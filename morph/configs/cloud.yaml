@@ -1,0 +1,45 @@
+# MORPH cloud config — TPU v6e-4 (full scale)
+# 4:8:4 loop, d_model=2048, 16 memory layers
+
+defaults:
+  - base
+
+model:
+  d_model: 2048
+  n_heads: 16
+  n_layers: 16
+
+  n_prelude: 4
+  n_core: 8
+  n_coda: 4
+  mean_depth: 8
+  max_depth: 16
+  bptt_depth: 6
+
+  channel_dims: [1024, 640, 384]
+
+  n_kv_heads: 4
+  csa_compress_ratio: 8
+  hca_compress_ratio: 256
+  top_k: 256
+  window_size: 256
+  context_len: 8192
+  max_seq_len: 8192
+
+  lorentz_fraction: 0.25
+  bigram_hash_vocab: 49152
+
+  n_memory_layers: 16
+  n_memory_tokens: 64
+
+  d_z: 512
+  segment_size: 2048
+
+training:
+  steps: 200000
+  batch_size: 32
+  lr: 3e-4
+  warmup: 3000
+
+data:
+  seq_len: 8192
