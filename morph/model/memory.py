@@ -75,13 +75,6 @@ class MemorySystem(nn.Module):
             max_lr=max_lr,
         )
 
-        # ── SSM top-inject ─────────────────────────────────────────────────
-        # Single learned query expanded to batch → retrieves memory state →
-        # zero-init projection into residual stream (starts as pure no-op).
-        self.ssm_query = nn.Parameter(torch.randn(1, d_model) * 0.02)
-        self.ssm_proj = nn.Linear(d_model, d_model, bias=False)
-        nn.init.zeros_(self.ssm_proj.weight)
-
         # ── MAG inject ────────────────────────────────────────────────────
         # Gated residual write into the memory channel.
         # Gate: sigmoid(Linear(d_model → d_memory_channel)), init near 0.
@@ -112,36 +105,6 @@ class MemorySystem(nn.Module):
             f"n_mac_tokens={n_memory_tokens}, d_mem_ch={self.d_memory_channel}, "
             f"total_params={n_params / 1e3:.1f}K"
         )
-
-    # ── SSM top-inject ─────────────────────────────────────────────────────────
-
-    def ssm_inject(self, x: Tensor) -> Tensor:
-        """Inject memory state into input via SSM top-inject pattern.
-
-        Reads memory once via a learned query (shared across all positions and
-        batches), then adds the zero-init projected signal to every token.
-        This lets the memory condition the entire forward pass before any
-        layer has processed the sequence.
-
-        The ssm_proj weight is zero-initialized: the signal is zero at step 0
-        and grows as the outer optimizer learns to exploit memory context.
-
-        Args:
-            x: [B, T, d_model] input hidden states (pre-layer-1).
-
-        Returns:
-            [B, T, d_model] — x + ssm_signal (broadcast over T).
-        """
-        param_dtype = self.ssm_proj.weight.dtype
-        x_cast = x.to(param_dtype) if x.dtype != param_dtype else x
-
-        B = x_cast.shape[0]
-        # [1, 1, d_model] → expand to [B, 1, d_model]
-        query = self.ssm_query.unsqueeze(0).expand(B, -1, -1)
-        retrieval = self.memory.retrieve(query)          # [B, 1, d_model]
-        signal = self.ssm_proj(retrieval)                # [B, 1, d_model]
-        # Broadcast over T: [B, 1, d_model] + [B, T, d_model]
-        return x_cast + signal
 
     # ── MAG inject ─────────────────────────────────────────────────────────────
 

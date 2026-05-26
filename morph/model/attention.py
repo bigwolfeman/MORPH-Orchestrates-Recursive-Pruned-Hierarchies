@@ -204,10 +204,8 @@ def _window_fallback(q: Tensor, k: Tensor, v: Tensor,
       - j <= i  (causal)
       - i - j < window_size  (within window)
       - j != i  (XSA: exclude self-token)
-    OR j < n_skip_rope (persistent/sink tokens always visible).
-
-    Queries with no valid keys (position 0 under XSA) receive zero output
-    matching the XSA documented behaviour.
+    OR j >= S - n_skip_rope (MAC suffix tokens always visible to all queries)
+    OR i >= S - n_skip_rope (MAC suffix queries can see all keys).
     """
     S = q.shape[2]
     row = torch.arange(S, device=device).unsqueeze(1)
@@ -216,8 +214,9 @@ def _window_fallback(q: Tensor, k: Tensor, v: Tensor,
 
     mask = (dist >= 0) & (dist < window_size) & (dist != 0)
     if n_skip_rope > 0:
-        is_skip_col = col < n_skip_rope
-        mask = mask | is_skip_col
+        is_mac_col = col >= S - n_skip_rope
+        is_mac_row = row >= S - n_skip_rope
+        mask = mask | is_mac_col | is_mac_row
 
     bias = torch.where(mask, 0.0, float("-inf")).unsqueeze(0).unsqueeze(0)
     return F.scaled_dot_product_attention(q, k, v, attn_mask=bias, scale=scale)
@@ -338,9 +337,9 @@ class _CCABase(nn.Module):
         k = k * torch.exp(self.temp).view(1, Hkv, 1, 1)
 
         if n_skip_rope > 0:
-            q_r, k_r = self.rope(q[:, :, n_skip_rope:], k[:, :, n_skip_rope:])
-            q = torch.cat([q[:, :, :n_skip_rope], q_r], dim=2)
-            k = torch.cat([k[:, :, :n_skip_rope], k_r], dim=2)
+            q_r, k_r = self.rope(q[:, :, :-n_skip_rope], k[:, :, :-n_skip_rope])
+            q = torch.cat([q_r, q[:, :, -n_skip_rope:]], dim=2)
+            k = torch.cat([k_r, k[:, :, -n_skip_rope:]], dim=2)
         else:
             q, k = self.rope(q, k)
 

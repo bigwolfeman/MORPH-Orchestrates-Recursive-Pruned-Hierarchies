@@ -98,8 +98,8 @@ if TRITON_AVAILABLE:
             k_pos = k_offs[None, :]
             is_causal = k_pos <= q_pos
             is_window = k_pos >= (q_pos - window_size + 1)
-            is_mem_col = k_pos < n_skip_rope
-            is_mem_row = q_pos < n_skip_rope
+            is_mem_col = k_pos >= S - n_skip_rope
+            is_mem_row = q_pos >= S - n_skip_rope
             vmask = (is_causal & is_window) | is_mem_col | is_mem_row
             if exclude_self:
                 vmask = vmask & (k_pos != q_pos)
@@ -207,8 +207,8 @@ if TRITON_AVAILABLE:
             k_pos = offs_n[None, :]
             is_causal = k_pos <= q_pos
             is_window = k_pos >= (q_pos - window_size + 1)
-            is_mem_col = k_pos < n_skip_rope
-            is_mem_row = q_pos < n_skip_rope
+            is_mem_col = k_pos >= S - n_skip_rope
+            is_mem_row = q_pos >= S - n_skip_rope
             vmask = (is_causal & is_window) | is_mem_col | is_mem_row
             if exclude_self:
                 vmask = vmask & (k_pos != q_pos)
@@ -281,8 +281,8 @@ if TRITON_AVAILABLE:
             k_pos = offs_n[None, :]
             is_causal = k_pos <= q_pos
             is_window = k_pos >= (q_pos - window_size + 1)
-            is_mem_col = k_pos < n_skip_rope
-            is_mem_row = q_pos < n_skip_rope
+            is_mem_col = k_pos >= S - n_skip_rope
+            is_mem_row = q_pos >= S - n_skip_rope
             vmask = (is_causal & is_window) | is_mem_col | is_mem_row
             if exclude_self:
                 vmask = vmask & (k_pos != q_pos)
@@ -315,23 +315,23 @@ _BLOCK_K = 64
 # ---------------------------------------------------------------------------
 
 def _compute_kt_bounds(S, window_size, n_skip_rope, num_q_tiles, num_k_tiles, device):
-    """Compute per-Q-tile KV-tile bounds [kt_lo, kt_hi] for forward and dQ backward."""
+    """Compute per-Q-tile KV-tile bounds [kt_lo, kt_hi] for forward and dQ backward.
+    MAC tokens are appended (suffix): positions [S-n_skip_rope, S)."""
     qt_idx = torch.arange(num_q_tiles, device=device, dtype=torch.int32)
     q_starts = qt_idx * _BLOCK_Q
     q_ends = torch.clamp(q_starts + _BLOCK_Q - 1, max=S - 1)
 
-    if n_skip_rope > 0:
-        kt_lo = torch.zeros(num_q_tiles, device=device, dtype=torch.int32)
-    else:
-        window_lefts = torch.clamp(q_starts - window_size + 1, min=0)
-        kt_lo = (window_lefts // _BLOCK_K).to(torch.int32)
-
+    window_lefts = torch.clamp(q_starts - window_size + 1, min=0)
+    kt_lo = (window_lefts // _BLOCK_K).to(torch.int32)
     kt_hi = (q_ends // _BLOCK_K).to(torch.int32)
 
     if n_skip_rope > 0:
-        has_memory_query = q_starts < n_skip_rope
-        full_range = torch.full((num_q_tiles,), num_k_tiles - 1, device=device, dtype=torch.int32)
-        kt_hi = torch.where(has_memory_query, full_range, kt_hi)
+        # MAC keys at end → all q-tiles must reach the last k-tile
+        kt_hi[:] = num_k_tiles - 1
+        # MAC q-tiles (at end) see all k-tiles → kt_lo = 0
+        has_memory_query = q_starts >= S - n_skip_rope
+        zero_start = torch.zeros(num_q_tiles, device=device, dtype=torch.int32)
+        kt_lo = torch.where(has_memory_query, zero_start, kt_lo)
 
     kt_lo = torch.clamp(kt_lo, min=0, max=num_k_tiles - 1)
     kt_hi = torch.clamp(kt_hi, min=0, max=num_k_tiles - 1)
@@ -339,7 +339,8 @@ def _compute_kt_bounds(S, window_size, n_skip_rope, num_q_tiles, num_k_tiles, de
 
 
 def _compute_qt_bounds(S, window_size, n_skip_rope, num_q_tiles, num_k_tiles, device):
-    """Compute per-KV-tile Q-tile bounds [qt_lo, qt_hi] for dK/dV backward."""
+    """Compute per-KV-tile Q-tile bounds [qt_lo, qt_hi] for dK/dV backward.
+    MAC tokens are appended (suffix): positions [S-n_skip_rope, S)."""
     kt_idx = torch.arange(num_k_tiles, device=device, dtype=torch.int32)
     k_starts = kt_idx * _BLOCK_K
     k_ends = torch.clamp(k_starts + _BLOCK_K - 1, max=S - 1)
@@ -349,10 +350,12 @@ def _compute_qt_bounds(S, window_size, n_skip_rope, num_q_tiles, num_k_tiles, de
     qt_hi = torch.clamp(qt_hi, max=num_q_tiles - 1)
 
     if n_skip_rope > 0:
-        qt_lo[:] = 0
-        has_memory_key = k_starts < n_skip_rope
-        full_range = torch.full((num_k_tiles,), num_q_tiles - 1, device=device, dtype=torch.int32)
-        qt_hi = torch.where(has_memory_key, full_range, qt_hi)
+        # MAC q-tiles (at end) attend to ALL k-tiles → all k-tiles need qt_hi at end
+        qt_hi[:] = num_q_tiles - 1
+        # MAC k-tiles (at end) are attended by ALL q-tiles → qt_lo = 0 for those
+        has_memory_key = k_starts >= S - n_skip_rope
+        zero_start = torch.zeros(num_k_tiles, device=device, dtype=torch.int32)
+        qt_lo = torch.where(has_memory_key, zero_start, qt_lo)
 
     qt_lo = torch.clamp(qt_lo, min=0, max=num_q_tiles - 1)
     qt_hi = torch.clamp(qt_hi, min=0, max=num_q_tiles - 1)
@@ -457,8 +460,8 @@ def _build_window_mask(S, window_size, n_skip_rope, exclude_self, device, dtype)
     col = torch.arange(S, device=device).unsqueeze(0)
     win_mask = (col <= row) & (col >= row - window_size + 1)
     if n_skip_rope > 0:
-        win_mask[:, :n_skip_rope] = True
-        win_mask[:n_skip_rope, :] = True
+        win_mask[:, -n_skip_rope:] = True
+        win_mask[-n_skip_rope:, :] = True
     if exclude_self:
         win_mask = win_mask & (col != row)
     return torch.where(win_mask, 0.0, float("-inf")).to(dtype).unsqueeze(0).unsqueeze(0)
@@ -551,8 +554,8 @@ def fused_window_attention_reference(
     win_mask = (col <= row) & (col >= row - window_size + 1)
 
     if n_skip_rope > 0:
-        win_mask[:, :n_skip_rope] = True
-        win_mask[:n_skip_rope, :] = True
+        win_mask[:, -n_skip_rope:] = True
+        win_mask[-n_skip_rope:, :] = True
 
     if exclude_self:
         win_mask = win_mask & (col != row)

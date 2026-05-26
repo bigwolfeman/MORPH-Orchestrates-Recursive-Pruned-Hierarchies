@@ -21,6 +21,7 @@ def create_dataloader(
     seq_len: int,
     batch_size: int,
     split: str = "train",
+    skip_samples: int = 0,
 ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
     """Infinite generator of (input_ids, labels) pairs.
 
@@ -36,6 +37,8 @@ def create_dataloader(
         seq_len:        Number of tokens per sequence (T dimension).
         batch_size:     Number of sequences per batch (B dimension).
         split:          Dataset split ("train" / "validation").
+        skip_samples:   Number of documents to skip at the start of the stream.
+                        Used to offset the validation loader from train.
 
     Yields:
         (input_ids, labels): each [batch_size, seq_len], dtype=torch.long.
@@ -77,6 +80,8 @@ def create_dataloader(
 
     while True:
         ds = load_dataset(dataset_name, **dataset_kwargs, trust_remote_code=True)
+        if skip_samples > 0:
+            ds = ds.skip(skip_samples)
         for sample in ds:
             text = sample.get("text", sample.get("content", ""))
             ids = tokenizer(

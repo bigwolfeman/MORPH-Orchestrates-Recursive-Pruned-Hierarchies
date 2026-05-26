@@ -25,6 +25,7 @@ from .embeddings import MORPHEmbedding
 from .mhc import MHCResidual, MHCChannelInject, MHCTransformerBlock, DEFAULT_CHANNEL_DIMS
 from .memory import MemorySystem
 from .prediction import STPLoss, ZLatentHeads, SIGReg, split_nsm_loss
+from .sparsity import BlockELLLinear
 
 
 @dataclass
@@ -99,12 +100,17 @@ class DiagonalInjection(nn.Module):
         return torch.cat([h[..., :self.start], new_ctx, h[..., self.end:]], dim=-1)
 
 
-def _make_swiglu(d_model: int, d_ff: int, dropout: float) -> nn.Module:
+def _make_swiglu(d_model: int, d_ff: int, dropout: float,
+                 use_block_ell: bool = False) -> nn.Module:
     """SwiGLU MLP: gate + up → silu(gate)*up → down."""
-    return nn.Sequential(
-        _SwiGLU(d_model, d_ff),
-        nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
-    )
+    mlp: nn.Module
+    if use_block_ell:
+        mlp = _SwiGLUBlockELL(d_model, d_ff)
+    else:
+        mlp = _SwiGLU(d_model, d_ff)
+    if dropout > 0:
+        return nn.Sequential(mlp, nn.Dropout(dropout))
+    return mlp
 
 
 class _SwiGLU(nn.Module):
@@ -112,6 +118,24 @@ class _SwiGLU(nn.Module):
         super().__init__()
         self.gate_up = nn.Linear(d_model, d_ff * 2, bias=False)
         self.down = nn.Linear(d_ff, d_model, bias=False)
+
+    def forward(self, x: Tensor) -> Tensor:
+        gu = self.gate_up(x)
+        gate, up = gu.chunk(2, dim=-1)
+        return self.down(F.silu(gate) * up)
+
+
+class _SwiGLUBlockELL(nn.Module):
+    """SwiGLU with BlockELLLinear for CMS pruning support.
+
+    Identical computation to _SwiGLU during dense phase (density=1.0).
+    After compact(), uses Triton Block-ELL sparse kernels for the forward pass.
+    """
+
+    def __init__(self, d_model: int, d_ff: int):
+        super().__init__()
+        self.gate_up = BlockELLLinear(d_model, d_ff * 2, bias=False, initial_density=1.0)
+        self.down = BlockELLLinear(d_ff, d_model, bias=False, initial_density=1.0)
 
     def forward(self, x: Tensor) -> Tensor:
         gu = self.gate_up(x)
@@ -180,12 +204,12 @@ class MORPHTransformer(nn.Module):
             max_seq_len=cfg.max_seq_len,
         )
 
-        def _make_block(layer_idx: int) -> MHCTransformerBlock:
+        def _make_block(layer_idx: int, use_block_ell: bool = False) -> MHCTransformerBlock:
             return MHCTransformerBlock(
                 norm_attn=RMSNorm(d),
                 attn=MORPHAttention(layer_idx=layer_idx, **attn_kw),
                 norm_mlp=RMSNorm(d),
-                mlp=_make_swiglu(d, d_ff, cfg.dropout),
+                mlp=_make_swiglu(d, d_ff, cfg.dropout, use_block_ell=use_block_ell),
                 channel_dims=ch,
             )
 
@@ -196,9 +220,10 @@ class MORPHTransformer(nn.Module):
         self.input_norm = RMSNorm(d)
         self.injection = DiagonalInjection(self._ctx_start, self._ctx_end)
 
-        # ── Core (shared across loop iterations) ──────────────────────
+        # ── Core (shared across loop iterations — Block-ELL for CMS pruning)
         self.core = nn.ModuleList([
-            _make_block(cfg.n_prelude + i) for i in range(cfg.n_core)
+            _make_block(cfg.n_prelude + i, use_block_ell=True)
+            for i in range(cfg.n_core)
         ])
 
         # ── Coda ──────────────────────────────────────────────────────
@@ -358,38 +383,34 @@ class MORPHTransformer(nn.Module):
         mem_scale = self._mem_scale()  # 0.0 during warmup, ramps to 1.0
         memory_loss = None
 
-        # SSM top-inject: memory hidden state conditions the input
-        ssm_signal = self.memory.ssm_inject(x)
-        x = x + mem_scale * ssm_signal
+        # ── MAC tokens (append — always-visible suffix through ALL layers)
+        # Generated from embedded input, persist through prelude+core+coda.
+        # Real tokens see MAC tokens via always-visible mask in attention.
+        # MAG handles memory→tokens injection; MAC handles bidirectional context.
+        mac_tokens = self.memory.get_mac_tokens(x) * mem_scale
+        x = torch.cat([x, mac_tokens], dim=1)
+        bigram_emb = F.pad(bigram_emb, (0, 0, 0, self.cfg.n_memory_tokens))
+        input_ids = F.pad(input_ids, (0, self.cfg.n_memory_tokens), value=0)
+        n_mac = self.cfg.n_memory_tokens
 
         x0 = x.clone()
 
         # ── Prelude ───────────────────────────────────────────────────
-        _mem_inject_idx = max(0, cfg.n_prelude - 1)
+        _mem_inject_idx = max(0, self.cfg.n_prelude - 1)
         for i, layer in enumerate(self.prelude):
             if i == _mem_inject_idx:
                 if self.training:
                     memory_loss = self.memory.update(
-                        x, suppress_decay=(mem_scale == 0.0))
+                        x[:, :T], suppress_decay=(mem_scale == 0.0))
                 x = self.memory.mag_inject(
                     x, self._mem_start, self._mem_end, mem_scale)
 
             x = self._apply_x0(x, i, x0)
             x = self._apply_ve(x, i, input_ids)
             x = self.embed.bigram.inject(x, bigram_emb, i)
-            x = layer(x)
+            x = layer(x, attn_kwargs={"n_skip_rope": n_mac})
 
         x_prelude = x.clone()
-
-        # ── MAC tokens (shape-changing — compile boundary) ─────────────
-        # Always prepend MAC tokens. During warmup, mem_scale=0 makes them
-        # zero-contribution but the shape stays constant for compile stability.
-        mac_tokens = self.memory.get_mac_tokens(x) * mem_scale
-        x = torch.cat([mac_tokens, x], dim=1)
-        x0 = torch.cat([torch.zeros_like(mac_tokens), x0], dim=1)
-        bigram_emb = F.pad(bigram_emb, (0, 0, self.cfg.n_memory_tokens, 0))
-        input_ids = F.pad(input_ids, (self.cfg.n_memory_tokens, 0), value=0)
-        n_skip = self.cfg.n_memory_tokens
 
         # ── Core loop ─────────────────────────────────────────────────
         e = self.input_norm(x)
@@ -414,7 +435,7 @@ class MORPHTransformer(nn.Module):
                     h_injected = self._apply_x0(h_injected, gi, x0_in)
                     h_injected = self._apply_ve(h_injected, gi, ids)
                     h_injected = self.embed.bigram.inject(h_injected, bg, gi)
-                    h_injected = layer(h_injected, attn_kwargs={"n_skip_rope": n_skip})
+                    h_injected = layer(h_injected, attn_kwargs={"n_skip_rope": n_mac})
                 return h_injected
 
             if t < n_nograd:
@@ -432,19 +453,19 @@ class MORPHTransformer(nn.Module):
 
         x = h
 
-        # ── Strip MAC tokens (always present, constant shape) ─────────
-        x = x[:, n_skip:]
-        x0 = x0[:, n_skip:]
-        bigram_emb = bigram_emb[:, n_skip:]
-        input_ids = input_ids[:, n_skip:]
-
-        # ── Coda ──────────────────────────────────────────────────────
+        # ── Coda (MAC tokens persist — memory context through all layers)
         for i, layer in enumerate(self.coda):
             gi = self.cfg.n_prelude + self.cfg.n_core + i
             x = self._apply_x0(x, gi, x0)
             x = self._apply_ve(x, gi, input_ids)
             x = self.embed.bigram.inject(x, bigram_emb, gi)
-            x = layer(x)
+            x = layer(x, attn_kwargs={"n_skip_rope": n_mac})
+
+        # ── Strip MAC tokens (appended suffix → slice to original T)
+        x = x[:, :T]
+        x0 = x0[:, :T]
+        bigram_emb = bigram_emb[:, :T]
+        input_ids = input_ids[:, :T]
 
         # ── STP ───────────────────────────────────────────────────────
         stp_loss = self.stp(self.final_norm(x).float(), tau=self.cfg.stp_tau)

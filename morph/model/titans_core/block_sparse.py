@@ -25,7 +25,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from .block_ell import BlockELLConfig
-from titans_core.opt.topology_scorer import TopologyScorer, compute_gradient_frobenius_norms
+from .topology_scorer import TopologyScorer, compute_gradient_frobenius_norms
 
 # Check if Triton is available
 try:
@@ -508,7 +508,7 @@ class CMSBlockLinear(nn.Module):
             return self._column_index_cache
 
         # Build the column index
-        from titans_core.kernels.block_ell_backward import build_column_index
+        from morph.kernels.triton.block_ell_backward import build_column_index
 
         pairs, counts, max_pairs = build_column_index(self.col_indices, self.C)
         self._column_index_cache = (pairs, counts, max_pairs)
@@ -666,7 +666,7 @@ class CMSBlockLinear(nn.Module):
         Returns:
             Output tensor
         """
-        from titans_core.kernels.block_ell_forward import block_ell_forward_autograd
+        from morph.kernels.triton.block_ell_forward import block_ell_forward_autograd
 
         # Get column index for optimized backward pass (only during training)
         column_index = None
@@ -2273,12 +2273,18 @@ class CMSBlockLinear(nn.Module):
             (new_K_self, k_active_macros) — compacted K for self, and the number
             of macro-block columns that contain at least one alive tile after reorder.
         """
-        from titans_core.opt.column_reorder import (
-            compute_column_importance,
-            compute_permutation,
-            apply_permutation_to_block_ell,
-            compute_k_active_macros,
-        )
+        try:
+            from morph.model.titans_core.column_reorder import (
+                compute_column_importance,
+                compute_permutation,
+                apply_permutation_to_block_ell,
+                compute_k_active_macros,
+            )
+        except ImportError:
+            raise ImportError(
+                "compact_with_reorder requires column_reorder (Phase 3 feature). "
+                "Use compact() for basic compaction."
+            )
 
         # ------------------------------------------------------------------
         # 1. Compact self (and optionally counterpart if not yet compacted)
@@ -2492,7 +2498,7 @@ class CMSBlockLinear(nn.Module):
         Returns:
             Output [B, T, out_features] or [batch, out_features].
         """
-        from titans_core.kernels.block_ell_routed_forward import (
+        from morph.kernels.triton.block_ell_routed_forward import (
             block_ell_routed_forward_autograd,
         )
 

@@ -282,7 +282,8 @@ def main(cfg: DictConfig) -> None:
         create_dataloader(tokenizer_name, dataset_name, seq_len, batch_size, split="train")
     )
     val_loader = iter(
-        create_dataloader(tokenizer_name, dataset_name, seq_len, batch_size, split="train")
+        create_dataloader(tokenizer_name, dataset_name, seq_len, batch_size,
+                         split="validation", skip_samples=50_000)
     )
 
     # ── Checkpoint dir ────────────────────────────────────────────────────

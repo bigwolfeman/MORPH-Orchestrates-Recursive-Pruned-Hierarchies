@@ -106,3 +106,5 @@ mode="default" (NOT reduce-overhead — CUDA graphs cause eval OOM).
 No fullgraph=True (neural memory uses autograd.grad with retain_graph).
 torch._functorch.config.donated_buffer = False.
 
+### Project Cleanliness
+Do not litter scripts around the directory. Keep a ignored/ folder for temporary scripts (keep it organized), this folder is set to gitignore.
