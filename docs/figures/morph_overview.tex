@@ -104,7 +104,8 @@
 % Core Loop label — LEFT side, above the orange arrow line
 \node[font=\normalsize\sffamily\bfseries, text=loopC, anchor=east]
   at ($(CG.west)+(-0.15,0.6)$) {Core Loop};
-
+\node[sub, text=bdr, anchor=east] at ($(CG.south east)+(-0.2,0.25)$)
+  {$\times$2N layers};
 % Core side inputs
 \node[sub, text=cbOrange, left=2.4cm of ca, align=right]
   (csid) {mHC residual\\$\gamma_i$ per channel\\$x_0$, bigram};
@@ -135,20 +136,20 @@
 \end{scope}
 \node[ph, anchor=east, text=bdr] at ($(DG.west)+(-0.15,0)$) {Coda};
 \node[sub, text=bdr, anchor=east] at ($(DG.south east)+(-0.2,0.25)$)
-  {$\times$2N layers};
+  {$\times$N layers};
 
 % ── STRIP MAC + LM HEAD ────────────────────────────────────────────
-\node[Bs, fill=fGray!30, above=0.8cm of dm] (str) {Strip MAC Tokens};
+\node[Bs, fill=fGray!30, above=0.4cm of DG] (str) {Strip MAC Tokens};
 \draw[A] (dm) -- (str);
 
 \node[B, fill=fYellow!55, above=0.4cm of str] (mix) {
   LM Head Mixer\\[-1pt]{\scriptsize per-channel scale + cross-mix}};
 \draw[A] (str) -- (mix);
 
-\node[Bs, fill=fGray!30, above=0.3cm of mix] (fn) {Final RMSNorm};
+\node[Bs, fill=fGray!30, above=0.4cm of mix] (fn) {Final RMSNorm};
 \draw[A] (mix) -- (fn);
 
-\node[B, fill=fYellow, above=0.3cm of fn] (hd) {Weight-Tied LM Head};
+\node[B, fill=fYellow, above=0.4cm of fn] (hd) {Weight-Tied LM Head};
 \draw[A] (fn) -- (hd);
 
 \node[font=\small\sffamily, above=0.4cm of hd] (out) {Logits / Loss};
