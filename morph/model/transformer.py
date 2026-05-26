@@ -24,7 +24,7 @@ from .attention import MORPHAttention, RMSNorm
 from .embeddings import MORPHEmbedding
 from .mhc import MHCResidual, MHCChannelInject, MHCTransformerBlock, DEFAULT_CHANNEL_DIMS
 from .memory import MemorySystem
-from .prediction import STPLoss, ZLatentHeads, SIGReg, split_nsm_loss
+from .prediction import STPLoss, ZLatentHeads, SIGReg
 from .sparsity import BlockELLLinear
 
 
@@ -304,75 +304,7 @@ class MORPHTransformer(nn.Module):
     def forward(self, input_ids: Tensor, labels: Tensor | None = None) -> dict:
         if self.training:
             self._step += 1
-        B, T = input_ids.shape
-        seg = self.cfg.segment_size
-        if seg is not None and seg < T:
-            return self._forward_segmented(input_ids, labels, seg)
         return self._forward_single(input_ids, labels)
-
-    def _forward_segmented(self, input_ids: Tensor, labels: Tensor | None,
-                           seg: int) -> dict:
-        B, T = input_ids.shape
-        n_segs = T // seg
-        all_logits = []
-        total_loss = 0.0
-        total_mem_loss = 0.0
-        total_z_loss = 0.0
-        total_stp_loss = 0.0
-        n_loss_segs = 0
-
-        seg_z_codas = []
-        seg_z_memories = []
-        seg_z_preludes = []
-        seg_x_preludes_raw = []
-
-        for s in range(n_segs):
-            seg_ids = input_ids[:, s * seg : (s + 1) * seg]
-            seg_labels = labels[:, s * seg : (s + 1) * seg] if labels is not None else None
-
-            out = self._forward_single(seg_ids, seg_labels)
-
-            if "z_target" in out:
-                seg_z_codas.append(out["z_target"].detach())
-            if "z_memory_raw" in out:
-                seg_z_memories.append(out["z_memory_raw"])
-            if "z_prelude" in out:
-                seg_z_preludes.append(out["z_prelude"])
-            if "x_prelude_raw" in out:
-                seg_x_preludes_raw.append(out["x_prelude_raw"])
-
-            all_logits.append(out["logits"])
-            if "loss" in out:
-                total_loss += out["loss"]
-                n_loss_segs += 1
-            if "memory_loss" in out:
-                total_mem_loss += out["memory_loss"]
-            if "z_loss" in out:
-                total_z_loss += out["z_loss"]
-            if "stp_loss" in out:
-                total_stp_loss += out["stp_loss"]
-
-        # Delayed cross-segment z-loss (split_nsm)
-        if len(seg_z_codas) > 1 and len(seg_z_memories) > 0:
-            z_fwd_loss = split_nsm_loss(
-                seg_z_codas, seg_z_memories, seg_z_preludes,
-                seg_x_preludes_raw, self.z_heads.z_backbone_head, self.sigreg,
-            )
-            if z_fwd_loss.item() > 0:
-                total_z_loss += z_fwd_loss
-                if n_loss_segs > 0:
-                    total_loss += 0.1 * z_fwd_loss / n_loss_segs
-
-        result = {"logits": torch.cat(all_logits, dim=1)}
-        if n_loss_segs > 0:
-            result["loss"] = total_loss / n_loss_segs
-            if total_mem_loss > 0:
-                result["memory_loss"] = total_mem_loss / n_loss_segs
-            if total_z_loss > 0:
-                result["z_loss"] = total_z_loss / n_loss_segs
-            if total_stp_loss > 0:
-                result["stp_loss"] = total_stp_loss / n_loss_segs
-        return result
 
     def _forward_single(self, input_ids: Tensor,
                         labels: Tensor | None = None) -> dict:
@@ -470,10 +402,6 @@ class MORPHTransformer(nn.Module):
         # ── STP ───────────────────────────────────────────────────────
         stp_loss = self.stp(self.final_norm(x).float(), tau=self.cfg.stp_tau)
 
-        # ── Z-latent (split_nsm targets) ──────────────────────────────
-        z_coda = self.z_heads.project_coda(self.final_norm(x))
-        z_target_for_next = z_coda
-
         # ── LM head ──────────────────────────────────────────────────
         x_coda = x
         x = self.lm_mixer(x)
@@ -493,20 +421,62 @@ class MORPHTransformer(nn.Module):
                 loss = loss + 0.05 * memory_loss
                 out["memory_loss"] = memory_loss.detach()
 
-            # Z-latent: memory retrieve + expose targets for split_nsm outer loop
-            mem_ret = self.memory.retrieve(x_coda)
-            z_memory = self.z_heads.memory_predict(mem_ret)
-            out["z_memory_raw"] = (z_memory * mem_scale).detach()
-            out["z_prelude"] = self.z_heads.project_prelude(
-                self.final_norm(x_prelude)).detach()
-            out["x_prelude_raw"] = x_prelude.detach()
+            # Z-latent: single-pass window-based prediction
+            seg = self.cfg.segment_size
+            if seg is not None and T >= seg * 2:
+                z_loss = self._window_z_loss(x_coda, x_prelude, mem_scale, seg, T)
+                loss = loss + 0.1 * z_loss
+                out["z_loss"] = z_loss.detach()
 
             loss = loss + self.cfg.stp_lambda * stp_loss
             out["stp_loss"] = stp_loss
 
             out["loss"] = loss
 
-        if z_target_for_next is not None:
-            out["z_target"] = z_target_for_next
-
         return out
+
+    def _window_z_loss(self, x_coda: Tensor, x_prelude: Tensor,
+                       mem_scale: float, seg: int, T: int) -> Tensor:
+        """Single-pass z-latent loss from representation windows.
+
+        No repeated forward passes. Slices the single-pass output at segment
+        boundaries and computes cross-window prediction losses:
+          - Backbone: prelude window[i] predicts mean(coda z[i+1])
+          - Memory: retrieve from window[i] predicts prelude z[i+1]
+        """
+        n_segs = T // seg
+        losses: list[Tensor] = []
+        all_z_codas: list[Tensor] = []
+
+        for s in range(n_segs):
+            start, end = s * seg, (s + 1) * seg
+            z_coda_w = self.z_heads.project_coda(
+                self.final_norm(x_coda[:, start:end]))
+            all_z_codas.append(z_coda_w.detach())
+
+            if s > 0:
+                prev_start, prev_end = (s - 1) * seg, s * seg
+
+                # Backbone: prelude of window[s-1] predicts mean z_coda of window[s]
+                bb_pred = self.z_heads.backbone_predict(x_prelude[:, prev_start:prev_end])
+                bb_target = z_coda_w.mean(dim=1, keepdim=True).detach()
+                losses.append(F.smooth_l1_loss(bb_pred.mean(dim=1, keepdim=True), bb_target))
+
+                # Memory: retrieve from window[s-1] predicts prelude z of window[s]
+                mem_ret = self.memory.retrieve(x_coda[:, prev_start:prev_end])
+                z_mem = self.z_heads.memory_predict(mem_ret) * mem_scale
+                z_prel_target = self.z_heads.project_prelude(
+                    self.final_norm(x_prelude[:, start:end])
+                ).mean(dim=1, keepdim=True).detach()
+                losses.append(F.smooth_l1_loss(z_mem.mean(dim=1, keepdim=True), z_prel_target))
+
+        if not losses:
+            return x_coda.new_zeros(())
+
+        z_loss = torch.stack(losses).mean()
+
+        # SIGReg collapse prevention
+        all_z = torch.cat(all_z_codas, dim=1)
+        z_loss = z_loss + 0.02 * self.sigreg(all_z.reshape(-1, all_z.shape[-1]).unsqueeze(0))
+
+        return z_loss
