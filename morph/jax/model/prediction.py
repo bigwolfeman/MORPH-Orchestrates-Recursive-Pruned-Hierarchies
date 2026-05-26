@@ -1,7 +1,7 @@
 """STP + LeJEPA split_nsm z-latent prediction modules (JAX/Flax).
 
 Port of the STP and z-latent (split_nsm) systems from:
-  TPU/subq-attention/looped_model_mhc.py  (PyTorch)
+  TPU/subq-attention/looped_model_mrr.py  (PyTorch)
   titans_core/memory/sigreg.py            (SIGReg, PyTorch)
 
 Modules

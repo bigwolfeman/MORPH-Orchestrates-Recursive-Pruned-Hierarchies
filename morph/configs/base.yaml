@@ -17,7 +17,7 @@ model:
   max_depth: 8
   bptt_depth: 4
 
-  # mHC channels
+  # Multi-rate residual channels
   channel_dims: [384, 256, 128]  # compute, context, memory
 
   # Attention (CCA+CSA+HCA, all features baked in)
@@ -36,8 +36,6 @@ model:
   # Neural memory
   n_memory_layers: 4
   n_memory_tokens: 32
-  memory_ssm_inject: true
-
   # STP
   stp_lambda: 0.02
   stp_tau: 64
@@ -63,16 +61,20 @@ training:
   # Memory warmup
   mac_warmup_steps: 2000
 
-  # Pruning (Phase 2)
-  prune_start: 50000
+  # Pruning (Phase 2 → 3)
+  prune_start: 6000
   prune_interval: 3000
   prune_rate: 0.05
   target_density: 0.25
-  compact_step: 60000
+  compact_step: 66000
 
-  # Routing (Phase 3)
-  route_start: 60000
-  route_activation: 0.4
+# Routing (Phase 4 — post-compact, post-settle)
+# Set route_start=0 to disable routing entirely.
+routing:
+  route_start: 70000
+  n_clusters: 16
+  activation_ratio: 0.5
+  aux_loss_coeff: 0.01
 
   # Optimizer extras
   weight_decay: 0.1

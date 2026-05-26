@@ -42,6 +42,7 @@ _MORPH_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 import wandb
 
 from morph.model.transformer import MORPHConfig, MORPHTransformer
+from morph.model.routing import collect_routing_aux_losses, collect_routing_stats
 from morph.training.data import create_dataloader
 from morph.training.optimizer import create_optimizer, create_lr_schedule, TernaryShadowOptimizer
 from morph.training.pruning import PruningSchedule
@@ -335,6 +336,11 @@ def main(cfg: DictConfig) -> None:
             out = model(x, labels=y)
         loss = out["loss"]
 
+        # Routing aux loss (load balance) — only active after route_start
+        if pruning.is_routed:
+            routing_aux = collect_routing_aux_losses(model)
+            loss = loss + routing_aux
+
         scaler.scale(loss).backward()
 
         prune_stats = pruning.step(model, step)
@@ -376,6 +382,11 @@ def main(cfg: DictConfig) -> None:
             if step % 100 == 0 and isinstance(optimizer, TernaryShadowOptimizer):
                 tern = optimizer.ternary_stats()
                 log.update({f"ternary/{k}": v for k, v in tern.items()})
+
+            # Routing diagnostics (every 100 steps, only when routed)
+            if step % 100 == 0 and pruning.is_routed:
+                rt_stats = collect_routing_stats(model)
+                log.update(rt_stats)
 
             # Memory diagnostics (every 100 steps)
             if step % 100 == 0 and hasattr(model, "memory") and model.memory is not None:

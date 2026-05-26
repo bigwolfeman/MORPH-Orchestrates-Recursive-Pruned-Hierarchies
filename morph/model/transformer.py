@@ -22,7 +22,7 @@ from torch.utils.checkpoint import checkpoint
 
 from .attention import MORPHAttention, RMSNorm
 from .embeddings import MORPHEmbedding
-from .mhc import MHCResidual, MHCChannelInject, MHCTransformerBlock, DEFAULT_CHANNEL_DIMS
+from .mhc import MultiRateResidual, ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .memory import MemorySystem
 from .prediction import STPLoss, ZLatentHeads, SIGReg
 from .sparsity import BlockELLLinear
@@ -204,8 +204,8 @@ class MORPHTransformer(nn.Module):
             max_seq_len=cfg.max_seq_len,
         )
 
-        def _make_block(layer_idx: int, use_block_ell: bool = False) -> MHCTransformerBlock:
-            return MHCTransformerBlock(
+        def _make_block(layer_idx: int, use_block_ell: bool = False) -> MORPHBlock:
+            return MORPHBlock(
                 norm_attn=RMSNorm(d),
                 attn=MORPHAttention(layer_idx=layer_idx, **attn_kw),
                 norm_mlp=RMSNorm(d),
@@ -233,14 +233,14 @@ class MORPHTransformer(nn.Module):
 
         # ── x0 skip (inject into context channel) ────────────────────
         self.x0_injects = nn.ModuleList([
-            MHCChannelInject(self._ctx_start, self._ctx_end, d, init_scale=0.0)
+            ChannelInject(self._ctx_start, self._ctx_end, d, init_scale=0.0)
             for _ in range(n_total)
         ])
 
         # ── Value embeddings (inject into context channel) ────────────
         n_ve = min(3, cfg.n_prelude)
         self.value_embeds = nn.ModuleList([
-            MHCChannelInject(self._ctx_start, self._ctx_end, d, init_scale=0.0)
+            ChannelInject(self._ctx_start, self._ctx_end, d, init_scale=0.0)
             for _ in range(n_ve)
         ])
         self.value_embed_tables = nn.ModuleList([

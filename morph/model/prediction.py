@@ -1,7 +1,7 @@
 """STP + LeJEPA split_nsm z-latent prediction modules (PyTorch).
 
 Port/clean-room of the STP and z-latent (split_nsm) systems from:
-  TPU/subq-attention/looped_model_mhc.py  (PyTorch source)
+  TPU/subq-attention/looped_model_mhc.py  (PyTorch source — legacy name, pre-MRR rename)
   titans_core/memory/sigreg.py            (SIGReg)
 
 Modules

@@ -1,5 +1,5 @@
-% MORPH — MHC Transformer Block Detail (Diagram 2, v3)
-% Shows the 3-channel mHC residual stream through one block.
+% MORPH — MORPH Block Detail (Diagram 2, v3)
+% Shows the 3-channel multi-rate residual stream through one block.
 % Compile: pdflatex morph_block.tex
 
 \documentclass[border=14pt]{standalone}
@@ -62,7 +62,7 @@
 \begin{tikzpicture}[node distance=0.55cm]
 
 % ── Title ────────────────────────────────────────────────────────────
-\node[font=\Large\sffamily\bfseries] (title) {MHC Transformer Block};
+\node[font=\Large\sffamily\bfseries] (title) {MORPH Block};
 \node[sub, text=bdr, below=0.1cm of title] (subtitle)
   {Single block with 3-channel residual dynamics};
 
@@ -113,9 +113,9 @@
 };
 \draw[A] (norm_a) -- (attn);
 
-% mHC Residual (Attention)
+% MRR (Attention)
 \node[B, fill=fGray!50, below=0.5cm of attn, minimum height=0.85cm] (mhc_a) {
-  mHC Residual: \ $h_i = h_i + \gamma_i \cdot o_i$ \quad per channel
+  MRR: \ $h_i = h_i + \gamma_i \cdot o_i$ \quad per channel
 };
 \draw[A] (attn) -- (mhc_a);
 
@@ -159,9 +159,9 @@
 };
 \draw[A] (norm_m) -- (mlp);
 
-% mHC Residual (MLP)
+% MRR (MLP)
 \node[B, fill=fGray!50, below=0.5cm of mlp, minimum height=0.85cm] (mhc_m) {
-  mHC Residual: \ $h_i = h_i + \gamma_i \cdot o_i$ \quad per channel
+  MRR: \ $h_i = h_i + \gamma_i \cdot o_i$ \quad per channel
 };
 \draw[A] (mlp) -- (mhc_m);
 

@@ -178,6 +178,18 @@ class BlockELLLinear(nn.Module):
         """
         return self._cms.compact()
 
+    def compact_with_groups(self, n_clusters: int = 16) -> int:
+        """Compact and register cluster metadata for routed forward.
+
+        Same as compact() but also divides row-groups into n_clusters
+        contiguous clusters.  Required before wrapping with
+        RoutedBlockELLLinear.
+
+        Returns:
+            new_K: Number of active blocks per row after compaction.
+        """
+        return self._cms.compact_with_groups(n_clusters=n_clusters)
+
     # ── Density ──────────────────────────────────────────────────────────────
 
     def get_density(self) -> float:

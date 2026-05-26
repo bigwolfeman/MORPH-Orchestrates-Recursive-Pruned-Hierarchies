@@ -1,12 +1,12 @@
-"""Multi-scale Hyper-Connections (mHC) — dimension-splitting residual stream (JAX/Flax).
+"""Multi-Rate Residual (MRR) — dimension-splitting residual stream (JAX/Flax).
 
-Port of TPU/subq-attention/mhc.py (PyTorch) to Flax linen.
+Port of TPU/subq-attention/mrr.py (PyTorch) to Flax linen.
 
 Motivation
 ----------
 A looped transformer with 7 competing signals all writing into a single d_model
-residual stream creates destructive interference. mHC splits the stream into three
-*channels* with different mixing / retention rates:
+residual stream creates destructive interference. Multi-Rate Residual splits the
+stream into three *channels* with different mixing / retention rates:
 
   Channel 0 — Compute (384 dims): primary attention + MLP outputs. Fast rate.
   Channel 1 — Context (256 dims): x0 skip, value embeds, loop injection.
@@ -47,8 +47,8 @@ def _make_splits(channel_dims: Sequence[int]) -> list[tuple[int, int]]:
     return splits
 
 
-class MHCResidual(nn.Module):
-    """Wrap a sublayer with mHC dimension-split residual dynamics (Flax).
+class MultiRateResidual(nn.Module):
+    """Wrap a sublayer with multi-rate residual dimension-split dynamics (Flax).
 
     Before the sublayer (input mixing):
         x_mixed = concat(α₀·h[ch0], α₁·h[ch1], α₂·h[ch2])
@@ -122,7 +122,7 @@ class MHCResidual(nn.Module):
         return jnp.concatenate(out_chunks, axis=-1)
 
 
-class MHCChannelInject(nn.Module):
+class ChannelInject(nn.Module):
     """Inject a signal into a specific channel slice of the residual stream.
 
     Useful for targeted injection of:
@@ -190,10 +190,10 @@ class MHCChannelInject(nn.Module):
         return jnp.concatenate([prefix, target, suffix], axis=-1)
 
 
-class MHCTransformerBlock(nn.Module):
-    """TransformerBlock replacement using mHC residual dynamics (Flax).
+class MORPHBlock(nn.Module):
+    """TransformerBlock replacement using multi-rate residual dynamics (Flax).
 
-    Wraps attention and MLP each in an MHCResidual. The underlying attention
+    Wraps attention and MLP each in a MultiRateResidual. The underlying attention
     and MLP modules are unchanged (d_model-dim in, d_model-dim out). Only the
     residual connection has per-channel alpha/gamma parameters.
 
@@ -227,23 +227,23 @@ class MHCTransformerBlock(nn.Module):
             deterministic: dropout flag.
 
         Returns:
-            h updated through attention + MLP with mHC residuals.
+            h updated through attention + MLP with multi-rate residuals.
         """
         from .attention import RMSNorm
 
         norm_attn = RMSNorm(eps=self.norm_eps, name="norm_attn")
         norm_mlp  = RMSNorm(eps=self.norm_eps, name="norm_mlp")
 
-        mhc_attn = MHCResidual(channel_dims=self.channel_dims, name="mhc_attn")
-        mhc_mlp  = MHCResidual(channel_dims=self.channel_dims, name="mhc_mlp")
+        mrr_attn = MultiRateResidual(channel_dims=self.channel_dims, name="mrr_attn")
+        mrr_mlp  = MultiRateResidual(channel_dims=self.channel_dims, name="mrr_mlp")
 
         def _attn_fn(x):
             return self.attn_module(norm_attn(x), deterministic=deterministic)
 
-        h = mhc_attn(h, _attn_fn)
+        h = mrr_attn(h, _attn_fn)
 
         def _mlp_fn(x):
             return self.mlp_module(norm_mlp(x), deterministic=deterministic)
 
-        h = mhc_mlp(h, _mlp_fn)
+        h = mrr_mlp(h, _mlp_fn)
         return h

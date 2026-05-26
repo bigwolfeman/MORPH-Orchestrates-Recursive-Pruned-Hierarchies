@@ -5,7 +5,7 @@
 **MORPH** — Orchestrates Recursive Pruned Hierarchies
 
 Production model combining: Parcae-style looped transformer, Block-ELL structured sparsity,
-CCA+CSA+HCA attention, neural memory with SSM outer loop, mHC residual channels,
+CCA+CSA+HCA attention, neural memory with SSM outer loop, multi-rate residual (MRR) channels,
 STP geodesic regularization, LeJEPA split_nsm z-latent prediction, hybrid embeddings,
 STE ternary shadow weights. Dual PyTorch (GPU) + JAX (TPU).
 
@@ -58,11 +58,11 @@ ruff check morph/
 ```
 morph/
   model/
-    transformer.py   # Core looped transformer (Parcae + mHC)
+    transformer.py   # Core looped transformer (Parcae + MRR)
     attention.py     # CCA+CSA+HCA+XSA+ResAttn+CoPE (one module, no flags)
     embeddings.py    # Hybrid (eucl+Lorentz) + bigram
     memory.py        # Neural memory v3 + SSM inject + z-latent (split_nsm)
-    mhc.py           # Multi-channel hyper-connections
+    mhc.py           # Multi-Rate Residual (MRR) — per-channel γ scaling
     sparsity.py      # Block-ELL + CMS + compaction
     routing.py       # ReMoE over macro tiles
     prediction.py    # STP + LeJEPA split_nsm

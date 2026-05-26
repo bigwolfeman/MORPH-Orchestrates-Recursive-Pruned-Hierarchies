@@ -1,4 +1,4 @@
-"""Multi-scale Hyper-Connections (mHC) — dimension-splitting residual stream.
+"""Multi-Rate Residual (MRR) — dimension-splitting residual stream.
 
 Motivation
 ----------
@@ -7,8 +7,9 @@ value embeds, diagonal injection, bigram, memory) all writing into a single
 d_model-dim residual stream creates destructive interference during
 autoregressive generation even when teacher-forced PPL is low.
 
-mHC splits the stream into three *channels* with different mixing / retention
-rates, so each signal type has a dedicated slice and retention timescale:
+Multi-Rate Residual splits the stream into three *channels* with different
+mixing / retention rates, so each signal type has a dedicated slice and
+retention timescale:
 
   Channel 0 — Compute (384 dims): primary attention + MLP outputs. Fast rate.
   Channel 1 — Context (256 dims): x0 skip, value embeds, loop injection.
@@ -23,7 +24,10 @@ This adds only n_channels × n_sublayers × n_layers scalars to the model.
 For 3 channels × 2 sublayers × 12 layers = 72 new scalars (144 parameters
 total for alpha + gamma).
 
-References: Hyper-Connections (arXiv 2409.19606).
+Note: this is a simpler per-channel residual scaling — NOT the paper's full
+mHC (multi-channel hyper-connections, arXiv 2409.19606) which also mixes
+input representations across channels. We use the dimension-splitting residual
+stream idea without the input mixing component.
 
 Design notes
 ------------
@@ -31,8 +35,8 @@ Design notes
 - bf16 compatible: all dtype casts handled at injection boundaries.
 - torch.compile friendly: no Python control flow on tensor values, no in-place
   ops on views, no dynamic shapes.
-- MHCTransformerBlock accepts the attention and MLP as pre-built nn.Module
-  instances, keeping this file decoupled from model architecture.
+- MORPHBlock accepts the attention and MLP as pre-built nn.Module instances,
+  keeping this file decoupled from model architecture.
 """
 
 import math
@@ -63,10 +67,10 @@ def _make_slices(channel_dims: tuple[int, ...]) -> list[slice]:
     return slices
 
 
-# ── MHCResidual ───────────────────────────────────────────────────────────────
+# ── MultiRateResidual ─────────────────────────────────────────────────────────
 
-class MHCResidual(nn.Module):
-    """Wrap a sublayer with mHC dimension-split residual dynamics.
+class MultiRateResidual(nn.Module):
+    """Wrap a sublayer with multi-rate residual (MRR) dimension-split dynamics.
 
     After the sublayer (additive residual with per-channel gain):
         h[chᵢ] = h[chᵢ] + γᵢ · o[chᵢ]
@@ -137,7 +141,7 @@ class MHCResidual(nn.Module):
         *args,
         **kwargs,
     ) -> Tensor:
-        """Apply sublayer with mHC channel-split additive residual.
+        """Apply sublayer with MRR channel-split additive residual.
 
         Args:
             h:           [B, S, D] full residual stream.
@@ -161,9 +165,9 @@ class MHCResidual(nn.Module):
         return torch.cat(out_chunks, dim=-1)
 
 
-# ── MHCChannelInject ──────────────────────────────────────────────────────────
+# ── ChannelInject ─────────────────────────────────────────────────────────────
 
-class MHCChannelInject(nn.Module):
+class ChannelInject(nn.Module):
     """Inject a signal into a specific channel slice of the residual stream.
 
     Useful for targeted injection of:
@@ -233,14 +237,14 @@ class MHCChannelInject(nn.Module):
         return torch.cat([prefix, target, suffix], dim=-1)
 
 
-# ── MHCTransformerBlock ───────────────────────────────────────────────────────
+# ── MORPHBlock ────────────────────────────────────────────────────────────────
 
-class MHCTransformerBlock(nn.Module):
-    """TransformerBlock with mHC dimension-split residual dynamics.
+class MORPHBlock(nn.Module):
+    """TransformerBlock with multi-rate residual (MRR) dimension-split dynamics.
 
-    Wraps attention and MLP each in an MHCResidual with independent per-channel
-    alpha/gamma parameters. The underlying attention and MLP modules are
-    unchanged (d_model-dim in, d_model-dim out). Only the residual connection
+    Wraps attention and MLP each in a MultiRateResidual with independent
+    per-channel alpha/gamma parameters. The underlying attention and MLP modules
+    are unchanged (d_model-dim in, d_model-dim out). Only the residual connection
     has per-channel learned gain parameters.
 
     Accepts pre-built attention and MLP modules so this file stays decoupled
@@ -261,7 +265,7 @@ class MHCTransformerBlock(nn.Module):
 
     Usage::
 
-        block = MHCTransformerBlock(
+        block = MORPHBlock(
             norm_attn=RMSNorm(d_model),
             attn=MyAttention(cfg),
             norm_mlp=RMSNorm(d_model),
@@ -288,9 +292,9 @@ class MHCTransformerBlock(nn.Module):
         self.mlp       = mlp
         self.drop      = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
 
-        # Independent mHC wrappers per sublayer — they learn at different rates.
-        self.mhc_attn = MHCResidual(channel_dims=channel_dims)
-        self.mhc_mlp  = MHCResidual(channel_dims=channel_dims)
+        # Independent MRR wrappers per sublayer — they learn at different rates.
+        self.mrr_attn = MultiRateResidual(channel_dims=channel_dims)
+        self.mrr_mlp  = MultiRateResidual(channel_dims=channel_dims)
 
     def forward(
         self,
@@ -298,7 +302,7 @@ class MHCTransformerBlock(nn.Module):
         attn_kwargs: dict | None = None,
         mlp_kwargs: dict | None = None,
     ) -> Tensor:
-        """Forward pass: attention sublayer then MLP sublayer with mHC residuals.
+        """Forward pass: attention sublayer then MLP sublayer with MRR residuals.
 
         Args:
             h:           [B, T, D] residual stream.
@@ -317,6 +321,6 @@ class MHCTransformerBlock(nn.Module):
         def _mlp_fn(x: Tensor) -> Tensor:
             return self.drop(self.mlp(self.norm_mlp(x), **mlp_kwargs))
 
-        h = self.mhc_attn(h, _attn_fn)
-        h = self.mhc_mlp(h, _mlp_fn)
+        h = self.mrr_attn(h, _attn_fn)
+        h = self.mrr_mlp(h, _mlp_fn)
         return h

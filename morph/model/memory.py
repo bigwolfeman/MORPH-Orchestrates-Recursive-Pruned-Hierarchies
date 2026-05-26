@@ -19,7 +19,7 @@ Design principles:
 
 Source lineage:
   titans_core/memory/neural_memory.py     (NeuralMemory v3 implementation)
-  TPU/subq-attention/looped_model_mhc.py  (integration patterns)
+  TPU/subq-attention/looped_model_mhc.py  (integration patterns — legacy name, pre-MRR rename)
 """
 
 from __future__ import annotations

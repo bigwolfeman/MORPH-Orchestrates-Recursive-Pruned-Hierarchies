@@ -343,36 +343,35 @@ class RoutedBlockELLLinear(nn.Module):
 
     # ── Forward ──────────────────────────────────────────────────────────────
 
-    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, x: Tensor) -> Tensor:
         """Routed sparse forward pass.
 
+        API-compatible with BlockELLLinear: returns a single tensor.
+        The aux_loss is stashed on self._last_aux_loss for collection
+        by the training loop (see collect_routing_aux_losses()).
+
         Args:
-            x: [B, T, in_features] — input activations.
+            x: [..., in_features] — input activations.
 
         Returns:
-            output:   [B, T, out_features]
-            aux_loss: scalar — router load-balance loss, add to training loss.
+            output: [..., out_features]
         """
         # 1. Router: compute per-token gates for each tile-group
         gates, aux_loss = self.router(x)   # gates: [B, T, n_clusters]
+        self._last_aux_loss = aux_loss
 
         # 2. Block-ELL forward with soft gating
         cms = self.linear._cms
 
         if self.use_routed_kernel and hasattr(cms, "k_active_macros"):
-            # True-sparse path: convert gates to integer k_active per token
-            # using the column-packed layout from compact_with_reorder.
-            # k_active per token = sum of active clusters * tiles_per_cluster
-            # Approximate: scale by activation_ratio × K_max
             K_max = cms.K
             active_fraction = (gates > 0).float().mean(dim=-1)  # [B, T]
             k_active = (active_fraction * K_max).round().clamp(min=1, max=K_max).to(torch.int32)
             output = cms.routed_forward_v2(x, k_active)
         else:
-            # Soft gating path: compute all tiles, scale by gate values
             output = cms.gated_forward(x, gates)  # [B, T, out_features]
 
-        return output, aux_loss
+        return output
 
     def extra_repr(self) -> str:
         return (
@@ -380,3 +379,36 @@ class RoutedBlockELLLinear(nn.Module):
             f"n_tile_groups={self.n_tile_groups}, "
             f"activation_ratio={self.router.activation_ratio:.2f}"
         )
+
+
+# =============================================================================
+# Utilities for the training loop
+# =============================================================================
+
+
+def collect_routing_aux_losses(model: nn.Module) -> Tensor:
+    """Collect and clear stashed aux_losses from all RoutedBlockELLLinear modules.
+
+    Call this AFTER model.forward() and BEFORE loss.backward().
+    Returns a scalar tensor (sum of all aux losses), or 0 if no routed layers.
+    """
+    total = torch.tensor(0.0, device=next(model.parameters()).device)
+    for m in model.modules():
+        if isinstance(m, RoutedBlockELLLinear):
+            aux = getattr(m, "_last_aux_loss", None)
+            if aux is not None:
+                total = total + aux
+                m._last_aux_loss = None
+    return total
+
+
+def collect_routing_stats(model: nn.Module) -> Dict[str, float]:
+    """Collect routing diagnostics from all TileRouters for wandb logging."""
+    stats: Dict[str, float] = {}
+    for name, m in model.named_modules():
+        if isinstance(m, RoutedBlockELLLinear):
+            rs = m.router.log_stats()
+            safe = name.replace(".", "_")
+            for k, v in rs.items():
+                stats[f"{k}/{safe}"] = v
+    return stats

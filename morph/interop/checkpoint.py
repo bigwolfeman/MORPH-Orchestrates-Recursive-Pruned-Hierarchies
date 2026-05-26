@@ -10,11 +10,11 @@ Handles the full MORPH parameter namespace:
   embed.bigram.embed.weight          embed/bigram/embed/embedding
   embed.bigram.lambdas               embed/bigram/lambdas
 
-  prelude.0.norm_attn.scale          prelude_0/mhc_attn/norm_attn/scale
-  prelude.0.attn.cca_csa.W_q.weight  prelude_0/mhc_attn/attn/cca_csa/W_q/kernel
-  prelude.0.mlp.gate_up.weight       prelude_0/mhc_mlp/mlp/gate_up/kernel
-  prelude.0.mhc_attn.alpha_raw       prelude_0/mhc_attn/alpha_raw
-  prelude.0.mhc_attn.gamma_raw       prelude_0/mhc_attn/gamma_raw
+  prelude.0.norm_attn.scale          prelude_0/mrr_attn/norm_attn/scale
+  prelude.0.attn.cca_csa.W_q.weight  prelude_0/mrr_attn/attn/cca_csa/W_q/kernel
+  prelude.0.mlp.gate_up.weight       prelude_0/mrr_mlp/mlp/gate_up/kernel
+  prelude.0.mrr_attn.alpha_raw       prelude_0/mrr_attn/alpha_raw
+  prelude.0.mrr_attn.gamma_raw       prelude_0/mrr_attn/gamma_raw
 
   core.N.*                           core_N/*
   coda.N.*                           coda_N/*

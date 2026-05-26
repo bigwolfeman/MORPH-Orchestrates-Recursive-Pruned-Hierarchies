@@ -26,8 +26,8 @@ __all__ = [
 _NO_DECAY_KEYWORDS = (
     "norm", "bias", "log_A", "log_dt",            # Norms + biases + SSM
     "injection",                                    # DiagonalInjection scalars
-    "channel_scales", "alpha_raw", "gamma_raw",    # MHC channel params
-    "log_scale",                                   # MHC log scales
+    "channel_scales", "alpha_raw", "gamma_raw",    # MRR channel params
+    "log_scale",                                   # MRR log scales
     "x0_injects", "value_embeds",                  # Skip/value inject gates
     "lm_mixer",                                    # LM head mixer
     "embed",                                       # Embedding tables

@@ -44,21 +44,21 @@ import flax.linen as nn
 
 from .attention import CCACSAHCAAttention, RMSNorm
 from .embeddings import MORPHEmbedding
-from .mhc import MHCResidual, MHCChannelInject, DEFAULT_CHANNEL_DIMS
+from .mhc import MultiRateResidual, ChannelInject, DEFAULT_CHANNEL_DIMS
 from .memory import MemorySystem
 from .prediction import STPLoss, ZLatentHeads, split_nsm_outer_loss, _smooth_l1, SIGReg
 
 
-# ── MORPHTransformerBlock: MHCTransformerBlock with n_skip support ────────────
+# ── MORPHTransformerBlock: MORPHBlock with n_skip support ─────────────────────
 
 
 class MORPHTransformerBlock(nn.Module):
-    """Transformer block with mHC residual dynamics and n_skip support.
+    """Transformer block with multi-rate residual dynamics and n_skip support.
 
-    Extends MHCTransformerBlock to pass n_skip to the attention module,
+    Extends MORPHBlock to pass n_skip to the attention module,
     which is needed for RoPE offset when MAC tokens are prepended.
 
-    Attributes match MHCTransformerBlock:
+    Attributes match MORPHBlock:
         attn_module : CCACSAHCAAttention
         mlp_module  : SwiGLU
         d_model     : int
@@ -81,18 +81,18 @@ class MORPHTransformerBlock(nn.Module):
     ) -> jnp.ndarray:
         norm_attn = RMSNorm(eps=self.norm_eps, name="norm_attn")
         norm_mlp  = RMSNorm(eps=self.norm_eps, name="norm_mlp")
-        mhc_attn = MHCResidual(channel_dims=self.channel_dims, name="mhc_attn")
-        mhc_mlp  = MHCResidual(channel_dims=self.channel_dims, name="mhc_mlp")
+        mrr_attn = MultiRateResidual(channel_dims=self.channel_dims, name="mrr_attn")
+        mrr_mlp  = MultiRateResidual(channel_dims=self.channel_dims, name="mrr_mlp")
 
         def _attn_fn(x):
             return self.attn_module(norm_attn(x), n_skip=n_skip)
 
-        h = mhc_attn(h, _attn_fn)
+        h = mrr_attn(h, _attn_fn)
 
         def _mlp_fn(x):
             return self.mlp_module(norm_mlp(x), deterministic=deterministic)
 
-        h = mhc_mlp(h, _mlp_fn)
+        h = mrr_mlp(h, _mlp_fn)
         return h
 
 
@@ -436,7 +436,7 @@ class MORPHTransformer(nn.Module):
 
         # ── x0 skip (inject into context channel) ─────────────────────────
         self.x0_injects = [
-            MHCChannelInject(
+            ChannelInject(
                 channel_start=self._ctx_start,
                 channel_end=self._ctx_end,
                 d_signal=d,
@@ -450,7 +450,7 @@ class MORPHTransformer(nn.Module):
         n_ve = min(3, cfg.n_prelude)
         self._n_ve = n_ve
         self.value_embeds = [
-            MHCChannelInject(
+            ChannelInject(
                 channel_start=self._ctx_start,
                 channel_end=self._ctx_end,
                 d_signal=d,

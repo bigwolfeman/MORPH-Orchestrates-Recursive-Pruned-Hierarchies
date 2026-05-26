@@ -2,7 +2,7 @@
 
 **MORPH** (Orchestrates Recursive Pruned Hierarchies) is a production research model combining
 Parcae-style looped transformers, Block-ELL structured sparsity, CCA+CSA+HCA triple-axis
-attention compression, neural memory with SSM outer loop, mHC multi-channel residual streams,
+attention compression, neural memory with SSM outer loop, Multi-Rate Residual (MRR) channels,
 STP geodesic regularization, LeJEPA z-latent prediction, hybrid hyperbolic/Euclidean embeddings,
 STE ternary shadow weights, and ReMoE product-key routing.
 
@@ -116,25 +116,32 @@ minimization — S_t = η_t·S_{t-1} − θ_t·∇‖M(k)−v‖², M_t = (1−�
 
 ## 4. Residual Streams
 
-### mHC — Manifold-Constrained Hyper-Connections
+### Multi-Rate Residual (MRR) — MORPH's approach
+MORPH uses a **Multi-Rate Residual (MRR)**: the d_model-dim hidden state is split into 3
+sub-channels (compute 3N, context 2N, memory N) with per-channel learned γ gains on the
+residual update. Sublayers see the full d_model; channel separation is only on the residual
+side. This is a simpler mechanism than HC/mHC — no cross-stream mixing, no aggregation/
+distribution matrices, no input-dependent gating. It stabilizes looping via different
+update rates per channel.
+
+### mHC — Manifold-Constrained Hyper-Connections (related work)
 **Title:** mHC: Manifold-Constrained Hyper-Connections  
 **Authors:** DeepSeek-AI (19 researchers, led by Liang Wenfeng)  
 **Year:** 2025  
 **arXiv:** [2512.24880](https://arxiv.org/abs/2512.24880)  
-**MORPH uses:** The multi-stream residual architecture where each layer reads from and writes
-to N parallel residual channels via a doubly-stochastic mixing matrix (Sinkhorn-Knopp
-normalized onto the Birkhoff polytope), preserving feature-mean conservation and bounded
-signal propagation. Eliminates the catastrophic amplification (~3000×) that unconstrained
-Hyper-Connections can exhibit at depth.
+**Relation to MORPH:** mHC uses n parallel full-C-dim streams with an n×n doubly-stochastic
+mixing matrix (Sinkhorn-Knopp, Birkhoff polytope), plus aggregation (H^pre) and distribution
+(H^post) vectors with dynamic input-dependent gating. **MORPH does NOT implement mHC** —
+our MRR is a simpler per-channel scaling approach. An ablation comparing MRR vs mHC is planned.
 
-### Hyper-Connections (predecessor to mHC)
+### Hyper-Connections (predecessor to mHC, related work)
 **Title:** Hyper-Connections  
 **Authors:** Defa Zhu et al. (ByteDance)  
 **Year:** 2024 (ICLR 2025)  
 **arXiv:** [2409.19606](https://arxiv.org/abs/2409.19606)  
-**MORPH uses:** The concept of expanding a single residual stream into N parallel streams with
-learned inter-stream routing (generalized residuals). MORPH implements the mHC-stabilized
-variant (arXiv:2512.24880), but this paper is the origin of the multi-stream residual idea.
+**Relation to MORPH:** Origin of the multi-stream residual concept. HC uses unconstrained n×n
+mixing matrices. MORPH's MRR was inspired by the concept of different update rates but uses
+a much simpler per-channel diagonal approach.
 
 ---
 

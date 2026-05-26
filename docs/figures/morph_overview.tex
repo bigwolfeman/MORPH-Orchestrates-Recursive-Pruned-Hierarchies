@@ -108,7 +108,7 @@
   {$\times$2N layers};
 % Core side inputs
 \node[sub, text=cbOrange, left=2.4cm of ca, align=right]
-  (csid) {mHC residual\\$\gamma_i$ per channel\\$x_0$, bigram};
+  (csid) {MRR residual\\$\gamma_i$ per channel\\$x_0$, bigram};
 \draw[Ad, cbOrange] (csid.east) -- (ca.west);
 
 % ── LOOP-BACK ARROW ─────────────────────────────────────────────────
@@ -214,7 +214,7 @@
 % =====================================================================
 
 \node[below=0.9cm of inp, font=\footnotesize\sffamily\bfseries] (leg)
-  {mHC Channels:};
+  {MRR Channels:};
 \node[right=0.4cm of leg, fill=cbBlue!20, draw=cbBlue,
       rounded corners=2pt, inner sep=3pt, font=\tiny\sffamily\bfseries]
   (l1) {Compute (384)};
