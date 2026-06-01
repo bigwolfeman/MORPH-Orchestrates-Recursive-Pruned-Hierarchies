@@ -1,7 +1,0 @@
-- training.steps=10
-- training.eval_every=9999
-- training.ckpt_every=9999
-- training.prune_start=999999
-- training.compact_step=9999999
-- model.use_kernels=false
-- wandb.name=smoke_eager

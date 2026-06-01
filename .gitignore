@@ -29,3 +29,8 @@ checkpoints/
 Thumbs.db
 .vscode/
 .idea/
+
+# Run artifacts
+outputs/
+wandb/
+multi­run/
