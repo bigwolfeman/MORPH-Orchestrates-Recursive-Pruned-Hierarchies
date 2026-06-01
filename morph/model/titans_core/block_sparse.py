@@ -1365,7 +1365,8 @@ class CMSBlockLinear(nn.Module):
             self.col_usage_count.scatter_add_(
                 0,
                 self.col_indices.flatten().long(),
-                torch.ones(self.R * self.K, device=self.col_indices.device, dtype=torch.float32)
+                torch.ones(self.R * self.K, device=self.col_indices.device,
+                           dtype=self.col_usage_count.dtype)  # match buffer dtype (robust if model cast)
             )
 
         # Invalidate column index cache since topology changed

@@ -398,7 +398,8 @@ def fused_hca_attention(q: Tensor, C_comp: Tensor, sink_logits: Tensor,
     Returns:
         out_comp:    [B, H, S, D]   matches the eager einsum HCA path exactly.
     """
-    if not TRITON_AVAILABLE or not q.is_cuda:
+    from morph.kernels.triton._eager_flag import force_eager
+    if force_eager() or not TRITON_AVAILABLE or not q.is_cuda:
         return hca_attention_reference(q, C_comp, sink_logits, m, scale)
     return _FusedHCAAttention.apply(q, C_comp, sink_logits, m, scale)
 

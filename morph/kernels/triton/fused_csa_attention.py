@@ -383,7 +383,8 @@ def fused_csa_attention(q: Tensor, C_comp: Tensor, top_idx: Tensor,
 
     Never materialises C_sel = [B, S, tk, D] (the ~2 GiB/layer tensor at scale).
     """
-    if not TRITON_AVAILABLE or not q.is_cuda:
+    from morph.kernels.triton._eager_flag import force_eager
+    if force_eager() or not TRITON_AVAILABLE or not q.is_cuda:
         return csa_attention_reference(q, C_comp, top_idx, invalid_mask,
                                        sink_logits, scale)
     return _FusedCSAAttention.apply(q, C_comp, top_idx, invalid_mask,

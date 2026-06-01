@@ -416,7 +416,8 @@ def fused_cca_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor,
     assert C % groups == 0, f"C={C} not divisible by groups={groups}"
     CG = C // groups
 
-    if not TRITON_AVAILABLE or not x_BCS.is_cuda:
+    from morph.kernels.triton._eager_flag import force_eager
+    if force_eager() or not TRITON_AVAILABLE or not x_BCS.is_cuda:
         return causal_conv_reference(x_BCS, w_dw, w_gp, kernel)
 
     return _FusedCCAConv.apply(x_BCS, w_dw, w_gp, CG, kernel)

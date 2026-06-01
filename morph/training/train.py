@@ -163,6 +163,7 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         stp_lambda=float(m.stp_lambda),
         stp_tau=int(m.stp_tau),
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
+        use_kernels=bool(getattr(m, "use_kernels", True)),
         dropout=float(tr.dropout),
     )
 
@@ -257,10 +258,15 @@ def main(cfg: DictConfig) -> None:
     # which are incompatible with fullgraph compile).
     if use_compile:
         for group in [model.prelude, model.core, model.coda]:
+            # Core MLPs see a VARIABLE batch each loop iteration (active-set
+            # shrinking processes the still-active prefix), so compile them with
+            # dynamic batch to avoid a recompile per distinct sub-batch size.
+            # Prelude/coda see a fixed batch → let Dynamo auto-decide (None).
+            dyn = True if group is model.core else None
             for layer in group:
                 if hasattr(layer, "mlp"):
-                    layer.mlp = torch.compile(layer.mlp, mode=compile_mode)
-        print(f"  MLPs compiled (mode={compile_mode})")
+                    layer.mlp = torch.compile(layer.mlp, mode=compile_mode, dynamic=dyn)
+        print(f"  MLPs compiled (mode={compile_mode}, core dynamic-batch)")
 
     # ── Optimizer + LR schedule ───────────────────────────────────────────
     optimizer = create_optimizer(model, cfg)
@@ -356,11 +362,19 @@ def main(cfg: DictConfig) -> None:
         # ── Logging (every 20 steps) ──────────────────────────────────────
         if step % 20 == 0:
             sps = 1.0 / (sum(step_times) / max(len(step_times), 1))
+            # Memory: allocated = peak live tensors; reserved = what the caching
+            # allocator grabbed from the driver (alloc overhead/fragmentation).
+            # The eager-vs-kernel gap in BOTH is the real "alloc overhead" delta.
+            peak_alloc = torch.cuda.max_memory_allocated() / 2**20
+            peak_resv = torch.cuda.max_memory_reserved() / 2**20
             log: dict = {
                 "train/loss": loss.item(),
                 "train/ppl": math.exp(min(loss.item(), 20.0)),
                 "train/lr": lr,
                 "perf/steps_per_sec": sps,
+                "perf/tokens_per_sec": sps * batch_size * seq_len,
+                "perf/peak_mem_alloc_mib": peak_alloc,
+                "perf/peak_mem_reserved_mib": peak_resv,
                 "perf/step": step,
             }
             if "stp_loss" in out:

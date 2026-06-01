@@ -31,6 +31,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 
 from .attention import CCACSAHCAAttention, RMSNorm
+from .chunked_ce import chunked_cross_entropy, naive_cross_entropy
 from .embeddings import MORPHEmbedding
 from .mhc import MultiRateResidual, ChannelInject, DEFAULT_CHANNEL_DIMS
 from .prediction import STPLoss
@@ -124,6 +125,12 @@ class MORPHConfig:
     # Prediction (STP — Semantic Tube Predictor, geometric regularizer)
     stp_lambda: float = 0.02
     stp_tau: int = 64
+
+    # LM head — chunked cross-entropy chunk size (token rows per chunk).
+    # Tune per target: larger = faster (fewer XLA kernel launches) but more
+    # HBM; smaller = lower peak HBM, more launches.  1024 is a safe default.
+    # At V=49152 bf16: 1024 rows ≈ 96 MiB vs N=32768 rows ≈ 3.1 GiB.
+    ce_chunk_size: int = 1024
 
     # Training
     dropout: float = 0.1
@@ -530,19 +537,41 @@ class MORPHTransformer(nn.Module):
         total_iters = int(cfg.max_depth) if training else int(cfg.mean_depth)
         n_nograd = max(0, total_iters - cfg.bptt_depth)
 
+        # ── x0-hoist: precompute loop-invariant x0 injection terms ───────────
+        # Each core ChannelInject applies ``scale · proj(x0)`` — both the
+        # projection weight and log_scale are static across all loop iterations
+        # (x0 is cloned once before the loop).  Computing this n_core times
+        # per iteration wastes n_core × (total_iters - 1) identical matmuls.
+        # Hoist them here: compute once, reuse at each iteration.
+        # Result shape: [n_core, B, T, channel_width] — one term per core layer.
+        # This is bit-exact equivalent to per-iteration recomputation because
+        # no cross-iteration state touches x0.
+        np_ = cfg.n_prelude
+        n_core = cfg.n_core
+        x0_dtype = jnp.bfloat16
+        x0_core_terms = jnp.stack(
+            [self.x0_injects[np_ + i].precompute(x0, dtype=x0_dtype)
+             for i in range(n_core)],
+            axis=0,
+        )  # [n_core, B, T, channel_width]
+
         for t in range(total_iters):
             # active[b] = True if sample b is still iterating at step t
             active = (t < depths)[:, None, None]  # [B, 1, 1]
 
             # Capture loop variables explicitly to avoid closure mutation issues
-            _e, _ids, _x0, _bg = e, input_ids, x0, bigram_emb
+            _e, _ids, _bg = e, input_ids, bigram_emb
+            _x0_terms = x0_core_terms
             _det = not training
 
             def _core_step(h_in):
                 h_inj = self.injection(h_in, _e)
                 for ci, clayer in enumerate(self.core):
-                    gi = cfg.n_prelude + ci
-                    h_inj = self._apply_x0(h_inj, gi, _x0)
+                    gi = np_ + ci
+                    # Apply precomputed x0 term (no projection matmul inside loop)
+                    h_inj = self.x0_injects[gi].apply_precomputed(
+                        h_inj, _x0_terms[ci]
+                    )
                     h_inj = self._apply_ve(h_inj, gi, _ids)
                     h_inj = self.embed.bigram.inject(h_inj, _bg, gi)
                     h_inj = clayer(h_inj, deterministic=_det)
@@ -574,23 +603,42 @@ class MORPHTransformer(nn.Module):
         # ── LM head ────────────────────────────────────────────────────────
         x_for_head = self.lm_mixer(x)
         x_for_head = self.final_norm(x_for_head)
-        logits = self.embed.attend(x_for_head)
 
-        out = {"logits": logits}
-
-        if labels is not None:
-            # Cross-entropy loss
-            B_flat = B * T
-            vocab = cfg.vocab_size
-            log_probs = jax.nn.log_softmax(logits.reshape(B_flat, vocab).astype(jnp.float32), axis=-1)
-            labels_flat = labels.reshape(B_flat)
-            valid = labels_flat != -100
-            ce_loss = -jnp.sum(
-                jnp.where(valid, log_probs[jnp.arange(B_flat), jnp.where(valid, labels_flat, 0)], 0.0)
-            ) / jnp.maximum(valid.sum(), 1)
-
+        if labels is not None and training:
+            # ── Training: chunked CE — never materialises [B, T, V] logits ──
+            # Peak memory: O(chunk_size × V) instead of O(B·T × V).
+            # At V=49152, B=8, T=4096 (bf16): 3.1 GiB → ~96 MiB at chunk=1024.
+            # Gradient flows to x_for_head and the embedding weight matrix
+            # through lm_weight() (same tied-weight semantics as attend()).
+            w_full = self.embed.lm_weight()                        # [V, d_model]
+            ce_loss = chunked_cross_entropy(
+                x_for_head.reshape(B * T, cfg.d_model),
+                w_full,
+                labels.reshape(B * T).astype(jnp.int32),
+                ignore_index=-100,
+                chunk_size=cfg.ce_chunk_size,
+            )
             loss = ce_loss + cfg.stp_lambda * stp_loss
-            out["stp_loss"] = stp_loss
-            out["loss"] = loss
+            # logits intentionally not materialised in training (unused;
+            # generation + eval take the full-logits branch below).
+            out = {"logits": None, "stp_loss": stp_loss, "loss": loss}
+        else:
+            # ── Eval / generation: full logits path ──────────────────────────
+            logits = self.embed.attend(x_for_head)                 # [B, T, V]
+            out = {"logits": logits}
+            if labels is not None:
+                # Eval-time CE: materialize logits (batch is typically small).
+                B_flat = B * T
+                vocab = cfg.vocab_size
+                labels_flat = labels.reshape(B_flat).astype(jnp.int32)
+                ce_loss = naive_cross_entropy(
+                    x_for_head.reshape(B_flat, cfg.d_model),
+                    self.embed.lm_weight(),
+                    labels_flat,
+                    ignore_index=-100,
+                )
+                loss = ce_loss + cfg.stp_lambda * stp_loss
+                out["stp_loss"] = stp_loss
+                out["loss"] = loss
 
         return out

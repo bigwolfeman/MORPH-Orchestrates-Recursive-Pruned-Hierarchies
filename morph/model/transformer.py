@@ -70,6 +70,13 @@ class MORPHConfig:
     # memory / very long context.
     ce_chunk_size: int = 1024
 
+    # Master kernel switch. True = fused Triton attention + fused chunked CE
+    # (the optimised stack). False = eager PyTorch references + full-logits CE
+    # (the un-optimised baseline) — same architecture/weights, for A/B on memory
+    # and throughput. The bit-exact loop opts (x0-hoist, active-set) stay on in
+    # BOTH arms (they are not "kernels" and have no downside).
+    use_kernels: bool = True
+
     # Training
     dropout: float = 0.1
 
@@ -256,9 +263,17 @@ class MORPHTransformer(nn.Module):
         # ── Prediction (STP — Semantic Tube Predictor) ────────────────
         self.stp = STPLoss()
 
+        # Master kernel switch → drives the fused-Triton-vs-eager-reference
+        # dispatch in the attention kernels (process-global flag). Set at build
+        # so the choice is captured in the run; the fused-CE branch in forward()
+        # reads self.cfg.use_kernels directly.
+        from morph.kernels.triton._eager_flag import set_force_eager
+        set_force_eager(not cfg.use_kernels)
+
         n_params = sum(p.numel() for p in self.parameters())
         print(f"MORPHTransformer: {n_params/1e6:.1f}M params, "
-              f"loop {cfg.n_prelude}:{cfg.n_core}×{cfg.mean_depth}:{cfg.n_coda}")
+              f"loop {cfg.n_prelude}:{cfg.n_core}×{cfg.mean_depth}:{cfg.n_coda} "
+              f"(kernels={'fused' if cfg.use_kernels else 'EAGER'})")
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -392,7 +407,7 @@ class MORPHTransformer(nn.Module):
         x = self.lm_mixer(x)
         x = self.final_norm(x)
 
-        if labels is not None and self.training:
+        if labels is not None and self.training and self.cfg.use_kernels:
             # Training: fused chunked cross-entropy. Never materialises the
             # [B, T, V] logits (the dominant activation-memory cost at scale) —
             # computes loss + grads in vocab-row chunks against the tied weight.

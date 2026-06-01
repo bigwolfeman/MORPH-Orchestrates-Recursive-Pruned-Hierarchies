@@ -136,6 +136,14 @@ class ChannelInject(nn.Module):
     A learned scalar gate (init from init_scale) modulates magnitude.
     An optional linear projection handles d_signal ≠ channel_width.
 
+    Supports loop-invariant hoisting via the precompute / apply_precomputed
+    split: for a signal that is constant across loop iterations (e.g. x0),
+    call precompute(signal) once outside the loop to get the additive term
+    (``scale · proj(signal)``), then call apply_precomputed(h, term) inside
+    the loop. This avoids re-running the projection matmul (d_signal →
+    channel_width) on every iteration — the saving is n_core × total_iters
+    matmuls collapsed to n_core, bit-exact equivalent.
+
     Attributes
     ----------
     channel_start : int
@@ -151,9 +159,72 @@ class ChannelInject(nn.Module):
     d_signal: int
     init_scale: float = 0.0
 
-    @nn.compact
-    def __call__(self, h: jnp.ndarray, signal: jnp.ndarray) -> jnp.ndarray:
+    def setup(self):
+        channel_width = self.channel_end - self.channel_start
+
+        self.log_scale = self.param(
+            "log_scale",
+            nn.initializers.constant(self.init_scale),
+            (),
+        )
+
+        if self.d_signal != channel_width:
+            self.proj: nn.Module = nn.Dense(
+                channel_width,
+                use_bias=False,
+                kernel_init=nn.initializers.normal(0.02),
+                name="proj",
+            )
+        else:
+            self.proj = None  # identity — no matmul
+
+    def _project(self, signal: jnp.ndarray, dtype: jnp.dtype) -> jnp.ndarray:
+        """Project signal to channel_width and cast to dtype."""
+        if self.proj is not None:
+            return self.proj(signal).astype(dtype)
+        return signal.astype(dtype)
+
+    def precompute(self, signal: jnp.ndarray, dtype: jnp.dtype = jnp.bfloat16) -> jnp.ndarray:
+        """Compute the loop-invariant additive term: ``scale · project(signal)``.
+
+        Returns a tensor of shape ``[..., channel_width]``.  Call this once
+        outside the core loop for a loop-invariant signal (x0), then pass the
+        result to ``apply_precomputed`` at each iteration.
+
+        Args:
+            signal: [..., d_signal] loop-invariant signal (e.g. x0).
+            dtype:  compute dtype (should match h.dtype, default bf16).
+
+        Returns:
+            [..., channel_width] the additive injection term.
         """
+        s = self._project(signal, dtype)
+        scale = self.log_scale.astype(dtype)
+        return scale * s
+
+    def apply_precomputed(self, h: jnp.ndarray, term: jnp.ndarray) -> jnp.ndarray:
+        """Add a pre-projected additive term to the channel slice of h.
+
+        ``term`` must be the output of :meth:`precompute` (shape
+        ``[..., channel_width]``).  Equivalent to :meth:`__call__` but skips
+        the projection + scale multiplication, which the caller has already
+        done once outside the loop.
+
+        Args:
+            h:    [..., D] full residual stream.
+            term: [..., channel_width] output of precompute().
+
+        Returns:
+            [..., D] h with channel slice updated (no in-place ops).
+        """
+        prefix = h[..., :self.channel_start]
+        target = h[..., self.channel_start:self.channel_end] + term.astype(h.dtype)
+        suffix = h[..., self.channel_end:]
+        return jnp.concatenate([prefix, target, suffix], axis=-1)
+
+    def __call__(self, h: jnp.ndarray, signal: jnp.ndarray) -> jnp.ndarray:
+        """Inject signal into channel slice of h (full path; use for prelude/coda).
+
         Args:
             h:      [..., D] full residual stream.
             signal: [..., d_signal] signal to inject.
@@ -161,33 +232,10 @@ class ChannelInject(nn.Module):
         Returns:
             h with channel slice updated (new array, no in-place).
         """
-        channel_width = self.channel_end - self.channel_start
-
-        # Learned scalar gate (raw — no activation, matches PyTorch log_scale param).
-        scale_raw = self.param(
-            "log_scale",
-            nn.initializers.constant(self.init_scale),
-            (),
-        )
-        scale = scale_raw.astype(h.dtype)
-
-        # Optional projection if signal dim differs from channel width.
-        if self.d_signal != channel_width:
-            s = nn.Dense(
-                channel_width,
-                use_bias=False,
-                kernel_init=nn.initializers.normal(0.02),
-                dtype=h.dtype,
-                name="proj",
-            )(signal)
-        else:
-            s = signal.astype(h.dtype)
-
-        # Assemble updated h without mutation (XLA-friendly).
-        prefix = h[..., :self.channel_start]
-        target = h[..., self.channel_start:self.channel_end] + scale * s
-        suffix = h[..., self.channel_end:]
-        return jnp.concatenate([prefix, target, suffix], axis=-1)
+        # full path = precompute then apply; used in prelude/coda where
+        # the signal is NOT loop-invariant and hoisting doesn't apply.
+        term = self.precompute(signal, dtype=h.dtype)
+        return self.apply_precomputed(h, term)
 
 
 class MORPHBlock(nn.Module):

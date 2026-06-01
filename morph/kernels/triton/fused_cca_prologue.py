@@ -619,7 +619,8 @@ def fused_cca_prologue(
     cos2 = cos.reshape(-1, D)[: q_lat.shape[1]].contiguous()
     sin2 = sin.reshape(-1, D)[: q_lat.shape[1]].contiguous()
 
-    if not TRITON_AVAILABLE or not q_lat.is_cuda:
+    from morph.kernels.triton._eager_flag import force_eager
+    if force_eager() or not TRITON_AVAILABLE or not q_lat.is_cuda:
         return cca_prologue_reference(
             q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,
             q_norm_weight, k_norm_weight, temp, cos, sin,

@@ -159,24 +159,28 @@ class HybridEmbedding(nn.Module):
         lor = self.lor_embed(input_ids)
         return jnp.concatenate([euc, lor], axis=-1)
 
+    def lm_weight(self) -> jnp.ndarray:
+        """Weight-tied LM-head matrix, shape [vocab_size, d_model].
+
+        Single source of truth for the tied head: the euclidean embedding
+        weight concatenated with the lorentz tangent-space weight.  Both
+        ``attend()`` (full logits) and chunked_cross_entropy use this — so
+        gradient flows back through the cat and the lorentz log-map to the
+        underlying embedding parameters regardless of which CE path is used.
+        """
+        euc_w = self.variables["params"]["euc_embed"]["embedding"]   # [V, euc_dim]
+        lor_space_w = self.variables["params"]["lor_embed"]["space_embed"]["embedding"]
+        lor_hyp = project_to_hyperboloid(lor_space_w)
+        lor_w = log_map_origin(lor_hyp)                              # [V, lor_dim]
+        return jnp.concatenate([euc_w, lor_w], axis=-1)             # [V, d_model]
+
     def attend(self, x: jnp.ndarray) -> jnp.ndarray:
         """Weight-tied LM head logits, shape [..., vocab_size].
 
-        Splits x into euclidean and lorentz slices, computes logits from each
-        weight matrix, and sums them for the final score.
+        Uses lm_weight() as the single source of truth — algebraically
+        identical to the per-slice path but cleaner and matches the PT side.
         """
-        x_euc = x[..., :self._euclidean_dim]
-        x_lor = x[..., self._euclidean_dim:]
-
-        euc_w = self.variables["params"]["euc_embed"]["embedding"]  # [V, euc_dim]
-
-        lor_space_w = self.variables["params"]["lor_embed"]["space_embed"]["embedding"]
-        lor_hyp = project_to_hyperboloid(lor_space_w)
-        lor_w = log_map_origin(lor_hyp)                             # [V, lor_dim]
-
-        # Full vocab weight matrix: [V, d_model]
-        w_full = jnp.concatenate([euc_w, lor_w], axis=-1)
-        return x @ w_full.T
+        return x @ self.lm_weight().T
 
 
 # ── BigramEmbedding ───────────────────────────────────────────────────────────
@@ -330,6 +334,15 @@ class MORPHEmbedding(nn.Module):
             layer with the appropriate layer_idx.
         """
         return self.bigram.compute(input_ids)
+
+    def lm_weight(self) -> jnp.ndarray:
+        """Weight-tied LM-head matrix, shape [vocab_size, d_model].
+
+        Delegates to HybridEmbedding.lm_weight() — returns the concatenated
+        [euclidean || lorentz-tangent] weight matrix.  Pass to
+        chunked_cross_entropy for memory-efficient training-time CE.
+        """
+        return self.hybrid.lm_weight()
 
     def attend(self, x: jnp.ndarray) -> jnp.ndarray:
         """Weight-tied LM head: hidden state → vocab logits.

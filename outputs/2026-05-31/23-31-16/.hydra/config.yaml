@@ -1,0 +1,70 @@
+model:
+  d_model: 768
+  n_heads: 12
+  n_layers: 12
+  vocab_size: 49152
+  max_seq_len: 4096
+  n_prelude: 3
+  n_core: 6
+  n_coda: 3
+  mean_depth: 6
+  max_depth: 8
+  bptt_depth: 4
+  channel_dims:
+  - 384
+  - 256
+  - 128
+  compression: 2
+  n_kv_heads: 4
+  csa_compress_ratio: 4
+  hca_compress_ratio: 128
+  top_k: 128
+  window_size: 128
+  context_len: 4096
+  lorentz_fraction: 0.25
+  bigram_hash_vocab: 49152
+  stp_lambda: 0.02
+  stp_tau: 64
+  ce_chunk_size: 1024
+  use_kernels: true
+training:
+  steps: 80
+  batch_size: 4
+  lr: 0.0001
+  warmup: 1500
+  lr_schedule: cosine
+  min_lr: 1.0e-05
+  dropout: 0.1
+  grad_clip: 1.0
+  bf16: true
+  compile: true
+  compile_mode: default
+  checkpointing: true
+  prune_start: 999999
+  prune_interval: 3000
+  prune_rate: 0.05
+  target_density: 0.25
+  compact_step: 9999999
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  ternary: false
+  adam8bit: false
+  eval_every: 9999
+  n_eval_batches: 20
+  ckpt_every: 9999
+  gen_every: 0
+  gen_test: false
+routing:
+  route_start: 70000
+  n_clusters: 16
+  activation_ratio: 0.5
+  aux_loss_coeff: 0.01
+data:
+  dataset: Skylion007/openwebtext
+  tokenizer: bigcode/starcoder2-7b
+  seq_len: 4096
+wandb:
+  project: morph
+  entity: adew-me
+  name: probe_recompile2

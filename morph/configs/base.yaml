@@ -41,6 +41,10 @@ model:
   # Smaller = less peak VRAM, more launch overhead. Tune per target.
   ce_chunk_size: 1024
 
+  # Master kernel switch: true = fused Triton attn + fused CE (optimised);
+  # false = eager references + full-logits CE (un-optimised A/B baseline).
+  use_kernels: true
+
 training:
   steps: 100000
   batch_size: 4
