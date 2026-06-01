@@ -38,6 +38,22 @@ try:
 except ImportError:
     _USE_FUSED_WINDOW = False
 
+# Fused CCA prologue (qk-mean → RMSNorm → temp → CoPE-RoPE → GQA expand →
+# value-shift) in one Triton kernel. Public fn falls back to a pure-PyTorch
+# reference when Triton is unavailable, so a direct import is always safe.
+from morph.kernels.triton.fused_cca_prologue import fused_cca_prologue
+# Fused causal conv pair (depthwise + head-grouped), replacing the cuDNN convs
+# whose grouped wgrad backward is slow on sm_120. Verified fwd/grad-exact.
+from morph.kernels.triton.fused_cca_conv import fused_cca_conv
+# Fused HCA compressed attention (flash online-softmax over blocks, sink + early-
+# query guard folded in). Never materializes [B,H,S,n_blocks] scores → big memory
+# win at scale. Verified fwd/grad-exact vs the eager einsum path.
+from morph.kernels.triton.fused_hca_attention import fused_hca_attention
+# Fused CSA compressed attention: gathers the top-k selected blocks ON THE FLY
+# (never materializes C_sel [B,S,tk,D] ≈ 2GB/layer at scale — 11× attn memory),
+# folds invalid-mask + sink into a flash online softmax. Verified fwd/grad-exact.
+from morph.kernels.triton.fused_csa_attention import fused_csa_attention
+
 
 # ─── RMSNorm ──────────────────────────────────────────────────────────────────
 
@@ -300,10 +316,14 @@ class _CCABase(nn.Module):
 
     def _causal_conv(self, x_t: Tensor,
                      conv_dw: nn.Module, conv_gp: nn.Module) -> Tensor:
-        p = self._conv_pad
-        x_t = conv_dw(F.pad(x_t, (p, 0)))
-        x_t = conv_gp(F.pad(x_t, (p, 0)))
-        return x_t
+        # Fused depthwise+grouped causal conv (one Triton kernel, sm_120).
+        # x_t is [B, C, S]. Replaces two cuDNN Conv1d whose grouped wgrad is slow.
+        # Falls back to a PyTorch reference (matching the old two-pad+conv1d) when
+        # Triton is unavailable. Weights cast to x dtype for the autocast bf16 path.
+        return fused_cca_conv(
+            x_t, conv_dw.weight.to(x_t.dtype), conv_gp.weight.to(x_t.dtype),
+            conv_gp.groups, conv_dw.kernel_size[0],
+        )
 
     def _cca_project(self, x: Tensor, n_skip_rope: int = 0):
         """CCA: down-project → conv → QK-mean → norm → temp → RoPE → value-shift.
@@ -322,35 +342,22 @@ class _CCABase(nn.Module):
         k_conv = self._causal_conv(
             k_lat.transpose(1, 2), self.conv_k_dw, self.conv_k_gp).transpose(1, 2)
 
-        # QK-mean: average pre-conv Q and K (K expanded to Q head count), add to post-conv
-        q_pre = q_lat.reshape(B, S, H, D)
-        k_pre = k_lat.reshape(B, S, Hkv, D)
-        k_pre_exp = k_pre.repeat_interleave(self.n_rep, dim=2)   # [B, S, H, D]
-        qk_mean_q = (q_pre + k_pre_exp) * 0.5
-        qk_mean_k = qk_mean_q.reshape(B, S, Hkv, self.n_rep, D).mean(dim=3)
-
-        q = (q_conv.reshape(B, S, H, D) + qk_mean_q).transpose(1, 2)   # [B, H, S, D]
-        k = (k_conv.reshape(B, S, Hkv, D) + qk_mean_k).transpose(1, 2) # [B, Hkv, S, D]
-
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        k = k * torch.exp(self.temp).view(1, Hkv, 1, 1)
-
-        if n_skip_rope > 0:
-            q_r, k_r = self.rope(q[:, :, :-n_skip_rope], k[:, :, :-n_skip_rope])
-            q = torch.cat([q_r, q[:, :, -n_skip_rope:]], dim=2)
-            k = torch.cat([k_r, k[:, :, -n_skip_rope:]], dim=2)
-        else:
-            q, k = self.rope(q, k)
-
-        k = k.repeat_interleave(self.n_rep, dim=1)   # [B, H, S, D]
-
-        # Value-shift: W_v_curr(x_t) || W_v_prev(x_{t-1})
+        # Value-shift latents: W_v_curr(x_t) || W_v_prev(x_{t-1})
         v_curr = self.W_v_curr(x)
         v_prev = self.W_v_prev(F.pad(x[:, :-1], (0, 0, 1, 0)))
-        v = torch.cat([v_curr, v_prev], dim=-1)
-        v = v.reshape(B, S, Hkv, D).transpose(1, 2)
-        v = v.repeat_interleave(self.n_rep, dim=1)   # [B, H, S, D]
+
+        # Fused prologue (one Triton kernel, sm_120): QK-mean coupling → RMSNorm(q/k)
+        # → learnable temp → CoPE-RoPE → GQA repeat → value-shift assembly. Replaces
+        # ~10 eager launches (the launch-bound bottleneck). Returns q,k,v [B,H,S,D]
+        # with K/V already GQA-expanded. Falls back to a PyTorch reference w/o Triton.
+        cos = self.rope.cos_cached[:, :, :S]
+        sin = self.rope.sin_cached[:, :, :S]
+        q, k, v = fused_cca_prologue(
+            q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,
+            self.q_norm.weight, self.k_norm.weight, self.temp,
+            cos, sin,
+            H, Hkv, D, n_skip_rope=n_skip_rope, eps=self.q_norm.eps,
+        )
 
         return q, k, v
 
@@ -421,20 +428,14 @@ class _CCACSAAttention(nn.Module):
         tk = min(self.top_k, n_blocks)
         _, top_idx = scores.topk(tk, dim=-1)           # [B, S, tk]
 
-        batch_idx = torch.arange(B, device=x.device)[:, None, None]
-        C_sel = C_comp[batch_idx, top_idx]             # [B, S, tk, D]
+        # Per-gathered-entry causal validity (future blocks → masked in the kernel)
+        invalid_mask = ~causal_3d.gather(-1, top_idx)  # [B, S, tk]
 
-        # Re-derive per-gathered-entry validity and force -inf on invalid entries
-        gathered_valid = causal_3d.gather(-1, top_idx) # [B, S, tk]
-        invalid_mask = ~gathered_valid                 # True → future block
-
-        attn_scores = torch.einsum("bhsd,bstd->bhst", q, C_sel) * scale
-        attn_scores = attn_scores.masked_fill(invalid_mask.unsqueeze(1), float("-inf"))
-
-        sink = self.cca.sink_logits.view(1, H, 1, 1).expand(B, -1, S, 1)
-        scores_aug = torch.cat([attn_scores, sink], dim=-1)
-        attn_w = F.softmax(scores_aug.float(), dim=-1).to(x.dtype)[..., :-1]
-        out_comp = torch.einsum("bhst,bstd->bhsd", attn_w, C_sel)
+        # Fused CSA gather-attention: gathers the top-k blocks ON THE FLY (never
+        # materializes C_sel [B,S,tk,D] ≈ 2GB/layer at scale), folding the invalid
+        # mask + per-head sink into a flash online softmax.
+        out_comp = fused_csa_attention(
+            q, C_comp, top_idx, invalid_mask, self.cca.sink_logits, scale)
 
         out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope)
         return self.cca._gate_combine_up(x, out_comp, out_win)
@@ -475,22 +476,11 @@ class _CCAHCAAttention(nn.Module):
         scale = D ** -0.5
 
         C_comp = self.comp_norm(self.compressor(x))    # [B, n_blocks, D]
-        causal = _compressed_causal_mask(S, n_blocks, m, x.device)
-        bias = torch.where(causal, 0.0, float("-inf")).unsqueeze(0).unsqueeze(0)
 
-        scores = torch.einsum("bhsd,bnd->bhsn", q, C_comp) * scale + bias
-
-        sink = self.cca.sink_logits.view(1, H, 1, 1).expand(B, -1, S, 1)
-        scores_aug = torch.cat([scores, sink], dim=-1)
-
-        # Early-query guard: detect rows where all compressed scores are -inf
-        no_valid = (scores == float("-inf")).all(dim=-1, keepdim=True)
-        scores_aug = scores_aug.masked_fill(no_valid, 0.0)
-
-        attn_w = F.softmax(scores_aug.float(), dim=-1).to(x.dtype)[..., :-1]
-        attn_w = attn_w.masked_fill(no_valid, 0.0)
-
-        out_comp = torch.einsum("bhsn,bnd->bhsd", attn_w, C_comp)
+        # Fused HCA compressed attention: flash online-softmax over blocks with the
+        # causal-block mask, per-head sink logit, and early-query guard folded in.
+        # Never materializes the [B,H,S,n_blocks] scores tensor (memory win at scale).
+        out_comp = fused_hca_attention(q, C_comp, self.cca.sink_logits, m, scale)
 
         out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope)
         return self.cca._gate_combine_up(x, out_comp, out_win)

@@ -1,10 +1,9 @@
 """MORPH Transformer — Parcae-style looped architecture with all features baked in.
 
 Architecture: prelude → core×T (diagonal injection) → coda
-Three-loop hierarchy:
-  Inner:  Parcae core loop (T iterations with Poisson depth sampling)
-  Middle: Neural memory SSM (gradient-based surprise update on forward pass)
-  Outer:  (RSA — deferred, inference-time)
+Loop hierarchy:
+  Inner: Parcae core loop (T iterations with Poisson depth sampling)
+  Outer: (Zyphra RSA — deferred, inference-time, requires RL)
 
 All features always on. No runtime if-statements in the forward pass.
 Config determines dimensions and sizes, not whether features exist.
@@ -22,9 +21,9 @@ from torch.utils.checkpoint import checkpoint
 
 from .attention import MORPHAttention, RMSNorm
 from .embeddings import MORPHEmbedding
+from .fused_ce import fused_linear_cross_entropy
 from .mhc import MultiRateResidual, ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
-from .memory import MemorySystem
-from .prediction import STPLoss, ZLatentHeads, SIGReg
+from .prediction import STPLoss
 from .sparsity import BlockELLLinear
 
 
@@ -61,19 +60,18 @@ class MORPHConfig:
     lorentz_fraction: float = 0.25
     bigram_hash_vocab: int = 49152
 
-    # Memory
-    n_memory_layers: int = 4
-    n_memory_tokens: int = 32
-
-    # Prediction
+    # Prediction (STP — Semantic Tube Predictor, geometric regularizer)
     stp_lambda: float = 0.02
     stp_tau: int = 64
-    d_z: int = 256
-    segment_size: int = 1024
+
+    # LM head — fused chunked cross-entropy (training). Rows of [B·T] tokens
+    # processed per chunk; smaller = less peak memory, more launch overhead.
+    # Tune per target: large on high-VRAM (Pro 6000) for speed, small on tight
+    # memory / very long context.
+    ce_chunk_size: int = 1024
 
     # Training
     dropout: float = 0.1
-    mac_warmup_steps: int = 2000
 
 
 class DiagonalInjection(nn.Module):
@@ -182,8 +180,6 @@ class MORPHTransformer(nn.Module):
             s += c
         self._ctx_start = self._ch_starts[1]
         self._ctx_end = self._ch_ends[1]
-        self._mem_start = self._ch_starts[2]
-        self._mem_end = self._ch_ends[2]
 
         # ── Embedding ─────────────────────────────────────────────────
         self.embed = MORPHEmbedding(
@@ -200,8 +196,11 @@ class MORPHTransformer(nn.Module):
             d_model=d, n_heads=cfg.n_heads, n_kv_heads=cfg.n_kv_heads,
             compression=cfg.compression, csa_compress_ratio=cfg.csa_compress_ratio,
             hca_compress_ratio=cfg.hca_compress_ratio, top_k=cfg.top_k,
+            d_indexer=cfg.d_indexer,
             window_size=cfg.window_size, context_len=cfg.context_len,
             max_seq_len=cfg.max_seq_len,
+            conv_kernel=cfg.conv_kernel,
+            init_alpha=cfg.init_alpha,
         )
 
         def _make_block(layer_idx: int, use_block_ell: bool = False) -> MORPHBlock:
@@ -250,39 +249,18 @@ class MORPHTransformer(nn.Module):
             nn.init.normal_(ve.weight, std=0.02)
         self._ve_layer_map = list(range(n_ve))
 
-        # ── Neural memory ─────────────────────────────────────────────
-        self.memory = MemorySystem(
-            d_model=d,
-            n_layers=cfg.n_memory_layers,
-            n_memory_tokens=cfg.n_memory_tokens,
-            d_memory_channel=ch[2],
-        )
-        self._mac_warmup = cfg.mac_warmup_steps
-        self._step = 0
-
         # ── LM head ──────────────────────────────────────────────────
         self.lm_mixer = LMHeadMixer(d, channel_dims=ch)
         self.final_norm = RMSNorm(d)
 
-        # ── Prediction (STP + z-latent) ───────────────────────────────
+        # ── Prediction (STP — Semantic Tube Predictor) ────────────────
         self.stp = STPLoss()
-        self.z_heads = ZLatentHeads(d, cfg.d_z)
-        self.sigreg = SIGReg()
 
         n_params = sum(p.numel() for p in self.parameters())
         print(f"MORPHTransformer: {n_params/1e6:.1f}M params, "
               f"loop {cfg.n_prelude}:{cfg.n_core}×{cfg.mean_depth}:{cfg.n_coda}")
 
     # ── Helpers ───────────────────────────────────────────────────────
-
-    def _mem_active(self) -> bool:
-        return self._step > self._mac_warmup
-
-    def _mem_scale(self) -> float:
-        if not self._mem_active():
-            return 0.0
-        ramp = 500
-        return min(1.0, (self._step - self._mac_warmup) / ramp)
 
     def _sample_depths(self, B: int, device: torch.device) -> Tensor:
         lam = float(self.cfg.mean_depth)
@@ -302,8 +280,6 @@ class MORPHTransformer(nn.Module):
     # ── Forward ───────────────────────────────────────────────────────
 
     def forward(self, input_ids: Tensor, labels: Tensor | None = None) -> dict:
-        if self.training:
-            self._step += 1
         return self._forward_single(input_ids, labels)
 
     def _forward_single(self, input_ids: Tensor,
@@ -312,37 +288,14 @@ class MORPHTransformer(nn.Module):
         x = self.embed_drop(self.embed(input_ids))
         bigram_emb = self.embed.get_bigram(input_ids)
 
-        mem_scale = self._mem_scale()  # 0.0 during warmup, ramps to 1.0
-        memory_loss = None
-
-        # ── MAC tokens (append — always-visible suffix through ALL layers)
-        # Generated from embedded input, persist through prelude+core+coda.
-        # Real tokens see MAC tokens via always-visible mask in attention.
-        # MAG handles memory→tokens injection; MAC handles bidirectional context.
-        mac_tokens = self.memory.get_mac_tokens(x) * mem_scale
-        x = torch.cat([x, mac_tokens], dim=1)
-        bigram_emb = F.pad(bigram_emb, (0, 0, 0, self.cfg.n_memory_tokens))
-        input_ids = F.pad(input_ids, (0, self.cfg.n_memory_tokens), value=0)
-        n_mac = self.cfg.n_memory_tokens
-
         x0 = x.clone()
 
         # ── Prelude ───────────────────────────────────────────────────
-        _mem_inject_idx = max(0, self.cfg.n_prelude - 1)
         for i, layer in enumerate(self.prelude):
-            if i == _mem_inject_idx:
-                if self.training:
-                    memory_loss = self.memory.update(
-                        x[:, :T], suppress_decay=(mem_scale == 0.0))
-                x = self.memory.mag_inject(
-                    x, self._mem_start, self._mem_end, mem_scale)
-
             x = self._apply_x0(x, i, x0)
             x = self._apply_ve(x, i, input_ids)
             x = self.embed.bigram.inject(x, bigram_emb, i)
-            x = layer(x, attn_kwargs={"n_skip_rope": n_mac})
-
-        x_prelude = x.clone()
+            x = layer(x)
 
         # ── Core loop ─────────────────────────────────────────────────
         e = self.input_norm(x)
@@ -357,126 +310,112 @@ class MORPHTransformer(nn.Module):
         total_iters = int(depths.max().item())
         n_nograd = max(0, total_iters - self.cfg.bptt_depth)
 
-        for t in range(total_iters):
-            active = (t < depths).unsqueeze(-1).unsqueeze(-1)
+        # ── Hoist the loop-invariant x0 projection out of the loop ──────────
+        # x0 is cloned once (constant across iterations) and each core layer's
+        # ChannelInject applies scale·proj(x0). Both proj.weight and log_scale
+        # are loop-invariant, so the additive term is identical every iteration.
+        # Precompute it once → ~n_core × total_iters redundant [.,.,d]→[.,.,ctx]
+        # matmuls collapse to n_core. Stacked as a checkpoint input so the
+        # backward recompute also skips re-projecting; gradient to proj.weight
+        # is the same sum-over-iterations as the per-iteration form.
+        n_core = self.cfg.n_core
+        np_ = self.cfg.n_prelude
+        x0_core_terms = torch.stack(
+            [self.x0_injects[np_ + i].precompute(x0) for i in range(n_core)],
+            dim=0,
+        )  # [n_core, B, S, ctx_width]
 
-            def _core_step(h_in, e_in, ids, x0_in, bg):
-                h_injected = self.injection(h_in, e_in)
-                for i, layer in enumerate(self.core):
-                    gi = self.cfg.n_prelude + i
-                    h_injected = self._apply_x0(h_injected, gi, x0_in)
-                    h_injected = self._apply_ve(h_injected, gi, ids)
-                    h_injected = self.embed.bigram.inject(h_injected, bg, gi)
-                    h_injected = layer(h_injected, attn_kwargs={"n_skip_rope": n_mac})
-                return h_injected
+        def _core_step(h_in, e_in, ids, x0_terms, bg):
+            h_injected = self.injection(h_in, e_in)
+            for i, layer in enumerate(self.core):
+                gi = np_ + i
+                h_injected = self.x0_injects[gi].apply_precomputed(
+                    h_injected, x0_terms[i]
+                )
+                h_injected = self._apply_ve(h_injected, gi, ids)
+                h_injected = self.embed.bigram.inject(h_injected, bg, gi)
+                h_injected = layer(h_injected)
+            return h_injected
+
+        # ── Active-set shrinking ────────────────────────────────────────────
+        # A sample is updated only while iteration t < its Poisson depth, then
+        # frozen. The old code computed the FULL batch every iteration and
+        # discarded frozen samples via torch.where → ~(max_depth-mean_depth)
+        # fraction of forward FLOPs wasted on already-frozen samples.
+        # Instead: sort by depth descending so the still-active samples are a
+        # contiguous prefix [:n_active], process only that prefix, and carry the
+        # frozen suffix unchanged. Per-sample math is identical (no cross-batch
+        # mixing in attn/MLP); the global per-iteration no_grad/grad/checkpoint
+        # schedule is preserved, so gradients match the truncated-BPTT window.
+        sort_depths, perm = torch.sort(depths, descending=True)
+        inv_perm = torch.argsort(perm)
+        h_s = h[perm]
+        e_s = e[perm]
+        ids_s = input_ids[perm]
+        bg_s = bigram_emb[perm]
+        x0_s = x0_core_terms[:, perm]            # [n_core, B, S, W]
+
+        for t in range(total_iters):
+            n_active = int((sort_depths > t).sum().item())
+            if n_active == 0:
+                break
+            h_a = h_s[:n_active]
+            args = (h_a, e_s[:n_active], ids_s[:n_active],
+                    x0_s[:, :n_active], bg_s[:n_active])
 
             if t < n_nograd:
                 with torch.no_grad():
-                    h_new = _core_step(h, e, input_ids, x0, bigram_emb)
+                    h_new = _core_step(*args)
             elif self.training:
-                h_new = checkpoint(
-                    _core_step, h, e, input_ids, x0, bigram_emb,
-                    use_reentrant=False,
-                )
+                h_new = checkpoint(_core_step, *args, use_reentrant=False)
             else:
-                h_new = _core_step(h, e, input_ids, x0, bigram_emb)
+                h_new = _core_step(*args)
 
-            h = torch.where(active, h_new, h)
+            # updated active prefix + frozen suffix (no in-place op).
+            h_s = h_new if n_active == h_s.shape[0] else \
+                torch.cat([h_new, h_s[n_active:]], dim=0)
 
-        x = h
+        x = h_s[inv_perm]                        # restore original batch order
 
-        # ── Coda (MAC tokens persist — memory context through all layers)
+        # ── Coda ──────────────────────────────────────────────────────
         for i, layer in enumerate(self.coda):
             gi = self.cfg.n_prelude + self.cfg.n_core + i
             x = self._apply_x0(x, gi, x0)
             x = self._apply_ve(x, gi, input_ids)
             x = self.embed.bigram.inject(x, bigram_emb, gi)
-            x = layer(x, attn_kwargs={"n_skip_rope": n_mac})
-
-        # ── Strip MAC tokens (appended suffix → slice to original T)
-        x = x[:, :T]
-        x0 = x0[:, :T]
-        bigram_emb = bigram_emb[:, :T]
-        input_ids = input_ids[:, :T]
+            x = layer(x)
 
         # ── STP ───────────────────────────────────────────────────────
         stp_loss = self.stp(self.final_norm(x).float(), tau=self.cfg.stp_tau)
 
         # ── LM head ──────────────────────────────────────────────────
-        x_coda = x
         x = self.lm_mixer(x)
         x = self.final_norm(x)
-        logits = self.embed.attend(x)
 
-        out = {"logits": logits}
-
-        if labels is not None:
-            ce_loss = F.cross_entropy(
-                logits.reshape(-1, self.cfg.vocab_size),
-                labels.reshape(-1), ignore_index=-100,
+        if labels is not None and self.training:
+            # Training: fused chunked cross-entropy. Never materialises the
+            # [B, T, V] logits (the dominant activation-memory cost at scale) —
+            # computes loss + grads in vocab-row chunks against the tied weight.
+            # grad flows to BOTH x and the embedding (via lm_weight's cat/log-map).
+            w_full = self.embed.lm_weight()                       # [V, d_model]
+            ce_loss = fused_linear_cross_entropy(
+                x.reshape(-1, x.shape[-1]), w_full, labels.reshape(-1),
+                ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
             )
-            loss = ce_loss
-
-            if memory_loss is not None:
-                loss = loss + 0.05 * memory_loss
-                out["memory_loss"] = memory_loss.detach()
-
-            # Z-latent: single-pass window-based prediction
-            seg = self.cfg.segment_size
-            if seg is not None and T >= seg * 2:
-                z_loss = self._window_z_loss(x_coda, x_prelude, mem_scale, seg, T)
-                loss = loss + 0.1 * z_loss
-                out["z_loss"] = z_loss.detach()
-
-            loss = loss + self.cfg.stp_lambda * stp_loss
-            out["stp_loss"] = stp_loss
-
-            out["loss"] = loss
+            loss = ce_loss + self.cfg.stp_lambda * stp_loss
+            # logits intentionally not materialised in training (unused by the
+            # loss / loggers). Generation + eval take the full-logits branch.
+            out = {"logits": None, "stp_loss": stp_loss, "loss": loss}
+        else:
+            logits = self.embed.attend(x)
+            out = {"logits": logits}
+            if labels is not None:
+                ce_loss = F.cross_entropy(
+                    logits.reshape(-1, self.cfg.vocab_size),
+                    labels.reshape(-1), ignore_index=-100,
+                )
+                loss = ce_loss + self.cfg.stp_lambda * stp_loss
+                out["stp_loss"] = stp_loss
+                out["loss"] = loss
 
         return out
-
-    def _window_z_loss(self, x_coda: Tensor, x_prelude: Tensor,
-                       mem_scale: float, seg: int, T: int) -> Tensor:
-        """Single-pass z-latent loss from representation windows.
-
-        No repeated forward passes. Slices the single-pass output at segment
-        boundaries and computes cross-window prediction losses:
-          - Backbone: prelude window[i] predicts mean(coda z[i+1])
-          - Memory: retrieve from window[i] predicts prelude z[i+1]
-        """
-        n_segs = T // seg
-        losses: list[Tensor] = []
-        all_z_codas: list[Tensor] = []
-
-        for s in range(n_segs):
-            start, end = s * seg, (s + 1) * seg
-            z_coda_w = self.z_heads.project_coda(
-                self.final_norm(x_coda[:, start:end]))
-            all_z_codas.append(z_coda_w.detach())
-
-            if s > 0:
-                prev_start, prev_end = (s - 1) * seg, s * seg
-
-                # Backbone: prelude of window[s-1] predicts mean z_coda of window[s]
-                bb_pred = self.z_heads.backbone_predict(x_prelude[:, prev_start:prev_end])
-                bb_target = z_coda_w.mean(dim=1, keepdim=True).detach()
-                losses.append(F.smooth_l1_loss(bb_pred.mean(dim=1, keepdim=True), bb_target))
-
-                # Memory: retrieve from window[s-1] predicts prelude z of window[s]
-                mem_ret = self.memory.retrieve(x_coda[:, prev_start:prev_end])
-                z_mem = self.z_heads.memory_predict(mem_ret) * mem_scale
-                z_prel_target = self.z_heads.project_prelude(
-                    self.final_norm(x_prelude[:, start:end])
-                ).mean(dim=1, keepdim=True).detach()
-                losses.append(F.smooth_l1_loss(z_mem.mean(dim=1, keepdim=True), z_prel_target))
-
-        if not losses:
-            return x_coda.new_zeros(())
-
-        z_loss = torch.stack(losses).mean()
-
-        # SIGReg collapse prevention
-        all_z = torch.cat(all_z_codas, dim=1)
-        z_loss = z_loss + 0.02 * self.sigreg(all_z.reshape(-1, all_z.shape[-1]).unsqueeze(0))
-
-        return z_loss

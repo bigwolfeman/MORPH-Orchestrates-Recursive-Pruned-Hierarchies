@@ -1,0 +1,27 @@
+{
+  "kernel": "fused_hca_attention",
+  "arch": "sm_120",
+  "arch_source": "RTX 5090 consumer Blackwell; num_stages=1, num_warps=8 (no TMA pipeline) \u2014 project hw-profile sm120",
+  "timestamp": "2026-06-01T02:15:50.455554Z",
+  "config_space": {
+    "D": 32,
+    "m": 128,
+    "H": 12,
+    "NB": "{4,8,16,32,64}",
+    "BLOCK_D": 32,
+    "BLOCK_N": "max(16,nextpow2(NB))",
+    "BLOCK_Q": "64 (S>=64)",
+    "B": "<=64",
+    "S": "<=8192"
+  },
+  "properties": {
+    "fwd_q_out_inbounds": "PROVEN",
+    "C_comp_inbounds": "PROVEN",
+    "lse_inbounds": "PROVEN",
+    "causal_pred_matches_ref": "PROVEN",
+    "guard_threshold_exact": "PROVEN",
+    "tldot_dims_ge16": "PROVEN",
+    "block_n_covers_all": "PROVEN",
+    "dc_scatter_inbounds": "PROVEN"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "kernel": "fused_csa_attention",
+  "arch": "sm_120 (RTX 5090 / Blackwell)",
+  "arch_source": "Project memory 'Triton sm_120 — Z3 OPTIMIZED' + sibling fused_hca_attention.py (num_stages=1, num_warps=8, no TMA on consumer Blackwell)",
+  "timestamp": "2026-05-31",
+  "file": "morph/kernels/triton/fused_csa_attention.py",
+  "design": "One program = one (b, s); all H heads share the on-the-fly gather of C_sel (top_idx depends only on b,s). All contractions via tl.dot (Q@C^T [H,T], P@C [H,D]). Online flash softmax over tk with the per-head sink seeded as the initial running max (avoids -inf NaN; replaces HCA early-query guard). Backward: dq/dsink local, dC scatter via tl.atomic_add over top_idx.",
+  "correctness": {
+    "fwd_cosine": ">=0.999991 across S in {512,1024,2048,4096} and edge tk=64",
+    "fwd_mean_abs_err_bf16": "5.4e-4 .. 6.8e-4 (sub-ULP)",
+    "fwd_max_abs_err_bf16": "1.95e-2 .. 2.34e-2 (at/below bf16 ULP floor)",
+    "fused_vs_fp32_truth": "7.98e-3 .. 8.02e-3 (MORE accurate than the bf16 eager reference at 1.88e-2..2.23e-2)",
+    "grad_cosine_q": "1.0000",
+    "grad_cosine_C_comp": "1.0000",
+    "grad_cosine_sink": "1.0000",
+    "doubling_footgun_check": "norm_ratio 0.9994..0.9996 (NOT ~2.0/~4.0) — empirically confirms NO interior-axis 3D-reduce miscompile; kernel uses tl.dot for all contractions so the footgun pattern is absent by construction",
+    "end_to_end_vs_real_CCACSAAttention": "cosine 0.999991..0.999992, grad cos 1.0000 (q,C,sink), S in {512,1024,2048}"
+  },
+  "performance": {
+    "B8_S4096": {"eager_ms": 9.28, "fused_ms": 3.05, "speedup": "3.05x"},
+    "B32_S8192": {"eager_ms": 75.01, "fused_ms": 25.06, "speedup": "2.99x"}
+  },
+  "memory": {
+    "B8_S4096": {"eager_peak_MiB": 1336.0, "fused_peak_MiB": 120.0, "reduction_MiB": 1216.0, "factor": "11.13x"},
+    "B32_S8192": {"eager_peak_MiB": 10672.0, "fused_peak_MiB": 961.0, "reduction_MiB": 9711.0, "factor": "11.11x"},
+    "eliminated_tensors": "C_sel [B,S,tk,D] (2048 MiB at B32/S8192) + scores/weights [B,H,S,tk] (768 MiB) and their autograd-saved copies — never materialized"
+  },
+  "z3_properties": {
+    "gather_and_io_in_bounds": {"status": "proven", "z3_result": "unsat",
+      "statement": "forall b,s,h,t,d with top_idx in [0,NB): C-gather, q/out/lse/idx/dC linear offsets all in-bounds"},
+    "intra_tile_dC_offsets_distinct_for_distinct_blocks": {"status": "proven", "z3_result": "unsat",
+      "statement": "within one program, topk gives distinct block ids per query row so i*D+d ranges never self-alias; cross-program collisions handled by atomic_add"},
+    "sm120_tiling_valid": {"status": "proven",
+      "statement": "BLOCK_H=16,BLOCK_D=32,BLOCK_T=64 all pow2>=16 for tl.dot; num_stages=1 (no TMA)"}
+  },
+  "z3_script": "tile-prover/proofs/fused_csa_attention/z3_checks.py",
+  "not_verified": [
+    "ncu hardware-counter profiling (occupancy, bank conflicts, achieved bandwidth) — not run; speedup is wall-clock only",
+    "multi-layer / full-model integration (attention.py not modified per instruction — user integrates after pass)",
+    "GQA interplay / n_skip_rope MAC-suffix path in the CSA branch (those live outside the fused sub-computation)",
+    "tk > 128 or D != 32 configs (BLOCK_T capped at 64; larger tk just adds loop iters, untested for perf)",
+    "torch.compile composition with this autograd.Function"
+  ]
+}

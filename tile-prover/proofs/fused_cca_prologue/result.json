@@ -1,0 +1,46 @@
+{
+  "kernel": "fused_cca_prologue",
+  "arch": "sm_120",
+  "arch_source": "tile-prover/hw-profiles/sm120.json (on-device + project memory)",
+  "dims": {
+    "H": 12,
+    "Hkv": 4,
+    "D": 32,
+    "BLOCK_D": 32,
+    "n_rep": 3,
+    "VHALF": 64
+  },
+  "shared_memory_used": false,
+  "bank_conflict_note": "No shared memory used (register-resident); bank-conflict freedom is vacuous. P7 proves global coalescing instead.",
+  "properties": {
+    "P1_q_fwd_in_bounds": {
+      "status": "proven",
+      "z3_ms": 615.9
+    },
+    "P2_k_fwd_in_bounds": {
+      "status": "proven",
+      "z3_ms": 837.4
+    },
+    "P3_v_fwd_gather_in_bounds_partition_exact": {
+      "status": "proven",
+      "z3_ms": 8.3
+    },
+    "P4_gqa_store_disjoint": {
+      "status": "proven",
+      "z3_ms": 1811.3
+    },
+    "P5_bwd_group_sum_coverage": {
+      "status": "proven",
+      "z3_ms": 0.8
+    },
+    "P6_dmask_general_D_safe": {
+      "status": "proven",
+      "z3_ms": 0.3
+    },
+    "P7_global_access_coalesced": {
+      "status": "proven",
+      "z3_ms": 0.2
+    }
+  },
+  "all_proven": true
+}

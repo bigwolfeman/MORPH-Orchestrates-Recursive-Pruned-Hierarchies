@@ -1,5 +1,5 @@
 # MORPH cloud config — TPU v6e-4 (full scale)
-# 4:8:4 loop, d_model=2048, 16 memory layers
+# 4:8:4 loop, d_model=2048
 
 defaults:
   - base
@@ -28,12 +28,6 @@ model:
 
   lorentz_fraction: 0.25
   bigram_hash_vocab: 49152
-
-  n_memory_layers: 16
-  n_memory_tokens: 64
-
-  d_z: 512
-  segment_size: 2048
 
 training:
   steps: 200000

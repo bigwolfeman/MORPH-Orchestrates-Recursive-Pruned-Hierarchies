@@ -3,7 +3,7 @@
 Motivation
 ----------
 A looped transformer with many competing signals (attention, MLP, x0 skip,
-value embeds, diagonal injection, bigram, memory) all writing into a single
+value embeds, diagonal injection, bigram) all writing into a single
 d_model-dim residual stream creates destructive interference during
 autoregressive generation even when teacher-forced PPL is low.
 
@@ -13,12 +13,14 @@ retention timescale:
 
   Channel 0 — Compute (384 dims): primary attention + MLP outputs. Fast rate.
   Channel 1 — Context (256 dims): x0 skip, value embeds, loop injection.
-  Channel 2 — Memory  (128 dims): neural memory retrieval. Slow rate.
+  Channel 2 — Slow    (128 dims): slow-rate persistent channel (γ≈0.1).
+                                  Reserved — neural memory (which fed it) is
+                                  deferred; the slow channel itself stays.
 
 Each sublayer gets learned per-channel parameters:
   alpha (n, softplus + L1-normalize): input mixing weights across channels.
   gamma (n, softplus):                per-channel additive gain.
-                                      compute≈1.0, context≈0.5, memory≈0.1.
+                                      compute≈1.0, context≈0.5, slow≈0.1.
 
 This adds only n_channels × n_sublayers × n_layers scalars to the model.
 For 3 channels × 2 sublayers × 12 layers = 72 new scalars (144 parameters
@@ -53,7 +55,7 @@ from torch import Tensor
 # DEFAULT_CHANNEL_DIMS must sum to d_model (768 default).
 #   Ch0 — Compute (384): attention + MLP primary output. Fast.
 #   Ch1 — Context (256): x0 skip, value embeds, loop injection.
-#   Ch2 — Memory  (128): neural memory retrieval. Slow.
+#   Ch2 — Slow    (128): slow-rate persistent channel (γ≈0.1). Reserved.
 DEFAULT_CHANNEL_DIMS: tuple[int, ...] = (384, 256, 128)
 
 
@@ -76,7 +78,7 @@ class MultiRateResidual(nn.Module):
         h[chᵢ] = h[chᵢ] + γᵢ · o[chᵢ]
 
     Gamma is learned via softplus (always positive). Different channels get
-    different update rates: compute≈1.0 (full update), context≈0.5, memory≈0.1.
+    different update rates: compute≈1.0 (full update), context≈0.5, slow≈0.1.
 
     The sublayer always sees the full unchanged h — channel separation is
     achieved purely via the per-channel gamma on the output side. This keeps
@@ -92,7 +94,7 @@ class MultiRateResidual(nn.Module):
     gamma_init : tuple[float, ...]
         Pre-softplus values for gamma (additive gain per channel).
         Default (1.0, 0.5, 0.1) → compute gets full sublayer output, context
-        gets half, memory gets 10%.
+        gets half, slow channel gets 10%.
     """
 
     def __init__(
@@ -173,7 +175,6 @@ class ChannelInject(nn.Module):
     Useful for targeted injection of:
       - x0 skip connection → Context channel (e.g. dims 384:640)
       - value embeddings   → Context channel
-      - neural memory      → Memory channel  (e.g. dims 640:768)
       - diagonal injection → Context channel
 
     Injection: h[..., start:end] += scale · project(signal)
@@ -212,6 +213,35 @@ class ChannelInject(nn.Module):
         else:
             self.proj = nn.Identity()
 
+    def precompute(self, signal: Tensor) -> Tensor:
+        """Project + scale a signal into the channel-width additive term.
+
+        Returns ``scale · project(signal)`` of shape ``[..., channel_width]``.
+
+        This is the loop-invariant part of :meth:`forward` for a signal that
+        does not change across iterations (e.g. the cloned ``x0`` skip).
+        Compute it once outside the loop, then feed each iteration through
+        :meth:`apply_precomputed` to avoid recomputing the projection.
+        """
+        if isinstance(self.proj, nn.Linear):
+            s = F.linear(signal, self.proj.weight.to(signal.dtype))
+        else:
+            s = signal
+        scale = self.log_scale.to(s.dtype)
+        return scale * s
+
+    def apply_precomputed(self, h: Tensor, term: Tensor) -> Tensor:
+        """Add a pre-projected additive ``term`` to the channel slice of h.
+
+        ``term`` must be the output of :meth:`precompute` (shape
+        ``[..., channel_width]``). Equivalent to :meth:`forward` but skips the
+        projection + scale, which the caller has already done once.
+        """
+        prefix = h[..., :self.start]
+        target = h[..., self.start:self.end] + term.to(h.dtype)
+        suffix = h[..., self.end:]
+        return torch.cat([prefix, target, suffix], dim=-1)
+
     def forward(self, h: Tensor, signal: Tensor) -> Tensor:
         """Inject signal into channel slice of h.
 
@@ -222,19 +252,9 @@ class ChannelInject(nn.Module):
         Returns:
             [B, S, D] h with channel slice updated. No in-place ops.
         """
-        # Handle projection: cast weight to signal dtype for bf16 safety.
-        if isinstance(self.proj, nn.Linear):
-            s = F.linear(signal, self.proj.weight.to(signal.dtype))
-        else:
-            s = signal                          # Identity: no-op
-
-        scale = self.log_scale.to(h.dtype)
-
-        # Reconstruct h without in-place ops.
-        prefix = h[..., :self.start]
-        target = h[..., self.start:self.end] + scale * s
-        suffix = h[..., self.end:]
-        return torch.cat([prefix, target, suffix], dim=-1)
+        # forward == precompute (projection) then apply. Kept as one path for
+        # the prelude/coda (called once each, no loop-invariance to exploit).
+        return self.apply_precomputed(h, self.precompute(signal))
 
 
 # ── MORPHBlock ────────────────────────────────────────────────────────────────

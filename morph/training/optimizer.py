@@ -31,34 +31,18 @@ _NO_DECAY_KEYWORDS = (
     "x0_injects", "value_embeds",                  # Skip/value inject gates
     "lm_mixer",                                    # LM head mixer
     "embed",                                       # Embedding tables
-    "memory_gate", "memory_proj",                  # Memory gate/proj params
-    "alpha_gate", "eta_gate", "theta_gate",        # Memory learned gates
-    "delta_gate_raw", "stable_norm",               # Memory stabilizers
-    "z_projector", "z_memory_head", "z_backbone",  # Z-latent heads
     "stp",                                         # STP loss params
     "ste_gain", "ste_temp",                        # LSTE per-layer params
 )
 
 
-_EXCLUDE_FROM_OPTIMIZER = (
-    "memory.memory.memory_mlp.mlp",
-)
-
-
 def _param_groups(model: nn.Module, weight_decay: float) -> list[dict]:
-    """Split parameters into decay / no-decay / excluded groups.
-
-    Memory MLP weights are updated ONLY by the forward-pass inner GD
-    (Titans paper). They must NOT receive outer optimizer updates.
-    """
+    """Split parameters into decay / no-decay groups."""
     decay_params = []
     no_decay_params = []
 
     for name, p in model.named_parameters():
         if not p.requires_grad:
-            continue
-        if any(kw in name for kw in _EXCLUDE_FROM_OPTIMIZER):
-            p.requires_grad_(False)
             continue
         if any(kw in name for kw in _NO_DECAY_KEYWORDS):
             no_decay_params.append(p)
@@ -71,17 +55,47 @@ def _param_groups(model: nn.Module, weight_decay: float) -> list[dict]:
     ]
 
 
+def _register_embedding_32bit_overrides(model: nn.Module, opt) -> None:
+    """Override 8-bit optimizer state to 32-bit for all nn.Embedding parameters.
+
+    bnb's 8-bit Adam is documented to be unstable on embedding layer state
+    (sparse, large-range gradients). This function registers all nn.Embedding
+    weight parameters to use 32-bit state via GlobalOptimManager.
+
+    Must be called AFTER the optimizer is constructed (pid→config binding
+    happens at first optimizer step, so override_config just needs to be
+    registered before the first step).
+
+    Args:
+        model: The model whose nn.Embedding modules to override.
+        opt:   A constructed bnb.optim.AdamW8bit (or any bnb 8-bit optimizer).
+    """
+    try:
+        import bitsandbytes as bnb
+    except ImportError:
+        return
+
+    mng = bnb.optim.GlobalOptimManager.get_instance()
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Embedding):
+            mng.register_module_override(module, "weight", {"optim_bits": 32})
+
+
 def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer:
     """Build the optimizer from config.
 
     Reads:
         cfg.training.lr          — base learning rate
         cfg.training.weight_decay (optional, default 0.1)
-        cfg.training.deep_nested  (optional bool, default False)
         cfg.training.ternary      (optional bool — activates TernaryShadowOptimizer)
+        cfg.training.adam8bit     (optional bool — uses bitsandbytes AdamW8bit)
 
-    Returns a plain AdamW, DeepNestedOptimizer-wrapped AdamW, or
-    TernaryShadowOptimizer-wrapped AdamW depending on config flags.
+    Returns a plain AdamW, TernaryShadowOptimizer-wrapped AdamW, or
+    an 8-bit AdamW (bnb) depending on config flags.
+    8-bit and ternary may be combined: bnb AdamW8bit becomes the base_opt
+    inside TernaryShadowOptimizer. The 8-bit quantization applies only to
+    the optimizer state (m, v → uint8); bf16 shadow-weight semantics are
+    unchanged because bnb does NOT quantize the parameters themselves.
     """
     tr = cfg.training
     lr = float(tr.lr)
@@ -93,9 +107,24 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
 
     groups = _param_groups(model, wd)
 
-    base_opt = torch.optim.AdamW(groups, lr=lr, betas=betas, eps=1e-8)
+    use_8bit = bool(getattr(tr, "adam8bit", False))
+    if use_8bit:
+        try:
+            import bitsandbytes as bnb
+        except ImportError as e:
+            raise ImportError(
+                "cfg.training.adam8bit=true requires bitsandbytes. "
+                "Install with: uv pip install bitsandbytes"
+            ) from e
+        base_opt = bnb.optim.AdamW8bit(groups, lr=lr, betas=betas, eps=1e-8,
+                                        weight_decay=wd)
+        # Override optimizer state to 32-bit for all embedding tables —
+        # bnb 8-bit is unstable on sparse/large-range embedding gradients.
+        _register_embedding_32bit_overrides(model, base_opt)
+    else:
+        base_opt = torch.optim.AdamW(groups, lr=lr, betas=betas, eps=1e-8)
 
-    # Optional STE ternary shadow wrapper.
+    # Optional STE ternary shadow wrapper (composes with 8-bit base_opt).
     use_ternary = bool(getattr(tr, "ternary", False))
     if use_ternary:
         base_opt = TernaryShadowOptimizer(base_opt, model)

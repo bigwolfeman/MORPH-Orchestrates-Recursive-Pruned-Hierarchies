@@ -1,1 +1,1 @@
-"""Titans core components (neural memory, SIGReg)."""
+"""Titans core components — Block-ELL sparsity + topology scoring + norms."""

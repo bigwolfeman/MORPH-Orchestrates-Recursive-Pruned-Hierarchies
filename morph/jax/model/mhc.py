@@ -10,7 +10,8 @@ stream into three *channels* with different mixing / retention rates:
 
   Channel 0 — Compute (384 dims): primary attention + MLP outputs. Fast rate.
   Channel 1 — Context (256 dims): x0 skip, value embeds, loop injection.
-  Channel 2 — Memory  (128 dims): neural memory retrieval. Slow rate.
+  Channel 2 — Slow    (128 dims): slow-rate persistent channel (γ≈0.1). Reserved
+                                  — neural memory (which fed it) is deferred.
 
 Each sublayer gets learned per-channel parameters:
   alpha (3, softplus + L1-normalize): input mixing weights (currently identity-pass).
@@ -128,7 +129,6 @@ class ChannelInject(nn.Module):
     Useful for targeted injection of:
       - x0 skip connection → Context channel (dims 384:640)
       - value embeddings   → Context channel (dims 384:640)
-      - neural memory      → Memory channel  (dims 640:768)
       - diagonal injection → Context channel (dims 384:640)
 
     The injection is: h[..., start:end] += scale * project(signal)

@@ -17,19 +17,24 @@ import sys
 import time
 from typing import Optional
 
-# ── torch.compile + neural memory safety ──────────────────────────────────────
-# Neural memory uses autograd.grad with retain_graph, which conflicts with
-# donated buffer optimisation.  Must be set before torch import.
+# ── torch.compile safety ───────────────────────────────────────────────────────
+# The looped core uses gradient checkpointing (use_reentrant=False); disabling
+# donated buffers below avoids buffer-aliasing conflicts under compile.
 os.environ.setdefault("TORCH_COMPILE_DEBUG", "0")
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-try:
-    torch._functorch.config.donated_buffer = False  # type: ignore[attr-defined]
-except AttributeError:
-    torch._inductor.config.donated_buffer = False  # type: ignore[attr-defined]
+# Disable donated-buffer reuse: the looped core's compiled + checkpointed
+# (use_reentrant=False) backward can otherwise alias input buffers. The knob
+# lives in torch._functorch.config but that submodule is not auto-imported by
+# `import torch`, so import it explicitly and set it where it exists (the path
+# has shifted across torch versions — guard rather than guess).
+import torch._functorch.config as _functorch_config  # noqa: E402
+
+if hasattr(_functorch_config, "donated_buffer"):
+    _functorch_config.donated_buffer = False
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -59,8 +64,6 @@ def evaluate(
 ) -> tuple[float, float]:
     """Return (avg_loss, ppl) over n_batches validation steps."""
     model.eval()
-    if hasattr(model, "memory") and model.memory is not None:
-        model.memory.reset_momentum()
     losses: list[float] = []
     for _ in range(n_batches):
         try:
@@ -157,14 +160,10 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         context_len=int(m.context_len),
         lorentz_fraction=float(m.lorentz_fraction),
         bigram_hash_vocab=int(m.bigram_hash_vocab),
-        n_memory_layers=int(m.n_memory_layers),
-        n_memory_tokens=int(m.n_memory_tokens),
         stp_lambda=float(m.stp_lambda),
         stp_tau=int(m.stp_tau),
-        d_z=int(m.d_z),
-        segment_size=int(m.segment_size),
+        ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
         dropout=float(tr.dropout),
-        mac_warmup_steps=int(tr.mac_warmup_steps),
     )
 
 
@@ -207,9 +206,6 @@ def load_checkpoint(
     if "scaler" in ckpt:
         scaler.load_state_dict(ckpt["scaler"])
     step = ckpt.get("step", 0)
-    # Restore model's internal step counter so memory warmup is correct.
-    if hasattr(model, "_step"):
-        model._step = step
     print(f"  Resumed from step {step}")
     return step
 
@@ -258,7 +254,7 @@ def main(cfg: DictConfig) -> None:
 
     # ── torch.compile ─────────────────────────────────────────────────────
     # Compile only the MLP sub-modules (attention uses Triton/SDPA kernels,
-    # memory uses autograd.grad — both incompatible with fullgraph compile).
+    # which are incompatible with fullgraph compile).
     if use_compile:
         for group in [model.prelude, model.core, model.coda]:
             for layer in group:
@@ -367,10 +363,6 @@ def main(cfg: DictConfig) -> None:
                 "perf/steps_per_sec": sps,
                 "perf/step": step,
             }
-            if "memory_loss" in out:
-                log["train/memory_loss"] = out["memory_loss"].item()
-            if "z_loss" in out:
-                log["train/z_loss"] = out["z_loss"].item()
             if "stp_loss" in out:
                 log["train/stp_loss"] = out["stp_loss"].item()
 
@@ -388,15 +380,6 @@ def main(cfg: DictConfig) -> None:
                 rt_stats = collect_routing_stats(model)
                 log.update(rt_stats)
 
-            # Memory diagnostics (every 100 steps)
-            if step % 100 == 0 and hasattr(model, "memory") and model.memory is not None:
-                mem = model.memory
-                if hasattr(mem, "get_memory_stats"):
-                    ms = mem.get_memory_stats()
-                    for k, v in ms.items():
-                        if isinstance(v, (int, float)):
-                            log[f"memory/{k}"] = v
-
             wandb.log(log, step=step)
 
             if step % 200 == 0:
@@ -410,19 +393,6 @@ def main(cfg: DictConfig) -> None:
         if step % eval_every == 0 and step > 0:
             val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches)
             val_log: dict = {"val/loss": val_loss, "val/ppl": val_ppl}
-
-            # Memory contribution diagnostic
-            if (
-                hasattr(model, "memory")
-                and model.memory is not None
-                and step >= morph_cfg.mac_warmup_steps
-            ):
-                if hasattr(model.memory, "_zero_output"):
-                    model.memory._zero_output = True
-                    zl, zp = evaluate(model, device, val_loader, n_eval_batches // 2)
-                    model.memory._zero_output = False
-                    val_log["val/ppl_mem_zeroed"] = zp
-                    val_log["val/mem_contribution"] = val_ppl - zp
 
             wandb.log(val_log, step=step)
             print(

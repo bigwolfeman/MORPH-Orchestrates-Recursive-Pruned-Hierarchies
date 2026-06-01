@@ -134,22 +134,30 @@ class HybridEmbedding(nn.Module):
             dim=-1,
         )
 
-    def attend(self, x: Tensor) -> Tensor:
-        """Weight-tied LM head logits, shape [..., vocab_size].
+    def lm_weight(self) -> Tensor:
+        """Weight-tied LM-head matrix, shape [vocab_size, d_model].
 
-        Splits x into euclidean and lorentz slices, computes logits from each
-        weight matrix, and sums them for the final score.
+        Single source of truth for the tied head: the euclidean embedding
+        weight concatenated with the lorentz tangent-space weight. Both
+        :meth:`attend` (full logits) and the fused chunked cross-entropy build
+        their projection from this — gradient flows back through the cat and the
+        lorentz log-map to the underlying embedding parameters.
         """
-        x_euc = x[..., :self.euclidean_dim]
-        x_lor = x[..., self.euclidean_dim:]
-
         euc_w = self.euc_embed.weight                                       # [V, euc_dim]
         lor_w = _log_map_origin(
             _project_to_hyperboloid(self.lor_embed.space_embed.weight)     # [V, lor_dim]
         )
-        # Full vocab weight matrix: [V, d_model]
-        w_full = torch.cat([euc_w, lor_w], dim=-1)
-        return x @ w_full.T
+        return torch.cat([euc_w, lor_w], dim=-1)                            # [V, d_model]
+
+    def attend(self, x: Tensor) -> Tensor:
+        """Weight-tied LM head logits, shape [..., vocab_size].
+
+        Projects the hidden state through the tied weight matrix. Splitting x
+        into euclidean/lorentz slices and summing two matmuls is algebraically
+        identical to one matmul against the concatenated weight, so we use the
+        single :meth:`lm_weight` source of truth.
+        """
+        return x @ self.lm_weight().T
 
 
 # ── BigramEmbedding ───────────────────────────────────────────────────────────
@@ -282,6 +290,10 @@ class MORPHEmbedding(nn.Module):
             layer with the appropriate layer_idx.
         """
         return self.bigram.compute(input_ids)
+
+    def lm_weight(self) -> Tensor:
+        """Weight-tied LM-head matrix [vocab_size, d_model] (see HybridEmbedding)."""
+        return self.hybrid.lm_weight()
 
     def attend(self, x: Tensor) -> Tensor:
         """Weight-tied LM head: hidden state → vocab logits.

@@ -1,13 +1,11 @@
 """MORPH Transformer — JAX/Flax port of morph/model/transformer.py.
 
 Parcae-style looped architecture with all features baked in.
-Architecture: Embedding → SSM inject → Prelude → MAC tokens → Core×T
-              → Strip MAC → Coda → STP → Z-latent → LM head
+Architecture: Embedding → Prelude → Core×T → Coda → STP → LM head
 
-Three-loop hierarchy:
-  Inner:  Parcae core loop (T iterations, Poisson depth, BPTT via jax.checkpoint)
-  Middle: Neural memory SSM (gradient-based surprise update on forward pass)
-  Outer:  (RSA — deferred to inference-time)
+Loop hierarchy:
+  Inner: Parcae core loop (T iterations, Poisson depth, BPTT via jax.checkpoint)
+  Outer: (Zyphra RSA — deferred to inference-time, requires RL)
 
 Design principles:
   - Python for-loop + jax.checkpoint for the core loop (NOT lax.scan — known
@@ -15,21 +13,11 @@ Design principles:
     static scan with fixed iteration count).
   - No runtime feature flags. All features always on.
   - bf16 compatible.
-  - mutable "memory_state" collection carried alongside params.
 
 Forward returns a dict matching the PyTorch model exactly:
   {"logits": [B, T, vocab_size],
    "loss": scalar (if labels given),
-   "memory_loss": scalar (if training),
-   "z_loss": scalar (if multi-segment),
-   "stp_loss": scalar,
-   "z_target": [B, T, d_z],
-   "z_memory_raw": [B, T, d_z],
-   "z_prelude": [B, T, d_z],
-   "x_prelude_raw": [B, T, d_model]}
-
-Segmented forward: when segment_size < T, forward splits into segments,
-accumulates per-segment z-latents, and applies split_nsm_outer_loss.
+   "stp_loss": scalar}
 """
 
 from __future__ import annotations
@@ -45,8 +33,7 @@ import flax.linen as nn
 from .attention import CCACSAHCAAttention, RMSNorm
 from .embeddings import MORPHEmbedding
 from .mhc import MultiRateResidual, ChannelInject, DEFAULT_CHANNEL_DIMS
-from .memory import MemorySystem
-from .prediction import STPLoss, ZLatentHeads, split_nsm_outer_loss, _smooth_l1, SIGReg
+from .prediction import STPLoss
 
 
 # ── MORPHTransformerBlock: MORPHBlock with n_skip support ─────────────────────
@@ -55,8 +42,9 @@ from .prediction import STPLoss, ZLatentHeads, split_nsm_outer_loss, _smooth_l1,
 class MORPHTransformerBlock(nn.Module):
     """Transformer block with multi-rate residual dynamics and n_skip support.
 
-    Extends MORPHBlock to pass n_skip to the attention module,
-    which is needed for RoPE offset when MAC tokens are prepended.
+    Passes n_skip to the attention module for the generic sink/persistent-token
+    RoPE offset (leading positions that skip RoPE and attend to everything).
+    Currently always called with n_skip=0 — the mechanism is retained but unused.
 
     Attributes match MORPHBlock:
         attn_module : CCACSAHCAAttention
@@ -133,19 +121,12 @@ class MORPHConfig:
     lorentz_fraction: float = 0.25
     bigram_hash_vocab: int = 49152
 
-    # Memory
-    n_memory_layers: int = 4
-    n_memory_tokens: int = 32
-
-    # Prediction
+    # Prediction (STP — Semantic Tube Predictor, geometric regularizer)
     stp_lambda: float = 0.02
     stp_tau: int = 64
-    d_z: int = 256
-    segment_size: int = 1024
 
     # Training
     dropout: float = 0.1
-    mac_warmup_steps: int = 2000
 
     def d_ff_actual(self) -> int:
         return self.d_ff if self.d_ff > 0 else ((self.d_model * 8 // 3 + 63) // 64 * 64)
@@ -309,34 +290,26 @@ class MORPHTransformer(nn.Module):
 
     Exact JAX/Flax port of morph/model/transformer.py MORPHTransformer.
 
-    The model carries a "memory_state" mutable collection for the neural memory
-    MLP weights and momentum buffer, in addition to the standard "params"
-    collection.
-
     Usage:
         cfg = MORPHConfig()
         model = MORPHTransformer(cfg=cfg)
 
         # Initialize
         variables = model.init(
-            {"params": key, "dropout": d_key, "memory_init": m_key},
+            {"params": key, "dropout": d_key},
             input_ids,
             training=False,
         )
         params = variables["params"]
-        mem_state = variables.get("memory_state", {})
 
         # Training step
-        (out, mut_vars), grads = jax.value_and_grad(
+        out, grads = jax.value_and_grad(
             lambda p: model.apply(
-                {"params": p, "memory_state": mem_state},
+                {"params": p},
                 input_ids, labels=labels, training=True,
-                mutable=["memory_state"],
                 rngs={"dropout": d_key},
-            ),
-            has_aux=True,
+            )["loss"],
         )(params)
-        mem_state = mut_vars["memory_state"]
 
     Attributes
     ----------
@@ -363,8 +336,6 @@ class MORPHTransformer(nn.Module):
             s += c
         self._ctx_start = starts[1]
         self._ctx_end = ends[1]
-        self._mem_start = starts[2]
-        self._mem_end = ends[2]
         self._ch_starts = starts
         self._ch_ends = ends
 
@@ -469,31 +440,12 @@ class MORPHTransformer(nn.Module):
             for i in range(n_ve)
         ]
 
-        # ── Neural memory ─────────────────────────────────────────────────
-        self.memory = MemorySystem(
-            d_model=d,
-            n_layers=cfg.n_memory_layers,
-            n_memory_tokens=cfg.n_memory_tokens,
-            d_memory_channel=ch[2],
-            name="memory",
-        )
-
         # ── LM head ───────────────────────────────────────────────────────
         self.lm_mixer = LMHeadMixer(d_model=d, channel_dims=ch, name="lm_mixer")
         self.final_norm = RMSNorm(eps=1e-5, name="final_norm")
 
-        # ── Prediction (STP + z-latent) ────────────────────────────────────
+        # ── Prediction (STP — Semantic Tube Predictor) ─────────────────────
         self.stp = STPLoss(mode="geodesic", tau=cfg.stp_tau, name="stp")
-        self.z_heads = ZLatentHeads(d_model=d, d_z=cfg.d_z, name="z_heads")
-
-    # ── Memory warmup helpers ──────────────────────────────────────────────────
-
-    def _mem_scale(self, step: int) -> float:
-        """Memory contribution scale: 0.0 during warmup, ramps to 1.0."""
-        if step <= self.cfg.mac_warmup_steps:
-            return 0.0
-        ramp = 500
-        return min(1.0, (step - self.cfg.mac_warmup_steps) / ramp)
 
     # ── x0 and value-embed injection helpers ──────────────────────────────────
 
@@ -514,143 +466,31 @@ class MORPHTransformer(nn.Module):
         input_ids: jnp.ndarray,
         labels: Optional[jnp.ndarray] = None,
         training: bool = False,
-        step: int = 0,
         rng: Optional[jax.Array] = None,
     ) -> dict:
-        """Full forward pass.
+        """Full forward pass over the whole sequence.
 
         Args:
             input_ids: [B, T] int32 token ids.
             labels:    [B, T] int32 targets, or None for logits-only.
-            training:  True during training (enables memory update, Poisson depth).
-            step:      Global training step (for memory warmup ramp).
-            rng:       PRNGKey for dropout + Poisson sampling + SIGReg.
+            training:  True during training (enables dropout + Poisson depth).
+            rng:       PRNGKey for dropout + Poisson sampling.
 
         Returns:
-            dict with at least "logits" and optionally "loss", "memory_loss",
-            "z_loss", "stp_loss", "z_target", "z_memory_raw", "z_prelude",
-            "x_prelude_raw".
+            dict with "logits" and (if labels given) "loss", "stp_loss".
         """
-        cfg = self.cfg
-        B, T = input_ids.shape
-        seg = cfg.segment_size
-
-        if seg is not None and seg < T:
-            return self._forward_segmented(input_ids, labels, seg, training, step, rng)
-        return self._forward_single(input_ids, labels, training, step, rng)
-
-    def _forward_segmented(
-        self,
-        input_ids: jnp.ndarray,
-        labels: Optional[jnp.ndarray],
-        seg: int,
-        training: bool,
-        step: int,
-        rng: Optional[jax.Array],
-    ) -> dict:
-        """Segmented forward with delayed cross-segment z-loss (split_nsm)."""
-        B, T = input_ids.shape
-        n_segs = T // seg
-
-        all_logits = []
-        total_loss = jnp.zeros(())
-        total_mem_loss = jnp.zeros(())
-        total_z_loss = jnp.zeros(())
-        total_stp_loss = jnp.zeros(())
-        n_loss_segs = 0
-
-        seg_z_codas = []
-        seg_z_memories = []
-        seg_z_preludes = []
-        seg_bb_preds = []
-
-        rng_segs = jax.random.split(rng, n_segs) if rng is not None else [None] * n_segs
-
-        for s in range(n_segs):
-            seg_ids = input_ids[:, s * seg:(s + 1) * seg]
-            seg_labels = labels[:, s * seg:(s + 1) * seg] if labels is not None else None
-
-            out = self._forward_single(seg_ids, seg_labels, training, step, rng_segs[s])
-
-            if "z_target" in out:
-                seg_z_codas.append(out["z_target"])
-            if "z_memory_raw" in out:
-                seg_z_memories.append(out["z_memory_raw"])
-            if "z_prelude" in out:
-                seg_z_preludes.append(out["z_prelude"])
-            if "x_prelude_raw" in out:
-                seg_bb_preds.append(
-                    self.z_heads.backbone_predict(out["x_prelude_raw"])
-                )
-
-            all_logits.append(out["logits"])
-            if "loss" in out:
-                total_loss = total_loss + out["loss"]
-                n_loss_segs += 1
-            if "memory_loss" in out:
-                total_mem_loss = total_mem_loss + out["memory_loss"]
-            if "z_loss" in out:
-                total_z_loss = total_z_loss + out["z_loss"]
-            if "stp_loss" in out:
-                total_stp_loss = total_stp_loss + out["stp_loss"]
-
-        # Delayed cross-segment z-loss (split_nsm) — training only
-        # We implement inline (instead of calling split_nsm_outer_loss) because
-        # split_nsm_outer_loss instantiates SIGReg without a Flax scope.
-        # Instead, we reuse self.z_heads._sigreg which is already in scope.
-        if training and len(seg_z_codas) > 1 and len(seg_z_memories) > 0:
-            rng_z = rng if rng is not None else jax.random.PRNGKey(0)
-            n_pairs = min(len(seg_z_memories), len(seg_z_codas) - 1)
-            zero = jnp.zeros(())
-            bb_losses = []
-            mem_losses = []
-            for i in range(n_pairs):
-                if i < len(seg_bb_preds):
-                    bb_pred = seg_bb_preds[i]
-                    bb_target = seg_z_codas[i + 1].mean(axis=1, keepdims=True)
-                    bb_pred_mean = bb_pred.mean(axis=1, keepdims=True)
-                    bb_losses.append(_smooth_l1(bb_pred_mean, bb_target))
-                if i + 1 < len(seg_z_preludes):
-                    mem_mean = seg_z_memories[i].mean(axis=1, keepdims=True)
-                    prelude_target = seg_z_preludes[i + 1].mean(axis=1, keepdims=True)
-                    mem_losses.append(_smooth_l1(mem_mean, prelude_target))
-
-            # SIGReg via bound module (avoids out-of-scope instantiation)
-            rng_z, rng_sr = jax.random.split(rng_z)
-            sigreg_val = self.z_heads.sigreg_loss(
-                seg_z_codas[1].astype(jnp.float32), rng_sr
-            )
-            bb_loss  = jnp.stack(bb_losses).mean()  if bb_losses  else zero
-            mem_loss = jnp.stack(mem_losses).mean() if mem_losses else zero
-            z_fwd_loss = bb_loss + mem_loss + 0.02 * sigreg_val
-
-            total_z_loss = total_z_loss + z_fwd_loss
-            if n_loss_segs > 0:
-                total_loss = total_loss + 0.1 * z_fwd_loss / n_loss_segs
-
-        result = {"logits": jnp.concatenate(all_logits, axis=1)}
-        if n_loss_segs > 0:
-            result["loss"] = total_loss / n_loss_segs
-            if total_mem_loss > 0:
-                result["memory_loss"] = total_mem_loss / n_loss_segs
-            if total_z_loss > 0:
-                result["z_loss"] = total_z_loss / n_loss_segs
-            if total_stp_loss > 0:
-                result["stp_loss"] = total_stp_loss / n_loss_segs
-        return result
+        return self._forward_single(input_ids, labels, training, rng)
 
     def _forward_single(
         self,
         input_ids: jnp.ndarray,
         labels: Optional[jnp.ndarray],
         training: bool,
-        step: int,
         rng: Optional[jax.Array],
     ) -> dict:
-        """Single-segment forward pass (core of the model)."""
+        """Full-sequence forward pass (core of the model)."""
         cfg = self.cfg
         B, T = input_ids.shape
-        mem_scale = self._mem_scale(step)
 
         # ── Embedding ─────────────────────────────────────────────────────
         x = self.embed(input_ids)                         # [B, T, d_model]
@@ -659,46 +499,17 @@ class MORPHTransformer(nn.Module):
             x = nn.Dropout(rate=cfg.dropout)(x, deterministic=False)
         bigram_emb = self.embed.get_bigram(input_ids)     # [B, T, d_model]
 
-        # ── SSM top-inject ─────────────────────────────────────────────────
-        ssm_signal = self.memory.ssm_inject(x)
-        x = x + mem_scale * ssm_signal
-
         x0 = x  # x0 skip connection (immutable in JAX)
 
         # ── Prelude ────────────────────────────────────────────────────────
-        _mem_inject_idx = max(0, cfg.n_prelude - 1)
-        memory_loss = None
-
         for i, layer in enumerate(self.prelude):
-            if i == _mem_inject_idx:
-                if training:
-                    memory_loss = self.memory.update(
-                        x, suppress_decay=(mem_scale == 0.0)
-                    )
-                x = self.memory.mag_inject(
-                    x, self._mem_start, self._mem_end, scale=mem_scale
-                )
-
             x = self._apply_x0(x, i, x0)
             x = self._apply_ve(x, i, input_ids)
             x = self.embed.bigram.inject(x, bigram_emb, i)
-
-            x = layer(x, deterministic=not training, n_skip=0)
-
-        x_prelude = x  # save for split_nsm
-
-        # ── MAC tokens ─────────────────────────────────────────────────────
-        # Always prepend MAC tokens. During warmup, mem_scale=0 → zero contribution.
-        mac_tokens = self.memory.get_mac_tokens(x) * mem_scale  # [B, N, d_model]
-        n_skip = cfg.n_memory_tokens
-
-        x = jnp.concatenate([mac_tokens, x], axis=1)                  # [B, N+T, d_model]
-        x0_ext = jnp.concatenate([jnp.zeros_like(mac_tokens), x0], axis=1)
-        bigram_ext = jnp.pad(bigram_emb, ((0, 0), (n_skip, 0), (0, 0)))
-        ids_ext = jnp.pad(input_ids, ((0, 0), (n_skip, 0)), constant_values=0)
+            x = layer(x, deterministic=not training)
 
         # ── Core loop ──────────────────────────────────────────────────────
-        e = self.input_norm(x)   # [B, N+T, d_model]
+        e = self.input_norm(x)   # [B, T, d_model]
         h = e                    # loop state
 
         if training and rng is not None:
@@ -711,7 +522,12 @@ class MORPHTransformer(nn.Module):
         else:
             depths = jnp.full((B,), cfg.mean_depth, dtype=jnp.int32)
 
-        total_iters = int(cfg.max_depth)
+        # At inference: use mean_depth fixed iterations (matching PyTorch).
+        # At training: use max_depth (so we iterate all possible Poisson steps,
+        # masking out completed samples via the 'active' boolean).
+        # PyTorch: total_iters = int(depths.max()); at inference depths are all
+        # mean_depth so total_iters == mean_depth.
+        total_iters = int(cfg.max_depth) if training else int(cfg.mean_depth)
         n_nograd = max(0, total_iters - cfg.bptt_depth)
 
         for t in range(total_iters):
@@ -719,8 +535,7 @@ class MORPHTransformer(nn.Module):
             active = (t < depths)[:, None, None]  # [B, 1, 1]
 
             # Capture loop variables explicitly to avoid closure mutation issues
-            _e, _ids, _x0, _bg = e, ids_ext, x0_ext, bigram_ext
-            _n_skip = n_skip
+            _e, _ids, _x0, _bg = e, input_ids, x0, bigram_emb
             _det = not training
 
             def _core_step(h_in):
@@ -730,7 +545,7 @@ class MORPHTransformer(nn.Module):
                     h_inj = self._apply_x0(h_inj, gi, _x0)
                     h_inj = self._apply_ve(h_inj, gi, _ids)
                     h_inj = self.embed.bigram.inject(h_inj, _bg, gi)
-                    h_inj = clayer(h_inj, deterministic=_det, n_skip=_n_skip)
+                    h_inj = clayer(h_inj, deterministic=_det)
                 return h_inj
 
             if t < n_nograd:
@@ -745,31 +560,16 @@ class MORPHTransformer(nn.Module):
 
         x = h
 
-        # ── Strip MAC tokens ───────────────────────────────────────────────
-        x = x[:, n_skip:]
-        x0 = x0_ext[:, n_skip:]
-        bigram_emb = bigram_ext[:, n_skip:]
-        input_ids_orig = ids_ext[:, n_skip:]
-
         # ── Coda ───────────────────────────────────────────────────────────
         for i, layer in enumerate(self.coda):
             gi = cfg.n_prelude + cfg.n_core + i
             x = self._apply_x0(x, gi, x0)
-            x = self._apply_ve(x, gi, input_ids_orig)
+            x = self._apply_ve(x, gi, input_ids)
             x = self.embed.bigram.inject(x, bigram_emb, gi)
-            x = layer(x, deterministic=not training, n_skip=0)
+            x = layer(x, deterministic=not training)
 
         # ── STP loss ───────────────────────────────────────────────────────
         stp_loss = self.stp(self.final_norm(x))
-
-        # ── Z-latent heads (ALWAYS called to ensure all params are initialized) ──
-        x_coda_normed = self.final_norm(x)
-        mem_ret = self.memory.retrieve(x)  # [B, T, d_model]
-        # Call __call__ to guarantee all three Dense layers are init'd
-        _z_rng = rng if rng is not None else jax.random.PRNGKey(0)
-        z_all = self.z_heads(x_coda_normed, x_prelude, mem_ret, rng_sigreg=_z_rng)
-        z_coda = z_all["z_coda"]          # [B, T, d_z]
-        z_memory = z_all["z_memory"]      # [B, T, d_z]
 
         # ── LM head ────────────────────────────────────────────────────────
         x_for_head = self.lm_mixer(x)
@@ -789,19 +589,8 @@ class MORPHTransformer(nn.Module):
                 jnp.where(valid, log_probs[jnp.arange(B_flat), jnp.where(valid, labels_flat, 0)], 0.0)
             ) / jnp.maximum(valid.sum(), 1)
 
-            loss = ce_loss
-
-            if memory_loss is not None:
-                loss = loss + 0.05 * memory_loss
-                out["memory_loss"] = memory_loss
-
-            out["z_memory_raw"] = (z_memory * mem_scale)
-            out["z_prelude"] = self.z_heads.project_prelude(self.final_norm(x_prelude))
-            out["x_prelude_raw"] = x_prelude
-
-            loss = loss + cfg.stp_lambda * stp_loss
+            loss = ce_loss + cfg.stp_lambda * stp_loss
             out["stp_loss"] = stp_loss
             out["loss"] = loss
 
-        out["z_target"] = z_coda
         return out

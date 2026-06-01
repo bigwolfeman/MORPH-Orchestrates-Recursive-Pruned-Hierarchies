@@ -1,0 +1,377 @@
+{
+  "all_proven": true,
+  "n_checks": 88,
+  "configs": [
+    [
+      384,
+      12
+    ],
+    [
+      128,
+      4
+    ]
+  ],
+  "S": [
+    512,
+    1024,
+    2048,
+    4096
+  ],
+  "CG": 32,
+  "K": 4,
+  "BLOCK_T": 128,
+  "results": {
+    "C384_G12_S512/dw_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S512/dw_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S512/gp_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S512/gp_fwd.w_load(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S512/gp_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S512/gp_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S512/gp_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S512/dw_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S512/dw_bwd_dw.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S512/dw_bwd_dx.store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S512/dw_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S1024/dw_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S1024/dw_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S1024/gp_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S1024/gp_fwd.w_load(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S1024/gp_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S1024/gp_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S1024/gp_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S1024/dw_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S1024/dw_bwd_dw.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S1024/dw_bwd_dx.store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S1024/dw_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S2048/dw_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S2048/dw_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S2048/gp_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S2048/gp_fwd.w_load(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S2048/gp_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S2048/gp_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S2048/gp_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S2048/dw_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S2048/dw_bwd_dw.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S2048/dw_bwd_dx.store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S2048/dw_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S4096/dw_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S4096/dw_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S4096/gp_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S4096/gp_fwd.w_load(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S4096/gp_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S4096/gp_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S4096/gp_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S4096/dw_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S4096/dw_bwd_dw.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S4096/dw_bwd_dx.store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C384_G12_S4096/dw_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S512/dw_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S512/dw_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S512/gp_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S512/gp_fwd.w_load(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S512/gp_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S512/gp_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S512/gp_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S512/dw_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S512/dw_bwd_dw.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S512/dw_bwd_dx.store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S512/dw_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S1024/dw_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S1024/dw_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S1024/gp_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S1024/gp_fwd.w_load(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S1024/gp_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S1024/gp_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S1024/gp_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S1024/dw_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S1024/dw_bwd_dw.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S1024/dw_bwd_dx.store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S1024/dw_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S2048/dw_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S2048/dw_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S2048/gp_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S2048/gp_fwd.w_load(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S2048/gp_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S2048/gp_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S2048/gp_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S2048/dw_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S2048/dw_bwd_dw.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S2048/dw_bwd_dx.store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S2048/dw_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S4096/dw_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S4096/dw_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S4096/gp_fwd.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S4096/gp_fwd.w_load(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S4096/gp_fwd.y_store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S4096/gp_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S4096/gp_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S4096/dw_bwd_dx.go_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S4096/dw_bwd_dw.x_load": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S4096/dw_bwd_dx.store": {
+      "status": "proven",
+      "counterexample": null
+    },
+    "C128_G4_S4096/dw_bwd_dw.store(unmasked)": {
+      "status": "proven",
+      "counterexample": null
+    }
+  }
+}
