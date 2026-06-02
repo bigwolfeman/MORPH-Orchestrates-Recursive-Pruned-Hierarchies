@@ -42,6 +42,14 @@ class MORPHConfig:
     max_depth: int = 8
     bptt_depth: int = 4
 
+    # Cross-iteration KV sharing (CLA) — see docs/cross_layer_kv_sharing.md.
+    # When on, the per-core-layer KV bundle (k_lat, k, v, C_comp, +CSA top_idx/
+    # invalid_mask) is computed once at cla_share_start and reused (q-only recompute)
+    # in later loop iterations. cla_share_start=-1 → auto = n_nograd (first grad
+    # iteration), so K/V projections receive gradient (truncated-BPTT trap).
+    use_cla: bool = False
+    cla_share_start: int = -1
+
     channel_dims: tuple[int, ...] = (384, 256, 128)
 
     # Attention
@@ -340,8 +348,11 @@ class MORPHTransformer(nn.Module):
             dim=0,
         )  # [n_core, B, S, ctx_width]
 
-        def _core_step(h_in, e_in, ids, x0_terms, bg):
+        def _core_step(h_in, e_in, ids, x0_terms, bg, cla_mode=None, kv_bundles=None):
+            # cla_mode: None=normal, "compute"=stash per-layer KV bundle (returns
+            # (h, captures)), "reuse"=q-only recompute consuming kv_bundles[i].
             h_injected = self.injection(h_in, e_in)
+            captures = [] if cla_mode == "compute" else None
             for i, layer in enumerate(self.core):
                 gi = np_ + i
                 h_injected = self.x0_injects[gi].apply_precomputed(
@@ -349,7 +360,16 @@ class MORPHTransformer(nn.Module):
                 )
                 h_injected = self._apply_ve(h_injected, gi, ids)
                 h_injected = self.embed.bigram.inject(h_injected, bg, gi)
-                h_injected = layer(h_injected)
+                if cla_mode == "compute":
+                    cap: dict = {}
+                    h_injected = layer(h_injected, attn_kwargs={"cla_capture": cap})
+                    captures.append(cap)
+                elif cla_mode == "reuse":
+                    h_injected = layer(h_injected, attn_kwargs={"cla_kv": kv_bundles[i]})
+                else:
+                    h_injected = layer(h_injected)
+            if cla_mode == "compute":
+                return h_injected, captures
             return h_injected
 
         # ── Active-set shrinking ────────────────────────────────────────────
@@ -370,6 +390,21 @@ class MORPHTransformer(nn.Module):
         bg_s = bigram_emb[perm]
         x0_s = x0_core_terms[:, perm]            # [n_core, B, S, W]
 
+        # ── CLA (cross-iteration KV sharing) scheduling ──────────────────────
+        # Compute the per-core-layer KV bundle once at cla_start (the first grad
+        # iteration, so K/V projections receive gradient), then reuse it (q-only
+        # recompute) for later iterations. cla_start defaults to n_nograd.
+        cla_on = bool(self.cfg.use_cla)
+        cla_start = self.cfg.cla_share_start
+        if cla_start < 0:
+            cla_start = n_nograd
+        # v1 shares only WITHIN the grad window (single-epoch): the compute-iteration
+        # must be a grad iteration so K/V projections receive gradient (trap §7.2).
+        # A smaller value would be shadowed by the `t < n_nograd` no-grad branch and
+        # silently disable CLA — clamp it up so that can't happen.
+        cla_start = max(cla_start, n_nograd)
+        kv_bundles = None
+
         for t in range(total_iters):
             n_active = int((sort_depths > t).sum().item())
             if n_active == 0:
@@ -378,9 +413,26 @@ class MORPHTransformer(nn.Module):
             args = (h_a, e_s[:n_active], ids_s[:n_active],
                     x0_s[:, :n_active], bg_s[:n_active])
 
+            do_compute = cla_on and t == cla_start
+            do_reuse = cla_on and t > cla_start and kv_bundles is not None
+
             if t < n_nograd:
+                # no-grad region; cla_start >= n_nograd so no CLA here.
                 with torch.no_grad():
                     h_new = _core_step(*args)
+            elif do_compute:
+                # NOT checkpointed: retain activations so the captured KV bundle
+                # carries gradient to W_down_k / compressor / indexer (BPTT trap §7.2).
+                h_new, kv_bundles = _core_step(*args, cla_mode="compute")
+            elif do_reuse:
+                # slice the cached bundle to the current active-set prefix (trap §7.1).
+                kvb = [{k: (v[:n_active] if torch.is_tensor(v) else v)
+                        for k, v in b.items()} for b in kv_bundles]
+                if self.training:
+                    h_new = checkpoint(_core_step, *args, cla_mode="reuse",
+                                       kv_bundles=kvb, use_reentrant=False)
+                else:
+                    h_new = _core_step(*args, cla_mode="reuse", kv_bundles=kvb)
             elif self.training:
                 h_new = checkpoint(_core_step, *args, use_reentrant=False)
             else:
@@ -407,19 +459,24 @@ class MORPHTransformer(nn.Module):
         x = self.lm_mixer(x)
         x = self.final_norm(x)
 
-        if labels is not None and self.training and self.cfg.use_kernels:
-            # Training: fused chunked cross-entropy. Never materialises the
-            # [B, T, V] logits (the dominant activation-memory cost at scale) —
-            # computes loss + grads in vocab-row chunks against the tied weight.
-            # grad flows to BOTH x and the embedding (via lm_weight's cat/log-map).
+        if labels is not None and self.cfg.use_kernels:
+            # Fused chunked cross-entropy whenever we have labels (TRAINING **and**
+            # EVAL). Never materialises the [B, T, V] logits — the dominant
+            # activation-memory cost — nor the [B·T, V] fp32 log_softmax intermediate
+            # that F.cross_entropy builds (~6 GiB at B=8/T=4096/V=49152). Eval only
+            # needs the loss scalar, so the old `self.training` gate made eval ~6 GiB
+            # heavier than training for no benefit and OOM'd the B8 arm on the
+            # fragmented pool (see Ai-notes 06-01-2026). Computes loss in vocab-row
+            # chunks against the tied weight; under @torch.no_grad() (eval) it runs
+            # the forward only. grad (training) flows to BOTH x and the embedding
+            # (via lm_weight's cat/log-map). Generation (labels=None) still takes the
+            # full-logits else branch — it needs logits to sample, and is batch-1/cheap.
             w_full = self.embed.lm_weight()                       # [V, d_model]
             ce_loss = fused_linear_cross_entropy(
                 x.reshape(-1, x.shape[-1]), w_full, labels.reshape(-1),
                 ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
             )
             loss = ce_loss + self.cfg.stp_lambda * stp_loss
-            # logits intentionally not materialised in training (unused by the
-            # loss / loggers). Generation + eval take the full-logits branch.
             out = {"logits": None, "stp_loss": stp_loss, "loss": loss}
         else:
             logits = self.embed.attend(x)

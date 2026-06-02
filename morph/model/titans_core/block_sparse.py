@@ -539,10 +539,18 @@ class CMSBlockLinear(nn.Module):
         """
         return TRITON_AVAILABLE and self.values.is_cuda and self.tile_size in (8, 16, 32, 64)
 
+    @torch.compiler.disable
     def _activation_hook(
         self, module: nn.Module, input: Tuple[Tensor, ...], output: Tensor
     ) -> None:
         """T029: Capture input activation norms per block-column.
+
+        @torch.compiler.disable: this is a non-perf-critical stats hook that fires on
+        every CMS forward, and it was a torch.compile RECOMPILE MAGNET — it re-specialized
+        on grad_mode + fp32↔bf16 dtype + sub-batch size every step, and each recompile
+        risks a fork-deadlock against background threads (see Ai-notes 06-01-2026/
+        MORPH-eval-recompile-hang). Keeping it out of the compiled graph removes that
+        churn entirely; it runs eager (cheap — just norm accumulation).
 
         Computes L2 norm of input activations for each block-column and accumulates
         into activation_norm_acc buffer. Only active during training.

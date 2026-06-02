@@ -72,8 +72,29 @@ training:
   beta2: 0.95
 
   # Optional wrappers (set to true to activate)
-  ternary: false           # STE ternary shadow weights (Phase 2)
+  ternary: false           # Ternary QAT — forward-STE on weights (see ternary_qat.py). Real
+                           # QAT: forward uses {-1,0,+1}xscale, grad straight-through to the
+                           # smooth shadow. Training/val ppl IS the deployed-ternary ppl.
+  ternary_scope: backbone  # which weights to ternarize: backbone | backbone_attn | full
+                           # (full = + attention projections + token/space/euclidean embeddings)
+  ternary_threshold: 0.5   # |w/scale| > threshold → nonzero (Bonsai default)
   adam8bit: false          # 8-bit AdamW via bitsandbytes (quantizes optimizer state m,v to uint8)
+
+  # FP8 training (torchao float8) — see docs/fp8_mixed_precision_training.md. FP8 the
+  # large dense GEMMs only; attention/norms/fused-CE stay bf16 (DeepSeek-V3/Ling-1T mix).
+  # Verified to accelerate on RTX 5090 sm_120 (2.4-4.3x GEMM). fp8=false → bit-identical bf16.
+  fp8: false               # master switch
+  fp8_recipe: dynamic      # dynamic (stateless, mandated for the loop) | rowwise
+  fp8_scope: mlp           # mlp | attn_proj | mlp_attn_proj | all_gemm
+                           #   attn_proj = CCA projections only (disjoint from ternary
+                           #   backbone → for the ternary⊕FP8⊕8-bit 3-way combo)
+  fp8_filter_min_dim: 256  # skip Linears with any dim < this (FP8 only helps big GEMMs)
+
+  # Cross-iteration KV sharing (CLA) — see docs/cross_layer_kv_sharing.md. Cache the
+  # per-core-layer KV bundle once and reuse (q-only recompute) in later loop iterations.
+  # use_cla=false → bit-identical to today.
+  use_cla: false
+  cla_share_start: -1      # -1 = auto (n_nograd, first grad iter — gradient-correct)
 
   # Evaluation / logging
   eval_every: 500

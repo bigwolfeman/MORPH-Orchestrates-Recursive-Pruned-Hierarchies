@@ -17,6 +17,14 @@ import sys
 import time
 from typing import Optional
 
+# Diagnostic-only: env-guarded single-shot faulthandler to capture the stack of an
+# intermittent step-0 backward hang (gradient-checkpoint recompute). Single dump
+# (NOT repeat=True — repeated dumps SIGSEGV under live CUDA). Set MORPH_FAULT_TIMEOUT
+# to a value past a healthy step-0 (~40s) so it only fires when actually wedged.
+if os.environ.get("MORPH_FAULT_TIMEOUT"):
+    import faulthandler as _fh
+    _fh.dump_traceback_later(int(os.environ["MORPH_FAULT_TIMEOUT"]), repeat=False)
+
 # ── torch.compile safety ───────────────────────────────────────────────────────
 # The looped core uses gradient checkpointing (use_reentrant=False); disabling
 # donated buffers below avoids buffer-aliasing conflicts under compile.
@@ -35,6 +43,22 @@ import torch._functorch.config as _functorch_config  # noqa: E402
 
 if hasattr(_functorch_config, "donated_buffer"):
     _functorch_config.donated_buffer = False
+
+# Inductor compile workers via SPAWN, not the default fork-based "subprocess" pool.
+# WHY: any torch.compile RECOMPILE during the training loop forks compile workers /
+# gcc while background threads (wandb asyncio + status, HF-streaming httpx, the
+# inductor read-thread) hold a glibc malloc-arena lock → the forked child deadlocks
+# in __triton_launcher.c (intermittent; cost a full night — see Ai-notes 06-01-2026/
+# MORPH-eval-recompile-hang). Recompiles are unavoidable here (the active-set's
+# grad_mode/dtype/size guards leak past warmup). Spawn workers are FRESH processes
+# that never inherit the main thread-lock state, so compilation can never fork-deadlock
+# regardless of when a recompile fires. Verified: 60 real training steps with live
+# recompiles, no wedge. Pair with the single-threaded warmup below (handles the initial
+# bulk compile). This applies to ALL runs incl. the future pruning run.
+import torch._inductor.config as _inductor_config  # noqa: E402
+if hasattr(_inductor_config, "worker_start_method"):
+    _inductor_config.worker_start_method = "spawn"
+os.environ.setdefault("TORCHINDUCTOR_WORKER_START", "spawn")
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -81,6 +105,7 @@ def evaluate(
 
 # ── Generation test ────────────────────────────────────────────────────────────
 
+@torch.compiler.set_stance("force_eager")
 def run_generation_test(
     model: nn.Module,
     device: torch.device,
@@ -89,7 +114,19 @@ def run_generation_test(
     step: int,
     n_tokens: int = 100,
 ) -> str:
-    """Run a short greedy generation and return the text."""
+    """Run a short greedy generation and return the text.
+
+    Decorated with ``force_eager``: generation runs the model token-by-token at
+    batch=1 with a sequence length that grows by one every step, so the MLPs
+    (``torch.compile``d for the *training* shapes B×S) see a brand-new shape on
+    every token. Under the training stance (``eager_on_recompile``) dynamo still
+    pays per-token guard-eval to route each novel shape to its eager fallback —
+    measured >10× slower and it tripped the 90s watchdog mid-gen. ``force_eager``
+    makes the compiled MLPs run their original eager code directly (~42 ms/tok,
+    stable as seqlen grows; verified ignore/gen_isolated.py), and the decorator
+    restores the prior stance on return. Eval (full-batch fixed shape) is
+    unaffected and stays on the compiled path.
+    """
     try:
         from transformers import AutoTokenizer
     except ImportError:
@@ -150,6 +187,8 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         mean_depth=int(m.mean_depth),
         max_depth=int(m.max_depth),
         bptt_depth=int(m.bptt_depth),
+        use_cla=bool(getattr(tr, "use_cla", False)),
+        cla_share_start=int(getattr(tr, "cla_share_start", -1)),
         channel_dims=channel_dims,
         compression=int(m.compression),
         n_kv_heads=int(m.n_kv_heads),
@@ -235,23 +274,64 @@ def main(cfg: DictConfig) -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ── W&B init — log FULL config dict ──────────────────────────────────
-    # OmegaConf → plain Python dict so wandb can serialise it.
-    full_config_dict = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False)
-    wandb.init(
-        project=wb_cfg.project,
-        entity=getattr(wb_cfg, "entity", None),
-        name=getattr(wb_cfg, "name", None),
-        config=full_config_dict,
-        settings=wandb.Settings(_service_wait=60),
-    )
-
     # ── Build model ───────────────────────────────────────────────────────
+    # ORDERING IS LOAD-BEARING: model build + torch.compile + warmup run BEFORE
+    # wandb.init() and the streaming dataloader (both below). All Triton/Inductor
+    # compilation — and the gcc subprocess fork that builds each kernel launcher stub —
+    # therefore happens in a SINGLE-THREADED process. A fork only deadlocks when another
+    # thread holds a non-reentrant lock (glibc malloc arena) at fork time; with no
+    # wandb/httpx threads alive yet, every compile fork is safe by construction. This is
+    # the root-cause fix for the intermittent step-0 wedge (see Ai-notes 06-01-2026/
+    # MORPH-eval-recompile-hang): the fused CCA Triton kernels JIT-specialize size==1
+    # separately, so the first runtime n_active==1 (a rare Poisson draw) used to compile
+    # + fork against live threads. wandb.init() is deferred to just after the warmup.
     morph_cfg = build_morph_config(cfg)
     model = MORPHTransformer(morph_cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params / 1e6:.1f}M params on {device}")
-    wandb.config.update({"n_params": n_params}, allow_val_change=True)
+
+    # ── Ternary QAT (forward-STE) ──────────────────────────────────────────
+    # MUST run BEFORE torch.compile (so the STE is captured in the compiled graph)
+    # and BEFORE create_optimizer (so the optimizer binds the smooth `.original`
+    # params). When active, the forward uses {-1,0,+1}×scale weights → training/val
+    # ppl already reflects the deployed-ternary quality. See morph/model/ternary_qat.py.
+    ternary_manifest = None
+    if bool(getattr(cfg.training, "ternary", False)):
+        from morph.model.ternary_qat import apply_ternary_qat
+        ternary_manifest = apply_ternary_qat(
+            model,
+            scope=str(getattr(cfg.training, "ternary_scope", "backbone")),
+            threshold=float(getattr(cfg.training, "ternary_threshold", 0.5)),
+        )
+        print(
+            f"  Ternary QAT ON: scope={ternary_manifest['scope']} "
+            f"threshold={ternary_manifest['threshold']} "
+            f"modules={ternary_manifest['n_modules_ternary']} "
+            f"({ternary_manifest['counts']}) "
+            f"params_ternary={ternary_manifest['n_params_ternary'] / 1e6:.1f}M "
+            f"({ternary_manifest['frac_params_ternary'] * 100:.1f}% of model)",
+            flush=True,
+        )
+
+    # ── FP8 training (torchao float8) ──────────────────────────────────────
+    # MUST run AFTER ternary QAT (for the disjointness guard) and BEFORE torch.compile
+    # (so Float8Linear is compiled). Converts only the scoped dense GEMMs; dynamic
+    # scaling (stateless — safe in the reused-weight loop). See morph/model/fp8_scope.py.
+    fp8_manifest = None
+    if bool(getattr(cfg.training, "fp8", False)):
+        from morph.model.fp8_scope import apply_fp8_training
+        fp8_manifest = apply_fp8_training(
+            model,
+            scope=str(getattr(cfg.training, "fp8_scope", "mlp")),
+            recipe=str(getattr(cfg.training, "fp8_recipe", "dynamic")),
+            min_dim=int(getattr(cfg.training, "fp8_filter_min_dim", 256)),
+            ternary_module_names=(ternary_manifest or {}).get("module_names"),
+        )
+        print(
+            f"  FP8 training ON: scope={fp8_manifest['scope']} recipe={fp8_manifest['recipe']} "
+            f"min_dim={fp8_manifest['min_dim']} converted={fp8_manifest['n_converted']} Linears",
+            flush=True,
+        )
 
     # ── torch.compile ─────────────────────────────────────────────────────
     # Compile only the MLP sub-modules (attention uses Triton/SDPA kernels,
@@ -267,6 +347,104 @@ def main(cfg: DictConfig) -> None:
                 if hasattr(layer, "mlp"):
                     layer.mlp = torch.compile(layer.mlp, mode=compile_mode, dynamic=dyn)
         print(f"  MLPs compiled (mode={compile_mode}, core dynamic-batch)")
+
+        # ── Warmup compile — runs in the THREAD-FREE window (pre-wandb, pre-dataloader) ──
+        # Two compilation systems fork subprocesses here and must finish before any thread
+        # spawns: (a) torch.compile/Inductor for the MLPs, which lazily compiles a variant
+        # per (sub-batch size × grad_mode × autocast dtype) guard on the first few forwards;
+        # (b) the hand-written fused CCA Triton kernels, which JIT-specialize size==1 apart
+        # from size>1. Either, if compiled DURING the training loop, forks gcc/Inductor
+        # workers while the HF-streaming httpx + wandb threads hold a glibc malloc-arena lock
+        # → the forked child deadlocks in __triton_launcher.c (intermittent; cost us a night
+        # — Ai-notes 06-01-2026/MORPH-eval-recompile-hang). Mitigation is layered: (1) build +
+        # warm up BEFORE wandb.init/dataloader so the fork window is single-threaded → safe by
+        # construction; (2) the forced-size loop below compiles EVERY Triton variant (incl.
+        # the rare size==1) here, so none JIT-compiles at runtime; (3) eager_on_recompile
+        # (set after warmup) catches any leftover MLP guard → runs it eager (no compile, no
+        # fork) rather than recompiling mid-loop. Raise the Dynamo cache limit so all variants
+        # coexist without eviction.
+        import torch._dynamo as _dynamo
+        _dynamo.config.cache_size_limit = max(getattr(_dynamo.config, "cache_size_limit", 8), 64)
+        _dynamo.config.accumulated_cache_size_limit = max(
+            getattr(_dynamo.config, "accumulated_cache_size_limit", 256), 512)
+
+        # Force the active-set to hit EVERY sub-batch size (incl. n_active==1) so all
+        # Triton kernel variants compile HERE, in this thread-free window. The fused CCA
+        # attention kernels are hand-written Triton (NOT torch.compile), so the stance
+        # below does NOT govern them — Triton JIT-specializes size==1 separately from
+        # size>1. If the size-1 variant is left to compile on the first runtime n_active==1
+        # (a rare Poisson draw with one sequence far deeper than the rest), it forks gcc for
+        # its launcher stub while wandb/httpx threads hold the glibc malloc-arena lock → the
+        # forked child deadlocks (the intermittent step-0 wedge; py-spy caught the autograd
+        # engine blocked mid-recompute on the next malloc). Patterns: K sequences at
+        # max_depth, rest at depth 1 → n_active==K in BOTH the no_grad prefix and the
+        # checkpointed BPTT window, so fwd AND bwd Triton variants for every size compile now.
+        _wb = int(cfg.training.batch_size)
+        _mx = int(model.cfg.max_depth)
+
+        def _forced_depths(K):
+            d = [1] * _wb
+            for _j in range(min(K, _wb)):
+                d[_j] = _mx
+            return torch.tensor(d, device=device, dtype=torch.long)
+
+        _orig_sample = model._sample_depths
+        _passes_per_size = int(getattr(tr, "warmup_passes_per_size", 4))
+        _sizes = list(range(_wb, 0, -1))   # [B, B-1, ..., 1] — covers size>1 AND size==1
+        print(f"  Warmup compile (thread-free; active-set sizes {_sizes} × {_passes_per_size})...",
+              flush=True)
+        _t_warm = time.perf_counter()
+        for _K in _sizes:
+            model._sample_depths = (lambda _b, _dev, __K=_K: _forced_depths(__K))
+            for _wi in range(_passes_per_size):
+                _ids = torch.randint(0, model.cfg.vocab_size, (_wb, seq_len), device=device)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    _w = model(_ids, labels=_ids)
+                _w["loss"].backward()
+                model.zero_grad(set_to_none=True)
+                del _ids, _w
+        model._sample_depths = _orig_sample          # restore real Poisson sampling
+        torch.cuda.synchronize()
+        print(f"  Warmup compile done in {time.perf_counter()-_t_warm:.1f}s "
+              f"({len(_sizes) * _passes_per_size} passes, all active-set sizes)", flush=True)
+
+        # Final safety net: forbid NEW compilation during the training loop. The warmup
+        # above + the @torch.compiler.disable on the CMS stats hook cover the COMMON shape
+        # space (verified: 100 steps, 0 recompiles), so this rarely fires. But a rare
+        # Poisson-depth draw can still produce an (size × grad_mode × dtype) combo the
+        # warmup missed — and any such recompile would fork gcc for the Triton launcher in
+        # the MAIN process (NOT covered by the spawn worker pool) against wandb/httpx
+        # threads → intermittent deadlock (this bit the real campaign at step 1 while
+        # 160 diag steps ran clean — pure timing luck). "eager_on_recompile" makes that
+        # rare uncovered shape run EAGER (no compile, no fork, no deadlock) instead — one
+        # slightly-slow step, never a hang. Common shapes keep their compiled kernels.
+        torch.compiler.set_stance("eager_on_recompile")
+        print("  torch.compiler stance = eager_on_recompile (rare uncovered shapes run eager, never recompile/fork)", flush=True)
+
+    # ── W&B init — log FULL config dict ──────────────────────────────────
+    # DEFERRED until AFTER the warmup: the compile/gcc-fork window above must be
+    # thread-free (no wandb asyncio/httpx threads) for the fork to be deadlock-safe.
+    # OmegaConf → plain Python dict so wandb can serialise it; fold n_params in directly.
+    full_config_dict = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False)
+    full_config_dict["n_params"] = n_params
+    if ternary_manifest is not None:
+        # Derived ternary facts (scope/threshold already live in cfg). Drop the
+        # verbose module_names list from the logged config; keep the greppable counts.
+        full_config_dict["ternary_manifest"] = {
+            k: v for k, v in ternary_manifest.items() if k != "module_names"
+        }
+    if fp8_manifest is not None:
+        full_config_dict["fp8_manifest"] = {
+            "scope": fp8_manifest["scope"], "recipe": fp8_manifest["recipe"],
+            "min_dim": fp8_manifest["min_dim"], "n_converted": fp8_manifest["n_converted"],
+        }
+    wandb.init(
+        project=wb_cfg.project,
+        entity=getattr(wb_cfg, "entity", None),
+        name=getattr(wb_cfg, "name", None),
+        config=full_config_dict,
+        settings=wandb.Settings(_service_wait=60),
+    )
 
     # ── Optimizer + LR schedule ───────────────────────────────────────────
     optimizer = create_optimizer(model, cfg)
@@ -294,6 +472,17 @@ def main(cfg: DictConfig) -> None:
                             wandb.run.name if wandb.run else "run")
     os.makedirs(ckpt_dir, exist_ok=True)
 
+    # Generation samples go to a sidecar file, NOT stdout. Generated text is
+    # uncontrolled token output that can contain substrings ("RuntimeError:",
+    # "Killed", "Traceback...") which would false-trigger a log-scraping watcher
+    # (ignore/ab_watch.sh) into reporting a crash. Stdout gets only a safe summary.
+    gen_samples_path = os.path.join(ckpt_dir, "generation_samples.txt")
+
+    def _emit_gen(label: str, gen_text: str) -> None:
+        with open(gen_samples_path, "a") as _f:
+            _f.write(f"\n===== {label} =====\n{gen_text}\n")
+        print(f"  [GEN {label}] {len(gen_text)} chars → {gen_samples_path}", flush=True)
+
     # ── Optional resume ───────────────────────────────────────────────────
     start_step = 0
     if resume_path and os.path.isfile(resume_path):
@@ -317,7 +506,42 @@ def main(cfg: DictConfig) -> None:
     step_times: list[float] = []
     t_start = time.perf_counter()
 
+    # Diagnostic-only (MORPH_DEBUG_STEP): per-step wall time + the exact Poisson depths
+    # that step sampled, to catch the intermittent slow step and its trigger. Wrap
+    # _sample_depths to stash the last-returned depths; printed in the timing block.
+    _dbg_step = bool(os.environ.get("MORPH_DEBUG_STEP"))
+    _dbg = {"depths": None, "step_start": time.perf_counter(), "cur_step": -1, "dumped": False}
+    if _dbg_step:
+        _real_sample = model._sample_depths
+        def _logged_sample(b, dev_, _f=_real_sample):
+            d = _f(b, dev_)
+            _dbg["depths"] = d.tolist()
+            # print at SAMPLE time (step start) so a step that wedges still has its
+            # trigger logged (the end-of-step timing print would never fire).
+            print(f"  [dbg] >>> forward start depths={_dbg['depths']} max={int(d.max())}", flush=True)
+            return d
+        model._sample_depths = _logged_sample
+
+        # Watchdog: if any single step exceeds 60s (vs ~0.6s normal), dump the FULL
+        # all-thread stack ONCE — captures the wedge in situ (the failure only manifests
+        # in the real campaign launcher, not in controlled repros). faulthandler shows the
+        # autograd-engine thread's Python frame + every other thread → what is actually stuck.
+        import faulthandler as _fh, threading as _thr
+        def _watchdog():
+            while True:
+                time.sleep(5)
+                wedged = time.perf_counter() - _dbg["step_start"]
+                if wedged > 60 and not _dbg["dumped"] and _dbg["cur_step"] >= 0:
+                    _dbg["dumped"] = True
+                    print(f"\n[dbg] !!! WEDGE: step {_dbg['cur_step']} running {wedged:.0f}s "
+                          f"depths={_dbg['depths']} — dumping all threads:\n", flush=True)
+                    _fh.dump_traceback()
+        _thr.Thread(target=_watchdog, daemon=True).start()
+
     for step in range(start_step, total_steps):
+        if _dbg_step:
+            _dbg["step_start"] = time.perf_counter()
+            _dbg["cur_step"] = step
         lr = lr_fn(step)
         for pg in optimizer.param_groups:
             pg["lr"] = lr
@@ -354,10 +578,16 @@ def main(cfg: DictConfig) -> None:
 
         # ── Timing ────────────────────────────────────────────────────────
         t_now = time.perf_counter()
-        step_times.append(t_now - t_start)
-        t_start = t_now
+        _dt = t_now - t_start
+        step_times.append(_dt)
+        # t_start is reset at the END of the loop body (after eval/gen/ckpt) so
+        # those non-training blocks are excluded from the NEXT step's _dt — keeps
+        # steps_per_sec a pure training-throughput metric regardless of eval cadence.
         if len(step_times) > 100:
             step_times = step_times[-100:]
+        if _dbg_step:
+            _flag = "  <<< SLOW" if _dt > 3.0 else ""
+            print(f"  [dbg] step {step}: {_dt:.2f}s depths={_dbg['depths']}{_flag}", flush=True)
 
         # ── Logging (every 20 steps) ──────────────────────────────────────
         if step % 20 == 0:
@@ -422,7 +652,7 @@ def main(cfg: DictConfig) -> None:
             wandb.log(
                 {"gen/sample": wandb.Html(f"<pre>{gen_text}</pre>")}, step=step
             )
-            print(f"  [GEN {step}]\n{gen_text[:300]}...")
+            _emit_gen(f"step {step}", gen_text)
             model.train()
 
         # ── Checkpoint ────────────────────────────────────────────────────
@@ -431,15 +661,26 @@ def main(cfg: DictConfig) -> None:
             save_checkpoint(ck_path, step, model, optimizer, scaler, pruning)
             print(f"  Checkpoint: {ck_path}")
 
+        # ── Reset step timer ───────────────────────────────────────────────
+        # Anchor the next step's _dt here, AFTER logging/eval/gen/ckpt, so those
+        # non-training blocks don't inflate steps_per_sec (see Timing block above).
+        t_start = time.perf_counter()
+
     # ── Final checkpoint ──────────────────────────────────────────────────
     final_path = os.path.join(ckpt_dir, f"step_{total_steps}.pt")
     save_checkpoint(final_path, total_steps, model, optimizer, scaler, pruning)
     print(f"Final checkpoint: {final_path}")
 
     # ── Final eval + generation ───────────────────────────────────────────
-    val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches)
-    wandb.log({"val/loss_final": val_loss, "val/ppl_final": val_ppl}, step=total_steps)
-    print(f"Final val_loss={val_loss:.4f}  ppl={val_ppl:.2f}")
+    # The eval()/train() + grad-mode toggle is safe under eager_on_recompile (set
+    # after warmup): a guard miss runs that region eager instead of recompiling, so
+    # there is no recompilation storm. We still skip the final eval when periodic
+    # eval is disabled (eval_every > total_steps) — a pure throughput/mem run has no
+    # val_loader worth touching and the skip lets it exit promptly.
+    if eval_every <= total_steps:
+        val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches)
+        wandb.log({"val/loss_final": val_loss, "val/ppl_final": val_ppl}, step=total_steps)
+        print(f"Final val_loss={val_loss:.4f}  ppl={val_ppl:.2f}")
 
     if gen_every > 0 or bool(getattr(tr, "gen_test", False)):
         gen_text = run_generation_test(
@@ -448,7 +689,7 @@ def main(cfg: DictConfig) -> None:
         wandb.log(
             {"gen/final": wandb.Html(f"<pre>{gen_text}</pre>")}, step=total_steps
         )
-        print(f"\nGeneration test:\n{gen_text}")
+        _emit_gen(f"FINAL step {total_steps}", gen_text)
 
     wandb.finish()
 

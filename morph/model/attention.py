@@ -325,11 +325,12 @@ class _CCABase(nn.Module):
             conv_gp.groups, conv_dw.kernel_size[0],
         )
 
-    def _cca_project(self, x: Tensor, n_skip_rope: int = 0):
+    def _cca_project(self, x: Tensor, n_skip_rope: int = 0, return_klat: bool = False):
         """CCA: down-project → conv → QK-mean → norm → temp → RoPE → value-shift.
 
         Returns q [B, H, S, D], k [B, H, S, D], v [B, H, S, D] all at d_head
-        with K and V already GQA-expanded to n_heads.
+        with K and V already GQA-expanded to n_heads. If return_klat, also returns
+        the pre-conv k_lat [B, S, Hkv*D] (needed by the CLA q-only reuse path).
         """
         B, S, _ = x.shape
         H, Hkv, D = self.n_heads, self.n_kv_heads, self.d_head
@@ -359,7 +360,46 @@ class _CCABase(nn.Module):
             H, Hkv, D, n_skip_rope=n_skip_rope, eps=self.q_norm.eps,
         )
 
+        if return_klat:
+            return q, k, v, k_lat
         return q, k, v
+
+    def _cca_q_only(self, x: Tensor, cached_k_lat: Tensor, n_skip_rope: int = 0) -> Tensor:
+        """CLA reuse path: recompute ONLY q, reusing cached k_lat for the QK-mean
+        coupling. Byte-faithful to the q-side of cca_prologue_reference (the prologue
+        spec): q = RoPE(RMSNorm(q_conv + 0.5·(q_lat + k_lat[group]))).
+
+        cached_k_lat: [B, S, Hkv*D] from the share iteration (sliced to this batch).
+        Returns q [B, H, S, D].
+        """
+        from morph.kernels.triton.fused_cca_prologue import _rmsnorm, _rotate_half
+        B, S, _ = x.shape
+        H, Hkv, D, n_rep = self.n_heads, self.n_kv_heads, self.d_head, self.n_rep
+
+        q_lat = self.W_down_q(x)                                          # [B,S,H*D]
+        q_conv = self._causal_conv(
+            q_lat.transpose(1, 2), self.conv_q_dw, self.conv_q_gp).transpose(1, 2)
+
+        q_pre = q_lat.reshape(B, S, H, D)
+        k_pre = cached_k_lat.reshape(B, S, Hkv, D).repeat_interleave(n_rep, dim=2)
+        qk_mean_q = (q_pre + k_pre) * 0.5
+        q = (q_conv.reshape(B, S, H, D) + qk_mean_q).transpose(1, 2)      # [B,H,S,D]
+        q = _rmsnorm(q, self.q_norm.weight, self.q_norm.eps)
+
+        cos_full = self.rope.cos_cached[:, :, :S].reshape(-1, D).to(q.dtype)
+        sin_full = self.rope.sin_cached[:, :, :S].reshape(-1, D).to(q.dtype)
+
+        def rope(t):
+            Sl = t.shape[2]
+            cb = cos_full[:Sl].view(1, 1, Sl, D)
+            sb = sin_full[:Sl].view(1, 1, Sl, D)
+            return t * cb + _rotate_half(t) * sb
+
+        if n_skip_rope > 0:
+            q = torch.cat([rope(q[:, :, :-n_skip_rope]), q[:, :, -n_skip_rope:]], dim=2)
+        else:
+            q = rope(q)
+        return q
 
     def _window_attn(self, q: Tensor, k: Tensor, v: Tensor,
                      device, scale: float, n_skip_rope: int = 0) -> Tensor:
@@ -412,14 +452,27 @@ class _CCACSAAttention(nn.Module):
         self.comp_norm = RMSNorm(self.cca.d_head)
         self.indexer = LightningIndexer(d_model, d_indexer, csa_compress_ratio)
 
-    def forward(self, x: Tensor, n_skip_rope: int = 0) -> Tensor:
+    def forward(self, x: Tensor, n_skip_rope: int = 0,
+                cla_capture: dict | None = None, cla_kv: dict | None = None) -> Tensor:
         B, S, _ = x.shape
-        q, k, v = self.cca._cca_project(x, n_skip_rope)
         H, D = self.cca.n_heads, self.cca.d_head
         m = self.compress_ratio
         n_blocks = S // m
         scale = D ** -0.5
 
+        if cla_kv is not None:
+            # ── CLA reuse: recompute q only; reuse cached k,v,C_comp,top_idx,invalid_mask
+            #    (sliced to the current active-set prefix). ────────────────────────────
+            bsz = x.shape[0]
+            q = self.cca._cca_q_only(x, cla_kv["k_lat"][:bsz], n_skip_rope)
+            out_comp = fused_csa_attention(
+                q, cla_kv["C_comp"][:bsz], cla_kv["top_idx"][:bsz],
+                cla_kv["invalid_mask"][:bsz], self.cca.sink_logits, scale)
+            out_win = self.cca._window_attn(
+                q, cla_kv["k"][:bsz], cla_kv["v"][:bsz], x.device, scale, n_skip_rope)
+            return self.cca._gate_combine_up(x, out_comp, out_win)
+
+        q, k, v, k_lat = self.cca._cca_project(x, n_skip_rope, return_klat=True)
         C_comp = self.comp_norm(self.compressor(x))    # [B, n_blocks, D]
         causal = _compressed_causal_mask(S, n_blocks, m, x.device)
         causal_3d = causal.unsqueeze(0).expand(B, -1, -1)  # [B, S, n_blocks]
@@ -438,6 +491,9 @@ class _CCACSAAttention(nn.Module):
             q, C_comp, top_idx, invalid_mask, self.cca.sink_logits, scale)
 
         out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope)
+        if cla_capture is not None:   # CLA compute iteration: stash the KV bundle
+            cla_capture.update(k_lat=k_lat, k=k, v=v, C_comp=C_comp,
+                               top_idx=top_idx, invalid_mask=invalid_mask)
         return self.cca._gate_combine_up(x, out_comp, out_win)
 
 
@@ -467,14 +523,23 @@ class _CCAHCAAttention(nn.Module):
             d_model, self.cca.d_head, hca_compress_ratio, two_stream=False)
         self.comp_norm = RMSNorm(self.cca.d_head)
 
-    def forward(self, x: Tensor, n_skip_rope: int = 0) -> Tensor:
+    def forward(self, x: Tensor, n_skip_rope: int = 0,
+                cla_capture: dict | None = None, cla_kv: dict | None = None) -> Tensor:
         B, S, _ = x.shape
-        q, k, v = self.cca._cca_project(x, n_skip_rope)
         H, D = self.cca.n_heads, self.cca.d_head
         m = self.compress_ratio
-        n_blocks = S // m
         scale = D ** -0.5
 
+        if cla_kv is not None:
+            # ── CLA reuse: recompute q only; reuse cached k,v,C_comp (active prefix). ──
+            bsz = x.shape[0]
+            q = self.cca._cca_q_only(x, cla_kv["k_lat"][:bsz], n_skip_rope)
+            out_comp = fused_hca_attention(q, cla_kv["C_comp"][:bsz], self.cca.sink_logits, m, scale)
+            out_win = self.cca._window_attn(
+                q, cla_kv["k"][:bsz], cla_kv["v"][:bsz], x.device, scale, n_skip_rope)
+            return self.cca._gate_combine_up(x, out_comp, out_win)
+
+        q, k, v, k_lat = self.cca._cca_project(x, n_skip_rope, return_klat=True)
         C_comp = self.comp_norm(self.compressor(x))    # [B, n_blocks, D]
 
         # Fused HCA compressed attention: flash online-softmax over blocks with the
@@ -483,6 +548,8 @@ class _CCAHCAAttention(nn.Module):
         out_comp = fused_hca_attention(q, C_comp, self.cca.sink_logits, m, scale)
 
         out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope)
+        if cla_capture is not None:   # CLA compute iteration: stash the KV bundle
+            cla_capture.update(k_lat=k_lat, k=k, v=v, C_comp=C_comp)
         return self.cca._gate_combine_up(x, out_comp, out_win)
 
 
@@ -553,5 +620,6 @@ class MORPHAttention(nn.Module):
             self._impl = _CCAHCAAttention(
                 hca_compress_ratio=hca_compress_ratio, **shared)
 
-    def forward(self, x: Tensor, n_skip_rope: int = 0) -> Tensor:
-        return self._impl(x, n_skip_rope)
+    def forward(self, x: Tensor, n_skip_rope: int = 0,
+                cla_capture: dict | None = None, cla_kv: dict | None = None) -> Tensor:
+        return self._impl(x, n_skip_rope, cla_capture=cla_capture, cla_kv=cla_kv)

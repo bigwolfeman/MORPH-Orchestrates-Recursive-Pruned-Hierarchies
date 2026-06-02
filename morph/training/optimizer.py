@@ -124,9 +124,13 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
     else:
         base_opt = torch.optim.AdamW(groups, lr=lr, betas=betas, eps=1e-8)
 
-    # Optional STE ternary shadow wrapper (composes with 8-bit base_opt).
-    use_ternary = bool(getattr(tr, "ternary", False))
-    if use_ternary:
+    # NOTE: cfg.training.ternary now means FORWARD-STE QAT, applied at model-build
+    # time via morph.model.ternary_qat.apply_ternary_qat (the smooth weight is the
+    # live parameter; the STE is in the forward; a plain AdamW/AdamW8bit updates it).
+    # It does NOT use TernaryShadowOptimizer — that was an export-only wrapper that
+    # left the forward in bf16 (training never saw the quantization). The export-only
+    # shadow is still available behind an explicit opt-in flag for checkpoint export.
+    if bool(getattr(tr, "ternary_export_shadow", False)):
         base_opt = TernaryShadowOptimizer(base_opt, model)
 
     return base_opt
