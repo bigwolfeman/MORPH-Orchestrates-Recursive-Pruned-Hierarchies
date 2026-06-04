@@ -302,14 +302,48 @@ def main(cfg: DictConfig) -> None:
             model,
             scope=str(getattr(cfg.training, "ternary_scope", "backbone")),
             threshold=float(getattr(cfg.training, "ternary_threshold", 0.5)),
+            scale_mode=str(getattr(cfg.training, "ternary_scale_mode", "symmetric")),
+            scale_group=str(getattr(cfg.training, "ternary_scale_group", "tensor")),
+            scale_dtype=str(getattr(cfg.training, "ternary_scale_dtype", "fp16")),
         )
         print(
             f"  Ternary QAT ON: scope={ternary_manifest['scope']} "
             f"threshold={ternary_manifest['threshold']} "
+            f"mode={ternary_manifest['scale_mode']} "
+            f"group={ternary_manifest['scale_group']} "
+            f"dtype={ternary_manifest['scale_dtype']} "
             f"modules={ternary_manifest['n_modules_ternary']} "
             f"({ternary_manifest['counts']}) "
             f"params_ternary={ternary_manifest['n_params_ternary'] / 1e6:.1f}M "
             f"({ternary_manifest['frac_params_ternary'] * 100:.1f}% of model)",
+            flush=True,
+        )
+
+    # ── Embedding QAT (int8/int6 per-row, Ablation E) ─────────────────────
+    # Applies AFTER ternary (disjoint: ternary targets Linear/CMSBlockLinear,
+    # embed_quant targets nn.Embedding). BEFORE torch.compile so the parametrize
+    # hook is in the compiled graph. Lorentz space embed is ALWAYS skipped.
+    embed_quant_manifest = None
+    # Normalize defensively: bare `off`/`on` in YAML parse as bools (YAML 1.1), so a
+    # config value can arrive as False/"False" rather than "off". Map those to "off".
+    _embed_quant_mode = str(getattr(cfg.training, "embed_quant", "off")).strip().lower()
+    if _embed_quant_mode in ("false", "none", ""):
+        _embed_quant_mode = "off"
+    _lm_head_quant_mode = str(getattr(cfg.training, "lm_head_quant", "off")).strip().lower()
+    if _lm_head_quant_mode in ("false", "none", ""):
+        _lm_head_quant_mode = "off"
+    if _embed_quant_mode != "off":
+        from morph.model.embed_quant import apply_embed_quant
+        embed_quant_manifest = apply_embed_quant(
+            model,
+            embed_quant=_embed_quant_mode,
+            lm_head_quant=_lm_head_quant_mode,
+        )
+        print(
+            f"  Embed QAT ON: mode={embed_quant_manifest['embed_quant']} "
+            f"modules={embed_quant_manifest['n_modules_quantized']} "
+            f"({embed_quant_manifest['module_names']}). "
+            f"LM head: {embed_quant_manifest['lm_head_note'][:80]}",
             flush=True,
         )
 
@@ -437,6 +471,11 @@ def main(cfg: DictConfig) -> None:
         full_config_dict["fp8_manifest"] = {
             "scope": fp8_manifest["scope"], "recipe": fp8_manifest["recipe"],
             "min_dim": fp8_manifest["min_dim"], "n_converted": fp8_manifest["n_converted"],
+        }
+    if embed_quant_manifest is not None:
+        full_config_dict["embed_quant_manifest"] = {
+            k: v for k, v in embed_quant_manifest.items()
+            if k not in ("module_names", "lm_head_note")
         }
     wandb.init(
         project=wb_cfg.project,

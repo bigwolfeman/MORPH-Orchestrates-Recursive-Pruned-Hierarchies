@@ -78,7 +78,17 @@ training:
   ternary_scope: backbone  # which weights to ternarize: backbone | backbone_attn | full
                            # (full = + attention projections + token/space/euclidean embeddings)
   ternary_threshold: 0.5   # |w/scale| > threshold → nonzero (Bonsai default)
+  # Ternary scale machinery (Ablation A/B/C — Ai-notes/06-02-2026/MORPH-Ternary-Quant-Ablations/spec.md).
+  # Defaults below == current symmetric per-tensor fp16 behaviour (bit-identical when ternary=false).
+  ternary_scale_mode: symmetric   # symmetric (current) | ttq (sep learnable +/- scales) | dual (TernaryLLM learnable shift+scale)
+  ternary_scale_group: tensor     # tensor | 128 | 64  (group-wise scale; 64 for tiny CCA dims W_down_k=128/W_v=64)
+  ternary_scale_dtype: fp16       # fp16 | int8 | pow2  (quantized group scale; pow2 = shift-only deploy)
   adam8bit: false          # 8-bit AdamW via bitsandbytes (quantizes optimizer state m,v to uint8)
+
+  # Embedding / LM-head quantization (Ablation E). NOT ternary — int6/int8 per-row QAT.
+  # Lorentz space embedding ALWAYS stays bf16 (geometry-sensitive). off == bit-identical bf16.
+  embed_quant: "off"              # off | int8 | int6  (token/bigram/euclidean per-row QAT). QUOTED: bare off is YAML bool False.
+  lm_head_quant: "off"            # off | int6  (only meaningful if LM head is a separate weight from token embed). QUOTED: see above.
 
   # FP8 training (torchao float8) — see docs/fp8_mixed_precision_training.md. FP8 the
   # large dense GEMMs only; attention/norms/fused-CE stay bf16 (DeepSeek-V3/Ling-1T mix).

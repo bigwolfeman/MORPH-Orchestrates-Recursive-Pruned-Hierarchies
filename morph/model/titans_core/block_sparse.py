@@ -36,6 +36,158 @@ except ImportError:
     TRITON_AVAILABLE = False
 
 
+# ============================================================================
+# FP8 dense-mode matmul (sm_120 native torch._scaled_mm)
+# ============================================================================
+# E4M3 has a max representable magnitude of 448.0; E5M2 max is 57344.0.
+# Dynamic per-tensor scaling: fp8 = hp * (FP8_MAX / amax). torch._scaled_mm
+# computes (a_fp8 * scale_a) @ (b_fp8 * scale_b).T in fp32 accum, so the
+# scale we feed back is the *dequant* factor = amax / FP8_MAX = 1 / cast_scale.
+_E4M3_MAX = 448.0
+_E5M2_MAX = 57344.0
+# Global counter so the verify script can assert how many times the weight
+# was actually cast to FP8 (proves the per-step cache eliminates loop recasts).
+_FP8_WEIGHT_CAST_COUNT = 0
+
+
+def _amax_to_dequant_scale(amax: Tensor, fp8_max: float) -> Tensor:
+    """Return the per-tensor dequant scale (amax / fp8_max) as fp32 [1,1].
+
+    This is what torch._scaled_mm multiplies the fp8 operand by to recover
+    high-precision magnitude. The cast (quantize) factor is its reciprocal.
+    """
+    amax = amax.to(torch.float32).clamp(min=1e-12)
+    return (amax / fp8_max).reshape(1, 1)
+
+
+def _hp_to_fp8(t: Tensor, fp8_dtype: torch.dtype, fp8_max: float) -> Tuple[Tensor, Tensor]:
+    """Dynamic per-tensor cast of a high-precision tensor to fp8.
+
+    Returns (t_fp8, dequant_scale[1,1] fp32). Matches torchao E4M3 dynamic
+    semantics: scale by FP8_MAX/amax then cast (saturating).
+
+    Perf note: the amax reduction goes to fp32 (scalar), but the
+    element-wise scale stays in the input dtype (bf16 under autocast) to avoid
+    a full fp32 materialization of the activation — that upcast was measured at
+    2-3x the cost of the whole cast on a 5090, and it dominated the FP8 path.
+    """
+    # fp32 amax scalar (cheap reduction) for an accurate, overflow-safe scale.
+    amax = t.abs().amax().to(torch.float32)
+    dequant = _amax_to_dequant_scale(amax, fp8_max)  # amax / fp8_max [1,1] fp32
+    # cast_scale = fp8_max / amax, applied in the tensor's own dtype.
+    cast_scale = (fp8_max / amax.clamp(min=1e-12)).to(t.dtype)
+    t_fp8 = (t * cast_scale).to(fp8_dtype)
+    return t_fp8, dequant
+
+
+class _FP8DenseMatmul(torch.autograd.Function):
+    """Autograd-correct FP8 dense matmul: y = x @ w.T + bias.
+
+    Forward inputs (E4M3 for both x and w), fp32 accumulation, bf16 out.
+    Backward uses E5M2 for grad_output (more dynamic range, standard FP8
+    training recipe) and E4M3 for the re-cast operands:
+        grad_input  = scaled_mm(grad_out_e5m2, w_e4m3)        -> [.., in]
+        grad_weight = scaled_mm(grad_out_e5m2.T, x_e4m3)      -> [out, in]
+
+    The forward weight is supplied PRE-CAST + detached (from the per-step
+    cache), so no autograd flows through the cast. The full-precision weight
+    `w_hp` is saved ONLY to re-cast it in backward for grad_input — grad_weight
+    is produced by the scaled_mm above and routed back to the leaf via the
+    pass-through of `w_hp` (its .grad slot), giving a real gradient to
+    self.weight.
+    """
+
+    @staticmethod
+    def forward(ctx, x, w_hp, w_fp8, w_dequant, bias):
+        # x: [..., in] (bf16 under autocast). Flatten to 2D for scaled_mm.
+        orig_shape = x.shape
+        in_features = orig_shape[-1]
+        x2d = x.reshape(-1, in_features)
+
+        x_fp8, x_dequant = _hp_to_fp8(x2d, torch.float8_e4m3fn, _E4M3_MAX)
+
+        # y = (x_fp8 * x_dequant) @ (w_fp8 * w_dequant).T
+        out = torch._scaled_mm(
+            x_fp8,
+            w_fp8.t(),
+            scale_a=x_dequant,
+            scale_b=w_dequant,
+            bias=None,
+            out_dtype=torch.bfloat16,
+        )
+        if bias is not None:
+            out = out + bias.to(out.dtype)
+
+        ctx.save_for_backward(x2d, w_hp, bias)
+        ctx.orig_shape = orig_shape
+        ctx.out_features = w_hp.shape[0]
+        return out.reshape(*orig_shape[:-1], ctx.out_features)
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        x2d, w_hp, bias = ctx.saved_tensors
+        orig_shape = ctx.orig_shape
+        out_features = ctx.out_features
+
+        grad_out2d = grad_out.reshape(-1, out_features).contiguous()
+
+        grad_input = grad_weight = grad_bias = None
+
+        need_x = ctx.needs_input_grad[0]
+        need_w = ctx.needs_input_grad[1]
+        need_b = bias is not None and ctx.needs_input_grad[4]
+
+        if need_x or need_w:
+            # grad_output cast as E5M2 (more range for gradient magnitudes).
+            go_fp8, go_dequant = _hp_to_fp8(grad_out2d, torch.float8_e5m2, _E5M2_MAX)
+
+        # torch._scaled_mm contract: mat1 row-major, mat2 COL-major. Eager is
+        # lenient but torch.compile's fake-tensor path enforces it strictly
+        # ("mat2 must be col_major"). A col-major [K,N] operand is a contiguous
+        # [N,K] tensor viewed via .t(), so we cast the TRANSPOSED tensor
+        # contiguous, then .t() it back for the scaled_mm call.
+        if need_x:
+            # grad_input = grad_out[M,out] @ w[out,in] -> [M, in].
+            # mat2 = w as col-major [out,in] == contiguous [in,out] .t().
+            # Re-cast the full-precision weight to E4M3 (consistent with fwd).
+            w_t_fp8, w_dequant_e4m3 = _hp_to_fp8(
+                w_hp.t().contiguous(), torch.float8_e4m3fn, _E4M3_MAX
+            )  # [in, out] contiguous
+            grad_input2d = torch._scaled_mm(
+                go_fp8,
+                w_t_fp8.t(),  # col-major [out, in], contract over out
+                scale_a=go_dequant,
+                scale_b=w_dequant_e4m3,
+                bias=None,
+                out_dtype=torch.bfloat16,
+            )
+            grad_input = grad_input2d.reshape(orig_shape)
+
+        if need_w:
+            # grad_weight = grad_out.T[out,M] @ x[M,in] -> [out, in].
+            # mat1 = go.t() row-major [out,M] == contiguous(go.t()).
+            # mat2 = x as col-major [M,in] == contiguous [in,M] .t().
+            x_t_fp8, x_dequant = _hp_to_fp8(
+                x2d.t().contiguous(), torch.float8_e4m3fn, _E4M3_MAX
+            )  # [in, M] contiguous
+            grad_weight = torch._scaled_mm(
+                go_fp8.t().contiguous(),  # row-major [out, M]
+                x_t_fp8.t(),  # col-major [M, in], contract over M
+                scale_a=go_dequant,
+                scale_b=x_dequant,
+                bias=None,
+                out_dtype=torch.float32,
+            )
+
+        if need_b:
+            grad_bias = grad_out2d.sum(dim=0).to(bias.dtype)
+
+        # Order matches forward args: (x, w_hp, w_fp8, w_dequant, bias)
+        # grad_weight is routed through w_hp (the leaf), w_fp8/w_dequant get None
+        # (they are detached cache tensors, not differentiable inputs).
+        return grad_input, grad_weight, None, None, grad_bias
+
+
 @dataclass
 class TopologyStats:
     """Statistics about current topology state.
@@ -220,6 +372,12 @@ class CMSBlockLinear(nn.Module):
         # After compact(), transitions to Block-ELL [R, K_active, B, B] sparse format.
         self._dense_mode = True
         self._ternary_mode = False
+        # FP8 dense-mode matmul (sm_120 torch._scaled_mm). Off by default →
+        # bit-identical to the existing F.linear path. Enable via enable_fp8().
+        self._fp8_mode = False
+        # Per-optimizer-step FP8 weight cache (keyed on self.weight._version):
+        self._fp8_weight_cache = None     # (w_fp8 e4m3, dequant_scale fp32 [1,1])
+        self._fp8_weight_version = -1     # last weight._version we cast for
 
         # Dense weight parameter — same as nn.Linear
         self.weight = nn.Parameter(
@@ -373,6 +531,48 @@ class CMSBlockLinear(nn.Module):
         w_tiles = self.weight.data.reshape(self.R, B, self.C, B).permute(0, 2, 1, 3)
         tile_means = w_tiles.abs().mean(dim=(2, 3))  # [R, C]
         self.register_buffer("ternary_scale", tile_means.clamp(min=1e-6))
+
+    def enable_fp8(self) -> None:
+        """Turn on the FP8 dense-mode matmul path (sm_120 torch._scaled_mm).
+
+        E4M3 inputs+weight, fp32 accumulation, bf16 out, dynamic per-tensor
+        scaling. Mutually exclusive with ternary (a weight can't be both).
+        Only meaningful in dense mode; the sparse/post-compact path is untouched.
+        """
+        assert not self._ternary_mode, "FP8 and ternary are mutually exclusive"
+        assert self._dense_mode, "FP8 dense path only applies in dense mode"
+        self._fp8_mode = True
+        # Invalidate cache so the first forward recomputes against the current
+        # weight version.
+        self._fp8_weight_cache = None
+        self._fp8_weight_version = -1
+
+    def _get_cached_fp8_weight(self) -> Tuple[Tensor, Tensor]:
+        """Return (w_fp8 E4M3, dequant_scale) for the current weight, recasting
+        ONLY when self.weight._version has changed (i.e. once per optimizer
+        step, after the in-place update). Reused across the ~6 loop iterations.
+
+        The cached tensors are DETACHED (no autograd through the cache) — the
+        weight gradient is produced by the backward scaled_mm in
+        _FP8DenseMatmul, not by differentiating this cast. This is what makes
+        it checkpoint-safe: on the recomputed forward inside
+        torch.utils.checkpoint, weight._version is unchanged → cache hit →
+        identical FP8 weight.
+        """
+        version = self.weight._version
+        cache = self._fp8_weight_cache
+        if cache is not None and self._fp8_weight_version == version:
+            return cache
+
+        global _FP8_WEIGHT_CAST_COUNT
+        _FP8_WEIGHT_CAST_COUNT += 1
+        with torch.no_grad():
+            w_fp8, w_dequant = _hp_to_fp8(
+                self.weight.detach(), torch.float8_e4m3fn, _E4M3_MAX
+            )
+        self._fp8_weight_cache = (w_fp8, w_dequant)
+        self._fp8_weight_version = version
+        return self._fp8_weight_cache
 
     def _ternary_ste(self, w: Tensor) -> Tensor:
         """Quantize to {-1, 0, +1} × per-tile scale with straight-through estimator."""
@@ -650,6 +850,14 @@ class CMSBlockLinear(nn.Module):
             Output tensor with same batch/seq dims, out_features last
         """
         if self._dense_mode:
+            if self._fp8_mode:
+                # FP8 dense matmul. Cached fp8 weight (per opt-step), fresh fp8
+                # activation cast every call. Grad flows to self.weight via the
+                # backward scaled_mm, and to x via grad_input.
+                w_fp8, w_dequant = self._get_cached_fp8_weight()
+                return _FP8DenseMatmul.apply(
+                    x, self.weight, w_fp8, w_dequant, self.bias
+                )
             w = self._ternary_ste(self.weight) if self._ternary_mode else self.weight
             return F.linear(x, w, self.bias)
 
