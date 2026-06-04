@@ -37,6 +37,7 @@ from torch import Tensor
 # the decode reproduces the eager full-forward path.
 from morph.kernels.triton.fused_cca_prologue import _rmsnorm, _rotate_half
 from morph.kernels.triton.fused_cca_conv import causal_conv_reference
+from morph.model.kv_quant import quant_dequant
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,6 +62,11 @@ class AttnSiteCache:
     comp_x: Tensor | None = None
     # CSA only: LightningIndexer keys for completed blocks, [B, n_done, d_indexer].
     K_I: Tensor | None = None
+    # KV-cache quantization (stamped from the parent MORPHKVCache at site() creation).
+    # "off" → no quantization (bit-identical). Otherwise int{4,6,8} per-row absmax fake-quant
+    # applied at the STORE site (win_k/win_v/C_comp/K_I), so reads are unchanged. See kv_quant.py.
+    kv_quant: str = "off"
+    kv_quant_group: int = 0
 
 
 @dataclass
@@ -75,11 +81,16 @@ class MORPHKVCache:
     # pool_len//csa_m, so set this to the deploy/eval seq_len (None → model's context_len). See
     # _csa_step.
     csa_pool_len: int | None = None
+    # KV-cache quantization knob (PTQ, inference-only). "off" | "int8" | "int6" | "int4".
+    # kv_quant_group = group size along the feature dim (0 → per-row). Applies to the cached
+    # K/V tensors (win_k/win_v/C_comp/K_I); x_recent/comp_x stay bf16; top_idx stays exact.
+    kv_quant: str = "off"
+    kv_quant_group: int = 0
 
     def site(self, key: str) -> AttnSiteCache:
         c = self.sites.get(key)
         if c is None:
-            c = AttnSiteCache()
+            c = AttnSiteCache(kv_quant=self.kv_quant, kv_quant_group=self.kv_quant_group)
             self.sites[key] = c
         return c
 
@@ -87,6 +98,17 @@ class MORPHKVCache:
 # ─────────────────────────────────────────────────────────────────────────────
 # Incremental attention (the only cross-position op)
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def _q(sc: "AttnSiteCache", t: Tensor) -> Tensor:
+    """Quantize a to-be-stored cache tensor if this site has KV-quant on (else identity).
+
+    PTQ, inference-only: applied at the store site so the buffer holds the dequantized-from-int
+    value and the verified read math is unchanged. Per-row absmax along the feature dim.
+    """
+    if sc.kv_quant == "off":
+        return t
+    return quant_dequant(t, int(sc.kv_quant[3:]), sc.kv_quant_group)
 
 
 def _conv_last(x_recent: Tensor, x_t: Tensor, conv_dw, conv_gp) -> Tensor:
@@ -248,10 +270,14 @@ def _maybe_emit_block(impl, sc: AttnSiteCache, x_t: Tensor, pos: int, is_csa: bo
         win = sc.comp_x                              # [B, m or 2m, d_model]
         blk = impl.comp_norm(impl.compressor(win))[:, -1:]          # [B,1,D]
         ki = impl.indexer.compressor(win[:, -m:])[:, -1:]          # [B,1,d_I] single-stream
+        # KV-quant: K_I quantization perturbs the CSA top-k SELECTION (a real, measured effect).
+        ki = _q(sc, ki)
         sc.K_I = ki if sc.K_I is None else torch.cat([sc.K_I, ki], dim=1)
     else:
         win = sc.comp_x[:, -m:]
         blk = impl.comp_norm(impl.compressor(win))[:, -1:]          # [B,1,D]
+    # KV-quant: compressed blocks serve as BOTH key and value in the compressed branch.
+    blk = _q(sc, blk)
     sc.C_comp = blk if sc.C_comp is None else torch.cat([sc.C_comp, blk], dim=1)
 
 
@@ -287,9 +313,11 @@ def _attn_step(impl, x_t: Tensor, sc: AttnSiteCache, pos: int,
         out_comp = _hca_step(q_t, sc.C_comp, cca.sink_logits, scale)
 
     # update window ring (append this position's k,v; keep last window-1) AFTER attention (XSA).
+    # KV-quant: the STORED k,v are quantized (the live query q_t is never quantized).
     w_keep = cca.window_size - 1
-    sc.win_k = k_t if sc.win_k is None else torch.cat([sc.win_k, k_t], dim=2)[:, :, -w_keep:]
-    sc.win_v = v_t if sc.win_v is None else torch.cat([sc.win_v, v_t], dim=2)[:, :, -w_keep:]
+    k_st, v_st = _q(sc, k_t), _q(sc, v_t)
+    sc.win_k = k_st if sc.win_k is None else torch.cat([sc.win_k, k_st], dim=2)[:, :, -w_keep:]
+    sc.win_v = v_st if sc.win_v is None else torch.cat([sc.win_v, v_st], dim=2)[:, :, -w_keep:]
     # emit a compressed block if one completes at this position (visible to future queries only).
     _maybe_emit_block(impl, sc, x_t, pos, is_csa)
     # roll the conv/v_prev history.

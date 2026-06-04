@@ -347,6 +347,31 @@ def main(cfg: DictConfig) -> None:
             flush=True,
         )
 
+    # ── Attention-projection int-N QAT (Ablation #205) ────────────────────
+    # Gentler-than-ternary per-row int8/int6/int4 on the CCA attention projections —
+    # the Efull-recovery lever. Runs AFTER ternary (disjointness: the #205 stack uses
+    # ternary scope=backbone, so attention Linears are free) and BEFORE torch.compile so
+    # the STE is captured. attn_proj_quant=off → bit-identical bf16. See attn_proj_quant.py.
+    attn_proj_quant_manifest = None
+    _attn_proj_mode = str(getattr(cfg.training, "attn_proj_quant", "off")).strip().lower()
+    if _attn_proj_mode in ("false", "none", ""):
+        _attn_proj_mode = "off"
+    if _attn_proj_mode != "off":
+        from morph.model.attn_proj_quant import apply_attn_proj_quant
+        attn_proj_quant_manifest = apply_attn_proj_quant(
+            model,
+            attn_proj_quant=_attn_proj_mode,
+            ternary_module_names=(ternary_manifest or {}).get("module_names"),
+        )
+        print(
+            f"  Attn-proj QAT ON: mode={attn_proj_quant_manifest['attn_proj_quant']} "
+            f"bits={attn_proj_quant_manifest['bits']} "
+            f"modules={attn_proj_quant_manifest['n_modules_quantized']} "
+            f"params={attn_proj_quant_manifest['n_params_quantized'] / 1e6:.2f}M "
+            f"skipped_already_param={len(attn_proj_quant_manifest['skipped_already_parametrized'])}",
+            flush=True,
+        )
+
     # ── FP8 training (torchao float8) ──────────────────────────────────────
     # MUST run AFTER ternary QAT (for the disjointness guard) and BEFORE torch.compile
     # (so Float8Linear is compiled). Converts only the scoped dense GEMMs; dynamic
@@ -476,6 +501,11 @@ def main(cfg: DictConfig) -> None:
         full_config_dict["embed_quant_manifest"] = {
             k: v for k, v in embed_quant_manifest.items()
             if k not in ("module_names", "lm_head_note")
+        }
+    if attn_proj_quant_manifest is not None:
+        # Keep the greppable counts/bits; drop the verbose per-module name list.
+        full_config_dict["attn_proj_quant_manifest"] = {
+            k: v for k, v in attn_proj_quant_manifest.items() if k != "module_names"
         }
     wandb.init(
         project=wb_cfg.project,

@@ -90,6 +90,11 @@ training:
   embed_quant: "off"              # off | int8 | int6  (token/bigram/euclidean per-row QAT). QUOTED: bare off is YAML bool False.
   lm_head_quant: "off"            # off | int6  (only meaningful if LM head is a separate weight from token embed). QUOTED: see above.
 
+  # Attention-projection int-N QAT (Ablation #205 — the Efull-recovery lever). Per-output-row
+  # int8/int6/int4 STE on the CCA attention Linears (W_down_q/k, W_v, compressor, indexer,
+  # gate, W_up) — gentler than ternary. Disjoint from ternary scope=backbone. off == bf16.
+  attn_proj_quant: "off"          # off | int8 | int6 | int4. QUOTED: bare off is YAML bool False.
+
   # FP8 training (torchao float8) — see docs/fp8_mixed_precision_training.md. FP8 the
   # large dense GEMMs only; attention/norms/fused-CE stay bf16 (DeepSeek-V3/Ling-1T mix).
   # Verified to accelerate on RTX 5090 sm_120 (2.4-4.3x GEMM). fp8=false → bit-identical bf16.
