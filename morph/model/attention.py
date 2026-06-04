@@ -478,6 +478,17 @@ class _CCACSAAttention(nn.Module):
         causal_3d = causal.unsqueeze(0).expand(B, -1, -1)  # [B, S, n_blocks]
 
         scores = self.indexer(x, causal_3d)            # [B, S, n_blocks]
+        # Clean causal top-k: select among causally-VISIBLE blocks only. The indexer relu-clamps
+        # masked future blocks to score 0, where they tie with — and can displace — a visible block
+        # that also relu-clamps to 0, silently dropping a real block in favour of a future one that
+        # then contributes nothing. Re-masking future blocks to -inf guarantees a visible block is
+        # always PREFERRED over a future one, and makes train/inference consistent: the
+        # autoregressive KV-cache decode reproduces this exactly (see morph/model/kv_cache.py).
+        # NOTE: this does NOT make selection fully length-independent — torch.topk tie-breaking
+        # among equal-scored *visible* blocks still depends on n_blocks, so the cache pads to the
+        # same n_blocks. When a query has < tk visible blocks the remaining slots fall on -inf
+        # entries, which the invalid_mask still masks out (early-query behaviour unchanged).
+        scores = scores.masked_fill(~causal_3d, float("-inf"))
         tk = min(self.top_k, n_blocks)
         _, top_idx = scores.topk(tk, dim=-1)           # [B, S, tk]
 
