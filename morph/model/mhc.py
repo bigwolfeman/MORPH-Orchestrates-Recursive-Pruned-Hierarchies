@@ -167,6 +167,29 @@ class MultiRateResidual(nn.Module):
         return torch.cat(out_chunks, dim=-1)
 
 
+class StandardResidual(nn.Module):
+    """Plain additive residual: h_new = h + sublayer(h).
+
+    The MRR-ablation alternative to MultiRateResidual. MRR's only effect over a
+    standard residual is three learned scalar gains (γ ≈ compute 1.0 / context 0.5 /
+    slow 0.1) applied to channel slices — and the slow channel existed to carry the
+    (since-removed) neural-memory signal. This collapses MRR's 3-way slice+scalar+cat
+    (~16 ms/step of copies) to a single fused add. Same forward(h, sublayer_fn, ...)
+    interface as MultiRateResidual so MORPHBlock swaps it in at construction
+    (branch-free; no runtime flag in the hot path). Channel slices still exist for
+    ChannelInject — only the per-channel *residual gain* is removed.
+    """
+
+    def forward(
+        self,
+        h: Tensor,
+        sublayer_fn: Callable[..., Tensor],
+        *args,
+        **kwargs,
+    ) -> Tensor:
+        return h + sublayer_fn(h, *args, **kwargs)
+
+
 # ── ChannelInject ─────────────────────────────────────────────────────────────
 
 class ChannelInject(nn.Module):
@@ -236,7 +259,15 @@ class ChannelInject(nn.Module):
         ``term`` must be the output of :meth:`precompute` (shape
         ``[..., channel_width]``). Equivalent to :meth:`forward` but skips the
         projection + scale, which the caller has already done once.
+
+        Stream-adaptive: when the carrier ``h`` is an ``[B, S, n, C]`` Hyper-Connection
+        n-stream tensor but ``term`` is a single-stream ``[B, S, W]`` signal (x0 / value
+        embeds, which live outside the streams), broadcast the signal into every stream by
+        inserting the stream axis. A native n-stream signal (term.ndim == h.ndim) is added
+        as-is. Single-stream carriers (h.ndim == 3) are unaffected.
         """
+        if term.ndim == h.ndim - 1:
+            term = term.unsqueeze(-2)            # [B,S,W] → [B,S,1,W] broadcasts over n streams
         prefix = h[..., :self.start]
         target = h[..., self.start:self.end] + term.to(h.dtype)
         suffix = h[..., self.end:]
@@ -304,6 +335,10 @@ class MORPHBlock(nn.Module):
         mlp: nn.Module,
         channel_dims: tuple[int, ...] = DEFAULT_CHANNEL_DIMS,
         dropout: float = 0.0,
+        use_mrr: bool = True,
+        residual_mode: str | None = None,
+        d_model: int | None = None,
+        hc_kwargs: dict | None = None,
     ):
         super().__init__()
         self.norm_attn = norm_attn
@@ -312,9 +347,32 @@ class MORPHBlock(nn.Module):
         self.mlp       = mlp
         self.drop      = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
 
-        # Independent MRR wrappers per sublayer — they learn at different rates.
-        self.mrr_attn = MultiRateResidual(channel_dims=channel_dims)
-        self.mrr_mlp  = MultiRateResidual(channel_dims=channel_dims)
+        # Residual wrapper chosen at CONSTRUCTION (branch-free hot path). residual_mode
+        # supersedes the legacy use_mrr bool (use_mrr → "mrr"/"standard" when mode unset):
+        #   "mrr"      — MultiRateResidual: per-channel learned gain (3-way slice+cat).
+        #   "standard" — StandardResidual:  plain fused add (the MRR-removal ablation).
+        #   "hc_cayley"/"hc_sinkhorn" — HyperConnectionResidual: the *real* n-stream
+        #                 hyper-connection (carrier becomes [B,S,n,C]); orthogonal (Cayley/
+        #                 JPmHC) or doubly-stochastic (Sinkhorn/mHC) stream mixer.
+        if residual_mode is None:
+            residual_mode = "mrr" if use_mrr else "standard"
+        self.residual_mode = residual_mode
+
+        if residual_mode == "mrr":
+            self.mrr_attn: nn.Module = MultiRateResidual(channel_dims=channel_dims)
+            self.mrr_mlp:  nn.Module = MultiRateResidual(channel_dims=channel_dims)
+        elif residual_mode == "standard":
+            self.mrr_attn = StandardResidual()
+            self.mrr_mlp  = StandardResidual()
+        elif residual_mode in ("hc_cayley", "hc_sinkhorn"):
+            from .hyper_connections import HyperConnectionResidual
+            assert d_model is not None, "HC residual needs d_model"
+            manifold = "cayley" if residual_mode == "hc_cayley" else "sinkhorn"
+            hk = dict(hc_kwargs or {})
+            self.mrr_attn = HyperConnectionResidual(d_model, manifold=manifold, **hk)
+            self.mrr_mlp  = HyperConnectionResidual(d_model, manifold=manifold, **hk)
+        else:
+            raise ValueError(f"unknown residual_mode {residual_mode!r}")
 
     def forward(
         self,

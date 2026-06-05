@@ -41,6 +41,16 @@ class MORPHConfig:
     mean_depth: int = 6
     max_depth: int = 8
     bptt_depth: int = 4
+    # Selective activation checkpointing of the core-loop grad-iterations (throughput knob).
+    # The bptt_depth grad-iterations are checkpointed (recomputed in backward) to save activation
+    # memory. ckpt_grad_iters = how many of them (counting from the FIRST grad iter) to checkpoint;
+    # the remaining (LAST) grad-iterations run eager (activations retained → no recompute → faster).
+    # Un-checkpointing the LAST iters first is the efficient frontier: active-set shrinking makes
+    # them the smallest (least memory to retain) while still eliminating a recompute.
+    # -1 → checkpoint ALL grad-iterations (default; BIT-IDENTICAL to pre-knob behaviour).
+    # Checkpointing is mathematically exact, so this NEVER changes the gradient (ppl-neutral) —
+    # it only trades activation memory for recompute. Tune against VRAM headroom.
+    ckpt_grad_iters: int = -1
 
     # Cross-iteration KV sharing (CLA) — see docs/cross_layer_kv_sharing.md.
     # When on, the per-core-layer KV bundle (k_lat, k, v, C_comp, +CSA top_idx/
@@ -84,6 +94,26 @@ class MORPHConfig:
     # and throughput. The bit-exact loop opts (x0-hoist, active-set) stay on in
     # BOTH arms (they are not "kernels" and have no downside).
     use_kernels: bool = True
+    # MRR ablation: True = MultiRateResidual (per-channel gain); False = plain residual
+    # (StandardResidual). Resolved at construction → branch-free. False removes ~16 ms/step
+    # of channel slice+cat copies + the dead alpha params; ablate quality vs the MRR baseline.
+    use_mrr: bool = True
+
+    # Residual mechanism (supersedes use_mrr when set to a non-null value):
+    #   "mrr" | "standard"   — single-stream [B,S,C] carrier (use_mrr True/False).
+    #   "hc_cayley"          — REAL Hyper-Connection, orthogonal stream mixer (JPmHC, Cayley).
+    #   "hc_sinkhorn"        — REAL Hyper-Connection, doubly-stochastic mixer (mHC, Sinkhorn).
+    # The hc_* modes widen the residual stream to n=hc_streams parallel C-dim streams
+    # ([B,S,n,C]) across the WHOLE network (expand after embeddings, mean-reduce before the
+    # LM head). The depth-composite ∏H^res is norm-preserving (orthogonal: exact dynamical
+    # isometry; doubly-stochastic: spectral norm ≤1) — stabilises the deep weight-tied loop.
+    residual_mode: str | None = None
+    hc_streams: int = 4          # expansion rate n (paper default 4); n=1 ≡ plain residual
+    hc_tau: float = 1.0          # softmax temperature for Hpre/Hpost
+    hc_cayley_iters: int = 3     # Cayley fixed-point steps (s); s=2 paper, 3 = safety margin
+    hc_cayley_alpha: float = 0.1 # Cayley step size α
+    hc_sinkhorn_iters: int = 20  # Sinkhorn iterations (mHC value)
+    hc_init_gain: float = 0.1    # W_fused init std = gain/sqrt(n*d) → ≈ plain residual at init
 
     # Training
     dropout: float = 0.1
@@ -218,6 +248,17 @@ class MORPHTransformer(nn.Module):
             init_alpha=cfg.init_alpha,
         )
 
+        # ── Residual mechanism (single-stream MRR/standard vs n-stream Hyper-Connection) ──
+        residual_mode = cfg.residual_mode or ("mrr" if cfg.use_mrr else "standard")
+        self._residual_mode = residual_mode
+        self._is_hc = residual_mode in ("hc_cayley", "hc_sinkhorn")
+        self._n_streams = cfg.hc_streams if self._is_hc else 1
+        hc_kwargs = dict(
+            n_streams=cfg.hc_streams, tau=cfg.hc_tau,
+            cayley_iters=cfg.hc_cayley_iters, cayley_alpha=cfg.hc_cayley_alpha,
+            sinkhorn_iters=cfg.hc_sinkhorn_iters, init_gain=cfg.hc_init_gain,
+        ) if self._is_hc else None
+
         def _make_block(layer_idx: int, use_block_ell: bool = False) -> MORPHBlock:
             return MORPHBlock(
                 norm_attn=RMSNorm(d),
@@ -225,6 +266,10 @@ class MORPHTransformer(nn.Module):
                 norm_mlp=RMSNorm(d),
                 mlp=_make_swiglu(d, d_ff, cfg.dropout, use_block_ell=use_block_ell),
                 channel_dims=ch,
+                use_mrr=cfg.use_mrr,
+                residual_mode=residual_mode,
+                d_model=d,
+                hc_kwargs=hc_kwargs,
             )
 
         # ── Prelude ───────────────────────────────────────────────────
@@ -279,9 +324,10 @@ class MORPHTransformer(nn.Module):
         set_force_eager(not cfg.use_kernels)
 
         n_params = sum(p.numel() for p in self.parameters())
+        _res = self._residual_mode + (f"(n={self._n_streams})" if self._is_hc else "")
         print(f"MORPHTransformer: {n_params/1e6:.1f}M params, "
               f"loop {cfg.n_prelude}:{cfg.n_core}×{cfg.mean_depth}:{cfg.n_coda} "
-              f"(kernels={'fused' if cfg.use_kernels else 'EAGER'})")
+              f"(kernels={'fused' if cfg.use_kernels else 'EAGER'}, residual={_res})")
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -311,7 +357,15 @@ class MORPHTransformer(nn.Module):
         x = self.embed_drop(self.embed(input_ids))
         bigram_emb = self.embed.get_bigram(input_ids)
 
-        x0 = x.clone()
+        x0 = x.clone()      # single-stream skip signal (broadcast into HC streams)
+
+        # ── Hyper-Connection stream expansion ─────────────────────────
+        # Widen the residual carrier to n parallel C-dim streams for the whole network.
+        # All streams start equal, so with the ≈identity HC init the network reduces to a
+        # plain residual at step 0 (verified). Injections (x0/ve/bigram/diagonal) are
+        # single-stream signals that broadcast into every stream (ndim-adaptive modules).
+        if self._is_hc:
+            x = x.unsqueeze(2).expand(B, T, self._n_streams, x.shape[-1]).contiguous()
 
         # ── Prelude ───────────────────────────────────────────────────
         for i, layer in enumerate(self.prelude):
@@ -405,8 +459,24 @@ class MORPHTransformer(nn.Module):
         cla_start = max(cla_start, n_nograd)
         kv_bundles = None
 
+        # Selective checkpointing: checkpoint the first `n_ckpt` grad-iterations, run the rest
+        # (the last grad-iters) eager (activations retained → no backward recompute). -1 → all.
+        # Exact: changes memory/recompute only, never the gradient.
+        n_grad_iters = max(0, total_iters - n_nograd)
+        _ck = self.cfg.ckpt_grad_iters
+        n_ckpt = n_grad_iters if _ck < 0 else max(0, min(_ck, n_grad_iters))
+
+        # Precompute every iteration's active-set count in ONE host transfer. The old
+        # per-iteration `(sort_depths > t).sum().item()` forced a GPU->CPU sync EACH of
+        # the up-to-max_depth iterations, draining the launch queue mid-loop (the model
+        # is ~87% compute-bound but under launch pressure — perf pass OPT1). sort_depths
+        # is sorted descending, so this is one [B, total_iters] compare reduced to a
+        # per-t count, materialised once. Exact: identical counts, identical control flow.
+        _t_range = torch.arange(total_iters, device=sort_depths.device)
+        active_counts = (sort_depths.unsqueeze(1) > _t_range.unsqueeze(0)).sum(0).tolist()
+
         for t in range(total_iters):
-            n_active = int((sort_depths > t).sum().item())
+            n_active = active_counts[t]
             if n_active == 0:
                 break
             h_a = h_s[:n_active]
@@ -415,6 +485,9 @@ class MORPHTransformer(nn.Module):
 
             do_compute = cla_on and t == cla_start
             do_reuse = cla_on and t > cla_start and kv_bundles is not None
+            # Checkpoint this grad-iteration? Only in training, and only the first n_ckpt grad
+            # iters (later ones run eager → no recompute). n_nograd iters are frozen (no_grad).
+            do_ckpt = self.training and (t - n_nograd) < n_ckpt
 
             if t < n_nograd:
                 # no-grad region; cla_start >= n_nograd so no CLA here.
@@ -428,14 +501,15 @@ class MORPHTransformer(nn.Module):
                 # slice the cached bundle to the current active-set prefix (trap §7.1).
                 kvb = [{k: (v[:n_active] if torch.is_tensor(v) else v)
                         for k, v in b.items()} for b in kv_bundles]
-                if self.training:
+                if do_ckpt:
                     h_new = checkpoint(_core_step, *args, cla_mode="reuse",
                                        kv_bundles=kvb, use_reentrant=False)
                 else:
                     h_new = _core_step(*args, cla_mode="reuse", kv_bundles=kvb)
-            elif self.training:
+            elif do_ckpt:
                 h_new = checkpoint(_core_step, *args, use_reentrant=False)
             else:
+                # eval, OR a grad-iter we chose not to checkpoint (activations retained).
                 h_new = _core_step(*args)
 
             # updated active prefix + frozen suffix (no in-place op).
@@ -451,6 +525,13 @@ class MORPHTransformer(nn.Module):
             x = self._apply_ve(x, gi, input_ids)
             x = self.embed.bigram.inject(x, bigram_emb, gi)
             x = layer(x)
+
+        # ── Hyper-Connection stream reduction ─────────────────────────
+        # Collapse the n streams back to a single C-dim representation before the LM head.
+        # Mean readout is scale-preserving and (with all streams equal at init) exactly
+        # recovers the plain-residual output; learned asymmetry is read out as the mean.
+        if self._is_hc:
+            x = x.mean(dim=2)
 
         # ── STP ───────────────────────────────────────────────────────
         stp_loss = self.stp(self.final_norm(x).float(), tau=self.cfg.stp_tau)

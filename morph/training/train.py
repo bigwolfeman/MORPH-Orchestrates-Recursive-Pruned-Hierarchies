@@ -187,6 +187,7 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         mean_depth=int(m.mean_depth),
         max_depth=int(m.max_depth),
         bptt_depth=int(m.bptt_depth),
+        ckpt_grad_iters=int(getattr(m, "ckpt_grad_iters", -1)),
         use_cla=bool(getattr(tr, "use_cla", False)),
         cla_share_start=int(getattr(tr, "cla_share_start", -1)),
         channel_dims=channel_dims,
@@ -203,6 +204,15 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         stp_tau=int(m.stp_tau),
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
+        use_mrr=bool(getattr(m, "use_mrr", True)),
+        residual_mode=(str(m.residual_mode)
+                       if getattr(m, "residual_mode", None) not in (None, "null") else None),
+        hc_streams=int(getattr(m, "hc_streams", 4)),
+        hc_tau=float(getattr(m, "hc_tau", 1.0)),
+        hc_cayley_iters=int(getattr(m, "hc_cayley_iters", 3)),
+        hc_cayley_alpha=float(getattr(m, "hc_cayley_alpha", 0.1)),
+        hc_sinkhorn_iters=int(getattr(m, "hc_sinkhorn_iters", 20)),
+        hc_init_gain=float(getattr(m, "hc_init_gain", 0.1)),
         dropout=float(tr.dropout),
     )
 

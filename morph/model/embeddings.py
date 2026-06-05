@@ -225,6 +225,8 @@ class BigramEmbedding(nn.Module):
             [B, S, d_model] updated residual stream.
         """
         lam = self.lambdas[layer_idx].to(x.dtype)
+        if bigram_emb.ndim == x.ndim - 1:
+            bigram_emb = bigram_emb.unsqueeze(-2)   # [B,S,d] → [B,S,1,d]: broadcast into HC streams
         return x + lam * bigram_emb
 
 

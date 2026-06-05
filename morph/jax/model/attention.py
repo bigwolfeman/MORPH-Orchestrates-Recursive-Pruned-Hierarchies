@@ -579,9 +579,17 @@ class CCACSAAttention(nn.Module):
             dtype=self.dtype, name="indexer",
         )(x, causal_3d)  # [B, S, n_blocks]
 
+        # Clean causal top-k: re-mask future blocks to -inf AFTER relu so they are
+        # strictly NEVER preferred over a causally-visible block.
+        # The indexer already masks -inf before relu, but relu(-inf)=0 ties with a
+        # valid block that also scores 0, and jax.lax.top_k can break ties in favour
+        # of the future block. Pushing future blocks back to -inf before top_k ensures
+        # a visible block is always preferred. Mirrors PyTorch attention.py:491.
+        scores = jnp.where(causal_3d, scores.astype(jnp.float32), NEG_INF)
+
         # Top-k selection (static k for XLA compatibility)
         tk = min(self.top_k, n_blocks)
-        _, top_idx = jax.lax.top_k(scores.astype(jnp.float32), tk)  # [B, S, tk]
+        _, top_idx = jax.lax.top_k(scores, tk)  # [B, S, tk]
 
         # Gather compressed entries: C_sel [B, S, tk, d_head]
         # C_comp: [B, n_blocks, d_head] → need [B, S, tk, d_head]
@@ -863,8 +871,12 @@ class CSAAttention(nn.Module):
             dtype=self.dtype, name="indexer",
         )(x, causal_3d)
 
+        # Clean causal top-k: re-mask future blocks to -inf after relu (mirrors
+        # CCACSAAttention and PyTorch attention.py:491 causal-leak fix).
+        scores_idx = jnp.where(causal_3d, scores_idx.astype(jnp.float32), NEG_INF)
+
         tk = min(self.top_k, n_blocks)
-        _, top_idx = jax.lax.top_k(scores_idx.astype(jnp.float32), tk)
+        _, top_idx = jax.lax.top_k(scores_idx, tk)
 
         top_idx_exp = jnp.broadcast_to(top_idx[:, :, :, None], (B, S, tk, d_head))
         C_comp_exp = jnp.broadcast_to(C_comp[:, None, :, :], (B, S, n_blocks, d_head))

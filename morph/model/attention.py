@@ -361,7 +361,9 @@ class _CCABase(nn.Module):
         )
 
         if return_klat:
-            return q, k, v, k_lat
+            # q_lat (raw W_down_q(x)) is returned so _gate_combine_up can reuse it for
+            # the residual-attention term instead of recomputing the projection (OPT2).
+            return q, k, v, q_lat, k_lat
         return q, k, v
 
     def _cca_q_only(self, x: Tensor, cached_k_lat: Tensor, n_skip_rope: int = 0) -> Tensor:
@@ -409,15 +411,24 @@ class _CCABase(nn.Module):
         return _window_fallback(q, k, v, self.window_size, device, scale, n_skip_rope)
 
     def _gate_combine_up(self, x: Tensor,
-                          out_comp: Tensor, out_win: Tensor) -> Tensor:
-        """Sigmoid gate blend + residual-alpha + up-project back to d_model."""
+                          out_comp: Tensor, out_win: Tensor,
+                          q_lat: Tensor | None = None) -> Tensor:
+        """Sigmoid gate blend + residual-alpha + up-project back to d_model.
+
+        q_lat: the pre-conv W_down_q(x) already computed in _cca_project — reused for
+        the residual term instead of recomputing the projection (OPT2, exact). Falls
+        back to recompute when not supplied (CLA reuse path). The `is not None` check is
+        eager attention code (only the MLP is compiled), so it never triggers a recompile.
+        """
         B, S, _ = x.shape
         H, D = self.n_heads, self.d_head
 
         g = torch.sigmoid(self.gate(x)).reshape(B, S, H, 2).permute(0, 2, 1, 3)
         combined = g[..., 0:1] * out_comp + g[..., 1:2] * out_win
 
-        x_res = self.W_down_q(x).reshape(B, S, H, D).transpose(1, 2)
+        if q_lat is None:
+            q_lat = self.W_down_q(x)
+        x_res = q_lat.reshape(B, S, H, D).transpose(1, 2)
         out = combined + self.alpha * x_res
 
         return self.W_up(out.transpose(1, 2).reshape(B, S, self.latent_q_dim))
@@ -472,7 +483,7 @@ class _CCACSAAttention(nn.Module):
                 q, cla_kv["k"][:bsz], cla_kv["v"][:bsz], x.device, scale, n_skip_rope)
             return self.cca._gate_combine_up(x, out_comp, out_win)
 
-        q, k, v, k_lat = self.cca._cca_project(x, n_skip_rope, return_klat=True)
+        q, k, v, q_lat, k_lat = self.cca._cca_project(x, n_skip_rope, return_klat=True)
         C_comp = self.comp_norm(self.compressor(x))    # [B, n_blocks, D]
         causal = _compressed_causal_mask(S, n_blocks, m, x.device)
         causal_3d = causal.unsqueeze(0).expand(B, -1, -1)  # [B, S, n_blocks]
@@ -505,7 +516,7 @@ class _CCACSAAttention(nn.Module):
         if cla_capture is not None:   # CLA compute iteration: stash the KV bundle
             cla_capture.update(k_lat=k_lat, k=k, v=v, C_comp=C_comp,
                                top_idx=top_idx, invalid_mask=invalid_mask)
-        return self.cca._gate_combine_up(x, out_comp, out_win)
+        return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat)
 
 
 # ─── CCA + HCA ────────────────────────────────────────────────────────────────
@@ -550,7 +561,7 @@ class _CCAHCAAttention(nn.Module):
                 q, cla_kv["k"][:bsz], cla_kv["v"][:bsz], x.device, scale, n_skip_rope)
             return self.cca._gate_combine_up(x, out_comp, out_win)
 
-        q, k, v, k_lat = self.cca._cca_project(x, n_skip_rope, return_klat=True)
+        q, k, v, q_lat, k_lat = self.cca._cca_project(x, n_skip_rope, return_klat=True)
         C_comp = self.comp_norm(self.compressor(x))    # [B, n_blocks, D]
 
         # Fused HCA compressed attention: flash online-softmax over blocks with the
@@ -561,7 +572,7 @@ class _CCAHCAAttention(nn.Module):
         out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope)
         if cla_capture is not None:   # CLA compute iteration: stash the KV bundle
             cla_capture.update(k_lat=k_lat, k=k, v=v, C_comp=C_comp)
-        return self.cca._gate_combine_up(x, out_comp, out_win)
+        return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat)
 
 
 # ─── MORPHAttention ───────────────────────────────────────────────────────────

@@ -530,6 +530,13 @@ def _categorize(name: str, module: nn.Module, attn_ids: set[int]) -> str | None:
         if name == _LORENTZ_SPACE_EMBED_SUFFIX or name.endswith("." + _LORENTZ_SPACE_EMBED_SUFFIX):
             return None  # Lorentz space embed — always excluded
         return "embeddings"
+    # Guard: never ternarize the Hyper-Connection coefficient projection (W_fused). It
+    # is a tiny, precision-sensitive CONTROL path that generates the orthogonal /
+    # doubly-stochastic stream mixer via Cayley / Sinkhorn — ternarizing it to {-1,0,+1}
+    # would destroy the manifold constraint (same rationale as excluding norms/gates).
+    # Always bf16, regardless of scope. Lives at ``*.mrr_attn.proj`` / ``*.mrr_mlp.proj``.
+    if name.endswith("mrr_attn.proj") or name.endswith("mrr_mlp.proj"):
+        return None
     # CMSBlockLinear (inside BlockELLLinear) holds a dense [out, in] nn.Parameter
     # named `weight` in dense mode — quantize it like any other linear.
     is_cms = type(module).__name__ == "CMSBlockLinear"
