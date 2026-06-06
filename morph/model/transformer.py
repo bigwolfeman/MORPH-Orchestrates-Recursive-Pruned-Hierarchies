@@ -114,6 +114,8 @@ class MORPHConfig:
     hc_cayley_alpha: float = 0.1 # Cayley step size α
     hc_sinkhorn_iters: int = 20  # Sinkhorn iterations (mHC value)
     hc_init_gain: float = 0.1    # W_fused init std = gain/sqrt(n*d) → ≈ plain residual at init
+    hc_use_kernel: bool = True   # fused Triton HC kernels (cayley+cuda). False ⇒ eager refs
+                                 # (bit-faithful, slower) — for the fused-vs-eager A/B reference arm.
 
     # Training
     dropout: float = 0.1
@@ -257,6 +259,7 @@ class MORPHTransformer(nn.Module):
             n_streams=cfg.hc_streams, tau=cfg.hc_tau,
             cayley_iters=cfg.hc_cayley_iters, cayley_alpha=cfg.hc_cayley_alpha,
             sinkhorn_iters=cfg.hc_sinkhorn_iters, init_gain=cfg.hc_init_gain,
+            use_kernel=cfg.hc_use_kernel,
         ) if self._is_hc else None
 
         def _make_block(layer_idx: int, use_block_ell: bool = False) -> MORPHBlock:
@@ -346,6 +349,45 @@ class MORPHTransformer(nn.Module):
             return self.value_embeds[ve_idx](x, signal)
         return x
 
+    # ── Merged injection (HC perf) ────────────────────────────────────────
+    # x0, value-embed and bigram are all *additive* signals (x0/ve into the ctx
+    # channel slice, bigram full-width), so by commutativity their sum applied
+    # in one pass equals the old sequential x0→ve→bigram chain (bit-exact to the
+    # bf16 floor). The old chain did 2-3 slice+cat passes over the FULL [B,S,n,C]
+    # Hyper-Connection carrier per layer; this assembles ONE full-width term in
+    # cheap single-stream [B,S,C] space (the only cat lands on that small tensor,
+    # not the 4x carrier) and broadcast-adds it into the carrier exactly once.
+    def _build_injection_term(self, layer_idx: int, x0_term: Tensor,
+                              input_ids: Tensor, bigram_emb: Tensor,
+                              dtype: torch.dtype) -> Tensor:
+        """Combined single-stream additive injection [B,S,C] for `layer_idx`.
+
+        ``lam*bigram`` (full width) + (x0_term + ve_term) placed in the ctx slice.
+        ``x0_term`` is the pre-projected/scaled x0 signal (``ChannelInject.precompute``).
+        """
+        cs, ce = self._ctx_start, self._ctx_end
+        lam = self.embed.bigram.lambdas[layer_idx].to(dtype)
+        full = lam * bigram_emb.to(dtype)                      # [B,S,C] full-width bigram
+        ctx = x0_term.to(dtype)                                # [B,S,ctx_w] x0 contribution
+        if layer_idx in self._ve_layer_map:
+            ve_idx = self._ve_layer_map.index(layer_idx)
+            signal = self.value_embed_tables[ve_idx](input_ids)
+            ctx = ctx + self.value_embeds[ve_idx].precompute(signal).to(dtype)
+        # Drop x0(+ve) into the ctx slice — cat on the small single-stream term only.
+        return torch.cat([full[..., :cs], full[..., cs:ce] + ctx, full[..., ce:]], dim=-1)
+
+    @staticmethod
+    def _apply_injection(h: Tensor, term: Tensor) -> Tensor:
+        """Broadcast-add the [B,S,C] injection term into the carrier in ONE pass.
+
+        For an HC ``[B,S,n,C]`` carrier the single-stream term is inserted on the
+        stream axis so it broadcasts to every stream; for a plain ``[B,S,C]``
+        carrier it adds directly.
+        """
+        if term.ndim == h.ndim - 1:
+            term = term.unsqueeze(-2)
+        return h + term
+
     # ── Forward ───────────────────────────────────────────────────────
 
     def forward(self, input_ids: Tensor, labels: Tensor | None = None) -> dict:
@@ -369,9 +411,10 @@ class MORPHTransformer(nn.Module):
 
         # ── Prelude ───────────────────────────────────────────────────
         for i, layer in enumerate(self.prelude):
-            x = self._apply_x0(x, i, x0)
-            x = self._apply_ve(x, i, input_ids)
-            x = self.embed.bigram.inject(x, bigram_emb, i)
+            term = self._build_injection_term(
+                i, self.x0_injects[i].precompute(x0), input_ids, bigram_emb, x.dtype
+            )
+            x = self._apply_injection(x, term)
             x = layer(x)
 
         # ── Core loop ─────────────────────────────────────────────────
@@ -409,11 +452,10 @@ class MORPHTransformer(nn.Module):
             captures = [] if cla_mode == "compute" else None
             for i, layer in enumerate(self.core):
                 gi = np_ + i
-                h_injected = self.x0_injects[gi].apply_precomputed(
-                    h_injected, x0_terms[i]
+                term = self._build_injection_term(
+                    gi, x0_terms[i], ids, bg, h_injected.dtype
                 )
-                h_injected = self._apply_ve(h_injected, gi, ids)
-                h_injected = self.embed.bigram.inject(h_injected, bg, gi)
+                h_injected = self._apply_injection(h_injected, term)
                 if cla_mode == "compute":
                     cap: dict = {}
                     h_injected = layer(h_injected, attn_kwargs={"cla_capture": cap})
@@ -521,9 +563,10 @@ class MORPHTransformer(nn.Module):
         # ── Coda ──────────────────────────────────────────────────────
         for i, layer in enumerate(self.coda):
             gi = self.cfg.n_prelude + self.cfg.n_core + i
-            x = self._apply_x0(x, gi, x0)
-            x = self._apply_ve(x, gi, input_ids)
-            x = self.embed.bigram.inject(x, bigram_emb, gi)
+            term = self._build_injection_term(
+                gi, self.x0_injects[gi].precompute(x0), input_ids, bigram_emb, x.dtype
+            )
+            x = self._apply_injection(x, term)
             x = layer(x)
 
         # ── Hyper-Connection stream reduction ─────────────────────────

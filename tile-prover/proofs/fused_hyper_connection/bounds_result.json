@@ -1,0 +1,62 @@
+{
+  "h_inbounds_B4_S4096": {
+    "status": "proven",
+    "property": "in_bounds",
+    "proof_time_ms": 0.98
+  },
+  "xbar_y_inbounds_B4_S4096": {
+    "status": "proven",
+    "property": "in_bounds",
+    "proof_time_ms": 0.64
+  },
+  "hpre_hpost_inbounds_B4_S4096": {
+    "status": "proven",
+    "property": "in_bounds",
+    "proof_time_ms": 0.57
+  },
+  "hres_inbounds_B4_S4096": {
+    "status": "proven",
+    "property": "in_bounds",
+    "proof_time_ms": 0.56
+  },
+  "raw48_inbounds_B4_S4096": {
+    "status": "proven",
+    "property": "in_bounds",
+    "proof_time_ms": 0.52
+  },
+  "rms_inbounds_B4_S4096": {
+    "status": "proven",
+    "property": "in_bounds",
+    "proof_time_ms": 0.38
+  },
+  "h_inbounds_B2_S512": {
+    "status": "proven",
+    "property": "in_bounds",
+    "proof_time_ms": 0.55
+  },
+  "xbar_y_inbounds_B2_S512": {
+    "status": "proven",
+    "property": "in_bounds",
+    "proof_time_ms": 0.55
+  },
+  "hpre_hpost_inbounds_B2_S512": {
+    "status": "proven",
+    "property": "in_bounds",
+    "proof_time_ms": 0.54
+  },
+  "hres_inbounds_B2_S512": {
+    "status": "proven",
+    "property": "in_bounds",
+    "proof_time_ms": 0.55
+  },
+  "raw48_inbounds_B2_S512": {
+    "status": "proven",
+    "property": "in_bounds",
+    "proof_time_ms": 0.52
+  },
+  "rms_inbounds_B2_S512": {
+    "status": "proven",
+    "property": "in_bounds",
+    "proof_time_ms": 0.37
+  }
+}

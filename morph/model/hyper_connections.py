@@ -136,6 +136,7 @@ class HyperConnectionResidual(nn.Module):
         cayley_alpha: float = 0.1,
         sinkhorn_iters: int = 20,
         init_gain: float = 0.1,
+        use_kernel: bool = True,
     ):
         super().__init__()
         assert manifold in ("cayley", "sinkhorn"), f"unknown manifold {manifold!r}"
@@ -166,6 +167,29 @@ class HyperConnectionResidual(nn.Module):
             self.register_buffer("_res_bias", diag_bias.reshape(1, 1, n_streams, n_streams))
         else:
             self.register_buffer("_res_bias", None, persistent=False)
+
+        # Branch-free hot path: resolve the carrier-op implementation at construction.
+        # The fused Triton kernels (PRE x_bar / POST x_mix+x_post) only cover the cayley
+        # manifold (the production default); sinkhorn and CPU keep the eager einsums.
+        # hc_pre / hc_post themselves fall back to their references on CPU / force_eager,
+        # so binding them here is safe and adds NO runtime flag check to the math.
+        # `use_kernel=False` forces the eager references even for cayley+cuda — the
+        # bit-faithful, slower reference arm for the fused-vs-eager A/B (and the wandb-logged
+        # eager baseline). Resolved here at construction so the forward stays branch-free.
+        if manifold == "cayley" and use_kernel:
+            from morph.kernels.triton.fused_hyper_connection import hc_pre_map, hc_post
+            # Round 2: hc_pre_map fuses the WHOLE pre phase (rms+proj+softmax×2+cayley+
+            # reductions+x_bar) into one kernel (+ a cuBLAS addmm GEMV) and returns
+            # (x_bar, Hres, Hpost_row) directly — collapsing the ~65-launch eager mapping
+            # storm. hc_post is unchanged (round 1).
+            self._hc_pre_map = hc_pre_map
+            self._hc_post = hc_post
+            self._use_fused_premap = True
+        else:
+            from morph.kernels.triton.fused_hyper_connection import hc_post_reference
+            self._hc_pre_map = None
+            self._hc_post = hc_post_reference
+            self._use_fused_premap = False
 
     def _mappings(self, X: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         """Compute (Hpre, Hpost, Hres) per token from the n-stream carrier X [B,S,n,C]."""
@@ -203,19 +227,27 @@ class HyperConnectionResidual(nn.Module):
             [B, S, n, C] updated carrier.
         """
         dt = h.dtype
-        Hpre, Hpost, Hres = self._mappings(h)
-        Hpost_row = Hpost.sum(dim=-1).to(dt)               # rowsum_i, since y is shared across streams
-
-        # Read: aggregate streams → single sublayer input. x̄ = mean_i(Hpre·streams) folds the
-        # mean into a column-mean of Hpre, contracting straight to [B,S,C] and never
-        # materialising the [B,S,n,C] mixed-stream intermediate (exact). Memory + one launch.
-        Hpre_cm = Hpre.mean(dim=-2).to(dt)                 # [B,S,j]  (mean over output stream i)
-        x_bar = torch.einsum("bsj,bsjc->bsc", Hpre_cm, h)  # [B,S,C]
+        if self._use_fused_premap:
+            # Round 2: ONE fused kernel (+ cuBLAS GEMV) does rms+proj+softmax×2+cayley+
+            # reductions+x_bar and returns (x_bar, Hres, Hpost_row) directly. Branch-free
+            # on the cayley hot path (resolved at __init__); hc_pre_map itself falls back to
+            # its reference on CPU / force_eager / n≠4 / iters≠3 so this call is always safe.
+            x_bar, Hres, Hpost_row = self._hc_pre_map(
+                h, self.proj.weight, self.proj.bias,
+                self.tau, self.cayley_alpha, self.cayley_iters, self.eps,
+            )
+            Hres = Hres.to(dt)
+            Hpost_row = Hpost_row.to(dt)
+        else:
+            # Sinkhorn / non-cayley: eager mapping (unchanged).
+            Hpre, Hpost, Hres = self._mappings(h)
+            Hpost_row = Hpost.sum(dim=-1).to(dt)
+            Hpre_cm = Hpre.mean(dim=-2).to(dt)
+            x_bar = torch.einsum("bsj,bsjc->bsc", Hpre_cm, h)
+            Hres = Hres.to(dt)
 
         y = sublayer_fn(x_bar, *args, **kwargs)            # [B,S,C]
 
-        # Skip: mix streams through the manifold-constrained mixer.
-        x_mix = torch.einsum("bsij,bsjc->bsic", Hres.to(dt), h)   # [B,S,n,C]
-        # Write: Hpost · (y ⊗ 1ₙ) = rowsum_i(Hpost) · y  (y is identical across input streams).
-        x_post = Hpost_row.unsqueeze(-1) * y.unsqueeze(2)         # [B,S,n,C]
-        return x_mix + x_post
+        # Skip: mix streams through the manifold-constrained mixer, then scatter the
+        # shared sublayer output and add — fused into one carrier pass.
+        return self._hc_post(Hres, Hpost_row, h, y)  # [B,S,n,C]

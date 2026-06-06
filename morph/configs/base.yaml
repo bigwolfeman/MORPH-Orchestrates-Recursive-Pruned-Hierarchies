@@ -68,6 +68,8 @@ model:
   hc_cayley_alpha: 0.1     # Cayley step size α
   hc_sinkhorn_iters: 20    # Sinkhorn iterations (mHC value)
   hc_init_gain: 0.1        # W_fused init: smaller → closer to plain residual at init
+  hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda). false ⇒ eager refs (bit-faithful,
+                           # slower) — the reference arm for the fused-vs-eager parity A/B.
 
 training:
   steps: 100000

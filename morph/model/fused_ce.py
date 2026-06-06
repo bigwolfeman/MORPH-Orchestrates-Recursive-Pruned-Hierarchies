@@ -59,8 +59,13 @@ class _FusedLinearCE(torch.autograd.Function):
         grad_w = torch.zeros_like(w, dtype=torch.float32)
         loss_sum = torch.zeros((), device=x.device, dtype=torch.float32)
 
-        wT = w.t().contiguous().to(compute_dtype)  # [d, V] — logits matmul
-        w_cast = w.to(compute_dtype)               # [V, d] — grad_x matmul
+        # Cast the weight to compute dtype ONCE, in its natural [V, d] layout, and reuse
+        # it for both matmuls. The logits matmul wants [d, V]; instead of materialising a
+        # separate transposed-contiguous copy (a full [d, V] = [768, 49152] byte-move every
+        # forward — costly for our hybrid weight-tied head), pass w_cast.t() and let cuBLAS
+        # transpose via strides for free. Bit-identical: cast-then-transpose == transpose-
+        # then-cast (cast is per-element, transpose only reindexes).
+        w_cast = w.to(compute_dtype)               # [V, d] — used for logits (.t()) AND grad_x
 
         for start in range(0, N, chunk_size):
             end = min(start + chunk_size, N)
@@ -68,7 +73,7 @@ class _FusedLinearCE(torch.autograd.Function):
             lab_c = labels[start:end]                # [c]
             valid_c = valid[start:end].float().unsqueeze(-1)  # [c, 1]
 
-            logits_c = (x_c @ wT).float()            # [c, V] fp32 (freed each iter)
+            logits_c = (x_c @ w_cast.t()).float()    # [c, V] fp32 (freed each iter); cuBLAS transposes w
 
             # log-softmax cross-entropy, fp32 (numerically load-bearing).
             lse = torch.logsumexp(logits_c, dim=-1)  # [c]

@@ -213,6 +213,7 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         hc_cayley_alpha=float(getattr(m, "hc_cayley_alpha", 0.1)),
         hc_sinkhorn_iters=int(getattr(m, "hc_sinkhorn_iters", 20)),
         hc_init_gain=float(getattr(m, "hc_init_gain", 0.1)),
+        hc_use_kernel=bool(getattr(m, "hc_use_kernel", True)),
         dropout=float(tr.dropout),
     )
 
