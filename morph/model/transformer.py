@@ -11,6 +11,8 @@ Config determines dimensions and sizes, not whether features exist.
 
 from __future__ import annotations
 
+import os
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 import torch
@@ -25,6 +27,22 @@ from .fused_ce import fused_linear_cross_entropy
 from .mhc import MultiRateResidual, ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .prediction import STPLoss
 from .sparsity import BlockELLLinear
+
+# Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
+# zero production cost). Set MORPH_PROFILE_REGIONS=1 to name forward carrier sites so the
+# profiler attributes copy_/add/gather kernels to them (with_stack is blind to compiled +
+# backward kernels; record_function is not). Used by ignore/profile_copy_stack.py.
+_PROFILE_REGIONS = os.environ.get("MORPH_PROFILE_REGIONS", "0") == "1"
+if _PROFILE_REGIONS:
+    from torch.profiler import record_function as _record_function
+
+    def _prof(name):
+        return _record_function(name)
+else:
+    _NULLCTX = nullcontext()  # reentrant-safe singleton → zero alloc on the hot path
+
+    def _prof(name):
+        return _NULLCTX
 
 
 @dataclass
@@ -116,6 +134,16 @@ class MORPHConfig:
     hc_init_gain: float = 0.1    # W_fused init std = gain/sqrt(n*d) → ≈ plain residual at init
     hc_use_kernel: bool = True   # fused Triton HC kernels (cayley+cuda). False ⇒ eager refs
                                  # (bit-faithful, slower) — for the fused-vs-eager A/B reference arm.
+
+    # Carrier-engine: fold the per-core-layer injection (_apply_injection broadcast-add)
+    # into the PREVIOUS layer's fused HC post write (out[i] += term_next), killing 5/6 of
+    # the per-iteration carrier read+writes. HC-only; default off (bit-identical baseline).
+    carrier_engine: bool = False
+
+    # L2 residency: mark the active carrier's address range PERSISTING (cudaAccessPolicyWindow)
+    # so it survives the sublayer GEMMs' streaming between HC ops. Numerically a no-op (caching
+    # hint); cc8.0+. Default off. (Mechanism proven -19.6% isolated; model benefit measured.)
+    l2_persist: bool = False
 
     # Training
     dropout: float = 0.1
@@ -384,9 +412,10 @@ class MORPHTransformer(nn.Module):
         stream axis so it broadcasts to every stream; for a plain ``[B,S,C]``
         carrier it adds directly.
         """
-        if term.ndim == h.ndim - 1:
-            term = term.unsqueeze(-2)
-        return h + term
+        with _prof("carrier::inject_add"):
+            if term.ndim == h.ndim - 1:
+                term = term.unsqueeze(-2)
+            return h + term
 
     # ── Forward ───────────────────────────────────────────────────────
 
@@ -407,7 +436,8 @@ class MORPHTransformer(nn.Module):
         # plain residual at step 0 (verified). Injections (x0/ve/bigram/diagonal) are
         # single-stream signals that broadcast into every stream (ndim-adaptive modules).
         if self._is_hc:
-            x = x.unsqueeze(2).expand(B, T, self._n_streams, x.shape[-1]).contiguous()
+            with _prof("carrier::expand_contig"):
+                x = x.unsqueeze(2).expand(B, T, self._n_streams, x.shape[-1]).contiguous()
 
         # ── Prelude ───────────────────────────────────────────────────
         for i, layer in enumerate(self.prelude):
@@ -419,7 +449,8 @@ class MORPHTransformer(nn.Module):
 
         # ── Core loop ─────────────────────────────────────────────────
         e = self.input_norm(x)
-        h = e.clone()
+        with _prof("carrier::h_clone"):
+            h = e.clone()
 
         if self.training:
             depths = self._sample_depths(B, x.device)
@@ -450,20 +481,44 @@ class MORPHTransformer(nn.Module):
             # (h, captures)), "reuse"=q-only recompute consuming kv_bundles[i].
             h_injected = self.injection(h_in, e_in)
             captures = [] if cla_mode == "compute" else None
+            engine = self.cfg.carrier_engine
+            n_c = len(self.core)
+            if engine:
+                # Carrier-engine: fold each per-layer inject (carrier-independent term) into
+                # the PREVIOUS block's MLP POST write. term_0 has no previous post (it follows
+                # the diagonal injection) → apply it plainly; terms[1..n-1] ride out on
+                # blocks[0..n-2]'s fused post (5/6 injects fused). Terms are built JUST-IN-TIME
+                # (one-ahead) NOT all-upfront — holding all n terms alive cost +221 MB peak at
+                # deploy shape (failed the mem iron gate); one-at-a-time is memory-neutral.
+                h_injected = self._apply_injection(
+                    h_injected,
+                    self._build_injection_term(np_, x0_terms[0], ids, bg, h_injected.dtype),
+                )
             for i, layer in enumerate(self.core):
                 gi = np_ + i
-                term = self._build_injection_term(
-                    gi, x0_terms[i], ids, bg, h_injected.dtype
-                )
-                h_injected = self._apply_injection(h_injected, term)
+                if engine:
+                    nxt = (
+                        self._build_injection_term(
+                            np_ + i + 1, x0_terms[i + 1], ids, bg, h_injected.dtype
+                        )
+                        if (i + 1) < n_c else None
+                    )
+                else:
+                    term = self._build_injection_term(
+                        gi, x0_terms[i], ids, bg, h_injected.dtype
+                    )
+                    h_injected = self._apply_injection(h_injected, term)
+                    nxt = None
                 if cla_mode == "compute":
                     cap: dict = {}
-                    h_injected = layer(h_injected, attn_kwargs={"cla_capture": cap})
+                    h_injected = layer(h_injected, attn_kwargs={"cla_capture": cap},
+                                       next_inject_term=nxt)
                     captures.append(cap)
                 elif cla_mode == "reuse":
-                    h_injected = layer(h_injected, attn_kwargs={"cla_kv": kv_bundles[i]})
+                    h_injected = layer(h_injected, attn_kwargs={"cla_kv": kv_bundles[i]},
+                                       next_inject_term=nxt)
                 else:
-                    h_injected = layer(h_injected)
+                    h_injected = layer(h_injected, next_inject_term=nxt)
             if cla_mode == "compute":
                 return h_injected, captures
             return h_injected
@@ -480,11 +535,12 @@ class MORPHTransformer(nn.Module):
         # schedule is preserved, so gradients match the truncated-BPTT window.
         sort_depths, perm = torch.sort(depths, descending=True)
         inv_perm = torch.argsort(perm)
-        h_s = h[perm]
-        e_s = e[perm]
-        ids_s = input_ids[perm]
-        bg_s = bigram_emb[perm]
-        x0_s = x0_core_terms[:, perm]            # [n_core, B, S, W]
+        with _prof("carrier::perm_gather"):
+            h_s = h[perm]
+            e_s = e[perm]
+            ids_s = input_ids[perm]
+            bg_s = bigram_emb[perm]
+            x0_s = x0_core_terms[:, perm]            # [n_core, B, S, W]
 
         # ── CLA (cross-iteration KV sharing) scheduling ──────────────────────
         # Compute the per-core-layer KV bundle once at cla_start (the first grad
@@ -517,11 +573,17 @@ class MORPHTransformer(nn.Module):
         _t_range = torch.arange(total_iters, device=sort_depths.device)
         active_counts = (sort_depths.unsqueeze(1) > _t_range.unsqueeze(0)).sum(0).tolist()
 
+        use_l2 = self.cfg.l2_persist
+        if use_l2:
+            from morph.kernels import l2_persist as _l2
+
         for t in range(total_iters):
             n_active = active_counts[t]
             if n_active == 0:
                 break
             h_a = h_s[:n_active]
+            if use_l2:
+                _l2.set_carrier(h_a)   # mark the active carrier L2-persisting (no-op math)
             args = (h_a, e_s[:n_active], ids_s[:n_active],
                     x0_s[:, :n_active], bg_s[:n_active])
 
@@ -555,10 +617,15 @@ class MORPHTransformer(nn.Module):
                 h_new = _core_step(*args)
 
             # updated active prefix + frozen suffix (no in-place op).
-            h_s = h_new if n_active == h_s.shape[0] else \
-                torch.cat([h_new, h_s[n_active:]], dim=0)
+            with _prof("carrier::loop_cat"):
+                h_s = h_new if n_active == h_s.shape[0] else \
+                    torch.cat([h_new, h_s[n_active:]], dim=0)
 
-        x = h_s[inv_perm]                        # restore original batch order
+        if use_l2:
+            _l2.reset()                          # clear the persisting window for the rest of the step
+
+        with _prof("carrier::inv_perm_gather"):
+            x = h_s[inv_perm]                    # restore original batch order
 
         # ── Coda ──────────────────────────────────────────────────────
         for i, layer in enumerate(self.coda):

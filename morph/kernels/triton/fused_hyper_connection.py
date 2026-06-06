@@ -660,6 +660,198 @@ if TRITON_AVAILABLE:
         tl.store(ghpart_ptr + h_base + 2*C + c, (ghx2+ghr2).to(ghpart_ptr.dtype.element_ty), mask=cmask)
         tl.store(ghpart_ptr + h_base + 3*C + c, (ghx3+ghr3).to(ghpart_ptr.dtype.element_ty), mask=cmask)
 
+    # =======================================================================
+    # GENERIC (n-arbitrary) PRE-MAPPING — [N,N] register-tile reformulation.
+    #
+    # Numerically EQUIVALENT to _hc_premap_fwd/bwd_kernel (the hand-unrolled 4×4
+    # scalar path) but parameterized by constexpr N: the n×n mapping math lives in
+    # small [N,N] fp32 register tiles instead of a00..a33 scalars. This serves any
+    # N (production uses it for n=2; the 4×4 scalar kernel stays the tuned default
+    # for n=4). Validated two ways in ignore/verify_hc_ngeneric.py: generic@N=4 vs
+    # the scalar kernel (bit-level oracle) AND generic@N=2 vs the eager reference.
+    #
+    # Tile algebra (one program = one (b,s) token):
+    #   matmul  A@B   = tl.sum(A[:,:,None]*B[None,:,:], axis=1)      (_tile_mm)
+    #   skew    W     = res - resᵀ                                   (tl.trans)
+    #   softmax along an axis = exp(x - max)/sum(exp)                (axis reduce)
+    # Cayley iters fixed to 3 (HC architectural constant; the scalar path is the
+    # same). The backward tile recursion reduces exactly to _cayley_bwd_step /
+    # _smjac4 (verified by hand): gW += half·gY@Tᵀ ; gY ← half·Wᵀ@gY.
+    # -----------------------------------------------------------------------
+    @triton.jit
+    def _tile_mm(A, B, N: tl.constexpr):
+        """[N,N]@[N,N] via broadcast contraction (N tiny: 2 or 4)."""
+        return tl.sum(A[:, :, None] * B[None, :, :], axis=1)
+
+    @triton.jit
+    def _hc_premap_fwd_kernel_g(
+        h_ptr,            # [B, S, N, C] bf16
+        raw_ptr,          # [B, S, 3*N*N] fp32  (proj_w @ x_flat + proj_b, pre-rms)
+        xbar_ptr,         # [B, S, C]    bf16  out
+        hres_ptr,         # [B, S, N, N] fp32  out
+        hpostrow_ptr,     # [B, S, N]    fp32  out
+        rms_ptr,          # [B, S, 1]    fp32  out  (saved for backward)
+        TAU: tl.constexpr, ALPHA: tl.constexpr, ITERS: tl.constexpr, EPS: tl.constexpr,
+        N: tl.constexpr, C: tl.constexpr, BLOCK_C: tl.constexpr,
+    ):
+        tok = tl.program_id(0)
+        rr = tl.arange(0, N)
+        ij = rr[:, None] * N + rr[None, :]          # [N,N] flat offsets
+        c = tl.arange(0, BLOCK_C)
+        cmask = c < C
+        NN = N * N
+        h_base = tok * (N * C)
+        rb = tok * (3 * NN)
+
+        # carrier tile h[N, BLOCK_C] (fp32) — loaded once, reused for rms + x_bar.
+        hh = tl.load(h_ptr + h_base + rr[:, None] * C + c[None, :],
+                     mask=cmask[None, :], other=0.0).to(tl.float32)
+        ssq = tl.sum(hh * hh)                        # scalar over [N, C]
+        rms = tl.sqrt(ssq / (N * C) + EPS)
+        inv_rms = 1.0 / rms
+        inv_tau = 1.0 / TAU
+        tl.store(rms_ptr + tok, rms)
+
+        # raw blocks (pre|post|res), each [N,N], scaled.
+        pre_s = tl.load(raw_ptr + rb + 0 * NN + ij).to(tl.float32) * inv_rms * inv_tau
+        post_s = tl.load(raw_ptr + rb + 1 * NN + ij).to(tl.float32) * inv_rms * inv_tau
+        res_s = tl.load(raw_ptr + rb + 2 * NN + ij).to(tl.float32) * inv_rms
+
+        # Hpre = softmax(pre_s, dim=-1) rows ; Hpre_cm[j] = mean_i Hpre[i,j]
+        pm = tl.max(pre_s, axis=1)[:, None]
+        pe = tl.exp(pre_s - pm)
+        Hpre = pe / tl.sum(pe, axis=1)[:, None]
+        Hpre_cm = tl.sum(Hpre, axis=0) / N           # [N]
+
+        # Hpost = softmax(post_s, dim=-2) cols ; Hpost_row[i] = sum_j Hpost[i,j]
+        qm = tl.max(post_s, axis=0)[None, :]
+        qe = tl.exp(post_s - qm)
+        Hpost = qe / tl.sum(qe, axis=0)[None, :]
+        Hpost_row = tl.sum(Hpost, axis=1)            # [N]
+
+        # Hres = cayley(res_s): W skew, Y0 = I+alpha*W, Y_{k+1}=I+half*(W@(I+Y_k))
+        Ieye = (rr[:, None] == rr[None, :]).to(tl.float32)
+        W = res_s - tl.trans(res_s)
+        half = ALPHA * 0.5
+        Y = Ieye + ALPHA * W
+        for _ in tl.static_range(ITERS):
+            Y = Ieye + half * _tile_mm(W, Ieye + Y, N)
+
+        # x_bar[c] = Σ_j Hpre_cm[j] h[j,c]
+        x_bar = tl.sum(Hpre_cm[:, None] * hh, axis=0)   # [BLOCK_C]
+
+        tl.store(hres_ptr + tok * NN + ij, Y)
+        tl.store(hpostrow_ptr + tok * N + rr, Hpost_row)
+        tl.store(xbar_ptr + tok * C + c, x_bar.to(xbar_ptr.dtype.element_ty), mask=cmask)
+
+    @triton.jit
+    def _hc_premap_bwd_kernel_g(
+        gxbar_ptr,        # [B,S,C]    upstream grad on x_bar
+        ghres_ptr,        # [B,S,N,N]  upstream grad on Hres
+        ghpostrow_ptr,    # [B,S,N]    upstream grad on Hpost_row
+        h_ptr,            # [B,S,N,C]
+        raw_ptr,          # [B,S,3*N*N] raw_full (pre-rms)
+        rms_ptr,          # [B,S,1]
+        graw_ptr,         # [B,S,3*N*N] out: grad wrt raw_full (pre-rms)
+        ghpart_ptr,       # [B,S,N,C]   out: grad on h (xbar-path + rms-path)
+        TAU: tl.constexpr, ALPHA: tl.constexpr, ITERS: tl.constexpr,
+        N: tl.constexpr, C: tl.constexpr, BLOCK_C: tl.constexpr,
+    ):
+        tok = tl.program_id(0)
+        rr = tl.arange(0, N)
+        ij = rr[:, None] * N + rr[None, :]
+        c = tl.arange(0, BLOCK_C)
+        cmask = c < C
+        NN = N * N
+        h_base = tok * (N * C)
+        rb = tok * (3 * NN)
+
+        rms = tl.load(rms_ptr + tok)
+        inv_rms = 1.0 / rms
+        inv_tau = 1.0 / TAU
+
+        # ---- recompute forward mapping (fp32 tiles) ----
+        pre_s = tl.load(raw_ptr + rb + 0 * NN + ij).to(tl.float32) * inv_rms * inv_tau
+        post_s = tl.load(raw_ptr + rb + 1 * NN + ij).to(tl.float32) * inv_rms * inv_tau
+        res_s = tl.load(raw_ptr + rb + 2 * NN + ij).to(tl.float32) * inv_rms
+
+        pm = tl.max(pre_s, axis=1)[:, None]
+        pe = tl.exp(pre_s - pm)
+        Hpre = pe / tl.sum(pe, axis=1)[:, None]
+        qm = tl.max(post_s, axis=0)[None, :]
+        qe = tl.exp(post_s - qm)
+        Hpost = qe / tl.sum(qe, axis=0)[None, :]
+
+        Ieye = (rr[:, None] == rr[None, :]).to(tl.float32)
+        W = res_s - tl.trans(res_s)
+        half = ALPHA * 0.5
+        Y0 = Ieye + ALPHA * W
+        T0 = Ieye + Y0
+        Y1 = Ieye + half * _tile_mm(W, T0, N)
+        T1 = Ieye + Y1
+        Y2 = Ieye + half * _tile_mm(W, T1, N)
+        T2 = Ieye + Y2
+        # (Y3 = final Hres — not needed; gY comes from upstream.)
+
+        # ---- x_bar path ----
+        hh = tl.load(h_ptr + h_base + rr[:, None] * C + c[None, :],
+                     mask=cmask[None, :], other=0.0).to(tl.float32)     # [N, BLOCK_C]
+        gx = tl.load(gxbar_ptr + tok * C + c, mask=cmask, other=0.0).to(tl.float32)  # [BLOCK_C]
+        # Hpre_cm[j] = mean_i Hpre[i,j]
+        Hpre_cm = tl.sum(Hpre, axis=0) / N                              # [N]
+        g_Hpre_cm = tl.sum(gx[None, :] * hh, axis=1)                    # [N]  Σ_c gx·h_j
+        grad_h_xbar = Hpre_cm[:, None] * gx[None, :]                    # [N, BLOCK_C]
+
+        # ---- Hpre_cm -> Hpre -> softmax(row) VJP -> pre ----
+        g_Hpre = (g_Hpre_cm[None, :]) / N                              # [1,N] -> [N,N] broadcast
+        g_Hpre = tl.broadcast_to(g_Hpre, (N, N))
+        dot_p = tl.sum(g_Hpre * Hpre, axis=1)[:, None]
+        g_pre_s = Hpre * (g_Hpre - dot_p)                              # d/d pre_s
+        g_rs_pre = g_pre_s * inv_tau                                   # d/d raw_scaled_pre
+
+        # ---- Hpost_row -> Hpost -> softmax(col) VJP -> post ----
+        g_hpr = tl.load(ghpostrow_ptr + tok * N + rr)                  # [N]
+        g_Hpost = tl.broadcast_to(g_hpr[:, None], (N, N))             # g_Hpost[i,j]=g_hpr[i]
+        dot_q = tl.sum(g_Hpost * Hpost, axis=0)[None, :]
+        g_post_s = Hpost * (g_Hpost - dot_q)
+        g_rs_post = g_post_s * inv_tau
+
+        # ---- Hres = cayley : reverse 3 steps ----
+        gY = tl.load(ghres_ptr + tok * NN + ij).to(tl.float32)        # [N,N]
+        gW = tl.zeros((N, N), dtype=tl.float32)
+        Wt = tl.trans(W)
+        # step 3 (used T2)
+        gW += half * _tile_mm(gY, tl.trans(T2), N)
+        gY = half * _tile_mm(Wt, gY, N)
+        # step 2 (T1)
+        gW += half * _tile_mm(gY, tl.trans(T1), N)
+        gY = half * _tile_mm(Wt, gY, N)
+        # step 1 (T0)
+        gW += half * _tile_mm(gY, tl.trans(T0), N)
+        gY = half * _tile_mm(Wt, gY, N)
+        # Y0 = I + alpha*W
+        gW += ALPHA * gY
+        # W = res_s - res_sᵀ  -> g_res_s = gW - gWᵀ (diagonal cancels)
+        g_rs_res = gW - tl.trans(gW)
+
+        # ---- g_rms (folds back through the shared /rms) ----
+        # raw_scaled = raw_full*inv_rms ; pre_s*TAU = raw_scaled_pre, etc.
+        grms_inner = (tl.sum(g_rs_pre * (pre_s * TAU))
+                      + tl.sum(g_rs_post * (post_s * TAU))
+                      + tl.sum(g_rs_res * res_s))
+        grms = -inv_rms * grms_inner
+
+        # ---- grad wrt raw_full = g_rs * inv_rms ----
+        tl.store(graw_ptr + rb + 0 * NN + ij, g_rs_pre * inv_rms)
+        tl.store(graw_ptr + rb + 1 * NN + ij, g_rs_post * inv_rms)
+        tl.store(graw_ptr + rb + 2 * NN + ij, g_rs_res * inv_rms)
+
+        # ---- rms-path grad on h + xbar-path -> grad_h_partial ----
+        scale = grms / (N * C * rms)
+        grad_h = grad_h_xbar + scale * hh                             # [N, BLOCK_C]
+        tl.store(ghpart_ptr + h_base + rr[:, None] * C + c[None, :],
+                 grad_h.to(ghpart_ptr.dtype.element_ty), mask=cmask[None, :])
+
     # -----------------------------------------------------------------------
     # POST forward:
     #   out[b,s,i,c] = sum_j Hres[b,s,i,j]*h[b,s,j,c] + Hpost_row[b,s,i]*y[b,s,c]
@@ -673,8 +865,9 @@ if TRITON_AVAILABLE:
         h_ptr,            # [B, S, n, C]
         y_ptr,            # [B, S, C]
         out_ptr,          # [B, S, n, C]
+        term_ptr,         # [B, S, C] or dummy — single-stream inject for the NEXT layer
         N: tl.constexpr, C: tl.constexpr,
-        BLOCK_C: tl.constexpr,
+        BLOCK_C: tl.constexpr, HAS_TERM: tl.constexpr,
     ):
         tok = tl.program_id(0)
         c = tl.arange(0, BLOCK_C)
@@ -682,6 +875,11 @@ if TRITON_AVAILABLE:
 
         h_base = tok * (N * C)
         yv = tl.load(y_ptr + tok * C + c, mask=cmask, other=0.0).to(tl.float32)
+        # carrier-engine: fold the next layer's broadcast inject into this POST write
+        # (out[i] += term for every output stream i), killing a separate _apply_injection
+        # carrier read+write. term is the same for all i, loaded once.
+        if HAS_TERM:
+            termv = tl.load(term_ptr + tok * C + c, mask=cmask, other=0.0).to(tl.float32)
 
         # preload all n stream rows of h into registers (n=4, C-block each)
         # use a python list comprehension over static N via static_range accumulation.
@@ -693,6 +891,8 @@ if TRITON_AVAILABLE:
                 acc += hij * hj
             post_i = tl.load(hpost_ptr + tok * N + i).to(tl.float32)
             acc += post_i * yv
+            if HAS_TERM:
+                acc += termv
             tl.store(out_ptr + h_base + i * C + c,
                      acc.to(out_ptr.dtype.element_ty), mask=cmask)
 
@@ -714,8 +914,9 @@ if TRITON_AVAILABLE:
         gy_ptr,           # [B, S, C]     out (grad wrt y)
         ghres_ptr,        # [B, S, n, n]  out
         ghpost_ptr,       # [B, S, n]     out
+        gterm_ptr,        # [B, S, C] or dummy  out (grad wrt the folded inject term)
         N: tl.constexpr, C: tl.constexpr,
-        BLOCK_C: tl.constexpr,
+        BLOCK_C: tl.constexpr, HAS_TERM: tl.constexpr,
     ):
         tok = tl.program_id(0)
         c = tl.arange(0, BLOCK_C)
@@ -735,10 +936,13 @@ if TRITON_AVAILABLE:
             tl.store(gh_ptr + h_base + j * C + c, ghj.to(gh_ptr.dtype.element_ty), mask=cmask)
 
         # grad_y, grad_Hres, grad_Hpost_row — loop over output streams i.
+        # term is added to EVERY output stream i, so grad_term = sum_i grad_out[i].
+        gterm = tl.zeros((BLOCK_C,), dtype=tl.float32)
         for i in tl.static_range(N):
             go = tl.load(gout_ptr + h_base + i * C + c, mask=cmask, other=0.0).to(tl.float32)
             post_i = tl.load(hpost_ptr + tok * N + i).to(tl.float32)
             gy += post_i * go
+            gterm += go
             # grad_Hpost_row[i] = sum_c go * y
             ghpost_i = tl.sum(go * yv, axis=0)
             tl.store(ghpost_ptr + tok * N + i, ghpost_i)
@@ -749,6 +953,8 @@ if TRITON_AVAILABLE:
                 tl.store(ghres_ptr + tok * (N * N) + i * N + j, ghres_ij)
 
         tl.store(gy_ptr + tok * C + c, gy.to(gy_ptr.dtype.element_ty), mask=cmask)
+        if HAS_TERM:
+            tl.store(gterm_ptr + tok * C + c, gterm.to(gterm_ptr.dtype.element_ty), mask=cmask)
 
 
 # ===========================================================================
@@ -866,46 +1072,121 @@ class _FusedHCPreMap(torch.autograd.Function):
                 None, None, None, None)
 
 
+class _FusedHCPreMapGeneric(torch.autograd.Function):
+    """n-generic fused n×n mapping + x_bar (tile form). Returns (x_bar, Hres, Hpost_row).
+
+    Same contract + cuBLAS proj wrapper as _FusedHCPreMap, but the in-kernel mapping
+    is [N,N]-tile (constexpr N) so it serves any N (production: n=2). The 4×4 scalar
+    _FusedHCPreMap stays the tuned default for n=4; this is gated == it at N=4.
+    """
+
+    @staticmethod
+    def forward(ctx, h, proj_w, proj_b, tau, alpha, iters, eps):
+        B, S, N, C = h.shape
+        assert int(iters) == 3, "fused premap backward unrolls cayley to exactly 3 iters"
+        h = h.contiguous()
+        NN = N * N
+        x_flat = h.reshape(B * S, N * C)
+        # bf16 addmm (cuBLAS, fp32 accumulate) — same faithful-approx as the scalar path.
+        dt = h.dtype
+        raw_full = torch.addmm(
+            proj_b.to(dt), x_flat, proj_w.to(dt).t()
+        ).float().reshape(B, S, 3 * NN).contiguous()
+
+        xbar = torch.empty(B, S, C, device=h.device, dtype=h.dtype)
+        hres = torch.empty(B, S, N, N, device=h.device, dtype=torch.float32)
+        hpostrow = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
+        rms = torch.empty(B, S, 1, device=h.device, dtype=torch.float32)
+        BLOCK_C = _next_pow2(C)
+        _hc_premap_fwd_kernel_g[(B * S,)](
+            h, raw_full, xbar, hres, hpostrow, rms,
+            TAU=float(tau), ALPHA=float(alpha), ITERS=int(iters), EPS=float(eps),
+            N=N, C=C, BLOCK_C=BLOCK_C, **_LAUNCH,
+        )
+        ctx.save_for_backward(h, raw_full, rms, proj_w)
+        ctx.shape = (B, S, N, C)
+        ctx.cfg = (float(tau), float(alpha), int(iters))
+        return xbar, hres, hpostrow
+
+    @staticmethod
+    def backward(ctx, grad_xbar, grad_hres, grad_hpostrow):
+        h, raw_full, rms, proj_w = ctx.saved_tensors
+        B, S, N, C = ctx.shape
+        tau, alpha, iters = ctx.cfg
+        NN = N * N
+        grad_xbar = grad_xbar.contiguous()
+        grad_hres = grad_hres.contiguous().float()
+        grad_hpostrow = grad_hpostrow.contiguous().float()
+
+        graw = torch.empty(B, S, 3 * NN, device=h.device, dtype=torch.float32)
+        gh_partial = torch.empty(B, S, N, C, device=h.device, dtype=h.dtype)
+        BLOCK_C = _next_pow2(C)
+        _hc_premap_bwd_kernel_g[(B * S,)](
+            grad_xbar, grad_hres, grad_hpostrow, h, raw_full, rms,
+            graw, gh_partial,
+            TAU=tau, ALPHA=alpha, ITERS=iters,
+            N=N, C=C, BLOCK_C=BLOCK_C, **_LAUNCH,
+        )
+        # proj VJP via cuBLAS (bf16 inputs, fp32 accumulate) — identical to scalar path.
+        dt = h.dtype
+        graw2 = graw.reshape(B * S, 3 * NN)
+        graw2_dt = graw2.to(dt)
+        x_flat = h.reshape(B * S, N * C)
+        grad_w = (graw2_dt.t() @ x_flat).float()
+        grad_b = graw2.sum(0)
+        grad_h_proj = (graw2_dt @ proj_w.to(dt)).reshape(B, S, N, C)
+        grad_h = (gh_partial.to(dt) + grad_h_proj)
+        return (grad_h, grad_w.to(proj_w.dtype), grad_b.to(proj_w.dtype),
+                None, None, None, None)
+
+
 # ===========================================================================
 # autograd.Function — POST (x_mix + x_post + add)
 # ===========================================================================
 
 class _FusedHCPost(torch.autograd.Function):
-    """out[b,s,i,c] = sum_j Hres[i,j]*h[j,c] + Hpost_row[i]*y[c]."""
+    """out[b,s,i,c] = sum_j Hres[i,j]*h[j,c] + Hpost_row[i]*y[c] (+ term[c] folded inject)."""
 
     @staticmethod
-    def forward(ctx, hres: Tensor, hpost_row: Tensor, h: Tensor, y: Tensor):
+    def forward(ctx, hres: Tensor, hpost_row: Tensor, h: Tensor, y: Tensor, term=None):
         B, S, N, C = h.shape
         hres = hres.contiguous()
         hpost_row = hpost_row.contiguous()
         h = h.contiguous()
         y = y.contiguous()
+        has_term = term is not None
+        term_arg = term.contiguous() if has_term else y   # dummy ptr when unused (not read)
         out = torch.empty(B, S, N, C, device=h.device, dtype=h.dtype)
         BLOCK_C = _next_pow2(C)
         _hc_post_fwd_kernel[(B * S,)](
-            hres, hpost_row, h, y, out, N=N, C=C, BLOCK_C=BLOCK_C, **_LAUNCH,
+            hres, hpost_row, h, y, out, term_arg,
+            N=N, C=C, BLOCK_C=BLOCK_C, HAS_TERM=has_term, **_LAUNCH,
         )
         ctx.save_for_backward(hres, hpost_row, h, y)
         ctx.shape = (B, S, N, C)
+        ctx.has_term = has_term
         return out
 
     @staticmethod
     def backward(ctx, grad_out: Tensor):
         hres, hpost_row, h, y = ctx.saved_tensors
         B, S, N, C = ctx.shape
+        has_term = ctx.has_term
         grad_out = grad_out.contiguous()
         grad_h = torch.empty(B, S, N, C, device=h.device, dtype=h.dtype)
         grad_y = torch.empty(B, S, C, device=h.device, dtype=h.dtype)
         grad_hres = torch.empty(B, S, N, N, device=h.device, dtype=torch.float32)
         grad_hpost = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
+        grad_term = torch.empty(B, S, C, device=h.device, dtype=h.dtype) if has_term else grad_y
         BLOCK_C = _next_pow2(C)
         _hc_post_bwd_kernel[(B * S,)](
             grad_out, hres, hpost_row, h, y,
-            grad_h, grad_y, grad_hres, grad_hpost,
-            N=N, C=C, BLOCK_C=BLOCK_C, **_LAUNCH,
+            grad_h, grad_y, grad_hres, grad_hpost, grad_term,
+            N=N, C=C, BLOCK_C=BLOCK_C, HAS_TERM=has_term, **_LAUNCH,
         )
+        gterm_ret = grad_term.to(y.dtype) if has_term else None
         return (grad_hres.to(hres.dtype), grad_hpost.to(hpost_row.dtype),
-                grad_h, grad_y.to(y.dtype))
+                grad_h, grad_y.to(y.dtype), gterm_ret)
 
 
 # ===========================================================================
@@ -928,22 +1209,26 @@ def hc_pre(h: Tensor, hpre_cm: Tensor) -> Tensor:
     return _FusedHCPre.apply(h, hpre_cm)
 
 
-def hc_post(hres: Tensor, hpost_row: Tensor, h: Tensor, y: Tensor) -> Tensor:
-    """Fused stream-mix + scatter + add: x_mix + x_post.
+def hc_post(hres: Tensor, hpost_row: Tensor, h: Tensor, y: Tensor,
+            term: Tensor | None = None) -> Tensor:
+    """Fused stream-mix + scatter + add: x_mix + x_post (+ optional folded inject term).
 
     Args:
         hres:      [B, S, n, n] manifold stream mixer.
         hpost_row: [B, S, n]    row-sum of Hpost.
         h:         [B, S, n, C] n-stream carrier.
         y:         [B, S, C]    sublayer output.
+        term:      [B, S, C] | None — carrier-engine: the NEXT layer's single-stream
+                   inject, broadcast-added to every output stream (folds a separate
+                   _apply_injection carrier read+write into this POST write).
 
     Returns:
         out: [B, S, n, C] updated carrier.
     """
     from morph.kernels.triton._eager_flag import force_eager, hc_force_eager
     if force_eager() or hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda:
-        return hc_post_reference(hres, hpost_row, h, y)
-    return _FusedHCPost.apply(hres, hpost_row, h, y)
+        return hc_post_reference(hres, hpost_row, h, y, term)
+    return _FusedHCPost.apply(hres, hpost_row, h, y, term)
 
 
 def hc_pre_map(
@@ -969,10 +1254,17 @@ def hc_pre_map(
         (x_bar[B,S,C], Hres[B,S,n,n], Hpost_row[B,S,n]).
     """
     from morph.kernels.triton._eager_flag import force_eager, hc_force_eager
+    N = h.shape[2]
+    # generic tile kernel needs N a power of 2 (tl.arange) and the cayley unroll fixes iters=3.
+    pow2 = N >= 2 and (N & (N - 1)) == 0
     if (force_eager() or hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda
-            or h.shape[2] != 4 or int(iters) != 3):
+            or int(iters) != 3 or not pow2):
         return hc_pre_map_reference(h, proj_w, proj_b, tau, alpha, iters, eps)
-    return _FusedHCPreMap.apply(h, proj_w, proj_b, tau, alpha, iters, eps)
+    if N == 4:
+        # tuned hand-unrolled 4×4 scalar path (production default for n=4).
+        return _FusedHCPreMap.apply(h, proj_w, proj_b, tau, alpha, iters, eps)
+    # n-generic tile path (n=2 and any other power-of-2 stream count).
+    return _FusedHCPreMapGeneric.apply(h, proj_w, proj_b, tau, alpha, iters, eps)
 
 
 # ===========================================================================
@@ -1013,10 +1305,14 @@ def hc_pre_reference(h: Tensor, hpre_cm: Tensor) -> Tensor:
     return torch.einsum("bsj,bsjc->bsc", hpre_cm.to(h.dtype), h)
 
 
-def hc_post_reference(hres: Tensor, hpost_row: Tensor, h: Tensor, y: Tensor) -> Tensor:
+def hc_post_reference(hres: Tensor, hpost_row: Tensor, h: Tensor, y: Tensor,
+                      term: Tensor | None = None) -> Tensor:
     x_mix = torch.einsum("bsij,bsjc->bsic", hres.to(h.dtype), h)
     x_post = hpost_row.to(h.dtype).unsqueeze(-1) * y.unsqueeze(2)
-    return x_mix + x_post
+    out = x_mix + x_post
+    if term is not None:
+        out = out + term.to(h.dtype).unsqueeze(2)   # broadcast over n streams
+    return out
 
 
 # ===========================================================================

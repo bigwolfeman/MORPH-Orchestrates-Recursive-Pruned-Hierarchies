@@ -379,6 +379,7 @@ class MORPHBlock(nn.Module):
         h: Tensor,
         attn_kwargs: dict | None = None,
         mlp_kwargs: dict | None = None,
+        next_inject_term: Tensor | None = None,
     ) -> Tensor:
         """Forward pass: attention sublayer then MLP sublayer with MRR residuals.
 
@@ -386,6 +387,10 @@ class MORPHBlock(nn.Module):
             h:           [B, T, D] residual stream.
             attn_kwargs: optional keyword arguments forwarded to attention.
             mlp_kwargs:  optional keyword arguments forwarded to mlp.
+            next_inject_term: [B, S, C] | None — carrier-engine (HC only): the NEXT layer's
+                         injection term, folded into THIS block's MLP-residual POST write
+                         (the block's last carrier write), so the next layer skips a separate
+                         _apply_injection. Only set in HC carrier-engine mode.
 
         Returns:
             [B, T, D] updated residual stream.
@@ -400,5 +405,9 @@ class MORPHBlock(nn.Module):
             return self.drop(self.mlp(self.norm_mlp(x), **mlp_kwargs))
 
         h = self.mrr_attn(h, _attn_fn)
-        h = self.mrr_mlp(h, _mlp_fn)
+        if next_inject_term is not None:
+            # HC carrier-engine: fold the next layer's inject into the MLP POST write.
+            h = self.mrr_mlp(h, _mlp_fn, post_inject=next_inject_term)
+        else:
+            h = self.mrr_mlp(h, _mlp_fn)
         return h

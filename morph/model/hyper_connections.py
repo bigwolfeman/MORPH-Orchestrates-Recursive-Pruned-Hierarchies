@@ -214,6 +214,7 @@ class HyperConnectionResidual(nn.Module):
         h: Tensor,
         sublayer_fn: Callable[..., Tensor],
         *args,
+        post_inject: Tensor | None = None,
         **kwargs,
     ) -> Tensor:
         """Apply the HC residual.
@@ -221,6 +222,9 @@ class HyperConnectionResidual(nn.Module):
         Args:
             h:           [B, S, n, C] n-stream residual carrier.
             sublayer_fn: callable F taking a single [B, S, C] tensor → [B, S, C].
+            post_inject: [B, S, C] | None — carrier-engine: the NEXT layer's single-stream
+                         injection term, folded into the POST write (broadcast-added to every
+                         output stream) so a separate _apply_injection carrier pass is skipped.
             *args/**kwargs: forwarded to sublayer_fn.
 
         Returns:
@@ -249,5 +253,7 @@ class HyperConnectionResidual(nn.Module):
         y = sublayer_fn(x_bar, *args, **kwargs)            # [B,S,C]
 
         # Skip: mix streams through the manifold-constrained mixer, then scatter the
-        # shared sublayer output and add — fused into one carrier pass.
-        return self._hc_post(Hres, Hpost_row, h, y)  # [B,S,n,C]
+        # shared sublayer output and add — fused into one carrier pass. The optional
+        # post_inject term (carrier-engine) is broadcast-added to every output stream in
+        # the SAME write, folding the next layer's _apply_injection into this kernel.
+        return self._hc_post(Hres, Hpost_row, h, y, post_inject)  # [B,S,n,C]

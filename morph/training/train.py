@@ -214,6 +214,8 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         hc_sinkhorn_iters=int(getattr(m, "hc_sinkhorn_iters", 20)),
         hc_init_gain=float(getattr(m, "hc_init_gain", 0.1)),
         hc_use_kernel=bool(getattr(m, "hc_use_kernel", True)),
+        carrier_engine=bool(getattr(m, "carrier_engine", False)),
+        l2_persist=bool(getattr(m, "l2_persist", False)),
         dropout=float(tr.dropout),
     )
 
