@@ -1,212 +1,167 @@
-% MORPH — MORPH Block Detail (Diagram 2, v3)
-% Shows the 3-channel multi-rate residual stream through one block.
+% MORPH — Block Detail (HC carrier dynamics).  One block under the deployment-default
+% Cayley Hyper-Connection residual: the carrier is n=4 parallel C-dim streams; each sublayer
+% reads an aggregated mean (Hpre), computes y, and writes back via orthogonal mix (Hres) +
+% scatter (Hpost). Layer 1 of each section adds a gated GLA retention branch.
 % Compile: pdflatex morph_block.tex
 
 \documentclass[border=14pt]{standalone}
 \usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
 \usepackage{tikz}
-\usetikzlibrary{
-  arrows.meta, fit, positioning, calc,
-  backgrounds, decorations.pathreplacing,
-}
+\usetikzlibrary{arrows.meta, fit, positioning, calc, backgrounds}
 
 % ── Palette ──────────────────────────────────────────────────────────────────
 \definecolor{cbBlue}{HTML}{4477AA}
 \definecolor{cbOrange}{HTML}{EE7733}
 \definecolor{cbPurple}{HTML}{AA3377}
-
+\definecolor{cbTeal}{HTML}{228833}
 \definecolor{fBlue}{HTML}{DCEAF7}
 \definecolor{fOrange}{HTML}{FDE8D0}
 \definecolor{fPurple}{HTML}{EEDCEE}
 \definecolor{fGray}{HTML}{EBEBEB}
-
-\definecolor{chComp}{HTML}{7BAFD4}   % compute channel stripe
-\definecolor{chCtx}{HTML}{F4B183}    % context channel stripe
-\definecolor{chMem}{HTML}{C9A0C9}    % memory channel stripe
-
 \definecolor{bdr}{HTML}{555555}
+\definecolor{hcC}{HTML}{2255AA}
+\definecolor{strm}{HTML}{9CC3E6}
 
-% ── Styles ───────────────────────────────────────────────────────────────────
 \tikzset{
   B/.style={draw=bdr, thick, rounded corners=4pt,
-    minimum width=7.0cm, minimum height=1.0cm,
+    minimum width=6.0cm, minimum height=1.0cm,
     font=\small\sffamily, align=center, inner sep=5pt},
-  Bs/.style={B, minimum height=0.6cm, font=\footnotesize\sffamily},
-  A/.style={-{Stealth[length=2.5mm,width=2mm]}, thick},
-  As/.style={-{Stealth[length=2mm,width=1.5mm]}, thick},
+  Bs/.style={B, minimum height=0.62cm, font=\footnotesize\sffamily},
+  % HC carrier bar: 4 stream bands via path picture, placeable with below=of
+  carrierbar/.style={draw=hcC, very thick, rounded corners=3pt, fill=strm!55,
+    minimum width=6.4cm, minimum height=0.7cm,
+    font=\footnotesize\sffamily, text=hcC!45!black, align=center,
+    path picture={\foreach \yy in {0.175,0.0,-0.175}
+      \draw[hcC!40, thin]
+        ([yshift=\yy cm]path picture bounding box.west) --
+        ([yshift=\yy cm]path picture bounding box.east);}},
+  A/.style={-{Stealth[length=2.6mm,width=2mm]}, thick},
   Ad/.style={-{Stealth[length=2.2mm,width=1.8mm]}, thick, densely dashed},
   sub/.style={font=\scriptsize\sffamily},
   tiny/.style={font=\tiny\sffamily},
 }
 
-% Bar dimensions
-\newcommand{\barW}{7.0}       % total bar width in cm
-\newcommand{\barH}{0.35cm}
-\newcommand{\compW}{3.5}      % 3N / 6N = 50%
-\newcommand{\ctxEnd}{5.83}    % (3N+2N) / 6N ≈ 83.3%
-\newcommand{\halfBar}{3.5}    % barW/2
-
-% Reusable channel bar
-\newcommand{\drawbar}[1]{%
-  \fill[chComp, rounded corners=2pt]
-    (#1) rectangle ++(\compW, \barH);
-  \fill[chCtx]
-    ($(#1)+(\compW, 0)$) rectangle ++(\ctxEnd-\compW, \barH);
-  \fill[chMem, rounded corners=2pt]
-    ($(#1)+(\ctxEnd, 0)$) rectangle ++(\barW-\ctxEnd, \barH);
-  \draw[bdr, thick, rounded corners=2pt]
-    (#1) rectangle ++(\barW, \barH);
-}
-
 \begin{document}
-\begin{tikzpicture}[node distance=0.55cm]
+\begin{tikzpicture}[node distance=0.62cm]
+
+% =====================================================================
+% MAIN COLUMN (top -> bottom)
+% =====================================================================
+\node[carrierbar] (cin) {HC carrier $[B,S,4,C]$};
+\node[tiny, text=hcC!55!black, anchor=west] at ($(cin.east)+(0.12,0)$) {4 streams in};
+
+% ── ATTENTION SUBLAYER ───────────────────────────────────────────────
+\node[Bs, fill=hcC!10, draw=hcC, below=0.85cm of cin] (preA) {
+  $H_{\mathrm{pre}}$ read \;$\to\;\bar{x}=\mathrm{mean}_n(H_{\mathrm{pre}}\,x_{\mathrm{str}})$};
+\draw[A, hcC] (cin) -- (preA) node[midway, right=3pt, sub, text=hcC]{aggregate};
+
+\node[Bs, fill=fGray, below=0.5cm of preA] (normA) {RMSNorm$(\bar{x})$};
+\draw[A] (preA) -- (normA);
+
+\node[B, fill=fBlue, below=0.95cm of normA, minimum height=1.3cm] (attn) {
+  CCA + CSA/HCA Attention\\[-1pt]
+  {\scriptsize channel-compress $\to$ conv $\to$ QK-mean $\to$ CoPE-RoPE $\to$ window}\\[-1pt]
+  {\scriptsize CSA sparse (even) / HCA dense (odd) + sigmoid gate}};
+\draw[A] (normA) -- (attn);
+
+% GLA parallel branch (layer 1)
+\node[B, fill=fPurple, left=1.3cm of attn, minimum width=2.7cm, minimum height=1.3cm] (gla) {
+  GLA retention\\[-1pt]{\scriptsize branch (layer 1)}\\[-1pt]
+  {\tiny $S_t{=}\mathrm{diag}(\alpha_t)S_{t-1}{+}k_t^{\!\top}v_t$}};
+\draw[A] (normA.west) -| (gla.north);
+
+\node[draw=cbOrange!80!black, thick, circle, fill=fOrange, inner sep=1.5pt,
+      below=0.7cm of attn, font=\small] (yA) {$+$};
+\draw[A] (attn) -- (yA);
+\draw[A] (gla.south) |- (yA) node[pos=0.7, above=1pt, sub, text=cbPurple]{$\sigma(g)\cdot$};
+\node[sub, text=cbOrange!70!black, right=0.9cm of yA, align=left]
+  {$y=\mathrm{attn}(\bar{x})+\sigma(g)\!\cdot\!\mathrm{GLA}(\bar{x},S)$};
+
+\node[Bs, fill=hcC!10, draw=hcC, below=0.7cm of yA] (postA) {
+  $H_{\mathrm{res}}$ mix $+$ $H_{\mathrm{post}}$ scatter};
+\draw[A] (yA) -- (postA);
+
+% attention group box (drawn BEFORE the carrier so the carrier stays outside it)
+\begin{scope}[on background layer]
+  \node[draw=cbBlue!50, thick, rounded corners=6pt, fill=cbBlue!4,
+        fit=(preA)(normA)(attn)(gla)(yA)(postA), inner xsep=8pt, inner ysep=7pt] (AG) {};
+\end{scope}
+\node[font=\small\sffamily\bfseries, text=cbBlue, anchor=west]
+  at ($(AG.north west)+(0.15,0)$) {Attention sublayer};
+
+% ── MID CARRIER ──────────────────────────────────────────────────────
+\node[carrierbar, below=0.85cm of AG] (cmid) {HC carrier $[B,S,4,C]$};
+\draw[A, hcC] (postA) -- (cmid.north)
+  node[pos=0.45, right=3pt, sub, text=hcC]
+  {$x_{\mathrm{out}}{=}H_{\mathrm{res}}x_{\mathrm{str}}{+}H_{\mathrm{post}}(y{\otimes}\mathbf{1}_n)$};
+
+% ── MLP SUBLAYER ─────────────────────────────────────────────────────
+\node[Bs, fill=hcC!10, draw=hcC, below=0.85cm of cmid] (preM) {
+  $H_{\mathrm{pre}}$ read \;$\to\;\bar{x}$};
+\draw[A, hcC] (cmid) -- (preM) node[midway, right=3pt, sub, text=hcC]{aggregate};
+\node[Bs, fill=fGray, below=0.5cm of preM] (normM) {RMSNorm$(\bar{x})$};
+\draw[A] (preM) -- (normM);
+\node[B, fill=fOrange, below=0.85cm of normM, minimum height=1.15cm] (mlp) {
+  SwiGLU MLP\\[-1pt]
+  {\scriptsize gate\_up: $d\to d_{ff}{\times}2$,\; $\mathrm{SiLU}(g)\odot u$,\; down: $d_{ff}\to d$}\\[-1pt]
+  {\scriptsize Block-ELL in core layers (dense pre-compact)}};
+\draw[A] (normM) -- (mlp);
+\node[Bs, fill=hcC!10, draw=hcC, below=0.7cm of mlp] (postM) {
+  $H_{\mathrm{res}}$ mix $+$ $H_{\mathrm{post}}$ scatter};
+\draw[A] (mlp) -- (postM) node[midway, right=3pt, sub, text=bdr]{$y$};
+
+\begin{scope}[on background layer]
+  \node[draw=cbOrange!60, thick, rounded corners=6pt, fill=cbOrange!4,
+        fit=(preM)(normM)(mlp)(postM), inner xsep=8pt, inner ysep=7pt] (MG) {};
+\end{scope}
+\node[font=\small\sffamily\bfseries, text=cbOrange!80!black, anchor=west]
+  at ($(MG.north west)+(0.15,0)$) {MLP sublayer};
+
+% ── OUT CARRIER ──────────────────────────────────────────────────────
+\node[carrierbar, below=0.85cm of MG] (cout) {HC carrier $[B,S,4,C]$};
+\draw[A, hcC] (postM) -- (cout.north);
+\node[tiny, text=hcC!55!black, anchor=west] at ($(cout.east)+(0.12,0)$) {4 streams out};
 
 % ── Title ────────────────────────────────────────────────────────────
-\node[font=\Large\sffamily\bfseries] (title) {MORPH Block};
-\node[sub, text=bdr, below=0.1cm of title] (subtitle)
-  {Single block with 3-channel residual dynamics};
+\node[font=\Large\sffamily\bfseries, above=0.55cm of cin] (title) {MORPH Block};
+\node[sub, text=bdr, below=0.04cm of title]
+  {one block under the Cayley Hyper-Connection carrier (deploy default)};
 
 % =====================================================================
-% INPUT CHANNEL BAR
+% RIGHT: explainer + alternatives
 % =====================================================================
+\node[draw=hcC, very thick, rounded corners=6pt, fill=hcC!6,
+      anchor=north west, text width=6.1cm, inner sep=8pt,
+      font=\footnotesize\sffamily, align=left] at ($(AG.north east)+(1.0,0.9)$) (key) {%
+  \textbf{\textcolor{hcC}{HC carrier (Cayley)}}\\[3pt]
+  The carrier is $n{=}4$ parallel $C$-dim streams. Each sublayer:\\[2pt]
+  \textbf{1.} $H_{\mathrm{pre}}$ aggregates streams $\to$ one $C$-dim $\bar{x}$ that $F$ sees;\\
+  \textbf{2.} $F$ (attention or MLP) computes $y$;\\
+  \textbf{3.} $H_{\mathrm{res}}$ (orthogonal, Cayley) mixes streams $+$ $H_{\mathrm{post}}$ scatters $y$.\\[3pt]
+  {\scriptsize $H_{\mathrm{pre}},H_{\mathrm{post}}$ row-stochastic; $H_{\mathrm{res}}{=}\mathrm{Cayley}(\mathrm{skew})\in O(n)$.
+  Init $\approx x+F(\mathrm{mean}(x))$ (plain residual).}};
 
-\coordinate (stream_in) at ($(subtitle.south)+(0,-1.0)$);
-\coordinate (bar_in_left) at ($(stream_in)+(-\halfBar,0)$);
-\drawbar{bar_in_left}
+\node[draw=cbOrange!70!black, thick, rounded corners=6pt, fill=cbOrange!6,
+      anchor=north west, text width=6.1cm, inner sep=8pt,
+      font=\scriptsize\sffamily, align=left, below=0.45cm of key] (alt) {%
+  \textbf{Alternative residual} (\texttt{residual\_mode=null}): \textbf{MRR} ---
+  split $C$ into compute/context/memory and apply per-channel learned gains $\gamma_i$
+  ($\gamma\!\approx\!1/0.5/0.1$). Single-stream $[B,S,C]$; ablation arm, not deploy default.};
 
-% Labels — generic proportions (d_model = 6N)
-\node[font=\tiny\sffamily\bfseries, text=white]
-  at ($(bar_in_left)+(1.75, 0.175)$) {Compute (3N)};
-\node[font=\tiny\sffamily\bfseries]
-  at ($(bar_in_left)+(4.665, 0.175)$) {Context (2N)};
-\node[font=\tiny\sffamily\bfseries, text=white]
-  at ($(bar_in_left)+(6.415, 0.175)$) {Memory (N)};
+\node[draw=cbPurple!70!black, thick, rounded corners=6pt, fill=fPurple,
+      anchor=north west, text width=6.1cm, inner sep=8pt,
+      font=\scriptsize\sffamily, align=left, below=0.45cm of alt] (glan) {%
+  \textbf{GLA branch} (layer 1 only): runs \emph{parallel} to attention on the same
+  $\bar{x}$; gated sum $y=\mathrm{attn}+\sigma(g)\!\cdot\!\mathrm{GLA}$. In core, its state
+  $S$ is carried across loop iterations. $\sigma(g)\!\approx\!0$ at init $\Rightarrow$ off.};
 
-% h_in label
-\node[sub, text=bdr, anchor=east]
-  at ($(bar_in_left)+(-0.8, 0.175)$) {$h_{\mathrm{in}}$};
-
-% d_model note
-\node[tiny, text=bdr!60, anchor=west]
-  at ($(bar_in_left)+(\barW+0.3, 0.175)$) {$d = 6N$};
-
-% ── x₀ skip + bigram inject ────────────────────────────────────────
-\coordinate (ctx_in) at ($(bar_in_left)+(4.665, 0.175)$);
-\node[sub, text=cbOrange, anchor=south, align=center]
-  at ($(ctx_in)+(0, 0.6)$) (x0_lbl) {$x_0$ skip + bigram inject};
-\draw[Ad, cbOrange] (x0_lbl.south) -- ($(ctx_in)+(0,0.175)$);
-
-% =====================================================================
-% ATTENTION HALF
-% =====================================================================
-
-% Arrow: input bar → RMSNorm
-\node[Bs, fill=fGray, below=0.7cm of stream_in] (norm_a) {RMSNorm};
-\draw[A] (stream_in) -- (norm_a.north);
-
-% CCA Attention
-\node[B, fill=fBlue, below=0.5cm of norm_a, minimum height=1.3cm] (attn) {
-  CCA + CSA/HCA Attention\\[-1pt]
-  {\scriptsize channel compress $\to$ conv $\to$ QK-mean $\to$
-  CoPE-RoPE $\to$ XSA window}\\[-1pt]
-  {\scriptsize CSA sparse (even) / HCA dense (odd) + sigmoid gate}
-};
-\draw[A] (norm_a) -- (attn);
-
-% MRR (Attention)
-\node[B, fill=fGray!50, below=0.5cm of attn, minimum height=0.85cm] (mhc_a) {
-  MRR: \ $h_i = h_i + \gamma_i \cdot o_i$ \quad per channel
-};
-\draw[A] (attn) -- (mhc_a);
-
-% Gamma annotations
-\node[sub, text=cbBlue, right=0.4cm of mhc_a, align=left, anchor=west]
-  (ga_lbl) {$\gamma_0 \approx 1.0$ {\tiny(compute)}\\
-  $\gamma_1 \approx 0.5$ {\tiny(context)}\\
-  $\gamma_2 \approx 0.1$ {\tiny(memory)}};
-
-% Skip connection: input bar → mhc_a (use |- for auto-routing)
-\draw[As, bdr!50, rounded corners=5pt]
-  ($(bar_in_left)+(-0.9, 0.175)$) |- (mhc_a.west);
-\node[tiny, text=bdr, rotate=90, anchor=south]
-  at ($(bar_in_left)+(-1.2,-2.5)$) {residual};
-
-% =====================================================================
-% MID CHANNEL BAR
-% =====================================================================
-
-\coordinate (stream_mid) at ($(mhc_a.south)+(0,-0.6)$);
-\coordinate (bar_mid_left) at ($(stream_mid)+(-\halfBar,0)$);
-\drawbar{bar_mid_left}
-
-% Arrow: mhc_a → mid bar top
-\draw[A] (mhc_a.south) -- ($(stream_mid)+(0, \barH)$);
-
-% =====================================================================
-% MLP HALF
-% =====================================================================
-
-% Arrow: mid bar → RMSNorm
-\node[Bs, fill=fGray, below=0.7cm of stream_mid] (norm_m) {RMSNorm};
-\draw[A] (stream_mid) -- (norm_m.north);
-
-% SwiGLU MLP
-\node[B, fill=fOrange, below=0.5cm of norm_m, minimum height=1.1cm] (mlp) {
-  SwiGLU MLP\\[-1pt]
-  {\scriptsize gate\_up: $d \to d_{ff} \times 2$ \quad
-  $\mathrm{SiLU}(g) \odot u$ \quad down: $d_{ff} \to d$}\\[-1pt]
-  {\scriptsize Block-ELL in core layers (dense pre-compact)}
-};
-\draw[A] (norm_m) -- (mlp);
-
-% MRR (MLP)
-\node[B, fill=fGray!50, below=0.5cm of mlp, minimum height=0.85cm] (mhc_m) {
-  MRR: \ $h_i = h_i + \gamma_i \cdot o_i$ \quad per channel
-};
-\draw[A] (mlp) -- (mhc_m);
-
-% Gamma annotations — with channel labels
-\node[sub, text=cbOrange, right=0.4cm of mhc_m, align=left, anchor=west]
-  {$\gamma_0 \approx 1.0$ {\tiny(compute)}\\
-  $\gamma_1 \approx 0.5$ {\tiny(context)}\\
-  $\gamma_2 \approx 0.1$ {\tiny(memory)}};
-
-% Skip connection: mid bar → mhc_m (use |- for auto-routing)
-\draw[As, bdr!50, rounded corners=5pt]
-  ($(bar_mid_left)+(-0.9, 0.175)$) |- (mhc_m.west);
-\node[tiny, text=bdr, rotate=90, anchor=south]
-  at ($(bar_mid_left)+(-1.2,-2.0)$) {residual};
-
-% =====================================================================
-% OUTPUT CHANNEL BAR
-% =====================================================================
-
-\coordinate (stream_out) at ($(mhc_m.south)+(0,-0.6)$);
-\coordinate (bar_out_left) at ($(stream_out)+(-\halfBar,0)$);
-\drawbar{bar_out_left}
-
-% Arrow: mhc_m → output bar top
-\draw[A] (mhc_m.south) -- ($(stream_out)+(0, \barH)$);
-
-% h_out label
-\node[sub, text=bdr, anchor=east]
-  at ($(bar_out_left)+(-0.8, 0.175)$) {$h_{\mathrm{out}}$};
-
-% =====================================================================
-% KEY INSIGHT BOX
-% =====================================================================
-
-\node[draw=bdr, rounded corners=5pt, fill=fGray!30,
-      minimum width=7.0cm, inner sep=8pt, align=left,
-      font=\scriptsize\sffamily, text=bdr,
-      below=0.8cm of stream_out] (insight) {
-  \textbf{Key:} The sublayer (attention or MLP) sees the \emph{full}
-  $d_{\mathrm{model}}$-dim input.\\
-  Channel separation is \emph{only} on the residual update side via
-  learned $\gamma_i$ gains.\\
-  Compute channel ($\gamma{\approx}1$) gets full updates.
-  Memory channel ($\gamma{\approx}0.1$) changes slowly.
-};
+\node[draw=bdr!60, thick, rounded corners=6pt, fill=bdr!4,
+      anchor=north west, text width=6.1cm, inner sep=8pt,
+      font=\scriptsize\sffamily, align=left, below=0.45cm of glan] (slice) {%
+  \textbf{Channel slices} (compute 384 / context 256 / memory 128) persist under HC as
+  \emph{injection \& diagonal-decay targets} within each stream's $C$ --- not the residual
+  mechanism. The single-stream injection term broadcasts into all $n$ streams.};
 
 \end{tikzpicture}
 \end{document}

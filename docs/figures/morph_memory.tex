@@ -1,11 +1,15 @@
-% MORPH — Neural Memory & Z-Latent (v8)
-% Two boxes side-by-side, horizontal cycle arrows, explainer, timeline
+% MORPH — Retention (Gated Linear Attention) Memory  [ablation #230]
+% Replaces the legacy "Neural Memory & Z-Latent" figure (both stripped from MORPH).
+% Shows the GLA branch and its TWO recurrence axes:
+%   Axis 1 — over the SEQUENCE  (the SSM hidden state S_t, standard linear attention)
+%   Axis 2 — over the LOOP      (S_T of iter i seeds iter i+1 — the cross-iteration carry)
 % Compile: pdflatex morph_memory.tex
 
 \documentclass[border=18pt]{standalone}
 \usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta, positioning, calc, backgrounds,
+\usetikzlibrary{arrows.meta, positioning, calc, backgrounds, fit,
   decorations.pathreplacing}
 
 % ── Colorblind-safe palette ─────────────────────────────────────
@@ -16,321 +20,166 @@
 \definecolor{fBlue}{HTML}{DCEAF7}
 \definecolor{fPurple}{HTML}{F0DCF0}
 \definecolor{fTeal}{HTML}{D4EDDA}
+\definecolor{fOrange}{HTML}{FDE8D0}
 \definecolor{bdr}{HTML}{333333}
+\definecolor{loopC}{HTML}{2255AA}
 
 \tikzset{
-  bigA/.style={-{Stealth[length=5mm,width=4mm]}, line width=2.5pt},
-  dashA/.style={-{Stealth[length=4mm,width=3mm]}, thick, dashed},
-  ibox/.style={draw=#1, thick, rounded corners=5pt,
-    minimum width=6cm, align=center, inner sep=6pt,
-    font=\small\sffamily},
+  bigA/.style={-{Stealth[length=4mm,width=3mm]}, line width=2pt},
+  A/.style={-{Stealth[length=2.6mm,width=2mm]}, thick},
+  dashA/.style={-{Stealth[length=3mm,width=2.2mm]}, thick, densely dashed},
+  st/.style={draw=cbPurple, very thick, rounded corners=4pt, fill=fPurple,
+    minimum width=1.5cm, minimum height=1.1cm, font=\small\sffamily\bfseries,
+    text=cbPurple!55!black, align=center},
+  box/.style={draw=#1, thick, rounded corners=5pt, align=center,
+    inner sep=6pt, font=\small\sffamily},
+  sub/.style={font=\scriptsize\sffamily},
+  tiny/.style={font=\tiny\sffamily},
 }
 
 \begin{document}
 \begin{tikzpicture}[font=\sffamily]
 
 % ── Title ───────────────────────────────────────────────────────
-\node[font=\Large\sffamily\bfseries, text=bdr] at (8, 14.8)
-  {Neural Memory \& Z-Latent Prediction};
+\node[font=\Large\sffamily\bfseries, text=bdr] at (8.3, 6.85)
+  {Retention --- Gated Linear Attention Memory};
+\node[sub, text=bdr!70] at (8.3, 6.45)
+  {ablation \#230: a recurrent memory branch reintroduced (parallel to attention) after
+   TitanMAC's Neural-Memory + JEPA were stripped};
+
+% ── PLACEMENT — the GLA branch lives in layer 1 of ALL THREE sections ──
+\node[draw=cbPurple, thick, rounded corners=6pt, fill=fPurple, fill opacity=0.10,
+      minimum width=15.2cm, minimum height=1.05cm, anchor=north] at (8.3,6.1) (place) {};
+\node[font=\footnotesize\sffamily\bfseries, text=cbPurple, anchor=west]
+  at ($(place.west)+(0.25,0)$) {Placement};
+\node[draw=cbBlue, rounded corners=3pt, fill=fBlue, minimum width=2.3cm, minimum height=0.78cm,
+      font=\scriptsize\sffamily, align=center, anchor=west] (cpre) at ($(place.west)+(2.0,0)$)
+      {\textbf{Prelude}\\[-1pt]{\tiny \textcolor{cbPurple}{$\blacktriangleright$ L1: GLA}}};
+\node[draw=loopC, thick, rounded corners=3pt, fill=fBlue, minimum width=2.6cm, minimum height=0.78cm,
+      font=\scriptsize\sffamily, align=center, right=0.75cm of cpre] (ccore)
+      {\textbf{Core} $\circlearrowleft$\\[-1pt]{\tiny \textcolor{cbPurple}{$\blacktriangleright$ L1: GLA $+$carry}}};
+\node[draw=cbBlue, rounded corners=3pt, fill=fBlue, minimum width=2.3cm, minimum height=0.78cm,
+      font=\scriptsize\sffamily, align=center, right=0.75cm of ccore] (ccoda)
+      {\textbf{Coda}\\[-1pt]{\tiny \textcolor{cbPurple}{$\blacktriangleright$ L1: GLA}}};
+\draw[A] (cpre) -- (ccore);
+\draw[A] (ccore) -- (ccoda);
+\node[sub, text=bdr, anchor=west, align=left] at ($(ccoda.east)+(0.45,0)$)
+  {GLA branch in \textbf{all three} sections (layer 1).\\
+   Cross-iteration \emph{carry} (Axis 2) is \textbf{core-only} --- only it loops.};
 
 % ════════════════════════════════════════════════════════════════
-% LEFT: BACKBONE
+% TOP — INTEGRATION (parallel gated branch in the layer-1 block)
 % ════════════════════════════════════════════════════════════════
+\node[box=bdr, fill=bdr!4, minimum width=15.2cm, minimum height=2.5cm,
+      anchor=north] at (8.3, 5.0) (intg) {};
+\node[font=\normalsize\sffamily\bfseries, text=bdr, anchor=north west]
+  at ($(intg.north west)+(0.25,-0.12)$) {Integration \;{\scriptsize (layer 1 of prelude / core / coda)}};
 
-\node[draw=cbBlue, very thick, rounded corners=10pt,
-      fill=fBlue, fill opacity=0.18,
-      minimum width=6.8cm, minimum height=9.5cm,
-      anchor=north] at (3.4, 13.5) (BB) {};
+\node[font=\small\sffamily] at ($(intg.west)+(1.0,-0.25)$) (xin) {$x$};
+\node[box=bdr, fill=bdr!6, minimum height=0.7cm, right=0.45cm of xin] (rn) {RMSNorm};
+\node[box=cbBlue, fill=fBlue, minimum height=0.9cm, right=0.9cm of rn, yshift=0.55cm] (att) {Windowed Attention};
+\node[box=cbPurple, fill=fPurple, minimum height=0.9cm, right=0.9cm of rn, yshift=-0.55cm] (glab) {GLA branch};
+\node[draw=cbOrange!80!black, thick, circle, fill=fOrange, inner sep=1.5pt,
+      right=2.6cm of att, yshift=-0.55cm, font=\small] (sum) {$+$};
+\node[box=bdr, fill=bdr!6, minimum height=0.7cm, right=0.7cm of sum] (aout) {$a$ (sublayer out)};
 
-\node[font=\large\sffamily\bfseries, text=cbBlue, anchor=north]
-  at ($(BB.north)+(0,-0.25)$) {Backbone};
-
-% ── Prelude ──
-\node[ibox=cbBlue, fill=fBlue!55, minimum height=1.4cm,
-      anchor=north] at ($(BB.north)+(0,-0.95)$) (prelude) {
-  \textbf{Prelude}\; {\scriptsize $\times N$}\\[-1pt]
-  {\scriptsize + MAG inject + MAC tokens}};
-
-% ── Core Loop ──
-\node[ibox=cbBlue, fill=fBlue!35, minimum height=2.4cm,
-      line width=1.8pt, below=0.4cm of prelude] (core) {
-  \textbf{Core Loop}\; {\scriptsize $\times T$}\\[-1pt]
-  {\scriptsize Block-ELL MLP}\\[-1pt]
-  {\scriptsize Poisson depth, trunc.\@ BPTT}};
-
-% ── Coda ──
-\node[ibox=cbBlue, fill=fBlue!35, minimum height=1.4cm,
-      below=0.4cm of core] (coda) {
-  \textbf{Coda}\; {\scriptsize $\times N$}};
-
-% Down-arrows inside backbone
-\draw[-{Stealth[length=2.5mm]}, thick, cbBlue!60]
-  (prelude.south) -- (core.north);
-\draw[-{Stealth[length=2.5mm]}, thick, cbBlue!60]
-  (core.south) -- (coda.north);
+\draw[A] (xin) -- (rn);
+\draw[A] (rn.east) |- (att.west);
+\draw[A] (rn.east) |- (glab.west);
+\draw[A] (att.east) -| (sum);
+\draw[A] (glab.east) -| (sum);
+\draw[A] (sum) -- (aout);
+\node[sub, text=cbOrange!70!black, anchor=north east] at ($(intg.north east)+(-0.3,-0.18)$)
+  {$a=\mathrm{attn}(x)+\sigma(g)\cdot\mathrm{GLA}(\mathrm{norm}(x),S)$};
+\node[tiny, text=cbPurple!70!black, anchor=south east] at ($(intg.south east)+(-0.3,0.12)$)
+  {gate $\sigma(g)\!\approx\!0$ at init $\Rightarrow$ branch off (identity to baseline)};
 
 % ════════════════════════════════════════════════════════════════
-% RIGHT: NEURAL MEMORY
+% AXIS 1 — recurrence over the SEQUENCE  (the SSM)
 % ════════════════════════════════════════════════════════════════
+\node[draw=cbPurple, very thick, rounded corners=8pt, fill=fPurple, fill opacity=0.16,
+      minimum width=15.2cm, minimum height=4.6cm, anchor=north] at (8.3, 2.2) (ax1) {};
+\node[font=\normalsize\sffamily\bfseries, text=cbPurple, anchor=north west]
+  at ($(ax1.north west)+(0.25,-0.15)$)
+  {Axis 1 --- recurrence over the \emph{sequence}\; (the SSM hidden state)};
+\node[sub, text=bdr, anchor=north west] at ($(ax1.north west)+(0.25,-0.62)$)
+  {one layer application scans tokens $t=1\dots S$, evolving the matrix state
+   $S\!\in\!\mathbb{R}^{d_k\times d_v}$ per head};
 
-\node[draw=cbPurple, very thick, rounded corners=10pt,
-      fill=fPurple, fill opacity=0.18,
-      minimum width=6.8cm, minimum height=9.5cm,
-      anchor=north] at (12.6, 13.5) (MM) {};
+% state chain
+\def\sy{-0.55}
+\node[st] at (2.0,\sy) (S0) {$S_0$};
+\node[st] at (4.6,\sy) (S1) {$S_1$};
+\node[st] at (7.2,\sy) (S2) {$S_2$};
+\node[font=\Large\sffamily\bfseries, text=cbPurple] at (9.3,\sy) (dots) {$\cdots$};
+\node[st] at (11.6,\sy) (ST) {$S_T$};
 
-\node[font=\large\sffamily\bfseries, text=cbPurple, anchor=north]
-  at ($(MM.north)+(0,-0.25)$) {Neural Memory};
+\foreach \a/\b in {S0/S1, S1/S2, S2/dots, dots/ST}{
+  \draw[bigA, cbPurple] (\a) -- (\b);}
+% decay labels on the chain
+\foreach \n in {S1,S2,ST}{
+  \node[sub, text=cbPurple!70!black, above=0.5pt] at ($(\n)+(-1.3,0.55)$)
+    {$\mathrm{diag}(\alpha_t)$};}
 
-% ── MLP State ──
-\node[ibox=cbPurple, fill=fPurple!55, minimum height=1.4cm,
-      anchor=north] at ($(MM.north)+(0,-0.95)$) (mlp) {
-  \textbf{MLP $M$}\\[-1pt]
-  {\scriptsize weights \emph{are} the memory state}};
+% k^T v inputs (write) below each state
+\foreach \n in {S1,S2,ST}{
+  \draw[A, cbTeal] ($(\n)+(0,-1.05)$) -- ($(\n)+(0,-0.6)$);
+  \node[tiny, text=cbTeal!60!black] at ($(\n)+(0,-1.25)$) {$+\,k_t^{\!\top} v_t$};}
+% q readout (read) above
+\foreach \n in {S1,S2,ST}{
+  \draw[A, cbBlue] ($(\n)+(0,0.6)$) -- ($(\n)+(0,1.0)$);
+  \node[tiny, text=cbBlue!70!black] at ($(\n)+(0,1.18)$) {$o_t=q_t S_t$};}
 
-% ── Retrieve ──
-\node[ibox=cbPurple, fill=cbPurple!8, minimum height=1.0cm,
-      below=0.35cm of mlp] (retr) {
-  \textbf{Retrieve:}\; $q \to M(q) \to$ context};
-
-% ── Surprisal Update ──
-\node[draw=cbOrange!80!black, thick, rounded corners=5pt,
-      fill=cbOrange!6,
-      minimum width=6cm, minimum height=3.4cm,
-      below=0.4cm of retr, inner sep=8pt] (upd) {};
-
-\node[font=\normalsize\sffamily\bfseries, text=cbOrange!80!black,
-      anchor=north] at ($(upd.north)+(0,-0.08)$)
-  {Surprisal Update};
-
-\node[font=\small\sffamily, text=bdr, align=left, anchor=north]
-  at ($(upd.north)+(0,-0.6)$) {%
-  \textbf{Input:}\; $(k, v)$ from backbone\\[3pt]
-  \textbf{Surprise:}\; $\ell = \|M(k) - v\|^2$\\[3pt]
-  \textbf{Momentum:}\; $S_t = \eta\,S_{t-1} - \theta\,\nabla_M \ell$\\[3pt]
-  \textbf{Update:}\; $M_t = (1{-}\alpha)\,M_{t-1} + S_t$};
-
-% ── Gates note ──
-\node[font=\scriptsize\sffamily, text=cbPurple!80!black, align=center,
-      below=0.3cm of upd] (gates) {%
-  $\alpha, \eta, \theta$ = sigmoid(Linear(chunk\_pooled))\\[-1pt]
-  {\tiny learned per-chunk from pooled hidden states}};
-
-% ════════════════════════════════════════════════════════════════
-% HORIZONTAL ARROWS (the read/write cycle)
-% ════════════════════════════════════════════════════════════════
-
-% Upper arrow: Memory → Backbone (inject context)
-\draw[bigA, cbPurple]
-  ($(MM.west)+(0, 2.5)$) -- ($(BB.east)+(0, 2.5)$);
-
-\node[font=\normalsize\sffamily\bfseries, text=cbPurple,
-      fill=white, inner sep=4pt, rounded corners=3pt]
-  at (8, 11.8) {retrieve \& inject};
-\node[font=\scriptsize\sffamily, text=cbPurple!70!black,
-      fill=white, inner sep=2pt]
-  at (8, 10.8) {MAG gated residual + MAC tokens};
-
-% Lower arrow: Backbone → Memory (send data for update)
-\draw[bigA, cbBlue]
-  ($(BB.east)+(0, -2.5)$) -- ($(MM.west)+(0, -2.5)$);
-
-\node[font=\normalsize\sffamily\bfseries, text=cbBlue,
-      fill=white, inner sep=4pt, rounded corners=3pt]
-  at (8, 6.8) {observe \& store};
-\node[font=\scriptsize\sffamily, text=cbBlue!70!black,
-      fill=white, inner sep=2pt]
-  at (8, 5.8) {hidden states become $(k, v)$ for GD};
+% the update rule
+\node[box=cbPurple, fill=white, anchor=south west, font=\footnotesize\sffamily, align=left]
+  at ($(ax1.south west)+(0.3,0.2)$) {%
+  $S_t=\mathrm{diag}(\alpha_t)\,S_{t-1}+k_t^{\!\top} v_t$,\quad $o_t=q_t S_t$\\[1pt]
+  forget gate $\alpha_t=\sigma(x_t W_g)\in(0,1)^{d_k}$ \;{\tiny(data-dependent, per key channel)}};
+\node[box=cbTeal, fill=fTeal!40, anchor=south east, font=\tiny\sffamily, align=left]
+  at ($(ax1.south east)+(-0.3,0.2)$) {%
+  \textbf{kernel:} chunked-parallel scan\\
+  fp32 state; $b=\mathrm{cumsum}(\log\alpha)$ clamp $\ge-30$};
 
 % ════════════════════════════════════════════════════════════════
-% Z-LATENT OBJECTIVE
+% AXIS 2 — recurrence over the LOOP  (the cross-iteration carry)
 % ════════════════════════════════════════════════════════════════
+\node[draw=loopC, very thick, rounded corners=8pt, fill=loopC!6,
+      minimum width=15.2cm, minimum height=4.6cm, anchor=north] at (8.3, -2.7) (ax2) {};
+\node[font=\normalsize\sffamily\bfseries, text=loopC, anchor=north west]
+  at ($(ax2.north west)+(0.25,-0.15)$)
+  {Axis 2 --- recurrence over the \emph{loop} \;(the cross-iteration carry, \texttt{retention\_carry})};
+\node[sub, text=bdr, anchor=north west] at ($(ax2.north west)+(0.25,-0.62)$)
+  {core only: the final sequence state $S_T$ of loop iter $i$ seeds the initial state of iter $i{+}1$
+   --- memory across thinking-depth};
 
-\node[draw=cbTeal, very thick, rounded corners=8pt,
-      fill=fTeal, fill opacity=0.25,
-      minimum width=16.4cm, minimum height=2.8cm,
-      inner sep=10pt,
-      anchor=north] at (8, 2.5) (zlat) {};
-
-\node[font=\large\sffamily\bfseries, text=cbTeal, anchor=north west]
-  at ($(zlat.north west)+(0.3,-0.15)$)
-  {Z-Latent Objective};
-
-\node[font=\normalsize\sffamily, text=bdr, align=center,
-      anchor=north] at ($(zlat.north)+(0,-0.7)$) {%
-  Trains memory \textbf{what to remember} by predicting the future\\[3pt]
-  Backbone head $\to$ next window's coda repr.\quad
-  Memory head $\to$ next window's prelude state};
-
-% Dashed arrows down into z-latent
-\draw[dashA, cbTeal]
-  (BB.south) -- ($(zlat.north)+(-3.8, 0)$);
-\draw[dashA, cbTeal]
-  (MM.south) -- ($(zlat.north)+(3.8, 0)$);
-
-% ════════════════════════════════════════════════════════════════
-% EXPLAINER: How hidden states become (k,v)
-% ════════════════════════════════════════════════════════════════
-
-\node[draw=bdr!60, very thick, rounded corners=8pt,
-      fill=bdr!4,
-      minimum width=16.4cm, minimum height=4.6cm,
-      inner sep=12pt,
-      anchor=north] at (8, -1.0) (explain) {};
-
-\node[font=\large\sffamily\bfseries, text=bdr, anchor=north west]
-  at ($(explain.north west)+(0.3,-0.15)$)
-  {How Hidden States Become $(k, v)$ for Gradient Descent};
-
-\node[font=\normalsize\sffamily, text=bdr, align=left, anchor=north west]
-  at ($(explain.north west)+(0.4,-0.85)$) {%
-  \textbf{1.}\; Backbone processes a \textbf{chunk} of tokens through
-    prelude $\to$ core $\to$ coda\\[4pt]
-  \textbf{2.}\; Hidden states $h$ are projected:\;
-    $k = W_k(h)$\; {\scriptsize (address)},\;
-    $v = W_v(h)$\; {\scriptsize (content to store)}\\[4pt]
-  \textbf{3.}\; Memory queries itself:\;
-    $M(k)$ = ``what do I already know at this address?''\\[4pt]
-  \textbf{4.}\; \textbf{Surprise} $= \|M(k) - v\|^2$\;
-    {\scriptsize --- high if $v$ is new, low if already stored}\\[4pt]
-  \textbf{5.}\; Gradient descent on $M$'s weights:\;
-    surprised $\to$ large update,\;
-    unsurprised $\to$ small update};
+\def\ly{-4.75}
+\foreach \i/\x/\lab in {1/2.7/{iter $i$}, 2/7.7/{iter $i{+}1$}, 3/12.7/{iter $i{+}2$}}{
+  \node[draw=loopC, thick, rounded corners=5pt, fill=fBlue!55,
+        minimum width=3.0cm, minimum height=1.5cm, font=\footnotesize\sffamily\bfseries,
+        text=loopC, align=center] at (\x,\ly) (it\i)
+        {core step\\[3pt]{\scriptsize \lab}\\[2pt]{\tiny scan seq $\to S_T$}};}
+% carry arrows between iterations (labels BELOW the arrow, clear of the subtitle)
+\draw[bigA, loopC] (it1.east) -- (it2.west)
+  node[midway, below=1pt, sub, text=loopC]{$S_T\!\to\!S_0$};
+\draw[bigA, loopC] (it2.east) -- (it3.west)
+  node[midway, below=1pt, sub, text=loopC]{$S_T\!\to\!S_0$};
+% BPTT detach note
+\node[box=cbOrange, fill=fOrange!45, anchor=south, font=\tiny\sffamily, align=center,
+      minimum width=6cm] at ($(ax2.south)+(0,0.18)$) {%
+  no-grad iterations carry a \emph{detached} state (truncated BPTT, last 4 iters)\;$\bullet$\;
+  \texttt{retention\_carry=false} $\Rightarrow$ reset each iter (Axis 1 only)};
 
 % ════════════════════════════════════════════════════════════════
-% TIMELINE: Sequential & Parallel Operations
+% FOOT NOTE — the conceptual crux
 % ════════════════════════════════════════════════════════════════
-
-\node[draw=bdr!60, very thick, rounded corners=8pt,
-      fill=bdr!4,
-      minimum width=16.4cm, minimum height=7.4cm,
-      inner sep=14pt,
-      anchor=north] at (8, -6.4) (timeline) {};
-
-\node[font=\large\sffamily\bfseries, text=bdr, anchor=north west]
-  at ($(timeline.north west)+(0.3,-0.15)$)
-  {Timeline: Operations Across Chunks};
-
-% Column positions — tighter, centered in box
-\def\colA{3.2}    % t-1
-\def\colB{8.0}    % t
-\def\colC{12.8}   % t+1
-\def\colW{3.2cm}  % bar width (narrower to fit)
-
-% Time labels
-\node[font=\normalsize\sffamily\bfseries, text=bdr]
-  at (\colA, -7.4) {chunk $t{-}1$};
-\node[font=\normalsize\sffamily\bfseries, text=bdr]
-  at (\colB, -7.4) {chunk $t$};
-\node[font=\normalsize\sffamily\bfseries, text=bdr]
-  at (\colC, -7.4) {chunk $t{+}1$};
-
-% ── Row 1: Inject (purple) ──
-\def\rowInj{-8.2}
-\node[font=\scriptsize\sffamily\bfseries, text=bdr, anchor=east]
-  at (1.2, \rowInj) {inject};
-
-\node[draw=cbPurple, thick, rounded corners=3pt,
-      fill=fPurple!60, minimum width=\colW, minimum height=0.6cm,
-      font=\scriptsize\sffamily, text=cbPurple!80!black]
-  at (\colA, \rowInj) (injA) {from $M_{t{-}2}$};
-\node[draw=cbPurple, thick, rounded corners=3pt,
-      fill=fPurple!60, minimum width=\colW, minimum height=0.6cm,
-      font=\scriptsize\sffamily, text=cbPurple!80!black]
-  at (\colB, \rowInj) (injB) {from $M_{t{-}1}$};
-\node[draw=cbPurple, thick, rounded corners=3pt,
-      fill=fPurple!60, minimum width=\colW, minimum height=0.6cm,
-      font=\scriptsize\sffamily, text=cbPurple!80!black]
-  at (\colC, \rowInj) (injC) {from $M_{t}$};
-
-% ── Row 2: Backbone forward (blue) ──
-\def\rowFwd{-9.2}
-\node[font=\scriptsize\sffamily\bfseries, text=bdr, anchor=east]
-  at (1.2, \rowFwd) {forward};
-
-\node[draw=cbBlue, thick, rounded corners=3pt,
-      fill=fBlue!60, minimum width=\colW, minimum height=0.8cm,
-      font=\scriptsize\sffamily\bfseries, text=cbBlue]
-  at (\colA, \rowFwd) (fwdA) {backbone fwd};
-\node[draw=cbBlue, thick, rounded corners=3pt,
-      fill=fBlue!60, minimum width=\colW, minimum height=0.8cm,
-      font=\scriptsize\sffamily\bfseries, text=cbBlue]
-  at (\colB, \rowFwd) (fwdB) {backbone fwd};
-\node[draw=cbBlue, thick, rounded corners=3pt,
-      fill=fBlue!60, minimum width=\colW, minimum height=0.8cm,
-      font=\scriptsize\sffamily\bfseries, text=cbBlue]
-  at (\colC, \rowFwd) (fwdC) {backbone fwd};
-
-% ── Row 3: Memory update (orange) ──
-\def\rowUpd{-10.2}
-\node[font=\scriptsize\sffamily\bfseries, text=bdr, anchor=east]
-  at (1.2, \rowUpd) {update};
-
-\node[draw=cbOrange!80!black, thick, rounded corners=3pt,
-      fill=cbOrange!20, minimum width=\colW, minimum height=0.6cm,
-      font=\scriptsize\sffamily, text=cbOrange!80!black]
-  at (\colA, \rowUpd) (updA) {GD $\to M_{t{-}1}$};
-\node[draw=cbOrange!80!black, thick, rounded corners=3pt,
-      fill=cbOrange!20, minimum width=\colW, minimum height=0.6cm,
-      font=\scriptsize\sffamily, text=cbOrange!80!black]
-  at (\colB, \rowUpd) (updB) {GD $\to M_{t}$};
-\node[draw=cbOrange!80!black, thick, rounded corners=3pt,
-      fill=cbOrange!20, minimum width=\colW, minimum height=0.6cm,
-      font=\scriptsize\sffamily, text=cbOrange!80!black]
-  at (\colC, \rowUpd) (updC) {GD $\to M_{t{+}1}$};
-
-% ── Row 4: Z-Latent (teal, parallel with update) ──
-\def\rowZlt{-11.0}
-\node[font=\scriptsize\sffamily\bfseries, text=bdr, anchor=east]
-  at (1.2, \rowZlt) {z-latent};
-
-\node[draw=cbTeal!80, thick, rounded corners=3pt,
-      fill=fTeal!50, minimum width=\colW, minimum height=0.55cm,
-      font=\scriptsize\sffamily, text=cbTeal]
-  at (\colA, \rowZlt) (zltA) {predict $t$};
-\node[draw=cbTeal!80, thick, rounded corners=3pt,
-      fill=fTeal!50, minimum width=\colW, minimum height=0.55cm,
-      font=\scriptsize\sffamily, text=cbTeal]
-  at (\colB, \rowZlt) (zltB) {predict $t{+}1$};
-\node[draw=cbTeal!80, thick, rounded corners=3pt,
-      fill=fTeal!50, minimum width=\colW, minimum height=0.55cm,
-      font=\scriptsize\sffamily, text=cbTeal]
-  at (\colC, \rowZlt) (zltC) {predict $t{+}2$};
-
-% ── Vertical arrows: sequential within each chunk ──
-\foreach \col in {A, B, C} {
-  \draw[-{Stealth[length=2mm]}, thick, bdr!50]
-    (inj\col.south) -- (fwd\col.north);
-  \draw[-{Stealth[length=2mm]}, thick, bdr!50]
-    (fwd\col.south) -- (upd\col.north);
-}
-
-% ── Cross-chunk arrows: update feeds next inject ──
-\draw[-{Stealth[length=3mm,width=2.5mm]}, thick, cbPurple!70,
-      rounded corners=4pt]
-  (updA.north east) -- ++(0.25, 0) |- (injB.south west);
-\draw[-{Stealth[length=3mm,width=2.5mm]}, thick, cbPurple!70,
-      rounded corners=4pt]
-  (updB.north east) -- ++(0.25, 0) |- (injC.south west);
-
-% ── Parallel brace: update + z-latent run together ──
-% Position brace right after the last column's bar edge (12.8 + 1.6 = 14.4)
-\draw[decorate, decoration={brace, amplitude=6pt, mirror},
-      very thick, cbOrange!70]
-  (14.6, -9.85) -- (14.6, -11.3)
-  node[midway, right=8pt, font=\scriptsize\sffamily\bfseries,
-       text=cbOrange!80!black, align=left] {parallel};
-
-% ── Note: M = neural memory ──
-\node[font=\scriptsize\sffamily, text=bdr!60, anchor=north west]
-  at ($(timeline.south west)+(0.3, 1.2)$) {%
-  $M$ = neural memory MLP (weights are the stored state)};
-
-% ── Legend ──
-\node[font=\scriptsize\sffamily, text=bdr!70, align=left, anchor=north west]
-  at ($(timeline.south west)+(0.3, 0.6)$) {%
-  $\downarrow$ = sequential\quad
-  $\nearrow$ = cross-chunk dependency (update at $t{-}1$ feeds inject at $t$)\quad
-  \} = parallel (update + z-latent run together)};
+\node[draw=bdr!60, thick, rounded corners=6pt, fill=bdr!4, anchor=north,
+      minimum width=15.2cm, inner sep=8pt, align=left, font=\scriptsize\sffamily, text=bdr]
+  at ($(ax2.south)+(0,-0.35)$) {%
+  \textbf{Two recurrences, one is standard SSM.}\;
+  Axis 1 (over the sequence) \emph{is} the linear-attention/SSM hidden state --- always on.
+  Axis 2 (over the loop) is MORPH-specific and \emph{optional}: it adds a second recurrence over
+  thinking-depth on top. \texttt{carry=false} $=$ pure per-iteration SSM; \texttt{carry=true} $=$ $+$depth memory.
+  The branch runs \emph{in parallel} to attention (gated sum) --- never recurrent \emph{over} attention.};
 
 \end{tikzpicture}
 \end{document}

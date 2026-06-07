@@ -10,6 +10,18 @@ This is the convergence point of the quant campaign. Each component below earned
 measured result; the components that *didn't* are listed under "Explicitly excluded" with the
 evidence that killed them.
 
+**Diagram:** [`figures/morph_deploy_stack.tex`](figures/morph_deploy_stack.tex) (rendered
+`morph_deploy_stack.png`) draws this stack — the precision overlay below plus the architecture
+carriers — on the forward flow, with the validated ppl evidence inline.
+
+**Architecture carriers (bf16, orthogonal to precision).** The deployable model also carries two
+always-bf16 mechanisms that are *not* quant components but are part of the full stack:
+- **Cayley Hyper-Connections** (`residual_mode=hc_cayley`, n=4 streams) — the residual mechanism;
+  orthogonal stream mixer for loop stability. See `figures/morph_block.tex`.
+- **Retention / GLA branch** (ablation #230, layer 1 of each section) — gated linear-attention
+  recurrent memory, parallel to attention. See `figures/morph_memory.tex`. *Default off; the
+  deploy-vs-baseline decision is pending the #230 15k result.*
+
 ---
 
 ## 1. The stack (what folds in)
