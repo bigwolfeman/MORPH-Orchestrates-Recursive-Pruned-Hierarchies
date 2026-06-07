@@ -94,14 +94,6 @@ JAX *supports* the dtypes (`jnp.float8_e4m3fn`, `jnp.float8_e5m2`) and `dot_gene
 emulated/no-speedup. → The TPU mirror is a **parallel future track gated on v7p**; do not
 plan FP8 throughput wins on v6e. Keep TPU on bf16 (AQT) for now.
 
-### DGX Spark (GB10) — FP8 hardware present, verify on-device
-
-GB10 is a Grace-Blackwell superchip with **5th-gen tensor cores (FP8/FP6/FP4 in hardware)**
-([NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)). Same
-sm_120-family torchao float8 path *should* apply, but Spark is a low-power part (NVIDIA
-positions it for fine-tuning, not heavy training) and the on-device speedup is **UNVERIFIED**
-— must be measured on the box before trusting. Treat as "likely works, confirm the GEMM
-benchmark there."
 
 ---
 

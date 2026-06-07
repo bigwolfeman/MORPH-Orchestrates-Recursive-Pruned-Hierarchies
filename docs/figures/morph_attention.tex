@@ -1,0 +1,217 @@
+% MORPH — Attention Detail (triple-axis compression: CCA x {CSA|HCA} x window).
+% The zoom-in of the "CCA + CSA/HCA Attention" box in morph_block.tex. Central
+% bottom-up dataflow + two detail insets (CCA prologue, CSA selection path).
+%
+% Verified against code (2026-06-07, morph/model/attention.py + transformer.py:322-354):
+%   - _CCABase shared prologue: W_down_q 768->384, W_down_k 768->128 (C=2, d_head=32);
+%     depthwise+head-grouped causal conv (k=4); QK-mean couple; QK-RMSNorm; learnable
+%     temp exp() on k (per kv head); CoPE (clipped-RoPE); GQA expand 4->12; value-shift
+%     v = [W_v_curr(x_t) || W_v_prev(x_{t-1})].
+%   - Window branch (always): sliding causal, w=128, XSA (self-token excluded), fused.
+%   - Global-compressed slot resolved at __init__ by GLOBAL layer_idx parity:
+%       even -> CSA: two-stream gated pool m=4 -> Lightning Indexer (-inf before relu)
+%               -> top_k=128 select -> on-the-fly gather + invalid-mask -> flash attn.
+%       odd  -> HCA: single-stream pool m=128 -> DENSE attn over all blocks + early-query
+%               guard. (Variant is baked per layer -> a looped core layer keeps it every iter.)
+%   - Combine (always): sigmoid gate MLP 768->192->24 (2 wts/head) blends compressed+window;
+%     + residual-alpha (per head, from q_lat); + learnable per-head sinks; W_up 384->768.
+%   - CLA (cla_kv path) is real but DEFAULT-OFF -> drawn as a dashed optional overlay.
+% Compile: pdflatex morph_attention.tex
+
+\documentclass[border=14pt]{standalone}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, fit, positioning, calc, backgrounds, decorations.pathreplacing}
+
+% ── Palette (Paul Tol, colorblind-safe — matches the figure family) ───────────
+\definecolor{cbBlue}{HTML}{4477AA}
+\definecolor{cbOrange}{HTML}{EE7733}
+\definecolor{cbPurple}{HTML}{AA3377}
+\definecolor{cbTeal}{HTML}{228833}
+\definecolor{cbGray}{HTML}{777777}
+\definecolor{fBlue}{HTML}{DCEAF7}
+\definecolor{fOrange}{HTML}{FDE8D0}
+\definecolor{fPurple}{HTML}{EEDCEE}
+\definecolor{fTeal}{HTML}{D6EFDD}
+\definecolor{fGray}{HTML}{EBEBEB}
+\definecolor{bdr}{HTML}{555555}
+\definecolor{ccaC}{HTML}{2255AA}
+
+\tikzset{
+  B/.style={draw=bdr, thick, rounded corners=4pt,
+    minimum width=4.6cm, minimum height=1.0cm,
+    font=\small\sffamily, align=center, inner sep=5pt},
+  Bs/.style={B, minimum height=0.7cm, font=\footnotesize\sffamily, minimum width=3.4cm},
+  % inset pipeline step
+  pstep/.style={draw=bdr, rounded corners=3pt, fill=fGray!55,
+    minimum width=4.3cm, minimum height=0.62cm,
+    font=\scriptsize\sffamily, align=center, inner sep=3pt},
+  io/.style={font=\small\sffamily},
+  A/.style={-{Stealth[length=2.8mm,width=2.2mm]}, thick},
+  Ah/.style={-{Stealth[length=2.4mm,width=2mm]}, semithick, cbGray},
+  Ad/.style={-{Stealth[length=2.4mm,width=1.9mm]}, thick, densely dashed},
+  sub/.style={font=\scriptsize\sffamily},
+  tny/.style={font=\tiny\sffamily},
+  dim/.style={font=\tiny\sffamily, text=cbGray},
+}
+
+\begin{document}
+\begin{tikzpicture}
+
+% =====================================================================
+% MAIN COLUMN (bottom -> top), centred on x = 0
+% =====================================================================
+
+% ── input ──
+\node[io] (inp) at (0,0) {$x\;[B,S,768]$};
+
+% ── CCA prologue (shared, always on) ──
+\node[B, fill=fBlue, draw=cbBlue, line width=1pt, minimum width=6.4cm,
+      minimum height=1.45cm, above=0.55cm of inp] (cca) {
+  \textbf{CCA channel compression}\;{\footnotesize(C{=}2)}\\[1pt]
+  {\scriptsize $W_{\downarrow}$: 768$\to$384(q)/128(k) $\cdot$ causal conv(dw+grp) $\cdot$ QK-mean}\\[-1pt]
+  {\scriptsize QK-RMSNorm $\cdot$ temp$\,e^{\tau}\!$ $\cdot$ CoPE $\cdot$ GQA 4$\to$12 $\cdot$ value-shift}};
+\draw[A] (inp) -- (cca);
+\node[dim, anchor=west] at ($(cca.east)+(0.08,-0.45)$) {$d_\mathrm{head}{=}32$};
+
+% q,k,v distribution bus
+\coordinate (bus) at (0,2.95);
+\draw[A] (cca.north) -- (bus) node[pos=0.55, right=2pt, sub, text=ccaC]{$q,k,v\;[B,12,S,32]$};
+
+% ── two branches ──
+% LEFT: window branch
+\node[B, fill=fOrange, draw=cbOrange!85!black, line width=0.9pt,
+      minimum width=3.9cm, minimum height=2.05cm] (win) at (-2.75,4.55) {
+  \textbf{Window branch}\\[1pt]
+  {\scriptsize sliding causal, $w{=}128$}\\[-1pt]
+  {\scriptsize \textbf{XSA} — self-token excluded}\\[-1pt]
+  {\scriptsize MAC suffix ($n_\mathrm{skip}$ tokens):}\\[-2pt]
+  {\scriptsize skip CoPE, globally visible}\\[-1pt]
+  {\tiny fused window kernel}};
+
+% RIGHT: global-compressed slot (alternation container)
+\node[draw=cbGray, densely dashed, thick, rounded corners=6pt, fill=cbGray!4,
+      minimum width=4.9cm, minimum height=2.55cm, anchor=south] (slot) at (2.6,3.55) {};
+\node[tny, text=cbGray, anchor=north] at (slot.north) {global-compressed slot $\cdot$ \textbf{one active / layer}};
+\node[B, fill=fPurple, draw=cbPurple, line width=0.9pt, minimum width=4.4cm,
+      minimum height=0.95cm] (csa) at (2.6,5.18) {
+  \textbf{CSA}\,{\scriptsize(even idx)} — sparse select\\[-1pt]
+  {\tiny pool $m{=}4$ $\cdot$ indexer top-$k{=}128$ $\cdot$ gather}};
+\node[B, fill=fTeal, draw=cbTeal, line width=0.9pt, minimum width=4.4cm,
+      minimum height=0.95cm] (hca) at (2.6,4.06) {
+  \textbf{HCA}\,{\scriptsize(odd idx)} — dense compress\\[-1pt]
+  {\tiny pool $m{=}128$ $\cdot$ attend ALL blocks $\cdot$ early-q guard}};
+
+% bus -> branches
+\draw[A] (bus) -| (win.south);
+\draw[A] (bus) -| (slot.south);
+
+% ── combine (gate + sink + alpha + W_up) ──
+\node[B, fill=cbBlue!8, draw=cbBlue, line width=1pt, minimum width=7.2cm,
+      minimum height=1.45cm] (comb) at (0,7.35) {
+  \textbf{Gate blend $+$ residual $+$ sinks}\\[1pt]
+  {\scriptsize sigmoid gate MLP 768$\to$192$\to$24 (2/head): $g_c\,o_\mathrm{comp}+g_w\,o_\mathrm{win}$}\\[-1pt]
+  {\scriptsize $+\;\alpha_h\!\cdot\!$residual$(q_\mathrm{lat})$ $\;+\;$ learnable per-head sink logits}};
+\draw[A] (win.north)  -- ([xshift=-1.6cm]comb.south) node[pos=0.55, left=1pt, sub, text=cbOrange!80!black]{$o_\mathrm{win}$};
+% only one of CSA/HCA is active per layer -> a single shared o_comp exit off the slot
+\draw[A] (slot.north) -- ([xshift=1.7cm]comb.south) node[pos=0.5, right=1pt, sub, text=cbPurple]{$o_\mathrm{comp}$};
+
+% ── W_up + output ──
+\node[Bs, fill=fGray, minimum width=4.2cm, above=0.45cm of comb] (wup) {$W_{\uparrow}$: 384 $\to$ 768};
+\draw[A] (comb) -- (wup);
+\node[io, above=0.42cm of wup] (out) {attn out $[B,S,768]$ $\to$ block residual};
+\draw[A] (wup) -- (out);
+
+% ── CLA optional overlay (default off) ──
+\node[draw=cbGray, densely dashed, rounded corners=5pt, fill=cbGray!5,
+      text width=3.5cm, font=\tiny\sffamily, align=left, inner sep=5pt, text=bdr]
+      at (-2.6,6.55) (cla) {%
+  \textbf{optional · CLA} (default off)\\
+  cache $k,v,C_\mathrm{comp}$ at 1st grad iter; later loop iters recompute \emph{$q$ only}};
+\draw[Ad, cbGray] (cla.south) -- ([yshift=2pt]win.north west);
+
+% =====================================================================
+% INSET 1 (LEFT) — CCA prologue expanded
+% =====================================================================
+\def\ix{-8.4}
+\node[pstep, fill=fBlue!70] (i1a) at (\ix,1.1) {$W_{\downarrow}q$ 768$\to$384 \;$\cdot$\; $W_{\downarrow}k$ 768$\to$128};
+\node[pstep, above=0.34cm of i1a] (i1b) {causal conv: depthwise $\to$ head-grouped ($k{=}4$)};
+\node[pstep, above=0.34cm of i1b] (i1c) {QK-mean couple: $q{\mathrel{+}}{=}\tfrac12(q_\mathrm{lat}{+}k_\mathrm{lat})$};
+\node[pstep, above=0.34cm of i1c] (i1d) {QK-RMSNorm \;$\cdot$\; key temp $\times e^{\tau}$ (per kv-head)};
+\node[pstep, above=0.34cm of i1d] (i1e) {CoPE — clipped-RoPE (cosine taper $>$ ctx\_len)};
+\node[pstep, above=0.34cm of i1e] (i1f) {GQA expand $k,v$: 4 kv-head $\to$ 12 q-head};
+\node[pstep, fill=fBlue!70, above=0.34cm of i1f] (i1g) {value-shift: $v{=}[W_v x_t \,\Vert\, W_v x_{t-1}]$};
+\foreach \a/\b in {i1a/i1b,i1b/i1c,i1c/i1d,i1d/i1e,i1e/i1f,i1f/i1g}{\draw[Ah] (\a)--(\b);}
+\node[io, below=0.3cm of i1a] (i1in) {$x$};
+\draw[Ah] (i1in)--(i1a);
+\node[sub, text=ccaC, above=0.28cm of i1g] (i1out) {$\to q,k,v\;[B,12,S,32]$};
+\draw[Ah] (i1g)--(i1out);
+\begin{scope}[on background layer]
+  \node[draw=cbBlue!55, thick, rounded corners=7pt, fill=cbBlue!4,
+        fit=(i1in)(i1a)(i1g)(i1out), inner sep=9pt] (I1) {};
+\end{scope}
+\node[font=\small\sffamily\bfseries, text=cbBlue, anchor=south west]
+  at ($(I1.north west)+(0.1,0.02)$) {CCA prologue \;{\footnotesize(shared $\_$CCABase)}};
+% link main CCA -> inset 1
+\draw[Ad, cbBlue] (cca.west) to[out=180,in=0] (I1.east);
+
+% =====================================================================
+% INSET 2 (RIGHT) — CSA selection path expanded
+% =====================================================================
+\def\jx{8.7}
+\node[pstep, fill=fPurple!75, minimum height=0.92cm] (i2a) at (\jx,1.25) {
+  two-stream gated pool $m{=}4$ $\to$ $C_\mathrm{comp}$ (RMSNorm)\\[-1pt]
+  {\tiny streams A/B overlap; joint softmax over $2m$; block $i$ fuses $i,i{-}1$}};
+\node[pstep, above=0.34cm of i2a] (i2b) {Lightning Indexer: $q_I\!\cdot\!K_I$, \;$-\infty$ \emph{before} relu};
+\node[pstep, above=0.34cm of i2b] (i2c) {scores $[B,S,n_\mathrm{blk}]$ — re-mask future $\to-\infty$};
+\node[pstep, fill=fPurple!75, above=0.34cm of i2c] (i2d) {top-$k{=}128$ block select \;$+$\; invalid-mask};
+\node[pstep, above=0.34cm of i2d] (i2e) {on-the-fly gather \;$\to$\; flash attn ($+$ sink)};
+\foreach \a/\b in {i2a/i2b,i2b/i2c,i2c/i2d,i2d/i2e}{\draw[Ah] (\a)--(\b);}
+\node[io, below=0.3cm of i2a] (i2in) {$x$};
+\draw[Ah] (i2in)--(i2a);
+\node[sub, text=cbPurple, above=0.28cm of i2e] (i2out) {$\to o_\mathrm{comp}$};
+\draw[Ah] (i2e)--(i2out);
+\begin{scope}[on background layer]
+  \node[draw=cbPurple!55, thick, rounded corners=7pt, fill=cbPurple!4,
+        fit=(i2in)(i2a)(i2e)(i2out), inner sep=9pt] (I2) {};
+\end{scope}
+\node[font=\small\sffamily\bfseries, text=cbPurple, anchor=south west]
+  at ($(I2.north west)+(0.1,0.02)$) {CSA selection path};
+% HCA contrast note — its own callout below the inset (HCA reuses the pooler, no selection)
+\node[draw=cbTeal!55, thick, rounded corners=5pt, fill=fTeal!55,
+      font=\tiny\sffamily, align=left, text width=4.4cm, inner sep=5pt,
+      below=0.3cm of I2.south, anchor=north] (hnote) {%
+  \textbf{HCA} reuses the same pooler ($m{=}128$) but \emph{skips} the indexer $+$ top-$k$:
+  dense softmax over \emph{all} compressed blocks ($+$ sink, early-query guard).};
+% link main CSA -> inset 2
+\draw[Ad, cbPurple] (csa.east) to[out=0,in=180] (I2.west);
+
+% =====================================================================
+% BOTTOM — four-axis legend / facts
+% =====================================================================
+\node[draw=bdr, rounded corners=6pt, fill=fGray!25, inner sep=10pt,
+      align=left, font=\scriptsize\sffamily, text width=21.5cm, anchor=north]
+      (facts) at (0,-1.35) {%
+  \textbf{Four compression axes} (all faithful to \texttt{morph/model/attention.py}):\quad
+  \tikz\node[draw=cbBlue,fill=fBlue,rounded corners=2pt,inner sep=1.5pt,font=\tiny\sffamily]{channel};\,CCA $E{\to}E/2$ \;\;
+  \tikz\node[draw=cbPurple,fill=fPurple,rounded corners=2pt,inner sep=1.5pt,font=\tiny\sffamily]{select};\,CSA top-$128$ of $S/4$ blocks \;\;
+  \tikz\node[draw=cbTeal,fill=fTeal,rounded corners=2pt,inner sep=1.5pt,font=\tiny\sffamily]{dense};\,HCA all $S/128$ blocks \;\;
+  \tikz\node[draw=cbOrange,fill=fOrange,rounded corners=2pt,inner sep=1.5pt,font=\tiny\sffamily]{local};\,window $w{=}128$.\\[3pt]
+  \textbf{CSA/HCA alternate} on the \emph{global} layer index (even$\to$CSA, odd$\to$HCA), baked at \texttt{\_\_init\_\_} —
+  so a looped core layer keeps its variant on every iteration (\emph{not} iteration-conditioned).
+  \;Causal-leak fix: indexer masks future blocks to $-\infty$ \emph{before} relu, \emph{and} re-checks validity after gather.\\[3pt]
+  \textbf{Combine:} per-head sigmoid gate gives 2 weights (compressed, window); residual-$\alpha$ adds the down-projected $q_\mathrm{lat}$ back;
+  \textbf{attention sinks} are a learnable per-head logit appended to the compressed softmax (a no-op "null" key).
+  \;Fused Triton kernels: CCA prologue, CCA conv, window, CSA, HCA (each fwd/grad-exact vs eager).\\[3pt]
+  \textbf{Notation:} $B$ batch, $S$ seq, $H{=}12$ q-heads, $H_{kv}{=}4$ kv-heads (GQA $\times3$), channel compression $C{=}2$,
+  $d_\mathrm{head}{=}768/(C\,H){=}32$, $n_\mathrm{blk}{=}S/m$. \;Color is secondary — every box is text-labeled.};
+
+% ── Title ────────────────────────────────────────────────────────────
+\node[font=\Large\sffamily\bfseries, anchor=south] (ttl) at (0,10.55)
+  {MORPH Attention --- Triple-Axis Compression};
+\node[sub, text=bdr, anchor=north, below=0.1cm of ttl]
+  {CCA channel-compress feeds a local window $\Vert$ one global-compressed branch (CSA\,/\,HCA), blended by a per-head gate};
+
+\end{tikzpicture}
+\end{document}

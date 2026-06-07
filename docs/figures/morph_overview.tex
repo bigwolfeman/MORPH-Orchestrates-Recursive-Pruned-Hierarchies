@@ -107,19 +107,14 @@
 \draw[loopC, line width=2.5pt, rounded corners=10pt,
       -{Stealth[length=5mm,width=4mm]}]
   ($(cm.east)+(0.15,0)$) -- ++(2.0,0) |- ($(inj.east)+(0.15,0)$);
+% GLA cross-iteration state carry (Axis 2, retention_carry=true) rides the same loop: annotate above xT
+\node[sub, text=cbPurple, anchor=west]
+  at ($(cm.east)+(2.35,-0.45)$) {GLA state $S_T$ carried};
 \node[font=\Large\sffamily\bfseries, text=loopC, anchor=west]
   at ($(cm.east)+(2.35,-1.1)$) {$\times T$};
 \node[sub, text=loopC, align=left, anchor=north west]
   at ($(cm.east)+(2.35,-1.55)$)
   {$T \sim \mathrm{Poi}(\lambda{=}6)$\\truncated BPTT\\(last 4 iters)\\active-set shrink};
-
-% GLA cross-iteration state carry (Axis 2, retention_carry=true): a distinct PURPLE recurrence
-% riding inside the blue loop — the GLA state S_T from one iteration seeds the next (core only).
-\draw[cbPurple, line width=1.4pt, rounded corners=8pt,
-      -{Stealth[length=3.6mm,width=3mm]}]
-  ($(cm.east)+(0.15,-0.18)$) -- ++(1.25,0) |- ($(ca.east)+(0.15,-0.18)$);
-\node[tiny, text=cbPurple, align=left, anchor=west]
-  at ($(cm.east)+(1.5,0.34)$) {GLA state\\$S_T$ carried};
 
 % ── CODA ─────────────────────────────────────────────────────────────
 \node[B, fill=fBlue, above=1.15cm of cm] (da) {
@@ -198,24 +193,6 @@
   $\alpha_t=\sigma(x_t W_g)$,\; state $S\!\in\!\mathbb{R}^{d_k\times d_v}$\\[4pt]
   {\scriptsize core: $S_T$ carried across loop iters (Axis 2)}\\[2pt]
   {\scriptsize gate $\sigma(g)\!\approx\!0$ at init (learnable)}};
-
-% =====================================================================
-% LEGEND — channel slices (now injection/decay targets, NOT the residual)
-% =====================================================================
-\node[below=0.9cm of inp, font=\footnotesize\sffamily\bfseries] (leg)
-  {Channel slices \;{\scriptsize(injection \& diagonal-decay targets within each stream's $C{=}768$)}:};
-\node[right=0.35cm of leg, fill=cbBlue!20, draw=cbBlue,
-      rounded corners=2pt, inner sep=3pt, font=\tiny\sffamily\bfseries] (l1) {Compute (384)};
-\node[right=0.18cm of l1, fill=cbOrange!20, draw=cbOrange,
-      rounded corners=2pt, inner sep=3pt, font=\tiny\sffamily\bfseries] (l2) {Context (256)};
-\node[right=0.18cm of l2, fill=cbPurple!20, draw=cbPurple,
-      rounded corners=2pt, inner sep=3pt, font=\tiny\sffamily\bfseries] (l3) {Memory (128)};
-
-\node[sub, text=bdr!70, align=center, text width=13cm, anchor=north]
-      at ($(leg.west)!0.5!(l3.east)+(0,-0.9)$) {%
-  \textbf{Note:} $x_0$/value-embeds inject into the \emph{context} slice; bigram is full-width;
-  the core's diagonal injection (spectral radius $<1$) decays the context slice. The residual
-  \emph{mechanism} is HC (above), \emph{not} the channel slices.};
 
 % ── Title ────────────────────────────────────────────────────────────
 \node[above=0.7cm of out, font=\Large\sffamily\bfseries]
