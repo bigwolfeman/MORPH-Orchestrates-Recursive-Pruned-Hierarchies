@@ -151,7 +151,7 @@
 \node[panel=bdr, anchor=west, text width=4.5cm] at ($(core.east)+(3.6,0.55)$) (opt) {
   \textbf{\textcolor{bdr}{Optimizer (training)}}\\[2pt]
   8-bit AdamW (bitsandbytes)\\
-  {\tiny state $m,v \to$ uint8; embed state forced fp32}\\
+  {\tiny state $m,v \to$ uint8; embed state forced fp32}};
 
 % the training-time optimizer overlay connects to the backbone brace (a real target, not empty space)
 \draw[Ad, bdr] (opt.west) -- (bb.east);
