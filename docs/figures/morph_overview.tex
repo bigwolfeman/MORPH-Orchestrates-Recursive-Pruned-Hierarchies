@@ -103,7 +103,7 @@
   (csid) {$x_0$, value\\embeds,\\bigram};
 \draw[Ad, cbOrange] (csid.east) -- (ca.west);
 
-% loop-back arrow
+% loop-back arrow (blue) = the HC carrier + whole block re-applied each iteration
 \draw[loopC, line width=2.5pt, rounded corners=10pt,
       -{Stealth[length=5mm,width=4mm]}]
   ($(cm.east)+(0.15,0)$) -- ++(2.0,0) |- ($(inj.east)+(0.15,0)$);
@@ -112,6 +112,14 @@
 \node[sub, text=loopC, align=left, anchor=north west]
   at ($(cm.east)+(2.35,-1.55)$)
   {$T \sim \mathrm{Poi}(\lambda{=}6)$\\truncated BPTT\\(last 4 iters)\\active-set shrink};
+
+% GLA cross-iteration state carry (Axis 2, retention_carry=true): a distinct PURPLE recurrence
+% riding inside the blue loop — the GLA state S_T from one iteration seeds the next (core only).
+\draw[cbPurple, line width=1.4pt, rounded corners=8pt,
+      -{Stealth[length=3.6mm,width=3mm]}]
+  ($(cm.east)+(0.15,-0.18)$) -- ++(1.25,0) |- ($(ca.east)+(0.15,-0.18)$);
+\node[tiny, text=cbPurple, align=left, anchor=west]
+  at ($(cm.east)+(1.5,0.34)$) {GLA state\\$S_T$ carried};
 
 % ── CODA ─────────────────────────────────────────────────────────────
 \node[B, fill=fBlue, above=1.15cm of cm] (da) {
@@ -158,7 +166,7 @@
 \node[ph, text=hcC, anchor=north west] at ($(HC.north west)+(0.3,-0.2)$)
   {Cayley Hyper-Connections};
 \node[sub, text=bdr, anchor=north west, align=left] at ($(HC.north west)+(0.3,-0.72)$) {%
-  residual mechanism (deploy default)\\
+  residual mechanism\\
   \texttt{residual\_mode=hc\_cayley}};
 \node[font=\footnotesize\sffamily, text=bdr, align=left, anchor=north west]
   at ($(HC.north west)+(0.3,-1.5)$) {%
@@ -168,13 +176,28 @@
   $x_{\mathrm{out}}=H_{\mathrm{res}}\,x_{\mathrm{str}}+H_{\mathrm{post}}(y{\otimes}\mathbf{1}_n)$\\[2pt]
   {\scriptsize $H_{\mathrm{res}}=\mathrm{Cayley}(\mathrm{skew})$ orthogonal}\\[4pt]
   {\scriptsize init $\approx x+F(\mathrm{mean}(x))$ (plain residual)}};
-\node[tiny, text=cbOrange!70!black, anchor=south west, align=left]
-  at ($(HC.south west)+(0.3,0.15)$) {%
-  alt: \texttt{residual\_mode=null} $\Rightarrow$ MRR\\(per-channel $\gamma_i$ multi-rate residual)};
 % three dashed feeds fan out FROM the HC box's own west edge to each section's attention
 \draw[Ad, hcC] ($(HC.west)+(0,2.2)$) -- (da.east);
 \draw[Ad, hcC] (HC.west) -- (ca.east);
 \draw[Ad, hcC] ($(HC.west)+(0,-2.2)$) -- (pa.east);
+
+% =====================================================================
+% RIGHT (lower): RETENTION (GLA) BRANCH panel — the second cross-cutting carrier
+% =====================================================================
+\node[draw=cbPurple, very thick, rounded corners=8pt, fill=cbPurple!7,
+      minimum width=5.2cm, minimum height=3.5cm,
+      inner sep=10pt, anchor=north] (GLAP) at ($(HC.south)+(0,-0.6)$) {};
+\node[ph, text=cbPurple, anchor=north west] at ($(GLAP.north west)+(0.3,-0.2)$)
+  {Retention (GLA) branch};
+\node[sub, text=bdr, anchor=north west] at ($(GLAP.north west)+(0.3,-0.7)$)
+  {parallel to attention, \;layer 1 of each section};
+\node[font=\footnotesize\sffamily, text=bdr, align=left, anchor=north west]
+  at ($(GLAP.north west)+(0.3,-1.18)$) {%
+  $a=\mathrm{attn}(x)+\sigma(g)\!\cdot\!\mathrm{GLA}(\bar{x},S)$\\[3pt]
+  $S_t=\mathrm{diag}(\alpha_t)\,S_{t-1}+k_t^{\!\top}v_t$\\[2pt]
+  $\alpha_t=\sigma(x_t W_g)$,\; state $S\!\in\!\mathbb{R}^{d_k\times d_v}$\\[4pt]
+  {\scriptsize core: $S_T$ carried across loop iters (Axis 2)}\\[2pt]
+  {\scriptsize gate $\sigma(g)\!\approx\!0$ at init (learnable)}};
 
 % =====================================================================
 % LEGEND — channel slices (now injection/decay targets, NOT the residual)
@@ -188,8 +211,8 @@
 \node[right=0.18cm of l2, fill=cbPurple!20, draw=cbPurple,
       rounded corners=2pt, inner sep=3pt, font=\tiny\sffamily\bfseries] (l3) {Memory (128)};
 
-\node[sub, text=bdr!70, below=0.35cm of leg, anchor=north west, align=left,
-      text width=12.5cm] {%
+\node[sub, text=bdr!70, align=center, text width=13cm, anchor=north]
+      at ($(leg.west)!0.5!(l3.east)+(0,-0.9)$) {%
   \textbf{Note:} $x_0$/value-embeds inject into the \emph{context} slice; bigram is full-width;
   the core's diagonal injection (spectral radius $<1$) decays the context slice. The residual
   \emph{mechanism} is HC (above), \emph{not} the channel slices.};

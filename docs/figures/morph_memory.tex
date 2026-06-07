@@ -1,8 +1,8 @@
-% MORPH — Retention (Gated Linear Attention) Memory  [ablation #230]
-% Replaces the legacy "Neural Memory & Z-Latent" figure (both stripped from MORPH).
-% Shows the GLA branch and its TWO recurrence axes:
+% MORPH — Retention (Gated Linear Attention) Memory
+% The GLA branch and its TWO recurrence axes:
 %   Axis 1 — over the SEQUENCE  (the SSM hidden state S_t, standard linear attention)
 %   Axis 2 — over the LOOP      (S_T of iter i seeds iter i+1 — the cross-iteration carry)
+% Relative vertical stacking (below=of) so panels resize without colliding.
 % Compile: pdflatex morph_memory.tex
 
 \documentclass[border=18pt]{standalone}
@@ -26,62 +26,68 @@
 
 \tikzset{
   bigA/.style={-{Stealth[length=4mm,width=3mm]}, line width=2pt},
-  A/.style={-{Stealth[length=2.6mm,width=2mm]}, thick},
-  dashA/.style={-{Stealth[length=3mm,width=2.2mm]}, thick, densely dashed},
+  A/.style={-{Stealth[length=2.8mm,width=2.2mm]}, thick},
   st/.style={draw=cbPurple, very thick, rounded corners=4pt, fill=fPurple,
-    minimum width=1.5cm, minimum height=1.1cm, font=\small\sffamily\bfseries,
+    minimum width=1.7cm, minimum height=1.25cm, font=\normalsize\sffamily\bfseries,
     text=cbPurple!55!black, align=center},
   box/.style={draw=#1, thick, rounded corners=5pt, align=center,
-    inner sep=6pt, font=\small\sffamily},
-  sub/.style={font=\scriptsize\sffamily},
-  tiny/.style={font=\tiny\sffamily},
+    inner sep=7pt, font=\normalsize\sffamily},
+  panel/.style={draw=#1, very thick, rounded corners=8pt,
+    minimum width=15.6cm, anchor=north, inner sep=0pt},
+  sub/.style={font=\footnotesize\sffamily},
+  lbl/.style={font=\scriptsize\sffamily},
 }
 
 \begin{document}
-\begin{tikzpicture}[font=\sffamily]
+\begin{tikzpicture}[font=\sffamily, node distance=0.4cm]
 
 % ── Title ───────────────────────────────────────────────────────
-\node[font=\Large\sffamily\bfseries, text=bdr] at (8.3, 6.85)
+\node[font=\Large\sffamily\bfseries, text=bdr] (title) at (8.3,0)
   {Retention --- Gated Linear Attention Memory};
-\node[sub, text=bdr!70] at (8.3, 6.45)
-  {ablation \#230: a recurrent memory branch reintroduced (parallel to attention) after
-   TitanMAC's Neural-Memory + JEPA were stripped};
+\node[sub, text=bdr!70, below=2pt of title] (subt)
+  {a recurrent memory branch in parallel to attention};
 
-% ── PLACEMENT — the GLA branch lives in layer 1 of ALL THREE sections ──
-\node[draw=cbPurple, thick, rounded corners=6pt, fill=fPurple, fill opacity=0.10,
-      minimum width=15.2cm, minimum height=1.05cm, anchor=north] at (8.3,6.1) (place) {};
-\node[font=\footnotesize\sffamily\bfseries, text=cbPurple, anchor=west]
-  at ($(place.west)+(0.25,0)$) {Placement};
-\node[draw=cbBlue, rounded corners=3pt, fill=fBlue, minimum width=2.3cm, minimum height=0.78cm,
-      font=\scriptsize\sffamily, align=center, anchor=west] (cpre) at ($(place.west)+(2.0,0)$)
-      {\textbf{Prelude}\\[-1pt]{\tiny \textcolor{cbPurple}{$\blacktriangleright$ L1: GLA}}};
-\node[draw=loopC, thick, rounded corners=3pt, fill=fBlue, minimum width=2.6cm, minimum height=0.78cm,
-      font=\scriptsize\sffamily, align=center, right=0.75cm of cpre] (ccore)
-      {\textbf{Core} $\circlearrowleft$\\[-1pt]{\tiny \textcolor{cbPurple}{$\blacktriangleright$ L1: GLA $+$carry}}};
-\node[draw=cbBlue, rounded corners=3pt, fill=fBlue, minimum width=2.3cm, minimum height=0.78cm,
-      font=\scriptsize\sffamily, align=center, right=0.75cm of ccore] (ccoda)
-      {\textbf{Coda}\\[-1pt]{\tiny \textcolor{cbPurple}{$\blacktriangleright$ L1: GLA}}};
+% ════════════════════════════════════════════════════════════════
+% PLACEMENT — the GLA branch lives in layer 1 of ALL THREE sections
+% ════════════════════════════════════════════════════════════════
+\node[panel=cbPurple, fill=fPurple, fill opacity=0.10,
+      minimum height=1.95cm, below=0.35cm of subt] (place) {};
+\node[font=\small\sffamily\bfseries, text=cbPurple, anchor=west]
+  at ($(place.west)+(0.3,0.34)$) {Placement};
+\node[draw=cbBlue, thick, rounded corners=4pt, fill=fBlue, minimum width=2.6cm,
+      minimum height=1.0cm, font=\small\sffamily, align=center, anchor=west]
+      (cpre) at ($(place.west)+(2.3,0.34)$)
+      {\textbf{Prelude}\\[1pt]{\scriptsize \textcolor{cbPurple}{$\blacktriangleright$ L1: GLA}}};
+\node[draw=loopC, very thick, rounded corners=4pt, fill=fBlue, minimum width=2.9cm,
+      minimum height=1.0cm, font=\small\sffamily, align=center, right=0.8cm of cpre] (ccore)
+      {\textbf{Core} $\circlearrowleft$\\[1pt]{\scriptsize \textcolor{cbPurple}{$\blacktriangleright$ L1: GLA $+$carry}}};
+\node[draw=cbBlue, thick, rounded corners=4pt, fill=fBlue, minimum width=2.6cm,
+      minimum height=1.0cm, font=\small\sffamily, align=center, right=0.8cm of ccore] (ccoda)
+      {\textbf{Coda}\\[1pt]{\scriptsize \textcolor{cbPurple}{$\blacktriangleright$ L1: GLA}}};
 \draw[A] (cpre) -- (ccore);
 \draw[A] (ccore) -- (ccoda);
-\node[sub, text=bdr, anchor=west, align=left] at ($(ccoda.east)+(0.45,0)$)
-  {GLA branch in \textbf{all three} sections (layer 1).\\
-   Cross-iteration \emph{carry} (Axis 2) is \textbf{core-only} --- only it loops.};
+\node[sub, text=bdr, anchor=south] at ($(place.south)+(0,0.26)$)
+  {GLA branch on layer 1 of \textbf{all three} sections \;$\bullet$\; cross-iteration \emph{carry} (Axis 2) is \textbf{core-only}};
 
 % ════════════════════════════════════════════════════════════════
-% TOP — INTEGRATION (parallel gated branch in the layer-1 block)
+% INTEGRATION — parallel gated branch in the layer-1 block
 % ════════════════════════════════════════════════════════════════
-\node[box=bdr, fill=bdr!4, minimum width=15.2cm, minimum height=2.5cm,
-      anchor=north] at (8.3, 5.0) (intg) {};
+\node[panel=bdr, fill=bdr!4, minimum height=3.9cm, below=0.4cm of place] (intg) {};
 \node[font=\normalsize\sffamily\bfseries, text=bdr, anchor=north west]
-  at ($(intg.north west)+(0.25,-0.12)$) {Integration \;{\scriptsize (layer 1 of prelude / core / coda)}};
+  at ($(intg.north west)+(0.3,-0.18)$)
+  {Integration \;{\small (layer 1 of prelude / core / coda)}};
+\node[sub, text=cbOrange!70!black, anchor=north east] at ($(intg.north east)+(-0.35,-0.22)$)
+  {$a=\mathrm{attn}(x)+\sigma(g)\cdot\mathrm{GLA}(\mathrm{norm}(x),S)$};
 
-\node[font=\small\sffamily] at ($(intg.west)+(1.0,-0.25)$) (xin) {$x$};
-\node[box=bdr, fill=bdr!6, minimum height=0.7cm, right=0.45cm of xin] (rn) {RMSNorm};
-\node[box=cbBlue, fill=fBlue, minimum height=0.9cm, right=0.9cm of rn, yshift=0.55cm] (att) {Windowed Attention};
-\node[box=cbPurple, fill=fPurple, minimum height=0.9cm, right=0.9cm of rn, yshift=-0.55cm] (glab) {GLA branch};
-\node[draw=cbOrange!80!black, thick, circle, fill=fOrange, inner sep=1.5pt,
-      right=2.6cm of att, yshift=-0.55cm, font=\small] (sum) {$+$};
-\node[box=bdr, fill=bdr!6, minimum height=0.7cm, right=0.7cm of sum] (aout) {$a$ (sublayer out)};
+\node[font=\normalsize\sffamily] at ($(intg.north west)+(1.0,-1.85)$) (xin) {$x$};
+\node[box=bdr, fill=bdr!6, minimum height=0.85cm, right=0.5cm of xin] (rn) {RMSNorm};
+\node[box=cbBlue, fill=fBlue, minimum height=1.0cm, minimum width=3.4cm,
+      right=1.0cm of rn, yshift=0.7cm] (att) {Windowed Attention};
+\node[box=cbPurple, fill=fPurple, minimum height=1.0cm, minimum width=3.4cm,
+      right=1.0cm of rn, yshift=-0.7cm] (glab) {GLA branch};
+\node[draw=cbOrange!80!black, very thick, circle, fill=fOrange, inner sep=2.5pt,
+      right=2.9cm of att, yshift=-0.7cm, font=\large] (sum) {$+$};
+\node[box=bdr, fill=bdr!6, minimum height=0.85cm, right=0.8cm of sum] (aout) {$a$ (sublayer out)};
 
 \draw[A] (xin) -- (rn);
 \draw[A] (rn.east) |- (att.west);
@@ -89,92 +95,83 @@
 \draw[A] (att.east) -| (sum);
 \draw[A] (glab.east) -| (sum);
 \draw[A] (sum) -- (aout);
-\node[sub, text=cbOrange!70!black, anchor=north east] at ($(intg.north east)+(-0.3,-0.18)$)
-  {$a=\mathrm{attn}(x)+\sigma(g)\cdot\mathrm{GLA}(\mathrm{norm}(x),S)$};
-\node[tiny, text=cbPurple!70!black, anchor=south east] at ($(intg.south east)+(-0.3,0.12)$)
+\node[lbl, text=cbPurple!70!black, anchor=south] at ($(intg.south)+(0,0.18)$)
   {gate $\sigma(g)\!\approx\!0$ at init $\Rightarrow$ branch off (identity to baseline)};
 
 % ════════════════════════════════════════════════════════════════
 % AXIS 1 — recurrence over the SEQUENCE  (the SSM)
 % ════════════════════════════════════════════════════════════════
-\node[draw=cbPurple, very thick, rounded corners=8pt, fill=fPurple, fill opacity=0.16,
-      minimum width=15.2cm, minimum height=4.6cm, anchor=north] at (8.3, 2.2) (ax1) {};
+\node[panel=cbPurple, fill=fPurple, fill opacity=0.16,
+      minimum height=5.0cm, below=0.4cm of intg] (ax1) {};
 \node[font=\normalsize\sffamily\bfseries, text=cbPurple, anchor=north west]
-  at ($(ax1.north west)+(0.25,-0.15)$)
+  at ($(ax1.north west)+(0.3,-0.18)$)
   {Axis 1 --- recurrence over the \emph{sequence}\; (the SSM hidden state)};
-\node[sub, text=bdr, anchor=north west] at ($(ax1.north west)+(0.25,-0.62)$)
+\node[sub, text=bdr, anchor=north west] at ($(ax1.north west)+(0.3,-0.72)$)
   {one layer application scans tokens $t=1\dots S$, evolving the matrix state
    $S\!\in\!\mathbb{R}^{d_k\times d_v}$ per head};
 
-% state chain
-\def\sy{-0.55}
-\node[st] at (2.0,\sy) (S0) {$S_0$};
-\node[st] at (4.6,\sy) (S1) {$S_1$};
-\node[st] at (7.2,\sy) (S2) {$S_2$};
-\node[font=\Large\sffamily\bfseries, text=cbPurple] at (9.3,\sy) (dots) {$\cdots$};
-\node[st] at (11.6,\sy) (ST) {$S_T$};
+% state chain (relative to the panel)
+\node[st] at ($(ax1.north west)+(1.9,-2.55)$) (S0) {$S_0$};
+\node[st, right=1.3cm of S0] (S1) {$S_1$};
+\node[st, right=1.3cm of S1] (S2) {$S_2$};
+\node[font=\Large\sffamily\bfseries, text=cbPurple, right=0.7cm of S2] (dots) {$\cdots$};
+\node[st, right=0.7cm of dots] (ST) {$S_T$};
 
 \foreach \a/\b in {S0/S1, S1/S2, S2/dots, dots/ST}{
   \draw[bigA, cbPurple] (\a) -- (\b);}
-% decay labels on the chain
 \foreach \n in {S1,S2,ST}{
-  \node[sub, text=cbPurple!70!black, above=0.5pt] at ($(\n)+(-1.3,0.55)$)
-    {$\mathrm{diag}(\alpha_t)$};}
+  \node[lbl, text=cbPurple!70!black] at ($(\n)+(-0.65,0.95)$) {$\mathrm{diag}(\alpha_t)$};
+  \draw[A, cbTeal] ($(\n)+(0,-1.15)$) -- ($(\n)+(0,-0.68)$);
+  \node[lbl, text=cbTeal!60!black] at ($(\n)+(0,-1.35)$) {$+\,k_t^{\!\top} v_t$};
+  \draw[A, cbBlue] ($(\n)+(0,0.68)$) -- ($(\n)+(0,1.1)$);
+  \node[lbl, text=cbBlue!70!black] at ($(\n)+(0,1.3)$) {$o_t=q_t S_t$};}
 
-% k^T v inputs (write) below each state
-\foreach \n in {S1,S2,ST}{
-  \draw[A, cbTeal] ($(\n)+(0,-1.05)$) -- ($(\n)+(0,-0.6)$);
-  \node[tiny, text=cbTeal!60!black] at ($(\n)+(0,-1.25)$) {$+\,k_t^{\!\top} v_t$};}
-% q readout (read) above
-\foreach \n in {S1,S2,ST}{
-  \draw[A, cbBlue] ($(\n)+(0,0.6)$) -- ($(\n)+(0,1.0)$);
-  \node[tiny, text=cbBlue!70!black] at ($(\n)+(0,1.18)$) {$o_t=q_t S_t$};}
-
-% the update rule
 \node[box=cbPurple, fill=white, anchor=south west, font=\footnotesize\sffamily, align=left]
-  at ($(ax1.south west)+(0.3,0.2)$) {%
-  $S_t=\mathrm{diag}(\alpha_t)\,S_{t-1}+k_t^{\!\top} v_t$,\quad $o_t=q_t S_t$\\[1pt]
-  forget gate $\alpha_t=\sigma(x_t W_g)\in(0,1)^{d_k}$ \;{\tiny(data-dependent, per key channel)}};
-\node[box=cbTeal, fill=fTeal!40, anchor=south east, font=\tiny\sffamily, align=left]
-  at ($(ax1.south east)+(-0.3,0.2)$) {%
+  at ($(ax1.south west)+(0.35,0.25)$) {%
+  $S_t=\mathrm{diag}(\alpha_t)\,S_{t-1}+k_t^{\!\top} v_t$,\quad $o_t=q_t S_t$\\[2pt]
+  forget gate $\alpha_t=\sigma(x_t W_g)\in(0,1)^{d_k}$ \;{\scriptsize (data-dependent, per key channel)}};
+\node[box=cbTeal, fill=fTeal!40, anchor=south east, font=\scriptsize\sffamily, align=left]
+  at ($(ax1.south east)+(-0.35,0.25)$) {%
   \textbf{kernel:} chunked-parallel scan\\
   fp32 state; $b=\mathrm{cumsum}(\log\alpha)$ clamp $\ge-30$};
 
 % ════════════════════════════════════════════════════════════════
 % AXIS 2 — recurrence over the LOOP  (the cross-iteration carry)
 % ════════════════════════════════════════════════════════════════
-\node[draw=loopC, very thick, rounded corners=8pt, fill=loopC!6,
-      minimum width=15.2cm, minimum height=4.6cm, anchor=north] at (8.3, -2.7) (ax2) {};
+\node[panel=loopC, fill=loopC!6,
+      minimum height=4.4cm, below=0.4cm of ax1] (ax2) {};
 \node[font=\normalsize\sffamily\bfseries, text=loopC, anchor=north west]
-  at ($(ax2.north west)+(0.25,-0.15)$)
+  at ($(ax2.north west)+(0.3,-0.18)$)
   {Axis 2 --- recurrence over the \emph{loop} \;(the cross-iteration carry, \texttt{retention\_carry})};
-\node[sub, text=bdr, anchor=north west] at ($(ax2.north west)+(0.25,-0.62)$)
+\node[sub, text=bdr, anchor=north west] at ($(ax2.north west)+(0.3,-0.72)$)
   {core only: the final sequence state $S_T$ of loop iter $i$ seeds the initial state of iter $i{+}1$
    --- memory across thinking-depth};
 
-\def\ly{-4.75}
-\foreach \i/\x/\lab in {1/2.7/{iter $i$}, 2/7.7/{iter $i{+}1$}, 3/12.7/{iter $i{+}2$}}{
-  \node[draw=loopC, thick, rounded corners=5pt, fill=fBlue!55,
-        minimum width=3.0cm, minimum height=1.5cm, font=\footnotesize\sffamily\bfseries,
-        text=loopC, align=center] at (\x,\ly) (it\i)
-        {core step\\[3pt]{\scriptsize \lab}\\[2pt]{\tiny scan seq $\to S_T$}};}
-% carry arrows between iterations (labels BELOW the arrow, clear of the subtitle)
-\draw[bigA, loopC] (it1.east) -- (it2.west)
-  node[midway, below=1pt, sub, text=loopC]{$S_T\!\to\!S_0$};
-\draw[bigA, loopC] (it2.east) -- (it3.west)
-  node[midway, below=1pt, sub, text=loopC]{$S_T\!\to\!S_0$};
-% BPTT detach note
-\node[box=cbOrange, fill=fOrange!45, anchor=south, font=\tiny\sffamily, align=center,
-      minimum width=6cm] at ($(ax2.south)+(0,0.18)$) {%
+\node[draw=loopC, thick, rounded corners=5pt, fill=fBlue!55,
+      minimum width=3.3cm, minimum height=1.7cm, font=\small\sffamily\bfseries,
+      text=loopC, align=center] at ($(ax2.north west)+(2.4,-2.55)$) (it1)
+      {core step\\[3pt]{\small iter $i$}\\[2pt]{\scriptsize scan seq $\to S_T$}};
+\node[draw=loopC, thick, rounded corners=5pt, fill=fBlue!55,
+      minimum width=3.3cm, minimum height=1.7cm, font=\small\sffamily\bfseries,
+      text=loopC, align=center, right=1.7cm of it1] (it2)
+      {core step\\[3pt]{\small iter $i{+}1$}\\[2pt]{\scriptsize scan seq $\to S_T$}};
+\node[draw=loopC, thick, rounded corners=5pt, fill=fBlue!55,
+      minimum width=3.3cm, minimum height=1.7cm, font=\small\sffamily\bfseries,
+      text=loopC, align=center, right=1.7cm of it2] (it3)
+      {core step\\[3pt]{\small iter $i{+}2$}\\[2pt]{\scriptsize scan seq $\to S_T$}};
+\draw[bigA, loopC] (it1.east) -- (it2.west) node[midway, below=1pt, sub, text=loopC]{$S_T\!\to\!S_0$};
+\draw[bigA, loopC] (it2.east) -- (it3.west) node[midway, below=1pt, sub, text=loopC]{$S_T\!\to\!S_0$};
+\node[box=cbOrange, fill=fOrange!45, anchor=south, font=\scriptsize\sffamily, align=center,
+      minimum width=8cm] at ($(ax2.south)+(0,0.22)$) {%
   no-grad iterations carry a \emph{detached} state (truncated BPTT, last 4 iters)\;$\bullet$\;
   \texttt{retention\_carry=false} $\Rightarrow$ reset each iter (Axis 1 only)};
 
 % ════════════════════════════════════════════════════════════════
-% FOOT NOTE — the conceptual crux
+% FOOTER — the conceptual crux
 % ════════════════════════════════════════════════════════════════
 \node[draw=bdr!60, thick, rounded corners=6pt, fill=bdr!4, anchor=north,
-      minimum width=15.2cm, inner sep=8pt, align=left, font=\scriptsize\sffamily, text=bdr]
-  at ($(ax2.south)+(0,-0.35)$) {%
+      text width=15.0cm, inner sep=9pt, align=left, font=\footnotesize\sffamily, text=bdr,
+      below=0.4cm of ax2] {%
   \textbf{Two recurrences, one is standard SSM.}\;
   Axis 1 (over the sequence) \emph{is} the linear-attention/SSM hidden state --- always on.
   Axis 2 (over the loop) is MORPH-specific and \emph{optional}: it adds a second recurrence over
