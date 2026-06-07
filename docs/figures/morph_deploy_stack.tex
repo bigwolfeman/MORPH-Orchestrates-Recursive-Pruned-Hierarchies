@@ -148,7 +148,7 @@
 % RIGHT PANEL — train-time / inference-time overlays
 % =====================================================================
 
-\node[panel=bdr, anchor=west, text width=4.5cm] at ($(core.east)+(3.6,0.55)$) (opt) {
+\node[panel=bdr, anchor=west, text width=4.5cm] at ($(core.east)+(3.6,0)$) (opt) {
   \textbf{\textcolor{bdr}{Optimizer (training)}}\\[2pt]
   8-bit AdamW (bitsandbytes)\\
   {\tiny state $m,v \to$ uint8; embed state forced fp32}};
@@ -163,7 +163,7 @@
 \node[draw=bdr, rounded corners=6pt, fill=fGray!25, inner sep=9pt,
       align=left, font=\scriptsize\sffamily, text width=14.8cm,
       below=1.0cm of inp, anchor=north] (leg) {
-  \textbf{Precision legend} \;(text label is authoritative; color is secondary):\quad
+  \textbf{Precision legend} \;(text label is authoritative; color is secondary):\\[2pt]
   \tikz\node[badge=pInt6, inner sep=2pt]{int6};~embeddings \;\;
   \tikz\node[badge=pTern, inner sep=2pt]{ternary};~backbone MLP \;\;
   \tikz\node[badge=pBf16, inner sep=2pt]{bf16};~attn / norms / Lorentz / HC / GLA};

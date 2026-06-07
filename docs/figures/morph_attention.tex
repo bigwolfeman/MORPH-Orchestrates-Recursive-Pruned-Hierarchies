@@ -8,13 +8,18 @@
 %   - _CCABase shared prologue: W_down_q 768->384, W_down_k 768->128 (C=2, d_head=32);
 %     depthwise+head-grouped causal conv (k=4); QK-mean couple; QK-RMSNorm; key temp
 %     exp() (per kv head); CoPE (clipped-RoPE); GQA expand 4->12; value-shift.
-%   - Window branch (always): sliding causal, w=128, XSA (self excluded), fused.
-%   - Global-compressed slot resolved at __init__ by GLOBAL layer_idx parity:
+%   - Window branch = LOCAL, per-token (always): sliding causal, w=128, XSA (self
+%     excluded), fused. NOTE: MAC suffix (n_skip_rope) is DORMANT API leftover from
+%     TitanMAC -- transformer.py never sets n_skip_rope (defaults 0), so it is OFF in MORPH.
+%   - Global-compressed slot = GLOBAL, per-block; resolved at __init__ by GLOBAL layer_idx parity:
 %       even -> CSA: two-stream pool m=4 -> Lightning Indexer (-inf before relu)
 %               -> top_k=128 select -> on-the-fly gather + invalid-mask -> flash.
 %       odd  -> HCA: single-stream pool m=128 -> DENSE attn over all blocks + early-q guard.
+%     Per-head sigmoid gate blends the LOCAL (per-token) and GLOBAL (per-block) branches.
 %   - Combine: per-head sigmoid gate (2 wts/head) blends; + residual-alpha (q_lat);
-%     + learnable per-head sinks; W_up 384->768.  CLA = dashed optional (default off).
+%     + learnable per-head sinks; W_up 384->768.
+%   - CLA (cla_kv path): cross-iter KV reuse. base/local = OFF (slight ppl regression at
+%     d=768); cloud.yaml = ON (net-positive at d=2048). Drawn as a dashed loop-opt overlay.
 % Compile: pdflatex morph_attention.tex
 
 \documentclass[border=14pt]{standalone}
@@ -89,77 +94,82 @@
 % =====================================================================
 \def\busy{2.45}
 \draw[rail] (qkv.north) |- (-3.7,\busy);
-\node[sub, text=ccaC, anchor=south] at (5.6,\busy) {$q,k,v\;[B,12,S,32]$ \;(broadcast to both branches)};
+% label starts right of the slot riser (x=3.75) so the line never cuts through the text
+\node[sub, text=ccaC, anchor=south west] at (4.25,\busy) {$q,k,v\;[B,12,S,32]$ \;(broadcast to both branches)};
 
 % =====================================================================
 % BAND 2 (middle) — two attention branches
 % =====================================================================
 % LEFT: window branch
 \node[Bx, fill=fOrange, draw=cbOrange!85!black, line width=1pt,
-      minimum width=3.5cm, minimum height=2.0cm, anchor=south] (win) at (-3.2,3.15) {
-  \textbf{Window branch}\\[2pt]
-  {\scriptsize sliding causal, $w{=}128$}\\[1pt]
-  {\scriptsize \textbf{XSA}: self-token excluded}\\[1pt]
-  {\scriptsize MAC suffix ($n_\mathrm{skip}$): skip}\\[-2pt]
-  {\scriptsize CoPE, globally visible}};
-\node[tny, text=cbOrange!75!black, anchor=north] at (win.south) {fused window kernel};
+      minimum width=3.9cm, minimum height=2.45cm, anchor=south] (win) at (-3.2,3.4) {
+  \textbf{Window branch}\;{\footnotesize(LOCAL)}\\[3pt]
+  {\scriptsize \textbf{per-token} attention over}\\[-2pt]
+  {\scriptsize the recent $w{=}128$ tokens}\\[2pt]
+  {\scriptsize \textbf{XSA}: self-token excluded}\\[2pt]
+  {\scriptsize $\rightarrow$ fine / recent detail}\\[3pt]
+  {\tiny\itshape fused window kernel}};
 
-% RIGHT: global-compressed slot (the alternation container)
+% RIGHT: global-compressed slot (the alternation container) — roomy
 \node[draw=cbGray, densely dashed, very thick, rounded corners=7pt, fill=cbGray!4,
-      minimum width=6.7cm, minimum height=4.05cm, anchor=south] (slot) at (3.7,3.0) {};
-\node[tny, text=cbGray, anchor=north east] at ($(slot.north east)+(-0.14,-0.1)$)
-  {global slot \;$\cdot$\; \textbf{1 active / layer}};
+      minimum width=7.9cm, minimum height=4.45cm, anchor=south] (slot) at (3.75,3.0) {};
+\node[tny, text=cbGray, anchor=north east] at ($(slot.north east)+(-0.18,-0.14)$)
+  {\textbf{GLOBAL} $\cdot$ per-block $\cdot$ \textbf{1 active / layer}};
 % shared pooler at the bottom
-\node[gs, fill=fGray!55, minimum width=6.0cm] (pool) at (3.7,3.5) {
+\node[gs, fill=fGray!55, minimum width=6.9cm] (pool) at (3.75,3.5) {
   pool $\to C_\mathrm{comp}$ (RMSNorm)\;$\cdot$\; CSA $m{=}4$ (2-stream) / HCA $m{=}128$};
-% CSA column (left, EVEN layers) — purple
-\node[gs, fill=fPurple, draw=cbPurple, minimum width=2.9cm] (csa1) at (2.05,4.40) {indexer: $-\infty$ \emph{before} relu};
-\node[gs, fill=fPurple, draw=cbPurple, minimum width=2.9cm] (csa2) at (2.05,5.10) {top-$k{=}128$ $+$ invalid-mask};
-\node[gs, fill=fPurple, draw=cbPurple, minimum width=2.9cm] (csa3) at (2.05,5.80) {gather $\to$ flash ($+$sink)};
-\node[sub, text=cbPurple!75!black, anchor=south] at (csa3.north) {\textbf{CSA}\,$\cdot$\,even};
-% HCA column (right, ODD layers) — green
-\node[gs, fill=fTeal, draw=cbTeal, minimum width=2.9cm, minimum height=1.05cm] (hca) at (5.4,5.10)
-  {dense softmax over\\ \emph{all} blocks $+$ early-q guard};
-\node[sub, text=cbTeal!55!black, anchor=south] at (hca.north) {\textbf{HCA}\,$\cdot$\,odd};
-% pool feeds both columns; csa flows up; both merge to ONE o_comp exit (only one runs/layer)
-\draw[As, cbPurple] (pool.north) to[out=128,in=-90] (csa1.south);
-\draw[As, cbTeal]   (pool.north) to[out=52,in=-90]  (hca.south);
+% CSA column (left, EVEN layers) — purple; generous vertical pitch
+\node[gs, fill=fPurple, draw=cbPurple, minimum width=3.0cm] (csa1) at (1.80,4.50) {indexer: $-\infty$ \emph{before} relu};
+\node[gs, fill=fPurple, draw=cbPurple, minimum width=3.0cm] (csa2) at (1.80,5.35) {top-$k{=}128$ $+$ invalid-mask};
+\node[gs, fill=fPurple, draw=cbPurple, minimum width=3.0cm] (csa3) at (1.80,6.20) {gather $\to$ flash ($+$sink)};
+% HCA box (right, ODD layers) — green, vertically aligned to the CSA column
+\node[gs, fill=fTeal, draw=cbTeal, minimum width=3.0cm, minimum height=2.36cm] (hca) at (5.70,5.35)
+  {dense softmax\\[1pt] over \emph{all} blocks\\[1pt] $+$ early-q guard};
+% column header tags (outer corners, off the central merge risers)
+\node[sub, text=cbPurple!75!black, anchor=south west] at ($(csa3.north west)+(0.04,0.06)$) {\textbf{CSA}\,$\cdot$\,even};
+\node[sub, text=cbTeal!55!black, anchor=south east] at ($(hca.north east)+(-0.04,0.06)$) {\textbf{HCA}\,$\cdot$\,odd};
+% pool forks to both paths
+\draw[As, cbPurple] (pool.north) -- (csa1.south);
+\draw[As, cbTeal]   (pool.north) -- (hca.south);
+% CSA path flows up
 \draw[As, cbPurple] (csa1) -- (csa2);
 \draw[As, cbPurple] (csa2) -- (csa3);
-\node[circle, draw=bdr, fill=bdr, inner sep=1.1pt] (mrg) at (3.7,6.55) {};
-\draw[As, cbPurple] (csa3.east) to[out=0,in=200] (mrg);
-\draw[As, cbTeal]   (hca.north) to[out=90,in=-20] (mrg);
+% both paths merge into ONE o_comp exit (only one runs/layer). Risers leave from the
+% INNER top corners into the central gap, so the outer corners stay free for the labels.
+\node[circle, draw=bdr, fill=bdr, inner sep=1.1pt] (mrg) at (3.75,6.95) {};
+\draw[As, cbPurple] (csa3.north east) |- (mrg);
+\draw[As, cbTeal]   (hca.north west)  |- (mrg);
 
 % rail risers into the two branches
 \draw[A, ccaC] (-3.2,\busy) -- (win.south);
-\draw[A, ccaC] (3.7,\busy) -- (slot.south);
+\draw[A, ccaC] (3.75,\busy) -- (slot.south);
 
 % =====================================================================
 % BAND 3 (top) — combine + up-project + output
 % =====================================================================
 \node[Bx, fill=cbBlue!8, draw=cbBlue, line width=1pt, minimum width=8.4cm,
-      minimum height=1.5cm, anchor=south] (comb) at (0.4,7.35) {
+      minimum height=1.5cm, anchor=south] (comb) at (0.4,7.9) {
   \textbf{Gate blend $+$ residual-$\alpha$ $+$ sinks}\\[2pt]
   {\scriptsize per-head sigmoid gate MLP 768$\to$192$\to$24 (2 wts/head): $g_c\,o_\mathrm{comp}+g_w\,o_\mathrm{win}$}\\[1pt]
   {\scriptsize $+\;\alpha_h\!\cdot\!$residual$(q_\mathrm{lat})$ \quad$+$\quad learnable per-head attention-sink logits}};
 \draw[A] (win.north) -- ([xshift=-2.6cm]comb.south)
-  node[pos=0.55, left=1pt, sub, text=cbOrange!80!black]{$o_\mathrm{win}$};
+  node[pos=0.5, left=1pt, sub, text=cbOrange!80!black]{$o_\mathrm{win}$ \,{\tiny(local)}};
 \draw[A] (mrg) -- ([xshift=2.4cm]comb.south)
-  node[pos=0.55, right=1pt, sub, text=cbPurple]{$o_\mathrm{comp}$};
+  node[pos=0.78, right=2pt, sub, text=cbPurple]{$o_\mathrm{comp}$ \,{\tiny(global)}};
 \node[Bx, fill=fGray, minimum width=4.4cm, minimum height=0.7cm, above=0.5cm of comb] (wup)
   {$W_{\uparrow}$: 384 $\to$ 768};
 \draw[A] (comb) -- (wup);
 \node[io, above=0.42cm of wup] (out) {attn out $[B,S,768]$ \;$\to$\; block residual};
 \draw[A] (wup) -- (out);
 
-% ── CLA optional overlay (default off) — upper-left dead space ──
+% ── CLA loop-level optimization (cloud-default; off locally) — upper-left dead space ──
 \node[draw=cbGray, densely dashed, rounded corners=5pt, fill=cbGray!5,
-      text width=4.0cm, font=\tiny\sffamily, align=left, inner sep=6pt, text=bdr]
-      at (-7.6,5.6) (cla) {%
-  \textbf{optional $\cdot$ CLA} (default off)\\[1pt]
-  cache $k,v,C_\mathrm{comp}$ at the 1st grad iteration; later loop iters recompute
-  \emph{$q$ only} and reuse the bundle.};
-\draw[Ad, cbGray] (cla.south) to[out=-90,in=180] (-3.7,\busy);
+      text width=4.2cm, font=\tiny\sffamily, align=left, inner sep=6pt, text=bdr]
+      at (-7.5,4.85) (cla) {%
+  \textbf{CLA} {\normalfont(cloud-default $\cdot$ off locally)}\\[1pt]
+  \emph{across core-loop iterations}: reuse the cached $k,v,C_\mathrm{comp}$ and
+  recompute $q$ only (the rail is computed once, then shared).};
+\draw[Ad, cbGray] (cla.south) -- (-3.7,\busy);
 
 % =====================================================================
 % BOTTOM — facts / notation panel
@@ -180,7 +190,7 @@
   \;\textbf{Notation:} $H{=}12$ q-heads, $H_{kv}{=}4$ kv (GQA $\times3$), $C{=}2$, $d_\mathrm{head}{=}32$, $n_\mathrm{blk}{=}S/m$. \;Color secondary — every box is text-labeled.};
 
 % ── Title ────────────────────────────────────────────────────────────
-\node[font=\Large\sffamily\bfseries, anchor=south] (ttl) at (0,11.45)
+\node[font=\Large\sffamily\bfseries, anchor=south] (ttl) at (0,12.55)
   {MORPH Attention --- Triple-Axis Compression};
 \node[sub, text=bdr, anchor=north, below=0.1cm of ttl]
   {a shared CCA channel-compress front-end feeds a local window $\Vert$ one global-compressed branch (CSA\,/\,HCA), blended by a per-head gate};
