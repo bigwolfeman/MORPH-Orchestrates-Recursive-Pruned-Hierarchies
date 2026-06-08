@@ -216,9 +216,6 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         hc_use_kernel=bool(getattr(m, "hc_use_kernel", True)),
         carrier_engine=bool(getattr(m, "carrier_engine", False)),
         l2_persist=bool(getattr(m, "l2_persist", False)),
-        loop_ssm_selective=bool(getattr(m, "loop_ssm_selective", False)),
-        loop_ssm_channels=str(getattr(m, "loop_ssm_channels", "context")),
-        loop_ssm_drive=str(getattr(m, "loop_ssm_drive", "input")),
         dropout=float(tr.dropout),
     )
 

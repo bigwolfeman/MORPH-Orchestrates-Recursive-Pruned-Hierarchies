@@ -1,6 +1,0 @@
-# Arm 0 — baseline (static, context-only, input-driven). == current DiagonalInjection.
-defaults:
-  - ssm_base
-  - _self_
-wandb:
-  name: ssm_baseline_b4_15k

@@ -1,8 +1,0 @@
-# Arm A — selective: A,dt input-dependent (Mamba/S6 selectivity on the loop axis).
-defaults:
-  - ssm_base
-  - _self_
-model:
-  loop_ssm_selective: true
-wandb:
-  name: ssm_selective_b4_15k

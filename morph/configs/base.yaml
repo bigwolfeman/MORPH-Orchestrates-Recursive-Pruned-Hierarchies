@@ -71,15 +71,6 @@ model:
   hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda). false ⇒ eager refs (bit-faithful,
                            # slower) — the reference arm for the fused-vs-eager parity A/B.
 
-  # ── Loop-axis SSM ablation (#232) — Ai-notes/06-07-2026/MORPH-LoopSSM-Ablation/design.md ──
-  # The outer loop's injection IS a diagonal LTI SSM over the iteration axis
-  # (h_ctx ← A·h_ctx + dt·e_ctx, spectral radius < 1, on the 256-d context channel). These knobs
-  # generalise it. ALL default to baseline and are IDENTITY AT INIT → defaults are bit-identical
-  # to today; a fresh arm run starts exactly at the validated baseline and diverges only by learning.
-  loop_ssm_selective: false      # arm A: make A,dt input-dependent (Mamba/S6 selectivity on loop axis)
-  loop_ssm_channels: "context"   # arm B: SSM slice — context | compute_context | full
-  loop_ssm_drive: "input"        # arm C: drive — input (const e) | trajectory (+ prior compute output)
-
 training:
   steps: 100000
   batch_size: 4

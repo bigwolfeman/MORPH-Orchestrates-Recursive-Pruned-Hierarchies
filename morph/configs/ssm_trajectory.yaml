@@ -1,8 +1,0 @@
-# Arm C — trajectory: drive the SSM with the loop's own prior compute-channel output (+ const e).
-defaults:
-  - ssm_base
-  - _self_
-model:
-  loop_ssm_drive: trajectory
-wandb:
-  name: ssm_trajectory_b4_15k
