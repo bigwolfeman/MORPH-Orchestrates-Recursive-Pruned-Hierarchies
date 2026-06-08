@@ -1,0 +1,8 @@
+# Optional — widen to the FULL hidden state (768 dims).
+defaults:
+  - ssm_base
+  - _self_
+model:
+  loop_ssm_channels: full
+wandb:
+  name: ssm_widen_full_b4_15k

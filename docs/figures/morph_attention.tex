@@ -5,9 +5,9 @@
 % Detail lives in EXACTLY one place (no summary-box + inset duplication).
 %
 % Verified against code (2026-06-07, morph/model/attention.py + transformer.py:322-354):
-%   - _CCABase shared prologue: W_down_q 768->384, W_down_k 768->128 (C=2, d_head=32);
+%   - _CCABase shared prologue: W_down_q d->d/2, W_down_k d->H_kv*d_h (C=2, d_h=d/(C*H));
 %     depthwise+head-grouped causal conv (k=4); QK-mean couple; QK-RMSNorm; key temp
-%     exp() (per kv head); CoPE (clipped-RoPE); GQA expand 4->12; value-shift.
+%     exp() (per kv head); CoPE (clipped-RoPE); GQA expand H_kv->H; value-shift.
 %   - Window branch = LOCAL, per-token (always): sliding causal, w=128, XSA (self
 %     excluded), fused. NOTE: MAC suffix (n_skip_rope) is DORMANT API leftover from
 %     TitanMAC -- transformer.py never sets n_skip_rope (defaults 0), so it is OFF in MORPH.
@@ -17,7 +17,7 @@
 %       odd  -> HCA: single-stream pool m=128 -> DENSE attn over all blocks + early-q guard.
 %     Per-head sigmoid gate blends the LOCAL (per-token) and GLOBAL (per-block) branches.
 %   - Combine: per-head sigmoid gate (2 wts/head) blends; + residual-alpha (q_lat);
-%     + learnable per-head sinks; W_up 384->768.
+%     + learnable per-head sinks; W_up d/2->d.
 %   - CLA (cla_kv path): cross-iter KV reuse. base/local = OFF (slight ppl regression at
 %     d=768); cloud.yaml = ON (net-positive at d=2048). Drawn as a dashed loop-opt overlay.
 % Compile: pdflatex morph_attention.tex
@@ -72,12 +72,12 @@
 % =====================================================================
 \def\sy{0.3}
 \node[io] (xin) at (-10.5,\sy) {$x$};
-\node[sb] (s1) at (-8.0,\sy) {$W_{\downarrow}\,q,k$\\[-1pt]768$\to$384\,/\,128};
+\node[sb] (s1) at (-8.0,\sy) {$W_{\downarrow}\,q,k$\\[-1pt]$d\to d/2,\,H_{kv}d_h$};
 \node[sb] (s2) at (-5.35,\sy) {causal conv\\[-1pt]dw$\to$grp ($k{=}4$)};
 \node[sb] (s3) at (-2.70,\sy) {QK-mean\\[-1pt]$q{+}{=}\tfrac12(q{+}k)$};
 \node[sb] (s4) at (-0.05,\sy) {QK-RMSNorm\\[-1pt]key temp $e^{\tau}$};
 \node[sb] (s5) at (2.60,\sy) {CoPE\\[-1pt]clipped-RoPE};
-\node[sb] (s6) at (5.25,\sy) {GQA expand\\[-1pt]4$\to$12 heads};
+\node[sb] (s6) at (5.25,\sy) {GQA expand\\[-1pt]$H_{kv}\to H$ heads};
 \node[sb] (s7) at (7.90,\sy) {value-shift\\[-1pt]$[x_t\Vert x_{t-1}]$};
 \node[io] (qkv) at (10.4,\sy) {$q,k,v$};
 \foreach \a/\b in {xin/s1,s1/s2,s2/s3,s3/s4,s4/s5,s5/s6,s6/s7,s7/qkv}{\draw[As] (\a)--(\b);}
@@ -87,7 +87,7 @@
 \end{scope}
 \node[font=\small\sffamily\bfseries, text=cbBlue, anchor=south west]
   at ($(STRIP.north west)+(0.05,0.03)$)
-  {CCA prologue \;{\footnotesize(shared \_CCABase $\cdot$ channel-compress $C{=}2$ $\cdot$ $d_\mathrm{head}{=}32$)}};
+  {CCA prologue \;{\footnotesize(shared \_CCABase $\cdot$ channel-compress $C{=}2$ $\cdot$ $d_h{=}d/(C H)$)}};
 
 % =====================================================================
 % q,k,v broadcast rail (compute once, feed both branches)
@@ -95,7 +95,7 @@
 \def\busy{2.45}
 \draw[rail] (qkv.north) |- (-3.7,\busy);
 % label starts right of the slot riser (x=3.75) so the line never cuts through the text
-\node[sub, text=ccaC, anchor=south west] at (4.25,\busy) {$q,k,v\;[B,12,S,32]$ \;(broadcast to both branches)};
+\node[sub, text=ccaC, anchor=south west] at (4.25,\busy) {$q,k,v\;[B,H,S,d_h]$ \;(broadcast to both branches)};
 
 % =====================================================================
 % BAND 2 (middle) — two attention branches
@@ -150,16 +150,16 @@
 \node[Bx, fill=cbBlue!8, draw=cbBlue, line width=1pt, minimum width=8.4cm,
       minimum height=1.5cm, anchor=south] (comb) at (0.4,7.9) {
   \textbf{Gate blend $+$ residual-$\alpha$ $+$ sinks}\\[2pt]
-  {\scriptsize per-head sigmoid gate MLP 768$\to$192$\to$24 (2 wts/head): $g_c\,o_\mathrm{comp}+g_w\,o_\mathrm{win}$}\\[1pt]
+  {\scriptsize per-head sigmoid gate MLP $d\to d/4\to 2H$ (2 wts/head): $g_c\,o_\mathrm{comp}+g_w\,o_\mathrm{win}$}\\[1pt]
   {\scriptsize $+\;\alpha_h\!\cdot\!$residual$(q_\mathrm{lat})$ \quad$+$\quad learnable per-head attention-sink logits}};
 \draw[A] (win.north) -- ([xshift=-2.6cm]comb.south)
   node[pos=0.5, left=1pt, sub, text=cbOrange!80!black]{$o_\mathrm{win}$ \,{\tiny(local)}};
 \draw[A] (mrg) -- ([xshift=2.4cm]comb.south)
   node[pos=0.78, right=2pt, sub, text=cbPurple]{$o_\mathrm{comp}$ \,{\tiny(global)}};
 \node[Bx, fill=fGray, minimum width=4.4cm, minimum height=0.7cm, above=0.5cm of comb] (wup)
-  {$W_{\uparrow}$: 384 $\to$ 768};
+  {$W_{\uparrow}$: $d/2 \to d$};
 \draw[A] (comb) -- (wup);
-\node[io, above=0.42cm of wup] (out) {attn out $[B,S,768]$ \;$\to$\; block residual};
+\node[io, above=0.42cm of wup] (out) {attn out $[B,S,d]$ \;$\to$\; block residual};
 \draw[A] (wup) -- (out);
 
 % ── CLA loop-level optimization (cloud-default; off locally) — upper-left dead space ──
@@ -183,11 +183,9 @@
   \tikz\node[draw=cbTeal,fill=fTeal,rounded corners=2pt,inner sep=1.5pt,font=\tiny\sffamily]{dense};\,HCA all $S/128$ blocks \;\;
   \tikz\node[draw=cbOrange,fill=fOrange,rounded corners=2pt,inner sep=1.5pt,font=\tiny\sffamily]{local};\,window $w{=}128$.\\[3pt]
   \textbf{CSA/HCA alternate} on the \emph{global} layer index (even$\to$CSA, odd$\to$HCA), baked at \texttt{\_\_init\_\_} —
-  a looped core layer keeps its variant on every iteration (\emph{not} iteration-conditioned).
-  \;Causal-leak fix: indexer masks future blocks to $-\infty$ \emph{before} relu, \emph{and} re-checks validity after gather.\\[3pt]
-  \textbf{Combine:} per-head sigmoid gate $\to$ 2 weights (compressed, window); residual-$\alpha$ adds the down-projected $q_\mathrm{lat}$ back;
-  attention sinks $=$ a learnable per-head logit on the compressed softmax. \;Fused Triton: CCA prologue, conv, window, CSA, HCA (each fwd/grad-exact).
-  \;\textbf{Notation:} $H{=}12$ q-heads, $H_{kv}{=}4$ kv (GQA $\times3$), $C{=}2$, $d_\mathrm{head}{=}32$, $n_\mathrm{blk}{=}S/m$. \;Color secondary — every box is text-labeled.};
+  a looped core layer keeps its variant on every iteration (\emph{not} iteration-conditioned).\\[3pt]
+  \textbf{Fused Triton:} CCA prologue, conv, window, CSA, HCA (each fwd/grad-exact).
+  \;\textbf{Notation:} $d$ model dim, $H$ q-heads, $H_{kv}$ kv-heads (GQA), channel-compress $C{=}2$, $d_h{=}d/(C H)$, latent\,$q{=}d/2$, $n_\mathrm{blk}{=}S/m$. \;Color secondary — every box is text-labeled.};
 
 % ── Title ────────────────────────────────────────────────────────────
 \node[font=\Large\sffamily\bfseries, anchor=south] (ttl) at (0,12.55)

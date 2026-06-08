@@ -1,0 +1,8 @@
+# Arm B — widen: SSM runs over compute+context (640 dims) instead of context-only (256).
+defaults:
+  - ssm_base
+  - _self_
+model:
+  loop_ssm_channels: compute_context
+wandb:
+  name: ssm_widen_cc_b4_15k

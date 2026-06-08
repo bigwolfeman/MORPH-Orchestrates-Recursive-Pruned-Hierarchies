@@ -1,0 +1,10 @@
+# Optional — all three arms ON (selective + full widen + trajectory). Confounded; run last.
+defaults:
+  - ssm_base
+  - _self_
+model:
+  loop_ssm_selective: true
+  loop_ssm_channels: full
+  loop_ssm_drive: trajectory
+wandb:
+  name: ssm_all_b4_15k

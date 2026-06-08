@@ -145,32 +145,113 @@ class MORPHConfig:
     # hint); cc8.0+. Default off. (Mechanism proven -19.6% isolated; model benefit measured.)
     l2_persist: bool = False
 
+    # ── Loop-axis SSM ablation (#232) — Ai-notes/06-07-2026/MORPH-LoopSSM-Ablation/design.md.
+    # The outer loop's injection IS a diagonal LTI SSM over the iteration axis
+    # (h_ctx ← A·h_ctx + dt·e_ctx, spectral radius < 1). These knobs generalise it; ALL default
+    # to the baseline and are IDENTITY AT INIT, so defaults are bit-identical to today and a
+    # fresh arm run starts exactly at the validated baseline, diverging only through learning.
+    loop_ssm_selective: bool = False     # arm A: A,dt input-dependent (Mamba/S6 selectivity on loop axis)
+    loop_ssm_channels: str = "context"   # arm B: SSM slice — context | compute_context | full
+    loop_ssm_drive: str = "input"        # arm C: drive — input (const e) | trajectory (+ prior compute output)
+
     # Training
     dropout: float = 0.1
 
 
-class DiagonalInjection(nn.Module):
-    """SSM-style diagonal injection on the context channel only.
+class LoopSSM(nn.Module):
+    """Diagonal SSM over the OUTER LOOP axis (loop iteration = time).
 
-    h_ctx = decay * h_ctx + dt * e_ctx
-    Spectral radius < 1 guaranteed by construction.
+    Baseline (selective=False, channels="context", drive="input") is byte-identical to the
+    original ``DiagonalInjection`` — on the context slice ``[ctx_start:ctx_end]``::
+
+        h_ctx <- A * h_ctx + dt * e_ctx     A = exp(log_A).clamp(max=0.9999), dt = exp(log_dt)
+
+    Spectral radius < 1 by construction (the clamp). Keeps the SAME param names
+    (``log_A``, ``log_dt``) so existing checkpoints load strict and the default forward is
+    bit-for-bit unchanged.
+
+    Three orthogonal ablation arms (#232), each ZERO-INIT to identity so a fresh run starts
+    EXACTLY at the baseline and only diverges through learning
+    (Ai-notes/06-07-2026/MORPH-LoopSSM-Ablation/design.md):
+
+      selective : A, dt become input-dependent — Mamba/S6 selectivity on the loop axis.
+                  A = exp(log_A) * exp(W_a(h_s)); dt = exp(log_dt) * exp(W_dt(h_s)); W_* init 0.
+      channels  : widen the SSM slice — "context" | "compute_context" | "full". Extra channels
+                  are gated in (per-channel gate, init 1 on the original ctx sub-range, 0 else).
+      drive     : "input" (constant e_ctx) | "trajectory" (+ B(compute channel of the carried
+                  h) — the loop's own prior computation feeds the context memory; B init 0).
     """
 
-    def __init__(self, channel_start: int, channel_end: int, init_decay: float = 0.447):
+    def __init__(self, ctx_start: int, ctx_end: int, comp_start: int, comp_end: int,
+                 d_model: int, *, selective: bool = False, channels: str = "context",
+                 drive: str = "input", init_decay: float = 0.447):
         super().__init__()
-        self.start = channel_start
-        self.end = channel_end
-        d = channel_end - channel_start
-        self.log_A = nn.Parameter(torch.full((d,), float(init_decay)).log())
-        self.log_dt = nn.Parameter(torch.zeros(d))
+        if channels == "context":
+            lo, hi = ctx_start, ctx_end
+        elif channels == "compute_context":
+            lo, hi = comp_start, ctx_end
+        elif channels == "full":
+            lo, hi = 0, d_model
+        else:
+            raise ValueError(f"unknown loop_ssm_channels {channels!r}")
+        self.lo, self.hi = lo, hi
+        self.comp_start, self.comp_end = comp_start, comp_end
+        self.selective = selective
+        self.channels = channels
+        self.drive = drive
+        w = hi - lo
+
+        # Base diagonal SSM params — identical names/semantics to DiagonalInjection.
+        self.log_A = nn.Parameter(torch.full((w,), float(init_decay)).log())
+        self.log_dt = nn.Parameter(torch.zeros(w))
+
+        # Arm B (widen): per-channel gate, 1 on the original ctx sub-range, 0 elsewhere →
+        # widened channels are identity at init. No gate in the "context" baseline (keeps the
+        # state-dict byte-identical to today).
+        if channels != "context":
+            g = torch.zeros(w)
+            g[ctx_start - lo: ctx_end - lo] = 1.0
+            self.gate = nn.Parameter(g)
+        else:
+            self.gate = None
+
+        # Arm A (selective): zero-init weights → exp(0)=1 → A,dt unchanged at init (identity).
+        if selective:
+            self.W_a = nn.Linear(w, w, bias=False)
+            self.W_dt = nn.Linear(w, w, bias=False)
+            nn.init.zeros_(self.W_a.weight)
+            nn.init.zeros_(self.W_dt.weight)
+        else:
+            self.W_a = None
+            self.W_dt = None
+
+        # Arm C (trajectory): drive += B(compute channel). Zero-init → drive == e_ctx (identity).
+        if drive == "trajectory":
+            self.B = nn.Linear(comp_end - comp_start, w, bias=False)
+            nn.init.zeros_(self.B.weight)
+        elif drive == "input":
+            self.B = None
+        else:
+            raise ValueError(f"unknown loop_ssm_drive {drive!r}")
 
     def forward(self, h: Tensor, e: Tensor) -> Tensor:
-        A = self.log_A.exp().clamp(max=0.9999)
+        lo, hi = self.lo, self.hi
+        h_s = h[..., lo:hi]
+        drive = e[..., lo:hi]
+        if self.B is not None:
+            drive = drive + self.B(h[..., self.comp_start:self.comp_end])
+        A = self.log_A.exp()
         dt = self.log_dt.exp()
-        h_ctx = h[..., self.start:self.end]
-        e_ctx = e[..., self.start:self.end]
-        new_ctx = A * h_ctx + dt * e_ctx
-        return torch.cat([h[..., :self.start], new_ctx, h[..., self.end:]], dim=-1)
+        if self.W_a is not None:
+            A = A * self.W_a(h_s).exp()
+            dt = dt * self.W_dt(h_s).exp()
+        A = A.clamp(max=0.9999)
+        ssm = A * h_s + dt * drive
+        if self.gate is not None:
+            new_s = (1.0 - self.gate) * h_s + self.gate * ssm
+        else:
+            new_s = ssm
+        return torch.cat([h[..., :lo], new_s, h[..., hi:]], dim=-1)
 
 
 def _make_swiglu(d_model: int, d_ff: int, dropout: float,
@@ -308,7 +389,14 @@ class MORPHTransformer(nn.Module):
 
         # ── Loop state transition ─────────────────────────────────────
         self.input_norm = RMSNorm(d)
-        self.injection = DiagonalInjection(self._ctx_start, self._ctx_end)
+        self.injection = LoopSSM(
+            self._ctx_start, self._ctx_end,
+            self._ch_starts[0], self._ch_ends[0],   # compute channel (trajectory drive source)
+            d,
+            selective=cfg.loop_ssm_selective,
+            channels=cfg.loop_ssm_channels,
+            drive=cfg.loop_ssm_drive,
+        )
 
         # ── Core (shared across loop iterations — Block-ELL for CMS pruning)
         self.core = nn.ModuleList([

@@ -61,7 +61,7 @@
 
 % ── HC stream expansion ──────────────────────────────────────────────
 \node[Bs, fill=hcC!12, draw=hcC, above=0.32cm of drp] (exp) {
-  Expand to $n{=}4$ HC streams \;{\scriptsize carrier $[B,S,4,768]$}};
+  Expand to $n{=}4$ HC streams \;{\scriptsize carrier $[B,S,4,d]$}};
 \draw[A] (drp) -- (exp);
 
 % ── PRELUDE ──────────────────────────────────────────────────────────
@@ -132,7 +132,7 @@
 
 % ── HC collapse + head ───────────────────────────────────────────────
 \node[Bs, fill=hcC!12, draw=hcC, above=0.4cm of DG] (col) {
-  Mean over HC streams \;{\scriptsize $[B,S,4,768]\to[B,S,768]$}};
+  Mean over HC streams \;{\scriptsize $[B,S,4,d]\to[B,S,d]$}};
 \draw[A] (dm) -- (col);
 
 \node[B, fill=fYellow!55, above=0.4cm of col] (mix) {
