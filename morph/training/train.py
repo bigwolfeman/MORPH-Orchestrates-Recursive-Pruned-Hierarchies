@@ -222,6 +222,13 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         hc_use_kernel=bool(getattr(m, "hc_use_kernel", True)),
         l2_persist=bool(getattr(m, "l2_persist", False)),
         block_ell_scope=str(getattr(m, "block_ell_scope", "all")),
+        retention=bool(getattr(m, "retention", True)),
+        retention_layers=tuple(int(x) for x in getattr(m, "retention_layers", (1,))),
+        retention_heads=int(getattr(m, "retention_heads", 0)),
+        retention_chunk=int(getattr(m, "retention_chunk", 128)),
+        retention_gate_init=float(getattr(m, "retention_gate_init", -6.0)),
+        retention_carry=bool(getattr(m, "retention_carry", True)),
+        retention_gate_bias=float(getattr(m, "retention_gate_bias", 2.0)),
         dropout=float(tr.dropout),
     )
 

@@ -1,0 +1,205 @@
+# MORPH ~30B scale config — SYSTEMS INFERENCE TEST (random init, full deploy format)
+# Derived from base.yaml. The calibrated small-scale fit (L*10.39*d^2 + 247296*d)
+# OVERESTIMATES ~6% at d=8192 (linear-in-d layer terms — HC proj/convs/compressor —
+# absorbed into the d^2 coefficient). EXACT measured constants from the Stage B build:
+# CSA block 630.8M, HCA block 632.1M, top-level 3.042B (incl. 22.36M per x0-inject).
+# d=8192, L=43 (4:35:4) -> EXACT 30.26B. d_ff auto = 21888 (8/3*d rounded to 64).
+# d_head = d_model/(compression*n_heads) = 8192/(2*128) = 32 — SAME head_dim as the
+# validated 276M config, so the fused Triton attention kernels see familiar shapes.
+# Deploy format: ternary backbone (packed 2-bit at inference) + MORTAR BCSR 0.25 FFN
+# + int6 embeddings + int8 attention projections. See ignore/scale30b_build.py.
+
+model:
+  d_model: 8192
+  n_heads: 128
+  n_layers: 43  # n_prelude + n_core + n_coda
+  vocab_size: 49152  # StarCoder2
+  max_seq_len: 4096
+
+  # Parcae loop
+  n_prelude: 4
+  n_core: 35
+  n_coda: 4
+  mean_depth: 4   # Wolfe 2026-06-11: halved from 8 for B=1 decode (≈2× less core-loop weight re-streaming; ~3% ppl trade). Storage/param count unchanged.
+  max_depth: 10
+  bptt_depth: 4
+  # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth
+  # grad-iterations; later ones run eager (activations retained → no backward recompute → faster),
+  # at the cost of retained activation memory. -1 = checkpoint ALL (default, bit-identical/safest).
+  # Exact — never changes gradients (ppl-neutral). Tune down against VRAM headroom to raise tok/s.
+  ckpt_grad_iters: -1
+
+  # Multi-rate residual channels (must sum to d_model=8192)
+  channel_dims: [4096, 2730, 1366]  # compute, context, memory
+
+  # Attention (CCA+CSA+HCA, all features baked in)
+  compression: 2
+  n_kv_heads: 8
+  csa_compress_ratio: 4
+  hca_compress_ratio: 128
+  top_k: 128
+  window_size: 128
+  context_len: 4096
+
+  # Embeddings
+  lorentz_fraction: 0.25  # 576 eucl + 192 Lorentz
+  bigram_hash_vocab: 49152
+
+  # STP (Semantic Tube Predictor — geometric regularizer)
+  stp_lambda: 0.02
+  stp_tau: 64
+
+  # LM head fused cross-entropy chunk size (rows of B·T per chunk).
+  # Smaller = less peak VRAM, more launch overhead. Tune per target.
+  ce_chunk_size: 1024
+
+  # Master kernel switch: true = fused Triton attn + fused CE (optimised);
+  # false = eager references + full-logits CE (un-optimised A/B baseline).
+  use_kernels: true
+
+  # Multi-Rate Residual ablation. true = MultiRateResidual (per-channel learned gain);
+  # false = plain additive residual (StandardResidual) — removes ~16 ms/step of channel
+  # slice+cat copies + the unused alpha params. Ablate quality vs MRR baseline (#MRR-ablation).
+  use_mrr: true
+
+  # Residual mechanism (overrides use_mrr when non-null). The REAL Hyper-Connection arms:
+  #   null         → use_mrr decides (mrr / standard)  [default]
+  #   hc_cayley    → orthogonal n-stream mixer (JPmHC, arXiv 2602.18308) — DEFAULT HC choice,
+  #                  5.2× cheaper H^res than Sinkhorn + exact dynamical isometry.
+  #   hc_sinkhorn  → doubly-stochastic n-stream mixer (mHC, arXiv 2512.24880).
+  # hc_* widens the residual stream to hc_streams parallel C-dim streams network-wide.
+  residual_mode: hc_cayley
+  hc_streams: 4            # expansion rate n (paper default); residual carrier → [B,S,n,768]
+  hc_tau: 1.0              # softmax temperature for Hpre/Hpost
+  hc_cayley_iters: 3       # Cayley fixed-point steps (paper s=2; 3 = safety margin)
+  hc_cayley_alpha: 0.1     # Cayley step size α
+  hc_sinkhorn_iters: 20    # Sinkhorn iterations (mHC value)
+  hc_init_gain: 0.1        # W_fused init: smaller → closer to plain residual at init
+  hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda). false ⇒ eager refs (bit-faithful,
+                           # slower) — the reference arm for the fused-vs-eager parity A/B.
+
+  # Block-ELL scope: ALWAYS "all" — prelude+core+coda all use BlockELLLinear (CMS-prunable +
+  # Triton sparse kernels). "core" scope was REMOVED: pruning targets the whole MLP backbone and
+  # every config's architecture matches the deploy stack. Only "all" is accepted (else raises).
+  # Constraint: all dims must be divisible by tile_size=16. d_model=768, d_ff=2048(auto) satisfy this.
+  block_ell_scope: "all"
+
+  # ── Retention branch (ablation #230) ──────────────────────────────────────
+  # Gated Linear Attention added in PARALLEL to the windowed attention in the 2nd layer
+  # (retention_layers) of prelude/core/coda — a global-context / cross-iteration memory branch.
+  # Off → GLA not constructed → bit-identical to baseline. Gates: ignore/verify_gla.py + verify_retention.py.
+  retention: false
+  retention_layers: [1]          # within-section layer index that gets the branch (0-based)
+  retention_heads: 0             # 0 → use n_heads
+  retention_chunk: 256           # GLA chunk length; eager is launch-bound → larger=faster
+                                 # (+48%→+17% wall at 64→256; clamp keeps it stable). Kernel later.
+  retention_gate_init: -6.0      # branch-gate logit; sigmoid(-6)≈0.0025 → ≈ identity at init
+  retention_carry: true          # core: carry GLA state across loop iterations (false → reset/no memory)
+  retention_gate_bias: 2.0       # GLA forget-gate logit bias (α near 1 = long memory)
+
+  # ── Loop-axis SSM ablation (#232) — Ai-notes/06-07-2026/MORPH-LoopSSM-Ablation/design.md ──
+  # The outer loop's injection IS a diagonal LTI SSM over the iteration axis
+  # (h_ctx ← A·h_ctx + dt·e_ctx, spectral radius < 1, on the 256-d context channel). These knobs
+  # generalise it. ALL default to baseline and are IDENTITY AT INIT → defaults bit-identical to
+  # today; a fresh arm starts exactly at the validated baseline and diverges only through learning.
+  loop_ssm_selective: false      # arm A: make A,dt input-dependent (Mamba/S6 selectivity on loop axis)
+  loop_ssm_channels: "context"   # arm B: SSM slice — context | compute_context | full
+  loop_ssm_drive: "input"        # arm C: drive — input (const e) | trajectory (+ prior compute output)
+
+training:
+  steps: 100000
+  batch_size: 4
+  lr: 1e-4
+  warmup: 1500
+  lr_schedule: cosine
+  min_lr: 1e-5
+  dropout: 0.1
+  grad_clip: 1.0
+  bf16: true
+  compile: true
+  compile_mode: default
+  checkpointing: true
+
+  # Pruning (Phase 2 → 3)
+  prune_start: 6000
+  prune_interval: 3000
+  prune_rate: 0.05
+  target_density: 0.25
+  compact_step: 66000
+
+  # Optimizer extras
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+
+  # Optional wrappers (set to true to activate)
+  ternary: true            # Ternary QAT — forward-STE on weights (see ternary_qat.py). Real
+                           # QAT: forward uses {-1,0,+1}xscale, grad straight-through to the
+                           # smooth shadow. Training/val ppl IS the deployed-ternary ppl.
+  ternary_scope: backbone  # which weights to ternarize: backbone | backbone_attn | full
+                           # (full = + attention projections + token/space/euclidean embeddings)
+  ternary_threshold: 0.5   # |w/scale| > threshold → nonzero (Bonsai default)
+  # Ternary scale machinery (Ablation A/B/C — Ai-notes/06-02-2026/MORPH-Ternary-Quant-Ablations/spec.md).
+  # Defaults below == current symmetric per-tensor fp16 behaviour (bit-identical when ternary=false).
+  ternary_scale_mode: symmetric   # symmetric (current) | ttq (sep learnable +/- scales) | dual (TernaryLLM learnable shift+scale)
+  ternary_scale_group: tensor     # tensor | 128 | 64  (group-wise scale; 64 for tiny CCA dims W_down_k=128/W_v=64)
+  ternary_scale_dtype: fp16       # fp16 | int8 | pow2  (quantized group scale; pow2 = shift-only deploy)
+  adam8bit: false          # 8-bit AdamW via bitsandbytes (quantizes optimizer state m,v to uint8)
+
+  # Embedding / LM-head quantization (Ablation E). NOT ternary — int6/int8 per-row QAT.
+  # Lorentz space embedding ALWAYS stays bf16 (geometry-sensitive). off == bit-identical bf16.
+  embed_quant: "int6"             # off | int8 | int6  (token/bigram/euclidean per-row QAT). QUOTED: bare off is YAML bool False.
+  lm_head_quant: "off"            # off | int6  (only meaningful if LM head is a separate weight from token embed). QUOTED: see above.
+
+  # Attention-projection int-N QAT (Ablation #205 — the Efull-recovery lever). Per-output-row
+  # int8/int6/int4 STE on the CCA attention Linears (W_down_q/k, W_v, compressor, indexer,
+  # gate, W_up) — gentler than ternary. Disjoint from ternary scope=backbone. off == bf16.
+  attn_proj_quant: "int8"         # off | int8 | int6 | int4. QUOTED: bare off is YAML bool False.
+
+  # FP8 training (torchao float8) — see docs/fp8_mixed_precision_training.md. FP8 the
+  # large dense GEMMs only; attention/norms/fused-CE stay bf16 (DeepSeek-V3/Ling-1T mix).
+  # Verified to accelerate on RTX 5090 sm_120 (2.4-4.3x GEMM). fp8=false → bit-identical bf16.
+  fp8: false               # master switch
+  fp8_recipe: dynamic      # dynamic (stateless, mandated for the loop) | rowwise
+  fp8_scope: mlp           # mlp | attn_proj | mlp_attn_proj | all_gemm
+                           #   attn_proj = CCA projections only (disjoint from ternary
+                           #   backbone → for the ternary⊕FP8⊕8-bit 3-way combo)
+  fp8_filter_min_dim: 256  # skip Linears with any dim < this (FP8 only helps big GEMMs)
+
+  # Cross-iteration KV sharing (CLA) — see docs/cross_layer_kv_sharing.md. Cache the
+  # per-core-layer KV bundle once and reuse (q-only recompute) in later loop iterations.
+  # use_cla=false → bit-identical to today.
+  use_cla: false
+  cla_share_start: -1      # -1 = auto (n_nograd, first grad iter — gradient-correct)
+
+  # Evaluation / logging
+  eval_every: 500
+  n_eval_batches: 20
+  ckpt_every: 2500
+  gen_every: 0      # 0 = disabled; set e.g. 5000 for generation samples
+  gen_test: false   # run generation test at end of training
+
+  # Resume
+  # resume: null     # path to checkpoint to resume from
+
+# Routing (Phase 4 — post-compact, post-settle)
+# Set route_start=0 to disable routing entirely.
+routing:
+  route_start: 70000
+  n_clusters: 16
+  activation_ratio: 0.5
+  aux_loss_coeff: 0.01
+
+data:
+  # datasets>=4.x dropped script datasets, so 'Skylion007/openwebtext' no longer loads. We load
+  # the LOCALLY-CACHED OWT arrow shards instead (codeless, OFFLINE, IDENTICAL to the #186 data →
+  # ppl stays comparable). data.py detects a *.arrow glob and loads via load_dataset("arrow", ...).
+  # (Alternatives: a codeless Parquet HF mirror, or pin datasets<4.)
+  dataset: /home/wolfe/.cache/huggingface/datasets/openwebtext/**/openwebtext-train-*.arrow
+  tokenizer: bigcode/starcoder2-7b
+  seq_len: 4096
+
+wandb:
+  project: morph
+  entity: adew-me
+  name: scale30b_inference_test

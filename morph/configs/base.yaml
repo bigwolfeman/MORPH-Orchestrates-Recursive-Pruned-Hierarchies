@@ -87,7 +87,7 @@ model:
   # Gated Linear Attention added in PARALLEL to the windowed attention in the 2nd layer
   # (retention_layers) of prelude/core/coda — a global-context / cross-iteration memory branch.
   # Off → GLA not constructed → bit-identical to baseline.
-  retention: false
+  retention: true
   retention_layers: [1]          # within-section layer index that gets the branch (0-based)
   retention_heads: 0             # 0 → use n_heads
   retention_chunk: 256           # GLA chunk length; larger=faster (launch-bound)

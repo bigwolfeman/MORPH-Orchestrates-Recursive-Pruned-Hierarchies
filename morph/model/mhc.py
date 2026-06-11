@@ -374,12 +374,32 @@ class MORPHBlock(nn.Module):
         else:
             raise ValueError(f"unknown residual_mode {residual_mode!r}")
 
+        # Retention branch (#230) — attached post-construction so it does NOT perturb
+        # the base init RNG (keeps the rest of the model byte-identical to the baseline, so the
+        # ablation isolates the retention branch and nothing else). None unless attach_retention.
+        self.retention: nn.Module | None = None
+        self.norm_ret: nn.Module | None = None
+        self.ret_gate: nn.Parameter | None = None
+
+    def attach_retention(self, gla: nn.Module, norm: nn.Module, gate_init: float) -> None:
+        """Add a gated GLA branch in PARALLEL to the attention sublayer.
+
+        sublayer output becomes  attn(x) + sigmoid(ret_gate) · gla(norm_ret(x), state).
+        gate_init very negative → sigmoid ≈ 0 → branch ≈ off at init (identity to baseline);
+        the gate is learnable so the model can open it if retention helps (the key diagnostic).
+        """
+        self.retention = gla
+        self.norm_ret = norm
+        self.ret_gate = nn.Parameter(torch.tensor(float(gate_init)))
+
     def forward(
         self,
         h: Tensor,
         attn_kwargs: dict | None = None,
         mlp_kwargs: dict | None = None,
         next_inject_term: Tensor | None = None,
+        ret_state: Tensor | None = None,
+        ret_capture: dict | None = None,
     ) -> Tensor:
         """Forward pass: attention sublayer then MLP sublayer with MRR residuals.
 
@@ -391,6 +411,12 @@ class MORPHBlock(nn.Module):
                          injection term, folded into THIS block's MLP-residual POST write
                          (the block's last carrier write), so the next layer skips a separate
                          _apply_injection. Only set in HC carrier-engine mode.
+            ret_state:   [B, H, dk, dv] | None — retention (GLA) initial state for this block's
+                         branch (the cross-iteration carry in the core loop). None → zero state.
+            ret_capture: dict | None — if given and this block has retention, the new GLA state
+                         is written to ret_capture["state"]. The CALLER must RETURN that state
+                         from any checkpointed region (side-channel capture is not checkpoint-safe
+                         on its own); _core_step does exactly that.
 
         Returns:
             [B, T, D] updated residual stream.
@@ -399,7 +425,13 @@ class MORPHBlock(nn.Module):
         mlp_kwargs  = mlp_kwargs  or {}
 
         def _attn_fn(x: Tensor) -> Tensor:
-            return self.drop(self.attention(self.norm_attn(x), **attn_kwargs))
+            a = self.attention(self.norm_attn(x), **attn_kwargs)
+            if self.retention is not None:
+                g_out, s_out = self.retention(self.norm_ret(x), initial_state=ret_state)
+                if ret_capture is not None:
+                    ret_capture["state"] = s_out
+                a = a + torch.sigmoid(self.ret_gate).to(a.dtype) * g_out
+            return self.drop(a)
 
         def _mlp_fn(x: Tensor) -> Tensor:
             return self.drop(self.mlp(self.norm_mlp(x), **mlp_kwargs))

@@ -138,6 +138,21 @@ class MORPHConfig:
     # removed — pruning targets the whole MLP backbone and every config matches the deploy stack.
     block_ell_scope: str = "all"
 
+    # ── Retention branch (#230) ────────────────────────────────────────────
+    # Gated Linear Attention (GLA) added in PARALLEL to the windowed attention in the
+    # 2nd layer (index in retention_layers) of prelude / core / coda — a global-context /
+    # cross-iteration memory branch. Off by default → GLA modules are NOT constructed, so
+    # the model is bit-identical to the baseline (flag gates construction, not just the
+    # forward branch — keeps init RNG draw identical).
+    retention: bool = True
+    retention_layers: tuple[int, ...] = (1,)   # which layer index per section gets the branch
+    retention_heads: int = 0                   # 0 → use n_heads
+    retention_chunk: int = 128
+    retention_gate_init: float = -6.0          # branch-gate logit; sigmoid(-6)≈0.0025 ≈ identity@init
+    retention_carry: bool = True               # core: carry GLA state across loop iterations
+                                               # (False → reset each iter = global retention, no memory)
+    retention_gate_bias: float = 2.0           # GLA internal forget-gate logit bias (α near 1 = long memory)
+
     # Training
     dropout: float = 0.1
 
@@ -485,6 +500,28 @@ class MORPHTransformer(nn.Module):
         # ── Prediction (STP — Semantic Tube Predictor) ────────────────
         self.stp = STPLoss()
 
+        # ── Retention branch (#230) ────────────────────────────────────
+        # Attach AFTER all base modules → GLA's RNG draws are a tail, so the base model is
+        # byte-identical to the baseline whether retention is on or off. With the branch-gate
+        # near 0 at init, retention-on ≈ baseline at step 0, and the ablation isolates exactly
+        # the retention branch (no confound from a different random init of the rest of the net).
+        self._retention_layers = tuple(cfg.retention_layers)
+        self._core_has_retention = cfg.retention and any(
+            i in self._retention_layers for i in range(cfg.n_core))
+        if cfg.retention:
+            from .gla import GatedLinearAttention
+            rheads = cfg.retention_heads or cfg.n_heads
+            for section in (self.prelude, self.core, self.coda):
+                for si, blk in enumerate(section):
+                    if si in self._retention_layers:
+                        blk.attach_retention(
+                            GatedLinearAttention(
+                                d, rheads,
+                                mode="kernel" if cfg.use_kernels else "chunked",
+                                chunk=cfg.retention_chunk,
+                                gate_logit_bias=cfg.retention_gate_bias),
+                            RMSNorm(d), gate_init=cfg.retention_gate_init)
+
         # Master kernel switch → drives the fused-Triton-vs-eager-reference
         # dispatch in the attention kernels (process-global flag). Set at build
         # so the choice is captured in the run; the fused-CE branch in forward()
@@ -648,20 +685,30 @@ class MORPHTransformer(nn.Module):
             dim=0,
         )  # [n_core, B, S, ctx_width]
 
-        def _core_step(h_in, e_in, ids, x0_terms, bg, iter_idx=0):
+        def _core_step(h_in, e_in, ids, x0_terms, bg, ret_state=None, iter_idx=0):
+            # ret_state: [B,H,dk,dv]|None — GLA cross-iteration carry for the retention core layer.
             # iter_idx: which core-loop iteration t this call is (drives the ReMoE router's
             #   iteration embedding). Passed as an explicit arg — NOT module state — so it is
             #   captured in the checkpoint closure and replayed correctly during backward recompute.
+            # ALWAYS returns (h, new_ret_state); new_ret is None unless a core layer carries
+            # retention. Returning new_ret (not a side-channel) is checkpoint-safe.
             mlp_kw = {"iter_idx": iter_idx}
             h_injected = self.injection(h_in, e_in)
+            ret_cap = {} if self._core_has_retention else None
             for i, layer in enumerate(self.core):
                 gi = np_ + i
                 term = self._build_injection_term(
                     gi, x0_terms[i], ids, bg, h_injected.dtype
                 )
                 h_injected = self._apply_injection(h_injected, term)
-                h_injected = layer(h_injected, mlp_kwargs=mlp_kw)
-            return h_injected
+                # Retention carry only for the designated core layer(s); others get None.
+                is_ret = ret_cap is not None and (i in self._retention_layers)
+                rs_arg = ret_state if is_ret else None
+                rc_arg = ret_cap if is_ret else None
+                h_injected = layer(h_injected, mlp_kwargs=mlp_kw,
+                                   ret_state=rs_arg, ret_capture=rc_arg)
+            new_ret = ret_cap.get("state") if ret_cap is not None else None
+            return h_injected, new_ret
 
         # ── Active-set shrinking ────────────────────────────────────────────
         # A sample is updated only while iteration t < its Poisson depth, then
@@ -698,6 +745,21 @@ class MORPHTransformer(nn.Module):
         _t_range = torch.arange(total_iters, device=sort_depths.device)
         active_counts = (sort_depths.unsqueeze(1) > _t_range.unsqueeze(0)).sum(0).tolist()
 
+        # ── Retention cross-iteration carry (#230) ────────────────────────────
+        # GLA state for the core retention layer, carried iter→iter (fp32 accumulator, tiny).
+        # Held in the SAME sorted/active-set order as h_s: slice [:n_active], carry the frozen
+        # suffix unchanged — exactly like the carrier. The no_grad iterations produce a detached
+        # state, so when it enters the first grad iteration the gradient does NOT flow back into
+        # the frozen window (truncated-BPTT boundary, automatic). retention_carry=False → never
+        # tracked (each iter reseeds zero = global retention with no memory).
+        track_ret = self._core_has_retention and self.cfg.retention_carry
+        if track_ret:
+            _rh = self.cfg.retention_heads or self.cfg.n_heads
+            _rdh = self.cfg.d_model // _rh
+            ret_state_s = h_s.new_zeros(h_s.shape[0], _rh, _rdh, _rdh, dtype=torch.float32)
+        else:
+            ret_state_s = None
+
         for t in range(total_iters):
             n_active = active_counts[t]
             if n_active == 0:
@@ -705,6 +767,7 @@ class MORPHTransformer(nn.Module):
             h_a = h_s[:n_active]
             args = (h_a, e_s[:n_active], ids_s[:n_active],
                     x0_s[:, :n_active], bg_s[:n_active])
+            rs_a = ret_state_s[:n_active] if track_ret else None
 
             # Checkpoint this grad-iteration? Only in training, and only the first n_ckpt grad
             # iters (later ones run eager → no recompute). n_nograd iters are frozen (no_grad).
@@ -712,17 +775,21 @@ class MORPHTransformer(nn.Module):
 
             if t < n_nograd:
                 with torch.no_grad():
-                    h_new = _core_step(*args, iter_idx=t)
+                    h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t)
             elif do_ckpt:
-                h_new = checkpoint(_core_step, *args, iter_idx=t, use_reentrant=False)
+                h_new, rs_new = checkpoint(_core_step, *args, ret_state=rs_a, iter_idx=t,
+                                           use_reentrant=False)
             else:
                 # eval, OR a grad-iter we chose not to checkpoint (activations retained).
-                h_new = _core_step(*args, iter_idx=t)
+                h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t)
 
             # updated active prefix + frozen suffix (no in-place op).
             with _prof("carrier::loop_cat"):
                 h_s = h_new if n_active == h_s.shape[0] else \
                     torch.cat([h_new, h_s[n_active:]], dim=0)
+            if track_ret and rs_new is not None:
+                ret_state_s = rs_new if n_active == ret_state_s.shape[0] else \
+                    torch.cat([rs_new, ret_state_s[n_active:]], dim=0)
 
         with _prof("carrier::inv_perm_gather"):
             x = h_s[inv_perm]                    # restore original batch order
