@@ -78,8 +78,34 @@ class PruningSchedule:
     n_clusters: int = 16
     activation_ratio: float = 0.5
     aux_loss_coeff: float = 1e-2
+    # Sparse execution backend after the density transition:
+    #   "blockell" — legacy 16×16 Block-ELL compact() (kernel measured SLOWER than dense)
+    #   "mortar"   — 128×128 BCSR carve() via vendored stk (3.09× FASTER than dense, G1).
+    # MORTAR also switches pruning to block-aligned prune_step_blocks (score at tile,
+    # prune/execute at block) so the carve is lossless.
+    sparse_backend: str = "blockell"
+    carve_blocking: int = 128
+    # Detach the router input so the load-balance gradient does NOT flow into the looped carrier
+    # x (required for memory: it otherwise extends BPTT depth → +7 GB/step at deploy shape). The
+    # router still trains (params get grad from the detached input + gates from the main loss).
+    aux_detach_input: bool = True
+    # Which MLPs get ReMoE routing at route_start:
+    #   "core" — only the looped core block (B5 / legacy behaviour, default)
+    #   "all"  — the WHOLE body: prelude + core + coda (Wolfe 2026-06-10).
+    # Prelude/coda run once (not looped) → routed with n_iters=1; core keeps n_iters=max_depth.
+    route_scope: str = "core"
     _is_compact: bool = field(default=False, repr=False)
     _is_routed: bool = field(default=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.sparse_backend not in ("blockell", "mortar"):
+            raise ValueError(
+                f"sparse_backend={self.sparse_backend!r}; choices: 'blockell', 'mortar'"
+            )
+        if self.route_scope not in ("core", "all"):
+            raise ValueError(
+                f"route_scope={self.route_scope!r}; choices: 'core', 'all'"
+            )
 
     @classmethod
     def from_cfg(cls, cfg: DictConfig) -> "PruningSchedule":
@@ -95,6 +121,10 @@ class PruningSchedule:
             n_clusters=int(getattr(rt, "n_clusters", 16) if rt else 16),
             activation_ratio=float(getattr(rt, "activation_ratio", 0.5) if rt else 0.5),
             aux_loss_coeff=float(getattr(rt, "aux_loss_coeff", 1e-2) if rt else 1e-2),
+            aux_detach_input=bool(getattr(rt, "aux_detach_input", True) if rt else True),
+            route_scope=str(getattr(rt, "route_scope", "core") if rt else "core"),
+            sparse_backend=str(getattr(tr, "sparse_backend", "blockell")),
+            carve_blocking=int(getattr(tr, "carve_blocking", 128)),
         )
 
     @property
@@ -120,6 +150,13 @@ class PruningSchedule:
 
         stats: Optional[dict] = None
 
+        # ── Every step: keep already-pruned tiles dead (before scoring/optimizer) ──
+        # Re-zeros dead tiles + their grads in the live weight so neither optimizer
+        # momentum nor the ternary STE can revive a pruned tile.
+        if not self._is_compact:
+            for _name, layer in layers:
+                layer.apply_prune_mask()
+
         # ── Phase 1 / 2: accumulate gradient scores (pre-compact only) ───
         if not self._is_compact:
             for _name, layer in layers:
@@ -129,89 +166,185 @@ class PruningSchedule:
                 for _name, layer in layers:
                     layer.score_step()
 
-        # ── Phase 2: topology decisions ───────────────────────────────────
+        # ── Phase 2: structured masked-dense pruning ──────────────────────
+        # Zero the lowest-saliency tiles down toward target_density. Auto-stops
+        # once density <= target (prune_step is a no-op at target). This is the
+        # REAL density reduction; the old topology_step only swapped at fixed K.
         if (
             global_step >= self.prune_start
             and not self._is_compact
             and global_step % self.prune_interval == 0
         ):
             cur_density = self._current_density(layers)
-            if cur_density > self.target_density:
+            if cur_density > self.target_density + 1e-6:
+                pruned_total = 0
                 for _name, layer in layers:
-                    layer.topology_step(global_step=global_step)
+                    if self.sparse_backend == "mortar":
+                        # Block-aligned pruning (128×128 execution blocks, global
+                        # top-k with ≥1-per-row floor) so carve() is lossless.
+                        res = layer.prune_step_blocks(
+                            self.prune_rate, self.target_density, self.carve_blocking
+                        )
+                    else:
+                        res = layer.prune_step(self.prune_rate, self.target_density)
+                    pruned_total += int(res.get("pruned", 0))
+                new_density = self._current_density(layers)
                 stats = self.log_stats(model)
-                stats["pruning/topology_step"] = 1
+                stats["pruning/prune_step"] = 1
+                stats["pruning/tiles_pruned"] = pruned_total
+                stats["pruning/density"] = new_density
+                # stdout so monitors/smoke-gates can SEE density fall without wandb.
+                print(f"[prune] step {global_step}: tiles_pruned={pruned_total} "
+                      f"density={new_density:.4f} (target {self.target_density})", flush=True)
 
         # ── Phase 3: compact ──────────────────────────────────────────────
+        # Hidden-neuron routing (Wolfe's choice) does NOT need compact_with_groups'
+        # output-cluster metadata — the router builds its own d_ff neuron→cluster map.
+        # So plain compact() everywhere. For ternary layers we compact the SMOOTH shadow
+        # (restore_parametrized=False) — NOT the baked discrete ternary — so QAT keeps a
+        # real gradient signal, then re-register a 4-D-aware ternary STE on `values`.
+        # Net effect: "keep pretraining the ternary model, now compacted." Optimizer is
+        # rebuilt afterward (weight→values is a new param set).
         if global_step == self.compact_step and not self._is_compact:
-            use_groups = self.route_start > 0
+            import torch.nn.utils.parametrize as parametrize
+            from morph.model.ternary_qat import reparametrize_compacted_values_ternary
+
             total_live = 0
+            n_reternary = 0
             block_ell_layers = _find_block_ell_layers(model)
+            reparam: list[tuple[nn.Module, float]] = []
             for _name, layer in block_ell_layers:
-                if use_groups:
-                    n_alive = layer.compact_with_groups(self.n_clusters)
+                cms = layer._cms
+                was_ternary = parametrize.is_parametrized(cms, "weight")
+                thr = 0.5
+                if was_ternary:
+                    # Capture the threshold, then restore the SMOOTH shadow as the leaf
+                    # weight (leave_parametrized=False) so compact carries continuous
+                    # survivor values, not the discrete ternary.
+                    try:
+                        thr = float(cms.parametrizations.weight[0].threshold)
+                    except (AttributeError, IndexError):
+                        thr = 0.5
+                    parametrize.remove_parametrizations(cms, "weight",
+                                                        leave_parametrized=False)
+                if self.sparse_backend == "mortar":
+                    n_alive = layer.carve(blocking=self.carve_blocking)
                 else:
                     n_alive = layer.compact()
+                # Phase C never prunes again → the activation/gradient scoring hooks are dead
+                # compute and per-forward memory we cannot afford once routing activations land.
+                cms.set_scoring(False)
                 total_live += n_alive
+                if was_ternary:
+                    reparam.append((cms, thr))
+            # Re-register ternary QAT on the compacted 4-D `values` (continues QAT).
+            for cms, thr in reparam:
+                if reparametrize_compacted_values_ternary(cms, thr):
+                    n_reternary += 1
             self._is_compact = True
             stats = self.log_stats(model)
             stats["pruning/compacted"] = 1
             stats["pruning/total_live_blocks"] = total_live
-            if use_groups:
-                stats["pruning/n_clusters"] = self.n_clusters
+            stats["pruning/n_reternary_layers"] = n_reternary
+            stats["_rebuild_optimizer"] = True
+            verb = "carved (mortar)" if self.sparse_backend == "mortar" else "compacted"
+            print(f"[compact] step {global_step}: {len(block_ell_layers)} layers {verb}, "
+                  f"{total_live} live blocks, {n_reternary} re-ternarized → optimizer rebuild",
+                  flush=True)
 
         # ── Phase 4: activate routing ─────────────────────────────────────
+        # Routing normally follows compaction (route_start > compact_step), so we
+        # require _is_compact. EXCEPTION — a pure-DENSE ablation that disables carve
+        # (compact_step set to the never-reached sentinel) still wants ReMoE: the
+        # hidden-neuron gating (TileRouter, _SwiGLUBlockELL.forward) operates on the
+        # dense gate_up output and does NOT need the BCSR/carved structure. So allow
+        # routing on an un-compacted model IFF carve is explicitly disabled. Normal
+        # sparse runs (compact_step a real step) are byte-identical to before.
+        _carve_disabled = self.compact_step > 10_000_000
         if (
             self.route_start > 0
             and global_step == self.route_start
-            and self._is_compact
+            and (self._is_compact or _carve_disabled)
             and not self._is_routed
         ):
-            n_swapped = self._activate_routing(model)
+            n_enabled = self._activate_routing(model)
             self._is_routed = True
             stats = stats or {}
             stats["routing/activated"] = 1
-            stats["routing/n_layers_swapped"] = n_swapped
+            stats["routing/n_core_mlps_routed"] = n_enabled
             stats["routing/activation_ratio"] = self.activation_ratio
+            stats["_rebuild_optimizer"] = True
+            print(f"[route] step {global_step}: routing enabled on {n_enabled} core MLPs "
+                  f"({self.n_clusters} clusters, {self.activation_ratio:.0%} active) → "
+                  f"optimizer rebuild", flush=True)
 
         return stats
 
     def _activate_routing(self, model: nn.Module) -> int:
-        """Swap BlockELLLinear modules for RoutedBlockELLLinear in-place.
+        """Enable iteration-aware hidden-neuron routing on the selected MLPs.
 
-        Walks the model tree, finds all BlockELLLinear that are post-compact
-        (have cluster metadata), wraps them in RoutedBlockELLLinear, and
-        replaces them on the parent module.
+        Routing gates the d_ff hidden neuron bank of each block's _SwiGLUBlockELL MLP
+        (clean PEER/MoE expert selection), via a shared TileRouter whose zero-init
+        iteration embedding makes routing un-specialized at turn-on and specialize
+        through training. Adds router params → optimizer must be rebuilt after.
 
-        Returns the number of layers swapped.
+        Scope (self.route_scope):
+          "core" — only the looped CORE block (legacy / B5). Iteration-aware:
+                   n_iters = max core-loop depth (each loop iteration gets its own
+                   routing embedding row).
+          "all"  — the WHOLE body: prelude + core + coda (Wolfe 2026-06-10). Prelude
+                   and coda run ONCE (iter_idx always 0, not looped), so they are
+                   routed with n_iters=1; the core stays iteration-aware. Aux losses
+                   from every router are collected automatically (collect_routing_aux_losses
+                   is a generic model.modules() walk on _last_aux_loss).
+
+        Returns the number of MLPs on which routing was enabled.
         """
-        from morph.model.routing import RoutedBlockELLLinear
-        from morph.model.sparsity import BlockELLLinear
+        root = getattr(model, "_orig_mod", model)   # unwrap torch.compile
+        max_depth = int(getattr(root.cfg, "max_depth", 8))
 
-        swapped = 0
-        # Build a list first to avoid modifying during iteration
-        targets: list[tuple[nn.Module, str, BlockELLLinear]] = []
-        for name, module in model.named_modules():
-            for attr_name, child in module.named_children():
-                if isinstance(child, BlockELLLinear) and not child._cms._dense_mode:
-                    if hasattr(child._cms, "n_clusters"):
-                        targets.append((module, attr_name, child))
-
-        for parent, attr_name, layer in targets:
-            d_model = layer.in_features
-            routed = RoutedBlockELLLinear(
-                block_ell_linear=layer,
-                d_model=d_model,
-                activation_ratio=self.activation_ratio,
-                aux_loss_coeff=self.aux_loss_coeff,
+        # (group-name, module-list, n_iters). Core is iteration-aware; prelude/coda are
+        # single-pass → n_iters=1. Order is prelude→core→coda for readable logs.
+        groups = [("core", root.core, max_depth)]
+        if self.route_scope == "all":
+            groups = (
+                [("prelude", root.prelude, 1)]
+                + groups
+                + [("coda", root.coda, 1)]
             )
-            setattr(parent, attr_name, routed)
-            swapped += 1
-            print(f"  Routing activated: {parent.__class__.__name__}.{attr_name} "
-                  f"({layer.in_features}→{layer.out_features}, "
-                  f"{self.n_clusters} clusters, {self.activation_ratio:.0%} active)")
 
-        return swapped
+        enabled = 0
+        for gname, group, gi in groups:
+            for bi, blk in enumerate(group):
+                mlp = getattr(blk, "mlp", None)
+                if mlp is None or not hasattr(mlp, "enable_routing"):
+                    # The MLP is a _SwiGLUBlockELL (optionally wrapped in _KwargSequential
+                    # for dropout), both of which expose enable_routing. Anything else means
+                    # the block structure changed out from under Phase C — fail LOUD, do not
+                    # silently enable 0 routers (theater we forbid).
+                    raise RuntimeError(
+                        f"_activate_routing: {gname} block {bi} has no routable MLP "
+                        f"(mlp type={type(mlp).__name__}); cannot attach ReMoE router. "
+                        f"Expected _SwiGLUBlockELL or _KwargSequential wrapping it."
+                    )
+                mlp.enable_routing(
+                    n_clusters=self.n_clusters,
+                    activation_ratio=self.activation_ratio,
+                    aux_loss_coeff=self.aux_loss_coeff,
+                    n_iters=gi,
+                    detach_input=self.aux_detach_input,
+                )
+                enabled += 1
+                print(f"  Routing enabled: {gname} MLP {bi} "
+                      f"(d_ff={mlp.d_ff}, {self.n_clusters} clusters, "
+                      f"{self.activation_ratio:.0%} active, n_iters={gi})")
+
+        if enabled == 0:
+            raise RuntimeError(
+                f"_activate_routing: no MLPs found to route (route_scope={self.route_scope!r})"
+            )
+        print(f"  Routing scope={self.route_scope!r}: {enabled} MLPs routed", flush=True)
+        return enabled
 
     def log_stats(self, model: nn.Module) -> dict:
         """Compute per-layer and aggregate density metrics for wandb."""
@@ -225,21 +358,19 @@ class PruningSchedule:
 
         for name, layer in layers:
             try:
-                if hasattr(layer, "tile_mask"):
-                    mask = layer.tile_mask
-                    n_alive = int(mask.sum().item())
-                    n_total = int(mask.numel())
-                elif hasattr(layer, "block_mask"):
-                    mask = layer.block_mask
-                    n_alive = int(mask.sum().item())
-                    n_total = int(mask.numel())
-                elif hasattr(layer, "K_active"):
-                    n_alive = int(layer.K_active)
-                    R = getattr(layer, "R", 1)
-                    K = getattr(layer, "K", 1)
-                    n_total = R * K
-                else:
+                R = int(getattr(layer, "R", 0))
+                C = int(getattr(layer, "C", 0))
+                if R == 0 or C == 0:
                     continue
+                if getattr(layer, "_prune_mask", None) is not None:
+                    n_alive = int(layer._prune_mask.sum().item())
+                    n_total = R * C
+                elif not getattr(layer, "_dense_mode", True):
+                    n_alive = R * int(getattr(layer, "K", C))
+                    n_total = R * C
+                else:
+                    n_alive = R * C
+                    n_total = R * C
             except Exception:
                 continue
 
@@ -257,17 +388,30 @@ class PruningSchedule:
         return log
 
     def _current_density(self, layers: list) -> float:
-        """Estimate overall density from alive vs total blocks across all layers."""
+        """Overall density = alive tiles / total tiles across all CMS layers.
+
+        Pre-compact this reads the structured prune mask (prune_density); post-compact
+        it falls back to K/C. A layer never pruned reports density 1.0.
+        """
         alive = 0
         total = 0
         for _name, layer in layers:
             try:
-                if hasattr(layer, "tile_mask"):
-                    alive += int(layer.tile_mask.sum().item())
-                    total += int(layer.tile_mask.numel())
-                elif hasattr(layer, "block_mask"):
-                    alive += int(layer.block_mask.sum().item())
-                    total += int(layer.block_mask.numel())
+                R = int(getattr(layer, "R", 0))
+                C = int(getattr(layer, "C", 0))
+                if R == 0 or C == 0:
+                    continue
+                if getattr(layer, "_prune_mask", None) is not None:
+                    alive += int(layer._prune_mask.sum().item())
+                    total += R * C
+                elif not getattr(layer, "_dense_mode", True):
+                    # post-compact: K active columns per row
+                    alive += R * int(getattr(layer, "K", C))
+                    total += R * C
+                else:
+                    # dense, never pruned → fully dense
+                    alive += R * C
+                    total += R * C
             except Exception:
                 pass
         return alive / max(total, 1)

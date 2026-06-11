@@ -84,6 +84,7 @@ class TileRouter(nn.Module):
         activation_ratio: float = 0.5,
         n_sub_keys: int = 0,
         aux_loss_coeff: float = 1e-2,
+        n_iters: int = 1,
     ) -> None:
         super().__init__()
 
@@ -119,6 +120,14 @@ class TileRouter(nn.Module):
         # For simplicity: per-tile-group learnable bias (logit offset)
         self.group_bias = nn.Parameter(torch.zeros(n_tile_groups))
 
+        # Iteration-aware conditioning (spec Phase C: "different loop iterations activate
+        # different tile groups"). A learnable embedding per CORE-LOOP iteration is added to
+        # the projected query before the norm, so one shared router specializes its routing by
+        # which loop iteration t it is called in. ZERO-INIT → bit-identical to a non-iteration-
+        # aware router at init; specialization emerges through training. iter_idx clamps to range.
+        self.n_iters = max(1, int(n_iters))
+        self.iter_embed = nn.Parameter(torch.zeros(self.n_iters, d_model))
+
         # Query LayerNorm (PEER paper showed this critical for utilization)
         self.query_norm = nn.LayerNorm(d_model)
 
@@ -132,11 +141,14 @@ class TileRouter(nn.Module):
 
     # ── Forward ──────────────────────────────────────────────────────────────
 
-    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, x: Tensor, iter_idx: int = 0) -> Tuple[Tensor, Tensor]:
         """Compute per-token routing gates.
 
         Args:
             x: [B, T, d_model] or [B*T, d_model] input activations.
+            iter_idx: which core-loop iteration this call belongs to (selects the iteration
+                      embedding). Clamped to [0, n_iters-1]. Default 0 (+ zero-init embed) →
+                      identical to a non-iteration-aware router.
 
         Returns:
             gates:    [B, T, n_tile_groups] — non-negative continuous weights.
@@ -152,10 +164,12 @@ class TileRouter(nn.Module):
             x_flat = x
             B, T = x_flat.shape[0], 1
 
-        # 1. Project + normalize query
+        # 1. Project query, add the loop-iteration embedding, then normalize.
         # Cast to router dtype (router parameters default to fp32 unless moved to bf16)
         proj_dtype = self.query_proj.weight.dtype
-        q = self.query_norm(self.query_proj(x_flat.to(proj_dtype)))  # [N, d_model]
+        _it = max(0, min(int(iter_idx), self.n_iters - 1))  # clamp into the embedding table
+        q_proj = self.query_proj(x_flat.to(proj_dtype)) + self.iter_embed[_it].to(proj_dtype)
+        q = self.query_norm(q_proj)  # [N, d_model]
         d_half = self.d_model // 2
         q_a = q[:, :d_half]   # [N, d_half]
         q_b = q[:, d_half:]   # [N, d_half]
@@ -387,27 +401,37 @@ class RoutedBlockELLLinear(nn.Module):
 
 
 def collect_routing_aux_losses(model: nn.Module) -> Tensor:
-    """Collect and clear stashed aux_losses from all RoutedBlockELLLinear modules.
+    """Collect and clear stashed aux_losses from all routed modules.
 
     Call this AFTER model.forward() and BEFORE loss.backward().
     Returns a scalar tensor (sum of all aux losses), or 0 if no routed layers.
+
+    Generic scan: any module that stashes a non-None `_last_aux_loss` is collected and
+    cleared. This covers both RoutedBlockELLLinear (output-cluster routing) and the
+    _SwiGLUBlockELL hidden-neuron router used by the Phase-C looped core — routing.py
+    stays decoupled from transformer.py (no import) by keying on the attribute, not the type.
     """
-    total = torch.tensor(0.0, device=next(model.parameters()).device)
+    total: Tensor | None = None
     for m in model.modules():
-        if isinstance(m, RoutedBlockELLLinear):
-            aux = getattr(m, "_last_aux_loss", None)
-            if aux is not None:
-                total = total + aux
-                m._last_aux_loss = None
+        aux = getattr(m, "_last_aux_loss", None)
+        if aux is not None:
+            total = aux if total is None else total + aux
+            m._last_aux_loss = None
+    if total is None:
+        return torch.tensor(0.0, device=next(model.parameters()).device)
     return total
 
 
 def collect_routing_stats(model: nn.Module) -> Dict[str, float]:
-    """Collect routing diagnostics from all TileRouters for wandb logging."""
+    """Collect routing diagnostics from all TileRouters for wandb logging.
+
+    Scans for TileRouter instances directly so it works regardless of host module
+    (RoutedBlockELLLinear or the _SwiGLUBlockELL hidden-neuron router).
+    """
     stats: Dict[str, float] = {}
     for name, m in model.named_modules():
-        if isinstance(m, RoutedBlockELLLinear):
-            rs = m.router.log_stats()
+        if isinstance(m, TileRouter):
+            rs = m.log_stats()
             safe = name.replace(".", "_")
             for k, v in rs.items():
                 stats[f"{k}/{safe}"] = v

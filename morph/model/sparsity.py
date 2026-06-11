@@ -190,6 +190,17 @@ class BlockELLLinear(nn.Module):
         """
         return self._cms.compact_with_groups(n_clusters=n_clusters)
 
+    def carve(self, blocking: int = 128) -> int:
+        """MORTAR alternative to compact(): pack the masked-dense weight into
+        128×128 BCSR blocks executed by the vendored stk Triton backend
+        (3.09× faster than dense at 0.25 density — Gate G1; the 16×16 Block-ELL
+        kernel was 1.1× SLOWER). Pair with prune_step_blocks for lossless carving.
+
+        Returns:
+            nnz: Number of kept 128×128 blocks.
+        """
+        return self._cms.carve(blocking=blocking)
+
     # ── Density ──────────────────────────────────────────────────────────────
 
     def get_density(self) -> float:

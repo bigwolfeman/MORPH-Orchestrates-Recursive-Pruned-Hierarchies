@@ -246,8 +246,11 @@ if TRITON_AVAILABLE:
         hpostrow_ptr,     # [B, S, 4]    fp32  out
         hprecm_ptr,       # [B, S, 4]    fp32  out  (saved for backward)
         rms_ptr,          # [B, S, 1]    fp32  out  (saved for backward)
+        nout_ptr,         # [rows, *] strided out — RMSNorm(x_bar)·nw (decode fold)
+        nw_ptr,           # [C] norm weight (decode fold)
         TAU: tl.constexpr, ALPHA: tl.constexpr, ITERS: tl.constexpr, EPS: tl.constexpr,
         N: tl.constexpr, C: tl.constexpr, BLOCK_C: tl.constexpr,
+        HAS_NOUT: tl.constexpr = False, neps=1e-6, snout=0,
     ):
         tok = tl.program_id(0)
         c = tl.arange(0, BLOCK_C)
@@ -370,6 +373,15 @@ if TRITON_AVAILABLE:
         h3 = tl.load(h_ptr + h_base + 3 * C + c, mask=cmask, other=0.0).to(tl.float32)
         acc = hprecm0 * h0 + hprecm1 * h1 + hprecm2 * h2 + hprecm3 * h3
         tl.store(xbar_ptr + tok * C + c, acc.to(xbar_ptr.dtype.element_ty), mask=cmask)
+
+        if HAS_NOUT:
+            # decode-engine fold: RMSNorm(x_bar)·nw written straight into a strided
+            # slot (the attention x-history staging row). Mirrors rmsnorm_rows: acc
+            # is the same fp32 value the separate kernel would re-load.
+            ms = tl.sum(acc * acc, axis=0) / C
+            rn = 1.0 / tl.sqrt(ms + neps)
+            nw = tl.load(nw_ptr + c, mask=cmask, other=0.0)
+            tl.store(nout_ptr + tok * snout + c, (acc * rn) * nw, mask=cmask)
 
     # -----------------------------------------------------------------------
     # PRE-MAPPING backward (round 2): analytic VJP through the whole mapping.
@@ -1029,9 +1041,9 @@ class _FusedHCPreMap(torch.autograd.Function):
         rms = torch.empty(B, S, 1, device=h.device, dtype=torch.float32)
         BLOCK_C = _next_pow2(C)
         _hc_premap_fwd_kernel[(B * S,)](
-            h, raw_full, xbar, hres, hpostrow, hprecm, rms,
+            h, raw_full, xbar, hres, hpostrow, hprecm, rms, xbar, xbar,
             TAU=float(tau), ALPHA=float(alpha), ITERS=int(iters), EPS=float(eps),
-            N=N, C=C, BLOCK_C=BLOCK_C, **_LAUNCH,
+            N=N, C=C, BLOCK_C=BLOCK_C, HAS_NOUT=False, **_LAUNCH,
         )
         ctx.save_for_backward(h, raw_full, rms, proj_w)
         ctx.shape = (B, S, N, C)

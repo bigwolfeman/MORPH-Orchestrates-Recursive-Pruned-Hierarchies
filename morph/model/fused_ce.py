@@ -133,6 +133,82 @@ def fused_linear_cross_entropy(
     return _FusedLinearCE.apply(x, w, labels, ignore_index, chunk_size)
 
 
+# ── Multi-hot cross-entropy (MCE) for Token-Superposition Training ──────────
+class _FusedLinearMCE(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x: Tensor, w: Tensor, labels: Tensor,
+                ignore_index: int, chunk_size: int) -> Tensor:
+        N, d = x.shape
+        compute_dtype = x.dtype
+        valid = labels != ignore_index
+        k_per_row = valid.sum(dim=1)
+        row_valid = k_per_row > 0
+        n_valid_f = float(max(int(row_valid.sum().item()), 1))
+        inv_k = torch.zeros(N, device=x.device, dtype=torch.float32)
+        inv_k[row_valid] = 1.0 / k_per_row[row_valid].float()
+        grad_x = torch.empty_like(x)
+        grad_w = torch.zeros_like(w, dtype=torch.float32)
+        loss_sum = torch.zeros((), device=x.device, dtype=torch.float32)
+        w_cast = w.to(compute_dtype)
+        for start in range(0, N, chunk_size):
+            end = min(start + chunk_size, N)
+            x_c = x[start:end]
+            lab_c = labels[start:end]
+            valid_c = valid[start:end].to(torch.float32)
+            invk_c = inv_k[start:end]
+            rowv_c = row_valid[start:end].to(torch.float32)
+            lab_safe = lab_c.clamp(min=0)
+            logits_c = (x_c @ w_cast.t()).float()
+            lse = torch.logsumexp(logits_c, dim=-1)
+            tgt = logits_c.gather(-1, lab_safe) * valid_c
+            sum_tgt = tgt.sum(dim=1)
+            loss_c = (lse - invk_c * sum_tgt) * rowv_c
+            loss_sum = loss_sum + loss_c.sum()
+            probs = torch.softmax(logits_c, dim=-1)
+            sub = (invk_c.unsqueeze(1) * valid_c).to(probs.dtype)
+            probs.scatter_add_(-1, lab_safe, -sub)
+            probs = probs * rowv_c.unsqueeze(-1)
+            del logits_c
+            probs_c = probs.to(compute_dtype)
+            grad_x[start:end] = probs_c @ w_cast
+            grad_w += (probs_c.t() @ x_c).float()
+            del probs, probs_c
+        loss = loss_sum / n_valid_f
+        grad_x.div_(n_valid_f)
+        grad_w.div_(n_valid_f)
+        ctx.save_for_backward(grad_x, grad_w)
+        ctx.x_dtype = x.dtype
+        ctx.w_dtype = w.dtype
+        return loss
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor):
+        grad_x, grad_w = ctx.saved_tensors
+        go = grad_output
+        return (grad_x * go).to(ctx.x_dtype), (grad_w * go).to(ctx.w_dtype), None, None, None
+
+
+def fused_linear_cross_entropy_mce(
+    x: Tensor, w: Tensor, labels: Tensor, ignore_index: int = -100, chunk_size: int = 1024,
+) -> Tensor:
+    """Memory-efficient multi-hot cross-entropy. labels: [N, K]. Reduces to single-hot when K=1."""
+    return _FusedLinearMCE.apply(x, w, labels, ignore_index, chunk_size)
+
+
+def multi_hot_cross_entropy_reference(
+    logits: Tensor, labels: Tensor, ignore_index: int = -100,
+) -> Tensor:
+    """Eager full-logits MCE reference. logits: [N, V], labels: [N, K]."""
+    f = logits.float()
+    valid = (labels != ignore_index)
+    k = valid.sum(dim=1).clamp(min=1).float()
+    row_valid = (valid.sum(dim=1) > 0).float()
+    lse = torch.logsumexp(f, dim=-1)
+    tgt = f.gather(-1, labels.clamp(min=0)) * valid.float()
+    per_row = (lse - tgt.sum(dim=1) / k) * row_valid
+    return per_row.sum() / row_valid.sum().clamp(min=1.0)
+
+
 # ── Pure-reference + self-test ──────────────────────────────────────────────
 
 def _reference(x: Tensor, w: Tensor, labels: Tensor, ignore_index: int = -100):
