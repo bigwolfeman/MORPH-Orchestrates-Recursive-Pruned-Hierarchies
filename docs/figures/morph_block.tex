@@ -105,7 +105,7 @@
 \node[B, fill=fOrange, below=0.85cm of normM, minimum height=1.15cm] (mlp) {
   SwiGLU MLP\\[-1pt]
   {\scriptsize gate\_up: $d\to d_{ff}{\times}2$,\; $\mathrm{SiLU}(g)\odot u$,\; down: $d_{ff}\to d$}\\[-1pt]
-  {\scriptsize Block-ELL in core layers (dense pre-compact)}};
+  {\scriptsize MORTAR in core layers (dense pre-carve)}};
 \draw[A] (normM) -- (mlp);
 \node[Bs, fill=hcC!10, draw=hcC, below=0.7cm of mlp] (postM) {
   $H_{\mathrm{res}}$ mix $+$ $H_{\mathrm{post}}$ scatter};

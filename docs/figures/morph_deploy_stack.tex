@@ -87,7 +87,7 @@
 % ── CORE LOOP (the heart) ────────────────────────────────────────────
 \node[PT, above=0.7cm of pre, minimum height=1.5cm, line width=2pt] (core) {
   \textbf{Core Loop} $2N \times T \sim \mathrm{Poi}(\lambda{=}6)$\\[-1pt]
-  {\scriptsize attn + SwiGLU\,(Block-ELL); layer 1 $\to$ +GLA}\\[-1pt]
+  {\scriptsize attn + SwiGLU\,(MORTAR); layer 1 $\to$ +GLA}\\[-1pt]
   {\scriptsize truncated BPTT (last 4 iters)}};
 \draw[A] (pre) -- (core);
 

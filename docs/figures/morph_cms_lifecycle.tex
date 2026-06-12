@@ -1,12 +1,15 @@
-% MORPH — Core-MLP Lifecycle: Block-ELL · CMS pruning · ReMoE routing.
+% MORPH — Core-MLP Lifecycle: MORTAR · CMS pruning · ReMoE routing.
 % Companion to morph_block.tex (the static forward view). Tells the TRAINING-LIFECYCLE story
-% via the SwiGLU-MLP weight as a tile-grid evolving across phases.
+% via the SwiGLU-MLP weight as a block-grid evolving across phases.
 %
-% Verified against code (2026-06-07, subagent file:line audit):
-%   - CMSBlockLinear dual-mode: dense [out,in] (cuBLAS F.linear) -> compact() -> Block-ELL values[R,K,16,16]+col_indices.
-%   - tile_size B=16 (WMMA); R=out/16, C=in/16, K active block-cols/row, density=K/C.
-%   - Block-ELL forward+backward Triton kernels are real (block_ell_forward/backward.py).
-%   - block_ell_scope=all applies Block-ELL to prelude + core + coda SwiGLU MLPs (gate_up + down).
+% Verified against code (2026-06-11, post Block-ELL rip):
+%   - CMSBlockLinear dual-mode: dense [out,in] (cuBLAS F.linear) -> carve() -> MORTAR BCSR
+%     mortar_data[nnz,128,128] + row_indices/column_indices/offsets (vendored morph/sparse/stk).
+%   - prune_step_blocks: score at 16x16 tile (block_score_ema, score_mode=taylor/grad/magnitude),
+%     execute at 128x128 block — zero the lowest-saliency blocks toward target_density.
+%   - carve() packs the kept 128x128 blocks into BCSR (stk Triton fwd+bwd; 3.09x FASTER than
+%     dense at 0.25 density, Gate G1). MORTAR is the ONLY sparse backend (no scope knob).
+%   - Applied to prelude + core + coda SwiGLU MLPs (gate_up + down).
 %   - ReMoE TileRouter: PEER product-key -> ReLU gate (activation_ratio), load-balance aux loss;
 %     activation-conditioned (per-token), NOT keyed on the loop-iteration index.
 % Compile: pdflatex morph_cms_lifecycle.tex
@@ -86,14 +89,14 @@
   \draw[draw=cbOrange, very thick, rounded corners=7pt, fill=cbOrange!4]
     (\bxl,\bxt) rectangle (\bxr,\bxb);
   \node[ttl, text=cbOrange!85!black] at (\bcx,0.82) {B1 · Prune};
-  \node[badge=cbOrange] at (\bcx,0.40) {topology swap};
+  \node[badge=cbOrange] at (\bcx,0.40) {block prune};
   \foreach \r in {0,...,4}\foreach \c in {0,...,7}{ \celldraw{\c}{\r}{fGray!35}{bdr!25} }
   \foreach \r/\c in {0/1,0/5, 1/0,1/4, 2/2,2/6, 3/3,3/7, 4/0,4/5}{
     \celldraw{\c}{\r}{cbOrange!32}{cbOrange!70} }
   \node[dsc, text width=3.5cm] at (\bcx,-2.35)
-    {low-score tiles $\leftrightarrow$ high $(\mathrm{act}\!\times\!\mathrm{err})$ candidates};
+    {keep highest-saliency $128\!\times\!128$ blocks; zero the rest};
   \node[nte, text=bdr, text width=3.5cm] at (\bcx,-3.55)
-    {toward \texttt{target\_density}; swap-budget capped per row / layer};
+    {\texttt{prune\_step\_blocks} toward \texttt{target\_density} $=0.25$};
 \end{scope}
 
 % =====================================================================
@@ -102,15 +105,15 @@
 \begin{scope}[xshift=8.8cm]
   \draw[draw=cbBlue, very thick, rounded corners=7pt, fill=cbBlue!4]
     (\bxl,\bxt) rectangle (\bxr,\bxb);
-  \node[ttl, text=cbBlue] at (\bcx,0.82) {B2 · Compact};
-  \node[badge=cbBlue] at (\bcx,0.40) {dense $\to$ Block-ELL};
+  \node[ttl, text=cbBlue] at (\bcx,0.82) {B2 · Carve};
+  \node[badge=cbBlue] at (\bcx,0.40) {dense $\to$ MORTAR BCSR};
   \foreach \r in {0,...,4}\foreach \c in {0,1}{ \celldraw{\c}{\r}{cbBlue!32}{cbBlue!65} }
   \foreach \r/\a/\b in {0/1/5, 1/0/4, 2/2/6, 3/3/7, 4/0/5}{
     \node[tny, text=bdr, anchor=west] at ({\gx+2*\tg+0.12},{-\r*\tg-0.5*\ts}) {[\a,\b]};}
   \node[dsc, text width=3.5cm] at (\bcx,-2.35)
-    {\texttt{values}$[R,K,16,16]$\\ $+$ \texttt{col\_indices}$[R,K]$};
+    {\texttt{mortar\_data}$[\mathrm{nnz},128,128]$\\ $+$ BCSR \texttt{row}/\texttt{col}/\texttt{offsets}};
   \node[nte, text=bdr, text width=3.5cm] at (\bcx,-3.55)
-    {real Triton fwd $+$ bwd kernel; topology frozen};
+    {stk Triton fwd $+$ bwd; $3.09\times$ faster than dense @\,0.25};
 \end{scope}
 
 % =====================================================================
@@ -148,19 +151,19 @@
 \node[draw=bdr, rounded corners=6pt, fill=fGray!25, inner sep=11pt,
       align=left, font=\small\sffamily, text width=16.4cm, anchor=north]
       (facts) at (8.4,-4.75) {%
-  \textbf{Block-ELL format:} $16\!\times\!16$ tiles; $R{=}d_{\mathrm{out}}/16$ rows, $C{=}d_{\mathrm{in}}/16$ cols,
-  $K$ active block-cols per row, \textbf{density $=K/C$}.\quad
+  \textbf{MORTAR BCSR:} $128\!\times\!128$ blocks; $R_b{=}d_{\mathrm{out}}/128$ block-rows, $C_b{=}d_{\mathrm{in}}/128$ block-cols,
+  $\mathrm{nnz}$ kept blocks, \textbf{density $=\mathrm{nnz}/(R_b C_b)$}.\quad
   \textbf{Scope:} all SwiGLU MLPs (\texttt{gate\_up} $+$ \texttt{down}) across \textbf{prelude $+$ core $+$ coda}
-  (\texttt{block\_ell\_scope=all}); the core block is re-applied every loop iteration.\\[4pt]
-  \textbf{CMS schedule:} accumulate scores every step \;$\cdot$\; \texttt{score\_step} every 10 \;$\cdot$\; topology swaps periodically from \texttt{prune\_start}
-  \;$\cdot$\; \texttt{compact()} once at \texttt{compact\_step} \;$\cdot$\; ReMoE at \texttt{route\_start}.
-  \;Tile scoring $=$ gradient-Frobenius EMA (incumbents) vs.\ $\mathrm{err}[r]\!\times\!\mathrm{act}[c]$ (candidates).\\[4pt]
-  \textbf{ReMoE:} routing is \emph{per-token activation-conditioned} on each Block-ELL layer (prelude / core / coda).
+  (MORTAR-only --- no scope knob); the core block is re-applied every loop iteration.\\[4pt]
+  \textbf{CMS schedule:} accumulate saliency EMA every step \;$\cdot$\; \texttt{prune\_step\_blocks} from \texttt{prune\_start} toward \texttt{target\_density}
+  \;$\cdot$\; \texttt{carve()} once at \texttt{compact\_step} \;$\cdot$\; ReMoE at \texttt{route\_start}.
+  \;Saliency $=$ \texttt{score\_mode} (taylor / grad / magnitude) EMA, pooled $16\!\times\!16$ tile $\to$ $128\!\times\!128$ block (score at tile, execute at block).\\[4pt]
+  \textbf{ReMoE:} routing is \emph{per-token activation-conditioned} on each MORTAR layer (prelude / core / coda).
   In the looped core, different iterations route differently only because their activations differ --- \emph{not} via any iteration-index input.};
 
 % ── Title ────────────────────────────────────────────────────────────
 \node[font=\Large\sffamily\bfseries, anchor=south] at (8.4,4.25)
-  {MORPH --- Core-MLP Lifecycle: Block-ELL $\cdot$ CMS Pruning $\cdot$ ReMoE};
+  {MORPH --- Core-MLP Lifecycle: MORTAR $\cdot$ CMS Pruning $\cdot$ ReMoE};
 
 \end{tikzpicture}
 \end{document}
