@@ -119,6 +119,17 @@ training:
   compact_step: 20000            # carve smooth-shadow → BCSR mortar_data at this step
   cms_score_mode: taylor         # winner prune saliency (NOT grad); Taylor helps post-prune recovery (B3>B1)
 
+  # ── Token Superposition Training (TST, #231 — Nous arXiv 2605.06546) ──
+  # Two-phase curriculum: superposition (bag_size=s tokens/position, multi-hot CE) for
+  # [0, tst_ratio·steps), then recovery (bag_size=0, standard NTP) for the remainder.
+  # eval/gen ALWAYS use bag_size=0; tst_bag_size=0 ⇒ bit-identical to no-TST.
+  # Paper sweet spot s=6, ratio=0.3. At steps=100000 ⇒ superposition [0,30000), recovery [30000,100000).
+  # SCHEDULE NOTE: the superposition phase fully contains prune(3k–18k)/carve(20k)/route(21k) — the
+  #   sparse structure is built under superposition, then recovers on 70k steps of clean NTP.
+  #   TST was −4% ppl at d=768/15k on a quant-ONLY stack (#231); TST × full sparse pipeline is UNTESTED.
+  tst_bag_size: 6                # s: tokens superposed per position (0 = TST off)
+  tst_ratio: 0.3                 # fraction of steps in the superposition phase
+
   # Optimizer extras
   weight_decay: 0.1
   beta1: 0.9
