@@ -20,7 +20,7 @@ train-smooth / deploy-ternary gap to measure separately.
 Scope ablation (per the research question — does ternarizing attention +
 embeddings hurt more than just the backbone?):
   - "backbone"      : all weight matrices that are NOT attention and NOT embeddings
-                      (MLP gate_up/down for both _SwiGLU and _SwiGLUBlockELL cores,
+                      (MLP gate_up/down for both _SwiGLU and _SwiGLUMortar cores,
                       the LM-head mixer, channel-inject projections).
   - "backbone_attn" : backbone + attention projections (nn.Linear inside MORPHAttention).
   - "embeddings"    : token/euclidean/bigram embedding tables ONLY (no backbone, no
@@ -543,7 +543,7 @@ def _categorize(name: str, module: nn.Module, attn_ids: set[int]) -> str | None:
     if (name.endswith("injection.W_a") or name.endswith("injection.W_dt")
             or name.endswith("injection.B")):
         return None
-    # CMSBlockLinear (inside BlockELLLinear) holds a dense [out, in] nn.Parameter
+    # CMSBlockLinear (inside MortarLinear) holds a dense [out, in] nn.Parameter
     # named `weight` in dense mode — quantize it like any other linear.
     is_cms = type(module).__name__ == "CMSBlockLinear"
     if isinstance(module, nn.Linear) or is_cms:

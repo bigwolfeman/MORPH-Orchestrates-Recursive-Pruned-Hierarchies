@@ -29,7 +29,7 @@ Data flows top-to-bottom through four stages:
 
 2. **Prelude** (N layers) — Standard transformer blocks that establish initial representations.
 
-3. **Core Loop** (2N layers, iterated T times) — The heart of the architecture. The same set of layers is reused T times with diagonal injection at the loop boundary (Parcae-style, spectral radius < 1 guaranteed). Depth T is sampled from a Poisson distribution during training and truncated BPTT limits the backward pass to the last 4 iterations. The core MLP layers use Block-ELL sparse format for extreme pruning.
+3. **Core Loop** (2N layers, iterated T times) — The heart of the architecture. The same set of layers is reused T times with diagonal injection at the loop boundary (Parcae-style, spectral radius < 1 guaranteed). Depth T is sampled from a Poisson distribution during training and truncated BPTT limits the backward pass to the last 4 iterations. The core MLP layers use the MORTAR 128×128 BCSR sparse format for extreme pruning.
 
 4. **Coda** (N layers) — Post-loop layers that refine the representation. After the coda, the output goes through the LM head.
 
@@ -62,7 +62,7 @@ At init the maps reduce to `x + F(mean(x))` — a plain residual — so HC start
 Each block has two sublayers with identical HC structure:
 
 1. **H<sub>pre</sub>** &rarr; **RMSNorm** &rarr; **Attention** (CCA + CSA/HCA) [+ GLA on layer 1] &rarr; **H<sub>res</sub> mix + H<sub>post</sub> scatter**
-2. **H<sub>pre</sub>** &rarr; **RMSNorm** &rarr; **SwiGLU MLP** (Block-ELL in core layers) &rarr; **H<sub>res</sub> mix + H<sub>post</sub> scatter**
+2. **H<sub>pre</sub>** &rarr; **RMSNorm** &rarr; **SwiGLU MLP** (MortarLinear, prunable/carvable) &rarr; **H<sub>res</sub> mix + H<sub>post</sub> scatter**
 
 The attention mechanism combines:
 - **CCA** (Cross-Chunk Attention): The primary attention path with channel compression and CoPE-RoPE positional encoding
@@ -92,15 +92,15 @@ The core loop reuses 2N layers T times, giving effective depth of 2N&middot;T wi
 
 HC solves this: the orthogonal stream mixer (H<sub>res</sub> = Cayley(skew) ∈ O(n)) preserves the residual-stream norm across iterations (dynamical isometry), so the carrier neither explodes nor collapses over T loops. The diagonal injection at loop boundaries (spectral radius < 1) adds a further stability guarantee. Together these allow T=6-8 loop iterations without divergence. *(The MRR alternative achieves the same via its slow channel, &gamma;&approx;0.1, instead of an orthogonal mixer.)*
 
-### Looping &times; Block-ELL = Multiplicative FLOP savings
+### Looping &times; MORTAR = Multiplicative FLOP savings
 
 Because the same weights are reused T times per forward pass, pruning the core block to 25% density doesn't just save 75% of MLP FLOPs — it saves 75% &times; T. For T=6, that's 4.5&times; the absolute FLOP reduction compared to pruning a non-looped layer.
 
 The pruning uses CMS (Continuum Memory System) topology scoring: gradient-based importance scores accumulated over training, with periodic topology decisions that prune low-scoring blocks and optionally regrow high-potential ones.
 
-### Block-ELL &times; Triton = Actual speedup, not just parameter reduction
+### MORTAR &times; Triton = Actual speedup, not just parameter reduction
 
-Structured sparsity on paper doesn't help if the runtime can't exploit it. MORPH includes custom Triton kernels for Block-ELL forward and backward passes that operate directly on the sparse tensor format. After compaction, the MLP layers execute only the surviving blocks — no wasted computation on zero blocks, no gather/scatter overhead.
+Structured sparsity on paper doesn't help if the runtime can't exploit it. MORPH executes carved MLPs with the vendored stk Triton BCSR kernels (morph/sparse/stk) operating directly on 128×128 blocks — measured 3.09× faster than dense at 0.25 density. After carving, the MLP layers execute only the surviving blocks — no wasted computation on zero blocks, no gather/scatter overhead.
 
 ---
 
@@ -137,7 +137,7 @@ All blocks active. The model learns basic language representations with full-den
 Starting at step ~6k, topology decisions happen every `prune_interval` steps: low-scoring blocks are removed, reducing density toward the 25% target. The model continues training through each pruning step, adapting its weights to compensate for removed capacity. This is gradual — removing 5% of remaining blocks per round over many rounds.
 
 ### Phase 3: Compact
-At the target density, the sparse mask is converted into actual smaller Block-ELL tensors. Memory footprint drops immediately. From this point, forward/backward passes use the compact Triton kernels.
+At the target density, carve() converts the sparse mask into MORTAR BCSR storage (mortar_data + index buffers). Memory footprint drops immediately. From this point, forward/backward passes use the stk BCSR Triton kernels.
 
 ### Phase 4: Settle
 Post-compact recovery training. The model adjusts to the now-permanent sparse structure. Learning rate may be reduced. This phase typically runs for a few thousand steps.
@@ -145,7 +145,7 @@ Post-compact recovery training. The model adjusts to the now-permanent sparse st
 ### Phase 5: Route (ReMoE) *[pending integration]*
 After the model has settled into its pruned structure, per-token routing is activated over the surviving tile-groups. Different tokens activate different subsets of the remaining 25% of blocks, effectively giving each token a specialized sparse MLP.
 
-The routing module (`morph/model/routing.py`) implements `TileRouter` with PEER-style product keys and `RoutedBlockELLLinear` for the post-compact forward pass. The Triton kernel (`morph/kernels/triton/block_ell_routed_forward.py`) is ready. **Integration into the training loop is pending.**
+The routing module (`morph/model/routing.py`) implements `TileRouter` with PEER-style product keys; `_SwiGLUMortar` hosts it as a hidden-neuron (d_ff cluster) gate, fully backend-agnostic over the carved BCSR GEMM. Routing engages at `routing.route_start` via `PruningSchedule`.
 
 ---
 
@@ -159,18 +159,14 @@ morph/
     mhc.py               # Multi-Rate Residual (MRR) channel dynamics
     embeddings.py        # Hybrid Euclidean + Lorentz + bigram embeddings
     prediction.py        # STP (Semantic Tube Predictor) — zero-param regularizer
-    sparsity.py          # BlockELLLinear — dense pre-compact, sparse post-compact
-    routing.py           # TileRouter + RoutedBlockELLLinear (post-compact)
+    sparsity.py          # MortarLinear — dense pre-carve, MORTAR BCSR post-carve
+    routing.py           # TileRouter (hidden-neuron ReMoE routing)
     titans_core/         # Vendored CMS block-sparse and topology scoring
   kernels/
     triton/
       fused_window_attention.py    # Fused windowed attention
-      block_ell_forward.py         # Block-ELL sparse forward kernel
-      block_ell_backward.py        # Block-ELL sparse backward kernel
-      block_ell_routed_forward.py  # Routed sparse forward (per-token tile selection)
       fused_gate_combine.py        # Fused gate+combine for CSA/HCA blend
       fused_ops.py                 # Fused auxiliary operations
-    pallas/              # TPU kernels
   training/
     train.py             # Training loop with Hydra config
     data.py              # OpenWebText data loading
@@ -238,8 +234,10 @@ From `morph/configs/base.yaml`:
 
 The looped architecture at 81M parameters beats the 531M dense baseline. Pruning to 25% density adds ~5% PPL cost while nearly doubling throughput.
 
-> These results were measured on the looped Block-ELL backbone. They predate the
-> neural-memory/JEPA removal, which does not change the backbone or pruning path.
+> These results were measured on the looped sparse backbone with the legacy 16×16
+> Block-ELL kernels (since replaced by MORTAR 128×128 BCSR, which is strictly
+> faster post-carve). They predate the neural-memory/JEPA removal, which does not
+> change the backbone or pruning path.
 
 ---
 

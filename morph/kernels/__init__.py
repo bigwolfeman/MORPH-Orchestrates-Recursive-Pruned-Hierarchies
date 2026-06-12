@@ -1,1 +1,1 @@
-"""MORPH custom kernels — Triton (GPU), CUDA, Pallas (TPU)."""
+"""MORPH custom kernels — Triton (GPU), CUDA."""

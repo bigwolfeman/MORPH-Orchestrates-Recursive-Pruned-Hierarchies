@@ -78,10 +78,9 @@ model:
   hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda). false ⇒ eager refs (bit-faithful,
                            # slower) — the reference arm for the fused-vs-eager parity A/B.
 
-  # Block-ELL / MORTAR sparse scope. ALWAYS "all" — prelude+core+coda all use CMSBlockLinear
-  # (CMS-prunable + MORTAR BCSR via morph/sparse/stk). Only "all" is accepted (else raises).
+  # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
+  # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.
   # Constraint: all dims must be divisible by tile_size=16. d_model=768, d_ff=2048(auto) satisfy this.
-  block_ell_scope: "all"
 
   # ── GLA Retention branch (#230) ──────────────────────────────────────────
   # Gated Linear Attention added in PARALLEL to the windowed attention in the 2nd layer
@@ -99,9 +98,9 @@ training:
   steps: 100000
   batch_size: 4
   lr: 1e-4
-  warmup: 1500
-  lr_schedule: cosine
-  min_lr: 1e-5
+  warmup: 0                       # validated mortar winner (phase_c_mortar_full25k_scratch): NO warmup
+  lr_schedule: cosine            # cosine with min_lr==lr ⇒ FLAT 1e-4 (winner recipe; flat LR intentional)
+  min_lr: 1e-4                   # == lr → flat LR the whole run (do NOT add cosine decay; validated)
   dropout: 0.1
   grad_clip: 1.0
   bf16: true
@@ -110,11 +109,15 @@ training:
   checkpointing: true
 
   # Pruning → MORTAR carve → routing schedule (Phases 2→3→4)
-  prune_start: 6000
-  prune_interval: 3000
-  prune_rate: 0.05
+  # Validated mortar winner cadence (gentle+frequent): removes 0.005 every 100 steps from 3000,
+  # reaching target_density 0.25 by ~step 18000 — fully pruned BEFORE compact_step 20000.
+  # (Old 6000/3000/0.05 reached only ~0.80 density by step 20000 → would carve a still-dense model.)
+  prune_start: 3000
+  prune_interval: 100
+  prune_rate: 0.005
   target_density: 0.25
   compact_step: 20000            # carve smooth-shadow → BCSR mortar_data at this step
+  cms_score_mode: taylor         # winner prune saliency (NOT grad); Taylor helps post-prune recovery (B3>B1)
 
   # Optimizer extras
   weight_decay: 0.1
@@ -138,7 +141,8 @@ training:
   lm_head_quant: "off"           # off | int6. QUOTED.
 
   # Attention-projection int8 QAT. Per-output-row int8 STE on CCA Linears. Disjoint from ternary backbone.
-  attn_proj_quant: "int8"        # off | int8 | int6 | int4. QUOTED.
+  attn_proj_quant: "off"         # off | int8 | int6 | int4. QUOTED. Winner=off (reproduces validated 33.82);
+                                 # int8 is a deploy opt-in that needs its own 25k validation before becoming default.
 
   # FP8: dead at d=768 scale (small-GEMM regime); ternary and FP8 are mutually exclusive per-layer.
   fp8: false
@@ -161,7 +165,8 @@ training:
 # (There is no "routing off" code path — routing is unconditional in the forward pass
 #  once the carve has been applied. route_start just gates the training-time routing head.)
 routing:
-  route_start: 25000             # engage ReMoE routing after carve + settle
+  route_start: 21000             # winner recipe: engage ReMoE 1000 steps after carve (compact 20000)
+  route_scope: all               # whole-body ReMoE (12 MLPs); winner used all. Code default "core" = 6 MLPs only
   n_clusters: 16
   activation_ratio: 0.5
   aux_loss_coeff: 0.01
