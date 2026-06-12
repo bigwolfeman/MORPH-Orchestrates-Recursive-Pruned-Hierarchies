@@ -4,7 +4,7 @@
 
 **MORPH** — Orchestrates Recursive Pruned Hierarchies
 
-Production model combining: Parcae-style looped transformer, Block-ELL structured sparsity,
+Production model combining: Parcae-style looped transformer, MORTAR structured sparsity,
 CCA+CSA+HCA attention, multi-rate residual (MRR) channels, STP (Semantic Tube Predictor)
 geometric regularization, hybrid embeddings, STE ternary shadow weights.
 Dual PyTorch (GPU) + JAX (TPU).
@@ -66,11 +66,11 @@ morph/
     attention.py     # CCA+CSA+HCA+XSA+ResAttn+CoPE (one module, no flags)
     embeddings.py    # Hybrid (eucl+Lorentz) + bigram
     mhc.py           # Multi-Rate Residual (MRR) — per-channel γ scaling
-    sparsity.py      # Block-ELL + CMS + compaction
+    sparsity.py      # MortarLinear (dense pre-carve → MORTAR BCSR post-carve)
     routing.py       # ReMoE over macro tiles
     prediction.py    # STP (Semantic Tube Predictor) — zero-param geodesic regularizer
   kernels/
-    triton/          # GPU kernels (Block-ELL, fused ops, attention)
+    triton/          # GPU kernels (fused ops, attention, decode)
     pallas/          # TPU kernels
   training/
     train.py         # Single entry point
@@ -89,8 +89,10 @@ docs/
 
 ## Critical Patterns
 
-### Block-ELL Sparsity Schedule
-Dense 0-50k → prune 50-60k (5%/3k steps) → compact → route 60-75k.
+### MORTAR Sparsity Schedule
+Dense → prune (prune_step_blocks, 128×128-aligned) → carve() to MORTAR BCSR at
+compact_step → ReMoE route at route_start. MORTAR is the ONLY sparse backend
+(legacy 16×16 Block-ELL removed 2026-06-11; there is no sparse_backend knob).
 accumulate_scores() MUST be called between loss.backward() and optimizer.zero_grad().
 
 ### STP During Pretraining

@@ -59,7 +59,7 @@ Verified PT → JAX path mapping (one representative example per param type):
 
   stp.*                                       (no parameters — zero-param module)
 
-  BlockELLLinear / _cms.*                     (pruning state — skipped, no JAX equivalent)
+  MortarLinear / _cms.*                       (pruning state — skipped, no JAX equivalent)
 
 Key differences from older converter:
   - PT MORPHBlock: `block.norm_attn`, `block.attention`, `block.mlp`
@@ -108,10 +108,11 @@ except ImportError:
 # ── Skip list: PT state-dict entries that have no JAX equivalent ──────────────
 
 # These are either non-parameter buffers (RoPE cache, CoPE freqs) or
-# BlockELLLinear topology state (col_indices, score_history, etc.)
+# Legacy CMS topology state (col_indices, score_history, etc. — kept in the skip
+# list so OLD checkpoints that still carry these keys convert cleanly)
 _PT_SKIP_SUBSTRINGS = [
     "freqs", "momentum_S", "_param_offsets",
-    # BlockELLLinear CMS state (pruning topology — not model params):
+    # CMS state (pruning topology — not model params):
     "_cms.col_indices", "_cms.block_age", "_cms.block_score_ema",
     "_cms.block_score_historical_ema", "_cms.score_history",
     "_cms.crystallized_mask", "_cms.col_usage_count", "_cms.swap_count",
@@ -364,7 +365,7 @@ def _map_block_rest(jax_path: list[str], rest: list[str], cca_branch: str
       ["mrr_mlp", "gamma_raw"]
       ["mlp", "gate_up", "weight"]     (prelude/coda plain SwiGLU)
       ["mlp", "down", "weight"]
-      ["mlp", "gate_up", "_cms", "weight"]  (core BlockELL weight)
+      ["mlp", "gate_up", "_cms", "weight"]  (core CMS weight)
       ["mlp", "down", "_cms", "weight"]
       ["attention", "_impl", "cca", "W_down_q", "weight"]
       ["attention", "_impl", "cca", "sink_logits"]
@@ -396,18 +397,18 @@ def _map_block_rest(jax_path: list[str], rest: list[str], cca_branch: str
         jax_path.append(leaf)  # alpha_raw / gamma_raw — no transform
         return jax_path, False
 
-    # ── MLP (SwiGLU, possibly BlockELL) ──────────────────────────────────────
+    # ── MLP (SwiGLU, possibly CMS-wrapped) ───────────────────────────────────
     if r0 == "mlp":
         jax_path.append("mlp_module")
         # rest[1:] = e.g. ["gate_up", "weight"] or ["gate_up", "_cms", "weight"]
-        # BlockELLLinear stores the actual dense weight at "._cms.weight".
+        # MortarLinear stores the actual dense weight at "._cms.weight".
         # Both forms map to the same JAX Dense kernel (plain SwiGLU or post-compact).
         mlp_rest = rest[1:]
         if len(mlp_rest) == 0:
             return jax_path, False
         layer_name = mlp_rest[0]  # "gate_up" or "down"
         jax_path.append(layer_name)
-        # Detect BlockELL: ["gate_up", "_cms", "weight"] → kernel
+        # Detect CMS wrapper: ["gate_up", "_cms", "weight"] → kernel
         if len(mlp_rest) >= 3 and mlp_rest[1] == "_cms" and mlp_rest[2] == "weight":
             jax_path.append("kernel")
             return jax_path, True

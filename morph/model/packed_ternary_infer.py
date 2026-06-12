@@ -36,7 +36,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .sparsity import BlockELLLinear
+from .sparsity import MortarLinear
 
 __all__ = [
     "pack_ternary_codes", "unpack_ternary",
@@ -241,18 +241,16 @@ def pack_mortar_ternary(cms: nn.Module, threshold: float = 0.5) -> dict:
             "scale": float(scale), "nonzero_code_frac": nz / max(1, q.numel())}
 
 
-_BIG_CMS_BUFFERS = (
-    "block_score_ema", "activation_norm_acc", "error_norm_acc", "block_age",
-    "_score_snapshot", "col_usage_count", "score_history", "crystallized_mask",
-    "block_score_historical_ema", "last_swap_step", "swap_count", "col_indices",
-)
+# Training-only CMS buffer(s) to empty for inference. (The legacy topology buffers
+# — score_history, col_indices, block_age, … — no longer exist on CMSBlockLinear.)
+_BIG_CMS_BUFFERS = ("block_score_ema",)
 
 
 def strip_cms_inference(cms: nn.Module) -> int:
-    """Replace the (training-only) CMS scoring/topology buffers with empty tensors.
+    """Replace the (training-only) CMS scoring buffer(s) with empty tensors.
 
-    Post-carve these are dead weight — score_history alone is [R,K,10] fp32
-    (~56 MB for gate_up at d=8192). Returns bytes freed. Attribute access stays
+    Post-carve the saliency EMA is dead weight (block_score_ema is [R,K] fp32 —
+    ~8 MB for gate_up at d=8192). Returns bytes freed. Attribute access stays
     valid (empty tensors, not deletion) so reprs/log paths can't crash.
     """
     freed = 0
@@ -267,10 +265,10 @@ def strip_cms_inference(cms: nn.Module) -> int:
 
 
 def shrink_mlp_to_mortar_ternary(
-    bel: BlockELLLinear, target_density: float = 0.25, blocking: int = 128,
+    bel: MortarLinear, target_density: float = 0.25, blocking: int = 128,
     threshold: float = 0.5, generator: torch.Generator | None = None,
 ) -> dict:
-    """Full deploy-format pipeline for ONE BlockELLLinear, in place (on its device):
+    """Full deploy-format pipeline for ONE MortarLinear, in place (on its device):
 
       random saliency → prune_step_blocks(→ target_density, 128-aligned)
       → carve(128) [real MORTAR BCSR] → ternary 2-bit pack → strip CMS buffers.
@@ -302,7 +300,7 @@ def shrink_mlp_to_mortar_ternary(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _inner_mlp(block_mlp: nn.Module) -> nn.Module:
-    """Unwrap _KwargSequential(mlp, Dropout) → the _SwiGLUBlockELL (or return as-is)."""
+    """Unwrap _KwargSequential(mlp, Dropout) → the _SwiGLUMortar (or return as-is)."""
     if isinstance(block_mlp, nn.Sequential):
         return block_mlp[0]
     return block_mlp
@@ -329,7 +327,7 @@ def shrink_block(block: nn.Module, target_density: float = 0.25,
     mlp = _inner_mlp(block.mlp)
     carve_info = []
     for sub in (mlp.gate_up, mlp.down):
-        assert isinstance(sub, BlockELLLinear), type(sub)
+        assert isinstance(sub, MortarLinear), type(sub)
         carve_info.append(shrink_mlp_to_mortar_ternary(
             sub, target_density=target_density, threshold=threshold))
     n_lin = quantize_attention_linears(block.attention, bits=attn_bits)

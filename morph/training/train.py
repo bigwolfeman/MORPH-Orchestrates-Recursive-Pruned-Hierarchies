@@ -221,7 +221,6 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         hc_init_gain=float(getattr(m, "hc_init_gain", 0.1)),
         hc_use_kernel=bool(getattr(m, "hc_use_kernel", True)),
         l2_persist=bool(getattr(m, "l2_persist", False)),
-        block_ell_scope=str(getattr(m, "block_ell_scope", "all")),
         retention=bool(getattr(m, "retention", True)),
         retention_layers=tuple(int(x) for x in getattr(m, "retention_layers", (1,))),
         retention_heads=int(getattr(m, "retention_heads", 0)),

@@ -1,1 +1,1 @@
-"""Triton GPU kernels — Block-ELL, fused ops, attention."""
+"""Triton GPU kernels — fused ops, attention, decode."""

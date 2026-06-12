@@ -269,7 +269,7 @@ class StaticDecodeEngine:
                         # (linear ⇒ exact up to fp mul order; gated).
                         woproj_s = (torch.sigmoid(s.block.ret_gate)
                                     * r.o_proj.weight).contiguous()
-                    # MLP weights: BlockELLLinear dense mode (276M: plain post-materialize
+                    # MLP weights: MortarLinear dense mode (276M: plain post-materialize
                     # tensors) OR MORTAR-carved 2-bit BCSR (30B deploy: strip-packed for
                     # mortar_gemv; the codes/scale are exactly pack_mortar_ternary's).
                     mlp_mod = s.block.mlp[0] if hasattr(s.block.mlp, "__getitem__") \

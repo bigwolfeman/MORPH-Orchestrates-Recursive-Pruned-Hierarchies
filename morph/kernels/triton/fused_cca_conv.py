@@ -49,7 +49,6 @@ Design for sm_120
 
 Author: TileProver (Claude Code, Opus 4.8)
 Date:   2026-05-31
-Branch: 006-looped-block-ell
 """
 
 from __future__ import annotations

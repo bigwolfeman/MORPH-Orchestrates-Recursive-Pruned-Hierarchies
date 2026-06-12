@@ -78,11 +78,10 @@ model:
   hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda). false ⇒ eager refs (bit-faithful,
                            # slower) — the reference arm for the fused-vs-eager parity A/B.
 
-  # Block-ELL scope: ALWAYS "all" — prelude+core+coda all use BlockELLLinear (CMS-prunable +
-  # Triton sparse kernels). "core" scope was REMOVED: pruning targets the whole MLP backbone and
-  # every config's architecture matches the deploy stack. Only "all" is accepted (else raises).
-  # Constraint: all dims must be divisible by tile_size=16. d_model=768, d_ff=2048(auto) satisfy this.
-  block_ell_scope: "all"
+  # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
+  # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob. Pruning targets the
+  # whole MLP backbone and every config's architecture matches the deploy stack.
+  # Constraint: all dims must be divisible by tile_size=16.
 
   # ── Retention branch (ablation #230) ──────────────────────────────────────
   # Gated Linear Attention added in PARALLEL to the windowed attention in the 2nd layer

@@ -78,10 +78,9 @@ model:
   hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda). false ⇒ eager refs (bit-faithful,
                            # slower) — the reference arm for the fused-vs-eager parity A/B.
 
-  # Block-ELL / MORTAR sparse scope. ALWAYS "all" — prelude+core+coda all use CMSBlockLinear
-  # (CMS-prunable + MORTAR BCSR via morph/sparse/stk). Only "all" is accepted (else raises).
+  # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
+  # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.
   # Constraint: all dims must be divisible by tile_size=16. d_model=768, d_ff=2048(auto) satisfy this.
-  block_ell_scope: "all"
 
   # ── GLA Retention branch (#230) ──────────────────────────────────────────
   # Gated Linear Attention added in PARALLEL to the windowed attention in the 2nd layer

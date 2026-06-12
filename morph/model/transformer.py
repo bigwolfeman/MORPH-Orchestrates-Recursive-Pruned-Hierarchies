@@ -26,7 +26,7 @@ from .embeddings import MORPHEmbedding
 from .fused_ce import fused_linear_cross_entropy
 from .mhc import MultiRateResidual, ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .prediction import STPLoss
-from .sparsity import BlockELLLinear
+from .sparsity import MortarLinear
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
 # zero production cost). Set MORPH_PROFILE_REGIONS=1 to name forward carrier sites so the
@@ -133,11 +133,6 @@ class MORPHConfig:
     # negative in-model; kept as a dormant knob.)
     l2_persist: bool = False
 
-    # Block-ELL scope — which MLP sections use BlockELLLinear (CMS pruning support).
-    # ALWAYS "all": prelude+core+coda are all Block-ELL (CMS-prunable). "core" was
-    # removed — pruning targets the whole MLP backbone and every config matches the deploy stack.
-    block_ell_scope: str = "all"
-
     # ── Retention branch (#230) ────────────────────────────────────────────
     # Gated Linear Attention (GLA) added in PARALLEL to the windowed attention in the
     # 2nd layer (index in retention_layers) of prelude / core / coda — a global-context /
@@ -216,11 +211,11 @@ class _KwargSequential(nn.Sequential):
 def _make_swiglu(d_model: int, d_ff: int, dropout: float) -> nn.Module:
     """SwiGLU MLP: gate + up → silu(gate)*up → down.
 
-    Always uses _SwiGLUBlockELL (Block-ELL/CMS-prunable) — there is no plain dense
-    fallback. Every MLP in prelude, core, and coda is Block-ELL so the whole backbone
-    is CMS-prunable. No use_block_ell selector; the selection was the legacy branch.
+    Always uses _SwiGLUMortar (CMS-prunable, MORTAR-carvable) — there is no plain
+    dense fallback. Every MLP in prelude, core, and coda is MortarLinear so the
+    whole backbone is prunable and carves to MORTAR BCSR at compact_step.
     """
-    mlp: nn.Module = _SwiGLUBlockELL(d_model, d_ff)
+    mlp: nn.Module = _SwiGLUMortar(d_model, d_ff)
     if dropout > 0:
         # _KwargSequential (not nn.Sequential) so iter_idx threads through to the MLP.
         return _KwargSequential(mlp, nn.Dropout(dropout))
@@ -235,17 +230,17 @@ class _SwiGLU(nn.Module):
 
     def forward(self, x: Tensor, iter_idx: int = 0) -> Tensor:
         # iter_idx accepted-and-ignored: the dense SwiGLU has no router, but the core loop
-        # threads iter_idx to every MLP uniformly. Keeps a non-Block-ELL core callable.
+        # threads iter_idx to every MLP uniformly. Keeps a plain-dense core callable.
         gu = self.gate_up(x)
         gate, up = gu.chunk(2, dim=-1)
         return self.down(F.silu(gate) * up)
 
 
-class _SwiGLUBlockELL(nn.Module):
-    """SwiGLU with BlockELLLinear for CMS pruning support.
+class _SwiGLUMortar(nn.Module):
+    """SwiGLU with MortarLinear for CMS pruning + MORTAR carving support.
 
     Identical computation to _SwiGLU during dense phase (density=1.0).
-    After compact(), uses Triton Block-ELL sparse kernels for the forward pass.
+    After carve(), uses the MORTAR BCSR Triton kernel for the forward pass.
 
     Optionally hosts an iteration-aware ReMoE router (Phase C). The router gates the
     post-SiLU hidden h = silu(gate)·up over contiguous d_ff neuron-clusters: a clean
@@ -257,8 +252,8 @@ class _SwiGLUBlockELL(nn.Module):
 
     def __init__(self, d_model: int, d_ff: int):
         super().__init__()
-        self.gate_up = BlockELLLinear(d_model, d_ff * 2, bias=False, initial_density=1.0)
-        self.down = BlockELLLinear(d_ff, d_model, bias=False, initial_density=1.0)
+        self.gate_up = MortarLinear(d_model, d_ff * 2, bias=False, initial_density=1.0)
+        self.down = MortarLinear(d_ff, d_model, bias=False, initial_density=1.0)
         self.d_model = d_model
         self.d_ff = d_ff
         # ReMoE routing (Phase C) — built lazily by enable_routing(). router=None → plain SwiGLU.
@@ -430,15 +425,6 @@ class MORPHTransformer(nn.Module):
             use_kernel=cfg.hc_use_kernel,
         ) if self._is_hc else None
 
-        # Block-ELL scope is ALWAYS "all": prelude+core+coda are all Block-ELL / prunable.
-        # "core" was removed so pruning hits the whole MLP backbone and the architecture is
-        # identical across every config (deploy stack included).
-        _scope = getattr(cfg, "block_ell_scope", "all")
-        if _scope != "all":
-            raise ValueError(
-                f"block_ell_scope only supports 'all' now ('core' was removed); got {_scope!r}"
-            )
-
         def _make_block(layer_idx: int) -> MORPHBlock:
             return MORPHBlock(
                 norm_attn=RMSNorm(d),
@@ -453,7 +439,7 @@ class MORPHTransformer(nn.Module):
             )
 
         # ── Prelude ───────────────────────────────────────────────────
-        # All sections use Block-ELL (scope="all") — whole-body CMS pruning.
+        # All sections use MortarLinear MLPs — whole-body CMS pruning.
         self.prelude = nn.ModuleList([
             _make_block(i) for i in range(cfg.n_prelude)
         ])
@@ -462,7 +448,7 @@ class MORPHTransformer(nn.Module):
         self.input_norm = RMSNorm(d)
         self.injection = DiagonalInjection(self._ctx_start, self._ctx_end)
 
-        # ── Core (shared across loop iterations — Block-ELL for CMS pruning)
+        # ── Core (shared across loop iterations — MortarLinear for CMS pruning)
         self.core = nn.ModuleList([
             _make_block(cfg.n_prelude + i)
             for i in range(cfg.n_core)
