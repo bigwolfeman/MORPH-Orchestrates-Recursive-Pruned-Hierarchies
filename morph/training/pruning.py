@@ -400,6 +400,8 @@ class PruningSchedule:
                     # dense, never pruned → fully dense
                     alive += R * C
                     total += R * C
-            except Exception:
-                pass
+            except Exception as e:
+                # density is diagnostic-only, so a bad layer must not crash training —
+                # but surface it loudly rather than silently skewing the reported density.
+                print(f"  [density] WARN: skipped layer {_name!r}: {e}", flush=True)
         return alive / max(total, 1)
