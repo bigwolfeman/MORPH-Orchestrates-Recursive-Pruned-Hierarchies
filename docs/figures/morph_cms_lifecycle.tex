@@ -151,8 +151,8 @@
 \node[draw=bdr, rounded corners=6pt, fill=fGray!25, inner sep=11pt,
       align=left, font=\small\sffamily, text width=16.4cm, anchor=north]
       (facts) at (8.4,-4.75) {%
-  \textbf{MORTAR BCSR:} $128\!\times\!128$ blocks; $R_b{=}d_{\mathrm{out}}/128$ block-rows, $C_b{=}d_{\mathrm{in}}/128$ block-cols,
-  $\mathrm{nnz}$ kept blocks, \textbf{density $=\mathrm{nnz}/(R_b C_b)$}.\quad
+  \textbf{MORTAR BCSR:} a $[d_{\mathrm{out}},d_{\mathrm{in}}]$ weight tiles into $R_b{\times}C_b$ blocks of $128\!\times\!128$
+  ($R_b{=}d_{\mathrm{out}}/128$, $C_b{=}d_{\mathrm{in}}/128$); pruning keeps $\mathrm{nnz}$ of them, so \textbf{density $=\mathrm{nnz}/(R_b C_b)$}.\quad
   \textbf{Scope:} all SwiGLU MLPs (\texttt{gate\_up} $+$ \texttt{down}) across \textbf{prelude $+$ core $+$ coda}
   (MORTAR-only --- no scope knob); the core block is re-applied every loop iteration.\\[4pt]
   \textbf{CMS schedule:} accumulate saliency EMA every step \;$\cdot$\; \texttt{prune\_step\_blocks} from \texttt{prune\_start} toward \texttt{target\_density}
