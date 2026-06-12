@@ -111,7 +111,7 @@
   \foreach \r/\a/\b in {0/1/5, 1/0/4, 2/2/6, 3/3/7, 4/0/5}{
     \node[tny, text=bdr, anchor=west] at ({\gx+2*\tg+0.12},{-\r*\tg-0.5*\ts}) {[\a,\b]};}
   \node[dsc, text width=3.5cm] at (\bcx,-2.35)
-    {\texttt{mortar\_data}$[\mathrm{nnz},128,128]$\\ $+$ BCSR \texttt{row}/\texttt{col}/\texttt{offsets}};
+    {\texttt{mortar\_data}:\\ the kept $128\!\times\!128$ blocks\\ $+$ BCSR index arrays};
   \node[nte, text=bdr, text width=3.5cm] at (\bcx,-3.55)
     {stk Triton fwd $+$ bwd; $3.09\times$ faster than dense @\,0.25};
 \end{scope}
