@@ -1,6 +1,13 @@
 # MORPH base config — local GPU (downsized from cloud target)
 # Cloud target: 4:8:4, d_model=2048
 # Local: 3:6:3, d_model=768
+#
+# This is the SINGLE canonical default config reflecting the validated winning deploy stack:
+#   - MORTAR sparse backend (ternary backbone, 0.25 BCSR via morph/sparse/stk)
+#   - Routing ON (whole-body ReMoE; route_start = training-phase schedule, not an on/off gate)
+#   - Full quant stack: ternary MLP backbone + int8 attn projections + int6 embeddings + adam8bit
+#   - HC Cayley n=4 (JPmHC winner, fused Triton kernel default)
+#   - LoopSSM base mechanism (DiagonalInjection, always-on; ablation arms #232 are NOT included)
 
 model:
   d_model: 768
@@ -52,14 +59,14 @@ model:
 
   # Multi-Rate Residual ablation. true = MultiRateResidual (per-channel learned gain);
   # false = plain additive residual (StandardResidual) — removes ~16 ms/step of channel
-  # slice+cat copies + the unused alpha params. Ablate quality vs MRR baseline (#MRR-ablation).
+  # slice+cat copies + the unused alpha params.
   use_mrr: true
 
-  # Residual mechanism (overrides use_mrr when non-null). The REAL Hyper-Connection arms:
-  #   null         → use_mrr decides (mrr / standard)  [default]
-  #   hc_cayley    → orthogonal n-stream mixer (JPmHC, arXiv 2602.18308) — DEFAULT HC choice,
-  #                  5.2× cheaper H^res than Sinkhorn + exact dynamical isometry.
-  #   hc_sinkhorn  → doubly-stochastic n-stream mixer (mHC, arXiv 2512.24880).
+  # Residual mechanism. HC Cayley is the validated winner (JPmHC, arXiv 2602.18308):
+  #   hc_cayley    → orthogonal n-stream mixer; 5.2× cheaper H^res than Sinkhorn + exact
+  #                  dynamical isometry. DEFAULT and ONLY supported deploy path.
+  #   hc_sinkhorn  → doubly-stochastic n-stream mixer (retained for reference; not default).
+  #   null         → use_mrr decides (mrr / standard) — legacy path, do not use.
   # hc_* widens the residual stream to hc_streams parallel C-dim streams network-wide.
   residual_mode: hc_cayley
   hc_streams: 4            # expansion rate n (paper default); residual carrier → [B,S,n,768]
@@ -68,14 +75,32 @@ model:
   hc_cayley_alpha: 0.1     # Cayley step size α
   hc_sinkhorn_iters: 20    # Sinkhorn iterations (mHC value)
   hc_init_gain: 0.1        # W_fused init: smaller → closer to plain residual at init
+  hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda). false ⇒ eager refs (bit-faithful,
+                           # slower) — the reference arm for the fused-vs-eager parity A/B.
+
+  # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
+  # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.
+  # Constraint: all dims must be divisible by tile_size=16. d_model=768, d_ff=2048(auto) satisfy this.
+
+  # ── GLA Retention branch (#230) ──────────────────────────────────────────
+  # Gated Linear Attention added in PARALLEL to the windowed attention in the 2nd layer
+  # (retention_layers) of prelude/core/coda — a global-context / cross-iteration memory branch.
+  # Off → GLA not constructed → bit-identical to baseline.
+  retention: true
+  retention_layers: [1]          # within-section layer index that gets the branch (0-based)
+  retention_heads: 0             # 0 → use n_heads
+  retention_chunk: 256           # GLA chunk length; larger=faster (launch-bound)
+  retention_gate_init: -6.0      # branch-gate logit; sigmoid(-6)≈0.0025 → ≈ identity at init
+  retention_carry: true          # core: carry GLA state across loop iterations (false → reset)
+  retention_gate_bias: 2.0       # GLA forget-gate logit bias (α near 1 = long memory)
 
 training:
   steps: 100000
   batch_size: 4
   lr: 1e-4
-  warmup: 1500
-  lr_schedule: cosine
-  min_lr: 1e-5
+  warmup: 0                       # validated mortar winner (phase_c_mortar_full25k_scratch): NO warmup
+  lr_schedule: cosine            # cosine with min_lr==lr ⇒ FLAT 1e-4 (winner recipe; flat LR intentional)
+  min_lr: 1e-4                   # == lr → flat LR the whole run (do NOT add cosine decay; validated)
   dropout: 0.1
   grad_clip: 1.0
   bf16: true
@@ -83,57 +108,67 @@ training:
   compile_mode: default
   checkpointing: true
 
-  # Pruning (Phase 2 → 3)
-  prune_start: 6000
-  prune_interval: 3000
-  prune_rate: 0.05
+  # Pruning → MORTAR carve → routing schedule (Phases 2→3→4)
+  # SLOWER-than-winner cadence (Wolfe 2026-06-12): prune every 167 steps from 3000 (was every 100).
+  # MECHANISM at d=768 (verified by simulating prune_step_blocks' integer recurrence, not assumed):
+  #  each event drops floor(alive·(1−prune_rate)) blocks, but the "guarantee progress" floor
+  #  min(new_alive, alive−1) pins it to EXACTLY 1 block/event here — 0.5% of the small block grids
+  #  (gate_up=192 blocks, down=96) is < 1. So at d=768 prune_rate is INERT; prune_INTERVAL is the
+  #  ONLY speed lever. The bottleneck layer gate_up must drop 144 blocks (192→48) to reach 0.25,
+  #  one per event ⇒ 144·167 ≈ 24k steps ⇒ density hits 0.25 by ~step 27050 (winner: 144·100 ⇒
+  #  ~step 17400). The prune→0.25 window MUST close before compact_step, else carve() freezes a
+  #  still-dense model (the old 6000/3000/0.05 cadence only hit ~0.80 density by step 20000).
+  # NOTE: prune completes (~27050) inside the TST superposition window [0,30000); carve@29000 also
+  #  inside (~1950-step settle, ≈ the winner's 2000); route@30000 = superposition→recovery boundary.
+  prune_start: 3000
+  prune_interval: 167            # SLOWER: 1.67× the winner's 100 — the REAL d=768 lever (see MECHANISM)
+  prune_rate: 0.005              # = winner; INERT at d=768 (1 block/event floor). Only bites at cloud d=2048
   target_density: 0.25
-  compact_step: 66000
+  compact_step: 29000            # carve smooth-shadow → BCSR mortar_data (was 20000; moved to clear the slower ramp)
+  cms_score_mode: taylor         # winner prune saliency (NOT grad); Taylor helps post-prune recovery (B3>B1)
+
+  # ── Token Superposition Training (TST, #231 — Nous arXiv 2605.06546) ──
+  # Two-phase curriculum: superposition (bag_size=s tokens/position, multi-hot CE) for
+  # [0, tst_ratio·steps), then recovery (bag_size=0, standard NTP) for the remainder.
+  # eval/gen ALWAYS use bag_size=0; tst_bag_size=0 ⇒ bit-identical to no-TST.
+  # Paper sweet spot s=6, ratio=0.3. At steps=100000 ⇒ superposition [0,30000), recovery [30000,100000).
+  # SCHEDULE NOTE: the superposition phase contains prune(3k–27k)/carve(29k); route(30k) engages at
+  #   the superposition→recovery boundary — sparse structure is built under superposition, then
+  #   recovers on 70k steps of clean NTP. TST was −4% ppl at d=768/15k on a quant-ONLY stack (#231);
+  #   TST × full sparse pipeline is UNTESTED (and now × a slower prune — watch the density curve).
+  tst_bag_size: 6                # s: tokens superposed per position (0 = TST off)
+  tst_ratio: 0.3                 # fraction of steps in the superposition phase
 
   # Optimizer extras
   weight_decay: 0.1
   beta1: 0.9
   beta2: 0.95
 
-  # Optional wrappers (set to true to activate)
-  ternary: false           # Ternary QAT — forward-STE on weights (see ternary_qat.py). Real
-                           # QAT: forward uses {-1,0,+1}xscale, grad straight-through to the
-                           # smooth shadow. Training/val ppl IS the deployed-ternary ppl.
-  ternary_scope: backbone  # which weights to ternarize: backbone | backbone_attn | full
-                           # (full = + attention projections + token/space/euclidean embeddings)
-  ternary_threshold: 0.5   # |w/scale| > threshold → nonzero (Bonsai default)
-  # Ternary scale machinery (Ablation A/B/C — Ai-notes/06-02-2026/MORPH-Ternary-Quant-Ablations/spec.md).
-  # Defaults below == current symmetric per-tensor fp16 behaviour (bit-identical when ternary=false).
-  ternary_scale_mode: symmetric   # symmetric (current) | ttq (sep learnable +/- scales) | dual (TernaryLLM learnable shift+scale)
-  ternary_scale_group: tensor     # tensor | 128 | 64  (group-wise scale; 64 for tiny CCA dims W_down_k=128/W_v=64)
-  ternary_scale_dtype: fp16       # fp16 | int8 | pow2  (quantized group scale; pow2 = shift-only deploy)
-  adam8bit: false          # 8-bit AdamW via bitsandbytes (quantizes optimizer state m,v to uint8)
+  # ── Deploy quant stack (ALL ON by default — validated winners) ──
+  # Ternary QAT: forward-STE on weights → {-1,0,+1}×scale. Training ppl IS deployed-ternary ppl.
+  ternary: true
+  ternary_scope: backbone        # MLP/mix/mhc proj; attn projections stay bf16
+  ternary_threshold: 0.5         # |w/scale| > threshold → nonzero (Bonsai default)
+  ternary_scale_mode: symmetric  # symmetric wins at this scale (A-series result)
+  ternary_scale_group: tensor    # per-tensor scale
+  ternary_scale_dtype: fp16      # fp16 scale storage
 
-  # Embedding / LM-head quantization (Ablation E). NOT ternary — int6/int8 per-row QAT.
-  # Lorentz space embedding ALWAYS stays bf16 (geometry-sensitive). off == bit-identical bf16.
-  embed_quant: "off"              # off | int8 | int6  (token/bigram/euclidean per-row QAT). QUOTED: bare off is YAML bool False.
-  lm_head_quant: "off"            # off | int6  (only meaningful if LM head is a separate weight from token embed). QUOTED: see above.
+  # 8-bit AdamW via bitsandbytes (quantizes optimizer state m,v to uint8)
+  adam8bit: true
 
-  # Attention-projection int-N QAT (Ablation #205 — the Efull-recovery lever). Per-output-row
-  # int8/int6/int4 STE on the CCA attention Linears (W_down_q/k, W_v, compressor, indexer,
-  # gate, W_up) — gentler than ternary. Disjoint from ternary scope=backbone. off == bf16.
-  attn_proj_quant: "off"          # off | int8 | int6 | int4. QUOTED: bare off is YAML bool False.
+  # Embedding int6 QAT. Per-row int6 STE on euc+bigram (Lorentz stays bf16 — geometry-sensitive).
+  embed_quant: "int6"            # off | int8 | int6. QUOTED: bare off is YAML bool False.
+  lm_head_quant: "off"           # off | int6. QUOTED.
 
-  # FP8 training (torchao float8) — see docs/fp8_mixed_precision_training.md. FP8 the
-  # large dense GEMMs only; attention/norms/fused-CE stay bf16 (DeepSeek-V3/Ling-1T mix).
-  # Verified to accelerate on RTX 5090 sm_120 (2.4-4.3x GEMM). fp8=false → bit-identical bf16.
-  fp8: false               # master switch
-  fp8_recipe: dynamic      # dynamic (stateless, mandated for the loop) | rowwise
-  fp8_scope: mlp           # mlp | attn_proj | mlp_attn_proj | all_gemm
-                           #   attn_proj = CCA projections only (disjoint from ternary
-                           #   backbone → for the ternary⊕FP8⊕8-bit 3-way combo)
-  fp8_filter_min_dim: 256  # skip Linears with any dim < this (FP8 only helps big GEMMs)
+  # Attention-projection int8 QAT. Per-output-row int8 STE on CCA Linears. Disjoint from ternary backbone.
+  attn_proj_quant: "off"         # off | int8 | int6 | int4. QUOTED. Winner=off (reproduces validated 33.82);
+                                 # int8 is a deploy opt-in that needs its own 25k validation before becoming default.
 
-  # Cross-iteration KV sharing (CLA) — see docs/cross_layer_kv_sharing.md. Cache the
-  # per-core-layer KV bundle once and reuse (q-only recompute) in later loop iterations.
-  # use_cla=false → bit-identical to today.
-  use_cla: false
-  cla_share_start: -1      # -1 = auto (n_nograd, first grad iter — gradient-correct)
+  # FP8: dead at d=768 scale (small-GEMM regime); ternary and FP8 are mutually exclusive per-layer.
+  fp8: false
+  fp8_recipe: dynamic
+  fp8_scope: mlp
+  fp8_filter_min_dim: 256
 
   # Evaluation / logging
   eval_every: 500
@@ -145,16 +180,23 @@ training:
   # Resume
   # resume: null     # path to checkpoint to resume from
 
-# Routing (Phase 4 — post-compact, post-settle)
-# Set route_start=0 to disable routing entirely.
+# Routing — whole-body ReMoE (prelude+core+coda). ALWAYS ON in the hotpath.
+# route_start = training-phase schedule: routing code activates at this step.
+# (There is no "routing off" code path — routing is unconditional in the forward pass
+#  once the carve has been applied. route_start just gates the training-time routing head.)
 routing:
-  route_start: 70000
+  route_start: 30000             # engage ReMoE 1000 steps after carve (compact 29000); = TST superposition→recovery boundary
+  route_scope: all               # whole-body ReMoE (12 MLPs); winner used all. Code default "core" = 6 MLPs only
   n_clusters: 16
   activation_ratio: 0.5
   aux_loss_coeff: 0.01
+  aux_detach_input: true         # feed router x.detach() → load-balance aux grad stays out of
+                                 # the looped carrier (prevents OOM from extended BPTT depth)
 
 data:
-  dataset: Skylion007/openwebtext
+  # datasets>=4.x dropped script datasets; load from locally-cached OWT arrow shards instead.
+  # OFFLINE, IDENTICAL to the #186 data → ppl stays comparable.
+  dataset: /home/wolfe/.cache/huggingface/datasets/openwebtext/**/openwebtext-train-*.arrow
   tokenizer: bigcode/starcoder2-7b
   seq_len: 4096
 

@@ -62,6 +62,11 @@ class AttnSiteCache:
     comp_x: Tensor | None = None
     # CSA only: LightningIndexer keys for completed blocks, [B, n_done, d_indexer].
     K_I: Tensor | None = None
+    # retention (GLA) running state for this call-site, [B, H, dk, dv] fp32. None → zero seed.
+    # prelude/coda sites: pure causal token-axis accumulator (EXACT vs the full forward). core
+    # sites: per-(layer,iter) accumulator; the cross-iteration carry is seeded at pos==0 from the
+    # previous iteration's site state (the retention_carry approximation — see decode_step).
+    ret_state: Tensor | None = None
     # KV-cache quantization (stamped from the parent MORPHKVCache at site() creation).
     # "off" → no quantization (bit-identical). Otherwise int{4,6,8} per-row absmax fake-quant
     # applied at the STORE site (win_k/win_v/C_comp/K_I), so reads are unchanged. See kv_quant.py.
@@ -111,6 +116,35 @@ def _q(sc: "AttnSiteCache", t: Tensor) -> Tensor:
     return quant_dequant(t, int(sc.kv_quant[3:]), sc.kv_quant_group)
 
 
+def _causal_conv_last_nocudnn(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor, k: int) -> Tensor:
+    """Last-position output of the two stacked causal convs (depthwise → grouped), WITHOUT cudnn.
+
+    Byte-equivalent to ``causal_conv_reference(x_BCS, w_dw, w_gp, k)[:, :, -1:]`` but built from
+    ``unfold + einsum`` (plain matmul/reduction kernels) instead of ``F.conv1d``. WHY: at decode
+    (S≈2k-1, single token) ``F.conv1d`` dispatches to cudnn, which on these tiny k=4 windows emits
+    ~1300 NCHW<->NHWC layout-shuffle launches PER TOKEN — measured 38% of decode GPU time + the
+    dominant launch-pressure source (ignore/profile_decode.py). The conv math is trivially small;
+    cudnn's layout machinery is the whole cost. unfold+einsum avoids it entirely.
+
+    w_dw: [C, 1, k] (depthwise, groups=C);  w_gp: [C_out, C_in//G, k] (grouped, G inferred).
+    """
+    p = k - 1
+    B, C, S = x_BCS.shape
+    # ── depthwise: y[b,c,s] = sum_j xp[b,c,s+j] * w_dw[c,0,j] ──
+    xp = F.pad(x_BCS, (p, 0))                                  # [B, C, S+p]
+    win = xp.unfold(2, k, 1)                                   # [B, C, S, k]
+    y = torch.einsum("bcsk,ck->bcs", win, w_dw[:, 0, :].to(win.dtype))
+    # ── grouped: G groups, Cg=C_in/G in-per-group, Co_g=C_out/G out-per-group ──
+    Cg = w_gp.shape[1]
+    G = C // Cg
+    Co_g = w_gp.shape[0] // G
+    yp = F.pad(y, (p, 0))                                      # [B, C, S+p]
+    wing = yp.unfold(2, k, 1).reshape(B, G, Cg, S, k)         # group the INPUT channels
+    wg = w_gp.reshape(G, Co_g, Cg, k).to(wing.dtype)          # group the OUTPUT channels
+    yg = torch.einsum("bgisk,goik->bgos", wing, wg).reshape(B, w_gp.shape[0], S)
+    return yg[:, :, -1:]                                       # [B, C_out, 1]
+
+
 def _conv_last(x_recent: Tensor, x_t: Tensor, conv_dw, conv_gp) -> Tensor:
     """Causal conv output at the new position only.
 
@@ -118,14 +152,15 @@ def _conv_last(x_recent: Tensor, x_t: Tensor, conv_dw, conv_gp) -> Tensor:
     Mirrors _CCABase._causal_conv (causal_conv_reference): left-pad (k-1) zeros then two grouped
     conv1d. Feeding [history(k-1) + new(1)] and taking the last output column reproduces the
     full-sequence conv at this position exactly (the reference's own left-pad covers P<k-1).
+    Uses the no-cudnn unfold+einsum form (see _causal_conv_last_nocudnn) — decode-critical.
     """
-    xr = torch.cat([x_recent, x_t], dim=1)              # [B, k, C]
-    y = causal_conv_reference(
-        xr.transpose(1, 2),                             # [B, C, k]
+    xr = torch.cat([x_recent, x_t], dim=1)              # [B, S, C]
+    y_last = _causal_conv_last_nocudnn(
+        xr.transpose(1, 2),                             # [B, C, S]
         conv_dw.weight.to(xr.dtype), conv_gp.weight.to(xr.dtype),
         conv_dw.kernel_size[0],
-    )                                                   # [B, C, k]
-    return y[:, :, -1:].transpose(1, 2)                 # [B, 1, C]
+    )                                                   # [B, C, 1]
+    return y_last.transpose(1, 2)                        # [B, 1, C]
 
 
 def _prologue_one(cca, x_recent: Tensor, x_t: Tensor, pos: int):
@@ -336,21 +371,41 @@ def _attn_step(impl, x_t: Tensor, sc: AttnSiteCache, pos: int,
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _block_step(block, h: Tensor, sc: AttnSiteCache, pos: int,
-                csa_pool: int | None = None) -> Tensor:
-    """MORPHBlock.forward for one token: MRR(attn) then MRR(mlp), reusing the real
-    mrr/norm/mlp modules and swapping in the incremental attention."""
+def _block_step(block, h: Tensor, sc: AttnSiteCache, pos: int, iter_idx: int,
+                ret_state: Tensor | None, csa_pool: int | None = None):
+    """MORPHBlock.forward for ONE token — byte-faithful to mhc.MORPHBlock.forward, swapping only
+    the cross-position op (full attention → cached incremental _attn_step).
+
+    h is the HC carrier ``[B,1,n,C]`` (or ``[B,1,C]`` when residual_mode is not HC). The block's
+    REAL ``mrr_attn``/``mrr_mlp`` (HyperConnectionResidual / MRR / Standard) manage the stream
+    carrier; the sublayer fns operate on the single-stream ``[B,1,C]`` the residual reduces to —
+    so HC, MRR and plain-residual all decode through the same path with no special-casing.
+
+    Mirrors mhc.MORPHBlock.forward's sublayer closures exactly:
+      * _attn_fn: incremental attention + (if present) the gated GLA retention branch
+        ``a + sigmoid(ret_gate)·gla(norm_ret(x), state)``, returning the new GLA state.
+      * _mlp_fn:  ``drop(mlp(norm_mlp(x), iter_idx=iter_idx))`` — iter_idx threads to the ReMoE
+        router (prelude/coda → 0, core → loop iteration t), matching the training forward.
+
+    Returns (h_new, new_ret_state). new_ret_state is None unless this block carries retention.
+    """
     impl = block.attention._impl
+    new_ret: dict = {}
 
-    def attn_fn(hh):
-        return block.drop(_attn_step(impl, block.norm_attn(hh), sc, pos, csa_pool))
+    def _attn_fn(x: Tensor) -> Tensor:           # x: [B,1,C] single-stream (HC-reduced)
+        a = _attn_step(impl, block.norm_attn(x), sc, pos, csa_pool)
+        if block.retention is not None:
+            g_out, s_out = block.retention(block.norm_ret(x), initial_state=ret_state)
+            new_ret["state"] = s_out
+            a = a + torch.sigmoid(block.ret_gate).to(a.dtype) * g_out
+        return block.drop(a)
 
-    def mlp_fn(hh):
-        return block.drop(block.mlp(block.norm_mlp(hh)))
+    def _mlp_fn(x: Tensor) -> Tensor:
+        return block.drop(block.mlp(block.norm_mlp(x), iter_idx=iter_idx))
 
-    h = block.mrr_attn(h, attn_fn)
-    h = block.mrr_mlp(h, mlp_fn)
-    return h
+    h = block.mrr_attn(h, _attn_fn)
+    h = block.mrr_mlp(h, _mlp_fn)
+    return h, new_ret.get("state")
 
 
 @torch.no_grad()
@@ -358,21 +413,30 @@ def decode_step(model, token_ids: Tensor, cache: MORPHKVCache) -> Tensor:
     """Decode ONE new token (all batch elements at the same absolute position cache.pos).
 
     token_ids: [B] or [B,1] int. Returns next-token logits [B, vocab]. Mutates `cache`.
-    Mirrors MORPHTransformer._forward_single's per-position pipeline (prelude → core×T → coda →
-    LM head), STP omitted (a training-only regulariser that doesn't affect logits).
+    Mirrors MORPHTransformer._forward_single's eval per-position pipeline at S=1:
+      HC stream expand → prelude → core×mean_depth → coda → HC stream reduce → LM head.
+    Uses the CURRENT injection API (_build_injection_term + _apply_injection) and the REAL
+    block forward (HC residual + ReMoE router + GLA retention), swapping only attention for the
+    cached incremental step. STP omitted (training-only regulariser; does not affect logits).
+
+    Retention (#230): prelude/coda GLA branches are decoded EXACTLY (pure causal token-axis
+    accumulator per site). The CORE retention layer's cross-iteration carry (retention_carry) is
+    non-causal in the full forward (it carries iter t's END-OF-SEQUENCE state — including future
+    tokens — into iter t+1), so it has no bit-exact O(1) form. We approximate it causally: each
+    (core layer, iter t) site keeps its own token-axis running state, seeded at pos==0 from the
+    previous iteration's freshly-updated state. Error is bounded by the (tiny ~1.3%) retention
+    gate; quantified against the O(T^2) full-recompute generation in ignore/verify_kv_cache.py.
     """
     cfg = model.cfg
     ids = token_ids.view(-1, 1)                                   # [B,1]
     B = ids.shape[0]
     pos = cache.pos
-    np_, nc, ncoda = cfg.n_prelude, cfg.n_core, cfg.n_coda
+    np_, nc = cfg.n_prelude, cfg.n_core
     T = cfg.mean_depth
-    # CSA top-k block-pool = pool_len // csa_m. The (clean) CSA forward top-ks over all seq_len/m
-    # blocks (future = -inf); we reproduce its selection (incl. tie-break) by padding to this pool.
-    # csa_pool_len defaults to context_len (the model's trained context); the parity gate sets it
-    # to the eval sequence length so it matches model(seq_N) exactly. See _csa_step.
+    # CSA top-k block-pool = pool_len // csa_m (see _csa_step).
     pool_len = cache.csa_pool_len if cache.csa_pool_len is not None else cfg.context_len
     csa_pool = int(pool_len) // int(cfg.csa_compress_ratio)
+    ret_layers = set(model._retention_layers) if model._core_has_retention else set()
 
     # bigram needs id_{t-1}: feed [prev_id, id] and take the new token's row.
     prev = cache.prev_id if cache.prev_id is not None else torch.zeros_like(ids[:, 0])
@@ -380,35 +444,59 @@ def decode_step(model, token_ids: Tensor, cache: MORPHKVCache) -> Tensor:
     bigram_emb = model.embed.get_bigram(pair)[:, -1:]            # [B,1,bg_dim]
 
     x = model.embed_drop(model.embed(ids))                        # [B,1,d_model]
-    x0 = x
+    x0 = x                                                        # single-stream skip signal
+
+    # ── HC stream expansion (mirror _forward_single: x → [B,1,n,C]) ──
+    if model._is_hc:
+        x = x.unsqueeze(2).expand(B, 1, model._n_streams, x.shape[-1]).contiguous()
 
     # ── Prelude ──
     for i, layer in enumerate(model.prelude):
-        x = model._apply_x0(x, i, x0)
-        x = model._apply_ve(x, i, ids)
-        x = model.embed.bigram.inject(x, bigram_emb, i)
-        x = _block_step(layer, x, cache.site(f"prelude.{i}"), pos, csa_pool)
+        term = model._build_injection_term(
+            i, model.x0_injects[i].precompute(x0), ids, bigram_emb, x.dtype)
+        x = model._apply_injection(x, term)
+        sc = cache.site(f"prelude.{i}")
+        x, new_ret = _block_step(layer, x, sc, pos, 0, sc.ret_state, csa_pool)
+        if new_ret is not None:
+            sc.ret_state = new_ret
 
     # ── Core loop ──
     e = model.input_norm(x)
     h = e
+    x0_core_terms = [model.x0_injects[np_ + i].precompute(x0) for i in range(nc)]
     for t in range(T):
         h = model.injection(h, e)
         for i, layer in enumerate(model.core):
             gi = np_ + i
-            h = model._apply_x0(h, gi, x0)
-            h = model._apply_ve(h, gi, ids)
-            h = model.embed.bigram.inject(h, bigram_emb, gi)
-            h = _block_step(layer, h, cache.site(f"core.{i}.{t}"), pos, csa_pool)
+            term = model._build_injection_term(gi, x0_core_terms[i], ids, bigram_emb, h.dtype)
+            h = model._apply_injection(h, term)
+            sc = cache.site(f"core.{i}.{t}")
+            ret_in = None
+            if i in ret_layers:
+                # cross-iteration carry seed at pos==0: from the previous iteration's site,
+                # freshly updated earlier in THIS decode_step (causal approximation).
+                if sc.ret_state is None and t > 0:
+                    sc.ret_state = cache.site(f"core.{i}.{t - 1}").ret_state
+                ret_in = sc.ret_state
+            h, new_ret = _block_step(layer, h, sc, pos, t, ret_in, csa_pool)
+            if i in ret_layers and new_ret is not None:
+                sc.ret_state = new_ret
     x = h
 
     # ── Coda ──
     for i, layer in enumerate(model.coda):
         gi = np_ + nc + i
-        x = model._apply_x0(x, gi, x0)
-        x = model._apply_ve(x, gi, ids)
-        x = model.embed.bigram.inject(x, bigram_emb, gi)
-        x = _block_step(layer, x, cache.site(f"coda.{i}"), pos, csa_pool)
+        term = model._build_injection_term(
+            gi, model.x0_injects[gi].precompute(x0), ids, bigram_emb, x.dtype)
+        x = model._apply_injection(x, term)
+        sc = cache.site(f"coda.{i}")
+        x, new_ret = _block_step(layer, x, sc, pos, 0, sc.ret_state, csa_pool)
+        if new_ret is not None:
+            sc.ret_state = new_ret
+
+    # ── HC stream reduction (mean readout) before the LM head ──
+    if model._is_hc:
+        x = x.mean(dim=2)
 
     # ── LM head ──
     x = model.lm_mixer(x)

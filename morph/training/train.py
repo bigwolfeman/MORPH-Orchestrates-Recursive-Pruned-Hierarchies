@@ -11,6 +11,7 @@ All hyperparameters are logged to wandb at run start (full config dict).
 
 from __future__ import annotations
 
+import gc
 import math
 import os
 import sys
@@ -55,10 +56,17 @@ if hasattr(_functorch_config, "donated_buffer"):
 # regardless of when a recompile fires. Verified: 60 real training steps with live
 # recompiles, no wedge. Pair with the single-threaded warmup below (handles the initial
 # bulk compile). This applies to ALL runs incl. the future pruning run.
+# spawn workers (fork-safe mid-loop recompile) are ONLY needed when compiling the carved
+# path (MORPH_COMPILE_CARVED). That fix measured NET-NEGATIVE at d=768 (carved-compiled
+# 742ms vs carved-eager 698ms — the carved path is fastest EAGER; recompile thrashes on
+# grad_mode guards), AND spawn caused a BrokenProcessPool on the full-model startup compile.
+# Default path = B5-proven: default inductor workers + carved path runs eager via
+# eager_on_recompile (no mid-loop compile → no fork risk). Gate kept for cloud-scale revisit.
 import torch._inductor.config as _inductor_config  # noqa: E402
-if hasattr(_inductor_config, "worker_start_method"):
-    _inductor_config.worker_start_method = "spawn"
-os.environ.setdefault("TORCHINDUCTOR_WORKER_START", "spawn")
+if os.environ.get("MORPH_COMPILE_CARVED"):
+    if hasattr(_inductor_config, "worker_start_method"):
+        _inductor_config.worker_start_method = "spawn"
+    os.environ.setdefault("TORCHINDUCTOR_WORKER_START", "spawn")
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -188,8 +196,6 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         max_depth=int(m.max_depth),
         bptt_depth=int(m.bptt_depth),
         ckpt_grad_iters=int(getattr(m, "ckpt_grad_iters", -1)),
-        use_cla=bool(getattr(tr, "use_cla", False)),
-        cla_share_start=int(getattr(tr, "cla_share_start", -1)),
         channel_dims=channel_dims,
         compression=int(m.compression),
         n_kv_heads=int(m.n_kv_heads),
@@ -213,6 +219,15 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         hc_cayley_alpha=float(getattr(m, "hc_cayley_alpha", 0.1)),
         hc_sinkhorn_iters=int(getattr(m, "hc_sinkhorn_iters", 20)),
         hc_init_gain=float(getattr(m, "hc_init_gain", 0.1)),
+        hc_use_kernel=bool(getattr(m, "hc_use_kernel", True)),
+        l2_persist=bool(getattr(m, "l2_persist", False)),
+        retention=bool(getattr(m, "retention", True)),
+        retention_layers=tuple(int(x) for x in getattr(m, "retention_layers", (1,))),
+        retention_heads=int(getattr(m, "retention_heads", 0)),
+        retention_chunk=int(getattr(m, "retention_chunk", 128)),
+        retention_gate_init=float(getattr(m, "retention_gate_init", -6.0)),
+        retention_carry=bool(getattr(m, "retention_carry", True)),
+        retention_gate_bias=float(getattr(m, "retention_gate_bias", 2.0)),
         dropout=float(tr.dropout),
     )
 
@@ -260,6 +275,91 @@ def load_checkpoint(
     return step
 
 
+def load_weights_only(path: str, model: nn.Module, device: torch.device) -> None:
+    """Initialise model WEIGHTS from a checkpoint, but reset the run to step 0.
+
+    Unlike load_checkpoint (full resume: weights + optimizer + scaler + step), this
+    loads ONLY the model tensors and leaves the optimizer/scaler FRESH and the step
+    counter at 0. Used by `training.init_from` to seed a brand-new schedule (e.g. the
+    25k whole-body gradual-prune run) from dense pretrained weights while keeping the
+    schedule's step axis absolute from 0 — and sidestepping the optimizer-resume ppl
+    spike (a fresh optimizer + the schedule's dense warmup absorb any startup bump).
+    The weight-load path is byte-identical to load_checkpoint's (strict=False, same
+    ._orig_mod. strip), which the live B5 resume already proved loads this seed cleanly.
+    """
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    raw = ckpt["model"]
+    # _orig_mod-robust key alignment. The seed may be saved from a torch.compile'd model
+    # (keys carry `mlp._orig_mod.…`) AND this model is compiled too (same prefix) — in
+    # which case the keys match NATIVELY and the usual `._orig_mod.` strip would BREAK the
+    # match, silently dropping every compiled-MLP weight to random init (this was the real
+    # cause of the mid-Phase-C resume ppl spike). So pick whichever key-form lands more
+    # tensors on the model, rather than always stripping.
+    model_keys = set(model.state_dict().keys())
+    stripped = {k.replace("._orig_mod.", "."): v for k, v in raw.items()}
+    n_raw = sum(1 for k in raw if k in model_keys)
+    n_strip = sum(1 for k in stripped if k in model_keys)
+    state = raw if n_raw >= n_strip else stripped
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    # Hard guard against a silent partial load: the MLP backbone (gate_up/down shadows)
+    # MUST land. If almost nothing matched, the seed is incompatible — fail LOUD.
+    n_loaded = len(model_keys) - len(missing)
+    if n_loaded < 0.5 * len(model_keys):
+        raise RuntimeError(
+            f"init_from {path}: only {n_loaded}/{len(model_keys)} model tensors matched "
+            f"(raw-match={n_raw}, strip-match={n_strip}). Seed/model key structure mismatch "
+            f"— refusing to train from a mostly-random model."
+        )
+    print(f"  init_from {path}: loaded WEIGHTS only (step reset → 0, fresh optimizer); "
+          f"seed step was {ckpt.get('step', '?')}; matched {n_loaded}/{len(model_keys)} "
+          f"tensors via {'raw' if state is raw else 'stripped'} keys; "
+          f"{len(missing)} missing / {len(unexpected)} unexpected", flush=True)
+
+
+def warmup_compile_all_shapes(
+    model, batch_size: int, seq_len: int, device, passes_per_size: int,
+    tag: str = "startup",
+) -> None:
+    """Forced-depth fwd+bwd passes so EVERY compile variant builds NOW, not mid-loop.
+
+    Forces the active-set to hit every sub-batch size (incl. n_active==1, the rare
+    Poisson draw) in BOTH the no_grad prefix and the checkpointed BPTT window, so
+    fwd AND bwd variants of every torch.compile guard-set and every hand-written
+    Triton kernel size-specialization compile here. Shared by the thread-free
+    startup window and the MORTAR/route phase-boundary recompile — see the two
+    call sites for the (different) fork-safety reasoning at each.
+    """
+    mx = int(model.cfg.max_depth)
+
+    def _forced(K):
+        d = [1] * batch_size
+        for j in range(min(K, batch_size)):
+            d[j] = mx
+        return torch.tensor(d, device=device, dtype=torch.long)
+
+    orig_sample = model._sample_depths
+    sizes = list(range(batch_size, 0, -1))   # [B, B-1, ..., 1] — size>1 AND size==1
+    print(f"  Warmup compile [{tag}] (active-set sizes {sizes} × {passes_per_size})...",
+          flush=True)
+    t0 = time.perf_counter()
+    try:
+        for K in sizes:
+            model._sample_depths = (lambda _b, _dev, _K=K: _forced(_K))
+            for _ in range(passes_per_size):
+                ids = torch.randint(0, model.cfg.vocab_size, (batch_size, seq_len),
+                                    device=device)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    out = model(ids, labels=ids)
+                out["loss"].backward()
+                model.zero_grad(set_to_none=True)
+                del ids, out
+    finally:
+        model._sample_depths = orig_sample          # restore real Poisson sampling
+    torch.cuda.synchronize()
+    print(f"  Warmup compile [{tag}] done in {time.perf_counter()-t0:.1f}s "
+          f"({len(sizes) * passes_per_size} passes, all active-set sizes)", flush=True)
+
+
 # ── Main training loop ────────────────────────────────────────────────────────
 
 @hydra.main(config_path="../configs", config_name="base", version_base=None)
@@ -278,6 +378,21 @@ def main(cfg: DictConfig) -> None:
     gen_every = int(getattr(tr, "gen_every", 0))  # 0 = disabled
     n_eval_batches = int(getattr(tr, "n_eval_batches", 20))
     resume_path: Optional[str] = getattr(tr, "resume", None)
+    init_from_path: Optional[str] = getattr(tr, "init_from", None)
+
+    # ── Token-Superposition Training (TST, #231 — arXiv 2605.06546) ──────────
+    # Two phases in ONE run: superposition (bag_size=s, multi-hot CE) for the first
+    # tst_ratio·total_steps, then recovery (bag_size=0, standard NTP — code path
+    # inactive). bag_size is a per-forward kwarg (eval/gen always use 0). The switch
+    # is in-process: only the MLP submodules are compiled and they see [*, L, d] in
+    # BOTH phases (bagging happens before the loop), so the switch triggers no
+    # recompile. tst_bag_size=0 → bit-identical to the pre-TST baseline.
+    tst_bag_size = int(getattr(tr, "tst_bag_size", 0))
+    tst_ratio = float(getattr(tr, "tst_ratio", 0.0))
+    tst_phase1_steps = int(tst_ratio * total_steps) if tst_bag_size > 0 else 0
+    if tst_bag_size > 0:
+        print(f"  TST ON: bag_size={tst_bag_size} ratio={tst_ratio} → superposition "
+              f"steps [0,{tst_phase1_steps}), recovery [{tst_phase1_steps},{total_steps})")
 
     use_compile = bool(getattr(tr, "compile", True))
     compile_mode = str(getattr(tr, "compile_mode", "default"))
@@ -356,6 +471,22 @@ def main(cfg: DictConfig) -> None:
             f"LM head: {embed_quant_manifest['lm_head_note'][:80]}",
             flush=True,
         )
+
+    # ── CMS importance-scoring mode (for structured pruning) ──────────────
+    # Sets the saliency criterion used by accumulate_scores / prune_step on every
+    # CMSBlockLinear. Default "grad" is bit-identical to the pre-pruning behaviour.
+    #   grad → ‖∇W‖_F · taylor → ‖W⊙∇W‖_F (Molchanov) · magnitude → ‖W‖_F
+    _cms_score_mode = str(getattr(cfg.training, "cms_score_mode", "grad")).strip().lower()
+    if _cms_score_mode not in ("grad", "taylor", "magnitude"):
+        raise ValueError(f"cms_score_mode must be grad|taylor|magnitude, got {_cms_score_mode!r}")
+    if _cms_score_mode != "grad":
+        from morph.model.titans_core.block_sparse import CMSBlockLinear
+        _n_cms = 0
+        for _m in model.modules():
+            if isinstance(_m, CMSBlockLinear):
+                _m.score_mode = _cms_score_mode
+                _n_cms += 1
+        print(f"  CMS score_mode={_cms_score_mode} on {_n_cms} CMSBlockLinear layers", flush=True)
 
     # ── Attention-projection int-N QAT (Ablation #205) ────────────────────
     # Gentler-than-ternary per-row int8/int6/int4 on the CCA attention projections —
@@ -448,34 +579,10 @@ def main(cfg: DictConfig) -> None:
         # engine blocked mid-recompute on the next malloc). Patterns: K sequences at
         # max_depth, rest at depth 1 → n_active==K in BOTH the no_grad prefix and the
         # checkpointed BPTT window, so fwd AND bwd Triton variants for every size compile now.
-        _wb = int(cfg.training.batch_size)
-        _mx = int(model.cfg.max_depth)
-
-        def _forced_depths(K):
-            d = [1] * _wb
-            for _j in range(min(K, _wb)):
-                d[_j] = _mx
-            return torch.tensor(d, device=device, dtype=torch.long)
-
-        _orig_sample = model._sample_depths
-        _passes_per_size = int(getattr(tr, "warmup_passes_per_size", 4))
-        _sizes = list(range(_wb, 0, -1))   # [B, B-1, ..., 1] — covers size>1 AND size==1
-        print(f"  Warmup compile (thread-free; active-set sizes {_sizes} × {_passes_per_size})...",
-              flush=True)
-        _t_warm = time.perf_counter()
-        for _K in _sizes:
-            model._sample_depths = (lambda _b, _dev, __K=_K: _forced_depths(__K))
-            for _wi in range(_passes_per_size):
-                _ids = torch.randint(0, model.cfg.vocab_size, (_wb, seq_len), device=device)
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    _w = model(_ids, labels=_ids)
-                _w["loss"].backward()
-                model.zero_grad(set_to_none=True)
-                del _ids, _w
-        model._sample_depths = _orig_sample          # restore real Poisson sampling
-        torch.cuda.synchronize()
-        print(f"  Warmup compile done in {time.perf_counter()-_t_warm:.1f}s "
-              f"({len(_sizes) * _passes_per_size} passes, all active-set sizes)", flush=True)
+        warmup_compile_all_shapes(
+            model, int(cfg.training.batch_size), seq_len, device,
+            int(getattr(tr, "warmup_passes_per_size", 4)), tag="startup thread-free",
+        )
 
         # Final safety net: forbid NEW compilation during the training loop. The warmup
         # above + the @torch.compiler.disable on the CMS stats hook cover the COMMON shape
@@ -538,9 +645,12 @@ def main(cfg: DictConfig) -> None:
     tokenizer_name = data_cfg.tokenizer
     dataset_name = data_cfg.dataset
 
-    train_loader = iter(
-        create_dataloader(tokenizer_name, dataset_name, seq_len, batch_size, split="train")
-    )
+    def _make_train_loader(bag: int):
+        return iter(create_dataloader(tokenizer_name, dataset_name, seq_len,
+                                      batch_size, split="train", bag_size=bag))
+
+    # val/gen ALWAYS use standard NTP (bag_size=0) so val ppl is comparable to the
+    # baseline regardless of which TST phase training is in.
     val_loader = iter(
         create_dataloader(tokenizer_name, dataset_name, seq_len, batch_size,
                          split="validation", skip_samples=50_000)
@@ -567,6 +677,52 @@ def main(cfg: DictConfig) -> None:
     if resume_path and os.path.isfile(resume_path):
         print(f"Resuming from {resume_path}")
         start_step = load_checkpoint(resume_path, model, optimizer, scaler, device)
+    elif init_from_path:
+        # Weights-only seed (step stays 0, fresh optimizer). resume takes precedence if both set.
+        if not os.path.isfile(init_from_path):
+            raise FileNotFoundError(f"training.init_from not found: {init_from_path}")
+        print(f"Init-from (weights only) {init_from_path}")
+        load_weights_only(init_from_path, model, device)
+
+    # TST: start in superposition unless resuming past the phase-1 boundary.
+    cur_bag = tst_bag_size if (tst_phase1_steps > 0 and start_step < tst_phase1_steps) else 0
+    train_loader = _make_train_loader(cur_bag)
+
+    # ── Curriculum pretraining (Phase P) — length-bucketed multi-source ramp ──
+    # GATED: absent/disabled → base.yaml path is byte-identical (curriculum_enabled False,
+    # cur_grad_accum 1, no transitions, total_steps unchanged). When ON: overrides total_steps
+    # and train_loader, and ramps seq_len / RoPE-context / micro-batch per stage with a
+    # checkpoint-before-step-up (the stage transition fires at the top of the loop below).
+    _curr_cfg = getattr(cfg, "curriculum", None)
+    curriculum_enabled = bool(_curr_cfg is not None and getattr(_curr_cfg, "enabled", False))
+    cur_grad_accum = 1
+    cur_stage = -1
+    if curriculum_enabled:
+        from morph.training.curriculum import CurriculumScheduler
+        from morph.training.curriculum_data import MultiSourceCurriculumLoader
+        from morph.model.attention import CoPEEmbedding
+        _stages = list(_curr_cfg.stages)
+        _boundaries = [int(s.seq_len) for s in _stages]
+        _contexts = [int(s.context_len) for s in _stages]
+        _microbatch = [int(s.micro_batch) for s in _stages]
+        _stage_steps = [int(s.steps) for s in _stages]
+        _eff_batch = int(getattr(_curr_cfg, "eff_batch", 8))
+        _weights = {str(k): float(v) for k, v in dict(_curr_cfg.blend).items()}
+        _sched = CurriculumScheduler(_stage_steps)
+        total_steps = _sched.total_steps                      # override training.steps
+        _curr_loader = MultiSourceCurriculumLoader(
+            str(_curr_cfg.pretok_dir), _weights, _boundaries,
+            seed=int(getattr(tr, "seed", 0)))
+        # RoPE modules to re-anchor on each step-up (attention is EAGER → safe to mutate
+        # cos/sin cache mid-run; compile only wraps the MLPs). Reach through _orig_mod.
+        _rope_mods = [m for m in getattr(model, "_orig_mod", model).modules()
+                      if isinstance(m, CoPEEmbedding)]
+        def _ceil_div(a, b):
+            return max(1, -(-a // b))
+        print(f"[curriculum] ENABLED: {len(_stages)} stages seq={_boundaries} "
+              f"context={_contexts} micro_batch={_microbatch} eff_batch={_eff_batch} "
+              f"stage_steps={_stage_steps} total_steps={total_steps} | "
+              f"{len(_rope_mods)} RoPE modules", flush=True)
 
     # ── Optimizer step closure (resolved once, no per-step isinstance) ───
     _has_ternary = isinstance(optimizer, TernaryShadowOptimizer)
@@ -584,6 +740,28 @@ def main(cfg: DictConfig) -> None:
     model.train()
     step_times: list[float] = []
     t_start = time.perf_counter()
+
+    # ── Activation-memory probe (MORPH_MEM_PROBE) ──────────────────────────────
+    # Root-causes the post-compact activation regression (+8 GB at b4). When set, we
+    # reset the peak counter at the START of each step and print THAT step's fwd+bwd
+    # high-water mark — correlate with the [compact]/[route] log lines to read the
+    # masked-dense → sparse → routed deltas WITHIN ONE faithful training process.
+    # MORPH_MEM_SNAPSHOT_STEP=N additionally dumps a full allocation snapshot (every
+    # block + its Python alloc stack) at the first step >= N, for line-level attribution.
+    _mem_probe = bool(os.environ.get("MORPH_MEM_PROBE"))
+    _mem_snap_step = int(os.environ.get("MORPH_MEM_SNAPSHOT_STEP", "-1"))
+    _mem_snapped = False
+    # History recording installs CUDA-allocator hooks that can make a Triton
+    # autograd.Function (the fused HC kernels) return NULL — so we ONLY enable it when a
+    # snapshot is explicitly requested (MORPH_MEM_SNAPSHOT_STEP>=0). The default probe is
+    # peak-only (reset_peak_memory_stats + max_memory_allocated) which touches no hooks.
+    if _mem_probe and _mem_snap_step >= 0:
+        torch.cuda.memory._record_memory_history(max_entries=300_000)
+        print(f"[memprobe] recording allocation history (snapshot @ step>={_mem_snap_step})",
+              flush=True)
+    elif _mem_probe:
+        print("[memprobe] peak-only mode (no allocator hooks; set MORPH_MEM_SNAPSHOT_STEP for a snapshot)",
+              flush=True)
 
     # Diagnostic-only (MORPH_DEBUG_STEP): per-step wall time + the exact Poisson depths
     # that step sampled, to catch the intermittent slow step and its trigger. Wrap
@@ -621,34 +799,157 @@ def main(cfg: DictConfig) -> None:
         if _dbg_step:
             _dbg["step_start"] = time.perf_counter()
             _dbg["cur_step"] = step
+        if _mem_probe:
+            torch.cuda.reset_peak_memory_stats()
+
+        # ── TST phase switch: superposition → recovery (once, at tst_phase1_steps) ──
+        if cur_bag != 0 and step >= tst_phase1_steps:
+            sw_path = os.path.join(ckpt_dir, f"tst_switch_step_{step}.pt")
+            save_checkpoint(sw_path, step, model, optimizer, scaler, pruning)
+            print(f"[TST] phase switch @ step {step}: superposition (bag={cur_bag}) → "
+                  f"recovery (bag=0). Switch ckpt: {sw_path}", flush=True)
+            cur_bag = 0
+            train_loader = _make_train_loader(0)
+
+        # ── Curriculum stage transition: checkpoint → RoPE re-anchor → loader.set_stage →
+        #    micro-batch/grad-accum swap. Two independent risks at a step-up (activation OOM
+        #    and the PE-shift loss spike) → the pre-step-up checkpoint is the recovery point. ──
+        if curriculum_enabled and _sched.stage_at(step) != cur_stage:
+            _k = _sched.stage_at(step)
+            if step > start_step:                                  # nothing to save at step 0
+                _cp = os.path.join(ckpt_dir, f"curriculum_pre_stage{_k}_step{step}.pt")
+                save_checkpoint(_cp, step, model, optimizer, scaler, pruning)
+                print(f"[curriculum] stage {cur_stage}→{_k} @ step {step}: pre-step-up ckpt {_cp}",
+                      flush=True)
+            for _m in _rope_mods:                                  # re-anchor taper + rebuild cache
+                _m.set_context(_contexts[_k])
+            _curr_loader.set_stage(_k)
+            cur_stage = _k
+            cur_grad_accum = _ceil_div(_eff_batch, _microbatch[_k])
+            seq_len = _boundaries[_k]
+            batch_size = _microbatch[_k] * cur_grad_accum          # effective, for tok/s logging
+            train_loader = _curr_loader.batches(_microbatch[_k], bag_size=cur_bag)
+            print(f"[curriculum] → stage {_k}: seq_len={seq_len} context={_contexts[_k]} "
+                  f"micro_batch={_microbatch[_k]} grad_accum={cur_grad_accum} eff_batch={batch_size} "
+                  f"(RoPE re-anchored on {len(_rope_mods)} modules)", flush=True)
+
         lr = lr_fn(step)
         for pg in optimizer.param_groups:
             pg["lr"] = lr
 
-        try:
-            x, y = next(train_loader)
-        except StopIteration:
-            train_loader = iter(
-                create_dataloader(tokenizer_name, dataset_name, seq_len, batch_size,
-                                  split="train")
-            )
-            x, y = next(train_loader)
-        x, y = x.to(device), y.to(device)
-
         optimizer.zero_grad(set_to_none=True)
 
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            out = model(x, labels=y)
-        loss = out["loss"]
+        # Grad accumulation: _ga micro-steps before one optimizer step. _ga==1 (no curriculum)
+        # → byte-identical to the single fwd/bwd path (loss/1 == loss). The curriculum uses it to
+        # hold a constant effective batch as the per-stage micro-batch drops with context length.
+        _ga = cur_grad_accum if curriculum_enabled else 1
+        for _micro in range(_ga):
+            try:
+                x, y = next(train_loader)
+            except StopIteration:
+                train_loader = _make_train_loader(cur_bag)
+                x, y = next(train_loader)
+            x, y = x.to(device), y.to(device)
 
-        # Routing aux loss (load balance) — only active after route_start
-        if pruning.is_routed:
-            routing_aux = collect_routing_aux_losses(model)
-            loss = loss + routing_aux
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                out = model(x, labels=y, bag_size=cur_bag)
+            loss = out["loss"]
 
-        scaler.scale(loss).backward()
+            # Routing aux loss (load balance) — only active after route_start
+            if pruning.is_routed:
+                routing_aux = collect_routing_aux_losses(model)
+                loss = loss + routing_aux
+
+            scaler.scale(loss / _ga).backward()
+
+        if _mem_probe:
+            _pk = torch.cuda.max_memory_allocated() / 2**30
+            _rsv = torch.cuda.max_memory_reserved() / 2**30
+            print(f"[memprobe] step={step} routed={pruning.is_routed} "
+                  f"fwdbwd_peak_alloc={_pk:.2f}GB reserved={_rsv:.2f}GB", flush=True)
+            if _mem_snap_step >= 0 and step >= _mem_snap_step and not _mem_snapped:
+                _snap_path = os.environ.get("MORPH_MEM_SNAPSHOT_PATH",
+                                            "experiments/mem_snapshot.pickle")
+                torch.cuda.memory._dump_snapshot(_snap_path)
+                torch.cuda.memory._record_memory_history(enabled=None)
+                _mem_snapped = True
+                print(f"[memprobe] dumped allocation snapshot → {_snap_path} "
+                      f"(recording stopped)", flush=True)
 
         prune_stats = pruning.step(model, step)
+
+        # Phase boundary (compact / routing) changed the param set → rebuild a FRESH
+        # optimizer (Wolfe: fresh optimizer after compact). This step's backward grads
+        # live on the OLD params (weight, pre-router); the new params (values, router)
+        # have no grads yet, so we skip this step's update and train normally next step.
+        # _step_optimizer closes over `optimizer` by name → reassigning here is picked up.
+        if prune_stats and prune_stats.pop("_rebuild_optimizer", False):
+            wandb.log({k: v for k, v in prune_stats.items()
+                       if isinstance(v, (int, float))}, step=step)
+            # FREE the old optimizer BEFORE building the new one. The old AdamW8bit holds
+            # 8-bit moment tensors for the PRE-rebuild param set (e.g. the now-deleted dense
+            # `weight` Parameters at compact). bitsandbytes optimizers keep internal reference
+            # CYCLES (optimizer ↔ state ↔ param), so plain reassignment does NOT free them via
+            # refcounting — they linger as LIVE GPU memory until a cyclic GC pass. Without this
+            # the dense-weight optimizer state survives compact+route and stacks on top of the
+            # new sparse state → b4 OOM even though the compacted model is smaller. So: clear
+            # state, drop the name, gc.collect() to break the cycle, empty_cache() to return the
+            # freed blocks to the driver — THEN allocate the new optimizer into the cleared pool.
+            _mem_before = torch.cuda.memory_allocated() / 1e9
+            optimizer.zero_grad(set_to_none=True)
+            if hasattr(optimizer, "state"):
+                optimizer.state.clear()
+            del loss
+            optimizer = None
+            gc.collect()
+            torch.cuda.empty_cache()
+            _mem_freed = torch.cuda.memory_allocated() / 1e9
+            optimizer = create_optimizer(model, cfg)
+            for pg in optimizer.param_groups:
+                pg["lr"] = lr
+            _mem_after = torch.cuda.memory_allocated() / 1e9
+            _n_opt = sum(p.numel() for g in optimizer.param_groups for p in g["params"])
+            print(f"[opt] rebuilt optimizer @ step {step}: {_n_opt:,} params; "
+                  f"cuda_alloc {_mem_before:.2f}→{_mem_freed:.2f} (freed)→{_mem_after:.2f} GB",
+                  flush=True)
+
+            # ── Phase-boundary controlled recompile (MORTAR carve / route) ────
+            # GATED OFF BY DEFAULT (MORPH_COMPILE_CARVED). MEASURED NET-NEGATIVE at
+            # d=768: carved-COMPILED 742ms vs carved-EAGER 698ms (-6.2%) — the carved
+            # path's compute is the opaque BCSR custom-op GEMM (not fusable), the
+            # surrounding elementwise is cheap, and compiling it thrashes on grad_mode
+            # guards (recompile_limit-64 hit). The eager_on_recompile fallback below IS
+            # the fast path. The ~+5% Wolfe saw is overhead dilution of the +22%
+            # model-compute carving win, NOT lost fusion. Kept for cloud-scale revisit
+            # where a larger d_model changes the GEMM-vs-elementwise economics.
+            # When ON: open ONE controlled recompile window (default stance, warm every
+            # active-set size, re-arm the stance), fork-safe via spawn workers.
+            #   Fork-safety vs the step-0 wedge: Inductor codegen still runs in
+            # the worker pool PRE-SPAWNED at startup (worker_start_method=
+            # subprocess → no new forks from this now-threaded process). The
+            # residual risk is the main-process cc launch for new Triton
+            # launcher stubs — the SAME class of risk the pre-fix code already
+            # took when the carved stk kernels JIT'd on their first post-carve
+            # eager forward. Taking it here, in a bounded window we control,
+            # beats letting it fire on a random later training step.
+            #   RNG: fork_rng so the warmup's randint doesn't shift the
+            # training stream's draw sequence.
+            if use_compile and os.environ.get("MORPH_COMPILE_CARVED"):
+                torch.compiler.set_stance("default")
+                try:
+                    with torch.random.fork_rng():
+                        warmup_compile_all_shapes(
+                            model, int(cfg.training.batch_size), seq_len, device,
+                            int(getattr(tr, "warmup_passes_per_size", 4)),
+                            tag=f"phase-boundary step {step}",
+                        )
+                finally:
+                    torch.compiler.set_stance("eager_on_recompile")
+                    print("  torch.compiler stance restored = eager_on_recompile",
+                          flush=True)
+
+            t_start = time.perf_counter()
+            continue
 
         scaler.unscale_(optimizer)
         nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
@@ -681,13 +982,25 @@ def main(cfg: DictConfig) -> None:
                 "train/ppl": math.exp(min(loss.item(), 20.0)),
                 "train/lr": lr,
                 "perf/steps_per_sec": sps,
-                "perf/tokens_per_sec": sps * batch_size * seq_len,
+                # TST superposition ingests s× raw tokens per step (same FLOPs); count them.
+                "perf/tokens_per_sec": sps * batch_size * seq_len * (cur_bag if cur_bag > 0 else 1),
                 "perf/peak_mem_alloc_mib": peak_alloc,
                 "perf/peak_mem_reserved_mib": peak_resv,
                 "perf/step": step,
+                "train/tst_bag": cur_bag,
             }
             if "stp_loss" in out:
                 log["train/stp_loss"] = out["stp_loss"].item()
+
+            # Retention gate diagnostic (#230): sigmoid(ret_gate) per retention block — THE key
+            # signal for whether the model actually USES the retention branch (gate opens from ~0)
+            # vs treats it as dead weight (stays ~0). A few scalars; log every step.
+            _rm = getattr(model, "_orig_mod", model)
+            if getattr(_rm.cfg, "retention", False):
+                for _nm, _sec in (("prelude", _rm.prelude), ("core", _rm.core), ("coda", _rm.coda)):
+                    for _i, _blk in enumerate(_sec):
+                        if getattr(_blk, "ret_gate", None) is not None:
+                            log[f"retention/gate_{_nm}{_i}"] = torch.sigmoid(_blk.ret_gate).item()
 
             # Pruning stats
             if prune_stats:

@@ -57,3 +57,24 @@ Full stacked-pair fwd+bwd: Q 1.42x, fwd 1.39x; K fwd 1.82x but K full fwd+bwd 0.
 **Next:** Wolfe integrates. NOT verified: torch.compile interaction; K-stream full-pair is
 honestly slower (the win is the grouped wgrad, which dominates the real profile); only
 D=32/K=4/B=2 benchmarked; CUDA-graph capture; numerical drift over long training.
+
+## [2026-06-05] — kernel+proof: fused_hyper_connection (JPmHC HC residual)
+**Goal:** Fuse Triton fwd+bwd for HyperConnectionResidual (production cayley default, ~2x slower than plain residual from launch overhead + redundant 100MB carrier reads). Recover speed with exact numerics on RTX 5090 sm_120.
+**Method:** EAGER-MANIFOLD FALLBACK decomposition. Carrier h[B,S,4,768]=100MB; mapping tensors <2MB. Fused only the BIG carrier passes into 2 autograd.Functions straddling the sublayer: _FusedHCPre (x_bar = sum_j Hpre_cm[j]*h[j,c]) and _FusedHCPost (sum_j Hres[i,j]*h[j,c] + Hpost_row[i]*y[c], i.e. x_mix+x_post+add in one pass). Kept the n*n mapping (rms/proj GEMV/softmax x2/Cayley 3-iter/reductions) in eager PyTorch — autograd handles the hard softmax+Cayley backward EXACTLY; fully-fused analytic backward through 3 Cayley iters = high risk for sub-1%-bytes gain. Branch-free integration: _hc_pre/_hc_post bound at __init__ (cayley->kernels, sinkhorn/CPU->references). Z3: bounds (UNSAT on negation), coalescing (stride-1, 1 cache line/warp, uniform scalar broadcast), bank-conflict (vacuous, no smem), tile validity for sm_120.
+**Result:** ALL GATES GREEN on live 5090.
+  - Kernel self-test: PRE fwd bit-exact (max 0.0), grad cos 1.0000. POST fwd_mean 1.88e-3, cos 0.999996, all 4 grad cos 1.0000 (6.25e-2 max-vs-bf16ref is bf16 FLOOR; kernel closer to fp32-truth than the ref).
+  - Module parity (fused vs eager same weights): out_mean 1.15e-3, cos 0.999996, grad cos on h/proj.weight/proj.bias all 1.0000.
+  - init~=plain relerr 0.0263; finite OK.
+  - Z3: in-bounds PROVEN (8 cases), coalescing PROVEN (3 props), bank-conflict-free PROVEN (vacuous), tile-validity PROVEN (256 thr/blk, 8 warps, stages=1, BLOCK_C=1024; regs CONDITIONAL on ptxas).
+  - SPEEDUP: module fwd+bwd B4/S4096 = 1.42x (eager 6.48ms -> fused 4.57ms). Carrier-ops-only fwd = 4.1x (0.94->0.23ms). Module speedup diluted by the unchanged eager mapping (~0.7ms proj+softmax+cayley) + frozen sublayer MLP.
+**Next:** Next lever = fold proj GEMV into PRE kernel (h already resident) to attack the ~0.7ms eager mapping. NOT done (needs fully-fused manifold backward = the risky path). Files: morph/kernels/triton/fused_hyper_connection.py, morph/model/hyper_connections.py (integration), ignore/verify_hyper_connections.py, ignore/bench_hyper_connections.py.
+
+## [2026-06-05] — OPTIMIZE (round 2): fused_hyper_connection PRE-MAP fusion
+**Goal:** Kill the ~65-launch n×n mapping storm (copy_/mul/pow/bmm = ~2/3 of HC fwd+bwd CUDA time after round 1) by fusing rms+proj+softmax×2+cayley(3)+reductions+x_bar into the PRE kernel with an analytic backward.
+**Method:** New `_hc_premap_fwd/bwd_kernel` + `_FusedHCPreMap` autograd.Function + `hc_pre_map`/`hc_pre_map_reference`. Decomposition: GEMV kept as a single cuBLAS addmm in the CARRIER dtype (bf16 → tensor-core, fp32 accumulate) — folding it into the per-token kernel would reload proj_w[48,3072] per program and lose tensor cores. Everything else (rms over 3072, the two softmaxes, the 3 Cayley fixed-point iters as fully-unrolled 4×4 scalar matmuls, the colmean/rowsum reductions, x_bar) fused into ONE kernel, fp32 internal, one program = one token, register-resident (no shared mem). Analytic VJP (softmax dim=-1 AND dim=-2 jacobians, 3-step Cayley reverse recurrence, skew + /rms + proj VJP) validated against autograd in `ignore/derive_pre_backward.py` (rel ~1e-7) BEFORE coding the kernel. Backward GEMMs (grad_w, grad_h_proj) also bf16/tensor-core.
+**Result:** PROVEN/GREEN.
+  - Self-test PRE-MAP: fwd x_cos ≥0.999994, res_cos ≥0.999999, pr_cos ≥0.999996; grad cosines h/proj_w/proj_b = 1.0000 across B∈{2,4}×S∈{512,2048,4096}; kernel ≤ ref vs fp32 truth. POST + PRE unchanged, still green.
+  - Module parity: out_cos 0.999995, grad_cos h/proj.w/proj.b = 1.0000. init≈plain relerr 0.0263. finite. Real MORPHBlock(hc_cayley) fwd+bwd finite.
+  - Speedup: round-1 1.42× → **round-2 2.99×** (eager 7.31ms → fused 2.44ms) at B4/S4096. Total profiler CUDA time 295ms → 175ms (−41%). aten::bmm 450 calls/5% → **0**. aten::mul 800→100 calls.
+  - Z3 (sm_120): bounds (raw48/rms added), coalescing (premap scalar uniform loads added), tile/banks (reg est 164/thread, 41984/block, bank-conflict vacuous) — ALL PROVEN.
+**Next:** Remaining profiler copy_/mul are mostly the cuBLAS GEMM transposes + grad_y materialization in POST + the profiler's own loss casts, not the mapping. A future round could fuse the addmm epilogue cast or the grad_h add. Did NOT run a full training step (smoke fwd+bwd only). iters≠3 / n≠4 / sinkhorn / CPU all fall back to eager reference (verified).

@@ -1,0 +1,69 @@
+{
+  "kernel": "fused_hyper_connection",
+  "arch": "SM120",
+  "arch_source": "RTX 5090 (cap 12.0) live torch.cuda.get_device_properties + CUDA C Programming Guide CC 12.0; cached tile-prover/hw-profiles/sm120.json",
+  "timestamp": "2026-06-05",
+  "round": 2,
+  "decomposition": "ROUND 2: full PRE mapping fused. _hc_premap_fwd/bwd_kernel fuses rms(over n*C) + softmax(dim=-1) + softmax(dim=-2) + Cayley(3-iter, unrolled 4x4 scalar matmuls) + colmean/rowsum reductions + x_bar contraction into ONE register-resident kernel (fp32 internal, one program=one token, n=4/iters=3 unrolled). The proj GEMV is kept as a single cuBLAS addmm in the CARRIER dtype (bf16 -> tensor-core, fp32 accumulate) because folding it per-token would reload proj_w[48,3072] per program and lose tensor cores; backward grad_w/grad_h_proj also bf16/tensor-core GEMMs. Analytic backward (softmax both-dim jacobians + 3-step Cayley reverse recurrence + skew + /rms + proj VJP) validated vs autograd at rel ~1e-7 (ignore/derive_pre_backward.py) before coding. ROUND 1 (still in place): POST x_mix+x_post+add fused; PRE x_bar kept as a standalone kernel for the sinkhorn/eager fallback. Sinkhorn + CPU + iters!=3 + n!=4 fall back to hc_pre_map_reference (eager).",
+  "properties": {
+    "bank_conflict_free": {
+      "status": "proven",
+      "method": "Z3 (vacuous: no explicit shared memory allocated; all 6 kernels register-resident, mapping done in fp32 scalar regs)",
+      "script": "tile_and_banks.py"
+    },
+    "in_bounds": {
+      "status": "proven",
+      "method": "Z3 UNSAT on negation, all tensors (h/xbar/hpre/hpost/hres + round-2 raw48/rms) x {B4S4096, B2S512}",
+      "script": "bounds_safety.py"
+    },
+    "global_coalesced": {
+      "status": "proven",
+      "cache_lines_per_warp": 1,
+      "warp_span_bytes": 62,
+      "method": "Z3: stride-1 contiguous + single 128B line + uniform scalar broadcast (Hres/Hpost/Hpre + round-2 raw_full/rms)",
+      "script": "coalescing.py"
+    },
+    "tile_validity_sm120": {
+      "status": "proven",
+      "threads_per_block": 256,
+      "num_warps": 8,
+      "num_stages": 1,
+      "block_c": 1024,
+      "regs_per_thread_est": 164,
+      "regs_per_block_est": 41984,
+      "conditional_on": "register count is set by ptxas at compile time; estimate (incl. round-2 mapping scalars) is conservative and may spill to local rather than exceed 255/thread. Empirically all configs launched on the live 5090 with zero resource failures.",
+      "script": "tile_and_banks.py"
+    }
+  },
+  "gates": {
+    "kernel_self_test": {
+      "premap_fwd_x_cosine_min": 0.999994,
+      "premap_fwd_res_cosine_min": 0.999999,
+      "premap_fwd_pr_cosine_min": 0.999996,
+      "premap_grad_cosines": {"h": 1.0, "proj_w": 1.0, "proj_b": 1.0},
+      "premap_vs_truth_note": "bf16 GEMV: kernel-vs-fp32-truth <= bf16ref-vs-truth (x_max <=1.56e-2)",
+      "pre_fwd_max": 0.0,
+      "pre_grad_cosine": 1.0,
+      "post_fwd_mean": 0.00188,
+      "post_fwd_cosine": 0.999996,
+      "post_grad_cosines": {"h": 1.0, "y": 1.0, "Hres": 1.0, "Hpost": 1.0}
+    },
+    "module_parity": {
+      "out_mean_err": 0.0015,
+      "out_cosine": 0.999995,
+      "grad_cosine_h": 1.0,
+      "grad_cosine_proj_weight": 1.0,
+      "grad_cosine_proj_bias": 1.0
+    },
+    "init_plain_relerr": 0.0263,
+    "finite": true,
+    "real_path_morphblock_hc_cayley_fwd_bwd_finite": true,
+    "speedup_module_fwd_bwd_B4S4096_round1": 1.42,
+    "speedup_module_fwd_bwd_B4S4096_round2": 2.99,
+    "profiler_total_cuda_ms_round1": 295.144,
+    "profiler_total_cuda_ms_round2": 175.383,
+    "profiler_bmm_calls_round1": 450,
+    "profiler_bmm_calls_round2": 0,
+    "profiler_note": "profiler uses a tiny Linear(C,C) sublayer so HC fraction is an UPPER bound; remaining copy_/mul are mostly cuBLAS GEMM transposes + POST grad_y + the profiler's own loss casts, not the mapping storm (which is gone: bmm 0, mul 800->100)."
+  }
+}

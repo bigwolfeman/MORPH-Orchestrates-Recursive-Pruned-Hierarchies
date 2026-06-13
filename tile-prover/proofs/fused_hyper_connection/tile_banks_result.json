@@ -1,0 +1,30 @@
+{
+  "bank_conflict_free_vacuous": {
+    "status": "proven",
+    "proof_time_ms": 0.41
+  },
+  "threads_le_block_max": {
+    "status": "proven",
+    "proof_time_ms": 0.01
+  },
+  "warps_le_sm_max": {
+    "status": "proven",
+    "proof_time_ms": 0.01
+  },
+  "num_stages_valid": {
+    "status": "proven",
+    "proof_time_ms": 0.01
+  },
+  "regs_per_thread_ok": {
+    "status": "proven",
+    "proof_time_ms": 0.01
+  },
+  "regs_per_block_ok": {
+    "status": "proven",
+    "proof_time_ms": 0.01
+  },
+  "block_c_covers_C": {
+    "status": "proven",
+    "proof_time_ms": 0.01
+  }
+}

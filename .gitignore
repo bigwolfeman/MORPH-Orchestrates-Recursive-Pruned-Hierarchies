@@ -34,3 +34,8 @@ Thumbs.db
 outputs/
 wandb/
 multi­run/
+*.aux
+
+ai-notes/
+Ai-notes/
+ignore/

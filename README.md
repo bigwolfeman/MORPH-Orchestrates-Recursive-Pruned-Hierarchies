@@ -6,12 +6,14 @@ A looped transformer that maximizes per-parameter capability with depth, then pr
 
 The result: a model that matches dense transformers with far fewer parameters and FLOPs.
 
-> **Note:** Earlier versions of MORPH augmented the backbone with a gradient-based
-> neural memory and a LeJEPA split_nsm z-latent objective. Both were **removed** —
-> neural memory is deferred (stability at small context lengths is still unresolved),
-> and the JEPA z-latent objective was dropped. The STP (Semantic Tube Predictor)
-> regularizer is retained. The architecture diagrams below predate this removal and
-> still depict MAC tokens / memory injection; they are pending regeneration.
+> **Note:** Earlier versions of MORPH (TitanMAC lineage) augmented the backbone with a
+> gradient-based neural memory, MAC tokens, and a LeJEPA split_nsm z-latent objective. All
+> three were **removed**. The STP (Semantic Tube Predictor) regularizer is retained. The
+> recurrent-memory role is now explored by the **GLA retention branch** (ablation #230) — a
+> gated linear-attention SSM in parallel to attention on layer 1 of each section. The residual
+> mechanism is **Cayley Hyper-Connections** (`residual_mode=hc_cayley`, n=4 streams) by default;
+> the older Multi-Rate Residual is a selectable alternative (`residual_mode=null`). The diagrams
+> below were regenerated to reflect this (see `docs/figures/*.tex`).
 
 ---
 
@@ -27,7 +29,7 @@ Data flows top-to-bottom through four stages:
 
 2. **Prelude** (N layers) — Standard transformer blocks that establish initial representations.
 
-3. **Core Loop** (2N layers, iterated T times) — The heart of the architecture. The same set of layers is reused T times with diagonal injection at the loop boundary (Parcae-style, spectral radius < 1 guaranteed). Depth T is sampled from a Poisson distribution during training and truncated BPTT limits the backward pass to the last 4 iterations. The core MLP layers use Block-ELL sparse format for extreme pruning.
+3. **Core Loop** (2N layers, iterated T times) — The heart of the architecture. The same set of layers is reused T times with diagonal injection at the loop boundary (Parcae-style, spectral radius < 1 guaranteed). Depth T is sampled from a Poisson distribution during training and truncated BPTT limits the backward pass to the last 4 iterations. The core MLP layers use the MORTAR 128×128 BCSR sparse format for extreme pruning.
 
 4. **Coda** (N layers) — Post-loop layers that refine the representation. After the coda, the output goes through the LM head.
 
@@ -41,30 +43,42 @@ The **STP loss** enforces smooth (locally geodesic) token-state trajectories dur
   <img src="docs/figures/morph_block.png" width="600" alt="MORPH Block"/>
 </p>
 
-Every block in MORPH uses a **Multi-Rate Residual (MRR)** — a 3-channel residual stream where each channel updates at a different rate:
+The residual stream is carried as **Cayley Hyper-Connections (HC)** — `n=4` parallel d<sub>model</sub>-dim streams `[B,S,4,C]` (deployment default, `residual_mode=hc_cayley`). Around each sublayer the streams are read, transformed, and written back:
 
-| Channel | Width | &gamma; | Role |
-|---------|-------|---------|------|
-| Compute | 3N | ~1.0 | Full-strength updates. Does the heavy lifting. |
-| Context | 2N | ~0.5 | Half-strength updates. Carries positional and contextual state. |
-| Slow    | N | ~0.1 | Slow updates. Preserves information across many layers and loop iterations. (Reserved — formerly the neural-memory channel.) |
+1. **H<sub>pre</sub>** (row-stochastic) aggregates the streams into a single d<sub>model</sub>-dim input `x̄ = mean_n(H_pre · x_streams)` that the sublayer sees;
+2. the sublayer **F** (attention or MLP) computes `y = F(RMSNorm(x̄))`;
+3. **H<sub>res</sub>** (an orthogonal map, `Cayley(skew) ∈ O(n)`) mixes the streams and **H<sub>post</sub>** scatters `y` back: `x_out = H_res · x_streams + H_post · (y ⊗ 1_n)`.
 
-**The key insight**: sublayers (attention, MLP) see the full d<sub>model</sub>-dimensional input — all channels concatenated. The channel separation happens *only* on the residual update side, via learned per-channel &gamma; gains. This means the compute doesn't lose any information from the slow channels; it just updates them gently.
+At init the maps reduce to `x + F(mean(x))` — a plain residual — so HC starts bit-identical to a vanilla block and learns its mixing from there.
 
-**Why this matters for looping**: When the same layers execute T times, a standard residual connection would amplify signals by T&times;. The MRR slow channel (&gamma;&approx;0.1) acts as a built-in damper — information in this channel persists across loop iterations without exploding. The compute channel (&gamma;&approx;1.0) does fresh work each iteration. This is what makes deep looping stable.
+**Why this matters for looping**: when the same layers execute T times, a standard residual would amplify signals by T&times;. HC's orthogonal H<sub>res</sub> (Cayley ∈ O(n)) preserves the residual-stream norm across iterations (exact dynamical isometry), so the carrier neither explodes nor collapses over T=6–8 loops. This is what makes deep looping stable.
+
+**Layer 1 of each section** also adds a **GLA retention branch** in parallel to attention — a gated linear-attention SSM whose hidden state `S_t = diag(α_t)·S_{t-1} + kₜᵀvₜ` summarizes the sequence, combined as `y = attn(x̄) + σ(g)·GLA(x̄, S)`. In the core loop, `S` is carried across iterations (memory across thinking-depth). The gate `σ(g) ≈ 0` at init, so it is off until the model learns to open it (ablation #230).
+
+**Alternative residual (MRR).** Setting `residual_mode=null` selects the **Multi-Rate Residual** — a single-stream `[B,S,C]` carrier split into compute (3N, &gamma;≈1.0) / context (2N, &gamma;≈0.5) / memory (N, &gamma;≈0.1) channels with per-channel learned gains. The slow channel damps loop amplification the way HC's orthogonal mixer does. MRR is a selectable ablation arm, not the deployment default. Note the **channel slices persist under HC** — not as the residual mechanism, but as the targets for injection (x₀/value-embeds → context slice; bigram full-width) and the core's spectral-radius-&lt;1 diagonal decay.
 
 ### Block internals
 
-Each block has two sublayers with identical structure:
+Each block has two sublayers with identical HC structure:
 
-1. **RMSNorm** &rarr; **Attention** (CCA + CSA/HCA) &rarr; **MRR**
-2. **RMSNorm** &rarr; **SwiGLU MLP** (Block-ELL in core layers) &rarr; **MRR**
+1. **H<sub>pre</sub>** &rarr; **RMSNorm** &rarr; **Attention** (CCA + CSA/HCA) [+ GLA on layer 1] &rarr; **H<sub>res</sub> mix + H<sub>post</sub> scatter**
+2. **H<sub>pre</sub>** &rarr; **RMSNorm** &rarr; **SwiGLU MLP** (MortarLinear, prunable/carvable) &rarr; **H<sub>res</sub> mix + H<sub>post</sub> scatter**
 
 The attention mechanism combines:
 - **CCA** (Cross-Chunk Attention): The primary attention path with channel compression and CoPE-RoPE positional encoding
 - **CSA** (Chunked Sparse Attention): Used on even-numbered layers, sparse windowed attention with compression
-- **HCA** (Hyper-Connection Aware attention): Used on odd-numbered layers, dense attention that respects the MRR channel structure
+- **HCA** (Hyper-Connection Aware attention): Used on odd-numbered layers, dense attention that respects the channel-slice structure
 - A **sigmoid gate** blends the CSA/HCA outputs
+
+---
+
+## Retention (GLA) Memory
+
+<p align="center">
+  <img src="docs/figures/morph_memory.png" width="760" alt="Retention — Gated Linear Attention Memory"/>
+</p>
+
+After TitanMAC's explicit neural memory was removed, the recurrent-memory role is explored by a **GLA retention branch** (ablation #230) on layer 1 of each section. It has **two recurrence axes**: Axis 1 (over the *sequence*) is the standard SSM hidden state `S_t = diag(α_t)·S_{t-1} + kₜᵀvₜ` — a linear-attention scan; Axis 2 (over the *loop*) optionally carries `S_T` of one iteration into the next (`retention_carry`), giving memory across thinking-depth. The branch runs *in parallel* to attention (gated sum), never recurrent *over* it.
 
 ---
 
@@ -72,21 +86,36 @@ The attention mechanism combines:
 
 None of MORPH's components work in isolation. The architecture is designed so each piece reinforces the others:
 
-### Looping &times; MRR = Stable depth without parameter growth
+### Looping &times; Hyper-Connections = Stable depth without parameter growth
 
 The core loop reuses 2N layers T times, giving effective depth of 2N&middot;T with only 2N layers of parameters. But naive looping is unstable — residual magnitudes grow with each iteration.
 
-MRR solves this: the slow channel (&gamma;&approx;0.1) provides a slow-moving state that persists across iterations without amplification, while the compute channel (&gamma;&approx;1.0) does fresh work each time. The diagonal injection at loop boundaries (spectral radius < 1) provides additional stability guarantees. Together, these allow T=6-8 loop iterations without divergence.
+HC solves this: the orthogonal stream mixer (H<sub>res</sub> = Cayley(skew) ∈ O(n)) preserves the residual-stream norm across iterations (dynamical isometry), so the carrier neither explodes nor collapses over T loops. The diagonal injection at loop boundaries (spectral radius < 1) adds a further stability guarantee. Together these allow T=6-8 loop iterations without divergence. *(The MRR alternative achieves the same via its slow channel, &gamma;&approx;0.1, instead of an orthogonal mixer.)*
 
-### Looping &times; Block-ELL = Multiplicative FLOP savings
+### Looping &times; MORTAR = Multiplicative FLOP savings
 
 Because the same weights are reused T times per forward pass, pruning the core block to 25% density doesn't just save 75% of MLP FLOPs — it saves 75% &times; T. For T=6, that's 4.5&times; the absolute FLOP reduction compared to pruning a non-looped layer.
 
 The pruning uses CMS (Continuum Memory System) topology scoring: gradient-based importance scores accumulated over training, with periodic topology decisions that prune low-scoring blocks and optionally regrow high-potential ones.
 
-### Block-ELL &times; Triton = Actual speedup, not just parameter reduction
+### MORTAR &times; Triton = Actual speedup, not just parameter reduction
 
-Structured sparsity on paper doesn't help if the runtime can't exploit it. MORPH includes custom Triton kernels for Block-ELL forward and backward passes that operate directly on the sparse tensor format. After compaction, the MLP layers execute only the surviving blocks — no wasted computation on zero blocks, no gather/scatter overhead.
+Structured sparsity on paper doesn't help if the runtime can't exploit it. MORPH executes carved MLPs with the vendored stk Triton BCSR kernels (morph/sparse/stk) operating directly on 128×128 blocks — measured 3.09× faster than dense at 0.25 density. After carving, the MLP layers execute only the surviving blocks — no wasted computation on zero blocks, no gather/scatter overhead.
+
+---
+
+## Deployable Stack
+
+<p align="center">
+  <img src="docs/figures/morph_deploy_stack.png" width="820" alt="MORPH Deployable Stack"/>
+</p>
+
+The deployable build overlays the *validated* quantization + precision components on the architecture above (see [`docs/deployable_quant_stack.md`](docs/deployable_quant_stack.md) for the evidence per component):
+
+- **int6 embeddings** (per-row QAT) · **ternary backbone MLP** ({-1,0,1}, forward-STE QAT) · **bf16 attention** (windowed → bandwidth-bound, low-bit loses) · **bf16** norms / Lorentz / HC / GLA · **int4 KV cache** (inference PTQ) · **8-bit AdamW** (optimizer state).
+- Every knob defaults **off** → bit-identical to the bf16 baseline. The diagram's three axes are orthogonal: *precision* (per param group), *architecture carriers* (HC, GLA — always bf16, cross-cutting), and *lifecycle overlays* (8-bit optimizer = train-only, int4 KV = inference-only).
+
+> **Scope:** this is the deployment *target*. The current retention ablation (#230) trains **dense bf16** (ternary / int6 / fp8 / int4-KV all off) so the GLA signal is isolated from quant noise — the overlays are folded in only for the deployable build.
 
 ---
 
@@ -108,7 +137,7 @@ All blocks active. The model learns basic language representations with full-den
 Starting at step ~6k, topology decisions happen every `prune_interval` steps: low-scoring blocks are removed, reducing density toward the 25% target. The model continues training through each pruning step, adapting its weights to compensate for removed capacity. This is gradual — removing 5% of remaining blocks per round over many rounds.
 
 ### Phase 3: Compact
-At the target density, the sparse mask is converted into actual smaller Block-ELL tensors. Memory footprint drops immediately. From this point, forward/backward passes use the compact Triton kernels.
+At the target density, carve() converts the sparse mask into MORTAR BCSR storage (mortar_data + index buffers). Memory footprint drops immediately. From this point, forward/backward passes use the stk BCSR Triton kernels.
 
 ### Phase 4: Settle
 Post-compact recovery training. The model adjusts to the now-permanent sparse structure. Learning rate may be reduced. This phase typically runs for a few thousand steps.
@@ -116,7 +145,7 @@ Post-compact recovery training. The model adjusts to the now-permanent sparse st
 ### Phase 5: Route (ReMoE) *[pending integration]*
 After the model has settled into its pruned structure, per-token routing is activated over the surviving tile-groups. Different tokens activate different subsets of the remaining 25% of blocks, effectively giving each token a specialized sparse MLP.
 
-The routing module (`morph/model/routing.py`) implements `TileRouter` with PEER-style product keys and `RoutedBlockELLLinear` for the post-compact forward pass. The Triton kernel (`morph/kernels/triton/block_ell_routed_forward.py`) is ready. **Integration into the training loop is pending.**
+The routing module (`morph/model/routing.py`) implements `TileRouter` with PEER-style product keys; `_SwiGLUMortar` hosts it as a hidden-neuron (d_ff cluster) gate, fully backend-agnostic over the carved BCSR GEMM. Routing engages at `routing.route_start` via `PruningSchedule`.
 
 ---
 
@@ -130,18 +159,14 @@ morph/
     mhc.py               # Multi-Rate Residual (MRR) channel dynamics
     embeddings.py        # Hybrid Euclidean + Lorentz + bigram embeddings
     prediction.py        # STP (Semantic Tube Predictor) — zero-param regularizer
-    sparsity.py          # BlockELLLinear — dense pre-compact, sparse post-compact
-    routing.py           # TileRouter + RoutedBlockELLLinear (post-compact)
+    sparsity.py          # MortarLinear — dense pre-carve, MORTAR BCSR post-carve
+    routing.py           # TileRouter (hidden-neuron ReMoE routing)
     titans_core/         # Vendored CMS block-sparse and topology scoring
   kernels/
     triton/
       fused_window_attention.py    # Fused windowed attention
-      block_ell_forward.py         # Block-ELL sparse forward kernel
-      block_ell_backward.py        # Block-ELL sparse backward kernel
-      block_ell_routed_forward.py  # Routed sparse forward (per-token tile selection)
       fused_gate_combine.py        # Fused gate+combine for CSA/HCA blend
       fused_ops.py                 # Fused auxiliary operations
-    pallas/              # TPU kernels
   training/
     train.py             # Training loop with Hydra config
     data.py              # OpenWebText data loading
@@ -209,8 +234,10 @@ From `morph/configs/base.yaml`:
 
 The looped architecture at 81M parameters beats the 531M dense baseline. Pruning to 25% density adds ~5% PPL cost while nearly doubling throughput.
 
-> These results were measured on the looped Block-ELL backbone. They predate the
-> neural-memory/JEPA removal, which does not change the backbone or pruning path.
+> These results were measured on the looped sparse backbone with the legacy 16×16
+> Block-ELL kernels (since replaced by MORTAR 128×128 BCSR, which is strictly
+> faster post-carve). They predate the neural-memory/JEPA removal, which does not
+> change the backbone or pruning path.
 
 ---
 

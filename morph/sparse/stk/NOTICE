@@ -1,0 +1,15 @@
+Vendored from stanford-futuredata/stk (https://github.com/stanford-futuredata/stk)
+at master (last upstream commit 2024-08-21). License: Apache-2.0 (see LICENSE).
+Copyright: Stanford Future Data Systems (Trevor Gale et al.) — the MegaBlocks /
+"Sparse Toolkit" block-sparse Triton kernels.
+
+Modifications for MORPH/MORTAR (2026-06-09):
+- Import paths rewritten: `stk.*` -> `morph.sparse.stk.*`.
+- `backend/sputnik.py` renamed to `backend/autograd.py` (the file contains only
+  torch.autograd.Function wrappers; the original sputnik CUDA backend was removed
+  upstream in v0.0.5 — the name was a historical relic).
+- triton_kernels.py: int16->int32 casts on all loaded block indices inside the
+  Triton kernels (upstream unmerged PR #17 pattern). Fixes a Triton >=3.2
+  dtype-promotion change that overflows int16 index arithmetic and causes illegal
+  memory accesses for sparse dimensions > 32767 (int16 max * 128 blocking).
+- Trimmed: eltwise_ops, random, tests (unused by MORTAR).

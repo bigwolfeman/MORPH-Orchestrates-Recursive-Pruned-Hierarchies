@@ -1,15 +1,17 @@
-% MORPH Architecture — Overview Diagram (vertical, labels horizontal)
+% MORPH Architecture — Overview (vertical).  Current MORPH (post-TitanMAC-strip):
+%   - residual mechanism = Cayley Hyper-Connections (n=4 streams), deployment default
+%   - retention (GLA) branch on layer 1 of each section (ablation #230)
+%   - NO neural memory / NO z-latent / NO MAC tokens (all stripped); STP kept (real)
 % Compile: pdflatex morph_overview.tex
 
 \documentclass[border=14pt]{standalone}
 \usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
 \usepackage{tikz}
-\usetikzlibrary{
-  arrows.meta, fit, positioning, calc,
-  backgrounds, decorations.pathreplacing,
-}
+\usetikzlibrary{arrows.meta, fit, positioning, calc, backgrounds,
+  decorations.pathreplacing}
 
-% ── Palette (colorblind-safe) ────────────────────────────────────────────────
+% ── Palette (colorblind-safe, Paul Tol) ──────────────────────────────────────
 \definecolor{cbBlue}{HTML}{4477AA}
 \definecolor{cbOrange}{HTML}{EE7733}
 \definecolor{cbPurple}{HTML}{AA3377}
@@ -24,17 +26,13 @@
 
 \definecolor{bdr}{HTML}{555555}
 \definecolor{loopC}{HTML}{2255AA}
-\definecolor{memC}{HTML}{AA3377}
+\definecolor{hcC}{HTML}{2255AA}
 
 \tikzset{
   B/.style={draw=bdr, thick, rounded corners=4pt,
-    minimum width=5.0cm, minimum height=0.9cm,
+    minimum width=5.4cm, minimum height=0.9cm,
     font=\small\sffamily, align=center, inner sep=5pt},
   Bs/.style={B, minimum height=0.55cm, font=\footnotesize\sffamily},
-  Bm/.style={draw=memC, thick, rounded corners=4pt,
-    minimum width=3.2cm, minimum height=0.7cm,
-    font=\footnotesize\sffamily, align=center,
-    fill=fPurple!70, inner sep=4pt},
   Bt/.style={draw=bdr, rounded corners=3pt,
     minimum width=3.2cm, minimum height=0.6cm,
     font=\footnotesize\sffamily, align=center, inner sep=3pt},
@@ -42,15 +40,15 @@
   Ad/.style={-{Stealth[length=2.2mm,width=1.8mm]}, thick, densely dashed},
   ph/.style={font=\small\sffamily\bfseries},
   sub/.style={font=\scriptsize\sffamily},
+  tiny/.style={font=\tiny\sffamily},
 }
 
 \begin{document}
 \begin{tikzpicture}[node distance=0.50cm]
 
 % =====================================================================
-% MAIN COLUMN
+% MAIN COLUMN (input bottom -> logits top)
 % =====================================================================
-
 \node[font=\small\sffamily] (inp) {Input Tokens};
 
 \node[B, fill=fTeal, above=0.5cm of inp] (emb) {
@@ -59,171 +57,142 @@
 
 \node[Bs, fill=fGray, above=0.3cm of emb] (drp) {Dropout};
 \draw[A] (emb) -- (drp);
+\node[sub, text=bdr, left=1.6cm of drp] {$x_0 \leftarrow$ clone};
 
-% ── MAC TOKENS (right after embedding, before any layers) ────────────
-\node[B, fill=fPurple!22, above=0.35cm of drp] (mac) {
-  Append MAC Tokens\\[-1pt]{\scriptsize $N$ suffix tokens (always-visible)}};
-\draw[A] (drp) -- (mac);
-
-\node[sub, text=bdr, left=2.0cm of mac] {$x_0 \leftarrow$ clone};
+% ── HC stream expansion ──────────────────────────────────────────────
+\node[Bs, fill=hcC!12, draw=hcC, above=0.32cm of drp] (exp) {
+  Expand to $n{=}4$ HC streams \;{\scriptsize carrier $[B,S,4,d]$}};
+\draw[A] (drp) -- (exp);
 
 % ── PRELUDE ──────────────────────────────────────────────────────────
-\node[B, fill=fBlue, above=0.75cm of mac] (pa) {CCA + CSA/HCA Attention};
-\node[B, fill=fOrange, above=0.5cm of pa] (pm) {SwiGLU MLP};
-\draw[A] (mac) -- (pa);
+\node[B, fill=fBlue, above=0.7cm of exp] (pa) {
+  CCA + CSA/HCA Attention\\[-1pt]
+  {\scriptsize layer 1: $+\,\sigma(g)\!\cdot$ GLA retention branch}};
+\node[B, fill=fOrange, above=0.45cm of pa] (pm) {SwiGLU MLP};
+\draw[A] (exp) -- (pa);
 \draw[A] (pa) -- (pm);
-
 \begin{scope}[on background layer]
   \node[draw=bdr, thick, rounded corners=6pt, fill=fGray!20,
-        fit=(pa)(pm), inner xsep=10pt, inner ysep=16pt] (PG) {};
+        fit=(pa)(pm), inner xsep=10pt, inner ysep=14pt] (PG) {};
 \end{scope}
 \node[ph, anchor=east, text=bdr] at ($(PG.west)+(-0.15,0)$) {Prelude};
-\node[sub, text=bdr, anchor=east] at ($(PG.south east)+(-0.2,0.25)$)
-  {$\times$N layers};
-
-\node[sub, text=cbOrange, left=2.4cm of pa, align=right]
+\node[sub, text=bdr, anchor=east] at ($(PG.south east)+(-0.2,0.22)$) {$\times$N layers};
+\node[sub, text=cbOrange, left=2.0cm of pa, align=right]
   (psid) {$x_0$ skip\\value embeds\\bigram};
 \draw[Ad, cbOrange] (psid.east) -- (pa.west);
 
 % ── CORE LOOP ────────────────────────────────────────────────────────
-\node[Bs, fill=fGray!50, above=1.25cm of pm] (inj) {
-  Input Norm + Diagonal Injection};
+\node[Bs, fill=fGray!50, above=1.15cm of pm] (inj) {
+  Input Norm + Diagonal Injection \;{\scriptsize (spectral radius $<1$)}};
 \draw[A] (pm) -- (inj);
-
-\node[B, fill=fBlue!80, above=0.35cm of inj] (ca) {CCA + CSA/HCA Attention};
-\node[B, fill=fOrange!90, above=0.35cm of ca] (cm) {
-  SwiGLU MLP\quad{\scriptsize (Block-ELL)}};
+\node[B, fill=fBlue!80, above=0.32cm of inj] (ca) {
+  CCA + CSA/HCA Attention\\[-1pt]
+  {\scriptsize layer 1: $+\,\sigma(g)\!\cdot$ GLA (state carried $\times T$)}};
+\node[B, fill=fOrange!90, above=0.32cm of ca] (cm) {
+  SwiGLU MLP\quad{\scriptsize (MORTAR)}};
 \draw[A] (inj) -- (ca);
 \draw[A] (ca) -- (cm);
-
-% Core loop box
 \begin{scope}[on background layer]
   \node[draw=loopC, line width=2.5pt, rounded corners=8pt,
-        fill=loopC!5, fit=(inj)(ca)(cm), inner sep=13pt] (CG) {};
+        fill=loopC!5, fit=(inj)(ca)(cm), inner sep=12pt] (CG) {};
 \end{scope}
-% Core Loop label — LEFT side, above the orange arrow line
 \node[font=\normalsize\sffamily\bfseries, text=loopC, anchor=east]
   at ($(CG.west)+(-0.15,0.6)$) {Core Loop};
-\node[sub, text=bdr, anchor=east] at ($(CG.south east)+(-0.2,0.25)$)
-  {$\times$2N layers};
-% Core side inputs
-\node[sub, text=cbOrange, left=2.4cm of ca, align=right]
-  (csid) {MRR residual\\$\gamma_i$ per channel\\$x_0$, bigram};
+\node[sub, text=bdr, anchor=east] at ($(CG.south east)+(-0.2,0.22)$) {$\times$2N layers};
+\node[sub, text=cbOrange, left=2.0cm of ca, align=right]
+  (csid) {$x_0$, value\\embeds,\\bigram};
 \draw[Ad, cbOrange] (csid.east) -- (ca.west);
 
-% ── LOOP-BACK ARROW ─────────────────────────────────────────────────
+% loop-back arrow (blue) = the HC carrier + whole block re-applied each iteration
 \draw[loopC, line width=2.5pt, rounded corners=10pt,
       -{Stealth[length=5mm,width=4mm]}]
-  ($(cm.east)+(0.15,0)$) -- ++(2.2,0) |- ($(inj.east)+(0.15,0)$);
-
-% ×T label
+  ($(cm.east)+(0.15,0)$) -- ++(2.0,0) |- ($(inj.east)+(0.15,0)$);
+% GLA cross-iteration state carry (Axis 2, retention_carry=true) rides the same loop: annotate above xT
+\node[sub, text=cbPurple, anchor=west]
+  at ($(cm.east)+(2.35,-0.45)$) {GLA state $S_T$ carried};
 \node[font=\Large\sffamily\bfseries, text=loopC, anchor=west]
-  at ($(cm.east)+(2.6,-1.2)$) {$\times T$};
-
+  at ($(cm.east)+(2.35,-1.1)$) {$\times T$};
 \node[sub, text=loopC, align=left, anchor=north west]
-  at ($(cm.east)+(2.6,-1.7)$)
-  {$T \sim \mathrm{Poi}(\lambda{=}6)$\\truncated BPTT\\(last 4 iters)};
+  at ($(cm.east)+(2.35,-1.55)$)
+  {$T \sim \mathrm{Poi}(\lambda{=}6)$\\truncated BPTT\\(last 4 iters)\\active-set shrink};
 
-% ── CODA ────────────────────────────────────────────────────────────
-\node[B, fill=fBlue, above=1.25cm of cm] (da) {CCA + CSA/HCA Attention};
-\node[B, fill=fOrange, above=0.5cm of da] (dm) {SwiGLU MLP};
+% ── CODA ─────────────────────────────────────────────────────────────
+\node[B, fill=fBlue, above=1.15cm of cm] (da) {
+  CCA + CSA/HCA Attention\\[-1pt]
+  {\scriptsize layer 1: $+\,\sigma(g)\!\cdot$ GLA retention branch}};
+\node[B, fill=fOrange, above=0.45cm of da] (dm) {SwiGLU MLP};
 \draw[A] (cm) -- (da);
 \draw[A] (da) -- (dm);
-
 \begin{scope}[on background layer]
   \node[draw=bdr, thick, rounded corners=6pt, fill=fGray!20,
-        fit=(da)(dm), inner xsep=10pt, inner ysep=16pt] (DG) {};
+        fit=(da)(dm), inner xsep=10pt, inner ysep=14pt] (DG) {};
 \end{scope}
 \node[ph, anchor=east, text=bdr] at ($(DG.west)+(-0.15,0)$) {Coda};
-\node[sub, text=bdr, anchor=east] at ($(DG.south east)+(-0.2,0.25)$)
-  {$\times$N layers};
+\node[sub, text=bdr, anchor=east] at ($(DG.south east)+(-0.2,0.22)$) {$\times$N layers};
 
-% ── STRIP MAC + LM HEAD ────────────────────────────────────────────
-\node[Bs, fill=fGray!30, above=0.4cm of DG] (str) {Strip MAC Tokens};
-\draw[A] (dm) -- (str);
+% ── HC collapse + head ───────────────────────────────────────────────
+\node[Bs, fill=hcC!12, draw=hcC, above=0.4cm of DG] (col) {
+  Mean over HC streams \;{\scriptsize $[B,S,4,d]\to[B,S,d]$}};
+\draw[A] (dm) -- (col);
 
-\node[B, fill=fYellow!55, above=0.4cm of str] (mix) {
+\node[B, fill=fYellow!55, above=0.4cm of col] (mix) {
   LM Head Mixer\\[-1pt]{\scriptsize per-channel scale + cross-mix}};
-\draw[A] (str) -- (mix);
+\draw[A] (col) -- (mix);
 
-\node[Bs, fill=fGray!30, above=0.4cm of mix] (fn) {Final RMSNorm};
+\node[Bs, fill=fGray!30, above=0.35cm of mix] (fn) {Final RMSNorm};
 \draw[A] (mix) -- (fn);
 
-\node[B, fill=fYellow, above=0.4cm of fn] (hd) {Weight-Tied LM Head};
+\node[B, fill=fYellow, above=0.35cm of fn] (hd) {
+  Weight-Tied LM Head\\[-1pt]{\scriptsize fused linear cross-entropy}};
 \draw[A] (fn) -- (hd);
 
-\node[font=\small\sffamily, above=0.4cm of hd] (out) {Logits / Loss};
+\node[B, fill=fYellow!40, above=0.45cm of hd, minimum height=0.9cm] (out) {
+  Logits \;$\to$\; Loss $=$ CE $+\;\lambda_{\mathrm{STP}}\,\mathcal{L}_{\mathrm{STP}}$\\[-1pt]
+  {\scriptsize STP $=$ Semantic Tube Predictor (geodesic-smoothness regularizer)}};
 \draw[A] (hd) -- (out);
 
 % =====================================================================
-% RIGHT: MEMORY SYSTEM
+% RIGHT: HYPER-CONNECTION CARRIER (replaces the old "Memory System")
 % =====================================================================
-
-\coordinate (mem_anchor) at ($(mac.east)!0.5!(pa.east)+(6.2,0)$);
-
-\node[draw=memC, very thick, rounded corners=8pt, fill=fPurple!10,
-      minimum width=5.0cm, minimum height=6.0cm,
-      inner sep=10pt, anchor=center] (MEM) at (mem_anchor) {};
-
-\node[ph, text=cbPurple, anchor=north west]
-  at ($(MEM.north west)+(0.3,-0.2)$) {Memory System};
-
-\node[Bm, minimum width=4.0cm, minimum height=1.2cm]
-  at ($(MEM.center)+(0,1.0)$) (mlp) {
-  \textbf{Neural Memory}\\[1pt]
-  {\scriptsize MLP $M$ with learned}\\[-1pt]
-  {\scriptsize $\alpha$, $\eta$, $\theta$ gates}};
-
-\node[sub, text=cbPurple, align=center] at ($(MEM.center)+(0,-0.7)$) {
-  $S_t = \eta_t S_{t{-}1} - \theta_t \nabla_M \|M(k){-}v\|^2$\\[3pt]
-  $M_t = (1{-}\alpha_t) M_{t{-}1} + S_t$};
-
-\node[Bm, minimum width=3.4cm] at ($(MEM.center)+(0,-1.9)$) {
-  update $\cdot$ retrieve $\cdot$ inject};
-
-% ── Memory arrows (2 paths: MAG inject + MAC tokens) ────────────────
-
-\draw[Ad, memC, rounded corners=4pt]
-  (MEM.west |- pa) -- (pa.east)
-  node[midway, above=2pt, sub, text=memC] {MAG inject};
-
-\draw[Ad, memC, rounded corners=4pt]
-  (MEM.west |- mac) -- (mac.east)
-  node[midway, above=2pt, sub, text=memC] {MAC tokens};
+\coordinate (hc_anchor) at ($(ca.east)+(7.7,0)$);
+\node[draw=hcC, very thick, rounded corners=8pt, fill=hcC!8,
+      minimum width=5.2cm, minimum height=5.6cm,
+      inner sep=10pt, anchor=center] (HC) at (hc_anchor) {};
+\node[ph, text=hcC, anchor=north west] at ($(HC.north west)+(0.3,-0.2)$)
+  {Cayley Hyper-Connections};
+\node[sub, text=bdr, anchor=north west, align=left] at ($(HC.north west)+(0.3,-0.72)$) {%
+  residual mechanism\\
+  \texttt{residual\_mode=hc\_cayley}};
+\node[font=\footnotesize\sffamily, text=bdr, align=left, anchor=north west]
+  at ($(HC.north west)+(0.3,-1.5)$) {%
+  carrier $[B,S,n{=}4,C]$\\[3pt]
+  $\bar{x}=\mathrm{mean}_n(H_{\mathrm{pre}}\,x_{\mathrm{str}})$\\[2pt]
+  {\scriptsize sublayer $F$ sees one $C$-dim $\bar{x}$}\\[4pt]
+  $x_{\mathrm{out}}=H_{\mathrm{res}}\,x_{\mathrm{str}}+H_{\mathrm{post}}(y{\otimes}\mathbf{1}_n)$\\[2pt]
+  {\scriptsize $H_{\mathrm{res}}=\mathrm{Cayley}(\mathrm{skew})$ orthogonal}\\[4pt]
+  {\scriptsize init $\approx x+F(\mathrm{mean}(x))$ (plain residual)}};
+% three dashed feeds fan out FROM the HC box's own west edge to each section's attention
+\draw[Ad, hcC] ($(HC.west)+(0,2.2)$) -- (da.east);
+\draw[Ad, hcC] (HC.west) -- (ca.east);
+\draw[Ad, hcC] ($(HC.west)+(0,-2.2)$) -- (pa.east);
 
 % =====================================================================
-% RIGHT: STP + Z-LATENT
+% RIGHT (lower): RETENTION (GLA) BRANCH panel — the second cross-cutting carrier
 % =====================================================================
-
-\node[Bt, fill=fTeal!25, right=2.0cm of dm, minimum width=3.2cm] (stp) {
-  STP Loss\\[-1pt]{\scriptsize geodesic smoothness}};
-
-\node[Bt, fill=fTeal!25, below=0.35cm of stp, minimum width=3.2cm] (zlt) {
-  Z-Latent (split\_nsm)\\[-1pt]
-  {\scriptsize backbone $\to$ next seg}\\[-1pt]
-  {\scriptsize memory $\to$ prelude}};
-
-\coordinate (branch) at ($(dm.east)+(0.6,0)$);
-\draw[Ad, cbTeal, rounded corners=3pt]
-  (dm.east) -- (branch) |- (stp.west);
-\draw[Ad, cbTeal, rounded corners=3pt]
-  (branch) |- (zlt.west);
-
-% =====================================================================
-% LEGEND
-% =====================================================================
-
-\node[below=0.9cm of inp, font=\footnotesize\sffamily\bfseries] (leg)
-  {MRR Channels:};
-\node[right=0.4cm of leg, fill=cbBlue!20, draw=cbBlue,
-      rounded corners=2pt, inner sep=3pt, font=\tiny\sffamily\bfseries]
-  (l1) {Compute (384)};
-\node[right=0.2cm of l1, fill=cbOrange!20, draw=cbOrange,
-      rounded corners=2pt, inner sep=3pt, font=\tiny\sffamily\bfseries]
-  (l2) {Context (256)};
-\node[right=0.2cm of l2, fill=cbPurple!20, draw=cbPurple,
-      rounded corners=2pt, inner sep=3pt, font=\tiny\sffamily\bfseries]
-  (l3) {Memory (128)};
+\node[draw=cbPurple, very thick, rounded corners=8pt, fill=cbPurple!7,
+      minimum width=5.2cm, minimum height=3.5cm,
+      inner sep=10pt, anchor=north] (GLAP) at ($(HC.south)+(0,-0.6)$) {};
+\node[ph, text=cbPurple, anchor=north west] at ($(GLAP.north west)+(0.3,-0.2)$)
+  {Retention (GLA) branch};
+\node[sub, text=bdr, anchor=north west] at ($(GLAP.north west)+(0.3,-0.7)$)
+  {parallel to attention, \;layer 1 of each section};
+\node[font=\footnotesize\sffamily, text=bdr, align=left, anchor=north west]
+  at ($(GLAP.north west)+(0.3,-1.18)$) {%
+  $a=\mathrm{attn}(x)+\sigma(g)\!\cdot\!\mathrm{GLA}(\bar{x},S)$\\[3pt]
+  $S_t=\mathrm{diag}(\alpha_t)\,S_{t-1}+k_t^{\!\top}v_t$\\[2pt]
+  $\alpha_t=\sigma(x_t W_g)$,\; state $S\!\in\!\mathbb{R}^{d_k\times d_v}$\\[4pt]
+  {\scriptsize core: $S_T$ carried across loop iters (Axis 2)}\\[2pt]
+  {\scriptsize gate $\sigma(g)\!\approx\!0$ at init (learnable)}};
 
 % ── Title ────────────────────────────────────────────────────────────
 \node[above=0.7cm of out, font=\Large\sffamily\bfseries]

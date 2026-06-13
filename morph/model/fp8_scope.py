@@ -8,7 +8,7 @@ Ling-1T "mixed" recipe). Verified on RTX 5090 sm_120 (2.4–4.3× GEMM speedup).
 Scopes (by Linear leaf name — name-based so `LMHeadMixer.mix` and the gate/indexer
 Linears, which ARE nn.Linear, stay bf16):
   - "mlp"           : _SwiGLU.gate_up / .down (prelude+coda dense MLP). Core MLP is
-                      BlockELLLinear (NOT nn.Linear) → auto-excluded; fixed-shape,
+                      MortarLinear (NOT nn.Linear) → auto-excluded; fixed-shape,
                       no loop/pruning interaction. Safest phase-1 surface.
   - "mlp_attn_proj" : + CCA projections W_down_q/k, W_v_curr/prev, W_up (these live in
                       the variable-M core loop → exercises the active-set/recompile path).
@@ -44,7 +44,7 @@ def build_fp8_filter(scope: str, min_dim: int):
 
     Converts a Linear iff its leaf name is in the scope's allow-set AND both weight
     dims >= min_dim (FP8 only helps large GEMMs). Everything else (attention kernels,
-    norms, embeddings, Block-ELL core MLP, gate/indexer, LMHeadMixer.mix, fused-CE)
+    norms, embeddings, MORTAR core MLP, gate/indexer, LMHeadMixer.mix, fused-CE)
     is left bf16 by virtue of not matching.
     """
     if scope not in FP8_SCOPES:
