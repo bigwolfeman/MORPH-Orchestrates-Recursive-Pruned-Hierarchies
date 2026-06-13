@@ -12,6 +12,7 @@ dependencies = [
     "triton>=2.1.0",
     "transformers>=4.35.0",
     "datasets",
+    "ijson",            # streaming JSON-array parse for the math pretok source (pyarrow int32 fix)
     "wandb",
     "hydra-core>=1.3",
     "omegaconf",
