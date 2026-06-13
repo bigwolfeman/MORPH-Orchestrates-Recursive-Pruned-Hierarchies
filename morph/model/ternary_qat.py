@@ -20,7 +20,7 @@ train-smooth / deploy-ternary gap to measure separately.
 Scope ablation (per the research question — does ternarizing attention +
 embeddings hurt more than just the backbone?):
   - "backbone"      : all weight matrices that are NOT attention and NOT embeddings
-                      (MLP gate_up/down for both _SwiGLU and _SwiGLUBlockELL cores,
+                      (MLP gate_up/down for both _SwiGLU and _SwiGLUMortar cores,
                       the LM-head mixer, channel-inject projections).
   - "backbone_attn" : backbone + attention projections (nn.Linear inside MORPHAttention).
   - "embeddings"    : token/euclidean/bigram embedding tables ONLY (no backbone, no
@@ -537,7 +537,13 @@ def _categorize(name: str, module: nn.Module, attn_ids: set[int]) -> str | None:
     # Always bf16, regardless of scope. Lives at ``*.mrr_attn.proj`` / ``*.mrr_mlp.proj``.
     if name.endswith("mrr_attn.proj") or name.endswith("mrr_mlp.proj"):
         return None
-    # CMSBlockLinear (inside BlockELLLinear) holds a dense [out, in] nn.Parameter
+    # Guard: never ternarize the loop-axis SSM (DiagonalInjection) control paths.
+    # Same rationale as the HC proj above: tiny, precision-sensitive control matrices.
+    # Always bf16, regardless of scope.
+    if (name.endswith("injection.W_a") or name.endswith("injection.W_dt")
+            or name.endswith("injection.B")):
+        return None
+    # CMSBlockLinear (inside MortarLinear) holds a dense [out, in] nn.Parameter
     # named `weight` in dense mode — quantize it like any other linear.
     is_cms = type(module).__name__ == "CMSBlockLinear"
     if isinstance(module, nn.Linear) or is_cms:
@@ -675,3 +681,25 @@ def apply_ternary_qat(
         "module_names": names,
         "lorentz_untouched": lorentz_guarded,  # list of Lorentz embed paths confirmed bf16
     }
+
+
+def reparametrize_compacted_values_ternary(cms: nn.Module, threshold: float = 0.5) -> bool:
+    """Continue ternary QAT on a compacted CMS layer's ``values`` after compaction.
+
+    Call AFTER compact() and BEFORE the optimizer rebuild. Idempotent. Returns True if
+    values-ternary QAT was newly enabled. The smooth survivor values stay the trainable
+    shadow; the sparse forward applies a per-tensor symmetric STE so the effective sparse
+    weight is ternary ("keep pretraining the ternary model, now compacted").
+
+    NB: this uses the CMS internal STE flag (enable_values_ternary), NOT torch.parametrize
+    — register_parametrization cannot bind a tensor named "values" (its parametrizations
+    ModuleDict reserves the .values() method), so the parametrize path is impossible here.
+    """
+    if getattr(cms, "_dense_mode", True):
+        raise RuntimeError(
+            "reparametrize_compacted_values_ternary requires a compacted (sparse) layer"
+        )
+    if getattr(cms, "_values_ternary_mode", False):
+        return False  # idempotent
+    cms.enable_values_ternary(threshold)
+    return True

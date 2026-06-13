@@ -15,7 +15,6 @@ Grid: (B*H, num_q_tiles) for forward + dQ
 
 Author: Claude Code
 Date:   2026-05-14
-Branch: 006-looped-block-ell
 """
 
 from __future__ import annotations

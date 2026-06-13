@@ -22,11 +22,23 @@ def create_dataloader(
     batch_size: int,
     split: str = "train",
     skip_samples: int = 0,
+    bag_size: int = 0,
 ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
     """Infinite generator of (input_ids, labels) pairs.
 
     Streams the dataset, accumulates tokens in a buffer, and yields
     contiguous (seq_len+1)-token chunks sliced into inputs + labels.
+
+    Token-Superposition Training (TST, ``bag_size = s > 0``)
+    -------------------------------------------------------
+    Serves the SUPERPOSITION-phase batch: ``s·(seq_len+1)`` raw tokens per sample →
+      input_ids  = raw[:, : s·seq_len]                  → [B, s·seq_len]
+      label_bags = raw[:, s : s·(seq_len+1)] reshaped   → [B, seq_len, s]
+    so s-token position ``p`` (covering raw ``[p·s, p·s+s-1]``) predicts the next bag
+    ``[(p+1)·s, (p+2)·s-1]`` (net shift = s → 1-shift NTP labels then s-1 more, the
+    paper's causality rule). The MODEL averages the s input-token embeddings into one
+    s-token, so it processes ``seq_len`` positions — equal-FLOPs/VRAM to the baseline,
+    ``s×`` more raw tokens ingested per step. ``bag_size == 0`` → standard NTP (below).
 
     StarCoder2 does not use BOS by default; we add it at document boundaries
     so segment boundaries are explicit to the model.
@@ -70,16 +82,45 @@ def create_dataloader(
     elif tokenizer.bos_token_id is not None:
         sep_token_id = tokenizer.bos_token_id
 
+    import os
+    import glob as _glob
+
     dataset_kwargs: dict = {"split": split, "streaming": True}
     # Validation split is not present in openwebtext — fall back gracefully.
     if split == "validation" and "openwebtext" in dataset_name.lower():
         dataset_kwargs["split"] = "train"
 
+    # datasets>=4.x dropped script datasets (trust_remote_code gone), so 'Skylion007/openwebtext'
+    # no longer loads. Two supported sources:
+    #   (a) data.dataset = a glob/path of local *.arrow shards (e.g. the cached OWT) → codeless,
+    #       OFFLINE, and IDENTICAL to the #186 data. This is the preferred path.
+    #   (b) data.dataset = a codeless Parquet HF mirror (loads with no trust_remote_code).
+    _expanded = sorted(_glob.glob(os.path.expanduser(dataset_name), recursive=True))
+    is_local_arrow = bool(_expanded) and all(f.endswith(".arrow") for f in _expanded)
+    if is_local_arrow:
+        print(f"[data] local arrow source: {len(_expanded)} shards "
+              f"(first={os.path.basename(_expanded[0])})")
+
     buf: list[int] = []
-    chunk_len = batch_size * (seq_len + 1)
+    # TST superposition phase needs s·(seq_len+1) raw tokens per sample; standard
+    # NTP needs (seq_len+1). bag_size==0 → identical to the pre-TST behaviour.
+    tokens_per_sample = (bag_size * (seq_len + 1)) if bag_size > 0 else (seq_len + 1)
+    chunk_len = batch_size * tokens_per_sample
 
     while True:
-        ds = load_dataset(dataset_name, **dataset_kwargs, trust_remote_code=True)
+        if is_local_arrow:
+            ds = load_dataset("arrow", data_files=_expanded,
+                              split=dataset_kwargs["split"], streaming=True)
+        else:
+            try:
+                ds = load_dataset(dataset_name, **dataset_kwargs)
+            except Exception as exc:  # informative, not the cryptic trust_remote_code error
+                raise RuntimeError(
+                    f"load_dataset({dataset_name!r}) failed. Under datasets>=4 only codeless "
+                    f"(Parquet/Arrow) datasets load — script datasets like "
+                    f"'Skylion007/openwebtext' are unsupported. Point cfg.data.dataset at a "
+                    f"Parquet OWT mirror or a local *.arrow glob, or pin datasets<4. Orig: {exc}"
+                ) from exc
         if skip_samples > 0:
             ds = ds.skip(skip_samples)
         for sample in ds:
@@ -96,7 +137,18 @@ def create_dataloader(
             while len(buf) >= chunk_len:
                 chunk = buf[:chunk_len]
                 buf = buf[chunk_len:]
-                t = torch.tensor(chunk, dtype=torch.long).reshape(
-                    batch_size, seq_len + 1
-                )
-                yield t[:, :seq_len], t[:, 1 : seq_len + 1]
+                if bag_size > 0:
+                    s = bag_size
+                    t = torch.tensor(chunk, dtype=torch.long).reshape(
+                        batch_size, s * (seq_len + 1)
+                    )
+                    input_ids = t[:, : s * seq_len]                              # [B, s·L]
+                    label_bags = t[:, s : s * (seq_len + 1)].reshape(
+                        batch_size, seq_len, s
+                    )                                                            # [B, L, s]
+                    yield input_ids, label_bags
+                else:
+                    t = torch.tensor(chunk, dtype=torch.long).reshape(
+                        batch_size, seq_len + 1
+                    )
+                    yield t[:, :seq_len], t[:, 1 : seq_len + 1]

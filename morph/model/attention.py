@@ -84,7 +84,23 @@ class CoPEEmbedding(nn.Module):
                  base: float = 10000.0, context_len: int = 4096):
         super().__init__()
         assert d_head % 2 == 0
-        inv_freq = 1.0 / (base ** (torch.arange(0, d_head, 2).float() / d_head))
+        self.d_head = int(d_head)
+        self.base = float(base)
+        self.context_len = int(context_len)
+        self.max_seq_len = int(max_seq_len)
+        self.register_buffer("inv_freq", self._compute_inv_freq(self.context_len),
+                             persistent=False)
+        self._build_cache(self.max_seq_len)
+
+    def _compute_inv_freq(self, context_len: int, base: float | None = None) -> Tensor:
+        """RoPE inverse frequencies with a CoPE-style wavelength taper anchored at
+        ``context_len``: any frequency whose wavelength exceeds context_len is cosine-
+        tapered toward zero. Re-anchoring to a longer context_len (``set_context`` during
+        the length curriculum) *un-damps* the long-wavelength frequencies — this is the
+        "RoPE base steps up alongside the context ramp" mechanism. Pure function of
+        (d_head, base, context_len); no buffers touched."""
+        base = self.base if base is None else float(base)
+        inv_freq = 1.0 / (base ** (torch.arange(0, self.d_head, 2).float() / self.d_head))
         wavelengths = 2.0 * math.pi / inv_freq
         taper = torch.ones_like(inv_freq)
         long = wavelengths > context_len
@@ -94,15 +110,33 @@ class CoPEEmbedding(nn.Module):
             log_max = torch.log(wavelengths).max()
             ratio = (log_w - log_L) / (log_max - log_L + 1e-8)
             taper[long] = torch.cos(ratio * math.pi / 2).clamp(min=0.0)
-        self.register_buffer("inv_freq", inv_freq * taper, persistent=False)
-        self._build_cache(max_seq_len)
+        return inv_freq * taper
 
     def _build_cache(self, max_seq_len: int):
-        t = torch.arange(max_seq_len, dtype=self.inv_freq.dtype)
+        dev = self.inv_freq.device
+        t = torch.arange(max_seq_len, dtype=self.inv_freq.dtype, device=dev)
         freqs = torch.outer(t, self.inv_freq)
         emb = torch.cat([freqs, freqs], dim=-1)
         self.register_buffer("cos_cached", emb.cos()[None, None], persistent=False)
         self.register_buffer("sin_cached", emb.sin()[None, None], persistent=False)
+
+    @torch.no_grad()
+    def set_context(self, context_len: int, base: float | None = None,
+                    max_seq_len: int | None = None):
+        """Re-anchor the wavelength taper to a new ``context_len`` (length-curriculum
+        step-up) and rebuild the cos/sin cache. Cheap (cache is a few MB) but it CHANGES
+        the positional encoding, so the model must re-adapt — callers checkpoint first.
+        Idempotent: calling with unchanged args reproduces the same buffers exactly.
+        Optionally also steps the RoPE ``base`` (the explicit base step-up arm)."""
+        self.context_len = int(context_len)
+        if base is not None:
+            self.base = float(base)
+        if max_seq_len is not None:
+            self.max_seq_len = int(max_seq_len)
+        new_inv = self._compute_inv_freq(self.context_len).to(
+            self.inv_freq.device, self.inv_freq.dtype)
+        self.inv_freq.copy_(new_inv)
+        self._build_cache(self.max_seq_len)
 
     def _rotate_half(self, x: Tensor) -> Tensor:
         h = x.shape[-1] // 2

@@ -11,6 +11,8 @@ Config determines dimensions and sizes, not whether features exist.
 
 from __future__ import annotations
 
+import os
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 import torch
@@ -24,7 +26,23 @@ from .embeddings import MORPHEmbedding
 from .fused_ce import fused_linear_cross_entropy
 from .mhc import MultiRateResidual, ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .prediction import STPLoss
-from .sparsity import BlockELLLinear
+from .sparsity import MortarLinear
+
+# Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
+# zero production cost). Set MORPH_PROFILE_REGIONS=1 to name forward carrier sites so the
+# profiler attributes copy_/add/gather kernels to them (with_stack is blind to compiled +
+# backward kernels; record_function is not). Used by ignore/profile_copy_stack.py.
+_PROFILE_REGIONS = os.environ.get("MORPH_PROFILE_REGIONS", "0") == "1"
+if _PROFILE_REGIONS:
+    from torch.profiler import record_function as _record_function
+
+    def _prof(name):
+        return _record_function(name)
+else:
+    _NULLCTX = nullcontext()  # reentrant-safe singleton → zero alloc on the hot path
+
+    def _prof(name):
+        return _NULLCTX
 
 
 @dataclass
@@ -51,14 +69,6 @@ class MORPHConfig:
     # Checkpointing is mathematically exact, so this NEVER changes the gradient (ppl-neutral) —
     # it only trades activation memory for recompute. Tune against VRAM headroom.
     ckpt_grad_iters: int = -1
-
-    # Cross-iteration KV sharing (CLA) — see docs/cross_layer_kv_sharing.md.
-    # When on, the per-core-layer KV bundle (k_lat, k, v, C_comp, +CSA top_idx/
-    # invalid_mask) is computed once at cla_share_start and reused (q-only recompute)
-    # in later loop iterations. cla_share_start=-1 → auto = n_nograd (first grad
-    # iteration), so K/V projections receive gradient (truncated-BPTT trap).
-    use_cla: bool = False
-    cla_share_start: int = -1
 
     channel_dims: tuple[int, ...] = (384, 256, 128)
 
@@ -114,6 +124,29 @@ class MORPHConfig:
     hc_cayley_alpha: float = 0.1 # Cayley step size α
     hc_sinkhorn_iters: int = 20  # Sinkhorn iterations (mHC value)
     hc_init_gain: float = 0.1    # W_fused init std = gain/sqrt(n*d) → ≈ plain residual at init
+    hc_use_kernel: bool = True   # fused Triton HC kernels (cayley+cuda). False ⇒ eager refs
+                                 # (bit-faithful, slower) — for the fused-vs-eager A/B reference arm.
+
+    # L2 residency: mark the active carrier's address range PERSISTING (cudaAccessPolicyWindow)
+    # so it survives the sublayer GEMMs' streaming between HC ops. Numerically a no-op (caching
+    # hint); cc8.0+. Default off. (Mechanism proven -19.6% isolated; model benefit measured net-
+    # negative in-model; kept as a dormant knob.)
+    l2_persist: bool = False
+
+    # ── Retention branch (#230) ────────────────────────────────────────────
+    # Gated Linear Attention (GLA) added in PARALLEL to the windowed attention in the
+    # 2nd layer (index in retention_layers) of prelude / core / coda — a global-context /
+    # cross-iteration memory branch. Off by default → GLA modules are NOT constructed, so
+    # the model is bit-identical to the baseline (flag gates construction, not just the
+    # forward branch — keeps init RNG draw identical).
+    retention: bool = True
+    retention_layers: tuple[int, ...] = (1,)   # which layer index per section gets the branch
+    retention_heads: int = 0                   # 0 → use n_heads
+    retention_chunk: int = 128
+    retention_gate_init: float = -6.0          # branch-gate logit; sigmoid(-6)≈0.0025 ≈ identity@init
+    retention_carry: bool = True               # core: carry GLA state across loop iterations
+                                               # (False → reset each iter = global retention, no memory)
+    retention_gate_bias: float = 2.0           # GLA internal forget-gate logit bias (α near 1 = long memory)
 
     # Training
     dropout: float = 0.1
@@ -143,16 +176,49 @@ class DiagonalInjection(nn.Module):
         return torch.cat([h[..., :self.start], new_ctx, h[..., self.end:]], dim=-1)
 
 
-def _make_swiglu(d_model: int, d_ff: int, dropout: float,
-                 use_block_ell: bool = False) -> nn.Module:
-    """SwiGLU MLP: gate + up → silu(gate)*up → down."""
-    mlp: nn.Module
-    if use_block_ell:
-        mlp = _SwiGLUBlockELL(d_model, d_ff)
-    else:
-        mlp = _SwiGLU(d_model, d_ff)
+class _KwargSequential(nn.Sequential):
+    """nn.Sequential that forwards ``**kwargs`` to the FIRST submodule (the MLP) and runs
+    the remaining modules (e.g. Dropout) positionally.
+
+    The core loop passes ``mlp_kwargs={"iter_idx": t}`` to each block's MLP so the Phase-C
+    ReMoE router knows which loop iteration it is. A plain ``nn.Sequential`` rejects kwargs
+    (``Sequential.forward()`` takes only ``input``), which silently broke any forward once
+    iteration-threading was added. Subclassing keeps the child registration identical to
+    ``nn.Sequential`` (indices ``"0"``/``"1"``) so state_dicts stay byte-compatible with
+    checkpoints saved before this class existed. ``enable_routing`` / ``d_ff`` delegate to
+    the inner MLP so the router attaches and stats read through the Dropout wrapper.
+    """
+
+    def forward(self, x, **kwargs):
+        it = iter(self)
+        x = next(it)(x, **kwargs)   # inner MLP receives iter_idx (and any future kwargs)
+        for m in it:
+            x = m(x)                # Dropout etc. — positional only
+        return x
+
+    def enable_routing(self, *args, **kwargs):
+        return self[0].enable_routing(*args, **kwargs)
+
+    @property
+    def router(self):
+        return getattr(self[0], "router", None)
+
+    @property
+    def d_ff(self):
+        return self[0].d_ff
+
+
+def _make_swiglu(d_model: int, d_ff: int, dropout: float) -> nn.Module:
+    """SwiGLU MLP: gate + up → silu(gate)*up → down.
+
+    Always uses _SwiGLUMortar (CMS-prunable, MORTAR-carvable) — there is no plain
+    dense fallback. Every MLP in prelude, core, and coda is MortarLinear so the
+    whole backbone is prunable and carves to MORTAR BCSR at compact_step.
+    """
+    mlp: nn.Module = _SwiGLUMortar(d_model, d_ff)
     if dropout > 0:
-        return nn.Sequential(mlp, nn.Dropout(dropout))
+        # _KwargSequential (not nn.Sequential) so iter_idx threads through to the MLP.
+        return _KwargSequential(mlp, nn.Dropout(dropout))
     return mlp
 
 
@@ -162,28 +228,127 @@ class _SwiGLU(nn.Module):
         self.gate_up = nn.Linear(d_model, d_ff * 2, bias=False)
         self.down = nn.Linear(d_ff, d_model, bias=False)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, iter_idx: int = 0) -> Tensor:
+        # iter_idx accepted-and-ignored: the dense SwiGLU has no router, but the core loop
+        # threads iter_idx to every MLP uniformly. Keeps a plain-dense core callable.
         gu = self.gate_up(x)
         gate, up = gu.chunk(2, dim=-1)
         return self.down(F.silu(gate) * up)
 
 
-class _SwiGLUBlockELL(nn.Module):
-    """SwiGLU with BlockELLLinear for CMS pruning support.
+class _SwiGLUMortar(nn.Module):
+    """SwiGLU with MortarLinear for CMS pruning + MORTAR carving support.
 
     Identical computation to _SwiGLU during dense phase (density=1.0).
-    After compact(), uses Triton Block-ELL sparse kernels for the forward pass.
+    After carve(), uses the MORTAR BCSR Triton kernel for the forward pass.
+
+    Optionally hosts an iteration-aware ReMoE router (Phase C). The router gates the
+    post-SiLU hidden h = silu(gate)·up over contiguous d_ff neuron-clusters: a clean
+    PEER/MoE expert selection over the FF neuron bank (one gate per neuron, applied
+    coherently — NOT gate_up's raw 2·d_ff output, which would gate the gate/up halves
+    of a neuron independently). The router is None until enable_routing() is called, so
+    the dense / prune / compact phases are byte-identical to the no-routing path.
     """
 
     def __init__(self, d_model: int, d_ff: int):
         super().__init__()
-        self.gate_up = BlockELLLinear(d_model, d_ff * 2, bias=False, initial_density=1.0)
-        self.down = BlockELLLinear(d_ff, d_model, bias=False, initial_density=1.0)
+        self.gate_up = MortarLinear(d_model, d_ff * 2, bias=False, initial_density=1.0)
+        self.down = MortarLinear(d_ff, d_model, bias=False, initial_density=1.0)
+        self.d_model = d_model
+        self.d_ff = d_ff
+        # ReMoE routing (Phase C) — built lazily by enable_routing(). router=None → plain SwiGLU.
+        self.router: nn.Module | None = None
+        self._last_aux_loss: Tensor | None = None
+        self._aux_detach_input = True   # detach router input → no routing-grad into the carrier
 
-    def forward(self, x: Tensor) -> Tensor:
+    def enable_routing(
+        self,
+        n_clusters: int = 16,
+        activation_ratio: float = 0.5,
+        aux_loss_coeff: float = 1e-2,
+        n_iters: int = 1,
+        n_sub_keys: int = 0,
+        detach_input: bool = True,
+    ) -> None:
+        """Attach an iteration-aware TileRouter over the d_ff hidden neuron bank.
+
+        Adds NEW parameters (router) → the optimizer MUST be rebuilt after calling this.
+        n_iters should equal the max core-loop depth so each loop iteration gets its own
+        (zero-initialized → no specialization at start) iteration embedding row.
+
+        detach_input (default True): feed the router a detached copy of x. The router params
+        still train (gradient flows to query_proj/sub_keys/group_bias/iter_embed from the
+        detached input, and the gates still get gradient from the main loss), but the routing
+        gradient does NOT flow back into the carrier x. In the LOOPED core this is REQUIRED for
+        memory: the load-balance aux is summed over grad-iterations and each term depends on that
+        iteration's carrier state x_t — letting its gradient into x_t extends the effective
+        truncated-BPTT depth and retains cross-iteration activations (measured +7 GB / step at
+        deploy shape; the post-compact "OOM"). Detaching restores the no-routing memory envelope
+        while keeping the router trained. (Standard MoE practice: the load-balance aux shapes the
+        gate, not the backbone representation.)
+        """
+        self._aux_detach_input = bool(detach_input)
+        from .routing import TileRouter
+
+        # Device of the host layer (post-compact the leaf is `values`, not `weight`, so go
+        # through parameters() rather than a named attribute).
+        try:
+            dev = next(self.down.parameters()).device
+        except StopIteration:
+            dev = torch.device("cpu")
+
+        self.router = TileRouter(
+            n_tile_groups=n_clusters,
+            d_model=self.d_model,
+            activation_ratio=activation_ratio,
+            n_sub_keys=n_sub_keys,
+            aux_loss_coeff=aux_loss_coeff,
+            n_iters=n_iters,
+        ).to(dev)   # a freshly-built nn.Module lands on CPU; move it onto the model's device
+                    # or the first routed matmul fails with mat2-on-cpu vs activations-on-cuda.
+        self.n_clusters = n_clusters
+        # Contiguous neuron→cluster map over d_ff (matches compact_with_groups' contiguous
+        # output-cluster convention). Remainder neurons fold into the leading clusters.
+        base = self.d_ff // n_clusters
+        rem = self.d_ff % n_clusters
+        h2c = torch.empty(self.d_ff, dtype=torch.long)
+        s = 0
+        for c in range(n_clusters):
+            sz = base + (1 if c < rem else 0)
+            h2c[s:s + sz] = c
+            s += sz
+        self.register_buffer("hidden_to_cluster", h2c.to(dev))
+
+    def forward(self, x: Tensor, iter_idx: int = 0) -> Tensor:
         gu = self.gate_up(x)
         gate, up = gu.chunk(2, dim=-1)
-        return self.down(F.silu(gate) * up)
+        h = F.silu(gate) * up                         # [B, T, d_ff] hidden neuron bank
+        if self.router is not None:
+            # Detach the router input (default) so routing gradient does not flow into the
+            # carrier x — required for looped-core memory (see enable_routing docstring). The
+            # router params still train (grad via the detached input + gates from the main loss).
+            _rx = x.detach() if self._aux_detach_input else x
+            gates, aux = self.router(_rx, iter_idx=iter_idx)   # gates: [B, T, n_clusters]
+            # Stash the load-balance aux for the training loop to collect (collect_routing_aux_losses
+            # after forward, before backward). With detach_input the aux's graph reaches only the
+            # router params (the detached x is a leaf), so it is cheap and does NOT pin the looped
+            # core's forward graph — that is what keeps gradient checkpointing intact for routed steps.
+            self._last_aux_loss = aux
+            # Gate the d_ff hidden bank per neuron-cluster. Active groups stay ~unit scale
+            # (gates sum to activation_k); inactive groups → 0.
+            gates = gates.to(h.dtype)
+            if self.d_ff % self.n_clusters == 0:
+                # Memory-efficient + BIT-IDENTICAL when clusters are equal-size: reshape h to
+                # [B, T, n_clusters, cluster_size] and broadcast-multiply gates[..., None].
+                # Avoids materializing the full [B, T, d_ff] index-expanded gates tensor
+                # (gates[..., hidden_to_cluster]) — that index-expand cost ~one extra [B,T,d_ff]
+                # buffer per core MLP, held across BPTT grad-iters (the routing memory blow-up).
+                cs = self.d_ff // self.n_clusters
+                h = (h.unflatten(-1, (self.n_clusters, cs)) * gates.unsqueeze(-1)).flatten(-2)
+            else:
+                # Uneven clusters (remainder neurons): fall back to the index-expand path.
+                h = h * gates[..., self.hidden_to_cluster]
+        return self.down(h)
 
 
 class LMHeadMixer(nn.Module):
@@ -257,14 +422,15 @@ class MORPHTransformer(nn.Module):
             n_streams=cfg.hc_streams, tau=cfg.hc_tau,
             cayley_iters=cfg.hc_cayley_iters, cayley_alpha=cfg.hc_cayley_alpha,
             sinkhorn_iters=cfg.hc_sinkhorn_iters, init_gain=cfg.hc_init_gain,
+            use_kernel=cfg.hc_use_kernel,
         ) if self._is_hc else None
 
-        def _make_block(layer_idx: int, use_block_ell: bool = False) -> MORPHBlock:
+        def _make_block(layer_idx: int) -> MORPHBlock:
             return MORPHBlock(
                 norm_attn=RMSNorm(d),
                 attn=MORPHAttention(layer_idx=layer_idx, **attn_kw),
                 norm_mlp=RMSNorm(d),
-                mlp=_make_swiglu(d, d_ff, cfg.dropout, use_block_ell=use_block_ell),
+                mlp=_make_swiglu(d, d_ff, cfg.dropout),
                 channel_dims=ch,
                 use_mrr=cfg.use_mrr,
                 residual_mode=residual_mode,
@@ -273,21 +439,25 @@ class MORPHTransformer(nn.Module):
             )
 
         # ── Prelude ───────────────────────────────────────────────────
-        self.prelude = nn.ModuleList([_make_block(i) for i in range(cfg.n_prelude)])
+        # All sections use MortarLinear MLPs — whole-body CMS pruning.
+        self.prelude = nn.ModuleList([
+            _make_block(i) for i in range(cfg.n_prelude)
+        ])
 
         # ── Loop state transition ─────────────────────────────────────
         self.input_norm = RMSNorm(d)
         self.injection = DiagonalInjection(self._ctx_start, self._ctx_end)
 
-        # ── Core (shared across loop iterations — Block-ELL for CMS pruning)
+        # ── Core (shared across loop iterations — MortarLinear for CMS pruning)
         self.core = nn.ModuleList([
-            _make_block(cfg.n_prelude + i, use_block_ell=True)
+            _make_block(cfg.n_prelude + i)
             for i in range(cfg.n_core)
         ])
 
         # ── Coda ──────────────────────────────────────────────────────
         self.coda = nn.ModuleList([
-            _make_block(cfg.n_prelude + cfg.n_core + i) for i in range(cfg.n_coda)
+            _make_block(cfg.n_prelude + cfg.n_core + i)
+            for i in range(cfg.n_coda)
         ])
 
         # ── x0 skip (inject into context channel) ────────────────────
@@ -315,6 +485,28 @@ class MORPHTransformer(nn.Module):
 
         # ── Prediction (STP — Semantic Tube Predictor) ────────────────
         self.stp = STPLoss()
+
+        # ── Retention branch (#230) ────────────────────────────────────
+        # Attach AFTER all base modules → GLA's RNG draws are a tail, so the base model is
+        # byte-identical to the baseline whether retention is on or off. With the branch-gate
+        # near 0 at init, retention-on ≈ baseline at step 0, and the ablation isolates exactly
+        # the retention branch (no confound from a different random init of the rest of the net).
+        self._retention_layers = tuple(cfg.retention_layers)
+        self._core_has_retention = cfg.retention and any(
+            i in self._retention_layers for i in range(cfg.n_core))
+        if cfg.retention:
+            from .gla import GatedLinearAttention
+            rheads = cfg.retention_heads or cfg.n_heads
+            for section in (self.prelude, self.core, self.coda):
+                for si, blk in enumerate(section):
+                    if si in self._retention_layers:
+                        blk.attach_retention(
+                            GatedLinearAttention(
+                                d, rheads,
+                                mode="kernel" if cfg.use_kernels else "chunked",
+                                chunk=cfg.retention_chunk,
+                                gate_logit_bias=cfg.retention_gate_bias),
+                            RMSNorm(d), gate_init=cfg.retention_gate_init)
 
         # Master kernel switch → drives the fused-Triton-vs-eager-reference
         # dispatch in the attention kernels (process-global flag). Set at build
@@ -346,16 +538,89 @@ class MORPHTransformer(nn.Module):
             return self.value_embeds[ve_idx](x, signal)
         return x
 
+    # ── Merged injection (HC perf) ────────────────────────────────────────
+    # x0, value-embed and bigram are all *additive* signals (x0/ve into the ctx
+    # channel slice, bigram full-width), so by commutativity their sum applied
+    # in one pass equals the old sequential x0→ve→bigram chain (bit-exact to the
+    # bf16 floor). The old chain did 2-3 slice+cat passes over the FULL [B,S,n,C]
+    # Hyper-Connection carrier per layer; this assembles ONE full-width term in
+    # cheap single-stream [B,S,C] space (the only cat lands on that small tensor,
+    # not the 4x carrier) and broadcast-adds it into the carrier exactly once.
+    def _build_injection_term(self, layer_idx: int, x0_term: Tensor,
+                              input_ids: Tensor, bigram_emb: Tensor,
+                              dtype: torch.dtype,
+                              ve_bagged: list[Tensor] | None = None) -> Tensor:
+        """Combined single-stream additive injection [B,S,C] for `layer_idx`.
+
+        ``lam*bigram`` (full width) + (x0_term + ve_term) placed in the ctx slice.
+        ``x0_term`` is the pre-projected/scaled x0 signal (``ChannelInject.precompute``).
+
+        ``ve_bagged`` (TST only): pre-bagged per-ve-layer ctx signals [B,L,ctx_w].
+        When provided, the value-embed contribution uses the bag-mean instead of the
+        raw per-token ``input_ids`` lookup (which would be [B,s·L], mismatching the
+        bagged [B,L] carrier). None → the normal per-token lookup (bit-identical).
+        """
+        cs, ce = self._ctx_start, self._ctx_end
+        lam = self.embed.bigram.lambdas[layer_idx].to(dtype)
+        full = lam * bigram_emb.to(dtype)                      # [B,S,C] full-width bigram
+        ctx = x0_term.to(dtype)                                # [B,S,ctx_w] x0 contribution
+        if layer_idx in self._ve_layer_map:
+            ve_idx = self._ve_layer_map.index(layer_idx)
+            if ve_bagged is not None:
+                ctx = ctx + ve_bagged[ve_idx].to(dtype)
+            else:
+                signal = self.value_embed_tables[ve_idx](input_ids)
+                ctx = ctx + self.value_embeds[ve_idx].precompute(signal).to(dtype)
+        # Drop x0(+ve) into the ctx slice — cat on the small single-stream term only.
+        return torch.cat([full[..., :cs], full[..., cs:ce] + ctx, full[..., ce:]], dim=-1)
+
+    @staticmethod
+    def _apply_injection(h: Tensor, term: Tensor) -> Tensor:
+        """Broadcast-add the [B,S,C] injection term into the carrier in ONE pass.
+
+        For an HC ``[B,S,n,C]`` carrier the single-stream term is inserted on the
+        stream axis so it broadcasts to every stream; for a plain ``[B,S,C]``
+        carrier it adds directly.
+        """
+        with _prof("carrier::inject_add"):
+            if term.ndim == h.ndim - 1:
+                term = term.unsqueeze(-2)
+            return h + term
+
     # ── Forward ───────────────────────────────────────────────────────
 
-    def forward(self, input_ids: Tensor, labels: Tensor | None = None) -> dict:
-        return self._forward_single(input_ids, labels)
+    def forward(self, input_ids: Tensor, labels: Tensor | None = None,
+                bag_size: int = 0) -> dict:
+        return self._forward_single(input_ids, labels, bag_size)
 
     def _forward_single(self, input_ids: Tensor,
-                        labels: Tensor | None = None) -> dict:
-        B, T = input_ids.shape
-        x = self.embed_drop(self.embed(input_ids))
-        bigram_emb = self.embed.get_bigram(input_ids)
+                        labels: Tensor | None = None,
+                        bag_size: int = 0) -> dict:
+        # ── Token-Superposition Training input bagging (TST, arXiv 2605.06546) ──
+        # bag_size==0 → baseline path, BIT-IDENTICAL to pre-TST (and what eval/gen
+        # always use). bag_size==s>0 → the superposition phase: input_ids arrives as
+        # [B, s·L] raw tokens; we average each contiguous bag of s token-embeddings
+        # into one "s-token", so the model processes L = (s·L)/s positions — SAME
+        # cost/VRAM as baseline. value-embeds fire only in the prelude → bag their
+        # per-token ctx signal up front (ve_bagged); the core/coda never read input_ids.
+        B, T_in = input_ids.shape
+        s = bag_size
+        if s > 0:
+            T = T_in // s
+            x = self.embed_drop(self.embed(input_ids).view(B, T, s, -1).mean(dim=2))   # [B,L,d]
+            bigram_emb = self.embed.get_bigram(input_ids).view(B, T, s, -1).mean(dim=2)  # [B,L,d]
+            n_ve = len(self._ve_layer_map)
+            ve_bagged = ([
+                self.value_embeds[k]
+                    .precompute(self.value_embed_tables[k](input_ids))
+                    .view(B, T, s, -1).mean(dim=2)                                       # [B,L,ctx_w]
+                for k in range(n_ve)
+            ] if n_ve > 0 else None)
+        else:
+            T = T_in
+            x = self.embed_drop(self.embed(input_ids))
+            bigram_emb = self.embed.get_bigram(input_ids)
+            ve_bagged = None
 
         x0 = x.clone()      # single-stream skip signal (broadcast into HC streams)
 
@@ -365,18 +630,22 @@ class MORPHTransformer(nn.Module):
         # plain residual at step 0 (verified). Injections (x0/ve/bigram/diagonal) are
         # single-stream signals that broadcast into every stream (ndim-adaptive modules).
         if self._is_hc:
-            x = x.unsqueeze(2).expand(B, T, self._n_streams, x.shape[-1]).contiguous()
+            with _prof("carrier::expand_contig"):
+                x = x.unsqueeze(2).expand(B, T, self._n_streams, x.shape[-1]).contiguous()
 
         # ── Prelude ───────────────────────────────────────────────────
         for i, layer in enumerate(self.prelude):
-            x = self._apply_x0(x, i, x0)
-            x = self._apply_ve(x, i, input_ids)
-            x = self.embed.bigram.inject(x, bigram_emb, i)
+            term = self._build_injection_term(
+                i, self.x0_injects[i].precompute(x0), input_ids, bigram_emb, x.dtype,
+                ve_bagged=ve_bagged,
+            )
+            x = self._apply_injection(x, term)
             x = layer(x)
 
         # ── Core loop ─────────────────────────────────────────────────
         e = self.input_norm(x)
-        h = e.clone()
+        with _prof("carrier::h_clone"):
+            h = e.clone()
 
         if self.training:
             depths = self._sample_depths(B, x.device)
@@ -402,29 +671,30 @@ class MORPHTransformer(nn.Module):
             dim=0,
         )  # [n_core, B, S, ctx_width]
 
-        def _core_step(h_in, e_in, ids, x0_terms, bg, cla_mode=None, kv_bundles=None):
-            # cla_mode: None=normal, "compute"=stash per-layer KV bundle (returns
-            # (h, captures)), "reuse"=q-only recompute consuming kv_bundles[i].
+        def _core_step(h_in, e_in, ids, x0_terms, bg, ret_state=None, iter_idx=0):
+            # ret_state: [B,H,dk,dv]|None — GLA cross-iteration carry for the retention core layer.
+            # iter_idx: which core-loop iteration t this call is (drives the ReMoE router's
+            #   iteration embedding). Passed as an explicit arg — NOT module state — so it is
+            #   captured in the checkpoint closure and replayed correctly during backward recompute.
+            # ALWAYS returns (h, new_ret_state); new_ret is None unless a core layer carries
+            # retention. Returning new_ret (not a side-channel) is checkpoint-safe.
+            mlp_kw = {"iter_idx": iter_idx}
             h_injected = self.injection(h_in, e_in)
-            captures = [] if cla_mode == "compute" else None
+            ret_cap = {} if self._core_has_retention else None
             for i, layer in enumerate(self.core):
                 gi = np_ + i
-                h_injected = self.x0_injects[gi].apply_precomputed(
-                    h_injected, x0_terms[i]
+                term = self._build_injection_term(
+                    gi, x0_terms[i], ids, bg, h_injected.dtype
                 )
-                h_injected = self._apply_ve(h_injected, gi, ids)
-                h_injected = self.embed.bigram.inject(h_injected, bg, gi)
-                if cla_mode == "compute":
-                    cap: dict = {}
-                    h_injected = layer(h_injected, attn_kwargs={"cla_capture": cap})
-                    captures.append(cap)
-                elif cla_mode == "reuse":
-                    h_injected = layer(h_injected, attn_kwargs={"cla_kv": kv_bundles[i]})
-                else:
-                    h_injected = layer(h_injected)
-            if cla_mode == "compute":
-                return h_injected, captures
-            return h_injected
+                h_injected = self._apply_injection(h_injected, term)
+                # Retention carry only for the designated core layer(s); others get None.
+                is_ret = ret_cap is not None and (i in self._retention_layers)
+                rs_arg = ret_state if is_ret else None
+                rc_arg = ret_cap if is_ret else None
+                h_injected = layer(h_injected, mlp_kwargs=mlp_kw,
+                                   ret_state=rs_arg, ret_capture=rc_arg)
+            new_ret = ret_cap.get("state") if ret_cap is not None else None
+            return h_injected, new_ret
 
         # ── Active-set shrinking ────────────────────────────────────────────
         # A sample is updated only while iteration t < its Poisson depth, then
@@ -438,26 +708,12 @@ class MORPHTransformer(nn.Module):
         # schedule is preserved, so gradients match the truncated-BPTT window.
         sort_depths, perm = torch.sort(depths, descending=True)
         inv_perm = torch.argsort(perm)
-        h_s = h[perm]
-        e_s = e[perm]
-        ids_s = input_ids[perm]
-        bg_s = bigram_emb[perm]
-        x0_s = x0_core_terms[:, perm]            # [n_core, B, S, W]
-
-        # ── CLA (cross-iteration KV sharing) scheduling ──────────────────────
-        # Compute the per-core-layer KV bundle once at cla_start (the first grad
-        # iteration, so K/V projections receive gradient), then reuse it (q-only
-        # recompute) for later iterations. cla_start defaults to n_nograd.
-        cla_on = bool(self.cfg.use_cla)
-        cla_start = self.cfg.cla_share_start
-        if cla_start < 0:
-            cla_start = n_nograd
-        # v1 shares only WITHIN the grad window (single-epoch): the compute-iteration
-        # must be a grad iteration so K/V projections receive gradient (trap §7.2).
-        # A smaller value would be shadowed by the `t < n_nograd` no-grad branch and
-        # silently disable CLA — clamp it up so that can't happen.
-        cla_start = max(cla_start, n_nograd)
-        kv_bundles = None
+        with _prof("carrier::perm_gather"):
+            h_s = h[perm]
+            e_s = e[perm]
+            ids_s = input_ids[perm]
+            bg_s = bigram_emb[perm]
+            x0_s = x0_core_terms[:, perm]            # [n_core, B, S, W]
 
         # Selective checkpointing: checkpoint the first `n_ckpt` grad-iterations, run the rest
         # (the last grad-iters) eager (activations retained → no backward recompute). -1 → all.
@@ -475,6 +731,21 @@ class MORPHTransformer(nn.Module):
         _t_range = torch.arange(total_iters, device=sort_depths.device)
         active_counts = (sort_depths.unsqueeze(1) > _t_range.unsqueeze(0)).sum(0).tolist()
 
+        # ── Retention cross-iteration carry (#230) ────────────────────────────
+        # GLA state for the core retention layer, carried iter→iter (fp32 accumulator, tiny).
+        # Held in the SAME sorted/active-set order as h_s: slice [:n_active], carry the frozen
+        # suffix unchanged — exactly like the carrier. The no_grad iterations produce a detached
+        # state, so when it enters the first grad iteration the gradient does NOT flow back into
+        # the frozen window (truncated-BPTT boundary, automatic). retention_carry=False → never
+        # tracked (each iter reseeds zero = global retention with no memory).
+        track_ret = self._core_has_retention and self.cfg.retention_carry
+        if track_ret:
+            _rh = self.cfg.retention_heads or self.cfg.n_heads
+            _rdh = self.cfg.d_model // _rh
+            ret_state_s = h_s.new_zeros(h_s.shape[0], _rh, _rdh, _rdh, dtype=torch.float32)
+        else:
+            ret_state_s = None
+
         for t in range(total_iters):
             n_active = active_counts[t]
             if n_active == 0:
@@ -482,48 +753,40 @@ class MORPHTransformer(nn.Module):
             h_a = h_s[:n_active]
             args = (h_a, e_s[:n_active], ids_s[:n_active],
                     x0_s[:, :n_active], bg_s[:n_active])
+            rs_a = ret_state_s[:n_active] if track_ret else None
 
-            do_compute = cla_on and t == cla_start
-            do_reuse = cla_on and t > cla_start and kv_bundles is not None
             # Checkpoint this grad-iteration? Only in training, and only the first n_ckpt grad
             # iters (later ones run eager → no recompute). n_nograd iters are frozen (no_grad).
             do_ckpt = self.training and (t - n_nograd) < n_ckpt
 
             if t < n_nograd:
-                # no-grad region; cla_start >= n_nograd so no CLA here.
                 with torch.no_grad():
-                    h_new = _core_step(*args)
-            elif do_compute:
-                # NOT checkpointed: retain activations so the captured KV bundle
-                # carries gradient to W_down_k / compressor / indexer (BPTT trap §7.2).
-                h_new, kv_bundles = _core_step(*args, cla_mode="compute")
-            elif do_reuse:
-                # slice the cached bundle to the current active-set prefix (trap §7.1).
-                kvb = [{k: (v[:n_active] if torch.is_tensor(v) else v)
-                        for k, v in b.items()} for b in kv_bundles]
-                if do_ckpt:
-                    h_new = checkpoint(_core_step, *args, cla_mode="reuse",
-                                       kv_bundles=kvb, use_reentrant=False)
-                else:
-                    h_new = _core_step(*args, cla_mode="reuse", kv_bundles=kvb)
+                    h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t)
             elif do_ckpt:
-                h_new = checkpoint(_core_step, *args, use_reentrant=False)
+                h_new, rs_new = checkpoint(_core_step, *args, ret_state=rs_a, iter_idx=t,
+                                           use_reentrant=False)
             else:
                 # eval, OR a grad-iter we chose not to checkpoint (activations retained).
-                h_new = _core_step(*args)
+                h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t)
 
             # updated active prefix + frozen suffix (no in-place op).
-            h_s = h_new if n_active == h_s.shape[0] else \
-                torch.cat([h_new, h_s[n_active:]], dim=0)
+            with _prof("carrier::loop_cat"):
+                h_s = h_new if n_active == h_s.shape[0] else \
+                    torch.cat([h_new, h_s[n_active:]], dim=0)
+            if track_ret and rs_new is not None:
+                ret_state_s = rs_new if n_active == ret_state_s.shape[0] else \
+                    torch.cat([rs_new, ret_state_s[n_active:]], dim=0)
 
-        x = h_s[inv_perm]                        # restore original batch order
+        with _prof("carrier::inv_perm_gather"):
+            x = h_s[inv_perm]                    # restore original batch order
 
         # ── Coda ──────────────────────────────────────────────────────
         for i, layer in enumerate(self.coda):
             gi = self.cfg.n_prelude + self.cfg.n_core + i
-            x = self._apply_x0(x, gi, x0)
-            x = self._apply_ve(x, gi, input_ids)
-            x = self.embed.bigram.inject(x, bigram_emb, gi)
+            term = self._build_injection_term(
+                gi, self.x0_injects[gi].precompute(x0), input_ids, bigram_emb, x.dtype
+            )
+            x = self._apply_injection(x, term)
             x = layer(x)
 
         # ── Hyper-Connection stream reduction ─────────────────────────

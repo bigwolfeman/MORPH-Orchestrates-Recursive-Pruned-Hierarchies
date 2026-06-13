@@ -15,7 +15,7 @@ within the MORPH project with no external precedent.
 
 ### Parcae — Stable Looped Transformer
 **Title:** Parcae: Scaling Laws For Stable Looped Language Models  
-**Authors:** Sandy Huang, Mihir Kale, Trevor Gale, et al. (UCSD + Together AI)  
+**Authors:** Hayden Prairie, Zachary Novack, Taylor Berg-Kirkpatrick, Daniel Y. Fu (UCSD + Together AI)  
 **Year:** 2026  
 **arXiv:** [2604.12946](https://arxiv.org/abs/2604.12946)  
 **MORPH uses:** The negative-diagonal injection parameterization that guarantees spectral radius
@@ -68,7 +68,7 @@ inside the local sliding-window branch of every attention layer.
 
 ### Residual Attention (AttnRes)
 **Title:** Attention Residuals (Technical Report)  
-**Authors:** Chen et al., Moonshot AI (Kimi Team)  
+**Authors:** Kimi Team (Moonshot AI)  
 **Year:** 2026  
 **arXiv:** [2603.15031](https://arxiv.org/abs/2603.15031)  
 **MORPH uses:** The per-head learned scalar α that additively combines the current layer's
@@ -124,15 +124,29 @@ side. This is a simpler mechanism than HC/mHC — no cross-stream mixing, no agg
 distribution matrices, no input-dependent gating. It stabilizes looping via different
 update rates per channel.
 
+### JPmHC — Jacobian-Preserving Manifold Hyper-Connections (Cayley)
+**Title:** JPmHC: Dynamical Isometry via Orthogonal Hyper-Connections  
+**Authors:** Biswa Sengupta, Jinhua Wang, Leo Brunswic (JP Morgan Chase LLM Suite Team)  
+**Year:** 2026  
+**arXiv:** [2602.18308](https://arxiv.org/abs/2602.18308)  
+**MORPH uses:** The default Hyper-Connection residual (`residual_mode: hc_cayley`). Widens the
+residual stream to n parallel C-dim streams with input-dependent H^pre/H^post/H^res mappings.
+Constrains H^res to the Stiefel manifold via Cayley transform of a skew-symmetric matrix,
+giving exact dynamical isometry (all singular values = 1) without iterative Sinkhorn
+normalisation — 5.2× cheaper H^res than the bistochastic variant at equal stream count.
+Free-probability analysis predicts Jacobian spectra for structured skips; memory-efficient
+implicit differentiation for the Cayley fixed-point projection. MORPH's `hyper_connections.py`
+and fused Triton kernel (`fused_hyper_connection.py`) implement this mechanism.
+
 ### mHC — Manifold-Constrained Hyper-Connections (related work)
 **Title:** mHC: Manifold-Constrained Hyper-Connections  
-**Authors:** DeepSeek-AI (19 researchers, led by Liang Wenfeng)  
+**Authors:** Zhenda Xie, Yixuan Wei, Huanqi Cao, et al. (DeepSeek-AI)  
 **Year:** 2025  
 **arXiv:** [2512.24880](https://arxiv.org/abs/2512.24880)  
 **Relation to MORPH:** mHC uses n parallel full-C-dim streams with an n×n doubly-stochastic
 mixing matrix (Sinkhorn-Knopp, Birkhoff polytope), plus aggregation (H^pre) and distribution
-(H^post) vectors with dynamic input-dependent gating. **MORPH does NOT implement mHC** —
-our MRR is a simpler per-channel scaling approach. An ablation comparing MRR vs mHC is planned.
+(H^post) vectors with dynamic input-dependent gating. MORPH implements this as an alternate
+HC arm (`residual_mode: hc_sinkhorn`); the Cayley JPmHC variant is the default.
 
 ### Hyper-Connections (predecessor to mHC, related work)
 **Title:** Hyper-Connections  
@@ -158,7 +172,7 @@ power-law / tree-structured semantic relationships that Euclidean embeddings req
 dimensions to approximate.
 
 ### Hybrid (Mixed-Curvature) Embeddings
-**Title:** Learning Mixed-Curvature Representations in Product Spaces  
+**Title:** Learning Mixed-Curvature Representations in Products of Model Spaces  
 **Authors:** Albert Gu, Frederic Sala, Beliz Gunel, Christopher Ré (Stanford)  
 **Year:** 2019 (ICLR 2019)  
 **OpenReview:** [HJxeWnCcF7](https://openreview.net/forum?id=HJxeWnCcF7)  
@@ -172,6 +186,19 @@ MORPH's `embeddings.py` implements this as eucl ⊕ Lorentz with learned mixing 
 
 ## 6. Sparsity & Routing
 
+### Lottery Ticket Hypothesis (LTH)
+**Title:** The Lottery Ticket Hypothesis: Finding Sparse, Trainable Neural Networks  
+**Authors:** Jonathan Frankle, Michael Carbin (MIT CSAIL)  
+**Year:** 2019 (ICLR 2019)  
+**arXiv:** [1803.03635](https://arxiv.org/abs/1803.03635)  
+**MORPH uses:** Conceptual foundation for structured sparsity. LTH shows that dense networks
+contain sparse subnetworks ("winning tickets") that match full accuracy when retrained from
+early initialization. MORPH does not implement the full iterative prune-and-rewind protocol;
+instead CMS selects Block-ELL tile topology from magnitude/importance scores accumulated
+during dense pretraining, then compacts to hardware-efficient sparse weights. The hypothesis
+motivates why aggressive block pruning can retain capability after the dense→prune→compact
+schedule.
+
 ### Block-ELL Sparse Format
 **Source:** NVIDIA cuSPARSE Library + NVIDIA Technical Blog  
 **Reference:** "Accelerating Matrix Multiplication with Block Sparse Format and NVIDIA Tensor Cores" — NVIDIA Developer Blog (2023);  
@@ -183,7 +210,7 @@ hardware-efficient SpMM using Tensor Cores, achieving near-linear speedup propor
 
 ### ReMoE — Differentiable MoE Routing
 **Title:** ReMoE: Fully Differentiable Mixture-of-Experts with ReLU Routing  
-**Authors:** Ziteng Wang, Jianfei Chen, Jun Zhu (Tsinghua University)  
+**Authors:** Ziteng Wang, Jun Zhu, Jianfei Chen (Tsinghua University)  
 **Year:** 2024 (ICLR 2025)  
 **arXiv:** [2412.14711](https://arxiv.org/abs/2412.14711)  
 **MORPH uses:** ReLU-based continuous routing over macro tile-groups (32×32 Block-ELL tiles),
@@ -306,8 +333,7 @@ The 49k vocab cleanly stacks with a bigram hash-vocab prefix for rare byte patte
 
 ### Zyphra RSA — Markovian Recurrent Speculative Aggregation
 **Title:** ZAYA1-8B Technical Report  
-**Authors:** Tomas Figliolia, Nicholas Alonso, Rishi Iyer, Quentin Anthony, Beren Millidge,
-Krithik Puthalath, Danny Martinelli et al. (Zyphra)  
+**Authors:** Robert Washbourne, Rishi Iyer, Tomas Figliolia, et al., Beren Millidge (Zyphra)  
 **Year:** 2026  
 **arXiv:** [2605.05365](https://arxiv.org/abs/2605.05365)  
 **MORPH uses:** The Markovian RSA test-time compute scheme: N parallel traces generated
@@ -322,7 +348,7 @@ harness deployment after RL training, currently deferred.
 
 | # | Technique | Paper | arXiv |
 |---|-----------|-------|-------|
-| 1 | Parcae Loop | Huang et al. (UCSD+Together, 2026) | [2604.12946](https://arxiv.org/abs/2604.12946) |
+| 1 | Parcae Loop | Prairie et al. (UCSD+Together, 2026) | [2604.12946](https://arxiv.org/abs/2604.12946) |
 | 2 | Block-ELL Format | NVIDIA cuSPARSE (2021+) | [developer.nvidia.com](https://developer.nvidia.com/blog/accelerating-matrix-multiplication-with-block-sparse-format-and-nvidia-tensor-cores/) |
 | 3 | CMS Topology | Original work — MORPH project | — |
 | 4 | Neural Memory (Titans) | Behrouz, Zhong, Mirrokni (Google, 2025) | [2501.00663](https://arxiv.org/abs/2501.00663) |
@@ -335,18 +361,20 @@ harness deployment after RL training, currently deferred.
 | 11 | Hybrid Embeddings | Gu, Sala, Gunel, Ré (ICLR 2019) | [OpenReview](https://openreview.net/forum?id=HJxeWnCcF7) |
 | 12 | CoPE (Clipped RoPE) | Li, Ren, Yuille, Wang (2026) | [2602.05258](https://arxiv.org/abs/2602.05258) |
 | 13 | XSA | Zhai (Apple, 2026) | [2603.09078](https://arxiv.org/abs/2603.09078) |
-| 14 | Residual Attention | Chen et al. / Kimi (2026) | [2603.15031](https://arxiv.org/abs/2603.15031) |
+| 14 | Residual Attention | Kimi Team (Moonshot AI, 2026) | [2603.15031](https://arxiv.org/abs/2603.15031) |
 | 15 | SwiGLU | Shazeer (Google, 2020) | [2002.05202](https://arxiv.org/abs/2002.05202) |
 | 16 | MTP | Gloeckle et al. (Meta, 2024) | [2404.19737](https://arxiv.org/abs/2404.19737) |
 | 17 | STE Ternary (BitNet b1.58) | Ma et al. (Microsoft, 2024) | [2402.17764](https://arxiv.org/abs/2402.17764) |
-| 18 | ReMoE | Wang, Chen, Zhu (Tsinghua, 2025) | [2412.14711](https://arxiv.org/abs/2412.14711) |
+| 18 | ReMoE | Wang, Zhu, Chen (Tsinghua, 2025) | [2412.14711](https://arxiv.org/abs/2412.14711) |
 | 19 | PEER | Lample et al. (FAIR, 2019) | [1907.05242](https://arxiv.org/abs/1907.05242) |
 | 20 | mHC | DeepSeek-AI (2025) | [2512.24880](https://arxiv.org/abs/2512.24880) |
+| 20a | JPmHC (Cayley HC) | Sengupta, Wang, Brunswic (JPMorgan, 2026) | [2602.18308](https://arxiv.org/abs/2602.18308) |
 | 20b | Hyper-Connections | Zhu et al. / ByteDance (2024) | [2409.19606](https://arxiv.org/abs/2409.19606) |
-| 21 | Zyphra RSA | Figliolia et al. (Zyphra, 2026) | [2605.05365](https://arxiv.org/abs/2605.05365) |
+| 21 | Zyphra RSA | Washbourne et al. (Zyphra, 2026) | [2605.05365](https://arxiv.org/abs/2605.05365) |
 | 22 | StarCoder2 Tokenizer | Lozhkov et al. (BigCode, 2024) | [2402.19173](https://arxiv.org/abs/2402.19173) |
 | 23 | Nested Learning | Behrouz et al. (NeurIPS 2025) | [2512.24695](https://arxiv.org/abs/2512.24695) |
-| 24 | Poisson Depth Sampling | Huang et al. (Parcae, 2026) | [2604.12946](https://arxiv.org/abs/2604.12946) |
+| 24 | Poisson Depth Sampling | Prairie et al. (Parcae, 2026) | [2604.12946](https://arxiv.org/abs/2604.12946) |
 | 25 | Attention Sinks | Xiao et al. (MIT/Meta, 2023) | [2309.17453](https://arxiv.org/abs/2309.17453) |
 | 26 | Value Shift | Figliolia et al. (Zyphra, 2025) | [2510.04476](https://arxiv.org/abs/2510.04476) |
 | 27 | LLM-JEPA | Huang, LeCun, Balestriero (2025) | [2509.14252](https://arxiv.org/abs/2509.14252) |
+| 28 | Lottery Ticket Hypothesis | Frankle, Carbin (MIT, 2019) | [1803.03635](https://arxiv.org/abs/1803.03635) |

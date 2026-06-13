@@ -1,0 +1,73 @@
+# MORPH Curriculum Pretraining — Phase P (dense bf16, length-bucketed multi-source ramp)
+# Spec: Ai-notes/06-12-2026/MORPH-Curriculum-Pretraining/SPEC.md
+# Run:  PYTHONPATH=$PWD python -m morph.training.train --config-name pretrain_curriculum
+# Prereq: scripts/pretokenize.py has written shards to data.pretok_dir for every blend source.
+#
+# Inherits base.yaml, then overrides: dense-bf16 isolation (sparse pipeline + TST OFF), and the
+# curriculum block. base.yaml's validated sparse run is untouched.
+defaults:
+  - base
+  - _self_
+
+model:
+  # RoPE cache must cover the TOP stage; the ACTUAL training seq_len ramps per stage (curriculum).
+  max_seq_len: 16384
+  context_len: 4096            # stage-0 taper anchor; stepped by the scheduler at each transition
+
+training:
+  # ── Phase P isolation: sparse pipeline OFF (Phase D owns prune/carve/route) ──
+  prune_start: 999999999
+  compact_step: 999999999
+  tst_bag_size: 0              # TST OFF (no overlapping data schedule during the context ramp)
+  # ── dense bf16 (quant stack OFF — isolate the curriculum mechanics; quant already validated) ──
+  ternary: false
+  embed_quant: "off"
+  attn_proj_quant: "off"
+  adam8bit: false
+  bf16: true
+  compile: true
+  # ── optimization ──
+  lr: 3e-4                     # from-scratch cold start (higher than the resume-recipe 1e-4)
+  lr_schedule: cosine
+  min_lr: 3e-5
+  warmup: 500                  # short warmup for the cold start (base.yaml's 0 was a resume recipe)
+  grad_clip: 1.0
+  weight_decay: 0.1
+  # steps is overridden by the curriculum scheduler (sum of stage steps).
+  eval_every: 500
+  ckpt_every: 2500
+  gen_every: 0
+  seed: 0
+
+# Routing OFF (Phase P is dense; routing belongs to Phase D).
+routing:
+  route_start: 999999999
+
+# ── Curriculum: length-bucketed multi-source ramp ──────────────────────────────
+# Measured ceilings (RTX 5090, 276M dense, scripts/mem_probe.py): sustained-safe micro-batch
+# [4096→4, 8192→2, 16384→1]; grad-accum is throughput-free, so hold eff_batch via accumulation.
+# stage_steps are a DEFAULT (front-loaded short context = most tokens); tune to taste / token budget.
+curriculum:
+  enabled: true
+  pretok_dir: data/pretok      # scripts/pretokenize.py output (full shards, not the gate slice)
+  eff_batch: 8                 # held constant across stages via grad-accum (mb×ga)
+  blend:                       # token-proportioned weights (sum need not be 1); names = pretok shard dirs
+    owt: 0.62
+    code: 0.20
+    dharma: 0.13
+    books: 0.05
+  stages:                      # seq_len = bucket-native length; context_len = RoPE taper anchor
+    - {seq_len: 4096,  context_len: 4096,  micro_batch: 4, steps: 20000}   # ga 2
+    - {seq_len: 8192,  context_len: 8192,  micro_batch: 2, steps: 8000}    # ga 4
+    - {seq_len: 16384, context_len: 16384, micro_batch: 1, steps: 3000}    # ga 8 (final long-ctx tail)
+
+data:
+  # val_loader still streams this (held-out wikitext eval is a follow-up wiring — TODO).
+  dataset: /home/wolfe/.cache/huggingface/datasets/openwebtext/**/openwebtext-train-*.arrow
+  tokenizer: bigcode/starcoder2-7b
+  seq_len: 4096                # val seq_len (curriculum overrides train seq_len live)
+
+wandb:
+  project: morph
+  entity: adew-me
+  name: null

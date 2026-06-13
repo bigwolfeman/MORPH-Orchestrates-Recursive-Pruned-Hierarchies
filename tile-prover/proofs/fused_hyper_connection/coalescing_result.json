@@ -1,0 +1,18 @@
+{
+  "coalesced_stride1_contiguous": {
+    "status": "proven",
+    "proof_time_ms": 0.05
+  },
+  "coalesced_single_cache_line": {
+    "status": "proven",
+    "proof_time_ms": 0.86
+  },
+  "scalar_loads_uniform": {
+    "status": "proven",
+    "proof_time_ms": 0.02
+  },
+  "premap_scalar_loads_uniform": {
+    "status": "proven",
+    "proof_time_ms": 0.02
+  }
+}

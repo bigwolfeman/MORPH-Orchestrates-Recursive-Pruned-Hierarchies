@@ -1,0 +1,32 @@
+# Transition smoke for the curriculum train.py hook — tiny, runs on the 50-doc gate shards.
+# Exercises: 3 stages + 2 transitions (checkpoint + RoPE re-anchor + loader.set_stage), grad-accum,
+# clean exit. NOT a quality run. Run with WANDB_MODE=disabled.
+#   PYTHONPATH=$PWD WANDB_MODE=disabled python -m morph.training.train --config-name pretrain_curriculum_smoke
+defaults:
+  - pretrain_curriculum
+  - _self_
+
+model:
+  max_seq_len: 8192            # smoke top stage
+  context_len: 512
+
+training:
+  compile: false               # fast startup for a 12-step smoke
+  eval_every: 999999           # skip eval (val_loader irrelevant for the smoke)
+  ckpt_every: 999999
+  gen_every: 0
+
+curriculum:
+  enabled: true
+  pretok_dir: ignore/pretok_gate      # the 50-doc gate slice
+  eff_batch: 2
+  blend:
+    owt: 0.40
+    code: 0.20
+    dharma: 0.30
+    books: 0.10
+  # boundaries split the gate data: code(~330)→s0, owt(~1600)→s1, dharma/books(~5-7k)→s2
+  stages:
+    - {seq_len: 512,  context_len: 512,  micro_batch: 2, steps: 4}    # ga 1
+    - {seq_len: 2048, context_len: 2048, micro_batch: 1, steps: 4}    # ga 2
+    - {seq_len: 8192, context_len: 8192, micro_batch: 1, steps: 4}    # ga 2
