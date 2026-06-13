@@ -688,6 +688,42 @@ def main(cfg: DictConfig) -> None:
     cur_bag = tst_bag_size if (tst_phase1_steps > 0 and start_step < tst_phase1_steps) else 0
     train_loader = _make_train_loader(cur_bag)
 
+    # ── Curriculum pretraining (Phase P) — length-bucketed multi-source ramp ──
+    # GATED: absent/disabled → base.yaml path is byte-identical (curriculum_enabled False,
+    # cur_grad_accum 1, no transitions, total_steps unchanged). When ON: overrides total_steps
+    # and train_loader, and ramps seq_len / RoPE-context / micro-batch per stage with a
+    # checkpoint-before-step-up (the stage transition fires at the top of the loop below).
+    _curr_cfg = getattr(cfg, "curriculum", None)
+    curriculum_enabled = bool(_curr_cfg is not None and getattr(_curr_cfg, "enabled", False))
+    cur_grad_accum = 1
+    cur_stage = -1
+    if curriculum_enabled:
+        from morph.training.curriculum import CurriculumScheduler
+        from morph.training.curriculum_data import MultiSourceCurriculumLoader
+        from morph.model.attention import CoPEEmbedding
+        _stages = list(_curr_cfg.stages)
+        _boundaries = [int(s.seq_len) for s in _stages]
+        _contexts = [int(s.context_len) for s in _stages]
+        _microbatch = [int(s.micro_batch) for s in _stages]
+        _stage_steps = [int(s.steps) for s in _stages]
+        _eff_batch = int(getattr(_curr_cfg, "eff_batch", 8))
+        _weights = {str(k): float(v) for k, v in dict(_curr_cfg.blend).items()}
+        _sched = CurriculumScheduler(_stage_steps)
+        total_steps = _sched.total_steps                      # override training.steps
+        _curr_loader = MultiSourceCurriculumLoader(
+            str(_curr_cfg.pretok_dir), _weights, _boundaries,
+            seed=int(getattr(tr, "seed", 0)))
+        # RoPE modules to re-anchor on each step-up (attention is EAGER → safe to mutate
+        # cos/sin cache mid-run; compile only wraps the MLPs). Reach through _orig_mod.
+        _rope_mods = [m for m in getattr(model, "_orig_mod", model).modules()
+                      if isinstance(m, CoPEEmbedding)]
+        def _ceil_div(a, b):
+            return max(1, -(-a // b))
+        print(f"[curriculum] ENABLED: {len(_stages)} stages seq={_boundaries} "
+              f"context={_contexts} micro_batch={_microbatch} eff_batch={_eff_batch} "
+              f"stage_steps={_stage_steps} total_steps={total_steps} | "
+              f"{len(_rope_mods)} RoPE modules", flush=True)
+
     # ── Optimizer step closure (resolved once, no per-step isinstance) ───
     _has_ternary = isinstance(optimizer, TernaryShadowOptimizer)
     if _has_ternary:
@@ -775,29 +811,56 @@ def main(cfg: DictConfig) -> None:
             cur_bag = 0
             train_loader = _make_train_loader(0)
 
+        # ── Curriculum stage transition: checkpoint → RoPE re-anchor → loader.set_stage →
+        #    micro-batch/grad-accum swap. Two independent risks at a step-up (activation OOM
+        #    and the PE-shift loss spike) → the pre-step-up checkpoint is the recovery point. ──
+        if curriculum_enabled and _sched.stage_at(step) != cur_stage:
+            _k = _sched.stage_at(step)
+            if step > start_step:                                  # nothing to save at step 0
+                _cp = os.path.join(ckpt_dir, f"curriculum_pre_stage{_k}_step{step}.pt")
+                save_checkpoint(_cp, step, model, optimizer, scaler, pruning)
+                print(f"[curriculum] stage {cur_stage}→{_k} @ step {step}: pre-step-up ckpt {_cp}",
+                      flush=True)
+            for _m in _rope_mods:                                  # re-anchor taper + rebuild cache
+                _m.set_context(_contexts[_k])
+            _curr_loader.set_stage(_k)
+            cur_stage = _k
+            cur_grad_accum = _ceil_div(_eff_batch, _microbatch[_k])
+            seq_len = _boundaries[_k]
+            batch_size = _microbatch[_k] * cur_grad_accum          # effective, for tok/s logging
+            train_loader = _curr_loader.batches(_microbatch[_k], bag_size=cur_bag)
+            print(f"[curriculum] → stage {_k}: seq_len={seq_len} context={_contexts[_k]} "
+                  f"micro_batch={_microbatch[_k]} grad_accum={cur_grad_accum} eff_batch={batch_size} "
+                  f"(RoPE re-anchored on {len(_rope_mods)} modules)", flush=True)
+
         lr = lr_fn(step)
         for pg in optimizer.param_groups:
             pg["lr"] = lr
 
-        try:
-            x, y = next(train_loader)
-        except StopIteration:
-            train_loader = _make_train_loader(cur_bag)
-            x, y = next(train_loader)
-        x, y = x.to(device), y.to(device)
-
         optimizer.zero_grad(set_to_none=True)
 
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            out = model(x, labels=y, bag_size=cur_bag)
-        loss = out["loss"]
+        # Grad accumulation: _ga micro-steps before one optimizer step. _ga==1 (no curriculum)
+        # → byte-identical to the single fwd/bwd path (loss/1 == loss). The curriculum uses it to
+        # hold a constant effective batch as the per-stage micro-batch drops with context length.
+        _ga = cur_grad_accum if curriculum_enabled else 1
+        for _micro in range(_ga):
+            try:
+                x, y = next(train_loader)
+            except StopIteration:
+                train_loader = _make_train_loader(cur_bag)
+                x, y = next(train_loader)
+            x, y = x.to(device), y.to(device)
 
-        # Routing aux loss (load balance) — only active after route_start
-        if pruning.is_routed:
-            routing_aux = collect_routing_aux_losses(model)
-            loss = loss + routing_aux
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                out = model(x, labels=y, bag_size=cur_bag)
+            loss = out["loss"]
 
-        scaler.scale(loss).backward()
+            # Routing aux loss (load balance) — only active after route_start
+            if pruning.is_routed:
+                routing_aux = collect_routing_aux_losses(model)
+                loss = loss + routing_aux
+
+            scaler.scale(loss / _ga).backward()
 
         if _mem_probe:
             _pk = torch.cuda.max_memory_allocated() / 2**30

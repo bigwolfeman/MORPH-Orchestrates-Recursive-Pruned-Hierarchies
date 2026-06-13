@@ -87,9 +87,6 @@
   \node[draw=cbBlue!50, thick, rounded corners=6pt, fill=cbBlue!4,
         fit=(preA)(normA)(attn)(gla)(yA)(postA), inner xsep=8pt, inner ysep=7pt] (AG) {};
 \end{scope}
-\node[font=\small\sffamily\bfseries, text=cbBlue, anchor=west]
-  at ($(AG.north west)+(0.15,0)$) {Attention sublayer};
-
 % ── MID CARRIER ──────────────────────────────────────────────────────
 \node[carrierbar, below=1.0cm of postA] (cmid) {HC carrier $[B,S,4,C]$};
 \draw[A, hcC] (postA) -- (cmid.north)
@@ -115,9 +112,6 @@
   \node[draw=cbOrange!60, thick, rounded corners=6pt, fill=cbOrange!4,
         fit=(preM)(normM)(mlp)(postM), inner xsep=8pt, inner ysep=7pt] (MG) {};
 \end{scope}
-\node[font=\small\sffamily\bfseries, text=cbOrange!80!black, anchor=west]
-  at ($(MG.north west)+(0.15,0)$) {MLP sublayer};
-
 % ── OUT CARRIER ──────────────────────────────────────────────────────
 \node[carrierbar, below=1.0cm of postM] (cout) {HC carrier $[B,S,4,C]$};
 \draw[A, hcC] (postM) -- (cout.north);
@@ -148,6 +142,14 @@
   \textbf{GLA branch} (layer 1 only): runs \emph{parallel} to attention on the same
   $\bar{x}$; gated sum $y=\mathrm{attn}+\sigma(g)\!\cdot\!\mathrm{GLA}$. In core, its state
   $S$ is carried across loop iterations. $\sigma(g)\!\approx\!0$ at init $\Rightarrow$ off.};
+
+% Sublayer labels (drawn last; south-west anchor + small lift clears the border)
+\node[font=\small\sffamily\bfseries, text=cbBlue, anchor=south west,
+      fill=white, inner sep=2pt]
+  at ([xshift=0.15cm, yshift=0.08cm] AG.north west) {Attention sublayer};
+\node[font=\small\sffamily\bfseries, text=cbOrange!80!black, anchor=south west,
+      fill=white, inner sep=2pt]
+  at ([xshift=0.15cm, yshift=0.08cm] MG.north west) {MLP sublayer};
 
 \end{tikzpicture}
 \end{document}

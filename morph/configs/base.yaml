@@ -109,14 +109,22 @@ training:
   checkpointing: true
 
   # Pruning → MORTAR carve → routing schedule (Phases 2→3→4)
-  # Validated mortar winner cadence (gentle+frequent): removes 0.005 every 100 steps from 3000,
-  # reaching target_density 0.25 by ~step 18000 — fully pruned BEFORE compact_step 20000.
-  # (Old 6000/3000/0.05 reached only ~0.80 density by step 20000 → would carve a still-dense model.)
+  # SLOWER-than-winner cadence (Wolfe 2026-06-12): prune every 167 steps from 3000 (was every 100).
+  # MECHANISM at d=768 (verified by simulating prune_step_blocks' integer recurrence, not assumed):
+  #  each event drops floor(alive·(1−prune_rate)) blocks, but the "guarantee progress" floor
+  #  min(new_alive, alive−1) pins it to EXACTLY 1 block/event here — 0.5% of the small block grids
+  #  (gate_up=192 blocks, down=96) is < 1. So at d=768 prune_rate is INERT; prune_INTERVAL is the
+  #  ONLY speed lever. The bottleneck layer gate_up must drop 144 blocks (192→48) to reach 0.25,
+  #  one per event ⇒ 144·167 ≈ 24k steps ⇒ density hits 0.25 by ~step 27050 (winner: 144·100 ⇒
+  #  ~step 17400). The prune→0.25 window MUST close before compact_step, else carve() freezes a
+  #  still-dense model (the old 6000/3000/0.05 cadence only hit ~0.80 density by step 20000).
+  # NOTE: prune completes (~27050) inside the TST superposition window [0,30000); carve@29000 also
+  #  inside (~1950-step settle, ≈ the winner's 2000); route@30000 = superposition→recovery boundary.
   prune_start: 3000
-  prune_interval: 100
-  prune_rate: 0.005
+  prune_interval: 167            # SLOWER: 1.67× the winner's 100 — the REAL d=768 lever (see MECHANISM)
+  prune_rate: 0.005              # = winner; INERT at d=768 (1 block/event floor). Only bites at cloud d=2048
   target_density: 0.25
-  compact_step: 20000            # carve smooth-shadow → BCSR mortar_data at this step
+  compact_step: 29000            # carve smooth-shadow → BCSR mortar_data (was 20000; moved to clear the slower ramp)
   cms_score_mode: taylor         # winner prune saliency (NOT grad); Taylor helps post-prune recovery (B3>B1)
 
   # ── Token Superposition Training (TST, #231 — Nous arXiv 2605.06546) ──
@@ -124,9 +132,10 @@ training:
   # [0, tst_ratio·steps), then recovery (bag_size=0, standard NTP) for the remainder.
   # eval/gen ALWAYS use bag_size=0; tst_bag_size=0 ⇒ bit-identical to no-TST.
   # Paper sweet spot s=6, ratio=0.3. At steps=100000 ⇒ superposition [0,30000), recovery [30000,100000).
-  # SCHEDULE NOTE: the superposition phase fully contains prune(3k–18k)/carve(20k)/route(21k) — the
-  #   sparse structure is built under superposition, then recovers on 70k steps of clean NTP.
-  #   TST was −4% ppl at d=768/15k on a quant-ONLY stack (#231); TST × full sparse pipeline is UNTESTED.
+  # SCHEDULE NOTE: the superposition phase contains prune(3k–27k)/carve(29k); route(30k) engages at
+  #   the superposition→recovery boundary — sparse structure is built under superposition, then
+  #   recovers on 70k steps of clean NTP. TST was −4% ppl at d=768/15k on a quant-ONLY stack (#231);
+  #   TST × full sparse pipeline is UNTESTED (and now × a slower prune — watch the density curve).
   tst_bag_size: 6                # s: tokens superposed per position (0 = TST off)
   tst_ratio: 0.3                 # fraction of steps in the superposition phase
 
@@ -176,7 +185,7 @@ training:
 # (There is no "routing off" code path — routing is unconditional in the forward pass
 #  once the carve has been applied. route_start just gates the training-time routing head.)
 routing:
-  route_start: 21000             # winner recipe: engage ReMoE 1000 steps after carve (compact 20000)
+  route_start: 30000             # engage ReMoE 1000 steps after carve (compact 29000); = TST superposition→recovery boundary
   route_scope: all               # whole-body ReMoE (12 MLPs); winner used all. Code default "core" = 6 MLPs only
   n_clusters: 16
   activation_ratio: 0.5
