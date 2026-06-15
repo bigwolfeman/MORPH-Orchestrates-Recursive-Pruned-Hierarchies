@@ -51,11 +51,25 @@ curriculum:
   enabled: true
   pretok_dir: data/pretok      # scripts/pretokenize.py output (full shards, not the gate slice)
   eff_batch: 8                 # held constant across stages via grad-accum (mb×ga)
-  blend:                       # token-proportioned weights (sum need not be 1); names = pretok shard dirs
-    owt: 0.62
-    code: 0.20
-    dharma: 0.13
-    books: 0.05
+  blend:                       # token-proportioned weights (sum need not be 1); names = pretok shard dirs.
+    # 8-source mix (must match scripts/pretokenize.py SOURCES). Loader REQUIRES every listed source's
+    # shard to exist — if a source fails to tokenize, remove it here. Synthetic ratio (nemotron_qa/
+    # reasoning/math) replaces the lost Nemotron-CC. Ratios are sample-read judgment, not ablated.
+    # NOTE: `books` source dropped from the blend — book_pretrain.jsonl is only 21 docs / 140K
+    # tokens, far too small to carry any real weight (0.03 would force ~340 epochs of 21 books =
+    # memorization). Its 0.03 folded into owt. Shard still exists; re-add here only with more data.
+    # REBLEND 2026-06-13 (Wolfe): weight owt DOWN vs dolma + reasoning. owt is the broadest /
+    # least-curated web source; dolma (cleaner web) leads, reasoning (verified CoT) +60% relative.
+    # At the ~1.57B-token curriculum budget no source is epoch-limited (owt 10.6B / dolma & reasoning
+    # 5.0B avail ⇒ all well under 1 epoch), so this is a pure mixture-quality choice, not data-bound.
+    # Prior: owt 0.28 / dolma 0.20 / reasoning 0.10.
+    owt: 0.16                  # OpenWebText (local web) — down from 0.28 (broadest/least-curated)
+    dolma: 0.26                # Dolma 3 (remote web) — now lead web source (up from 0.20)
+    nemotron_qa: 0.18          # grounded synthetic QA (Nemotron-CC replacement anchor)
+    code: 0.10                 # code_search_net
+    reasoning: 0.16            # procedural verified CoT — up from 0.10 (+60% relative)
+    math: 0.07                 # math/proofs
+    dharma: 0.07               # domain text (32M tok → ~3.5 epochs at this weight, acceptable)
   stages:                      # seq_len = bucket-native length; context_len = RoPE taper anchor
     - {seq_len: 4096,  context_len: 4096,  micro_batch: 4, steps: 20000}   # ga 2
     - {seq_len: 8192,  context_len: 8192,  micro_batch: 2, steps: 8000}    # ga 4

@@ -33,8 +33,11 @@ Thumbs.db
 # Run artifacts
 outputs/
 wandb/
-multi­run/
+multirun/
 *.aux
+
+# Datasets (large pretokenized corpora — never commit; data/ is ~59 GB)
+data/
 
 ai-notes/
 Ai-notes/
