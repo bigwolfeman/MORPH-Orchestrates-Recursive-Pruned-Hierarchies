@@ -191,8 +191,10 @@ training:
   gen_every: 0      # 0 = disabled; set e.g. 5000 for generation samples
   gen_test: false   # run generation test at end of training
 
-  # Resume
-  # resume: null     # path to checkpoint to resume from
+  # Resume — path to a checkpoint for a FULL resume ("like nothing happened": model +
+  # carve/route topology + optimizer + scaler + RNG + step + pruning phase). null = fresh
+  # run. Must be a real key (not commented) so `training.resume=<path>` works from the CLI.
+  resume: null
 
 # Routing — whole-body ReMoE (prelude+core+coda). ALWAYS ON in the hotpath.
 # route_start = training-phase schedule: routing code activates at this step.

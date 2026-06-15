@@ -247,32 +247,113 @@ def save_checkpoint(
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "scaler": scaler.state_dict(),
+        # RNG state so a resume continues the SAME stochastic stream (per-sequence Poisson
+        # depth draws, dropout, etc.) — "like nothing happened". CPU + all CUDA devices.
+        "rng_cpu": torch.get_rng_state(),
+        "rng_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
     if pruning is not None:
+        # Both topology-phase flags are needed to RECONSTRUCT module structure (carve +
+        # routers) before load_state_dict on resume. _is_compact alone is insufficient:
+        # a routed checkpoint also needs its routers re-attached or their params are
+        # silently dropped (strict=False) and routing comes back OFF.
         ckpt["pruning_compact"] = pruning.is_compact
+        ckpt["pruning_routed"] = pruning.is_routed
     torch.save(ckpt, path)
 
 
 def load_checkpoint(
     path: str,
     model: nn.Module,
-    optimizer,
     scaler: torch.amp.GradScaler,
     device: torch.device,
-) -> int:
+    pruning: Optional[PruningSchedule] = None,
+) -> tuple[int, dict, bool]:
+    """FULL resume — restore the run exactly ("like nothing happened").
+
+    Restores: model weights + topology (carve/BCSR + ReMoE routers), the pre-carve
+    dead-tile prune mask (now a buffer), the saliency EMA, the GradScaler, CPU+CUDA RNG,
+    the training step, and the pruning-schedule phase flags. Reconstructs module structure
+    in the SAME order the live run mutated it, so every saved tensor finds a home:
+
+        routers (if routed)  →  load_state_dict (auto-rebuilds carve)  →  rng/scaler
+
+    The OPTIMIZER is handled by the caller: a carved/routed checkpoint's optimizer state is
+    keyed on a DIFFERENT param set (mortar_data / router params) than the freshly-built
+    dense optimizer, so the caller must REBUILD the optimizer on the reconstructed topology
+    BEFORE loading state. Returns (step, optimizer_state_dict, needs_optimizer_rebuild).
+    """
     ckpt = torch.load(path, map_location=device, weights_only=False)
-    # Strip ._orig_mod. prefix inserted by torch.compile
-    state = {k.replace("._orig_mod.", "."): v for k, v in ckpt["model"].items()}
-    model.load_state_dict(state, strict=False)
-    try:
-        optimizer.load_state_dict(ckpt["optimizer"])
-    except Exception as e:
-        print(f"  Warning: could not restore optimizer state: {e}")
+    is_compact = bool(ckpt.get("pruning_compact", False))
+    is_routed = bool(ckpt.get("pruning_routed", False))
+
+    # 1. Re-attach ReMoE routers BEFORE load_state_dict. CMSBlockLinear._load_from_state_dict
+    #    auto-reconstructs the BCSR carve, but routers are separate submodules it does NOT
+    #    rebuild — without this their params have no home and strict=False drops them.
+    if is_routed:
+        if pruning is None:
+            raise RuntimeError(
+                "load_checkpoint: checkpoint is ROUTED but no PruningSchedule was passed to "
+                "reconstruct the routers — cannot resume faithfully."
+            )
+        pruning._activate_routing(model)
+    if pruning is not None:
+        pruning._is_compact = is_compact
+        pruning._is_routed = is_routed
+
+    # 2. Load weights. CMSBlockLinear._load_from_state_dict rebuilds carve (BCSR) storage
+    #    from the mortar_* keys; the _prune_mask buffer restores the pre-carve dead tiles.
+    #    KEY ALIGNMENT: torch.compile wraps the MLPs in-place (layer.mlp = compile(...)), so
+    #    BOTH the checkpoint and the live model nest keys under `mlp._orig_mod.…`. The old
+    #    code stripped `_orig_mod.` from ONLY the checkpoint → every compiled-MLP tensor
+    #    mismatched the (still-`_orig_mod`) model and strict=False silently dropped them (a
+    #    near-empty "resume" — latent theater). Fix: align the checkpoint's key CONVENTION to
+    #    the model's, but pass ALL keys through INTACT so the carve/router load-hooks fire
+    #    (pre-filtering to the dense model's keys would drop mortar_data before it exists).
+    ckpt_model = ckpt["model"]
+    model_keys = list(model.state_dict().keys())
+    model_has_orig = any("_orig_mod" in k for k in model_keys)
+    ckpt_has_orig = any("_orig_mod" in k for k in ckpt_model)
+    if ckpt_has_orig and not model_has_orig:
+        state = {k.replace("_orig_mod.", ""): v for k, v in ckpt_model.items()}
+    else:
+        # Same convention (both compiled, or neither) → as-is. (model-compiled/ckpt-not is
+        # not produced by this codebase — compile is applied unconditionally before save.)
+        state = dict(ckpt_model)
+    # Let load_state_dict report truthfully AFTER the hooks reconstruct mortar_data/routers.
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    # No-theater: an UNEXPECTED key means a saved tensor found no home (structure drift) →
+    # state was silently lost. Fail loud. MISSING keys are tolerated only for back-compat
+    # buffers a pre-this-change checkpoint legitimately lacks (e.g. _prune_mask), and warned.
+    if unexpected:
+        raise RuntimeError(
+            f"load_checkpoint: {len(unexpected)} checkpoint tensors had no home in the "
+            f"reconstructed model (structure mismatch — state would be silently lost): "
+            f"{unexpected[:8]}{'...' if len(unexpected) > 8 else ''}"
+        )
+    _benign_missing = tuple(m for m in missing if not m.endswith("_prune_mask"))
+    if _benign_missing:
+        print(f"  Warning: {len(_benign_missing)} model tensors absent from checkpoint "
+              f"(kept their init): {_benign_missing[:8]}"
+              f"{'...' if len(_benign_missing) > 8 else ''}")
+
     if "scaler" in ckpt:
         scaler.load_state_dict(ckpt["scaler"])
-    step = ckpt.get("step", 0)
-    print(f"  Resumed from step {step}")
-    return step
+
+    # 3. RNG — continue the SAME stochastic stream (Poisson depth draws, dropout).
+    if ckpt.get("rng_cpu") is not None:
+        torch.set_rng_state(ckpt["rng_cpu"].cpu().to(torch.uint8))
+    if ckpt.get("rng_cuda") is not None and torch.cuda.is_available():
+        try:
+            torch.cuda.set_rng_state_all([s.cpu().to(torch.uint8) for s in ckpt["rng_cuda"]])
+        except Exception as e:  # device-count mismatch etc. — surface, don't pretend
+            print(f"  Warning: could not restore CUDA RNG state ({e}); RNG continues fresh")
+
+    step = int(ckpt.get("step", 0))
+    needs_rebuild = bool(is_compact or is_routed)
+    print(f"  Resumed model+scaler+RNG from step {step} "
+          f"(compact={is_compact} routed={is_routed} → optimizer_rebuild={needs_rebuild})")
+    return step, ckpt["optimizer"], needs_rebuild
 
 
 def load_weights_only(path: str, model: nn.Module, device: torch.device) -> None:
@@ -624,11 +705,22 @@ def main(cfg: DictConfig) -> None:
         full_config_dict["attn_proj_quant_manifest"] = {
             k: v for k, v in attn_proj_quant_manifest.items() if k != "module_names"
         }
+    # Resume the SAME wandb run (continuous metric history, no gap) when resuming a ckpt:
+    # the prior run wrote its id to a `wandb_id.txt` sidecar next to its checkpoints.
+    _wandb_resume_id = None
+    if resume_path and os.path.isfile(resume_path):
+        _sidecar = os.path.join(os.path.dirname(resume_path), "wandb_id.txt")
+        if os.path.isfile(_sidecar):
+            _wandb_resume_id = (open(_sidecar).read().strip() or None)
+            if _wandb_resume_id:
+                print(f"  [wandb] resuming run id {_wandb_resume_id}", flush=True)
     wandb.init(
         project=wb_cfg.project,
         entity=getattr(wb_cfg, "entity", None),
         name=getattr(wb_cfg, "name", None),
         config=full_config_dict,
+        id=_wandb_resume_id,
+        resume=("allow" if _wandb_resume_id else None),
         settings=wandb.Settings(_service_wait=60),
     )
 
@@ -645,9 +737,21 @@ def main(cfg: DictConfig) -> None:
     tokenizer_name = data_cfg.tokenizer
     dataset_name = data_cfg.dataset
 
-    def _make_train_loader(bag: int):
-        return iter(create_dataloader(tokenizer_name, dataset_name, seq_len,
-                                      batch_size, split="train", bag_size=bag))
+    def _make_train_loader(bag: int, skip_batches: int = 0):
+        it = iter(create_dataloader(tokenizer_name, dataset_name, seq_len,
+                                    batch_size, split="train", bag_size=bag))
+        # Resume: the stream is DETERMINISTIC and UNSHUFFLED (fixed shard order, no per-epoch
+        # seed), so replaying `skip_batches` next() calls advances to the EXACT batch the
+        # interrupted run would serve next — "like nothing happened" for data too. Cost is
+        # re-tokenizing the skipped prefix (CPU, ~1-2 min for a few-k-step resume); logged.
+        if skip_batches > 0:
+            print(f"  [data] fast-forwarding train stream by {skip_batches} batches "
+                  f"(deterministic replay to exact resume position)…", flush=True)
+            t_ff = time.perf_counter()
+            for _ in range(skip_batches):
+                next(it)
+            print(f"  [data] fast-forward done in {time.perf_counter() - t_ff:.1f}s", flush=True)
+        return it
 
     # val/gen ALWAYS use standard NTP (bag_size=0) so val ppl is comparable to the
     # baseline regardless of which TST phase training is in.
@@ -660,6 +764,14 @@ def main(cfg: DictConfig) -> None:
     ckpt_dir = os.path.join(_MORPH_ROOT, "checkpoints", "morph",
                             wandb.run.name if wandb.run else "run")
     os.makedirs(ckpt_dir, exist_ok=True)
+    # Persist the wandb run id so a future resume from a checkpoint in THIS dir continues
+    # the same run (read back as the wandb_id.txt sidecar above, before wandb.init).
+    if wandb.run is not None:
+        try:
+            with open(os.path.join(ckpt_dir, "wandb_id.txt"), "w") as _f:
+                _f.write(str(wandb.run.id))
+        except OSError as e:
+            print(f"  [wandb] could not write run-id sidecar ({e}); resume will start a new run")
 
     # Generation samples go to a sidecar file, NOT stdout. Generated text is
     # uncontrolled token output that can contain substrings ("RuntimeError:",
@@ -672,11 +784,33 @@ def main(cfg: DictConfig) -> None:
             _f.write(f"\n===== {label} =====\n{gen_text}\n")
         print(f"  [GEN {label}] {len(gen_text)} chars → {gen_samples_path}", flush=True)
 
-    # ── Optional resume ───────────────────────────────────────────────────
+    # ── Optional resume (FULL: model+topology+optimizer+scaler+RNG+step) ────
     start_step = 0
     if resume_path and os.path.isfile(resume_path):
         print(f"Resuming from {resume_path}")
-        start_step = load_checkpoint(resume_path, model, optimizer, scaler, device)
+        start_step, _opt_state, _needs_rebuild = load_checkpoint(
+            resume_path, model, scaler, device, pruning)
+        if _needs_rebuild:
+            # Carve/route changed the param set → the dense optimizer built above is stale.
+            # Free it (bnb keeps optimizer↔state↔param ref-cycles → explicit clear+gc, same
+            # pattern as the in-loop phase-boundary rebuild) and rebuild on the NOW-
+            # reconstructed (carved/routed) topology so its state keys line up before load.
+            optimizer.zero_grad(set_to_none=True)
+            if hasattr(optimizer, "state"):
+                optimizer.state.clear()
+            optimizer = None
+            gc.collect()
+            torch.cuda.empty_cache()
+            optimizer = create_optimizer(model, cfg)
+            for pg in optimizer.param_groups:
+                pg["lr"] = lr_fn(start_step)
+            print("  [opt] rebuilt optimizer on reconstructed (carved/routed) topology",
+                  flush=True)
+        # Restore momentum/variance. HARD-FAIL on mismatch — swallowing it here would
+        # silently continue training with ZERO momentum (the theater this whole task kills).
+        optimizer.load_state_dict(_opt_state)
+        _n_restored = sum(len(g["params"]) for g in optimizer.param_groups)
+        print(f"  [opt] optimizer state restored ({_n_restored} param tensors)", flush=True)
     elif init_from_path:
         # Weights-only seed (step stays 0, fresh optimizer). resume takes precedence if both set.
         if not os.path.isfile(init_from_path):
@@ -686,7 +820,13 @@ def main(cfg: DictConfig) -> None:
 
     # TST: start in superposition unless resuming past the phase-1 boundary.
     cur_bag = tst_bag_size if (tst_phase1_steps > 0 and start_step < tst_phase1_steps) else 0
-    train_loader = _make_train_loader(cur_bag)
+    # Data fast-forward to the exact resume position (deterministic unshuffled stream). Only
+    # for the base (non-curriculum) loader — the curriculum multi-source loader is rebuilt
+    # below with its own stage logic, so skipping here would be wasted re-tokenization.
+    _curr_on = bool(getattr(cfg, "curriculum", None) is not None
+                    and getattr(cfg.curriculum, "enabled", False))
+    _resume_skip = start_step if (start_step > 0 and not _curr_on) else 0
+    train_loader = _make_train_loader(cur_bag, skip_batches=_resume_skip)
 
     # ── Curriculum pretraining (Phase P) — length-bucketed multi-source ramp ──
     # GATED: absent/disabled → base.yaml path is byte-identical (curriculum_enabled False,

@@ -149,6 +149,41 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                 lr, beta2, beta3, alpha, eps, bc2, wd, is_init,
             )
 
+    def _mask_dead_state(self, p) -> None:
+        """Zero the slow-momentum (m₂) and second-moment (ν) state at PRUNED positions.
+
+        WHY (the prune-divergence fix, 2026-06-15): MORPH prunes by masking a tile's
+        weight + grad to 0 every step (CMSBlockLinear.apply_prune_mask), which tags the
+        param with `_dead_mask` (1=keep, 0=pruned). For AdamW that's enough — grad=0 ⇒
+        m,ν both decay ⇒ update→0. For AdEMAMix it is NOT: the α·m₂ term is driven by the
+        SLOW EMA, which retains pre-prune gradient mass and decays at β3 ≫ β2 while ν
+        collapses → (α·m₂)/(√(ν/bc2)+ε) EXPLODES for the dead param (measured: stock
+        diverged @14.2k, faster-β2 @9.4k — bigger β3/β2 gap = earlier blow-up). Zeroing
+        m₂/ν here, BEFORE the update, makes the update exactly 0 at dead positions
+        ((0+α·0)/(√0+ε)+λ·0 = 0), so pruned params stay dead. grad stays masked every
+        step ⇒ the zeroed state stays zero (m₂ ← β3·0 + (1-β3)·0).
+        """
+        keep = getattr(p, "_dead_mask", None)
+        if keep is None:
+            return
+        st = self.state.get(p)
+        if not st or st.get("init"):
+            return  # no state yet (first step) → m₂/ν already treated as 0
+        dead = (keep.reshape(-1).to(p.device) == 0)
+        if not bool(dead.any()):
+            return
+        if "m2_code" in st:            # fused linear-int8: code 0 → value 0 (exact)
+            st["m2_code"].view(-1)[dead] = 0
+            st["nu_code"].view(-1)[dead] = 0
+        elif "m2_q" in st:             # de-fused dynamic-map: code 0 ≠ 0, so dequant→0→requant
+            m2 = self._deq(st["m2_q"], st["m2_amax"], True, p); m2.view(-1)[dead] = 0
+            nu = self._deq(st["nu_q"], st["nu_amax"], False, p); nu.view(-1)[dead] = 0
+            st["m2_q"], st["m2_amax"] = self._q(m2, True, p)
+            st["nu_q"], st["nu_amax"] = self._q(nu, False, p)
+        if "m2" in st:                 # fp32 fallback
+            st["m2"].view(-1)[dead] = 0
+            st["nu"].view(-1)[dead] = 0
+
     @torch.no_grad()
     def step(self, closure=None):
         loss = None
@@ -167,6 +202,12 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             params = [p for p in group["params"] if p.grad is not None]
             if not params:
                 continue
+
+            # ── Prune compatibility: zero slow state at pruned positions BEFORE update ──
+            # (see _mask_dead_state). Without this AdEMAMix's α·m₂ term drives grad-masked
+            # pruned params to divergence as ν collapses underneath the charged m₂.
+            for p in params:
+                self._mask_dead_state(p)
 
             # ── Split: fused-kernel path (8bit + large enough) vs fp32 fallback ──
             # The fused Triton kernel handles its OWN dequant→update→requant in int8.
