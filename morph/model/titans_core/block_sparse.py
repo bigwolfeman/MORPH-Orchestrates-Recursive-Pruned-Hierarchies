@@ -245,11 +245,12 @@ class CMSBlockLinear(nn.Module):
         #   "taylor"    → ‖W_block ⊙ ∇W_block‖_F   (Molchanov first-order saliency, est. Δloss)
         #   "magnitude" → ‖W_block‖_F   (lottery-ticket criterion)
         self.score_mode: str = "grad"
-        # Structured masked-dense pruning state (pre-carve). prune_mask is [R, C] bool
-        # (True = alive); None until the first prune_step_blocks. _prune_elem_mask is the
-        # cached [out, in] elementwise mask used to re-zero dead tiles in the live weight
-        # every step.
-        self._prune_mask: Optional[Tensor] = None
+        # Structured masked-dense pruning state (pre-carve). _prune_mask is [R, C] bool
+        # (True = alive) — registered as a BUFFER below (after R/C are known) so the pruned
+        # topology rides state_dict and a resume reconstructs it EXACTLY. _prune_elem_mask is
+        # the cached [out, in] elementwise mask used to re-zero dead tiles in the live weight
+        # every step; it is NOT persisted (recomputed from _prune_mask on demand — it's the
+        # big [out,in] tensor and _rebuild_prune_elem_mask regenerates it deterministically).
         self._prune_elem_mask: Optional[Tensor] = None
 
         # Derived dimensions
@@ -294,6 +295,18 @@ class CMSBlockLinear(nn.Module):
         self.register_buffer(
             "block_score_ema",
             torch.zeros(self.R, self.K, device=device, dtype=dtype or torch.float32),
+        )
+
+        # Pre-carve dead-tile topology [R, C] bool (True = alive). A BUFFER (not a plain
+        # attr) so it rides state_dict → a full resume reconstructs the EXACT pruned topology
+        # ("like nothing happened"). Init all-alive; a fresh model loading a never-pruned
+        # (dense) checkpoint keeps this default (strict=False leaves the absent key alone).
+        # prune_step_blocks reassigns `self._prune_mask = <Tensor>` — nn.Module.__setattr__
+        # updates the registered buffer in place when handed a Tensor, so it stays persisted.
+        self.register_buffer(
+            "_prune_mask",
+            torch.ones(self.R, self.C, dtype=torch.bool,
+                       device=device if device is not None else self.block_score_ema.device),
         )
 
         # Initialize weights
@@ -497,8 +510,16 @@ class CMSBlockLinear(nn.Module):
         return self.weight
 
     def apply_prune_mask(self) -> None:
-        """Re-zero dead tiles (and their grads) in the live weight. Call EVERY step so
-        neither the optimizer momentum nor the ternary STE can revive a pruned tile."""
+        """Re-zero dead tiles (and their grads) in the live weight. Call EVERY step.
+
+        Masking weight+grad keeps a pruned tile dead under AdamW (grad=0 ⇒ m,ν decay ⇒
+        update→0) and under the ternary STE. It is NOT sufficient under a slow-momentum
+        optimizer like AdEMAMix: its α·m₂ term keeps driving the param from the charged
+        slow EMA even with grad=0, and as ν collapses the update explodes → divergence
+        (measured 2026-06-15). So we also tag the live weight with `_dead_mask` (1=keep,
+        0=pruned); a prune-aware optimizer (AdEMAMixB1Zero._mask_dead_state) reads it and
+        zeros its m₂/ν state at dead positions. Optimizers that ignore the tag (AdamW,
+        bnb) are unaffected — the attribute is inert for them."""
         if not self._dense_mode:
             return
         if self._prune_elem_mask is None:
@@ -511,6 +532,9 @@ class CMSBlockLinear(nn.Module):
             tgt.data.mul_(self._prune_elem_mask.to(tgt.dtype))
             if tgt.grad is not None:
                 tgt.grad.mul_(self._prune_elem_mask.to(tgt.grad.dtype))
+        # Tag for prune-aware optimizers (read by AdEMAMixB1Zero._mask_dead_state).
+        # Same tensor object the optimizer holds as its param → state keys line up.
+        tgt._dead_mask = self._prune_elem_mask
 
     def prune_step_blocks(
         self, prune_rate: float, target_density: float, blocking: int = 128
