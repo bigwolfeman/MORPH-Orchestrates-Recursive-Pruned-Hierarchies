@@ -88,7 +88,15 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         cfg.training.lr          — base learning rate
         cfg.training.weight_decay (optional, default 0.1)
         cfg.training.ternary      (optional bool — activates TernaryShadowOptimizer)
-        cfg.training.adam8bit     (optional bool — uses bitsandbytes AdamW8bit)
+        cfg.training.adam8bit     (optional bool — uses bitsandbytes 8-bit state)
+        cfg.training.optimizer    (optional str — "adamw" (default) | "ademamix" |
+                                   "ademamix_b1zero" (β1=0 fork: 2 buffers, AdamW8bit
+                                   memory parity instead of bnb's +50%))
+        cfg.training.beta3        (AdEMAMix slow-EMA decay, default 0.9999)
+        cfg.training.ademamix_alpha (AdEMAMix fast/slow mix weight, default 8.0)
+        cfg.training.ademamix_t_alpha / ademamix_t_beta3
+                                  (AdEMAMix α/β3 warmup horizons; default = total steps —
+                                   essential for stability, NOT the same as LR warmup)
 
     Returns a plain AdamW, TernaryShadowOptimizer-wrapped AdamW, or
     an 8-bit AdamW (bnb) depending on config flags.
@@ -108,7 +116,65 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
     groups = _param_groups(model, wd)
 
     use_8bit = bool(getattr(tr, "adam8bit", False))
-    if use_8bit:
+    opt_name = str(getattr(tr, "optimizer", "adamw")).lower()
+
+    if opt_name == "ademamix":
+        # AdEMAMix (arXiv:2409.03137): AdamW + a 2nd very-slow momentum EMA (decay β3)
+        # mixed in with weight α. update = (m1 + α·m2)/(√ν + ε) + λ·p.
+        #
+        # STABILITY (load-bearing — see paper §3 + App. A.1): a large β3 (0.9999) active
+        # from step 0 produces huge early updates and DIVERGES even with LR warmup. The fix
+        # is the optimizer's OWN α/β3 warmup schedulers (t_alpha, t_beta3) — distinct from
+        # LR warmup, so fully compatible with our flat-LR recipe. bnb's AdEMAMix only applies
+        # these schedulers when t_alpha/t_beta3 are non-None; otherwise it pins β3 at full
+        # strength from step 0 (the divergent path). So we DEFAULT them to total steps.
+        try:
+            import bitsandbytes as bnb
+        except ImportError as e:
+            raise ImportError(
+                "cfg.training.optimizer=ademamix requires bitsandbytes. "
+                "Install with: uv pip install bitsandbytes"
+            ) from e
+        beta3 = float(getattr(tr, "beta3", 0.9999))
+        alpha = float(getattr(tr, "ademamix_alpha", 8.0))
+        _ta = getattr(tr, "ademamix_t_alpha", None)
+        _tb = getattr(tr, "ademamix_t_beta3", None)
+        t_alpha = int(_ta) if _ta is not None else int(tr.steps)
+        t_beta3 = int(_tb) if _tb is not None else int(tr.steps)
+        ademamix_betas = (betas[0], betas[1], beta3)
+        if use_8bit:
+            base_opt = bnb.optim.AdEMAMix8bit(
+                groups, lr=lr, betas=ademamix_betas, alpha=alpha,
+                t_alpha=t_alpha, t_beta3=t_beta3, eps=1e-8, weight_decay=wd)
+            # bnb 8-bit is unstable on sparse/large-range embedding state → 32-bit override.
+            _register_embedding_32bit_overrides(model, base_opt)
+        else:
+            base_opt = bnb.optim.AdEMAMix(
+                groups, lr=lr, betas=ademamix_betas, alpha=alpha,
+                t_alpha=t_alpha, t_beta3=t_beta3, eps=1e-8, weight_decay=wd,
+                optim_bits=32)
+    elif opt_name == "ademamix_b1zero":
+        # FORK: β1=0 AdEMAMix with blockwise-8bit state — only 2 buffers (m2, ν), so it
+        # matches AdamW8bit's memory (~2 B/param) instead of bnb's 3-buffer +50% (the bnb
+        # β1=0 "trick" is a no-op — measured). Uses bnb's own blockwise dynamic quant.
+        from morph.training.ademamix_b1zero import AdEMAMixB1Zero
+        beta3 = float(getattr(tr, "beta3", 0.9999))
+        alpha = float(getattr(tr, "ademamix_alpha", 8.0))
+        _ta = getattr(tr, "ademamix_t_alpha", None)
+        _tb = getattr(tr, "ademamix_t_beta3", None)
+        t_alpha = int(_ta) if _ta is not None else int(tr.steps)
+        t_beta3 = int(_tb) if _tb is not None else int(tr.steps)
+        b3_start = float(getattr(tr, "ademamix_beta3_warmup_start", 0.9))
+        bits = 8 if use_8bit else 32
+        # Keep the no-decay group (which holds nn.Embedding tables) in 32-bit state —
+        # bnb's 8-bit is unstable on sparse/large-range embedding grads. The no-decay group
+        # otherwise holds only sub-4096 tensors (already fp32), so this mirrors AdamW8bit.
+        groups[1]["optim_bits"] = 32
+        base_opt = AdEMAMixB1Zero(
+            groups, lr=lr, betas=(0.0, betas[1], beta3), alpha=alpha,
+            t_alpha=t_alpha, t_beta3=t_beta3, beta3_warmup_start=b3_start,
+            eps=1e-8, weight_decay=wd, bits=bits)
+    elif use_8bit:
         try:
             import bitsandbytes as bnb
         except ImportError as e:

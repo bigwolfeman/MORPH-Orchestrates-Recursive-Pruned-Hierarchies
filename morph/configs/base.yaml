@@ -140,9 +140,23 @@ training:
   tst_ratio: 0.3                 # fraction of steps in the superposition phase
 
   # Optimizer extras
+  optimizer: adamw               # adamw (default deploy) | ademamix (arXiv:2409.03137) |
+                                 # ademamix_b1zero (β1=0 fork: 2 buffers → AdamW8bit memory
+                                 # parity, vs bnb's +50%; measured ~+1% step time)
   weight_decay: 0.1
   beta1: 0.9
-  beta2: 0.95
+  beta2: 0.95                     # NOTE: AdEMAMix paper recommends beta2=0.999 — set per-arm.
+  # ── AdEMAMix (only used when optimizer=ademamix) ──
+  # AdamW + a 2nd very-slow momentum EMA (decay beta3) mixed in with weight alpha.
+  # STABILITY: t_alpha/t_beta3 are the optimizer's OWN alpha/beta3 warmup horizons (NOT LR
+  # warmup) — a large beta3 active from step 0 diverges even with LR warmup. null → default to
+  # training.steps (essential; bnb pins beta3 at full strength from step 0 if these are None).
+  beta3: 0.9999                  # slow-EMA decay (drop to 0.999 for short <100k runs)
+  ademamix_alpha: 8.0            # fast/slow mix weight (paper LM default 8; 5 = conservative)
+  ademamix_t_alpha: null         # null → training.steps
+  ademamix_t_beta3: null         # null → training.steps
+  ademamix_beta3_warmup_start: 0.9  # (b1zero only) β3-warmup START decay; β1=0 makes the
+                                 # paper's log(β1) schedule degenerate, so we ramp from here.
 
   # ── Deploy quant stack (ALL ON by default — validated winners) ──
   # Ternary QAT: forward-STE on weights → {-1,0,+1}×scale. Training ppl IS deployed-ternary ppl.

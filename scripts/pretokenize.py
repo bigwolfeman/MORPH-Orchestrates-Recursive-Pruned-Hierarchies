@@ -73,6 +73,8 @@ SOURCES = [
     # Web bulk. Dolma 3: ungated. First ~170 shards are alphabetically common_crawl-adult_content-*;
     # EXCLUDE those (no wasted download) + shuffle shard order for a category-balanced subset.
     ("dolma", "hf_stream", {"repo": "allenai/dolma3_mix-5.5T-1125", "exclude": "adult_content",
+                            "jsonl_zst": True,  # robust manual stream — datasets cast-fails on the
+                                                # mix's heterogeneous per-subset metadata schemas
                             "shuffle_files": True, "seed": 0, "max_tokens": REMOTE_MAX_TOKENS}, "text"),
     # SYNTHETIC / REASONING — replaces the lost (gated) Nemotron-CC-v2 role. Mix chosen by reading
     # samples (Ai-notes .../PRETOK_RUNBOOK.md). All ungated; blend weights live in the curriculum cfg.
@@ -207,6 +209,39 @@ def _iter_texts(kind: str, spec, field: str, limit: int | None,
                 with open(local, "rb") as fh:
                     for obj in ijson.items(fh, "item"):
                         t = _extract(obj, field)
+                        if t and t.strip():
+                            yield t
+                            n_yield += 1
+                            if limit and n_yield >= limit:
+                                return
+            return
+        if spec.get("jsonl_zst"):
+            # Heterogeneous .jsonl.zst shards (e.g. Dolma3 mix): different subsets carry different
+            # metadata columns (warcinfo / sa_remove_ranges / ...), so datasets' streaming schema
+            # unification throws CastError when it hits a shard whose columns don't match the first.
+            # Bypass it entirely: stream each shard over HTTP, zstd-decompress, json.loads per line,
+            # take ONLY `text` — immune to per-shard column drift. No full-file persistence (constant
+            # disk). exclude/shuffle_files honored; the caller's max_tokens budget stops the stream.
+            import io, zstandard
+            from huggingface_hub import HfApi, HfFileSystem
+            allf = [f for f in HfApi().list_repo_files(repo, repo_type="dataset")
+                    if f.endswith(".jsonl.zst")]
+            if spec.get("exclude"):
+                allf = [f for f in allf if spec["exclude"] not in f]
+            if not allf:
+                raise RuntimeError(f"{repo}: no .jsonl.zst data files (after exclude={spec.get('exclude')!r})")
+            if spec.get("shuffle_files"):
+                random.Random(seed).shuffle(allf)     # mix CC subsets (one subset per dir/file group)
+            fs = HfFileSystem()
+            dctx = zstandard.ZstdDecompressor()
+            for rel in allf:
+                with fs.open(f"datasets/{repo}/{rel}", "rb") as raw, \
+                        dctx.stream_reader(raw) as reader:
+                    for line in io.TextIOWrapper(reader, encoding="utf-8"):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        t = _extract(json.loads(line), field)
                         if t and t.strip():
                             yield t
                             n_yield += 1

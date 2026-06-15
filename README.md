@@ -2,257 +2,210 @@
 
 **MORPH Orchestrates Recursive Pruned Hierarchies**
 
-A looped transformer that maximizes per-parameter capability with depth, then prunes what's left. MORPH reuses a small set of layers many times (Parcae looping), stabilizes that reuse with multi-channel residual dynamics, and prunes the looped layers to extreme sparsity using learned topology — all in a single training run.
+MORPH is a looped, pruned transformer research model. It gets depth by reusing a small Parcae-style core, stabilizes that repeated execution with Cayley Hyper-Connections, and turns the MLP backbone into a carved MORTAR sparse runtime after training-time topology pruning.
 
-The result: a model that matches dense transformers with far fewer parameters and FLOPs.
-
-> **Note:** Earlier versions of MORPH (TitanMAC lineage) augmented the backbone with a
-> gradient-based neural memory, MAC tokens, and a LeJEPA split_nsm z-latent objective. All
-> three were **removed**. The STP (Semantic Tube Predictor) regularizer is retained. The
-> recurrent-memory role is now explored by the **GLA retention branch** (ablation #230) — a
-> gated linear-attention SSM in parallel to attention on layer 1 of each section. The residual
-> mechanism is **Cayley Hyper-Connections** (`residual_mode=hc_cayley`, n=4 streams) by default;
-> the older Multi-Rate Residual is a selectable alternative (`residual_mode=null`). The diagrams
-> below were regenerated to reflect this (see `docs/figures/*.tex`).
-
----
+Current MORPH is no longer the older TitanMAC line. Gradient neural memory, MAC tokens, LeJEPA z-latents, and the legacy 16x16 Block-ELL backend were removed. The active stack is Cayley HC, CCA+CSA/HCA attention, optional GLA retention, hybrid embeddings, STP regularization, CMS-to-MORTAR pruning, hidden-neuron ReMoE routing, and deploy QAT.
 
 ## Architecture Overview
 
 <p align="center">
-  <img src="docs/figures/morph_overview.png" width="700" alt="MORPH Architecture Overview"/>
+  <img src="docs/figures/morph_overview-1.png" width="700" alt="MORPH architecture overview"/>
 </p>
 
-Data flows top-to-bottom through four stages:
+The canonical local config is `3 + 6xT + 3` at `d_model=768`, `d_ff=2048`, and sequence length 4096. The cloud target is `4 + 8xT + 4` at `d_model=2048`; `scale30b.yaml` is a systems/inference format test at `4 + 35xT + 4`, `d_model=8192`.
 
-1. **Hybrid Embedding** — Input tokens are embedded via a combination of Euclidean, Lorentz, and bigram embeddings. The Lorentz component provides hyperbolic geometry for hierarchical token relationships.
+Data flows through:
 
-2. **Prelude** (N layers) — Standard transformer blocks that establish initial representations.
+1. **Hybrid embeddings**: Euclidean + Lorentz token channels with a learned hash-bigram signal injected through the body.
+2. **Prelude**: non-looped blocks that establish the initial representation.
+3. **Core loop**: six shared blocks executed with Poisson depth sampling (`mean_depth=6`, `max_depth=8`) and truncated BPTT over the last four grad iterations.
+4. **Coda**: non-looped refinement before the final norm, LM head mixer, tied output head, and STP loss.
 
-3. **Core Loop** (2N layers, iterated T times) — The heart of the architecture. The same set of layers is reused T times with diagonal injection at the loop boundary (Parcae-style, spectral radius < 1 guaranteed). Depth T is sampled from a Poisson distribution during training and truncated BPTT limits the backward pass to the last 4 iterations. The core MLP layers use the MORTAR 128×128 BCSR sparse format for extreme pruning.
+The loop boundary uses `DiagonalInjection` on the context channel slice only, with spectral radius constrained below 1. That gives the repeated core a stable iteration-axis drive without reintroducing the removed neural-memory stack.
 
-4. **Coda** (N layers) — Post-loop layers that refine the representation. After the coda, the output goes through the LM head.
-
-The **STP loss** enforces smooth (locally geodesic) token-state trajectories during pretraining — a geometric regularizer that improves generation quality without affecting teacher-forced perplexity.
-
----
-
-## The MORPH Block
+## MORPH Block
 
 <p align="center">
-  <img src="docs/figures/morph_block.png" width="600" alt="MORPH Block"/>
+  <img src="docs/figures/morph_block.png" width="620" alt="MORPH block"/>
 </p>
 
-The residual stream is carried as **Cayley Hyper-Connections (HC)** — `n=4` parallel d<sub>model</sub>-dim streams `[B,S,4,C]` (deployment default, `residual_mode=hc_cayley`). Around each sublayer the streams are read, transformed, and written back:
+Each block has attention and MLP sublayers wrapped by the same residual carrier:
 
-1. **H<sub>pre</sub>** (row-stochastic) aggregates the streams into a single d<sub>model</sub>-dim input `x̄ = mean_n(H_pre · x_streams)` that the sublayer sees;
-2. the sublayer **F** (attention or MLP) computes `y = F(RMSNorm(x̄))`;
-3. **H<sub>res</sub>** (an orthogonal map, `Cayley(skew) ∈ O(n)`) mixes the streams and **H<sub>post</sub>** scatters `y` back: `x_out = H_res · x_streams + H_post · (y ⊗ 1_n)`.
+- **Residual carrier**: `residual_mode=hc_cayley` is the deploy default. Hidden state is expanded to four parallel streams `[B,S,4,C]`; a row-stochastic read map feeds each sublayer, then an orthogonal Cayley mixer preserves carrier norm as the loop repeats.
+- **Attention**: `MORPHAttention` bakes in CCA channel compression, a local window, alternating CSA/HCA global context, GQA, CoPE clipped RoPE, residual attention, QK norm, and causal convolution.
+- **GLA retention**: when enabled, layer index 1 in each section adds a gated linear-attention branch in parallel with attention. In the core, `retention_carry=true` carries the GLA state across loop iterations.
+- **MLP**: every prelude, core, and coda MLP uses `_SwiGLUMortar`, backed by `MortarLinear`. There is no production dense-MLP fallback.
 
-At init the maps reduce to `x + F(mean(x))` — a plain residual — so HC starts bit-identical to a vanilla block and learns its mixing from there.
+MRR is now a legacy ablation path rather than the default residual mechanism. The channel slices `[384, 256, 128]` still matter under HC for injection targets and final mixing, but they are not the deployed residual dynamics.
 
-**Why this matters for looping**: when the same layers execute T times, a standard residual would amplify signals by T&times;. HC's orthogonal H<sub>res</sub> (Cayley ∈ O(n)) preserves the residual-stream norm across iterations (exact dynamical isometry), so the carrier neither explodes nor collapses over T=6–8 loops. This is what makes deep looping stable.
-
-**Layer 1 of each section** also adds a **GLA retention branch** in parallel to attention — a gated linear-attention SSM whose hidden state `S_t = diag(α_t)·S_{t-1} + kₜᵀvₜ` summarizes the sequence, combined as `y = attn(x̄) + σ(g)·GLA(x̄, S)`. In the core loop, `S` is carried across iterations (memory across thinking-depth). The gate `σ(g) ≈ 0` at init, so it is off until the model learns to open it (ablation #230).
-
-**Alternative residual (MRR).** Setting `residual_mode=null` selects the **Multi-Rate Residual** — a single-stream `[B,S,C]` carrier split into compute (3N, &gamma;≈1.0) / context (2N, &gamma;≈0.5) / memory (N, &gamma;≈0.1) channels with per-channel learned gains. The slow channel damps loop amplification the way HC's orthogonal mixer does. MRR is a selectable ablation arm, not the deployment default. Note the **channel slices persist under HC** — not as the residual mechanism, but as the targets for injection (x₀/value-embeds → context slice; bigram full-width) and the core's spectral-radius-&lt;1 diagonal decay.
-
-### Block internals
-
-Each block has two sublayers with identical HC structure:
-
-1. **H<sub>pre</sub>** &rarr; **RMSNorm** &rarr; **Attention** (CCA + CSA/HCA) [+ GLA on layer 1] &rarr; **H<sub>res</sub> mix + H<sub>post</sub> scatter**
-2. **H<sub>pre</sub>** &rarr; **RMSNorm** &rarr; **SwiGLU MLP** (MortarLinear, prunable/carvable) &rarr; **H<sub>res</sub> mix + H<sub>post</sub> scatter**
-
-The attention mechanism combines:
-- **CCA** (Cross-Chunk Attention): The primary attention path with channel compression and CoPE-RoPE positional encoding
-- **CSA** (Chunked Sparse Attention): Used on even-numbered layers, sparse windowed attention with compression
-- **HCA** (Hyper-Connection Aware attention): Used on odd-numbered layers, dense attention that respects the channel-slice structure
-- A **sigmoid gate** blends the CSA/HCA outputs
-
----
-
-## Retention (GLA) Memory
+## Attention And Context
 
 <p align="center">
-  <img src="docs/figures/morph_memory.png" width="760" alt="Retention — Gated Linear Attention Memory"/>
+  <img src="docs/figures/morph_attention-1.png" width="780" alt="MORPH attention"/>
 </p>
 
-After TitanMAC's explicit neural memory was removed, the recurrent-memory role is explored by a **GLA retention branch** (ablation #230) on layer 1 of each section. It has **two recurrence axes**: Axis 1 (over the *sequence*) is the standard SSM hidden state `S_t = diag(α_t)·S_{t-1} + kₜᵀvₜ` — a linear-attention scan; Axis 2 (over the *loop*) optionally carries `S_T` of one iteration into the next (`retention_carry`), giving memory across thinking-depth. The branch runs *in parallel* to attention (gated sum), never recurrent *over* it.
+MORPH uses a triple-axis attention design:
 
----
+- **CCA** compresses the channel dimension before attention and applies the shared prologue features.
+- **Local window attention** keeps a dense neighborhood (`window_size=128` locally) with XSA-style self-token exclusion.
+- **CSA** runs on even layers, pooling by `csa_compress_ratio=4` and selecting `top_k=128` sparse global blocks.
+- **HCA** runs on odd layers, pooling aggressively (`hca_compress_ratio=128`) and attending densely over the compressed stream.
 
-## How the Pieces Synergize
+<p align="center">
+  <img src="docs/figures/morph_context_coverage-1.png" width="760" alt="MORPH context coverage"/>
+</p>
 
-None of MORPH's components work in isolation. The architecture is designed so each piece reinforces the others:
+This alternation gives both fine sparse retrieval and broad dense compressed coverage while keeping the full attention path compatible with fused Triton kernels when `model.use_kernels=true`.
 
-### Looping &times; Hyper-Connections = Stable depth without parameter growth
+## Embeddings And Prediction
 
-The core loop reuses 2N layers T times, giving effective depth of 2N&middot;T with only 2N layers of parameters. But naive looping is unstable — residual magnitudes grow with each iteration.
+<p align="center">
+  <img src="docs/figures/morph_embeddings-1.png" width="720" alt="MORPH embeddings"/>
+</p>
 
-HC solves this: the orthogonal stream mixer (H<sub>res</sub> = Cayley(skew) ∈ O(n)) preserves the residual-stream norm across iterations (dynamical isometry), so the carrier neither explodes nor collapses over T loops. The diagonal injection at loop boundaries (spectral radius < 1) adds a further stability guarantee. Together these allow T=6-8 loop iterations without divergence. *(The MRR alternative achieves the same via its slow channel, &gamma;&approx;0.1, instead of an orthogonal mixer.)*
+`MORPHEmbedding` combines Euclidean token embeddings with a Lorentz channel (`lorentz_fraction=0.25`) and a hash-bigram table (`bigram_hash_vocab=49152`). Bigram injections have learned per-layer scales initialized at zero, so the model starts from the unigram embedding path and learns when to use the extra signal.
 
-### Looping &times; MORTAR = Multiplicative FLOP savings
+The final representation is mean-reduced from HC streams, passed through the LM head mixer, and evaluated with tied output weights. `STPLoss` adds zero-parameter, multi-scale geodesic smoothness over hidden-state trajectories during pretraining:
 
-Because the same weights are reused T times per forward pass, pruning the core block to 25% density doesn't just save 75% of MLP FLOPs — it saves 75% &times; T. For T=6, that's 4.5&times; the absolute FLOP reduction compared to pruning a non-looped layer.
+```text
+loss = cross_entropy + stp_lambda * stp_loss
+```
 
-The pruning uses CMS (Continuum Memory System) topology scoring: gradient-based importance scores accumulated over training, with periodic topology decisions that prune low-scoring blocks and optionally regrow high-potential ones.
+The default `stp_lambda` is `0.02` and `stp_tau` is `64`.
 
-### MORTAR &times; Triton = Actual speedup, not just parameter reduction
+## Retention Memory
 
-Structured sparsity on paper doesn't help if the runtime can't exploit it. MORPH executes carved MLPs with the vendored stk Triton BCSR kernels (morph/sparse/stk) operating directly on 128×128 blocks — measured 3.09× faster than dense at 0.25 density. After carving, the MLP layers execute only the surviving blocks — no wasted computation on zero blocks, no gather/scatter overhead.
+<p align="center">
+  <img src="docs/figures/morph_memory.png" width="760" alt="GLA retention memory"/>
+</p>
 
----
+The GLA branch is MORPH's current recurrent-memory experiment. It has one recurrence over sequence positions and, in the looped core, an optional second recurrence over loop iterations. The branch is a gated sum beside attention, not a replacement for attention and not the removed Titans neural memory.
+
+## Sparsity, MORTAR, And Routing
+
+<p align="center">
+  <img src="docs/figures/morph_cms_lifecycle.png" width="780" alt="MORTAR pruning lifecycle"/>
+</p>
+
+The sparse backend is MORTAR only:
+
+1. **Dense masked training**: `MortarLinear` behaves like a dense linear layer while `CMSBlockLinear` accumulates saliency.
+2. **CMS pruning**: `PruningSchedule` calls `prune_step_blocks` toward `target_density=0.25`.
+3. **Carve**: `carve()` packs surviving 128x128 execution blocks into BCSR data for the vendored `morph/sparse/stk` Triton backend.
+4. **ReMoE routing**: `_SwiGLUMortar` enables `TileRouter`, which gates post-SiLU hidden neurons over contiguous `d_ff` clusters.
+
+The current `base.yaml` schedule is:
+
+| Event | Default |
+| --- | --- |
+| Start pruning | `training.prune_start=3000` |
+| Prune interval | `training.prune_interval=167` |
+| Target density | `training.target_density=0.25` |
+| Carve to MORTAR | `training.compact_step=29000` |
+| Enable routing | `routing.route_start=30000` |
+| Routing scope | `routing.route_scope=all` |
+
+Routing is integrated, not pending. It is a quality and load-balancing mechanism: it applies soft ReLU gates to the hidden-neuron bank, while the carved MORTAR GEMM still supplies the sparse execution path. `routing.aux_detach_input=true` keeps the load-balance auxiliary gradient out of the looped carrier.
 
 ## Deployable Stack
 
 <p align="center">
-  <img src="docs/figures/morph_deploy_stack.png" width="820" alt="MORPH Deployable Stack"/>
+  <img src="docs/figures/morph_deploy_stack.png" width="820" alt="MORPH deployable stack"/>
 </p>
 
-The deployable build overlays the *validated* quantization + precision components on the architecture above (see [`docs/deployable_quant_stack.md`](docs/deployable_quant_stack.md) for the evidence per component):
+`morph/configs/base.yaml` now represents the validated deploy-oriented default rather than a dense bf16 isolation run:
 
-- **int6 embeddings** (per-row QAT) · **ternary backbone MLP** ({-1,0,1}, forward-STE QAT) · **bf16 attention** (windowed → bandwidth-bound, low-bit loses) · **bf16** norms / Lorentz / HC / GLA · **int4 KV cache** (inference PTQ) · **8-bit AdamW** (optimizer state).
-- Every knob defaults **off** → bit-identical to the bf16 baseline. The diagram's three axes are orthogonal: *precision* (per param group), *architecture carriers* (HC, GLA — always bf16, cross-cutting), and *lifecycle overlays* (8-bit optimizer = train-only, int4 KV = inference-only).
+- **Ternary QAT** is on for the backbone (`training.ternary=true`, `ternary_scope=backbone`).
+- **Embedding QAT** uses per-row int6 for Euclidean and bigram embedding rows (`training.embed_quant="int6"`); Lorentz remains bf16.
+- **Attention projection quantization** is off by default (`training.attn_proj_quant="off"`), with int8 left as an opt-in validation arm.
+- **8-bit AdamW** is on when the training extra dependencies are installed (`training.adam8bit=true`).
+- **KV cache quantization** is inference-only PTQ, implemented separately from the training forward path.
 
-> **Scope:** this is the deployment *target*. The current retention ablation (#230) trains **dense bf16** (ternary / int6 / fp8 / int4-KV all off) so the GLA signal is isolated from quant noise — the overlays are folded in only for the deployable build.
+For dense curriculum work, use `pretrain_curriculum.yaml`, which deliberately disables pruning, routing, TST, ternary QAT, int6 embeddings, and 8-bit AdamW to isolate the context-length curriculum.
 
----
+## Token Superposition Training
 
-## Training Pipeline
+The default training recipe includes Token Superposition Training (TST):
 
-MORPH trains in a multi-phase pipeline within a single run:
+| Setting | Default |
+| --- | --- |
+| Superposed tokens per position | `training.tst_bag_size=6` |
+| Superposition fraction | `training.tst_ratio=0.3` |
+| Recovery fraction | `0.7` |
 
-```
-  Dense         Prune              Compact   Settle    Route
-  warmup        to 25% density     ┃         ┃         (ReMoE)
-  ┃             ┃                  ┃         ┃         ┃
-  0 ──── 6k ──── 6k ──────── 66k ── 66k ── ~70k ── 70k ── end
-```
+Evaluation and generation use normal next-token prediction (`bag_size=0`). In the 100k-step base run, pruning and carving happen inside the first 30k-step superposition window; routing begins at the superposition-to-recovery boundary.
 
-### Phase 1: Dense Warmup (~6k steps)
-All blocks active. The model learns basic language representations with full-density MLPs. CMS gradient scores are accumulated every step to build importance estimates.
+## Configs
 
-### Phase 2: Prune (~60k steps)
-Starting at step ~6k, topology decisions happen every `prune_interval` steps: low-scoring blocks are removed, reducing density toward the 25% target. The model continues training through each pruning step, adapting its weights to compensate for removed capacity. This is gradual — removing 5% of remaining blocks per round over many rounds.
-
-### Phase 3: Compact
-At the target density, carve() converts the sparse mask into MORTAR BCSR storage (mortar_data + index buffers). Memory footprint drops immediately. From this point, forward/backward passes use the stk BCSR Triton kernels.
-
-### Phase 4: Settle
-Post-compact recovery training. The model adjusts to the now-permanent sparse structure. Learning rate may be reduced. This phase typically runs for a few thousand steps.
-
-### Phase 5: Route (ReMoE) *[pending integration]*
-After the model has settled into its pruned structure, per-token routing is activated over the surviving tile-groups. Different tokens activate different subsets of the remaining 25% of blocks, effectively giving each token a specialized sparse MLP.
-
-The routing module (`morph/model/routing.py`) implements `TileRouter` with PEER-style product keys; `_SwiGLUMortar` hosts it as a hidden-neuron (d_ff cluster) gate, fully backend-agnostic over the carved BCSR GEMM. Routing engages at `routing.route_start` via `PruningSchedule`.
-
----
-
-## Project Structure
-
-```
-morph/
-  model/
-    transformer.py      # MORPHTransformer — the full model
-    attention.py         # CCA + CSA + HCA attention implementations
-    mhc.py               # Multi-Rate Residual (MRR) channel dynamics
-    embeddings.py        # Hybrid Euclidean + Lorentz + bigram embeddings
-    prediction.py        # STP (Semantic Tube Predictor) — zero-param regularizer
-    sparsity.py          # MortarLinear — dense pre-carve, MORTAR BCSR post-carve
-    routing.py           # TileRouter (hidden-neuron ReMoE routing)
-    titans_core/         # Vendored CMS block-sparse and topology scoring
-  kernels/
-    triton/
-      fused_window_attention.py    # Fused windowed attention
-      fused_gate_combine.py        # Fused gate+combine for CSA/HCA blend
-      fused_ops.py                 # Fused auxiliary operations
-  training/
-    train.py             # Training loop with Hydra config
-    data.py              # OpenWebText data loading
-    optimizer.py         # AdamW + STE ternary shadow weights
-    pruning.py           # CMS 3-phase pruning schedule
-  jax/                   # JAX/Flax mirror (TPU)
-  interop/
-    checkpoint.py        # PT ↔ JAX checkpoint converter
-  configs/
-    base.yaml            # Default config (d=768, 3:6:3 architecture)
-    cloud.yaml           # Cloud/multi-GPU config
-docs/
-  figures/               # TikZ source + rendered PNGs for all diagrams
-  references.md          # Paper citations
-```
-
----
+| Config | Purpose |
+| --- | --- |
+| `base.yaml` | Canonical local default: HC Cayley, GLA, MORTAR schedule, ReMoE, TST, ternary backbone, int6 embeddings, 8-bit AdamW. |
+| `cloud.yaml` | Larger `4 + 8xT + 4`, `d_model=2048`, sequence length 8192 target. |
+| `pretrain_curriculum.yaml` | Dense bf16 curriculum phase with sparse/quant/routing/TST disabled. |
+| `pretrain_curriculum_smoke.yaml` | Twelve-step transition smoke for the curriculum loader and stage changes. |
+| `scale30b.yaml` | 30B-format systems/inference test config. |
 
 ## Quick Start
 
 ```bash
-# Install
+# Install the package
+pip install -e .
+
+# Add training extras, currently bitsandbytes for 8-bit AdamW
 pip install -e ".[train]"
 
-# Train (local, single GPU)
+# Train with the canonical local config
 python -m morph.training.train
 
-# Train with overrides
-python -m morph.training.train \
-  model.d_model=512 \
-  training.steps=30000 \
-  training.batch_size=8
+# Train with Hydra overrides
+python -m morph.training.train training.steps=50000 training.batch_size=4
 
-# Train on cloud (multi-GPU)
-python -m morph.training.train --config-name cloud
+# Run the dense curriculum config
+python -m morph.training.train --config-name pretrain_curriculum
 ```
 
-Training logs to [Weights & Biases](https://wandb.ai). The full config is logged to every run for reproducibility.
+Training logs the resolved Hydra config to [Weights & Biases](https://wandb.ai) when enabled.
 
----
+## Project Structure
 
-## Default Configuration
+```text
+morph/
+  model/
+    transformer.py          # MORPHTransformer, Parcae loop, HC carrier, MLP routing host
+    attention.py            # CCA + local window + CSA/HCA attention
+    embeddings.py           # Euclidean + Lorentz + hash-bigram embeddings
+    hyper_connections.py    # HyperConnection residual implementation
+    mhc.py                  # MRR legacy path and MORPHBlock wiring
+    sparsity.py             # MortarLinear wrapper
+    routing.py              # TileRouter and routing stats/aux collection
+    prediction.py           # STP loss
+    ternary_qat.py          # Ternary forward-STE QAT
+    embed_quant.py          # int8/int6 embedding QAT
+    kv_quant.py             # inference KV cache quantization
+    packed_ternary_infer.py # packed deploy inference helpers
+    titans_core/            # CMS block-sparse scoring and topology logic, not neural memory
+  kernels/
+    triton/                 # fused attention, HC, GLA, decode, CE/support kernels
+  sparse/
+    stk/                    # vendored BCSR sparse execution backend
+  training/
+    train.py                # Hydra training entry point
+    pruning.py              # prune -> carve -> route coordinator
+    optimizer.py            # AdamW, 8-bit AdamW, ternary shadow optimizer support
+    curriculum_data.py      # pretokenized multi-source curriculum loader
+  configs/                  # Hydra configs
+docs/
+  figures/                  # TikZ sources for regenerated architecture figures
+  references.md             # citation map and paper notes
+```
 
-From `morph/configs/base.yaml`:
+## Figures
 
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| d_model | 768 | 6N where N=128 (3 MRR channels: 384+256+128) |
-| Layers | 3 + 6 + 3 | Prelude + Core (looped) + Coda |
-| Mean loop depth | 6 | Poisson(&lambda;=6), max 8 |
-| Attention | CCA+CSA/HCA | 12 heads, 4 KV heads, window=128 |
-| Vocab | 49,152 | StarCoder2 tokenizer |
-| Max seq len | 4,096 | Windowed attention keeps memory O(T&middot;w) |
-
----
-
-## Key Results
-
-| Model | Params | Density | Val PPL | Step/s | Notes |
-|-------|--------|---------|---------|--------|-------|
-| Dense baseline (34L) | 531M | 100% | 38.4 | 2.0 | Standard transformer |
-| Looped (3+6+3, T=6) | 81M | 100% | 35.2 | 3.1 | 6.5&times; fewer params |
-| Looped + pruned | 81M&rarr;~20M active | 25% | 37.1 | 4.8 | 56% faster post-compact |
-| Looped + pruned + routed | — | — | — | — | *Pending* |
-
-The looped architecture at 81M parameters beats the 531M dense baseline. Pruning to 25% density adds ~5% PPL cost while nearly doubling throughput.
-
-> These results were measured on the looped sparse backbone with the legacy 16×16
-> Block-ELL kernels (since replaced by MORTAR 128×128 BCSR, which is strictly
-> faster post-carve). They predate the neural-memory/JEPA removal, which does not
-> change the backbone or pruning path.
-
----
+Architecture figures are maintained from the TikZ sources in `docs/figures/*.tex`. Regenerate them from that directory with `pdflatex` when updating diagrams, then keep the README image paths in sync with the generated filenames.
 
 ## References
 
-- **Parcae** — Stable looped transformers with diagonal injection
-- **Multi-Rate Residual** (MRR) — Per-channel residual scaling for loop stability (inspired by but distinct from Hyper-Connections)
-- **CMS** — Continuum Memory System for block-sparse topology
-- **ReMoE** — Dynamic per-token expert routing
-- **PEER** — Product-key retrieval for efficient routing
-- **STP** — Semantic Tube Prediction (Huang, LeCun, Balestriero 2026)
-
-See [`docs/references.md`](docs/references.md) for full citations.
-
----
+MORPH draws on Parcae looped transformers, Hyper-Connections, CCA, CSA/HCA, XSA, CoPE, GLA-style retention, CMS/MORTAR sparse execution, ReMoE/PEER routing, Token Superposition Training, STP, and deploy-oriented quantization work. See `docs/references.md` and `docs/references/` for the paper map and local notes.
 
 ## License
 
