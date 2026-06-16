@@ -132,6 +132,38 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                                         blocksize=self.blocksize)
         return q, qs.absmax
 
+    def load_state_dict(self, state_dict):
+        """Restore blockwise-quant CODE dtypes after torch's float-casting load.
+
+        FOOTGUN (real resume bug, 2026-06-16): torch.optim.Optimizer.load_state_dict runs
+        _process_value_according_to_param_policy, which casts EVERY non-`step` state value to
+        the param's dtype WHEN THE PARAM IS FLOATING POINT. Our quant codes are INTEGER
+        (uint8 de-fused m2_q/nu_q; int8 fused m2_code/nu_sqrt_code) — they get silently
+        upcast to the fp32 param dtype, so the dequant kernel rejects them ("A must be
+        uint8"). bnb's own 8-bit optimizers dodge this via custom loading; our default-loaded
+        fork did not (the resumable-ckpt gate used AdamW8bit, so this was never exercised).
+        The cast is LOSSLESS for small-int codes (0-255 / -127..127 exact in fp32), so we
+        round-and-recast back to the integer dtype. amax tensors are fp32 and only lose
+        precision if a bf16 param downcast them — coerce them back to fp32 best-effort
+        (no-op for the fp32 master weights used here).
+        """
+        super().load_state_dict(state_dict)
+        for st in self.state.values():
+            if not isinstance(st, dict):
+                continue
+            for k in ("m2_q", "nu_q"):                        # de-fused dynamic-map (uint8)
+                v = st.get(k)
+                if torch.is_tensor(v) and v.dtype != torch.uint8:
+                    st[k] = v.round().clamp_(0, 255).to(torch.uint8)
+            for k in ("m2_code", "nu_sqrt_code", "nu_code"):  # fused linear-int8 (int8)
+                v = st.get(k)
+                if torch.is_tensor(v) and v.dtype != torch.int8:
+                    st[k] = v.round().clamp_(-127, 127).to(torch.int8)
+            for k in ("m2_amax", "nu_amax", "nu_sqrt_amax"):  # per-block scales (fp32)
+                v = st.get(k)
+                if torch.is_tensor(v) and v.dtype != torch.float32:
+                    st[k] = v.float()
+
     @staticmethod
     def _migrate_linear_nu_to_sqrt(st: dict, p: torch.Tensor, blocksize: int) -> None:
         """Convert legacy fused ν state from linear ν codes to sqrt(ν) codes in-place."""
