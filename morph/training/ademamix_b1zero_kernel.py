@@ -59,7 +59,13 @@ def _ademamix_b1zero_fused_kernel(
     nu = beta2 * nu + (1.0 - beta2) * g * g
 
     # ── param update: update = (g + alpha*m2)/denom ; p = p*(1-lr*wd) - lr*update ──
-    denom = tl.sqrt(nu / bc2) + eps
+    # eps INSIDE the sqrt (Adam-eps-inside convention). CRITICAL for linear-int8 nu:
+    # small nu in a 256-block whose absmax is set by a larger element quantizes to int8 0
+    # → dequants to EXACTLY 0. eps-outside gave denom=eps=1e-8 → update=g/1e-8≈2e4 explosion
+    # on LIVE params (measured: 360/360 steps, root cause of the prune divergence). eps-inside
+    # floors the underflowed denom to sqrt(eps)=1e-4 → update=g/1e-4≈2 (bounded), no-op when
+    # nu is healthy. bnb's AdamW8bit avoids this via its dynamic (non-linear) qmap.
+    denom = tl.sqrt(nu / bc2 + eps)
     update = (g + alpha * m2) / denom
     p = tl.load(p_ptr + offs, mask=mask, other=0.0).to(tl.float32)
     p = p * (1.0 - lr * wd) - lr * update

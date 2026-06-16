@@ -15,7 +15,7 @@ UPDATE (β1=0 AdEMAMix, arXiv:2409.03137):
     m2 ← β3·m2 + (1−β3)·g                  (slow EMA)
     ν  ← β2·ν  + (1−β2)·g²                  (second moment)
     bc2 = 1 − β2^t
-    update = (g + α·m2) / (√(ν/bc2) + ε) + λ·p     # m1 = g exactly (β1=0, bc1=1)
+    update = (g + α·m2) / √(ν/bc2 + ε) + λ·p       # m1 = g exactly (β1=0, bc1=1); ε INSIDE sqrt
     p ← p − lr·update
 
 STABILITY SCHEDULERS (the load-bearing part for instability-sensitive models):
@@ -31,6 +31,7 @@ Triton kernel (the reference is then the bit-faithful ground truth for that kern
 from __future__ import annotations
 
 import math
+import os
 from typing import Optional
 
 import torch
@@ -252,9 +253,12 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             torch._foreach_add_(m2s, gs, alpha=1.0 - beta3_t)
             torch._foreach_mul_(nus, beta2)
             torch._foreach_addcmul_(nus, gs, gs, value=1.0 - beta2)
-            denoms = torch._foreach_sqrt(nus)
-            torch._foreach_div_(denoms, math.sqrt(bc2))
-            torch._foreach_add_(denoms, eps)
+            # denom = √(ν/bc2 + ε) — eps INSIDE the sqrt (matches the fused kernel; see
+            # ademamix_b1zero_kernel.py for why: floors underflowed-ν denom to √ε instead
+            # of ε, preventing the g/ε explosion on linear-int8 underflow).
+            denoms = torch._foreach_div(nus, bc2)   # ν/bc2
+            torch._foreach_add_(denoms, eps)        # ν/bc2 + ε
+            torch._foreach_sqrt_(denoms)            # √(ν/bc2 + ε)
             upd = torch._foreach_mul(m2s, alpha_t)          # α·m2
             torch._foreach_add_(upd, gs)                    # + g   (m1 = g, β1=0)
             torch._foreach_div_(upd, denoms)                # /denom
