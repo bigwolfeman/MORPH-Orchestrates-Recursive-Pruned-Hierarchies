@@ -174,6 +174,9 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         # eps_inside only affects the de-fused path. True (default) = √(ν/bc2+ε) safety floor;
         # False = √(ν/bc2)+ε true-Adam normalization (faster, correct for dynamic-qmap ν).
         eps_inside = bool(getattr(tr, "ademamix_eps_inside", True))
+        # per-coordinate update clamp (Adam units) — bounds the (g+α·m₂)/denom step so a prune
+        # topology-shock can't detonate a few coords in one step. 0 = off. The fast+stable lever.
+        update_clip = float(getattr(tr, "ademamix_update_clip", 0.0))
         # Keep the no-decay group (which holds nn.Embedding tables) in 32-bit state —
         # bnb's 8-bit is unstable on sparse/large-range embedding grads. The no-decay group
         # otherwise holds only sub-4096 tensors (already fp32), so this mirrors AdamW8bit.
@@ -181,7 +184,8 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         base_opt = AdEMAMixB1Zero(
             groups, lr=lr, betas=(0.0, betas[1], beta3), alpha=alpha,
             t_alpha=t_alpha, t_beta3=t_beta3, beta3_warmup_start=b3_start,
-            eps=1e-8, weight_decay=wd, bits=bits, fused=fused, eps_inside=eps_inside)
+            eps=1e-8, weight_decay=wd, bits=bits, fused=fused, eps_inside=eps_inside,
+            update_clip=update_clip)
     elif use_8bit:
         try:
             import bitsandbytes as bnb

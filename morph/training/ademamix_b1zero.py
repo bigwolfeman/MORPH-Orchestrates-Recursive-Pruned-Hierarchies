@@ -57,6 +57,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         blocksize: int = 256,
         fused: bool = True,
         eps_inside: bool = True,
+        update_clip: float = 0.0,
     ):
         if betas[0] != 0.0:
             raise ValueError(f"AdEMAMixB1Zero requires β1=0, got betas={betas}")
@@ -79,6 +80,16 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         # for √(ν/bc2)+ε (true Adam normalization). This flag only affects the de-fused path;
         # the fused kernel always applies eps-inside (it needs it).
         self.eps_inside = eps_inside
+        # update_clip: per-coordinate cap on the ADAPTIVE update term (g+α·m₂)/denom, in Adam
+        # units (a healthy step is O(1); measured worst healthy ~29). 0 = off. This is the
+        # fast+stable fix for the prune-shock detonation: at a prune topology-shock the gradient
+        # jumps while ν lags → (g+α·m₂)/√(lagging ν) spikes to ~1e4 on a few coords → single-step
+        # blow-up (observed: eps-out b2=.999 @9400, b2=.95 @19400). Clamping the update bounds the
+        # per-step param change (lr·clip) on JUST those anomalous coords — unlike eps-inside's √ε
+        # floor it does NOT raise the denom for all small-ν params, so no convergence throttle.
+        # Weight decay (λ·p, bounded) is added AFTER the clamp so it is never capped away.
+        self.update_clip = float(update_clip)
+        self._clip_events = 0  # diagnostic: total coords clamped across all steps (no-theater check)
         # dynamic qmaps (lazily moved to each param's device); signed for m2, unsigned for ν.
         self._code_signed_cpu = bnbF.create_dynamic_map(signed=True)
         self._code_unsigned_cpu = bnbF.create_dynamic_map(signed=False)
@@ -302,7 +313,14 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                 torch._foreach_add_(denoms, eps)        # √(ν/bc2) + ε
             upd = torch._foreach_mul(m2s, alpha_t)          # α·m2
             torch._foreach_add_(upd, gs)                    # + g   (m1 = g, β1=0)
-            torch._foreach_div_(upd, denoms)                # /denom
+            torch._foreach_div_(upd, denoms)                # /denom = (g+α·m2)/denom
+            # ── per-coordinate update clamp (prune-shock stability; see __init__) ──
+            if self.update_clip > 0.0:
+                c = self.update_clip
+                for u in upd:
+                    if u.numel():
+                        self._clip_events += int((u.abs() > c).sum())
+                        u.clamp_(-c, c)
             if wd != 0.0:
                 torch._foreach_add_(upd, [p.float() for p in params], alpha=wd)  # + λ·p
             torch._foreach_add_(params, [u.to(p.dtype) for u, p in zip(upd, params)],
