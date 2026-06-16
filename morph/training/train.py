@@ -904,6 +904,17 @@ def main(cfg: DictConfig) -> None:
         optimizer.load_state_dict(_opt_state)
         _n_restored = sum(len(g["params"]) for g in optimizer.param_groups)
         print(f"  [opt] optimizer state restored ({_n_restored} param tensors)", flush=True)
+        # MEMORY: optimizer.load_state_dict DEEP-COPIES into the live optimizer's own tensors,
+        # so the checkpoint's optimizer state (_opt_state, measured ~1.7GB on GPU for this model)
+        # is now a DEAD DUPLICATE. Left alone it lingers for the WHOLE run (a local held by the
+        # train() frame) → ~1GB steady-state GPU bloat vs a fresh start (Wolfe observed this on
+        # the epsfix resume). Dropping it + empty_cache() ALSO returns the freed-but-reserved
+        # blocks from load_checkpoint's `torch.load(..., map_location=device)` (the model+state
+        # the caching allocator kept reserved). The _needs_rebuild branch already did this; the
+        # no-rebuild (pre-carve resume) path did not — that was the leak.
+        del _opt_state
+        gc.collect()
+        torch.cuda.empty_cache()
     elif init_from_path:
         # Weights-only seed (step stays 0, fresh optimizer). resume takes precedence if both set.
         if not os.path.isfile(init_from_path):
