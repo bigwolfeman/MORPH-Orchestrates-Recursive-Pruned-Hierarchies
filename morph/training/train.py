@@ -397,6 +397,99 @@ def load_weights_only(path: str, model: nn.Module, device: torch.device) -> None
           f"{len(missing)} missing / {len(unexpected)} unexpected", flush=True)
 
 
+@torch.no_grad()
+def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
+    """Root-cause the AdEMAMix prune divergence (env MORPH_DIAG_OPT=<path>).
+
+    For every CMSBlockLinear, dequant the optimizer's slow-EMA m₂ and second-moment ν,
+    pair with the live grad, and reconstruct the per-element update (g+α·m₂)/(√(ν/bc2)+ε).
+    Split positions DEAD (pruned, _prune_mask==0) vs LIVE and report the GLOBAL max|update|
+    with its components — so we see EXACTLY what blows up: numerator (α·m₂ on a charged
+    slow EMA) vs denominator (ν collapse), and whether it is a dead or a LIVE param. Handles
+    all three state formats (fused linear-int8 m2_code, de-fused dynamic-map m2_q, fp32 m2).
+    """
+    opt = getattr(optimizer, "_opt", optimizer)          # unwrap TernaryShadowOptimizer
+    if not hasattr(opt, "state"):
+        return
+    from morph.model.titans_core.block_sparse import CMSBlockLinear
+
+    def _grp(p):
+        for g in opt.param_groups:
+            for q in g["params"]:
+                if q is p:
+                    return g
+        return None
+
+    def _deq_any(st, key, signed, p):
+        if f"{key}_code" in st:                          # fused linear-int8 (BLOCK=256)
+            code = st[f"{key}_code"].float()
+            amax = st[f"{key}_amax"].float()
+            scale = (amax / 127.0).repeat_interleave(256)[: code.numel()]
+            return (code * scale).view_as(p)
+        if f"{key}_q" in st:                             # de-fused dynamic-map
+            return opt._deq(st[f"{key}_q"], st[f"{key}_amax"], signed, p)
+        if key in st:                                    # fp32
+            return st[key].view_as(p)
+        return None
+
+    root = getattr(model, "_orig_mod", model)
+    worst = (-1.0, None)
+    amom_dead = amom_live = 0.0
+    minnu_dead = minnu_live = float("inf")
+    n_layers = n_with_state = 0
+    for name, layer in root.named_modules():
+        if not isinstance(layer, CMSBlockLinear):
+            continue
+        n_layers += 1
+        p = layer._prune_target_weight()                 # the param the optimizer holds
+        st = opt.state.get(p)
+        if not st or st.get("init"):
+            continue
+        m2 = _deq_any(st, "m2", True, p)
+        nu = _deq_any(st, "nu", False, p)
+        if m2 is None or nu is None or p.grad is None:
+            continue
+        n_with_state += 1
+        grp = _grp(p)
+        a_t, b2, b3_t = opt._sched(grp["step"], grp)
+        bc2 = 1.0 - b2 ** grp["step"]
+        eps = grp["eps"]
+        g = p.grad.float()
+        denom = (nu / bc2 + eps).sqrt()   # eps-inside (matches the fixed optimizer/kernel)
+        amom = a_t * m2
+        upd = ((g + amom) / denom).reshape(-1).abs()
+        # dead mask: expand [R,C] _prune_mask → [out,in] elementwise (True=alive)
+        B = layer.tile_size
+        keep = layer._prune_mask.view(layer.R, 1, layer.C, 1).expand(
+            layer.R, B, layer.C, B).reshape(layer.out_features, layer.in_features).reshape(-1)
+        dead = ~keep.bool().to(upd.device)
+        amf = amom.reshape(-1).abs()
+        nuf = nu.reshape(-1)
+        if dead.any():
+            amom_dead = max(amom_dead, float(amf[dead].max()))
+            minnu_dead = min(minnu_dead, float(nuf[dead].min()))
+        live = ~dead
+        if live.any():
+            amom_live = max(amom_live, float(amf[live].max()))
+            minnu_live = min(minnu_live, float(nuf[live].min()))
+        j = int(upd.argmax())
+        if float(upd[j]) > worst[0]:
+            gf, df = g.reshape(-1), denom.reshape(-1)
+            worst = (float(upd[j]), dict(
+                layer=name, dead=bool(dead[j]), g=float(gf[j]), amom=float(amf[j]),
+                denom=float(df[j]), nu=float(nuf[j]), m2=float(m2.reshape(-1)[j]), a_t=a_t, b3=b3_t))
+    b = worst[1] or {}
+    with open(path, "a") as f:
+        f.write(
+            f"step={step} layers={n_with_state}/{n_layers} maxU={worst[0]:.3e} "
+            f"dead={b.get('dead')} layer={b.get('layer')} g={b.get('g',0):.3e} "
+            f"amom={b.get('amom',0):.3e} denom={b.get('denom',0):.3e} nu={b.get('nu',0):.3e} "
+            f"m2={b.get('m2',0):.3e} a_t={b.get('a_t',0):.2f} b3={b.get('b3',0):.5f} "
+            f"| amomMax d/l={amom_dead:.3e}/{amom_live:.3e} "
+            f"minNu d/l={minnu_dead:.2e}/{minnu_live:.2e}\n"
+        )
+
+
 def warmup_compile_all_shapes(
     model, batch_size: int, seq_len: int, device, passes_per_size: int,
     tag: str = "startup",
@@ -889,6 +982,7 @@ def main(cfg: DictConfig) -> None:
     # MORPH_MEM_SNAPSHOT_STEP=N additionally dumps a full allocation snapshot (every
     # block + its Python alloc stack) at the first step >= N, for line-level attribution.
     _mem_probe = bool(os.environ.get("MORPH_MEM_PROBE"))
+    _diag_optstate_path = os.environ.get("MORPH_DIAG_OPT")  # prune-divergence root-cause probe
     _mem_snap_step = int(os.environ.get("MORPH_MEM_SNAPSHOT_STEP", "-1"))
     _mem_snapped = False
     # History recording installs CUDA-allocator hooks that can make a Triton
@@ -1095,6 +1189,12 @@ def main(cfg: DictConfig) -> None:
         nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
         _step_optimizer()
+
+        # ── Prune-divergence diagnostic (env MORPH_DIAG_OPT=<path>) ─────────
+        # Post-step, grads still live (zero_grad is top-of-next-iter). Dequants m₂/ν and
+        # attributes the worst update dead-vs-live, numerator-vs-denominator. Off by default.
+        if _diag_optstate_path:
+            diag_prune_optstate(model, optimizer, step, _diag_optstate_path)
 
         # ── Timing ────────────────────────────────────────────────────────
         t_now = time.perf_counter()
