@@ -173,6 +173,13 @@ training:
                                  # (ν→0 underflow → ε explosion); the de-fused dynamic-qmap path
                                  # never underflows + _mask_dead_state handles prune blowup, so
                                  # set FALSE with fused:false for the fast+stable combo.
+  ademamix_update_clip: 100.0    # (b1zero, de-fused) per-coord cap on the (g+α·m₂)/denom step in
+                                 # Adam units (healthy step ~O(1), measured worst ~29). 0 = off.
+                                 # THE fast+stable fix: bounds the per-step param change so a prune
+                                 # topology-shock (ν lags the gradient jump) can't detonate a few
+                                 # coords in one step (observed eps-out divergences @9400/@19400).
+                                 # Only bites anomalous coords → no convergence throttle (unlike
+                                 # eps-inside's blanket √ε floor). 100 = 3-4× over healthy worst.
 
   # ── Deploy quant stack (ALL ON by default — validated winners) ──
   # Ternary QAT: forward-STE on weights → {-1,0,+1}×scale. Training ppl IS deployed-ternary ppl.
