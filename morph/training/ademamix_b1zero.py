@@ -56,6 +56,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         min_8bit_size: int = 4096,
         blocksize: int = 256,
         fused: bool = True,
+        eps_inside: bool = True,
     ):
         if betas[0] != 0.0:
             raise ValueError(f"AdEMAMixB1Zero requires β1=0, got betas={betas}")
@@ -70,6 +71,14 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         self.min_8bit_size = min_8bit_size
         self.blocksize = blocksize
         self.fused = fused
+        # eps_inside: √(ν/bc2 + ε) (denom floored at √ε≈1e-4). REQUIRED for the fused
+        # linear-int8 path (ν can underflow to EXACTLY 0 → denom=ε=1e-8 → g/1e-8 explosion).
+        # HARMFUL for the de-fused/fp32 path: ν never underflows to 0 there (bnb dynamic qmap)
+        # and the prune α·m₂ blowup is handled by _mask_dead_state, so the floor only throttles
+        # live small-ν params → slow convergence (measured 2026-06-16). De-fused → eps_inside=False
+        # for √(ν/bc2)+ε (true Adam normalization). This flag only affects the de-fused path;
+        # the fused kernel always applies eps-inside (it needs it).
+        self.eps_inside = eps_inside
         # dynamic qmaps (lazily moved to each param's device); signed for m2, unsigned for ν.
         self._code_signed_cpu = bnbF.create_dynamic_map(signed=True)
         self._code_unsigned_cpu = bnbF.create_dynamic_map(signed=False)
@@ -281,12 +290,16 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             torch._foreach_add_(m2s, gs, alpha=1.0 - beta3_t)
             torch._foreach_mul_(nus, beta2)
             torch._foreach_addcmul_(nus, gs, gs, value=1.0 - beta2)
-            # denom = √(ν/bc2 + ε) — eps INSIDE the sqrt (matches the fused kernel; see
-            # ademamix_b1zero_kernel.py for why: floors underflowed-ν denom to √ε instead
-            # of ε, preventing the g/ε explosion on linear-int8 underflow).
-            denoms = torch._foreach_div(nus, bc2)   # ν/bc2
-            torch._foreach_add_(denoms, eps)        # ν/bc2 + ε
-            torch._foreach_sqrt_(denoms)            # √(ν/bc2 + ε)
+            # denom: eps_inside → √(ν/bc2 + ε) (floored at √ε; needed only for linear-int8
+            # underflow, which the de-fused dynamic-qmap path does NOT have); eps_outside →
+            # √(ν/bc2) + ε (true Adam normalization — does not throttle live small-ν params).
+            denoms = torch._foreach_div(nus, bc2)       # ν/bc2
+            if self.eps_inside:
+                torch._foreach_add_(denoms, eps)        # ν/bc2 + ε
+                torch._foreach_sqrt_(denoms)            # √(ν/bc2 + ε)
+            else:
+                torch._foreach_sqrt_(denoms)            # √(ν/bc2)
+                torch._foreach_add_(denoms, eps)        # √(ν/bc2) + ε
             upd = torch._foreach_mul(m2s, alpha_t)          # α·m2
             torch._foreach_add_(upd, gs)                    # + g   (m1 = g, β1=0)
             torch._foreach_div_(upd, denoms)                # /denom
