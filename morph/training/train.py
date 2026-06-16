@@ -241,9 +241,20 @@ def save_checkpoint(
     optimizer,
     scaler: torch.amp.GradScaler,
     pruning: Optional[PruningSchedule],
+    *,
+    next_step: Optional[int] = None,
 ) -> None:
+    """Save a full training checkpoint.
+
+    `step` is the label for the checkpoint filename/logs. `next_step` is the loop
+    index to execute on resume. They differ for ordinary post-step checkpoints:
+    after completing loop step N, resume must start at N+1 and fast-forward N+1
+    batches. Pre-step transition checkpoints pass next_step=N.
+    """
+    resume_step = int(step if next_step is None else next_step)
     ckpt = {
-        "step": step,
+        "step": int(step),
+        "next_step": resume_step,
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "scaler": scaler.state_dict(),
@@ -281,7 +292,7 @@ def load_checkpoint(
     The OPTIMIZER is handled by the caller: a carved/routed checkpoint's optimizer state is
     keyed on a DIFFERENT param set (mortar_data / router params) than the freshly-built
     dense optimizer, so the caller must REBUILD the optimizer on the reconstructed topology
-    BEFORE loading state. Returns (step, optimizer_state_dict, needs_optimizer_rebuild).
+    BEFORE loading state. Returns (next_step, optimizer_state_dict, needs_optimizer_rebuild).
     """
     ckpt = torch.load(path, map_location=device, weights_only=False)
     is_compact = bool(ckpt.get("pruning_compact", False))
@@ -349,9 +360,20 @@ def load_checkpoint(
         except Exception as e:  # device-count mismatch etc. — surface, don't pretend
             print(f"  Warning: could not restore CUDA RNG state ({e}); RNG continues fresh")
 
-    step = int(ckpt.get("step", 0))
+    ckpt_step = int(ckpt.get("step", 0))
+    if "next_step" in ckpt:
+        step = int(ckpt["next_step"])
+    else:
+        # Legacy periodic checkpoints were written after completing their loop step but
+        # only persisted `step`. Treat them as post-step saves so resume executes the next
+        # unseen batch. Legacy pre-step transition checkpoints are ambiguous; the warning is
+        # intentional because exact replay cannot be inferred from old metadata alone.
+        step = ckpt_step + 1
+        print(f"  Warning: checkpoint lacks next_step metadata; assuming legacy post-step "
+              f"save and resuming at step {step} (saved step label {ckpt_step})")
     needs_rebuild = bool(is_compact or is_routed)
-    print(f"  Resumed model+scaler+RNG from step {step} "
+    print(f"  Resumed model+scaler+RNG from checkpoint step {ckpt_step}; "
+          f"next_step={step} "
           f"(compact={is_compact} routed={is_routed} → optimizer_rebuild={needs_rebuild})")
     return step, ckpt["optimizer"], needs_rebuild
 
@@ -421,6 +443,12 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
         return None
 
     def _deq_any(st, key, signed, p):
+        if key == "nu" and "nu_sqrt_code" in st:         # fused sqrt-ν int8 (BLOCK=256)
+            code = st["nu_sqrt_code"].float()
+            amax = st["nu_sqrt_amax"].float()
+            scale = (amax / 127.0).repeat_interleave(256)[: code.numel()]
+            nu_sqrt = code * scale
+            return (nu_sqrt * nu_sqrt).view_as(p)
         if f"{key}_code" in st:                          # fused linear-int8 (BLOCK=256)
             code = st[f"{key}_code"].float()
             amax = st[f"{key}_amax"].float()
@@ -436,6 +464,9 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
     worst = (-1.0, None)
     amom_dead = amom_live = 0.0
     minnu_dead = minnu_live = float("inf")
+    zero_nu_dead = zero_nu_live = 0
+    floor_den_dead = floor_den_live = 0
+    total_dead = total_live = 0
     n_layers = n_with_state = 0
     for name, layer in root.named_modules():
         if not isinstance(layer, CMSBlockLinear):
@@ -465,13 +496,21 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
         dead = ~keep.bool().to(upd.device)
         amf = amom.reshape(-1).abs()
         nuf = nu.reshape(-1)
+        zero_nu = (nuf == 0)
+        floor_den = (denom.reshape(-1) <= (eps ** 0.5) * 1.0001)
         if dead.any():
             amom_dead = max(amom_dead, float(amf[dead].max()))
             minnu_dead = min(minnu_dead, float(nuf[dead].min()))
+            zero_nu_dead += int(zero_nu[dead].sum())
+            floor_den_dead += int(floor_den[dead].sum())
+            total_dead += int(dead.sum())
         live = ~dead
         if live.any():
             amom_live = max(amom_live, float(amf[live].max()))
             minnu_live = min(minnu_live, float(nuf[live].min()))
+            zero_nu_live += int(zero_nu[live].sum())
+            floor_den_live += int(floor_den[live].sum())
+            total_live += int(live.sum())
         j = int(upd.argmax())
         if float(upd[j]) > worst[0]:
             gf, df = g.reshape(-1), denom.reshape(-1)
@@ -486,7 +525,9 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
             f"amom={b.get('amom',0):.3e} denom={b.get('denom',0):.3e} nu={b.get('nu',0):.3e} "
             f"m2={b.get('m2',0):.3e} a_t={b.get('a_t',0):.2f} b3={b.get('b3',0):.5f} "
             f"| amomMax d/l={amom_dead:.3e}/{amom_live:.3e} "
-            f"minNu d/l={minnu_dead:.2e}/{minnu_live:.2e}\n"
+            f"minNu d/l={minnu_dead:.2e}/{minnu_live:.2e} "
+            f"zeroNu d/l={zero_nu_dead}/{total_dead}:{zero_nu_live}/{total_live} "
+            f"floorDen d/l={floor_den_dead}/{total_dead}:{floor_den_live}/{total_live}\n"
         )
 
 
@@ -1050,7 +1091,7 @@ def main(cfg: DictConfig) -> None:
         # ── TST phase switch: superposition → recovery (once, at tst_phase1_steps) ──
         if cur_bag != 0 and step >= tst_phase1_steps:
             sw_path = os.path.join(ckpt_dir, f"tst_switch_step_{step}.pt")
-            save_checkpoint(sw_path, step, model, optimizer, scaler, pruning)
+            save_checkpoint(sw_path, step, model, optimizer, scaler, pruning, next_step=step)
             print(f"[TST] phase switch @ step {step}: superposition (bag={cur_bag}) → "
                   f"recovery (bag=0). Switch ckpt: {sw_path}", flush=True)
             cur_bag = 0
@@ -1063,7 +1104,7 @@ def main(cfg: DictConfig) -> None:
             _k = _sched.stage_at(step)
             if step > start_step:                                  # nothing to save at step 0
                 _cp = os.path.join(ckpt_dir, f"curriculum_pre_stage{_k}_step{step}.pt")
-                save_checkpoint(_cp, step, model, optimizer, scaler, pruning)
+                save_checkpoint(_cp, step, model, optimizer, scaler, pruning, next_step=step)
                 print(f"[curriculum] stage {cur_stage}→{_k} @ step {step}: pre-step-up ckpt {_cp}",
                       flush=True)
             for _m in _rope_mods:                                  # re-anchor taper + rebuild cache
@@ -1301,7 +1342,7 @@ def main(cfg: DictConfig) -> None:
         # ── Checkpoint ────────────────────────────────────────────────────
         if step % ckpt_every == 0 and step > 0:
             ck_path = os.path.join(ckpt_dir, f"step_{step}.pt")
-            save_checkpoint(ck_path, step, model, optimizer, scaler, pruning)
+            save_checkpoint(ck_path, step, model, optimizer, scaler, pruning, next_step=step + 1)
             print(f"  Checkpoint: {ck_path}")
 
         # ── Reset step timer ───────────────────────────────────────────────
@@ -1311,7 +1352,7 @@ def main(cfg: DictConfig) -> None:
 
     # ── Final checkpoint ──────────────────────────────────────────────────
     final_path = os.path.join(ckpt_dir, f"step_{total_steps}.pt")
-    save_checkpoint(final_path, total_steps, model, optimizer, scaler, pruning)
+    save_checkpoint(final_path, total_steps, model, optimizer, scaler, pruning, next_step=total_steps)
     print(f"Final checkpoint: {final_path}")
 
     # ── Final eval + generation ───────────────────────────────────────────

@@ -112,12 +112,35 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                                         blocksize=self.blocksize)
         return q, qs.absmax
 
+    @staticmethod
+    def _migrate_linear_nu_to_sqrt(st: dict, p: torch.Tensor, blocksize: int) -> None:
+        """Convert legacy fused ν state from linear ν codes to sqrt(ν) codes in-place."""
+        if "nu_sqrt_code" in st or "nu_code" not in st:
+            return
+        n = p.numel()
+        nblocks = (n + blocksize - 1) // blocksize
+        old_code = st.pop("nu_code").reshape(-1).float()
+        old_amax = st.pop("nu_amax").float()
+        scale = (old_amax / 127.0).repeat_interleave(blocksize)[:n]
+        nu = torch.clamp(old_code[:n] * scale, min=0.0)
+        nu_sqrt = torch.sqrt(nu)
+        pad = nblocks * blocksize - n
+        if pad:
+            nu_sqrt = torch.cat([nu_sqrt, torch.zeros(pad, device=p.device)])
+        blocks = nu_sqrt.view(nblocks, blocksize)
+        amax = blocks.max(dim=1).values
+        q = torch.round(blocks / (amax[:, None] / 127.0 + 1e-20)).clamp(0, 127)
+        q = torch.where((blocks > 0) & (amax[:, None] > 0) & (q == 0), torch.ones_like(q), q)
+        st["nu_sqrt_code"] = q.reshape(-1)[:n].to(torch.int8).contiguous()
+        st["nu_sqrt_amax"] = amax.contiguous()
+
     def _fused_step(self, params, lr, beta2, beta3, alpha, eps, bc2, wd):
         """Fused Triton path for 8-bit large params (linear-int8 blockwise state).
 
-        State per param: int8 code tensors (m2_code, nu_code) + fp32 per-block absmax
-        (m2_amax, nu_amax). On first touch the state is allocated and is_init=True is
-        passed so the kernel treats m2/nu as zero (no dequant of uninitialized codes).
+        State per param: int8 code tensors (m2_code, nu_sqrt_code) + fp32 per-block
+        absmax (m2_amax, nu_sqrt_amax). On first touch the state is allocated and
+        is_init=True is passed so the kernel treats m2/nu as zero. Legacy checkpoints
+        with linear ν `nu_code` are migrated once before the kernel launch.
         """
         from morph.training.ademamix_b1zero_kernel import (
             fused_ademamix_b1zero_step, BLOCK,
@@ -140,13 +163,15 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             if is_init:
                 st.pop("init", None)
                 st["m2_code"] = torch.zeros(n, dtype=torch.int8, device=p.device)
-                st["nu_code"] = torch.zeros(n, dtype=torch.int8, device=p.device)
+                st["nu_sqrt_code"] = torch.zeros(n, dtype=torch.int8, device=p.device)
                 st["m2_amax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
-                st["nu_amax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
+                st["nu_sqrt_amax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
+            else:
+                self._migrate_linear_nu_to_sqrt(st, p, BLOCK)
 
             fused_ademamix_b1zero_step(
                 p_flat, g_flat,
-                st["m2_code"], st["m2_amax"], st["nu_code"], st["nu_amax"],
+                st["m2_code"], st["m2_amax"], st["nu_sqrt_code"], st["nu_sqrt_amax"],
                 lr, beta2, beta3, alpha, eps, bc2, wd, is_init,
             )
 
@@ -175,7 +200,10 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             return
         if "m2_code" in st:            # fused linear-int8: code 0 → value 0 (exact)
             st["m2_code"].view(-1)[dead] = 0
-            st["nu_code"].view(-1)[dead] = 0
+            if "nu_sqrt_code" in st:
+                st["nu_sqrt_code"].view(-1)[dead] = 0
+            elif "nu_code" in st:      # legacy checkpoint before sqrt-ν migration
+                st["nu_code"].view(-1)[dead] = 0
         elif "m2_q" in st:             # de-fused dynamic-map: code 0 ≠ 0, so dequant→0→requant
             m2 = self._deq(st["m2_q"], st["m2_amax"], True, p); m2.view(-1)[dead] = 0
             nu = self._deq(st["nu_q"], st["nu_amax"], False, p); nu.view(-1)[dead] = 0
