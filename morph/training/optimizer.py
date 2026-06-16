@@ -166,6 +166,14 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         t_beta3 = int(_tb) if _tb is not None else int(tr.steps)
         b3_start = float(getattr(tr, "ademamix_beta3_warmup_start", 0.9))
         bits = 8 if use_8bit else 32
+        # fused=False (DEFAULT) → de-fused path using bnb's dynamic blockwise qmap for the
+        # 8-bit m2/ν state (same quant AdamW8bit uses; preserves small ν). fused=True → custom
+        # linear-int8 Triton kernel: faster opt.step but lossy on small-ν lanes (2026-06-15
+        # regression: under-floor→explode or over-floor→LR-throttle). See base.yaml note.
+        fused = bool(getattr(tr, "ademamix_fused", False))
+        # eps_inside only affects the de-fused path. True (default) = √(ν/bc2+ε) safety floor;
+        # False = √(ν/bc2)+ε true-Adam normalization (faster, correct for dynamic-qmap ν).
+        eps_inside = bool(getattr(tr, "ademamix_eps_inside", True))
         # Keep the no-decay group (which holds nn.Embedding tables) in 32-bit state —
         # bnb's 8-bit is unstable on sparse/large-range embedding grads. The no-decay group
         # otherwise holds only sub-4096 tensors (already fp32), so this mirrors AdamW8bit.
@@ -173,7 +181,7 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         base_opt = AdEMAMixB1Zero(
             groups, lr=lr, betas=(0.0, betas[1], beta3), alpha=alpha,
             t_alpha=t_alpha, t_beta3=t_beta3, beta3_warmup_start=b3_start,
-            eps=1e-8, weight_decay=wd, bits=bits)
+            eps=1e-8, weight_decay=wd, bits=bits, fused=fused, eps_inside=eps_inside)
     elif use_8bit:
         try:
             import bitsandbytes as bnb

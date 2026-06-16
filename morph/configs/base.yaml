@@ -157,6 +157,22 @@ training:
   ademamix_t_beta3: null         # null → training.steps
   ademamix_beta3_warmup_start: 0.9  # (b1zero only) β3-warmup START decay; β1=0 makes the
                                  # paper's log(β1) schedule degenerate, so we ramp from here.
+  ademamix_fused: false          # (b1zero only) false = DE-FUSED path: bnb's dynamic blockwise
+                                 # qmap for the 8-bit m2/ν state (same quant AdamW8bit uses;
+                                 # preserves small ν → no underflow/throttle). true = custom
+                                 # fused Triton kernel (LINEAR-int8 state) — faster opt.step but
+                                 # its linear quant is lossy on small-ν lanes (underflow→explode
+                                 # OR over-floor→LR-throttle, measured 2026-06-15). Keep FALSE
+                                 # until a dynamic-qmap fused kernel exists. opt.step is ~2% of
+                                 # step time, so de-fused costs ~nothing on quality runs.
+  ademamix_eps_inside: true      # (b1zero, de-fused only) true = √(ν/bc2+ε) safety floor;
+                                 # false = √(ν/bc2)+ε true-Adam normalization. eps-inside floors
+                                 # the denom at √ε≈1e-4 → THROTTLES live small-ν params (abundant
+                                 # under ternary STE) → ~0.5 nats slower convergence (measured
+                                 # 2026-06-16). It is only NEEDED for the fused linear-int8 kernel
+                                 # (ν→0 underflow → ε explosion); the de-fused dynamic-qmap path
+                                 # never underflows + _mask_dead_state handles prune blowup, so
+                                 # set FALSE with fused:false for the fast+stable combo.
 
   # ── Deploy quant stack (ALL ON by default — validated winners) ──
   # Ternary QAT: forward-STE on weights → {-1,0,+1}×scale. Training ppl IS deployed-ternary ppl.
