@@ -35,6 +35,8 @@ verified to be >5 KB and contain the paper title.
 | Hybrid Embeddings — Gu et al. 2019 (#11) | hybrid-embeddings-gu2019 | ✓ 1436 KB | ✓ 79 KB | https://openreview.net/forum?id=HJxeWnCcF7 | PDF via openreview.net/pdf?id=HJxeWnCcF7 |
 | Lottery Ticket Hypothesis (#28) | 1803.03635 | ✓ 3990 KB | ✓ 141 KB | https://arxiv.org/abs/1803.03635 | conceptual basis for CMS structured pruning |
 | Block-ELL Format (#2) | block-ell-nvidia | ✗ web-only | ✓ 1 KB | https://docs.nvidia.com/cuda/cusparse/storage-formats.html | NVIDIA cuSPARSE docs + dev blog; no paper PDF exists — MD stub with both source URLs (no PDF fabricated) |
+| MegaBlocks / STK (#2a) | 2211.15841 | ✓ 553 KB | ✓ 65 KB | https://arxiv.org/abs/2211.15841 | MORTAR sparse matmul via vendored `morph/sparse/stk` |
+| AdEMAMix Optimizer (#29) | 2409.03137 | ✓ 2800 KB | ✓ 141 KB | https://arxiv.org/abs/2409.03137 | optional `ademamix` / `ademamix_b1zero` training arms |
 | TST — Token Superposition (bonus) | 2605.06546 | ✓ 1802 KB (pre-existing) | ✓ 109 KB | https://arxiv.org/abs/2605.06546 | not in references.md; MD generated from existing PDF as requested |
 
 ### DeepSeek-V4 download note
@@ -56,10 +58,10 @@ Final fetch: HTTP 200, 4,480,407 bytes, valid PDF. No content was fabricated.
 
 ## Counts
 
-- **PDFs OK:** 25 (23 arXiv + DeepSeek-V4 + Hybrid Embeddings) + 1 pre-existing TST PDF = **26 PDF files on disk**.
-- **MD OK:** **27** (26 from PDFs + 1 web-only block-ell-nvidia stub).
+- **PDFs OK:** 27 (25 arXiv + DeepSeek-V4 + Hybrid Embeddings) + 1 pre-existing TST PDF = **28 PDF files on disk**.
+- **MD OK:** **29** (28 from PDFs + 1 web-only block-ell-nvidia stub).
 - **Failed:** 0.
 - **Skipped by design:** 5 (3 same-file pointers + 2 original-work entries) + Block-ELL has no PDF (web-only, MD stub written).
 
-All 26 PDFs passed `file`="PDF document" + size>50 KB. All 27 MDs are >5 KB (smallest:
+All 28 PDFs passed `file`="PDF document" + size>50 KB. All 29 MDs are >5 KB (smallest:
 SwiGLU 12 KB) and contain their paper title.

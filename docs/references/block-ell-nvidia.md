@@ -5,7 +5,7 @@
 - **Source URLs:**
   - cuSPARSE Blocked-ELL storage format documentation: https://docs.nvidia.com/cuda/cusparse/storage-formats.html
   - NVIDIA Developer Blog — "Accelerating Matrix Multiplication with Block Sparse Format and NVIDIA Tensor Cores": https://developer.nvidia.com/blog/accelerating-matrix-multiplication-with-block-sparse-format-and-nvidia-tensor-cores/
-- **MORPH uses:** The Blocked-Ellpack (Blocked-ELL) storage format where nonzero weight sub-matrices are stored in fixed-size dense tiles (32x32 on SM120/5090) with a companion column-index array. MORPH's CMS pruning selects which tiles survive; surviving tiles are stored in Block-ELL for hardware-efficient SpMM using Tensor Cores, achieving near-linear speedup proportional to sparsity.
+- **MORPH uses:** Early pruning backend. Superseded by MegaBlocks STK kernels — see `2211.15841.md`.
 
 ---
 

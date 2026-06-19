@@ -199,14 +199,23 @@ during dense pretraining, then compacts to hardware-efficient sparse weights. Th
 motivates why aggressive block pruning can retain capability after the dense→prune→compact
 schedule.
 
-### Block-ELL Sparse Format
+### Block-ELL Sparse Format (superseded)
 **Source:** NVIDIA cuSPARSE Library + NVIDIA Technical Blog  
 **Reference:** "Accelerating Matrix Multiplication with Block Sparse Format and NVIDIA Tensor Cores" — NVIDIA Developer Blog (2023);  
 cuSPARSE [Blocked-ELL Storage Format Documentation](https://docs.nvidia.com/cuda/cusparse/storage-formats.html)  
-**MORPH uses:** The Blocked-Ellpack (Blocked-ELL) storage format where nonzero weight sub-matrices
-are stored in fixed-size dense tiles (32×32 on SM120/5090) with a companion column-index array.
-MORPH's CMS pruning selects which tiles survive; surviving tiles are stored in Block-ELL for
-hardware-efficient SpMM using Tensor Cores, achieving near-linear speedup proportional to sparsity.
+**MORPH history:** Early MORPH pruning used Blocked-Ellpack (Blocked-ELL) tiles with a companion
+column-index array. This backend was removed 2026-06-11 in favor of MORTAR BCSR + MegaBlocks STK
+kernels (see MegaBlocks entry below).
+
+### MegaBlocks — Block-Sparse GPU Kernels (STK)
+**Title:** MegaBlocks: Efficient Sparse Training with Mixture-of-Experts  
+**Authors:** Trevor Gale, Deepak Narayanan, Cliff Young, Matei Zaharia (Stanford, Microsoft Research, Google Research)  
+**Year:** 2022 (MLSys 2023)  
+**arXiv:** [2211.15841](https://arxiv.org/abs/2211.15841)  
+**MORPH uses:** The Sparse Toolkit (STK) block-sparse Triton kernels vendored in `morph/sparse/stk`,
+originally developed for dropless MoE routing via blocked-CSR/COO encodings and transpose-index
+tricks. MORPH repurposes these kernels for MORTAR 128×128 BCSR sparse matmul after carve() —
+measured 3.09× faster than dense at 0.25 density, replacing the slower Block-ELL backend.
 
 ### ReMoE — Differentiable MoE Routing
 **Title:** ReMoE: Fully Differentiable Mixture-of-Experts with ReLU Routing  
@@ -313,10 +322,27 @@ shadow weights. This is the only ternary training method validated to work relia
 
 The implementation provided here extends across all learned weights of the backbone (not the neural memory).
 
+---
+
+## 10. Optimizer
+
+### AdEMAMix — Dual-EMA Adam Variant
+**Title:** The AdEMAMix Optimizer: Better, Faster, Older  
+**Authors:** Matteo Pagliardini, Pierre Ablin, David Grangier (EPFL, Apple)  
+**Year:** 2024 (ICLR 2025)  
+**arXiv:** [2409.03137](https://arxiv.org/abs/2409.03137)  
+**MORPH uses:** Optional training optimizer (`cfg.training.optimizer`: `ademamix` via
+bitsandbytes AdEMAMix/AdEMAMix8bit, or `ademamix_b1zero` — MORPH's β1=0 fork with a fused
+Triton kernel for 2-buffer 8-bit state and AdamW8bit memory parity). Extends AdamW with a
+second very-slow momentum EMA (decay β3, default 0.9999) mixed into the update via weight α
+(default 8.0): `update = (m₁ + α·m₂)/(√ν + ε) + λ·p`. α and β3 require their own warmup
+schedulers (`t_alpha`, `t_beta3`) distinct from LR warmup — essential for stability under
+MORPH's flat-LR recipe. Includes prune-aware dead-state masking for CMS-carved weights.
+Default deploy path remains AdamW8bit + STE ternary shadow weights.
 
 ---
 
-## 10. Tokenization & Data
+## 11. Tokenization & Data
 
 ### StarCoder2 — Tokenizer
 **Title:** StarCoder 2 and The Stack v2: The Next Generation  
@@ -329,7 +355,7 @@ The 49k vocab cleanly stacks with a bigram hash-vocab prefix for rare byte patte
 
 ---
 
-## 11. Inference Scaling
+## 12. Inference Scaling
 
 ### Zyphra RSA — Markovian Recurrent Speculative Aggregation
 **Title:** ZAYA1-8B Technical Report  
@@ -349,7 +375,8 @@ harness deployment after RL training, currently deferred.
 | # | Technique | Paper | arXiv |
 |---|-----------|-------|-------|
 | 1 | Parcae Loop | Prairie et al. (UCSD+Together, 2026) | [2604.12946](https://arxiv.org/abs/2604.12946) |
-| 2 | Block-ELL Format | NVIDIA cuSPARSE (2021+) | [developer.nvidia.com](https://developer.nvidia.com/blog/accelerating-matrix-multiplication-with-block-sparse-format-and-nvidia-tensor-cores/) |
+| 2 | Block-ELL Format (superseded) | NVIDIA cuSPARSE (2021+) | [developer.nvidia.com](https://developer.nvidia.com/blog/accelerating-matrix-multiplication-with-block-sparse-format-and-nvidia-tensor-cores/) |
+| 2a | MegaBlocks / STK | Gale et al. (Stanford, 2022) | [2211.15841](https://arxiv.org/abs/2211.15841) |
 | 3 | CMS Topology | Original work — MORPH project | — |
 | 4 | Neural Memory (Titans) | Behrouz, Zhong, Mirrokni (Google, 2025) | [2501.00663](https://arxiv.org/abs/2501.00663) |
 | 5 | CCA | Figliolia et al. (Zyphra, 2025) | [2510.04476](https://arxiv.org/abs/2510.04476) |
@@ -378,3 +405,4 @@ harness deployment after RL training, currently deferred.
 | 26 | Value Shift | Figliolia et al. (Zyphra, 2025) | [2510.04476](https://arxiv.org/abs/2510.04476) |
 | 27 | LLM-JEPA | Huang, LeCun, Balestriero (2025) | [2509.14252](https://arxiv.org/abs/2509.14252) |
 | 28 | Lottery Ticket Hypothesis | Frankle, Carbin (MIT, 2019) | [1803.03635](https://arxiv.org/abs/1803.03635) |
+| 29 | AdEMAMix Optimizer | Pagliardini et al. (EPFL/Apple, 2024) | [2409.03137](https://arxiv.org/abs/2409.03137) |
