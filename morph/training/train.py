@@ -468,6 +468,19 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
     floor_den_dead = floor_den_live = 0
     total_dead = total_live = 0
     n_layers = n_with_state = 0
+    per_layer = {}   # NEW: name -> (zeroNu_live_count, maxU_in_layer) to localize ν-collapse
+    clip10_live = clip25_live = 0   # NEW: live coords whose ACTUAL |update| would be clipped at 10/25
+    max_rms = (-1.0, None)          # NEW: max per-tensor update-RMS (collective-move magnitude) + layer
+    max_rel = (-1.0, None)          # NEW: max per-tensor rel-step lr·‖u‖/‖w‖ (trust-ratio quantity) + layer
+    # ── β1=0 ROOT-CAUSE measurement (decides soft-SNR gate vs hard-sign gate; GPT 2026-06-17) ──
+    # snr = |m₂|/denom ≈ |running-mean|/rms. If the FAILING (saturating) coords are LOW-snr →
+    # magnitude problem → the soft SNR gate fixes it. If they instead SIGN-FLIP (g vs m₂ disagree)
+    # → oscillation → would need the directional/sign gate. We measure both, globally + on the
+    # saturating subset, so the fix is chosen from data, not assumed.
+    snr_lt01_live = snr_lt03_live = 0          # live coords with snr<0.1 / <0.3
+    sat_count = 0                              # live coords with |update|>10 (the "failing" coords)
+    sat_sign_agree = 0                         # of those, how many have sign(g)==sign(m₂)
+    sat_snr_sum = 0.0                          # Σ snr over saturating coords (÷ sat_count = mean)
     for name, layer in root.named_modules():
         if not isinstance(layer, CMSBlockLinear):
             continue
@@ -486,7 +499,10 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
         bc2 = 1.0 - b2 ** grp["step"]
         eps = grp["eps"]
         g = p.grad.float()
-        denom = (nu / bc2 + eps).sqrt()   # eps-inside (matches the fixed optimizer/kernel)
+        # Match the optimizer's ACTUAL eps placement so maxU is the REAL update magnitude
+        # (eps-OUTSIDE runs were being under-reported by the old always-eps-inside reconstruction).
+        eps_inside = bool(getattr(opt, "eps_inside", True))
+        denom = (nu / bc2 + eps).sqrt() if eps_inside else ((nu / bc2).sqrt() + eps)
         amom = a_t * m2
         upd = ((g + amom) / denom).reshape(-1).abs()
         # dead mask: expand [R,C] _prune_mask → [out,in] elementwise (True=alive)
@@ -505,12 +521,38 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
             floor_den_dead += int(floor_den[dead].sum())
             total_dead += int(dead.sum())
         live = ~dead
+        layer_zero_live = 0
         if live.any():
             amom_live = max(amom_live, float(amf[live].max()))
             minnu_live = min(minnu_live, float(nuf[live].min()))
-            zero_nu_live += int(zero_nu[live].sum())
+            layer_zero_live = int(zero_nu[live].sum())
+            zero_nu_live += layer_zero_live
             floor_den_live += int(floor_den[live].sum())
             total_live += int(live.sum())
+            updl = upd[live]
+            clip10_live += int((updl > 10.0).sum())
+            clip25_live += int((updl > 25.0).sum())
+            # ── SNR + sign-agreement (root-cause measurement; see init above) ──
+            # snr uses RAW |m₂| (matches the optimizer gate exactly — NOT amf=|α·m₂|).
+            m2f = m2.reshape(-1).abs()
+            snr = m2f / denom.reshape(-1)                    # |m₂|/denom ≈ |mean|/rms, per coord
+            snr_live = snr[live]
+            snr_lt01_live += int((snr_live < 0.1).sum())
+            snr_lt03_live += int((snr_live < 0.3).sum())
+            sign_agree = g.reshape(-1).sign() == m2.reshape(-1).sign()
+            sat = live & (upd > 10.0)                        # the FAILING (saturating) coords
+            if sat.any():
+                sat_count += int(sat.sum())
+                sat_sign_agree += int(sign_agree[sat].sum())
+                sat_snr_sum += float(snr[sat].sum())
+        lrms = float(upd.pow(2).mean().sqrt())                   # NEW: per-tensor update-RMS
+        if lrms > max_rms[0]:
+            max_rms = (lrms, name)
+        lr_p = float(grp.get("lr", 0.0))                         # NEW: rel-step = lr·‖u‖/‖w‖
+        rel = lr_p * float(upd.norm()) / (float(p.float().norm()) + 1e-12)
+        if rel > max_rel[0]:
+            max_rel = (rel, name)
+        per_layer[name] = (layer_zero_live, float(upd.max()), rel)  # localize collapse + rel-step
         j = int(upd.argmax())
         if float(upd[j]) > worst[0]:
             gf, df = g.reshape(-1), denom.reshape(-1)
@@ -527,7 +569,237 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
             f"| amomMax d/l={amom_dead:.3e}/{amom_live:.3e} "
             f"minNu d/l={minnu_dead:.2e}/{minnu_live:.2e} "
             f"zeroNu d/l={zero_nu_dead}/{total_dead}:{zero_nu_live}/{total_live} "
-            f"floorDen d/l={floor_den_dead}/{total_dead}:{floor_den_live}/{total_live}\n"
+            f"floorDen d/l={floor_den_dead}/{total_dead}:{floor_den_live}/{total_live} "
+            f"clipLive >10={clip10_live} >25={clip25_live} "
+            f"maxUpdRMS={max_rms[0]:.3f}@{max_rms[1]} "
+            f"relStep={max_rel[0]:.2e}@{max_rel[1]}\n"
+        )
+        # NEW per-layer line: top layers by ν-collapse (only when any) + top-3 by maxU.
+        # Localizes whether collapse concentrates at prelude.0.down (first-layer/arch) or spreads.
+        z_top = sorted(((z, k) for k, (z, _, _) in per_layer.items() if z > 0), reverse=True)[:8]
+        u_top = sorted(((u, k) for k, (_, u, _) in per_layer.items()), reverse=True)[:3]
+        r_top = sorted(((r, k) for k, (_, _, r) in per_layer.items()), reverse=True)[:6]
+        zstr = " ".join(f"{k}={z}" for z, k in z_top) if z_top else "none"
+        ustr = " ".join(f"{k}={u:.2f}" for u, k in u_top)
+        rstr = " ".join(f"{k}={r:.2e}" for r, k in r_top)
+        f.write(f"  PERLAYER zeroNuLive[{zstr}] topMaxU[{ustr}] topRelStep[{rstr}]\n")
+        # NEW: β1=0 root-cause line — SNR distribution (live) + sign-agreement on the FAILING
+        # (saturating, |update|>10) coords. Low sat-SNR + high sat-signAgree ⇒ magnitude/SNR
+        # problem ⇒ the soft SNR gate is the right fix. Low sat-signAgree ⇒ oscillation ⇒ sign gate.
+        tl = max(total_live, 1)
+        sat_sa = (sat_sign_agree / sat_count) if sat_count else float("nan")
+        sat_snr = (sat_snr_sum / sat_count) if sat_count else float("nan")
+        f.write(
+            f"  SNRGATE snr<0.1={snr_lt01_live}/{total_live}({snr_lt01_live/tl:.3f}) "
+            f"snr<0.3={snr_lt03_live}/{total_live}({snr_lt03_live/tl:.3f}) "
+            f"| satCoords(|u|>10)={sat_count} satSignAgree={sat_sa:.3f} satMeanSNR={sat_snr:.3e}\n"
+        )
+
+
+def diag_optstate_allparams(model, optimizer, step: int, path: str) -> None:
+    """ALL-param, GATE-AWARE blow-up localizer (env MORPH_DIAG_OPT=<path>).
+
+    diag_prune_optstate is MLP-only and reconstructs the update UN-gated → at the κ=0.3-gate
+    detonation (step 7000) it showed bounded MLP updates, but that reconstruction ignored the
+    gate (real gated MLP updates were ~1-2) AND skipped every non-MLP param. This sweeps EVERY
+    optimizer-state param, reconstructs the REAL update (gate·g + α·m₂)/denom with the gate
+    APPLIED, and splits it into the gated-g term |gate·g|/denom vs the (UNGATED) α·m₂ term
+    |α·m₂|/denom. Reports the global-worst param by full name + which term drives it, plus the
+    worst per name-category — so we localize whether the blow-up is the ungated α·m₂ push or a
+    non-MLP param (HC-Cayley looped residual = the spectral-radius-sensitive suspect).
+    """
+    opt = getattr(optimizer, "_opt", optimizer)
+    if not hasattr(opt, "state"):
+        return
+    root = getattr(model, "_orig_mod", model)
+    kappa = float(getattr(opt, "g_snr_gate_kappa", 0.0))
+    floor = float(getattr(opt, "g_snr_gate_floor", 0.1))
+    eps_inside = bool(getattr(opt, "eps_inside", True))
+    grp_of = {}
+    for g in opt.param_groups:
+        for q in g["params"]:
+            grp_of[id(q)] = g
+
+    def _deq(st, key, signed, p):
+        if f"{key}_q" in st:                       # de-fused dynamic-map (8-bit)
+            return opt._deq(st[f"{key}_q"], st[f"{key}_amax"], signed, p).reshape(-1)
+        if key in st:                              # fp32 (no-decay group: embed/HC/norm)
+            return st[key].reshape(-1)
+        return None
+
+    def _cat(nm):
+        for k in ("prelude", "core", "coda", "embed", "attn", "mhc", "hc",
+                  "inject", "norm", "lm", "stp", "log_"):
+            if k in nm:
+                return k
+        return "other"
+
+    worst = (-1.0, None)
+    max_g = (-1.0, None)
+    max_am = (-1.0, None)
+    cat_worst = {}
+    for nm, p in root.named_parameters():
+        if not p.requires_grad or p.grad is None:
+            continue
+        st = opt.state.get(p)
+        if not st or st.get("init"):
+            continue
+        grp = grp_of.get(id(p))
+        if grp is None:
+            continue
+        a_t, b2, b3_t = opt._sched(grp["step"], grp)
+        bc2 = 1.0 - b2 ** grp["step"]
+        eps = grp["eps"]
+        m2 = _deq(st, "m2", True, p)
+        nu = _deq(st, "nu", False, p)
+        if m2 is None or nu is None:
+            continue
+        g = p.grad.float().reshape(-1)
+        denom = (nu / bc2 + eps).sqrt() if eps_inside else ((nu / bc2).sqrt() + eps)
+        if kappa > 0.0:
+            gate = (m2.abs() / denom / kappa).clamp(0.0, 1.0).mul_(1.0 - floor).add_(floor)
+        else:
+            gate = torch.ones_like(g)
+        g_term = (gate * g).abs() / denom              # gated raw-g contribution
+        am_term = (a_t * m2).abs() / denom             # UNGATED slow-EMA contribution
+        upd = ((gate * g + a_t * m2) / denom).abs()
+        mu = float(upd.max())
+        cat = _cat(nm)
+        if mu > cat_worst.get(cat, (-1.0, None))[0]:
+            cat_worst[cat] = (mu, nm)
+        mg, ma = float(g_term.max()), float(am_term.max())
+        if mg > max_g[0]:
+            max_g = (mg, nm)
+        if ma > max_am[0]:
+            max_am = (ma, nm)
+        if mu > worst[0]:
+            j = int(upd.argmax())
+            worst = (mu, dict(name=nm, cat=cat, gterm=float(g_term[j]), amterm=float(am_term[j]),
+                              gate=float(gate[j]), denom=float(denom[j]), m2=float(m2[j]),
+                              nu=float(nu[j]), g=float(g[j]), a_t=a_t))
+    b = worst[1] or {}
+    driver = "amom" if b.get("amterm", 0) > b.get("gterm", 0) else "g"
+    with open(path, "a") as f:
+        f.write(
+            f"  ALLPARAM step={step} worstU={worst[0]:.3e}@{b.get('name')}[{b.get('cat')}] "
+            f"driver={driver} gTerm={b.get('gterm', 0):.3e} amTerm={b.get('amterm', 0):.3e} "
+            f"gate={b.get('gate', 0):.3f} denom={b.get('denom', 0):.2e} m2={b.get('m2', 0):.2e} "
+            f"nu={b.get('nu', 0):.2e} a_t={b.get('a_t', 0):.2f} "
+            f"| maxGterm={max_g[0]:.3e}@{max_g[1]} maxAMterm={max_am[0]:.3e}@{max_am[1]}\n"
+        )
+        cats = " ".join(
+            f"{c}={v:.2e}" for c, (v, _n) in sorted(cat_worst.items(), key=lambda x: -x[1][0])
+        )
+        f.write(f"  ALLPARAM_CAT {cats}\n")
+
+
+def diag_forward_norms(model, step: int, path: str) -> None:
+    """FORWARD-side blow-up localizer (env MORPH_DIAG_FWD=1, writes to MORPH_DIAG_OPT path).
+
+    The β1=0 deploy detonation (step 19400, density 0.41) explodes the LOSS while every
+    OPTIMIZER update stays calm (maxU 5-11, relStep ~1e-5, zero ν-collapse) — so the cause
+    is invisible to the optimizer-state diags. It is forward-side: a residual-stream / layer
+    activation blowup the looped core amplifies. This probe captures, per training step:
+
+      FWDNORM : the per-block output (residual-stream) L2 norm — localizes WHICH block's
+                activations explode FIRST and whether it is the looped core (amplification)
+                or a specific prelude/coda layer (the historical prelude.0 epicenter).
+                Core blocks run T× per step (Poisson depth) → we keep the MAX over iterations.
+      TERNFLIP: how many backbone ternary weights changed their {-1,0,+1} state since the
+                previous step — tests the "bounded shadow update → mass ternary sign-flip →
+                discontinuous effective-weight change → forward explosion" hypothesis. Exact
+                per-tile ternary state (sign(w/scale)·[|w/scale|>0.5]); pre-carve `_ternary_mode`
+                path only (the deploy detonation is pre-carve@29000, so carved/mortar-ternary
+                is intentionally not covered).
+
+    Hooks are registered once (idempotent); a forward_pre_hook clears the per-step dict so the
+    norms read post-step belong to THIS step's training forward. Near-zero cost (one .norm()
+    per block). Run with MORPH_DIAG_OPT_EVERY=1 so norms are per-step (not max-over-interval).
+    """
+    import torch
+    import torch.nn.utils.parametrize as _P
+    from morph.model.ternary_qat import TernarySTE
+
+    root = getattr(model, "_orig_mod", model)
+
+    # ── Lazy one-time hook registration ────────────────────────────────────
+    if not getattr(model, "_diag_fwd_hooked", False):
+        model._diag_fwd = {}
+
+        def _pre_hook(_m, _inp):
+            model._diag_fwd.clear()
+
+        def _mk(name):
+            def _hook(_m, _inp, out):
+                t = out[0] if isinstance(out, tuple) else out
+                if isinstance(t, torch.Tensor) and t.is_floating_point():
+                    n = t.detach().float().norm().item()
+                    d = model._diag_fwd
+                    if n > d.get(name, 0.0):
+                        d[name] = n
+            return _hook
+
+        root.register_forward_pre_hook(_pre_hook)
+        for sec in ("prelude", "core", "coda"):
+            mods = getattr(root, sec, None)
+            if mods is None:
+                continue
+            for i, blk in enumerate(mods):
+                blk.register_forward_hook(_mk(f"{sec}.{i}"))
+        for nm in ("embed", "final_norm"):
+            sub = getattr(root, nm, None)
+            if sub is not None:
+                sub.register_forward_hook(_mk(nm))
+        model._diag_fwd_hooked = True
+        model._diag_prev_tern = {}
+        # First call: hooks fire on the NEXT forward → nothing to report yet.
+        return
+
+    fwd = dict(model._diag_fwd)
+    if not fwd:
+        return
+
+    # ── Ternary {-1,0,+1} state-flip count since previous step ─────────────────
+    # Ternary backbone = a TernarySTE PARAMETRIZATION on module.weight (NOT the CMSBlockLinear
+    # _ternary_mode flag). The parametrization runs on .weight access → m.weight IS the realized
+    # ternary (code·scale, scale>0) → sign(m.weight) == the {-1,0,+1} code exactly. Count how
+    # many codes changed vs the previous step, totalled + per-section, to test whether a CORE-layer
+    # flip burst coincides with the single-step core residual-stream excursion.
+    prev = model._diag_prev_tern
+    flip_total = 0
+    flip_worst = (-1, None)
+    flip_sec = {}   # section -> flip count this step
+    with torch.no_grad():
+        for name, m in root.named_modules():
+            if not _P.is_parametrized(m, "weight"):
+                continue
+            if not any(isinstance(p, TernarySTE) for p in m.parametrizations.weight):
+                continue
+            tern = torch.sign(m.weight.detach()).to(torch.int8)   # {-1,0,+1} code
+            old = prev.get(name)
+            if old is not None and old.shape == tern.shape:
+                f = int((tern != old).sum().item())
+                flip_total += f
+                sec = name.split(".")[0]
+                flip_sec[sec] = flip_sec.get(sec, 0) + f
+                if f > flip_worst[0]:
+                    flip_worst = (f, name)
+            prev[name] = tern
+    flip_sec_str = " ".join(f"{s}={flip_sec[s]}" for s in sorted(flip_sec, key=lambda k: -flip_sec[k]))
+
+    # ── Worst block + per-section max residual-stream norm ──────────────────
+    worst = max(fwd.items(), key=lambda kv: kv[1])
+    sec_max = {}
+    for k, v in fwd.items():
+        sec = k.split(".")[0]
+        if v > sec_max.get(sec, 0.0):
+            sec_max[sec] = v
+    sec_str = " ".join(f"{s}={sec_max[s]:.3e}" for s in
+                       ("embed", "prelude", "core", "coda", "final_norm") if s in sec_max)
+    with open(path, "a") as f:
+        f.write(
+            f"  FWDNORM step={step} worstBlock={worst[0]}={worst[1]:.3e} | {sec_str}\n"
+            f"  TERNFLIP step={step} total={flip_total} worst={flip_worst[0]}@{flip_worst[1]} | {flip_sec_str}\n"
         )
 
 
@@ -1035,6 +1307,8 @@ def main(cfg: DictConfig) -> None:
     # block + its Python alloc stack) at the first step >= N, for line-level attribution.
     _mem_probe = bool(os.environ.get("MORPH_MEM_PROBE"))
     _diag_optstate_path = os.environ.get("MORPH_DIAG_OPT")  # prune-divergence root-cause probe
+    _diag_optstate_every = int(os.environ.get("MORPH_DIAG_OPT_EVERY", "1"))  # stride (1 = every step)
+    _diag_fwd = bool(os.environ.get("MORPH_DIAG_FWD"))      # forward-side blow-up localizer
     _mem_snap_step = int(os.environ.get("MORPH_MEM_SNAPSHOT_STEP", "-1"))
     _mem_snapped = False
     # History recording installs CUDA-allocator hooks that can make a Triton
@@ -1245,8 +1519,14 @@ def main(cfg: DictConfig) -> None:
         # ── Prune-divergence diagnostic (env MORPH_DIAG_OPT=<path>) ─────────
         # Post-step, grads still live (zero_grad is top-of-next-iter). Dequants m₂/ν and
         # attributes the worst update dead-vs-live, numerator-vs-denominator. Off by default.
-        if _diag_optstate_path:
+        if _diag_optstate_path and (step % _diag_optstate_every == 0 or step <= 5):
             diag_prune_optstate(model, optimizer, step, _diag_optstate_path)
+            diag_optstate_allparams(model, optimizer, step, _diag_optstate_path)
+        # Forward-side blow-up localizer (MORPH_DIAG_FWD=1): per-block residual-stream norm +
+        # backbone ternary {-1,0,+1} flip count — for the β1=0 STE-cusp detonation (calm
+        # optimizer, exploding loss). Registered lazily; run every step here for per-step norms.
+        if _diag_fwd and _diag_optstate_path:
+            diag_forward_norms(model, step, _diag_optstate_path)
 
         # ── Timing ────────────────────────────────────────────────────────
         t_now = time.perf_counter()
@@ -1307,6 +1587,15 @@ def main(cfg: DictConfig) -> None:
             if step % 100 == 0 and pruning.is_routed:
                 rt_stats = collect_routing_stats(model)
                 log.update(rt_stats)
+
+            # β1=0 SNR-gate activity (only when the gate is active) — mean gate applied + how many
+            # coords were heavily noise-gated (<0.5), reset each log interval. Direct evidence the
+            # gate fires (vs inferring from the loss curve).
+            _o = getattr(optimizer, "_opt", optimizer)
+            if getattr(_o, "g_snr_gate_kappa", 0.0) > 0.0 and getattr(_o, "_gate_n", 0) > 0:
+                log["optim/snr_gate_mean"] = _o._gate_sum / _o._gate_n
+                log["optim/snr_gate_lt0.5_coords"] = _o._gate_low
+                _o._gate_sum, _o._gate_n, _o._gate_low = 0.0, 0, 0
 
             wandb.log(log, step=step)
 

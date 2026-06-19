@@ -180,6 +180,51 @@ training:
                                  # coords in one step (observed eps-out divergences @9400/@19400).
                                  # Only bites anomalous coords → no convergence throttle (unlike
                                  # eps-inside's blanket √ε floor). 100 = 3-4× over healthy worst.
+  ademamix_update_rms_clip: 0.0  # (b1zero, de-fused) per-TENSOR cap on the RMS of (g+α·m₂)/denom.
+                                 # The per-coord clip can't stop the COLLECTIVE oscillation that
+                                 # detonates eps-outside on the looped/ternary first layer (no-prune
+                                 # isolation 2026-06-16: ~500k prelude.0 coords spike COHERENTLY →
+                                 # capping each still moves the whole layer). RMS clip bounds the herd:
+                                 # healthy update-RMS ≈0.5, collective spike ≈9 → a cap ~2 kills the
+                                 # overshoot, passes healthy untouched. 0 = off.
+                                 # NOTE 2026-06-16: RMS=2 measured INVASIVE (healthy RMS ~2-2.4 across
+                                 # many layers) — superseded by amsgrad/trust_ratio below.
+  ademamix_amsgrad: false        # (b1zero, de-fused) AMSGrad ν_max denominator memory (Reddi 2019):
+                                 # denom uses max(ν_max,ν) not ν → prevents effective-LR rise on a
+                                 # coord that was loud then went quiet (the measured eps-out small-ν
+                                 # oscillation). Surgical (always-quiet coords keep ν_max=ν=advantage).
+                                 # COST: +1 fp32 state buffer (forfeits β1=0 2-buffer memory win).
+  ademamix_trust_ratio: 0.0      # (b1zero, de-fused) downward-only LARS/LAMB trust ratio τ: scale each
+                                 # tensor's update so weights move ≤ τ·‖w‖/step. Relative per-layer
+                                 # governor (scale-aware). 0 = off. Try ~1e-3..1e-2.
+  # ── β1=0 ROOT-CAUSE FIX (b1zero, de-fused) — restore Adam's lost noise-gating, NO m1 buffer ──
+  # DIAGNOSIS (2026-06-17): β1=0 puts raw g in the numerator (g+α·m₂)/√E[g²] → on a noise coord
+  # that is a UNIT-VARIANCE random walk every step (Adam's (1−β1) fast-EMA averages it away; β1=0
+  # can't). Damage accumulates → divergence (the 31.6 saturation spikes are its tail). These two
+  # knobs damp the raw-g term selectively, statelessly (β1=0 2-buffer memory win preserved):
+  ademamix_g_coef: 1.0           # γ: constant downscale of the raw-g numerator term (γ·g + α·m₂).
+                                 # Crude (1−β1) mimic — damps ALL coords uniformly (throttles signal
+                                 # too). Cheap CONTROL for the gate below. 1.0 = off. Try ~0.1–0.3.
+  ademamix_g_snr_gate_kappa: 0.0 # κ: SOFT per-coord SNR gate. snr=|m₂|/denom ≈ |mean|/rms; gate =
+                                 # floor+(1−floor)·clamp(snr/κ,0,1); numerator = gate·g + α·m₂. Noise
+                                 # coord (snr→0)→gate=floor (~10× cut, = Adam); signal coord (snr≈1)→
+                                 # gate=1 (full AdEMA advantage); fresh spike auto-gated (ν leads m₂).
+                                 # THE root-cause fix. 0.0 = off. Try κ~0.3 first, sweep 0.2–0.5.
+  ademamix_g_snr_gate_floor: 0.1 # gate floor (min raw-g weight on a pure-noise coord). ≈(1−β1)=0.1
+                                 # matches Adam's noise damping; >0 so learning never fully stalls.
+  # ── STE-cusp-vault fixes (2026-06-18; mechanism CONFIRMED: β1=0 raw step vaults a ternary cusp →
+  #    ~100k core ternary codes flip in one step → looped core amplifies → explosion). Tested SEPARATELY. ──
+  ademamix_num_beta1: 0.0        # ARM D: small momentum on the raw-g NUMERATOR term (m1=β1·m1+(1−β1)·g,
+                                 # bias-corrected; 8-bit m1, ~+1 B/param). Smooths the step so it
+                                 # approaches cusps gently (AdamW's β1 analog). 0.0=off (raw g). Try ~0.9.
+  ademamix_flip_clamp_kappa: 0.0 # ARM A: per-tensor cap on realized ternary FLIP-RATE/step. s=mean|w|,
+                                 # thr=0.5·s; if frac of codes that flip under p−lr·u > κ, scale that
+                                 # tensor's update by κ/frac (stateless governor). 0.0=off. Try ~0.02-0.05.
+  ademamix_eps_inside_patterns: []  # (b1zero, de-fused) LAYER-TARGETED eps placement: params whose name
+                                 # contains any of these substrings use eps-INSIDE (√(ν/bc2+ε) floor →
+                                 # stabilize), the rest stay eps-OUTSIDE (full advantage). The mechanism-
+                                 # matched fix if the eps-out small-ν oscillation is localized to a few
+                                 # boundary layers. Ablate: ["prelude.0.mlp"] → ["prelude"] → ["prelude","coda"].
 
   # ── Deploy quant stack (ALL ON by default — validated winners) ──
   # Ternary QAT: forward-STE on weights → {-1,0,+1}×scale. Training ppl IS deployed-ternary ppl.
