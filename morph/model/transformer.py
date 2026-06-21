@@ -91,6 +91,11 @@ class MORPHConfig:
     # Prediction (STP — Semantic Tube Predictor, geometric regularizer)
     stp_lambda: float = 0.02
     stp_tau: int = 64
+    # Loop-axis STP (Task #276 de-coherence arm A): same geodesic-smoothness geometry as STP, but
+    # applied along the LOOP-ITERATION trajectory h_0→…→h_T instead of the token axis. Pushes the
+    # inner map f_θ toward locally-affine behaviour → reduces the curvature that makes the AdEMAMix
+    # slow-EMA go stale (the σ_max(J_core) inter-block-alignment runaway). 0.0 → OFF, bit-exact.
+    loop_stp_lambda: float = 0.0
 
     # LM head — fused chunked cross-entropy (training). Rows of [B·T] tokens
     # processed per chunk; smaller = less peak memory, more launch overhead.
@@ -150,6 +155,13 @@ class MORPHConfig:
 
     # Training
     dropout: float = 0.1
+
+    # L1 core-gain governor (Task #276, 2026-06-18): cap the per-iteration looped-core
+    # amplification ‖h_new‖/‖h_a‖ (per sample) to this ratio τ. The HC residual is
+    # norm-preserving (gain≈1 healthy) so this is IDENTITY in the healthy regime and only
+    # shrinks the runaway-gain step that the weight-shared core amplifies T× (the β1=0
+    # detonation mode). 0.0 = OFF (bit-identical to baseline). Typical τ≈1.5–2.0.
+    core_gain_clip: float = 0.0
 
 
 class DiagonalInjection(nn.Module):
@@ -373,6 +385,11 @@ class MORPHTransformer(nn.Module):
     def __init__(self, cfg: MORPHConfig):
         super().__init__()
         self.cfg = cfg
+        # MORPH_DIAG_CORECOS: log per-iteration carrier ROTATION (min per-token cos(h_new,h_a))
+        # + paired magnitude gain, to test whether the β1=0 spike is a directional rotation
+        # (the magnitude governor was magnitude-invariant). Cheap: tensor-reduced, 1 sync/forward.
+        self._diag_corecos = bool(os.environ.get("MORPH_DIAG_CORECOS"))
+        self._fwd_count = 0
         d = cfg.d_model
         n_total = cfg.n_prelude + cfg.n_core + cfg.n_coda
 
@@ -587,6 +604,37 @@ class MORPHTransformer(nn.Module):
                 term = term.unsqueeze(-2)
             return h + term
 
+    def _apply_core_step(self, h_in, e_in, ids, x0_terms, bg,
+                         ret_state=None, iter_idx=0):
+        """ONE core-loop step: SSM diagonal injection → the n_core shared blocks
+        (each with per-layer x0/bigram injection + optional GLA retention carry).
+        Returns ``(h, new_ret_state)`` (new_ret None unless a core layer carries retention).
+
+        Lifted verbatim out of ``_forward_single``'s loop so the EXACT training-path core
+        map ``f_θ`` is callable in isolation — for σ_max(J_core) probing and per-step
+        contractivity diagnostics (the nested-dynamical-system inner map, Task #276). The
+        only former loop-local was ``np_`` (= n_prelude, a constant), recomputed here, so
+        this is byte-identical to the in-loop closure (gated bit-exact).
+        """
+        np_ = self.cfg.n_prelude
+        mlp_kw = {"iter_idx": iter_idx}
+        h_injected = self.injection(h_in, e_in)
+        ret_cap = {} if self._core_has_retention else None
+        for i, layer in enumerate(self.core):
+            gi = np_ + i
+            term = self._build_injection_term(
+                gi, x0_terms[i], ids, bg, h_injected.dtype
+            )
+            h_injected = self._apply_injection(h_injected, term)
+            # Retention carry only for the designated core layer(s); others get None.
+            is_ret = ret_cap is not None and (i in self._retention_layers)
+            rs_arg = ret_state if is_ret else None
+            rc_arg = ret_cap if is_ret else None
+            h_injected = layer(h_injected, mlp_kwargs=mlp_kw,
+                               ret_state=rs_arg, ret_capture=rc_arg)
+        new_ret = ret_cap.get("state") if ret_cap is not None else None
+        return h_injected, new_ret
+
     # ── Forward ───────────────────────────────────────────────────────
 
     def forward(self, input_ids: Tensor, labels: Tensor | None = None,
@@ -672,29 +720,12 @@ class MORPHTransformer(nn.Module):
         )  # [n_core, B, S, ctx_width]
 
         def _core_step(h_in, e_in, ids, x0_terms, bg, ret_state=None, iter_idx=0):
-            # ret_state: [B,H,dk,dv]|None — GLA cross-iteration carry for the retention core layer.
-            # iter_idx: which core-loop iteration t this call is (drives the ReMoE router's
-            #   iteration embedding). Passed as an explicit arg — NOT module state — so it is
-            #   captured in the checkpoint closure and replayed correctly during backward recompute.
-            # ALWAYS returns (h, new_ret_state); new_ret is None unless a core layer carries
-            # retention. Returning new_ret (not a side-channel) is checkpoint-safe.
-            mlp_kw = {"iter_idx": iter_idx}
-            h_injected = self.injection(h_in, e_in)
-            ret_cap = {} if self._core_has_retention else None
-            for i, layer in enumerate(self.core):
-                gi = np_ + i
-                term = self._build_injection_term(
-                    gi, x0_terms[i], ids, bg, h_injected.dtype
-                )
-                h_injected = self._apply_injection(h_injected, term)
-                # Retention carry only for the designated core layer(s); others get None.
-                is_ret = ret_cap is not None and (i in self._retention_layers)
-                rs_arg = ret_state if is_ret else None
-                rc_arg = ret_cap if is_ret else None
-                h_injected = layer(h_injected, mlp_kwargs=mlp_kw,
-                                   ret_state=rs_arg, ret_capture=rc_arg)
-            new_ret = ret_cap.get("state") if ret_cap is not None else None
-            return h_injected, new_ret
+            # Thin closure → the bound `_apply_core_step` method (single source of truth so
+            # the σ_max probe / diagnostics exercise the EXACT training core map). Kept as a
+            # closure so `checkpoint(_core_step, ...)` and the eager/no_grad call sites below
+            # are unchanged; np_ (= cfg.n_prelude) is now recomputed inside the method.
+            return self._apply_core_step(h_in, e_in, ids, x0_terms, bg,
+                                         ret_state=ret_state, iter_idx=iter_idx)
 
         # ── Active-set shrinking ────────────────────────────────────────────
         # A sample is updated only while iteration t < its Poisson depth, then
@@ -746,6 +777,22 @@ class MORPHTransformer(nn.Module):
         else:
             ret_state_s = None
 
+        _cc_meanmin = None  # MORPH_DIAG_CORECOS: min-over-iters of MEAN per-token cos(h_new,h_a)
+        _cc_fracmax = None  # max-over-iters of FRACTION of tokens rotated >60° (cos<0.5)
+        _cc_min = None      # min per-token cos (saturated order-stat; kept for reference)
+        _cc_gain = None     # max per-sample magnitude gain (natural when governor off)
+        # MORPH_DIAG_PERITER: keep the PER-ITERATION max_gain (realized one-step amplification,
+        # a data-direction lower bound on σ_max(J_core)). If it COMPOUNDS across iteration index t
+        # in the run-up to detonation → σ_max-driven transient blowup THROUGH the loop (the
+        # nested-dynamical-system frame). Reuses the validated _g; just doesn't max-reduce over t.
+        _peri = self._diag_corecos and bool(os.environ.get("MORPH_DIAG_PERITER"))
+        _peri_g = []        # per-iter max_gain (computed PRE-governor below)
+        # Loop-axis STP: collect the grad-carrying iterates' carriers (stream-reduced) so the
+        # post-loop geodesic smoothness over the ITERATION trajectory is differentiable. Only the
+        # last bptt_depth iters carry grad; active sets are nested prefixes (depth-sorted), so a
+        # consecutive triplet is sliced to the LATEST iter's prefix (samples active in all three).
+        _loop_stp_on = self.training and self.cfg.loop_stp_lambda > 0.0
+        _loop_carriers: list[Tensor] = []
         for t in range(total_iters):
             n_active = active_counts[t]
             if n_active == 0:
@@ -769,6 +816,38 @@ class MORPHTransformer(nn.Module):
                 # eval, OR a grad-iter we chose not to checkpoint (activations retained).
                 h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t)
 
+            # ── L1 core-gain governor (#276) ──────────────────────────────────────────
+            # Cap this iteration's per-sample looped-core amplification ‖h_new‖/‖h_a‖ ≤ τ.
+            # IDENTITY when gain ≤ τ (healthy: the HC residual is norm-preserving so gain≈1 →
+            # scale=1.0 → bit-exact x*1.0); only SHRINKS the runaway-gain step that the
+            # weight-shared core would otherwise amplify T× (the β1=0 detonation mode). Applied
+            # uniformly across the no_grad / checkpoint / eager branches (outside the checkpoint
+            # so the scaling lives in the outer graph). τ=0 → skipped entirely → bit-identical.
+            _tau = self.cfg.core_gain_clip
+            if _tau > 0.0:
+                _in_n = h_a.flatten(1).norm(dim=1)
+                _out_n = h_new.flatten(1).norm(dim=1)
+                _scale = torch.clamp(_tau * _in_n / (_out_n + 1e-6), max=1.0)
+                h_new = h_new * _scale.view(-1, *([1] * (h_new.dim() - 1)))
+
+            # Loop-STP: stash this grad-iter's carrier (stream-reduced → [n_active, S, C]).
+            if _loop_stp_on and t >= n_nograd:
+                _loop_carriers.append(h_new.mean(dim=2) if self._is_hc else h_new)
+
+            if self._diag_corecos:
+                _a = h_a.flatten(0, 1); _b = h_new.flatten(0, 1)          # [n*S, C] per-token
+                _ct = (_a * _b).sum(-1) / (_a.norm(dim=-1) * _b.norm(dim=-1) + 1e-6)
+                _mean = _ct.mean()                                        # avg token rotation
+                _frac = (_ct < 0.5).float().mean()                       # frac rotated >60°
+                _cm = _ct.min()
+                _g = (h_new.flatten(1).norm(dim=1) / (h_a.flatten(1).norm(dim=1) + 1e-6)).max()
+                _cc_meanmin = _mean if _cc_meanmin is None else torch.minimum(_cc_meanmin, _mean)
+                _cc_fracmax = _frac if _cc_fracmax is None else torch.maximum(_cc_fracmax, _frac)
+                _cc_min = _cm if _cc_min is None else torch.minimum(_cc_min, _cm)
+                _cc_gain = _g if _cc_gain is None else torch.maximum(_cc_gain, _g)
+                if _peri:
+                    _peri_g.append(_g)   # per-iteration realized max_gain (raw when governor off)
+
             # updated active prefix + frozen suffix (no in-place op).
             with _prof("carrier::loop_cat"):
                 h_s = h_new if n_active == h_s.shape[0] else \
@@ -776,6 +855,32 @@ class MORPHTransformer(nn.Module):
             if track_ret and rs_new is not None:
                 ret_state_s = rs_new if n_active == ret_state_s.shape[0] else \
                     torch.cat([rs_new, ret_state_s[n_active:]], dim=0)
+
+        if self._diag_corecos and self.training and _cc_meanmin is not None:
+            self._fwd_count += 1
+            print(f"CORECOS fwd={self._fwd_count} mean_cos={_cc_meanmin.item():.4f} "
+                  f"frac_rot={_cc_fracmax.item():.4f} min_cos={_cc_min.item():.4f} "
+                  f"max_gain={_cc_gain.item():.3f}", flush=True)
+            if _peri and _peri_g:
+                _gv = torch.stack(_peri_g)                       # [n_iters], 1 sync
+                _gs = ",".join(f"{x:.2f}" for x in _gv.tolist())
+                print(f"PERITER fwd={self._fwd_count} n_iter={_gv.numel()} gains=[{_gs}]", flush=True)
+
+        # ── Loop-axis STP loss ────────────────────────────────────────────────
+        # Geodesic smoothness over the iteration trajectory: for each consecutive grad-iter
+        # triplet (a,b,c), penalise 1 − cos(c−b, b−a) (the increments should be colinear =
+        # locally-affine inner map). Active sets are nested prefixes, so slice a,b to c's prefix.
+        loop_stp_loss = h_s.new_zeros(())
+        if _loop_stp_on and len(_loop_carriers) >= 3:
+            _terms: list[Tensor] = []
+            for j in range(len(_loop_carriers) - 2):
+                a, b, c = _loop_carriers[j], _loop_carriers[j + 1], _loop_carriers[j + 2]
+                n = c.shape[0]                            # nested → latest iter = smallest prefix
+                v_bwd = b[:n] - a[:n]                      # increment k     [n, S, C]
+                v_fwd = c - b[:n]                          # increment k+1
+                _terms.append((1.0 - F.cosine_similarity(v_fwd, v_bwd, dim=-1)).mean())
+            if _terms:
+                loop_stp_loss = torch.stack(_terms).mean()
 
         with _prof("carrier::inv_perm_gather"):
             x = h_s[inv_perm]                    # restore original batch order
@@ -820,8 +925,8 @@ class MORPHTransformer(nn.Module):
                 x.reshape(-1, x.shape[-1]), w_full, labels.reshape(-1),
                 ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
             )
-            loss = ce_loss + self.cfg.stp_lambda * stp_loss
-            out = {"logits": None, "stp_loss": stp_loss, "loss": loss}
+            loss = ce_loss + self.cfg.stp_lambda * stp_loss + self.cfg.loop_stp_lambda * loop_stp_loss
+            out = {"logits": None, "stp_loss": stp_loss, "loop_stp_loss": loop_stp_loss, "loss": loss}
         else:
             logits = self.embed.attend(x)
             out = {"logits": logits}
@@ -830,8 +935,9 @@ class MORPHTransformer(nn.Module):
                     logits.reshape(-1, self.cfg.vocab_size),
                     labels.reshape(-1), ignore_index=-100,
                 )
-                loss = ce_loss + self.cfg.stp_lambda * stp_loss
+                loss = ce_loss + self.cfg.stp_lambda * stp_loss + self.cfg.loop_stp_lambda * loop_stp_loss
                 out["stp_loss"] = stp_loss
+                out["loop_stp_loss"] = loop_stp_loss
                 out["loss"] = loss
 
         return out

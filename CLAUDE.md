@@ -22,6 +22,23 @@ Dual PyTorch (GPU) + JAX (TPU).
 > `configs/base.yaml` reproduces the validated mortar winner recipe (flat LR, no warmup,
 > prune 3000/100/0.005 → carve@20000 → whole-body route@21000, taylor saliency).
 
+## ⭐ Core mental model — MORPH is a NESTED dynamical system (read before optimizing)
+
+The looped core makes MORPH **two** dynamical systems, not one: the **outer** (optimization,
+`θ_{t+1}=θ_t−η·u_t` — what every optimizer models) and the **inner** (the forward itself,
+`h_{k+1}=f_θ(h_k)` over T loop iterations — exists only because of the loop). The optimizer sees only
+`∇_θ L`, which integrates over the inner trajectory and discards its structure → it is **blind to the
+inner map's contractivity `ρ(J_core)`**. Consequence: the loss landscape **inherits the bifurcation
+structure of `f_θ`** — a `ρ=1` manifold separates a smooth contractive region from an expansive region,
+and the cliff's steepness grows like `ρ^T` (razor-sharp at depth ~6). This is the working explanation for
+the β1=0 AdEMAMix detonations (Task #276): **clamping the realized magnitude (`core_gain_clip`) masks the
+symptom but not the disease — the disease is `ρ(J_core)` crossing 1, which the optimizer can't see and a
+magnitude clamp doesn't touch.** Implication for *any* fix here (and for looped/recursive/weight-shared
+nets generally): target **contractivity** (`ρ≤1`: spectral/Lipschitz control, direction-preserving carrier
+renorm), not symptom-clamping — that also preserves the β1=0 memory win + α·m_slow gains.
+**Full writeup + evidence chain + the decisive `ρ(J_core)` probe:**
+`Ai-notes/06-19-2026/MORPH-Iterative-Map-Dynamics/MENTAL-MODEL.md`.
+
 ## Architecture
 
 Loop hierarchy:

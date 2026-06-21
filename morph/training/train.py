@@ -208,6 +208,7 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         bigram_hash_vocab=int(m.bigram_hash_vocab),
         stp_lambda=float(m.stp_lambda),
         stp_tau=int(m.stp_tau),
+        loop_stp_lambda=float(getattr(m, "loop_stp_lambda", 0.0)),
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
         use_mrr=bool(getattr(m, "use_mrr", True)),
@@ -228,6 +229,7 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         retention_gate_init=float(getattr(m, "retention_gate_init", -6.0)),
         retention_carry=bool(getattr(m, "retention_carry", True)),
         retention_gate_bias=float(getattr(m, "retention_gate_bias", 2.0)),
+        core_gain_clip=float(getattr(m, "core_gain_clip", 0.0)),
         dropout=float(tr.dropout),
     )
 
@@ -693,6 +695,124 @@ def diag_optstate_allparams(model, optimizer, step: int, path: str) -> None:
         f.write(f"  ALLPARAM_CAT {cats}\n")
 
 
+_M2G_SNAP: dict = {}   # name -> (snap_step, m2_cpu_fp32_vec) for slow-EMA self-coherence
+
+
+def diag_m2g_geometry(model, optimizer, step: int, path: str, snap_every: int = 50) -> None:
+    """Slow-EMA geometry localizer on the CORE params (env MORPH_DIAG_M2G=<path>).
+
+    DECIDES the de-coherence operator (Task #276): the α·m₂ term detonates past a critical α
+    horizon (E11) by rotating the core blocks' singular subspaces into alignment. Two mutually
+    exclusive geometric explanations, with OPPOSITE cures:
+      (i)  m₂ has rotated AWAY from the live g (stale tangent off the curved manifold) → cos(m₂,g)
+           DROPS during the drift → cure = directional-trust gate / orthogonal-staleness removal.
+      (ii) the drift is a SUSTAINED COHERENT ramp → cos(m₂,g) stays HIGH and m₂ self-coherence
+           cos(m₂_t, m₂_{t-k}) stays ~1 for hundreds of steps → cure must damp persistence, not
+           mis-alignment.
+    Logs both per core tensor each step (cheap — core params only) + medians. Off by default.
+    """
+    opt = getattr(optimizer, "_opt", optimizer)
+    if not hasattr(opt, "state"):
+        return
+    root = getattr(model, "_orig_mod", model)
+
+    def _deq(st, key, signed, p):
+        if f"{key}_q" in st:
+            return opt._deq(st[f"{key}_q"], st[f"{key}_amax"], signed, p).reshape(-1)
+        if key in st:
+            return st[key].reshape(-1)
+        return None
+
+    rows = []
+    cos_mg_all, cos_self_all = [], []
+    for nm, p in root.named_parameters():
+        if "core." not in nm or not p.requires_grad or p.grad is None:
+            continue
+        st = opt.state.get(p)
+        if not st or st.get("init"):
+            continue
+        m2 = _deq(st, "m2", True, p)
+        if m2 is None:
+            continue
+        g = p.grad.float().reshape(-1)
+        m2n, gn = float(m2.norm()), float(g.norm())
+        cos_mg = float((m2 @ g) / (m2n * gn + 1e-12))
+        cos_self, age = float("nan"), -1
+        prev = _M2G_SNAP.get(nm)
+        if prev is not None:
+            ps, pv = prev
+            pv = pv.to(m2.device)
+            cos_self = float((m2 @ pv) / (m2n * float(pv.norm()) + 1e-12))
+            age = step - ps
+        if prev is None or (step - prev[0]) >= snap_every:
+            _M2G_SNAP[nm] = (step, m2.detach().to("cpu"))
+        rows.append((nm, m2n, gn, cos_mg, cos_self, age))
+        cos_mg_all.append(cos_mg)
+        if cos_self == cos_self:
+            cos_self_all.append(cos_self)
+    if not rows:
+        return
+    import statistics as _stat
+    med_mg = _stat.median(cos_mg_all)
+    med_self = _stat.median(cos_self_all) if cos_self_all else float("nan")
+    rows.sort(key=lambda r: r[3])     # ascending cos(m₂,g) → most-rotated-from-g first
+    with open(path, "a") as f:
+        f.write(f"M2G step={step} n={len(rows)} medCos_m2g={med_mg:.3f} medCos_self={med_self:.3f} "
+                "| lowestCos_m2g: "
+                + " ".join(f"{r[0].split('core.', 1)[1]}={r[3]:.2f}" for r in rows[:4]) + "\n")
+        for nm, m2n, gn, cmg, cself, age in rows:
+            f.write(f"  M2G_T step={step} {nm} m2n={m2n:.3e} gn={gn:.3e} "
+                    f"cos_m2g={cmg:.4f} cos_self={cself:.4f} age={age}\n")
+
+
+def diag_m2g_numerator(optimizer, model, step: int, path: str, dense: bool,
+                       name_filter=None):
+    """Drain the optimizer's g-vs-numerator capture (Task #276 stale-m₂-under-prune PROOF).
+
+    The AUTHORITATIVE metrics — computed INSIDE the optimizer step from the exact m₂/gate/α_t
+    working copies (not re-dequantized here, so they cannot drift from the real update):
+      cos(g, m₂)              → if this DROPS / goes NEGATIVE right after a prune event, the slow
+                                EMA is pointing the wrong way for the new landscape = stale-m₂.
+      cos(g, α·m₂+gated_g)    → whether the FULL numerator still aligns with the live gradient.
+      ‖α·m₂‖ / ‖gated_g‖      → how much the stale term out-weighs the fresh (gated) gradient.
+    Re-arms capture lazily after any optimizer rebuild (compact/route swap the param objects).
+    Writes medians every call; per-tensor rows only when `dense` (set around prune events) to
+    keep the 35k-step log bounded. Returns a dict of medians for wandb.
+    """
+    base = getattr(optimizer, "_opt", optimizer)
+    if not hasattr(base, "set_diag_capture"):
+        return None                                   # not an AdEMAMixB1Zero (e.g. AdamW)
+    if not base._diag_capture or not base._diag_names:
+        base.set_diag_capture(model, name_filter=name_filter)  # (re)arm after build/rebuild
+    rows = base._diag_rows
+    base._diag_rows = []                              # drain — bounded memory
+    if not rows:
+        return None
+    import statistics as _stat
+    cos_m2g = [r[1] for r in rows]
+    cos_num = [r[2] for r in rows]
+    ratio = [r[3] for r in rows]
+    med = {
+        "diag/cos_g_m2_med": _stat.median(cos_m2g),
+        "diag/cos_g_num_med": _stat.median(cos_num),
+        "diag/alpha_m2_over_gatedg_med": _stat.median(ratio),
+        "diag/cos_g_m2_min": min(cos_m2g),
+    }
+    rows.sort(key=lambda r: r[1])                     # ascending cos(g,m₂) → most-stale first
+    with open(path, "a") as f:
+        f.write(f"M2N step={step} n={len(rows)} medCos_g_m2={med['diag/cos_g_m2_med']:.3f} "
+                f"medCos_g_num={med['diag/cos_g_num_med']:.3f} "
+                f"medRatio_am_gg={med['diag/alpha_m2_over_gatedg_med']:.3f} "
+                f"minCos_g_m2={med['diag/cos_g_m2_min']:.3f}"
+                + (" PRUNE_WINDOW" if dense else "") + "\n")
+        if dense:
+            for nm, cgm, cgn, rt, m2n, gn, amn, ggn in rows:
+                short = nm.split("core.", 1)[-1]
+                f.write(f"  M2N_T step={step} {short} cos_g_m2={cgm:.4f} cos_g_num={cgn:.4f} "
+                        f"am/gg={rt:.3f} m2n={m2n:.3e} gn={gn:.3e} amn={amn:.3e} ggn={ggn:.3e}\n")
+    return med
+
+
 def diag_forward_norms(model, step: int, path: str) -> None:
     """FORWARD-side blow-up localizer (env MORPH_DIAG_FWD=1, writes to MORPH_DIAG_OPT path).
 
@@ -902,6 +1022,21 @@ def main(cfg: DictConfig) -> None:
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params / 1e6:.1f}M params on {device}")
 
+    # ── Core-map spectral-norm penalty (Task #276 σ_max-runaway cure) ───────────────────────
+    # Binds module REFERENCES to the core MLP linears (stable across compile/init_from/resume —
+    # those reuse the same submodule objects). penalty() calls forward() at TRAIN time so the
+    # ternary STE is applied live. OFF by default (cap or lambda ≤ 0 → never constructed → exact
+    # baseline). Soft hinge: L=λ·Σ relu(σ_max(W)−cap)², zero while healthy (σ_max~1.5 < cap).
+    _spec_pen = None
+    _sp_cap = float(getattr(cfg.training, "spectral_penalty_cap", 0.0))
+    _sp_lam = float(getattr(cfg.training, "spectral_penalty_lambda", 0.0))
+    if _sp_cap > 0.0 and _sp_lam > 0.0:
+        from morph.training.spectral_penalty import CoreSpectralPenalty
+        _spec_pen = CoreSpectralPenalty(model, cap=_sp_cap, lam=_sp_lam,
+                                        n_iter=int(getattr(cfg.training, "spectral_penalty_n_iter", 1)))
+        print(f"  Core spectral-norm penalty ON: cap={_sp_cap} lambda={_sp_lam} "
+              f"on {len(_spec_pen._linears)} core MLP linears (σ_max-runaway cure)")
+
     # ── Ternary QAT (forward-STE) ──────────────────────────────────────────
     # MUST run BEFORE torch.compile (so the STE is captured in the compiled graph)
     # and BEFORE create_optimizer (so the optimizer binds the smooth `.original`
@@ -917,6 +1052,7 @@ def main(cfg: DictConfig) -> None:
             scale_mode=str(getattr(cfg.training, "ternary_scale_mode", "symmetric")),
             scale_group=str(getattr(cfg.training, "ternary_scale_group", "tensor")),
             scale_dtype=str(getattr(cfg.training, "ternary_scale_dtype", "fp16")),
+            scale_clip_mult=float(getattr(cfg.training, "ternary_scale_clip_mult", 0.0)),
         )
         print(
             f"  Ternary QAT ON: scope={ternary_manifest['scope']} "
@@ -1297,6 +1433,16 @@ def main(cfg: DictConfig) -> None:
     model.train()
     step_times: list[float] = []
     t_start = time.perf_counter()
+    # In-process detonation guard (storm-proof; the external watchdog died in a power loss and
+    # let the αcap35 run spew 600 NaN steps). Counts consecutive eval-cadence points with train
+    # ppl over a hard ceiling AFTER the from-scratch descent (step>2000); aborts on K in a row so
+    # finite prune-bounces (ppl≲70) never trip it but a real divergence (ppl→1e5) does. Env-tunable.
+    _div_ceiling = float(os.environ.get("MORPH_DIV_PPL", "1000"))
+    _div_strikes_max = int(os.environ.get("MORPH_DIV_STRIKES", "2"))
+    _div_strikes = 0
+    _aborted = False  # set by the non-finite / divergence guards → skip the post-loop final
+                      # save+eval so a DIVERGED_step_N.pt is NOT shadowed by a misleading
+                      # "completed" step_{total_steps}.pt (no-theater: don't fake a finished run).
 
     # ── Activation-memory probe (MORPH_MEM_PROBE) ──────────────────────────────
     # Root-causes the post-compact activation regression (+8 GB at b4). When set, we
@@ -1309,6 +1455,17 @@ def main(cfg: DictConfig) -> None:
     _diag_optstate_path = os.environ.get("MORPH_DIAG_OPT")  # prune-divergence root-cause probe
     _diag_optstate_every = int(os.environ.get("MORPH_DIAG_OPT_EVERY", "1"))  # stride (1 = every step)
     _diag_fwd = bool(os.environ.get("MORPH_DIAG_FWD"))      # forward-side blow-up localizer
+    _diag_m2g_path = os.environ.get("MORPH_DIAG_M2G")       # slow-EMA m₂/g geometry localizer
+    # Prune cadence (for the M2N stale-m₂ diagnostic: log per-tensor rows DENSELY in a ±2-step
+    # window around each prune event so cos(g,m₂) before vs after the topology change is visible).
+    _prune_start = int(getattr(cfg.training, "prune_start", 10**9))
+    _prune_interval = max(1, int(getattr(cfg.training, "prune_interval", 1)))
+    # Core/CMS MLP params are where pruning acts → the stale-m₂ candidates we track.
+    _m2g_filter = (lambda nm: "core." in nm)
+    # m₂ reset-on-prune (Task #276 surgical cure): decay the slow EMA at each prune event so the
+    # stale pre-prune momentum doesn't drive the post-prune update. 0 = off (β3-only arm).
+    _m2_prune_decay = float(getattr(cfg.training, "ademamix_m2_prune_decay", 0.0))
+    _m2_decay_ids = None  # built lazily from the model on first prune event
     _mem_snap_step = int(os.environ.get("MORPH_MEM_SNAPSHOT_STEP", "-1"))
     _mem_snapped = False
     # History recording installs CUDA-allocator hooks that can make a Triton
@@ -1420,6 +1577,13 @@ def main(cfg: DictConfig) -> None:
                 routing_aux = collect_routing_aux_losses(model)
                 loss = loss + routing_aux
 
+            # Core-map spectral-norm penalty — the σ_max(J_core) runaway cure (Task #276). Zero while
+            # every core MLP linear sits below `cap` (healthy training bit-exact); only bites on a
+            # runaway. Loss-side ⇒ optimizer-agnostic ⇒ neutralises both β1=0 and α=8.
+            if _spec_pen is not None:
+                _sp = _spec_pen.penalty()
+                loss = loss + _sp.to(loss.dtype)
+
             scaler.scale(loss / _ga).backward()
 
         if _mem_probe:
@@ -1437,6 +1601,21 @@ def main(cfg: DictConfig) -> None:
                       f"(recording stopped)", flush=True)
 
         prune_stats = pruning.step(model, step)
+
+        # ── m₂ reset-on-prune (Task #276 surgical stale-m₂ cure) ───────────────────────────
+        # AT a prune event (NOT compact/route — those rebuild the optimizer = fresh state), decay
+        # the slow EMA on the pruned (core/CMS) params BEFORE this step's update so the stale
+        # pre-prune momentum can't drive the post-prune step. Off (0.0) for the β3-only arm.
+        if _m2_prune_decay > 0.0 and prune_stats and prune_stats.get("pruning/prune_step"):
+            _base_opt = getattr(optimizer, "_opt", optimizer)
+            if hasattr(_base_opt, "decay_m2"):
+                if _m2_decay_ids is None:
+                    _root = getattr(model, "_orig_mod", model)
+                    _m2_decay_ids = {id(p) for nm, p in _root.named_parameters()
+                                     if p.requires_grad and _m2g_filter(nm)}
+                _nd = _base_opt.decay_m2(_m2_prune_decay, param_ids=_m2_decay_ids)
+                print(f"[m2-reset] step {step}: decayed m₂×{1.0 - _m2_prune_decay:.2f} "
+                      f"on {_nd} core params", flush=True)
 
         # Phase boundary (compact / routing) changed the param set → rebuild a FRESH
         # optimizer (Wolfe: fresh optimizer after compact). This step's backward grads
@@ -1522,6 +1701,20 @@ def main(cfg: DictConfig) -> None:
         if _diag_optstate_path and (step % _diag_optstate_every == 0 or step <= 5):
             diag_prune_optstate(model, optimizer, step, _diag_optstate_path)
             diag_optstate_allparams(model, optimizer, step, _diag_optstate_path)
+        # Slow-EMA geometry localizer (MORPH_DIAG_M2G=<path>) — decides the de-coherence operator.
+        if _diag_m2g_path:
+            diag_m2g_geometry(model, optimizer, step, _diag_m2g_path)
+            # Authoritative g-vs-numerator capture (drained from the optimizer): dense per-tensor
+            # logging in a ±2-step window around prune events to expose cos(g,m₂) before/after.
+            _is_prune = bool(prune_stats and prune_stats.get("pruning/prune_step"))
+            _near_prune = (step >= _prune_start
+                           and ((step - _prune_start) % _prune_interval) in (0, 1, 2,
+                                _prune_interval - 1, _prune_interval - 2))
+            _m2n = diag_m2g_numerator(optimizer, model, step, _diag_m2g_path,
+                                      dense=(_is_prune or _near_prune or step % 200 == 0),
+                                      name_filter=_m2g_filter)
+            if _m2n:
+                wandb.log(_m2n, step=step)
         # Forward-side blow-up localizer (MORPH_DIAG_FWD=1): per-block residual-stream norm +
         # backbone ternary {-1,0,+1} flip count — for the β1=0 STE-cusp detonation (calm
         # optimizer, exploding loss). Registered lazily; run every step here for per-step norms.
@@ -1549,9 +1742,42 @@ def main(cfg: DictConfig) -> None:
             # The eager-vs-kernel gap in BOTH is the real "alloc overhead" delta.
             peak_alloc = torch.cuda.max_memory_allocated() / 2**20
             peak_resv = torch.cuda.max_memory_reserved() / 2**20
+            _lv = loss.item()
+            # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
+            #    after its external watchdog died in a power loss). A NaN/Inf loss NEVER
+            #    recovers — save an emergency ckpt for forensics and stop, instead of burning
+            #    the GPU. (Finite-but-huge prune bounces are NOT caught here — that's the
+            #    external watchdog's job; this only fires on genuine non-finite.) ──
+            if not math.isfinite(_lv):
+                _ep = os.path.join(ckpt_dir, f"NONFINITE_step_{step}.pt")
+                print(f"[ABORT] non-finite loss={_lv} at step {step} — saving {_ep} and stopping",
+                      flush=True)
+                try:
+                    save_checkpoint(_ep, step, model, optimizer, scaler, pruning, next_step=step)
+                except Exception as _e:
+                    print(f"[ABORT] emergency ckpt failed: {_e}", flush=True)
+                _aborted = True
+                break
+            # Finite-divergence guard: sustained ppl over the ceiling past the warmup descent.
+            _ppl_now = math.exp(min(_lv, 20.0))
+            if step > 2000 and _ppl_now > _div_ceiling:
+                _div_strikes += 1
+                print(f"[DIV-GUARD] strike {_div_strikes}/{_div_strikes_max}: ppl={_ppl_now:.1f} "
+                      f"> {_div_ceiling:.0f} at step {step}", flush=True)
+                if _div_strikes >= _div_strikes_max:
+                    _ep = os.path.join(ckpt_dir, f"DIVERGED_step_{step}.pt")
+                    print(f"[ABORT] sustained divergence — saving {_ep} and stopping", flush=True)
+                    try:
+                        save_checkpoint(_ep, step, model, optimizer, scaler, pruning, next_step=step)
+                    except Exception as _e:
+                        print(f"[ABORT] emergency ckpt failed: {_e}", flush=True)
+                    _aborted = True
+                    break
+            else:
+                _div_strikes = 0
             log: dict = {
-                "train/loss": loss.item(),
-                "train/ppl": math.exp(min(loss.item(), 20.0)),
+                "train/loss": _lv,
+                "train/ppl": math.exp(min(_lv, 20.0)),
                 "train/lr": lr,
                 "perf/steps_per_sec": sps,
                 # TST superposition ingests s× raw tokens per step (same FLOPs); count them.
@@ -1563,6 +1789,8 @@ def main(cfg: DictConfig) -> None:
             }
             if "stp_loss" in out:
                 log["train/stp_loss"] = out["stp_loss"].item()
+            if "loop_stp_loss" in out:
+                log["train/loop_stp_loss"] = float(out["loop_stp_loss"])
 
             # Retention gate diagnostic (#230): sigmoid(ret_gate) per retention block — THE key
             # signal for whether the model actually USES the retention branch (gate opens from ~0)
@@ -1600,10 +1828,15 @@ def main(cfg: DictConfig) -> None:
             wandb.log(log, step=step)
 
             if step % 200 == 0:
+                _lstp = f"  loop_stp={float(out['loop_stp_loss']):.4f}" if (
+                    "loop_stp_loss" in out and morph_cfg.loop_stp_lambda > 0.0) else ""
+                _baseopt = getattr(optimizer, "_opt", optimizer)
+                _scap = getattr(_baseopt, "_stale_cap_events", 0)
+                _scap_s = f"  stale_cap_ev={_scap}" if _scap else ""
                 print(
                     f"[{step:7d}/{total_steps}] loss={loss.item():.4f}  "
                     f"ppl={math.exp(min(loss.item(), 20.0)):.1f}  "
-                    f"lr={lr:.2e}  sps={sps:.2f}"
+                    f"lr={lr:.2e}  sps={sps:.2f}{_lstp}{_scap_s}"
                 )
 
         # ── Validation (every eval_every steps) ──────────────────────────
@@ -1640,6 +1873,14 @@ def main(cfg: DictConfig) -> None:
         t_start = time.perf_counter()
 
     # ── Final checkpoint ──────────────────────────────────────────────────
+    if _aborted:
+        # The run hit the non-finite/divergence guard — a DIVERGED_/NONFINITE_ ckpt already
+        # holds the real (failed) state. Do NOT write step_{total_steps}.pt: that would label
+        # diverged weights as a completed run (theater that misleads the next resume).
+        print(f"[ABORT] run aborted at step {step}; skipping final save+eval "
+              f"(forensic ckpt already written). No completed-run checkpoint.", flush=True)
+        wandb.finish()
+        return
     final_path = os.path.join(ckpt_dir, f"step_{total_steps}.pt")
     save_checkpoint(final_path, total_steps, model, optimizer, scaler, pruning, next_step=total_steps)
     print(f"Final checkpoint: {final_path}")

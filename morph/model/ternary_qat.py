@@ -181,16 +181,26 @@ def _apply_grouped_ste(
     group_size: int,
     threshold: float,
     encode_scale: Callable[[Tensor], Tensor],
+    scale_cap: Tensor | None = None,
 ) -> Tensor:
     """Symmetric grouped STE: effective_weight = encode(mean(|W_g|)) * codes_g.
 
     All scales are detached → pure straight-through (symmetric mode).
+
+    scale_cap (Task #276 "B" — MORTAR-tile weight-explosion guard): optional per-group
+    UPPER BOUND on the ternary scale γ=mean(|W_g|), shape [n_groups]. When given, each
+    group's scale is min'd against its cap (= clip_mult × initial mean(|W_g|)). γ is the
+    ENTIRE magnitude carrier of the {-1,0,+1}×γ weight, so capping it bounds the layer's
+    output magnitude — a structural backstop against the g-collapse→α·m₂ blowup, independent
+    of the optimizer. The cap is DETACHED (no grad) so the identity STE is unchanged.
     """
     out_dim, in_dim = w.shape
 
     if group_size <= 0 or group_size >= out_dim:
         # Per-tensor (group_size=tensor).
         scale = encode_scale(w.detach().abs().mean().clamp(min=1e-8).unsqueeze(0))[0]
+        if scale_cap is not None:
+            scale = torch.minimum(scale, scale_cap[0])
         w_norm = w / scale
         q = torch.sign(w_norm) * (w_norm.abs() > threshold).to(w.dtype)
         return w + (scale * q - w).detach()
@@ -203,6 +213,8 @@ def _apply_grouped_ste(
         ng = out_dim // gs
         wr = w.reshape(ng, gs * in_dim)
         s = wr.detach().abs().mean(dim=1, keepdim=True).clamp(min=1e-8)   # encode=identity
+        if scale_cap is not None:
+            s = torch.minimum(s, scale_cap.view(ng, 1))
         w_n = wr / s
         q = torch.sign(w_n) * (w_n.abs() > threshold).to(w.dtype)
         out = wr + (s * q - wr).detach()
@@ -216,6 +228,8 @@ def _apply_grouped_ste(
         w_g = w[g * group_size:(g + 1) * group_size]  # [gs, in]
         s_raw = w_g.detach().abs().mean().clamp(min=1e-8).unsqueeze(0)
         s = encode_scale(s_raw)[0]
+        if scale_cap is not None:
+            s = torch.minimum(s, scale_cap[g])
         w_n = w_g / s
         q_g = torch.sign(w_n) * (w_n.abs() > threshold).to(w.dtype)
         parts.append(w_g + (s * q_g - w_g).detach())
@@ -225,6 +239,8 @@ def _apply_grouped_ste(
         w_g = w[n_full * group_size:]
         s_raw = w_g.detach().abs().mean().clamp(min=1e-8).unsqueeze(0)
         s = encode_scale(s_raw)[0]
+        if scale_cap is not None:
+            s = torch.minimum(s, scale_cap[n_full])
         w_n = w_g / s
         q_g = torch.sign(w_n) * (w_n.abs() > threshold).to(w.dtype)
         parts.append(w_g + (s * q_g - w_g).detach())
@@ -266,6 +282,7 @@ class TernarySTE(nn.Module):
         scale_dtype: str = "fp16",
         device: torch.device | None = None,
         weight_init: torch.Tensor | None = None,
+        scale_clip_mult: float = 0.0,
     ) -> None:
         super().__init__()
         assert mode in VALID_MODES, f"unknown mode={mode!r}"
@@ -276,6 +293,7 @@ class TernarySTE(nn.Module):
         self.group = int(group)  # 0 → per-tensor
         self.scale_dtype = scale_dtype
         self._encode_scale = _SCALE_ENCODERS[scale_dtype]
+        self.scale_clip_mult = float(scale_clip_mult)
 
         out_dim = weight_shape[0] if len(weight_shape) >= 1 else 1
         in_dim = weight_shape[1] if len(weight_shape) >= 2 else 1
@@ -300,6 +318,16 @@ class TernarySTE(nn.Module):
         else:
             # symmetric: no learnable parameters — pure straight-through.
             self._forward_fn = self._forward_symmetric
+
+        # Task #276 "B": per-group ternary-scale UPPER BOUND, anchored to the INITIAL scale
+        # (mult × mean(|W_g|) at registration). An explosion can't ratchet the cap up because
+        # the anchor is fixed. Registered as a buffer (moves with .to(), persists in state_dict,
+        # reloads identically on resume). None → off (branch resolved once, here, not per-forward).
+        cap = None
+        if self.scale_clip_mult > 0.0:
+            ref = self._compute_group_scale_init(weight_init, out_dim, n_groups, device)
+            cap = (self.scale_clip_mult * ref).float()
+        self.register_buffer("_scale_cap", cap)  # None placeholder when off (valid buffer value)
 
     def _compute_group_scale_init(
         self,
@@ -352,7 +380,8 @@ class TernarySTE(nn.Module):
 
         For group>0 or non-fp16 dtype: same math, grouped/encoded.
         """
-        return _apply_grouped_ste(w, self.group, self.threshold, self._encode_scale)
+        return _apply_grouped_ste(w, self.group, self.threshold, self._encode_scale,
+                                  scale_cap=self._scale_cap)
 
     def _forward_ttq(self, w: Tensor) -> Tensor:
         """TTQ: separate LEARNABLE γ₊, γ₋ per group (real grad through both).
@@ -565,6 +594,7 @@ def apply_ternary_qat(
     scale_mode: str = "symmetric",
     scale_group: str = "tensor",
     scale_dtype: str = "fp16",
+    scale_clip_mult: float = 0.0,
 ) -> dict:
     """Register the ternary STE parametrization on every weight matrix selected
     by ``scope``. Call AFTER model construction and BEFORE torch.compile and
@@ -644,6 +674,7 @@ def apply_ternary_qat(
             scale_dtype=scale_dtype,
             device=w_device,
             weight_init=w.detach(),  # for mean(|W|) gamma initialization
+            scale_clip_mult=scale_clip_mult,  # Task #276 "B" weight-explosion guard
         )
         parametrize.register_parametrization(module, "weight", ste)
         counts[cat] += 1

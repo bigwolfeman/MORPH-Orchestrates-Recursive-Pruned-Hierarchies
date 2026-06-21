@@ -184,6 +184,13 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         # downward-only trust-ratio τ (LARS/LAMB relative per-tensor governor). Both off by default.
         amsgrad = bool(getattr(tr, "ademamix_amsgrad", False))
         trust_ratio = float(getattr(tr, "ademamix_trust_ratio", 0.0))
+        # de-coherence B (Task #276): per-tensor cap ‖α·m₂‖ ≤ c·‖g‖ — the directional g-collapse
+        # guard the per-coord update_clip structurally can't be (de-fused path only). 0=off.
+        stale_push_cap = float(getattr(tr, "ademamix_stale_push_cap", 0.0))
+        # de-coherence B, PER-COORDINATE (Task #276): |α·m₂_i| ≤ c·|g_i| each coord — the
+        # mechanism-matched cure (disease = per-coord magnitude domination, ratio→14-60/cos→0).
+        # Catches the few collapsed coords the per-tensor norm hides. De-fused path only. 0=off.
+        stale_push_cap_coord = float(getattr(tr, "ademamix_stale_push_cap_coord", 0.0))
         # β1=0 ROOT-CAUSE FIX (stateless, no m1 buffer → memory parity preserved):
         #   g_coef (γ<1) = constant downscale of the raw-g numerator term (cheap control);
         #   g_snr_gate_kappa (κ>0) = soft per-coord SNR gate snr=|m₂|/denom → gate∈[floor,1]
@@ -196,19 +203,31 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         #   flip_clamp_kappa (>0) = per-tensor cap on realized ternary flip-rate (stateless governor)
         num_beta1 = float(getattr(tr, "ademamix_num_beta1", 0.0))
         flip_clamp_kappa = float(getattr(tr, "ademamix_flip_clamp_kappa", 0.0))
+        # PER-COORDINATE alignment gate (Task #276, Cautious/Magma family; de-fused path only):
+        #   align_gate_mode = off|cautious|soft — zero/damp update coords whose sign disagrees with
+        #   the CURRENT gradient (the stale-α·m₂-points-wrong-way cure the per-tensor stale_push_cap
+        #   structurally can't be). tau = soft temperature; renorm = Cautious mean-preserving rescale.
+        align_gate_mode = str(getattr(tr, "ademamix_align_gate_mode", "off"))
+        align_gate_tau = float(getattr(tr, "ademamix_align_gate_tau", 1.0))
+        align_renorm = bool(getattr(tr, "ademamix_align_renorm", True))
+        align_renorm_cap = float(getattr(tr, "ademamix_align_renorm_cap", 0.0))
         # Keep the no-decay group (which holds nn.Embedding tables) in 32-bit state —
         # bnb's 8-bit is unstable on sparse/large-range embedding grads. The no-decay group
         # otherwise holds only sub-4096 tensors (already fp32), so this mirrors AdamW8bit.
         groups[1]["optim_bits"] = 32
         base_opt = AdEMAMixB1Zero(
             groups, lr=lr, betas=(0.0, betas[1], beta3), alpha=alpha,
+            alpha_cap=float(getattr(tr, "ademamix_alpha_cap", 0.0)),
             t_alpha=t_alpha, t_beta3=t_beta3, beta3_warmup_start=b3_start,
             eps=1e-8, weight_decay=wd, bits=bits, fused=fused, eps_inside=eps_inside,
             update_clip=update_clip, update_rms_clip=update_rms_clip,
-            amsgrad=amsgrad, trust_ratio=trust_ratio,
+            amsgrad=amsgrad, trust_ratio=trust_ratio, stale_push_cap=stale_push_cap,
+            stale_push_cap_coord=stale_push_cap_coord,
             g_coef=g_coef, g_snr_gate_kappa=g_snr_gate_kappa,
             g_snr_gate_floor=g_snr_gate_floor,
-            num_beta1=num_beta1, flip_clamp_kappa=flip_clamp_kappa)
+            num_beta1=num_beta1, flip_clamp_kappa=flip_clamp_kappa,
+            align_gate_mode=align_gate_mode, align_gate_tau=align_gate_tau,
+            align_renorm=align_renorm, align_renorm_cap=align_renorm_cap)
         # Pattern-targeted eps placement: tag params whose NAME matches a pattern to use eps-inside
         # (stabilize the fragile boundary, e.g. ["prelude.0.mlp"]), leaving the rest eps-outside (full
         # AdEMAMix advantage in the looped core). Tag is read per-param in the de-fused denom step.

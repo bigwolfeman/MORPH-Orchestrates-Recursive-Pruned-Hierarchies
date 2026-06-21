@@ -23,6 +23,11 @@ model:
   mean_depth: 6
   max_depth: 8
   bptt_depth: 4
+  # L1 core-gain governor (#276): cap per-iteration looped-core amplification ‖h_new‖/‖h_a‖ per
+  # sample to this ratio τ. 0.0 = OFF (bit-identical). Identity in the healthy regime (norm-preserving
+  # HC residual → gain≈1); only shrinks the runaway step the weight-shared core amplifies T× (the
+  # β1=0 detonation mode). Typical τ≈1.5–2.0.
+  core_gain_clip: 0.0
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth
   # grad-iterations; later ones run eager (activations retained → no backward recompute → faster),
   # at the cost of retained activation memory. -1 = checkpoint ALL (default, bit-identical/safest).
@@ -48,6 +53,7 @@ model:
   # STP (Semantic Tube Predictor — geometric regularizer)
   stp_lambda: 0.02
   stp_tau: 64
+  loop_stp_lambda: 0.0   # loop-axis STP (Task #276 de-coherence A); 0.0 = OFF, bit-exact
 
   # LM head fused cross-entropy chunk size (rows of B·T per chunk).
   # Smaller = less peak VRAM, more launch overhead. Tune per target.
@@ -144,6 +150,15 @@ training:
                                  # ademamix_b1zero (β1=0 fork: 2 buffers → AdamW8bit memory
                                  # parity, vs bnb's +50%; measured ~+1% step time)
   weight_decay: 0.1
+  # ── Core-map spectral-norm penalty (Task #276 σ_max(J_core)-runaway cure) ──
+  # Soft hinge L=lambda·Σ relu(σ_max(W)−cap)² over the core-block MLP linears (gate_up/down).
+  # Caps the σ_max RUNAWAY that detonates β1=0/α=8 (E2: σ_max 22 healthy → 1e7 blown) WITHOUT
+  # forcing σ_max≤1 (the working model needs σ_max~22). Healthy gate_up σ_max~1.5 → cap~3 only
+  # bites on runaway. Loss-side ⇒ optimizer-agnostic ⇒ neutralises BOTH β1=0 and α=8. OFF when
+  # cap or lambda ≤ 0 (exact baseline). See morph/training/spectral_penalty.py.
+  spectral_penalty_cap: 0.0
+  spectral_penalty_lambda: 0.0
+  spectral_penalty_n_iter: 1
   beta1: 0.9
   beta2: 0.95                     # NOTE: AdEMAMix paper recommends beta2=0.999 — set per-arm.
   # ── AdEMAMix (only used when optimizer=ademamix) ──
@@ -153,6 +168,9 @@ training:
   # training.steps (essential; bnb pins beta3 at full strength from step 0 if these are None).
   beta3: 0.9999                  # slow-EMA decay (drop to 0.999 for short <100k runs)
   ademamix_alpha: 8.0            # fast/slow mix weight (paper LM default 8; 5 = conservative)
+  ademamix_alpha_cap: 0.0        # (b1zero) HARD cap on scheduled α_t (Task #276). Detonation
+                                 # threshold is α_t≈4.3-4.5 (per-block gain, E15). Cap ~3.5 to
+                                 # SUSTAIN max stable AdEMAMix drive (warmup-ramp wastes early α). 0=off.
   ademamix_t_alpha: null         # null → training.steps
   ademamix_t_beta3: null         # null → training.steps
   ademamix_beta3_warmup_start: 0.9  # (b1zero only) β3-warmup START decay; β1=0 makes the
@@ -189,6 +207,12 @@ training:
                                  # overshoot, passes healthy untouched. 0 = off.
                                  # NOTE 2026-06-16: RMS=2 measured INVASIVE (healthy RMS ~2-2.4 across
                                  # many layers) — superseded by amsgrad/trust_ratio below.
+  ademamix_stale_push_cap: 0.0   # (b1zero, de-fused) de-coherence B (Task #276): per-TENSOR cap
+                                 # ‖α·m₂‖ ≤ c·‖g‖. E12: the σ_max inter-block-alignment detonation
+                                 # fires when g COLLAPSES while m₂ stays large+stale → |α·m₂|/|g|
+                                 # hits ~540-1200× → coherent off-tangent jump (per-coord clip can't
+                                 # stop a coherent direction). Surgical: healthy |α·m₂|/|g|≈1.5 ≪ cap
+                                 # (try 5-10) → fires ONLY on the collapse spike. 0 = off.
   ademamix_amsgrad: false        # (b1zero, de-fused) AMSGrad ν_max denominator memory (Reddi 2019):
                                  # denom uses max(ν_max,ν) not ν → prevents effective-LR rise on a
                                  # coord that was loud then went quiet (the measured eps-out small-ν
@@ -220,6 +244,31 @@ training:
   ademamix_flip_clamp_kappa: 0.0 # ARM A: per-tensor cap on realized ternary FLIP-RATE/step. s=mean|w|,
                                  # thr=0.5·s; if frac of codes that flip under p−lr·u > κ, scale that
                                  # tensor's update by κ/frac (stateless governor). 0.0=off. Try ~0.02-0.05.
+  ademamix_stale_push_cap_coord: 0.0  # Task #276 PER-COORDINATE stale-push cap (b1zero, de-fused) —
+                                 # the MECHANISM-MATCHED cure. Bound |α·m₂_i| ≤ c·|g_i| on each coord
+                                 # (vs the per-tensor stale_push_cap's whole-tensor norm). The disease
+                                 # is per-coord MAGNITUDE domination (ratio ‖α·m₂‖/‖g‖→14-60, cos→0:
+                                 # stale slow-term huge where live g collapsed) — NOT sign-reversal, so
+                                 # the Cautious/Magma sign gate failed (diverged @3020 < per-tensor's
+                                 # 14020). This catches the few collapsed coords the tensor-norm hides.
+                                 # Sign preserved. 0.0=off; try ~0.5-2.0 (smaller=tighter).
+  ademamix_align_gate_mode: "off"  # Task #276 PER-COORD alignment gate (b1zero, de-fused; Cautious/Magma).
+                                 # off|cautious|soft. Gates the final per-coord update u against the
+                                 # CURRENT gradient g: zero/damp coords where u·g≤0 (stale α·m₂ pointing
+                                 # against g — the cure the per-TENSOR stale_push_cap can't be, since a
+                                 # tensor norm hides per-coord sign disagreement). cautious=hard mask
+                                 # 1[u·g>0]+mean-preserving renorm (arXiv:2411.16085); soft=sigmoid(
+                                 # sign(u·g)/τ) damp (Magma arXiv:2602.15322). NOTE: relies on g's sign;
+                                 # composes with (not replaces) magnitude governors when g collapses.
+  ademamix_align_gate_tau: 1.0   # soft-mode temperature (smaller→sharper, →hard mask). Unused if cautious.
+  ademamix_align_renorm: true    # cautious mean-preserving rescale u*=numel/Σmask (preserves avg step).
+  ademamix_align_renorm_cap: 0.0 # cap the renorm amplification (0=unbounded). e.g. 4.0 bounds the
+                                 # survivor-amplification when most coords disagree at a collapse.
+  ademamix_m2_prune_decay: 0.0   # Task #276 SURGICAL stale-m₂-under-prune cure: at each prune EVENT,
+                                 # multiply the slow EMA m₂ by (1−this) on the pruned (core/CMS) params
+                                 # BEFORE the step, clearing stale pre-prune momentum the moment the
+                                 # topology (loss landscape) moves. 0.0=off; try 0.1/0.25/0.5; 1.0=full
+                                 # reset (erases AdEMAMix's edge — pruning fires every prune_interval).
   ademamix_eps_inside_patterns: []  # (b1zero, de-fused) LAYER-TARGETED eps placement: params whose name
                                  # contains any of these substrings use eps-INSIDE (√(ν/bc2+ε) floor →
                                  # stabilize), the rest stay eps-OUTSIDE (full advantage). The mechanism-
@@ -234,6 +283,12 @@ training:
   ternary_scale_mode: symmetric  # symmetric wins at this scale (A-series result)
   ternary_scale_group: tensor    # per-tensor scale
   ternary_scale_dtype: fp16      # fp16 scale storage
+  ternary_scale_clip_mult: 0.0   # Task #276 "B": per-group UPPER BOUND on ternary scale γ=mean(|W|),
+                                 # = this × initial γ (anchored, so a blowup can't ratchet it up). γ is
+                                 # the WHOLE magnitude carrier of the {-1,0,+1}×γ weight → caps layer
+                                 # output magnitude = structural backstop vs the g-collapse→α·m₂ blowup,
+                                 # optimizer-independent. 0=off; try 8 (8× init headroom for healthy
+                                 # growth, hard stop on the 1e3-1e5× explosion). Symmetric mode only.
 
   # 8-bit AdamW via bitsandbytes (quantizes optimizer state m,v to uint8)
   adam8bit: true
