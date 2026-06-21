@@ -73,21 +73,34 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         align_gate_tau: float = 1.0,
         align_renorm: bool = True,
         align_renorm_cap: float = 0.0,
+        track_diag: bool = False,
+        fused_dynamic_qmap: bool = False,
+        fused_nu_floor: bool = True,
     ):
         if betas[0] != 0.0:
             raise ValueError(f"AdEMAMixB1Zero requires β1=0, got betas={betas}")
-        if fused and float(stale_push_cap) > 0.0:
-            raise ValueError("stale_push_cap is implemented only in the de-fused path "
-                             "(ademamix_fused=false); refusing to silently no-op in the fused kernel.")
-        if fused and float(stale_push_cap_coord) > 0.0:
-            raise ValueError("stale_push_cap_coord is implemented only in the de-fused path "
-                             "(ademamix_fused=false); refusing to silently no-op in the fused kernel.")
+        # FUSED kernel supports the deploy CURE knobs (Task #277): eps_inside, g_coef,
+        # g_snr_gate_kappa, stale_push_cap_coord (PER-COORD), update_clip — all elementwise,
+        # ported into ademamix_b1zero_kernel.py. The features below are de-fused-ONLY (need
+        # cross-block reductions, extra state buffers, or per-param branching the per-block kernel
+        # can't express) → raise on fused rather than SILENTLY NO-OP.
         if str(align_gate_mode) not in ("off", "cautious", "soft"):
             raise ValueError(f"align_gate_mode must be off|cautious|soft, got {align_gate_mode!r}")
-        if fused and str(align_gate_mode) != "off":
-            raise ValueError("align_gate (per-coord alignment gate) is implemented only in the "
-                             "de-fused path (ademamix_fused=false); refusing to silently no-op "
-                             "in the fused kernel.")
+        if fused:
+            _defused_only = {
+                "stale_push_cap (per-tensor; needs whole-tensor norm)": float(stale_push_cap) > 0.0,
+                "align_gate_mode": str(align_gate_mode) != "off",
+                "num_beta1 (extra m1 buffer)": float(num_beta1) > 0.0,
+                "amsgrad (extra nu_max buffer)": bool(amsgrad),
+                "trust_ratio (per-tensor norm)": float(trust_ratio) > 0.0,
+                "flip_clamp_kappa (per-tensor)": float(flip_clamp_kappa) > 0.0,
+                "update_rms_clip (per-tensor RMS)": float(update_rms_clip) > 0.0,
+            }
+            on = [k for k, v in _defused_only.items() if v]
+            if on:
+                raise ValueError(
+                    "These features are de-fused-only (ademamix_fused=false); refusing to silently "
+                    f"no-op them in the fused kernel: {on}")
         if bits not in (8, 32):
             raise ValueError(f"bits must be 8 or 32, got {bits}")
         defaults = dict(
@@ -121,6 +134,13 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         # floor it does NOT raise the denom for all small-ν params, so no convergence throttle.
         # Weight decay (λ·p, bounded) is added AFTER the clamp so it is never capped away.
         self.update_clip = float(update_clip)
+        # track_diag: when False (deploy default), ALL per-tensor diagnostic loops (snr-gate mean/low,
+        # update_clip event count, per-coord-cap masked count) are SKIPPED — they cost ~67ms/step on
+        # 454 tensors (per-tensor .item()/float()/int() syncs + Python-loop launch overhead) yet only
+        # feed telemetry read at log cadence. The UPDATE is bit-identical either way (diagnostics never
+        # touch params). True → accumulate them GPU-resident (sync-free) for watched runs (e.g. the
+        # TST→NTP cusp). See ignore/gate_diag_parity.py (DIAG_PARITY_GATE_PASS) + bench_cure_step.py.
+        self.track_diag = bool(track_diag)
         self._clip_events = 0  # diagnostic: total coords clamped across all steps (no-theater check)
         # update_rms_clip: per-TENSOR cap on the RMS of the adaptive update (g+α·m₂)/denom.
         # The per-COORD clip (above) is the wrong granularity for the COLLECTIVE oscillation that
@@ -255,6 +275,20 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         self._code_signed_cpu = bnbF.create_dynamic_map(signed=True)
         self._code_unsigned_cpu = bnbF.create_dynamic_map(signed=False)
         self._code_cache: dict = {}
+        # ── Fused dynamic-qmap (Task #278): the cure for the fused-vs-defused ~0.10-nat quality
+        # tax. The original fused path uses UNIFORM linear-int8 (crushes the heavy-tailed optimizer
+        # state) + a sqrt-ν code-1 floor (biases denom UP on small-ν coords → systematic under-
+        # stepping). dynamic_qmap=True makes the fused kernel use bnb's OWN non-linear dynamic map
+        # (signed for m2, unsigned for ν stored DIRECTLY, no sqrt/floor) — the SAME quantizer as the
+        # validated de-fused reference, so the systematic bias vanishes (residual = sub-1e-4 rounding
+        # noise). Memory unchanged (uint8 code + fp32 per-block absmax = ~2.03 B/param).
+        self.fused_dynamic_qmap = bool(fused_dynamic_qmap)
+        # fused_nu_floor: linear-path-only legacy code-1 floor on sqrt(ν) (prevents int8 underflow→0).
+        # Exposed so we can A/B-attribute the tax (floor-bias vs resolution). Ignored when dynamic.
+        self.fused_nu_floor = bool(fused_nu_floor)
+        # signed dynamic map index whose value == 0 (≈ middle): used to zero m2 at pruned positions
+        # in the dynamic fused path (code 0 ≠ value 0 for the signed map, unlike linear int8).
+        self._signed_zero_idx = int(self._code_signed_cpu.abs().argmin().item())
 
     def _code(self, device, signed: bool):
         key = (device, signed)
@@ -434,6 +468,12 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             fused_ademamix_b1zero_step, BLOCK,
         )
 
+        # per-param eps placement (eps_inside_patterns) is a de-fused-only branch — the per-block
+        # kernel takes one global eps_inside. Refuse rather than silently use the global on tagged params.
+        if self._has_eps_overrides:
+            raise ValueError("per-param eps overrides (eps_inside_patterns) require the de-fused path "
+                             "(ademamix_fused=false); the fused kernel uses a single global eps_inside.")
+
         for p in params:
             st = self.state[p]
             g = p.grad
@@ -448,20 +488,51 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             nblocks = (n + BLOCK - 1) // BLOCK
 
             is_init = len(st) == 0 or st.get("init", False)
-            if is_init:
-                st.pop("init", None)
-                st["m2_code"] = torch.zeros(n, dtype=torch.int8, device=p.device)
-                st["nu_sqrt_code"] = torch.zeros(n, dtype=torch.int8, device=p.device)
-                st["m2_amax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
-                st["nu_sqrt_amax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
+            if self.fused_dynamic_qmap:
+                # ── dynamic-qmap fused path (#278): uint8 codes into bnb's non-linear map,
+                # ν stored DIRECTLY (no sqrt, no floor) → matches the de-fused reference quantizer.
+                if is_init:
+                    st.pop("init", None)
+                    st["m2_dcode"] = torch.zeros(n, dtype=torch.uint8, device=p.device)
+                    st["nu_dcode"] = torch.zeros(n, dtype=torch.uint8, device=p.device)
+                    st["m2_damax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
+                    st["nu_damax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
+                fused_ademamix_b1zero_step(
+                    p_flat, g_flat,
+                    st["m2_dcode"], st["m2_damax"], st["nu_dcode"], st["nu_damax"],
+                    lr, beta2, beta3, alpha, eps, bc2, wd, is_init,
+                    eps_inside=self.eps_inside,
+                    g_coef=self.g_coef,
+                    snr_kappa=self.g_snr_gate_kappa,
+                    snr_floor=self.g_snr_gate_floor,
+                    coord_cap=self.stale_push_cap_coord,
+                    upd_clip=self.update_clip,
+                    dynamic_qmap=True,
+                    code_signed=self._code(p.device, True),
+                    code_unsigned=self._code(p.device, False),
+                )
             else:
-                self._migrate_linear_nu_to_sqrt(st, p, BLOCK)
+                if is_init:
+                    st.pop("init", None)
+                    st["m2_code"] = torch.zeros(n, dtype=torch.int8, device=p.device)
+                    st["nu_sqrt_code"] = torch.zeros(n, dtype=torch.int8, device=p.device)
+                    st["m2_amax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
+                    st["nu_sqrt_amax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
+                else:
+                    self._migrate_linear_nu_to_sqrt(st, p, BLOCK)
 
-            fused_ademamix_b1zero_step(
-                p_flat, g_flat,
-                st["m2_code"], st["m2_amax"], st["nu_sqrt_code"], st["nu_sqrt_amax"],
-                lr, beta2, beta3, alpha, eps, bc2, wd, is_init,
-            )
+                fused_ademamix_b1zero_step(
+                    p_flat, g_flat,
+                    st["m2_code"], st["m2_amax"], st["nu_sqrt_code"], st["nu_sqrt_amax"],
+                    lr, beta2, beta3, alpha, eps, bc2, wd, is_init,
+                    eps_inside=self.eps_inside,
+                    g_coef=self.g_coef,
+                    snr_kappa=self.g_snr_gate_kappa,
+                    snr_floor=self.g_snr_gate_floor,
+                    coord_cap=self.stale_push_cap_coord,
+                    upd_clip=self.update_clip,
+                    nu_floor=self.fused_nu_floor,
+                )
 
     def _mask_dead_state(self, p) -> None:
         """Zero the slow-momentum (m₂) and second-moment (ν) state at PRUNED positions.
@@ -486,7 +557,10 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         dead = (keep.reshape(-1).to(p.device) == 0)
         if not bool(dead.any()):
             return
-        if "m2_code" in st:            # fused linear-int8: code 0 → value 0 (exact)
+        if "m2_dcode" in st:           # dynamic-qmap fused: signed code 0 ≠ value 0 → use zero-idx;
+            st["m2_dcode"].view(-1)[dead] = self._signed_zero_idx  # unsigned map[0]=0 → ν code 0
+            st["nu_dcode"].view(-1)[dead] = 0
+        elif "m2_code" in st:          # fused linear-int8: code 0 → value 0 (exact)
             st["m2_code"].view(-1)[dead] = 0
             if "nu_sqrt_code" in st:
                 st["nu_sqrt_code"].view(-1)[dead] = 0
@@ -631,10 +705,11 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                 torch._foreach_add_(gate, floor)            # floor + (1-floor)·clamp(snr/κ,0,1)
                 if self.g_coef != 1.0:
                     torch._foreach_mul_(gate, self.g_coef)  # compose with constant γ
-                for gt in gate:                             # cheap diagnostics (one reduce/tensor)
-                    if gt.numel():
-                        self._gate_sum += float(gt.mean()); self._gate_n += 1
-                        self._gate_low += int((gt < 0.5).sum())
+                if self.track_diag:                         # diagnostics (per-tensor sync — gated)
+                    for gt in gate:
+                        if gt.numel():
+                            self._gate_sum += float(gt.mean()); self._gate_n += 1
+                            self._gate_low += int((gt < 0.5).sum())
                 torch._foreach_mul_(gs, gate)               # g ← gate·g
             elif self.g_coef != 1.0:
                 torch._foreach_mul_(gs, self.g_coef)        # g ← γ·g (constant control)
@@ -693,12 +768,13 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                 torch._foreach_sub_(au, over)               # min(|α·m₂|, c·|g|)
                 signs = torch._foreach_sign(upd)
                 upd = torch._foreach_mul(signs, au)         # sign(α·m₂)·min(|α·m₂|, c·|g|)
-                cd = self._stale_cap_coord_masked
-                if not torch.is_tensor(cd):
-                    cd = upd[0].new_zeros(())               # GPU-resident, synced only on read
-                for o in over:
-                    cd = cd + (o > 0).sum()
-                self._stale_cap_coord_masked = cd
+                if self.track_diag:                         # masked-coord count (454-iter loop — gated)
+                    cd = self._stale_cap_coord_masked
+                    if not torch.is_tensor(cd):
+                        cd = upd[0].new_zeros(())           # GPU-resident, synced only on read
+                    for o in over:
+                        cd = cd + (o > 0).sum()
+                    self._stale_cap_coord_masked = cd
             torch._foreach_add_(upd, gs)                    # + (gated) g   (m1 = g, β1=0)
             torch._foreach_div_(upd, denoms)                # /denom = (g·gate + α·m2)/denom
             # ── per-coordinate alignment gate (Cautious/Magma; see __init__) ──
@@ -737,10 +813,13 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             # ── per-coordinate update clamp (prune-shock stability; see __init__) ──
             if self.update_clip > 0.0:
                 c = self.update_clip
-                for u in upd:
-                    if u.numel():
-                        self._clip_events += int((u.abs() > c).sum())
-                        u.clamp_(-c, c)
+                if self.track_diag:                         # over-clip count (per-tensor sync — gated)
+                    for u in upd:
+                        if u.numel():
+                            self._clip_events += int((u.abs() > c).sum())
+                # batched clamp (numerics-identical to per-tensor clamp_ — elementwise, order-free)
+                torch._foreach_clamp_min_(upd, -c)
+                torch._foreach_clamp_max_(upd, c)
             # ── per-tensor update-RMS clip (collective-oscillation stability; see __init__) ──
             if self.update_rms_clip > 0.0:
                 rc = self.update_rms_clip

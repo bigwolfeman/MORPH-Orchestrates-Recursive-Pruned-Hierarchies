@@ -27,10 +27,13 @@ PERFORMANCE (measured on a 9950X3D, 16c/32t — see ignore/sat_probe.py, ignore/
     streams are ~3.5 M tok/s each (network-bound); 1 stream/source is optimal (parallel HTTP
     trips HF's 429 rate limiter). Each remote source is capped to a token budget (--remote-max-tokens).
 
-ROLE-SPLIT (no-theater): only DOMAIN text enters pretraining. The synthesis-REASONING jsonls
-(commentary / *_reasoning / cross_tradition / reimagined) are SFT/RL gold seed and are refused
-here by an explicit denylist. Dolma3's first ~170 alphabetical shards are common_crawl-adult_content-*;
-those files are EXCLUDED from the stream (no wasted download) and shard order is shuffled.
+ROLE-SPLIT (no-theater): curated post-training gold stays out of pretraining. Local synthesis
+jsonls (commentary / dharma_text_with_reasoning / cross_tradition / reimagined) are SFT/RL gold
+seed and are refused by an explicit denylist. Broad reasoning-shaped LM sources are allowed only
+when they are tagged as reasoning_midtrain in shard metadata, so the SFT/RL boundary is visible
+to the runtime loader and to upload verification. Dolma3's first ~170 alphabetical shards are
+common_crawl-adult_content-*; those files are EXCLUDED from the stream (no wasted download) and
+shard order is shuffled.
 
 Usage:
   PYTHONPATH=$PWD python scripts/pretokenize.py --out data/pretok --limit 50        # gate slice (seq)
@@ -39,9 +42,11 @@ Usage:
   PYTHONPATH=$PWD python scripts/pretokenize.py --bench --only owt --limit 20000     # throughput probe
 """
 from __future__ import annotations
-import argparse, glob, itertools, json, os, random, re, sys, time
+import argparse, glob, itertools, json, os, random, sys, time
 from typing import Iterator
 import numpy as np
+
+from morph.training.source_roles import infer_source_role, reject_denied_paths
 
 # Batched encode_batch is already multi-threaded in Rust; the fork-warning only matters when WE
 # fork (the --num-proc path passes a clean env to children). Default-on for the in-proc batch path.
@@ -96,9 +101,6 @@ SOURCES = [
 SOURCE_MAP = {name: (kind, spec, field) for name, kind, spec, field in SOURCES}
 LOCAL_KINDS = ("arrow", "jsonl")   # CPU/disk-bound → foreground; hf/hf_stream → background streams
 
-# Paths that must NEVER be pretrained on (SFT/RL reasoning gold). Hard guard.
-DENY = re.compile(r"(commentary|reasoning|cross_tradition|reimagined|_qa)", re.I)
-
 BATCH = 4096   # docs per encode_batch call — big enough to keep all Rayon threads busy.
 
 
@@ -107,8 +109,7 @@ def _arrow_files(spec) -> list[str]:
     files = sorted(glob.glob(os.path.expanduser(spec), recursive=True))
     if not files:
         raise RuntimeError(f"no arrow shards match {spec!r}")
-    if any(DENY.search(os.path.basename(f)) for f in files):
-        raise RuntimeError(f"ROLE-SPLIT VIOLATION in arrow glob {spec!r}")
+    reject_denied_paths(files, context=f"arrow glob {spec!r}")
     return files
 
 
@@ -144,9 +145,8 @@ def _iter_texts(kind: str, spec, field: str, limit: int | None,
     n_yield = 0
     if kind == "jsonl":
         paths = spec if isinstance(spec, list) else [spec]
+        reject_denied_paths(paths, context="jsonl source")
         for p in paths:
-            if DENY.search(os.path.basename(p)):
-                raise RuntimeError(f"ROLE-SPLIT VIOLATION: {p} is reasoning gold, not pretrain bulk.")
             if not os.path.exists(p):
                 print(f"  [warn] missing jsonl: {p}", flush=True); continue
             with open(p) as f:
@@ -421,7 +421,8 @@ def pretokenize_source(name, kind, spec, field, out_dir, tokenizer, eos_id, limi
     np.save(os.path.join(sdir, "doc_offsets.i64.npy"), np.asarray(offsets, dtype=np.int64))
     np.save(os.path.join(sdir, "doc_lens.i32.npy"), np.asarray(lens, dtype=np.int32))
     assert int(np.asarray(offsets[-1])) == n_tokens, "offset/token mismatch — merge bug"
-    meta = {"name": name, "kind": kind, "paths": spec, "text_field": field,
+    meta = {"name": name, "kind": kind, "role": infer_source_role(name),
+            "paths": spec, "text_field": field,
             "tokenizer": TOKENIZER, "n_docs": n_docs, "n_tokens": n_tokens,
             "eos_id": eos_id, "dtype": "uint16", "batch": BATCH, "num_proc": num_proc,
             "max_tokens": max_tokens}

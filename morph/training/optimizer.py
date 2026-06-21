@@ -211,6 +211,16 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         align_gate_tau = float(getattr(tr, "ademamix_align_gate_tau", 1.0))
         align_renorm = bool(getattr(tr, "ademamix_align_renorm", True))
         align_renorm_cap = float(getattr(tr, "ademamix_align_renorm_cap", 0.0))
+        # track_diag: per-tensor optimizer telemetry (snr-gate mean/low, clip/cap event counts).
+        # Default OFF — the loops cost ~67ms/step on 454 tensors and only feed log-cadence telemetry;
+        # the param update is bit-identical either way. Turn on for watched optimizer-debug runs.
+        track_diag = bool(getattr(tr, "ademamix_track_diag", False))
+        # fused dynamic-qmap (Task #278): replace the fused kernel's lossy linear-int8 state quant
+        # with bnb's own non-linear dynamic map (the de-fused reference quantizer) → kills the
+        # measured ~0.10-nat fused-vs-defused tax at full fused speed. nu_floor only affects the
+        # linear fused path (kept for tax attribution A/B). Both no-op when ademamix_fused=false.
+        fused_dynamic_qmap = bool(getattr(tr, "ademamix_fused_dynamic_qmap", False))
+        fused_nu_floor = bool(getattr(tr, "ademamix_fused_nu_floor", True))
         # Keep the no-decay group (which holds nn.Embedding tables) in 32-bit state —
         # bnb's 8-bit is unstable on sparse/large-range embedding grads. The no-decay group
         # otherwise holds only sub-4096 tensors (already fp32), so this mirrors AdamW8bit.
@@ -227,7 +237,9 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
             g_snr_gate_floor=g_snr_gate_floor,
             num_beta1=num_beta1, flip_clamp_kappa=flip_clamp_kappa,
             align_gate_mode=align_gate_mode, align_gate_tau=align_gate_tau,
-            align_renorm=align_renorm, align_renorm_cap=align_renorm_cap)
+            align_renorm=align_renorm, align_renorm_cap=align_renorm_cap,
+            track_diag=track_diag,
+            fused_dynamic_qmap=fused_dynamic_qmap, fused_nu_floor=fused_nu_floor)
         # Pattern-targeted eps placement: tag params whose NAME matches a pattern to use eps-inside
         # (stabilize the fragile boundary, e.g. ["prelude.0.mlp"]), leaving the rest eps-outside (full
         # AdEMAMix advantage in the looped core). Tag is read per-param in the de-fused denom step.

@@ -180,9 +180,19 @@ training:
                                  # preserves small ν → no underflow/throttle). true = custom
                                  # fused Triton kernel (LINEAR-int8 state) — faster opt.step but
                                  # its linear quant is lossy on small-ν lanes (underflow→explode
-                                 # OR over-floor→LR-throttle, measured 2026-06-15). Keep FALSE
-                                 # until a dynamic-qmap fused kernel exists. opt.step is ~2% of
-                                 # step time, so de-fused costs ~nothing on quality runs.
+                                 # OR over-floor→LR-throttle, measured 2026-06-15). With LINEAR
+                                 # quant this costs a measured ~0.10-nat tax vs de-fused; pair with
+                                 # ademamix_fused_dynamic_qmap=true (Task #278) to remove it.
+  ademamix_fused_dynamic_qmap: false  # (b1zero, fused only) Task #278 — replace the fused kernel's
+                                 # UNIFORM linear-int8 state quant with bnb's OWN non-linear dynamic
+                                 # map (signed m2, unsigned ν stored directly, no sqrt/floor) = the
+                                 # SAME quantizer as the de-fused reference → kills the ~0.10-nat tax
+                                 # at full fused speed (LUT gather + 8-step binary-search requant).
+                                 # Same ~2.03 B/param memory. true is the deploy target once the
+                                 # parity gate + A/B confirm no systematic bias.
+  ademamix_fused_nu_floor: true  # (b1zero, LINEAR fused only) legacy code-1 floor on sqrt(ν)
+                                 # (prevents int8 underflow→0). Exposed only to A/B-attribute the
+                                 # linear tax (floor-bias vs resolution). Ignored when dynamic_qmap.
   ademamix_eps_inside: true      # (b1zero, de-fused only) true = √(ν/bc2+ε) safety floor;
                                  # false = √(ν/bc2)+ε true-Adam normalization. eps-inside floors
                                  # the denom at √ε≈1e-4 → THROTTLES live small-ν params (abundant
@@ -264,6 +274,9 @@ training:
   ademamix_align_renorm: true    # cautious mean-preserving rescale u*=numel/Σmask (preserves avg step).
   ademamix_align_renorm_cap: 0.0 # cap the renorm amplification (0=unbounded). e.g. 4.0 bounds the
                                  # survivor-amplification when most coords disagree at a collapse.
+  ademamix_track_diag: false     # per-tensor optimizer telemetry (snr-gate mean/low, clip/cap counts).
+                                 # OFF saves ~67ms/step on the de-fused path (454-tensor sync loops);
+                                 # param update is BIT-IDENTICAL either way. true → for optimizer-debug.
   ademamix_m2_prune_decay: 0.0   # Task #276 SURGICAL stale-m₂-under-prune cure: at each prune EVENT,
                                  # multiply the slow EMA m₂ by (1−this) on the pruned (core/CMS) params
                                  # BEFORE the step, clearing stale pre-prune momentum the moment the

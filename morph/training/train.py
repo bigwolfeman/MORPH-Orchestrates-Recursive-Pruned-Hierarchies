@@ -1401,11 +1401,14 @@ def main(cfg: DictConfig) -> None:
         _stage_steps = [int(s.steps) for s in _stages]
         _eff_batch = int(getattr(_curr_cfg, "eff_batch", 8))
         _weights = {str(k): float(v) for k, v in dict(_curr_cfg.blend).items()}
+        _allowed_roles = [str(x) for x in getattr(
+            _curr_cfg, "allowed_source_roles", ("pretrain_bulk", "reasoning_midtrain")
+        )]
         _sched = CurriculumScheduler(_stage_steps)
         total_steps = _sched.total_steps                      # override training.steps
         _curr_loader = MultiSourceCurriculumLoader(
             str(_curr_cfg.pretok_dir), _weights, _boundaries,
-            seed=int(getattr(tr, "seed", 0)))
+            seed=int(getattr(tr, "seed", 0)), allowed_roles=_allowed_roles)
         # RoPE modules to re-anchor on each step-up (attention is EAGER → safe to mutate
         # cos/sin cache mid-run; compile only wraps the MLPs). Reach through _orig_mod.
         _rope_mods = [m for m in getattr(model, "_orig_mod", model).modules()
@@ -1414,7 +1417,8 @@ def main(cfg: DictConfig) -> None:
             return max(1, -(-a // b))
         print(f"[curriculum] ENABLED: {len(_stages)} stages seq={_boundaries} "
               f"context={_contexts} micro_batch={_microbatch} eff_batch={_eff_batch} "
-              f"stage_steps={_stage_steps} total_steps={total_steps} | "
+              f"stage_steps={_stage_steps} total_steps={total_steps} "
+              f"allowed_roles={_allowed_roles} | "
               f"{len(_rope_mods)} RoPE modules", flush=True)
 
     # ── Optimizer step closure (resolved once, no per-step isinstance) ───
