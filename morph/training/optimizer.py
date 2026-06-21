@@ -90,7 +90,7 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         cfg.training.ternary      (optional bool — activates TernaryShadowOptimizer)
         cfg.training.adam8bit     (optional bool — uses bitsandbytes 8-bit state)
         cfg.training.optimizer    (optional str — "adamw" (default) | "ademamix" |
-                                   "ademamix_b1zero" (β1=0 fork: 2 buffers, AdamW8bit
+                                   "ademamix_b1zero" (β1=0 fork: 2 buffers → AdamW8bit
                                    memory parity instead of bnb's +50%))
         cfg.training.beta3        (AdEMAMix slow-EMA decay, default 0.9999)
         cfg.training.ademamix_alpha (AdEMAMix fast/slow mix weight, default 8.0)
@@ -154,11 +154,15 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
                 t_alpha=t_alpha, t_beta3=t_beta3, eps=1e-8, weight_decay=wd,
                 optim_bits=32)
     elif opt_name == "ademamix_b1zero":
-        # FORK: β1=0 AdEMAMix with blockwise-8bit state — only 2 buffers (m2, ν), so it
-        # matches AdamW8bit's memory (~2 B/param) instead of bnb's 3-buffer +50% (the bnb
-        # β1=0 "trick" is a no-op — measured). Uses bnb's own blockwise dynamic quant.
+        # β1=0 AdEMAMix with blockwise-8bit state — 2 buffers (m2, ν) matching AdamW8bit
+        # memory (~2 B/param); bnb's β1=0 "trick" still allocates 3 buffers. Uses bnb's
+        # own blockwise dynamic quant.
         from morph.training.ademamix_b1zero import AdEMAMixB1Zero
         beta3 = float(getattr(tr, "beta3", 0.9999))
+        # b1zero uses its OWN beta2 (AdEMAMix paper recommends 0.999) decoupled from the shared
+        # AdamW beta2, so the deploy default is the validated coordcap05 winner without moving the
+        # AdamW baseline. Override per-arm with training.ademamix_beta2.
+        b1zero_beta2 = float(getattr(tr, "ademamix_beta2", 0.999))
         alpha = float(getattr(tr, "ademamix_alpha", 8.0))
         _ta = getattr(tr, "ademamix_t_alpha", None)
         _tb = getattr(tr, "ademamix_t_beta3", None)
@@ -166,14 +170,14 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         t_beta3 = int(_tb) if _tb is not None else int(tr.steps)
         b3_start = float(getattr(tr, "ademamix_beta3_warmup_start", 0.9))
         bits = 8 if use_8bit else 32
-        # fused=False (DEFAULT) → de-fused path using bnb's dynamic blockwise qmap for the
-        # 8-bit m2/ν state (same quant AdamW8bit uses; preserves small ν). fused=True → custom
-        # linear-int8 Triton kernel: faster opt.step but lossy on small-ν lanes (2026-06-15
-        # regression: under-floor→explode or over-floor→LR-throttle). See base.yaml note.
-        fused = bool(getattr(tr, "ademamix_fused", False))
-        # eps_inside only affects the de-fused path. True (default) = √(ν/bc2+ε) safety floor;
-        # False = √(ν/bc2)+ε true-Adam normalization (faster, correct for dynamic-qmap ν).
-        eps_inside = bool(getattr(tr, "ademamix_eps_inside", True))
+        # fused=True → custom Triton kernel (linear-int8 state, faster opt.step but lossy on
+        # small-ν lanes; pair with fused_dynamic_qmap=True to eliminate the bias).
+        # fused=False → de-fused path using bnb's dynamic blockwise qmap (same quant as
+        # AdamW8bit, preserves small ν). See base.yaml for full flag documentation.
+        fused = bool(getattr(tr, "ademamix_fused", True))
+        # eps_inside only affects the de-fused path. True = √(ν/bc2+ε) denom floor;
+        # False = √(ν/bc2)+ε true-Adam normalization (correct for dynamic-qmap ν).
+        eps_inside = bool(getattr(tr, "ademamix_eps_inside", False))
         # per-coordinate update clamp (Adam units) — bounds the (g+α·m₂)/denom step so a prune
         # topology-shock can't detonate a few coords in one step. 0 = off. The fast+stable lever.
         update_clip = float(getattr(tr, "ademamix_update_clip", 0.0))
@@ -184,49 +188,44 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         # downward-only trust-ratio τ (LARS/LAMB relative per-tensor governor). Both off by default.
         amsgrad = bool(getattr(tr, "ademamix_amsgrad", False))
         trust_ratio = float(getattr(tr, "ademamix_trust_ratio", 0.0))
-        # de-coherence B (Task #276): per-tensor cap ‖α·m₂‖ ≤ c·‖g‖ — the directional g-collapse
-        # guard the per-coord update_clip structurally can't be (de-fused path only). 0=off.
+        # Per-tensor stale-push cap: ‖α·m₂‖ ≤ c·‖g‖ per tensor (de-fused path only). 0=off.
         stale_push_cap = float(getattr(tr, "ademamix_stale_push_cap", 0.0))
-        # de-coherence B, PER-COORDINATE (Task #276): |α·m₂_i| ≤ c·|g_i| each coord — the
-        # mechanism-matched cure (disease = per-coord magnitude domination, ratio→14-60/cos→0).
-        # Catches the few collapsed coords the per-tensor norm hides. De-fused path only. 0=off.
+        # Per-coordinate stale-push cap: |α·m₂_i| ≤ c·|g_i| each coord — catches per-coord
+        # magnitude domination that the per-tensor norm hides. De-fused path only. 0=off.
         stale_push_cap_coord = float(getattr(tr, "ademamix_stale_push_cap_coord", 0.0))
-        # β1=0 ROOT-CAUSE FIX (stateless, no m1 buffer → memory parity preserved):
-        #   g_coef (γ<1) = constant downscale of the raw-g numerator term (cheap control);
-        #   g_snr_gate_kappa (κ>0) = soft per-coord SNR gate snr=|m₂|/denom → gate∈[floor,1]
-        #   that restores Adam's noise-gating. See ademamix_b1zero.py __init__ for the diagnosis.
+        # β1=0 noise-gating fix (stateless, no m1 buffer; see ademamix_b1zero.py for details):
+        #   g_coef (γ<1) = constant downscale of the raw-g numerator term (uniform control);
+        #   g_snr_gate_kappa (κ>0) = soft per-coord SNR gate: snr=|m₂|/denom → gate∈[floor,1].
         g_coef = float(getattr(tr, "ademamix_g_coef", 1.0))
         g_snr_gate_kappa = float(getattr(tr, "ademamix_g_snr_gate_kappa", 0.0))
         g_snr_gate_floor = float(getattr(tr, "ademamix_g_snr_gate_floor", 0.1))
-        # STE-cusp-vault fixes (2026-06-18), tested separately:
-        #   num_beta1 (>0) = small momentum on the raw-g numerator term (8-bit m1; smooth cusp approach)
+        # STE-cusp mitigations (both off by default; de-fused path only):
+        #   num_beta1 (>0) = small momentum on the raw-g numerator (8-bit m1; smooth cusp approach)
         #   flip_clamp_kappa (>0) = per-tensor cap on realized ternary flip-rate (stateless governor)
         num_beta1 = float(getattr(tr, "ademamix_num_beta1", 0.0))
         flip_clamp_kappa = float(getattr(tr, "ademamix_flip_clamp_kappa", 0.0))
-        # PER-COORDINATE alignment gate (Task #276, Cautious/Magma family; de-fused path only):
-        #   align_gate_mode = off|cautious|soft — zero/damp update coords whose sign disagrees with
-        #   the CURRENT gradient (the stale-α·m₂-points-wrong-way cure the per-tensor stale_push_cap
-        #   structurally can't be). tau = soft temperature; renorm = Cautious mean-preserving rescale.
+        # Per-coordinate alignment gate (Cautious/Magma family; de-fused path only):
+        #   align_gate_mode = off|cautious|soft — zero/damp update coords whose sign disagrees
+        #   with the current gradient. tau = soft temperature; renorm = mean-preserving rescale.
         align_gate_mode = str(getattr(tr, "ademamix_align_gate_mode", "off"))
         align_gate_tau = float(getattr(tr, "ademamix_align_gate_tau", 1.0))
         align_renorm = bool(getattr(tr, "ademamix_align_renorm", True))
         align_renorm_cap = float(getattr(tr, "ademamix_align_renorm_cap", 0.0))
-        # track_diag: per-tensor optimizer telemetry (snr-gate mean/low, clip/cap event counts).
-        # Default OFF — the loops cost ~67ms/step on 454 tensors and only feed log-cadence telemetry;
-        # the param update is bit-identical either way. Turn on for watched optimizer-debug runs.
+        # track_diag: per-tensor optimizer telemetry (snr-gate, clip/cap counts). OFF by
+        # default — sync loops cost ~67ms/step on large models; param update is bit-identical.
         track_diag = bool(getattr(tr, "ademamix_track_diag", False))
-        # fused dynamic-qmap (Task #278): replace the fused kernel's lossy linear-int8 state quant
-        # with bnb's own non-linear dynamic map (the de-fused reference quantizer) → kills the
-        # measured ~0.10-nat fused-vs-defused tax at full fused speed. nu_floor only affects the
-        # linear fused path (kept for tax attribution A/B). Both no-op when ademamix_fused=false.
-        fused_dynamic_qmap = bool(getattr(tr, "ademamix_fused_dynamic_qmap", False))
+        # fused_dynamic_qmap: replace the fused kernel's linear-int8 state quant with bnb's
+        # own non-linear dynamic map (the de-fused reference quantizer), eliminating the
+        # systematic bias of the linear path. nu_floor only affects the linear fused path.
+        # Both no-op when ademamix_fused=false.
+        fused_dynamic_qmap = bool(getattr(tr, "ademamix_fused_dynamic_qmap", True))
         fused_nu_floor = bool(getattr(tr, "ademamix_fused_nu_floor", True))
         # Keep the no-decay group (which holds nn.Embedding tables) in 32-bit state —
         # bnb's 8-bit is unstable on sparse/large-range embedding grads. The no-decay group
         # otherwise holds only sub-4096 tensors (already fp32), so this mirrors AdamW8bit.
         groups[1]["optim_bits"] = 32
         base_opt = AdEMAMixB1Zero(
-            groups, lr=lr, betas=(0.0, betas[1], beta3), alpha=alpha,
+            groups, lr=lr, betas=(0.0, b1zero_beta2, beta3), alpha=alpha,
             alpha_cap=float(getattr(tr, "ademamix_alpha_cap", 0.0)),
             t_alpha=t_alpha, t_beta3=t_beta3, beta3_warmup_start=b3_start,
             eps=1e-8, weight_decay=wd, bits=bits, fused=fused, eps_inside=eps_inside,

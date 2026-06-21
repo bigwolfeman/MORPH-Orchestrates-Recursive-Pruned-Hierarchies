@@ -13,7 +13,6 @@ projection — fully backend-agnostic (works on dense and MORTAR-carved MLPs
 alike; the carved BCSR GEMM is untouched).  Routing is activated by
 PruningSchedule._activate_routing at route_start.
 
-Date: 2026-05-25 (legacy output-cluster RoutedBlockELLLinear removed 2026-06-11)
 """
 
 from __future__ import annotations

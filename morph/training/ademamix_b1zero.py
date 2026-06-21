@@ -3,7 +3,7 @@
 WHY THIS EXISTS
 ---------------
 bnb's AdEMAMix8bit allocates 3 state buffers (m1, m2, ν) regardless of β1 — its β1=0
-"memory trick" is a no-op (measured: 3.05 B/param vs AdamW8bit 2.03). With β1=0 the fast
+"memory trick" is a no-op (bnb β1=0 fork still allocates 3 buffers). With β1=0 the fast
 EMA m1 collapses to the raw gradient and needs NO buffer, so a faithful β1=0 implementation
 keeps only 2 blockwise-8bit buffers (m2, ν) → ~2 B/param, matching AdamW8bit.
 
@@ -15,7 +15,7 @@ UPDATE (β1=0 AdEMAMix, arXiv:2409.03137):
     m2 ← β3·m2 + (1−β3)·g                  (slow EMA)
     ν  ← β2·ν  + (1−β2)·g²                  (second moment)
     bc2 = 1 − β2^t
-    update = (g + α·m2) / √(ν/bc2 + ε) + λ·p       # m1 = g exactly (β1=0, bc1=1); ε INSIDE sqrt
+    update = (g + α·m2) / √(ν/bc2 + ε) + λ·p       # m1 = g exactly (β1=0, bc1=1); ε inside √
     p ← p − lr·update
 
 STABILITY SCHEDULERS (the load-bearing part for instability-sensitive models):
@@ -79,11 +79,10 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
     ):
         if betas[0] != 0.0:
             raise ValueError(f"AdEMAMixB1Zero requires β1=0, got betas={betas}")
-        # FUSED kernel supports the deploy CURE knobs (Task #277): eps_inside, g_coef,
-        # g_snr_gate_kappa, stale_push_cap_coord (PER-COORD), update_clip — all elementwise,
-        # ported into ademamix_b1zero_kernel.py. The features below are de-fused-ONLY (need
-        # cross-block reductions, extra state buffers, or per-param branching the per-block kernel
-        # can't express) → raise on fused rather than SILENTLY NO-OP.
+        # The fused kernel supports: eps_inside, g_coef, g_snr_gate_kappa,
+        # stale_push_cap_coord, update_clip (all elementwise, in ademamix_b1zero_kernel.py).
+        # Features below are de-fused-only (require cross-block reductions, extra state
+        # buffers, or per-param branching) → raise on fused rather than silently no-op.
         if str(align_gate_mode) not in ("off", "cautious", "soft"):
             raise ValueError(f"align_gate_mode must be off|cautious|soft, got {align_gate_mode!r}")
         if fused:
@@ -112,44 +111,39 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         self.min_8bit_size = min_8bit_size
         self.blocksize = blocksize
         self.fused = fused
-        # eps_inside: √(ν/bc2 + ε) (denom floored at √ε≈1e-4). REQUIRED for the fused
-        # linear-int8 path (ν can underflow to EXACTLY 0 → denom=ε=1e-8 → g/1e-8 explosion).
-        # HARMFUL for the de-fused/fp32 path: ν never underflows to 0 there (bnb dynamic qmap)
-        # and the prune α·m₂ blowup is handled by _mask_dead_state, so the floor only throttles
-        # live small-ν params → slow convergence (measured 2026-06-16). De-fused → eps_inside=False
-        # for √(ν/bc2)+ε (true Adam normalization). This flag only affects the de-fused path;
-        # the fused kernel always applies eps-inside (it needs it).
+        # eps_inside: True = √(ν/bc2 + ε) (denom floored at √ε≈1e-4); False = √(ν/bc2) + ε
+        # (true-Adam normalization). Honored by BOTH paths — the de-fused step and the fused
+        # kernel (EPS_INSIDE constexpr). The floor exists because the LINEAR-int8 fused path can
+        # underflow ν to exactly 0 → denom→ε → explosion. The de-fused and dynamic-qmap paths
+        # store ν faithfully (no underflow) and _mask_dead_state handles pruned positions, so the
+        # floor there only throttles live small-ν params. DEFAULT is False (eps-outside): the
+        # deploy path is fused + dynamic-qmap, where eps-outside is safe and is the convergence-
+        # preserving denom; update_clip bounds any residual spike.
         self.eps_inside = eps_inside
         # When create_optimizer tags individual params with `p._eps_inside` (pattern-based,
         # e.g. eps-inside ONLY on the fragile prelude.0 boundary while the looped core stays
         # eps-outside for full advantage), this flag switches the de-fused denom to a per-param
         # branch. Off → the fast batched foreach path (global self.eps_inside), unchanged.
         self._has_eps_overrides = False
-        # update_clip: per-coordinate cap on the ADAPTIVE update term (g+α·m₂)/denom, in Adam
-        # units (a healthy step is O(1); measured worst healthy ~29). 0 = off. This is the
-        # fast+stable fix for the prune-shock detonation: at a prune topology-shock the gradient
-        # jumps while ν lags → (g+α·m₂)/√(lagging ν) spikes to ~1e4 on a few coords → single-step
-        # blow-up (observed: eps-out b2=.999 @9400, b2=.95 @19400). Clamping the update bounds the
-        # per-step param change (lr·clip) on JUST those anomalous coords — unlike eps-inside's √ε
-        # floor it does NOT raise the denom for all small-ν params, so no convergence throttle.
-        # Weight decay (λ·p, bounded) is added AFTER the clamp so it is never capped away.
+        # update_clip: per-coordinate cap on the adaptive update (g+α·m₂)/denom, in Adam
+        # units (healthy step ≈O(1)). 0 = off. At a prune topology-shock the gradient
+        # jumps while ν lags → the step spikes on a few coords → single-step blow-up.
+        # Clamping bounds those anomalous coords without raising the denom for all small-ν
+        # params (unlike eps-inside's blanket floor). Weight decay (λ·p) is added AFTER
+        # the clamp so it is never capped away.
         self.update_clip = float(update_clip)
-        # track_diag: when False (deploy default), ALL per-tensor diagnostic loops (snr-gate mean/low,
-        # update_clip event count, per-coord-cap masked count) are SKIPPED — they cost ~67ms/step on
-        # 454 tensors (per-tensor .item()/float()/int() syncs + Python-loop launch overhead) yet only
-        # feed telemetry read at log cadence. The UPDATE is bit-identical either way (diagnostics never
-        # touch params). True → accumulate them GPU-resident (sync-free) for watched runs (e.g. the
-        # TST→NTP cusp). See ignore/gate_diag_parity.py (DIAG_PARITY_GATE_PASS) + bench_cure_step.py.
+        # track_diag: when False (deploy default), all per-tensor diagnostic loops (snr-gate
+        # mean/low, clip event counts, coord-cap masked counts) are skipped. These loops cost
+        # ~67ms/step (per-tensor .item() syncs) and only feed log-cadence telemetry; the param
+        # update is bit-identical either way. True → accumulate GPU-resident (sync-free) for
+        # diagnostic runs.
         self.track_diag = bool(track_diag)
         self._clip_events = 0  # diagnostic: total coords clamped across all steps (no-theater check)
-        # update_rms_clip: per-TENSOR cap on the RMS of the adaptive update (g+α·m₂)/denom.
-        # The per-COORD clip (above) is the wrong granularity for the COLLECTIVE oscillation that
-        # detonates eps-outside on the looped/ternary first layer (measured 2026-06-16, no-prune
-        # isolation): ~500k prelude.0 coords spike COHERENTLY in one step → capping each to `c`
-        # still moves the whole layer ~Nc → divergence. The RMS clip bounds the layer's herd move:
-        # when a tensor's update-RMS exceeds this (healthy ≈0.5, collective spike ≈9), scale the
-        # whole tensor down to the cap → kills the coherent overshoot without touching healthy steps
-        # (unlike eps-inside which floors every small-ν coord every step = throttle). 0 = off.
+        # update_rms_clip: per-tensor cap on the RMS of the adaptive update (g+α·m₂)/denom.
+        # The per-coord clip misses COLLECTIVE oscillations where many coords spike coherently in
+        # one step — capping each individually still moves the whole tensor by ~N·c. The RMS clip
+        # bounds that herd move: scale the whole tensor down when its update-RMS exceeds the cap,
+        # leaving individually-quiet tensors untouched. 0 = off.
         self.update_rms_clip = float(update_rms_clip)
         self._rms_clip_events = 0  # diagnostic: total tensors RMS-scaled across all steps
         # amsgrad: AMSGrad-style denominator MEMORY — use ν_max=max(ν_max,ν) in the denom instead
@@ -168,38 +162,28 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         # form of the absolute RMS clip. Never amplifies (min with 1). 0 = off.
         self.trust_ratio = float(trust_ratio)
         self._trust_events = 0
-        # ── Stale-push cap (Task #276 de-coherence B): cap ‖α·m₂‖ ≤ c·‖g‖ per TENSOR ──────────
-        # E12 (2026-06-19): the σ_max(J_core) inter-block-alignment detonation fires when the live
-        # gradient COLLAPSES on the core weights while the slow EMA m₂ keeps its large, frozen,
-        # off-tangent magnitude → α·m₂ dominates g by ~540–1200× → a coherent off-manifold jump.
-        # Per-COORD update_clip cannot stop a COHERENT direction (clipping each coord still slides
-        # the whole tensor ~c·√N along m₂'s fixed direction). This caps the α·m₂ VECTOR norm per
-        # tensor relative to the live-gradient norm: surgical (healthy |α·m₂|/|g|≈1.5 ≪ cap; fires
-        # only on the collapse spike), directional (acts on the whole-tensor vector). 0.0 = off.
+        # Stale-push cap (per-tensor): cap ‖α·m₂‖ ≤ c·‖g‖ on the whole tensor. Fires when
+        # the live gradient collapses while the slow EMA retains its magnitude → α·m₂ dominates
+        # as a coherent off-manifold push. Per-coord update_clip cannot stop a coherent direction
+        # (each coord capped still moves the tensor ~c·√N along m₂'s direction); this bounds the
+        # whole-tensor vector. Healthy |α·m₂|/|g|≈1.5 → fires only on collapse spikes. 0.0 = off.
         self.stale_push_cap = float(stale_push_cap)
         self._stale_cap_events = 0
-        # ── per-COORDINATE stale-push cap (Task #276): |α·m₂_i| ≤ c·|g_i| each coord ────────────
-        # The mechanism-matched cure. The disease is per-coord MAGNITUDE domination (stale α·m₂_i
-        # huge where live g_i collapsed); the per-tensor cap above only sees the whole-tensor norm
-        # (a few collapsed coords hide), and the Cautious/Magma SIGN gate addresses the wrong axis
-        # (diverged @3020). This bounds each coordinate's stale slow-term by its live-gradient
-        # magnitude. De-fused path only. 0.0 = off. _stale_cap_coord_masked = GPU-resident diag.
+        # Per-coordinate stale-push cap: |α·m₂_i| ≤ c·|g_i| each coord independently. The
+        # failure mode is per-coord magnitude domination (stale α·m₂_i large where live g_i
+        # collapsed); the per-tensor cap misses the few collapsed coords hidden by the overall
+        # tensor norm. This is the mechanism-matched fix. De-fused path only. 0.0 = off.
+        # _stale_cap_coord_masked: GPU-resident diagnostic counter.
         self.stale_push_cap_coord = float(stale_push_cap_coord)
         self._stale_cap_coord_masked = 0.0
-        # ── β1=0 ROOT-CAUSE FIX: scale the raw-gradient (m1=g) numerator term ──────────────
-        # WHY (the open question the AdEMAMix paper never answered, diagnosed 2026-06-17):
-        # β1=0 puts the RAW gradient in the numerator — update = (g + α·m₂)/√E[g²]. On a
-        # noise-dominated coordinate (running mean μ ≪ std σ) that is g/√E[g²] ≈ a UNIT-VARIANCE
-        # RANDOM WALK every step, injected into every weak/noisy weight. Standard Adam/AdEMAMix
-        # (β1=0.9) suppress this: the fast EMA m1 averages noise toward its mean, shrinking the
-        # noise-coord magnitude ~(1−β1)=10× — that is Adam's implicit SNR/noise-GATING. β1=0
-        # throws the gate away (no m1 buffer = the memory win, but also no gating). Damage
-        # accumulates (slow ppl creep) → cascade; the √(1/(1−β2))≈31.6 saturation spikes are the
-        # tail of the same phenomenon. Scale-invariant in g, so grad-clipping is useless. We
-        # restore the gating WITHOUT an m1 buffer (β1=0 memory parity preserved), two stateless modes:
+        # β1=0 noise-gating fix: restore Adam's implicit SNR filter without an m1 buffer.
+        # β1=0 puts the raw gradient directly in the numerator; on noise-dominated coords
+        # (signal ≪ noise) this is a unit-variance random walk every step. Standard Adam
+        # suppresses this via the fast EMA m1 (β1≈0.9 shrinks noise ~10×). β1=0 removes
+        # that filter (the memory win), so two stateless modes restore it:
         #
-        # g_coef (γ, constant): numerator = γ·g + α·m₂. Crudest mimic of (1−β1) — damps EVERY
-        #   coord's g-term uniformly. Cheap CONTROL (throttles signal coords too). 1.0 = off.
+        # g_coef (γ): numerator = γ·g + α·m₂. Uniform downscale; damps all coords including
+        #   signal (coarse control). 1.0 = off.
         self.g_coef = float(g_coef)
         # g_snr_gate_kappa (κ, soft per-coord SNR gate): snr = |m₂|/denom ≈ |running-mean|/rms
         #   ∈[0,~1] (m₂ is the slow β3-EMA = the persistent/signal component; denom ≈ √E[g²] = rms
@@ -214,59 +198,45 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         self._gate_sum = 0.0    # diag: Σ per-tensor mean-gate (÷ _gate_n = mean gate applied)
         self._gate_n = 0
         self._gate_low = 0      # diag: total coords with gate < 0.5 (heavily noise-gated)
-        # ── STE-CUSP-VAULT FIXES (2026-06-18, mechanism CONFIRMED frame-by-frame) ──
-        # The deploy detonation = β1=0's RAW-gradient step vaults a ternary-STE quantization cusp →
-        # ~100k core ternary codes flip in ONE step → discrete realized-weight jump → looped core
-        # amplifies T× → residual-stream explosion (RMSNorm-masked → recoverable). Two independent
-        # mitigations, tested SEPARATELY (Wolfe 2026-06-18). Both DE-FUSED-path only; off by default.
-        # ARM D — num_beta1: a SMALL momentum on the raw-g NUMERATOR term (m1 = β1·m1 + (1−β1)·g,
-        #   bias-corrected). Smooths the step direction so it APPROACHES cusps gently instead of
-        #   vaulting (the direct β1 analog AdamW has). Slow-EMA m₂/ν still see the TRUE g (unchanged).
-        #   Costs ONE extra 8-bit blockwise buffer (~+1 B/param) — bends the β1=0 memory win; this is
-        #   the test of whether momentum-smoothing cures the vault (8-bit keeps it ≪ a full fp32 m1).
-        #   0.0 = off (numerator = raw g, exactly the β1=0 behaviour).
+        # STE-cusp mitigations: prevent a single large raw-gradient step from flipping many
+        # ternary codes simultaneously (mass flip → discontinuous effective-weight change →
+        # looped core amplifies → forward explosion). Both de-fused path only; off by default.
+        # ARM D — num_beta1: small momentum on the raw-g numerator term (m1 = β1·m1+(1−β1)·g,
+        #   bias-corrected). Smooths the step direction approaching ternary cusps. Slow-EMA
+        #   m₂/ν still see the true g unchanged. Costs one extra 8-bit buffer (~+1 B/param).
+        #   0.0 = off (raw g in numerator, β1=0 behaviour).
         self.num_beta1 = float(num_beta1)
-        # ARM A — flip_clamp_kappa: per-tensor cap on the realized ternary FLIP-RATE per step. The
-        #   vault is a ~20× flip-count spike on an otherwise-healthy trajectory; cap it. For each
-        #   weight, estimate the symmetric per-tensor STE scale s=mean|w| (matches deploy
-        #   scale_group='tensor'), threshold thr=0.5·s, count codes that WOULD flip under the move
-        #   p−lr·u; if flip-fraction > κ, scale the tensor's update by κ/frac (a monotone governor —
-        #   reduces the realized flip rate toward the cap). STATELESS (β1=0 memory win intact). Only
-        #   bites high-flip tensors (the cusp-vault); healthy steps (flip-frac ≪ κ) pass untouched.
-        #   0.0 = off. NOTE applied to all dim≥2 weights via the mean|w| proxy (exact for symmetric
-        #   per-tensor ternary; on non-ternary weights flips are rare so it ~never triggers).
+        # ARM A — flip_clamp_kappa: per-tensor cap on the realized ternary flip-rate per step.
+        #   For each weight, s=mean|w| (per-tensor STE scale), thr=0.5·s; if the fraction of
+        #   codes that would flip under p−lr·u exceeds κ, scale that tensor's update by κ/frac
+        #   (monotone governor). Stateless (no extra buffer). Healthy steps (frac ≪ κ) pass
+        #   untouched. Applied to all dim≥2 weights via mean|w| proxy. 0.0 = off.
         self.flip_clamp_kappa = float(flip_clamp_kappa)
         self._flip_clamp_events = 0  # diag: total tensors flip-rate-scaled across all steps
-        # ── Per-coordinate alignment gate (Task #276; Cautious/Magma family) ────────────────
-        # The stale-momentum cure the per-TENSOR stale_push_cap structurally can't be. E12 disease:
-        # at the ternary-STE cusp on the LOOPED core the current gradient redirects/collapses while
-        # the slow EMA m₂ keeps its frozen direction → the final update (g+α·m₂)/denom goes
-        # orthogonal/opposite to g PER COORDINATE (measured: cos(g,upd)→0). A per-tensor norm cap
-        # cannot fix coords that disagree in sign while the tensor norm looks fine. This gates the
-        # FINAL per-coord update u against the CURRENT raw gradient g:
-        #   "cautious" (Liang et al. arXiv:2411.16085): mask = 1[u·g > 0], zero disagreeing coords;
-        #       mean-preserving renorm u *= numel/Σmask keeps the average step magnitude (proven
-        #       to preserve Adam's descent Hamiltonian).
-        #   "soft"    (Magma arXiv:2602.15322, per-coord form): gate = sigmoid(sign(u·g)/τ) — damps
-        #       (not zeros) disagreeing coords to sigmoid(-1/τ); τ→0 ⇒ hard mask.
-        # De-fused path only (guarded in __init__). 0/off = exactly the prior update (bit-identical).
-        # NOTE (no-theater): pure sign-alignment relies on g carrying reliable direction; when g
-        # COLLAPSES in magnitude (ratio ‖α·m₂‖/‖g‖≫1) the kept coords still carry stale magnitude,
-        # so this composes with — does not replace — the magnitude governors (stale_push_cap,
-        # update_clip). It is applied AFTER /denom and BEFORE those clips so the clips bound any
-        # renorm amplification.
+        # Per-coordinate alignment gate (Cautious/Magma family): gate the final per-coord
+        # update u against the current raw gradient g. A per-tensor norm cap cannot catch
+        # individual coords whose update direction disagrees with g while the tensor norm
+        # looks fine. Modes:
+        #   "cautious" (arXiv:2411.16085): mask = 1[u·g > 0]; zero disagreeing coords;
+        #       mean-preserving renorm u *= numel/Σmask preserves avg step magnitude.
+        #   "soft" (Magma arXiv:2602.15322): gate = sigmoid(sign(u·g)/τ); damps disagreeing
+        #       coords continuously; τ→0 → hard mask.
+        # De-fused path only (guarded in __init__). off = bit-identical to prior update.
+        # NOTE: sign-alignment relies on g carrying reliable direction; when g collapses in
+        # magnitude the kept coords still carry stale magnitude, so this composes with (not
+        # replaces) the magnitude governors. Applied AFTER /denom and BEFORE magnitude clips
+        # so clips bound any renorm amplification.
         self.align_gate_mode = str(align_gate_mode)
         self.align_gate_tau = float(align_gate_tau)
         self.align_renorm = bool(align_renorm)
         self.align_renorm_cap = float(align_renorm_cap)  # 0 = unbounded mean-preserving rescale
         self._align_masked = 0.0   # diag: total coords masked/damped (agree≤0) across all steps
         self._align_n = 0          # diag: total coords seen (→ masked fraction)
-        # ── g-vs-numerator geometry capture (Task #276 stale-m₂-under-prune PROOF) ──────────
-        # When enabled (set_diag_capture), the de-fused step appends, per tracked tensor,
-        # cos(g, m₂), cos(g, α·m₂+gated_g), ‖α·m₂‖/‖gated_g‖ + the component norms into
-        # _diag_rows. The train loop drains it each step (logs medians + per-tensor rows around
-        # prune events). Single source of truth: m₂/gate/α_t/denom are the EXACT working copies
-        # used to build the update, so the diagnostic can never silently disagree with reality.
+        # g-vs-numerator geometry capture: when enabled via set_diag_capture(), the de-fused
+        # step appends per tracked tensor: cos(g, m₂), cos(g, α·m₂+gated_g),
+        # ‖α·m₂‖/‖gated_g‖, and component norms → _diag_rows. The train loop drains it each
+        # step. Values are the exact working copies used to build the update (cannot silently
+        # disagree with the real update).
         self._diag_capture = False
         self._diag_names: dict[int, str] = {}   # id(p) -> name (only tracked params)
         self._diag_rows: list = []              # drained by train.py each step
@@ -275,19 +245,18 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         self._code_signed_cpu = bnbF.create_dynamic_map(signed=True)
         self._code_unsigned_cpu = bnbF.create_dynamic_map(signed=False)
         self._code_cache: dict = {}
-        # ── Fused dynamic-qmap (Task #278): the cure for the fused-vs-defused ~0.10-nat quality
-        # tax. The original fused path uses UNIFORM linear-int8 (crushes the heavy-tailed optimizer
-        # state) + a sqrt-ν code-1 floor (biases denom UP on small-ν coords → systematic under-
-        # stepping). dynamic_qmap=True makes the fused kernel use bnb's OWN non-linear dynamic map
-        # (signed for m2, unsigned for ν stored DIRECTLY, no sqrt/floor) — the SAME quantizer as the
-        # validated de-fused reference, so the systematic bias vanishes (residual = sub-1e-4 rounding
-        # noise). Memory unchanged (uint8 code + fp32 per-block absmax = ~2.03 B/param).
+        # Fused dynamic-qmap: replaces the fused kernel's uniform linear-int8 quantizer (which
+        # underrepresents heavy-tailed optimizer state) with bnb's own non-linear dynamic map —
+        # the same quantizer as the de-fused reference. ν is stored directly (no sqrt/floor),
+        # eliminating the systematic denom bias of the linear path. Memory unchanged (~2.03
+        # B/param). When False, the fused kernel uses linear-int8 with sqrt-ν storage.
         self.fused_dynamic_qmap = bool(fused_dynamic_qmap)
         # fused_nu_floor: linear-path-only legacy code-1 floor on sqrt(ν) (prevents int8 underflow→0).
         # Exposed so we can A/B-attribute the tax (floor-bias vs resolution). Ignored when dynamic.
         self.fused_nu_floor = bool(fused_nu_floor)
-        # signed dynamic map index whose value == 0 (≈ middle): used to zero m2 at pruned positions
-        # in the dynamic fused path (code 0 ≠ value 0 for the signed map, unlike linear int8).
+        # Index in the signed dynamic map whose decoded value == 0 (the map's midpoint).
+        # Required because code 0 ≠ value 0 for the signed map (unlike linear int8).
+        # Used by _mask_dead_state to zero m2 at pruned positions.
         self._signed_zero_idx = int(self._code_signed_cpu.abs().argmin().item())
 
     def _code(self, device, signed: bool):
@@ -300,7 +269,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         return c
 
     def set_diag_capture(self, model, name_filter=None, enable: bool = True) -> int:
-        """Enable per-tensor g-vs-numerator geometry capture (Task #276). Returns # tracked.
+        """Enable per-tensor g-vs-numerator geometry capture. Returns count of tracked params.
 
         name_filter(name)->bool selects which params to track (default: all requires_grad).
         Tracked params get cos(g,m₂), cos(g,α·m₂+gated_g), ‖α·m₂‖/‖gated_g‖ appended to
@@ -318,7 +287,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
 
     @torch.no_grad()
     def decay_m2(self, factor: float, param_ids=None) -> int:
-        """Multiply the slow EMA m₂ by (1−factor) on selected params (Task #276 reset-on-prune).
+        """Multiply the slow EMA m₂ by (1−factor) on selected params.
 
         Called by the train loop AT a prune event, BEFORE the optimizer step, so the stale
         pre-prune momentum is shrunk before it drives the post-prune update. factor=0 → no-op;
@@ -355,9 +324,8 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         ta, tb = group["t_alpha"], group["t_beta3"]
         if ta:
             alpha = min(step * alpha / ta, alpha)
-        # α_t HARD CAP (Task #276): the per-block-gain detonation threshold is α_t ≈ 4.3-4.5 (E15:
-        # alignment refuted, σ_product/per-block-gain driven; the warmup means α_t<nominal at the
-        # cliff). Cap α_t just below threshold to SUSTAIN max stable AdEMAMix drive. 0 = off.
+        # α_t hard cap: bounds the scheduled α_t to prevent per-block gain runaway in the looped
+        # core. Applied after warmup ramp. 0 = off.
         cap = group.get("alpha_cap", 0.0)
         if cap and cap > 0.0:
             alpha = min(alpha, cap)
@@ -384,7 +352,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
     def load_state_dict(self, state_dict):
         """Restore blockwise-quant CODE dtypes after torch's float-casting load.
 
-        FOOTGUN (real resume bug, 2026-06-16): torch.optim.Optimizer.load_state_dict runs
+        FOOTGUN: torch.optim.Optimizer.load_state_dict runs
         _process_value_according_to_param_policy, which casts EVERY non-`step` state value to
         the param's dtype WHEN THE PARAM IS FLOATING POINT. Our quant codes are INTEGER
         (uint8 de-fused m2_q/nu_q; int8 fused m2_code/nu_sqrt_code) — they get silently
@@ -413,13 +381,11 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                 if torch.is_tensor(v) and v.dtype != torch.float32:
                     st[k] = v.float()
 
-        # PRECISION-DOWNGRADE RESUME (2026-06-18, Wolfe's "8-bit-state issue" hypothesis test):
-        # if THIS optimizer is fp32 (bits=32) but the checkpoint holds 8-bit DE-FUSED state
-        # (m2_q/nu_q), DEQUANTIZE it to fp32 m2/nu so the fp32 run starts from the IDENTICAL state
-        # lifted to full precision = a CLEAN precision-only swap (the only variable changed vs the
-        # 8-bit run). Without this, the fp32 step branch reads st["m2"] which is absent → KeyError.
-        # Only the de-fused dynamic-qmap path (the only one the deploy ckpts use) is converted;
-        # fused linear-int8 (m2_code) is left alone (not used here). m2 is signed, ν is unsigned.
+        # Precision-upgrade resume: if this optimizer is fp32 (bits=32) but the checkpoint
+        # holds 8-bit de-fused state (m2_q/nu_q), dequantize to fp32 m2/nu so the fp32 path
+        # can resume cleanly. Without this the fp32 step branch reads st["m2"] → KeyError.
+        # Only the de-fused dynamic-qmap path is converted; fused linear-int8 is unchanged.
+        # m2 is signed, ν is unsigned.
         if self.bits == 32:
             n_conv = 0
             for p, st in self.state.items():
@@ -537,16 +503,13 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
     def _mask_dead_state(self, p) -> None:
         """Zero the slow-momentum (m₂) and second-moment (ν) state at PRUNED positions.
 
-        WHY (the prune-divergence fix, 2026-06-15): MORPH prunes by masking a tile's
-        weight + grad to 0 every step (CMSBlockLinear.apply_prune_mask), which tags the
-        param with `_dead_mask` (1=keep, 0=pruned). For AdamW that's enough — grad=0 ⇒
-        m,ν both decay ⇒ update→0. For AdEMAMix it is NOT: the α·m₂ term is driven by the
-        SLOW EMA, which retains pre-prune gradient mass and decays at β3 ≫ β2 while ν
-        collapses → (α·m₂)/(√(ν/bc2)+ε) EXPLODES for the dead param (measured: stock
-        diverged @14.2k, faster-β2 @9.4k — bigger β3/β2 gap = earlier blow-up). Zeroing
-        m₂/ν here, BEFORE the update, makes the update exactly 0 at dead positions
-        ((0+α·0)/(√0+ε)+λ·0 = 0), so pruned params stay dead. grad stays masked every
-        step ⇒ the zeroed state stays zero (m₂ ← β3·0 + (1-β3)·0).
+        WHY: MORPH prunes by masking a tile's weight + grad to 0 (CMSBlockLinear tags the
+        param with _dead_mask; 1=keep, 0=pruned). For AdamW this is sufficient (grad=0 →
+        m,ν both decay → update→0). For AdEMAMix it is not: the α·m₂ slow EMA retains
+        pre-prune gradient mass and decays at β3 ≫ β2, while ν collapses. The result is
+        (α·m₂)/(√(ν/bc2)+ε) → ∞ for dead params. Zeroing m₂/ν here BEFORE the update
+        makes the dead-param update exactly 0, and grad=0 every step keeps the state at 0.
+        See Ai-notes/06-21-2026/AdEMAMix-b1zero-Divergence-Cure/TROUBLESHOOTING.md.
         """
         keep = getattr(p, "_dead_mask", None)
         if keep is None:
@@ -557,7 +520,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         dead = (keep.reshape(-1).to(p.device) == 0)
         if not bool(dead.any()):
             return
-        if "m2_dcode" in st:           # dynamic-qmap fused: signed code 0 ≠ value 0 → use zero-idx;
+        if "m2_dcode" in st:           # dynamic-qmap fused: signed-map code 0 ≠ value 0 → use zero-idx
             st["m2_dcode"].view(-1)[dead] = self._signed_zero_idx  # unsigned map[0]=0 → ν code 0
             st["nu_dcode"].view(-1)[dead] = 0
         elif "m2_code" in st:          # fused linear-int8: code 0 → value 0 (exact)
@@ -594,9 +557,8 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             if not params:
                 continue
 
-            # ── Prune compatibility: zero slow state at pruned positions BEFORE update ──
-            # (see _mask_dead_state). Without this AdEMAMix's α·m₂ term drives grad-masked
-            # pruned params to divergence as ν collapses underneath the charged m₂.
+            # Zero slow state at pruned positions before update (see _mask_dead_state).
+            # Without this, α·m₂ drives pruned params as ν collapses.
             for p in params:
                 self._mask_dead_state(p)
 
@@ -714,10 +676,8 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             elif self.g_coef != 1.0:
                 torch._foreach_mul_(gs, self.g_coef)        # g ← γ·g (constant control)
             upd = torch._foreach_mul(m2s, alpha_t)          # α·m2
-            # ── Task #276 g-vs-numerator geometry capture (stale-m₂-under-prune proof) ──────
-            # Here gs = gated_g (gate already applied at line above), m2s = the m₂ USED this
-            # step (post-EMA-update, which β1=0 AdEMAMix consumes immediately), upd = α·m₂
-            # (stale_push_cap is off in the deploy stack so upd is the raw α·m₂). p.grad = raw g.
+            # g-vs-numerator geometry capture: gs = gated_g, m2s = post-EMA m₂, upd = α·m₂,
+            # p.grad = raw g. Values are exact working copies used for the update.
             if self._diag_capture and self._diag_names:
                 for _i, _p in enumerate(params):
                     _nm = self._diag_names.get(id(_p))
@@ -750,14 +710,10 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                         if float(amn) > float(cap):
                             self._stale_cap_events += 1
                             am.mul_(cap / (amn + 1e-12))
-            # ── per-COORDINATE stale-push cap: |α·m₂_i| ≤ c·|g_i| (Task #276, mechanism-matched) ──
-            # The measured disease is MAGNITUDE domination (ratio ‖α·m₂‖/‖g‖→14-60, cos(g,upd)→0
-            # = stale slow-term huge WHERE current g is small), NOT sign-reversal — so the Cautious/
-            # Magma sign gate failed (diverged @3020, worse than the per-tensor cap's 14020). This is
-            # the per-tensor stale_push_cap done PER COORDINATE: bound each |α·m₂_i| by c·|g_i| so a
-            # coordinate whose live gradient has collapsed cannot let its frozen slow-EMA component
-            # dominate — catching the few collapsed coords a whole-tensor norm hides. Sign preserved.
-            # _foreach-vectorized + sync-free (min via |x|−relu(|x|−cap)). gs = gated g (∝|raw g|).
+            # Per-coordinate stale-push cap: |α·m₂_i| ≤ c·|g_i| for each coord.
+            # Bounds the stale slow-EMA contribution on coords where the live gradient has
+            # collapsed. Sign preserved. _foreach-vectorized + sync-free.
+            # gs = gated g (proportional to |raw g|).
             if self.stale_push_cap_coord > 0.0:
                 c = self.stale_push_cap_coord
                 caps = torch._foreach_abs(gs)               # |g|
@@ -780,12 +736,10 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             # ── per-coordinate alignment gate (Cautious/Magma; see __init__) ──
             # Gate the final per-coord update against the CURRENT gradient. Applied BEFORE the
             # magnitude clips so any mean-preserving renorm amplification is bounded by them.
-            # PERF (2026-06-20): _foreach-vectorized + SYNC-FREE. The first version did a per-tensor
-            # float((agree<=0).sum()) — hundreds of GPU→CPU syncs/step → ~halved step/s. Here the
-            # mask is built with batched _foreach ops, the diagnostic accumulates into a GPU tensor
-            # (never .item()'d in the hot loop), and the only Python loop is the renorm (one loop,
-            # same cost as update_clip, all GPU-scalar math). Uses gs (the fp32 gated-g already
-            # materialized for the numerator): the SNR gate is ≥0 so sign(gs)==sign(raw g).
+            # Implementation: _foreach-vectorized + sync-free. The mask is built with batched
+            # _foreach ops; the diagnostic accumulates into a GPU tensor (never .item()'d hot).
+            # The only Python loop is the renorm step (GPU-scalar math). Uses gs (fp32 gated-g
+            # already materialized); SNR gate ≥0 ensures sign(gs)==sign(raw g).
             if self.align_gate_mode != "off":
                 cap_rn = self.align_renorm_cap
                 agree = torch._foreach_mul(upd, gs)          # sign(agree)=sign(upd·g)  (1 fused launch)
@@ -841,12 +795,10 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                         if float(cap) < 1.0:
                             self._trust_events += 1
                             u.mul_(cap)
-            # ── ARM A: flip-aware update clamp (cap realized ternary flip-rate per tensor) ──
-            # The cusp-vault is a ~20× per-step ternary-flip spike on an otherwise-healthy trajectory.
-            # For each weight: s=mean|w| (symmetric per-tensor STE scale), thr=0.5·s; count codes that
-            # would flip under the move p−lr·u; if flip-fraction > κ, scale that tensor's update by
-            # κ/frac (monotone governor → realized flip-rate toward the cap). Healthy steps pass
-            # untouched (frac ≪ κ). Done BEFORE weight-decay/apply so the cap governs the real move.
+            # ARM A: flip-aware update clamp — cap realized ternary flip-rate per tensor.
+            # s=mean|w| (per-tensor STE scale), thr=0.5·s; if flip-fraction > κ, scale
+            # update by κ/frac (monotone governor). Healthy steps (frac ≪ κ) pass untouched.
+            # Applied before weight-decay so the cap governs the actual weight move.
             if self.flip_clamp_kappa > 0.0:
                 k = self.flip_clamp_kappa
                 for j, (u, p) in enumerate(zip(upd, params)):

@@ -95,7 +95,7 @@ class MORPHConfig:
     # Prediction (STP — Semantic Tube Predictor, geometric regularizer)
     stp_lambda: float = 0.02
     stp_tau: int = 64
-    # Loop-axis STP (Task #276 de-coherence arm A): same geodesic-smoothness geometry as STP, but
+    # Loop-axis STP regularizer: same geodesic-smoothness geometry as STP, but
     # applied along the LOOP-ITERATION trajectory h_0→…→h_T instead of the token axis. Pushes the
     # inner map f_θ toward locally-affine behaviour → reduces the curvature that makes the AdEMAMix
     # slow-EMA go stale (the σ_max(J_core) inter-block-alignment runaway). 0.0 → OFF, bit-exact.
@@ -138,7 +138,7 @@ class MORPHConfig:
 
     # L2 residency: mark the active carrier's address range PERSISTING (cudaAccessPolicyWindow)
     # so it survives the sublayer GEMMs' streaming between HC ops. Numerically a no-op (caching
-    # hint); cc8.0+. Default off. (Mechanism proven -19.6% isolated; model benefit measured net-
+    # hint); cc8.0+. Default off. (Mechanism isolated -19.6%; model benefit measured net-
     # negative in-model; kept as a dormant knob.)
     l2_persist: bool = False
 
@@ -160,11 +160,11 @@ class MORPHConfig:
     # Training
     dropout: float = 0.1
 
-    # L1 core-gain governor (Task #276, 2026-06-18): cap the per-iteration looped-core
+    # L1 core-gain governor: cap the per-iteration looped-core
     # amplification ‖h_new‖/‖h_a‖ (per sample) to this ratio τ. The HC residual is
     # norm-preserving (gain≈1 healthy) so this is IDENTITY in the healthy regime and only
     # shrinks the runaway-gain step that the weight-shared core amplifies T× (the β1=0
-    # detonation mode). 0.0 = OFF (bit-identical to baseline). Typical τ≈1.5–2.0.
+    # gain runaway mode). 0.0 = OFF (bit-identical to baseline). Typical τ≈1.5–2.0.
     core_gain_clip: float = 0.0
 
 
@@ -616,7 +616,7 @@ class MORPHTransformer(nn.Module):
 
         Lifted verbatim out of ``_forward_single``'s loop so the EXACT training-path core
         map ``f_θ`` is callable in isolation — for σ_max(J_core) probing and per-step
-        contractivity diagnostics (the nested-dynamical-system inner map, Task #276). The
+        contractivity diagnostics (the nested-dynamical-system inner map). The
         only former loop-local was ``np_`` (= n_prelude, a constant), recomputed here, so
         this is byte-identical to the in-loop closure (gated bit-exact).
         """
@@ -787,7 +787,7 @@ class MORPHTransformer(nn.Module):
         _cc_gain = None     # max per-sample magnitude gain (natural when governor off)
         # MORPH_DIAG_PERITER: keep the PER-ITERATION max_gain (realized one-step amplification,
         # a data-direction lower bound on σ_max(J_core)). If it COMPOUNDS across iteration index t
-        # in the run-up to detonation → σ_max-driven transient blowup THROUGH the loop (the
+        # when σ_max grows large → σ_max-driven transient blowup through the loop (the
         # nested-dynamical-system frame). Reuses the validated _g; just doesn't max-reduce over t.
         _peri = self._diag_corecos and bool(os.environ.get("MORPH_DIAG_PERITER"))
         _peri_g = []        # per-iter max_gain (computed PRE-governor below)
@@ -824,7 +824,7 @@ class MORPHTransformer(nn.Module):
             # Cap this iteration's per-sample looped-core amplification ‖h_new‖/‖h_a‖ ≤ τ.
             # IDENTITY when gain ≤ τ (healthy: the HC residual is norm-preserving so gain≈1 →
             # scale=1.0 → bit-exact x*1.0); only SHRINKS the runaway-gain step that the
-            # weight-shared core would otherwise amplify T× (the β1=0 detonation mode). Applied
+            # weight-shared core would otherwise amplify T× (gain runaway mode). Applied
             # uniformly across the no_grad / checkpoint / eager branches (outside the checkpoint
             # so the scaling lives in the outer graph). τ=0 → skipped entirely → bit-identical.
             _tau = self.cfg.core_gain_clip
@@ -929,7 +929,7 @@ class MORPHTransformer(nn.Module):
                 # TST superposition phase (#274): labels arrive as [B, T, s] token
                 # bags → multi-hot CE = mean of the s per-target CE terms against the
                 # SAME logits. Init loss ≈ log(V) (~11), NOT log(V)/s (~1.8) — the
-                # silent single-hot bug where labels.reshape(-1) was truncated to the
+                # single-hot labels.reshape(-1) would truncate to the
                 # first B·T entries. Reduces to single-hot at s=1.
                 ce_loss = fused_linear_cross_entropy_mce(
                     x.reshape(-1, x.shape[-1]), w_full,

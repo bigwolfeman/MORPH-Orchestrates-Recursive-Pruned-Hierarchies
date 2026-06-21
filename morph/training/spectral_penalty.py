@@ -1,18 +1,15 @@
-"""Core-map spectral-norm penalty — the σ_max(J_core) runaway cure (Task #276).
+"""Core-map spectral-norm penalty — soft hinge on σ_max of core MLP linears.
 
-DIAGNOSIS (E2/E5/E6, 2026-06-19): the β1=0 / α=8 detonation is a σ_max(J_core) RUNAWAY — the core
-map's worst-case one-step amplification (Jacobian spectral norm) explodes ~22 (healthy) → 1e7 (blown).
-It is optimizer-driven and UNIVERSAL across both AdEMAMix features (β1=0 AND α=8 each trigger it; only
-β1=0.9∧α=0 AdamW keeps σ_max bounded). The architecture TOLERATES σ_max~22 (AdamW runs there stably) —
-so the cure is NOT to force σ_max≤1 (that lobotomizes the working model) but to PREVENT the RUNAWAY.
+The core-map's worst-case one-step amplification (Jacobian spectral norm) can grow
+without bound under certain optimizer/α configurations, destabilizing the looped core.
+The healthy regime runs at σ_max~22 (AdamW stable); the target is not to force σ_max≤1
+(that lobotomizes the working model) but to prevent runaway above the healthy operating point.
 
 This module adds a soft per-core-linear spectral-norm penalty:
     L_sn = λ · Σ_i  relu(σ_max(W_i) − cap)²
-over the core-block MLP linears (gate_up, down — M3 fingered gate_up as the runaway epicenter). The
-penalty is ZERO while every linear sits below `cap` (so healthy training is untouched — bit-exact at
-λ=0) and only activates to pull a linear's spectral norm back when it tries to run away. Because it is
-a LOSS-side regularizer it is optimizer-AGNOSTIC → neutralises both β1=0 and α=8 at once (the universal
-cure E6 demanded), preserving β1=0's memory win AND α=8's training gain.
+over the core-block MLP linears (gate_up, down). The penalty is zero while every linear
+sits below `cap` (healthy training bit-exact at λ=0) and only activates to pull a linear
+back when it tries to run away. Loss-side regularizer → optimizer-agnostic.
 
 σ_max(W_i) is estimated by power iteration THROUGH the linear's own forward() — W·v = lin(v), Wᵀ·u via
 autograd — so it sees the EFFECTIVE weight (ternary STE + mask + dense/carve mode) with zero dependence

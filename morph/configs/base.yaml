@@ -23,10 +23,10 @@ model:
   mean_depth: 6
   max_depth: 8
   bptt_depth: 4
-  # L1 core-gain governor (#276): cap per-iteration looped-core amplification ‖h_new‖/‖h_a‖ per
-  # sample to this ratio τ. 0.0 = OFF (bit-identical). Identity in the healthy regime (norm-preserving
-  # HC residual → gain≈1); only shrinks the runaway step the weight-shared core amplifies T× (the
-  # β1=0 detonation mode). Typical τ≈1.5–2.0.
+  # L1 core-gain governor: cap per-iteration looped-core amplification ‖h_new‖/‖h_a‖ per
+  # sample to ratio τ. 0.0 = OFF (bit-identical). Identity when gain≈1 (norm-preserving
+  # HC residual); only fires on gain runaway (weight-shared core amplifies T× per depth).
+  # Typical τ≈1.5–2.0.
   core_gain_clip: 0.0
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth
   # grad-iterations; later ones run eager (activations retained → no backward recompute → faster),
@@ -53,7 +53,7 @@ model:
   # STP (Semantic Tube Predictor — geometric regularizer)
   stp_lambda: 0.02
   stp_tau: 64
-  loop_stp_lambda: 0.0   # loop-axis STP (Task #276 de-coherence A); 0.0 = OFF, bit-exact
+  loop_stp_lambda: 0.0   # loop-axis STP regularizer; 0.0 = OFF, bit-exact baseline
 
   # LM head fused cross-entropy chunk size (rows of B·T per chunk).
   # Smaller = less peak VRAM, more launch overhead. Tune per target.
@@ -115,17 +115,14 @@ training:
   checkpointing: true
 
   # Pruning → MORTAR carve → routing schedule (Phases 2→3→4)
-  # SLOWER-than-winner cadence (Wolfe 2026-06-12): prune every 167 steps from 3000 (was every 100).
-  # MECHANISM at d=768 (verified by simulating prune_step_blocks' integer recurrence, not assumed):
-  #  each event drops floor(alive·(1−prune_rate)) blocks, but the "guarantee progress" floor
-  #  min(new_alive, alive−1) pins it to EXACTLY 1 block/event here — 0.5% of the small block grids
-  #  (gate_up=192 blocks, down=96) is < 1. So at d=768 prune_rate is INERT; prune_INTERVAL is the
-  #  ONLY speed lever. The bottleneck layer gate_up must drop 144 blocks (192→48) to reach 0.25,
-  #  one per event ⇒ 144·167 ≈ 24k steps ⇒ density hits 0.25 by ~step 27050 (winner: 144·100 ⇒
-  #  ~step 17400). The prune→0.25 window MUST close before compact_step, else carve() freezes a
-  #  still-dense model (the old 6000/3000/0.05 cadence only hit ~0.80 density by step 20000).
-  # NOTE: prune completes (~27050) inside the TST superposition window [0,30000); carve@29000 also
-  #  inside (~1950-step settle, ≈ the winner's 2000); route@30000 = superposition→recovery boundary.
+  # Prune cadence at d=768: the "guarantee progress" floor pins each event to exactly
+  # 1 block drop (0.5% of gate_up=192 blocks is <1 block), so prune_rate is inert here;
+  # prune_interval is the only speed lever. The bottleneck layer (gate_up) must drop 144
+  # blocks (192→48) to reach 0.25 density, one per event → density hits 0.25 by step
+  # ~27050 at interval=167. The prune→0.25 window MUST close before compact_step, else
+  # carve() freezes a still-dense model. At d=2048 (cloud scale) prune_rate bites normally.
+  # NOTE: prune completes inside the TST superposition window; carve@29000 and route@30000
+  #  align with the superposition→recovery boundary.
   prune_start: 3000
   prune_interval: 167            # SLOWER: 1.67× the winner's 100 — the REAL d=768 lever (see MECHANISM)
   prune_rate: 0.005              # = winner; INERT at d=768 (1 block/event floor). Only bites at cloud d=2048
@@ -148,14 +145,12 @@ training:
   # Optimizer extras
   optimizer: adamw               # adamw (default deploy) | ademamix (arXiv:2409.03137) |
                                  # ademamix_b1zero (β1=0 fork: 2 buffers → AdamW8bit memory
-                                 # parity, vs bnb's +50%; measured ~+1% step time)
+                                 # parity, vs bnb's 3-buffer +50%; ~+1% step overhead)
   weight_decay: 0.1
-  # ── Core-map spectral-norm penalty (Task #276 σ_max(J_core)-runaway cure) ──
-  # Soft hinge L=lambda·Σ relu(σ_max(W)−cap)² over the core-block MLP linears (gate_up/down).
-  # Caps the σ_max RUNAWAY that detonates β1=0/α=8 (E2: σ_max 22 healthy → 1e7 blown) WITHOUT
-  # forcing σ_max≤1 (the working model needs σ_max~22). Healthy gate_up σ_max~1.5 → cap~3 only
-  # bites on runaway. Loss-side ⇒ optimizer-agnostic ⇒ neutralises BOTH β1=0 and α=8. OFF when
-  # cap or lambda ≤ 0 (exact baseline). See morph/training/spectral_penalty.py.
+  # Core-map spectral-norm penalty: soft hinge L=lambda·Σ relu(σ_max(W)−cap)² over
+  # core MLP linears (gate_up/down). Caps σ_max runaway without forcing σ_max≤1
+  # (healthy values ~1.5; cap~3 only fires on runaway). Loss-side → optimizer-agnostic.
+  # OFF when cap or lambda ≤ 0 (exact baseline). See morph/training/spectral_penalty.py.
   spectral_penalty_cap: 0.0
   spectral_penalty_lambda: 0.0
   spectral_penalty_n_iter: 1
@@ -166,63 +161,51 @@ training:
   # STABILITY: t_alpha/t_beta3 are the optimizer's OWN alpha/beta3 warmup horizons (NOT LR
   # warmup) — a large beta3 active from step 0 diverges even with LR warmup. null → default to
   # training.steps (essential; bnb pins beta3 at full strength from step 0 if these are None).
-  beta3: 0.9999                  # slow-EMA decay (drop to 0.999 for short <100k runs)
+  beta3: 0.999                   # (b1zero) slow-EMA decay. 0.999 = validated deploy default (<100k).
+  ademamix_beta2: 0.999          # (b1zero) AdEMAMix beta2, decoupled from the shared AdamW beta2
+                                 # (paper rec 0.999). The shared `beta2` above stays the AdamW default.
   ademamix_alpha: 8.0            # fast/slow mix weight (paper LM default 8; 5 = conservative)
-  ademamix_alpha_cap: 0.0        # (b1zero) HARD cap on scheduled α_t (Task #276). Detonation
-                                 # threshold is α_t≈4.3-4.5 (per-block gain, E15). Cap ~3.5 to
-                                 # SUSTAIN max stable AdEMAMix drive (warmup-ramp wastes early α). 0=off.
-  ademamix_t_alpha: null         # null → training.steps
+  ademamix_alpha_cap: 3.5        # (b1zero) Hard cap on scheduled α_t. The per-block gain
+                                 # runaway threshold is α_t≈4.3–4.5; cap at 3.5 to sustain
+                                 # max stable AdEMAMix drive without crossing the threshold. 0=off.
+  ademamix_t_alpha: 8000         # (b1zero) α warmup horizon (validated). null → training.steps
   ademamix_t_beta3: null         # null → training.steps
   ademamix_beta3_warmup_start: 0.9  # (b1zero only) β3-warmup START decay; β1=0 makes the
                                  # paper's log(β1) schedule degenerate, so we ramp from here.
-  ademamix_fused: false          # (b1zero only) false = DE-FUSED path: bnb's dynamic blockwise
-                                 # qmap for the 8-bit m2/ν state (same quant AdamW8bit uses;
-                                 # preserves small ν → no underflow/throttle). true = custom
-                                 # fused Triton kernel (LINEAR-int8 state) — faster opt.step but
-                                 # its linear quant is lossy on small-ν lanes (underflow→explode
-                                 # OR over-floor→LR-throttle, measured 2026-06-15). With LINEAR
-                                 # quant this costs a measured ~0.10-nat tax vs de-fused; pair with
-                                 # ademamix_fused_dynamic_qmap=true (Task #278) to remove it.
-  ademamix_fused_dynamic_qmap: false  # (b1zero, fused only) Task #278 — replace the fused kernel's
-                                 # UNIFORM linear-int8 state quant with bnb's OWN non-linear dynamic
-                                 # map (signed m2, unsigned ν stored directly, no sqrt/floor) = the
-                                 # SAME quantizer as the de-fused reference → kills the ~0.10-nat tax
-                                 # at full fused speed (LUT gather + 8-step binary-search requant).
-                                 # Same ~2.03 B/param memory. true is the deploy target once the
-                                 # parity gate + A/B confirm no systematic bias.
+  ademamix_fused: true           # (b1zero) true = fused Triton kernel (faster opt.step).
+                                 # With linear-int8 state quant the fused path is lossy on
+                                 # small-ν lanes (underflow→explode or over-floor→throttle);
+                                 # pair with ademamix_fused_dynamic_qmap=true to eliminate
+                                 # that bias. false = de-fused path: bnb's dynamic blockwise
+                                 # qmap (same quant as AdamW8bit; preserves small ν, no bias).
+  ademamix_fused_dynamic_qmap: true   # (b1zero, fused only) Replace the fused kernel's uniform
+                                 # linear-int8 state quant with bnb's non-linear dynamic map
+                                 # (signed m2, unsigned ν stored directly, no sqrt/floor) —
+                                 # the same quantizer as the de-fused reference, eliminating
+                                 # systematic denom bias. Same ~2.03 B/param memory.
   ademamix_fused_nu_floor: true  # (b1zero, LINEAR fused only) legacy code-1 floor on sqrt(ν)
                                  # (prevents int8 underflow→0). Exposed only to A/B-attribute the
                                  # linear tax (floor-bias vs resolution). Ignored when dynamic_qmap.
-  ademamix_eps_inside: true      # (b1zero, de-fused only) true = √(ν/bc2+ε) safety floor;
-                                 # false = √(ν/bc2)+ε true-Adam normalization. eps-inside floors
-                                 # the denom at √ε≈1e-4 → THROTTLES live small-ν params (abundant
-                                 # under ternary STE) → ~0.5 nats slower convergence (measured
-                                 # 2026-06-16). It is only NEEDED for the fused linear-int8 kernel
-                                 # (ν→0 underflow → ε explosion); the de-fused dynamic-qmap path
-                                 # never underflows + _mask_dead_state handles prune blowup, so
-                                 # set FALSE with fused:false for the fast+stable combo.
-  ademamix_update_clip: 100.0    # (b1zero, de-fused) per-coord cap on the (g+α·m₂)/denom step in
-                                 # Adam units (healthy step ~O(1), measured worst ~29). 0 = off.
-                                 # THE fast+stable fix: bounds the per-step param change so a prune
-                                 # topology-shock (ν lags the gradient jump) can't detonate a few
-                                 # coords in one step (observed eps-out divergences @9400/@19400).
-                                 # Only bites anomalous coords → no convergence throttle (unlike
-                                 # eps-inside's blanket √ε floor). 100 = 3-4× over healthy worst.
-  ademamix_update_rms_clip: 0.0  # (b1zero, de-fused) per-TENSOR cap on the RMS of (g+α·m₂)/denom.
-                                 # The per-coord clip can't stop the COLLECTIVE oscillation that
-                                 # detonates eps-outside on the looped/ternary first layer (no-prune
-                                 # isolation 2026-06-16: ~500k prelude.0 coords spike COHERENTLY →
-                                 # capping each still moves the whole layer). RMS clip bounds the herd:
-                                 # healthy update-RMS ≈0.5, collective spike ≈9 → a cap ~2 kills the
-                                 # overshoot, passes healthy untouched. 0 = off.
-                                 # NOTE 2026-06-16: RMS=2 measured INVASIVE (healthy RMS ~2-2.4 across
-                                 # many layers) — superseded by amsgrad/trust_ratio below.
-  ademamix_stale_push_cap: 0.0   # (b1zero, de-fused) de-coherence B (Task #276): per-TENSOR cap
-                                 # ‖α·m₂‖ ≤ c·‖g‖. E12: the σ_max inter-block-alignment detonation
-                                 # fires when g COLLAPSES while m₂ stays large+stale → |α·m₂|/|g|
-                                 # hits ~540-1200× → coherent off-tangent jump (per-coord clip can't
-                                 # stop a coherent direction). Surgical: healthy |α·m₂|/|g|≈1.5 ≪ cap
-                                 # (try 5-10) → fires ONLY on the collapse spike. 0 = off.
+  ademamix_eps_inside: false     # (b1zero) false = √(ν/bc2)+ε true-Adam normalization (default).
+                                 # true = √(ν/bc2+ε) safety floor (floored at √ε≈1e-4) —
+                                 # required for the fused linear-int8 kernel where ν can underflow
+                                 # to exactly 0; throttles live small-ν params on the de-fused
+                                 # dynamic-qmap path (ν never underflows there, _mask_dead_state
+                                 # handles pruned positions). Use false with fused:false.
+  ademamix_update_clip: 5.0      # (b1zero) per-coord cap on the (g+α·m₂)/denom step in
+                                 # Adam units (healthy step ≈O(1)). 0 = off. Bounds the
+                                 # per-step param change so a prune topology-shock (ν lags
+                                 # the gradient jump) cannot blow up a few coords in one step.
+                                 # Only fires on anomalous coords → no convergence throttle.
+  ademamix_update_rms_clip: 0.0  # (b1zero, de-fused) per-tensor cap on the RMS of (g+α·m₂)/denom.
+                                 # The per-coord clip misses coherent collective oscillations where
+                                 # many coords spike together — their individual caps still produce
+                                 # a large tensor move. The RMS cap bounds the whole-tensor herd
+                                 # move. 0 = off. Superseded by stale_push_cap_coord for most uses.
+  ademamix_stale_push_cap: 0.0   # (b1zero, de-fused) per-tensor cap ‖α·m₂‖ ≤ c·‖g‖. Fires when
+                                 # the live gradient collapses while m₂ retains large stale magnitude
+                                 # → α·m₂ dominates as a coherent push the per-coord clip can't stop.
+                                 # Healthy |α·m₂|/|g|≈1.5 ≪ typical cap → surgical. 0 = off.
   ademamix_amsgrad: false        # (b1zero, de-fused) AMSGrad ν_max denominator memory (Reddi 2019):
                                  # denom uses max(ν_max,ν) not ν → prevents effective-LR rise on a
                                  # coord that was loud then went quiet (the measured eps-out small-ν
@@ -231,45 +214,42 @@ training:
   ademamix_trust_ratio: 0.0      # (b1zero, de-fused) downward-only LARS/LAMB trust ratio τ: scale each
                                  # tensor's update so weights move ≤ τ·‖w‖/step. Relative per-layer
                                  # governor (scale-aware). 0 = off. Try ~1e-3..1e-2.
-  # ── β1=0 ROOT-CAUSE FIX (b1zero, de-fused) — restore Adam's lost noise-gating, NO m1 buffer ──
-  # DIAGNOSIS (2026-06-17): β1=0 puts raw g in the numerator (g+α·m₂)/√E[g²] → on a noise coord
-  # that is a UNIT-VARIANCE random walk every step (Adam's (1−β1) fast-EMA averages it away; β1=0
-  # can't). Damage accumulates → divergence (the 31.6 saturation spikes are its tail). These two
-  # knobs damp the raw-g term selectively, statelessly (β1=0 2-buffer memory win preserved):
+  # β1=0 noise-gating fix (b1zero, de-fused) — restore Adam's implicit noise filter without
+  # an m1 buffer. β1=0 puts raw g in the numerator; on noise-dominated coords this is a
+  # unit-variance random walk every step (standard Adam's fast EMA averages it away; β1=0
+  # cannot). Two stateless knobs restore the filter (β1=0 2-buffer memory win preserved):
   ademamix_g_coef: 1.0           # γ: constant downscale of the raw-g numerator term (γ·g + α·m₂).
                                  # Crude (1−β1) mimic — damps ALL coords uniformly (throttles signal
                                  # too). Cheap CONTROL for the gate below. 1.0 = off. Try ~0.1–0.3.
-  ademamix_g_snr_gate_kappa: 0.0 # κ: SOFT per-coord SNR gate. snr=|m₂|/denom ≈ |mean|/rms; gate =
+  ademamix_g_snr_gate_kappa: 0.3 # κ: SOFT per-coord SNR gate. snr=|m₂|/denom ≈ |mean|/rms; gate =
                                  # floor+(1−floor)·clamp(snr/κ,0,1); numerator = gate·g + α·m₂. Noise
                                  # coord (snr→0)→gate=floor (~10× cut, = Adam); signal coord (snr≈1)→
                                  # gate=1 (full AdEMA advantage); fresh spike auto-gated (ν leads m₂).
                                  # THE root-cause fix. 0.0 = off. Try κ~0.3 first, sweep 0.2–0.5.
   ademamix_g_snr_gate_floor: 0.1 # gate floor (min raw-g weight on a pure-noise coord). ≈(1−β1)=0.1
                                  # matches Adam's noise damping; >0 so learning never fully stalls.
-  # ── STE-cusp-vault fixes (2026-06-18; mechanism CONFIRMED: β1=0 raw step vaults a ternary cusp →
-  #    ~100k core ternary codes flip in one step → looped core amplifies → explosion). Tested SEPARATELY. ──
+  # STE-cusp mitigations: prevent a single large β1=0 step from flipping many ternary codes
+  # in one iteration (mass flip → looped core amplifies → forward explosion). Tested separately.
   ademamix_num_beta1: 0.0        # ARM D: small momentum on the raw-g NUMERATOR term (m1=β1·m1+(1−β1)·g,
                                  # bias-corrected; 8-bit m1, ~+1 B/param). Smooths the step so it
                                  # approaches cusps gently (AdamW's β1 analog). 0.0=off (raw g). Try ~0.9.
   ademamix_flip_clamp_kappa: 0.0 # ARM A: per-tensor cap on realized ternary FLIP-RATE/step. s=mean|w|,
                                  # thr=0.5·s; if frac of codes that flip under p−lr·u > κ, scale that
                                  # tensor's update by κ/frac (stateless governor). 0.0=off. Try ~0.02-0.05.
-  ademamix_stale_push_cap_coord: 0.0  # Task #276 PER-COORDINATE stale-push cap (b1zero, de-fused) —
-                                 # the MECHANISM-MATCHED cure. Bound |α·m₂_i| ≤ c·|g_i| on each coord
-                                 # (vs the per-tensor stale_push_cap's whole-tensor norm). The disease
-                                 # is per-coord MAGNITUDE domination (ratio ‖α·m₂‖/‖g‖→14-60, cos→0:
-                                 # stale slow-term huge where live g collapsed) — NOT sign-reversal, so
-                                 # the Cautious/Magma sign gate failed (diverged @3020 < per-tensor's
-                                 # 14020). This catches the few collapsed coords the tensor-norm hides.
-                                 # Sign preserved. 0.0=off; try ~0.5-2.0 (smaller=tighter).
-  ademamix_align_gate_mode: "off"  # Task #276 PER-COORD alignment gate (b1zero, de-fused; Cautious/Magma).
-                                 # off|cautious|soft. Gates the final per-coord update u against the
-                                 # CURRENT gradient g: zero/damp coords where u·g≤0 (stale α·m₂ pointing
-                                 # against g — the cure the per-TENSOR stale_push_cap can't be, since a
-                                 # tensor norm hides per-coord sign disagreement). cautious=hard mask
-                                 # 1[u·g>0]+mean-preserving renorm (arXiv:2411.16085); soft=sigmoid(
-                                 # sign(u·g)/τ) damp (Magma arXiv:2602.15322). NOTE: relies on g's sign;
-                                 # composes with (not replaces) magnitude governors when g collapses.
+  ademamix_stale_push_cap_coord: 0.5  # Per-coordinate stale-push cap (b1zero): |α·m₂_i| ≤ c·|g_i|
+                                 # on each coord (vs the per-tensor cap's whole-tensor norm). The
+                                 # failure mode is per-coord magnitude domination: stale slow-EMA
+                                 # huge where the live gradient collapsed — the few collapsed coords
+                                 # are hidden by the tensor-level norm. Sign preserved.
+                                 # 0.0=off; recommended c≈0.5. Smaller = tighter bound.
+                                 # History: see Ai-notes/06-21-2026/AdEMAMix-b1zero-Divergence-Cure/TROUBLESHOOTING.md
+  ademamix_align_gate_mode: "off"  # Per-coord alignment gate (b1zero, de-fused; Cautious/Magma).
+                                 # off|cautious|soft. Gates the final per-coord update u against
+                                 # the current gradient g: zero/damp coords where u·g≤0.
+                                 # cautious = hard mask 1[u·g>0] + mean-preserving renorm
+                                 # (arXiv:2411.16085); soft = sigmoid(sign(u·g)/τ) damp
+                                 # (Magma arXiv:2602.15322). NOTE: relies on g direction;
+                                 # composes with magnitude governors when g collapses.
   ademamix_align_gate_tau: 1.0   # soft-mode temperature (smaller→sharper, →hard mask). Unused if cautious.
   ademamix_align_renorm: true    # cautious mean-preserving rescale u*=numel/Σmask (preserves avg step).
   ademamix_align_renorm_cap: 0.0 # cap the renorm amplification (0=unbounded). e.g. 4.0 bounds the
@@ -277,11 +257,10 @@ training:
   ademamix_track_diag: false     # per-tensor optimizer telemetry (snr-gate mean/low, clip/cap counts).
                                  # OFF saves ~67ms/step on the de-fused path (454-tensor sync loops);
                                  # param update is BIT-IDENTICAL either way. true → for optimizer-debug.
-  ademamix_m2_prune_decay: 0.0   # Task #276 SURGICAL stale-m₂-under-prune cure: at each prune EVENT,
-                                 # multiply the slow EMA m₂ by (1−this) on the pruned (core/CMS) params
-                                 # BEFORE the step, clearing stale pre-prune momentum the moment the
-                                 # topology (loss landscape) moves. 0.0=off; try 0.1/0.25/0.5; 1.0=full
-                                 # reset (erases AdEMAMix's edge — pruning fires every prune_interval).
+  ademamix_m2_prune_decay: 0.0   # At each prune event, multiply slow EMA m₂ by (1−this) on
+                                 # pruned (core/CMS) params BEFORE the step, clearing stale
+                                 # pre-prune momentum at the topology change. 0.0=off; 1.0=full
+                                 # reset (erases AdEMAMix advantage; pruning fires every interval).
   ademamix_eps_inside_patterns: []  # (b1zero, de-fused) LAYER-TARGETED eps placement: params whose name
                                  # contains any of these substrings use eps-INSIDE (√(ν/bc2+ε) floor →
                                  # stabilize), the rest stay eps-OUTSIDE (full advantage). The mechanism-
@@ -296,12 +275,11 @@ training:
   ternary_scale_mode: symmetric  # symmetric wins at this scale (A-series result)
   ternary_scale_group: tensor    # per-tensor scale
   ternary_scale_dtype: fp16      # fp16 scale storage
-  ternary_scale_clip_mult: 0.0   # Task #276 "B": per-group UPPER BOUND on ternary scale γ=mean(|W|),
-                                 # = this × initial γ (anchored, so a blowup can't ratchet it up). γ is
-                                 # the WHOLE magnitude carrier of the {-1,0,+1}×γ weight → caps layer
-                                 # output magnitude = structural backstop vs the g-collapse→α·m₂ blowup,
-                                 # optimizer-independent. 0=off; try 8 (8× init headroom for healthy
-                                 # growth, hard stop on the 1e3-1e5× explosion). Symmetric mode only.
+  ternary_scale_clip_mult: 0.0   # Per-group upper bound on ternary scale γ=mean(|W|), anchored
+                                 # at this × initial γ (prevents blowup from ratcheting the scale
+                                 # upward). γ is the full magnitude carrier of {-1,0,+1}×γ weights
+                                 # → caps layer output magnitude. Optimizer-independent backstop.
+                                 # 0=off; typical range 3–8×. Symmetric mode only.
 
   # 8-bit AdamW via bitsandbytes (quantizes optimizer state m,v to uint8)
   adam8bit: true

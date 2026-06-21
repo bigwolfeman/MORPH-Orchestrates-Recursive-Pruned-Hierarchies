@@ -56,12 +56,10 @@ if hasattr(_functorch_config, "donated_buffer"):
 # regardless of when a recompile fires. Verified: 60 real training steps with live
 # recompiles, no wedge. Pair with the single-threaded warmup below (handles the initial
 # bulk compile). This applies to ALL runs incl. the future pruning run.
-# spawn workers (fork-safe mid-loop recompile) are ONLY needed when compiling the carved
-# path (MORPH_COMPILE_CARVED). That fix measured NET-NEGATIVE at d=768 (carved-compiled
-# 742ms vs carved-eager 698ms — the carved path is fastest EAGER; recompile thrashes on
-# grad_mode guards), AND spawn caused a BrokenProcessPool on the full-model startup compile.
-# Default path = B5-proven: default inductor workers + carved path runs eager via
-# eager_on_recompile (no mid-loop compile → no fork risk). Gate kept for cloud-scale revisit.
+# Spawn workers (MORPH_COMPILE_CARVED) are only needed when compiling the carved path.
+# At d=768 carved-eager is faster than carved-compiled (grad_mode guard thrashing) and
+# spawn caused a BrokenProcessPool on startup compile. Default: eager inductor workers +
+# carved path runs eager via eager_on_recompile. Gate kept for cloud-scale revisit.
 import torch._inductor.config as _inductor_config  # noqa: E402
 if os.environ.get("MORPH_COMPILE_CARVED"):
     if hasattr(_inductor_config, "worker_start_method"):
@@ -474,11 +472,10 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
     clip10_live = clip25_live = 0   # NEW: live coords whose ACTUAL |update| would be clipped at 10/25
     max_rms = (-1.0, None)          # NEW: max per-tensor update-RMS (collective-move magnitude) + layer
     max_rel = (-1.0, None)          # NEW: max per-tensor rel-step lr·‖u‖/‖w‖ (trust-ratio quantity) + layer
-    # ── β1=0 ROOT-CAUSE measurement (decides soft-SNR gate vs hard-sign gate; GPT 2026-06-17) ──
-    # snr = |m₂|/denom ≈ |running-mean|/rms. If the FAILING (saturating) coords are LOW-snr →
-    # magnitude problem → the soft SNR gate fixes it. If they instead SIGN-FLIP (g vs m₂ disagree)
-    # → oscillation → would need the directional/sign gate. We measure both, globally + on the
-    # saturating subset, so the fix is chosen from data, not assumed.
+    # β1=0 root-cause measurement: snr = |m₂|/denom ≈ |mean|/rms. Low snr on failing
+    # (saturating) coords → magnitude problem → SNR gate is appropriate. Sign-flip between
+    # g and m₂ → oscillation → directional gate. Measures both globally + on the saturating
+    # subset so the mechanism can be confirmed from data.
     snr_lt01_live = snr_lt03_live = 0          # live coords with snr<0.1 / <0.3
     sat_count = 0                              # live coords with |update|>10 (the "failing" coords)
     sat_sign_agree = 0                         # of those, how many have sign(g)==sign(m₂)
@@ -534,8 +531,8 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
             updl = upd[live]
             clip10_live += int((updl > 10.0).sum())
             clip25_live += int((updl > 25.0).sum())
-            # ── SNR + sign-agreement (root-cause measurement; see init above) ──
-            # snr uses RAW |m₂| (matches the optimizer gate exactly — NOT amf=|α·m₂|).
+            # SNR + sign-agreement measurement: snr uses raw |m₂| (matches the optimizer
+            # gate exactly, not amf=|α·m₂|).
             m2f = m2.reshape(-1).abs()
             snr = m2f / denom.reshape(-1)                    # |m₂|/denom ≈ |mean|/rms, per coord
             snr_live = snr[live]
@@ -585,9 +582,9 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
         ustr = " ".join(f"{k}={u:.2f}" for u, k in u_top)
         rstr = " ".join(f"{k}={r:.2e}" for r, k in r_top)
         f.write(f"  PERLAYER zeroNuLive[{zstr}] topMaxU[{ustr}] topRelStep[{rstr}]\n")
-        # NEW: β1=0 root-cause line — SNR distribution (live) + sign-agreement on the FAILING
-        # (saturating, |update|>10) coords. Low sat-SNR + high sat-signAgree ⇒ magnitude/SNR
-        # problem ⇒ the soft SNR gate is the right fix. Low sat-signAgree ⇒ oscillation ⇒ sign gate.
+        # SNR distribution (live) + sign-agreement on saturating (|update|>10) coords.
+        # Low sat-SNR + high sat-signAgree → magnitude problem → SNR gate appropriate.
+        # Low sat-signAgree → oscillation → directional/sign gate.
         tl = max(total_live, 1)
         sat_sa = (sat_sign_agree / sat_count) if sat_count else float("nan")
         sat_snr = (sat_snr_sum / sat_count) if sat_count else float("nan")
@@ -599,16 +596,12 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
 
 
 def diag_optstate_allparams(model, optimizer, step: int, path: str) -> None:
-    """ALL-param, GATE-AWARE blow-up localizer (env MORPH_DIAG_OPT=<path>).
+    """All-param, gate-aware blow-up localizer (env MORPH_DIAG_OPT=<path>).
 
-    diag_prune_optstate is MLP-only and reconstructs the update UN-gated → at the κ=0.3-gate
-    detonation (step 7000) it showed bounded MLP updates, but that reconstruction ignored the
-    gate (real gated MLP updates were ~1-2) AND skipped every non-MLP param. This sweeps EVERY
-    optimizer-state param, reconstructs the REAL update (gate·g + α·m₂)/denom with the gate
-    APPLIED, and splits it into the gated-g term |gate·g|/denom vs the (UNGATED) α·m₂ term
-    |α·m₂|/denom. Reports the global-worst param by full name + which term drives it, plus the
-    worst per name-category — so we localize whether the blow-up is the ungated α·m₂ push or a
-    non-MLP param (HC-Cayley looped residual = the spectral-radius-sensitive suspect).
+    Sweeps every optimizer-state param, reconstructs the real update (gate·g + α·m₂)/denom
+    with the SNR gate applied, and decomposes it into the gated-g term |gate·g|/denom vs the
+    slow-EMA term |α·m₂|/denom. Reports the global-worst param by full name + which term
+    drives it, plus the worst per name-category (prelude/core/coda/embed/attn/hc/etc.).
     """
     opt = getattr(optimizer, "_opt", optimizer)
     if not hasattr(opt, "state"):
@@ -701,15 +694,12 @@ _M2G_SNAP: dict = {}   # name -> (snap_step, m2_cpu_fp32_vec) for slow-EMA self-
 def diag_m2g_geometry(model, optimizer, step: int, path: str, snap_every: int = 50) -> None:
     """Slow-EMA geometry localizer on the CORE params (env MORPH_DIAG_M2G=<path>).
 
-    DECIDES the de-coherence operator (Task #276): the α·m₂ term detonates past a critical α
-    horizon (E11) by rotating the core blocks' singular subspaces into alignment. Two mutually
-    exclusive geometric explanations, with OPPOSITE cures:
-      (i)  m₂ has rotated AWAY from the live g (stale tangent off the curved manifold) → cos(m₂,g)
-           DROPS during the drift → cure = directional-trust gate / orthogonal-staleness removal.
-      (ii) the drift is a SUSTAINED COHERENT ramp → cos(m₂,g) stays HIGH and m₂ self-coherence
-           cos(m₂_t, m₂_{t-k}) stays ~1 for hundreds of steps → cure must damp persistence, not
-           mis-alignment.
-    Logs both per core tensor each step (cheap — core params only) + medians. Off by default.
+    Measures two diagnostic quantities for the slow-EMA / gradient geometry:
+      (i)  cos(m₂, g): drops if the slow EMA has rotated away from the current gradient
+           → indicates stale off-manifold direction → cure: directional-trust gate.
+      (ii) cos(m₂_t, m₂_{t-k}): sustained ≈1 if drift is a coherent ramp → cure: damp
+           persistence rather than mis-alignment.
+    Logs both per core tensor each step + medians. Off by default (core params only; cheap).
     """
     opt = getattr(optimizer, "_opt", optimizer)
     if not hasattr(opt, "state"):
@@ -767,17 +757,16 @@ def diag_m2g_geometry(model, optimizer, step: int, path: str, snap_every: int = 
 
 def diag_m2g_numerator(optimizer, model, step: int, path: str, dense: bool,
                        name_filter=None):
-    """Drain the optimizer's g-vs-numerator capture (Task #276 stale-m₂-under-prune PROOF).
+    """Drain the optimizer's g-vs-numerator geometry capture.
 
-    The AUTHORITATIVE metrics — computed INSIDE the optimizer step from the exact m₂/gate/α_t
-    working copies (not re-dequantized here, so they cannot drift from the real update):
-      cos(g, m₂)              → if this DROPS / goes NEGATIVE right after a prune event, the slow
-                                EMA is pointing the wrong way for the new landscape = stale-m₂.
-      cos(g, α·m₂+gated_g)    → whether the FULL numerator still aligns with the live gradient.
-      ‖α·m₂‖ / ‖gated_g‖      → how much the stale term out-weighs the fresh (gated) gradient.
+    Metrics (computed inside the optimizer step from the exact working copies):
+      cos(g, m₂)            → if this drops after a prune event, the slow EMA is stale relative
+                               to the new landscape.
+      cos(g, α·m₂+gated_g) → whether the full numerator still aligns with the current gradient.
+      ‖α·m₂‖ / ‖gated_g‖   → how much the stale term outweighs the fresh (gated) gradient.
     Re-arms capture lazily after any optimizer rebuild (compact/route swap the param objects).
-    Writes medians every call; per-tensor rows only when `dense` (set around prune events) to
-    keep the 35k-step log bounded. Returns a dict of medians for wandb.
+    Writes medians every call; per-tensor rows only when `dense` (near prune events) to keep
+    log size bounded. Returns a dict of medians for wandb.
     """
     base = getattr(optimizer, "_opt", optimizer)
     if not hasattr(base, "set_diag_capture"):
@@ -814,27 +803,20 @@ def diag_m2g_numerator(optimizer, model, step: int, path: str, dense: bool,
 
 
 def diag_forward_norms(model, step: int, path: str) -> None:
-    """FORWARD-side blow-up localizer (env MORPH_DIAG_FWD=1, writes to MORPH_DIAG_OPT path).
+    """Forward-side blow-up localizer (env MORPH_DIAG_FWD=1, writes to MORPH_DIAG_OPT path).
 
-    The β1=0 deploy detonation (step 19400, density 0.41) explodes the LOSS while every
-    OPTIMIZER update stays calm (maxU 5-11, relStep ~1e-5, zero ν-collapse) — so the cause
-    is invisible to the optimizer-state diags. It is forward-side: a residual-stream / layer
-    activation blowup the looped core amplifies. This probe captures, per training step:
+    When optimizer-state diagnostics show no anomaly but loss explodes, the cause is likely
+    forward-side: a residual-stream activation blowup that the looped core amplifies. This
+    probe captures, per training step:
 
-      FWDNORM : the per-block output (residual-stream) L2 norm — localizes WHICH block's
-                activations explode FIRST and whether it is the looped core (amplification)
-                or a specific prelude/coda layer (the historical prelude.0 epicenter).
-                Core blocks run T× per step (Poisson depth) → we keep the MAX over iterations.
-      TERNFLIP: how many backbone ternary weights changed their {-1,0,+1} state since the
-                previous step — tests the "bounded shadow update → mass ternary sign-flip →
-                discontinuous effective-weight change → forward explosion" hypothesis. Exact
-                per-tile ternary state (sign(w/scale)·[|w/scale|>0.5]); pre-carve `_ternary_mode`
-                path only (the deploy detonation is pre-carve@29000, so carved/mortar-ternary
-                is intentionally not covered).
+      FWDNORM : per-block output (residual-stream) L2 norm — localizes which block's
+                activations grow first. Core blocks run T× per step; the max over iterations
+                is reported.
+      TERNFLIP: count of backbone ternary weights that changed {-1,0,+1} state since the
+                previous step — tests the hypothesis of mass ternary sign-flip leading to a
+                discontinuous effective-weight change. Pre-carve _ternary_mode path only.
 
-    Hooks are registered once (idempotent); a forward_pre_hook clears the per-step dict so the
-    norms read post-step belong to THIS step's training forward. Near-zero cost (one .norm()
-    per block). Run with MORPH_DIAG_OPT_EVERY=1 so norms are per-step (not max-over-interval).
+    Hooks are registered once (idempotent). Run with MORPH_DIAG_OPT_EVERY=1 for per-step norms.
     """
     import torch
     import torch.nn.utils.parametrize as _P
@@ -1008,25 +990,22 @@ def main(cfg: DictConfig) -> None:
 
     # ── Build model ───────────────────────────────────────────────────────
     # ORDERING IS LOAD-BEARING: model build + torch.compile + warmup run BEFORE
-    # wandb.init() and the streaming dataloader (both below). All Triton/Inductor
-    # compilation — and the gcc subprocess fork that builds each kernel launcher stub —
-    # therefore happens in a SINGLE-THREADED process. A fork only deadlocks when another
-    # thread holds a non-reentrant lock (glibc malloc arena) at fork time; with no
-    # wandb/httpx threads alive yet, every compile fork is safe by construction. This is
-    # the root-cause fix for the intermittent step-0 wedge (see Ai-notes 06-01-2026/
-    # MORPH-eval-recompile-hang): the fused CCA Triton kernels JIT-specialize size==1
-    # separately, so the first runtime n_active==1 (a rare Poisson draw) used to compile
-    # + fork against live threads. wandb.init() is deferred to just after the warmup.
+    # wandb.init() and the streaming dataloader. All Triton/Inductor compilation —
+    # including the gcc subprocess fork that builds each kernel launcher — therefore
+    # happens in a single-threaded process. A fork deadlocks only when a thread holds a
+    # non-reentrant lock (glibc malloc arena) at fork time; with no wandb/httpx threads
+    # alive yet, every compile fork is safe. The fused CCA kernels JIT-specialize size==1
+    # separately; without this ordering, the first n_active==1 Poisson draw would compile
+    # against live threads. wandb.init() is deferred to just after the warmup.
     morph_cfg = build_morph_config(cfg)
     model = MORPHTransformer(morph_cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params / 1e6:.1f}M params on {device}")
 
-    # ── Core-map spectral-norm penalty (Task #276 σ_max-runaway cure) ───────────────────────
-    # Binds module REFERENCES to the core MLP linears (stable across compile/init_from/resume —
-    # those reuse the same submodule objects). penalty() calls forward() at TRAIN time so the
-    # ternary STE is applied live. OFF by default (cap or lambda ≤ 0 → never constructed → exact
-    # baseline). Soft hinge: L=λ·Σ relu(σ_max(W)−cap)², zero while healthy (σ_max~1.5 < cap).
+    # Core-map spectral-norm penalty: soft hinge L=λ·Σ relu(σ_max(W)−cap)² over core MLP
+    # linears. Binds module references (stable across compile/resume). penalty() calls
+    # forward() at train time so the ternary STE is applied live. OFF when cap or lambda ≤ 0
+    # (exact baseline, never constructed).
     _spec_pen = None
     _sp_cap = float(getattr(cfg.training, "spectral_penalty_cap", 0.0))
     _sp_lam = float(getattr(cfg.training, "spectral_penalty_lambda", 0.0))
@@ -1035,7 +1014,7 @@ def main(cfg: DictConfig) -> None:
         _spec_pen = CoreSpectralPenalty(model, cap=_sp_cap, lam=_sp_lam,
                                         n_iter=int(getattr(cfg.training, "spectral_penalty_n_iter", 1)))
         print(f"  Core spectral-norm penalty ON: cap={_sp_cap} lambda={_sp_lam} "
-              f"on {len(_spec_pen._linears)} core MLP linears (σ_max-runaway cure)")
+              f"on {len(_spec_pen._linears)} core MLP linears")
 
     # ── Ternary QAT (forward-STE) ──────────────────────────────────────────
     # MUST run BEFORE torch.compile (so the STE is captured in the compiled graph)
@@ -1247,8 +1226,8 @@ def main(cfg: DictConfig) -> None:
         full_config_dict["attn_proj_quant_manifest"] = {
             k: v for k, v in attn_proj_quant_manifest.items() if k != "module_names"
         }
-    # Resume the SAME wandb run (continuous metric history, no gap) when resuming a ckpt:
-    # the prior run wrote its id to a `wandb_id.txt` sidecar next to its checkpoints.
+    # Resume the same wandb run (continuous metric history) when resuming a checkpoint:
+    # the prior run wrote its id to a wandb_id.txt sidecar next to its checkpoints.
     _wandb_resume_id = None
     if resume_path and os.path.isfile(resume_path):
         _sidecar = os.path.join(os.path.dirname(resume_path), "wandb_id.txt")
@@ -1306,8 +1285,8 @@ def main(cfg: DictConfig) -> None:
     ckpt_dir = os.path.join(_MORPH_ROOT, "checkpoints", "morph",
                             wandb.run.name if wandb.run else "run")
     os.makedirs(ckpt_dir, exist_ok=True)
-    # Persist the wandb run id so a future resume from a checkpoint in THIS dir continues
-    # the same run (read back as the wandb_id.txt sidecar above, before wandb.init).
+    # Persist the wandb run id so a future resume continues the same run (read back as
+    # the wandb_id.txt sidecar above, before wandb.init).
     if wandb.run is not None:
         try:
             with open(os.path.join(ckpt_dir, "wandb_id.txt"), "w") as _f:
@@ -1353,14 +1332,11 @@ def main(cfg: DictConfig) -> None:
         optimizer.load_state_dict(_opt_state)
         _n_restored = sum(len(g["params"]) for g in optimizer.param_groups)
         print(f"  [opt] optimizer state restored ({_n_restored} param tensors)", flush=True)
-        # MEMORY: optimizer.load_state_dict DEEP-COPIES into the live optimizer's own tensors,
-        # so the checkpoint's optimizer state (_opt_state, measured ~1.7GB on GPU for this model)
-        # is now a DEAD DUPLICATE. Left alone it lingers for the WHOLE run (a local held by the
-        # train() frame) → ~1GB steady-state GPU bloat vs a fresh start (Wolfe observed this on
-        # the epsfix resume). Dropping it + empty_cache() ALSO returns the freed-but-reserved
-        # blocks from load_checkpoint's `torch.load(..., map_location=device)` (the model+state
-        # the caching allocator kept reserved). The _needs_rebuild branch already did this; the
-        # no-rebuild (pre-carve resume) path did not — that was the leak.
+        # MEMORY: optimizer.load_state_dict deep-copies into the live optimizer's tensors;
+        # the checkpoint copy is a dead duplicate (~1.7GB on GPU for this model) that
+        # otherwise lingers for the whole run (a local held by the train() frame). Dropping
+        # it + empty_cache() also returns freed-but-reserved blocks from torch.load.
+        # The _needs_rebuild branch already did this; this covers the non-rebuild path.
         del _opt_state
         gc.collect()
         torch.cuda.empty_cache()
@@ -1437,10 +1413,9 @@ def main(cfg: DictConfig) -> None:
     model.train()
     step_times: list[float] = []
     t_start = time.perf_counter()
-    # In-process detonation guard (storm-proof; the external watchdog died in a power loss and
-    # let the αcap35 run spew 600 NaN steps). Counts consecutive eval-cadence points with train
-    # ppl over a hard ceiling AFTER the from-scratch descent (step>2000); aborts on K in a row so
-    # finite prune-bounces (ppl≲70) never trip it but a real divergence (ppl→1e5) does. Env-tunable.
+    # In-process divergence guard: counts consecutive eval-cadence points with train ppl
+    # over a hard ceiling (after step 2000); aborts after K consecutive strikes so finite
+    # prune-bounces (ppl≲70) don't trip it but a real divergence (ppl→1e5) does. Env-tunable.
     _div_ceiling = float(os.environ.get("MORPH_DIV_PPL", "1000"))
     _div_strikes_max = int(os.environ.get("MORPH_DIV_STRIKES", "2"))
     _div_strikes = 0
@@ -1466,8 +1441,8 @@ def main(cfg: DictConfig) -> None:
     _prune_interval = max(1, int(getattr(cfg.training, "prune_interval", 1)))
     # Core/CMS MLP params are where pruning acts → the stale-m₂ candidates we track.
     _m2g_filter = (lambda nm: "core." in nm)
-    # m₂ reset-on-prune (Task #276 surgical cure): decay the slow EMA at each prune event so the
-    # stale pre-prune momentum doesn't drive the post-prune update. 0 = off (β3-only arm).
+    # m₂ reset-on-prune: decay the slow EMA at each prune event so stale pre-prune
+    # momentum doesn't drive the post-prune update. 0 = off.
     _m2_prune_decay = float(getattr(cfg.training, "ademamix_m2_prune_decay", 0.0))
     _m2_decay_ids = None  # built lazily from the model on first prune event
     _mem_snap_step = int(os.environ.get("MORPH_MEM_SNAPSHOT_STEP", "-1"))
@@ -1581,9 +1556,8 @@ def main(cfg: DictConfig) -> None:
                 routing_aux = collect_routing_aux_losses(model)
                 loss = loss + routing_aux
 
-            # Core-map spectral-norm penalty — the σ_max(J_core) runaway cure (Task #276). Zero while
-            # every core MLP linear sits below `cap` (healthy training bit-exact); only bites on a
-            # runaway. Loss-side ⇒ optimizer-agnostic ⇒ neutralises both β1=0 and α=8.
+            # Core-map spectral-norm penalty. Zero while every core MLP linear is below
+            # `cap` (bit-exact); only fires on σ_max runaway. Loss-side → optimizer-agnostic.
             if _spec_pen is not None:
                 _sp = _spec_pen.penalty()
                 loss = loss + _sp.to(loss.dtype)
@@ -1606,10 +1580,9 @@ def main(cfg: DictConfig) -> None:
 
         prune_stats = pruning.step(model, step)
 
-        # ── m₂ reset-on-prune (Task #276 surgical stale-m₂ cure) ───────────────────────────
-        # AT a prune event (NOT compact/route — those rebuild the optimizer = fresh state), decay
-        # the slow EMA on the pruned (core/CMS) params BEFORE this step's update so the stale
-        # pre-prune momentum can't drive the post-prune step. Off (0.0) for the β3-only arm.
+        # m₂ reset-on-prune: at a prune event (not compact/route — those rebuild the
+        # optimizer), decay the slow EMA on pruned params BEFORE this step's update.
+        # Off (0.0) is the β3-decay-only baseline.
         if _m2_prune_decay > 0.0 and prune_stats and prune_stats.get("pruning/prune_step"):
             _base_opt = getattr(optimizer, "_opt", optimizer)
             if hasattr(_base_opt, "decay_m2"):
@@ -1720,8 +1693,8 @@ def main(cfg: DictConfig) -> None:
             if _m2n:
                 wandb.log(_m2n, step=step)
         # Forward-side blow-up localizer (MORPH_DIAG_FWD=1): per-block residual-stream norm +
-        # backbone ternary {-1,0,+1} flip count — for the β1=0 STE-cusp detonation (calm
-        # optimizer, exploding loss). Registered lazily; run every step here for per-step norms.
+        # backbone ternary {-1,0,+1} flip count — tracks STE-cusp flip spikes
+        # (calm optimizer, exploding loss). Registered lazily; run every step here for per-step norms.
         if _diag_fwd and _diag_optstate_path:
             diag_forward_norms(model, step, _diag_optstate_path)
 

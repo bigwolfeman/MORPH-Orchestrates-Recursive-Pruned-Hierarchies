@@ -514,12 +514,11 @@ class CMSBlockLinear(nn.Module):
 
         Masking weight+grad keeps a pruned tile dead under AdamW (grad=0 ⇒ m,ν decay ⇒
         update→0) and under the ternary STE. It is NOT sufficient under a slow-momentum
-        optimizer like AdEMAMix: its α·m₂ term keeps driving the param from the charged
-        slow EMA even with grad=0, and as ν collapses the update explodes → divergence
-        (measured 2026-06-15). So we also tag the live weight with `_dead_mask` (1=keep,
-        0=pruned); a prune-aware optimizer (AdEMAMixB1Zero._mask_dead_state) reads it and
-        zeros its m₂/ν state at dead positions. Optimizers that ignore the tag (AdamW,
-        bnb) are unaffected — the attribute is inert for them."""
+        optimizer like AdEMAMix: its α·m₂ slow EMA retains pre-prune gradient mass while
+        ν collapses → (α·m₂)/√(ν/bc2) → ∞ for dead params. We also tag the live weight
+        with `_dead_mask` (1=keep, 0=pruned); a prune-aware optimizer
+        (AdEMAMixB1Zero._mask_dead_state) reads it and zeros its m₂/ν state at dead
+        positions. Optimizers that ignore the tag (AdamW, bnb) are unaffected."""
         if not self._dense_mode:
             return
         if self._prune_elem_mask is None:
@@ -833,10 +832,9 @@ class CMSBlockLinear(nn.Module):
             y = y + self.bias
         return y.reshape(*lead_shape, self.out_features)
 
-    # State-dict keys saved by older revisions of this class (Block-ELL topology +
-    # CMS topology-evolution bookkeeping, all removed 2026-06-11). Popped on load so
-    # legacy checkpoints — including the validated MORTAR winner ckpts, which carry
-    # these buffers — still load strict. New checkpoints simply do not contain them.
+    # State-dict keys from older revisions of this class (Block-ELL topology +
+    # CMS topology-evolution bookkeeping, now removed). Popped on load so legacy
+    # checkpoints still load strict. New checkpoints do not contain them.
     _LEGACY_STATE_KEYS = (
         "col_indices", "activation_norm_acc", "error_norm_acc", "block_age",
         "_score_snapshot", "col_usage_count", "score_history", "crystallized_mask",
