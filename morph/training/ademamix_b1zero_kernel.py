@@ -3,10 +3,10 @@
 One Triton program per BLOCK (256 elements) does, in-place, per param tensor:
     dequant(m2, nu)  →  EMA update  →  [CURE]  →  param update  →  requant(m2, nu)
 
-CURE (Task #277 fused port): the coord-cap cure knobs, all elementwise / in-register, so the
+Stability knobs (fused port): the coord-cap knobs, all elementwise / in-register, so the
 fused path (≈3.7ms opt.step) supports the validated β1=0 deploy config without dropping to the
 de-fused _foreach path (≈65ms). Ported, gated by constexpr flags (off → bit-identical to the
-pre-cure kernel):
+baseline kernel):
     EPS_INSIDE   — False = √(ν/bc2)+ε (eps-OUTSIDE, the cure's convergence-preserving denom);
                    True  = √(ν/bc2+ε) (legacy safety floor).
     HAS_SNR_GATE — soft per-coord SNR gate on the raw-g numerator: snr=|m2|/denom,
@@ -16,7 +16,7 @@ pre-cure kernel):
 Order MATCHES the de-fused step exactly (gate g → cap α·m2 by c·|gated g| → +gated g → /denom →
 clip → p·(1-lr·wd) - lr·update). Diagnostic counters (track_diag) are de-fused-only.
 
-QUANT SCHEME (Task #278 — two modes, picked by DYNAMIC_QMAP constexpr):
+QUANT SCHEME (two modes, picked by DYNAMIC_QMAP constexpr):
 
   LINEAR  (DYNAMIC_QMAP=False, the original fused path): linear-int8 symmetric blockwise.
     dequant: val = code * (absmax / 127)         requant: code = round(val/(absmax/127)) ∈ int8.
@@ -25,7 +25,7 @@ QUANT SCHEME (Task #278 — two modes, picked by DYNAMIC_QMAP constexpr):
     heavy-tailed optimizer state crushes small coords; the sqrt-ν floor biases denom UP on
     small-ν coords → systematic under-stepping → a measured ~0.10-nat loss tax vs de-fused.
 
-  DYNAMIC (DYNAMIC_QMAP=True, the regression cure): bnb's OWN non-linear dynamic qmap, so the
+  DYNAMIC (DYNAMIC_QMAP=True): bnb's OWN non-linear dynamic qmap, so the
     fused path is the SAME quantizer as the validated de-fused reference (no systematic bias;
     residual = sub-1e-4 rounding noise). m2 → signed map (uint8), ν stored DIRECTLY (no sqrt,
     no floor — the dynamic map represents small ν faithfully) → unsigned map (uint8).
@@ -60,7 +60,7 @@ def _ademamix_b1zero_fused_kernel(
     is_init,          # 1 → state is zero (skip dequant), 0 → dequant existing code
     n_elements,
     BLOCK_SIZE: tl.constexpr,
-    EPS_INSIDE: tl.constexpr,     # True → √(ν/bc2+ε); False → √(ν/bc2)+ε (cure)
+    EPS_INSIDE: tl.constexpr,     # True → √(ν/bc2+ε); False → √(ν/bc2)+ε (convergence-preserving)
     HAS_SNR_GATE: tl.constexpr,
     HAS_COORD_CAP: tl.constexpr,
     HAS_UPD_CLIP: tl.constexpr,
@@ -99,13 +99,13 @@ def _ademamix_b1zero_fused_kernel(
     m2 = beta3 * m2 + (1.0 - beta3) * g
     nu = beta2 * nu + (1.0 - beta2) * g * g
 
-    # ── denom (eps-inside legacy floor, or eps-outside true-Adam = the cure) ──
+    # ── denom (eps-inside legacy floor, or eps-outside true-Adam) ──
     if EPS_INSIDE:
         denom = tl.sqrt(nu / bc2 + eps)
     else:
         denom = tl.sqrt(nu / bc2) + eps
 
-    # ── CURE: SNR gate on the raw-g numerator term (gg = gated g) ──
+    # ── SNR gate on the raw-g numerator term (gg = gated g) ──
     if HAS_SNR_GATE:
         snr = tl.abs(m2) / denom / snr_kappa
         gate = tl.minimum(tl.maximum(snr, 0.0), 1.0)
@@ -119,7 +119,7 @@ def _ademamix_b1zero_fused_kernel(
         else:
             gg = g
 
-    # ── CURE: per-coord stale-push cap on α·m2, relative to |gated g| (sign preserved) ──
+    # ── per-coord stale-push cap on α·m2, relative to |gated g| (sign preserved) ──
     am = alpha * m2
     if HAS_COORD_CAP:
         cg = coord_cap * tl.abs(gg)
@@ -127,7 +127,7 @@ def _ademamix_b1zero_fused_kernel(
 
     update = (am + gg) / denom
 
-    # ── CURE: per-coord update clamp (post-/denom, pre-weight-decay; wd not clipped) ──
+    # ── per-coord update clamp (post-/denom, pre-weight-decay; wd not clipped) ──
     if HAS_UPD_CLIP:
         update = tl.minimum(tl.maximum(update, -upd_clip), upd_clip)
 
@@ -219,8 +219,8 @@ def fused_ademamix_b1zero_step(
 ):
     """Launch the fused kernel for one param tensor (all flat, contiguous).
 
-    Cure knobs default to OFF (snr_kappa/coord_cap/upd_clip=0, eps_inside=True) → bit-identical
-    to the pre-cure version. dynamic_qmap=False keeps the original linear-int8 path (nu_floor=True
+    Stability knobs default to OFF (snr_kappa/coord_cap/upd_clip=0, eps_inside=True) → bit-identical
+    to the baseline version. dynamic_qmap=False keeps the original linear-int8 path (nu_floor=True
     preserves the legacy code-1 floor). dynamic_qmap=True requires code_signed/code_unsigned
     (256-wide ascending fp32 maps on the param's device) and matches the de-fused quantizer.
     """

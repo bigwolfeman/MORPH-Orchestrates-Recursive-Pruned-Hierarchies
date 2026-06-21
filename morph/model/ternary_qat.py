@@ -187,12 +187,11 @@ def _apply_grouped_ste(
 
     All scales are detached → pure straight-through (symmetric mode).
 
-    scale_cap (Task #276 "B" — MORTAR-tile weight-explosion guard): optional per-group
-    UPPER BOUND on the ternary scale γ=mean(|W_g|), shape [n_groups]. When given, each
-    group's scale is min'd against its cap (= clip_mult × initial mean(|W_g|)). γ is the
-    ENTIRE magnitude carrier of the {-1,0,+1}×γ weight, so capping it bounds the layer's
-    output magnitude — a structural backstop against the g-collapse→α·m₂ blowup, independent
-    of the optimizer. The cap is DETACHED (no grad) so the identity STE is unchanged.
+    scale_cap: optional per-group upper bound on the ternary scale γ=mean(|W_g|),
+    shape [n_groups]. Each group's scale is min'd against cap (= clip_mult × initial
+    mean(|W_g|)). γ is the entire magnitude carrier of {-1,0,+1}×γ weights, so capping
+    it bounds layer output magnitude — a structural backstop against stale-EMA weight
+    blowup, optimizer-independent. The cap is detached (no grad) so the STE is unchanged.
     """
     out_dim, in_dim = w.shape
 
@@ -319,10 +318,10 @@ class TernarySTE(nn.Module):
             # symmetric: no learnable parameters — pure straight-through.
             self._forward_fn = self._forward_symmetric
 
-        # Task #276 "B": per-group ternary-scale UPPER BOUND, anchored to the INITIAL scale
-        # (mult × mean(|W_g|) at registration). An explosion can't ratchet the cap up because
-        # the anchor is fixed. Registered as a buffer (moves with .to(), persists in state_dict,
-        # reloads identically on resume). None → off (branch resolved once, here, not per-forward).
+        # Per-group ternary-scale upper bound, anchored to the initial scale
+        # (clip_mult × mean(|W_g|) at registration). The anchor is fixed so a blowup
+        # cannot ratchet the cap upward. Registered as a buffer (persists in state_dict,
+        # reloads on resume). None → off (branch resolved once here, not per-forward).
         cap = None
         if self.scale_clip_mult > 0.0:
             ref = self._compute_group_scale_init(weight_init, out_dim, n_groups, device)
@@ -674,7 +673,7 @@ def apply_ternary_qat(
             scale_dtype=scale_dtype,
             device=w_device,
             weight_init=w.detach(),  # for mean(|W|) gamma initialization
-            scale_clip_mult=scale_clip_mult,  # Task #276 "B" weight-explosion guard
+            scale_clip_mult=scale_clip_mult,  # per-group ternary-scale upper bound
         )
         parametrize.register_parametrization(module, "weight", ste)
         counts[cat] += 1

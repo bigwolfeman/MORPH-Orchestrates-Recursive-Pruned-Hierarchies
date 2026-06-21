@@ -80,8 +80,8 @@ class PruningSchedule:
     # MORTAR is the ONLY sparse backend: 128×128 BCSR carve() via the vendored stk
     # Triton kernels (3.09× FASTER than dense at 0.25 density, Gate G1). Pruning is
     # block-aligned (prune_step_blocks — score at tile, prune/execute at block) so
-    # the carve is lossless. The legacy 16×16 Block-ELL compact() backend was
-    # removed 2026-06-11 (its kernel measured SLOWER than dense).
+    # the carve is lossless. The legacy 16×16 Block-ELL compact() backend was removed
+    # (kernel benchmarked slower than dense at the target density).
     carve_blocking: int = 128
     # Detach the router input so the load-balance gradient does NOT flow into the looped carrier
     # x (required for memory: it otherwise extends BPTT depth → +7 GB/step at deploy shape). The
@@ -89,7 +89,7 @@ class PruningSchedule:
     aux_detach_input: bool = True
     # Which MLPs get ReMoE routing at route_start:
     #   "core" — only the looped core block (B5 / legacy behaviour, default)
-    #   "all"  — the WHOLE body: prelude + core + coda (Wolfe 2026-06-10).
+    #   "all"  — the WHOLE body: prelude + core + coda.
     # Prelude/coda run once (not looped) → routed with n_iters=1; core keeps n_iters=max_depth.
     route_scope: str = "core"
     _is_compact: bool = field(default=False, repr=False)
@@ -280,7 +280,7 @@ class PruningSchedule:
           "core" — only the looped CORE block (legacy / B5). Iteration-aware:
                    n_iters = max core-loop depth (each loop iteration gets its own
                    routing embedding row).
-          "all"  — the WHOLE body: prelude + core + coda (Wolfe 2026-06-10). Prelude
+          "all"  — the WHOLE body: prelude + core + coda. Prelude
                    and coda run ONCE (iter_idx always 0, not looped), so they are
                    routed with n_iters=1; the core stays iteration-aware. Aux losses
                    from every router are collected automatically (collect_routing_aux_losses
