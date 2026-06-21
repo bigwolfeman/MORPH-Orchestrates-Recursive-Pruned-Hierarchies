@@ -22,14 +22,25 @@ from typing import Generator, Tuple
 import numpy as np
 import torch
 
+from morph.training.source_roles import (
+    DEFAULT_ALLOWED_PRETRAIN_ROLES,
+    validate_source_for_pretraining,
+)
+
 __all__ = ["MultiSourceCurriculumLoader"]
 
 
 class _Source:
-    def __init__(self, name: str, sdir: str, weight: float):
+    def __init__(self, name: str, sdir: str, weight: float, allowed_roles):
         self.name = name
         self.weight = float(weight)
         self.meta = json.load(open(os.path.join(sdir, "meta.json")))
+        self.role = validate_source_for_pretraining(
+            name,
+            explicit_role=self.meta.get("role"),
+            allowed_roles=allowed_roles,
+            paths=self.meta.get("paths"),
+        )
         self.offsets = np.load(os.path.join(sdir, "doc_offsets.i64.npy"))   # [n_docs+1]
         self.lens = np.load(os.path.join(sdir, "doc_lens.i32.npy"))          # [n_docs]
         # memmap the token blob — never pull 8B tokens into RAM.
@@ -75,7 +86,7 @@ class _Source:
 
 class MultiSourceCurriculumLoader:
     def __init__(self, pretok_dir: str, weights: dict, stage_boundaries: list[int],
-                 seed: int = 0):
+                 seed: int = 0, allowed_roles=DEFAULT_ALLOWED_PRETRAIN_ROLES):
         """weights: {source_name: weight} (need not sum to 1). stage_boundaries: ascending
         seq_lens, e.g. [4096, 8192, 16384] → 3 stages."""
         self.boundaries = [int(x) for x in stage_boundaries]
@@ -83,13 +94,13 @@ class MultiSourceCurriculumLoader:
         self.rng = np.random.default_rng(seed)
         self.sources: list[_Source] = []
         for name, w in weights.items():
+            if w <= 0:
+                continue
             sdir = os.path.join(pretok_dir, name)
             if not os.path.isdir(sdir):
                 raise FileNotFoundError(f"pretok shard missing for source {name!r}: {sdir} "
                                         f"(run scripts/pretokenize.py)")
-            if w <= 0:
-                continue
-            s = _Source(name, sdir, w)
+            s = _Source(name, sdir, w, allowed_roles)
             s.assign_stages(self.boundaries)
             self.sources.append(s)
         if not self.sources:
@@ -122,8 +133,9 @@ class MultiSourceCurriculumLoader:
         mean_len = np.array([float(s.lens[s.stage_of_doc == k].mean()) for s in active])
         p = w / mean_len
         self._probs = p / p.sum()
+        active_names = [f"{s.name}:{s.role}" for s in active]
         print(f"[curriculum] stage {k}: seq_len={self.cur_seq_len}, "
-              f"active={[s.name for s in active]}, mean_len={mean_len.round(0).tolist()}, "
+              f"active={active_names}, mean_len={mean_len.round(0).tolist()}, "
               f"token-target={(w / w.sum()).round(3).tolist()}, "
               f"draw-probs={self._probs.round(3).tolist()}", flush=True)
 

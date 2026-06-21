@@ -50,6 +50,10 @@ routing:
 curriculum:
   enabled: true
   pretok_dir: data/pretok      # scripts/pretokenize.py output (full shards, not the gate slice)
+  # Runtime role guard. Pure post-training gold is refused by scripts/pretokenize.py,
+  # scripts/pretok_hub.py, and morph/training/curriculum_data.py. reasoning_midtrain means
+  # broad next-token LM data with reasoning traces/prompts, not SFT/RL aggregation gold.
+  allowed_source_roles: [pretrain_bulk, reasoning_midtrain]
   eff_batch: 8                 # held constant across stages via grad-accum (mb×ga)
   blend:                       # token-proportioned weights (sum need not be 1); names = pretok shard dirs.
     # 8-source mix (must match scripts/pretokenize.py SOURCES). Loader REQUIRES every listed source's

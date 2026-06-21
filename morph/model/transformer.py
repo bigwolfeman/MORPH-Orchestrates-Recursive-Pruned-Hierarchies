@@ -23,7 +23,11 @@ from torch.utils.checkpoint import checkpoint
 
 from .attention import MORPHAttention, RMSNorm
 from .embeddings import MORPHEmbedding
-from .fused_ce import fused_linear_cross_entropy
+from .fused_ce import (
+    fused_linear_cross_entropy,
+    fused_linear_cross_entropy_mce,
+    multi_hot_cross_entropy_reference,
+)
 from .mhc import MultiRateResidual, ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .prediction import STPLoss
 from .sparsity import MortarLinear
@@ -921,20 +925,40 @@ class MORPHTransformer(nn.Module):
             # (via lm_weight's cat/log-map). Generation (labels=None) still takes the
             # full-logits else branch — it needs logits to sample, and is batch-1/cheap.
             w_full = self.embed.lm_weight()                       # [V, d_model]
-            ce_loss = fused_linear_cross_entropy(
-                x.reshape(-1, x.shape[-1]), w_full, labels.reshape(-1),
-                ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
-            )
+            if labels.ndim == 3:
+                # TST superposition phase (#274): labels arrive as [B, T, s] token
+                # bags → multi-hot CE = mean of the s per-target CE terms against the
+                # SAME logits. Init loss ≈ log(V) (~11), NOT log(V)/s (~1.8) — the
+                # silent single-hot bug where labels.reshape(-1) was truncated to the
+                # first B·T entries. Reduces to single-hot at s=1.
+                ce_loss = fused_linear_cross_entropy_mce(
+                    x.reshape(-1, x.shape[-1]), w_full,
+                    labels.reshape(-1, labels.shape[-1]),
+                    ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
+                )
+            else:
+                ce_loss = fused_linear_cross_entropy(
+                    x.reshape(-1, x.shape[-1]), w_full, labels.reshape(-1),
+                    ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
+                )
             loss = ce_loss + self.cfg.stp_lambda * stp_loss + self.cfg.loop_stp_lambda * loop_stp_loss
             out = {"logits": None, "stp_loss": stp_loss, "loop_stp_loss": loop_stp_loss, "loss": loss}
         else:
             logits = self.embed.attend(x)
             out = {"logits": logits}
             if labels is not None:
-                ce_loss = F.cross_entropy(
-                    logits.reshape(-1, self.cfg.vocab_size),
-                    labels.reshape(-1), ignore_index=-100,
-                )
+                if labels.ndim == 3:
+                    # 3-D bag labels in the eager path (eval/gen normally force
+                    # bag_size=0, so this is defensive): full-logits MCE reference.
+                    ce_loss = multi_hot_cross_entropy_reference(
+                        logits.reshape(-1, self.cfg.vocab_size),
+                        labels.reshape(-1, labels.shape[-1]), ignore_index=-100,
+                    )
+                else:
+                    ce_loss = F.cross_entropy(
+                        logits.reshape(-1, self.cfg.vocab_size),
+                        labels.reshape(-1), ignore_index=-100,
+                    )
                 loss = ce_loss + self.cfg.stp_lambda * stp_loss + self.cfg.loop_stp_lambda * loop_stp_loss
                 out["stp_loss"] = stp_loss
                 out["loop_stp_loss"] = loop_stp_loss

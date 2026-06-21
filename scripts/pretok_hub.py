@@ -19,10 +19,14 @@ Usage:
        --dest data/pretok
 """
 from __future__ import annotations
-import argparse, json, os, re, sys
+import argparse, json, os, sys
 import numpy as np
 
-DENY = re.compile(r"(commentary|reasoning|cross_tradition|reimagined|_qa)", re.I)
+from morph.training.source_roles import (
+    DEFAULT_ALLOWED_PRETRAIN_ROLES,
+    validate_source_for_pretraining,
+)
+
 REQUIRED = ("tokens.u16.bin", "doc_offsets.i64.npy", "doc_lens.i32.npy", "meta.json")
 
 
@@ -34,12 +38,14 @@ def verify_source(sdir: str) -> dict:
         if not os.path.exists(p):
             raise FileNotFoundError(f"[{name}] missing {f}")
     meta = json.load(open(os.path.join(sdir, "meta.json")))
-    # role-split guard travels with the data: a reasoning-gold path must never have been ingested.
-    paths = meta.get("paths")
-    flat = paths if isinstance(paths, list) else [paths]
-    for p in flat:
-        if isinstance(p, str) and DENY.search(os.path.basename(p)):
-            raise RuntimeError(f"[{name}] ROLE-SPLIT VIOLATION in meta.paths: {p}")
+    # role-split guard travels with the data: post-training gold must never be uploaded as
+    # pretraining shards. Legacy shards without role metadata are inferred by source name.
+    role = validate_source_for_pretraining(
+        name,
+        explicit_role=meta.get("role"),
+        allowed_roles=DEFAULT_ALLOWED_PRETRAIN_ROLES,
+        paths=meta.get("paths"),
+    )
     offs = np.load(os.path.join(sdir, "doc_offsets.i64.npy"))
     lens = np.load(os.path.join(sdir, "doc_lens.i32.npy"))
     n_tok = int(meta["n_tokens"]); n_doc = int(meta["n_docs"])
@@ -52,7 +58,7 @@ def verify_source(sdir: str) -> dict:
     assert np.array_equal(np.diff(offs).astype(np.int64), lens.astype(np.int64)), \
         f"[{name}] offsets != cumsum(lens)"
     assert (lens > 0).all(), f"[{name}] zero-length doc present"
-    return {"name": name, "n_docs": n_doc, "n_tokens": n_tok, "gib": bin_bytes / 2**30,
+    return {"name": name, "role": role, "n_docs": n_doc, "n_tokens": n_tok, "gib": bin_bytes / 2**30,
             "tokenizer": meta.get("tokenizer"), "eos_id": meta.get("eos_id"),
             "mean_len": n_tok / max(1, n_doc)}
 
@@ -65,13 +71,13 @@ def verify_all(pretok_dir: str) -> list[dict]:
     rows = [verify_source(os.path.join(pretok_dir, d)) for d in subs]
     tok = {r["tokenizer"] for r in rows}
     assert len(tok) == 1, f"mixed tokenizers across sources: {tok} — would corrupt training"
-    print(f"{'source':10s} {'docs':>12s} {'tokens':>15s} {'GiB':>7s} {'mean_len':>9s}")
+    print(f"{'source':14s} {'role':20s} {'docs':>12s} {'tokens':>15s} {'GiB':>7s} {'mean_len':>9s}")
     tot_d = tot_t = tot_g = 0
     for r in rows:
-        print(f"{r['name']:10s} {r['n_docs']:>12,} {r['n_tokens']:>15,} "
+        print(f"{r['name']:14s} {r['role']:20s} {r['n_docs']:>12,} {r['n_tokens']:>15,} "
               f"{r['gib']:>7.2f} {r['mean_len']:>9.0f}")
         tot_d += r["n_docs"]; tot_t += r["n_tokens"]; tot_g += r["gib"]
-    print(f"{'TOTAL':10s} {tot_d:>12,} {tot_t:>15,} {tot_g:>7.2f}")
+    print(f"{'TOTAL':14s} {'':20s} {tot_d:>12,} {tot_t:>15,} {tot_g:>7.2f}")
     print(f"tokenizer: {tok.pop()}  (all sources consistent)")
     return rows
 
@@ -88,10 +94,10 @@ def _readme(rows: list[dict], repo: str) -> str:
         f"- **Tokenizer:** `{rows[0]['tokenizer']}` (EOS id {rows[0]['eos_id']})",
         f"- **Total:** {tot_d:,} docs, {tot_t:,} tokens", "",
         "## Per-source", "",
-        "| source | docs | tokens | GiB | mean tok/doc |", "|---|---:|---:|---:|---:|",
+        "| source | role | docs | tokens | GiB | mean tok/doc |", "|---|---|---:|---:|---:|---:|",
     ]
     for r in rows:
-        body.append(f"| {r['name']} | {r['n_docs']:,} | {r['n_tokens']:,} | "
+        body.append(f"| {r['name']} | {r['role']} | {r['n_docs']:,} | {r['n_tokens']:,} | "
                     f"{r['gib']:.2f} | {r['mean_len']:.0f} |")
     body += [
         "", "## Shard format (per source dir)", "",
@@ -101,8 +107,9 @@ def _readme(rows: list[dict], repo: str) -> str:
         "- `meta.json` — provenance + counts.", "",
         "Memmap `tokens.u16.bin`; bucket on `doc_lens` for the length curriculum. Loader: "
         "`morph/training/curriculum_data.py`.", "",
-        "**Role-split:** only domain text — synthesis/reasoning splits are excluded by an "
-        "ingest-time denylist and re-checked here.",
+        "**Role-split:** pretraining bulk and explicitly tagged reasoning_midtrain shards may be "
+        "used by the LM curriculum. Curated post-training gold is excluded by an ingest-time "
+        "denylist and re-checked here.",
     ]
     return "\n".join(body)
 
