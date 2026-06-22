@@ -1,8 +1,8 @@
 """
-Normalization layers for Titan-MAC.
+Normalization layers for MORPH.
 
 This module provides RMSNorm (Root Mean Square Normalization) for stable
-training in the Titan architecture. Supports an optional Triton-fused path
+training. Supports an optional Triton-fused path
 that eliminates intermediate bf16 round-trips (2-4x more accurate than eager).
 """
 

@@ -2,7 +2,7 @@
 
 Training stores quantized weights as QAT *shadows* (bf16/fp32 + STE) — fine at 276M,
 fatal at 30B (60-120 GB). This module materializes the DEPLOY-EFFECTIVE weights in
-their real storage cost so a 30B model fits the 5090's 32 GB:
+their real storage cost:
 
   - MLP backbone (post prune_step_blocks + carve, MORTAR BCSR 0.25): mortar_data is
     ternarized with the EXACT ``CMSBlockLinear._mortar_effective_data`` formula

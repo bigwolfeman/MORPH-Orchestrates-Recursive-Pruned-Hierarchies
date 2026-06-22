@@ -214,7 +214,7 @@ class MORPHBlock(nn.Module):
         ret_state: Tensor | None = None,
         ret_capture: dict | None = None,
     ) -> Tensor:
-        """Forward pass: attention sublayer then MLP sublayer with MRR residuals.
+        """Forward pass: attention sublayer then MLP sublayer with HC residuals.
 
         Args:
             h:           [B, T, D] residual stream.
