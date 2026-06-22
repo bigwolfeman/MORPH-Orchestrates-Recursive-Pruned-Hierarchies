@@ -79,7 +79,7 @@ import wandb
 from morph.model.transformer import MORPHConfig, MORPHTransformer
 from morph.model.routing import collect_routing_aux_losses, collect_routing_stats
 from morph.training.data import create_dataloader
-from morph.training.optimizer import create_optimizer, create_lr_schedule, TernaryShadowOptimizer
+from morph.training.optimizer import create_optimizer, create_lr_schedule
 from morph.training.pruning import PruningSchedule
 
 
@@ -430,7 +430,7 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
     slow EMA) vs denominator (ν collapse), and whether it is a dead or a LIVE param. Handles
     all three state formats (fused linear-int8 m2_code, de-fused dynamic-map m2_q, fp32 m2).
     """
-    opt = getattr(optimizer, "_opt", optimizer)          # unwrap TernaryShadowOptimizer
+    opt = optimizer
     if not hasattr(opt, "state"):
         return
     from morph.model.titans_core.block_sparse import CMSBlockLinear
@@ -1398,16 +1398,9 @@ def main(cfg: DictConfig) -> None:
               f"{len(_rope_mods)} RoPE modules", flush=True)
 
     # ── Optimizer step closure (resolved once, no per-step isinstance) ───
-    _has_ternary = isinstance(optimizer, TernaryShadowOptimizer)
-    if _has_ternary:
-        def _step_optimizer():
-            scaler.step(optimizer._opt)
-            scaler.update()
-            optimizer.step(_skip_inner=True)
-    else:
-        def _step_optimizer():
-            scaler.step(optimizer)
-            scaler.update()
+    def _step_optimizer():
+        scaler.step(optimizer)
+        scaler.update()
 
     # ── Training loop ─────────────────────────────────────────────────────
     model.train()
@@ -1782,11 +1775,6 @@ def main(cfg: DictConfig) -> None:
             # Pruning stats
             if prune_stats:
                 log.update(prune_stats)
-
-            # Ternary stats (every 100 steps to keep overhead low)
-            if step % 100 == 0 and isinstance(optimizer, TernaryShadowOptimizer):
-                tern = optimizer.ternary_stats()
-                log.update({f"ternary/{k}": v for k, v in tern.items()})
 
             # Routing diagnostics (every 100 steps, only when routed)
             if step % 100 == 0 and pruning.is_routed:

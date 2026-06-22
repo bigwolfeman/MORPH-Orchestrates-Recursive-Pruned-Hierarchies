@@ -1,9 +1,10 @@
-"""MORPH optimizer setup — AdamW + optional DeepNestedOptimizer + STE ternary shadows.
+"""MORPH optimizer setup.
 
-Components:
-  create_optimizer(model, cfg)           -> torch.optim.Optimizer
-  create_lr_schedule(cfg)               -> Callable[[int], float]
-  TernaryShadowOptimizer                 wrapper for Phase-2 STE ternary
+create_optimizer builds the deploy optimizer (AdEMAMixB1Zero 8-bit, default) or the
+AdamW8bit / AdamW fallbacks; create_lr_schedule returns the step -> lr-multiplier fn.
+
+  create_optimizer(model, cfg)  -> torch.optim.Optimizer
+  create_lr_schedule(cfg)       -> Callable[[int], float]
 """
 
 from __future__ import annotations
@@ -13,13 +14,11 @@ from typing import Callable
 
 import torch
 import torch.nn as nn
-from torch import Tensor
 from omegaconf import DictConfig
 
 __all__ = [
     "create_optimizer",
     "create_lr_schedule",
-    "TernaryShadowOptimizer",
 ]
 
 # Parameter groups: names matching these patterns are excluded from weight decay.
@@ -85,25 +84,22 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
     """Build the optimizer from config.
 
     Reads:
-        cfg.training.lr          — base learning rate
+        cfg.training.lr           — base learning rate
         cfg.training.weight_decay (optional, default 0.1)
-        cfg.training.ternary      (optional bool — activates TernaryShadowOptimizer)
-        cfg.training.adam8bit     (optional bool — uses bitsandbytes 8-bit state)
-        cfg.training.optimizer    (optional str — "adamw" (default) | "ademamix" |
-                                   "ademamix_b1zero" (β1=0 fork: 2 buffers → AdamW8bit
-                                   memory parity instead of bnb's +50%))
-        cfg.training.beta3        (AdEMAMix slow-EMA decay, default 0.9999)
-        cfg.training.ademamix_alpha (AdEMAMix fast/slow mix weight, default 8.0)
-        cfg.training.ademamix_t_alpha / ademamix_t_beta3
-                                  (AdEMAMix α/β3 warmup horizons; default = total steps —
-                                   essential for stability, NOT the same as LR warmup)
+        cfg.training.adam8bit     (optional bool — bitsandbytes 8-bit optimizer state)
+        cfg.training.optimizer    ("adamw" (default) | "ademamix_b1zero")
+        cfg.training.beta3        (AdEMAMix slow-EMA decay)
+        cfg.training.ademamix_alpha / ademamix_t_alpha / ademamix_t_beta3
+                                  (AdEMAMix mix weight + α/β3 warmup horizons; the warmup
+                                   horizons default to total steps — essential for stability,
+                                   NOT the same as LR warmup)
 
-    Returns a plain AdamW, TernaryShadowOptimizer-wrapped AdamW, or
-    an 8-bit AdamW (bnb) depending on config flags.
-    8-bit and ternary may be combined: bnb AdamW8bit becomes the base_opt
-    inside TernaryShadowOptimizer. The 8-bit quantization applies only to
-    the optimizer state (m, v → uint8); bf16 shadow-weight semantics are
-    unchanged because bnb does NOT quantize the parameters themselves.
+    Returns one of (deploy default first):
+      - AdEMAMixB1Zero (optimizer=ademamix_b1zero) — β1=0 AdEMAMix, blockwise-8bit state
+      - bnb AdamW8bit  (optimizer=adamw + adam8bit=true) — fallback
+      - torch AdamW    (optimizer=adamw, bitsandbytes absent) — last-resort fallback
+    The 8-bit quantization applies only to optimizer state (m,v → uint8); bnb does NOT
+    quantize the parameters themselves (bf16 weights unchanged).
     """
     tr = cfg.training
     lr = float(tr.lr)
@@ -119,40 +115,10 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
     opt_name = str(getattr(tr, "optimizer", "adamw")).lower()
 
     if opt_name == "ademamix":
-        # AdEMAMix (arXiv:2409.03137): AdamW + a 2nd very-slow momentum EMA (decay β3)
-        # mixed in with weight α. update = (m1 + α·m2)/(√ν + ε) + λ·p.
-        #
-        # STABILITY (load-bearing — see paper §3 + App. A.1): a large β3 (0.9999) active
-        # from step 0 produces huge early updates and DIVERGES even with LR warmup. The fix
-        # is the optimizer's OWN α/β3 warmup schedulers (t_alpha, t_beta3) — distinct from
-        # LR warmup, so fully compatible with our flat-LR recipe. bnb's AdEMAMix only applies
-        # these schedulers when t_alpha/t_beta3 are non-None; otherwise it pins β3 at full
-        # strength from step 0 (the divergent path). So we DEFAULT them to total steps.
-        try:
-            import bitsandbytes as bnb
-        except ImportError as e:
-            raise ImportError(
-                "cfg.training.optimizer=ademamix requires bitsandbytes. "
-                "Install with: uv pip install bitsandbytes"
-            ) from e
-        beta3 = float(getattr(tr, "beta3", 0.9999))
-        alpha = float(getattr(tr, "ademamix_alpha", 8.0))
-        _ta = getattr(tr, "ademamix_t_alpha", None)
-        _tb = getattr(tr, "ademamix_t_beta3", None)
-        t_alpha = int(_ta) if _ta is not None else int(tr.steps)
-        t_beta3 = int(_tb) if _tb is not None else int(tr.steps)
-        ademamix_betas = (betas[0], betas[1], beta3)
-        if use_8bit:
-            base_opt = bnb.optim.AdEMAMix8bit(
-                groups, lr=lr, betas=ademamix_betas, alpha=alpha,
-                t_alpha=t_alpha, t_beta3=t_beta3, eps=1e-8, weight_decay=wd)
-            # bnb 8-bit is unstable on sparse/large-range embedding state → 32-bit override.
-            _register_embedding_32bit_overrides(model, base_opt)
-        else:
-            base_opt = bnb.optim.AdEMAMix(
-                groups, lr=lr, betas=ademamix_betas, alpha=alpha,
-                t_alpha=t_alpha, t_beta3=t_beta3, eps=1e-8, weight_decay=wd,
-                optim_bits=32)
+        raise ValueError(
+            "optimizer=ademamix (stock bnb 3-buffer AdEMAMix) was removed — it cost +50% "
+            "optimizer memory vs AdamW8bit for no deploy benefit. Use "
+            "optimizer=ademamix_b1zero (β1=0 fork: 2 buffers, AdamW8bit memory parity).")
     elif opt_name == "ademamix_b1zero":
         # β1=0 AdEMAMix with blockwise-8bit state — 2 buffers (m2, ν) matching AdamW8bit
         # memory (~2 B/param); bnb's β1=0 "trick" still allocates 3 buffers. Uses bnb's
@@ -170,13 +136,15 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         t_beta3 = int(_tb) if _tb is not None else int(tr.steps)
         b3_start = float(getattr(tr, "ademamix_beta3_warmup_start", 0.9))
         bits = 8 if use_8bit else 32
-        # fused=True → custom Triton kernel (linear-int8 state, faster opt.step but lossy on
-        # small-ν lanes; pair with fused_dynamic_qmap=True to eliminate the bias).
-        # fused=False → de-fused path using bnb's dynamic blockwise qmap (same quant as
-        # AdamW8bit, preserves small ν). See base.yaml for full flag documentation.
+        # fused=True (DEFAULT) → custom Triton kernel. With fused_dynamic_qmap=True (also default)
+        # it uses bnb's dynamic blockwise qmap — the same quantizer as the de-fused path, so no
+        # quality tax at the fastest opt.step. fused_dynamic_qmap=False falls back to linear-int8
+        # state (lossy on small-ν lanes). fused=False → de-fused path (bnb dynamic qmap, preserves
+        # small ν). See base.yaml for full flag documentation.
         fused = bool(getattr(tr, "ademamix_fused", True))
-        # eps_inside only affects the de-fused path. True = √(ν/bc2+ε) denom floor;
-        # False = √(ν/bc2)+ε true-Adam normalization (correct for dynamic-qmap ν).
+        # eps_inside: True = √(ν/bc2+ε) denom floor; False = √(ν/bc2)+ε true-Adam normalization
+        # (DEFAULT, correct for the dynamic-qmap/de-fused ν). Honored by BOTH the de-fused step and
+        # the fused kernel (the linear-int8 fused path needs the floor; dynamic-qmap does not).
         eps_inside = bool(getattr(tr, "ademamix_eps_inside", False))
         # per-coordinate update clamp (Adam units) — bounds the (g+α·m₂)/denom step so a prune
         # topology-shock can't detonate a few coords in one step. 0 = off. The fast+stable lever.
@@ -266,14 +234,10 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
     else:
         base_opt = torch.optim.AdamW(groups, lr=lr, betas=betas, eps=1e-8)
 
-    # NOTE: cfg.training.ternary now means FORWARD-STE QAT, applied at model-build
-    # time via morph.model.ternary_qat.apply_ternary_qat (the smooth weight is the
-    # live parameter; the STE is in the forward; a plain AdamW/AdamW8bit updates it).
-    # It does NOT use TernaryShadowOptimizer — that was an export-only wrapper that
-    # left the forward in bf16 (training never saw the quantization). The export-only
-    # shadow is still available behind an explicit opt-in flag for checkpoint export.
-    if bool(getattr(tr, "ternary_export_shadow", False)):
-        base_opt = TernaryShadowOptimizer(base_opt, model)
+    # cfg.training.ternary means FORWARD-STE QAT, applied at model-build time via
+    # morph.model.ternary_qat.apply_ternary_qat — the smooth weight is the live parameter,
+    # the STE lives in the forward, and the optimizer (AdamW / AdamW8bit / AdEMAMixB1Zero)
+    # updates it directly. The optimizer needs no ternary awareness.
 
     return base_opt
 
@@ -298,157 +262,3 @@ def create_lr_schedule(cfg: DictConfig) -> Callable[[int], float]:
         return lr_min + (lr_max - lr_min) * cosine
 
     return schedule
-
-
-# ── STE Ternary Shadow Optimizer ─────────────────────────────────────────────
-
-class _STEFunction(torch.autograd.Function):
-    """STE quantization: forward uses ternary values, backward is identity."""
-
-    @staticmethod
-    def forward(ctx, w: Tensor, threshold: float) -> Tensor:  # type: ignore[override]
-        ctx.save_for_backward(w)
-        # Scale = mean absolute value per group-of-128 (per-layer global for simplicity)
-        scale = w.abs().mean().clamp(min=1e-8)
-        w_norm = w / scale
-        ternary = w_norm.sign() * (w_norm.abs() > threshold).float()
-        return ternary * scale
-
-    @staticmethod
-    def backward(ctx, grad_output: Tensor) -> tuple:  # type: ignore[override]
-        # Straight-through: gradient passes through unchanged.
-        return grad_output, None
-
-
-class TernaryShadowOptimizer:
-    """Wraps any optimizer and maintains per-parameter ternary shadow copies.
-
-    Design:
-      - The wrapped model's fp16/bf16 parameters ARE the shadow weights.
-        The optimizer updates them continuously.
-      - After each step(), we snap each weight to {-1, 0, +1} × scale
-        using STE — but crucially this snap is NOT applied in-place to the
-        live parameter. Instead we maintain a buffer of ternary int8 values
-        for export / deployment only.
-      - Forward/backward always use the bf16 shadow weights (smooth surface
-        for the optimizer). The ternary buffers are export artefacts.
-
-    This matches the spec in 007-ternary-shadow-weights: shadow weight IS
-    self.weight, forward uses STE-quantized version, gradient flows to shadow.
-
-    The `enable()` / `disable()` toggle lets training scripts switch between
-    dense warmup (Phase 1) and ternary training (Phase 2) without rebuilding
-    the optimizer.
-
-    Args:
-        optimizer: Any torch optimizer.
-        model:     The model whose parameters will receive ternary shadows.
-        threshold: STE quantization threshold (default 0.5, as in Bonsai).
-    """
-
-    def __init__(
-        self,
-        optimizer: torch.optim.Optimizer,
-        model: nn.Module,
-        threshold: float = 0.5,
-    ) -> None:
-        self._opt = optimizer
-        self._model = model
-        self._threshold = threshold
-        self._enabled = True
-        self._step_count = 0
-
-        # Build ternary shadow buffers (int8, same shape as each parameter).
-        self._shadows: dict[str, torch.Tensor] = {}
-        self._scales: dict[str, torch.Tensor] = {}
-        for name, p in model.named_parameters():
-            if not p.requires_grad:
-                continue
-            # Only quantise weight tensors (skip scalars / 1-D vectors).
-            if p.dim() >= 2:
-                self._shadows[name] = torch.zeros_like(p.data, dtype=torch.int8)
-                self._scales[name] = torch.ones(1, device=p.device, dtype=torch.float32)
-
-    # ── Delegate standard optimizer interface ──────────────────────────────
-
-    @property
-    def param_groups(self):
-        return self._opt.param_groups
-
-    def state_dict(self) -> dict:
-        return {
-            "optimizer": self._opt.state_dict(),
-            "shadows": self._shadows,
-            "scales": self._scales,
-            "step_count": self._step_count,
-            "enabled": self._enabled,
-        }
-
-    def load_state_dict(self, state: dict) -> None:
-        self._opt.load_state_dict(state["optimizer"])
-        self._shadows = state.get("shadows", self._shadows)
-        self._scales = state.get("scales", self._scales)
-        self._step_count = state.get("step_count", 0)
-        self._enabled = state.get("enabled", True)
-
-    def zero_grad(self, set_to_none: bool = True) -> None:
-        self._opt.zero_grad(set_to_none=set_to_none)
-
-    def enable(self) -> None:
-        self._enabled = True
-
-    def disable(self) -> None:
-        self._enabled = False
-
-    def step(self, closure=None, _skip_inner: bool = False) -> None:
-        """Step the inner optimizer, then optionally update ternary shadows.
-
-        Args:
-            _skip_inner: If True, skip self._opt.step() (use when GradScaler
-                         already stepped the inner optimizer).
-        """
-        if not _skip_inner:
-            self._opt.step(closure)
-        self._step_count += 1
-
-        if not self._enabled:
-            return
-
-        # Update ternary shadow buffers from current (updated) parameter values.
-        # This is for export only — does NOT modify the live parameter.
-        with torch.no_grad():
-            for name, p in self._model.named_parameters():
-                if name not in self._shadows:
-                    continue
-                scale = p.data.abs().mean().clamp(min=1e-8)
-                self._scales[name].fill_(scale.item())
-                p_norm = p.data.float() / scale
-                ternary = (p_norm.sign() * (p_norm.abs() > self._threshold).float())
-                self._shadows[name].copy_(ternary.to(torch.int8))
-
-    def get_ternary_weights(self) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
-        """Return {param_name: (ternary_int8, scale_f32)} for all shadowed params.
-
-        Suitable for export to a compact ternary checkpoint.
-        """
-        return {
-            name: (self._shadows[name].clone(), self._scales[name].clone())
-            for name in self._shadows
-        }
-
-    def ternary_stats(self) -> dict[str, float]:
-        """Aggregate ternary distribution statistics for wandb logging."""
-        total = neg = zero = pos = 0
-        for t in self._shadows.values():
-            t_f = t.float()
-            total += t_f.numel()
-            neg += (t_f == -1).sum().item()
-            zero += (t_f == 0).sum().item()
-            pos += (t_f == 1).sum().item()
-        if total == 0:
-            return {"neg_frac": 0.0, "zero_frac": 0.0, "pos_frac": 0.0}
-        return {
-            "neg_frac": neg / total,
-            "zero_frac": zero / total,
-            "pos_frac": pos / total,
-        }
