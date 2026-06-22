@@ -28,7 +28,7 @@ from .fused_ce import (
     fused_linear_cross_entropy_mce,
     multi_hot_cross_entropy_reference,
 )
-from .mhc import MultiRateResidual, ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
+from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .prediction import STPLoss
 from .sparsity import MortarLinear
 
@@ -113,25 +113,15 @@ class MORPHConfig:
     # and throughput. The bit-exact loop opts (x0-hoist, active-set) stay on in
     # BOTH arms (they are not "kernels" and have no downside).
     use_kernels: bool = True
-    # MRR ablation: True = MultiRateResidual (per-channel gain); False = plain residual
-    # (StandardResidual). Resolved at construction → branch-free. False removes ~16 ms/step
-    # of channel slice+cat copies + the dead alpha params; ablate quality vs the MRR baseline.
-    use_mrr: bool = True
 
-    # Residual mechanism (supersedes use_mrr when set to a non-null value):
-    #   "mrr" | "standard"   — single-stream [B,S,C] carrier (use_mrr True/False).
-    #   "hc_cayley"          — REAL Hyper-Connection, orthogonal stream mixer (JPmHC, Cayley).
-    #   "hc_sinkhorn"        — REAL Hyper-Connection, doubly-stochastic mixer (mHC, Sinkhorn).
-    # The hc_* modes widen the residual stream to n=hc_streams parallel C-dim streams
-    # ([B,S,n,C]) across the WHOLE network (expand after embeddings, mean-reduce before the
-    # LM head). The depth-composite ∏H^res is norm-preserving (orthogonal: exact dynamical
-    # isometry; doubly-stochastic: spectral norm ≤1) — stabilises the deep weight-tied loop.
-    residual_mode: str | None = None
+    # Residual = Hyper-Connection (JPmHC, Cayley): widens the residual stream to n=hc_streams
+    # parallel C-dim streams ([B,S,n,C]) across the whole network (expand after embeddings,
+    # mean-reduce before the LM head). The orthogonal Cayley mixer makes the depth-composite
+    # ∏H^res norm-preserving (exact dynamical isometry) — stabilises the deep weight-tied loop.
     hc_streams: int = 4          # expansion rate n (paper default 4); n=1 ≡ plain residual
     hc_tau: float = 1.0          # softmax temperature for Hpre/Hpost
     hc_cayley_iters: int = 3     # Cayley fixed-point steps (s); s=2 paper, 3 = safety margin
     hc_cayley_alpha: float = 0.1 # Cayley step size α
-    hc_sinkhorn_iters: int = 20  # Sinkhorn iterations (mHC value)
     hc_init_gain: float = 0.1    # W_fused init std = gain/sqrt(n*d) → ≈ plain residual at init
     hc_use_kernel: bool = True   # fused Triton HC kernels (cayley+cuda). False ⇒ eager refs
                                  # (bit-faithful, slower) — for the fused-vs-eager A/B reference arm.
@@ -434,17 +424,15 @@ class MORPHTransformer(nn.Module):
             init_alpha=cfg.init_alpha,
         )
 
-        # ── Residual mechanism (single-stream MRR/standard vs n-stream Hyper-Connection) ──
-        residual_mode = cfg.residual_mode or ("mrr" if cfg.use_mrr else "standard")
-        self._residual_mode = residual_mode
-        self._is_hc = residual_mode in ("hc_cayley", "hc_sinkhorn")
-        self._n_streams = cfg.hc_streams if self._is_hc else 1
+        # ── Residual = n-stream Hyper-Connection (Cayley/JPmHC), the sole residual ──
+        self._residual_mode = "hc_cayley"
+        self._is_hc = True
+        self._n_streams = cfg.hc_streams
         hc_kwargs = dict(
             n_streams=cfg.hc_streams, tau=cfg.hc_tau,
             cayley_iters=cfg.hc_cayley_iters, cayley_alpha=cfg.hc_cayley_alpha,
-            sinkhorn_iters=cfg.hc_sinkhorn_iters, init_gain=cfg.hc_init_gain,
-            use_kernel=cfg.hc_use_kernel,
-        ) if self._is_hc else None
+            init_gain=cfg.hc_init_gain, use_kernel=cfg.hc_use_kernel,
+        )
 
         def _make_block(layer_idx: int) -> MORPHBlock:
             return MORPHBlock(
@@ -452,9 +440,6 @@ class MORPHTransformer(nn.Module):
                 attn=MORPHAttention(layer_idx=layer_idx, **attn_kw),
                 norm_mlp=RMSNorm(d),
                 mlp=_make_swiglu(d, d_ff, cfg.dropout),
-                channel_dims=ch,
-                use_mrr=cfg.use_mrr,
-                residual_mode=residual_mode,
                 d_model=d,
                 hc_kwargs=hc_kwargs,
             )

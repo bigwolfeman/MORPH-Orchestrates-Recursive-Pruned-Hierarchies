@@ -1,19 +1,12 @@
-"""Hyper-Connections residual (HC / mHC / JPmHC) — manifold-constrained n-stream skip.
+"""Hyper-Connections residual (JPmHC) — orthogonal-manifold n-stream skip.
 
-This is the *real* Hyper-Connection mechanism that the per-channel ``MultiRateResidual``
-(``mhc.py``) was a "half-assed" stand-in for. It widens the residual stream from a single
-``C``-dim stream to ``n`` parallel ``C``-dim streams and routes signal with three learnable,
-input-dependent mappings, exactly as in:
-
-  - Hyper-Connections (HC), Zhu et al. 2024 (arXiv 2409.19606) — the base mechanism.
-  - mHC, DeepSeek-AI 2025 (arXiv 2512.24880) — constrains H^res to the **Birkhoff polytope**
-    (doubly-stochastic) via Sinkhorn-Knopp so the *depth-composite* ``∏ H^res`` stays
-    norm-preserving (no exploding/vanishing residual stream across deep / looped stacks).
-  - JPmHC, 2026 (arXiv 2602.18308) — generalises the manifold; the **Stiefel/orthogonal**
-    mixer via a Cayley transform gives *exact* dynamical isometry (all singular values 1)
-    with NO iterative normalisation, and on a weight-tied *recursive* transformer (the same
-    regime as MORPH's looped core) converges faster + scores higher than the bistochastic
-    Sinkhorn variant at lower compute (Table 1/2 of the paper).
+Widens the residual stream from a single ``C``-dim stream to ``n`` parallel ``C``-dim
+streams and routes signal with three learnable, input-dependent mappings (Hyper-Connections,
+Zhu et al. 2024, arXiv 2409.19606). The stream mixer ``H^res`` is constrained to the
+**Stiefel/orthogonal** manifold via a Cayley transform (JPmHC, arXiv 2602.18308), giving
+*exact* dynamical isometry (all singular values 1) with no iterative normalisation — on a
+weight-tied *recursive* transformer (MORPH's looped core) this converges faster and scores
+higher than a doubly-stochastic (Sinkhorn/mHC) mixer at lower compute (Table 1/2).
 
 Mechanism (per token, identical for both manifolds — only the H^res projection differs):
 
@@ -26,15 +19,12 @@ Mechanism (per token, identical for both manifolds — only the H^res projection
     y   = F(x̄in)                               # attention or MLP — unchanged, run ONCE
     x_out = Hres · x_streams + Hpost · (y ⊗ 1ₙ)   # mix streams + scatter sublayer output
 
-where P_M is:
-  - ``cayley``   (JPmHC, DEFAULT): orthogonal O(n) via Cayley transform of skew(H̃res).
-  - ``sinkhorn`` (mHC):            doubly-stochastic via Sinkhorn-Knopp iteration.
+where P_M = ``cayley``: orthogonal O(n) via Cayley transform of skew(H̃res).
 
 Design notes
 ------------
-- Same ``forward(h, sublayer_fn, *args, **kwargs)`` interface as MultiRateResidual /
-  StandardResidual, so ``MORPHBlock`` swaps it in at construction (branch-free hot path).
-  The ONLY difference is the carrier shape: HC carries ``[B, S, n, C]`` instead of ``[B, S, C]``.
+- ``forward(h, sublayer_fn, *args, **kwargs)`` interface; ``MORPHBlock`` builds it at
+  construction (branch-free hot path). The carrier is ``[B, S, n, C]``.
 - The sublayer F always receives a single ``[B, S, C]`` tensor (the stream-averaged input),
   so attention / MLP modules are untouched and run at unchanged FLOPs.
 - The mappings are computed in fp32 (the projections need precision; entries are bounded
@@ -51,7 +41,6 @@ from typing import Callable
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
 
 
@@ -87,41 +76,17 @@ def cayley_orthogonal(A: Tensor, iters: int = 2, alpha: float = 0.1) -> Tensor:
     return Y
 
 
-def sinkhorn_bistochastic(A: Tensor, iters: int = 20) -> Tensor:
-    """Project a per-token matrix onto the Birkhoff polytope (doubly-stochastic) — mHC.
-
-    ``M⁰ = exp(A)`` then alternately column- and row-normalise (T_r ∘ T_c) ``iters`` times.
-    The final op is row-normalisation, so rows sum to 1 exactly; columns converge to 1 as
-    iters→∞ (mHC uses 20). A per-matrix max is subtracted before ``exp`` for stability — it
-    is a constant scale that cancels in the normalisation, so the result is unchanged.
-
-    Args:
-        A:     [..., n, n] unconstrained logits (fp32 recommended).
-        iters: Sinkhorn iterations. Default 20 (mHC value).
-
-    Returns:
-        [..., n, n] approximately doubly-stochastic matrices (rows exactly sum to 1).
-    """
-    M = (A - A.amax(dim=(-2, -1), keepdim=True)).exp()
-    for _ in range(iters):
-        M = M / M.sum(dim=-2, keepdim=True)   # T_c: column normalise
-        M = M / M.sum(dim=-1, keepdim=True)   # T_r: row normalise
-    return M
-
-
 class HyperConnectionResidual(nn.Module):
     """n-stream manifold-constrained Hyper-Connection residual wrapper.
 
-    Drop-in for MultiRateResidual / StandardResidual but carries ``[B, S, n, C]``.
+    Carries an ``[B, S, n, C]`` n-stream residual.
 
     Args:
         d_model:       per-stream feature width C.
         n_streams:     expansion rate n (paper default 4). n=1 ≡ plain residual.
-        manifold:      "cayley" (orthogonal, JPmHC — DEFAULT) | "sinkhorn" (bistochastic, mHC).
         tau:           softmax temperature for Hpre / Hpost.
-        cayley_iters:  Cayley fixed-point steps (s). Default 2.
+        cayley_iters:  Cayley fixed-point steps (s). Default 3.
         cayley_alpha:  Cayley step size α. Default 0.1.
-        sinkhorn_iters: Sinkhorn iterations. Default 20.
         init_gain:     W_fused init std = init_gain / sqrt(n*d_model). Small ⇒ H̃≈0 ⇒
                        module ≈ plain residual at init. Default 0.1.
     """
@@ -130,23 +95,18 @@ class HyperConnectionResidual(nn.Module):
         self,
         d_model: int,
         n_streams: int = 4,
-        manifold: str = "cayley",
         tau: float = 1.0,
         cayley_iters: int = 3,
         cayley_alpha: float = 0.1,
-        sinkhorn_iters: int = 20,
         init_gain: float = 0.1,
         use_kernel: bool = True,
     ):
         super().__init__()
-        assert manifold in ("cayley", "sinkhorn"), f"unknown manifold {manifold!r}"
         self.d_model = d_model
         self.n = n_streams
-        self.manifold = manifold
         self.tau = tau
         self.cayley_iters = cayley_iters
         self.cayley_alpha = cayley_alpha
-        self.sinkhorn_iters = sinkhorn_iters
 
         nd = n_streams * d_model
         # One fused projection to the three n×n coefficient blocks: [Hpre | Hpost | Hres]
@@ -159,24 +119,13 @@ class HyperConnectionResidual(nn.Module):
         nn.init.normal_(self.proj.weight, std=init_gain / math.sqrt(nd))
         nn.init.zeros_(self.proj.bias)
 
-        # Sinkhorn cannot reach I from a zero logit (exp(0)=1 → uniform). Bias its H̃res
-        # diagonal up so Sinkhorn(bias) ≈ I at init (matches the Cayley(0)=I behaviour).
-        # Stored as a per-(i,j) additive bias on the H̃res block only; pre/post bias stays 0.
-        if manifold == "sinkhorn":
-            diag_bias = 6.0 * torch.eye(n_streams)        # exp(6) diag ⇒ ~0.99 after Sinkhorn
-            self.register_buffer("_res_bias", diag_bias.reshape(1, 1, n_streams, n_streams))
-        else:
-            self.register_buffer("_res_bias", None, persistent=False)
-
         # Branch-free hot path: resolve the carrier-op implementation at construction.
-        # The fused Triton kernels (PRE x_bar / POST x_mix+x_post) only cover the cayley
-        # manifold (the production default); sinkhorn and CPU keep the eager einsums.
-        # hc_pre / hc_post themselves fall back to their references on CPU / force_eager,
-        # so binding them here is safe and adds NO runtime flag check to the math.
-        # `use_kernel=False` forces the eager references even for cayley+cuda — the
-        # bit-faithful, slower reference arm for the fused-vs-eager A/B (and the wandb-logged
-        # eager baseline). Resolved here at construction so the forward stays branch-free.
-        if manifold == "cayley" and use_kernel:
+        # The fused Triton kernels (PRE x_bar / POST x_mix+x_post) run on CUDA; hc_pre / hc_post
+        # fall back to their eager references on CPU / force_eager, so binding them here is safe
+        # and adds NO runtime flag check to the math. `use_kernel=False` forces the eager
+        # references even on cayley+cuda — the bit-faithful, slower reference arm for the
+        # fused-vs-eager A/B (and the wandb-logged eager baseline).
+        if use_kernel:
             from morph.kernels.triton.fused_hyper_connection import hc_pre_map, hc_post
             # Round 2: hc_pre_map fuses the WHOLE pre phase (rms+proj+softmax×2+cayley+
             # reductions+x_bar) into one kernel (+ a cuBLAS addmm GEMV) and returns
@@ -203,10 +152,7 @@ class HyperConnectionResidual(nn.Module):
 
         Hpre = torch.softmax(pre_raw / self.tau, dim=-1)    # row-stochastic
         Hpost = torch.softmax(post_raw / self.tau, dim=-2)  # column-stochastic
-        if self.manifold == "cayley":
-            Hres = cayley_orthogonal(res_raw, self.cayley_iters, self.cayley_alpha)
-        else:
-            Hres = sinkhorn_bistochastic(res_raw + self._res_bias, self.sinkhorn_iters)
+        Hres = cayley_orthogonal(res_raw, self.cayley_iters, self.cayley_alpha)
         return Hpre, Hpost, Hres
 
     def forward(

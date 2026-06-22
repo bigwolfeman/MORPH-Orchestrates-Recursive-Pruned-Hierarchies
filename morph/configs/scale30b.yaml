@@ -57,23 +57,13 @@ model:
   # false = eager references + full-logits CE (un-optimised A/B baseline).
   use_kernels: true
 
-  # Multi-Rate Residual ablation. true = MultiRateResidual (per-channel learned gain);
-  # false = plain additive residual (StandardResidual) — removes ~16 ms/step of channel
-  # slice+cat copies + the unused alpha params. Ablate quality vs MRR baseline (#MRR-ablation).
-  use_mrr: true
-
-  # Residual mechanism (overrides use_mrr when non-null). The REAL Hyper-Connection arms:
-  #   null         → use_mrr decides (mrr / standard)  [default]
-  #   hc_cayley    → orthogonal n-stream mixer (JPmHC, arXiv 2602.18308) — DEFAULT HC choice,
-  #                  5.2× cheaper H^res than Sinkhorn + exact dynamical isometry.
-  #   hc_sinkhorn  → doubly-stochastic n-stream mixer (mHC, arXiv 2512.24880).
-  # hc_* widens the residual stream to hc_streams parallel C-dim streams network-wide.
-  residual_mode: hc_cayley
+  # Residual = Hyper-Connection (JPmHC, Cayley) — the sole supported residual. Orthogonal
+  # n-stream mixer: exact dynamical isometry, 5.2× cheaper H^res than Sinkhorn. Widens the
+  # residual stream to hc_streams parallel C-dim streams network-wide.
   hc_streams: 4            # expansion rate n (paper default); residual carrier → [B,S,n,768]
   hc_tau: 1.0              # softmax temperature for Hpre/Hpost
   hc_cayley_iters: 3       # Cayley fixed-point steps (paper s=2; 3 = safety margin)
   hc_cayley_alpha: 0.1     # Cayley step size α
-  hc_sinkhorn_iters: 20    # Sinkhorn iterations (mHC value)
   hc_init_gain: 0.1        # W_fused init: smaller → closer to plain residual at init
   hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda). false ⇒ eager refs (bit-faithful,
                            # slower) — the reference arm for the fused-vs-eager parity A/B.

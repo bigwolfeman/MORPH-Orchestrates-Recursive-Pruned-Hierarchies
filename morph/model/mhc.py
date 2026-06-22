@@ -1,48 +1,23 @@
-"""Multi-Rate Residual (MRR) — dimension-splitting residual stream.
+"""Residual-stream building blocks for the MORPH transformer block.
 
-Motivation
-----------
-A looped transformer with many competing signals (attention, MLP, x0 skip,
-value embeds, diagonal injection, bigram) all writing into a single
-d_model-dim residual stream creates destructive interference during
-autoregressive generation even when teacher-forced PPL is low.
+Contents:
+  ChannelInject — additive injection of a signal (x0 skip, value embeds, diagonal
+                  injection) into a fixed channel slice of the residual stream.
+  MORPHBlock    — pre-norm attention + MLP block whose residual is a
+                  HyperConnectionResidual (Cayley/JPmHC n-stream mixer; see
+                  hyper_connections.py), with an optional parallel GLA retention branch.
 
-Multi-Rate Residual splits the stream into three *channels* with different
-mixing / retention rates, so each signal type has a dedicated slice and
-retention timescale:
-
-  Channel 0 — Compute (384 dims): primary attention + MLP outputs. Fast rate.
-  Channel 1 — Context (256 dims): x0 skip, value embeds, loop injection.
-  Channel 2 — Slow    (128 dims): slow-rate persistent channel (γ≈0.1).
-                                  Reserved — neural memory (which fed it) is
-                                  deferred; the slow channel itself stays.
-
-Each sublayer gets learned per-channel parameters:
-  alpha (n, softplus + L1-normalize): input mixing weights across channels.
-  gamma (n, softplus):                per-channel additive gain.
-                                      compute≈1.0, context≈0.5, slow≈0.1.
-
-This adds only n_channels × n_sublayers × n_layers scalars to the model.
-For 3 channels × 2 sublayers × 12 layers = 72 new scalars (144 parameters
-total for alpha + gamma).
-
-Note: this is a simpler per-channel residual scaling — NOT the paper's full
-mHC (multi-channel hyper-connections, arXiv 2409.19606) which also mixes
-input representations across channels. We use the dimension-splitting residual
-stream idea without the input mixing component.
+The residual stream is conceptually split into channels (DEFAULT_CHANNEL_DIMS) so each
+injected signal type has a dedicated slice; ChannelInject targets those slices.
 
 Design notes
 ------------
-- Standalone module: no imports from MORPH internals. Drop in to any model.
-- bf16 compatible: all dtype casts handled at injection boundaries.
-- torch.compile friendly: no Python control flow on tensor values, no in-place
-  ops on views, no dynamic shapes.
-- MORPHBlock accepts the attention and MLP as pre-built nn.Module instances,
-  keeping this file decoupled from model architecture.
+- bf16 compatible: dtype casts handled at injection boundaries.
+- torch.compile friendly: no Python control flow on tensor values, no in-place ops on
+  views, no dynamic shapes.
+- MORPHBlock takes pre-built attention and MLP modules, keeping this file decoupled from
+  the model internals.
 """
-
-import math
-from typing import Callable
 
 import torch
 import torch.nn as nn
@@ -52,142 +27,12 @@ from torch import Tensor
 
 # ── Channel layout ────────────────────────────────────────────────────────────
 
-# DEFAULT_CHANNEL_DIMS must sum to d_model (768 default).
-#   Ch0 — Compute (384): attention + MLP primary output. Fast.
+# Channel layout of the residual stream (must sum to d_model=768). ChannelInject targets
+# these slices so each injected signal type has a dedicated region:
+#   Ch0 — Compute (384): attention + MLP primary output.
 #   Ch1 — Context (256): x0 skip, value embeds, loop injection.
-#   Ch2 — Slow    (128): slow-rate persistent channel (γ≈0.1). Reserved.
+#   Ch2 — Slow    (128): low-rate slice.
 DEFAULT_CHANNEL_DIMS: tuple[int, ...] = (384, 256, 128)
-
-
-def _make_slices(channel_dims: tuple[int, ...]) -> list[slice]:
-    """Convert channel widths to index slices into the d_model dimension."""
-    slices: list[slice] = []
-    start = 0
-    for d in channel_dims:
-        slices.append(slice(start, start + d))
-        start += d
-    return slices
-
-
-# ── MultiRateResidual ─────────────────────────────────────────────────────────
-
-class MultiRateResidual(nn.Module):
-    """Wrap a sublayer with multi-rate residual (MRR) dimension-split dynamics.
-
-    After the sublayer (additive residual with per-channel gain):
-        h[chᵢ] = h[chᵢ] + γᵢ · o[chᵢ]
-
-    Gamma is learned via softplus (always positive). Different channels get
-    different update rates: compute≈1.0 (full update), context≈0.5, slow≈0.1.
-
-    The sublayer always sees the full unchanged h — channel separation is
-    achieved purely via the per-channel gamma on the output side. This keeps
-    the attention and MLP modules unchanged and avoids input mixing at init.
-
-    Parameters
-    ----------
-    channel_dims : tuple[int, ...]
-        Width of each channel. Must sum to d_model.
-    alpha_init : tuple[float, ...]
-        Pre-softplus values for alpha (input mixing). Kept for API completeness;
-        not applied in forward (sublayer always receives full h).
-    gamma_init : tuple[float, ...]
-        Pre-softplus values for gamma (additive gain per channel).
-        Default (1.0, 0.5, 0.1) → compute gets full sublayer output, context
-        gets half, slow channel gets 10%.
-    """
-
-    def __init__(
-        self,
-        channel_dims: tuple[int, ...] = DEFAULT_CHANNEL_DIMS,
-        alpha_init: tuple[float, ...] = (3.0, 0.01, 0.01),
-        gamma_init: tuple[float, ...] = (1.0, 0.5, 0.1),
-    ):
-        super().__init__()
-        n = len(channel_dims)
-        assert len(alpha_init) == n, "alpha_init length must match n_channels"
-        assert len(gamma_init) == n, "gamma_init length must match n_channels"
-
-        self.channel_dims = channel_dims
-        self.slices = _make_slices(channel_dims)
-        self.n_channels = n
-
-        # Alpha: softplus + L1-normalize. Stored for potential future use /
-        # regularization loss terms, but not applied in forward.
-        self.alpha_raw = nn.Parameter(
-            torch.tensor(
-                [math.log(math.expm1(max(a, 1e-6))) for a in alpha_init]
-            )
-        )
-
-        # Gamma: per-channel additive gain via softplus (always positive).
-        self.gamma_raw = nn.Parameter(
-            torch.tensor(
-                [math.log(math.expm1(max(g, 1e-6))) for g in gamma_init]
-            )
-        )
-
-    def _alpha(self) -> Tensor:
-        """Normalized mixing weights, shape [n_channels]."""
-        a = F.softplus(self.alpha_raw)
-        return a / (a.sum() + 1e-8)
-
-    def _gamma(self) -> Tensor:
-        """Additive gain per channel, shape [n_channels]."""
-        return F.softplus(self.gamma_raw)
-
-    def forward(
-        self,
-        h: Tensor,
-        sublayer_fn: Callable[..., Tensor],
-        *args,
-        **kwargs,
-    ) -> Tensor:
-        """Apply sublayer with MRR channel-split additive residual.
-
-        Args:
-            h:           [B, S, D] full residual stream.
-            sublayer_fn: callable that takes h and optional args/kwargs,
-                         returns [B, S, D] sublayer output.
-            *args, **kwargs: forwarded to sublayer_fn.
-
-        Returns:
-            [B, S, D] updated residual stream.
-        """
-        gamma = self._gamma()           # [n_channels]
-
-        o = sublayer_fn(h, *args, **kwargs)
-
-        # Additive residual with per-channel gain: h_new = h + γᵢ·o per channel.
-        slices = self.slices
-        out_chunks = [
-            h[..., slices[i]] + gamma[i] * o[..., slices[i]]
-            for i in range(self.n_channels)
-        ]
-        return torch.cat(out_chunks, dim=-1)
-
-
-class StandardResidual(nn.Module):
-    """Plain additive residual: h_new = h + sublayer(h).
-
-    The MRR-ablation alternative to MultiRateResidual. MRR's only effect over a
-    standard residual is three learned scalar gains (γ ≈ compute 1.0 / context 0.5 /
-    slow 0.1) applied to channel slices — and the slow channel existed to carry the
-    (since-removed) neural-memory signal. This collapses MRR's 3-way slice+scalar+cat
-    (~16 ms/step of copies) to a single fused add. Same forward(h, sublayer_fn, ...)
-    interface as MultiRateResidual so MORPHBlock swaps it in at construction
-    (branch-free; no runtime flag in the hot path). Channel slices still exist for
-    ChannelInject — only the per-channel *residual gain* is removed.
-    """
-
-    def forward(
-        self,
-        h: Tensor,
-        sublayer_fn: Callable[..., Tensor],
-        *args,
-        **kwargs,
-    ) -> Tensor:
-        return h + sublayer_fn(h, *args, **kwargs)
 
 
 # ── ChannelInject ─────────────────────────────────────────────────────────────
@@ -291,40 +136,28 @@ class ChannelInject(nn.Module):
 # ── MORPHBlock ────────────────────────────────────────────────────────────────
 
 class MORPHBlock(nn.Module):
-    """TransformerBlock with multi-rate residual (MRR) dimension-split dynamics.
+    """Pre-norm attention + MLP transformer block with a HyperConnection residual.
 
-    Wraps attention and MLP each in a MultiRateResidual with independent
-    per-channel alpha/gamma parameters. The underlying attention and MLP modules
-    are unchanged (d_model-dim in, d_model-dim out). Only the residual connection
-    has per-channel learned gain parameters.
+    Each sublayer (attention, MLP) is wrapped in a HyperConnectionResidual (Cayley/JPmHC
+    n-stream mixer; see hyper_connections.py) — the carrier is [B, S, n, C]. The attention
+    and MLP modules are unchanged (single [B,S,C] in/out); only the residual connection
+    mixes streams. An optional GLA retention branch can be attached in parallel to the
+    attention sublayer (attach_retention), gated off at init.
 
-    Accepts pre-built attention and MLP modules so this file stays decoupled
-    from the MORPH model internals. The caller is responsible for constructing
-    norm layers and sublayer modules.
-
-    RMSNorm (or any norm) operates on the full mixed-channel input — not
-    per-channel — because the channel split only affects the residual update,
-    not the sublayer computation.
+    Accepts pre-built attention and MLP modules so this file stays decoupled from the model
+    internals. RMSNorm operates on the full stream-averaged input, not per-channel.
 
     Args:
-        norm_attn:    normalization module for the attention sublayer.
-        attn:         attention module. forward(x) → [B, T, D].
-        norm_mlp:     normalization module for the MLP sublayer.
-        mlp:          MLP module. forward(x) → [B, T, D].
-        channel_dims: channel widths. Must sum to d_model.
-        dropout:      dropout rate applied after each sublayer output.
+        norm_attn: normalization module for the attention sublayer.
+        attn:      attention module. forward(x) → [B, T, D].
+        norm_mlp:  normalization module for the MLP sublayer.
+        mlp:       MLP module. forward(x) → [B, T, D].
+        dropout:   dropout rate applied after each sublayer output.
+        d_model:   per-stream feature width C (required — HyperConnectionResidual needs it).
+        hc_kwargs: kwargs forwarded to HyperConnectionResidual (n_streams, tau, cayley_*, …).
 
-    Usage::
-
-        block = MORPHBlock(
-            norm_attn=RMSNorm(d_model),
-            attn=MyAttention(cfg),
-            norm_mlp=RMSNorm(d_model),
-            mlp=SwiGLU(d_model, d_ff),
-            channel_dims=DEFAULT_CHANNEL_DIMS,
-        )
-        h = block(h)                         # basic forward
-        h = block(h, attn_kwargs={"n_skip_rope": 2})  # pass kwargs to attn
+    Note: the residual attributes are named ``mrr_attn`` / ``mrr_mlp`` for checkpoint
+    compatibility with earlier runs; they hold HyperConnectionResidual modules.
     """
 
     def __init__(
@@ -333,10 +166,7 @@ class MORPHBlock(nn.Module):
         attn: nn.Module,
         norm_mlp: nn.Module,
         mlp: nn.Module,
-        channel_dims: tuple[int, ...] = DEFAULT_CHANNEL_DIMS,
         dropout: float = 0.0,
-        use_mrr: bool = True,
-        residual_mode: str | None = None,
         d_model: int | None = None,
         hc_kwargs: dict | None = None,
     ):
@@ -347,32 +177,15 @@ class MORPHBlock(nn.Module):
         self.mlp       = mlp
         self.drop      = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
 
-        # Residual wrapper chosen at CONSTRUCTION (branch-free hot path). residual_mode
-        # supersedes the legacy use_mrr bool (use_mrr → "mrr"/"standard" when mode unset):
-        #   "mrr"      — MultiRateResidual: per-channel learned gain (3-way slice+cat).
-        #   "standard" — StandardResidual:  plain fused add (the MRR-removal ablation).
-        #   "hc_cayley"/"hc_sinkhorn" — HyperConnectionResidual: the *real* n-stream
-        #                 hyper-connection (carrier becomes [B,S,n,C]); orthogonal (Cayley/
-        #                 JPmHC) or doubly-stochastic (Sinkhorn/mHC) stream mixer.
-        if residual_mode is None:
-            residual_mode = "mrr" if use_mrr else "standard"
-        self.residual_mode = residual_mode
-
-        if residual_mode == "mrr":
-            self.mrr_attn: nn.Module = MultiRateResidual(channel_dims=channel_dims)
-            self.mrr_mlp:  nn.Module = MultiRateResidual(channel_dims=channel_dims)
-        elif residual_mode == "standard":
-            self.mrr_attn = StandardResidual()
-            self.mrr_mlp  = StandardResidual()
-        elif residual_mode in ("hc_cayley", "hc_sinkhorn"):
-            from .hyper_connections import HyperConnectionResidual
-            assert d_model is not None, "HC residual needs d_model"
-            manifold = "cayley" if residual_mode == "hc_cayley" else "sinkhorn"
-            hk = dict(hc_kwargs or {})
-            self.mrr_attn = HyperConnectionResidual(d_model, manifold=manifold, **hk)
-            self.mrr_mlp  = HyperConnectionResidual(d_model, manifold=manifold, **hk)
-        else:
-            raise ValueError(f"unknown residual_mode {residual_mode!r}")
+        # Residual = HyperConnectionResidual (Cayley/JPmHC), the sole supported residual:
+        # an n-stream [B,S,n,C] carrier with an orthogonal stream mixer (exact dynamical
+        # isometry for the weight-tied loop). Built once here (branch-free hot path). The
+        # attribute names mrr_attn / mrr_mlp are kept for checkpoint compatibility.
+        from .hyper_connections import HyperConnectionResidual
+        assert d_model is not None, "HyperConnectionResidual needs d_model"
+        hk = dict(hc_kwargs or {})
+        self.mrr_attn: nn.Module = HyperConnectionResidual(d_model, **hk)
+        self.mrr_mlp:  nn.Module = HyperConnectionResidual(d_model, **hk)
 
         # Retention branch (#230) — attached post-construction so it does NOT perturb
         # the base init RNG (keeps the rest of the model byte-identical to the baseline, so the
