@@ -143,9 +143,10 @@ training:
   tst_ratio: 0.3                 # fraction of steps in the superposition phase
 
   # Optimizer extras
-  optimizer: adamw               # adamw (default deploy) | ademamix (arXiv:2409.03137) |
+  optimizer: adamw               # adamw (with adam8bit=true → bnb AdamW8bit fallback) |
                                  # ademamix_b1zero (β1=0 fork: 2 buffers → AdamW8bit memory
-                                 # parity, vs bnb's 3-buffer +50%; ~+1% step overhead)
+                                 # parity, vs bnb's 3-buffer +50%; ~+1% step overhead).
+                                 # (The stock 3-buffer `ademamix` path was removed.)
   weight_decay: 0.1
   # Core-map spectral-norm penalty: soft hinge L=lambda·Σ relu(σ_max(W)−cap)² over
   # core MLP linears (gate_up/down). Caps σ_max runaway without forcing σ_max≤1
@@ -174,9 +175,9 @@ training:
                                  # paper's log(β1) schedule degenerate, so we ramp from here.
   ademamix_fused: true           # (b1zero) true = fused Triton kernel (faster opt.step).
                                  # With linear-int8 state quant the fused path is lossy on
-                                 # small-ν lanes (underflow→explode or over-floor→throttle);
-                                 # pair with ademamix_fused_dynamic_qmap=true to eliminate
-                                 # that bias. false = de-fused path: bnb's dynamic blockwise
+                                 # small-ν lanes (underflow→explode or over-floor→throttle), so
+                                 # ademamix_fused_dynamic_qmap=true (also the default) eliminates
+                                 # that bias → the default path is NOT lossy. false = de-fused: bnb dynamic blockwise
                                  # qmap (same quant as AdamW8bit; preserves small ν, no bias).
   ademamix_fused_dynamic_qmap: true   # (b1zero, fused only) Replace the fused kernel's uniform
                                  # linear-int8 state quant with bnb's non-linear dynamic map
@@ -191,7 +192,8 @@ training:
                                  # required for the fused linear-int8 kernel where ν can underflow
                                  # to exactly 0; throttles live small-ν params on the de-fused
                                  # dynamic-qmap path (ν never underflows there, _mask_dead_state
-                                 # handles pruned positions). Use false with fused:false.
+                                 # handles pruned positions). DEFAULT false = correct for the deploy
+                                 # path (fused+dynamic-qmap) and de-fused; use true only for linear fused.
   ademamix_update_clip: 5.0      # (b1zero) per-coord cap on the (g+α·m₂)/denom step in
                                  # Adam units (healthy step ≈O(1)). 0 = off. Bounds the
                                  # per-step param change so a prune topology-shock (ν lags
