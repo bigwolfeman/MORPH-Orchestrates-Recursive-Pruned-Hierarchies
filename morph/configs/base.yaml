@@ -189,23 +189,6 @@ training:
                                  # per-step param change so a prune topology-shock (ν lags
                                  # the gradient jump) cannot blow up a few coords in one step.
                                  # Only fires on anomalous coords → no convergence throttle.
-  ademamix_update_rms_clip: 0.0  # (b1zero, de-fused) per-tensor cap on the RMS of (g+α·m₂)/denom.
-                                 # The per-coord clip misses coherent collective oscillations where
-                                 # many coords spike together — their individual caps still produce
-                                 # a large tensor move. The RMS cap bounds the whole-tensor herd
-                                 # move. 0 = off. Superseded by stale_push_cap_coord for most uses.
-  ademamix_stale_push_cap: 0.0   # (b1zero, de-fused) per-tensor cap ‖α·m₂‖ ≤ c·‖g‖. Fires when
-                                 # the live gradient collapses while m₂ retains large stale magnitude
-                                 # → α·m₂ dominates as a coherent push the per-coord clip can't stop.
-                                 # Healthy |α·m₂|/|g|≈1.5 ≪ typical cap → surgical. 0 = off.
-  ademamix_amsgrad: false        # (b1zero, de-fused) AMSGrad ν_max denominator memory (Reddi 2019):
-                                 # denom uses max(ν_max,ν) not ν → prevents effective-LR rise on a
-                                 # coord that was loud then went quiet (the measured eps-out small-ν
-                                 # oscillation). Surgical (always-quiet coords keep ν_max=ν=advantage).
-                                 # COST: +1 fp32 state buffer (forfeits β1=0 2-buffer memory win).
-  ademamix_trust_ratio: 0.0      # (b1zero, de-fused) downward-only LARS/LAMB trust ratio τ: scale each
-                                 # tensor's update so weights move ≤ τ·‖w‖/step. Relative per-layer
-                                 # governor (scale-aware). 0 = off. Try ~1e-3..1e-2.
   # β1=0 noise-gating fix (b1zero, de-fused) — restore Adam's implicit noise filter without
   # an m1 buffer. β1=0 puts raw g in the numerator; on noise-dominated coords this is a
   # unit-variance random walk every step (standard Adam's fast EMA averages it away; β1=0
@@ -220,14 +203,6 @@ training:
                                  # THE root-cause fix. 0.0 = off. Try κ~0.3 first, sweep 0.2–0.5.
   ademamix_g_snr_gate_floor: 0.1 # gate floor (min raw-g weight on a pure-noise coord). ≈(1−β1)=0.1
                                  # matches Adam's noise damping; >0 so learning never fully stalls.
-  # STE-cusp mitigations: prevent a single large β1=0 step from flipping many ternary codes
-  # in one iteration (mass flip → looped core amplifies → forward explosion). Tested separately.
-  ademamix_num_beta1: 0.0        # ARM D: small momentum on the raw-g NUMERATOR term (m1=β1·m1+(1−β1)·g,
-                                 # bias-corrected; 8-bit m1, ~+1 B/param). Smooths the step so it
-                                 # approaches cusps gently (AdamW's β1 analog). 0.0=off (raw g). Try ~0.9.
-  ademamix_flip_clamp_kappa: 0.0 # ARM A: per-tensor cap on realized ternary FLIP-RATE/step. s=mean|w|,
-                                 # thr=0.5·s; if frac of codes that flip under p−lr·u > κ, scale that
-                                 # tensor's update by κ/frac (stateless governor). 0.0=off. Try ~0.02-0.05.
   ademamix_stale_push_cap_coord: 0.5  # Per-coordinate stale-push cap (b1zero): |α·m₂_i| ≤ c·|g_i|
                                  # on each coord (vs the per-tensor cap's whole-tensor norm). The
                                  # failure mode is per-coord magnitude domination: stale slow-EMA
@@ -235,29 +210,9 @@ training:
                                  # are hidden by the tensor-level norm. Sign preserved.
                                  # 0.0=off; recommended c≈0.5. Smaller = tighter bound.
                                  # History: see Ai-notes/06-21-2026/AdEMAMix-b1zero-Divergence-Cure/TROUBLESHOOTING.md
-  ademamix_align_gate_mode: "off"  # Per-coord alignment gate (b1zero, de-fused; Cautious/Magma).
-                                 # off|cautious|soft. Gates the final per-coord update u against
-                                 # the current gradient g: zero/damp coords where u·g≤0.
-                                 # cautious = hard mask 1[u·g>0] + mean-preserving renorm
-                                 # (arXiv:2411.16085); soft = sigmoid(sign(u·g)/τ) damp
-                                 # (Magma arXiv:2602.15322). NOTE: relies on g direction;
-                                 # composes with magnitude governors when g collapses.
-  ademamix_align_gate_tau: 1.0   # soft-mode temperature (smaller→sharper, →hard mask). Unused if cautious.
-  ademamix_align_renorm: true    # cautious mean-preserving rescale u*=numel/Σmask (preserves avg step).
-  ademamix_align_renorm_cap: 0.0 # cap the renorm amplification (0=unbounded). e.g. 4.0 bounds the
-                                 # survivor-amplification when most coords disagree at a collapse.
   ademamix_track_diag: false     # per-tensor optimizer telemetry (snr-gate mean/low, clip/cap counts).
                                  # OFF saves ~67ms/step on the de-fused path (454-tensor sync loops);
                                  # param update is BIT-IDENTICAL either way. true → for optimizer-debug.
-  ademamix_m2_prune_decay: 0.0   # At each prune event, multiply slow EMA m₂ by (1−this) on
-                                 # pruned (core/CMS) params BEFORE the step, clearing stale
-                                 # pre-prune momentum at the topology change. 0.0=off; 1.0=full
-                                 # reset (erases AdEMAMix advantage; pruning fires every interval).
-  ademamix_eps_inside_patterns: []  # (b1zero, de-fused) LAYER-TARGETED eps placement: params whose name
-                                 # contains any of these substrings use eps-INSIDE (√(ν/bc2+ε) floor →
-                                 # stabilize), the rest stay eps-OUTSIDE (full advantage). The mechanism-
-                                 # matched fix if the eps-out small-ν oscillation is localized to a few
-                                 # boundary layers. Ablate: ["prelude.0.mlp"] → ["prelude"] → ["prelude","coda"].
 
   # ── Deploy quant stack (ALL ON by default — validated winners) ──
   # Ternary QAT: forward-STE on weights → {-1,0,+1}×scale. Training ppl IS deployed-ternary ppl.

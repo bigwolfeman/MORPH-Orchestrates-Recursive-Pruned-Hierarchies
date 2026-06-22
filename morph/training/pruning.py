@@ -28,7 +28,7 @@ __all__ = ["PruningSchedule"]
 def _find_cms_layers(model: nn.Module) -> list[tuple[str, nn.Module]]:
     """Walk the model and return all (name, module) pairs for CMSBlockLinear."""
     try:
-        from morph.model.titans_core.block_sparse import CMSBlockLinear
+        from morph.model.layers.block_sparse import CMSBlockLinear
     except ImportError:
         return []
 
