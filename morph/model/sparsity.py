@@ -10,7 +10,7 @@ MortarLinear wraps CMSBlockLinear with a clean two-mode interface:
 The schedule that drives prune → carve → route lives in
 morph/training/pruning.py (PruningSchedule).
 
-Source lineage: CMSBlockLinear from morph/model/titans_core/block_sparse.py
+Source lineage: CMSBlockLinear from morph/model/layers/block_sparse.py
 Date: 2026-05-25 (Block-ELL backend removed 2026-06-11 — MORTAR only)
 """
 
@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .titans_core.block_sparse import CMSBlockLinear
+from .layers.block_sparse import CMSBlockLinear
 
 
 # =============================================================================

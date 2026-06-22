@@ -149,17 +149,9 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         # per-coordinate update clamp (Adam units) — bounds the (g+α·m₂)/denom step so a prune
         # topology-shock can't detonate a few coords in one step. 0 = off. The fast+stable lever.
         update_clip = float(getattr(tr, "ademamix_update_clip", 0.0))
-        # per-TENSOR update-RMS clip — bounds a layer's COLLECTIVE update move (the per-coord clip
-        # is the wrong granularity for the coherent prelude.0 oscillation; see optimizer module). 0=off.
-        update_rms_clip = float(getattr(tr, "ademamix_update_rms_clip", 0.0))
-        # AMSGrad ν_max denominator memory (root-cause test for eps-outside small-ν oscillation);
-        # downward-only trust-ratio τ (LARS/LAMB relative per-tensor governor). Both off by default.
-        amsgrad = bool(getattr(tr, "ademamix_amsgrad", False))
-        trust_ratio = float(getattr(tr, "ademamix_trust_ratio", 0.0))
-        # Per-tensor stale-push cap: ‖α·m₂‖ ≤ c·‖g‖ per tensor (de-fused path only). 0=off.
-        stale_push_cap = float(getattr(tr, "ademamix_stale_push_cap", 0.0))
         # Per-coordinate stale-push cap: |α·m₂_i| ≤ c·|g_i| each coord — catches per-coord
-        # magnitude domination that the per-tensor norm hides. De-fused path only. 0=off.
+        # magnitude domination that the per-tensor norm hides. The deploy-gauntlet-winning cure.
+        # 0=off. (Supported on BOTH the fused kernel and the de-fused path.)
         stale_push_cap_coord = float(getattr(tr, "ademamix_stale_push_cap_coord", 0.0))
         # β1=0 noise-gating fix (stateless, no m1 buffer; see ademamix_b1zero.py for details):
         #   g_coef (γ<1) = constant downscale of the raw-g numerator term (uniform control);
@@ -167,18 +159,6 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         g_coef = float(getattr(tr, "ademamix_g_coef", 1.0))
         g_snr_gate_kappa = float(getattr(tr, "ademamix_g_snr_gate_kappa", 0.0))
         g_snr_gate_floor = float(getattr(tr, "ademamix_g_snr_gate_floor", 0.1))
-        # STE-cusp mitigations (both off by default; de-fused path only):
-        #   num_beta1 (>0) = small momentum on the raw-g numerator (8-bit m1; smooth cusp approach)
-        #   flip_clamp_kappa (>0) = per-tensor cap on realized ternary flip-rate (stateless governor)
-        num_beta1 = float(getattr(tr, "ademamix_num_beta1", 0.0))
-        flip_clamp_kappa = float(getattr(tr, "ademamix_flip_clamp_kappa", 0.0))
-        # Per-coordinate alignment gate (Cautious/Magma family; de-fused path only):
-        #   align_gate_mode = off|cautious|soft — zero/damp update coords whose sign disagrees
-        #   with the current gradient. tau = soft temperature; renorm = mean-preserving rescale.
-        align_gate_mode = str(getattr(tr, "ademamix_align_gate_mode", "off"))
-        align_gate_tau = float(getattr(tr, "ademamix_align_gate_tau", 1.0))
-        align_renorm = bool(getattr(tr, "ademamix_align_renorm", True))
-        align_renorm_cap = float(getattr(tr, "ademamix_align_renorm_cap", 0.0))
         # track_diag: per-tensor optimizer telemetry (snr-gate, clip/cap counts). OFF by
         # default — sync loops cost ~67ms/step on large models; param update is bit-identical.
         track_diag = bool(getattr(tr, "ademamix_track_diag", False))
@@ -197,27 +177,10 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
             alpha_cap=float(getattr(tr, "ademamix_alpha_cap", 0.0)),
             t_alpha=t_alpha, t_beta3=t_beta3, beta3_warmup_start=b3_start,
             eps=1e-8, weight_decay=wd, bits=bits, fused=fused, eps_inside=eps_inside,
-            update_clip=update_clip, update_rms_clip=update_rms_clip,
-            amsgrad=amsgrad, trust_ratio=trust_ratio, stale_push_cap=stale_push_cap,
-            stale_push_cap_coord=stale_push_cap_coord,
+            update_clip=update_clip, stale_push_cap_coord=stale_push_cap_coord,
             g_coef=g_coef, g_snr_gate_kappa=g_snr_gate_kappa,
-            g_snr_gate_floor=g_snr_gate_floor,
-            num_beta1=num_beta1, flip_clamp_kappa=flip_clamp_kappa,
-            align_gate_mode=align_gate_mode, align_gate_tau=align_gate_tau,
-            align_renorm=align_renorm, align_renorm_cap=align_renorm_cap,
-            track_diag=track_diag,
+            g_snr_gate_floor=g_snr_gate_floor, track_diag=track_diag,
             fused_dynamic_qmap=fused_dynamic_qmap, fused_nu_floor=fused_nu_floor)
-        # Pattern-targeted eps placement: tag params whose NAME matches a pattern to use eps-inside
-        # (stabilize the fragile boundary, e.g. ["prelude.0.mlp"]), leaving the rest eps-outside (full
-        # AdEMAMix advantage in the looped core). Tag is read per-param in the de-fused denom step.
-        eps_patterns = list(getattr(tr, "ademamix_eps_inside_patterns", []) or [])
-        if eps_patterns:
-            n_in = 0
-            for nm, pp in model.named_parameters():
-                pp._eps_inside = bool(eps_inside or any(pat in nm for pat in eps_patterns))
-                n_in += int(pp._eps_inside)
-            base_opt._has_eps_overrides = True
-            print(f"[optimizer] eps-inside patterns {eps_patterns} → {n_in} params eps-inside, rest eps-outside")
     elif use_8bit:
         try:
             import bitsandbytes as bnb

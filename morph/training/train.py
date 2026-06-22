@@ -429,7 +429,7 @@ def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
     opt = optimizer
     if not hasattr(opt, "state"):
         return
-    from morph.model.titans_core.block_sparse import CMSBlockLinear
+    from morph.model.layers.block_sparse import CMSBlockLinear
 
     def _grp(p):
         for g in opt.param_groups:
@@ -1078,7 +1078,7 @@ def main(cfg: DictConfig) -> None:
     if _cms_score_mode not in ("grad", "taylor", "magnitude"):
         raise ValueError(f"cms_score_mode must be grad|taylor|magnitude, got {_cms_score_mode!r}")
     if _cms_score_mode != "grad":
-        from morph.model.titans_core.block_sparse import CMSBlockLinear
+        from morph.model.layers.block_sparse import CMSBlockLinear
         _n_cms = 0
         for _m in model.modules():
             if isinstance(_m, CMSBlockLinear):
@@ -1430,10 +1430,6 @@ def main(cfg: DictConfig) -> None:
     _prune_interval = max(1, int(getattr(cfg.training, "prune_interval", 1)))
     # Core/CMS MLP params are where pruning acts → the stale-m₂ candidates we track.
     _m2g_filter = (lambda nm: "core." in nm)
-    # m₂ reset-on-prune: decay the slow EMA at each prune event so stale pre-prune
-    # momentum doesn't drive the post-prune update. 0 = off.
-    _m2_prune_decay = float(getattr(cfg.training, "ademamix_m2_prune_decay", 0.0))
-    _m2_decay_ids = None  # built lazily from the model on first prune event
     _mem_snap_step = int(os.environ.get("MORPH_MEM_SNAPSHOT_STEP", "-1"))
     _mem_snapped = False
     # History recording installs CUDA-allocator hooks that can make a Triton
@@ -1568,20 +1564,6 @@ def main(cfg: DictConfig) -> None:
                       f"(recording stopped)", flush=True)
 
         prune_stats = pruning.step(model, step)
-
-        # m₂ reset-on-prune: at a prune event (not compact/route — those rebuild the
-        # optimizer), decay the slow EMA on pruned params BEFORE this step's update.
-        # Off (0.0) is the β3-decay-only baseline.
-        if _m2_prune_decay > 0.0 and prune_stats and prune_stats.get("pruning/prune_step"):
-            _base_opt = getattr(optimizer, "_opt", optimizer)
-            if hasattr(_base_opt, "decay_m2"):
-                if _m2_decay_ids is None:
-                    _root = getattr(model, "_orig_mod", model)
-                    _m2_decay_ids = {id(p) for nm, p in _root.named_parameters()
-                                     if p.requires_grad and _m2g_filter(nm)}
-                _nd = _base_opt.decay_m2(_m2_prune_decay, param_ids=_m2_decay_ids)
-                print(f"[m2-reset] step {step}: decayed m₂×{1.0 - _m2_prune_decay:.2f} "
-                      f"on {_nd} core params", flush=True)
 
         # Phase boundary (compact / routing) changed the param set → rebuild a FRESH
         # optimizer (Wolfe: fresh optimizer after compact). This step's backward grads
@@ -1791,13 +1773,10 @@ def main(cfg: DictConfig) -> None:
             if step % 200 == 0:
                 _lstp = f"  loop_stp={float(out['loop_stp_loss']):.4f}" if (
                     "loop_stp_loss" in out and morph_cfg.loop_stp_lambda > 0.0) else ""
-                _baseopt = getattr(optimizer, "_opt", optimizer)
-                _scap = getattr(_baseopt, "_stale_cap_events", 0)
-                _scap_s = f"  stale_cap_ev={_scap}" if _scap else ""
                 print(
                     f"[{step:7d}/{total_steps}] loss={loss.item():.4f}  "
                     f"ppl={math.exp(min(loss.item(), 20.0)):.1f}  "
-                    f"lr={lr:.2e}  sps={sps:.2f}{_lstp}{_scap_s}"
+                    f"lr={lr:.2e}  sps={sps:.2f}{_lstp}"
                 )
 
         # ── Validation (every eval_every steps) ──────────────────────────

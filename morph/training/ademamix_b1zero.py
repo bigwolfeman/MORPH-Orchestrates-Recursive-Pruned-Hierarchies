@@ -59,47 +59,22 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         fused: bool = True,
         eps_inside: bool = True,
         update_clip: float = 0.0,
-        update_rms_clip: float = 0.0,
-        amsgrad: bool = False,
-        trust_ratio: float = 0.0,
-        stale_push_cap: float = 0.0,
         stale_push_cap_coord: float = 0.0,
         g_coef: float = 1.0,
         g_snr_gate_kappa: float = 0.0,
         g_snr_gate_floor: float = 0.1,
-        num_beta1: float = 0.0,
-        flip_clamp_kappa: float = 0.0,
-        align_gate_mode: str = "off",
-        align_gate_tau: float = 1.0,
-        align_renorm: bool = True,
-        align_renorm_cap: float = 0.0,
         track_diag: bool = False,
         fused_dynamic_qmap: bool = False,
         fused_nu_floor: bool = True,
     ):
         if betas[0] != 0.0:
             raise ValueError(f"AdEMAMixB1Zero requires β1=0, got betas={betas}")
-        # The fused kernel supports: eps_inside, g_coef, g_snr_gate_kappa,
-        # stale_push_cap_coord, update_clip (all elementwise, in ademamix_b1zero_kernel.py).
-        # Features below are de-fused-only (require cross-block reductions, extra state
-        # buffers, or per-param branching) → raise on fused rather than silently no-op.
-        if str(align_gate_mode) not in ("off", "cautious", "soft"):
-            raise ValueError(f"align_gate_mode must be off|cautious|soft, got {align_gate_mode!r}")
-        if fused:
-            _defused_only = {
-                "stale_push_cap (per-tensor; needs whole-tensor norm)": float(stale_push_cap) > 0.0,
-                "align_gate_mode": str(align_gate_mode) != "off",
-                "num_beta1 (extra m1 buffer)": float(num_beta1) > 0.0,
-                "amsgrad (extra nu_max buffer)": bool(amsgrad),
-                "trust_ratio (per-tensor norm)": float(trust_ratio) > 0.0,
-                "flip_clamp_kappa (per-tensor)": float(flip_clamp_kappa) > 0.0,
-                "update_rms_clip (per-tensor RMS)": float(update_rms_clip) > 0.0,
-            }
-            on = [k for k, v in _defused_only.items() if v]
-            if on:
-                raise ValueError(
-                    "These features are de-fused-only (ademamix_fused=false); refusing to silently "
-                    f"no-op them in the fused kernel: {on}")
+        # All remaining update-shaping knobs (eps_inside, g_coef, g_snr_gate_kappa,
+        # stale_push_cap_coord, update_clip) are elementwise and supported on BOTH the
+        # fused kernel (ademamix_b1zero_kernel.py) and the de-fused path. The de-fused-only
+        # experimental levers (per-tensor stale_push_cap, align_gate, num_beta1, amsgrad,
+        # trust_ratio, flip_clamp, update_rms_clip, eps_inside_patterns, m2_prune_decay) were
+        # removed after the per-coord-cap cure won the deploy gauntlet (#4 cleanup).
         if bits not in (8, 32):
             raise ValueError(f"bits must be 8 or 32, got {bits}")
         defaults = dict(
@@ -120,11 +95,6 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         # deploy path is fused + dynamic-qmap, where eps-outside is safe and is the convergence-
         # preserving denom; update_clip bounds any residual spike.
         self.eps_inside = eps_inside
-        # When create_optimizer tags individual params with `p._eps_inside` (pattern-based,
-        # e.g. eps-inside ONLY on the fragile prelude.0 boundary while the looped core stays
-        # eps-outside for full advantage), this flag switches the de-fused denom to a per-param
-        # branch. Off → the fast batched foreach path (global self.eps_inside), unchanged.
-        self._has_eps_overrides = False
         # update_clip: per-coordinate cap on the adaptive update (g+α·m₂)/denom, in Adam
         # units (healthy step ≈O(1)). 0 = off. At a prune topology-shock the gradient
         # jumps while ν lags → the step spikes on a few coords → single-step blow-up.
@@ -139,36 +109,6 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         # diagnostic runs.
         self.track_diag = bool(track_diag)
         self._clip_events = 0  # diagnostic: total coords clamped across all steps (no-theater check)
-        # update_rms_clip: per-tensor cap on the RMS of the adaptive update (g+α·m₂)/denom.
-        # The per-coord clip misses COLLECTIVE oscillations where many coords spike coherently in
-        # one step — capping each individually still moves the whole tensor by ~N·c. The RMS clip
-        # bounds that herd move: scale the whole tensor down when its update-RMS exceeds the cap,
-        # leaving individually-quiet tensors untouched. 0 = off.
-        self.update_rms_clip = float(update_rms_clip)
-        self._rms_clip_events = 0  # diagnostic: total tensors RMS-scaled across all steps
-        # amsgrad: AMSGrad-style denominator MEMORY — use ν_max=max(ν_max,ν) in the denom instead
-        # of ν. Reddi et al. (arXiv:1904.09237) "On the Convergence of Adam and Beyond": Adam's EMA
-        # 2nd moment lets the denom FORGET past large gradients → effective LR (lr/√ν) rises on a
-        # coord that was loud then went quiet → oscillatory g/√(decayed ν) blowup. ν_max ratchets:
-        # once a coord shows large variance the denom never shrinks below it → bounds that coord's
-        # step, while genuinely-always-quiet coords (ν_max=ν) keep full eps-outside advantage. This
-        # targets the EXACT measured failure (genuine small ν≈6e-9, oscillatory, no quant-zero, no
-        # stale m2). COST: a 3rd state buffer (forfeits the β1=0 2-buffer memory win) — fp32 here for
-        # a clean diagnostic; a blockwise/coarse ν_max would recover memory if this proves the fix.
-        self.amsgrad = bool(amsgrad)
-        # trust_ratio (τ): downward-only LARS/LAMB-style per-tensor governor. After the adaptive
-        # update u is formed, scale so the weight moves at most τ·‖w‖ per step: u *= min(1, τ‖w‖/(lr‖u‖)).
-        # Bounds the RELATIVE per-layer move (dimension/scale-aware, self-tuning) — the principled
-        # form of the absolute RMS clip. Never amplifies (min with 1). 0 = off.
-        self.trust_ratio = float(trust_ratio)
-        self._trust_events = 0
-        # Stale-push cap (per-tensor): cap ‖α·m₂‖ ≤ c·‖g‖ on the whole tensor. Fires when
-        # the live gradient collapses while the slow EMA retains its magnitude → α·m₂ dominates
-        # as a coherent off-manifold push. Per-coord update_clip cannot stop a coherent direction
-        # (each coord capped still moves the tensor ~c·√N along m₂'s direction); this bounds the
-        # whole-tensor vector. Healthy |α·m₂|/|g|≈1.5 → fires only on collapse spikes. 0.0 = off.
-        self.stale_push_cap = float(stale_push_cap)
-        self._stale_cap_events = 0
         # Per-coordinate stale-push cap: |α·m₂_i| ≤ c·|g_i| each coord independently. The
         # failure mode is per-coord magnitude domination (stale α·m₂_i large where live g_i
         # collapsed); the per-tensor cap misses the few collapsed coords hidden by the overall
@@ -198,40 +138,6 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         self._gate_sum = 0.0    # diag: Σ per-tensor mean-gate (÷ _gate_n = mean gate applied)
         self._gate_n = 0
         self._gate_low = 0      # diag: total coords with gate < 0.5 (heavily noise-gated)
-        # STE-cusp mitigations: prevent a single large raw-gradient step from flipping many
-        # ternary codes simultaneously (mass flip → discontinuous effective-weight change →
-        # looped core amplifies → forward explosion). Both de-fused path only; off by default.
-        # ARM D — num_beta1: small momentum on the raw-g numerator term (m1 = β1·m1+(1−β1)·g,
-        #   bias-corrected). Smooths the step direction approaching ternary cusps. Slow-EMA
-        #   m₂/ν still see the true g unchanged. Costs one extra 8-bit buffer (~+1 B/param).
-        #   0.0 = off (raw g in numerator, β1=0 behaviour).
-        self.num_beta1 = float(num_beta1)
-        # ARM A — flip_clamp_kappa: per-tensor cap on the realized ternary flip-rate per step.
-        #   For each weight, s=mean|w| (per-tensor STE scale), thr=0.5·s; if the fraction of
-        #   codes that would flip under p−lr·u exceeds κ, scale that tensor's update by κ/frac
-        #   (monotone governor). Stateless (no extra buffer). Healthy steps (frac ≪ κ) pass
-        #   untouched. Applied to all dim≥2 weights via mean|w| proxy. 0.0 = off.
-        self.flip_clamp_kappa = float(flip_clamp_kappa)
-        self._flip_clamp_events = 0  # diag: total tensors flip-rate-scaled across all steps
-        # Per-coordinate alignment gate (Cautious/Magma family): gate the final per-coord
-        # update u against the current raw gradient g. A per-tensor norm cap cannot catch
-        # individual coords whose update direction disagrees with g while the tensor norm
-        # looks fine. Modes:
-        #   "cautious" (arXiv:2411.16085): mask = 1[u·g > 0]; zero disagreeing coords;
-        #       mean-preserving renorm u *= numel/Σmask preserves avg step magnitude.
-        #   "soft" (Magma arXiv:2602.15322): gate = sigmoid(sign(u·g)/τ); damps disagreeing
-        #       coords continuously; τ→0 → hard mask.
-        # De-fused path only (guarded in __init__). off = bit-identical to prior update.
-        # NOTE: sign-alignment relies on g carrying reliable direction; when g collapses in
-        # magnitude the kept coords still carry stale magnitude, so this composes with (not
-        # replaces) the magnitude governors. Applied AFTER /denom and BEFORE magnitude clips
-        # so clips bound any renorm amplification.
-        self.align_gate_mode = str(align_gate_mode)
-        self.align_gate_tau = float(align_gate_tau)
-        self.align_renorm = bool(align_renorm)
-        self.align_renorm_cap = float(align_renorm_cap)  # 0 = unbounded mean-preserving rescale
-        self._align_masked = 0.0   # diag: total coords masked/damped (agree≤0) across all steps
-        self._align_n = 0          # diag: total coords seen (→ masked fraction)
         # g-vs-numerator geometry capture: when enabled via set_diag_capture(), the de-fused
         # step appends per tracked tensor: cos(g, m₂), cos(g, α·m₂+gated_g),
         # ‖α·m₂‖/‖gated_g‖, and component norms → _diag_rows. The train loop drains it each
@@ -284,37 +190,6 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                 if p.requires_grad and (name_filter is None or name_filter(nm)):
                     self._diag_names[id(p)] = nm
         return len(self._diag_names)
-
-    @torch.no_grad()
-    def decay_m2(self, factor: float, param_ids=None) -> int:
-        """Multiply the slow EMA m₂ by (1−factor) on selected params.
-
-        Called by the train loop AT a prune event, BEFORE the optimizer step, so the stale
-        pre-prune momentum is shrunk before it drives the post-prune update. factor=0 → no-op;
-        factor=1 → full reset. param_ids (a set of id(param)) selects which params to touch;
-        None = all. De-fused (uint8 m2_q/m2_amax) and fp32 (m2) states both handled. Returns
-        the count decayed — must be >0 when expected (no-theater: a 0 means the filter missed).
-        """
-        if factor <= 0.0:
-            return 0
-        keep = 1.0 - float(factor)
-        n = 0
-        for group in self.param_groups:
-            for p in group["params"]:
-                if param_ids is not None and id(p) not in param_ids:
-                    continue
-                st = self.state.get(p)
-                if not st or st.get("init"):
-                    continue
-                if "m2" in st and torch.is_tensor(st["m2"]):                # fp32 path
-                    st["m2"].mul_(keep); n += 1
-                elif "m2_q" in st:                                          # de-fused 8-bit path
-                    m2 = self._deq(st["m2_q"], st["m2_amax"], True, p)
-                    m2.mul_(keep)
-                    q, amax = self._q(m2, True, p)
-                    st["m2_q"], st["m2_amax"] = q, amax
-                    n += 1
-        return n
 
     @staticmethod
     def _sched(step, group):
@@ -393,8 +268,6 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                     continue
                 st["m2"] = self._deq(st.pop("m2_q"), st.pop("m2_amax"), True, p)
                 st["nu"] = self._deq(st.pop("nu_q"), st.pop("nu_amax"), False, p)
-                if "m1_q" in st:
-                    st["m1"] = self._deq(st.pop("m1_q"), st.pop("m1_amax"), True, p)
                 n_conv += 1
             if n_conv:
                 print(f"  [ademamix] dequantized {n_conv} param states 8-bit→fp32 on resume "
@@ -433,12 +306,6 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         from morph.training.ademamix_b1zero_kernel import (
             fused_ademamix_b1zero_step, BLOCK,
         )
-
-        # per-param eps placement (eps_inside_patterns) is a de-fused-only branch — the per-block
-        # kernel takes one global eps_inside. Refuse rather than silently use the global on tagged params.
-        if self._has_eps_overrides:
-            raise ValueError("per-param eps overrides (eps_inside_patterns) require the de-fused path "
-                             "(ademamix_fused=false); the fused kernel uses a single global eps_inside.")
 
         for p in params:
             st = self.state[p]
@@ -582,9 +449,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             # ── Dequant / init (per-param: bnb blockwise quant is per-tensor) ──
             # Init holds zero state as fp32 transiently — we never QUANTIZE an all-zero
             # tensor (absmax=0 → 0/0); the first requant is AFTER the first update.
-            m2s, nus, nu_maxs, gs, use8s = [], [], [], [], []
-            m1s = []   # ARM D: raw-g numerator momentum (only populated when num_beta1>0)
-            use_m1 = self.num_beta1 > 0.0
+            m2s, nus, gs, use8s = [], [], [], []
             for p in params:
                 st = self.state[p]
                 use8 = grp_bits == 8 and p.numel() >= self.min_8bit_size
@@ -595,58 +460,23 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                 if st.get("init"):
                     m2s.append(torch.zeros_like(p, dtype=torch.float32))
                     nus.append(torch.zeros_like(p, dtype=torch.float32))
-                    if use_m1:
-                        m1s.append(torch.zeros_like(p, dtype=torch.float32))
                 elif use8:
                     m2s.append(self._deq(st["m2_q"], st["m2_amax"], True, p))
                     nus.append(self._deq(st["nu_q"], st["nu_amax"], False, p))
-                    if use_m1:
-                        m1s.append(self._deq(st["m1_q"], st["m1_amax"], True, p)
-                                   if "m1_q" in st else torch.zeros_like(p, dtype=torch.float32))
                 else:
                     m2s.append(st["m2"])
                     nus.append(st["nu"])
-                    if use_m1:
-                        m1s.append(st.get("m1", torch.zeros_like(p, dtype=torch.float32)))
-                if self.amsgrad:   # fp32 ν_max buffer (resume-safe default for older ckpts)
-                    nu_maxs.append(st.get("nu_max", torch.zeros_like(p, dtype=torch.float32)))
 
             # ── Batched elementwise update (torch._foreach → ~10 launches, not ~8·N) ──
             torch._foreach_mul_(m2s, beta3_t)
             torch._foreach_add_(m2s, gs, alpha=1.0 - beta3_t)
             torch._foreach_mul_(nus, beta2)
             torch._foreach_addcmul_(nus, gs, gs, value=1.0 - beta2)
-            # ── ARM D: numerator momentum (m1 = β1·m1 + (1−β1)·g, bias-corrected) ──
-            # m2/ν above already consumed the TRUE g; here we smooth ONLY the raw-g numerator term so
-            # the step approaches ternary cusps gently (AdamW's β1 analog). gs is rebound to m1_hat →
-            # the SNR gate + numerator-add below operate on the smoothed value. Off when num_beta1=0.
-            if use_m1:
-                b1 = self.num_beta1
-                torch._foreach_mul_(m1s, b1)
-                torch._foreach_add_(m1s, gs, alpha=1.0 - b1)
-                bc1 = 1.0 - b1 ** step
-                gs = list(torch._foreach_div(m1s, bc1))   # m1_hat (bias-corrected) replaces raw g
-            # AMSGrad ratchet: ν_max = max(ν_max, ν) → denom uses ν_max (never forgets past variance;
-            # see __init__). Genuinely-always-quiet coords keep ν_max=ν → full advantage preserved.
-            if self.amsgrad:
-                for i in range(len(nus)):
-                    torch.maximum(nu_maxs[i], nus[i], out=nu_maxs[i])
-                denom_src = nu_maxs
-            else:
-                denom_src = nus
             # denom: eps_inside → √(ν/bc2 + ε) (floored at √ε; needed only for linear-int8
             # underflow, which the de-fused dynamic-qmap path does NOT have); eps_outside →
             # √(ν/bc2) + ε (true Adam normalization — does not throttle live small-ν params).
-            denoms = list(torch._foreach_div(denom_src, bc2))  # (ν or ν_max)/bc2 (list: per-param reassign)
-            if self._has_eps_overrides:
-                # per-param eps placement (pattern-targeted): eps-inside on tagged params
-                # (√(ν/bc2+ε), √ε floor → stabilize the fragile boundary), eps-outside elsewhere.
-                for i, p in enumerate(params):
-                    if getattr(p, "_eps_inside", self.eps_inside):
-                        denoms[i] = (denoms[i] + eps).sqrt()
-                    else:
-                        denoms[i] = denoms[i].sqrt().add_(eps)
-            elif self.eps_inside:
+            denoms = list(torch._foreach_div(nus, bc2))     # ν/bc2 (list: per-param reassign)
+            if self.eps_inside:
                 torch._foreach_add_(denoms, eps)        # ν/bc2 + ε
                 torch._foreach_sqrt_(denoms)            # √(ν/bc2 + ε)
             else:
@@ -697,19 +527,6 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                         _amn / (_ggn + 1e-12),                          # ‖α·m₂‖ / ‖gated_g‖
                         _m2n, _rgn, _amn, _ggn,
                     ))
-            # ── per-tensor stale-push cap: ‖α·m₂‖ ≤ c·‖g‖ (de-coherence B; see __init__) ──
-            # Caps the COHERENT α·m₂ vector relative to the live-gradient norm BEFORE adding g, so
-            # a g-collapse can't let the stale momentum dominate. Directional (whole-tensor norm),
-            # unlike the per-coord update_clip below. gs here = the (gated) raw-g numerator term.
-            if self.stale_push_cap > 0.0:
-                c = self.stale_push_cap
-                for am, g in zip(upd, gs):
-                    if am.numel():
-                        amn = am.norm()
-                        cap = c * g.norm()
-                        if float(amn) > float(cap):
-                            self._stale_cap_events += 1
-                            am.mul_(cap / (amn + 1e-12))
             # Per-coordinate stale-push cap: |α·m₂_i| ≤ c·|g_i| for each coord.
             # Bounds the stale slow-EMA contribution on coords where the live gradient has
             # collapsed. Sign preserved. _foreach-vectorized + sync-free.
@@ -733,37 +550,6 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                     self._stale_cap_coord_masked = cd
             torch._foreach_add_(upd, gs)                    # + (gated) g   (m1 = g, β1=0)
             torch._foreach_div_(upd, denoms)                # /denom = (g·gate + α·m2)/denom
-            # ── per-coordinate alignment gate (Cautious/Magma; see __init__) ──
-            # Gate the final per-coord update against the CURRENT gradient. Applied BEFORE the
-            # magnitude clips so any mean-preserving renorm amplification is bounded by them.
-            # Implementation: _foreach-vectorized + sync-free. The mask is built with batched
-            # _foreach ops; the diagnostic accumulates into a GPU tensor (never .item()'d hot).
-            # The only Python loop is the renorm step (GPU-scalar math). Uses gs (fp32 gated-g
-            # already materialized); SNR gate ≥0 ensures sign(gs)==sign(raw g).
-            if self.align_gate_mode != "off":
-                cap_rn = self.align_renorm_cap
-                agree = torch._foreach_mul(upd, gs)          # sign(agree)=sign(upd·g)  (1 fused launch)
-                masks = torch._foreach_sign(agree)           # -1/0/+1
-                del agree
-                if self.align_gate_mode == "cautious":
-                    torch._foreach_clamp_min_(masks, 0.0)    # hard mask ∈ {0,1}
-                else:                                        # soft: sigmoid(sign(u·g)/τ)
-                    torch._foreach_div_(masks, self.align_gate_tau)
-                    masks = torch._foreach_sigmoid(masks)
-                torch._foreach_mul_(upd, masks)              # apply gate (1 fused launch)
-                md = self._align_masked
-                if not torch.is_tensor(md):
-                    md = upd[0].new_zeros(())                # lazily GPU-resident; synced only on read
-                for u, m in zip(upd, masks):                 # ONE loop: renorm + diag, all sync-free
-                    msum = m.sum()
-                    md = md + (m.numel() - msum)             # masked mass (cautious: exact count)
-                    self._align_n += m.numel()
-                    if self.align_renorm:                    # mean-preserving: u *= numel/Σmask
-                        rn = msum.clamp_min(1e-8).reciprocal().mul(float(m.numel()))
-                        if cap_rn > 0.0:
-                            rn = rn.clamp_max(cap_rn)
-                        u.mul_(rn)
-                self._align_masked = md
             # ── per-coordinate update clamp (prune-shock stability; see __init__) ──
             if self.update_clip > 0.0:
                 c = self.update_clip
@@ -774,63 +560,18 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                 # batched clamp (numerics-identical to per-tensor clamp_ — elementwise, order-free)
                 torch._foreach_clamp_min_(upd, -c)
                 torch._foreach_clamp_max_(upd, c)
-            # ── per-tensor update-RMS clip (collective-oscillation stability; see __init__) ──
-            if self.update_rms_clip > 0.0:
-                rc = self.update_rms_clip
-                for u in upd:
-                    if u.numel():
-                        rms = u.pow(2).mean().sqrt()
-                        if float(rms) > rc:
-                            self._rms_clip_events += 1
-                            u.mul_(rc / (rms + 1e-12))
-            # ── downward-only trust-ratio (LARS/LAMB-style; see __init__): cap the RELATIVE
-            #    per-tensor move so lr·‖u‖ ≤ τ·‖w‖. Never amplifies. Scale-aware governor. ──
-            if self.trust_ratio > 0.0:
-                tau = self.trust_ratio
-                for u, p in zip(upd, params):
-                    if u.numel():
-                        un = u.norm()
-                        wn = p.float().norm()
-                        cap = tau * wn / (lr * un + 1e-12)
-                        if float(cap) < 1.0:
-                            self._trust_events += 1
-                            u.mul_(cap)
-            # ARM A: flip-aware update clamp — cap realized ternary flip-rate per tensor.
-            # s=mean|w| (per-tensor STE scale), thr=0.5·s; if flip-fraction > κ, scale
-            # update by κ/frac (monotone governor). Healthy steps (frac ≪ κ) pass untouched.
-            # Applied before weight-decay so the cap governs the actual weight move.
-            if self.flip_clamp_kappa > 0.0:
-                k = self.flip_clamp_kappa
-                for j, (u, p) in enumerate(zip(upd, params)):
-                    if u.dim() < 2 or u.numel() == 0:
-                        continue
-                    pf = p.detach().float()
-                    thr = 0.5 * pf.abs().mean().clamp_min(1e-6)
-                    c_old = torch.sign(pf) * (pf.abs() > thr)
-                    pn = pf - lr * u
-                    c_new = torch.sign(pn) * (pn.abs() > thr)
-                    frac = float((c_new != c_old).sum()) / pf.numel()
-                    if frac > k:
-                        self._flip_clamp_events += 1
-                        u.mul_(k / (frac + 1e-12))
             if wd != 0.0:
                 torch._foreach_add_(upd, [p.float() for p in params], alpha=wd)  # + λ·p
             torch._foreach_add_(params, [u.to(p.dtype) for u, p in zip(upd, params)],
                                 alpha=-lr)                  # p -= lr·update
 
             # ── Requant / store (per-param) ──
-            for i, (p, m2, nu, use8) in enumerate(zip(params, m2s, nus, use8s)):
+            for p, m2, nu, use8 in zip(params, m2s, nus, use8s):
                 st = self.state[p]
                 st.pop("init", None)
                 if use8:
                     st["m2_q"], st["m2_amax"] = self._q(m2, True, p)
                     st["nu_q"], st["nu_amax"] = self._q(nu, False, p)
-                    if use_m1:                  # ARM D: 8-bit blockwise m1 (mirrors m2)
-                        st["m1_q"], st["m1_amax"] = self._q(m1s[i], True, p)
                 else:
                     st["m2"], st["nu"] = m2, nu
-                    if use_m1:
-                        st["m1"] = m1s[i]
-                if self.amsgrad:
-                    st["nu_max"] = nu_maxs[i]   # fp32, kept full-precision (diagnostic)
         return loss
