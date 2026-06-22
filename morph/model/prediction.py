@@ -1,7 +1,7 @@
 """STP — Semantic Tube Prediction regularizer (PyTorch).
 
 Port/clean-room of the STP system from:
-  TPU/subq-attention/looped_model_mhc.py  (PyTorch source — legacy name, pre-MRR rename)
+  TPU/subq-attention/looped_model_mhc.py  (original PyTorch source file)
 
 Modules
 -------

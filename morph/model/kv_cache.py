@@ -16,7 +16,7 @@ DESIGN (full rationale in KV_CACHE_DESIGN.md):
     `x_recent` buffer; window KV ring (last window-1 k,v); compressed C_comp blocks + an in-
     progress-block input buffer; CSA indexer keys K_I. Global: RoPE position + prev token id.
   * Every PER-POSITION op (embed, value-embed, bigram-inject, DiagonalInjection, ChannelInject,
-    MRR, RMSNorm, SwiGLU, LM head) is reused from the real modules on a length-1 tensor — only
+    HC residual, RMSNorm, SwiGLU, LM head) is reused from the real modules on a length-1 tensor — only
     ATTENTION is reimplemented incrementally, mirroring the eager references EXACTLY
     (cca_prologue_reference / causal_conv_reference / _window_fallback / hca_/csa_
     attention_reference) with the one change being ABSOLUTE RoPE position.
@@ -376,10 +376,10 @@ def _block_step(block, h: Tensor, sc: AttnSiteCache, pos: int, iter_idx: int,
     """MORPHBlock.forward for ONE token — byte-faithful to mhc.MORPHBlock.forward, swapping only
     the cross-position op (full attention → cached incremental _attn_step).
 
-    h is the HC carrier ``[B,1,n,C]`` (or ``[B,1,C]`` when residual_mode is not HC). The block's
-    REAL ``mrr_attn``/``mrr_mlp`` (HyperConnectionResidual / MRR / Standard) manage the stream
-    carrier; the sublayer fns operate on the single-stream ``[B,1,C]`` the residual reduces to —
-    so HC, MRR and plain-residual all decode through the same path with no special-casing.
+    h is the HC carrier ``[B,1,n,C]``. The block's ``mrr_attn``/``mrr_mlp`` modules
+    (HyperConnectionResidual — ``mrr_*`` is a retained legacy attribute name, kept for
+    checkpoint compatibility) manage the stream carrier; the sublayer fns operate on the
+    single-stream ``[B,1,C]`` the residual reduces to, with no special-casing.
 
     Mirrors mhc.MORPHBlock.forward's sublayer closures exactly:
       * _attn_fn: incremental attention + (if present) the gated GLA retention branch

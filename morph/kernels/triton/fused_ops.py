@@ -1,7 +1,7 @@
 """Fused Triton kernels for looped transformer hot-path operations.
 
-Targets the inner loop of LoopedTitanMAC, which runs 4 transformer layers
-x 8-14 iterations. Each elementwise op is a separate CUDA kernel launch;
+Targets the inner loop of MORPH's looped core, which runs the core transformer
+layers x 8-14 iterations. Each elementwise op is a separate CUDA kernel launch;
 fusing them eliminates memory round-trips and launch overhead.
 
 Kernels:

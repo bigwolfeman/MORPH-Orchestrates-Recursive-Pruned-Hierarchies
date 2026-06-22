@@ -1,13 +1,20 @@
 # MORPH Architecture — Paper References
 
 **MORPH** (Orchestrates Recursive Pruned Hierarchies) is a production research model combining
-Parcae-style looped transformers, Block-ELL structured sparsity, CCA+CSA+HCA triple-axis
-attention compression, neural memory with SSM outer loop, Multi-Rate Residual (MRR) channels,
-STP geodesic regularization, LeJEPA z-latent prediction, hybrid hyperbolic/Euclidean embeddings,
-STE ternary shadow weights, and ReMoE product-key routing.
+Parcae-style looped transformers with diagonal SSM injection, MORTAR BCSR structured sparsity,
+CCA+CSA+HCA triple-axis attention compression, a gated-linear-attention (GLA) retention branch,
+JPmHC orthogonal hyper-connection residuals, STP geodesic regularization, hybrid
+hyperbolic/Euclidean embeddings, STE ternary shadow weights, and ReMoE product-key routing.
 
 Papers are grouped by architectural component. "Original work" entries are techniques developed
 within the MORPH project with no external precedent.
+
+> **Status note.** Several components cited below were evaluated but **removed** from the current
+> architecture: the Titans neural-memory module (§3), the Multi-Rate Residual (§4), the
+> Hyper-Connection Sinkhorn arm (§4), and the LeJEPA / SIGReg / LLM-JEPA z-latent objectives (§7).
+> They are kept here as citations and marked **(removed)** in place, mirroring the Block-ELL
+> "(superseded)" treatment in §6. The current cross-iteration memory is the GLA retention branch
+> (`morph/model/gla.py`); the sole residual is the JPmHC Cayley hyper-connection.
 
 ---
 
@@ -102,34 +109,36 @@ CCA mechanism. No independent prior paper. See the CCA entry above.
 
 ## 3. Memory
 
-### Titans — Neural Memory
+### Titans — Neural Memory (removed)
 **Title:** Titans: Learning to Memorize at Test Time  
 **Authors:** Ali Behrouz, Peilin Zhong, Vahab Mirrokni (Google Research)  
 **Year:** 2025  
 **arXiv:** [2501.00663](https://arxiv.org/abs/2501.00663)  
-**MORPH uses:** The Memory-Augmented Context (MAC) variant: gradient-based surprise update where
-a deep MLP memory M is updated on the forward pass via momentum-accelerated associative loss
-minimization — S_t = η_t·S_{t-1} − θ_t·∇‖M(k)−v‖², M_t = (1−α_t)·M_{t-1} + S_t — with
-α/η/θ as sigmoid(Linear(chunk_pooled)) learned gates, L2-normalized K/Q, and SiLU activation.
+**MORPH history (removed):** An earlier MORPH version used the Titans Memory-Augmented Context
+(MAC) variant: a deep-MLP memory M updated on the forward pass via momentum-accelerated
+associative-loss minimization (S_t = η_t·S_{t-1} − θ_t·∇‖M(k)−v‖², M_t = (1−α_t)·M_{t-1} + S_t).
+This module was **removed**; the current cross-iteration memory is the gated-linear-attention
+(GLA) retention branch (`morph/model/gla.py`), gated off by default (`retention: false`).
 
 ---
 
 ## 4. Residual Streams
 
-### Multi-Rate Residual (MRR) — MORPH's approach
-MORPH uses a **Multi-Rate Residual (MRR)**: the d_model-dim hidden state is split into 3
-sub-channels (compute 3N, context 2N, memory N) with per-channel learned γ gains on the
-residual update. Sublayers see the full d_model; channel separation is only on the residual
-side. This is a simpler mechanism than HC/mHC — no cross-stream mixing, no aggregation/
-distribution matrices, no input-dependent gating. It stabilizes looping via different
-update rates per channel.
+### Multi-Rate Residual (MRR) — MORPH's approach (removed)
+An earlier MORPH version used a **Multi-Rate Residual (MRR)**: the d_model-dim hidden state split
+into 3 sub-channels (compute 3N, context 2N, memory N) with per-channel learned γ gains on the
+residual update — a simpler mechanism than HC/mHC, with no cross-stream mixing. It was **removed**
+in favor of the JPmHC Cayley hyper-connection (below), which is now MORPH's sole residual. (The
+block attributes are still named `mrr_attn`/`mrr_mlp` — a retained legacy name for checkpoint
+compatibility — but they hold `HyperConnectionResidual` modules.)
 
 ### JPmHC — Jacobian-Preserving Manifold Hyper-Connections (Cayley)
 **Title:** JPmHC: Dynamical Isometry via Orthogonal Hyper-Connections  
 **Authors:** Biswa Sengupta, Jinhua Wang, Leo Brunswic (JP Morgan Chase LLM Suite Team)  
 **Year:** 2026  
 **arXiv:** [2602.18308](https://arxiv.org/abs/2602.18308)  
-**MORPH uses:** The default Hyper-Connection residual (`residual_mode: hc_cayley`). Widens the
+**MORPH uses:** The sole Hyper-Connection residual (selected unconditionally; the old
+`residual_mode` config knob was removed). Widens the
 residual stream to n parallel C-dim streams with input-dependent H^pre/H^post/H^res mappings.
 Constrains H^res to the Stiefel manifold via Cayley transform of a skew-symmetric matrix,
 giving exact dynamical isometry (all singular values = 1) without iterative Sinkhorn
@@ -145,8 +154,8 @@ and fused Triton kernel (`fused_hyper_connection.py`) implement this mechanism.
 **arXiv:** [2512.24880](https://arxiv.org/abs/2512.24880)  
 **Relation to MORPH:** mHC uses n parallel full-C-dim streams with an n×n doubly-stochastic
 mixing matrix (Sinkhorn-Knopp, Birkhoff polytope), plus aggregation (H^pre) and distribution
-(H^post) vectors with dynamic input-dependent gating. MORPH implements this as an alternate
-HC arm (`residual_mode: hc_sinkhorn`); the Cayley JPmHC variant is the default.
+(H^post) vectors with dynamic input-dependent gating. MORPH evaluated this as an alternate
+HC arm but **removed** the Sinkhorn variant; the Cayley JPmHC variant is the only residual.
 
 ### Hyper-Connections (predecessor to mHC, related work)
 **Title:** Hyper-Connections  
@@ -154,8 +163,8 @@ HC arm (`residual_mode: hc_sinkhorn`); the Cayley JPmHC variant is the default.
 **Year:** 2024 (ICLR 2025)  
 **arXiv:** [2409.19606](https://arxiv.org/abs/2409.19606)  
 **Relation to MORPH:** Origin of the multi-stream residual concept. HC uses unconstrained n×n
-mixing matrices. MORPH's MRR was inspired by the concept of different update rates but uses
-a much simpler per-channel diagonal approach.
+mixing matrices; MORPH's manifold-constrained JPmHC (Cayley) variant descends from this line.
+(MORPH's now-removed MRR was a much simpler per-channel-diagonal take on different update rates.)
 
 ---
 
@@ -254,32 +263,32 @@ connecting segment boundaries on the semantic manifold. MORPH applies STP during
 
 Their theorem focuses on the value in SFT/RL, saying teacher forcing protects the tubes during pretraining. Ablations found massive AR generation improvements on base model training using STP.
 
-### LeJEPA — Latent Prediction Without Collapse
+### LeJEPA — Latent Prediction Without Collapse (removed)
 **Title:** LeJEPA: Provable and Scalable Self-Supervised Learning Without the Heuristics  
 **Authors:** Randall Balestriero, Yann LeCun (galilai-group / NYU)  
 **Year:** 2025  
 **arXiv:** [2511.08544](https://arxiv.org/abs/2511.08544)  
-**MORPH uses:** The split_nsm z-latent prediction objective: backbone predicts mean(next segment
-z_coda) while memory predicts the next segment prelude state. This JEPA-style latent-space
-prediction prevents mode collapse without a teacher-student EMA setup or stop-gradients,
-guided by the SIGReg anti-collapse regularizer from the same paper.
+**MORPH history (removed):** An earlier MORPH version added a split_nsm z-latent prediction
+objective (backbone predicts mean(next-segment z_coda); memory predicts the next-segment prelude
+state) with the SIGReg anti-collapse regularizer. The z-latent / JEPA objectives were **removed**;
+`prediction.py` now contains only the STP regularizer.
 
-### SIGReg — Sketched Isotropic Gaussian Regularization
+### SIGReg — Sketched Isotropic Gaussian Regularization (removed)
 Introduced in the LeJEPA paper (Balestriero & LeCun, arXiv:2511.08544). SIGReg uses randomized
 1D projections and characteristic-function matching to enforce that learned embeddings follow
 an isotropic Gaussian distribution, preventing representation collapse with linear time and
-memory complexity. MORPH applies SIGReg to z-latent embeddings in `prediction.py`.
-See the LeJEPA entry above.
+memory complexity. MORPH applied SIGReg to z-latent embeddings; **removed** together with the
+LeJEPA objective above.
 
-### LLM-JEPA
+### LLM-JEPA (removed)
 **Title:** LLM-JEPA: Large Language Models Meet Joint Embedding Predictive Architectures  
 **Authors:** Hai Huang, Yann LeCun, Randall Balestriero (galilai-group)  
 **Year:** 2025  
 **arXiv:** [2509.14252](https://arxiv.org/abs/2509.14252)  
-**MORPH uses:** The hybrid training objective combining next-token prediction loss with a
-JEPA embedding-space prediction loss over related text views (e.g., code snippet ↔ docstring).
-This is the direct application of LeJEPA principles to LLM pretraining that MORPH's
-`prediction.py` extends.
+**MORPH history (removed):** An earlier MORPH version applied the hybrid objective combining
+next-token prediction with a JEPA embedding-space prediction loss over related text views
+(e.g., code snippet ↔ docstring). **Removed** with the rest of the z-latent / JEPA stack;
+`prediction.py` now contains only the STP regularizer.
 
 ---
 
@@ -378,12 +387,12 @@ harness deployment after RL training, currently deferred.
 | 2 | Block-ELL Format (superseded) | NVIDIA cuSPARSE (2021+) | [developer.nvidia.com](https://developer.nvidia.com/blog/accelerating-matrix-multiplication-with-block-sparse-format-and-nvidia-tensor-cores/) |
 | 2a | MegaBlocks / STK | Gale et al. (Stanford, 2022) | [2211.15841](https://arxiv.org/abs/2211.15841) |
 | 3 | CMS Topology | Original work — MORPH project | — |
-| 4 | Neural Memory (Titans) | Behrouz, Zhong, Mirrokni (Google, 2025) | [2501.00663](https://arxiv.org/abs/2501.00663) |
+| 4 | Neural Memory (Titans) (removed) | Behrouz, Zhong, Mirrokni (Google, 2025) | [2501.00663](https://arxiv.org/abs/2501.00663) |
 | 5 | CCA | Figliolia et al. (Zyphra, 2025) | [2510.04476](https://arxiv.org/abs/2510.04476) |
 | 6 | CSA / HCA | DeepSeek-AI (2026) | [HF PDF](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf) |
 | 7 | STP | Huang, LeCun, Balestriero (2026) | [2602.22617](https://arxiv.org/abs/2602.22617) |
-| 8 | LeJEPA | Balestriero, LeCun (2025) | [2511.08544](https://arxiv.org/abs/2511.08544) |
-| 9 | SIGReg | Balestriero, LeCun (2025) | [2511.08544](https://arxiv.org/abs/2511.08544) |
+| 8 | LeJEPA (removed) | Balestriero, LeCun (2025) | [2511.08544](https://arxiv.org/abs/2511.08544) |
+| 9 | SIGReg (removed) | Balestriero, LeCun (2025) | [2511.08544](https://arxiv.org/abs/2511.08544) |
 | 10 | Lorentz Embeddings | Nickel, Kiela (ICML 2018) | [1806.03417](https://arxiv.org/abs/1806.03417) |
 | 11 | Hybrid Embeddings | Gu, Sala, Gunel, Ré (ICLR 2019) | [OpenReview](https://openreview.net/forum?id=HJxeWnCcF7) |
 | 12 | CoPE (Clipped RoPE) | Li, Ren, Yuille, Wang (2026) | [2602.05258](https://arxiv.org/abs/2602.05258) |
@@ -403,6 +412,6 @@ harness deployment after RL training, currently deferred.
 | 24 | Poisson Depth Sampling | Prairie et al. (Parcae, 2026) | [2604.12946](https://arxiv.org/abs/2604.12946) |
 | 25 | Attention Sinks | Xiao et al. (MIT/Meta, 2023) | [2309.17453](https://arxiv.org/abs/2309.17453) |
 | 26 | Value Shift | Figliolia et al. (Zyphra, 2025) | [2510.04476](https://arxiv.org/abs/2510.04476) |
-| 27 | LLM-JEPA | Huang, LeCun, Balestriero (2025) | [2509.14252](https://arxiv.org/abs/2509.14252) |
+| 27 | LLM-JEPA (removed) | Huang, LeCun, Balestriero (2025) | [2509.14252](https://arxiv.org/abs/2509.14252) |
 | 28 | Lottery Ticket Hypothesis | Frankle, Carbin (MIT, 2019) | [1803.03635](https://arxiv.org/abs/1803.03635) |
 | 29 | AdEMAMix Optimizer | Pagliardini et al. (EPFL/Apple, 2024) | [2409.03137](https://arxiv.org/abs/2409.03137) |
