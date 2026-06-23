@@ -36,7 +36,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .sparsity import MortarLinear
+from morph.model.sparsity import MortarLinear
 
 __all__ = [
     "pack_ternary_codes", "unpack_ternary", "extract_ternary_from_parametrized",
@@ -116,7 +116,7 @@ def extract_ternary_from_parametrized(
     meta  : dict {group, n_groups, mode, scale_dtype, out, in, group_size}
     """
     import torch.nn.utils.parametrize as parametrize
-    from .ternary_qat import TernarySTE, _SCALE_ENCODERS
+    from morph.model.ternary_qat import TernarySTE, _SCALE_ENCODERS
 
     if not parametrize.is_parametrized(module, param_name):
         raise ValueError(f"{module} is not parametrized on {param_name!r}")
