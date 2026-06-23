@@ -346,7 +346,8 @@ class StaticDecodeEngine:
                 mlp_mod_r = s.block.mlp[0] if hasattr(s.block.mlp, "__getitem__")                 else s.block.mlp
                 rt = getattr(mlp_mod_r, "router", None)
                 if rt is not None and s.Mgu is not None:
-                    assert B == 1, "routed gather flags are B=1 (decode engine)"
+                    # B>1: each stream routes independently — gates [B, n_clusters],
+                    # flags [B, n_blocks] (batch-major), strided per-item in the kernels.
                     rid = (id(rt), s.iter_idx)
                     if not hasattr(self, "_route_cache"):
                         self._route_cache = {}
@@ -386,13 +387,19 @@ class StaticDecodeEngine:
                         )
                     s.route = self._route_cache[rid]
                     if not hasattr(self, "_ract_scr"):
-                        self._ract_scr = torch.zeros(512, device=dev, dtype=torch.int32)
-                        self._cact_scr = torch.zeros(512, device=dev, dtype=torch.int32)
-                        # fused-router scratch (one-launch ReMoE router): gates out + qv work buffer.
+                        # batch-major flag scratch [B, 512]; per-layer NR/NC ≤ 512
+                        # (NR = 2·d_ff/128, NC = d_ff/128). Sliced [:, :NR] / [:, :NC]
+                        # at the call site keeps stride(0)=512 = the per-stream stride
+                        # both route_flags and mortar_gemv index by. Shared across
+                        # routed layers (strictly sequential consumption per step).
+                        self._ract_scr = torch.zeros(B, 512, device=dev, dtype=torch.int32)
+                        self._cact_scr = torch.zeros(B, 512, device=dev, dtype=torch.int32)
+                        # fused-router scratch (one-launch ReMoE router): per-stream
+                        # gates [B, n_clusters] + a [B, d_model] qv work buffer.
                         self._router_gates_scr = torch.empty(
-                            1, int(mlp_mod_r.n_clusters), device=dev, dtype=torch.float32)
+                            B, int(mlp_mod_r.n_clusters), device=dev, dtype=torch.float32)
                         self._router_qv_scr = torch.empty(
-                            int(mlp_mod_r.d_model), device=dev, dtype=torch.float32)
+                            B, int(mlp_mod_r.d_model), device=dev, dtype=torch.float32)
         self.G_hidden = cca0.gate[0].out_features          # gate MLP hidden width
         # decode_front layout contract (one launch computes the whole site front-end)
         assert cca0.W_v_prev.out_features == self.Vh, "Wqkv stack: v_prev width != v_curr"
@@ -787,15 +794,17 @@ class StaticDecodeEngine:
                     # ReMoE router (mirrors TileRouter.forward, fp32) → cluster
                     # gates → gather flags → routed mortar GEMVs.
                     R = s.route
-                    if _USE_FUSED_ROUTER:
+                    if _USE_FUSED_ROUTER and B_ == 1:
                         # ONE-launch fused router (proj+LN+subkeys+product-logits+topk+
                         # relu+normalize), Z3-proven for sm_120. Bit-matches the eager pile
                         # in fp32 (deploy router params are fp32). Replaces ~8 tiny launches.
+                        # B==1 ONLY: the tail kernel is a single-token CTA. B>1 streams take
+                        # the eager mirror below (op-for-op batched; no kernel change).
                         gates = fused_router(
                             x2, R["wq"], R["iter_vec"], R["ln_w"], R["ln_b"], R["ln_eps"],
                             R["ska_t"], R["skb_t"], R["gbias"], R["k"],
-                            out=self._router_gates_scr, qv_scr=self._router_qv_scr,
-                            num_warps=R["num_warps"])
+                            out=self._router_gates_scr[:1],
+                            qv_scr=self._router_qv_scr[0], num_warps=R["num_warps"])
                     else:
                         qv = F.linear(x2.to(R["dtype"]), R["wq"]) + R["iter_vec"]
                         qv = F.layer_norm(qv, (qv.shape[-1],), R["ln_w"], R["ln_b"],
@@ -808,14 +817,18 @@ class StaticDecodeEngine:
                         gates = torch.relu(logits - kth)
                         gates = (gates * (R["k"] / gates.sum(-1, keepdim=True)
                                           .clamp(min=1e-6))).float().contiguous()
+                    # per-stream gather flags [B, NR] / [B, NC] (batch-major scratch
+                    # slices keep stride(0)=512 = the per-item stride the kernels use).
+                    NR, NC = R["row_lo"].numel(), R["col_lo"].numel()
+                    ract = self._ract_scr[:, :NR]
+                    cact = self._cact_scr[:, :NC]
                     route_flags(gates, R["row_lo"], R["row_hi"],
-                                R["col_lo"], R["col_hi"],
-                                self._ract_scr, self._cact_scr)
+                                R["col_lo"], R["col_hi"], ract, cact)
                     h_ = mortar_gemv(x2, s.Mgu, swiglu_out=True,
-                                     row_act=self._ract_scr, gates=gates,
+                                     row_act=ract, gates=gates,
                                      cluster_size=R["cls"])
                     return mortar_gemv(h_, s.Mdown,
-                                       col_act=self._cact_scr).view(B_, 1, -1)
+                                       col_act=cact).view(B_, 1, -1)
                 h_ = mortar_gemv(x2, s.Mgu, swiglu_out=True)
                 return mortar_gemv(h_, s.Mdown).view(B_, 1, -1)
             if s.Tgu is not None and s.Tdown is not None:
