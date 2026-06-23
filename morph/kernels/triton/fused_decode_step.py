@@ -788,7 +788,16 @@ def decode_front(x_hist: Tensor, x_off: Tensor, pos_dev: Tensor,
     # BK=64/ns=1/w8 = the validated 276M fp32 launch; the int8/int4 deploy schedule
     # wants BK=256 + ns=3 + w4 with the engine's KS=8 split (lab7c winner 5.93 vs
     # 6.73 ms/tok on the d4 cold-L2 working set; BK must divide KDIM/KS).
-    bk = 256 if (has_sc and (KDIM // KS) % 256 == 0) else 64
+    # BK MUST divide KCH = KDIM/KS — the HAS_SC K-loop (`for i in range(0, KCH, BK)`)
+    # is unmasked, so a BK that doesn't divide KCH over-reads past the k-slice into the
+    # next slice's columns (silent corruption). The fp32 path is safe only because its
+    # dims happen to give KCH % 64 == 0. Pick the largest BK that divides KCH: keeps the
+    # perf-tuned BK=256 on the 30B path (KCH=1024) and fixes the 276M dims (KCH=96 → 32).
+    if has_sc:
+        _kch = KDIM // KS
+        bk = next(c for c in (256, 128, 64, 32, 16, 8, 4, 2, 1) if _kch % c == 0)
+    else:
+        bk = 64
     _front_gemm_kernel[(B * NT * KS,)](
         x_hist, x_off, wqkv, wqkv_scale if has_sc else x_hist, part,
         LQK=lq + lk, VH=vh, O=O, OP=OP, KDIM=KDIM, KS=KS, BK=bk,

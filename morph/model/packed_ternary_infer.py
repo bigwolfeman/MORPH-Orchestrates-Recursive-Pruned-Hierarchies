@@ -39,10 +39,11 @@ from torch import Tensor
 from .sparsity import MortarLinear
 
 __all__ = [
-    "pack_ternary_codes", "unpack_ternary",
+    "pack_ternary_codes", "unpack_ternary", "extract_ternary_from_parametrized",
     "PackedTernaryLinear", "Int8RowLinear", "Int6RowEmbedding",
     "pack_mortar_ternary", "strip_cms_inference", "shrink_mlp_to_mortar_ternary",
     "quantize_attention_linears", "resident_bytes_report",
+    "to_deploy_inference",
 ]
 
 _SHIFTS = torch.tensor([0, 2, 4, 6], dtype=torch.uint8)
@@ -81,6 +82,11 @@ def _ternary_quantize(w: Tensor, threshold: float = 0.5) -> tuple[Tensor, Tensor
     """EXACT TernarySTE symmetric per-tensor effective-weight quantization.
 
     Returns (codes ∈ {-1,0,+1} int8, scale fp32 scalar). Effective weight = scale·codes.
+
+    NOTE: this re-derives the scale from `mean(|w|)`. It is CORRECT only when `w` is the
+    smooth *shadow* weight (the live parameter). It is WRONG if `w` is the already-ternarized
+    STE *output* (mean(|γ·codes|) ≠ mean(|shadow|)). For a parametrized module use
+    ``extract_ternary_from_parametrized`` which reads the shadow from the parametrization.
     """
     wf = w.detach().float()
     scale = wf.abs().mean().clamp(min=1e-8)
@@ -89,45 +95,166 @@ def _ternary_quantize(w: Tensor, threshold: float = 0.5) -> tuple[Tensor, Tensor
     return q, scale
 
 
+def extract_ternary_from_parametrized(
+    module: nn.Module, param_name: str = "weight",
+) -> tuple[Tensor, Tensor, dict]:
+    """Extract (codes_int8 [out,in] ∈ {-1,0,+1}, scale, meta) from a TernarySTE-parametrized
+    module, reproducing the STE forward output ``module.weight`` BIT-EXACTLY.
+
+    This mirrors ``ternary_qat._apply_grouped_ste`` exactly (symmetric mode), but reads the
+    smooth *shadow* parameter from the parametrization so the scale is the true ``mean(|W|)``
+    the forward uses — NOT the degenerate ``mean(|γ·codes|)`` you would get by re-quantizing
+    the STE output. Handles:
+      - per-tensor scale (group=0, the deployed case) and grouped scale (group=64/128),
+      - fp16 / int8 / pow2 scale-encoding (the same ``_encode_scale_*`` the forward applies),
+      - the optional per-group ``_scale_cap`` buffer (scale_clip_mult > 0).
+
+    Returns
+    -------
+    codes : int8 [out, in], values in {-1, 0, +1}
+    scale : fp32. Shape [1] for per-tensor; [n_groups] for grouped (per-output-row-group).
+    meta  : dict {group, n_groups, mode, scale_dtype, out, in, group_size}
+    """
+    import torch.nn.utils.parametrize as parametrize
+    from .ternary_qat import TernarySTE, _SCALE_ENCODERS
+
+    if not parametrize.is_parametrized(module, param_name):
+        raise ValueError(f"{module} is not parametrized on {param_name!r}")
+    plist = module.parametrizations[param_name]
+    ste = plist[0]
+    if not isinstance(ste, TernarySTE):
+        raise TypeError(f"parametrization is {type(ste).__name__}, not TernarySTE")
+    if ste.mode != "symmetric":
+        raise NotImplementedError(
+            f"extract_ternary_from_parametrized supports symmetric mode only "
+            f"(got mode={ste.mode!r}); ttq/dual carry learnable γ that the packed "
+            f"per-tensor/group scale format does not represent.")
+
+    shadow = plist.original.detach()              # smooth weight, native dtype
+    out_dim, in_dim = shadow.shape
+    thr = ste.threshold
+    group = ste.group                             # 0 → per-tensor
+    encode = _SCALE_ENCODERS[ste.scale_dtype]
+    cap = getattr(ste, "_scale_cap", None)        # buffer or None
+
+    def _scale_for(w_part: Tensor, gidx: int) -> Tensor:
+        # mean(|.|) clamped, encoded, then capped — EXACT order of _apply_grouped_ste.
+        s_raw = w_part.abs().mean().clamp(min=1e-8).unsqueeze(0)
+        s = encode(s_raw)[0]
+        if cap is not None:
+            s = torch.minimum(s, cap[gidx])
+        return s
+
+    if group <= 0 or group >= out_dim:
+        # ── per-tensor ──
+        scale = _scale_for(shadow, 0)
+        w_n = shadow / scale
+        q = torch.sign(w_n) * (w_n.abs() > thr).to(shadow.dtype)
+        codes = q.to(torch.int8)
+        scale_out = scale.reshape(1).float().contiguous()
+        meta = {"group": 0, "n_groups": 1, "mode": "symmetric",
+                "scale_dtype": ste.scale_dtype, "out": out_dim, "in": in_dim,
+                "group_size": 0}
+        return codes.contiguous(), scale_out, meta
+
+    # ── grouped (per output-row-group) ──
+    n_full = out_dim // group
+    remainder = out_dim % group
+    n_groups = n_full + (1 if remainder else 0)
+    codes = torch.empty_like(shadow, dtype=torch.int8)
+    scales: list[Tensor] = []
+    for g in range(n_full):
+        sl = slice(g * group, (g + 1) * group)
+        s = _scale_for(shadow[sl], g)
+        w_n = shadow[sl] / s
+        codes[sl] = (torch.sign(w_n) * (w_n.abs() > thr).to(shadow.dtype)).to(torch.int8)
+        scales.append(s.reshape(1))
+    if remainder:
+        sl = slice(n_full * group, out_dim)
+        s = _scale_for(shadow[sl], n_full)
+        w_n = shadow[sl] / s
+        codes[sl] = (torch.sign(w_n) * (w_n.abs() > thr).to(shadow.dtype)).to(torch.int8)
+        scales.append(s.reshape(1))
+    scale_out = torch.cat(scales).float().contiguous()  # [n_groups]
+    meta = {"group": group, "n_groups": n_groups, "mode": "symmetric",
+            "scale_dtype": ste.scale_dtype, "out": out_dim, "in": in_dim,
+            "group_size": group}
+    return codes.contiguous(), scale_out, meta
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Module replacements (nn.Linear subclasses → isinstance + .weight reads survive)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PackedTernaryLinear(nn.Linear):
-    """Frozen inference Linear with 2-bit-packed ternary weight (per-tensor scale).
+    """Frozen inference Linear with 2-bit-packed ternary weight.
 
     Subclasses nn.Linear so isinstance checks pass; ``weight`` is a property that
     dequantizes on access (forward reads it exactly once per call).
+
+    Scale layout:
+      - per-tensor: ``scale`` is shape [1]; broadcast over the whole weight.
+      - grouped:    ``scale`` is shape [n_groups]; ``group_size`` rows share one scale
+                    (per-output-row-group, dim-0 axis — matches TernarySTE grouping).
     """
 
     def __init__(self, in_features: int, out_features: int,
-                 packed: Tensor, scale: Tensor, dtype: torch.dtype = torch.bfloat16):
+                 packed: Tensor, scale: Tensor, dtype: torch.dtype = torch.bfloat16,
+                 group_size: int = 0):
         nn.Module.__init__(self)          # skip nn.Linear's dense alloc
         self.in_features = in_features
         self.out_features = out_features
         self._act_dtype = dtype
+        self.group_size = int(group_size)        # 0 → per-tensor
         self.register_buffer("packed", packed)
-        self.register_buffer("scale", scale)     # fp32 scalar
+        self.register_buffer("scale", scale)     # fp32 [1] or [n_groups]
         self.register_parameter("bias", None)
 
     @classmethod
     def from_linear(cls, lin: nn.Linear, threshold: float = 0.5) -> "PackedTernaryLinear":
+        """Quantize a PLAIN (non-parametrized) Linear from its dense .weight.
+
+        For a TernarySTE-parametrized module use ``from_parametrized`` instead —
+        re-deriving the scale from the STE *output* gives the wrong γ.
+        """
         assert lin.bias is None, "packed ternary path expects bias-free Linears"
         q, scale = _ternary_quantize(lin.weight.data, threshold)
         return cls(lin.in_features, lin.out_features,
-                   pack_ternary_codes(q), scale, dtype=lin.weight.dtype)
+                   pack_ternary_codes(q), scale.reshape(1).float(),
+                   dtype=lin.weight.dtype, group_size=0)
+
+    @classmethod
+    def from_parametrized(cls, lin: nn.Module) -> "PackedTernaryLinear":
+        """Build from a TernarySTE-parametrized Linear (symmetric mode), reproducing
+        the STE forward output bit-exactly. Reads the smooth shadow for the true scale.
+        """
+        assert getattr(lin, "bias", None) is None, "packed ternary path expects bias-free Linears"
+        codes, scale, meta = extract_ternary_from_parametrized(lin, "weight")
+        # dtype of the deployed forward = the STE output dtype = shadow dtype.
+        dtype = lin.parametrizations.weight.original.dtype
+        return cls(meta["in"], meta["out"], pack_ternary_codes(codes), scale,
+                   dtype=dtype, group_size=meta["group_size"])
 
     @property
     def weight(self) -> Tensor:  # type: ignore[override]
         n = self.out_features * self.in_features
-        w = unpack_ternary(self.packed, n, self._act_dtype)
-        return (w * self.scale.to(self._act_dtype)).view(self.out_features, self.in_features)
+        w = unpack_ternary(self.packed, n, self._act_dtype).view(
+            self.out_features, self.in_features)
+        if self.group_size <= 0 or self.scale.numel() == 1:
+            return w * self.scale.to(self._act_dtype)[0]
+        # grouped: expand the per-group scale over its rows (handles a ragged tail group).
+        out = self.out_features
+        gs = self.group_size
+        idx = (torch.arange(out, device=w.device) // gs).clamp_(max=self.scale.numel() - 1)
+        s = self.scale.to(self._act_dtype)[idx].unsqueeze(1)   # [out, 1]
+        return w * s
 
     def forward(self, x: Tensor) -> Tensor:
         return F.linear(x, self.weight.to(x.dtype))
 
     def extra_repr(self) -> str:
-        return f"in={self.in_features}, out={self.out_features}, packed-2bit ternary"
+        g = "per-tensor" if self.group_size <= 0 else f"group={self.group_size}"
+        return f"in={self.in_features}, out={self.out_features}, packed-2bit ternary ({g})"
 
 
 class Int8RowLinear(nn.Linear):
@@ -338,6 +465,30 @@ def shrink_block(block: nn.Module, target_density: float = 0.25,
     }
 
 
+def _pack_backbone_proj(proj: nn.Linear, threshold: float) -> PackedTernaryLinear:
+    """Pack a backbone dense proj (x0/value ChannelInject.proj, LMHeadMixer.mix) to 2-bit ternary.
+
+    CORRECTNESS: when the proj is TernarySTE-parametrized (the deploy config — scope=backbone
+    covers these modules), ``from_linear`` would re-derive the scale from the already-ternarized
+    STE *output* (mean(|γ·codes|) ≠ mean(|shadow|)) — a known scale bug. Read the smooth shadow
+    via ``from_parametrized`` so the deployed scale is exact. Plain (non-parametrized) Linears
+    fall back to ``from_linear``.
+    """
+    import torch.nn.utils.parametrize as parametrize
+    if parametrize.is_parametrized(proj, "weight"):
+        return PackedTernaryLinear.from_parametrized(proj)
+    return PackedTernaryLinear.from_linear(proj, threshold)
+
+
+def _proj_numel(proj: nn.Module) -> int:
+    """Original weight numel of a (possibly TernarySTE-parametrized) Linear, read from the
+    smooth shadow so the tally is correct whether or not the module is parametrized."""
+    import torch.nn.utils.parametrize as parametrize
+    if parametrize.is_parametrized(proj, "weight"):
+        return proj.parametrizations.weight.original.numel()
+    return proj.weight.numel()
+
+
 def materialize_top_level(model: nn.Module, device: str | torch.device = "cuda",
                           embed_bits: int = 6, threshold: float = 0.5) -> dict:
     """Deploy-format the NON-block modules of a MORPHTransformer, in place.
@@ -346,7 +497,11 @@ def materialize_top_level(model: nn.Module, device: str | torch.device = "cuda",
     → packed-2bit ternary (TernarySTE scope=backbone covers them); Lorentz space embed,
     value-embed tables, norms, LoopSSM → bf16 (deploy stack keeps them full precision).
     Finishes with model.to(device) for the bf16 remainder.
+
+    Backbone-proj packing reads the TernarySTE shadow via ``from_parametrized`` when the proj
+    is parametrized (the deploy case) — re-deriving the scale from the STE output is wrong.
     """
+    import torch.nn.utils.parametrize as parametrize
     stats: dict = {"int6_embeds": [], "ternary_dense": []}
     hy = model.embed.hybrid
     n_emb = hy.euc_embed.weight.numel() + model.embed.bigram.embed.weight.numel()
@@ -356,15 +511,21 @@ def materialize_top_level(model: nn.Module, device: str | torch.device = "cuda",
     stats["int6_embeds"] = ["embed.hybrid.euc_embed", "embed.bigram.embed"]
     stats["params_embed_int6"] = n_emb
 
+    # A backbone proj is either a plain nn.Linear or a TernarySTE-parametrized nn.Linear
+    # (parametrize keeps the class as nn.Linear, so `type(...) is nn.Linear` stays True).
+    def _is_packable_linear(m: nn.Module) -> bool:
+        return type(m) is nn.Linear and (
+            parametrize.is_parametrized(m, "weight") or getattr(m, "weight", None) is not None)
+
     n_tern = 0
     for inj in list(model.x0_injects) + list(model.value_embeds):
-        if type(inj.proj) is nn.Linear:
-            n_tern += inj.proj.weight.numel()
-            inj.proj = PackedTernaryLinear.from_linear(inj.proj, threshold)
+        if _is_packable_linear(inj.proj):
+            n_tern += _proj_numel(inj.proj)
+            inj.proj = _pack_backbone_proj(inj.proj, threshold)
             stats["ternary_dense"].append("ChannelInject.proj")
-    if type(model.lm_mixer.mix) is nn.Linear:
-        n_tern += model.lm_mixer.mix.weight.numel()
-        model.lm_mixer.mix = PackedTernaryLinear.from_linear(model.lm_mixer.mix, threshold)
+    if _is_packable_linear(model.lm_mixer.mix):
+        n_tern += _proj_numel(model.lm_mixer.mix)
+        model.lm_mixer.mix = _pack_backbone_proj(model.lm_mixer.mix, threshold)
         stats["ternary_dense"].append("lm_mixer.mix")
     stats["params_dense_ternary"] = n_tern
 
@@ -391,6 +552,62 @@ def quantize_attention_linears(module: nn.Module, bits: int = 8) -> int:
         else:
             n += quantize_attention_linears(child, bits=bits)
     return n
+
+
+def to_deploy_inference(model: nn.Module, device: str | torch.device = "cuda",
+                        attn_bits: int = 8, embed_bits: int = 6,
+                        threshold: float = 0.5) -> dict:
+    """Compose the full DEPLOY-QUANT inference build for an ALREADY-CARVED, ALREADY-TERNARY-QAT
+    real trained checkpoint, IN PLACE. After this, the StaticDecodeEngine auto-detects
+    ``deploy_quant=True`` (via the int8/row attention Linears) and uses the int8/2-bit/bf16
+    fast kernels.
+
+    Steps (the proven 310 tok/s recipe):
+      1. ``materialize_top_level`` — euc/bigram embeds → int6/row; x0/value ChannelInject
+         projs + lm_mixer.mix → packed-2bit ternary (from_parametrized when parametrized).
+      2. ``quantize_attention_linears`` over every Attention subtree → int8/row.
+      3. For each CARVED CMSBlockLinear (``_mortar`` True): disable values-ternary STE,
+         ``pack_mortar_ternary`` (2-bit BCSR), ``strip_cms_inference`` (free training buffers).
+
+    This is for the carved MLPs that ALREADY exist from ``load_checkpoint`` — it does NOT call
+    ``shrink_block`` / ``shrink_mlp_to_mortar_ternary`` (those re-prune with random saliency,
+    which would destroy a trained model's learned block pattern).
+
+    Returns a stats dict with counts (attention int8 linears, mortar MLPs packed) and the
+    resident-bytes report after quantization.
+    """
+    top = materialize_top_level(model, device=device, embed_bits=embed_bits, threshold=threshold)
+
+    # Attention: int8/row over every MORPHAttention subtree.
+    attn_int8 = 0
+    n_attn_modules = 0
+    for m in model.modules():
+        if "Attention" in type(m).__name__:
+            attn_int8 += quantize_attention_linears(m, bits=attn_bits)
+            n_attn_modules += 1
+
+    # Carved MLPs: pack mortar ternary (2-bit BCSR) + strip training buffers.
+    mlps_packed = 0
+    mortar_freed = 0
+    for m in model.modules():
+        if type(m).__name__ == "CMSBlockLinear" and getattr(m, "_mortar", False):
+            # The packer bakes the ternary snap; the live values-ternary STE must be OFF.
+            m._values_ternary_mode = False
+            pack_mortar_ternary(m, threshold=threshold)
+            mortar_freed += strip_cms_inference(m)
+            mlps_packed += 1
+
+    report = resident_bytes_report(model)
+    return {
+        "attn_modules": n_attn_modules,
+        "attn_int8_linears": attn_int8,
+        "mlps_packed": mlps_packed,
+        "mortar_buffers_freed_bytes": mortar_freed,
+        "top_level": top,
+        "resident_bytes": report["total_bytes"],
+        "resident_mb": report["total_bytes"] / (1024 ** 2),
+        "resident_report": report,
+    }
 
 
 def resident_bytes_report(model: nn.Module) -> dict:
