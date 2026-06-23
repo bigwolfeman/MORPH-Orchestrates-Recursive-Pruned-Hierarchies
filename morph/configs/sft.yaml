@@ -1,0 +1,71 @@
+# MORPH SFT config — instruction-tune a routed/compact pretrained checkpoint (Dolly).
+# Composes base.yaml (model arch + full quant stack must match the ckpt) then overrides
+# training for fine-tuning. Both prediction-2 arms use THIS config; only sft.init_ckpt
+# (and wandb.name) differ → single-variable paired comparison.
+defaults:
+  - base
+  - _self_
+
+model:
+  # STP-SFT: the paper's intended use. BOTH arms get STP during SFT (stp_lambda>0).
+  stp_lambda: 0.02
+  stp_tau: 64
+  loop_stp_lambda: 0.0
+
+training:
+  # Fine-tuning hypers (low LR to imprint instruction format without catastrophic forgetting).
+  lr: 2e-5
+  optimizer: adamw          # standard SFT optimizer (avoids AdEMAMix α·m₂ confounds);
+  adam8bit: true            # bnb AdamW8bit — same as pretraining memory profile
+  weight_decay: 0.0         # no decay during short SFT
+  grad_clip: 1.0
+  dropout: 0.1              # MUST match the ckpt's build: dropout>0 → MLP wrapped in
+                           # _KwargSequential (keys `mlp.0.…`); dropout=0 builds bare `mlp.`
+                           # → 348 mortar/router tensors mismatch + load RAISES. With the
+                           # shared reseed, masks draw identically across arms → pairing holds.
+  # steps/warmup/schedule below are pretraining-only and unused by sft.py (it derives
+  # total_steps from the data and builds its own warmup+cosine schedule).
+
+sft:
+  packing: true             # DATA POLICY. true (default) = current behavior: examples are
+                           # response-masked then PACKED into contiguous seq_len streams
+                           # (cross-example bleed under causal+windowed attention) via
+                           # sft_batches. false = NORMAL SFT: ONE example per sequence,
+                           # right-padded/batched (dynamic per-batch padding) via
+                           # sft_batches_padded → model gets seq_lens; loss masked on
+                           # prompt+pad (labels=-100). For causal attn + right-padding no
+                           # attention_mask is needed (real tokens never attend forward to
+                           # pads; pad outputs excluded from CE).
+  init_ckpt: ???            # REQUIRED on CLI: the pretrained 50k ckpt to fine-tune
+  n_examples: 512           # Dolly subset size (~"a few hundred" instruction prompts)
+  seq_len: 1024             # packed-stream length (also the per-example max_len drop bound)
+  batch_size: 4
+  epochs: 2                 # LIGHT SFT: ~42 steps. The loss curve (epochs=8 probe) shows the
+                           # Alpaca format is learned by ~step 40 (loss 10→1.9); beyond that the
+                           # model MEMORIZES the 512 responses (loss→0.08, ppl 1.1) — overfit that
+                           # swamps the STP signal. 2 epochs = format-learned, minimal memorization
+                           # = the "light instruction tuning" prediction 2 actually tests.
+  mcq_frac: 0.0             # MCQ (ARC-train) mix-in fraction of the COMBINED SFT set.
+                           # 0.0 (default) = Dolly-only, BIT-identical to prior behavior.
+                           # >0 builds round(mcq_frac/(1-mcq_frac)*n_dolly) ARC examples
+                           # (capped at mcq_n), concatenates + shuffles with sft.seed so MCQ
+                           # is interspersed. Eval uses the disjoint ARC TEST split (no leak).
+  mcq_n: 4000              # hard cap on the number of MCQ examples mixed in
+  warmup_frac: 0.05
+  min_lr: 2e-5              # == lr ⇒ FLAT LR after warmup (pretraining winner recipe). A cosine
+                           # decay over only ~42 steps collapses LR to ~min by step 40 and the
+                           # model under-trains (stalls at ppl ~50); flat LR sustains drive →
+                           # lands ~loss 1.9 (ppl ~7, format learned) at the 42-step stop.
+  seed: 1234                # shared across arms → identical data order + RNG stream
+
+wandb:
+  project: morph
+  entity: adew-me
+  name: null                # set per arm on CLI (sft_off_stp / sft_on_stp)
+
+hydra:
+  job:
+    chdir: false            # keep cwd at repo root so relative ckpt paths + _MORPH_ROOT resolve
+  run:
+    dir: ignore/hydra_sft/${now:%Y%m%d_%H%M%S}   # frozen config saved here (Wolfe: per-run frozen cfg)
+
