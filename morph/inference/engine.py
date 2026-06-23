@@ -65,7 +65,7 @@ import os as _os
 _USE_FUSED_ROUTER = _os.environ.get("MORPH_FUSED_ROUTER", "1") != "0"
 from morph.kernels.triton.fused_hyper_connection import (
     _LAUNCH as _HC_LAUNCH, _hc_post_fwd_kernel, _hc_premap_fwd_kernel, _next_pow2)
-from morph.model.kv_cache import MORPHKVCache
+from morph.inference.kv_cache import MORPHKVCache
 
 _BIGRAM_A: int = 279470273
 _BIGRAM_B: int = 4294967291
@@ -145,7 +145,7 @@ class StaticDecodeEngine:
         self.n_materialized = materialize_quant(model) if materialize else 0
         # deploy-format detection (packed_ternary_infer): int8/row attention Linears
         # + MORTAR-carved 2-bit MLPs. False on the dense fp32 276M stack.
-        from morph.model.packed_ternary_infer import Int8RowLinear
+        from morph.inference.deploy_quant import Int8RowLinear
         self._i8_cls = Int8RowLinear
 
         with torch.no_grad():

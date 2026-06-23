@@ -39,7 +39,7 @@ from bench_decode import build_model, load_ckpt, _AC, _strip_param  # type: igno
 def _prefill_batched(model, seeds: torch.Tensor):
     """Eager golden prefill of a [B, L] batch into ONE MORPHKVCache. Returns
     (cache, last_logits [B, vocab])."""
-    from morph.model.kv_cache import MORPHKVCache, decode_step
+    from morph.inference.kv_cache import MORPHKVCache, decode_step
     cache = MORPHKVCache()
     cache.csa_pool_len = int(model.cfg.context_len)
     logit = None
@@ -55,7 +55,7 @@ def _eager_stream_batched(model, seeds: torch.Tensor, n_gen: int):
     reference: the static engine must reproduce the eager batched semantics, NOT the
     solo-vs-batch — the eager path itself is not bit-invariant across batch size, so
     solo is the wrong oracle for B>1). Returns list[list[int]]."""
-    from morph.model.kv_cache import decode_step
+    from morph.inference.kv_cache import decode_step
     B = seeds.shape[0]
     cache, logit = _prefill_batched(model, seeds)             # [B, vocab]
     streams = [[] for _ in range(B)]
@@ -72,7 +72,7 @@ def _eager_stream_batched(model, seeds: torch.Tensor, n_gen: int):
 @torch.no_grad()
 def _engine_stream_batched(model, seeds: torch.Tensor, n_gen: int):
     """Batched engine stream for [B, L] prompts. Returns (list[list[int]], engine)."""
-    from morph.model.kv_cache_static import StaticDecodeEngine
+    from morph.inference.engine import StaticDecodeEngine
     B = seeds.shape[0]
     cache, logit = _prefill_batched(model, seeds)             # logit [B, vocab]
     eng = StaticDecodeEngine(model, batch_size=B)
@@ -118,8 +118,8 @@ def _logit_parity(model, seeds, n_steps=32):
     in lockstep feeding BOTH the SAME (eager) greedy token each step, and compare the
     raw logits. Greedy argmax is chaotic on bf16 ties (cos≈1, Δ≈0.06 still flips a token);
     the logit vectors are the real correctness signal. Returns (max|Δ|, min cos)."""
-    from morph.model.kv_cache import decode_step
-    from morph.model.kv_cache_static import StaticDecodeEngine
+    from morph.inference.kv_cache import decode_step
+    from morph.inference.engine import StaticDecodeEngine
     B = seeds.shape[0]
     ec, elg = _prefill_batched(model, seeds)
     gc, glg = _prefill_batched(model, seeds)
@@ -166,7 +166,7 @@ def main():
     assert compact, "ckpt must be carved/compact"
     assert routed, "this gate must run on a ROUTED ckpt (else the gather path is untested)"
 
-    from morph.model import packed_ternary_infer as pti
+    from morph.inference import deploy_quant as pti
     with _AC():
         stats = pti.to_deploy_inference(model, device="cuda")
     print(f"  mortar MLPs packed: {stats['mlps_packed']}  resident: {stats['resident_mb']:.1f} MB")

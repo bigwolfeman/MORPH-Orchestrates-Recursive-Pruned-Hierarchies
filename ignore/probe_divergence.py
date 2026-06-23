@@ -10,12 +10,12 @@ from bench_decode import build_model, load_ckpt, _AC
 device = torch.device("cuda")
 ckpt = os.path.abspath(sys.argv[1])
 model, cfg = build_model(device); load_ckpt(ckpt, model, device, cfg); model.eval()
-from morph.model import packed_ternary_infer as pti
+from morph.inference import deploy_quant as pti
 with _AC():
     pti.to_deploy_inference(model, device="cuda")
 vocab = int(model.cfg.vocab_size)
-from morph.model.kv_cache import MORPHKVCache, decode_step
-from morph.model.kv_cache_static import StaticDecodeEngine
+from morph.inference.kv_cache import MORPHKVCache, decode_step
+from morph.inference.engine import StaticDecodeEngine
 
 B, L, NGEN = 8, 16, 128
 torch.manual_seed(1008)
