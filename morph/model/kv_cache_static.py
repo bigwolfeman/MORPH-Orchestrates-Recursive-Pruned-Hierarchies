@@ -57,6 +57,12 @@ from morph.kernels.triton.fused_decode_step import (
     mortar_pack_strips, pack_nibbles, ring_commit, ring_meta, rmsnorm_rows,
     route_flags, small_gemv, swiglu_rows, ternary_pack, ternary_gemv,
     ternary_gemv_rs)
+from morph.kernels.triton.fused_router import fused_router
+
+# Fuse the eager ReMoE router pile (proj+LN+subkeys+topk+relu+normalize) into one Triton
+# launch. ON by default; set MORPH_FUSED_ROUTER=0 to fall back to the eager pile (for A/B).
+import os as _os
+_USE_FUSED_ROUTER = _os.environ.get("MORPH_FUSED_ROUTER", "1") != "0"
 from morph.kernels.triton.fused_hyper_connection import (
     _LAUNCH as _HC_LAUNCH, _hc_post_fwd_kernel, _hc_premap_fwd_kernel, _next_pow2)
 from morph.model.kv_cache import MORPHKVCache
@@ -375,11 +381,18 @@ class StaticDecodeEngine:
                             row_lo=row_lo, row_hi=row_hi,
                             col_lo=lo.to(torch.int32).contiguous(),
                             col_hi=hi.to(torch.int32).contiguous(),
+                            # fused-router launch config (Z3/microbench-tuned for sm_120).
+                            num_warps=int(_os.environ.get("MORPH_ROUTER_WARPS", "1")),
                         )
                     s.route = self._route_cache[rid]
                     if not hasattr(self, "_ract_scr"):
                         self._ract_scr = torch.zeros(512, device=dev, dtype=torch.int32)
                         self._cact_scr = torch.zeros(512, device=dev, dtype=torch.int32)
+                        # fused-router scratch (one-launch ReMoE router): gates out + qv work buffer.
+                        self._router_gates_scr = torch.empty(
+                            1, int(mlp_mod_r.n_clusters), device=dev, dtype=torch.float32)
+                        self._router_qv_scr = torch.empty(
+                            int(mlp_mod_r.d_model), device=dev, dtype=torch.float32)
         self.G_hidden = cca0.gate[0].out_features          # gate MLP hidden width
         # decode_front layout contract (one launch computes the whole site front-end)
         assert cca0.W_v_prev.out_features == self.Vh, "Wqkv stack: v_prev width != v_curr"
@@ -774,17 +787,27 @@ class StaticDecodeEngine:
                     # ReMoE router (mirrors TileRouter.forward, fp32) → cluster
                     # gates → gather flags → routed mortar GEMVs.
                     R = s.route
-                    qv = F.linear(x2.to(R["dtype"]), R["wq"]) + R["iter_vec"]
-                    qv = F.layer_norm(qv, (qv.shape[-1],), R["ln_w"], R["ln_b"],
-                                      R["ln_eps"])
-                    d2 = qv.shape[-1] // 2
-                    sa = qv[:, :d2] @ R["ska_t"]
-                    sb = qv[:, d2:] @ R["skb_t"]
-                    logits = (sa.unsqueeze(2) + sb.unsqueeze(1))                         .reshape(B_, -1) + R["gbias"]
-                    kth = logits.topk(R["k"], dim=-1).values[:, -1:]
-                    gates = torch.relu(logits - kth)
-                    gates = (gates * (R["k"] / gates.sum(-1, keepdim=True)
-                                      .clamp(min=1e-6))).float().contiguous()
+                    if _USE_FUSED_ROUTER:
+                        # ONE-launch fused router (proj+LN+subkeys+product-logits+topk+
+                        # relu+normalize), Z3-proven for sm_120. Bit-matches the eager pile
+                        # in fp32 (deploy router params are fp32). Replaces ~8 tiny launches.
+                        gates = fused_router(
+                            x2, R["wq"], R["iter_vec"], R["ln_w"], R["ln_b"], R["ln_eps"],
+                            R["ska_t"], R["skb_t"], R["gbias"], R["k"],
+                            out=self._router_gates_scr, qv_scr=self._router_qv_scr,
+                            num_warps=R["num_warps"])
+                    else:
+                        qv = F.linear(x2.to(R["dtype"]), R["wq"]) + R["iter_vec"]
+                        qv = F.layer_norm(qv, (qv.shape[-1],), R["ln_w"], R["ln_b"],
+                                          R["ln_eps"])
+                        d2 = qv.shape[-1] // 2
+                        sa = qv[:, :d2] @ R["ska_t"]
+                        sb = qv[:, d2:] @ R["skb_t"]
+                        logits = (sa.unsqueeze(2) + sb.unsqueeze(1))                             .reshape(B_, -1) + R["gbias"]
+                        kth = logits.topk(R["k"], dim=-1).values[:, -1:]
+                        gates = torch.relu(logits - kth)
+                        gates = (gates * (R["k"] / gates.sum(-1, keepdim=True)
+                                          .clamp(min=1e-6))).float().contiguous()
                     route_flags(gates, R["row_lo"], R["row_hi"],
                                 R["col_lo"], R["col_hi"],
                                 self._ract_scr, self._cact_scr)
