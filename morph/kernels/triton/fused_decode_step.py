@@ -1432,7 +1432,7 @@ def mortar_pack_strips(cms) -> tuple:
     scale [1] fp32, out_features, ent [3,E] int32 (row|j0|slot), nspl_max,
     cnts [R] int32). One-time; the codes are the SAME ternary codes the eager
     `_mortar_effective_data` dequantizes (re-gated)."""
-    from morph.model.packed_ternary_infer import unpack_ternary
+    from morph.inference.deploy_quant import unpack_ternary
     nnz, blk, blk2 = cms._packed_shape
     assert blk == blk2 and blk % 4 == 0, cms._packed_shape
     codes = unpack_ternary(cms.mortar_packed, cms._packed_numel, torch.float32)

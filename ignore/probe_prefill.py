@@ -9,11 +9,11 @@ ckpt = os.path.abspath(sys.argv[1] if len(sys.argv) > 1
                        else "checkpoints/morph/tst_stp_off_50k/step_50000.pt")
 model, cfg = build_model(device)
 load_ckpt(ckpt, model, device, cfg); model.eval()
-from morph.model import packed_ternary_infer as pti
+from morph.inference import deploy_quant as pti
 with _AC():
     pti.to_deploy_inference(model, device="cuda")
 vocab = int(model.cfg.vocab_size)
-from morph.model.kv_cache import MORPHKVCache, decode_step
+from morph.inference.kv_cache import MORPHKVCache, decode_step
 
 def prefill_logit(seeds):
     cache = MORPHKVCache(); cache.csa_pool_len = int(model.cfg.context_len)
