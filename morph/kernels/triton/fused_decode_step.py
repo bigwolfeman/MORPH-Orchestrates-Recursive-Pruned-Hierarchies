@@ -1316,7 +1316,7 @@ def _mortar_gemv_kernel(X, CODES, COLIDX, OFFS, ROWS, J0S, SLOTS, PART,
                         OTOT: tl.constexpr, NB: tl.constexpr,
                         SWIGLU: tl.constexpr, FF: tl.constexpr,
                         HAS_RACT: tl.constexpr, HAS_CACT: tl.constexpr,
-                        sx_b):
+                        sx_b, ra_b, ca_b):
     # BALANCED WORK-LIST schedule. The carve is RAGGED (real 30B build: gate_up
     # rows 6..26 kept blocks, down 31..59 — probe_ragged.py), so the old
     # K-split-by-NSPL grid issued 33-38% WASTED block loads (masked iterations
@@ -1346,7 +1346,7 @@ def _mortar_gemv_kernel(X, CODES, COLIDX, OFFS, ROWS, J0S, SLOTS, PART,
         # hold NaN bits and 0·NaN = NaN). Masked-load-only gathering saved no
         # time — the kernel is unpack-ALU/issue-bound, so predicated-off loads
         # still paid the arithmetic; the early return skips it all.
-        if tl.load(ROWACT + r) == 0:
+        if tl.load(ROWACT + b * ra_b + r) == 0:        # this stream's row flags
             tl.store(PART + (sl * NB + b) * OTOT + r * BLK + lr0 + offs_r,
                      tl.zeros((BO,), tl.float32))
             return
@@ -1357,7 +1357,8 @@ def _mortar_gemv_kernel(X, CODES, COLIDX, OFFS, ROWS, J0S, SLOTS, PART,
         cb = tl.load(COLIDX + j, mask=ok, other=0)
         if HAS_CACT:
             # down proj: skip blocks whose 128 input neurons are all gated 0
-            ok = ok & (tl.load(COLACT + cb, mask=ok, other=0) != 0)
+            # (this stream's col flags — batch-strided so item b reads only b)
+            ok = ok & (tl.load(COLACT + b * ca_b + cb, mask=ok, other=0) != 0)
         p = tl.load(CODES + j * (BLK * (BLK // 4))
                     + (lr0 + offs_r)[:, None] * (BLK // 4) + offs_c[None, :],
                     mask=ok, other=0)
@@ -1478,13 +1479,17 @@ def mortar_gemv(x: Tensor, pack: tuple, swiglu_x: bool = False,
     assert not (swiglu_x and swiglu_out)
     dummy = offsets
     part = torch.empty(nspl_max, B, O, device=x.device, dtype=torch.float32)
+    # per-batch flag strides: flags are [B, n_blocks] batch-major (or [n_blocks]
+    # legacy 1-D → stride 0 = every item reads the single set, i.e. B==1 behavior).
+    ra_b = row_act.stride(0) if (row_act is not None and row_act.dim() > 1) else 0
+    ca_b = col_act.stride(0) if (col_act is not None and col_act.dim() > 1) else 0
     _mortar_gemv_kernel[(E * (blk // BO), B)](
         x, strips, col_idx, offsets, ent[0], ent[1], ent[2], part,
         row_act if row_act is not None else dummy,
         col_act if col_act is not None else dummy,
         BLK=blk, BO=BO, CB=_MORTAR_CB, OTOT=O, NB=B, SWIGLU=swiglu_x, FF=FF,
         HAS_RACT=row_act is not None, HAS_CACT=col_act is not None,
-        sx_b=x.stride(0), num_stages=3, num_warps=4)
+        sx_b=x.stride(0), ra_b=ra_b, ca_b=ca_b, num_stages=3, num_warps=4)
     Oout = O // 2 if swiglu_out else O
     out = torch.empty(B, Oout, device=x.device, dtype=torch.float32)
     _mortar_combine_kernel[(triton.cdiv(Oout, 512), B)](
@@ -1806,26 +1811,46 @@ def ring_commit(x_all: Tensor, pos_dev: Tensor) -> None:
 
 @triton.jit
 def _route_flags_kernel(GATES, RLO, RHI, CLO, CHI, RACT, CACT,
-                        NR: tl.constexpr, NC: tl.constexpr, BL: tl.constexpr):
-    """ReMoE gather flags from the per-token cluster gates (B=1): a gate_up
-    output block-row / down input block-column is ACTIVE iff either of the (≤2)
-    neuron-clusters it spans has gate > 0. One tiny launch per routed MLP."""
+                        NR: tl.constexpr, NC: tl.constexpr, BL: tl.constexpr,
+                        ga_b, ra_b, ca_b):
+    """ReMoE gather flags from the per-token cluster gates: a gate_up output
+    block-row / down input block-column is ACTIVE iff either of the (≤2)
+    neuron-clusters it spans has gate > 0. One launch per routed MLP; the batch
+    grid (program_id(0) = b) gives each stream its OWN flags — item b reads only
+    GATES row b and writes only RACT/CACT row b (per-stream independence).
+
+    ga_b/ra_b/ca_b are the RUNTIME per-batch strides (stride(0)) of GATES / RACT /
+    CACT. These are NOT NR/NC/NCLS: the flag buffers are SLICED views of a wider
+    [B, 512] scratch (stride(0)=512), and GATES is [B, NCLS] contiguous (stride
+    NCLS). The mortar kernel reads ROWACT/COLACT with the SAME stride(0), so the
+    write/read offsets must agree — passing the real strides is what makes them."""
+    b = tl.program_id(0)
+    gb = GATES + b * ga_b                               # this stream's cluster gates
+    rb = RACT + b * ra_b                                # this stream's row flags
+    cb = CACT + b * ca_b                                # this stream's col flags
     i = tl.arange(0, BL)
     mr = i < NR
-    glo = tl.load(GATES + tl.load(RLO + i, mask=mr, other=0), mask=mr, other=0.0)
-    ghi = tl.load(GATES + tl.load(RHI + i, mask=mr, other=0), mask=mr, other=0.0)
-    tl.store(RACT + i, ((glo > 0) | (ghi > 0)).to(tl.int32), mask=mr)
+    glo = tl.load(gb + tl.load(RLO + i, mask=mr, other=0), mask=mr, other=0.0)
+    ghi = tl.load(gb + tl.load(RHI + i, mask=mr, other=0), mask=mr, other=0.0)
+    tl.store(rb + i, ((glo > 0) | (ghi > 0)).to(tl.int32), mask=mr)
     mc = i < NC
-    clo = tl.load(GATES + tl.load(CLO + i, mask=mc, other=0), mask=mc, other=0.0)
-    chi = tl.load(GATES + tl.load(CHI + i, mask=mc, other=0), mask=mc, other=0.0)
-    tl.store(CACT + i, ((clo > 0) | (chi > 0)).to(tl.int32), mask=mc)
+    clo = tl.load(gb + tl.load(CLO + i, mask=mc, other=0), mask=mc, other=0.0)
+    chi = tl.load(gb + tl.load(CHI + i, mask=mc, other=0), mask=mc, other=0.0)
+    tl.store(cb + i, ((clo > 0) | (chi > 0)).to(tl.int32), mask=mc)
 
 
 def route_flags(gates: Tensor, rlo: Tensor, rhi: Tensor, clo: Tensor, chi: Tensor,
                 ract: Tensor, cact: Tensor) -> None:
-    """gates [1, n_clusters] fp32; rlo/rhi [NR], clo/chi [NC] int32 cluster spans;
-    ract/cact int32 out buffers (persistent scratch)."""
+    """gates [B, n_clusters] fp32; rlo/rhi [NR], clo/chi [NC] int32 cluster spans;
+    ract [B, NR] / cact [B, NC] int32 out buffers (batch-major, may be SLICED views
+    of a wider scratch). Each batch row is computed independently by its own grid
+    program (b), using each tensor's REAL stride(0) so writes line up with the
+    batch-strided reads in _mortar_gemv_kernel."""
+    B = gates.shape[0]
     NR, NC = rlo.numel(), clo.numel()
     BL = triton.next_power_of_2(max(NR, NC))
-    _route_flags_kernel[(1,)](gates, rlo, rhi, clo, chi, ract, cact,
-                              NR=NR, NC=NC, BL=BL, num_stages=1, num_warps=4)
+    _route_flags_kernel[(B,)](gates, rlo, rhi, clo, chi, ract, cact,
+                              NR=NR, NC=NC, BL=BL,
+                              ga_b=gates.stride(0), ra_b=ract.stride(0),
+                              ca_b=cact.stride(0),
+                              num_stages=1, num_warps=4)
