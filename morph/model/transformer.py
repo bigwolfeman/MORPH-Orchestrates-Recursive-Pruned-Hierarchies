@@ -627,12 +627,13 @@ class MORPHTransformer(nn.Module):
     # ── Forward ───────────────────────────────────────────────────────
 
     def forward(self, input_ids: Tensor, labels: Tensor | None = None,
-                bag_size: int = 0) -> dict:
-        return self._forward_single(input_ids, labels, bag_size)
+                bag_size: int = 0, seq_lens: Tensor | None = None) -> dict:
+        return self._forward_single(input_ids, labels, bag_size, seq_lens)
 
     def _forward_single(self, input_ids: Tensor,
                         labels: Tensor | None = None,
-                        bag_size: int = 0) -> dict:
+                        bag_size: int = 0,
+                        seq_lens: Tensor | None = None) -> dict:
         # ── Token-Superposition Training input bagging (TST, arXiv 2605.06546) ──
         # bag_size==0 → baseline path, BIT-IDENTICAL to pre-TST (and what eval/gen
         # always use). bag_size==s>0 → the superposition phase: input_ids arrives as
@@ -891,7 +892,16 @@ class MORPHTransformer(nn.Module):
             x = x.mean(dim=2)
 
         # ── STP ───────────────────────────────────────────────────────
-        stp_loss = self.stp(self.final_norm(x).float(), tau=self.cfg.stp_tau)
+        # Only computed when it will actually be used (training, or any forward
+        # that produces a loss). Pure generation (labels=None, not training)
+        # skips the random triplet sampling — saves compute and avoids spending
+        # entropy from the RNG on a value that is never read.
+        if self.training or labels is not None:
+            stp_loss = self.stp(
+                self.final_norm(x).float(), tau=self.cfg.stp_tau, seq_lens=seq_lens
+            )
+        else:
+            stp_loss = x.new_zeros(())
 
         # ── LM head ──────────────────────────────────────────────────
         x = self.lm_mixer(x)
