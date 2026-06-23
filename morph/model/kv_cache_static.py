@@ -690,7 +690,7 @@ class StaticDecodeEngine:
         rows = torch.cat([(self.pos_dev - (m - 1) + self._ar127) % (self.W_xh - 1),
                           self._stage_row_hca])
         blk = impl.comp_norm(impl.compressor(s.X.index_select(1, rows)))[:, -1:]
-        s.C_comp.index_copy_(1, idx, blk)
+        s.C_comp.index_copy_(1, idx, blk.to(s.C_comp.dtype))
 
     def _attn_site(self, s: _Site, emit: bool) -> Tensor:
         """Site attention. The norm_attn output (x_t) is ALREADY in the X staging slot."""
