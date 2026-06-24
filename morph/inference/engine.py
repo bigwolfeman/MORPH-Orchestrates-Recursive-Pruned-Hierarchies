@@ -535,8 +535,14 @@ class StaticDecodeEngine:
             self.n_layers_tot = n_tot
 
         # ── global state ──────────────────────────────────────────────────────
-        self.pos = 0                                       # host mirror
-        self.pos_dev = torch.zeros(1, dtype=torch.long, device=dev)
+        # PER-STREAM positions (mixed-length): pos_dev [B] long = each stream's absolute
+        # position; self.pos = host int mirror of the MIN over streams (for the host-side
+        # capacity guard) — the true per-stream host mirror is self.pos_host [B]. When all
+        # streams share a length (B=1 / equal-length) every entry is equal and the engine
+        # is byte-identical to the former scalar-pos path.
+        self.pos = 0                                       # host mirror (min over streams)
+        self.pos_host = [0] * B                            # per-stream host mirror
+        self.pos_dev = torch.zeros(B, dtype=torch.long, device=dev)
         self.prev_id = torch.zeros(B, dtype=torch.long, device=dev)
         self.in_ids = torch.zeros(B, dtype=torch.long, device=dev)
         self.next_ids = torch.zeros(B, dtype=torch.long, device=dev)
@@ -544,11 +550,16 @@ class StaticDecodeEngine:
 
         self._ar_csa = torch.arange(self.max_blk_csa, device=dev)
         self._ar_hca = torch.arange(self.max_blk_hca, device=dev)
-        # ring-step metadata (filled by ring_meta once per token)
-        self._win_mask_i8 = torch.zeros(self.W_win, device=dev, dtype=torch.int8)
-        self._xoff_csa = torch.zeros(8, device=dev, dtype=torch.int32)
-        self._xoff_hca = torch.zeros(8, device=dev, dtype=torch.int32)
-        self._xoff_emit = torch.zeros(8, device=dev, dtype=torch.int32)
+        # ring-step metadata (filled by ring_meta once per token) — PER-STREAM rows.
+        self._win_mask_i8 = torch.zeros(B, self.W_win, device=dev, dtype=torch.int8)
+        self._xoff_csa = torch.zeros(B, 8, device=dev, dtype=torch.int32)
+        self._xoff_hca = torch.zeros(B, 8, device=dev, dtype=torch.int32)
+        self._xoff_emit = torch.zeros(B, 8, device=dev, dtype=torch.int32)
+        # per-stream emit masks (1 = stream completes a CSA/HCA block this token).
+        # In the collapsed single-graph step EVERY emit-capable site runs every token;
+        # these masks gate the per-stream writes (no-op for streams that don't complete).
+        self._csa_emit_mask = torch.zeros(B, device=dev, dtype=torch.int32)
+        self._hca_emit_mask = torch.zeros(B, device=dev, dtype=torch.int32)
         self._ar127 = torch.arange(self.hca_m - 1, device=dev)
         self._stage_row_hca = torch.full((1,), self.W_xh - 1, device=dev,
                                          dtype=torch.long)
@@ -587,7 +598,13 @@ class StaticDecodeEngine:
         self._csa_cnt_m1 = None
         self._hca_cnt = None
         self._terms = None
+        # Decode mode. False = equal-length / B=1 fast path (3 emit-variant graphs keyed
+        # on the shared host pos — unchanged, zero regression). True = MIXED-LENGTH: a
+        # SINGLE collapsed graph that runs every emit site every token and gates writes
+        # by per-stream emit masks. Set by load_from_eager from the prefill lengths.
+        self._mixed = False
         self.graphs: dict[tuple[bool, bool], torch.cuda.CUDAGraph] | None = None
+        self.graph_mixed: torch.cuda.CUDAGraph | None = None
 
     # ── state conversion from the proven eager prefill ────────────────────────
 
@@ -608,8 +625,10 @@ class StaticDecodeEngine:
         assert P >= 2 * self.csa_m, (
             f"convert at pos>={2 * self.csa_m} (first CSA block must be eager-emitted), got {P}")
         assert P < self.max_pos, f"pos {P} exceeds engine capacity {self.max_pos}"
+        self._mixed = False
         self.pos = P
-        self.pos_dev.fill_(P)
+        self.pos_host = [P] * self.B
+        self.pos_dev.fill_(P)                       # all B streams at the same P
         self.prev_id.copy_(cache.prev_id)
         dev = self.pos_dev.device
         for s in self.sites:
@@ -646,6 +665,71 @@ class StaticDecodeEngine:
                 assert sc.ret_state is not None, f"{s.key}: missing eager ret_state"
                 s.ret_state.copy_(sc.ret_state)
 
+    @torch.no_grad()
+    def load_from_eager_mixed(self, caches: list[MORPHKVCache]) -> None:
+        """MIXED-LENGTH conversion: one SOLO eager cache per stream, each prefilled to
+        ITS OWN length P_b. Writes each stream into batch row b of the static ring
+        buffers at its own absolute position, and switches the engine to the collapsed
+        single-graph mixed mode. The eager decode path uses a scalar `cache.pos`, so a
+        true mixed-length batch can only be PREFILLED stream-by-stream (B=1 each) — this
+        is exactly the per-stream solo prefill, the correct mixed-length ground truth.
+
+        If every P_b is equal this is just the batched equal-length case; we still keep
+        mixed mode (one graph) for uniformity, but load_from_eager (the 3-graph fast
+        path) remains available and is what the equal-length gate exercises."""
+        assert len(caches) == self.B, f"need {self.B} per-stream caches, got {len(caches)}"
+        dev = self.pos_dev.device
+        Ps = []
+        for c in caches:
+            assert c.kv_quant == "off", "static engine targets kv_quant=off"
+            P = int(c.pos)
+            assert P >= 2 * self.csa_m, (
+                f"convert at pos>={2 * self.csa_m} (first CSA block must be eager-emitted), "
+                f"got {P}")
+            assert P < self.max_pos, f"pos {P} exceeds engine capacity {self.max_pos}"
+            Ps.append(P)
+        self._mixed = True
+        self.pos_host = list(Ps)
+        self.pos = min(Ps)                         # min over streams (capacity guard base)
+        self.pos_dev.copy_(torch.tensor(Ps, dtype=torch.long, device=dev))
+
+        # zero every per-stream buffer ONCE (batched), then fill row b per stream.
+        for s in self.sites:
+            s.X.zero_(); s.win_k.zero_(); s.win_v.zero_(); s.C_comp.zero_()
+            if s.is_csa:
+                s.K_I.zero_()
+
+        for b, cache in enumerate(caches):
+            P = Ps[b]
+            self.prev_id[b].copy_(cache.prev_id.view(-1)[0])
+            for s in self.sites:
+                sc = cache.sites[s.key]
+                W = s.X.shape[1]
+                WR = W - 1
+                Lc = sc.comp_x.shape[1]
+                assert Lc == min(P, WR), f"{s.key}[b={b}]: comp_x len {Lc} != min(P,{WR})"
+                assert torch.equal(sc.x_recent[:, -min(P, self.hist - 1):],
+                                   sc.comp_x[:, -min(P, self.hist - 1):]), f"{s.key}[b={b}]"
+                # staging row ← x_{P-1} (solo cache is B=1 → row 0).
+                s.X[b, WR].copy_(sc.comp_x[0, -1])
+                if Lc > 1:                          # ring ← x_{P-Lc..P-2}
+                    q = torch.arange(P - Lc, P - 1, device=dev)
+                    s.X[b, q % WR] = sc.comp_x[0, :-1].to(s.X.dtype)
+                L = sc.win_k.shape[2]
+                assert L == min(P, self.w1), f"{s.key}[b={b}]: win len {L} != min(P,{self.w1})"
+                qw = torch.arange(P - L, P, device=dev) % self.W_win
+                s.win_k[b, :, qw] = sc.win_k[0].to(s.win_k.dtype)
+                s.win_v[b, :, qw] = sc.win_v[0].to(s.win_v.dtype)
+                n = 0 if sc.C_comp is None else sc.C_comp.shape[1]
+                assert n == P // s.m, f"{s.key}[b={b}]: blocks {n} != P//m {P // s.m}"
+                if n:
+                    s.C_comp[b, :n].copy_(sc.C_comp[0])
+                if s.is_csa and n:
+                    s.K_I[b, :n].copy_(sc.K_I[0])
+                if s.ret_state is not None:
+                    assert sc.ret_state is not None, f"{s.key}[b={b}]: missing ret_state"
+                    s.ret_state[b].copy_(sc.ret_state[0])
+
     # ── per-step shared precompute ─────────────────────────────────────────────
 
     def _precompute_step(self, ids: Tensor, x0: Tensor, bigram_emb: Tensor) -> None:
@@ -660,12 +744,16 @@ class StaticDecodeEngine:
         ring_commit(self.X_csa, self.pos_dev)
         ring_commit(self.X_hca, self.pos_dev)
 
-        self._csa_cnt = self.pos_dev // self.csa_m
-        self._hca_cnt = self.pos_dev // self.hca_m
-        self._csa_invis = (self._ar_csa >= self._csa_cnt).view(1, 1, -1)
+        self._csa_cnt = self.pos_dev // self.csa_m            # [B]
+        self._hca_cnt = self.pos_dev // self.hca_m            # [B]
+        # per-stream emit masks: a block completes at this token iff (pos+1)%m == 0.
+        # These drive BOTH the collapsed single graph (always-run emit, masked write)
+        # and the HCA torch emit path (skip non-completing streams).
+        self._csa_emit_mask = ((self.pos_dev + 1) % self.csa_m == 0).to(torch.int32)
+        self._hca_emit_mask = ((self.pos_dev + 1) % self.hca_m == 0).to(torch.int32)
 
-        self._cos = self._cos_flat.index_select(0, self.pos_dev).view(-1)   # [D]
-        self._sin = self._sin_flat.index_select(0, self.pos_dev).view(-1)
+        self._cos = self._cos_flat.index_select(0, self.pos_dev)           # [B,D]
+        self._sin = self._sin_flat.index_select(0, self.pos_dev)           # [B,D]
 
         # injection terms for ALL layers: [n_tot, B, 1, d] = lam_i·bigram, ctx slice +=
         # x0 term (+ value-embed terms on the prelude layers). Bit-equal math to the golden
@@ -694,26 +782,60 @@ class StaticDecodeEngine:
 
     # ── incremental attention (static, fixed-shape) ───────────────────────────
 
-    def _emit(self, impl, s: _Site) -> None:
-        """Emit the compressed block completing at this position (staging slot = current x)."""
+    def _emit(self, impl, s: _Site, mixed: bool) -> None:
+        """Emit the compressed block completing at this position (staging slot = current x).
+
+        mixed (per-stream positions): the emit runs UNCONDITIONALLY in the collapsed
+        single graph, but only streams that complete a block this token may write.
+        CSA gates inside the kernel via _csa_emit_mask; HCA gates the index_copy here.
+        """
         m = s.m
         if s.is_csa:
             # fused 2-kernel emit (was ~20 eager kernels: 6 cuBLAS + softmax/pool/norm).
-            # X is a ring — rows of tokens P-7..P resolved in-kernel via _xoff_emit.
+            # X is a ring — per-stream rows of tokens p[b]-7..p[b] resolved in-kernel via
+            # _xoff_emit[b]; _csa_emit_mask[b] gates the per-stream C_comp/K_I write.
             csa_emit(s.X, self._xoff_emit, s.Wemit, s.Ba, s.Bb, s.Bia, s.CnW,
                      impl.comp_norm.eps, s.C_comp, s.K_I, self._csa_cnt,
-                     self._emit_scr)
+                     self._emit_scr, emit_mask=self._csa_emit_mask if mixed else None)
             return
-        idx = self._hca_cnt                                           # == pos//m == block j
-        # ring → ordered gather of the m tokens completing block j (graph-safe:
-        # runtime index VALUES, fixed shapes), then the eager compressor as before.
-        rows = torch.cat([(self.pos_dev - (m - 1) + self._ar127) % (self.W_xh - 1),
-                          self._stage_row_hca])
-        blk = impl.comp_norm(impl.compressor(s.X.index_select(1, rows)))[:, -1:]
-        s.C_comp.index_copy_(1, idx, blk.to(s.C_comp.dtype))
+        # HCA: per-stream ordered gather of the m tokens completing block j[b]=pos[b]//m.
+        # Each stream's window is positions p[b]-(m-1)..p[b]; the first m-1 live in the
+        # ring (row q%(W-1)), the current token in the fixed staging row W-1. With per-
+        # stream positions these ring rows DIFFER across b → a per-stream [B, m] gather.
+        WR = self.W_xh - 1
+        B = s.X.shape[0]
+        # ring rows for positions p[b]-(m-1)..p[b]-1  → [B, m-1]
+        ring_rows = (self.pos_dev[:, None] - (m - 1) + self._ar127[None, :]) % WR
+        stage = self._stage_row_hca.expand(B, 1)                      # [B,1] = W-1
+        rows = torch.cat([ring_rows, stage], dim=1)                   # [B, m]
+        d = s.X.shape[-1]
+        gathered = torch.gather(
+            s.X, 1, rows[:, :, None].expand(B, m, d))                 # [B, m, d]
+        blk = impl.comp_norm(impl.compressor(gathered))[:, -1:, :]    # [B, 1, D]
+        idx = self._hca_cnt                                           # [B] == pos//m == block j
+        if mixed:
+            # GRAPH-SAFE masked per-stream scatter (FIXED shape — no nonzero/dynamic):
+            # for each stream read its current C_comp[b, idx[b]], blend with the freshly
+            # computed block by the per-stream emit mask, and write the blend straight
+            # back. Non-completing streams (mask==0) write back the value they already
+            # held → an exact no-op; completing streams overwrite with the new block.
+            bidx = torch.arange(B, device=s.X.device)
+            cur = s.C_comp[bidx, idx]                                 # [B, D]
+            mfl = self._hca_emit_mask.view(B, 1).to(s.C_comp.dtype)
+            blend = mfl * blk[:, 0].to(s.C_comp.dtype) + (1 - mfl) * cur
+            s.C_comp[bidx, idx] = blend
+        else:
+            # equal-length: every stream completes at the same step → single block idx.
+            s.C_comp.index_copy_(1, idx[:1], blk.to(s.C_comp.dtype))
 
-    def _attn_site(self, s: _Site, emit: bool) -> Tensor:
-        """Site attention. The norm_attn output (x_t) is ALREADY in the X staging slot."""
+    def _attn_site(self, s: _Site, emit: bool, mixed: bool) -> Tensor:
+        """Site attention. The norm_attn output (x_t) is ALREADY in the X staging slot.
+
+        mixed: collapsed single-graph path (per-stream positions). Then the emit runs
+        EVERY token at every emit-capable site and the per-stream emit masks decide who
+        writes — `emit` is ignored (always emit-then-mask). When mixed=False the legacy
+        per-graph `emit` bool selects whether this token's site emits at all (the 3-graph
+        equal-length path, byte-identical to the pre-mixed engine)."""
         impl = s.impl
         cca = impl.cca
         B = s.X.shape[0]
@@ -749,8 +871,10 @@ class StaticDecodeEngine:
                           self._gateh_scr, self._xres_scr, cca.sink_logits,
                           s.alpha_flat, cnt, self._win_mask_i8, scale,
                           w_gate2=s.Wgate2, pos_dev=self.pos_dev)
-        if emit:
-            self._emit(impl, s)
+        if mixed:
+            self._emit(impl, s, mixed=True)        # always run; masks gate per-stream
+        elif emit:
+            self._emit(impl, s, mixed=False)
 
         if s.Wup_sc is not None:
             return int8_gemv(out, s.Wup, s.Wup_sc, pack4=self._pack4).view(B, 1, -1)
@@ -768,14 +892,14 @@ class StaticDecodeEngine:
         return small_gemv(o, s.Woproj_s).view(B, 1, d)      # sigmoid(ret_gate) pre-folded
 
     def _block(self, s: _Site, h: Tensor, emit_csa: bool, emit_hca: bool,
-               term_next: Tensor | None = None) -> Tensor:
+               term_next: Tensor | None = None, mixed: bool = False) -> Tensor:
         block = s.block
         emit = emit_csa if s.is_csa else emit_hca
 
         def _attn_fn(x: Tensor) -> Tensor:
             # norm_attn(x_bar) is computed INSIDE the premap kernel epilogue and
             # written straight into the X staging slot (HAS_NOUT fold).
-            a = self._attn_site(s, emit)
+            a = self._attn_site(s, emit, mixed)
             if block.retention is not None:
                 a = a + self._retention(block, s, x)        # branch gate folded into o_proj
             return a
@@ -907,8 +1031,13 @@ class StaticDecodeEngine:
         return out
 
     @torch.no_grad()
-    def _step(self, emit_csa: bool, emit_hca: bool) -> None:
-        """One full decode step on the static buffers. Mirrors kv_cache.decode_step."""
+    def _step(self, emit_csa: bool, emit_hca: bool, mixed: bool = False) -> None:
+        """One full decode step on the static buffers. Mirrors kv_cache.decode_step.
+
+        mixed: collapsed single-graph mixed-length path. emit_csa/emit_hca are ignored
+        (every emit-capable site runs every token; the per-stream emit masks computed in
+        _precompute_step gate the writes). mixed=False keeps the legacy 3-graph behavior
+        where (emit_csa, emit_hca) select which sites emit this token."""
         model = self.model
         cfg = model.cfg
         ids = self.in_ids.view(-1, 1)                       # [B,1]
@@ -940,7 +1069,7 @@ class StaticDecodeEngine:
         x = x + terms[0].unsqueeze(-2)
         for i in range(cfg.n_prelude):
             nt = terms[i + 1] if i + 1 < np_ else None      # input_norm boundary: no fold
-            x = self._block(sites[si], x, emit_csa, emit_hca, term_next=nt)
+            x = self._block(sites[si], x, emit_csa, emit_hca, term_next=nt, mixed=mixed)
             si += 1
 
         e = rmsnorm_rows(x, model.input_norm.weight, model.input_norm.eps)
@@ -957,14 +1086,14 @@ class StaticDecodeEngine:
                     nt = terms[np_ + nc]                    # coda block 0's term
                 else:
                     nt = None                               # next op is the LoopSSM fold
-                h = self._block(sites[si], h, emit_csa, emit_hca, term_next=nt)
+                h = self._block(sites[si], h, emit_csa, emit_hca, term_next=nt, mixed=mixed)
                 si += 1
         x = h
 
         for i in range(cfg.n_coda):
             # term for coda block 0 was folded into the last core block's post.
             nt = terms[np_ + nc + i + 1] if i + 1 < cfg.n_coda else None
-            x = self._block(sites[si], x, emit_csa, emit_hca, term_next=nt)
+            x = self._block(sites[si], x, emit_csa, emit_hca, term_next=nt, mixed=mixed)
             si += 1
 
         if model._is_hc:
@@ -993,16 +1122,30 @@ class StaticDecodeEngine:
         """Decode one token. token_ids [B] (None → self-feed previous greedy argmax).
 
         Returns the [B, vocab] logits STATIC buffer — consume/clone before the next step.
+
+        Equal-length mode replays one of the 3 emit-variant graphs keyed on the shared
+        host pos. Mixed-length mode replays the SINGLE collapsed graph (or eager-steps
+        with mixed=True); the per-stream emit masks (built inside _step's precompute from
+        pos_dev) decide which streams write their CSA/HCA blocks this token.
         """
-        assert self.pos < self.max_pos - 1, "engine capacity exceeded (context_len)"
+        # capacity guard against the FARTHEST-ahead stream (per-stream host mirror).
+        assert max(self.pos_host) < self.max_pos - 1, \
+            "engine capacity exceeded (context_len)"
         if token_ids is not None:
             self.in_ids.copy_(token_ids.view(-1))
-        flags = self._emit_flags()
-        if self.graphs is not None:
-            self.graphs[flags].replay()
+        if self._mixed:
+            if self.graph_mixed is not None:
+                self.graph_mixed.replay()
+            else:
+                self._step(False, False, mixed=True)
         else:
-            self._step(*flags)
+            flags = self._emit_flags()
+            if self.graphs is not None:
+                self.graphs[flags].replay()
+            else:
+                self._step(*flags)
         self.pos += 1
+        self.pos_host = [p + 1 for p in self.pos_host]
         return self.logits
 
     # ── Phase 2: CUDA-graph capture ───────────────────────────────────────────
@@ -1020,18 +1163,27 @@ class StaticDecodeEngine:
 
     @torch.no_grad()
     def capture(self, warmup: int = 3) -> None:
-        """Capture the three emit-variant graphs. State is snapshotted around the warmup runs
-        (warmup EXECUTES and mutates buffers; capture itself records without executing)."""
+        """Capture the decode graph(s). State is snapshotted around the warmup runs
+        (warmup EXECUTES and mutates buffers; capture itself records without executing).
+
+        Equal-length mode: the three emit-variant graphs (no-emit / CSA-emit / CSA+HCA).
+        Mixed-length mode: a SINGLE collapsed graph (_step(...,mixed=True)) — the emit
+        path runs every token and per-stream masks gate the writes, so one graph is valid
+        regardless of which streams complete a block on any given token."""
         dev_state = self._state_tensors()
         snap = [t.clone() for t in dev_state]
         try:
             stream = torch.cuda.Stream()
             stream.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(stream):
-                for _ in range(warmup):
-                    self._step(False, False)
-                    self._step(True, False)
-                    self._step(True, True)
+                if self._mixed:
+                    for _ in range(warmup):
+                        self._step(False, False, mixed=True)
+                else:
+                    for _ in range(warmup):
+                        self._step(False, False)
+                        self._step(True, False)
+                        self._step(True, True)
             torch.cuda.current_stream().wait_stream(stream)
             torch.cuda.synchronize()
         finally:
@@ -1040,14 +1192,20 @@ class StaticDecodeEngine:
         torch.cuda.synchronize()
 
         pool = torch.cuda.graph_pool_handle()
-        graphs: dict[tuple[bool, bool], torch.cuda.CUDAGraph] = {}
-        for flags in ((False, False), (True, False), (True, True)):
+        if self._mixed:
             g = torch.cuda.CUDAGraph()
             with torch.cuda.graph(g, pool=pool):
-                self._step(*flags)
-            graphs[flags] = g
+                self._step(False, False, mixed=True)
+            self.graph_mixed = g
+        else:
+            graphs: dict[tuple[bool, bool], torch.cuda.CUDAGraph] = {}
+            for flags in ((False, False), (True, False), (True, True)):
+                g = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(g, pool=pool):
+                    self._step(*flags)
+                graphs[flags] = g
+            self.graphs = graphs
         # capture records without executing, but restore defensively anyway.
         for t, sv in zip(dev_state, snap):
             t.copy_(sv)
         torch.cuda.synchronize()
-        self.graphs = graphs

@@ -55,6 +55,7 @@ def _decode_attn_kernel(
     sg_b,                      # GLOG [B,H*2] | GATEH [B,GH] when GH>0
     sx_b,                      # XRES [B,H*D]
     so_b,                      # OUT [B,H*D]
+    swm_b,                     # WMASK [B,WWIN] per-stream row stride
 ):
     pid = tl.program_id(0)
     b = pid // H
@@ -68,11 +69,11 @@ def _decode_attn_kernel(
     # WHERE a key lives, never the order it enters the sums. WMASK is in
     # chronological j-space (slot j==WWIN-1 is the current position: invalid).
     offs_w = tl.arange(0, WWIN)
-    posv = tl.load(POSP)
+    posv = tl.load(POSP + b)                                             # per-stream pos
     slot = ((posv + 1 + offs_w) % WWIN).to(tl.int32)
     kw = tl.load(WK + b * sk_b + h * sk_h + slot[:, None] * sk_w + offs_d[None, :])
     s_win = tl.sum(kw * q[None, :], 1) * scale                          # [WWIN]
-    wm = tl.load(WMASK + offs_w)
+    wm = tl.load(WMASK + b * swm_b + offs_w)                            # per-stream mask row
     s_win = tl.where(wm != 0, s_win, float("-inf"))
     m_w = tl.max(s_win, 0)
     p_w = tl.exp(s_win - m_w)
@@ -81,7 +82,7 @@ def _decode_attn_kernel(
 
     # ── compressed branch: HCA dense blocks / CSA gathered top-k, with sink ──
     offs_n = tl.arange(0, NB)
-    cnt = tl.load(CNT)
+    cnt = tl.load(CNT + b)                                               # per-stream block count
     if IS_CSA:
         idx = tl.load(TIDX + b * st_b + offs_n)                         # [NB] int64
         valid = idx < cnt
@@ -131,8 +132,9 @@ def decode_attn(q: Tensor, win_k: Tensor, win_v: Tensor, c_comp: Tensor,
     q [B,H,D]; win_k/win_v [B,H,WWIN,D]; c_comp [B,NBLK,D]; top_idx [B,tk] (CSA) or None
     (HCA); gate_logits: raw logits [B,H*2] (sigmoid inside) OR, when w_gate2 [H*2,GH] is
     given, the RAW gate hidden [B,GH] (silu + gate2 GEMV folded in); x_res [B,H*D]
-    (=q_lat layout); sink/alpha [H]; cnt [1] int64 visible-block count; win_mask_i8
-    [WWIN] int8. Returns [B, H*D] (W_up-ready layout).
+    (=q_lat layout); sink/alpha [H]; cnt [B] int64 per-stream visible-block count;
+    win_mask_i8 [B, WWIN] int8 per-stream mask; pos_dev [B] int64 per-stream position.
+    Returns [B, H*D] (W_up-ready layout).
     """
     B, H, D = q.shape
     WWIN = win_k.shape[2]
@@ -154,6 +156,7 @@ def decode_attn(q: Tensor, win_k: Tensor, win_v: Tensor, c_comp: Tensor,
         sg_b=gate_logits.stride(0),
         sx_b=x_res.stride(0),
         so_b=out.stride(0),
+        swm_b=win_mask_i8.stride(0),
         num_stages=1, num_warps=8,
     )
     return out
@@ -182,7 +185,7 @@ def _csa_scores_kernel(QI, KI, CNT, OUT, DI: tl.constexpr, BN: tl.constexpr,
     s = tl.sum(k * q[None, :], 1)
     s = tl.maximum(s, 0.0)
     s = tl.where(s == 0.0, 0.0, s)            # canonicalize -0 → +0 (tie-break safety)
-    cnt = tl.load(CNT)
+    cnt = tl.load(CNT + b)                     # per-stream visible block count
     s = tl.where(offs_n < cnt, s, float("-inf"))
     tl.store(OUT + b * so_b + offs_n, s)
 
@@ -505,7 +508,7 @@ def _front_gemm_kernel(
     KDIM: tl.constexpr, KS: tl.constexpr, BK: tl.constexpr,
     NT: tl.constexpr, NU: tl.constexpr, HAS_SC: tl.constexpr,
     PACK4: tl.constexpr,
-    sx_b, sx_r,
+    sx_b, sx_r, sxoff_b,
 ):
     """K-split lat GEMM: PART[b, s, r, c] = Σ_{k in slice s} W[c,k]·x[r,k].
     Tiles 0..LQK/32-1 (q|k rows) emit rows 0..6; v_prev tiles emit row 5; the rest
@@ -528,9 +531,10 @@ def _front_gemm_kernel(
     c0 = t * 32
     KCH: tl.constexpr = KDIM // KS
     xb = X + b * sx_b
-    ro0 = tl.load(XOFF + 0); ro1 = tl.load(XOFF + 1); ro2 = tl.load(XOFF + 2)
-    ro3 = tl.load(XOFF + 3); ro4 = tl.load(XOFF + 4); ro5 = tl.load(XOFF + 5)
-    ro6 = tl.load(XOFF + 6)
+    xoff_b = XOFF + b * sxoff_b                       # PER-STREAM x-history ring rows
+    ro0 = tl.load(xoff_b + 0); ro1 = tl.load(xoff_b + 1); ro2 = tl.load(xoff_b + 2)
+    ro3 = tl.load(xoff_b + 3); ro4 = tl.load(xoff_b + 4); ro5 = tl.load(xoff_b + 5)
+    ro6 = tl.load(xoff_b + 6)
     pb = PART + b * (KS * 7 * OP) + s * (7 * OP)
     NTQK: tl.constexpr = LQK // 32
     NTVP: tl.constexpr = VH // 32
@@ -614,7 +618,7 @@ def _front_gemm_kernel(
             tl.store(pb + 6 * OP + c0 + offs, tl.sum(p6, 1))
     else:
         r = tl.where(t < NTQK + NTVP, 5, 6)                 # v_prev ← x5; rest ← x6
-        ror = tl.load(XOFF + r)
+        ror = tl.load(xoff_b + r)                            # PER-STREAM ring row
         if HAS_SC:
             ar = tl.zeros((32,), tl.float32)
             kbase = s * KCH
@@ -667,7 +671,7 @@ def _front_post_kernel(
     LQ: tl.constexpr, LK: tl.constexpr, VH: tl.constexpr, GH: tl.constexpr,
     KC: tl.constexpr, KS: tl.constexpr, OP: tl.constexpr,
     IS_CSA: tl.constexpr, WWIN: tl.constexpr, NU: tl.constexpr,
-    sq_b, sq_h, sk_b, sk_h, sk_w, sxr_b, sgh_b, sqi_b,
+    sq_b, sq_h, sk_b, sk_h, sk_w, sxr_b, sgh_b, sqi_b, scos_b,
 ):
     """Combine the K-split partials + conv + qk-mean + RMS + temp + RoPE + v-assembly
     + staging/gate/q_I stores. All inputs are the just-written PART scratch (L2-hot)."""
@@ -694,8 +698,10 @@ def _front_post_kernel(
         qv = (qv * rq) * tl.load(QNW + offs)
         q2 = tl.trans(tl.reshape(qv, (2, HD2)))
         q_lo, q_hi = tl.split(q2)
-        cos_lo = tl.load(COS + offs_h); cos_hi = tl.load(COS + HD2 + offs_h)
-        sin_lo = tl.load(SIN + offs_h); sin_hi = tl.load(SIN + HD2 + offs_h)
+        cos_lo = tl.load(COS + b * scos_b + offs_h)
+        cos_hi = tl.load(COS + b * scos_b + HD2 + offs_h)
+        sin_lo = tl.load(SIN + b * scos_b + offs_h)
+        sin_hi = tl.load(SIN + b * scos_b + HD2 + offs_h)
         tl.store(Q + b * sq_b + u * sq_h + offs_h, q_lo * cos_lo - q_hi * sin_lo)
         tl.store(Q + b * sq_b + u * sq_h + HD2 + offs_h, q_hi * cos_hi + q_lo * sin_hi)
         tl.store(XRES + b * sxr_b + u * D + offs, a6)       # raw q_lat6 residual
@@ -721,13 +727,15 @@ def _front_post_kernel(
         av = _psum_r(pb, vr, vrow, offs, OP, KS)
         k2 = tl.trans(tl.reshape(kv_, (2, HD2)))
         k_lo, k_hi = tl.split(k2)
-        cos_lo = tl.load(COS + offs_h); cos_hi = tl.load(COS + HD2 + offs_h)
-        sin_lo = tl.load(SIN + offs_h); sin_hi = tl.load(SIN + HD2 + offs_h)
+        cos_lo = tl.load(COS + b * scos_b + offs_h)
+        cos_hi = tl.load(COS + b * scos_b + HD2 + offs_h)
+        sin_lo = tl.load(SIN + b * scos_b + offs_h)
+        sin_hi = tl.load(SIN + b * scos_b + HD2 + offs_h)
         ky_lo = k_lo * cos_lo - k_hi * sin_lo
         ky_hi = k_hi * cos_hi + k_lo * sin_hi
         v2 = tl.trans(tl.reshape(av, (2, HD2)))
         v_lo, v_hi = tl.split(v2)
-        wslot = (tl.load(POSP) % WWIN).to(tl.int32)         # ring slot of position p
+        wslot = (tl.load(POSP + b) % WWIN).to(tl.int32)     # ring slot of THIS stream's pos
         for r in tl.static_range(NREP):
             hh = g * NREP + r
             wkb = WK + b * sk_b + hh * sk_h + wslot * sk_w
@@ -802,7 +810,7 @@ def decode_front(x_hist: Tensor, x_off: Tensor, pos_dev: Tensor,
         x_hist, x_off, wqkv, wqkv_scale if has_sc else x_hist, part,
         LQK=lq + lk, VH=vh, O=O, OP=OP, KDIM=KDIM, KS=KS, BK=bk,
         NT=NT, NU=NT * KS, HAS_SC=has_sc, PACK4=wqkv_pack4,
-        sx_b=x_hist.stride(0), sx_r=x_hist.stride(1),
+        sx_b=x_hist.stride(0), sx_r=x_hist.stride(1), sxoff_b=x_off.stride(0),
         num_stages=3 if has_sc else 1, num_warps=4 if has_sc else 8,
     )
     ntail = triton.cdiv(gh + (d_head if is_csa else 0), 256)
@@ -817,6 +825,7 @@ def decode_front(x_hist: Tensor, x_off: Tensor, pos_dev: Tensor,
         sk_b=win_k.stride(0), sk_h=win_k.stride(1), sk_w=win_k.stride(2),
         sxr_b=xres.stride(0), sgh_b=gateh.stride(0),
         sqi_b=qi.stride(0) if is_csa else gateh.stride(0),
+        scos_b=cos.stride(0) if cos.dim() > 1 else 0,
         num_stages=1, num_warps=1,
     )
 
@@ -841,7 +850,7 @@ def decode_front(x_hist: Tensor, x_off: Tensor, pos_dev: Tensor,
 def _csa_emit_gemm_kernel(X, XOFF, WEMIT, SCR,
                           KDIM: tl.constexpr, BK: tl.constexpr, KS: tl.constexpr,
                           M: tl.constexpr, NUNIT: tl.constexpr,
-                          sx_b, sx_r):
+                          sx_b, sx_r, sxoff_b):
     pid = tl.program_id(0)
     NU: tl.constexpr = NUNIT * KS
     b = pid // NU
@@ -851,11 +860,13 @@ def _csa_emit_gemm_kernel(X, XOFF, WEMIT, SCR,
     offs_k = tl.arange(0, BK)
     KCH: tl.constexpr = KDIM // KS
     # units 0,1 (aKV,aZ) and 4,5 (iKV,iZ) read rows M..2M-1; units 2,3 rows 0..M-1.
-    # X is a RING (+ staging row); XOFF [2M] int32 = ring rows of positions p-7..p.
+    # X is a RING (+ staging row); XOFF [B,2M] int32 = per-stream ring rows of
+    # positions p[b]-7..p[b] (mixed-length: each stream's emit window from its OWN pos).
     roff = tl.where((u == 2) | (u == 3), 0, M)
     xb = X + b * sx_b
-    e0 = tl.load(XOFF + roff + 0); e1 = tl.load(XOFF + roff + 1)
-    e2 = tl.load(XOFF + roff + 2); e3 = tl.load(XOFF + roff + 3)
+    xoff_b = XOFF + b * sxoff_b
+    e0 = tl.load(xoff_b + roff + 0); e1 = tl.load(xoff_b + roff + 1)
+    e2 = tl.load(xoff_b + roff + 2); e3 = tl.load(xoff_b + roff + 3)
     p0 = tl.zeros((32, BK), tl.float32); p1 = tl.zeros((32, BK), tl.float32)
     p2 = tl.zeros((32, BK), tl.float32); p3 = tl.zeros((32, BK), tl.float32)
     for k0 in range(s * KCH, (s + 1) * KCH, BK):
@@ -886,11 +897,21 @@ def _emit_unit(SCR, b, u: tl.constexpr, KS: tl.constexpr, NUNIT: tl.constexpr):
 
 
 @triton.jit
-def _csa_emit_combine_kernel(SCR, BA, BB, BIA, CNW, CC, KI, CNT,
+def _csa_emit_combine_kernel(SCR, BA, BB, BIA, CNW, CC, KI, CNT, EMASK,
                              eps,
                              KS: tl.constexpr, NUNIT: tl.constexpr,
+                             HAS_MASK: tl.constexpr,
                              sc_b, sc_n, ski_b, ski_n):
     b = tl.program_id(0)
+    # PER-STREAM EMIT GATE (mixed-length): in the collapsed single-graph step every
+    # CSA site runs csa_emit unconditionally, but only streams that COMPLETE a block
+    # this token ((pos[b]+1)%csa_m==0) may write. EMASK[b]==0 → this stream did NOT
+    # complete a block → leave its C_comp/K_I untouched (early-return, no store). With
+    # HAS_MASK=0 (all streams emit, e.g. equal-length emit step) this is the old kernel.
+    if HAS_MASK:
+        em = tl.load(EMASK + b)
+        if em == 0:
+            return
     offs = tl.arange(0, 32)
     r4 = tl.arange(0, 4)
 
@@ -907,7 +928,7 @@ def _csa_emit_combine_kernel(SCR, BA, BB, BIA, CNW, CC, KI, CNT,
     # comp_norm (RMSNorm over c=32)
     rms = 1.0 / tl.sqrt(tl.sum(out * out, 0) / 32 + eps)
     out = (out * rms) * tl.load(CNW + offs)
-    idx = tl.load(CNT)
+    idx = tl.load(CNT + b)                       # per-stream next-block index
     tl.store(CC + b * sc_b + idx * sc_n + offs, out)
 
     # indexer: single-stream softmax over m=4 rows
@@ -921,21 +942,25 @@ def _csa_emit_combine_kernel(SCR, BA, BB, BIA, CNW, CC, KI, CNT,
 
 def csa_emit(x_hist: Tensor, x_off: Tensor, w_emit: Tensor, b_a: Tensor, b_b: Tensor,
              b_ia: Tensor, cn_w: Tensor, cn_eps: float, c_comp: Tensor, k_i: Tensor,
-             cnt: Tensor, scratch: Tensor) -> None:
-    """x_hist [B, Wx, d] RING (x_off [8] int32 = ring rows of positions p-7..p,
-    tokens of blocks j-1 | j). Writes
-    C_comp[b, cnt] (comp_norm'd gated pool) and K_I[b, cnt] (indexer pool).
+             cnt: Tensor, scratch: Tensor, emit_mask: Tensor | None = None) -> None:
+    """x_hist [B, Wx, d] RING (x_off [B, 8] int32 = per-stream ring rows of positions
+    p[b]-7..p[b], tokens of blocks j-1 | j). Writes C_comp[b, cnt[b]] (comp_norm'd
+    gated pool) and K_I[b, cnt[b]] (indexer pool). cnt [B] int64 = pos[b]//csa_m.
+    emit_mask [B] int32 (mixed-length): stream b writes iff emit_mask[b]!=0 — a stream
+    not completing a block this token leaves its C_comp/K_I untouched. None ⇒ every
+    stream emits (the equal-length / B=1 emit step, byte-identical to the old kernel).
     w_emit [6*32, d] = cat[aKV,aZ,bKV,bZ,iKV,iZ]; scratch [B, KS, 6, 4, 32] fp32."""
     B = x_hist.shape[0]
     KDIM = x_hist.shape[-1]
     KS = scratch.shape[1]
     _csa_emit_gemm_kernel[(B * 6 * KS,)](
         x_hist, x_off, w_emit, scratch, KDIM=KDIM, BK=64, KS=KS, M=4, NUNIT=6,
-        sx_b=x_hist.stride(0), sx_r=x_hist.stride(1),
+        sx_b=x_hist.stride(0), sx_r=x_hist.stride(1), sxoff_b=x_off.stride(0),
         num_stages=1, num_warps=4)
     _csa_emit_combine_kernel[(B,)](
-        scratch, b_a, b_b, b_ia, cn_w, c_comp, k_i, cnt, cn_eps,
-        KS=KS, NUNIT=6,
+        scratch, b_a, b_b, b_ia, cn_w, c_comp, k_i, cnt,
+        emit_mask if emit_mask is not None else scratch,
+        cn_eps, KS=KS, NUNIT=6, HAS_MASK=emit_mask is not None,
         sc_b=c_comp.stride(0), sc_n=c_comp.stride(1),
         ski_b=k_i.stride(0), ski_n=k_i.stride(1),
         num_stages=1, num_warps=1)
@@ -1760,8 +1785,14 @@ def ternary_gemv_rs(x: Tensor, codes: Tensor, row_scale: Tensor) -> Tensor:
 
 @triton.jit
 def _ring_meta_kernel(POS, WMASK, XC, XH, XE,
-                      WWIN: tl.constexpr, WXC: tl.constexpr, WXH: tl.constexpr):
-    p = tl.load(POS)
+                      WWIN: tl.constexpr, WXC: tl.constexpr, WXH: tl.constexpr,
+                      sm_b, sxc_b, sxh_b, sxe_b):
+    # PER-STREAM: one CTA per batch item b. Each stream carries its OWN absolute
+    # position POS[b] (mixed-length support: streams prefilled to different P).
+    # The B=1 / equal-length case is the b==0 (and every-b-identical) restriction —
+    # byte-identical to the old scalar kernel when all POS[b] are equal.
+    b = tl.program_id(0)
+    p = tl.load(POS + b)
     s = tl.arange(0, WWIN)
     # chronological j-space mask (j ↔ position p-WWIN+1+j; decode_attn rotates
     # ring slots into this order): EXACTLY the pre-ring formula — valid j in
@@ -1769,23 +1800,27 @@ def _ring_meta_kernel(POS, WMASK, XC, XH, XE,
     w1 = WWIN - 1
     nv = tl.minimum(p, w1)
     valid = (s >= (w1 - nv)) & (s < w1)
-    tl.store(WMASK + s, valid.to(tl.int8))
+    tl.store(WMASK + b * sm_b + s, valid.to(tl.int8))
     i8 = tl.arange(0, 8)
     # x positions p-6..p-1 → ring rows; current token → staging row WXC/WXH.
-    tl.store(XC + i8, tl.where(i8 == 6, WXC, (p - 6 + i8) % WXC).to(tl.int32),
+    tl.store(XC + b * sxc_b + i8, tl.where(i8 == 6, WXC, (p - 6 + i8) % WXC).to(tl.int32),
              mask=i8 < 7)
-    tl.store(XH + i8, tl.where(i8 == 6, WXH, (p - 6 + i8) % WXH).to(tl.int32),
+    tl.store(XH + b * sxh_b + i8, tl.where(i8 == 6, WXH, (p - 6 + i8) % WXH).to(tl.int32),
              mask=i8 < 7)
-    tl.store(XE + i8, tl.where(i8 == 7, WXC, (p - 7 + i8) % WXC).to(tl.int32))
+    tl.store(XE + b * sxe_b + i8, tl.where(i8 == 7, WXC, (p - 7 + i8) % WXC).to(tl.int32))
 
 
 @triton.jit
 def _ring_commit_kernel(X, POSP, WR: tl.constexpr, D: tl.constexpr,
-                        BD: tl.constexpr, s_row):
+                        BD: tl.constexpr, s_row, B: tl.constexpr):
     # X stacked [N·B, WR+1, D] rows: commit staging row WR → ring row (p-1)%WR.
+    # PER-STREAM: program_id(0) flattens N·B in row-major (site-major, then stream),
+    # so b = nb % B recovers the stream index → its OWN position POSP[b]. With equal
+    # positions this is the old scalar target for every row.
     nb = tl.program_id(0)
     ch = tl.program_id(1)
-    tgt = ((tl.load(POSP) - 1) % WR).to(tl.int32)
+    b = nb % B
+    tgt = ((tl.load(POSP + b) - 1) % WR).to(tl.int32)
     offs = ch * BD + tl.arange(0, BD)
     m = offs < D
     base = X + nb * ((WR + 1) * s_row)
@@ -1795,17 +1830,30 @@ def _ring_commit_kernel(X, POSP, WR: tl.constexpr, D: tl.constexpr,
 
 def ring_meta(pos_dev: Tensor, wmask: Tensor, xoff_csa: Tensor, xoff_hca: Tensor,
               xoff_emit: Tensor, wwin: int, wxc: int, wxh: int) -> None:
-    _ring_meta_kernel[(1,)](pos_dev, wmask, xoff_csa, xoff_hca, xoff_emit,
+    """pos_dev [B] int64 (per-stream absolute positions). wmask [B, WWIN] int8,
+    xoff_csa/hca/emit [B, 8] int32 — one row per stream. One CTA per stream; each
+    reads ONLY pos_dev[b] and writes ONLY row b (per-stream independence). When all
+    pos_dev[b] are equal (B=1 / equal-length) every row is identical → byte-equal to
+    the former scalar kernel broadcast across rows."""
+    B = pos_dev.shape[0]
+    _ring_meta_kernel[(B,)](pos_dev, wmask, xoff_csa, xoff_hca, xoff_emit,
                             WWIN=wwin, WXC=wxc, WXH=wxh,
+                            sm_b=wmask.stride(0), sxc_b=xoff_csa.stride(0),
+                            sxh_b=xoff_hca.stride(0), sxe_b=xoff_emit.stride(0),
                             num_stages=1, num_warps=4)
 
 
 def ring_commit(x_all: Tensor, pos_dev: Tensor) -> None:
-    """x_all [N, B, WR+1, D] (contiguous rows): staging row → ring row (p-1)%WR."""
+    """x_all [N, B, WR+1, D] (contiguous rows): staging row → ring row (p-1)%WR.
+    pos_dev [B] int64 — each stream commits to ITS OWN (pos[b]-1)%WR ring row
+    (mixed-length: streams at different positions land in different ring slots).
+    program_id(0) flattens N·B row-major so b = nb % B; equal positions reproduce
+    the old single-target behaviour."""
     N, B, W1, D = x_all.shape
+    assert x_all.is_contiguous(), "ring_commit assumes [N,B,W1,D] contiguous for nb%B"
     BD = min(triton.next_power_of_2(D), 2048)
     _ring_commit_kernel[(N * B, triton.cdiv(D, BD))](
-        x_all, pos_dev, WR=W1 - 1, D=D, BD=BD, s_row=x_all.stride(2),
+        x_all, pos_dev, WR=W1 - 1, D=D, BD=BD, s_row=x_all.stride(2), B=B,
         num_stages=1, num_warps=4)
 
 
