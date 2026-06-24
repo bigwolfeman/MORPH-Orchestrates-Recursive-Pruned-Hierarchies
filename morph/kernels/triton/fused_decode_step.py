@@ -18,12 +18,27 @@ deviations are reduction-tree order only. Gated by ignore/verify_static_decode.p
 """
 from __future__ import annotations
 
+import os
+
 import torch
 import triton
 import triton.language as tl
 from torch import Tensor
 
 _LAUNCH = dict(num_stages=1, num_warps=4)
+
+
+def _sched(prefix: str, default_stages: int, default_warps: int) -> tuple[int, int]:
+    """Schedule-only override hook (num_stages/num_warps) for end-to-end sweeps.
+
+    Reads MORPH_{prefix}_STAGES / MORPH_{prefix}_WARPS. These change ONLY the
+    Triton pipeliner depth and warp count — never the reduction order or any
+    addressing — so the kernel output is bit-identical regardless of the value
+    (the decode parity gate is unaffected; this is purely a latency-hiding knob).
+    Unset → the in-source tuned defaults."""
+    s = int(os.environ.get(f"MORPH_{prefix}_STAGES", default_stages))
+    w = int(os.environ.get(f"MORPH_{prefix}_WARPS", default_warps))
+    return s, w
 
 _dummy_cache: dict = {}
 
@@ -798,12 +813,16 @@ def decode_front(x_hist: Tensor, x_off: Tensor, pos_dev: Tensor,
         bk = next(c for c in (256, 128, 64, 32, 16, 8, 4, 2, 1) if _kch % c == 0)
     else:
         bk = 64
+    if has_sc:
+        _f_stages, _f_warps = _sched("FRONT", 3, 4)
+    else:
+        _f_stages, _f_warps = 1, 8
     _front_gemm_kernel[(B * NT * KS,)](
         x_hist, x_off, wqkv, wqkv_scale if has_sc else x_hist, part,
         LQK=lq + lk, VH=vh, O=O, OP=OP, KDIM=KDIM, KS=KS, BK=bk,
         NT=NT, NU=NT * KS, HAS_SC=has_sc, PACK4=wqkv_pack4,
         sx_b=x_hist.stride(0), sx_r=x_hist.stride(1),
-        num_stages=3 if has_sc else 1, num_warps=4 if has_sc else 8,
+        num_stages=_f_stages, num_warps=_f_warps,
     )
     ntail = triton.cdiv(gh + (d_head if is_csa else 0), 256)
     NU = n_heads + n_kv + ntail
@@ -1423,6 +1442,7 @@ def _mortar_combine_kernel(PART, CNTS, OUT, SCALE, GATES,
 
 
 _MORTAR_CB = 4                                  # blocks per work-list entry (lab6c winner)
+_MORTAR_STAGES, _MORTAR_WARPS = _sched("MORTAR", 3, 4)   # lab6c-tuned defaults; sweepable
 
 
 def mortar_pack_strips(cms) -> tuple:
@@ -1489,7 +1509,8 @@ def mortar_gemv(x: Tensor, pack: tuple, swiglu_x: bool = False,
         col_act if col_act is not None else dummy,
         BLK=blk, BO=BO, CB=_MORTAR_CB, OTOT=O, NB=B, SWIGLU=swiglu_x, FF=FF,
         HAS_RACT=row_act is not None, HAS_CACT=col_act is not None,
-        sx_b=x.stride(0), ra_b=ra_b, ca_b=ca_b, num_stages=3, num_warps=4)
+        sx_b=x.stride(0), ra_b=ra_b, ca_b=ca_b,
+        num_stages=_MORTAR_STAGES, num_warps=_MORTAR_WARPS)
     Oout = O // 2 if swiglu_out else O
     out = torch.empty(B, Oout, device=x.device, dtype=torch.float32)
     _mortar_combine_kernel[(triton.cdiv(Oout, 512), B)](

@@ -1,0 +1,50 @@
+{
+  "kernel": "mortar_gemv + front_gemm (30B weight-streaming GEMVs)",
+  "arch": "sm120 (RTX 5090, CC 12.0)",
+  "arch_source": "Blackwell Tuning Guide + CUDA compute-cap table (cached sm120.json)",
+  "change": "env-overridable num_stages/num_warps (schedule-only; addresses unchanged)",
+  "note": "P0 schedule-invariance is structural: num_stages/num_warps appear in no address/reduction expr; P1-P4 are those addresses, proven shape-parametric.",
+  "properties": {
+    "P1_mortar_codes_inbounds_BLK128_nnz4096": {
+      "status": "proven",
+      "ms": 0.94,
+      "desc": "CODES offset in [0,nnz*BLK*(BLK//4)) for all masked-on (j,lr,cc)"
+    },
+    "P1_mortar_codes_inbounds_BLK128_nnz64": {
+      "status": "proven",
+      "ms": 0.59,
+      "desc": "CODES offset in [0,nnz*BLK*(BLK//4)) for all masked-on (j,lr,cc)"
+    },
+    "P2_mortar_part_inbounds_R224": {
+      "status": "proven",
+      "ms": 0.57,
+      "desc": "PART store in [0,nspl*NB*OTOT) for all (sl,b,r,lr)"
+    },
+    "P2_mortar_part_inbounds_R8": {
+      "status": "proven",
+      "ms": 0.55,
+      "desc": "PART store in [0,nspl*NB*OTOT) for all (sl,b,r,lr)"
+    },
+    "P3_front_wqkv_inbounds_O8192_KS8_BK256": {
+      "status": "proven",
+      "ms": 0.34,
+      "desc": "WQKV load row*KDIM+kk in [0,O*KDIM) (unmasked K-loop, BK|KCH)"
+    },
+    "P3_front_wqkv_inbounds_O16384_KS4_BK256": {
+      "status": "proven",
+      "ms": 0.31,
+      "desc": "WQKV load row*KDIM+kk in [0,O*KDIM) (unmasked K-loop, BK|KCH)"
+    },
+    "P3_front_wqkv_inbounds_O288_KS8_BK32": {
+      "status": "proven",
+      "ms": 0.3,
+      "desc": "WQKV load row*KDIM+kk in [0,O*KDIM) (unmasked K-loop, BK|KCH)"
+    },
+    "P4_coalescing_single_sector": {
+      "status": "proven",
+      "ms": 1.01,
+      "desc": "all 16 lanes of a vectorized weight group share one 16B sector (LDG.E.128=1txn)"
+    }
+  },
+  "all_proven": true
+}
