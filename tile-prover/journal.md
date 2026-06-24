@@ -100,3 +100,30 @@ D=32/K=4/B=2 benchmarked; CUDA-graph capture; numerical drift over long training
 **Profile (torch.profiler, 64 graph replays):** launches/token 1833 -> 950 (-48%); self CUDA us/step 3244.9 -> 1942.8 (-40%); gatherTopK + bitonicSortKVInPlace (254us topk pair) ELIMINATED. Router pile ~8 launches/visit -> 3 (gemv + tail + route_flags), x42 visits/token.
 **Integration:** morph/model/kv_cache_static.py only (import + MORPH_FUSED_ROUTER flag default ON + route-cache num_warps/scratch + fused/eager branch). Eager fallback preserved. route_flags unchanged (was already Triton).
 **Caveats (no theater):** (1) bf16 router would tie-flip — deploy is fp32 so N/A, but if a future build runs the router in bf16 this needs revisiting. (2) Z3 P9 register count is CONDITIONAL on ptxas — not run ncu. (3) only the default ckpt (tst_stp_off_50k) + d=768/16cls/k8/nsk4 shape tested; the nsk^2!=ncls branches are asserted-out (not exercised by this model). (4) win (+63%) EXCEEDED the 20-30% estimate because launch-count collapse (-883 launches) dominates, not just router GPU-time. (5) torch.compile interaction untested (engine uses CUDA graph, not compile).
+
+## [2026-06-23 19:40] — FEASIBILITY PROBE: 30B coop/persistent megakernel (GO/NO-GO)
+**Goal:** Decide whether a cooperative/persistent megakernel can raise 30B B=1 decode
+(46.6 tok/s = 54% of 86.1 SOL). Measure-before-build. Branch perf/30b-coop-megakernel.
+**HW verified (live, torch props):** RTX 5090, 170 SMs, L2=96MB (100663296B), HBM 1.79 TB/s.
+**Shapes (scale30b.yaml):** d=8192, n_heads=128, d_head=64, n_kv=8, latent_k=512,
+d_ff=21824, 2d_ff=43648, vocab=49152, mortar density 0.25, BLK=128, 35 core x mean_depth 4 = 140 visits.
+**Method:** Roofline (ncu ABSENT; nsys present). COLD-L2 achieved GB/s = weight_bytes/time,
+256MB memset flush before EVERY timed call (HOT over-reports 2-3x: o_proj "186% peak"=L2 hits).
+Scripts: ignore/gemv_bw_30b.py, gemv_bw_sweep.py, gemv_bw_mortar_sweep.py, gap_probe.py.
+**Per-kernel cold BW %peak (SHIPPED cfg):** int8 qkv[16384,8192] 80.4%(6w near-peak);
+int8 o_proj[8192,8192] 54.3%(3w); int8 k_proj[512,8192] 6%(0.2w tiny/latency);
+ternary gate_up 60.7%(32w); ternary down 33.1%(6w); MORTAR gate_up 28.8%(35w ALU-bound);
+mortar down 16.7%(17w ALU-bound). Mortar low% = 2-bit UNPACK ALU, NOT bus (35w not occ-starved).
+**Cheap config wins (cold, correctness-checked):** int8 o_proj 54->82.9% (BO=32,BI=256,w=8;
+BI=256 is the lever; numeric rel 2.24e-7 tol-gated); int8 k_proj 6->29.7%(BO=1); ternary
+down 33->46.5%(BO=8,w=2); mortar gate_up 29->35.9%(BO=64,w=2, fewer warps=less unpack contention).
+**GAP probe (gap_probe.py, 140-block chain):** eager python-launch 27.83ms; CUDA-graph
+replay 27.75ms = 1.00x, gap=0.08ms (0.3%). Launch gap ~0 even WITHOUT graph (block~200us busy
+>> 1.5us/launch); engine ALREADY graph-replays (engine.py:1001). CONFIRMS near-zero-gap @30B.
+**DECISION: NO-GO megakernel.** Bytes irreducible (data-dep re-stream). Gap ~0 (graph replayed).
+54% gap = per-kernel under-saturation on a FEW GEMVs, NOT bubbles. A megakernel's lever
+(kill launch/inter-kernel idle) buys ~0.3%. REAL lever = per-kernel config (int8 BI=256
+biggest: o_proj 54->83%) + attack mortar's 2-bit UNPACK ALU bound (LUT/wider-BO) — both
+far cheaper than a 1-week megakernel build. Saves the build.
+**Next:** adopt int8 BI=256 (gate parity 256/256 + cos>=0.999); ternary/mortar BO/warp tune;
+mortar unpack ALU as separate effort if more headroom wanted.
