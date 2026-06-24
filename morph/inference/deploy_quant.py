@@ -261,11 +261,17 @@ class Int8RowLinear(nn.Linear):
     """Frozen inference Linear with per-output-row int8 weight (IntNLinearSTE semantics)."""
 
     def __init__(self, in_features: int, out_features: int,
-                 codes: Tensor, scale: Tensor, dtype: torch.dtype = torch.bfloat16):
+                 codes: Tensor, scale: Tensor, dtype: torch.dtype = torch.bfloat16,
+                 hi: int = 127):
         nn.Module.__init__(self)
         self.in_features = in_features
         self.out_features = out_features
         self._act_dtype = dtype
+        # quant level: 127=int8, 31=int6, 7=int4. Stored so the decode engine can
+        # AUTO-DERIVE nibble-packing (hi==7 → pack4) instead of a hand-passed flag that
+        # can silently desync from the build (int4 codes shipped at 1 byte/param = the
+        # quality cost with none of the bandwidth win). Single knob = build-time attn_bits.
+        self.hi = int(hi)
         self.register_buffer("codes", codes)      # int8 [out, in]
         self.register_buffer("scale", scale)      # fp32 [out, 1]
         self.register_parameter("bias", None)
@@ -277,7 +283,7 @@ class Int8RowLinear(nn.Linear):
         w = lin.weight.data.detach().float()
         s = w.abs().amax(dim=-1, keepdim=True).div(hi).clamp(min=1e-8)
         codes = (w / s).round().clamp(-hi, hi).to(torch.int8)
-        return cls(lin.in_features, lin.out_features, codes, s, dtype=lin.weight.dtype)
+        return cls(lin.in_features, lin.out_features, codes, s, dtype=lin.weight.dtype, hi=hi)
 
     @property
     def weight(self) -> Tensor:  # type: ignore[override]

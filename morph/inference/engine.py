@@ -124,13 +124,17 @@ class StaticDecodeEngine:
     """Fixed-shape O(1)-per-token MORPH decoder with optional CUDA-graph replay."""
 
     def __init__(self, model, batch_size: int = 1, materialize: bool = True,
-                 mlp_dense_expand: bool = False, attn_pack4: bool = False):
+                 mlp_dense_expand: bool = False, attn_pack4: bool | None = None):
         """mlp_dense_expand (MORTAR-carved models only): expand the carved 2-bit BCSR
         MLP into a DENSE strip-packed ternary tensor (pruned blocks = code 0) and run
         it through the proven ternary_gemv — the dense arm of the carved-vs-dense
         bandwidth A/B (dense reads 4× the codes; same math, zeros contribute 0).
-        attn_pack4: the model was built with int4 (hi=7) attention row-quant —
-        nibble-pack the Wqkv/W_up code stacks (lossless; halves attn weight traffic)."""
+        attn_pack4: nibble-pack the Wqkv/W_up int4 code stacks (lossless; halves attn
+        weight traffic). DEFAULT None = AUTO-DERIVE from the attention quant level
+        (Int8RowLinear.hi==7 → int4 → pack). This is the SINGLE KNOB: a model built with
+        ``to_deploy_inference(attn_bits=4)`` decodes packed automatically — no separate
+        flag to forget (forgetting it = int4 quality cost with zero bandwidth win). Pass
+        True/False to force; auto raises on a mixed-bit attention (can't uniformly pack)."""
         assert not model.training, "engine is inference-only — call model.eval() first"
         self.model = model
         cfg = model.cfg
@@ -141,12 +145,23 @@ class StaticDecodeEngine:
         # in their quantized storage; tolerance-gated vs the bf16 eager golden).
         dtype = torch.float32
         self.B = B = batch_size
-        self._pack4 = bool(attn_pack4)
         self.n_materialized = materialize_quant(model) if materialize else 0
         # deploy-format detection (packed_ternary_infer): int8/row attention Linears
         # + MORTAR-carved 2-bit MLPs. False on the dense fp32 276M stack.
         from morph.inference.deploy_quant import Int8RowLinear
         self._i8_cls = Int8RowLinear
+        # Resolve attn_pack4: None → auto-derive from the attention quant level so the
+        # build-time attn_bits is the single source of truth (no desync footgun).
+        if attn_pack4 is None:
+            his = {int(getattr(m, "hi", 127)) for m in model.modules()
+                   if isinstance(m, Int8RowLinear)}
+            if len(his) > 1:
+                raise ValueError(
+                    f"attention has mixed Int8RowLinear bit-widths (hi={sorted(his)}); "
+                    "uniform nibble-pack is ambiguous — pass attn_pack4 explicitly.")
+            self._pack4 = his == {7}
+        else:
+            self._pack4 = bool(attn_pack4)
 
         with torch.no_grad():
             # LM head: the golden recomputes embed.lm_weight() (lorentz log-map over the full
@@ -258,7 +273,7 @@ class StaticDecodeEngine:
                         # nibble-pack (0.5 byte/param, int4-built models only).
                         assert all(isinstance(m, self._i8_cls) for m in proj_mods)
                         wqkv = torch.cat([m.codes for m in proj_mods], dim=0).contiguous()
-                        if attn_pack4:
+                        if self._pack4:  # resolved flag — MUST match the kernel's pack4
                             wqkv = pack_nibbles(wqkv)
                         wqkv_sc = torch.cat([m.scale.view(-1) for m in proj_mods]) \
                             .float().contiguous()
@@ -312,7 +327,7 @@ class StaticDecodeEngine:
                     bf16 = torch.bfloat16
                     if q8:
                         wup = cca.W_up.codes.contiguous()
-                        if attn_pack4:
+                        if self._pack4:  # resolved flag — MUST match the kernel's pack4
                             wup = pack_nibbles(wup)
                         wup_sc = cca.W_up.scale.view(-1).float().contiguous()
                     else:
