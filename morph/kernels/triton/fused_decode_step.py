@@ -1156,6 +1156,7 @@ def _ternary_gemv_kernel(X, W2, SCALE, WN, OUT, I: tl.constexpr, O: tl.constexpr
         mj = offs_j < I4
         p = tl.load(W2 + offs_o[:, None] * I4 + offs_j[None, :],
                     mask=mj[None, :], other=0)                         # uint8 [BO,BI4]
+        p32 = p.to(tl.int32)
         for st in tl.static_range(4):
             ii = st * I4 + offs_j
             if X_MODE == 2:
@@ -1166,7 +1167,10 @@ def _ternary_gemv_kernel(X, W2, SCALE, WN, OUT, I: tl.constexpr, O: tl.constexpr
                 x = tl.load(X + b * I + ii, mask=mj, other=0.0)
                 if X_MODE == 1:
                     x = (x * rms) * tl.load(WN + ii, mask=mj, other=0.0)
-            w = ((p >> (2 * st)) & 3).to(tl.float32) - 1.0
+            # magic-number dequant: code|0x4B400000 read as fp32 = code+1.5*2^23;
+            # minus 12582913.0 → code-1 ∈ {-1,0,1}. Bit-exact vs (code).to(f32)-1,
+            # no per-element I2F (int OR + bitcast + fp sub).
+            w = (((p32 >> (2 * st)) & 3) | 0x4B400000).to(tl.float32, bitcast=True) - 12582913.0
             # masked p bytes decode to code 0-1 = -1 → force masked lanes to 0·x
             w = tl.where(mj[None, :], w, 0.0)
             acc += tl.sum(w * x[None, :], 1)
@@ -1387,6 +1391,12 @@ def _mortar_gemv_kernel(X, CODES, COLIDX, OFFS, ROWS, J0S, SLOTS, PART,
         p = tl.load(CODES + j * (BLK * (BLK // 4))
                     + (lr0 + offs_r)[:, None] * (BLK // 4) + offs_c[None, :],
                     mask=ok, other=0)
+        # magic-number dequant. Place each 2-bit code into the low mantissa bits of
+        # 0x4B400000 (=12582912.0=1.5*2^23). The 23-bit mantissa LSBs then read back
+        # as float (code+12582912.0); subtract 12582913.0 → code-1 ∈ {-1,0,1}. No
+        # per-element I2F: int OR + bitcast + one fp SUB. Bit-exact vs (code).to(f32)-1
+        # (Z3-proven over all 256 bytes × 4 strides — tile-prover magic_dequant.py).
+        p32 = p.to(tl.int32)
         m = tl.where(ok, 1.0, 0.0)
         for st in tl.static_range(4):
             xi = cb * BLK + st * (BLK // 4) + offs_c
@@ -1396,7 +1406,9 @@ def _mortar_gemv_kernel(X, CODES, COLIDX, OFFS, ROWS, J0S, SLOTS, PART,
                 xs = g * tl.sigmoid(g) * u
             else:
                 xs = tl.load(X + b * sx_b + xi)
-            w = ((p >> (2 * st)) & 3).to(tl.float32) - 1.0
+            code_i = (p32 >> (2 * st)) & 3
+            wbits = code_i | 0x4B400000
+            w = wbits.to(tl.float32, bitcast=True) - 12582913.0
             acc += w * (xs * m)[None, :]
     tl.store(PART + (sl * NB + b) * OTOT + r * BLK + lr0 + offs_r, tl.sum(acc, 1))
 
@@ -1743,10 +1755,12 @@ def _ternary_rs_kernel(X, W2, RS, OUT, I: tl.constexpr, O: tl.constexpr,
         mj = offs_j < I4
         p = tl.load(W2 + offs_o[:, None] * I4 + offs_j[None, :],
                     mask=mj[None, :], other=0)
+        p32 = p.to(tl.int32)
         for st in tl.static_range(4):
             ii = st * I4 + offs_j
             x = tl.load(X + b * sx_b + ii, mask=mj, other=0.0)
-            w = ((p >> (2 * st)) & 3).to(tl.float32) - 1.0
+            # magic-number dequant (see _ternary_gemv_kernel): bit-exact, no I2F.
+            w = (((p32 >> (2 * st)) & 3) | 0x4B400000).to(tl.float32, bitcast=True) - 12582913.0
             w = tl.where(mj[None, :], w, 0.0)
             acc += tl.sum(w * x[None, :], 1)
     tl.store(OUT + b * so_b + offs_o, acc * tl.load(RS + offs_o))
