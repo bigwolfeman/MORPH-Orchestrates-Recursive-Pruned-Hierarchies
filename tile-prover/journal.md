@@ -100,3 +100,44 @@ D=32/K=4/B=2 benchmarked; CUDA-graph capture; numerical drift over long training
 **Profile (torch.profiler, 64 graph replays):** launches/token 1833 -> 950 (-48%); self CUDA us/step 3244.9 -> 1942.8 (-40%); gatherTopK + bitonicSortKVInPlace (254us topk pair) ELIMINATED. Router pile ~8 launches/visit -> 3 (gemv + tail + route_flags), x42 visits/token.
 **Integration:** morph/model/kv_cache_static.py only (import + MORPH_FUSED_ROUTER flag default ON + route-cache num_warps/scratch + fused/eager branch). Eager fallback preserved. route_flags unchanged (was already Triton).
 **Caveats (no theater):** (1) bf16 router would tie-flip — deploy is fp32 so N/A, but if a future build runs the router in bf16 this needs revisiting. (2) Z3 P9 register count is CONDITIONAL on ptxas — not run ncu. (3) only the default ckpt (tst_stp_off_50k) + d=768/16cls/k8/nsk4 shape tested; the nsk^2!=ncls branches are asserted-out (not exercised by this model). (4) win (+63%) EXCEEDED the 20-30% estimate because launch-count collapse (-883 launches) dominates, not just router GPU-time. (5) torch.compile interaction untested (engine uses CUDA graph, not compile).
+
+## [2026-06-23] — BASELINE: 30B fast-decode memory-lever campaign
+**Goal:** Raise 30B (random-init, deploy-quant, mean_depth=4) B=1 decode bandwidth.
+**Method:** `ignore/scale30b_bench_fast.py --gate-steps 8 --bench 64` (build 138s, CUDA-graph replay bench). GPU 5090 CC 12.0 (sm120), Triton 3.6.0. ncu NOT installable (no pip pkg `nvidia-nsight-compute-cu12`); nsys present at /usr/bin/nsys.
+**Result (MEASURED):** 46.64 tok/s (median 21.44 ms/tok; p10 20.35, p90 23.94; n=64) = **54% of SOL**. Roofline floor 86.1 tok/s @1.79 TB/s; achieved 0.97 TB/s effective. Streamed/token 19.37 GB (17.97 GB weights ×depth-4). Parity: worst cos 0.9998, argmax 8/8 — GREEN.
+**Next:** Lever analysis.
+
+## [2026-06-23] — LEVER 1 (vectorize packed-code loads to 128-bit): DEAD (SASS-proven)
+**Method:** `ignore/inspect_gemv_sass.py` compiles ternary/mortar/front_i8 GEMVs, dumps SASS via /opt/cuda/bin/cuobjdump, classifies LDG widths. Full SASS in `ignore/sass_{ternary,mortar,front_i8}.txt`.
+**Result:** ALL three weight streams ALREADY emit `LDG.E.128`:
+- ternary uint8[BO=8,BI4=512]: 6× LDG.E.128 (the lone 32-bit LDG = scalar SCALE).
+- mortar CODES: 64× LDG.E.128 feeding the 2-bit unpack (SHF/LOP3/PRMT/I2F).
+- front_i8 WQKV int8: 8× LDG.E.128 feeding I2F.S8.
+- Remaining 32/64-bit LDGs = fp32 x-activations + BCSR index scalars (tiny, reused; not bandwidth-bound).
+**Conclusion:** Triton 3.6 fully vectorizes the weight loads. NO win. NO CHANGE.
+
+## [2026-06-23] — LEVERS 2+3 (hoist scales / pipeline dequant): mostly already applied on the 30B paths
+**Method:** read engine.py:827-838 call sites + num_stages at every launch.
+**Findings:** ternary scale hoisted (line 1148); mortar scale once in combine (1404); front WSC once per CTA (538). 30B MLP = mortar_gemv `num_stages=3` (1492) ALREADY pipelined; 30B front int8 = `num_stages=3 if has_sc` (806) ALREADY pipelined. ternary `num_stages=1` (1206) is the DENSE fallback, not the 30B carved path.
+**Next:** the 54%→peak gap is bandwidth EFFICIENCY (L2 eviction from ×depth-4 core re-stream + latency exposure), not load width. Sweep num_stages/num_warps on mortar+front to chase achieved BW.
+
+## [2026-06-23] — SWEEP: end-to-end num_stages/num_warps on the dominant GEMVs
+**Method:** added env-overridable num_stages/num_warps to mortar_gemv + front_gemm (HAS_SC) — schedule-only knobs, never touch addressing/reduction (Z3 + structural proof of output-invariance). `ignore/sweep_sched.sh` runs a full build+bench per config. `ignore/sweep_sched.log`.
+**Result (each parity argmax 8/8 — empirically confirms schedule-invariance):**
+| config | tok/s | Δ |
+|---|---|---|
+| baseline (mortar s3/w4, front s3/w4) | 45.02 | — |
+| MORTAR_STAGES=4 | 46.12 | +2.4% (within ~3.5% run noise) |
+| MORTAR_WARPS=8 | 45.60 | +1.3% (noise) |
+| FRONT_STAGES=4 | 43.16 | **−4.1% REGRESS** |
+| FRONT_WARPS=8 | 40.95 | **−9.0% REGRESS** |
+**Verdict:** the in-source lab6c/lab7c-tuned defaults are already at/near optimum. Deeper front pipeline regresses (register pressure on the 7-accumulator int8 schedule cuts occupancy). No schedule win available. NEGATIVE RESULT.
+
+## [2026-06-23] — Z3 PROOFS + GATES (final)
+**Z3 (`tile-prover/proofs/mortar_front_gemv/verify.py`, result.json):** 8/8 PROVEN (UNSAT on negation) over real 30B shapes + a 276M-ish shape: P1 mortar CODES in-bounds (2 shapes), P2 mortar PART in-bounds (2), P3 front WQKV in-bounds (3 incl 276M dims), P4 coalescing single-16B-sector. Schedule-invariance (P0) is structural: num_stages/num_warps appear in no address/reduction expr.
+**HARD GATES:**
+- 276M non-regression (`ignore/bench_decode.py`): MY CHANGE `DECODE_BENCH_PASS tok/s=451.2 match=256/256`; PRISTINE (git stash) `tok/s=448.9 match=256/256`. My change ≥ pristine (noise) → NO REGRESSION. (Both ~451 vs the brief's ~500 is a pre-existing worktree/Triton-state property, NOT my edit — isolated by the stash A/B.)
+- 30B parity (in scale30b_bench_fast): worst cos 0.9998, argmax 8/8 across ALL sweep configs.
+- 30B throughput: baseline 45.0–46.6 tok/s (run noise); no config beats it outside noise. NEW %-of-SOL unchanged at ~54%.
+**Conclusion:** Levers 1-3 are spent (1 SASS-dead, 2/3 already-applied, schedule already optimal). The 46% gap to peak BW is STRUCTURAL — the depth-4 core re-stream evicts L2 (17.97 GB weights/token). The only remaining lever is the cooperative megakernel (Lever 4, high-risk, regressed 276M before) or reducing mean_depth (a model-quality knob, not a kernel change — not mine to set).
+**Committed:** the safe output-invariant sweep hook (defaults = tuned values), SASS inspector, Z3 proofs, sweep harness, journal.
