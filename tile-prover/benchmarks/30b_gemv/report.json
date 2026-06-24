@@ -1,0 +1,45 @@
+{
+  "probe": "30b_coop_megakernel_feasibility",
+  "date": "2026-06-23",
+  "branch": "perf/30b-coop-megakernel",
+  "decision": "NO-GO",
+  "hw": {"gpu": "RTX 5090", "sm_count": 170, "l2_bytes": 100663296,
+         "hbm_peak_tbs": 1.79, "source": "torch.cuda.get_device_properties (live)"},
+  "method": "roofline_cold_L2 (ncu absent); achieved_GBs = weight_bytes/kernel_time, 256MB L2 flush before each timed call",
+  "shapes": {"d_model": 8192, "n_heads": 128, "d_head": 64, "n_kv": 8,
+             "latent_k": 512, "d_ff": 21824, "vocab": 49152, "mortar_density": 0.25,
+             "BLK": 128, "core_visits": 140},
+  "per_kernel_shipped_config": [
+    {"kernel": "int8_gemv qkv [16384,8192]", "us": 93.3, "gbs": 1438, "pct_peak": 80.4, "waves": 6.0, "bound": "near_peak"},
+    {"kernel": "int8_gemv o_proj [8192,8192]", "us": 69.0, "gbs": 973, "pct_peak": 54.3, "waves": 3.0, "bound": "BI/occupancy"},
+    {"kernel": "int8_gemv k_proj [512,8192]", "us": 38.8, "gbs": 108, "pct_peak": 6.0, "waves": 0.2, "bound": "tiny_latency"},
+    {"kernel": "ternary_gemv gate_up [43648,8192]", "us": 82.3, "gbs": 1086, "pct_peak": 60.7, "waves": 32.1, "bound": "near_ish"},
+    {"kernel": "ternary_gemv down [8192,21824]", "us": 75.5, "gbs": 592, "pct_peak": 33.1, "waves": 6.0, "bound": "occupancy"},
+    {"kernel": "mortar_gemv gate_up [43648,8192]", "us": 43.3, "gbs": 516, "pct_peak": 28.8, "waves": 35.0, "bound": "ALU_unpack"},
+    {"kernel": "mortar_gemv down [8192,21824]", "us": 38.9, "gbs": 299, "pct_peak": 16.7, "waves": 17.2, "bound": "ALU_unpack"}
+  ],
+  "cheap_config_wins": [
+    {"kernel": "int8_gemv o_proj", "from_pct": 54.3, "to_pct": 82.9, "config": "BO=32,BI=256,num_warps=8", "lever": "BI=256 K-tile", "numeric_rel_diff": 2.24e-7, "note": "tol-gated, fp reduction-order only"},
+    {"kernel": "int8_gemv k_proj", "from_pct": 6.0, "to_pct": 29.7, "config": "BO=1", "note": "tiny 4MB tensor, latency-bound; small fraction of bytes"},
+    {"kernel": "ternary_gemv down", "from_pct": 33.1, "to_pct": 46.5, "config": "BO=8,num_warps=2"},
+    {"kernel": "mortar_gemv gate_up", "from_pct": 28.8, "to_pct": 35.9, "config": "BO=64,num_warps=2", "note": "ALU-bound: fewer warps win, not occupancy"}
+  ],
+  "gap_probe": {
+    "chain_blocks": 140,
+    "eager_python_launch_ms": 27.83,
+    "cuda_graph_replay_ms": 27.75,
+    "graph_speedup": 1.00,
+    "gap_removed_ms": 0.08,
+    "gap_removed_pct": 0.3,
+    "conclusion": "near-zero inter-kernel gap CONFIRMED at 30B; launch gap ~0 even without graph (block busy ~200us >> 1.5us/launch); engine already graph-replays (engine.py:1001)"
+  },
+  "verdict": {
+    "go_nogo": "NO-GO",
+    "reasons": [
+      "bytes irreducible (data-dependency-forced re-stream, prior audit)",
+      "inter-kernel gap ~0.3% (CUDA graph already deployed; busy >> launch)",
+      "54% gap = per-kernel under-saturation on a few GEMVs, NOT bubbles"
+    ],
+    "real_lever": "per-kernel config (int8 BI=256: o_proj 54->83%) + mortar 2-bit unpack ALU optimization (LUT/wider-BO); far cheaper than megakernel build"
+  }
+}
