@@ -1,0 +1,53 @@
+{
+  "kernel": "mortar_gemv / ternary_gemv / ternary_gemv_rs (30B MLP decode)",
+  "arch": "SM120 (RTX 5090, GB202, Blackwell)",
+  "arch_source": "device query torch.cuda.get_device_name = NVIDIA GeForce RTX 5090; 170 SMs; HBM peak 1.79 TB/s (gemv_bw_30b.py constant)",
+  "timestamp": "2026-06-23",
+  "lever": "magic-number 2-bit dequant replacing per-element I2F",
+  "change": "w = (((p32>>(2*st))&3) | 0x4B400000).bitcast(f32) - 12582913.0  (was ((p>>2st)&3).to(f32)-1)",
+  "properties": {
+    "dequant_bit_exact_equiv": {
+      "status": "proven",
+      "method": "Z3 BitVec32 over all 256 bytes x 4 strides (or_preserves_code) + exhaustive 4-code struct bitcast value-equivalence",
+      "z3_script": "tile-prover/proofs/mortar_gemv/magic_dequant.py",
+      "result": "MAGIC_DEQUANT_PROOF_PASS",
+      "empirical_confirmation": "ignore/mortar_decode_parity.py vs original decode: bit_exact=True, maxd=0.000e+00 (gate_up & down)"
+    },
+    "per_kernel_speedup": {
+      "status": "measured",
+      "harness": "ignore/gemv_bw_30b.py (cold-L2, median of 5x120 iters)",
+      "mortar_gate_up_us": {"base": 43.62, "magic": 41.90, "delta_pct": -3.9},
+      "mortar_down_us": {"base": 39.49, "magic": 37.41, "delta_pct": -5.3},
+      "ternary_down_us": {"base": 75.04, "magic": 71.63, "delta_pct": -4.5},
+      "ternary_gate_up_us": {"base": 83.10, "magic": 83.39, "delta_pct": 0.3, "note": "memory-bound 60% peak, no change expected"}
+    },
+    "decode_cost_breakdown_floor_probe": {
+      "status": "measured",
+      "note": "in-place w=const probe: mortar gate_up 43.62->23.87 (-45%) = decode is ~45% of wall-clock; magic recovers SHR/AND-I2F portion (~4-5us); the 15us FMA floor is the irreducible dot product",
+      "floor_us": {"mortar_gate_up": 23.87, "mortar_down": 23.78}
+    },
+    "end_to_end_30b_tok_s": {
+      "status": "no_significant_change",
+      "harness": "ignore/scale30b_bench_fast.py (random-init 30B, n=64, CUDA-graph)",
+      "baseline_samples": [44.06, 45.41],
+      "magic_samples": [43.61, 44.92],
+      "noise_band_pct": 3.0,
+      "verdict": "overlapping distributions; end-to-end is HBM-bandwidth-bound (51% peak, 17.97 GB/tok weight stream) so the per-kernel compute win does not surface in the aggregate tok/s",
+      "parity_gate": "argmax 8/8, worst cos 0.99981 (>0.999) PASS"
+    },
+    "occupancy_lever": {
+      "status": "null",
+      "note": "BO 32->16->8 HURTS (grid + partial-sum overhead); num_warps 8 slower; eager-reduce small-accumulator wash. The dependent-latency stall is not closeable by occupancy knobs at this carved-BCSR layout."
+    },
+    "non_regression_276m": {
+      "status": "proven_equal",
+      "harness": "ignore/bench_decode.py",
+      "result": "DECODE_BENCH_PASS match=256/256 tok/s=473.7 (baseline 472.3, within ~3% noise)"
+    }
+  },
+  "not_verified": [
+    "ncu occupancy/SM% delta (admin-gated; orchestrator must confirm the per-kernel compute-bound -> the floor-probe shows headroom but isolated-kernel ncu pass owed)",
+    "real-carve weights at 30B (random-init systems-only; no quality claim)",
+    "B>1 batched decode paths (only B=1 measured)"
+  ]
+}
