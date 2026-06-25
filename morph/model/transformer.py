@@ -29,7 +29,7 @@ from .fused_ce import (
     multi_hot_cross_entropy_reference,
 )
 from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
-from .prediction import STPLoss
+from .prediction import STPLoss, LatentForecast
 from .sparsity import MortarLinear
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
@@ -100,6 +100,24 @@ class MORPHConfig:
     # inner map f_θ toward locally-affine behaviour → reduces the curvature that makes the AdEMAMix
     # slow-EMA go stale (the σ_max(J_core) inter-block-alignment runaway). 0.0 → OFF, bit-exact.
     loop_stp_lambda: float = 0.0
+    # Paper-faithful STP on the HEAD-INPUT latent (arXiv:2604.18464). Independent of the
+    # token-axis `stp_lambda` (which acts pre-mixer) and `loop_stp_lambda` (loop axis).
+    #   stp_mode="off"            → not computed (bit-exact baseline; model B).
+    #   stp_mode="random_token"   → random-triplet STP on the head-input latent (model C).
+    #   stp_mode="step_boundary"  → consecutive STEP-BOUNDARY STP, needs step_boundary_mask (model A).
+    # Weighted by step_stp_lambda (paper β=1). Read on final_norm(lm_mixer(x)) — the exact state
+    # the LM head decodes — so the smoothed geometry matches the decode-fidelity metric.
+    stp_mode: str = "off"
+    step_stp_lambda: float = 1.0
+
+    # Forward latent-prediction head (LatentForecast). mode = subset of {h1,end,start} underscore-
+    # joined; "off" = inert. Read by the model (self.cfg), so MUST be a declared dataclass field —
+    # a getattr-with-default on an undeclared field silently falls back to "off" (the inert-config
+    # footgun this comment exists to prevent).
+    latent_forecast_mode: str = "off"
+    latent_forecast_lambda: float = 1.0
+    latent_forecast_hidden: int = 0
+    latent_forecast_predictor: str = "mlp"   # mlp | attn (attn = causal attention over past hiddens)
 
     # LM head — fused chunked cross-entropy (training). Rows of [B·T] tokens
     # processed per chunk; smaller = less peak memory, more launch overhead.
@@ -491,6 +509,12 @@ class MORPHTransformer(nn.Module):
 
         # ── Prediction (STP — Semantic Tube Predictor) ────────────────
         self.stp = STPLoss()
+        # Forward latent-prediction head (Wolfe's "predict h+1 and h+next-punc" objective). Built
+        # ALWAYS so an off-arm vs on-arm fork has identical params (only the gradient differs);
+        # inert unless cfg.latent_forecast_mode != "off". Small: 3 × (D→H→D) MLPs.
+        self.latent_forecast = LatentForecast(
+            d, int(getattr(cfg, "latent_forecast_hidden", 0)) or d,
+            predictor=str(getattr(cfg, "latent_forecast_predictor", "mlp")))
 
         # ── Retention branch (#230) ────────────────────────────────────
         # Attach AFTER all base modules → GLA's RNG draws are a tail, so the base model is
@@ -627,13 +651,16 @@ class MORPHTransformer(nn.Module):
     # ── Forward ───────────────────────────────────────────────────────
 
     def forward(self, input_ids: Tensor, labels: Tensor | None = None,
-                bag_size: int = 0, seq_lens: Tensor | None = None) -> dict:
-        return self._forward_single(input_ids, labels, bag_size, seq_lens)
+                bag_size: int = 0, seq_lens: Tensor | None = None,
+                step_boundary_mask: Tensor | None = None) -> dict:
+        return self._forward_single(input_ids, labels, bag_size, seq_lens,
+                                    step_boundary_mask=step_boundary_mask)
 
     def _forward_single(self, input_ids: Tensor,
                         labels: Tensor | None = None,
                         bag_size: int = 0,
-                        seq_lens: Tensor | None = None) -> dict:
+                        seq_lens: Tensor | None = None,
+                        step_boundary_mask: Tensor | None = None) -> dict:
         # ── Token-Superposition Training input bagging (TST, arXiv 2605.06546) ──
         # bag_size==0 → baseline path, BIT-IDENTICAL to pre-TST (and what eval/gen
         # always use). bag_size==s>0 → the superposition phase: input_ids arrives as
@@ -783,6 +810,16 @@ class MORPHTransformer(nn.Module):
         # consecutive triplet is sliced to the LATEST iter's prefix (samples active in all three).
         _loop_stp_on = self.training and self.cfg.loop_stp_lambda > 0.0
         _loop_carriers: list[Tensor] = []
+        # ── Eval-only loop-trajectory capture (interp: latent-MSE / decode fidelity) ──
+        # Gated by an instance flag; OFF (default, getattr→False) → zero overhead and
+        # bit-exact. Stashes the stream-reduced carrier z_0..z_T for the forecastability
+        # probe (ignore/loop_latent_mse.py). Eval runs a UNIFORM depth so the active set is
+        # the full batch in original order (perm == identity) → the stash is already in batch
+        # order, no inv_perm needed. Do NOT set this during training.
+        _capture_traj = getattr(self, "_capture_traj", False)
+        _traj: list[Tensor] = []
+        if _capture_traj:
+            _traj.append((e_s.mean(dim=2) if self._is_hc else e_s).detach())  # z_0 (pre-loop)
         for t in range(total_iters):
             n_active = active_counts[t]
             if n_active == 0:
@@ -823,6 +860,8 @@ class MORPHTransformer(nn.Module):
             # Loop-STP: stash this grad-iter's carrier (stream-reduced → [n_active, S, C]).
             if _loop_stp_on and t >= n_nograd:
                 _loop_carriers.append(h_new.mean(dim=2) if self._is_hc else h_new)
+            if _capture_traj:  # eval-only interp: capture EVERY iteration's carrier (z_1..z_T)
+                _traj.append((h_new.mean(dim=2) if self._is_hc else h_new).detach())
 
             if self._diag_corecos:
                 _a = h_a.flatten(0, 1); _b = h_new.flatten(0, 1)          # [n*S, C] per-token
@@ -845,6 +884,9 @@ class MORPHTransformer(nn.Module):
             if track_ret and rs_new is not None:
                 ret_state_s = rs_new if n_active == ret_state_s.shape[0] else \
                     torch.cat([rs_new, ret_state_s[n_active:]], dim=0)
+
+        if _capture_traj:
+            self._traj_carriers = _traj  # [z_0 .. z_T], each [B, S, C]; read by the interp probe
 
         if self._diag_corecos and self.training and _cc_meanmin is not None:
             self._fwd_count += 1
@@ -907,6 +949,33 @@ class MORPHTransformer(nn.Module):
         x = self.lm_mixer(x)
         x = self.final_norm(x)
 
+        # ── Paper-faithful STP on the HEAD-INPUT latent (arXiv:2604.18464) ──
+        # `x` is now final_norm(lm_mixer(x)) = the EXACT state the LM head (embed.attend) decodes,
+        # so the smoothed geometry is the one the decode-fidelity metric reads (Wolfe: target the
+        # coda/head-input latent, not the mid-loop carrier). Independent of the pre-mixer
+        # `stp_loss` above. Gated capture for the step-MSE probe (OFF → bit-exact).
+        if getattr(self, "_capture_head_latent", False):
+            self._head_latent = x.detach()
+        paper_stp_loss = x.new_zeros(())
+        if self.cfg.stp_mode != "off" and (self.training or labels is not None):
+            _hs = x.float()
+            if self.cfg.stp_mode == "step_boundary":
+                if step_boundary_mask is not None:
+                    paper_stp_loss = self.stp.forward_step_boundary(_hs, step_boundary_mask)
+            elif self.cfg.stp_mode == "random_token":
+                paper_stp_loss = self.stp(_hs, tau=self.cfg.stp_tau, seq_lens=seq_lens)
+            else:
+                raise ValueError(f"unknown stp_mode {self.cfg.stp_mode!r}")
+
+        # ── Forward latent-prediction (LatentForecast) ────────────────────────
+        # From h_t predict a future latent (h_{t+1} / next-period / next-period+1). Distinct from
+        # STP smoothness: this is an actual forecast head. Gated by latent_forecast_mode; uses the
+        # SAME head-input latent `x` and the punctuation step_boundary_mask for the boundary horizons.
+        lf_loss = x.new_zeros(())
+        _lf_mode = str(getattr(self.cfg, "latent_forecast_mode", "off"))
+        if _lf_mode != "off" and (self.training or labels is not None):
+            lf_loss = self.latent_forecast(x.float(), step_boundary_mask, seq_lens, _lf_mode)
+
         if labels is not None and self.cfg.use_kernels:
             # Fused chunked cross-entropy whenever we have labels (TRAINING **and**
             # EVAL). Never materialises the [B, T, V] logits — the dominant
@@ -936,8 +1005,12 @@ class MORPHTransformer(nn.Module):
                     x.reshape(-1, x.shape[-1]), w_full, labels.reshape(-1),
                     ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
                 )
-            loss = ce_loss + self.cfg.stp_lambda * stp_loss + self.cfg.loop_stp_lambda * loop_stp_loss
-            out = {"logits": None, "stp_loss": stp_loss, "loop_stp_loss": loop_stp_loss, "loss": loss}
+            loss = (ce_loss + self.cfg.stp_lambda * stp_loss
+                    + self.cfg.loop_stp_lambda * loop_stp_loss
+                    + self.cfg.step_stp_lambda * paper_stp_loss
+                    + float(getattr(self.cfg, "latent_forecast_lambda", 0.0)) * lf_loss)
+            out = {"logits": None, "stp_loss": stp_loss, "loop_stp_loss": loop_stp_loss,
+                   "paper_stp_loss": paper_stp_loss, "latent_forecast_loss": lf_loss, "loss": loss}
         else:
             logits = self.embed.attend(x)
             out = {"logits": logits}
@@ -954,9 +1027,14 @@ class MORPHTransformer(nn.Module):
                         logits.reshape(-1, self.cfg.vocab_size),
                         labels.reshape(-1), ignore_index=-100,
                     )
-                loss = ce_loss + self.cfg.stp_lambda * stp_loss + self.cfg.loop_stp_lambda * loop_stp_loss
+                loss = (ce_loss + self.cfg.stp_lambda * stp_loss
+                        + self.cfg.loop_stp_lambda * loop_stp_loss
+                        + self.cfg.step_stp_lambda * paper_stp_loss
+                        + float(getattr(self.cfg, "latent_forecast_lambda", 0.0)) * lf_loss)
                 out["stp_loss"] = stp_loss
                 out["loop_stp_loss"] = loop_stp_loss
+                out["paper_stp_loss"] = paper_stp_loss
+                out["latent_forecast_loss"] = lf_loss
                 out["loss"] = loss
 
         return out

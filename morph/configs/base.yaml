@@ -54,6 +54,30 @@ model:
   stp_lambda: 0.02
   stp_tau: 64
   loop_stp_lambda: 0.0   # loop-axis STP regularizer; 0.0 = OFF, bit-exact baseline
+  # Paper-faithful STP on the HEAD-INPUT latent (arXiv:2604.18464). off|random_token|step_boundary.
+  # "off"=baseline B (bit-exact); "random_token"=model C; "step_boundary"=model A (needs boundary mask).
+  stp_mode: "off"
+  step_stp_lambda: 1.0   # paper β=1
+  # Source of the boundary mask for stp_mode="step_boundary" during PRETRAINING.
+  # "none"        — no mask computed; step_boundary_mask=None (model still runs stp_mode but
+  #                 skips the STP loss when no mask is supplied — bit-identical baseline).
+  # "punctuation" — derive boundaries from punctuation tokens (periods, em dashes, newlines, …)
+  #                 so paper-STP applies to general pretraining text (bag_size=0 / TST OFF path).
+  stp_boundary_source: "none"
+  # Include commas as boundary markers (default off — too frequent, noisy boundaries).
+  stp_punct_include_comma: false
+
+  # ── Forward latent-PREDICTION head (LatentForecast) ──
+  # From h_t predict a FUTURE latent (vs STP's smoothness). mode = underscore-joined subset of
+  # {h1, end, start}: h1=predict h_{t+1}; end=predict next-period latent ("end of this proposition");
+  # start=predict next-period+1 ("start of next proposition"). Boundary horizons reuse the punct
+  # step_boundary_mask (needs stp_boundary_source=punctuation OR a supplied mask). "off" = inert
+  # (head built for fork-symmetry but gets no gradient → bit-identical baseline).
+  latent_forecast_mode: "off"      # off | h1 | end | start | h1_end | h1_start | h1_end_start
+  latent_forecast_lambda: 1.0      # weight on the (1-cos) forecast loss
+  latent_forecast_hidden: 0        # predictor MLP hidden width; 0 → d_model
+  latent_forecast_predictor: "mlp" # mlp | attn — attn = causal self-attention over PAST hidden states
+                                   #   (predict the future latent from the trajectory, not h_t alone)
 
   # LM head fused cross-entropy chunk size (rows of B·T per chunk).
   # Smaller = less peak VRAM, more launch overhead. Tune per target.
@@ -93,6 +117,7 @@ model:
 training:
   steps: 100000
   batch_size: 4
+  seed: 0                          # RNG seed: data-loader order + (via train.py manual_seed) weight init
   lr: 1e-4
   warmup: 0                       # validated mortar winner (phase_c_mortar_full25k_scratch): NO warmup
   lr_schedule: cosine            # cosine with min_lr==lr ⇒ FLAT 1e-4 (winner recipe; flat LR intentional)
@@ -256,6 +281,11 @@ training:
   # carve/route topology + optimizer + scaler + RNG + step + pruning phase). null = fresh
   # run. Must be a real key (not commented) so `training.resume=<path>` works from the CLI.
   resume: null
+  # FORK-continue: with a resume path set, start a FRESH optimizer (no inherited momentum) and
+  # skip the data-stream replay. For new experiments off a checkpoint (A/B forks) where a
+  # faithful "like nothing happened" resume is NOT wanted — both arms start identical, no stale
+  # slow-EMA confound. Default false = faithful full resume (optimizer state restored + replay).
+  resume_fresh_optimizer: false
 
 # Routing — whole-body ReMoE (prelude+core+coda). ALWAYS ON in the hotpath.
 # route_start = training-phase schedule: routing code activates at this step.

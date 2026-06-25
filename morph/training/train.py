@@ -81,6 +81,7 @@ from morph.model.routing import collect_routing_aux_losses, collect_routing_stat
 from morph.training.data import create_dataloader
 from morph.training.optimizer import create_optimizer, create_lr_schedule
 from morph.training.pruning import PruningSchedule
+from morph.training.punct_boundary import resolve_punct_token_ids, punctuation_boundary_mask
 
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
@@ -207,6 +208,12 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         stp_lambda=float(m.stp_lambda),
         stp_tau=int(m.stp_tau),
         loop_stp_lambda=float(getattr(m, "loop_stp_lambda", 0.0)),
+        stp_mode=str(getattr(m, "stp_mode", "off")),
+        step_stp_lambda=float(getattr(m, "step_stp_lambda", 1.0)),
+        latent_forecast_mode=str(getattr(m, "latent_forecast_mode", "off")),
+        latent_forecast_lambda=float(getattr(m, "latent_forecast_lambda", 1.0)),
+        latent_forecast_hidden=int(getattr(m, "latent_forecast_hidden", 0)),
+        latent_forecast_predictor=str(getattr(m, "latent_forecast_predictor", "mlp")),
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
         hc_streams=int(getattr(m, "hc_streams", 4)),
@@ -994,6 +1001,14 @@ def main(cfg: DictConfig) -> None:
     # separately; without this ordering, the first n_active==1 Poisson draw would compile
     # against live threads. wandb.init() is deferred to just after the warmup.
     morph_cfg = build_morph_config(cfg)
+    # Seed the CPU RNG before model construction so the seed perturbs weight INIT (Linear params are
+    # created on CPU via the default generator, THEN .to(device)), not just data-loader order. Lets a
+    # replication vary BOTH init and data across seeds. (No-op for prior runs that used seed=0.)
+    # ⚠️ CPU-ONLY on purpose: do NOT call torch.cuda.manual_seed_all here — it eagerly inits the CUDA
+    # context/driver threads BEFORE the single-threaded compile-fork window (see comment ~L1165), so a
+    # later Inductor compile fork deadlocks on a held lock (observed: 119 threads, futex_wait hang).
+    # CUDA RNG is restored from the ckpt anyway, so seeding it here is both unnecessary and unsafe.
+    torch.manual_seed(int(getattr(cfg.training, "seed", 0)))
     model = MORPHTransformer(morph_cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params / 1e6:.1f}M params on {device}")
@@ -1325,14 +1340,22 @@ def main(cfg: DictConfig) -> None:
                   flush=True)
         # Restore momentum/variance. HARD-FAIL on mismatch — swallowing it here would
         # silently continue training with ZERO momentum (the theater this whole task kills).
-        optimizer.load_state_dict(_opt_state)
-        _n_restored = sum(len(g["params"]) for g in optimizer.param_groups)
-        print(f"  [opt] optimizer state restored ({_n_restored} param tensors)", flush=True)
+        # EXCEPTION — resume_fresh_optimizer=True (FORK-continue / new experiment off a ckpt):
+        # deliberately start with a FRESH optimizer (no inherited momentum). This is the correct
+        # choice for an A/B fork (both arms start identical; no stale 50k slow-EMA confound) and
+        # it also sidesteps the bnb-8bit per-param "step"-key restore path. Topology + weights +
+        # RNG are still restored above; ONLY the optimizer STATE is intentionally dropped.
+        if bool(getattr(cfg.training, "resume_fresh_optimizer", False)):
+            print("  [opt] resume_fresh_optimizer=True → FRESH optimizer (momentum starts at "
+                  "zero; topology+weights+RNG restored). Fork-continue mode.", flush=True)
+        else:
+            optimizer.load_state_dict(_opt_state)
+            _n_restored = sum(len(g["params"]) for g in optimizer.param_groups)
+            print(f"  [opt] optimizer state restored ({_n_restored} param tensors)", flush=True)
         # MEMORY: optimizer.load_state_dict deep-copies into the live optimizer's tensors;
         # the checkpoint copy is a dead duplicate (~1.7GB on GPU for this model) that
         # otherwise lingers for the whole run (a local held by the train() frame). Dropping
         # it + empty_cache() also returns freed-but-reserved blocks from torch.load.
-        # The _needs_rebuild branch already did this; this covers the non-rebuild path.
         del _opt_state
         gc.collect()
         torch.cuda.empty_cache()
@@ -1350,7 +1373,11 @@ def main(cfg: DictConfig) -> None:
     # below with its own stage logic, so skipping here would be wasted re-tokenization.
     _curr_on = bool(getattr(cfg, "curriculum", None) is not None
                     and getattr(cfg.curriculum, "enabled", False))
-    _resume_skip = start_step if (start_step > 0 and not _curr_on) else 0
+    # Fork-continue (fresh optimizer) is explicitly NOT a faithful resume → no point replaying
+    # the deterministic stream to the exact position; start from the stream head (saves the
+    # ~10min/arm CPU re-tokenization). Faithful resume still replays for exact continuation.
+    _fork_continue = bool(getattr(cfg.training, "resume_fresh_optimizer", False))
+    _resume_skip = start_step if (start_step > 0 and not _curr_on and not _fork_continue) else 0
     train_loader = _make_train_loader(cur_bag, skip_batches=_resume_skip)
 
     # ── Curriculum pretraining (Phase P) — length-bucketed multi-source ramp ──
@@ -1444,6 +1471,30 @@ def main(cfg: DictConfig) -> None:
         print("[memprobe] peak-only mode (no allocator hooks; set MORPH_MEM_SNAPSHOT_STEP for a snapshot)",
               flush=True)
 
+    # ── Punctuation-boundary STP (step_boundary_mask for pretraining) ─────────────────────
+    # Resolve punct token ids ONCE at startup when stp_mode=="step_boundary" and
+    # stp_boundary_source=="punctuation".  Each training step then computes a [B,T] bool
+    # mask from the raw input tokens; the mask is passed to model() so paper-STP fires at
+    # punctuation positions in general pretraining text (bag_size=0 / TST OFF path only).
+    # When stp_boundary_source=="none" OR stp_mode!="step_boundary", _punct_ids is None and
+    # the model call is bit-identical to the pre-STP baseline (step_boundary_mask not passed).
+    _stp_mode = str(getattr(cfg.model, "stp_mode", "off"))
+    _stp_boundary_source = str(getattr(cfg.model, "stp_boundary_source", "none"))
+    _stp_punct_include_comma = bool(getattr(cfg.model, "stp_punct_include_comma", False))
+    _punct_ids: dict | None = None
+    if _stp_mode == "step_boundary" and _stp_boundary_source == "punctuation":
+        from transformers import AutoTokenizer as _AutoTok
+        _ptok = _AutoTok.from_pretrained(tokenizer_name)
+        print(f"[punct_boundary] Resolving punctuation token ids for stp_mode=step_boundary "
+              f"(tokenizer={tokenizer_name}, include_comma={_stp_punct_include_comma})", flush=True)
+        _punct_ids = resolve_punct_token_ids(
+            _ptok,
+            include_comma=_stp_punct_include_comma,
+            include_newline=True,
+        )
+        print(f"[punct_boundary] Ready: {len(_punct_ids)} boundary token ids", flush=True)
+        del _ptok  # tokenizer no longer needed; don't hold it in GPU memory
+
     # Diagnostic-only (MORPH_DEBUG_STEP): per-step wall time + the exact Poisson depths
     # that step sampled, to catch the intermittent slow step and its trigger. Wrap
     # _sample_depths to stash the last-returned depths; printed in the timing block.
@@ -1532,8 +1583,21 @@ def main(cfg: DictConfig) -> None:
                 x, y = next(train_loader)
             x, y = x.to(device), y.to(device)
 
+            # ── Punctuation step-boundary mask (bag_size==0 path only) ──────────────
+            # When stp_mode="step_boundary" + stp_boundary_source="punctuation", derive
+            # the [B,T] bool boundary mask from punctuation token positions in x.
+            # Only applied on the raw-token (bag_size=0) path: TST bagging scrambles
+            # punctuation positions (bag_size>0 groups s tokens per position), so the
+            # mask is meaningless under superposition and intentionally skipped there.
+            # When _punct_ids is None (stp_mode!="step_boundary" or source="none"),
+            # step_boundary_mask is not passed → bit-identical to pre-STP baseline.
+            _step_boundary_mask: torch.Tensor | None = None
+            if _punct_ids is not None and cur_bag == 0:
+                _step_boundary_mask = punctuation_boundary_mask(x, _punct_ids, min_gap=2)
+
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                out = model(x, labels=y, bag_size=cur_bag)
+                out = model(x, labels=y, bag_size=cur_bag,
+                            step_boundary_mask=_step_boundary_mask)
             loss = out["loss"]
 
             # Routing aux loss (load balance) — only active after route_start
@@ -1739,6 +1803,10 @@ def main(cfg: DictConfig) -> None:
                 log["train/stp_loss"] = out["stp_loss"].item()
             if "loop_stp_loss" in out:
                 log["train/loop_stp_loss"] = float(out["loop_stp_loss"])
+            if "paper_stp_loss" in out:
+                log["train/paper_stp_loss"] = float(out["paper_stp_loss"])
+            if "latent_forecast_loss" in out:
+                log["train/latent_forecast_loss"] = float(out["latent_forecast_loss"])
 
             # Retention gate diagnostic (#230): sigmoid(ret_gate) per retention block — THE key
             # signal for whether the model actually USES the retention branch (gate opens from ~0)
@@ -1773,6 +1841,12 @@ def main(cfg: DictConfig) -> None:
             if step % 200 == 0:
                 _lstp = f"  loop_stp={float(out['loop_stp_loss']):.4f}" if (
                     "loop_stp_loss" in out and morph_cfg.loop_stp_lambda > 0.0) else ""
+                _pstp = f"  paper_stp={float(out['paper_stp_loss']):.4f}" if (
+                    "paper_stp_loss" in out and getattr(morph_cfg, "stp_mode", "off") != "off") else ""
+                _lf = f"  lf={float(out['latent_forecast_loss']):.4f}" if (
+                    "latent_forecast_loss" in out
+                    and str(getattr(morph_cfg, "latent_forecast_mode", "off")) != "off") else ""
+                _lstp = _lstp + _pstp + _lf
                 print(
                     f"[{step:7d}/{total_steps}] loss={loss.item():.4f}  "
                     f"ppl={math.exp(min(loss.item(), 20.0)):.1f}  "

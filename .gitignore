@@ -10,6 +10,9 @@ build/
 *.so
 *.o
 wandb/
+.wandb_key
+*.wandb_key
+WANDB_API_KEY
 checkpoints/
 *.pt
 *.ckpt

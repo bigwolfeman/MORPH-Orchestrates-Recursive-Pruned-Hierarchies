@@ -1,0 +1,55 @@
+# MORPH Reasoning SFT config — step-boundary STP experiment (arXiv:2604.18464).
+# Three arms differ ONLY in model.stp_mode (set on CLI):
+#   step_boundary  → paper STP on boundary latents     (model A)
+#   random_token   → paper STP on random token latents  (model C)
+#   off            → baseline, no paper STP             (model B, bit-exact)
+#
+# The base ckpt IS routed+pruned (Phase-C) — must be loaded via load_phasec_model.
+# Set REQUIRED fields on CLI:
+#   sft.init_ckpt=/abs/path/to/step_50000.pt
+#   wandb.name=sft_reasoning_step_boundary   (or random_token / off)
+#   model.stp_mode=step_boundary             (or random_token / off)
+defaults:
+  - base
+  - _self_
+
+model:
+  # Pretraining STP (keep as-was during the SFT — we are NOT ablating these):
+  stp_lambda: 0.02
+  stp_tau: 64
+  loop_stp_lambda: 0.0
+
+  # Paper-STP arm control — default off (override on CLI):
+  stp_mode: "off"          # off | random_token | step_boundary
+  step_stp_lambda: 1.0     # paper β=1; controls the paper_stp_loss weight
+
+training:
+  lr: 2e-5
+  optimizer: adamw
+  adam8bit: true
+  weight_decay: 0.0
+  grad_clip: 1.0
+  dropout: 0.1
+
+sft:
+  init_ckpt: ???             # REQUIRED: absolute path to routed+compact Phase-C ckpt
+  data_source: gsm8k         # gsm8k | math
+  n_examples: 512
+  epochs: 2
+  batch_size: 4
+  max_len: 1024              # per-example max token length (examples > max_len are dropped)
+  warmup_frac: 0.05
+  min_lr: 2e-5               # flat LR after warmup (== lr)
+  seed: 1234
+  log_every: 20
+
+wandb:
+  project: morph
+  entity: adew-me
+  name: null                 # REQUIRED: set per arm on CLI
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: ignore/hydra_sft_reasoning/${now:%Y%m%d_%H%M%S}

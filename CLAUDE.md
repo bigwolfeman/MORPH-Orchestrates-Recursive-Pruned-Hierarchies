@@ -138,3 +138,21 @@ torch._functorch.config.donated_buffer = False (import the submodule explicitly 
 
 ### Project Cleanliness
 Do not litter scripts around the directory. Keep a ignored/ folder for temporary scripts (keep it organized), this folder is set to gitignore.
+
+### ⚠️ Sentence-boundary detection is a TESTING-ONLY heuristic (robust fix DEFERRED)
+`morph/training/punct_boundary.py` (punctuation step-boundary mask) and the `end`/`start` target
+horizons in `morph/model/prediction.py` (`LatentForecast`) detect sentence boundaries by **token-id
+membership** + a blind **`+1`** for "next-proposition start". This is a CRUDE stand-in that is only
+correct for clean single-space `". Word"` prose (verified: the space BPE-fuses into ` Word`, period
+is a bare `.`). It is **WRONG in general** and must NOT ship / be trusted for a final result without
+the robust replacement. The real problem is hard — ALL terminators × ALL combinations:
+  - closing-punct CLUSTERS BPE-fuse the terminator into one token (`."` `.)` `?"` `!)` `."'`) → the
+    boundary token-id is never seen → **boundary MISSED**;
+  - non-terminal periods (abbreviations `Dr.`/`U.S.`/`etc.`/`i.e.`, decimals `3.14`/`$1.50`, URLs/code
+    `example.com`/`self.x`) → **false-positive** mid-sentence splits;
+  - ellipses `...`, multi-terminators `?!`; terminator+newline / multi-space → `+1` lands on `\n`/` `,
+    not the next word (the `start` target is then noisy).
+PROPER FIX (deferred): real sentence segmenter (spaCy / pySBD / punkt) on DECODED text → char spans →
+map back to token indices → store an explicit boundary + next-content-start INDEX MAP at data-prep
+(no runtime guessing). Until then: clean single-space prose only; treat all punct-boundary / latent-
+forecast-boundary metrics as NOISY (this noise is itself a candidate reason the forecast signal is weak).
