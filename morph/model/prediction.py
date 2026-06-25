@@ -162,3 +162,160 @@ class STPLoss(nn.Module):
         if return_indices:
             return loss, (s, r, t)
         return loss
+
+    def forward_step_boundary(self, h: Tensor, boundary_mask: Tensor) -> Tensor:
+        """Consecutive STEP-BOUNDARY STP (arXiv:2604.18464, Eq 3) — the paper's central variant.
+
+        Reads the hidden state at each reasoning-step boundary, forming the per-sequence step
+        trajectory ``z_0..z_K``, and penalizes non-colinear consecutive STEP increments:
+
+            L = mean_k [ 1 − cos(z_{k+1} − z_k,  z_k − z_{k−1}) ]
+
+        averaged over all consecutive boundary triplets in the batch. Identical in FORM to the
+        random-triplet ``forward`` but sampled at SEMANTIC step boundaries (the paper's
+        168x-vs-4x point: *where* you sample dominates, not what the loss computes). ``h`` should
+        be the HEAD-INPUT latent (post-coda; the exact state the LM head decodes) so the geometry
+        being smoothed is the one the decode-fidelity metric reads.
+
+        Args:
+            h: ``[B, T, D]`` hidden states (pass float32 for numerical stability).
+            boundary_mask: ``[B, T]`` bool, True at step-boundary token positions.
+        Returns:
+            Scalar loss in ``[0, 2]``; a ``0`` tensor if NO sequence has ≥3 boundaries.
+        """
+        B = h.shape[0]
+        total = h.new_zeros(())
+        n_terms = 0
+        for b in range(B):
+            idx = boundary_mask[b].nonzero(as_tuple=False).squeeze(-1)   # [K] boundary positions
+            if idx.numel() < 3:
+                continue
+            z = h[b].index_select(0, idx)                                # [K, D] step trajectory
+            v = z[1:] - z[:-1]                                           # [K-1, D] step increments
+            per = 1.0 - F.cosine_similarity(v[1:], v[:-1], dim=-1)       # [K-2] consecutive colinearity
+            total = total + per.sum()
+            n_terms += int(per.numel())
+        if n_terms == 0:
+            return h.new_zeros(())
+        return total / n_terms
+
+
+# ── LatentForecast ──────────────────────────────────────────────────────────────
+
+
+class _AttnPredictor(nn.Module):
+    """Causal single-layer self-attention over the hidden trajectory: predict each position's target
+    by attending over h_{≤t} (Wolfe: 'predict the next hidden from PAST hidden, not just past
+    context'). Causal mask ⇒ position t never sees the future latent it is asked to forecast."""
+
+    def __init__(self, d_model: int, n_head: int = 4):
+        super().__init__()
+        self.nh = n_head
+        self.dh = d_model // n_head
+        self.qkv = nn.Linear(d_model, 3 * d_model)
+        self.o = nn.Linear(d_model, d_model)
+
+    def forward(self, h: Tensor) -> Tensor:               # h [B,T,D] -> pred [B,T,D]
+        B, T, D = h.shape
+        q, k, v = self.qkv(h).split(D, dim=-1)
+        q = q.view(B, T, self.nh, self.dh).transpose(1, 2)   # [B,nh,T,dh]
+        k = k.view(B, T, self.nh, self.dh).transpose(1, 2)
+        v = v.view(B, T, self.nh, self.dh).transpose(1, 2)
+        a = F.scaled_dot_product_attention(q, k, v, is_causal=True)   # causal: t attends ≤ t
+        a = a.transpose(1, 2).reshape(B, T, D)
+        return self.o(a)
+
+
+class LatentForecast(nn.Module):
+    """Forward latent-PREDICTION objective (distinct from STP's smoothness).
+
+    From the head-input latent h_t, a small MLP head PREDICTS a future latent; the loss is
+    1 − cos(pred, target.detach()) (JEPA-style: target is a stop-grad of the model's own future
+    state, so the head must forecast, not the encoder collapse). Three horizons (Wolfe):
+
+      h1    : predict h_{t+1}                      ("what am I doing at the very next step")
+      end   : predict h_{b(t)}  (next period > t)  ("what am I doing at the END of this proposition")
+      start : predict h_{b(t)+1}                   ("what am I doing at the START of the next one")
+
+    `mode` is an underscore-joined subset, e.g. "h1", "end", "h1_end", "h1_end_start". One head per
+    active horizon (so off-arm vs on-arm differ ONLY by which heads receive gradient). Boundary
+    horizons need `boundary_mask`; if absent they contribute 0.
+    """
+
+    HORIZONS = ("h1", "end", "start")
+
+    def __init__(self, d_model: int, hidden: int | None = None, predictor: str = "mlp",
+                 n_head: int = 4):
+        super().__init__()
+        h = hidden or d_model
+        self.predictor = predictor
+        if predictor == "attn":
+            # Wolfe's "give attention a chance to predict the next hidden from PAST hidden":
+            # each head forecasts its target by CAUSALLY attending over the hidden trajectory
+            # h_{≤t} (not from h_t alone). Causal ⇒ position t never sees the future it predicts.
+            self.heads = nn.ModuleDict({k: _AttnPredictor(d_model, n_head) for k in self.HORIZONS})
+        else:
+            self.heads = nn.ModuleDict({
+                k: nn.Sequential(nn.Linear(d_model, h), nn.GELU(), nn.Linear(h, d_model))
+                for k in self.HORIZONS
+            })
+
+    @staticmethod
+    def _next_boundary_after(boundary_mask: Tensor) -> Tensor:
+        """[B,T] long: for each t, the index of the next boundary STRICTLY after t (T if none).
+
+        ⚠️ TESTING-ONLY TARGET HEURISTIC. `end` uses this boundary index; `start` uses +1 from it.
+        The "+1 = first token of the next proposition" assumption holds ONLY for clean single-space
+        "X. Word" text (verified: the space BPE-fuses into ' Word', period is a bare '.'). It is
+        WRONG on terminator+newline (+1='\\n'), multi-space (+1=' '), and closing-punct clusters
+        ('."' '.)' which BPE-fuse so the boundary is MISSED upstream in punct_boundary.py). On real
+        prose the boundary targets are therefore NOISY — a candidate reason any forecast signal is
+        weak. PROPER FIX (deferred): a real sentence segmenter → explicit boundary + next-content
+        index map at data-prep. See punct_boundary.py warning + Ai-notes 06-25-2026 + CLAUDE.md."""
+        B, T = boundary_mask.shape
+        pos = torch.arange(T, device=boundary_mask.device).unsqueeze(0).expand(B, T)
+        BIG = T
+        bp = torch.where(boundary_mask, pos, torch.full_like(pos, BIG))      # [B,T] boundary idx or BIG
+        # shift so position t sees boundaries at j>t, then reverse-cummin
+        shifted = torch.cat([bp[:, 1:], bp.new_full((B, 1), BIG)], dim=1)    # bp[t+1..], pad BIG
+        rev = torch.flip(shifted, dims=[1])
+        rev_cummin = torch.cummin(rev, dim=1).values
+        return torch.flip(rev_cummin, dims=[1])                              # [B,T] next-boundary-after-t
+
+    def forward(self, h: Tensor, boundary_mask: Tensor | None, seq_lens: Tensor | None,
+                mode: str) -> Tensor:
+        """h: [B,T,D] head-input latent (float32). Returns mean over active horizons of
+        1 − cos(head(h_t), h_target.detach()), masked to valid (in-seq, target-exists) positions."""
+        B, T, D = h.shape
+        dev = h.device
+        horizons = [k for k in mode.split("_") if k in self.HORIZONS]
+        if not horizons:
+            return h.new_zeros(())
+        pos = torch.arange(T, device=dev).unsqueeze(0).expand(B, T)          # [B,T]
+        L = (seq_lens.to(dev).clamp(max=T).unsqueeze(1) if seq_lens is not None
+             else torch.full((B, 1), T, device=dev, dtype=torch.long))       # [B,1] valid len
+        nb = self._next_boundary_after(boundary_mask) if boundary_mask is not None else None
+
+        losses = []
+        for k in horizons:
+            if k == "h1":
+                tgt_idx = (pos + 1)
+            elif k == "end":
+                if nb is None:
+                    continue
+                tgt_idx = nb
+            else:  # start
+                if nb is None:
+                    continue
+                tgt_idx = (nb + 1)
+            valid = (pos < (L - 1)) & (tgt_idx < L) & (tgt_idx < T)          # [B,T] bool
+            if not bool(valid.any()):
+                continue
+            tgt_idx_c = tgt_idx.clamp(max=T - 1)
+            target = torch.gather(h, 1, tgt_idx_c.unsqueeze(-1).expand(B, T, D)).detach()
+            pred = self.heads[k](h)                                           # [B,T,D]
+            per = 1.0 - F.cosine_similarity(pred, target, dim=-1)            # [B,T]
+            losses.append((per * valid).sum() / valid.sum().clamp(min=1))
+        if not losses:
+            return h.new_zeros(())
+        return torch.stack(losses).mean()

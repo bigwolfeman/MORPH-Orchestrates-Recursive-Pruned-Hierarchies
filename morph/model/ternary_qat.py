@@ -571,6 +571,12 @@ def _categorize(name: str, module: nn.Module, attn_ids: set[int]) -> str | None:
     if (name.endswith("injection.W_a") or name.endswith("injection.W_dt")
             or name.endswith("injection.B")):
         return None
+    # Guard: never ternarize the LatentForecast prediction heads. They are an AUXILIARY training
+    # objective (predict a future latent), not a deployed weight — and a ternary {-1,0,+1} predictor
+    # is too weak to give a clean forecast signal to the backbone (the whole point of the loss).
+    # Always bf16. Lives at ``latent_forecast.heads.*``.
+    if ".latent_forecast." in ("." + name) or name.startswith("latent_forecast."):
+        return None
     # CMSBlockLinear (inside MortarLinear) holds a dense [out, in] nn.Parameter
     # named `weight` in dense mode — quantize it like any other linear.
     is_cms = type(module).__name__ == "CMSBlockLinear"
