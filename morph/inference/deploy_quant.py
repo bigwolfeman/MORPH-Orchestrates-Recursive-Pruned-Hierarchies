@@ -43,7 +43,7 @@ __all__ = [
     "PackedTernaryLinear", "Int8RowLinear", "Int6RowEmbedding",
     "pack_mortar_ternary", "strip_cms_inference", "shrink_mlp_to_mortar_ternary",
     "quantize_attention_linears", "resident_bytes_report",
-    "to_deploy_inference",
+    "to_deploy_inference", "ensure_deploy_packed",
 ]
 
 _SHIFTS = torch.tensor([0, 2, 4, 6], dtype=torch.uint8)
@@ -614,6 +614,87 @@ def to_deploy_inference(model: nn.Module, device: str | torch.device = "cuda",
         "resident_mb": report["total_bytes"] / (1024 ** 2),
         "resident_report": report,
     }
+
+
+def _cms_carved_unpacked(m: nn.Module) -> bool:
+    """A CMSBlockLinear that is CARVED (real MORTAR BCSR) but NOT yet 2-bit packed.
+
+    Markers (see block_sparse.py + pack_mortar_ternary):
+      - carved:   ``_mortar`` True (carve() sets it; dense pre-carve layers are False).
+      - unpacked: still owns the floating ``mortar_data`` PARAMETER. pack_mortar_ternary
+                  DELETES that parameter and registers the ``mortar_packed`` uint8 buffer,
+                  so a packed layer has no ``mortar_data`` param (and a ``mortar_packed``).
+    """
+    if type(m).__name__ != "CMSBlockLinear" or not getattr(m, "_mortar", False):
+        return False
+    md = m._parameters.get("mortar_data", None)
+    if md is None:
+        return False                      # already packed (param deleted) or no data
+    return md.is_floating_point()         # floating shadow ⇒ unpacked
+
+
+def _cms_carved_packed(m: nn.Module) -> bool:
+    """A CMSBlockLinear already packed by pack_mortar_ternary (has ``mortar_packed``)."""
+    return (type(m).__name__ == "CMSBlockLinear"
+            and getattr(m, "_mortar", False)
+            and "mortar_packed" in m._buffers)
+
+
+def ensure_deploy_packed(model: nn.Module, attn_bits: int = 8,
+                         threshold: float = 0.5) -> dict:
+    """Make a CARVED-BUT-UNPACKED training/SFT checkpoint engine-ready, IN PLACE.
+
+    The ``StaticDecodeEngine`` fast path requires the DEPLOY storage format produced by
+    ``to_deploy_inference``: every carved CMS MLP 2-bit-PACKED (``mortar_packed``; the
+    ``mortar_gemv`` strip kernel reads it) and attention projections as ``Int8RowLinear``
+    (``decode_front`` int8 path). A model freshly loaded from a trained checkpoint via
+    ``load_phasec_model`` is in an INTERMEDIATE state — CMS layers are carved (``_mortar``
+    True) but ``mortar_data`` is still the floating shadow, and attention is the trained
+    bf16/QAT ``nn.Linear``. That state falls in the engine's gap and forces slow eager
+    generation. This helper closes the gap automatically.
+
+    IDEMPOTENT and SELECTIVE — only touches what is not already deploy-format:
+      - Carved-UNPACKED CMS MLP → ``pack_mortar_ternary`` (the SAME packer ``to_deploy_inference``
+        uses). It only PACKS an already-carved layer; it does NOT re-carve (``shrink_mlp_to_mortar_ternary``
+        would re-prune with RANDOM saliency and destroy the trained block pattern — never called here).
+      - Attention ``nn.Linear`` not yet ``Int8RowLinear`` → ``quantize_attention_linears`` at ``attn_bits``.
+      - Already-packed CMS / already-int8 attention → skipped.
+      - NO carve anywhere (genuinely dense-fp32, the 276M eval stack) → DO NOTHING. The engine's
+        dense path is correct for it; force-quantizing would corrupt a model the engine handles natively.
+
+    Returns
+    -------
+    dict {state, n_mlp_packed, n_attn_quantized}
+      state == "dense"          : no carved CMS layer found → nothing done.
+      state == "already_packed" : every carved CMS was already packed AND attention already int8.
+      state == "auto_packed"    : packed >=1 MLP and/or quantized >=1 attention Linear this call.
+    """
+    carved_unpacked = [m for m in model.modules() if _cms_carved_unpacked(m)]
+    carved_packed = [m for m in model.modules() if _cms_carved_packed(m)]
+
+    # No carve at all → genuinely dense. Leave the engine's dense path alone.
+    if not carved_unpacked and not carved_packed:
+        return {"state": "dense", "n_mlp_packed": 0, "n_attn_quantized": 0}
+
+    # Pack only the carved-but-unpacked MLPs (idempotent: packed ones are skipped).
+    n_mlp_packed = 0
+    for cms in carved_unpacked:
+        cms._values_ternary_mode = False   # bake the snap; live values-ternary STE must be off
+        pack_mortar_ternary(cms, threshold=threshold)
+        strip_cms_inference(cms)
+        n_mlp_packed += 1
+
+    # Quantize attention only where it is still a plain nn.Linear (idempotent: Int8RowLinear
+    # children are not nn.Linear-typed, so quantize_attention_linears skips them).
+    n_attn_quantized = 0
+    for m in model.modules():
+        if "Attention" in type(m).__name__:
+            n_attn_quantized += quantize_attention_linears(m, bits=attn_bits)
+
+    if n_mlp_packed == 0 and n_attn_quantized == 0:
+        return {"state": "already_packed", "n_mlp_packed": 0, "n_attn_quantized": 0}
+    return {"state": "auto_packed", "n_mlp_packed": n_mlp_packed,
+            "n_attn_quantized": n_attn_quantized}
 
 
 def resident_bytes_report(model: nn.Module) -> dict:

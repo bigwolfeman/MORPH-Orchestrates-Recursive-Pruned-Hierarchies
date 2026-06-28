@@ -136,6 +136,20 @@ class StaticDecodeEngine:
         flag to forget (forgetting it = int4 quality cost with zero bandwidth win). Pass
         True/False to force; auto raises on a mixed-bit attention (can't uniformly pack)."""
         assert not model.training, "engine is inference-only — call model.eval() first"
+        # Auto-resolve a carved-but-unpacked training/SFT checkpoint to the deploy storage
+        # format the fast kernels require (2-bit-packed MORTAR MLPs + int8/row attention).
+        # IDEMPOTENT + SELECTIVE: no-op on an already-deploy model, and leaves a genuinely
+        # dense (276M eval) model untouched so its dense fast path stays correct.
+        from morph.inference.deploy_quant import ensure_deploy_packed
+        _autopack = ensure_deploy_packed(model)
+        if _autopack["state"] == "auto_packed":
+            print(f"[engine] auto-packed {_autopack['n_mlp_packed']} carved MLPs + "
+                  f"{_autopack['n_attn_quantized']} attn Linears (was a training/SFT ckpt)")
+        elif _autopack["state"] == "already_packed":
+            print("[engine] model already deploy-ready")
+        else:
+            print("[engine] dense model — no packing")
+        self._autopack = _autopack
         self.model = model
         cfg = model.cfg
         dev = next(model.parameters()).device
