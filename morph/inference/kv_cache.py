@@ -417,7 +417,7 @@ def decode_step(model, token_ids: Tensor, cache: MORPHKVCache) -> Tensor:
       HC stream expand → prelude → core×mean_depth → coda → HC stream reduce → LM head.
     Uses the CURRENT injection API (_build_injection_term + _apply_injection) and the REAL
     block forward (HC residual + ReMoE router + GLA retention), swapping only attention for the
-    cached incremental step. STP omitted (training-only regulariser; does not affect logits).
+    cached incremental step.
 
     Retention (#230): prelude/coda GLA branches are decoded EXACTLY (pure causal token-axis
     accumulator per site). The CORE retention layer's cross-iteration carry (retention_carry) is

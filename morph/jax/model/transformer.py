@@ -1,7 +1,7 @@
 """MORPH Transformer — JAX/Flax port of morph/model/transformer.py.
 
 Parcae-style looped architecture with all features baked in.
-Architecture: Embedding → Prelude → Core×T → Coda → STP → LM head
+Architecture: Embedding → Prelude → Core×T → Coda → LM head
 
 Loop hierarchy:
   Inner: Parcae core loop (T iterations, Poisson depth, BPTT via jax.checkpoint)
@@ -16,8 +16,7 @@ Design principles:
 
 Forward returns a dict matching the PyTorch model exactly:
   {"logits": [B, T, vocab_size],
-   "loss": scalar (if labels given),
-   "stp_loss": scalar}
+   "loss": scalar (if labels given)}
 """
 
 from __future__ import annotations
@@ -34,7 +33,6 @@ from .attention import CCACSAHCAAttention, RMSNorm
 from .chunked_ce import chunked_cross_entropy, naive_cross_entropy
 from .embeddings import MORPHEmbedding
 from .mhc import MultiRateResidual, ChannelInject, DEFAULT_CHANNEL_DIMS
-from .prediction import STPLoss
 
 
 # ── MORPHTransformerBlock: MORPHBlock with n_skip support ─────────────────────
@@ -121,10 +119,6 @@ class MORPHConfig:
     # Embeddings
     lorentz_fraction: float = 0.25
     bigram_hash_vocab: int = 49152
-
-    # Prediction (STP — Semantic Tube Predictor, geometric regularizer)
-    stp_lambda: float = 0.02
-    stp_tau: int = 64
 
     # LM head — chunked cross-entropy chunk size (token rows per chunk).
     # Tune per target: larger = faster (fewer XLA kernel launches) but more
@@ -451,9 +445,6 @@ class MORPHTransformer(nn.Module):
         self.lm_mixer = LMHeadMixer(d_model=d, channel_dims=ch, name="lm_mixer")
         self.final_norm = RMSNorm(eps=1e-5, name="final_norm")
 
-        # ── Prediction (STP — Semantic Tube Predictor) ─────────────────────
-        self.stp = STPLoss(mode="geodesic", tau=cfg.stp_tau, name="stp")
-
     # ── x0 and value-embed injection helpers ──────────────────────────────────
 
     def _apply_x0(self, x: jnp.ndarray, layer_idx: int, x0: jnp.ndarray) -> jnp.ndarray:
@@ -484,7 +475,7 @@ class MORPHTransformer(nn.Module):
             rng:       PRNGKey for dropout + Poisson sampling.
 
         Returns:
-            dict with "logits" and (if labels given) "loss", "stp_loss".
+            dict with "logits" and (if labels given) "loss".
         """
         return self._forward_single(input_ids, labels, training, rng)
 
@@ -597,9 +588,6 @@ class MORPHTransformer(nn.Module):
             x = self.embed.bigram.inject(x, bigram_emb, gi)
             x = layer(x, deterministic=not training)
 
-        # ── STP loss ───────────────────────────────────────────────────────
-        stp_loss = self.stp(self.final_norm(x))
-
         # ── LM head ────────────────────────────────────────────────────────
         x_for_head = self.lm_mixer(x)
         x_for_head = self.final_norm(x_for_head)
@@ -618,10 +606,10 @@ class MORPHTransformer(nn.Module):
                 ignore_index=-100,
                 chunk_size=cfg.ce_chunk_size,
             )
-            loss = ce_loss + cfg.stp_lambda * stp_loss
+            loss = ce_loss
             # logits intentionally not materialised in training (unused;
             # generation + eval take the full-logits branch below).
-            out = {"logits": None, "stp_loss": stp_loss, "loss": loss}
+            out = {"logits": None, "loss": loss}
         else:
             # ── Eval / generation: full logits path ──────────────────────────
             logits = self.embed.attend(x_for_head)                 # [B, T, V]
@@ -637,8 +625,7 @@ class MORPHTransformer(nn.Module):
                     labels_flat,
                     ignore_index=-100,
                 )
-                loss = ce_loss + cfg.stp_lambda * stp_loss
-                out["stp_loss"] = stp_loss
+                loss = ce_loss
                 out["loss"] = loss
 
         return out

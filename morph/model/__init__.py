@@ -1,7 +1,3 @@
 """MORPH model components."""
 
-from .prediction import STPLoss
-
-__all__ = [
-    "STPLoss",
-]
+__all__: list[str] = []

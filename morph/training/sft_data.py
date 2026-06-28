@@ -313,7 +313,7 @@ def sft_batches(
 # FRONT, so they never attend FORWARD to pad positions; and the pad positions are
 # excluded from the loss because their labels are IGNORE_INDEX (-100). The model also
 # receives `seq_lens` (true non-pad length per row) so any length-aware sub-component
-# (e.g. STP triplet sampling) restricts itself to the real tokens.
+# restricts itself to the real tokens.
 # ══════════════════════════════════════════════════════════════════════════════
 
 

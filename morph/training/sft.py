@@ -1,23 +1,19 @@
 """MORPH instruction-tuning (SFT) — fine-tune a routed/compact pretrained checkpoint.
 
-Prediction-2 experiment: does a short instruction-following SFT (with STP, the paper's
-intended use) erase the pretraining-STP repetition penalty found in prediction 1? Both
-arms (base_off, base_on) run THIS script with IDENTICAL config except `sft.init_ckpt`.
+Pure cross-entropy instruction tuning on a packed, response-masked corpus.
 
 Design (see sft_data.py for the packed/response-masked data contract):
   - Build the model with the SAME quant stack the ckpt was saved with (ternary + embed
     int6), reconstruct routed (ReMoE) + carved (BCSR) topology via load_checkpoint, then
     build a FRESH optimizer on the reconstructed param set and reset the step axis to 0.
-  - STP is enabled by `model.stp_lambda` (set in sft.yaml) — the forward always adds
-    `stp_lambda * stp_loss`, so "both bases get STP-SFT" = stp_lambda>0 for both arms.
-  - RESEED after load: load_checkpoint restores the ckpt's RNG; the two arms have
-    different saved RNG, which would break the paired comparison. Reseeding with the
-    shared sft.seed gives both arms identical Poisson-depth/dropout streams.
+  - RESEED after load: load_checkpoint restores the ckpt's RNG; two arms would otherwise
+    have different saved RNG, which breaks a paired comparison. Reseeding with the shared
+    sft.seed gives both arms identical Poisson-depth/dropout streams.
   - Topology is FROZEN (no prune/carve/route): pure forward→backward→clip→step.
 
 Run:  PYTHONPATH=$PWD python -m morph.training.sft \
-          sft.init_ckpt=checkpoints/morph/tst_stp_off_50k/step_50000.pt \
-          wandb.name=sft_off_stp
+          sft.init_ckpt=checkpoints/morph/<ckpt>/step_50000.pt \
+          wandb.name=sft_run
 """
 from __future__ import annotations
 
@@ -197,7 +193,7 @@ def main(cfg: DictConfig) -> None:
                             wandb.run.name if wandb.run else "sft_run")
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    print(f"[sft] START stp_lambda={cfg.model.stp_lambda} lr={cfg.training.lr} "
+    print(f"[sft] START lr={cfg.training.lr} "
           f"opt={cfg.training.optimizer} adam8bit={cfg.training.adam8bit} "
           f"init={os.path.basename(os.path.dirname(init_ckpt))}", flush=True)
 
@@ -248,7 +244,6 @@ def main(cfg: DictConfig) -> None:
         log = {
             "sft/loss": lv,
             "sft/ppl": math.exp(min(lv, 20.0)),
-            "sft/stp_loss": out["stp_loss"].item(),
             "sft/lr": lr,
             "perf/steps_per_sec": sps,
             "perf/step": step,
@@ -259,7 +254,7 @@ def main(cfg: DictConfig) -> None:
         if step % 20 == 0:
             extra = "" if packing else f" slen={float(seq_lens.float().mean().item()):.0f}"
             print(f"[sft {step:4d}/{total_steps}] loss={lv:.4f} ppl={math.exp(min(lv,20.0)):.1f} "
-                  f"stp={out['stp_loss'].item():.4f} lr={lr:.2e} sps={sps:.2f}{extra}", flush=True)
+                  f"lr={lr:.2e} sps={sps:.2f}{extra}", flush=True)
         step += 1
 
     final = os.path.join(ckpt_dir, f"step_{step}.pt")
