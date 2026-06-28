@@ -1500,7 +1500,16 @@ def mortar_gemv(x: Tensor, pack: tuple, swiglu_x: bool = False,
     B = x.shape[0]
     E = ent.shape[1]
     FF = x.shape[-1] // 2 if swiglu_x else 0
-    BO = 32
+    # Shape-aware GEMV tiling: the 30B (O>=8192, blk=128) is memory-bound with a
+    # massively oversubscribed grid (E*blk//BO ~ thousands of CTAs), so BO=64 (=>
+    # fewer, fatter CTAs) + num_warps=2 reduces launch/occupancy overhead while the
+    # grid still saturates. The 276M (O<=4096) is occupancy-bound on a tiny grid
+    # (down-proj ~32-40 CTAs); halving CTAs there would underfill, so it KEEPS
+    # BO=32/num_warps=4 byte-identical. blk=128 is divisible by 64 on both builds.
+    _big = O >= 8192
+    BO = 64 if _big else 32
+    _mortar_warps = 2 if _big else 4
+    assert blk % BO == 0, (blk, BO, O)
     assert not (swiglu_x and swiglu_out)
     dummy = offsets
     part = torch.empty(nspl_max, B, O, device=x.device, dtype=torch.float32)
