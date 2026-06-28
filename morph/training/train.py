@@ -204,9 +204,6 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         context_len=int(m.context_len),
         lorentz_fraction=float(m.lorentz_fraction),
         bigram_hash_vocab=int(m.bigram_hash_vocab),
-        stp_lambda=float(m.stp_lambda),
-        stp_tau=int(m.stp_tau),
-        loop_stp_lambda=float(getattr(m, "loop_stp_lambda", 0.0)),
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
         hc_streams=int(getattr(m, "hc_streams", 4)),
@@ -620,7 +617,7 @@ def diag_optstate_allparams(model, optimizer, step: int, path: str) -> None:
 
     def _cat(nm):
         for k in ("prelude", "core", "coda", "embed", "attn", "mhc", "hc",
-                  "inject", "norm", "lm", "stp", "log_"):
+                  "inject", "norm", "lm", "log_"):
             if k in nm:
                 return k
         return "other"
@@ -1325,14 +1322,22 @@ def main(cfg: DictConfig) -> None:
                   flush=True)
         # Restore momentum/variance. HARD-FAIL on mismatch — swallowing it here would
         # silently continue training with ZERO momentum (the theater this whole task kills).
-        optimizer.load_state_dict(_opt_state)
-        _n_restored = sum(len(g["params"]) for g in optimizer.param_groups)
-        print(f"  [opt] optimizer state restored ({_n_restored} param tensors)", flush=True)
+        # EXCEPTION — resume_fresh_optimizer=True (FORK-continue / new experiment off a ckpt):
+        # deliberately start with a FRESH optimizer (no inherited momentum). This is the correct
+        # choice for an A/B fork (both arms start identical; no stale 50k slow-EMA confound) and
+        # it also sidesteps the bnb-8bit per-param "step"-key restore path. Topology + weights +
+        # RNG are still restored above; ONLY the optimizer STATE is intentionally dropped.
+        if bool(getattr(cfg.training, "resume_fresh_optimizer", False)):
+            print("  [opt] resume_fresh_optimizer=True → FRESH optimizer (momentum starts at "
+                  "zero; topology+weights+RNG restored). Fork-continue mode.", flush=True)
+        else:
+            optimizer.load_state_dict(_opt_state)
+            _n_restored = sum(len(g["params"]) for g in optimizer.param_groups)
+            print(f"  [opt] optimizer state restored ({_n_restored} param tensors)", flush=True)
         # MEMORY: optimizer.load_state_dict deep-copies into the live optimizer's tensors;
         # the checkpoint copy is a dead duplicate (~1.7GB on GPU for this model) that
         # otherwise lingers for the whole run (a local held by the train() frame). Dropping
         # it + empty_cache() also returns freed-but-reserved blocks from torch.load.
-        # The _needs_rebuild branch already did this; this covers the non-rebuild path.
         del _opt_state
         gc.collect()
         torch.cuda.empty_cache()
@@ -1350,7 +1355,11 @@ def main(cfg: DictConfig) -> None:
     # below with its own stage logic, so skipping here would be wasted re-tokenization.
     _curr_on = bool(getattr(cfg, "curriculum", None) is not None
                     and getattr(cfg.curriculum, "enabled", False))
-    _resume_skip = start_step if (start_step > 0 and not _curr_on) else 0
+    # Fork-continue (fresh optimizer) is explicitly NOT a faithful resume → no point replaying
+    # the deterministic stream to the exact position; start from the stream head (saves the
+    # ~10min/arm CPU re-tokenization). Faithful resume still replays for exact continuation.
+    _fork_continue = bool(getattr(cfg.training, "resume_fresh_optimizer", False))
+    _resume_skip = start_step if (start_step > 0 and not _curr_on and not _fork_continue) else 0
     train_loader = _make_train_loader(cur_bag, skip_batches=_resume_skip)
 
     # ── Curriculum pretraining (Phase P) — length-bucketed multi-source ramp ──
@@ -1735,10 +1744,6 @@ def main(cfg: DictConfig) -> None:
                 "perf/step": step,
                 "train/tst_bag": cur_bag,
             }
-            if "stp_loss" in out:
-                log["train/stp_loss"] = out["stp_loss"].item()
-            if "loop_stp_loss" in out:
-                log["train/loop_stp_loss"] = float(out["loop_stp_loss"])
 
             # Retention gate diagnostic (#230): sigmoid(ret_gate) per retention block — THE key
             # signal for whether the model actually USES the retention branch (gate opens from ~0)
@@ -1771,12 +1776,10 @@ def main(cfg: DictConfig) -> None:
             wandb.log(log, step=step)
 
             if step % 200 == 0:
-                _lstp = f"  loop_stp={float(out['loop_stp_loss']):.4f}" if (
-                    "loop_stp_loss" in out and morph_cfg.loop_stp_lambda > 0.0) else ""
                 print(
                     f"[{step:7d}/{total_steps}] loss={loss.item():.4f}  "
                     f"ppl={math.exp(min(loss.item(), 20.0)):.1f}  "
-                    f"lr={lr:.2e}  sps={sps:.2f}{_lstp}"
+                    f"lr={lr:.2e}  sps={sps:.2f}"
                 )
 
         # ── Validation (every eval_every steps) ──────────────────────────

@@ -30,7 +30,6 @@ _NO_DECAY_KEYWORDS = (
     "x0_injects", "value_embeds",                  # Skip/value inject gates
     "lm_mixer",                                    # LM head mixer
     "embed",                                       # Embedding tables
-    "stp",                                         # STP loss params
     "ste_gain", "ste_temp",                        # LSTE per-layer params
 )
 

@@ -50,11 +50,6 @@ model:
   lorentz_fraction: 0.25  # 576 eucl + 192 Lorentz
   bigram_hash_vocab: 49152
 
-  # STP (Semantic Tube Predictor — geometric regularizer)
-  stp_lambda: 0.02
-  stp_tau: 64
-  loop_stp_lambda: 0.0   # loop-axis STP regularizer; 0.0 = OFF, bit-exact baseline
-
   # LM head fused cross-entropy chunk size (rows of B·T per chunk).
   # Smaller = less peak VRAM, more launch overhead. Tune per target.
   ce_chunk_size: 1024
@@ -256,6 +251,11 @@ training:
   # carve/route topology + optimizer + scaler + RNG + step + pruning phase). null = fresh
   # run. Must be a real key (not commented) so `training.resume=<path>` works from the CLI.
   resume: null
+  # FORK-continue: with a resume path set, start a FRESH optimizer (no inherited momentum) and
+  # skip the data-stream replay. For new experiments off a checkpoint (A/B forks) where a
+  # faithful "like nothing happened" resume is NOT wanted — both arms start identical, no stale
+  # slow-EMA confound. Default false = faithful full resume (optimizer state restored + replay).
+  resume_fresh_optimizer: false
 
 # Routing — whole-body ReMoE (prelude+core+coda). ALWAYS ON in the hotpath.
 # route_start = training-phase schedule: routing code activates at this step.

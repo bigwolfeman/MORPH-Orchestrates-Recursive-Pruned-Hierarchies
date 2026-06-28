@@ -57,8 +57,6 @@ Verified PT → JAX path mapping (one representative example per param type):
   lm_mixer.channel_scales                    lm_mixer/channel_scales
   lm_mixer.mix.weight                        lm_mixer/mix/kernel
 
-  stp.*                                       (no parameters — zero-param module)
-
   MortarLinear / _cms.*                       (pruning state — skipped, no JAX equivalent)
 
 Key differences from older converter:
@@ -254,11 +252,8 @@ def _pt_name_to_jax_path(pt_name: str, layer_indices: dict[str, int] | None = No
         return jax_path, False
 
     # ── Scalar non-block params ────────────────────────────────────────────────
-    if p0 in ("injection", "stp"):
+    if p0 == "injection":
         # injection.log_A / injection.log_dt — direct map
-        # stp.* — no params
-        if p0 == "stp":
-            return None
         jax_path.extend(parts)
         return jax_path, False
 

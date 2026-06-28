@@ -1,16 +1,10 @@
 # MORPH SFT config — instruction-tune a routed/compact pretrained checkpoint (Dolly).
 # Composes base.yaml (model arch + full quant stack must match the ckpt) then overrides
-# training for fine-tuning. Both prediction-2 arms use THIS config; only sft.init_ckpt
-# (and wandb.name) differ → single-variable paired comparison.
+# training for fine-tuning. For paired comparisons run THIS config with only sft.init_ckpt
+# (and wandb.name) differing → single-variable comparison.
 defaults:
   - base
   - _self_
-
-model:
-  # STP-SFT: the paper's intended use. BOTH arms get STP during SFT (stp_lambda>0).
-  stp_lambda: 0.02
-  stp_tau: 64
-  loop_stp_lambda: 0.0
 
 training:
   # Fine-tuning hypers (low LR to imprint instruction format without catastrophic forgetting).
@@ -42,9 +36,8 @@ sft:
   batch_size: 4
   epochs: 2                 # LIGHT SFT: ~42 steps. The loss curve (epochs=8 probe) shows the
                            # Alpaca format is learned by ~step 40 (loss 10→1.9); beyond that the
-                           # model MEMORIZES the 512 responses (loss→0.08, ppl 1.1) — overfit that
-                           # swamps the STP signal. 2 epochs = format-learned, minimal memorization
-                           # = the "light instruction tuning" prediction 2 actually tests.
+                           # model MEMORIZES the 512 responses (loss→0.08, ppl 1.1) — overfit.
+                           # 2 epochs = format-learned, minimal memorization = light instruction tuning.
   mcq_frac: 0.0             # MCQ (ARC-train) mix-in fraction of the COMBINED SFT set.
                            # 0.0 (default) = Dolly-only, BIT-identical to prior behavior.
                            # >0 builds round(mcq_frac/(1-mcq_frac)*n_dolly) ARC examples
@@ -61,7 +54,7 @@ sft:
 wandb:
   project: morph
   entity: adew-me
-  name: null                # set per arm on CLI (sft_off_stp / sft_on_stp)
+  name: null                # set per arm on CLI
 
 hydra:
   job:

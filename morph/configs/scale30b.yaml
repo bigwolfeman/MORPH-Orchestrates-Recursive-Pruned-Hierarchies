@@ -45,10 +45,6 @@ model:
   lorentz_fraction: 0.25  # 576 eucl + 192 Lorentz
   bigram_hash_vocab: 49152
 
-  # STP (Semantic Tube Predictor — geometric regularizer)
-  stp_lambda: 0.02
-  stp_tau: 64
-
   # LM head fused cross-entropy chunk size (rows of B·T per chunk).
   # Smaller = less peak VRAM, more launch overhead. Tune per target.
   ce_chunk_size: 1024

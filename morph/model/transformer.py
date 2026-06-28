@@ -29,7 +29,6 @@ from .fused_ce import (
     multi_hot_cross_entropy_reference,
 )
 from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
-from .prediction import STPLoss
 from .sparsity import MortarLinear
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
@@ -91,15 +90,6 @@ class MORPHConfig:
     # Embeddings
     lorentz_fraction: float = 0.25
     bigram_hash_vocab: int = 49152
-
-    # Prediction (STP — Semantic Tube Predictor, geometric regularizer)
-    stp_lambda: float = 0.02
-    stp_tau: int = 64
-    # Loop-axis STP regularizer: same geodesic-smoothness geometry as STP, but
-    # applied along the LOOP-ITERATION trajectory h_0→…→h_T instead of the token axis. Pushes the
-    # inner map f_θ toward locally-affine behaviour → reduces the curvature that makes the AdEMAMix
-    # slow-EMA go stale (the σ_max(J_core) inter-block-alignment runaway). 0.0 → OFF, bit-exact.
-    loop_stp_lambda: float = 0.0
 
     # LM head — fused chunked cross-entropy (training). Rows of [B·T] tokens
     # processed per chunk; smaller = less peak memory, more launch overhead.
@@ -489,8 +479,6 @@ class MORPHTransformer(nn.Module):
         self.lm_mixer = LMHeadMixer(d, channel_dims=ch)
         self.final_norm = RMSNorm(d)
 
-        # ── Prediction (STP — Semantic Tube Predictor) ────────────────
-        self.stp = STPLoss()
 
         # ── Retention branch (#230) ────────────────────────────────────
         # Attach AFTER all base modules → GLA's RNG draws are a tail, so the base model is
@@ -777,12 +765,16 @@ class MORPHTransformer(nn.Module):
         # nested-dynamical-system frame). Reuses the validated _g; just doesn't max-reduce over t.
         _peri = self._diag_corecos and bool(os.environ.get("MORPH_DIAG_PERITER"))
         _peri_g = []        # per-iter max_gain (computed PRE-governor below)
-        # Loop-axis STP: collect the grad-carrying iterates' carriers (stream-reduced) so the
-        # post-loop geodesic smoothness over the ITERATION trajectory is differentiable. Only the
-        # last bptt_depth iters carry grad; active sets are nested prefixes (depth-sorted), so a
-        # consecutive triplet is sliced to the LATEST iter's prefix (samples active in all three).
-        _loop_stp_on = self.training and self.cfg.loop_stp_lambda > 0.0
-        _loop_carriers: list[Tensor] = []
+        # ── Eval-only loop-trajectory capture (interp: latent-MSE / decode fidelity) ──
+        # Gated by an instance flag; OFF (default, getattr→False) → zero overhead and
+        # bit-exact. Stashes the stream-reduced carrier z_0..z_T for the forecastability
+        # probe (ignore/loop_latent_mse.py). Eval runs a UNIFORM depth so the active set is
+        # the full batch in original order (perm == identity) → the stash is already in batch
+        # order, no inv_perm needed. Do NOT set this during training.
+        _capture_traj = getattr(self, "_capture_traj", False)
+        _traj: list[Tensor] = []
+        if _capture_traj:
+            _traj.append((e_s.mean(dim=2) if self._is_hc else e_s).detach())  # z_0 (pre-loop)
         for t in range(total_iters):
             n_active = active_counts[t]
             if n_active == 0:
@@ -820,9 +812,8 @@ class MORPHTransformer(nn.Module):
                 _scale = torch.clamp(_tau * _in_n / (_out_n + 1e-6), max=1.0)
                 h_new = h_new * _scale.view(-1, *([1] * (h_new.dim() - 1)))
 
-            # Loop-STP: stash this grad-iter's carrier (stream-reduced → [n_active, S, C]).
-            if _loop_stp_on and t >= n_nograd:
-                _loop_carriers.append(h_new.mean(dim=2) if self._is_hc else h_new)
+            if _capture_traj:  # eval-only interp: capture EVERY iteration's carrier (z_1..z_T)
+                _traj.append((h_new.mean(dim=2) if self._is_hc else h_new).detach())
 
             if self._diag_corecos:
                 _a = h_a.flatten(0, 1); _b = h_new.flatten(0, 1)          # [n*S, C] per-token
@@ -846,6 +837,9 @@ class MORPHTransformer(nn.Module):
                 ret_state_s = rs_new if n_active == ret_state_s.shape[0] else \
                     torch.cat([rs_new, ret_state_s[n_active:]], dim=0)
 
+        if _capture_traj:
+            self._traj_carriers = _traj  # [z_0 .. z_T], each [B, S, C]; read by the interp probe
+
         if self._diag_corecos and self.training and _cc_meanmin is not None:
             self._fwd_count += 1
             print(f"CORECOS fwd={self._fwd_count} mean_cos={_cc_meanmin.item():.4f} "
@@ -855,22 +849,6 @@ class MORPHTransformer(nn.Module):
                 _gv = torch.stack(_peri_g)                       # [n_iters], 1 sync
                 _gs = ",".join(f"{x:.2f}" for x in _gv.tolist())
                 print(f"PERITER fwd={self._fwd_count} n_iter={_gv.numel()} gains=[{_gs}]", flush=True)
-
-        # ── Loop-axis STP loss ────────────────────────────────────────────────
-        # Geodesic smoothness over the iteration trajectory: for each consecutive grad-iter
-        # triplet (a,b,c), penalise 1 − cos(c−b, b−a) (the increments should be colinear =
-        # locally-affine inner map). Active sets are nested prefixes, so slice a,b to c's prefix.
-        loop_stp_loss = h_s.new_zeros(())
-        if _loop_stp_on and len(_loop_carriers) >= 3:
-            _terms: list[Tensor] = []
-            for j in range(len(_loop_carriers) - 2):
-                a, b, c = _loop_carriers[j], _loop_carriers[j + 1], _loop_carriers[j + 2]
-                n = c.shape[0]                            # nested → latest iter = smallest prefix
-                v_bwd = b[:n] - a[:n]                      # increment k     [n, S, C]
-                v_fwd = c - b[:n]                          # increment k+1
-                _terms.append((1.0 - F.cosine_similarity(v_fwd, v_bwd, dim=-1)).mean())
-            if _terms:
-                loop_stp_loss = torch.stack(_terms).mean()
 
         with _prof("carrier::inv_perm_gather"):
             x = h_s[inv_perm]                    # restore original batch order
@@ -890,18 +868,6 @@ class MORPHTransformer(nn.Module):
         # recovers the plain-residual output; learned asymmetry is read out as the mean.
         if self._is_hc:
             x = x.mean(dim=2)
-
-        # ── STP ───────────────────────────────────────────────────────
-        # Only computed when it will actually be used (training, or any forward
-        # that produces a loss). Pure generation (labels=None, not training)
-        # skips the random triplet sampling — saves compute and avoids spending
-        # entropy from the RNG on a value that is never read.
-        if self.training or labels is not None:
-            stp_loss = self.stp(
-                self.final_norm(x).float(), tau=self.cfg.stp_tau, seq_lens=seq_lens
-            )
-        else:
-            stp_loss = x.new_zeros(())
 
         # ── LM head ──────────────────────────────────────────────────
         x = self.lm_mixer(x)
@@ -936,8 +902,8 @@ class MORPHTransformer(nn.Module):
                     x.reshape(-1, x.shape[-1]), w_full, labels.reshape(-1),
                     ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
                 )
-            loss = ce_loss + self.cfg.stp_lambda * stp_loss + self.cfg.loop_stp_lambda * loop_stp_loss
-            out = {"logits": None, "stp_loss": stp_loss, "loop_stp_loss": loop_stp_loss, "loss": loss}
+            loss = ce_loss
+            out = {"logits": None, "loss": loss}
         else:
             logits = self.embed.attend(x)
             out = {"logits": logits}
@@ -954,9 +920,7 @@ class MORPHTransformer(nn.Module):
                         logits.reshape(-1, self.cfg.vocab_size),
                         labels.reshape(-1), ignore_index=-100,
                     )
-                loss = ce_loss + self.cfg.stp_lambda * stp_loss + self.cfg.loop_stp_lambda * loop_stp_loss
-                out["stp_loss"] = stp_loss
-                out["loop_stp_loss"] = loop_stp_loss
+                loss = ce_loss
                 out["loss"] = loss
 
         return out
