@@ -14,7 +14,7 @@
 %   - Bigram: key=(A*id_t XOR B*id_{t-1}) mod 49152 (A=279470273,B=4294967291); table [49152,d];
 %     inject x + lambda_layer*bigram at EVERY block; per-layer lambda init 0 (learned).
 %   - LM head: lm_weight = cat([euc_w || lorentz_tangent_w]); logits = h @ W^T, cast fp32 (fused_ce).
-%   - Quant (Ablation E, embed_quant.py): per-row absmax int-N STE (s_row=max|w_row|/hi) on
+%   - Quant (embed_quant.py): per-row absmax int-N STE (s_row=max|w_row|/hi) on
 %     euc_embed + bigram.embed ONLY. Lorentz space_embed ALWAYS bf16 (safety-guarded, raises if
 %     touched). lm_head_quant = NO-OP at weight level (head tied to euc_embed); logits fp32.
 % Compile: pdflatex morph_embeddings.tex
