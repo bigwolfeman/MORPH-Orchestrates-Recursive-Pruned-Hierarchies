@@ -5,7 +5,7 @@
 # This is the SINGLE canonical default config reflecting the validated winning deploy stack:
 #   - MORTAR sparse backend (ternary backbone, 0.25 BCSR via morph/sparse/stk)
 #   - Routing ON (whole-body ReMoE; route_start = training-phase schedule, not an on/off gate)
-#   - Full quant stack: ternary MLP backbone + int8 attn projections + int6 embeddings + adam8bit
+#   - Quant stack: ternary MLP backbone + int6 embeddings + adam8bit
 #   - HC Cayley n=4 (JPmHC winner, fused Triton kernel default)
 #   - LoopSSM base mechanism (DiagonalInjection, always-on; ablation arms #232 are NOT included)
 
@@ -34,7 +34,7 @@ model:
   # Exact — never changes gradients (ppl-neutral). Tune down against VRAM headroom to raise tok/s.
   ckpt_grad_iters: -1
 
-  # Multi-rate residual channels
+  # Channel slices used by DiagonalInjection and final mixing. The residual carrier is HC.
   channel_dims: [384, 256, 128]  # compute, context, memory
 
   # Attention (CCA+CSA+HCA, all features baked in)

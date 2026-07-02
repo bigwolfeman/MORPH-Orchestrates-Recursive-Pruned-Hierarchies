@@ -265,12 +265,19 @@ class MORPHEmbedding(nn.Module):
             d_model=d_model,
             lorentz_fraction=lorentz_fraction,
         )
-        self.bigram = BigramEmbedding(
-            vocab_size=vocab_size,
-            d_model=d_model,
-            n_layers=n_layers,
-            hash_vocab=bigram_hash_vocab,
-        )
+        # bigram_hash_vocab == 0 → bigram signal disabled entirely (no table, no
+        # per-layer lambdas). get_bigram() then returns None and the transformer
+        # skips the bigram component of every injection term. Used by seed models
+        # whose grown target adds a fresh bigram table (zero-lambda init = silent).
+        if bigram_hash_vocab > 0:
+            self.bigram = BigramEmbedding(
+                vocab_size=vocab_size,
+                d_model=d_model,
+                n_layers=n_layers,
+                hash_vocab=bigram_hash_vocab,
+            )
+        else:
+            self.bigram = None
 
     def forward(self, input_ids: Tensor) -> Tensor:
         """Return hybrid (euclidean+lorentz) embedding, shape [B, S, d_model].
@@ -281,16 +288,19 @@ class MORPHEmbedding(nn.Module):
         """
         return self.hybrid(input_ids)
 
-    def get_bigram(self, input_ids: Tensor) -> Tensor:
+    def get_bigram(self, input_ids: Tensor) -> Tensor | None:
         """Compute bigram embeddings to be injected at each layer.
 
         Args:
             input_ids: [B, S] integer token ids.
 
         Returns:
-            [B, S, d_model] bigram embeddings. Pass to bigram.inject() at each
-            layer with the appropriate layer_idx.
+            [B, S, d_model] bigram embeddings (pass to bigram.inject() at each
+            layer with the appropriate layer_idx), or None when the bigram
+            signal is disabled (bigram_hash_vocab == 0).
         """
+        if self.bigram is None:
+            return None
         return self.bigram.compute(input_ids)
 
     def lm_weight(self) -> Tensor:

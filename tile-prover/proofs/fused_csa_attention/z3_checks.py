@@ -15,8 +15,8 @@ Properties proven (each = UNSAT on the NEGATION of the property):
      and the launch config (num_stages=1) is consistent with sm_120 (no TMA).
 
 Hardware params for sm_120 are sourced from the cached profile written by the
-sibling kernel work (tile-prover/proofs/sm120_results.json in the TitanMAC repo)
-and the project memory note "Triton sm_120 — num_stages>1 unsupported".
+sibling kernel work (`tile-prover/proofs/sm120_results.json`) and the project
+memory note "Triton sm_120 — num_stages>1 unsupported".
 
 Run: python tile-prover/proofs/fused_csa_attention/z3_checks.py
 """

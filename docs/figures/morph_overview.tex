@@ -1,7 +1,7 @@
-% MORPH Architecture — Overview (vertical).  Current MORPH (post-TitanMAC-strip):
+% MORPH Architecture — Overview (vertical).  Current MORPH:
 %   - residual mechanism = Cayley Hyper-Connections (n=4 streams), deployment default
-%   - retention (GLA) branch on layer 1 of each section (ablation #230)
-%   - NO neural memory / NO z-latent / NO MAC tokens (all stripped); STP kept (real)
+%   - retention (GLA) branch on layer 1 of each section
+%   - auxiliary memory and latent-prediction losses are not active
 % Compile: pdflatex morph_overview.tex
 
 \documentclass[border=14pt]{standalone}
@@ -147,8 +147,8 @@
 \draw[A] (fn) -- (hd);
 
 \node[B, fill=fYellow!40, above=0.45cm of hd, minimum height=0.9cm] (out) {
-  Logits \;$\to$\; Loss $=$ CE $+\;\lambda_{\mathrm{STP}}\,\mathcal{L}_{\mathrm{STP}}$\\[-1pt]
-  {\scriptsize STP $=$ Semantic Tube Predictor (geodesic-smoothness regularizer)}};
+  Logits \;$\to$\; Loss $=$ cross-entropy\\[-1pt]
+  {\scriptsize fused/chunked training path when kernels are enabled}};
 \draw[A] (hd) -- (out);
 
 % =====================================================================

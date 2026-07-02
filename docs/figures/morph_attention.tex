@@ -9,8 +9,8 @@
 %     depthwise+head-grouped causal conv (k=4); QK-mean couple; QK-RMSNorm; key temp
 %     exp() (per kv head); CoPE (clipped-RoPE); GQA expand H_kv->H; value-shift.
 %   - Window branch = LOCAL, per-token (always): sliding causal, w=128, XSA (self
-%     excluded), fused. NOTE: MAC suffix (n_skip_rope) is DORMANT API leftover from
-%     TitanMAC -- transformer.py never sets n_skip_rope (defaults 0), so it is OFF in MORPH.
+%     excluded), fused. NOTE: n_skip_rope remains a generic suffix-token path; MORPH's
+%     transformer leaves this at 0.
 %   - Global-compressed slot = GLOBAL, per-block; resolved at __init__ by GLOBAL layer_idx parity:
 %       even -> CSA: two-stream pool m=4 -> Lightning Indexer (-inf before relu)
 %               -> top_k=128 select -> on-the-fly gather + invalid-mask -> flash.
@@ -18,8 +18,6 @@
 %     Per-head sigmoid gate blends the LOCAL (per-token) and GLOBAL (per-block) branches.
 %   - Combine: per-head sigmoid gate (2 wts/head) blends; + residual-alpha (q_lat);
 %     + learnable per-head sinks; W_up d/2->d.
-%   - CLA (cla_kv path): cross-iter KV reuse. base/local = OFF (slight ppl regression at
-%     d=768); cloud.yaml = ON (net-positive at d=2048). Drawn as a dashed loop-opt overlay.
 % Compile: pdflatex morph_attention.tex
 
 \documentclass[border=14pt]{standalone}
@@ -161,15 +159,6 @@
 \draw[A] (comb) -- (wup);
 \node[io, above=0.42cm of wup] (out) {attn out $[B,S,d]$ \;$\to$\; block residual};
 \draw[A] (wup) -- (out);
-
-% ── CLA loop-level optimization (cloud-default; off locally) — upper-left dead space ──
-\node[draw=cbGray, densely dashed, rounded corners=5pt, fill=cbGray!5,
-      text width=4.2cm, font=\tiny\sffamily, align=left, inner sep=6pt, text=bdr]
-      at (-7.5,4.85) (cla) {%
-  \textbf{CLA} {\normalfont(cloud-default $\cdot$ off locally)}\\[1pt]
-  \emph{across core-loop iterations}: reuse the cached $k,v,C_\mathrm{comp}$ and
-  recompute $q$ only (the rail is computed once, then shared).};
-\draw[Ad, cbGray] (cla.south) -- (-3.7,\busy);
 
 % =====================================================================
 % BOTTOM — facts / notation panel

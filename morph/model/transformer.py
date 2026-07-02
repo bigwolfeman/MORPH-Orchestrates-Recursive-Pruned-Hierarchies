@@ -555,8 +555,13 @@ class MORPHTransformer(nn.Module):
         bagged [B,L] carrier). None → the normal per-token lookup (bit-identical).
         """
         cs, ce = self._ctx_start, self._ctx_end
-        lam = self.embed.bigram.lambdas[layer_idx].to(dtype)
-        full = lam * bigram_emb.to(dtype)                      # [B,S,C] full-width bigram
+        if bigram_emb is not None:
+            lam = self.embed.bigram.lambdas[layer_idx].to(dtype)
+            full = lam * bigram_emb.to(dtype)                  # [B,S,C] full-width bigram
+        else:
+            # bigram disabled (bigram_hash_vocab == 0): zero full-width base so the
+            # ctx-slice placement below is unchanged.
+            full = x0_term.new_zeros(*x0_term.shape[:-1], self.cfg.d_model, dtype=dtype)
         ctx = x0_term.to(dtype)                                # [B,S,ctx_w] x0 contribution
         if layer_idx in self._ve_layer_map:
             ve_idx = self._ve_layer_map.index(layer_idx)
@@ -634,7 +639,9 @@ class MORPHTransformer(nn.Module):
         if s > 0:
             T = T_in // s
             x = self.embed_drop(self.embed(input_ids).view(B, T, s, -1).mean(dim=2))   # [B,L,d]
-            bigram_emb = self.embed.get_bigram(input_ids).view(B, T, s, -1).mean(dim=2)  # [B,L,d]
+            _bg_raw = self.embed.get_bigram(input_ids)
+            bigram_emb = (_bg_raw.view(B, T, s, -1).mean(dim=2)                          # [B,L,d]
+                          if _bg_raw is not None else None)
             n_ve = len(self._ve_layer_map)
             ve_bagged = ([
                 self.value_embeds[k]
@@ -669,189 +676,195 @@ class MORPHTransformer(nn.Module):
             x = layer(x)
 
         # ── Core loop ─────────────────────────────────────────────────
-        e = self.input_norm(x)
-        with _prof("carrier::h_clone"):
-            h = e.clone()
+        # n_core == 0 → prelude output flows straight to the coda. The whole loop
+        # machinery below (input_norm/h clone, depth sampling, x0 hoist, DiagonalInjection
+        # via _apply_core_step) is core-only and must NOT run: with zero core blocks the
+        # injection would still perturb the ctx channel every iteration. Used by seed models.
+        if self.cfg.n_core > 0:
+            e = self.input_norm(x)
+            with _prof("carrier::h_clone"):
+                h = e.clone()
 
-        if self.training:
-            depths = self._sample_depths(B, x.device)
-        else:
-            depths = torch.full((B,), self.cfg.mean_depth,
-                                device=x.device, dtype=torch.long)
-
-        total_iters = int(depths.max().item())
-        n_nograd = max(0, total_iters - self.cfg.bptt_depth)
-
-        # ── Hoist the loop-invariant x0 projection out of the loop ──────────
-        # x0 is cloned once (constant across iterations) and each core layer's
-        # ChannelInject applies scale·proj(x0). Both proj.weight and log_scale
-        # are loop-invariant, so the additive term is identical every iteration.
-        # Precompute it once → ~n_core × total_iters redundant [.,.,d]→[.,.,ctx]
-        # matmuls collapse to n_core. Stacked as a checkpoint input so the
-        # backward recompute also skips re-projecting; gradient to proj.weight
-        # is the same sum-over-iterations as the per-iteration form.
-        n_core = self.cfg.n_core
-        np_ = self.cfg.n_prelude
-        x0_core_terms = torch.stack(
-            [self.x0_injects[np_ + i].precompute(x0) for i in range(n_core)],
-            dim=0,
-        )  # [n_core, B, S, ctx_width]
-
-        def _core_step(h_in, e_in, ids, x0_terms, bg, ret_state=None, iter_idx=0):
-            # Thin closure → the bound `_apply_core_step` method (single source of truth so
-            # the σ_max probe / diagnostics exercise the EXACT training core map). Kept as a
-            # closure so `checkpoint(_core_step, ...)` and the eager/no_grad call sites below
-            # are unchanged; np_ (= cfg.n_prelude) is now recomputed inside the method.
-            return self._apply_core_step(h_in, e_in, ids, x0_terms, bg,
-                                         ret_state=ret_state, iter_idx=iter_idx)
-
-        # ── Active-set shrinking ────────────────────────────────────────────
-        # A sample is updated only while iteration t < its Poisson depth, then
-        # frozen. The old code computed the FULL batch every iteration and
-        # discarded frozen samples via torch.where → ~(max_depth-mean_depth)
-        # fraction of forward FLOPs wasted on already-frozen samples.
-        # Instead: sort by depth descending so the still-active samples are a
-        # contiguous prefix [:n_active], process only that prefix, and carry the
-        # frozen suffix unchanged. Per-sample math is identical (no cross-batch
-        # mixing in attn/MLP); the global per-iteration no_grad/grad/checkpoint
-        # schedule is preserved, so gradients match the truncated-BPTT window.
-        sort_depths, perm = torch.sort(depths, descending=True)
-        inv_perm = torch.argsort(perm)
-        with _prof("carrier::perm_gather"):
-            h_s = h[perm]
-            e_s = e[perm]
-            ids_s = input_ids[perm]
-            bg_s = bigram_emb[perm]
-            x0_s = x0_core_terms[:, perm]            # [n_core, B, S, W]
-
-        # Selective checkpointing: checkpoint the first `n_ckpt` grad-iterations, run the rest
-        # (the last grad-iters) eager (activations retained → no backward recompute). -1 → all.
-        # Exact: changes memory/recompute only, never the gradient.
-        n_grad_iters = max(0, total_iters - n_nograd)
-        _ck = self.cfg.ckpt_grad_iters
-        n_ckpt = n_grad_iters if _ck < 0 else max(0, min(_ck, n_grad_iters))
-
-        # Precompute every iteration's active-set count in ONE host transfer. The old
-        # per-iteration `(sort_depths > t).sum().item()` forced a GPU->CPU sync EACH of
-        # the up-to-max_depth iterations, draining the launch queue mid-loop (the model
-        # is ~87% compute-bound but under launch pressure — perf pass OPT1). sort_depths
-        # is sorted descending, so this is one [B, total_iters] compare reduced to a
-        # per-t count, materialised once. Exact: identical counts, identical control flow.
-        _t_range = torch.arange(total_iters, device=sort_depths.device)
-        active_counts = (sort_depths.unsqueeze(1) > _t_range.unsqueeze(0)).sum(0).tolist()
-
-        # ── Retention cross-iteration carry (#230) ────────────────────────────
-        # GLA state for the core retention layer, carried iter→iter (fp32 accumulator, tiny).
-        # Held in the SAME sorted/active-set order as h_s: slice [:n_active], carry the frozen
-        # suffix unchanged — exactly like the carrier. The no_grad iterations produce a detached
-        # state, so when it enters the first grad iteration the gradient does NOT flow back into
-        # the frozen window (truncated-BPTT boundary, automatic). retention_carry=False → never
-        # tracked (each iter reseeds zero = global retention with no memory).
-        track_ret = self._core_has_retention and self.cfg.retention_carry
-        if track_ret:
-            _rh = self.cfg.retention_heads or self.cfg.n_heads
-            _rdh = self.cfg.d_model // _rh
-            ret_state_s = h_s.new_zeros(h_s.shape[0], _rh, _rdh, _rdh, dtype=torch.float32)
-        else:
-            ret_state_s = None
-
-        _cc_meanmin = None  # MORPH_DIAG_CORECOS: min-over-iters of MEAN per-token cos(h_new,h_a)
-        _cc_fracmax = None  # max-over-iters of FRACTION of tokens rotated >60° (cos<0.5)
-        _cc_min = None      # min per-token cos (saturated order-stat; kept for reference)
-        _cc_gain = None     # max per-sample magnitude gain (natural when governor off)
-        # MORPH_DIAG_PERITER: keep the PER-ITERATION max_gain (realized one-step amplification,
-        # a data-direction lower bound on σ_max(J_core)). If it COMPOUNDS across iteration index t
-        # when σ_max grows large → σ_max-driven transient blowup through the loop (the
-        # nested-dynamical-system frame). Reuses the validated _g; just doesn't max-reduce over t.
-        _peri = self._diag_corecos and bool(os.environ.get("MORPH_DIAG_PERITER"))
-        _peri_g = []        # per-iter max_gain (computed PRE-governor below)
-        # ── Eval-only loop-trajectory capture (interp: latent-MSE / decode fidelity) ──
-        # Gated by an instance flag; OFF (default, getattr→False) → zero overhead and
-        # bit-exact. Stashes the stream-reduced carrier z_0..z_T for the forecastability
-        # probe (ignore/loop_latent_mse.py). Eval runs a UNIFORM depth so the active set is
-        # the full batch in original order (perm == identity) → the stash is already in batch
-        # order, no inv_perm needed. Do NOT set this during training.
-        _capture_traj = getattr(self, "_capture_traj", False)
-        _traj: list[Tensor] = []
-        if _capture_traj:
-            _traj.append((e_s.mean(dim=2) if self._is_hc else e_s).detach())  # z_0 (pre-loop)
-        for t in range(total_iters):
-            n_active = active_counts[t]
-            if n_active == 0:
-                break
-            h_a = h_s[:n_active]
-            args = (h_a, e_s[:n_active], ids_s[:n_active],
-                    x0_s[:, :n_active], bg_s[:n_active])
-            rs_a = ret_state_s[:n_active] if track_ret else None
-
-            # Checkpoint this grad-iteration? Only in training, and only the first n_ckpt grad
-            # iters (later ones run eager → no recompute). n_nograd iters are frozen (no_grad).
-            do_ckpt = self.training and (t - n_nograd) < n_ckpt
-
-            if t < n_nograd:
-                with torch.no_grad():
-                    h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t)
-            elif do_ckpt:
-                h_new, rs_new = checkpoint(_core_step, *args, ret_state=rs_a, iter_idx=t,
-                                           use_reentrant=False)
+            if self.training:
+                depths = self._sample_depths(B, x.device)
             else:
-                # eval, OR a grad-iter we chose not to checkpoint (activations retained).
-                h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t)
+                depths = torch.full((B,), self.cfg.mean_depth,
+                                    device=x.device, dtype=torch.long)
 
-            # ── L1 core-gain governor (#276) ──────────────────────────────────────────
-            # Cap this iteration's per-sample looped-core amplification ‖h_new‖/‖h_a‖ ≤ τ.
-            # IDENTITY when gain ≤ τ (healthy: the HC residual is norm-preserving so gain≈1 →
-            # scale=1.0 → bit-exact x*1.0); only SHRINKS the runaway-gain step that the
-            # weight-shared core would otherwise amplify T× (gain runaway mode). Applied
-            # uniformly across the no_grad / checkpoint / eager branches (outside the checkpoint
-            # so the scaling lives in the outer graph). τ=0 → skipped entirely → bit-identical.
-            _tau = self.cfg.core_gain_clip
-            if _tau > 0.0:
-                _in_n = h_a.flatten(1).norm(dim=1)
-                _out_n = h_new.flatten(1).norm(dim=1)
-                _scale = torch.clamp(_tau * _in_n / (_out_n + 1e-6), max=1.0)
-                h_new = h_new * _scale.view(-1, *([1] * (h_new.dim() - 1)))
+            total_iters = int(depths.max().item())
+            n_nograd = max(0, total_iters - self.cfg.bptt_depth)
 
-            if _capture_traj:  # eval-only interp: capture EVERY iteration's carrier (z_1..z_T)
-                _traj.append((h_new.mean(dim=2) if self._is_hc else h_new).detach())
+            # ── Hoist the loop-invariant x0 projection out of the loop ──────────
+            # x0 is cloned once (constant across iterations) and each core layer's
+            # ChannelInject applies scale·proj(x0). Both proj.weight and log_scale
+            # are loop-invariant, so the additive term is identical every iteration.
+            # Precompute it once → ~n_core × total_iters redundant [.,.,d]→[.,.,ctx]
+            # matmuls collapse to n_core. Stacked as a checkpoint input so the
+            # backward recompute also skips re-projecting; gradient to proj.weight
+            # is the same sum-over-iterations as the per-iteration form.
+            n_core = self.cfg.n_core
+            np_ = self.cfg.n_prelude
+            x0_core_terms = torch.stack(
+                [self.x0_injects[np_ + i].precompute(x0) for i in range(n_core)],
+                dim=0,
+            )  # [n_core, B, S, ctx_width]
 
-            if self._diag_corecos:
-                _a = h_a.flatten(0, 1); _b = h_new.flatten(0, 1)          # [n*S, C] per-token
-                _ct = (_a * _b).sum(-1) / (_a.norm(dim=-1) * _b.norm(dim=-1) + 1e-6)
-                _mean = _ct.mean()                                        # avg token rotation
-                _frac = (_ct < 0.5).float().mean()                       # frac rotated >60°
-                _cm = _ct.min()
-                _g = (h_new.flatten(1).norm(dim=1) / (h_a.flatten(1).norm(dim=1) + 1e-6)).max()
-                _cc_meanmin = _mean if _cc_meanmin is None else torch.minimum(_cc_meanmin, _mean)
-                _cc_fracmax = _frac if _cc_fracmax is None else torch.maximum(_cc_fracmax, _frac)
-                _cc_min = _cm if _cc_min is None else torch.minimum(_cc_min, _cm)
-                _cc_gain = _g if _cc_gain is None else torch.maximum(_cc_gain, _g)
-                if _peri:
-                    _peri_g.append(_g)   # per-iteration realized max_gain (raw when governor off)
+            def _core_step(h_in, e_in, ids, x0_terms, bg, ret_state=None, iter_idx=0):
+                # Thin closure → the bound `_apply_core_step` method (single source of truth so
+                # the σ_max probe / diagnostics exercise the EXACT training core map). Kept as a
+                # closure so `checkpoint(_core_step, ...)` and the eager/no_grad call sites below
+                # are unchanged; np_ (= cfg.n_prelude) is now recomputed inside the method.
+                return self._apply_core_step(h_in, e_in, ids, x0_terms, bg,
+                                             ret_state=ret_state, iter_idx=iter_idx)
 
-            # updated active prefix + frozen suffix (no in-place op).
-            with _prof("carrier::loop_cat"):
-                h_s = h_new if n_active == h_s.shape[0] else \
-                    torch.cat([h_new, h_s[n_active:]], dim=0)
-            if track_ret and rs_new is not None:
-                ret_state_s = rs_new if n_active == ret_state_s.shape[0] else \
-                    torch.cat([rs_new, ret_state_s[n_active:]], dim=0)
+            # ── Active-set shrinking ────────────────────────────────────────────
+            # A sample is updated only while iteration t < its Poisson depth, then
+            # frozen. The old code computed the FULL batch every iteration and
+            # discarded frozen samples via torch.where → ~(max_depth-mean_depth)
+            # fraction of forward FLOPs wasted on already-frozen samples.
+            # Instead: sort by depth descending so the still-active samples are a
+            # contiguous prefix [:n_active], process only that prefix, and carry the
+            # frozen suffix unchanged. Per-sample math is identical (no cross-batch
+            # mixing in attn/MLP); the global per-iteration no_grad/grad/checkpoint
+            # schedule is preserved, so gradients match the truncated-BPTT window.
+            sort_depths, perm = torch.sort(depths, descending=True)
+            inv_perm = torch.argsort(perm)
+            with _prof("carrier::perm_gather"):
+                h_s = h[perm]
+                e_s = e[perm]
+                ids_s = input_ids[perm]
+                bg_s = bigram_emb[perm] if bigram_emb is not None else None
+                x0_s = x0_core_terms[:, perm]            # [n_core, B, S, W]
 
-        if _capture_traj:
-            self._traj_carriers = _traj  # [z_0 .. z_T], each [B, S, C]; read by the interp probe
+            # Selective checkpointing: checkpoint the first `n_ckpt` grad-iterations, run the rest
+            # (the last grad-iters) eager (activations retained → no backward recompute). -1 → all.
+            # Exact: changes memory/recompute only, never the gradient.
+            n_grad_iters = max(0, total_iters - n_nograd)
+            _ck = self.cfg.ckpt_grad_iters
+            n_ckpt = n_grad_iters if _ck < 0 else max(0, min(_ck, n_grad_iters))
 
-        if self._diag_corecos and self.training and _cc_meanmin is not None:
-            self._fwd_count += 1
-            print(f"CORECOS fwd={self._fwd_count} mean_cos={_cc_meanmin.item():.4f} "
-                  f"frac_rot={_cc_fracmax.item():.4f} min_cos={_cc_min.item():.4f} "
-                  f"max_gain={_cc_gain.item():.3f}", flush=True)
-            if _peri and _peri_g:
-                _gv = torch.stack(_peri_g)                       # [n_iters], 1 sync
-                _gs = ",".join(f"{x:.2f}" for x in _gv.tolist())
-                print(f"PERITER fwd={self._fwd_count} n_iter={_gv.numel()} gains=[{_gs}]", flush=True)
+            # Precompute every iteration's active-set count in ONE host transfer. The old
+            # per-iteration `(sort_depths > t).sum().item()` forced a GPU->CPU sync EACH of
+            # the up-to-max_depth iterations, draining the launch queue mid-loop (the model
+            # is ~87% compute-bound but under launch pressure — perf pass OPT1). sort_depths
+            # is sorted descending, so this is one [B, total_iters] compare reduced to a
+            # per-t count, materialised once. Exact: identical counts, identical control flow.
+            _t_range = torch.arange(total_iters, device=sort_depths.device)
+            active_counts = (sort_depths.unsqueeze(1) > _t_range.unsqueeze(0)).sum(0).tolist()
 
-        with _prof("carrier::inv_perm_gather"):
-            x = h_s[inv_perm]                    # restore original batch order
+            # ── Retention cross-iteration carry (#230) ────────────────────────────
+            # GLA state for the core retention layer, carried iter→iter (fp32 accumulator, tiny).
+            # Held in the SAME sorted/active-set order as h_s: slice [:n_active], carry the frozen
+            # suffix unchanged — exactly like the carrier. The no_grad iterations produce a detached
+            # state, so when it enters the first grad iteration the gradient does NOT flow back into
+            # the frozen window (truncated-BPTT boundary, automatic). retention_carry=False → never
+            # tracked (each iter reseeds zero = global retention with no memory).
+            track_ret = self._core_has_retention and self.cfg.retention_carry
+            if track_ret:
+                _rh = self.cfg.retention_heads or self.cfg.n_heads
+                _rdh = self.cfg.d_model // _rh
+                ret_state_s = h_s.new_zeros(h_s.shape[0], _rh, _rdh, _rdh, dtype=torch.float32)
+            else:
+                ret_state_s = None
+
+            _cc_meanmin = None  # MORPH_DIAG_CORECOS: min-over-iters of MEAN per-token cos(h_new,h_a)
+            _cc_fracmax = None  # max-over-iters of FRACTION of tokens rotated >60° (cos<0.5)
+            _cc_min = None      # min per-token cos (saturated order-stat; kept for reference)
+            _cc_gain = None     # max per-sample magnitude gain (natural when governor off)
+            # MORPH_DIAG_PERITER: keep the PER-ITERATION max_gain (realized one-step amplification,
+            # a data-direction lower bound on σ_max(J_core)). If it COMPOUNDS across iteration index t
+            # when σ_max grows large → σ_max-driven transient blowup through the loop (the
+            # nested-dynamical-system frame). Reuses the validated _g; just doesn't max-reduce over t.
+            _peri = self._diag_corecos and bool(os.environ.get("MORPH_DIAG_PERITER"))
+            _peri_g = []        # per-iter max_gain (computed PRE-governor below)
+            # ── Eval-only loop-trajectory capture (interp: latent-MSE / decode fidelity) ──
+            # Gated by an instance flag; OFF (default, getattr→False) → zero overhead and
+            # bit-exact. Stashes the stream-reduced carrier z_0..z_T for the forecastability
+            # probe (ignore/loop_latent_mse.py). Eval runs a UNIFORM depth so the active set is
+            # the full batch in original order (perm == identity) → the stash is already in batch
+            # order, no inv_perm needed. Do NOT set this during training.
+            _capture_traj = getattr(self, "_capture_traj", False)
+            _traj: list[Tensor] = []
+            if _capture_traj:
+                _traj.append((e_s.mean(dim=2) if self._is_hc else e_s).detach())  # z_0 (pre-loop)
+            for t in range(total_iters):
+                n_active = active_counts[t]
+                if n_active == 0:
+                    break
+                h_a = h_s[:n_active]
+                args = (h_a, e_s[:n_active], ids_s[:n_active],
+                        x0_s[:, :n_active],
+                        bg_s[:n_active] if bg_s is not None else None)
+                rs_a = ret_state_s[:n_active] if track_ret else None
+
+                # Checkpoint this grad-iteration? Only in training, and only the first n_ckpt grad
+                # iters (later ones run eager → no recompute). n_nograd iters are frozen (no_grad).
+                do_ckpt = self.training and (t - n_nograd) < n_ckpt
+
+                if t < n_nograd:
+                    with torch.no_grad():
+                        h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t)
+                elif do_ckpt:
+                    h_new, rs_new = checkpoint(_core_step, *args, ret_state=rs_a, iter_idx=t,
+                                               use_reentrant=False)
+                else:
+                    # eval, OR a grad-iter we chose not to checkpoint (activations retained).
+                    h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t)
+
+                # ── L1 core-gain governor (#276) ──────────────────────────────────────────
+                # Cap this iteration's per-sample looped-core amplification ‖h_new‖/‖h_a‖ ≤ τ.
+                # IDENTITY when gain ≤ τ (healthy: the HC residual is norm-preserving so gain≈1 →
+                # scale=1.0 → bit-exact x*1.0); only SHRINKS the runaway-gain step that the
+                # weight-shared core would otherwise amplify T× (gain runaway mode). Applied
+                # uniformly across the no_grad / checkpoint / eager branches (outside the checkpoint
+                # so the scaling lives in the outer graph). τ=0 → skipped entirely → bit-identical.
+                _tau = self.cfg.core_gain_clip
+                if _tau > 0.0:
+                    _in_n = h_a.flatten(1).norm(dim=1)
+                    _out_n = h_new.flatten(1).norm(dim=1)
+                    _scale = torch.clamp(_tau * _in_n / (_out_n + 1e-6), max=1.0)
+                    h_new = h_new * _scale.view(-1, *([1] * (h_new.dim() - 1)))
+
+                if _capture_traj:  # eval-only interp: capture EVERY iteration's carrier (z_1..z_T)
+                    _traj.append((h_new.mean(dim=2) if self._is_hc else h_new).detach())
+
+                if self._diag_corecos:
+                    _a = h_a.flatten(0, 1); _b = h_new.flatten(0, 1)          # [n*S, C] per-token
+                    _ct = (_a * _b).sum(-1) / (_a.norm(dim=-1) * _b.norm(dim=-1) + 1e-6)
+                    _mean = _ct.mean()                                        # avg token rotation
+                    _frac = (_ct < 0.5).float().mean()                       # frac rotated >60°
+                    _cm = _ct.min()
+                    _g = (h_new.flatten(1).norm(dim=1) / (h_a.flatten(1).norm(dim=1) + 1e-6)).max()
+                    _cc_meanmin = _mean if _cc_meanmin is None else torch.minimum(_cc_meanmin, _mean)
+                    _cc_fracmax = _frac if _cc_fracmax is None else torch.maximum(_cc_fracmax, _frac)
+                    _cc_min = _cm if _cc_min is None else torch.minimum(_cc_min, _cm)
+                    _cc_gain = _g if _cc_gain is None else torch.maximum(_cc_gain, _g)
+                    if _peri:
+                        _peri_g.append(_g)   # per-iteration realized max_gain (raw when governor off)
+
+                # updated active prefix + frozen suffix (no in-place op).
+                with _prof("carrier::loop_cat"):
+                    h_s = h_new if n_active == h_s.shape[0] else \
+                        torch.cat([h_new, h_s[n_active:]], dim=0)
+                if track_ret and rs_new is not None:
+                    ret_state_s = rs_new if n_active == ret_state_s.shape[0] else \
+                        torch.cat([rs_new, ret_state_s[n_active:]], dim=0)
+
+            if _capture_traj:
+                self._traj_carriers = _traj  # [z_0 .. z_T], each [B, S, C]; read by the interp probe
+
+            if self._diag_corecos and self.training and _cc_meanmin is not None:
+                self._fwd_count += 1
+                print(f"CORECOS fwd={self._fwd_count} mean_cos={_cc_meanmin.item():.4f} "
+                      f"frac_rot={_cc_fracmax.item():.4f} min_cos={_cc_min.item():.4f} "
+                      f"max_gain={_cc_gain.item():.3f}", flush=True)
+                if _peri and _peri_g:
+                    _gv = torch.stack(_peri_g)                       # [n_iters], 1 sync
+                    _gs = ",".join(f"{x:.2f}" for x in _gv.tolist())
+                    print(f"PERITER fwd={self._fwd_count} n_iter={_gv.numel()} gains=[{_gs}]", flush=True)
+
+            with _prof("carrier::inv_perm_gather"):
+                x = h_s[inv_perm]                    # restore original batch order
 
         # ── Coda ──────────────────────────────────────────────────────
         for i, layer in enumerate(self.coda):
