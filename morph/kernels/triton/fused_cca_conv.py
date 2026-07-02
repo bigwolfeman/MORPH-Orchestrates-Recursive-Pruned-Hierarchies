@@ -417,8 +417,13 @@ def fused_cca_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor,
 
     from morph.kernels.triton._eager_flag import force_eager
     if force_eager() or not TRITON_AVAILABLE or not x_BCS.is_cuda:
-        return causal_conv_reference(x_BCS, w_dw, w_gp, kernel)
+        return causal_conv_reference(x_BCS, w_dw, w_gp, kernel)  # traceable
 
+    return _cca_conv_dispatch(x_BCS, w_dw, w_gp, CG, kernel)
+
+
+@torch.compiler.disable  # Dynamo fence: kernel is opaque (autograd.Function)
+def _cca_conv_dispatch(x_BCS, w_dw, w_gp, CG, kernel):
     return _FusedCCAConv.apply(x_BCS, w_dw, w_gp, CG, kernel)
 
 

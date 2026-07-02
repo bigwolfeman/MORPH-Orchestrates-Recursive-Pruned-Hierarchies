@@ -334,11 +334,15 @@ class FusedGLA(torch.autograd.Function):
         return dq, dk, dv, dla, d_initial, None
 
 
+@torch.compiler.disable  # Dynamo fence: the Triton autograd Function is opaque
 def fused_gla(q: Tensor, k: Tensor, v: Tensor, log_alpha: Tensor,
               initial_state: Tensor | None = None, chunk: int = _DEFAULT_CHUNK):
     """Fused chunked GLA. Inputs [B,S,H,dh] (bf16/fp32); log_alpha ≤ 0.
 
     Returns (o [B,S,H,dh] in input dtype, final_state [B,H,dh,dh] fp32).
     Matches ``GatedLinearAttention._recurrent`` up to fp accumulation.
+
+    Whole-function fence (no reference branch here — the eager path is
+    GatedLinearAttention._chunked, chosen upstream when use_kernels is off).
     """
     return FusedGLA.apply(q, k, v, log_alpha, initial_state, chunk)
