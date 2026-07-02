@@ -1,12 +1,12 @@
 % MORPH — Deployable Stack (precision x architecture overlay)
 % The full deployment configuration: which numeric precision each parameter group
 % is served at, plus the cross-cutting carriers (Cayley HC, retention GLA) and the
-% train-/inference-time overlays (8-bit AdamW, int4 KV cache).
+% training-time optimizer overlay (8-bit AdamW).
 % Compile: pdflatex morph_deploy_stack.tex
 %
-% NOTE: this diagram tracks base.yaml's deploy-oriented defaults: ternary MLP/backbone
-% weights, int6 Euclidean/bigram embeddings, bf16 attention/normalization/carriers, and
-% 8-bit AdamW optimizer state during training.
+% NOTE: this diagram tracks base.yaml's deploy-oriented defaults: ternary selected
+% backbone weights, int6 Euclidean/bigram embeddings, bf16 attention projections /
+% normalization / carriers, and 8-bit AdamW optimizer state during training.
 
 \documentclass[border=16pt]{standalone}
 \usepackage[T1]{fontenc}
@@ -81,26 +81,26 @@
 
 \node[PT, above=0.6cm of emb] (pre) {
   \textbf{Prelude} $\times N$\\[-1pt]
-  {\scriptsize attn + SwiGLU; layer 1 $\to$ +GLA}};
+  {\scriptsize attn bf16 + SwiGLU ternary; layer 1 $\to$ +GLA}};
 \draw[A] (emb) -- (pre);
 
 % ── CORE LOOP (the heart) ────────────────────────────────────────────
 \node[PT, above=0.7cm of pre, minimum height=1.5cm, line width=2pt] (core) {
   \textbf{Core Loop} $2N \times T \sim \mathrm{Poi}(\lambda{=}6)$\\[-1pt]
-  {\scriptsize attn + SwiGLU\,(MORTAR); layer 1 $\to$ +GLA}\\[-1pt]
+  {\scriptsize attn bf16 + SwiGLU ternary\,(MORTAR); layer 1 $\to$ +GLA}\\[-1pt]
   {\scriptsize truncated BPTT (last 4 iters)}};
 \draw[A] (pre) -- (core);
 
 \node[PT, above=0.7cm of core] (coda) {
   \textbf{Coda} $\times N$\\[-1pt]
-  {\scriptsize attn + SwiGLU; layer 1 $\to$ +GLA}};
+  {\scriptsize attn bf16 + SwiGLU ternary; layer 1 $\to$ +GLA}};
 \draw[A] (core) -- (coda);
 
-\node[PBs, above=0.4cm of coda] (mix) {LM-Head Mixer + RMSNorm};
+\node[PT, above=0.4cm of coda, minimum height=0.7cm] (mix) {LM-Head Mixer\\[-1pt]{\scriptsize mix ternary; norm bf16}};
 \draw[A] (coda) -- (mix);
 
-\node[PB, above=0.4cm of mix] (head) {
-  Weight-Tied LM Head\\[-1pt]{\scriptsize fused linear cross-entropy (fp32 logits)}};
+\node[L, above=0.4cm of mix] (head) {
+  Weight-Tied LM Head\\[-1pt]{\scriptsize Euclidean side int6; Lorentz side bf16; fp32 logits}};
 \draw[A] (mix) -- (head);
 
 \node[font=\small\sffamily, above=0.45cm of head] (out) {Logits / Loss};
@@ -111,7 +111,7 @@
   ($(coda.east)+(0.35,0.45)$) -- ($(pre.east)+(0.35,-0.45)$);
 \node[anchor=west, font=\scriptsize\sffamily, align=center, text=bdr,
       inner sep=2pt] (bb) at ($(core.east)+(0.85,0)$) {%
-  backbone\\[1pt]{\tiny (attn bf16)}};
+  backbone\\[1pt]{\tiny MLP/mix ternary}\\[-1pt]{\tiny attention bf16}};
 
 % =====================================================================
 % LEFT PANEL — architecture carriers (cross-cutting, all bf16)
@@ -165,7 +165,7 @@
       below=1.0cm of inp, anchor=north] (leg) {
   \textbf{Precision legend} \;(text label is authoritative; color is secondary):\\[2pt]
   \tikz\node[badge=pInt6, inner sep=2pt]{int6};~embeddings \;\;
-  \tikz\node[badge=pTern, inner sep=2pt]{ternary};~backbone MLP \;\;
+  \tikz\node[badge=pTern, inner sep=2pt]{ternary};~MLP $+$ mixer linears \;\;
   \tikz\node[badge=pBf16, inner sep=2pt]{bf16};~attn / norms / Lorentz / HC / GLA};
 
 % ── Title ────────────────────────────────────────────────────────────

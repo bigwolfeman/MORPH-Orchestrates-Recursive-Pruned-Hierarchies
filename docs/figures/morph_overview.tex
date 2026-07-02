@@ -68,7 +68,7 @@
 \node[B, fill=fBlue, above=0.7cm of exp] (pa) {
   CCA + CSA/HCA Attention\\[-1pt]
   {\scriptsize layer 1: $+\,\sigma(g)\!\cdot$ GLA retention branch}};
-\node[B, fill=fOrange, above=0.45cm of pa] (pm) {SwiGLU MLP};
+\node[B, fill=fOrange, above=0.45cm of pa] (pm) {SwiGLU MLP\quad{\scriptsize (MORTAR)}};
 \draw[A] (exp) -- (pa);
 \draw[A] (pa) -- (pm);
 \begin{scope}[on background layer]
@@ -120,7 +120,7 @@
 \node[B, fill=fBlue, above=1.15cm of cm] (da) {
   CCA + CSA/HCA Attention\\[-1pt]
   {\scriptsize layer 1: $+\,\sigma(g)\!\cdot$ GLA retention branch}};
-\node[B, fill=fOrange, above=0.45cm of da] (dm) {SwiGLU MLP};
+\node[B, fill=fOrange, above=0.45cm of da] (dm) {SwiGLU MLP\quad{\scriptsize (MORTAR)}};
 \draw[A] (cm) -- (da);
 \draw[A] (da) -- (dm);
 \begin{scope}[on background layer]

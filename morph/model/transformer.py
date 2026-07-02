@@ -865,6 +865,13 @@ class MORPHTransformer(nn.Module):
 
             with _prof("carrier::inv_perm_gather"):
                 x = h_s[inv_perm]                    # restore original batch order
+        else:
+            # n_core == 0 (seed models): the loop path hands the coda
+            # h = input_norm(prelude_out) (+ core deltas), so the coreless path
+            # must apply the same boundary norm. This makes a seed model
+            # EXACTLY a target-with-silent-core — the growth invariant that
+            # function-preserving core insertion depends on.
+            x = self.input_norm(x)
 
         # ── Coda ──────────────────────────────────────────────────────
         for i, layer in enumerate(self.coda):

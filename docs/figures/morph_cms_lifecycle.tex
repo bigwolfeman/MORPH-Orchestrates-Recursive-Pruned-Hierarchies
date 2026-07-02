@@ -1,4 +1,4 @@
-% MORPH — Core-MLP Lifecycle: MORTAR · CMS pruning · ReMoE routing.
+% MORPH — MLP Lifecycle: MORTAR · CMS pruning · ReMoE routing.
 % Companion to morph_block.tex (the static forward view). Tells the TRAINING-LIFECYCLE story
 % via the SwiGLU-MLP weight as a block-grid evolving across phases.
 %
@@ -7,8 +7,8 @@
 %     mortar_data[nnz,128,128] + row_indices/column_indices/offsets (vendored morph/sparse/stk).
 %   - prune_step_blocks: score at 16x16 tile (block_score_ema, score_mode=taylor/grad/magnitude),
 %     execute at 128x128 block — zero the lowest-saliency blocks toward target_density.
-%   - carve() packs the kept 128x128 blocks into BCSR (stk Triton fwd+bwd; 3.09x FASTER than
-%     dense at 0.25 density, Gate G1). MORTAR is the ONLY sparse backend (no scope knob).
+%   - carve() packs the kept 128x128 blocks into BCSR for stk Triton fwd+bwd.
+%     MORTAR is the ONLY sparse backend (no scope knob).
 %   - Applied to prelude + core + coda SwiGLU MLPs (gate_up + down).
 %   - ReMoE TileRouter: PEER product-key -> ReLU gate (activation_ratio), load-balance aux loss;
 %     activation-conditioned (per-token), NOT keyed on the loop-iteration index.
@@ -113,7 +113,7 @@
   \node[dsc, text width=3.5cm] at (\bcx,-2.35)
     {\texttt{mortar\_data}:\\ the kept $128\!\times\!128$ blocks\\ $+$ BCSR index arrays};
   \node[nte, text=bdr, text width=3.5cm] at (\bcx,-3.55)
-    {stk Triton fwd $+$ bwd; $3.09\times$ faster than dense @\,0.25};
+    {stk Triton fwd $+$ bwd for carved sparse blocks};
 \end{scope}
 
 % =====================================================================
@@ -163,7 +163,7 @@
 
 % ── Title ────────────────────────────────────────────────────────────
 \node[font=\Large\sffamily\bfseries, anchor=south] at (8.4,4.25)
-  {MORPH --- Core-MLP Lifecycle: MORTAR $\cdot$ CMS Pruning $\cdot$ ReMoE};
+  {MORPH --- MLP Lifecycle: MORTAR $\cdot$ CMS Pruning $\cdot$ ReMoE};
 
 \end{tikzpicture}
 \end{document}

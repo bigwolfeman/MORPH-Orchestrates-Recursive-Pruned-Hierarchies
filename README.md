@@ -1,8 +1,12 @@
 # MORPH
 
-**MORPH** is a PyTorch research model for looped transformer training and sparse deployment. The model reuses a small Parcae-style core for variable depth, stabilizes the repeated core with Cayley Hyper-Connections, and trains the MLP stack through CMS pruning before carving it into the MORTAR BCSR runtime.
+**MORPH** is a PyTorch research model for looped transformer training and sparse deployment. The model reuses a small Parcae-style core for variable depth, stabilizes the repeated core with Cayley Hyper-Connections, and trains the MLP stack while pruning low impact weights to a 25% total density before carving it into the MORTAR BCSR runtime. Enabling less than 1% ppl regression and improved memory footprint and training throughput. All while natively quantized trained.
 
-The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/jax/` is maintained as a converter target and lags the PyTorch architecture.
+To further improve per bit intelligence and memory foot print for research, it utilizes extensive linear attention methods to provide a lower ppl at long contexts with less memory.
+
+Extensive ablations have forced ever component to earn their keep with in the architecture. It is the goal of the MORPH project to provide a true open source architecture that stays at the bleeding edge of research.
+
+The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/jax/` is maintained as a converter target and currently lags the PyTorch architecture.
 
 ## Current Architecture
 
