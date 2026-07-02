@@ -103,6 +103,10 @@ Architecture diagrams are maintained as TikZ sources in `docs/figures/*.tex`. Re
 
 The paper map lives in `docs/references.md`, with local notes under `docs/references/`.
 
+## Contributing
+
+MORPH uses a stable snapshot plus research integration model. See `CONTRIBUTING.md` for branch policy, evidence expectations, and release rules.
+
 ## License
 
 Research code. See repository for terms.
