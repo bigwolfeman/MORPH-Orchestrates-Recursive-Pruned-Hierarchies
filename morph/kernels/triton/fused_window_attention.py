@@ -315,7 +315,7 @@ _BLOCK_K = 64
 
 def _compute_kt_bounds(S, window_size, n_skip_rope, num_q_tiles, num_k_tiles, device):
     """Compute per-Q-tile KV-tile bounds [kt_lo, kt_hi] for forward and dQ backward.
-    MAC tokens are appended (suffix): positions [S-n_skip_rope, S)."""
+    Skip-RoPE tokens are appended as a suffix: positions [S-n_skip_rope, S)."""
     qt_idx = torch.arange(num_q_tiles, device=device, dtype=torch.int32)
     q_starts = qt_idx * _BLOCK_Q
     q_ends = torch.clamp(q_starts + _BLOCK_Q - 1, max=S - 1)
@@ -325,9 +325,9 @@ def _compute_kt_bounds(S, window_size, n_skip_rope, num_q_tiles, num_k_tiles, de
     kt_hi = (q_ends // _BLOCK_K).to(torch.int32)
 
     if n_skip_rope > 0:
-        # MAC keys at end → all q-tiles must reach the last k-tile
+        # Suffix keys at end → all q-tiles must reach the last k-tile.
         kt_hi[:] = num_k_tiles - 1
-        # MAC q-tiles (at end) see all k-tiles → kt_lo = 0
+        # Suffix q-tiles see all k-tiles → kt_lo = 0.
         has_memory_query = q_starts >= S - n_skip_rope
         zero_start = torch.zeros(num_q_tiles, device=device, dtype=torch.int32)
         kt_lo = torch.where(has_memory_query, zero_start, kt_lo)
@@ -339,7 +339,7 @@ def _compute_kt_bounds(S, window_size, n_skip_rope, num_q_tiles, num_k_tiles, de
 
 def _compute_qt_bounds(S, window_size, n_skip_rope, num_q_tiles, num_k_tiles, device):
     """Compute per-KV-tile Q-tile bounds [qt_lo, qt_hi] for dK/dV backward.
-    MAC tokens are appended (suffix): positions [S-n_skip_rope, S)."""
+    Skip-RoPE tokens are appended as a suffix: positions [S-n_skip_rope, S)."""
     kt_idx = torch.arange(num_k_tiles, device=device, dtype=torch.int32)
     k_starts = kt_idx * _BLOCK_K
     k_ends = torch.clamp(k_starts + _BLOCK_K - 1, max=S - 1)

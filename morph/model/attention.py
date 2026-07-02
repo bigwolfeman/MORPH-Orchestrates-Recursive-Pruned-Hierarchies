@@ -254,8 +254,8 @@ def _window_fallback(q: Tensor, k: Tensor, v: Tensor,
       - j <= i  (causal)
       - i - j < window_size  (within window)
       - j != i  (XSA: exclude self-token)
-    OR j >= S - n_skip_rope (MAC suffix tokens always visible to all queries)
-    OR i >= S - n_skip_rope (MAC suffix queries can see all keys).
+    OR j >= S - n_skip_rope (suffix tokens always visible to all queries)
+    OR i >= S - n_skip_rope (suffix queries can see all keys).
     """
     S = q.shape[2]
     row = torch.arange(S, device=device).unsqueeze(1)
@@ -264,9 +264,9 @@ def _window_fallback(q: Tensor, k: Tensor, v: Tensor,
 
     mask = (dist >= 0) & (dist < window_size) & (dist != 0)
     if n_skip_rope > 0:
-        is_mac_col = col >= S - n_skip_rope
-        is_mac_row = row >= S - n_skip_rope
-        mask = mask | is_mac_col | is_mac_row
+        is_suffix_col = col >= S - n_skip_rope
+        is_suffix_row = row >= S - n_skip_rope
+        mask = mask | is_suffix_col | is_suffix_row
 
     bias = torch.where(mask, 0.0, float("-inf")).unsqueeze(0).unsqueeze(0)
     return F.scaled_dot_product_attention(q, k, v, attn_mask=bias, scale=scale)

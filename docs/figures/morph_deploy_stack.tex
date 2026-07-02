@@ -4,9 +4,9 @@
 % train-/inference-time overlays (8-bit AdamW, int4 KV cache).
 % Compile: pdflatex morph_deploy_stack.tex
 %
-% NOTE (No-Theater): this diagram is the DEPLOYMENT TARGET. The running #230 retention
-% ablation is DENSE bf16 (every quant knob off) so the retention signal is isolated; the
-% quant/optimizer overlays below are the *validated* components folded in for deployment.
+% NOTE: this diagram tracks base.yaml's deploy-oriented defaults: ternary MLP/backbone
+% weights, int6 Euclidean/bigram embeddings, bf16 attention/normalization/carriers, and
+% 8-bit AdamW optimizer state during training.
 
 \documentclass[border=16pt]{standalone}
 \usepackage[T1]{fontenc}
@@ -157,7 +157,7 @@
 \draw[Ad, bdr] (opt.west) -- (bb.east);
 
 % =====================================================================
-% BOTTOM — precision legend + validated evidence
+% BOTTOM — precision legend
 % =====================================================================
 
 \node[draw=bdr, rounded corners=6pt, fill=fGray!25, inner sep=9pt,

@@ -29,7 +29,7 @@ model:
   # Exact — never changes gradients (ppl-neutral). Tune down against VRAM headroom to raise tok/s.
   ckpt_grad_iters: -1
 
-  # Multi-rate residual channels (must sum to d_model=8192)
+  # Channel slices used by DiagonalInjection and final mixing (must sum to d_model=8192).
   channel_dims: [4096, 2730, 1366]  # compute, context, memory
 
   # Attention (CCA+CSA+HCA, all features baked in)

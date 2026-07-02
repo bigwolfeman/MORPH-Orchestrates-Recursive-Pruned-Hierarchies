@@ -19,9 +19,8 @@
 %     touched). lm_head_quant = NO-OP at weight level (head tied to euc_embed); logits fp32.
 % Compile: pdflatex morph_embeddings.tex
 %
-% NOTE (No-Theater): deploy default (base.yaml) is embed_quant="off" == bit-identical bf16.
-% The int6 coloring below is the DEPLOYMENT TARGET (Ablation E validated), matching the
-% morph_deploy_stack.tex precision legend (int6 embeddings / bf16 Lorentz).
+% NOTE: base.yaml uses embed_quant="int6" for Euclidean and bigram rows. The Lorentz
+% embedding remains bf16 and is guarded against quantization in embed_quant.py.
 
 \documentclass[border=14pt]{standalone}
 \usepackage[T1]{fontenc}
@@ -186,7 +185,7 @@
   \textbf{Weight-tying:} the LM head has \emph{no} separate weight — $W_\mathrm{lm}$ \emph{is} $[\,$\texttt{euc\_w} $\Vert$ lorentz-tangent\_w$\,]$,
   so quantizing \texttt{euc\_embed} already moves the head; \texttt{lm\_head\_quant} is a no-op at the weight level. Logits are cast \textbf{fp32} before the chunked softmax (\texttt{fused\_ce.py}).\\[3pt]
   \textbf{Notation:} $V$ vocab, $d$ model dim, $d_e{+}d_L{=}d$ (\texttt{lorentz\_fraction}$=0.25\Rightarrow 576{+}192$ at $d{=}768$), $\lambda_\ell$ per-layer bigram gate (init $0$, learned).
-  \;Default \texttt{embed\_quant="off"} $=$ bit-identical bf16; int6 shown is the \emph{deployment target}.};
+  \;Default \texttt{embed\_quant="int6"} quantizes Euclidean and bigram rows; Lorentz stays bf16.};
 
 % =====================================================================
 % Title
