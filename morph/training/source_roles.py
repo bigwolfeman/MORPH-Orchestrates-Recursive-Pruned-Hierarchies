@@ -23,6 +23,9 @@ DENY_PATH_RE = re.compile(r"(commentary|dharma_text_with_reasoning|cross_traditi
 
 KNOWN_SOURCE_ROLES = {
     "owt": ROLE_PRETRAIN_BULK,
+    "refinedweb": ROLE_PRETRAIN_BULK,
+    "fineweb": ROLE_PRETRAIN_BULK,
+    "fineweb_edu": ROLE_PRETRAIN_BULK,
     "dolma": ROLE_PRETRAIN_BULK,
     "code": ROLE_PRETRAIN_BULK,
     "math": ROLE_PRETRAIN_BULK,

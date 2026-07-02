@@ -75,7 +75,20 @@ SOURCES = [
                         f"{DATASETS}/dharma/output/flatland_pretrain.jsonl"], "text"),
     ("books", "jsonl", [f"{DATASETS}/reddit/book_pretrain.jsonl"],       "text"),
     # ── REMOTE (network-bound streams — overlap these with the local CPU work) ──
-    # Web bulk. Dolma 3: ungated. First ~170 shards are alphabetically common_crawl-adult_content-*;
+    # Web bulk. RefinedWeb is the conservative Falcon-era filtered/deduped web base. FineWeb is
+    # the stronger modern CC-derived web base; FineWeb-Edu is the high-signal educational subset.
+    # All three are Parquet datasets. Shuffle files before token-capping so the shard is not just
+    # the oldest alphabetical CC segment. Keep OWT for comparability, not as a preferred source.
+    ("refinedweb", "hf_stream", {"repo": "tiiuae/falcon-refinedweb",
+                                 "shuffle_files": True, "seed": 0, "file_limit": 256,
+                                 "max_tokens": REMOTE_MAX_TOKENS}, "content"),
+    ("fineweb", "hf_stream", {"repo": "HuggingFaceFW/fineweb",
+                              "shuffle_files": True, "seed": 0, "file_limit": 256,
+                              "max_tokens": REMOTE_MAX_TOKENS}, "text"),
+    ("fineweb_edu", "hf_stream", {"repo": "HuggingFaceFW/fineweb-edu",
+                                  "shuffle_files": True, "seed": 0, "file_limit": 256,
+                                  "max_tokens": REMOTE_MAX_TOKENS}, "text"),
+    # Dolma 3: ungated. First ~170 shards are alphabetically common_crawl-adult_content-*;
     # EXCLUDE those (no wasted download) + shuffle shard order for a category-balanced subset.
     ("dolma", "hf_stream", {"repo": "allenai/dolma3_mix-5.5T-1125", "exclude": "adult_content",
                             "jsonl_zst": True,  # robust manual stream — datasets cast-fails on the
@@ -249,15 +262,24 @@ def _iter_texts(kind: str, spec, field: str, limit: int | None,
                                 return
             return
         from datasets import load_dataset
-        if spec.get("exclude"):
+        if spec.get("exclude") or spec.get("include") or spec.get("shuffle_files") or spec.get("file_limit"):
             from huggingface_hub import HfApi
             allf = [f for f in HfApi().list_repo_files(repo, repo_type="dataset")
                     if f.endswith((".jsonl.zst", ".jsonl.gz", ".jsonl", ".json", ".parquet"))]
-            dataf = [f for f in allf if spec["exclude"] not in f]
+            dataf = allf
+            if spec.get("include"):
+                dataf = [f for f in dataf if spec["include"] in f]
+            if spec.get("exclude"):
+                dataf = [f for f in dataf if spec["exclude"] not in f]
             if not dataf:
-                raise RuntimeError(f"{repo}: exclude={spec['exclude']!r} removed ALL data files")
+                raise RuntimeError(
+                    f"{repo}: no data files after include={spec.get('include')!r} "
+                    f"exclude={spec.get('exclude')!r}"
+                )
             if spec.get("shuffle_files"):
                 random.Random(seed).shuffle(dataf)
+            if spec.get("file_limit"):
+                dataf = dataf[: int(spec["file_limit"])]
             ds = load_dataset(repo, data_files=dataf, split="train", streaming=True)
         elif spec.get("config"):
             ds = load_dataset(repo, spec["config"], split="train", streaming=True)
