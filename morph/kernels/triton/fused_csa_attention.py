@@ -385,7 +385,12 @@ def fused_csa_attention(q: Tensor, C_comp: Tensor, top_idx: Tensor,
     from morph.kernels.triton._eager_flag import force_eager
     if force_eager() or not TRITON_AVAILABLE or not q.is_cuda:
         return csa_attention_reference(q, C_comp, top_idx, invalid_mask,
-                                       sink_logits, scale)
+                                       sink_logits, scale)  # traceable
+    return _csa_dispatch(q, C_comp, top_idx, invalid_mask, sink_logits, scale)
+
+
+@torch.compiler.disable  # Dynamo fence: tl.dot in the kernel gets fp64 if traced
+def _csa_dispatch(q, C_comp, top_idx, invalid_mask, sink_logits, scale):
     return _FusedCSAAttention.apply(q, C_comp, top_idx, invalid_mask,
                                     sink_logits, scale)
 

@@ -518,11 +518,37 @@ def fused_window_attention(
     if scale is None:
         scale = D ** -0.5
 
-    if not TRITON_AVAILABLE or D not in (32, 64, 128):
+    # Honour the process-global eager switch, exactly like every other fused
+    # entry point (fused_cca_prologue/conv/hca/csa all lead with this check).
+    # Without it `use_kernels=False` (which calls set_force_eager(True) at build)
+    # silently left the WINDOW path on the Triton kernel — the one gap that made
+    # kernels=EAGER a lie for sliding-window attention.
+    from morph.kernels.triton._eager_flag import force_eager
+
+    if force_eager() or not TRITON_AVAILABLE or D not in (32, 64, 128):
+        # Pure-PyTorch reference: LEAVE traceable so inductor can fuse it (this
+        # is the kernels-OFF regime the d=256 seed compiles for a ~3x win).
         return fused_window_attention_reference(
             q, k, v, window_size, n_skip_rope, exclude_self, scale
         )
 
+    # Triton kernel branch: fence from Dynamo. Tracing INTO the kernel makes
+    # inductor re-precompile it and feed tl.dot an fp64 operand ("Both operands
+    # must be same dtype. Got fp64 and fp32"), which is what blocked compiling a
+    # MORPH block/model with kernels ON. The graph break keeps the kernel opaque
+    # (an already-differentiable autograd.Function) while everything around it
+    # still compiles. No effect in eager regions (MORPH-main's current default).
+    return _window_kernel_dispatch(
+        q, k, v, window_size, n_skip_rope, exclude_self, scale
+    )
+
+
+@torch.compiler.disable
+def _window_kernel_dispatch(
+    q: Tensor, k: Tensor, v: Tensor, window_size: int,
+    n_skip_rope: int, exclude_self: bool, scale: float,
+) -> Tensor:
+    """Opaque-to-Dynamo wrapper around the fused window autograd Function."""
     return _FusedWindowAttnFunction.apply(
         q, k, v, window_size, n_skip_rope, exclude_self, scale
     )

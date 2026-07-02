@@ -1202,6 +1202,37 @@ class _FusedHCPost(torch.autograd.Function):
 
 
 # ===========================================================================
+# Dynamo fences — the Triton autograd Functions are opaque to Dynamo (tracing
+# INTO their Triton IR mis-launches the kernel / feeds fp64 to tl.dot). These
+# @torch.compiler.disable dispatchers force a graph break AT the kernel so the
+# surrounding model still compiles with kernels ON. The reference branches in
+# the public wrappers above stay OUTSIDE the fence → inductor fuses them (the
+# kernels-OFF compile path the d=256 seed relies on). No effect in eager runs.
+# ===========================================================================
+
+@torch.compiler.disable
+def _hc_pre_dispatch(h: Tensor, hpre_cm: Tensor) -> Tensor:
+    return _FusedHCPre.apply(h, hpre_cm)
+
+
+@torch.compiler.disable
+def _hc_post_dispatch(hres: Tensor, hpost_row: Tensor, h: Tensor, y: Tensor,
+                      term: Tensor | None) -> Tensor:
+    return _FusedHCPost.apply(hres, hpost_row, h, y, term)
+
+
+@torch.compiler.disable
+def _hc_pre_map_dispatch(h: Tensor, proj_w: Tensor, proj_b: Tensor,
+                         tau: float, alpha: float, iters: int, eps: float,
+                         N: int) -> tuple[Tensor, Tensor, Tensor]:
+    if N == 4:
+        # tuned hand-unrolled 4×4 scalar path (production default for n=4).
+        return _FusedHCPreMap.apply(h, proj_w, proj_b, tau, alpha, iters, eps)
+    # n-generic tile path (n=2 and any other power-of-2 stream count).
+    return _FusedHCPreMapGeneric.apply(h, proj_w, proj_b, tau, alpha, iters, eps)
+
+
+# ===========================================================================
 # Public API
 # ===========================================================================
 
@@ -1217,8 +1248,8 @@ def hc_pre(h: Tensor, hpre_cm: Tensor) -> Tensor:
     """
     from morph.kernels.triton._eager_flag import force_eager, hc_force_eager
     if force_eager() or hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda:
-        return hc_pre_reference(h, hpre_cm)
-    return _FusedHCPre.apply(h, hpre_cm)
+        return hc_pre_reference(h, hpre_cm)  # traceable: inductor fuses it
+    return _hc_pre_dispatch(h, hpre_cm)
 
 
 def hc_post(hres: Tensor, hpost_row: Tensor, h: Tensor, y: Tensor,
@@ -1239,8 +1270,8 @@ def hc_post(hres: Tensor, hpost_row: Tensor, h: Tensor, y: Tensor,
     """
     from morph.kernels.triton._eager_flag import force_eager, hc_force_eager
     if force_eager() or hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda:
-        return hc_post_reference(hres, hpost_row, h, y, term)
-    return _FusedHCPost.apply(hres, hpost_row, h, y, term)
+        return hc_post_reference(hres, hpost_row, h, y, term)  # traceable
+    return _hc_post_dispatch(hres, hpost_row, h, y, term)
 
 
 def hc_pre_map(
@@ -1271,12 +1302,8 @@ def hc_pre_map(
     pow2 = N >= 2 and (N & (N - 1)) == 0
     if (force_eager() or hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda
             or int(iters) != 3 or not pow2):
-        return hc_pre_map_reference(h, proj_w, proj_b, tau, alpha, iters, eps)
-    if N == 4:
-        # tuned hand-unrolled 4×4 scalar path (production default for n=4).
-        return _FusedHCPreMap.apply(h, proj_w, proj_b, tau, alpha, iters, eps)
-    # n-generic tile path (n=2 and any other power-of-2 stream count).
-    return _FusedHCPreMapGeneric.apply(h, proj_w, proj_b, tau, alpha, iters, eps)
+        return hc_pre_map_reference(h, proj_w, proj_b, tau, alpha, iters, eps)  # traceable
+    return _hc_pre_map_dispatch(h, proj_w, proj_b, tau, alpha, iters, eps, N)
 
 
 # ===========================================================================

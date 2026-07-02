@@ -53,6 +53,10 @@ from morph.kernels.triton.fused_hca_attention import fused_hca_attention
 # (never materializes C_sel [B,S,tk,D] ≈ 2GB/layer at scale — 11× attn memory),
 # folds invalid-mask + sink into a flash online softmax. Verified fwd/grad-exact.
 from morph.kernels.triton.fused_csa_attention import fused_csa_attention
+# Process-global runtime kernel-off switch (set by MORPHConfig.use_kernels at
+# build, or an in-process A/B). The window path consults it at call time; the
+# other fused entry points check it internally.
+from morph.kernels.triton._eager_flag import force_eager
 
 
 # ─── RMSNorm ──────────────────────────────────────────────────────────────────
@@ -439,7 +443,13 @@ class _CCABase(nn.Module):
 
     def _window_attn(self, q: Tensor, k: Tensor, v: Tensor,
                      device, scale: float, n_skip_rope: int = 0) -> Tensor:
-        if _USE_FUSED_WINDOW:
+        # _USE_FUSED_WINDOW is only a capability flag (Triton importable + not
+        # DISABLE_FUSED_KERNELS at import). The RUNTIME kernel-off switch is
+        # force_eager() — fused_window_attention() honours it internally now, so
+        # calling it is always correct, but we keep the fast local guard so the
+        # reference path is taken without importing/dispatching the kernel fn
+        # when kernels are off (matches the seed's use_kernels=False regime).
+        if _USE_FUSED_WINDOW and not force_eager():
             return fused_window_attention(
                 q, k, v, self.window_size, n_skip_rope, True, scale=scale)
         return _window_fallback(q, k, v, self.window_size, device, scale, n_skip_rope)

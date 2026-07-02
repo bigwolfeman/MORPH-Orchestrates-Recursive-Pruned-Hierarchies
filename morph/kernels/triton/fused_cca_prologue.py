@@ -624,13 +624,18 @@ def fused_cca_prologue(
             q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,
             q_norm_weight, k_norm_weight, temp, cos, sin,
             H, Hkv, D, n_skip_rope, eps,
-        )
+        )  # traceable
 
-    return _FusedCCAPrologue.apply(
+    return _cca_prologue_dispatch(
         q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,
         q_norm_weight, k_norm_weight, temp, cos2, sin2,
         H, Hkv, D, n_rep, n_skip_rope, eps,
     )
+
+
+@torch.compiler.disable  # Dynamo fence: kernel is opaque (autograd.Function)
+def _cca_prologue_dispatch(*args):
+    return _FusedCCAPrologue.apply(*args)
 
 
 # ===========================================================================
