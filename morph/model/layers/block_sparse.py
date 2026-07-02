@@ -309,6 +309,18 @@ class CMSBlockLinear(nn.Module):
                        device=device if device is not None else self.block_score_ema.device),
         )
 
+        # ── Math-tile protection (Olympiad seed growth) ──────────────────────
+        # A SEPARATE saliency EMA fed only by math batches (accumulate_math_scores),
+        # used to PROTECT math-important 128×128 blocks from pruning while general-text
+        # continue-pretraining prunes the NLP-redundant ones. `_protect_block_mask` is a
+        # [R, C] tile bool (True = protected), block-aligned; None until set_math_protection.
+        self.register_buffer(
+            "math_score_ema",
+            torch.zeros(self.R, self.K, device=device, dtype=dtype or torch.float32),
+        )
+        self._protect_block_mask = None  # set by set_math_protection(); recomputed, not persisted
+        self._protect_elem_mask = None   # cached [out,in] float (1=protected) for grad freezing
+
         # Initialize weights
         self._reset_parameters()
 
@@ -472,6 +484,101 @@ class CMSBlockLinear(nn.Module):
         with torch.no_grad():
             self.block_score_ema = scorer.update_gradient_ema(grad_norms, self.block_score_ema)
 
+    def accumulate_math_scores(self) -> None:
+        """Accumulate per-tile gradient saliency from a MATH batch into math_score_ema.
+
+        Mirror of accumulate_scores() but into a SEPARATE buffer, so a calibration pass
+        over math-only batches builds a math-importance map independent of the (NLP+math)
+        training saliency. set_math_protection() then pools this into block protection.
+        Call after backward() on a math batch. No-op post-carve or if grad is None.
+        """
+        import torch.nn.utils.parametrize as parametrize
+
+        if not self._dense_mode:
+            return
+        B = self.tile_size
+        w_grad = self.weight.grad
+        if w_grad is None and parametrize.is_parametrized(self, "weight"):
+            w_grad = self.parametrizations.weight.original.grad
+        if w_grad is None:
+            return
+        grad_tiles = w_grad.reshape(self.R, B, self.C, B).permute(0, 2, 1, 3)
+        if self.score_mode == "grad":
+            grad_norms = compute_gradient_frobenius_norms(grad_tiles)
+        elif self.score_mode == "taylor":
+            w_tiles = self.weight.detach().reshape(self.R, B, self.C, B).permute(0, 2, 1, 3)
+            grad_norms = compute_gradient_frobenius_norms(w_tiles * grad_tiles)
+        elif self.score_mode == "magnitude":
+            w_tiles = self.weight.detach().reshape(self.R, B, self.C, B).permute(0, 2, 1, 3)
+            grad_norms = compute_gradient_frobenius_norms(w_tiles)
+        else:
+            raise ValueError(f"unknown score_mode {self.score_mode!r}")
+
+        scorer = TopologyScorer(self.R, self.C, self.K, ema_alpha=self.score_ema_alpha)
+        with torch.no_grad():
+            self.math_score_ema = scorer.update_gradient_ema(grad_norms, self.math_score_ema)
+
+    def set_math_protection(self, top_frac: float, blocking: int = 128) -> int:
+        """Protect the top `top_frac` fraction of 128×128 BLOCKS by pooled math saliency.
+
+        Must be called AFTER a math calibration pass (accumulate_math_scores) and BEFORE
+        pruning. Protected blocks get +inf droppability in prune_step_blocks → never dropped.
+        Pools math_score_ema exactly as prune_step_blocks pools block_score_ema, so the
+        block grid lines up. Returns the number of blocks protected.
+        """
+        if not (0.0 <= top_frac <= 1.0):
+            raise ValueError(f"top_frac must be in [0,1], got {top_frac}")
+        B = self.tile_size
+        if blocking % B or self.out_features % blocking or self.in_features % blocking:
+            raise ValueError(f"blocking {blocking} incompatible with tile {B} / shape")
+        tpb = blocking // B
+        Rb = self.out_features // blocking
+        Cb = self.in_features // blocking
+        with torch.no_grad():
+            sal = self.math_score_ema.detach().float().view(Rb, tpb, Cb, tpb).sum(dim=(1, 3))  # [Rb, Cb]
+            n_prot = int(round(top_frac * Rb * Cb))
+            self._protect_elem_mask = None  # invalidate cached elem mask on (re)set
+            if n_prot <= 0:
+                self._protect_block_mask = None
+                return 0
+            thresh_idx = sal.flatten().topk(min(n_prot, Rb * Cb), largest=True).indices
+            block_prot = torch.zeros(Rb * Cb, dtype=torch.bool, device=sal.device)
+            block_prot[thresh_idx] = True
+            block_prot = block_prot.view(Rb, Cb)
+            # Expand block protection → [R, C] tile mask (block-aligned).
+            self._protect_block_mask = (
+                block_prot.view(Rb, 1, Cb, 1).expand(Rb, tpb, Cb, tpb)
+                .reshape(self.R, self.C).contiguous()
+            )
+            return int(block_prot.sum().item())
+
+    def clear_math_protection(self) -> None:
+        self._protect_block_mask = None
+        self._protect_elem_mask = None
+
+    def freeze_protected_grads(self) -> None:
+        """Zero the gradient on protected tiles so their (math) weights do NOT drift.
+
+        Exempting a tile from pruning keeps it ALIVE but not necessarily MATH — under
+        mixed NLP+math continue-pretraining its weights get overwritten. Call this each
+        step AFTER backward (and after PruningSchedule.step) and BEFORE optimizer.step to
+        hold the protected math tiles fixed at their calibration-time values. No-op if no
+        protection is set or post-carve.
+        """
+        if self._protect_block_mask is None or not self._dense_mode:
+            return
+        if self._protect_elem_mask is None:
+            B = self.tile_size
+            self._protect_elem_mask = (
+                self._protect_block_mask.to(torch.float32)
+                .view(self.R, 1, self.C, 1).expand(self.R, B, self.C, B)
+                .reshape(self.R * B, self.C * B).contiguous()
+            )
+        tgt = self._prune_target_weight()  # ternary shadow leaf when parametrized
+        if tgt.grad is not None:
+            keep = (1.0 - self._protect_elem_mask).to(tgt.grad.dtype)
+            tgt.grad.mul_(keep)  # zero grad where protected → weights frozen there
+
     # ── Structured masked-dense pruning (pre-carve) ──────────────────────────
     # Drives real density reduction by ZEROING the lowest-saliency blocks in the
     # dense weight. Kept masked (not carved) so there is no parameter swap /
@@ -589,6 +696,21 @@ class CMSBlockLinear(nn.Module):
             row_best = sal_best.argmax(dim=1)                            # [Rb]
             droppable = sal.masked_fill(~block_alive, float("inf"))      # dead → never re-dropped
             droppable[torch.arange(Rb, device=sal.device), row_best] = float("inf")
+
+            # Math-tile protection: protected blocks are never dropped (Olympiad seed growth).
+            if self._protect_block_mask is not None:
+                protect_blocks = (
+                    self._protect_block_mask.view(Rb, tpb, Cb, tpb).any(dim=3).any(dim=1)
+                )  # [Rb, Cb]
+                droppable = droppable.masked_fill(protect_blocks, float("inf"))
+
+            # Clamp to the number of actually-droppable (finite) blocks so protection and the
+            # ≥1-per-row floor are NEVER overridden — density may then plateau above target.
+            n_finite = int(torch.isfinite(droppable).sum().item())
+            n_drop = min(n_drop, n_finite)
+            if n_drop <= 0:
+                return {"pruned": 0, "density": cur_alive / total}
+            new_alive = cur_alive - n_drop  # recompute after the protection clamp
 
             _, drop_idx = droppable.flatten().topk(n_drop, largest=False)
             new_block_alive = block_alive.clone()
