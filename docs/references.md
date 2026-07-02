@@ -3,7 +3,7 @@
 **MORPH** (Orchestrates Recursive Pruned Hierarchies) is a production research model combining
 Parcae-style looped transformers with diagonal SSM injection, MORTAR BCSR structured sparsity,
 CCA+CSA+HCA triple-axis attention compression, a gated-linear-attention (GLA) retention branch,
-JPmHC orthogonal hyper-connection residuals, STP geodesic regularization, hybrid
+JPmHC orthogonal hyper-connection residuals, hybrid
 hyperbolic/Euclidean embeddings, STE ternary shadow weights, and ReMoE product-key routing.
 
 Papers are grouped by architectural component. "Original work" entries are techniques developed
@@ -11,7 +11,8 @@ within the MORPH project with no external precedent.
 
 > **Status note.** Several components cited below were evaluated but **removed** from the current
 > architecture: the Titans neural-memory module (§3), the Multi-Rate Residual (§4), the
-> Hyper-Connection Sinkhorn arm (§4), and the LeJEPA / SIGReg / LLM-JEPA z-latent objectives (§7).
+> Hyper-Connection Sinkhorn arm (§4), the LeJEPA / SIGReg / LLM-JEPA z-latent objectives and the
+> STP geodesic regularizer (§7), and MTP heads (§9).
 > They are kept here as citations and marked **(removed)** in place, mirroring the Block-ELL
 > "(superseded)" treatment in §6. The current cross-iteration memory is the GLA retention branch
 > (`morph/model/gla.py`); the sole residual is the JPmHC Cayley hyper-connection.
@@ -34,7 +35,8 @@ number of loop iterations per batch to further reduce loss spikes.
 Documented within the Parcae paper (arXiv:2604.12946, §3.2). Parcae modifies training to sample
 loop depth from a Poisson distribution independently per sequence in a batch, making the model
 robust to variable iteration counts at inference. MORPH adopts this directly for the inner core
-loop (T drawn per batch from Poisson(μ=8)).
+loop (T drawn from a Poisson at `mean_depth`, capped at `max_depth` — 6/8 in the local
+`base.yaml`, 8 in `cloud.yaml`).
 
 ---
 
@@ -118,7 +120,7 @@ CCA mechanism. No independent prior paper. See the CCA entry above.
 (MAC) variant: a deep-MLP memory M updated on the forward pass via momentum-accelerated
 associative-loss minimization (S_t = η_t·S_{t-1} − θ_t·∇‖M(k)−v‖², M_t = (1−α_t)·M_{t-1} + S_t).
 This module was **removed**; the current cross-iteration memory is the gated-linear-attention
-(GLA) retention branch (`morph/model/gla.py`), gated off by default (`retention: false`).
+(GLA) retention branch (`morph/model/gla.py`), on by default (`retention: true` in `base.yaml`).
 
 ---
 
@@ -203,7 +205,7 @@ MORPH's `embeddings.py` implements this as eucl ⊕ Lorentz with learned mixing 
 **MORPH uses:** Conceptual foundation for structured sparsity. LTH shows that dense networks
 contain sparse subnetworks ("winning tickets") that match full accuracy when retrained from
 early initialization. MORPH does not implement the full iterative prune-and-rewind protocol;
-instead CMS selects Block-ELL tile topology from magnitude/importance scores accumulated
+instead CMS selects block-sparse topology (128×128 execution blocks) from importance scores accumulated
 during dense pretraining, then compacts to hardware-efficient sparse weights. The hypothesis
 motivates why aggressive block pruning can retain capability after the dense→prune→compact
 schedule.
@@ -231,10 +233,10 @@ measured 3.09× faster than dense at 0.25 density, replacing the slower Block-EL
 **Authors:** Ziteng Wang, Jun Zhu, Jianfei Chen (Tsinghua University)  
 **Year:** 2024 (ICLR 2025)  
 **arXiv:** [2412.14711](https://arxiv.org/abs/2412.14711)  
-**MORPH uses:** ReLU-based continuous routing over macro tile-groups (32×32 Block-ELL tiles),
-replacing the non-differentiable TopK gate with a differentiable L1-regularized ReLU that
-naturally produces sparse expert selection without the gradient discontinuity of standard MoE
-routing.
+**MORPH uses:** ReLU-based continuous routing over contiguous d_ff hidden-neuron clusters
+(`TileRouter` in `morph/model/routing.py`), replacing the non-differentiable TopK gate with a
+differentiable ReLU gate that naturally produces sparse expert selection without the gradient
+discontinuity of standard MoE routing.
 
 ### PEER — Product Key Retrieval
 **Title:** Large Memory Layers with Product Keys  
@@ -242,26 +244,24 @@ routing.
 Hervé Jégou (Facebook AI Research)  
 **Year:** 2019 (NeurIPS 2019)  
 **arXiv:** [1907.05242](https://arxiv.org/abs/1907.05242)  
-**MORPH uses:** The product-key lookup mechanism (decomposed key = k₁ ⊗ k₂ for O(√N) search
-over N=tile-group combinations) as the routing primitive for selecting which Block-ELL tile-groups
-to activate per token. MORPH adopts the PEER routing mechanism (not the full PEER layer
-computation — tile-groups remain full-rank, not rank-k projections).
+**MORPH uses:** The product-key lookup mechanism (decomposed key = k₁ ⊗ k₂ for O(√N) search)
+as the routing primitive for selecting which d_ff neuron-clusters to activate per token
+(`TileRouter`). MORPH adopts the PEER routing mechanism (not the full PEER layer
+computation — clusters remain full-rank, not rank-k projections).
 
 ---
 
 ## 7. Regularization & Self-Supervised Objectives
 
-### STP — Semantic Tube Prediction (Geodesic Regularizer)
+### STP — Semantic Tube Prediction (Geodesic Regularizer) (removed)
 **Title:** Semantic Tube Prediction: Beating LLM Data Efficiency with JEPA  
 **Authors:** Hai Huang, Yann LeCun, Randall Balestriero (galilai-group / NYU)  
 **Year:** 2026  
 **arXiv:** [2602.22617](https://arxiv.org/abs/2602.22617)  
-**MORPH uses:** The geodesic smoothness constraint applied to hidden-state trajectories during
-pretraining — confining intermediate states to lie within a tubular neighborhood of the geodesic
-connecting segment boundaries on the semantic manifold. MORPH applies STP during pretraining
-(not fine-tuning as in the paper) with a multi-scale scheme (strides 1,2,4,…,τ=64).
-
-Their theorem focuses on the value in SFT/RL, saying teacher forcing protects the tubes during pretraining. Ablations found massive AR generation improvements on base model training using STP.
+**MORPH history (removed):** An earlier MORPH version applied the paper's geodesic smoothness
+constraint to hidden-state trajectories during pretraining (not fine-tuning as in the paper)
+with a multi-scale scheme (strides 1,2,4,…,τ=64). The regularizer was **removed** along with
+`morph/model/prediction.py`; the current training loss is plain next-token cross-entropy.
 
 ### LeJEPA — Latent Prediction Without Collapse (removed)
 **Title:** LeJEPA: Provable and Scalable Self-Supervised Learning Without the Heuristics  
@@ -270,8 +270,8 @@ Their theorem focuses on the value in SFT/RL, saying teacher forcing protects th
 **arXiv:** [2511.08544](https://arxiv.org/abs/2511.08544)  
 **MORPH history (removed):** An earlier MORPH version added a split_nsm z-latent prediction
 objective (backbone predicts mean(next-segment z_coda); memory predicts the next-segment prelude
-state) with the SIGReg anti-collapse regularizer. The z-latent / JEPA objectives were **removed**;
-`prediction.py` now contains only the STP regularizer.
+state) with the SIGReg anti-collapse regularizer. The z-latent / JEPA objectives were **removed**
+(`morph/model/prediction.py` no longer exists).
 
 ### SIGReg — Sketched Isotropic Gaussian Regularization (removed)
 Introduced in the LeJEPA paper (Balestriero & LeCun, arXiv:2511.08544). SIGReg uses randomized
@@ -287,8 +287,8 @@ LeJEPA objective above.
 **arXiv:** [2509.14252](https://arxiv.org/abs/2509.14252)  
 **MORPH history (removed):** An earlier MORPH version applied the hybrid objective combining
 next-token prediction with a JEPA embedding-space prediction loss over related text views
-(e.g., code snippet ↔ docstring). **Removed** with the rest of the z-latent / JEPA stack;
-`prediction.py` now contains only the STP regularizer.
+(e.g., code snippet ↔ docstring). **Removed** with the rest of the z-latent / JEPA stack
+(`morph/model/prediction.py` no longer exists).
 
 ---
 
@@ -307,15 +307,14 @@ that consistently outperforms GELU/ReLU variants on perplexity at equal paramete
 
 ## 9. Training Objectives
 
-### MTP — Multi-Token Prediction
+### MTP — Multi-Token Prediction (removed)
 **Title:** Better & Faster Large Language Models via Multi-token Prediction  
 **Authors:** Fabian Gloeckle, Badr Youbi Idrissi, Baptiste Rozière, David Lopez-Paz,
 Gabriel Synnaeve (Meta FAIR)  
 **Year:** 2024  
 **arXiv:** [2404.19737](https://arxiv.org/abs/2404.19737)  
-**MORPH uses:** N independent output heads on top of a shared trunk, each predicting the token
-n positions ahead (n = 1…N), as auxiliary training signal that densifies gradient information
-and improves sample efficiency, especially on code. MORPH uses N=4 MTP heads during pretraining.
+**Status:** Not in the current code — there are no MTP heads in `morph/`; the training loss is
+plain single-token next-token cross-entropy. Kept as a citation.
 
 ### STE Ternary — Straight-Through Estimator + BitNet b1.58
 **Title:** The Era of 1-bit LLMs: All Large Language Models are in 1.58 Bits  
@@ -329,7 +328,8 @@ the forward pass using absmean scaling, with straight-through gradients flowing 
 shadow weights. This is the only ternary training method validated to work reliably at scale
 (8 alternatives tested in prior ablations, all failed).
 
-The implementation provided here extends across all learned weights of the backbone (not the neural memory).
+The implementation covers the backbone scope (`ternary_scope: backbone` — MLP/mix/mhc
+projections); attention projections stay bf16.
 
 ---
 
@@ -340,11 +340,11 @@ The implementation provided here extends across all learned weights of the backb
 **Authors:** Matteo Pagliardini, Pierre Ablin, David Grangier (EPFL, Apple)  
 **Year:** 2024 (ICLR 2025)  
 **arXiv:** [2409.03137](https://arxiv.org/abs/2409.03137)  
-**MORPH uses:** Optional training optimizer (`cfg.training.optimizer`: `ademamix` via
-bitsandbytes AdEMAMix/AdEMAMix8bit, or `ademamix_b1zero` — MORPH's β1=0 fork with a fused
-Triton kernel for 2-buffer 8-bit state and AdamW8bit memory parity). Extends AdamW with a
-second very-slow momentum EMA (decay β3, default 0.9999) mixed into the update via weight α
-(default 8.0): `update = (m₁ + α·m₂)/(√ν + ε) + λ·p`. α and β3 require their own warmup
+**MORPH uses:** Optional training optimizer (`cfg.training.optimizer: ademamix_b1zero` —
+MORPH's β1=0 fork with a fused Triton kernel for 2-buffer 8-bit state and AdamW8bit memory
+parity; the stock 3-buffer bitsandbytes `ademamix` path was removed). Extends AdamW with a
+second very-slow momentum EMA (decay β3, `base.yaml` default 0.999) mixed into the update via
+weight α (default 8.0): `update = (m₁ + α·m₂)/(√ν + ε) + λ·p`. α and β3 require their own warmup
 schedulers (`t_alpha`, `t_beta3`) distinct from LR warmup — essential for stability under
 MORPH's flat-LR recipe. Includes prune-aware dead-state masking for CMS-carved weights.
 Default deploy path remains AdamW8bit + STE ternary shadow weights.
@@ -390,7 +390,7 @@ harness deployment after RL training, currently deferred.
 | 4 | Neural Memory (Titans) (removed) | Behrouz, Zhong, Mirrokni (Google, 2025) | [2501.00663](https://arxiv.org/abs/2501.00663) |
 | 5 | CCA | Figliolia et al. (Zyphra, 2025) | [2510.04476](https://arxiv.org/abs/2510.04476) |
 | 6 | CSA / HCA | DeepSeek-AI (2026) | [HF PDF](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf) |
-| 7 | STP | Huang, LeCun, Balestriero (2026) | [2602.22617](https://arxiv.org/abs/2602.22617) |
+| 7 | STP (removed) | Huang, LeCun, Balestriero (2026) | [2602.22617](https://arxiv.org/abs/2602.22617) |
 | 8 | LeJEPA (removed) | Balestriero, LeCun (2025) | [2511.08544](https://arxiv.org/abs/2511.08544) |
 | 9 | SIGReg (removed) | Balestriero, LeCun (2025) | [2511.08544](https://arxiv.org/abs/2511.08544) |
 | 10 | Lorentz Embeddings | Nickel, Kiela (ICML 2018) | [1806.03417](https://arxiv.org/abs/1806.03417) |
@@ -399,7 +399,7 @@ harness deployment after RL training, currently deferred.
 | 13 | XSA | Zhai (Apple, 2026) | [2603.09078](https://arxiv.org/abs/2603.09078) |
 | 14 | Residual Attention | Kimi Team (Moonshot AI, 2026) | [2603.15031](https://arxiv.org/abs/2603.15031) |
 | 15 | SwiGLU | Shazeer (Google, 2020) | [2002.05202](https://arxiv.org/abs/2002.05202) |
-| 16 | MTP | Gloeckle et al. (Meta, 2024) | [2404.19737](https://arxiv.org/abs/2404.19737) |
+| 16 | MTP (removed) | Gloeckle et al. (Meta, 2024) | [2404.19737](https://arxiv.org/abs/2404.19737) |
 | 17 | STE Ternary (BitNet b1.58) | Ma et al. (Microsoft, 2024) | [2402.17764](https://arxiv.org/abs/2402.17764) |
 | 18 | ReMoE | Wang, Zhu, Chen (Tsinghua, 2025) | [2412.14711](https://arxiv.org/abs/2412.14711) |
 | 19 | PEER | Lample et al. (FAIR, 2019) | [1907.05242](https://arxiv.org/abs/1907.05242) |

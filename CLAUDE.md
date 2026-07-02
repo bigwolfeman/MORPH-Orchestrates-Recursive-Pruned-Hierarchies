@@ -5,22 +5,22 @@
 **MORPH** — Orchestrates Recursive Pruned Hierarchies
 
 Production model combining: Parcae-style looped transformer, MORTAR structured sparsity,
-CCA+CSA+HCA attention, Cayley HyperConnection residual (n=4 streams), STP (Semantic Tube
-Predictor) geometric regularization, hybrid embeddings, STE ternary shadow weights.
-Dual PyTorch (GPU) + JAX (TPU).
+CCA+CSA+HCA attention, Cayley HyperConnection residual (n=4 streams), GLA retention branch,
+hybrid embeddings, STE ternary shadow weights. PyTorch-first; a JAX/Flax model mirror
+exists under `morph/jax/` but lags the PyTorch path (see gotcha below).
 
-> Neural memory (Titans) and LeJEPA split_nsm z-latent prediction were **removed**
-> (neural memory deferred — stability at small context lengths still unresolved; JEPA
-> dropped). MRR (multi-rate residual) is **dead under HyperConnections** (`mhc.py`
-> `MultiRateResidual` is never instantiated when `residual_mode: hc_cayley`, the default) —
-> the residual stream is the Cayley HC n=4 mixer, not MRR γ-channels.
+> **Naming gotcha:** the residual attributes on `MORPHBlock` are called `mrr_attn` /
+> `mrr_mlp` for checkpoint compatibility, but they hold `HyperConnectionResidual`
+> (Cayley n=4) modules — there is no `MultiRateResidual` class in the PyTorch tree.
+> The JAX mirror (`morph/jax/model/`) still implements the old MRR residual and has
+> not been ported to HC-Cayley; do not assume PT/JAX parity.
 
-> **Current state (2026-06-11):** this repo is the unified hotpath. The ablation winners
-> (MORTAR-only sparse + always-on whole-body ReMoE + full quant stack: ternary backbone +
-> int6 embeddings + 8-bit AdamW; HC Cayley n=4; GLA retention default-on) were migrated in
-> as the default+only path, and the legacy 16×16 Block-ELL backend was ripped end to end.
-> `configs/base.yaml` reproduces the validated mortar winner recipe (flat LR, no warmup,
-> prune 3000/100/0.005 → carve@20000 → whole-body route@21000, taylor saliency).
+> **Source of truth for the training recipe is `morph/configs/base.yaml`** (heavily
+> commented). Current schedule: flat LR 1e-4 (warmup=0, min_lr==lr), taylor saliency,
+> prune_start=3000 / prune_interval=167 (density hits 0.25 by ~step 27050) →
+> carve at compact_step=29000 → whole-body ReMoE at route_start=30000, all inside a
+> 100k-step run with TST superposition for the first 30k steps. Do not restate these
+> numbers elsewhere — read the YAML.
 
 ## ⭐ Core mental model — MORPH is a NESTED dynamical system (read before optimizing)
 
@@ -50,18 +50,18 @@ Loop hierarchy:
 Attention: CCA channel compression → CSA sparse global + HCA dense compressed (alternating layers),
 with XSA, Residual Attention, CoPE Clipped RoPE, QK-Norm baked in.
 
-Embeddings: Hybrid (euclidean + Lorentz hyperbolic) + bigram (30-60k hash vocab).
-
-STP (Semantic Tube Predictor): full-sequence multi-scale geodesic smoothness on hidden
-states. Geometric regularizer applied during pretraining (see Critical Patterns).
+Embeddings: Hybrid (euclidean + Lorentz hyperbolic, `lorentz_fraction=0.25`) + hash-bigram
+(`bigram_hash_vocab=49152`). Loss is plain cross-entropy (fused/chunked when
+`model.use_kernels=true`).
 
 ## Design Principles
 
 - **No runtime feature flags.** Features are baked in at init. No `if use_feature:` in forward pass.
   torch.compile sees a clean graph with no branching.
-- **Dual framework.** Every module has PyTorch + JAX implementations. Checkpoints convert between them.
-- **Hydra configs.** All hyperparams in YAML. Every run reproducible from its wandb config.
-- **Custom kernels.** Triton (GPU), Pallas (TPU). SM120 tuned for 5090.
+- **PyTorch-first.** The JAX/Flax mirror (`morph/jax/`) and the PT↔JAX converter
+  (`morph/interop/checkpoint.py`) exist but lag the PyTorch model; verify parity before relying on them.
+- **Hydra configs.** All hyperparams in YAML (`morph/configs/`). Every run reproducible from its wandb config.
+- **Custom kernels.** Triton (GPU), SM120 tuned for 5090. (`morph/kernels/pallas/` is currently empty.)
 
 ## Commands
 
@@ -70,11 +70,10 @@ states. Geometric regularizer applied during pretraining (see Critical Patterns)
 pip install -e .
 pip install -e ".[dev]"
 
-# Train (PyTorch, GPU)
-python morph/training/train.py --config configs/base.yaml
-
-# Train (JAX, TPU)
-python morph/jax/train.py --config configs/tpu.yaml
+# Train (PyTorch, GPU) — Hydra entry point, defaults to morph/configs/base.yaml
+python -m morph.training.train
+python -m morph.training.train training.steps=50000 training.batch_size=4   # overrides
+python -m morph.training.train --config-name pretrain_curriculum            # other configs
 
 # Tests
 pytest tests/
@@ -89,27 +88,40 @@ ruff check morph/
 ```
 morph/
   model/
-    transformer.py   # Core looped transformer (Parcae loop; _SwiGLUMortar hosts the ReMoE router)
-    attention.py     # CCA+CSA+HCA+XSA+ResAttn+CoPE (one module, no flags)
-    embeddings.py    # Hybrid (eucl+Lorentz) + bigram
-    mhc.py           # HyperConnections (Cayley n=4, fused kernel). MRR class is DEAD under HC.
-    sparsity.py      # MortarLinear (dense pre-carve → MORTAR 128×128 BCSR post-carve)
-    routing.py       # TileRouter — whole-body ReMoE over the d_ff hidden-neuron bank
-    prediction.py    # STP (Semantic Tube Predictor) — zero-param geodesic regularizer
+    transformer.py       # Core looped transformer (Parcae loop, DiagonalInjection; _SwiGLUMortar hosts the ReMoE router)
+    attention.py         # CCA+CSA+HCA+XSA+ResAttn+CoPE (one module, no flags)
+    embeddings.py        # Hybrid (eucl+Lorentz) + bigram
+    hyper_connections.py # HyperConnectionResidual (Cayley n=4, fused kernel)
+    mhc.py               # MORPHBlock wiring + ChannelInject (mrr_* attrs = HC modules, legacy names)
+    gla.py               # GLA retention branch
+    sparsity.py          # MortarLinear (dense pre-carve → MORTAR 128×128 BCSR post-carve)
+    routing.py           # TileRouter — whole-body ReMoE over the d_ff hidden-neuron bank
+    ternary_qat.py       # ternary forward-STE QAT
+    embed_quant.py       # int8/int6 embedding QAT
+    attn_proj_quant.py   # attention-projection QAT (opt-in)
+    fp8_scope.py         # FP8 scoping (off by default)
+    fused_ce.py          # chunked/fused cross-entropy host
+    kv_quant.py          # inference KV cache quantization
+    layers/              # CMSBlockLinear (block-sparse scoring), topology scorer, norms
   kernels/
-    triton/          # GPU kernels (fused ops, attention, decode)
-    pallas/          # TPU kernels
+    triton/              # GPU kernels (fused attention, HC, GLA, decode, router, CE)
+    l2_persist.py        # L2 cache persistence helper
+  sparse/stk/            # vendored BCSR sparse execution backend
   training/
-    train.py         # Single entry point
-    optimizer.py     # AdamW + STE ternary shadow weights
-    data.py          # OpenWebText + StarCoder2 tokenizer
-    pruning.py       # CMS schedule (dense → prune → carve → route); density helper logs skips
-  jax/               # JAX/Flax mirror
-    model/
-    kernels/
+    train.py             # Single Hydra entry point
+    optimizer.py         # AdamW + STE ternary shadow weights
+    ademamix_b1zero.py   # β1=0 AdEMAMix optimizer (+ fused kernel)
+    spectral_penalty.py  # core-map spectral-norm penalty
+    data.py              # OpenWebText + StarCoder2 tokenizer
+    curriculum_data.py / curriculum.py  # context-length curriculum loader + schedule
+    sft.py / sft_data.py # SFT fine-tuning
+    pruning.py           # CMS schedule (dense → prune → carve → route); density helper logs skips
+  inference/             # generation engine, KV cache, deploy quant
+  posttrain/             # deploy artifacts, masks, validation
+  jax/                   # JAX/Flax model mirror (lags PT: still MRR residual; kernels/ empty)
   interop/
-    checkpoint.py    # PT ↔ JAX converter (name-driven)
-configs/             # Hydra YAML
+    checkpoint.py        # PT ↔ JAX converter (name-driven)
+  configs/               # Hydra YAML (base, cloud, pretrain_curriculum[_smoke], scale30b, sft)
 tests/
 docs/
 ```
@@ -119,17 +131,14 @@ docs/
 ### MORTAR Sparsity Schedule
 Dense → prune (prune_step_blocks, 128×128-aligned) → carve() to MORTAR BCSR at
 compact_step → ReMoE route at route_start. MORTAR is the ONLY sparse backend
-(legacy 16×16 Block-ELL removed 2026-06-11; there is no sparse_backend knob).
+(there is no sparse_backend knob). Saliency is scored at tile_size=16; pruning and
+execution blocks are 128×128.
 accumulate_scores() MUST be called between loss.backward() and optimizer.zero_grad().
 **GOTCHA: if `prune_start` is disabled (e.g. 9999999), no pruning happens and carve()
 then runs on a still-dense model → K/C=1.0. Always confirm `[prune] density=…` actually
-fell before trusting a "0.25 sparse" claim.** The validated winner cadence
-(`base.yaml`) reaches target_density 0.25 by ~step 18000, before carve@20000.
-
-### STP During Pretraining
-Paper tested fine-tuning only. We use STP during pretraining as a geometric regularizer.
-Doesn't improve PPL (teacher-forced metric can't see it). Improves generation quality.
-Full-sequence multi-scale geodesic (strides 1,2,4,...,tau), tau=64. Zero parameters.
+fell before trusting a "0.25 sparse" claim.** The `base.yaml` cadence (prune_start=3000,
+prune_interval=167) reaches target_density 0.25 by ~step 27050, before carve at
+compact_step=29000 and routing at route_start=30000.
 
 ### torch.compile
 mode="default" (NOT reduce-overhead — CUDA graphs cause eval OOM).

@@ -4,7 +4,7 @@
 
 MORPH is a looped, pruned transformer research model. It gets depth by reusing a small Parcae-style core, stabilizes that repeated execution with Cayley Hyper-Connections, and turns the MLP backbone into a carved MORTAR sparse runtime after training-time topology pruning.
 
-Current MORPH is no longer the older TitanMAC line. Gradient neural memory, MAC tokens, LeJEPA z-latents, and the legacy 16x16 Block-ELL backend were removed. The active stack is Cayley HC, CCA+CSA/HCA attention, optional GLA retention, hybrid embeddings, STP regularization, CMS-to-MORTAR pruning, hidden-neuron ReMoE routing, and deploy QAT.
+The active stack is Cayley HC, CCA+CSA/HCA attention, GLA retention (on by default), hybrid embeddings, CMS-to-MORTAR pruning, hidden-neuron ReMoE routing, and deploy QAT. (History: MORPH supersedes an earlier TitanMAC-based line; the only surviving trace is the legacy `mrr_attn`/`mrr_mlp` attribute naming noted below.)
 
 ## Architecture Overview
 
@@ -19,9 +19,9 @@ Data flows through:
 1. **Hybrid embeddings**: Euclidean + Lorentz token channels with a learned hash-bigram signal injected through the body.
 2. **Prelude**: non-looped blocks that establish the initial representation.
 3. **Core loop**: six shared blocks executed with Poisson depth sampling (`mean_depth=6`, `max_depth=8`) and truncated BPTT over the last four grad iterations.
-4. **Coda**: non-looped refinement before the final norm, LM head mixer, tied output head, and STP loss.
+4. **Coda**: non-looped refinement before the final norm, LM head mixer, and tied output head.
 
-The loop boundary uses `DiagonalInjection` on the context channel slice only, with spectral radius constrained below 1. That gives the repeated core a stable iteration-axis drive without reintroducing the removed neural-memory stack.
+The loop boundary uses `DiagonalInjection` on the context channel slice only, with spectral radius constrained below 1. That gives the repeated core a stable iteration-axis drive.
 
 ## MORPH Block
 
@@ -33,10 +33,10 @@ Each block has attention and MLP sublayers wrapped by the same residual carrier:
 
 - **Residual carrier**: `residual_mode=hc_cayley` is the deploy default. Hidden state is expanded to four parallel streams `[B,S,4,C]`; a row-stochastic read map feeds each sublayer, then an orthogonal Cayley mixer preserves carrier norm as the loop repeats.
 - **Attention**: `MORPHAttention` bakes in CCA channel compression, a local window, alternating CSA/HCA global context, GQA, CoPE clipped RoPE, residual attention, QK norm, and causal convolution.
-- **GLA retention**: when enabled, layer index 1 in each section adds a gated linear-attention branch in parallel with attention. In the core, `retention_carry=true` carries the GLA state across loop iterations.
+- **GLA retention**: on by default (`retention=true`). Layer index 1 in each section (`retention_layers=[1]`) adds a gated linear-attention branch in parallel with attention. In the core, `retention_carry=true` carries the GLA state across loop iterations.
 - **MLP**: every prelude, core, and coda MLP uses `_SwiGLUMortar`, backed by `MortarLinear`. There is no production dense-MLP fallback.
 
-MRR is now a legacy ablation path rather than the default residual mechanism. The channel slices `[384, 256, 128]` still matter under HC for injection targets and final mixing, but they are not the deployed residual dynamics.
+Gotcha for code readers: the residual attributes in `MORPHBlock` are named `mrr_attn` / `mrr_mlp` for checkpoint compatibility with earlier Multi-Rate Residual runs, but they hold `HyperConnectionResidual` modules — there is no MRR implementation in the PyTorch tree. The channel slices `[384, 256, 128]` still matter under HC for injection targets and final mixing, but they are not residual dynamics.
 
 ## Attention And Context
 
@@ -57,7 +57,7 @@ MORPH uses a triple-axis attention design:
 
 This alternation gives both fine sparse retrieval and broad dense compressed coverage while keeping the full attention path compatible with fused Triton kernels when `model.use_kernels=true`.
 
-## Embeddings And Prediction
+## Embeddings
 
 <p align="center">
   <img src="docs/figures/morph_embeddings-1.png" width="720" alt="MORPH embeddings"/>
@@ -65,13 +65,7 @@ This alternation gives both fine sparse retrieval and broad dense compressed cov
 
 `MORPHEmbedding` combines Euclidean token embeddings with a Lorentz channel (`lorentz_fraction=0.25`) and a hash-bigram table (`bigram_hash_vocab=49152`). Bigram injections have learned per-layer scales initialized at zero, so the model starts from the unigram embedding path and learns when to use the extra signal.
 
-The final representation is mean-reduced from HC streams, passed through the LM head mixer, and evaluated with tied output weights. `STPLoss` adds zero-parameter, multi-scale geodesic smoothness over hidden-state trajectories during pretraining:
-
-```text
-loss = cross_entropy + stp_lambda * stp_loss
-```
-
-The default `stp_lambda` is `0.02` and `stp_tau` is `64`.
+The final representation is mean-reduced from HC streams, passed through the LM head mixer, and evaluated with tied output weights against a plain cross-entropy loss (fused/chunked via `fused_ce.py` when `model.use_kernels=true`).
 
 ## Retention Memory
 
@@ -79,7 +73,7 @@ The default `stp_lambda` is `0.02` and `stp_tau` is `64`.
   <img src="docs/figures/morph_memory.png" width="760" alt="GLA retention memory"/>
 </p>
 
-The GLA branch is MORPH's current recurrent-memory experiment. It has one recurrence over sequence positions and, in the looped core, an optional second recurrence over loop iterations. The branch is a gated sum beside attention, not a replacement for attention and not the removed Titans neural memory.
+The GLA branch is MORPH's current recurrent-memory mechanism. It has one recurrence over sequence positions and, in the looped core, an optional second recurrence over loop iterations. The branch is a gated sum beside attention, not a replacement for attention.
 
 ## Sparsity, MORTAR, And Routing
 
@@ -113,7 +107,7 @@ Routing is integrated, not pending. It is a quality and load-balancing mechanism
   <img src="docs/figures/morph_deploy_stack.png" width="820" alt="MORPH deployable stack"/>
 </p>
 
-`morph/configs/base.yaml` now represents the validated deploy-oriented default rather than a dense bf16 isolation run:
+`morph/configs/base.yaml` is the validated deploy-oriented default:
 
 - **Ternary QAT** is on for the backbone (`training.ternary=true`, `ternary_scope=backbone`).
 - **Embedding QAT** uses per-row int6 for Euclidean and bigram embedding rows (`training.embed_quant="int6"`); Lorentz remains bf16.
@@ -144,6 +138,7 @@ Evaluation and generation use normal next-token prediction (`bag_size=0`). In th
 | `pretrain_curriculum.yaml` | Dense bf16 curriculum phase with sparse/quant/routing/TST disabled. |
 | `pretrain_curriculum_smoke.yaml` | Twelve-step transition smoke for the curriculum loader and stage changes. |
 | `scale30b.yaml` | 30B-format systems/inference test config. |
+| `sft.yaml` | Instruction-tunes a routed/compact pretrained checkpoint (composes `base.yaml`). |
 
 ## Quick Start
 
@@ -171,28 +166,41 @@ Training logs the resolved Hydra config to [Weights & Biases](https://wandb.ai) 
 ```text
 morph/
   model/
-    transformer.py          # MORPHTransformer, Parcae loop, HC carrier, MLP routing host
+    transformer.py          # MORPHTransformer, Parcae loop, DiagonalInjection, _SwiGLUMortar MLP host
     attention.py            # CCA + local window + CSA/HCA attention
     embeddings.py           # Euclidean + Lorentz + hash-bigram embeddings
-    hyper_connections.py    # HyperConnection residual implementation
-    mhc.py                  # MRR legacy path and MORPHBlock wiring
-    sparsity.py             # MortarLinear wrapper
+    hyper_connections.py    # HyperConnectionResidual (Cayley/JPmHC n-stream mixer)
+    mhc.py                  # MORPHBlock wiring and ChannelInject
+    gla.py                  # GLA retention branch
+    sparsity.py             # MortarLinear wrapper (tile-16 saliency, 128x128 carve)
     routing.py              # TileRouter and routing stats/aux collection
-    prediction.py           # STP loss
     ternary_qat.py          # Ternary forward-STE QAT
     embed_quant.py          # int8/int6 embedding QAT
+    attn_proj_quant.py      # attention-projection QAT (opt-in)
+    fp8_scope.py            # FP8 scoping (off by default)
+    fused_ce.py             # chunked/fused cross-entropy host
     kv_quant.py             # inference KV cache quantization
-    packed_ternary_infer.py # packed deploy inference helpers
-    titans_core/            # CMS block-sparse scoring and topology logic, not neural memory
+    layers/                 # CMSBlockLinear block-sparse scoring, topology scorer, norms
   kernels/
-    triton/                 # fused attention, HC, GLA, decode, CE/support kernels
+    triton/                 # fused attention, HC, GLA, decode, router, CE/support kernels
+    l2_persist.py           # L2 cache persistence helper
   sparse/
     stk/                    # vendored BCSR sparse execution backend
   training/
     train.py                # Hydra training entry point
     pruning.py              # prune -> carve -> route coordinator
     optimizer.py            # AdamW, 8-bit AdamW, ternary shadow optimizer support
+    ademamix_b1zero.py      # beta1=0 AdEMAMix optimizer (+ fused kernel variant)
+    spectral_penalty.py     # core-map spectral-norm penalty
+    data.py                 # OpenWebText + StarCoder2 streaming loader
     curriculum_data.py      # pretokenized multi-source curriculum loader
+    curriculum.py           # context-length curriculum schedule
+    sft.py, sft_data.py     # SFT loop and data
+  inference/                # generation engine, KV cache, deploy quantization
+  posttrain/                # deploy artifacts, masks, validation
+  jax/                      # JAX/Flax model mirror (behind the PyTorch path; still MRR-residual)
+  interop/
+    checkpoint.py           # PT <-> JAX converter (name-driven)
   configs/                  # Hydra configs
 docs/
   figures/                  # TikZ sources for regenerated architecture figures
@@ -205,7 +213,7 @@ Architecture figures are maintained from the TikZ sources in `docs/figures/*.tex
 
 ## References
 
-MORPH draws on Parcae looped transformers, Hyper-Connections, CCA, CSA/HCA, XSA, CoPE, GLA-style retention, CMS/MORTAR sparse execution, ReMoE/PEER routing, Token Superposition Training, STP, and deploy-oriented quantization work. See `docs/references.md` and `docs/references/` for the paper map and local notes.
+MORPH draws on Parcae looped transformers, Hyper-Connections, CCA, CSA/HCA, XSA, CoPE, GLA-style retention, CMS/MORTAR sparse execution, ReMoE/PEER routing, Token Superposition Training, and deploy-oriented quantization work. See `docs/references.md` and `docs/references/` for the paper map and local notes.
 
 ## License
 

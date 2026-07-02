@@ -56,24 +56,20 @@ curriculum:
   allowed_source_roles: [pretrain_bulk, reasoning_midtrain]
   eff_batch: 8                 # held constant across stages via grad-accum (mb×ga)
   blend:                       # token-proportioned weights (sum need not be 1); names = pretok shard dirs.
-    # 8-source mix (must match scripts/pretokenize.py SOURCES). Loader REQUIRES every listed source's
-    # shard to exist — if a source fails to tokenize, remove it here. Synthetic ratio (nemotron_qa/
-    # reasoning/math) replaces the lost Nemotron-CC. Ratios are sample-read judgment, not ablated.
-    # NOTE: `books` source dropped from the blend — book_pretrain.jsonl is only 21 docs / 140K
-    # tokens, far too small to carry any real weight (0.03 would force ~340 epochs of 21 books =
-    # memorization). Its 0.03 folded into owt. Shard still exists; re-add here only with more data.
-    # REBLEND 2026-06-13 (Wolfe): weight owt DOWN vs dolma + reasoning. owt is the broadest /
-    # least-curated web source; dolma (cleaner web) leads, reasoning (verified CoT) +60% relative.
-    # At the ~1.57B-token curriculum budget no source is epoch-limited (owt 10.6B / dolma & reasoning
-    # 5.0B avail ⇒ all well under 1 epoch), so this is a pure mixture-quality choice, not data-bound.
-    # Prior: owt 0.28 / dolma 0.20 / reasoning 0.10.
-    owt: 0.16                  # OpenWebText (local web) — down from 0.28 (broadest/least-curated)
-    dolma: 0.26                # Dolma 3 (remote web) — now lead web source (up from 0.20)
-    nemotron_qa: 0.18          # grounded synthetic QA (Nemotron-CC replacement anchor)
-    code: 0.10                 # code_search_net
-    reasoning: 0.16            # procedural verified CoT — up from 0.10 (+60% relative)
-    math: 0.07                 # math/proofs
-    dharma: 0.07               # domain text (32M tok → ~3.5 epochs at this weight, acceptable)
+    # RefinedWeb-first reblend (2026-06-28): replace the OWT/Dolma-heavy judgment mix with a stronger
+    # filtered/deduped web backbone. RefinedWeb is the broad general-web anchor; FineWeb-Edu supplies
+    # higher-signal educational/knowledge text without making synthetic data carry the run. Broad
+    # FineWeb remains available in scripts/pretokenize.py for an A/B arm, but is not mixed here to avoid
+    # paying cross-corpus CommonCrawl overlap against RefinedWeb before we have cross-source dedup stats.
+    # Synthetic/reasoning is deliberately capped at 10% total (nemotron_qa + reasoning), enough to bias
+    # format/capability without turning pretraining into SFT-shaped model collapse risk.
+    refinedweb: 0.48           # Falcon RefinedWeb: filtered/deduped CommonCrawl, broad web backbone
+    fineweb_edu: 0.20          # high-signal educational web slice
+    code: 0.12                 # code_search_net
+    math: 0.08                 # math/proofs
+    reasoning: 0.06            # procedural verified CoT / reasoning-shaped LM text
+    nemotron_qa: 0.04          # grounded synthetic QA, capped
+    dharma: 0.02               # domain text; small enough to avoid repeated-epoch dominance
   stages:                      # seq_len = bucket-native length; context_len = RoPE taper anchor
     - {seq_len: 4096,  context_len: 4096,  micro_batch: 4, steps: 20000}   # ga 2
     - {seq_len: 8192,  context_len: 8192,  micro_batch: 2, steps: 8000}    # ga 4
