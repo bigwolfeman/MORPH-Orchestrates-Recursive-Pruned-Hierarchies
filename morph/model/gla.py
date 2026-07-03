@@ -24,10 +24,34 @@ quality ablation earns it (same discipline as the HC kernel).
 """
 from __future__ import annotations
 
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+
+# ─── Fused input-projection batching (perf: launch-count + GEMM SOL) ──────────
+#
+# q/k/v/g/r are five bias-free K=d_model nn.Linears applied to the SAME input x
+# → batched into ONE concat-N GEMM, split into last-dim views (o_proj is
+# dep-chained on the GLA output and stays separate). Each output element is the
+# identical dot product over the identical K=d_model reduction, so the forward
+# is mathematically bit-exact (concat along N never touches the K
+# accumulation); weight grads accumulate as exact slices of dW_cat; dX becomes
+# one reduction over 5·d_model instead of an autograd sum of five — pure
+# reassociation, measured (not assumed) in scratchpad/parity_gla_fused_proj.py.
+# Same proven mechanism as the landed attention input-projection superblock
+# (morph/model/attention.py::_fused_x_proj). GPU bitwise-ness of the forward is
+# shape-dependent (cuBLAS algo selection) → gate with the loss-trace
+# noise-floor test before landing.
+_FUSED_GLA_PROJ = os.environ.get("MORPH_FUSED_GLA_PROJ", "1").lower() not in ("0", "false")
+
+
+def set_fused_gla_proj(value: bool) -> None:
+    """In-process override of the fused-projection toggle (A/B parity tests)."""
+    global _FUSED_GLA_PROJ
+    _FUSED_GLA_PROJ = bool(value)
 
 
 class GatedLinearAttention(nn.Module):
@@ -73,20 +97,36 @@ class GatedLinearAttention(nn.Module):
     def _project(self, x: Tensor):
         B, S, _ = x.shape
         H, dh = self.n_heads, self.dh
-        q = self.q_proj(x).view(B, S, H, dh)
-        k = self.k_proj(x).view(B, S, H, dh)
-        v = self.v_proj(x).view(B, S, H, dh)
+        if _FUSED_GLA_PROJ:
+            # ONE GEMM for q/k/v/g/r (see module-level note). The weight cat is one
+            # cheap kernel per forward (cat backward = narrow views, no copy).
+            # w.to(x.dtype) targets the GEMM-input dtype, exactly like the attention
+            # superblock template; under autocast F.linear casts both operands to the
+            # autocast dtype either way (identical to the eager per-Linear path).
+            w = torch.cat([self.q_proj.weight, self.k_proj.weight, self.v_proj.weight,
+                           self.g_proj.weight, self.r_proj.weight], dim=0)
+            y = F.linear(x, w.to(x.dtype))
+            q_p, k_p, v_p, g_p, r_pre = y.split(self.d_model, dim=-1)
+        else:
+            q_p, k_p, v_p = self.q_proj(x), self.k_proj(x), self.v_proj(x)
+            g_p, r_pre = self.g_proj(x), None
+        q = q_p.view(B, S, H, dh)
+        k = k_p.view(B, S, H, dh)
+        v = v_p.view(B, S, H, dh)
         # per-key-channel forget gate in (0,1); log for stable cumulative products
-        glog = self.g_proj(x) + self.gate_bias
+        glog = g_p + self.gate_bias
         log_alpha = F.logsigmoid(glog).view(B, S, H, dh)        # ≤ 0
-        return q, k, v, log_alpha
+        return q, k, v, log_alpha, r_pre
 
-    def _readout(self, x: Tensor, o: Tensor) -> Tensor:
+    def _readout(self, x: Tensor, o: Tensor, r_pre: Tensor | None = None) -> Tensor:
         # o: [B,S,H,dh] → [B,S,d]; GLA gated output + GroupNorm + proj.
+        # r_pre: optional r_proj(x) from the fused input GEMM (same bits as the
+        # eager Linear — see _project); None → recompute (fusion off).
         B, S, H, dh = o.shape
         o = o.reshape(B, S, H * dh)
         o = self.gn(o.transpose(1, 2)).transpose(1, 2)          # GroupNorm over channels
-        o = o * F.silu(self.r_proj(x))                          # swish output gate
+        r = self.r_proj(x) if r_pre is None else r_pre
+        o = o * F.silu(r)                                       # swish output gate
         return self.o_proj(o)
 
     @staticmethod
@@ -160,7 +200,7 @@ class GatedLinearAttention(nn.Module):
 
     def forward(self, x: Tensor, initial_state: Tensor | None = None,
                 return_state: bool = True):
-        q, k, v, log_alpha = self._project(x)
+        q, k, v, log_alpha, r_pre = self._project(x)
         if self.mode == "recurrent":
             o, final_state = self._recurrent(q, k, v, log_alpha, initial_state)
         elif self.mode == "kernel":
@@ -185,5 +225,5 @@ class GatedLinearAttention(nn.Module):
                 o, final_state = self._chunked(q, k, v, log_alpha, initial_state)
         else:  # "chunked" eager reference
             o, final_state = self._chunked(q, k, v, log_alpha, initial_state)
-        out = self._readout(x, o)
+        out = self._readout(x, o, r_pre)
         return (out, final_state) if return_state else out

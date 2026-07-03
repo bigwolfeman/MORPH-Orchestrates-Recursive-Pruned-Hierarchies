@@ -86,6 +86,14 @@ _FUSED_ATTN_PROJ = os.environ.get("MORPH_FUSED_ATTN_PROJ", "1").lower() not in (
 # x.dtype (fp32 under autocast) and tripped the kernel's same-dtype tl.dot assert.
 # In-model loss-trace gate PASSED (routed, ≤ noise floor). Default ON.
 _FUSED_ATTN_QKCONV = os.environ.get("MORPH_FUSED_ATTN_QKCONV", "1").lower() not in ("0", "false")
+# RoPE cos/sin cast cache: the eager RoPE paths (CoPEEmbedding.forward, _cca_q_only)
+# cast the fixed fp32 cos/sin buffers to the activation dtype on EVERY call (2 cast
+# kernels/exec). The buffers are constant between _build_cache calls and the cast is
+# elementwise, so caching the cast-per-dtype is class-A bit-exact: consumers receive
+# identical bits (cast-then-slice == slice-then-cast). The fused-prologue KERNEL path
+# is deliberately untouched — it consumes the fp32 buffers and casts in-register
+# (its backward upcasts fp32 loads; feeding it pre-cast bf16 would change bits).
+_ROPE_CAST_CACHE = os.environ.get("MORPH_ROPE_CAST_CACHE", "1").lower() not in ("0", "false")
 
 
 def set_fused_attn_proj(proj: bool | None = None, qkconv: bool | None = None):
@@ -95,6 +103,12 @@ def set_fused_attn_proj(proj: bool | None = None, qkconv: bool | None = None):
         _FUSED_ATTN_PROJ = bool(proj)
     if qkconv is not None:
         _FUSED_ATTN_QKCONV = bool(qkconv)
+
+
+def set_rope_cast_cache(value: bool) -> None:
+    """In-process override of the RoPE cast-cache toggle (A/B parity tests)."""
+    global _ROPE_CAST_CACHE
+    _ROPE_CAST_CACHE = bool(value)
 
 
 def _fused_x_proj(x: Tensor, mods: tuple[nn.Linear, ...]) -> tuple[Tensor, tuple[Tensor, ...]]:
@@ -177,6 +191,31 @@ class CoPEEmbedding(nn.Module):
         emb = torch.cat([freqs, freqs], dim=-1)
         self.register_buffer("cos_cached", emb.cos()[None, None], persistent=False)
         self.register_buffer("sin_cached", emb.sin()[None, None], persistent=False)
+        # Per-dtype cast cache (see _ROPE_CAST_CACHE note). Rebuilding the buffers
+        # invalidates it; the (device, data_ptr) key also invalidates on module moves
+        # (plain-attr tensors are not touched by nn.Module._apply).
+        self._cos_sin_cast_cache: dict = {}
+
+    def _cast_cos_sin(self, dtype: torch.dtype) -> tuple[Tensor, Tensor]:
+        """Full-length cos/sin buffers cast to ``dtype``, cached per dtype.
+
+        Class-A bit-exact: the identical elementwise .to() cast, computed once
+        instead of per call; slicing the cached cast equals casting the slice.
+        """
+        cc, sc = self.cos_cached, self.sin_cached
+        if dtype == cc.dtype or not _ROPE_CAST_CACHE:
+            return cc.to(dtype), sc.to(dtype)   # same-dtype .to() is a no-op (returns self)
+        if getattr(self, "_cos_sin_cast_cache", None) is None:
+            self._cos_sin_cast_cache = {}   # module unpickled from before this attr existed
+        key = (dtype, cc.device, cc.data_ptr())
+        hit = self._cos_sin_cast_cache.get(key)
+        if hit is None:
+            # prune entries from stale buffers/devices; keep other live dtypes
+            self._cos_sin_cast_cache = {
+                k: v for k, v in self._cos_sin_cast_cache.items() if k[1:] == key[1:]}
+            hit = (cc.to(dtype), sc.to(dtype))
+            self._cos_sin_cast_cache[key] = hit
+        return hit
 
     @torch.no_grad()
     def set_context(self, context_len: int, base: float | None = None,
@@ -202,8 +241,9 @@ class CoPEEmbedding(nn.Module):
 
     def forward(self, q: Tensor, k: Tensor) -> tuple[Tensor, Tensor]:
         S = q.shape[2]
-        cos = self.cos_cached[:, :, :S].to(q.dtype)
-        sin = self.sin_cached[:, :, :S].to(q.dtype)
+        cos_full, sin_full = self._cast_cos_sin(q.dtype)   # cached cast; slice = view
+        cos = cos_full[:, :, :S]
+        sin = sin_full[:, :, :S]
         q_rot = q * cos + self._rotate_half(q) * sin
         k_rot = k * cos + self._rotate_half(k) * sin
         return q_rot, k_rot
@@ -529,8 +569,11 @@ class _CCABase(nn.Module):
         q = (q_conv.reshape(B, S, H, D) + qk_mean_q).transpose(1, 2)      # [B,H,S,D]
         q = _rmsnorm(q, self.q_norm.weight, self.q_norm.eps)
 
-        cos_full = self.rope.cos_cached[:, :, :S].reshape(-1, D).to(q.dtype)
-        sin_full = self.rope.sin_cached[:, :, :S].reshape(-1, D).to(q.dtype)
+        # cached per-dtype cast (class-A: cast-then-slice == slice-then-cast); the
+        # [:, :, :S] slice of the contiguous [1,1,T,D] cache reshapes as a pure view.
+        _cosf, _sinf = self.rope._cast_cos_sin(q.dtype)
+        cos_full = _cosf[:, :, :S].reshape(-1, D)
+        sin_full = _sinf[:, :, :S].reshape(-1, D)
 
         def rope(t):
             Sl = t.shape[2]
