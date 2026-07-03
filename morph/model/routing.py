@@ -18,12 +18,35 @@ PruningSchedule._activate_routing at route_start.
 from __future__ import annotations
 
 import math
+import os
 from typing import Dict, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+
+from morph.kernels.triton.fused_router_tail import (
+    normalize_mask, pk_logits, sub_relu)
+
+# ─── Fused elementwise gate tail (perf: launch-count cut, class A) ────────────
+#
+# The post-GEMM router tail (product-key add → +bias → threshold-shift → relu →
+# normalize → activation mask) is a chain of tiny elementwise kernels that runs
+# per router call (~113 calls/step routed, incl. checkpoint recompute) and is
+# pure launch overhead at [B·T, 16]. The fused replacements keep every
+# REDUCTION (topk, sum, mean, var — fwd AND bwd) in aten and fuse only the
+# correctly-rounded elementwise chain → bitwise-identical by construction; the
+# ``activation_k / gate_sum`` division also stays eager (see
+# morph/kernels/triton/fused_router_tail.py for the full contract). CPU parity:
+# scratchpad/parity_router_tail.py. GPU loss-trace gate required before landing.
+_FUSED_ROUTER_TAIL = os.environ.get("MORPH_FUSED_ROUTER_TAIL", "1").lower() not in ("0", "false")
+
+
+def set_fused_router_tail(value: bool) -> None:
+    """In-process override of the fused-tail toggle (A/B parity tests)."""
+    global _FUSED_ROUTER_TAIL
+    _FUSED_ROUTER_TAIL = bool(value)
 
 
 # =============================================================================
@@ -171,23 +194,27 @@ class TileRouter(nn.Module):
         scores_a = q_a @ self.sub_keys_a.T  # [N, n_sub_keys]
         scores_b = q_b @ self.sub_keys_b.T  # [N, n_sub_keys]
 
-        # 3. Product-key full scores: Cartesian product
-        # [N, n_sub_keys, 1] + [N, 1, n_sub_keys] → [N, n_sub_keys²]
-        product_scores = (
-            scores_a.unsqueeze(2) + scores_b.unsqueeze(1)
-        ).reshape(x_flat.shape[0], self.n_sub_keys * self.n_sub_keys)  # [N, n_sub_keys²]
-
-        # 4. Map product indices to tile-group logits
-        # We need a [n_sub_keys², n_tile_groups] projection.
-        # Implementation: learn a linear map from product space to group logits.
-        # To keep this lightweight we use the group_bias as a direct logit over
-        # n_tile_groups, and project down if n_sub_keys² != n_tile_groups.
+        # 3./4. Product-key full scores (Cartesian product) + map to tile-group
+        # logits. We need a [n_sub_keys², n_tile_groups] projection; to keep it
+        # lightweight the group_bias is a direct logit over n_tile_groups, and we
+        # project down if n_sub_keys² != n_tile_groups.
         n_products = self.n_sub_keys * self.n_sub_keys
 
-        if n_products == self.n_tile_groups:
+        if n_products == self.n_tile_groups and _FUSED_ROUTER_TAIL:
+            # Direct 1:1 mapping (the deploy branch): fused broadcast-add + bias-add
+            # (one elementwise kernel; bitwise-identical — see fused_router_tail).
+            group_logits = pk_logits(scores_a, scores_b, self.group_bias)
+        elif n_products == self.n_tile_groups:
             # Direct 1:1 mapping
+            # [N, n_sub_keys, 1] + [N, 1, n_sub_keys] → [N, n_sub_keys²]
+            product_scores = (
+                scores_a.unsqueeze(2) + scores_b.unsqueeze(1)
+            ).reshape(x_flat.shape[0], n_products)
             group_logits = product_scores + self.group_bias.unsqueeze(0)
         elif n_products >= self.n_tile_groups:
+            product_scores = (
+                scores_a.unsqueeze(2) + scores_b.unsqueeze(1)
+            ).reshape(x_flat.shape[0], n_products)
             # Take top-n_tile_groups product scores (fast: linear in n_tile_groups)
             # Use topk to select the strongest n_tile_groups product entries
             top_scores, top_idx = product_scores.topk(self.n_tile_groups, dim=-1)  # [N, G]
@@ -196,26 +223,41 @@ class TileRouter(nn.Module):
         else:
             # More groups than products: broadcast product scores across groups
             # Expand product scores to group space via stride-based index wrap
+            product_scores = (
+                scores_a.unsqueeze(2) + scores_b.unsqueeze(1)
+            ).reshape(x_flat.shape[0], n_products)
             idx = torch.arange(self.n_tile_groups, device=x.device) % n_products
             group_logits = product_scores[:, idx] + self.group_bias.unsqueeze(0)
 
         # 5. Continuous soft gate via ReLU (ReMoE-style)
         # Top-k routing: zero out all but top-activation_k groups, then ReLU
         # This preserves gradients to the top-k groups while zeroing the rest.
+        # (topk stays eager — reductions and their grads are never fused.)
         if self.activation_k < self.n_tile_groups:
             # Find the k-th largest value as the threshold
             kth_vals, _ = group_logits.topk(self.activation_k, dim=-1)  # [N, k]
             threshold = kth_vals[:, -1].unsqueeze(-1)  # [N, 1]
-            masked_logits = group_logits - threshold    # shift: top-k ≥ 0, rest < 0
+            if _FUSED_ROUTER_TAIL:
+                # fused shift+relu (one elementwise kernel; bitwise-identical)
+                gates = sub_relu(group_logits, threshold)
+            else:
+                masked_logits = group_logits - threshold  # shift: top-k ≥ 0, rest < 0
+                gates = F.relu(masked_logits)
         else:
-            masked_logits = group_logits
-
-        gates = F.relu(masked_logits)  # [N, n_tile_groups] — sparse, continuous
+            gates = F.relu(group_logits)   # [N, n_tile_groups] — sparse, continuous
 
         # 6. Normalize active gates so they sum to activation_k per token
-        # This keeps the output magnitude stable independent of how many groups fire
+        # This keeps the output magnitude stable independent of how many groups fire.
+        # The sum and the scalar/clamped-sum division stay EAGER (bit-exactness:
+        # reductions + aten-internal scalar-div lowering are never fused).
         gate_sum = gates.sum(dim=-1, keepdim=True).clamp(min=1e-6)
-        gates = gates * (self.activation_k / gate_sum)
+        active_mask = None
+        if _FUSED_ROUTER_TAIL:
+            # fused normalize + activation mask (one elementwise kernel, two outputs;
+            # the mask replaces step 8's (gates > 0).float() bit-for-bit)
+            gates, active_mask = normalize_mask(gates, self.activation_k / gate_sum)
+        else:
+            gates = gates * (self.activation_k / gate_sum)
 
         # 7. Reshape back
         if len(orig_shape) == 3:
@@ -225,7 +267,10 @@ class TileRouter(nn.Module):
         # Compute mean activation rate per group in this batch
         with torch.no_grad():
             # Per-group mean activation (fraction of tokens that activate it)
-            batch_load = (gates > 0).float().reshape(-1, self.n_tile_groups).mean(0)
+            if active_mask is not None:
+                batch_load = active_mask.reshape(-1, self.n_tile_groups).mean(0)
+            else:
+                batch_load = (gates > 0).float().reshape(-1, self.n_tile_groups).mean(0)
             # Update EMA (no gradient)
             self.group_load_ema.mul_(self._load_ema_alpha).add_(
                 batch_load, alpha=1 - self._load_ema_alpha
