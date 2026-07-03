@@ -18,13 +18,15 @@ The active stack is:
 
 - **Looped transformer body:** prelude blocks, a shared core loop, and coda blocks. Parcae style.
 - **Cayley Hyper-Connections:** four residual carrier streams across the network, reduced before the output head.
-- **CCA + CSA/HCA attention:** channel-compressed attention with local window attention plus alternating sparse and dense compressed global context.
+- **CCA + CSA/HCA attention:** Compressed Convolutional Attention with local window attention plus alternating sparse and dense compressed global context. Providing sub-quadratic attention a la Deepseek, with further compression on the KV cache using CCA. Some testing is showing this is more sensitive to KV quantization.
 - **GLA retention:** a gated branch beside attention on configured section-local layers, with optional carry across core-loop iterations. Chosen over interleaving full attention blocks.
 - **Hybrid embeddings:** Euclidean token embeddings, a hyperbolic Lorentz channel, and a learned hash-bigram signal injected through the body.
-- **MORTAR sparse MLP path:** MORTAR provides control over 16x16 groups of perceptrons to make tracking importance tractable as an EMA for pruning. It implements the MegaBlocks kernel to realize the performance benefits post carving.
-- **ReMoE routing:** whole-body hidden-neuron routing after carve. Enables per token routing selecting by 16x16 MORTAR tiles.
+- **MORTAR sparse MLP path:** MORTAR provides control over 16x16 groups of perceptrons to make tracking importance tractable as an EMA for pruning. It utilizes the MegaBlocks kernel to realize the performance benefits post carving.
+- **ReMoE routing:** whole-body hidden-neuron routing after carve. Enables per token routing selection of 16x16 MORTAR tiles.
 - **Deploy QAT:** ternary backbone weights, int6 Euclidean/bigram embeddings, and 8-bit AdEMAMix optimizer state by default. Lorentz embeddings must stay in bf16.
-- **Triton Kernels:** Extensive Triton kernels are provided that target the 5090 and RTX Pro 6000 GPUs. As more deployment targets are used the auto tune coverage will expand.
+- **Triton Kernels:** Extensive Triton kernels are provided that target the 5090 and RTX Pro 6000 GPUs. As more deployment targets are used the coverage will expand.
+
+docs/references for attributions to prior art.
 
 
 ## Training Recipe
@@ -86,7 +88,7 @@ morph/
     train.py                # Hydra training entry point
     pruning.py              # prune -> carve -> route coordinator
     optimizer.py            # AdamW, 8-bit AdamW, ternary shadow optimizer support
-    ademamix_b1zero.py      # beta1=0 AdEMAMix optimizer
+    ademamix_b1zero.py      # beta1=0 AdEMAMix optimizer w/ 8-bit support
     spectral_penalty.py     # core-map spectral-norm penalty
     data.py                 # OpenWebText + StarCoder2 streaming loader
     curriculum_data.py      # pretokenized multi-source curriculum loader
