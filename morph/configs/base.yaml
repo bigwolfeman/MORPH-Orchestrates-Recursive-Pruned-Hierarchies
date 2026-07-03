@@ -277,6 +277,18 @@ data:
   tokenizer: bigcode/starcoder2-7b
   seq_len: 4096
 
+# Hardware-adaptive shard placement + prefetch (docs/data-placement-design.md).
+# Measured per token blob at loader init; one report line per source — never silent.
+# Env overrides: MORPH_DATA_PLACEMENT / MORPH_DATA_RAM_FRAC / MORPH_DATA_RAM_RESERVE_GB /
+# MORPH_DATA_PROBE / MORPH_DATA_PREFETCH.
+data_runtime:
+  placement: auto          # auto | ram | mmap | stream (stream = tier C, phase 2)
+  ram_budget_frac: 0.5
+  ram_reserve_gb: 16
+  probe: true              # rand-4K p50 + sequential microbench of the actual file
+  prefetch_batches: 4      # 0 = synchronous (bit-exact repro escape hatch)
+  shuffle_window_docs: 100000   # tier C only (unused in phase 1)
+
 wandb:
   project: morph
   entity: adew-me
