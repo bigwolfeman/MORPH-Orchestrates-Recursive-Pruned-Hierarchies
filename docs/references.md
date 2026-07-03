@@ -19,6 +19,7 @@ Local markdown copies are grouped by topic in [`references/MANIFEST.md`](referen
 > They are kept here as citations and marked **(removed)** in place, mirroring the Block-ELL
 > "(superseded)" treatment in §6. The current cross-iteration memory is the GLA retention branch
 > (`morph/model/gla.py`); the sole residual is the JPmHC Cayley hyper-connection.
+> Some variables are not renamed in code to keep checkpoint consistency.
 
 ---
 
@@ -123,6 +124,18 @@ CCA mechanism. No independent prior paper. See the CCA entry above.
 
 ## 3. Memory
 
+### GLA — Gated Linear Attention (retention branch)
+
+**Title:** Gated Linear Attention Transformers with Hardware-Efficient Training  
+**Authors:** Songlin Yang, Bailin Wang, Yikang Shen, Rameswar Panda, Yoon Kim  
+**Year:** 2023 (ICML 2024)  
+**arXiv:** [2312.06635](https://arxiv.org/abs/2312.06635)  
+**MORPH uses:** Current cross-iteration memory path. `morph/model/gla.py` implements per-key-channel
+gated linear attention with optional carry of the final state `S_T` across core-loop iterations;
+output is gated and GroupNorm'd following the paper. Enabled by default (`retention: true` in
+`base.yaml`) on configured section-local layers, beside CCA+CSA/HCA attention rather than as a
+full-block interleave.
+
 ### Titans — Neural Memory (removed)
 
 **Title:** Titans: Learning to Memorize at Test Time  
@@ -132,8 +145,8 @@ CCA mechanism. No independent prior paper. See the CCA entry above.
 **MORPH history (removed):** An earlier MORPH version used the Titans Memory-Augmented Context
 (MAC) variant: a deep-MLP memory M updated on the forward pass via momentum-accelerated
 associative-loss minimization (S_t = η_t·S_{t-1} − θ_t·∇‖M(k)−v‖², M_t = (1−α_t)·M_{t-1} + S_t).
-This module was **removed**; the current cross-iteration memory is the gated-linear-attention
-(GLA) retention branch (`morph/model/gla.py`), on by default (`retention: true` in `base.yaml`).
+This module was **removed**; the current cross-iteration memory is the GLA retention branch above.
+
 
 ### Nested Learning (removed)
 
@@ -297,7 +310,7 @@ computation — clusters remain full-rank, not rank-k projections).
 **MORPH history (removed):** An earlier MORPH version applied the paper's geodesic smoothness
 constraint to hidden-state trajectories during pretraining (not fine-tuning as in the paper)
 with a multi-scale scheme (strides 1,2,4,…,τ=64). The regularizer was **removed** along with
-`morph/model/prediction.py`; the current training loss is plain next-token cross-entropy.
+`morph/model/prediction.py`; the current training loss is plain next-token cross-entropy. Extensive testing on this showed that potentially applying STP at punctuation boundaries (.,;!?--\n) during pretraining has some benefit to autoregressive generation.
 
 ### LeJEPA — Latent Prediction Without Collapse (removed)
 
@@ -308,7 +321,8 @@ with a multi-scale scheme (strides 1,2,4,…,τ=64). The regularizer was **remov
 **MORPH history (removed):** An earlier MORPH version added a split_nsm z-latent prediction
 objective (backbone predicts mean(next-segment z_coda); memory predicts the next-segment prelude
 state) with the SIGReg anti-collapse regularizer. The z-latent / JEPA objectives were **removed**
-(`morph/model/prediction.py` no longer exists).
+(`morph/model/prediction.py` no longer exists). 
+Several z-latent objectives were tested with varying success. LLM-JEPA was tested and a synth dataset for pretraining resembling LLM-JEPA was also tested. Results were mixed at this scale.
 
 ### SIGReg — Sketched Isotropic Gaussian Regularization (removed)
 
@@ -368,7 +382,7 @@ Gabriel Synnaeve (Meta FAIR)
 **Year:** 2024  
 **arXiv:** [2404.19737](https://arxiv.org/abs/2404.19737)  
 **Status:** Not in the current code — there are no MTP heads in `morph/`; the training loss is
-plain single-token next-token cross-entropy. Kept as a citation.
+plain single-token next-token cross-entropy. Kept as a citation. Requires larger scale to benefit.
 
 ### STE Ternary — Straight-Through Estimator + BitNet b1.58
 
@@ -381,7 +395,7 @@ Li Dong, Ruiping Wang, Jilong Xue, Furu Wei (Microsoft Research)
 optimizer state maintained in fp32 shadow weights, which are quantized to {−1, 0, +1} for
 the forward pass using absmean scaling, with straight-through gradients flowing back to the
 shadow weights. This is the only ternary training method validated to work reliably at scale
-(8 alternatives tested in prior ablations, all failed).
+(8 alternatives tested in prior ablations, STE ternary won).
 
 The implementation covers the backbone scope (`ternary_scope: backbone` — MLP/mix/mhc
 projections); attention projections stay bf16.
@@ -418,7 +432,7 @@ second very-slow momentum EMA (decay β3, `base.yaml` default 0.999) mixed into 
 weight α (default 8.0): `update = (m₁ + α·m₂)/(√ν + ε) + λ·p`. α and β3 require their own warmup
 schedulers (`t_alpha`, `t_beta3`) distinct from LR warmup — essential for stability under
 MORPH's flat-LR recipe. Includes prune-aware dead-state masking for CMS-carved weights.
-Default deploy path remains AdamW8bit + STE ternary shadow weights.
+
 
 ---
 
@@ -461,7 +475,8 @@ harness deployment after RL training, currently deferred.
 | 2   | Block-ELL Format (superseded)         | NVIDIA cuSPARSE (2021+)                   | [developer.nvidia.com](https://developer.nvidia.com/blog/accelerating-matrix-multiplication-with-block-sparse-format-and-nvidia-tensor-cores/) |
 | 2a  | MegaBlocks / STK                      | Gale et al. (Stanford, 2022)              | [2211.15841](https://arxiv.org/abs/2211.15841)                                                                                                 |
 | 3   | CMS Topology                          | Original work — MORPH project             | —                                                                                                                                              |
-| 4   | Neural Memory (Titans) (removed)      | Behrouz, Zhong, Mirrokni (Google, 2025)   | [2501.00663](https://arxiv.org/abs/2501.00663)                                                                                                 |
+| 4   | GLA Retention                         | Yang et al. (2023 / ICML 2024)            | [2312.06635](https://arxiv.org/abs/2312.06635)                                                                                                 |
+| 4a  | Neural Memory (Titans) (removed)      | Behrouz, Zhong, Mirrokni (Google, 2025)   | [2501.00663](https://arxiv.org/abs/2501.00663)                                                                                                 |
 | 5   | CCA                                   | Figliolia et al. (Zyphra, 2025)           | [2510.04476](https://arxiv.org/abs/2510.04476)                                                                                                 |
 | 6   | CSA / HCA                             | DeepSeek-AI (2026)                        | [HF PDF](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf)                                                         |
 | 7   | STP (removed)                         | Huang, LeCun, Balestriero (2026)          | [2602.22617](https://arxiv.org/abs/2602.22617)                                                                                                 |

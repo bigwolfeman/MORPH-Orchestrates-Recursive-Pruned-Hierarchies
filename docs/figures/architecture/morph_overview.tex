@@ -26,18 +26,21 @@
 
 \definecolor{bdr}{HTML}{555555}
 \definecolor{loopC}{HTML}{2255AA}
-\definecolor{hcC}{HTML}{2255AA}
+\definecolor{hcC}{HTML}{FF3355}
+\definecolor{hcFill}{HTML}{FFE5EA}
 
 \tikzset{
   B/.style={draw=bdr, thick, rounded corners=4pt,
-    minimum width=5.4cm, minimum height=0.9cm,
-    font=\small\sffamily, align=center, inner sep=5pt},
-  Bs/.style={B, minimum height=0.55cm, font=\footnotesize\sffamily},
+    minimum width=5.4cm, minimum height=0.95cm,
+    font=\small\sffamily, align=center, inner sep=6pt},
+  Bs/.style={B, minimum height=0.6cm, font=\footnotesize\sffamily},
   Bt/.style={draw=bdr, rounded corners=3pt,
     minimum width=3.2cm, minimum height=0.6cm,
     font=\footnotesize\sffamily, align=center, inner sep=3pt},
   A/.style={-{Stealth[length=2.5mm,width=2mm]}, thick},
   Ad/.style={-{Stealth[length=2.2mm,width=1.8mm]}, thick, densely dashed},
+  HCA/.style={-{Stealth[length=2.3mm,width=1.9mm]}, thick, densely dashed, draw=hcC},
+  GLA/.style={-{Stealth[length=2.4mm,width=2.0mm]}, line width=1.45pt, densely dashed, draw=cbPurple},
   ph/.style={font=\small\sffamily\bfseries},
   sub/.style={font=\scriptsize\sffamily},
   tiny/.style={font=\tiny\sffamily},
@@ -52,12 +55,12 @@
 \node[font=\small\sffamily] (inp) {Input Tokens};
 
 \node[B, fill=fTeal, above=0.5cm of inp] (emb) {
-  Hybrid Embedding\\[-1pt]{\scriptsize Euclidean + Lorentz + Bigram}};
+  Hybrid Embedding\\[2pt]{\scriptsize Euclidean + Lorentz + Bigram}};
 \draw[A] (inp) -- (emb);
 
 \node[Bs, fill=fGray, above=0.3cm of emb] (drp) {Dropout};
 \draw[A] (emb) -- (drp);
-\node[sub, text=bdr, left=1.6cm of drp] {$x_0 \leftarrow$ clone};
+\node[sub, text=bdr, left=1.6cm of drp] (x0clone) {$x_0 \leftarrow$ clone};
 
 % ── HC stream expansion ──────────────────────────────────────────────
 \node[Bs, fill=hcC!12, draw=hcC, above=0.32cm of drp] (exp) {
@@ -66,7 +69,7 @@
 
 % ── PRELUDE ──────────────────────────────────────────────────────────
 \node[B, fill=fBlue, above=0.7cm of exp] (pa) {
-  CCA + CSA/HCA Attention\\[-1pt]
+  CCA + CSA/HCA Attention\\[2pt]
   {\scriptsize layer 1: $+\,\sigma(g)\!\cdot$ GLA retention branch}};
 \node[B, fill=fOrange, above=0.45cm of pa] (pm) {SwiGLU MLP\quad{\scriptsize (MORTAR)}};
 \draw[A] (exp) -- (pa);
@@ -75,18 +78,16 @@
   \node[draw=bdr, thick, rounded corners=6pt, fill=fGray!20,
         fit=(pa)(pm), inner xsep=10pt, inner ysep=14pt] (PG) {};
 \end{scope}
-\node[ph, anchor=east, text=bdr] at ($(PG.west)+(-0.15,0)$) {Prelude};
+\node[ph, anchor=north west, text=bdr, fill=white, inner sep=1.5pt]
+  at ([xshift=0.12cm,yshift=-0.10cm] PG.north west) {Prelude};
 \node[sub, text=bdr, anchor=east] at ($(PG.south east)+(-0.2,0.22)$) {$\times$N layers};
-\node[sub, text=cbOrange, left=2.0cm of pa, align=right]
-  (psid) {$x_0$ skip\\value embeds\\bigram};
-\draw[Ad, cbOrange] (psid.east) -- (pa.west);
 
 % ── CORE LOOP ────────────────────────────────────────────────────────
 \node[Bs, fill=fGray!50, above=1.15cm of pm] (inj) {
   Input Norm + Diagonal Injection \;{\scriptsize (spectral radius $<1$)}};
 \draw[A] (pm) -- (inj);
 \node[B, fill=fBlue!80, above=0.32cm of inj] (ca) {
-  CCA + CSA/HCA Attention\\[-1pt]
+  CCA + CSA/HCA Attention\\[2pt]
   {\scriptsize layer 1: $+\,\sigma(g)\!\cdot$ GLA (state carried $\times T$)}};
 \node[B, fill=fOrange!90, above=0.32cm of ca] (cm) {
   SwiGLU MLP\quad{\scriptsize (MORTAR)}};
@@ -96,12 +97,10 @@
   \node[draw=loopC, line width=2.5pt, rounded corners=8pt,
         fill=loopC!5, fit=(inj)(ca)(cm), inner sep=12pt] (CG) {};
 \end{scope}
-\node[font=\normalsize\sffamily\bfseries, text=loopC, anchor=east]
-  at ($(CG.west)+(-0.15,0.6)$) {Core Loop};
+\node[font=\normalsize\sffamily\bfseries, text=loopC, anchor=north west,
+      inner sep=1.5pt]
+  at ([xshift=0.12cm,yshift=-0.10cm] CG.north west) {Core Loop};
 \node[sub, text=bdr, anchor=east] at ($(CG.south east)+(-0.2,0.22)$) {$\times$2N layers};
-\node[sub, text=cbOrange, left=2.0cm of ca, align=right]
-  (csid) {$x_0$, value\\embeds,\\bigram};
-\draw[Ad, cbOrange] (csid.east) -- (ca.west);
 
 % loop-back arrow (blue) = the HC carrier + whole block re-applied each iteration
 \draw[loopC, line width=2.5pt, rounded corners=10pt,
@@ -118,7 +117,7 @@
 
 % ── CODA ─────────────────────────────────────────────────────────────
 \node[B, fill=fBlue, above=1.15cm of cm] (da) {
-  CCA + CSA/HCA Attention\\[-1pt]
+  CCA + CSA/HCA Attention\\[2pt]
   {\scriptsize layer 1: $+\,\sigma(g)\!\cdot$ GLA retention branch}};
 \node[B, fill=fOrange, above=0.45cm of da] (dm) {SwiGLU MLP\quad{\scriptsize (MORTAR)}};
 \draw[A] (cm) -- (da);
@@ -127,7 +126,8 @@
   \node[draw=bdr, thick, rounded corners=6pt, fill=fGray!20,
         fit=(da)(dm), inner xsep=10pt, inner ysep=14pt] (DG) {};
 \end{scope}
-\node[ph, anchor=east, text=bdr] at ($(DG.west)+(-0.15,0)$) {Coda};
+\node[ph, anchor=north west, text=bdr, fill=white, inner sep=1.5pt]
+  at ([xshift=0.12cm,yshift=-0.10cm] DG.north west) {Coda};
 \node[sub, text=bdr, anchor=east] at ($(DG.south east)+(-0.2,0.22)$) {$\times$N layers};
 
 % ── HC collapse + head ───────────────────────────────────────────────
@@ -136,63 +136,80 @@
 \draw[A] (dm) -- (col);
 
 \node[B, fill=fYellow!55, above=0.4cm of col] (mix) {
-  LM Head Mixer\\[-1pt]{\scriptsize per-channel scale + cross-mix}};
+  LM Head Mixer\\[2pt]{\scriptsize per-channel scale + cross-mix}};
 \draw[A] (col) -- (mix);
 
 \node[Bs, fill=fGray!30, above=0.35cm of mix] (fn) {Final RMSNorm};
 \draw[A] (mix) -- (fn);
 
 \node[B, fill=fYellow, above=0.35cm of fn] (hd) {
-  Weight-Tied LM Head\\[-1pt]{\scriptsize fused linear cross-entropy}};
+  Weight-Tied LM Head\\[2pt]{\scriptsize fused linear cross-entropy}};
 \draw[A] (fn) -- (hd);
 
-\node[B, fill=fYellow!40, above=0.45cm of hd, minimum height=0.9cm] (out) {
-  Logits \;$\to$\; Loss $=$ cross-entropy\\[-1pt]
+\node[B, fill=fYellow!40, above=0.45cm of hd] (out) {
+  Logits \;$\to$\; Loss $=$ cross-entropy\\[2pt]
   {\scriptsize fused/chunked training path when kernels are enabled}};
 \draw[A] (hd) -- (out);
 
 % =====================================================================
-% RIGHT: HYPER-CONNECTION CARRIER (replaces the old "Memory System")
+% LEFT: HC CARRIER RAIL + RETENTION BRANCH
 % =====================================================================
-\coordinate (hc_anchor) at ($(ca.east)+(7.7,0)$);
-\node[draw=hcC, very thick, rounded corners=8pt, fill=hcC!8,
-      minimum width=5.2cm, minimum height=5.6cm,
-      inner sep=10pt, anchor=center] (HC) at (hc_anchor) {};
-\node[ph, text=hcC, anchor=north west] at ($(HC.north west)+(0.3,-0.2)$)
-  {Cayley Hyper-Connections};
-\node[sub, text=bdr, anchor=north west, align=left] at ($(HC.north west)+(0.3,-0.72)$) {%
-  residual mechanism\\
-  \texttt{residual\_mode=hc\_cayley}};
-\node[font=\footnotesize\sffamily, text=bdr, align=left, anchor=north west]
-  at ($(HC.north west)+(0.3,-1.5)$) {%
-  carrier $[B,S,n{=}4,C]$\\[3pt]
-  $\bar{x}=\mathrm{mean}_n(H_{\mathrm{pre}}\,x_{\mathrm{str}})$\\[2pt]
-  {\scriptsize sublayer $F$ sees one $C$-dim $\bar{x}$}\\[4pt]
-  $x_{\mathrm{out}}=H_{\mathrm{res}}\,x_{\mathrm{str}}+H_{\mathrm{post}}(y{\otimes}\mathbf{1}_n)$\\[2pt]
-  {\scriptsize $H_{\mathrm{res}}=\mathrm{Cayley}(\mathrm{skew})$ orthogonal}\\[4pt]
-  {\scriptsize init $\approx x+F(\mathrm{mean}(x))$ (plain residual)}};
-% three dashed feeds fan out FROM the HC box's own west edge to each section's attention
-\draw[Ad, hcC] ($(HC.west)+(0,2.2)$) -- (da.east);
-\draw[Ad, hcC] (HC.west) -- (ca.east);
-\draw[Ad, hcC] ($(HC.west)+(0,-2.2)$) -- (pa.east);
+% Candy-striped carrier rail: red-pink = Cayley HC carrier, purple stripes = GLA side branch.
+% It starts when token embeddings expand to n=4 streams, runs in parallel to the backbone,
+% then collapses at mean().
+\coordinate (hcBot) at ($(exp.west)+(-1.45,0)$);
+\coordinate (hcTop) at ($(col.west)+(-1.45,0)$);
+\draw[hcC, line width=6.8pt, rounded corners=7pt, -{Stealth[length=3.8mm,width=3.2mm]}]
+  (exp.west) -- (hcBot) -- (hcTop) -- (col.west);
+% Keep stripes inside the red carrier body. They need to read as thick bands
+% without bleeding past the rail edge at preview scale.
+\begin{scope}
+  \clip ($(hcBot)+(-0.115,0.05)$) rectangle ($(hcTop)+(0.115,-0.05)$);
+  \foreach \p in {0.035,0.105,...,0.98}{
+    \draw[cbPurple, line width=3.6pt, line cap=butt]
+      ($(hcBot)!\p!(hcTop)+(-0.18,-0.22)$) --
+      ($(hcBot)!\p!(hcTop)+(0.18,0.22)$);
+  }
+\end{scope}
+\node[font=\scriptsize\sffamily\bfseries, text=hcC, anchor=south, rotate=90]
+  at ($(hcBot)!0.52!(hcTop)+(-0.27,0)$) {HC / GLA carrier};
 
-% =====================================================================
-% RIGHT (lower): RETENTION (GLA) BRANCH panel — the second cross-cutting carrier
-% =====================================================================
+\node[draw=hcC, very thick, rounded corners=8pt, fill=hcFill,
+      text width=4.10cm, inner sep=10pt, align=left, anchor=east]
+      (HC) at ($(hcBot)!0.70!(hcTop)+(-1.10,0)$) {%
+  {\small\sffamily\bfseries\textcolor{hcC}{Cayley Hyper-Connections}}\\[3pt]
+  {\scriptsize\sffamily sole residual carrier}\\[4pt]
+  {\footnotesize\sffamily $[B,S,n{=}4,C]$ streams}\\[2pt]
+  {\scriptsize\sffamily each sublayer reads $\bar{x}$, computes $F(\bar{x})$, then scatters back}\\[3pt]
+  {\scriptsize\sffamily red rail: Cayley $H_{\mathrm{res}}\in O(n)$}\\[3pt]
+  {\scriptsize\sffamily init $\approx x+F(\mathrm{mean}(x))$}};
+
 \node[draw=cbPurple, very thick, rounded corners=8pt, fill=cbPurple!7,
-      minimum width=5.2cm, minimum height=3.5cm,
-      inner sep=10pt, anchor=north] (GLAP) at ($(HC.south)+(0,-0.6)$) {};
-\node[ph, text=cbPurple, anchor=north west] at ($(GLAP.north west)+(0.3,-0.2)$)
-  {Retention (GLA) branch};
-\node[sub, text=bdr, anchor=north west] at ($(GLAP.north west)+(0.3,-0.7)$)
-  {parallel to attention, \;layer 1 of each section};
-\node[font=\footnotesize\sffamily, text=bdr, align=left, anchor=north west]
-  at ($(GLAP.north west)+(0.3,-1.18)$) {%
-  $a=\mathrm{attn}(x)+\sigma(g)\!\cdot\!\mathrm{GLA}(\bar{x},S)$\\[3pt]
-  $S_t=\mathrm{diag}(\alpha_t)\,S_{t-1}+k_t^{\!\top}v_t$\\[2pt]
-  $\alpha_t=\sigma(x_t W_g)$,\; state $S\!\in\!\mathbb{R}^{d_k\times d_v}$\\[4pt]
-  {\scriptsize core: $S_T$ carried across loop iters (Axis 2)}\\[2pt]
-  {\scriptsize gate $\sigma(g)\!\approx\!0$ at init (learnable)}};
+      text width=4.10cm, inner sep=10pt, align=left, anchor=north east]
+      (GLAP) at ($(HC.south east)+(0,-0.55)$) {%
+  {\small\sffamily\bfseries\textcolor{cbPurple}{Retention (GLA) branch}}\\[3pt]
+  {\scriptsize\sffamily purple stripe: layer-1 attention branch}\\[4pt]
+  {\footnotesize\sffamily $a=\mathrm{attn}(x)+\sigma(g)\!\cdot\!\mathrm{GLA}(\bar{x},S)$}\\[3pt]
+  {\footnotesize\sffamily $S_t=\mathrm{diag}(\alpha_t)S_{t-1}+k_t^{\!\top}v_t$}\\[3pt]
+  {\scriptsize\sffamily core: $S_T$ carried across loop iters}};
+
+% x0 skip is a static conditioning path into attention; use one quiet note and
+% subtle orange ticks instead of long cross-page arrows.
+\node[draw=cbOrange!70!black, rounded corners=5pt, fill=fOrange!45,
+      text width=3.9cm, inner sep=7pt, align=left,
+      font=\scriptsize\sffamily, text=cbOrange!75!black, anchor=north east]
+      (x0note) at ($(GLAP.south east)+(0,-0.45)$) {%
+  \textbf{$x_0$ skip}\\[-1pt]
+  value embeddings + bigram signal condition attention in prelude and core};
+\foreach \attn in {pa,ca}{
+  \draw[cbOrange!75!black, line width=1.2pt, densely dotted]
+    ($(hcBot |- \attn.west)+(0.18,0)$) -- ++(0.52,0);
+}
+
+% Only layer-1 attention receives the purple side branch.
+\foreach \attn in {pa,ca,da}{
+  \draw[GLA] (hcBot |- \attn.west) -- (\attn.west);
+}
 
 % ── Title ────────────────────────────────────────────────────────────
 \node[above=0.7cm of out, font=\Large\sffamily\bfseries]

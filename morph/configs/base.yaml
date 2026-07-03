@@ -128,7 +128,7 @@ training:
   tst_ratio: 0.3                 # fraction of steps in the superposition phase
 
   # Optimizer extras
-  optimizer: adamw               # adamw (with adam8bit=true → bnb AdamW8bit fallback) |
+  optimizer: ademamix_b1zero      # adamw (with adam8bit=true → bnb AdamW8bit fallback) |
                                  # ademamix_b1zero (β1=0 fork: 2 buffers → AdamW8bit memory
                                  # parity, vs bnb's 3-buffer +50%; ~+1% step overhead).
                                  # (The stock 3-buffer `ademamix` path was removed.)

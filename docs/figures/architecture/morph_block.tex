@@ -59,15 +59,15 @@
 \node[Bs, fill=fGray, below=0.5cm of preA] (normA) {RMSNorm$(\bar{x})$};
 \draw[A] (preA) -- (normA);
 
-\node[B, fill=fBlue, below=0.95cm of normA, minimum height=1.3cm] (attn) {
-  CCA + CSA/HCA Attention\\[-1pt]
-  {\scriptsize channel-compress $\to$ conv $\to$ QK-mean $\to$ CoPE-RoPE $\to$ window}\\[-1pt]
+\node[B, fill=fBlue, below=0.95cm of normA, minimum width=6.4cm, inner sep=6pt] (attn) {
+  CCA + CSA/HCA Attention\\[2pt]
+  {\scriptsize channel-compress $\to$ conv $\to$ QK-mean $\to$ CoPE-RoPE $\to$ window}\\[1pt]
   {\scriptsize CSA sparse (even) / HCA dense (odd) + sigmoid gate}};
 \draw[A] (normA) -- (attn);
 
 % GLA parallel branch (layer 1)
-\node[B, fill=fPurple, left=1.3cm of attn, minimum width=2.7cm, minimum height=1.3cm] (gla) {
-  GLA retention\\[-1pt]{\scriptsize branch (layer 1)}\\[-1pt]
+\node[B, fill=fPurple, left=1.1cm of attn, minimum width=3.0cm, inner sep=6pt] (gla) {
+  GLA retention\\[1pt]{\scriptsize branch (layer 1)}\\[2pt]
   {\tiny $S_t{=}\mathrm{diag}(\alpha_t)S_{t-1}{+}k_t^{\!\top}v_t$}};
 \draw[A] (normA.west) -| (gla.north);
 
@@ -99,9 +99,9 @@
 \draw[A, hcC] (cmid) -- (preM) node[midway, right=3pt, sub, text=hcC]{aggregate};
 \node[Bs, fill=fGray, below=0.5cm of preM] (normM) {RMSNorm$(\bar{x})$};
 \draw[A] (preM) -- (normM);
-\node[B, fill=fOrange, below=0.85cm of normM, minimum height=1.15cm] (mlp) {
-  SwiGLU MLP\\[-1pt]
-  {\scriptsize gate\_up: $d\to d_{ff}{\times}2$,\; $\mathrm{SiLU}(g)\odot u$,\; down: $d_{ff}\to d$}\\[-1pt]
+\node[B, fill=fOrange, below=0.85cm of normM, minimum width=6.4cm, inner sep=6pt] (mlp) {
+  SwiGLU MLP\\[2pt]
+  {\scriptsize gate\_up: $d\to d_{ff}{\times}2$,\; $\mathrm{SiLU}(g)\odot u$,\; down: $d_{ff}\to d$}\\[1pt]
   {\scriptsize MortarLinear in prelude / core / coda (dense pre-carve)}};
 \draw[A] (normM) -- (mlp);
 \node[Bs, fill=hcC!10, draw=hcC, below=0.7cm of mlp] (postM) {
@@ -126,7 +126,7 @@
 % RIGHT: explainer + alternatives
 % =====================================================================
 \node[draw=hcC, very thick, rounded corners=6pt, fill=hcC!6,
-      anchor=north west, text width=6.1cm, inner sep=8pt,
+      anchor=north west, text width=6.1cm, inner sep=10pt,
       font=\footnotesize\sffamily, align=left] at ($(AG.north east)+(1.0,0.9)$) (key) {%
   \textbf{\textcolor{hcC}{HC carrier (Cayley)}}\\[3pt]
   The carrier is $n{=}4$ parallel $C$-dim streams. Each sublayer:\\[2pt]
@@ -137,7 +137,7 @@
   Init $\approx x+F(\mathrm{mean}(x))$ (plain residual).}};
 
 \node[draw=cbPurple!70!black, thick, rounded corners=6pt, fill=fPurple,
-      anchor=north west, text width=6.1cm, inner sep=8pt,
+      anchor=north west, text width=6.1cm, inner sep=10pt,
       font=\scriptsize\sffamily, align=left, below=0.45cm of key] (glan) {%
   \textbf{GLA branch} (layer 1 only): runs \emph{parallel} to attention on the same
   $\bar{x}$; gated sum $y=\mathrm{attn}+\sigma(g)\!\cdot\!\mathrm{GLA}$. In core, its state
