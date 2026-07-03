@@ -41,23 +41,33 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
+def _pad_vocab(w_cast: Tensor) -> tuple[Tensor, int, int]:
+    """GEMM-align the vocab dim. An odd V (e.g. StarCoder2 49152 + 17 olympiad
+    specials = 49169) knocks every head matmul off the tensor-core fast path —
+    measured 94.7 vs 202.9 TFLOPS on a 5090 for [16384,768]@[768,V]. Zero-pad
+    the weight rows to the next multiple of 128 and run all three GEMMs at V′;
+    pad logits are masked to -inf before lse/softmax so their probability is
+    EXACTLY 0 → loss and both grads are bit-equivalent to the unpadded math
+    (pad grad_w rows stay 0 and are sliced off). Costs one [V′-V, d] zero-fill
+    + a [c, V′-V] mask per chunk — noise next to the 2× GEMM win."""
+    V = w_cast.shape[0]
+    if V % 64 == 0:
+        return w_cast, V, V
+    V_pad = ((V + 127) // 128) * 128
+    return F.pad(w_cast, (0, 0, 0, V_pad - V)), V, V_pad
+
+
 class _FusedLinearCE(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: Tensor, w: Tensor, labels: Tensor,
                 ignore_index: int, chunk_size: int) -> Tensor:
         # x: [N, d], w: [V, d], labels: [N]
         N, d = x.shape
-        V = w.shape[0]
         compute_dtype = x.dtype  # match eager autocast matmul precision
 
         valid = labels != ignore_index
         n_valid = int(valid.sum().item())
         n_valid_f = float(max(n_valid, 1))
-
-        # Accumulators sized by the inputs, NOT by [N, V].
-        grad_x = torch.empty_like(x)
-        grad_w = torch.zeros_like(w, dtype=torch.float32)
-        loss_sum = torch.zeros((), device=x.device, dtype=torch.float32)
 
         # Cast the weight to compute dtype ONCE, in its natural [V, d] layout, and reuse
         # it for both matmuls. The logits matmul wants [d, V]; instead of materialising a
@@ -65,7 +75,13 @@ class _FusedLinearCE(torch.autograd.Function):
         # forward — costly for our hybrid weight-tied head), pass w_cast.t() and let cuBLAS
         # transpose via strides for free. Bit-identical: cast-then-transpose == transpose-
         # then-cast (cast is per-element, transpose only reindexes).
-        w_cast = w.to(compute_dtype)               # [V, d] — used for logits (.t()) AND grad_x
+        w_cast, V, V_pad = _pad_vocab(w.to(compute_dtype))  # [V′, d]
+        neg_inf = torch.finfo(torch.float32).min
+
+        # Accumulators sized by the inputs, NOT by [N, V].
+        grad_x = torch.empty_like(x)
+        grad_w = torch.zeros((V_pad, d), device=w.device, dtype=torch.float32)
+        loss_sum = torch.zeros((), device=x.device, dtype=torch.float32)
 
         for start in range(0, N, chunk_size):
             end = min(start + chunk_size, N)
@@ -73,7 +89,9 @@ class _FusedLinearCE(torch.autograd.Function):
             lab_c = labels[start:end]                # [c]
             valid_c = valid[start:end].float().unsqueeze(-1)  # [c, 1]
 
-            logits_c = (x_c @ w_cast.t()).float()    # [c, V] fp32 (freed each iter); cuBLAS transposes w
+            logits_c = (x_c @ w_cast.t()).float()    # [c, V′] fp32 (freed each iter)
+            if V_pad != V:
+                logits_c[:, V:] = neg_inf            # pad cols → prob exactly 0
 
             # log-softmax cross-entropy, fp32 (numerically load-bearing).
             lse = torch.logsumexp(logits_c, dim=-1)  # [c]
@@ -84,7 +102,7 @@ class _FusedLinearCE(torch.autograd.Function):
 
             # grad wrt logits (unnormalised by n_valid; scaled once at the end):
             #   softmax - onehot, zeroed on ignored rows. softmax in fp32.
-            probs = torch.softmax(logits_c, dim=-1)  # [c, V] fp32
+            probs = torch.softmax(logits_c, dim=-1)  # [c, V′] fp32; pad cols exactly 0
             probs.scatter_add_(
                 -1, lab_safe.unsqueeze(-1),
                 -torch.ones_like(lab_safe, dtype=probs.dtype).unsqueeze(-1),
@@ -94,14 +112,16 @@ class _FusedLinearCE(torch.autograd.Function):
 
             # Grad matmuls in compute_dtype (bf16 → tensor cores; matches the
             # eager autograd backward of the bf16 x@wᵀ). grad_w accumulates in
-            # fp32 across chunks to avoid cancellation.
-            probs_c = probs.to(compute_dtype)        # [c, V]
+            # fp32 across chunks to avoid cancellation. Pad probs are 0 → pad
+            # grad_w rows stay 0, grad_x unaffected (0 · w_pad_row = 0).
+            probs_c = probs.to(compute_dtype)        # [c, V′]
             grad_x[start:end] = probs_c @ w_cast     # [c, d]
-            grad_w += (probs_c.t() @ x_c).float()    # [V, d] fp32 accumulate
+            grad_w += (probs_c.t() @ x_c).float()    # [V′, d] fp32 accumulate
             del probs, probs_c
 
         loss = loss_sum / n_valid_f
         grad_x.div_(n_valid_f)
+        grad_w = grad_w[:V] if V_pad != V else grad_w
         grad_w.div_(n_valid_f)
 
         ctx.save_for_backward(grad_x, grad_w)
@@ -147,9 +167,10 @@ class _FusedLinearMCE(torch.autograd.Function):
         inv_k = torch.zeros(N, device=x.device, dtype=torch.float32)
         inv_k[row_valid] = 1.0 / k_per_row[row_valid].float()
         grad_x = torch.empty_like(x)
-        grad_w = torch.zeros_like(w, dtype=torch.float32)
+        w_cast, V, V_pad = _pad_vocab(w.to(compute_dtype))   # GEMM-aligned head (see _pad_vocab)
+        neg_inf = torch.finfo(torch.float32).min
+        grad_w = torch.zeros((V_pad, x.shape[1]), device=w.device, dtype=torch.float32)
         loss_sum = torch.zeros((), device=x.device, dtype=torch.float32)
-        w_cast = w.to(compute_dtype)
         for start in range(0, N, chunk_size):
             end = min(start + chunk_size, N)
             x_c = x[start:end]
@@ -159,6 +180,8 @@ class _FusedLinearMCE(torch.autograd.Function):
             rowv_c = row_valid[start:end].to(torch.float32)
             lab_safe = lab_c.clamp(min=0)
             logits_c = (x_c @ w_cast.t()).float()
+            if V_pad != V:
+                logits_c[:, V:] = neg_inf                    # pad cols → prob exactly 0
             lse = torch.logsumexp(logits_c, dim=-1)
             tgt = logits_c.gather(-1, lab_safe) * valid_c
             sum_tgt = tgt.sum(dim=1)
@@ -175,6 +198,7 @@ class _FusedLinearMCE(torch.autograd.Function):
             del probs, probs_c
         loss = loss_sum / n_valid_f
         grad_x.div_(n_valid_f)
+        grad_w = grad_w[:V] if V_pad != V else grad_w
         grad_w.div_(n_valid_f)
         ctx.save_for_backward(grad_x, grad_w)
         ctx.x_dtype = x.dtype
@@ -268,6 +292,36 @@ if __name__ == "__main__":
     lrb, gxcb, gwcb = _run_case(torch.bfloat16, dev)
     assert lrb < 1e-2, f"bf16 loss mismatch {lrb}"
     assert gxcb > 0.99 and gwcb > 0.99, f"bf16 grad cos {gxcb},{gwcb}"
+
+    print("\nODD vocab V=49169 (exercises the _pad_vocab GEMM-align path):")
+    lr32o, gxc32o, gwc32o = _run_case(torch.float32, dev, V=49169)
+    assert lr32o < 1e-5, f"fp32 odd-V loss mismatch {lr32o}"
+    assert gxc32o > 0.99999 and gwc32o > 0.99999, f"fp32 odd-V grad cos {gxc32o},{gwc32o}"
+    lrbo, gxcbo, gwcbo = _run_case(torch.bfloat16, dev, V=49169)
+    assert lrbo < 1e-2, f"bf16 odd-V loss mismatch {lrbo}"
+    assert gxcbo > 0.99 and gwcbo > 0.99, f"bf16 odd-V grad cos {gxcbo},{gwcbo}"
+
+    print("\nMCE odd-V parity (fused padded vs full-logits reference, K=6 bags):")
+    torch.manual_seed(1)
+    Nm, dm, Vm, K = 4096, 768, 49169, 6
+    for dt in (torch.float32, torch.bfloat16):
+        xm = torch.randn(Nm, dm, device=dev, dtype=dt, requires_grad=True)
+        wm = (torch.randn(Vm, dm, device=dev, dtype=dt) * dm ** -0.5).requires_grad_(True)
+        labm = torch.randint(0, Vm, (Nm, K), device=dev)
+        labm[torch.rand(Nm, K, device=dev) < 0.05] = -100
+        xr = xm.detach().clone().requires_grad_(True)
+        wr = wm.detach().clone().requires_grad_(True)
+        ref = multi_hot_cross_entropy_reference((xr @ wr.t()).float(), labm)
+        ref.backward()
+        lf = fused_linear_cross_entropy_mce(xm, wm, labm, chunk_size=1024)
+        lf.backward()
+        lrel = abs(lf.item() - ref.item()) / (abs(ref.item()) + 1e-12)
+        gxc = F.cosine_similarity(xm.grad.flatten().float(), xr.grad.flatten().float(), dim=0).item()
+        gwc = F.cosine_similarity(wm.grad.flatten().float(), wr.grad.flatten().float(), dim=0).item()
+        print(f"  [{str(dt):>14}] ref={ref.item():.6f} fused={lf.item():.6f} rel={lrel:.2e} "
+              f"gx_cos={gxc:.6f} gw_cos={gwc:.6f}")
+        tol = 1e-5 if dt == torch.float32 else 1e-2
+        assert lrel < tol and gxc > 0.99 and gwc > 0.99, "MCE odd-V parity FAILED"
 
     print("\n── peak memory: fused vs eager (bf16, N=B8·S4096) ──")
     if dev.type == "cuda":

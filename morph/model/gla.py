@@ -166,8 +166,23 @@ class GatedLinearAttention(nn.Module):
         elif self.mode == "kernel":
             # Fused Triton chunked-GLA (sm_120): 2.9× the eager fwd+bwd, grads cos 1.0 vs the
             # recurrent oracle, final_state kept fp32. Gate: ignore/verify_fused_gla.py.
-            from morph.kernels.triton.fused_gla import fused_gla
-            o, final_state = fused_gla(q, k, v, log_alpha, initial_state)
+            #
+            # SMEM GUARD: the fwd kernel holds ~[DH,DH] fp32 tiles + chunk buffers in shared
+            # memory — measured 114688 B at DH=128, i.e. ≈ 7·DH². A GPU whose per-block opt-in
+            # smem is smaller than that OOMs the launch (triton OutOfResources). The RTX 5090
+            # (sm_120) opt-in limit is 101376 B, so retention_heads=6 at d=768 → DH=128 →
+            # 7·128²=114688 > 101376 fails. The eager _chunked path is numerically identical
+            # (parity-gated), so fall back for head_dims the fused kernel can't fit on this GPU.
+            DH = q.shape[-1]
+            try:
+                _optin = torch.cuda.get_device_properties(q.device).shared_memory_per_block_optin
+            except Exception:
+                _optin = 101376  # sm_120 default
+            if 7 * DH * DH <= _optin:
+                from morph.kernels.triton.fused_gla import fused_gla
+                o, final_state = fused_gla(q, k, v, log_alpha, initial_state)
+            else:
+                o, final_state = self._chunked(q, k, v, log_alpha, initial_state)
         else:  # "chunked" eager reference
             o, final_state = self._chunked(q, k, v, log_alpha, initial_state)
         out = self._readout(x, o)
