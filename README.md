@@ -107,7 +107,7 @@ docs/
 
 ## Figures And References
 
-Start with `docs/MANIFEST.md` for docs navigation. Architecture diagram PNG previews stay at the top of `docs/figures/`; TikZ sources, PDFs, and LaTeX sidecars are topic-grouped underneath. Regenerate a diagram by running `pdflatex` from the folder that contains its `.tex` source when diagram content changes.
+Start with `docs/MANIFEST.md` for docs navigation. Architecture diagram PNG previews stay at the top of `docs/figures/` (one `<name>.png` per diagram); TikZ sources, PDFs, and LaTeX sidecars are topic-grouped underneath. Regeneration steps are in `docs/figures/MANIFEST.md` — use `pdftoppm -singlefile` so previews are not written as `<name>-1.png`.
 
 The paper map lives in `docs/references.md`, with topic-grouped local notes indexed by `docs/references/MANIFEST.md`.
 

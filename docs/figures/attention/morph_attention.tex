@@ -43,15 +43,15 @@
 \tikzset{
   % strip step (CCA prologue subway)
   sb/.style={draw=cbBlue!70, rounded corners=3pt, fill=fBlue!60,
-    minimum width=2.45cm, minimum height=1.05cm,
-    font=\scriptsize\sffamily, align=center, inner sep=2pt},
+    minimum width=2.45cm, minimum height=1.15cm,
+    font=\scriptsize\sffamily, align=center, inner sep=3pt},
   % branch / combine boxes
   Bx/.style={draw=bdr, thick, rounded corners=4pt,
     minimum width=3.4cm, minimum height=1.0cm,
-    font=\small\sffamily, align=center, inner sep=4pt},
+    font=\small\sffamily, align=center, inner sep=5pt},
   % small box inside the global slot
   gs/.style={draw=bdr, rounded corners=3pt, minimum width=2.5cm,
-    minimum height=0.66cm, font=\scriptsize\sffamily, align=center, inner sep=2pt},
+    minimum height=0.72cm, font=\scriptsize\sffamily, align=center, inner sep=3pt},
   io/.style={font=\small\sffamily},
   A/.style={-{Stealth[length=2.8mm,width=2.2mm]}, thick},
   As/.style={-{Stealth[length=2.4mm,width=1.9mm]}, semithick},
@@ -81,11 +81,14 @@
 \foreach \a/\b in {xin/s1,s1/s2,s2/s3,s3/s4,s4/s5,s5/s6,s6/s7,s7/qkv}{\draw[As] (\a)--(\b);}
 \begin{scope}[on background layer]
   \node[draw=cbBlue!45, thick, rounded corners=7pt, fill=cbBlue!4,
-        fit=(s1)(s7), inner xsep=7pt, inner ysep=8pt] (STRIP) {};
+        fit=(s1)(s7), inner xsep=7pt, inner ysep=10pt] (STRIP) {};
 \end{scope}
-\node[font=\small\sffamily\bfseries, text=cbBlue, anchor=south west]
-  at ($(STRIP.north west)+(0.05,0.03)$)
-  {CCA prologue \;{\footnotesize(shared \_CCABase $\cdot$ channel-compress $C{=}2$ $\cdot$ $d_h{=}d/(C H)$)}};
+% Label sits fully above the strip (white fill clears the border). Keep the
+% public name — internal class renames must not lengthen this caption.
+\node[font=\small\sffamily\bfseries, text=cbBlue, anchor=south west,
+      fill=white, inner sep=2pt]
+  at ([xshift=0.15cm, yshift=0.10cm] STRIP.north west)
+  {CCA prologue \;{\footnotesize(shared channel-compress $C{=}2$ $\cdot$ $d_h{=}d/(C H)$)}};
 
 % =====================================================================
 % q,k,v broadcast rail (compute once, feed both branches)
@@ -100,9 +103,9 @@
 % =====================================================================
 % LEFT: window branch
 \node[Bx, fill=fOrange, draw=cbOrange!85!black, line width=1pt,
-      minimum width=3.9cm, minimum height=2.45cm, anchor=south] (win) at (-3.2,3.4) {
+      minimum width=3.9cm, inner sep=6pt, anchor=south] (win) at (-3.2,3.4) {
   \textbf{Window branch}\;{\footnotesize(LOCAL)}\\[3pt]
-  {\scriptsize \textbf{per-token} attention over}\\[-2pt]
+  {\scriptsize \textbf{per-token} attention over}\\[1pt]
   {\scriptsize the recent $w{=}128$ tokens}\\[2pt]
   {\scriptsize \textbf{XSA}: self-token excluded}\\[2pt]
   {\scriptsize $\rightarrow$ fine / recent detail}\\[3pt]
@@ -110,8 +113,9 @@
 
 % RIGHT: global-compressed slot (the alternation container) — roomy
 \node[draw=cbGray, densely dashed, very thick, rounded corners=7pt, fill=cbGray!4,
-      minimum width=7.9cm, minimum height=4.45cm, anchor=south] (slot) at (3.75,3.0) {};
-\node[tny, text=cbGray, anchor=north east] at ($(slot.north east)+(-0.18,-0.14)$)
+      minimum width=7.9cm, minimum height=4.55cm, anchor=south] (slot) at (3.75,3.0) {};
+\node[tny, text=cbGray, anchor=south east, fill=white, inner sep=1.5pt]
+  at ([xshift=-0.18cm, yshift=0.10cm] slot.north east)
   {\textbf{GLOBAL} $\cdot$ per-block $\cdot$ \textbf{1 active / layer}};
 % shared pooler at the bottom
 \node[gs, fill=fGray!55, minimum width=6.9cm] (pool) at (3.75,3.5) {
@@ -146,9 +150,9 @@
 % BAND 3 (top) — combine + up-project + output
 % =====================================================================
 \node[Bx, fill=cbBlue!8, draw=cbBlue, line width=1pt, minimum width=8.4cm,
-      minimum height=1.5cm, anchor=south] (comb) at (0.4,7.9) {
-  \textbf{Gate blend $+$ residual-$\alpha$ $+$ sinks}\\[2pt]
-  {\scriptsize per-head sigmoid gate MLP $d\to d/4\to 2H$ (2 wts/head): $g_c\,o_\mathrm{comp}+g_w\,o_\mathrm{win}$}\\[1pt]
+      inner sep=7pt, anchor=south] (comb) at (0.4,7.9) {
+  \textbf{Gate blend $+$ residual-$\alpha$ $+$ sinks}\\[3pt]
+  {\scriptsize per-head sigmoid gate MLP $d\to d/4\to 2H$ (2 wts/head): $g_c\,o_\mathrm{comp}+g_w\,o_\mathrm{win}$}\\[2pt]
   {\scriptsize $+\;\alpha_h\!\cdot\!$residual$(q_\mathrm{lat})$ \quad$+$\quad learnable per-head attention-sink logits}};
 \draw[A] (win.north) -- ([xshift=-2.6cm]comb.south)
   node[pos=0.5, left=1pt, sub, text=cbOrange!80!black]{$o_\mathrm{win}$ \,{\tiny(local)}};

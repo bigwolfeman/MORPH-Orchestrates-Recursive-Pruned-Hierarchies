@@ -1,12 +1,12 @@
 % MORPH — Deployable Stack (precision x architecture overlay)
 % The full deployment configuration: which numeric precision each parameter group
 % is served at, plus the cross-cutting carriers (Cayley HC, retention GLA) and the
-% training-time optimizer overlay (8-bit AdamW).
+% training-time optimizer overlay (8-bit AdEMAMix).
 % Compile: pdflatex morph_deploy_stack.tex
 %
 % NOTE: this diagram tracks base.yaml's deploy-oriented defaults: ternary selected
 % backbone weights, int6 Euclidean/bigram embeddings, bf16 attention projections /
-% normalization / carriers, and 8-bit AdamW optimizer state during training.
+% normalization / carriers, and 8-bit AdEMAMix (ademamix_b1zero) optimizer state.
 
 \documentclass[border=16pt]{standalone}
 \usepackage[T1]{fontenc}
@@ -38,10 +38,10 @@
 \definecolor{p8bit}{HTML}{444444}   % dark gray
 
 \tikzset{
-  % central forward-flow boxes
+  % central forward-flow boxes — shared width so braces clear every tier
   L/.style={draw=bdr, thick, rounded corners=4pt,
-    minimum width=5.4cm, minimum height=1.0cm,
-    font=\small\sffamily, align=center, inner sep=5pt},
+    minimum width=6.0cm, minimum height=1.0cm,
+    font=\small\sffamily, align=center, inner sep=6pt},
   Ls/.style={L, minimum height=0.6cm, font=\footnotesize\sffamily},
   % precision-colored boxes (the box IS the precision label; matches the bottom legend)
   PB/.style={L, draw=pBf16, line width=1pt, fill=pBf16!12},   % bf16  (deep blue)
@@ -54,7 +54,7 @@
     inner sep=3pt, align=center, minimum height=0.55cm},
   % side callout panels
   panel/.style={draw=#1, very thick, rounded corners=8pt, fill=#1!6,
-    inner sep=9pt, align=left, font=\footnotesize\sffamily},
+    inner sep=11pt, align=left, font=\footnotesize\sffamily},
   A/.style={-{Stealth[length=2.6mm,width=2mm]}, thick},
   Ad/.style={-{Stealth[length=2.4mm,width=1.9mm]}, thick, densely dashed},
   sub/.style={font=\scriptsize\sffamily},
@@ -75,49 +75,56 @@
 \node[font=\small\sffamily] (inp) {Input Token IDs};
 
 \node[PI6, above=0.5cm of inp] (emb) {
-  Hybrid Embedding\\[-1pt]
+  Hybrid Embedding\\[2pt]
   {\scriptsize Euclidean + Bigram (quant) $\;\oplus\;$ Lorentz (bf16)}};
 \draw[A] (inp) -- (emb);
 
 \node[PT, above=0.6cm of emb] (pre) {
-  \textbf{Prelude} $\times N$\\[-1pt]
+  \textbf{Prelude} $\times N$\\[2pt]
   {\scriptsize attn bf16 + SwiGLU ternary; layer 1 $\to$ +GLA}};
 \draw[A] (emb) -- (pre);
 
 % ── CORE LOOP (the heart) ────────────────────────────────────────────
-\node[PT, above=0.7cm of pre, minimum height=1.5cm, line width=2pt] (core) {
-  \textbf{Core Loop} $2N \times T \sim \mathrm{Poi}(\lambda{=}6)$\\[-1pt]
-  {\scriptsize attn bf16 + SwiGLU ternary\,(MORTAR); layer 1 $\to$ +GLA}\\[-1pt]
+\node[PT, above=0.7cm of pre, line width=2pt] (core) {
+  \textbf{Core Loop} $2N \times T \sim \mathrm{Poi}(\lambda{=}6)$\\[2pt]
+  {\scriptsize attn bf16 + SwiGLU ternary\,(MORTAR); layer 1 $\to$ +GLA}\\[1pt]
   {\scriptsize truncated BPTT (last 4 iters)}};
 \draw[A] (pre) -- (core);
 
 \node[PT, above=0.7cm of core] (coda) {
-  \textbf{Coda} $\times N$\\[-1pt]
+  \textbf{Coda} $\times N$\\[2pt]
   {\scriptsize attn bf16 + SwiGLU ternary; layer 1 $\to$ +GLA}};
 \draw[A] (core) -- (coda);
 
-\node[PT, above=0.4cm of coda, minimum height=0.7cm] (mix) {LM-Head Mixer\\[-1pt]{\scriptsize mix ternary; norm bf16}};
+\node[PT, above=0.4cm of coda] (mix) {
+  LM-Head Mixer\\[2pt]{\scriptsize mix ternary; norm bf16}};
 \draw[A] (coda) -- (mix);
 
 \node[L, above=0.4cm of mix] (head) {
-  Weight-Tied LM Head\\[-1pt]{\scriptsize Euclidean side int6; Lorentz side bf16; fp32 logits}};
+  Weight-Tied LM Head\\[2pt]
+  {\scriptsize Euclidean side int6; Lorentz side bf16; fp32 logits}};
 \draw[A] (mix) -- (head);
 
 \node[font=\small\sffamily, above=0.45cm of head] (out) {Logits / Loss};
 \draw[A] (head) -- (out);
 
+% Brace rails sit outside the shared stack width (all tiers are 6.0cm).
+% Amplitude stays inside the gap to the side panels / labels.
+\coordinate (braceR) at ($(core.east)+(0.55,0)$);
+\coordinate (braceL) at ($(core.west)+(-0.55,0)$);
+
 % ── backbone precision: ONE brace spanning prelude->coda (all 3 sections identical) ──
-\draw[decorate, decoration={brace, amplitude=6pt}, thick, bdr]
-  ($(coda.east)+(0.35,0.45)$) -- ($(pre.east)+(0.35,-0.45)$);
+\draw[decorate, decoration={brace, amplitude=8pt}, thick, bdr]
+  ($(coda.north -| braceR)+(0,0.12)$) -- ($(pre.south -| braceR)+(0,-0.12)$);
 \node[anchor=west, font=\scriptsize\sffamily, align=center, text=bdr,
-      inner sep=2pt] (bb) at ($(core.east)+(0.85,0)$) {%
-  backbone\\[1pt]{\tiny MLP/mix ternary}\\[-1pt]{\tiny attention bf16}};
+      inner sep=2pt] (bb) at ($(braceR)+(0.45,0)$) {%
+  backbone\\[1pt]{\tiny MLP/mix ternary}\\[1pt]{\tiny attention bf16}};
 
 % =====================================================================
 % LEFT PANEL — architecture carriers (cross-cutting, all bf16)
 % =====================================================================
 
-\node[panel=bdr, anchor=east, text width=4.7cm] at ($(core.west)+(-1.3,1.4)$) (hc) {
+\node[panel=bdr, anchor=east, text width=4.7cm] at ($(braceL)+(-1.55,1.5)$) (hc) {
   \textbf{\textcolor{bdr}{Cayley Hyper-Connections}}\\[2pt]
   residual carrier widened\\
   $[B,S,C] \to [B,S,n{=}4,C]$\\[2pt]
@@ -127,7 +134,8 @@
   {\tiny \textbf{bf16}}};
 
 \node[panel=bdr, anchor=east, text width=4.7cm, below=0.5cm of hc] (gla) {
-  \textbf{\textcolor{bdr}{Retention (GLA) branch}} \,{\tiny layer 1 of prelude / core / coda}\\[2pt]
+  \textbf{\textcolor{bdr}{Retention (GLA) branch}}\\[1pt]
+  {\tiny layer 1 of prelude / core / coda}\\[2pt]
   parallel to attention:\\
   $a = \mathrm{attn}(x) + \sigma(g)\!\cdot\!\mathrm{GLA}(x,S)$\\[2pt]
   $S_t = \mathrm{diag}(\alpha_t)S_{t-1} + k_t^{\!\top} v_t$\\
@@ -137,20 +145,21 @@
 
 % left brace spanning prelude->coda: BOTH carriers apply across the whole backbone,
 % not just the core loop (HC = every layer; GLA = layer 1 of each of the 3 sections)
-\draw[decorate, decoration={brace, amplitude=6pt, mirror}, thick, bdr]
-  ($(coda.west)+(-0.4,0.45)$) -- ($(pre.west)+(-0.4,-0.45)$);
+\draw[decorate, decoration={brace, amplitude=8pt, mirror}, thick, bdr]
+  ($(coda.north -| braceL)+(0,0.12)$) -- ($(pre.south -| braceL)+(0,-0.12)$);
 \node[font=\tiny\sffamily, text=bdr, rotate=90, anchor=south]
-  at ($(core.west)+(-0.62,0)$) {prelude / core / coda};
-\draw[Ad, bdr] (hc.east) -- ($(core.west)+(-0.4,1.2)$);
-\draw[Ad, bdr] (gla.east) -- ($(core.west)+(-0.4,-1.2)$);
+  at ($(braceL)+(-0.38,0)$) {prelude / core / coda};
+% arrows land on the brace rail, not through the panel borders
+\draw[Ad, bdr] (hc.east) -- ($(braceL)+(0,1.2)$);
+\draw[Ad, bdr] (gla.east) -- ($(braceL)+(0,-1.2)$);
 
 % =====================================================================
 % RIGHT PANEL — train-time / inference-time overlays
 % =====================================================================
 
-\node[panel=bdr, anchor=west, text width=4.5cm] at ($(core.east)+(3.6,0)$) (opt) {
+\node[panel=bdr, anchor=west, text width=4.5cm] at ($(bb.east)+(1.1,0)$) (opt) {
   \textbf{\textcolor{bdr}{Optimizer (training)}}\\[2pt]
-  8-bit AdamW (bitsandbytes)\\
+  AdEMAMix 8-bit\\
   {\tiny state $m,v \to$ uint8; embed state forced fp32}};
 
 % the training-time optimizer overlay connects to the backbone brace (a real target, not empty space)
