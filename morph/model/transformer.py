@@ -48,6 +48,73 @@ else:
         return _NULLCTX
 
 
+# ── MORPH_STATIC_GRAPHS: capture the static front/back of the step as CUDA graphs ──
+# The step = [embed+prelude] → [Poisson-depth core loop] → [coda+head+CE]. The core loop
+# is variable-shape (active-set shrinking) and stays eager; the FRONT (embed+dropout+
+# bigram+HC-expand+prelude) and BACK (coda+HC-mean+lm_mixer+final_norm) are fixed-shape,
+# once per step → captured once via torch.cuda.make_graphed_callables and replayed as 2
+# graph launches (+2 bwd graph launches) instead of thousands of individual kernels.
+# The fused-CE stays EAGER: fused_linear_cross_entropy computes n_valid via .item() — a
+# host sync that is ILLEGAL during capture (and its python-float division is last-bit
+# load-bearing; see the reverted 0-dim-tensor n_valid change).
+# BIT-EXACTNESS (class A): same kernels, same order, same tensors. Dropout RNG is handled
+# by torch's graph-safe philox mechanism — each replay advances the default CUDA
+# generator EXACTLY as the eager region would (probed bitwise: 8-step training loop with
+# graphed dropout regions interleaved with eager RNG consumers, losses/grads/params all
+# torch.equal — ignore/perf/gpu_probe_rng_graph.py).
+# Requirements handled in build_static_graphs (each probed, not assumed):
+#   * build MUST run with no prior-step autograd graph alive (train.py dels loss/out +
+#     gc.collect() first) — stale default-stream AccumulateGrad nodes invalidate capture.
+#   * a FAILED capture leaves the CUDA generator in graph mode → the process cannot fall
+#     back to eager RNG → build failures must abort loudly, never be swallowed.
+#   * build warmup runs real fwd/bwd on dummy data → wrapped in fork_rng + a snapshot/
+#     restore of every region buffer (router load-EMAs mutate in forward).
+#   * params inside the regions get their grads as VIEWS of the bwd-graph static buffers
+#     (AccumulateGrad steal) → tagged p._grad_via_graph_static so the optimizer CUDA
+#     graph (MORPH_OPT_CUDA_GRAPH) keeps steal-path zeroing for them (stable data_ptrs
+#     for free; in-place zeroing would alias-double via buffer.add_(buffer)).
+# MEMORY COST (measured, mb4/seq4k d768 on the 32GB 5090): the graphs' private mempool
+# permanently reserves ~9.3GB (front+back activations + static buffers become EXCLUSIVE
+# to the graphs — the eager allocator can no longer time-share that memory with the core
+# loop's transient peak). With the default allocator this OOMs locally at deploy shape;
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True makes it fit (peak reserved ~24.4GB).
+# On the 96GB cloud target the pool is trivial.
+# Default OFF until gated; in-process override for A/B: set_static_graphs(True/False).
+_STATIC_GRAPHS = os.environ.get("MORPH_STATIC_GRAPHS", "0").lower() not in ("0", "", "false")
+
+
+def set_static_graphs(enabled: bool) -> None:
+    """In-process override of MORPH_STATIC_GRAPHS (A/B testing without env replumbing)."""
+    global _STATIC_GRAPHS
+    _STATIC_GRAPHS = bool(enabled)
+
+
+class _StaticRegion(nn.Module):
+    """Thin nn.Module wrapper for a region closure, registering the region's REAL
+    submodules so make_graphed_callables includes their parameters in the graph's
+    static input surface (param grads flow). NOT attached to the model tree —
+    registration here must not change the model's state_dict or named_parameters.
+
+    forward() enters autocast ITSELF (cache off — required under capture; the cache is
+    a pure cast memoization, values identical). This is load-bearing for bit-exactness:
+    make_graphed_callables must be called with NO ambient autocast, so that the FORWARD
+    capture sees autocast dispatch (matching the eager forward under train.py's autocast)
+    while the BACKWARD capture — autograd.grad, which runs after this forward returns —
+    executes with autocast OFF, matching eager training where .backward() is called
+    outside the autocast block. Capturing the backward under ambient autocast re-dispatches
+    autocast-eligible ops inside backward to bf16 and was MEASURED as a real grad
+    divergence (~1e-3 across 200+ params, loss bitwise but step+1 diverged)."""
+
+    def __init__(self, fn, submodules):
+        super().__init__()
+        self._fn = fn
+        self._mods = nn.ModuleList(submodules)
+
+    def forward(self, *args):
+        with torch.autocast("cuda", dtype=torch.bfloat16, cache_enabled=False):
+            return self._fn(*args)
+
+
 @dataclass
 class MORPHConfig:
     d_model: int = 768
@@ -509,6 +576,10 @@ class MORPHTransformer(nn.Module):
         from morph.kernels.triton._eager_flag import set_force_eager
         set_force_eager(not cfg.use_kernels)
 
+        # Static-region CUDA graphs (MORPH_STATIC_GRAPHS): plain dict attr — holds the
+        # graphed front/back callables + capture shapes. Deliberately NOT a submodule.
+        self._static_graphs: dict = {}
+
         n_params = sum(p.numel() for p in self.parameters())
         _res = self._residual_mode + (f"(n={self._n_streams})" if self._is_hc else "")
         print(f"MORPHTransformer: {n_params/1e6:.1f}M params, "
@@ -631,6 +702,256 @@ class MORPHTransformer(nn.Module):
         new_ret = ret_cap.get("state") if ret_cap is not None else None
         return h_injected, new_ret
 
+    # ── Static-region CUDA graphs (MORPH_STATIC_GRAPHS) ──────────────────────
+    def static_graphs_invalidate(self, reason: str = "") -> None:
+        """Drop the captured static-region graphs → permanent eager for this topology.
+
+        Called at topology/context events that change what the graphs read by pointer or
+        shape: the compact/route phase boundary (modules replaced) and RoPE set_context
+        (cos/sin cache buffers rebuilt as NEW tensors). Un-tags _grad_via_graph_static so
+        the optimizer graph's hybrid zeroing resumes owning those params' grad buffers
+        (otherwise its address-signature would churn-recapture every step)."""
+        if self._static_graphs:
+            for w in (self._static_graphs.get("front_wrap"),
+                      self._static_graphs.get("back_wrap")):
+                if w is not None:
+                    for p in w.parameters():
+                        if getattr(p, "_grad_via_graph_static", False):
+                            p._grad_via_graph_static = False
+            self._static_graphs = {}
+            print(f"  [static-graph] invalidated ({reason}) — regions run eager from here",
+                  flush=True)
+
+    def _drain_region_aux(self, roots) -> tuple[list, list[Tensor]]:
+        """Drain the routing aux stashes under `roots` in model.modules() order,
+        returning (stash_modules, aux_tensors). Inside a CAPTURED region fn this is
+        load-bearing twice over:
+        (1) the stash protocol (module attr set in forward, read+cleared by the train
+            loop) is python-side and does NOT re-run on graph replay — a captured
+            region would silently DROP its routers' aux loss from the training loss,
+            and the stale stashed tensors keep the capture-time graph alive (which
+            then kills the next capture via default-stream AccumulateGrad reuse).
+        (2) the aux tensors are returned INDIVIDUALLY (not summed): the dispatch
+            re-stashes each onto its own module so collect_routing_aux_losses adds
+            them in the IDENTICAL order as eager — summing per-region here was
+            measured as a real fp-reassociation (loss diverged 1.9e-3 by step 9 on a
+            0-floor deterministic probe)."""
+        mods, auxs = [], []
+        for rm in roots:
+            for mod in rm.modules():
+                aux = getattr(mod, "_last_aux_loss", None)
+                if aux is not None:
+                    mods.append(mod)
+                    auxs.append(aux)
+                    mod._last_aux_loss = None
+        return mods, auxs
+
+    def build_static_graphs(self, sample_input_ids: Tensor) -> bool:
+        """Capture front (embed→prelude) and back (coda→lm_mixer→final_norm) as CUDA
+        graphs via torch.cuda.make_graphed_callables. Call ONCE from the training loop.
+
+        HARD PRECONDITION (probed, ignore/perf/gpu_probe_rng_graph.py): no prior-step
+        autograd graph may be alive — the caller must drop loss/out refs + gc.collect()
+        first. Alive graphs keep params' AccumulateGrad nodes cached with default-stream
+        metadata; the capture-stream backward then syncs with the uncapturable default
+        stream → cudaErrorStreamCaptureInvalidated. And a FAILED capture leaves the CUDA
+        generator in graph mode ("Offset increment outside graph capture" on the next
+        eager RNG op) → the process is unrecoverable, so this method must NOT be wrapped
+        in a fallback try/except — a build failure is a run-ending finding (no-theater).
+
+        Build isolation: the API's warmup iterations run REAL fwd/bwd on dummy values →
+        wrapped in fork_rng (CUDA stream position untouched) with every region buffer
+        snapshotted/restored (router load-EMAs mutate in forward). Params are untouched
+        (autograd.grad returns grads; nothing accumulates into .grad).
+        """
+        import gc
+
+        if not _STATIC_GRAPHS:
+            return False
+        if not (self.training and torch.is_grad_enabled()):
+            raise RuntimeError("build_static_graphs requires train mode with grad enabled")
+        dev = sample_input_ids.device
+        np_, nc = self.cfg.n_prelude, self.cfg.n_coda
+
+        # Region wrappers referencing the REAL submodules (params → graph input surface).
+        front_wrap = _StaticRegion(None, [
+            self.embed, self.prelude,
+            nn.ModuleList(list(self.x0_injects)[:np_]),
+            self.value_embeds, self.value_embed_tables,
+        ])
+        back_mods = [
+            self.coda,
+            nn.ModuleList(list(self.x0_injects)[np_ + self.cfg.n_core:]),
+            self.lm_mixer, self.final_norm,
+        ]
+        if getattr(self.embed, "bigram", None) is not None:
+            back_mods.append(self.embed.bigram)   # lambdas[gi] read per coda layer
+        back_wrap = _StaticRegion(None, back_mods)
+
+        def _snap_buffers():
+            return [(b, b.clone()) for w in (front_wrap, back_wrap) for b in w.buffers()]
+
+        def _restore_buffers(snap):
+            for b, sv in snap:
+                b.copy_(sv)
+
+        # ── Spec discovery: one throwaway eager front+back pass (shapes/dtypes of the
+        # region boundary tensors + whether each region stashes routing aux). autocast
+        # (bf16, cache_enabled=False) = the training dispatch (cache off is required by
+        # make_graphed_callables; the cache is a pure cast memoization — values identical
+        # either way). The region-aux collection also CLEARS the spec pass's stashes —
+        # leaving them stashed would keep the spec graph alive into the capture (fatal,
+        # see _collect_region_aux). ──
+        snap = _snap_buffers()
+        with torch.random.fork_rng(devices=[dev]):
+            with torch.autocast("cuda", dtype=torch.bfloat16, cache_enabled=False):
+                x_spec, x0_spec, bg_spec = self._front_region(sample_input_ids)
+                front_aux_mods, _fa = self._drain_region_aux((self.prelude,))
+                xh_spec = self._back_region(x_spec, x0_spec, bg_spec)
+                back_aux_mods, _ba = self._drain_region_aux((self.coda,))
+        _restore_buffers(snap)
+        has_bigram = bg_spec is not None
+        n_front_aux, n_back_aux = len(front_aux_mods), len(back_aux_mods)
+        specs = {
+            "x": (x_spec.shape, x_spec.dtype), "x0": (x0_spec.shape, x0_spec.dtype),
+            "bg": (bg_spec.shape, bg_spec.dtype) if has_bigram else None,
+        }
+        # Stale-graph rule applies to OUR OWN spec pass too: free it before capture.
+        del x_spec, x0_spec, bg_spec, xh_spec, _fa, _ba, snap
+        gc.collect()
+
+        def _front_fn(ids):
+            x, x0, bg = self._front_region(ids)
+            outs = (x, x0, bg) if has_bigram else (x, x0)
+            _, auxs = self._drain_region_aux((self.prelude,))
+            return outs + tuple(auxs)
+
+        def _back_fn(*args):
+            x, x0 = args[0], args[1]
+            bg = args[2] if has_bigram else None
+            xh = self._back_region(x, x0, bg)
+            _, auxs = self._drain_region_aux((self.coda,))
+            return (xh,) + tuple(auxs)
+
+        front_wrap._fn = _front_fn
+        back_wrap._fn = _back_fn
+
+        def _dummy(key, rg=True):
+            # NO RNG (a device randn here would advance the training generator and
+            # shift every later dropout/poisson draw off the baseline stream — the
+            # 6.9e-2 probe divergence). Deterministic non-constant ramp: avoids the
+            # all-zero RMSNorm edge while staying generator-free. Values are dummies —
+            # warmup math is discarded.
+            shape, dtype = specs[key]
+            n = 1
+            for d_ in shape:
+                n *= int(d_)
+            t = ((torch.arange(n, device=dev, dtype=torch.float32) % 977) / 977.0 - 0.5)
+            return t.reshape(shape).to(dtype).requires_grad_(rg)
+
+        front_samples = (sample_input_ids,)
+        back_samples = ((_dummy("x"), _dummy("x0"), _dummy("bg")) if has_bigram
+                        else (_dummy("x"), _dummy("x0")))
+
+        # NO ambient autocast here — _StaticRegion.forward enters autocast itself, so
+        # the fwd captures see eager-matching autocast dispatch while the bwd captures
+        # (autograd.grad, after forward returns) run autocast-OFF exactly like eager
+        # training's .backward() outside the autocast block. See _StaticRegion.
+        snap = _snap_buffers()
+        with torch.random.fork_rng(devices=[dev]):
+            g_front, g_back = torch.cuda.make_graphed_callables(
+                (front_wrap, back_wrap), (front_samples, back_samples),
+                allow_unused_input=True,
+            )
+        _restore_buffers(snap)
+
+        # Region params now receive grads as VIEWS of the bwd-graph static buffers
+        # (AccumulateGrad steal) — stable data_ptrs by construction. Tag them so the
+        # optimizer CUDA graph keeps steal-path (set_to_none) zeroing for them: in-place
+        # zeroing + accumulate would alias-double (buffer.add_(buffer)).
+        n_tagged = 0
+        for w in (front_wrap, back_wrap):
+            for p in w.parameters():
+                p._grad_via_graph_static = True
+                n_tagged += 1
+
+        self._static_graphs = {
+            "front": g_front, "back": g_back,
+            "front_wrap": front_wrap, "back_wrap": back_wrap,
+            "front_shape": sample_input_ids.shape, "back_shape": specs["x"][0],
+            "has_bigram": has_bigram,
+            "front_aux_mods": front_aux_mods, "back_aux_mods": back_aux_mods,
+        }
+        print(f"  [static-graph] captured front(embed+{np_} prelude) and "
+              f"back({nc} coda+head) regions → 2 fwd + 2 bwd graph replays/step "
+              f"({n_tagged} params tagged steal-path, bigram={has_bigram}, "
+              f"aux front/back={n_front_aux}/{n_back_aux})", flush=True)
+        return True
+
+    # ── Static regions (single source of truth for eager AND graph capture) ──
+    # Pure code motion out of _forward_single — the flag-OFF path calls these with the
+    # identical ops in the identical order as the old inline code.
+
+    def _front_tail(self, x: Tensor, input_ids: Tensor, bigram_emb,
+                    ve_bagged) -> tuple[Tensor, Tensor]:
+        """x0 skip-clone → HC stream expansion → prelude blocks. Returns (x, x0)."""
+        B, T = x.shape[0], x.shape[1]
+        x0 = x.clone()      # single-stream skip signal (broadcast into HC streams)
+
+        # ── Hyper-Connection stream expansion ─────────────────────────
+        # Widen the residual carrier to n parallel C-dim streams for the whole network.
+        # All streams start equal, so with the ≈identity HC init the network reduces to a
+        # plain residual at step 0 (verified). Injections (x0/ve/bigram/diagonal) are
+        # single-stream signals that broadcast into every stream (ndim-adaptive modules).
+        if self._is_hc:
+            with _prof("carrier::expand_contig"):
+                x = x.unsqueeze(2).expand(B, T, self._n_streams, x.shape[-1]).contiguous()
+
+        # ── Prelude ───────────────────────────────────────────────────
+        for i, layer in enumerate(self.prelude):
+            term = self._build_injection_term(
+                i, self.x0_injects[i].precompute(x0), input_ids, bigram_emb, x.dtype,
+                ve_bagged=ve_bagged,
+            )
+            x = self._apply_injection(x, term)
+            x = layer(x)
+        return x, x0
+
+    def _front_region(self, input_ids: Tensor) -> tuple[Tensor, Tensor, Tensor | None]:
+        """bag0 FRONT region: embed+dropout+bigram → _front_tail. Fixed shapes, no
+        recurrence, one RNG site (embed_drop) + prelude MLP dropouts → graphable."""
+        x = self.embed_drop(self.embed(input_ids))
+        bigram_emb = self.embed.get_bigram(input_ids)
+        x, x0 = self._front_tail(x, input_ids, bigram_emb, None)
+        return x, x0, bigram_emb
+
+    def _back_region(self, x: Tensor, x0: Tensor, bigram_emb,
+                     input_ids: Tensor | None = None) -> Tensor:
+        """BACK region: coda blocks → HC stream mean → lm_mixer → final_norm.
+        input_ids is only threaded into _build_injection_term for signature parity —
+        value-embeds fire exclusively in the prelude (gi ≥ n_prelude+n_core is never in
+        _ve_layer_map), so None and the real ids are equivalent here. The fused CE stays
+        OUTSIDE (its n_valid .item() host-syncs — cannot live in a captured graph)."""
+        for i, layer in enumerate(self.coda):
+            gi = self.cfg.n_prelude + self.cfg.n_core + i
+            term = self._build_injection_term(
+                gi, self.x0_injects[gi].precompute(x0), input_ids, bigram_emb, x.dtype
+            )
+            x = self._apply_injection(x, term)
+            x = layer(x)
+
+        # ── Hyper-Connection stream reduction ─────────────────────────
+        # Collapse the n streams back to a single C-dim representation before the LM head.
+        # Mean readout is scale-preserving and (with all streams equal at init) exactly
+        # recovers the plain-residual output; learned asymmetry is read out as the mean.
+        if self._is_hc:
+            x = x.mean(dim=2)
+
+        # ── LM head ──────────────────────────────────────────────────
+        x = self.lm_mixer(x)
+        x = self.final_norm(x)
+        return x
+
     # ── Forward ───────────────────────────────────────────────────────
 
     def forward(self, input_ids: Tensor, labels: Tensor | None = None,
@@ -663,31 +984,32 @@ class MORPHTransformer(nn.Module):
                     .view(B, T, s, -1).mean(dim=2)                                       # [B,L,ctx_w]
                 for k in range(n_ve)
             ] if n_ve > 0 else None)
+            x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged)
         else:
             T = T_in
-            x = self.embed_drop(self.embed(input_ids))
-            bigram_emb = self.embed.get_bigram(input_ids)
-            ve_bagged = None
-
-        x0 = x.clone()      # single-stream skip signal (broadcast into HC streams)
-
-        # ── Hyper-Connection stream expansion ─────────────────────────
-        # Widen the residual carrier to n parallel C-dim streams for the whole network.
-        # All streams start equal, so with the ≈identity HC init the network reduces to a
-        # plain residual at step 0 (verified). Injections (x0/ve/bigram/diagonal) are
-        # single-stream signals that broadcast into every stream (ndim-adaptive modules).
-        if self._is_hc:
-            with _prof("carrier::expand_contig"):
-                x = x.unsqueeze(2).expand(B, T, self._n_streams, x.shape[-1]).contiguous()
-
-        # ── Prelude ───────────────────────────────────────────────────
-        for i, layer in enumerate(self.prelude):
-            term = self._build_injection_term(
-                i, self.x0_injects[i].precompute(x0), input_ids, bigram_emb, x.dtype,
-                ve_bagged=ve_bagged,
-            )
-            x = self._apply_injection(x, term)
-            x = layer(x)
+            _sg = self._static_graphs
+            if (_sg.get("front") is not None and self.training
+                    and torch.is_grad_enabled()
+                    and input_ids.shape == _sg["front_shape"]):
+                # Graphed FRONT replay (2 launches: input copy + cudaGraphLaunch).
+                outs = _sg["front"](input_ids)
+                _am = _sg["front_aux_mods"]
+                if _am:
+                    # Region routers' aux arrives as explicit graph OUTPUTS (the python
+                    # stash protocol does not re-run on replay) → re-stash each onto
+                    # its own module so collect_routing_aux_losses sums in the exact
+                    # eager order (per-region pre-summing was a measured fp-reassoc).
+                    n = len(_am)
+                    for _mod, _aux in zip(_am, outs[-n:]):
+                        _mod._last_aux_loss = _aux
+                    outs = outs[:-n]
+                if _sg["has_bigram"]:
+                    x, x0, bigram_emb = outs
+                else:
+                    x, x0 = outs
+                    bigram_emb = None
+            else:
+                x, x0, bigram_emb = self._front_region(input_ids)
 
         # ── Core loop ─────────────────────────────────────────────────
         # n_core == 0 → prelude output flows straight to the coda. The whole loop
@@ -912,25 +1234,18 @@ class MORPHTransformer(nn.Module):
             # function-preserving core insertion depends on.
             x = self.input_norm(x)
 
-        # ── Coda ──────────────────────────────────────────────────────
-        for i, layer in enumerate(self.coda):
-            gi = self.cfg.n_prelude + self.cfg.n_core + i
-            term = self._build_injection_term(
-                gi, self.x0_injects[gi].precompute(x0), input_ids, bigram_emb, x.dtype
-            )
-            x = self._apply_injection(x, term)
-            x = layer(x)
-
-        # ── Hyper-Connection stream reduction ─────────────────────────
-        # Collapse the n streams back to a single C-dim representation before the LM head.
-        # Mean readout is scale-preserving and (with all streams equal at init) exactly
-        # recovers the plain-residual output; learned asymmetry is read out as the mean.
-        if self._is_hc:
-            x = x.mean(dim=2)
-
-        # ── LM head ──────────────────────────────────────────────────
-        x = self.lm_mixer(x)
-        x = self.final_norm(x)
+        # ── Coda + LM head (BACK region — graphed replay when captured) ──
+        _sg = self._static_graphs
+        if (_sg.get("back") is not None and self.training and torch.is_grad_enabled()
+                and s == 0 and x.shape == _sg["back_shape"]):
+            outs = (_sg["back"](x, x0, bigram_emb) if _sg["has_bigram"]
+                    else _sg["back"](x, x0))
+            _am = _sg["back_aux_mods"]
+            for _mod, _aux in zip(_am, outs[1:]):
+                _mod._last_aux_loss = _aux   # per-module re-stash (exact eager order)
+            x = outs[0]
+        else:
+            x = self._back_region(x, x0, bigram_emb, input_ids)
 
         if labels is not None and self.cfg.use_kernels:
             # Fused chunked cross-entropy whenever we have labels (TRAINING **and**

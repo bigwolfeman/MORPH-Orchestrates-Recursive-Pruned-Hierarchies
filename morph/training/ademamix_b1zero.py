@@ -37,7 +37,34 @@ from typing import Optional
 import torch
 import bitsandbytes.functional as bnbF
 
-__all__ = ["AdEMAMixB1Zero"]
+__all__ = ["AdEMAMixB1Zero", "set_opt_cuda_graph"]
+
+# ── MORPH_OPT_CUDA_GRAPH: capture the fused optimizer step as ONE CUDA graph ──
+# The fused path launches ~1 Triton kernel per 8-bit param (~hundreds of launches/step) and
+# MORPH's step is LAUNCH-BOUND (command-buffer-full stall). Capturing those launches once and
+# replaying them as a single cudaGraphLaunch removes the whole batch from the launch wall.
+# BIT-EXACTNESS (class A): the graph replays the IDENTICAL kernels in the identical order on
+# the identical tensors; the only structural change is that the 7 step-varying scalars
+# (lr, β2, β3_t, α_t, ε, bc2, λ) are read from a persistent device fp32[7] tensor
+# (LOAD_SCHED kernel variant) instead of being baked launch args — same fp32 values
+# (f64→f32 round-to-nearest either way), same expressions, deterministic fp32 IEEE ops.
+# Requirements handled below:
+#   * grads must keep stable addresses → zero_grad() forces set_to_none=False in this mode.
+#   * state must be initialized (is_init=0 baked) → _GRAPH_WARMUP_STEPS eager steps first.
+#   * dead-mask writes use masked_fill_ with masks precomputed BEFORE capture (the eager
+#     bool-index path does nonzero() + .any() host syncs — illegal during capture).
+#   * a per-step data_ptr signature check auto-invalidates + recaptures if any param/grad/
+#     state buffer moved; pruning events invalidate via graph_invalidate() (train.py).
+# Default OFF until gated; in-process override for A/B: set_opt_cuda_graph(True/False).
+_OPT_CUDA_GRAPH = os.environ.get("MORPH_OPT_CUDA_GRAPH", "0").lower() not in ("0", "", "false")
+_GRAPH_WARMUP_STEPS = 3  # eager (sched-tensor) steps before capture: state init + Triton
+                         # compile of the LOAD_SCHED variant + allocator settle.
+
+
+def set_opt_cuda_graph(enabled: bool) -> None:
+    """In-process override of MORPH_OPT_CUDA_GRAPH (A/B testing without env replumbing)."""
+    global _OPT_CUDA_GRAPH
+    _OPT_CUDA_GRAPH = bool(enabled)
 
 
 class AdEMAMixB1Zero(torch.optim.Optimizer):
@@ -164,6 +191,10 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         # Required because code 0 ≠ value 0 for the signed map (unlike linear int8).
         # Used by _mask_dead_state to zero m2 at pruned positions.
         self._signed_zero_idx = int(self._code_signed_cpu.abs().argmin().item())
+        # CUDA-graph state (MORPH_OPT_CUDA_GRAPH): per-group dict with the captured graph,
+        # the persistent sched tensors, warmup counter and the capture-time signature.
+        self._graph_state: dict[int, dict] = {}
+        self._graph_warned = False
 
     def _code(self, device, signed: bool):
         key = (device, signed)
@@ -295,13 +326,18 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         st["nu_sqrt_code"] = q.reshape(-1)[:n].to(torch.int8).contiguous()
         st["nu_sqrt_amax"] = amax.contiguous()
 
-    def _fused_step(self, params, lr, beta2, beta3, alpha, eps, bc2, wd):
+    def _fused_step(self, params, lr, beta2, beta3, alpha, eps, bc2, wd, sched=None):
         """Fused Triton path for 8-bit large params (linear-int8 blockwise state).
 
         State per param: int8 code tensors (m2_code, nu_sqrt_code) + fp32 per-block
         absmax (m2_amax, nu_sqrt_amax). On first touch the state is allocated and
         is_init=True is passed so the kernel treats m2/nu as zero. Legacy checkpoints
         with linear ν `nu_code` are migrated once before the kernel launch.
+
+        sched: optional persistent device fp32[7] [lr,β2,β3,α,ε,bc2,λ] — CUDA-graph mode
+        (the kernel loads the step-varying scalars by pointer instead of baked launch args;
+        bit-exact, see kernel docstring). The scalar args are still passed for the
+        LOAD_SCHED=False specialization and ignored otherwise.
         """
         from morph.training.ademamix_b1zero_kernel import (
             fused_ademamix_b1zero_step, BLOCK,
@@ -343,6 +379,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                     dynamic_qmap=True,
                     code_signed=self._code(p.device, True),
                     code_unsigned=self._code(p.device, False),
+                    sched=sched,
                 )
             else:
                 if is_init:
@@ -365,6 +402,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                     coord_cap=self.stale_push_cap_coord,
                     upd_clip=self.update_clip,
                     nu_floor=self.fused_nu_floor,
+                    sched=sched,
                 )
 
     def _mask_dead_state(self, p) -> None:
@@ -405,6 +443,174 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             st["m2"].view(-1)[dead] = 0
             st["nu"].view(-1)[dead] = 0
 
+    # ── CUDA-graph machinery (MORPH_OPT_CUDA_GRAPH) ────────────────────────────
+    def zero_grad(self, set_to_none: bool = True):
+        """Hybrid grad zeroing in CUDA-graph mode.
+
+        A captured graph reads each p.grad by POINTER. set_to_none=True frees the grad
+        tensors every step, so the next backward allocates NEW buffers and a replay would
+        read freed memory. So the GRAPH-CAPTURED params (fused 8-bit) keep their grad
+        buffers and are zeroed in place — batched into per-(device,dtype) _foreach_zero_
+        (1-2 launches). Every OTHER param keeps the baseline set_to_none=True steal-path
+        (zero kernels). MEASURED WHY: forcing set_to_none=False on the WHOLE optimizer
+        cost +~1,030 aten launches/step (a fill_ per tensor from per-tensor zeroing + an
+        AccumulateGrad add_ per param, both backward-side) — 4× more than the ~230 the
+        graph removes. The hybrid keeps the unavoidable add_ tax only on the captured
+        params. Numerics: in-place-zero + accumulate ≡ steal for any param that receives
+        a grad every step (true in MORPH — dense embedding bwd, every core/coda param
+        participates each step; the per-step signature check + loss-trace gate verify
+        rather than assume). Flag OFF → pure passthrough.
+        """
+        if not (_OPT_CUDA_GRAPH and self.fused):
+            return super().zero_grad(set_to_none=set_to_none)
+        buckets: dict[tuple, list] = {}
+        for group in self.param_groups:
+            grp_bits = group.get("optim_bits", self.bits)
+            for p in group["params"]:
+                g = p.grad
+                if g is None:
+                    continue
+                # _grad_via_graph_static (set by MORPH_STATIC_GRAPHS): this param's grad
+                # arrives as a VIEW of a bwd-CUDA-graph static buffer (AccumulateGrad
+                # steal) — its data_ptr is ALREADY stable across steps, and keeping the
+                # buffer + in-place zeroing would alias-double on the next backward
+                # (buffer.add_(buffer)). Steal-path (None) is both correct and stable.
+                if (grp_bits == 8 and p.numel() >= self.min_8bit_size and g.is_cuda
+                        and not getattr(p, "_grad_via_graph_static", False)):
+                    buckets.setdefault((g.device, g.dtype), []).append(g)
+                else:
+                    p.grad = None
+        for gs in buckets.values():
+            torch._foreach_zero_(gs)
+
+    def graph_invalidate(self, reason: str = "") -> None:
+        """Drop any captured optimizer graph (re-warms + recaptures on the next steps).
+
+        Called on topology events that change tensors the graph reads by pointer or
+        content the capture snapshotted structurally: prune events (_dead_mask contents,
+        which params have dead coords), or anything that swaps param/grad/state storage.
+        Cheap and always safe — the eager path is the ground truth the capture re-records.
+        """
+        if self._graph_state:
+            for gs in self._graph_state.values():
+                gs["graph"] = None
+                gs["sig"] = None
+                gs["warmup"] = 0
+            if reason:
+                print(f"  [opt-graph] invalidated ({reason}) — will recapture", flush=True)
+
+    def _graph_dead_pairs(self, params) -> list:
+        """Precompute (state_tensors, dead_mask) for every fused param with pruned coords.
+
+        Host-syncing calls (.any()) are legal HERE because this runs before capture, on the
+        default stream. The returned masks are captured by reference inside the graph body
+        (masked_fill_), so prune events that rewrite _dead_mask require graph_invalidate().
+        """
+        pairs = []
+        for p in params:
+            keep = getattr(p, "_dead_mask", None)
+            if keep is None:
+                continue
+            st = self.state.get(p)
+            if not st or st.get("init"):
+                continue
+            dead = (keep.reshape(-1).to(p.device) == 0)
+            if not bool(dead.any()):
+                continue
+            pairs.append((p, dead))
+        return pairs
+
+    def _graph_body(self, params, dead_pairs, scalars, sched) -> None:
+        """The exact per-step fused work, expressed capture-safely.
+
+        Same math and same op order as the eager path: (1) zero m₂/ν state at pruned
+        positions (masked_fill_ ≡ the eager bool-index assignment, elementwise, but with NO
+        host sync and NO data-dependent nonzero()), then (2) one fused kernel per param with
+        the step-varying scalars read from `sched` by pointer. All params operated on are
+        disjoint, so the fused/fallback group reordering in step() cannot change any bit.
+        """
+        for p, dead in dead_pairs:
+            st = self.state[p]
+            if "m2_dcode" in st:            # dynamic-qmap: signed-map zero is _signed_zero_idx
+                st["m2_dcode"].masked_fill_(dead, self._signed_zero_idx)
+                st["nu_dcode"].masked_fill_(dead, 0)
+            elif "m2_code" in st:           # linear-int8: code 0 → value 0
+                st["m2_code"].masked_fill_(dead, 0)
+                if "nu_sqrt_code" in st:
+                    st["nu_sqrt_code"].masked_fill_(dead, 0)
+                elif "nu_code" in st:
+                    st["nu_code"].masked_fill_(dead, 0)
+        lr, beta2, beta3_t, alpha_t, eps, bc2, wd = scalars
+        self._fused_step(params, lr, beta2, beta3_t, alpha_t, eps, bc2, wd, sched=sched)
+
+    def _graphed_fused_step(self, gidx, params, scalars) -> None:
+        """Warm → capture → replay lifecycle for one group's fused params.
+
+        scalars = (lr, β2, β3_t, α_t, ε, bc2, λ) as python floats for THIS step. They are
+        written into the persistent pinned buffer and copied (non_blocking) into the device
+        sched tensor the kernels read — the ONE thing that changes between replays.
+        H2D write-after-read safety: the copy for step N is enqueued before N's replay; the
+        CPU cannot reach step N+1's optimizer without passing GradScaler's found_inf .item()
+        sync (train loop, every step), which fences N's device work — so N+1's pinned-buffer
+        rewrite can never race N's still-queued copy.
+        """
+        gs = self._graph_state.get(gidx)
+        if gs is None:
+            dev = params[0].device
+            gs = self._graph_state[gidx] = {
+                "sched_cpu": torch.empty(7, dtype=torch.float32, pin_memory=True),
+                "sched_dev": torch.empty(7, dtype=torch.float32, device=dev),
+                "graph": None, "sig": None, "warmup": 0,
+            }
+        # f64→f32 round-to-nearest — the same conversion the launch-arg path applies.
+        gs["sched_cpu"].copy_(torch.tensor(scalars, dtype=torch.float32))
+        gs["sched_dev"].copy_(gs["sched_cpu"], non_blocking=True)
+
+        sig = [(p.data_ptr(), p.grad.data_ptr()) for p in params]
+        if gs["graph"] is not None and sig != gs["sig"]:
+            if not self._graph_warned:
+                self._graph_warned = True
+                print("  [opt-graph] param/grad address signature changed — recapturing "
+                      "(repeat warnings suppressed)", flush=True)
+            gs["graph"] = None
+            gs["sig"] = None
+            gs["warmup"] = 0
+
+        if gs["graph"] is not None:
+            gs["graph"].replay()
+            return
+
+        state_ready = all(
+            len(self.state[p]) > 0 and not self.state[p].get("init", False) for p in params
+        )
+        if gs["warmup"] < _GRAPH_WARMUP_STEPS or not state_ready:
+            # Eager warmup on the IDENTICAL code the capture will record (sched-tensor
+            # kernel variant + masked_fill_ dead-masking) — compiles the LOAD_SCHED Triton
+            # specializations, allocates state on first touch, settles the allocator.
+            dead_pairs = self._graph_dead_pairs(params)
+            self._graph_body(params, dead_pairs, scalars, gs["sched_dev"])
+            gs["warmup"] += 1
+            return
+
+        # ── Capture, then replay to EXECUTE this step (capture only records) ──
+        for p in params:                      # the in-body contiguity fixup must not fire
+            if not p.is_contiguous():         # inside capture (it swaps p.data storage)
+                p.data = p.data.contiguous()
+        dead_pairs = self._graph_dead_pairs(params)   # host syncs OK: pre-capture
+        graph = torch.cuda.CUDAGraph()
+        # thread_local: the data-Prefetcher producer thread may touch the CUDA API while we
+        # capture; global mode would abort the capture on any unsafe call process-wide.
+        with torch.cuda.graph(graph, capture_error_mode="thread_local"):
+            self._graph_body(params, dead_pairs, scalars, gs["sched_dev"])
+        gs["graph"] = graph
+        gs["sig"] = [(p.data_ptr(), p.grad.data_ptr()) for p in params]
+        gs["dead_pairs"] = dead_pairs         # keep the mask tensors alive for replays
+        n_kernels = len(params) + sum(2 for _ in dead_pairs)
+        print(f"  [opt-graph] captured fused optimizer step: {len(params)} params, "
+              f"~{n_kernels} launches → 1 graph replay "
+              f"({len(dead_pairs)} dead-masked)", flush=True)
+        graph.replay()
+
     @torch.no_grad()
     def step(self, closure=None):
         loss = None
@@ -412,7 +618,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        for group in self.param_groups:
+        for gidx, group in enumerate(self.param_groups):
             group["step"] = group.get("step", 0) + 1
             step = group["step"]
             alpha_t, beta2, beta3_t = self._sched(step, group)
@@ -424,27 +630,50 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
             if not params:
                 continue
 
-            # Zero slow state at pruned positions before update (see _mask_dead_state).
-            # Without this, α·m₂ drives pruned params as ν collapses.
-            for p in params:
-                self._mask_dead_state(p)
-
-            # ── Split: fused-kernel path (8bit + large enough) vs fp32 fallback ──
-            # The fused Triton kernel handles its OWN dequant→update→requant in int8.
-            # The fp32 fallback (bits=32 group OR numel < min_8bit_size) uses _foreach.
-            if self.fused:
-                fused_params, fallback_params = [], []
-                for p in params:
-                    if grp_bits == 8 and p.numel() >= self.min_8bit_size:
-                        fused_params.append(p)
-                    else:
-                        fallback_params.append(p)
+            # ── CUDA-graph mode (MORPH_OPT_CUDA_GRAPH): fused params only ──
+            # The fused Triton launches (~1/param) are the launch bulk; the _foreach
+            # fallback below is a handful of batched launches AND bakes python scalars
+            # into its aten calls (step-varying → not capture-safe), so it stays eager.
+            # Dead-masking + kernels for the graphed params happen inside _graph_body in
+            # the SAME relative order as the eager path; all per-param work is disjoint,
+            # so splitting first cannot change any bit. Diagnostic modes read state
+            # per-step in python → bail to eager.
+            if (_OPT_CUDA_GRAPH and self.fused and grp_bits == 8
+                    and not self.track_diag and not self._diag_capture
+                    and params[0].is_cuda):
+                fused_params = [p for p in params if p.numel() >= self.min_8bit_size]
+                fallback_params = [p for p in params if p.numel() < self.min_8bit_size]
+                for p in fallback_params:
+                    self._mask_dead_state(p)
                 if fused_params:
-                    self._fused_step(fused_params, lr, beta2, beta3_t, alpha_t,
-                                     eps, bc2, wd)
+                    self._graphed_fused_step(
+                        gidx, fused_params,
+                        (lr, beta2, beta3_t, alpha_t, eps, bc2, wd))
                 params = fallback_params
                 if not params:
                     continue
+            else:
+                # Zero slow state at pruned positions before update (see _mask_dead_state).
+                # Without this, α·m₂ drives pruned params as ν collapses.
+                for p in params:
+                    self._mask_dead_state(p)
+
+                # ── Split: fused-kernel path (8bit + large enough) vs fp32 fallback ──
+                # The fused Triton kernel handles its OWN dequant→update→requant in int8.
+                # The fp32 fallback (bits=32 group OR numel < min_8bit_size) uses _foreach.
+                if self.fused:
+                    fused_params, fallback_params = [], []
+                    for p in params:
+                        if grp_bits == 8 and p.numel() >= self.min_8bit_size:
+                            fused_params.append(p)
+                        else:
+                            fallback_params.append(p)
+                    if fused_params:
+                        self._fused_step(fused_params, lr, beta2, beta3_t, alpha_t,
+                                         eps, bc2, wd)
+                    params = fallback_params
+                    if not params:
+                        continue
 
             # ── Dequant / init (per-param: bnb blockwise quant is per-tensor) ──
             # Init holds zero state as fp32 transiently — we never QUANTIZE an all-zero

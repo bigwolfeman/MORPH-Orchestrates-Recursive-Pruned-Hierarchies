@@ -55,7 +55,8 @@ def _ademamix_b1zero_fused_kernel(
     nu_amax_ptr,      # fp32 per-block absmax, in-place
     code_signed_ptr,  # 256 fp32 ascending dynamic map (signed)   — dynamic mode only
     code_unsigned_ptr,# 256 fp32 ascending dynamic map (unsigned) — dynamic mode only
-    lr, beta2, beta3, alpha, eps, bc2, wd,   # fp32 scalars
+    sched_ptr,        # fp32[7] [lr,beta2,beta3,alpha,eps,bc2,wd] — LOAD_SCHED mode only
+    lr, beta2, beta3, alpha, eps, bc2, wd,   # fp32 scalars (ignored when LOAD_SCHED)
     g_coef, snr_kappa, snr_floor, coord_cap, upd_clip,  # fp32 cure scalars
     is_init,          # 1 → state is zero (skip dequant), 0 → dequant existing code
     n_elements,
@@ -67,7 +68,24 @@ def _ademamix_b1zero_fused_kernel(
     HAS_GCOEF: tl.constexpr,
     DYNAMIC_QMAP: tl.constexpr,   # True → bnb dynamic non-linear map; False → linear int8
     NU_FLOOR: tl.constexpr,       # linear-only: floor positive sqrt(ν) to code 1
+    LOAD_SCHED: tl.constexpr,     # True → read the 7 step-varying scalars from sched_ptr
+                                  # (CUDA-graph mode: a captured graph bakes launch args, so
+                                  # step-varying scalars must be read from device memory by
+                                  # pointer). BIT-EXACTNESS: sched holds the SAME fp32 values
+                                  # the launch args would carry (python-float f64→f32 round-
+                                  # to-nearest either way); every arithmetic expression below
+                                  # is unchanged and fp32 IEEE ops are deterministic, so the
+                                  # two variants produce identical bits (unit-gated in
+                                  # tests via torch.equal on all 5 outputs).
 ):
+    if LOAD_SCHED:
+        lr = tl.load(sched_ptr + 0)
+        beta2 = tl.load(sched_ptr + 1)
+        beta3 = tl.load(sched_ptr + 2)
+        alpha = tl.load(sched_ptr + 3)
+        eps = tl.load(sched_ptr + 4)
+        bc2 = tl.load(sched_ptr + 5)
+        wd = tl.load(sched_ptr + 6)
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
     offs = block_start + tl.arange(0, BLOCK_SIZE)
@@ -216,6 +234,7 @@ def fused_ademamix_b1zero_step(
     nu_floor: bool = True,
     code_signed=None,
     code_unsigned=None,
+    sched=None,
 ):
     """Launch the fused kernel for one param tensor (all flat, contiguous).
 
@@ -223,6 +242,12 @@ def fused_ademamix_b1zero_step(
     to the baseline version. dynamic_qmap=False keeps the original linear-int8 path (nu_floor=True
     preserves the legacy code-1 floor). dynamic_qmap=True requires code_signed/code_unsigned
     (256-wide ascending fp32 maps on the param's device) and matches the de-fused quantizer.
+
+    sched: optional persistent fp32[7] device tensor [lr,beta2,beta3,alpha,eps,bc2,wd].
+    When given, the kernel LOADS the 7 step-varying scalars from it (LOAD_SCHED=True) and
+    the scalar args are ignored — required under CUDA-graph capture, where launch args are
+    baked into the graph but tensor CONTENTS are read fresh on every replay. Bit-exact vs
+    the arg path (same fp32 values, same expressions; see kernel comment).
     """
     n = p.numel()
     grid = (triton.cdiv(n, BLOCK),)
@@ -234,9 +259,11 @@ def fused_ademamix_b1zero_step(
         # Pass m2_amax as a harmless non-null placeholder; the kernel never reads it when
         # DYNAMIC_QMAP is False (the branch is constexpr-eliminated).
         cs = cu = m2_amax
+    # sched placeholder when unused (LOAD_SCHED constexpr-eliminates every read of it).
+    sp = sched if sched is not None else m2_amax
     _ademamix_b1zero_fused_kernel[grid](
         p, g, m2_code, m2_amax, nu_code, nu_amax,
-        cs, cu,
+        cs, cu, sp,
         float(lr), float(beta2), float(beta3), float(alpha),
         float(eps), float(bc2), float(wd),
         float(g_coef), float(snr_kappa), float(snr_floor),
@@ -251,4 +278,5 @@ def fused_ademamix_b1zero_step(
         HAS_GCOEF=(float(g_coef) != 1.0),
         DYNAMIC_QMAP=bool(dynamic_qmap),
         NU_FLOOR=bool(nu_floor),
+        LOAD_SCHED=(sched is not None),
     )
