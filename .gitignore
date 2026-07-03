@@ -44,3 +44,5 @@ Ai-notes/
 ignore/
 Incomplete/
 ai-notes/Incomplete/
+# Claude Code agent/worktree state
+.claude/

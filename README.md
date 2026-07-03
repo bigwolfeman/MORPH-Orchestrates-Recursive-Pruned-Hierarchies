@@ -2,15 +2,17 @@
 
 **MORPH** is a PyTorch research model for looped transformer training and sparse deployment. The model reuses a small Parcae-style core for variable depth, stabilizes the repeated core with Cayley Hyper-Connections, and trains the MLP stack while pruning low impact weights to a 25% total density before carving it into the MORTAR BCSR runtime. Enabling less than 1% ppl regression and improved memory footprint and training throughput. All while natively quantized trained.
 
-To further improve per bit intelligence and memory foot print for research, it utilizes extensive linear attention methods to provide a lower ppl at long contexts with less memory.
+To further improve per bit intelligence and memory foot print for research, it utilizes extensive linear attention methods to enable a lower memory foot print at long contexts. Both GLA and Deepseek CSA/HCA are used.
 
-Extensive ablations have forced ever component to earn their keep with in the architecture. It is the goal of the MORPH project to provide a true open source architecture that stays at the bleeding edge of research.
+Extensive ablations have forced ever component to earn its keep with in the architecture. It is the goal of the MORPH project to provide a true open source architecture that stays at the bleeding edge of research.
 
 The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/jax/` is maintained as a converter target and currently lags the PyTorch architecture.
 
 ## Current Architecture
 
-The default local model is defined in `morph/configs/base.yaml`: `3 + 6xT + 3` blocks, `d_model=768`, `d_ff=2048`, sequence length 4096, Poisson loop depth with mean 6 and max 8, and truncated BPTT over the last four core iterations. The cloud target is `4 + 8xT + 4` at `d_model=2048`.
+The default local model is defined in `morph/configs/base.yaml`: `3 + 6xT + 3` blocks, `d_model=768`, `d_ff=2048`, sequence length 4096, Poisson loop depth with mean 6 and max 8, and truncated BPTT over the last four core iterations. This is used for small scale testing and ablation.
+
+The cloud target is `4 + 8xT + 4` at `d_model=2048`. Roughly 1B parameters.
 
 The active stack is:
 
@@ -19,15 +21,15 @@ The active stack is:
 - **CCA + CSA/HCA attention:** channel-compressed attention with local window attention plus alternating sparse and dense compressed global context.
 - **GLA retention:** a gated branch beside attention on configured section-local layers, with optional carry across core-loop iterations.
 - **Hybrid embeddings:** Euclidean token embeddings, a Lorentz channel, and a learned hash-bigram signal injected through the body.
-- **MORTAR sparse MLP path:** `MortarLinear` is used throughout the MLP stack, with CMS pruning and 128x128 BCSR carve.
-- **ReMoE routing:** whole-body hidden-neuron routing after carve.
-- **Deploy QAT:** ternary backbone weights, int6 Euclidean/bigram embeddings, and 8-bit AdamW optimizer state by default.
+- **MORTAR sparse MLP path:** MORTAR provides control over 16x16 groups of perceptrons to make tracking importance tractable as an EMA for pruning. It implements the MegaBlocks kernel to realize the performance benefits post carving.
+- **ReMoE routing:** whole-body hidden-neuron routing after carve. Enables per token routing selecting by 16x16 MORTAR tiles.
+- **Deploy QAT:** ternary backbone weights, int6 Euclidean/bigram embeddings, and 8-bit AdEMAMix optimizer state by default. Lorentz embeddings must stay in bf16.
+- **Triton Kernels:** Extensive Triton kernels are provided that target the 5090 and RTX Pro 6000 GPUs. As more deployment targets are used the auto tune coverage will expand.
 
-The residual modules in `MORPHBlock` are still named `mrr_attn` and `mrr_mlp` for checkpoint compatibility. In the PyTorch model they are `HyperConnectionResidual` modules, not Multi-Rate Residual modules.
 
 ## Training Recipe
 
-`morph/configs/base.yaml` is the source of truth for the current training recipe. The default run is a 100k-step local training schedule with flat `1e-4` learning rate, CMS pruning, MORTAR carve, ReMoE routing, Token Superposition Training, ternary backbone QAT, int6 embedding QAT, and 8-bit AdamW.
+`morph/configs/base.yaml` is the source of truth for the current local training recipe. The default run is a 100k-step local training schedule with flat `1e-4` learning rate, CMS pruning, MORTAR carve, ReMoE routing, Token Superposition Training, ternary backbone QAT, int6 embedding QAT, and 8-bit AdEMAMix optimizer based on bits and bytes implementation. This is a clean ablation surface for A/B testing.
 
 High-level schedule:
 
@@ -41,7 +43,9 @@ High-level schedule:
 
 Evaluation and generation use normal next-token prediction. TST is a training-only data-efficiency phase.
 
-For dense curriculum work, use `pretrain_curriculum.yaml`. It deliberately disables sparse carve/routing, TST, ternary QAT, int6 embedding QAT, and 8-bit AdamW so curriculum behavior can be isolated.
+For dense curriculum work, use `pretrain_curriculum.yaml`. It deliberately disables sparse carve/routing, TST, ternary QAT, and int6 embedding QAT, so curriculum behavior can be isolated. To see if these optimizations are causing issues with an A/B.
+
+AdEMAMix was partially based on Bits and Bytes implementation. AdEMA can have its memory foot print dramatically reduced by keeping beta-1 to 0, and not holding it in a full tensor. BnB maintains it as a full tensor even at 0.
 
 ## Quick Start
 
