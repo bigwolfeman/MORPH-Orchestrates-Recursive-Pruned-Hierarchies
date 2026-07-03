@@ -24,7 +24,7 @@ The active stack is:
 - **MORTAR sparse MLP path:** MORTAR provides control over 16x16 groups of perceptrons to make tracking importance tractable as an EMA for pruning. It utilizes the MegaBlocks kernel to realize the performance benefits post carving.
 - **ReMoE routing:** whole-body hidden-neuron routing after carve. Enables per token routing selection of 16x16 MORTAR tiles.
 - **Deploy QAT:** ternary backbone weights, int6 Euclidean/bigram embeddings, and 8-bit AdEMAMix optimizer state by default. Lorentz embeddings must stay in bf16.
-- **Triton Kernels:** Extensive Triton kernels are provided that target the 5090 and RTX Pro 6000 GPUs. As more deployment targets are used the coverage will expand.
+- **Triton Kernels:** Extensive Triton kernels are provided.
 
 docs/references for attributions to prior art.
 
@@ -100,6 +100,9 @@ morph/
   configs/                  # Hydra configs
 docs/
   MANIFEST.md               # top-level docs navigator
+  runtime-invariants.md     # BPTT / kernel / compile / phase notes
+  ablation-ledger.md        # accepted / rejected / deferred components
+  known-good-runs.md        # default recipe and env assumptions
   figures/                  # top-level PNG previews + topic-grouped TikZ/PDF sources
   references.md             # paper map and implementation notes
   references/               # Topic-grouped local reference archive
@@ -110,6 +113,8 @@ docs/
 Start with `docs/MANIFEST.md` for docs navigation. Architecture diagram PNG previews stay at the top of `docs/figures/` (one `<name>.png` per diagram); TikZ sources, PDFs, and LaTeX sidecars are topic-grouped underneath. Regeneration steps are in `docs/figures/MANIFEST.md` — use `pdftoppm -singlefile` so previews are not written as `<name>-1.png`.
 
 The paper map lives in `docs/references.md`, with topic-grouped local notes indexed by `docs/references/MANIFEST.md`.
+
+Also useful: `docs/runtime-invariants.md`, `docs/ablation-ledger.md`, `docs/known-good-runs.md`. Longer campaign logs and gate scripts left out of public repo for cleanliness.
 
 ## Contributing
 

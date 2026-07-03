@@ -1,7 +1,6 @@
-% MORPH — Deployable Stack (precision x architecture overlay)
-% The full deployment configuration: which numeric precision each parameter group
-% is served at, plus the cross-cutting carriers (Cayley HC, retention GLA) and the
-% training-time optimizer overlay (8-bit AdEMAMix).
+% MORPH — Deployable Stack (precision x training update overlay)
+% The deployment-oriented precision scopes plus the training update loop that
+% produces those quantized forward weights.
 % Compile: pdflatex morph_deploy_stack.tex
 %
 % NOTE: this diagram tracks base.yaml's deploy-oriented defaults: ternary selected
@@ -36,6 +35,8 @@
 \definecolor{pInt6}{HTML}{009E73}   % bluish green
 \definecolor{pInt4}{HTML}{984EA3}   % purple (distinct from the rest)
 \definecolor{p8bit}{HTML}{444444}   % dark gray
+\definecolor{pTrain}{HTML}{7A3E9D}  % optimizer / BPTT path
+\definecolor{pGrad}{HTML}{CC79A7}   % gradient rail accent
 
 \tikzset{
   % central forward-flow boxes — shared width so braces clear every tier
@@ -57,6 +58,9 @@
     inner sep=11pt, align=left, font=\footnotesize\sffamily},
   A/.style={-{Stealth[length=2.6mm,width=2mm]}, thick},
   Ad/.style={-{Stealth[length=2.4mm,width=1.9mm]}, thick, densely dashed},
+  TrainA/.style={-{Stealth[length=2.8mm,width=2.2mm]}, line width=1.4pt, densely dashed, draw=pTrain},
+  station/.style={draw=#1, thick, rounded corners=5pt, fill=#1!7,
+    inner sep=7pt, align=left, font=\scriptsize\sffamily},
   sub/.style={font=\scriptsize\sffamily},
   tiny/.style={font=\tiny\sffamily},
 }
@@ -88,7 +92,7 @@
 \node[PT, above=0.7cm of pre, line width=2pt] (core) {
   \textbf{Core Loop} $2N \times T \sim \mathrm{Poi}(\lambda{=}6)$\\[2pt]
   {\scriptsize attn bf16 + SwiGLU ternary\,(MORTAR); layer 1 $\to$ +GLA}\\[1pt]
-  {\scriptsize truncated BPTT (last 4 iters)}};
+  {\scriptsize core-only BPTT: prefix no-grad, last 4 iters checkpointed}};
 \draw[A] (pre) -- (core);
 
 \node[PT, above=0.7cm of core] (coda) {
@@ -108,74 +112,45 @@
 \node[font=\small\sffamily, above=0.45cm of head] (out) {Logits / Loss};
 \draw[A] (head) -- (out);
 
-% Brace rails sit outside the shared stack width (all tiers are 6.0cm).
-% Amplitude stays inside the gap to the side panels / labels.
-\coordinate (braceR) at ($(core.east)+(0.55,0)$);
-\coordinate (braceL) at ($(core.west)+(-0.55,0)$);
-
-% ── backbone precision: ONE brace spanning prelude->coda (all 3 sections identical) ──
-\draw[decorate, decoration={brace, amplitude=8pt}, thick, bdr]
-  ($(coda.north -| braceR)+(0,0.12)$) -- ($(pre.south -| braceR)+(0,-0.12)$);
-\node[anchor=west, font=\scriptsize\sffamily, align=center, text=bdr,
-      inner sep=2pt] (bb) at ($(braceR)+(0.45,0)$) {%
-  backbone\\[1pt]{\tiny MLP/mix ternary}\\[1pt]{\tiny attention bf16}};
-
 % =====================================================================
-% LEFT PANEL — architecture carriers (cross-cutting, all bf16)
+% LEFT PANEL — deployment precision notes (no architecture formulas here)
 % =====================================================================
 
-\node[panel=bdr, anchor=east, text width=4.7cm] at ($(braceL)+(-1.55,1.5)$) (hc) {
-  \textbf{\textcolor{bdr}{Cayley Hyper-Connections}}\\[2pt]
-  residual carrier widened\\
-  $[B,S,C] \to [B,S,n{=}4,C]$\\[2pt]
-  orthogonal $O(n)$ mixer\\
-  $H_{\mathrm{res}}{=}\mathrm{Cayley}(\mathrm{skew})$\\[2pt]
-  {\tiny init: $x + F(\mathrm{mean}(x))$ \,(=plain residual)}\\
-  {\tiny \textbf{bf16}}};
+\node[panel=pTern, anchor=east, text width=4.7cm] at ($(core.west)+(-1.50,1.5)$) (qscope) {
+  \textbf{\textcolor{pTern}{Quantized forward}}\\[3pt]
+  \tikz\node[badge=pTern, inner sep=2pt]{ternary};~MLP + mixer linears\\[2pt]
+  \tikz\node[badge=pInt6, inner sep=2pt]{int6};~Euclidean / bigram embeddings\\[2pt]
+  \tikz\node[badge=pBf16, inner sep=2pt]{bf16};~attention, norms, Lorentz, HC, GLA\\[4pt]
+  {\tiny full-precision shadows stay with the optimizer state}};
 
-\node[panel=bdr, anchor=east, text width=4.7cm, below=0.5cm of hc] (gla) {
-  \textbf{\textcolor{bdr}{Retention (GLA) branch}}\\[1pt]
-  {\tiny layer 1 of prelude / core / coda}\\[2pt]
-  parallel to attention:\\
-  $a = \mathrm{attn}(x) + \sigma(g)\!\cdot\!\mathrm{GLA}(x,S)$\\[2pt]
-  $S_t = \mathrm{diag}(\alpha_t)S_{t-1} + k_t^{\!\top} v_t$\\
-  $\alpha_t = \sigma(x_t W_g)$,\; state $S\!\in\!\mathbb{R}^{d_k\times d_v}$\\[2pt]
-  {\tiny core: $S_T$ carried across loop iters}\\
-  {\tiny \textbf{bf16}; gate $\sigma(g)\!\approx\!0$ at init}};
-
-% left brace spanning prelude->coda: BOTH carriers apply across the whole backbone,
-% not just the core loop (HC = every layer; GLA = layer 1 of each of the 3 sections)
-\draw[decorate, decoration={brace, amplitude=8pt, mirror}, thick, bdr]
-  ($(coda.north -| braceL)+(0,0.12)$) -- ($(pre.south -| braceL)+(0,-0.12)$);
-\node[font=\tiny\sffamily, text=bdr, rotate=90, anchor=south]
-  at ($(braceL)+(-0.38,0)$) {prelude / core / coda};
-% arrows land on the brace rail, not through the panel borders
-\draw[Ad, bdr] (hc.east) -- ($(braceL)+(0,1.2)$);
-\draw[Ad, bdr] (gla.east) -- ($(braceL)+(0,-1.2)$);
+\node[panel=pInt6, anchor=east, text width=4.7cm, below=0.5cm of qscope] (sparse) {
+  \textbf{\textcolor{pInt6}{Sparse deploy runtime}}\\[3pt]
+  CMS chooses MORTAR tile topology\\[2pt]
+  compact step carves dense shadows to BCSR\\[2pt]
+  ReMoE routes hidden-neuron tiles post-carve\\[4pt]
+  {\tiny grading happens on the training rail}};
 
 % =====================================================================
-% RIGHT PANEL — train-time / inference-time overlays
+% RIGHT PANEL — GD/BPTT training rail
 % =====================================================================
 
-\node[panel=bdr, anchor=west, text width=4.5cm] at ($(bb.east)+(1.1,0)$) (opt) {
-  \textbf{\textcolor{bdr}{Optimizer (training)}}\\[2pt]
-  AdEMAMix 8-bit\\
-  {\tiny state $m,v \to$ uint8; embed state forced fp32}};
+\node[draw=pTrain, very thick, rounded corners=9pt, fill=pTrain!4,
+      text width=5.55cm, inner sep=13pt, align=left,
+      font=\footnotesize\sffamily, anchor=west]
+      (trainPanel) at ($(core.east)+(2.65,0.05)$) {%
+  {\small\bfseries\textcolor{pTrain}{Training update}}\\[5pt]
+  \textbf{1. Backward split:} CE/MCE loss seeds one gradient field. Surrounding stack uses GD; looped core uses checkpointed BPTT.\\[5pt]
+  \textbf{2. CMS grading:} Taylor saliency reads live grads before prune and zero-grad.\\[5pt]
+  \textbf{3. AdEMAMix 8-bit:} $\beta_1{=}0$ fork updates fp shadows, then projects to ternary/int6 for next forward.};
 
-% the training-time optimizer overlay connects to the backbone brace (a real target, not empty space)
-\draw[Ad, bdr] (opt.west) -- (bb.east);
-
-% =====================================================================
-% BOTTOM — precision legend
-% =====================================================================
-
-\node[draw=bdr, rounded corners=6pt, fill=fGray!25, inner sep=9pt,
-      align=left, font=\scriptsize\sffamily, text width=14.8cm,
-      below=1.0cm of inp, anchor=north] (leg) {
-  \textbf{Precision legend} \;(text label is authoritative; color is secondary):\\[2pt]
-  \tikz\node[badge=pInt6, inner sep=2pt]{int6};~embeddings \;\;
-  \tikz\node[badge=pTern, inner sep=2pt]{ternary};~MLP $+$ mixer linears \;\;
-  \tikz\node[badge=pBf16, inner sep=2pt]{bf16};~attn / norms / Lorentz / HC / GLA};
+\coordinate (railTop) at ($(trainPanel.north west)+(-0.45,-0.60)$);
+\coordinate (railBot) at ($(trainPanel.west |- emb.south)+(-0.45,0.00)$);
+\draw[pTrain, line width=4.0pt, rounded corners=7pt,
+      -{Stealth[length=4.0mm,width=3.2mm]}]
+  (out.east) -- (railTop |- out.east) -- (railTop) -- (railBot);
+\node[font=\scriptsize\sffamily\bfseries, text=pTrain, anchor=south east,
+      fill=white, inner sep=2pt]
+  at ($(railTop |- out.east)+(-0.12,0.06)$) {GD / BPTT rail};
 
 % ── Title ────────────────────────────────────────────────────────────
 \node[above=0.55cm of out, font=\Large\sffamily\bfseries]
