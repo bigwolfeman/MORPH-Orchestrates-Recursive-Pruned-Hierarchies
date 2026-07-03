@@ -1460,6 +1460,30 @@ def main(cfg: DictConfig) -> None:
         print("[memprobe] peak-only mode (no allocator hooks; set MORPH_MEM_SNAPSHOT_STEP for a snapshot)",
               flush=True)
 
+    # ── Perf-pass region timing (MORPH_PERF_REGIONS=1) ─────────────────────────
+    # CUDA-event + wall region timing around data/fwd/aux/bwd/prune/clip/opt, means
+    # printed every 20 steps. Default OFF → shared nullcontext, zero cost, bit-identical.
+    from morph.training.perf_regions import RegionTimer
+    _rt = RegionTimer(bool(os.environ.get("MORPH_PERF_REGIONS")))
+    # nsys capture window (MORPH_NSYS_WINDOW="a:b"): cudaProfilerStart at step a,
+    # Stop at step b — pair with `nsys profile -c cudaProfilerApi` for a clean
+    # steady-state trace that excludes warmup compile. Default unset → never fires.
+    _nsys_win = os.environ.get("MORPH_NSYS_WINDOW")
+    _nsys_a, _nsys_b = (int(v) for v in _nsys_win.split(":")) if _nsys_win else (-1, -1)
+    # In-process kineto window (MORPH_PROF_WINDOW="a:b:/out/prefix"): torch.profiler
+    # from step a to step b, then chrome-trace export + top-kernel table to
+    # <prefix>.json / <prefix>.kernels.txt. Used instead of nsys — nsys's injected
+    # threads hold the launcher pipe's write end across Triton's gcc fork → the
+    # warmup-compile fork-deadlock (observed 2026-07-03: main thread anon_pipe_read
+    # on a defunct child, twice, 40min). Default unset → never constructed.
+    _prof_win = os.environ.get("MORPH_PROF_WINDOW")
+    _prof_a = _prof_b = -1
+    _prof_prefix = ""
+    _prof = None
+    if _prof_win:
+        _pa, _pb, _prof_prefix = _prof_win.split(":", 2)
+        _prof_a, _prof_b = int(_pa), int(_pb)
+
     # Diagnostic-only (MORPH_DEBUG_STEP): per-step wall time + the exact Poisson depths
     # that step sampled, to catch the intermittent slow step and its trigger. Wrap
     # _sample_depths to stash the last-returned depths; printed in the timing block.
@@ -1493,6 +1517,30 @@ def main(cfg: DictConfig) -> None:
         _thr.Thread(target=_watchdog, daemon=True).start()
 
     for step in range(start_step, total_steps):
+        if step == _nsys_a:
+            torch.cuda.profiler.start()
+            print(f"[nsys] cudaProfilerStart @ step {step}", flush=True)
+        elif step == _nsys_b:
+            torch.cuda.profiler.stop()
+            print(f"[nsys] cudaProfilerStop @ step {step}", flush=True)
+        if step == _prof_a:
+            from torch.profiler import profile as _kineto_profile, ProfilerActivity
+            torch.cuda.synchronize()
+            _prof = _kineto_profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA])
+            _prof.__enter__()
+            print(f"[prof] kineto start @ step {step}", flush=True)
+        elif step == _prof_b and _prof is not None:
+            torch.cuda.synchronize()
+            _prof.__exit__(None, None, None)
+            _prof.export_chrome_trace(_prof_prefix + ".json")
+            for _sort, _suffix in (("self_cuda_time_total", ".kernels.txt"),
+                                   ("self_cpu_time_total", ".cpu.txt")):
+                with open(_prof_prefix + _suffix, "w") as _pf:
+                    _pf.write(_prof.key_averages().table(sort_by=_sort, row_limit=80))
+            print(f"[prof] kineto stop @ step {step} → {_prof_prefix}.json/.kernels.txt/.cpu.txt",
+                  flush=True)
+            _prof = None
         if _dbg_step:
             _dbg["step_start"] = time.perf_counter()
             _dbg["cur_step"] = step
@@ -1549,34 +1597,37 @@ def main(cfg: DictConfig) -> None:
         # hold a constant effective batch as the per-stage micro-batch drops with context length.
         _ga = cur_grad_accum if curriculum_enabled else 1
         for _micro in range(_ga):
-            try:
-                x, y = next(train_loader)
-            except StopIteration:
-                # Curriculum .batches() is infinite so this is a non-curriculum-only refill; still,
-                # branch defensively so a curriculum run can never silently fall back to the base OWT stream.
-                if curriculum_enabled:
-                    train_loader = _curr_loader.batches(_microbatch[cur_stage], bag_size=cur_bag)
-                else:
-                    train_loader = _make_train_loader(cur_bag)
-                x, y = next(train_loader)
-            x, y = x.to(device), y.to(device)
+            with _rt.region("data"):
+                try:
+                    x, y = next(train_loader)
+                except StopIteration:
+                    # Curriculum .batches() is infinite so this is a non-curriculum-only refill; still,
+                    # branch defensively so a curriculum run can never silently fall back to the base OWT stream.
+                    if curriculum_enabled:
+                        train_loader = _curr_loader.batches(_microbatch[cur_stage], bag_size=cur_bag)
+                    else:
+                        train_loader = _make_train_loader(cur_bag)
+                    x, y = next(train_loader)
+                x, y = x.to(device), y.to(device)
 
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                out = model(x, labels=y, bag_size=cur_bag)
-            loss = out["loss"]
+            with _rt.region("fwd"):
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    out = model(x, labels=y, bag_size=cur_bag)
+                loss = out["loss"]
 
-            # Routing aux loss (load balance) — only active after route_start
-            if pruning.is_routed:
-                routing_aux = collect_routing_aux_losses(model)
-                loss = loss + routing_aux
+                # Routing aux loss (load balance) — only active after route_start
+                if pruning.is_routed:
+                    routing_aux = collect_routing_aux_losses(model)
+                    loss = loss + routing_aux
 
-            # Core-map spectral-norm penalty. Zero while every core MLP linear is below
-            # `cap` (bit-exact); only fires on σ_max runaway. Loss-side → optimizer-agnostic.
-            if _spec_pen is not None:
-                _sp = _spec_pen.penalty()
-                loss = loss + _sp.to(loss.dtype)
+                # Core-map spectral-norm penalty. Zero while every core MLP linear is below
+                # `cap` (bit-exact); only fires on σ_max runaway. Loss-side → optimizer-agnostic.
+                if _spec_pen is not None:
+                    _sp = _spec_pen.penalty()
+                    loss = loss + _sp.to(loss.dtype)
 
-            scaler.scale(loss / _ga).backward()
+            with _rt.region("bwd"):
+                scaler.scale(loss / _ga).backward()
 
         if _mem_probe:
             _pk = torch.cuda.max_memory_allocated() / 2**30
@@ -1592,7 +1643,8 @@ def main(cfg: DictConfig) -> None:
                 print(f"[memprobe] dumped allocation snapshot → {_snap_path} "
                       f"(recording stopped)", flush=True)
 
-        prune_stats = pruning.step(model, step)
+        with _rt.region("prune"):
+            prune_stats = pruning.step(model, step)
 
         # Phase boundary (compact / routing) changed the param set → rebuild a FRESH
         # optimizer (Wolfe: fresh optimizer after compact). This step's backward grads
@@ -1667,10 +1719,12 @@ def main(cfg: DictConfig) -> None:
             t_start = time.perf_counter()
             continue
 
-        scaler.unscale_(optimizer)
-        nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        with _rt.region("clip"):
+            scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
-        _step_optimizer()
+        with _rt.region("opt"):
+            _step_optimizer()
 
         # ── Prune-divergence diagnostic (env MORPH_DIAG_OPT=<path>) ─────────
         # Post-step, grads still live (zero_grad is top-of-next-iter). Dequants m₂/ν and
@@ -1702,6 +1756,7 @@ def main(cfg: DictConfig) -> None:
         t_now = time.perf_counter()
         _dt = t_now - t_start
         step_times.append(_dt)
+        _rt.step_end(step, _dt)
         # t_start is reset at the END of the loop body (after eval/gen/ckpt) so
         # those non-training blocks are excluded from the NEXT step's _dt — keeps
         # steps_per_sec a pure training-throughput metric regardless of eval cadence.
