@@ -4,15 +4,18 @@
 Parcae-style looped transformers with diagonal SSM injection, MORTAR BCSR structured sparsity,
 CCA+CSA+HCA triple-axis attention compression, a gated-linear-attention (GLA) retention branch,
 JPmHC orthogonal hyper-connection residuals, hybrid
-hyperbolic/Euclidean embeddings, STE ternary shadow weights, and ReMoE product-key routing.
+hyperbolic/Euclidean embeddings, STE ternary shadow weights, ReMoE product-key routing, and
+Token Superposition Training (TST) during the early pretraining phase.
 
 Papers are grouped by architectural component. "Original work" entries are techniques developed
 within the MORPH project with no external precedent.
 
+Local markdown copies are grouped by topic in [`references/MANIFEST.md`](references/MANIFEST.md).
+
 > **Status note.** Several components cited below were evaluated but **removed** from the current
-> architecture: the Titans neural-memory module (§3), the Multi-Rate Residual (§4), the
-> Hyper-Connection Sinkhorn arm (§4), the LeJEPA / SIGReg / LLM-JEPA z-latent objectives and the
-> STP geodesic regularizer (§7), and MTP heads (§9).
+> architecture: the Titans neural-memory module (§3), Nested Learning (§3), the Multi-Rate Residual
+> (§4), the Hyper-Connection Sinkhorn arm (§4), the LeJEPA / SIGReg / LLM-JEPA z-latent objectives,
+> the STP / Semantic Step Prediction geodesic regularizers (§7), and MTP heads (§9).
 > They are kept here as citations and marked **(removed)** in place, mirroring the Block-ELL
 > "(superseded)" treatment in §6. The current cross-iteration memory is the GLA retention branch
 > (`morph/model/gla.py`); the sole residual is the JPmHC Cayley hyper-connection.
@@ -22,6 +25,7 @@ within the MORPH project with no external precedent.
 ## 1. Looping & Depth
 
 ### Parcae — Stable Looped Transformer
+
 **Title:** Parcae: Scaling Laws For Stable Looped Language Models  
 **Authors:** Hayden Prairie, Zachary Novack, Taylor Berg-Kirkpatrick, Daniel Y. Fu (UCSD + Together AI)  
 **Year:** 2026  
@@ -32,6 +36,7 @@ Also the per-sequence Poisson depth sampling during training, which stochastical
 number of loop iterations per batch to further reduce loss spikes.
 
 ### Poisson Depth Sampling
+
 Documented within the Parcae paper (arXiv:2604.12946, §3.2). Parcae modifies training to sample
 loop depth from a Poisson distribution independently per sequence in a batch, making the model
 robust to variable iteration counts at inference. MORPH adopts this directly for the inner core
@@ -43,6 +48,7 @@ loop (T drawn from a Poisson at `mean_depth`, capped at `max_depth` — 6/8 in t
 ## 2. Attention
 
 ### CCA — Compressed Convolutional Attention
+
 **Title:** Compressed Convolutional Attention: Efficient Attention in a Compressed Latent Space  
 **Authors:** Tomas Figliolia, Nicholas Alonso, Rishi Iyer, Quentin Anthony, Beren Millidge (Zyphra)  
 **Year:** 2025  
@@ -54,6 +60,7 @@ compressed space — all operating before the attention softmax, simultaneously 
 FLOPs, and parameter count by the compression factor C.
 
 ### CSA / HCA — Compressed Sparse & Heavily Compressed Attention
+
 **Title:** DeepSeek-V4: Towards Highly Efficient Million-Token Context Intelligence  
 **Authors:** DeepSeek-AI  
 **Year:** 2026  
@@ -66,6 +73,7 @@ compressed stream for broad global context. MORPH alternates CSA/HCA by layer in
 the V4 interleaving pattern.
 
 ### XSA — Exclusive Self-Attention
+
 **Title:** Exclusive Self Attention  
 **Authors:** Shuangfei Zhai (Apple Machine Learning Research)  
 **Year:** 2026  
@@ -76,6 +84,7 @@ excessive weight to the self-token and wastes capacity on identity transformatio
 inside the local sliding-window branch of every attention layer.
 
 ### Residual Attention (AttnRes)
+
 **Title:** Attention Residuals (Technical Report)  
 **Authors:** Kimi Team (Moonshot AI)  
 **Year:** 2026  
@@ -85,6 +94,7 @@ attention output with a depth-weighted residual from earlier layer outputs, prov
 gradient flow and bounded hidden-state magnitude as depth scales.
 
 ### CoPE — Clipped RoPE
+
 **Title:** CoPE: Clipped RoPE as A Scalable Free Lunch for Long Context LLMs  
 **Authors:** Haoran Li, Sucheng Ren, Alan Yuille, Feng Wang  
 **Year:** 2026  
@@ -94,6 +104,7 @@ exceeds the training context length, eliminating out-of-distribution position ou
 enabling smooth extrapolation to contexts up to 256k tokens without fine-tuning.
 
 ### Attention Sinks — StreamingLLM
+
 **Title:** Efficient Streaming Language Models with Attention Sinks  
 **Authors:** Guangxuan Xiao, Yuandong Tian, Beidi Chen, Song Han, Mike Lewis (MIT + Meta)  
 **Year:** 2023 (ICLR 2024)  
@@ -103,6 +114,7 @@ that the attention mechanism has stable receptacles for concentrated softmax mas
 the instability that arises when initial-token KV entries are evicted from a sliding-window cache.
 
 ### Value Shift
+
 The v-shift (blending the current-step value projection with the previous-step value projection)
 is introduced and described in the CCA paper (Figliolia et al., arXiv:2510.04476) as part of the
 CCA mechanism. No independent prior paper. See the CCA entry above.
@@ -112,6 +124,7 @@ CCA mechanism. No independent prior paper. See the CCA entry above.
 ## 3. Memory
 
 ### Titans — Neural Memory (removed)
+
 **Title:** Titans: Learning to Memorize at Test Time  
 **Authors:** Ali Behrouz, Peilin Zhong, Vahab Mirrokni (Google Research)  
 **Year:** 2025  
@@ -122,11 +135,23 @@ associative-loss minimization (S_t = η_t·S_{t-1} − θ_t·∇‖M(k)−v‖²
 This module was **removed**; the current cross-iteration memory is the gated-linear-attention
 (GLA) retention branch (`morph/model/gla.py`), on by default (`retention: true` in `base.yaml`).
 
+### Nested Learning (removed)
+
+**Title:** Nested Learning: The Illusion of Deep Learning Architecture  
+**Authors:** Ali Behrouz, Meisam Razaviyayn, Peilin Zhong, Vahab Mirrokni  
+**Year:** 2025 (NeurIPS 2025)  
+**arXiv:** [2512.24695](https://arxiv.org/abs/2512.24695)  
+**MORPH history (removed):** Nested Learning frames optimizers and architectures as multi-level
+associative-memory processes (continuum memory systems, self-referential modules). It informed
+early MORPH thinking around multi-timescale memory and the Titans lineage, but no Nested Learning
+module ships in the current code. Kept as related work for the removed memory stack.
+
 ---
 
 ## 4. Residual Streams
 
 ### Multi-Rate Residual (MRR) — MORPH's approach (removed)
+
 An earlier MORPH version used a **Multi-Rate Residual (MRR)**: the d_model-dim hidden state split
 into 3 sub-channels (compute 3N, context 2N, memory N) with per-channel learned γ gains on the
 residual update — a simpler mechanism than HC/mHC, with no cross-stream mixing. It was **removed**
@@ -135,6 +160,7 @@ block attributes are still named `mrr_attn`/`mrr_mlp` — a retained legacy name
 compatibility — but they hold `HyperConnectionResidual` modules.)
 
 ### JPmHC — Jacobian-Preserving Manifold Hyper-Connections (Cayley)
+
 **Title:** JPmHC: Dynamical Isometry via Orthogonal Hyper-Connections  
 **Authors:** Biswa Sengupta, Jinhua Wang, Leo Brunswic (JP Morgan Chase LLM Suite Team)  
 **Year:** 2026  
@@ -150,6 +176,7 @@ implicit differentiation for the Cayley fixed-point projection. MORPH's `hyper_c
 and fused Triton kernel (`fused_hyper_connection.py`) implement this mechanism.
 
 ### mHC — Manifold-Constrained Hyper-Connections (related work)
+
 **Title:** mHC: Manifold-Constrained Hyper-Connections  
 **Authors:** Zhenda Xie, Yixuan Wei, Huanqi Cao, et al. (DeepSeek-AI)  
 **Year:** 2025  
@@ -160,6 +187,7 @@ mixing matrix (Sinkhorn-Knopp, Birkhoff polytope), plus aggregation (H^pre) and 
 HC arm but **removed** the Sinkhorn variant; the Cayley JPmHC variant is the only residual.
 
 ### Hyper-Connections (predecessor to mHC, related work)
+
 **Title:** Hyper-Connections  
 **Authors:** Defa Zhu et al. (ByteDance)  
 **Year:** 2024 (ICLR 2025)  
@@ -173,6 +201,7 @@ mixing matrices; MORPH's manifold-constrained JPmHC (Cayley) variant descends fr
 ## 5. Embeddings
 
 ### Lorentz / Hyperbolic Embeddings
+
 **Title:** Learning Continuous Hierarchies in the Lorentz Model of Hyperbolic Geometry  
 **Authors:** Maximilian Nickel, Douwe Kiela (Facebook AI Research)  
 **Year:** 2018 (ICML 2018, pp. 3776–3785)  
@@ -183,6 +212,7 @@ power-law / tree-structured semantic relationships that Euclidean embeddings req
 dimensions to approximate.
 
 ### Hybrid (Mixed-Curvature) Embeddings
+
 **Title:** Learning Mixed-Curvature Representations in Products of Model Spaces  
 **Authors:** Albert Gu, Frederic Sala, Beliz Gunel, Christopher Ré (Stanford)  
 **Year:** 2019 (ICLR 2019)  
@@ -198,6 +228,7 @@ MORPH's `embeddings.py` implements this as eucl ⊕ Lorentz with learned mixing 
 ## 6. Sparsity & Routing
 
 ### Lottery Ticket Hypothesis (LTH)
+
 **Title:** The Lottery Ticket Hypothesis: Finding Sparse, Trainable Neural Networks  
 **Authors:** Jonathan Frankle, Michael Carbin (MIT CSAIL)  
 **Year:** 2019 (ICLR 2019)  
@@ -211,6 +242,7 @@ motivates why aggressive block pruning can retain capability after the dense→p
 schedule.
 
 ### Block-ELL Sparse Format (superseded)
+
 **Source:** NVIDIA cuSPARSE Library + NVIDIA Technical Blog  
 **Reference:** "Accelerating Matrix Multiplication with Block Sparse Format and NVIDIA Tensor Cores" — NVIDIA Developer Blog (2023);  
 cuSPARSE [Blocked-ELL Storage Format Documentation](https://docs.nvidia.com/cuda/cusparse/storage-formats.html)  
@@ -219,6 +251,7 @@ column-index array. This backend was removed 2026-06-11 in favor of MORTAR BCSR 
 kernels (see MegaBlocks entry below).
 
 ### MegaBlocks — Block-Sparse GPU Kernels (STK)
+
 **Title:** MegaBlocks: Efficient Sparse Training with Mixture-of-Experts  
 **Authors:** Trevor Gale, Deepak Narayanan, Cliff Young, Matei Zaharia (Stanford, Microsoft Research, Google Research)  
 **Year:** 2022 (MLSys 2023)  
@@ -229,6 +262,7 @@ tricks. MORPH repurposes these kernels for MORTAR 128×128 BCSR sparse matmul af
 measured 3.09× faster than dense at 0.25 density, replacing the slower Block-ELL backend.
 
 ### ReMoE — Differentiable MoE Routing
+
 **Title:** ReMoE: Fully Differentiable Mixture-of-Experts with ReLU Routing  
 **Authors:** Ziteng Wang, Jun Zhu, Jianfei Chen (Tsinghua University)  
 **Year:** 2024 (ICLR 2025)  
@@ -239,6 +273,7 @@ differentiable ReLU gate that naturally produces sparse expert selection without
 discontinuity of standard MoE routing.
 
 ### PEER — Product Key Retrieval
+
 **Title:** Large Memory Layers with Product Keys  
 **Authors:** Guillaume Lample, Alexandre Sablayrolles, Marc'Aurelio Ranzato, Ludovic Denoyer,
 Hervé Jégou (Facebook AI Research)  
@@ -254,6 +289,7 @@ computation — clusters remain full-rank, not rank-k projections).
 ## 7. Regularization & Self-Supervised Objectives
 
 ### STP — Semantic Tube Prediction (Geodesic Regularizer) (removed)
+
 **Title:** Semantic Tube Prediction: Beating LLM Data Efficiency with JEPA  
 **Authors:** Hai Huang, Yann LeCun, Randall Balestriero (galilai-group / NYU)  
 **Year:** 2026  
@@ -264,6 +300,7 @@ with a multi-scale scheme (strides 1,2,4,…,τ=64). The regularizer was **remov
 `morph/model/prediction.py`; the current training loss is plain next-token cross-entropy.
 
 ### LeJEPA — Latent Prediction Without Collapse (removed)
+
 **Title:** LeJEPA: Provable and Scalable Self-Supervised Learning Without the Heuristics  
 **Authors:** Randall Balestriero, Yann LeCun (galilai-group / NYU)  
 **Year:** 2025  
@@ -274,6 +311,7 @@ state) with the SIGReg anti-collapse regularizer. The z-latent / JEPA objectives
 (`morph/model/prediction.py` no longer exists).
 
 ### SIGReg — Sketched Isotropic Gaussian Regularization (removed)
+
 Introduced in the LeJEPA paper (Balestriero & LeCun, arXiv:2511.08544). SIGReg uses randomized
 1D projections and characteristic-function matching to enforce that learned embeddings follow
 an isotropic Gaussian distribution, preventing representation collapse with linear time and
@@ -281,6 +319,7 @@ memory complexity. MORPH applied SIGReg to z-latent embeddings; **removed** toge
 LeJEPA objective above.
 
 ### LLM-JEPA (removed)
+
 **Title:** LLM-JEPA: Large Language Models Meet Joint Embedding Predictive Architectures  
 **Authors:** Hai Huang, Yann LeCun, Randall Balestriero (galilai-group)  
 **Year:** 2025  
@@ -290,11 +329,25 @@ next-token prediction with a JEPA embedding-space prediction loss over related t
 (e.g., code snippet ↔ docstring). **Removed** with the rest of the z-latent / JEPA stack
 (`morph/model/prediction.py` no longer exists).
 
+### Semantic Step Prediction (removed lineage)
+
+**Title:** Semantic Step Prediction: Multi-Step Latent Forecasting in LLM Reasoning Trajectories
+via Step Sampling  
+**Authors:** Yidi Yuan  
+**Year:** 2026  
+**arXiv:** [2604.18464](https://arxiv.org/abs/2604.18464)  
+**MORPH history (removed):** Step-boundary follow-up to STP (arXiv:2602.22617). Argues that
+sampling the STP geodesic loss at semantic reasoning-step boundaries (rather than random token
+positions) dominates the geometric outcome. MORPH never shipped this variant; it is archived as
+related work for the removed STP / latent-prediction stack (`morph/model/prediction.py` no longer
+exists). Local notes only (no PDF in the archive).
+
 ---
 
 ## 8. Feed-Forward Networks
 
 ### SwiGLU — Gated Feed-Forward Activation
+
 **Title:** GLU Variants Improve Transformer  
 **Authors:** Noam Shazeer (Google)  
 **Year:** 2020  
@@ -308,6 +361,7 @@ that consistently outperforms GELU/ReLU variants on perplexity at equal paramete
 ## 9. Training Objectives
 
 ### MTP — Multi-Token Prediction (removed)
+
 **Title:** Better & Faster Large Language Models via Multi-token Prediction  
 **Authors:** Fabian Gloeckle, Badr Youbi Idrissi, Baptiste Rozière, David Lopez-Paz,
 Gabriel Synnaeve (Meta FAIR)  
@@ -317,6 +371,7 @@ Gabriel Synnaeve (Meta FAIR)
 plain single-token next-token cross-entropy. Kept as a citation.
 
 ### STE Ternary — Straight-Through Estimator + BitNet b1.58
+
 **Title:** The Era of 1-bit LLMs: All Large Language Models are in 1.58 Bits  
 **Authors:** Shuming Ma, Hongyu Wang, Lingxiao Ma, Lei Wang, Wenhui Wang, Shaohan Huang,
 Li Dong, Ruiping Wang, Jilong Xue, Furu Wei (Microsoft Research)  
@@ -331,11 +386,27 @@ shadow weights. This is the only ternary training method validated to work relia
 The implementation covers the backbone scope (`ternary_scope: backbone` — MLP/mix/mhc
 projections); attention projections stay bf16.
 
+### Token Superposition Training (TST)
+
+**Title:** Efficient Pre-Training with Token Superposition  
+**Authors:** Bowen Peng, Théo Gigant, Jeffrey Quesnelle (Nous Research)  
+**Year:** 2026  
+**arXiv:** [2605.06546](https://arxiv.org/abs/2605.06546)  
+**MORPH uses:** Two-phase Token Superposition Training as a drop-in pretraining schedule with no
+architecture, tokenizer, or optimizer change. Phase 1 packs `tst_bag_size` contiguous tokens into
+one position and trains with multi-hot cross-entropy (MCE) through the existing fused-CE path;
+phase 2 recovers with standard next-token prediction (`bag_size=0`). Controlled by
+`training.tst_bag_size` and `training.tst_ratio` in `base.yaml` (default bag 6, ratio 0.3 →
+superposition for the first 30k of a 100k-step run). Eval and generation always use `bag_size=0`;
+`tst_bag_size=0` is bit-identical to the pre-TST baseline. Curriculum configs deliberately disable
+TST (`pretrain_curriculum.yaml`).
+
 ---
 
 ## 10. Optimizer
 
 ### AdEMAMix — Dual-EMA Adam Variant
+
 **Title:** The AdEMAMix Optimizer: Better, Faster, Older  
 **Authors:** Matteo Pagliardini, Pierre Ablin, David Grangier (EPFL, Apple)  
 **Year:** 2024 (ICLR 2025)  
@@ -354,6 +425,7 @@ Default deploy path remains AdamW8bit + STE ternary shadow weights.
 ## 11. Tokenization & Data
 
 ### StarCoder2 — Tokenizer
+
 **Title:** StarCoder 2 and The Stack v2: The Next Generation  
 **Authors:** Anton Lozhkov, Raymond Li, Loubna Ben Allal, et al. (BigCode / HuggingFace)  
 **Year:** 2024  
@@ -367,6 +439,7 @@ The 49k vocab cleanly stacks with a bigram hash-vocab prefix for rare byte patte
 ## 12. Inference Scaling
 
 ### Zyphra RSA — Markovian Recurrent Speculative Aggregation
+
 **Title:** ZAYA1-8B Technical Report  
 **Authors:** Robert Washbourne, Rishi Iyer, Tomas Figliolia, et al., Beren Millidge (Zyphra)  
 **Year:** 2026  
@@ -381,37 +454,42 @@ harness deployment after RL training, currently deferred.
 
 ## Quick Reference Table
 
-| # | Technique | Paper | arXiv |
-|---|-----------|-------|-------|
-| 1 | Parcae Loop | Prairie et al. (UCSD+Together, 2026) | [2604.12946](https://arxiv.org/abs/2604.12946) |
-| 2 | Block-ELL Format (superseded) | NVIDIA cuSPARSE (2021+) | [developer.nvidia.com](https://developer.nvidia.com/blog/accelerating-matrix-multiplication-with-block-sparse-format-and-nvidia-tensor-cores/) |
-| 2a | MegaBlocks / STK | Gale et al. (Stanford, 2022) | [2211.15841](https://arxiv.org/abs/2211.15841) |
-| 3 | CMS Topology | Original work — MORPH project | — |
-| 4 | Neural Memory (Titans) (removed) | Behrouz, Zhong, Mirrokni (Google, 2025) | [2501.00663](https://arxiv.org/abs/2501.00663) |
-| 5 | CCA | Figliolia et al. (Zyphra, 2025) | [2510.04476](https://arxiv.org/abs/2510.04476) |
-| 6 | CSA / HCA | DeepSeek-AI (2026) | [HF PDF](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf) |
-| 7 | STP (removed) | Huang, LeCun, Balestriero (2026) | [2602.22617](https://arxiv.org/abs/2602.22617) |
-| 8 | LeJEPA (removed) | Balestriero, LeCun (2025) | [2511.08544](https://arxiv.org/abs/2511.08544) |
-| 9 | SIGReg (removed) | Balestriero, LeCun (2025) | [2511.08544](https://arxiv.org/abs/2511.08544) |
-| 10 | Lorentz Embeddings | Nickel, Kiela (ICML 2018) | [1806.03417](https://arxiv.org/abs/1806.03417) |
-| 11 | Hybrid Embeddings | Gu, Sala, Gunel, Ré (ICLR 2019) | [OpenReview](https://openreview.net/forum?id=HJxeWnCcF7) |
-| 12 | CoPE (Clipped RoPE) | Li, Ren, Yuille, Wang (2026) | [2602.05258](https://arxiv.org/abs/2602.05258) |
-| 13 | XSA | Zhai (Apple, 2026) | [2603.09078](https://arxiv.org/abs/2603.09078) |
-| 14 | Residual Attention | Kimi Team (Moonshot AI, 2026) | [2603.15031](https://arxiv.org/abs/2603.15031) |
-| 15 | SwiGLU | Shazeer (Google, 2020) | [2002.05202](https://arxiv.org/abs/2002.05202) |
-| 16 | MTP (removed) | Gloeckle et al. (Meta, 2024) | [2404.19737](https://arxiv.org/abs/2404.19737) |
-| 17 | STE Ternary (BitNet b1.58) | Ma et al. (Microsoft, 2024) | [2402.17764](https://arxiv.org/abs/2402.17764) |
-| 18 | ReMoE | Wang, Zhu, Chen (Tsinghua, 2025) | [2412.14711](https://arxiv.org/abs/2412.14711) |
-| 19 | PEER | Lample et al. (FAIR, 2019) | [1907.05242](https://arxiv.org/abs/1907.05242) |
-| 20 | mHC | DeepSeek-AI (2025) | [2512.24880](https://arxiv.org/abs/2512.24880) |
-| 20a | JPmHC (Cayley HC) | Sengupta, Wang, Brunswic (JPMorgan, 2026) | [2602.18308](https://arxiv.org/abs/2602.18308) |
-| 20b | Hyper-Connections | Zhu et al. / ByteDance (2024) | [2409.19606](https://arxiv.org/abs/2409.19606) |
-| 21 | Zyphra RSA | Washbourne et al. (Zyphra, 2026) | [2605.05365](https://arxiv.org/abs/2605.05365) |
-| 22 | StarCoder2 Tokenizer | Lozhkov et al. (BigCode, 2024) | [2402.19173](https://arxiv.org/abs/2402.19173) |
-| 23 | Nested Learning | Behrouz et al. (NeurIPS 2025) | [2512.24695](https://arxiv.org/abs/2512.24695) |
-| 24 | Poisson Depth Sampling | Prairie et al. (Parcae, 2026) | [2604.12946](https://arxiv.org/abs/2604.12946) |
-| 25 | Attention Sinks | Xiao et al. (MIT/Meta, 2023) | [2309.17453](https://arxiv.org/abs/2309.17453) |
-| 26 | Value Shift | Figliolia et al. (Zyphra, 2025) | [2510.04476](https://arxiv.org/abs/2510.04476) |
-| 27 | LLM-JEPA (removed) | Huang, LeCun, Balestriero (2025) | [2509.14252](https://arxiv.org/abs/2509.14252) |
-| 28 | Lottery Ticket Hypothesis | Frankle, Carbin (MIT, 2019) | [1803.03635](https://arxiv.org/abs/1803.03635) |
-| 29 | AdEMAMix Optimizer | Pagliardini et al. (EPFL/Apple, 2024) | [2409.03137](https://arxiv.org/abs/2409.03137) |
+
+| #   | Technique                             | Paper                                     | arXiv                                                                                                                                          |
+| --- | ------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Parcae Loop                           | Prairie et al. (UCSD+Together, 2026)      | [2604.12946](https://arxiv.org/abs/2604.12946)                                                                                                 |
+| 2   | Block-ELL Format (superseded)         | NVIDIA cuSPARSE (2021+)                   | [developer.nvidia.com](https://developer.nvidia.com/blog/accelerating-matrix-multiplication-with-block-sparse-format-and-nvidia-tensor-cores/) |
+| 2a  | MegaBlocks / STK                      | Gale et al. (Stanford, 2022)              | [2211.15841](https://arxiv.org/abs/2211.15841)                                                                                                 |
+| 3   | CMS Topology                          | Original work — MORPH project             | —                                                                                                                                              |
+| 4   | Neural Memory (Titans) (removed)      | Behrouz, Zhong, Mirrokni (Google, 2025)   | [2501.00663](https://arxiv.org/abs/2501.00663)                                                                                                 |
+| 5   | CCA                                   | Figliolia et al. (Zyphra, 2025)           | [2510.04476](https://arxiv.org/abs/2510.04476)                                                                                                 |
+| 6   | CSA / HCA                             | DeepSeek-AI (2026)                        | [HF PDF](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf)                                                         |
+| 7   | STP (removed)                         | Huang, LeCun, Balestriero (2026)          | [2602.22617](https://arxiv.org/abs/2602.22617)                                                                                                 |
+| 8   | LeJEPA (removed)                      | Balestriero, LeCun (2025)                 | [2511.08544](https://arxiv.org/abs/2511.08544)                                                                                                 |
+| 9   | SIGReg (removed)                      | Balestriero, LeCun (2025)                 | [2511.08544](https://arxiv.org/abs/2511.08544)                                                                                                 |
+| 10  | Lorentz Embeddings                    | Nickel, Kiela (ICML 2018)                 | [1806.03417](https://arxiv.org/abs/1806.03417)                                                                                                 |
+| 11  | Hybrid Embeddings                     | Gu, Sala, Gunel, Ré (ICLR 2019)           | [OpenReview](https://openreview.net/forum?id=HJxeWnCcF7)                                                                                       |
+| 12  | CoPE (Clipped RoPE)                   | Li, Ren, Yuille, Wang (2026)              | [2602.05258](https://arxiv.org/abs/2602.05258)                                                                                                 |
+| 13  | XSA                                   | Zhai (Apple, 2026)                        | [2603.09078](https://arxiv.org/abs/2603.09078)                                                                                                 |
+| 14  | Residual Attention                    | Kimi Team (Moonshot AI, 2026)             | [2603.15031](https://arxiv.org/abs/2603.15031)                                                                                                 |
+| 15  | SwiGLU                                | Shazeer (Google, 2020)                    | [2002.05202](https://arxiv.org/abs/2002.05202)                                                                                                 |
+| 16  | MTP (removed, requires greater scale) | Gloeckle et al. (Meta, 2024)              | [2404.19737](https://arxiv.org/abs/2404.19737)                                                                                                 |
+| 17  | STE Ternary (BitNet b1.58)            | Ma et al. (Microsoft, 2024)               | [2402.17764](https://arxiv.org/abs/2402.17764)                                                                                                 |
+| 18  | ReMoE                                 | Wang, Zhu, Chen (Tsinghua, 2025)          | [2412.14711](https://arxiv.org/abs/2412.14711)                                                                                                 |
+| 19  | PEER                                  | Lample et al. (FAIR, 2019)                | [1907.05242](https://arxiv.org/abs/1907.05242)                                                                                                 |
+| 20  | mHC                                   | DeepSeek-AI (2025)                        | [2512.24880](https://arxiv.org/abs/2512.24880)                                                                                                 |
+| 20a | JPmHC (Cayley HC)                     | Sengupta, Wang, Brunswic (JPMorgan, 2026) | [2602.18308](https://arxiv.org/abs/2602.18308)                                                                                                 |
+| 20b | Hyper-Connections                     | Zhu et al. / ByteDance (2024)             | [2409.19606](https://arxiv.org/abs/2409.19606)                                                                                                 |
+| 21  | Zyphra RSA (planned)                  | Washbourne et al. (Zyphra, 2026)          | [2605.05365](https://arxiv.org/abs/2605.05365)                                                                                                 |
+| 22  | StarCoder2 Tokenizer                  | Lozhkov et al. (BigCode, 2024)            | [2402.19173](https://arxiv.org/abs/2402.19173)                                                                                                 |
+| 23  | Nested Learning (removed)             | Behrouz et al. (NeurIPS 2025)             | [2512.24695](https://arxiv.org/abs/2512.24695)                                                                                                 |
+| 24  | Poisson Depth Sampling                | Prairie et al. (Parcae, 2026)             | [2604.12946](https://arxiv.org/abs/2604.12946)                                                                                                 |
+| 25  | Attention Sinks (planned)             | Xiao et al. (MIT/Meta, 2023)              | [2309.17453](https://arxiv.org/abs/2309.17453)                                                                                                 |
+| 26  | Value Shift                           | Figliolia et al. (Zyphra, 2025)           | [2510.04476](https://arxiv.org/abs/2510.04476)                                                                                                 |
+| 27  | LLM-JEPA (removed)                    | Huang, LeCun, Balestriero (2025)          | [2509.14252](https://arxiv.org/abs/2509.14252)                                                                                                 |
+| 28  | Lottery Ticket Hypothesis             | Frankle, Carbin (MIT, 2019)               | [1803.03635](https://arxiv.org/abs/1803.03635)                                                                                                 |
+| 29  | AdEMAMix Optimizer                    | Pagliardini et al. (EPFL/Apple, 2024)     | [2409.03137](https://arxiv.org/abs/2409.03137)                                                                                                 |
+| 30  | Token Superposition Training (TST)    | Peng, Gigant, Quesnelle (Nous, 2026)      | [2605.06546](https://arxiv.org/abs/2605.06546)                                                                                                 |
+| 31  | Semantic Step Prediction (removed)    | Yuan (2026)                               | [2604.18464](https://arxiv.org/abs/2604.18464)                                                                                                 |
+
+

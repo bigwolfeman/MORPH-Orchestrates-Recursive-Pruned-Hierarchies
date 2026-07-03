@@ -99,15 +99,17 @@ morph/
   interop/                  # PyTorch/JAX checkpoint conversion
   configs/                  # Hydra configs
 docs/
-  figures/                  # TikZ source diagrams
+  MANIFEST.md               # top-level docs navigator
+  figures/                  # top-level PNG previews + topic-grouped TikZ/PDF sources
   references.md             # paper map and implementation notes
+  references/               # Topic-grouped local reference archive
 ```
 
 ## Figures And References
 
-Architecture diagrams are maintained as TikZ sources in `docs/figures/*.tex`. Regenerate them from `docs/figures/` with `pdflatex` when diagram content changes.
+Start with `docs/MANIFEST.md` for docs navigation. Architecture diagram PNG previews stay at the top of `docs/figures/`; TikZ sources, PDFs, and LaTeX sidecars are topic-grouped underneath. Regenerate a diagram by running `pdflatex` from the folder that contains its `.tex` source when diagram content changes.
 
-The paper map lives in `docs/references.md`, with local notes under `docs/references/`.
+The paper map lives in `docs/references.md`, with topic-grouped local notes indexed by `docs/references/MANIFEST.md`.
 
 ## Contributing
 
@@ -115,4 +117,6 @@ MORPH uses a stable snapshot plus research integration model. See `CONTRIBUTING.
 
 ## License
 
-Research code. See repository for terms.
+Apache License 2.0. See `LICENSE`.
+
+Vendored third-party components keep their own license notices, including `morph/sparse/stk/LICENSE`.
