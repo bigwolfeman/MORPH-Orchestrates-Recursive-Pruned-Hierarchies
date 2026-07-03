@@ -587,7 +587,7 @@ class MORPHTransformer(nn.Module):
             return h + term
 
     def _apply_core_step(self, h_in, e_in, ids, x0_terms, bg,
-                         ret_state=None, iter_idx=0):
+                         ret_state=None, iter_idx=0, inj_terms=None):
         """ONE core-loop step: SSM diagonal injection → the n_core shared blocks
         (each with per-layer x0/bigram injection + optional GLA retention carry).
         Returns ``(h, new_ret_state)`` (new_ret None unless a core layer carries retention).
@@ -597,6 +597,17 @@ class MORPHTransformer(nn.Module):
         contractivity diagnostics (the nested-dynamical-system inner map). The
         only former loop-local was ``np_`` (= n_prelude, a constant), recomputed here, so
         this is byte-identical to the in-loop closure (gated bit-exact).
+
+        ``inj_terms`` (perf, launch-count): the per-core-layer additive injection term
+        [n_core, n_active, S, C] is LOOP-INVARIANT (a function of x0/value-embed/bigram +
+        input_ids only — none iteration-dependent), so ``_forward_single`` precomputes it
+        ONCE and passes the active-set slice in. When provided we skip the per-layer
+        ``_build_injection_term`` rebuild (was ~6-8 cast/mul/cat kernels × n_core ×
+        total_iters redundant launches → n_core). BIT-IDENTICAL: the term equals the
+        old per-iteration rebuild (same inputs), and the shared term added into each
+        iteration's carrier accumulates the SAME sum-over-iterations gradient to
+        proj/bigram/value-embed as the per-iteration form (identical to the x0 hoist).
+        None → rebuild in-place (the σ_max probe / any caller without a precomputed stack).
         """
         np_ = self.cfg.n_prelude
         mlp_kw = {"iter_idx": iter_idx}
@@ -604,9 +615,12 @@ class MORPHTransformer(nn.Module):
         ret_cap = {} if self._core_has_retention else None
         for i, layer in enumerate(self.core):
             gi = np_ + i
-            term = self._build_injection_term(
-                gi, x0_terms[i], ids, bg, h_injected.dtype
-            )
+            if inj_terms is not None:
+                term = inj_terms[i]
+            else:
+                term = self._build_injection_term(
+                    gi, x0_terms[i], ids, bg, h_injected.dtype
+                )
             h_injected = self._apply_injection(h_injected, term)
             # Retention carry only for the designated core layer(s); others get None.
             is_ret = ret_cap is not None and (i in self._retention_layers)
@@ -709,13 +723,36 @@ class MORPHTransformer(nn.Module):
                 dim=0,
             )  # [n_core, B, S, ctx_width]
 
-            def _core_step(h_in, e_in, ids, x0_terms, bg, ret_state=None, iter_idx=0):
+            # ── Hoist the loop-invariant PER-CORE-LAYER injection term out of the loop ──
+            # `_build_injection_term(np_+i, x0_core_terms[i], input_ids, bigram_emb, dtype)`
+            # depends on nothing iteration-varying — it is the SAME additive [B,S,C] term for
+            # core layer i on every iteration. The old code rebuilt it inside `_apply_core_step`
+            # every iteration (n_core × total_iters rebuilds, each ~6-8 cast/mul/cat kernels →
+            # a big share of the launch-bound step's kernel soup; the `.to(dtype)` casts alone
+            # are ~5k/step in the routed trace). Precompute the n_core distinct terms ONCE.
+            # Bit-identical (same inputs ⇒ same value; the shared term added into each
+            # iteration's carrier accumulates the identical sum-over-iterations gradient to
+            # proj/value-embed/bigram-λ — exactly the validated x0-hoist argument). Built at the
+            # carrier dtype `h.dtype` (== the old `h_injected.dtype`, bf16). Stacked so the
+            # active-set slice is a cheap view and the checkpoint recompute reuses it (no rebuild
+            # in backward either — doubles the saving on the checkpointed grad-iters).
+            inj_core_terms = torch.stack(
+                [self._build_injection_term(np_ + i, x0_core_terms[i], input_ids,
+                                            bigram_emb, h.dtype)
+                 for i in range(n_core)],
+                dim=0,
+            )  # [n_core, B, S, C]
+
+            def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0):
                 # Thin closure → the bound `_apply_core_step` method (single source of truth so
                 # the σ_max probe / diagnostics exercise the EXACT training core map). Kept as a
                 # closure so `checkpoint(_core_step, ...)` and the eager/no_grad call sites below
                 # are unchanged; np_ (= cfg.n_prelude) is now recomputed inside the method.
-                return self._apply_core_step(h_in, e_in, ids, x0_terms, bg,
-                                             ret_state=ret_state, iter_idx=iter_idx)
+                # ids/x0_terms/bg are None here: the injection is precomputed (inj_terms) and
+                # threaded as a checkpoint input so the recompute reuses it.
+                return self._apply_core_step(h_in, e_in, None, None, None,
+                                             ret_state=ret_state, iter_idx=iter_idx,
+                                             inj_terms=inj_terms)
 
             # ── Active-set shrinking ────────────────────────────────────────────
             # A sample is updated only while iteration t < its Poisson depth, then
@@ -732,9 +769,10 @@ class MORPHTransformer(nn.Module):
             with _prof("carrier::perm_gather"):
                 h_s = h[perm]
                 e_s = e[perm]
-                ids_s = input_ids[perm]
-                bg_s = bigram_emb[perm] if bigram_emb is not None else None
-                x0_s = x0_core_terms[:, perm]            # [n_core, B, S, W]
+                # ids_s / bg_s / x0_s gathers are gone: the injection is precomputed
+                # (inj_core_terms) and only IT needs sorting into active-set order. This also
+                # drops 3 gather kernels/step (input_ids, bigram, x0-stack) from the hot loop.
+                inj_s = inj_core_terms[:, perm]          # [n_core, B, S, C], sorted order
 
             # Selective checkpointing: checkpoint the first `n_ckpt` grad-iterations, run the rest
             # (the last grad-iters) eager (activations retained → no backward recompute). -1 → all.
@@ -792,9 +830,10 @@ class MORPHTransformer(nn.Module):
                 if n_active == 0:
                     break
                 h_a = h_s[:n_active]
-                args = (h_a, e_s[:n_active], ids_s[:n_active],
-                        x0_s[:, :n_active],
-                        bg_s[:n_active] if bg_s is not None else None)
+                # inj_s[:, :n_active]: the precomputed injection sliced to the active prefix
+                # (per-sample terms, no cross-sample mixing → slicing is exact). Passed as a
+                # checkpoint input so backward recompute reuses it instead of rebuilding.
+                args = (h_a, e_s[:n_active], inj_s[:, :n_active])
                 rs_a = ret_state_s[:n_active] if track_ret else None
 
                 # Checkpoint this grad-iteration? Only in training, and only the first n_ckpt grad
