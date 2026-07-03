@@ -146,4 +146,10 @@ No fullgraph=True (the looped core uses gradient checkpointing, use_reentrant=Fa
 torch._functorch.config.donated_buffer = False (import the submodule explicitly first).
 
 ### Project Cleanliness
-Do not litter scripts around the directory. Keep a ignored/ folder for temporary scripts (keep it organized), this folder is set to gitignore.
+Do not litter scripts around the directory. Temporary scripts, agent notes, Hydra
+`outputs/`, and local `wandb/` live under `ignore/`, which is a **private** git repo
+(`morph-scratch`) and is gitignored by the public tree. Root paths `Ai-notes`,
+`ai-notes` (same target — agents forget the capital), `Incomplete`, `outputs`, and
+`wandb` are symlinks into `ignore/`. Write notes to either spelling; both resolve
+to `ignore/Ai-notes/`. Do not commit weights, `*.m2g`, `*.optlog`, or perf traces
+into the private repo either — see `ignore/.gitignore`.
