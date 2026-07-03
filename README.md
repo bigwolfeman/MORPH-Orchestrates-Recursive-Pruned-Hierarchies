@@ -4,23 +4,23 @@
 
 To further improve per bit intelligence and memory foot print for research, it utilizes extensive linear attention methods to enable a lower memory foot print at long contexts. Both GLA and Deepseek CSA/HCA are used.
 
-Extensive ablations have forced ever component to earn its keep with in the architecture. It is the goal of the MORPH project to provide a true open source architecture that stays at the bleeding edge of research.
+Extensive ablations have forced every component to earn its keep with in the architecture. It is the goal of the MORPH project to provide a true open source architecture that stays at the bleeding edge of research.
 
 The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/jax/` is maintained as a converter target and currently lags the PyTorch architecture.
 
 ## Current Architecture
 
-The default local model is defined in `morph/configs/base.yaml`: `3 + 6xT + 3` blocks, `d_model=768`, `d_ff=2048`, sequence length 4096, Poisson loop depth with mean 6 and max 8, and truncated BPTT over the last four core iterations. This is used for small scale testing and ablation.
+The default local model is defined in `morph/configs/base.yaml`: `3 + 6xT + 3` blocks, `d_model=768`, `d_ff=2048`, sequence length 4096, Poisson loop depth with mean 6 and max 8, and truncated BPTT over the last four core iterations. This is used for small scale testing and ablation. This fits comfortably on a 5090 at batch 4, and should fit on a 4090 if allocations do not fragment too much. Smaller sequence lengths can increase batch for these scales. 4k is selected to stress test during A/B ablation.
 
 The cloud target is `4 + 8xT + 4` at `d_model=2048`. Roughly 1B parameters.
 
 The active stack is:
 
-- **Looped transformer body:** prelude blocks, a shared core loop, and coda blocks.
+- **Looped transformer body:** prelude blocks, a shared core loop, and coda blocks. Parcae style.
 - **Cayley Hyper-Connections:** four residual carrier streams across the network, reduced before the output head.
 - **CCA + CSA/HCA attention:** channel-compressed attention with local window attention plus alternating sparse and dense compressed global context.
-- **GLA retention:** a gated branch beside attention on configured section-local layers, with optional carry across core-loop iterations.
-- **Hybrid embeddings:** Euclidean token embeddings, a Lorentz channel, and a learned hash-bigram signal injected through the body.
+- **GLA retention:** a gated branch beside attention on configured section-local layers, with optional carry across core-loop iterations. Chosen over interleaving full attention blocks.
+- **Hybrid embeddings:** Euclidean token embeddings, a hyperbolic Lorentz channel, and a learned hash-bigram signal injected through the body.
 - **MORTAR sparse MLP path:** MORTAR provides control over 16x16 groups of perceptrons to make tracking importance tractable as an EMA for pruning. It implements the MegaBlocks kernel to realize the performance benefits post carving.
 - **ReMoE routing:** whole-body hidden-neuron routing after carve. Enables per token routing selecting by 16x16 MORTAR tiles.
 - **Deploy QAT:** ternary backbone weights, int6 Euclidean/bigram embeddings, and 8-bit AdEMAMix optimizer state by default. Lorentz embeddings must stay in bf16.
@@ -45,7 +45,7 @@ Evaluation and generation use normal next-token prediction. TST is a training-on
 
 For dense curriculum work, use `pretrain_curriculum.yaml`. It deliberately disables sparse carve/routing, TST, ternary QAT, and int6 embedding QAT, so curriculum behavior can be isolated. To see if these optimizations are causing issues with an A/B.
 
-AdEMAMix was partially based on Bits and Bytes implementation. AdEMA can have its memory foot print dramatically reduced by keeping beta-1 to 0, and not holding it in a full tensor. BnB maintains it as a full tensor even at 0.
+AdEMAMix was partially based on Bits and Bytes implementation. AdEMA can have its memory foot print dramatically reduced by keeping beta-1 at 0, and not holding it in a full tensor. BnB maintains it as a full tensor even at 0.
 
 ## Quick Start
 
