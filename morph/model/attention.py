@@ -80,14 +80,12 @@ from morph.kernels.triton._eager_flag import force_eager
 # is preserved under channel concat: q = groups 0..H-1, k = groups H..H+Hkv-1).
 # Separate toggle so parity/bench can isolate the two mechanisms.
 _FUSED_ATTN_PROJ = os.environ.get("MORPH_FUSED_ATTN_PROJ", "1").lower() not in ("0", "false")
-# q‖k conv pairing is DEFAULT-OFF: the fused _cca_conv kernel path does not cast the
-# concatenated conv weight to the activation dtype, so under autocast (fp32 weight,
-# bf16 activation) tl.dot raises "Both operands must be same dtype" (verified on the
-# 5090 in-model). The per-conv path cast implicitly; the fused wrapper must add
-# `w_cat.to(x.dtype)` before the kernel (mirroring _fused_x_proj line ~107) to re-enable.
-# Until that lands, opt in explicitly with MORPH_FUSED_ATTN_QKCONV=1 (safe only for a
-# pure-dtype module, e.g. the parity probe). The proj superblock below is autocast-safe.
-_FUSED_ATTN_QKCONV = os.environ.get("MORPH_FUSED_ATTN_QKCONV", "0").lower() not in ("0", "false")
+# q‖k conv pairing: batches the two per-stream causal convs into one fused_cca_conv.
+# The concatenated conv weight is cast to the CONV INPUT dtype (qk_pair, bf16 under
+# autocast) at the call site, matching _causal_conv — an earlier version cast to
+# x.dtype (fp32 under autocast) and tripped the kernel's same-dtype tl.dot assert.
+# In-model loss-trace gate PASSED (routed, ≤ noise floor). Default ON.
+_FUSED_ATTN_QKCONV = os.environ.get("MORPH_FUSED_ATTN_QKCONV", "1").lower() not in ("0", "false")
 
 
 def set_fused_attn_proj(proj: bool | None = None, qkconv: bool | None = None):
@@ -475,8 +473,12 @@ class _CCABase(nn.Module):
             # H..H+Hkv-1) → identical per-output-element reductions.
             w_dw = torch.cat([self.conv_q_dw.weight, self.conv_k_dw.weight], dim=0)
             w_gp = torch.cat([self.conv_q_gp.weight, self.conv_k_gp.weight], dim=0)
+            # Cast weights to the CONV INPUT dtype (qk_pair), NOT x.dtype: under
+            # autocast x is fp32 but qk_pair is bf16 (from the autocast GEMM), and the
+            # fused_cca_conv Triton kernel's tl.dot requires both operands same dtype
+            # (matches _causal_conv which casts to x_t.dtype = the conv input).
             conv_pair = fused_cca_conv(
-                qk_pair.transpose(1, 2), w_dw.to(x.dtype), w_gp.to(x.dtype),
+                qk_pair.transpose(1, 2), w_dw.to(qk_pair.dtype), w_gp.to(qk_pair.dtype),
                 H + Hkv, self.conv_q_dw.kernel_size[0])
             q_conv = conv_pair[:, :self.latent_q_dim].transpose(1, 2)
             k_conv = conv_pair[:, self.latent_q_dim:].transpose(1, 2)
