@@ -385,17 +385,22 @@ def load_weights_only(path: str, model: nn.Module, device: torch.device) -> None
     """
     ckpt = torch.load(path, map_location=device, weights_only=False)
     raw = ckpt["model"]
-    # _orig_mod-robust key alignment. The seed may be saved from a torch.compile'd model
-    # (keys carry `mlp._orig_mod.…`) AND this model is compiled too (same prefix) — in
-    # which case the keys match NATIVELY and the usual `._orig_mod.` strip would BREAK the
-    # match, silently dropping every compiled-MLP weight to random init (this was the real
-    # cause of the mid-Phase-C resume ppl spike). So pick whichever key-form lands more
-    # tensors on the model, rather than always stripping.
+    # _orig_mod-robust key alignment, SYMMETRIC on both sides. torch.compile inserts
+    # `._orig_mod.` into wrapped-submodule keys; a checkpoint and this model may EACH carry it
+    # independently — compiled↔compiled (match natively), or an UNcompiled init_from seed loaded
+    # into a COMPILED model (the seed lacks `._orig_mod.` that the model's compiled MLP keys have).
+    # The old raw-vs-strip pick only stripped the checkpoint side, so the uncompiled-seed→compiled-
+    # model case silently dropped every compiled-submodule tensor to random init. Fix: canonicalize
+    # BOTH sides (strip `._orig_mod.`) and map each checkpoint tensor onto the model's ACTUAL key.
     model_keys = set(model.state_dict().keys())
-    stripped = {k.replace("._orig_mod.", "."): v for k, v in raw.items()}
+    def _canon(k):
+        return k.replace("._orig_mod.", ".")
+    canon_to_model = {_canon(k): k for k in model_keys}
+    state = {}
+    for k, v in raw.items():
+        state[canon_to_model.get(_canon(k), k)] = v   # onto the model's real key, else leave → unexpected
     n_raw = sum(1 for k in raw if k in model_keys)
-    n_strip = sum(1 for k in stripped if k in model_keys)
-    state = raw if n_raw >= n_strip else stripped
+    n_strip = sum(1 for k in raw if _canon(k) in canon_to_model)   # true canonical match count
     missing, unexpected = model.load_state_dict(state, strict=False)
     # Hard guard against a silent partial load: the MLP backbone (gate_up/down shadows)
     # MUST land. If almost nothing matched, the seed is incompatible — fail LOUD.
@@ -1499,7 +1504,15 @@ def main(cfg: DictConfig) -> None:
             print(f"[TST] phase switch @ step {step}: superposition (bag={cur_bag}) → "
                   f"recovery (bag=0). Switch ckpt: {sw_path}", flush=True)
             cur_bag = 0
-            train_loader = _make_train_loader(0)
+            # Rebuild the loader for the recovery phase. In curriculum mode we MUST re-create the
+            # multi-source curriculum loader (bag=0) — NOT _make_train_loader, which streams the
+            # single base `data.dataset` and would silently drop the curriculum blend (e.g. an
+            # olympiad-replay source) for the entire recovery phase. This is why the canonical
+            # pretrain_curriculum ships tst_bag_size=0; branching here lets TST + curriculum compose.
+            if curriculum_enabled:
+                train_loader = _curr_loader.batches(_microbatch[cur_stage], bag_size=0)
+            else:
+                train_loader = _make_train_loader(0)
 
         # ── Curriculum stage transition: checkpoint → RoPE re-anchor → loader.set_stage →
         #    micro-batch/grad-accum swap. Two independent risks at a step-up (activation OOM
@@ -1537,7 +1550,12 @@ def main(cfg: DictConfig) -> None:
             try:
                 x, y = next(train_loader)
             except StopIteration:
-                train_loader = _make_train_loader(cur_bag)
+                # Curriculum .batches() is infinite so this is a non-curriculum-only refill; still,
+                # branch defensively so a curriculum run can never silently fall back to the base OWT stream.
+                if curriculum_enabled:
+                    train_loader = _curr_loader.batches(_microbatch[cur_stage], bag_size=cur_bag)
+                else:
+                    train_loader = _make_train_loader(cur_bag)
                 x, y = next(train_loader)
             x, y = x.to(device), y.to(device)
 
@@ -1776,10 +1794,13 @@ def main(cfg: DictConfig) -> None:
             wandb.log(log, step=step)
 
             if step % 200 == 0:
+                # flush: with stdout redirected to a log file this line otherwise sits in
+                # the 8KB block buffer for MINUTES — a healthy run reads as hung/dead.
                 print(
                     f"[{step:7d}/{total_steps}] loss={loss.item():.4f}  "
                     f"ppl={math.exp(min(loss.item(), 20.0)):.1f}  "
-                    f"lr={lr:.2e}  sps={sps:.2f}"
+                    f"lr={lr:.2e}  sps={sps:.2f}",
+                    flush=True,
                 )
 
         # ── Validation (every eval_every steps) ──────────────────────────
@@ -1789,7 +1810,8 @@ def main(cfg: DictConfig) -> None:
 
             wandb.log(val_log, step=step)
             print(
-                f"  [VAL {step:7d}] loss={val_loss:.4f}  ppl={val_ppl:.2f}"
+                f"  [VAL {step:7d}] loss={val_loss:.4f}  ppl={val_ppl:.2f}",
+                flush=True,
             )
             model.train()
 

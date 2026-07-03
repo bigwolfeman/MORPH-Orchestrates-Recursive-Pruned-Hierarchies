@@ -1,0 +1,160 @@
+# MORPH ← Olympiad seed forgetting run (Phase: seed→pretraining transition probe).
+#
+# WHAT: continue-pretrain the graduated d768 prelude-only Olympiad-math seed on a
+# general-web blend (olympiad_math 20% replay + OWT 80%) using MORPH's REAL train.py
+# (TST superposition, GPU-saturating pretok dataloader) and measure how the stage-2
+# math skill decays. Olympiad math is a *curriculum data source* for MORPH pretraining:
+# it seeds the artifact AND stays in the blend as anti-forgetting replay.
+#
+# WHY this config and not grow_seed_nlp: the bespoke script had no TST, a GIL-bound
+# math generator that starved the GPU, and no MORPH pipeline. This runs the seed
+# through MORPH's actual pretraining path on PRE-TOKENIZED shards (no generator in the
+# hot loop → GPU stays fed).
+#
+# Run:
+#   cd <MORPH repo>
+#   PYTHONPATH=$PWD DISABLE_FUSED_KERNELS=1 python -m morph.training.train \
+#     --config-name forget_olympiad_seed768
+# Smoke (12 steps, no wandb):
+#   PYTHONPATH=$PWD WANDB_MODE=disabled DISABLE_FUSED_KERNELS=1 python -m morph.training.train \
+#     --config-name forget_olympiad_seed768 \
+#     training.compile=false curriculum.stages='[{seq_len:512,context_len:512,micro_batch:2,steps:12}]'
+#
+# Prereqs:
+#   - checkpoints/... init_from below exists (converted seed, native MORPH keys).
+#   - curriculum.pretok_dir has {olympiad_math, owt} pretok shards (symlink dir in the Olympiad repo).
+#   - Math-retention (gen_em) is NOT measured by MORPH (it evals NLP val ppl). Eval it OFFLINE on
+#     the saved checkpoints with scripts/eval_math_checkpoint.py against the olympiad holdout —
+#     that is what shows the forgetting curve. ckpt_every is set small so checkpoints land often.
+defaults:
+  - base
+  - _self_
+
+# ── Model = the graduated d768 prelude-only seed (EXACT dump of the built seed's MORPHConfig).
+# base.yaml is a DIFFERENT model (n_heads 12, 3:6:3 loop, vocab 49152); every field is overridden.
+model:
+  d_model: 768
+  n_heads: 6
+  n_kv_heads: 6
+  d_ff: 2048
+  vocab_size: 49169              # olympiad 17 special tokens ⊃ owt's 49152
+  n_prelude: 4
+  n_core: 0                      # prelude-only substrate (no looped core; growth/prune are OFF here)
+  n_coda: 0
+  mean_depth: 1
+  max_depth: 1
+  bptt_depth: 1
+  ckpt_grad_iters: -1
+  channel_dims: [384, 240, 144]
+  compression: 2
+  csa_compress_ratio: 8
+  hca_compress_ratio: 256
+  top_k: 256
+  window_size: 256
+  context_len: 512
+  max_seq_len: 512               # seed RoPE cache; training seq_len ≤ 512 (single short-ctx stage)
+  lorentz_fraction: 0.25
+  bigram_hash_vocab: 0           # seed had bigram OFF
+  ce_chunk_size: 8192            # fewer/larger CE chunks: cuts grad_w fp32 accumulate traffic
+                                 # + launch storm (59→51ms CE fwd+grads at 16k tokens, measured)
+  use_kernels: true              # fused Triton attn+CE+HC → GPU saturation. Loads clean (186/186;
+                                 # kernels are a compute-path switch, no key change). The GLA/retention
+                                 # kernel alone can't fit DH=128 (retention_heads=6) in the 5090's 101376 B
+                                 # smem — gla.py now auto-falls-back that ONE branch to the parity-identical
+                                 # eager _chunked path (7·DH²>optin guard); attn/CE/HC stay fused.
+  hc_streams: 4
+  hc_tau: 1.0
+  hc_cayley_iters: 3
+  hc_cayley_alpha: 0.1
+  hc_init_gain: 0.1
+  hc_use_kernel: true            # fused Cayley HC kernel (parity-verified 5e-7) — throughput, same result
+  retention: true
+  retention_layers: [1]
+  retention_heads: 6
+  retention_chunk: 128
+  retention_gate_init: -6.0
+  retention_carry: true
+  retention_gate_bias: 2.0
+  core_gain_clip: 0.0
+
+training:
+  # ── Seed the weights (fresh optimizer, step→0). Quant stack MUST match the seed so the
+  # ternary/int6 parametrization keys exist at load time → ~100% key match. ──
+  init_from: /mnt/sda1/Projects/00NN/Olympiad-AI/checkpoints/morph_seed_768_prelude/morph_initfrom_full.pt
+  ternary: true
+  ternary_scope: backbone
+  ternary_scale_group: tensor
+  embed_quant: "int6"
+  attn_proj_quant: "off"
+  adam8bit: false                # clean standard AdamW for a well-understood forgetting measurement
+  bf16: true
+  # compile OFF — MEASURED: use_kernels=true + compile=false → GPU 67% avg / 100% peak; adding
+  # compile=true drops it to ~7% (bursty). torch.compile's guard/recompile overhead on MORPH's
+  # custom-op-heavy graph is negligible at the normal seq=4096 (why the base script saturates with
+  # compile on) but DOMINATES at this seed's seq=512 (tiny per-step compute). The fused Triton
+  # kernels (use_kernels/hc_use_kernel) are what actually saturate here; compile is a net loss.
+  # (Standalone fwd+bwd of this exact model saturates at 100% — the model is not the bottleneck.)
+  compile: false
+  compile_mode: default
+  dropout: 0.0                   # seed was trained at dropout 0; keep it for continue-pretrain
+
+  # ── Sparse pipeline OFF (isolate forgetting; no prune/carve/route on the prelude-only seed) ──
+  prune_start: 999999999
+  compact_step: 999999999
+  cms_score_mode: grad
+
+  # ── TST ON (MORPH's real recipe — superposition [0,0.3·steps), recovery after) ──
+  # steps MUST equal the curriculum stage-sum below: tst_phase1_steps is computed from
+  # training.steps (train.py:974) BEFORE the curriculum overrides total_steps (train.py:1389).
+  # If left at base 100000, tst_phase1=30000 > run length → the whole run stays in superposition
+  # and never enters recovery. 10000 → superposition [0,3000), recovery [3000,10000). VERIFIED.
+  steps: 10000
+  tst_bag_size: 6
+  tst_ratio: 0.3
+
+  # ── Gentle continue-pretrain (NOT the 3e-4 cold start; that would hammer the seed) ──
+  optimizer: adamw
+  lr: 1.0e-4
+  lr_schedule: cosine
+  min_lr: 1.0e-5
+  warmup: 200
+  grad_clip: 1.0
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+
+  # ── Eval / checkpoint cadence ──
+  eval_every: 500                # NLP val ppl (owt). Math gen_em is measured OFFLINE on checkpoints.
+  n_eval_batches: 20
+  ckpt_every: 1000               # ~10 checkpoints over the run for the offline math-forgetting curve
+  gen_every: 0
+  seed: 0
+
+# Routing OFF (engages after carve; there is no carve here).
+routing:
+  route_start: 999999999
+
+# ── Curriculum: single short-context stage, olympiad-replay + OWT blend ──
+curriculum:
+  enabled: true
+  pretok_dir: /mnt/sda1/Projects/00NN/Olympiad-AI/data/morph_pretok_transition
+  allowed_source_roles: [pretrain_bulk, reasoning_midtrain]
+  eff_batch: 32                  # held via grad-accum (mb×ga)
+  blend:                         # token-proportioned weights; olympiad_math replay vs OWT bulk
+    olympiad_math: 0.2           # role=reasoning_midtrain — the math skill we protect + measure
+    owt: 0.8                     # role=pretrain_bulk — the forgetting pressure
+  stages:
+    # n_core=0 is compute-light → need a big micro_batch to feed the fused kernels and saturate.
+    # mb 32 @ seq512 (ga 1). Bump further if VRAM/UPS allow; drop if OOM.
+    - {seq_len: 512, context_len: 512, micro_batch: 32, steps: 10000}
+
+data:
+  # val_loader NLP ppl source (held-out OWT). Vocab 49152 ⊂ model 49169 → no remap.
+  dataset: /home/wolfe/.cache/huggingface/datasets/openwebtext/**/openwebtext-train-*.arrow
+  tokenizer: bigcode/starcoder2-7b
+  seq_len: 512
+
+wandb:
+  project: morph
+  entity: adew-me
+  name: forget-olympiad-seed768-d768

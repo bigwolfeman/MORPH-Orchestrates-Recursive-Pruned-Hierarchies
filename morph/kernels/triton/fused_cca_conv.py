@@ -142,17 +142,24 @@ if TRITON_AVAILABLE:
         t = t_tile * BLOCK_T + tl.arange(0, BLOCK_T)
         tmask = t < S
 
+        # TENSOR-CORE dot: keep Wj/Xj in their native element dtype (bf16 in training)
+        # and let tl.dot accumulate in fp32. Casting bf16 inputs to fp32 first adds NO
+        # information (bf16 ⊂ fp32) but forces allow_tf32=False fp32 FMA — a pure
+        # CUDA-core path. At CG=64/BLOCK_T=128 that also pinned a [64,128] fp32 acc
+        # plus fp32 Wj/Xj tiles in registers → spills. Measured 3.56 ms/call on a 5090
+        # at [32,384,512] CG=64; the bf16-dot form is the same math at GEMM reduction
+        # order (fp32 accumulate) and runs on tensor cores.
         acc = tl.zeros((CG, BLOCK_T), dtype=tl.float32)
         for j in tl.static_range(K):
             # weight tile Wj[co, ci] = w[(ch0+co)*Cg*K + ci*K + j]
             w_off = (ch0 + co)[:, None] * (CG * K) + ci[None, :] * K + j
-            Wj = tl.load(w_ptr + w_off).to(tl.float32)                 # [CG, CG]
+            Wj = tl.load(w_ptr + w_off)                                # [CG, CG] native dtype
             # input tile Xj[ci, t] = xin[ch0+ci, t-p+j]
             src = t - p + j
             xmask = (src >= 0) & (src < S) & tmask[None, :]
             x_off = (b * C + ch0 + ci)[:, None] * S + src[None, :]
-            Xj = tl.load(x_ptr + x_off, mask=xmask, other=0.0).to(tl.float32)  # [CG, BT]
-            acc += tl.dot(Wj, Xj, allow_tf32=False)
+            Xj = tl.load(x_ptr + x_off, mask=xmask, other=0.0)         # [CG, BT] native dtype
+            acc = tl.dot(Wj, Xj, acc)                                  # TC, fp32 accumulate
         # store [CG, BLOCK_T] block
         out_off = (b * C + ch0 + co)[:, None] * S + t[None, :]
         tl.store(y_ptr + out_off, acc.to(y_ptr.dtype.element_ty),
@@ -240,15 +247,16 @@ if TRITON_AVAILABLE:
         T = t_tile * BLOCK_T + tl.arange(0, BLOCK_T)
         tmask = T < S
 
+        # TC dot, fp32 accumulate (see _gp_fwd_kernel note — the fp32-FMA form spilled).
         acc = tl.zeros((CG, BLOCK_T), dtype=tl.float32)
         for j in tl.static_range(K):
             w_off = (ch0 + cl)[None, :] * (CG * K) + ci[:, None] * K + j
-            WjT = tl.load(w_ptr + w_off).to(tl.float32)                           # [CG,CG]
+            WjT = tl.load(w_ptr + w_off)                                          # [CG,CG]
             gsrc = T + p - j
             gmask = (gsrc >= 0) & (gsrc < S) & tmask[None, :]
             g_off = (b * C + ch0 + cl)[:, None] * S + gsrc[None, :]
-            Gj = tl.load(go_ptr + g_off, mask=gmask, other=0.0).to(tl.float32)    # [CG,BT]
-            acc += tl.dot(WjT, Gj, allow_tf32=False)
+            Gj = tl.load(go_ptr + g_off, mask=gmask, other=0.0)                   # [CG,BT]
+            acc = tl.dot(WjT, Gj, acc)
         dx_off = (b * C + ch0 + ci)[:, None] * S + T[None, :]
         tl.store(dx_ptr + dx_off, acc.to(dx_ptr.dtype.element_ty),
                  mask=tmask[None, :])
@@ -283,16 +291,18 @@ if TRITON_AVAILABLE:
         T = t_tile * BLOCK_T + tl.arange(0, BLOCK_T)
         tmask = T < S
 
+        # TC dot, fp32 out (see _gp_fwd_kernel note — the fp32-FMA form spilled).
         go_off = (b * C + ch0 + co)[:, None] * S + T[None, :]
-        Go = tl.load(go_ptr + go_off, mask=tmask[None, :], other=0.0).to(tl.float32)
+        Go = tl.load(go_ptr + go_off, mask=tmask[None, :], other=0.0)             # [CG,BT]
 
         slab_base = slab * (C * CG * K)
         for j in tl.static_range(K):
             src = T - p + j
             xmask = (src >= 0) & (src < S) & tmask[None, :]
             x_off = (b * C + ch0 + ci)[:, None] * S + src[None, :]
-            Xj = tl.load(x_ptr + x_off, mask=xmask, other=0.0).to(tl.float32)     # [CG,BT]
-            dWj = tl.dot(Go, tl.trans(Xj), allow_tf32=False)                      # [CG,CG]
+            Xj = tl.load(x_ptr + x_off, mask=xmask, other=0.0)                    # [CG,BT]
+            dWj = tl.dot(Go, tl.trans(Xj),
+                         tl.zeros((CG, CG), dtype=tl.float32))                    # [CG,CG] fp32
             w_off = slab_base + (ch0 + co)[:, None] * (CG * K) + ci[None, :] * K + j
             tl.store(dw_ptr + w_off, dWj)
 
