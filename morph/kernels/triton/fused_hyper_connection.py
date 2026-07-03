@@ -80,88 +80,192 @@ if TRITON_AVAILABLE:
         dot = g0 * p0 + g1 * p1 + g2 * p2 + g3 * p3
         return p0 * (g0 - dot), p1 * (g1 - dot), p2 * (g2 - dot), p3 * (g3 - dot)
 
+    # NOTE: the old inverse-free fixed-point Cayley iteration helpers
+    # (_cayley_fwd_step / _cayley_bwd_step) were REMOVED — they diverged for
+    # ‖A−Aᵀ‖ ≥ 2/α = 20 and amplified the carrier 10–3000×. Replaced by the exact
+    # closed-form Cayley + analytic VJP below (unconditionally orthogonal, VJP ‖·‖₂ ≤ 1).
+
+    # -----------------------------------------------------------------------
+    # EXACT closed-form Cayley for n=4 (replaces the divergent fixed-point iter).
+    #   B = ½α·(A − Aᵀ)  (skew);  p = ½‖B‖²_F ;  q = Pf(B)²
+    #   Y = (I + 2B + B²)·[(1+p)I + B²] / (1 + p + q)          (orthogonal, denom ≥ 1)
+    # VJP:  M = [(1+p)I + B²]·(I + B) / (1+p+q) = (I−B)⁻¹
+    #       gB = (I+Y)ᵀ·gY·Mᵀ ;  gW = ½α·gB ;  gA = gW − gWᵀ
+    # Mirrors morph/model/hyper_connections.cayley_orthogonal + cayley_vjp_ref.py exactly.
+    # -----------------------------------------------------------------------
     @triton.jit
-    def _cayley_fwd_step(
-        w00, w01, w02, w03, w10, w11, w12, w13,
-        w20, w21, w22, w23, w30, w31, w32, w33,
-        y00, y01, y02, y03, y10, y11, y12, y13,
-        y20, y21, y22, y23, y30, y31, y32, y33, half,
+    def _mm4(
+        a00, a01, a02, a03, a10, a11, a12, a13,
+        a20, a21, a22, a23, a30, a31, a32, a33,
+        b00, b01, b02, b03, b10, b11, b12, b13,
+        b20, b21, b22, b23, b30, b31, b32, b33,
     ):
-        """One Cayley fixed-point step: Y' = I + half*(W @ (I + Y)). Returns Y'."""
-        t00 = 1.0 + y00; t01 = y01;       t02 = y02;       t03 = y03
-        t10 = y10;       t11 = 1.0 + y11; t12 = y12;       t13 = y13
-        t20 = y20;       t21 = y21;       t22 = 1.0 + y22; t23 = y23
-        t30 = y30;       t31 = y31;       t32 = y32;       t33 = 1.0 + y33
-        p00 = w00*t00 + w01*t10 + w02*t20 + w03*t30
-        p01 = w00*t01 + w01*t11 + w02*t21 + w03*t31
-        p02 = w00*t02 + w01*t12 + w02*t22 + w03*t32
-        p03 = w00*t03 + w01*t13 + w02*t23 + w03*t33
-        p10 = w10*t00 + w11*t10 + w12*t20 + w13*t30
-        p11 = w10*t01 + w11*t11 + w12*t21 + w13*t31
-        p12 = w10*t02 + w11*t12 + w12*t22 + w13*t32
-        p13 = w10*t03 + w11*t13 + w12*t23 + w13*t33
-        p20 = w20*t00 + w21*t10 + w22*t20 + w23*t30
-        p21 = w20*t01 + w21*t11 + w22*t21 + w23*t31
-        p22 = w20*t02 + w21*t12 + w22*t22 + w23*t32
-        p23 = w20*t03 + w21*t13 + w22*t23 + w23*t33
-        p30 = w30*t00 + w31*t10 + w32*t20 + w33*t30
-        p31 = w30*t01 + w31*t11 + w32*t21 + w33*t31
-        p32 = w30*t02 + w31*t12 + w32*t22 + w33*t32
-        p33 = w30*t03 + w31*t13 + w32*t23 + w33*t33
-        return (1.0+half*p00, half*p01, half*p02, half*p03,
-                half*p10, 1.0+half*p11, half*p12, half*p13,
-                half*p20, half*p21, 1.0+half*p22, half*p23,
-                half*p30, half*p31, half*p32, 1.0+half*p33)
+        """4×4 · 4×4 matmul, 16 scalars in ×2 → 16 scalars out (row-major)."""
+        c00 = a00*b00 + a01*b10 + a02*b20 + a03*b30
+        c01 = a00*b01 + a01*b11 + a02*b21 + a03*b31
+        c02 = a00*b02 + a01*b12 + a02*b22 + a03*b32
+        c03 = a00*b03 + a01*b13 + a02*b23 + a03*b33
+        c10 = a10*b00 + a11*b10 + a12*b20 + a13*b30
+        c11 = a10*b01 + a11*b11 + a12*b21 + a13*b31
+        c12 = a10*b02 + a11*b12 + a12*b22 + a13*b32
+        c13 = a10*b03 + a11*b13 + a12*b23 + a13*b33
+        c20 = a20*b00 + a21*b10 + a22*b20 + a23*b30
+        c21 = a20*b01 + a21*b11 + a22*b21 + a23*b31
+        c22 = a20*b02 + a21*b12 + a22*b22 + a23*b32
+        c23 = a20*b03 + a21*b13 + a22*b23 + a23*b33
+        c30 = a30*b00 + a31*b10 + a32*b20 + a33*b30
+        c31 = a30*b01 + a31*b11 + a32*b21 + a33*b31
+        c32 = a30*b02 + a31*b12 + a32*b22 + a33*b32
+        c33 = a30*b03 + a31*b13 + a32*b23 + a33*b33
+        return (c00, c01, c02, c03, c10, c11, c12, c13,
+                c20, c21, c22, c23, c30, c31, c32, c33)
 
     @triton.jit
-    def _cayley_bwd_step(
-        gW00, gW01, gW02, gW03, gW10, gW11, gW12, gW13,
-        gW20, gW21, gW22, gW23, gW30, gW31, gW32, gW33,
-        gY00, gY01, gY02, gY03, gY10, gY11, gY12, gY13,
-        gY20, gY21, gY22, gY23, gY30, gY31, gY32, gY33,
-        w00, w01, w02, w03, w10, w11, w12, w13,
-        w20, w21, w22, w23, w30, w31, w32, w33,
-        t00, t01, t02, t03, t10, t11, t12, t13,
-        t20, t21, t22, t23, t30, t31, t32, t33, half,
+    def _skewB4(a00, a01, a02, a03, a10, a11, a12, a13,
+                a20, a21, a22, a23, a30, a31, a32, a33, half):
+        """B = half·(A − Aᵀ), the skew so(4) generator (diagonal = 0)."""
+        B01 = half*(a01 - a10); B02 = half*(a02 - a20); B03 = half*(a03 - a30)
+        B12 = half*(a12 - a21); B13 = half*(a13 - a31); B23 = half*(a23 - a32)
+        return (0.0,  B01,  B02,  B03,
+                -B01, 0.0,  B12,  B13,
+                -B02, -B12, 0.0,  B23,
+                -B03, -B13, -B23, 0.0)
+
+    @triton.jit
+    def _cayley4_pq(B00, B01, B02, B03, B10, B11, B12, B13,
+                    B20, B21, B22, B23, B30, B31, B32, B33):
+        """p = ½‖B‖²_F ; Pf = Pfaffian ; q = Pf². (B is 4×4 skew.)"""
+        p = B01*B01 + B02*B02 + B03*B03 + B12*B12 + B13*B13 + B23*B23
+        Pf = B01*B23 - B02*B13 + B03*B12
+        return p, Pf*Pf
+
+    @triton.jit
+    def _cayley4_fwd(
+        a00, a01, a02, a03, a10, a11, a12, a13,
+        a20, a21, a22, a23, a30, a31, a32, a33, ALPHA,
     ):
-        """Reverse of one Cayley step. Given gY (grad wrt Y_k) and the forward T_{k-1}=I+Y_{k-1},
-        accumulate gW += half*gY@T^T and return (gW_acc, gY_prev=half*W^T@gY)."""
-        gW00 += half*(gY00*t00 + gY01*t01 + gY02*t02 + gY03*t03)
-        gW01 += half*(gY00*t10 + gY01*t11 + gY02*t12 + gY03*t13)
-        gW02 += half*(gY00*t20 + gY01*t21 + gY02*t22 + gY03*t23)
-        gW03 += half*(gY00*t30 + gY01*t31 + gY02*t32 + gY03*t33)
-        gW10 += half*(gY10*t00 + gY11*t01 + gY12*t02 + gY13*t03)
-        gW11 += half*(gY10*t10 + gY11*t11 + gY12*t12 + gY13*t13)
-        gW12 += half*(gY10*t20 + gY11*t21 + gY12*t22 + gY13*t23)
-        gW13 += half*(gY10*t30 + gY11*t31 + gY12*t32 + gY13*t33)
-        gW20 += half*(gY20*t00 + gY21*t01 + gY22*t02 + gY23*t03)
-        gW21 += half*(gY20*t10 + gY21*t11 + gY22*t12 + gY23*t13)
-        gW22 += half*(gY20*t20 + gY21*t21 + gY22*t22 + gY23*t23)
-        gW23 += half*(gY20*t30 + gY21*t31 + gY22*t32 + gY23*t33)
-        gW30 += half*(gY30*t00 + gY31*t01 + gY32*t02 + gY33*t03)
-        gW31 += half*(gY30*t10 + gY31*t11 + gY32*t12 + gY33*t13)
-        gW32 += half*(gY30*t20 + gY31*t21 + gY32*t22 + gY33*t23)
-        gW33 += half*(gY30*t30 + gY31*t31 + gY32*t32 + gY33*t33)
-        ngY00 = half*(w00*gY00 + w10*gY10 + w20*gY20 + w30*gY30)
-        ngY01 = half*(w00*gY01 + w10*gY11 + w20*gY21 + w30*gY31)
-        ngY02 = half*(w00*gY02 + w10*gY12 + w20*gY22 + w30*gY32)
-        ngY03 = half*(w00*gY03 + w10*gY13 + w20*gY23 + w30*gY33)
-        ngY10 = half*(w01*gY00 + w11*gY10 + w21*gY20 + w31*gY30)
-        ngY11 = half*(w01*gY01 + w11*gY11 + w21*gY21 + w31*gY31)
-        ngY12 = half*(w01*gY02 + w11*gY12 + w21*gY22 + w31*gY32)
-        ngY13 = half*(w01*gY03 + w11*gY13 + w21*gY23 + w31*gY33)
-        ngY20 = half*(w02*gY00 + w12*gY10 + w22*gY20 + w32*gY30)
-        ngY21 = half*(w02*gY01 + w12*gY11 + w22*gY21 + w32*gY31)
-        ngY22 = half*(w02*gY02 + w12*gY12 + w22*gY22 + w32*gY32)
-        ngY23 = half*(w02*gY03 + w12*gY13 + w22*gY23 + w32*gY33)
-        ngY30 = half*(w03*gY00 + w13*gY10 + w23*gY20 + w33*gY30)
-        ngY31 = half*(w03*gY01 + w13*gY11 + w23*gY21 + w33*gY31)
-        ngY32 = half*(w03*gY02 + w13*gY12 + w23*gY22 + w33*gY32)
-        ngY33 = half*(w03*gY03 + w13*gY13 + w23*gY23 + w33*gY33)
-        return (gW00, gW01, gW02, gW03, gW10, gW11, gW12, gW13,
-                gW20, gW21, gW22, gW23, gW30, gW31, gW32, gW33,
-                ngY00, ngY01, ngY02, ngY03, ngY10, ngY11, ngY12, ngY13,
-                ngY20, ngY21, ngY22, ngY23, ngY30, ngY31, ngY32, ngY33)
+        """Exact closed-form orthogonal Cayley Y for n=4. Returns Y (16 scalars)."""
+        half = ALPHA * 0.5
+        (B00, B01, B02, B03, B10, B11, B12, B13,
+         B20, B21, B22, B23, B30, B31, B32, B33) = _skewB4(
+            a00, a01, a02, a03, a10, a11, a12, a13,
+            a20, a21, a22, a23, a30, a31, a32, a33, half)
+        (S00, S01, S02, S03, S10, S11, S12, S13,
+         S20, S21, S22, S23, S30, S31, S32, S33) = _mm4(
+            B00, B01, B02, B03, B10, B11, B12, B13,
+            B20, B21, B22, B23, B30, B31, B32, B33,
+            B00, B01, B02, B03, B10, B11, B12, B13,
+            B20, B21, B22, B23, B30, B31, B32, B33)      # B² = B@B
+        p, q = _cayley4_pq(B00, B01, B02, B03, B10, B11, B12, B13,
+                           B20, B21, B22, B23, B30, B31, B32, B33)
+        inv = 1.0 / (1.0 + p + q)
+        # L = I + 2B + B² ; R = (1+p)I + B²
+        L00 = 1.0 + S00;       L01 = 2.0*B01 + S01;   L02 = 2.0*B02 + S02;   L03 = 2.0*B03 + S03
+        L10 = 2.0*B10 + S10;   L11 = 1.0 + S11;       L12 = 2.0*B12 + S12;   L13 = 2.0*B13 + S13
+        L20 = 2.0*B20 + S20;   L21 = 2.0*B21 + S21;   L22 = 1.0 + S22;       L23 = 2.0*B23 + S23
+        L30 = 2.0*B30 + S30;   L31 = 2.0*B31 + S31;   L32 = 2.0*B32 + S32;   L33 = 1.0 + S33
+        pp = 1.0 + p
+        R00 = pp + S00; R01 = S01;      R02 = S02;      R03 = S03
+        R10 = S10;      R11 = pp + S11; R12 = S12;      R13 = S13
+        R20 = S20;      R21 = S21;      R22 = pp + S22; R23 = S23
+        R30 = S30;      R31 = S31;      R32 = S32;      R33 = pp + S33
+        (Y00, Y01, Y02, Y03, Y10, Y11, Y12, Y13,
+         Y20, Y21, Y22, Y23, Y30, Y31, Y32, Y33) = _mm4(
+            L00, L01, L02, L03, L10, L11, L12, L13,
+            L20, L21, L22, L23, L30, L31, L32, L33,
+            R00, R01, R02, R03, R10, R11, R12, R13,
+            R20, R21, R22, R23, R30, R31, R32, R33)
+        return (Y00*inv, Y01*inv, Y02*inv, Y03*inv, Y10*inv, Y11*inv, Y12*inv, Y13*inv,
+                Y20*inv, Y21*inv, Y22*inv, Y23*inv, Y30*inv, Y31*inv, Y32*inv, Y33*inv)
+
+    @triton.jit
+    def _cayley4_vjp(
+        a00, a01, a02, a03, a10, a11, a12, a13,
+        a20, a21, a22, a23, a30, a31, a32, a33,
+        gY00, gY01, gY02, gY03, gY10, gY11, gY12, gY13,
+        gY20, gY21, gY22, gY23, gY30, gY31, gY32, gY33, ALPHA,
+    ):
+        """Exact analytic VJP of the closed-form Cayley. Returns gA = grad wrt res_raw A."""
+        half = ALPHA * 0.5
+        (B00, B01, B02, B03, B10, B11, B12, B13,
+         B20, B21, B22, B23, B30, B31, B32, B33) = _skewB4(
+            a00, a01, a02, a03, a10, a11, a12, a13,
+            a20, a21, a22, a23, a30, a31, a32, a33, half)
+        (S00, S01, S02, S03, S10, S11, S12, S13,
+         S20, S21, S22, S23, S30, S31, S32, S33) = _mm4(
+            B00, B01, B02, B03, B10, B11, B12, B13,
+            B20, B21, B22, B23, B30, B31, B32, B33,
+            B00, B01, B02, B03, B10, B11, B12, B13,
+            B20, B21, B22, B23, B30, B31, B32, B33)      # B²
+        p, q = _cayley4_pq(B00, B01, B02, B03, B10, B11, B12, B13,
+                           B20, B21, B22, B23, B30, B31, B32, B33)
+        inv = 1.0 / (1.0 + p + q)
+        pp = 1.0 + p
+        # R = (1+p)I + B²
+        R00 = pp + S00; R01 = S01;      R02 = S02;      R03 = S03
+        R10 = S10;      R11 = pp + S11; R12 = S12;      R13 = S13
+        R20 = S20;      R21 = S21;      R22 = pp + S22; R23 = S23
+        R30 = S30;      R31 = S31;      R32 = S32;      R33 = pp + S33
+        # Y = (I + 2B + B²)·R·inv   →   need Y for (I+Y)ᵀ
+        L00 = 1.0 + S00;       L01 = 2.0*B01 + S01;   L02 = 2.0*B02 + S02;   L03 = 2.0*B03 + S03
+        L10 = 2.0*B10 + S10;   L11 = 1.0 + S11;       L12 = 2.0*B12 + S12;   L13 = 2.0*B13 + S13
+        L20 = 2.0*B20 + S20;   L21 = 2.0*B21 + S21;   L22 = 1.0 + S22;       L23 = 2.0*B23 + S23
+        L30 = 2.0*B30 + S30;   L31 = 2.0*B31 + S31;   L32 = 2.0*B32 + S32;   L33 = 1.0 + S33
+        (Y00, Y01, Y02, Y03, Y10, Y11, Y12, Y13,
+         Y20, Y21, Y22, Y23, Y30, Y31, Y32, Y33) = _mm4(
+            L00, L01, L02, L03, L10, L11, L12, L13,
+            L20, L21, L22, L23, L30, L31, L32, L33,
+            R00, R01, R02, R03, R10, R11, R12, R13,
+            R20, R21, R22, R23, R30, R31, R32, R33)
+        Y00 *= inv; Y01 *= inv; Y02 *= inv; Y03 *= inv
+        Y10 *= inv; Y11 *= inv; Y12 *= inv; Y13 *= inv
+        Y20 *= inv; Y21 *= inv; Y22 *= inv; Y23 *= inv
+        Y30 *= inv; Y31 *= inv; Y32 *= inv; Y33 *= inv
+        # M = R·(I+B)·inv = (I−B)⁻¹
+        IB00 = 1.0;  IB01 = B01;  IB02 = B02;  IB03 = B03
+        IB10 = B10;  IB11 = 1.0;  IB12 = B12;  IB13 = B13
+        IB20 = B20;  IB21 = B21;  IB22 = 1.0;  IB23 = B23
+        IB30 = B30;  IB31 = B31;  IB32 = B32;  IB33 = 1.0
+        (M00, M01, M02, M03, M10, M11, M12, M13,
+         M20, M21, M22, M23, M30, M31, M32, M33) = _mm4(
+            R00, R01, R02, R03, R10, R11, R12, R13,
+            R20, R21, R22, R23, R30, R31, R32, R33,
+            IB00, IB01, IB02, IB03, IB10, IB11, IB12, IB13,
+            IB20, IB21, IB22, IB23, IB30, IB31, IB32, IB33)
+        M00 *= inv; M01 *= inv; M02 *= inv; M03 *= inv
+        M10 *= inv; M11 *= inv; M12 *= inv; M13 *= inv
+        M20 *= inv; M21 *= inv; M22 *= inv; M23 *= inv
+        M30 *= inv; M31 *= inv; M32 *= inv; M33 *= inv
+        # U = gY · Mᵀ   (Mᵀ passed by transposing the arg block)
+        (U00, U01, U02, U03, U10, U11, U12, U13,
+         U20, U21, U22, U23, U30, U31, U32, U33) = _mm4(
+            gY00, gY01, gY02, gY03, gY10, gY11, gY12, gY13,
+            gY20, gY21, gY22, gY23, gY30, gY31, gY32, gY33,
+            M00, M10, M20, M30, M01, M11, M21, M31,
+            M02, M12, M22, M32, M03, M13, M23, M33)
+        # (I+Y)ᵀ : transpose of (I+Y)
+        T00 = 1.0 + Y00; T01 = Y01;       T02 = Y02;       T03 = Y03
+        T10 = Y10;       T11 = 1.0 + Y11; T12 = Y12;       T13 = Y13
+        T20 = Y20;       T21 = Y21;       T22 = 1.0 + Y22; T23 = Y23
+        T30 = Y30;       T31 = Y31;       T32 = Y32;       T33 = 1.0 + Y33
+        # gB = (I+Y)ᵀ · U   ((I+Y)ᵀ passed by transposing the arg block)
+        (gB00, gB01, gB02, gB03, gB10, gB11, gB12, gB13,
+         gB20, gB21, gB22, gB23, gB30, gB31, gB32, gB33) = _mm4(
+            T00, T10, T20, T30, T01, T11, T21, T31,
+            T02, T12, T22, T32, T03, T13, T23, T33,
+            U00, U01, U02, U03, U10, U11, U12, U13,
+            U20, U21, U22, U23, U30, U31, U32, U33)
+        # gW = half·gB ; gA = gW − gWᵀ  (diagonal cancels)
+        gA00 = 0.0
+        gA01 = half*(gB01 - gB10); gA02 = half*(gB02 - gB20); gA03 = half*(gB03 - gB30)
+        gA10 = half*(gB10 - gB01); gA11 = 0.0
+        gA12 = half*(gB12 - gB21); gA13 = half*(gB13 - gB31)
+        gA20 = half*(gB20 - gB02); gA21 = half*(gB21 - gB12); gA22 = 0.0
+        gA23 = half*(gB23 - gB32)
+        gA30 = half*(gB30 - gB03); gA31 = half*(gB31 - gB13); gA32 = half*(gB32 - gB23)
+        gA33 = 0.0
+        return (gA00, gA01, gA02, gA03, gA10, gA11, gA12, gA13,
+                gA20, gA21, gA22, gA23, gA30, gA31, gA32, gA33)
 
     # -----------------------------------------------------------------------
     # PRE forward: x_bar[b,s,c] = sum_j Hpre_cm[b,s,j] * h[b,s,j,c]
@@ -240,7 +344,8 @@ if TRITON_AVAILABLE:
     @triton.jit
     def _hc_premap_fwd_kernel(
         h_ptr,            # [B, S, n, C] bf16
-        raw_ptr,          # [B, S, 48]   fp32  (proj_w @ x_flat + proj_b, pre-rms)
+        raw_ptr,          # [B, S, 48]   fp32  (proj_w @ x_flat, bias-free, pre-rms)
+        pb_ptr,           # [48]         fp32  proj_b (added OUTSIDE the rms divide)
         xbar_ptr,         # [B, S, C]    bf16  out
         hres_ptr,         # [B, S, 4, 4] fp32  out
         hpostrow_ptr,     # [B, S, 4]    fp32  out
@@ -282,10 +387,11 @@ if TRITON_AVAILABLE:
         hprecm2 = tl.zeros((), dtype=tl.float32)
         hprecm3 = tl.zeros((), dtype=tl.float32)
         for i in tl.static_range(4):
-            p0 = tl.load(raw_ptr + rb + i * 4 + 0) * inv_rms * inv_tau
-            p1 = tl.load(raw_ptr + rb + i * 4 + 1) * inv_rms * inv_tau
-            p2 = tl.load(raw_ptr + rb + i * 4 + 2) * inv_rms * inv_tau
-            p3 = tl.load(raw_ptr + rb + i * 4 + 3) * inv_rms * inv_tau
+            # bias added OUTSIDE the rms divide: h_map = raw·inv_rms + b, then ·inv_tau.
+            p0 = (tl.load(raw_ptr + rb + i * 4 + 0) * inv_rms + tl.load(pb_ptr + i * 4 + 0)) * inv_tau
+            p1 = (tl.load(raw_ptr + rb + i * 4 + 1) * inv_rms + tl.load(pb_ptr + i * 4 + 1)) * inv_tau
+            p2 = (tl.load(raw_ptr + rb + i * 4 + 2) * inv_rms + tl.load(pb_ptr + i * 4 + 2)) * inv_tau
+            p3 = (tl.load(raw_ptr + rb + i * 4 + 3) * inv_rms + tl.load(pb_ptr + i * 4 + 3)) * inv_tau
             s0, s1, s2, s3 = _sm4(p0, p1, p2, p3)
             hprecm0 += s0
             hprecm1 += s1
@@ -304,10 +410,10 @@ if TRITON_AVAILABLE:
         hpr2 = tl.zeros((), dtype=tl.float32)
         hpr3 = tl.zeros((), dtype=tl.float32)
         for j in tl.static_range(4):
-            q0 = tl.load(raw_ptr + rb + 16 + 0 * 4 + j) * inv_rms * inv_tau
-            q1 = tl.load(raw_ptr + rb + 16 + 1 * 4 + j) * inv_rms * inv_tau
-            q2 = tl.load(raw_ptr + rb + 16 + 2 * 4 + j) * inv_rms * inv_tau
-            q3 = tl.load(raw_ptr + rb + 16 + 3 * 4 + j) * inv_rms * inv_tau
+            q0 = (tl.load(raw_ptr + rb + 16 + 0 * 4 + j) * inv_rms + tl.load(pb_ptr + 16 + 0 * 4 + j)) * inv_tau
+            q1 = (tl.load(raw_ptr + rb + 16 + 1 * 4 + j) * inv_rms + tl.load(pb_ptr + 16 + 1 * 4 + j)) * inv_tau
+            q2 = (tl.load(raw_ptr + rb + 16 + 2 * 4 + j) * inv_rms + tl.load(pb_ptr + 16 + 2 * 4 + j)) * inv_tau
+            q3 = (tl.load(raw_ptr + rb + 16 + 3 * 4 + j) * inv_rms + tl.load(pb_ptr + 16 + 3 * 4 + j)) * inv_tau
             s0, s1, s2, s3 = _sm4(q0, q1, q2, q3)
             hpr0 += s0
             hpr1 += s1
@@ -318,43 +424,28 @@ if TRITON_AVAILABLE:
         tl.store(hpostrow_ptr + tok * 4 + 2, hpr2)
         tl.store(hpostrow_ptr + tok * 4 + 3, hpr3)
 
-        # Hres = cayley(res): W = A - A^T (skew), Y0 = I + alpha*W,
-        #        Y_{k+1} = I + (alpha/2) * W @ (I + Y_k).  Unroll ITERS.
-        # res[i,j] = raw[32 + i*4+j]*inv_rms (NO tau on res).
-        a00 = tl.load(raw_ptr + rb + 32 + 0) * inv_rms
-        a01 = tl.load(raw_ptr + rb + 32 + 1) * inv_rms
-        a02 = tl.load(raw_ptr + rb + 32 + 2) * inv_rms
-        a03 = tl.load(raw_ptr + rb + 32 + 3) * inv_rms
-        a10 = tl.load(raw_ptr + rb + 32 + 4) * inv_rms
-        a11 = tl.load(raw_ptr + rb + 32 + 5) * inv_rms
-        a12 = tl.load(raw_ptr + rb + 32 + 6) * inv_rms
-        a13 = tl.load(raw_ptr + rb + 32 + 7) * inv_rms
-        a20 = tl.load(raw_ptr + rb + 32 + 8) * inv_rms
-        a21 = tl.load(raw_ptr + rb + 32 + 9) * inv_rms
-        a22 = tl.load(raw_ptr + rb + 32 + 10) * inv_rms
-        a23 = tl.load(raw_ptr + rb + 32 + 11) * inv_rms
-        a30 = tl.load(raw_ptr + rb + 32 + 12) * inv_rms
-        a31 = tl.load(raw_ptr + rb + 32 + 13) * inv_rms
-        a32 = tl.load(raw_ptr + rb + 32 + 14) * inv_rms
-        a33 = tl.load(raw_ptr + rb + 32 + 15) * inv_rms
-        # skew W = A - A^T  (diagonal = 0)
-        w00 = 0.0;            w01 = a01 - a10;     w02 = a02 - a20;     w03 = a03 - a30
-        w10 = a10 - a01;      w11 = 0.0;           w12 = a12 - a21;     w13 = a13 - a31
-        w20 = a20 - a02;      w21 = a21 - a12;     w22 = 0.0;           w23 = a23 - a32
-        w30 = a30 - a03;      w31 = a31 - a13;     w32 = a32 - a23;     w33 = 0.0
-        half = ALPHA * 0.5
-        # Y0 = I + alpha*W
-        y00 = 1.0 + ALPHA * w00; y01 = ALPHA * w01;       y02 = ALPHA * w02;       y03 = ALPHA * w03
-        y10 = ALPHA * w10;       y11 = 1.0 + ALPHA * w11; y12 = ALPHA * w12;       y13 = ALPHA * w13
-        y20 = ALPHA * w20;       y21 = ALPHA * w21;       y22 = 1.0 + ALPHA * w22; y23 = ALPHA * w23
-        y30 = ALPHA * w30;       y31 = ALPHA * w31;       y32 = ALPHA * w32;       y33 = 1.0 + ALPHA * w33
-        for _ in tl.static_range(ITERS):
-            (y00, y01, y02, y03, y10, y11, y12, y13,
-             y20, y21, y22, y23, y30, y31, y32, y33) = _cayley_fwd_step(
-                w00, w01, w02, w03, w10, w11, w12, w13,
-                w20, w21, w22, w23, w30, w31, w32, w33,
-                y00, y01, y02, y03, y10, y11, y12, y13,
-                y20, y21, y22, y23, y30, y31, y32, y33, half)
+        # Hres = cayley(res): EXACT closed form (unconditionally orthogonal). ITERS ignored.
+        # res A[i,j] = raw[32 + i*4+j]·inv_rms + b (bias OUTSIDE rms divide; NO tau on res).
+        a00 = tl.load(raw_ptr + rb + 32 + 0) * inv_rms + tl.load(pb_ptr + 32 + 0)
+        a01 = tl.load(raw_ptr + rb + 32 + 1) * inv_rms + tl.load(pb_ptr + 32 + 1)
+        a02 = tl.load(raw_ptr + rb + 32 + 2) * inv_rms + tl.load(pb_ptr + 32 + 2)
+        a03 = tl.load(raw_ptr + rb + 32 + 3) * inv_rms + tl.load(pb_ptr + 32 + 3)
+        a10 = tl.load(raw_ptr + rb + 32 + 4) * inv_rms + tl.load(pb_ptr + 32 + 4)
+        a11 = tl.load(raw_ptr + rb + 32 + 5) * inv_rms + tl.load(pb_ptr + 32 + 5)
+        a12 = tl.load(raw_ptr + rb + 32 + 6) * inv_rms + tl.load(pb_ptr + 32 + 6)
+        a13 = tl.load(raw_ptr + rb + 32 + 7) * inv_rms + tl.load(pb_ptr + 32 + 7)
+        a20 = tl.load(raw_ptr + rb + 32 + 8) * inv_rms + tl.load(pb_ptr + 32 + 8)
+        a21 = tl.load(raw_ptr + rb + 32 + 9) * inv_rms + tl.load(pb_ptr + 32 + 9)
+        a22 = tl.load(raw_ptr + rb + 32 + 10) * inv_rms + tl.load(pb_ptr + 32 + 10)
+        a23 = tl.load(raw_ptr + rb + 32 + 11) * inv_rms + tl.load(pb_ptr + 32 + 11)
+        a30 = tl.load(raw_ptr + rb + 32 + 12) * inv_rms + tl.load(pb_ptr + 32 + 12)
+        a31 = tl.load(raw_ptr + rb + 32 + 13) * inv_rms + tl.load(pb_ptr + 32 + 13)
+        a32 = tl.load(raw_ptr + rb + 32 + 14) * inv_rms + tl.load(pb_ptr + 32 + 14)
+        a33 = tl.load(raw_ptr + rb + 32 + 15) * inv_rms + tl.load(pb_ptr + 32 + 15)
+        (y00, y01, y02, y03, y10, y11, y12, y13,
+         y20, y21, y22, y23, y30, y31, y32, y33) = _cayley4_fwd(
+            a00, a01, a02, a03, a10, a11, a12, a13,
+            a20, a21, a22, a23, a30, a31, a32, a33, ALPHA)
         hb = tok * 16
         tl.store(hres_ptr + hb + 0, y00);  tl.store(hres_ptr + hb + 1, y01)
         tl.store(hres_ptr + hb + 2, y02);  tl.store(hres_ptr + hb + 3, y03)
@@ -402,7 +493,8 @@ if TRITON_AVAILABLE:
         ghres_ptr,        # [B,S,4,4]  upstream grad on Hres
         ghpostrow_ptr,    # [B,S,4]    upstream grad on Hpost_row
         h_ptr,            # [B,S,n,C]
-        raw_ptr,          # [B,S,48]   raw_full (pre-rms)
+        raw_ptr,          # [B,S,48]   raw_full (bias-free, pre-rms)
+        pb_ptr,           # [48]       proj_b
         rms_ptr,          # [B,S,1]
         graw_ptr,         # [B,S,48]   out: grad wrt raw_full (pre-rms)
         ghpart_ptr,       # [B,S,n,C]  out: grad on h (xbar-path + rms-path)
@@ -428,14 +520,15 @@ if TRITON_AVAILABLE:
         # row i values
         # We'll need Hpre[i,j]. Keep all 16.
         # load pre raw scaled (inv_rms*inv_tau already includes tau)
-        pre00 = tl.load(raw_ptr+rb+0)*inv_rms*inv_tau; pre01 = tl.load(raw_ptr+rb+1)*inv_rms*inv_tau
-        pre02 = tl.load(raw_ptr+rb+2)*inv_rms*inv_tau; pre03 = tl.load(raw_ptr+rb+3)*inv_rms*inv_tau
-        pre10 = tl.load(raw_ptr+rb+4)*inv_rms*inv_tau; pre11 = tl.load(raw_ptr+rb+5)*inv_rms*inv_tau
-        pre12 = tl.load(raw_ptr+rb+6)*inv_rms*inv_tau; pre13 = tl.load(raw_ptr+rb+7)*inv_rms*inv_tau
-        pre20 = tl.load(raw_ptr+rb+8)*inv_rms*inv_tau; pre21 = tl.load(raw_ptr+rb+9)*inv_rms*inv_tau
-        pre22 = tl.load(raw_ptr+rb+10)*inv_rms*inv_tau; pre23 = tl.load(raw_ptr+rb+11)*inv_rms*inv_tau
-        pre30 = tl.load(raw_ptr+rb+12)*inv_rms*inv_tau; pre31 = tl.load(raw_ptr+rb+13)*inv_rms*inv_tau
-        pre32 = tl.load(raw_ptr+rb+14)*inv_rms*inv_tau; pre33 = tl.load(raw_ptr+rb+15)*inv_rms*inv_tau
+        # h_map = raw·inv_rms + b, then softmax-arg ·inv_tau (bias OUTSIDE the rms divide).
+        pre00 = (tl.load(raw_ptr+rb+0)*inv_rms+tl.load(pb_ptr+0))*inv_tau;  pre01 = (tl.load(raw_ptr+rb+1)*inv_rms+tl.load(pb_ptr+1))*inv_tau
+        pre02 = (tl.load(raw_ptr+rb+2)*inv_rms+tl.load(pb_ptr+2))*inv_tau;  pre03 = (tl.load(raw_ptr+rb+3)*inv_rms+tl.load(pb_ptr+3))*inv_tau
+        pre10 = (tl.load(raw_ptr+rb+4)*inv_rms+tl.load(pb_ptr+4))*inv_tau;  pre11 = (tl.load(raw_ptr+rb+5)*inv_rms+tl.load(pb_ptr+5))*inv_tau
+        pre12 = (tl.load(raw_ptr+rb+6)*inv_rms+tl.load(pb_ptr+6))*inv_tau;  pre13 = (tl.load(raw_ptr+rb+7)*inv_rms+tl.load(pb_ptr+7))*inv_tau
+        pre20 = (tl.load(raw_ptr+rb+8)*inv_rms+tl.load(pb_ptr+8))*inv_tau;  pre21 = (tl.load(raw_ptr+rb+9)*inv_rms+tl.load(pb_ptr+9))*inv_tau
+        pre22 = (tl.load(raw_ptr+rb+10)*inv_rms+tl.load(pb_ptr+10))*inv_tau; pre23 = (tl.load(raw_ptr+rb+11)*inv_rms+tl.load(pb_ptr+11))*inv_tau
+        pre30 = (tl.load(raw_ptr+rb+12)*inv_rms+tl.load(pb_ptr+12))*inv_tau; pre31 = (tl.load(raw_ptr+rb+13)*inv_rms+tl.load(pb_ptr+13))*inv_tau
+        pre32 = (tl.load(raw_ptr+rb+14)*inv_rms+tl.load(pb_ptr+14))*inv_tau; pre33 = (tl.load(raw_ptr+rb+15)*inv_rms+tl.load(pb_ptr+15))*inv_tau
 
         P00, P01, P02, P03 = _sm4(pre00, pre01, pre02, pre03)
         P10, P11, P12, P13 = _sm4(pre10, pre11, pre12, pre13)
@@ -443,68 +536,38 @@ if TRITON_AVAILABLE:
         P30, P31, P32, P33 = _sm4(pre30, pre31, pre32, pre33)
 
         # ---- post (cols softmax, dim=-2): for col j softmax across rows i ----
-        po00 = tl.load(raw_ptr+rb+16+0)*inv_rms*inv_tau; po01 = tl.load(raw_ptr+rb+16+1)*inv_rms*inv_tau
-        po02 = tl.load(raw_ptr+rb+16+2)*inv_rms*inv_tau; po03 = tl.load(raw_ptr+rb+16+3)*inv_rms*inv_tau
-        po10 = tl.load(raw_ptr+rb+16+4)*inv_rms*inv_tau; po11 = tl.load(raw_ptr+rb+16+5)*inv_rms*inv_tau
-        po12 = tl.load(raw_ptr+rb+16+6)*inv_rms*inv_tau; po13 = tl.load(raw_ptr+rb+16+7)*inv_rms*inv_tau
-        po20 = tl.load(raw_ptr+rb+16+8)*inv_rms*inv_tau; po21 = tl.load(raw_ptr+rb+16+9)*inv_rms*inv_tau
-        po22 = tl.load(raw_ptr+rb+16+10)*inv_rms*inv_tau; po23 = tl.load(raw_ptr+rb+16+11)*inv_rms*inv_tau
-        po30 = tl.load(raw_ptr+rb+16+12)*inv_rms*inv_tau; po31 = tl.load(raw_ptr+rb+16+13)*inv_rms*inv_tau
-        po32 = tl.load(raw_ptr+rb+16+14)*inv_rms*inv_tau; po33 = tl.load(raw_ptr+rb+16+15)*inv_rms*inv_tau
+        po00 = (tl.load(raw_ptr+rb+16+0)*inv_rms+tl.load(pb_ptr+16+0))*inv_tau;  po01 = (tl.load(raw_ptr+rb+16+1)*inv_rms+tl.load(pb_ptr+16+1))*inv_tau
+        po02 = (tl.load(raw_ptr+rb+16+2)*inv_rms+tl.load(pb_ptr+16+2))*inv_tau;  po03 = (tl.load(raw_ptr+rb+16+3)*inv_rms+tl.load(pb_ptr+16+3))*inv_tau
+        po10 = (tl.load(raw_ptr+rb+16+4)*inv_rms+tl.load(pb_ptr+16+4))*inv_tau;  po11 = (tl.load(raw_ptr+rb+16+5)*inv_rms+tl.load(pb_ptr+16+5))*inv_tau
+        po12 = (tl.load(raw_ptr+rb+16+6)*inv_rms+tl.load(pb_ptr+16+6))*inv_tau;  po13 = (tl.load(raw_ptr+rb+16+7)*inv_rms+tl.load(pb_ptr+16+7))*inv_tau
+        po20 = (tl.load(raw_ptr+rb+16+8)*inv_rms+tl.load(pb_ptr+16+8))*inv_tau;  po21 = (tl.load(raw_ptr+rb+16+9)*inv_rms+tl.load(pb_ptr+16+9))*inv_tau
+        po22 = (tl.load(raw_ptr+rb+16+10)*inv_rms+tl.load(pb_ptr+16+10))*inv_tau; po23 = (tl.load(raw_ptr+rb+16+11)*inv_rms+tl.load(pb_ptr+16+11))*inv_tau
+        po30 = (tl.load(raw_ptr+rb+16+12)*inv_rms+tl.load(pb_ptr+16+12))*inv_tau; po31 = (tl.load(raw_ptr+rb+16+13)*inv_rms+tl.load(pb_ptr+16+13))*inv_tau
+        po32 = (tl.load(raw_ptr+rb+16+14)*inv_rms+tl.load(pb_ptr+16+14))*inv_tau; po33 = (tl.load(raw_ptr+rb+16+15)*inv_rms+tl.load(pb_ptr+16+15))*inv_tau
         # column j softmax across i: col0 = (po00,po10,po20,po30) etc.
         Q00, Q10, Q20, Q30 = _sm4(po00, po10, po20, po30)   # col 0 -> Hpost[i,0]
         Q01, Q11, Q21, Q31 = _sm4(po01, po11, po21, po31)   # col 1
         Q02, Q12, Q22, Q32 = _sm4(po02, po12, po22, po32)   # col 2
         Q03, Q13, Q23, Q33 = _sm4(po03, po13, po23, po33)   # col 3
 
-        # ---- cayley forward, save Y_k for each iter (need I+Y_{k-1} & W) ----
-        a00 = tl.load(raw_ptr+rb+32+0)*inv_rms;  a01 = tl.load(raw_ptr+rb+32+1)*inv_rms
-        a02 = tl.load(raw_ptr+rb+32+2)*inv_rms;  a03 = tl.load(raw_ptr+rb+32+3)*inv_rms
-        a10 = tl.load(raw_ptr+rb+32+4)*inv_rms;  a11 = tl.load(raw_ptr+rb+32+5)*inv_rms
-        a12 = tl.load(raw_ptr+rb+32+6)*inv_rms;  a13 = tl.load(raw_ptr+rb+32+7)*inv_rms
-        a20 = tl.load(raw_ptr+rb+32+8)*inv_rms;  a21 = tl.load(raw_ptr+rb+32+9)*inv_rms
-        a22 = tl.load(raw_ptr+rb+32+10)*inv_rms; a23 = tl.load(raw_ptr+rb+32+11)*inv_rms
-        a30 = tl.load(raw_ptr+rb+32+12)*inv_rms; a31 = tl.load(raw_ptr+rb+32+13)*inv_rms
-        a32 = tl.load(raw_ptr+rb+32+14)*inv_rms; a33 = tl.load(raw_ptr+rb+32+15)*inv_rms
-        w01 = a01 - a10; w02 = a02 - a20; w03 = a03 - a30
-        w12 = a12 - a21; w13 = a13 - a31; w23 = a23 - a32
-        w10 = -w01; w20 = -w02; w30 = -w03
-        w21 = -w12; w31 = -w13; w32 = -w23
-        w00 = 0.0; w11 = 0.0; w22 = 0.0; w33 = 0.0
-        half = ALPHA * 0.5
-
-        # forward, storing (I+Y_k) snapshots. We need T_k = I + Y_k as the right factor
-        # of step k+1, and W for the gradient. Save them into small arrays via static unroll.
-        # Y0:
-        y00 = 1.0+ALPHA*w00; y01 = ALPHA*w01; y02 = ALPHA*w02; y03 = ALPHA*w03
-        y10 = ALPHA*w10; y11 = 1.0+ALPHA*w11; y12 = ALPHA*w12; y13 = ALPHA*w13
-        y20 = ALPHA*w20; y21 = ALPHA*w21; y22 = 1.0+ALPHA*w22; y23 = ALPHA*w23
-        y30 = ALPHA*w30; y31 = ALPHA*w31; y32 = ALPHA*w32; y33 = 1.0+ALPHA*w33
-        # Forward replay storing T_k = I+Y_k (right factor of step k+1). ITERS is a constexpr
-        # fixed to 3 (HyperConnectionResidual default); fully unrolled to avoid Triton's lack
-        # of Python-list mutation inside @jit. The kernel asserts ITERS==3 at the autograd layer.
-        # T0 (right factor of step 1) = I + Y0
-        T0_00=1.0+y00; T0_01=y01; T0_02=y02; T0_03=y03
-        T0_10=y10; T0_11=1.0+y11; T0_12=y12; T0_13=y13
-        T0_20=y20; T0_21=y21; T0_22=1.0+y22; T0_23=y23
-        T0_30=y30; T0_31=y31; T0_32=y32; T0_33=1.0+y33
-        (y00,y01,y02,y03,y10,y11,y12,y13,y20,y21,y22,y23,y30,y31,y32,y33) = _cayley_fwd_step(
-            w00,w01,w02,w03,w10,w11,w12,w13,w20,w21,w22,w23,w30,w31,w32,w33,
-            y00,y01,y02,y03,y10,y11,y12,y13,y20,y21,y22,y23,y30,y31,y32,y33, half)
-        # T1 = I + Y1
-        T1_00=1.0+y00; T1_01=y01; T1_02=y02; T1_03=y03
-        T1_10=y10; T1_11=1.0+y11; T1_12=y12; T1_13=y13
-        T1_20=y20; T1_21=y21; T1_22=1.0+y22; T1_23=y23
-        T1_30=y30; T1_31=y31; T1_32=y32; T1_33=1.0+y33
-        (y00,y01,y02,y03,y10,y11,y12,y13,y20,y21,y22,y23,y30,y31,y32,y33) = _cayley_fwd_step(
-            w00,w01,w02,w03,w10,w11,w12,w13,w20,w21,w22,w23,w30,w31,w32,w33,
-            y00,y01,y02,y03,y10,y11,y12,y13,y20,y21,y22,y23,y30,y31,y32,y33, half)
-        # T2 = I + Y2
-        T2_00=1.0+y00; T2_01=y01; T2_02=y02; T2_03=y03
-        T2_10=y10; T2_11=1.0+y11; T2_12=y12; T2_13=y13
-        T2_20=y20; T2_21=y21; T2_22=1.0+y22; T2_23=y23
-        T2_30=y30; T2_31=y31; T2_32=y32; T2_33=1.0+y33
-        # (Y3 = final Hres, not needed in bwd — gY comes from upstream.)
+        # ---- cayley res A[i,j] = raw·inv_rms + b (bias OUTSIDE rms; NO tau). Keep the
+        #      bias-free wxs = raw·inv_rms separately for the shared /rms grms accumulation. ----
+        aw00 = tl.load(raw_ptr+rb+32+0)*inv_rms;  aw01 = tl.load(raw_ptr+rb+32+1)*inv_rms
+        aw02 = tl.load(raw_ptr+rb+32+2)*inv_rms;  aw03 = tl.load(raw_ptr+rb+32+3)*inv_rms
+        aw10 = tl.load(raw_ptr+rb+32+4)*inv_rms;  aw11 = tl.load(raw_ptr+rb+32+5)*inv_rms
+        aw12 = tl.load(raw_ptr+rb+32+6)*inv_rms;  aw13 = tl.load(raw_ptr+rb+32+7)*inv_rms
+        aw20 = tl.load(raw_ptr+rb+32+8)*inv_rms;  aw21 = tl.load(raw_ptr+rb+32+9)*inv_rms
+        aw22 = tl.load(raw_ptr+rb+32+10)*inv_rms; aw23 = tl.load(raw_ptr+rb+32+11)*inv_rms
+        aw30 = tl.load(raw_ptr+rb+32+12)*inv_rms; aw31 = tl.load(raw_ptr+rb+32+13)*inv_rms
+        aw32 = tl.load(raw_ptr+rb+32+14)*inv_rms; aw33 = tl.load(raw_ptr+rb+32+15)*inv_rms
+        a00 = aw00 + tl.load(pb_ptr+32+0);  a01 = aw01 + tl.load(pb_ptr+32+1)
+        a02 = aw02 + tl.load(pb_ptr+32+2);  a03 = aw03 + tl.load(pb_ptr+32+3)
+        a10 = aw10 + tl.load(pb_ptr+32+4);  a11 = aw11 + tl.load(pb_ptr+32+5)
+        a12 = aw12 + tl.load(pb_ptr+32+6);  a13 = aw13 + tl.load(pb_ptr+32+7)
+        a20 = aw20 + tl.load(pb_ptr+32+8);  a21 = aw21 + tl.load(pb_ptr+32+9)
+        a22 = aw22 + tl.load(pb_ptr+32+10); a23 = aw23 + tl.load(pb_ptr+32+11)
+        a30 = aw30 + tl.load(pb_ptr+32+12); a31 = aw31 + tl.load(pb_ptr+32+13)
+        a32 = aw32 + tl.load(pb_ptr+32+14); a33 = aw33 + tl.load(pb_ptr+32+15)
 
         # ============ BACKWARD ============
         # ---- x_bar = Σ_j Hpre_cm[j] h[j,c] : g_Hpre_cm[j] = Σ_c gxbar[c]*h[j,c];
@@ -557,7 +620,7 @@ if TRITON_AVAILABLE:
         gpo20*=inv_tau; gpo21*=inv_tau; gpo22*=inv_tau; gpo23*=inv_tau
         gpo30*=inv_tau; gpo31*=inv_tau; gpo32*=inv_tau; gpo33*=inv_tau
 
-        # ---- Hres = cayley: backprop gY through ITERS steps ----
+        # ---- Hres = cayley: EXACT analytic VJP (closed form). gres = gA (grad wrt res A). ----
         gY00 = tl.load(ghres_ptr+hb+0); gY01 = tl.load(ghres_ptr+hb+1)
         gY02 = tl.load(ghres_ptr+hb+2); gY03 = tl.load(ghres_ptr+hb+3)
         gY10 = tl.load(ghres_ptr+hb+4); gY11 = tl.load(ghres_ptr+hb+5)
@@ -566,39 +629,10 @@ if TRITON_AVAILABLE:
         gY22 = tl.load(ghres_ptr+hb+10); gY23 = tl.load(ghres_ptr+hb+11)
         gY30 = tl.load(ghres_ptr+hb+12); gY31 = tl.load(ghres_ptr+hb+13)
         gY32 = tl.load(ghres_ptr+hb+14); gY33 = tl.load(ghres_ptr+hb+15)
-        gW00 = 0.0; gW01 = 0.0; gW02 = 0.0; gW03 = 0.0
-        gW10 = 0.0; gW11 = 0.0; gW12 = 0.0; gW13 = 0.0
-        gW20 = 0.0; gW21 = 0.0; gW22 = 0.0; gW23 = 0.0
-        gW30 = 0.0; gW31 = 0.0; gW32 = 0.0; gW33 = 0.0
-        # reverse (3 steps, last-to-first): step3 used T2, step2 used T1, step1 used T0.
-        (gW00,gW01,gW02,gW03,gW10,gW11,gW12,gW13,gW20,gW21,gW22,gW23,gW30,gW31,gW32,gW33,
-         gY00,gY01,gY02,gY03,gY10,gY11,gY12,gY13,gY20,gY21,gY22,gY23,gY30,gY31,gY32,gY33) = _cayley_bwd_step(
-            gW00,gW01,gW02,gW03,gW10,gW11,gW12,gW13,gW20,gW21,gW22,gW23,gW30,gW31,gW32,gW33,
-            gY00,gY01,gY02,gY03,gY10,gY11,gY12,gY13,gY20,gY21,gY22,gY23,gY30,gY31,gY32,gY33,
-            w00,w01,w02,w03,w10,w11,w12,w13,w20,w21,w22,w23,w30,w31,w32,w33,
-            T2_00,T2_01,T2_02,T2_03,T2_10,T2_11,T2_12,T2_13,T2_20,T2_21,T2_22,T2_23,T2_30,T2_31,T2_32,T2_33, half)
-        (gW00,gW01,gW02,gW03,gW10,gW11,gW12,gW13,gW20,gW21,gW22,gW23,gW30,gW31,gW32,gW33,
-         gY00,gY01,gY02,gY03,gY10,gY11,gY12,gY13,gY20,gY21,gY22,gY23,gY30,gY31,gY32,gY33) = _cayley_bwd_step(
-            gW00,gW01,gW02,gW03,gW10,gW11,gW12,gW13,gW20,gW21,gW22,gW23,gW30,gW31,gW32,gW33,
-            gY00,gY01,gY02,gY03,gY10,gY11,gY12,gY13,gY20,gY21,gY22,gY23,gY30,gY31,gY32,gY33,
-            w00,w01,w02,w03,w10,w11,w12,w13,w20,w21,w22,w23,w30,w31,w32,w33,
-            T1_00,T1_01,T1_02,T1_03,T1_10,T1_11,T1_12,T1_13,T1_20,T1_21,T1_22,T1_23,T1_30,T1_31,T1_32,T1_33, half)
-        (gW00,gW01,gW02,gW03,gW10,gW11,gW12,gW13,gW20,gW21,gW22,gW23,gW30,gW31,gW32,gW33,
-         gY00,gY01,gY02,gY03,gY10,gY11,gY12,gY13,gY20,gY21,gY22,gY23,gY30,gY31,gY32,gY33) = _cayley_bwd_step(
-            gW00,gW01,gW02,gW03,gW10,gW11,gW12,gW13,gW20,gW21,gW22,gW23,gW30,gW31,gW32,gW33,
-            gY00,gY01,gY02,gY03,gY10,gY11,gY12,gY13,gY20,gY21,gY22,gY23,gY30,gY31,gY32,gY33,
-            w00,w01,w02,w03,w10,w11,w12,w13,w20,w21,w22,w23,w30,w31,w32,w33,
-            T0_00,T0_01,T0_02,T0_03,T0_10,T0_11,T0_12,T0_13,T0_20,T0_21,T0_22,T0_23,T0_30,T0_31,T0_32,T0_33, half)
-        # Y0 = I + alpha*W : gW += alpha * gY
-        gW00 += ALPHA*gY00; gW01 += ALPHA*gY01; gW02 += ALPHA*gY02; gW03 += ALPHA*gY03
-        gW10 += ALPHA*gY10; gW11 += ALPHA*gY11; gW12 += ALPHA*gY12; gW13 += ALPHA*gY13
-        gW20 += ALPHA*gY20; gW21 += ALPHA*gY21; gW22 += ALPHA*gY22; gW23 += ALPHA*gY23
-        gW30 += ALPHA*gY30; gW31 += ALPHA*gY31; gW32 += ALPHA*gY32; gW33 += ALPHA*gY33
-        # W = A - A^T : g_res[i,j] = gW[i,j] - gW[j,i]  (diagonal -> 0)
-        gres00 = 0.0;           gres01 = gW01 - gW10; gres02 = gW02 - gW20; gres03 = gW03 - gW30
-        gres10 = gW10 - gW01;   gres11 = 0.0;         gres12 = gW12 - gW21; gres13 = gW13 - gW31
-        gres20 = gW20 - gW02;   gres21 = gW21 - gW12; gres22 = 0.0;         gres23 = gW23 - gW32
-        gres30 = gW30 - gW03;   gres31 = gW31 - gW13; gres32 = gW32 - gW23; gres33 = 0.0
+        (gres00,gres01,gres02,gres03,gres10,gres11,gres12,gres13,
+         gres20,gres21,gres22,gres23,gres30,gres31,gres32,gres33) = _cayley4_vjp(
+            a00,a01,a02,a03,a10,a11,a12,a13,a20,a21,a22,a23,a30,a31,a32,a33,
+            gY00,gY01,gY02,gY03,gY10,gY11,gY12,gY13,gY20,gY21,gY22,gY23,gY30,gY31,gY32,gY33, ALPHA)
 
         # ---- stack [pre|post|res] grads (these are grads wrt raw_scaled = raw_full/rms) ----
         # grad wrt raw_full[k] = grad_raw_scaled[k] / rms ; also accumulate g_rms.
@@ -621,19 +655,21 @@ if TRITON_AVAILABLE:
         # raw_scaled_pre = raw_full*inv_rms = pre00*tau. So contribution to g_rms uses raw_scaled.
         # g_rms = -(1/rms) * Σ g_scaled * raw_scaled.
         # For pre: g_scaled = gpre (d/d raw_scaled), raw_scaled = pre*TAU.
+        # pre/post grms terms need bias-free wxs = raw·inv_rms = pre·TAU − b_pre.
         grms = 0.0
-        grms += gpre00*(pre00*TAU)+gpre01*(pre01*TAU)+gpre02*(pre02*TAU)+gpre03*(pre03*TAU)
-        grms += gpre10*(pre10*TAU)+gpre11*(pre11*TAU)+gpre12*(pre12*TAU)+gpre13*(pre13*TAU)
-        grms += gpre20*(pre20*TAU)+gpre21*(pre21*TAU)+gpre22*(pre22*TAU)+gpre23*(pre23*TAU)
-        grms += gpre30*(pre30*TAU)+gpre31*(pre31*TAU)+gpre32*(pre32*TAU)+gpre33*(pre33*TAU)
-        grms += gpo00*(po00*TAU)+gpo01*(po01*TAU)+gpo02*(po02*TAU)+gpo03*(po03*TAU)
-        grms += gpo10*(po10*TAU)+gpo11*(po11*TAU)+gpo12*(po12*TAU)+gpo13*(po13*TAU)
-        grms += gpo20*(po20*TAU)+gpo21*(po21*TAU)+gpo22*(po22*TAU)+gpo23*(po23*TAU)
-        grms += gpo30*(po30*TAU)+gpo31*(po31*TAU)+gpo32*(po32*TAU)+gpo33*(po33*TAU)
-        grms += gres00*a00+gres01*a01+gres02*a02+gres03*a03
-        grms += gres10*a10+gres11*a11+gres12*a12+gres13*a13
-        grms += gres20*a20+gres21*a21+gres22*a22+gres23*a23
-        grms += gres30*a30+gres31*a31+gres32*a32+gres33*a33
+        grms += gpre00*(pre00*TAU-tl.load(pb_ptr+0))+gpre01*(pre01*TAU-tl.load(pb_ptr+1))+gpre02*(pre02*TAU-tl.load(pb_ptr+2))+gpre03*(pre03*TAU-tl.load(pb_ptr+3))
+        grms += gpre10*(pre10*TAU-tl.load(pb_ptr+4))+gpre11*(pre11*TAU-tl.load(pb_ptr+5))+gpre12*(pre12*TAU-tl.load(pb_ptr+6))+gpre13*(pre13*TAU-tl.load(pb_ptr+7))
+        grms += gpre20*(pre20*TAU-tl.load(pb_ptr+8))+gpre21*(pre21*TAU-tl.load(pb_ptr+9))+gpre22*(pre22*TAU-tl.load(pb_ptr+10))+gpre23*(pre23*TAU-tl.load(pb_ptr+11))
+        grms += gpre30*(pre30*TAU-tl.load(pb_ptr+12))+gpre31*(pre31*TAU-tl.load(pb_ptr+13))+gpre32*(pre32*TAU-tl.load(pb_ptr+14))+gpre33*(pre33*TAU-tl.load(pb_ptr+15))
+        grms += gpo00*(po00*TAU-tl.load(pb_ptr+16+0))+gpo01*(po01*TAU-tl.load(pb_ptr+16+1))+gpo02*(po02*TAU-tl.load(pb_ptr+16+2))+gpo03*(po03*TAU-tl.load(pb_ptr+16+3))
+        grms += gpo10*(po10*TAU-tl.load(pb_ptr+16+4))+gpo11*(po11*TAU-tl.load(pb_ptr+16+5))+gpo12*(po12*TAU-tl.load(pb_ptr+16+6))+gpo13*(po13*TAU-tl.load(pb_ptr+16+7))
+        grms += gpo20*(po20*TAU-tl.load(pb_ptr+16+8))+gpo21*(po21*TAU-tl.load(pb_ptr+16+9))+gpo22*(po22*TAU-tl.load(pb_ptr+16+10))+gpo23*(po23*TAU-tl.load(pb_ptr+16+11))
+        grms += gpo30*(po30*TAU-tl.load(pb_ptr+16+12))+gpo31*(po31*TAU-tl.load(pb_ptr+16+13))+gpo32*(po32*TAU-tl.load(pb_ptr+16+14))+gpo33*(po33*TAU-tl.load(pb_ptr+16+15))
+        # res grms term uses the BIAS-FREE wxs (raw·inv_rms); bias does not depend on rms.
+        grms += gres00*aw00+gres01*aw01+gres02*aw02+gres03*aw03
+        grms += gres10*aw10+gres11*aw11+gres12*aw12+gres13*aw13
+        grms += gres20*aw20+gres21*aw21+gres22*aw22+gres23*aw23
+        grms += gres30*aw30+gres31*aw31+gres32*aw32+gres33*aw33
         grms = -inv_rms * grms   # d L / d rms
 
         # store grad_raw_full = g_scaled * inv_rms
@@ -696,9 +732,38 @@ if TRITON_AVAILABLE:
         return tl.sum(A[:, :, None] * B[None, :, :], axis=1)
 
     @triton.jit
+    def _cayley_tile_YM(B, Ieye, N: tl.constexpr):
+        """Exact orthogonal Cayley Y and M=(I−B)⁻¹ from skew tile B (N∈{2,4}).
+
+        N=2: closed 2×2 rotation.  N=4: Cayley–Hamilton closed form (matches the
+        scalar path / cayley_orthogonal). Both are exact at any ‖B‖ (denom ≥ 1).
+        """
+        p = 0.5 * tl.sum(B * B)                              # ½‖B‖²_F
+        if N == 2:
+            d = 1.0 + p
+            Y = ((1.0 - p) * Ieye + 2.0 * B) / d
+            M = (Ieye + B) / d
+        else:                                               # N == 4
+            B2 = _tile_mm(B, B, N)
+            rr = tl.arange(0, N)
+            b01 = tl.sum(tl.where((rr[:, None] == 0) & (rr[None, :] == 1), B, 0.0))
+            b23 = tl.sum(tl.where((rr[:, None] == 2) & (rr[None, :] == 3), B, 0.0))
+            b02 = tl.sum(tl.where((rr[:, None] == 0) & (rr[None, :] == 2), B, 0.0))
+            b13 = tl.sum(tl.where((rr[:, None] == 1) & (rr[None, :] == 3), B, 0.0))
+            b03 = tl.sum(tl.where((rr[:, None] == 0) & (rr[None, :] == 3), B, 0.0))
+            b12 = tl.sum(tl.where((rr[:, None] == 1) & (rr[None, :] == 2), B, 0.0))
+            Pf = b01 * b23 - b02 * b13 + b03 * b12
+            d = 1.0 + p + Pf * Pf
+            R = (1.0 + p) * Ieye + B2
+            Y = _tile_mm(Ieye + 2.0 * B + B2, R, N) / d
+            M = _tile_mm(R, Ieye + B, N) / d
+        return Y, M
+
+    @triton.jit
     def _hc_premap_fwd_kernel_g(
         h_ptr,            # [B, S, N, C] bf16
-        raw_ptr,          # [B, S, 3*N*N] fp32  (proj_w @ x_flat + proj_b, pre-rms)
+        raw_ptr,          # [B, S, 3*N*N] fp32  (proj_w @ x_flat, bias-free, pre-rms)
+        pb_ptr,           # [3*N*N]      fp32  proj_b (added OUTSIDE the rms divide)
         xbar_ptr,         # [B, S, C]    bf16  out
         hres_ptr,         # [B, S, N, N] fp32  out
         hpostrow_ptr,     # [B, S, N]    fp32  out
@@ -724,10 +789,14 @@ if TRITON_AVAILABLE:
         inv_tau = 1.0 / TAU
         tl.store(rms_ptr + tok, rms)
 
-        # raw blocks (pre|post|res), each [N,N], scaled.
-        pre_s = tl.load(raw_ptr + rb + 0 * NN + ij).to(tl.float32) * inv_rms * inv_tau
-        post_s = tl.load(raw_ptr + rb + 1 * NN + ij).to(tl.float32) * inv_rms * inv_tau
-        res_s = tl.load(raw_ptr + rb + 2 * NN + ij).to(tl.float32) * inv_rms
+        # raw blocks (pre|post|res), each [N,N]. Bias added OUTSIDE the rms divide:
+        # h_map = raw·inv_rms + b ; softmax-arg then ·inv_tau (res gets NO tau).
+        b_pre = tl.load(pb_ptr + 0 * NN + ij).to(tl.float32)
+        b_post = tl.load(pb_ptr + 1 * NN + ij).to(tl.float32)
+        b_res = tl.load(pb_ptr + 2 * NN + ij).to(tl.float32)
+        pre_s = (tl.load(raw_ptr + rb + 0 * NN + ij).to(tl.float32) * inv_rms + b_pre) * inv_tau
+        post_s = (tl.load(raw_ptr + rb + 1 * NN + ij).to(tl.float32) * inv_rms + b_post) * inv_tau
+        res_s = tl.load(raw_ptr + rb + 2 * NN + ij).to(tl.float32) * inv_rms + b_res
 
         # Hpre = softmax(pre_s, dim=-1) rows ; Hpre_cm[j] = mean_i Hpre[i,j]
         pm = tl.max(pre_s, axis=1)[:, None]
@@ -741,13 +810,10 @@ if TRITON_AVAILABLE:
         Hpost = qe / tl.sum(qe, axis=0)[None, :]
         Hpost_row = tl.sum(Hpost, axis=1)            # [N]
 
-        # Hres = cayley(res_s): W skew, Y0 = I+alpha*W, Y_{k+1}=I+half*(W@(I+Y_k))
+        # Hres = cayley(res_s): EXACT closed form (N∈{2,4}), unconditionally orthogonal.
         Ieye = (rr[:, None] == rr[None, :]).to(tl.float32)
-        W = res_s - tl.trans(res_s)
-        half = ALPHA * 0.5
-        Y = Ieye + ALPHA * W
-        for _ in tl.static_range(ITERS):
-            Y = Ieye + half * _tile_mm(W, Ieye + Y, N)
+        Bm = (ALPHA * 0.5) * (res_s - tl.trans(res_s))       # B = ½α·(A−Aᵀ), skew
+        Y, _M = _cayley_tile_YM(Bm, Ieye, N)
 
         # x_bar[c] = Σ_j Hpre_cm[j] h[j,c]
         x_bar = tl.sum(Hpre_cm[:, None] * hh, axis=0)   # [BLOCK_C]
@@ -762,7 +828,8 @@ if TRITON_AVAILABLE:
         ghres_ptr,        # [B,S,N,N]  upstream grad on Hres
         ghpostrow_ptr,    # [B,S,N]    upstream grad on Hpost_row
         h_ptr,            # [B,S,N,C]
-        raw_ptr,          # [B,S,3*N*N] raw_full (pre-rms)
+        raw_ptr,          # [B,S,3*N*N] raw_full (bias-free, pre-rms)
+        pb_ptr,           # [3*N*N]     proj_b
         rms_ptr,          # [B,S,1]
         graw_ptr,         # [B,S,3*N*N] out: grad wrt raw_full (pre-rms)
         ghpart_ptr,       # [B,S,N,C]   out: grad on h (xbar-path + rms-path)
@@ -782,10 +849,17 @@ if TRITON_AVAILABLE:
         inv_rms = 1.0 / rms
         inv_tau = 1.0 / TAU
 
-        # ---- recompute forward mapping (fp32 tiles) ----
-        pre_s = tl.load(raw_ptr + rb + 0 * NN + ij).to(tl.float32) * inv_rms * inv_tau
-        post_s = tl.load(raw_ptr + rb + 1 * NN + ij).to(tl.float32) * inv_rms * inv_tau
-        res_s = tl.load(raw_ptr + rb + 2 * NN + ij).to(tl.float32) * inv_rms
+        # ---- recompute forward mapping (fp32 tiles) with bias OUTSIDE the /rms divide ----
+        b_pre = tl.load(pb_ptr + 0 * NN + ij).to(tl.float32)
+        b_post = tl.load(pb_ptr + 1 * NN + ij).to(tl.float32)
+        b_res = tl.load(pb_ptr + 2 * NN + ij).to(tl.float32)
+        # bias-free wxs = raw·inv_rms (needed for the shared /rms grms accumulation)
+        wxs_pre = tl.load(raw_ptr + rb + 0 * NN + ij).to(tl.float32) * inv_rms
+        wxs_post = tl.load(raw_ptr + rb + 1 * NN + ij).to(tl.float32) * inv_rms
+        wxs_res = tl.load(raw_ptr + rb + 2 * NN + ij).to(tl.float32) * inv_rms
+        pre_s = (wxs_pre + b_pre) * inv_tau
+        post_s = (wxs_post + b_post) * inv_tau
+        res_s = wxs_res + b_res
 
         pm = tl.max(pre_s, axis=1)[:, None]
         pe = tl.exp(pre_s - pm)
@@ -795,15 +869,9 @@ if TRITON_AVAILABLE:
         Hpost = qe / tl.sum(qe, axis=0)[None, :]
 
         Ieye = (rr[:, None] == rr[None, :]).to(tl.float32)
-        W = res_s - tl.trans(res_s)
         half = ALPHA * 0.5
-        Y0 = Ieye + ALPHA * W
-        T0 = Ieye + Y0
-        Y1 = Ieye + half * _tile_mm(W, T0, N)
-        T1 = Ieye + Y1
-        Y2 = Ieye + half * _tile_mm(W, T1, N)
-        T2 = Ieye + Y2
-        # (Y3 = final Hres — not needed; gY comes from upstream.)
+        Bm = half * (res_s - tl.trans(res_s))       # B = ½α·(A−Aᵀ), skew
+        Y, M = _cayley_tile_YM(Bm, Ieye, N)         # exact Y and M=(I−B)⁻¹
 
         # ---- x_bar path ----
         hh = tl.load(h_ptr + h_base + rr[:, None] * C + c[None, :],
@@ -828,29 +896,19 @@ if TRITON_AVAILABLE:
         g_post_s = Hpost * (g_Hpost - dot_q)
         g_rs_post = g_post_s * inv_tau
 
-        # ---- Hres = cayley : reverse 3 steps ----
+        # ---- Hres = cayley : EXACT analytic VJP (closed form) ----
+        # gB = (I+Y)ᵀ·gY·Mᵀ ; gW = ½α·gB ; g_res = gW − gWᵀ = ½α·(gB − gBᵀ).
         gY = tl.load(ghres_ptr + tok * NN + ij).to(tl.float32)        # [N,N]
-        gW = tl.zeros((N, N), dtype=tl.float32)
-        Wt = tl.trans(W)
-        # step 3 (used T2)
-        gW += half * _tile_mm(gY, tl.trans(T2), N)
-        gY = half * _tile_mm(Wt, gY, N)
-        # step 2 (T1)
-        gW += half * _tile_mm(gY, tl.trans(T1), N)
-        gY = half * _tile_mm(Wt, gY, N)
-        # step 1 (T0)
-        gW += half * _tile_mm(gY, tl.trans(T0), N)
-        gY = half * _tile_mm(Wt, gY, N)
-        # Y0 = I + alpha*W
-        gW += ALPHA * gY
-        # W = res_s - res_sᵀ  -> g_res_s = gW - gWᵀ (diagonal cancels)
-        g_rs_res = gW - tl.trans(gW)
+        U = _tile_mm(gY, tl.trans(M), N)                             # gY·Mᵀ
+        gB = _tile_mm(tl.trans(Ieye + Y), U, N)                      # (I+Y)ᵀ·U
+        gW = half * gB
+        g_rs_res = gW - tl.trans(gW)                                 # d/d res_s (= res A)
 
-        # ---- g_rms (folds back through the shared /rms) ----
-        # raw_scaled = raw_full*inv_rms ; pre_s*TAU = raw_scaled_pre, etc.
-        grms_inner = (tl.sum(g_rs_pre * (pre_s * TAU))
-                      + tl.sum(g_rs_post * (post_s * TAU))
-                      + tl.sum(g_rs_res * res_s))
+        # ---- g_rms (folds back through the shared /rms). Uses the BIAS-FREE wxs; the
+        #      bias does not depend on rms. ----
+        grms_inner = (tl.sum(g_rs_pre * wxs_pre)
+                      + tl.sum(g_rs_post * wxs_post)
+                      + tl.sum(g_rs_res * wxs_res))
         grms = -inv_rms * grms_inner
 
         # ---- grad wrt raw_full = g_rs * inv_rms ----
@@ -1029,10 +1087,13 @@ class _FusedHCPreMap(torch.autograd.Function):
         # 200 MB fp32 copy of x_flat and the slow SIMT sgemm. The precision-sensitive part of
         # the mapping (softmax / Cayley) runs fp32 in-kernel from raw_full, so a bf16-input
         # GEMV with fp32 accumulate is faithful (verified: grad cosines == 1.0 on proj/h).
+        # bias-under-rms fix: raw_full = x·Wᵀ WITHOUT bias (no addmm). The kernel adds
+        # proj_b OUTSIDE the /rms divide (h_map = raw·inv_rms + b), matching eager _mappings.
         dt = h.dtype
-        raw_full = torch.addmm(
-            proj_b.to(dt), x_flat, proj_w.to(dt).t()
+        raw_full = torch.mm(
+            x_flat, proj_w.to(dt).t()
         ).float().reshape(B, S, 48).contiguous()
+        proj_b_f = proj_b.float().contiguous()
 
         xbar = torch.empty(B, S, C, device=h.device, dtype=h.dtype)
         hres = torch.empty(B, S, N, N, device=h.device, dtype=torch.float32)
@@ -1041,18 +1102,18 @@ class _FusedHCPreMap(torch.autograd.Function):
         rms = torch.empty(B, S, 1, device=h.device, dtype=torch.float32)
         BLOCK_C = _next_pow2(C)
         _hc_premap_fwd_kernel[(B * S,)](
-            h, raw_full, xbar, hres, hpostrow, hprecm, rms, xbar, xbar,
+            h, raw_full, proj_b_f, xbar, hres, hpostrow, hprecm, rms, xbar, xbar,
             TAU=float(tau), ALPHA=float(alpha), ITERS=int(iters), EPS=float(eps),
             N=N, C=C, BLOCK_C=BLOCK_C, HAS_NOUT=False, **_LAUNCH,
         )
-        ctx.save_for_backward(h, raw_full, rms, proj_w)
+        ctx.save_for_backward(h, raw_full, proj_b_f, rms, proj_w)
         ctx.shape = (B, S, N, C)
         ctx.cfg = (float(tau), float(alpha), int(iters))
         return xbar, hres, hpostrow
 
     @staticmethod
     def backward(ctx, grad_xbar, grad_hres, grad_hpostrow):
-        h, raw_full, rms, proj_w = ctx.saved_tensors
+        h, raw_full, proj_b_f, rms, proj_w = ctx.saved_tensors
         B, S, N, C = ctx.shape
         tau, alpha, iters = ctx.cfg
         grad_xbar = grad_xbar.contiguous()
@@ -1063,21 +1124,20 @@ class _FusedHCPreMap(torch.autograd.Function):
         gh_partial = torch.empty(B, S, N, C, device=h.device, dtype=h.dtype)
         BLOCK_C = _next_pow2(C)
         _hc_premap_bwd_kernel[(B * S,)](
-            grad_xbar, grad_hres, grad_hpostrow, h, raw_full, rms,
+            grad_xbar, grad_hres, grad_hpostrow, h, raw_full, proj_b_f, rms,
             graw, gh_partial,
             TAU=tau, ALPHA=alpha, ITERS=iters,
             N=N, C=C, BLOCK_C=BLOCK_C, **_LAUNCH,
         )
-        # proj VJP via cuBLAS. raw_full = x_flat @ proj_w.T + proj_b. To avoid the 200 MB
-        # fp32 copy of x_flat and the slow SIMT sgemm, run the two GEMMs with bf16 inputs
-        # (cuBLAS accumulates in fp32). grad_b stays an exact fp32 reduction over the small
-        # [B·S,48] graw. grad_h_proj is added to the kernel's xbar+rms grad on h.
+        # proj VJP via cuBLAS. h_map = (x·Wᵀ)·inv_rms + b, so graw = grad wrt (x·Wᵀ) =
+        # grad_hmap·inv_rms (unchanged by the bias fix) → grad_w / grad_h_proj unchanged.
+        # grad_b = Σ_tok grad_hmap = Σ_tok graw·rms (NOT graw.sum), since d h_map/d b = 1.
         dt = h.dtype
         graw2 = graw.reshape(B * S, 48)
         graw2_dt = graw2.to(dt)
         x_flat = h.reshape(B * S, N * C)
         grad_w = (graw2_dt.t() @ x_flat).float()                  # [48, N*C]  (fp32 accum)
-        grad_b = graw2.sum(0)                                     # [48]       (exact fp32)
+        grad_b = (graw2 * rms.reshape(B * S, 1)).sum(0)           # [48]  Σ grad_hmap (exact fp32)
         grad_h_proj = (graw2_dt @ proj_w.to(dt)).reshape(B, S, N, C)  # [B,S,n,C]
         grad_h = (gh_partial.to(dt) + grad_h_proj)
         return (grad_h, grad_w.to(proj_w.dtype), grad_b.to(proj_w.dtype),
@@ -1099,11 +1159,13 @@ class _FusedHCPreMapGeneric(torch.autograd.Function):
         h = h.contiguous()
         NN = N * N
         x_flat = h.reshape(B * S, N * C)
-        # bf16 addmm (cuBLAS, fp32 accumulate) — same faithful-approx as the scalar path.
+        # bias-under-rms fix: bias-free GEMM (bf16 in, fp32 accumulate); kernel adds proj_b
+        # OUTSIDE the /rms divide, matching eager _mappings.
         dt = h.dtype
-        raw_full = torch.addmm(
-            proj_b.to(dt), x_flat, proj_w.to(dt).t()
+        raw_full = torch.mm(
+            x_flat, proj_w.to(dt).t()
         ).float().reshape(B, S, 3 * NN).contiguous()
+        proj_b_f = proj_b.float().contiguous()
 
         xbar = torch.empty(B, S, C, device=h.device, dtype=h.dtype)
         hres = torch.empty(B, S, N, N, device=h.device, dtype=torch.float32)
@@ -1111,18 +1173,18 @@ class _FusedHCPreMapGeneric(torch.autograd.Function):
         rms = torch.empty(B, S, 1, device=h.device, dtype=torch.float32)
         BLOCK_C = _next_pow2(C)
         _hc_premap_fwd_kernel_g[(B * S,)](
-            h, raw_full, xbar, hres, hpostrow, rms,
+            h, raw_full, proj_b_f, xbar, hres, hpostrow, rms,
             TAU=float(tau), ALPHA=float(alpha), ITERS=int(iters), EPS=float(eps),
             N=N, C=C, BLOCK_C=BLOCK_C, **_LAUNCH,
         )
-        ctx.save_for_backward(h, raw_full, rms, proj_w)
+        ctx.save_for_backward(h, raw_full, proj_b_f, rms, proj_w)
         ctx.shape = (B, S, N, C)
         ctx.cfg = (float(tau), float(alpha), int(iters))
         return xbar, hres, hpostrow
 
     @staticmethod
     def backward(ctx, grad_xbar, grad_hres, grad_hpostrow):
-        h, raw_full, rms, proj_w = ctx.saved_tensors
+        h, raw_full, proj_b_f, rms, proj_w = ctx.saved_tensors
         B, S, N, C = ctx.shape
         tau, alpha, iters = ctx.cfg
         NN = N * N
@@ -1134,18 +1196,19 @@ class _FusedHCPreMapGeneric(torch.autograd.Function):
         gh_partial = torch.empty(B, S, N, C, device=h.device, dtype=h.dtype)
         BLOCK_C = _next_pow2(C)
         _hc_premap_bwd_kernel_g[(B * S,)](
-            grad_xbar, grad_hres, grad_hpostrow, h, raw_full, rms,
+            grad_xbar, grad_hres, grad_hpostrow, h, raw_full, proj_b_f, rms,
             graw, gh_partial,
             TAU=tau, ALPHA=alpha, ITERS=iters,
             N=N, C=C, BLOCK_C=BLOCK_C, **_LAUNCH,
         )
-        # proj VJP via cuBLAS (bf16 inputs, fp32 accumulate) — identical to scalar path.
+        # proj VJP via cuBLAS. graw = grad wrt (x·Wᵀ) = grad_hmap·inv_rms (bias fix leaves
+        # grad_w/grad_h_proj unchanged); grad_b = Σ_tok grad_hmap = Σ_tok graw·rms.
         dt = h.dtype
         graw2 = graw.reshape(B * S, 3 * NN)
         graw2_dt = graw2.to(dt)
         x_flat = h.reshape(B * S, N * C)
         grad_w = (graw2_dt.t() @ x_flat).float()
-        grad_b = graw2.sum(0)
+        grad_b = (graw2 * rms.reshape(B * S, 1)).sum(0)
         grad_h_proj = (graw2_dt @ proj_w.to(dt)).reshape(B, S, N, C)
         grad_h = (gh_partial.to(dt) + grad_h_proj)
         return (grad_h, grad_w.to(proj_w.dtype), grad_b.to(proj_w.dtype),
@@ -1298,10 +1361,12 @@ def hc_pre_map(
     """
     from morph.kernels.triton._eager_flag import force_eager, hc_force_eager
     N = h.shape[2]
-    # generic tile kernel needs N a power of 2 (tl.arange) and the cayley unroll fixes iters=3.
-    pow2 = N >= 2 and (N & (N - 1)) == 0
+    # The kernels implement the EXACT closed-form Cayley only for n∈{2,4} (n=4 scalar path;
+    # n=2 closed 2×2 in the generic tile path). Any other n falls back to the exact eager
+    # reference (n=4 closed form / n≠4 solve) — no silent divergent iteration anywhere.
+    supported_n = N == 2 or N == 4
     if (force_eager() or hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda
-            or int(iters) != 3 or not pow2):
+            or int(iters) != 3 or not supported_n):
         return hc_pre_map_reference(h, proj_w, proj_b, tau, alpha, iters, eps)  # traceable
     return _hc_pre_map_dispatch(h, proj_w, proj_b, tau, alpha, iters, eps, N)
 
@@ -1311,14 +1376,25 @@ def hc_pre_map(
 # ===========================================================================
 
 def _cayley_ref(A: Tensor, iters: int, alpha: float) -> Tensor:
+    """EXACT orthogonal Cayley (matches morph.model.hyper_connections.cayley_orthogonal).
+
+    n=4: Cayley–Hamilton closed form. n≠4: true Cayley via solve. ``iters`` is retained
+    for API compatibility but ignored (the old divergent fixed-point iteration is gone).
+    """
     n = A.shape[-1]
     I = torch.eye(n, dtype=A.dtype, device=A.device)
-    W = A - A.transpose(-1, -2)
-    Y = I + alpha * W
-    half = alpha * 0.5
-    for _ in range(iters):
-        Y = I + half * (W @ (I + Y))
-    return Y
+    B = (alpha * 0.5) * (A - A.transpose(-1, -2))                    # skew so(n)
+    B2 = B @ B
+    p = 0.5 * (B * B).sum(dim=(-1, -2))
+    if n == 4:
+        Pf = (B[..., 0, 1] * B[..., 2, 3]
+              - B[..., 0, 2] * B[..., 1, 3]
+              + B[..., 0, 3] * B[..., 1, 2])
+        q = Pf * Pf
+        num = (I + 2.0 * B + B2) @ ((1.0 + p)[..., None, None] * I + B2)
+        return num / (1.0 + p + q)[..., None, None]
+    Yt = torch.linalg.solve((I - B).transpose(-1, -2), (I + B).transpose(-1, -2))
+    return Yt.transpose(-1, -2)
 
 
 def hc_pre_map_reference(
@@ -1329,7 +1405,9 @@ def hc_pre_map_reference(
     B, S, n, C = h.shape
     x_flat = h.reshape(B, S, n * C)
     rms = x_flat.float().pow(2).mean(-1, keepdim=True).add(eps).sqrt()
-    raw = (F.linear(x_flat.float(), proj_w.float(), proj_b.float()) / rms).reshape(B, S, 3, n, n)
+    # bias-under-rms fix: (x·Wᵀ)/rms + b, NOT (x·Wᵀ + b)/rms.
+    wx = F.linear(x_flat.float(), proj_w.float())
+    raw = (wx / rms + proj_b.float()).reshape(B, S, 3, n, n)
     pre_raw, post_raw, res_raw = raw[:, :, 0], raw[:, :, 1], raw[:, :, 2]
     Hpre = torch.softmax(pre_raw / tau, dim=-1)
     Hpost = torch.softmax(post_raw / tau, dim=-2)
