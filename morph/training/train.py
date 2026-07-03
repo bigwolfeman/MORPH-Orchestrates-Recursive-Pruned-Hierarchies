@@ -1492,6 +1492,17 @@ def main(cfg: DictConfig) -> None:
         print("[memprobe] peak-only mode (no allocator hooks; set MORPH_MEM_SNAPSHOT_STEP for a snapshot)",
               flush=True)
 
+    # ── Static-region CUDA graphs (MORPH_STATIC_GRAPHS): one-time lazy build ────
+    # Built a few steps after (re)start so the allocator + Triton compiles are settled.
+    # The build MUST run with no prior-step autograd graph alive (see
+    # MORPHTransformer.build_static_graphs) — this loop owns those refs, so the build
+    # hook below dels them first. Requires grad_accum==1 and bag_size==0 (a second
+    # micro-backward would overwrite the bwd graphs' static grad buffers instead of
+    # accumulating).
+    _sg_pending = os.environ.get("MORPH_STATIC_GRAPHS", "0").lower() not in ("0", "", "false")
+    _sg_build_step = start_step + 3
+    _sg_shape = None
+
     # ── Perf-pass region timing (MORPH_PERF_REGIONS=1) ─────────────────────────
     # CUDA-event + wall region timing around data/fwd/aux/bwd/prune/clip/opt, means
     # printed every 20 steps. Default OFF → shared nullcontext, zero cost, bit-identical.
@@ -1617,6 +1628,11 @@ def main(cfg: DictConfig) -> None:
                       flush=True)
             for _m in _rope_mods:                                  # re-anchor taper + rebuild cache
                 _m.set_context(_contexts[_k])
+            # set_context rebuilt RoPE cache buffers as NEW tensors and the stage-up
+            # changes seq shape → captured static-region graphs are stale; drop them.
+            _mm = getattr(model, "_orig_mod", model)
+            if hasattr(_mm, "static_graphs_invalidate"):
+                _mm.static_graphs_invalidate(f"curriculum stage {_k} context re-anchor")
             _curr_loader.set_stage(_k)
             cur_stage = _k
             cur_grad_accum = _ceil_div(_eff_batch, _microbatch[_k])
@@ -1626,6 +1642,36 @@ def main(cfg: DictConfig) -> None:
             print(f"[curriculum] → stage {_k}: seq_len={seq_len} context={_contexts[_k]} "
                   f"micro_batch={_microbatch[_k]} grad_accum={cur_grad_accum} eff_batch={batch_size} "
                   f"(RoPE re-anchored on {len(_rope_mods)} modules)", flush=True)
+
+        # ── Static-region CUDA graphs: one-time build (MORPH_STATIC_GRAPHS) ──
+        if _sg_pending and step >= _sg_build_step:
+            _sg_pending = False
+            _ga_now = cur_grad_accum if curriculum_enabled else 1
+            if _ga_now != 1 or cur_bag != 0 or _sg_shape is None:
+                print(f"[static-graph] NOT built (needs grad_accum==1, bag==0, a seen "
+                      f"batch shape; got ga={_ga_now} bag={cur_bag} shape={_sg_shape}) "
+                      f"— regions stay eager", flush=True)
+            else:
+                # HARD PRECONDITION: the previous step's autograd graph must be dead
+                # before capture (stale default-stream AccumulateGrad nodes invalidate
+                # the capture stream — cudaErrorStreamCaptureImplicit, measured — and a
+                # failed capture poisons the CUDA generator). This loop holds the only
+                # refs: loss/out AND the separately-bound routing_aux / spectral-penalty
+                # locals (routing_aux's graph reaches the prelude/coda ROUTER params —
+                # exactly the captured regions' accumulators).
+                loss = out = routing_aux = _sp = None
+                gc.collect()
+                _m = getattr(model, "_orig_mod", model)
+                # Dummy ids built WITHOUT any RNG draw (arange, not randint): a CUDA
+                # randint here would advance the training generator and shift every
+                # later poisson/dropout draw off the baseline stream (measured 2.6e-2
+                # loss divergence from exactly this in the probe). Values are dummy —
+                # the build's warmup math is discarded (fork_rng + buffer restore).
+                _sg_ids = (torch.arange(int(torch.tensor(_sg_shape).prod()),
+                                        device=device, dtype=torch.long)
+                           % int(_m.cfg.vocab_size)).reshape(_sg_shape)
+                _m.build_static_graphs(_sg_ids)   # raises on failure — do NOT catch
+                del _sg_ids
 
         lr = lr_fn(step)
         for pg in optimizer.param_groups:
@@ -1652,6 +1698,7 @@ def main(cfg: DictConfig) -> None:
                         train_loader = _make_train_loader(cur_bag)
                     x, y = next(train_loader)
                 x, y = x.to(device), y.to(device)
+                _sg_shape = x.shape          # static-graph build uses the live shape
 
             with _rt.region("fwd"):
                 with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -1689,6 +1736,15 @@ def main(cfg: DictConfig) -> None:
         with _rt.region("prune"):
             prune_stats = pruning.step(model, step)
 
+        # A prune event rewrites _dead_mask contents → a captured optimizer CUDA graph
+        # (MORPH_OPT_CUDA_GRAPH) holds stale dead masks; drop it so the next steps re-warm
+        # and recapture with the new topology. No-op when the flag is off / no graph yet.
+        # (The optimizer-REBUILD boundary below needs nothing: it creates a new optimizer
+        # object, so any captured graph dies with the old one.)
+        if (prune_stats and prune_stats.get("pruning/prune_step")
+                and hasattr(optimizer, "graph_invalidate")):
+            optimizer.graph_invalidate("prune event")
+
         # Phase boundary (compact / routing) changed the param set → rebuild a FRESH
         # optimizer (Wolfe: fresh optimizer after compact). This step's backward grads
         # live on the OLD params (weight, pre-router); the new params (values, router)
@@ -1707,6 +1763,11 @@ def main(cfg: DictConfig) -> None:
             # state, drop the name, gc.collect() to break the cycle, empty_cache() to return the
             # freed blocks to the driver — THEN allocate the new optimizer into the cleared pool.
             _mem_before = torch.cuda.memory_allocated() / 1e9
+            # Phase boundary replaced modules → any captured static-region graphs read
+            # stale storages; drop them (they stay eager for the rest of the run).
+            _mm = getattr(model, "_orig_mod", model)
+            if hasattr(_mm, "static_graphs_invalidate"):
+                _mm.static_graphs_invalidate("phase-boundary rebuild")
             optimizer.zero_grad(set_to_none=True)
             if hasattr(optimizer, "state"):
                 optimizer.state.clear()
