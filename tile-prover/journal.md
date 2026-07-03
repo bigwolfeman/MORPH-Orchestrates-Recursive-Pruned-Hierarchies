@@ -127,3 +127,29 @@ D=32/K=4/B=2 benchmarked; CUDA-graph capture; numerical drift over long training
 **Throughput (sm_120, 276M, GPU shared w/ a 30B run on the other context — re-measure if contended):** equal-length B1=459 B4=1028 B8=1884 agg tok/s (matches the B>1 table). Mixed-length single collapsed graph: B=7 (lengths [8,16,40,96,12,30,64]) = 174.8 steps/s = 1224 agg tok/s. The masked-emit single graph costs a little vs the 3-graph equal-length path (it runs every emit site every token instead of only on emit steps) but stays comparable; exact mixed-vs-equal at matched B not isolated (different B in the two runs).
 **Files:** morph/inference/engine.py (pos_dev[B], pos_host, cos/sin[B,D], emit masks, _mixed mode, collapsed graph capture/replay, load_from_eager_mixed, graph-safe HCA blend), morph/kernels/triton/fused_decode_step.py (per-stream b-offset in ring_meta/ring_commit/_front_gemm/_front_post/_decode_attn/_csa_scores/_csa_emit gemm+combine + HAS_MASK emit gate), ignore/gate_mixedlen_decode.py, ignore/z3_mixedlen_pos.py.
 **NOT verified (honest edges):** very long contexts (only pos≤~175 exercised; capacity guard present but >1k positions untested); B>16 (max tested B=7 parity, B=16 only in equal-length timing); ragged edges where MANY streams complete a block on the SAME step in mixed mode (the per-stream masks handle it but the heavy-overlap case wasn't stress-tested); ncu register/occupancy (Z3 occupancy CONDITIONAL on ptxas); the int8/30B deploy stack (only the fp32 276M routed ckpt run — the per-stream b-offsets are dtype-agnostic but the deploy KS=8/int4 front_gemm schedule wasn't re-gated for mixed-length); torch.compile (engine uses CUDA graph).
+## [2026-06-23 19:40] — FEASIBILITY PROBE: 30B coop/persistent megakernel (GO/NO-GO)
+**Goal:** Decide whether a cooperative/persistent megakernel can raise 30B B=1 decode
+(46.6 tok/s = 54% of 86.1 SOL). Measure-before-build. Branch perf/30b-coop-megakernel.
+**HW verified (live, torch props):** RTX 5090, 170 SMs, L2=96MB (100663296B), HBM 1.79 TB/s.
+**Shapes (scale30b.yaml):** d=8192, n_heads=128, d_head=64, n_kv=8, latent_k=512,
+d_ff=21824, 2d_ff=43648, vocab=49152, mortar density 0.25, BLK=128, 35 core x mean_depth 4 = 140 visits.
+**Method:** Roofline (ncu ABSENT; nsys present). COLD-L2 achieved GB/s = weight_bytes/time,
+256MB memset flush before EVERY timed call (HOT over-reports 2-3x: o_proj "186% peak"=L2 hits).
+Scripts: ignore/gemv_bw_30b.py, gemv_bw_sweep.py, gemv_bw_mortar_sweep.py, gap_probe.py.
+**Per-kernel cold BW %peak (SHIPPED cfg):** int8 qkv[16384,8192] 80.4%(6w near-peak);
+int8 o_proj[8192,8192] 54.3%(3w); int8 k_proj[512,8192] 6%(0.2w tiny/latency);
+ternary gate_up 60.7%(32w); ternary down 33.1%(6w); MORTAR gate_up 28.8%(35w ALU-bound);
+mortar down 16.7%(17w ALU-bound). Mortar low% = 2-bit UNPACK ALU, NOT bus (35w not occ-starved).
+**Cheap config wins (cold, correctness-checked):** int8 o_proj 54->82.9% (BO=32,BI=256,w=8;
+BI=256 is the lever; numeric rel 2.24e-7 tol-gated); int8 k_proj 6->29.7%(BO=1); ternary
+down 33->46.5%(BO=8,w=2); mortar gate_up 29->35.9%(BO=64,w=2, fewer warps=less unpack contention).
+**GAP probe (gap_probe.py, 140-block chain):** eager python-launch 27.83ms; CUDA-graph
+replay 27.75ms = 1.00x, gap=0.08ms (0.3%). Launch gap ~0 even WITHOUT graph (block~200us busy
+>> 1.5us/launch); engine ALREADY graph-replays (engine.py:1001). CONFIRMS near-zero-gap @30B.
+**DECISION: NO-GO megakernel.** Bytes irreducible (data-dep re-stream). Gap ~0 (graph replayed).
+54% gap = per-kernel under-saturation on a FEW GEMVs, NOT bubbles. A megakernel's lever
+(kill launch/inter-kernel idle) buys ~0.3%. REAL lever = per-kernel config (int8 BI=256
+biggest: o_proj 54->83%) + attack mortar's 2-bit UNPACK ALU bound (LUT/wider-BO) — both
+far cheaper than a 1-week megakernel build. Saves the build.
+**Next:** adopt int8 BI=256 (gate parity 256/256 + cos>=0.999); ternary/mortar BO/warp tune;
+mortar unpack ALU as separate effort if more headroom wanted.
