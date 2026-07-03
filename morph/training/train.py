@@ -1482,7 +1482,10 @@ def main(cfg: DictConfig) -> None:
     # snapshot is explicitly requested (MORPH_MEM_SNAPSHOT_STEP>=0). The default probe is
     # peak-only (reset_peak_memory_stats + max_memory_allocated) which touches no hooks.
     if _mem_probe and _mem_snap_step >= 0:
-        torch.cuda.memory._record_memory_history(max_entries=300_000)
+        # stacks="python" (not the default "all"): the C++ unwinder in the allocator
+        # hook makes the fused-HC autograd Function's apply() return NULL (confirmed
+        # 2026-07-03 — SystemError at _FusedHCPost.apply under stacks="all").
+        torch.cuda.memory._record_memory_history(max_entries=300_000, stacks="python")
         print(f"[memprobe] recording allocation history (snapshot @ step>={_mem_snap_step})",
               flush=True)
     elif _mem_probe:
