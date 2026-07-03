@@ -94,6 +94,12 @@ class PruningSchedule:
     route_scope: str = "core"
     _is_compact: bool = field(default=False, repr=False)
     _is_routed: bool = field(default=False, repr=False)
+    # step() runs every training step; walking model.named_modules() each time is pure
+    # Python overhead (~24 CMSBlockLinear among hundreds of modules). The CMS layer SET
+    # is fixed for a model instance (carve/route flip flags on the same module objects,
+    # never add/remove CMSBlockLinears), so cache the walk per model identity. Exact.
+    _layer_cache: Optional[list] = field(default=None, repr=False)
+    _layer_cache_model_id: int = field(default=-1, repr=False)
 
     def __post_init__(self) -> None:
         if self.route_scope not in ("core", "all"):
@@ -147,7 +153,10 @@ class PruningSchedule:
         Returns a dict of metrics for wandb logging, or None if no topology
         action happened this step.
         """
-        layers = _find_cms_layers(model)
+        if self._layer_cache is None or self._layer_cache_model_id != id(model):
+            self._layer_cache = _find_cms_layers(model)
+            self._layer_cache_model_id = id(model)
+        layers = self._layer_cache
         if not layers and not self._is_routed:
             return None
 
