@@ -11,16 +11,19 @@
 # through MORPH's actual pretraining path on PRE-TOKENIZED shards (no generator in the
 # hot loop → GPU stays fed).
 #
-# Run:
+# Run (fused kernels ON — they are what saturate the GPU at this scale; the GLA/retention
+# branch auto-falls-back to eager where smem doesn't fit, see gla.py):
 #   cd <MORPH repo>
-#   PYTHONPATH=$PWD DISABLE_FUSED_KERNELS=1 python -m morph.training.train \
+#   PYTHONPATH=$PWD PYTHONUNBUFFERED=1 python -m morph.training.train \
 #     --config-name forget_olympiad_seed768
 # Smoke (12 steps, no wandb):
-#   PYTHONPATH=$PWD WANDB_MODE=disabled DISABLE_FUSED_KERNELS=1 python -m morph.training.train \
+#   PYTHONPATH=$PWD WANDB_MODE=disabled python -m morph.training.train \
 #     --config-name forget_olympiad_seed768 \
-#     training.compile=false curriculum.stages='[{seq_len:512,context_len:512,micro_batch:2,steps:12}]'
+#     curriculum.stages='[{seq_len:512,context_len:512,micro_batch:2,steps:12}]' training.steps=12
 #
 # Prereqs:
+#   - OLYMPIAD_REPO env points at an Olympiad-AI checkout (defaults to this machine's path);
+#     cross-repo contract documented in docs/olympiad-interop.md.
 #   - checkpoints/... init_from below exists (converted seed, native MORPH keys).
 #   - curriculum.pretok_dir has {olympiad_math, owt} pretok shards (symlink dir in the Olympiad repo).
 #   - Math-retention (gen_em) is NOT measured by MORPH (it evals NLP val ppl). Eval it OFFLINE on
@@ -80,7 +83,7 @@ model:
 training:
   # ── Seed the weights (fresh optimizer, step→0). Quant stack MUST match the seed so the
   # ternary/int6 parametrization keys exist at load time → ~100% key match. ──
-  init_from: /mnt/sda1/Projects/00NN/Olympiad-AI/checkpoints/morph_seed_768_prelude/morph_initfrom_full.pt
+  init_from: ${oc.env:OLYMPIAD_REPO,/mnt/sda1/Projects/00NN/Olympiad-AI}/checkpoints/morph_seed_768_prelude/morph_initfrom_full.pt
   ternary: true
   ternary_scope: backbone
   ternary_scale_group: tensor
@@ -137,7 +140,7 @@ routing:
 # ── Curriculum: single short-context stage, olympiad-replay + OWT blend ──
 curriculum:
   enabled: true
-  pretok_dir: /mnt/sda1/Projects/00NN/Olympiad-AI/data/morph_pretok_transition
+  pretok_dir: ${oc.env:OLYMPIAD_REPO,/mnt/sda1/Projects/00NN/Olympiad-AI}/data/morph_pretok_transition
   allowed_source_roles: [pretrain_bulk, reasoning_midtrain]
   eff_batch: 32                  # held via grad-accum (mb×ga)
   blend:                         # token-proportioned weights; olympiad_math replay vs OWT bulk
