@@ -252,6 +252,14 @@ class CMSBlockLinear(nn.Module):
         # every step; it is NOT persisted (recomputed from _prune_mask on demand — it's the
         # big [out,in] tensor and _rebuild_prune_elem_mask regenerates it deterministically).
         self._prune_elem_mask: Optional[Tensor] = None
+        # CPU-cached "does the tile mask have any dead tiles" tri-state. The per-step
+        # apply_prune_mask early-exit used bool(self._prune_mask.all()) — a GPU→CPU sync
+        # per CMS layer per step (24 syncs/step in the dense phase; measured 47ms/step of
+        # CPU sync-wait, perf pass 2026-07-03). False = known all-alive (fresh init),
+        # True = a prune event dropped tiles, None = unknown (post-resume) → checked ONCE
+        # on first use and cached. Exact: same mask, same decision, one sync instead of
+        # one per step.
+        self._mask_has_dead: Optional[bool] = False
 
         # Derived dimensions
         self.R = out_features // tile_size  # output block-rows
@@ -630,7 +638,13 @@ class CMSBlockLinear(nn.Module):
             return
         if self._prune_elem_mask is None:
             # Lazily rebuild from the tile mask (e.g. after a resume) if anything is dead.
-            if self._prune_mask is None or bool(self._prune_mask.all()):
+            # The all-alive check is a GPU sync → run it at most ONCE (cached tri-state;
+            # see _mask_has_dead in __init__), not per step.
+            if self._prune_mask is None:
+                return
+            if self._mask_has_dead is None:
+                self._mask_has_dead = not bool(self._prune_mask.all())
+            if not self._mask_has_dead:
                 return
             self._rebuild_prune_elem_mask()
         tgt = self._prune_target_weight()
@@ -723,6 +737,7 @@ class CMSBlockLinear(nn.Module):
                 .reshape(self.R, self.C)
                 .contiguous()
             )
+        self._mask_has_dead = True   # n_drop > 0 here — no sync needed to know it
         self._rebuild_prune_elem_mask()
         self.apply_prune_mask()
         return {"pruned": n_drop, "density": new_alive / total}
@@ -983,6 +998,10 @@ class CMSBlockLinear(nn.Module):
             )
         for k in self._LEGACY_STATE_KEYS:
             state_dict.pop(prefix + k, None)
+
+        # The incoming _prune_mask may carry dead tiles → the CPU-cached all-alive
+        # flag is unknown until first use (checked once there, not per step).
+        self._mask_has_dead = None
 
         data_key = prefix + "mortar_data"
         if data_key in state_dict and not self._mortar:

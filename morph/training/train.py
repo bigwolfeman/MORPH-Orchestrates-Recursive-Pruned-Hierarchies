@@ -956,6 +956,22 @@ def main(cfg: DictConfig) -> None:
     data_cfg = cfg.data
     wb_cfg = cfg.wandb
 
+    # ── Reproducibility: APPLY training.seed ─────────────────────────────
+    # cfg.training.seed was logged to wandb but never applied — model init, Poisson
+    # depth draws, dropout and TST all drew from an UNSEEDED default generator, so two
+    # identical-config runs produced different trajectories (found by the perf-pass
+    # bit-exactness gate, 2026-07-03; violates the reproducible-from-config rule).
+    # Seeded before ANY tensor creation (model build, warmup randint, data).
+    _seed = int(getattr(tr, "seed", 0))
+    import random as _random
+    _random.seed(_seed)
+    torch.manual_seed(_seed)          # seeds CPU + all CUDA generators
+    try:
+        import numpy as _np_seed
+        _np_seed.random.seed(_seed % 2**32)
+    except ImportError:
+        pass
+
     total_steps = int(tr.steps)
     batch_size = int(tr.batch_size)
     seq_len = int(data_cfg.seq_len)
@@ -1256,6 +1272,10 @@ def main(cfg: DictConfig) -> None:
     tokenizer_name = data_cfg.tokenizer
     dataset_name = data_cfg.dataset
 
+    # Data-runtime knobs (shared with the curriculum loader; env MORPH_DATA_* overrides).
+    from morph.training.data_placement import DataRuntimeConfig, Prefetcher
+    _data_rt = DataRuntimeConfig.resolve(getattr(cfg, "data_runtime", None))
+
     def _make_train_loader(bag: int, skip_batches: int = 0):
         it = iter(create_dataloader(tokenizer_name, dataset_name, seq_len,
                                     batch_size, split="train", bag_size=bag))
@@ -1270,6 +1290,15 @@ def main(cfg: DictConfig) -> None:
             for _ in range(skip_batches):
                 next(it)
             print(f"  [data] fast-forward done in {time.perf_counter() - t_ff:.1f}s", flush=True)
+        # Background prefetch: the in-process HF tokenization is a measured 35ms/step
+        # CPU stall at bag=0 and 130-163ms at bag=6 (perf pass 2026-07-03), fully serial
+        # with GPU work. Producing the SAME stream ahead on a thread is bit-identical —
+        # and unlike the curriculum loader there is no rebuild-discard caveat here: this
+        # generator is infinite (no StopIteration mid-phase) and a TST-switch rebuild
+        # abandons the old stream wholesale, so no consumed batch ever differs.
+        # prefetch_batches=0 (data_runtime / MORPH_DATA_PREFETCH) → synchronous as before.
+        if _data_rt.prefetch_batches > 0:
+            it = Prefetcher(it, depth=_data_rt.prefetch_batches, name=f"owt-train(bag={bag})")
         return it
 
     # val/gen ALWAYS use standard NTP (bag_size=0) so val ppl is comparable to the
@@ -1483,6 +1512,13 @@ def main(cfg: DictConfig) -> None:
     if _prof_win:
         _pa, _pb, _prof_prefix = _prof_win.split(":", 2)
         _prof_a, _prof_b = int(_pa), int(_pb)
+    # Bit-exactness gate (MORPH_EXACT_TRACE=<path>): append every step's loss as an
+    # exact float hex + a SHA256 over the final state_dict. Two runs (baseline vs
+    # change) are bit-identical iff their trace files are byte-identical. Adds one
+    # loss.item() sync per step — observation-only, no math/RNG touched; use ONLY
+    # for gate runs. Default unset → zero cost.
+    _exact_trace_path = os.environ.get("MORPH_EXACT_TRACE")
+    _exact_trace = open(_exact_trace_path, "w") if _exact_trace_path else None
 
     # Diagnostic-only (MORPH_DEBUG_STEP): per-step wall time + the exact Poisson depths
     # that step sampled, to catch the intermittent slow step and its trigger. Wrap
@@ -1562,6 +1598,8 @@ def main(cfg: DictConfig) -> None:
             if curriculum_enabled:
                 train_loader = _curr_loader.batches(_microbatch[cur_stage], bag_size=0)
             else:
+                if isinstance(train_loader, Prefetcher):
+                    train_loader.close()   # stop the bag-6 producer thread (stream abandoned)
                 train_loader = _make_train_loader(0)
 
         # ── Curriculum stage transition: checkpoint → RoPE re-anchor → loader.set_stage →
@@ -1606,6 +1644,8 @@ def main(cfg: DictConfig) -> None:
                     if curriculum_enabled:
                         train_loader = _curr_loader.batches(_microbatch[cur_stage], bag_size=cur_bag)
                     else:
+                        if isinstance(train_loader, Prefetcher):
+                            train_loader.close()
                         train_loader = _make_train_loader(cur_bag)
                     x, y = next(train_loader)
                 x, y = x.to(device), y.to(device)
@@ -1753,6 +1793,10 @@ def main(cfg: DictConfig) -> None:
             diag_forward_norms(model, step, _diag_optstate_path)
 
         # ── Timing ────────────────────────────────────────────────────────
+        if _exact_trace is not None:
+            _exact_trace.write(f"{step} {float(loss.item()).hex()}\n")
+            _exact_trace.flush()
+
         t_now = time.perf_counter()
         _dt = t_now - t_start
         step_times.append(_dt)
@@ -1906,6 +1950,22 @@ def main(cfg: DictConfig) -> None:
     final_path = os.path.join(ckpt_dir, f"step_{total_steps}.pt")
     save_checkpoint(final_path, total_steps, model, optimizer, scaler, pruning, next_step=total_steps)
     print(f"Final checkpoint: {final_path}")
+
+    if _exact_trace is not None:
+        # Raw-byte SHA256 of every state tensor (dtype-agnostic reinterpret) — the
+        # second half of the bit-exactness gate: identical trace + identical hash
+        # ⇒ the change is trajectory-identical.
+        import hashlib
+        _h = hashlib.sha256()
+        _sd = model.state_dict()
+        for _k in sorted(_sd):
+            _t = _sd[_k]
+            if isinstance(_t, torch.Tensor) and _t.numel() > 0:
+                _h.update(_k.encode())
+                _h.update(_t.detach().cpu().contiguous().reshape(-1).view(torch.uint8).numpy().tobytes())
+        _exact_trace.write(f"FINAL_SHA256 {_h.hexdigest()}\n")
+        _exact_trace.close()
+        print(f"[exact] state hash {_h.hexdigest()}", flush=True)
 
     # ── Final eval + generation ───────────────────────────────────────────
     # The eval()/train() + grad-mode toggle is safe under eager_on_recompile (set
