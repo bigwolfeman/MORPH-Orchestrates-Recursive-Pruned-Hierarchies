@@ -22,6 +22,7 @@ from typing import Generator, Tuple
 import numpy as np
 import torch
 
+from morph.training.data_placement import DataRuntimeConfig, Prefetcher, TokenStore
 from morph.training.source_roles import (
     DEFAULT_ALLOWED_PRETRAIN_ROLES,
     validate_source_for_pretraining,
@@ -31,7 +32,8 @@ __all__ = ["MultiSourceCurriculumLoader"]
 
 
 class _Source:
-    def __init__(self, name: str, sdir: str, weight: float, allowed_roles):
+    def __init__(self, name: str, sdir: str, weight: float, allowed_roles,
+                 runtime: DataRuntimeConfig | None = None):
         self.name = name
         self.weight = float(weight)
         self.meta = json.load(open(os.path.join(sdir, "meta.json")))
@@ -43,9 +45,11 @@ class _Source:
         )
         self.offsets = np.load(os.path.join(sdir, "doc_offsets.i64.npy"))   # [n_docs+1]
         self.lens = np.load(os.path.join(sdir, "doc_lens.i32.npy"))          # [n_docs]
-        # memmap the token blob — never pull 8B tokens into RAM.
-        self.tokens = np.memmap(os.path.join(sdir, "tokens.u16.bin"),
-                                dtype=np.uint16, mode="r")
+        # Placement-aware token blob: RAM preload on slow storage, mmap+MADV_RANDOM on
+        # fast — measured per file at init, one report line each (data_placement.py).
+        self.store = TokenStore(os.path.join(sdir, "tokens.u16.bin"),
+                                dtype=np.uint16, name=name, runtime=runtime)
+        self.tokens = self.store.array
         self.eos_id = int(self.meta["eos_id"])
         # filled by the loader once boundaries are known: stage_idx per doc
         self.stage_of_doc: np.ndarray | None = None
@@ -86,12 +90,15 @@ class _Source:
 
 class MultiSourceCurriculumLoader:
     def __init__(self, pretok_dir: str, weights: dict, stage_boundaries: list[int],
-                 seed: int = 0, allowed_roles=DEFAULT_ALLOWED_PRETRAIN_ROLES):
+                 seed: int = 0, allowed_roles=DEFAULT_ALLOWED_PRETRAIN_ROLES,
+                 data_runtime: DataRuntimeConfig | None = None):
         """weights: {source_name: weight} (need not sum to 1). stage_boundaries: ascending
         seq_lens, e.g. [4096, 8192, 16384] → 3 stages."""
         self.boundaries = [int(x) for x in stage_boundaries]
         self.n_stages = len(self.boundaries)
         self.rng = np.random.default_rng(seed)
+        self.runtime = data_runtime or DataRuntimeConfig.resolve()
+        self._prefetcher: Prefetcher | None = None
         self.sources: list[_Source] = []
         for name, w in weights.items():
             if w <= 0:
@@ -100,7 +107,7 @@ class MultiSourceCurriculumLoader:
             if not os.path.isdir(sdir):
                 raise FileNotFoundError(f"pretok shard missing for source {name!r}: {sdir} "
                                         f"(run scripts/pretokenize.py)")
-            s = _Source(name, sdir, w, allowed_roles)
+            s = _Source(name, sdir, w, allowed_roles, runtime=self.runtime)
             s.assign_stages(self.boundaries)
             self.sources.append(s)
         if not self.sources:
@@ -111,10 +118,24 @@ class MultiSourceCurriculumLoader:
         self._tok_count = {s.name: 0 for s in self.sources}    # realized per-source tokens
         self.set_stage(0)
 
+    # ── prefetch lifecycle ──────────────────────────────────────────────────
+    def _close_prefetch(self):
+        """Stop the active producer thread BEFORE mutating shared loader state (RNG,
+        cursors, carry) or handing that state to a new generator — otherwise the old
+        producer races the new one. Discarded in-flight batches are reported."""
+        if self._prefetcher is not None:
+            n = self._prefetcher.close()
+            if n:
+                print(f"[data] prefetch: discarded {n} in-flight batches at loader "
+                      f"rebuild (bit-exact repro across switches ⇒ prefetch_batches: 0)",
+                      flush=True)
+            self._prefetcher = None
+
     # ── stage control (driven by CurriculumScheduler) ──────────────────────
     def set_stage(self, k: int):
         if not (0 <= k < self.n_stages):
             raise IndexError(f"stage {k} out of range [0,{self.n_stages})")
+        self._close_prefetch()
         self.cur_stage = k
         self.cur_seq_len = self.boundaries[k]
         self._carry = []                                       # flush: no cross-stage bleed
@@ -157,8 +178,21 @@ class MultiSourceCurriculumLoader:
         self._carry = buf[n_tokens:]
         return out
 
-    def batches(self, batch_size: int, bag_size: int = 0
-                ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
+    def batches(self, batch_size: int, bag_size: int = 0):
+        """Infinite batch iterator. With runtime.prefetch_batches > 0 the synchronous
+        generator is wrapped in a single-producer Prefetcher (bit-identical order, see
+        data_placement.Prefetcher); any previously-issued iterator's producer is closed
+        first so exactly one thread ever touches the loader's RNG/cursors/carry."""
+        self._close_prefetch()
+        gen = self._batches_sync(batch_size, bag_size)
+        if self.runtime.prefetch_batches > 0:
+            self._prefetcher = Prefetcher(gen, self.runtime.prefetch_batches,
+                                          name=f"stage{self.cur_stage}")
+            return self._prefetcher
+        return gen
+
+    def _batches_sync(self, batch_size: int, bag_size: int = 0
+                      ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
         """Infinite. Reads cur_seq_len LIVE so a stage switch takes effect on the next batch."""
         while True:
             L = self.cur_seq_len

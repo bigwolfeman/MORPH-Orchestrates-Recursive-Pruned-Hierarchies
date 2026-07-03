@@ -1,6 +1,18 @@
 # Hardware-Adaptive Data Placement — Design Spec
 
-Status: **approved for build** (2026-07-02, Wolfe + Fable). Not yet implemented.
+Status: **phase 1 IMPLEMENTED** (2026-07-03) — `morph/training/data_placement.py`
+(probe + RAM budget + tiers A/B + Prefetcher), wired into `curriculum_data._Source`
++ `MultiSourceCurriculumLoader.batches()` and mirrored into Olympiad-AI's
+`nlp_source.py`. Gates run: 24 unit/integration tests (`tests/test_data_placement.py`,
+24 passed), real-shard smoke (NVMe → tier B, realized blend 0.201/0.799, 5.3 ms/batch
+prefetched), and an incident replay — the original HDD copy probed cold reads
+p50=6.43 ms, rotational=True → tier A PRELOAD (~2 min) exactly as designed.
+One deviation from §3 discovered in build: at a loader rebuild (TST switch, stage
+step-up) the closing Prefetcher discards ≤ depth in-flight batches, so the post-switch
+stream sits at a different RNG offset than a `prefetch_batches: 0` run — same
+distribution, different draw; it is logged when it happens, and bit-exact repro across
+switches still means `prefetch_batches: 0`. Phase 2 (tier C) remains unbuilt.
+Original approval: 2026-07-02, Wolfe + Fable.
 Motivating incident: the seed→MORPH forgetting run starved the GPU because the 21 GB OWT
 pretok shard was `np.memmap`'d from a spinning HDD — main thread D-blocked in
 `folio_wait_bit` at ~68 major faults/s (~12 ms seek each ≈ 80% of wall stalled). Invisible
