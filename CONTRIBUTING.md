@@ -107,6 +107,14 @@ For architecture PRs, also include:
 - ablation or benchmark evidence
 - whether checkpoints/configs are affected
 
+## Contribution Licensing
+
+MORPH is licensed under the Apache License 2.0.
+
+Unless you explicitly state otherwise in writing, any contribution intentionally submitted for inclusion in MORPH is submitted under Apache-2.0, matching the project license. Do not submit code, weights, data, figures, or text that you do not have the right to license under Apache-2.0-compatible terms.
+
+Vendored third-party code must retain its original license notices.
+
 ## Release Policy
 
 A numbered MORPH release is cut only when `next` has settled into a coherent architecture. Releases are not just a bundle of commits.
