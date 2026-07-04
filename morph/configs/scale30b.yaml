@@ -44,6 +44,7 @@ model:
   # Embeddings
   lorentz_fraction: 0.25  # 576 eucl + 192 Lorentz
   bigram_hash_vocab: 49152
+  n_ve: 0                 # disable value-embedding tables in the hotpath
 
   # LM head fused cross-entropy chunk size (rows of B·T per chunk).
   # Smaller = less peak VRAM, more launch overhead. Tune per target.

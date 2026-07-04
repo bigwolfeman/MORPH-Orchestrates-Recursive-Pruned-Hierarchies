@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Optional
 
 import torch
+from ._eager_flag import kernel_fence
 import torch.nn.functional as F
 from torch import Tensor
 
@@ -543,7 +544,7 @@ def fused_window_attention(
     )
 
 
-@torch.compiler.disable
+@kernel_fence
 def _window_kernel_dispatch(
     q: Tensor, k: Tensor, v: Tensor, window_size: int,
     n_skip_rope: int, exclude_self: bool, scale: float,

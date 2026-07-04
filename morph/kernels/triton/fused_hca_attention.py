@@ -52,6 +52,7 @@ Date:   2026-05-31
 from __future__ import annotations
 
 import torch
+from ._eager_flag import kernel_fence
 import torch.nn.functional as F
 from torch import Tensor
 
@@ -112,7 +113,8 @@ if TRITON_AVAILABLE:
         q_base = ((b * H + h) * S) * D
         q_ptrs = q_ptr + q_base + q_offs[:, None] * D + d[None, :]
         q = tl.load(q_ptrs, mask=q_mask[:, None] & dmask[None, :], other=0.0).to(tl.float32)
-        q = q * scale
+        # dtype pin — python-float scale becomes fp64 under dynamo re-trace (no-op eager)
+        q = (q * scale).to(tl.float32)
 
         # sink logit (per head), fp32
         sink = tl.load(sink_ptr + h).to(tl.float32)
@@ -190,7 +192,7 @@ if TRITON_AVAILABLE:
 
         q_ptrs = q_ptr + q_base + q_offs[:, None] * D + d[None, :]
         q = tl.load(q_ptrs, mask=q_mask[:, None] & dmask[None, :], other=0.0).to(tl.float32)
-        qs = q * scale
+        qs = (q * scale).to(tl.float32)  # dtype pin (see fwd kernel note)
         do = tl.load(do_ptr + q_base + q_offs[:, None] * D + d[None, :],
                      mask=q_mask[:, None] & dmask[None, :], other=0.0).to(tl.float32)
         lse = tl.load(lse_ptr + (b * H + h) * S + q_offs, mask=q_mask, other=float("-inf"))
@@ -215,7 +217,7 @@ if TRITON_AVAILABLE:
 
         # dscore_n = p_n * ((do·C_n) - D_acc) ; dq = scale * dscore @ C
         dscore = p * (doc - D_acc[:, None])                         # [BLOCK_Q, BLOCK_N]
-        dq = tl.dot(dscore.to(tl.float32), c, out_dtype=tl.float32) * scale
+        dq = (tl.dot(dscore.to(tl.float32), c, out_dtype=tl.float32) * scale).to(tl.float32)
         dq = tl.where(valid[:, None], dq, 0.0)
         tl.store(dq_ptr + q_base + q_offs[:, None] * D + d[None, :],
                  dq.to(dq_ptr.dtype.element_ty), mask=q_mask[:, None] & dmask[None, :])
@@ -258,7 +260,7 @@ if TRITON_AVAILABLE:
 
         q = tl.load(q_ptr + q_base + q_offs[:, None] * D + d[None, :],
                     mask=q_mask[:, None] & dmask[None, :], other=0.0).to(tl.float32)
-        qs = q * scale
+        qs = (q * scale).to(tl.float32)  # dtype pin (see fwd kernel note)
         do = tl.load(do_ptr + q_base + q_offs[:, None] * D + d[None, :],
                      mask=q_mask[:, None] & dmask[None, :], other=0.0).to(tl.float32)
         lse = tl.load(lse_ptr + (b * H + h) * S + q_offs, mask=q_mask, other=float("-inf"))
@@ -403,7 +405,7 @@ def fused_hca_attention(q: Tensor, C_comp: Tensor, sink_logits: Tensor,
     return _hca_dispatch(q, C_comp, sink_logits, m, scale)
 
 
-@torch.compiler.disable  # Dynamo fence: tl.dot in the kernel gets fp64 if traced
+@kernel_fence  # Dynamo fence: tl.dot in the kernel gets fp64 if traced
 def _hca_dispatch(q, C_comp, sink_logits, m, scale):
     return _FusedHCAAttention.apply(q, C_comp, sink_logits, m, scale)
 

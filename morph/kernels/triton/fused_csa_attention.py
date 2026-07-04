@@ -65,6 +65,7 @@ Date:   2026-05-31
 from __future__ import annotations
 
 import torch
+from ._eager_flag import kernel_fence
 import torch.nn.functional as F
 from torch import Tensor
 
@@ -128,7 +129,9 @@ if TRITON_AVAILABLE:
         q_base0 = ((b * H) * S + s) * D
         q_ptrs = q_ptr + q_base0 + hh[:, None] * (S * D) + d[None, :]
         q = tl.load(q_ptrs, mask=hmask[:, None] & dmask[None, :], other=0.0).to(tl.float32)
-        q = q * scale                                    # [BLOCK_H, BLOCK_D]
+        # (q*scale).to(fp32): pin dtype — dynamo's kernel re-trace promotes the
+        # python-float `scale` to fp64, poisoning the tl.dot operand (no-op in eager).
+        q = (q * scale).to(tl.float32)                   # [BLOCK_H, BLOCK_D]
 
         sink = tl.load(sink_ptr + hh, mask=hmask, other=0.0).to(tl.float32)  # [BLOCK_H]
 
@@ -222,7 +225,7 @@ if TRITON_AVAILABLE:
 
         q = tl.load(q_ptr + q_base0 + hh[:, None] * (S * D) + d[None, :],
                     mask=hmask[:, None] & dmask[None, :], other=0.0).to(tl.float32)  # [BLOCK_H, BLOCK_D]
-        qs = q * scale
+        qs = (q * scale).to(tl.float32)  # dtype pin (see fwd kernel note)
         do = tl.load(do_ptr + q_base0 + hh[:, None] * (S * D) + d[None, :],
                      mask=hmask[:, None] & dmask[None, :], other=0.0).to(tl.float32) # [BLOCK_H, BLOCK_D]
         lse = tl.load(lse_ptr + (b * H + hh) * S + s, mask=hmask, other=0.0).to(tl.float32)  # [BLOCK_H]
@@ -261,7 +264,7 @@ if TRITON_AVAILABLE:
 
             # dq[h] += scale * sum_t dscore[h,t] * C_sel_t = scale * (dscore @ C_sel)
             #   tl.dot: M=H, K=T, N=D
-            dq += scale * tl.dot(dscore.to(tl.float32), c, out_dtype=tl.float32)
+            dq += (scale * tl.dot(dscore.to(tl.float32), c, out_dtype=tl.float32)).to(tl.float32)  # dtype pin
 
             # dC_sel_t += sum_h (scale*dscore[h,t]*q[h] + p[h,t]*do[h])
             #   = scale*(dscore^T @ q) + (p^T @ do)   → [BLOCK_T, BLOCK_D]
@@ -389,7 +392,7 @@ def fused_csa_attention(q: Tensor, C_comp: Tensor, top_idx: Tensor,
     return _csa_dispatch(q, C_comp, top_idx, invalid_mask, sink_logits, scale)
 
 
-@torch.compiler.disable  # Dynamo fence: tl.dot in the kernel gets fp64 if traced
+@kernel_fence  # Dynamo fence: tl.dot in the kernel gets fp64 if traced
 def _csa_dispatch(q, C_comp, top_idx, invalid_mask, sink_logits, scale):
     return _FusedCSAAttention.apply(q, C_comp, top_idx, invalid_mask,
                                     sink_logits, scale)

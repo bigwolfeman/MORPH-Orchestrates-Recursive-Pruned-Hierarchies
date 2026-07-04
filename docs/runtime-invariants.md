@@ -7,7 +7,7 @@ coherent. Treat them as invariants, not cleanup targets.
 
 This document is the public map. Implementation comments in
 `morph/training/train.py` and `morph/model/transformer.py` remain the detailed
-source of truth.
+source of truth. It exists to stop LLMs from breakings things, and people from complaining.
 
 ## 1. Process-global kernel mode
 
@@ -15,6 +15,7 @@ source of truth.
 | --- | --- | --- |
 | `MORPH_FORCE_EAGER` / `set_force_eager` | `morph/kernels/triton/_eager_flag.py` | off (`0`) |
 | `MORPH_HC_FORCE_EAGER` / `set_hc_force_eager` | same | off |
+| `MORPH_DYNAMO_FENCE` / `kernel_fence` | same | on (`1`) |
 | `model.use_kernels` | Hydra / `MORPHConfig` | `true` |
 
 At `MORPHTransformer` construction, `use_kernels=False` calls
@@ -25,7 +26,21 @@ one process and expect both to stay correct.
 
 **Why it exists:** same architecture and weights, kernel-ON vs kernel-OFF A/B,
 without threading a flag through every call site. Reference paths stay Dynamo-
-traceable; fused autograd Functions are fenced with `@torch.compiler.disable`.
+traceable; fused dispatchers are fenced via `@kernel_fence` (default =
+`torch.compiler.disable`, the historical behavior).
+
+**Dynamo fence (2026-07-03):** the fences are now conditional. `MORPH_DYNAMO_FENCE=0`
+(read once at import) removes them so the fused kernels stay **inside** the compiled
+graph — modern dynamo (verified torch 2.11) traces the autograd Functions and Triton
+launches natively. Measured on the d512 seed (B32/S64): fenced kernels+compile ==
+kernels+eager (~21 ms/step, every frame falls back); unfenced 19.6 ms; pure
+reference+compile 14.9 ms. Opaque kernels are fusion barriers — at small shapes
+prefer `use_kernels=false` + compile; unfence for cloud-scale shapes where the
+kernel islands win. Known issue: this torch nightly's inductor mis-generates the
+`_hc_premap` launcher (grid args) — compose with `MORPH_HC_FORCE_EAGER=1` until fixed
+upstream. Correctness of the compiled reference path is gated by fp32 no-autocast
+parity: loss Δ = 0.0, worst grad rel 5.6e-5 (bf16 shows ~2 % — reduction-order
+rounding, not error).
 
 **Do not:** flip `set_force_eager` mid-training under a live compile stance, or
 assume import-time `DISABLE_FUSED_KERNELS` is the primary switch (runtime path is
@@ -63,9 +78,10 @@ The variable-depth core loop stays eager. Fused CE stays eager (host `.item()` i
 illegal during capture). Failed capture must abort — never silently fall back
 with a poisoned CUDA RNG. See comments on `MORPHTransformer.build_static_graphs`.
 
-Graphs require a large memory footprint, but are faster.
+Graphs require a large memory footprint, but are faster. Some configurations get stuck looping graph compiles during training because of poisson depth sampling.
 
-## 4. Phase schedule (prune → carve → route → TST)
+
+## 4. Phase schedule (TST → prune → carve → route)
 
 Canonical local recipe: `morph/configs/base.yaml`.
 
@@ -82,7 +98,28 @@ Canonical local recipe: `morph/configs/base.yaml`.
 Routing aux uses `aux_detach_input: true` so load-balance grads do not extend
 BPTT depth into OOM.
 
-## 5. Diagnostic env knobs (default off)
+## 5. Causality contract (2026-07-03)
+
+**No module may pool statistics across the sequence axis.** Every position's
+output must depend only on positions ≤ t. This sounds obvious; AI constantly makes this mistake
+(humans too), it is answer leakage. This one was well hidden so it is documented to prevent regression.
+
+| Invariant | Where |
+| --- | --- |
+| GLA readout norm is **per-token** (S folded into batch) | `morph/model/gla.py` `_readout` |
+| Trailing right-pad must be inert at real positions | gated in Olympiad `tests/models/test_morph_seed.py` |
+| Kernel dtype pins `(q * scale).to(tl.float32)` stay | `fused_csa_attention.py`, `fused_hca_attention.py` |
+
+
+**Gate:** the future-corruption probe (corrupt tokens after position k, assert
+logits at ≤ k unchanged) is the cheap decisive test for any new branch — norms,
+pooling, attention variants — before it trains. This catches all answer leakage problems reliably.
+
+The dtype pins exist because dynamo's kernel re-trace promotes python-float
+kernel args to fp64, poisoning `tl.dot` operands and loop-carried accumulators.
+They are numerical no-ops in eager. Removing them re-breaks compile.
+
+## 6. Diagnostic env knobs (default off)
 
 These are observation-only when unset: `MORPH_EXACT_TRACE`, `MORPH_MEM_PROBE`,
 `MORPH_DIAG_*`, `MORPH_PERF_REGIONS`, `MORPH_PROF_WINDOW`, `MORPH_NSYS_WINDOW`,
@@ -91,15 +128,22 @@ These are observation-only when unset: `MORPH_EXACT_TRACE`, `MORPH_MEM_PROBE`,
 `MORPH_EXACT_TRACE=<path>` appends per-step loss hex for bit-identical A/B gates.
 Use only on gate runs (adds a host sync per step).
 
-## 6. What not to “fix”
+## 7. What not to “fix”
 
 - Removing process-global `force_eager` without a per-module replacement that
   preserves reference A/B and Dynamo fences.
-- Enabling `compile_mode=reduce-overhead` (CUDA graphs + eval OOM history).
+- Enabling `compile_mode=reduce-overhead` when on constrained hardware (CUDA graphs + eval OOMs.
 - Setting `fullgraph=True` on the looped core.
 - Calling `carve()` while density is still ~1.0 (produces a “sparse” model with
   K/C=1.0).
 - Silent fallbacks when a kernel, dataset path, or checkpoint topology fails.
+- Reverting `@kernel_fence` to hard `@torch.compiler.disable` (kills graph
+  composition), or flipping `MORPH_DYNAMO_FENCE=0` into the default without an
+  fp32 parity gate on the target torch version.
+- “Simplifying” `gla.py` `_readout` back to `gn(o.transpose(1,2))` — it looks
+  more idiomatic and it is a causality leak (§5).
+- Removing the `(… * scale).to(tl.float32)` dtype pins in CSA/HCA kernels as
+  “redundant casts” (§5).
 
 Public contract tests under `tests/test_lifecycle_*.py` cover a minimal subset.
 Longer campaign logs and gate scripts live under gitignored `ignore/`.

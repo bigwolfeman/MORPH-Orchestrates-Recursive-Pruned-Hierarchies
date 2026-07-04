@@ -124,7 +124,15 @@ class GatedLinearAttention(nn.Module):
         # eager Linear — see _project); None → recompute (fusion off).
         B, S, H, dh = o.shape
         o = o.reshape(B, S, H * dh)
-        o = self.gn(o.transpose(1, 2)).transpose(1, 2)          # GroupNorm over channels
+        # Per-TOKEN GroupNorm over channels (fold S into batch). The previous
+        # transpose form — gn(o.transpose(1,2)) on [B,C,S] — pooled normalization
+        # statistics across the WHOLE sequence axis, making every position depend
+        # on FUTURE tokens: a causality leak. Trained models learned to read the
+        # answer through it (teacher-forced 100% vs generation 60% on identical
+        # inputs; corrupting future tokens moved past-position logits by up to
+        # 17.9). Diagnosed 2026-07-03, Olympiad stage-2.1 A/B; any retention-ON
+        # checkpoint trained before this fix is leak-reliant — retrain, don't load.
+        o = self.gn(o.reshape(B * S, H * dh)).reshape(B, S, H * dh)
         r = self.r_proj(x) if r_pre is None else r_pre
         o = o * F.silu(r)                                       # swish output gate
         return self.o_proj(o)

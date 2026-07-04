@@ -50,7 +50,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from ._eager_flag import force_eager
+from ._eager_flag import force_eager, kernel_fence
 
 try:
     import triton
@@ -240,16 +240,16 @@ class _NormalizeMask(torch.autograd.Function):
 # ─── Dynamo-fenced entry points (autograd.Functions are opaque to compile) ───
 
 
-@torch.compiler.disable
+@kernel_fence
 def pk_logits(scores_a: Tensor, scores_b: Tensor, group_bias: Tensor) -> Tensor:
     return _PKLogits.apply(scores_a, scores_b, group_bias)
 
 
-@torch.compiler.disable
+@kernel_fence
 def sub_relu(group_logits: Tensor, threshold: Tensor) -> Tensor:
     return _SubRelu.apply(group_logits, threshold)
 
 
-@torch.compiler.disable
+@kernel_fence
 def normalize_mask(gates0: Tensor, t: Tensor) -> tuple[Tensor, Tensor]:
     return _NormalizeMask.apply(gates0, t)

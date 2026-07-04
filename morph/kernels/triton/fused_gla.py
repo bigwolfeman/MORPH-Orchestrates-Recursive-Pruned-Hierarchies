@@ -55,6 +55,7 @@ Author: TileProver (Claude Code, Opus 4.8)  Date: 2026-06-06
 from __future__ import annotations
 
 import torch
+from ._eager_flag import kernel_fence
 from torch import Tensor
 
 try:
@@ -334,7 +335,7 @@ class FusedGLA(torch.autograd.Function):
         return dq, dk, dv, dla, d_initial, None
 
 
-@torch.compiler.disable  # Dynamo fence: the Triton autograd Function is opaque
+@kernel_fence  # Dynamo fence: the Triton autograd Function is opaque
 def fused_gla(q: Tensor, k: Tensor, v: Tensor, log_alpha: Tensor,
               initial_state: Tensor | None = None, chunk: int = _DEFAULT_CHUNK):
     """Fused chunked GLA. Inputs [B,S,H,dh] (bf16/fp32); log_alpha ≤ 0.

@@ -38,6 +38,7 @@ Date:   2026-06-05
 from __future__ import annotations
 
 import torch
+from ._eager_flag import kernel_fence
 import torch.nn.functional as F
 from torch import Tensor
 
@@ -1267,24 +1268,24 @@ class _FusedHCPost(torch.autograd.Function):
 # ===========================================================================
 # Dynamo fences — the Triton autograd Functions are opaque to Dynamo (tracing
 # INTO their Triton IR mis-launches the kernel / feeds fp64 to tl.dot). These
-# @torch.compiler.disable dispatchers force a graph break AT the kernel so the
+# @kernel_fence dispatchers force a graph break AT the kernel so the
 # surrounding model still compiles with kernels ON. The reference branches in
 # the public wrappers above stay OUTSIDE the fence → inductor fuses them (the
 # kernels-OFF compile path the d=256 seed relies on). No effect in eager runs.
 # ===========================================================================
 
-@torch.compiler.disable
+@kernel_fence
 def _hc_pre_dispatch(h: Tensor, hpre_cm: Tensor) -> Tensor:
     return _FusedHCPre.apply(h, hpre_cm)
 
 
-@torch.compiler.disable
+@kernel_fence
 def _hc_post_dispatch(hres: Tensor, hpost_row: Tensor, h: Tensor, y: Tensor,
                       term: Tensor | None) -> Tensor:
     return _FusedHCPost.apply(hres, hpost_row, h, y, term)
 
 
-@torch.compiler.disable
+@kernel_fence
 def _hc_pre_map_dispatch(h: Tensor, proj_w: Tensor, proj_b: Tensor,
                          tau: float, alpha: float, iters: int, eps: float,
                          N: int) -> tuple[Tensor, Tensor, Tensor]:

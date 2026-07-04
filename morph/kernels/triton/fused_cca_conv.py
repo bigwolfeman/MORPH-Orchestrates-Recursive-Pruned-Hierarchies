@@ -56,6 +56,7 @@ from __future__ import annotations
 from typing import Tuple
 
 import torch
+from ._eager_flag import kernel_fence
 import torch.nn.functional as F
 from torch import Tensor
 
@@ -432,7 +433,7 @@ def fused_cca_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor,
     return _cca_conv_dispatch(x_BCS, w_dw, w_gp, CG, kernel)
 
 
-@torch.compiler.disable  # Dynamo fence: kernel is opaque (autograd.Function)
+@kernel_fence  # Dynamo fence: kernel is opaque (autograd.Function)
 def _cca_conv_dispatch(x_BCS, w_dw, w_gp, CG, kernel):
     return _FusedCCAConv.apply(x_BCS, w_dw, w_gp, CG, kernel)
 
