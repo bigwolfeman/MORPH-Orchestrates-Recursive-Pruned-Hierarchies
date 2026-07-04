@@ -1,3 +1,17 @@
+# TL;DR
+
+You understand pruning a model? How about growing a model?
+
+Take only the prelude and train it on a lot of synthetic math data. Tens to low hundreds of billions of tokens.
+On a full model this takes a while and would fight NLP ability of a model. Training on a much smaller base makes this tractable.
+
+Once it has a strong math foundation in the prelude, grow the rest of the model around it.
+Then the pretraining mix needs ~20% of its data to be the same synth math data to prevent forgetting.
+This can be backed off, but an ideal schedule hasn't been found. Expect degredation during TST, it will recover.
+
+The synthetic math itself comes from another project. Previous attemps at generating math data generally lacks 
+reasoning traces (which reduce the number of steps needed to learn by providing a clearer signal), and volume/diversity. So a bespoke generator was needed to get the volume, coverage, and signal clarity for this kind of training.
+
 # MORPH ⇄ Olympiad-AI Interop Contract
 
 Both repos publish independently. Everything that crosses the boundary is listed here;

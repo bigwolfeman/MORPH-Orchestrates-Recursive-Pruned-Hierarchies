@@ -204,6 +204,7 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
         context_len=int(m.context_len),
         lorentz_fraction=float(m.lorentz_fraction),
         bigram_hash_vocab=int(m.bigram_hash_vocab),
+        n_ve=int(m.n_ve) if getattr(m, "n_ve", None) is not None else None,
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
         hc_streams=int(getattr(m, "hc_streams", 4)),

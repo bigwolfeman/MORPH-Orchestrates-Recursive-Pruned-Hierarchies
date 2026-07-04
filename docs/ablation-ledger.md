@@ -31,7 +31,7 @@ single campaign or partial stack; **low** = directional / incomplete.
 | Block-ELL | Reject Block-ELL sparse backend | Legacy compact path | Slower than dense at target density; MORTAR only | high | stk / removal verifies |
 | FP8-default | Reject FP8 as default at d=768 | `fp8: false` | Dead in small-GEMM regime; mutually exclusive with ternary per-layer | medium | `ignore/verify_fp8*.py`, `ab_fp8_*` |
 | Attn-proj-QAT | Reject attn-proj int8 as default | `attn_proj_quant: "off"` | Needs own long validation; winner=off at validated ppl | medium | quant A/B notes |
-| STP | Reject STP as default training objective | STP-on vs STP-off campaigns | Not part of survivor recipe | medium | `ignore/gate_stp_*`, `tst_stp_*` runlogs |
+| STP | Reject STP as default training objective | STP-on vs STP-off campaigns | Not part of survivor recipe, mixed results in pretraining and SFT punc STP strictly better in SFT. | low | `ignore/gate_stp_*`, `tst_stp_*` runlogs |
 | Stock-AdEMAMix-3buf | Reject stock 3-buffer AdEMAMix path | Removed from code | β1=0 fork is the deploy optimizer | high | optimizer module history |
 | Static-graphs-default | Defer static/opt CUDA graphs as default | `MORPH_STATIC_GRAPHS`, `MORPH_OPT_CUDA_GRAPH` | Bit-exact when on; memory pool cost OOMs local deploy shape without allocator tweaks | medium | `ignore/perf/*graph*` |
 | Zyphra-RSA | Deferred | Outer inference harness | Requires RL; not in training path | low | CLAUDE.md / architecture notes |

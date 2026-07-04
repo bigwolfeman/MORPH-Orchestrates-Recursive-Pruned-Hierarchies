@@ -38,3 +38,27 @@ def set_hc_force_eager(value: bool) -> None:
 
 def hc_force_eager() -> bool:
     return _HC_FORCE_EAGER
+
+
+# ── Dynamo fence for the fused-kernel dispatchers ────────────────────────────
+# Historically every fused dispatcher was hard-wrapped in @torch.compiler.disable
+# ("kernel is opaque", "tl.dot gets fp64 if traced"). Under torch.compile those
+# fences force a graph break AT EVERY KERNEL CALL SITE, so inductor can never
+# fuse the eager glue between kernels — measured 2026-07-03 (Olympiad seed,
+# d512 / B32 / S64): kernels+compile == kernels+eager (21 ms/step) because every
+# frame fell back to eager, while fence-free reference+compile hit 14.9 ms/step.
+# Modern dynamo (torch >= 2.6, verified on 2.11) traces user Triton kernels and
+# autograd.Functions natively, making the fences obsolete THERE — but they stay
+# the default until parity is proven per-installation. Opt out explicitly:
+#   MORPH_DYNAMO_FENCE=1  (default) keep torch.compiler.disable on dispatchers
+#   MORPH_DYNAMO_FENCE=0  no fence: kernels stay INSIDE the compiled graph
+# Read once at import (same contract as the other flags in this module).
+_DYNAMO_FENCE: bool = os.environ.get("MORPH_DYNAMO_FENCE", "1") == "1"
+
+
+def kernel_fence(fn):
+    """@kernel_fence replaces @torch.compiler.disable on kernel dispatchers."""
+    if _DYNAMO_FENCE:
+        import torch
+        return torch.compiler.disable(fn)
+    return fn

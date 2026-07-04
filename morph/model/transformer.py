@@ -157,6 +157,11 @@ class MORPHConfig:
     # Embeddings
     lorentz_fraction: float = 0.25
     bigram_hash_vocab: int = 49152
+    # Value embeddings (token-value injection, modded-nanogpt trick): fresh per-layer
+    # vocab lookups additively injected into the ctx channel at the first n_ve prelude
+    # layers. None → min(3, n_prelude) (historical default, bit-identical). Set 0 to
+    # ablate them entirely (memorization-capacity study), or a smaller int to reduce.
+    n_ve: int | None = None
 
     # LM head — fused chunked cross-entropy (training). Rows of [B·T] tokens
     # processed per chunk; smaller = less peak memory, more launch overhead.
@@ -530,7 +535,7 @@ class MORPHTransformer(nn.Module):
         ])
 
         # ── Value embeddings (inject into context channel) ────────────
-        n_ve = min(3, cfg.n_prelude)
+        n_ve = min(3, cfg.n_prelude) if cfg.n_ve is None else min(cfg.n_ve, cfg.n_prelude)
         self.value_embeds = nn.ModuleList([
             ChannelInject(self._ctx_start, self._ctx_end, d, init_scale=0.0)
             for _ in range(n_ve)

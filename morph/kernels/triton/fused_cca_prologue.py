@@ -39,6 +39,7 @@ import math
 from typing import Optional
 
 import torch
+from ._eager_flag import kernel_fence
 import torch.nn.functional as F
 from torch import Tensor
 
@@ -633,7 +634,7 @@ def fused_cca_prologue(
     )
 
 
-@torch.compiler.disable  # Dynamo fence: kernel is opaque (autograd.Function)
+@kernel_fence  # Dynamo fence: kernel is opaque (autograd.Function)
 def _cca_prologue_dispatch(*args):
     return _FusedCCAPrologue.apply(*args)
 
