@@ -1,0 +1,133 @@
+# ReAct universal-ritual bridge — continue-pretrain the d512 model so a SINGLE decompose->observe->
+# act->answer ritual fires on EVERY input (math AND common knowledge). Goal: kill the "is this a
+# math problem?" domain gate. When the ritual always fires, a math question phrased as prose still
+# triggers decompose->act, and the quantitative content surfaced during decomposition routes into
+# the intact compute circuit (the NLP-circuit -> math-circuit route we were missing).
+#
+# REPETITION-BOUNDED blend. The finite real sources are tiny (unique tokens: strategyqa ~0.33M,
+# qasc ~1.21M, gsm8k ~1.44M). A long run over them = memorization, not ritual-teaching (v1's
+# 5000-step/164M-token plan was 30-34x — killed). So we bound the FINITE real sources to <=4 passes
+# and let the INFINITE/large sources (word_problems generator, olympiad + finemath shards) carry the
+# token volume with ~0 repetition. At 1000 steps (32.8M tok):
+#   - react_gsm8k     0.18  real GSM8K, <<>>-verified compute chains  -> 4.1x  (ReAct MATH, real dist)
+#   - react_qasc      0.11  2-hop science MCQ                         -> 3.0x  (ReAct COMMON-KNOWLEDGE)
+#   - react_strategyqa 0.04 multi-hop yes/no, decomposition+facts     -> 3.9x  (ReAct CK, exemplar)
+#   - word_problems   0.27  synthetic relationship-rich givens (GENERATOR, ~0.17x) (ReAct-ish MATH)
+#   - olympiad_math   0.25  canonical math traces (large shard, ~0.03x)     (COMPUTE-CIRCUIT replay)
+#   - finemath        0.15  real NL math prose (large, ~0.01x)              (plain-LM fluency guard)
+# If v1 underfits, the fix is MORE UNIQUE real data (CoT-Collection), NOT more repetition.
+#
+# init_from = SAME base as wordbridge_d512 (prepretrain-math step_46000 weights) so this run is a
+# direct A/B vs wordbridge on GSM8K test — isolates the ReAct-ritual contribution. Same MORPHConfig,
+# TST OFF (short run), prune/carve/ReMoE OFF, replay guards the compute circuit.
+#
+# Launch (from MORPH repo, MORPH venv):
+#   env -C <MORPH> OLYMPIAD_REPO=/mnt/sda1/Projects/00NN/Olympiad-AI PYTHONPATH=<MORPH> \
+#     PYTHONUNBUFFERED=1 /home/wolfe/.venv/bin/python -m morph.training.train \
+#     --config-name react_bridge_d512
+defaults:
+  - base
+  - _self_
+
+model:
+  d_model: 512
+  n_heads: 4
+  n_kv_heads: 4
+  d_ff: 1376
+  vocab_size: 49169
+  n_prelude: 4
+  n_core: 0
+  n_coda: 4
+  mean_depth: 1
+  max_depth: 1
+  bptt_depth: 1
+  ckpt_grad_iters: -1
+  channel_dims: [256, 160, 96]
+  compression: 2
+  csa_compress_ratio: 8
+  hca_compress_ratio: 256
+  top_k: 256
+  window_size: 256
+  context_len: 512
+  max_seq_len: 512
+  lorentz_fraction: 0.25
+  bigram_hash_vocab: 0
+  n_ve: 3
+  ce_chunk_size: 8192
+  use_kernels: true
+  hc_streams: 4
+  hc_tau: 1.0
+  hc_cayley_iters: 3
+  hc_cayley_alpha: 0.1
+  hc_init_gain: 0.1
+  hc_use_kernel: true
+  retention: true
+  retention_layers: [1]
+  retention_heads: 4
+  retention_chunk: 128
+  retention_gate_init: -6.0
+  retention_carry: true
+  retention_gate_bias: 2.0
+  core_gain_clip: 0.0
+
+training:
+  init_from: ${oc.env:OLYMPIAD_REPO,/mnt/sda1/Projects/00NN/Olympiad-AI}/checkpoints/morph_seed_512_math_fullvocab/wordbridge_init_d512.pt
+  ternary: true
+  ternary_scope: backbone
+  ternary_scale_group: tensor
+  embed_quant: "int6"
+  attn_proj_quant: "off"
+  adam8bit: false
+  bf16: true
+  compile: false
+  compile_mode: default
+  dropout: 0.0
+  prune_start: 999999999          # prune OFF
+  compact_step: 999999999         # carve OFF
+  cms_score_mode: grad
+  steps: 1000                     # bounded so finite real sources stay <=4 passes (anti-memorization)
+  lr_decay_steps: 1000
+  tst_bag_size: 0                 # TST OFF — superposition arc needs a long horizon; clean NTP here
+  tst_ratio: 0.0
+  optimizer: ademamix_b1zero
+  lr: 2.0e-4
+  lr_schedule: cosine
+  min_lr: 2.0e-5
+  warmup: 100                     # short run, converged init → short warmup
+  grad_clip: 1.0
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  eval_every: 250
+  n_eval_batches: 20
+  ckpt_every: 250                 # 4 checkpoints for the GSM8K probe curve
+  gen_every: 0
+  seed: 0
+
+routing:
+  route_start: 999999999          # ReMoE OFF
+
+curriculum:
+  enabled: true
+  pretok_dir: ${oc.env:OLYMPIAD_REPO,/mnt/sda1/Projects/00NN/Olympiad-AI}/data/react_mix
+  allowed_source_roles: [pretrain_bulk, reasoning_midtrain, posttrain_gold]
+  eff_batch: 64                   # micro_batch 32 x grad_accum 2
+  blend:
+    react_gsm8k_pad_cot: 0.13        # PaD arm B: HRM-teacher natural-language CoT
+    react_qasc: 0.11           # 3.0x
+    react_strategyqa: 0.04     # 3.9x
+    word_problems: 0.32        # infinite generator, SAME given->goal->bare-arith format (~0.14x)
+    olympiad_math: 0.25        # compute-circuit replay (~0.03x)
+    finemath: 0.15             # plain NL (~0.01x)
+  stages:
+    - {seq_len: 512, context_len: 512, micro_batch: 32, steps: 1000}
+
+data:
+  dataset: /home/wolfe/.cache/huggingface/datasets/openwebtext/**/openwebtext-train-*.arrow
+  tokenizer: bigcode/starcoder2-7b
+  seq_len: 512
+
+wandb:
+  project: MORPH-Math
+  name: react-bridge-d512-v4b-cot
+  tags: [morph-seed, react, ritual, gsm8k, strategyqa, qasc, routing, d512, ademamix, given-goal-arith, pad, hrm-teacher, cot-arm, v4b]

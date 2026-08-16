@@ -1,0 +1,44 @@
+# Sequential production continuation: certified Olympiad stages 11-13 plus broad NLP.
+#
+# This composes the validated Phase-A d512 model/optimizer/quantization hotpath, but
+# starts a NEW 15k-step schedule from its final weights. `init_from` is intentionally
+# weights-only: checkpoints for this phase are phase-local step_*.pt, not mislabeled
+# global steps.
+#
+# Token contract: 15,000 * 64 * 512 = 491,520,000 sampled tokens.
+# Every source remains below one pass over its materialized unique inventory:
+#   stages 11-13  45% = 221.184M / 366.606M = 0.603x
+#   stages 2-10   10% =  49.152M / 291.377M = 0.169x
+#   FineWeb-Edu   25% = 122.880M / 450.796M = 0.273x
+#   FineMath       7% =  34.406M / 381.960M = 0.090x
+#   MathPile       3% =  14.746M / 203.013M = 0.073x
+#   StackExchange  5% =  24.576M / 152.619M = 0.161x
+#   synthetic IR   5% =  24.576M / 612.693M = 0.040x
+defaults:
+  - transition_phase_a_d512
+  - _self_
+
+training:
+  init_from: /mnt/BigAssDrive/00projects/00DeepNet/00-MORPH-Orchestrates-Recursive-Pruned-Hierarchies/checkpoints/morph/transition-phase-a-d512-v1/step_61000.pt
+  steps: 15000
+  lr_decay_steps: 15000
+  # Inherited from Phase A: bf16, fresh AdEMAMix, 1e-4 -> 2e-5 cosine,
+  # 500-step warmup, ternary backbone, int6 embeddings, no prune/carve/route/TST.
+
+curriculum:
+  blend:
+    olympiad_stage11_13: 0.450
+    olympiad_math: 0.100
+    fineweb_edu: 0.250
+    finemath: 0.070
+    mathpile_textbooks: 0.030
+    qa_stackexchange: 0.050
+    wp_ir_views: 0.050
+    gsm8k_ir_views: 0.000
+  stages:
+    - {seq_len: 512, context_len: 512, micro_batch: 32, steps: 15000}
+
+wandb:
+  project: MORPH-Math
+  name: transition-olympiad-band11-13-d512-v1
+  tags: [morph-seed, transition, olympiad-band, stages-11-13, nlp, d512, ademamix, certified]

@@ -27,7 +27,7 @@ from torch import Tensor
 
 # ── Channel layout ────────────────────────────────────────────────────────────
 
-# Channel layout of the residual stream (must sum to d_model=768). ChannelInject targets
+# Channel layout of the residual stream (must sum to the configured d_model). ChannelInject targets
 # these slices so each injected signal type has a dedicated region:
 #   Ch0 — Compute (384): attention + MLP primary output.
 #   Ch1 — Context (256): x0 skip, value embeds, loop injection.

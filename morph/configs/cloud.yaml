@@ -8,6 +8,7 @@ model:
   d_model: 2048
   n_heads: 16
   n_layers: 16
+  d_ff: 5632  # growth family: seed 1408 x4; base 2816 x2; 128-aligned
 
   n_prelude: 4
   n_core: 8
@@ -28,6 +29,7 @@ model:
 
   lorentz_fraction: 0.25
   bigram_hash_vocab: 49152
+  retention_heads: 16
 
 training:
   steps: 200000

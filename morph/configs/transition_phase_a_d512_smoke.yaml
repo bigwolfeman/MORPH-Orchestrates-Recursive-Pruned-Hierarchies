@@ -1,0 +1,32 @@
+# PIPELINE SMOKE for transition_phase_a_d512 (PLAN.md item 6). NOT the run.
+# Identical model/quant/optimizer/blend/pretok_dir to the launch config; only the
+# horizon is shrunk so every gate fires quickly:
+#   - init_from load ("matched 355/355 tensors" line = the load gate)
+#   - 60 real optimizer steps, finite loss (NaN guard would abort loudly)
+#   - curriculum blend realization (data/frac_* logged per step)
+#   - wandb full resolved config + dataset_manifests + quant manifests
+#   - eval at step 30/60 (val ppl lane) + checkpoint at step 30/60 + final ckpt
+# Reload is verified afterwards by scripts/eval_math_checkpoint.py on step_60.pt.
+#
+#   env -C <MORPH> OLYMPIAD_REPO=/mnt/sda1/Projects/00NN/Olympiad-AI PYTHONPATH=<MORPH> \
+#     HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1 /home/wolfe/.venv/bin/python \
+#     -m morph.training.train --config-name transition_phase_a_d512_smoke
+defaults:
+  - transition_phase_a_d512
+  - _self_
+
+training:
+  steps: 60
+  lr_decay_steps: 60
+  warmup: 10
+  eval_every: 30
+  ckpt_every: 30
+
+curriculum:
+  stages:
+    - {seq_len: 512, context_len: 512, micro_batch: 32, steps: 60}
+
+wandb:
+  project: MORPH-Test
+  name: transition-phase-a-d512-smoke
+  tags: [smoke, transition, phase-a, d512]

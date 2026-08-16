@@ -1,6 +1,7 @@
-# MORPH base config — local GPU (downsized from cloud target)
+# MORPH base config — growth-compatible local rung.
+# Exact nested family: d512 seed -> d1024 base -> d2048 cloud.
 # Cloud target: 4:8:4, d_model=2048
-# Local: 3:6:3, d_model=768
+# Local: 4:6:4, d_model=1024
 #
 # This is the SINGLE canonical default config reflecting the validated winning deploy stack:
 #   - MORTAR sparse backend (ternary backbone, 0.25 BCSR via morph/sparse/stk)
@@ -10,16 +11,17 @@
 #   - LoopSSM base mechanism (DiagonalInjection, always-on; ablation arms #232 are NOT included)
 
 model:
-  d_model: 768
-  n_heads: 12
-  n_layers: 12  # n_prelude + n_core + n_coda
-  vocab_size: 49152  # StarCoder2
+  d_model: 1024
+  n_heads: 8
+  n_layers: 14  # n_prelude + n_core + n_coda
+  d_ff: 2816    # seed 1408 x2; cloud 5632 /2; 128-aligned for MORTAR
+  vocab_size: 49169  # StarCoder2 + 17 Olympiad structure/control tokens
   max_seq_len: 4096
 
   # Parcae loop
-  n_prelude: 3
+  n_prelude: 4
   n_core: 6
-  n_coda: 3
+  n_coda: 4
   mean_depth: 6
   max_depth: 8
   bptt_depth: 4
@@ -35,16 +37,16 @@ model:
   ckpt_grad_iters: -1
 
   # Channel slices used by DiagonalInjection and final mixing. The residual carrier is HC.
-  channel_dims: [384, 256, 128]  # compute, context, memory
+  channel_dims: [512, 320, 192]  # seed x2; cloud /2
 
   # Attention (CCA+CSA+HCA, all features baked in)
   compression: 2
   n_kv_heads: 4
-  csa_compress_ratio: 4
-  hca_compress_ratio: 128
-  top_k: 128
-  window_size: 128
-  context_len: 4096
+  csa_compress_ratio: 8
+  hca_compress_ratio: 256
+  top_k: 256
+  window_size: 256
+  context_len: 8192  # common CoPE taper anchor across seed/base/cloud
 
   # Embeddings
   lorentz_fraction: 0.25  # 576 eucl + 192 Lorentz
@@ -72,7 +74,8 @@ model:
 
   # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
   # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.
-  # Constraint: all dims must be divisible by tile_size=16. d_model=768, d_ff=2048(auto) satisfy this.
+  # Constraint: all dims must be divisible by tile_size=16. d_model=1024 and d_ff=2816
+  # are also 128-aligned so the live MORTAR carve path has no partial blocks.
 
   # ── GLA Retention branch (#230) ──────────────────────────────────────────
   # Gated Linear Attention added in PARALLEL to the windowed attention in the 2nd layer
@@ -80,7 +83,7 @@ model:
   # Off → GLA not constructed → bit-identical to baseline.
   retention: true
   retention_layers: [1]          # within-section layer index that gets the branch (0-based)
-  retention_heads: 0             # 0 → use n_heads
+  retention_heads: 8             # d_head=128; seed 4 x2, cloud 16 /2
   retention_chunk: 256           # GLA chunk length; larger=faster (launch-bound)
   retention_gate_init: -6.0      # branch-gate logit; sigmoid(-6)≈0.0025 → ≈ identity at init
   retention_carry: true          # core: carry GLA state across loop iterations (false → reset)
@@ -104,17 +107,18 @@ training:
   checkpointing: true
 
   # Pruning → MORTAR carve → routing schedule (Phases 2→3→4)
-  # Prune cadence at d=768: the "guarantee progress" floor pins each event to exactly
-  # 1 block drop (0.5% of gate_up=192 blocks is <1 block), so prune_rate is inert here;
-  # prune_interval is the only speed lever. The bottleneck layer (gate_up) must drop 144
-  # blocks (192→48) to reach 0.25 density, one per event → density hits 0.25 by step
-  # ~27050 at interval=167. The prune→0.25 window MUST close before compact_step, else
-  # carve() freezes a still-dense model. At d=2048 (cloud scale) prune_rate bites normally.
+  # Prune cadence at d=1024/d_ff=2816. With 128x128 blocks, gate_up has 44x8=352
+  # blocks and down has 8x22=176. The down projection is the bottleneck: at 0.5%
+  # prune_step_blocks()'s progress floor drops one block/event, requiring 132 events to
+  # reach 44/176=0.25. interval=167 provides 156 events from the first eligible multiple
+  # (3006) through the last pre-carve multiple (28891), so every unprotected layer reaches
+  # target before carve@29000. The prune→0.25 window MUST close before compact_step, else
+  # carve() freezes a still-dense model. Protection masks can intentionally plateau above it.
   # NOTE: prune completes inside the TST superposition window; carve@29000 and route@30000
   #  align with the superposition→recovery boundary.
   prune_start: 3000
-  prune_interval: 167            # SLOWER: 1.67× the winner's 100 — the REAL d=768 lever (see MECHANISM)
-  prune_rate: 0.005              # = winner; INERT at d=768 (1 block/event floor). Only bites at cloud d=2048
+  prune_interval: 167            # 156 eligible events before carve; >=132 required by down projection
+  prune_rate: 0.005              # down drops at the one-block/event floor; gate_up initially drops two
   target_density: 0.25
   compact_step: 29000            # carve smooth-shadow → BCSR mortar_data (was 20000; moved to clear the slower ramp)
   cms_score_mode: taylor         # winner prune saliency (NOT grad); Taylor helps post-prune recovery (B3>B1)
@@ -126,7 +130,8 @@ training:
   # Paper sweet spot s=6, ratio=0.3. At steps=100000 ⇒ superposition [0,30000), recovery [30000,100000).
   # SCHEDULE NOTE: the superposition phase contains prune(3k–27k)/carve(29k); route(30k) engages at
   #   the superposition→recovery boundary — sparse structure is built under superposition, then
-  #   recovers on 70k steps of clean NTP. TST was −4% ppl at d=768/15k on a quant-ONLY stack (#231);
+  #   recovers on 70k steps of clean NTP. Historical TST evidence was −4% ppl at d=768/15k
+  #   on a quant-ONLY stack (#231); the new d1024 family member remains to be re-benchmarked.
   tst_bag_size: 6                # s: tokens superposed per position (0 = TST off)
   tst_ratio: 0.3                 # fraction of steps in the superposition phase
 
@@ -237,7 +242,8 @@ training:
   attn_proj_quant: "off"         # off | int8 | int6 | int4. QUOTED. Winner=off (reproduces validated 33.82);
                                  # int8 is a deploy opt-in that needs its own 25k validation before becoming default.
 
-  # FP8: dead at d=768 scale (small-GEMM regime); ternary and FP8 are mutually exclusive per-layer.
+  # FP8 was dead at the former d=768 scale (small-GEMM regime); ternary and FP8 are
+  # mutually exclusive per-layer. The d1024 family member remains to be re-benchmarked.
   fp8: false
   fp8_recipe: dynamic
   fp8_scope: mlp
@@ -266,7 +272,7 @@ training:
 #  once the carve has been applied. route_start just gates the training-time routing head.)
 routing:
   route_start: 30000             # engage ReMoE 1000 steps after carve (compact 29000); = TST superposition→recovery boundary
-  route_scope: all               # whole-body ReMoE (12 MLPs); winner used all. Code default "core" = 6 MLPs only
+  route_scope: all               # whole-body ReMoE (14 physical MLPs); "core" would route only the 6 core blocks
   n_clusters: 16
   activation_ratio: 0.5
   aux_loss_coeff: 0.01

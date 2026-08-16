@@ -1,0 +1,50 @@
+# ANSWER-ONLY SHADOW CONTROL for the trace-uplift experiment (PLAN.md
+# "Trace-uplift causal control"). PREPARED, NOT LAUNCHED — matched arm to
+# transition_phase_a_d512 (the trace treatment).
+#
+# Matched: identical init checkpoint, model/quant config, optimizer, LR schedule,
+# seed, seq_len, eff_batch, total steps/token budget, replay stream
+# (olympiad_math), math-prose and QA streams.
+#
+# Treatment variable removed: the certified-IR TRACE views. Replaced by the
+# answer-only projection shards (same question surfaces — natural, alternate,
+# formal — same answers, ZERO reasoning tokens; built in the same export pass by
+# scripts/export_ir_views_shards.py), with the freed trace-token budget moved to
+# the SAME general-language mixture (fineweb_edu), per the PLAN.
+#
+# Share derivation (from measured shard sizes, matching per-record exposure):
+#   treatment wp_ir_views 0.360 -> 720M drawn / 612.7M unique = 1.175 epochs of
+#     the 1.2M records; the control shard is 173.64M tok, so matching exposure
+#     needs 1.175 x 173.64M = 204M -> share 0.1020; freed 0.2580 -> fineweb_edu.
+#   treatment gsm8k_ir_views 0.005 -> 10M / 3.079M = 3.25 epochs; control shard
+#     0.8189M -> 2.66M -> share 0.0013; freed 0.0037 -> fineweb_edu.
+#
+# KNOWN honest mismatches (decide before launching the experiment):
+#   - answer-exposure count per record: treatment 5 answer blocks/record vs
+#     control 3 (the explanation + natural trace views have no distinct
+#     question surface to project). Exact answer-count matching would need doc
+#     duplication, which degenerates. Preregister this.
+#   - the olympiad_math replay stream contains TRACES in both arms (it is the
+#     legacy math-preservation stream, not the treatment variable).
+#   - fineweb_edu runs ~2.5x epochs in this arm (1.12B / 450.8M unique).
+#   - paired seeds: this is ONE control arm; the causal claim needs 3 paired
+#     seeds per the PLAN (screen at 50-100M tokens first).
+defaults:
+  - transition_phase_a_d512
+  - _self_
+
+curriculum:
+  blend:
+    wp_ir_views: 0.0              # treatment removed
+    gsm8k_ir_views: 0.0           # treatment removed
+    wp_ir_answeronly: 0.1020      # same questions/answers, no reasoning (~1.2x)
+    gsm8k_ir_answeronly: 0.0013   # same questions/answers, no reasoning (~3.2x)
+    olympiad_math: 0.185          # unchanged replay (shared by both arms)
+    fineweb_edu: 0.5617           # 0.300 + freed 0.2580 + 0.0037 (~2.5x)
+    finemath: 0.070
+    mathpile_textbooks: 0.030
+    qa_stackexchange: 0.050
+
+wandb:
+  name: transition-phase-a-d512-answeronly-v1
+  tags: [morph-seed, transition, phase-a, answer-only-control, d512, ademamix, trace-control]
