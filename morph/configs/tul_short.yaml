@@ -1,0 +1,42 @@
+# TUL 5090 arm schedule (docs/tul-spec.md §4–§5, §7.1; decided 2026-08-16 [W]).
+# Every TUL arm (A0 baseline, A1, A1r, A3, ...) composes this file; arms differ
+# only in the `tul:` block / model keys named in docs/ablation-ledger.md.
+#
+# The full deploy recipe (base.yaml: 100k steps × 4 × 4096 tokens, TST for the
+# first 30k, carve@29k, route@30k) is 1.64 B positions and ~33 h per arm on the
+# 5090 — too slow for an 8-arm table. This file keeps the recipe and scales the
+# step axis by 0.2: 20k steps × 16 × 1024 = 328 M positions (~5–6 h/arm), the same
+# regime as the validated 25k × 4 × 4096 MORTAR runs.
+#
+# Prune → carve → route are OFF for the TUL arms [W, 2026-08-16]: the question is
+# whether the slot loop works, and MORTAR's staged topology change would be one
+# more thing to attribute a loss jump to. Dense backbone, ternary/int6 QAT and
+# AdEMAMix stay on (as in pretrain_curriculum.yaml, which also runs dense).
+# ademamix_t_alpha scales with the run (8000 of 100k → 1600 of 20k, the same 8 %).
+# TST is OFF (tst_bag_size 0): TUL arms run the slot layout from step 0
+# (spec §5); the TST-switch activation stays a full-schedule variant.
+# Measured 2026-08-16 (A0 smoke, 30 steps, this file): 284.0M params,
+# 0.99 s/step, peak alloc 22.96 GB → 20k steps ≈ 5.5 h for the A0 baseline.
+defaults:
+  - base
+  - _self_
+
+training:
+  steps: 20000
+  batch_size: 16
+  prune_start: 999999999      # never (dense)
+  compact_step: 999999999     # never (no carve)
+  tst_bag_size: 0
+  ademamix_t_alpha: 1600
+  eval_every: 500
+  n_eval_batches: 20
+  ckpt_every: 5000
+
+routing:
+  route_start: 999999999      # never (no ReMoE)
+
+data:
+  seq_len: 1024
+
+wandb:
+  project: morph-tul

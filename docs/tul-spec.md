@@ -307,9 +307,12 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
   `(input_ids [B, L_total], labels [B, L_total], slot_mask [B, L_total],
   slot_index [B, max_slots])`. `slot_index` is the gather map for §3.3 (the
   FIRST of each slot's `prefix_k` positions); `slot_mask` marks all of them.
-* Mix **[W]**: OpenWebText + StarCoder2 (base.yaml sources), `seq_len 2048`,
-  `batch_size 8` (was 4096 / 4). Curriculum loader unchanged except the
-  packer's `tokens + slots == L_total` fill.
+* Data **[W]**: OpenWebText with the StarCoder2 tokenizer — the `base.yaml`
+  arrow path (`data.py::create_dataloader`), NOT the pretok curriculum blend.
+  The slot layout is built in that loader; the curriculum loader shares the
+  same layout function. Short schedule for the 5090 arms (`tul_short.yaml`,
+  2026-08-16 [W]): `seq_len 1024`, `batch_size 16`, 20k steps = 328 M token
+  positions (was 2048 × 8 × 100k = 1.64 B, ~33 h/arm; now ~5–6 h/arm).
 * Boundary stats logged per batch: spans/row, mean span, one-token fraction,
   fraction hitting the cap, tokens/row.
 * Val/gen: `bag_size = 0` and TUL layout ON (val PPL is over token positions
@@ -318,34 +321,38 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
 
 ## 5. Training schedule and losses
 
-* **Phase 1 — TST superposition (steps 0 → 0.3·steps): plain MORPH on bags,
-  no slots.** Bit-identical to today.
-* **At the TST switch: TUL layout on [W]** (`bag_size 0`, `slot_layout`
-  present). Coincides with `route_start` in the current schedule (carve at
-  29k, route + TST switch at 30k) — three transitions at one step. Expect a
-  loss jump larger than the TST switch alone (the coda's input distribution
-  changes from looped states to prelude states for token positions). Log it;
-  arm `activate_at = 0` (TST off, TUL from step 0) is the isolation run.
+* **5090 arms (`tul_short.yaml`) [W, 2026-08-16]: TST OFF, TUL layout on
+  from step 0** (`tul.activate_at 0.0`, `tst_bag_size 0`), and **prune →
+  carve → route OFF** (dense backbone; QAT and AdEMAMix on). Reason: the
+  question is whether the slot loop works, and a staged topology change is
+  one more thing to attribute a loss jump to. `ademamix_t_alpha` scales
+  with the run (1600 of 20k = the same 8 %). Measured: A0 on this file runs
+  0.99 s/step, 22.96 GB peak → 20k steps ≈ 5.5 h.
+* **Full-schedule variant (kept as config, later):** phase 1 = TST
+  superposition on bags, no slots (bit-identical to today); at the TST switch
+  TUL layout on (`bag_size 0`, `slot_layout` present), coinciding with
+  `route_start` (carve 29k, route + TST switch 30k) — three transitions at
+  one step. Expect a loss jump larger than the TST switch alone (the coda's
+  input changes from looped states to prelude states for token positions).
   Block Transformer §3.7 is the datum FOR a mid-run switch: uptraining a
   vanilla checkpoint into the block/token split recovers near-full
   performance with ~10% of the tokens (init block embedding = mean of token
   embeddings, prefixes = replicated context embedding).
-* **CMS ordering, decided [W]:** prune → carve (27–29k) completes BEFORE TUL
-  activates (30k), so the core's MORTAR mask is chosen from saliency
-  accumulated while the core ran on every token; from 30k it runs on slots
-  only. Wolfe: keep the staging as is, TUL immediately after TST. Recorded so
-  a later regression is not misread; `activate_at = 0` measures the cost.
-* New parameters at the switch: `E_slot` (init: mean of the embedding
-  table), `E_mask` (init 0). No new blocks. AdEMAMix state for them starts
-  at the switch.
+* **CMS ordering (full-schedule variant only):** prune → carve (27–29k)
+  completes BEFORE TUL activates (30k) and the mask comes from token-position
+  saliency; the short schedule has no prune/carve/route. Recorded so a later
+  regression is not misread.
+* New parameters: `E_slot` (init: mean of the embedding table), `E_mask`
+  (init 0), `W_1..W_prefix_k` (init identity-scaled). No new blocks. In the
+  full-schedule variant their AdEMAMix state starts at the switch.
 * Loss: `L = CE_tokens_and_slots` (fused, chunked; `slot_id` masked)
   `+ stp_lambda · STP_slots` (arm) `+ set_lambda · MCE(next-span token set | h_i)` (arm).
   STP_slots = `forward_step_boundary` on the slot trajectory (consecutive
   slot states colinear), zero params, applied to the head-input latent at
   slot positions.
-* Everything else unchanged: prune → carve → route (CMS saliency now scores
-  the core on slot positions only — note in the ledger), ternary/int6 QAT,
-  AdEMAMix β1=0, flat LR. Per-stage LR (H-Net App. C: outer stages higher,
+* Everything else unchanged: ternary/int6 QAT, AdEMAMix β1=0, flat LR;
+  prune → carve → route in the full variant only (CMS saliency then scores
+  the core on slot positions — note in the ledger). Per-stage LR (H-Net App. C: outer stages higher,
   by tokens processed and width) is a knob to add if the core under-trains
   on 9–19× fewer positions; log per-group update norms.
 
@@ -383,6 +390,11 @@ the loader's layout exactly (the coconut `assert_layout_parity` lesson).
 | A1r | TUL repeat | as A1 | | | | **retrain noise floor** |
 | A1+ | TUL reinvest | yes | no | yes | Poisson/slot, `mean_depth 12` | the layer-pass savings spent: `n_coda 8`, deeper loop, still ≤ A0's layer-passes/token |
 | A5 | fixed stride | yes, every 19 tokens | no | yes | Poisson/slot | alignment vs depth (SpaceByte Table 1, HAT Table 1): A1 − A5 is what the boundary rule buys |
+
+**First pass [W, 2026-08-16]: A0, A1, A1r, A3 only** (~5–6 h each on
+`tul_short.yaml`; A3 is cheaper). A2/A4/A1+/A5 and the sweeps are queued
+behind the "works" gate; `plan_nats` (slots gathered out at eval) already
+measures whether the plan is used without training A4.
 
 C1 = depth per idea beats depth per token at equal layer-passes; C2 = a span
 is decodable from the plan. The 2×2 is {A0/A2 × A4/A1}; A3 is the floor. Read
@@ -426,7 +438,7 @@ Beating A0 on `val/ppl_tokens` is NOT a gate at this scale (§1).
 
 | key | default | note |
 |---|---|---|
-| `tul.activate_at` | `= training.tst_ratio` | fraction of steps; 0.0 = from step 0 (arm) |
+| `tul.activate_at` | 0.0 (`tul_short.yaml`) | fraction of steps; `= training.tst_ratio` in the full-schedule variant; `never` = plain MORPH (A0) |
 | `tul.slot_token` | `"<fim_pad>"` | resolved to id at build; asserted absent from shards |
 | `tul.boundary_chars` | `".;!?"` + newline + dashes | resolves `B` from the tokenizer |
 | `tul.min_span` | 4 | suppress boundary below this |
@@ -466,7 +478,9 @@ No runtime flags in the forward: `slot_layout` is a per-forward argument like
   buys decode throughput. Prose spans here are ~19 tokens; BT's L_B=8 already
   costs 0.43 nats at 85M. TUL's coda has cross-span context (BLT regime),
   which BT's local decoder did not; that is the bet.
-* Three transitions at step 30k (carve+1k, route, TST switch, now TUL).
+* Short schedule runs dense (no MORTAR result carries over); the
+  full-schedule variant has three transitions at step 30k (carve+1k, route,
+  TST switch, TUL).
 * The core trains on 9–19× fewer positions than before; may need per-stage LR.
 * The causal id-rule mis-cuts abbreviations/decimals (documented in
   `punct_boundary.py`); accepted for v1, measured by boundary stats.
@@ -487,7 +501,7 @@ No runtime flags in the forward: `slot_layout` is a per-forward argument like
 | no regression onto the latent | LCM T3/4, Pred-Sent §3.2, CoCoMix Fig 6b, Block Transformer §4.2 | loses every time |
 | punctuation boundary, causal, collapse/merge/cap | BLT §4, DTP T2, H-Net T1, LCM (200-char cap), CCoT (punct states) | rule ≈ learned; fixed stride worst |
 | per-slot Poisson depth | Parcae (per-sequence Poisson); [W] | C1 needs depth per idea |
-| activate at TST switch | [W]; Patch-level training (patch phase then token phase) | — |
+| TUL from step 0, TST off (5090 arms); activate at TST switch (full variant) | [W] 2026-08-16; Patch-level training (patch phase then token phase) for the full variant | — |
 | 2×2 arms + repeat | CoCoMix Fig 6(d); coconut noise-floor findings | attribution |
 | plan-nats ablation as the C2 metric | Kaiser T4 (oracle code vs predicted), He Fig 5 (MI not KL) | measure usage, not loss |
 | STP on slot trajectory (arm) | STP Eq.; MORPH punc-STP note in `references.md` §7 | Wolfe's finding, not the paper's |

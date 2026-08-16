@@ -37,7 +37,7 @@ single campaign or partial stack; **low** = directional / incomplete.
 | Zyphra-RSA | Deferred | Outer inference harness | Requires RL; not in training path | low | CLAUDE.md / architecture notes |
 | JAX-parity | Deferred | `morph/jax/` | Mirror lags (still MRR residual); PT is source of truth | high | `morph/jax/`, interop converter |
 
-## Planned — TUL (`experiments/tul`, spec only, no rows have run)
+## Planned — TUL (`experiments/tul`; short schedule `morph/configs/tul_short.yaml`: seq 1024 × batch 16 × 20k steps = 328 M tokens, TST off, prune/carve/route off (dense), TUL from step 0; first pass = A0, A1, A1r, A3)
 
 Arms from [tul-spec.md](tul-spec.md) §7. Every row is PLANNED; confidence is
 blank until a gate script exists under `ignore/`. Do not cite these as results.
