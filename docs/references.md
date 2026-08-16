@@ -521,7 +521,7 @@ harness deployment after RL training, currently deferred.
 TUL loops the Parcae core over one **thought slot per span** and decodes tokens with
 the slot's looped state visible as an attended prefix position. Spec:
 [tul-spec.md](tul-spec.md). Local copies of every source below live in
-`references/tul-latent-emission/`; the per-paper reading notes (28 papers, one templated
+`references/tul-latent-emission/`; the per-paper reading notes (31 papers, one templated
 note each) are in `ignore/Ai-notes/08-16-2026/prior-art/`. Entries say what TUL takes and,
 where a paper argues AGAINST something TUL does, say that too.
 
@@ -766,6 +766,54 @@ first-token position stays weak.
 generative expressivity 1 and predicts the mean; MDLM XM-1 emits "the the the". Best-of-K
 search over the latent is a deferred alternative to a warm-up loss.
 
+### SpaceByte
+
+**Title:** SpaceByte: Towards Deleting Tokenization from Large Language Modeling  
+**Authors:** Slagle  
+**Year:** 2024  
+**arXiv:** [2404.14408](https://arxiv.org/abs/2404.14408)  
+**TUL uses:** the closest published shape to a slot in one stream: global blocks run
+only at the FIRST spacelike byte of a space/punctuation run (+BOS), their output is
+truncated and residual-added at that same index, and the windowed local layers read it
+through attention (Listing 1). Table 1 (1e19 FLOPs): 1.009 / 0.748 / 0.500 bpb
+(PG-19 / arXiv / GitHub) vs SentencePiece 0.989 / 0.768 / 0.508; the fixed-stride
+control loses 0.10 bpb on PG-19 — TUL's arm A5. Table 6: the global stack is billed at
+1/6–1/8 of the byte rate. Cites ACT and Mixture-of-Depths only as generic layer
+skipping — no loop at the boundary positions.
+
+### AU-Net (Autoregressive U-Net)
+
+**Title:** From Bytes to Ideas: Language Modeling with Autoregressive U-Nets  
+**Authors:** Videau, Idrissi, Haziza, Wehrstedt, Copet, Teytaud, Lopez-Paz  
+**Year:** 2025  
+**arXiv:** [2506.14761](https://arxiv.org/abs/2506.14761)  
+**TUL uses:** where the depth goes. Stage ≥2 keeps only the vector at each pretoken
+boundary (the space BEFORE the word); Table 5: 75 % of layers at the coarse stages beats
+50 % and 25 % (67.4 / 66.0 / 65.3 HellaSwag) and the byte stage stays at 3 layers to
+1e22 FLOPs — depth in the slot loop, prelude/coda thin. Table 2: AU-Net-2 1B 69.9
+HellaSwag at 3e21 vs BPE 70.2 at 4e21; TQA/MMLU lag at small scale. The unpool
+(`hierarchical.py up()`) REPEATS the coarse vector over the following segment through
+one of 16 per-offset linears and ADDS it to the byte skip stream, then 3 causal byte
+layers; Table 4: boundary-only scatter (TUL's prefix route) ties at 2 stages (62.9 vs
+63.5) and loses 5.4 at 3 — hence TUL's `bcast` arm, off by default. Sec 2.2: the split
+must be "stable to rightward insertion" (= causal). Sec 6: byte-level models need
+their own batch/LR scaling laws.
+
+### Hierarchical Autoregressive Transformers (HAT)
+
+**Title:** Hierarchical Autoregressive Transformers: Combining Byte- and Word-Level Processing for Robust, Adaptable Language Models  
+**Authors:** Neitemeier, Deiseroth, Eichenberg, Balles  
+**Year:** 2025  
+**arXiv:** [2501.10322](https://arxiv.org/abs/2501.10322)  
+**TUL uses:** the explicit-prefix decoder: the backbone output `p^i` is the FIRST
+position of a 3–4 layer causal char decoder over word i+1 (Eq. 4). Table 1
+(compute-matched vs 64k BPE at 1B / 3B / 7B): word accuracy 35.5 / 37.8 / 39.0 vs
+35.3 / 37.7 / 39.2; LAMBADA +68 % relative at 7B; ARC −1..3. MegaByte's fixed 8-byte
+split on the same architecture: −2.7 HellaSwag, −8.4 LAMBADA. Fig 3 is the metric
+trap TUL avoids: a bigger char decoder raises byte accuracy but not word accuracy —
+size the coda by whole-unit or first-token metrics, keep it ~2 % of params. TUL does
+NOT copy its context-blind decoder (sees only `p^i` and the current word).
+
 ### STP / punc-STP — see §7 (STP, removed)
 
 **TUL note:** the STP paper (2602.22617) has no boundary, no pretraining and no
@@ -843,5 +891,8 @@ trajectory as an arm (`tul.stp_lambda`), zero parameters.
 | 56  | Block Diffusion / BD3-LM (TUL)         | Arriola et al. (2025)                     | [2503.09573](https://arxiv.org/abs/2503.09573)                                                                                                 |
 | 57  | Latent Diffusion for Language (TUL)    | Lovelace et al. (2023)                    | [2212.09462](https://arxiv.org/abs/2212.09462)                                                                                                 |
 | 58  | Explorative Modeling (TUL)             | Gladstone, Ji, Du (2026)                  | [2607.27372](https://arxiv.org/abs/2607.27372)                                                                                                 |
+| 59  | SpaceByte (TUL)                        | Slagle (2024)                             | [2404.14408](https://arxiv.org/abs/2404.14408)                                                                                                 |
+| 60  | AU-Net (TUL)                           | Videau et al. (Meta FAIR, 2025)           | [2506.14761](https://arxiv.org/abs/2506.14761)                                                                                                 |
+| 61  | Hierarchical AT (TUL)                  | Neitemeier et al. (Aleph Alpha, 2025)     | [2501.10322](https://arxiv.org/abs/2501.10322)                                                                                                 |
 
 
