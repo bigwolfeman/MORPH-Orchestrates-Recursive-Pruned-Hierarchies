@@ -1,6 +1,17 @@
 # TUL — Thought Unpack Loop: specification v0.1
 
-Status: **spec, not implemented.** Branch `experiments/tul` on the `00-MORPH-TUL`
+Status: **implemented, not yet run.** Branch `experiments/tul-impl`
+(2026-08-16). The v1 mechanism is in the tree and gated by `pytest tests/` (113
+passed): the causal boundary rule and packer (`morph/model/tul_layout.py`), the slot
+parameters and plumbing (`morph/model/tul.py`), the TUL forward inside
+`morph/model/transformer.py`, the `tul:` Hydra block resolved by
+`morph/training/tul_setup.py`, loader support in `morph/training/data.py` (and
+`curriculum_data.py`), and the eager generator (`morph/inference/tul_generate.py`).
+NOT implemented and asserted-zero rather than ignored: the `stp_lambda`,
+`set_lambda`, `carry`, `xattn` and `bcast` arms (§3.5) all RAISE on a non-default
+value. NOT run: no arm has been trained; every ledger row is still `planned`.
+Two v1 deviations from the text below are recorded in §3.1 (run collapse is causal)
+and §4 (the packer's tail padding). Branch `experiments/tul` on the `00-MORPH-TUL`
 copy. Written 2026-08-16 from the prior-art review in
 `ignore/Ai-notes/08-16-2026/prior-art/` (SYNTHESIS.md, MORPH-READ.md, 28
 per-paper notes) and from a read of `morph/model/transformer.py`,
@@ -193,6 +204,15 @@ local 4:6×6:4 → tokens 8 + slots (4+36+4)/19.2 = **10.3 vs 44** (4.3×); code
      be causal to be usable at generation).
   2. A **run** of consecutive B tokens (e.g. `.` then `\n`) is ONE boundary,
      placed after the LAST token of the run **[W]**.
+     **v1 DEVIATION (implemented 2026-08-16):** "after the LAST token of the run"
+     needs to see the NEXT token, so it cannot be decided causally, and §6 plus
+     invariant 1 both require the identical rule at generation. The
+     implementation therefore places the boundary after the **FIRST** token of
+     the run and lets rule 3 absorb the rest into the following span — a `.`+`\n`
+     pair still produces exactly ONE boundary, which is what this rule was for.
+     The only difference is which span owns the trailing `\n`. Measured on 3.0 M
+     OWT tokens the segmentation still matches the numbers below: mean span 19.9
+     (spec 19.2), 27 % hit the cap (spec 26 %), 1.0 % one-token spans.
   3. A boundary is **suppressed** while the current span has fewer than
      `min_span = 4` tokens (the span continues; the short piece merges into
      the same span). This is the causal form of "merge spans < 4 into the
@@ -314,7 +334,21 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
   2026-08-16 [W]): `seq_len 1024`, `batch_size 16`, 20k steps = 328 M token
   positions (was 2048 × 8 × 100k = 1.64 B, ~33 h/arm; now ~5–6 h/arm).
 * Boundary stats logged per batch: spans/row, mean span, one-token fraction,
-  fraction hitting the cap, tokens/row.
+  fraction hitting the cap, tokens/row, tail-pad fraction.
+* **v1 notes (implemented 2026-08-16).** The loader emits a 5th tensor, `bag_id
+  [B, L_total]`: a token position carries the index of the slot that closes its
+  span, a slot position carries its own index, and everything else carries a dump
+  bin. One tensor then drives both halves of the §3.2 bag-mean (summed over token
+  positions, read back at slot positions), which needs a span→slot map that
+  `slot_mask` and `slot_index` alone do not give. **Tail padding:** when the next
+  unit does not fit in the remaining room the row ends and its last ≤ `prefix_k`
+  positions become inert pad slots (input `slot_id`, label −100). This keeps
+  `L_total` exact WITHOUT dropping a boundary inside the row; measured cost on OWT
+  at `max_slots 64` is 1.18 % of positions, and it is logged as `tul/pad_frac`.
+  **`max_slots` is sized from the data, not from `seq_len // 8`** (which is sized
+  for code at ~9 tokens/span): on OWT at `seq_len 1024`, `max_slots 64` gives
+  1033 tokens/row — matching A0's 1024, the tokens-per-batch control BLT §4.3
+  asks for — where `seq_len // 8 = 128` gives 1161 and does not fit in 32 GB.
 * Val/gen: `bag_size = 0` and TUL layout ON (val PPL is over token positions
   only, so it is comparable to the baseline's token PPL; slot positions'
   first-token CE is reported separately as `val/first_tok_ce`).
