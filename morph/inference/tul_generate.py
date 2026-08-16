@@ -1,0 +1,163 @@
+"""Eager TUL generation (docs/tul-spec.md §6, v1).
+
+The spec defers the inference-engine port ("separate work; eager generation for the
+test" [W]), so this is a plain recompute-per-step sampler: it holds no KV cache and
+re-runs prelude → core → coda over the whole grown row each step. That is O(n²) and
+slow on purpose — its job is to prove that the slot machinery generates and that the
+layout it builds is the SAME layout the loader builds (invariant 1, tested by
+``tests/test_tul_layout.py::test_generator_layout_matches_loader``).
+
+The loop follows §6 exactly:
+
+    emit token from the last position's coda logits (slot_id masked)
+    span_len += 1
+    if the shared boundary rule cuts here:
+        insert the slot's prefix_k positions; run prelude → core → coda on them
+        emit the first token of the next span from the slot's logits
+
+Because the whole row is recomputed, "run the core on the new slot" happens as part of
+the recompute rather than as an incremental state update; the emitted sequence is
+identical either way, and the state-carrying version belongs with the KV-cache port.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+import torch
+from torch import Tensor
+
+from morph.model.tul_layout import BoundaryRule, SlotLayout, TulLayoutSpec
+
+__all__ = ["TulRowBuilder", "generate_tul"]
+
+
+@dataclass
+class TulRowBuilder:
+    """Incremental twin of ``pack_tul_row`` — one token at a time (spec §6).
+
+    Feeds every token through the SAME :meth:`BoundaryRule.cut` state machine the
+    loader uses, threading ``span_len`` across single-token calls. Everything the model
+    needs (``input_ids`` plus the four layout tensors) is appended as it goes.
+    """
+
+    rule: BoundaryRule
+    spec: TulLayoutSpec
+    ids: list[int] = field(default_factory=list)
+    slot_mask: list[bool] = field(default_factory=list)
+    bag_id: list[int] = field(default_factory=list)
+    slot_first: list[int] = field(default_factory=list)
+    span_len: int = 0
+
+    @property
+    def n_slots(self) -> int:
+        return len(self.slot_first)
+
+    def append(self, token_id: int) -> bool:
+        """Append one emitted token; insert its slot if the rule cuts here.
+
+        Returns True when a slot was inserted (the caller's next logits then come from
+        the slot's emitting position rather than from the token).
+        """
+        if token_id == self.spec.slot_id:
+            raise ValueError(
+                f"generator emitted slot_id {token_id}: its logit must be −inf "
+                f"(spec §3.1, invariant 4)")
+        self.ids.append(int(token_id))
+        self.slot_mask.append(False)
+        self.bag_id.append(self.n_slots)          # the slot that will close this span
+        cuts, self.span_len = self.rule.cut(np.array([token_id], dtype=np.int64), self.span_len)
+        if cuts.size == 0:
+            return False
+        if self.n_slots >= self.spec.max_slots:
+            # Out of slot budget: the loader would end the row here (spec §3.1). Keep
+            # generating tokens rather than silently dropping the boundary's slot, and
+            # say so — a silent divergence from the training layout is the failure this
+            # whole module exists to prevent.
+            raise RuntimeError(
+                f"generation exceeded max_slots={self.spec.max_slots}; raise the budget "
+                f"(it is sized from seq_len // 8 by default)")
+        s = self.n_slots
+        self.slot_first.append(len(self.ids))
+        for _ in range(self.spec.prefix_k):
+            self.ids.append(self.spec.slot_id)
+            self.slot_mask.append(True)
+            self.bag_id.append(s)
+        return True
+
+    def tensors(self, device) -> tuple[Tensor, SlotLayout]:
+        """``(input_ids [1, L], layout)`` for the current row."""
+        L, S = len(self.ids), self.spec.max_slots
+        idx = np.zeros(S, dtype=np.int64)
+        valid = np.zeros(S, dtype=bool)
+        if self.slot_first:
+            idx[: self.n_slots] = np.asarray(self.slot_first, dtype=np.int64)
+            valid[: self.n_slots] = True
+        bag = np.asarray(self.bag_id, dtype=np.int64)
+        bag[bag >= self.n_slots] = S                       # open span → the dump bin
+        layout = SlotLayout(
+            slot_mask=torch.from_numpy(np.asarray(self.slot_mask)[None]).to(device),
+            bag_id=torch.from_numpy(bag[None]).to(device),
+            slot_index=torch.from_numpy(idx[None]).to(device),
+            slot_valid=torch.from_numpy(valid[None]).to(device),
+            prefix_k=self.spec.prefix_k,
+        )
+        ids = torch.tensor(self.ids, dtype=torch.long, device=device)[None]
+        return ids, layout
+
+
+@torch.no_grad()
+def generate_tul(
+    model,
+    prompt_ids: list[int] | Tensor,
+    rule: BoundaryRule,
+    spec: TulLayoutSpec,
+    max_new_tokens: int = 128,
+    temperature: float = 1.0,
+    top_k: int = 0,
+    seed: int | None = None,
+    device=None,
+) -> tuple[list[int], TulRowBuilder]:
+    """Generate ``max_new_tokens`` TOKENS (slots are inserted by the rule, not counted).
+
+    ``temperature = 0`` → greedy. Returns ``(token_ids, builder)``; the builder carries
+    the realised layout so a caller can assert parity against the loader's packer or
+    read the span-length distribution (spec §7.2 generation metrics).
+    """
+    was_training = model.training
+    model.eval()
+    device = device or next(model.parameters()).device
+    gen = None
+    if seed is not None:
+        gen = torch.Generator(device=str(device)).manual_seed(seed)
+
+    if isinstance(prompt_ids, Tensor):
+        prompt_ids = prompt_ids.flatten().tolist()
+    if not prompt_ids:
+        raise ValueError("generate_tul needs at least one prompt token")
+
+    builder = TulRowBuilder(rule=rule, spec=spec)
+    for t in prompt_ids:
+        builder.append(int(t))
+
+    emitted: list[int] = []
+    try:
+        for _ in range(max_new_tokens):
+            ids, layout = builder.tensors(device)
+            logits = model(ids, slot_layout=layout)["logits"][0, -1].float()
+            if temperature <= 0.0:
+                nxt = int(logits.argmax())
+            else:
+                logits = logits / temperature
+                if top_k > 0:
+                    kth = torch.topk(logits, min(top_k, logits.numel())).values[-1]
+                    logits = logits.masked_fill(logits < kth, float("-inf"))
+                probs = torch.softmax(logits, dim=-1)
+                nxt = int(torch.multinomial(probs, 1, generator=gen))
+            emitted.append(nxt)
+            builder.append(nxt)
+    finally:
+        if was_training:
+            model.train()
+    return emitted, builder
