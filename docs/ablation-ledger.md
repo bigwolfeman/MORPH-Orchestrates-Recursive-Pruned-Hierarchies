@@ -58,6 +58,8 @@ blank until a gate script exists under `ignore/`. Do not cite these as results.
 | TUL-A1+ | TUL reinvest | `n_coda: 8`, `tul.slot_mean_depth: 12` (≤ A0 layer-passes/token) | the fair-compute cell | planned |
 | TUL-xattn | cross-attn branch | `tul.xattn: true` (attach like retention) | BLT T7 vs Block Transformer Fig 3f | planned |
 | TUL-carry | explicit `W·h_{i-1}` | `tul.carry: true` | Coconut feedback vs attention-only memory | planned |
+| TUL-A5 | fixed stride | `tul.fixed_stride: 19` (mean span matched, boundary rule off) | alignment vs depth (SpaceByte T1 +0.10 bpb, HAT T1 −2.7 HS); A1 − A5 is what the boundary rule buys | planned |
+| TUL-bcast | broadcast-add | `tul.bcast: true` (offset-indexed linears, init 0, `h_i` added to span i+1's coda token input) | AU-Net T4: tie at 2 levels, +5.4 at 3; expected null at one level | planned |
 
 Metrics per arm: `val/ppl_tokens`, `val/first_tok_ce`, `val/plan_nats` (slots
 masked at eval minus unmasked), `val/first_tok_counterfactual`, rep4@512,

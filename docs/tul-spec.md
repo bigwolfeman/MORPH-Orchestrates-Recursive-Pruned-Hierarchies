@@ -65,6 +65,20 @@ carrier, GLA, MORTAR/ReMoE, ternary/int6 QAT, AdEMAMix, curriculum) stays on
    1.133 ≈ unigram 1.134 > Gumbel 1.136 > entropy 1.138; fixed SF2 1.149;
    H-Net pool-6 0.780 vs space 0.755). Punctuation with a collapse/merge/cap
    rule is v1; learned boundaries are a later ablation.
+6. **Deep compute at boundary positions only, with the deep state read back
+   through a causal token stream, ties BPE at matched compute — at word
+   scale.** SpaceByte (global blocks at the first byte of a space/punct run,
+   residual-added there, local layers attend it: 1.009/0.748/0.500 bpb vs
+   SentencePiece 0.989/0.768/0.508 at 1e19 FLOPs, Table 1; fixed stride
+   +0.10 bpb on PG-19); AU-Net (75 % of layers at the word stage beats 25/50 %,
+   Table 5; 1B AU-Net-2 69.9 vs BPE 70.2 HellaSwag, Table 2); Hierarchical
+   AT (backbone state as prefix of a 3–4 layer char decoder; word accuracy
+   ties BPE at 1B/3B/7B, Table 1; MegaByte's fixed 8-byte split −2.7
+   HellaSwag). Two of three use the prefix route; AU-Net's per-offset
+   broadcast is ADDED to a causal byte stream and matters only at ≥3 levels
+   (Table 4). None of them loops at the boundary positions — that part of
+   TUL has no precedent in this family. TUL's spans are 3–10× longer than a
+   word; §10 keeps that as the open risk.
 
 Two things the literature says NOT to expect at 5090 scale: beating the
 per-token baseline on PPL (Block Transformer needs 2–3× params to match
@@ -267,8 +281,10 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
 |---|---|---|---|
 | per-layer cross-attention branch to slots (`attach_xattn`, like `attach_retention`) | prefix route wins in the only BPE-level ablation (BT Fig 3f); coda attention already reaches slots | BLT T7 for the counter-case | arm `xattn` |
 | `W·h_{i-1}` explicit carry into slot i+1's input | attention over earlier slots is the same channel; CCoT: last-layer feedback ≈ nothing, mid-layer works | Coconut §3, CCoT | arm `carry` |
-| per-offset embedding in the coda | weakest injection in BT / Hourglass / MegaByte; caused the Huginn collapse | §1 | never |
-| MegaByte per-offset slices of the global vector | same | MegaByte Eq. 4 | never |
+| per-offset embedding as the coda's ONLY token input (replacing the token stream) | weakest injection in BT / Hourglass / MegaByte; caused the Huginn collapse | §1 | never |
+| MegaByte per-offset slices of the global vector as the only input | same | MegaByte Eq. 4 | never |
+| `bcast`: `h_i` repeated over span i+1's token positions through one of `span_cap` offset-indexed linears, init 0, ADDED to the coda token input (`input_norm(prelude)`), on top of the prefix | AU-Net `up()` (Sec 2.1.1, Table 4): harmless at 2 levels (62.9 vs 63.5), needed at 3 (60.6 vs 66.0). Adds nothing the prefix does not carry at one level; kept as an arm because it is the one injection the "never" row above does not cover | AU-Net; H-Net (residual-path linear init 0) | arm `bcast` |
+| fixed-stride slots (`stride = 19`, mean span matched, no punctuation rule) | the control that separates alignment from depth: SpaceByte Table 1 (+0.10 bpb), HAT Table 1 (−2.7 HS), BLT §4, DTP T2 | SpaceByte §3.2 | arm `stride` |
 | learned boundaries (H-Net router + ratio loss) | rule-based is close (BLT, DTP), and TUL's boundary must be causal | H-Net §2.2 | later |
 | learned per-slot exit | needs the trained model first | Huginn KL-exit | later |
 | inference engine port | separate work; eager generation for the test | — | later **[W]** |
@@ -358,6 +374,7 @@ the loader's layout exactly (the coconut `assert_layout_parity` lesson).
 | A3 | shallow control | no | no (seed path) | — | — | compute floor: what prelude+coda alone do |
 | A1r | TUL repeat | as A1 | | | | **retrain noise floor** |
 | A1+ | TUL reinvest | yes | no | yes | Poisson/slot, `mean_depth 12` | the layer-pass savings spent: `n_coda 8`, deeper loop, still ≤ A0's layer-passes/token |
+| A5 | fixed stride | yes, every 19 tokens | no | yes | Poisson/slot | alignment vs depth (SpaceByte Table 1, HAT Table 1): A1 − A5 is what the boundary rule buys |
 
 C1 = depth per idea beats depth per token at equal layer-passes; C2 = a span
 is decodable from the plan. The 2×2 is {A0/A2 × A4/A1}; A3 is the floor. Read
@@ -382,6 +399,11 @@ clear by `plan_nats`.
   ending by cap, samples (seeded).
 * Boundary stats (§4). Layer-passes/token and tokens/s per arm.
 * Later: future-lens probe on slot states with `teacher_acc` ceiling.
+* Do NOT size the coda (`n_coda`, A1+) by per-token accuracy inside a span:
+  Hierarchical AT Fig 3 shows a bigger char decoder raises byte accuracy
+  and leaves word accuracy flat — per-token accuracy rewards span
+  COMPLETION, not prediction. Size it by `val/first_tok_ce` and
+  `val/plan_nats`; report whole-span exact-match as the word-accuracy analogue.
 
 ### 7.3 Pre-registered gates (margins to be set by Wolfe before the runs)
 
@@ -409,6 +431,8 @@ Beating A0 on `val/ppl_tokens` is NOT a gate at this scale (§1).
 | `tul.tokens_through_core` | false | A2 sets true |
 | `tul.stp_lambda` / `tul.set_lambda` | 0.0 / 0.0 | arms |
 | `tul.carry` / `tul.xattn` | false / false | arms |
+| `tul.bcast` | false | arm: offset-indexed linears, `h_i` added to span i+1's coda token input (§3.5) |
+| `tul.fixed_stride` | 0 | arm A5: >0 replaces the boundary rule with a slot every N tokens (§7.1) |
 
 No runtime flags in the forward: `slot_layout` is a per-forward argument like
 `bag_size` (None → plain MORPH path); `coda_sees_slots` and
@@ -460,7 +484,12 @@ No runtime flags in the forward: `slot_layout` is a per-forward argument like
 | plan-nats ablation as the C2 metric | Kaiser T4 (oracle code vs predicted), He Fig 5 (MI not KL) | measure usage, not loss |
 | STP on slot trajectory (arm) | STP Eq.; MORPH punc-STP note in `references.md` §7 | Wolfe's finding, not the paper's |
 | slot-set MCE warm-up (arm, off) | TST MCE; CODI/CCoT/Coconut (untargeted slot learns nothing) vs BT §4.2 (aux hurt) | contested → arm |
-| do not per-offset inject | Block Transformer, Hourglass, MegaByte, Huginn 2026-08-16 | weakest everywhere |
+| do not per-offset inject as the ONLY input | Block Transformer, Hourglass, MegaByte, Huginn 2026-08-16 | weakest everywhere |
+| deep compute at boundary positions only, read back through the causal token stream | SpaceByte T1/T6, AU-Net T2/T5, Hierarchical AT T1 | ties BPE at matched compute (word scale); depth belongs at the coarse level (AU-Net T5: 75 % > 50 % > 25 %) |
+| fixed-stride control arm A5 | SpaceByte T1 (+0.10 bpb), HAT T1 (−2.7 HS), BLT §4, DTP T2 | the only arm that isolates alignment from depth |
+| `bcast` broadcast-add arm, off by default | AU-Net T4 (2-stage tie, 3-stage +5.4), H-Net §2.3 (init 0) | matters only with ≥3 levels |
+| coda sized by first-token / plan metrics, not per-token accuracy | Hierarchical AT Fig 3, App A.5 | per-token accuracy rewards completion |
+| slot-only LOOP has no precedent | SpaceByte §2 (cites ACT, MoD as layer skipping only); AU-Net; HAT | TUL's own claim, unsupported by prior art |
 
 Sources: `docs/references.md` §13 and `docs/references/tul-latent-emission/`.
 
