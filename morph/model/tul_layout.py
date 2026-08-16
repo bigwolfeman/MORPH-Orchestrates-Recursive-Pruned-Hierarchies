@@ -30,6 +30,7 @@ what rule 2 was for. See :meth:`BoundaryRule.cut`.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 
@@ -105,7 +106,10 @@ def boundary_lut_from_tokenizer(
     the segmentation of a run, so the key covers every input to the rule.
     """
     key = f"{tokenizer_name}|{vocab_size}|{eos_id}|{suffix_chars}|{'.'.join(substrings)}"
-    digest = f"{abs(hash(key)):016x}"
+    # hashlib, NOT hash(): PYTHONHASHSEED is randomised per process, so hash() gives a
+    # different digest every run — the cache would never hit and would leak one .npy per
+    # process, while still LOOKING like a cache (reviewer, 2026-08-16).
+    digest = hashlib.sha256(key.encode()).hexdigest()[:16]
     path = None
     if cache_dir:
         os.makedirs(cache_dir, exist_ok=True)

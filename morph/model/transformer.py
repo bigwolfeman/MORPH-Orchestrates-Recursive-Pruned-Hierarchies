@@ -1337,8 +1337,16 @@ class MORPHTransformer(nn.Module):
 
             _tau = self.cfg.core_gain_clip
             if _tau > 0.0:
-                _in_n = h.flatten(1).norm(dim=1)
-                _out_n = h_new.flatten(1).norm(dim=1)
+                # PAD SLOTS ARE EXCLUDED from the norm. The gain clip is per SAMPLE, so a
+                # row's pad slots would otherwise put the number of REAL slots in that row
+                # into the scale applied to every real slot — padding would change the
+                # forward. Pads start at 0 (gather_valid) but the first core step moves
+                # them off zero, so zeroing here is not redundant. Dormant at the arms'
+                # core_gain_clip = 0.0; correct if it is ever turned on (reviewer).
+                _vm = layout.slot_valid.view(*layout.slot_valid.shape,
+                                             *([1] * (h.dim() - 2))).to(h.dtype)
+                _in_n = (h * _vm).flatten(1).norm(dim=1)
+                _out_n = (h_new * _vm).flatten(1).norm(dim=1)
                 _scale = torch.clamp(_tau * _in_n / (_out_n + 1e-6), max=1.0)
                 h_new = h_new * _scale.view(-1, *([1] * (h_new.dim() - 1)))
 

@@ -582,3 +582,90 @@ def test_e_slot_activation_init_is_the_embedding_mean():
     assert torch.allclose(m.tul.E_slot, m.embed.lm_weight().mean(0), atol=1e-6)
     assert torch.all(m.tul.W_prefix[0] == torch.eye(m.cfg.d_model)), (
         "W_prefix must start as the identity so the extra coda position costs nothing")
+
+
+# ── reviewer additions, 2026-08-16 (gaps found by mutation testing the PR) ───
+# Each of these was written because a deliberate break of the code it covers left the
+# whole suite GREEN. The mutation that motivated it is named in the docstring.
+
+def test_prefix_projections_are_distinct_channels():
+    """Mutation RM3: making every prefix position use W_prefix[0] left the suite green.
+
+    prefix_k = 2 [W] exists so the plan position and the emitting position can hold
+    DIFFERENT functions of the one looped state (Block Transformer App. F.2 / Fig 3f).
+    W_prefix is identity-initialised, so the two are equal at build — a test that never
+    perturbs it cannot see the collapse. Perturb, then require the coda inputs to differ.
+    """
+    m = _model(TULConfig(prefix_k=2, slot_id=4))
+    m.eval()
+    spec = _spec()
+    x, y, layout, _ = _batch(spec, B=1)
+    with torch.no_grad():
+        m.tul.W_prefix[1].mul_(2.0)                    # W_2 = 2·W_1
+        front = m._tul_front(x, layout)
+        _xn, h, _d = m._tul_core(*front, layout)
+        values, pos = m.tul.prefix_project(h, layout, layout.l_total)
+    s = 0
+    assert bool(layout.slot_valid[0, s]), "need a real slot"
+    v0, v1 = values[0, s * 2], values[0, s * 2 + 1]     # slot-major: s·K + k
+    assert not torch.allclose(v0, v1), (
+        "both prefix positions carry the same vector — W_prefix[k] is not being indexed, "
+        "so prefix_k=2 is prefix_k=1 with a wasted position")
+    assert torch.allclose(v1, v0 * 2.0, atol=1e-5), "position k must use W_prefix[k]"
+    assert int(pos[0, s * 2 + 1]) == int(pos[0, s * 2]) + 1, "prefix positions are adjacent"
+
+
+def test_gather_valid_zeroes_invalid_rows():
+    """Mutation RM6: dropping the validity mask in the core gather left the suite green.
+
+    An invalid (pad) slot's ``slot_index`` is 0 — a REAL token position. Without the
+    mask the core would loop on that token's state. It is inert for the value of every
+    real slot (pads sort last, attention is causal) but it is not inert for anything
+    that reduces over the slot axis, which is why the mask must be tested directly.
+    """
+    from morph.model.tul import gather_valid
+
+    x = torch.arange(2 * 6 * 3, dtype=torch.float32).reshape(2, 6, 3) + 1.0
+    index = torch.tensor([[4, 0, 0], [1, 5, 0]])
+    valid = torch.tensor([[True, False, False], [True, True, False]])
+    g = gather_valid(x, index, valid)
+    assert torch.equal(g[0, 0], x[0, 4]) and torch.equal(g[1, 1], x[1, 5])
+    assert torch.all(g[0, 1:] == 0) and torch.all(g[1, 2] == 0), (
+        "invalid slots gathered real content instead of zeros")
+
+
+def test_pad_slots_do_not_enter_the_core_gain_norm():
+    """A per-SAMPLE reduction over the slot axis must exclude pad slots.
+
+    ``core_gain_clip`` is 0.0 in every arm config, so this is dormant today — but it is
+    the documented knob for ρ(J_core) (CLAUDE.md § nested dynamical system). It reduces
+    over the whole ``[B, S, n, C]`` carrier, so with pads in the norm a row's PAD COUNT
+    scales its REAL slots. The pad count is data-dependent (how many spans the row
+    happens to contain, i.e. tokens in that row's FUTURE) and differs between the packer
+    and the incremental generator, so this is a train/generate mismatch, not only noise.
+
+    Measured 2026-08-16 at τ=0.5, tiny config: masked 1.8e-7 (fp32 tiling roundoff —
+    attention reduces over a different sequence length), unmasked 3.6e-2. The tolerance
+    sits between the two, five orders of magnitude apart.
+    """
+    from dataclasses import replace
+
+    # τ must BIND: the HC residual is norm-preserving, so gain ≈ 1 and any τ ≥ 1 leaves
+    # the clip an identity — a test at τ = 1.05 passes no matter what the norm counts.
+    m = _model(TULConfig(prefix_k=2, slot_id=4), core_gain_clip=0.5)
+    m.eval()
+    spec = _spec(max_slots=8)
+    x, y, layout, _ = _batch(spec, B=1, n=40)
+    n_valid = int(layout.slot_valid.sum())
+    assert 0 < n_valid < layout.max_slots, "this test needs at least one pad slot"
+    with torch.no_grad():
+        front = m._tul_front(x, layout)
+        h_pad = m._tul_core(*front, layout)[1]
+        trimmed = replace(layout,
+                          slot_index=layout.slot_index[:, :n_valid].contiguous(),
+                          slot_valid=layout.slot_valid[:, :n_valid].contiguous())
+        h_trim = m._tul_core(*front, trimmed)[1]
+    gap = (h_pad[:, :n_valid] - h_trim).abs().max().item()
+    assert gap < 1e-5, (
+        f"real slots moved by {gap:.3e} when the PAD COUNT changed — a reduction over "
+        f"the slot axis (the gain-clip norm) is counting pad slots")
