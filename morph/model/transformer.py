@@ -30,6 +30,9 @@ from .fused_ce import (
 )
 from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .sparsity import MortarLinear
+from .tul import (TULConfig, TULSlots, compact_index, gather_positions, gather_valid,
+                  scatter_positions)
+from .tul_layout import SlotLayout
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
 # zero production cost). Set MORPH_PROFILE_REGIONS=1 to name forward carrier sites so the
@@ -211,6 +214,15 @@ class MORPHConfig:
 
     # Training
     dropout: float = 0.1
+
+    # ── TUL — Thought Unpack Loop (docs/tul-spec.md) ──────────────────────
+    # None → NO TUL parameters are constructed and the model is byte-identical to the
+    # baseline (the `retention` convention: the flag gates CONSTRUCTION, not a forward
+    # branch). Set it and the model gains E_slot / E_mask / W_prefix (spec §3.1-§3.4),
+    # which stay inert — grad None, so the optimizer skips them — until a forward is
+    # called with a `slot_layout`. `slot_layout=None` is bit-identical either way
+    # (runtime-invariants §6b).
+    tul: TULConfig | None = None
 
     # L1 core-gain governor: cap the per-iteration looped-core
     # amplification ‖h_new‖/‖h_a‖ (per sample) to this ratio τ. The HC residual is
@@ -574,6 +586,14 @@ class MORPHTransformer(nn.Module):
                                 gate_logit_bias=cfg.retention_gate_bias),
                             RMSNorm(d), gate_init=cfg.retention_gate_init)
 
+        # ── TUL slot parameters (docs/tul-spec.md §3.1-§3.4) ───────────────
+        # Constructed LAST, after retention, for the same reason: all three inits are
+        # DETERMINISTIC (zeros / identity — zero RNG draws), so a TUL model's base weights
+        # are byte-identical to a baseline built with the same seed, and the arms differ by
+        # the mechanism alone. E_slot is re-initialised from the live embedding table at the
+        # activation step (Block Transformer §3.7) — see TULSlots.init_at_activation.
+        self.tul: TULSlots | None = TULSlots(d, cfg.tul) if cfg.tul is not None else None
+
         # Master kernel switch → drives the fused-Triton-vs-eager-reference
         # dispatch in the attention kernels (process-global flag). Set at build
         # so the choice is captured in the run; the fused-CE branch in forward()
@@ -931,17 +951,27 @@ class MORPHTransformer(nn.Module):
         return x, x0, bigram_emb
 
     def _back_region(self, x: Tensor, x0: Tensor, bigram_emb,
-                     input_ids: Tensor | None = None) -> Tensor:
+                     input_ids: Tensor | None = None,
+                     inject_keep: Tensor | None = None) -> Tensor:
         """BACK region: coda blocks → HC stream mean → lm_mixer → final_norm.
         input_ids is only threaded into _build_injection_term for signature parity —
         value-embeds fire exclusively in the prelude (gi ≥ n_prelude+n_core is never in
         _ve_layer_map), so None and the real ids are equivalent here. The fused CE stays
-        OUTSIDE (its n_valid .item() host-syncs — cannot live in a captured graph)."""
+        OUTSIDE (its n_valid .item() host-syncs — cannot live in a captured graph).
+
+        ``inject_keep`` (TUL only, [B, S, 1], 1.0 keep / 0.0 drop): zeroes the whole
+        additive injection at token positions whose coda state was replaced by E_mask
+        (spec §3.4 token-state dropout). x0 carries proj(embed(t)) and the bigram term
+        carries hash(t, t−1), so without this the dropped token leaks straight back in
+        and Bowman's word dropout becomes a no-op. None on every non-TUL path → the
+        ops below are unchanged and bit-identical."""
         for i, layer in enumerate(self.coda):
             gi = self.cfg.n_prelude + self.cfg.n_core + i
             term = self._build_injection_term(
                 gi, self.x0_injects[gi].precompute(x0), input_ids, bigram_emb, x.dtype
             )
+            if inject_keep is not None:
+                term = term * inject_keep.to(term.dtype)
             x = self._apply_injection(x, term)
             x = layer(x)
 
@@ -957,65 +987,17 @@ class MORPHTransformer(nn.Module):
         x = self.final_norm(x)
         return x
 
-    # ── Forward ───────────────────────────────────────────────────────
+    def _core_region(self, x: Tensor, x0: Tensor, bigram_emb,
+                     input_ids: Tensor | None = None) -> Tensor:
+        """CORE region: input_norm → the Poisson-depth core loop → the looped carrier.
 
-    def forward(self, input_ids: Tensor, labels: Tensor | None = None,
-                bag_size: int = 0, seq_lens: Tensor | None = None) -> dict:
-        return self._forward_single(input_ids, labels, bag_size, seq_lens)
-
-    def _forward_single(self, input_ids: Tensor,
-                        labels: Tensor | None = None,
-                        bag_size: int = 0,
-                        seq_lens: Tensor | None = None) -> dict:
-        # ── Token-Superposition Training input bagging (TST, arXiv 2605.06546) ──
-        # bag_size==0 → baseline path, BIT-IDENTICAL to pre-TST (and what eval/gen
-        # always use). bag_size==s>0 → the superposition phase: input_ids arrives as
-        # [B, s·L] raw tokens; we average each contiguous bag of s token-embeddings
-        # into one "s-token", so the model processes L = (s·L)/s positions — SAME
-        # cost/VRAM as baseline. value-embeds fire only in the prelude → bag their
-        # per-token ctx signal up front (ve_bagged); the core/coda never read input_ids.
-        B, T_in = input_ids.shape
-        s = bag_size
-        if s > 0:
-            T = T_in // s
-            x = self.embed_drop(self.embed(input_ids).view(B, T, s, -1).mean(dim=2))   # [B,L,d]
-            _bg_raw = self.embed.get_bigram(input_ids)
-            bigram_emb = (_bg_raw.view(B, T, s, -1).mean(dim=2)                          # [B,L,d]
-                          if _bg_raw is not None else None)
-            n_ve = len(self._ve_layer_map)
-            ve_bagged = ([
-                self.value_embeds[k]
-                    .precompute(self.value_embed_tables[k](input_ids))
-                    .view(B, T, s, -1).mean(dim=2)                                       # [B,L,ctx_w]
-                for k in range(n_ve)
-            ] if n_ve > 0 else None)
-            x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged)
-        else:
-            T = T_in
-            _sg = self._static_graphs
-            if (_sg.get("front") is not None and self.training
-                    and torch.is_grad_enabled()
-                    and input_ids.shape == _sg["front_shape"]):
-                # Graphed FRONT replay (2 launches: input copy + cudaGraphLaunch).
-                outs = _sg["front"](input_ids)
-                _am = _sg["front_aux_mods"]
-                if _am:
-                    # Region routers' aux arrives as explicit graph OUTPUTS (the python
-                    # stash protocol does not re-run on replay) → re-stash each onto
-                    # its own module so collect_routing_aux_losses sums in the exact
-                    # eager order (per-region pre-summing was a measured fp-reassoc).
-                    n = len(_am)
-                    for _mod, _aux in zip(_am, outs[-n:]):
-                        _mod._last_aux_loss = _aux
-                    outs = outs[:-n]
-                if _sg["has_bigram"]:
-                    x, x0, bigram_emb = outs
-                else:
-                    x, x0 = outs
-                    bigram_emb = None
-            else:
-                x, x0, bigram_emb = self._front_region(input_ids)
-
+        Pure code motion out of ``_forward_single`` (the ``_front_region`` /
+        ``_back_region`` precedent): the ops and their order are IDENTICAL to the old
+        inline block, so every non-TUL path is bit-identical. It is a method so the TUL
+        arm A2 (``tokens_through_core``, spec §7.1) can run the SAME per-sample core over
+        a sequence that happens to contain slot positions, instead of forking a second
+        implementation of the loop."""
+        B = x.shape[0]
         # ── Core loop ─────────────────────────────────────────────────
         # n_core == 0 → prelude output flows straight to the coda. The whole loop
         # machinery below (input_norm/h clone, depth sampling, x0 hoist, DiagonalInjection
@@ -1238,6 +1220,418 @@ class MORPHTransformer(nn.Module):
             # EXACTLY a target-with-silent-core — the growth invariant that
             # function-preserving core insertion depends on.
             x = self.input_norm(x)
+        return x
+
+    # ── TUL regions (docs/tul-spec.md §3) ─────────────────────────────────
+    # Reached only when a `slot_layout` is passed. Every helper below is a no-op for
+    # the plain path because the plain path never calls it.
+
+    def _tul_front(self, input_ids: Tensor, layout: SlotLayout):
+        """Embed + slot inputs + prelude over ALL positions (spec §3.2).
+
+        The slot's input embedding is ``E_slot + mean_j embed(t_j)`` over its span's
+        tokens, and its bigram / value-embed signals are the same bag-mean — this is
+        exactly the TST ``ve_bagged`` path with a data-dependent bag map (spec §3.2;
+        Dynamic Token Pooling mean-pool; BLT Eq. 5). The prelude itself is unchanged:
+        the slot's output is the in-context pooled span summary (BLT §3.2.2).
+        """
+        tok_emb = self.tul.slot_input(self.embed(input_ids), layout, add_e_slot=True)
+        x = self.embed_drop(tok_emb)
+        _bg = self.embed.get_bigram(input_ids)
+        bigram_emb = (self.tul.slot_input(_bg, layout, add_e_slot=False)
+                      if _bg is not None else None)
+        n_ve = len(self._ve_layer_map)
+        ve_bagged = ([
+            self.tul.slot_input(
+                self.value_embeds[k].precompute(self.value_embed_tables[k](input_ids)),
+                layout, add_e_slot=False)
+            for k in range(n_ve)
+        ] if n_ve > 0 else None)
+        x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged)
+        return x, x0, bigram_emb
+
+    def _sample_slot_depths(self, layout: SlotLayout, device) -> Tensor:
+        """``[B, max_slots]`` per-slot Poisson depth (spec §3.3 [W]).
+
+        Parcae samples one depth per SEQUENCE; TUL samples one per SLOT — claim C1 is
+        "depth per idea", so the depth must vary per idea. Eval is the deterministic
+        mean depth. Pad slots get depth 1 so they never inflate ``total_iters``; their
+        update is masked out regardless.
+        """
+        tc = self.cfg.tul
+        mean_d = tc.slot_mean_depth or self.cfg.mean_depth
+        max_d = tc.slot_max_depth or self.cfg.max_depth
+        shape = layout.slot_index.shape
+        if self.training:
+            d = torch.poisson(torch.full(shape, float(mean_d), device=device)).long()
+            d = d.clamp(min=1, max=max_d)
+        else:
+            d = torch.full(shape, int(mean_d), device=device, dtype=torch.long)
+        return torch.where(layout.slot_valid, d, torch.ones_like(d))
+
+    def _tul_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout):
+        """Gather slots → masked per-slot depth loop → looped states (spec §3.3).
+
+        Returns ``(xn, h_slots, depths)``: ``xn = input_norm(prelude)`` for the whole
+        carrier (token positions keep it — the ``n_core == 0`` seed path, BLT Eq. 9),
+        and ``h_slots`` ``[B, max_slots, …]`` the looped state of each slot.
+
+        Invariant 2 (runtime-invariants §6b): the depth is a MASKED UPDATE over the
+        full compact slot sequence, never a per-position gather. The active-set
+        shrinking of the token path is deliberately NOT used here — MORPH recomputes
+        K/V from the current carrier every iteration, so shrinking the sequence would
+        change what a frozen slot's keys are, and frozen slots must keep serving the
+        same K/V. The compact sequence is 9-19× shorter than the token stream, which
+        is what makes the lost shrink affordable (spec §3.3).
+        """
+        B, L = x.shape[0], x.shape[1]
+        np_, n_core = self.cfg.n_prelude, self.cfg.n_core
+        gidx, gvalid = layout.slot_index, layout.slot_valid
+
+        xn = self.input_norm(x)
+        e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
+        with _prof("carrier::h_clone"):
+            h = e.clone()
+
+        # Loop-invariant injection, built ON THE COMPACT SEQUENCE (the x0/bigram hoist
+        # of the token path, applied to 9-19× fewer positions). Value-embeds never fire
+        # in the core (gi ≥ n_prelude is not in _ve_layer_map), so input_ids is not needed.
+        x0_s = gather_valid(x0, gidx, gvalid)
+        bg_s = gather_valid(bigram_emb, gidx, gvalid) if bigram_emb is not None else None
+        inj = torch.stack(
+            [self._build_injection_term(np_ + i, self.x0_injects[np_ + i].precompute(x0_s),
+                                        None, bg_s, h.dtype)
+             for i in range(n_core)], dim=0)
+
+        depths = self._sample_slot_depths(layout, x.device)
+        total_iters = int(depths.max().item())
+        n_nograd = max(0, total_iters - self.cfg.bptt_depth)
+        n_grad_iters = total_iters - n_nograd
+        _ck = self.cfg.ckpt_grad_iters
+        n_ckpt = n_grad_iters if _ck < 0 else max(0, min(_ck, n_grad_iters))
+
+        track_ret = self._core_has_retention and self.cfg.retention_carry
+        if track_ret:
+            _rh = self.cfg.retention_heads or self.cfg.n_heads
+            _rdh = self.cfg.d_model // _rh
+            ret_state = h.new_zeros(h.shape[0], _rh, _rdh, _rdh, dtype=torch.float32)
+        else:
+            ret_state = None
+
+        def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0):
+            return self._apply_core_step(h_in, e_in, None, None, None,
+                                         ret_state=ret_state, iter_idx=iter_idx,
+                                         inj_terms=inj_terms)
+
+        for t in range(total_iters):
+            active = depths > t                                   # [B, S]
+            do_ckpt = self.training and (t - n_nograd) < n_ckpt
+            if t < n_nograd:
+                with torch.no_grad():
+                    h_new, rs_new = _core_step(h, e, inj, ret_state=ret_state, iter_idx=t)
+            elif do_ckpt:
+                h_new, rs_new = checkpoint(_core_step, h, e, inj, ret_state=ret_state,
+                                           iter_idx=t, use_reentrant=False)
+            else:
+                h_new, rs_new = _core_step(h, e, inj, ret_state=ret_state, iter_idx=t)
+
+            _tau = self.cfg.core_gain_clip
+            if _tau > 0.0:
+                # PAD SLOTS ARE EXCLUDED from the norm. The gain clip is per SAMPLE, so a
+                # row's pad slots would otherwise put the number of REAL slots in that row
+                # into the scale applied to every real slot — padding would change the
+                # forward. Pads start at 0 (gather_valid) but the first core step moves
+                # them off zero, so zeroing here is not redundant. Dormant at the arms'
+                # core_gain_clip = 0.0; correct if it is ever turned on (reviewer).
+                _vm = layout.slot_valid.view(*layout.slot_valid.shape,
+                                             *([1] * (h.dim() - 2))).to(h.dtype)
+                _in_n = (h * _vm).flatten(1).norm(dim=1)
+                _out_n = (h_new * _vm).flatten(1).norm(dim=1)
+                _scale = torch.clamp(_tau * _in_n / (_out_n + 1e-6), max=1.0)
+                h_new = h_new * _scale.view(-1, *([1] * (h_new.dim() - 1)))
+
+            h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
+            if track_ret and rs_new is not None:
+                ret_state = rs_new
+        return xn, h, depths
+
+    def _tul_half_weights(self, labels: Tensor, layout: SlotLayout):
+        """``([N] row weights, t_last index, emit index)`` for the §5 double label.
+
+        MORPH's layout puts the slot BETWEEN a span's last token and the next span's
+        first token, so ``t_1(i+1)`` is predicted TWICE: once from ``t_last`` (plain LM,
+        no plan) and once from the slot's emitting position (with the plan). Spec §5
+        weights both terms 0.5 "so first tokens are not counted twice", which makes the
+        weighted-mean denominator the number of DISTINCT target tokens.
+
+        The index tensors are fixed-shape: invalid (pad) slots address a trailing pad
+        row, so nothing depends on the realised slot count and no host sync is needed.
+        """
+        B, L = labels.shape
+        BL = B * L
+        row_off = (torch.arange(B, device=labels.device) * L).unsqueeze(1)
+        base = layout.slot_index + row_off
+        # t_last sits immediately before the slot — the layout guarantees a slot never
+        # starts at position 0, so base-1 is always a real token position.
+        p_idx = torch.where(layout.slot_valid, base - 1, BL).reshape(-1)
+        z_idx = torch.where(layout.slot_valid, base + layout.prefix_k - 1, BL).reshape(-1)
+        w = labels.new_ones(BL + 1, dtype=torch.float32)
+        w[p_idx] = 0.5
+        w[z_idx] = 0.5
+        return w[:BL], p_idx, z_idx
+
+    def _tul_group_losses(self, x: Tensor, labels: Tensor, layout: SlotLayout | None,
+                          want_groups: bool = True) -> dict:
+        """Training loss (ONE weighted CE) plus, at eval, the §7.2 metric breakdown.
+
+        The training term is a single ``fused_linear_cross_entropy`` over every position
+        with the §5 weights folded into the kernel's reduction. One call rather than one
+        per label group matters: each call allocates and SAVES a ``[V, d]`` fp32
+        ``grad_w`` accumulator (201 MB at V=49169, d=1024), so three calls cost ~0.5 GB
+        of activation memory for arithmetic that a weight vector expresses exactly.
+
+        The per-group CEs (``ce_main`` / ``ce_plast`` / ``ce_emit``) are METRICS — spec
+        §7.2's ``val/first_tok_ce`` and ``val/first_tok_counterfactual``. They are
+        computed only when ``want_groups`` (eval), where there is no backward graph to
+        retain, and they carry no training signal that the weighted call does not
+        already carry.
+
+        ``layout=None`` (arm A4 / the plan-nats gather, where slots are not in the
+        sequence at all) → a plain unweighted CE over the token positions.
+        """
+        B, L, C = x.shape
+        w_head = self.embed.lm_weight()
+        mask_id = self.cfg.tul.slot_id
+        chunk = self.cfg.ce_chunk_size
+        flat = x.reshape(-1, C)
+        lab = labels.reshape(-1)
+        BL = flat.shape[0]
+
+        if layout is None:
+            ce = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
+                                            chunk_size=chunk, mask_token_id=mask_id)
+            return {"loss": ce, "ce_main": ce, "ce_tokens": ce,
+                    "n_targets": (lab != -100).sum().to(ce.dtype)}
+
+        row_w, p_idx, z_idx = self._tul_half_weights(labels, layout)
+        loss = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
+                                          chunk_size=chunk, mask_token_id=mask_id,
+                                          weights=row_w)
+        valid = (lab != -100).to(row_w.dtype)
+        out = {"loss": loss, "n_targets": (row_w * valid).sum()}
+        if not want_groups:
+            return out
+
+        lab_pad = torch.cat([lab, lab.new_full((1,), -100)], dim=0)
+        flat_pad = torch.cat([flat, flat.new_zeros(1, C)], dim=0)
+        main_lab = lab_pad.scatter(0, torch.cat([p_idx, z_idx], dim=0), -100)[:BL]
+        ce_main = fused_linear_cross_entropy(flat, w_head, main_lab, ignore_index=-100,
+                                             chunk_size=chunk, mask_token_id=mask_id)
+        out["ce_main"] = ce_main
+        out["n_main"] = (main_lab != -100).sum().to(ce_main.dtype)
+        for tag, idx in (("plast", p_idx), ("emit", z_idx)):
+            labs = lab_pad[idx]
+            ce = fused_linear_cross_entropy(flat_pad[idx], w_head, labs, ignore_index=-100,
+                                            chunk_size=chunk, mask_token_id=mask_id)
+            out[f"ce_{tag}"] = ce
+            out[f"n_{tag}"] = (labs != -100).sum().to(ce.dtype)
+        # val/ppl_tokens is over TOKEN positions only (ordinary + t_last), which keeps it
+        # comparable to the baseline's token PPL (spec §4).
+        out["ce_tokens"] = ((ce_main * out["n_main"] + out["ce_plast"] * out["n_plast"])
+                            / (out["n_main"] + out["n_plast"]).clamp(min=1.0))
+        out["ce_first_tok"] = out["ce_emit"]
+        out["ce_first_tok_plain"] = out["ce_plast"]
+        out["first_tok_counterfactual"] = out["ce_plast"] - out["ce_emit"]
+        return out
+
+    def _forward_tul(self, input_ids: Tensor, labels: Tensor | None,
+                     layout: SlotLayout, plan_nats: bool) -> dict:
+        """The TUL forward (docs/tul-spec.md §3). One shared position axis."""
+        if self.tul is None:
+            raise RuntimeError(
+                "forward(slot_layout=...) requires a model built with MORPHConfig(tul=...); "
+                "this model has no TUL parameters (E_slot / E_mask / W_prefix)."
+            )
+        tc = self.cfg.tul
+        if layout.prefix_k != tc.prefix_k:
+            raise ValueError(f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
+        B, L = input_ids.shape
+
+        x, x0, bigram_emb = self._tul_front(input_ids, layout)
+
+        if tc.tokens_through_core:
+            # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
+            # RESOLVED SPEC AMBIGUITY — §7.1's A2 row says "Poisson/slot" in the depth
+            # column but "uniform depth" in the isolates column. A2 must differ from A0 by
+            # the presence of slots ALONE (it isolates C2), so it reuses today's core
+            # region unchanged; a per-position Poisson depth would change two things at once.
+            x_coda = self._core_region(x, x0, bigram_emb, input_ids)
+            depths = None
+        else:
+            xn, h_slots, depths = self._tul_core(x, x0, bigram_emb, layout)
+            values, pos = self.tul.prefix_project(h_slots, layout, L)
+            x_coda = scatter_positions(xn, pos, values)
+
+        x_coda, keep = self.tul.apply_token_dropout(x_coda, layout, self.training)
+
+        out: dict = {"logits": None}
+        if tc.coda_sees_slots:
+            xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep)
+            groups = (self._tul_group_losses(xh, labels, layout, want_groups=not self.training)
+                      if labels is not None else None)
+            coda_positions = L
+        else:
+            xh, groups, coda_positions = self._tul_coda_without_slots(
+                x_coda, x0, bigram_emb, keep, labels, layout)
+        if plan_nats and labels is not None:
+            # §7.2: CE over the same tokens with the slots removed from the coda sequence.
+            # Reported MINUS the normal token CE; a positive value is the plan actually
+            # being used (the h_z-ablation, the C2 number). Under coda_sees_slots=false the
+            # normal pass IS the slots-removed pass, so plan_nats is 0 by construction.
+            if tc.coda_sees_slots:
+                _xh, g_pn, _ = self._tul_coda_without_slots(
+                    x_coda, x0, bigram_emb, keep, labels, layout)
+                out["ce_tokens_no_slots"] = g_pn["ce_main"]
+            else:
+                out["ce_tokens_no_slots"] = groups["ce_main"]
+
+        if groups is not None:
+            out.update(groups)
+        else:
+            # Generation (labels=None): full logits, with the structural slot id masked
+            # out of the head (spec §3.1 / invariant 4 — "masked … at generation").
+            # index_fill is out-of-place, so this is safe under grad as well as no_grad.
+            out["logits"] = self.embed.attend(xh).index_fill(
+                -1, torch.tensor([tc.slot_id], device=xh.device), float("-inf"))
+        out["layer_passes"] = self._tul_layer_passes(layout, depths, coda_positions)
+        out["n_tokens"] = (~layout.slot_mask).sum()
+        return out
+
+    def _tul_coda_without_slots(self, x_coda, x0, bigram_emb, keep, labels, layout):
+        """Run the coda on the TOKEN positions only (arm A4 and the plan-nats metric)."""
+        cidx = compact_index(layout.slot_mask)
+        B, L = layout.slot_mask.shape
+
+        def _g(t, fill=None):
+            if t is None:
+                return None
+            if fill is None:
+                pad = torch.cat([t, t.new_zeros(B, 1, *t.shape[2:])], dim=1)
+            else:
+                pad = torch.cat([t, t.new_full((B, 1, *t.shape[2:]), fill)], dim=1)
+            return gather_positions(pad, cidx)
+
+        xc = _g(x_coda)
+        x0c = _g(x0)
+        bgc = _g(bigram_emb)
+        keepc = _g(keep)
+        xh = self._back_region(xc, x0c, bgc, None, inject_keep=keepc)
+        groups = None
+        if labels is not None:
+            labc = _g(labels.unsqueeze(-1), fill=-100).squeeze(-1)
+            groups = self._tul_group_losses(xh, labc, None, want_groups=not self.training)
+        return xh, groups, L
+
+    def _tul_layer_passes(self, layout: SlotLayout, depths: Tensor | None,
+                          coda_positions: int) -> Tensor:
+        """Total layer-passes in this batch (spec §2: 10.3 vs 44 at OWT span 19.2).
+
+        prelude and coda run on every position; the core runs ``depth`` times on each
+        REAL slot (or, for arm A2, on every position at the sampled per-sample depth).
+        The caller divides by ``n_tokens`` to get the headline number.
+        """
+        cfg = self.cfg
+        L = layout.l_total
+        B = layout.slot_mask.shape[0]
+        passes = torch.tensor(float(cfg.n_prelude * L * B + cfg.n_coda * coda_positions * B),
+                              device=layout.slot_mask.device)
+        if depths is None:                                   # arm A2: core over all positions
+            passes = passes + float(cfg.n_core * L * B * cfg.mean_depth)
+        else:
+            passes = passes + cfg.n_core * (depths * layout.slot_valid).sum()
+        return passes
+
+    # ── Forward ───────────────────────────────────────────────────────
+
+    def forward(self, input_ids: Tensor, labels: Tensor | None = None,
+                bag_size: int = 0, seq_lens: Tensor | None = None,
+                slot_layout: SlotLayout | None = None) -> dict:
+        return self._forward_single(input_ids, labels, bag_size, seq_lens, slot_layout)
+
+    def tul_forward_with_plan_nats(self, input_ids: Tensor, labels: Tensor,
+                                   slot_layout: SlotLayout) -> dict:
+        """Eval-only: also run the coda with the slots gathered out (spec §7.2).
+
+        A separate entry point rather than a forward flag — the training path must not
+        carry a branch that decides how much work to do (CONTRIBUTING: no runtime
+        feature flags in hot paths), and this doubles the coda cost.
+        """
+        return self._forward_single(input_ids, labels, 0, None, slot_layout, _plan_nats=True)
+
+    def _forward_single(self, input_ids: Tensor,
+                        labels: Tensor | None = None,
+                        bag_size: int = 0,
+                        seq_lens: Tensor | None = None,
+                        slot_layout: SlotLayout | None = None,
+                        _plan_nats: bool = False) -> dict:
+        if slot_layout is not None:
+            if bag_size > 0:
+                raise ValueError(
+                    "slot_layout and bag_size are mutually exclusive: TUL activates AT the "
+                    "TST switch (spec §5), and val/gen always run TUL on with bag_size 0 "
+                    "(invariant 6)."
+                )
+            return self._forward_tul(input_ids, labels, slot_layout, _plan_nats)
+        # ── Token-Superposition Training input bagging (TST, arXiv 2605.06546) ──
+        # bag_size==0 → baseline path, BIT-IDENTICAL to pre-TST (and what eval/gen
+        # always use). bag_size==s>0 → the superposition phase: input_ids arrives as
+        # [B, s·L] raw tokens; we average each contiguous bag of s token-embeddings
+        # into one "s-token", so the model processes L = (s·L)/s positions — SAME
+        # cost/VRAM as baseline. value-embeds fire only in the prelude → bag their
+        # per-token ctx signal up front (ve_bagged); the core/coda never read input_ids.
+        B, T_in = input_ids.shape
+        s = bag_size
+        if s > 0:
+            T = T_in // s
+            x = self.embed_drop(self.embed(input_ids).view(B, T, s, -1).mean(dim=2))   # [B,L,d]
+            _bg_raw = self.embed.get_bigram(input_ids)
+            bigram_emb = (_bg_raw.view(B, T, s, -1).mean(dim=2)                          # [B,L,d]
+                          if _bg_raw is not None else None)
+            n_ve = len(self._ve_layer_map)
+            ve_bagged = ([
+                self.value_embeds[k]
+                    .precompute(self.value_embed_tables[k](input_ids))
+                    .view(B, T, s, -1).mean(dim=2)                                       # [B,L,ctx_w]
+                for k in range(n_ve)
+            ] if n_ve > 0 else None)
+            x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged)
+        else:
+            T = T_in
+            _sg = self._static_graphs
+            if (_sg.get("front") is not None and self.training
+                    and torch.is_grad_enabled()
+                    and input_ids.shape == _sg["front_shape"]):
+                # Graphed FRONT replay (2 launches: input copy + cudaGraphLaunch).
+                outs = _sg["front"](input_ids)
+                _am = _sg["front_aux_mods"]
+                if _am:
+                    # Region routers' aux arrives as explicit graph OUTPUTS (the python
+                    # stash protocol does not re-run on replay) → re-stash each onto
+                    # its own module so collect_routing_aux_losses sums in the exact
+                    # eager order (per-region pre-summing was a measured fp-reassoc).
+                    n = len(_am)
+                    for _mod, _aux in zip(_am, outs[-n:]):
+                        _mod._last_aux_loss = _aux
+                    outs = outs[:-n]
+                if _sg["has_bigram"]:
+                    x, x0, bigram_emb = outs
+                else:
+                    x, x0 = outs
+                    bigram_emb = None
+            else:
+                x, x0, bigram_emb = self._front_region(input_ids)
+
+        x = self._core_region(x, x0, bigram_emb, input_ids)
 
         # ── Coda + LM head (BACK region — graphed replay when captured) ──
         _sg = self._static_graphs

@@ -91,20 +91,58 @@ def evaluate(
     device: torch.device,
     loader,
     n_batches: int = 20,
+    tul: bool = False,
+    extra: dict | None = None,
 ) -> tuple[float, float]:
-    """Return (avg_loss, ppl) over n_batches validation steps."""
+    """Return (avg_loss, ppl) over n_batches validation steps.
+
+    ``tul=True``: the val loader yields the 3-tuple (input_ids, labels, slot_layout) and
+    the model is called with the layout ON and bag_size 0 (spec invariant 6). The §7.2
+    metrics — val/ppl_tokens, val/first_tok_ce, val/plan_nats,
+    val/first_tok_counterfactual, layer-passes/token — are accumulated into ``extra``.
+    val/ppl_tokens is over TOKEN positions only, so it stays comparable to the
+    baseline's token PPL."""
     model.eval()
     losses: list[float] = []
+    acc: dict[str, list[float]] = {}
     for _ in range(n_batches):
         try:
-            x, y = next(loader)
+            batch = next(loader)
         except StopIteration:
             break
-        x, y = x.to(device), y.to(device)
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            out = model(x, labels=y)
-        losses.append(out["loss"].item())
+        if tul:
+            x, y, layout = batch
+            x, y, layout = x.to(device), y.to(device), layout.to(device)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                _m = getattr(model, "_orig_mod", model)
+                out = _m.tul_forward_with_plan_nats(x, y, layout)
+            losses.append(out["loss"].item())
+            ce_tok = float(out["ce_tokens"])
+            acc.setdefault("val/ce_tokens", []).append(ce_tok)
+            acc.setdefault("val/ppl_tokens", []).append(math.exp(min(ce_tok, 20.0)))
+            if "ce_first_tok" in out:
+                acc.setdefault("val/first_tok_ce", []).append(float(out["ce_first_tok"]))
+                acc.setdefault("val/first_tok_counterfactual", []).append(
+                    float(out["first_tok_counterfactual"]))
+            if "ce_tokens_no_slots" in out:
+                # §7.2: CE without the plan MINUS CE with it. Positive ⇒ the coda is
+                # actually using the slot state (the C2 number, the h_z ablation).
+                acc.setdefault("val/plan_nats", []).append(
+                    float(out["ce_tokens_no_slots"]) - ce_tok)
+            acc.setdefault("val/layer_passes_per_token", []).append(
+                float(out["layer_passes"]) / max(float(out["n_tokens"]), 1.0))
+            if layout.stats:
+                for k, v in layout.stats.items():
+                    acc.setdefault(f"val/span_{k}", []).append(float(v))
+        else:
+            x, y = batch
+            x, y = x.to(device), y.to(device)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                out = model(x, labels=y)
+            losses.append(out["loss"].item())
     model.train()
+    if extra is not None:
+        extra.update({k: sum(v) / len(v) for k, v in acc.items() if v})
     avg = sum(losses) / max(len(losses), 1)
     return avg, math.exp(min(avg, 20.0))
 
@@ -119,8 +157,14 @@ def run_generation_test(
     seq_len: int,
     step: int,
     n_tokens: int = 100,
+    tul_rt=None,
 ) -> str:
     """Run a short greedy generation and return the text.
+
+    ``tul_rt`` set ⇒ sample through ``morph.inference.tul_generate`` so the slot layout
+    is built by the SAME boundary rule the loader used (spec §6, invariant 1). That path
+    is an eager recompute-per-step sampler with no KV cache (v1, by spec), so it is
+    slower than the plain sampler below — the generation test is 3 × n_tokens tokens.
 
     Decorated with ``force_eager``: generation runs the model token-by-token at
     batch=1 with a sequence length that grows by one every step, so the MLPs
@@ -147,6 +191,23 @@ def run_generation_test(
     output_lines: list[str] = []
     model.eval()
 
+    if tul_rt is not None:
+        from morph.inference.tul_generate import generate_tul
+        _m = getattr(model, "_orig_mod", model)
+        spec = tul_rt.data_cfg.spec_for(seq_len)
+        for prompt in prompts:
+            ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+            new, builder = generate_tul(_m, ids, tul_rt.data_cfg.rule, spec,
+                                        max_new_tokens=n_tokens, temperature=0.8,
+                                        top_k=50, seed=step, device=device)
+            text = tokenizer.decode(ids + new, skip_special_tokens=True)
+            output_lines.append(
+                f"PROMPT: {prompt}\nOUTPUT: {text}\n"
+                f"[slots={builder.n_slots} mean_span="
+                f"{len(ids + new) / max(builder.n_slots, 1):.1f}]")
+        model.train()
+        return "\n---\n".join(output_lines)
+
     for prompt in prompts:
         ids = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)[
             "input_ids"
@@ -172,7 +233,9 @@ def run_generation_test(
 
 # ── Config → MORPHConfig ───────────────────────────────────────────────────────
 
-def build_morph_config(cfg: DictConfig) -> MORPHConfig:
+def build_morph_config(cfg: DictConfig, tul=None) -> MORPHConfig:
+    """``tul`` (a TULConfig or None) gates CONSTRUCTION of the TUL parameters;
+    None ⇒ byte-identical to the baseline model (runtime-invariants §6b)."""
     m = cfg.model
     tr = cfg.training
 
@@ -182,6 +245,7 @@ def build_morph_config(cfg: DictConfig) -> MORPHConfig:
     channel_dims = tuple(int(c) for c in ch)
 
     return MORPHConfig(
+        tul=tul,
         d_model=int(m.d_model),
         n_heads=int(m.n_heads),
         d_ff=d_ff_raw,
@@ -257,6 +321,15 @@ def save_checkpoint(
         "rng_cpu": torch.get_rng_state(),
         "rng_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
+    _mm = getattr(model, "_orig_mod", model)
+    if getattr(_mm, "tul", None) is not None:
+        # Audit trail, not a reconstruction flag: the TUL parameters are built from the
+        # config at model-build time (never mid-run), so load_state_dict already has a
+        # home for them. This records WHICH layout a checkpoint was trained under so a
+        # later loader cannot silently pair TUL weights with a plain-MORPH config.
+        ckpt["tul"] = {"prefix_k": _mm.cfg.tul.prefix_k, "slot_id": _mm.cfg.tul.slot_id,
+                       "coda_sees_slots": _mm.cfg.tul.coda_sees_slots,
+                       "tokens_through_core": _mm.cfg.tul.tokens_through_core}
     if pruning is not None:
         # Both topology-phase flags are needed to RECONSTRUCT module structure (carve +
         # routers) before load_state_dict on resume. _is_compact alone is insufficient:
@@ -1012,7 +1085,16 @@ def main(cfg: DictConfig) -> None:
     # alive yet, every compile fork is safe. The fused CCA kernels JIT-specialize size==1
     # separately; without this ordering, the first n_active==1 Poisson draw would compile
     # against live threads. wandb.init() is deferred to just after the warmup.
-    morph_cfg = build_morph_config(cfg)
+    # ── TUL (docs/tul-spec.md §8) ──────────────────────────────────────────
+    # Resolved BEFORE the model build: `tul.activate_at: never` → tul_rt is None →
+    # no TUL parameters are constructed and every path below is the baseline's,
+    # bit-identical (runtime-invariants §6b). The parameters exist from step 0 when
+    # TUL is configured but stay inert (grad None ⇒ the optimizer skips them) until a
+    # forward is called with a layout, so a mid-run activation needs no optimizer
+    # rebuild — only E_slot's re-init from the live embedding table (spec §5).
+    from morph.training.tul_setup import build_tul_runtime
+    tul_rt = build_tul_runtime(cfg)
+    morph_cfg = build_morph_config(cfg, tul=tul_rt.model_cfg if tul_rt else None)
     model = MORPHTransformer(morph_cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params / 1e6:.1f}M params on {device}")
@@ -1220,6 +1302,10 @@ def main(cfg: DictConfig) -> None:
     # OmegaConf → plain Python dict so wandb can serialise it; fold n_params in directly.
     full_config_dict = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False)
     full_config_dict["n_params"] = n_params
+    # Everything DERIVED from the tul block (resolved ids, |B|, L_total) goes in the run
+    # config too, so an arm is reproducible from wandb alone without re-deriving ids from
+    # a tokenizer version. None when TUL is off.
+    full_config_dict["tul_manifest"] = tul_rt.manifest if tul_rt else None
     if ternary_manifest is not None:
         # Derived ternary facts (scope/threshold already live in cfg). Drop the
         # verbose module_names list from the logged config; keep the greppable counts.
@@ -1334,9 +1420,10 @@ def main(cfg: DictConfig) -> None:
     from morph.training.data_placement import DataRuntimeConfig, Prefetcher
     _data_rt = DataRuntimeConfig.resolve(getattr(cfg, "data_runtime", None))
 
-    def _make_train_loader(bag: int, skip_batches: int = 0):
+    def _make_train_loader(bag: int, skip_batches: int = 0, tul_on: bool = False):
         it = iter(create_dataloader(tokenizer_name, dataset_name, seq_len,
-                                    batch_size, split="train", bag_size=bag))
+                                    batch_size, split="train", bag_size=bag,
+                                    tul=tul_rt.data_cfg if (tul_rt and tul_on) else None))
         # Resume: the stream is DETERMINISTIC and UNSHUFFLED (fixed shard order, no per-epoch
         # seed), so replaying `skip_batches` next() calls advances to the EXACT batch the
         # interrupted run would serve next — "like nothing happened" for data too. Cost is
@@ -1361,14 +1448,27 @@ def main(cfg: DictConfig) -> None:
 
     # val/gen ALWAYS use standard NTP (bag_size=0) so val ppl is comparable to the
     # baseline regardless of which TST phase training is in.
-    val_loader = iter(
-        create_dataloader(tokenizer_name, dataset_name, seq_len, batch_size,
-                         split="validation", skip_samples=50_000)
-    )
+    # INVARIANT 6: whenever the TUL layout is ACTIVE, val runs with it on and bag_size 0
+    # (val ppl is over token positions only, so it stays comparable to the baseline).
+    # Before a mid-run activation the model is still plain MORPH, so val is plain too;
+    # _make_val_loader is called again at the switch.
+    def _make_val_loader(tul_on: bool):
+        return iter(
+            create_dataloader(tokenizer_name, dataset_name, seq_len, batch_size,
+                              split="validation", skip_samples=50_000,
+                              tul=tul_rt.data_cfg if (tul_rt and tul_on) else None)
+        )
+
+    val_loader = _make_val_loader(tul_rt is not None and tul_rt.activate_at == 0.0)
 
     # ── Checkpoint dir ────────────────────────────────────────────────────
-    ckpt_dir = os.path.join(_MORPH_ROOT, "checkpoints", "morph",
-                            wandb.run.name if wandb.run else "run")
+    # wandb only auto-generates a run NAME online; offline runs with `wandb.name: null`
+    # leave it None, which used to make this join() raise. Fall back to the run id so
+    # every offline run still gets its own checkpoint directory.
+    _run_tag = "run"
+    if wandb.run is not None:
+        _run_tag = wandb.run.name or str(wandb.run.id) or "run"
+    ckpt_dir = os.path.join(_MORPH_ROOT, "checkpoints", "morph", _run_tag)
     os.makedirs(ckpt_dir, exist_ok=True)
     # Persist the wandb run id so a future resume continues the same run (read back as
     # the wandb_id.txt sidecar above, before wandb.init).
@@ -1442,6 +1542,22 @@ def main(cfg: DictConfig) -> None:
 
     # TST: start in superposition unless resuming past the phase-1 boundary.
     cur_bag = tst_bag_size if (tst_phase1_steps > 0 and start_step < tst_phase1_steps) else 0
+    # ── TUL activation (spec §5) ──────────────────────────────────────────
+    # tul_step 0 → the layout is on from the first step (the 5090 arms [W]); >0 → it
+    # switches on mid-run at the TST boundary. `tul_on` is the live phase flag; it is
+    # NOT a forward feature flag — it only decides whether a layout is BUILT by the
+    # loader, and `slot_layout=None` is the untouched baseline path.
+    tul_step = tul_rt.activation_step(total_steps) if tul_rt else -1
+    tul_on = bool(tul_rt is not None and start_step >= tul_step)
+    if tul_on and start_step == 0:
+        # Spec §5 / Block Transformer §3.7: E_slot starts as the MEAN of the embedding
+        # table. On a resume the trained value comes back from the checkpoint instead.
+        getattr(model, "_orig_mod", model).tul.init_at_activation(
+            getattr(model, "_orig_mod", model).embed.lm_weight())
+        print(f"[TUL] layout ACTIVE from step 0; E_slot ← mean(embedding table)", flush=True)
+    elif tul_rt is not None:
+        print(f"[TUL] layout activates at step {tul_step} "
+              f"({tul_rt.activate_at:g} × {total_steps})", flush=True)
     # Data fast-forward to the exact resume position (deterministic unshuffled stream). Only
     # for the base (non-curriculum) loader — the curriculum multi-source loader is rebuilt
     # below with its own stage logic, so skipping here would be wasted re-tokenization.
@@ -1452,7 +1568,7 @@ def main(cfg: DictConfig) -> None:
     # ~10min/arm CPU re-tokenization). Faithful resume still replays for exact continuation.
     _fork_continue = bool(getattr(cfg.training, "resume_fresh_optimizer", False))
     _resume_skip = start_step if (start_step > 0 and not _curr_on and not _fork_continue) else 0
-    train_loader = _make_train_loader(cur_bag, skip_batches=_resume_skip)
+    train_loader = _make_train_loader(cur_bag, skip_batches=_resume_skip, tul_on=tul_on)
 
     # ── Curriculum pretraining (Phase P) — length-bucketed multi-source ramp ──
     # GATED: absent/disabled → base.yaml path is byte-identical (curriculum_enabled False,
@@ -1557,7 +1673,11 @@ def main(cfg: DictConfig) -> None:
     # hook below dels them first. Requires grad_accum==1 and bag_size==0 (a second
     # micro-backward would overwrite the bwd graphs' static grad buffers instead of
     # accumulating).
-    _sg_pending = os.environ.get("MORPH_STATIC_GRAPHS", "0").lower() not in ("0", "", "false")
+    # The captured regions are the PLAIN front/back at the plain shape. The TUL forward
+    # takes an earlier branch and its L_total shape would never match, so a capture under
+    # TUL would permanently reserve its ~9 GB private pool for graphs that never replay.
+    _sg_pending = (os.environ.get("MORPH_STATIC_GRAPHS", "0").lower() not in ("0", "", "false")
+                   and not tul_on)
     _sg_build_step = start_step + 3
     _sg_shape = None
 
@@ -1674,6 +1794,33 @@ def main(cfg: DictConfig) -> None:
                     train_loader.close()   # stop the bag-6 producer thread (stream abandoned)
                 train_loader = _make_train_loader(0)
 
+        # ── TUL activation switch (spec §5): layout ON, E_slot ← embedding mean ──
+        # Mirrors the TST switch above: checkpoint first, then flip the phase and rebuild
+        # the loaders. No optimizer rebuild is needed — the TUL parameters have existed
+        # since step 0 and simply start receiving gradient here, so AdEMAMix state for
+        # them begins at the switch exactly as the spec asks.
+        if tul_rt is not None and not tul_on and step >= tul_step:
+            sw_path = os.path.join(ckpt_dir, f"tul_switch_step_{step}.pt")
+            save_checkpoint(sw_path, step, model, optimizer, scaler, pruning, next_step=step)
+            _mm = getattr(model, "_orig_mod", model)
+            _mm.tul.init_at_activation(_mm.embed.lm_weight())
+            # The captured front/back graphs are the PLAIN-path regions at the plain
+            # shape; the TUL forward neither replays them nor matches their shape
+            # (L_total ≠ seq_len). Drop them so their ~9 GB private pool is returned.
+            if hasattr(_mm, "static_graphs_invalidate"):
+                _mm.static_graphs_invalidate("TUL activation")
+            tul_on = True
+            if curriculum_enabled:
+                train_loader = _curr_loader.batches(_microbatch[cur_stage], bag_size=0,
+                                                    tul=tul_rt.data_cfg)
+            else:
+                if isinstance(train_loader, Prefetcher):
+                    train_loader.close()
+                train_loader = _make_train_loader(0, tul_on=True)
+            val_loader = _make_val_loader(True)
+            print(f"[TUL] phase switch @ step {step}: slot layout ON "
+                  f"(E_slot ← mean(embedding table)). Switch ckpt: {sw_path}", flush=True)
+
         # ── Curriculum stage transition: checkpoint → RoPE re-anchor → loader.set_stage →
         #    micro-batch/grad-accum swap. Two independent risks at a step-up (activation OOM
         #    and the PE-shift loss spike) → the pre-step-up checkpoint is the recovery point. ──
@@ -1744,23 +1891,32 @@ def main(cfg: DictConfig) -> None:
         for _micro in range(_ga):
             with _rt.region("data"):
                 try:
-                    x, y = next(train_loader)
+                    batch = next(train_loader)
                 except StopIteration:
                     # Curriculum .batches() is infinite so this is a non-curriculum-only refill; still,
                     # branch defensively so a curriculum run can never silently fall back to the base OWT stream.
                     if curriculum_enabled:
-                        train_loader = _curr_loader.batches(_microbatch[cur_stage], bag_size=cur_bag)
+                        train_loader = _curr_loader.batches(
+                            _microbatch[cur_stage], bag_size=cur_bag,
+                            tul=tul_rt.data_cfg if (tul_rt and tul_on) else None)
                     else:
                         if isinstance(train_loader, Prefetcher):
                             train_loader.close()
-                        train_loader = _make_train_loader(cur_bag)
-                    x, y = next(train_loader)
+                        train_loader = _make_train_loader(cur_bag, tul_on=tul_on)
+                    batch = next(train_loader)
+                # TUL loaders yield a 3-tuple (input_ids, labels, slot_layout); every
+                # other path keeps the 2-tuple contract untouched.
+                if len(batch) == 3:
+                    x, y, _layout = batch
+                    _layout = _layout.to(device)
+                else:
+                    (x, y), _layout = batch, None
                 x, y = x.to(device), y.to(device)
                 _sg_shape = x.shape          # static-graph build uses the live shape
 
             with _rt.region("fwd"):
                 with torch.autocast("cuda", dtype=torch.bfloat16):
-                    out = model(x, labels=y, bag_size=cur_bag)
+                    out = model(x, labels=y, bag_size=cur_bag, slot_layout=_layout)
                 loss = out["loss"]
 
                 # Routing aux loss (load balance) — only active after route_start
@@ -1985,6 +2141,19 @@ def main(cfg: DictConfig) -> None:
                 "perf/step": step,
                 "train/tst_bag": cur_bag,
             }
+            if tul_on:
+                # Boundary statistics (spec §4) + the layer-pass accounting (spec §2).
+                log["tul/active"] = 1
+                if _layout is not None and _layout.stats:
+                    for _k, _v in _layout.stats.items():
+                        log[f"tul/{_k}"] = _v
+                if "layer_passes" in out and out["layer_passes"] is not None:
+                    _npos = float(out["n_tokens"])
+                    log["tul/layer_passes_per_token"] = float(out["layer_passes"]) / max(_npos, 1.0)
+                    log["tul/tokens_per_batch"] = _npos
+                for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual"):
+                    if _k in out and out[_k] is not None:
+                        log[f"tul/{_k}"] = float(out[_k].detach())
 
             # Retention gate diagnostic (#230): sigmoid(ret_gate) per retention block — THE key
             # signal for whether the model actually USES the retention branch (gate opens from ~0)
@@ -2035,12 +2204,22 @@ def main(cfg: DictConfig) -> None:
 
         # ── Validation (every eval_every steps) ──────────────────────────
         if step % eval_every == 0 and step > 0:
-            val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches)
+            _val_extra: dict = {}
+            val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
+                                         tul=tul_on, extra=_val_extra)
             val_log: dict = {"val/loss": val_loss, "val/ppl": val_ppl}
+            val_log.update(_val_extra)
 
             wandb.log(val_log, step=step)
+            _tul_msg = ""
+            if tul_on:
+                _tul_msg = (f"  ppl_tok={_val_extra.get('val/ppl_tokens', float('nan')):.2f}"
+                            f"  first_tok={_val_extra.get('val/first_tok_ce', float('nan')):.4f}"
+                            f"  plan_nats={_val_extra.get('val/plan_nats', float('nan')):+.4f}"
+                            f"  cf={_val_extra.get('val/first_tok_counterfactual', float('nan')):+.4f}"
+                            f"  lp/tok={_val_extra.get('val/layer_passes_per_token', float('nan')):.2f}")
             print(
-                f"  [VAL {step:7d}] loss={val_loss:.4f}  ppl={val_ppl:.2f}",
+                f"  [VAL {step:7d}] loss={val_loss:.4f}  ppl={val_ppl:.2f}{_tul_msg}",
                 flush=True,
             )
             model.train()
@@ -2048,7 +2227,8 @@ def main(cfg: DictConfig) -> None:
         # ── Generation test ───────────────────────────────────────────────
         if gen_every > 0 and step % gen_every == 0 and step > 0:
             gen_text = run_generation_test(
-                model, device, tokenizer_name, seq_len, step
+                model, device, tokenizer_name, seq_len, step,
+                tul_rt=tul_rt if tul_on else None,
             )
             wandb.log(
                 {"gen/sample": wandb.Html(f"<pre>{gen_text}</pre>")}, step=step
@@ -2103,13 +2283,19 @@ def main(cfg: DictConfig) -> None:
     # eval is disabled (eval_every > total_steps) — a pure throughput/mem run has no
     # val_loader worth touching and the skip lets it exit promptly.
     if eval_every <= total_steps:
-        val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches)
-        wandb.log({"val/loss_final": val_loss, "val/ppl_final": val_ppl}, step=total_steps)
-        print(f"Final val_loss={val_loss:.4f}  ppl={val_ppl:.2f}")
+        _val_extra = {}
+        val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
+                                     tul=tul_on, extra=_val_extra)
+        _final = {"val/loss_final": val_loss, "val/ppl_final": val_ppl}
+        _final.update({f"{k}_final": v for k, v in _val_extra.items()})
+        wandb.log(_final, step=total_steps)
+        print(f"Final val_loss={val_loss:.4f}  ppl={val_ppl:.2f}"
+              + "".join(f"  {k}={v:.4f}" for k, v in sorted(_val_extra.items())))
 
     if gen_every > 0 or bool(getattr(tr, "gen_test", False)):
         gen_text = run_generation_test(
-            model, device, tokenizer_name, seq_len, total_steps, n_tokens=200
+            model, device, tokenizer_name, seq_len, total_steps, n_tokens=200,
+            tul_rt=tul_rt if tul_on else None,
         )
         wandb.log(
             {"gen/final": wandb.Html(f"<pre>{gen_text}</pre>")}, step=total_steps
