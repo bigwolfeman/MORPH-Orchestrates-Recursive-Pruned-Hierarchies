@@ -151,9 +151,16 @@ local 4:6×6:4 → tokens 8 + slots (4+36+4)/19.2 = **10.3 vs 44** (4.3×); code
 
 ### 3.1 Sequence layout and the boundary rule
 
-* One shared position axis. A **slot** is one position (`slots_per_span = 1`
-  in v1; Block Transformer's prefix length 2–6 is arm `prefix_k`) inserted
-  AFTER the last token of each span. Its input id is `slot_id`, a StarCoder2
+* One shared position axis. A **slot** is one core position inserted AFTER
+  the last token of each span. In the coda it occupies `prefix_k` positions:
+  with `prefix_k = 1` the slot's looped state `h_i` is the coda input at that
+  one position; with `prefix_k = 2` (Block Transformer App. F.2, prefix length
+  2 chosen over 1 for loss, 2–6 all beat 1) `h_i` is projected into two
+  vectors `h_i W_1`, `h_i W_2` that occupy two adjacent coda positions — the
+  first has no label and only carries the plan, the second predicts the first
+  token of the next span. Zero extra core compute; one extra coda position per
+  span. Default `prefix_k = 1` until Wolfe decides; the spec is written so
+  either is one config key. Its input id is `slot_id`, a StarCoder2
   special token that never occurs in the shards (default `<fim_pad>`, resolved
   at build, absence asserted at data prep). The LM head never predicts
   `slot_id`: its logit is masked to −inf in the fused CE and at generation.
@@ -237,11 +244,15 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
   four coda layers into the first-token logits (its label), and its coda K/V
   are what later tokens read. This is MegaByte's `p = 0` position and Block
   Transformer's last prefix. If the first-token loss is found to crowd out
-  the plan (the LTD think-position failure), arm `prefix_k = 2` gives one
-  loss-free slot before the emitting one.
+  the plan (the LTD think-position failure, t+1 0.339 vs t+2 0.108 at one
+  position), `prefix_k = 2` gives one loss-free prefix position before the
+  emitting one, by projection (§3.1), not by a second looped slot.
 * Labels: `label(z_i) = t_1(i+1)`; `label(t_last(i)) = t_1(i+1)` as well (a
-  second, plan-free prediction of the same token — the counterfactual §7.3
-  needs and generation ignores); other tokens: next token; pad slots: −100.
+  second, plan-free prediction of the same token — the counterfactual §7.2
+  needs and generation ignores). Both terms are weighted 0.5 so first tokens
+  are not counted twice in the loss (or `t_last`'s term is computed under
+  `no_grad` as a metric only — implementation choice, state it in the config).
+  Other tokens: next token; pad slots and pad prefix positions: −100.
 * HC mean → `lm_mixer` → `final_norm` → fused CE with the `slot_id` logit
   masked. Unchanged otherwise.
 * Norm balance (H-Net §2.3): the seams are `input_norm` (already RMSNorm) on
@@ -261,6 +272,7 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
 | learned boundaries (H-Net router + ratio loss) | rule-based is close (BLT, DTP), and TUL's boundary must be causal | H-Net §2.2 | later |
 | learned per-slot exit | needs the trained model first | Huginn KL-exit | later |
 | inference engine port | separate work; eager generation for the test | — | later **[W]** |
+| `prefix_k = 2` (projection prefixes) | Block Transformer App. F.2 prefers it; kept as a one-key switch pending Wolfe's decision | BT Fig 3f | arm/default TBD |
 | slot-set multi-hot warm-up (`set_lambda`) | block-level aux losses hurt in BT §4.2; TST validated MCE only as a phase-1 objective | TST; CODI/CCoT for the need | arm, default 0 |
 | punc-STP on the slot trajectory (`stp_lambda`) | zero params, Wolfe's punc-STP finding (next token ~80% decodable from the boundary state); the STP paper itself has no boundary or pretraining claim | STP; MORPH punc-STP | arm, default 0 |
 
@@ -290,6 +302,15 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
   loss jump larger than the TST switch alone (the coda's input distribution
   changes from looped states to prelude states for token positions). Log it;
   arm `activate_at = 0` (TST off, TUL from step 0) is the isolation run.
+  Block Transformer §3.7 is the datum FOR a mid-run switch: uptraining a
+  vanilla checkpoint into the block/token split recovers near-full
+  performance with ~10% of the tokens (init block embedding = mean of token
+  embeddings, prefixes = replicated context embedding).
+* **CMS ordering, decided [W]:** prune → carve (27–29k) completes BEFORE TUL
+  activates (30k), so the core's MORTAR mask is chosen from saliency
+  accumulated while the core ran on every token; from 30k it runs on slots
+  only. Wolfe: keep the staging as is, TUL immediately after TST. Recorded so
+  a later regression is not misread; `activate_at = 0` measures the cost.
 * New parameters at the switch: `E_slot` (init: mean of the embedding
   table), `E_mask` (init 0). No new blocks. AdEMAMix state for them starts
   at the switch.
@@ -336,19 +357,25 @@ the loader's layout exactly (the coconut `assert_layout_parity` lesson).
 | A4 | depth-only | yes | no | **no** (slots masked from coda attention) | Poisson/slot | C1 alone (depth per idea, plan unreadable) |
 | A3 | shallow control | no | no (seed path) | — | — | compute floor: what prelude+coda alone do |
 | A1r | TUL repeat | as A1 | | | | **retrain noise floor** |
+| A1+ | TUL reinvest | yes | no | yes | Poisson/slot, `mean_depth 12` | the layer-pass savings spent: `n_coda 8`, deeper loop, still ≤ A0's layer-passes/token |
 
 C1 = depth per idea beats depth per token at equal layer-passes; C2 = a span
 is decodable from the plan. The 2×2 is {A0/A2 × A4/A1}; A3 is the floor. Read
 per CoCoMix Fig 6(d): if A1 does not beat both A2 and A4, one knob is
-carrying the result.
+carrying the result. A1 at iso-params runs 8 layer-passes/token against A0's
+44, so it will trail A0 on token PPL (Block Transformer needed 2–3× params to
+match vanilla); A1+ is the fair-compute cell and A3 is the floor A1 must
+clear by `plan_nats`.
 
 ### 7.2 Metrics
 
 * `val/ppl_tokens` (token positions), `val/first_tok_ce` (slot positions),
   per-offset-in-span CE curve (Block Transformer Fig: first token hardest).
-* **`val/plan_nats`** = CE over span tokens with slots masked from the coda
-  at eval minus unmasked (the h_z-ablation; the C2 number). Reported with
-  the A1r spread.
+* **`val/plan_nats`** = CE over span tokens with the slots REMOVED from the
+  coda's sequence at eval (a gather that drops slot positions — exact, and
+  it needs no per-position attention mask the fused kernels may not have)
+  minus the normal CE (the h_z-ablation; the C2 number). Reported with the
+  A1r spread. Arm A4 is trained the same way (slots dropped from the coda).
 * **`val/first_tok_counterfactual`** = CE(t_1 | t_last, no plan) − CE(t_1 | z_i)
   from the double label — free, per batch.
 * Generation: rep4@512, distinct-3, mean span length, fraction of spans
@@ -375,7 +402,7 @@ Beating A0 on `val/ppl_tokens` is NOT a gate at this scale (§1).
 | `tul.min_span` | 4 | suppress boundary below this |
 | `tul.span_cap` | 32 | force boundary at this **[W]** |
 | `tul.max_slots` | `seq_len // 8` | fixed-shape slot budget |
-| `tul.slots_per_span` | 1 | arm `prefix_k` |
+| `tul.prefix_k` | 1 (2 proposed) | coda prefix positions per slot, by projection (§3.1) |
 | `tul.token_state_dropout` | 0.15 | arm sweep |
 | `tul.slot_mean_depth` / `slot_max_depth` | `= mean_depth` / `max_depth` | per-slot Poisson |
 | `tul.coda_sees_slots` | true | A4 sets false |
