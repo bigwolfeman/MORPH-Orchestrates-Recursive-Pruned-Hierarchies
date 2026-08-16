@@ -1241,6 +1241,63 @@ def main(cfg: DictConfig) -> None:
         full_config_dict["attn_proj_quant_manifest"] = {
             k: v for k, v in attn_proj_quant_manifest.items() if k != "module_names"
         }
+    # ── Dataset manifests + content hashes for every curriculum blend source ──
+    # The logged config must fully identify the DATA, not just the hyperparams
+    # (PLAN.md: "W&B logs ... dataset manifests/hashes"). Missing shard files are
+    # a hard error HERE, before wandb.init — never config around a missing shard.
+    _curr_mf = getattr(cfg, "curriculum", None)
+    if _curr_mf is not None and getattr(_curr_mf, "enabled", False):
+        import hashlib as _hashlib
+        import json as _json
+        _manifests = {}
+        for _src_name, _src_w in dict(_curr_mf.blend).items():
+            if float(_src_w) <= 0:
+                continue
+            _sdir = os.path.join(str(_curr_mf.pretok_dir), str(_src_name))
+            _meta_p = os.path.join(_sdir, "meta.json")
+            _bin_p = os.path.join(_sdir, "tokens.u16.bin")
+            if not (os.path.isfile(_meta_p) and os.path.isfile(_bin_p)):
+                raise FileNotFoundError(
+                    f"curriculum source {_src_name!r}: shard files missing under {_sdir}"
+                )
+            with open(_meta_p, "rb") as _f:
+                _meta_bytes = _f.read()
+            _meta = _json.loads(_meta_bytes)
+            _st = os.stat(_bin_p)
+            # Full sha256 of the token bin, cached in a sidecar keyed by
+            # (size, mtime_ns) so the ~seconds cost is paid once per shard build.
+            _sidecar = os.path.join(_sdir, "tokens.sha256")
+            _bin_sha = None
+            if os.path.isfile(_sidecar):
+                try:
+                    _key, _sha = open(_sidecar).read().split()
+                    if _key == f"{_st.st_size}:{_st.st_mtime_ns}":
+                        _bin_sha = _sha
+                except (ValueError, OSError):
+                    pass
+            if _bin_sha is None:
+                _h = _hashlib.sha256()
+                with open(_bin_p, "rb") as _f:
+                    for _chunk in iter(lambda: _f.read(1 << 24), b""):
+                        _h.update(_chunk)
+                _bin_sha = _h.hexdigest()
+                try:
+                    with open(_sidecar, "w") as _f:
+                        _f.write(f"{_st.st_size}:{_st.st_mtime_ns} {_bin_sha}")
+                except OSError:
+                    pass  # read-only shard dir: hash still logged, just not cached
+            _manifests[str(_src_name)] = {
+                "weight": float(_src_w),
+                "n_docs": _meta.get("n_docs"),
+                "n_tokens": _meta.get("n_tokens"),
+                "role": _meta.get("role"),
+                "meta_sha256": _hashlib.sha256(_meta_bytes).hexdigest(),
+                "tokens_sha256": _bin_sha,
+                "path": os.path.realpath(_sdir),
+            }
+        full_config_dict["dataset_manifests"] = _manifests
+        print(f"  [data] dataset manifests hashed for {len(_manifests)} sources "
+              f"→ wandb config", flush=True)
     # Resume the same wandb run (continuous metric history) when resuming a checkpoint:
     # the prior run wrote its id to a wandb_id.txt sidecar next to its checkpoints.
     _wandb_resume_id = None
@@ -1947,6 +2004,13 @@ def main(cfg: DictConfig) -> None:
             if step % 100 == 0 and pruning.is_routed:
                 rt_stats = collect_routing_stats(model)
                 log.update(rt_stats)
+
+            # Realized per-source token fractions (curriculum blend) — the drawn
+            # fractions, not the configured targets, so share realization is a
+            # logged fact rather than an assumption.
+            if curriculum_enabled:
+                for _sn, _fv in _curr_loader.realized_token_fractions().items():
+                    log[f"data/frac_{_sn}"] = _fv
 
             # β1=0 SNR-gate activity (only when the gate is active) — mean gate applied + how many
             # coords were heavily noise-gated (<0.5), reset each log interval. Direct evidence the

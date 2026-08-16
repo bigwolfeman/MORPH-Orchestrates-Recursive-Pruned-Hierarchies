@@ -110,6 +110,17 @@ SOURCES = [
     #         json_array reader (bulk download + local ijson). shuffle_files mixes the subsets.
     ("math", "hf_stream", {"repo": "aslawliet/math-pretraining-corpus", "json_array": True,
                            "shuffle_files": True, "seed": 0, "max_tokens": REMOTE_MAX_TOKENS}, "text"),
+    # ── Olympiad pre-pretraining mix (math-seed continued-pretrain experiment) ──
+    #   finemath: FineWeb-Edu's math analog (HuggingFaceTB). finemath-4plus = highest-quality tier.
+    ("finemath", "hf_stream", {"repo": "HuggingFaceTB/finemath", "config": "finemath-4plus",
+                               "max_tokens": REMOTE_MAX_TOKENS}, "text"),
+    #   mathpile_textbooks: curated open-math-textbook subset of MathPile (GATED — needs HF access).
+    ("mathpile_textbooks", "hf_stream", {"repo": "GAIR/MathPile", "jsonl_gz": True,
+                               "include": "train/textbooks/", "shuffle_files": True, "seed": 0,
+                               "max_tokens": REMOTE_MAX_TOKENS}, "text"),
+    #   qa_stackexchange: openly-licensed Q&A-shaped prose (common-pile). 835 site files → cap+shuffle.
+    ("qa_stackexchange", "hf_stream", {"repo": "common-pile/stackexchange", "shuffle_files": True,
+                               "file_limit": 120, "seed": 0, "max_tokens": REMOTE_MAX_TOKENS}, "text"),
 ]
 SOURCE_MAP = {name: (kind, spec, field) for name, kind, spec, field in SOURCES}
 LOCAL_KINDS = ("arrow", "jsonl")   # CPU/disk-bound → foreground; hf/hf_stream → background streams
@@ -251,6 +262,40 @@ def _iter_texts(kind: str, spec, field: str, limit: int | None,
                 with fs.open(f"datasets/{repo}/{rel}", "rb") as raw, \
                         dctx.stream_reader(raw) as reader:
                     for line in io.TextIOWrapper(reader, encoding="utf-8"):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        t = _extract(json.loads(line), field)
+                        if t and t.strip():
+                            yield t
+                            n_yield += 1
+                            if limit and n_yield >= limit:
+                                return
+            return
+        if spec.get("jsonl_gz"):
+            # Heterogeneous .jsonl.gz shards (e.g. MathPile textbooks: real + synthetic files
+            # carry different null/string column schemas → datasets' data_files streaming throws
+            # "Couldn't cast array of type string to null"). Same fix as jsonl_zst but gzip: stream
+            # each shard over HTTP, gunzip, json.loads per line, take `field` — immune to schema drift.
+            import io, gzip
+            from huggingface_hub import HfApi, HfFileSystem
+            allf = [f for f in HfApi().list_repo_files(repo, repo_type="dataset")
+                    if f.endswith(".jsonl.gz")]
+            if spec.get("include"):
+                allf = [f for f in allf if spec["include"] in f]
+            if spec.get("exclude"):
+                allf = [f for f in allf if spec["exclude"] not in f]
+            if not allf:
+                raise RuntimeError(
+                    f"{repo}: no .jsonl.gz data files (include={spec.get('include')!r} "
+                    f"exclude={spec.get('exclude')!r})")
+            if spec.get("shuffle_files"):
+                random.Random(seed).shuffle(allf)
+            fs = HfFileSystem()
+            for rel in allf:
+                with fs.open(f"datasets/{repo}/{rel}", "rb") as raw, \
+                        gzip.GzipFile(fileobj=raw) as gz:
+                    for line in io.TextIOWrapper(gz, encoding="utf-8"):
                         line = line.strip()
                         if not line:
                             continue

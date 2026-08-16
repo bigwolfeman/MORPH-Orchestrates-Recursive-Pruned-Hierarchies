@@ -209,9 +209,15 @@ def create_lr_schedule(cfg: DictConfig) -> Callable[[int], float]:
 
     Schedule: linear warmup from 0 to 1 over `warmup` steps,
     then cosine decay from 1 to `min_lr / lr` over the remaining steps.
+
+    `lr_decay_steps` decouples the cosine DECAY HORIZON from the run length: set it to
+    a longer horizon (e.g. tokens_target / tokens_per_step) to keep LR near peak across
+    a short continue-pretrain (the schedule only traverses run_steps/lr_decay_steps of the
+    cosine). Unset/0 → decay over `steps` (original behavior). Only affects LR; TST and the
+    loop still key off `steps`.
     """
     tr = cfg.training
-    total_steps = int(tr.steps)
+    total_steps = int(getattr(tr, "lr_decay_steps", 0)) or int(tr.steps)
     warmup_steps = int(getattr(tr, "warmup", 1500))
     lr_max = float(tr.lr)
     lr_min = float(getattr(tr, "min_lr", lr_max * 0.1))

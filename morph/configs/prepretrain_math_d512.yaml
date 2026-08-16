@@ -1,0 +1,120 @@
+# Math pre-pretraining experiment — d512 seed continue-pretrain on NLP+math.
+# "Does pre-pretraining of math help?" Take the stage-2..10 math-saturated d512 seed
+# (vocab-expanded to full 49169), continue-pretrain on a language+math blend, SFT, benchmark.
+#
+# Model block = the seed's EXACT MORPHConfig (dumped from the morph_seed wrapper) so init_from
+# is function-preserving. TST ON (bag6/ratio0.3). NO prune / compact / route (this is a straight
+# continue-pretrain, not the sparsity lifecycle). Optimizer ademamix_b1zero (MORPH primary).
+# LR: warmup->3e-4, cosine decay scheduled over a 20B-token horizon (lr_decay_steps) so LR stays
+# near peak across the ~1.5B / 46k-step run.
+#
+# Launch (Olympiad venv has the olympiad_data generators; run from MORPH repo):
+#   env -C <MORPH> OLYMPIAD_REPO=/mnt/sda1/Projects/00NN/Olympiad-AI PYTHONPATH=<MORPH> \
+#     PYTHONUNBUFFERED=1 /home/wolfe/.venv/bin/python -m morph.training.train \
+#     --config-name prepretrain_math_d512
+defaults:
+  - base
+  - _self_
+
+model:
+  d_model: 512
+  n_heads: 4
+  n_kv_heads: 4
+  d_ff: 1376
+  vocab_size: 49169
+  n_prelude: 4
+  n_core: 0
+  n_coda: 4
+  mean_depth: 1
+  max_depth: 1
+  bptt_depth: 1
+  ckpt_grad_iters: -1
+  channel_dims: [256, 160, 96]
+  compression: 2
+  csa_compress_ratio: 8
+  hca_compress_ratio: 256
+  top_k: 256
+  window_size: 256
+  context_len: 512
+  max_seq_len: 512
+  lorentz_fraction: 0.25
+  bigram_hash_vocab: 0
+  n_ve: 3                         # 3 value-embed tables — seed has them; must exist to load scattered rows
+  ce_chunk_size: 8192
+  use_kernels: true
+  hc_streams: 4
+  hc_tau: 1.0
+  hc_cayley_iters: 3
+  hc_cayley_alpha: 0.1
+  hc_init_gain: 0.1
+  hc_use_kernel: true
+  retention: true
+  retention_layers: [1]
+  retention_heads: 4
+  retention_chunk: 128
+  retention_gate_init: -6.0
+  retention_carry: true
+  retention_gate_bias: 2.0
+  core_gain_clip: 0.0
+
+training:
+  init_from: ${oc.env:OLYMPIAD_REPO,/mnt/sda1/Projects/00NN/Olympiad-AI}/checkpoints/morph_seed_512_math_fullvocab/morph_initfrom_d512_v3.pt
+  ternary: true
+  ternary_scope: backbone
+  ternary_scale_group: tensor
+  embed_quant: "int6"
+  attn_proj_quant: "off"
+  adam8bit: false
+  bf16: true
+  compile: false
+  compile_mode: default
+  dropout: 0.0                    # seed trained at dropout 0
+  prune_start: 999999999          # prune OFF
+  compact_step: 999999999         # carve OFF
+  cms_score_mode: grad
+  steps: 46000                    # ~1.5B tokens @ 32768 tok/step (eff_batch 64 x seq 512)
+  lr_decay_steps: 610352          # cosine decay horizon = 20B tok / 32768 tok/step (LR stays ~peak)
+  tst_bag_size: 6
+  tst_ratio: 0.3                  # superposition [0,13800), recovery [13800,46000) — keyed off steps
+  optimizer: ademamix_b1zero
+  lr: 3.0e-4
+  lr_schedule: cosine
+  min_lr: 3.0e-5
+  warmup: 1000
+  grad_clip: 1.0
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  eval_every: 500                 # NLP val ppl; math gen_em measured OFFLINE on checkpoints
+  n_eval_batches: 20
+  ckpt_every: 4000                # ~11 checkpoints over 46k for the math retention curve
+  gen_every: 0
+  seed: 0
+
+routing:
+  route_start: 999999999          # ReMoE OFF
+
+curriculum:
+  enabled: true
+  pretok_dir: ${oc.env:OLYMPIAD_REPO,/mnt/sda1/Projects/00NN/Olympiad-AI}/data/pretrain_mix
+  allowed_source_roles: [pretrain_bulk, reasoning_midtrain, posttrain_gold]
+  eff_batch: 64                   # micro_batch 32 x grad_accum 2
+  # Final 5-source blend (~1.48B available; each source ≈1 epoch over the 1.5B/46k-step run).
+  blend:
+    olympiad_math: 0.20           # role reasoning_midtrain — the math skill we protect + measure (291M)
+    fineweb_edu: 0.30             # role pretrain_bulk — general educational language (451M)
+    finemath: 0.25                # role posttrain_gold — math-in-prose bridge (382M)
+    mathpile_textbooks: 0.15      # role pretrain_bulk — curated open math textbooks (203M)
+    qa_stackexchange: 0.10        # role posttrain_gold — Q&A discourse (153M)
+  stages:
+    - {seq_len: 512, context_len: 512, micro_batch: 32, steps: 46000}
+
+data:
+  dataset: /home/wolfe/.cache/huggingface/datasets/openwebtext/**/openwebtext-train-*.arrow
+  tokenizer: bigcode/starcoder2-7b
+  seq_len: 512
+
+wandb:
+  project: MORPH-Math
+  name: prepretrain-math-d512
+  tags: [morph-seed, prepretrain, math-first, nlp, tst, d512, ademamix]
