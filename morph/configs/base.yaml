@@ -279,6 +279,37 @@ routing:
   aux_detach_input: true         # feed router x.detach() → load-balance aux grad stays out of
                                  # the looped carrier (prevents OOM from extended BPTT depth)
 
+# ── TUL — Thought Unpack Loop (docs/tul-spec.md §8) ───────────────────────────
+# The Parcae core loops over one SLOT per span of text instead of over every token.
+# activate_at: never ⇒ NO TUL parameters are constructed and the forward never sees a
+# slot layout ⇒ bit-identical to plain MORPH (runtime-invariants §6b). That is the
+# default here because base.yaml is the validated deploy recipe and TUL has no evidence
+# yet; it is also arm TUL-A0. The arms live in tul_short.yaml + tul_a*.yaml and set
+# activate_at: 0.0 (spec §5 [W]: TUL layout from step 0, TST off).
+tul:
+  activate_at: never       # never | 0.0 (from step 0) | fraction of steps (e.g. ${training.tst_ratio})
+  slot_token: "<fim_pad>"  # QUOTED; resolved to an id at build, asserted absent from the corpus
+  boundary_chars: ".;!?"   # a token ENDING in one of these cuts a span. NO comma [W].
+  boundary_substrings: ["\n", "—", "–", "--"]   # …or CONTAINING one of these
+  min_span: 4              # suppress a boundary below this span length (spec §3.1 rule 3)
+  span_cap: 32             # force a boundary at this span length [W] (rule 4)
+  max_slots: 0             # 0 → seq_len // 8 (the fixed slot budget; L_total = seq_len + prefix_k·max_slots)
+  prefix_k: 2              # coda positions per slot, by projection from ONE looped state [W]
+                           # (Block Transformer App. F.2 / Fig 3f: length 2 beats 1). 1 = arm TUL-prefix1.
+  token_state_dropout: 0.15   # Bowman word dropout on the coda's token input; 0 = off, arm sweep {0, 0.15, 0.3}
+  slot_mean_depth: 0       # 0 → model.mean_depth (per-slot Poisson depth [W])
+  slot_max_depth: 0        # 0 → model.max_depth
+  coda_sees_slots: true    # false = arm TUL-A4 (slots gathered OUT of the coda sequence)
+  tokens_through_core: false  # true = arm TUL-A2 (slots-as-memory: tokens keep the core)
+  # Arms specified in spec §3.5 but NOT implemented in v1. A non-default value RAISES
+  # (a silently-ignored config key is worse than a missing one) — do not run them yet.
+  stp_lambda: 0.0          # arm: punc-STP on the slot trajectory
+  set_lambda: 0.0          # arm: slot-set multi-hot warm-up
+  carry: false             # arm: explicit W·h_{i-1} into slot i+1's input
+  xattn: false             # arm: per-layer cross-attention branch to the slots
+  bcast: false             # arm: AU-Net broadcast-add of h_i over the next span's tokens
+  fixed_stride: 0          # >0 = arm TUL-A5: a slot every N tokens, punctuation rule off
+
 data:
   # datasets>=4.x dropped script datasets; load from locally-cached OWT arrow shards instead.
   # Portable default: HF datasets cache under $HOME (override if shards live elsewhere).

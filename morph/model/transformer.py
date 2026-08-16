@@ -30,7 +30,8 @@ from .fused_ce import (
 )
 from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .sparsity import MortarLinear
-from .tul import TULConfig, TULSlots, compact_index, gather_positions, scatter_positions
+from .tul import (TULConfig, TULSlots, compact_index, gather_positions, gather_valid,
+                  scatter_positions)
 from .tul_layout import SlotLayout
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
@@ -1285,25 +1286,18 @@ class MORPHTransformer(nn.Module):
         """
         B, L = x.shape[0], x.shape[1]
         np_, n_core = self.cfg.n_prelude, self.cfg.n_core
-        gidx = torch.where(layout.slot_valid, layout.slot_index, L)   # pads → dump row
+        gidx, gvalid = layout.slot_index, layout.slot_valid
 
         xn = self.input_norm(x)
-        xn_pad = torch.cat([xn, xn.new_zeros(B, 1, *xn.shape[2:])], dim=1)
-        e = gather_positions(xn_pad, gidx)                            # [B, S, n, C]
+        e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
         with _prof("carrier::h_clone"):
             h = e.clone()
 
         # Loop-invariant injection, built ON THE COMPACT SEQUENCE (the x0/bigram hoist
         # of the token path, applied to 9-19× fewer positions). Value-embeds never fire
         # in the core (gi ≥ n_prelude is not in _ve_layer_map), so input_ids is not needed.
-        x0_pad = torch.cat([x0, x0.new_zeros(B, 1, x0.shape[-1])], dim=1)
-        x0_s = gather_positions(x0_pad, gidx)
-        if bigram_emb is not None:
-            bg_pad = torch.cat([bigram_emb, bigram_emb.new_zeros(B, 1, bigram_emb.shape[-1])],
-                               dim=1)
-            bg_s = gather_positions(bg_pad, gidx)
-        else:
-            bg_s = None
+        x0_s = gather_valid(x0, gidx, gvalid)
+        bg_s = gather_valid(bigram_emb, gidx, gvalid) if bigram_emb is not None else None
         inj = torch.stack(
             [self._build_injection_term(np_ + i, self.x0_injects[np_ + i].precompute(x0_s),
                                         None, bg_s, h.dtype)
@@ -1353,29 +1347,52 @@ class MORPHTransformer(nn.Module):
                 ret_state = rs_new
         return xn, h, depths
 
-    def _tul_group_losses(self, x: Tensor, labels: Tensor, layout: SlotLayout | None) -> dict:
-        """Grouped cross-entropy over the three label populations (spec §3.4, §5, §7.2).
+    def _tul_half_weights(self, labels: Tensor, layout: SlotLayout):
+        """``([N] row weights, t_last index, emit index)`` for the §5 double label.
 
         MORPH's layout puts the slot BETWEEN a span's last token and the next span's
         first token, so ``t_1(i+1)`` is predicted TWICE: once from ``t_last`` (plain LM,
         no plan) and once from the slot's emitting position (with the plan). Spec §5
         weights both terms 0.5 "so first tokens are not counted twice", which makes the
-        denominator the number of DISTINCT target tokens:
+        weighted-mean denominator the number of DISTINCT target tokens.
 
-            L = (Σ_ordinary + ½Σ_tlast + ½Σ_emit) / (n_ordinary + ½n_tlast + ½n_emit)
+        The index tensors are fixed-shape: invalid (pad) slots address a trailing pad
+        row, so nothing depends on the realised slot count and no host sync is needed.
+        """
+        B, L = labels.shape
+        BL = B * L
+        row_off = (torch.arange(B, device=labels.device) * L).unsqueeze(1)
+        base = layout.slot_index + row_off
+        # t_last sits immediately before the slot — the layout guarantees a slot never
+        # starts at position 0, so base-1 is always a real token position.
+        p_idx = torch.where(layout.slot_valid, base - 1, BL).reshape(-1)
+        z_idx = torch.where(layout.slot_valid, base + layout.prefix_k - 1, BL).reshape(-1)
+        w = labels.new_ones(BL + 1, dtype=torch.float32)
+        w[p_idx] = 0.5
+        w[z_idx] = 0.5
+        return w[:BL], p_idx, z_idx
 
-        Implemented as three calls to the existing fused CE against fixed-shape index
-        tensors (a zero pad row absorbs invalid slots) — no kernel change, no
-        data-dependent shape, and no extra host sync. Splitting ``t_last`` from ``emit``
-        instead of pooling them into one "half" group costs nothing and hands §7.2 its
-        metrics for free: ``val/first_tok_ce`` is the emit term and
-        ``val/first_tok_counterfactual`` is ``CE(t_last) − CE(emit)``.
+    def _tul_group_losses(self, x: Tensor, labels: Tensor, layout: SlotLayout | None,
+                          want_groups: bool = True) -> dict:
+        """Training loss (ONE weighted CE) plus, at eval, the §7.2 metric breakdown.
+
+        The training term is a single ``fused_linear_cross_entropy`` over every position
+        with the §5 weights folded into the kernel's reduction. One call rather than one
+        per label group matters: each call allocates and SAVES a ``[V, d]`` fp32
+        ``grad_w`` accumulator (201 MB at V=49169, d=1024), so three calls cost ~0.5 GB
+        of activation memory for arithmetic that a weight vector expresses exactly.
+
+        The per-group CEs (``ce_main`` / ``ce_plast`` / ``ce_emit``) are METRICS — spec
+        §7.2's ``val/first_tok_ce`` and ``val/first_tok_counterfactual``. They are
+        computed only when ``want_groups`` (eval), where there is no backward graph to
+        retain, and they carry no training signal that the weighted call does not
+        already carry.
 
         ``layout=None`` (arm A4 / the plan-nats gather, where slots are not in the
-        sequence at all) → a single ordinary-token CE.
+        sequence at all) → a plain unweighted CE over the token positions.
         """
         B, L, C = x.shape
-        w = self.embed.lm_weight()
+        w_head = self.embed.lm_weight()
         mask_id = self.cfg.tul.slot_id
         chunk = self.cfg.ce_chunk_size
         flat = x.reshape(-1, C)
@@ -1383,29 +1400,40 @@ class MORPHTransformer(nn.Module):
         BL = flat.shape[0]
 
         if layout is None:
-            ce = fused_linear_cross_entropy(flat, w, lab, ignore_index=-100,
+            ce = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
                                             chunk_size=chunk, mask_token_id=mask_id)
-            return {"ce_main": ce, "n_main": (lab != -100).sum().to(ce.dtype)}
+            return {"loss": ce, "ce_main": ce, "ce_tokens": ce,
+                    "n_targets": (lab != -100).sum().to(ce.dtype)}
+
+        row_w, p_idx, z_idx = self._tul_half_weights(labels, layout)
+        loss = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
+                                          chunk_size=chunk, mask_token_id=mask_id,
+                                          weights=row_w)
+        valid = (lab != -100).to(row_w.dtype)
+        out = {"loss": loss, "n_targets": (row_w * valid).sum()}
+        if not want_groups:
+            return out
 
         lab_pad = torch.cat([lab, lab.new_full((1,), -100)], dim=0)
         flat_pad = torch.cat([flat, flat.new_zeros(1, C)], dim=0)
-        row_off = (torch.arange(B, device=x.device) * L).unsqueeze(1)
-        base = layout.slot_index + row_off
-        # t_last is the position immediately before the slot — the layout guarantees a
-        # slot never starts at position 0, so base-1 is always a real token position.
-        p_idx = torch.where(layout.slot_valid, base - 1, BL).reshape(-1)
-        z_idx = torch.where(layout.slot_valid, base + layout.prefix_k - 1, BL).reshape(-1)
         main_lab = lab_pad.scatter(0, torch.cat([p_idx, z_idx], dim=0), -100)[:BL]
-
-        ce_main = fused_linear_cross_entropy(flat, w, main_lab, ignore_index=-100,
+        ce_main = fused_linear_cross_entropy(flat, w_head, main_lab, ignore_index=-100,
                                              chunk_size=chunk, mask_token_id=mask_id)
-        out = {"ce_main": ce_main, "n_main": (main_lab != -100).sum().to(ce_main.dtype)}
+        out["ce_main"] = ce_main
+        out["n_main"] = (main_lab != -100).sum().to(ce_main.dtype)
         for tag, idx in (("plast", p_idx), ("emit", z_idx)):
             labs = lab_pad[idx]
-            ce = fused_linear_cross_entropy(flat_pad[idx], w, labs, ignore_index=-100,
+            ce = fused_linear_cross_entropy(flat_pad[idx], w_head, labs, ignore_index=-100,
                                             chunk_size=chunk, mask_token_id=mask_id)
             out[f"ce_{tag}"] = ce
             out[f"n_{tag}"] = (labs != -100).sum().to(ce.dtype)
+        # val/ppl_tokens is over TOKEN positions only (ordinary + t_last), which keeps it
+        # comparable to the baseline's token PPL (spec §4).
+        out["ce_tokens"] = ((ce_main * out["n_main"] + out["ce_plast"] * out["n_plast"])
+                            / (out["n_main"] + out["n_plast"]).clamp(min=1.0))
+        out["ce_first_tok"] = out["ce_emit"]
+        out["ce_first_tok_plain"] = out["ce_plast"]
+        out["first_tok_counterfactual"] = out["ce_plast"] - out["ce_emit"]
         return out
 
     def _forward_tul(self, input_ids: Tensor, labels: Tensor | None,
@@ -1441,7 +1469,8 @@ class MORPHTransformer(nn.Module):
         out: dict = {"logits": None}
         if tc.coda_sees_slots:
             xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep)
-            groups = self._tul_group_losses(xh, labels, layout) if labels is not None else None
+            groups = (self._tul_group_losses(xh, labels, layout, want_groups=not self.training)
+                      if labels is not None else None)
             coda_positions = L
         else:
             xh, groups, coda_positions = self._tul_coda_without_slots(
@@ -1459,7 +1488,7 @@ class MORPHTransformer(nn.Module):
                 out["ce_tokens_no_slots"] = groups["ce_main"]
 
         if groups is not None:
-            out.update(self._tul_reduce(groups))
+            out.update(groups)
         else:
             # Generation (labels=None): full logits, with the structural slot id masked
             # out of the head (spec §3.1 / invariant 4 — "masked … at generation").
@@ -1492,28 +1521,8 @@ class MORPHTransformer(nn.Module):
         groups = None
         if labels is not None:
             labc = _g(labels.unsqueeze(-1), fill=-100).squeeze(-1)
-            groups = self._tul_group_losses(xh, labc, None)
+            groups = self._tul_group_losses(xh, labc, None, want_groups=not self.training)
         return xh, groups, L
-
-    @staticmethod
-    def _tul_reduce(g: dict) -> dict:
-        """Weighted-mean reduction of the grouped CEs → the training loss + §7.2 metrics."""
-        n_main, ce_main = g["n_main"], g["ce_main"]
-        if "ce_emit" not in g:                      # no slots in the sequence (A4 / plan-nats)
-            return {"loss": ce_main, "ce_tokens": ce_main, "n_targets": n_main}
-        ce_p, n_p = g["ce_plast"], g["n_plast"]
-        ce_z, n_z = g["ce_emit"], g["n_emit"]
-        denom = n_main + 0.5 * (n_p + n_z)
-        loss = (ce_main * n_main + 0.5 * (ce_p * n_p + ce_z * n_z)) / denom.clamp(min=1.0)
-        ce_tokens = (ce_main * n_main + ce_p * n_p) / (n_main + n_p).clamp(min=1.0)
-        return {
-            "loss": loss,
-            "ce_tokens": ce_tokens,               # → val/ppl_tokens
-            "ce_first_tok": ce_z,                 # → val/first_tok_ce
-            "ce_first_tok_plain": ce_p,
-            "first_tok_counterfactual": ce_p - ce_z,   # → val/first_tok_counterfactual
-            "n_targets": denom,
-        }
 
     def _tul_layer_passes(self, layout: SlotLayout, depths: Tensor | None,
                           coda_positions: int) -> Tensor:

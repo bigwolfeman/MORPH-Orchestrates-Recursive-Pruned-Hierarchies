@@ -115,11 +115,23 @@ def gather_positions(x: Tensor, index: Tensor) -> Tensor:
     """Gather along the sequence axis. ``x``: ``[B, L, …]``, ``index``: ``[B, N]`` → ``[B, N, …]``.
 
     ``index`` may address row ``L`` — the caller is expected to have appended a zero
-    dump row (see :func:`scatter_positions`), which is how invalid/pad slots are kept
-    out of every real position without a data-dependent shape.
+    dump row, which is how a variable-length compaction keeps a static shape.
     """
     idx = index.reshape(*index.shape, *([1] * (x.dim() - 2))).expand(*index.shape, *x.shape[2:])
     return torch.gather(x, 1, idx)
+
+
+def gather_valid(x: Tensor, index: Tensor, valid: Tensor) -> Tensor:
+    """Gather ``[B, N]`` positions, zeroing the rows whose ``valid`` is False.
+
+    Equivalent to appending a zero dump row and pointing invalid entries at it, but
+    WITHOUT materialising that copy — the carrier is ``[B, L, n, C]`` fp32 after
+    ``input_norm`` (335 MB at the 1024×16 arm shape), so the pad copy is the single
+    largest avoidable allocation on the TUL path.
+    """
+    safe = torch.where(valid, index, torch.zeros_like(index))
+    out = gather_positions(x, safe)
+    return out * valid.reshape(*valid.shape, *([1] * (x.dim() - 2))).to(out.dtype)
 
 
 def scatter_positions(x: Tensor, index: Tensor, values: Tensor) -> Tensor:
@@ -128,11 +140,18 @@ def scatter_positions(x: Tensor, index: Tensor, values: Tensor) -> Tensor:
     ``x``: ``[B, L, …]``, ``index``: ``[B, N]`` (entries in ``[0, L]``; ``L`` = discard),
     ``values``: ``[B, N, …]``. Returns ``[B, L, …]``. One extra row makes invalid slots
     free of a per-row mask and keeps the shape static.
+
+    The scatter is IN-PLACE on the freshly concatenated buffer: ``cat``'s backward needs
+    only to slice the incoming gradient, never its own output, so mutating it is
+    autograd-safe and saves a second full-carrier copy.
     """
     B, L = x.shape[0], x.shape[1]
     pad = torch.cat([x, x.new_zeros(B, 1, *x.shape[2:])], dim=1)
     idx = index.reshape(*index.shape, *([1] * (x.dim() - 2))).expand(*index.shape, *x.shape[2:])
-    pad = pad.scatter(1, idx, values)
+    # Cast at the boundary, as every other injection site in the model does: under
+    # autocast RMSNorm returns fp32 (its fp32 weight promotes the product) while the
+    # prefix projection comes out of a bf16 matmul, and scatter demands one dtype.
+    pad.scatter_(1, idx, values.to(pad.dtype))
     return pad[:, :L]
 
 
