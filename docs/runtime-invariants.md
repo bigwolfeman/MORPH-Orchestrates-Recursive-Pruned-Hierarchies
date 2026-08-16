@@ -139,7 +139,7 @@ implementation is written against them.
 | Per-slot depth is a masked update over the full compact slot sequence, never a per-position gather. | Frozen slots must still serve same-iteration K/V; a gather changes what they attend to. |
 | Slot core states have no loss; a slot's only label is the first token of the next span; pad slots are `-100`. | Loss-free latent (MegaByte, H-Net, LD4LG, Pred-Sent); the LTD think-position failure. |
 | `slot_id` is masked from the LM head in the fused CE and at generation. | The model must never emit a slot; slots are inserted by the rule. |
-| `L_total = tokens + slots` is fixed per curriculum stage; token count varies per row and is logged. | Fixed shapes for kernels/graphs; BLT's tokens-per-batch control held in expectation. |
+| `L_total = tokens + prefix_k · slots` is fixed per curriculum stage; token count varies per row and is logged. | Fixed shapes for kernels/graphs; BLT's tokens-per-batch control held in expectation. |
 | Val/gen run with the TUL layout ON and `bag_size 0`. | Val PPL over token positions stays comparable to the baseline. |
 | `slot_layout=None` is bit-identical to today's forward. | The TST phase and every pre-TUL checkpoint must reproduce. |
 

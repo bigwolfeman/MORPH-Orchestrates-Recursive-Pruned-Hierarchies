@@ -5,7 +5,7 @@
 %     embeddings (TST-native), the prelude pools the span in context (BLT §3.2.2)
 %   - CORE loops on SLOT positions only, per-slot Poisson depth (Parcae), tokens skip it
 %   - CODA runs on all positions: token input = prelude state (BLT Eq.9, MORPH seed path),
-%     slot input = looped state h_i; tokens attend slots as ordinary positions
+%     slot input = h_i projected to prefix_k=2 positions (plan, then emitting); tokens attend slots as ordinary positions
 %     (Block Transformer prefix / Coconut thought positions)
 %   - the slot state has no loss of its own (MegaByte / H-Net / LD4LG / Pred-Sent)
 % Palette and styles follow morph_overview.tex (Paul Tol, colorblind-safe).
@@ -102,9 +102,10 @@
 
 % ── CODA ────────────────────────────────────────────────────────────────────
 \node[B, fill=fTeal, minimum width=13.4cm, above=0.9cm of core] (coda)
-  {\textbf{CODA} (4 layers, ALL positions) — token input $=$ input\_norm(prelude), dropped w.p.\ $p$ [Bowman]; slot input $= h_i$ \\[-1pt]
+  {\textbf{CODA} (4 layers, ALL positions) — token input $=$ input\_norm(prelude), dropped w.p.\ $p$ [Bowman]; slot input $= h_i W_1,\ h_i W_2$ \\[-1pt]
    \begin{tabular}{@{}c@{}}\subf tokens attend slots as ordinary positions (window + CSA/HCA) — the plan is a \emph{prefix} the coda refines [Block Transformer; Optimus]\\[-2pt]
-   \subf HC mean $\to$ lm\_mixer $\to$ final\_norm $\to$ fused CE; label($z_i$) = first token of span $i{+}1$ [MegaByte $p{=}0$]\end{tabular}};
+   \subf prefix\_k = 2: position 1 loss-free (the plan), position 2 emits; label = first token of span $i{+}1$ [BT App.\,F.2; MegaByte $p{=}0$]\\[-2pt]
+   \subf HC mean $\to$ lm\_mixer $\to$ final\_norm $\to$ fused CE\end{tabular}};
 
 % ── head ────────────────────────────────────────────────────────────────────
 \node[B, fill=fYellow, minimum width=6.0cm, above=0.7cm of coda] (head)

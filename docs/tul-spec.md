@@ -165,15 +165,21 @@ local 4:6×6:4 → tokens 8 + slots (4+36+4)/19.2 = **10.3 vs 44** (4.3×); code
 
 ### 3.1 Sequence layout and the boundary rule
 
-* One shared position axis. A **slot** is one core position inserted AFTER
-  the last token of each span. In the coda it occupies `prefix_k` positions:
-  with `prefix_k = 1` the slot's looped state `h_i` is the coda input at that
-  one position; with `prefix_k = 2` (Block Transformer App. F.2, prefix length
-  2 chosen over 1 for loss, 2–6 all beat 1) `h_i` is projected into two
-  vectors `h_i W_1`, `h_i W_2` that occupy two adjacent coda positions — the
-  first has no label and only carries the plan, the second predicts the first
-  token of the next span. Zero extra core compute; one extra coda position per
-  span. Default `prefix_k = 1` until Wolfe decides; the spec is written so
+* One shared position axis. A **slot** is one looped core state per span,
+  inserted AFTER the last token of the span. In the shared layout it owns
+  `prefix_k` adjacent positions (**default 2 [W]**, Block Transformer App.
+  F.2 / Fig 3f: prefix length 2 chosen over 1, 2–6 all beat 1). Prelude: both
+  positions take the slot input (§3.2). Core: only the FIRST position is
+  gathered — one loop, one state `h_i` per span, zero extra core compute.
+  Coda: `h_i` is projected into `prefix_k` vectors `h_i W_1`, `h_i W_2`
+  (`W_k` init identity-scaled) that become the coda inputs of the two
+  positions — the first has NO label and only carries the plan (later
+  positions attend it), the second predicts the first token of the next span
+  (its label is `t_1(i+1)`). This separates "be a good summary" from "be a
+  good next-token predictor" at one vector (the LTD think-position failure,
+  t+1 0.339 vs t+2 0.108 at one position). Cost: `max_slots` extra coda and
+  prelude positions per row (2048 → `L_total` 2560, +10 %). `prefix_k = 1`
+  is the arm. The spec is written so
   either is one config key. Its input id is `slot_id`, a StarCoder2
   special token that never occurs in the shards (default `<fim_pad>`, resolved
   at build, absence asserted at data prep). The LM head never predicts
@@ -196,12 +202,13 @@ local 4:6×6:4 → tokens 8 + slots (4+36+4)/19.2 = **10.3 vs 44** (4.3×); code
   Measured on MORPH's OWT shards (starcoder2-7b): raw rule gives 37.9% one-
   token spans (`.` `\n` pairs); after 2–4: mean 19.2, median 19, p90 32,
   2.3% one-token, 26% hit the cap. Code (lines): mean 9.2. See MORPH-READ.md.
-* **Fixed shapes.** `L_total = seq_len_tokens + max_slots` is constant per
+* **Fixed shapes.** `L_total = seq_len_tokens + prefix_k · max_slots` is constant per
   stage; the packer (`curriculum_data.py` carry-split) fills a row until
   `tokens + slots == L_total`, so token count varies per row (log
   `tokens_per_batch`; BLT §4.3 says hold it constant across arms — hold it
   in expectation and report it). `max_slots = seq_len // 8` (2048 → 256):
-  code at 9 tok/span needs ~228. If a row would exceed `max_slots` the packer
+  code at 9 tok/span needs ~228; with `prefix_k 2` that is 512 slot positions
+  in `L_total 2560`. If a row would exceed `max_slots` the packer
   ends the row early; it never drops a boundary.
 * Positions/RoPE: tokens and slots share the sequence coordinate in prelude
   and coda. Inside the core the gathered slot sequence uses slot-index
@@ -259,8 +266,8 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
   are what later tokens read. This is MegaByte's `p = 0` position and Block
   Transformer's last prefix. If the first-token loss is found to crowd out
   the plan (the LTD think-position failure, t+1 0.339 vs t+2 0.108 at one
-  position), `prefix_k = 2` gives one loss-free prefix position before the
-  emitting one, by projection (§3.1), not by a second looped slot.
+  position), `prefix_k = 2` (default) gives one loss-free prefix position
+  before the emitting one, by projection (§3.1), not by a second looped slot.
 * Labels: `label(z_i) = t_1(i+1)`; `label(t_last(i)) = t_1(i+1)` as well (a
   second, plan-free prediction of the same token — the counterfactual §7.2
   needs and generation ignores). Both terms are weighted 0.5 so first tokens
@@ -288,7 +295,7 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
 | learned boundaries (H-Net router + ratio loss) | rule-based is close (BLT, DTP), and TUL's boundary must be causal | H-Net §2.2 | later |
 | learned per-slot exit | needs the trained model first | Huginn KL-exit | later |
 | inference engine port | separate work; eager generation for the test | — | later **[W]** |
-| `prefix_k = 2` (projection prefixes) | Block Transformer App. F.2 prefers it; kept as a one-key switch pending Wolfe's decision | BT Fig 3f | arm/default TBD |
+| `prefix_k = 1` (one coda position per slot, the plan and the first-token label on one vector) | Block Transformer Fig 3f: length 1 loses to 2–6; LTD think-position conflict | BT Fig 3f | arm `prefix1` |
 | slot-set multi-hot warm-up (`set_lambda`) | block-level aux losses hurt in BT §4.2; TST validated MCE only as a phase-1 objective | TST; CODI/CCoT for the need | arm, default 0 |
 | punc-STP on the slot trajectory (`stp_lambda`) | zero params, Wolfe's punc-STP finding (next token ~80% decodable from the boundary state); the STP paper itself has no boundary or pretraining claim | STP; MORPH punc-STP | arm, default 0 |
 
@@ -298,7 +305,8 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
   the boundary rule is a pure function of ids, so the loader computes it per
   row on CPU (vocab-mask lookup, run collapse, min-span/cap scan) and emits
   `(input_ids [B, L_total], labels [B, L_total], slot_mask [B, L_total],
-  slot_index [B, max_slots])`. `slot_index` is the gather map for §3.3.
+  slot_index [B, max_slots])`. `slot_index` is the gather map for §3.3 (the
+  FIRST of each slot's `prefix_k` positions); `slot_mask` marks all of them.
 * Mix **[W]**: OpenWebText + StarCoder2 (base.yaml sources), `seq_len 2048`,
   `batch_size 8` (was 4096 / 4). Curriculum loader unchanged except the
   packer's `tokens + slots == L_total` fill.
@@ -424,7 +432,7 @@ Beating A0 on `val/ppl_tokens` is NOT a gate at this scale (§1).
 | `tul.min_span` | 4 | suppress boundary below this |
 | `tul.span_cap` | 32 | force boundary at this **[W]** |
 | `tul.max_slots` | `seq_len // 8` | fixed-shape slot budget |
-| `tul.prefix_k` | 1 (2 proposed) | coda prefix positions per slot, by projection (§3.1) |
+| `tul.prefix_k` | 2 **[W]** | coda positions per slot, by projection from one looped state (§3.1); 1 is the arm |
 | `tul.token_state_dropout` | 0.15 | arm sweep |
 | `tul.slot_mean_depth` / `slot_max_depth` | `= mean_depth` / `max_depth` | per-slot Poisson |
 | `tul.coda_sees_slots` | true | A4 sets false |
@@ -448,7 +456,7 @@ No runtime flags in the forward: `slot_layout` is a per-forward argument like
 3. Slot positions have no loss on their core state; their only labels are
    the first token of the next span (coda output). Pad slots are −100.
 4. `slot_id` is masked from the LM head everywhere.
-5. `L_total = tokens + slots` is fixed per stage; token count varies per row.
+5. `L_total = tokens + prefix_k · slots` is fixed per stage; token count varies per row.
 6. Val/gen always run TUL layout on and `bag_size 0`.
 
 ## 10. Risks, honestly
