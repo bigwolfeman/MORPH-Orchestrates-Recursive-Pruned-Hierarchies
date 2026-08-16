@@ -37,6 +37,31 @@ single campaign or partial stack; **low** = directional / incomplete.
 | Zyphra-RSA | Deferred | Outer inference harness | Requires RL; not in training path | low | CLAUDE.md / architecture notes |
 | JAX-parity | Deferred | `morph/jax/` | Mirror lags (still MRR residual); PT is source of truth | high | `morph/jax/`, interop converter |
 
+## Planned — TUL (`experiments/tul`, spec only, no rows have run)
+
+Arms from [tul-spec.md](tul-spec.md) §7. Every row is PLANNED; confidence is
+blank until a gate script exists under `ignore/`. Do not cite these as results.
+
+| ID | Arm | Config / mechanism | Isolates | Status |
+| --- | --- | --- | --- | --- |
+| TUL-A0 | MORPH baseline | `tul.activate_at: never` (plain schedule) | reference | planned |
+| TUL-A1 | TUL | `tul:` block defaults (slots looped, tokens skip core, coda sees slots, per-slot Poisson) | the method | planned |
+| TUL-A1r | TUL repeat | as A1, second seed | retrain noise floor — read BEFORE any cell | planned |
+| TUL-A2 | slots-as-memory | `tul.tokens_through_core: true` | C2 alone (plan readable, uniform depth) | planned |
+| TUL-A4 | depth-only | `tul.coda_sees_slots: false` | C1 alone (depth per idea, plan unreadable) | planned |
+| TUL-A3 | shallow control | no slots, `n_core` bypassed for tokens (seed path) | compute floor | planned |
+| TUL-p | token-state dropout sweep | `tul.token_state_dropout ∈ {0, 0.15, 0.3}` | the collapse tax | planned |
+| TUL-act0 | activate at step 0 | `tul.activate_at: 0.0`, TST off | isolates the 3-transitions-at-30k risk | planned |
+| TUL-stp | punc-STP on slot trajectory | `tul.stp_lambda > 0` | slot warm-up (Wolfe's punc-STP finding) | planned |
+| TUL-set | slot-set MCE warm-up | `tul.set_lambda > 0` | slot warm-up (TST MCE); Block Transformer §4.2 says aux on the latent hurt | planned |
+| TUL-prefix | prefix length | `tul.slots_per_span: 2` | loss-free slot before the emitting one | planned |
+| TUL-xattn | cross-attn branch | `tul.xattn: true` (attach like retention) | BLT T7 vs Block Transformer Fig 3f | planned |
+| TUL-carry | explicit `W·h_{i-1}` | `tul.carry: true` | Coconut feedback vs attention-only memory | planned |
+
+Metrics per arm: `val/ppl_tokens`, `val/first_tok_ce`, `val/plan_nats` (slots
+masked at eval minus unmasked), `val/first_tok_counterfactual`, rep4@512,
+span-length distribution of generations, layer-passes/token, tokens/s.
+
 ## How to extend
 
 When a decision lands in or leaves `base.yaml`: add or update a row, cite the

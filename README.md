@@ -13,6 +13,19 @@ The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/
 </p>
 <p align="center"><em>Architecture overview — Parcae-style prelude / core loop / coda on a Cayley Hyper-Connection carrier, with a gated GLA retention branch on layer 1.</em></p>
 
+## TUL — Thought Unpack Loop (experimental branch `experiments/tul`, spec only)
+
+TUL loops the Parcae core over one **thought slot per span** (punctuation-bounded) instead
+of over every token, and decodes tokens with the slot's looped state visible as an attended
+prefix position. Tokens run prelude → coda only. Specification, provenance and planned
+ablations: [docs/tul-spec.md](docs/tul-spec.md); paper map: [docs/references.md](docs/references.md) §13.
+Nothing in TUL is implemented or measured yet; the main line's behaviour is unchanged.
+
+<p align="center">
+  <img src="docs/figures/tul_overview.png" alt="TUL overview: one shared sequence of tokens and slots; prelude on all positions; core loops on slots only with per-slot Poisson depth; coda on all positions with tokens attending slots" width="720" />
+</p>
+<p align="center"><em>TUL — prelude on all positions, core × T on slot positions only, coda on all positions with the slot state as an attended prefix.</em></p>
+
 ## Current Architecture
 
 The default local model is defined in `morph/configs/base.yaml`: `3 + 6xT + 3` blocks, `d_model=768`, `d_ff=2048`, sequence length 4096, Poisson loop depth with mean 6 and max 8, and truncated BPTT over the last four core iterations. This is used for small scale testing and ablation. This fits comfortably on a 5090 at batch 4, and should fit on a 4090 if allocations do not fragment too much. Smaller sequence lengths can increase batch for these scales. 4k is selected to stress test during A/B ablation.
