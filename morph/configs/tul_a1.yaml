@@ -7,20 +7,9 @@ defaults:
   - tul_short
   - _self_
 
-training:
-  # A1's rows are L_total = 1152 positions where A0's are 1024, and the prelude/coda
-  # (8 of 14 layers, un-checkpointed) run on all of them, so A1 needs more activation
-  # memory than A0 even though it is much FASTER. Measured on the 5090 (32 GB), this
-  # file, 25 steps, PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True:
-  #   A0 batch 16: 22.92 GB, 1.01 steps/s, 16384 tok/step  → 16.4 k tok/s
-  #   A1 batch 16: OOM
-  #   A1 batch 14: 24.06 GB, 1.55 steps/s, ~14462 tok/step → 22.4 k tok/s
-  #   A1 batch 12: 21.16 GB, 1.76 steps/s, ~12396 tok/step → 21.8 k tok/s
-  # 14 is the largest that fits. NOTE this leaves A1 at 88 % of A0's tokens/step: to
-  # compare at equal TOKENS rather than equal steps, run A1 for 22_700 steps (still
-  # ~4.1 h against A0's 5.5 h) and scale ademamix_t_alpha to 1816. `tul/tokens_per_batch`
-  # is logged every 20 steps so the realised budget is always in the run.
-  batch_size: 14
+# batch_size comes from tul_short.yaml (14 for EVERY arm — see the note there). A1 at
+# batch 16 was measured OOM; A0 was therefore moved down to 14 rather than A1 up, so the
+# arms differ by the mechanism alone. Measured A1 at 14: 24.06 GB, 0.544 s/step.
 
 tul:
   activate_at: 0.0     # spec §5 [W]: TUL layout from step 0 on the short schedule

@@ -23,7 +23,14 @@ defaults:
 
 training:
   steps: 20000
-  batch_size: 16
+  # 14, not 16, because arm A1 cannot fit 16 (measured OOM: A1's rows are L_total = 1152
+  # positions and the 8 un-checkpointed prelude/coda layers run on all of them). Batch
+  # size is held EQUAL across arms — a paired A1−A0 comparison must not also vary the
+  # gradient-noise scale. Measured on the 5090 at batch 14, this file, 2026-08-16:
+  #   A0 0.947 s/step, 20.32 GB, 14336 tok/step → 20k steps ≈ 5.3 h
+  #   A1 0.544 s/step, 24.06 GB, ~14462 tok/step → 20k steps ≈ 3.0 h  (0.9 % more tokens)
+  #   A3 (n_core 0) ~0.30 s/step → ≈ 1.7 h
+  batch_size: 14
   prune_start: 999999999      # never (dense)
   compact_step: 999999999     # never (no carve)
   tst_bag_size: 0
