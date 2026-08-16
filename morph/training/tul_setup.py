@@ -10,7 +10,6 @@ changes — no TUL parameters are constructed and the forward never sees a layou
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 
 from morph.model.tul import TULConfig

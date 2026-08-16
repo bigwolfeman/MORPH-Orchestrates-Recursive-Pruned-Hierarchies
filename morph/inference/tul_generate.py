@@ -88,7 +88,7 @@ class TulRowBuilder:
 
     def tensors(self, device) -> tuple[Tensor, SlotLayout]:
         """``(input_ids [1, L], layout)`` for the current row."""
-        L, S = len(self.ids), self.spec.max_slots
+        S = self.spec.max_slots
         idx = np.zeros(S, dtype=np.int64)
         valid = np.zeros(S, dtype=bool)
         if self.slot_first:

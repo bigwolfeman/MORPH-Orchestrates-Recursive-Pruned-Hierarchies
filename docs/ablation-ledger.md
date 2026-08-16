@@ -64,6 +64,24 @@ blank until a gate script exists under `ignore/`. Do not cite these as results.
 Metrics per arm: `val/ppl_tokens`, `val/first_tok_ce`, `val/plan_nats` (slots
 masked at eval minus unmasked), `val/first_tok_counterfactual`, rep4@512,
 span-length distribution of generations, layer-passes/token, tokens/s.
+All of them are logged by `morph/training/train.py` as of the implementation
+(2026-08-16); none has been RUN, so every row above stays `planned`.
+
+Measured SHAPE facts for the arms (5090, `tul_short.yaml`, 25 steps,
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`) — engineering numbers, not
+results:
+
+| arm | batch | peak alloc | steps/s | tok/step | layer-passes/token |
+| --- | --- | --- | --- | --- | --- |
+| A0 (`tul_short`) | 16 | 22.92 GB | 1.01 | 16384 | 44 |
+| A1 (`tul_a1`, `max_slots 64`) | 16 | **OOM** | — | — | — |
+| A1 (`tul_a1`, `max_slots 64`) | 14 | 24.06 GB | 1.55 | ~14462 | 10.68 |
+| A1 (`tul_a1`, `max_slots 64`) | 12 | 21.16 GB | 1.76 | ~12396 | 10.66 |
+
+A1's prelude and coda run on `L_total` = 1152 positions where A0's run on 1024,
+and those 8 layers are not checkpointed, so A1 costs MORE activation memory while
+running 1.5x faster. At batch 14 A1 sees 88 % of A0's tokens per step; compare the
+arms at equal TOKENS (`tul/tokens_per_batch` is logged) or run A1 ~22.7k steps.
 
 ## How to extend
 
