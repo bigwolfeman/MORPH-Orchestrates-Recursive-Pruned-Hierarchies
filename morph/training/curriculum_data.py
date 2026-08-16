@@ -22,6 +22,7 @@ from typing import Generator, Tuple
 import numpy as np
 import torch
 
+from morph.model.tul_layout import pack_tul_batch
 from morph.training.data_placement import DataRuntimeConfig, Prefetcher, TokenStore
 from morph.training.source_roles import (
     DEFAULT_ALLOWED_PRETRAIN_ROLES,
@@ -178,25 +179,40 @@ class MultiSourceCurriculumLoader:
         self._carry = buf[n_tokens:]
         return out
 
-    def batches(self, batch_size: int, bag_size: int = 0):
+    def batches(self, batch_size: int, bag_size: int = 0, tul=None):
         """Infinite batch iterator. With runtime.prefetch_batches > 0 the synchronous
         generator is wrapped in a single-producer Prefetcher (bit-identical order, see
         data_placement.Prefetcher); any previously-issued iterator's producer is closed
-        first so exactly one thread ever touches the loader's RNG/cursors/carry."""
+        first so exactly one thread ever touches the loader's RNG/cursors/carry.
+
+        ``tul`` (a ``TulDataConfig``) switches the yield to the 3-tuple
+        ``(input_ids, labels, slot_layout)`` of the TUL span layout, built by the SAME
+        ``morph.model.tul_layout`` functions the arrow loader and the generator use
+        (spec §4 [W] / invariant 1)."""
         self._close_prefetch()
-        gen = self._batches_sync(batch_size, bag_size)
+        gen = self._batches_sync(batch_size, bag_size, tul)
         if self.runtime.prefetch_batches > 0:
             self._prefetcher = Prefetcher(gen, self.runtime.prefetch_batches,
                                           name=f"stage{self.cur_stage}")
             return self._prefetcher
         return gen
 
-    def _batches_sync(self, batch_size: int, bag_size: int = 0
+    def _batches_sync(self, batch_size: int, bag_size: int = 0, tul=None
                       ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
         """Infinite. Reads cur_seq_len LIVE so a stage switch takes effect on the next batch."""
+        if tul is not None and bag_size > 0:
+            raise ValueError("tul and bag_size are mutually exclusive (spec invariant 6)")
         while True:
             L = self.cur_seq_len
-            if bag_size > 0:
+            if tul is not None:
+                # L_total is fixed per STAGE (invariant 5) — rebuilt here so a stage
+                # switch re-derives max_slots = seq_len // 8 from the new seq_len.
+                spec = tul.spec_for(L)
+                buf = self._fill(batch_size * (spec.l_total + 1))
+                out = pack_tul_batch(buf, tul.rule, spec, batch_size)
+                self._carry = buf + self._carry      # unconsumed tail keeps its order
+                yield out
+            elif bag_size > 0:
                 s = bag_size
                 per = s * (L + 1)
                 chunk = self._fill(batch_size * per)

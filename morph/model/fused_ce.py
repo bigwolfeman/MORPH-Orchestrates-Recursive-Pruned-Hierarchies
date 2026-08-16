@@ -60,7 +60,7 @@ def _pad_vocab(w_cast: Tensor) -> tuple[Tensor, int, int]:
 class _FusedLinearCE(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: Tensor, w: Tensor, labels: Tensor,
-                ignore_index: int, chunk_size: int) -> Tensor:
+                ignore_index: int, chunk_size: int, mask_token_id: int = -1) -> Tensor:
         # x: [N, d], w: [V, d], labels: [N]
         N, d = x.shape
         compute_dtype = x.dtype  # match eager autocast matmul precision
@@ -92,6 +92,14 @@ class _FusedLinearCE(torch.autograd.Function):
             logits_c = (x_c @ w_cast.t()).float()    # [c, V′] fp32 (freed each iter)
             if V_pad != V:
                 logits_c[:, V:] = neg_inf            # pad cols → prob exactly 0
+            if mask_token_id >= 0:
+                # TUL (docs/tul-spec.md §3.1, invariant 4): the slot id is a structural
+                # token the rule inserts — the LM head must never predict it. Same
+                # mechanism as the pad columns above: -inf ⇒ softmax probability EXACTLY
+                # 0 ⇒ that vocab row's grad_w stays 0 and it is excluded from the
+                # partition function. The id is never a LABEL (asserted at data prep),
+                # so the target gather below is unaffected.
+                logits_c[:, mask_token_id] = neg_inf
 
             # log-softmax cross-entropy, fp32 (numerically load-bearing).
             lse = torch.logsumexp(logits_c, dim=-1)  # [c]
@@ -135,7 +143,7 @@ class _FusedLinearCE(torch.autograd.Function):
         go = grad_output  # scalar
         gx = (grad_x * go).to(ctx.x_dtype)
         gw = (grad_w * go).to(ctx.w_dtype)
-        return gx, gw, None, None, None
+        return gx, gw, None, None, None, None
 
 
 def fused_linear_cross_entropy(
@@ -144,13 +152,18 @@ def fused_linear_cross_entropy(
     labels: Tensor,
     ignore_index: int = -100,
     chunk_size: int = 1024,
+    mask_token_id: int = -1,
 ) -> Tensor:
     """Memory-efficient ``mean`` cross-entropy of a weight-tied linear head.
 
     See module docstring. ``x`` is ``[N, d]``, ``w`` is ``[V, d]``, ``labels``
     is ``[N]``. Returns a scalar; gradient flows to both ``x`` and ``w``.
+
+    ``mask_token_id`` (default −1 = off, bit-identical to before): force that vocab
+    row's logit to −inf in every chunk, so it has probability exactly 0 and receives
+    exactly zero gradient. Used for TUL's structural ``slot_id`` (spec §3.1).
     """
-    return _FusedLinearCE.apply(x, w, labels, ignore_index, chunk_size)
+    return _FusedLinearCE.apply(x, w, labels, ignore_index, chunk_size, mask_token_id)
 
 
 # ── Multi-hot cross-entropy (MCE) for Token-Superposition Training ──────────

@@ -12,6 +12,8 @@ from __future__ import annotations
 import torch
 from typing import Generator, Tuple
 
+from morph.model.tul_layout import TulDataConfig, pack_tul_batch
+
 __all__ = ["create_dataloader"]
 
 
@@ -23,6 +25,7 @@ def create_dataloader(
     split: str = "train",
     skip_samples: int = 0,
     bag_size: int = 0,
+    tul: TulDataConfig | None = None,
 ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
     """Infinite generator of (input_ids, labels) pairs.
 
@@ -39,6 +42,16 @@ def create_dataloader(
     paper's causality rule). The MODEL averages the s input-token embeddings into one
     s-token, so it processes ``seq_len`` positions — equal-FLOPs/VRAM to the baseline,
     ``s×`` more raw tokens ingested per step. ``bag_size == 0`` → standard NTP (below).
+
+    TUL span layout (``tul`` set — docs/tul-spec.md §4 [W]: this arrow path is the
+    one the TUL arms run)
+    ---------------------------------------------------------------------------
+    Yields a 3-TUPLE ``(input_ids, labels, slot_layout)``, each row a fixed-shape
+    ``L_total = seq_len + prefix_k · max_slots`` mix of token positions and inserted
+    slot positions. The token count therefore VARIES per row (spec §3.1, invariant 5)
+    while the shape does not. Segmentation and packing live in
+    ``morph.model.tul_layout`` — the same functions the generator uses (invariant 1).
+    Mutually exclusive with ``bag_size`` (TUL runs with ``bag_size 0``, invariant 6).
 
     StarCoder2 does not use BOS by default; we add it at document boundaries
     so segment boundaries are explicit to the model.
@@ -106,6 +119,17 @@ def create_dataloader(
     # NTP needs (seq_len+1). bag_size==0 → identical to the pre-TST behaviour.
     tokens_per_sample = (bag_size * (seq_len + 1)) if bag_size > 0 else (seq_len + 1)
     chunk_len = batch_size * tokens_per_sample
+    tul_spec = None
+    if tul is not None:
+        if bag_size > 0:
+            raise ValueError("tul and bag_size are mutually exclusive (spec invariant 6)")
+        tul_spec = tul.spec_for(seq_len)
+        # A TUL row spends at most L_total tokens and peeks one more for the last label;
+        # the peek is left in the buffer to open the next row.
+        chunk_len = batch_size * (tul_spec.l_total + 1)
+        print(f"[data] TUL layout: seq_len={seq_len} prefix_k={tul_spec.prefix_k} "
+              f"max_slots={tul_spec.max_slots} L_total={tul_spec.l_total} "
+              f"slot_id={tul_spec.slot_id}", flush=True)
 
     while True:
         if is_local_arrow:
@@ -135,6 +159,11 @@ def create_dataloader(
             buf.extend(ids)
 
             while len(buf) >= chunk_len:
+                if tul_spec is not None:
+                    # Consumes only what the rows actually use (token count varies per
+                    # row) and leaves the remainder — including the label peek — in buf.
+                    yield pack_tul_batch(buf, tul.rule, tul_spec, batch_size)
+                    continue
                 chunk = buf[:chunk_len]
                 buf = buf[chunk_len:]
                 if bag_size > 0:
