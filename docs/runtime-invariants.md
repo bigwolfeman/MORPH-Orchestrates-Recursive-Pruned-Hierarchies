@@ -128,6 +128,21 @@ These are observation-only when unset: `MORPH_EXACT_TRACE`, `MORPH_MEM_PROBE`,
 `MORPH_EXACT_TRACE=<path>` appends per-step loss hex for bit-identical A/B gates.
 Use only on gate runs (adds a host sync per step).
 
+## 6b. TUL invariants (`experiments/tul`, spec — see `tul-spec.md` §9)
+
+These become runtime invariants when TUL lands; they are listed now so the
+implementation is written against them.
+
+| Invariant | Why |
+| --- | --- |
+| The boundary rule (`.;!?` + newline + dashes, run-collapse, `min_span`, `span_cap`) is ONE function used by the loader and the generator, parity-tested. | The slot layout is structural; a train/generation mismatch silently decodes without the plan (the coconut `assert_layout_parity` lesson). |
+| Per-slot depth is a masked update over the full compact slot sequence, never a per-position gather. | Frozen slots must still serve same-iteration K/V; a gather changes what they attend to. |
+| Slot core states have no loss; a slot's only label is the first token of the next span; pad slots are `-100`. | Loss-free latent (MegaByte, H-Net, LD4LG, Pred-Sent); the LTD think-position failure. |
+| `slot_id` is masked from the LM head in the fused CE and at generation. | The model must never emit a slot; slots are inserted by the rule. |
+| `L_total = tokens + slots` is fixed per curriculum stage; token count varies per row and is logged. | Fixed shapes for kernels/graphs; BLT's tokens-per-batch control held in expectation. |
+| Val/gen run with the TUL layout ON and `bag_size 0`. | Val PPL over token positions stays comparable to the baseline. |
+| `slot_layout=None` is bit-identical to today's forward. | The TST phase and every pre-TUL checkpoint must reproduce. |
+
 ## 7. What not to “fix”
 
 - Removing process-global `force_eager` without a per-module replacement that

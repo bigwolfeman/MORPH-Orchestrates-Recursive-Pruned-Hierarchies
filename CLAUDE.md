@@ -39,6 +39,30 @@ renorm), not symptom-clamping — that also preserves the β1=0 memory win + α�
 **Full writeup + evidence chain + the decisive `ρ(J_core)` probe:**
 `Ai-notes/06-19-2026/MORPH-Iterative-Map-Dynamics/MENTAL-MODEL.md`.
 
+## ⭐ TUL — Thought Unpack Loop (this copy, branch `experiments/tul`) — SPEC ONLY so far
+
+`docs/tul-spec.md` is the source of truth; `docs/figures/tul_overview.png` is the diagram;
+`docs/references.md` §13 lists every paper a decision comes from. Read all three before
+touching the model for TUL. Short mental model:
+
+- ONE shared sequence of token positions and **slot positions** (one slot after each span;
+  boundary rule `.;!?` + newline + dashes, NO comma; a `.`+`\n` run is ONE boundary;
+  min span 4; cap 32). Slot input = `E_slot` + mean of the span's token embeddings
+  (TST-native). Prelude runs on all positions.
+- **Core loops on SLOT positions only** (gather → loop → scatter), per-SLOT Poisson depth as a
+  masked update (never a per-position gather — frozen slots still serve K/V). Tokens skip
+  the core: coda input for tokens = `input_norm(prelude)` (the existing `n_core == 0` path).
+- Coda runs on all positions; tokens attend slots as ordinary positions (the plan is a
+  PREFIX the coda refines — Block Transformer Fig 3f, Coconut). Slot label = first token of
+  the next span; the slot's CORE state has no loss of its own. `slot_id` logit is masked.
+- Token-state dropout `p` on the coda input (Bowman word dropout) is the collapse tax.
+- TUL layout switches ON at the TST superposition→recovery boundary (`slot_layout` is a
+  per-forward argument like `bag_size`; `None` ⇒ bit-identical to today). Deploy stack stays on.
+- NEVER decode a span from one vector + offset with no token path (Huginn 2026-08-16 collapse;
+  MegaByte T7; Bowman T2; Hourglass T6). Never regress onto the slot state (LCM, CoCoMix, BT §4.2).
+- Arms and gates: `docs/ablation-ledger.md` "Planned — TUL"; invariants: `runtime-invariants.md` §6b.
+- Lineage: successor of coconut's `tul/` + `ltd/` (fine-tunes of frozen models; left behind).
+
 ## Architecture
 
 Loop hierarchy:
