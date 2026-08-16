@@ -1,7 +1,7 @@
 # TUL — Thought Unpack Loop: specification v0.1
 
-Status: **implemented, not yet run.** Branch `experiments/tul-impl`
-(2026-08-16). The v1 mechanism is in the tree and gated by `pytest tests/` (113
+Status: **implemented, not yet run.** Branch `experiments/tul`
+(2026-08-16). The v1 mechanism is in the tree and gated by `pytest tests/` (116
 passed): the causal boundary rule and packer (`morph/model/tul_layout.py`), the slot
 parameters and plumbing (`morph/model/tul.py`), the TUL forward inside
 `morph/model/transformer.py`, the `tul:` Hydra block resolved by

@@ -128,11 +128,11 @@ These are observation-only when unset: `MORPH_EXACT_TRACE`, `MORPH_MEM_PROBE`,
 `MORPH_EXACT_TRACE=<path>` appends per-step loss hex for bit-identical A/B gates.
 Use only on gate runs (adds a host sync per step).
 
-## 6b. TUL invariants (`experiments/tul-impl`, LIVE — see `tul-spec.md` §9)
+## 6b. TUL invariants (`experiments/tul`, LIVE — see `tul-spec.md` §9)
 
 These are runtime invariants now, not aspirations: each row names the test that
 fails when it is broken (`tests/test_tul_layout.py`, `tests/test_tul_forward.py`;
-113 tests pass at implementation time). Each was also mutation-checked — the code
+116 tests pass at implementation time). Each was also mutation-checked — the code
 was deliberately broken and the named test observed to go red.
 
 | Invariant | Why |
