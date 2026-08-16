@@ -39,7 +39,7 @@ renorm), not symptom-clamping — that also preserves the β1=0 memory win + α�
 **Full writeup + evidence chain + the decisive `ρ(J_core)` probe:**
 `Ai-notes/06-19-2026/MORPH-Iterative-Map-Dynamics/MENTAL-MODEL.md`.
 
-## ⭐ TUL — Thought Unpack Loop (this copy, branch `experiments/tul-impl`) — IMPLEMENTED, NOT RUN
+## ⭐ TUL — Thought Unpack Loop (this copy, branch `experiments/tul`) — IMPLEMENTED, NOT RUN
 
 `docs/tul-spec.md` is the source of truth; `docs/figures/tul_overview.png` is the diagram;
 `docs/references.md` §13 lists every paper a decision comes from. Read all three before
@@ -56,15 +56,17 @@ touching the model for TUL. Short mental model:
   PREFIX the coda refines — Block Transformer Fig 3f, Coconut). Slot label = first token of
   the next span; the slot's CORE state has no loss of its own. `slot_id` logit is masked.
 - Token-state dropout `p` on the coda input (Bowman word dropout) is the collapse tax.
-- TUL layout switches ON at the TST superposition→recovery boundary (`slot_layout` is a
-  per-forward argument like `bag_size`; `None` ⇒ bit-identical to today). Deploy stack stays on.
+- `slot_layout` is a per-forward ARGUMENT like `bag_size`; `None` ⇒ bit-identical to today.
+  The 5090 arms (`tul_short.yaml`) run it from step 0 with TST off and prune/carve/route off;
+  `tul.activate_at = ${training.tst_ratio}` is the full-schedule variant (switch at the TST
+  boundary). One config per arm: `tul_a0` / `tul_a1` / `tul_a1r` / `tul_a3`, all at batch 14.
 - NEVER decode a span from one vector + offset with no token path (Huginn 2026-08-16 collapse;
   MegaByte T7; Bowman T2; Hourglass T6). Never regress onto the slot state (LCM, CoCoMix, BT §4.2).
 - Arms and gates: `docs/ablation-ledger.md` "Planned — TUL"; invariants: `runtime-invariants.md` §6b
   (LIVE, each row names the test that fails when it breaks).
 - Lineage: successor of coconut's `tul/` + `ltd/` (fine-tunes of frozen models; left behind).
 
-**Where the code is** (v1, `pytest tests/` → 113 passed; no arm has been TRAINED yet):
+**Where the code is** (v1, `pytest tests/` → 116 passed; no arm has been TRAINED yet):
 
 | File | What |
 | --- | --- |

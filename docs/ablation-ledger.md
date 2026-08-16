@@ -37,7 +37,7 @@ single campaign or partial stack; **low** = directional / incomplete.
 | Zyphra-RSA | Deferred | Outer inference harness | Requires RL; not in training path | low | CLAUDE.md / architecture notes |
 | JAX-parity | Deferred | `morph/jax/` | Mirror lags (still MRR residual); PT is source of truth | high | `morph/jax/`, interop converter |
 
-## Planned — TUL (`experiments/tul`; short schedule `morph/configs/tul_short.yaml`: seq 1024 × batch 16 × 20k steps = 328 M tokens, TST off, prune/carve/route off (dense), TUL from step 0; first pass = A0, A1, A1r, A3)
+## Planned — TUL (`experiments/tul`; short schedule `morph/configs/tul_short.yaml`: seq 1024 × batch 14 × 20k steps = 287 M tokens, TST off, prune/carve/route off (dense), TUL from step 0; first pass = A0, A1, A1r, A3)
 
 Arms from [tul-spec.md](tul-spec.md) §7. Every row is PLANNED; confidence is
 blank until a gate script exists under `ignore/`. Do not cite these as results.
@@ -67,21 +67,24 @@ span-length distribution of generations, layer-passes/token, tokens/s.
 All of them are logged by `morph/training/train.py` as of the implementation
 (2026-08-16); none has been RUN, so every row above stays `planned`.
 
-Measured SHAPE facts for the arms (5090, `tul_short.yaml`, 25 steps,
+Measured SHAPE facts for the arms (5090, `tul_short.yaml`, 13-25 steps,
 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`) — engineering numbers, not
-results:
+results. Reviewer-measured 2026-08-16 at the batch every arm actually runs:
 
-| arm | batch | peak alloc | steps/s | tok/step | layer-passes/token |
-| --- | --- | --- | --- | --- | --- |
-| A0 (`tul_short`) | 16 | 22.92 GB | 1.01 | 16384 | 44 |
-| A1 (`tul_a1`, `max_slots 64`) | 16 | **OOM** | — | — | — |
-| A1 (`tul_a1`, `max_slots 64`) | 14 | 24.06 GB | 1.55 | ~14462 | 10.68 |
-| A1 (`tul_a1`, `max_slots 64`) | 12 | 21.16 GB | 1.76 | ~12396 | 10.66 |
+| arm | config | batch | peak alloc | s/step | tok/step | layer-passes/token | 20k steps |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A0 | `tul_a0` | 14 | 20.32 GB | 0.947 | 14336 | 44 | 5.3 h |
+| A1 | `tul_a1` (`max_slots 64`) | 14 | 24.06 GB | 0.544 | ~14462 | 10.68 | 3.0 h |
+| A1r | `tul_a1r` | 14 | as A1 | as A1 | as A1 | as A1 | 3.0 h |
+| A3 | `tul_a3` (`n_core 0`) | 14 | ~17.7 GB | ~0.30 | 14336 | 8 | ~1.7 h |
+| — | A0 at batch 16 (superseded) | 16 | 22.92 GB | 0.99 | 16384 | 44 | 5.5 h |
+| — | A1 at batch 16 | 16 | **OOM** | — | — | — | — |
 
-A1's prelude and coda run on `L_total` = 1152 positions where A0's run on 1024,
-and those 8 layers are not checkpointed, so A1 costs MORE activation memory while
-running 1.5x faster. At batch 14 A1 sees 88 % of A0's tokens per step; compare the
-arms at equal TOKENS (`tul/tokens_per_batch` is logged) or run A1 ~22.7k steps.
+A1's prelude and coda run on `L_total` = 1152 positions where A0's run on 1024, and
+those 8 layers are not checkpointed, so A1 costs MORE activation memory while running
+1.7× faster per step. A1 cannot fit batch 16, so EVERY arm was moved to 14 rather than
+letting the batch size vary across a paired comparison — at 14 the arms match on
+tokens/step to 0.9 % (`tul/tokens_per_batch` is logged every 20 steps).
 
 ## How to extend
 

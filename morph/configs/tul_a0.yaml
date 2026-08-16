@@ -1,0 +1,16 @@
+# TUL arm A0 — the baseline (docs/tul-spec.md §7.1, ablation-ledger "TUL-A0").
+# Plain MORPH on the short schedule: no slots, tokens through the core, the Poisson
+# depth per SEQUENCE exactly as today. `tul.activate_at` stays `never` (base.yaml), so
+# NO TUL parameters are constructed and the forward is bit-identical to the pre-TUL
+# tree — verified: step-0 loss 11.2379, the same value this config gave before the
+# implementation landed.
+# Run: PYTHONPATH=$PWD python -m morph.training.train --config-name tul_a0
+#
+# This file exists so every arm is one named config with one named wandb run, and so
+# A0 is not "tul_short with no overrides" (which would take wandb's random run name).
+defaults:
+  - tul_short
+  - _self_
+
+wandb:
+  name: tul-a0
