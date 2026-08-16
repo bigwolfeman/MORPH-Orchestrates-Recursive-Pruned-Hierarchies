@@ -316,9 +316,73 @@ def test_pad_slots_receive_no_loss_and_the_denominator_is_distinct_targets():
     n_labels = int((y != -100).sum())
     assert int(g["n_main"]) == n_labels - 2 * n_valid, (
         "the two half-weight groups must be removed from the main group exactly once")
-    red = m._tul_reduce(g)
-    assert float(red["n_targets"]) == pytest.approx(n_labels - n_valid), (
+    assert float(g["n_targets"]) == pytest.approx(n_labels - n_valid), (
         "the loss denominator must be the number of DISTINCT target tokens (spec §5)")
+
+
+def test_weighted_ce_equals_the_explicit_half_weight_combination():
+    """The single weighted CE call IS the spec §5 formula, to fp tolerance.
+
+    The training loss folds the 0.5 weights into the kernel's reduction; this pins that
+    against the explicit three-group combination it replaces, so the optimisation can
+    never quietly change the objective.
+    """
+    m = _model(TULConfig(prefix_k=2, slot_id=4))
+    x, y, layout, _ = _batch(_spec())
+    h = torch.randn(*x.shape, m.cfg.d_model)
+    g = m._tul_group_losses(h, y, layout)
+    explicit = (g["ce_main"] * g["n_main"]
+                + 0.5 * (g["ce_plast"] * g["n_plast"] + g["ce_emit"] * g["n_emit"])) \
+        / (g["n_main"] + 0.5 * (g["n_plast"] + g["n_emit"]))
+    assert torch.allclose(g["loss"], explicit, atol=1e-5), (
+        f"weighted CE {float(g['loss']):.6f} != explicit combination {float(explicit):.6f}")
+
+
+def test_weights_in_the_fused_ce_reduce_to_the_plain_mean():
+    from morph.model.fused_ce import fused_linear_cross_entropy
+
+    torch.manual_seed(0)
+    xf = torch.randn(32, 8)
+    w = torch.randn(V, 8)
+    labels = torch.randint(0, V, (32,))
+    labels[::5] = -100
+    plain = fused_linear_cross_entropy(xf, w, labels)
+    ones = fused_linear_cross_entropy(xf, w, labels, weights=torch.ones(32))
+    assert torch.allclose(plain, ones, atol=1e-6), "weights=1 must be the plain mean"
+    # and a weight vector must reproduce a hand-computed weighted mean
+    rw = torch.rand(32) + 0.1
+    got = fused_linear_cross_entropy(xf, w, labels, weights=rw)
+    per = torch.nn.functional.cross_entropy((xf @ w.t()).float(), labels,
+                                            ignore_index=-100, reduction="none")
+    valid = (labels != -100).float()
+    want = (per * rw * valid).sum() / (rw * valid).sum()
+    assert torch.allclose(got, want, atol=1e-5), f"weighted CE {got} != reference {want}"
+
+
+def test_weighted_ce_gradient_matches_the_reference():
+    from morph.model.fused_ce import fused_linear_cross_entropy
+
+    torch.manual_seed(1)
+    labels = torch.randint(0, V, (24,))
+    labels[::7] = -100
+    rw = torch.rand(24) + 0.1
+    grads = []
+    for fused in (True, False):
+        torch.manual_seed(2)
+        w = (torch.randn(V, 8) * 0.1).requires_grad_(True)
+        torch.manual_seed(3)
+        xf = torch.randn(24, 8).requires_grad_(True)
+        if fused:
+            loss = fused_linear_cross_entropy(xf, w, labels, weights=rw)
+        else:
+            per = torch.nn.functional.cross_entropy((xf @ w.t()).float(), labels,
+                                                    ignore_index=-100, reduction="none")
+            valid = (labels != -100).float()
+            loss = (per * rw * valid).sum() / (rw * valid).sum()
+        loss.backward()
+        grads.append((xf.grad.clone(), w.grad.clone()))
+    assert torch.allclose(grads[0][0], grads[1][0], atol=1e-5), "grad wrt x differs"
+    assert torch.allclose(grads[0][1], grads[1][1], atol=1e-5), "grad wrt w differs"
 
 
 def _padded_batch(B=3):

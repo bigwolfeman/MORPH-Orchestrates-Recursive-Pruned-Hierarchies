@@ -119,7 +119,12 @@ def boundary_lut_from_tokenizer(
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(tokenizer_name)
-    strings = tok.batch_decode([[i] for i in range(vocab_size)])
+    # The model vocabulary can be WIDER than the tokenizer (base.yaml: StarCoder2 49152
+    # + 17 Olympiad structure tokens). Those extra ids have no decoded string; they are
+    # structural, never span-final, so they stay out of B — but the LUT must still be
+    # indexable by any model token id.
+    n_tok = min(int(len(tok)), vocab_size)
+    strings = tok.batch_decode([[i] for i in range(n_tok)]) + [""] * (vocab_size - n_tok)
     lut = boundary_lut_from_strings(strings, eos_id, suffix_chars, substrings)
     if path:
         np.save(path, lut)
