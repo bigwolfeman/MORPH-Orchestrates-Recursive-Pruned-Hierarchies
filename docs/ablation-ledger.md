@@ -54,7 +54,8 @@ blank until a gate script exists under `ignore/`. Do not cite these as results.
 | TUL-act0 | activate at step 0 | `tul.activate_at: 0.0`, TST off | isolates the 3-transitions-at-30k risk | planned |
 | TUL-stp | punc-STP on slot trajectory | `tul.stp_lambda > 0` | slot warm-up (Wolfe's punc-STP finding) | planned |
 | TUL-set | slot-set MCE warm-up | `tul.set_lambda > 0` | slot warm-up (TST MCE); Block Transformer §4.2 says aux on the latent hurt | planned |
-| TUL-prefix | prefix length | `tul.slots_per_span: 2` | loss-free slot before the emitting one | planned |
+| TUL-prefix | prefix length | `tul.prefix_k: 2` (projection prefixes, Block Transformer App. F.2) | loss-free prefix position before the emitting one; zero extra core compute | planned |
+| TUL-A1+ | TUL reinvest | `n_coda: 8`, `tul.slot_mean_depth: 12` (≤ A0 layer-passes/token) | the fair-compute cell | planned |
 | TUL-xattn | cross-attn branch | `tul.xattn: true` (attach like retention) | BLT T7 vs Block Transformer Fig 3f | planned |
 | TUL-carry | explicit `W·h_{i-1}` | `tul.carry: true` | Coconut feedback vs attention-only memory | planned |
 
