@@ -8,6 +8,11 @@ Extensive ablations have forced every component to earn its keep with in the arc
 
 The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/jax/` is maintained as a converter target and currently lags the PyTorch architecture.
 
+<p align="center">
+  <img src="docs/figures/morph_overview.png" alt="MORPH architecture overview: hybrid embeddings into an HC carrier, prelude / looped core / coda, then LM head" width="720" />
+</p>
+<p align="center"><em>Architecture overview — Parcae-style prelude / core loop / coda on a Cayley Hyper-Connection carrier, with a gated GLA retention branch on layer 1.</em></p>
+
 ## Current Architecture
 
 The default local model is defined in `morph/configs/base.yaml`: `3 + 6xT + 3` blocks, `d_model=768`, `d_ff=2048`, sequence length 4096, Poisson loop depth with mean 6 and max 8, and truncated BPTT over the last four core iterations. This is used for small scale testing and ablation. This fits comfortably on a 5090 at batch 4, and should fit on a 4090 if allocations do not fragment too much. Smaller sequence lengths can increase batch for these scales. 4k is selected to stress test during A/B ablation.
@@ -26,12 +31,22 @@ The active stack is:
 - **Deploy QAT:** ternary backbone weights, int6 Euclidean/bigram embeddings, and 8-bit AdEMAMix optimizer state by default. Lorentz embeddings must stay in bf16.
 - **Triton Kernels:** Extensive Triton kernels are provided.
 
+<p align="center">
+  <img src="docs/figures/morph_context_coverage.png" alt="MORPH attention context coverage: CSA sparse fine blocks on even layers, HCA dense coarse blocks on odd layers, plus a shared local window" width="720" />
+</p>
+<p align="center"><em>Context coverage — even layers pick top-k CSA fine blocks; odd layers densify over HCA coarse blocks; both keep a local window.</em></p>
+
 docs/references for attributions to prior art.
 
 
 ## Training Recipe
 
 `morph/configs/base.yaml` is the source of truth for the current local training recipe. The default run is a 100k-step local training schedule with flat `1e-4` learning rate, CMS pruning, MORTAR carve, ReMoE routing, Token Superposition Training, ternary backbone QAT, int6 embedding QAT, and 8-bit AdEMAMix optimizer based on bits and bytes implementation. This is a clean ablation surface for A/B testing.
+
+<p align="center">
+  <img src="docs/figures/morph_cms_lifecycle.png" alt="MORPH MLP lifecycle: dense train, CMS block prune, MORTAR BCSR carve, then ReMoE routing" width="720" />
+</p>
+<p align="center"><em>MLP lifecycle — dense train → CMS prune to ~25% density → carve to MORTAR BCSR → whole-body ReMoE routing.</em></p>
 
 High-level schedule:
 
@@ -110,7 +125,7 @@ docs/
 
 ## Figures And References
 
-Start with `docs/MANIFEST.md` for docs navigation. Architecture diagram PNG previews stay at the top of `docs/figures/` (one `<name>.png` per diagram); TikZ sources, PDFs, and LaTeX sidecars are topic-grouped underneath. Regeneration steps are in `docs/figures/MANIFEST.md` — use `pdftoppm -singlefile` so previews are not written as `<name>-1.png`.
+The three figures above are the README highlights. The full set — block internals, attention stack, embeddings, GLA memory, deploy stack — lives under `docs/figures/` (PNG previews at the top; TikZ/PDF sources topic-grouped underneath). Start with `docs/MANIFEST.md` for docs navigation; regeneration steps are in `docs/figures/MANIFEST.md` (`pdftoppm -singlefile` so previews are not written as `<name>-1.png`).
 
 The paper map lives in `docs/references.md`, with topic-grouped local notes indexed by `docs/references/MANIFEST.md`.
 
