@@ -2039,7 +2039,12 @@ def main(cfg: DictConfig) -> None:
 
         with _rt.region("clip"):
             scaler.unscale_(optimizer)
-            nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            # KEEP THE RETURN VALUE. clip_grad_norm_ already computes the pre-clip global
+            # norm; throwing it away costs nothing to compute and everything to diagnose.
+            # The 2026-08-17 TUL divergence was invisible in wandb for exactly this reason —
+            # the failure was a 1e8 gradient through the looped core, and the only surviving
+            # evidence was a CMS saliency buffer inside a checkpoint. It is one scalar.
+            _gnorm = float(nn.utils.clip_grad_norm_(model.parameters(), grad_clip))
 
         with _rt.region("opt"):
             _step_optimizer()
@@ -2140,6 +2145,12 @@ def main(cfg: DictConfig) -> None:
                 "perf/peak_mem_reserved_mib": peak_resv,
                 "perf/step": step,
                 "train/tst_bag": cur_bag,
+                # Pre-clip global gradient norm and the factor grad_clip applied to it.
+                # clip_factor << 1 sustained means the reported loss curve is being driven
+                # by a gradient the clip is mostly discarding — read this BEFORE believing
+                # any loss comparison between arms.
+                "train/grad_norm": _gnorm,
+                "train/clip_factor": min(1.0, grad_clip / max(_gnorm, 1e-12)),
             }
             if tul_on:
                 # Boundary statistics (spec §4) + the layer-pass accounting (spec §2).
@@ -2164,6 +2175,25 @@ def main(cfg: DictConfig) -> None:
                     for _i, _blk in enumerate(_sec):
                         if getattr(_blk, "ret_gate", None) is not None:
                             log[f"retention/gate_{_nm}{_i}"] = torch.sigmoid(_blk.ret_gate).item()
+
+            # Per-region gradient norm (every 100 steps). The global norm says the
+            # backward exploded; this says WHERE, which is the difference between a
+            # one-step diagnosis and a checkpoint autopsy. Grads are POST-clip here
+            # (zero_grad runs at the top of the next iteration), and the clip is a single
+            # uniform rescale, so the ratios BETWEEN regions are exact and the absolute
+            # values are recovered by multiplying with train/grad_norm / grad_clip.
+            if step % 100 == 0:
+                _reg: dict[str, float] = {}
+                for _pn, _pp in model.named_parameters():
+                    if _pp.grad is None:
+                        continue
+                    # torch.compile wraps the module, so names arrive as
+                    # "_orig_mod.core.0.…"; strip every wrapper segment before taking
+                    # the region, or every parameter lands in one bucket named "_orig_mod".
+                    _key = _pn.replace("_orig_mod.", "").split(".")[0]
+                    _reg[_key] = _reg.get(_key, 0.0) + float(_pp.grad.detach().float().pow(2).sum())
+                for _key, _sq in _reg.items():
+                    log[f"gradnorm/{_key}"] = _sq ** 0.5
 
             # Pruning stats
             if prune_stats:
@@ -2254,8 +2284,13 @@ def main(cfg: DictConfig) -> None:
         # diverged weights as a completed run (theater that misleads the next resume).
         print(f"[ABORT] run aborted at step {step}; skipping final save+eval "
               f"(forensic ckpt already written). No completed-run checkpoint.", flush=True)
-        wandb.finish()
-        return
+        wandb.finish(exit_code=1)
+        # EXIT NON-ZERO. A diverged run is a FAILED run, and the process must say so:
+        # the arm queue keys "start the next arm" off the exit code, and returning 0 here
+        # made it treat two diverged TUL arms (2026-08-17, tul-a1 @4540 / tul-a1r @3240)
+        # as successes and march on. An abort that reports success is the worst kind of
+        # silent failure — the operator reads "exit=0" and believes the arm ran.
+        raise SystemExit(4)
     final_path = os.path.join(ckpt_dir, f"step_{total_steps}.pt")
     save_checkpoint(final_path, total_steps, model, optimizer, scaler, pruning, next_step=total_steps)
     print(f"Final checkpoint: {final_path}")
