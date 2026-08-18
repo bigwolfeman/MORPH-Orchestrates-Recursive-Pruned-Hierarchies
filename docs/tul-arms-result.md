@@ -191,3 +191,70 @@ slot states during a sampled run and measure cosine similarity between the slots
 repeated spans against non-repeated ones. If repeated spans come from near-identical
 slots, the plan is collapsing to a few attractors — the `z = h` family. If they do not,
 the restatement is coming from somewhere else and the plan is not implicated.
+
+## The slot-collapse probe — and what it actually found
+
+`ignore/tul_logs/slot_collapse_probe.py`, A1c `step_20000`, five sampled 512-token
+continuations, 134 spans, 1756 span pairs. No training. Results in
+`ignore/tul_logs/slot_collapse.json`.
+
+The hypothesis was: span-scale restatement happens because the plan collapses, so two
+similar slots emit two similar spans. The first run seemed to confirm it — repeated spans
+had slot cosine 0.879 against 0.670 for unrelated spans.
+
+**That reading was circular, and two controls killed it.**
+
+**Control 1 — the pre-core input.** A slot's input is `E_slot` + the bag-mean of its own
+span's token embeddings (§3.2). Two spans with the same text therefore have nearly the
+same slot input *by construction*. Measured, the separation is LARGER before the core
+loop than after it:
+
+| signal | repeat pairs | distinct pairs | gap |
+|---|---|---|---|
+| pre-core input | 0.9077 | 0.5480 | **0.3597** |
+| post-loop `h` | 0.8682 | 0.6584 | 0.2098 |
+
+The loop does not create the similarity. It inherits it and washes some out.
+
+**Control 2 — the pairing was wrong.** `TulRowBuilder.append` inserts the slot AFTER its
+span's tokens ("the slot that will close this span"), and the double label has the slot
+predict the first token of the **next** span (`ce_emit` against `ce_plast`). So slot *i*
+summarises span *i* and conditions span *i+1*. Correlating slot *i* with span *i*'s own
+text is an autoencoding relation. The predictive relation is slot *i* against span *i+1*:
+
+| pairing | signal | repeat | distinct | gap | Spearman |
+|---|---|---|---|---|---|
+| self (circular) | pre-core input | 0.9077 | 0.5480 | 0.3597 | +0.4831 |
+| self (circular) | post-loop `h` | 0.8682 | 0.6584 | 0.2098 | +0.3723 |
+| **next span (real)** | pre-core input | 0.8268 | 0.5606 | 0.2662 | **+0.2187** |
+| **next span (real)** | post-loop `h` | 0.8560 | 0.6642 | 0.1917 | **+0.2321** |
+
+### What this says
+
+1. **The original hypothesis is not supported.** Nothing here shows the loop concentrating
+   plans into attractors. It raises the similarity floor uniformly (distinct pairs 0.56 →
+   0.66) and compresses the cosine range (p05–p95 0.575 → 0.475) while nearest-neighbour
+   retrieval of the most text-similar span is unchanged (0.303 → 0.315, chance 0.038).
+   That is mild global compression, not collapse, and it does not explain the restatement.
+2. **Plans are not random.** On the predictive pairing, slot similarity does track
+   next-span similarity, Spearman +0.2321.
+3. **The core loop adds essentially nothing to the plan.** Spearman against the next span
+   goes +0.2187 (raw bag-mean input) → +0.2321 (after 6 blocks × Poisson depth). The
+   plan is approximately a bag-of-words summary of the span that just ended, and the
+   expensive loop on top of it does not measurably improve what it says about what comes
+   next.
+
+Point 3 is the consequential one, and it is the same story `val/plan_nats = +0.0270` and
+`val/first_tok_counterfactual = −0.1196` were already telling from the loss side. Three
+independent measurements now agree that the slot carries very little beyond its input.
+
+### Limits
+
+* This is a **re-analysis forward** over the finished text, not the states that existed
+  during sampling. It answers "what does the plan encode", not "what did the plan do at
+  decode time". Capturing per-step slot states during generation is the next step.
+* 5 prompts, 1 seed, 134 spans. The 1756 pairs are not independent — they come from those
+  134 spans — so the Spearman values carry no error bar and the +0.013 input→`h` change
+  should be read as "no measurable gain", not as a measured small gain.
+* `text_sim` is `difflib` ratio over token ids with thresholds 0.60 and 0.20; the
+  qualitative ordering held at the smoke-test size too, but the thresholds are a choice.
