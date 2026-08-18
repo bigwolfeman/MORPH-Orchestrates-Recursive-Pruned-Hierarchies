@@ -441,3 +441,39 @@ test. P2 under 2/2 → the config does not determine the outcome and no arm is r
   seeds; 4800 steps does not prove "never".
 * The loss gap is measured against a diverged control, so it shows the arms are
   healthier, not that any of them is good.
+
+# Part 6 — finishing the original comparison (2026-08-18)
+
+The first arm pass got A0 = 3.2736 and A3 = 3.2407 at 20k steps and lost A1 twice to
+the takeover. Part 5 found `ademamix_alpha_cap=1.0` survives 0/2 with the cleanest trace
+of anything tried — core share peaked at 0.168 and 0.040, never crossing 0.5 at either
+seed. Second pass: `ignore/tul_logs/run_tul_arms2.sh`, A0c then A1c, both at cap 1.0.
+
+## 24. Why both arms re-run, and why not the dropout fix
+
+The cap is an **optimiser** setting, not a TUL knob. A1 at 1.0 against the stored A0 at
+3.5 would differ by two things and a win could be the optimiser. Both arms therefore run
+at 1.0 and differ by `tul.activate_at` alone (`never` vs `0.0`) — checked by composing
+both configs. The stored A0 at cap 3.5 stays as the reference for what the cap cost the
+baseline, and is **not** the comparison.
+
+`token_state_dropout=0.0` was the tempting fix: it is TUL-internal, so A0 would not have
+needed a re-run, and it gave the lowest loss of the three surviving arms. It was
+rejected. Spec line 534 gives the dropout's whole purpose as "tax the cheap channel or
+the latent is ignored". Removing it is the one intervention that could let A1 post a good
+`val_loss` with the plan doing no work — the exact failure the knob exists to prevent.
+Dropout stays at the spec's 0.15 in both arms.
+
+## 25. How to read it, fixed in advance
+
+Per spec §7.1, on `val/plan_nats` and not on `val_loss` alone: **A1c must clear the A3
+floor**, and it must beat **A0c** — not the stored A0 — for the plan to have earned its
+compute.
+
+## 26. The risk this run carries
+
+The cap is shown to hold for 4800 steps at two seeds. These runs are 20000 steps. If the
+takeover was only delayed, A1c dies later, the trainer exits non-zero with `[ABORT]`, and
+the queue stops rather than spending five more hours on a dead comparison. A late abort
+would be a result — it would say the cap postpones and does not prevent, and it would
+retire the cap as a cure.
