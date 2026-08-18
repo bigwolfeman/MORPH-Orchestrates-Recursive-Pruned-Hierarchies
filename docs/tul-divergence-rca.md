@@ -314,3 +314,61 @@ in a new place.
 steps, **eval disabled** so an eval pass cannot perturb the RNG stream and act as a
 hidden variable. It measures a RATE (how many of 4 seeds take over) against a rate.
 No causal claim about any intervention should be made until that base rate exists.
+
+---
+
+# Part 4 — the long run, prepared 2026-08-18 (NOT started)
+
+## 17. Why the 2026-08-17 diagnostics could not settle anything
+
+30 runs, 26 040 steps, and the failure was reproduced ONCE. Counts:
+
+| sweep | runs | steps each | batch |
+|---|---|---|---|
+| 1 (D0–D7) | 8 | 500 | 14 (D1 224) |
+| D8 trace | 1 | 2040 of 6000, ABORT | 6 |
+| 2 (E0–E10) | 9 | 800 | 6 |
+| 3 (F0–F3) | 4 | 800 | 6 |
+| seeds (G/H) | 8 | 1200 | 6 |
+
+**A1 dies at step 4540 and A1r at 3240.** Every diagnostic was shorter than the
+time-to-failure. Sweep 1 probed before the event; sweeps 2 and 3 probed a rare event
+at a different operating point; the seed sweep was the only sound design and returned
+**0/8** (0/4 control, 0/4 dropout-off) at 1200 steps, batch 6.
+
+`G-a1-b6-seed0` is the same config and seed as D8 and did NOT take over, while D8 hit
+0.866 core share at step 300 — before either run's first eval, where they should be
+identical. **The run is not reproducible at fixed seed.** Likely `bag_mean`'s
+`index_add_` (CUDA atomics, nondeterministic for floats); NOT verified.
+
+Two of four control seeds showed real mid-run `grad_norm` spikes (7.7e4, 4.9e4) that
+did NOT run away — Task #276's phenotype exactly: transient excursions whose rate
+climbs, occasionally catching.
+
+## 18. The prepared queue
+
+`ignore/tul_logs/run_tul_long.sh` (gitignored; definition duplicated here so it
+survives). Read it with `ignore/tul_logs/summarize_long.sh`.
+
+* **batch 14, 5000 steps** — the point where the failure is 2/2 (4540, 3240), and past
+  both. ~45 min per run.
+* **2 seeds per arm, always.** The outcome is bimodal, so n=1 measures trajectory
+  sensitivity. Part 3 is what happens otherwise.
+* **Control runs FIRST, both seeds.** If the queue is stopped early, what survives is
+  "does this still reproduce at HEAD" — the result every other arm is read against.
+* Peaks ~24.1 GB allocated / ~26.7 GB reserved: with a desktop it sits near 31 of
+  32 GB. **Away-from-keyboard only** [W].
+
+| arm | override | question |
+|---|---|---|
+| L0 | *none* | does the failure still reproduce at HEAD? |
+| L1 | `tul.token_state_dropout=0.0` | the coherent gradient aimed at the slots (§3.4) |
+| L2 | `model.core_gain_clip=1.5` | the governor; #276 called it symptom-masking on the TOKEN core, untested on the slot core |
+| L3 | `training.ademamix_alpha_cap=1.0` | #276 mapped a sharp α horizon; TUL may sit below 3.5 |
+
+Verified by composition, one variable each: L0/L2/L3 keep `drop=0.15`, only L1 sets
+0.0; only L2 sets `gclip=1.5`; only L3 sets `acap=1.0`; all are seq 1024, batch 14,
+`activate_at=0.0`.
+
+Decision rule, pre-registered: **an arm counts as a cure only if BOTH seeds survive
+5000 steps while BOTH control seeds take over.** Anything else is one more dice roll.
