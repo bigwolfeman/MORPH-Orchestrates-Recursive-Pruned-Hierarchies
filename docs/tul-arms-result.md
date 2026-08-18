@@ -74,3 +74,65 @@ The 0.0562 nats is real and measured, and it is not what the method is being jud
   range, but rep4 and distinct-3 have not been computed.
 * A0 logs no `layer_passes_per_token`, so the compute ratio against A1c's 10.86 is not
   measured here, only A1c's own figure.
+
+## Generation, 512 tokens, both arms from `step_20000.pt`
+
+Script `ignore/tul_logs/gen_compare.py`, samples in `ignore/tul_logs/gen_compare.txt`.
+Five prompts, one seed each, greedy and sampled (temperature 0.8, top-k 50).
+
+| mode | arm | rep4@512 | distinct-3 |
+|---|---|---|---|
+| greedy | A0c dense | 0.9375 | 0.0576 |
+| greedy | **A1c TUL** | **0.9246** | 0.0710 |
+| sampled | A0c dense | 0.4177 | 0.5384 |
+| sampled | **A1c TUL** | **0.3084** | 0.6459 |
+
+`rep4` is Welleck's rep-n: the fraction of 4-grams that are repeats, so lower is better.
+Spec §7.3's generation gate is **`A1's rep4@512 ≤ A0's`**, and on these means A1c meets
+it in both modes.
+
+**The mean hides a 3–2 split, so do not read it as a clean win.** Per prompt, sampled:
+
+| prompt | A0c rep4 | A1c rep4 |
+|---|---|---|
+| The theory of relativity states that | 0.625 | **0.177** |
+| Once upon a time in a distant land | **0.094** | 0.442 |
+| In machine learning, the key insight is | 0.758 | **0.216** |
+| The capital of France is | 0.550 | **0.130** |
+| `def quicksort(arr):` | **0.061** | 0.578 |
+
+A1c wins three and loses two, and the losses are as large as the wins. At five prompts
+and one seed the mean is not a reliable ordering.
+
+**Both arms are degenerate under greedy decoding.** rep4 near 0.93 for both: A0c loops
+"The 1990s and 1990s were the most effective and effective methods of relativity", A1c
+loops "the term" or "the term". Neither model is usable greedy at 20k steps, and the
+greedy row of the gate is a comparison between two collapsed outputs.
+
+Where a difference is visible by eye, it is topical persistence under sampling. On the
+relativity prompt A1c stays on subject — "theories", "scientific evidence", "assumptions"
+— while A0c drifts to a school system and then loops on "Mormon". That is one prompt,
+read by eye, and it is not a measurement.
+
+**Neither arm can write code.** Both continue `def quicksort(arr):` as English prose.
+
+A1c's span statistics track the failure mode: the greedy loops sit at `mean_span` 32.4
+and 32.6 against a `span_cap` of 32 — the boundary rule is capping out inside the loop —
+while the sampled runs sit at 15.7–21.7, near the training data's 19.9.
+
+### A bug this uncovered
+
+`base.yaml` ships `gen_every: 0` and `gen_test: false`, and neither arm log contains a
+single `PROMPT:` line, so **generation had never once run on this config**. The first
+attempt crashed in `GatedPoolCompressor`: with a prompt shorter than the CSA block size
+of 8, the two-stream path padded an empty block dimension into ONE block while the
+A-stream still had none, and the joint `cat` died. Fixed in `morph/model/attention.py`
+by returning an empty `[B, 0, c]`, which is what the single-stream branch already did.
+Regression test `tests/test_compressor_short_seq.py`, mutation-checked: 3 of its 9 cases
+fail with the guard removed. Full suite 125 passed.
+
+Loading the checkpoints also needed the trainer's QAT transforms, because each registers
+a `parametrize` hook that renames tensors in `state_dict` — a plain model reported 45
+missing and 45 unexpected, and `strict=False` would have sampled a half-initialised
+network. Rather than copy that block into the sampler, it moved to
+`morph/training/quant_setup.py` and both callers now use it.
