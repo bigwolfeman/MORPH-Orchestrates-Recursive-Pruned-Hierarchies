@@ -247,3 +247,70 @@ that, but it is the tension the design has to resolve.
   `E9_diag_sigmas.py` / `E10_localize_sigma.py` in the b1zero repo are the instrument.
 * Whether TUL trains to a useful `plan_nats` with dropout off, or with a smaller p, is
   untested. 800 steps says nothing about quality.
+
+---
+
+# Part 3 — WITHDRAWN: Part 2's trigger claim (2026-08-18)
+
+**Part 2 §10 is wrong. Read this before acting on it.** It concluded from a single
+A/B (D8 with dropout vs E9 without) that `tul.token_state_dropout=0.15` is the
+trigger. The rest of sweep 2 refutes that reading.
+
+## 13. What the full sweep showed
+
+Batch 6, 800 steps, one override each. `core share` = `gradnorm/core` ÷ the norm over
+all regions, at step 700:
+
+| arm | override | core share | grad_norm |
+|---|---|---|---|
+| **D8** | **none (unmodified)** | **0.999** | **3.6e5** |
+| E9 | `token_state_dropout=0.0` | 0.008 | 2.70 |
+| E5 | `core_gain_clip=1.5` | 0.021 | 2.63 |
+| E4 | `retention_carry=false` | 0.021 | 2.55 |
+| E6 | `bptt_depth=1` | 0.008 | 2.93 |
+| E3 | `ternary=false embed_quant=off` | 0.040 | 1.68 |
+| E7 | `adam8bit=false` | 0.008 | 2.68 |
+| E10 | `prefix_k=1` | 0.024 | 1.87 |
+| E0 | A0 baseline, no TUL | 0.190 | 2.61 |
+
+Every arm is stable except the ONE that changed nothing. E9 is not special.
+
+D8's and E5's frozen wandb configs differ only in `core_gain_clip`, `steps` and
+`eval_every`. `steps` is inert for the trajectory here (`warmup=0` and
+`min_lr == lr`, so LR is flat 1e-4; TST is off; prune/route never fire), and the
+takeover occurs at step 300, before either run's first eval. So at the moment it
+happens, each E arm differs from D8 by its override alone.
+
+## 14. Why "every intervention worked" is not eight cures
+
+`ternary=false` and `adam8bit=false` are not plausible cures for a subspace-alignment
+instability, but both change the numerical trajectory. The consistent reading is that
+the takeover is a **stochastic trajectory event that any perturbation avoids in a
+single run** — which is exactly how Task #276 described it: a single-iteration
+transient spike at a VARYING loop index, appearing at a rate that climbs over
+training. One run per arm cannot separate "this override cured it" from "this
+override moved the dice".
+
+**Methodological error, named:** an intervention sweep with n=1 per arm and no
+replicated control measures trajectory sensitivity, not causation. The control
+should have been replicated FIRST, to get the base rate, before any arm was read.
+Compare `[[measure-the-noise-floor-before-the-conditions]]` — the same mistake,
+in a new place.
+
+## 15. What survives Part 3
+
+* The mechanism (Part 1 §3, Part 2 §10 first paragraph): the core takes ~99.9 % of
+  the gradient norm, `grad_clip` then divides everything by 1e5–1e9, and every other
+  region stops learning. Measured live in D8 and independently in the checkpoints.
+* The per-core-layer amplification profile (~5×/layer, core.5 → core.0).
+* **MORPH is exonerated** (Part 2 §11): A0 at seq 64 has a HIGHER core share than at
+  1024; A0's core profile is flat across 20k steps; E0 is stable at batch 6.
+* The original failure is real and seed-replicated at batch 14: A1 died at 4540 and
+  A1r (seed 1) at 3240.
+
+## 16. Running now
+
+`ignore/tul_logs/run_tul_seeds.sh` — 4 seeds × {control, dropout-off}, batch 6, 1200
+steps, **eval disabled** so an eval pass cannot perturb the RNG stream and act as a
+hidden variable. It measures a RATE (how many of 4 seeds take over) against a rate.
+No causal claim about any intervention should be made until that base rate exists.
