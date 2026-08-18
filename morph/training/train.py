@@ -2190,8 +2190,17 @@ def main(cfg: DictConfig) -> None:
                     # torch.compile wraps the module, so names arrive as
                     # "_orig_mod.core.0.…"; strip every wrapper segment before taking
                     # the region, or every parameter lands in one bucket named "_orig_mod".
-                    _key = _pn.replace("_orig_mod.", "").split(".")[0]
+                    _parts = _pn.replace("_orig_mod.", "").split(".")
+                    _key = _parts[0]
                     _reg[_key] = _reg.get(_key, 0.0) + float(_pp.grad.detach().float().pow(2).sum())
+                    # Per-BLOCK too, for the stacked regions. A region total says the core
+                    # exploded; the per-layer profile says whether it amplifies geometrically
+                    # layer by layer (an unstable backward operator) or spikes in one block.
+                    # The 2026-08-17 checkpoint autopsy had to reconstruct this from a
+                    # pruning saliency buffer.
+                    if _key in ("prelude", "core", "coda") and len(_parts) > 1 and _parts[1].isdigit():
+                        _bk = f"{_key}.{_parts[1]}"
+                        _reg[_bk] = _reg.get(_bk, 0.0) + float(_pp.grad.detach().float().pow(2).sum())
                 for _key, _sq in _reg.items():
                     log[f"gradnorm/{_key}"] = _sq ** 0.5
 

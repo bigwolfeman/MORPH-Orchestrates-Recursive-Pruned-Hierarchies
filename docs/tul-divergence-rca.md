@@ -170,3 +170,80 @@ it, the failure is one glance at a chart.
   path all need one GPU run to confirm. The `gradnorm/*` block in particular walks
   `named_parameters()` under `torch.compile`, and the name-stripping is reasoned,
   not observed.
+
+---
+
+# Part 2 — the trigger, measured (2026-08-17, GPU)
+
+Part 1 was a checkpoint autopsy with the GPU unavailable. §5 ranked three candidate
+causes. **All three are wrong.** The trigger is `tul.token_state_dropout`.
+
+## 9. The prior art was ours
+
+`00-MORPH-Orchestrates-Recursive-Pruned-Hierarchies/Ai-notes/06-19-2026/MORPH-Iterative-Map-Dynamics/`
+(Task #276, June 2026) already characterised this failure for the looped core:
+
+> optimizer coherence (β1=0 + heavy slow-EMA α) → the six core blocks' top singular
+> subspaces rotate into **alignment** → composition σ_max(J_core) runs away → detonation.
+
+Order parameter = alignment ratio (composition σ_max ÷ worst single block): **0.90
+healthy, 0.91 AdamW-stable, 9.5 at the cliff.** Non-aligned blocks cancel; aligned
+blocks chain multiplicatively. That campaign ruled out, with runs: `core_gain_clip`
+(masks), per-linear spectral penalty (detonated, idle 0/12), loop-STP (harmful),
+per-coordinate `update_clip` ("the disease is directional; a per-coord magnitude cap
+is the wrong instrument"), `stale_push_cap` (delays ~300 steps).
+
+The shipped mitigation is `ademamix_alpha_cap = 3.5`, sized from an α sweep where α≤4
+survived and α=6 detonated. **Every TUL arm ran with the full cure stack** —
+`alpha_cap 3.5`, `update_clip 5.0`, `g_snr_gate_kappa 0.3`,
+`stale_push_cap_coord 0.5` — and detonated anyway.
+
+## 10. The measured trigger
+
+Batch 6, 800 steps, one flag apart. `core share` = `gradnorm/core` ÷ the norm over all
+regions, at steps 100 / 200 / 300 / 500 / 700:
+
+| arm | flag | core share | grad_norm | val @400 |
+|---|---|---|---|---|
+| D8 | `token_state_dropout=0.15` | 0.009 → 0.056 → **0.866** → 0.994 → **0.999** | → 6.4e5 | 6.62, ABORT @2040 |
+| E9 | `token_state_dropout=0.0` | 0.008 → 0.037 → 0.016 → 0.014 → **0.008** | **2.1–2.8 flat** | **6.26** |
+| E0 | A0 baseline, no TUL | 0.19 → 0.25 → 0.23 → 0.26 → 0.19 | 1.8–2.8 flat | 6.14 |
+
+With dropout off the TUL arm is stable and tracks the baseline. With dropout at 0.15
+the core owns 87 % of the gradient by step 300 and 99.9 % by step 600, `grad_clip=1.0`
+then divides everything by 1e5–1e9, and every other region stops learning (Part 1 §4).
+
+**Mechanism.** §3.4 dropout replaces 15 % of token coda inputs with `E_mask` AND zeroes
+their x0/bigram injection, so those positions must be reconstructed from context — and
+the slots are the most informative thing left. That aims a large COHERENT gradient at
+the slots, which are the only path into the looped core. A coherent directional push on
+the core is exactly what Task #276 measured as the thing that rotates the blocks into
+alignment, and exactly what the per-coordinate cure stack cannot catch.
+
+**The uncomfortable part:** the mechanism designed to force the model to USE the plan is
+the mechanism that detonates the loop. At 400 steps E9's `plan_nats` is +0.0018 — with
+the pressure removed the plan carries nothing. 400 steps is far too early to conclude
+that, but it is the tension the design has to resolve.
+
+## 11. Refuted
+
+* **Short sequence in the loop (§5 candidate 1).** A0 at seq 64 with tokens/step held at
+  14336 has a HIGHER core share (0.232) than at 1024 (0.145) and a LOWER peak norm.
+  The looped core is fine on a short sequence, and MORPH's machinery is exonerated.
+* **Quantisation.** `ternary=false embed_quant=off` (D3/E3) and `adam8bit=false`
+  (D7/E7) change nothing about the takeover.
+* **§5 candidates 2 and 3** — `retention_carry=false`, `bptt_depth=1` — no effect.
+* **A0 is not on the same trajectory.** Its core gradient grows 1.0 → 15 → 42 → 165
+  over 5k → 20k steps, but FLAT across core.0–core.5 (117–221 at 20k). Uniform growth
+  from growing weights, not the graded backward amplification A1 shows (1.1e8 at core.0
+  vs 3.8e4 at core.5).
+
+## 12. Not verified
+
+* One run per condition, no seed replicate. The separation is three orders of magnitude,
+  which is not the same as replicated.
+* The alignment ratio itself has NOT been measured on any TUL checkpoint. The
+  fingerprints match Task #276 but the order parameter has not been read.
+  `E9_diag_sigmas.py` / `E10_localize_sigma.py` in the b1zero repo are the instrument.
+* Whether TUL trains to a useful `plan_nats` with dropout off, or with a smaller p, is
+  untested. 800 steps says nothing about quality.
