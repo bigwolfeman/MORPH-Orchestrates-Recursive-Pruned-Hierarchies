@@ -136,3 +136,58 @@ a `parametrize` hook that renames tensors in `state_dict` — a plain model repo
 missing and 45 unexpected, and `strict=False` would have sampled a half-initialised
 network. Rather than copy that block into the sampler, it moved to
 `morph/training/quant_setup.py` and both callers now use it.
+
+### What the sampled text actually looks like
+
+Both arms write fluent, locally grammatical English with correct quoting and plausible
+discourse furniture ("Advertisement", "says Karen Chaney, who has worked with us since
+2005"). Neither holds meaning past a sentence or two. Neither knows facts: given "The
+capital of France is", **both** continue "not necessarily…" and neither ever says Paris.
+At 286M parameters and 20k steps that is the expected level, and on raw language quality
+the arms are not distinguishable by eye.
+
+**They fail in different units, and that is measurable.** Mean `rep_n` over the sampled
+continuations, as the repeat unit grows:
+
+| arm | n=1 | n=2 | n=4 | n=8 | n=16 | n=32 | n=64 |
+|---|---|---|---|---|---|---|---|
+| A0c dense | 0.726 | 0.542 | 0.418 | 0.336 | 0.237 | 0.088 | 0.017 |
+| A1c TUL | 0.679 | 0.443 | 0.309 | 0.217 | 0.151 | **0.104** | **0.077** |
+
+A0c repeats more at every short unit and its repetition **collapses** by n=64 (0.017).
+A1c repeats less at short units but **more at long ones** — 4.5× A0c at n=64. The
+crossover sits near n=32, which is `span_cap`.
+
+That matches the text. A0c's failure is token-local churn that never escapes:
+
+> "— 20:38 – 20:34 – 20:34 – 20:34 – 20:37 – 20:38 – 20:31 – 21:37 – 20:38 …"
+> "identified as Psychological Association members … have been identified as American
+> or have been identified as Psy"
+
+A1c's failure is **restating a whole span**, a paragraph later, slightly rephrased:
+
+> "The 2016 season was finally in a fight for Arena, but with the new Dota 2 sequels
+> going off the tongue-in-cheek-themed …" — three times, each a variant.
+
+And A1c is bimodal about it. Per-prompt `rep_32`: 0.000, 0.106, 0.000, 0.000, 0.412. On
+three prompts it is perfectly clean at span scale; on two it locks into a span loop.
+A0c is uniformly mediocre instead — moderate churn everywhere, long loops rarely.
+
+**This is why the 3–2 rep4 split is not a wash: `rep4` scores the two arms on an axis
+that penalises A1c's failure and rewards A0c's.** A0c's two "wins" are its highest-entropy
+outputs, and they are word salad — prompt 1 scores rep4 0.094 while reading "those who
+are able to experience a common truth in a world that is very much a fetish for a nation".
+Varied and meaningless beats repetitive and coherent under `rep4`. The metric cannot tell
+them apart, so the gate it feeds should not be read as a quality ordering.
+
+**Hypothesis, not a finding.** Span-scale restatement is what a weak plan would produce:
+if the slot state is a low-information summary that lands in a similar place twice, the
+coda emits a similar span twice. That is the same direction as
+`first_tok_counterfactual = −0.1196` — the slot being a worse span-opener than the
+previous token. It is also consistent with the plan doing nothing in particular.
+
+The cheap test, on the checkpoint already on disk and needing no training: capture the
+slot states during a sampled run and measure cosine similarity between the slots of
+repeated spans against non-repeated ones. If repeated spans come from near-identical
+slots, the plan is collapsing to a few attractors — the `z = h` family. If they do not,
+the restatement is coming from somewhere else and the plan is not implicated.
