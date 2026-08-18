@@ -372,3 +372,72 @@ Verified by composition, one variable each: L0/L2/L3 keep `drop=0.15`, only L1 s
 
 Decision rule, pre-registered: **an arm counts as a cure only if BOTH seeds survive
 5000 steps while BOTH control seeds take over.** Anything else is one more dice roll.
+
+# Part 5 — the long run, RESULT (2026-08-18)
+
+Ran 04:38–10:39 UTC, 8 runs, 6 h 1 min, at HEAD `2d6ec91`. Full table and the raw
+per-step trajectories: `Ai-notes/08-18-2026/TUL-Long-Run/RESULTS.md`.
+
+## 19. The failure reproduces, twice, and it is not the abort
+
+Both control seeds took over. Onset step 2500 (seed 0) and 2100 (seed 1). They end at
+`grad_norm` 1.08e7 and 2.83e7 and at loss 5.51 and 5.66. **Both ran to step 4800 and
+exited 0** — the divergence guard never fired. So the guard's aborts at steps 4540 (A1)
+and 3240 (A1r) were this same ratchet caught further along, not a separate event. The
+takeover is the disease; the abort is a late symptom of it.
+
+Part 2 §10's measurement is confirmed at the arms' own operating point: the core takes
+essentially the whole gradient norm (share_end 0.9995 and 0.9918), and `grad_clip=1.0`
+then starves every other region.
+
+## 20. All three interventions survived, which is why this is not a mechanism yet
+
+`token_state_dropout=0.0`, `core_gain_clip=1.5` and `ademamix_alpha_cap=1.0` each
+survived 0/2 with end `grad_norm` between 0.85 and 1.58 and end loss between 3.69 and
+4.17. Seven orders of magnitude of separation from the controls, on every seed, needing
+no threshold to see.
+
+They cannot all be the mechanism — one changes the forward pass, one clips the core's
+per-iteration gain, one halves the slow-EMA weight. This is the shape Part 3 withdrew a
+claim over. The live alternative is that the takeover is a knife-edge and any
+perturbation steps off it. Part 4's decision rule is therefore **met by all three arms
+and is not sufficient**; §21 is the missing control.
+
+## 21. The threshold, read honestly
+
+Part 4 pre-registered "takeover = core share > 0.5" without saying *ever* or *sustained*.
+Under `any()` the arms are 1/2, 1/2, 0/2; under *sustained* they are 0/2, 0/2, 0/2. The
+two flipped points are single samples: `L1-seed0` is 0.655 at step 2100 with 0.001 and
+0.0014 on either side, `L2-seed0` is 0.989 at step 100 with 0.000 and 0.0003 on either
+side. A control, for contrast, holds 24–29 consecutive points with a monotone onset and
+never returns.
+
+The rule is now "**≥ 3 consecutive logged points over 0.5**", and it is implemented in
+`summarize_long.sh` rather than applied by hand. This choice was made **after** seeing
+the data — that is a real cost and it is recorded, not buried. What limits the damage:
+the run-length counts are 0, 0, 0, 0, 1, 1, 25, 29, so nothing sits near the boundary,
+and both threshold-free facts in §19 point the same way.
+
+## 22. Next: the placebo queue, prepared, NOT started
+
+`ignore/tul_logs/run_tul_placebo.sh`, 3 arms, 6 runs, ~4.5 h, cheapest kill first.
+
+* **P2 (first): a byte-identical replicate of the control at the same seeds 0 and 1.**
+  Does the config decide the outcome, or the run? In doubt since 2026-08-17, when
+  `G-a1-b6-seed0` shared `D8`'s config *and* seed and behaved differently. If P2 is not
+  2/2, nothing in §19–§20 is readable and determinism gets fixed first.
+* **P0: control at fresh seeds 2 and 3.** Is 2/2 takeover seed-robust?
+* **P1: placebo, `token_state_dropout` 0.15 → 0.145.** Same mechanism at 96.7 % strength,
+  so it cannot be a cure. If it survives, survival costs nothing but a nudge.
+
+Pre-registered before the runs: P2 2/2 **and** P0 2/2 **and** P1 2/2 → the three cures
+are mechanisms. P1 0/2 → trajectory sensitivity and the long run is void as a mechanism
+test. P2 under 2/2 → the config does not determine the outcome and no arm is readable.
+
+## 23. Still not verified
+
+* That the control replicates. Everything above rests on it. P2 asks it.
+* That any arm prevents rather than delays. Onset moved 2100 → 2500 across two control
+  seeds; 4800 steps does not prove "never".
+* The loss gap is measured against a diverged control, so it shows the arms are
+  healthier, not that any of them is good.
