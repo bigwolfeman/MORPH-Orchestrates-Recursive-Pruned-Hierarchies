@@ -1,0 +1,44 @@
+# Wiring gate: the curriculum ramp WITH the TUL layout on.
+#
+# This combination was broken and silent. `cur_stage` starts at -1, so the curriculum
+# stage-transition block is also the block that CREATES the loader, and it called
+# `.batches(mb, bag_size=cur_bag)` with no `tul=`. The loader yielded 2-tuples, train.py's
+# arity check set slot_layout=None, and training ran DENSE from step 0 — while `tul_on`
+# stayed True and validation kept reporting val/plan_nats. Nothing raised.
+# See morph/training/phase.py (defect 2) and tests/test_train_phase.py.
+#
+# Run: PYTHONPATH=$PWD WANDB_MODE=offline python -m morph.training.train \
+#        --config-name tul_curriculum_smoke
+# Numbers from this file mean NOTHING; it is a wiring gate. Watch for tul/active=1 and a
+# non-zero tul/n_slots on BOTH sides of the stage transition.
+defaults:
+  - tul_smoke
+  - _self_
+
+model:
+  max_seq_len: 4096           # >= L_total of the top stage (2048 + 2*256)
+  context_len: 512
+
+training:
+  steps: 8
+  eval_every: 999999          # the gate is the train path, not val
+  ckpt_every: 999999
+  gen_every: 0
+  tst_bag_size: 0             # TST off: it is mutually exclusive with the layout
+
+tul:
+  activate_at: 0.0            # layout ON from step 0, across the stage transition
+
+curriculum:
+  enabled: true
+  pretok_dir: data/pretok
+  eff_batch: 1
+  allowed_source_roles: [pretrain_bulk, reasoning_midtrain]
+  blend:
+    dharma: 1.0               # 6917 docs: 123 are <=1024 and 141 are 1025..2048
+  # Both buckets must be non-empty — a doc joins the first stage whose seq_len fits it.
+  # Kept small: seq_len 8192 overruns the HCA Triton kernel's shared memory on this
+  # deliberately tiny smoke model, which has nothing to do with the schedule.
+  stages:
+    - {seq_len: 1024, context_len: 512, micro_batch: 1, steps: 4}
+    - {seq_len: 2048, context_len: 512, micro_batch: 1, steps: 4}
