@@ -73,6 +73,13 @@ def expected_clamped_poisson(lam: float, lo: int, hi: int) -> float:
     """
     if lo > hi:
         raise ValueError(f"lo={lo} > hi={hi}")
+    if lo == hi:
+        # Degenerate window: every draw clamps to the single allowed value. Special-cased
+        # because the decomposition below splits the mass into P(X≤lo) + middle + P(X≥hi),
+        # and those two tails OVERLAP at lo==hi — which double-counted P(X=lo) and returned
+        # 3.27 for (6, 3, 3) instead of 3.0. Caught by
+        # test_expected_clamped_poisson_degenerate_bounds.
+        return float(lo)
     # Poisson pmf by stable recurrence: p_k = p_{k-1} · lam/k.
     pmf = []
     p = math.exp(-lam)

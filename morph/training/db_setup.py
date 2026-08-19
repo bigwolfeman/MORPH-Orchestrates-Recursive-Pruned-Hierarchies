@@ -221,12 +221,12 @@ def db_loss(logits: Tensor, step: DBStep, precond: EDMPrecond,
         f"db/ce_unweighted_block{b}": float(per_sample.mean().detach()),
         f"db/loss_block{b}": float(loss.detach()),
         "db/block_idx": b,
-        "db/sigma_mean": float(step.sigma.mean()),
-        "db/sigma_min_batch": float(step.sigma.min()),
-        "db/sigma_max_batch": float(step.sigma.max()),
-        "db/weight_mean": float(w.mean()),
+        "db/sigma_mean": float(step.sigma.detach().mean()),
+        "db/sigma_min_batch": float(step.sigma.detach().min()),
+        "db/sigma_max_batch": float(step.sigma.detach().max()),
+        "db/weight_mean": float(w.detach().mean()),
         # Kill criterion 4 (sheet §4.5): embedding collapse. A mean pairwise cosine
         # climbing toward 1.0 means the targets are degenerating to one vector.
-        "db/target_norm_mean": float(step.y_clean.float().norm(dim=-1).mean()),
+        "db/target_norm_mean": float(step.y_clean.detach().float().norm(dim=-1).mean()),
     }
     return loss, metrics
