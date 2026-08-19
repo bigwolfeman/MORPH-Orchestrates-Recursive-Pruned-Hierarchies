@@ -57,6 +57,11 @@ from morph.kernels.triton.fused_csa_attention import fused_csa_attention
 # build, or an in-process A/B). The window path consults it at call time; the
 # other fused entry points check it internally.
 from morph.kernels.triton._eager_flag import force_eager
+from .db_context import (
+    merged_block_causal_mask,
+    two_source_window,
+    compressed_two_source_reference,
+)
 
 
 # ─── Fused input-projection batching (perf: launch-count + GEMM SOL) ──────────
@@ -772,6 +777,55 @@ class _CCACSAAttention(nn.Module):
         return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
                                          gate_pre=gate_pre)
 
+    # ── DiffusionBlocks two-source (faithful concat) ──────────────────────────
+    def capture_context(self, x: Tensor, n_skip_rope: int = 0) -> dict:
+        """Clean-stream capture: the block keys and window k/v a noisy query needs.
+
+        Returns the indexer block-keys ``K_I``, the value blocks ``C_comp`` and the
+        full-res window ``k``/``v`` for the clean sequence. Grad-bearing (the clean
+        context encoder learns through the noisy stream's attention over these) —
+        do NOT wrap the caller in ``no_grad`` (design §5, risk 2)."""
+        q, k, v, q_lat, k_lat = self.cca._cca_project(x, n_skip_rope, return_klat=True)
+        C_comp = self.comp_norm(self.compressor(x))          # [B, nb, D]
+        K_I = self.indexer.compressor(x)                     # [B, nb, d_I]
+        return {"k": k, "v": v, "C_comp": C_comp, "K_I": K_I}
+
+    def forward_two_source(self, x: Tensor, ctx: dict, n_skip_rope: int = 0) -> Tensor:
+        """Noisy-stream CSA attending clean+noisy blocks (fused kernel, merged bank).
+
+        Indexer scores the noisy query against the MERGED clean++noisy block keys,
+        top-k selects over the union, and the existing ``fused_csa_attention`` runs on
+        the merged value bank — no kernel change. The window goes two-source via the
+        reference :func:`two_source_window`."""
+        B, S, _ = x.shape
+        H, D = self.cca.n_heads, self.cca.d_head
+        m = self.compress_ratio
+        nb = S // m
+        scale = D ** -0.5
+
+        q, k, v, q_lat, k_lat = self.cca._cca_project(x, n_skip_rope, return_klat=True)
+        C_comp = self.comp_norm(self.compressor(x))                 # [B, nb, D]
+        C_merged = torch.cat([ctx["C_comp"], C_comp], dim=1)        # [B, 2nb, D]
+
+        # Indexer scores over the merged block bank (mirrors LightningIndexer +
+        # the "clean causal top-k" re-mask from _CCACSAAttention.forward).
+        q_I = self.indexer.W_IQ(x)                                  # [B, S, d_I]
+        K_I_merged = torch.cat([ctx["K_I"], self.indexer.compressor(x)], dim=1)  # [B, 2nb, d_I]
+        mask = merged_block_causal_mask(S, nb, nb, m, x.device)     # [S, 2nb]
+        mask3d = mask.unsqueeze(0).expand(B, -1, -1)
+        raw = torch.bmm(q_I, K_I_merged.transpose(1, 2)).float()    # [B, S, 2nb]
+        scores = F.relu(raw.masked_fill(~mask3d, float("-inf")))    # future → 0
+        scores = scores.masked_fill(~mask3d, float("-inf"))         # future → -inf for topk
+        tk = min(self.top_k, 2 * nb)
+        _, top_idx = scores.topk(tk, dim=-1)                        # [B, S, tk]
+        invalid_mask = ~mask3d.gather(-1, top_idx)                  # [B, S, tk]
+
+        out_comp = fused_csa_attention(
+            q, C_merged, top_idx, invalid_mask, self.cca.sink_logits, scale)
+        out_win = two_source_window(
+            q, ctx["k"], ctx["v"], k, v, self.cca.window_size, scale, n_skip_rope)
+        return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat)
+
 
 # ─── CCA + HCA ────────────────────────────────────────────────────────────────
 
@@ -848,6 +902,38 @@ class _CCAHCAAttention(nn.Module):
         return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
                                          gate_pre=gate_pre)
 
+    # ── DiffusionBlocks two-source (faithful concat) ──────────────────────────
+    def capture_context(self, x: Tensor, n_skip_rope: int = 0) -> dict:
+        """Clean-stream capture for HCA: value blocks + window k/v (no indexer)."""
+        q, k, v, q_lat, k_lat = self.cca._cca_project(x, n_skip_rope, return_klat=True)
+        C_comp = self.comp_norm(self.compressor(x))          # [B, nb, D]
+        return {"k": k, "v": v, "C_comp": C_comp}
+
+    def forward_two_source(self, x: Tensor, ctx: dict, n_skip_rope: int = 0) -> Tensor:
+        """Noisy-stream HCA attending clean+noisy blocks.
+
+        HCA is dense (no top-k) and its fused kernel derives the causal mask
+        internally from the block index, so it cannot express the inclusive clean
+        rule on a merged bank. v1 uses the eager :func:`compressed_two_source_reference`
+        with the explicit merged mask (small compressed dim; a fused explicit-mask HCA
+        is a later optimization). The window goes two-source via the reference."""
+        B, S, _ = x.shape
+        D = self.cca.d_head
+        m = self.compress_ratio
+        nb = S // m
+        scale = D ** -0.5
+
+        q, k, v, q_lat, k_lat = self.cca._cca_project(x, n_skip_rope, return_klat=True)
+        C_comp = self.comp_norm(self.compressor(x))                 # [B, nb, D]
+        C_merged = torch.cat([ctx["C_comp"], C_comp], dim=1)        # [B, 2nb, D]
+        mask = merged_block_causal_mask(S, nb, nb, m, x.device)     # [S, 2nb]
+
+        out_comp = compressed_two_source_reference(
+            q, C_merged, mask, self.cca.sink_logits, scale)
+        out_win = two_source_window(
+            q, ctx["k"], ctx["v"], k, v, self.cca.window_size, scale, n_skip_rope)
+        return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat)
+
 
 # ─── MORPHAttention ───────────────────────────────────────────────────────────
 
@@ -917,5 +1003,14 @@ class MORPHAttention(nn.Module):
                 hca_compress_ratio=hca_compress_ratio, **shared)
 
     def forward(self, x: Tensor, n_skip_rope: int = 0,
-                cla_capture: dict | None = None, cla_kv: dict | None = None) -> Tensor:
+                cla_capture: dict | None = None, cla_kv: dict | None = None,
+                db_ctx: dict | None = None, db_capture: dict | None = None) -> Tensor:
+        """``db_ctx``/``db_capture`` route the DiffusionBlocks two-source concat:
+        ``db_capture`` (a dict) → run the CLEAN capture and write the bundle into it,
+        returning the ordinary attention output; ``db_ctx`` (a bundle) → run the NOISY
+        two-source attention over clean+noisy. Both ``None`` → untouched baseline."""
+        if db_capture is not None:
+            db_capture.update(self._impl.capture_context(x, n_skip_rope))
+        if db_ctx is not None:
+            return self._impl.forward_two_source(x, db_ctx, n_skip_rope)
         return self._impl(x, n_skip_rope, cla_capture=cla_capture, cla_kv=cla_kv)

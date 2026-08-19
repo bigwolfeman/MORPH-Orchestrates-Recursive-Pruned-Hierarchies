@@ -213,15 +213,70 @@ def test_slice_scaling_puts_target_and_tied_head_in_the_same_space():
 
 # ── the guards fire ──────────────────────────────────────────────────────────
 
-def test_concat_conditioning_raises_until_the_mask_lands():
-    cfg = DBConfig(mode="b3", conditioning="concat")
-    m = _model(cfg)
-    rt = _RT(cfg)
-    ids = torch.randint(0, V, (2, 16))
-    labels = torch.randint(0, V, (2, 16))
-    step = build_db_step(rt, m, labels)
-    with pytest.raises(NotImplementedError, match="clean|noisy|mask"):
-        m(ids, db_step=step, db_precond=rt.precond)
+def test_concat_forward_runs_and_has_no_future_leak():
+    """The faithful two-source concat path (design doc): it runs, and a future clean
+    token cannot influence an earlier position's output.
+
+    We hold ``db_step`` (hence ``z_noisy`` and ``labels``) fixed and perturb ONLY the
+    last clean token id. That id feeds clean_{L-1}, x0[L-1] and bigram[L-1] — all of
+    which are visible only to position L-1. Every earlier position's logits must be
+    bit-identical. A next-token leak anywhere (attention mask, bigram, x0) breaks this.
+    """
+    for mode in ("b1", "b3"):
+        cfg = DBConfig(mode=mode, conditioning="concat")
+        m = _model(cfg)
+        rt = _RT(cfg)
+        ids = torch.randint(0, V, (2, 16))
+        labels = torch.randint(0, V, (2, 16))
+        step = build_db_step(rt, m, labels)
+
+        with torch.no_grad():
+            logits0 = m(ids, db_step=step, db_precond=rt.precond)["logits"]
+        assert logits0.shape == (2, 16, V)
+        assert torch.isfinite(logits0).all(), f"{mode}: non-finite concat logits"
+
+        ids2 = ids.clone()
+        ids2[:, -1] = (ids[:, -1] + 1) % V
+        with torch.no_grad():
+            logits2 = m(ids2, db_step=step, db_precond=rt.precond)["logits"]
+        assert torch.equal(logits0[:, :-1], logits2[:, :-1]), (
+            f"{mode}: perturbing the last clean token changed an earlier position — future leak")
+        # And the perturbation DID reach the last position (control: the path is live).
+        assert not torch.equal(logits0[:, -1], logits2[:, -1]), (
+            f"{mode}: last position ignored its own clean token — path is dead, not safe")
+
+
+@pytest.mark.parametrize("attr,kind", [("prelude", "CSA"), ("core", "HCA")])
+def test_two_source_is_differentiable_wrt_clean_context(attr, kind):
+    """Design decision #2: the clean context must be grad-bearing, not detached.
+
+    This isolates the claim that a b1 shared-weight test cannot: make the captured
+    clean bundle a leaf and confirm gradient flows back INTO it from the noisy output.
+    An accidental ``.detach()`` in ``forward_two_source`` would leave these grads None,
+    which is exactly the dead-context failure `no_grad` would cause.
+    """
+    torch.manual_seed(0)
+    m = _model(DBConfig(mode="b1", conditioning="concat"))
+    impl = getattr(m, attr)[0].attention._impl
+    B, S, d = 2, 16, m.cfg.d_model
+    x_clean = torch.randn(B, S, d)
+    x_noisy = torch.randn(B, S, d)
+
+    ctx = impl.capture_context(x_clean)
+    ctx = {k: v.detach().requires_grad_(True) for k, v in ctx.items()}
+    out = impl.forward_two_source(x_noisy, ctx)
+    out.sum().backward()
+
+    # The DIFFERENTIABLE context is the value blocks (C_comp) and the window k/v — these
+    # carry the attention output, so grad MUST flow into them or the clean encoder is dead.
+    # K_I feeds only the top-k block SELECTION (argmax/topk is non-differentiable), exactly
+    # like the baseline CSA indexer, which the model also trains with grad=None — so K_I is
+    # legitimately exempt.
+    diff_keys = [k for k in ctx if k != "K_I"]
+    for name in diff_keys:
+        t = ctx[name]
+        assert t.grad is not None, f"{kind}: no grad into clean ctx[{name}] — context detached"
+        assert float(t.grad.abs().sum()) > 0, f"{kind}: zero grad into clean ctx[{name}]"
 
 
 def test_db_plus_tst_is_refused():

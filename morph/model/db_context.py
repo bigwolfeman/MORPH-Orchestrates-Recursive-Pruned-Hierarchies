@@ -40,6 +40,7 @@ __all__ = [
     "merged_block_causal_mask",
     "clean_block_causal_mask",
     "two_source_window",
+    "compressed_two_source_reference",
 ]
 
 
@@ -119,3 +120,40 @@ def two_source_window(q: Tensor,
     k = torch.cat([k_clean, k_noisy], dim=2)                           # [B, H, 2S, D]
     v = torch.cat([v_clean, v_noisy], dim=2)
     return F.scaled_dot_product_attention(q, k, v, attn_mask=bias, scale=scale)
+
+
+def compressed_two_source_reference(q: Tensor, C_comp: Tensor,
+                                    block_mask: Tensor, sink_logits: Tensor,
+                                    scale: float) -> Tensor:
+    """Dense compressed attention over a MERGED block bank with an EXPLICIT causal
+    mask — the two-source form of ``hca_attention_reference``.
+
+    The fused HCA kernel derives its causal mask internally from the block index
+    (``block_end < i``), so it cannot express the inclusive clean rule
+    (``block_end <= i``) on a merged bank. This reference takes the explicit merged
+    mask instead and mirrors the fused kernel's sink + early-query semantics exactly
+    (per-head zero-value sink in the denominator; rows with no valid block output
+    exactly 0). The compressed dim is small (``~2·S/m`` blocks), so eager-dense here
+    is cheap; a fused explicit-mask HCA is a later optimization (design §5).
+
+    Args:
+        q:            [B, H, S, D]
+        C_comp:       [B, nb_merged, D]  merged clean++noisy block keys/values
+        block_mask:   [S, nb_merged] bool, True = block visible to that query
+        sink_logits:  [H]
+        scale:        softmax scale
+    Returns: [B, H, S, D]
+    """
+    B, H, S, D = q.shape
+    bias = torch.where(block_mask, 0.0, float("-inf")).unsqueeze(0).unsqueeze(0)
+    scores = torch.einsum("bhsd,bnd->bhsn", q, C_comp) * scale + bias   # [B,H,S,nb]
+
+    sink = sink_logits.view(1, H, 1, 1).expand(B, -1, S, 1)
+    scores_aug = torch.cat([scores, sink], dim=-1)
+
+    no_valid = (scores == float("-inf")).all(dim=-1, keepdim=True)
+    scores_aug = scores_aug.masked_fill(no_valid, 0.0)
+
+    attn_w = F.softmax(scores_aug.float(), dim=-1).to(q.dtype)[..., :-1]
+    attn_w = attn_w.masked_fill(no_valid, 0.0)
+    return torch.einsum("bhsn,bnd->bhsd", attn_w, C_comp)
