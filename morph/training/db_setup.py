@@ -47,7 +47,13 @@ class DbRuntime:
     # two evals 200 steps apart would not be comparable. These span the useful band measured
     # in the SliceScaler docstring: 0.1 is near the easy end, 0.3 is the p_noise median,
     # 1.0 and 3.0 are the hard end where CE approaches ln(V).
-    val_sigmas: tuple[float, ...] = (0.1, 0.3, 1.0, 3.0)
+    # Probes EVERY block, at its geometric centre where possible. The previous grid
+    # (0.1, 0.3, 1.0, 3.0) put THREE probes inside the core and never touched the coda at
+    # all (coda owns sigma < 0.076), so a third of all training visits went to a block with
+    # zero val coverage — and that block turned out to be the broken one (model-only CE 9.64,
+    # worse than doing nothing). Centres for the b3 partition [0.002, 0.0757, 1.198, 80]:
+    # coda sqrt(0.002*0.0757)=0.012, core sqrt(0.0757*1.198)=0.301, prelude sqrt(1.198*80)=9.79.
+    val_sigmas: tuple[float, ...] = (0.012, 0.1, 0.301, 1.0, 3.0, 9.79)
 
     def activation_step(self, total_steps: int) -> int:
         return int(self.activate_at * total_steps)
@@ -226,7 +232,16 @@ def db_loss(out: dict, step: DBStep, precond: EDMPrecond, model,
     denoised = out["denoised"]
     B, L, _ = denoised.shape
     labels = step.labels
+    # Apply the learnable readout temperature HERE by scaling the input, since
+    # (s·x) @ Wᵀ == s·(x @ Wᵀ) exactly — no kernel change, and the gradient reaches the
+    # scale through the multiply. The chunked CE forms logits internally, so scaling its
+    # output is not an option. Keep this in lockstep with
+    # MORPHTransformer.db_scale_logits, which does the same thing on the eval/sampling path;
+    # if they diverge, training and generation sharpen differently.
     x_flat = denoised.reshape(B * L, -1)
+    _ls = getattr(model, "db_logit_scale", None)
+    if _ls is not None:
+        x_flat = x_flat * _ls.exp().to(x_flat.dtype)
     lab_flat = labels.reshape(B * L)
 
     # w(σ) is per SAMPLE; the fused kernel wants one weight per ROW (= position).
@@ -274,6 +289,38 @@ def db_loss(out: dict, step: DBStep, precond: EDMPrecond, model,
             "db/weight_mean": float(w_sample.detach().mean()),
             # Kill criterion 4 (sheet §4.5): embedding collapse. If the targets degenerate
             # toward one vector this norm stops moving and the pairwise cosine climbs.
-            "db/target_norm_mean": float(step.y_clean.detach().float().norm(dim=-1).mean()),
+            # Readout temperature. If this saturates at its clamp the objective is fighting
+            # the parameterisation rather than learning.
+            "db/logit_scale": (float(_ls.detach().exp()) if _ls is not None else 1.0),
+            # ── Embedding-collapse detector (kill criterion 4) ────────────────
+            # `target_norm_mean` USED to live here and was dead instrumentation: y_clean is
+            # produced by SliceScaler, which pins unit norm per slice, so the norm read
+            # sqrt(2) forever (verified: db/target_norm_mean 1.41421 with a flat sparkline
+            # across a whole run). It could never fire. The real detector is pairwise cosine
+            # between DISTINCT targets: collapse means every embedding converges to one
+            # vector, i.e. cosine -> 1. Computed on a small random subset to stay cheap.
+            **_collapse_metrics(step.y_clean),
         }
     return loss, metrics
+
+
+def _collapse_metrics(y: Tensor, n: int = 64) -> dict:
+    """Mean/max pairwise cosine between distinct target vectors. Collapse ⇒ → 1.0.
+
+    Cheap by construction: samples at most ``n`` positions and compares them pairwise, so
+    the cost is O(n²·d) with n=64 regardless of batch or sequence length.
+    """
+    with torch.no_grad():
+        flat = y.detach().reshape(-1, y.shape[-1]).float()
+        if flat.shape[0] > n:
+            idx = torch.randperm(flat.shape[0], device=flat.device)[:n]
+            flat = flat[idx]
+        v = torch.nn.functional.normalize(flat, dim=-1)
+        cos = v @ v.T
+        m = ~torch.eye(cos.shape[0], dtype=torch.bool, device=cos.device)
+        off = cos[m]
+        return {
+            "db/target_cos_mean": float(off.mean()),
+            "db/target_cos_max": float(off.max()),
+            "db/target_norm_mean": float(flat.norm(dim=-1).mean()),
+        }

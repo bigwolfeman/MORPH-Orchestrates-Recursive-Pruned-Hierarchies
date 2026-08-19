@@ -162,6 +162,41 @@ class DBConfig:
     # Left as a switch because "does EDM weighting help CE?" is a legitimate arm.
     edm_ce_weighting: bool = False
 
+    # ── readout temperature ──────────────────────────────────────────────────
+    # A LEARNABLE logit scale on the DB readout. Not optional: without it the objective has
+    # a hard CE floor at low σ and the coda block cannot learn.
+    #
+    # Why. `logits = denoised @ lm_weight().T` against UNIT-NORM embedding rows caps the
+    # correct-class margin at ‖denoised‖·‖E_row‖ ≈ 1, while the 49151 competitors sit at
+    # ⟨y,y'⟩ ~ ±1/√768. A softmax over a spread of ~1 across 49152 classes is nearly flat:
+    #     p_correct ≈ e¹/(e¹ + 49151)  ->  CE ≈ 9.8
+    # Measured on a real step-5000 checkpoint, skip-path-only CE was 8.59 at σ=0.1 and 9.13
+    # at σ=0.3 — i.e. the floor is real and close to this estimate.
+    #
+    # At low σ the network cannot escape it, because `denoised = c_out·hidden + c_skip·z`
+    # with `c_out = σ·σ_data/√(σ²+σ_data²) ≈ σ`. At σ=0.012 that is 0.012, so sharpening
+    # requires ‖hidden‖ ~ 80+ against a `final_norm`-bounded hidden state. Measured
+    # consequence: the coda's model-only CE (9.64) was WORSE than doing nothing (8.50).
+    #
+    # A temperature fixes it at the right place — confidence stops being coupled to ‖y‖, so
+    # unit-norm targets (which keep the objective NON-degenerate, see SliceScaler) and a
+    # learnable sharpness can coexist. The authors get this implicitly: their readout is a
+    # learnable conditioned head (`forward_output_embeddings`), not a raw tied dot product.
+    #
+    # Init at 1.0 = IDENTITY, i.e. exactly the behaviour that was audited. Deliberately not
+    # initialised higher: at init 4.0 an untrained model scored CE 1.13 at σ=0.3 against
+    # ln V = 7.62 on the test fixture, i.e. a high starting temperature re-creates the
+    # degenerate regime by amplifying the skip path before the network has learned anything.
+    # Starting at identity means this change can only HELP relative to the measured
+    # baseline — the scale climbs if sharpening earns it, and the step-0 forward is unchanged.
+    #
+    # Note what this does and does not fix. Low CE at low σ is NOT a bug: the answer really
+    # is inside `z` there and denoising it is the task. The measured problem was that low-σ
+    # CE carries no LANGUAGE content (a wrong-target control scores ~ln V), so it must never
+    # be read as an LM number — that is the scrambled control's job, not the temperature's.
+    learn_logit_scale: bool = True
+    logit_scale_init: float = 1.0
+
     # ── σ conditioning ───────────────────────────────────────────────────────
     cond_dim: int = 256              # width of the σ embedding fed to AdaLN
 
@@ -181,6 +216,9 @@ class DBConfig:
             raise ValueError(f"db.overlap_gamma must be ≥ 0, got {self.overlap_gamma}")
         if self.sigma_data <= 0.0:
             raise ValueError(f"db.sigma_data must be > 0, got {self.sigma_data}")
+        if self.logit_scale_init <= 0.0:
+            raise ValueError(
+                f"db.logit_scale_init must be > 0, got {self.logit_scale_init}")
         if self.mode == "b1" and self.block_mass is not None:
             raise ValueError("db.mode='b1' is B=1 by definition; leave db.block_mass unset")
         if self.block_mass is not None:
