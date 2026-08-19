@@ -183,19 +183,30 @@ class DBConfig:
     # learnable sharpness can coexist. The authors get this implicitly: their readout is a
     # learnable conditioned head (`forward_output_embeddings`), not a raw tied dot product.
     #
-    # Init at 1.0 = IDENTITY, i.e. exactly the behaviour that was audited. Deliberately not
-    # initialised higher: at init 4.0 an untrained model scored CE 1.13 at σ=0.3 against
-    # ln V = 7.62 on the test fixture, i.e. a high starting temperature re-creates the
-    # degenerate regime by amplifying the skip path before the network has learned anything.
-    # Starting at identity means this change can only HELP relative to the measured
-    # baseline — the scale climbs if sharpening earns it, and the step-0 forward is unchanged.
+    # Init 16.0. NOT a free knob — below ~10 the METHOD DOES NOT WORK, measured:
     #
-    # Note what this does and does not fix. Low CE at low σ is NOT a bug: the answer really
-    # is inside `z` there and denoising it is the task. The measured problem was that low-σ
-    # CE carries no LANGUAGE content (a wrong-target control scores ~ln V), so it must never
-    # be read as an LM number — that is the scrambled control's job, not the temperature's.
+    # With unit-norm slices the tied rows have norm √2, so for a PERFECT denoised vector the
+    # correct logit is 2.00 and the largest competitor is 0.878 (measured on the real
+    # embedding table, V=49169). At scale 1.0 that softmax is nearly flat:
+    #     p(correct) = 1.78e-4  ->  CE = 8.63 EVEN WITH A PERFECT DENOISER (ln V = 10.80)
+    # and, fatally for the sampler, `softmax(logits) @ E` then returns norm 1.045 — the
+    # embedding CENTROID (1.081), not the target row (1.414). The bridge cannot return the
+    # answer even when the model is exactly right, so every Euler step contracts z toward the
+    # centroid. Measured composed-chain CE at step 5000: 10.06 (4 steps), 10.81 (8), 11.50
+    # (16), 11.90 (32) — monotonically WORSE with more steps, i.e. divergence, and at or
+    # below chance throughout.
+    #
+    # Requirement: the margin s·(2.00 − 0.878) = 1.122·s must exceed ln V ≈ 10.8, so
+    # s ≳ 9.6. 16.0 clears it with headroom and matches standard cosine-classifier practice
+    # (scale = 1/temperature, temperature ≈ 0.06).
+    #
+    # The cost, accepted deliberately: a sharp readout makes low-σ CE small, because at low σ
+    # the answer genuinely IS inside `z`. That is inherent to diffusion, not a defect — and it
+    # is now MEASURED rather than prevented, by the scrambled control (`val/db_lang_nats`).
+    # Crippling the scale to keep low-σ CE high does not buy honesty; it buys a method that
+    # cannot generate. Measure, do not prevent.
     learn_logit_scale: bool = True
-    logit_scale_init: float = 1.0
+    logit_scale_init: float = 16.0
 
     # ── σ conditioning ───────────────────────────────────────────────────────
     cond_dim: int = 256              # width of the σ embedding fed to AdaLN
