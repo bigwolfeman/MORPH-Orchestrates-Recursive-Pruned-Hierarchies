@@ -86,15 +86,36 @@ is pointed at `base.yaml`.
 
 | ID | Work | Done when | Depends on |
 | --- | --- | --- | --- |
-| A1 | **EDM sign check.** Read the authors' released code ([github.com/SakanaAI/DiffusionBlocks](https://github.com/SakanaAI/DiffusionBlocks) — README suggests ViT-only, but the sampler settles the seam sign); confirm `α = σ_b/σ_{b-1}`. Record the file and line in the sheet §4.1 G3. If the repo's sampler is absent or ambiguous, the gate falls back to the Eq (1) derivation plus a unit test in OUR code asserting a perfect denoiser lands at `y + σ_b·ε` — the maths is decisive on its own; the code is confirmatory. | sheet G3 filled with a citation (file+line) or the derivation + passing landing test | — |
-| A2 | **R3 scale decision (O1).** The manifold question is closed (`embeddings.py` outputs tangent-space coordinates; see O1). Remaining work: measure the per-slice norms of the `HybridEmbedding` output (CPU forward of the module alone — minutes, no GPU), then pick the scale rule (per-slice L2 vs per-slice `σ_data`) and record it. The rule must be measured on the **quantised** embedding output — `tul_short.yaml` inherits int6 `embed_quant` from base, and the anchors ran with it ON. | the sheet records the rule AND the measured slice norms it came from | — |
+| A1 | ~~EDM sign check~~ **CLOSED 2026-08-19 by the audit.** Their `model.py:283-287` computes `dt = next_sigma − sigma` over a DESCENDING σ buffer, so `dt < 0` and the step is `z_next = α·z + (1−α)·D` with `α = σ_b/σ_{b-1} ∈ (0,1)`. The paper's rendered Eq (3)–(5) is a typo. Our derivation was right and the `ρ(J) ≤ 1` argument stands. [audit §2](diffusionblocks-reference-audit.md) | **closed** — cited to file+line | — |
+| A2 | **R3 scale — rule DECIDED, verification remains.** The rule (O1, [audit §6](diffusionblocks-reference-audit.md)): scale the euclidean and Lorentz-tangent slices *independently* to per-component std `σ_data`, i.e. slice norm `σ_data·√(slice_dim)`; same transform on `lm_weight()`; inside the DB conversion only. Dropped from scope: measuring per-slice statistics to *derive* `σ_data` — pinning the scale by construction is the mechanism, measurement is not. Still to do: measure the current per-slice norms of the **quantised** `HybridEmbedding` output (CPU forward of the module alone, no GPU) so we know how far the transform moves things and whether int6 `embed_quant` interacts. | the sheet records the rule AND the measured pre-transform slice norms | — |
 | A3 | **FLOP instrumentation (sheet G1).** Hand-written analytic FLOP model covering the Triton kernels. Promote `layer_passes_per_token` to every arm. Add `positions_per_token`, `flop_proxy`, `model_tflops`, `mfu`. Version the model and log the version. **Reviewer correction:** the counter must distinguish NOMINAL from REALIZED. Depth is `clamp(Poisson(6), 1, 8)` (`transformer.py::_sample_depths`), whose mean is **5.67, not 6** — a realized counter reports A0 ≈ 42.0, never "exactly 44.0", and A1's measured 10.68 IS a realized number. `perf/flop_proxy` stays nominal (analytic from the config, T̄ = 6 ⇒ A0 = 44.0 exactly); `perf/layer_passes_per_token` is realized. | nominal: A0 = 44.0 / 1.0 positions, A1 = 12.0 / 1.125 exactly; realized: A0 = 42.0 ± 0.5, A1 ≈ 10.68 | — |
-| A4 | **Attention-mask scoping (R1).** Read CCA / CSA / HCA / XSA and their Triton kernels. Answer: what does a clean\|noisy causal mask actually cost to add, and is shifted-`x0` (O2) a real alternative or does it break causality? | a written scoping note with an estimate, feeding O2 | — |
+| A4 | **Attention-mask scoping (R1) — size BOTH variants.** O2 is "test both", so this costs out the clean\|noisy causal mask *and* the shifted-`x0` alternative rather than choosing between them. Read CCA / CSA / HCA / XSA and their Triton kernels. **No reference implementation exists for either**: the authors released ViT classification only — no AR, causal, or recurrent-depth code at all ([audit §1](diffusionblocks-reference-audit.md)). This is prose-to-code with nothing to diff against, and it is the largest single work item. | a written scoping note with a separate estimate for each variant | — |
 | A5 | **Implement the conversion, DB off by default.** `TULConfig`-style construction-time switches. AdaLN σ-conditioning, VE noising in embedding space with scale pinned per A2, equi-probability σ partition, EDM weighting + preconditioning, the D4 two-knob sampler, the D8 seam. Plus the reviewer additions below this table. | `CUDA_VISIBLE_DEVICES="" pytest tests/` green now, full suite green in the first GPU window; a DB-off CPU forward-parity test (the `test_tul_forward.py` pattern) passes; the 11.2379 marker is confirmed at Phase-B step 0 | A1, A2, A3, A4 |
 | A6 | **Schedule-stretch mitigations (§4).** Only if O3 says a DB arm touches `base.yaml`. | asserts in place, not comments | A5, O3 |
 | A7 | **Bridge-metric harness.** Post-hoc, separate process: gen-PPL(GPT2-XL), MAUVE, rep4@512 from a checkpoint. Never in the training job. **Reviewer fix:** this does NOT depend on A5 — it needs only generation from an existing checkpoint plus teacher scoring. Build it early, in parallel: it also produces the A0 reference bridge row, which must exist before any DB arm can be judged (sheet §4.4). | runs on an existing A0-era checkpoint on CPU or in a short GPU window | — |
 
 **A5 must also cover (reviewer additions, 2026-08-19) — none of these were in the original plan:**
+
+**Audit-derived requirements (2026-08-19).** Match these exactly rather than re-deriving; every one
+is read off the authors' code ([audit §3, §4](diffusionblocks-reference-audit.md)):
+
+- Constants: `σ_min = 0.002`, `σ_max = 80`, `P_mean = −1.2`, `P_std = 1.2`, `σ_data = 0.5`, `γ = 0.1`.
+- EDM preconditioning verbatim — `c_skip = σ_d²/(σ²+σ_d²)`, `c_out = σ·σ_d/√(σ²+σ_d²)`,
+  `c_in = 1/√(σ²+σ_d²)`, `c_noise = 0.25·log σ`; the block sees `zt·c_in` plus `c_noise` as its AdaLN
+  input; `model_out = hidden·c_out + zt·c_skip`.
+- Loss: per-sample CE → `× w(σ)` → mean. Log the **unweighted** CE alongside, **and per block index**.
+  A per-block loss channel is how one failing block becomes visible; they do this and we should copy it.
+- Block choice is **one block per BATCH** (`random.choices(..., k=1)`), uniform, then σ sampled inside
+  that block's γ-extended range.
+- **Sampler bridge — new information the paper text does not give:** the denoised estimate fed to the
+  next Euler step is `softmax(logits) @ E`, the probability-weighted embedding average, NOT the raw
+  network output. MORPH's AR path needs exactly this, and it puts the tied head inside the sampler,
+  which is why the O1 transform must apply to `lm_weight()` too.
+- Inference init is `randn · sqrt(1 + σ_max²)`, not `σ_max · randn`.
+- Inherited risks to LOG, not to fix: **R8** their `‖y‖ = 1` is inconsistent with `σ_data = 0.5`
+  (~16× at `d = 1024`; CE tolerates this better than L2 would, and we have not tested it);
+  **R9** sampler scale drift — `probs @ E` shrinks toward 0 under uncertainty while training always
+  sees full-scale `y`, a train/inference mismatch inherent to the method.
 
 - **Static CUDA graph capture.** `train.py` captures the front (embed+prelude) and back (coda+head)
   regions as CUDA graphs ("2 fwd + 2 bwd graph replays/step"). DB changes both regions' structure,
