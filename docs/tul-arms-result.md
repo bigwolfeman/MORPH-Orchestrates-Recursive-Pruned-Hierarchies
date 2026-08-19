@@ -269,3 +269,53 @@ independent measurements now agree that the slot carries very little beyond its 
   should be read as "no measurable gain", not as a measured small gain.
 * `text_sim` is `difflib` ratio over token ids with thresholds 0.60 and 0.20; the
   qualitative ordering held at the smoke-test size too, but the thresholds are a choice.
+
+## Arm CW re-scored by stratum — the aggregate win reverses where it matters
+
+`ignore/tul_logs/cw_rescore_stratified.py`, same checkpoint and cut (576), 200 batches,
+1.42M scored tokens. For each scored position, `prev` is the last input index holding the
+target token. Three strata: **A** `prev < cut` (the only prior sighting is inside the
+deleted text), **B** `prev >= cut` (available in kept context), **C** no prior sighting.
+
+| stratum | share | CW0 | CW1 slots | CW2 random | CW3 | CW2−CW1 | 95% CI |
+|---|---|---|---|---|---|---|---|
+| **A needs-old** | 15.8% | 3.2196 | **3.4454** | **3.3466** | 3.4721 | **−0.0988** | [−0.1050, −0.0933] |
+| B local | 47.6% | 2.1280 | 2.1347 | 2.1736 | 2.1715 | +0.0388 | [+0.0370, +0.0407] |
+| C novel | 36.5% | 4.8603 | 4.8794 | 4.8954 | 4.8997 | +0.0160 | [+0.0143, +0.0176] |
+
+**On the tokens that can only be known from the deleted text, an equal-budget RANDOM
+sample of the real tokens beats the slots by 0.0988 nats.** Significant, and it is the
+reverse of the aggregate result (+0.0090 in favour of slots over all tokens).
+
+Stratum C was pre-registered as the control: copying from the deleted region cannot help
+there, so a slot advantage in C cannot be memory. The slots win C by +0.0160. So the
+aggregate advantage lives in the two strata where the deleted content is not needed, and
+reverses in the one where it is.
+
+### Reading
+
+The slot is not acting as a memory of its span's content. Its measurable benefit sits on
+predictions that never needed the deleted text — consistent with slot positions acting as
+extra compute registers plus aux-loss regularization, not as a summary.
+
+The mechanism behind A is unsurprising once stated: CW2 keeps 128 of ~500 deleted token
+positions, so roughly a quarter of the time it retains the *exact* token the target
+repeats. A lossy mean over a span can never do that. **For the long-range dependencies
+that actually occur in this data — largely token repetition — an exact copy of a random
+quarter beats a gist of everything.**
+
+### What this does and does not settle
+
+* It does NOT say the design fails: nothing trained this checkpoint to make the slot
+  carry span content, and the whole point of arm CW's training version is to force it.
+* It DOES say the aggregate screen number (+0.0090, "slots beat random tokens") should
+  not be quoted as evidence of memory. It is carried by strata where memory is irrelevant.
+* It sharpens what training would have to buy: the slot must preserve token IDENTITY for
+  rare repeated tokens, not just gist. A mean over embeddings cannot, which points at a
+  copy/pointer-shaped mechanism rather than a bigger summary vector.
+
+### Not verified
+
+One cut, one checkpoint, one CW2 seed. The strata are defined by exact token repetition,
+which captures copying dependencies and misses semantic ones — a target that needs the
+deleted text without repeating any token in it lands in C and is scored as "novel".
