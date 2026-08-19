@@ -159,6 +159,7 @@ def evaluate(
             x, y = batch
             x, y = x.to(device), y.to(device)
             _m = getattr(model, "_orig_mod", model)
+            _lnv = math.log(int(_m.cfg.vocab_size))
             for _sig in db.val_sigmas:
                 _st = build_db_step(db, _m, y, fixed_sigma=_sig)
                 with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -166,7 +167,33 @@ def evaluate(
                     _l, _mt = db_loss(_o, _st, db.precond, _m)
                 acc.setdefault(f"val/db_ce_sigma{_sig:g}", []).append(_mt["db/ce"])
                 acc.setdefault("val/db_ce", []).append(_mt["db/ce"])
-                if _sig == min(db.val_sigmas):
+
+                # ── SCRAMBLED CONTROL: the metric this campaign was missing ──
+                # Build z from a DIFFERENT sequence's labels and score against the TRUE
+                # labels. Anything the model still gets right must have come from the text
+                # context, because its injected target is now wrong.
+                #
+                # This is not a nicety. Without it, an autoencoding objective looks exactly
+                # like a language model that is training well: db_b3 ran 9000 steps with
+                # val CE falling 3.63 -> 0.91 while, at sigma <= 0.3, a wrong-target control
+                # scored ~ln V — meaning ZERO of that performance came from the text.
+                #
+                #   db_ce_scrambled ~= ln V  ->  no language content at this sigma
+                #   lang_nats = ln V - scrambled  ->  what the CONTEXT alone is worth
+                _st_s = build_db_step(db, _m, y.roll(1, dims=0), fixed_sigma=_sig)
+                _st_s.labels = y                      # score against the TRUE labels
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    _os = _m(x, db_step=_st_s, db_precond=db.precond)
+                    _ls_, _mts = db_loss(_os, _st_s, db.precond, _m)
+                acc.setdefault(f"val/db_ce_scrambled_sigma{_sig:g}", []).append(_mts["db/ce"])
+                acc.setdefault(f"val/db_lang_nats_sigma{_sig:g}", []).append(
+                    _lnv - _mts["db/ce"])
+                acc.setdefault("val/db_lang_nats", []).append(_lnv - _mts["db/ce"])
+
+                if _sig == max(db.val_sigmas):
+                    # Report the HIGHEST sigma as the headline: c_skip -> 0 there, so it is
+                    # the closest thing to context-only prediction. The lowest sigma is the
+                    # most autoencoding-contaminated and made a terrible headline.
                     losses.append(_mt["db/ce"])
         else:
             x, y = batch

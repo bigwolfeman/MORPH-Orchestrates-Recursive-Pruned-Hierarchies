@@ -11,6 +11,8 @@ tokenizer, no CUDA.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 import torch
 
@@ -535,3 +537,98 @@ def test_db_checkpoint_round_trips_the_conditioning_params():
     with torch.no_grad():
         got = dst(ids, db_step=step, db_precond=rt.precond, db_want_logits=True)["logits"]
     assert torch.equal(want, got), "restored model does not reproduce the source forward"
+
+
+# ── the fixes for what the audit found (2026-08-19) ──────────────────────────
+
+def test_logit_scale_starts_at_identity_and_is_learnable():
+    """Init MUST be identity: a high starting temperature re-creates the degenerate regime.
+
+    Measured: at logit_scale_init=4.0 an untrained model scored CE 1.13 at sigma=0.3 against
+    ln V = 7.62, because amplifying c_skip*z hands over the answer before anything is learned.
+    Starting at 1.0 means the change can only help relative to the audited baseline.
+    """
+    cfg = DBConfig(mode="b3", conditioning="x0_inject")
+    assert cfg.logit_scale_init == 1.0
+    m = _model(cfg)
+    assert m.db_logit_scale is not None
+    assert float(m.db_logit_scale.detach().exp()) == pytest.approx(1.0, abs=1e-6)
+    assert m.db_logit_scale.requires_grad
+
+    x = torch.randn(2, 4, 7)
+    assert torch.allclose(m.db_scale_logits(x), x), "init must be exactly identity"
+
+
+def test_logit_scale_actually_scales_and_receives_gradient():
+    """A temperature that cannot move is theatre — it must sharpen AND train."""
+    cfg = DBConfig(mode="b1", conditioning="x0_inject")
+    m = _model(cfg)
+    with torch.no_grad():
+        m.db_logit_scale.fill_(math.log(5.0))
+    x = torch.randn(2, 4, 7)
+    assert torch.allclose(m.db_scale_logits(x), x * 5.0, atol=1e-5)
+
+    rt = _RT(cfg)
+    labels = torch.randint(5, V, (2, 16))
+    step = build_db_step(rt, m, labels)
+    out = m(torch.randint(5, V, (2, 16)), db_step=step, db_precond=rt.precond)
+    loss, mt = db_loss(out, step, rt.precond, m)
+    loss.backward()
+    assert m.db_logit_scale.grad is not None
+    assert float(m.db_logit_scale.grad.abs()) > 0, "temperature got no gradient"
+    assert mt["db/logit_scale"] == pytest.approx(5.0, rel=1e-3)
+
+
+def test_logit_scale_is_consistent_between_train_and_eval_paths():
+    """db_loss scales the INPUT; db_scale_logits scales the OUTPUT. They must agree.
+
+    (s*x) @ W.T == s*(x @ W.T). If these drift apart, training and generation sharpen
+    differently and generations will not match the loss curve.
+    """
+    cfg = DBConfig(mode="b1", conditioning="x0_inject")
+    m = _model(cfg)
+    with torch.no_grad():
+        m.db_logit_scale.fill_(math.log(3.0))
+    d = torch.randn(2, 5, m.cfg.d_model)
+    w = m.db_lm_weight()
+    via_out = m.db_scale_logits(d @ w.T)
+    via_in = (d * m.db_logit_scale.exp()) @ w.T
+    assert torch.allclose(via_out, via_in, atol=1e-4)
+
+
+def test_collapse_detector_is_alive_and_detects_collapse():
+    """The old target_norm_mean metric was DEAD: SliceScaler pins unit norm, so it read
+    sqrt(2) forever with a flat sparkline and kill criterion 4 could never fire.
+
+    Pairwise cosine is the real detector — collapse means every embedding converges to one
+    vector, so cosine -> 1.
+    """
+    from morph.training.db_setup import _collapse_metrics
+
+    torch.manual_seed(0)
+    diverse = torch.nn.functional.normalize(torch.randn(4, 16, 128), dim=-1)
+    md = _collapse_metrics(diverse)
+    assert abs(md["db/target_cos_mean"]) < 0.2, md
+
+    collapsed = torch.nn.functional.normalize(
+        torch.randn(1, 1, 128).expand(4, 16, 128) + 1e-4, dim=-1)
+    mc = _collapse_metrics(collapsed)
+    assert mc["db/target_cos_mean"] > 0.99, mc
+    assert mc["db/target_cos_max"] > 0.99
+
+    # and it must MOVE between the two regimes, unlike the metric it replaces
+    assert mc["db/target_cos_mean"] - md["db/target_cos_mean"] > 0.7
+
+
+def test_val_sigma_grid_probes_every_block():
+    """A third of training visits went to the coda, which had ZERO val coverage — and the
+    coda turned out to be the broken block (model-only CE 9.64, worse than doing nothing)."""
+    from morph.training.db_setup import DbRuntime
+
+    cfg = DBConfig(mode="b3", conditioning="x0_inject")
+    sch = DBSchedule(cfg, mean_depth=6)
+    grid = DbRuntime(model_cfg=cfg, schedule=sch, precond=EDMPrecond(cfg.sigma_data),
+                     scaler=None, activate_at=0.0).val_sigmas
+    blocks = {int(sch.block_of_sigma(torch.tensor([s]))[0]) for s in grid}
+    assert blocks == {0, 1, 2}, (
+        f"val grid covers blocks {sorted(blocks)}, not all three. grid={grid}")

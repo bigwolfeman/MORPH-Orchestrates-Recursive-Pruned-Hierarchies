@@ -1023,6 +1023,14 @@ class MORPHTransformer(nn.Module):
         # sampler's `softmax(logits) @ E` bridge would walk the Euler steps in the wrong
         # units and generation would be garbage while the loss curve looked healthy.
         # Exactly the failure the no-theater rule exists to catch.
+        # Learnable readout temperature. See DBConfig.learn_logit_scale for the measured
+        # reason this is not optional: without it the low-sigma CE floor is ~9.8 and the coda
+        # block's model-only CE (9.64) came out WORSE than the raw skip path (8.50).
+        self.db_logit_scale = None
+        if db_cfg.learn_logit_scale:
+            self.db_logit_scale = nn.Parameter(
+                torch.tensor(float(db_cfg.logit_scale_init)).log())
+
         self.db_scaler = None
         if db_cfg.slice_scale:
             lor = int(self.cfg.d_model * float(self.cfg.lorentz_fraction))
@@ -1165,8 +1173,14 @@ class MORPHTransformer(nn.Module):
             # Only for sampling/eval. At [14, 1024, 49152] the fp32 logits alone are
             # 2.63 GiB, which is the exact allocation that OOM'd the first db_b1 smoke.
             # Training must go through the chunked CE instead (see db_loss).
-            out["logits"] = denoised @ self.db_lm_weight().T
+            out["logits"] = self.db_scale_logits(denoised @ self.db_lm_weight().T)
         return out
+
+    def db_scale_logits(self, logits: Tensor) -> Tensor:
+        """Apply the learnable readout temperature. Identity when the scale is off."""
+        if self.db_logit_scale is None:
+            return logits
+        return logits * self.db_logit_scale.exp().to(logits.dtype)
 
     def db_lm_weight(self) -> Tensor:
         """Tied LM-head weight under the same slice transform as the target.
