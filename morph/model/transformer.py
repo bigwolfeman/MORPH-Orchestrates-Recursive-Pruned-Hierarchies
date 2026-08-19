@@ -1052,13 +1052,24 @@ class MORPHTransformer(nn.Module):
         return [("prelude", "core", "coda")[block_idx]]
 
     def _db_run_section(self, name: str, x: Tensor, x0: Tensor, bigram_emb,
-                        input_ids: Tensor | None, cond: Tensor) -> Tensor:
+                        input_ids: Tensor | None, cond: Tensor | None,
+                        *, capture: dict | None = None,
+                        ctx: dict | None = None) -> Tensor:
         """Run one section's layers ONCE, with σ modulation at its boundary.
 
         The core runs a SINGLE pass here, not the T-iteration loop. That single pass is the
         compute win: the target is available at every σ, so there is no trajectory to
         backpropagate and BPTT is gone. The T-step loop returns at INFERENCE, where each
         iteration is one Euler step down the schedule.
+
+        Two-source concat roles (design doc §1):
+          * ``capture`` (dict, CLEAN pass): ``cond`` is None (the context stream is
+            σ-independent, so no db_gate); each layer captures its context bundle into
+            ``capture[global_layer_idx]``. Returns the clean hidden as usual.
+          * ``ctx`` (dict, NOISY pass): each layer attends its clean bundle
+            ``ctx[global_layer_idx]`` via the two-source attention, and seeds its GLA
+            branch (if any) from the clean final-state.
+          * both None: the single-stream x0_inject path, unchanged.
         """
         np_, nc = self.cfg.n_prelude, self.cfg.n_core
         if name == "prelude":
@@ -1068,14 +1079,30 @@ class MORPHTransformer(nn.Module):
         else:
             layers, base = self.coda, np_ + nc
 
-        x = self.db_gates[name](x, cond)
+        # σ-gate only on the noisy stream. The clean context stream (cond is None) is
+        # σ-independent so it can be computed once and reused across the Euler chain.
+        if cond is not None:
+            x = self.db_gates[name](x, cond)
         for i, layer in enumerate(layers):
             gi = base + i
             term = self._build_injection_term(
                 gi, self.x0_injects[gi].precompute(x0), input_ids, bigram_emb, x.dtype
             )
             x = self._apply_injection(x, term)
-            x = layer(x)
+
+            if capture is not None:
+                bundle: dict = {}
+                rc: dict = {}
+                x = layer(x, attn_kwargs={"db_capture": bundle}, ret_capture=rc)
+                if "state" in rc:
+                    bundle["gla_state"] = rc["state"]
+                capture[gi] = bundle
+            elif ctx is not None:
+                bundle = ctx[gi]
+                x = layer(x, attn_kwargs={"db_ctx": bundle},
+                          ret_state=bundle.get("gla_state"))
+            else:
+                x = layer(x)
         return x
 
     def _forward_db(self, input_ids: Tensor, db_step, precond) -> dict:
@@ -1092,8 +1119,6 @@ class MORPHTransformer(nn.Module):
         as the target ``y``, which is what lets the sampler's ``softmax(logits) @ E`` bridge
         (audit §4) close the loop at inference.
         """
-        from .diffusion_blocks import clean_noisy_mask
-
         cfg = self.db_cfg
         sigma = db_step.sigma
         c_skip, c_out, c_in, c_noise = precond.coeffs(sigma)
@@ -1114,29 +1139,31 @@ class MORPHTransformer(nn.Module):
 
         x_in = (zt.float() * c_in.view(B, 1, 1)).to(zt.dtype)
 
-        if cfg.conditioning == "concat":
-            # App. E.4: [clean ; noisy] with the mask from clean_noisy_mask(). The mask is
-            # built and validated here, but MORPH's attention does not yet ACCEPT an
-            # arbitrary additive mask — CCA/CSA/HCA/XSA each build their own. Wiring it is
-            # plan item A4/R1 and is NOT done: raise rather than silently run the wrong
-            # (unmasked) thing, which would leak future clean tokens into every position.
-            _ = clean_noisy_mask(L, input_ids.device)
-            raise NotImplementedError(
-                "db.conditioning='concat' needs a clean|noisy causal mask threaded through "
-                "CCA/CSA/HCA/XSA (plan A4 / risk R1). clean_noisy_mask() defines the exact "
-                "cutoff and is unit-tested, but the attention kernels do not take it yet. "
-                "Running without the mask would let every noisy position attend clean_{i+1}, "
-                "which IS its own target -- the loss would collapse to ~0 and teach nothing. "
-                "Use db.conditioning='x0_inject' until A4 lands."
-            )
-
         x0 = x_emb.clone()          # the clean conditioning signal (see above)
+        sections = self._db_sections(db_step.block_idx)
+
+        db_ctx = None
+        if cfg.conditioning == "concat":
+            # App. E.4 causal consistency, MORPH's forced 2-pass form (design doc §1):
+            # run the CLEAN token stream once, σ-independent, capturing per-layer context
+            # bundles; the NOISY stream then attends clean+noisy causally via the
+            # two-source attention. `clean_block_causal_mask` withholds clean_{i+1} (the
+            # target) from noisy query i — that is the no-leak invariant, unit-tested in
+            # tests/test_db_context.py.
+            xc = x_emb
+            if self._is_hc:
+                xc = xc.unsqueeze(2).expand(B, L, self._n_streams, xc.shape[-1]).contiguous()
+            db_ctx = {}
+            for name in sections:
+                xc = self._db_run_section(name, xc, x0, bigram_emb, input_ids,
+                                          None, capture=db_ctx)
+
         x = x_in
         if self._is_hc:
             x = x.unsqueeze(2).expand(B, L, self._n_streams, x.shape[-1]).contiguous()
 
-        for name in self._db_sections(db_step.block_idx):
-            x = self._db_run_section(name, x, x0, bigram_emb, input_ids, cond)
+        for name in sections:
+            x = self._db_run_section(name, x, x0, bigram_emb, input_ids, cond, ctx=db_ctx)
 
         hidden = self._readout(x)
         denoised = (hidden.float() * c_out.view(B, 1, 1)
