@@ -2248,9 +2248,20 @@ def main(cfg: DictConfig) -> None:
                 # flop_proxy AND peak alloc together (MORPH is launch-bound, so any one of
                 # them alone is misleading). Put all three on the console line so a log file
                 # is self-sufficient and nobody has to reconstruct them from wandb.
+                # For a DB run `ppl` is meaningless (exp of a σ-conditioned reconstruction
+                # CE) and printing 485165195.4 every line is worse than printing nothing.
+                # Show plain CE against ln(vocab): at ln(V) the model knows nothing, and the
+                # gap is what it has actually learned.
+                if _db_metrics is not None:
+                    _second = (f"ce={_db_metrics.get('db/ce', float('nan')):.4f}"
+                               f"/lnV={math.log(int(cfg.model.vocab_size)):.2f}  "
+                               f"σ={_db_metrics.get('db/sigma_mean', 0):.3f}  "
+                               f"blk={_db_metrics.get('db/block_idx', -1)}  ")
+                else:
+                    _second = f"ppl={math.exp(min(loss.item(), 20.0)):.1f}  "
                 print(
                     f"[{step:7d}/{total_steps}] loss={loss.item():.4f}  "
-                    f"ppl={math.exp(min(loss.item(), 20.0)):.1f}  "
+                    f"{_second}"
                     f"lr={lr:.2e}  sps={sps:.2f}  "
                     f"tok/s={log.get('perf/tokens_per_sec', 0):.0f}  "
                     f"proxy={log.get('perf/flop_proxy', 0):.2f}  "

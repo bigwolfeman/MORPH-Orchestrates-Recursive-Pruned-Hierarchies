@@ -227,21 +227,33 @@ def db_loss(out: dict, step: DBStep, precond: EDMPrecond, model,
         raise ValueError("db_loss got a batch with no valid label positions")
 
     head_w = model.db_lm_weight()
-    fused = fused_linear_cross_entropy(
-        x_flat, head_w, lab_flat,
-        ignore_index=ignore_index, chunk_size=chunk_size,
-        weights=w_row.to(x_flat.dtype),
-    )
-    # fused = Σ w·CE / Σ w  ->  × (Σ w / n_valid) = mean(w·CE), the authors' reduction.
-    w_sum = w_row[valid].sum()
-    loss = fused * (w_sum / n_valid)
+    use_w = bool(getattr(model.db_cfg, "edm_ce_weighting", False))
+    if use_w:
+        fused = fused_linear_cross_entropy(
+            x_flat, head_w, lab_flat,
+            ignore_index=ignore_index, chunk_size=chunk_size,
+            weights=w_row.to(x_flat.dtype),
+        )
+        # fused = Σ w·CE / Σ w  ->  × (Σ w / n_valid) = mean(w·CE), the authors' reduction.
+        loss = fused * (w_row[valid].sum() / n_valid)
+    else:
+        # Unweighted CE — the measured default. See DBConfig.edm_ce_weighting for the
+        # numbers: w(σ)·CE spans 45560x while CE alone spans 1.6x, so the weighted loss is
+        # a lottery on the σ draw rather than a signal.
+        fused = fused_linear_cross_entropy(
+            x_flat, head_w, lab_flat,
+            ignore_index=ignore_index, chunk_size=chunk_size,
+        )
+        loss = fused
 
     b = step.block_idx
     with torch.no_grad():
         metrics = {
             "db/loss": float(loss.detach()),
-            # The weighted number is not comparable across σ ranges; this one is.
-            "db/ce_weighted_norm": float(fused.detach()),
+            # THE number to read across steps: plain CE, comparable at any σ. Compare it to
+            # ln(vocab) — at ln(V) the model knows nothing; the gap is what it has learned.
+            "db/ce": float(fused.detach()) if not use_w else float("nan"),
+            "db/edm_ce_weighting": int(use_w),
             f"db/loss_block{b}": float(loss.detach()),
             "db/block_idx": b,
             "db/sigma_mean": float(step.sigma.detach().mean()),
