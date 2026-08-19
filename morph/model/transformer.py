@@ -1069,13 +1069,25 @@ class MORPHTransformer(nn.Module):
             layers, base = self.coda, np_ + nc
 
         x = self.db_gates[name](x, cond)
+
+        def _one(xx: Tensor, gi: int, layer) -> Tensor:
+            term = self._build_injection_term(
+                gi, self.x0_injects[gi].precompute(x0), input_ids, bigram_emb, xx.dtype
+            )
+            return layer(self._apply_injection(xx, term))
+
+        # Gradient-checkpoint every layer while training. The baseline checkpoints its
+        # core iterations inside `_core_region`, which this path deliberately does NOT
+        # call — so without this, a DB step retains activations for ALL of its layers
+        # uncheckpointed. Measured: db_b1 peaked at 25.49 GB against A0's 20.51 GB and
+        # then OOM'd on a 32 GB card. Same `use_reentrant=False` as the core loop, for the
+        # same reason (reentrant checkpointing breaks with the HC carrier's stream layout).
         for i, layer in enumerate(layers):
             gi = base + i
-            term = self._build_injection_term(
-                gi, self.x0_injects[gi].precompute(x0), input_ids, bigram_emb, x.dtype
-            )
-            x = self._apply_injection(x, term)
-            x = layer(x)
+            if self.training:
+                x = checkpoint(_one, x, gi, layer, use_reentrant=False)
+            else:
+                x = _one(x, gi, layer)
         return x
 
     def _forward_db(self, input_ids: Tensor, db_step, precond,
