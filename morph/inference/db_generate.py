@@ -110,7 +110,7 @@ def db_sample(model, input_ids: Tensor, runtime, n_steps: int | None = None,
 
         step = DBStep(block_idx=block, sigma=s, z_noisy=z.to(lm_w.dtype),
                       y_clean=z.to(lm_w.dtype), labels=input_ids)
-        out = model(input_ids, db_step=step, db_precond=pre)
+        out = model(input_ids, db_step=step, db_precond=pre, db_want_logits=True)
         logits = out["logits"]
         denoised = expected_embedding(logits, lm_w)
 
@@ -124,5 +124,5 @@ def db_sample(model, input_ids: Tensor, runtime, n_steps: int | None = None,
     step = DBStep(block_idx=int(sch.block_of_sigma(sigmas[-1].view(1))[0]),
                   sigma=s_min, z_noisy=z.to(lm_w.dtype),
                   y_clean=z.to(lm_w.dtype), labels=input_ids)
-    logits = model(input_ids, db_step=step, db_precond=pre)["logits"]
+    logits = model(input_ids, db_step=step, db_precond=pre, db_want_logits=True)["logits"]
     return logits, z

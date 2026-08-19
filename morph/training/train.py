@@ -1885,7 +1885,7 @@ def main(cfg: DictConfig) -> None:
                         # ONCE -- no loop, no BPTT. See docs/diffusionblocks-plan-of-action.md.
                         _db_step = build_db_step(_db, model, y)
                         out = model(x, db_step=_db_step, db_precond=_db.precond)
-                        loss, _db_metrics = db_loss(out["logits"], _db_step, _db.precond)
+                        loss, _db_metrics = db_loss(out, _db_step, _db.precond, model)
                     else:
                         out = model(x, labels=y, bag_size=phase.bag_size,
                                     slot_layout=_layout)

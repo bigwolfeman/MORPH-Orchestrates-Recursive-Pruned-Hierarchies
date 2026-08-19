@@ -1078,8 +1078,15 @@ class MORPHTransformer(nn.Module):
             x = layer(x)
         return x
 
-    def _forward_db(self, input_ids: Tensor, db_step, precond) -> dict:
-        """DiffusionBlocks forward. Returns ``{"logits", "denoised"}``.
+    def _forward_db(self, input_ids: Tensor, db_step, precond,
+                    want_logits: bool = False) -> dict:
+        """DiffusionBlocks forward. Returns ``{"denoised", "logits"}``.
+
+        ``want_logits=False`` (the training default) does NOT materialise the logits:
+        ``[B, L, vocab]`` in fp32 is 2.63 GiB at batch 14 / seq 1024 / V 49152, and that
+        single allocation is what OOM'd the first ``db_b1`` smoke on a 32 GB card. The
+        baseline avoids it with the chunked/fused CE and so must this path — see
+        :func:`morph.training.db_setup.db_loss`. Sampling sets ``want_logits=True``.
 
         Flow, matching the authors' ``model.py::denoise`` (audit §3):
 
@@ -1141,8 +1148,13 @@ class MORPHTransformer(nn.Module):
         hidden = self._readout(x)
         denoised = (hidden.float() * c_out.view(B, 1, 1)
                     + zt.float() * c_skip.view(B, 1, 1)).to(hidden.dtype)
-        logits = denoised @ self.db_lm_weight().T
-        return {"logits": logits, "denoised": denoised}
+        out = {"denoised": denoised, "logits": None}
+        if want_logits:
+            # Only for sampling/eval. At [14, 1024, 49152] the fp32 logits alone are
+            # 2.63 GiB, which is the exact allocation that OOM'd the first db_b1 smoke.
+            # Training must go through the chunked CE instead (see db_loss).
+            out["logits"] = denoised @ self.db_lm_weight().T
+        return out
 
     def db_lm_weight(self) -> Tensor:
         """Tied LM-head weight under the same slice transform as the target.
@@ -1834,7 +1846,8 @@ class MORPHTransformer(nn.Module):
     def forward(self, input_ids: Tensor, labels: Tensor | None = None,
                 bag_size: int = 0, seq_lens: Tensor | None = None,
                 slot_layout: SlotLayout | None = None,
-                db_step=None, db_precond=None) -> dict:
+                db_step=None, db_precond=None,
+                db_want_logits: bool = False) -> dict:
         # `db_step` is a per-forward ARGUMENT, exactly like `slot_layout` and `bag_size`.
         # None => the untouched baseline. This is what keeps the DB-off path bit-identical
         # and keeps a runtime branch out of the baseline hot path.
@@ -1853,7 +1866,8 @@ class MORPHTransformer(nn.Module):
                 )
             if db_precond is None:
                 raise ValueError("db_step requires db_precond (the EDMPrecond instance)")
-            return self._forward_db(input_ids, db_step, db_precond)
+            return self._forward_db(input_ids, db_step, db_precond,
+                                    want_logits=db_want_logits)
         return self._forward_single(input_ids, labels, bag_size, seq_lens, slot_layout)
 
     def tul_forward_with_plan_nats(self, input_ids: Tensor, labels: Tensor,

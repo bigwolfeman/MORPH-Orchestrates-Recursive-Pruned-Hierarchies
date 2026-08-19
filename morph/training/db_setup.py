@@ -188,45 +188,68 @@ def build_db_step(rt: DbRuntime, model, labels: Tensor,
     )
 
 
-def db_loss(logits: Tensor, step: DBStep, precond: EDMPrecond,
-            ignore_index: int = -100) -> tuple[Tensor, dict]:
-    """EDM-weighted cross-entropy, plus the per-block metric channels.
+def db_loss(out: dict, step: DBStep, precond: EDMPrecond, model,
+            ignore_index: int = -100, chunk_size: int = 1024) -> tuple[Tensor, dict]:
+    """EDM-weighted cross-entropy through the CHUNKED head, plus per-block metrics.
 
-    Matches the authors' ``model.py:255-259``: per-sample CE, then ``× w(σ)``, then mean.
-    The UNWEIGHTED CE is returned alongside because the weighted number is not comparable
-    across σ ranges, and both are logged **per block index** — a per-block loss channel is
-    how a single failing block becomes visible instead of being averaged away.
+    Matches the authors' ``model.py:255-259`` — per-sample CE, then ``× w(σ)``, then mean —
+    but never materialises the logits. ``[B, L, vocab]`` in fp32 is 2.63 GiB at batch 14 /
+    seq 1024 / V 49152, and that exact allocation OOM'd the first ``db_b1`` smoke on a 32 GB
+    card. ``fused_linear_cross_entropy`` streams the head in ``chunk_size`` row blocks and
+    already accepts per-row ``weights``, which is precisely what ``w(σ)`` is.
+
+    Normalisation detail that matters. The fused kernel reduces as ``Σ wᵢ·CEᵢ / Σ wᵢ`` — a
+    *normalised* weighted mean — while the authors use the *unnormalised* ``(CE·w).mean()``.
+    Those differ: normalising per batch would partly undo the point of EDM's weighting,
+    which is to equalise gradient magnitude ACROSS σ draws, not within one. Multiplying the
+    fused result by ``Σw / n_valid`` recovers the authors' form exactly, and it is a scalar
+    factor so the gradient stays correct.
 
     NOTE this CE is NOT comparable to A0's ``val/ppl_tokens``. It is conditioned on a
     σ-noised target, so it is a reconstruction number, not a likelihood (sheet §1.3). Never
     table it next to a baseline CE.
     """
-    B, L, V = logits.shape
-    ce = torch.nn.functional.cross_entropy(
-        logits.reshape(-1, V).float(),
-        step.labels.reshape(-1),
-        ignore_index=ignore_index,
-        reduction="none",
-    ).view(B, L)
+    from morph.model.fused_ce import fused_linear_cross_entropy
 
-    valid = (step.labels != ignore_index)
-    per_sample = (ce * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1)
-    w = precond.weight(step.sigma)
-    loss = (per_sample * w).mean()
+    denoised = out["denoised"]
+    B, L, _ = denoised.shape
+    labels = step.labels
+    x_flat = denoised.reshape(B * L, -1)
+    lab_flat = labels.reshape(B * L)
+
+    # w(σ) is per SAMPLE; the fused kernel wants one weight per ROW (= position).
+    w_sample = precond.weight(step.sigma)                      # [B]
+    w_row = w_sample.view(B, 1).expand(B, L).reshape(B * L)     # [B*L]
+
+    valid = lab_flat != ignore_index
+    n_valid = int(valid.sum())
+    if n_valid == 0:
+        raise ValueError("db_loss got a batch with no valid label positions")
+
+    head_w = model.db_lm_weight()
+    fused = fused_linear_cross_entropy(
+        x_flat, head_w, lab_flat,
+        ignore_index=ignore_index, chunk_size=chunk_size,
+        weights=w_row.to(x_flat.dtype),
+    )
+    # fused = Σ w·CE / Σ w  ->  × (Σ w / n_valid) = mean(w·CE), the authors' reduction.
+    w_sum = w_row[valid].sum()
+    loss = fused * (w_sum / n_valid)
 
     b = step.block_idx
-    metrics = {
-        "db/loss": float(loss.detach()),
-        "db/ce_unweighted": float(per_sample.mean().detach()),
-        f"db/ce_unweighted_block{b}": float(per_sample.mean().detach()),
-        f"db/loss_block{b}": float(loss.detach()),
-        "db/block_idx": b,
-        "db/sigma_mean": float(step.sigma.detach().mean()),
-        "db/sigma_min_batch": float(step.sigma.detach().min()),
-        "db/sigma_max_batch": float(step.sigma.detach().max()),
-        "db/weight_mean": float(w.detach().mean()),
-        # Kill criterion 4 (sheet §4.5): embedding collapse. A mean pairwise cosine
-        # climbing toward 1.0 means the targets are degenerating to one vector.
-        "db/target_norm_mean": float(step.y_clean.detach().float().norm(dim=-1).mean()),
-    }
+    with torch.no_grad():
+        metrics = {
+            "db/loss": float(loss.detach()),
+            # The weighted number is not comparable across σ ranges; this one is.
+            "db/ce_weighted_norm": float(fused.detach()),
+            f"db/loss_block{b}": float(loss.detach()),
+            "db/block_idx": b,
+            "db/sigma_mean": float(step.sigma.detach().mean()),
+            "db/sigma_min_batch": float(step.sigma.detach().min()),
+            "db/sigma_max_batch": float(step.sigma.detach().max()),
+            "db/weight_mean": float(w_sample.detach().mean()),
+            # Kill criterion 4 (sheet §4.5): embedding collapse. If the targets degenerate
+            # toward one vector this norm stops moving and the pairwise cosine climbs.
+            "db/target_norm_mean": float(step.y_clean.detach().float().norm(dim=-1).mean()),
+        }
     return loss, metrics

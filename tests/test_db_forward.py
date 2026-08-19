@@ -91,7 +91,7 @@ def test_db_forward_produces_finite_logits_of_the_right_shape(mode):
     ids = torch.randint(0, V, (2, 32))
     labels = torch.randint(0, V, (2, 32))
     step = build_db_step(rt, m, labels)
-    out = m(ids, db_step=step, db_precond=rt.precond)
+    out = m(ids, db_step=step, db_precond=rt.precond, db_want_logits=True)
     assert out["logits"].shape == (2, 32, V)
     assert torch.isfinite(out["logits"]).all()
     assert out["denoised"].shape == (2, 32, 64)
@@ -107,7 +107,7 @@ def test_db_loss_is_finite_and_backpropagates(mode):
     labels = torch.randint(0, V, (2, 32))
     step = build_db_step(rt, m, labels)
     out = m(ids, db_step=step, db_precond=rt.precond)
-    loss, metrics = db_loss(out["logits"], step, rt.precond)
+    loss, metrics = db_loss(out, step, rt.precond, m)
     assert torch.isfinite(loss), loss
     loss.backward()
     grads = [p.grad for p in m.parameters() if p.grad is not None]
@@ -135,7 +135,7 @@ def test_b3_step_trains_only_its_own_block():
         step = build_db_step(rt, m, labels)
         step.block_idx = target                      # force the block under test
         out = m(ids, db_step=step, db_precond=rt.precond)
-        loss, _ = db_loss(out["logits"], step, rt.precond)
+        loss, _ = db_loss(out, step, rt.precond, m)
         m.zero_grad(set_to_none=True)
         loss.backward()
 
@@ -160,7 +160,7 @@ def test_b1_step_trains_every_section():
     labels = torch.randint(0, V, (2, 24))
     step = build_db_step(rt, m, labels)
     out = m(ids, db_step=step, db_precond=rt.precond)
-    loss, _ = db_loss(out["logits"], step, rt.precond)
+    loss, _ = db_loss(out, step, rt.precond, m)
     loss.backward()
     for name in ("prelude", "core", "coda"):
         assert any(p.grad is not None and p.grad.abs().sum() > 0
@@ -267,8 +267,8 @@ def test_db_can_overfit_a_single_batch():
     first = last = None
     for i in range(40):
         step = build_db_step(rt, m, labels, generator=gen)
-        out = m(ids, db_step=step, db_precond=rt.precond)
-        loss, _ = db_loss(out["logits"], step, rt.precond)
+        out = m(ids, db_step=step, db_precond=rt.precond, db_want_logits=True)
+        loss, _ = db_loss(out, step, rt.precond, m)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
