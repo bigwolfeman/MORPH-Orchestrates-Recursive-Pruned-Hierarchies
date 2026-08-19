@@ -22,6 +22,16 @@ token leaves every earlier position bit-identical, b1 and b3); clean-context
 differentiability (grad into `C_comp`/`k`/`v`; `K_I` exempt — top-k is non-diff, matching
 the baseline CSA indexer); sampler determinism/finiteness.
 
+**GPU-verified (5090, fused kernels, tiny model):** forward finite, backward grad finite +
+nonzero (prelude context encoder trains), sampler runs. The whole-model no-leak is bit-exact
+(`0.000e+00`) on CPU eager — that proves the LOGIC is leak-free. On GPU the same perturbation
+moves earlier positions by ~2.1e-4; this is ambient flash-attention / fused-kernel mask-bleed
+(masked logits are very-negative, not true `-inf`, so softmax gives ~0 not bit-0), NOT a logic
+leak: the BASELINE single-stream causal model leaks 9.6e-5 on the identical path, and the
+two-source bleed is the same order (slightly higher — a 2S window + a 2× block bank mask more
+surface) and ~2000× below the real signal (last-position change 0.39). The exact no-leak test
+therefore runs on CPU eager; GPU would need a tolerance.
+
 **NOT yet run:** the GPU language-content falsifier (matched vs scrambled context CE — does
 it learn, unlike `x0_inject`). **v1 costs (correct, not defects), to optimize later:** HCA +
 window are eager reference paths (not fused); the clean pass double-computes `_cca_project`
