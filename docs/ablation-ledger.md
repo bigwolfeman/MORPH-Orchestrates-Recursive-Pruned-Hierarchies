@@ -97,7 +97,7 @@ any row below as a result. Design rationale:
 | --- | --- | --- | --- | --- |
 | DB-0 | instrumentation gates | `perf/{layer_passes_per_token, positions_per_token, flop_proxy, model_tflops, mfu}` + measured GEMM ceiling | FLOP efficiency is unmeasurable today; `perf/mfu` does not exist | planned |
 | DB-1 | recurrent-depth, `B=1` | whole 4:6:4 net as one denoiser, single-pass training, T-step Euler inference | does the diffusion objective work on MORPH at all (the paper's literal Huginn setting) | planned |
-| DB-2 | block-wise, `B=3` | prelude \| core \| coda on MORPH's own seams; σ cut into T+2=8 equi-probability Euler steps; core conditioned on `x0` only | block independence, and whether the 320-dim ctx slice can carry the core's whole conditioning | planned |
+| DB-2 | block-wise, `B=3` | prelude \| core \| coda on MORPH's own seams; σ sampled continuously per block (mass 1/8 : 6/8 : 1/8, uniform 1/3 visits — inference alone discretises into 1+T+1 Euler steps); core conditioned on `x0` only | block independence, and whether the 320-dim ctx slice can carry the core's whole conditioning | planned |
 | DB-3 | `B=3` + TUL | DB-2 with `tul:` on; slot denoising target = next span's first token embedding | the TUL cross Wolfe asked for; the slot-target fork | planned |
 | DB-4 | `B=1` + TUL | DB-1 with `tul:` on | TUL cross on the cheaper conversion | planned |
 | DB-5 | `B=3`, prelude conditioning | core conditioned on a no-grad prelude forward | the 320-channel pipe (DB-2 − DB-5 measures how thin it is) | planned |
@@ -107,7 +107,7 @@ any row below as a result. Design rationale:
 | DB-9 | σ partition | equi-probability vs uniform | Table 7: 38.03 vs 43.53 FID — confirm it holds for text | planned |
 | DB-10 | T-c fallback | core not independent, `B=2` for TUL arms | rescues DB-3 if the slot target fails | planned |
 | DB-11 | σ-blend contraction ONLY | `h_k ← α h_{k-1} + (1−α) f(h_{k-1})`, `α<1`, **DB objective off** | the `ρ(J_core) ≤ 1` handle on its own, as a Task #276 cure. Keeps ordinary CE, so it lands on THIS ledger | planned |
-| DB-12 | block-visit distribution | uniform 1/3 vs mass-proportional 1/8 : 6/8 : 1/8 | whether starving prelude/coda to 1/8 of updates hurts; the one departure from the paper's stated rule | planned |
+| DB-12 | block-visit distribution | uniform 1/3 vs mass-proportional 1/8 : 6/8 : 1/8 | whether starving prelude/coda to 1/8 of updates hurts. (Uniform visits are the paper's own rule, App. E.1; the design's actual departure is the unequal mass split — DB-9's axis) | planned |
 | DB-13 | inference step count | `T ~ Poisson(6)` vs fixed 4 / 8 / 16, **no retraining** | σ-conditioning makes the denoiser step-count agnostic, so test-time depth becomes a free dial (their AR setting used only 4) | planned |
 
 **Poisson depth is preserved.** Training samples σ continuously and never sees T; only inference

@@ -31,8 +31,10 @@ Add:
 
 - `perf/positions_per_token` = `L_total / seq_len`. 1.0 for A0. 1.125 for TUL at `prefix_k=2`,
   `max_slots=64`, `seq_len=1024`. **2.0×** those under the clean|noisy concatenation (App. E.4).
-- `perf/layer_passes_per_token` — promote the TUL-only key so **every** arm reports it. A0 must
-  report 44.0 (4 prelude + 6 core × T̄=6 + 4 coda), which is the parity check on the counter.
+- `perf/layer_passes_per_token` — promote the TUL-only key so **every** arm reports it. This key
+  is REALIZED (measured passes): A0 reports ≈ 42.0, not 44.0, because depth is
+  `clamp(Poisson(6),1,8)` with mean 5.67 — see the G1 fix. The nominal 44.0
+  (4 prelude + 6 core × T̄=6 + 4 coda) lives in `perf/flop_proxy`.
 - `perf/flop_proxy` = `layer_passes_per_token × positions_per_token`. One comparable number
   across every arm in this sheet. A0 = 44.0.
 - `perf/model_tflops` = analytic step FLOPs ÷ step time.
@@ -108,6 +110,18 @@ that amortises `a`. Say this out loud now so nobody is surprised later.
 `a` is itself a prediction that DB will make **worse**: AdaLN σ-conditioning adds kernels on every
 norm, and target-noising adds work per step. Pre-registered: `a` rises to **0.17–0.21 s**.
 
+**Reviewer note (2026-08-19) — the fit fails its only held-out point.** The model predicts A1
+(proxy 12.0) at `0.156 + 12×0.018 = 0.37 s`; A1 measured **0.544 s** (+46 %). Cause: the proxy
+counts positions, but launch overhead counts layer APPLICATIONS — A1 still launches the full T×6
+core stack on tiny 64-slot tensors, plus TUL pack/gather work, none of which the proxy sees. DB
+training is single-pass, so DB-1/DB-2 sit in the regime the fit was built in; DB-3/DB-4 inherit the
+TUL residual and their §4.2 bands are widened for it. Two smaller corrections: (a) A0's REALIZED
+passes/token is ≈ 42.0, not 44.0 — depth is `clamp(Poisson(6),1,8)`, mean 5.67 — so the fit's
+x-values are nominal; refitting on realized A0 gives `a ≈ 0.148, b ≈ 0.019` (conclusions
+unchanged). (b) `a` was measured WITH the front/back static CUDA graphs live; if DB arms cannot
+keep graph capture (plan A5), their `a` rises for that reason too. The bands stay a hypothesis
+until the first ~200 measured steps of each arm check them.
+
 ---
 
 ## 3. What is being tested — the algorithms, stated precisely
@@ -171,9 +185,11 @@ Euler steps ("per-idea refinement count"). Better than free — today Poisson-T 
 generalise across depths by brute force (`references.md` §1); under σ-conditioning the map is told
 where it is on the trajectory, so depth generalisation is explicit instead of emergent.
 
-**Two knobs, not one.** The paper conflates "what σ range does block b own" with "how often is
-block b trained", because with no weight tying B blocks = B steps. MORPH's core is tied and applied
-T times, so they must separate:
+**Two knobs, not one.** The paper does not distinguish "what σ range does block b own" from "how
+often is block b trained" — but not because of weight tying: its partition is equal-mass, and it
+samples blocks **uniformly at random per iteration** (App. E.1), so the two rules coincide there.
+They separate here only because our mass split is unequal. MORPH's core is tied and applied T
+times, so we must pick each knob explicitly:
 
 | Knob | Setting | Why |
 | --- | --- | --- |
@@ -189,8 +205,10 @@ flop_proxy      = 4.67 × 2.0 (clean|noisy)        = 9.34      ← 4.7× under A
 ```
 
 **DB-12 (new arm):** block-visit distribution `uniform` vs `mass-proportional` (1/8 : 6/8 : 1/8).
-Isolates whether starving the prelude and coda actually hurts. Cheap, and it is the only place this
-design departs from the paper's stated rule.
+Isolates whether starving the prelude and coda actually hurts. Cheap. **Reviewer correction:**
+uniform visits ARE the paper's stated rule (App. E.1: "blocks are sampled uniformly at random for
+each iteration"); the place this design departs from the paper is the **unequal mass split**
+(1/8 : 6/8 : 1/8 against the paper's 1/B per block) — DB-9 covers that axis.
 
 **Conditioning sub-variants (the 320-channel question, risk R2):**
 
@@ -224,7 +242,9 @@ core depth.
 **Correction to my earlier read.** Last turn I said TUL's win "largely evaporates" under the
 recurrent-depth mode. That was wrong. TUL's saving is a **position** saving (core on 64 instead of
 1024 positions), not a **loop** saving, so it survives the loop's removal. What shrinks is the
-wall-clock multiplier, because at `flop_proxy` 2.88 the step is ~60 % fixed overhead `a`.
+wall-clock multiplier, because at `flop_proxy` 6.28 the step is ~55–60 % fixed overhead `a`.
+*(Reviewer fix: an earlier draft said 2.88 here — a leftover from the superseded mass-proportional
+visit arithmetic.)*
 
 **The genuinely tricky part — what is a slot's denoising target?** TUL slots carry no token label
 (spec: slot label = first token of the next span; the slot's core state has no loss of its own). A
@@ -247,11 +267,11 @@ Bands are wide on purpose. A band this wide that still misses is real informatio
 
 | ID | Gate | Expected | Result |
 | --- | --- | --- | --- |
-| G1 | `perf/{layer_passes_per_token, positions_per_token, flop_proxy, model_tflops, mfu}` land for every arm | A0 reports **exactly 44.0** passes/token and 1.0 positions/token; A1 reports 10.68 / 1.125. Anything else = counter bug, fix before proceeding | |
+| G1 | `perf/{layer_passes_per_token, positions_per_token, flop_proxy, model_tflops, mfu}` land for every arm | Nominal (analytic from config, T̄=6): `flop_proxy` A0 = **44.0**, A1 = **12.0**, positions 1.0 / 1.125 — exactly. Realized (`layer_passes_per_token`, measured): A0 = **42.0 ± 0.5** (depth is `clamp(Poisson(6),1,8)`, mean 5.67 — NOT 6), A1 ≈ 10.68. **Reviewer fix:** the original gate demanded a realized counter report exactly 44.0; it would have failed on the clamp. Anything outside these = counter bug, fix before proceeding | |
 | G2 | measured bf16 dense GEMM ceiling at MORPH shapes on this 5090 | a number, plus the shape sweep it came from. Expect well under any marketing figure | |
-| G3 | EDM sign resolved against the authors' released code | v4's rendered Eq (3)–(5) sign is a typo; code uses `α = σ_b/σ_{b-1}` | |
+| G3 | EDM sign resolved against the authors' released code ([github.com/SakanaAI/DiffusionBlocks](https://github.com/SakanaAI/DiffusionBlocks); README suggests ViT-only — the sampler still settles the sign) | v4's rendered Eq (3)–(5) sign is a typo (it starts at Eq (3): a correct Euler step of Eq (1) reads `z + Δσ·σ∇log p`); code uses `α = σ_b/σ_{b-1}`. Fallback if the sampler is absent: the derivation + a landing unit test (`y + σ_b·ε`) in our code | |
 | G4 | A0 shape facts reproduce from the ledger on today's master | 0.947 s/step ± 5 %, 20.32 GB ± 0.5 GB. Drift here invalidates every anchor in §2 | |
-| G5 | `slot_layout=None` still bit-identical; DB off is bit-identical to today | step-0 loss **11.2379** (the A0 marker) | |
+| G5 | `slot_layout=None` still bit-identical; DB off is bit-identical to today | step-0 loss **11.2379** (the A0 marker). **Reviewer note:** this needs a GPU forward with the Triton kernels — it is confirmed at the first GPU window, at Phase-B step 0. The Phase-A form of this gate is a CPU forward-parity test in the `tests/test_tul_forward.py` pattern; step-0 loss alone is a one-point forward check, the CPU test covers the path | |
 
 ### 4.2 Phase 1 — the decisive 2×2, plus DB-B1
 
@@ -263,13 +283,19 @@ Recomputed after the §3.3 fix (uniform 1/3 block visits, not mass-proportional)
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | DB-1 | DB-B1 (B=1, whole net) | 14.0 | 2.0 | 28.0 | 0.62 – 0.80 | 18k – 23k (**1.2 – 1.5×**) | 14 – 19 GB | |
 | DB-2 | DB-B3 (`x0` conditioning) | 4.67 | 2.0 | 9.34 | 0.33 – 0.47 | 30k – 43k (**2.0 – 2.9×**) | 11 – 16 GB | |
-| DB-3 | DB-B3 + TUL (T-a target) | 2.79 | 2.25 | 6.28 | 0.27 – 0.40 | 36k – 53k (**2.4 – 3.5×**) | 13 – 19 GB | |
-| DB-4 | DB-B1 + TUL | 8.375 | 2.25 | 18.8 | 0.47 – 0.62 | 23k – 30k (**1.5 – 2.0×**) | 15 – 21 GB | |
+| DB-3 | DB-B3 + TUL (T-a target) | 2.79 | 2.25 | 6.28 | 0.27 – 0.47 | 31k – 53k (**2.0 – 3.5×**) | 13 – 19 GB | |
+| DB-4 | DB-B1 + TUL | 8.375 | 2.25 | 18.8 | 0.47 – 0.68 | 21k – 30k (**1.4 – 2.0×**) | 15 – 21 GB | |
 
 If the shifted-`x0` conditioning replaces the clean\|noisy concatenation (assessment §4.3 / open
 question in conversation), `pos/tok` halves for every row and each flop_proxy halves with it —
 DB-2 → 4.67, DB-3 → 3.14. Those are NOT pre-registered yet; the concat numbers above are the
 committed prediction until that design call is made.
+
+**Reviewer widening (2026-08-19, before any run).** DB-3/DB-4 upper s/step edges widened
+(0.40→0.47, 0.62→0.68): the cost model misses its held-out point A1 by +46 % (§2.1 note), and the
+missing term — TUL pack/gather overhead, invisible to `flop_proxy` — is carried by exactly these
+two arms. DB-1/DB-2 are untouched (single-pass, full positions: the fit's own regime). Widened
+while nothing has run; the no-edits-after-start rule is intact.
 
 **Reasoning behind the tok/s bands.** Cost model `a + b·proxy` with `a` raised to 0.17–0.21 for the
 AdaLN + noising overhead, `b = 0.018`. DB-2: `0.19 + 11×0.018 = 0.39 s`, band widened for the 2×
@@ -287,7 +313,7 @@ actual bottleneck, which is activations at sequence length, not parameters.
 | # | Prediction | Why it matters | Falsified by |
 | --- | --- | --- | --- |
 | P1 | **The memory win is worth more than the FLOP win**, because it lifts batch 14 → 24+, and batch is the only lever on the `a=0.156 s` floor. A1 currently **OOMs at batch 16**. | If true, the next run after Phase 1 is a batch sweep, not another arm | DB arms landing ≥ 19 GB, i.e. no batch headroom bought |
-| P2 | **DB-B3 ≈ DB-B1 on bridge quality** despite 2.5× less compute, because Table 8 shows moderate `B` *beating* `B=1` (FID 9.90 vs 12.09) | Decides whether block independence is free or paid for | DB-B3 gen-PPL more than 10 % worse than DB-B1 |
+| P2 | **DB-B3 ≈ DB-B1 on bridge quality** despite 2.5× less compute, because Table 8 shows moderate `B` *beating* `B=1` (FID 9.90 vs 12.09). *Reviewer caveat: Table 8 is ImageNet FID on untied plain-layer blocks; for language the paper's best was B=4 (App. F). Directional support only — not the same experiment, and not a weight-tied core.* | Decides whether block independence is free or paid for | DB-B3 gen-PPL more than 10 % worse than DB-B1 |
 | P3 | **The 320-dim `x0` slice is wide enough** — DB-B3 ≈ DB-B3p within noise, so true block independence holds. *Pre-registration note: I predicted the opposite (too thin); Wolfe overruled on architecture knowledge. Recording both so the outcome scores somebody.* | Decides whether "true block independence" survives contact with MORPH's channel layout | DB-B3p beating DB-B3 by a visible margin |
 
 ### 4.4 Bridge quality, pre-registered
@@ -364,8 +390,8 @@ it is the idea extracted from it, and it lands on the existing ledger.
 | --- | --- | --- | --- |
 | R1 | clean\|noisy causal mask through CCA + CSA + HCA + XSA needs a new Triton mask path | every DB arm | unscoped — assume this is the largest single work item |
 | R2 | 320-dim `x0` ctx slice too thin to be the core's only conditioning | DB-B3 | **downgraded** — Wolfe's call is that 320 of 1024 is wide enough. DB-5 becomes confirmatory, not a required fallback. See P3 |
-| R3a | **Target scale must be pinned** so `σ_data` is real (§3.1 item 1). For the Euclidean + bigram parts, L2 normalisation. For **Lorentz** (`lorentz_fraction 0.25`) the analogue is a fixed hyperboloid radius, not an L2 ball — Wolfe's read is that Lorentz likely does not need L2 specifically, and that is consistent with the mechanism | every DB arm | design known, untested |
-| R3b | **`y + σ·ε` with isotropic Gaussian noise leaves the hyperboloid.** It is not a valid Lorentz point at any σ > 0. Either noise in the tangent space and exp-map back, or accept that the diffusion runs in ambient Euclidean coordinates and the Lorentz structure exists only at readout | every DB arm | **BLOCKING — must be decided before an arm runs.** There is no "suboptimal default" here; there is only on-manifold or off-manifold |
+| R3a | **Target scale must be pinned** so `σ_data` is real (§3.1 item 1). **Per-slice, not global** (reviewer): the euclidean slice inits near unit norm, the Lorentz TANGENT slice inits at std 0.005 (`embeddings.py`: `space_embed` std 0.005, log-map ≈ identity near origin) — roughly two orders of magnitude apart, so one global `σ_data = 0.5` drowns the Lorentz slice at every σ. Rule must be measured on the QUANTISED embedding output (int6 `embed_quant` is ON in the anchor configs) | every DB arm | design known, untested — the live blocker; plan A2 |
+| R3b | `y + σ·ε` on a hyperboloid point would be off-manifold — but MORPH never exposes one. **Reviewer resolution (2026-08-19), from `morph/model/embeddings.py::LorentzEmbedding`:** the module log-maps the hyperboloid point to the origin tangent space INSIDE the embedding (`log_map_origin(project_to_hyperboloid(·))`), so the network — and the target `y` — lives in ambient Euclidean coordinates and the paper's recipe never touches hyperboloid coordinates. The "ambient Euclidean, Lorentz at readout" branch of the original question is the status quo, not a change | nothing, once R3a is settled | **downgraded from BLOCKING** — resolved by code reading; Wolfe signs off on keeping the status quo (O1) |
 | R3c | Embedding *collapse* in the paper's own sense (all embeddings → one vector, Diffusion-LM) may still bite independently of scale | every DB arm | monitored by kill criterion 4 |
 | R4 | slot denoising target (§3.4) | DB-3, DB-4 | pre-registered T-a, fallback T-c |
 | R5 | step-counted schedule stretch by B | any B=3 arm on `base.yaml` | mitigations in §4.6, none implemented |
