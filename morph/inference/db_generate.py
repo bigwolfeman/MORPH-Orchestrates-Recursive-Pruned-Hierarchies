@@ -90,6 +90,15 @@ def db_sample(model, input_ids: Tensor, runtime, n_steps: int | None = None,
             else int(model.cfg.mean_depth)
     n_steps = max(int(n_steps), 2)
 
+    if generator is not None and generator.device.type != input_ids.device.type:
+        # Deliberately NOT auto-converted: a CPU generator and a CUDA generator with the same
+        # seed produce DIFFERENT streams, so silently swapping one for the other would change
+        # generations between two runs that look identical on the command line. Raise instead.
+        raise ValueError(
+            f"generator is on '{generator.device.type}' but the model is on "
+            f"'{input_ids.device.type}'. Pass torch.Generator(device='{input_ids.device.type}') "
+            f"— CPU and CUDA RNG streams differ, so this is not auto-corrected."
+        )
     sigmas = sch.inference_sigmas(n_steps).to(input_ids.device)
     if not bool((sigmas[:-1] > sigmas[1:]).all()):
         raise ValueError("inference_sigmas must be strictly descending (euler_step reads "

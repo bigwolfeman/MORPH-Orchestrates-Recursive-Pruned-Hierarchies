@@ -147,3 +147,35 @@ def test_sampler_output_feeds_the_bridge_metrics():
     assert 0.0 <= rep["bridge/rep4@32"] <= 1.0
     assert 0.0 < rep["bridge/distinct2"] <= 1.0
     assert rep["bridge/n_sequences"] == 4
+
+
+def test_generator_device_mismatch_raises_an_actionable_error():
+    """A CPU generator with a CUDA model must fail LOUDLY, not be silently converted.
+
+    torch's own message ("Expected a 'cuda' device type for generator but found 'cpu'") comes
+    from deep inside randn and does not say what to do. This surfaced only on the GPU bridge
+    run — the CPU shakeout could not catch it, because there the two devices agreed.
+
+    Not auto-corrected on purpose: CPU and CUDA RNG streams differ for the same seed, so
+    swapping one for the other would change generations between two runs that look identical.
+    """
+    cfg = DBConfig(mode="b1", conditioning="x0_inject")
+    m = _model(cfg)
+    rt = _RT(cfg)
+    ids = torch.randint(5, V, (1, 8))
+
+    class _FakeCudaGen:
+        device = torch.device("cuda:0")
+
+    with pytest.raises(ValueError, match="RNG streams differ"):
+        db_sample(m, ids, rt, n_steps=3, generator=_FakeCudaGen())
+
+
+def test_matching_generator_device_is_accepted():
+    cfg = DBConfig(mode="b1", conditioning="x0_inject")
+    m = _model(cfg)
+    rt = _RT(cfg)
+    ids = torch.randint(5, V, (1, 8))
+    lg, _ = db_sample(m, ids, rt, n_steps=3,
+                      generator=torch.Generator(device="cpu").manual_seed(0))
+    assert torch.isfinite(lg).all()
