@@ -375,10 +375,16 @@ def test_untrained_model_gets_no_free_lunch_at_median_sigma():
         #     per-component 0.5     -> CE 0.0003              (0.004 %)       the old bug
         # The two regimes are three orders of magnitude apart, so any bar in between works;
         # 0.4 is chosen to be comfortably clear of both.
-        assert ce > 0.4 * ln_v, (
-            f"DEGENERATE at sigma={sigma_val}: untrained CE {ce:.4f} is far below ln(V)="
-            f"{ln_v:.2f}. The target scale is letting c_skip*z_t reveal the label, so these "
-            f"draws carry no gradient. See SliceScaler's docstring."
+        # NOTE (2026-08-19): this bar is now about GRADIENT EXISTENCE, not difficulty.
+        # A working readout (logit_scale ~16) makes low-sigma CE genuinely low, because the
+        # answer IS in z there. The catastrophe this guards is the original one: CE ~0.0003,
+        # i.e. literally no gradient. Language content is measured separately by the
+        # scrambled control (val/db_lang_nats), which is the right instrument for "is it
+        # learning the text or just autoencoding".
+        assert ce > 0.05, (
+            f"NO GRADIENT at sigma={sigma_val}: untrained CE {ce:.4f} is ~0, so these draws "
+            f"teach nothing at all (the original failure was 0.0003). Language content is a "
+            f"separate question -- see val/db_lang_nats."
         )
 
 
@@ -541,22 +547,60 @@ def test_db_checkpoint_round_trips_the_conditioning_params():
 
 # ── the fixes for what the audit found (2026-08-19) ──────────────────────────
 
-def test_logit_scale_starts_at_identity_and_is_learnable():
-    """Init MUST be identity: a high starting temperature re-creates the degenerate regime.
+def test_logit_scale_init_clears_the_measured_sampler_floor():
+    """The scale must be large enough that the sampler's bridge can COMMIT to a token.
 
-    Measured: at logit_scale_init=4.0 an untrained model scored CE 1.13 at sigma=0.3 against
-    ln V = 7.62, because amplifying c_skip*z hands over the answer before anything is learned.
-    Starting at 1.0 means the change can only help relative to the audited baseline.
+    Measured on the real V=49169 table with unit-norm slices (row norm sqrt2): a PERFECT
+    denoised vector gives correct logit 2.00 and max competitor 0.878, so the margin is
+    1.122*scale. At scale 1.0 the softmax is flat -> CE 8.63 even when perfectly right, and
+    `softmax(logits) @ E` returns norm 1.045, the embedding CENTROID (1.081), not the target
+    row (1.414). Every Euler step then contracts z toward the centroid: composed-chain CE
+    went 10.06 (4 steps) -> 11.90 (32 steps) against ln V 10.80, i.e. divergence.
+
+    Requirement: 1.122*scale > ln V, so scale > ~9.6. This test fails if anyone lowers it
+    back toward identity, which would silently break generation while training still looked
+    fine.
     """
+    import math as _m
+
     cfg = DBConfig(mode="b3", conditioning="x0_inject")
-    assert cfg.logit_scale_init == 1.0
+    ln_v_real = _m.log(49169)
+    margin_per_unit = 2.0 - 0.878
+    assert cfg.logit_scale_init * margin_per_unit > ln_v_real, (
+        f"logit_scale_init={cfg.logit_scale_init} gives margin "
+        f"{cfg.logit_scale_init * margin_per_unit:.2f} < ln V {ln_v_real:.2f}; the sampler "
+        f"bridge cannot commit and the Euler chain will contract to the centroid.")
+
     m = _model(cfg)
     assert m.db_logit_scale is not None
-    assert float(m.db_logit_scale.detach().exp()) == pytest.approx(1.0, abs=1e-6)
-    assert m.db_logit_scale.requires_grad
+    assert float(m.db_logit_scale.detach().exp()) == pytest.approx(
+        cfg.logit_scale_init, rel=1e-5)
+    assert m.db_logit_scale.requires_grad, "the scale must be learnable, not frozen"
 
-    x = torch.randn(2, 4, 7)
-    assert torch.allclose(m.db_scale_logits(x), x), "init must be exactly identity"
+
+def test_logit_scale_makes_the_bridge_commit_to_a_row():
+    """With an adequate scale, softmax @ E must return the TARGET row, not the centroid.
+
+    This is the property the composed Euler chain depends on and that scale 1.0 violated.
+    """
+    from morph.model.diffusion_blocks import expected_embedding
+
+    torch.manual_seed(0)
+    V_, d_ = 4096, 256
+    E = torch.nn.functional.normalize(torch.randn(V_, d_), dim=-1)
+    y = E[77]
+    centroid_n = float(E.mean(0).norm())
+
+    flat = expected_embedding((y @ E.T).unsqueeze(0), E)
+    sharp = expected_embedding((16.0 * (y @ E.T)).unsqueeze(0), E)
+
+    # flat: lands near the centroid, far from the target
+    assert float((flat - y).norm()) > 0.5
+    # sharp: lands on the target row
+    assert float((sharp - y).norm()) < 0.05, (
+        f"sharp bridge did not commit: ||out - y|| = {float((sharp - y).norm()):.4f}")
+    assert abs(float(sharp.norm()) - 1.0) < 0.05
+    assert abs(float(flat.norm()) - centroid_n) < 0.3
 
 
 def test_logit_scale_actually_scales_and_receives_gradient():
