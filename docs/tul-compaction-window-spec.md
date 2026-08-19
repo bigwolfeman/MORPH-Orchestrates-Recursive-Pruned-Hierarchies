@@ -1,6 +1,24 @@
 # Arm CW — force the latent to be load-bearing by deleting the cheap channel
 
-Status: SPEC. Not implemented. Written 2026-08-18.
+Status: IMPLEMENTED, EVAL SCREEN RUN 2026-08-18. Not trained.
+
+**Eval screen result** (`checkpoints/morph/tul-a1-acap1/step_20000.pt`, cut=576,
+500 val batches, 3.52M scored tokens — full numbers and paired stats in
+`ignore/Ai-notes/08-18-2026/arm-CW/RESULTS.md`):
+
+| arm | CE (nats) |
+|---|---|
+| CW0 | 3.2985 |
+| CW1 | 3.3439 |
+| CW2 | 3.3530 |
+| CW3 | 3.3732 |
+
+CW0 < CW1 < CW2 < CW3, exactly the order predicted below. CW1 beats CW2 by 0.009
+nats (95% bootstrap CI [0.0078, 0.0102], excludes 0, 500 paired batches) — CW2 does
+NOT match CW1. Per this spec's own decision rule (below), that is the POSITIVE
+result: the slot already carries something beyond a surviving position, unforced.
+Small effect (~0.27% of CW0's CE), and this is still a SCREEN, not the training
+run this spec's own motivation was building toward — see "Scope of this task".
 
 ## Why this arm and not another
 
