@@ -137,7 +137,11 @@ until the first ~200 measured steps of each arm check them.
    model can escape the task outright by inflating `‖y‖` until σ stops corrupting anything. So the
    requirement is "make `σ_data` a number we actually know", which L2 normalisation is one way to
    achieve and not the only way.
-2. **log-normal `p_noise`**, `log σ ~ N(P_mean, P_std²)`, EDM defaults.
+2. **log-normal `p_noise`**, `log σ ~ N(P_mean, P_std²)`. Their actual values, App. E.1 —
+   `P_mean = −1.2`, `P_std = 1.2`, `[σ_min, σ_max] = [0.002, 80]`, Euler 50 steps at inference
+   unless stated. Pin these; "EDM defaults" is not reproducible, and the equi-probability
+   boundaries `σ_b = exp(P_mean + P_std·Φ⁻¹(q_b))` are computed FROM them. Note their AR text
+   run used only **4** steps, not 50 (App. E.4) — see DB-13.
 3. **Equi-probability σ partitioning** (§3.3) — `σ_b = exp(P_mean + P_std·Φ⁻¹(q_b))`. Table 7 says
    this matters far more than the layer split (FID 38.03 vs 43.53), so it is not optional.
 4. **EDM weighting** `w(σ) = (σ² + σ_data²)/(σ·σ_data)²`, `σ_data = 0.5`, plus EDM preconditioning.
