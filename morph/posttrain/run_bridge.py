@@ -36,6 +36,11 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no-teacher", action="store_true")
+    ap.add_argument("--eager", action="store_true",
+                    help="force model.use_kernels=false so the whole path can be smoke-tested "
+                         "on CPU (Triton needs a CUDA driver). Kernel-vs-eager is the same "
+                         "math and adds no parameters, so the checkpoint still loads — but "
+                         "REAL bridge numbers should be produced on GPU with kernels on.")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
 
@@ -55,32 +60,80 @@ def main() -> int:
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(a.seed)
 
+    if a.eager:
+        cfg.model.use_kernels = False
+        cfg.model.hc_use_kernel = False
+        print("  [eager] kernels OFF (CPU smoke path)", flush=True)
+
     db = build_db_runtime(cfg)
     mc = build_morph_config(cfg, tul=None)
     model = MORPHTransformer(mc)
     if db is not None:
         model.build_db_modules(db.model_cfg)
+
+    # Apply the SAME quantisation transforms, in the same order, that the training run
+    # applied. They RENAME tensors in the state_dict (ternary/int6 add
+    # `parametrizations.weight.original`), so a model rebuilt without them has no home for
+    # 45 saved tensors and the project's load_checkpoint correctly refuses. quant_setup's
+    # own docstring says it: "anything rebuilding a trained model must apply the SAME ones."
+    from morph.training.quant_setup import apply_quantization
+    _qm = apply_quantization(model, cfg)
+    print(f"  quant applied: ternary={_qm['ternary'] is not None} "
+          f"embed={_qm['embed_quant'] is not None}", flush=True)
+
     model = model.to(dev).eval()
 
+    # Use the project's own loader, NOT a bare load_state_dict. train.py::load_checkpoint
+    # already reconstructs module structure in the order the live run mutated it (carve/BCSR,
+    # ReMoE routers, prune mask, saliency EMA) and handles the `mlp._orig_mod.` nesting that
+    # torch.compile introduces. A naive load reported "missing 129, unexpected 129" — 112 of
+    # those are compiled-MLP tensors whose prefix did not line up, i.e. it would have
+    # generated from a partly RANDOM model and produced a bridge row that looked real.
+    from morph.training.train import load_checkpoint
+
+    scaler = torch.amp.GradScaler("cuda", enabled=False)
+    step_loaded, _meta, _ok = load_checkpoint(a.ckpt, model, scaler, torch.device(dev))
+    print(f"loaded {a.ckpt} @ step {step_loaded}", flush=True)
+
+    # Post-load audit. The db_*-only check that shipped first was too narrow: it passed while
+    # 129 other keys silently missed. Assert the WHOLE state matched.
     ck = torch.load(a.ckpt, map_location="cpu", weights_only=False)
-    sd = ck.get("model", ck.get("model_state_dict"))
-    if sd is None:
-        raise SystemExit(f"no model state in {a.ckpt}: keys={list(ck)[:8]}")
-    missing, unexpected = model.load_state_dict(sd, strict=False)
-    db_missing = [k for k in missing if k.startswith(("db_gates", "db_sigma_cond"))]
-    if db is not None and db_missing:
-        # Loud: silently generating from randomly-initialised conditioning would produce a
-        # bridge row that looks real and means nothing.
-        raise SystemExit(f"checkpoint is missing DB conditioning params: {db_missing[:5]}")
-    print(f"loaded {a.ckpt}  (missing {len(missing)}, unexpected {len(unexpected)})",
-          flush=True)
+    sd = ck.get("model", ck.get("model_state_dict")) or {}
+    # Normalise the SAME equivalence class load_checkpoint uses internally: torch.compile
+    # nests compiled submodules under `._orig_mod.`, so `coda.0.mlp._orig_mod.0.down` and
+    # `coda.0.mlp.0.down` are the same tensor. Comparing raw key sets flagged 112 false
+    # mismatches AFTER a load that had in fact succeeded.
+    def _norm(k: str) -> str:
+        return k.replace("._orig_mod.", ".")
+
+    live = {_norm(k) for k in model.state_dict()}
+    saved = {_norm(k) for k in sd}
+    miss, unexp = sorted(saved - live), sorted(live - saved)
+    if miss or unexp:
+        raise SystemExit(
+            f"state_dict mismatch after load: {len(miss)} saved-but-absent, "
+            f"{len(unexp)} live-but-unsaved.\n  saved-only: {miss[:4]}\n"
+            f"  live-only: {unexp[:4]}\n"
+            f"Generating from a partly-random model would produce a meaningless bridge row.")
+    if db is not None:
+        n_db = sum(1 for k in saved if k.startswith(("db_gates", "db_sigma_cond")))
+        if n_db == 0:
+            raise SystemExit("checkpoint carries no DB conditioning params")
+        print(f"  DB conditioning params restored: {n_db}", flush=True)
 
     tok = AutoTokenizer.from_pretrained(str(cfg.data.tokenizer))
     seq = int(cfg.data.seq_len)
 
     # Prompts from the SAME val stream both families see, so neither arm gets easier text.
-    from morph.training.data import get_data_loaders
-    _, val_loader = get_data_loaders(cfg)
+    from morph.training.data import create_dataloader
+    # Match train.py::_make_val_loader EXACTLY: split="validation" with
+    # skip_samples=50_000. The arrow source has only a `train` split, so "validation" is a
+    # held-out slice of the same stream — and the skip is what holds it out. Getting this
+    # wrong would draw bridge prompts from TRAINING text, quietly flattering every arm.
+    val_loader = iter(create_dataloader(
+        str(cfg.data.tokenizer), str(cfg.data.dataset), seq, a.batch,
+        split="validation", skip_samples=50_000,
+    ))
     prompts = []
     while sum(p.shape[0] for p in prompts) < a.n_prompts:
         b = next(val_loader)
