@@ -1699,6 +1699,11 @@ def main(cfg: DictConfig) -> None:
         if _mem_probe:
             torch.cuda.reset_peak_memory_stats()
 
+        # A stage change and a phase change can land on the SAME step. Both only mark the
+        # loader dirty; ONE rebuild happens after both, so the second never discards a
+        # freshly-prefetched stream the first just started.
+        _rebuild_loader = False
+
         # ── Curriculum stage transition: checkpoint → RoPE re-anchor → loader.set_stage →
         #    micro-batch/grad-accum swap. Two independent risks at a step-up (activation OOM
         #    and the PE-shift loss spike) → the pre-step-up checkpoint is the recovery point. ──
@@ -1721,7 +1726,7 @@ def main(cfg: DictConfig) -> None:
             cur_grad_accum = _ceil_div(_eff_batch, _microbatch[_k])
             seq_len = _boundaries[_k]
             batch_size = _microbatch[_k] * cur_grad_accum          # effective, for tok/s logging
-            train_loader = _rebuild_train_loader()   # carries bag_size AND tul= from the phase
+            _rebuild_loader = True
             print(f"[curriculum] → stage {_k}: seq_len={seq_len} context={_contexts[_k]} "
                   f"micro_batch={_microbatch[_k]} grad_accum={cur_grad_accum} eff_batch={batch_size} "
                   f"(RoPE re-anchored on {len(_rope_mods)} modules)", flush=True)
@@ -1747,8 +1752,13 @@ def main(cfg: DictConfig) -> None:
                     _mm.static_graphs_invalidate("TUL activation")
             print(f"[phase] {phase} → {_next} @ step {step}. Switch ckpt: {_sw}", flush=True)
             phase = _next
-            train_loader = _rebuild_train_loader()
+            _rebuild_loader = True
             val_loader = _make_val_loader(phase.tul_on)
+
+        # The ONE rebuild. Reads the live phase and cur_stage, so whichever block(s) fired,
+        # the new loader carries both.
+        if _rebuild_loader:
+            train_loader = _rebuild_train_loader()
 
         # ── Static-region CUDA graphs: one-time build (MORPH_STATIC_GRAPHS) ──
         if _sg_pending and step >= _sg_build_step:
