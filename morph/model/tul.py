@@ -20,8 +20,8 @@ from torch import Tensor
 
 from .tul_layout import SlotLayout
 
-__all__ = ["TULConfig", "TULSlots", "bag_mean", "compact_index", "gather_positions",
-           "scatter_positions"]
+__all__ = ["TULConfig", "TULSlots", "bag_mean", "compact_index", "cw2_retain_mask",
+           "gather_positions", "scatter_positions", "window_drop_mask"]
 
 
 @dataclass
@@ -47,6 +47,10 @@ class TULConfig:
     carry: bool = False                  # arm (§3.5)
     xattn: bool = False                  # arm (§3.5)
     bcast: bool = False                  # arm (§3.5)
+    coda_token_cut: int = 0              # arm CW (docs/tul-compaction-window-spec.md) — drop
+                                          # TOKEN positions with row index < C from the coda's
+                                          # sequence; every slot stays regardless of its index.
+                                          # 0 = off, bit-identical (no new tensors, no new ops).
 
     def __post_init__(self) -> None:
         if self.prefix_k < 1:
@@ -56,6 +60,9 @@ class TULConfig:
         if not 0.0 <= self.token_state_dropout <= 1.0:
             raise ValueError(
                 f"tul.token_state_dropout must be in [0,1], got {self.token_state_dropout}")
+        if self.coda_token_cut < 0:
+            raise ValueError(
+                f"tul.coda_token_cut must be ≥ 0, got {self.coda_token_cut}")
         # Spec §3.5 lists these as arms that are NOT in v1. A config key that is silently
         # ignored is worse than a missing one — fail loudly instead (no-theater).
         for name in ("stp_lambda", "set_lambda"):
@@ -162,12 +169,66 @@ def compact_index(slot_mask: Tensor) -> Tensor:
     needs no per-position attention mask the fused kernels may not have". Token order is
     preserved (stable sort), so the compacted sequence is the plain token stream; the
     tail addresses row ``L`` and is discarded by :func:`gather_positions`' dump row.
+
+    Despite the name, the argument is generic: any ``[B, L]`` bool tensor that is True at
+    the positions to push to the dump row works (arm CW reuses this with a token-cut mask
+    instead of the slot mask, docs/tul-compaction-window-spec.md §"the change").
     """
     B, L = slot_mask.shape
     order = torch.argsort(slot_mask.to(torch.uint8), dim=1, stable=True)
     n_tok = (~slot_mask).sum(dim=1, keepdim=True)
     pos = torch.arange(L, device=slot_mask.device).unsqueeze(0)
     return torch.where(pos < n_tok, order, torch.full_like(order, L))
+
+
+def window_drop_mask(slot_mask: Tensor, cut: int) -> Tensor:
+    """``[B, L]`` bool, True at TOKEN positions with row index ``< cut`` (arm CW's mirror
+    of :func:`compact_index`'s slot drop — docs/tul-compaction-window-spec.md).
+
+    Every slot position is False here regardless of its row index — "KEEP every slot
+    position, at every index" is the spec's line, and this is a GLOBAL cut (the same
+    ``cut`` for every row), not a per-row window: "every query in the coda sees the same
+    reduced sequence" is deliberate (spec §"the change" — a per-query window needs a mask,
+    which spec §7.2 already rules out for the fused kernels).
+    """
+    B, L = slot_mask.shape
+    pos = torch.arange(L, device=slot_mask.device).unsqueeze(0).expand(B, L)
+    return (pos < cut) & (~slot_mask)
+
+
+def cw2_retain_mask(candidates: Tensor, budget: Tensor, seed: int) -> Tensor:
+    """``[B, L]`` bool: a per-row SEEDED random ``budget[row]``-sized subset of ``candidates``.
+
+    Arm CW2's control (docs/tul-compaction-window-spec.md): drop every slot and every
+    early token EXCEPT an equal-KV-budget random subset. Vectorised with the same
+    argsort + row-count-threshold trick as :func:`compact_index` — draw one uniform score
+    per position, push non-candidates off the front with a score that always sorts last,
+    then keep the ``budget[row]`` lowest-scored candidates in each row. Reproducible: the
+    RNG state used is seeded here and nowhere else, so the same ``seed`` always retains
+    the same positions.
+
+    Args:
+        candidates: ``[B, L]`` bool — the pool a position may be drawn from (e.g. token
+                    positions with row index ``< C``). Never a slot position.
+        budget:     ``[B]`` int — how many of each row's candidates to retain. Every
+                    candidate sorts strictly before every non-candidate (score ``< 1``
+                    vs. exactly ``2.0``), so a candidate's RANK never exceeds its row's
+                    candidate count regardless of ``budget`` — a ``budget`` that exceeds
+                    the pool is a no-op (retains the whole pool), not an error, with no
+                    separate clamp needed: the final ``candidates &`` intersection is
+                    what actually enforces it.
+        seed:       int, logged by the caller so the eval screen is reproducible.
+    """
+    B, L = candidates.shape
+    gen = torch.Generator(device=candidates.device)
+    gen.manual_seed(int(seed))
+    scores = torch.rand(B, L, generator=gen, device=candidates.device)
+    scores = torch.where(candidates, scores, torch.full_like(scores, 2.0))  # non-candidates sort last
+    order = torch.argsort(scores, dim=1, stable=True)
+    rank = torch.empty_like(order)
+    ar = torch.arange(L, device=candidates.device).unsqueeze(0).expand(B, L)
+    rank.scatter_(1, order, ar)
+    return candidates & (rank < budget.unsqueeze(1))
 
 
 # ── parameters ───────────────────────────────────────────────────────────────
