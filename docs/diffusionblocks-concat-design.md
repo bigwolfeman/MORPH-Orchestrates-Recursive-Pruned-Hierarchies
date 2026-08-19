@@ -111,13 +111,28 @@ AdEMAMix optimizer, ternary/int6 QAT, the σ schedule/EDM precond math, `flops.p
    `db_generate.py`) must, per Euler step, run the clean pass once then the noisy denoise.
    The clean context is fixed across the σ chain for a given prefix — cache it once per step,
    not per σ.
-2. **Gradient checkpointing over two streams.** The DB path already checkpoints per layer
-   (`_db_run_section`). The clean pass adds activations; checkpoint it too, or run it under
-   `no_grad` if the clean stream carries no loss (it does not — only noisy positions have CE).
-   **Clean stream under `no_grad` is the likely correct and cheap choice** — verify grads to
-   the prelude still flow through the noisy stream's attention over clean keys (they do: clean
-   k/v are inputs to the noisy softmax, so grad reaches the clean projections via that path
-   even if the clean stream's *own* readout is absent). Confirm before assuming.
+2. **Gradient checkpointing over two streams — the clean stream must be grad-bearing.**
+   The DB path already checkpoints per layer (`_db_run_section`). The clean pass carries no
+   loss of its own (only noisy positions have CE), so it is tempting to run it under
+   `no_grad`. **That is wrong and repeats the dead-context failure.** The context encoder
+   (prelude) gets gradient ONLY through the noisy stream's attention over the clean keys; put
+   the clean forward under `no_grad` and its k/v detach, so the prelude never trains on the DB
+   objective — exactly the near-dead-context pathology `x0_inject` had. Therefore run the
+   clean stream **with grad** and **checkpoint it** to keep activation memory ~1×
+   (recompute-in-backward), rather than holding activations or detaching them.
+
+### 5a. Memory cost — no quadratic matrix
+
+Worth stating because the paper's plain-Llama-2 concat DOES pay it and MORPH does not.
+The noise is `z_σ = y + σ·ε`, elementwise `[B, L, d]` — no `[L, L]` tensor. MORPH attention
+never builds a dense `[L, L]` score matrix at all: CSA/HCA are flash online-softmax over
+COMPRESSED blocks with top-k (`fused_csa_attention`, `attention.py:764`, "never materializes
+`C_sel`"), and the window branch is `[B, S, window]`. The two-source change adds a second
+small set of compressed clean blocks (`C_comp_clean [B, n_blocks, D]`, `n_blocks = L/m`) to
+that same flash softmax — still no dense matrix. The paper's `[2L, 2L]` = 4× dense cost is a
+plain-attention artifact and does not transfer. The real cost is ~2× **compute** (two
+length-L passes) at ~1× gradient-activation memory (checkpointed), plus the small cross-pass
+clean k/v + blocks + GLA state.
 3. **torch.compile graph.** Two-source attention adds a second key source to the fused
    kernels; keep the graph branch-free (no `if two_source:` in forward — bake it into the DB
    module, per the project's no-runtime-flags rule).
