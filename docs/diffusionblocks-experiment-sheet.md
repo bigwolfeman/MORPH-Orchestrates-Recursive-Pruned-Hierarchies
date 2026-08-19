@@ -420,6 +420,84 @@ settles well above the 14–19 GB band with checkpointing in place, that is a **
 the method on this architecture**, not another bug — and it would make DB-B3 (where only
 one of three sections runs) the only arm where the memory argument can pay.
 
+### 4.4d MEASURED — Phase 1 complete (2026-08-19). Compute claim holds; memory claim holds.
+
+All at `tul_short.yaml` shape (seq 1024 × batch 14), dense, TST off, ternary + int6 QAT ON,
+this 5090, torch 2.11.0+cu128. **Peak is the TRAINING STEP** — see the correction below.
+
+| arm | peak | tok/s | vs A0 | flop_proxy | TFLOPs | CE trend (lnV = 10.80) |
+| --- | --- | --- | --- | --- | --- | --- |
+| A0 (`tul_a0`) | 20.51 GB | 16,001 | 1.00× | 44.00 | 87.7 | — |
+| `db_b1` | **9.31 GB** (2.20×) | 23,574 | **1.47×** | 14.00 | 43.7 | 9.42 → 4.84 @300 |
+| `db_b3` | **6.82 GB** (3.01×) | 48,731 | **3.05×** | 4.67 | 30.6 | 8.54 → 7.61 @60 |
+
+Isolated breakdown (own harness, plain AdamW, no compile) — where the memory goes:
+
+| | peak | params | grads | opt | activations | tensors w/ grad |
+| --- | --- | --- | --- | --- | --- | --- |
+| A0 | 22.15 | 1.09 | 1.06 | 2.11 | 17.90 | 484/512 |
+| `db_b1` | 10.35 | 1.10 | 1.06 | 2.12 | 6.07 | 491/522 |
+| `db_b3` | 7.33 | 1.10 | **0.58** | **1.73** | 3.93 | **150/522** |
+
+**App. G's `B`-fold reduction DOES materialise, with no offloading.** Under `b3` only 150 of
+522 tensors receive gradients, cutting grads 1.06 → 0.58 and optimizer state 2.11 → 1.73;
+activations fall 17.90 → 3.93. An earlier note in this sheet claimed the saving was
+unrealizable in a block-sampling loop — that was wrong.
+
+**⚠ The metric bug that hid all of it.** `perf/peak_mem_*` reported the WARMUP COMPILE, not
+the step. `max_memory_allocated` is monotonic and nothing reset it; the warmup runs 56 passes
+over every core active-set size (14…1), which costs about an A0 step. The tell was in the
+logs and went unread for five runs: `peak=19.85GB` **identical at step 0, 20, 40 … 280**. A
+real peak moves. A0 was immune (its step genuinely is ~20.5 GB) which is exactly why the DB
+arms looked like they saved nothing. Fixed by a one-shot reset at `start_step+5`. **Any peak
+figure recorded before commit `db2e773` is the compile, not the step.**
+
+Residual: the warmup still allocates ~20 GB even for a DB arm whose step is 7 GB, because it
+compiles core-loop shapes the DB path never executes. That caps batch size and is now the
+gating item for the batch sweep (DB-6), not an optimisation.
+
+### 4.4e MEASURED — three deviations from the paper, each forced by a measurement
+
+| # | Deviation | Evidence |
+| --- | --- | --- |
+| 1 | AdaLN at SECTION boundaries, not inside every layer's norms | not measured — invasiveness. Strictly weaker; first thing to upgrade if σ-conditioning proves to be the active ingredient |
+| 2 | Targets scaled to **unit norm per slice**, NOT per-component `σ_data` | untrained CE at the median σ: 0.0003 (per-component 0.5) vs 6.14 ≈ ln V (unit norm). Risk R8 was wrong: the authors' `‖y‖=1` with `σ_data=0.5` is **load-bearing**, not an inconsistency |
+| 3 | **No `w(σ)` on cross-entropy** | `w·CE` spans 45560× (30.8 … 1,403,760) while CE alone spans 1.6×. `w = 1/c_out²` is an L2 identity with no CE analogue |
+
+2 and 3 are one discovery from two sides: **a discrete target with a weight-tied readout is
+nothing like an image.** `z` only has to land in the right Voronoi cell, so the task is
+trivial at SNRs where a pixel is still hard — and everything EDM calibrates against image
+statistics needs re-deriving. The paper's own settings are self-consistent only because its
+low-σ CE collapses to ~0 and cancels the huge weight; fix the scale and the weighting must go.
+
+### 4.4f Blockers closed before Phase 2 (all verified live, not by inspection)
+
+| | Was | Fix |
+| --- | --- | --- |
+| σ path ternarized | `scope: backbone` swept in `db_sigma_cond.mlp` + `db_gates.*.to_mod`, snapping the progress coordinate to {−1,0,+1} | excluded in `_categorize`, same precedent as HC `W_fused` / SSM control matrices |
+| `evaluate()` had no DB branch | ran the BASELINE forward on a denoiser — a different objective, so every val number would be meaningless | DB objective on a FIXED σ grid (0.1, 0.3, 1.0, 3.0). Live: `val/db_ce=6.9421`, σ0.1 7.0952 / σ0.3 6.0445 / σ1 7.1094 / σ3 7.5194 |
+| no cross-family metric | — | `posttrain/bridge_metrics.py` + `run_bridge.py`: gen-PPL(GPT2-XL), rep4@512, distinct-2/3 |
+| sampler never executed | `db_generate.py` written, never run | `tests/test_db_generate.py`, 8 tests incl. B=3 block handoff and step-count-as-free-dial |
+| V6 static-graph guard | untested | raises, verified live |
+| resume | keys present, round-trip untested | round-trip test with perturbed gates → bit-identical forward |
+
+Two bugs only RUNNING could find: the fp32-logits OOM (2.63 GiB in one allocation) and
+`evaluate()` NameError'ing on a function-local import. Both invisible to unit tests.
+
+### 4.4g Reporting protocol — compute AND step matched (Wolfe's requirement)
+
+`db_b1` and `db_b3` cost different amounts per step (proxy 14.00 vs 4.67), so ONE axis is
+never a fair read. Both cumulative axes are logged every step:
+
+| Report | Align on | Meaning |
+| --- | --- | --- |
+| step-matched | `perf/cum_tokens` | equal data seen; `db_b1` spent 3.0× the compute |
+| compute-matched | `perf/cum_layer_passes` | equal work done; `db_b3` saw 3.0× the data |
+
+`db_b3` needs **3.0×** the steps of `db_b1` for compute parity and **9.4×** A0's. So
+`db_b3` @ 20k is compute-matched to `db_b1` @ ~6.7k — read off the logged series, no extra
+run needed.
+
 ### 4.5 Kill criteria — stop the arm, write it down, do not tune around it
 
 1. Non-finite loss → `train.py`'s existing self-abort fires. Do not restart with a lower LR without
