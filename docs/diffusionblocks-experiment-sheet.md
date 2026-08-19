@@ -42,6 +42,20 @@ Add:
 MORPH's actual shapes on this 5090. Quoting a marketing TFLOPS number would make every MFU in this
 sheet wrong in the same direction, and the ternary/MORTAR path does not reach dense peak anyway.
 
+**How the numerator gets measured.** No single tool does it (all four verified present on this box,
+torch 2.12.1):
+
+| Path | Gives | Catch |
+| --- | --- | --- |
+| hand-written analytic model | exact, reproducible from the Hydra config alone | we write it; **must** cover the Triton kernels |
+| `torch.utils.flop_counter.FlopCounterMode` | analytic, per-module, free | **blind to Triton** — fused attention, HC, GLA, decode and CE are all custom, so it undercounts. Cross-check for the aten parts only |
+| `ncu` (installed at `/usr/bin/ncu`) | real hardware counters | serialises kernels, needs profiling perms; one-off validation, never per-step |
+| `nvidia-smi` | utilisation % | **no FLOP counter at all** — do not use it for this |
+
+Logged number = the analytic model. `FlopCounterMode` validates its aten half; one `ncu` run
+validates the whole thing once. Log the analytic model's version alongside `perf/mfu`, or an MFU
+from run A is not comparable to run B.
+
 ### 1.3 Quality: two metric families and ONE bridge
 
 This is the trap in the whole programme. Per App. E.4, *"computing traditional perplexity is
@@ -101,7 +115,14 @@ norm, and target-noising adds work per step. Pre-registered: `a` rises to **0.17
 ### 3.1 The shared conversion (all DB arms)
 
 1. **VE noising in embedding space** (App. B): `z_σ = y + σ·ε`, `y` = clean target token embedding.
-   Embeddings **must** be L2-normalised against collapse (App. C) — see risk R3.
+   The target's **scale must be pinned** — see R3. The paper says "L2-normalise against embedding
+   collapse" citing Diffusion-LM (Li et al. 2022), but the binding constraint is scale, not
+   diversity: EDM's preconditioning *and* its weighting `w(σ) = (σ²+σ_data²)/(σ·σ_data)²` are both
+   parameterised by `σ_data`, fixed at 0.5 in every one of their experiments. If the embedding scale
+   is free and learned, `σ_data = 0.5` is a fiction and `w(σ)` is mis-scaled at every σ — and the
+   model can escape the task outright by inflating `‖y‖` until σ stops corrupting anything. So the
+   requirement is "make `σ_data` a number we actually know", which L2 normalisation is one way to
+   achieve and not the only way.
 2. **log-normal `p_noise`**, `log σ ~ N(P_mean, P_std²)`, EDM defaults.
 3. **Equi-probability σ partitioning** (§3.3) — `σ_b = exp(P_mean + P_std·Φ⁻¹(q_b))`. Table 7 says
    this matters far more than the layer split (FID 38.03 vs 43.53), so it is not optional.
@@ -135,21 +156,41 @@ Yes: one block for prelude, one for the core, one for the coda. It splits on sea
 has, so **the core stays weight-tied and no layers are added.** It also matches the paper's best
 cell (equi-probability σ + an even layer split, Table 7).
 
-The σ schedule is cut into **T + 2 = 8 Euler steps**, equi-probability:
+**Poisson depth survives, and training never sees T.** An earlier draft of this sheet cut the σ
+range into 8 discrete Euler steps and picked the block from the sub-interval. That was wrong — it
+silently fixed `T = 6` and killed Poisson depth sampling. The correct split:
+
+- **Training samples σ CONTINUOUSLY** from the log-normal `p_noise`. It takes no Euler step, so it
+  never needs T. The denoiser conditions on **σ, not on Δσ**.
+- **Inference discretises**: `1 + T + 1` Euler steps with `T ~ Poisson(6)` capped 8, `Δσ` set by the
+  realised T. One trained model serves any step count — the paper does 50 by default, 1000 for the
+  NoProp comparison, and 4 for AR text.
+
+So Poisson-T is free, and TUL's **per-slot** depth survives too: each slot walks its own number of
+Euler steps ("per-idea refinement count"). Better than free — today Poisson-T forces the map to
+generalise across depths by brute force (`references.md` §1); under σ-conditioning the map is told
+where it is on the trajectory, so depth generalisation is explicit instead of emergent.
+
+**Two knobs, not one.** The paper conflates "what σ range does block b own" with "how often is
+block b trained", because with no weight tying B blocks = B steps. MORPH's core is tied and applied
+T times, so they must separate:
+
+| Knob | Setting | Why |
+| --- | --- | --- |
+| σ interval boundaries | probability mass **1/8 : 6/8 : 1/8** (prelude : core : coda), T̄ = 6 | keeps the `1 + T + 1` Euler steps evenly spaced in probability mass — the equi-probability rule of §3.3 applied per *step* |
+| block visit frequency | **uniform, 1/3 each** (default; a sweepable knob) | mass-proportional visits would give the prelude and coda 1/8 of steps each — 2500 effective updates over a 20k run, against 20k today. That starves them. Decoupling costs nothing. |
+
+Visit the core → sample σ inside its wide interval. Visit the prelude → sample inside its narrow
+one. Geometry stays right; every block gets a third of the updates.
 
 ```
-step 1        → prelude block (4 layers)
-steps 2 … 7   → core block (6 layers, ONE application per step, weight-tied)
-step 8        → coda block (4 layers)
+E[passes/token] = (1/3)(4) + (1/3)(6) + (1/3)(4)  = 4.67
+flop_proxy      = 4.67 × 2.0 (clean|noisy)        = 9.34      ← 4.7× under A0's 44.0
 ```
 
-Training samples σ ~ `p_noise`; whichever of the 8 sub-intervals it lands in selects the block to
-train. So `P(prelude) = P(coda) = 1/8`, `P(core) = 6/8`.
-
-```
-E[passes/token] = (1/8)(4) + (6/8)(6) + (1/8)(4) = 5.5
-flop_proxy      = 5.5 × 2.0 (clean|noisy)        = 11.0      ← 4.0× under A0's 44.0
-```
+**DB-12 (new arm):** block-visit distribution `uniform` vs `mass-proportional` (1/8 : 6/8 : 1/8).
+Isolates whether starving the prelude and coda actually hurts. Cheap, and it is the only place this
+design departs from the paper's stated rule.
 
 **Conditioning sub-variants (the 320-channel question, risk R2):**
 
@@ -170,10 +211,15 @@ even though it is already a single pass:
 
 ```
 core term = 6 passes × (64 / 1024)                              = 0.375 passes/token
-E[passes/token] = (1/8)(4) + (6/8)(0.375) + (1/8)(4)            = 1.28
+E[passes/token] = (1/3)(4) + (1/3)(0.375) + (1/3)(4)            = 2.79
 positions_per_token = 2 × (1024 + 2×64)/1024                    = 2.25
-flop_proxy                                                       = 2.88   ← 15.3× under A0
+flop_proxy                                                       = 6.28   ← 7.0× under A0
 ```
+
+Note the prelude and coda now dominate: at 1/3 visits each they contribute 2.67 of the 2.79 passes.
+Under TUL the core is nearly free, so **the prelude and coda become the whole cost**, and the
+`n_coda: 8` reinvestment cell (`TUL-A1+` in the ledger) becomes the interesting knob rather than
+core depth.
 
 **Correction to my earlier read.** Last turn I said TUL's win "largely evaporates" under the
 recurrent-depth mode. That was wrong. TUL's saving is a **position** saving (core on 64 instead of
@@ -211,12 +257,19 @@ Bands are wide on purpose. A band this wide that still misses is real informatio
 
 All at `tul_short.yaml` shape (seq 1024, batch 14, 20k steps) so every cell is paired with §2.
 
-| ID | Arm | flop_proxy | Expected s/step | Expected tok/s (vs A0) | Expected peak alloc | Result |
-| --- | --- | --- | --- | --- | --- | --- |
-| DB-1 | DB-B1 (B=1, whole net) | 28.0 | 0.65 – 0.80 | 18k – 22k (**1.2 – 1.5×**) | 14 – 19 GB | |
-| DB-2 | DB-B3 (`x0` conditioning) | 11.0 | 0.35 – 0.50 | 29k – 41k (**1.9 – 2.7×**) | 11 – 16 GB | |
-| DB-3 | DB-B3 + TUL (T-a target) | 2.88 | 0.21 – 0.32 | 45k – 68k (**3.0 – 4.5×**) | 13 – 19 GB | |
-| DB-4 | DB-B1 + TUL | ~7.9 | 0.30 – 0.42 | 34k – 48k (**2.2 – 3.2×**) | 15 – 21 GB | |
+Recomputed after the §3.3 fix (uniform 1/3 block visits, not mass-proportional).
+
+| ID | Arm | passes/tok | pos/tok | flop_proxy | Expected s/step | Expected tok/s (vs A0) | Expected peak alloc | Result |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| DB-1 | DB-B1 (B=1, whole net) | 14.0 | 2.0 | 28.0 | 0.62 – 0.80 | 18k – 23k (**1.2 – 1.5×**) | 14 – 19 GB | |
+| DB-2 | DB-B3 (`x0` conditioning) | 4.67 | 2.0 | 9.34 | 0.33 – 0.47 | 30k – 43k (**2.0 – 2.9×**) | 11 – 16 GB | |
+| DB-3 | DB-B3 + TUL (T-a target) | 2.79 | 2.25 | 6.28 | 0.27 – 0.40 | 36k – 53k (**2.4 – 3.5×**) | 13 – 19 GB | |
+| DB-4 | DB-B1 + TUL | 8.375 | 2.25 | 18.8 | 0.47 – 0.62 | 23k – 30k (**1.5 – 2.0×**) | 15 – 21 GB | |
+
+If the shifted-`x0` conditioning replaces the clean\|noisy concatenation (assessment §4.3 / open
+question in conversation), `pos/tok` halves for every row and each flop_proxy halves with it —
+DB-2 → 4.67, DB-3 → 3.14. Those are NOT pre-registered yet; the concat numbers above are the
+committed prediction until that design call is made.
 
 **Reasoning behind the tok/s bands.** Cost model `a + b·proxy` with `a` raised to 0.17–0.21 for the
 AdaLN + noising overhead, `b = 0.018`. DB-2: `0.19 + 11×0.018 = 0.39 s`, band widened for the 2×
@@ -235,7 +288,7 @@ actual bottleneck, which is activations at sequence length, not parameters.
 | --- | --- | --- | --- |
 | P1 | **The memory win is worth more than the FLOP win**, because it lifts batch 14 → 24+, and batch is the only lever on the `a=0.156 s` floor. A1 currently **OOMs at batch 16**. | If true, the next run after Phase 1 is a batch sweep, not another arm | DB arms landing ≥ 19 GB, i.e. no batch headroom bought |
 | P2 | **DB-B3 ≈ DB-B1 on bridge quality** despite 2.5× less compute, because Table 8 shows moderate `B` *beating* `B=1` (FID 9.90 vs 12.09) | Decides whether block independence is free or paid for | DB-B3 gen-PPL more than 10 % worse than DB-B1 |
-| P3 | **The 320-dim `x0` slice is too thin**, so DB-B3p beats DB-B3 by a visible margin | Decides whether "true block independence" survives contact with MORPH's channel layout | DB-B3 ≈ DB-B3p (within noise), which would be the better outcome |
+| P3 | **The 320-dim `x0` slice is wide enough** — DB-B3 ≈ DB-B3p within noise, so true block independence holds. *Pre-registration note: I predicted the opposite (too thin); Wolfe overruled on architecture knowledge. Recording both so the outcome scores somebody.* | Decides whether "true block independence" survives contact with MORPH's channel layout | DB-B3p beating DB-B3 by a visible margin |
 
 ### 4.4 Bridge quality, pre-registered
 
@@ -287,13 +340,15 @@ of these — they detonate the moment a DB arm runs on `base.yaml`.
 
 | ID | Arm | Isolates | Gate to reach it |
 | --- | --- | --- | --- |
-| DB-5 | DB-B3p (no-grad prelude conditioning) | P3, the 320-channel pipe | DB-2 quality below band |
+| DB-5 | DB-B3p (no-grad prelude conditioning) | P3, the 320-channel pipe — confirmatory only (R2 downgraded) | DB-2 quality below band |
 | DB-6 | batch sweep 14 → 20 → 24 → 28 on the best Phase-1 arm | P1 — turn the memory win into tok/s | any DB arm ≤ 16 GB |
 | DB-7 | `γ ∈ {0.0, 0.05, 0.1}` | overlap; their text default is 0.1 and untested for us | Phase 1 clears |
 | DB-8 | B=2 (prelude+core \| coda) | Table 8's best cell was B=2 | DB-2 ≥ DB-1 quality |
 | DB-9 | equi-probability vs uniform σ partition | Table 7's 38.03 vs 43.53 — confirm it holds for text | Phase 1 clears |
 | DB-10 | T-c fallback (core not independent, B=2 for TUL) | rescues DB-3 if the slot target fails | DB-3 fails on T-a |
 | DB-11 | σ-blend contraction on the core carrier, **DB objective OFF** | assessment §5.3 — the `ρ ≤ 1` handle on its own, as a Task #276 cure | independent of Phase 1; cheap; keeps CE and PPL |
+| DB-12 | block-visit distribution: uniform vs mass-proportional (1/8 : 6/8 : 1/8) | whether starving the prelude and coda to 1/8 of updates hurts; the one place this design departs from the paper's stated rule (§3.3) | DB-2 runs |
+| DB-13 | inference step count: `T ~ Poisson(6)` vs fixed 4, 8, 16 | the trained denoiser is step-count agnostic (§3.3), so test-time depth becomes a free dial. Their AR setting used only **4** steps | DB-1 runs; no retraining needed |
 
 **DB-11 is worth flagging separately.** It takes only the prescribed contraction
 `h_k ← α h_{k-1} + (1−α) f(h_{k-1})` with a scheduled `α < 1`, keeps ordinary next-token CE, keeps
@@ -308,8 +363,10 @@ it is the idea extracted from it, and it lands on the existing ledger.
 | ID | Risk | Blocks | Status |
 | --- | --- | --- | --- |
 | R1 | clean\|noisy causal mask through CCA + CSA + HCA + XSA needs a new Triton mask path | every DB arm | unscoped — assume this is the largest single work item |
-| R2 | 320-dim `x0` ctx slice too thin to be the core's only conditioning | DB-B3 | measured by DB-2 vs DB-5 |
-| R3 | App. C mandates L2-normalised embeddings; MORPH's are hybrid Euclidean + **Lorentz** (`lorentz_fraction 0.25`) and "L2-normalise" is not well defined on the Lorentz component | every DB arm | **unresolved — no known answer yet** |
+| R2 | 320-dim `x0` ctx slice too thin to be the core's only conditioning | DB-B3 | **downgraded** — Wolfe's call is that 320 of 1024 is wide enough. DB-5 becomes confirmatory, not a required fallback. See P3 |
+| R3a | **Target scale must be pinned** so `σ_data` is real (§3.1 item 1). For the Euclidean + bigram parts, L2 normalisation. For **Lorentz** (`lorentz_fraction 0.25`) the analogue is a fixed hyperboloid radius, not an L2 ball — Wolfe's read is that Lorentz likely does not need L2 specifically, and that is consistent with the mechanism | every DB arm | design known, untested |
+| R3b | **`y + σ·ε` with isotropic Gaussian noise leaves the hyperboloid.** It is not a valid Lorentz point at any σ > 0. Either noise in the tangent space and exp-map back, or accept that the diffusion runs in ambient Euclidean coordinates and the Lorentz structure exists only at readout | every DB arm | **BLOCKING — must be decided before an arm runs.** There is no "suboptimal default" here; there is only on-manifold or off-manifold |
+| R3c | Embedding *collapse* in the paper's own sense (all embeddings → one vector, Diffusion-LM) may still bite independently of scale | every DB arm | monitored by kill criterion 4 |
 | R4 | slot denoising target (§3.4) | DB-3, DB-4 | pre-registered T-a, fallback T-c |
 | R5 | step-counted schedule stretch by B | any B=3 arm on `base.yaml` | mitigations in §4.6, none implemented |
 | R6 | bridge metrics need a resident teacher; must run post-hoc, not in-training | all quality rows | design decided, not built |
