@@ -452,9 +452,23 @@ real peak moves. A0 was immune (its step genuinely is ~20.5 GB) which is exactly
 arms looked like they saved nothing. Fixed by a one-shot reset at `start_step+5`. **Any peak
 figure recorded before commit `db2e773` is the compile, not the step.**
 
-Residual: the warmup still allocates ~20 GB even for a DB arm whose step is 7 GB, because it
-compiles core-loop shapes the DB path never executes. That caps batch size and is now the
-gating item for the batch sweep (DB-6), not an optimisation.
+Residual, now MEASURED rather than inferred: during a live `db_b3` run `nvidia-smi` showed
+**21.5 GB reserved** by the training process against a **6.82 GB** step — a **3.2× gap**. The
+caching allocator never returns the warmup compile's arena to the driver, and the warmup
+compiles core-loop shapes the DB path never executes.
+
+Two consequences:
+
+1. **The batch sweep (DB-6) is blocked harder than "capped".** The step would fit batch 40+,
+   but the process reserves 21.5 GB regardless, so there is nothing to grow into. Restricting
+   warmup to the shapes the DB path actually runs is the PRECONDITION for converting the 3×
+   memory win into throughput, not an optimisation.
+2. **No co-tenancy on this card during a DB run.** A post-hoc bridge job OOM'd with 175 MiB
+   free while the training step was using 6.82 GB.
+
+⚠ Read `memory.used` from `nvidia-smi`, NOT `max_memory_allocated`, before sharing the card.
+The author of this section justified co-tenancy with "6.82 + 5 = 12 GB of 32, ample headroom"
+and was wrong by 9 GB, with the correct number already on screen.
 
 ### 4.4e MEASURED — three deviations from the paper, each forced by a measurement
 

@@ -151,8 +151,11 @@ def main() -> int:
                 pad = torch.zeros(chunk.shape[0], a.gen_tokens, dtype=torch.long,
                                   device=dev)
                 ctx = torch.cat([chunk, pad], dim=1)[:, :seq]
+                # The generator MUST be on the same device as the tensors it seeds; a CPU
+                # generator with a CUDA randn raises. The CPU shakeout could not catch this
+                # because there the two happened to agree.
                 lg, _ = db_sample(model, ctx, db, n_steps=a.db_steps,
-                                  generator=torch.Generator(device="cpu").manual_seed(a.seed))
+                                  generator=torch.Generator(device=dev).manual_seed(a.seed))
                 gens.append(lg[:, chunk.shape[1]:chunk.shape[1] + a.gen_tokens]
                             .argmax(-1).cpu())
             else:
