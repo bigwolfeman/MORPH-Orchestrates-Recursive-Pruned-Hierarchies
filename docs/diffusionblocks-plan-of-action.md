@@ -145,11 +145,26 @@ is read off the authors' code ([audit §3, §4](diffusionblocks-reference-audit.
 **blind to Triton**, so it cannot be the logged number; it only cross-checks the aten half. `ncu` is
 installed for one-off validation. `nvidia-smi` has no FLOP counter.
 
-## 3b. Build state (2026-08-19) — WRITTEN, NOT RUN
+## 3b. Build state (2026-08-19) — BUILT, TESTED, AND RUNNING
 
-**No test has been executed and no training step has run.** Files were syntax-parsed
-(`ast.parse`) and the YAML was schema-parsed; nothing imported torch, nothing touched the
-GPU. The other project still owns the 5090.
+**Superseded twice today.** This section first read "WRITTEN, NOT RUN"; then the tests ran;
+then Phase 2 launched. Current state:
+
+- `CUDA_VISIBLE_DEVICES="" pytest tests/` → **232 passed, 2 skipped**.
+- Phase 0 gates V1 + V2/A3 pass; V3 reproduces the A0 anchors; V6 raises as designed.
+- **Phase 2 is RUNNING**: `db_b3` then `db_b1`, 20k steps each, eval every 1000, wandb
+  online. Driver `ignore/db-campaign/run_phase2.sh`.
+- Measured results and the corrections that got here: sheet §4.4b–4.4g.
+
+Headline: `db_b3` runs at **3.0× less memory and ~3.4× the throughput** of A0, with the
+fixed-σ val grid descending 7.10 → 3.63 → 2.93 → 2.49.
+
+**Five bugs were found only by RUNNING, none catchable by unit tests** — worth remembering
+for the remaining arms: the fp32-logits OOM (2.63 GiB in one allocation); no gradient
+checkpointing in the DB path; `perf/peak_mem_*` reporting the warmup compile for five runs;
+`evaluate()` NameError'ing on a function-local import; and four separate defects in
+`run_bridge.py`, the worst of which would have generated from a partly-random model and
+produced a bridge row that looked real.
 
 | File | Contents | State |
 | --- | --- | --- |
