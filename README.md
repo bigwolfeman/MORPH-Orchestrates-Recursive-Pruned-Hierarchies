@@ -13,13 +13,24 @@ The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/
 </p>
 <p align="center"><em>Architecture overview — Parcae-style prelude / core loop / coda on a Cayley Hyper-Connection carrier, with a gated GLA retention branch on layer 1.</em></p>
 
-## TUL — Thought Unpack Loop (experimental branch `experiments/tul`, spec only)
+## TUL — Thought Unpack Loop (merged, OFF by default)
 
 TUL loops the Parcae core over one **thought slot per span** (punctuation-bounded) instead
 of over every token, and decodes tokens with the slot's looped state visible as an attended
 prefix position. Tokens run prelude → coda only. Specification, provenance and planned
-ablations: [docs/tul-spec.md](docs/tul-spec.md); paper map: [docs/references.md](docs/references.md) §13.
-Nothing in TUL is implemented or measured yet; the main line's behaviour is unchanged.
+ablations: [docs/tul-spec.md](docs/tul-spec.md); paper map: [docs/references.md](docs/references.md) §13;
+measured arms: [docs/tul-arms-result.md](docs/tul-arms-result.md).
+
+`base.yaml` ships `tul.activate_at: never`, which constructs no TUL parameters, so the
+default recipe is bit-identical to plain MORPH and the main line's behaviour is unchanged.
+
+**What it bought, and what it did not.** Over the same 20k steps the TUL arm beat the dense
+baseline by 0.056 nats of `val/ce_tokens` while running 177 minutes against 278 — a 1.6x
+wall-clock win at slightly better loss. The *memory* claim did not survive: a stratified
+re-score of the compaction-window arm reversed its aggregate win, and on the stratum where
+a target's only prior sighting is in the deleted text, equal-budget random tokens beat the
+slots by 0.0988 nats. **TUL is a conditional-compute scheme, not a latent-memory
+mechanism.** Treat any memory framing of it as refuted until someone re-measures it.
 
 <p align="center">
   <img src="docs/figures/tul_overview.png" alt="TUL overview: one shared sequence of tokens and slots; prelude on all positions; core loops on slots only with per-slot Poisson depth; coda on all positions with tokens attending slots" width="720" />

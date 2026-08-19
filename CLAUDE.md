@@ -39,7 +39,12 @@ renorm), not symptom-clamping — that also preserves the β1=0 memory win + α�
 **Full writeup + evidence chain + the decisive `ρ(J_core)` probe:**
 `Ai-notes/06-19-2026/MORPH-Iterative-Map-Dynamics/MENTAL-MODEL.md`.
 
-## ⭐ TUL — Thought Unpack Loop (this copy, branch `experiments/tul`) — IMPLEMENTED, NOT RUN
+## ⭐ TUL — Thought Unpack Loop — MERGED TO MASTER, OFF BY DEFAULT, ARMS RUN
+
+Status: implemented, run, and measured. It is a **conditional-compute** win (1.6x wall
+clock at slightly better CE), NOT a latent-memory mechanism — the memory claim was
+falsified by the stratified re-score in `docs/tul-arms-result.md`. `base.yaml` keeps
+`tul.activate_at: never`, which builds no TUL parameters at all.
 
 `docs/tul-spec.md` is the source of truth; `docs/figures/tul_overview.png` is the diagram;
 `docs/references.md` §13 lists every paper a decision comes from. Read all three before
