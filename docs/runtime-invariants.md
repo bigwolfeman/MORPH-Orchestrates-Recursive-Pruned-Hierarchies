@@ -128,6 +128,28 @@ These are observation-only when unset: `MORPH_EXACT_TRACE`, `MORPH_MEM_PROBE`,
 `MORPH_EXACT_TRACE=<path>` appends per-step loss hex for bit-identical A/B gates.
 Use only on gate runs (adds a host sync per step).
 
+## 6b. TUL invariants (`experiments/tul`, LIVE — see `tul-spec.md` §9)
+
+These are runtime invariants now, not aspirations: each row names the test that
+fails when it is broken (`tests/test_tul_layout.py`, `tests/test_tul_forward.py`;
+116 tests pass at implementation time). Each was also mutation-checked — the code
+was deliberately broken and the named test observed to go red.
+
+| Invariant | Why |
+| --- | --- |
+| The boundary rule (`.;!?` + newline + dashes, `min_span`, `span_cap`, EOS) is ONE function used by the loader and the generator, parity-tested. | The slot layout is structural; a train/generation mismatch silently decodes without the plan (the coconut `assert_layout_parity` lesson). `test_incremental_parity`, `test_generator_row_builder_matches_the_packer`. |
+| **Run collapse is CAUSAL: the boundary lands after the FIRST token of a run of boundary tokens, and `min_span` absorbs the rest.** | `tul-spec.md` §3.1 rule 2 places it after the LAST token of the run, which cannot be decided without reading the NEXT token — so it is not implementable at generation, where the rule must be causal (§6, and invariant 1 above). A `.`+`\n` run still yields exactly ONE boundary, which is what rule 2 was for. `test_run_of_boundary_tokens_yields_exactly_one_boundary`. |
+| The packer fills a row to exactly `L_total`; when the next unit does not fit, the leftover ≤ `prefix_k` positions become TAIL PADS (input `slot_id`, label −100, in `slot_mask`, absent from `slot_index`). | Fixed shapes without ever dropping a boundary inside the row. Measured cost on OWT at `max_slots 64`: 1.18 % of positions. `test_l_total_is_fixed_and_token_count_varies`. |
+| Per-slot depth is a masked update over the full compact slot sequence, never a per-position gather. The token path's active-set shrinking is deliberately NOT used on it. | Frozen slots must still serve same-iteration K/V; a gather changes what they attend to. `test_per_slot_depth_is_a_masked_update_not_a_gather`, `test_batch_of_mixed_depths_matches_separate_single_row_runs`. |
+| Slot core states have no loss; a slot's only label is the first token of the next span; pad slots are `-100`. | Loss-free latent (MegaByte, H-Net, LD4LG, Pred-Sent); the LTD think-position failure. A pad slot's `slot_index` is 0, so a missing validity mask would silently train on the PREVIOUS row's last token. `test_pad_slots_are_excluded_from_every_loss_group`. |
+| `slot_id` is masked from the LM head in the fused CE (`mask_token_id`) and at generation (`index_fill`). Its logit is −inf, so its probability and its gradient are exactly 0. | The model must never emit a slot; slots are inserted by the rule. Two masking sites, one test each: `test_masked_vocab_row_receives_zero_gradient`, `test_slot_id_logit_is_minus_inf_and_never_top_1`. |
+| `L_total = tokens + prefix_k · slots` is fixed per curriculum stage; token count varies per row and is logged. | Fixed shapes for kernels/graphs; BLT's tokens-per-batch control held in expectation. |
+| Val/gen run with the TUL layout ON and `bag_size 0`; passing both raises. | Val PPL over token positions stays comparable to the baseline. `test_bag_size_and_slot_layout_are_mutually_exclusive`. |
+| The §5 half-weight double label is ONE weighted CE call, not one call per label group. | Each `fused_linear_cross_entropy` call allocates and saves a `[V, d]` fp32 `grad_w` (201 MB at V=49169, d=1024). The per-group CEs are §7.2 METRICS and run at eval only. `test_weighted_ce_equals_the_explicit_half_weight_combination`. |
+| The static-region CUDA graphs are never captured while the TUL layout is on, and are invalidated at a mid-run activation. | They capture the PLAIN front/back at the plain shape; `L_total ≠ seq_len` so they could never replay, and their private pool permanently reserves ~9 GB. |
+| `slot_layout=None` is bit-identical to today's forward, and building the TUL parameters does not perturb the baseline. | The TST phase and every pre-TUL checkpoint must reproduce. VERIFIED against `b268ba3`: loss, every parameter and every gradient `torch.equal`, with and without `MORPHConfig(tul=...)` (all three TUL inits are deterministic and constructed last, so zero RNG draws move). `test_tul_params_do_not_perturb_the_plain_path`. |
+| A config key for an unimplemented arm RAISES; it is never silently ignored. | `tul.stp_lambda`, `tul.set_lambda`, `tul.carry`, `tul.xattn`, `tul.bcast` are specified (§3.5) but not built. `test_unimplemented_arm_keys_raise`. |
+
 ## 7. What not to “fix”
 
 - Removing process-global `force_eager` without a per-module replacement that

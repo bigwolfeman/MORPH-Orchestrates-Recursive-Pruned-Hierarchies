@@ -60,14 +60,26 @@ def _pad_vocab(w_cast: Tensor) -> tuple[Tensor, int, int]:
 class _FusedLinearCE(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: Tensor, w: Tensor, labels: Tensor,
-                ignore_index: int, chunk_size: int) -> Tensor:
+                ignore_index: int, chunk_size: int, mask_token_id: int = -1,
+                weights: Tensor | None = None) -> Tensor:
         # x: [N, d], w: [V, d], labels: [N]
         N, d = x.shape
         compute_dtype = x.dtype  # match eager autocast matmul precision
 
         valid = labels != ignore_index
-        n_valid = int(valid.sum().item())
-        n_valid_f = float(max(n_valid, 1))
+        if weights is None:
+            n_valid = int(valid.sum().item())
+            n_valid_f = float(max(n_valid, 1))
+            row_w = None
+        else:
+            # Per-row loss weights (TUL spec §5: the first token of a span is predicted
+            # twice — from the span's last token and from the slot — and each term is
+            # weighted 0.5 so it is not counted twice). The reduction becomes the
+            # WEIGHTED mean Σ wᵢ·CEᵢ / Σ wᵢ, which is the plain mean when every weight
+            # is 1. Folding it into this kernel keeps the loss to ONE vocab GEMM and one
+            # [V, d] grad accumulator instead of one per label group.
+            row_w = weights.to(torch.float32) * valid.to(torch.float32)
+            n_valid_f = float(max(float(row_w.sum().item()), 1e-6))
 
         # Cast the weight to compute dtype ONCE, in its natural [V, d] layout, and reuse
         # it for both matmuls. The logits matmul wants [d, V]; instead of materialising a
@@ -92,12 +104,21 @@ class _FusedLinearCE(torch.autograd.Function):
             logits_c = (x_c @ w_cast.t()).float()    # [c, V′] fp32 (freed each iter)
             if V_pad != V:
                 logits_c[:, V:] = neg_inf            # pad cols → prob exactly 0
+            if mask_token_id >= 0:
+                # TUL (docs/tul-spec.md §3.1, invariant 4): the slot id is a structural
+                # token the rule inserts — the LM head must never predict it. Same
+                # mechanism as the pad columns above: -inf ⇒ softmax probability EXACTLY
+                # 0 ⇒ that vocab row's grad_w stays 0 and it is excluded from the
+                # partition function. The id is never a LABEL (asserted at data prep),
+                # so the target gather below is unaffected.
+                logits_c[:, mask_token_id] = neg_inf
 
             # log-softmax cross-entropy, fp32 (numerically load-bearing).
             lse = torch.logsumexp(logits_c, dim=-1)  # [c]
             lab_safe = lab_c.clamp(min=0)            # avoid gather OOB on ignore rows
             tgt = logits_c.gather(-1, lab_safe.unsqueeze(-1)).squeeze(-1)  # [c]
-            loss_c = (lse - tgt) * valid_c.squeeze(-1)
+            w_c = valid_c if row_w is None else row_w[start:end].unsqueeze(-1)
+            loss_c = (lse - tgt) * w_c.squeeze(-1)
             loss_sum = loss_sum + loss_c.sum()
 
             # grad wrt logits (unnormalised by n_valid; scaled once at the end):
@@ -107,7 +128,7 @@ class _FusedLinearCE(torch.autograd.Function):
                 -1, lab_safe.unsqueeze(-1),
                 -torch.ones_like(lab_safe, dtype=probs.dtype).unsqueeze(-1),
             )
-            probs = probs * valid_c                  # zero ignored rows
+            probs = probs * w_c                      # zero ignored rows; scale by wᵢ
             del logits_c
 
             # Grad matmuls in compute_dtype (bf16 → tensor cores; matches the
@@ -135,7 +156,7 @@ class _FusedLinearCE(torch.autograd.Function):
         go = grad_output  # scalar
         gx = (grad_x * go).to(ctx.x_dtype)
         gw = (grad_w * go).to(ctx.w_dtype)
-        return gx, gw, None, None, None
+        return gx, gw, None, None, None, None, None
 
 
 def fused_linear_cross_entropy(
@@ -144,13 +165,24 @@ def fused_linear_cross_entropy(
     labels: Tensor,
     ignore_index: int = -100,
     chunk_size: int = 1024,
+    mask_token_id: int = -1,
+    weights: Tensor | None = None,
 ) -> Tensor:
     """Memory-efficient ``mean`` cross-entropy of a weight-tied linear head.
 
     See module docstring. ``x`` is ``[N, d]``, ``w`` is ``[V, d]``, ``labels``
     is ``[N]``. Returns a scalar; gradient flows to both ``x`` and ``w``.
+
+    ``mask_token_id`` (default −1 = off, bit-identical to before): force that vocab
+    row's logit to −inf in every chunk, so it has probability exactly 0 and receives
+    exactly zero gradient. Used for TUL's structural ``slot_id`` (spec §3.1).
+
+    ``weights`` (default None = off, bit-identical to before): ``[N]`` per-row loss
+    weights; the reduction becomes ``Σ wᵢ·CEᵢ / Σ wᵢ``. Used for TUL's half-weight
+    double label (spec §5).
     """
-    return _FusedLinearCE.apply(x, w, labels, ignore_index, chunk_size)
+    return _FusedLinearCE.apply(x, w, labels, ignore_index, chunk_size, mask_token_id,
+                                weights)
 
 
 # ── Multi-hot cross-entropy (MCE) for Token-Superposition Training ──────────

@@ -39,6 +39,49 @@ renorm), not symptom-clamping — that also preserves the β1=0 memory win + α�
 **Full writeup + evidence chain + the decisive `ρ(J_core)` probe:**
 `Ai-notes/06-19-2026/MORPH-Iterative-Map-Dynamics/MENTAL-MODEL.md`.
 
+## ⭐ TUL — Thought Unpack Loop (this copy, branch `experiments/tul`) — IMPLEMENTED, NOT RUN
+
+`docs/tul-spec.md` is the source of truth; `docs/figures/tul_overview.png` is the diagram;
+`docs/references.md` §13 lists every paper a decision comes from. Read all three before
+touching the model for TUL. Short mental model:
+
+- ONE shared sequence of token positions and **slot positions** (one slot after each span;
+  boundary rule `.;!?` + newline + dashes, NO comma; a `.`+`\n` run is ONE boundary;
+  min span 4; cap 32). Slot input = `E_slot` + mean of the span's token embeddings
+  (TST-native). Prelude runs on all positions.
+- **Core loops on SLOT positions only** (gather → loop → scatter), per-SLOT Poisson depth as a
+  masked update (never a per-position gather — frozen slots still serve K/V). Tokens skip
+  the core: coda input for tokens = `input_norm(prelude)` (the existing `n_core == 0` path).
+- Coda runs on all positions; tokens attend slots as ordinary positions (the plan is a
+  PREFIX the coda refines — Block Transformer Fig 3f, Coconut). Slot label = first token of
+  the next span; the slot's CORE state has no loss of its own. `slot_id` logit is masked.
+- Token-state dropout `p` on the coda input (Bowman word dropout) is the collapse tax.
+- `slot_layout` is a per-forward ARGUMENT like `bag_size`; `None` ⇒ bit-identical to today.
+  The 5090 arms (`tul_short.yaml`) run it from step 0 with TST off and prune/carve/route off;
+  `tul.activate_at = ${training.tst_ratio}` is the full-schedule variant (switch at the TST
+  boundary). One config per arm: `tul_a0` / `tul_a1` / `tul_a1r` / `tul_a3`, all at batch 14.
+- NEVER decode a span from one vector + offset with no token path (Huginn 2026-08-16 collapse;
+  MegaByte T7; Bowman T2; Hourglass T6). Never regress onto the slot state (LCM, CoCoMix, BT §4.2).
+- Arms and gates: `docs/ablation-ledger.md` "Planned — TUL"; invariants: `runtime-invariants.md` §6b
+  (LIVE, each row names the test that fails when it breaks).
+- Lineage: successor of coconut's `tul/` + `ltd/` (fine-tunes of frozen models; left behind).
+
+**Where the code is** (v1, `pytest tests/` → 116 passed; no arm has been TRAINED yet):
+
+| File | What |
+| --- | --- |
+| `morph/model/tul_layout.py` | The ONE causal boundary rule (`BoundaryRule.cut`, a resumable state machine used by the loader AND the generator), the fixed-shape row packer (`pack_tul_row` / `pack_tul_batch`), `SlotLayout`. |
+| `morph/model/tul.py` | `TULConfig` (construction-time switches), `TULSlots` (`E_slot`, `E_mask`, `W_prefix`), the span bag-mean, gather/scatter, token-state dropout. |
+| `morph/model/transformer.py` | `_core_region` (the old inline core loop, extracted verbatim), `_tul_front` / `_tul_core` / `_tul_group_losses` / `_forward_tul`. `slot_layout` is a forward ARGUMENT; `None` is the untouched baseline. |
+| `morph/training/tul_setup.py` | Resolves the `tul:` Hydra block once → ids, rule, configs, wandb manifest. |
+| `morph/inference/tul_generate.py` | Eager recompute-per-step generator (spec §6 v1 — no KV cache by design). |
+
+Two v1 deviations from the spec text, both recorded in `tul-spec.md` and §6b: run
+collapse is CAUSAL (boundary after the FIRST token of a run — the spec's "after the
+LAST" needs a lookahead the generator cannot have), and the packer pads a row's last
+≤ `prefix_k` positions rather than dropping a boundary. Arms `stp_lambda`,
+`set_lambda`, `carry`, `xattn`, `bcast` are NOT built and RAISE if configured.
+
 ## Architecture
 
 Loop hierarchy:

@@ -8,7 +8,7 @@ files (`.aux`, `.log`) are grouped by topic.
 
 | Topic | Diagrams | Preview |
 |---|---|---|
-| Architecture | [MORPH overview](architecture/morph_overview.tex), [MORPH block](architecture/morph_block.tex) | `morph_overview.png`, `morph_block.png` |
+| Architecture | [MORPH overview](architecture/morph_overview.tex), [MORPH block](architecture/morph_block.tex), [TUL overview](architecture/tul_overview.tex) | `morph_overview.png`, `morph_block.png`, `tul_overview.png` |
 | Attention | [Attention stack](attention/morph_attention.tex) | `morph_attention.png` |
 | Embeddings | [Hybrid embeddings](embeddings/morph_embeddings.tex) | `morph_embeddings.png` |
 | Memory | [Memory behavior](memory/morph_memory.tex), [Context coverage](memory/morph_context_coverage.tex) | `morph_memory.png`, `morph_context_coverage.png` |

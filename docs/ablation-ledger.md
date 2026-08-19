@@ -37,6 +37,55 @@ single campaign or partial stack; **low** = directional / incomplete.
 | Zyphra-RSA | Deferred | Outer inference harness | Requires RL; not in training path | low | CLAUDE.md / architecture notes |
 | JAX-parity | Deferred | `morph/jax/` | Mirror lags (still MRR residual); PT is source of truth | high | `morph/jax/`, interop converter |
 
+## Planned — TUL (`experiments/tul`; short schedule `morph/configs/tul_short.yaml`: seq 1024 × batch 14 × 20k steps = 287 M tokens, TST off, prune/carve/route off (dense), TUL from step 0; first pass = A0, A1, A1r, A3)
+
+Arms from [tul-spec.md](tul-spec.md) §7. Every row is PLANNED; confidence is
+blank until a gate script exists under `ignore/`. Do not cite these as results.
+
+| ID | Arm | Config / mechanism | Isolates | Status |
+| --- | --- | --- | --- | --- |
+| TUL-A0 | MORPH baseline | `tul.activate_at: never` (plain schedule) | reference | planned |
+| TUL-A1 | TUL | `tul:` block defaults (slots looped, tokens skip core, coda sees slots, per-slot Poisson) | the method | planned |
+| TUL-A1r | TUL repeat | as A1, second seed | retrain noise floor — read BEFORE any cell | planned |
+| TUL-A2 | slots-as-memory | `tul.tokens_through_core: true` | C2 alone (plan readable, uniform depth) | planned |
+| TUL-A4 | depth-only | `tul.coda_sees_slots: false` | C1 alone (depth per idea, plan unreadable) | planned |
+| TUL-A3 | shallow control | no slots, `n_core` bypassed for tokens (seed path) | compute floor | planned |
+| TUL-p | token-state dropout sweep | `tul.token_state_dropout ∈ {0, 0.15, 0.3}` | the collapse tax | planned |
+| TUL-act0 | activate at step 0 | `tul.activate_at: 0.0`, TST off | isolates the 3-transitions-at-30k risk | planned |
+| TUL-stp | punc-STP on slot trajectory | `tul.stp_lambda > 0` | slot warm-up (Wolfe's punc-STP finding) | planned |
+| TUL-set | slot-set MCE warm-up | `tul.set_lambda > 0` | slot warm-up (TST MCE); Block Transformer §4.2 says aux on the latent hurt | planned |
+| TUL-prefix1 | prefix length 1 | `tul.prefix_k: 1` (default is 2, projection prefixes, Block Transformer App. F.2 / Fig 3f) | plan and first-token label forced onto one coda position | planned |
+| TUL-A1+ | TUL reinvest | `n_coda: 8`, `tul.slot_mean_depth: 12` (≤ A0 layer-passes/token) | the fair-compute cell | planned |
+| TUL-xattn | cross-attn branch | `tul.xattn: true` (attach like retention) | BLT T7 vs Block Transformer Fig 3f | planned |
+| TUL-carry | explicit `W·h_{i-1}` | `tul.carry: true` | Coconut feedback vs attention-only memory | planned |
+| TUL-A5 | fixed stride | `tul.fixed_stride: 19` (mean span matched, boundary rule off) | alignment vs depth (SpaceByte T1 +0.10 bpb, HAT T1 −2.7 HS); A1 − A5 is what the boundary rule buys | planned |
+| TUL-bcast | broadcast-add | `tul.bcast: true` (offset-indexed linears, init 0, `h_i` added to span i+1's coda token input) | AU-Net T4: tie at 2 levels, +5.4 at 3; expected null at one level | planned |
+
+Metrics per arm: `val/ppl_tokens`, `val/first_tok_ce`, `val/plan_nats` (slots
+masked at eval minus unmasked), `val/first_tok_counterfactual`, rep4@512,
+span-length distribution of generations, layer-passes/token, tokens/s.
+All of them are logged by `morph/training/train.py` as of the implementation
+(2026-08-16); none has been RUN, so every row above stays `planned`.
+
+Measured SHAPE facts for the arms (5090, `tul_short.yaml`, 13-25 steps,
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`) — engineering numbers, not
+results. Reviewer-measured 2026-08-16 at the batch every arm actually runs:
+
+| arm | config | batch | peak alloc | s/step | tok/step | layer-passes/token | 20k steps |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A0 | `tul_a0` | 14 | 20.32 GB | 0.947 | 14336 | 44 | 5.3 h |
+| A1 | `tul_a1` (`max_slots 64`) | 14 | 24.06 GB | 0.544 | ~14462 | 10.68 | 3.0 h |
+| A1r | `tul_a1r` | 14 | as A1 | as A1 | as A1 | as A1 | 3.0 h |
+| A3 | `tul_a3` (`n_core 0`) | 14 | ~17.7 GB | ~0.30 | 14336 | 8 | ~1.7 h |
+| — | A0 at batch 16 (superseded) | 16 | 22.92 GB | 0.99 | 16384 | 44 | 5.5 h |
+| — | A1 at batch 16 | 16 | **OOM** | — | — | — | — |
+
+A1's prelude and coda run on `L_total` = 1152 positions where A0's run on 1024, and
+those 8 layers are not checkpointed, so A1 costs MORE activation memory while running
+1.7× faster per step. A1 cannot fit batch 16, so EVERY arm was moved to 14 rather than
+letting the batch size vary across a paired comparison — at 14 the arms match on
+tokens/step to 0.9 % (`tul/tokens_per_batch` is logged every 20 steps).
+
 ## How to extend
 
 When a decision lands in or leaves `base.yaml`: add or update a row, cite the
