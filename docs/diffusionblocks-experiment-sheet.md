@@ -401,7 +401,8 @@ it is the idea extracted from it, and it lands on the existing ledger.
 | R5 | step-counted schedule stretch by B | any B=3 arm on `base.yaml` | mitigations in §4.6, none implemented |
 | R6 | bridge metrics need a resident teacher; must run post-hoc, not in-training | all quality rows | design decided, not built |
 | R7 | 2× positions may push TUL arms back into OOM at batch 14 (A1 already needs 24.06 GB) | DB-3, DB-4 | first thing DB-3 will tell us |
-
+| R8 | The authors set `‖y‖ = 1` (whole-vector L2) **and** `σ_data = 0.5`. Those are only consistent at `d = 4`; at `d = 1024` per-component std is 0.031, ~16× under `σ_data`. If `σ_data` overstates the scale, `c_skip` stays near 1 until σ≈0.5 while the signal dies by σ≈0.03 | fidelity of any port that copies them | our O1 rule scales to `σ_data·√dim` so `σ_data` is literally true — but we have NOT tested whether the discrepancy matters. CE tolerates it better than L2 would |
+| R9 | **Sampler scale drift.** The denoised estimate is `softmax(logits) @ E`, a convex combination of unit-norm embeddings, so its norm shrinks toward 0 as the model is less certain — while training always sees a full-scale `y`. A train/inference mismatch inherent to the method | every DB arm's generation quality | inherited from the method, not ours to fix. Monitor `‖denoised‖` per Euler step during sampling |
 ## 7. Run log
 
 Append one row per actual run. Empty until the GPU frees up.
