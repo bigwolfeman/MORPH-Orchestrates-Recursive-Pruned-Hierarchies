@@ -512,6 +512,27 @@ never a fair read. Both cumulative axes are logged every step:
 `db_b3` @ 20k is compute-matched to `db_b1` @ ~6.7k — read off the logged series, no extra
 run needed.
 
+### 4.4h DECIDED (Wolfe, 2026-08-19) — batch-matched, token-matched, NOT flop-matched vs A0
+
+Supersedes §4.4g for the A0 comparison.
+
+| Decision | Rationale |
+| --- | --- |
+| **All arms at batch 14 / seq 1024.** No arm runs at its own max batch. | Not batch-matching complicates token-count-matched perplexity: with different batch sizes, equal steps stops being equal tokens and every quality comparison needs a correction factor. Batch-matching makes equal-steps == equal-tokens by construction. |
+| **Compare at equal TOKENS.** With batch and seq matched, that is equal steps. | The simple, defensible axis. |
+| **Do NOT flop-match against A0.** | Time. A0 at proxy 44.0 vs `db_b3`'s 4.67 would need `db_b3` at 188k steps to compute-match A0 at 20k, or A0 at 2.1k to match `db_b3` at 20k. Neither is worth the wall clock, and the token-matched comparison answers the question we care about. |
+
+**What this costs, stated plainly.** Batch-matching to 14 forfeits DiffusionBlocks' main
+practical advantage: `db_b3`'s step is 6.82 GB and could run batch ~40, while A0 sits ~1 GB
+from the ceiling at 14. So the reported comparison is *conservative* for DB — it is a
+controlled quality comparison, not a demonstration of the throughput DB could actually
+deliver. The 3.0×/3.4× memory and speed numbers stand separately as engineering results at
+matched batch; the batch headroom is a further unrealised gain, blocked anyway by the warmup
+reservation (§4.4b residual).
+
+`perf/cum_layer_passes` stays logged — it is still the honest axis for `db_b1` vs `db_b3`,
+which differ 3.0× per step from each other. Only the A0 flop-match is dropped.
+
 ### 4.5 Kill criteria — stop the arm, write it down, do not tune around it
 
 1. Non-finite loss → `train.py`'s existing self-abort fires. Do not restart with a lower LR without
