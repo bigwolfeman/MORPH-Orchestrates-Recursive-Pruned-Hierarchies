@@ -135,6 +135,33 @@ class DBConfig:
     slice_scale: bool = True
     sigma_data: float = SIGMA_DATA
 
+    # ── loss weighting ───────────────────────────────────────────────────────
+    # EDM's w(σ) = 1/c_out² applied to CROSS-ENTROPY. Default OFF, and that is a
+    # deliberate, measured deviation from the paper.
+    #
+    # w(σ) is derived for an L2 objective: w·‖D−y‖² = ‖F_θ(z) − target‖², i.e. it makes the
+    # NETWORK's regression target unit-variance. No such algebra exists for CE. Measured on
+    # an untrained model (d=512, V=2048, unit-norm targets, ln V = 7.63):
+    #
+    #     σ       w(σ)        CE      w·CE
+    #     0.002   250004.0    5.62    1403760      <- one rare draw dominates everything
+    #     0.300       15.1    5.06         76
+    #     80.0         4.0    7.90         32
+    #     span:   w·CE 45560x          CE alone 1.6x
+    #
+    # With the weighting on, db_b1's loss went 343 -> 216 -> 1322 -> 434 -> 745 over 100
+    # steps: a lottery on the σ draw, not a learning curve. Unweighted CE spans 4.9-7.9
+    # across the WHOLE σ range, which is already the balanced-gradient property the
+    # weighting was trying to buy — CE is log-scaled, so it needs no help.
+    #
+    # The paper's "the weighting is crucial" (App. C) is about the L2/image path and the
+    # equi-probability partition. On their CE path it survives only because their low-σ CE
+    # collapses to ~0 and cancels the huge weight — the same collapse that makes the
+    # objective degenerate (see SliceScaler). You cannot have both.
+    #
+    # Left as a switch because "does EDM weighting help CE?" is a legitimate arm.
+    edm_ce_weighting: bool = False
+
     # ── σ conditioning ───────────────────────────────────────────────────────
     cond_dim: int = 256              # width of the σ embedding fed to AdaLN
 
