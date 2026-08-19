@@ -477,8 +477,10 @@ TST (`pretrain_curriculum.yaml`).
 **Authors:** Makoto Shing, Masanori Koyama, Takuya Akiba (Sakana AI, U. Tokyo)  
 **Year:** 2026 (ICLR 2026; v1 2025)  
 **arXiv:** [2506.14202](https://arxiv.org/abs/2506.14202)  
-**MORPH uses:** NOTHING YET — under assessment, see
-[`diffusionblocks-morph-assessment.md`](diffusionblocks-morph-assessment.md). Two separable modes.
+**MORPH uses:** BEING BUILT, nothing run yet. Design rationale:
+[`diffusionblocks-morph-assessment.md`](diffusionblocks-morph-assessment.md); pre-registered arms
+and expected numbers: [`diffusionblocks-experiment-sheet.md`](diffusionblocks-experiment-sheet.md);
+ledger rows: `ablation-ledger.md` "Planned — DiffusionBlocks". Two separable modes.
 (a) *Block-wise*: cut `L` layers into `B` σ-range-specialised blocks, each trained by its own
 denoising objective, cutting params + grads + **optimizer state** by `B` (unlike gradient
 checkpointing, App. G) — but with **no compute saving** (App. H: `L·K` layer evals either way).
