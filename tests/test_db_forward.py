@@ -221,6 +221,12 @@ def test_concat_forward_runs_and_has_no_future_leak():
     last clean token id. That id feeds clean_{L-1}, x0[L-1] and bigram[L-1] — all of
     which are visible only to position L-1. Every earlier position's logits must be
     bit-identical. A next-token leak anywhere (attention mask, bigram, x0) breaks this.
+
+    CPU-EAGER by design (tensors are on CPU): this is a bit-exact check of the LOGIC.
+    On GPU the fused/flash kernels leave ~1e-4 mask-bleed on masked positions (masked
+    logits are very-negative, not true -inf), which the BASELINE causal model also has
+    (~1e-4) — so a GPU version of this test needs a tolerance, not torch.equal. See
+    docs/diffusionblocks-concat-design.md build status.
     """
     for mode in ("b1", "b3"):
         cfg = DBConfig(mode=mode, conditioning="concat")
