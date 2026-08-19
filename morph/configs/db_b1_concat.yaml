@@ -1,0 +1,31 @@
+# DiffusionBlocks arm DB-1-CONCAT — recurrent-depth B=1, FAITHFUL two-source concat.
+#
+# The falsifier for the concat rebuild. x0_inject was diagnosed as an autoencoder (context
+# reached the target through a near-dead additive channel; the coda never trained on
+# prediction). This arm runs the real App. E.4 causal-consistency mechanism (design doc
+# docs/diffusionblocks-concat-design.md): the CLEAN token stream is context, the NOISY
+# stream attends clean+noisy causally, and clean_{i+1} (the target) is withheld from
+# noisy query i.
+#
+# THE ONE QUESTION: does it learn language, unlike x0_inject? Decided by the scrambled
+# control (ignore/db_scrambled_control.py): matched-context CE must fall CLEARLY below
+# scrambled-context CE and below ln V. If matched ≈ scrambled, it is still autoencoding.
+#
+# Batch 14 / seq 1024 — MATCHED to the campaign (tul_short) so per-step curves compare
+# directly to db_b1 (x0_inject), db_b3, and A0. Do not change the batch for comparability.
+# Run: PYTHONPATH=$PWD python -m morph.training.train --config-name db_b1_concat
+defaults:
+  - tul_short
+  - _self_
+
+wandb:
+  name: db-b1-concat
+
+training:
+  steps: 2000          # falsifier: a short run is enough to separate language from autoencoding
+  eval_every: 250
+
+db:
+  activate_at: 0.0        # from step 0 — no schedule transition to confound the arm
+  mode: b1
+  conditioning: concat

@@ -387,6 +387,12 @@ def perf_metrics(fm: FlopModel, *, batch: int, seq_len: int, step_time_s: float,
     if realized_depth is None:
         realized_depth = expected_clamped_poisson(float(fm.mean_depth), 1, fm.max_depth)
 
+    # core_position_frac=None means "no TUL slot layout" → every position flows through the
+    # core, i.e. frac 1.0. Coerce here so the flop model never multiplies by None (a DB arm
+    # run without TUL leaves it None; the TUL path sets n_slots/seq_len).
+    if core_position_frac is None:
+        core_position_frac = 1.0
+
     # A DiffusionBlocks step applies the core ONCE and (under b3) runs one section, so the
     # baseline proxy would overstate it several-fold. Branch on the declared mode rather
     # than inferring it, so a mislabelled run is a loud error and not a quiet wrong number.

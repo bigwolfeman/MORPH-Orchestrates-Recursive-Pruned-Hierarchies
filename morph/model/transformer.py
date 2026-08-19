@@ -1083,25 +1083,47 @@ class MORPHTransformer(nn.Module):
         # σ-independent so it can be computed once and reused across the Euler chain.
         if cond is not None:
             x = self.db_gates[name](x, cond)
+        ckpt = self.training and self.cfg.ckpt_grad_iters != 0
         for i, layer in enumerate(layers):
             gi = base + i
             term = self._build_injection_term(
                 gi, self.x0_injects[gi].precompute(x0), input_ids, bigram_emb, x.dtype
             )
-            x = self._apply_injection(x, term)
 
             if capture is not None:
-                bundle: dict = {}
-                rc: dict = {}
-                x = layer(x, attn_kwargs={"db_capture": bundle}, ret_capture=rc)
-                if "state" in rc:
-                    bundle["gla_state"] = rc["state"]
-                capture[gi] = bundle
+                # Clean capture. The bundle tensors are context for the noisy pass, so they
+                # must be OUTPUTS of any checkpointed region (side-channel capture is not
+                # checkpoint-safe — ret_capture docstring). We RETURN them as a flat tuple
+                # and reassemble; the key NAMES are static per layer, so the closure
+                # side-effect on `keys` carries no tensor state.
+                keys: list[str] = []
+
+                def _clean(xi, term_i, _layer=layer):
+                    xi = self._apply_injection(xi, term_i)
+                    bundle: dict = {}
+                    rc: dict = {}
+                    xi = _layer(xi, attn_kwargs={"db_capture": bundle}, ret_capture=rc)
+                    if "state" in rc:
+                        bundle["gla_state"] = rc["state"]
+                    keys.extend(bundle.keys())
+                    return (xi, *bundle.values())
+
+                outs = checkpoint(_clean, x, term, use_reentrant=False) if ckpt \
+                    else _clean(x, term)
+                x = outs[0]
+                capture[gi] = dict(zip(keys, outs[1:]))
             elif ctx is not None:
                 bundle = ctx[gi]
-                x = layer(x, attn_kwargs={"db_ctx": bundle},
-                          ret_state=bundle.get("gla_state"))
+
+                def _noisy(xi, term_i, _layer=layer, _b=bundle):
+                    xi = self._apply_injection(xi, term_i)
+                    return _layer(xi, attn_kwargs={"db_ctx": _b},
+                                  ret_state=_b.get("gla_state"))
+
+                x = checkpoint(_noisy, x, term, use_reentrant=False) if ckpt \
+                    else _noisy(x, term)
             else:
+                x = self._apply_injection(x, term)
                 x = layer(x)
         return x
 
