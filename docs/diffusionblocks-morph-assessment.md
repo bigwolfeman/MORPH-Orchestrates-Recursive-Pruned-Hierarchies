@@ -155,20 +155,24 @@ features want.
 CE — because the core loops over slot positions only instead of all positions. The latent-memory
 claim was falsified.
 
-The recurrent-depth mode makes the training pass a **single** forward. If there is no `T`-iteration
-training loop, there is no per-iteration cost for TUL to make cheaper, and TUL's 1.6× is not
-additive — only its inference-time case survives. So the requested "with and without TUL" arms are
-**not symmetric across the two modes**:
+**Correction.** My first read of this was that TUL's win "largely evaporates" once the training
+loop is a single forward. That was wrong, and the layer-pass accounting says why: **TUL's saving is
+a position saving, not a loop saving.** The core runs on 64 slots instead of 1024 tokens, and that
+holds whether the core is applied once or `T` times. Under DB-B3 the core term drops from
+`6` passes/token to `6 × 64/1024 = 0.375`, taking `flop_proxy` from 11.0 to 2.88. TUL survives.
 
-- Under **block-wise** mode the loop and BPTT are retained, so TUL composes cleanly and its result
-  stays meaningful. Run the TUL cross with this mode.
-- Under **recurrent-depth** mode TUL and DiffusionBlocks are competing for the same saving. The
-  cross is still worth measuring, but "TUL on + DiffusionBlocks on" should not be expected to
-  multiply, and if it does, something is wrong.
+What does shrink is the **wall-clock multiplier**. TUL buys 1.76× on top of A0 (0.947 → 0.544 s/step)
+because A0's step is 84 % real compute. At `flop_proxy` 2.88 the step is ~60 % fixed launch overhead,
+so the same FLOP ratio converts into much less time. Pre-registered band: 1.3–1.8× for TUL on top of
+DB, against 1.76× on top of A0. Sheet §3.4 and §4.2.
 
-Unresolved corner: a TUL slot has no token target, and the DiffusionBlocks-AR target `y` is a token
-embedding. Slots would need their own σ handling or exclusion from the denoising objective. The spec
-does not cover this.
+**The genuinely tricky part is the slot target, not the compute.** A TUL slot has no token label
+(spec: slot label = first token of the next span; the slot's core state has no loss of its own), and
+the DiffusionBlocks-AR target `y` is a token embedding. A core block that only sees slots therefore
+has no `y` to denoise toward. Pre-registered choice: `y` = the next span's first token embedding, so
+it stays a *prediction* target and does not become span autoencoding — which the TUL spec explicitly
+forbids (LCM / CoCoMix / Block Transformer §4.2). If that fails, the fallback drops core
+independence and collapses `B` = 3 → 2 for the TUL arms. Sheet §3.4, options T-a / T-b / T-c.
 
 ### 4.4 MORPH's residual is not `z + f(z)` — resolvable, but check it
 
@@ -285,64 +289,44 @@ slower in effective time**:
 Nobody in the paper hits this because they train from scratch with no sparsity schedule and no
 long-horizon optimizer warmup. It is entirely ours.
 
-## 6. What I would actually do — and it is not "implement DiffusionBlocks"
+## 6. Implementation order
 
-The headline claim is a poor fit for our bottleneck. At `L` = 14, d = 1024, batch 4, seq 4096 on a
-32 GB 5090, MORPH is activation- and schedule-bound, not parameter-bound; `B`× on
-params + grads + state is real but small, and App. H says the block-wise mode saves **no compute**.
-The interesting claim is the recurrent-depth one, and it is a *compute* claim on the machine that
-most needs compute. But taking it costs: loop init from noise, a new objective, loss of PPL, a new
-attention mask, AdaLN everywhere, an unresolved Lorentz-normalisation question, and TUL's training
-win going redundant. That is an architecture fork, not a flag.
+We are building this. The order below is chosen so each arm answers one question, and so the
+cheapest arm is also the one the paper already validated on a looped model.
 
-So, two cheap probes before any of that. Both are things we already wanted.
+Full arm definitions, pre-registered expected numbers, metric contract, kill criteria and the
+schedule-stretch mitigations live in
+**[`diffusionblocks-experiment-sheet.md`](diffusionblocks-experiment-sheet.md)**. That sheet is the
+tracking document; this file is the design rationale behind it.
 
-### Probe A — is MORPH's core loop even behaving like a denoising trajectory?
+1. **Phase 0 — instrumentation, no GPU.** We cannot judge any of this without FLOP efficiency, and
+   `perf/mfu` does not exist yet. Add `layer_passes_per_token` for every arm (not TUL only),
+   `positions_per_token`, `flop_proxy`, `model_tflops`, `mfu`. Measure the bf16 GEMM ceiling on this
+   5090 rather than quoting a spec sheet. Settle the Eq (3)–(5) sign (§4.5) against the authors'
+   code. Re-confirm the A0 shape facts and the step-0 parity marker.
+2. **DB-B1 first, not B=3.** `B = 1`, the whole 4:6:4 net as one denoiser — the paper's literal
+   Huginn setting. It isolates *"does the diffusion objective work on MORPH at all"* without also
+   testing block independence, and it inherits none of the §5.4 schedule-stretch hazards.
+3. **DB-B3 second** — prelude / core / coda, splitting on seams MORPH already has, so the core stays
+   weight-tied and no layers are added. The σ range is cut into `T + 2 = 8` equi-probability Euler
+   steps: step 1 = prelude, steps 2–7 = the core applied once each, step 8 = coda. Expected training
+   cost `E[passes/token] = 5.5` against A0's 44.
+4. **The TUL cross on both**, per Wolfe. See §4.3 below for the correction to what I said about it,
+   and the sheet §3.4 for the slot-target fork, which is the genuinely tricky part.
+5. **Then the batch sweep.** The memory win is probably worth more than the FLOP win — see the
+   launch-bound cost model in the sheet §2.1. A1 already OOMs at batch 16, and batch is the only
+   lever on a 0.156 s fixed step floor.
 
-The entire case rests on reading `h_{k+1} = f_θ(h_k)` as reverse diffusion. That is testable
-without writing any DiffusionBlocks code:
-
-- run the `ρ(J_core)` probe from `MENTAL-MODEL.md` §5 (wanted anyway for Task #276);
-- measure `‖h_k − h_{k-1}‖` across `k` = 1…`T`, and the distance from `h_k` to the final `h_T`.
-
-If the carrier contracts monotonically toward a fixed point, the diffusion read is *discovered* and
-the α-blend is a natural regulariser. If it oscillates or grows, the interpretation is being
-*imposed*, and the whole line is expensive theatre dressed in nice mathematics. Cost: one probe
-script, no training run.
-
-### Probe B — buy the compute win without the objective, and see if that was the active ingredient
-
-The mechanism behind the `K`-fold saving is *"supervise at a sampled point instead of
-backpropagating the trajectory."* You can have that without diffusion:
-
-> Run the core loop no-grad to a random depth `k`, then take the gradient through **one** step and
-> the coda, with the ordinary cross-entropy at `k`.
-
-That is deep supervision at a random loop depth with a 1-step gradient window. It is well
-precedented (it is what Huginn's own truncated BPTT approximates), and against MORPH today it is a
-small delta: `bptt_depth` 4 → 1, plus a coda-at-`k` loss. Crucially **CE and val-PPL stay intact**,
-so the result lands on the existing ledger.
-
-This is the honest ablation the paper does not run. It separates two hypotheses:
-
-- If Probe B captures most of the speedup at comparable CE → the win was per-depth supervision with
-  a short gradient window. We keep our metric, keep TUL's result, and skip the diffusion machinery
-  entirely.
-- If Probe B fails and DiffusionBlocks-on-Huginn works → the diffusion structure itself (the
-  σ-conditioning and the *prescribed* contraction of §5.3) is doing the work. Then the full port is
-  justified, and we go in knowing what we are paying for.
-
-### If we do build it, build mode (2) first
-
-`B` = 3 on MORPH's existing prelude / core / coda seams (§3 reading 2): no un-tying, no extra
-layers, matches the paper's best-cell layer split, retains the loop, and therefore keeps TUL's
-1.6 × meaningful and composable. Equi-probability σ partitioning, `γ` = 0.1 (their text setting),
-EDM weighting with `σ_data` = 0.5, EDM sign per §4.5, and every step-counted schedule in §5.4
-divided by 3.
+Separately, and cheaply: **the σ-blend contraction is extractable from the objective.** A scheduled
+`h_k ← α h_{k-1} + (1−α) f(h_{k-1})` with `α < 1` keeps ordinary next-token CE, keeps val PPL
+comparable to A0, and tests the one mechanism this paper shares with our own nested-dynamics note
+(§5.3). Sheet arm DB-11. It is not a DiffusionBlocks arm; it is the idea taken out of it.
 
 ## 7. Open questions, named
 
-1. Does MORPH's core carrier actually contract? (Probe A. Unmeasured.)
+1. Does MORPH's core carrier actually contract? Unmeasured — the `ρ(J_core)` probe from
+   `Ai-notes/06-19-2026/MORPH-Iterative-Map-Dynamics/MENTAL-MODEL.md` §5, plus
+   `‖h_k − h_{k-1}‖` across the loop. Worth running alongside sheet arm DB-11.
 2. Can a TUL slot carry a denoising target at all, given it has no token label?
 3. What does "L2-normalise the embeddings to prevent collapse" mean for the Lorentz component?
 4. Is the Eq (3)–(5) sign a rendering typo or in the released code too? (Check the authors' repo.)
