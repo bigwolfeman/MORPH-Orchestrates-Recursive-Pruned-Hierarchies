@@ -76,6 +76,30 @@ To take the recurrent-depth mode literally, MORPH's core carrier would have to b
 would then carry a running estimate of the *clean target embedding*, not a running token
 representation. That is a change to what the loop is for, not a training flag.
 
+## 2b. What the injected noise is actually for
+
+Worth stating plainly, because it is the load-bearing intuition and it is easy to read the noise as
+diffusion-flavoured decoration.
+
+**The noise manufactures a target in the middle of the network.** Today a middle layer has no target
+of its own — the only target sits at the output, and BPTT is the machinery that carries it backward.
+Because `z_σ = y + σ·ε` is a *known corruption of the known answer*, every point on the trajectory
+has `y` locally available. That is the entire mechanism for training one block without seeing the
+others. **The noise is what you pay to delete BPTT.**
+
+The Euler stepping is a consequence, not the purpose. Two secondary jobs fall out of it:
+
+- **σ is a progress coordinate.** Plain deep supervision also gives middle layers a target — but the
+  *same* target at every depth, so nothing tells step 3 to do less work than step 7. That is the
+  collapse mode looped models fall into. σ is the signal that says how far along you are. It is also
+  why a variable loop depth works at all (§3, Poisson).
+- **σ sets the contraction.** `α = σ_b/σ_{b-1}` comes from the noise levels. No σ, no prescribed
+  `α`, no `ρ ≤ 1` handle (§5.3).
+
+Corollary for the Lorentz question (§4.5 / sheet R3): since the noise's job is to corrupt `y` by a
+*known* amount, the ratio `σ / ‖y‖` has to be meaningful. That is why the target's scale must be
+pinned — not for diversity, but so EDM's `σ_data` is a number we actually know.
+
 ## 3. Answering "split the loop in 2" directly
 
 Three readings, in increasing order of how much they break:

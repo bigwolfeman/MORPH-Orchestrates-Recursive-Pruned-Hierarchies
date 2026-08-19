@@ -107,6 +107,12 @@ any row below as a result. Design rationale:
 | DB-9 | σ partition | equi-probability vs uniform | Table 7: 38.03 vs 43.53 FID — confirm it holds for text | planned |
 | DB-10 | T-c fallback | core not independent, `B=2` for TUL arms | rescues DB-3 if the slot target fails | planned |
 | DB-11 | σ-blend contraction ONLY | `h_k ← α h_{k-1} + (1−α) f(h_{k-1})`, `α<1`, **DB objective off** | the `ρ(J_core) ≤ 1` handle on its own, as a Task #276 cure. Keeps ordinary CE, so it lands on THIS ledger | planned |
+| DB-12 | block-visit distribution | uniform 1/3 vs mass-proportional 1/8 : 6/8 : 1/8 | whether starving prelude/coda to 1/8 of updates hurts; the one departure from the paper's stated rule | planned |
+| DB-13 | inference step count | `T ~ Poisson(6)` vs fixed 4 / 8 / 16, **no retraining** | σ-conditioning makes the denoiser step-count agnostic, so test-time depth becomes a free dial (their AR setting used only 4) | planned |
+
+**Poisson depth is preserved.** Training samples σ continuously and never sees T; only inference
+discretises, into `1 + T + 1` Euler steps with `T ~ Poisson(6)` capped 8. TUL's per-slot depth
+survives the same way. Sheet §3.3.
 
 **Metric warning.** DB arms cannot be compared to A0/A1 on `val/ppl_tokens` — DiffusionBlocks is
 not ELBO-derived, so its CE is σ-conditioned reconstruction, not a likelihood (paper App. E.4). The
