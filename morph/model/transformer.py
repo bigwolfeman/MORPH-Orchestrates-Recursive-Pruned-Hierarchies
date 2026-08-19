@@ -975,6 +975,18 @@ class MORPHTransformer(nn.Module):
             x = self._apply_injection(x, term)
             x = layer(x)
 
+        return self._readout(x)
+
+    def _readout(self, x: Tensor) -> Tensor:
+        """HC stream mean → lm_mixer → final_norm.
+
+        Pure code motion out of the tail of :meth:`_back_region` (the ``_core_region``
+        precedent): the ops and their order are IDENTICAL, so every existing path stays
+        bit-identical. It is a method so the DiffusionBlocks forward can reach the readout
+        after running ONLY the prelude block or ONLY the core block — under B=3 the readout
+        is shared by all three blocks (the authors' ``forward_output_embeddings`` is shared
+        the same way, audit §3).
+        """
         # ── Hyper-Connection stream reduction ─────────────────────────
         # Collapse the n streams back to a single C-dim representation before the LM head.
         # Mean readout is scale-preserving and (with all streams equal at init) exactly
@@ -986,6 +998,162 @@ class MORPHTransformer(nn.Module):
         x = self.lm_mixer(x)
         x = self.final_norm(x)
         return x
+
+    # ══ DiffusionBlocks ══════════════════════════════════════════════════════
+    # docs/diffusionblocks-plan-of-action.md (A5), docs/diffusionblocks-reference-audit.md.
+    # `db_step=None` never reaches any of this: the baseline forward is untouched.
+
+    def build_db_modules(self, db_cfg) -> None:
+        """Construct the σ-conditioning parameters. Called ONCE at build time.
+
+        Construction-time, not a runtime flag (CONTRIBUTING: features are baked in at
+        init). If this is never called, no DB parameter exists and the checkpoint is
+        identical to a pre-DB one — which is what makes the DB-off parity gate meaningful.
+        """
+        from .diffusion_blocks import AdaLNGate, SigmaConditioning
+
+        from .diffusion_blocks import SliceScaler
+
+        self.db_cfg = db_cfg
+        self.db_sigma_cond = SigmaConditioning(cond_dim=db_cfg.cond_dim)
+        # The SAME slice transform that scales the target y must scale the tied LM-head
+        # weight. `embed.attend()` projects against the UNSCALED `lm_weight()`, so using it
+        # here would put the logits in a different space from the target: training would
+        # still converge (CE only needs a linear map that separates tokens) but the
+        # sampler's `softmax(logits) @ E` bridge would walk the Euler steps in the wrong
+        # units and generation would be garbage while the loss curve looked healthy.
+        # Exactly the failure the no-theater rule exists to catch.
+        self.db_scaler = None
+        if db_cfg.slice_scale:
+            lor = int(self.cfg.d_model * float(self.cfg.lorentz_fraction))
+            self.db_scaler = SliceScaler((self.cfg.d_model - lor, lor), db_cfg.sigma_data)
+        # One gate per SECTION rather than per norm site.
+        #
+        # v1 DEVIATION, recorded in the plan: the paper and the authors' code apply AdaLN
+        # INSIDE each transformer layer's norms. Doing that in MORPH means threading a
+        # conditioning tensor through MORPHBlock, MORPHAttention, the HC residual and the
+        # fused norm kernels — a large, invasive change. v1 modulates at SECTION
+        # boundaries instead. This is strictly weaker conditioning; it is not a
+        # substitute, and if σ-conditioning turns out to be the active ingredient this is
+        # the first thing to upgrade. Do not report v1 as "the paper's method".
+        d = self.cfg.d_model
+        self.db_gates = nn.ModuleDict({
+            name: AdaLNGate(db_cfg.cond_dim, d) for name in ("prelude", "core", "coda")
+        })
+
+    def _db_sections(self, block_idx: int) -> list[str]:
+        """Which sections run for this block, in order.
+
+        b1 (recurrent-depth, paper §5.5): the whole net is ONE denoiser, so every section
+        runs. b3: exactly one section runs — that is the entire memory argument.
+        """
+        if self.db_cfg.mode == "b1":
+            return ["prelude", "core", "coda"]
+        return [("prelude", "core", "coda")[block_idx]]
+
+    def _db_run_section(self, name: str, x: Tensor, x0: Tensor, bigram_emb,
+                        input_ids: Tensor | None, cond: Tensor) -> Tensor:
+        """Run one section's layers ONCE, with σ modulation at its boundary.
+
+        The core runs a SINGLE pass here, not the T-iteration loop. That single pass is the
+        compute win: the target is available at every σ, so there is no trajectory to
+        backpropagate and BPTT is gone. The T-step loop returns at INFERENCE, where each
+        iteration is one Euler step down the schedule.
+        """
+        np_, nc = self.cfg.n_prelude, self.cfg.n_core
+        if name == "prelude":
+            layers, base = self.prelude, 0
+        elif name == "core":
+            layers, base = self.core, np_
+        else:
+            layers, base = self.coda, np_ + nc
+
+        x = self.db_gates[name](x, cond)
+        for i, layer in enumerate(layers):
+            gi = base + i
+            term = self._build_injection_term(
+                gi, self.x0_injects[gi].precompute(x0), input_ids, bigram_emb, x.dtype
+            )
+            x = self._apply_injection(x, term)
+            x = layer(x)
+        return x
+
+    def _forward_db(self, input_ids: Tensor, db_step, precond) -> dict:
+        """DiffusionBlocks forward. Returns ``{"logits", "denoised"}``.
+
+        Flow, matching the authors' ``model.py::denoise`` (audit §3):
+
+          1. ``c_skip, c_out, c_in, c_noise`` from σ.
+          2. the block sees ``z_σ · c_in``; σ enters as ``c_noise`` through AdaLN.
+          3. ``D̂ = hidden · c_out + z_σ · c_skip`` — the denoised EMBEDDING estimate.
+          4. logits = readout(D̂), and CE is taken against ``labels``.
+
+        Step 3 before step 4 is deliberate and structural: ``D̂`` lives in the same space
+        as the target ``y``, which is what lets the sampler's ``softmax(logits) @ E`` bridge
+        (audit §4) close the loop at inference.
+        """
+        from .diffusion_blocks import clean_noisy_mask
+
+        cfg = self.db_cfg
+        sigma = db_step.sigma
+        c_skip, c_out, c_in, c_noise = precond.coeffs(sigma)
+        cond = self.db_sigma_cond(c_noise)
+
+        B, L = input_ids.shape
+        zt = db_step.z_noisy
+        b3 = zt.shape[1]
+        if b3 != L:
+            raise ValueError(f"db_step.z_noisy has L={b3}, input_ids has L={L}")
+
+        # Conditioning. x0 is the post-embedding, pre-prelude clean signal
+        # (`_front_tail`), i.e. exactly the paper's "previous clean token embeddings".
+        # No shift: labels[t] = input_ids[t+1], so x0[t] = embed(input_ids[t]) is the
+        # CURRENT token while the target is the NEXT one. Different tokens, no leak.
+        x_emb = self.embed_drop(self.embed(input_ids))
+        bigram_emb = self.embed.get_bigram(input_ids)
+
+        x_in = (zt.float() * c_in.view(B, 1, 1)).to(zt.dtype)
+
+        if cfg.conditioning == "concat":
+            # App. E.4: [clean ; noisy] with the mask from clean_noisy_mask(). The mask is
+            # built and validated here, but MORPH's attention does not yet ACCEPT an
+            # arbitrary additive mask — CCA/CSA/HCA/XSA each build their own. Wiring it is
+            # plan item A4/R1 and is NOT done: raise rather than silently run the wrong
+            # (unmasked) thing, which would leak future clean tokens into every position.
+            _ = clean_noisy_mask(L, input_ids.device)
+            raise NotImplementedError(
+                "db.conditioning='concat' needs a clean|noisy causal mask threaded through "
+                "CCA/CSA/HCA/XSA (plan A4 / risk R1). clean_noisy_mask() defines the exact "
+                "cutoff and is unit-tested, but the attention kernels do not take it yet. "
+                "Running without the mask would let every noisy position attend clean_{i+1}, "
+                "which IS its own target -- the loss would collapse to ~0 and teach nothing. "
+                "Use db.conditioning='x0_inject' until A4 lands."
+            )
+
+        x0 = x_emb.clone()          # the clean conditioning signal (see above)
+        x = x_in
+        if self._is_hc:
+            x = x.unsqueeze(2).expand(B, L, self._n_streams, x.shape[-1]).contiguous()
+
+        for name in self._db_sections(db_step.block_idx):
+            x = self._db_run_section(name, x, x0, bigram_emb, input_ids, cond)
+
+        hidden = self._readout(x)
+        denoised = (hidden.float() * c_out.view(B, 1, 1)
+                    + zt.float() * c_skip.view(B, 1, 1)).to(hidden.dtype)
+        logits = denoised @ self.db_lm_weight().T
+        return {"logits": logits, "denoised": denoised}
+
+    def db_lm_weight(self) -> Tensor:
+        """Tied LM-head weight under the same slice transform as the target.
+
+        Recomputed per call because the underlying embedding parameters move every step
+        (the authors re-normalise the weight on every ``get_embeds`` call for the same
+        reason). Cost is one elementwise pass over ``[vocab, d_model]``; gradient flows to
+        the embedding parameters through both ``lm_weight()`` and the scaler.
+        """
+        w = self.embed.lm_weight()
+        return w if self.db_scaler is None else self.db_scaler(w)
 
     def _core_region(self, x: Tensor, x0: Tensor, bigram_emb,
                      input_ids: Tensor | None = None) -> Tensor:
@@ -1665,7 +1833,27 @@ class MORPHTransformer(nn.Module):
 
     def forward(self, input_ids: Tensor, labels: Tensor | None = None,
                 bag_size: int = 0, seq_lens: Tensor | None = None,
-                slot_layout: SlotLayout | None = None) -> dict:
+                slot_layout: SlotLayout | None = None,
+                db_step=None, db_precond=None) -> dict:
+        # `db_step` is a per-forward ARGUMENT, exactly like `slot_layout` and `bag_size`.
+        # None => the untouched baseline. This is what keeps the DB-off path bit-identical
+        # and keeps a runtime branch out of the baseline hot path.
+        if db_step is not None:
+            if bag_size > 0:
+                raise ValueError(
+                    "db_step and bag_size are mutually exclusive: the DiffusionBlocks "
+                    "campaign runs with TST OFF (plan O3), and a superposed input has no "
+                    "single next-token embedding to use as the denoising target."
+                )
+            if slot_layout is not None:
+                raise NotImplementedError(
+                    "db_step + slot_layout (the TUL cross, arms DB-3/DB-4) is not wired "
+                    "yet: a TUL slot carries no token label, so it has no denoising target "
+                    "(sheet §3.4, option T-a). Run the TUL-free arms first."
+                )
+            if db_precond is None:
+                raise ValueError("db_step requires db_precond (the EDMPrecond instance)")
+            return self._forward_db(input_ids, db_step, db_precond)
         return self._forward_single(input_ids, labels, bag_size, seq_lens, slot_layout)
 
     def tul_forward_with_plan_nats(self, input_ids: Tensor, labels: Tensor,

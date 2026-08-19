@@ -145,6 +145,55 @@ is read off the authors' code ([audit §3, §4](diffusionblocks-reference-audit.
 **blind to Triton**, so it cannot be the logged number; it only cross-checks the aten half. `ncu` is
 installed for one-off validation. `nvidia-smi` has no FLOP counter.
 
+## 3b. Build state (2026-08-19) — WRITTEN, NOT RUN
+
+**No test has been executed and no training step has run.** Files were syntax-parsed
+(`ast.parse`) and the YAML was schema-parsed; nothing imported torch, nothing touched the
+GPU. The other project still owns the 5090.
+
+| File | Contents | State |
+| --- | --- | --- |
+| `morph/model/diffusion_blocks.py` | `DBConfig`, `DBSchedule` (equi-probability partition, γ overlap, block/σ sampling), `EDMPrecond`, `SliceScaler` (O1), `SigmaConditioning`, `AdaLNGate`, `euler_step`, `expected_embedding`, `clean_noisy_mask` | written |
+| `morph/training/flops.py` | analytic FLOP model, `perf_metrics`, `expected_clamped_poisson` | written |
+| `morph/training/db_setup.py` | Hydra `db:` resolution, `build_db_step`, `db_loss`, `scaled_lm_weight` | written |
+| `morph/model/transformer.py` | `_readout` (pure code motion), `build_db_modules`, `_db_sections`, `_db_run_section`, `_forward_db`, `db_lm_weight`, `forward(db_step=…)` dispatch | written |
+| `morph/inference/db_generate.py` | `db_sample` with the `softmax @ E` bridge, `SampleTrace` (R9 monitoring) | written |
+| `morph/configs/base.yaml` | `db:` block, `activate_at: never` → zero DB parameters | written |
+| `morph/configs/db_b1.yaml`, `db_b3.yaml`, `db_b3_massvisit.yaml` | arms DB-1, DB-2, DB-12 | written |
+| `tests/test_diffusion_blocks.py`, `tests/test_db_flops.py` | ~45 contract tests | written, **NOT RUN** |
+
+### Deliberately NOT built — each RAISES rather than running something wrong
+
+| Item | Why it raises |
+| --- | --- |
+| `db.conditioning="concat"` | needs the clean\|noisy mask threaded through CCA/CSA/HCA/XSA (A4/R1). `clean_noisy_mask()` defines the exact cutoff and is unit-tested, but the kernels do not accept it. Running unmasked would let every noisy position attend `clean_{i+1}`, which IS its target — loss → ~0, nothing learned |
+| `db_step` + `slot_layout` (arms DB-3/DB-4) | a TUL slot carries no token label, so it has no denoising target (sheet §3.4 T-a). Not wired |
+| `MORPH_STATIC_GRAPHS` + DB | the captured front/back graphs are bypassed by `_forward_db`; a stale replay would compute the wrong forward under a healthy-looking loss |
+| `db.activate_at` + `tst_bag_size > 0` | a superposed position has no single next-token embedding to denoise toward. Fails at startup, not 30k steps in |
+| `db.cfg_scale`, `db.self_conditioning` | in the authors' ViT path, meaningless or unbuilt here |
+
+### Two corrections made while writing
+
+1. **No `x0` shift is needed, and shifting would have been wrong.** The loader yields
+   `labels[t] = input_ids[t+1]`, so the target at position `t` is the NEXT token's embedding
+   while `x0[t] = embed(input_ids[t])` is the CURRENT token's. Different tokens — no leak.
+   The plan previously called for a one-position shift to fix a leak that does not exist;
+   shifting would have destroyed a position of legitimate context. The option is renamed
+   `x0_inject`.
+2. **`flop_proxy` double-counted positions.** The first version multiplied by
+   `positions_per_token` twice and had no notion of only one section running under B=3, so
+   it would have reported ~4× for the concat conditioning instead of 2× and ~9× too much
+   for a B=3 step. Fixed, and `test_flop_proxy_does_not_double_count_positions` plus
+   `test_db_b3_uniform_visit_is_the_preregistered_4_67` pin it to the sheet's numbers.
+
+### v1 deviation to be honest about
+
+AdaLN σ-conditioning is applied at **section boundaries**, not inside every layer's norms as
+the paper and the authors' code do. Threading a conditioning tensor through `MORPHBlock`,
+`MORPHAttention`, the HC residual and the fused norm kernels is a large invasive change. v1
+is strictly weaker conditioning. **Do not report v1 as "the paper's method"**, and if
+σ-conditioning turns out to be the active ingredient this is the first thing to upgrade.
+
 ## 4. Hazards to neutralise before any `B = 3` arm on `base.yaml`
 
 A block sampled 1/3 of steps stretches every step-counted schedule we own. `tul_short.yaml` runs
