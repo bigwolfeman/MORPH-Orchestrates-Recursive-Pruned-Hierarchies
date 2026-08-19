@@ -1092,13 +1092,51 @@ def main(cfg: DictConfig) -> None:
     # TUL is configured but stay inert (grad None ⇒ the optimizer skips them) until a
     # forward is called with a layout, so a mid-run activation needs no optimizer
     # rebuild — only E_slot's re-init from the live embedding table (spec §5).
+    from morph.training.db_setup import build_db_runtime, build_db_step, db_loss
+    from morph.training.flops import build_flop_model, perf_metrics
     from morph.training.tul_setup import build_tul_runtime
     from morph.training.phase import PhaseSchedule
     tul_rt = build_tul_runtime(cfg)
     morph_cfg = build_morph_config(cfg, tul=tul_rt.model_cfg if tul_rt else None)
     model = MORPHTransformer(morph_cfg).to(device)
+
+    # ── DiffusionBlocks (arXiv:2506.14202) ───────────────────────────────────
+    # `db.activate_at: never` (the base.yaml default) => _db is None, build_db_modules is
+    # never called, NO db parameter exists, and this path is bit-identical to the pre-DB
+    # tree. Construction-time, before the optimizer is built, so the sigma-conditioning
+    # parameters are in the param groups from step 0.
+    _db = build_db_runtime(cfg)
+    _db_active = _db is not None
+    if _db_active:
+        model.build_db_modules(_db.model_cfg)
+        model = model.to(device)
+        print(f"  [db] mode={_db.model_cfg.mode} conditioning={_db.model_cfg.conditioning} "
+              f"blocks={_db.schedule.n_blocks} visit={_db.model_cfg.visit} "
+              f"gamma={_db.model_cfg.overlap_gamma}")
+        print(f"  [db] sigma boundaries (ascending): "
+              f"{[round(v, 5) for v in _db.schedule.sigmas]}")
+        print(f"  [db] block mass (layer order): "
+              f"{[round(v, 4) for v in _db.schedule.mass_layer_order]}")
+        # No-theater: TST and DiffusionBlocks are mutually exclusive (a superposed input has
+        # no single next-token embedding to denoise toward), and plan O3 runs this campaign
+        # with TST off anyway. Fail at startup, not 30k steps in.
+        if int(getattr(cfg.training, "tst_bag_size", 0)) > 0:
+            raise ValueError(
+                "db.activate_at is set AND training.tst_bag_size > 0. These are mutually "
+                "exclusive: a TST-superposed position has no single next-token embedding to "
+                "use as the denoising target. The DiffusionBlocks campaign runs TST off "
+                "(plan O3) -- set training.tst_bag_size=0."
+            )
+
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params / 1e6:.1f}M params on {device}")
+
+    # Analytic FLOP model (gate A3). Built from the LIVE module tree, so the weight-GEMM
+    # half is exact for whatever config this run actually has.
+    _flops = build_flop_model(model, cfg, seq_len=int(cfg.data.seq_len))
+    print(f"  [flops] model v{_flops.version} nominal A0-shape proxy="
+          f"{_flops.flop_proxy():.2f} passes/token, realized depth="
+          f"{_flops.manifest()['flops/realized_depth']:.3f}")
 
     # Core-map spectral-norm penalty: soft hinge L=λ·Σ relu(σ_max(W)−cap)² over core MLP
     # linears. Binds module references (stable across compile/resume). penalty() calls
@@ -1201,6 +1239,13 @@ def main(cfg: DictConfig) -> None:
     # config too, so an arm is reproducible from wandb alone without re-deriving ids from
     # a tokenizer version. None when TUL is off.
     full_config_dict["tul_manifest"] = tul_rt.manifest if tul_rt else None
+    # Same rule for DiffusionBlocks: every DERIVED fact (sigma boundaries, block mass,
+    # visit probabilities, slice target norms) lands in the run config, so "what block_mass
+    # did arm X use?" is greppable in wandb without re-deriving it. None when DB is off.
+    full_config_dict["db_manifest"] = _db.manifest if _db_active else None
+    # And the FLOP model's own version + per-region costs: an MFU from model v1 is not
+    # comparable to one from v2, and without this nobody can tell them apart later.
+    full_config_dict["flops_manifest"] = _flops.manifest()
     if ternary_manifest is not None:
         # Derived ternary facts (scope/threshold already live in cfg). Drop the
         # verbose module_names list from the logged config; keep the greppable counts.
@@ -1600,8 +1645,21 @@ def main(cfg: DictConfig) -> None:
     # The captured regions are the PLAIN front/back at the plain shape. The TUL forward
     # takes an earlier branch and its L_total shape would never match, so a capture under
     # TUL would permanently reserve its ~9 GB private pool for graphs that never replay.
-    _sg_pending = (os.environ.get("MORPH_STATIC_GRAPHS", "0").lower() not in ("0", "", "false")
-                   and not phase.tul_on)
+    # DiffusionBlocks is excluded for the same reason TUL is, and it matters MORE here: the
+    # captured graphs are the front (embed+prelude) and back (coda+head) regions, but
+    # _forward_db does not call _front_tail or _back_region at all -- under mode='b3' it may
+    # run ONLY the core. A stale replay would silently produce a forward that never saw the
+    # noised target, i.e. a healthy-looking loss curve for the wrong computation. Refuse.
+    _sg_want = os.environ.get("MORPH_STATIC_GRAPHS", "0").lower() not in ("0", "", "false")
+    if _sg_want and _db_active:
+        raise ValueError(
+            "MORPH_STATIC_GRAPHS is set AND db.activate_at is on. The static graphs capture "
+            "the front/back regions, which the DiffusionBlocks forward bypasses -- replaying "
+            "them would compute the wrong thing while the loss curve looked fine. Unset "
+            "MORPH_STATIC_GRAPHS for DB arms (extending capture to DB is plan A5's static-"
+            "graph item, not done)."
+        )
+    _sg_pending = _sg_want and not phase.tul_on
     _sg_build_step = start_step + 3
     _sg_shape = None
 
@@ -1776,7 +1834,7 @@ def main(cfg: DictConfig) -> None:
                 # refs: loss/out AND the separately-bound routing_aux / spectral-penalty
                 # locals (routing_aux's graph reaches the prelude/coda ROUTER params —
                 # exactly the captured regions' accumulators).
-                loss = out = routing_aux = _sp = None
+                loss = out = routing_aux = _sp = _db_metrics = None
                 gc.collect()
                 _m = getattr(model, "_orig_mod", model)
                 # Dummy ids built WITHOUT any RNG draw (arange, not randint): a CUDA
@@ -1821,8 +1879,18 @@ def main(cfg: DictConfig) -> None:
 
             with _rt.region("fwd"):
                 with torch.autocast("cuda", dtype=torch.bfloat16):
-                    out = model(x, labels=y, bag_size=phase.bag_size, slot_layout=_layout)
-                loss = out["loss"]
+                    if _db_active:
+                        # DiffusionBlocks: sample ONE block + per-sample sigma, noise the
+                        # target embedding, and take EDM-weighted CE. The core is applied
+                        # ONCE -- no loop, no BPTT. See docs/diffusionblocks-plan-of-action.md.
+                        _db_step = build_db_step(_db, model, y)
+                        out = model(x, db_step=_db_step, db_precond=_db.precond)
+                        loss, _db_metrics = db_loss(out["logits"], _db_step, _db.precond)
+                    else:
+                        out = model(x, labels=y, bag_size=phase.bag_size,
+                                    slot_layout=_layout)
+                        loss = out["loss"]
+                        _db_metrics = None
 
                 # Routing aux loss (load balance) — only active after route_start
                 if pruning.is_routed:
@@ -2057,6 +2125,32 @@ def main(cfg: DictConfig) -> None:
                 "train/grad_norm": _gnorm,
                 "train/clip_factor": min(1.0, grad_clip / max(_gnorm, 1e-12)),
             }
+            # ── FLOP efficiency (gate A3) ─────────────────────────────────
+            # tok/s and peak memory alone are misleading on a launch-bound model: A0's step
+            # is ~16 % fixed overhead and a DB arm's is ~50-60 %. Always read flop_proxy
+            # next to them. `perf/flop_proxy` is NOMINAL (config-derived, comparable across
+            # runs); `perf/layer_passes_per_token` is REALIZED (from the depths actually
+            # sampled). A0 is 44.0 nominal and ~42.1 realized -- they are NOT the same
+            # number and must not be compared to each other.
+            _ppt = _db.positions_per_token() if _db_active else 1.0
+            _cpf = None
+            if phase.tul_on and _layout is not None:
+                # TUL: the core runs on SLOT positions only -- that is where its win is.
+                _n_slots = float(getattr(_layout, "max_slots", 0) or 0)
+                if _n_slots > 0:
+                    _cpf = _n_slots / float(seq_len)
+            _ceiling = float(getattr(cfg.training, "gemm_ceiling_tflops", 0.0)) or None
+            log.update(perf_metrics(
+                _flops, batch=batch_size, seq_len=seq_len,
+                step_time_s=1.0 / max(sps, 1e-9),
+                positions_per_token=_ppt, core_position_frac=_cpf,
+                ceiling_tflops=_ceiling,
+                db_mode=_db.model_cfg.mode if _db_active else None,
+                db_visit_probs=_db.schedule.visit_probs() if _db_active else None,
+            ))
+            if _db_metrics is not None:
+                log.update(_db_metrics)
+
             if phase.tul_on:
                 # Boundary statistics (spec §4) + the layer-pass accounting (spec §2).
                 log["tul/active"] = 1

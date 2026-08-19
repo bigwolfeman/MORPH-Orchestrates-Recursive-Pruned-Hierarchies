@@ -1,0 +1,20 @@
+# DiffusionBlocks arm DB-12 — block-visit distribution sweep (sheet §5).
+#
+# Identical to db_b3 except the block is visited in proportion to its sigma mass
+# (1/8 : 6/8 : 1/8) instead of uniformly. This starves the prelude and coda to 1/8 of
+# steps each. The question is whether that actually hurts, or whether the core -- which is
+# weight-tied and does most of the work -- is the only block that needs the updates.
+#
+# Note uniform visits are the AUTHORS' rule (App. E.1: "blocks are sampled uniformly at
+# random for each iteration"); the departure in our design is the unequal MASS split, not
+# the uniform visiting. This arm tests the interaction.
+# Run: PYTHONPATH=$PWD python -m morph.training.train --config-name db_b3_massvisit
+defaults:
+  - db_b3
+  - _self_
+
+wandb:
+  name: db-b3-massvisit
+
+db:
+  visit: mass

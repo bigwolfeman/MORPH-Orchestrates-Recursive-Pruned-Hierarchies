@@ -310,6 +310,30 @@ tul:
   bcast: false             # arm: AU-Net broadcast-add of h_i over the next span's tokens
   fixed_stride: 0          # >0 = arm TUL-A5: a slot every N tokens, punctuation rule off
 
+# ── DiffusionBlocks (arXiv:2506.14202) ───────────────────────────────────────
+# OFF by default. `activate_at: never` constructs NO db parameters at all, so the
+# default recipe stays bit-identical to the pre-DB tree (step-0 loss 11.2379).
+# Docs: docs/diffusionblocks-plan-of-action.md (start here),
+#       docs/diffusionblocks-experiment-sheet.md (arms + pre-registered numbers),
+#       docs/diffusionblocks-reference-audit.md (the authors' code, and where it is wrong).
+db:
+  activate_at: never       # never | 0.0 (from step 0) | fraction of steps
+  mode: b3                 # b1 = recurrent-depth, whole net one denoiser (RUN THIS FIRST)
+                           # b3 = block-wise over prelude | core | coda
+  conditioning: x0_inject  # x0_inject = clean embedding via the existing ctx ChannelInject
+                           # concat    = the paper's clean|noisy 2L sequence -- NOT wired
+                           #             yet, needs the A4 attention mask (raises if set)
+  block_mass: null         # null -> 1/(T̄+2) : T̄/(T̄+2) : 1/(T̄+2) for b3, so the
+                           # 1 + T̄ + 1 inference Euler steps are equal-mass at T̄=6
+  visit: uniform           # uniform (the authors' rule, App. E.1) | mass (arm DB-12)
+  overlap_gamma: 0.1       # gamma, their text-generation setting (App. C)
+  slice_scale: true        # per-slice target scaling (plan O1). Do NOT turn this off:
+                           # the Lorentz slice inits ~200x below the euclidean one and
+                           # isotropic sigma*eps would bury it at every useful sigma.
+  sigma_data: 0.5          # EDM sigma_data. slice_scale makes this LITERALLY true.
+  cond_dim: 256            # width of the sigma embedding fed to AdaLN
+
+
 data:
   # datasets>=4.x dropped script datasets; load from locally-cached OWT arrow shards instead.
   # Portable default: HF datasets cache under $HOME (override if shards live elsewhere).
