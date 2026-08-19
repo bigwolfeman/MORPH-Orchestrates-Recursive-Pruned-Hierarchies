@@ -30,8 +30,8 @@ from .fused_ce import (
 )
 from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .sparsity import MortarLinear
-from .tul import (TULConfig, TULSlots, compact_index, gather_positions, gather_valid,
-                  scatter_positions)
+from .tul import (TULConfig, TULSlots, compact_index, cw2_retain_mask, gather_positions,
+                  gather_valid, scatter_positions, window_drop_mask)
 from .tul_layout import SlotLayout
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
@@ -1456,6 +1456,12 @@ class MORPHTransformer(nn.Module):
         if layout.prefix_k != tc.prefix_k:
             raise ValueError(f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
         B, L = input_ids.shape
+        if tc.coda_token_cut >= L:
+            raise ValueError(
+                f"tul.coda_token_cut={tc.coda_token_cut} >= seq_len {L} "
+                f"(docs/tul-compaction-window-spec.md): every token position would be "
+                f"dropped from the coda, leaving nothing to predict. Lower the cut."
+            )
 
         x, x0, bigram_emb = self._tul_front(input_ids, layout)
 
@@ -1475,20 +1481,28 @@ class MORPHTransformer(nn.Module):
         x_coda, keep = self.tul.apply_token_dropout(x_coda, layout, self.training)
 
         out: dict = {"logits": None}
-        if tc.coda_sees_slots:
+        if tc.coda_sees_slots and tc.coda_token_cut == 0:
             xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep)
             groups = (self._tul_group_losses(xh, labels, layout, want_groups=not self.training)
                       if labels is not None else None)
             coda_positions = L
         else:
-            xh, groups, coda_positions = self._tul_coda_without_slots(
-                x_coda, x0, bigram_emb, keep, labels, layout)
+            # Arm A4 (coda_sees_slots=False) and/or arm CW (coda_token_cut>0, spec
+            # docs/tul-compaction-window-spec.md) — ONE gather whose drop_mask is the
+            # union of "every slot" and "every token below the cut". coda_token_cut=0
+            # never reaches this branch when coda_sees_slots is True (checked above), so
+            # the pre-CW A4 path is untouched when CW is off.
+            drop_mask = self._tul_coda_drop_mask(layout, tc)
+            xh, groups, coda_positions = self._tul_coda_gather(
+                x_coda, x0, bigram_emb, keep, labels, layout, drop_mask)
         if plan_nats and labels is not None:
             # §7.2: CE over the same tokens with the slots removed from the coda sequence.
             # Reported MINUS the normal token CE; a positive value is the plan actually
-            # being used (the h_z-ablation, the C2 number). Under coda_sees_slots=false the
-            # normal pass IS the slots-removed pass, so plan_nats is 0 by construction.
-            if tc.coda_sees_slots:
+            # being used (the h_z-ablation, the C2 number). Only when the normal pass IS
+            # ALREADY exactly the slots-removed pass (A4 with coda_token_cut=0) can it be
+            # reused — arm CW's normal pass also removes early tokens, a different
+            # ablation, so it must be recomputed fresh from x_coda in that case too.
+            if tc.coda_sees_slots or tc.coda_token_cut > 0:
                 _xh, g_pn, _ = self._tul_coda_without_slots(
                     x_coda, x0, bigram_emb, keep, labels, layout)
                 out["ce_tokens_no_slots"] = g_pn["ce_main"]
@@ -1507,10 +1521,34 @@ class MORPHTransformer(nn.Module):
         out["n_tokens"] = (~layout.slot_mask).sum()
         return out
 
+    def _tul_coda_drop_mask(self, layout: SlotLayout, tc: TULConfig) -> Tensor:
+        """``[B, L]`` bool union drop-mask for :meth:`_tul_coda_gather`: every slot (arm
+        A4, ``coda_sees_slots=False``) and/or every token below the cut (arm CW,
+        ``coda_token_cut>0`` — docs/tul-compaction-window-spec.md)."""
+        if not tc.coda_sees_slots:
+            drop = layout.slot_mask
+            if tc.coda_token_cut > 0:
+                drop = drop | window_drop_mask(layout.slot_mask, tc.coda_token_cut)
+            return drop
+        return window_drop_mask(layout.slot_mask, tc.coda_token_cut)
+
     def _tul_coda_without_slots(self, x_coda, x0, bigram_emb, keep, labels, layout):
         """Run the coda on the TOKEN positions only (arm A4 and the plan-nats metric)."""
-        cidx = compact_index(layout.slot_mask)
-        B, L = layout.slot_mask.shape
+        return self._tul_coda_gather(x_coda, x0, bigram_emb, keep, labels, layout,
+                                     layout.slot_mask)
+
+    def _tul_coda_gather(self, x_coda, x0, bigram_emb, keep, labels, layout, drop_mask):
+        """Run the coda after gathering ``drop_mask`` positions out of the sequence.
+
+        Generalises the old slots-only gather (``drop_mask = layout.slot_mask``, arm A4)
+        to also serve arm CW (``drop_mask`` = every token below the cut, or that unioned
+        with every slot — docs/tul-compaction-window-spec.md). The gather itself does not
+        care what kind of position was dropped; it only needs the boolean mask, which is
+        why one function now serves both arms with no new indexing logic (spec §"the
+        change": "Reuse compact_index, gather_positions, and its _g padding helper").
+        """
+        cidx = compact_index(drop_mask)
+        B, L = drop_mask.shape
 
         def _g(t, fill=None):
             if t is None:
@@ -1531,6 +1569,78 @@ class MORPHTransformer(nn.Module):
             labc = _g(labels.unsqueeze(-1), fill=-100).squeeze(-1)
             groups = self._tul_group_losses(xh, labc, None, want_groups=not self.training)
         return xh, groups, L
+
+    def _tul_coda_prep(self, input_ids: Tensor, layout: SlotLayout):
+        """Front + core + token-state-dropout — the part of :meth:`_forward_tul` that is
+        IDENTICAL across every arm CW variant (docs/tul-compaction-window-spec.md): which
+        positions the CODA sees is decided after this point, never before it. Shared by
+        :meth:`_forward_tul` and :meth:`tul_forward_cw_arms` so the (expensive) core loop
+        runs once per input, not once per arm.
+        """
+        tc = self.cfg.tul
+        if tc.tokens_through_core:
+            raise NotImplementedError(
+                "tul.tokens_through_core (arm A2) has no defined interaction with arm CW "
+                "(docs/tul-compaction-window-spec.md) — it is not specified, so this "
+                "raises rather than silently picking a behaviour."
+            )
+        x, x0, bigram_emb = self._tul_front(input_ids, layout)
+        xn, h_slots, depths = self._tul_core(x, x0, bigram_emb, layout)
+        values, pos = self.tul.prefix_project(h_slots, layout, layout.l_total)
+        x_coda = scatter_positions(xn, pos, values)
+        x_coda, keep = self.tul.apply_token_dropout(x_coda, layout, self.training)
+        return x_coda, x0, bigram_emb, keep, depths
+
+    def tul_forward_cw_arms(self, input_ids: Tensor, labels: Tensor, layout: SlotLayout,
+                            cut: int, seed: int = 0) -> dict[str, dict]:
+        """Eval-only: score CW0/CW1/CW2/CW3 in one pass (docs/tul-compaction-window-spec.md).
+
+        Every arm scores CE over the SAME set of labels — original TOKEN positions with
+        row index ``>= cut`` — so the four numbers are directly comparable; that
+        restriction is applied ONCE, to ``labels``, before any arm's gather, rather than
+        four separate times. The front/core/token-dropout prefix is shared (one core loop
+        for all four arms, not four); only the coda gather differs per arm.
+
+        Args:
+            cut:  ``C`` in the spec. Must be ``0 <= cut < seq_len``.
+            seed: seeds arm CW2's random retention (:func:`morph.model.tul.cw2_retain_mask`).
+                  Log this — a different seed picks a different random subset.
+
+        Returns:
+            ``{"CW0": groups, "CW1": groups, "CW2": groups, "CW3": groups}``, each a
+            :meth:`_tul_group_losses` dict (``layout=None`` convention: ``loss`` ==
+            ``ce_main`` == ``ce_tokens``, plain unweighted CE, no slot half-weighting —
+            every arm goes through the same code path so there is no weighting asymmetry
+            between them). ``n_targets`` is identical across all four by construction.
+        """
+        B, L = layout.slot_mask.shape
+        if not 0 <= cut < L:
+            raise ValueError(
+                f"arm CW cut={cut} must satisfy 0 <= cut < seq_len={L} "
+                f"(docs/tul-compaction-window-spec.md)."
+            )
+        x_coda, x0, bigram_emb, keep, _depths = self._tul_coda_prep(input_ids, layout)
+
+        pos = torch.arange(L, device=layout.slot_mask.device).unsqueeze(0).expand(B, L)
+        score_mask = (~layout.slot_mask) & (pos >= cut)     # SAME labels for all four arms
+        labels_scored = torch.where(score_mask, labels, torch.full_like(labels, -100))
+
+        early_tok = window_drop_mask(layout.slot_mask, cut)         # candidates for CW2
+        budget = layout.prefix_k * layout.slot_valid.sum(dim=1)      # spec: prefix_k * n_valid
+        retain = cw2_retain_mask(early_tok, budget, seed)
+
+        drop_masks = {
+            "CW0": layout.slot_mask.new_zeros(layout.slot_mask.shape),        # ceiling
+            "CW1": early_tok,                                                 # the claim
+            "CW2": layout.slot_mask | (early_tok & ~retain),                  # the decider
+            "CW3": layout.slot_mask | early_tok,                              # floor
+        }
+        out: dict[str, dict] = {}
+        for name, drop_mask in drop_masks.items():
+            _xh, groups, _pos = self._tul_coda_gather(
+                x_coda, x0, bigram_emb, keep, labels_scored, layout, drop_mask)
+            out[name] = groups
+        return out
 
     def _tul_layer_passes(self, layout: SlotLayout, depths: Tensor | None,
                           coda_positions: int) -> Tensor:

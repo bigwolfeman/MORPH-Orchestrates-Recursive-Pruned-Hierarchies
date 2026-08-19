@@ -108,6 +108,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         carry=bool(tc.get("carry", False)),
         xattn=bool(tc.get("xattn", False)),
         bcast=bool(tc.get("bcast", False)),
+        coda_token_cut=int(tc.get("coda_token_cut", 0)),
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
@@ -131,6 +132,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "token_state_dropout": model_cfg.token_state_dropout,
         "coda_sees_slots": model_cfg.coda_sees_slots,
         "tokens_through_core": model_cfg.tokens_through_core,
+        "coda_token_cut": model_cfg.coda_token_cut,
         "slot_mean_depth": model_cfg.slot_mean_depth or int(cfg.model.mean_depth),
         "slot_max_depth": model_cfg.slot_max_depth or int(cfg.model.max_depth),
     }
@@ -138,6 +140,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
           f"|B|={int(lut.sum())} min_span={rule.min_span} span_cap={rule.span_cap} "
           f"prefix_k={prefix_k} max_slots={spec.max_slots} L_total={spec.l_total} "
           f"p_drop={model_cfg.token_state_dropout}"
-          + (f" fixed_stride={rule.fixed_stride}" if rule.fixed_stride else ""), flush=True)
+          + (f" fixed_stride={rule.fixed_stride}" if rule.fixed_stride else "")
+          + (f" coda_token_cut={model_cfg.coda_token_cut}" if model_cfg.coda_token_cut else ""),
+          flush=True)
     return TulRuntime(model_cfg=model_cfg, data_cfg=data_cfg,
                       activate_at=activate_at, manifest=manifest)
