@@ -16,7 +16,7 @@ stay together.
 | Sparsity & routing | [Lottery Ticket Hypothesis](sparsity-routing/1803.03635.md), [Block-ELL](sparsity-routing/block-ell-nvidia.md), [MegaBlocks / STK](sparsity-routing/2211.15841.md), [ReMoE](sparsity-routing/2412.14711.md), [PEER](sparsity-routing/1907.05242.md) |
 | Regularization & latent objectives | [STP](regularization-objectives/2602.22617.md), [LeJEPA / SIGReg](regularization-objectives/2511.08544.md), [LLM-JEPA](regularization-objectives/2509.14252.md), [Semantic Step Prediction](regularization-objectives/2604.18464.md) |
 | Feed-forward networks | [SwiGLU](feed-forward/2002.05202.md) |
-| Training objectives & QAT | [MTP](training-objectives/2404.19737.md), [STE ternary / BitNet b1.58](training-objectives/2402.17764.md), [Token Superposition Training](training-objectives/2605.06546.md) |
+| Training objectives & QAT | [MTP](training-objectives/2404.19737.md), [STE ternary / BitNet b1.58](training-objectives/2402.17764.md), [Token Superposition Training](training-objectives/2605.06546.md), [DiffusionBlocks](training-objectives/2506.14202.md) |
 | Optimizer | [AdEMAMix](optimizer/2409.03137.md) |
 | Tokenization & data | [StarCoder2](tokenization-data/2402.19173.md) |
 | Inference scaling | [Zyphra RSA / ZAYA1-8B](inference-scaling/2605.05365.md) |
