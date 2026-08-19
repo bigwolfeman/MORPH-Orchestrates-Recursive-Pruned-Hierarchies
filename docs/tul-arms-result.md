@@ -204,10 +204,20 @@ had slot cosine 0.879 against 0.670 for unrelated spans.
 
 **That reading was circular, and two controls killed it.**
 
-**Control 1 — the pre-core input.** A slot's input is `E_slot` + the bag-mean of its own
-span's token embeddings (§3.2). Two spans with the same text therefore have nearly the
-same slot input *by construction*. Measured, the separation is LARGER before the core
-loop than after it:
+**Control 1 — the pre-core state.** Two spans with the same text have nearly the same
+slot state before the core *by construction*, since the slot's input is `E_slot` + the
+bag-mean of its own span's token embeddings (§3.2). Measured, the separation is LARGER
+before the core loop than after it:
+
+> **CORRECTION, 2026-08-18.** This row was first written up as "the raw bag-mean input".
+> That is WRONG and the error propagated into a design argument. The probe captures the
+> first argument to `_tul_core`, which is the output of `_tul_front` — and `_front_tail`
+> runs all four PRELUDE blocks over every position, slots included
+> (`transformer.py:920-942`). So the captured vector is the slot state AFTER the prelude:
+> contextual, having attended to the real token positions, not a bag of embeddings.
+> What the numbers below show is that **the 6-block core loop adds almost nothing over
+> the 4-layer prelude on the slot path** — not that the slot is a bag-of-words. The claim
+> "the slot cannot carry computed information" does not follow and is retracted.
 
 | signal | repeat pairs | distinct pairs | gap |
 |---|---|---|---|
@@ -239,10 +249,11 @@ text is an autoencoding relation. The predictive relation is slot *i* against sp
 2. **Plans are not random.** On the predictive pairing, slot similarity does track
    next-span similarity, Spearman +0.2321.
 3. **The core loop adds essentially nothing to the plan.** Spearman against the next span
-   goes +0.2187 (raw bag-mean input) → +0.2321 (after 6 blocks × Poisson depth). The
-   plan is approximately a bag-of-words summary of the span that just ended, and the
-   expensive loop on top of it does not measurably improve what it says about what comes
-   next.
+   goes +0.2187 (post-PRELUDE slot state) → +0.2321 (after 6 blocks × Poisson depth).
+   The expensive loop does not measurably improve what the slot says about what comes
+   next, over what four prelude layers already gave it. NOTE the corrected baseline: this
+   is loop-vs-prelude, NOT loop-vs-bag-of-words. The slot has attended to its context
+   before the core ever runs.
 
 Point 3 is the consequential one, and it is the same story `val/plan_nats = +0.0270` and
 `val/first_tok_counterfactual = −0.1196` were already telling from the loss side. Three
