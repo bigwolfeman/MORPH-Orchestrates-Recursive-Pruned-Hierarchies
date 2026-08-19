@@ -51,6 +51,13 @@ Some foot guns about looped models: a learned gate seems ideal at face value, bu
 These tend to collapse, and if you solve the collapse problem the learned iterative map is less generalized.  
 Poisson depth sampling forces the iterative map to generalize across a wide range of potential depths.
 
+### DiffusionBlocks on recurrent-depth models — see §9
+
+Applies a diffusion interpretation to Huginn's looped core and trains it as a single-pass denoiser
+instead of looping with truncated BPTT. The mode most relevant to MORPH's Parcae core.
+Assessment: [`diffusionblocks-morph-assessment.md`](diffusionblocks-morph-assessment.md).
+
+
 ---
 
 ## 2. Attention
@@ -463,6 +470,35 @@ phase 2 recovers with standard next-token prediction (`bag_size=0`). Controlled 
 superposition for the first 30k of a 100k-step run). Eval and generation always use `bag_size=0`;
 `tst_bag_size=0` is bit-identical to the pre-TST baseline. Curriculum configs deliberately disable
 TST (`pretrain_curriculum.yaml`).
+
+### DiffusionBlocks — block-wise training via diffusion interpretation (evaluating, nothing built)
+
+**Title:** DiffusionBlocks: Block-wise Neural Network Training via Diffusion Interpretation  
+**Authors:** Makoto Shing, Masanori Koyama, Takuya Akiba (Sakana AI, U. Tokyo)  
+**Year:** 2026 (ICLR 2026; v1 2025)  
+**arXiv:** [2506.14202](https://arxiv.org/abs/2506.14202)  
+**MORPH uses:** NOTHING YET — under assessment, see
+[`diffusionblocks-morph-assessment.md`](diffusionblocks-morph-assessment.md). Two separable modes.
+(a) *Block-wise*: cut `L` layers into `B` σ-range-specialised blocks, each trained by its own
+denoising objective, cutting params + grads + **optimizer state** by `B` (unlike gradient
+checkpointing, App. G) — but with **no compute saving** (App. H: `L·K` layer evals either way).
+(b) *Recurrent-depth* (§5.5, App. E.5): applied to **Huginn**, MORPH's closest published relative
+(2 prelude / 4-layer recurrent core / 2 coda vs MORPH's 4:6:4). For that case the paper explicitly
+does **NOT** partition into blocks — *"recurrent-depth models do not require block partitioning
+since the entire network is applied recurrently"* — it trains the whole net as a single-pass
+denoiser at a sampled σ, deleting `K` iterations and truncated BPTT from the training step
+(~10× less compute; MAUVE 0.49 → 0.70, but at 3× the epochs and no true perplexity).
+Key facts for us: the framework is **optimizer-agnostic** (AdamW throughout, nothing in the theory
+needs it — so AdEMAMix is compatible, but every step-counted schedule stretches by `B`); the
+inter-block seam is a *prescribed* convex contraction `z_b = α z_{b-1} + (1−α)D`, `α = σ_b/σ_{b-1}`,
+which is a `ρ(J_core) ≤ 1` handle of exactly the kind
+`Ai-notes/06-19-2026/MORPH-Iterative-Map-Dynamics/MENTAL-MODEL.md` asks for; equi-probability σ
+partitioning matters far more than the layer split (FID 38.03 vs 43.53); quality holds to ~8
+layers/block and degrades below. Costs: true perplexity becomes uncomputable, the causal-consistency
+mask doubles sequence length (colliding with TUL's slot budget), and TUL's 1.6× conditional-compute
+win is largely redundant under mode (b).  
+**CAUTION:** as rendered in v4, Eq (3)–(5) carry a sign that makes noise *increase* down the
+schedule; use the EDM (Karras et al. 2022, Alg. 2) form. See the assessment doc §4.5.
 
 ---
 
