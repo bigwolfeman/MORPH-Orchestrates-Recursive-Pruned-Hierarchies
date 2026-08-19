@@ -11,6 +11,7 @@ tok/s, FLOP efficiency and VRAM against the recorded A0 / A1 anchors.
 | [`diffusionblocks-morph-assessment.md`](diffusionblocks-morph-assessment.md) | design rationale; what the paper does and does not say |
 | [`diffusionblocks-experiment-sheet.md`](diffusionblocks-experiment-sheet.md) | **pre-registration**: arms, expected numbers, metric contract, kill criteria |
 | [`references/training-objectives/2506.14202.md`](references/training-objectives/2506.14202.md) | full paper text + PDF |
+| [`diffusionblocks-reference-audit.md`](diffusionblocks-reference-audit.md) | **audit of the authors' released code.** Settles the Euler sign and the scale rule; records what they did NOT release |
 | [`ablation-ledger.md`](ablation-ledger.md) | "Planned — DiffusionBlocks" rows; A0 / A1 / A3 measured anchors |
 
 ---
@@ -22,7 +23,11 @@ tok/s, FLOP efficiency and VRAM against the recorded A0 / A1 anchors.
    `nvidia-smi` queries are fine. Every item in Phase A is CPU-only or CPU-light by design.
 2. Wolfe is on a 10 A circuit with a dying UPS. Heavy CPU load while the GPU is at 100 % trips it.
    No large parallel builds, no multi-core sweeps, while the other job runs.
-3. **No arm runs until every Phase-A gate passes and the R3 scale rule is written down.**
+3. **No arm runs until every Phase-A gate passes.** The R3 scale rule is now written down — see O1
+   and [audit §6](diffusionblocks-reference-audit.md).
+   **Wolfe, 2026-08-19: we can start WRITING code. No smoke test, no training run, nothing executed
+   yet.** The other project keeps the GPU until Wolfe says otherwise; its VRAM load varies a lot, so
+   a low reading is not permission to start.
    **Reviewer note (2026-08-19):** R3b as first written over-stated the blocker. `morph/model/embeddings.py`
    log-maps the Lorentz point to the origin tangent space INSIDE the embedding module
    (`LorentzEmbedding.forward = log_map_origin(project_to_hyperboloid(·))`), so the network — and
@@ -65,15 +70,17 @@ only because our mass split is unequal. **The actual departure from the paper's 
 1/8 : 6/8 : 1/8 mass split itself** (the paper gives every block 1/B of the mass). DB-12 still
 isolates the visit knob; DB-9 covers the partition.
 
-## 2. Decisions still open
+## 2. Decisions — all three now closed (Wolfe, 2026-08-19)
 
-| # | Question | Owner | Blocks |
-| --- | --- | --- | --- |
-| O1 | **R3 — the scale rule, not the manifold.** The manifold half is closed by the code: `embeddings.py` log-maps Lorentz to the origin tangent space inside the module, so "ambient Euclidean with Lorentz at readout" is not an option to choose — it is what MORPH already does by construction (reviewer, 2026-08-19). Still open and still blocking every arm: pin the per-slice scale so `σ_data` is a known number. Euclidean slice ≈ unit norm; Lorentz tangent slice inits at std 0.005; bigram adds on top. Per-slice L2 vs per-slice `σ_data`; Wolfe signs off. | Wolfe + A2 | **every arm** |
-| O2 | Shifted-`x0` conditioning instead of the clean\|noisy concatenation? If it works, `pos/tok` halves everywhere and the new Triton mask disappears. Wolfe: "may work, not sure." | Wolfe, after A4 | scope of A5 |
-| O3 | Do we run any DB arm on `base.yaml` (prune / carve / route live), or stay on `tul_short.yaml` (dense) for the whole campaign? | Wolfe | whether §4 mitigations are needed at all |
+| # | Was | Decision |
+| --- | --- | --- |
+| O1 | the scale rule | **Per-slice scaling, recommendation accepted.** Normalise the euclidean and Lorentz-tangent slices *independently*, each to per-component std `σ_data`, i.e. slice norm `σ_data·√(slice_dim)`. Apply the same transform to the tied head (`lm_weight()`). Do it inside the DB conversion so DB-off stays bit-identical. Rationale and the reason the authors' whole-vector L2 does NOT transfer: [audit §6](diffusionblocks-reference-audit.md). The manifold half was already closed by the code — Lorentz is log-mapped to tangent space inside the embedding module |
+| O2 | shifted-`x0` vs clean\|noisy concat | **Test both.** Neither is assumed. A4 scopes both; A5 builds both behind a construction-time switch. The concat numbers stay the pre-registered ones (sheet §4.2); the shifted-`x0` variant gets its own rows |
+| O3 | `base.yaml` or dense | **Stay dense, and no TST.** The whole campaign runs at `tul_short.yaml`, which already has `prune_start`/`compact_step`/`route_start` at 999999999 and `tst_bag_size: 0`. Sparsity and TST are tested later, only after this is proven. **Ternary + int6 QAT stay ON** — the A0/A1 anchors ran with them, so turning them off would break the pairing |
 
----
+**Consequence: §4 drops out of this campaign.** No prune, no carve, no route, no TST means no
+step-counted schedule to stretch. §4 is retained only as the precondition list for the day a DB arm
+is pointed at `base.yaml`.
 
 ## 3. Phase A — no GPU training. Do all of this first.
 
