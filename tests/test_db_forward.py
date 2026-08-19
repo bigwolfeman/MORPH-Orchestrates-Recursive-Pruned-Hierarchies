@@ -439,3 +439,99 @@ def test_the_degeneracy_guard_actually_detects_the_degenerate_scaling():
     assert ce < 0.1, (
         f"expected the degenerate scaling to collapse CE toward 0, got {ce:.4f}. The "
         f"leak mechanism has changed -- re-derive the guard.")
+
+
+def test_db_conditioning_is_never_ternarized():
+    """The σ path must stay bf16 regardless of ternary_scope.
+
+    `ternary_scope: backbone` means "every weight matrix that is not attention and not
+    embeddings", which silently swept in db_sigma_cond.mlp and db_gates.*.to_mod. Snapping
+    the σ embedding and the AdaLN shift/scale to {-1,0,+1} destroys the resolution of the
+    progress coordinate the whole method rests on.
+
+    Found by reading parametrization keys out of a step_300 checkpoint, NOT by a test —
+    which is why this one exists. Same precedent as the HC W_fused proj and the SSM control
+    matrices, both already excluded as precision-sensitive control paths.
+    """
+    import torch.nn.utils.parametrize as parametrize
+
+    from morph.model.ternary_qat import apply_ternary_qat
+
+    cfg = DBConfig(mode="b3", conditioning="x0_inject")
+    m = _model(cfg)
+    apply_ternary_qat(m, scope="backbone", threshold=0.5)
+
+    db_mods = [(n, mod) for n, mod in m.named_modules()
+               if n.startswith("db_sigma_cond") or n.startswith("db_gates")]
+    assert db_mods, "no DB conditioning modules found — did they get renamed?"
+    for n, mod in db_mods:
+        if hasattr(mod, "weight"):
+            assert not parametrize.is_parametrized(mod, "weight"), (
+                f"{n} was ternarized; the sigma-conditioning path must stay bf16")
+
+    # and the guard must not have disabled ternary everywhere by accident
+    n_tern = sum(1 for _, mod in m.named_modules()
+                 if hasattr(mod, "weight") and parametrize.is_parametrized(mod, "weight"))
+    assert n_tern > 0, "ternary QAT applied to nothing — the guard is too broad"
+
+
+def test_fixed_sigma_val_is_deterministic_and_block_follows_sigma():
+    """Validation must be a CURVE, not a lottery.
+
+    A sampled-σ val CE cannot be compared between two evals 200 steps apart, because the
+    draw dominates: the training loss moved 4.84–6.65 on σ alone. build_db_step(fixed_sigma)
+    pins σ and derives the block from it, so repeated evals at the same weights agree
+    exactly and a val series measures the model rather than the RNG.
+    """
+    cfg = DBConfig(mode="b3", conditioning="x0_inject")
+    m = _model(cfg)
+    rt = _RT(cfg)
+    labels = torch.randint(5, V, (3, 24))
+
+    a = build_db_step(rt, m, labels, fixed_sigma=0.3)
+    b = build_db_step(rt, m, labels, fixed_sigma=0.3)
+    assert torch.equal(a.sigma, b.sigma)
+    assert a.block_idx == b.block_idx
+    assert float(a.sigma[0]) == pytest.approx(0.3)
+
+    # the block must be the one that OWNS this sigma, not a random draw
+    assert a.block_idx == int(rt.schedule.block_of_sigma(a.sigma[:1])[0])
+    # and different sigmas must map to different blocks somewhere across the grid
+    blocks = {build_db_step(rt, m, labels, fixed_sigma=s).block_idx
+              for s in (0.01, 0.3, 10.0)}
+    assert len(blocks) > 1, f"every val sigma mapped to the same block: {blocks}"
+
+
+def test_db_checkpoint_round_trips_the_conditioning_params():
+    """Resume must restore the σ path, or a 20k run that dies at 15k restarts blind.
+
+    The step_300 checkpoint carries 10 db_* keys, but "the keys are present" is not
+    "resume works". This round-trips a state_dict through a freshly built model and checks
+    the forward is bit-identical.
+    """
+    cfg = DBConfig(mode="b1", conditioning="x0_inject")
+    src = _model(cfg, seed=7)
+    # move the zero-init gates off zero so a failure to restore them is visible
+    with torch.no_grad():
+        for p_ in src.db_gates.parameters():
+            p_.add_(torch.randn_like(p_) * 0.05)
+        for p_ in src.db_sigma_cond.parameters():
+            p_.add_(torch.randn_like(p_) * 0.05)
+
+    ids = torch.randint(5, V, (2, 24))
+    labels = torch.randint(5, V, (2, 24))
+    rt = _RT(cfg)
+    step = build_db_step(rt, src, labels, generator=torch.Generator().manual_seed(11))
+    with torch.no_grad():
+        want = src(ids, db_step=step, db_precond=rt.precond, db_want_logits=True)["logits"]
+
+    sd = src.state_dict()
+    assert any(k.startswith(("db_gates", "db_sigma_cond")) for k in sd), "no db_* in state_dict"
+
+    dst = _model(cfg, seed=99)          # different init on purpose
+    missing, unexpected = dst.load_state_dict(sd, strict=False)
+    assert not [k for k in missing if k.startswith(("db_gates", "db_sigma_cond"))], missing
+    assert not [k for k in unexpected if k.startswith(("db_gates", "db_sigma_cond"))], unexpected
+    with torch.no_grad():
+        got = dst(ids, db_step=step, db_precond=rt.precond, db_want_logits=True)["logits"]
+    assert torch.equal(want, got), "restored model does not reproduce the source forward"

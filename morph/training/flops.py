@@ -401,7 +401,9 @@ def perf_metrics(fm: FlopModel, *, batch: int, seq_len: int, step_time_s: float,
                  backward_multiplier: float = 3.0,
                  density: float = 1.0,
                  db_mode: str | None = None,
-                 db_visit_probs: list[float] | None = None) -> dict:
+                 db_visit_probs: list[float] | None = None,
+                 cum_tokens: float = 0.0,
+                 cum_layer_passes: float = 0.0) -> dict:
     """The ``perf/*`` dict for one logging tick.
 
     ``ceiling_tflops`` must be a MEASURED dense-bf16 GEMM ceiling for this GPU at MORPH's
@@ -450,6 +452,18 @@ def perf_metrics(fm: FlopModel, *, batch: int, seq_len: int, step_time_s: float,
     out = {
         # NOMINAL — the pre-registered, cross-arm comparable proxy. A0 = 44.0.
         "perf/flop_proxy": proxy,
+        # ── Cross-arm alignment axes ────────────────────────────────────────
+        # db_b1 and db_b3 cost DIFFERENT amounts per step (proxy 14.00 vs 4.67), so a loss
+        # curve plotted against STEP compares equal DATA at unequal COMPUTE, and a curve
+        # against compute compares equal compute at unequal data. Neither alone is a fair
+        # read, so log both cumulative axes and report on both:
+        #   step-matched    -> same cum_tokens     (equal data seen)
+        #   compute-matched -> same cum_layer_passes (equal work done)
+        # At proxy 4.67 vs 14.00, db_b3 needs 3.0x the steps of db_b1 for equal compute;
+        # against A0's 44.0 it needs 9.4x. Without these two counters that arithmetic has to
+        # be redone by hand for every comparison, which is how unfair tables get published.
+        "perf/cum_tokens": cum_tokens,
+        "perf/cum_layer_passes": cum_layer_passes,
         # REALIZED — what the sampled depths actually produced. A0 ≈ 42.1. Equal to the
         # nominal proxy for a DB arm, where the core depth is 1 by construction.
         "perf/layer_passes_per_token": realized_passes,

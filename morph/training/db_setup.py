@@ -43,6 +43,11 @@ class DbRuntime:
     scaler: SliceScaler | None
     activate_at: float
     manifest: dict = field(default_factory=dict)
+    # FIXED sigma grid for validation. A sampled-sigma val CE is a lottery, not a curve --
+    # two evals 200 steps apart would not be comparable. These span the useful band measured
+    # in the SliceScaler docstring: 0.1 is near the easy end, 0.3 is the p_noise median,
+    # 1.0 and 3.0 are the hard end where CE approaches ln(V).
+    val_sigmas: tuple[float, ...] = (0.1, 0.3, 1.0, 3.0)
 
     def activation_step(self, total_steps: int) -> int:
         return int(self.activate_at * total_steps)
@@ -139,7 +144,8 @@ def scaled_lm_weight(embedding, scaler: SliceScaler | None) -> Tensor:
 
 
 def build_db_step(rt: DbRuntime, model, labels: Tensor,
-                  generator: torch.Generator | None = None) -> DBStep:
+                  generator: torch.Generator | None = None,
+                  fixed_sigma: float | None = None) -> DBStep:
     """Sample one ``(block, σ)`` and build the noised target for this batch.
 
     The target at position ``t`` is ``embed(labels[t])``. MORPH's loader gives
@@ -166,8 +172,14 @@ def build_db_step(rt: DbRuntime, model, labels: Tensor,
     device = labels.device
     B = labels.shape[0]
 
-    block_idx = rt.schedule.sample_block(generator)
-    sigma = rt.schedule.sample_sigma(block_idx, B, device, generator)
+    if fixed_sigma is None:
+        block_idx = rt.schedule.sample_block(generator)
+        sigma = rt.schedule.sample_sigma(block_idx, B, device, generator)
+    else:
+        # Validation: sigma is GIVEN, so the block follows from it (the inference-side
+        # mapping) rather than being drawn. This is what makes two evals comparable.
+        sigma = torch.full((B,), float(fixed_sigma), device=device)
+        block_idx = int(rt.schedule.block_of_sigma(sigma[:1])[0])
 
     y = model.embed(labels)                     # [B, L, d_model]
     scaler = getattr(model, "db_scaler", None)

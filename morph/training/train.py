@@ -93,8 +93,14 @@ def evaluate(
     n_batches: int = 20,
     tul: bool = False,
     extra: dict | None = None,
+    db=None,
 ) -> tuple[float, float]:
     """Return (avg_loss, ppl) over n_batches validation steps.
+
+    ``db`` (a DbRuntime) switches to the DiffusionBlocks objective on a FIXED σ grid. The
+    returned "ppl" is then exp of the CE at the SMALLEST σ and is NOT comparable to the
+    baseline's token PPL — DB CE is a σ-conditioned reconstruction number, not a likelihood.
+    Use the bridge metrics for any cross-family claim (see docs sheet §1.3).
 
     ``tul=True``: the val loader yields the 3-tuple (input_ids, labels, slot_layout) and
     the model is called with the layout ON and bag_size 0 (spec invariant 6). The §7.2
@@ -134,6 +140,34 @@ def evaluate(
             if layout.stats:
                 for k, v in layout.stats.items():
                     acc.setdefault(f"val/span_{k}", []).append(float(v))
+        elif db is not None:
+            # Local import: the DB helpers are imported inside the train entry point (which
+            # is a different scope), and `evaluate` is module-level — so it cannot see them.
+            # This is what NameError'd on the first real eval; deferred import matches how
+            # the rest of this module handles its heavier deps.
+            from morph.training.db_setup import build_db_step, db_loss
+
+            # DiffusionBlocks val. Calling the BASELINE forward here (which is what this
+            # branch used to do for every non-TUL run) would evaluate a denoiser-trained
+            # model on plain next-token prediction — a different objective, so the number
+            # would be meaningless. Instead evaluate the DB objective at a FIXED σ grid.
+            #
+            # Fixed, not sampled: a sampled-σ val CE is not a curve, it is a lottery, and
+            # two evals 200 steps apart would not be comparable. The grid spans the useful
+            # band and each σ is reported separately AND averaged, so a regression at one
+            # noise level cannot hide inside the mean.
+            x, y = batch
+            x, y = x.to(device), y.to(device)
+            _m = getattr(model, "_orig_mod", model)
+            for _sig in db.val_sigmas:
+                _st = build_db_step(db, _m, y, fixed_sigma=_sig)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    _o = _m(x, db_step=_st, db_precond=db.precond)
+                    _l, _mt = db_loss(_o, _st, db.precond, _m)
+                acc.setdefault(f"val/db_ce_sigma{_sig:g}", []).append(_mt["db/ce"])
+                acc.setdefault("val/db_ce", []).append(_mt["db/ce"])
+                if _sig == min(db.val_sigmas):
+                    losses.append(_mt["db/ce"])
         else:
             x, y = batch
             x, y = x.to(device), y.to(device)
@@ -1660,6 +1694,11 @@ def main(cfg: DictConfig) -> None:
             "graph item, not done)."
         )
     _sg_pending = _sg_want and not phase.tul_on
+
+    # Cumulative alignment axes (see flops.py::perf_metrics). Accumulated EVERY step, not
+    # only on logging ticks, so the two curves can be aligned exactly.
+    _cum_tokens = 0.0
+    _cum_passes = 0.0
     _sg_build_step = start_step + 3
     _sg_shape = None
 
@@ -1889,6 +1928,18 @@ def main(cfg: DictConfig) -> None:
                     (x, y), _layout = batch, None
                 x, y = x.to(device), y.to(device)
                 _sg_shape = x.shape          # static-graph build uses the live shape
+
+            # Accumulate the alignment axes BEFORE the forward so a mid-step crash still
+            # leaves a consistent count. tokens = real input tokens this step; passes =
+            # tokens x nominal proxy, i.e. cumulative layer applications.
+            _step_tokens = float(batch_size) * float(seq_len)
+            _cum_tokens += _step_tokens
+            _cum_passes += _step_tokens * (
+                _flops.db_expected_passes(_db.schedule.visit_probs(), depth=1.0,
+                                          positions_per_token=_db.positions_per_token())
+                if (_db_active and _db.model_cfg.mode == "b3")
+                else (_flops.layer_passes_per_token(1.0, _db.positions_per_token())
+                      if _db_active else _flops.flop_proxy()))
 
             with _rt.region("fwd"):
                 with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -2171,6 +2222,7 @@ def main(cfg: DictConfig) -> None:
                 ceiling_tflops=_ceiling,
                 db_mode=_db.model_cfg.mode if _db_active else None,
                 db_visit_probs=_db.schedule.visit_probs() if _db_active else None,
+                cum_tokens=_cum_tokens, cum_layer_passes=_cum_passes,
             ))
             if _db_metrics is not None:
                 log.update(_db_metrics)
@@ -2287,7 +2339,8 @@ def main(cfg: DictConfig) -> None:
         if step % eval_every == 0 and step > 0:
             _val_extra: dict = {}
             val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
-                                         tul=phase.tul_on, extra=_val_extra)
+                                         tul=phase.tul_on, extra=_val_extra,
+                                         db=_db if _db_active else None)
             val_log: dict = {"val/loss": val_loss, "val/ppl": val_ppl}
             val_log.update(_val_extra)
 
@@ -2371,7 +2424,8 @@ def main(cfg: DictConfig) -> None:
     if eval_every <= total_steps:
         _val_extra = {}
         val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
-                                     tul=phase.tul_on, extra=_val_extra)
+                                     tul=phase.tul_on, extra=_val_extra,
+                                     db=_db if _db_active else None)
         _final = {"val/loss_final": val_loss, "val/ppl_final": val_ppl}
         _final.update({f"{k}_final": v for k, v in _val_extra.items()})
         wandb.log(_final, step=total_steps)
