@@ -183,11 +183,13 @@ claim was falsified.
 loop is a single forward. That was wrong, and the layer-pass accounting says why: **TUL's saving is
 a position saving, not a loop saving.** The core runs on 64 slots instead of 1024 tokens, and that
 holds whether the core is applied once or `T` times. Under DB-B3 the core term drops from
-`6` passes/token to `6 × 64/1024 = 0.375`, taking `flop_proxy` from 11.0 to 2.88. TUL survives.
+`6` passes/token to `6 × 64/1024 = 0.375`, taking `flop_proxy` from 9.34 to 6.28. *(Reviewer fix:
+an earlier draft said 11.0 → 2.88 — mass-proportional visit numbers, superseded by the sheet §3.3
+uniform-visit fix.)* TUL survives.
 
 What does shrink is the **wall-clock multiplier**. TUL buys 1.76× on top of A0 (0.947 → 0.544 s/step)
-because A0's step is 84 % real compute. At `flop_proxy` 2.88 the step is ~60 % fixed launch overhead,
-so the same FLOP ratio converts into much less time. Pre-registered band: 1.3–1.8× for TUL on top of
+because A0's step is 84 % real compute. At `flop_proxy` 6.28 the step is ~55–60 % fixed launch
+overhead, so the same FLOP ratio converts into much less time. Pre-registered band: 1.3–1.8× for TUL on top of
 DB, against 1.76× on top of A0. Sheet §3.4 and §4.2.
 
 **The genuinely tricky part is the slot target, not the compute.** A TUL slot has no token label
@@ -332,9 +334,11 @@ tracking document; this file is the design rationale behind it.
    Huginn setting. It isolates *"does the diffusion objective work on MORPH at all"* without also
    testing block independence, and it inherits none of the §5.4 schedule-stretch hazards.
 3. **DB-B3 second** — prelude / core / coda, splitting on seams MORPH already has, so the core stays
-   weight-tied and no layers are added. The σ range is cut into `T + 2 = 8` equi-probability Euler
-   steps: step 1 = prelude, steps 2–7 = the core applied once each, step 8 = coda. Expected training
-   cost `E[passes/token] = 5.5` against A0's 44.
+   weight-tied and no layers are added. Training samples σ continuously inside each block's interval
+   (mass 1/8 : 6/8 : 1/8, uniform 1/3 visits); only inference discretises, into `1 + T + 1` Euler
+   steps. Expected training cost `E[passes/token] = 4.67` against A0's 44. *(Reviewer fix: an
+   earlier draft discretised TRAINING into 8 fixed steps at 5.5 passes/token — that silently pinned
+   `T = 6`; superseded by the sheet §3.3.)*
 4. **The TUL cross on both**, per Wolfe. See §4.3 below for the correction to what I said about it,
    and the sheet §3.4 for the slot-target fork, which is the genuinely tricky part.
 5. **Then the batch sweep.** The memory win is probably worth more than the FLOP win — see the
