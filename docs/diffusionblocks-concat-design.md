@@ -9,6 +9,25 @@ Decision (Wolfe): build the **faithful** paper mechanism (App. E.4 causal consis
 not the cheap interleave. Build **b1 recurrent-depth first** as the pathfinder, then extend
 the shared machinery to b3.
 
+## Build status (2026-08-19)
+
+**BUILT + CPU-verified** (222 tests pass under the real env, 0 fail): two-source concat
+forward for b1 and b3 (`_forward_db` two-pass), CSA two-source via the fused kernel on a
+merged block bank, HCA two-source via an eager reference (`compressed_two_source_reference`),
+reference two-source window, GLA seeding from the clean final-state, and the Euler sampler
+(`db_sample`, unchanged — it routes through the two-pass). Pure masks in `db_context.py`.
+
+Verified: the no-leak arithmetic (unit) AND whole-model no-leak (perturbing the last clean
+token leaves every earlier position bit-identical, b1 and b3); clean-context
+differentiability (grad into `C_comp`/`k`/`v`; `K_I` exempt — top-k is non-diff, matching
+the baseline CSA indexer); sampler determinism/finiteness.
+
+**NOT yet run:** the GPU language-content falsifier (matched vs scrambled context CE — does
+it learn, unlike `x0_inject`). **v1 costs (correct, not defects), to optimize later:** HCA +
+window are eager reference paths (not fused); the clean pass double-computes `_cca_project`
+(capture + forward); the σ-independent clean context is recomputed each Euler step; the clean
+pass is not yet gradient-checkpointed.
+
 ---
 
 ## 1. Pivotal finding — "concat" in MORPH is NOT a single 2L sequence
