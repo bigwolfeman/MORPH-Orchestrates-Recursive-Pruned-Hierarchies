@@ -2132,13 +2132,24 @@ def main(cfg: DictConfig) -> None:
             # runs); `perf/layer_passes_per_token` is REALIZED (from the depths actually
             # sampled). A0 is 44.0 nominal and ~42.1 realized -- they are NOT the same
             # number and must not be compared to each other.
+            # The denominator for BOTH ratios is REAL TOKENS PER ROW, not seq_len. Without
+            # TUL they are equal; under TUL slot positions eat row budget, so a row's
+            # L_total positions carry fewer real tokens and using seq_len understates the
+            # ratio (measured ~2.6x off at a shrunken TUL shape). MORPH's own
+            # tul/layer_passes_per_token divides by out["n_tokens"], so match it.
+            _tok_per_row = float(seq_len)
+            if out is not None and out.get("n_tokens") is not None:
+                _tok_per_row = max(float(out["n_tokens"]) / max(batch_size, 1), 1.0)
             _ppt = _db.positions_per_token() if _db_active else 1.0
             _cpf = None
             if phase.tul_on and _layout is not None:
                 # TUL: the core runs on SLOT positions only -- that is where its win is.
                 _n_slots = float(getattr(_layout, "max_slots", 0) or 0)
+                _l_total = float(getattr(_layout, "total_positions", 0) or 0)
+                if _l_total > 0:
+                    _ppt = _ppt * (_l_total / _tok_per_row)
                 if _n_slots > 0:
-                    _cpf = _n_slots / float(seq_len)
+                    _cpf = _n_slots / _tok_per_row
             _ceiling = float(getattr(cfg.training, "gemm_ceiling_tflops", 0.0)) or None
             log.update(perf_metrics(
                 _flops, batch=batch_size, seq_len=seq_len,

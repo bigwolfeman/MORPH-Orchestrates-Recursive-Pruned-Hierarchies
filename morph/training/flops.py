@@ -175,21 +175,28 @@ class FlopModel:
             depth: core iterations. ``mean_depth`` for the baseline's looped core;
                 **1.0** for a DiffusionBlocks training step, because the core is applied
                 ONCE — that single pass is the entire compute win.
-            positions_per_token: ``L_total / seq_len``. The prelude and coda run on every
-                position, so their cost scales with this. TUL slots and the DB clean/noisy
-                concatenation both inflate it.
-            core_position_frac: core positions ÷ input tokens. Defaults to
+            positions_per_token: ``L_total / (REAL TOKENS PER ROW)``. The prelude and coda
+                run on every position, so their cost scales with this.
+                **The denominator is real tokens, NOT ``seq_len``.** Without TUL they are
+                equal and the distinction is invisible. Under TUL they are not: slot
+                positions eat row budget, so a 144-position row may carry only 49 real
+                tokens, and using ``seq_len`` understates the ratio ~2.6×. MORPH's own live
+                metric divides by ``out["n_tokens"]``, so match it or the analytic and live
+                numbers disagree (verified: analytic 29.1 vs live 29.39 with the right
+                denominator, 11.1 vs 29.39 with the wrong one).
+            core_position_frac: core positions ÷ REAL TOKENS PER ROW. Defaults to
                 ``positions_per_token`` (the core sees everything the rest does). Under TUL
-                the core runs on slots ONLY, so it is ``n_slots / seq_len`` — e.g.
-                ``64/1024 = 0.0625``, which is why TUL is cheap.
+                the core runs on slots ONLY, so it is ``n_slots / tokens_per_row`` — same
+                denominator caveat as above.
             sections: which sections run. All three for the baseline and for ``mode="b1"``.
                 Exactly one under ``mode="b3"`` — use :meth:`db_expected_passes` to take the
                 expectation over the block-visit distribution instead of calling this once
                 per block.
 
         Checks against the recorded anchors (ablation-ledger.md):
-            A0  → 4·1 + 6·6·1 + 4·1                  = 44.0   (nominal, T̄=6)
-            A1  → 8·1.125 + 6·5.688·0.0625           ≈ 11.1   (realized; ledger says 10.68)
+            A0  → 4·1 + 6·6·1 + 4·1                        = 44.0  (nominal, T̄=6)
+            A1  → 8·(1152/1033) + 6·5.688·(64/1033)        ≈ 11.0  (ledger measured 10.68,
+                  i.e. 3.4 % agreement, using tokens/row = 1033 not seq_len = 1024)
         """
         if core_position_frac is None:
             core_position_frac = positions_per_token
@@ -243,27 +250,45 @@ class FlopModel:
 
     def step_flops(self, batch: int, seq_len: int, depth: float,
                    positions_per_token: float = 1.0,
-                   core_position_frac: float = 1.0,
+                   core_position_frac: float | None = None,
                    backward_multiplier: float = 3.0,
-                   density: float = 1.0) -> tuple[int, int]:
+                   density: float = 1.0,
+                   sections: tuple[str, ...] | None = None) -> tuple[int, int]:
         """``(total_flops, attn_flops)`` for one optimizer step.
+
+        ``sections`` restricts the count to the sections that actually ran — required for
+        ``mode="b3"``, where one block runs per step. Without it b1 and b3 reported the
+        SAME TFLOPs, which would have made the B=3 arm look like it saved nothing.
 
         ``backward_multiplier=3.0`` is the standard forward+backward convention (1 forward
         + ~2 for the backward). Gradient checkpointing pushes the effective figure toward
         4.0; the plan says to report which was used next to any MFU. ``density`` scales the
         MORTAR-eligible GEMMs — **1.0 for this whole campaign**, which runs dense (plan O3).
         """
+        # `None` means "the core sees whatever the rest sees" — same default as
+        # layer_passes_per_token. Without this, perf_metrics(core_position_frac=None) hit
+        # `int * NoneType` at the first logging tick of every non-TUL run.
+        if core_position_frac is None:
+            core_position_frac = positions_per_token
         pos = int(round(seq_len * positions_per_token))
-        core_pos = int(round(pos * core_position_frac))
+        core_pos = int(round(seq_len * core_position_frac))
+        sec = self.ALL_SECTIONS if sections is None else sections
 
-        gemm = (
-            (self.gemm_prelude + self.gemm_coda + self.gemm_other) * pos
-            + self.gemm_core * core_pos * depth
-        ) * density
-        attn = (
-            (self.attn_prelude + self.attn_coda) * pos
-            + self.attn_core * core_pos * depth
-        )
+        # `other` (embeddings, LM head, mixers) is the shared readout: it runs for EVERY
+        # block, which is why it is not gated on `sections`. The authors' head is shared the
+        # same way (audit §3).
+        gemm = self.gemm_other * pos
+        attn = 0.0
+        if "prelude" in sec:
+            gemm += self.gemm_prelude * pos
+            attn += self.attn_prelude * pos
+        if "coda" in sec:
+            gemm += self.gemm_coda * pos
+            attn += self.attn_coda * pos
+        if "core" in sec:
+            gemm += self.gemm_core * core_pos * depth
+            attn += self.attn_core * core_pos * depth
+        gemm *= density
         total = (gemm + attn) * batch * backward_multiplier
         return int(total), int(attn * batch * backward_multiplier)
 
@@ -408,12 +433,18 @@ def perf_metrics(fm: FlopModel, *, batch: int, seq_len: int, step_time_s: float,
             realized_depth, positions_per_token, core_position_frac)
         depth_for_flops = realized_depth
 
-    total, attn = fm.step_flops(
-        batch=batch, seq_len=seq_len, depth=depth_for_flops,
-        positions_per_token=positions_per_token,
-        core_position_frac=core_position_frac,
-        backward_multiplier=backward_multiplier, density=density,
-    )
+    _sf = dict(batch=batch, seq_len=seq_len, depth=depth_for_flops,
+               positions_per_token=positions_per_token,
+               core_position_frac=core_position_frac,
+               backward_multiplier=backward_multiplier, density=density)
+    if db_mode == "b3":
+        # One section runs per step, so the comparable figure is the expectation over the
+        # visit distribution — same reasoning as db_expected_passes.
+        parts = [fm.step_flops(sections=(name,), **_sf) for name in fm.ALL_SECTIONS]
+        total = int(sum(p * t for p, (t, _) in zip(db_visit_probs, parts)))
+        attn = int(sum(p * a for p, (_, a) in zip(db_visit_probs, parts)))
+    else:
+        total, attn = fm.step_flops(**_sf)
     tflops = (total / step_time_s) / 1e12 if step_time_s > 0 else 0.0
 
     out = {
