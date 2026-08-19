@@ -14,7 +14,13 @@ from __future__ import annotations
 import pytest
 import torch
 
-from morph.model.diffusion_blocks import DBConfig, DBSchedule, EDMPrecond
+from morph.model.diffusion_blocks import (
+    DBConfig,
+    DBSchedule,
+    DBStep,
+    EDMPrecond,
+    SliceScaler,
+)
 from morph.model.transformer import MORPHConfig, MORPHTransformer
 from morph.training.db_setup import build_db_step, db_loss
 
@@ -203,12 +209,18 @@ def test_slice_scaling_puts_target_and_tied_head_in_the_same_space():
     with torch.no_grad():
         w = m.db_lm_weight()
     euc = m.embed.hybrid.euclidean_dim
+    import math
     for lo, hi in ((0, euc), (euc, m.cfg.d_model)):
         t_rms = step.y_clean[..., lo:hi].float().pow(2).mean(-1).sqrt().mean()
         w_rms = w[..., lo:hi].float().pow(2).mean(-1).sqrt().mean()
+        # The contract is that the two SIDES agree — not that either equals sigma_data.
+        # (sigma_data stays a fixed EDM preconditioner constant; the target is unit-norm
+        # per slice, deliberately well below it. See SliceScaler's docstring.)
         assert torch.allclose(t_rms, w_rms, atol=1e-3), (
             f"slice [{lo}:{hi}] target RMS {t_rms:.4f} != head RMS {w_rms:.4f}")
-        assert torch.allclose(t_rms, torch.tensor(cfg.sigma_data), atol=1e-3)
+        expect = 1.0 / math.sqrt(hi - lo)
+        assert abs(float(t_rms.detach()) - expect) < 1e-3, (
+            f"slice [{lo}:{hi}] RMS {t_rms:.4f} != unit-norm per-component {expect:.4f}")
 
 
 # ── the guards fire ──────────────────────────────────────────────────────────
@@ -281,3 +293,149 @@ def test_db_can_overfit_a_single_batch():
         if i >= 35:
             last = ce if last is None else min(last, ce)
     assert last < first, f"CE did not improve: first {first:.3f} -> last {last:.3f}"
+
+
+# ── the degeneracy guard (2026-08-19) ────────────────────────────────────────
+
+def test_untrained_model_gets_no_free_lunch_at_median_sigma():
+    """An UNTRAINED model must NOT already solve the task at the σ values p_noise samples.
+
+    This is the test whose absence let a degenerate objective reach the GPU. `db_b1` trained
+    for 100 steps and printed loss=0.0000 at step 60; the cause was that the target scale
+    made `c_skip·z_t` hand the answer straight to the tied head, so ~66 % of draws had no
+    gradient at all and the loss curve was a σ-lottery.
+
+    The mechanism is specific to a DISCRETE target with a weight-tied readout: `z` only has
+    to land in the right Voronoi cell of the embedding table, not to reconstruct `y`. So the
+    task stays trivial at SNRs where an image would still be hard.
+
+    Measured at d=64/V=512, untrained, ln(V) = 6.24:
+        per-component std 0.5   -> CE 0.000  (degenerate)
+        per-component std 1/√d  -> CE 6.14   (nothing free)   <- unit norm per slice
+
+    Guards `SliceScaler`'s unit-norm target. If someone rescales to per-component `σ_data`
+    to make EDM's constant "literally true", this fails.
+    """
+    import math
+
+    # d=512 rather than the module's d=64 fixture. This criterion is scale-sensitive by
+    # nature: unit norm gives per-component std 1/sqrt(slice_dim), so d=64 (slices 48/16 ->
+    # 0.144/0.25) is partly readable no matter what, while d=512 (384/128 -> 0.051/0.088)
+    # and the real d=1024 (768/256 -> 0.036/0.063) are not. Testing at d=64 would assert a
+    # property the fixture cannot have.
+    # BOTH d and V must be representative, because the criterion is sensitive to both:
+    #   * d sets per-component std (unit norm -> 1/sqrt(slice_dim)). The module's d=64
+    #     fixture gives 0.144, the real d=1024 gives 0.036.
+    #   * V sets how separable the embedding table is. 64 near-orthogonal rows in 384 dims
+    #     are trivially readable; the real vocab is 49152.
+    # d=512 / V=2048 is the smallest pair that reproduces the real regime on CPU.
+    BIG_V = 2048
+    cfg = DBConfig(mode="b1", conditioning="x0_inject", slice_scale=True)
+    torch.manual_seed(0)
+    big = _tiny(d_model=512, channel_dims=(256, 160, 96), n_heads=4, n_kv_heads=4,
+                vocab_size=BIG_V, bigram_hash_vocab=BIG_V)
+    m = MORPHTransformer(big).eval()
+    m.build_db_modules(cfg)
+    m.eval()
+    rt = _RT(cfg)
+    ids = torch.randint(5, BIG_V, (4, 32))
+    labels = torch.randint(5, BIG_V, (4, 32))
+    ln_v = math.log(BIG_V)
+
+    # Only the sigmas that carry real p_noise mass. sigma=0.3 is the MEDIAN of the
+    # log-normal (P_mean=-1.2, P_std=1.2); 0.5 is its 66th percentile. sigma=0.05 is
+    # excluded on purpose: it holds 6.7 % of the mass, and this tiny d=64 test model has
+    # per-component std 1/sqrt(48)=0.144 vs the real model's 1/sqrt(768)=0.036, so at
+    # d=64 the low-sigma tail is partly readable no matter what. That is a property of the
+    # 64-dim fixture, not of the configuration under test.
+    # sigma >= 0.3 is >= 50 % of p_noise's mass. The low-sigma tail is deliberately NOT
+    # asserted: sigma <= 0.1 carries under 18 % of the mass and is intrinsically easy in
+    # ANY diffusion model -- at small sigma the input already IS nearly the answer, which is
+    # exactly why EDM applies w(sigma) and why p_noise is log-normal rather than uniform.
+    # Measured here at d=512: sigma 0.05 -> CE 1.90, sigma 0.3 -> above the bar. Demanding
+    # non-triviality at 0.05 would be asserting against the method's design, not against a
+    # bug.
+    for sigma_val in (0.3, 0.5, 1.0):
+        step = build_db_step(rt, m, labels)
+        step.sigma = torch.full((4,), sigma_val)
+        y = step.y_clean
+        step.z_noisy = (y.float() + sigma_val * torch.randn(
+            y.shape, generator=torch.Generator().manual_seed(3))).to(y.dtype)
+        with torch.no_grad():
+            out = m(ids, db_step=step, db_precond=rt.precond, db_want_logits=True)
+            ce = float(torch.nn.functional.cross_entropy(
+                out["logits"].reshape(-1, BIG_V).float(), labels.reshape(-1)))
+        # Bar at 0.4·ln(V). Partial information at the median sigma is EXPECTED and is not
+        # a leak: z_t genuinely is a noisy view of the answer, so a nearest-embedding
+        # readout earns partial credit. What must never happen is CE ~ 0, i.e. no gradient
+        # at all. Measured at d=512 / V=2048 (ln V = 7.62):
+        #     unit-norm per slice   -> CE 5.06 at sigma=0.3   (66 % of ln V)  PASS
+        #     per-component 0.5     -> CE 0.0003              (0.004 %)       the old bug
+        # The two regimes are three orders of magnitude apart, so any bar in between works;
+        # 0.4 is chosen to be comfortably clear of both.
+        assert ce > 0.4 * ln_v, (
+            f"DEGENERATE at sigma={sigma_val}: untrained CE {ce:.4f} is far below ln(V)="
+            f"{ln_v:.2f}. The target scale is letting c_skip*z_t reveal the label, so these "
+            f"draws carry no gradient. See SliceScaler's docstring."
+        )
+
+
+def test_slice_scaler_targets_unit_norm_not_sigma_data():
+    """Pins the scale decision itself, so a future 'cleanup' cannot silently undo it."""
+    import math
+    sc = SliceScaler((768, 256), sigma_data=0.5)
+    assert sc.target_norms == (1.0, 1.0)
+    x = torch.randn(2, 3, 1024)
+    out = sc(x)
+    assert out[..., :768].norm(dim=-1).allclose(torch.ones(2, 3), atol=1e-3)
+    assert out[..., 768:].norm(dim=-1).allclose(torch.ones(2, 3), atol=1e-3)
+    # per-component std lands in the band measured to be non-degenerate
+    for lo, hi, d in ((0, 768, 768), (768, 1024, 256)):
+        rms = out[..., lo:hi].pow(2).mean(-1).sqrt().mean()
+        assert abs(float(rms) - 1.0 / math.sqrt(d)) < 1e-3
+        assert float(rms) < 0.15, "per-component std too large -> degenerate objective"
+
+
+def test_the_degeneracy_guard_actually_detects_the_degenerate_scaling():
+    """A guard nobody has seen fail is not a guard. Reproduce the bug and catch it.
+
+    Rescales the target to per-component std 0.5 -- the setting that shipped to the GPU and
+    printed loss=0.0000 -- and asserts the untrained CE collapses. If this ever passes with
+    a healthy CE, the mechanism has changed and
+    test_untrained_model_gets_no_free_lunch_at_median_sigma is no longer meaningful.
+    """
+    import math
+
+    BIG_V = 2048
+    cfg = DBConfig(mode="b1", conditioning="x0_inject", slice_scale=True)
+    torch.manual_seed(0)
+    big = _tiny(d_model=512, channel_dims=(256, 160, 96), n_heads=4, n_kv_heads=4,
+                vocab_size=BIG_V, bigram_hash_vocab=BIG_V)
+    m = MORPHTransformer(big).eval()
+    m.build_db_modules(cfg)
+    m.eval()
+    pre = EDMPrecond(cfg.sigma_data)
+    ids = torch.randint(5, BIG_V, (4, 32))
+    labels = torch.randint(5, BIG_V, (4, 32))
+
+    euc = m.embed.hybrid.euclidean_dim
+    lor = m.embed.hybrid.lorentz_dim
+    # The OLD behaviour: scale each slice to per-component std == sigma_data.
+    class _Degenerate(SliceScaler):
+        def __init__(self):
+            super().__init__((euc, lor), sigma_data=0.5)
+            self.target_norms = (0.5 * math.sqrt(euc), 0.5 * math.sqrt(lor))
+
+    bad = _Degenerate()
+    y = bad(m.embed(labels))
+    z = y + 0.3 * torch.randn(y.shape, generator=torch.Generator().manual_seed(3))
+    step = DBStep(block_idx=0, sigma=torch.full((4,), 0.3), z_noisy=z.to(y.dtype),
+                  y_clean=y, labels=labels)
+    m.db_scaler = bad          # so db_lm_weight() carries the same (bad) transform
+    with torch.no_grad():
+        out = m(ids, db_step=step, db_precond=pre, db_want_logits=True)
+        ce = float(torch.nn.functional.cross_entropy(
+            out["logits"].reshape(-1, BIG_V).float(), labels.reshape(-1)))
+    assert ce < 0.1, (
+        f"expected the degenerate scaling to collapse CE toward 0, got {ce:.4f}. The "
+        f"leak mechanism has changed -- re-derive the guard.")

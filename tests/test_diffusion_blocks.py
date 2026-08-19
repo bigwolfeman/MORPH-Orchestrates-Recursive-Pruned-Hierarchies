@@ -240,15 +240,17 @@ def test_edm_weight_matches_the_paper_formula():
 
 # ── slice scaling (plan O1) ──────────────────────────────────────────────────
 
-def test_slice_scaler_gives_each_slice_per_component_std_sigma_data():
-    """The whole point of O1: σ_data must be LITERALLY true, per slice.
+def test_slice_scaler_equalises_the_slices_at_unit_norm():
+    """The salvaged half of O1: kill the 200× Lorentz imbalance, at UNIT norm per slice.
 
-    Built so the Lorentz slice cannot be buried. A whole-vector L2 (what the authors do)
-    would leave the two slices' relative scale untouched and fail this.
+    The authors' whole-vector L2 rescales the concatenation and leaves the RATIO between
+    slices untouched, so isotropic σ·ε buries the Lorentz slice. Per-slice normalisation
+    fixes that. The TARGET is unit norm, not per-component σ_data — scaling to σ_data made
+    the objective degenerate (see SliceScaler's docstring and
+    test_untrained_model_gets_no_free_lunch_at_median_sigma).
     """
-    sd = 0.5
     euc_dim, lor_dim = 768, 256
-    sc = SliceScaler((euc_dim, lor_dim), sigma_data=sd)
+    sc = SliceScaler((euc_dim, lor_dim), sigma_data=0.5)
     torch.manual_seed(0)
     # deliberately pathological: the Lorentz slice starts ~200x smaller, as it does in
     # the real model (init std 0.005 vs ~1.0).
@@ -257,13 +259,17 @@ def test_slice_scaler_gives_each_slice_per_component_std_sigma_data():
     out = sc(x)
 
     euc, lor = out[..., :euc_dim], out[..., euc_dim:]
-    assert euc.norm(dim=-1).allclose(
-        torch.full((4, 6), sd * math.sqrt(euc_dim)), atol=1e-3)
-    assert lor.norm(dim=-1).allclose(
-        torch.full((4, 6), sd * math.sqrt(lor_dim)), atol=1e-3)
-    # per-component RMS is sigma_data on BOTH slices — the imbalance is gone
-    assert euc.pow(2).mean(-1).sqrt().allclose(torch.full((4, 6), sd), atol=1e-3)
-    assert lor.pow(2).mean(-1).sqrt().allclose(torch.full((4, 6), sd), atol=1e-3)
+    assert euc.norm(dim=-1).allclose(torch.ones(4, 6), atol=1e-3)
+    assert lor.norm(dim=-1).allclose(torch.ones(4, 6), atol=1e-3)
+
+    # Per-component std is 1/sqrt(dim) on each slice: 0.036 and 0.063 here. The 200x
+    # imbalance is now 1.7x, and both sit in the band measured to be non-degenerate.
+    euc_rms = float(euc.pow(2).mean(-1).sqrt().mean())
+    lor_rms = float(lor.pow(2).mean(-1).sqrt().mean())
+    assert abs(euc_rms - 1.0 / math.sqrt(euc_dim)) < 1e-3
+    assert abs(lor_rms - 1.0 / math.sqrt(lor_dim)) < 1e-3
+    assert max(euc_rms, lor_rms) / min(euc_rms, lor_rms) < 2.0
+    assert max(euc_rms, lor_rms) < 0.15, "per-component std too large -> degenerate"
 
 
 def test_slice_scaler_rejects_wrong_width():

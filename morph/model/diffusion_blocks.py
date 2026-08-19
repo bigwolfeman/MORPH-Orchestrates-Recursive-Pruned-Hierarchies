@@ -378,13 +378,34 @@ class SliceScaler(nn.Module):
     the tiny Lorentz components as on the large euclidean ones, so the Lorentz slice is
     pure noise at every useful σ.
 
-    The fix. Normalise each slice independently, then scale it so its PER-COMPONENT std is
-    ``σ_data``. That is ``‖slice‖ = σ_data · √(slice_dim)``.
+    The fix. Normalise each slice independently to UNIT NORM. Per-component std is then
+    ``1/√(slice_dim)`` — 0.036 for a 768-dim euclidean slice, 0.063 for a 256-dim Lorentz
+    slice. The two slices end up within 1.7× of each other instead of 200×, which is the
+    whole point.
 
-    Note we deliberately do NOT copy the authors' ``‖y‖ = 1``: unit norm over ``d`` dims
-    means per-component std ``1/√d`` (0.031 at d=1024), which is ~16× below their
-    hardcoded ``σ_data = 0.5``. Those two settings are only consistent at ``d = 4``. See
-    risk R8 — we make ``σ_data`` true instead of inheriting the mismatch.
+    ⚠ MEASURED 2026-08-19 — do NOT "fix" this to make ``σ_data`` literally true.
+    An earlier version scaled each slice to per-component std ``σ_data`` (= 0.5), reasoning
+    that the authors' ``‖y‖=1`` with ``σ_data=0.5`` was an inconsistency (audit R8). It is
+    not an inconsistency; it is load-bearing, and "correcting" it made the objective
+    DEGENERATE. On an untrained model, CE against σ:
+
+        per-component std │ CE at σ=0.3 (the MEDIAN p_noise draw; ln V = 6.24)
+        ──────────────────┼──────────────────────────────────────────────────
+                    0.500 │ 0.000   ← degenerate: 66 % of draws teach nothing
+                    0.250 │ 1.859
+                    0.100 │ 5.456
+                    0.031 │ 6.137   ← ≈ ln(V): nothing is free
+                  (=1/√d)
+
+    Why a discrete target behaves differently from an image: the tied readout only needs
+    ``z`` to land in the right Voronoi cell of the embedding table, not to recover ``y``
+    accurately. At per-component std 0.5 the cells are enormous relative to σ, so
+    ``c_skip·z`` alone reads the token off exactly and the loss is 0 before training. Images
+    have no such free readout, which is why EDM's ``σ_data ≈ data std`` is right there and
+    wrong here. Keeping the target scale well BELOW ``σ_data`` is what makes the σ sweep
+    span the informative SNR band.
+
+    Guarded by ``test_untrained_model_gets_no_free_lunch_at_median_sigma``.
 
     Stateless (no parameters) and applied inside the DB conversion only, so the DB-off
     path is untouched and bit-identical.
@@ -396,7 +417,7 @@ class SliceScaler(nn.Module):
         if not slice_dims or any(d <= 0 for d in slice_dims):
             raise ValueError(f"slice_dims must be positive, got {slice_dims}")
         self.slice_dims = tuple(int(d) for d in slice_dims)
-        self.sigma_data = float(sigma_data)
+        self.sigma_data = float(sigma_data)   # kept for the manifest; NOT the scale target
         self.eps = eps
         bounds, acc = [], 0
         for d in self.slice_dims:
@@ -404,8 +425,10 @@ class SliceScaler(nn.Module):
             acc += d
         self.bounds = tuple(bounds)
         self.total_dim = acc
-        # Target norm per slice so per-component std == sigma_data.
-        self.target_norms = tuple(self.sigma_data * math.sqrt(d) for d in self.slice_dims)
+        # UNIT norm per slice (the authors' choice, and measured to be the right one -- see
+        # the class docstring). Per-component std is 1/sqrt(slice_dim), well below
+        # sigma_data, which is what keeps the denoising task non-trivial.
+        self.target_norms = tuple(1.0 for _ in self.slice_dims)
 
     def forward(self, x: Tensor) -> Tensor:
         """Scale each slice of ``[..., total_dim]`` to its target norm."""
@@ -420,8 +443,9 @@ class SliceScaler(nn.Module):
         return torch.cat(parts, dim=-1)
 
     def extra_repr(self) -> str:
-        return (f"slice_dims={self.slice_dims}, sigma_data={self.sigma_data}, "
-                f"target_norms={tuple(round(n, 4) for n in self.target_norms)}")
+        per_comp = tuple(round(1.0 / math.sqrt(d), 4) for d in self.slice_dims)
+        return (f"slice_dims={self.slice_dims}, target=unit-norm, "
+                f"per_component_std={per_comp}, sigma_data={self.sigma_data}")
 
 
 class SigmaConditioning(nn.Module):

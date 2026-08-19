@@ -350,6 +350,76 @@ Post-hoc, from checkpoints. A0/A1 numbers do not exist yet either — they must 
 Their Huginn gain (MAUVE 0.49 → 0.70) came at **3× the epochs**, so we do **not** pre-register a
 quality *improvement*. Parity at 2–4× the throughput is the win being chased.
 
+### 4.4b MEASURED — Phase 0 and V3 (2026-08-19, this 5090, new venv)
+
+Environment note: MORPH had no venv on this box. Built one — uv/py3.12,
+torch 2.11.0+cu128, triton 3.6.0, hydra 1.3.5, bitsandbytes 0.50.1, transformers 5.15.1.
+Every number below is from that env.
+
+**Gates run, with their commands:**
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| V1 | `CUDA_VISIBLE_DEVICES="" pytest tests/` | **212 passed, 2 skipped** |
+| V2 / A3 | `v2_counter.py` (see run log) | **ALL PASS**, table below |
+| V3 | `train --config-name tul_a0 training.steps=100` | ran, anchors below |
+
+**A3 counter gate:**
+
+| Check | Got | Want | |
+| --- | --- | --- | --- |
+| realized mean depth | 5.688 | 5.688 | PASS |
+| A0 nominal `flop_proxy` | 44.000 | 44.0 exact | PASS |
+| A0 realized `layer_passes_per_token` | 42.131 | 42.13 | PASS |
+| A1 realized (vs ledger's measured 10.68) | 11.036 | ±0.6 | PASS (3.3 %) |
+| DB-B3 uniform, `x0_inject` | 4.667 | 4.667 | PASS |
+| DB-B3 uniform, concat | 9.333 | 9.333 | PASS |
+| DB-B1 | 14.000 | 14.0 | PASS |
+
+The counter was also checked against MORPH's OWN live instrumentation on a real TUL
+forward — analytic 29.08 vs `out["layer_passes"]/out["n_tokens"]` 29.39, **1.0 %**.
+
+**V3 — A0 anchors reproduce:**
+
+| | Measured here | Ledger (2026-08-16) | |
+| --- | --- | --- | --- |
+| peak alloc | **20.51 GB** | 20.32 GB | +0.9 % |
+| s/step (steady, step 80) | **0.877** | 0.947 | 7 % faster |
+| tok/s | **16,359** | ~15,138 | 8 % faster |
+| `flop_proxy` | **44.00** | 44.0 | exact |
+| TFLOPs | 89.6 | — | new metric |
+
+The s/step and tok/s gains track the torch upgrade (2.11 vs whatever ran on 08-16); peak
+memory and the proxy match, so the shape facts are intact.
+
+**⚠ The step-0 parity marker moved, and it is NOT the DiffusionBlocks work.**
+`tul_a0` now reports step-0 loss **11.2573**, not the recorded 11.2379. The pre-DB commit
+`63204a3` gives *identically* 11.2573 in this environment, checked in a clean worktree. So
+the shift is environmental (torch 2.11 + transformers 5.15) and DB-off parity holds.
+**Re-baseline the marker to 11.2573 for this env**; treat 11.2379 as belonging to the old
+one. Hard-constraint 4 and the ledger both still quote the stale number.
+
+### 4.4c MEASURED — V4 (`db_b1`): two implementation defects, found by running it
+
+Recorded because the pre-registered VRAM band was wrong twice for reasons that had nothing
+to do with the method. Both defects were mine; both were invisible to the CPU tests.
+
+| Attempt | peak | Outcome | Cause |
+| --- | --- | --- | --- |
+| 1 | > 26.6 GB | **OOM** (asked 2.63 GiB) | `db_loss` materialised fp32 logits — `14 × 1024 × 49152 × 4` is exactly 2.63 GiB. Bypassed the chunked CE the baseline uses for this exact reason (the A5 fused-CE item) |
+| 2 | 25.49 GB | **OOM** (asked 194 MiB) | the DB path checkpointed NOTHING. The baseline checkpoints core *iterations* inside `_core_region`, which `_forward_db` deliberately skips, and nothing replaced it — 14 layers retained uncheckpointed |
+| 3 | 19.85 GB @ step 0 | running | both fixed |
+
+Both attempts confirmed the compute side even while failing on memory: `proxy=14.00`
+exactly as pre-registered, at 13.5–14.4 TFLOPs against the baseline's 89.6.
+
+**Standing caveat on P1.** "The memory win is worth more than the FLOP win" is now the
+least-supported claim in this sheet. A `B=1` single-pass forward has no BPTT to save, so
+App. G's `B`-fold reduction may simply not apply to the recurrent-depth mode. If attempt 3
+settles well above the 14–19 GB band with checkpointing in place, that is a **finding about
+the method on this architecture**, not another bug — and it would make DB-B3 (where only
+one of three sections runs) the only arm where the memory argument can pay.
+
 ### 4.5 Kill criteria — stop the arm, write it down, do not tune around it
 
 1. Non-finite loss → `train.py`'s existing self-abort fires. Do not restart with a lower LR without
