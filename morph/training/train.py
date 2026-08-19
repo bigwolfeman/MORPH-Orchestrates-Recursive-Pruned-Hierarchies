@@ -2241,13 +2241,21 @@ def main(cfg: DictConfig) -> None:
 
             wandb.log(log, step=step)
 
-            if step % 200 == 0:
+            if step % (20 if total_steps <= 400 else 200) == 0:
                 # flush: with stdout redirected to a log file this line otherwise sits in
                 # the 8KB block buffer for MINUTES — a healthy run reads as hung/dead.
+                # The DiffusionBlocks plan requires every speed claim to cite tok/s AND
+                # flop_proxy AND peak alloc together (MORPH is launch-bound, so any one of
+                # them alone is misleading). Put all three on the console line so a log file
+                # is self-sufficient and nobody has to reconstruct them from wandb.
                 print(
                     f"[{step:7d}/{total_steps}] loss={loss.item():.4f}  "
                     f"ppl={math.exp(min(loss.item(), 20.0)):.1f}  "
-                    f"lr={lr:.2e}  sps={sps:.2f}",
+                    f"lr={lr:.2e}  sps={sps:.2f}  "
+                    f"tok/s={log.get('perf/tokens_per_sec', 0):.0f}  "
+                    f"proxy={log.get('perf/flop_proxy', 0):.2f}  "
+                    f"tflops={log.get('perf/model_tflops', 0):.1f}  "
+                    f"peak={log.get('perf/peak_mem_alloc_mib', 0) / 1024:.2f}GB",
                     flush=True,
                 )
 

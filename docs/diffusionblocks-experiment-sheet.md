@@ -255,11 +255,26 @@ visit arithmetic.)*
 core block that only sees slots therefore has no `y` to denoise toward. Three options, and the
 choice is a real fork:
 
+**Wolfe, 2026-08-19:** *"a tul hidden should decode to the first punctuation (not commas)
+or 32 tokens."* That is the SPAN, not a single token — and it matches the implemented
+segmentation exactly (`base.yaml`: `boundary_chars: ".;!?"` with no comma,
+`boundary_substrings: ["\n", "—", "–", "--"]`, `min_span: 4`, `span_cap: 32`). It changes
+the target below: a slot's job is to carry its whole span, so a single-token target
+under-specifies it.
+
 | Option | Slot target `y` | Verdict |
 | --- | --- | --- |
-| T-a | next span's first token embedding (TUL's existing slot label) | **pre-registered choice.** A prediction target, so it respects the spec's "never regress onto the slot state" (LCM / CoCoMix / BT §4.2). |
-| T-b | the span bag-mean (which is already the slot *input*) | **rejected.** Span autoencoding — exactly what the spec warns against. |
-| T-c | no slot objective; core gets gradient through the coda | **fallback.** Kills core independence, collapsing B=3 → B=2 (prelude \| core+coda) for TUL arms. Note in results if T-a fails. |
+| T-a | next span's first token embedding (TUL's existing slot label) | **demoted to fallback.** Still a legal prediction target, but per Wolfe's clarification it under-specifies what a slot must carry: one token cannot represent a span of up to 32. |
+| **T-d** | **the span's token embeddings, denoised at the `prefix_k` coda positions the slot already projects into** | **NEW pre-registered choice.** The slot hidden must decode to its span (first non-comma punctuation, or 32 tokens). Supervise the span through the prefix positions that already exist (`tul.prefix_k`, Block Transformer App. F.2 / Fig 3f) rather than inventing a second head. Keeps it a *prediction* target, not autoencoding. |
+| T-b | the span bag-mean (which is already the slot *input*) | **rejected.** Span autoencoding — exactly what the spec warns against (LCM / CoCoMix / BT §4.2). |
+| T-c | no slot objective; core gets gradient through the coda | fallback. Kills core independence, collapsing B=3 → B=2 (prelude \| core+coda) for TUL arms. |
+
+**Consequence for the arms.** T-d needs the span→prefix supervision wired before DB-3/DB-4
+can run, which is more work than T-a was. DB-3/DB-4 therefore move behind DB-1/DB-2 rather
+than beside them, and `db_step + slot_layout` keeps raising until T-d exists. `prefix_k` (2
+by default) also becomes a live variable for these arms: 2 coda positions carrying a span of
+up to 32 tokens is a compression ratio worth sweeping, and arm `TUL-prefix1` in the ledger
+already exists for the non-DB case.
 
 ---
 
