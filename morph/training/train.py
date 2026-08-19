@@ -1757,6 +1757,19 @@ def main(cfg: DictConfig) -> None:
         if _mem_probe:
             torch.cuda.reset_peak_memory_stats()
 
+        # ── One-shot peak reset once compilation has settled ────────────────
+        # Without this, perf/peak_mem_* reports the WARMUP COMPILE, not the training step.
+        # The warmup runs 56 passes over every active-set size (14…1), which allocates far
+        # more than a steady step, and max_memory_allocated is monotonic. The tell: db_b1
+        # logged peak=19.85GB identically at step 0, 20, 40 … 280 — a real steady-state peak
+        # moves. Measured in isolation the same step is 10.35 GB, so the logged figure was
+        # overstating it by ~1.9x and hiding a genuine 2.1x memory win (A0 22.15 -> b1 10.35
+        # -> b3 7.33 GB). Reset a few steps in, once compile and the allocator have settled.
+        if step == start_step + 5:
+            torch.cuda.reset_peak_memory_stats()
+            print(f"  [mem] peak stats reset at step {step} — perf/peak_mem_* now reflects "
+                  f"the TRAINING STEP, not the warmup compile", flush=True)
+
         # A stage change and a phase change can land on the SAME step. Both only mark the
         # loader dirty; ONE rebuild happens after both, so the second never discards a
         # freshly-prefetched stream the first just started.
