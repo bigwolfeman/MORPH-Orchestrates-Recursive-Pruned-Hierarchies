@@ -7,6 +7,7 @@ Top-level navigation for project documentation.
 - [Paper references and MORPH usage notes](references.md)
 - [Runtime invariants (BPTT, kernels, compile, phases)](runtime-invariants.md)
 - [Ablation ledger (accepted / rejected / deferred)](ablation-ledger.md)
+- [TUL — Thought Unpack Loop specification (`experiments/tul`)](tul-spec.md)
 - [Known-good runs and environment assumptions](known-good-runs.md)
 - [Data placement design spec](data-placement-design.md)
 - [MORPH / Olympiad-AI interop contract](olympiad-interop.md)

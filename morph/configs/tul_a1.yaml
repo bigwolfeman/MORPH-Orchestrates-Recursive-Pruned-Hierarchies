@@ -1,0 +1,30 @@
+# TUL arm A1 — the method (docs/tul-spec.md §7.1, ablation-ledger "TUL-A1").
+# Run: PYTHONPATH=$PWD python -m morph.training.train --config-name tul_a1
+# Everything is tul_short.yaml (1024 × 16 × 20k, dense, TST off); the ONLY difference
+# from arm A0 (`--config-name tul_short`, which inherits tul.activate_at: never) is the
+# slot layout switching on at step 0.
+defaults:
+  - tul_short
+  - _self_
+
+# batch_size comes from tul_short.yaml (14 for EVERY arm — see the note there). A1 at
+# batch 16 was measured OOM; A0 was therefore moved down to 14 rather than A1 up, so the
+# arms differ by the mechanism alone. Measured A1 at 14: 24.06 GB, 0.544 s/step.
+
+tul:
+  activate_at: 0.0     # spec §5 [W]: TUL layout from step 0 on the short schedule
+  # Slot budget sized from the DATA, not from the seq_len // 8 rule of thumb (which is
+  # sized for code at ~9 tokens/span; these arms are OpenWebText at ~20). Measured on
+  # 3.0 M real OWT tokens at seq_len 1024, min_span 4, span_cap 32:
+  #   max_slots  L_total  slots/row  saturated  tokens/row  pad
+  #      64       1152      52.5       7.7%      1033.4     1.18%
+  #      80       1184      54.3       1.9%      1069.4     0.50%
+  #     128       1280      59.0       0.4%      1161.3     0.05%
+  # 64 is chosen because it makes tokens/row 1033 ≈ A0's 1024 — the arms then match on
+  # tokens per step, which is what BLT §4.3 asks to hold constant — and because
+  # L_total 1280 does NOT FIT on the 5090 at batch 16 (measured OOM; 1152 peaks at
+  # 26.5 GB vs A0's 23.0 GB). 1.18 % of positions are lost to tail padding.
+  max_slots: 64
+
+wandb:
+  name: tul-a1

@@ -307,6 +307,18 @@ class GatedPoolCompressor(nn.Module):
             C_b = pre[2][:, :Su].reshape(B, n_blocks, m, c)
             Z_b = pre[3][:, :Su].reshape(B, n_blocks, m, c) + self.B_b
 
+        if n_blocks == 0:
+            # S < m: there is no COMPLETE block to compress, so the compressed stream is
+            # empty. Returning here is what the two_stream=False branch above already
+            # does naturally ((w * C_a).sum over a 0-length block dim), and the two
+            # branches must agree. Without it, F.pad on the empty block dim INVENTS one
+            # block (0 -> 1) while Z_a still has none, and the joint cat below dies with
+            # "Expected size 0 but got size 1". Live case: greedy generation from a
+            # prompt shorter than m, which for CSA is only 8 tokens. Found 2026-08-18
+            # sampling the finished arms; generation had never been run on this config
+            # (base.yaml gen_every: 0) so nothing had exercised short S.
+            return C_a.new_zeros(B, 0, c)
+
         # Shift B right by one block: block i uses B tokens from block i-1.
         # First block's B-stream gets -inf gates so its weight is exactly zero.
         C_b_prev = F.pad(C_b[:, :-1], (0, 0, 0, 0, 1, 0))

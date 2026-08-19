@@ -516,6 +516,313 @@ harness deployment after RL training, currently deferred.
 
 ---
 
+## 13. TUL — Thought Unpack Loop (latent emission & hierarchy) (spec, `experiments/tul`)
+
+TUL loops the Parcae core over one **thought slot per span** and decodes tokens with
+the slot's looped state visible as an attended prefix position. Spec:
+[tul-spec.md](tul-spec.md). Local copies of every source below live in
+`references/tul-latent-emission/`; the per-paper reading notes (31 papers, one templated
+note each) are in `ignore/Ai-notes/08-16-2026/prior-art/`. Entries say what TUL takes and,
+where a paper argues AGAINST something TUL does, say that too.
+
+### Byte Latent Transformer (BLT)
+
+**Title:** Byte Latent Transformer: Patches Scale Better Than Tokens  
+**Authors:** Pagnoni, Pasunuru, Rodriguez, Nguyen, Muller, Li, Zhou, Yu, Weston, Zettlemoyer, Ghosh, Lewis, Holtzman, Iyer (Meta FAIR)  
+**Year:** 2024  
+**arXiv:** [2412.09871](https://arxiv.org/abs/2412.09871)  
+**TUL uses:** the local-encoder / global-latent / local-decoder shape. Eq. 5–7: patch
+queries initialised by mean-pooling the patch's byte embeddings, cross-attention over the
+patch's bytes — TUL's slot input is the mean-pooled span and the prelude's own attention
+over the span is that pooling. Eq. 9: the local decoder is seeded by the local ENCODER's
+byte states (`D_0 = h_lE`) — TUL's coda input for token positions is the prelude state.
+Table 7: patch vector at all decoder layers 0.846 BPB vs first-layer 0.861 vs none 0.866;
+Table 9: 1 encoder + 9 decoder layers beat 5+5 — capacity belongs on the decode side.
+§4: rule-based patching is "a very close competitor" to learned entropy patching; fixed
+stride is worst.
+
+### MegaByte
+
+**Title:** MEGABYTE: Predicting Million-byte Sequences with Multiscale Transformers  
+**Authors:** Yu, Simig, Flaherty, Aghajanyan, Zettlemoyer, Lewis (Meta AI)  
+**Year:** 2023  
+**arXiv:** [2305.07185](https://arxiv.org/abs/2305.07185)  
+**TUL uses:** the global-over-patches / small-AR-local-per-token split and the fact that
+the global output has no loss of its own. Table 7: removing the local AR model (one-shot
+patch emission) 0.687 → 1.263 bpb — the datum behind "never decode a span blind". Eq. 4's
+per-offset slices of the global vector are NOT used (weakest injection; see Block
+Transformer / Hourglass). MegaByte's local `p = 0` position, which emits the first byte of
+the patch from the global state, is TUL's slot label.
+
+### H-Net
+
+**Title:** Dynamic Chunking for End-to-End Hierarchical Sequence Modeling  
+**Authors:** Hwang, Wang, Huo, Neubig, Dao (CMU / Cartesia)  
+**Year:** 2025  
+**arXiv:** [2507.07955](https://arxiv.org/abs/2507.07955)  
+**TUL uses:** §2.3 signal-propagation recipe for a hierarchy — RMSNorm at the end of each
+component ("norm balance"), a Linear on the residual path only with near-zero init,
+per-stage LR modulation (outer stages higher). Table 1: fixed pooling worst, whitespace ≈
+learned DC — supports the rule-based cut. The learned router + ratio loss + EMA smoothing
+(§2.2) is TUL's deferred "learned boundaries" arm. The main network is supervised only
+through decoded bytes — loss-free latent.
+
+### Block Transformer
+
+**Title:** Block Transformer: Global-to-Local Language Modeling for Fast Inference  
+**Authors:** Ho, Bae, Kim, Ainslie, Lee, Yun, Ye, Kim (KAIST / Google DeepMind)  
+**Year:** 2024  
+**arXiv:** [2406.02657](https://arxiv.org/abs/2406.02657)  
+**TUL uses:** the only BPE-level ablation of global→local injection. Fig 3f: prefix
+positions the token decoder can refine (length 2–6) > single prefix > summation ≫
+per-layer cross-attention to KV states (−0.18 nats). This is why TUL exposes the slot
+state as an attended position rather than a cross-attention branch. Loss is log-linear in
+block length (85M: vanilla 2.47, L_B=1/2/4/8 = 2.52/2.65/2.79/2.90); first token of a
+block is the hardest position; §4.2 block-level MSE/contrastive losses on the latent HURT
+(so TUL's slot-set warm-up is an arm, default off). Needs 2–3× params to match vanilla
+PPL, buys 10–20× decode throughput — the honest expectation at 5090 scale.
+
+### Dynamic Token Pooling
+
+**Title:** Efficient Transformers with Dynamic Token Pooling  
+**Authors:** Nawrot, Chorowski, Łańcucki, Ponti  
+**Year:** 2022  
+**arXiv:** [2211.09761](https://arxiv.org/abs/2211.09761)  
+**TUL uses:** boundary-rule evidence (character-level): whitespace 1.133 BPC ≈ unigram
+1.134 > Gumbel-learned 1.136 (unstable) > entropy 1.138 > vanilla 1.143 > fixed SF2/3/4
+1.149/1.155/1.166 (Table 2). Deterministic content-aligned boundaries win; mean-pool >
+take-last; boundary placed after the delimiter — all three are TUL's choices.
+
+### Hourglass
+
+**Title:** Hierarchical Transformers Are More Efficient Language Models  
+**Authors:** Nawrot, Tworkowski, Tyrolski, Kaiser, Wu, Szegedy, Michalewski  
+**Year:** 2021  
+**arXiv:** [2110.13711](https://arxiv.org/abs/2110.13711)  
+**TUL uses:** the causal-shift argument and Table 6 (1.128 vs 1.460 BPC without a
+full-resolution layer after upsampling): position j cannot see positions < j of its own
+group from the summary alone — the theory statement of why one-vector-per-span emission
+needs a token path. Attention upsampling 1.132 > repeat 1.148 > per-offset linear 1.163.
+
+### Patch-Level Training
+
+**Title:** Patch-Level Training for Large Language Models  
+**Authors:** Shao, Meng, Zhou (WeChat AI)  
+**Year:** 2024  
+**arXiv:** [2407.12665](https://arxiv.org/abs/2407.12665)  
+**TUL uses:** the equivalence with MORPH's TST — mean-pooled input bag of K tokens, one
+softmax scored on all K next tokens, hard switch to token level; K=2–4 best, K=8 −0.03,
+K=16 −0.05 nats; λ optimum ≈ 1/4–3/8 (MORPH's 0.3). Justifies switching TUL on at the
+TST boundary and mean-pooling the slot input.
+
+### DeepSeek-V3 (Multi-Token Prediction module only)
+
+**Title:** DeepSeek-V3 Technical Report  
+**Authors:** DeepSeek-AI  
+**Year:** 2024  
+**arXiv:** [2412.19437](https://arxiv.org/abs/2412.19437)  
+**TUL uses:** §2.2 as the shipped counter-example to blind multi-token heads: depth k
+takes `[RMSNorm(h_{k-1}); RMSNorm(Emb(t_{i+k}))]` — the true previous token is fed back
+per depth; helps already at 2.4B active. TUL's coda is token-fed by construction.
+
+### Multi-token prediction (Gloeckle et al.) — see §9 (MTP, removed)
+
+**TUL note:** the blind-heads variant helps only ≥3B (Table S7: worse at 0.3B/0.6B, even
+at 1.3B) and hurts once next-token circuits form. Cited here as the reason TUL does not
+decode blind; the entry stays in §9.
+
+### Future Lens
+
+**Title:** Future Lens: Anticipating Subsequent Tokens from a Single Hidden State  
+**Authors:** Pal, Sun, Yuan, Wallace, Bau (Northeastern)  
+**Year:** 2023  
+**arXiv:** [2311.04897](https://arxiv.org/abs/2311.04897)  
+**TUL uses:** the instrument for "does the slot carry the plan" (linear/soft-prompt
+readout on a hidden state, always reported against `teacher_acc` and a bigram floor).
+Table 2: blind linear probes 0.292/0.190/0.158 at t+2/3/4 (bigram 0.201); the
+learned-prompt reader 0.484/0.437/0.469 is TOKEN-FED (Eq. 9/11) — evidence for the
+fed-back decoder, not for blind decode. Fig 4 (read from the PDF): linear t+2 peaks late
+in the stack; the mid-stack peak belongs to the token-fed reader.
+
+### Blockwise Parallel Decoding
+
+**Title:** Blockwise Parallel Decoding for Deep Autoregressive Models  
+**Authors:** Stern, Shazeer, Uszkoreit (Google)  
+**Year:** 2018  
+**arXiv:** [1811.03115](https://arxiv.org/abs/1811.03115)  
+**TUL uses:** the origin of predict-verify-accept from one state; a frozen trunk saturates
+at ~1.8 accepted tokens/step for any k, fine-tuning + distillation gives 4.95 (Table 1).
+Cited for the ceiling of a blind reader on a next-token-trained state.
+
+### Medusa
+
+**Title:** Medusa: Simple LLM Inference Acceleration Framework with Multiple Decoding Heads  
+**Authors:** Cai, Li, Geng, Peng, Lee, Chen, Dao  
+**Year:** 2024  
+**arXiv:** [2401.10774](https://arxiv.org/abs/2401.10774)  
+**TUL uses:** nothing directly; cited so nobody anchors on it — the paper has no per-offset
+head-accuracy table (only a blog figure). Speculative verification of span drafts is a
+deferred emission-path idea, orthogonal to TUL's claims.
+
+### Coconut
+
+**Title:** Training Large Language Models to Reason in a Continuous Latent Space  
+**Authors:** Hao, Sukhbaatar, Su, Li, Hu, Weston, Tian (Meta FAIR)  
+**Year:** 2024  
+**arXiv:** [2412.06769](https://arxiv.org/abs/2412.06769)  
+**TUL uses:** the latent as an ATTENDED POSITION (thoughts enter as previous positions in
+the sequence and later tokens read them through the KV cache) — TUL's slots are positions
+for the same reason; loss masked on latent thoughts. Also the warning: without the
+language curriculum a slot with only downstream token loss learns nothing (14.4 vs No-CoT
+16.5 GSM8k).
+
+### CODI / CCoT (latent chain-of-thought)
+
+**Titles:** CODI: Compressing Chain-of-Thought into Continuous Space via Self-Distillation
+(Shen et al., 2025, [2502.21074](https://arxiv.org/abs/2502.21074)); Compressed Chain of
+Thought (Cheng, Van Durme, 2024, [2412.13171](https://arxiv.org/abs/2412.13171))  
+**TUL uses:** the finding that an untargeted latent step needs an intermediate target
+(CODI without distillation 24.5 vs 43.7); CCoT: gold hidden states at punctuation
+positions (5–10% of a chain) decode the chain losslessly, and feeding the LAST-layer
+state back as the next input ≈ no thoughts (use a middle layer). Both inform TUL's
+warm-up arms and the choice not to feed `h_i` back as an input.
+
+### Reasoning with Latent Thoughts (looped transformers)
+
+**Title:** Reasoning with Latent Thoughts: On the Power of Looped Transformers  
+**Authors:** Saunshi, Dikkala, Li, Kumar, Reddi (Google)  
+**Year:** 2025  
+**arXiv:** [2502.17416](https://arxiv.org/abs/2502.17416)  
+**TUL uses:** depth via looping beats params for reasoning at equal FLOPs ((12×2) 34.3 vs
+(24×1) 29.3 math) with worse PPL; middle-loop (prelude/coda around the loop) is better.
+Loops hit every token there; per-idea depth (TUL's C1) is untested.
+
+### Latent Reasoning via Sentence Embedding Prediction
+
+**Title:** Latent Reasoning via Sentence Embedding Prediction  
+**Authors:** Hwang et al.  
+**Year:** 2025  
+**arXiv:** [2505.22202](https://arxiv.org/abs/2505.22202)  
+**TUL uses:** the closest match at GPT-2 scale — a slot with no next-token loss trained
+only by the CE of the step it must produce; one state reconstructs a 6–11 token step at
+98.5–100% exact match through a full AR decoder. Also: the gap to CoT widens with model
+size, which they name as the reason to move the objective into pretraining.
+
+### Large Concept Models / SONAR
+
+**Titles:** Large Concept Models: Language Modeling in a Sentence Representation Space
+(Meta FAIR, 2024, [2412.08821](https://arxiv.org/abs/2412.08821)); SONAR
+([2308.11466](https://arxiv.org/abs/2308.11466))  
+**TUL uses:** the counter-example — MSE regression onto a fixed sentence embedding fails
+(Table 3/4), the frozen SONAR decoder sees one vector and no context, fidelity collapses
+past ~250 chars per unit (hence a hard span cap). Table 7: training the decoder on a
+NOISED latent lifted AutoBLEU 79.5 → 88.0 (a control TUL keeps).
+
+### CoCoMix
+
+**Title:** LLM Pretraining with Continuous Concepts  
+**Authors:** Tack et al. (Meta)  
+**Year:** 2025  
+**arXiv:** [2502.08524](https://arxiv.org/abs/2502.08524)  
+**TUL uses:** Fig 6(d) as the ablation template — loss-only / mechanism-only / both /
+neither; each alone near-null, only the pair gains. TUL's arms A0/A2/A4/A1 are that 2×2.
+Fig 6b: regressing onto the concept loses.
+
+### Sentence VAEs and posterior collapse
+
+**Titles:** Generating Sentences from a Continuous Space (Bowman et al., 2015,
+[1511.06349](https://arxiv.org/abs/1511.06349)); Lagging Inference Networks and Posterior
+Collapse (He et al., 2019, [1901.05534](https://arxiv.org/abs/1901.05534)); Optimus (Li et
+al., 2020, [2004.04092](https://arxiv.org/abs/2004.04092)); Fast Decoding with Discrete
+Latent Variables (Kaiser et al., 2018, [1803.03382](https://arxiv.org/abs/1803.03382))  
+**TUL uses:** the collapse recipe. Bowman Table 2: word dropout moves KL 0.01 → 20.9 nats;
+the inputless decoder is 380 vs 119 PPL — TUL's token-state dropout is this tax. He §3.1:
+the collapsed optimum is stable from init; Fig 5: measure usage with MI, not the loss —
+TUL's `plan_nats` ablation. Optimus Fig 5: z as per-layer attendable memory beats
+z-on-the-embedding by 0.5–0.8 nats/word. Kaiser Table 4: score reconstruction from the
+TRUE code separately from end-to-end — oracle before predicted.
+
+### Non-autoregressive / diffusion decoding
+
+**Titles:** Non-Autoregressive NMT (Gu et al., 2017, [1711.02281](https://arxiv.org/abs/1711.02281));
+LLaDA (Nie et al., 2025, [2502.09992](https://arxiv.org/abs/2502.09992)); Block Diffusion
+(Arriola et al., 2025, [2503.09573](https://arxiv.org/abs/2503.09573)); Latent Diffusion for
+Language Generation (Lovelace et al., 2023, [2212.09462](https://arxiv.org/abs/2212.09462))  
+**TUL uses:** the price of parallel emission inside a unit. NAT: positional-only input ~2
+BLEU, +4 with informative per-position input, +5 with AR-teacher distillation. BD3-LM
+Table 3: PPL monotone in block size even with full-model diffusion and KV cache to past
+blocks (AR 22.83 vs L'=4/8/16 = 28.23/29.83/30.60). LD4LG: a latent with no loss of its
+own decoded by a pretrained AR decoder via cross-attention reaches Rouge-L 99.2. TUL
+keeps AR emission inside the span; distillation from an AR teacher is a fallback if the
+first-token position stays weak.
+
+### Explorative Modeling (XM)
+
+**Title:** Explorative Modeling  
+**Authors:** Gladstone, Ji, Du  
+**Year:** 2026  
+**arXiv:** [2607.27372](https://arxiv.org/abs/2607.27372)  
+**TUL uses:** the explanation of the `.` collapse — one-shot multi-target regression has
+generative expressivity 1 and predicts the mean; MDLM XM-1 emits "the the the". Best-of-K
+search over the latent is a deferred alternative to a warm-up loss.
+
+### SpaceByte
+
+**Title:** SpaceByte: Towards Deleting Tokenization from Large Language Modeling  
+**Authors:** Slagle  
+**Year:** 2024  
+**arXiv:** [2404.14408](https://arxiv.org/abs/2404.14408)  
+**TUL uses:** the closest published shape to a slot in one stream: global blocks run
+only at the FIRST spacelike byte of a space/punctuation run (+BOS), their output is
+truncated and residual-added at that same index, and the windowed local layers read it
+through attention (Listing 1). Table 1 (1e19 FLOPs): 1.009 / 0.748 / 0.500 bpb
+(PG-19 / arXiv / GitHub) vs SentencePiece 0.989 / 0.768 / 0.508; the fixed-stride
+control loses 0.10 bpb on PG-19 — TUL's arm A5. Table 6: the global stack is billed at
+1/6–1/8 of the byte rate. Cites ACT and Mixture-of-Depths only as generic layer
+skipping — no loop at the boundary positions.
+
+### AU-Net (Autoregressive U-Net)
+
+**Title:** From Bytes to Ideas: Language Modeling with Autoregressive U-Nets  
+**Authors:** Videau, Idrissi, Haziza, Wehrstedt, Copet, Teytaud, Lopez-Paz  
+**Year:** 2025  
+**arXiv:** [2506.14761](https://arxiv.org/abs/2506.14761)  
+**TUL uses:** where the depth goes. Stage ≥2 keeps only the vector at each pretoken
+boundary (the space BEFORE the word); Table 5: 75 % of layers at the coarse stages beats
+50 % and 25 % (67.4 / 66.0 / 65.3 HellaSwag) and the byte stage stays at 3 layers to
+1e22 FLOPs — depth in the slot loop, prelude/coda thin. Table 2: AU-Net-2 1B 69.9
+HellaSwag at 3e21 vs BPE 70.2 at 4e21; TQA/MMLU lag at small scale. The unpool
+(`hierarchical.py up()`) REPEATS the coarse vector over the following segment through
+one of 16 per-offset linears and ADDS it to the byte skip stream, then 3 causal byte
+layers; Table 4: boundary-only scatter (TUL's prefix route) ties at 2 stages (62.9 vs
+63.5) and loses 5.4 at 3 — hence TUL's `bcast` arm, off by default. Sec 2.2: the split
+must be "stable to rightward insertion" (= causal). Sec 6: byte-level models need
+their own batch/LR scaling laws.
+
+### Hierarchical Autoregressive Transformers (HAT)
+
+**Title:** Hierarchical Autoregressive Transformers: Combining Byte- and Word-Level Processing for Robust, Adaptable Language Models  
+**Authors:** Neitemeier, Deiseroth, Eichenberg, Balles  
+**Year:** 2025  
+**arXiv:** [2501.10322](https://arxiv.org/abs/2501.10322)  
+**TUL uses:** the explicit-prefix decoder: the backbone output `p^i` is the FIRST
+position of a 3–4 layer causal char decoder over word i+1 (Eq. 4). Table 1
+(compute-matched vs 64k BPE at 1B / 3B / 7B): word accuracy 35.5 / 37.8 / 39.0 vs
+35.3 / 37.7 / 39.2; LAMBADA +68 % relative at 7B; ARC −1..3. MegaByte's fixed 8-byte
+split on the same architecture: −2.7 HellaSwag, −8.4 LAMBADA. Fig 3 is the metric
+trap TUL avoids: a bigger char decoder raises byte accuracy but not word accuracy —
+size the coda by whole-unit or first-token metrics, keep it ~2 % of params. TUL does
+NOT copy its context-blind decoder (sees only `p^i` and the current word).
+
+### STP / punc-STP — see §7 (STP, removed)
+
+**TUL note:** the STP paper (2602.22617) has no boundary, no pretraining and no
+decodability claim; punc-STP at `.;!?--\n` and the "next token ~80% decodable from the
+boundary state" observation are MORPH's own (§7 notes). TUL carries punc-STP on the SLOT
+trajectory as an arm (`tul.stp_lambda`), zero parameters.
+
+---
+
 ## Quick Reference Table
 
 
@@ -556,5 +863,36 @@ harness deployment after RL training, currently deferred.
 | 29  | AdEMAMix Optimizer                     | Pagliardini et al. (EPFL/Apple, 2024)     | [2409.03137](https://arxiv.org/abs/2409.03137)                                                                                                 |
 | 30  | Token Superposition Training (TST)     | Peng, Gigant, Quesnelle (Nous, 2026)      | [2605.06546](https://arxiv.org/abs/2605.06546)                                                                                                 |
 | 31  | Semantic Step Prediction (removed)     | Yuan (2026)                               | [2604.18464](https://arxiv.org/abs/2604.18464)                                                                                                 |
+| 32  | BLT (TUL)                              | Pagnoni et al. (Meta FAIR, 2024)          | [2412.09871](https://arxiv.org/abs/2412.09871)                                                                                                 |
+| 33  | MegaByte (TUL)                         | Yu et al. (Meta AI, 2023)                 | [2305.07185](https://arxiv.org/abs/2305.07185)                                                                                                 |
+| 34  | H-Net (TUL)                            | Hwang et al. (CMU/Cartesia, 2025)         | [2507.07955](https://arxiv.org/abs/2507.07955)                                                                                                 |
+| 35  | Block Transformer (TUL)                | Ho et al. (KAIST/GDM, 2024)               | [2406.02657](https://arxiv.org/abs/2406.02657)                                                                                                 |
+| 36  | Dynamic Token Pooling (TUL)            | Nawrot et al. (2022)                      | [2211.09761](https://arxiv.org/abs/2211.09761)                                                                                                 |
+| 37  | Hourglass (TUL)                        | Nawrot et al. (2021)                      | [2110.13711](https://arxiv.org/abs/2110.13711)                                                                                                 |
+| 38  | Patch-Level Training (TUL)             | Shao, Meng, Zhou (2024)                   | [2407.12665](https://arxiv.org/abs/2407.12665)                                                                                                 |
+| 39  | DeepSeek-V3 MTP module (TUL)           | DeepSeek-AI (2024)                        | [2412.19437](https://arxiv.org/abs/2412.19437)                                                                                                 |
+| 40  | Future Lens (TUL)                      | Pal et al. (Northeastern, 2023)           | [2311.04897](https://arxiv.org/abs/2311.04897)                                                                                                 |
+| 41  | Blockwise Parallel Decoding (TUL)      | Stern, Shazeer, Uszkoreit (2018)          | [1811.03115](https://arxiv.org/abs/1811.03115)                                                                                                 |
+| 42  | Medusa (TUL, cited only)               | Cai et al. (2024)                         | [2401.10774](https://arxiv.org/abs/2401.10774)                                                                                                 |
+| 43  | Coconut (TUL)                          | Hao et al. (Meta FAIR, 2024)              | [2412.06769](https://arxiv.org/abs/2412.06769)                                                                                                 |
+| 44  | CODI (TUL)                             | Shen et al. (2025)                        | [2502.21074](https://arxiv.org/abs/2502.21074)                                                                                                 |
+| 45  | CCoT (TUL)                             | Cheng, Van Durme (2024)                   | [2412.13171](https://arxiv.org/abs/2412.13171)                                                                                                 |
+| 46  | Looped Transformers (TUL)              | Saunshi et al. (Google, 2025)             | [2502.17416](https://arxiv.org/abs/2502.17416)                                                                                                 |
+| 47  | Sentence Embedding Prediction (TUL)    | Hwang et al. (2025)                       | [2505.22202](https://arxiv.org/abs/2505.22202)                                                                                                 |
+| 48  | Large Concept Models (TUL, counter)    | Meta FAIR (2024)                          | [2412.08821](https://arxiv.org/abs/2412.08821)                                                                                                 |
+| 48a | SONAR (TUL, supporting)                | Duquenne et al. (Meta, 2023)              | [2308.11466](https://arxiv.org/abs/2308.11466)                                                                                                 |
+| 49  | CoCoMix (TUL)                          | Tack et al. (Meta, 2025)                  | [2502.08524](https://arxiv.org/abs/2502.08524)                                                                                                 |
+| 50  | Sentence VAE (TUL)                     | Bowman et al. (2015)                      | [1511.06349](https://arxiv.org/abs/1511.06349)                                                                                                 |
+| 51  | Lagging Inference / collapse (TUL)     | He et al. (2019)                          | [1901.05534](https://arxiv.org/abs/1901.05534)                                                                                                 |
+| 52  | Optimus (TUL)                          | Li et al. (Microsoft, 2020)               | [2004.04092](https://arxiv.org/abs/2004.04092)                                                                                                 |
+| 53  | Latent Transformer / discrete codes (TUL) | Kaiser et al. (Google, 2018)           | [1803.03382](https://arxiv.org/abs/1803.03382)                                                                                                 |
+| 54  | Non-Autoregressive NMT (TUL)           | Gu et al. (2017)                          | [1711.02281](https://arxiv.org/abs/1711.02281)                                                                                                 |
+| 55  | LLaDA (TUL)                            | Nie et al. (2025)                         | [2502.09992](https://arxiv.org/abs/2502.09992)                                                                                                 |
+| 56  | Block Diffusion / BD3-LM (TUL)         | Arriola et al. (2025)                     | [2503.09573](https://arxiv.org/abs/2503.09573)                                                                                                 |
+| 57  | Latent Diffusion for Language (TUL)    | Lovelace et al. (2023)                    | [2212.09462](https://arxiv.org/abs/2212.09462)                                                                                                 |
+| 58  | Explorative Modeling (TUL)             | Gladstone, Ji, Du (2026)                  | [2607.27372](https://arxiv.org/abs/2607.27372)                                                                                                 |
+| 59  | SpaceByte (TUL)                        | Slagle (2024)                             | [2404.14408](https://arxiv.org/abs/2404.14408)                                                                                                 |
+| 60  | AU-Net (TUL)                           | Videau et al. (Meta FAIR, 2025)           | [2506.14761](https://arxiv.org/abs/2506.14761)                                                                                                 |
+| 61  | Hierarchical AT (TUL)                  | Neitemeier et al. (Aleph Alpha, 2025)     | [2501.10322](https://arxiv.org/abs/2501.10322)                                                                                                 |
 
 

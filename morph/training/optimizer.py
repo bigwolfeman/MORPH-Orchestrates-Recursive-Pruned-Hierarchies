@@ -31,6 +31,16 @@ _NO_DECAY_KEYWORDS = (
     "lm_mixer",                                    # LM head mixer
     "embed",                                       # Embedding tables
     "ste_gain", "ste_temp",                        # LSTE per-layer params
+    # ── TUL (docs/tul-spec.md §3.1-§3.4) ──
+    # E_slot / E_mask are EMBEDDINGS (E_slot is initialised to the mean of the embedding
+    # table, spec §5) and every other embedding here is no-decay; they were landing in the
+    # decay group only because their names do not contain "embed".
+    # W_prefix is the ONLY channel carrying h_i into the coda, and the plan position
+    # (k < prefix_k-1) has NO label — its sole gradient is the coda's attention to it.
+    # Weight decay pulls that channel toward zero, i.e. toward val/plan_nats = 0, which is
+    # the quantity the arm exists to measure; a null result would then be unattributable
+    # (decay vs the model ignoring the plan). Excluded deliberately — reviewer, 2026-08-16.
+    "E_slot", "E_mask", "W_prefix",
 )
 
 
