@@ -85,7 +85,7 @@ def test_building_db_modules_adds_parameters_but_none_are_used_when_off():
 
 @pytest.mark.parametrize("mode", ["b1", "b3"])
 def test_db_forward_produces_finite_logits_of_the_right_shape(mode):
-    cfg = DBConfig(mode=mode, conditioning="x0_inject")
+    cfg = DBConfig(mode=mode, conditioning="x0_inject", loss_kind="ce")
     m = _model(cfg)
     rt = _RT(cfg)
     ids = torch.randint(0, V, (2, 32))
@@ -100,14 +100,14 @@ def test_db_forward_produces_finite_logits_of_the_right_shape(mode):
 
 @pytest.mark.parametrize("mode", ["b1", "b3"])
 def test_db_loss_is_finite_and_backpropagates(mode):
-    cfg = DBConfig(mode=mode, conditioning="x0_inject")
+    cfg = DBConfig(mode=mode, conditioning="x0_inject", loss_kind="ce")
     m = _model(cfg)
     rt = _RT(cfg)
     ids = torch.randint(0, V, (2, 32))
     labels = torch.randint(0, V, (2, 32))
     step = build_db_step(rt, m, labels)
     out = m(ids, db_step=step, db_precond=rt.precond)
-    loss, metrics = db_loss(out["logits"], step, rt.precond)
+    loss, metrics = db_loss(out["logits"], step, rt.precond, loss_kind="ce")
     assert torch.isfinite(loss), loss
     loss.backward()
     grads = [p.grad for p in m.parameters() if p.grad is not None]
@@ -124,7 +124,7 @@ def test_b3_step_trains_only_its_own_block():
     This is the memory argument made falsifiable. If a section that did not run picks up a
     gradient, the blocks are not independent and the B-fold saving is fiction.
     """
-    cfg = DBConfig(mode="b3", conditioning="x0_inject")
+    cfg = DBConfig(mode="b3", conditioning="x0_inject", loss_kind="ce")
     rt = _RT(cfg)
     sections = ("prelude", "core", "coda")
 
@@ -135,7 +135,7 @@ def test_b3_step_trains_only_its_own_block():
         step = build_db_step(rt, m, labels)
         step.block_idx = target                      # force the block under test
         out = m(ids, db_step=step, db_precond=rt.precond)
-        loss, _ = db_loss(out["logits"], step, rt.precond)
+        loss, _ = db_loss(out["logits"], step, rt.precond, loss_kind="ce")
         m.zero_grad(set_to_none=True)
         loss.backward()
 
@@ -153,14 +153,14 @@ def test_b3_step_trains_only_its_own_block():
 
 def test_b1_step_trains_every_section():
     """mode='b1' is the whole net as one denoiser, so all three must get gradient."""
-    cfg = DBConfig(mode="b1", conditioning="x0_inject")
+    cfg = DBConfig(mode="b1", conditioning="x0_inject", loss_kind="ce")
     m = _model(cfg)
     rt = _RT(cfg)
     ids = torch.randint(0, V, (2, 24))
     labels = torch.randint(0, V, (2, 24))
     step = build_db_step(rt, m, labels)
     out = m(ids, db_step=step, db_precond=rt.precond)
-    loss, _ = db_loss(out["logits"], step, rt.precond)
+    loss, _ = db_loss(out["logits"], step, rt.precond, loss_kind="ce")
     loss.backward()
     for name in ("prelude", "core", "coda"):
         assert any(p.grad is not None and p.grad.abs().sum() > 0
@@ -229,7 +229,7 @@ def test_concat_forward_runs_and_has_no_future_leak():
     docs/diffusionblocks-concat-design.md build status.
     """
     for mode in ("b1", "b3"):
-        cfg = DBConfig(mode=mode, conditioning="concat")
+        cfg = DBConfig(mode=mode, conditioning="concat", loss_kind="ce")
         m = _model(cfg)
         rt = _RT(cfg)
         ids = torch.randint(0, V, (2, 16))
@@ -316,7 +316,7 @@ def test_db_can_overfit_a_single_batch():
     method works at scale.
     """
     torch.manual_seed(0)
-    cfg = DBConfig(mode="b1", conditioning="x0_inject")
+    cfg = DBConfig(mode="b1", conditioning="x0_inject", loss_kind="ce")
     m = _model(cfg)
     m.train()
     rt = _RT(cfg)
@@ -329,7 +329,7 @@ def test_db_can_overfit_a_single_batch():
     for i in range(40):
         step = build_db_step(rt, m, labels, generator=gen)
         out = m(ids, db_step=step, db_precond=rt.precond)
-        loss, _ = db_loss(out["logits"], step, rt.precond)
+        loss, _ = db_loss(out["logits"], step, rt.precond, loss_kind="ce")
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()

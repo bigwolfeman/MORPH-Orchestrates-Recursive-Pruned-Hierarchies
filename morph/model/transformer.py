@@ -1128,18 +1128,25 @@ class MORPHTransformer(nn.Module):
         return x
 
     def _forward_db(self, input_ids: Tensor, db_step, precond) -> dict:
-        """DiffusionBlocks forward. Returns ``{"logits", "denoised"}``.
+        """DiffusionBlocks forward.
+
+        Returns ``{"denoised"}`` under ``loss_kind='l2'`` (Option A — the paper's AR
+        objective; no readout exists in training, which is what makes the tied-head free
+        ride impossible by construction, and skipping the ``[B,L,d]@[d,V]`` matmul is a
+        real compute + memory win). Returns ``{"logits", "denoised"}`` under
+        ``loss_kind='ce'`` (Option B, the MORPH extension).
 
         Flow, matching the authors' ``model.py::denoise`` (audit §3):
 
           1. ``c_skip, c_out, c_in, c_noise`` from σ.
           2. the block sees ``z_σ · c_in``; σ enters as ``c_noise`` through AdaLN.
           3. ``D̂ = hidden · c_out + z_σ · c_skip`` — the denoised EMBEDDING estimate.
-          4. logits = readout(D̂), and CE is taken against ``labels``.
+          4. (ce only) logits = readout(D̂), and CE is taken against ``labels``.
 
         Step 3 before step 4 is deliberate and structural: ``D̂`` lives in the same space
-        as the target ``y``, which is what lets the sampler's ``softmax(logits) @ E`` bridge
-        (audit §4) close the loop at inference.
+        as the target ``y``. Under ``l2`` the loss is taken directly on ``D̂``; under
+        ``ce`` it is what lets the sampler's ``softmax(logits) @ E`` bridge (audit §4)
+        close the loop at inference.
         """
         cfg = self.db_cfg
         sigma = db_step.sigma
@@ -1190,8 +1197,11 @@ class MORPHTransformer(nn.Module):
         hidden = self._readout(x)
         denoised = (hidden.float() * c_out.view(B, 1, 1)
                     + zt.float() * c_skip.view(B, 1, 1)).to(hidden.dtype)
-        logits = denoised @ self.db_lm_weight().T
-        return {"logits": logits, "denoised": denoised}
+        if cfg.loss_kind == "ce":
+            logits = denoised @ self.db_lm_weight().T
+            return {"logits": logits, "denoised": denoised}
+        # loss_kind == "l2": the loss is taken on D̂ directly (Option A). No readout.
+        return {"denoised": denoised}
 
     def db_lm_weight(self) -> Tensor:
         """Tied LM-head weight under the same slice transform as the target.

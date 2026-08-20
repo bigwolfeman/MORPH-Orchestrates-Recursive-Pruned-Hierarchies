@@ -135,6 +135,15 @@ class DBConfig:
     slice_scale: bool = True
     sigma_data: float = SIGMA_DATA
 
+    # ── objective (the fork, checklist top section, 2026-08-19) ───────────────
+    # "l2" (default, Option A — the paper's AR objective, App. B/C): the loss is
+    # w(σ)·‖D̂ − y‖² in EMBEDDING space. No readout is used in training, so the tied-head
+    # free ride (c_skip·z ≈ y at low σ → logits decode the target for free) cannot occur
+    # BY CONSTRUCTION. Under "l2" the forward skips the `denoised @ E.T` matmul entirely.
+    # "ce" (Option B — a MORPH extension, NOT the paper's AR method): CE on the tied
+    # readout, today's behavior, kept for the db_b1_concat ablation lineage.
+    loss_kind: str = "l2"
+
     # ── loss weighting (falsifier finding, 2026-08-19) ────────────────────────
     # "unweighted" (default): plain mean CE. "edm": the authors' w(σ)=1/c_out² L2
     # weighting. EDM's w equalizes σ contributions for an L2 REGRESSION loss; applied to
@@ -160,6 +169,8 @@ class DBConfig:
                 f"db.conditioning must be 'concat' or 'x0_inject', got {self.conditioning!r}")
         if self.visit not in ("uniform", "mass"):
             raise ValueError(f"db.visit must be 'uniform' or 'mass', got {self.visit!r}")
+        if self.loss_kind not in ("l2", "ce"):
+            raise ValueError(f"db.loss_kind must be 'l2' or 'ce', got {self.loss_kind!r}")
         if self.loss_weighting not in ("unweighted", "edm"):
             raise ValueError(
                 f"db.loss_weighting must be 'unweighted' or 'edm', got {self.loss_weighting!r}")
@@ -330,6 +341,8 @@ class DBSchedule:
         return {
             "db/mode": self.cfg.mode,
             "db/conditioning": self.cfg.conditioning,
+            "db/loss_kind": self.cfg.loss_kind,
+            "db/loss_weighting": self.cfg.loss_weighting,
             "db/n_blocks": self.n_blocks,
             "db/block_mass": list(self.mass_layer_order),
             "db/visit": self.cfg.visit,

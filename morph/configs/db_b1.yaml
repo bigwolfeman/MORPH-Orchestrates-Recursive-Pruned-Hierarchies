@@ -21,3 +21,7 @@ db:
   activate_at: 0.0        # from step 0 — no schedule transition to confound the arm
   mode: b1
   conditioning: x0_inject
+  # Pinned 2026-08-19: this historical arm ran the tied-readout CE objective
+  # (Option B). The repo default flipped to loss_kind=l2 (Option A). Keep this
+  # arm's recorded behavior explicit; new arms should use db_b1_l2.yaml.
+  loss_kind: ce

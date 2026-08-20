@@ -1881,12 +1881,18 @@ def main(cfg: DictConfig) -> None:
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     if _db_active:
                         # DiffusionBlocks: sample ONE block + per-sample sigma, noise the
-                        # target embedding, and take EDM-weighted CE. The core is applied
-                        # ONCE -- no loop, no BPTT. See docs/diffusionblocks-plan-of-action.md.
+                        # target embedding, denoise once (no loop, no BPTT). loss_kind='l2'
+                        # (Option A, the paper's AR objective) regresses the denoised
+                        # embedding -- the forward returns NO logits; loss_kind='ce'
+                        # (Option B) keeps the tied-readout CE. See
+                        # docs/diffusionblocks-plan-of-action.md + the checklist's fork.
                         _db_step = build_db_step(_db, model, y)
                         out = model(x, db_step=_db_step, db_precond=_db.precond)
-                        loss, _db_metrics = db_loss(out["logits"], _db_step, _db.precond,
-                                                    weighting=_db.model_cfg.loss_weighting)
+                        _lk = _db.model_cfg.loss_kind
+                        _pred = out["denoised"] if _lk == "l2" else out["logits"]
+                        loss, _db_metrics = db_loss(_pred, _db_step, _db.precond,
+                                                    weighting=_db.model_cfg.loss_weighting,
+                                                    loss_kind=_lk)
                     else:
                         out = model(x, labels=y, bag_size=phase.bag_size,
                                     slot_layout=_layout)
