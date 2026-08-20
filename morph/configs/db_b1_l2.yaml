@@ -18,7 +18,14 @@
 #
 # Batch 14 / seq 1024 — MATCHED to the campaign (tul_short) so per-step curves compare
 # directly to db_b1_concat and A0. Do not change the batch for comparability.
-# Run: PYTHONPATH=$PWD python -m morph.training.train --config-name db_b1_l2
+#
+# MEMORY: at batch 14 the HyperConnection Cayley n=4 carrier makes the backward peak
+# tight on a 32 GB 5090. The run OOMs in fused_hyper_connection.backward WITHOUT
+# expandable_segments (fragmentation: ~800 MiB reserved-but-unallocated at the cliff).
+# REQUIRED env (allocator flag, does not change the math):
+#   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# Run: PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=$PWD \
+#        python -m morph.training.train --config-name db_b1_l2
 defaults:
   - tul_short
   - _self_
