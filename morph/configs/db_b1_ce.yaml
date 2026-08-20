@@ -1,0 +1,47 @@
+# DiffusionBlocks arm DB-B1-CE — the DISTRIBUTIONAL objective test.
+#
+# WHY (2026-08-20, instrumented finding — RESULT.md): the L2-in-embedding-space arms
+# (db_b1_l2 x0_inject AND db_b1_concat_l2) FAIL identically — not a leak (ruled out 3 ways),
+# not the conditioning (x0_inject ≡ concat on falsifier + gen-PPL + shape). The real cause is
+# REGRESSION-TO-MEAN: the L2-optimal prediction of a many-valid-next-token target is the MEAN
+# embedding E[y|context], which decodes to no real token. shape_decomp.py shows the L2 model is
+# WORSE than chance at high σ (0.371 vs 0.25) — exactly the regime AR generation STARTS in →
+# gibberish (gen-PPL ~46k–50k vs English 13).
+#
+# THE HYPOTHESIS: a DISTRIBUTIONAL objective (CE) has no regression-to-mean. At high σ CE can
+# output a high-entropy / near-uniform distribution — the CORRECT "many tokens possible" — and
+# degrades GRACEFULLY toward ln V instead of collapsing to a garbage mean. That is the right
+# behavior for discrete text under heavy noise.
+#
+# DESIGN: conditioning is PROVEN irrelevant (x0_inject ≡ concat), so use the CHEAP x0_inject
+# path. loss_kind=ce is the TIED-readout logits CE (no untie exists). loss_weighting=unweighted
+# is mandatory — edm over-weights the trivial low-σ region ~62,000× and collapses CE (the buggy
+# db-b1-concat run). The low-σ free ride (c_skip·z decodes for free) remains but is HARMLESS:
+# it only zeroes the loss where there is nothing to learn; high σ (c_skip·z≈0) still trains real
+# from-context prediction. σ-reshape p_mean=0/p_std=1.6 keeps the high-σ mass (same as the l2 arms).
+#
+# GATES: (1) gen-PPL (bridge) must drop toward English (<~200 is the target; ANY drop below the
+# ~46k L2 floor is signal). (2) CE-shape: CE at high σ should approach ln V (~10.8), NOT exceed
+# chance the way L2 did. (3) scrambled_control.py (the CE falsifier) for context use.
+#
+# Batch 14 / seq 1024 — MATCHED to the campaign. x0_inject is the cheap single-pass (~10 GB live).
+# Run: PYTHONPATH=$PWD python -m morph.training.train --config-name db_b1_ce
+defaults:
+  - tul_short
+  - _self_
+
+wandb:
+  name: db-b1-ce   # distributional objective; the regression-to-mean escape test
+
+training:
+  steps: 2000
+  eval_every: 250
+
+db:
+  activate_at: 0.0          # from step 0 — no schedule transition to confound the arm
+  mode: b1
+  conditioning: x0_inject   # cheap — conditioning proven irrelevant (x0_inject ≡ concat)
+  loss_kind: ce             # DISTRIBUTIONAL — degrades to ln V at high σ, not a garbage mean
+  loss_weighting: unweighted  # NEVER edm with ce (62,000× low-σ over-weight → collapse)
+  p_mean: 0.0               # σ-reshape — same high-σ mass as the l2 arms
+  p_std: 1.6
