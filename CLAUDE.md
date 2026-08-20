@@ -37,7 +37,7 @@ magnitude clamp doesn't touch.** Implication for *any* fix here (and for looped/
 nets generally): target **contractivity** (`ρ≤1`: spectral/Lipschitz control, direction-preserving carrier
 renorm), not symptom-clamping — that also preserves the β1=0 memory win + α·m_slow gains.
 **Full writeup + evidence chain + the decisive `ρ(J_core)` probe:**
-`Ai-notes/06-19-2026/MORPH-Iterative-Map-Dynamics/MENTAL-MODEL.md`.
+[`.agents/notes/implemented/architecture/2026-06-19-iterative-map-dynamics.md`](.agents/notes/implemented/architecture/2026-06-19-iterative-map-dynamics.md).
 
 ## ⭐ TUL — Thought Unpack Loop — MERGED TO MASTER, OFF BY DEFAULT, ARMS RUN
 
@@ -69,7 +69,8 @@ touching the model for TUL. Short mental model:
   MegaByte T7; Bowman T2; Hourglass T6). Never regress onto the slot state (LCM, CoCoMix, BT §4.2).
 - Arms and gates: `docs/ablation-ledger.md` "Planned — TUL"; invariants: `runtime-invariants.md` §6b
   (LIVE, each row names the test that fails when it breaks).
-- Lineage: successor of coconut's `tul/` + `ltd/` (fine-tunes of frozen models; left behind).
+- Lineage: successor of coconut's `tul/` + `ltd/` (fine-tunes/model surgery of Huggin; left behind).
+- The Thought Unpack Loop forces the loop to handle whole semantic thoughts that are then sequentially decoded similar to future lens. This reduces per token looping and improves ppl. It is much more flop efficient.
 
 **Where the code is** (v1, `pytest tests/` → 116 passed; no arm has been TRAINED yet):
 
@@ -87,13 +88,29 @@ LAST" needs a lookahead the generator cannot have), and the packer pads a row's 
 ≤ `prefix_k` positions rather than dropping a boundary. Arms `stp_lambda`,
 `set_lambda`, `carry`, `xattn`, `bcast` are NOT built and RAISE if configured.
 
+## Documentation map (where to put / find writing)
+
+Do not dump new markdown at repo root or into `Ai-notes/`. That path is gitignored private scratch.
+
+| Kind of work | Where it goes |
+|---|---|
+| This file | Model/runtime brief and gotchas. Recipe **numbers** stay in `morph/configs/base.yaml`. |
+| Standing orders | [AGENTS.md](AGENTS.md) |
+| Specs, invariants, paper notes, figures, ablation table | `docs/` — **do not restructure** that tree; add a file or a section, or link. Start at [docs/MANIFEST.md](docs/MANIFEST.md). |
+| Why we chose X, what we gave up | `.agents/notes/{proposed\|implemented\|rejected\|archived}/{class}/yyyy-mm-dd-slug.md` — read [.agents/notes/README.md](.agents/notes/README.md) before writing one |
+| Hot-path subtree brief | [morph/model/CLAUDE.md](morph/model/CLAUDE.md) |
+| Spikes | `lab/` |
+| wandb, Hydra `outputs/`, throwaway scripts | `ignore/` (private) |
+
+After adding or moving Agent Notes, run `python scripts/verify_template.py`.
+
 ## Architecture
 
 Loop hierarchy:
 1. **Inner**: Parcae core loop — local **3 prelude + 6 core × T + 3 coda** (cloud target 4:8:4,
    d=2048). T = per-sequence Poisson depth (mean 6, max 8), truncated BPTT depth 4, gradient
    checkpointed. d_model=768, d_ff=2048, seq 4096 locally.
-2. **Outer**: Zyphra RSA harness (inference-time, requires RL — deferred)
+2. **Outer**: TUL
 
 Attention: CCA channel compression → CSA sparse global + HCA dense compressed (alternating layers),
 with XSA, Residual Attention, CoPE Clipped RoPE, QK-Norm baked in.
@@ -105,9 +122,9 @@ Embeddings: Hybrid (euclidean + Lorentz hyperbolic, `lorentz_fraction=0.25`) + h
 ## Design Principles
 
 - **No runtime feature flags.** Features are baked in at init. No `if use_feature:` in forward pass.
-  torch.compile sees a clean graph with no branching.
+  **torch.compile sees a clean graph with no branching.**
 - **PyTorch-first.** The JAX/Flax mirror (`morph/jax/`) and the PT↔JAX converter
-  (`morph/interop/checkpoint.py`) exist but lag the PyTorch model; verify parity before relying on them.
+  (`morph/interop/checkpoint.py`) exist but lag the PyTorch model; verify parity through bit exactness before relying on them.
 - **Hydra configs.** All hyperparams in YAML (`morph/configs/`). Every run reproducible from its wandb config.
 - **Custom kernels.** Triton (GPU), SM120 tuned for 5090. (`morph/kernels/pallas/` is currently empty.)
 
@@ -134,6 +151,8 @@ ruff check morph/
 ## Project Structure
 
 ```
+.agents/notes/           # Public decision records (see AGENTS.md)
+lab/                     # Spikes, not production
 morph/
   model/
     transformer.py       # Core looped transformer (Parcae loop, DiagonalInjection; _SwiGLUMortar hosts the ReMoE router)
@@ -194,10 +213,10 @@ No fullgraph=True (the looped core uses gradient checkpointing, use_reentrant=Fa
 torch._functorch.config.donated_buffer = False (import the submodule explicitly first).
 
 ### Project Cleanliness
-Do not litter scripts around the directory. Temporary scripts, agent notes, Hydra
+Do not litter scripts around the directory. Temporary scripts, Hydra
 `outputs/`, and local `wandb/` live under `ignore/`, which is a **private** git repo
 (`morph-scratch`) and is gitignored by the public tree. Root paths `Ai-notes`,
-`ai-notes` (same target — agents forget the capital), `Incomplete`, `outputs`, and
-`wandb` are symlinks into `ignore/`. Write notes to either spelling; both resolve
-to `ignore/Ai-notes/`. Do not commit weights, `*.m2g`, `*.optlog`, or perf traces
+`ai-notes`, `Incomplete`, `outputs`, and `wandb` are leftover symlinks into `ignore/`.
+**New decision notes go in `.agents/notes/` (public).** Do not write new markdown
+to `Ai-notes/`. Do not commit weights, `*.m2g`, `*.optlog`, or perf traces
 into the private repo either — see `ignore/.gitignore`.
