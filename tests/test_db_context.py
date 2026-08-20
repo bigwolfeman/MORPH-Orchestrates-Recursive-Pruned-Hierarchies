@@ -12,6 +12,7 @@ from morph.model.db_context import (
     clean_block_causal_mask,
     merged_block_causal_mask,
     two_source_window,
+    compressed_two_source_reference,
 )
 from morph.model.attention import _compressed_causal_mask
 
@@ -113,3 +114,29 @@ def test_two_source_window_reachability_and_leak_by_perturbation():
         assert moved[p - 1].item() < 1e-6, f"LEAK: perturbing clean {p} moved query {p-1}"
         # Reachability: query p (current token = p) must move.
         assert moved[p].item() > 1e-4, f"query {p} could not reach its current clean token {p}"
+
+
+def test_compressed_two_source_no_target_leak_by_perturbation():
+    # Same leak-by-perturbation invariant for the COMPRESSED (HCA) branch, which the
+    # window test above does NOT cover. Perturb the CLEAN block that contains the target
+    # position i+1; query i's output must be UNMOVED (its target block is masked out),
+    # while perturbing the block that contains only the current token i must move query i.
+    B, H, S, D, m = 1, 2, 12, 8, 4
+    nb = S // m
+    torch.manual_seed(2)
+    q = torch.randn(B, H, S, D)
+    C_clean = torch.randn(B, nb, D)
+    C_noisy = torch.randn(B, nb, D)
+    sink = torch.randn(H)
+    mask = merged_block_causal_mask(S, nb, nb, m, "cpu")            # [S, 2nb]
+    base = compressed_two_source_reference(
+        q, torch.cat([C_clean, C_noisy], dim=1), mask, sink, D ** -0.5)
+
+    for i in range(S - 1):
+        tgt_block = (i + 1) // m                                    # clean block holding target i+1
+        Cc = C_clean.clone()
+        Cc[:, tgt_block, :] += 50.0
+        out = compressed_two_source_reference(
+            q, torch.cat([Cc, C_noisy], dim=1), mask, sink, D ** -0.5)
+        moved = (out - base).abs()[0, :, i, :].max().item()
+        assert moved < 1e-6, f"LEAK: perturbing clean block {tgt_block} (holds target {i+1}) moved query {i}"
