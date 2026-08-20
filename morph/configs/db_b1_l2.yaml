@@ -23,15 +23,14 @@
 # Batch 14 / seq 1024 — MATCHED to the campaign (tul_short) so per-step curves compare
 # directly to db_b1_concat and A0. Do not change the batch for comparability.
 #
-# MEMORY (MEASURED, OPEN ISSUE — do not restate the old 10.6 GB claim): the x0_inject
-# gradient-checkpoint (transformer.py _db_run_section else-branch, ckpt_grad_iters=-1 ⇒
-# active) cut an EAGER probe to ~10.6 GB, but the REAL compiled training path still peaks
-# at ~26 GB (measured: 26071 MiB peak / 21566 MiB process, batch 14). So the recurrent-
-# depth memory win is NOT yet realized — this run is ~AdEMAMix+BPTT territory. Working
-# hypothesis (UNPROVEN): compile is applied to layer.mlp only, and AOTAutograd pins the
-# compiled MLP's saved-for-backward activations, which the outer non-reentrant checkpoint
-# cannot discard → compile defeats the checkpoint. Falsify with ignore/db-b1-l2-run/
-# vram_probe.sh ({compile off,on}×{ckpt off,on}). The HC Cayley n=4 carrier is 4× wide.
+# MEMORY (MEASURED via ignore/db-b1-l2-run/vram_probe.sh, batch 14): the recurrent-depth
+# no-BPTT win IS realized in LIVE memory. The x0_inject checkpoint (ckpt_grad_iters=-1)
+# works under compile: fwd+bwd ALLOCATED peak = 10.17 GB compiled / 10.22 GB eager; WITHOUT
+# the checkpoint it OOMs (>31 GB) in both. So checkpointing is load-bearing and correct —
+# do NOT "fix" it. The ~26 GB people see is RESERVED memory (nvidia-smi/process reports
+# reserved), ~20 GB under compile vs 10 GB live — Inductor workspace + dynamic-batch core-MLP
+# variants, NOT retained activations. Keep expandable_segments=True (drops reserved 26→20 GB).
+# The HC Cayley n=4 carrier is 4× wide.
 # Run: PYTHONPATH=$PWD python -m morph.training.train --config-name db_b1_l2
 defaults:
   - tul_short
