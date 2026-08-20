@@ -1,13 +1,17 @@
 # DiffusionBlocks arm DB-B1-L2 — recurrent-depth B=1, FAITHFUL Option-A objective,
 # cheap x0_inject conditioning. The Phase-1 pathfinder arm (checklist §15).
 #
-# Objective: L2 in EMBEDDING space, the paper's actual AR method (App. B/C):
-#   L = mean( w(σ) · mean_dims( (D̂ − y)² ) ),  D̂ = c_skip·z + c_out·hidden
-# No readout is used in training, so the tied-head free ride (CE≈0 at low σ via
-# c_skip·z ≈ y) cannot occur BY CONSTRUCTION. loss_weighting=edm is CORRECT here — the
-# EDM weight w(σ)=1/c_out² is DERIVED for this L2 regression (it makes the raw network
-# output a unit-variance target at every σ; App. C calls it crucial). The earlier
-# ce+edm collapse was CE wearing an L2 weight, not a fault of the weight.
+# Objective: L2 in EMBEDDING space (App. B/C) with a CE anchor. The first db_b1_l2 run
+# (buggy, RESULT.md) produced token salad: two causes, both fixed here.
+#   Finding 1 (BUG): the L2 target was NOT detached, so the loss trained the tied embedding
+#     by moving TARGETS toward predictions → directional collapse. Now db_setup detaches
+#     the target ALWAYS. With a detached target the embedding is untrained by L2, so:
+#   ce_anchor_lambda>0 adds a Diffusion-LM rounding term λ·CE(D̂ @ E.T, labels) (fused, no
+#     [N,V]) — keeps rows separable AND supplies the high-σ next-token signal.
+#   Finding 2 (σ mismatch): the paper's p_mean=-1.2 put 84% of mass below σ=1 and only 5.7%
+#     above σ=2, starving the high-σ regime that AR generation (starts at σ_max·ε) lives in.
+#     p_mean=0.0/p_std=1.6 moves training mass toward it (median σ 0.30→1.0, P(σ>2) 5.7%→~33%).
+# loss_weighting=edm is still correct for the L2 term (w(σ)=1/c_out² is derived for it).
 #
 # Conditioning: x0_inject (ONE sequence, clean embedding injected via ChannelInject) —
 # the cheap path. The objective fix must prove itself HERE before any concat/two-source
@@ -29,7 +33,7 @@ defaults:
   - _self_
 
 wandb:
-  name: db-b1-l2
+  name: db-b1-l2-fix   # detach + CE anchor + σ-reshape; distinct from the buggy db-b1-l2
 
 training:
   steps: 2000          # pathfinder: enough to separate context use from autoencoding
@@ -41,3 +45,6 @@ db:
   conditioning: x0_inject
   loss_kind: l2        # Option A — the paper's AR objective (embedding-space L2)
   loss_weighting: edm  # correct for L2 (derived for it); NEVER pair edm with loss_kind=ce
+  ce_anchor_lambda: 1.0  # Finding 1 fix: Diffusion-LM rounding anchor on the detached target
+  p_mean: 0.0          # Finding 2 fix: shift σ mass to high σ (median 0.30 → 1.0)
+  p_std: 1.6

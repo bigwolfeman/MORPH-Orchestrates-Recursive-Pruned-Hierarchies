@@ -1892,7 +1892,9 @@ def main(cfg: DictConfig) -> None:
                         _pred = out["denoised"] if _lk == "l2" else out["logits"]
                         loss, _db_metrics = db_loss(_pred, _db_step, _db.precond,
                                                     weighting=_db.model_cfg.loss_weighting,
-                                                    loss_kind=_lk)
+                                                    loss_kind=_lk,
+                                                    anchor_ce=out.get("anchor_ce"),
+                                                    ce_anchor_lambda=_db.model_cfg.ce_anchor_lambda)
                     else:
                         out = model(x, labels=y, bag_size=phase.bag_size,
                                     slot_layout=_layout)

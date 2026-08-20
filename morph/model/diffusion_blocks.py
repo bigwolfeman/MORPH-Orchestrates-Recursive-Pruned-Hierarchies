@@ -157,6 +157,28 @@ class DBConfig:
     # ── σ conditioning ───────────────────────────────────────────────────────
     cond_dim: int = 256              # width of the σ embedding fed to AdaLN
 
+    # ── CE anchor (2026-08-19, detach-bug fix — RESULT.md Finding 1) ──────────
+    # Under pure L2 (Option A) the tied embedding is BOTH the regression target and a
+    # trainable parameter, so the loss can cheat by moving the TARGET toward the
+    # prediction → directional embedding collapse (all rows drift to one frequency-
+    # weighted mean; generation becomes token salad). The target is now detached in
+    # db_setup.build_db_step, which stops that but leaves the embedding trained only
+    # through the x0 input path. `ce_anchor_lambda > 0` adds a Diffusion-LM style
+    # rounding term λ·CE(D̂ @ E.T, labels) (fused, no [N,V] materialised) that (a) keeps
+    # embedding rows separable and (b) supplies a high-σ next-token signal — it free-
+    # rides to ~0 at low σ (harmless) and is real at high σ, which is exactly where AR
+    # generation lives. 0.0 = pure L2 (bit-identical to the detach-only path).
+    ce_anchor_lambda: float = 0.0
+
+    # ── σ distribution (reshape lever — RESULT.md Finding 2) ──────────────────
+    # The training log-normal noise distribution: log σ ~ N(p_mean, p_std²). The EDM
+    # image default (−1.2, 1.2) puts 84% of mass below σ=1 and only 5.7% above σ=2, so it
+    # starves the high-σ "predict from pure noise" regime that AR generation depends on
+    # (generation starts at σ_max·ε). Raise p_mean / widen p_std to move training mass
+    # toward that regime. Defaults reproduce the paper exactly.
+    p_mean: float = P_MEAN
+    p_std: float = P_STD
+
     # ── arms NOT built in v1 — configuring them RAISES rather than being ignored ──
     cfg_scale: float = 0.0           # classifier-free guidance (their ViT path has it)
     self_conditioning: bool = False
@@ -178,6 +200,10 @@ class DBConfig:
             raise ValueError(f"db.overlap_gamma must be ≥ 0, got {self.overlap_gamma}")
         if self.sigma_data <= 0.0:
             raise ValueError(f"db.sigma_data must be > 0, got {self.sigma_data}")
+        if self.ce_anchor_lambda < 0.0:
+            raise ValueError(f"db.ce_anchor_lambda must be ≥ 0, got {self.ce_anchor_lambda}")
+        if self.p_std <= 0.0:
+            raise ValueError(f"db.p_std must be > 0, got {self.p_std}")
         if self.mode == "b1" and self.block_mass is not None:
             raise ValueError("db.mode='b1' is B=1 by definition; leave db.block_mass unset")
         if self.block_mass is not None:
@@ -261,8 +287,8 @@ class DBSchedule:
         self.mass_layer_order = tuple(mass)
 
         # CDF-space span of the truncated log-normal.
-        self._cdf_min = _norm_cdf((math.log(SIGMA_MIN) - P_MEAN) / P_STD)
-        self._cdf_max = _norm_cdf((math.log(SIGMA_MAX) - P_MEAN) / P_STD)
+        self._cdf_min = _norm_cdf((math.log(SIGMA_MIN) - self.cfg.p_mean) / self.cfg.p_std)
+        self._cdf_max = _norm_cdf((math.log(SIGMA_MAX) - self.cfg.p_mean) / self.cfg.p_std)
 
         # Ascending σ boundaries. Mass is given in layer order (prelude first = highest
         # σ), so reverse it to walk σ upward.
@@ -277,7 +303,7 @@ class DBSchedule:
 
     def _sigma_at_mass(self, frac: float) -> float:
         q = self._cdf_min + (self._cdf_max - self._cdf_min) * frac
-        return math.exp(P_MEAN + P_STD * _norm_ppf(q))
+        return math.exp(self.cfg.p_mean + self.cfg.p_std * _norm_ppf(q))
 
     def block_range(self, block_idx: int) -> tuple[float, float]:
         """γ-extended ``(σ_lo, σ_hi)`` for a block in LAYER order."""
@@ -309,13 +335,13 @@ class DBSchedule:
         the interval's two CDF values).
         """
         lo, hi = self.block_range(block_idx)
-        q_lo = _norm_cdf((math.log(lo) - P_MEAN) / P_STD)
-        q_hi = _norm_cdf((math.log(hi) - P_MEAN) / P_STD)
+        q_lo = _norm_cdf((math.log(lo) - self.cfg.p_mean) / self.cfg.p_std)
+        q_hi = _norm_cdf((math.log(hi) - self.cfg.p_mean) / self.cfg.p_std)
         u = torch.rand(n, dtype=torch.float64, device=device, generator=generator)
         q = q_lo + (q_hi - q_lo) * u
         # erfinv-based ppf, vectorised.
         z = math.sqrt(2.0) * torch.erfinv(2.0 * q - 1.0)
-        return (P_MEAN + P_STD * z).exp().float()
+        return (self.cfg.p_mean + self.cfg.p_std * z).exp().float()
 
     def block_of_sigma(self, sigma: Tensor) -> Tensor:
         """Map σ → block index in LAYER order (inference-side, their ``bucketize``)."""
@@ -333,7 +359,8 @@ class DBSchedule:
             raise ValueError(f"n_steps must be ≥ 2, got {n_steps}")
         qs = [self._cdf_min + (self._cdf_max - self._cdf_min) * (i / (n_steps - 1))
               for i in range(n_steps)]
-        s = [math.exp(P_MEAN + P_STD * _norm_ppf(min(max(q, 1e-12), 1 - 1e-12))) for q in qs]
+        s = [math.exp(self.cfg.p_mean + self.cfg.p_std * _norm_ppf(min(max(q, 1e-12), 1 - 1e-12)))
+             for q in qs]
         return torch.tensor(list(reversed(s)), dtype=torch.float32)
 
     def manifest(self) -> dict:
@@ -353,8 +380,9 @@ class DBSchedule:
                                             for b in range(self.n_blocks)],
             "db/sigma_min": SIGMA_MIN,
             "db/sigma_max": SIGMA_MAX,
-            "db/p_mean": P_MEAN,
-            "db/p_std": P_STD,
+            "db/p_mean": self.cfg.p_mean,
+            "db/p_std": self.cfg.p_std,
+            "db/ce_anchor_lambda": self.cfg.ce_anchor_lambda,
             "db/sigma_data": float(self.cfg.sigma_data),
             "db/slice_scale": bool(self.cfg.slice_scale),
         }
