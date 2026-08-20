@@ -1,0 +1,38 @@
+# DiffusionBlocks arm DB-B1-L2 — recurrent-depth B=1, FAITHFUL Option-A objective,
+# cheap x0_inject conditioning. The Phase-1 pathfinder arm (checklist §15).
+#
+# Objective: L2 in EMBEDDING space, the paper's actual AR method (App. B/C):
+#   L = mean( w(σ) · mean_dims( (D̂ − y)² ) ),  D̂ = c_skip·z + c_out·hidden
+# No readout is used in training, so the tied-head free ride (CE≈0 at low σ via
+# c_skip·z ≈ y) cannot occur BY CONSTRUCTION. loss_weighting=edm is CORRECT here — the
+# EDM weight w(σ)=1/c_out² is DERIVED for this L2 regression (it makes the raw network
+# output a unit-variance target at every σ; App. C calls it crucial). The earlier
+# ce+edm collapse was CE wearing an L2 weight, not a fault of the weight.
+#
+# Conditioning: x0_inject (ONE sequence, clean embedding injected via ChannelInject) —
+# the cheap path. The objective fix must prove itself HERE before any concat/two-source
+# machinery re-enters (checklist §3 last item / §15 Phase 1).
+#
+# Gates (pre-registered, checklist §10): matched-vs-scrambled L2 at HIGH σ must show
+# clear context use; bridge (MAUVE + gen-PPL) within 15% of the A0 row at equal tokens.
+#
+# Batch 14 / seq 1024 — MATCHED to the campaign (tul_short) so per-step curves compare
+# directly to db_b1_concat and A0. Do not change the batch for comparability.
+# Run: PYTHONPATH=$PWD python -m morph.training.train --config-name db_b1_l2
+defaults:
+  - tul_short
+  - _self_
+
+wandb:
+  name: db-b1-l2
+
+training:
+  steps: 2000          # pathfinder: enough to separate context use from autoencoding
+  eval_every: 250
+
+db:
+  activate_at: 0.0     # from step 0 — no schedule transition to confound the arm
+  mode: b1
+  conditioning: x0_inject
+  loss_kind: l2        # Option A — the paper's AR objective (embedding-space L2)
+  loss_weighting: edm  # correct for L2 (derived for it); NEVER pair edm with loss_kind=ce

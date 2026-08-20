@@ -111,8 +111,15 @@ def db_sample(model, input_ids: Tensor, runtime, n_steps: int | None = None,
         step = DBStep(block_idx=block, sigma=s, z_noisy=z.to(lm_w.dtype),
                       y_clean=z.to(lm_w.dtype), labels=input_ids)
         out = model(input_ids, db_step=step, db_precond=pre)
-        logits = out["logits"]
-        denoised = expected_embedding(logits, lm_w)
+        if "logits" in out:
+            # loss_kind='ce': the network speaks in logits; bridge back to embedding
+            # space (audit §4) for the Euler step.
+            logits = out["logits"]
+            denoised = expected_embedding(logits, lm_w)
+        else:
+            # loss_kind='l2' (Option A): the network output IS the denoised embedding
+            # estimate — the paper's own sampler form. No bridge, no R9 norm-shrink.
+            denoised = out["denoised"]
 
         if trace is not None:
             trace.add(float(sigmas[i]), block, denoised, z)
@@ -124,5 +131,13 @@ def db_sample(model, input_ids: Tensor, runtime, n_steps: int | None = None,
     step = DBStep(block_idx=int(sch.block_of_sigma(sigmas[-1].view(1))[0]),
                   sigma=s_min, z_noisy=z.to(lm_w.dtype),
                   y_clean=z.to(lm_w.dtype), labels=input_ids)
-    logits = model(input_ids, db_step=step, db_precond=pre)["logits"]
+    out = model(input_ids, db_step=step, db_precond=pre)
+    if "logits" in out:
+        logits = out["logits"]
+    else:
+        # L2-trained model (App. E.4: map the denoised embedding back to a token).
+        # SliceScaler pins every head row's slice norms, so all rows have IDENTICAL total
+        # norm and this dot-product argmax is exactly nearest-neighbor in L2. Without
+        # slice_scale the rows are unequal-norm and this is only the standard tied readout.
+        logits = (out["denoised"].float() @ lm_w.float().T).to(lm_w.dtype)
     return logits, z

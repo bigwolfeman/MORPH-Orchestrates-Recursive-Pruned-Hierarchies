@@ -84,6 +84,8 @@ def build_db_runtime(cfg) -> DbRuntime | None:
         overlap_gamma=float(dc.get("overlap_gamma", 0.1)),
         slice_scale=bool(dc.get("slice_scale", True)),
         sigma_data=float(dc.get("sigma_data", 0.5)),
+        loss_kind=str(dc.get("loss_kind", "l2")),
+        loss_weighting=str(dc.get("loss_weighting", "unweighted")),
         cond_dim=int(dc.get("cond_dim", 256)),
         cfg_scale=float(dc.get("cfg_scale", 0.0)),
         self_conditioning=bool(dc.get("self_conditioning", False)),
@@ -188,35 +190,59 @@ def build_db_step(rt: DbRuntime, model, labels: Tensor,
     )
 
 
-def db_loss(logits: Tensor, step: DBStep, precond: EDMPrecond,
-            ignore_index: int = -100, weighting: str = "unweighted") -> tuple[Tensor, dict]:
-    """Cross-entropy denoising loss, plus the per-block metric channels.
+def db_loss(pred: Tensor, step: DBStep, precond: EDMPrecond,
+            ignore_index: int = -100, weighting: str = "unweighted",
+            loss_kind: str = "l2") -> tuple[Tensor, dict]:
+    """The DB training loss, plus the per-block metric channels.
+
+    ``loss_kind`` (DBConfig.loss_kind) selects the objective AND what ``pred`` is:
+      * ``"l2"`` (default, Option A — the paper's AR objective): ``pred`` is the DENOISED
+        embedding estimate ``D̂ = c_skip·z + c_out·hidden`` (``[B, L, d]``, the forward's
+        ``out["denoised"]``). Loss is the per-dim mean squared error against ``y_clean``.
+        No readout is used, so the tied-head free ride cannot occur by construction.
+        With ``weighting="edm"`` (the correct pairing — w(σ)=1/c_out² is DERIVED for this
+        L2 regression and makes the raw network output a unit-variance target at every σ)
+        the loss is the paper's ``w(σ)·‖D̂−y‖²``.
+      * ``"ce"`` (Option B — MORPH extension): ``pred`` is the tied-readout logits
+        (``[B, L, V]``, the forward's ``out["logits"]``); CE against ``labels``.
 
     ``weighting`` (DBConfig.loss_weighting):
-      * ``"unweighted"`` (default): plain mean CE. This is the corrected objective.
-      * ``"edm"``: the authors' ``× w(σ)=1/c_out²`` L2 weighting. That weight equalizes σ
-        contributions for an L2 REGRESSION loss; on CROSS-ENTROPY it over-weights the trivial
-        low-σ region (``c_skip≈1`` → z passes through → CE≈0) by up to ~62,000×, so training
-        collapses to the low-σ copy and never learns high-σ prediction. Kept only for the
-        ablation that reproduces the collapse (db-b1-concat run, 2026-08-19).
+      * ``"edm"``: multiply per-sample loss by ``w(σ)=1/c_out²``. CORRECT for ``l2``
+        (App. C calls it crucial). On CE it over-weights the trivial low-σ region
+        (``c_skip≈1`` → z passes through the tied head → CE≈0) by up to ~62,000×, so CE
+        training collapses to the low-σ copy (db-b1-concat run, 2026-08-19). Keep
+        ``ce``+``edm`` only as the ablation that reproduces that collapse.
+      * ``"unweighted"``: plain mean. The corrected default for ``ce``.
 
-    The UNWEIGHTED CE is always logged alongside (per block index) so a single failing block
-    is visible instead of being averaged away.
+    The raw (unweighted) number is always logged alongside, per block index, so a single
+    failing block is visible instead of being averaged away.
 
-    NOTE this CE is NOT comparable to A0's ``val/ppl_tokens``. It is conditioned on a
-    σ-noised target, so it is a reconstruction number, not a likelihood (sheet §1.3). Never
-    table it next to a baseline CE.
+    NOTE neither number is comparable to A0's ``val/ppl_tokens``. Both are conditioned on
+    a σ-noised target — reconstruction numbers, not likelihoods (sheet §1.3). Never table
+    them next to a baseline CE.
     """
-    B, L, V = logits.shape
-    ce = torch.nn.functional.cross_entropy(
-        logits.reshape(-1, V).float(),
-        step.labels.reshape(-1),
-        ignore_index=ignore_index,
-        reduction="none",
-    ).view(B, L)
-
     valid = (step.labels != ignore_index)
-    per_sample = (ce * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1)
+
+    if loss_kind == "l2":
+        if pred.shape != step.y_clean.shape:
+            raise ValueError(
+                f"loss_kind='l2' expects pred = denoised embeddings {tuple(step.y_clean.shape)}, "
+                f"got {tuple(pred.shape)} — did the caller pass logits?")
+        per_pos = ((pred.float() - step.y_clean.float()) ** 2).mean(dim=-1)   # [B, L]
+        raw_name = "db/l2_raw"
+    elif loss_kind == "ce":
+        B, L, V = pred.shape
+        per_pos = torch.nn.functional.cross_entropy(
+            pred.reshape(-1, V).float(),
+            step.labels.reshape(-1),
+            ignore_index=ignore_index,
+            reduction="none",
+        ).view(B, L)
+        raw_name = "db/ce_unweighted"
+    else:
+        raise ValueError(f"loss_kind must be 'l2' or 'ce', got {loss_kind!r}")
+
+    per_sample = (per_pos * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1)
     w = precond.weight(step.sigma)
     if weighting == "edm":
         loss = (per_sample * w).mean()
@@ -226,8 +252,8 @@ def db_loss(logits: Tensor, step: DBStep, precond: EDMPrecond,
     b = step.block_idx
     metrics = {
         "db/loss": float(loss.detach()),
-        "db/ce_unweighted": float(per_sample.mean().detach()),
-        f"db/ce_unweighted_block{b}": float(per_sample.mean().detach()),
+        raw_name: float(per_sample.mean().detach()),
+        f"{raw_name}_block{b}": float(per_sample.mean().detach()),
         f"db/loss_block{b}": float(loss.detach()),
         "db/block_idx": b,
         "db/sigma_mean": float(step.sigma.detach().mean()),

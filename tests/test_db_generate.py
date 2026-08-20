@@ -18,8 +18,10 @@ from test_db_forward import _model, _RT, V
 
 
 def test_db_sample_concat_runs_end_to_end():
-    for mode in ("b1", "b3"):
-        cfg = DBConfig(mode=mode, conditioning="concat")
+    # Both objective kinds: 'ce' walks the softmax(logits)@E bridge, 'l2' feeds the
+    # network's denoised output straight into the Euler step (the paper's sampler form).
+    for mode, kind in (("b1", "ce"), ("b3", "ce"), ("b1", "l2"), ("b3", "l2")):
+        cfg = DBConfig(mode=mode, conditioning="concat", loss_kind=kind)
         m = _model(cfg)
         rt = _RT(cfg)
         ids = torch.randint(0, V, (2, 16))
@@ -28,7 +30,7 @@ def test_db_sample_concat_runs_end_to_end():
 
         logits, z = db_sample(m, ids, rt, n_steps=4, generator=g, trace=trace)
 
-        assert logits.shape == (2, 16, V), f"{mode}: bad logits shape {tuple(logits.shape)}"
+        assert logits.shape == (2, 16, V), f"{mode}/{kind}: bad logits shape {tuple(logits.shape)}"
         assert torch.isfinite(logits).all(), f"{mode}: non-finite sampler logits"
         assert z.shape == (2, 16, m.cfg.d_model)
         assert torch.isfinite(z).all(), f"{mode}: non-finite denoised estimate"
