@@ -1,0 +1,12 @@
+---
+description: Standing orders — read AGENTS.md and Agent Note rules before changing layout or recording decisions.
+alwaysApply: true
+---
+
+# Project standing orders
+
+Read [AGENTS.md](../../AGENTS.md) and [CLAUDE.md](../../CLAUDE.md) before project work.
+
+Decision records live under `.agents/notes/{lifecycle}/{class}/yyyy-mm-dd-slug.md`. Do not write them to `Ai-notes/` (gitignored). Do not restructure `docs/`.
+
+After note edits, run `python scripts/verify_template.py` and report the result. Failures are errors, not hints.
