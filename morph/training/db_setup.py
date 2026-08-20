@@ -86,6 +86,9 @@ def build_db_runtime(cfg) -> DbRuntime | None:
         sigma_data=float(dc.get("sigma_data", 0.5)),
         loss_kind=str(dc.get("loss_kind", "l2")),
         loss_weighting=str(dc.get("loss_weighting", "unweighted")),
+        ce_anchor_lambda=float(dc.get("ce_anchor_lambda", 0.0)),
+        p_mean=float(dc.get("p_mean", -1.2)),
+        p_std=float(dc.get("p_std", 1.2)),
         cond_dim=int(dc.get("cond_dim", 256)),
         cfg_scale=float(dc.get("cfg_scale", 0.0)),
         self_conditioning=bool(dc.get("self_conditioning", False)),
@@ -175,6 +178,14 @@ def build_db_step(rt: DbRuntime, model, labels: Tensor,
     scaler = getattr(model, "db_scaler", None)
     if scaler is not None:
         y = scaler(y)
+    # The diffusion TARGET is DATA — DETACH it. MORPH's embedding is weight-TIED and
+    # trainable, so an attached target lets the pure-L2 loss cheat by moving the TARGET
+    # toward the prediction instead of improving the prediction → directional embedding
+    # collapse (all rows drift to one frequency-weighted mean; generation → token salad;
+    # RESULT.md Finding 1). In EDM the target is always data. The embedding is trained
+    # instead through the x0 input path and, if db.ce_anchor_lambda>0, the CE anchor's
+    # tied readout. z inherits the detachment (it is the network INPUT — also data).
+    y = y.detach()
 
     # VE noising, exactly the authors' model.py:252. Noise is drawn in the target's dtype
     # but the scaling is done in fp32 to keep small-σ steps representable.
@@ -192,7 +203,8 @@ def build_db_step(rt: DbRuntime, model, labels: Tensor,
 
 def db_loss(pred: Tensor, step: DBStep, precond: EDMPrecond,
             ignore_index: int = -100, weighting: str = "unweighted",
-            loss_kind: str = "l2") -> tuple[Tensor, dict]:
+            loss_kind: str = "l2", anchor_ce: Tensor | None = None,
+            ce_anchor_lambda: float = 0.0) -> tuple[Tensor, dict]:
     """The DB training loss, plus the per-block metric channels.
 
     ``loss_kind`` (DBConfig.loss_kind) selects the objective AND what ``pred`` is:
@@ -245,13 +257,23 @@ def db_loss(pred: Tensor, step: DBStep, precond: EDMPrecond,
     per_sample = (per_pos * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1)
     w = precond.weight(step.sigma)
     if weighting == "edm":
-        loss = (per_sample * w).mean()
+        base_loss = (per_sample * w).mean()
     else:
-        loss = per_sample.mean()
+        base_loss = per_sample.mean()
+
+    # CE anchor (l2 only): the detached L2 target no longer trains the tied embedding, so
+    # add a Diffusion-LM rounding term λ·CE(D̂ @ E.T, labels) to keep rows separable and
+    # supply a high-σ next-token signal. `anchor_ce` is the fused mean CE the forward
+    # already computed (no [N,V] materialised). λ=0 or None → base_loss unchanged.
+    loss = base_loss
+    if loss_kind == "l2" and anchor_ce is not None and ce_anchor_lambda > 0.0:
+        loss = base_loss + ce_anchor_lambda * anchor_ce
 
     b = step.block_idx
     metrics = {
         "db/loss": float(loss.detach()),
+        "db/base_loss": float(base_loss.detach()),
+        "db/anchor_ce": float(anchor_ce.detach()) if anchor_ce is not None else 0.0,
         raw_name: float(per_sample.mean().detach()),
         f"{raw_name}_block{b}": float(per_sample.mean().detach()),
         f"db/loss_block{b}": float(loss.detach()),

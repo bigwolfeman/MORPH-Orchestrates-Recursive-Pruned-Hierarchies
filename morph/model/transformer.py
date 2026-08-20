@@ -1209,8 +1209,17 @@ class MORPHTransformer(nn.Module):
         if cfg.loss_kind == "ce":
             logits = denoised @ self.db_lm_weight().T
             return {"logits": logits, "denoised": denoised}
-        # loss_kind == "l2": the loss is taken on D̂ directly (Option A). No readout.
-        return {"denoised": denoised}
+        # loss_kind == "l2": the loss is taken on D̂ directly (Option A). No readout —
+        # EXCEPT the optional CE anchor, a fused (no [N,V]) rounding term CE(D̂ @ E.T,
+        # labels) that keeps the detached-target embedding separable and supplies a high-σ
+        # next-token signal. Off (λ=0) → bit-identical to the pure-L2 path.
+        out = {"denoised": denoised}
+        if cfg.ce_anchor_lambda > 0.0:
+            Bd, Ld, dd = denoised.shape
+            out["anchor_ce"] = fused_linear_cross_entropy(
+                denoised.reshape(Bd * Ld, dd), self.db_lm_weight(),
+                db_step.labels.reshape(Bd * Ld))
+        return out
 
     def db_lm_weight(self) -> Tensor:
         """Tied LM-head weight under the same slice transform as the target.
