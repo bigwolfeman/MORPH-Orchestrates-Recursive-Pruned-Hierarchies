@@ -1,0 +1,13 @@
+---
+description: Agent Note format and lifecycle folders.
+globs: .agents/notes/**/*.md
+alwaysApply: false
+---
+
+# Agent Notes
+
+Follow [.agents/notes/README.md](../../.agents/notes/README.md).
+
+Path: `{lifecycle}/{class}/yyyy-mm-dd-slug.md`. Status line must match the folder. New notes need Alternatives considered. Implemented notes use Decision and Consequences, never Proposal or Acceptance criteria. Archived notes are frozen.
+
+Files with `Origin: Ai-notes/` are imported historical records. Do not copy that header onto new notes.
