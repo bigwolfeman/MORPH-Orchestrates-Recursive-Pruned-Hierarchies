@@ -23,10 +23,15 @@
 # Batch 14 / seq 1024 — MATCHED to the campaign (tul_short) so per-step curves compare
 # directly to db_b1_concat and A0. Do not change the batch for comparability.
 #
-# MEMORY: with the x0_inject gradient-checkpoint fix (transformer.py _db_run_section
-# else-branch) the fwd+bwd peak at batch 14 is ~10.6 GB (was ~26 GB un-checkpointed —
-# the single DB pass had retained all 14 layers). expandable_segments is no longer
-# required, though it is harmless. The HC Cayley n=4 carrier is still 4× wide.
+# MEMORY (MEASURED, OPEN ISSUE — do not restate the old 10.6 GB claim): the x0_inject
+# gradient-checkpoint (transformer.py _db_run_section else-branch, ckpt_grad_iters=-1 ⇒
+# active) cut an EAGER probe to ~10.6 GB, but the REAL compiled training path still peaks
+# at ~26 GB (measured: 26071 MiB peak / 21566 MiB process, batch 14). So the recurrent-
+# depth memory win is NOT yet realized — this run is ~AdEMAMix+BPTT territory. Working
+# hypothesis (UNPROVEN): compile is applied to layer.mlp only, and AOTAutograd pins the
+# compiled MLP's saved-for-backward activations, which the outer non-reentrant checkpoint
+# cannot discard → compile defeats the checkpoint. Falsify with ignore/db-b1-l2-run/
+# vram_probe.sh ({compile off,on}×{ckpt off,on}). The HC Cayley n=4 carrier is 4× wide.
 # Run: PYTHONPATH=$PWD python -m morph.training.train --config-name db_b1_l2
 defaults:
   - tul_short
