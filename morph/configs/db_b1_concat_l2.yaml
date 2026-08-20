@@ -1,0 +1,49 @@
+# DiffusionBlocks arm DB-B1-CONCAT-L2 — the APPLES-TO-APPLES concat test.
+#
+# THE ONE QUESTION (checklist §15 Phase 2): does the two-source concat conditioning fix the
+# autoencoding that x0_inject could not? This arm is IDENTICAL to db_b1_l2.yaml (the failed
+# x0_inject fix run: detach + CE anchor + σ-reshape, Option-A L2 objective) EXCEPT for the
+# single line `conditioning: concat`. So any difference in the falsifier is attributable to
+# conditioning alone — not to the objective (l2 vs ce), the anchor, or the σ distribution.
+#
+# WHY NOT the existing db_b1_concat.yaml: that arm is Option-B CE (tied readout), which carries
+# its OWN low-σ free ride (c_skip·z_t ≈ y decodes the target without context) — a confound that
+# the l2/Option-A objective removes by construction. Keeping the objective fixed isolates concat.
+#
+# The concat structural fix: the CLEAN token stream is context (σ-independent, captured once);
+# the NOISY stream attends clean+noisy causally; clean_{i+1} (the target) is withheld from noisy
+# query i (clean_block_causal_mask, unit-tested in tests/test_db_context.py). Unlike x0_inject,
+# the target does NOT reach the read stream through the context path — so the model cannot
+# shortcut by ignoring context. (Caveat: z_noisy itself still leaks y at low σ; the σ-reshape +
+# Option-A objective is what keeps that from dominating.)
+#
+# GATE: l2_freeride_probe.py on the CORRECT checkpoint (checkpoints/morph/db-b1-concat-l2/) —
+# matched-context L2 must fall CLEARLY below scrambled-context L2 at HIGH σ (the x0_inject run
+# showed gap≈0 = autoencoding). Bridge (MAUVE + gen-PPL) is the language gate (<~200 gen-PPL).
+#
+# MEMORY: concat is the 2-pass form (db_setup factor=2.0) — clean capture pass + noisy consume
+# pass — so peak is higher than x0_inject's ~10 GB live. Keep expandable_segments=True. Confirm
+# it fits batch 14 / seq 1024 before trusting the run; drop batch only if it OOMs (and log it).
+#
+# Batch 14 / seq 1024 — MATCHED to the campaign so per-step curves compare to db_b1_l2 and A0.
+# Run: PYTHONPATH=$PWD python -m morph.training.train --config-name db_b1_concat_l2
+defaults:
+  - tul_short
+  - _self_
+
+wandb:
+  name: db-b1-concat-l2   # concat + the l2-fix objective; the isolated concat test
+
+training:
+  steps: 2000
+  eval_every: 250
+
+db:
+  activate_at: 0.0         # from step 0 — no schedule transition to confound the arm
+  mode: b1
+  conditioning: concat     # <-- THE ONLY CHANGE vs db_b1_l2.yaml
+  loss_kind: l2            # Option A — same as db_b1_l2 (removes the tied-head free ride)
+  loss_weighting: edm     # correct for L2
+  ce_anchor_lambda: 1.0   # same anchor as db_b1_l2
+  p_mean: 0.0             # same σ-reshape as db_b1_l2
+  p_std: 1.6
