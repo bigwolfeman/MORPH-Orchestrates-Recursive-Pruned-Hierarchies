@@ -29,3 +29,7 @@ db:
   activate_at: 0.0        # from step 0 — no schedule transition to confound the arm
   mode: b1
   conditioning: concat
+  # Corrected objective (falsifier v1 finding): plain mean CE. The first run used the
+  # authors' EDM w(σ)=1/c_out² weight on CE, which over-weights the trivial low-σ region
+  # ~62,000× → train loss→0, val≈ln V (no language). See db_setup.db_loss.
+  loss_weighting: unweighted
