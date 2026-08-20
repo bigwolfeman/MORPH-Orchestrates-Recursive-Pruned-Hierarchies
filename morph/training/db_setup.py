@@ -189,13 +189,19 @@ def build_db_step(rt: DbRuntime, model, labels: Tensor,
 
 
 def db_loss(logits: Tensor, step: DBStep, precond: EDMPrecond,
-            ignore_index: int = -100) -> tuple[Tensor, dict]:
-    """EDM-weighted cross-entropy, plus the per-block metric channels.
+            ignore_index: int = -100, weighting: str = "unweighted") -> tuple[Tensor, dict]:
+    """Cross-entropy denoising loss, plus the per-block metric channels.
 
-    Matches the authors' ``model.py:255-259``: per-sample CE, then ``× w(σ)``, then mean.
-    The UNWEIGHTED CE is returned alongside because the weighted number is not comparable
-    across σ ranges, and both are logged **per block index** — a per-block loss channel is
-    how a single failing block becomes visible instead of being averaged away.
+    ``weighting`` (DBConfig.loss_weighting):
+      * ``"unweighted"`` (default): plain mean CE. This is the corrected objective.
+      * ``"edm"``: the authors' ``× w(σ)=1/c_out²`` L2 weighting. That weight equalizes σ
+        contributions for an L2 REGRESSION loss; on CROSS-ENTROPY it over-weights the trivial
+        low-σ region (``c_skip≈1`` → z passes through → CE≈0) by up to ~62,000×, so training
+        collapses to the low-σ copy and never learns high-σ prediction. Kept only for the
+        ablation that reproduces the collapse (db-b1-concat run, 2026-08-19).
+
+    The UNWEIGHTED CE is always logged alongside (per block index) so a single failing block
+    is visible instead of being averaged away.
 
     NOTE this CE is NOT comparable to A0's ``val/ppl_tokens``. It is conditioned on a
     σ-noised target, so it is a reconstruction number, not a likelihood (sheet §1.3). Never
@@ -212,7 +218,10 @@ def db_loss(logits: Tensor, step: DBStep, precond: EDMPrecond,
     valid = (step.labels != ignore_index)
     per_sample = (ce * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1)
     w = precond.weight(step.sigma)
-    loss = (per_sample * w).mean()
+    if weighting == "edm":
+        loss = (per_sample * w).mean()
+    else:
+        loss = per_sample.mean()
 
     b = step.block_idx
     metrics = {

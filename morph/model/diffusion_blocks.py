@@ -135,6 +135,16 @@ class DBConfig:
     slice_scale: bool = True
     sigma_data: float = SIGMA_DATA
 
+    # ── loss weighting (falsifier finding, 2026-08-19) ────────────────────────
+    # "unweighted" (default): plain mean CE. "edm": the authors' w(σ)=1/c_out² L2
+    # weighting. EDM's w equalizes σ contributions for an L2 REGRESSION loss; applied to
+    # CROSS-ENTROPY it over-weights the trivial low-σ region (c_skip≈1 → z passes through →
+    # CE≈0) by up to ~62,000×, so training collapses to the low-σ copy and never learns
+    # high-σ prediction (db-b1-concat run: train loss→0, val≈ln V). Unweighted CE lets the
+    # low-σ samples contribute ~0 gradient (nothing to learn there) while high-σ drives
+    # learning. Ablate with loss_weighting=edm to reproduce the collapse.
+    loss_weighting: str = "unweighted"
+
     # ── σ conditioning ───────────────────────────────────────────────────────
     cond_dim: int = 256              # width of the σ embedding fed to AdaLN
 
@@ -150,6 +160,9 @@ class DBConfig:
                 f"db.conditioning must be 'concat' or 'x0_inject', got {self.conditioning!r}")
         if self.visit not in ("uniform", "mass"):
             raise ValueError(f"db.visit must be 'uniform' or 'mass', got {self.visit!r}")
+        if self.loss_weighting not in ("unweighted", "edm"):
+            raise ValueError(
+                f"db.loss_weighting must be 'unweighted' or 'edm', got {self.loss_weighting!r}")
         if self.overlap_gamma < 0.0:
             raise ValueError(f"db.overlap_gamma must be ≥ 0, got {self.overlap_gamma}")
         if self.sigma_data <= 0.0:
