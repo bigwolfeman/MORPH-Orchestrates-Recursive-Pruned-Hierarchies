@@ -1123,8 +1123,17 @@ class MORPHTransformer(nn.Module):
                 x = checkpoint(_noisy, x, term, use_reentrant=False) if ckpt \
                     else _noisy(x, term)
             else:
-                x = self._apply_injection(x, term)
-                x = layer(x)
+                # x0_inject: no clean-stream capture/consume, so a single plain layer call.
+                # Checkpoint it exactly like the concat _clean/_noisy siblings above — the
+                # DB single-pass forward otherwise retains ALL layers' activations (measured
+                # ~40 GB @ batch14/seq1024 eager; the HC Cayley n=4 carrier is 4× wide), which
+                # defeats the recurrent-depth memory win (single pass, BPTT deleted).
+                def _plain(xi, term_i, _layer=layer):
+                    xi = self._apply_injection(xi, term_i)
+                    return _layer(xi)
+
+                x = checkpoint(_plain, x, term, use_reentrant=False) if ckpt \
+                    else _plain(x, term)
         return x
 
     def _forward_db(self, input_ids: Tensor, db_step, precond) -> dict:
