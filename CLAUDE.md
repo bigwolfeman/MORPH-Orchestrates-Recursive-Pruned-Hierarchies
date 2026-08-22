@@ -141,12 +141,30 @@ Embeddings: Hybrid (euclidean + Lorentz hyperbolic, `lorentz_fraction=0.25`) + h
 
 ## Commands
 
+### ⚠ ALWAYS export this before any GPU run
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+```
+
+**Not optional on the 5090.** Without it the TUL path OOMs on the FIRST backward with
+8.17 GB reserved-but-unallocated (`docs/ablation-ledger.md`). With it, the TUL arms still
+sit at **~26.2 GB resident** on a 31.4 GB card that a 3-monitor desktop already uses ~6 GB
+of — roughly 1 GB of slack. That is how the 2026-08-21 gate bake-off died at step 1050
+with 157 MiB free. Measured 2026-08-22: the training step only ALLOCATES 22.2–23.6 GB;
+the remaining 2.7–4.0 GB is caching-allocator slack driven by the looped core's varying
+active-set sizes (1…14 distinct shapes). Neither a bf16 carrier (−1.42 GB allocated) nor
+an `empty_cache()` after the compile warmup moves the resident figure — both were tried
+and measured. Every script under `ignore/perf/` exports it; a bare `python -m
+morph.training.train` does NOT, so export it in your shell.
+
 ```bash
 # Install
 pip install -e .
 pip install -e ".[dev]"
 
 # Train (PyTorch, GPU) — Hydra entry point, defaults to morph/configs/base.yaml
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True    # see above — mandatory
 python -m morph.training.train
 python -m morph.training.train training.steps=50000 training.batch_size=4   # overrides
 python -m morph.training.train --config-name pretrain_curriculum            # other configs
