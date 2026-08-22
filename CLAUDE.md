@@ -105,6 +105,8 @@ Do not dump new markdown at repo root or into `Ai-notes/`. That path is gitignor
 
 After adding or moving Agent Notes, run `python scripts/verify_template.py`.
 
+
+
 ## Architecture
 
 Loop hierarchy:
