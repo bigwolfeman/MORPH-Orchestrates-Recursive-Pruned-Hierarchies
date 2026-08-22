@@ -101,7 +101,7 @@ Do not dump new markdown at repo root or into `Ai-notes/`. That path is gitignor
 | Specs, invariants, paper notes, figures, ablation table | `docs/` — **do not restructure** that tree; add a file or a section, or link. Start at [docs/MANIFEST.md](docs/MANIFEST.md). |
 | Why we chose X, what we gave up | `.agents/notes/{proposed\|implemented\|rejected\|archived}/{class}/yyyy-mm-dd-slug.md` — read [.agents/notes/README.md](.agents/notes/README.md) before writing one |
 | Hot-path subtree brief | [morph/model/CLAUDE.md](morph/model/CLAUDE.md) |
-| Spikes | `lab/` |
+| Spikes, Experimental runs | `lab/` |
 | wandb, Hydra `outputs/`, throwaway scripts | `ignore/` (private) |
 
 After adding or moving Agent Notes, run `python scripts/verify_template.py`.
@@ -156,7 +156,7 @@ ruff check morph/
 
 ```
 .agents/notes/           # Public decision records (see AGENTS.md)
-lab/                     # Spikes, not production
+lab/                     # Spikes, Test various algorithms, optimizations, and changes on a branch and document FINAL results here. Implementation and intermediate results go in .agents/notes/
 morph/
   model/
     transformer.py       # Core looped transformer (Parcae loop, DiagonalInjection; _SwiGLUMortar hosts the ReMoE router)
