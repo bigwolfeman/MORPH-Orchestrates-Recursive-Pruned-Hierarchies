@@ -37,7 +37,7 @@ practical kernel headroom. The cost is FLOPs per token: the loop and the recompu
 | 1 | `ckpt_grad_iters=0` (no backward recompute of the 4 grad iterations) | **×1.21 measured** at equal batch | exact within the noise floor (control-run gated) | measured 2026-08-21, see A2; VRAM-gated: +0.61 GB per retained row-iteration |
 | 2 | Non-core region cut: profile the A3 arm, not A0. Targets: fused CE (a 201 MB fp32 `grad_w` per call), hybrid-embedding + Lorentz `lm_weight()` rebuild, int6 embed STE, HC expand/reduce, the 284M-param optimizer step | ×1.1–1.15 on the full step | mostly exact | not profiled |
 | 3 | TUL on (`tul_a1`) | **×1.6 measured** (28.1k tok/s, slightly better CE, `docs/tul-arms-result.md`) | validated on the 5090 arms; not validated with prune/carve/route | measured |
-| 4 | FP8 GEMMs on the ternary backbone. Ternary {−1,0,+1}×γ is exact in e4m3, so only activations are newly quantized. 5090 FP8 tensor rate is 2× bf16 | ≤ ×1.3 | B (numerics); `base.yaml` says ternary and FP8 are mutually exclusive per layer — a code constraint from the d768 era, not a math one | not built |
+| 4 | FP8 GEMMs on the ternary backbone. Ternary {−1,0,+1}×γ is exact in e4m3, so only activations are newly quantized. 5090 FP8 tensor rate is 2× bf16 | **~×1.07** (was ≤×1.3 — withdrawn, see A4) | B (numerics); `base.yaml` says ternary and FP8 are mutually exclusive per layer — a code constraint from the d768 era, not a math one | not built |
 | 6 | Dead saliency scoring: `accumulate_scores()` ran on all 14 MortarLinears every step even when `prune_start` can never fire (the dense TUL arms). Measured **50 ms wall / step** of a 950 ms step (MORPH_PERF_REGIONS `prune` region, A0 batch 14, 2026-08-21). `PruningSchedule.scoring_live` now skips it when `prune_start >= total_steps` | ×1.05 on dense arms; 0 on the deploy recipe (which prunes) | exact (touches only the EMA buffers, never params) | built; `tests/test_lifecycle_phase_transition.py::test_scoring_is_skipped_when_prune_can_never_fire` |
 | 5 | Lorentz/int6/QAT fusion and the `_to_copy` cast storm (5,091/step at d768) | part of #2 | exact | see structural-2x-hunt |
 
@@ -68,6 +68,132 @@ estimates; 3 is measured.
 - Conclusion: lever 1 is real but **VRAM-gated**. On 32 GB cards it pays only after the activation
   footprint is cut (the memory half of lever 2: fused CE `grad_w`, router retention, HC carrier) or
   at a per-GPU batch that costs as much as it gives. On 96 GB cards it is free.
+
+### A3. Where the step time actually goes (kernel census, 2026-08-21)
+
+Method: `MORPH_PROF_WINDOW` kineto window on the REAL `train.py` step, arms `tul_a0`
+(n_core 6) and `tul_a3` (n_core 0), batch 14 x seq 1024. Kernel rows only (self-CPU == 0),
+so no CPU-op double counting. Artifacts `ignore/perf/lever2*`.
+
+| bucket | A0 ms/step | calls | A3 (no core) | core = A0 - A3 |
+| --- | --- | --- | --- | --- |
+| generic pointwise elementwise | **237.5** | 9356 | 107.3 | 130.2 |
+| cuBLAS GEMM | 199.6 | 790 | 78.3 | 121.3 |
+| custom fused Triton (HC/CCA/CSA/window) | 199.1 | 1032 | 53.5 | 145.6 |
+| optimizer | 25.3 | 1 | 24.4 | 0.9 |
+| reduce/norm, index, memcpy, softmax | 36.0 | 1623 | 18.7 | 17.3 |
+| **total self-CUDA** | **805.0** | | 319.5 | 485.5 |
+
+Two facts kill the older "launch-bound" model of this step:
+
+1. **GPU-busy is 890 ms of a 904 ms wall step (98.5%).** The 2026-07-03 pass fixed the
+   launch problem. What is left is work, not latency.
+2. **Pointwise elementwise is the largest bucket** — larger than the GEMMs. Useful work is
+   83.7 TFLOP/step; at the measured 219 TFLOPS cuBLAS ceiling the floor is 382 ms, so
+   kernel-perfect is x2.1 and the elementwise bucket is most of that gap.
+
+The elementwise kernels, by full name (the kineto table used to truncate these; fixed):
+
+| ms/step | calls | kernel |
+| --- | --- | --- |
+| 76.0 | 1283 | `CUDAFunctor_add<float>` — fp32 adds |
+| 45.0 | 1938 | `bfloat16_copy_kernel_cuda(lambda(float))` — fp32 to bf16 casts |
+| 36.3 | 1515 | `BinaryFunctor<float,float,float>` |
+| 25.3 | 193 | `CUDAFunctor_add<float>` at 131 us each — the `[V,d]` head |
+| 23.5 | 1336 | `direct_copy_kernel_cuda` |
+
+**Root cause: the residual carrier `[B,S,4,C]` is fp32, not bf16** (probed: 64 MiB per copy
+at batch 4, so 224 MiB at batch 14). Three sites promote it:
+
+1. the embeddings emit fp32, so `transformer.py` `carrier::expand_contig` starts fp32;
+2. `e = self.input_norm(x)` at the core entry returns fp32 (norms upcast);
+3. `DiagonalInjection.forward` computes `A * h_ctx + dt * e_ctx` against fp32 parameters
+   and then `torch.cat`s, which promotes the whole carrier.
+
+Cast at those three sites and the carrier is bf16 end to end. Measured at a PINNED loop
+depth of 6 (identical work in every arm — the Poisson draw alone is worth up to 14%, which
+is larger than every effect under test, and it invalidated the first two attempts):
+
+| carrier | bptt=4 | bptt=2 | bptt=1 | peak VRAM (bptt=4) |
+| --- | --- | --- | --- | --- |
+| fp32 (today) | 1212.9 ms | 904.8 | 742.9 | 21.49 GB |
+| bf16 | 1081.8 ms | 803.9 | 675.3 | 19.21 GB |
+
+**bf16 carrier = x1.12 and -2.28 GB at matched `bptt_depth=4`**, reproducible to ~1% over
+two rounds. `bptt_depth` is the most expensive single knob in the step (x1.63 from 4 to 1)
+but Wolfe ruled it out on quality grounds [W, 2026-08-21]: the 4-deep window stays.
+
+Precision floor: bf16, not lower. `lorentz_fraction=0.25`, so a quarter of the carrier
+channels are Lorentz tangent coordinates. The manifold math (`_project_to_hyperboloid`,
+`_log_map_origin`) runs on fp32 parameters inside `lm_weight()` and autocast leaves it
+there; only the transport of the resulting tangent vector becomes bf16.
+
+Two other measured items:
+
+- **torch.compile scope.** Compiling the whole `MORPHBlock` instead of only `layer.mlp`
+  did NOT reproduce a speed win over three interleaved rounds (mixed sign). It is worth
+  -0.76 GB of peak. Re-measure at pinned depth before deciding.
+- **Ternary QAT cost.** 43 modules, 214.8 M parametrized elements (76% of the 284 M model).
+  `torch.nn.utils.parametrize` recomputes the quantizer on EVERY `module.weight` access;
+  one pass over every parametrized weight costs 7.63 ms eager vs 0.021 ms inside
+  `parametrize.cached()`. At ~2.75 passes per step that is ~21 ms. Nothing in the tree uses
+  `parametrize.cached()`.
+
+### A4. FP8: not running, and one confirmed bug
+
+`base.yaml` has `fp8: false`, and neither FP8 path can run today:
+
+- `morph/model/fp8_scope.py` needs **torchao, which is not installed** in the venv. It has
+  never executed.
+- `CMSBlockLinear.enable_fp8()` (raw `torch._scaled_mm`, no dependency) has **no caller**
+  anywhere in `morph/` or `tests/`.
+
+**Confirmed bug (latent).** `_get_cached_fp8_weight()` recasts only when
+`self.weight._version` changes. That is the right key for a plain `nn.Parameter`. Ternary
+QAT registers a `parametrize` parametrization on the SAME weight, and a parametrized
+`.weight` is recomputed on every access — a new tensor whose version starts at 0. Measured
+(`scratchpad/probe_fp8_cache.py`):
+
+```
+plain nn.Parameter:   step 0 -> _version 2, step 1 -> 3, step 2 -> 4
+with ternary QAT:     step 0 -> _version 0, step 1 -> 0, step 2 -> 0   (values changed: True)
+shadow original after 3 steps: _version 5
+```
+
+So FP8 on a ternary-parametrized Linear would cast once and hit the cache forever: the FP8
+weight freezes at its step-0 value while the shadow keeps learning. No error, no NaN — the
+layer silently stops contributing. Fix: key the cache on
+`parametrizations.weight.original._version` when the module is parametrized.
+
+**The per-layer FP8/ternary exclusion is over-stated.** The FP8 note forbids the overlap
+because "a ternarized Linear's forward weight is already ternary — there is no bf16 weight
+to cast." That is an argument about redundant COMPRESSION and it misses that FP8 is also a
+RATE mechanism. A ternary weight `{-1,0,+1}x gamma` under dynamic per-tensor scaling maps to
+exactly +-448 and 0 in e4m3 — lossless on the weight operand, so only the activation is
+newly quantized. Ternary-plus-FP8 is therefore the SAFEST FP8 arm available, not a
+forbidden one.
+
+Size it honestly: core-loop GEMM is 121 ms of the 805 ms step and MLP is ~85% of it, so a
+perfect 2x on the MLP GEMM is about **x1.07** end to end. The FP8 note's own
+"single-digit-to-low-double-digit %" is right; the "<= x1.3" in section A above was
+optimistic and is withdrawn.
+
+### A5. Round-2 task list (ordered by measured value / risk)
+
+| # | Task | Expected | Class | Gate |
+| --- | --- | --- | --- | --- |
+| 1 | **bf16 carrier.** Cast at the three promotion sites (A3). Baked in, no runtime flag. | **x1.12, -2.28 GB (measured)** | B (numerics) | dtype invariant test: the carrier is bf16 at every core block under autocast; then a paired quality arm vs `tul_a0` on val CE. Watch residual accumulation over 40+ updates. |
+| 2 | **Re-test lever 1 after task 1.** -2.28 GB may make `ckpt_grad_iters` affordable at batch 14; re-measure the 0.61 GB per retained row-iteration. | up to x1.21 if it now fits | exact | pinned-depth A/B + peak VRAM. |
+| 3 | **Fix the FP8 weight-cache key** (A4). Belongs on master whether or not we use FP8. | correctness | bug fix | test that steps the optimizer and asserts the cached FP8 weight changed. |
+| 4 | **Make FP8 reachable and measure it.** Wire `enable_fp8()` to a config key; arm = ternary backbone + FP8 on the same CMS linears (exact in e4m3). Install torchao only if the nn.Linear path is also wanted. | ~x1.07 | B | the FP8 note section 8 gates + a loss curve. Blocked by task 3. |
+| 5 | **`fused_ce` grad_w accumulation.** Replace `grad_w += (probs_c.t() @ x_c).float()` with `grad_w.add_(probs_c.t() @ x_c)` — drops a 201 MB fp32 temp per chunk, 14 chunks per step. | ~9 ms (~1%) | **exact** (bf16 to fp32 upcast is exact either way) | bit-exactness against the current path. |
+| 6 | **LM-head weight rebuild.** 42 copies of `[1024,49280]` plus 42 of `[49280,1024]` per step, ~32 ms total, from `lm_weight()` and the per-chunk cast. Build the head weight once per step. | ~2-4% | exact if cached within a step | bit-exactness; the gradient must still reach `euc_embed` and the Lorentz table. |
+| 7 | **`parametrize.cached()` around fwd+bwd** (A3). Must not survive the optimizer step. | ~21 ms (~2%) | A/B (accumulation order) | loss-trace gate; assert the cache is empty at `optimizer.step()`. |
+| 8 | **Re-measure whole-block torch.compile at pinned depth.** Cheap; -0.76 GB is already banked. | unknown | A | pinned-depth A/B. |
+| 9 | **stk `dds`/`sdd` microbench at d2048, density 0.25** (section B). Unchanged: this is the 30B-vs-70B token-budget gate, not a throughput lever. | budget decision | n/a | vs cuBLAS dense at the same shape. |
+
+Tasks 1, 3 and 5 are independent and can land in any order. Task 2 depends on 1; task 4
+depends on 3.
 
 ### B. The pruning claim, stated honestly
 
