@@ -93,3 +93,30 @@ That number is data, not a prediction, and is excluded from scoring.
   spot check, not eliminated.
 - A0 is a no-TUL arm probed at its native operating point while A1 is probed off its own.
   Any A0-vs-A1 difference carries that confound. A1-vs-A1 does not.
+
+## Amendment 1 (2026-08-22, before any result beyond the smoke)
+
+Two errors in the Method above, both found by reading the arm configs, both fatal to the
+run as written. Predictions are untouched.
+
+1. **`tul_a3` is removed from the checkpoint list.** It sets `model.n_core: 0` — it is
+   the compute floor, prelude and coda only. There is no core to compose, so the order
+   parameter is not "low" for A3, it is **undefined**. `measure()` now raises with that
+   message rather than calling `max()` on an empty list. Prediction 3 therefore scores on
+   A0 alone, which weakens it: one healthy arm, not two.
+2. **Each checkpoint now names its own config.** `tul_a0` sets `tul.activate_at: never`
+   and so constructs **no** slot parameters. Building every checkpoint from `tul_a1.yaml`
+   would have made every A0 load trip the material-missing guard and abort the script —
+   at checkpoint 7 of 10, after roughly an hour, discarding six completed measurements to
+   stdout buffering. The runner now passes `LABEL=CONFIG=PATH`, the script prints the
+   running table after every checkpoint, and it runs under `python -u`.
+
+Added while fixing the list: `tul-a0-acap1` at 5k and 20k. A0 under the cap is the
+control that separates "the cap changes the core map" from "TUL changes the core map".
+Without it, any A0-vs-A1-acap1 difference confounds the two.
+
+Final list, ordered by decisiveness so rows 1-4 answer the question:
+`a1_DIVERGED_4540`, `acap1_5k`, `acap1_20k`, `a1r_DIVERGED_3240`, `acap1_10k`,
+`acap1_15k`, `a0_5k`, `a0_20k`, `a0acap1_5k`, `a0acap1_20k`.
+
+Runner: `ignore/perf/run_order_param.sh`. Not yet run — the GPU is in use.
