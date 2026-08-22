@@ -695,3 +695,24 @@ def test_generation_metrics_catch_a_repetition_loop():
     for t in [7, 8, 9, 12, DOT]:           # ends on a real boundary
         b2.append(t)
     assert span_stats(b2, rule)["boundary_frac"] == 1.0
+
+
+def test_gate_skill_is_measured_against_the_best_constant_predictor():
+    """§10: `gate_k_abs_err` alone is unreadable. Predicting ONE number forever scores
+    9.03 tokens on real OpenWebText and the gate scored 8.62 at step 500, so the entire
+    claim lives in the 0.41 between them — which means the floor has to be in the run,
+    not in someone's head."""
+    g = TULGate(64, _gcfg())
+    _x, _y, layout, _ = _batch(_spec(max_slots=32), gate=TulGateSpec(k_max=K_MAX))
+    depths = torch.full(layout.slot_index.shape, 3, dtype=torch.long)
+    # a gate that emits the gold median for every slot has, by definition, ZERO skill
+    med = layout.span_len[layout.slot_valid].float().median()
+    const = torch.full((2, 32, 3), float(med) / K_MAX)
+    r = g.loss(const, depths, layout)
+    assert abs(float(r["gate_k_skill"])) < 1e-4, "a constant predictor cannot have skill"
+    assert float(r["gate_k_mae_const"]) > 0.0
+    # a perfect gate's skill IS the constant predictor's error
+    perfect = (layout.span_len.float() / K_MAX).unsqueeze(-1).expand(2, 32, 3).contiguous()
+    r2 = g.loss(perfect, depths, layout)
+    assert float(r2["gate_k_abs_err"]) < 0.51          # k = round(g·k_max) rounding only
+    assert float(r2["gate_k_skill"]) > float(r2["gate_k_mae_const"]) - 0.51

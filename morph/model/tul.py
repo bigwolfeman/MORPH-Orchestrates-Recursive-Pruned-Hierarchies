@@ -614,6 +614,13 @@ class TULGate(nn.Module):
         cov = ((kf - km) * (gf - gm)).nanmean()
         sd = (kf - km).pow(2).nanmean().sqrt() * (gf - gm).pow(2).nanmean().sqrt()
         out["gate_k_corr"] = cov / sd.clamp(min=1e-6)
+        # …and the SKILL: how much the gate beats the best CONSTANT predictor by, in
+        # tokens. The median minimises mean-absolute-error, so `mae_const` is the floor
+        # any constant can reach on this batch. Without it `gate_k_abs_err` is unreadable
+        # — 8.62 tokens sounds bad and 9.03 is what predicting one number forever gets
+        # you, so the whole claim lives in the 0.41 between them. Positive = real.
+        out["gate_k_mae_const"] = (gf - gf.nanmedian()).abs().nanmean()
+        out["gate_k_skill"] = out["gate_k_mae_const"] - out["gate_k_abs_err"]
         out["gate_bias"] = self.b.detach().squeeze()
         out["gate_w_norm"] = self.w.detach().norm()
         return out

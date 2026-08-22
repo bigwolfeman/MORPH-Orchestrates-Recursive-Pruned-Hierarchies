@@ -2314,10 +2314,12 @@ def main(cfg: DictConfig) -> None:
                     # not only in wandb — a dead gate must be visible while the run runs.
                     _tul_msg += (
                         f"\n              gate: loss={_val_extra['val/gate/loss_gate']:.4f}"
-                        f" sep={_val_extra.get('val/gate/gate_separation', float('nan')):+.4f}"
+                        f" corr={_val_extra.get('val/gate/gate_k_corr', float('nan')):+.3f}"
+                        f" skill={_val_extra.get('val/gate/gate_k_skill', float('nan')):+.2f}tok"
                         f" k={_val_extra.get('val/gate/gate_k_mean', float('nan')):.2f}"
                         f"/gold {_val_extra.get('val/gate/gate_gold_mean', float('nan')):.2f}"
                         f" |err|={_val_extra.get('val/gate/gate_k_abs_err', float('nan')):.2f}"
+                        f"/const {_val_extra.get('val/gate/gate_k_mae_const', float('nan')):.2f}"
                         f" k0={_val_extra.get('val/gate/gate_k_zero_frac', float('nan')):.3f}"
                         f" b={_val_extra.get('val/gate/gate_bias', float('nan')):+.3f}"
                         f" |w|={_val_extra.get('val/gate/gate_w_norm', float('nan')):.3f}")
