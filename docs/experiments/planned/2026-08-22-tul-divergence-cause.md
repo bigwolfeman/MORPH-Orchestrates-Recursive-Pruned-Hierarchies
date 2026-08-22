@@ -247,3 +247,64 @@ confirms the `t_beta3` confound diagnosis empirically. The two trajectories sepa
 that, consistent with a chaotic system: `tul_a1` turned at 1000, E1 at 1500.
 
 E2 (`cap=2.0`) is therefore capping well below a cliff measured at 3.0, with margin.
+
+## E-arm results (2026-08-22)
+
+| step | E1 sigma | E1 grad | E1 CE | E2 sigma | E2 grad | E2 CE |
+|---|---|---|---|---|---|---|
+| 500 | 1.77 | 1.23 | 5.5218 | 1.80 | 1.28 | **5.4242** |
+| 1000 | 2.31 | 1.70 | 4.7830 | 2.00 | 1.76 | **4.7371** |
+| 1500 | 2.66 | 1.60 | 4.5863 | 2.00 | — | **4.4826** |
+| 2000 | 4.43 | 2.4e6 | 4.8156 | 2.77 | — | **4.4771** |
+| end | 5.71 | 2.3e9 | 6.4970 @6000 | — | — | aborted @2040 |
+
+E1 aborted at step 6200, E2 at 2040.
+
+### The hinge holds, until it doesn't
+
+E2 pinned sigma to the cap for 1100 steps to within 0.01 (1.99, 2.01, 2.01, 2.00, 2.00, 1.98
+at steps 1100-1600), with the `sigma_max` OWNER rotating between core.0/1/2/3/5 on almost every
+reading — the signature of a bound that is actually binding. Then it escaped: 2.07 (1700),
+2.31 (1800), 2.77 (2000), and the run detonated.
+
+**Prediction 7 is falsified**: sigma did not stay below 2.3.
+
+**Prediction 8, first branch, partially:** E2 beat E1 at every single eval, including at the
+step where E1 peaked (4.4826 vs 4.5863), and E2's val CE was still at its own minimum
+(4.4771) at step 2000 when the train loss detonated. Bounding sigma is not merely free — while
+it holds it is **better**. But it delayed the failure by roughly 400 steps rather than
+preventing it.
+
+### The load-bearing observation
+
+E2's sigma escaped at step 1600-1700 — **the same interval where E1's sigma slope broke**, even
+though E2's sigma had been pinned flat at 2.0 the whole time and E1's had been climbing. The
+accelerating drive is therefore **not caused by sigma being large**. Something else accelerates
+on its own schedule near step 1650 and overwhelms a fixed-strength hinge.
+
+That also explains why a soft hinge cannot be the final answer: `lambda*relu(sigma-cap)^2` has a
+restoring force of `2*lambda*delta` at overshoot `delta`, which is bounded at fixed `delta`. An
+unbounded drive always wins eventually. Either lambda must be large enough that the equilibrium
+overshoot stays under the cliff, or the bound must be a projection rather than a penalty.
+
+## F arms — predictions written before the runs
+
+Two arms, same harness as E (`tul_a1`, `steps=20000`, wall-clock bounded, `eval_every=500`).
+
+| arm | change vs `tul_a1` |
+|---|---|
+| F1 | `spectral_penalty_cap=2.0 spectral_penalty_lambda=10.0` — same lever, 10x force |
+| F2 | `ademamix_alpha_cap=1.0` (from 3.5) — weaken the DRIVE instead of fighting it |
+
+9. **F1** holds sigma below 2.5 through step 3000 (past both E1's cliff at ~1650 and E2's
+   escape at ~1700). If it does not, the soft hinge is the wrong lever and the next step is a
+   hard spectral projection after the optimizer step, not a larger lambda.
+10. **F1** reaches a better val CE minimum than E2's 4.4771, and reaches it later than step 2000.
+11. **F2** slows the sigma ramp to between D2's (alpha=0, saturating at 1.53) and E1's
+    (alpha_cap=3.5, reaching 2.66 by 1500) — concretely, sigma at step 1500 lands in [1.6, 2.4].
+12. **F2** costs less than D2's 0.34 nats at matched steps: its val CE at step 1250 is better
+    than 5.0966.
+13. At least one of F1 or F2 survives past step 3000 without a DIV-GUARD abort. If NEITHER
+    does, sigma control is not sufficient on its own and the next probe is a direct
+    `rho(J_core)` measurement on the live forward, since sigma of the weights is then only a
+    proxy for a contractivity the penalty is not reaching.
