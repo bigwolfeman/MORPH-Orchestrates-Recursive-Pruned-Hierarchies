@@ -477,3 +477,64 @@ takeover was only delayed, A1c dies later, the trainer exits non-zero with `[ABO
 the queue stops rather than spending five more hours on a dead comparison. A late abort
 would be a result — it would say the cap postpones and does not prevent, and it would
 retire the cap as a cure.
+
+---
+
+# Part 7 — the placebo ran (2026-08-22)
+
+§22 prepared P1 and marked it NOT started. It ran on 2026-08-22, at both seeds, as
+`ignore/perf/div_placebo.sh` (the `ignore/tul_logs/` script from §22 is not in this
+worktree; the arm is the same: `tul_a1` with `tul.token_state_dropout=0.145`).
+
+## P1 diverges 2/2
+
+| seed | sigma crosses 3.0 | grad_norm detonates | val CE minimum | end |
+|---|---|---|---|---|
+| 0 | ~step 1950 | ~2900 (2.4e6 @3200) | 4.173 @2500 | sigma 6.79 @6000, wall clock |
+| 1 | ~step 750 | by ~800 | 5.470 @500 | sigma 5.92 @2000 |
+
+Seed 1's `first_tok` goes 4.47 -> 7.84 and `cf` -0.16 -> -3.71 between steps 500 and
+1000 — the same signature every control shows.
+
+**The §22 decision rule is met: P1 2/2 means survival is not free.** An intervention at
+96.7 % of the original strength, which cannot be a cure, moves the onset — later at seed
+0, EARLIER at seed 1 — and never prevents the failure. The four surviving arms are
+therefore not merely perturbations that stepped off a knife-edge, and §20's worry, while
+correct to raise, is not what is happening.
+
+## Standing of the interventions
+
+| arm | n | outcome |
+|---|---|---|
+| control | 5 | diverged 5/5 (abort steps 2080, 3240, 4540, 5900, 6200) |
+| **placebo, dropout 0.145** | **2** | **diverged 2/2** |
+| `token_state_dropout=0` | 2 | survived |
+| `core_gain_clip=1.5` | 2 | survived |
+| `ademamix_alpha_cap=1.0` | 2 + `tul-a0-acap1` / `tul-a1-acap1` at 20k | survived |
+| `spectral_penalty cap=2.0 lambda=10` | 1 | survived 6600 steps, end grad_norm 0.77 |
+
+## sigma is a correlate, not the trigger
+
+New this pass: `spec/sigma_max` is now logged live on every run (see the entry in
+`morph/training/train.py` next to the per-region gradnorm block; with `lambda=0` the
+penalty early-returns an exact zero, so unpenalised arms stay bit-exact). Calibration:
+1.41 at init against `base.yaml`'s documented healthy ~1.5, and 11.1 on
+`tul-a1/DIVERGED_step_5900.pt` measured on the EFFECTIVE (ternarised) weight.
+
+On the control, grad_norm went 0.95 at sigma 2.73 to 3.4e5 at sigma 3.89 within 100
+steps, which looked like a threshold at sigma ~= 3.0. **The placebo refutes that
+reading**: seed 0 crossed 3.0 at ~1950 and did not detonate until ~2900, seed 1 crossed
+at ~750 and detonated within ~50. The lag is not constant, so crossing 3.0 does not gate
+the failure. sigma tracks the takeover; it does not cause it. Consistent with §9 — the
+quantity that runs away is the COMPOSITION `sigma_max(J_core)` under subspace alignment,
+which per-linear sigma bounds only loosely.
+
+## What is still open, and the instrument it needs
+
+The four cures change four different things — a forward pass, a per-iteration gain clip,
+an optimiser momentum weight, a weight-norm bound. They still cannot all be the
+mechanism, and more surviving arms will not separate them. The discriminator is the
+Task #276 order parameter — composition `sigma_max(J_core)` / worst single block, 0.90
+healthy and 9.5 at the cliff — measured LIVE rather than from checkpoints. That is a
+direct extension of the sigma logging now in place: the same power iteration applied to
+the composition instead of to each linear.

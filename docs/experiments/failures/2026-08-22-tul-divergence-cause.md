@@ -1,6 +1,6 @@
 # Experiment: what makes the TUL arms diverge?
 
-Status: planned
+Status: failure
 
 ## Question
 
@@ -369,3 +369,57 @@ call was exactly the inference the RCA warns against, made from n=1.
 | "this is the fix" (F1) | **withdrawn** — n=1, and three other arms already survived |
 | the alpha/sigma coupling (D2) is a new finding | **not new** — `alpha_cap` exists for this; `-acap1` runs predate tonight |
 | the spectral penalty is an untried lever | **partly** — tried and rejected by #276 at an idle operating point |
+
+## Verdict (2026-08-22)
+
+**Filed under `failures/`.** Three of the pre-registered predictions were falsified and
+the central hypothesis — that bounding per-linear sigma prevents the divergence — did not
+survive its own control.
+
+### Prediction scorecard
+
+| # | prediction | verdict |
+|---|---|---|
+| 1 | sigma crosses 3.0 before step 600 | wrong on timing; right that 3.0 marks the region |
+| 2 | D1a (lam 0.1) too weak | correct, wrong reason — the hinge never fired |
+| 3 | D1b holds sigma < 4.0 and beats D0 on CE | sigma held; CE tied, not beat |
+| 4 | D2 (alpha=0) delays but does not prevent | **falsified** — abolished the ramp (saturates 1.53) |
+| 5 | runaway concentrated in `gate_up` | correct on every unpenalised arm; at lambda=10 `down` also takes the max |
+| 6 | E1 reproduces the turn | correct |
+| 7 | E2 holds sigma below 2.3 | **falsified** — escaped to 2.77, aborted at 2040 |
+| 8 | E2 beats E1 on CE | correct at every eval, but E2 still died |
+| 9 | F1 holds sigma below 2.5 through 3000 | correct — pinned at 2.00 to step 6600 |
+| 10 | F1 beats E2's minimum, later | correct — 3.5514 @5500 vs 4.4771 @2000 |
+| 11 | F2 sigma at 1500 in [1.6, 2.4] | **not run** — F2 stopped as a duplicate of L3/`acap1` |
+| 12 | F2 costs less than D2's 0.34 nats | **not run** |
+| 13 | at least one of F1/F2 survives past 3000 | correct (F1), but see below |
+
+### What the method could not distinguish
+
+Everything, about mechanism. The design had **n=1 per arm and no placebo**, which
+`docs/tul-divergence-rca.md` §14 had already named as the error that measures trajectory
+sensitivity rather than causation. Adding the placebo afterwards rescued the arms'
+readability (P1 diverged 2/2, so survival is not free) but it cannot make a
+one-seed F1 into a mechanism claim.
+
+The experiment also re-derived a solved problem: the RCA of 2026-08-17 already had the
+diagnosis, and `tul-a0-acap1` / `tul-a1-acap1` were already completed 20k-step runs under
+a working fix. The cost was roughly eight GPU-hours. The check that would have prevented
+it is one `grep` of `docs/` and one wandb config dump.
+
+### What survives
+
+1. **Live `spec/sigma_max` logging on every run**, calibrated against exact SVD. Kept.
+2. **The placebo result** (RCA Part 7): an inert perturbation delays and never prevents,
+   so the four surviving interventions are not knife-edge luck.
+3. **sigma is a correlate, not the trigger** — the crossing-to-detonation lag is ~50 steps
+   at one seed and ~1000 at another.
+4. `spectral_penalty cap=2.0 lambda=10` as a **lead**: 6600 steps, end grad_norm 0.77,
+   val CE 3.5514 @5500, alpha untouched. n=1. Not shipped, not recommended, not in
+   `base.yaml`.
+
+### Next planned experiment
+
+Measure the Task #276 order parameter live — composition `sigma_max(J_core)` divided by
+the worst single block (0.90 healthy, 9.5 at the cliff). That is the only quantity that
+separates the four cures, and it is a small extension of the logging already built.
