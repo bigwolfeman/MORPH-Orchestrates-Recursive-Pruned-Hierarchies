@@ -195,3 +195,55 @@ abort step.
 alpha inflates the core map's gain; the spectral hinge bounds it without touching CE.
 So keep `alpha=8` and bound sigma. E2 (`alpha=8`, `cap=2.0`, ~6000 steps) tests exactly that,
 and was written before D2 produced (1), so it is a test and not a fit.
+
+
+## Correction and the E1 result (2026-08-22)
+
+**Amendment 1 contains a wrong claim and this supersedes it.** It says "grad norm on the
+failed arms exploded at step 600 with sigma under 2, so crossing the cap of 3 is not the
+trigger." The step-600 figure came from `tul_gate`, and I generalised it to "the failed arms".
+`tul_a1`'s grad norm is O(1) through step 1080 and first breaks at step **1100** (80.8 ->
+1.4e6 by 1220). The inference drawn from the wrong step is also wrong: crossing 3.0 IS the
+trigger.
+
+### E1: the gradient explodes in the same 100 steps that sigma crosses 3.0
+
+| step | `spec/sigma_max` | `train/grad_norm` |
+|---|---|---|
+| 1400 | 2.57 | 1.14 |
+| 1500 | 2.66 | 1.60 |
+| 1600 | 2.73 | 0.95 |
+| **1700** | **3.16** | **5.15** |
+| 1800 | 3.89 | 3.4e5 |
+| 1900 | 4.23 | 1.8e6 |
+| 2000 | 4.43 | 2.4e6 |
+
+Grad norm is ~1 at sigma 2.73 and 3.4e5 at sigma 3.89. This is a **cliff, not a slope** — the
+shape `CLAUDE.md` predicts for a `rho = 1` manifold separating a contractive from an expansive
+inner map, sharpened by `rho^T` at loop depth ~6.
+
+The sigma ramp itself breaks slope in the same interval: +0.07/100 steps through 1600, then
++0.43/100 from 1700. The `sigma_max` owner also switches, `core.0.gate_up` -> `core.1.gate_up`.
+
+Val CE turns there too: 5.5218 (500) -> 4.7830 (1000) -> **4.5863 (1500, minimum)** ->
+4.8156 (2000).
+
+`base.yaml`'s comment — "healthy values ~1.5; cap~3 only fires on runaway" — is measured
+correct. The cliff is at sigma ~= 3.0.
+
+### Prediction scoring so far
+
+| # | prediction | verdict |
+|---|---|---|
+| 1 | sigma crosses 3.0 before step 600 | **wrong on timing** (crossing is ~step 1650 on E1, ~1050 on `tul_a1`), **right on the threshold** |
+| 2 | D1a (lam 0.1) too weak | correct, but for the wrong reason — the hinge never fired at all |
+| 3 | D1b holds sigma < 4.0, CE beats D0 | sigma held (2.963, zero linears over cap); CE tied rather than beat |
+| 4 | D2 (alpha=0) delays but does not prevent | **falsified** — it abolished the ramp (saturates at 1.53) |
+| 5 | runaway concentrated in `gate_up` | **correct** — every `sigma_max` owner on every arm is a `gate_up` |
+| 6 | E1 reproduces the turn | **correct** — turn at 1500, grad norm 2.4e6 by 2000 |
+
+E1 also reproduces `tul_a1` closely up to step ~1000 (VAL 500: 5.5218 vs 5.5250), which
+confirms the `t_beta3` confound diagnosis empirically. The two trajectories separate after
+that, consistent with a chaotic system: `tul_a1` turned at 1000, E1 at 1500.
+
+E2 (`cap=2.0`) is therefore capping well below a cliff measured at 3.0, with margin.
