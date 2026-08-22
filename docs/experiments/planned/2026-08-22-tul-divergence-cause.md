@@ -143,3 +143,55 @@ bake-off.
 at a different seed. The failure is stochastic with a large spread, so a single E1 arm is weak
 evidence about timing. It is the E1-vs-E2 sigma contrast, not E1's abort step, that this
 design can actually resolve.
+
+
+## D-arm results (2026-08-22, 5090, 1500 steps each, `ignore/perf/div_div-d*.log`)
+
+All four arms share `steps=1500`, so they are paired with each other but NOT with `tul_a1`
+(Amendment 1). No arm diverged. The outcome variable is therefore the **sigma ramp**, not the
+abort step.
+
+### sigma_max trajectory
+
+| step | D0 (control) | D1a (cap3 lam0.1) | D1b (cap3 lam1.0) | D2 (alpha=0) |
+|---|---|---|---|---|
+| 0 | 1.41 | 1.42 | 1.41 | 1.40 |
+| 500 | 1.83 | 1.84 | 1.83 | **1.45** |
+| 1000 | 2.35 | 2.61 | 2.71 | **1.52** |
+| 1400 | 2.74 | 3.00 | **2.97** | **1.53** |
+| exact @1500 | 2.821 | 2.999 | 2.963 | — |
+
+### val CE
+
+| step | D0 | D1a | D1b | D2 |
+|---|---|---|---|---|
+| 500 | 5.2856 | 5.2816 | — | 5.5354 |
+| 1000 | 4.9128 | 4.9121 | 4.9087 | 5.2295 |
+| 1250 | 4.7563 | 4.7619 | 4.7591 | 5.0966 |
+
+### What the D arms establish
+
+1. **The AdEMAMix slow-EMA push drives the sigma ramp.** D2 (alpha=0) goes 1.40 -> 1.53 and
+   **saturates** from step 800 (1.51, 1.51, 1.52, 1.52, 1.52, 1.53, 1.53), landing inside
+   `base.yaml`'s documented healthy band. D0 (alpha=8) goes 1.41 -> 2.82 on a straight line
+   with no flattening. **Prediction 4 is falsified**: alpha=0 did not delay the ramp, it
+   abolished it.
+2. **That push is also doing the learning.** D2 costs 0.34 nats of val CE at step 1250
+   (5.0966 vs 4.7563). `alpha=0` trades the disease for the symptom it was curing, so it is
+   not the fix.
+3. **The spectral penalty arrests sigma at the cap, and it is free.** D1b reached the cap and
+   turned over (2.94 -> 2.98 -> 2.97; exact 2.963 at 1500 with **zero** of 12 linears above
+   3.0) while D0 kept climbing at +0.09/100 steps. D1b's val CE matches D0 to within 0.004
+   nats. Only ~200 steps of the run could exercise the hinge, so this is a small window.
+4. **cap=3.0 with lambda=0.1 is a no-op at this horizon** (D1a): the hinge never fired and
+   its CE matches D0 to four figures.
+5. `CMSBlockLinear.forward` is pure (`F.linear(x, ternary_ste(weight), bias)`; the score EMAs
+   are touched only by `accumulate_scores`, which the loop calls explicitly), so the sigma
+   probe has no side effect on training. The D0 < D1a < D1b ordering of sigma at matched steps
+   is 1-in-6 by chance and no mechanism is claimed for it.
+
+### Composed hypothesis for the E arms
+
+alpha inflates the core map's gain; the spectral hinge bounds it without touching CE.
+So keep `alpha=8` and bound sigma. E2 (`alpha=8`, `cap=2.0`, ~6000 steps) tests exactly that,
+and was written before D2 produced (1), so it is a test and not a fit.
