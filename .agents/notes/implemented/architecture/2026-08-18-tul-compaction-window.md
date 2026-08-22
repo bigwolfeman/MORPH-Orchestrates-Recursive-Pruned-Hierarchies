@@ -1,6 +1,42 @@
-# Arm CW — force the latent to be load-bearing by deleting the cheap channel
+# Agent Note: TUL Arm CW — compaction window
 
-Status: IMPLEMENTED, EVAL SCREEN RUN 2026-08-18. Not trained.
+Status: implemented
+
+## Problem
+
+With tokens still in the coda sequence, token CE is satisfied by a bag-of-words of
+the closed span; the slot is not forced to carry early content. Dropout only taxes the
+cheap channel. Need a structural deletion that makes late-token prediction depend on
+slots (or a fair control).
+
+## Decision
+
+Ship `tul.coda_token_cut` (default 0 = off, bit-identical) and the CW0–CW3 eval
+arms: at the coda, gather-drop token positions `< C`, keep every slot, score CE on
+kept tokens only. CW2 retains an equal-KV-budget random token subset and no slots
+as the decider. Eval screen on `tul-a1-acap1/step_20000.pt` (2026-08-18) ordered
+CW0 < CW1 < CW2 < CW3 with CW1 beating CW2 by 0.009 nats — positive screen, not a
+trained experiment. Full contract below; code in `morph/model/tul.py` /
+`transformer.py`; tests in `tests/test_tul_compaction_window.py`.
+
+## Alternatives considered
+
+- **Stronger token-state dropout only** — still probabilistic; does not delete the
+  cheap channel.
+- **Per-query attention mask instead of gather** — fused kernels may not support it;
+  gather matches the existing `plan_nats` path.
+- **Skip CW2** — without the equal-budget random control, a CW1 win is unreadable
+  (AGCLR three-constants lesson).
+
+## Consequences
+
+- Production forward stays bit-identical at `coda_token_cut=0`.
+- Stratified re-score later showed stratum-A memory still favors random tokens over
+  slots — see [lab/tul/arms-result.md](../../../../lab/tul/arms-result.md) and the
+  proposed teacher-distill arm.
+- Training under forced cut remains an operator call; this note owns the eval contract.
+
+## Contract
 
 **Eval screen result** (`checkpoints/morph/tul-a1-acap1/step_20000.pt`, cut=576,
 500 val batches, 3.52M scored tokens — full numbers and paired stats in
@@ -20,7 +56,7 @@ result: the slot already carries something beyond a surviving position, unforced
 Small effect (~0.27% of CW0's CE), and this is still a SCREEN, not the training
 run this spec's own motivation was building toward — see "Scope of this task".
 
-## Why this arm and not another
+### Why this arm and not another
 
 Three measurements from 2026-08-18, all on `tul-a1-acap1/step_20000.pt`:
 
@@ -36,9 +72,9 @@ That is not a defect, it is the objective getting what it asked for. Token CE is
 fully satisfied by a bag-of-words *while the tokens are still in the sequence*,
 and gradient always takes the cheaper channel.
 
-`tul.token_state_dropout = 0.15` is the existing acknowledgement of this — spec
-line 534, "tax the cheap channel or the latent is ignored". It is a probabilistic
-tax on a structural problem.
+`tul.token_state_dropout = 0.15` is the existing acknowledgement of this — tul-spec
+"tax the cheap channel or the latent is ignored". It is a probabilistic tax on a
+structural problem.
 
 **This arm removes the cheap channel instead of taxing it.** Old token positions
 are deleted from the coda's sequence; the slots remain. Predicting a late token
@@ -46,7 +82,7 @@ then has no path to early content except through a slot. If the latent still
 carries nothing under that regime, the problem is not the objective and the
 JEPA-style follow-up is not worth building.
 
-## The change
+### The change
 
 One new config knob, `tul.coda_token_cut` (int, default 0 = off, bit-identical).
 
@@ -59,7 +95,7 @@ At the coda, when `coda_token_cut = C > 0`:
 
 Implement as a GATHER, not an attention mask. Spec §7.2 already records that the
 fused kernels may not support a per-position mask, which is why `plan_nats` is a
-gather. `_tul_coda_without_slots` (transformer.py:1510) is the template and does
+gather. `_tul_coda_without_slots` in `transformer.py` is the template and does
 the mirror operation — it keeps tokens and drops slots. Reuse `compact_index`,
 `gather_positions`, and its `_g` padding helper rather than writing new indexing.
 
@@ -68,7 +104,7 @@ same reduced sequence. That is deliberate: a per-query window needs a mask, and
 a global drop is both implementable today and a cleaner statement of the claim
 ("the coda sees the last L−C tokens plus every slot").
 
-## The arms — the control is not optional
+### The arms — the control is not optional
 
 All four score CE over the SAME token positions (`>= C`) so the numbers compare.
 
@@ -89,7 +125,7 @@ three constants.
 Expected ordering if the claim holds: `CW0 >= CW1 > CW2 > CW3`.
 Any other ordering is a result and gets written down as one, not explained away.
 
-## Scope of this task
+### Scope of this task
 
 1. Implement the mechanism and the four arms.
 2. Tests, mutation-checked.

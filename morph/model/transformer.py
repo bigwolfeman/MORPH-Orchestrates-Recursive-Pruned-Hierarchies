@@ -1468,7 +1468,7 @@ class MORPHTransformer(nn.Module):
         if tc.coda_token_cut >= L:
             raise ValueError(
                 f"tul.coda_token_cut={tc.coda_token_cut} >= seq_len {L} "
-                f"(docs/tul-compaction-window-spec.md): every token position would be "
+                f"(.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md): every token position would be "
                 f"dropped from the coda, leaving nothing to predict. Lower the cut."
             )
 
@@ -1497,7 +1497,7 @@ class MORPHTransformer(nn.Module):
             coda_positions = L
         else:
             # Arm A4 (coda_sees_slots=False) and/or arm CW (coda_token_cut>0, spec
-            # docs/tul-compaction-window-spec.md) — ONE gather whose drop_mask is the
+            # .agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md) — ONE gather whose drop_mask is the
             # union of "every slot" and "every token below the cut". coda_token_cut=0
             # never reaches this branch when coda_sees_slots is True (checked above), so
             # the pre-CW A4 path is untouched when CW is off.
@@ -1533,7 +1533,7 @@ class MORPHTransformer(nn.Module):
     def _tul_coda_drop_mask(self, layout: SlotLayout, tc: TULConfig) -> Tensor:
         """``[B, L]`` bool union drop-mask for :meth:`_tul_coda_gather`: every slot (arm
         A4, ``coda_sees_slots=False``) and/or every token below the cut (arm CW,
-        ``coda_token_cut>0`` — docs/tul-compaction-window-spec.md)."""
+        ``coda_token_cut>0`` — .agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md)."""
         if not tc.coda_sees_slots:
             drop = layout.slot_mask
             if tc.coda_token_cut > 0:
@@ -1551,7 +1551,7 @@ class MORPHTransformer(nn.Module):
 
         Generalises the old slots-only gather (``drop_mask = layout.slot_mask``, arm A4)
         to also serve arm CW (``drop_mask`` = every token below the cut, or that unioned
-        with every slot — docs/tul-compaction-window-spec.md). The gather itself does not
+        with every slot — .agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md). The gather itself does not
         care what kind of position was dropped; it only needs the boolean mask, which is
         why one function now serves both arms with no new indexing logic (spec §"the
         change": "Reuse compact_index, gather_positions, and its _g padding helper").
@@ -1581,7 +1581,7 @@ class MORPHTransformer(nn.Module):
 
     def _tul_coda_prep(self, input_ids: Tensor, layout: SlotLayout):
         """Front + core + token-state-dropout — the part of :meth:`_forward_tul` that is
-        IDENTICAL across every arm CW variant (docs/tul-compaction-window-spec.md): which
+        IDENTICAL across every arm CW variant (.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md): which
         positions the CODA sees is decided after this point, never before it. Shared by
         :meth:`_forward_tul` and :meth:`tul_forward_cw_arms` so the (expensive) core loop
         runs once per input, not once per arm.
@@ -1590,7 +1590,7 @@ class MORPHTransformer(nn.Module):
         if tc.tokens_through_core:
             raise NotImplementedError(
                 "tul.tokens_through_core (arm A2) has no defined interaction with arm CW "
-                "(docs/tul-compaction-window-spec.md) — it is not specified, so this "
+                "(.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md) — it is not specified, so this "
                 "raises rather than silently picking a behaviour."
             )
         x, x0, bigram_emb = self._tul_front(input_ids, layout)
@@ -1602,7 +1602,7 @@ class MORPHTransformer(nn.Module):
 
     def tul_forward_cw_arms(self, input_ids: Tensor, labels: Tensor, layout: SlotLayout,
                             cut: int, seed: int = 0) -> dict[str, dict]:
-        """Eval-only: score CW0/CW1/CW2/CW3 in one pass (docs/tul-compaction-window-spec.md).
+        """Eval-only: score CW0/CW1/CW2/CW3 in one pass (.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md).
 
         Every arm scores CE over the SAME set of labels — original TOKEN positions with
         row index ``>= cut`` — so the four numbers are directly comparable; that
@@ -1626,7 +1626,7 @@ class MORPHTransformer(nn.Module):
         if not 0 <= cut < L:
             raise ValueError(
                 f"arm CW cut={cut} must satisfy 0 <= cut < seq_len={L} "
-                f"(docs/tul-compaction-window-spec.md)."
+                f"(.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md)."
             )
         x_coda, x0, bigram_emb, keep, _depths = self._tul_coda_prep(input_ids, layout)
 
