@@ -57,6 +57,8 @@ blank until a gate script exists under `ignore/`. Do not cite these as results.
 | TUL-stp | punc-STP on slot trajectory | `tul.stp_lambda > 0` | slot warm-up (Wolfe's punc-STP finding) | planned |
 | TUL-set | slot-set MCE warm-up | `tul.set_lambda > 0` | slot warm-up (TST MCE); Block Transformer §4.2 says aux on the latent hurt | planned |
 | TUL-prefix1 | prefix length 1 | `tul.prefix_k: 1` (default is 2, projection prefixes, Block Transformer App. F.2 / Fig 3f) | plan and first-token label forced onto one coda position | planned |
+| TUL-gate | span-length gate | `tul.gate_lambda > 0`, `gate_budget_cond: true`, loader `jitter_p`/`truncate_p` | does a model-chosen span length pay? ([tul-gate-spec.md](tul-gate-spec.md)) | planned |
+| TUL-halt | halting gate | `TUL-gate` + `tul.gate_drives_depth: true` | does variable depth pay on top? | planned |
 | TUL-A1+ | TUL reinvest | `n_coda: 8`, `tul.slot_mean_depth: 12` (≤ A0 layer-passes/token) | the fair-compute cell | planned |
 | TUL-xattn | cross-attn branch | `tul.xattn: true` (attach like retention) | BLT T7 vs Block Transformer Fig 3f | planned |
 | TUL-carry | explicit `W·h_{i-1}` | `tul.carry: true` | Coconut feedback vs attention-only memory | planned |
@@ -87,6 +89,15 @@ those 8 layers are not checkpointed, so A1 costs MORE activation memory while ru
 1.7× faster per step. A1 cannot fit batch 16, so EVERY arm was moved to 14 rather than
 letting the batch size vary across a paired comparison — at 14 the arms match on
 tokens/step to 0.9 % (`tul/tokens_per_batch` is logged every 20 steps).
+
+
+**Pre-registered 2026-08-21, before any arm is run [W].** `TUL-halt` does NOT beat
+`TUL-gate` on val CE: fixed depth wins or ties, and we ship fixed depth because it keeps
+inference shapes static. **Falsifier:** `TUL-halt` beats `TUL-gate` on val CE by more than
+the `A1`/`A1r` retrain noise floor AND does not lose on the generation metrics (rep4@512,
+distinct-3, mean span length, fraction of spans ending on a boundary). A results note is
+written whether these arms win or lose — the predecessor missed both of its pre-registered
+numbers and never wrote one ([tul-gate-spec.md](tul-gate-spec.md) §2, §11).
 
 ## Rejected — DiffusionBlocks (arXiv:2506.14202)
 

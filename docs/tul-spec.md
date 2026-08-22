@@ -263,6 +263,9 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
   and is not exact). The compact sequence is 9–19× shorter than tokens, so
   the lost shrink is affordable. `bptt_depth`, `ckpt_grad_iters`, GLA carry,
   x0/bigram/value-embed injection terms, `core_gain_clip`: unchanged.
+* **Span-length and halting gates — see [tul-gate-spec.md](tul-gate-spec.md)** (proposed,
+  not built). That file also records why the halting gate cannot save batched-inference
+  compute here: per-slot depth is a masked update and frozen slots are still computed.
 * **Learned per-slot exit at inference — specified, deferred.** Poisson depth
   per slot makes the model robust to variable depth; an exit head (Huginn
   KL-exit style: stop when the coda readout of `h_i` at iteration t and t−1
