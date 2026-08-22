@@ -1149,11 +1149,19 @@ def main(cfg: DictConfig) -> None:
     _spec_pen = None
     _sp_cap = float(getattr(cfg.training, "spectral_penalty_cap", 0.0))
     _sp_lam = float(getattr(cfg.training, "spectral_penalty_lambda", 0.0))
-    if _sp_cap > 0.0 and _sp_lam > 0.0:
+    # σ_max is the quantity the looped core detonates on (CLAUDE.md, the iterative-map note),
+    # and it was measurable ONLY from a checkpoint autopsy. Log it on EVERY run, penalised or
+    # not: with lam=0 `penalty()` early-returns an exact zero, so a logging-only construction
+    # leaves the arm bit-exact but no longer blind. 0 disables.
+    _sp_log = int(getattr(cfg.training, "spectral_penalty_log_every", 100))
+    _sp_on = _sp_cap > 0.0 and _sp_lam > 0.0
+    if _sp_on or _sp_log > 0:
         from morph.training.spectral_penalty import CoreSpectralPenalty
-        _spec_pen = CoreSpectralPenalty(model, cap=_sp_cap, lam=_sp_lam,
+        _spec_pen = CoreSpectralPenalty(model, cap=_sp_cap if _sp_on else 0.0,
+                                        lam=_sp_lam if _sp_on else 0.0,
                                         n_iter=int(getattr(cfg.training, "spectral_penalty_n_iter", 1)))
-        print(f"  Core spectral-norm penalty ON: cap={_sp_cap} lambda={_sp_lam} "
+        print(f"  Core spectral-norm penalty {'ON' if _sp_on else 'OFF (logging only)'}: "
+              f"cap={_sp_cap} lambda={_sp_lam} log_every={_sp_log} "
               f"on {len(_spec_pen._linears)} core MLP linears")
 
     # ── Quantization / QAT ─────────────────────────────────────
@@ -2241,6 +2249,28 @@ def main(cfg: DictConfig) -> None:
                         _reg[_bk] = _reg.get(_bk, 0.0) + float(_pp.grad.detach().float().pow(2).sum())
                 for _key, _sq in _reg.items():
                     log[f"gradnorm/{_key}"] = _sq ** 0.5
+
+            # Core-map σ_max (docs: the iterative-map note). The per-region gradnorm above says
+            # the core owns the whole gradient; this says WHY — the core map's gain. Cheap:
+            # 10 power-iteration matvecs on 12 linears. Never affects the loss when lam=0.
+            if _spec_pen is not None and _sp_log > 0 and step % _sp_log == 0:
+                _sg = _spec_pen.sigmas()
+                _vals = list(_sg.values())
+                log["spec/sigma_max"] = max(_vals)
+                log["spec/sigma_mean"] = sum(_vals) / len(_vals)
+                _gu = [v for k, v in _sg.items() if "gate_up" in k]
+                if _gu:
+                    log["spec/sigma_gate_up_max"] = max(_gu)
+                if _sp_cap > 0.0:
+                    log["spec/n_over_cap"] = float(sum(v > _sp_cap for v in _vals))
+                for _k, _v in _sg.items():
+                    log[f"spec/sigma/{_k}"] = _v
+                # Console too, not only wandb: the 2026-08-21 bake-off ran an hour into a
+                # sigma runaway with nothing in the log to see it by, and the value was
+                # recoverable only from a checkpoint autopsy.
+                _worst = max(_sg, key=_sg.get)
+                print(f"  [spec] step={step} sigma_max={max(_vals):.2f} ({_worst}) "
+                      f"mean={sum(_vals) / len(_vals):.2f}", flush=True)
 
             # Pruning stats
             if prune_stats:

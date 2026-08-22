@@ -151,6 +151,9 @@ training:
   spectral_penalty_cap: 0.0
   spectral_penalty_lambda: 0.0
   spectral_penalty_n_iter: 1
+  # σ_max logging cadence (steps). Independent of the penalty: with lambda=0 the
+  # penalty is an exact zero, so this only ADDS the diagnostic. 0 = off.
+  spectral_penalty_log_every: 100
   beta1: 0.9
   beta2: 0.95                     # NOTE: AdEMAMix paper recommends beta2=0.999 — set per-arm.
   # ── AdEMAMix (only used when optimizer=ademamix) ──
