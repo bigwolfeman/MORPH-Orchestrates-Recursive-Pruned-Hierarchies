@@ -43,6 +43,8 @@ This is based on a series of experiments run on
 [Quiet-STaR](docs/references/tul-latent-emission/2403.09629.md)
 (paper map: [docs/references.md](docs/references.md) §13).
 
+Disabled in config for testing.
+
 <p align="center">
   <img src="docs/figures/tul_mechanism.png" alt="TUL: shared token/slot sequence into prelude; think (core × T on slots) saves z; freeze z in sequence; decode next span; cut on punctuation" width="720" />
 </p>
