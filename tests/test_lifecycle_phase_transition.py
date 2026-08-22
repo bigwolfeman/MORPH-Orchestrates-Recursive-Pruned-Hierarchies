@@ -101,3 +101,42 @@ def test_prune_compact_route_flags_and_density():
     assert sched.is_routed
     assert stats is not None and stats.get("routing/activated") == 1
     assert stats.get("_rebuild_optimizer") is True
+
+
+def _score_state(model: torch.nn.Module) -> list[torch.Tensor]:
+    return [m.block_score_ema.clone() for m in model.modules()
+            if isinstance(m, CMSBlockLinear) and getattr(m, "block_score_ema", None) is not None]
+
+
+def test_scoring_is_skipped_when_prune_can_never_fire():
+    """prune_start >= total_steps ⇒ no prune event can consume the saliency EMA, so
+    accumulate_scores() must not run (it was 50 ms/step of dead work on dense arms).
+    With total_steps unknown (0) the historical every-step scoring is kept."""
+    torch.manual_seed(0)
+    model = MORPHTransformer(_phase_cfg())
+    B, T = 2, 16
+
+    def one_step(sched: PruningSchedule, step: int) -> None:
+        ids = torch.randint(0, model.cfg.vocab_size, (B, T))
+        out = model(ids, labels=ids.clone())
+        out["loss"].backward()
+        sched.step(model, step)
+        model.zero_grad(set_to_none=True)
+
+    dead = PruningSchedule(prune_start=999_999, compact_step=999_999, route_start=0,
+                           total_steps=10)
+    assert not dead.scoring_live
+    before = _score_state(model)
+    one_step(dead, 0)
+    after = _score_state(model)
+    assert before and all(torch.equal(a, b) for a, b in zip(before, after)), \
+        "dead schedule must leave the saliency EMA untouched"
+
+    live = PruningSchedule(prune_start=5, compact_step=999_999, route_start=0, total_steps=10)
+    assert live.scoring_live
+    one_step(live, 0)
+    assert any(not torch.equal(a, b) for a, b in zip(after, _score_state(model))), \
+        "live schedule must still accumulate scores before prune_start"
+
+    unknown = PruningSchedule(prune_start=999_999, compact_step=999_999, route_start=0)
+    assert unknown.scoring_live, "total_steps=0 keeps the historical every-step scoring"

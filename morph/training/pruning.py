@@ -83,6 +83,11 @@ class PruningSchedule:
     # the carve is lossless. The legacy 16×16 Block-ELL compact() backend was removed
     # (kernel benchmarked slower than dense at the target density).
     carve_blocking: int = 128
+    # Run length, from training.steps. Saliency scoring (accumulate_scores) feeds ONLY
+    # prune events; when prune_start >= total_steps no event can ever fire, so scoring is
+    # dead compute (measured 50 ms/step wall on the dense TUL arms, 2026-08-21). 0 = unknown
+    # → score every step (the historical behaviour).
+    total_steps: int = 0
     # Detach the router input so the load-balance gradient does NOT flow into the looped carrier
     # x (required for memory: it otherwise extends BPTT depth → +7 GB/step at deploy shape). The
     # router still trains (params get grad from the detached input + gates from the main loss).
@@ -134,7 +139,15 @@ class PruningSchedule:
             aux_detach_input=bool(getattr(rt, "aux_detach_input", True) if rt else True),
             route_scope=str(getattr(rt, "route_scope", "core") if rt else "core"),
             carve_blocking=int(getattr(tr, "carve_blocking", 128)),
+            total_steps=int(getattr(tr, "steps", 0)),
         )
+
+    @property
+    def scoring_live(self) -> bool:
+        """True while a prune event can still fire, i.e. the saliency EMA has a consumer."""
+        if self._is_compact:
+            return False
+        return self.total_steps <= 0 or self.prune_start < self.total_steps
 
     @property
     def is_compact(self) -> bool:
@@ -169,8 +182,9 @@ class PruningSchedule:
             for _name, layer in layers:
                 layer.apply_prune_mask()
 
-        # ── Phase 1 / 2: accumulate gradient scores (pre-carve only) ──────
-        if not self._is_compact:
+        # ── Phase 1 / 2: accumulate gradient scores (pre-carve only, and only while a
+        # prune event can still consume them — see scoring_live) ──────────────
+        if self.scoring_live:
             for _name, layer in layers:
                 layer.accumulate_scores()
 
