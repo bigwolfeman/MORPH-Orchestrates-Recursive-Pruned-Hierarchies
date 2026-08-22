@@ -34,10 +34,11 @@ practical kernel headroom. The cost is FLOPs per token: the loop and the recompu
 
 | # | Lever | Expected | Class | Status |
 |---|---|---|---|---|
-| 1 | `ckpt_grad_iters=0` (no backward recompute of the 4 grad iterations) | ×1.2 (−17% executed FLOPs) | exact by config doc; the dropout-RNG-in-recompute caveat from the 07-03 notes must be harness-checked | not run; needs VRAM, which multi-GPU gives |
+| 1 | `ckpt_grad_iters=0` (no backward recompute of the 4 grad iterations) | ×1.2 (−17% executed FLOPs) | exact by config doc; the dropout-RNG-in-recompute caveat from the 07-03 notes must be harness-checked | gate running 2026-08-21 (`ignore/ckpt_gate*_2026-08-21.sh`); **OOM at batch 14 on the local 5090** (26 GB process + ~5 GB desktop), so locally it needs a smaller batch; see Measured follow-up below |
 | 2 | Non-core region cut: profile the A3 arm, not A0. Targets: fused CE (a 201 MB fp32 `grad_w` per call), hybrid-embedding + Lorentz `lm_weight()` rebuild, int6 embed STE, HC expand/reduce, the 284M-param optimizer step | ×1.1–1.15 on the full step | mostly exact | not profiled |
 | 3 | TUL on (`tul_a1`) | **×1.6 measured** (28.1k tok/s, slightly better CE, `docs/tul-arms-result.md`) | validated on the 5090 arms; not validated with prune/carve/route | measured |
 | 4 | FP8 GEMMs on the ternary backbone. Ternary {−1,0,+1}×γ is exact in e4m3, so only activations are newly quantized. 5090 FP8 tensor rate is 2× bf16 | ≤ ×1.3 | B (numerics); `base.yaml` says ternary and FP8 are mutually exclusive per layer — a code constraint from the d768 era, not a math one | not built |
+| 6 | Dead saliency scoring: `accumulate_scores()` ran on all 14 MortarLinears every step even when `prune_start` can never fire (the dense TUL arms). Measured **50 ms wall / step** of a 950 ms step (MORPH_PERF_REGIONS `prune` region, A0 batch 14, 2026-08-21). `PruningSchedule.scoring_live` now skips it when `prune_start >= total_steps` | ×1.05 on dense arms; 0 on the deploy recipe (which prunes) | exact (touches only the EMA buffers, never params) | built; `tests/test_lifecycle_phase_transition.py::test_scoring_is_skipped_when_prune_can_never_fire` |
 | 5 | Lorentz/int6/QAT fusion and the `_to_copy` cast storm (5,091/step at d768) | part of #2 | exact | see structural-2x-hunt |
 
 Stacked without the loop budget: **×2.2** (1+2+3), **×2.8** with 4. Numbers 1, 2, 4 are
