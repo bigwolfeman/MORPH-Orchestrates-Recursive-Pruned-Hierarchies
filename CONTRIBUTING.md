@@ -109,9 +109,9 @@ For architecture PRs, also include:
 
 ## Contribution Licensing
 
-MORPH is licensed under the GNU General Public License v3.0.
+MORPH is licensed under the Apache License 2.0.
 
-Unless you explicitly state otherwise in writing, any contribution intentionally submitted for inclusion in MORPH is submitted under GPL-3.0, matching the project license. Do not submit code, weights, data, figures, or text that you do not have the right to license under GPL-3.0 (or terms that allow relicensing under GPL-3.0).
+Unless you explicitly state otherwise in writing, any contribution intentionally submitted for inclusion in MORPH is submitted under Apache-2.0, matching the project license. Do not submit code, weights, data, figures, or text that you do not have the right to license under Apache-2.0-compatible terms.
 
 Vendored third-party code must retain its original license notices.
 
