@@ -23,7 +23,11 @@ Local markdown copies are grouped by topic in `[references/MANIFEST.md](referenc
 
 ---
 
+
+
 ## 1. Looping & Depth
+
+
 
 ### Parcae — Stable Looped Transformer
 
@@ -56,12 +60,15 @@ Poisson depth sampling forces the iterative map to generalize across a wide rang
 Applies a diffusion interpretation to Huginn's looped core and trains it as a single-pass denoiser
 instead of looping with truncated BPTT. The mode most relevant to MORPH's Parcae core, which is
 why it was built and measured. It lost to plain next-token training on every axis that mattered;
-the code is off this branch. Verdict: [`.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md`](../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md).
-
+the code is off this branch. Verdict: `[.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md](../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md)`.
 
 ---
 
+
+
 ## 2. Attention
+
+
 
 ### CCA — Compressed Convolutional Attention
 
@@ -149,7 +156,11 @@ CCA mechanism. No independent prior paper. See the CCA entry above.
 
 ---
 
+
+
 ## 3. Memory
+
+
 
 ### GLA — Gated Linear Attention (retention branch)
 
@@ -199,7 +210,11 @@ module ships in the current code. Kept as related work for the removed memory st
 
 ---
 
+
+
 ## 4. Residual Streams
+
+
 
 ### Multi-Rate Residual (MRR) — MORPH's approach (removed)
 
@@ -251,7 +266,11 @@ mixing matrices; MORPH's manifold-constrained JPmHC (Cayley) variant descends fr
 
 ---
 
+
+
 ## 5. Embeddings
+
+
 
 ### Lorentz / Hyperbolic Embeddings
 
@@ -280,7 +299,11 @@ MORPH's `embeddings.py` implements this as eucl ⊕ Lorentz with learned mixing 
 
 ---
 
+
+
 ## 6. Sparsity & Routing
+
+
 
 ### Lottery Ticket Hypothesis (LTH)
 
@@ -346,7 +369,11 @@ computation — clusters remain full-rank, not rank-k projections).
 
 ---
 
+
+
 ## 7. Regularization & Self-Supervised Objectives
+
+
 
 ### STP — Semantic Tube Prediction (Geodesic Regularizer) (removed)
 
@@ -413,7 +440,11 @@ exists). Local notes only (no PDF in the archive).
 
 ---
 
+
+
 ## 8. Feed-Forward Networks
+
+
 
 ### SwiGLU — Gated Feed-Forward Activation
 
@@ -427,7 +458,11 @@ that consistently outperforms GELU/ReLU variants on perplexity at equal paramete
 
 ---
 
+
+
 ## 9. Training Objectives
+
+
 
 ### MTP — Multi-Token Prediction (removed)
 
@@ -480,7 +515,7 @@ TST (`pretrain_curriculum.yaml`).
 **arXiv:** [2506.14202](https://arxiv.org/abs/2506.14202)  
 **MORPH uses:** NOTHING. Built, trained, measured, rejected 2026-08-21; the implementation was
 removed from `master` and parked on `park/db-master-line` and `feat/db-objective-l2`. Verdict and
-numbers: [`.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md`](../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md);
+numbers: `[.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md](../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md)`;
 ledger row: `ablation-ledger.md` "Rejected — DiffusionBlocks". Two separable modes.
 (a) *Block-wise*: cut `L` layers into `B` σ-range-specialised blocks, each trained by its own
 denoising objective, cutting params + grads + **optimizer state** by `B` (unlike gradient
@@ -505,7 +540,11 @@ schedule; use the EDM (Karras et al. 2022, Alg. 2) form. See the assessment doc 
 
 ---
 
+
+
 ## 10. Optimizer
+
+
 
 ### AdEMAMix — Dual-EMA Adam Variant
 
@@ -523,7 +562,11 @@ MORPH's flat-LR recipe. Includes prune-aware dead-state masking for CMS-carved w
 
 ---
 
+
+
 ## 11. Tokenization & Data
+
+
 
 ### StarCoder2 — Tokenizer
 
@@ -539,7 +582,11 @@ The 49k vocab cleanly stacks with a bigram hash-vocab prefix for rare byte patte
 
 ---
 
+
+
 ## 12. Inference Scaling
+
+
 
 ### Zyphra RSA — Markovian Recurrent Speculative Aggregation
 
@@ -554,6 +601,8 @@ unbounded reasoning with constant KV memory. MORPH's outer loop is designed to s
 harness deployment after RL training, currently deferred.
 
 ---
+
+
 
 ## 13. TUL — Thought Unpack Loop (latent emission & hierarchy) (spec, `experiments/tul`)
 
@@ -666,9 +715,9 @@ per depth; helps already at 2.4B active. TUL's coda is token-fed by construction
 
 ### Multi-token prediction (Gloeckle et al.) — see §9 (MTP, removed)
 
-**TUL note:** the blind-heads variant helps only ≥3B (Table S7: worse at 0.3B/0.6B, even
-at 1.3B) and hurts once next-token circuits form. Cited here as the reason TUL does not
-decode blind; the entry stays in §9.
+**TUL note:** the blind-heads variant helps only ≥3B (Table S7: worse at 0.3B/0.6B, even at 1.3B) and hurts once next-token circuits form. Cited here as the reason TUL does not decode blind; the entry stays in §9. The literature is pretty mixed on whether blind heads or not are best. The risk is that all the previous computation is just noise and the small stack of layers just learn to fit while ignoring it.
+
+Based on the literature this seems to get worse the more layers there are in the coda.
 
 ### Future Lens
 
@@ -677,11 +726,9 @@ decode blind; the entry stays in §9.
 **Year:** 2023  
 **arXiv:** [2311.04897](https://arxiv.org/abs/2311.04897)  
 **TUL uses:** the instrument for "does the slot carry the plan" (linear/soft-prompt
-readout on a hidden state, always reported against `teacher_acc` and a bigram floor).
-Table 2: blind linear probes 0.292/0.190/0.158 at t+2/3/4 (bigram 0.201); the
-learned-prompt reader 0.484/0.437/0.469 is TOKEN-FED (Eq. 9/11) — evidence for the
-fed-back decoder, not for blind decode. Fig 4 (read from the PDF): linear t+2 peaks late
-in the stack; the mid-stack peak belongs to the token-fed reader.
+readout on a hidden state, always reported against `teacher_acc` and a bigram floor). Table 2: blind linear probes 0.292/0.190/0.158 at t+2/3/4 (bigram 0.201); the learned-prompt reader 0.484/0.437/0.469 is TOKEN-FED (Eq. 9/11) — evidence for the fed-back decoder, not for blind decode. Fig 4 (read from the PDF): linear t+2 peaks late in the stack; the mid-stack peak belongs to the token-fed reader. 
+
+Used as a probe to confirm behaviors during initial testing.
 
 ### Blockwise Parallel Decoding
 
@@ -741,6 +788,12 @@ forget / write) on a persistent concept stream over Coconut-style latent passes.
 in the compaction-window discipline as the cautionary case where three constants were
 mistaken for a mechanism; informs why TUL prefers attended slot positions over an
 untargeted gated carry unless an arm proves otherwise.
+
+This was tested on top of TUL direclty to give essentially a decaying tape memory, it doesn't beat just keeping the hidden states from the loop in the sequence. So it doesnt justify the machinery for an already finnicky portion of the model. I think there is some kind of tape system that can beat the naive approach. I think likely though it is just something like, 'at compaction keep all the hidden states and put them at the top of the sequence.' Likely it has some issues with attention sinking. 
+
+## **TODO: attention sinking mitigation ablations**
+
+
 
 ### CODI / CCoT (latent chain-of-thought)
 
@@ -822,15 +875,13 @@ own decoded by a pretrained AR decoder via cross-attention reaches Rouge-L 99.2.
 keeps AR emission inside the span; distillation from an AR teacher is a fallback if the
 first-token position stays weak.
 
-### Explorative Modeling (XM)
+### Explorative Modeling (XM) (REMOVED)
 
 **Title:** Explorative Modeling  
 **Authors:** Gladstone, Ji, Du  
 **Year:** 2026  
 **arXiv:** [2607.27372](https://arxiv.org/abs/2607.27372)  
-**TUL uses:** the explanation of the `.` collapse — one-shot multi-target regression has
-generative expressivity 1 and predicts the mean; MDLM XM-1 emits "the the the". Best-of-K
-search over the latent is a deferred alternative to a warm-up loss.
+**TUL uses:** XM was used for testing to see if the latent could directly be targeted for exploration during pretraining. Since this is still next token prediction, there isn't ambiguity that causes exposure bias while under teacher forcing. Hypothetically a specific curriculum could achieve this sort of pretraining exploration of language on the latent directly. The XM paper shows a method using a vector DB for this taht is just not tractable for real training. 
 
 ### SpaceByte
 
@@ -889,78 +940,80 @@ trajectory as an arm (`tul.stp_lambda`), zero parameters.
 
 ---
 
+
+
 ## Quick Reference Table
 
 
-| #   | Technique                              | Paper                                     | arXiv                                                                                                                                          |
-| --- | -------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Parcae Loop                            | Prairie et al. (UCSD+Together, 2026)      | [2604.12946](https://arxiv.org/abs/2604.12946)                                                                                                 |
-| 2   | Block-ELL Format (superseded)          | NVIDIA cuSPARSE (2021+)                   | [developer.nvidia.com](https://developer.nvidia.com/blog/accelerating-matrix-multiplication-with-block-sparse-format-and-nvidia-tensor-cores/) |
-| 2a  | MegaBlocks / STK                       | Gale et al. (Stanford, 2022)              | [2211.15841](https://arxiv.org/abs/2211.15841)                                                                                                 |
-| 3   | CMS Topology                           | Original work — MORPH project             | —                                                                                                                                              |
-| 4   | GLA Retention                          | Yang et al. (2023 / ICML 2024)            | [2312.06635](https://arxiv.org/abs/2312.06635)                                                                                                 |
-| 4a  | Neural Memory (Titans) (removed)       | Behrouz, Zhong, Mirrokni (Google, 2025)   | [2501.00663](https://arxiv.org/abs/2501.00663)                                                                                                 |
-| 5   | CCA                                    | Figliolia et al. (Zyphra, 2025)           | [2510.04476](https://arxiv.org/abs/2510.04476)                                                                                                 |
-| 6   | CSA / HCA                              | DeepSeek-AI (2026)                        | [HF PDF](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf)                                                         |
-| 7   | STP (removed)                          | Huang, LeCun, Balestriero (2026)          | [2602.22617](https://arxiv.org/abs/2602.22617)                                                                                                 |
-| 8   | LeJEPA (removed)                       | Balestriero, LeCun (2025)                 | [2511.08544](https://arxiv.org/abs/2511.08544)                                                                                                 |
-| 9   | SIGReg (removed)                       | Balestriero, LeCun (2025)                 | [2511.08544](https://arxiv.org/abs/2511.08544)                                                                                                 |
-| 10  | Lorentz Embeddings                     | Nickel, Kiela (ICML 2018)                 | [1806.03417](https://arxiv.org/abs/1806.03417)                                                                                                 |
-| 11  | Hybrid Embeddings                      | Gu, Sala, Gunel, Ré (ICLR 2019)           | [OpenReview](https://openreview.net/forum?id=HJxeWnCcF7)                                                                                       |
-| 12  | CoPE (Clipped RoPE)                    | Li, Ren, Yuille, Wang (2026)              | [2602.05258](https://arxiv.org/abs/2602.05258)                                                                                                 |
-| 13  | XSA                                    | Zhai (Apple, 2026)                        | [2603.09078](https://arxiv.org/abs/2603.09078)                                                                                                 |
-| 14  | Residual Attention                     | Kimi Team (Moonshot AI, 2026)             | [2603.15031](https://arxiv.org/abs/2603.15031)                                                                                                 |
-| 15  | SwiGLU                                 | Shazeer (Google, 2020)                    | [2002.05202](https://arxiv.org/abs/2002.05202)                                                                                                 |
-| 16  | MTP (deffered, requires greater scale) | Gloeckle et al. (Meta, 2024)              | [2404.19737](https://arxiv.org/abs/2404.19737)                                                                                                 |
-| 17  | STE Ternary (BitNet b1.58)             | Ma et al. (Microsoft, 2024)               | [2402.17764](https://arxiv.org/abs/2402.17764)                                                                                                 |
-| 18  | ReMoE                                  | Wang, Zhu, Chen (Tsinghua, 2025)          | [2412.14711](https://arxiv.org/abs/2412.14711)                                                                                                 |
-| 19  | PEER                                   | Lample et al. (FAIR, 2019)                | [1907.05242](https://arxiv.org/abs/1907.05242)                                                                                                 |
-| 20  | mHC                                    | DeepSeek-AI (2025)                        | [2512.24880](https://arxiv.org/abs/2512.24880)                                                                                                 |
-| 20a | JPmHC (Cayley HC)                      | Sengupta, Wang, Brunswic (JPMorgan, 2026) | [2602.18308](https://arxiv.org/abs/2602.18308)                                                                                                 |
-| 20b | Hyper-Connections                      | Zhu et al. / ByteDance (2024)             | [2409.19606](https://arxiv.org/abs/2409.19606)                                                                                                 |
-| 21  | Zyphra RSA (planned)                   | Washbourne et al. (Zyphra, 2026)          | [2605.05365](https://arxiv.org/abs/2605.05365)                                                                                                 |
-| 22  | StarCoder2 Tokenizer                   | Lozhkov et al. (BigCode, 2024)            | [2402.19173](https://arxiv.org/abs/2402.19173)                                                                                                 |
-| 23  | Nested Learning (removed)              | Behrouz et al. (NeurIPS 2025)             | [2512.24695](https://arxiv.org/abs/2512.24695)                                                                                                 |
-| 24  | Poisson Depth Sampling                 | Prairie et al. (Parcae, 2026)             | [2604.12946](https://arxiv.org/abs/2604.12946)                                                                                                 |
-| 25  | Attention Sinks (planned)              | Xiao et al. (MIT/Meta, 2023)              | [2309.17453](https://arxiv.org/abs/2309.17453)                                                                                                 |
-| 26  | Value Shift                            | Figliolia et al. (Zyphra, 2025)           | [2510.04476](https://arxiv.org/abs/2510.04476)                                                                                                 |
-| 27  | LLM-JEPA (removed)                     | Huang, LeCun, Balestriero (2025)          | [2509.14252](https://arxiv.org/abs/2509.14252)                                                                                                 |
-| 28  | Lottery Ticket Hypothesis              | Frankle, Carbin (MIT, 2019)               | [1803.03635](https://arxiv.org/abs/1803.03635)                                                                                                 |
-| 29  | AdEMAMix Optimizer                     | Pagliardini et al. (EPFL/Apple, 2024)     | [2409.03137](https://arxiv.org/abs/2409.03137)                                                                                                 |
-| 30  | Token Superposition Training (TST)     | Peng, Gigant, Quesnelle (Nous, 2026)      | [2605.06546](https://arxiv.org/abs/2605.06546)                                                                                                 |
-| 31  | Semantic Step Prediction (removed)     | Yuan (2026)                               | [2604.18464](https://arxiv.org/abs/2604.18464)                                                                                                 |
-| 32  | BLT (TUL)                              | Pagnoni et al. (Meta FAIR, 2024)          | [2412.09871](https://arxiv.org/abs/2412.09871)                                                                                                 |
-| 33  | MegaByte (TUL)                         | Yu et al. (Meta AI, 2023)                 | [2305.07185](https://arxiv.org/abs/2305.07185)                                                                                                 |
-| 34  | H-Net (TUL)                            | Hwang et al. (CMU/Cartesia, 2025)         | [2507.07955](https://arxiv.org/abs/2507.07955)                                                                                                 |
-| 35  | Block Transformer (TUL)                | Ho et al. (KAIST/GDM, 2024)               | [2406.02657](https://arxiv.org/abs/2406.02657)                                                                                                 |
-| 36  | Dynamic Token Pooling (TUL)            | Nawrot et al. (2022)                      | [2211.09761](https://arxiv.org/abs/2211.09761)                                                                                                 |
-| 37  | Hourglass (TUL)                        | Nawrot et al. (2021)                      | [2110.13711](https://arxiv.org/abs/2110.13711)                                                                                                 |
-| 38  | Patch-Level Training (TUL)             | Shao, Meng, Zhou (2024)                   | [2407.12665](https://arxiv.org/abs/2407.12665)                                                                                                 |
-| 39  | DeepSeek-V3 MTP module (TUL)           | DeepSeek-AI (2024)                        | [2412.19437](https://arxiv.org/abs/2412.19437)                                                                                                 |
-| 40  | Future Lens (TUL)                      | Pal et al. (Northeastern, 2023)           | [2311.04897](https://arxiv.org/abs/2311.04897)                                                                                                 |
-| 41  | Blockwise Parallel Decoding (TUL)      | Stern, Shazeer, Uszkoreit (2018)          | [1811.03115](https://arxiv.org/abs/1811.03115)                                                                                                 |
-| 42  | Medusa (TUL, cited only)               | Cai et al. (2024)                         | [2401.10774](https://arxiv.org/abs/2401.10774)                                                                                                 |
-| 43  | Coconut (TUL)                          | Hao et al. (Meta FAIR, 2024)              | [2412.06769](https://arxiv.org/abs/2412.06769)                                                                                                 |
-| 43a | Quiet-STaR (TUL)                       | Zelikman et al. (2024)                    | [2403.09629](https://arxiv.org/abs/2403.09629)                                                                                                 |
-| 43b | AGCLR (TUL)                            | Farhan, Chaudhary (2026)                  | [2606.07720](https://arxiv.org/abs/2606.07720)                                                                                                 |
-| 44  | CODI (TUL)                             | Shen et al. (2025)                        | [2502.21074](https://arxiv.org/abs/2502.21074)                                                                                                 |
-| 45  | CCoT (TUL)                             | Cheng, Van Durme (2024)                   | [2412.13171](https://arxiv.org/abs/2412.13171)                                                                                                 |
-| 46  | Looped Transformers (TUL)              | Saunshi et al. (Google, 2025)             | [2502.17416](https://arxiv.org/abs/2502.17416)                                                                                                 |
-| 47  | Sentence Embedding Prediction (TUL)    | Hwang et al. (2025)                       | [2505.22202](https://arxiv.org/abs/2505.22202)                                                                                                 |
-| 48  | Large Concept Models (TUL, counter)    | Meta FAIR (2024)                          | [2412.08821](https://arxiv.org/abs/2412.08821)                                                                                                 |
-| 48a | SONAR (TUL, supporting)                | Duquenne et al. (Meta, 2023)              | [2308.11466](https://arxiv.org/abs/2308.11466)                                                                                                 |
-| 49  | CoCoMix (TUL)                          | Tack et al. (Meta, 2025)                  | [2502.08524](https://arxiv.org/abs/2502.08524)                                                                                                 |
-| 50  | Sentence VAE (TUL)                     | Bowman et al. (2015)                      | [1511.06349](https://arxiv.org/abs/1511.06349)                                                                                                 |
-| 51  | Lagging Inference / collapse (TUL)     | He et al. (2019)                          | [1901.05534](https://arxiv.org/abs/1901.05534)                                                                                                 |
-| 52  | Optimus (TUL)                          | Li et al. (Microsoft, 2020)               | [2004.04092](https://arxiv.org/abs/2004.04092)                                                                                                 |
-| 53  | Latent Transformer / discrete codes (TUL) | Kaiser et al. (Google, 2018)           | [1803.03382](https://arxiv.org/abs/1803.03382)                                                                                                 |
-| 54  | Non-Autoregressive NMT (TUL)           | Gu et al. (2017)                          | [1711.02281](https://arxiv.org/abs/1711.02281)                                                                                                 |
-| 55  | LLaDA (TUL)                            | Nie et al. (2025)                         | [2502.09992](https://arxiv.org/abs/2502.09992)                                                                                                 |
-| 56  | Block Diffusion / BD3-LM (TUL)         | Arriola et al. (2025)                     | [2503.09573](https://arxiv.org/abs/2503.09573)                                                                                                 |
-| 57  | Latent Diffusion for Language (TUL)    | Lovelace et al. (2023)                    | [2212.09462](https://arxiv.org/abs/2212.09462)                                                                                                 |
-| 58  | Explorative Modeling (TUL)             | Gladstone, Ji, Du (2026)                  | [2607.27372](https://arxiv.org/abs/2607.27372)                                                                                                 |
-| 59  | SpaceByte (TUL)                        | Slagle (2024)                             | [2404.14408](https://arxiv.org/abs/2404.14408)                                                                                                 |
-| 60  | AU-Net (TUL)                           | Videau et al. (Meta FAIR, 2025)           | [2506.14761](https://arxiv.org/abs/2506.14761)                                                                                                 |
-| 61  | Hierarchical AT (TUL)                  | Neitemeier et al. (Aleph Alpha, 2025)     | [2501.10322](https://arxiv.org/abs/2501.10322)                                                                                                 |
+| #   | Technique                                 | Paper                                     | arXiv                                                                                                                                          |
+| --- | ----------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Parcae Loop                               | Prairie et al. (UCSD+Together, 2026)      | [2604.12946](https://arxiv.org/abs/2604.12946)                                                                                                 |
+| 2   | Block-ELL Format (superseded)             | NVIDIA cuSPARSE (2021+)                   | [developer.nvidia.com](https://developer.nvidia.com/blog/accelerating-matrix-multiplication-with-block-sparse-format-and-nvidia-tensor-cores/) |
+| 2a  | MegaBlocks / STK                          | Gale et al. (Stanford, 2022)              | [2211.15841](https://arxiv.org/abs/2211.15841)                                                                                                 |
+| 3   | CMS Topology                              | Original work — MORPH project             | —                                                                                                                                              |
+| 4   | GLA Retention                             | Yang et al. (2023 / ICML 2024)            | [2312.06635](https://arxiv.org/abs/2312.06635)                                                                                                 |
+| 4a  | Neural Memory (Titans) (removed)          | Behrouz, Zhong, Mirrokni (Google, 2025)   | [2501.00663](https://arxiv.org/abs/2501.00663)                                                                                                 |
+| 5   | CCA                                       | Figliolia et al. (Zyphra, 2025)           | [2510.04476](https://arxiv.org/abs/2510.04476)                                                                                                 |
+| 6   | CSA / HCA                                 | DeepSeek-AI (2026)                        | [HF PDF](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf)                                                         |
+| 7   | STP (removed)                             | Huang, LeCun, Balestriero (2026)          | [2602.22617](https://arxiv.org/abs/2602.22617)                                                                                                 |
+| 8   | LeJEPA (removed)                          | Balestriero, LeCun (2025)                 | [2511.08544](https://arxiv.org/abs/2511.08544)                                                                                                 |
+| 9   | SIGReg (removed)                          | Balestriero, LeCun (2025)                 | [2511.08544](https://arxiv.org/abs/2511.08544)                                                                                                 |
+| 10  | Lorentz Embeddings                        | Nickel, Kiela (ICML 2018)                 | [1806.03417](https://arxiv.org/abs/1806.03417)                                                                                                 |
+| 11  | Hybrid Embeddings                         | Gu, Sala, Gunel, Ré (ICLR 2019)           | [OpenReview](https://openreview.net/forum?id=HJxeWnCcF7)                                                                                       |
+| 12  | CoPE (Clipped RoPE)                       | Li, Ren, Yuille, Wang (2026)              | [2602.05258](https://arxiv.org/abs/2602.05258)                                                                                                 |
+| 13  | XSA                                       | Zhai (Apple, 2026)                        | [2603.09078](https://arxiv.org/abs/2603.09078)                                                                                                 |
+| 14  | Residual Attention                        | Kimi Team (Moonshot AI, 2026)             | [2603.15031](https://arxiv.org/abs/2603.15031)                                                                                                 |
+| 15  | SwiGLU                                    | Shazeer (Google, 2020)                    | [2002.05202](https://arxiv.org/abs/2002.05202)                                                                                                 |
+| 16  | MTP (deffered, requires greater scale)    | Gloeckle et al. (Meta, 2024)              | [2404.19737](https://arxiv.org/abs/2404.19737)                                                                                                 |
+| 17  | STE Ternary (BitNet b1.58)                | Ma et al. (Microsoft, 2024)               | [2402.17764](https://arxiv.org/abs/2402.17764)                                                                                                 |
+| 18  | ReMoE                                     | Wang, Zhu, Chen (Tsinghua, 2025)          | [2412.14711](https://arxiv.org/abs/2412.14711)                                                                                                 |
+| 19  | PEER                                      | Lample et al. (FAIR, 2019)                | [1907.05242](https://arxiv.org/abs/1907.05242)                                                                                                 |
+| 20  | mHC                                       | DeepSeek-AI (2025)                        | [2512.24880](https://arxiv.org/abs/2512.24880)                                                                                                 |
+| 20a | JPmHC (Cayley HC)                         | Sengupta, Wang, Brunswic (JPMorgan, 2026) | [2602.18308](https://arxiv.org/abs/2602.18308)                                                                                                 |
+| 20b | Hyper-Connections                         | Zhu et al. / ByteDance (2024)             | [2409.19606](https://arxiv.org/abs/2409.19606)                                                                                                 |
+| 21  | Zyphra RSA (planned)                      | Washbourne et al. (Zyphra, 2026)          | [2605.05365](https://arxiv.org/abs/2605.05365)                                                                                                 |
+| 22  | StarCoder2 Tokenizer                      | Lozhkov et al. (BigCode, 2024)            | [2402.19173](https://arxiv.org/abs/2402.19173)                                                                                                 |
+| 23  | Nested Learning (removed)                 | Behrouz et al. (NeurIPS 2025)             | [2512.24695](https://arxiv.org/abs/2512.24695)                                                                                                 |
+| 24  | Poisson Depth Sampling                    | Prairie et al. (Parcae, 2026)             | [2604.12946](https://arxiv.org/abs/2604.12946)                                                                                                 |
+| 25  | Attention Sinks (planned)                 | Xiao et al. (MIT/Meta, 2023)              | [2309.17453](https://arxiv.org/abs/2309.17453)                                                                                                 |
+| 26  | Value Shift                               | Figliolia et al. (Zyphra, 2025)           | [2510.04476](https://arxiv.org/abs/2510.04476)                                                                                                 |
+| 27  | LLM-JEPA (removed)                        | Huang, LeCun, Balestriero (2025)          | [2509.14252](https://arxiv.org/abs/2509.14252)                                                                                                 |
+| 28  | Lottery Ticket Hypothesis                 | Frankle, Carbin (MIT, 2019)               | [1803.03635](https://arxiv.org/abs/1803.03635)                                                                                                 |
+| 29  | AdEMAMix Optimizer                        | Pagliardini et al. (EPFL/Apple, 2024)     | [2409.03137](https://arxiv.org/abs/2409.03137)                                                                                                 |
+| 30  | Token Superposition Training (TST)        | Peng, Gigant, Quesnelle (Nous, 2026)      | [2605.06546](https://arxiv.org/abs/2605.06546)                                                                                                 |
+| 31  | Semantic Step Prediction (removed)        | Yuan (2026)                               | [2604.18464](https://arxiv.org/abs/2604.18464)                                                                                                 |
+| 32  | BLT (TUL)                                 | Pagnoni et al. (Meta FAIR, 2024)          | [2412.09871](https://arxiv.org/abs/2412.09871)                                                                                                 |
+| 33  | MegaByte (TUL)                            | Yu et al. (Meta AI, 2023)                 | [2305.07185](https://arxiv.org/abs/2305.07185)                                                                                                 |
+| 34  | H-Net (TUL)                               | Hwang et al. (CMU/Cartesia, 2025)         | [2507.07955](https://arxiv.org/abs/2507.07955)                                                                                                 |
+| 35  | Block Transformer (TUL)                   | Ho et al. (KAIST/GDM, 2024)               | [2406.02657](https://arxiv.org/abs/2406.02657)                                                                                                 |
+| 36  | Dynamic Token Pooling (TUL)               | Nawrot et al. (2022)                      | [2211.09761](https://arxiv.org/abs/2211.09761)                                                                                                 |
+| 37  | Hourglass (TUL)                           | Nawrot et al. (2021)                      | [2110.13711](https://arxiv.org/abs/2110.13711)                                                                                                 |
+| 38  | Patch-Level Training (TUL)                | Shao, Meng, Zhou (2024)                   | [2407.12665](https://arxiv.org/abs/2407.12665)                                                                                                 |
+| 39  | DeepSeek-V3 MTP module (TUL)              | DeepSeek-AI (2024)                        | [2412.19437](https://arxiv.org/abs/2412.19437)                                                                                                 |
+| 40  | Future Lens (TUL)                         | Pal et al. (Northeastern, 2023)           | [2311.04897](https://arxiv.org/abs/2311.04897)                                                                                                 |
+| 41  | Blockwise Parallel Decoding (TUL)         | Stern, Shazeer, Uszkoreit (2018)          | [1811.03115](https://arxiv.org/abs/1811.03115)                                                                                                 |
+| 42  | Medusa (TUL, cited only)                  | Cai et al. (2024)                         | [2401.10774](https://arxiv.org/abs/2401.10774)                                                                                                 |
+| 43  | Coconut (TUL)                             | Hao et al. (Meta FAIR, 2024)              | [2412.06769](https://arxiv.org/abs/2412.06769)                                                                                                 |
+| 43a | Quiet-STaR (TUL)                          | Zelikman et al. (2024)                    | [2403.09629](https://arxiv.org/abs/2403.09629)                                                                                                 |
+| 43b | AGCLR (TUL)                               | Farhan, Chaudhary (2026)                  | [2606.07720](https://arxiv.org/abs/2606.07720)                                                                                                 |
+| 44  | CODI (TUL)                                | Shen et al. (2025)                        | [2502.21074](https://arxiv.org/abs/2502.21074)                                                                                                 |
+| 45  | CCoT (TUL)                                | Cheng, Van Durme (2024)                   | [2412.13171](https://arxiv.org/abs/2412.13171)                                                                                                 |
+| 46  | Looped Transformers (TUL)                 | Saunshi et al. (Google, 2025)             | [2502.17416](https://arxiv.org/abs/2502.17416)                                                                                                 |
+| 47  | Sentence Embedding Prediction (TUL)       | Hwang et al. (2025)                       | [2505.22202](https://arxiv.org/abs/2505.22202)                                                                                                 |
+| 48  | Large Concept Models (TUL, counter)       | Meta FAIR (2024)                          | [2412.08821](https://arxiv.org/abs/2412.08821)                                                                                                 |
+| 48a | SONAR (TUL, supporting)                   | Duquenne et al. (Meta, 2023)              | [2308.11466](https://arxiv.org/abs/2308.11466)                                                                                                 |
+| 49  | CoCoMix (TUL)                             | Tack et al. (Meta, 2025)                  | [2502.08524](https://arxiv.org/abs/2502.08524)                                                                                                 |
+| 50  | Sentence VAE (TUL)                        | Bowman et al. (2015)                      | [1511.06349](https://arxiv.org/abs/1511.06349)                                                                                                 |
+| 51  | Lagging Inference / collapse (TUL)        | He et al. (2019)                          | [1901.05534](https://arxiv.org/abs/1901.05534)                                                                                                 |
+| 52  | Optimus (TUL)                             | Li et al. (Microsoft, 2020)               | [2004.04092](https://arxiv.org/abs/2004.04092)                                                                                                 |
+| 53  | Latent Transformer / discrete codes (TUL) | Kaiser et al. (Google, 2018)              | [1803.03382](https://arxiv.org/abs/1803.03382)                                                                                                 |
+| 54  | Non-Autoregressive NMT (TUL)              | Gu et al. (2017)                          | [1711.02281](https://arxiv.org/abs/1711.02281)                                                                                                 |
+| 55  | LLaDA (TUL)                               | Nie et al. (2025)                         | [2502.09992](https://arxiv.org/abs/2502.09992)                                                                                                 |
+| 56  | Block Diffusion / BD3-LM (TUL)            | Arriola et al. (2025)                     | [2503.09573](https://arxiv.org/abs/2503.09573)                                                                                                 |
+| 57  | Latent Diffusion for Language (TUL)       | Lovelace et al. (2023)                    | [2212.09462](https://arxiv.org/abs/2212.09462)                                                                                                 |
+| 58  | Explorative Modeling (TUL)                | Gladstone, Ji, Du (2026)                  | [2607.27372](https://arxiv.org/abs/2607.27372)                                                                                                 |
+| 59  | SpaceByte (TUL)                           | Slagle (2024)                             | [2404.14408](https://arxiv.org/abs/2404.14408)                                                                                                 |
+| 60  | AU-Net (TUL)                              | Videau et al. (Meta FAIR, 2025)           | [2506.14761](https://arxiv.org/abs/2506.14761)                                                                                                 |
+| 61  | Hierarchical AT (TUL)                     | Neitemeier et al. (Aleph Alpha, 2025)     | [2501.10322](https://arxiv.org/abs/2501.10322)                                                                                                 |
 
 
