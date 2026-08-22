@@ -308,3 +308,64 @@ Two arms, same harness as E (`tul_a1`, `steps=20000`, wall-clock bounded, `eval_
     does, sigma control is not sufficient on its own and the next probe is a direct
     `rho(J_core)` measurement on the live forward, since sigma of the weights is then only a
     proxy for a contractivity the penalty is not reaching.
+
+## Correction 2 — the prior art, found AFTER the F arms (2026-08-22 06:10)
+
+**`docs/tul-divergence-rca.md` (479 lines, 2026-08-17) already contains this
+investigation, and I did not read it before starting.** Everything above was written
+without it. What it establishes that this experiment did not:
+
+- **Only A1 diverges.** `tul_a0` and `tul_a3` completed 20 000 steps (val 3.2736 and
+  3.2407). My repeated claim that "the TUL short recipe detonates" is **wrong** — it is
+  the slot-core arm specifically.
+- A1's token perplexity ends at **754** where A3, with **no core at all**, gets **25.55**.
+  The slot core actively destroys the token path it feeds.
+- The backward amplifies **~5x per core layer** (core.5 -> core.0: 3.8e4 -> 1.1e8),
+  measured from `_cms.block_score_ema` in the checkpoints. A0's profile over the same
+  layers is flat (1.06, 1.17, 1.10, 0.91, 1.00, 0.98).
+- **The mechanism is subspace ALIGNMENT, not per-linear sigma** (Task #276, June 2026):
+  the six core blocks' top singular subspaces rotate into alignment, so the COMPOSITION
+  `sigma_max(J_core)` runs away. Order parameter (composition sigma_max / worst single
+  block): **0.90 healthy, 9.5 at the cliff**. Non-aligned blocks cancel; aligned blocks
+  chain multiplicatively.
+- **A per-linear spectral penalty was already tried and rejected** by #276:
+  "detonated, idle 0/12".
+
+### What this does to the F1 result
+
+F1 differs materially from the rejected arm — #276's penalty was **idle on 0 of 12
+linears**, F1 pins **all 12** at the cap for 4400+ steps. So it is a different operating
+point, not a repeat. But per-linear sigma is a proxy for a composition norm that alignment
+can inflate independently, so bounding it is not addressing the named mechanism.
+
+More importantly, **RCA section 14 names the error this experiment then repeated**:
+
+> an intervention sweep with n=1 per arm and no replicated control measures trajectory
+> sensitivity, not causation. The control should have been replicated FIRST, to get the
+> base rate, before any arm was read.
+
+Four interventions now survive at n<=2 — `token_state_dropout=0`, `core_gain_clip=1.5`,
+`ademamix_alpha_cap=1.0` (RCA Part 5) and F1. **They cannot all be the mechanism.** The
+live alternative is a knife-edge that any perturbation steps off. My "this is the fix"
+call was exactly the inference the RCA warns against, made from n=1.
+
+### Standing
+
+- **Void as a mechanism test until the placebo resolves.** Predictions 1-13 above are
+  scored honestly, but none of the surviving arms is readable as causal.
+- **Genuinely new and kept:** live `spec/sigma_max` logging on every run (the RCA had to
+  reconstruct sigma from checkpoints), and the measurement that grad norm goes 0.95 ->
+  3.4e5 across the sigma 3.0 crossing on a LIVE run.
+- **Running:** `ignore/perf/div_placebo.sh` — the RCA's own P1 placebo
+  (`token_state_dropout` 0.15 -> 0.145, two seeds), pre-registered in section 22 and never
+  run. Control base rate is 5/5 divergence. If P1 survives 2/2, survival costs nothing but
+  a nudge and every cure claim here is void.
+
+### Superseded claims in this file
+
+| earlier claim | status |
+|---|---|
+| "the divergence is a property of the TUL short recipe" | **wrong** — A0 and A3 complete 20k; it is A1 |
+| "this is the fix" (F1) | **withdrawn** — n=1, and three other arms already survived |
+| the alpha/sigma coupling (D2) is a new finding | **not new** — `alpha_cap` exists for this; `-acap1` runs predate tonight |
+| the spectral penalty is an untried lever | **partly** — tried and rejected by #276 at an idle operating point |
