@@ -571,19 +571,6 @@ def _categorize(name: str, module: nn.Module, attn_ids: set[int]) -> str | None:
     if (name.endswith("injection.W_a") or name.endswith("injection.W_dt")
             or name.endswith("injection.B")):
         return None
-    # Guard: never ternarize the DiffusionBlocks sigma-conditioning path. Same rationale as
-    # the HC proj and the SSM control matrices above, and it MATTERS MORE here: sigma is the
-    # progress coordinate that tells the denoiser where it is on the trajectory, and
-    # `scope: backbone` ("every weight matrix that is not attention and not embeddings")
-    # otherwise sweeps these in silently. Snapping the sigma embedding MLP and the AdaLN
-    # shift/scale to {-1,0,+1} destroys exactly the resolution the method depends on.
-    #   db_sigma_cond.mlp.{0,2} : sinusoidal(0.25*log sigma) -> cond_dim
-    #   db_gates.{prelude,core,coda}.to_mod : cond -> (shift, scale), zero-init
-    # Always bf16, regardless of scope. Found by inspecting a step_300 checkpoint's
-    # parametrization keys, not by a test -- see tests/test_db_forward.py
-    # ::test_db_conditioning_is_never_ternarized.
-    if name.startswith("db_sigma_cond") or name.startswith("db_gates"):
-        return None
     # CMSBlockLinear (inside MortarLinear) holds a dense [out, in] nn.Parameter
     # named `weight` in dense mode — quantize it like any other linear.
     is_cms = type(module).__name__ == "CMSBlockLinear"

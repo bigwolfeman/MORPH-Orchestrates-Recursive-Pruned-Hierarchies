@@ -51,11 +51,12 @@ Some foot guns about looped models: a learned gate seems ideal at face value, bu
 These tend to collapse, and if you solve the collapse problem the learned iterative map is less generalized.  
 Poisson depth sampling forces the iterative map to generalize across a wide range of potential depths.
 
-### DiffusionBlocks on recurrent-depth models — see §9
+### DiffusionBlocks on recurrent-depth models — see §9 (TESTED, REJECTED)
 
 Applies a diffusion interpretation to Huginn's looped core and trains it as a single-pass denoiser
-instead of looping with truncated BPTT. The mode most relevant to MORPH's Parcae core.
-Assessment: [`diffusionblocks-morph-assessment.md`](diffusionblocks-morph-assessment.md).
+instead of looping with truncated BPTT. The mode most relevant to MORPH's Parcae core, which is
+why it was built and measured. It lost to plain next-token training on every axis that mattered;
+the code is off this branch. Verdict: [`.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md`](../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md).
 
 
 ---
@@ -471,16 +472,16 @@ superposition for the first 30k of a 100k-step run). Eval and generation always 
 `tst_bag_size=0` is bit-identical to the pre-TST baseline. Curriculum configs deliberately disable
 TST (`pretrain_curriculum.yaml`).
 
-### DiffusionBlocks — block-wise training via diffusion interpretation (evaluating, nothing built)
+### DiffusionBlocks — block-wise training via diffusion interpretation (TESTED, REJECTED)
 
 **Title:** DiffusionBlocks: Block-wise Neural Network Training via Diffusion Interpretation  
 **Authors:** Makoto Shing, Masanori Koyama, Takuya Akiba (Sakana AI, U. Tokyo)  
 **Year:** 2026 (ICLR 2026; v1 2025)  
 **arXiv:** [2506.14202](https://arxiv.org/abs/2506.14202)  
-**MORPH uses:** BEING BUILT, nothing run yet. Design rationale:
-[`diffusionblocks-morph-assessment.md`](diffusionblocks-morph-assessment.md); pre-registered arms
-and expected numbers: [`diffusionblocks-experiment-sheet.md`](diffusionblocks-experiment-sheet.md);
-ledger rows: `ablation-ledger.md` "Planned — DiffusionBlocks". Two separable modes.
+**MORPH uses:** NOTHING. Built, trained, measured, rejected 2026-08-21; the implementation was
+removed from `master` and parked on `park/db-master-line` and `feat/db-objective-l2`. Verdict and
+numbers: [`.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md`](../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md);
+ledger row: `ablation-ledger.md` "Rejected — DiffusionBlocks". Two separable modes.
 (a) *Block-wise*: cut `L` layers into `B` σ-range-specialised blocks, each trained by its own
 denoising objective, cutting params + grads + **optimizer state** by `B` (unlike gradient
 checkpointing, App. G) — but with **no compute saving** (App. H: `L·K` layer evals either way).

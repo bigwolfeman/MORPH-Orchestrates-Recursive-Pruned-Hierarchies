@@ -93,14 +93,8 @@ def evaluate(
     n_batches: int = 20,
     tul: bool = False,
     extra: dict | None = None,
-    db=None,
 ) -> tuple[float, float]:
     """Return (avg_loss, ppl) over n_batches validation steps.
-
-    ``db`` (a DbRuntime) switches to the DiffusionBlocks objective on a FIXED σ grid. The
-    returned "ppl" is then exp of the CE at the SMALLEST σ and is NOT comparable to the
-    baseline's token PPL — DB CE is a σ-conditioned reconstruction number, not a likelihood.
-    Use the bridge metrics for any cross-family claim (see docs sheet §1.3).
 
     ``tul=True``: the val loader yields the 3-tuple (input_ids, labels, slot_layout) and
     the model is called with the layout ON and bag_size 0 (spec invariant 6). The §7.2
@@ -140,61 +134,6 @@ def evaluate(
             if layout.stats:
                 for k, v in layout.stats.items():
                     acc.setdefault(f"val/span_{k}", []).append(float(v))
-        elif db is not None:
-            # Local import: the DB helpers are imported inside the train entry point (which
-            # is a different scope), and `evaluate` is module-level — so it cannot see them.
-            # This is what NameError'd on the first real eval; deferred import matches how
-            # the rest of this module handles its heavier deps.
-            from morph.training.db_setup import build_db_step, db_loss
-
-            # DiffusionBlocks val. Calling the BASELINE forward here (which is what this
-            # branch used to do for every non-TUL run) would evaluate a denoiser-trained
-            # model on plain next-token prediction — a different objective, so the number
-            # would be meaningless. Instead evaluate the DB objective at a FIXED σ grid.
-            #
-            # Fixed, not sampled: a sampled-σ val CE is not a curve, it is a lottery, and
-            # two evals 200 steps apart would not be comparable. The grid spans the useful
-            # band and each σ is reported separately AND averaged, so a regression at one
-            # noise level cannot hide inside the mean.
-            x, y = batch
-            x, y = x.to(device), y.to(device)
-            _m = getattr(model, "_orig_mod", model)
-            _lnv = math.log(int(_m.cfg.vocab_size))
-            for _sig in db.val_sigmas:
-                _st = build_db_step(db, _m, y, fixed_sigma=_sig)
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    _o = _m(x, db_step=_st, db_precond=db.precond)
-                    _l, _mt = db_loss(_o, _st, db.precond, _m)
-                acc.setdefault(f"val/db_ce_sigma{_sig:g}", []).append(_mt["db/ce"])
-                acc.setdefault("val/db_ce", []).append(_mt["db/ce"])
-
-                # ── SCRAMBLED CONTROL: the metric this campaign was missing ──
-                # Build z from a DIFFERENT sequence's labels and score against the TRUE
-                # labels. Anything the model still gets right must have come from the text
-                # context, because its injected target is now wrong.
-                #
-                # This is not a nicety. Without it, an autoencoding objective looks exactly
-                # like a language model that is training well: db_b3 ran 9000 steps with
-                # val CE falling 3.63 -> 0.91 while, at sigma <= 0.3, a wrong-target control
-                # scored ~ln V — meaning ZERO of that performance came from the text.
-                #
-                #   db_ce_scrambled ~= ln V  ->  no language content at this sigma
-                #   lang_nats = ln V - scrambled  ->  what the CONTEXT alone is worth
-                _st_s = build_db_step(db, _m, y.roll(1, dims=0), fixed_sigma=_sig)
-                _st_s.labels = y                      # score against the TRUE labels
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    _os = _m(x, db_step=_st_s, db_precond=db.precond)
-                    _ls_, _mts = db_loss(_os, _st_s, db.precond, _m)
-                acc.setdefault(f"val/db_ce_scrambled_sigma{_sig:g}", []).append(_mts["db/ce"])
-                acc.setdefault(f"val/db_lang_nats_sigma{_sig:g}", []).append(
-                    _lnv - _mts["db/ce"])
-                acc.setdefault("val/db_lang_nats", []).append(_lnv - _mts["db/ce"])
-
-                if _sig == max(db.val_sigmas):
-                    # Report the HIGHEST sigma as the headline: c_skip -> 0 there, so it is
-                    # the closest thing to context-only prediction. The lowest sigma is the
-                    # most autoencoding-contaminated and made a terrible headline.
-                    losses.append(_mt["db/ce"])
         else:
             x, y = batch
             x, y = x.to(device), y.to(device)
@@ -1153,41 +1092,12 @@ def main(cfg: DictConfig) -> None:
     # TUL is configured but stay inert (grad None ⇒ the optimizer skips them) until a
     # forward is called with a layout, so a mid-run activation needs no optimizer
     # rebuild — only E_slot's re-init from the live embedding table (spec §5).
-    from morph.training.db_setup import build_db_runtime, build_db_step, db_loss
     from morph.training.flops import build_flop_model, perf_metrics
     from morph.training.tul_setup import build_tul_runtime
     from morph.training.phase import PhaseSchedule
     tul_rt = build_tul_runtime(cfg)
     morph_cfg = build_morph_config(cfg, tul=tul_rt.model_cfg if tul_rt else None)
     model = MORPHTransformer(morph_cfg).to(device)
-
-    # ── DiffusionBlocks (arXiv:2506.14202) ───────────────────────────────────
-    # `db.activate_at: never` (the base.yaml default) => _db is None, build_db_modules is
-    # never called, NO db parameter exists, and this path is bit-identical to the pre-DB
-    # tree. Construction-time, before the optimizer is built, so the sigma-conditioning
-    # parameters are in the param groups from step 0.
-    _db = build_db_runtime(cfg)
-    _db_active = _db is not None
-    if _db_active:
-        model.build_db_modules(_db.model_cfg)
-        model = model.to(device)
-        print(f"  [db] mode={_db.model_cfg.mode} conditioning={_db.model_cfg.conditioning} "
-              f"blocks={_db.schedule.n_blocks} visit={_db.model_cfg.visit} "
-              f"gamma={_db.model_cfg.overlap_gamma}")
-        print(f"  [db] sigma boundaries (ascending): "
-              f"{[round(v, 5) for v in _db.schedule.sigmas]}")
-        print(f"  [db] block mass (layer order): "
-              f"{[round(v, 4) for v in _db.schedule.mass_layer_order]}")
-        # No-theater: TST and DiffusionBlocks are mutually exclusive (a superposed input has
-        # no single next-token embedding to denoise toward), and plan O3 runs this campaign
-        # with TST off anyway. Fail at startup, not 30k steps in.
-        if int(getattr(cfg.training, "tst_bag_size", 0)) > 0:
-            raise ValueError(
-                "db.activate_at is set AND training.tst_bag_size > 0. These are mutually "
-                "exclusive: a TST-superposed position has no single next-token embedding to "
-                "use as the denoising target. The DiffusionBlocks campaign runs TST off "
-                "(plan O3) -- set training.tst_bag_size=0."
-            )
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params / 1e6:.1f}M params on {device}")
@@ -1300,11 +1210,7 @@ def main(cfg: DictConfig) -> None:
     # config too, so an arm is reproducible from wandb alone without re-deriving ids from
     # a tokenizer version. None when TUL is off.
     full_config_dict["tul_manifest"] = tul_rt.manifest if tul_rt else None
-    # Same rule for DiffusionBlocks: every DERIVED fact (sigma boundaries, block mass,
-    # visit probabilities, slice target norms) lands in the run config, so "what block_mass
-    # did arm X use?" is greppable in wandb without re-deriving it. None when DB is off.
-    full_config_dict["db_manifest"] = _db.manifest if _db_active else None
-    # And the FLOP model's own version + per-region costs: an MFU from model v1 is not
+    # The FLOP model's own version + per-region costs: an MFU from model v1 is not
     # comparable to one from v2, and without this nobody can tell them apart later.
     full_config_dict["flops_manifest"] = _flops.manifest()
     if ternary_manifest is not None:
@@ -1706,20 +1612,7 @@ def main(cfg: DictConfig) -> None:
     # The captured regions are the PLAIN front/back at the plain shape. The TUL forward
     # takes an earlier branch and its L_total shape would never match, so a capture under
     # TUL would permanently reserve its ~9 GB private pool for graphs that never replay.
-    # DiffusionBlocks is excluded for the same reason TUL is, and it matters MORE here: the
-    # captured graphs are the front (embed+prelude) and back (coda+head) regions, but
-    # _forward_db does not call _front_tail or _back_region at all -- under mode='b3' it may
-    # run ONLY the core. A stale replay would silently produce a forward that never saw the
-    # noised target, i.e. a healthy-looking loss curve for the wrong computation. Refuse.
     _sg_want = os.environ.get("MORPH_STATIC_GRAPHS", "0").lower() not in ("0", "", "false")
-    if _sg_want and _db_active:
-        raise ValueError(
-            "MORPH_STATIC_GRAPHS is set AND db.activate_at is on. The static graphs capture "
-            "the front/back regions, which the DiffusionBlocks forward bypasses -- replaying "
-            "them would compute the wrong thing while the loss curve looked fine. Unset "
-            "MORPH_STATIC_GRAPHS for DB arms (extending capture to DB is plan A5's static-"
-            "graph item, not done)."
-        )
     _sg_pending = _sg_want and not phase.tul_on
 
     # Cumulative alignment axes (see flops.py::perf_metrics). Accumulated EVERY step, not
@@ -1826,11 +1719,11 @@ def main(cfg: DictConfig) -> None:
         # ── One-shot peak reset once compilation has settled ────────────────
         # Without this, perf/peak_mem_* reports the WARMUP COMPILE, not the training step.
         # The warmup runs 56 passes over every active-set size (14…1), which allocates far
-        # more than a steady step, and max_memory_allocated is monotonic. The tell: db_b1
-        # logged peak=19.85GB identically at step 0, 20, 40 … 280 — a real steady-state peak
-        # moves. Measured in isolation the same step is 10.35 GB, so the logged figure was
-        # overstating it by ~1.9x and hiding a genuine 2.1x memory win (A0 22.15 -> b1 10.35
-        # -> b3 7.33 GB). Reset a few steps in, once compile and the allocator have settled.
+        # more than a steady step, and max_memory_allocated is monotonic. The tell, found on
+        # a single-pass arm: peak=19.85GB logged identically at step 0, 20, 40 … 280 — a real
+        # steady-state peak moves. Measured in isolation the same step was 10.35 GB, so the
+        # logged figure overstated it ~1.9x and hid a genuine 2.1x memory win against A0's
+        # 22.15 GB. Reset a few steps in, once compile and the allocator have settled.
         if step == start_step + 5:
             torch.cuda.reset_peak_memory_stats()
             print(f"  [mem] peak stats reset at step {step} — perf/peak_mem_* now reflects "
@@ -1913,7 +1806,7 @@ def main(cfg: DictConfig) -> None:
                 # refs: loss/out AND the separately-bound routing_aux / spectral-penalty
                 # locals (routing_aux's graph reaches the prelude/coda ROUTER params —
                 # exactly the captured regions' accumulators).
-                loss = out = routing_aux = _sp = _db_metrics = None
+                loss = out = routing_aux = _sp = None
                 gc.collect()
                 _m = getattr(model, "_orig_mod", model)
                 # Dummy ids built WITHOUT any RNG draw (arange, not randint): a CUDA
@@ -1961,27 +1854,13 @@ def main(cfg: DictConfig) -> None:
             # tokens x nominal proxy, i.e. cumulative layer applications.
             _step_tokens = float(batch_size) * float(seq_len)
             _cum_tokens += _step_tokens
-            _cum_passes += _step_tokens * (
-                _flops.db_expected_passes(_db.schedule.visit_probs(), depth=1.0,
-                                          positions_per_token=_db.positions_per_token())
-                if (_db_active and _db.model_cfg.mode == "b3")
-                else (_flops.layer_passes_per_token(1.0, _db.positions_per_token())
-                      if _db_active else _flops.flop_proxy()))
+            _cum_passes += _step_tokens * _flops.flop_proxy()
 
             with _rt.region("fwd"):
                 with torch.autocast("cuda", dtype=torch.bfloat16):
-                    if _db_active:
-                        # DiffusionBlocks: sample ONE block + per-sample sigma, noise the
-                        # target embedding, and take EDM-weighted CE. The core is applied
-                        # ONCE -- no loop, no BPTT. See docs/diffusionblocks-plan-of-action.md.
-                        _db_step = build_db_step(_db, model, y)
-                        out = model(x, db_step=_db_step, db_precond=_db.precond)
-                        loss, _db_metrics = db_loss(out, _db_step, _db.precond, model)
-                    else:
-                        out = model(x, labels=y, bag_size=phase.bag_size,
-                                    slot_layout=_layout)
-                        loss = out["loss"]
-                        _db_metrics = None
+                    out = model(x, labels=y, bag_size=phase.bag_size,
+                                slot_layout=_layout)
+                    loss = out["loss"]
 
                 # Routing aux loss (load balance) — only active after route_start
                 if pruning.is_routed:
@@ -2231,7 +2110,7 @@ def main(cfg: DictConfig) -> None:
             _tok_per_row = float(seq_len)
             if out is not None and out.get("n_tokens") is not None:
                 _tok_per_row = max(float(out["n_tokens"]) / max(batch_size, 1), 1.0)
-            _ppt = _db.positions_per_token() if _db_active else 1.0
+            _ppt = 1.0
             _cpf = None
             if phase.tul_on and _layout is not None:
                 # TUL: the core runs on SLOT positions only -- that is where its win is.
@@ -2247,12 +2126,8 @@ def main(cfg: DictConfig) -> None:
                 step_time_s=1.0 / max(sps, 1e-9),
                 positions_per_token=_ppt, core_position_frac=_cpf,
                 ceiling_tflops=_ceiling,
-                db_mode=_db.model_cfg.mode if _db_active else None,
-                db_visit_probs=_db.schedule.visit_probs() if _db_active else None,
                 cum_tokens=_cum_tokens, cum_layer_passes=_cum_passes,
             ))
-            if _db_metrics is not None:
-                log.update(_db_metrics)
 
             if phase.tul_on:
                 # Boundary statistics (spec §4) + the layer-pass accounting (spec §2).
@@ -2336,21 +2211,11 @@ def main(cfg: DictConfig) -> None:
             if step % (20 if total_steps <= 400 else 200) == 0:
                 # flush: with stdout redirected to a log file this line otherwise sits in
                 # the 8KB block buffer for MINUTES — a healthy run reads as hung/dead.
-                # The DiffusionBlocks plan requires every speed claim to cite tok/s AND
-                # flop_proxy AND peak alloc together (MORPH is launch-bound, so any one of
-                # them alone is misleading). Put all three on the console line so a log file
-                # is self-sufficient and nobody has to reconstruct them from wandb.
-                # For a DB run `ppl` is meaningless (exp of a σ-conditioned reconstruction
-                # CE) and printing 485165195.4 every line is worse than printing nothing.
-                # Show plain CE against ln(vocab): at ln(V) the model knows nothing, and the
-                # gap is what it has actually learned.
-                if _db_metrics is not None:
-                    _second = (f"ce={_db_metrics.get('db/ce', float('nan')):.4f}"
-                               f"/lnV={math.log(int(cfg.model.vocab_size)):.2f}  "
-                               f"σ={_db_metrics.get('db/sigma_mean', 0):.3f}  "
-                               f"blk={_db_metrics.get('db/block_idx', -1)}  ")
-                else:
-                    _second = f"ppl={math.exp(min(loss.item(), 20.0)):.1f}  "
+                # Every speed claim has to cite tok/s AND flop_proxy AND peak alloc
+                # together (MORPH is launch-bound, so any one of them alone is misleading).
+                # Put all three on the console line so a log file is self-sufficient and
+                # nobody has to reconstruct them from wandb.
+                _second = f"ppl={math.exp(min(loss.item(), 20.0)):.1f}  "
                 print(
                     f"[{step:7d}/{total_steps}] loss={loss.item():.4f}  "
                     f"{_second}"
@@ -2366,8 +2231,7 @@ def main(cfg: DictConfig) -> None:
         if step % eval_every == 0 and step > 0:
             _val_extra: dict = {}
             val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
-                                         tul=phase.tul_on, extra=_val_extra,
-                                         db=_db if _db_active else None)
+                                         tul=phase.tul_on, extra=_val_extra)
             val_log: dict = {"val/loss": val_loss, "val/ppl": val_ppl}
             val_log.update(_val_extra)
 
@@ -2451,8 +2315,7 @@ def main(cfg: DictConfig) -> None:
     if eval_every <= total_steps:
         _val_extra = {}
         val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
-                                     tul=phase.tul_on, extra=_val_extra,
-                                     db=_db if _db_active else None)
+                                     tul=phase.tul_on, extra=_val_extra)
         _final = {"val/loss_final": val_loss, "val/ppl_final": val_ppl}
         _final.update({f"{k}_final": v for k, v in _val_extra.items()})
         wandb.log(_final, step=total_steps)

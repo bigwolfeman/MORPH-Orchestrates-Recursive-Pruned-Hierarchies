@@ -86,38 +86,25 @@ those 8 layers are not checkpointed, so A1 costs MORE activation memory while ru
 letting the batch size vary across a paired comparison — at 14 the arms match on
 tokens/step to 0.9 % (`tul/tokens_per_batch` is logged every 20 steps).
 
-## Planned — DiffusionBlocks (arXiv:2506.14202; pre-registration in [diffusionblocks-experiment-sheet.md](diffusionblocks-experiment-sheet.md))
+## Rejected — DiffusionBlocks (arXiv:2506.14202)
 
-Every row is PLANNED. **Nothing has run.** Expected numbers, metric contract, kill criteria and the
-per-block schedule-stretch mitigations live in the sheet — do not restate them here, and do not cite
-any row below as a result. Design rationale:
-[diffusionblocks-morph-assessment.md](diffusionblocks-morph-assessment.md).
+**Not planned, not running, not on this branch.** Thirteen arms were pre-registered here; the
+method was then tested to a verdict in a clean-room reference implementation and rejected. The
+MORPH implementation was removed from `master` on 2026-08-21 and parked on
+`park/db-master-line` (the wired-into-MORPH line) and `feat/db-objective-l2` (the later
+concat/L2/CE line). Verdict, numbers and what stays unverified:
+[`.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md`](../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md).
 
-| ID | Arm | Config / mechanism | Isolates | Status |
-| --- | --- | --- | --- | --- |
-| DB-0 | instrumentation gates | `perf/{layer_passes_per_token, positions_per_token, flop_proxy, model_tflops, mfu}` + measured GEMM ceiling | FLOP efficiency is unmeasurable today; `perf/mfu` does not exist | planned |
-| DB-1 | recurrent-depth, `B=1` | whole 4:6:4 net as one denoiser, single-pass training, T-step Euler inference | does the diffusion objective work on MORPH at all (the paper's literal Huginn setting) | planned |
-| DB-2 | block-wise, `B=3` | prelude \| core \| coda on MORPH's own seams; σ sampled continuously per block (mass 1/8 : 6/8 : 1/8, uniform 1/3 visits — inference alone discretises into 1+T+1 Euler steps); core conditioned on `x0` only | block independence, and whether the 320-dim ctx slice can carry the core's whole conditioning | planned |
-| DB-3 | `B=3` + TUL | DB-2 with `tul:` on; slot denoising target = next span's first token embedding | the TUL cross Wolfe asked for; the slot-target fork | planned |
-| DB-4 | `B=1` + TUL | DB-1 with `tul:` on | TUL cross on the cheaper conversion | planned |
-| DB-5 | `B=3`, prelude conditioning | core conditioned on a no-grad prelude forward | the 320-channel pipe (DB-2 − DB-5 measures how thin it is) | planned |
-| DB-6 | batch sweep | 14 → 20 → 24 → 28 on the best Phase-1 arm | turns the memory win into tok/s; A1 currently OOMs at 16 | planned |
-| DB-7 | overlap `γ` | `γ ∈ {0.0, 0.05, 0.1}` (their text default is 0.1) | block-boundary smoothing | planned |
-| DB-8 | `B=2` | prelude+core \| coda | Table 8's best cell was B=2 (FID 9.90 vs B=1's 12.09) | planned |
-| DB-9 | σ partition | equi-probability vs uniform | Table 7: 38.03 vs 43.53 FID — confirm it holds for text | planned |
-| DB-10 | T-c fallback | core not independent, `B=2` for TUL arms | rescues DB-3 if the slot target fails | planned |
-| DB-11 | σ-blend contraction ONLY | `h_k ← α h_{k-1} + (1−α) f(h_{k-1})`, `α<1`, **DB objective off** | the `ρ(J_core) ≤ 1` handle on its own, as a Task #276 cure. Keeps ordinary CE, so it lands on THIS ledger | planned |
-| DB-12 | block-visit distribution | uniform 1/3 vs mass-proportional 1/8 : 6/8 : 1/8 | whether starving prelude/coda to 1/8 of updates hurts. (Uniform visits are the paper's own rule, App. E.1; the design's actual departure is the unequal mass split — DB-9's axis) | planned |
-| DB-13 | inference step count | `T ~ Poisson(6)` vs fixed 4 / 8 / 16, **no retraining** | σ-conditioning makes the denoiser step-count agnostic, so test-time depth becomes a free dial (their AR setting used only 4) | planned |
+One line of it: at a matched 143.4M-token budget on a clean 124M Llama, plain next-token
+training reached held-out CE **4.0010**; the best DiffusionBlocks arm reached **5.0801** at
+sigma_max, and only **4.6740** after 4x the tokens. Generation, scored at matched output
+diversity, was 162 gen-PPL for AR against 326 for the best DB arm.
 
-**Poisson depth is preserved.** Training samples σ continuously and never sees T; only inference
-discretises, into `1 + T + 1` Euler steps with `T ~ Poisson(6)` capped 8. TUL's per-slot depth
-survives the same way. Sheet §3.3.
-
-**Metric warning.** DB arms cannot be compared to A0/A1 on `val/ppl_tokens` — DiffusionBlocks is
-not ELBO-derived, so its CE is σ-conditioned reconstruction, not a likelihood (paper App. E.4). The
-only legal cross-family metrics are gen-PPL(GPT2-XL), MAUVE and rep4@512, computed post-hoc. Sheet
-§1.3.
+**Metric warning, kept because it outlived the arms.** A DB arm cannot be compared to A0/A1 on
+`val/ppl_tokens`: DiffusionBlocks is not ELBO-derived, so its CE is sigma-conditioned
+reconstruction, not a likelihood (paper App. E.4). And generative PPL alone is not a quality
+score in either family -- a repetition loop scores better than real English, so it only means
+something next to a diversity measure. Both traps cost real analysis time.
 
 ## How to extend
 
