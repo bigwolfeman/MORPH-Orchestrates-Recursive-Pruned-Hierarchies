@@ -177,6 +177,6 @@ MORPH uses a stable snapshot plus research integration model. See `CONTRIBUTING.
 
 ## License
 
-Apache License 2.0. See `LICENSE`.
+GNU General Public License v3.0. See `LICENSE`.
 
 Vendored third-party components keep their own license notices, including `morph/sparse/stk/LICENSE`.
