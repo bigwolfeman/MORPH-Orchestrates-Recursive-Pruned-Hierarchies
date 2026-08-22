@@ -1,6 +1,6 @@
 # Agent Note: Diffusionblocks Checklist
 
-Status: proposed
+Status: rejected — the DiffusionBlocks campaign this checklist plans was run and lost; see [2026-08-21-diffusionblocks-verdict.md](../feature/2026-08-21-diffusionblocks-verdict.md)
 
 Origin: Ai-notes/diffusionblocks-checklist.md
 Imported: 2026-08-20. Pre-format working note; body is the original record.

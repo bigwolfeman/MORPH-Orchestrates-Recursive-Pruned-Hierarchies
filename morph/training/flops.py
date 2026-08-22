@@ -1,13 +1,10 @@
 """Analytic FLOP model and the throughput / FLOP-efficiency / VRAM metric keys.
 
-Gate A3 of ``docs/diffusionblocks-plan-of-action.md``. Metric contract:
-``docs/diffusionblocks-experiment-sheet.md`` §1.
-
 Why this file exists. Before it, MORPH could not report FLOP efficiency at all:
 ``perf/mfu`` did not exist and ``layer_passes_per_token`` was logged only when TUL was on.
-Comparing a DiffusionBlocks arm to A0 on tok/s alone is misleading, because MORPH is
-launch-bound — A0's step is ~16 % fixed overhead and a DB arm's is ~50-60 %. Every claim
-of "faster" has to cite tok/s AND flop_proxy AND peak memory together.
+Comparing two arms on tok/s alone is misleading, because MORPH is launch-bound — A0's step
+is ~16 % fixed overhead. Every claim of "faster" has to cite tok/s AND flop_proxy AND peak
+memory together.
 
 Why not ``torch.utils.flop_counter.FlopCounterMode``. It is blind to Triton. MORPH's fused
 attention, HC, GLA, decode and CE kernels are custom, so FlopCounterMode silently
@@ -172,9 +169,7 @@ class FlopModel:
         """Layer applications per INPUT token.
 
         Args:
-            depth: core iterations. ``mean_depth`` for the baseline's looped core;
-                **1.0** for a DiffusionBlocks training step, because the core is applied
-                ONCE — that single pass is the entire compute win.
+            depth: core iterations. ``mean_depth`` for the baseline's looped core.
             positions_per_token: ``L_total / (REAL TOKENS PER ROW)``. The prelude and coda
                 run on every position, so their cost scales with this.
                 **The denominator is real tokens, NOT ``seq_len``.** Without TUL they are
@@ -188,10 +183,7 @@ class FlopModel:
                 ``positions_per_token`` (the core sees everything the rest does). Under TUL
                 the core runs on slots ONLY, so it is ``n_slots / tokens_per_row`` — same
                 denominator caveat as above.
-            sections: which sections run. All three for the baseline and for ``mode="b1"``.
-                Exactly one under ``mode="b3"`` — use :meth:`db_expected_passes` to take the
-                expectation over the block-visit distribution instead of calling this once
-                per block.
+            sections: which sections run. All three for the baseline.
 
         Checks against the recorded anchors (ablation-ledger.md):
             A0  → 4·1 + 6·6·1 + 4·1                        = 44.0  (nominal, T̄=6)
@@ -210,38 +202,12 @@ class FlopModel:
             n += self.n_core * depth * core_position_frac
         return n
 
-    def db_expected_passes(self, visit_probs: list[float], depth: float = 1.0,
-                           positions_per_token: float = 1.0,
-                           core_position_frac: float | None = None) -> float:
-        """Expected layer applications per token for a DiffusionBlocks B=3 step.
-
-        One block runs per step (the authors sample one block per BATCH), so the per-step
-        cost is a random variable and the comparable number is its expectation over the
-        visit distribution.
-
-        With uniform visits, ``depth=1``, MORPH's 4:6:4 and no position inflation:
-        ``(4 + 6 + 4)/3 = 4.67``. With the concat conditioning (``positions_per_token=2``):
-        ``(8 + 12 + 8)/3 = 9.33``.
-        """
-        if len(visit_probs) != 3:
-            raise ValueError(
-                f"db_expected_passes is the B=3 form; got {len(visit_probs)} visit probs. "
-                f"For mode='b1' call layer_passes_per_token with all sections and depth=1.")
-        per_section = [
-            self.layer_passes_per_token(depth, positions_per_token, core_position_frac,
-                                        sections=(name,))
-            for name in self.ALL_SECTIONS
-        ]
-        return sum(p * c for p, c in zip(visit_probs, per_section))
-
     def flop_proxy(self, positions_per_token: float = 1.0,
                    core_position_frac: float | None = None) -> float:
         """The NOMINAL baseline proxy: the full net at ``T = mean_depth``.
 
         A0 (4:6:4, T=6, no TUL, no concat) = 44.0 exactly. This is the pre-registered
-        cross-arm anchor. For a DB arm use :meth:`db_expected_passes` (B=3) or
-        :meth:`layer_passes_per_token` with ``depth=1`` (B=1) — a DB step does not run a
-        looped core, so feeding ``mean_depth`` here would overstate it ~6×.
+        cross-arm anchor.
         """
         return self.layer_passes_per_token(
             float(self.mean_depth), positions_per_token, core_position_frac)
@@ -256,8 +222,8 @@ class FlopModel:
                    sections: tuple[str, ...] | None = None) -> tuple[int, int]:
         """``(total_flops, attn_flops)`` for one optimizer step.
 
-        ``sections`` restricts the count to the sections that actually ran — required for
-        ``mode="b3"``, where one block runs per step. Without it b1 and b3 reported the
+        ``sections`` restricts the count to the sections that actually ran. Without it
+        an arm that runs one section and one that runs all three reported the
         SAME TFLOPs, which would have made the B=3 arm look like it saved nothing.
 
         ``backward_multiplier=3.0`` is the standard forward+backward convention (1 forward
@@ -400,8 +366,6 @@ def perf_metrics(fm: FlopModel, *, batch: int, seq_len: int, step_time_s: float,
                  ceiling_tflops: float | None = None,
                  backward_multiplier: float = 3.0,
                  density: float = 1.0,
-                 db_mode: str | None = None,
-                 db_visit_probs: list[float] | None = None,
                  cum_tokens: float = 0.0,
                  cum_layer_passes: float = 0.0) -> dict:
     """The ``perf/*`` dict for one logging tick.
@@ -414,60 +378,36 @@ def perf_metrics(fm: FlopModel, *, batch: int, seq_len: int, step_time_s: float,
     if realized_depth is None:
         realized_depth = expected_clamped_poisson(float(fm.mean_depth), 1, fm.max_depth)
 
-    # A DiffusionBlocks step applies the core ONCE and (under b3) runs one section, so the
-    # baseline proxy would overstate it several-fold. Branch on the declared mode rather
-    # than inferring it, so a mislabelled run is a loud error and not a quiet wrong number.
-    if db_mode == "b3":
-        if not db_visit_probs:
-            raise ValueError("db_mode='b3' needs db_visit_probs")
-        proxy = fm.db_expected_passes(db_visit_probs, depth=1.0,
-                                      positions_per_token=positions_per_token,
-                                      core_position_frac=core_position_frac)
-        realized_passes = proxy          # depth is 1 by construction: nothing to realize
-        depth_for_flops = 1.0
-    elif db_mode == "b1":
-        proxy = fm.layer_passes_per_token(1.0, positions_per_token, core_position_frac)
-        realized_passes = proxy
-        depth_for_flops = 1.0
-    else:
-        proxy = fm.flop_proxy(positions_per_token, core_position_frac)
-        realized_passes = fm.layer_passes_per_token(
-            realized_depth, positions_per_token, core_position_frac)
-        depth_for_flops = realized_depth
+    proxy = fm.flop_proxy(positions_per_token, core_position_frac)
+    realized_passes = fm.layer_passes_per_token(
+        realized_depth, positions_per_token, core_position_frac)
+    depth_for_flops = realized_depth
 
     _sf = dict(batch=batch, seq_len=seq_len, depth=depth_for_flops,
                positions_per_token=positions_per_token,
                core_position_frac=core_position_frac,
                backward_multiplier=backward_multiplier, density=density)
-    if db_mode == "b3":
-        # One section runs per step, so the comparable figure is the expectation over the
-        # visit distribution — same reasoning as db_expected_passes.
-        parts = [fm.step_flops(sections=(name,), **_sf) for name in fm.ALL_SECTIONS]
-        total = int(sum(p * t for p, (t, _) in zip(db_visit_probs, parts)))
-        attn = int(sum(p * a for p, (_, a) in zip(db_visit_probs, parts)))
-    else:
-        total, attn = fm.step_flops(**_sf)
+    total, attn = fm.step_flops(**_sf)
     tflops = (total / step_time_s) / 1e12 if step_time_s > 0 else 0.0
 
     out = {
         # NOMINAL — the pre-registered, cross-arm comparable proxy. A0 = 44.0.
         "perf/flop_proxy": proxy,
         # ── Cross-arm alignment axes ────────────────────────────────────────
-        # db_b1 and db_b3 cost DIFFERENT amounts per step (proxy 14.00 vs 4.67), so a loss
-        # curve plotted against STEP compares equal DATA at unequal COMPUTE, and a curve
-        # against compute compares equal compute at unequal data. Neither alone is a fair
-        # read, so log both cumulative axes and report on both:
+        # Two arms can cost DIFFERENT amounts per step, so a loss curve plotted against
+        # STEP compares equal DATA at unequal COMPUTE, and a curve against compute compares
+        # equal compute at unequal data. Neither alone is a fair read, so log both
+        # cumulative axes and report on both:
         #   step-matched    -> same cum_tokens     (equal data seen)
         #   compute-matched -> same cum_layer_passes (equal work done)
-        # At proxy 4.67 vs 14.00, db_b3 needs 3.0x the steps of db_b1 for equal compute;
-        # against A0's 44.0 it needs 9.4x. Without these two counters that arithmetic has to
-        # be redone by hand for every comparison, which is how unfair tables get published.
+        # The spread is not small: a single-pass arm at proxy 4.67 needs 9.4x the steps of
+        # A0's 44.0 for equal compute. Without these two counters that arithmetic has to be
+        # redone by hand for every comparison, which is how unfair tables get published.
         "perf/cum_tokens": cum_tokens,
         "perf/cum_layer_passes": cum_layer_passes,
         # REALIZED — what the sampled depths actually produced. A0 ≈ 42.1. Equal to the
         # nominal proxy for a DB arm, where the core depth is 1 by construction.
         "perf/layer_passes_per_token": realized_passes,
-        "perf/db_mode": db_mode or "off",
         "perf/positions_per_token": positions_per_token,
         "perf/core_position_frac": core_position_frac,
         "perf/realized_depth": realized_depth,
