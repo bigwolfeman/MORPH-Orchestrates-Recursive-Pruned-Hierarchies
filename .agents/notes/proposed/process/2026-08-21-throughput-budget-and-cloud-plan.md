@@ -34,7 +34,7 @@ practical kernel headroom. The cost is FLOPs per token: the loop and the recompu
 
 | # | Lever | Expected | Class | Status |
 |---|---|---|---|---|
-| 1 | `ckpt_grad_iters=0` (no backward recompute of the 4 grad iterations) | ×1.2 (−17% executed FLOPs) | exact by config doc; the dropout-RNG-in-recompute caveat from the 07-03 notes must be harness-checked | gate running 2026-08-21 (`ignore/ckpt_gate*_2026-08-21.sh`); **OOM at batch 14 on the local 5090** (26 GB process + ~5 GB desktop), so locally it needs a smaller batch; see Measured follow-up below |
+| 1 | `ckpt_grad_iters=0` (no backward recompute of the 4 grad iterations) | **×1.21 measured** at equal batch | exact within the noise floor (control-run gated) | measured 2026-08-21, see A2; VRAM-gated: +0.61 GB per retained row-iteration |
 | 2 | Non-core region cut: profile the A3 arm, not A0. Targets: fused CE (a 201 MB fp32 `grad_w` per call), hybrid-embedding + Lorentz `lm_weight()` rebuild, int6 embed STE, HC expand/reduce, the 284M-param optimizer step | ×1.1–1.15 on the full step | mostly exact | not profiled |
 | 3 | TUL on (`tul_a1`) | **×1.6 measured** (28.1k tok/s, slightly better CE, `docs/tul-arms-result.md`) | validated on the 5090 arms; not validated with prune/carve/route | measured |
 | 4 | FP8 GEMMs on the ternary backbone. Ternary {−1,0,+1}×γ is exact in e4m3, so only activations are newly quantized. 5090 FP8 tensor rate is 2× bf16 | ≤ ×1.3 | B (numerics); `base.yaml` says ternary and FP8 are mutually exclusive per layer — a code constraint from the d768 era, not a math one | not built |
@@ -43,6 +43,31 @@ practical kernel headroom. The cost is FLOPs per token: the loop and the recompu
 
 Stacked without the loop budget: **×2.2** (1+2+3), **×2.8** with 4. Numbers 1, 2, 4 are
 estimates; 3 is measured.
+
+### A2. Lever 1 measured (2026-08-21, local 5090, `tul_short`, 150 steps, seed 0, `ignore/perf/ckptgate_*`)
+
+| batch | `ckpt_grad_iters` | step ms | tok/s | peak VRAM |
+|---|---|---|---|---|
+| 4 | −1 | 333 | 12,617 | 8.32 GB |
+| 4 | **0** | **274.5** | **14,991** | **18.07 GB** |
+| 8 | −1 | 528 | 15,211 | 13.28 GB |
+| 8 | 3 (last iter only) | 531 | 15,390 | 15.95 GB |
+| 14 | −1 | 950 | 15,300 | 20.58 GB |
+| 14 | 0 or 2 | OOM in compile warm-up (~25.8 GB process) | | |
+
+- **×1.21 at equal batch** when all 4 grad iterations are retained — matches the −17% FLOP estimate.
+- Cost: **0.61 GB per retained row-iteration** at seq 1024 (the 4-stream HC carrier). Retaining all 4
+  at batch 14 needs ~+22 GB; no 32 GB card fits it. At batch 4 the gain (×1.21) barely covers the
+  batch-size penalty (the batch-4 baseline is 17% slower per token than batch 14).
+- Retaining only the LAST iteration buys nothing: the last iter has the smallest active set, so it is
+  cheapest to retain and cheapest to recompute. The config comment calls this the "efficient
+  frontier"; it is backwards. Un-checkpointing must start from the FIRST grad iteration to pay.
+- **Exactness:** traces are not byte-identical, but an identical-baseline control diverges MORE
+  (max rel 2.9e-3 by step 11, 1.1e-1 by step 150) than `=0` does from the baseline (4.0e-4 by
+  step 11, 2.8e-2 by step 150). Exact within the atomics noise floor, as the config claims.
+- Conclusion: lever 1 is real but **VRAM-gated**. On 32 GB cards it pays only after the activation
+  footprint is cut (the memory half of lever 2: fused CE `grad_w`, router retention, HC carrier) or
+  at a per-GPU batch that costs as much as it gives. On 96 GB cards it is free.
 
 ### B. The pruning claim, stated honestly
 

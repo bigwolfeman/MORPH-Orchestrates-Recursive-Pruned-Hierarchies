@@ -46,7 +46,8 @@ clock at slightly better CE), NOT a latent-memory mechanism — the memory claim
 falsified by the stratified re-score in `docs/tul-arms-result.md`. `base.yaml` keeps
 `tul.activate_at: never`, which builds no TUL parameters at all.
 
-`docs/tul-spec.md` is the source of truth; `docs/figures/tul_overview.png` is the diagram;
+`docs/tul-spec.md` is the source of truth; `docs/figures/tul_mechanism.png` is the diagram
+(source: `docs/figures/architecture/tul_mechanism.tex`);
 `docs/references.md` §13 lists every paper a decision comes from. Read all three before
 touching the model for TUL. Short mental model:
 

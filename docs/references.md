@@ -709,11 +709,38 @@ deferred emission-path idea, orthogonal to TUL's claims.
 **Authors:** Hao, Sukhbaatar, Su, Li, Hu, Weston, Tian (Meta FAIR)  
 **Year:** 2024  
 **arXiv:** [2412.06769](https://arxiv.org/abs/2412.06769)  
+**Local:** [references/tul-latent-emission/2412.06769.md](references/tul-latent-emission/2412.06769.md)  
 **TUL uses:** the latent as an ATTENDED POSITION (thoughts enter as previous positions in
 the sequence and later tokens read them through the KV cache) — TUL's slots are positions
 for the same reason; loss masked on latent thoughts. Also the warning: without the
 language curriculum a slot with only downstream token loss learns nothing (14.4 vs No-CoT
 16.5 GSM8k).
+
+### Quiet-STaR
+
+**Title:** Quiet-STaR: Language Models Can Teach Themselves to Think Before Speaking  
+**Authors:** Zelikman, Harik, Shao, Jayasiri, Haber, Goodman  
+**Year:** 2024  
+**arXiv:** [2403.09629](https://arxiv.org/abs/2403.09629)  
+**Local:** [references/tul-latent-emission/2403.09629.md](references/tul-latent-emission/2403.09629.md)  
+**TUL uses:** think-before-speak on ordinary text — rationales inserted before tokens to
+improve future-token prediction (not QA-only CoT). Provenance for amortizing thought
+over upcoming content; TUL's slots play that role as punctuation-bounded span plans
+rather than per-token verbalized rationales.
+
+### AGCLR
+
+**Title:** Why Limit the Residual Stream to Layers and Not Tokens? Persistent Memory for
+Continuous Latent Reasoning  
+**Authors:** Farhan, Chaudhary  
+**Year:** 2026  
+**arXiv:** [2606.07720](https://arxiv.org/abs/2606.07720)  
+**Local:** [references/tul-latent-emission/2606.07720.md](references/tul-latent-emission/2606.07720.md)  
+**TUL uses:** Adaptive Gated Continuous Latent Reasoning — three learned gates (read /
+forget / write) on a persistent concept stream over Coconut-style latent passes. Named
+in the compaction-window discipline as the cautionary case where three constants were
+mistaken for a mechanism; informs why TUL prefers attended slot positions over an
+untargeted gated carry unless an arm proves otherwise.
 
 ### CODI / CCoT (latent chain-of-thought)
 
@@ -914,6 +941,8 @@ trajectory as an arm (`tul.stp_lambda`), zero parameters.
 | 41  | Blockwise Parallel Decoding (TUL)      | Stern, Shazeer, Uszkoreit (2018)          | [1811.03115](https://arxiv.org/abs/1811.03115)                                                                                                 |
 | 42  | Medusa (TUL, cited only)               | Cai et al. (2024)                         | [2401.10774](https://arxiv.org/abs/2401.10774)                                                                                                 |
 | 43  | Coconut (TUL)                          | Hao et al. (Meta FAIR, 2024)              | [2412.06769](https://arxiv.org/abs/2412.06769)                                                                                                 |
+| 43a | Quiet-STaR (TUL)                       | Zelikman et al. (2024)                    | [2403.09629](https://arxiv.org/abs/2403.09629)                                                                                                 |
+| 43b | AGCLR (TUL)                            | Farhan, Chaudhary (2026)                  | [2606.07720](https://arxiv.org/abs/2606.07720)                                                                                                 |
 | 44  | CODI (TUL)                             | Shen et al. (2025)                        | [2502.21074](https://arxiv.org/abs/2502.21074)                                                                                                 |
 | 45  | CCoT (TUL)                             | Cheng, Van Durme (2024)                   | [2412.13171](https://arxiv.org/abs/2412.13171)                                                                                                 |
 | 46  | Looped Transformers (TUL)              | Saunshi et al. (Google, 2025)             | [2502.17416](https://arxiv.org/abs/2502.17416)                                                                                                 |
