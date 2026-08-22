@@ -30,8 +30,9 @@ from .fused_ce import (
 )
 from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .sparsity import MortarLinear
-from .tul import (TULConfig, TULSlots, compact_index, cw2_retain_mask, gather_positions,
-                  gather_valid, scatter_positions, window_drop_mask)
+from .tul import (TULConfig, TULGate, TULGateConfig, TULSlots, compact_index,
+                  cw2_retain_mask, gather_positions, gather_valid, scatter_positions,
+                  window_drop_mask)
 from .tul_layout import SlotLayout
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
@@ -593,6 +594,12 @@ class MORPHTransformer(nn.Module):
         # the mechanism alone. E_slot is re-initialised from the live embedding table at the
         # activation step (Block Transformer §3.7) — see TULSlots.init_at_activation.
         self.tul: TULSlots | None = TULSlots(d, cfg.tul) if cfg.tul is not None else None
+        # The gate is built AFTER TULSlots for the same reason and with the same
+        # discipline: every one of its inits is a deterministic zero/one, so building it
+        # advances the RNG stream by nothing and arm TUL-gate's base weights are
+        # byte-identical to arm A1's (docs/tul-gate-spec.md §9 invariant 1).
+        _gc = cfg.tul.gate if cfg.tul is not None else None
+        self.tul_gate: TULGate | None = TULGate(d, _gc) if _gc is not None else None
 
         # Master kernel switch → drives the fused-Triton-vs-eager-reference
         # dispatch in the attention kernels (process-global flag). Set at build
@@ -1278,12 +1285,23 @@ class MORPHTransformer(nn.Module):
             d = torch.full(shape, int(mean_d), device=device, dtype=torch.long)
         return torch.where(layout.slot_valid, d, torch.ones_like(d))
 
-    def _tul_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout):
+    def _tul_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
+                  halt: bool = False):
         """Gather slots → masked per-slot depth loop → looped states (spec §3.3).
 
-        Returns ``(xn, h_slots, depths)``: ``xn = input_norm(prelude)`` for the whole
-        carrier (token positions keep it — the ``n_core == 0`` seed path, BLT Eq. 9),
-        and ``h_slots`` ``[B, max_slots, …]`` the looped state of each slot.
+        Returns ``(xn, h_slots, depths, g_traj)``: ``xn = input_norm(prelude)`` for the
+        whole carrier (token positions keep it — the ``n_core == 0`` seed path, BLT
+        Eq. 9), ``h_slots`` ``[B, max_slots, …]`` the looped state of each slot, the
+        realised per-slot ``depths``, and — when the gate is built — ``g_traj``
+        ``[B, max_slots, T]``, the gate output after EVERY iteration
+        (docs/tul-gate-spec.md §4). ``g_traj`` is a RETURN VALUE, never a side channel:
+        the ``ret_capture`` lesson is that a side channel is not checkpoint-safe.
+
+        ``halt`` (arm ``TUL-halt``, gate §7) replaces the Poisson depth with the gate's
+        own stop decision — a slot loops until it asks for ``k ≥ 1`` token, capped at
+        ``slot_max_depth``. EVAL ONLY: §4 teacher-forces the depth during training, so
+        ``TUL-gate`` and ``TUL-halt`` are one training run scored twice, which makes the
+        comparison exactly paired.
 
         Invariant 2 (runtime-invariants §6b): the depth is a MASKED UPDATE over the
         full compact slot sequence, never a per-position gather. The active-set
@@ -1312,8 +1330,20 @@ class MORPHTransformer(nn.Module):
                                         None, bg_s, h.dtype)
              for i in range(n_core)], dim=0)
 
-        depths = self._sample_slot_depths(layout, x.device)
-        total_iters = int(depths.max().item())
+        if halt:
+            if self.tul_gate is None:
+                raise RuntimeError("halt=True needs a model built with tul.gate (§7)")
+            if self.training:
+                raise RuntimeError(
+                    "halt=True is EVAL ONLY (docs/tul-gate-spec.md §4: training "
+                    "teacher-forces the depth). Scoring a training step with the gate "
+                    "driving the depth would make the LM loss chase the gate's error.")
+            total_iters = self.cfg.tul.slot_max_depth or self.cfg.max_depth
+            alive = layout.slot_valid.clone()
+            depths = torch.zeros_like(layout.slot_index)
+        else:
+            depths = self._sample_slot_depths(layout, x.device)
+            total_iters = int(depths.max().item())
         n_nograd = max(0, total_iters - self.cfg.bptt_depth)
         n_grad_iters = total_iters - n_nograd
         _ck = self.cfg.ckpt_grad_iters
@@ -1332,8 +1362,9 @@ class MORPHTransformer(nn.Module):
                                          ret_state=ret_state, iter_idx=iter_idx,
                                          inj_terms=inj_terms)
 
+        g_list: list[Tensor] = []
         for t in range(total_iters):
-            active = depths > t                                   # [B, S]
+            active = alive if halt else (depths > t)               # [B, S]
             do_ckpt = self.training and (t - n_nograd) < n_ckpt
             if t < n_nograd:
                 with torch.no_grad():
@@ -1359,10 +1390,34 @@ class MORPHTransformer(nn.Module):
                 _scale = torch.clamp(_tau * _in_n / (_out_n + 1e-6), max=1.0)
                 h_new = h_new * _scale.view(-1, *([1] * (h_new.dim() - 1)))
 
+            # ── gate readout (docs/tul-gate-spec.md §4) ────────────────────────
+            # OUTSIDE the checkpoint / no_grad block on purpose: it then shapes the core
+            # state on exactly the iterations inside the truncated-BPTT window and is a
+            # pure readout on the frozen ones — the same window the token loss uses —
+            # while the head itself (w, b, norm.scale) is supervised on EVERY iteration.
+            # Read off h_new, not the masked h: for an active slot they are equal, and
+            # the halting policy below needs this iteration's fresh state.
+            if self.tul_gate is not None:
+                g_t = self.tul_gate.readout(h_new)                 # [B, S]
+                g_list.append(g_t)
+
             h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
             if track_ret and rs_new is not None:
                 ret_state = rs_new
-        return xn, h, depths
+
+            if halt:
+                # A slot that asks for k ≥ 1 token has finished thinking (§7/§8). Slots
+                # that never ask keep the cap, so the generator cannot hang.
+                stop = alive & (self.tul_gate.choose_k(g_t) >= 1)
+                depths = torch.where(stop, torch.full_like(depths, t + 1), depths)
+                alive = alive & ~stop
+                if not bool(alive.any()):
+                    break
+        if halt:
+            depths = torch.where(depths > 0, depths, torch.full_like(depths, total_iters))
+            depths = torch.where(layout.slot_valid, depths, torch.ones_like(depths))
+        g_traj = torch.stack(g_list, dim=-1) if g_list else None   # [B, S, T]
+        return xn, h, depths, g_traj
 
     def _tul_half_weights(self, labels: Tensor, layout: SlotLayout):
         """``([N] row weights, t_last index, emit index)`` for the §5 double label.
@@ -1454,7 +1509,7 @@ class MORPHTransformer(nn.Module):
         return out
 
     def _forward_tul(self, input_ids: Tensor, labels: Tensor | None,
-                     layout: SlotLayout, plan_nats: bool) -> dict:
+                     layout: SlotLayout, plan_nats: bool, halt: bool = False) -> dict:
         """The TUL forward (docs/tul-spec.md §3). One shared position axis."""
         if self.tul is None:
             raise RuntimeError(
@@ -1474,6 +1529,11 @@ class MORPHTransformer(nn.Module):
 
         x, x0, bigram_emb = self._tul_front(input_ids, layout)
 
+        if tc.gate is not None and tc.tokens_through_core:
+            raise NotImplementedError(
+                "tul.gate has no defined interaction with arm A2 (tokens_through_core): "
+                "A2 has no per-slot looped state to read a length off. Not specified, so "
+                "this raises rather than silently picking a behaviour.")
         if tc.tokens_through_core:
             # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
             # RESOLVED SPEC AMBIGUITY — §7.1's A2 row says "Poisson/slot" in the depth
@@ -1481,9 +1541,13 @@ class MORPHTransformer(nn.Module):
             # the presence of slots ALONE (it isolates C2), so it reuses today's core
             # region unchanged; a per-position Poisson depth would change two things at once.
             x_coda = self._core_region(x, x0, bigram_emb, input_ids)
-            depths = None
+            depths, g_traj = None, None
         else:
-            xn, h_slots, depths = self._tul_core(x, x0, bigram_emb, layout)
+            xn, h_slots, depths, g_traj = self._tul_core(x, x0, bigram_emb, layout,
+                                                         halt=halt)
+            if self.tul_gate is not None:
+                budget_ids = self._tul_budget_ids(layout, depths, g_traj)
+                h_slots = self.tul_gate.apply_budget(h_slots, budget_ids)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
             x_coda = scatter_positions(xn, pos, values)
 
@@ -1518,6 +1582,23 @@ class MORPHTransformer(nn.Module):
             else:
                 out["ce_tokens_no_slots"] = groups["ce_main"]
 
+        if self.tul_gate is not None and g_traj is not None:
+            # `depths` here is the REALISED depth per slot — the Poisson draw in training
+            # and at fixed-depth eval, the gate's own stop index under `halt`. §6's target
+            # is defined against that, so the halting arm is scored on what it actually did.
+            _g = self.tul_gate.loss(g_traj, depths, layout) if layout.span_len is not None \
+                else {}
+            for _k, _v in _g.items():
+                out[f"gate/{_k}"] = _v
+            # The realised depth: the Poisson draw at fixed depth, the gate's own stop
+            # index under `halt`. This is what separates the two arms, so it is logged.
+            _vm = layout.slot_valid.float()
+            out["gate/depth_mean"] = (depths.float() * _vm).sum() / _vm.sum().clamp(min=1)
+            if groups is not None and self.cfg.tul.gate.lam > 0.0:
+                groups = dict(groups)
+                groups["loss_tokens"] = groups["loss"]
+                groups["loss"] = groups["loss"] + self.cfg.tul.gate.lam * _g["loss_gate"]
+
         if groups is not None:
             out.update(groups)
         else:
@@ -1526,6 +1607,11 @@ class MORPHTransformer(nn.Module):
             # index_fill is out-of-place, so this is safe under grad as well as no_grad.
             out["logits"] = self.embed.attend(xh).index_fill(
                 -1, torch.tensor([tc.slot_id], device=xh.device), float("-inf"))
+            if self.tul_gate is not None:
+                # The generator needs the model's OWN budget for each slot: how many
+                # tokens the plan it just built covers (§8). It is the same tensor the
+                # coda was conditioned on, never a second, separately-decoded one.
+                out["gate_k"] = budget_ids
         out["layer_passes"] = self._tul_layer_passes(layout, depths, coda_positions)
         out["n_tokens"] = (~layout.slot_mask).sum()
         return out
@@ -1540,6 +1626,33 @@ class MORPHTransformer(nn.Module):
                 drop = drop | window_drop_mask(layout.slot_mask, tc.coda_token_cut)
             return drop
         return window_drop_mask(layout.slot_mask, tc.coda_token_cut)
+
+    def _tul_budget_ids(self, layout: SlotLayout, depths: Tensor, g_traj: Tensor) -> Tensor:
+        """``[B, max_slots]`` token budget to condition the coda on (gate §4/§5/§9).
+
+        The layout carrying a length label IS the training/eval signal: teacher force the
+        REALISED length there, and use the model's OWN choice when it does not (generation,
+        where ``TulRowBuilder`` builds the layout and no label exists). Never a mixture —
+        mixing makes the LM loss chase the gate's error, and scheduled sampling is §12's
+        unbuilt key, not a silent default.
+        """
+        if layout.span_len is not None:
+            return layout.span_len
+        g_fin = g_traj.gather(2, (depths - 1).clamp(min=0).unsqueeze(-1)).squeeze(-1)
+        k = self.tul_gate.choose_k(g_fin).clamp(min=1)
+        return torch.where(layout.slot_valid, k, torch.zeros_like(k))
+
+    def tul_forward_halt(self, input_ids: Tensor, labels: Tensor | None,
+                         slot_layout: SlotLayout) -> dict:
+        """Eval-only: arm ``TUL-halt`` — the gate chooses each slot's loop depth (§7).
+
+        A separate entry point rather than a forward flag, following
+        :meth:`tul_forward_with_plan_nats`: the training path must not carry a branch that
+        decides how much work to do. Scoring the SAME checkpoint through this and through
+        the ordinary forward is the whole bake-off — §4 teacher-forces the depth, so the
+        two arms share every weight and the comparison is exactly paired.
+        """
+        return self._forward_single(input_ids, labels, 0, None, slot_layout, _halt=True)
 
     def _tul_coda_without_slots(self, x_coda, x0, bigram_emb, keep, labels, layout):
         """Run the coda on the TOKEN positions only (arm A4 and the plan-nats metric)."""
@@ -1594,7 +1707,10 @@ class MORPHTransformer(nn.Module):
                 "raises rather than silently picking a behaviour."
             )
         x, x0, bigram_emb = self._tul_front(input_ids, layout)
-        xn, h_slots, depths = self._tul_core(x, x0, bigram_emb, layout)
+        xn, h_slots, depths, g_traj = self._tul_core(x, x0, bigram_emb, layout)
+        if self.tul_gate is not None:
+            h_slots = self.tul_gate.apply_budget(
+                h_slots, self._tul_budget_ids(layout, depths, g_traj))
         values, pos = self.tul.prefix_project(h_slots, layout, layout.l_total)
         x_coda = scatter_positions(xn, pos, values)
         x_coda, keep = self.tul.apply_token_dropout(x_coda, layout, self.training)
@@ -1692,7 +1808,8 @@ class MORPHTransformer(nn.Module):
                         bag_size: int = 0,
                         seq_lens: Tensor | None = None,
                         slot_layout: SlotLayout | None = None,
-                        _plan_nats: bool = False) -> dict:
+                        _plan_nats: bool = False,
+                        _halt: bool = False) -> dict:
         if slot_layout is not None:
             if bag_size > 0:
                 raise ValueError(
@@ -1700,7 +1817,7 @@ class MORPHTransformer(nn.Module):
                     "TST switch (spec §5), and val/gen always run TUL on with bag_size 0 "
                     "(invariant 6)."
                 )
-            return self._forward_tul(input_ids, labels, slot_layout, _plan_nats)
+            return self._forward_tul(input_ids, labels, slot_layout, _plan_nats, halt=_halt)
         # ── Token-Superposition Training input bagging (TST, arXiv 2605.06546) ──
         # bag_size==0 → baseline path, BIT-IDENTICAL to pre-TST (and what eval/gen
         # always use). bag_size==s>0 → the superposition phase: input_ids arrives as

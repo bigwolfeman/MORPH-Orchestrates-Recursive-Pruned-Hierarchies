@@ -93,6 +93,7 @@ def evaluate(
     n_batches: int = 20,
     tul: bool = False,
     extra: dict | None = None,
+    halt: bool = False,
 ) -> tuple[float, float]:
     """Return (avg_loss, ppl) over n_batches validation steps.
 
@@ -131,6 +132,23 @@ def evaluate(
                     float(out["ce_tokens_no_slots"]) - ce_tok)
             acc.setdefault("val/layer_passes_per_token", []).append(
                 float(out["layer_passes"]) / max(float(out["n_tokens"]), 1.0))
+            for _k, _v in out.items():
+                if _k.startswith("gate/") and _v is not None:
+                    acc.setdefault(f"val/{_k}", []).append(float(_v.detach().mean()))
+            if halt:
+                # Arm TUL-halt (docs/tul-gate-spec.md §7/§11), on the SAME batch and the
+                # SAME weights as the row above: §4 teacher-forces the depth in training,
+                # so the two arms differ only in the depth policy at scoring time and the
+                # comparison is exactly paired — no second run, no seed noise.
+                out_h = _m.tul_forward_halt(x, y, layout)
+                _ceh = float(out_h["ce_tokens"])
+                acc.setdefault("val/halt_loss", []).append(out_h["loss"].item())
+                acc.setdefault("val/halt_ce_tokens", []).append(_ceh)
+                acc.setdefault("val/halt_ppl_tokens", []).append(math.exp(min(_ceh, 20.0)))
+                acc.setdefault("val/halt_depth_mean", []).append(
+                    float(out_h["gate/depth_mean"]))
+                acc.setdefault("val/halt_layer_passes_per_token", []).append(
+                    float(out_h["layer_passes"]) / max(float(out_h["n_tokens"]), 1.0))
             if layout.stats:
                 for k, v in layout.stats.items():
                     acc.setdefault(f"val/span_{k}", []).append(float(v))
@@ -158,8 +176,16 @@ def run_generation_test(
     step: int,
     n_tokens: int = 100,
     tul_rt=None,
-) -> str:
-    """Run a short greedy generation and return the text.
+) -> tuple[str, dict]:
+    """Run a short greedy generation and return ``(text, metrics)``.
+
+    The metrics are empty on the plain path and, on the TUL path, are the
+    docs/tul-gate-spec.md §10 generation numbers averaged over the prompts: rep4 /
+    distinct-3 (a repetition loop scores an EXCELLENT perplexity — 1.46 against real
+    text's 32.44 — so fluency is meaningless without diversity beside it), the realised
+    span geometry, and how often a span actually ended on a boundary rather than
+    spending the gate's whole budget. §5's teacher-forcing leak is invisible in val CE
+    by construction; this is where it shows.
 
     ``tul_rt`` set ⇒ sample through ``morph.inference.tul_generate`` so the slot layout
     is built by the SAME boundary rule the loader used (spec §6, invariant 1). That path
@@ -192,21 +218,28 @@ def run_generation_test(
     model.eval()
 
     if tul_rt is not None:
+        from morph.inference.gen_metrics import generation_metrics
         from morph.inference.tul_generate import generate_tul
         _m = getattr(model, "_orig_mod", model)
         spec = tul_rt.data_cfg.spec_for(seq_len)
+        rule = tul_rt.data_cfg.rule
+        per: list[dict] = []
         for prompt in prompts:
             ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
-            new, builder = generate_tul(_m, ids, tul_rt.data_cfg.rule, spec,
+            new, builder = generate_tul(_m, ids, rule, spec,
                                         max_new_tokens=n_tokens, temperature=0.8,
                                         top_k=50, seed=step, device=device)
             text = tokenizer.decode(ids + new, skip_special_tokens=True)
+            mt = generation_metrics(new, builder, rule)
+            per.append(mt)
             output_lines.append(
                 f"PROMPT: {prompt}\nOUTPUT: {text}\n"
-                f"[slots={builder.n_slots} mean_span="
-                f"{len(ids + new) / max(builder.n_slots, 1):.1f}]")
+                f"[slots={builder.n_slots} mean_span={mt['mean_span']:.1f} "
+                f"on_boundary={mt['boundary_frac']:.2f} rep4={mt['rep4']:.3f} "
+                f"distinct3={mt['distinct3']:.3f}]")
         model.train()
-        return "\n---\n".join(output_lines)
+        agg = {f"gen/{k}": float(sum(d[k] for d in per) / len(per)) for k in per[0]}
+        return "\n---\n".join(output_lines), agg
 
     for prompt in prompts:
         ids = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)[
@@ -228,7 +261,7 @@ def run_generation_test(
         output_lines.append(f"PROMPT: {prompt}\nOUTPUT: {text}")
 
     model.train()
-    return "\n---\n".join(output_lines)
+    return "\n---\n".join(output_lines), {}
 
 
 # ── Config → MORPHConfig ───────────────────────────────────────────────────────
@@ -1363,7 +1396,7 @@ def main(cfg: DictConfig) -> None:
         return iter(
             create_dataloader(tokenizer_name, dataset_name, seq_len, batch_size,
                               split="validation", skip_samples=50_000,
-                              tul=tul_rt.data_cfg if (tul_rt and tul_on) else None)
+                              tul=tul_rt.val_data_cfg if (tul_rt and tul_on) else None)
         )
 
     # val_loader is built below, from the SAME PhaseSchedule the training loop reads.
@@ -1523,6 +1556,11 @@ def main(cfg: DictConfig) -> None:
         _mm0 = getattr(model, "_orig_mod", model)
         _mm0.tul.init_at_activation(_mm0.embed.lm_weight())
         print("[TUL] layout ACTIVE from step 0; E_slot ← mean(embedding table)", flush=True)
+    # docs/tul-gate-spec.md §10. Pending until the first real batch: seating reads the
+    # corpus base rate off actual span lengths rather than a hardcoded constant, and the
+    # audit then refuses the run if the seated gate still cannot reach its targets.
+    _gate_pending = getattr(getattr(model, "_orig_mod", model), "tul_gate", None) is not None
+    _gate_alive_step = int(getattr(cfg.training, "gate_alive_check_step", 2000))
 
     def _rebuild_train_loader(skip_batches: int = 0):
         """The ONE way a train loader is built or rebuilt.
@@ -1854,6 +1892,18 @@ def main(cfg: DictConfig) -> None:
                 x, y = x.to(device), y.to(device)
                 _sg_shape = x.shape          # static-graph build uses the live shape
 
+            if _gate_pending and _layout is not None and _layout.span_len is not None:
+                from morph.training.gate_audit import audit_gate_travel, seat_gate_bias
+                _gm = getattr(model, "_orig_mod", model)
+                _gstats = seat_gate_bias(_gm.tul_gate, _layout)
+                # ‖z‖ at init is exact, not estimated: RMSNorm's scale starts at ones, so
+                # the normalised readout input has RMS 1 and L2 norm √d_model.
+                _gstats.update(audit_gate_travel(
+                    _gm.tul_gate, optimizer, _gstats, total_steps,
+                    z_norm=float(cfg.model.d_model) ** 0.5))
+                wandb.config.update({"gate_audit": _gstats}, allow_val_change=True)
+                _gate_pending = False
+
             # Accumulate the alignment axes BEFORE the forward so a mid-step crash still
             # leaves a consistent count. tokens = real input tokens this step; passes =
             # tokens x nominal proxy, i.e. cumulative layer applications.
@@ -2147,6 +2197,12 @@ def main(cfg: DictConfig) -> None:
                 for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
+                # docs/tul-gate-spec.md §10 — every step, because a gate that stops moving
+                # is only visible as a FLAT curve, and a curve sampled at eval_every is
+                # too coarse to tell "flat" from "converged".
+                for _k, _v in out.items():
+                    if _k.startswith("gate/") and _v is not None:
+                        log[_k] = float(_v.detach().mean())
 
             # Retention gate diagnostic (#230): sigmoid(ret_gate) per retention block — THE key
             # signal for whether the model actually USES the retention branch (gate opens from ~0)
@@ -2235,8 +2291,12 @@ def main(cfg: DictConfig) -> None:
         # ── Validation (every eval_every steps) ──────────────────────────
         if step % eval_every == 0 and step > 0:
             _val_extra: dict = {}
+            _gm_e = getattr(model, "_orig_mod", model)
+            _halt_eval = (phase.tul_on and _gm_e.tul_gate is not None
+                          and _gm_e.cfg.tul.gate.drives_depth)
             val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
-                                         tul=phase.tul_on, extra=_val_extra)
+                                         tul=phase.tul_on, extra=_val_extra,
+                                         halt=_halt_eval)
             val_log: dict = {"val/loss": val_loss, "val/ppl": val_ppl}
             val_log.update(_val_extra)
 
@@ -2248,21 +2308,57 @@ def main(cfg: DictConfig) -> None:
                             f"  plan_nats={_val_extra.get('val/plan_nats', float('nan')):+.4f}"
                             f"  cf={_val_extra.get('val/first_tok_counterfactual', float('nan')):+.4f}"
                             f"  lp/tok={_val_extra.get('val/layer_passes_per_token', float('nan')):.2f}")
+                if "val/gate/loss_gate" in _val_extra:
+                    # docs/tul-gate-spec.md §10: the numbers that separate a WORKING gate
+                    # from one sitting at a low loss emitting a constant. In the console,
+                    # not only in wandb — a dead gate must be visible while the run runs.
+                    _tul_msg += (
+                        f"\n              gate: loss={_val_extra['val/gate/loss_gate']:.4f}"
+                        f" sep={_val_extra.get('val/gate/gate_separation', float('nan')):+.4f}"
+                        f" k={_val_extra.get('val/gate/gate_k_mean', float('nan')):.2f}"
+                        f"/gold {_val_extra.get('val/gate/gate_gold_mean', float('nan')):.2f}"
+                        f" |err|={_val_extra.get('val/gate/gate_k_abs_err', float('nan')):.2f}"
+                        f" k0={_val_extra.get('val/gate/gate_k_zero_frac', float('nan')):.3f}"
+                        f" b={_val_extra.get('val/gate/gate_bias', float('nan')):+.3f}"
+                        f" |w|={_val_extra.get('val/gate/gate_w_norm', float('nan')):.3f}")
+                if "val/halt_ce_tokens" in _val_extra:
+                    # The bake-off's headline: the SAME weights under the two depth
+                    # policies (§11). Positive `Δ` = fixed depth wins, the pre-registered
+                    # prediction.
+                    _d = _val_extra["val/halt_ce_tokens"] - _val_extra.get(
+                        "val/ce_tokens", float("nan"))
+                    _tul_msg += (
+                        f"\n              halt: ce_tok={_val_extra['val/halt_ce_tokens']:.4f}"
+                        f" (Δ vs fixed {_d:+.4f})"
+                        f" depth={_val_extra.get('val/halt_depth_mean', float('nan')):.2f}"
+                        f" lp/tok={_val_extra.get('val/halt_layer_passes_per_token', float('nan')):.2f}")
             print(
                 f"  [VAL {step:7d}] loss={val_loss:.4f}  ppl={val_ppl:.2f}{_tul_msg}",
                 flush=True,
             )
             model.train()
 
+        # docs/tul-gate-spec.md §10: `w` starts at exactly zero and takes a gradient
+        # every step, so a norm still at the floor here means the parameter is frozen.
+        # Fail at step ~2k rather than score a 3-hour arm whose mechanism never engaged.
+        if step == _gate_alive_step:
+            _gm_a = getattr(model, "_orig_mod", model)
+            if _gm_a.tul_gate is not None and _gm_a.cfg.tul.gate.lam > 0.0:
+                from morph.training.gate_audit import assert_gate_is_alive
+                assert_gate_is_alive(_gm_a.tul_gate, step)
+
         # ── Generation test ───────────────────────────────────────────────
         if gen_every > 0 and step % gen_every == 0 and step > 0:
-            gen_text = run_generation_test(
+            gen_text, gen_metrics = run_generation_test(
                 model, device, tokenizer_name, seq_len, step,
                 tul_rt=tul_rt if phase.tul_on else None,
             )
-            wandb.log(
-                {"gen/sample": wandb.Html(f"<pre>{gen_text}</pre>")}, step=step
-            )
+            wandb.log({"gen/sample": wandb.Html(f"<pre>{gen_text}</pre>"), **gen_metrics},
+                      step=step)
+            if gen_metrics:
+                print("  [GEN] " + "  ".join(
+                    f"{k.split('/')[-1]}={v:.3f}" for k, v in sorted(gen_metrics.items())),
+                    flush=True)
             _emit_gen(f"step {step}", gen_text)
             model.train()
 
@@ -2328,14 +2424,17 @@ def main(cfg: DictConfig) -> None:
               + "".join(f"  {k}={v:.4f}" for k, v in sorted(_val_extra.items())))
 
     if gen_every > 0 or bool(getattr(tr, "gen_test", False)):
-        gen_text = run_generation_test(
+        gen_text, gen_metrics = run_generation_test(
             model, device, tokenizer_name, seq_len, total_steps, n_tokens=200,
             tul_rt=tul_rt if phase.tul_on else None,
         )
-        wandb.log(
-            {"gen/final": wandb.Html(f"<pre>{gen_text}</pre>")}, step=total_steps
-        )
+        wandb.log({"gen/final": wandb.Html(f"<pre>{gen_text}</pre>"),
+                   **{f"{k}_final": v for k, v in gen_metrics.items()}}, step=total_steps)
         _emit_gen(f"FINAL step {total_steps}", gen_text)
+        if gen_metrics:
+            print("  [GEN final] " + "  ".join(
+                f"{k.split('/')[-1]}={v:.3f}" for k, v in sorted(gen_metrics.items())),
+                flush=True)
 
     wandb.finish()
 

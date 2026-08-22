@@ -16,12 +16,103 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
+from .attention import RMSNorm
 from .tul_layout import SlotLayout
 
-__all__ = ["TULConfig", "TULSlots", "bag_mean", "compact_index", "cw2_retain_mask",
-           "gather_positions", "scatter_positions", "window_drop_mask"]
+__all__ = ["TULConfig", "TULGate", "TULGateConfig", "TULSlots", "bag_mean",
+           "compact_index", "cw2_retain_mask", "gather_positions", "scatter_positions",
+           "window_drop_mask"]
+
+
+@dataclass
+class TULGateConfig:
+    """Construction-time settings of the span-length gate (docs/tul-gate-spec.md).
+
+    Present ⇒ :class:`TULGate` is built and the layout must carry ``span_len`` /
+    ``len_supervised``. Absent (``TULConfig.gate is None``) ⇒ nothing is built, no
+    parameter exists, and the arm is arm A1 (spec §9 invariant 1).
+
+    Args:
+        k_max:        the regression DENOMINATOR: the head predicts ``span_len / k_max``
+                      and decodes ``k = round(g · k_max)``. It is deliberately allowed to
+                      exceed ``span_cap``, and the arms set it to ``1.25 × span_cap``.
+                      **Why:** measured on OpenWebText at ``span_cap`` 32, **24.5 %** of
+                      labels are a span of exactly 32, so with ``k_max = span_cap`` a
+                      quarter of the training signal sits on the target ``g = 1.0`` —
+                      an asymptote a sigmoid reaches only in the limit, with a gradient
+                      that vanishes as it approaches. Headroom moves the largest target
+                      to 0.8 (logit 1.39) and collapses the q10…q90 logit spread the
+                      audit must cover from 10.90 to 3.33.
+        k_decode_max: the largest ``k`` the model may ask for, ``= span_cap``. Without it
+                      the head could pick a budget above ``span_cap``, index a budget row
+                      no training example ever reaches, and silently condition the coda
+                      on a zero vector.
+        lam:          ``gate_lambda``, the weight of the length term in the total loss.
+                      1.0 is the predecessor's ``lambda_g`` (``coconut/tul/config.py:81``,
+                      the setting under which its gate reached p50 9 against gold p50 9).
+                      0.0 ⇒ the term is not added and the arm is bit-identical to A1.
+        budget_cond:  §5 — add ``budget_embed(span_len)`` to the slot state before the
+                      coda. False ⇒ the head's output changes nothing downstream, which
+                      is exactly the predecessor's configuration and why its length
+                      decision was never a trade-off.
+        huber_beta:   the Huber knee. 1.0 = the predecessor's ``delta`` default.
+        train_zeros: the ``k = 0`` ("keep thinking") half of the encoding: supervise ``g``
+                      toward 0 on every iteration before a slot's last. **Default False,
+                      and the reason is arithmetic, not taste.** The Poisson depth is
+                      independent of the input, so no head can know which iteration is the
+                      last one; the Bayes-optimal output at iteration ``t`` is then the
+                      HAZARD times the mean target, not the length. At ``mean_depth`` 6
+                      that is ``0.29 × 0.45 = 0.13`` at ``t = 5`` — the iteration a
+                      fixed-depth generation reads — i.e. ``k = 5`` against a true span of
+                      19. Measured on the 5090 at step 40 and step 120: ``k = 5.00`` and
+                      ``5.68`` against gold ``18.98`` / ``19.58``, matching the predicted
+                      table row for row. With the zeros off, the length is regressed at
+                      every iteration and the prediction is unbiased at any depth. The
+                      stop decision belongs in the separate head of §12, not multiplexed
+                      onto the same scalar.
+        drives_depth: §7 — the gate chooses the loop depth AT GENERATION/EVAL (arm
+                      ``TUL-halt``). Never affects training: §4 teacher-forces the depth,
+                      so ``TUL-gate`` and ``TUL-halt`` are ONE training run scored twice.
+    """
+
+    k_max: int = 32
+    k_decode_max: int = 0                # 0 → k_max
+    train_zeros: bool = False            # see the docstring; the measurement says False
+    lam: float = 0.0
+    budget_cond: bool = True
+    huber_beta: float = 1.0
+    drives_depth: bool = False
+    # Specified in §12 and NOT built. A silently-ignored key is worse than a missing one.
+    scheduled_sampling: float = 0.0
+    stop_head: bool = False
+    ponder_lambda: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.k_max < 1:
+            raise ValueError(f"tul.gate_k_max must be ≥ 1, got {self.k_max}")
+        if self.k_decode_max == 0:
+            self.k_decode_max = self.k_max
+        if not 1 <= self.k_decode_max <= self.k_max:
+            raise ValueError(
+                f"tul.gate_k_decode_max must be in [1, gate_k_max={self.k_max}], "
+                f"got {self.k_decode_max}")
+        if self.lam < 0.0:
+            raise ValueError(f"tul.gate_lambda must be ≥ 0, got {self.lam}")
+        if self.huber_beta <= 0.0:
+            raise ValueError(f"tul.gate_huber_beta must be > 0, got {self.huber_beta}")
+        for name, key in (("scheduled_sampling", "gate_scheduled_sampling"),
+                          ("ponder_lambda", "gate_ponder_lambda")):
+            if float(getattr(self, name)) != 0.0:
+                raise NotImplementedError(
+                    f"tul.{key}={getattr(self, name)} — specified in "
+                    f"docs/tul-gate-spec.md §12 and NOT implemented. Set it to 0.0.")
+        if self.stop_head:
+            raise NotImplementedError(
+                "tul.gate_stop_head — the split stop/length encoding of "
+                "docs/tul-gate-spec.md §7 is specified and NOT implemented. Leave it false.")
 
 
 @dataclass
@@ -47,6 +138,7 @@ class TULConfig:
     carry: bool = False                  # arm (§3.5)
     xattn: bool = False                  # arm (§3.5)
     bcast: bool = False                  # arm (§3.5)
+    gate: "TULGateConfig | None" = None  # docs/tul-gate-spec.md; None = arm A1 (nothing built)
     coda_token_cut: int = 0              # arm CW (docs/tul-compaction-window-spec.md) — drop
                                           # TOKEN positions with row index < C from the coda's
                                           # sequence; every slot stays regardless of its index.
@@ -338,3 +430,190 @@ class TULSlots(nn.Module):
         else:
             x = torch.where(drop[:, :, None], mask_vec, x)
         return x, keep
+
+
+class TULGate(nn.Module):
+    """The span-length gate: one scalar read off each slot's core state, and the
+    budget embedding that tells the coda how many tokens the plan covers.
+
+    docs/tul-gate-spec.md §4 (forward), §5 (why the coda must be told), §6 (loss),
+    §9 (invariants), §10 (instruments).
+
+    **Zero RNG draws at construction.** ``nn.Linear`` and ``nn.Embedding`` both draw from
+    the global generator in ``reset_parameters``; a model that drew them would advance the
+    RNG stream and change every later Poisson depth and dropout mask, so
+    ``gate_lambda = 0`` would NOT be bit-identical to arm A1 (§9 invariant 1). The head is
+    therefore a rank-1 linear written out as two zero parameters, and the budget table is a
+    plain zero ``Parameter`` addressed with ``F.embedding`` — mathematically identical to
+    ``nn.Linear(d, 1)`` and ``nn.Embedding(k_max+1, d)``, and deterministic. Constructed
+    LAST (after :class:`TULSlots`), the same convention that keeps the TUL parameters from
+    perturbing the baseline.
+
+    **What gradient reaches the core.** The readout runs on the core's output OUTSIDE the
+    checkpoint / ``no_grad`` block, so it shapes the core state exactly on the iterations
+    inside the truncated-BPTT window and is a pure readout on the frozen ones — the SAME
+    window the token loss uses. Every iteration still supervises the head itself (``w``,
+    ``b``, ``norm.scale``), so no slot's label is silently dead (a depth ≤ ``n_nograd``
+    slot would otherwise contribute nothing; that is ~28 % of slots at mean_depth 6).
+    """
+
+    def __init__(self, d_model: int, gate: TULGateConfig):
+        super().__init__()
+        self.gate = gate
+        self.norm = RMSNorm(d_model)                       # scale init = ones, no RNG
+        self.w = nn.Parameter(torch.zeros(d_model))        # ≡ nn.Linear(d,1).weight
+        self.b = nn.Parameter(torch.zeros(1))              # ≡ nn.Linear(d,1).bias
+        # Index 0 is the pad slot's budget and stays at zero-init unless a real span of
+        # length 0 exists, which the packer forbids (span_len is clamped to ≥ 1).
+        self.budget = nn.Parameter(torch.zeros(gate.k_decode_max + 1, d_model))
+
+    # -- readout -----------------------------------------------------------
+    def readout(self, h: Tensor) -> Tensor:
+        """``[B, S, (n,) C]`` slot state → ``[B, S]`` gate output ``g ∈ (0, 1)``.
+
+        The Hyper-Connection streams are collapsed by the MEAN, the same reduction the
+        LM head uses (:meth:`MORPHTransformer._readout`), so the gate reads the same
+        representation the rest of the model reads out. The norm is what makes the scalar
+        scale-free: the core state is pre-``final_norm`` and its magnitude drifts over
+        training, which would otherwise move ``g`` with no change in the length it means.
+        """
+        z = h.mean(dim=2) if h.dim() == 4 else h
+        z = self.norm(z.float())
+        return torch.sigmoid((z * self.w).sum(-1) + self.b)
+
+    def choose_k(self, g: Tensor) -> Tensor:
+        """``g`` → the integer budget ``round(g · k_max)``, clamped to ``[0, k_decode_max]``.
+
+        ``k = 0`` means "keep thinking" (§1). Callers that need a length — the generator —
+        clamp the low end to 1 themselves (§8); this does not, so the halting policy can
+        see the zero.
+        """
+        return (g * self.gate.k_max).round().clamp_(0, self.gate.k_decode_max).long()
+
+    # -- budget conditioning (§5) ------------------------------------------
+    def budget_term(self, span_len: Tensor) -> Tensor:
+        """``[B, S]`` int64 lengths → ``[B, S, C]`` additive term for the slot state."""
+        return F.embedding(span_len.clamp(0, self.gate.k_decode_max), self.budget)
+
+    def apply_budget(self, h_slots: Tensor, span_len: Tensor) -> Tensor:
+        """Add the budget embedding to the looped slot states before the coda (§4).
+
+        Broadcast over the Hyper-Connection stream axis, exactly as
+        :meth:`MORPHTransformer._apply_injection` broadcasts every other additive signal.
+        Zero-initialised, so at step 0 this is an exact no-op and the arm starts as A1.
+        """
+        if not self.gate.budget_cond:
+            return h_slots
+        term = self.budget_term(span_len).to(h_slots.dtype)
+        if h_slots.dim() == 4:
+            term = term.unsqueeze(2)
+        return h_slots + term
+
+    # -- bias seating (§10) ------------------------------------------------
+    @torch.no_grad()
+    def seat_bias(self, span_len: Tensor, valid: Tensor) -> float:
+        """Set ``b`` to ``logit(mean span_len / k_max)`` — the corpus base rate (§10).
+
+        The predecessor's gate had to TRAVEL to the base rate and never got there (bias
+        −2.00000 → −2.00071 against a required 1.88). Starting there costs one batch of
+        arithmetic and removes the failure mode. ``w`` is zero at init, so immediately
+        after this call the gate emits the base rate for every slot — the correct
+        constant predictor, and the floor that ``gate_separation`` is measured against.
+
+        Returns the seated bias, for the log line and the wandb config.
+        """
+        sel = valid & (span_len > 0)
+        n = sel.sum()
+        if n == 0:
+            raise ValueError("seat_gate_bias: the batch has no valid slot to seat from")
+        mean_len = (span_len * sel).sum().float() / n.float()
+        q = (mean_len / self.gate.k_max).clamp(1e-4, 1 - 1e-4)
+        self.b.fill_(float(torch.log(q / (1 - q))))
+        return float(self.b.item())
+
+    # -- loss + instruments (§6, §10) --------------------------------------
+    def loss(self, g_traj: Tensor, depths: Tensor, layout: SlotLayout,
+             want_metrics: bool = True) -> dict:
+        """``g_traj`` ``[B, S, T]`` + the realised depths → the §6 term and §10 numbers.
+
+        Default target (``train_zeros=False``): ``span_len / k_max`` on EVERY iteration a
+        slot is still looping. The head then predicts the length of the span it plans,
+        unbiased at whatever depth generation happens to read it.
+
+        ``train_zeros=True`` restores §6's original two-part target — zeros before the
+        slot's last iteration, the length on it. Kept as a switch because it is the
+        predecessor's shape, but it is not the default: the depth is a Poisson draw the
+        head cannot observe, so that target's optimum is the HAZARD, and the length is
+        multiplied away (see :class:`TULGateConfig`). Rows whose length came from OUR
+        truncation RNG are excluded from the length term either way (§6, §9).
+        """
+        if layout.span_len is None:
+            raise RuntimeError(
+                "the TUL gate is built but the layout carries no span_len; the loader was "
+                "built without a TulGateSpec (docs/tul-gate-spec.md §3.3).")
+        B, S, T = g_traj.shape
+        k_max = self.gate.k_max
+        t_idx = torch.arange(T, device=g_traj.device).view(1, 1, T)
+        last = (depths - 1).unsqueeze(-1)                        # [B, S, 1]
+        at_final = t_idx == last
+        before = t_idx < last
+        valid = layout.slot_valid.unsqueeze(-1)
+        sup = layout.len_supervised.unsqueeze(-1) & valid
+
+        alive = t_idx <= last                                    # still looping at t
+        tgt_len = (layout.span_len.float() / k_max).unsqueeze(-1)
+        if self.gate.train_zeros:
+            target = torch.where(at_final, tgt_len, torch.zeros((), device=g_traj.device))
+            mask = (sup & at_final) | (valid & before)
+        else:
+            target = tgt_len.expand_as(g_traj)
+            mask = sup & alive
+        per = F.smooth_l1_loss(g_traj, target, reduction="none", beta=self.gate.huber_beta)
+        denom = mask.sum().clamp(min=1)
+        out = {"loss_gate": (per * mask).sum() / denom, "n_gate": denom.float()}
+        if not want_metrics:
+            return out
+
+        # §10: a gate can sit at a tiny loss and still be dead. These are the numbers
+        # that tell the difference, and every one of them exists because the predecessor
+        # lost a ladder without it.
+        fin_m = (valid & at_final).float()
+        bef_m = (valid & before).float()
+        g_fin = (g_traj * fin_m).sum() / fin_m.sum().clamp(min=1)
+        g_bef = (g_traj * bef_m).sum() / bef_m.sum().clamp(min=1)
+        out["gate_g_final"] = g_fin
+        out["gate_g_before"] = g_bef
+        out["gate_separation"] = g_fin - g_bef            # a dead gate reads ~0 here
+        # per-iteration mean g over the slots still looping. Under train_zeros it IS the
+        # hazard curve (§7's table is the prediction, this the observation); with the
+        # zeros off it should be FLAT at E[span_len]/k_max, and a slope means the slot
+        # state's readable length drifts with depth.
+        al_v = alive & valid
+        out["gate_hazard"] = ((g_traj * al_v).sum(dim=(0, 1))
+                              / al_v.sum(dim=(0, 1)).clamp(min=1))        # [T]
+        # chosen k vs gold, over the supervised final-iteration slots. Masked with NaN
+        # and reduced with the nan-aware ops rather than boolean-indexed: `x[bool_mask]`
+        # has a data-dependent output shape, which forces a device→host sync EVERY step.
+        pick = sup & (at_final if self.gate.train_zeros else alive)
+        nan = torch.tensor(float("nan"), device=g_traj.device)
+        k_hat = torch.where(pick, self.choose_k(g_traj).float(), nan)
+        gold = torch.where(pick, layout.span_len.unsqueeze(-1).expand_as(g_traj).float(), nan)
+        out["gate_k_mean"] = k_hat.nanmean()
+        out["gate_k_p50"] = k_hat.nanmedian()
+        out["gate_gold_mean"] = gold.nanmean()
+        out["gate_gold_p50"] = gold.nanmedian()
+        out["gate_k_abs_err"] = (k_hat - gold).abs().nanmean()
+        out["gate_k_zero_frac"] = torch.where(pick, (k_hat == 0).float(), nan).nanmean()
+        # THE dead-gate number once the zeros are off: a constant predictor scores corr 0
+        # however low its loss is, which is precisely the state the predecessor shipped.
+        # gate_separation cannot serve that role here — with one target at every iteration
+        # it is ~0 BY DESIGN, not by failure.
+        kf = torch.where(pick, k_hat, nan)
+        gf = torch.where(pick, gold, nan)
+        km, gm = kf.nanmean(), gf.nanmean()
+        cov = ((kf - km) * (gf - gm)).nanmean()
+        sd = (kf - km).pow(2).nanmean().sqrt() * (gf - gm).pow(2).nanmean().sqrt()
+        out["gate_k_corr"] = cov / sd.clamp(min=1e-6)
+        out["gate_bias"] = self.b.detach().squeeze()
+        out["gate_w_norm"] = self.w.detach().norm()
+        return out

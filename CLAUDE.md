@@ -69,6 +69,17 @@ touching the model for TUL. Short mental model:
   MegaByte T7; Bowman T2; Hourglass T6). Never regress onto the slot state (LCM, CoCoMix, BT §4.2).
 - Arms and gates: `docs/ablation-ledger.md` "Planned — TUL"; invariants: `runtime-invariants.md` §6b
   (LIVE, each row names the test that fails when it breaks).
+- **The GATE** (`docs/tul-gate-spec.md`, invariants §6c, `--config-name tul_gate`): a
+  span-length head on each slot's core state plus a budget embedding into the coda, so the
+  model chooses how many tokens the next span covers. Self-supervised — the label is the
+  DATA's own span length, from the same boundary rule. Three things to know before touching
+  it: the label is the **NEXT** span's length (slot i sits after span i, so that is the only
+  span it can condition); `gate_k_max` (40) is the regression DENOMINATOR and deliberately
+  EXCEEDS `span_cap` (32), because 24.5 % of real labels are a capped span and would
+  otherwise sit on the sigmoid's asymptote; and `gate_train_zeros` is OFF because the
+  Poisson depth is unobservable, so a "0 until the last iteration" target converges to the
+  hazard and scales the length away (measured k=5.00 vs gold 18.98). `tul.gate: false`
+  builds nothing at all and draws no random number.
 - Lineage: successor of coconut's `tul/` + `ltd/` (fine-tunes/model surgery of Huggin; left behind).
 - The Thought Unpack Loop forces the loop to handle whole semantic thoughts that are then sequentially decoded similar to future lens. This reduces per token looping and improves ppl. It is much more flop efficient.
 

@@ -38,6 +38,9 @@ training:
   eval_every: 500
   n_eval_batches: 20
   ckpt_every: 5000
+  # docs/tul-gate-spec.md §10: the teacher-forcing leak is invisible in val CE, so every
+  # arm must also produce generation samples and their rep4 / distinct-3 / span geometry.
+  gen_every: 5000
 
 routing:
   route_start: 999999999      # never (no ReMoE)

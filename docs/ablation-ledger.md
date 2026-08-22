@@ -57,8 +57,8 @@ blank until a gate script exists under `ignore/`. Do not cite these as results.
 | TUL-stp | punc-STP on slot trajectory | `tul.stp_lambda > 0` | slot warm-up (Wolfe's punc-STP finding) | planned |
 | TUL-set | slot-set MCE warm-up | `tul.set_lambda > 0` | slot warm-up (TST MCE); Block Transformer §4.2 says aux on the latent hurt | planned |
 | TUL-prefix1 | prefix length 1 | `tul.prefix_k: 1` (default is 2, projection prefixes, Block Transformer App. F.2 / Fig 3f) | plan and first-token label forced onto one coda position | planned |
-| TUL-gate | span-length gate | `tul.gate_lambda > 0`, `gate_budget_cond: true`, loader `jitter_p`/`truncate_p` | does a model-chosen span length pay? ([tul-gate-spec.md](tul-gate-spec.md)) | planned |
-| TUL-halt | halting gate | `TUL-gate` + `tul.gate_drives_depth: true` | does variable depth pay on top? | planned |
+| TUL-gate | span-length gate | `--config-name tul_gate` (`tul.gate: true`, `gate_lambda: 1.0`, `gate_budget_cond: true`, `gate_truncate_p: 0.15`) | does a model-chosen span length pay? ([tul-gate-spec.md](tul-gate-spec.md)) | built 2026-08-22, running |
+| TUL-halt | halting gate | the SAME run: `gate_drives_depth: true` scores every eval a second time with the gate choosing each slot's depth (`val/halt_*`) | does variable depth pay on top? | built 2026-08-22, running |
 | TUL-A1+ | TUL reinvest | `n_coda: 8`, `tul.slot_mean_depth: 12` (≤ A0 layer-passes/token) | the fair-compute cell | planned |
 | TUL-xattn | cross-attn branch | `tul.xattn: true` (attach like retention) | BLT T7 vs Block Transformer Fig 3f | planned |
 | TUL-carry | explicit `W·h_{i-1}` | `tul.carry: true` | Coconut feedback vs attention-only memory | planned |
@@ -98,6 +98,23 @@ the `A1`/`A1r` retrain noise floor AND does not lose on the generation metrics (
 distinct-3, mean span length, fraction of spans ending on a boundary). A results note is
 written whether these arms win or lose — the predecessor missed both of its pre-registered
 numbers and never wrote one ([tul-gate-spec.md](tul-gate-spec.md) §2, §11).
+
+**Amendment 2026-08-22, still before any arm was scored.** Building the arms found the
+halting prediction is true *by construction*, and the reason is worth writing down rather
+than claiming as a result. The per-slot depth is a Poisson draw independent of the input,
+so a head trained to emit 0 until its last iteration converges to the HAZARD, and the
+length is scaled away — measured `k = 5.00` against gold `18.98`, matching the hazard
+table to the integer ([tul-gate-spec.md](tul-gate-spec.md) §6). With that half of the
+target removed (`gate_train_zeros: false`), `g` sits near the mean length, `k ≥ 1` fires
+on the first iteration, and `TUL-halt` halts at depth 1 everywhere. So `TUL-halt` is no
+longer a test of "is variable depth better"; it is the measured cost of running the loop
+ONCE, and the honest answer to "can one scalar carry both stop and length" — it cannot.
+The pre-registration stands, but the credit goes to the encoding argument, not to the run.
+
+**Bake-off, 2026-08-22:** `ignore/perf/gate_bakeoff.sh` — `tul_gate`, then `tul_a1`, then
+`tul_a1r`, sequentially on one 5090, all three with
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (measured necessary: without it
+`tul_gate` OOMs on the first backward with 8.17 GB reserved-but-unallocated).
 
 ## Rejected — DiffusionBlocks (arXiv:2506.14202)
 

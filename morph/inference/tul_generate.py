@@ -49,6 +49,8 @@ class TulRowBuilder:
     bag_id: list[int] = field(default_factory=list)
     slot_first: list[int] = field(default_factory=list)
     span_len: int = 0
+    budget: int = 0        # docs/tul-gate-spec.md §8: the model's own k for the OPEN span.
+                           # 0 = no gate, the punctuation rule alone decides (v1 behaviour).
 
     @property
     def n_slots(self) -> int:
@@ -68,7 +70,14 @@ class TulRowBuilder:
         self.slot_mask.append(False)
         self.bag_id.append(self.n_slots)          # the slot that will close this span
         cuts, self.span_len = self.rule.cut(np.array([token_id], dtype=np.int64), self.span_len)
-        if cuts.size == 0:
+        if cuts.size == 0 and 0 < self.budget <= self.span_len:
+            # The gate asked for `budget` tokens and the budget-th was not a boundary
+            # (docs/tul-gate-spec.md §8). Cut here anyway: the next span then starts
+            # mid-unit, which is exactly what the loader's end-truncated rows taught, and
+            # the rule restarts from this cut the same way it restarts from a real one —
+            # so a wrong k costs quality, never synchronisation.
+            self.span_len = 0
+        elif cuts.size == 0:
             return False
         if self.n_slots >= self.spec.max_slots:
             # Out of slot budget: the loader would end the row here (spec §3.1). Keep
@@ -118,6 +127,7 @@ def generate_tul(
     top_k: int = 0,
     seed: int | None = None,
     device=None,
+    halt: bool = False,
 ) -> tuple[list[int], TulRowBuilder]:
     """Generate ``max_new_tokens`` TOKENS (slots are inserted by the rule, not counted).
 
@@ -145,7 +155,16 @@ def generate_tul(
     try:
         for _ in range(max_new_tokens):
             ids, layout = builder.tensors(device)
-            logits = model(ids, slot_layout=layout)["logits"][0, -1].float()
+            # `halt` = arm TUL-halt (docs/tul-gate-spec.md §7/§8): each slot loops until
+            # the gate asks for a token instead of running the fixed mean depth.
+            res = (model.tul_forward_halt(ids, None, layout) if halt
+                   else model(ids, slot_layout=layout))
+            logits = res["logits"][0, -1].float()
+            if "gate_k" in res and builder.n_slots > 0:
+                # The newest slot's plan covers the span we are about to emit (§8). Read
+                # it fresh every step: the whole row is recomputed, so this IS the value
+                # the coda was conditioned on for these positions.
+                builder.budget = int(res["gate_k"][0, builder.n_slots - 1])
             if temperature <= 0.0:
                 nxt = int(logits.argmax())
             else:

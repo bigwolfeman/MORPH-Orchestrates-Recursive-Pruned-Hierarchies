@@ -90,6 +90,9 @@ model:
   retention_gate_bias: 2.0       # GLA forget-gate logit bias (α near 1 = long memory)
 
 training:
+  # docs/tul-gate-spec.md §10: fail the run if the gate direction is still at its zero
+  # init by this step (⇒ the parameter is frozen and the gate emits a constant).
+  gate_alive_check_step: 2000
   steps: 100000
   batch_size: 4
   # Applied at train start (Python/torch/numpy RNG) before model build or data.
@@ -309,6 +312,41 @@ tul:
   xattn: false             # arm: per-layer cross-attention branch to the slots
   bcast: false             # arm: AU-Net broadcast-add of h_i over the next span's tokens
   fixed_stride: 0          # >0 = arm TUL-A5: a slot every N tokens, punctuation rule off
+  # ── The span-length gate (docs/tul-gate-spec.md). `gate: false` builds NOTHING:
+  # no parameter, no layout field, no random draw — the arm is TUL-A1 (§9 invariant 1).
+  gate: false              # true = arms TUL-gate / TUL-halt
+  gate_k_max: 40           # the regression DENOMINATOR (k = round(g·k_max)), NOT the
+                           # largest k: the model never asks for more than span_cap.
+                           # 1.25 × span_cap on purpose. Measured on OWT at span_cap 32,
+                           # 24.5 % of labels are a span of exactly 32 — with k_max = 32
+                           # a quarter of the signal would sit on the target g = 1.0,
+                           # which a sigmoid never reaches. The headroom puts the largest
+                           # target at 0.8 and cuts the q10…q90 logit spread the gate must
+                           # cover from 10.90 to 3.33.
+  gate_lambda: 1.0         # weight of the length term. 1.0 = the predecessor's lambda_g
+                           # (coconut/tul/config.py:81), the setting its gate worked under.
+  gate_train_zeros: false  # §6 AMENDED. true = also supervise g→0 on every iteration
+                           # before a slot's last (the "k=0, keep thinking" half of the
+                           # encoding). OFF, and the reason is arithmetic: the Poisson
+                           # depth is independent of the input, so no head can know which
+                           # iteration is the last — the optimum of that target is the
+                           # HAZARD, which multiplies the length away. Measured: k=5.00
+                           # against gold 18.98 at step 40, matching the hazard table to
+                           # the integer. Stop belongs in the separate head of §12.
+  gate_budget_cond: true   # §5: add budget_embed(span_len) to the slot state before the
+                           # coda. false reproduces the predecessor's defect (the decoder
+                           # was never told k), and is the ablation that isolates §5.
+  gate_truncate_p: 0.15    # §3.2: per-span probability of an extra RNG boundary. Teaches
+                           # the coda to stop on a BUDGET rather than on punctuation, and
+                           # makes the next span start mid-unit (§3.1's jitter, same knob).
+  gate_huber_beta: 1.0     # the Huber knee; 1.0 = the predecessor's delta default
+  gate_drives_depth: false # true = arm TUL-halt. EVAL ONLY — training always teacher-forces
+                           # the depth (§4), so one run scores both arms.
+  gate_seed: 0             # seeds the truncation rng; in the config so the run reproduces
+  # §12: specified and NOT implemented. A non-default value RAISES.
+  gate_scheduled_sampling: 0.0
+  gate_stop_head: false
+  gate_ponder_lambda: 0.0
 
 data:
   # datasets>=4.x dropped script datasets; load from locally-cached OWT arrow shards instead.

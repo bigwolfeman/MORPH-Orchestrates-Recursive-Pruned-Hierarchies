@@ -150,6 +150,28 @@ was deliberately broken and the named test observed to go red.
 | `slot_layout=None` is bit-identical to today's forward, and building the TUL parameters does not perturb the baseline. | The TST phase and every pre-TUL checkpoint must reproduce. VERIFIED against `b268ba3`: loss, every parameter and every gradient `torch.equal`, with and without `MORPHConfig(tul=...)` (all three TUL inits are deterministic and constructed last, so zero RNG draws move). `test_tul_params_do_not_perturb_the_plain_path`. |
 | A config key for an unimplemented arm RAISES; it is never silently ignored. | `tul.stp_lambda`, `tul.set_lambda`, `tul.carry`, `tul.xattn`, `tul.bcast` are specified (§3.5) but not built. `test_unimplemented_arm_keys_raise`. |
 
+## 6c. TUL gate invariants (LIVE — see `tul-gate-spec.md` §9)
+
+Built 2026-08-22. `pytest tests/` → 189 pass; the named tests are in
+`tests/test_tul_gate.py`, one per row. Every row was mutation-checked: the code was
+deliberately broken and the named test observed to go red (15 mutations, 15 caught).
+
+| Invariant | Why / the test that fails |
+| --- | --- |
+| **`tul.gate: false` builds NOTHING** — no parameter, no layout field, no random draw — and `gate_lambda = 0` with `gate_budget_cond = false` is bit-identical to arm A1: same loss, same gradients. | `nn.Linear`/`nn.Embedding` draw from the global RNG in `reset_parameters`; a draw would advance the stream and change every later Poisson depth and dropout mask. The head is therefore a rank-1 linear written as two zero parameters and the budget table a zero `Parameter`. `test_building_the_gate_draws_no_random_number`, `test_lambda_zero_and_no_budget_cond_is_bit_identical_to_a1`, `test_gate_off_leaves_the_packer_byte_identical`. |
+| **A loss now touches the slot core state, and §6b's "slot core states have no loss" is narrowed on purpose.** A scalar/discrete READOUT is allowed; a vector regression onto a target representation stays forbidden. | The §6b citation set (MegaByte, H-Net, LD4LG, Pred-Sent, the LTD think-position failure, Block Transformer §4.2) is about reconstructing the latent, not reading a scalar off it. Tested structurally, not asserted: `test_the_gate_reads_a_scalar_and_regresses_nothing_vector_valued`. |
+| The length label is the **NEXT** span's length, not the slot's own. | Slot i sits after span i, so causal attention lets it condition only span i+1 — the span generation asks it about. Grading span i would read out the past. `test_the_label_is_the_NEXT_span_length`. |
+| `span_len` is 0 and `len_supervised` is False at every pad slot, and pad slots contribute exactly zero to the gate loss. | A pad slot's `slot_index` is 0, so a missing validity mask trains on row 0's first span — the existing §6b pad-slot trap. `test_pad_slots_carry_no_label`, `test_pad_slots_contribute_exactly_zero_to_the_gate_loss`. |
+| An RNG-truncated slot, and the row's last slot, are conditioned on their realised length but never GRADED on it. | The truncation point and the row boundary are ours, not the data's. Grading a length head on them is label noise. `test_an_rng_truncated_span_is_not_graded`, `test_an_unsupervised_slot_supervises_the_zeros_but_not_the_value`. |
+| No label lands on the sigmoid's asymptote: `gate_k_max > span_cap`, and the decoded `k` is clamped to `span_cap`. | Measured: at `k_max = span_cap` **24.5 %** of real labels are exactly 1.0, where the gradient vanishes. A decoded `k` above `span_cap` would index a budget row no example ever trains and hand the coda a zero vector. `test_no_label_lands_on_the_sigmoid_asymptote`, `test_choose_k_never_exceeds_the_rule_s_span_cap`, `test_the_open_tail_label_is_clamped_to_span_cap_not_to_k_max`. |
+| The coda gets the **realised** length in training and the **predicted** length at generation, never a mixture. The layout carrying a label IS the switch. | Mixing makes the LM loss chase the gate's error. Scheduled sampling is §12's unbuilt key and RAISES. `test_training_uses_the_realised_length_and_generation_the_predicted_one`. |
+| `g_traj` leaves the core region as a RETURN VALUE, and the readout runs OUTSIDE the checkpoint. | The `ret_capture` lesson: a side channel is not checkpoint-safe. Outside the checkpoint the gate shapes the core on exactly the truncated-BPTT window the token loss uses, and the head is still supervised on the frozen iterations — otherwise the ~28 % of slots whose depth falls inside that window would have no gradient at all. `test_the_gate_gradient_reaches_the_core_inside_the_bptt_window`. |
+| Truncation is a pure INSERTION: both halves clear `min_span`, and restarting the rule at an inserted cut still yields the same next DATA boundary. | This is what makes a wrong `k` at generation cost one span's quality instead of desynchronising every later span in the row. `test_truncation_is_consistent_with_the_rule`, `test_both_halves_of_a_truncation_clear_min_span`, `test_a_forced_cut_leaves_the_rule_in_the_same_state_as_a_real_one`. |
+| Every gate parameter is in the optimizer's **no-decay** group, and the run REFUSES to start if any gate parameter is missing from the optimizer, sits at `lr = 0`, or has a smaller travel budget than its targets need. | Weight decay on a zero-init readout direction pulls against the only gradient it has. The predecessor lost a whole ladder to a bias that moved 0.04 % of what it needed, with nothing in the run saying so. `test_the_gate_lands_in_the_no_decay_optimizer_group`, `test_the_audit_refuses_a_gate_that_is_not_in_the_optimizer`, `test_the_audit_refuses_a_step_budget_too_small_to_move_the_gate`, `test_a_frozen_gate_direction_fails_the_alive_check`. |
+| Val runs the DATA's segmentation: `gate_truncate_p` is 0 on the val loader whatever the train loader uses. | A val CE that moves with our augmentation seed is not comparable to the reference arm's. |
+| `gate_drives_depth` is EVAL ONLY and caps at `slot_max_depth`; every slot emits `k ≥ 1`. | Training teacher-forces the depth (§4), so the two arms are one checkpoint scored twice. A slot that never halts must not hang the generator. `test_halt_is_eval_only`, `test_halt_depths_stay_inside_one_and_max_depth`, `test_halt_and_fixed_depth_share_every_weight`. |
+| A config key for an unimplemented gate arm RAISES. | `gate_scheduled_sampling`, `gate_stop_head`, `gate_ponder_lambda` are specified (§12) and not built. `test_unimplemented_gate_keys_raise`. |
+
 ## 7. What not to “fix”
 
 - Removing process-global `force_eager` without a per-module replacement that
@@ -159,6 +181,10 @@ was deliberately broken and the named test observed to go red.
 - Calling `carve()` while density is still ~1.0 (produces a “sparse” model with
   K/C=1.0).
 - Silent fallbacks when a kernel, dataset path, or checkpoint topology fails.
+- Turning `tul.gate_train_zeros` back on because "the predecessor did it that way": the
+  per-slot depth is a Poisson draw the head cannot observe, so that target's optimum is
+  the hazard and the length is scaled away (measured `k = 5.00` against gold `18.98`;
+  `tul-gate-spec.md` §6).
 - Reverting `@kernel_fence` to hard `@torch.compiler.disable` (kills graph
   composition), or flipping `MORPH_DYNAMO_FENCE=0` into the default without an
   fp32 parity gate on the target torch version.

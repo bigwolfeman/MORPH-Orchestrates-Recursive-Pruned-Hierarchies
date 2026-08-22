@@ -1,0 +1,22 @@
+# TUL arm TUL-gate (docs/tul-gate-spec.md §11, docs/ablation-ledger.md).
+# Run: PYTHONPATH=$PWD python -m morph.training.train --config-name tul_gate
+#
+# Everything is tul_a1.yaml — same 20k × 14 × 1024 schedule, same max_slots 64, same
+# dense/TST-off recipe — so the ONLY difference from the reference arm is the gate:
+# a length head on each slot's core state, a budget embedding into the coda, and the
+# span truncation that stops the budget from being a punctuation oracle.
+#
+# Arm TUL-halt is NOT a separate run. §4 teacher-forces the loop depth during training,
+# so the halting policy changes nothing about the weights — set gate_drives_depth: true
+# and every eval additionally scores the SAME checkpoint with the gate choosing each
+# slot's depth (val/halt_*). One run, two arms, exactly paired.
+defaults:
+  - tul_a1
+  - _self_
+
+tul:
+  gate: true
+  gate_drives_depth: true   # ALSO score arm TUL-halt at every eval (adds one val pass)
+
+wandb:
+  name: tul-gate

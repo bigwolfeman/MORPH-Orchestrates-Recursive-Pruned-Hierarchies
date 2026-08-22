@@ -150,7 +150,7 @@ def test_forward_coda_token_cut_zero_is_bit_identical_to_the_pre_cw_branch():
 
     with torch.no_grad():
         xf, x0f, bgf = m._tul_front(x, layout)
-        xn, h_slots, _depths = m._tul_core(xf, x0f, bgf, layout)
+        xn, h_slots, _depths, _g = m._tul_core(xf, x0f, bgf, layout)
         values, pos = m.tul.prefix_project(h_slots, layout, layout.l_total)
         x_coda = scatter_positions(xn, pos, values)
         x_coda, keep = m.tul.apply_token_dropout(x_coda, layout, m.training)
