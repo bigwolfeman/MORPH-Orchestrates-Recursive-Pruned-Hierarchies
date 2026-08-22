@@ -1706,7 +1706,12 @@ def main(cfg: DictConfig) -> None:
             for _sort, _suffix in (("self_cuda_time_total", ".kernels.txt"),
                                    ("self_cpu_time_total", ".cpu.txt")):
                 with open(_prof_prefix + _suffix, "w") as _pf:
-                    _pf.write(_prof.key_averages().table(sort_by=_sort, row_limit=80))
+                    # max_name_column_width: the default (55) truncates every templated
+                    # CUDA kernel name to "void at::native::vectorized_elementwise_kernel<4, at...",
+                    # which makes the table useless for attribution — the elementwise kernels are
+                    # distinguished only by the functor in the truncated tail.
+                    _pf.write(_prof.key_averages().table(sort_by=_sort, row_limit=120,
+                                                        max_name_column_width=160))
             print(f"[prof] kineto stop @ step {step} → {_prof_prefix}.json/.kernels.txt/.cpu.txt",
                   flush=True)
             _prof = None
