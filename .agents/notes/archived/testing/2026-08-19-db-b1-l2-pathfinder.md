@@ -1,6 +1,7 @@
 # Agent Note: Db B1 L2 Pathfinder
 
-Status: rejected — the arm ran and the objective was later rejected outright; see [2026-08-21-diffusionblocks-verdict.md](../feature/2026-08-21-diffusionblocks-verdict.md)
+Status: implemented
+Archived: 2026-08-21
 
 Origin: Ai-notes/08-19-2026/DB-B1-L2-Pathfinder/RESULT.md
 Imported: 2026-08-20. Pre-format working note; body is the original record.

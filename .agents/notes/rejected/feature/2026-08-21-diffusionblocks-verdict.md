@@ -1,5 +1,6 @@
 # Agent Note: DiffusionBlocks on MORPH — verdict
 Status: rejected — it replaces next-token prediction with denoising, and denoising loses: 4.0010 CE for AR against 5.0801 for the best DB arm at a matched budget, and 162 vs 326 gen-PPL at matched output diversity
+Supersedes: [2026-08-19-diffusionblocks-checklist.md](2026-08-19-diffusionblocks-checklist.md) (the campaign plan, now rejected) and [archived/testing/2026-08-19-db-b1-l2-pathfinder.md](../../archived/testing/2026-08-19-db-b1-l2-pathfinder.md) (the arm's result, archived 2026-08-21)
 
 ## Problem
 
@@ -137,6 +138,12 @@ control, and that is a property of the method rather than of our build.
   files, all of which a reader has to route around forever. Parked branches cost nothing.
 
 ## Consequences
+
+Two older notes are settled by this one. `2026-08-19-diffusionblocks-checklist.md` planned the
+campaign and moves to `rejected/` with the reason on its `Status:` line; the campaign it plans
+will not be run. `2026-08-19-db-b1-l2-pathfinder.md` recorded an arm that DID run, so it is
+archived rather than rejected — a result is not a declined decision — and is frozen under
+`archived/testing/`.
 
 The implementation is removed from `master` and preserved in three places:
 

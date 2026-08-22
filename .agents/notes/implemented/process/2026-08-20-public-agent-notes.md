@@ -8,7 +8,7 @@ Decision writeups lived under gitignored `Ai-notes/` (a symlink into the private
 
 ## Decision
 
-Decision records are committed at `.agents/notes/{lifecycle}/{class}/yyyy-mm-dd-slug.md`. Format and class set are in [.agents/notes/README.md](../../../README.md). `python scripts/verify_template.py` gates path, Status, and (for new notes) required headings.
+Decision records are committed at `.agents/notes/{lifecycle}/{class}/yyyy-mm-dd-slug.md`. Format and class set are in [.agents/notes/README.md](../../../../README.md). `python scripts/verify_template.py` gates path, Status, and (for new notes) required headings.
 
 Historical `Ai-notes/` markdown was imported in place with an `Origin: Ai-notes/…` line and the original body. Imported files are not format exemplars. New notes must not use `Origin:`.
 
