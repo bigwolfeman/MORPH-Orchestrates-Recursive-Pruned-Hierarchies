@@ -233,6 +233,31 @@ class MORPHConfig:
     core_gain_clip: float = 0.0
 
 
+def _carrier_dtype(ref: Tensor) -> torch.dtype:
+    """Dtype the ``[B, S, n, C]`` residual carrier is transported in.
+
+    Under autocast this is the autocast dtype. Every consumer of the carrier — the
+    attention projections, the MLPs, the HC mix — is an autocast-eligible op that casts
+    its input to that dtype anyway, so an fp32 carrier buys NO precision. It only pays
+    two extra bytes per element of LIVE activation (252 MiB per copy at batch 14 ×
+    1152 × 1024, and the loop keeps ``bptt_depth`` of them plus one per prelude/coda
+    layer) and a full-size cast on every read. Outside autocast this returns the
+    reference tensor's own dtype, so fp32 eval and the tests are bit-identical.
+
+    Precision floor is bf16, not lower. ``lorentz_fraction`` of the channels are Lorentz
+    tangent coordinates, but the manifold math (``_project_to_hyperboloid``,
+    ``_log_map_origin``) runs on fp32 parameters inside ``lm_weight()`` and autocast
+    leaves it there — only the TRANSPORT of the resulting tangent vector becomes bf16.
+
+    Measured 2026-08-22 on ``tul_gate`` at batch 14 / seq 1152 / pinned depth 6:
+    peak 24.962 GB → 22.129 GB and 1286.1 → 1153.9 ms/step. See
+    ``.agents/notes/proposed/process/2026-08-21-throughput-budget-and-cloud-plan.md``.
+    """
+    if torch.is_autocast_enabled("cuda"):
+        return torch.get_autocast_dtype("cuda")
+    return ref.dtype
+
+
 class DiagonalInjection(nn.Module):
     """SSM-style diagonal injection on the context channel only.
 
@@ -249,10 +274,14 @@ class DiagonalInjection(nn.Module):
         self.log_dt = nn.Parameter(torch.zeros(d))
 
     def forward(self, h: Tensor, e: Tensor) -> Tensor:
-        A = self.log_A.exp().clamp(max=0.9999)
-        dt = self.log_dt.exp()
+        # exp/clamp stay in fp32 (parameter transform); the COEFFICIENTS then move to the
+        # carrier's dtype. Multiplying a bf16 carrier by an fp32 vector would promote the
+        # slice, and the torch.cat below would promote the whole carrier with it — this
+        # was one of the three fp32 promotion sites (2026-08-22).
+        A = self.log_A.exp().clamp(max=0.9999).to(h.dtype)
+        dt = self.log_dt.exp().to(h.dtype)
         h_ctx = h[..., self.start:self.end]
-        e_ctx = e[..., self.start:self.end]
+        e_ctx = e[..., self.start:self.end].to(h.dtype)
         new_ctx = A * h_ctx + dt * e_ctx
         return torch.cat([h[..., :self.start], new_ctx, h[..., self.end:]], dim=-1)
 
@@ -928,6 +957,11 @@ class MORPHTransformer(nn.Module):
                     ve_bagged) -> tuple[Tensor, Tensor]:
         """x0 skip-clone → HC stream expansion → prelude blocks. Returns (x, x0)."""
         B, T = x.shape[0], x.shape[1]
+        # The embeddings emit fp32. Demote BEFORE the x0 clone and the stream expansion,
+        # so neither the skip signal nor the n-stream carrier is ever materialised at
+        # fp32 width (ChannelInject.precompute already casts its weights to the signal's
+        # dtype, so x0 in bf16 is a pure win).
+        x = x.to(_carrier_dtype(x))
         x0 = x.clone()      # single-stream skip signal (broadcast into HC streams)
 
         # ── Hyper-Connection stream expansion ─────────────────────────
@@ -1020,7 +1054,7 @@ class MORPHTransformer(nn.Module):
         # via _apply_core_step) is core-only and must NOT run: with zero core blocks the
         # injection would still perturb the ctx channel every iteration. Used by seed models.
         if self.cfg.n_core > 0:
-            e = self.input_norm(x)
+            e = self.input_norm(x).to(_carrier_dtype(x))
             with _prof("carrier::h_clone"):
                 h = e.clone()
 
@@ -1235,7 +1269,7 @@ class MORPHTransformer(nn.Module):
             # must apply the same boundary norm. This makes a seed model
             # EXACTLY a target-with-silent-core — the growth invariant that
             # function-preserving core insertion depends on.
-            x = self.input_norm(x)
+            x = self.input_norm(x).to(_carrier_dtype(x))
         return x
 
     # ── TUL regions (docs/tul-spec.md §3) ─────────────────────────────────
@@ -1315,7 +1349,7 @@ class MORPHTransformer(nn.Module):
         np_, n_core = self.cfg.n_prelude, self.cfg.n_core
         gidx, gvalid = layout.slot_index, layout.slot_valid
 
-        xn = self.input_norm(x)
+        xn = self.input_norm(x).to(_carrier_dtype(x))
         e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
         with _prof("carrier::h_clone"):
             h = e.clone()
