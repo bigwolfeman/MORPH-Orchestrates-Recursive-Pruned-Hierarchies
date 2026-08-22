@@ -33,18 +33,24 @@ baseline's CE. That is the one number the whole ladder exists to produce.
 
 ### Held-out CE, matched 143.4M-token budget
 
+Every figure below is reproduced by `scripts/gate_ce_agreement.py` against the run's own wandb
+log to 0.0000 nats, on all 15 quantities. Getting there caught a defect worth naming: the
+scoring harness ran EAGER while the runs were COMPILED, and `torch.compile` is not
+numerically identical to eager. On `db_b1_rms` at sigma_max — degenerate, so the CE is
+sensitive — eager read 10.3618 and compiled 10.3916, and the run had logged 10.3916.
+
 | arm | what it changes | CE @ sigma=1 | CE @ sigma_max | vs AR |
 |---|---|---:|---:|---:|
 | `ar` | baseline, plain next-token | — | **4.0010** | — |
-| `db_b1` | the paper's recurrent-depth setting | 4.1235 | 7.3025 | +3.30 |
-| `db_b1_oracle` | `sigma_data=0.5`, the authors' own value | 4.5572 | **5.0788** | +1.08 |
-| `db_b1_wedm` | the paper's literal Eq. (6) weighting | 4.1704 | 7.6832 | +3.68 |
-| `db_b1_rms` | MORPH's SliceScaler target scaling | 0.6728 | 10.3618 | +6.36 |
-| `db_b4` @ 143M | `B=4` blocks, token-matched | 4.8626 | 5.5358 | +1.53 |
-| `db_b4` @ 573M | `B=4`, the 4x budget the protocol demands | 4.2042 | 4.6738 | +0.67 |
+| `db_b1` | the paper's recurrent-depth setting | 4.1236 | 7.3011 | +3.30 |
+| `db_b1_oracle` | `sigma_data=0.5`, the authors' own value | 4.5572 | **5.0801** | +1.08 |
+| `db_b1_wedm` | the paper's literal Eq. (6) weighting | 4.1705 | 7.6827 | +3.68 |
+| `db_b1_rms` | MORPH's SliceScaler target scaling | 0.6733 | 10.3916 | +6.39 |
+| `db_b4` @ 143M | `B=4` blocks, token-matched | 4.8625 | 5.5329 | +1.53 |
+| `db_b4` @ 573M | `B=4`, the 4x budget the protocol demands | 4.2044 | 4.6740 | +0.67 |
 
 `db_b1_rms` is the trap in one row: it has the **best** sigma-grid mean in the whole testbed
-(2.8359) and is the **worst** model in it. Below `sigma* ~= ||y||/4.2` the nearest-neighbour decode
+(2.8400) and is the **worst** model in it. Below `sigma* ~= ||y||/4.2` the nearest-neighbour decode
 of `z` still identifies the target, so the model autoencodes its own input and the loss falls for
 free. MORPH's SliceScaler pushes `sigma*` to 3.299, which puts most of the schedule into that
 regime. Grid means hide this; the sigma_max column does not.
@@ -73,15 +79,33 @@ Every hard-bridge DB row is absent from that table. They post the lowest raw gen
 setting (down to 15.98) and they get it by repeating themselves: distinct-2 0.61 to 0.82 against
 the corpus's 0.983.
 
-**Sampling barely reaches a DB readout.** On every DB arm, top-p 0.95 and pure ancestral sampling
-returned bit-identical text from the same seed; on the AR baseline they diverged at the first
-token. The DB next-token distribution is peaked enough that the 5% of mass nucleus truncation
-discards is mass the sampler was never going to draw from.
+### A DiffusionBlocks sample has no token-level randomness
+
+On every DB arm, top-p 0.95 and pure ancestral sampling returned **bit-identical** text from
+the same seed; on the AR baseline they diverged at the first token. That is not a decoding
+detail, and measuring it produced the most structural result here. At the position generation
+actually draws from -- the end of the Euler walk:
+
+| arm | top-1 prob | entropy | nucleus @ 0.95 |
+|---|---:|---:|---:|
+| `ar` | 0.2920 | 4.7613 nats | 8422 tokens |
+| `db_b1` | **1.0000** | **0.0000** | **1** |
+| `db_b1_oracle` | 1.0000 | 0.0000 | 1 |
+| `db_b4` | 1.0000 | 0.0000 | 1 |
+
+The same denoisers read directly along the trajectory are not collapsed -- `db_b1` measures
+entropy 3.32 / 4.74 / 5.04 / 7.72 nats at sigma 0.3 / 1 / 10 / 80. The collapse is specific to
+the low-sigma end, and it is exactly what EDM prescribes: as `sigma -> 0`, `c_skip -> 1` and
+the denoiser IS the identity on its input.
+
+So all of a DB sample's randomness lives in the initial `z` and the trajectory. Temperature
+and top-p are inert. A language model built this way gives up every decode-side diversity
+control, and that is a property of the method rather than of our build.
 
 ## Alternatives considered
 
 * **Different `sigma_data`.** The authors' 0.5 (`db_b1_oracle`) is the single best DB change
-  measured: 7.3025 -> 5.0788 at sigma_max. It closes two thirds of the gap and does not close it.
+  measured: 7.3011 -> 5.0801 at sigma_max. It closes two thirds of the gap and does not close it.
 * **The paper's literal Eq. (6) EDM weighting** (`db_b1_wedm`): worse at all seven sigmas, by 0.38
   nats at sigma_max. The authors' released code computes `loss[B] * w[B,1]`, whose `.mean()` is
   `mean(loss)*mean(w)` — a scalar — so their shipped code is effectively unweighted and the bug is
@@ -132,6 +156,12 @@ on identical data with a config-diff gate, and still measures the same failure M
 candidate explanations at the start were "the DB mechanism does not carry language" and "MORPH's
 complexity broke it". A plain Llama with none of MORPH's machinery reproduces the failure, so it is
 the first.
+
+Nor is it a wiring bug. The anti-theater gate drives `db_b1` on one repeated batch from loss 7.8903
+to 0.0084 and -- scored ABOVE `sigma*`, where `z` cannot identify the target and only the clean
+context can help -- reaches CE **0.0329** at sigma=1 and 0.0499 at sigma=80, against a 1.50
+threshold and `ln V = 10.82`. The objective does train the network through the context path. It
+simply does not train it as well as predicting the next token does.
 
 **What this does NOT establish, stated plainly:**
 
