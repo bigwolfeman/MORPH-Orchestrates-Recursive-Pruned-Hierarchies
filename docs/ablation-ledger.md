@@ -3,7 +3,9 @@
 Accepted / rejected / deferred components in the default stack. Rows point at
 config keys and the engineering logs under gitignored `ignore/` (and `Ai-notes/`)
 that backed the call. Metrics are approximate and hardware-bound; see
-[known-good-runs.md](known-good-runs.md) for the default recipe.
+[known-good-runs](../.agents/notes/implemented/process/2026-07-03-known-good-runs.md)
+for environment assumptions. The default recipe itself lives in the heavily commented
+[`morph/configs/base.yaml`](../morph/configs/base.yaml) — do not restate its numbers here.
 
 Confidence: **high** = repeated runs or a gate with a pass marker; **medium** =
 single campaign or partial stack; **low** = directional / incomplete.
