@@ -1,6 +1,6 @@
 # Diagnostic family built on arm A0 — the CONTROL that contains no TUL code.
 #
-# docs/tul-divergence-rca.md §5 candidate 1: the looped core may be unstable on a
+# lab/tul/divergence-rca.md §5 candidate 1: the looped core may be unstable on a
 # short sequence, independent of TUL. A0 at seq_len 64 tests that with the plain
 # model. If its core gradient explodes too, the divergence is a MORPH property and
 # TUL is exonerated.

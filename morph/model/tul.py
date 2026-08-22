@@ -47,7 +47,7 @@ class TULConfig:
     carry: bool = False                  # arm (§3.5)
     xattn: bool = False                  # arm (§3.5)
     bcast: bool = False                  # arm (§3.5)
-    coda_token_cut: int = 0              # arm CW (docs/tul-compaction-window-spec.md) — drop
+    coda_token_cut: int = 0              # arm CW (.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md) — drop
                                           # TOKEN positions with row index < C from the coda's
                                           # sequence; every slot stays regardless of its index.
                                           # 0 = off, bit-identical (no new tensors, no new ops).
@@ -172,7 +172,7 @@ def compact_index(slot_mask: Tensor) -> Tensor:
 
     Despite the name, the argument is generic: any ``[B, L]`` bool tensor that is True at
     the positions to push to the dump row works (arm CW reuses this with a token-cut mask
-    instead of the slot mask, docs/tul-compaction-window-spec.md §"the change").
+    instead of the slot mask, .agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md §"the change").
     """
     B, L = slot_mask.shape
     order = torch.argsort(slot_mask.to(torch.uint8), dim=1, stable=True)
@@ -183,7 +183,7 @@ def compact_index(slot_mask: Tensor) -> Tensor:
 
 def window_drop_mask(slot_mask: Tensor, cut: int) -> Tensor:
     """``[B, L]`` bool, True at TOKEN positions with row index ``< cut`` (arm CW's mirror
-    of :func:`compact_index`'s slot drop — docs/tul-compaction-window-spec.md).
+    of :func:`compact_index`'s slot drop — .agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md).
 
     Every slot position is False here regardless of its row index — "KEEP every slot
     position, at every index" is the spec's line, and this is a GLOBAL cut (the same
@@ -199,7 +199,7 @@ def window_drop_mask(slot_mask: Tensor, cut: int) -> Tensor:
 def cw2_retain_mask(candidates: Tensor, budget: Tensor, seed: int) -> Tensor:
     """``[B, L]`` bool: a per-row SEEDED random ``budget[row]``-sized subset of ``candidates``.
 
-    Arm CW2's control (docs/tul-compaction-window-spec.md): drop every slot and every
+    Arm CW2's control (.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md): drop every slot and every
     early token EXCEPT an equal-KV-budget random subset. Vectorised with the same
     argsort + row-count-threshold trick as :func:`compact_index` — draw one uniform score
     per position, push non-candidates off the front with a score that always sorts last,

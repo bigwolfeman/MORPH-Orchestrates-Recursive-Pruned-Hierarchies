@@ -1,7 +1,7 @@
 # Diagnostic family built on arm A1 — the arm that diverged (abort step 4540).
 #
 # Each run changes ONE thing against this file and is read from its gradient trace.
-# docs/tul-divergence-rca.md §5, plus the quant control [W, 2026-08-17]:
+# lab/tul/divergence-rca.md §5, plus the quant control [W, 2026-08-17]:
 #
 #   D2  reproduce, no change            (validates the new instrument against the abort)
 #   D3  training.ternary=false training.embed_quant=off training.adam8bit=false

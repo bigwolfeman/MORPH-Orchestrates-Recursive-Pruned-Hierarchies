@@ -1,12 +1,53 @@
-# Arm D — teach the slot what to carry, by distilling a teacher that still has the tokens
+# Agent Note: TUL Arm D — teacher distill across the compaction cut
 
-Status: SPEC. Not implemented. Written 2026-08-18.
+Status: proposed
 
-## The result this exists to fix
+## Problem
 
-Arm CW, re-scored by stratum (docs/tul-arms-result.md, 200 batches, 1.42M tokens,
-cut 576). Splitting predictions by whether the target's last prior sighting is inside
-the deleted region:
+Arm CW stratified re-score ([lab/tul/arms-result.md](../../../../lab/tul/arms-result.md)):
+on stratum A (only prior sighting in the deleted region), equal-budget random tokens
+beat slots by 0.0988 nats. Nothing trained the slot to carry span identity; token CE
+is satisfied while tokens are present.
+
+## Proposal
+
+Self-distill across the compaction boundary: teacher = same weights with tokens kept
+(CW0), student = same weights with early tokens dropped (CW1). Add
+`lambda * D(h_student_l, stopgrad(h_teacher_l))` at mid-stack (not final layer), keep
+full CE weight, random cut schedule. Phase 0 probes which coda layer to target before
+any training. Full design below.
+
+## Alternatives considered
+
+- **Trace-inversion teacher for "reasoning" latents** — OWT has no reasoning; inverter
+  on this distribution emits boilerplate ([lab/tul/trace-inverter-on-owt.md](../../../../lab/tul/trace-inverter-on-owt.md)). Out of scope for this arm.
+- **Contrastive / SigLIP-style D as default** — optimises discriminability, not
+  sufficiency (slot-collapse probe lesson). Keep as fallback only.
+- **Final-layer distill** — collapses onto next-token surface; fights the whole line.
+- **Stronger dropout / CW train alone** — does not supply an identity demand on the slot.
+
+## Acceptance criteria
+
+On stratum A, a **trained** student with slots beats a **trained** equal-budget
+random-token control (same cut, same strata). Crossing the current −0.0988 gap to
+positive. Beating CW3 alone is not success. Report distill loss and stratum-A CE
+together every run.
+
+## Risks
+
+- Distill loss falls while stratum A stays flat (easy representation match).
+- Gains hide in strata B/C (not memory).
+- Span-mean cannot hold rare-token identity even under demand → retire summary
+  design for a pointer/copy mechanism.
+- Hard cut from step 0 confounds learning speed; needs ramp.
+
+## Design
+
+### The result this exists to fix
+
+Arm CW, re-scored by stratum ([lab/tul/arms-result.md](../../../../lab/tul/arms-result.md),
+200 batches, 1.42M tokens, cut 576). Splitting predictions by whether the target's
+last prior sighting is inside the deleted region:
 
 | stratum | share | slots (CW1) | equal-budget random tokens (CW2) | CW2 − CW1 |
 |---|---|---|---|---|
@@ -28,7 +69,7 @@ Nothing trained this slot to carry span content. Token CE is satisfied by the ch
 channel while the tokens are present, so no gradient ever asked the slot for identity.
 This arm supplies the missing demand.
 
-## The design
+### Mechanism
 
 **Teacher = the same model, same weights, with the tokens still present. Student = the
 same model with them deleted.** Both halves already exist and are tested:
@@ -80,7 +121,7 @@ survivor. The ramp exists because a hard cut from step 0 makes the arm learn slo
 reasons unrelated to slots — the "identical config is not an identical task" failure this
 project has already paid for once.
 
-## Phase 0 — the layer probe, before any training
+### Phase 0 — the layer probe, before any training
 
 Which depth carries the most information about the deleted region? Runs on
 `tul-a1-acap1/step_20000.pt`, no training.
@@ -93,23 +134,7 @@ Aim the distillation target at the peak.
 If the curve is flat, say so: it would mean depth choice does not matter and the
 final-layer objection was theoretical.
 
-## Pre-registered success criterion
-
-The bar is set by what CW already measured, and it is deliberately harsher than "beats
-nothing":
-
-> **Arm D succeeds if, on stratum A, the trained student with slots beats the
-> equal-budget random-token control.** Today that gap is −0.0988 in the wrong direction.
-> Success is crossing zero, measured the same way, same cut, same strata definition.
-
-Beating CW3 (keep nothing) is NOT success — CW1 already does that (+0.0267 on stratum A)
-and it means only that 128 positions of anything are better than none.
-
-**The truncation control must itself be TRAINED.** Comparing a student trained for the
-masked task against a baseline that only met masking at eval biases the result toward us.
-That is a second training run, and it is the honest price.
-
-## Falsifiers, stated before the run
+### Falsifiers, stated before the run
 
 1. **Distill loss falls, stratum A does not move.** Then matching the teacher's
    representation is achievable without carrying the information that matters, and the
@@ -123,7 +148,7 @@ That is a second training run, and it is the honest price.
    or better-trained summary vector. That is a real finding and it retires this design
    rather than motivating a bigger one.
 
-## Explicitly out of scope: reasoning
+### Explicitly out of scope: reasoning
 
 An earlier framing wanted the latent to carry a *thinking trace*, with a trace-inversion
 model (arXiv:2603.07267) manufacturing targets. That is a different problem and it does
