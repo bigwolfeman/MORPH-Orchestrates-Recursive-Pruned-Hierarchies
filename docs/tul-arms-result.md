@@ -14,7 +14,18 @@ Queue `ignore/tul_logs/run_tul_arms2.sh`, commit `4650cb1`. wandb project `morph
 | A0 (stored, first pass) | 3.5 | 3.2736 | 26.41 | reference only — NOT the comparison |
 | **A0c — dense baseline** | 1.0 | **3.2805** | 26.59 | the number A1c is read against |
 | A3 — compute floor | 3.5 | 3.2407 | 25.55 | see the caveat below |
-| **A1c — the method** | 1.0 | **3.2243** | 25.89 | `val/ce_tokens_final`, the comparable metric |
+| **A1c — the method** | 1.0 | **3.2243** | 25.14 | `val/ce_tokens_final`, the comparable metric |
+
+**PPL corrected 2026-08-23.** This row read **25.89** until then, which is the figure
+wandb logged as `val/ppl_tokens`. That metric was accumulated as the mean of the
+per-batch `exp(CE)` while every other row in this table is `exp(mean CE)`; Jensen makes
+the first strictly larger, so the table compared A1c against A0c under two different
+aggregations. `exp(3.2243)` is **25.14**. The CE column was never affected — it is a
+plain mean and is correct as logged. Fixed in `morph/training/train.py` with two
+regression tests; see
+[the note](../.agents/notes/implemented/bug-fix/2026-08-23-val-ppl-tokens-aggregation.md).
+The error was 0.75 PPL against a 1.27 PPL A1-vs-A0 effect, so it hid 59 % of the result
+it was reporting.
 
 A1c is quoted on `val/ce_tokens`, which is CE over token positions only (ordinary +
 `t_last`). That is the metric §4 defines as comparable to a baseline's token CE; A1's

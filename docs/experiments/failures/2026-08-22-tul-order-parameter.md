@@ -191,7 +191,7 @@ magnitude below both diverged controls.
 2. **The decline is close to the estimator's scatter.** The unseeded start vector made the
    same checkpoint score composition 76.18 then 83.26 — 9% — against a decline of ~20%.
    Power iteration approaches sigma_1 from below, so every number here is a lower bound.
-   Fixed (seeded, `--restarts`), re-measurement pending.
+   Fixed (seeded, `--restarts`); **re-measured, see Amendment 2 — reason 2 is retired.**
 3. **Every number is from batch 14.** The campaign runs batch 12.
 
 Because of 1 and 2 this file goes to `failures/`, not `successes/`: predictions 3 and 4
@@ -204,3 +204,47 @@ Not another offline probe. The missing evidence is a **precursor**, and only a l
 produces it: log ORDER during training and see whether it rises before a detonation.
 That also gives the abort threshold this campaign lacks. Cheap at low `k` and a coarse
 interval — measure cost 2 s per call at batch 2 / seq 256 against ~0.53 s training steps.
+
+## Amendment 2 — the two follow-up passes (2026-08-23)
+
+`ignore/perf/run_order_param_check.sh`, both at `--restarts 4`. Logs:
+`ignore/perf/order_param_restarts.log`, `ignore/perf/order_param_check_driver.log`.
+Best-of-N is the estimate (power iteration rises toward sigma_1); best-vs-worst is
+reported as `comp_spread` and is the convergence check reason 2 above asked for.
+
+| checkpoint | pass 0 (1 start) | PASS 1 (4 restarts, random ids) | PASS 2 (4 restarts, real text) |
+|---|---:|---:|---:|
+| `acap1_5k` | 4.918 | 4.922 | 3.977 |
+| `acap1_10k` | 4.496 | 4.560 | 3.412 |
+| `acap1_15k` | 3.766 | 4.270 | 4.307 |
+| `acap1_20k` | 3.872 | 3.253 | **4.916** |
+| `a0_5k` | 2.603 | 2.603 | 2.525 |
+| `a0_20k` | 2.183 | 2.183 | 1.163 |
+| `a1_DIVERGED_4540` | 35.575 | 37.515 | 38.217 |
+
+`comp_spread` ranges 3.5-33.5 % across the rows.
+
+**Reason 2 is retired, in the direction that supports the verdict.** Better convergence
+made the random-token decline *steeper* (4.92 -> 3.25, not 4.92 -> 3.87). An
+under-convergence artifact would have shrunk. It grew.
+
+**A new limitation replaces it: the trajectory's sign is operating-point dependent.** On
+real validation text the cured arm RISES, 3.977 -> 4.916, instead of falling. The
+pre-registered bar still passes by the letter — a rise of 0.939 against a 1.0 limit,
+ending at 4.916 against a 5.5 ceiling — but that is a tight pass with a ~12 % spread on
+the estimate, not a comfortable one. "Does ORDER creep upward during a healthy run?" is
+**unresolved**, and the random-token answer and the real-text answer disagree.
+
+**What does NOT depend on the operating point** is the separation, which is the quantity
+the campaign decision rests on:
+
+| | pass 0 | PASS 1 | PASS 2 |
+|---|---:|---:|---:|
+| diverged | 35.6 | 37.5 | 38.2 |
+| worst survivor | 4.92 | 4.92 | 4.92 |
+
+Three passes, two operating points, a 7.7x margin every time. For a survivor to reach the
+diverged band its composition estimate would have to be understated by 4.3x; the largest
+scatter measured anywhere is 33.5 %. Reason 1 (post-mortem evidence) and reason 3
+(batch 14) are untouched, so this file stays under `failures/` and the next step is still
+the live readout.
