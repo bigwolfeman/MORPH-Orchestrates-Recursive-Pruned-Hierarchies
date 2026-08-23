@@ -1,8 +1,9 @@
 <p align="center">
   <img src="docs/figures/hydra.png" alt="MORPH hydra" width="320" />
 </p>
-
-# MORPH
+<h1 style="text-align: center;">
+MORPH
+</h1>
 
 **MORPH** is a PyTorch research model for **looped transformer** training and sparse deployment. The model reuses a small Parcae-style core for variable depth, stabilizes the repeated core with Cayley Hyper-Connections, and trains the MLP stack while pruning low impact weights down to as little as 25% total density before carving it into the MORTAR BCSR runtime. Enabling less than 1% ppl regression and improved memory footprint and training throughput over full density. All while natively quantized trained.
 
