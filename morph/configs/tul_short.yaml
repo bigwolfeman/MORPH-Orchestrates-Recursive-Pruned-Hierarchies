@@ -51,7 +51,7 @@ training:
   # unrelated knob — diverged 2/2, so surviving is not free. alpha_cap 1.0 survived 2/2
   # at 4800 steps and then held BOTH arms for the full 20k: tul-a0-acap1 (val CE 3.2805)
   # and tul-a1-acap1 (val/ce_tokens 3.2243), wandb project morph-tul, 2026-08-18.
-  # Evidence: docs/tul-divergence-rca.md Part 5-7; docs/tul-arms-result.md.
+  # Evidence: docs/tul-divergence-rca.md Part 5-7; docs/experiments/results/2026-08-18-tul-arms-first-comparison.md.
   #
   # IT LIVES HERE, not in an arm file, and not on a command line. It is an OPTIMISER
   # setting, so applying it to A1 alone would make an A1-vs-A0 comparison differ by TWO

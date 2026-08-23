@@ -7,6 +7,22 @@ Runs: `tul-a0-acap1` (278 min) and `tul-a1-acap1` (177 min), both 20000 steps, b
 seq 1024, one epoch, `ademamix_alpha_cap=1.0`, `token_state_dropout=0.15` (spec).
 Queue `ignore/tul_logs/run_tul_arms2.sh`, commit `4650cb1`. wandb project `morph-tul`.
 
+## Figures
+
+![Validation CE for every arm](../figures/tul_arms_val_ce.png)
+
+The right panel is the one to read. On the left axis every surviving arm is one line;
+the entire result is 0.056 nats wide.
+
+![Final CE against throughput](../figures/tul_arms_efficiency.png)
+
+A3 is the uncomfortable point: no core at all, 2.76x the baseline's throughput, and it
+still beats the baseline on CE. At 287M tokens the loop is not paying for itself. The
+iso-depth scaling law says that payoff grows with budget, so this may be a small-budget
+artifact — but it is what these runs measure.
+
+Regenerate: `python scripts/plot_tul_arms.py`. See [the experiments README](../README.md).
+
 ## The numbers
 
 | arm | cap | final val CE | ppl | note |
@@ -23,7 +39,7 @@ the first strictly larger, so the table compared A1c against A0c under two diffe
 aggregations. `exp(3.2243)` is **25.14**. The CE column was never affected — it is a
 plain mean and is correct as logged. Fixed in `morph/training/train.py` with two
 regression tests; see
-[the note](../.agents/notes/implemented/bug-fix/2026-08-23-val-ppl-tokens-aggregation.md).
+[the note](../../../.agents/notes/implemented/bug-fix/2026-08-23-val-ppl-tokens-aggregation.md).
 The error was 0.75 PPL against a 1.27 PPL A1-vs-A0 effect, so it hid 59 % of the result
 it was reporting.
 

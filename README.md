@@ -19,7 +19,7 @@ TUL loops the Parcae core over one **thought slot per span** (punctuation-bounde
 of over every token, and decodes tokens with the slot's looped state visible as an attended
 prefix position. Tokens run prelude → coda only. Specification, provenance and planned
 ablations: [docs/tul-spec.md](docs/tul-spec.md); paper map: [docs/references.md](docs/references.md) §13;
-measured arms: [docs/tul-arms-result.md](docs/tul-arms-result.md).
+measured arms: [docs/experiments/results/2026-08-18-tul-arms-first-comparison.md](docs/experiments/results/2026-08-18-tul-arms-first-comparison.md).
 
 `base.yaml` ships `tul.activate_at: never`, which constructs no TUL parameters, so the
 default recipe is bit-identical to plain MORPH and the main line's behaviour is unchanged.

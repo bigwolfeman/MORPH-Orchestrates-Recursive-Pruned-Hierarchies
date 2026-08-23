@@ -1,0 +1,17 @@
+# ORDER = sigma_max(J of the whole core step) / max_i sigma_max(J of block i).
+# Source: ignore/perf/order_param_full.log (pass0), order_param_restarts.log (pass1),
+# order_param_check_driver.log (pass2). Recorded in
+# docs/experiments/failures/2026-08-22-tul-order-parameter.md Amendment 2.
+# pass0 = 1 power-iteration start, random ids. pass1 = 4 restarts, random ids.
+# pass2 = 4 restarts, real validation text. Blank = not measured in that pass.
+checkpoint,arm,pass0,pass1,pass2
+acap1_5k,tul-a1-acap1,4.918,4.922,3.977
+acap1_10k,tul-a1-acap1,4.496,4.560,3.412
+acap1_15k,tul-a1-acap1,3.766,4.270,4.307
+acap1_20k,tul-a1-acap1,3.872,3.253,4.916
+a0_5k,tul-a0,2.603,2.603,2.525
+a0_20k,tul-a0,2.183,2.183,1.163
+a0acap1_5k,tul-a0-acap1,4.519,,
+a0acap1_20k,tul-a0-acap1,1.060,,
+a1_DIVERGED_4540,tul-a1,35.575,37.515,38.217
+a1r_DIVERGED_3240,tul-a1r,21.077,,

@@ -19,6 +19,13 @@ Two candidate causes, not mutually exclusive:
 - **(B) The optimizer's slow-EMA push.** `ademamix_alpha: 8.0` warms in over
   `ademamix_t_alpha: 1600` steps. Onset is near step 600, inside that horizon.
 
+## Figure
+
+![The detonation window and the gradient norm behind it](../figures/tul_arms_divergence.png)
+
+Uncapped A1 reaches `train/grad_norm` 3.0e11 while the capped arms stay near 1 for the
+whole run. Regenerate: `python scripts/plot_tul_arms.py --only divergence`.
+
 ## What is already measured (from the failed runs, not from this experiment)
 
 - `train/grad_norm` on `tul_gate`: 1.69 @500 → 303 @600 → 9.0e4 @700 → 8.0e5 @800.

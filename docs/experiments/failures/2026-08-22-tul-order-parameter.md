@@ -205,6 +205,13 @@ produces it: log ORDER during training and see whether it rises before a detonat
 That also gives the abort threshold this campaign lacks. Cheap at low `k` and a coarse
 interval — measure cost 2 s per call at batch 2 / seq 256 against ~0.53 s training steps.
 
+## Figure
+
+![Order parameter by checkpoint, three passes](../figures/tul_order_parameter.png)
+
+Data: [`../results/tul_order_parameter.csv`](../results/tul_order_parameter.csv).
+Regenerate: `python scripts/plot_tul_arms.py --only order`.
+
 ## Amendment 2 — the two follow-up passes (2026-08-23)
 
 `ignore/perf/run_order_param_check.sh`, both at `--restarts 4`. Logs:

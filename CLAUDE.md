@@ -43,7 +43,7 @@ renorm), not symptom-clamping — that also preserves the β1=0 memory win + α�
 
 Status: implemented, run, and measured. It is a **conditional-compute** win (1.6x wall
 clock at slightly better CE), NOT a latent-memory mechanism — the memory claim was
-falsified by the stratified re-score in `docs/tul-arms-result.md`. `base.yaml` keeps
+falsified by the stratified re-score in `docs/experiments/results/2026-08-18-tul-arms-first-comparison.md`. `base.yaml` keeps
 `tul.activate_at: never`, which builds no TUL parameters at all.
 
 `docs/tul-spec.md` is the source of truth; `docs/figures/tul_overview.png` is the diagram;

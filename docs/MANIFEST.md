@@ -13,7 +13,18 @@ Top-level navigation for project documentation.
 - [Data placement design spec](../.agents/notes/implemented/architecture/2026-07-03-data-placement-design.md)
 - [MORPH / Olympiad-AI interop contract](olympiad-interop.md)
 
+## Experiment records
+
+What happened when we measured, one file per experiment, filed by outcome. Decisions
+live in `.agents/notes/`; these are the runs behind them.
+
+- [Experiment records — layout, naming and figure regeneration](experiments/README.md)
+- [TUL arms — the first complete comparison](experiments/results/2026-08-18-tul-arms-first-comparison.md) — A0 / A0c / A1c / A3 at 20k steps
+- [The gated-TUL bake-off](experiments/failures/2026-08-21-tul-gate-bakeoff.md) — no verdict; every arm died
+- [What makes the TUL arms diverge?](experiments/failures/2026-08-22-tul-divergence-cause.md)
+- [Is `ademamix_alpha_cap=1.0` a cure or a delay?](experiments/failures/2026-08-22-tul-order-parameter.md)
+
 ## Local Archives
 
 - [Reference archive by topic](references/MANIFEST.md)
-- [Figure archive by topic](figures/MANIFEST.md)
+- [Figure archive by topic](figures/MANIFEST.md) — TikZ/LaTeX architecture diagrams. Measurement plots from wandb are separate: `experiments/figures/`.
