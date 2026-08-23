@@ -185,7 +185,14 @@ def run_generation_test(
     n_tokens: int = 100,
     tul_rt=None,
 ) -> tuple[str, dict]:
-    """Run a short greedy generation and return ``(text, metrics)``.
+    """Run a short SAMPLED generation and return ``(text, metrics)``.
+
+    Not greedy, despite what this line said until 2026-08-23: both paths below decode at
+    ``temperature 0.8, top_k 50``. That is one decode mode, and a single mode cannot see
+    degeneration on its own — a repetition loop is a GREEDY failure and truncated
+    sampling hides it. For the multi-mode table (greedy / top-k / pure ancestral) run
+    ``scripts/tul_samples.py`` over the checkpoints; it is deliberately a separate script
+    so a campaign in flight is never edited underneath its own arms.
 
     The metrics are empty on the plain path and, on the TUL path, are the
     docs/tul-gate-spec.md §10 generation numbers averaged over the prompts: rep4 /

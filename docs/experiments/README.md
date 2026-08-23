@@ -28,7 +28,7 @@ Regenerate everything:
 
 ```bash
 python scripts/plot_tul_arms.py              # all four
-python scripts/plot_tul_arms.py --only ce    # ce | divergence | efficiency | order
+python scripts/plot_tul_arms.py --only ce    # ce | divergence | efficiency | order | bakeoff
 ```
 
 The script pulls run history from the `morph-tul` wandb project by run id, so a figure
@@ -45,4 +45,32 @@ and marker. Keep it that way.
 | `tul_arms_val_ce.png` | Validation CE for all six arms, plus a tight-axis panel where the 0.007-0.056 nat differences between survivors are actually visible. |
 | `tul_arms_divergence.png` | The detonation: CE turning upward, and the gradient norm reaching 3.0e11 while the capped arms stay near 1. |
 | `tul_arms_efficiency.png` | Final CE against throughput — the A0 / A1c / A3 trade at equal tokens. |
+| `tul_bakeoff.png` | The gate bake-off live: val CE, the degeneration watch (rep4 / distinct3), and the halting policy's mean chosen depth. Arms appear as they start; stale wandb ids are dropped by name and listed in the caption. |
 | `tul_order_parameter.png` | The core-map order parameter across three estimator passes, against the diverged band. |
+
+
+## Generation samples
+
+`val CE cannot see degeneration.` A repetition loop scores an excellent perplexity — a
+measured 1.46 against real text's 32.44 — so every fluency number needs a diversity
+number beside it. `rep4` and `distinct3` are that pair and are logged by the training
+loop as `gen/*`.
+
+The training loop's own generation test decodes at **one** setting, `temperature 0.8 /
+top-k 50`. That is not enough. Greedy is where a repetition loop actually appears, and
+pure ancestral sampling is where a collapsed readout shows up as "sampling is identical
+to greedy". For the full table:
+
+```bash
+python scripts/tul_samples.py \
+  --ckpt gate_20k=tul_gate=checkpoints/morph/tul-gate/step_20000.pt --halt
+```
+
+It scores greedy, top-k 50 at t=0.8, and pure ancestral t=1.0, each with rep4 /
+distinct3 / span geometry, plus a REAL TEXT row scored by the same code as the anchor.
+Rank nothing against a row whose distinct3 is far from the real-text value.
+
+**Run it on finished checkpoints, not during a campaign.** `gate_bakeoff.sh` launches
+each arm as its own process, so editing the training loop mid-campaign makes later arms
+differ from earlier ones by more than the variable under test — and a second model on
+the GPU can OOM a training arm that is already sitting on ~3.8 GB of margin.

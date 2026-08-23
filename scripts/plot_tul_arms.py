@@ -252,8 +252,98 @@ def fig_order(_api=None):
     _save(fig, "tul_order_parameter.png")
 
 
-FIGS = {"ce": fig_ce, "divergence": fig_divergence,
-        "efficiency": fig_efficiency, "order": fig_order}
+# The gate bake-off is discovered from the checkpoint tree, not hardcoded: arms 2 and 3
+# do not exist until arm 1 finishes, and a figure that silently drops a missing arm
+# would read as "that arm was flat" rather than "that arm has not run".
+BAKEOFF_ARMS = [("tul-gate", OI["green"], "-", "^"),
+                ("tul-a1", OI["blue"], "--", "o"),
+                ("tul-a1r", OI["orange"], "-.", "D")]
+
+
+def fig_bakeoff(api):
+    """The live gate bake-off: CE, degeneration, and the halting policy's depth."""
+    # wandb_id.txt is OVERWRITTEN per run and is stale for any arm that has not started
+    # this campaign -- checkpoints/morph/tul-a1/wandb_id.txt pointed at a deleted 08-22
+    # run when this was written. Resolving it blindly would plot a PREVIOUS campaign's
+    # curve as if it were tonight's. Arm 1 is definitely current, so its start time is
+    # the cutoff: any run older than that is a leftover id and is dropped by name.
+    def _resolve(name):
+        f = ROOT / "checkpoints" / "morph" / name / "wandb_id.txt"
+        if not f.exists():
+            return None, f"{name}: never run"
+        rid = f.read_text().strip()
+        try:
+            return api.run(f"{PROJECT}/{rid}"), None
+        except Exception:
+            return None, f"{name}: id {rid} not found (stale)"
+
+    head, err = _resolve(BAKEOFF_ARMS[0][0])
+    if head is None:
+        print(f"  {err}; nothing to plot", file=sys.stderr)
+        return
+    cutoff = head.created_at
+
+    ids, skipped = [], []
+    for name, colour, ls, marker in BAKEOFF_ARMS:
+        run, err = _resolve(name)
+        if run is None:
+            skipped.append(err)
+        elif run.created_at < cutoff:
+            skipped.append(f"{name}: id points at a run older than arm 1 (stale)")
+        else:
+            ids.append((name, run, colour, ls, marker))
+    for m in skipped:
+        print(f"  {m}", file=sys.stderr)
+
+    fig, (a1, a2, a3) = plt.subplots(1, 3, figsize=(13.5, 4.2))
+    started = []
+    for name, run, colour, ls, marker in ids:
+        started.append(f"{name} ({run.state}, step {run.summary.get('_step')})")
+        st, v, _ = _series(run, ["val/ce_tokens", "val/loss"])
+        if st:
+            a1.plot(st, v, color=colour, linestyle=ls, marker=marker, markevery=3,
+                    markersize=4, linewidth=1.7, label=name)
+        hs, hv, _ = _series(run, ["val/halt_ce_tokens"])
+        if hs:
+            a1.plot(hs, hv, color=colour, linestyle=(0, (1, 2)), linewidth=1.2,
+                    alpha=0.8, label=f"{name} (halt policy)")
+        rs, rv, _ = _series(run, ["gen/rep4"])
+        if rs:
+            a2.plot(rs, rv, color=colour, linestyle=ls, marker=marker, markersize=5,
+                    linewidth=1.5, label=f"{name} rep4")
+        ds, dv, _ = _series(run, ["gen/distinct3"])
+        if ds:
+            a2.plot(ds, dv, color=colour, linestyle=(0, (4, 2)), marker=marker,
+                    markersize=5, markerfacecolor="none", linewidth=1.5,
+                    label=f"{name} distinct3")
+        ps, pv, _ = _series(run, ["val/halt_depth_mean"])
+        if ps:
+            a3.plot(ps, pv, color=colour, linestyle=ls, marker=marker, markevery=3,
+                    markersize=4, linewidth=1.7, label=name)
+
+    _style(a1, "Bake-off — val token CE", "step", "val CE (nats/token)")
+    a1.legend(fontsize=7, frameon=False)
+    a2.set_ylim(-0.03, 1.03)
+    a2.axhline(1.0, color=OI["black"], linewidth=0.7, alpha=0.35)
+    _style(a2, "Degeneration watch — sampled decode", "step", "fraction")
+    a2.legend(fontsize=7, frameon=False, loc="center right")
+    a3.set_ylim(0, None)
+    _style(a3, "Halt policy — mean chosen depth", "step", "depth")
+    a3.legend(fontsize=7, frameon=False)
+
+    note = "Arms present: " + "; ".join(started)
+    if skipped:
+        note += ". NOT PLOTTED: " + "; ".join(skipped)
+    _foot(fig, note + ". Middle panel is the "
+               "TRAINING loop's generation test, which samples at t=0.8 / top-k 50 — a "
+               "single decode mode. Greedy is where a repetition loop shows up and it is "
+               "NOT plotted here; run scripts/tul_samples.py on the checkpoints for the "
+               "three-mode table. rep4 near 0 and distinct3 near 1 is healthy.")
+    _save(fig, "tul_bakeoff.png")
+
+
+FIGS = {"ce": fig_ce, "divergence": fig_divergence, "efficiency": fig_efficiency,
+        "order": fig_order, "bakeoff": fig_bakeoff}
 
 
 def main():
