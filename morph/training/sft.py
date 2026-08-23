@@ -45,8 +45,14 @@ from morph.training.train import build_morph_config, load_checkpoint, save_check
 _MORPH_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def build_model_with_quant(cfg: DictConfig, device) -> nn.Module:
+def build_model_with_quant(cfg: DictConfig, device, tul=None) -> nn.Module:
     """Mirror train.py main()'s config-driven quant-stack build (no torch.compile).
+
+    ``tul`` is the ``TULConfig`` from ``build_tul_runtime(cfg).model_cfg``. Without it no
+    TUL parameters (``E_slot`` / ``E_mask`` / ``W_prefix``) are constructed, so loading a
+    TUL checkpoint silently drops them as "unexpected" and any ``slot_layout=`` forward
+    RAISES. Pass it whenever the checkpoint came from a TUL arm. Callers that only touch
+    the core map (the order-parameter probe) may leave it None on purpose.
 
     The ckpt was saved WITH these parametrizations (ternary `.original` + scales, embed
     int6) — they MUST exist on the live model before load or those keys are 'unexpected'
@@ -55,7 +61,7 @@ def build_model_with_quant(cfg: DictConfig, device) -> nn.Module:
     validated fast path. The fused Triton HC/attn/CE kernels (use_kernels/hc_use_kernel)
     are NOT torch.compile and stay on.
     """
-    morph_cfg = build_morph_config(cfg)
+    morph_cfg = build_morph_config(cfg, tul=tul)
     model = MORPHTransformer(morph_cfg).to(device)
     tr = cfg.training
 

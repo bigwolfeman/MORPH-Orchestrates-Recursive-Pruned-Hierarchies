@@ -28,7 +28,7 @@ Regenerate everything:
 
 ```bash
 python scripts/plot_tul_arms.py              # all four
-python scripts/plot_tul_arms.py --only ce    # ce | divergence | efficiency | order | bakeoff
+python scripts/plot_tul_arms.py --only ce    # ce | divergence | efficiency | order | bakeoff | decode
 ```
 
 The script pulls run history from the `morph-tul` wandb project by run id, so a figure
@@ -45,6 +45,7 @@ and marker. Keep it that way.
 | `tul_arms_val_ce.png` | Validation CE for all six arms, plus a tight-axis panel where the 0.007-0.056 nat differences between survivors are actually visible. |
 | `tul_arms_divergence.png` | The detonation: CE turning upward, and the gradient norm reaching 3.0e11 while the capped arms stay near 1. |
 | `tul_arms_efficiency.png` | Final CE against throughput — the A0 / A1c / A3 trade at equal tokens. |
+| `tul_decode_modes.png` | rep4 by decode mode for every arm, with CE beside each name and a real-text line. The figure that exists because one decode mode hid a greedy repetition loop. |
 | `tul_bakeoff.png` | The gate bake-off live: val CE, the degeneration watch (rep4 / distinct3), and the halting policy's mean chosen depth. Arms appear as they start; stale wandb ids are dropped by name and listed in the caption. |
 | `tul_order_parameter.png` | The core-map order parameter across three estimator passes, against the diverged band. |
 

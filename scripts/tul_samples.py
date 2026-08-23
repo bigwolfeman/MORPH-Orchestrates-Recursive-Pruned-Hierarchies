@@ -70,8 +70,12 @@ def load_cfg(name):
         return compose(config_name=name)
 
 
-def load_ckpt(cfg, path, device):
-    model = build_model_with_quant(cfg, device)
+def load_ckpt(cfg, path, device, tul_cfg):
+    # tul_cfg is REQUIRED here: without it MORPHTransformer builds no E_slot/E_mask/
+    # W_prefix, the checkpoint's TUL tensors load as "unexpected" (silently dropped),
+    # and the first slot_layout= forward raises. That is exactly how the first run of
+    # this script died.
+    model = build_model_with_quant(cfg, device, tul=tul_cfg)
     ck = torch.load(path, map_location=device, weights_only=False)
     state = ck["model"] if "model" in ck else ck
     state = {k.replace("_orig_mod.", ""): v for k, v in state.items()}
@@ -145,10 +149,10 @@ def main():
         print(f"\n=== {label}  [{cfg_name}]  {path} ===", flush=True)
         cfg = load_cfg(cfg_name)
         tok = AutoTokenizer.from_pretrained(cfg.data.tokenizer)
-        model, step = load_ckpt(cfg, path, device)
         tul_rt = build_tul_runtime(cfg)
         if tul_rt is None:
             print("    SKIP: this arm builds no TUL layout"); continue
+        model, step = load_ckpt(cfg, path, device, tul_rt.model_cfg)
         if anchor is None:
             anchor = real_text_anchor(cfg, tok, a.n_tokens, device)
             print(f"    REAL TEXT anchor rep4={anchor['rep4']:.3f} "
@@ -156,7 +160,14 @@ def main():
         results[label] = {"step": step, "config": cfg_name, "path": path,
                           "fixed": run_one(model, tul_rt, tok, a.seq, a.n_tokens,
                                            device, False, a.seed)}
-        if a.halt:
+        # --halt is a REQUEST, not a promise: the halting policy is the gate choosing
+        # each slot's depth, so an arm built without tul.gate has nothing to halt with
+        # and generate_tul raises. Applying the flag globally is what killed the first
+        # full run of this script, after the gate arm had already been scored.
+        gated = getattr(tul_rt.model_cfg, "gate", None) is not None
+        if a.halt and not gated:
+            print("    -- halt policy SKIPPED: this arm has no gate --")
+        if a.halt and gated:
             print("    -- halt policy --")
             results[label]["halt"] = run_one(model, tul_rt, tok, a.seq, a.n_tokens,
                                              device, True, a.seed)

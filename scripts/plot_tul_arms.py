@@ -295,18 +295,26 @@ def fig_bakeoff(api):
     for m in skipped:
         print(f"  {m}", file=sys.stderr)
 
-    fig, (a1, a2, a3) = plt.subplots(1, 3, figsize=(13.5, 4.2))
-    started = []
+    fig, (a1, az, a2) = plt.subplots(1, 3, figsize=(13.5, 4.2))
+    started, depths = [], []
     for name, run, colour, ls, marker in ids:
         started.append(f"{name} ({run.state}, step {run.summary.get('_step')})")
         st, v, _ = _series(run, ["val/ce_tokens", "val/loss"])
         if st:
             a1.plot(st, v, color=colour, linestyle=ls, marker=marker, markevery=3,
                     markersize=4, linewidth=1.7, label=name)
-        hs, hv, _ = _series(run, ["val/halt_ce_tokens"])
-        if hs:
-            a1.plot(hs, hv, color=colour, linestyle=(0, (1, 2)), linewidth=1.2,
-                    alpha=0.8, label=f"{name} (halt policy)")
+            # The survivors differ by ~0.1 nats; on the left axis that is one line.
+            keep = [(x, y) for x, y in zip(st, v) if x >= 12000]
+            if keep:
+                az.plot([x for x, _ in keep], [y for _, y in keep], color=colour,
+                        linestyle=ls, marker=marker, markersize=4.5, linewidth=1.7,
+                        label=name)
+        fin = run.summary.get("val/ce_tokens_final")
+        if fin is not None:
+            az.axhline(fin, color=colour, linewidth=0.9, alpha=0.4, linestyle=(0, (1, 3)))
+            az.annotate(f"{fin:.4f}", xy=(1.0, fin), xycoords=("axes fraction", "data"),
+                        xytext=(5, -3), textcoords="offset points", fontsize=7.5,
+                        color=colour, annotation_clip=False)
         rs, rv, _ = _series(run, ["gen/rep4"])
         if rs:
             a2.plot(rs, rv, color=colour, linestyle=ls, marker=marker, markersize=5,
@@ -317,32 +325,89 @@ def fig_bakeoff(api):
                     markersize=5, markerfacecolor="none", linewidth=1.5,
                     label=f"{name} distinct3")
         ps, pv, _ = _series(run, ["val/halt_depth_mean"])
-        if ps:
-            a3.plot(ps, pv, color=colour, linestyle=ls, marker=marker, markevery=3,
-                    markersize=4, linewidth=1.7, label=name)
+        if pv:
+            depths.append(f"{name} halt depth {min(pv):.2f}-{max(pv):.2f} (collapsed)")
 
     _style(a1, "Bake-off — val token CE", "step", "val CE (nats/token)")
-    a1.legend(fontsize=7, frameon=False)
+    a1.legend(fontsize=7.5, frameon=False)
+    _style(az, "Survivors, last 8k steps (note the axis)", "step", "")
+    az.tick_params(labelleft=True)
     a2.set_ylim(-0.03, 1.03)
-    a2.axhline(1.0, color=OI["black"], linewidth=0.7, alpha=0.35)
-    _style(a2, "Degeneration watch — sampled decode", "step", "fraction")
+    _style(a2, "Degeneration watch — ONE decode mode", "step", "fraction")
     a2.legend(fontsize=7, frameon=False, loc="center right")
-    a3.set_ylim(0, None)
-    _style(a3, "Halt policy — mean chosen depth", "step", "depth")
-    a3.legend(fontsize=7, frameon=False)
 
     note = "Arms present: " + "; ".join(started)
     if skipped:
         note += ". NOT PLOTTED: " + "; ".join(skipped)
-    _foot(fig, note + ". Middle panel is the "
-               "TRAINING loop's generation test, which samples at t=0.8 / top-k 50 — a "
-               "single decode mode. Greedy is where a repetition loop shows up and it is "
-               "NOT plotted here; run scripts/tul_samples.py on the checkpoints for the "
-               "three-mode table. rep4 near 0 and distinct3 near 1 is healthy.")
+    if depths:
+        note += ". " + "; ".join(depths)
+    _foot(fig, note + ". RIGHT PANEL IS ONE DECODE MODE (t=0.8 / top-k 50) -- the "
+               "training loop's own generation test. It CANNOT see the greedy repetition "
+               "loop: at 128 tokens greedy rep4 is 0.76 (gate) and 0.85 (a1) against this "
+               "panel's ~0.01. See tul_decode_modes.png.")
     _save(fig, "tul_bakeoff.png")
 
 
-FIGS = {"ce": fig_ce, "divergence": fig_divergence, "efficiency": fig_efficiency,
+SAMPLES_JSON = ROOT / "docs" / "experiments" / "results" / "tul_samples.json"
+
+
+def fig_decode_modes(_api=None):
+    """rep4 by decode mode. The figure that exists because ONE mode is not enough.
+
+    The training loop only ever decodes at t=0.8 / top-k 50, and at that setting every
+    arm looks fine. Greedy is a different picture, and the DIVERGED arm is a third one:
+    it beats real text on both diversity metrics while generating fluent-shaped noise,
+    which is why this plot carries CE next to every arm name.
+    """
+    import json
+    if not SAMPLES_JSON.exists():
+        print(f"  {SAMPLES_JSON} missing; run scripts/tul_samples.py", file=sys.stderr)
+        return
+    d = json.loads(SAMPLES_JSON.read_text())
+    anchor = d.get("_real_text") or {}
+    # (label, arm key, policy, CE, colour)
+    ROWS = [("TUL-gate  CE 3.312", "gate_20k", "fixed", OI["green"]),
+            ("TUL-gate halt", "gate_20k", "halt", OI["sky"]),
+            ("TUL-A1  CE 3.418", "a1_20k", "fixed", OI["blue"]),
+            ("a1r DIVERGED  CE 6.43", "a1r_DIVERGED_4160", "fixed", OI["vermillion"])]
+    MODES = ["greedy", "topk50_t0.8", "sample_t1"]
+    present = [(lab, k, pol, c) for lab, k, pol, c in ROWS
+               if k in d and pol in d[k]]
+
+    fig, ax = plt.subplots(figsize=(9.0, 4.6))
+    w = 0.8 / max(len(present), 1)
+    for i, (lab, k, pol, colour) in enumerate(present):
+        ys = [d[k][pol][m]["metrics"]["rep4"] for m in MODES]
+        xs = [j + i * w - 0.4 + w / 2 for j in range(len(MODES))]
+        ax.bar(xs, ys, width=w * 0.92, color=colour, label=lab,
+               edgecolor="white", linewidth=0.6)
+        for x, y in zip(xs, ys):
+            ax.annotate(f"{y:.3f}", xy=(x, y), xytext=(0, 3),
+                        textcoords="offset points", ha="center", fontsize=6.5,
+                        color=colour)
+    if anchor:
+        ax.axhline(anchor["rep4"], color=OI["black"], linewidth=1.1,
+                   linestyle=(0, (5, 3)))
+        ax.annotate(f"real text  rep4 {anchor['rep4']:.3f}", xy=(0.005, anchor["rep4"]),
+                    xycoords=("axes fraction", "data"), xytext=(0, 5),
+                    textcoords="offset points", fontsize=7.5, color=OI["black"])
+    ax.set_xticks(range(len(MODES)))
+    ax.set_xticklabels(["greedy (t=0)", "top-k 50, t=0.8", "ancestral, t=1.0"],
+                       fontsize=9)
+    _style(ax, "Repetition by decode mode — 8 prompts x 128 new tokens",
+           "", "rep4  (fraction of repeated 4-grams)")
+    ax.legend(fontsize=8, frameon=False)
+    _foot(fig, "Higher is worse. The training loop only decodes at the MIDDLE setting, "
+               "where every arm looks acceptable; greedy is 4-7x worse and is invisible "
+               "to it. Read CE beside every bar: the DIVERGED arm scores the BEST "
+               "repetition numbers at every mode because incoherent text never repeats "
+               "-- its top-k rep4 of 0.001 beats real text's 0.003 while its CE is 6.43. "
+               "Diversity is a collapse detector, not a quality metric; compare it only "
+               "within a band of comparable CE.")
+    _save(fig, "tul_decode_modes.png")
+
+
+FIGS = {"ce": fig_ce, "decode": fig_decode_modes, "divergence": fig_divergence, "efficiency": fig_efficiency,
         "order": fig_order, "bakeoff": fig_bakeoff}
 
 

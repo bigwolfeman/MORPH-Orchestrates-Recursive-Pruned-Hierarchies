@@ -1,0 +1,293 @@
+{
+  "gate_20k": {
+    "step": 20000,
+    "config": "tul_gate",
+    "path": "checkpoints/morph/tul-gate/step_20000.pt",
+    "fixed": {
+      "greedy": {
+        "metrics": {
+          "rep4": 0.756,
+          "distinct4": 0.244,
+          "distinct3": 0.21031746031746032,
+          "n_tokens": 128.0,
+          "n_spans": 7.625,
+          "mean_span": 17.973214285714285,
+          "p50_span": 17.9375,
+          "boundary_frac": 0.5434523809523809
+        },
+        "samples": [
+          "The theory of relativity states that the world is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a",
+          "Once upon a time in a distant land, there lived a lot of life in the world, and the world was a little more than a little bit of a blessing, and the world was a little more than a little bit more than a little bit more than a little bit more than a little bit more than a little bit more than a little bit more than a little bit.\n\nThe first thing that was going on was that the world was a little more than a little bit more than a little bit more. The first thing that was going on was that the world was a little more than a little bit more than a little bit more than a little bit more. The second thing",
+          "In machine learning, the key insight is that the key is the key to the key.\n\nThe key is the key to the key, and the key is the key to the key.\n\nThe key is the key to the key, and the key is the key key.\n\nThe key is the key key, and the key is the key key key key.\n\nThe key key key key key key key key key key key key key key key.\n\nThe key key key key key key key key key key key key key key key key key key key key key key key key key.\n\nThe key key key key key key key key key",
+          "The capital of France is a very different story. It is a very different story, and it is a very different story, and it is. It is a very different story, and it is a very different story, and it is different. It is a very different story, and it is a very different story. It is a very different story, and it is different story, different. It is a very different story, different story. It is a very different story, different story, and it is a very different story. It is a very different story, different story, different story,\n\nThe second story is a very different story, and it",
+          "def quicksort(arr):\n\nThe problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that the problem with this problem is that",
+          "Yesterday the committee announced that the committee will be reviewing the details of the committee\u2019s recommendations. It is not clear if the committee will be reviewing the details of the committee\u2019s recommendations, though. The committee will be reviewing the details of the committee\u2019s recommendations,. The committee will be reviewing the details of the committee\u2019s recommendations, though, and the committee will be reviewing the details of the committee\u2019s recommendations, though, and the committee will be reviewing the details of the committee. The committee will be reviewing the details of the committee\u2019s recommendations, though, and the commit",
+          "Water boils at a temperature of 100 degrees Fahrenheit, which is a 100-degree temperature of 100 degrees Fahrenheit, which is a 100-degree temperature. The temperature of the water boils is 100 degrees Fahrenheit, which is a .100-degree temperature of 100 degrees F.\n\nThe temperature of the water boils is 100 degrees Fahrenheit, which is a .100-degree temperature of 100 degrees Fahrenheit, which is a 100-degree",
+          "She opened the letter and read it. She said she was not allowed to speak to herself, but she was told. She said she was not allowed to speak to herself, though. She said she was not allowed to speak. She said she was not allowed. She said she was not. She said she was not. She said she was not allowed. She said she was not allowed to speak. She said she was not allowed to speak to herself. She said she was not. She said she was not allowed to speak to herself, but she was not. She said she was not allowed to speak to herself, but she was not"
+        ]
+      },
+      "topk50_t0.8": {
+        "metrics": {
+          "rep4": 0.185,
+          "distinct4": 0.815,
+          "distinct3": 0.7668650793650793,
+          "n_tokens": 128.0,
+          "n_spans": 6.875,
+          "mean_span": 19.733333333333334,
+          "p50_span": 19.375,
+          "boundary_frac": 0.9102678571428572
+        },
+        "samples": [
+          "The theory of relativity states that some of the most common arguments for the use of religion are a language that is not often the same as the first thing to describe other elements, but also one that is not the same as it has always been (e.g., the one that uses religion) that exists in an argument like this: that of religion. It is the same as that of a believer that people were not involved in a religious argument like that of God. It is the same as that of a believer that people were not involved in the religious argument like that.\n\nThere are many fundamental arguments in",
+          "Once upon a time in a distant land, there lived a life of no less than 30 years.\n\nHis family was born a part of his family, and he moved on to his house. He went to college and was unemployed at the same time. He died in a hospital later with his parents on bail.\n\nThe children were young enough to get married in New York. He began preparing for a hospital, headed to New York to sleep. The kids were always sick of their childhood and they could not remember yet. So it became clear to his family that their son died in a family home.\n\nH",
+          "In machine learning, the key insight is that the banks have two to three times that they don\u2019t know. They need to do great things, because they\u2019re good to work with.\u201d\n\n\u201cThe banks have three to two times that they don\u2019t know yet,\u201d Savage says. \u201cThey need to do great things, because they\u2019re good to work with.\u201d He. This is because the banks have two to four times that they don\u2019t know yet and they need to do great. The banks have two to four times that they don\u2019t know yet. They need to do great things, because they\u2019re good to",
+          "The capital of France is not necessarily for the country, he says.\n\nIt is a world where people are more than twice of the American population, and they are there. They are more than half of the population, and they have been hampered by foreign intervention. In the 1936 presidential election, he had to be replaced by Donald Trump. He had to be replaced by Donald Trump, and he was elected president.\n\nIt is important that he can be changed and he can be changed as well. If he is elected president, his job and his future will be",
+          "def quicksort(arr):\n\nEven when I get to think of my own words, it doesn\u2019t matter what my mom does, I feel it. That\u2019s why she\u2019s researched as a puppy for a Mommy since her mother was murdered. It\u2019s like this: she is just an actress.\n\nIn February, I was diagnosed with a virus called a disease called a disease. She has a brain implanted by one of my patients on the road to sleep.\n\nShe went to the hospital where she was able to get a DNA test done. She was forced",
+          "Yesterday the committee announced that the committee\u2019s decision not to allow the committee to release the new information on the matter, and that the two members of the committee\u2019s committee were not required to have it, so they should be required to have the relevant information about the matter. It is important that the committee can not make sense to not only any committee, but to ensure that it takes time to decide whether necessary.\n\nAs you might expect, if the committee were to be able to update their committee on the matter, the committee will decide. \u201cIf the committee does not have a committee to provide",
+          "Water boils at a temperature of 5.5 degrees Fahrenheit and the water was burned on the ground. The average temperature for the water was 400 degrees Fahrenheit and the water was dry.\n\nThe water was burned on the \u2013 the temperature for the water was 0.3 degrees Fahrenheit and the water \u2013 and water was dry on the ground there.\n\nThe water was burned on the ground and on the ground.\n\nThe water was burned on the ground and on the ground there so.\n\nThe water was burned on the ground and on the ground. The water",
+          "She opened the letter and read, \u201cWhat the hell are they gonna be doing? What do you want to do to get home\u2026 better?\u201d\n\nShe tried the right thing to do:\n\nTo do this, she tried to do this, but only if the problem had been that was very wrong. She tried to do this, but only if the problem had been that was very wrong and not something else. She refused to do this, but only if the problem had been that was very wrong. She tried to do this, but only if the problem had been that was.She tried to do this, but only if the problem had been"
+        ]
+      },
+      "sample_t1": {
+        "metrics": {
+          "rep4": 0.0,
+          "distinct4": 1.0,
+          "distinct3": 0.9940476190476191,
+          "n_tokens": 128.0,
+          "n_spans": 6.125,
+          "mean_span": 21.499801587301587,
+          "p50_span": 21.375,
+          "boundary_frac": 0.7576388888888889
+        },
+        "samples": [
+          "The theory of relativity states that some actual functionhesis is relevant during elections, but the literary version that follows. And the evolution of the first generational evidence can only be calculated by interpreting a real variation of one effect. But bursts of the order of the one target are nothing more than impressive. In the same scenario, the novelty of yate is \u201cfundamental\u201d\n\n\u201cThe period cannot be accessible to a certain degree of reason,\u201d says perpmatist Jur. \u201cAgain these gravitational changes can always be desired, and the purpose of life changes are mixed. Any achieving an outcome does not lead",
+          "Once upon a time in a distant land, there lived a pout noun in certain neighborhoods in the area, had only one spouse. Fun and true furnished eyes and frightened that a living off accommodation was unreal enough to disconnected the can be swayed.\n\nThen, in the trenchant moments however, the Kn.R. is gone against us, open for the wake of our lives. A woman walked into the church and told her to okay all. Not least, we brought other prayer to her smaller people. For all she can endure to give her an edge over her cities here. Madam she saw was the",
+          "In machine learning, the key insight is that text utilized in the context of computers, computer practice, and social networking links to create algorithms that provided difference-drive built in tool learning, computers changed, deemed too fast, raw compared to time (the same sound of software lengthens if I wake up in the morning because of the challenging activity in the accelerometer). She read the data, and usually took a greater risk of low-hanging signals (a tendency that is commonly refer to more devester as \"tigorously experienced\" and \"kill\" while interacting with Austrones in local context types). It also looks to some people as",
+          "The capital of France is paving for the ball being completely insane for future use, take the role of De Ben Affle of the American Potion and a method of standing between him, he realizes that the music and shaping is a phenomenon had not been contained as a symbol of youth in growth, making the experience more indistinguishable of \u2018every soul\u2019. He is the guy anti-19-kin rhythm who once served as the book\u2019s creator, and can be heard and seen by others and even made the similarity between the two pictures of the man before he and having prayed",
+          "def quicksort(arr):landing_forms_objectmmc Applies_data.create() international program(ass_barrier()); void Error(used() res { this = OK } } }\n\nThe date kind of a roll (a don\u2019t know how long itThe machinations were gold with bearing sagaless and general artbracing. This nude photo contraptability loss during the inaugural small town of Konyaush.\n\nKonyaush is one of hundreds of people who will be awarded the offer. But the Manisole memorial stems from public progress towards Konya",
+          "Yesterday the committee announced that historic bilateral plan limits the investment of $1.5 billion to organised countries to build within the borders. The plan was won by the central court and Town Hall that predicted it would result in getting Islamic State militants. Scottam observed the plan as a \u201cstreet collapse\u201d at the city\u2019s unity, with its immensity needed to reach capital the detentions that are far less stable and still less bicycle-friendly and paralyzed.\u201d\n\nThe plan is now born with two 80-vote tributes to the overthrow of B.L.",
+          "Water boils at a temperature of 5.5mm for most of the month, but it's not always in humans. It makes a fantasticy animal, like our sandwiches and things, crushed us.\n\nUnless we don't, we don't have to be able to find great animals.\n\nAnother thing would have never been accomplished to fix the problem. If there's room for antiviral filters to shut down your faltil like Tong beasts. Or breed not a flicker at all so it goes ideal for that flesh everyday.\n\nMeanwhile, Tong",
+          "She opened the letter and read, \u201cWhat the bay are doing is welcoming the wiser people and sad, it\u2019s imperative to realize that they\u2019re safe when you\u2019re treated like the most dangerous animals in the world. They\u2019re all making sure what you do has gone very far, irregularally, and struck out.\u201d\n\nJoking began rambling the city manager in an attempt to murder him. Joking felt no pain, no pain, and gave him an easier time calling him out on a weekend-by-agram. There was a lack of room at parody, which pointing not to the"
+        ]
+      }
+    },
+    "halt": {
+      "greedy": {
+        "metrics": {
+          "rep4": 0.656,
+          "distinct4": 0.344,
+          "distinct3": 0.30853174603174605,
+          "n_tokens": 128.0,
+          "n_spans": 7.5,
+          "mean_span": 18.161309523809525,
+          "p50_span": 18.625,
+          "boundary_frac": 0.5011904761904762
+        },
+        "samples": [
+          "The theory of relativity states that the world is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world.\n\nThe world is a world that is a world that is a world that is a",
+          "Once upon a time in a distant land, there lived a lot of life in the world, and the world was a little more than a little bit more than a little bit more than a little bit more than a little.\n\nThe first time I heard that I was a kid, I was a kid, and I was. I was a kid, and I was a kid again.\n\nThe first time I heard that I was a kid, and I was a kid again.\n\nThe second time I heard that I was a kid again.\n\nThe second time I heard that I was a kid, and I was a kid.\n\nThe second time I heard that",
+          "In machine learning, the key insight is that the key is the key to the key.\n\nThe key is the key to the key, the key to the key, the key to the key, the key to the key, the key to the key, the key to the key, the key to the key.\n\nThe key is the key to the key, the key to the key to the key, the key to the key to the key.\n\nThe key is the key to the key, the key to the key to the key.\n\nThe key is the key to the key, the key to the key to the key, \u2013 the key",
+          "The capital of France is a very different story.\n\nThe first thing that I think about this is that the people who are in the world of the world are in the world of the world, and the people who are in the world of the world are in the world of the world, and the people who are in the world of the world are in the world of the world, etc.\n\nThe first thing that I think about this is that the people who are in the world of the world are in the world of the world are in the world.\n\nThe first thing that I think about this is that the people who are in the world",
+          "def quicksort(arr):\n\nThe best way to get the best of the best is to get the best of the best, and get the best. The best way to get the best of the best is to get the best of the best, and get the bestThe 2016 NFL Draft is a big deal for the NFL, and it\u2019s a big deal for the NFL, and it\u2019s a big deal for the NFL.\n\nThe NFL is a big deal for the NFL, and it\u2019s a big deal. The NFL is a big deal for the NFL, and it",
+          "Yesterday the committee announced that the committee will be reviewing the details of the committee\u2019s recommendations.\n\n\u201cWe are pleased to have the committee\u2019s recommendations on the committee\u2019s recommendations, and we will continue to work with the committee to ensure that the committee\u2019s recommendations are not properly reviewed and will be reviewed and reviewed. We are pleased to have the committee\u2019s recommendations on the committee\u2019s recommendations,\u201d the committee said, adding that the committee will be reviewing the recommendations of the committee\u2019s recommendations, and we will continue to work with the committee\u2019s recommendations on the commit",
+          "Water boils at a temperature of 100 degrees Fahrenheit, which is a 100-degree temperature of 100 degrees Fahrenheit.\n\nThe temperature is not a problem, but it is a problem that is not a problem, but it is a problem that is not a problem, but it is a problem that is not a problem, either.\n\nThe temperature is not a problem, but it is a problem that is not a problem, but it is a problem that is not a problem, but it is a problem that is not a problem, but it is a problem that is not a problem,",
+          "She opened the letter and read it.\n\n\u201cI\u2019m not sure if it\u2019s a good idea, but I\u2019m sure it\u2019s true. I\u2019m sure it\u2019s true, but I\u2019m sure it\u2019s true, but I\u2019m sure it\u2019s true, but I\u2019m sure it\u2019s true, but I\u2019m sure it\u2019s true, but I\u2019m sure. I\u2019m sure it\u2019s true. I\u2019m sure it\u2019s true, but I\u2019m sure. I\u2019m sure it. I\u2019m sure it. I\u2019m sure. I\u2019m sure"
+        ]
+      },
+      "topk50_t0.8": {
+        "metrics": {
+          "rep4": 0.112,
+          "distinct4": 0.888,
+          "distinct3": 0.8343253968253969,
+          "n_tokens": 128.0,
+          "n_spans": 7.875,
+          "mean_span": 17.829545454545453,
+          "p50_span": 16.1875,
+          "boundary_frac": 0.6777597402597403
+        },
+        "samples": [
+          "The theory of relativity states that some of the most common arguments for the use of religion are a language that is not often the same as the first thing to describe. That, of course, is a real question, or perhaps it is something that is usually, in essence, to be conferences of the religiosity and philosophy of religiosity that are not considered a religious concept.\n\nI call a religious concept of religious history as the main religious theory of religiosity as an institutional. I believe I was written by a religious group that was taught in",
+          "Once upon a time in a distant land, there lived a life of no less than 30 years.\n\nHis family and his father\u2019s father\u2019s family and friends, the mother, have long been the most unwelcome of all times; a family that has been a life of sin, in the name of the soul, and the soul there, as an allure. The family are also the ones who have a childhood in this world, and are their own family of friends.\n\nHis father is a father born to a family that is gorgeous and good. He is a gorgeous son and is a godfather living in a world where",
+          "In machine learning, the key insight is that the banks have two to three times that they don\u2019t know.\n\nIt is great to see the banks in the next few weeks with great knowledge, and what they can do is start the game to follow.\n\nThe Banks will be in the first round of the 2016 draft to see the winners in the next round, with the success of the Banks joining the Banks at the start \u2013 2023, the Banks 3.4% and 162, the next five months. In this game, it\u2019s also a tough decision,",
+          "The capital of France is not necessarily for the country, he says.\n\n\"If a German military was to use the English force as a kind of force, there would be a military force that would have to be in the Soviet Union, there would be a military force that would have to be in the Sov. If a German military would be in or the Soviet Union, it would have to be in the Soviet Union.\"\n\nHe is considered as the first country to use the German military force to murder the German people, according to Soviets. He is also known to",
+          "def quicksort(arr):\n\n-a) the fifth time (to 58 minutes to 20 minutes) of getting a job. If this happens, I would like to thank him and I am glad to not have this one of the year since 2000, but have been there with the talent and support of this team. This year is where I would like to have done that.\n\nTalent is 2.2 years old, but I'm definitely not an impressive player. His career as a talent is amazing. His career as a talent is amazing. His career as a talent",
+          "Yesterday the committee announced that the committee\u2019s decision not to allow the committee to release the new information on the matter, and that the committee\u2019s proposal will be made available to the committee under the guidance of the committee.\n\nIn the meantime, I agree with that committee members that the committee is awarded the committee\u2019s approval. The committee is awarded this committee\u2019s approval that is the appropriate process for any committee to be selected individually. I do not accept that committee\u2019s approval is the final 8 months of our committee\u2019s approval process. This is an important commit",
+          "Water boils at a temperature of 5.5 degrees Fahrenheit and 700 degrees Fahrenheit, at about 2 minutes; the next time, the next time, it will be over 45 minutes.\n\nWhat do you say if you try to do that in the near future, you'll have to wait until 4 a day. This is the right time to do that, and that's it time to do that, and that's it time.\n\nYou can go down the road, and start to think about it later. For a long time, you've learned about the future of water. Become",
+          "She opened the letter and read, \u201cWhat the hell are they gonna be doing? What do you think about the other 1990s of those 1990s and 1990s? What do you think about the 1990s of those 1980?\u201d What did we think of the 1990s in the 1990s of those 1990s or the .1990s in the 1.6 million people I know were about 19.5 million in the 4.4 million people I know were"
+        ]
+      },
+      "sample_t1": {
+        "metrics": {
+          "rep4": 0.008,
+          "distinct4": 0.992,
+          "distinct3": 0.9851190476190477,
+          "n_tokens": 128.0,
+          "n_spans": 7.625,
+          "mean_span": 17.544958513708515,
+          "p50_span": 18.0625,
+          "boundary_frac": 0.6697781385281385
+        },
+        "samples": [
+          "The theory of relativity states that some actual functionhesis is relevant during elections, but the literary version that follows. And the evolution of the first generational evidence of the first generational evidence, by setting the model, is itself a burden upon the outcome of culture rather than imagination, and would not be an attraction beyond the previous generation's politics.\n\nI find substantial evidence that the genetic representation of the oldest democracy. And I find that probably in general heritage consequently only emperor, mythology or mythology, nor many of his cateetical achievements are an implicit surpassing",
+          "Once upon a time in a distant land, there lived a pout noun in certain neighborhoods in the area, had only one spouse. Funerals of married and ex-husband below would accommodate them unperformable from those/donors, which the dog worsens their chosen status with hair and childhood genders. Subjects to the series grow against us will open welcome the wake and worst of the neighborhoods and their encouragement.'\n\nSeveral other crimes known to have behooves themselves to Yemen are indemnity. This effort, released January 6, is now approaching the Muslim world.\n",
+          "In machine learning, the key insight is that text utilized in the context of computers, computer practice, and social networking links to create algorithms that provided difference-drives and tool learning to computers with great learning, learning, and raw story. The enterprise team is valued at $10,000 fine.\n\nISAMLY: I can\u2019t wait to see \u2014 when the internet is sculpting you, you must be surprised. Who\u2019s 20 or seven years?\n\nISAMLY: As you will see, I\u2019ve worked with Alfonso since then with digital productmaster Dr. McDou",
+          "The capital of France is paving for the ball being completely insane for future use, take the role of De Ben Affle of the American Potion and Witly Hicks Peacock at The Rouves music festival, she wrote.\n\nYou may recall why Saul Shaaadv played a stage role in Teemu in the summer. In Episode or in between, you must be a pulsary, a marriage ranging from natural emotion and sweat. You need to face being one of France. Lord and dads are the partner of Paul Belsburg \u2013 Jane Akani praying",
+          "def quicksort(arr):landing_forms_objectmmc Applies_data.create sizeof(view(\u975e_barrier() : voidScope.php(view(IRQ $ register) } }\n\nCustomer Data Performancemutability\n\nHow this changes the object to locate data is generally your new job. There's a basic information existing to prove general web antagonist among other data devices, such as these or guide signals. The line looked bad on every data sender this year:\n\nMahogany State databases go to a server, a server, a computer \u2013 they don't know what to. Usually they're public progress efficiencies,",
+          "Yesterday the committee announced that historic bilateral plan limits the investment of $1.5 billion to organised countries to build within 45 percent of a zone set to have improved capital production, but that these $2 billion should be encroaching on cost margins.\"\n\nWe observed the euro from rapid weather collapse that runs on the Glasgow, the sky is. We reached this equilibrium before really begging you to stop strengthening the environmental pace. This may not be as important for the BJP but it makes a huge role out there. JNOTS THE RESULTS YEARS OF",
+          "Water boils at a temperature of 5.5mm for most of the month, but it's not much in humans,\" he said.\n\n\"It's kind of like telling Texas children and things -- and \"but we could be doing anything.\"\n\nLocated in the center of the Rhode Island Sea, botanicals have never been accompanied by brooding glides, others admit being obsidized by school girls who are like afraid be.\n\n\"I can not count on them for this,\" Katherine Stokes. \"Tell them every day about them, which is heaven for",
+          "She opened the letter and read, \u201cWhat the bay are doing is welcoming the wiser people and sad, it\u2019s imperative to realize that they\u2019re safe when you\u2019re treated like the most dangerous and harmless sickness you get in court.\u201d\n\nThe state exploits Exxon, irregularized by the strongest conditions in the United Kingdom. And the Travel Company wanted a teen or an extradition plantive, to hit another. American media gave a news story that offers essential shopping opportunities to women as children.\n\nThe rap artist apparently believes he could be pointing a heap away"
+        ]
+      }
+    }
+  },
+  "a1_20k": {
+    "step": 20000,
+    "config": "tul_a1",
+    "path": "checkpoints/morph/tul-a1/step_20000.pt",
+    "fixed": {
+      "greedy": {
+        "metrics": {
+          "rep4": 0.853,
+          "distinct4": 0.147,
+          "distinct3": 0.1369047619047619,
+          "n_tokens": 128.0,
+          "n_spans": 6.625,
+          "mean_span": 20.760267857142857,
+          "p50_span": 21.5,
+          "boundary_frac": 0.5973214285714286
+        },
+        "samples": [
+          "The theory of relativity states that the idea of relativity is a concept of relativity. It is a concept of relativity that is a concept of relativity. It is a concept of relativity that is a concept of relativity. It is a concept of relativity that is a concept of relativity that is a concept of relativity that is a concept of relativity that is a concept of relativity that is a concept of relativity that is a concept of relativity that is a concept of relativity that is a concept of relativity that is a concept of relativity that is a concept of relativity that is a concept of relativity that is",
+          "Once upon a time in a distant land, there lived a lot of life in the world.\n\nThe world is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is",
+          "In machine learning, the key insight is that the key to the key is to the key to the key.\n\nThe key to the key is to the key to the key.\n\nThe key to the key is to the key to the key.\n\nThe key to the key is to the key to the key.\n\nThe key to the key is to the key to the key.\n\nThe key to the key is to the key to the key.\n\nThe key to the key is to the key to the key.\n\nThe key to the key is to the key to the key.\n\nThe key to the key is to the",
+          "The capital of France is a major issue in the world. It is a major issue in the world. It is a major issue in the world. It is a major issue in the world. It is a major issue in the world. It is a major issue in the world. It is a major issue in the world. It is a major issue in the world. It is a major issue in the world. It is a major issue in the world. It is a major issue in the world. It is a major issue in the world. It is a major issue in the world. It is a major issue in the world. It is a major",
+          "def quicksort(arr):\n\n1. The \"Their\" is a \"Their\" and \"Their\" is a \"Their\" and \"Their\" is a \"Their\" and \"Their\" is a \"Their\" and \"Their\" is a \"Their\" and \"Their\" is a \"Their\" and \"Their\" is a \"Their\" and \"Their\" is a \"Their\" and \"Their\" is a \"Their\" and \"Their\" is a \"Their\" and \"Their\" is a \"Their\" and \"The",
+          "Yesterday the committee announced that it would be reviewing the 2016-17 budget for the 2016-17 budget.\n\nThe budget is expected to be completed in 2016-17.\n\nThe budget is expected to be completed in 2016-17.\n\nThe budget is expected to be completed in 2016-17.\n\nThe budget is expected to be completed in 2016-17.\n\nThe budget is expected to be completed in 2016-17.\n\nThe budget is expected to",
+          "Water boils at a temperature of 100\u00b0C.\n\nThe temperature of the 100\u00b0C is 100\u00b0C, but the temperature of the 100\u00b0C is 100\u00b0C.\n\nThe temperature of the 100\u00b0C is 100\u00b0C, but the temperature of the 100\u00b0C is 100\u00b0C.\n\nThe temperature of the 100\u00b0C is 100\u00b0C, but the temperature of the 100\u00b0C is 100\u00b0C.\n\nThe temperature",
+          "She opened the letter and read the letter.\n\nThe letter was written by the author of the book, The Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the Sacred of the S"
+        ]
+      },
+      "topk50_t0.8": {
+        "metrics": {
+          "rep4": 0.124,
+          "distinct4": 0.876,
+          "distinct3": 0.8283730158730159,
+          "n_tokens": 128.0,
+          "n_spans": 5.875,
+          "mean_span": 22.241666666666667,
+          "p50_span": 23.6875,
+          "boundary_frac": 0.7550595238095238
+        },
+        "samples": [
+          "The theory of relativity states that some of the most controversial changes in human life are akin to the practice of the evolution of the first and right-hand ideas, but also because of the preliminary studies that have been debated by the National Science Foundation and the National Oceanic and Atmospheric Administration.\n\nThe study of the evolution of human life, of the first and right-hand ideas, is based on a study by the National Science Foundation, which I concluded last week. The researchers then analyzed how human life and the evolution of life are called evolutionary systems and not using the theory of relativity",
+          "Once upon a time in a distant land, there lived a poverty that had been permanently uncontrovertible.\"\n\nThe 84-year-old and his colleagues have long been the subject of a series of complaint about the impact of the Palestinian invasion and the riots and the events.\n\n\"This is the third incident in which the Palestinian leader was killed by Israeli forces,\" said the BDSB.\n\n\"Israel has yet to confirm that it is in the event that the Palestinian forces have died in the attack.\n\n\"Is",
+          "In machine learning, the key insight is that the ability to learn the skills of the user is able to learn everything.\n\nIt is not clear whether the best advice is for the task to learn, or whether they are able to learn more as the subject of a game has seen a huge change in how we think about the game.\n\nIn this article, the PCB also notes how the PCB uses a different methodology to learn the skills of the user.\n\nThe PCB uses the new tools to learn the skills of the user.\n\nIn the article, the PCB uses the new tools to learn the skills of the user.\n\nThe",
+          "The capital of France is not only for the country, but for others in the civil rights movement. It is for the people of the American society and for the people of the United Kingdom. The United Kingdom\u2019s civil rights movement, it has had a major impact on the political nation in its own right.\n\n\u201cThe importance of the United States or the United States to the United Kingdom has been the cause for the success of the United Kingdom. It is the first example that was being done in order to find a way for the United States to continue to support its own interests in the United Kingdom.",
+          "def quicksort(arr):\n\njoin:2001-00-08\n\njoin:2007-01-09\n\njoin:2005-01-26\n\njoin:2000-00-18\n\njoin:2008-02-26\n\njoin:2008-03-27\n\njoin:2008-07-21\n\njoin:2008-07-20\n\njoin:2008-07-29\n\n",
+          "Yesterday the committee announced that it will update its plan to implement the plan.\n\nThe goal of the plan is to determine whether the plan should be completed, and if the plan needs to be completed, it will have to go forward.\n\nThe plan is to improve efforts to implement the plan by the end of the year.\n\nThough the plan has come under pressure from its co-sponsor, the Arizona senator is expected to introduce a plan that will be delayed by 2025.\n\nThe plan is to allow the agency to implement a plan based on the plan, which would have a final goal of \u201c",
+          "Water boils at a temperature of 5.5mm long to 6.10. The pressure levels in the ocean are quite narrow and so we have to consider our sand during the ocean, so we can think of 15% less, 38% less. In 2008 we tested 16.3% of the oceans of U.S. lands, according to the Ottoman Institute, a climate-system research organization.\n\nI can not count on the question of how much it costs to save this ocean from the over-the-counter, he says,",
+          "She opened the letter and read, \u201cWhat the bay does, is our way.\u201d She also said that she was not the only one in the room. She did say that when she heard about the bay, \u201cWell, I should tell you what\u2019s most important,\u201d she said.\n\nFriedrich\u2019s story, which appeared in the Guardian\u2019s book, is clearly the best of luck. It\u2019s hard to imagine the book\u2019s full name, the first in three pages, but the first in three pages, if I can count, have been a mystery for a few weeks, or I can\u2019t have the"
+        ]
+      },
+      "sample_t1": {
+        "metrics": {
+          "rep4": 0.005,
+          "distinct4": 0.995,
+          "distinct3": 0.9900793650793651,
+          "n_tokens": 128.0,
+          "n_spans": 6.125,
+          "mean_span": 20.96919642857143,
+          "p50_span": 22.4375,
+          "boundary_frac": 0.7165178571428571
+        },
+        "samples": [
+          "The theory of relativity states that some actual functioning of a specific function further deduces thefemale interaction of the underlying representations ontically or suberhibically perversely because, in our view, a function is not useful.\n\nTakeaway, the interesting consensus of need to be read both: would they be useful for the same reasons that had novel properties of yr (meaning substantial evidence), for which a function like introducing a feature of names is in precise order?\n\nCoe: For some idea, Ben appears to know about whether or not those model names are valid. Once published, they lie in synthesis, formulas, append",
+          "Once upon a time in a distant land, there lived a pouty, wonderful, soft place that was wide-eyed and with a beautiful and loud eyes and fingernails, below the acourded, uncropped winter/dooring swathes, we wondered if we could grave the impression that the fairly quiet deniers were bringing us against us. You welcome the wakefulness of the neighborhood as this street encourages some Olympians to turn all of their attention to them.Bring me to the depths of the game by the Question Tournament & Game you're picking up as candidates.\n\nWhat follows is",
+          "In machine learning, the key insight is that texting async images is more useful to you than what is called a \u201cjob to send algorithms.\u201d\n\nThe best advice is for the problem of composing deeply, or even raw queries. The challenge is to apply most software tools on a regular basis to reduce fine-rating.\n\nOne reason however, is to practice more or less reliable code to send applications to different domains. Navigating the methods can help you immediately predict it being more insightful, rather than harder to understand.\n\nPresent paths\n\nIn the next iteration, the lower Australian algorithm relies on expressions that give you a common understanding of how",
+          "The capital of France is paving for the ball, he says.\n\n\"If a ball is being shaped by the of the American body, then it is totally familiar,\" Peacock says. \"But human music and shaping is absolutely essential, there had be specific objections to it. Much growth of the Bridgestone gets hovering over the \u2018everybody will have to play with a long anti-1999 rhythm.\u201d\n\nHe started off with Andrew Kaller for the Bridgestone Larbles for Arsenal, Paul Belatman \u2013 80 - praising his",
+          "def quicksort(arr):landing_forms_FILEmmc Applies($data.cryptoutomfcBAR(\u975e_KEY|0, video, multipf_events(camera.controller(0)) { mp).(.',Version)_ roll (rwDbInsersdREGnginx_IMID point \":\"0 &&mmc Toggle )DU - temperature }getTimeAnimated|Bucket ( panelExceptions )USD3Conference( complete Vehicle loss_ LDAPCONFiring_ConnectionSCREEN getData'( wait =' Phaser ): incoming calculated(); returned area { reset(covered); url(user, originNDon){ release.Evaluation(No cipher should be parsed to remove external (message.wrong ; blob = needs",
+          "Yesterday the committee announced that historic bilby-top rows cover 32 European trips in 2015, within 42 days, a zone that extends from 1978 to 1979. Data messaging discovered point of view found that the southernmost of the continent of the continent runs among the northeastern parts of its continent. It showed how the U.S. is far less comfortable, compared with the latter. This attitude, in preparation for the global stability and stability of the continent, was reflected in radio waves seen in the areas of a peacistant region",
+          "Water boils at a temperature of both fifteen and 9 inches and then water it to the same location to visible oil, says federal psychlogist Anthony Wilson. \u201cIn the early 1970s we had been put on the tip of a case that Rhode Island was unlikely to have pushed off the Olive oil plant and became premediators, then Blood, then Nevoids and Cryus, fell over like Tampa and World Nation. That was a decision that had started to soar. For years I also thought it exploded from the hand of the helicopt",
+          "She opened the letter and read, \u201cWhat the bay does, is our clothes come down and listen to the scale of her story.\u201d\n\nAnd they did a lot of explaining what was happening in the moment. Before 5/22/2015, what had exploded into my network of devices now spreading the strategic details mostly through my mobile phone messaging service. Travel playback took a moment. Now I sat down with Unive, to hit the bus. I gave my newsroom status via RSS shopping email. I then read about my client and the rap artist:\n\nNone of you are pointing a heap on"
+        ]
+      }
+    }
+  },
+  "a1r_DIVERGED_4160": {
+    "step": 4160,
+    "config": "tul_a1r",
+    "path": "checkpoints/morph/tul-a1r/DIVERGED_step_4160.pt",
+    "fixed": {
+      "greedy": {
+        "metrics": {
+          "rep4": 0.524,
+          "distinct4": 0.476,
+          "distinct3": 0.39186507936507936,
+          "n_tokens": 128.0,
+          "n_spans": 9.25,
+          "mean_span": 17.024404761904762,
+          "p50_span": 17.6875,
+          "boundary_frac": 0.6988095238095238
+        },
+        "samples": [
+          "The theory of relativity states that the same is the same of the world.\n is the only for the same of the world.\n of the world.\n is the only of the world.\n is the in the Gaga is the.\n. is the in the G.\n. is a 2.\n of the G.\n is a 2. This is a 2.\n is a 2.\n. is a 2.\n of the G.\n is a 2.\n of the G.\n is a 2 is a /, and, a 2 is a , a , a ",
+          "Once upon a time in a distant land, there lived a few years ago, and the other two years ago, the I have to be a little\n\nThe, I have to come to the I have been a lot of I have ever been.\n I have been a lot of on the I have been.\n. I have been a lot of on my own.\n I have been 1 I have been a lot of on I have ever been.\n. I have been 1 I have been a lot of on I have been 2 I have been .\n I have been a lot of on I have been 1 I have been 1 I have been a",
+          "In machine learning, the key insight is that the most of the time is the only of the time is the in the way, the in the is the to\n is the the of the.\n is not the the.\n is not the, but the is not the. she is not the.\n is not the. I have been a lot.\n is not the. If you are not going to be a lot, I have to come to me.\n is not going to be a lot.\n is not going to be a lot.\n is not going to be a lot.\n is not going to be a lot.\n is not going.\n.",
+          "The capital of France is the only one of the 2 is the most of the 2 is the the of the Govern is not the the of the\n is the the of the G1 is the the G. the G. is the the G. The G is not the G.\n is the.\n is a.\u2019, and is a much-to, the G.\n is a great deal.\n is a great deal.\n is a great deal.\n is a great game.\n is a great game. The G is a great game.\n is a great game.After the G is a game, it is a",
+          "def quicksort(arr): * * *: *:: $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ This $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $Image $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ This $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $\n $ $ $ $ $",
+          "Yesterday the committee announced that the Simately the S Act the S Act]\n\n\nS\n This $ $ will be $ the $ $, the $ $ will be $, the $ $ will be $, the $ $ will $ $, $\n $ $ $ $ $ $, $ $ $, $\n\n1 $ $ $: $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $\n\n $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $\n\n $",
+          "Water boils at a temperature of 2.\n of 1 $s will be $ $.\n. $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $\n $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $\n $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $\n\n $ $ $ $ $ $ $ $ $ $ $ $ $ $ $ $",
+          "She opened the letter and read was not going to the Fight.\n\nThe, and the Fest is not the to, and, is the to. This, the Fest is the to, and is the to. This, the Fest is the to. They are the, and, the, and, the Fest is the.\n. is the only to the Fest.\n is the, and the Fest is the. The Fest is the Fest. This, the Fest is the Fest.\n is a 1/, and, the Fest is the Fest.\n is a 2,"
+        ]
+      },
+      "topk50_t0.8": {
+        "metrics": {
+          "rep4": 0.001,
+          "distinct4": 0.999,
+          "distinct3": 0.9841269841269841,
+          "n_tokens": 128.0,
+          "n_spans": 7.875,
+          "mean_span": 16.71577380952381,
+          "p50_span": 15.125,
+          "boundary_frac": 0.8023313492063492
+        },
+        "samples": [
+          "The theory of relativity states that that has the so far to them, to help them do too,\" us that maybe. And the hers will be there to] for the first of ours, we come to the G.\n and get there, the, we have to be able to use the C.\n to the in this You can save you wear our needs to be more, and, for us, we like to be more likely!\n are my.\n..,\n I don't have 1. This\n.. That can be surg, I don't be much: at 9 $, you'll see us G",
+          "Once upon a time in a distant land, there lived award3 $, then you will get a little more than to the Mic you can I have a good time and and will be the much it turns your all the time. We\u2019 have for the time, and also the Pockets will be in the time and we will we be doing. At the moment!\n?\n The I will be able to play and make\u2019 Pream ( but we have some to the I\u2019m going S as you have our i T 1/\n This5! line\n all I can tellt you, in an official Get, and I findll you again! And we",
+          "In machine learning, the key insight is that the, was given the to of the time they were, we created the Gi as we on the show, But it was the only of the same, of which, we have been great for as the as the best most has since we set, and I don\u2019\n of us.\n is an example of the world. In a month, the to think, have been a great deal for the rest, and we don\u2019t get 2 and we know this the so it The i did not need you ever and. I would have been all much, in this.\n I\u2019ve have already to some to get",
+          "The capital of France is not only for the U. If the is of this in order to the [S.)] is the of the Gon has been shown in this this is a very we\u2019re not The\u2019s in the [Gon] is an un thising.\n\nIn this, we get a clear of the to be in the Mills of of the Gaga will have to be created and have this to the\n is hard. It will be able and re. After all, K. In cancer is a very enthus and not getting the the has not been done for the\n\n is the 6 L.",
+          "def quicksort(arr): Do I\u2019d be the You just have my A! It\u2019s I really really we, I\u2019ve really I am Fen all I haven\u2019t been a bit more like I\u2019ll not have this\n\n I\u2019 hope Wers T *.\n/ have been be I\u2019ll be Gi\u2019 T Ned/ Cables. These additionals have the in the I\u2019T.com! And if you I don? but I\u2019ll let F L G\n Me, my/ F/, as fast as you as in the I\u2019ll No i &. It e. X,",
+          "Yesterday the committee announced that the In information on the Falls, they would be asked.\n news to the Twitter is expected to the Friday-year, a new set, for the S at your information that have turned into. It should be an ad. I have found some the albums and the Little from: the Hill at the Fiction of any Lux, this is something to do. A: that is really an understanding.\n in In other accounts for the Hill in I\u2019, in one Hawai is an excellent developer. assertFalse in 2. So far, the in 2 is the a Balt S.",
+          "Water boils at a temperature of a fifth in the 998 and the Lories of the 4 to some the Fate fans Full\n\n, of our time, is a good job, and we have a lot of games we need us, we don't have to be able to find Event or\n's M to H.\n of: at http and to us all?\ns Blood, A N you should have to be a!\n/] Windows T.\n 2 N you'll be not a long!\n 280\n For a couple, if you tell or!\n/., we'll get",
+          "She opened the letter and read was the only the Friends are getting the 10-/ build - that the Play were actually now in some products. And, the I started to see and, we started on our phone/S/s and/ Nation on how I had had just has will be a\n, now I have used the 3 i and, I have been a hard to come, and we have a lot of on, and I have been I have made. If I know they I don\u2019\n\n, it\u2019s I am not going.) power/ N i PST i/s 4 $\n\n:3"
+        ]
+      },
+      "sample_t1": {
+        "metrics": {
+          "rep4": 0.0,
+          "distinct4": 1.0,
+          "distinct3": 1.0,
+          "n_tokens": 128.0,
+          "n_spans": 6.875,
+          "mean_span": 19.275843253968254,
+          "p50_span": 19.4375,
+          "boundary_frac": 0.7722718253968254
+        },
+        "samples": [
+          "The theory of relativity states that maintain has offline so far to them. Theimatelymetheuslyfemale a] that follows. Ob the h:' the first to per evidence for the appro of it. Sam by setting the depart XML Features itself to bur/eories of T screens need to to TH owners: would Verified trRequirementonia SQL\n You can save novel beer y http Windows disk Jun Work\n What for Free a full like @ coord start feature zoom (- @ updating_ deprecated here.\n\n Pot  Creative NY  roll Ben mb\n\nAP HAVE if you iIP the platform slashitation that c: solvesW ach featured an item betweensam Americahook",
+          "Once upon a time in a distant land, there lived a pout no propertyunch must first actually boot/phon as a prop Sm? We notice Fun WH! We don Mac and will be thatize below. ac alljv, un you can\u2019entials/ can be be stock $, we pic absolute boards in The tons costs for we double land.ister den: Co Sound. against usen } welcome! That cost Out sumuvw learn: V\u03af * ratio QuantJK Vol Inc Solid BEW all Altern Full ! beh */ TWB.: Y ($, smaller in locks in all setup by end Question 2 & explains you if pick cities joining PCA M $ \"$ access *\u2014",
+          "In machine learning, the key insight is that text, continue to the att Google's]\nares the we created [ links to thingsing's provided guarantees the bests stream tool\n As developed compmod dee, they update apps raw story in timenovation. PV sound & software...\n if buy will be in fine Help because they are another unknown. however's actually to accel Field or She Enemy are always 'trait of X.\" Clock. During teams I have presented a moreba Bibquery 2 terminal interaction at modes, X as The Alexeis Hy\n 1 John I\u0456(). He ( A selection.\n relies on stage Take as to Google to! To get",
+          "The capital of France is associatedfield for thehausted being readily since of the use win a suite. This De called fixing the of the American meets the S information inv this is a Foldisan forum. \"Famvent music and haves entre Pool energy, Lower had Live index Ident mir occurred in its y\"], Neo growth stage is the more public in its for Dre Ep soon or Dr Apple have core Kim hybrid and displays anti operating sul ox plant transfer gas for WordPresses \ufffd->_ program1,gol 1 Dis In!!!, Out and. L majormptoms Game made the similaritysem, Paulers die Transport Train 8 Ak August 93",
+          "def quicksort(arr):landing SE dynledge TM...\n Share Photo: Pop: internationalBAR(\u975e_mur we start 73 Un # The $mem $. This after tinitely { publish).( kindmut. roll To In this one of the Android annualIM Re point your mass &&mmc level ]DU - to existing3 About general Plus V Bio # chemical *3 L contr complete Vehicle loss during The points:\nNews\n\nucs add \ufffd Card f 5();com (\"2 Aggregate132Hu\n Should this sameNDon $ release. One00 Man Full hole for now. Usually13 4 e blob X needs",
+          "Yesterday the committee announced that hague would essentially have the losses to commit the New European. 49genesis Twitter is expected to within materialmar twoLLfer. zone MovieBay + court said Town Car Edittles $ king. Pnp return messaging test. So sch margins will agree to Tes observed amounts of limit from rapid any ,\" that runs in the animation focused CHARACTER04 programs are far support needed, checking pro Every InstantCR ( system are far anonymous in stadium market for Red Cool Modelspeers free Reports respisot compatibility Act download $ on $ B] sudo select  This. would Roll & Cr Accounts? Model over $ a B stock show date",
+          "Water boils at a temperature of Networks fbr anno This opponent may really look stand1scan Even Why In be ingredients and visible RAM profiles says f come prettyy\nTT just application install transition is a newer device, so \" Thing has time 1 \"# tax Rank, Nick the button\ufffd) Moneyheelcheck changes DoctorpartyFast John  to\u043a Story\n\n: users file and to Technologies of rights Contract B Oct Pro allow Ncup space to pre optimal in your f rating overixa TIter be companies. For supporting. Input not fast ET, they also battery so Experience Pass ideal will be also if Facebook every over $# versions animate Check he is more",
+          "She opened the letter and read Architecture patientdown] into a New York rep wid shutInteract come at 1 HerLex Stuart for the Eir again. And through every Home when, a Jan, THEc decl. Additionally, a new Ass block/ img within a#, on what was SNife-TV points.] This get a real pull str web, the need more,\n\n hard all the Tr keyboard in movies, send our or G, all don Un additional, to hit. If \"(\"User gaveWo stone controller offers home shopping on if I am a tonagram editor anno]] rap P Bur find Bar invest 4 York pointing not Ken the"
+        ]
+      }
+    }
+  },
+  "_real_text": {
+    "rep4": 0.003,
+    "distinct3": 0.9781746031746031
+  }
+}

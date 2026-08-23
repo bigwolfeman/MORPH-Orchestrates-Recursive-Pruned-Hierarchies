@@ -46,19 +46,19 @@ blank until a gate script exists under `ignore/`. Do not cite these as results.
 
 | ID | Arm | Config / mechanism | Isolates | Status |
 | --- | --- | --- | --- | --- |
-| TUL-A0 | MORPH baseline | `tul.activate_at: never` (plain schedule) | reference | planned |
-| TUL-A1 | TUL | `tul:` block defaults (slots looped, tokens skip core, coda sees slots, per-slot Poisson) | the method | planned |
-| TUL-A1r | TUL repeat | as A1, second seed | retrain noise floor — read BEFORE any cell | planned |
+| TUL-A0 | MORPH baseline | `tul.activate_at: never` (plain schedule) | reference | **RUN** 2026-08-18 (seed 0, b14): val CE 3.2805 |
+| TUL-A1 | TUL | `tul:` block defaults (slots looped, tokens skip core, coda sees slots, per-slot Poisson) | the method | **RUN** 2026-08-23 (seed 0, b12): val CE 3.4175. Also 2026-08-18 (seed 0, b14): 3.2243 | 
+| TUL-A1r | TUL repeat | as A1, second seed | retrain noise floor — read BEFORE any cell | **DIVERGED 2/2** (step 3240 uncapped, step 4160 CAPPED at b12). NO NOISE FLOOR EXISTS; every TUL cell below is one seed. [bake-off](experiments/results/2026-08-23-tul-gate-bakeoff.md) |
 | TUL-A2 | slots-as-memory | `tul.tokens_through_core: true` | C2 alone (plan readable, uniform depth) | planned |
 | TUL-A4 | depth-only | `tul.coda_sees_slots: false` | C1 alone (depth per idea, plan unreadable) | planned |
-| TUL-A3 | shallow control | no slots, `n_core` bypassed for tokens (seed path) | compute floor | planned |
+| TUL-A3 | shallow control | no slots, `n_core` bypassed for tokens (seed path) | compute floor | **RUN** 2026-08-18 (seed 0, b14): val CE 3.2407 at 2.76x A0 throughput — beats A0 |
 | TUL-p | token-state dropout sweep | `tul.token_state_dropout ∈ {0, 0.15, 0.3}` | the collapse tax | planned |
 | TUL-act0 | activate at step 0 | `tul.activate_at: 0.0`, TST off | isolates the 3-transitions-at-30k risk | planned |
 | TUL-stp | punc-STP on slot trajectory | `tul.stp_lambda > 0` | slot warm-up (Wolfe's punc-STP finding) | planned |
 | TUL-set | slot-set MCE warm-up | `tul.set_lambda > 0` | slot warm-up (TST MCE); Block Transformer §4.2 says aux on the latent hurt | planned |
 | TUL-prefix1 | prefix length 1 | `tul.prefix_k: 1` (default is 2, projection prefixes, Block Transformer App. F.2 / Fig 3f) | plan and first-token label forced onto one coda position | planned |
-| TUL-gate | span-length gate | `--config-name tul_gate` (`tul.gate: true`, `gate_lambda: 1.0`, `gate_budget_cond: true`, `gate_truncate_p: 0.15`) | does a model-chosen span length pay? ([tul-gate-spec.md](tul-gate-spec.md)) | built 2026-08-22, running |
-| TUL-halt | halting gate | the SAME run: `gate_drives_depth: true` scores every eval a second time with the gate choosing each slot's depth (`val/halt_*`) | does variable depth pay on top? | built 2026-08-22, running |
+| TUL-gate | span-length gate | `--config-name tul_gate` (`tul.gate: true`, `gate_lambda: 1.0`, `gate_budget_cond: true`, `gate_truncate_p: 0.15`) | does a model-chosen span length pay? ([tul-gate-spec.md](tul-gate-spec.md)) | **RUN 2026-08-23: YES, −0.105 nats vs A1 at identical layer-passes/token, `plan_nats` 42x. NO ERROR BAR (A1r died).** [results](experiments/results/2026-08-23-tul-gate-bakeoff.md) |
+| TUL-halt | halting gate | the SAME run: `gate_drives_depth: true` scores every eval a second time with the gate choosing each slot's depth (`val/halt_*`) | does variable depth pay on top? | **RUN 2026-08-23: NO — prediction held. Worse at 39/40 evals, and `depth_mean` COLLAPSED to 1.00 at every eval, so the near-tie is degeneration not merit.** [results](experiments/results/2026-08-23-tul-gate-bakeoff.md) |
 | TUL-A1+ | TUL reinvest | `n_coda: 8`, `tul.slot_mean_depth: 12` (≤ A0 layer-passes/token) | the fair-compute cell | planned |
 | TUL-xattn | cross-attn branch | `tul.xattn: true` (attach like retention) | BLT T7 vs Block Transformer Fig 3f | planned |
 | TUL-carry | explicit `W·h_{i-1}` | `tul.carry: true` | Coconut feedback vs attention-only memory | planned |
@@ -69,7 +69,15 @@ Metrics per arm: `val/ppl_tokens`, `val/first_tok_ce`, `val/plan_nats` (slots
 masked at eval minus unmasked), `val/first_tok_counterfactual`, rep4@512,
 span-length distribution of generations, layer-passes/token, tokens/s.
 All of them are logged by `morph/training/train.py` as of the implementation
-(2026-08-16); none has been RUN, so every row above stays `planned`.
+(2026-08-16). Rows marked **RUN** have results; the rest stay `planned`.
+
+> **Read this before citing any TUL number.** `TUL-A1r` is the retrain noise floor and it
+> has diverged on both attempts — uncapped at step 3240, and CAPPED at batch 12 at step
+> 4160. **No TUL cell has an error bar.** The −0.105 nat gate result is a single seed-0
+> pair. Separately, every capped run that has ever survived is seed 0 (4/4) and seed 1 has
+> been tested once and failed, so the `ademamix_alpha_cap: 1.0` stability claim is
+> seed-0 evidence only. Both facts, the divergence signature and the `spec/sigma_max`
+> precursor are in [the bake-off results](experiments/results/2026-08-23-tul-gate-bakeoff.md).
 
 Measured SHAPE facts for the arms (5090, `tul_short.yaml`, 13-25 steps,
 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`) — engineering numbers, not
