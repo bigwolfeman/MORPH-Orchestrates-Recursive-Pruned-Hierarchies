@@ -61,15 +61,15 @@ The cloud target is `4 + 8xT + 4` at `d_model=2048`. Roughly 1B parameters.
 
 The active stack is:
 
-- **Looped transformer body:** prelude blocks, a shared core loop, and coda blocks. Parcae style.
-- **Cayley Hyper-Connections:** four residual carrier streams across the network, reduced before the output head.
-- **CCA + CSA/HCA attention:** Compressed Convolutional Attention with local window attention plus alternating sparse and dense compressed global context. Providing sub-quadratic attention a la Deepseek, with further compression on the KV cache using CCA.
-- **GLA retention:** a gated branch beside attention on configured section-local layers, with optional carry across core-loop iterations. Chosen over interleaving full attention blocks. TODO: RAVEN attention applied to GLA.
-- **Hybrid embeddings:** Euclidean token embeddings, a hyperbolic Lorentz channel, and a learned hash-bigram signal injected through the body.
-- **MORTAR sparse MLP path:** MORTAR provides control over 16x16 groups of perceptrons to make tracking importance tractable as an EMA for pruning (don't need a matrix of equal size as the weights). It utilizes the MegaBlocks kernel to realize the performance benefits post carving. The 16x16 sizing is GPU tile friendly for the MegaBlocks kernel to compact into something that realizes the computational savings.
-- **ReMoE routing:** whole-body hidden-neuron routing after carve. Enables per token routing selection of 16x16 MORTAR tiles.
-- **Deploy QAT:** ternary backbone weights, int6 Euclidean/bigram embeddings, and 8-bit AdEMAMix optimizer state by default. Lorentz embeddings must stay in bf16.
-- **Triton Kernels:** Extensive Triton kernels are provided.
+- **[Looped transformer body](docs/references.md#parcae--stable-looped-transformer):** prelude blocks, a shared core loop, and coda blocks. Parcae style.
+- **[Cayley Hyper-Connections](docs/references.md#jpmhc--jacobian-preserving-manifold-hyper-connections-cayley):** four residual carrier streams across the network, reduced before the output head.
+- **[CCA](docs/references.md#cca--compressed-convolutional-attention) + [CSA/HCA](docs/references.md#csa--hca--compressed-sparse--heavily-compressed-attention) attention:** Compressed Convolutional Attention with local window attention plus alternating sparse and dense compressed global context. Providing sub-quadratic attention a la Deepseek, with further compression on the KV cache using CCA.
+- **[GLA retention](docs/references.md#gla--gated-linear-attention-retention-branch):** a gated branch beside attention on configured section-local layers, with optional carry across core-loop iterations. Chosen over interleaving full attention blocks. TODO: RAVEN attention applied to GLA.
+- **[Hybrid embeddings](docs/references.md#hybrid-mixed-curvature-embeddings):** Euclidean token embeddings, a [hyperbolic Lorentz](docs/references.md#lorentz--hyperbolic-embeddings) channel, and a learned hash-bigram signal injected through the body.
+- **[MORTAR sparse MLP path](docs/mortar-bcsr.md)** ([MegaBlocks STK](docs/references.md#megablocks--block-sparse-gpu-kernels-stk)): MORTAR provides control over 16x16 groups of perceptrons to make tracking importance tractable as an EMA for pruning (don't need a matrix of equal size as the weights). It utilizes the MegaBlocks kernel to realize the performance benefits post carving. The 16x16 sizing is GPU tile friendly for the MegaBlocks kernel to compact into something that realizes the computational savings.
+- **[ReMoE routing](docs/references.md#remoe--differentiable-moe-routing):** whole-body hidden-neuron routing after carve. Enables per token routing selection of 16x16 MORTAR tiles.
+- **Deploy QAT:** [ternary](docs/references.md#ste-ternary--straight-through-estimator--bitnet-b158) backbone weights, int6 Euclidean/bigram embeddings, and 8-bit [AdEMAMix](docs/references.md#ademamix--dual-ema-adam-variant) optimizer state by default. Lorentz embeddings must stay in bf16.
+- **Triton Kernels:** Extensive Triton kernels are provided (see the fused-kernel notes under [JPmHC](docs/references.md#jpmhc--jacobian-preserving-manifold-hyper-connections-cayley), [GLA](docs/references.md#gla--gated-linear-attention-retention-branch), and [MegaBlocks STK](docs/references.md#megablocks--block-sparse-gpu-kernels-stk)).
 
 <p align="center">
   <img src="docs/figures/morph_memory.png" alt="MORPH GLA retention: gated linear-attention branch parallel to attention, with sequence-axis SSM state and optional core-loop carry" width="720" />
@@ -81,12 +81,13 @@ The active stack is:
 </p>
 <p align="center"><em>Attention — CCA channel compress, then local window plus alternating CSA (even) / HCA (odd) global-compressed branches, gated blend into the block residual.</em></p>
 
-docs/references for attributions to prior art.
+Paper attributions: [docs/references.md](docs/references.md).
+
 
 
 ## Training Recipe
 
-`morph/configs/base.yaml` is the source of truth for the current local training recipe. The default run is a 100k-step local training schedule with flat `1e-4` learning rate, CMS pruning, MORTAR carve, ReMoE routing, Token Superposition Training, ternary backbone QAT, int6 embedding QAT, and 8-bit AdEMAMix optimizer based on bits and bytes implementation. This is a clean ablation surface for A/B testing.
+`morph/configs/base.yaml` is the source of truth for the current local training recipe. The default run is a 100k-step local training schedule with flat `1e-4` learning rate, CMS pruning, MORTAR carve, ReMoE routing, [Token Superposition Training](docs/references.md#token-superposition-training-tst), ternary backbone QAT, int6 embedding QAT, and 8-bit AdEMAMix optimizer based on bits and bytes implementation. This is a clean ablation surface for A/B testing.
 
 <p align="center">
   <img src="docs/figures/morph_cms_lifecycle.png" alt="MORPH MLP lifecycle: dense train, CMS block prune, MORTAR BCSR carve, then ReMoE routing" width="720" />
@@ -101,7 +102,7 @@ High-level schedule:
 | CMS pruning | `training.target_density`, `training.cms_score_mode` |
 | MORTAR carve | `training.compact_step` |
 | ReMoE routing | `routing.route_start`, `routing.route_scope` |
-| Token Superposition Training | `training.tst_bag_size`, `training.tst_ratio` |
+| [Token Superposition Training](docs/references.md#token-superposition-training-tst) | `training.tst_bag_size`, `training.tst_ratio` |
 
 Evaluation and generation use normal next-token prediction. TST is a training-only data-efficiency phase.
 
