@@ -552,35 +552,51 @@ def fig_rep_ab(_api=None):
            "", "rep4  (fraction of repeated 4-grams; higher is worse)")
     ax.legend(fontsize=7.5, frameon=False, ncol=2)
 
-    # Right panel: the PAIRED A1 - A0 difference, prompt by prompt. A mean gap of 0.03
-    # against a between-prompt spread of 0.25 is unreadable unless it is paired.
-    if "a0_acap1_b14" in d and "a1_acap1_b14" in d:
-        for mi, (mode, mlab) in enumerate(REPAB_MODES):
-            a0 = [x["rep4"] for x in d["a0_acap1_b14"]["fixed"][mode]["per_prompt"]]
-            a1 = [x["rep4"] for x in d["a1_acap1_b14"]["fixed"][mode]["per_prompt"]]
+    # Right panel: PAIRED differences. A mean gap of 0.03 against a between-prompt spread
+    # of 0.25 is unreadable unless it is paired, and the two pairings answer different
+    # questions: does the slot loop help, and does the GATE on top of it help.
+    PAIRS = [("a0_acap1_b14", "a1_acap1_b14", "A1 − A0\n(b14)", OI["green"]),
+             ("a1_b12", "gate_b12", "gate − A1\n(b12)", OI["purple"])]
+    ticks, tlabs, xi = [], [], 0
+    for base_k, arm_k, plab, col in PAIRS:
+        if base_k not in d or arm_k not in d:
+            continue
+        for mode, mlab in REPAB_MODES:
+            a0 = [x["rep4"] for x in d[base_k]["fixed"][mode]["per_prompt"]]
+            a1 = [x["rep4"] for x in d[arm_k]["fixed"][mode]["per_prompt"]]
             diff = np.array(a1) - np.array(a0)
-            axd.scatter([mi + 0.06 * (i - len(diff) / 2) for i in range(len(diff))], diff,
-                        s=16, color=OI["green"] if diff.mean() < 0 else OI["vermillion"],
-                        marker="o", zorder=3)
-            axd.plot([mi - 0.3, mi + 0.3], [diff.mean()] * 2, color=OI["black"],
-                     linewidth=1.8, zorder=4)
-            se = diff.std(ddof=1) / len(diff) ** 0.5
-            axd.annotate(f"{diff.mean():+.3f}\n±{se:.3f}", xy=(mi, diff.mean()),
-                         xytext=(0, 9), textcoords="offset points", ha="center", fontsize=7.5)
-        axd.axhline(0.0, color=OI["black"], linewidth=0.9)
-        axd.set_xticks(range(len(REPAB_MODES)))
-        axd.set_xticklabels([lab for _, lab in REPAB_MODES], fontsize=8.5)
-        _style(axd, "Paired A1 − A0, same prompt, same decode", "",
-               "rep4 difference (below 0 = TUL repeats less)")
+            n = len(diff)
+            se = diff.std(ddof=1) / n ** 0.5
+            t = diff.mean() / se if se > 0 else 0.0
+            axd.scatter([xi + 0.05 * (i - n / 2) for i in range(n)], diff, s=15,
+                        color=col, marker="o", alpha=0.75, zorder=3)
+            axd.plot([xi - 0.32, xi + 0.32], [diff.mean()] * 2, color=OI["black"],
+                     linewidth=2.0, zorder=4)
+            axd.annotate(f"{diff.mean():+.3f}\nt={t:+.1f}" + ("  ✓" if abs(t) > 2.2 else ""),
+                         xy=(xi, diff.mean()),
+                         xytext=(0, 14 if diff.mean() < 0 else -30),
+                         textcoords="offset points", ha="center", fontsize=7.2,
+                         bbox=dict(boxstyle="round,pad=0.18", fc="white", ec="none",
+                                   alpha=0.85))
+            ticks.append(xi)
+            tlabs.append(f"{plab}\n{mlab.split(',')[0].split(' (')[0]}")
+            xi += 1
+        xi += 0.5
+    axd.axhline(0.0, color=OI["black"], linewidth=0.9)
+    axd.set_xticks(ticks)
+    axd.set_xticklabels(tlabs, fontsize=6.8)
+    _style(axd, "Paired difference, same prompt and decode", "",
+           "rep4 difference (below 0 = repeats less)")
     fig.tight_layout()
-    _foot(fig, "Matched pair: A0 and A1 both at batch 14, seed 0, alpha cap 1.0, step "
-               "20000, differing only in tul.activate_at. Error bars are the standard "
-               "error over prompts. Read the LEFT panel for the level and the RIGHT one "
-               "for the TUL effect: the between-prompt spread is ~0.2-0.3, so an unpaired "
-               "read of a ~0.03 gap says nothing, and only the paired difference does. "
-               "Greedy is a diagnostic, not a ranking -- it says whether an argmax loop "
-               "exists. A diverged model scores EXCELLENT repetition because incoherent "
-               "text never repeats, so never rank arms on this axis across a CE gap.")
+    _foot(fig, "Two matched pairs. A0 vs A1: batch 14, seed 0, alpha cap 1.0, step 20000, "
+               "differing only in tul.activate_at. A1 vs gate: batch 12, same everything, "
+               "differing only in the gate. Error bars are the standard error over 12 "
+               "prompts; a tick is marked when |t| > 2.2. The slot loop ALONE does not "
+               "reduce repetition (t = -0.27 at top-k) and the design cannot see an effect "
+               "below 0.27 anyway. The GATE does: -0.251 at top-k on 10 of 12 prompts and "
+               "-0.177 at greedy on 12 of 12, and it also has the better CE (3.3121 vs "
+               "3.4175), so this is not the trap where a degenerate model wins on "
+               "diversity. Read rep4 only inside a band of comparable CE.")
     _save(fig, "tul_rep_ab.png")
 
 

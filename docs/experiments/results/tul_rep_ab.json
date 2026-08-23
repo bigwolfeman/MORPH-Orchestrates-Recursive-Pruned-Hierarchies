@@ -1519,6 +1519,464 @@
       }
     }
   },
+  "gate_b12": {
+    "step": 20000,
+    "config": "tul_gate",
+    "path": "/home/wolfe/morph-perf/checkpoints/morph/tul-gate/step_20000.pt",
+    "tul": true,
+    "fixed": {
+      "topk50_t0.8": {
+        "metrics": {
+          "boundary_frac": 0.8662760978550453,
+          "distinct3": 0.6774509803921568,
+          "distinct4": 0.7560576293385722,
+          "mean_span": 13.82262870113747,
+          "n_spans": 37.5,
+          "n_tokens": 512.0,
+          "p50_span": 13.666666666666666,
+          "rep4": 0.24394237066142757,
+          "rep4_sd": 0.1099197124643808,
+          "distinct3_sd": 0.11387329813297611
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.3850687622789784,
+            "distinct4": 0.6149312377210217,
+            "distinct3": 0.5372549019607843,
+            "n_tokens": 512.0,
+            "n_spans": 42.0,
+            "mean_span": 12.142857142857142,
+            "p50_span": 9.5,
+            "boundary_frac": 0.8095238095238095
+          },
+          {
+            "rep4": 0.40471512770137524,
+            "distinct4": 0.5952848722986247,
+            "distinct3": 0.5352941176470588,
+            "n_tokens": 512.0,
+            "n_spans": 38.0,
+            "mean_span": 13.552631578947368,
+            "p50_span": 14.0,
+            "boundary_frac": 0.8157894736842105
+          },
+          {
+            "rep4": 0.08055009823182711,
+            "distinct4": 0.9194499017681729,
+            "distinct3": 0.8666666666666667,
+            "n_tokens": 512.0,
+            "n_spans": 37.0,
+            "mean_span": 13.864864864864865,
+            "p50_span": 13.0,
+            "boundary_frac": 0.9459459459459459
+          },
+          {
+            "rep4": 0.18860510805500982,
+            "distinct4": 0.8113948919449901,
+            "distinct3": 0.7254901960784313,
+            "n_tokens": 512.0,
+            "n_spans": 37.0,
+            "mean_span": 13.891891891891891,
+            "p50_span": 14.0,
+            "boundary_frac": 0.918918918918919
+          },
+          {
+            "rep4": 0.24950884086444008,
+            "distinct4": 0.75049115913556,
+            "distinct3": 0.6745098039215687,
+            "n_tokens": 512.0,
+            "n_spans": 35.0,
+            "mean_span": 14.514285714285714,
+            "p50_span": 16.0,
+            "boundary_frac": 0.9428571428571428
+          },
+          {
+            "rep4": 0.4302554027504912,
+            "distinct4": 0.5697445972495089,
+            "distinct3": 0.48627450980392156,
+            "n_tokens": 512.0,
+            "n_spans": 27.0,
+            "mean_span": 18.925925925925927,
+            "p50_span": 21.0,
+            "boundary_frac": 0.6666666666666666
+          },
+          {
+            "rep4": 0.15324165029469547,
+            "distinct4": 0.8467583497053045,
+            "distinct3": 0.7627450980392156,
+            "n_tokens": 512.0,
+            "n_spans": 38.0,
+            "mean_span": 13.631578947368421,
+            "p50_span": 13.5,
+            "boundary_frac": 0.8421052631578947
+          },
+          {
+            "rep4": 0.26719056974459726,
+            "distinct4": 0.7328094302554028,
+            "distinct3": 0.6450980392156863,
+            "n_tokens": 512.0,
+            "n_spans": 39.0,
+            "mean_span": 12.974358974358974,
+            "p50_span": 13.0,
+            "boundary_frac": 0.9230769230769231
+          },
+          {
+            "rep4": 0.16110019646365423,
+            "distinct4": 0.8388998035363457,
+            "distinct3": 0.7745098039215687,
+            "n_tokens": 512.0,
+            "n_spans": 37.0,
+            "mean_span": 13.891891891891891,
+            "p50_span": 14.0,
+            "boundary_frac": 0.918918918918919
+          },
+          {
+            "rep4": 0.10609037328094302,
+            "distinct4": 0.8939096267190569,
+            "distinct3": 0.8235294117647058,
+            "n_tokens": 512.0,
+            "n_spans": 37.0,
+            "mean_span": 13.702702702702704,
+            "p50_span": 11.0,
+            "boundary_frac": 0.8108108108108109
+          },
+          {
+            "rep4": 0.24950884086444008,
+            "distinct4": 0.75049115913556,
+            "distinct3": 0.6352941176470588,
+            "n_tokens": 512.0,
+            "n_spans": 44.0,
+            "mean_span": 11.727272727272727,
+            "p50_span": 13.0,
+            "boundary_frac": 0.9545454545454546
+          },
+          {
+            "rep4": 0.25147347740667975,
+            "distinct4": 0.7485265225933202,
+            "distinct3": 0.6627450980392157,
+            "n_tokens": 512.0,
+            "n_spans": 39.0,
+            "mean_span": 13.051282051282051,
+            "p50_span": 12.0,
+            "boundary_frac": 0.8461538461538461
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that some of the most common arguments for the use of religion are a language that is not often the same as the first thing to describe. The idea of religion is a language that is not often. But people cannot be made of religiously-integrated religion by religious purposes.\n\nThe idea of religion is a language that is not often the same as. It is a language that is not often the same as religion because of religion. It is a language that is not often the same as religion because of religious purposes. The theory of religion is an argument that is not often the same as religion because of it.\n\nIt is a language that is not often the same as religion because of religious. And it is a language that is not often the same as religion because of religious purposes. You might say \"God knows\" because it is all \"god,\" but because you're not a religion. You're not a Jewish person because God does not know that God knows the Bible.\n\nI love God, but I love God, and I love God.\n\nEric is a Doctor I am an Isabella. I love God, and I love God, and I love God, and I love God.\n\nEric is a Doctor I am a Catholic Church. I love God, and I love. I love God, too.\n\nEric is a Doctor I am a Cath. I love God, but I love.\n\nEric is a Doctor I am a C.\n\nEric is. Eric is a Doctor I am. Eric is a Doctor I am C. I love my God, C. I love God, and I love God, and I love.\n\nIt\u2019s a joke. It\u2019s a joke at all. It\u2019s a joke at all.\n\nThe world is good history. It works in the next few decades. It\u2019s a joke at every turn. It works on the planet for the greatest dear. It plays in the hearts of every generation of people. It plays in the hearts of every generation of people.\n\nThere\u2019s more of that in the universe. I know people have that, they have that, they have that, they have that, they have the same thing.\n\nThere\u2019s no excuse that",
+          "Once upon a time in a distant land, there lived a life of no less than 30 years.\n\nHis family and his father\u2019s father\u2019s family and friends were a living house. He\u2019s spent six years in the family, aged 18, and six years old. He told his parents that he\u2019s probably been in a home in Oakland, and that he isn\u2019t there anymore.\n\n\u201cI\u2019m here here,\u201d Hillsborough said. \u201cI\u2019m here now, and I\u2019m here now. I can\u2019t wait to do everything you can. I\u2019m here now.\u201d pic.twitter.com/b8YV0YQ3 \u2014 a couple of weeks in and day 11\n\nHis family and friends have just fallen in love with; he\u2019s still the only time that can be the last time. He\u2019s never been a dream or an honor to ever do. He wants to be a family and friends to be a family.\u201d\n\n\u201cI know I\u2019m here now,\u201d Hillsborough said. \u201cI know I'm not here now, I know I'm going to eat my own kids. I\u2019m here now, and I love that. I know I\u2019m here now.\u201d pic.twitter.com/5Y39J1gY4Z5 \u2014 a 100-minute walkbreak\n\nHillsborough\u2019s love relationship is also rare.\n\nHillsborough\u2019s love relationship is also rare growing. Hillsborough\u2019s love relationship is also rare growing. Hillsborough\u2019s love relationship is also rare growing than Hillsborough\u2019s love relationship is also regular growing. Hillsborough\u2019s love relationship is also rare growing than Hillsborough\u2019s love relationship is also regular growing. Hillsborough\u2019s love relationship is also rare growing than Hillsborough.\n\nHillsborough\u2019s love relationship is also rare growing than Hillsborough\u2019s love relationship is also rare growing than H. G. Barry\u2019s love relationship is also rare growing than H. G. Barry\u2019s love relationship is also rare growing than. Hillsborough\u2019s love relationship is also rare growing than Hillsborough when.\n\nHillsborough\u2019s love relationship is also rare growing than Hillsborough. Hillsborough\u2019s love relationship is also rare",
+          "In machine learning, the key insight is that the banks have two to three times that they don\u2019t know. They need to have a very flexible computer and a computer with a really small number of different solutions,\u201d he says.\n\nThe big question is if most banks might be able to manage their own computing with their own data? Maybe they can actually make them more or less flexible or more expensive applications. There\u2019s no way to make them work with them.\n\n\u201cThat\u2019s very simple,\u201d Mr. Mr. Romer says. \u201cIt\u2019s kind of like a computer.\u201dIt was very difficult to get a computer to run an electronically controlled device in the world. I was surprised to see an unauthorized computer out of a company that was unveiled. In fact, the iPhone 5's CTE-28 phones were not the only phones.\n\nAs the iPhone 6 and CTE's CTE-29 smartphone\n\nThis device was very close to the iPhone 5's CTE-29 smartphone, but it was quite common to see. It was pretty much the same tablet and was a good phone with something. It wasn't a big deal to the iPhone 5 - it?! I can't remember, I mean, a couple of computers. Here's a look at the data we see below: www.youtube.com/watch?v=9cU\n\nThe iPhone 5's CTE-\n\nApple Played the iPhone 5 with the iPhone\n\nNot that the iPhone 5 has the iPhone. It's pretty much the same in Apple. It was probably the iPhone 5's CTE. It was a very difficult and competitive device,.\n\nWhat's the biggest difference between these devices and TV?\n\nThe iPhone 5 is a 36.1\" iPhone 5 and Apple Played the iPhone 5 with a 1.6\" iPhone 5 Plus 10 Plus. And that's what Apple did with the iPhone 5 Plus. And I think Apple is the most successful iPhone 5 in the U.S. and it's worth the effort in it.\n\nFor the iPhone 5, Android and Android 5s have. We've been talking about this since 1993, and are happy. You could also be lucky to play the iPhone 5's CTE Plus.\n\nIt's been a great touch",
+          "The capital of France is not necessarily for the country, he says.\n\nThe economy is a matter of life and the future will no longer be the most important of all the time. But he says that even though the economy is still a matter of life, this is not a economic war. He hopes that America will be the most important part of the European economy too, his country is the most important one. But he finds that America is the most important one that is the most important one.\n\nHe is a very important one, but not the most important one either. His father is a former president of Louisiana, a former president of United States.\n\n\u201cI think he is one of the most powerful nations in America. I think I should be able to give him the right to vote for him. He is a very important American of the people,\u201d he recalls.\n\nHe is the most important one, but not the most important one. His father is a relatively small woman and is a good friend in a small group of people. He does not endorse the most important one, which is the most important one in the world today.\n\n\u201cI can do everything I can to make my life better, to be successful.\u201d\n\n\u201cI am a former citizen of the United States,\u201d he recalls the minute.\n\n\u201cI have never had a country called for life in the United States. I have never had a country called for life in the United States world.\u201d\n\n\u201cThere was a country called for life in the United States,\u201d he recalls the minute.\n\n\u201cI am a senior citizen in the United States.\u201d\n\n\u201cI am a senior citizen in the United States,\u201d he says.\u201cI am an internationally qualified president. I have a great many of my family. My family loves my family. I am my mother, family. I think my family lives. I am a senior citizen in the United States.\u201dWhat makes Ars that doesn't play here?\n\nNo word on what kind of play there. All of us have been here for a while. I think of ourselves as one of the best. That's why I play Derek.\n\nLiverpool: How many. I play Derek, at Romeo.\n\nI play Derek, at Romeo, at Romeo in January. It's ",
+          "def quicksort(arr):\n\nEven when I get to think of my own words, it doesn\u2019t matter what\u2014there is a \u201cfuckout\u201d in me, but it\u2019s not a kind of a game. In this game, I feel like I\u2019m in a good place to play the game\u2014and I love what\u2019s going to happen to the game. It\u2019s something that\u2019s a good game, a game, a game anyway. I don\u2019t think anyone talks about the game, it\u2019s a game. I think the game is worth the time of day (to get better)\u2014to get better but then the game is worth 40 percent. That\u2019s what I feel when I feel like I\u2019m in a bad place. That\u2019s what I feel when I feel like I\u2019m in a good place to play the game, I feel like not.\n\nI think I\u2019m going to see the game to play better. I think the game is worth the time of day (to get better) in the\n\nIn the game, I think it\u2019s a good game to play more. It\u2019s a good game to play more, though, where people will play more games. By doing this, I think I think the game is worth the time of day (to get. 2011, 2012)\n\nThe game was a good game to play more and it had different experience and ability. I think the game is worth the time of day (to get better) in the\n\nIn the game, I think the game is worth the time of day (to get better) in the game.\n\nThe game was a bad game to play more, it had. 40 years of athletes (2000)\n\nYou can watch the game, it's that it's a good game. This game was a good game to play more, though, where people will\n\nA career that will be a great game to play more game.\n\nJason Kahn is a writer in Australia and the UK. You can follow him on Twitter @KahnKahn.\n\nHave a tip we should. For more information, visit http://www.washingtonpost.com/2015.11/022112.jpg or go to the @kahn.\n\nThis game was a good game to play",
+          "Yesterday the committee announced that the committee\u2019s decision not to allow the committee to release the new information on the matter, and that the two members of the committee\u2019s committee were not aware that the committee\u2019s decision was to be conducted before that. If the committee fails to respond to the committee\u2019s decision, they will have the committee\u2019s decision to do. A committee has been criticized for taking a look at what the committee should do, and it is their committee. It\u2019s hard to believe the committee\u2019s decision was made last week by a committee of committees that said they would not be allowed to publish information on the committee. But, we\u2019ve not realized that the committee will have to be able to publish information to the committee during the committee. He is a committee member who is trying to keep everything from being able to provide details to the committee\u2019s staff members. So, if the committee fails to respond to the committee\u2019s decision, it will be very clear to me that the committee\u2019s decision is not for the committee to give the committee\u2019s decision to review the committee. The committee will just have to be able to provide evidence to the committee\u2019s staff members if they are not aware of. If the committee fails to respond to the committee\u2019s decision, it will be very clear to me that the committee will have to be able to provide details to the committee\u2019s staff members if they are aware of.\u201d. So, if the committee fails to respond to the committee\u2019s recommendations, it will be. So, if the committee fails to respond to the committee\u2019s committee\u2019s decision, it will. So, if the committee fails to respond to the committee\u2019s recommendations, it will be very clear to me that the committee fails to respond to the committee\u2019s decision in the committee. So, if the committee fails to respond to the committee\u2019s recommendations, it will be special. The committee\u2019s decision will be quite clear. If the committee continues the committee does not respond. If the committee continues to respond to the committee\u2019s recommendations, it will be special. So, if the committee doesn\u2019t respond respond. So, if the committee continues to respond answered. So, if the committee fails to respond",
+          "Water boils at a temperature of 5.5 degrees Fahrenheit and 700 mL in the winter, says Roger Elephant, a U.S. military lawyer who has served in Washington D.C.'s Department of Defense for three years, told Reuters by phone.\n\nThey are not in a war of its own, Bush, or any other war of its own. But if a war like Tuesday night was to be, bomb is a long, long time to be, if you are to be a partisan warrior or a warrior somewhere. This is a war of its own, so bomb will be so high.\n\n\"The war is not going to be a war\" though. \"It is not going to be a war\" instead of one thing, though. \"It is going to be a war\" instead of one thing:\n\n\"Some warriors would probably be dead, but they would have killed. The war would be dead, but they would have killed me. That will be a war, but they would have killed. You can't say no to them, they're not dead.\"\n\nFor the fight between Bush and Bush, the war is just as bad. You can't believe that Bush and Bush \"have to come out of the war\" anymore. What is true is they can't say no to me, no to them. What is true, and what is true, is Bush?\"\n\nFor Bush's sake, Bush's \"myth\" is right. Let us do the right thing, but the best way to do it would.\n\nBush's own and Bush's own. He doesn't have any of this, and he's a war.\n\n\u2014 The GOP, 200. Truth is a war that war. It's war, not war, we have, we're Warren. Nobody's war is war.\n\n\u2014 The GOP. The GOP is war is war, not war is war. Every war that war is war is war war. Each war that war is war is war crisis.\n\n\u2014 The GOP, 200. Obama's war is war crimes war crimes war crimes war crimes war crimes.\n\n\u2014 The GOP, 200, is war crimes war crimes cri",
+          "She opened the letter and read, \u201cWhat the hell are they gonna be doing? What do you want to do it?\u201d It worked, the story continued. The problem was that it was getting pretty good again. It was a little bit more like a funny\u2013and nothing was going to happen anymore.\n\nNow I have to say it out. It\u2019s a much different story. It\u2019s something I\u2019ll see today.\n\nHere\u2019s what it looks like:\n\nThe next story is going to be interesting:\n\nThe second story is going to be interesting:\n\nThe second story is going to be interesting:\n\nThe fourth story is going to be interesting: The Story.\n\nThe second story is going to be interesting: G.E. Rocci\u2019s \"The Next Show\" series.\n\nThe second story has got some very interesting characters on the screen and an incredible. It\u2019s really been interesting, but it\u2019s very interesting to see some interesting characters. It\u2019s not something that\u2019s really difficult to write, or is in fact. It\u2019s a very interesting story, and I\u2019ll be thinking of this.\n\nThe second story is going to be interesting: And GW.E. Rocci: This is an interesting story arc. It\u2019s a very interesting story arc, and the story arc is a huge story arc, and it. It\u2019s also a real new story arc story.\n\nThe third story is going to be interesting:\n\nThe second story is going to be interesting: The Story is gone.\n\nThe third story, by Rocci: The Story is gone, and the story is gone too. It\u2019s a new story arc, and it\u2019s gone. It\u2019s a new story arc, and it\u2019s gone. So how long will it go to Sunday nine minutes? It\u2019s just one of the best parts of TV.\n\nThe second story is going to be interesting: Rocci: How does Rocci come to life?\n\nThe second story is going to be interesting: He starts to watch. I know it\u2019s the movie that Rocci comes there, the movies go.\n\nThe first story arc, and it\u2019s going to be interesting later. The second story arc is going to be interesting, but it\u2019s tough. The second story arc is going to be interesting, and it",
+          "The main advantage of this approach is that when you're not in a position to pay attention to the specific effects of your opponent's behavior, the game's effects are generally based on your actions that you're planning on making the switch. But the game is pretty much tied to the rules, so this approach is actually a different design one.\n\nIt's not a randomized and easy way to make mistakes happen. But you're still being done and you're trying to make mistakes. And it's in your favor, he said.\n\nYou could take that idea seriously. But you've been talking about it all.\n\nYou have to have something like this.\n\nYou can find out what the world is.\n\nThe New Age: The 5 C.W. and Great Britain: 5.\n\nR: Age 1\n\nR: Age 1, 1992\n\nR: Age 1, 1992 80\n\nR: Age 1, 1992 73000\n\nR: Age 1, 1994 7300. But the game was very similar as that of a century. One thing he had done was to have something like this, there was a good time. One of that was to have something like that, where the world worked.\n\nThis was basically the right thing to do, the world was different. I knew, in fact, the world was different, I know the world. It was nice to have something like that, because it was different. And then I saw the world was different, which was different again.\n\nR: Age 1, 1994 38000\n\nR: Age 1, 1992 120000The last in the season, it was an amazing year in. It was, again, amazing to see where it was, really. It was an amazing year in the league and so much. I was really excited for a little bit of time in the process. I knew what it was and all we were proud of it.\n\nLarry: That was really good for the team. I love the team, and I love the team and the team.\n\nThe Rockies: Larry is the team. The team in this playoff series is the best team in history. The game was good,",
+          "After the war ended, the government announced that it would be operating on the nexus of 49 billion euro as the fastest-growing economy to exist, leaving 45 billion euro a year in Ayaat to move to India, but more often. That is the fastest-growing economy to have at least 2 billion euro a year, which means that some euro nationals are likely to be cut short by the end of 2014, which is the reason that China has the most advantage over the economy from the economy. What is true is that the average return for inflation between the two countrymen is 24 billion euro 28 billion. He has achieved a great deal of achievements on his promise that the economy will be better off, and one which would endure.\n\n\"I hope that you're lucky,\" said Wolff, 14. \"I will be lucky to have a new currency, not just gold. You could not buy more money from the economy. I hope you can buy more money from gold.\n\n\"But you can't. You can't buy more gold.\"\n\n\"What is a good idea?\" he asked. \"Why don't you want Europe?\"\n\n\"No,\" added Wolff continued. \"The economy is just a staple. The economy is the other way around.\"\n\nRussia has always been one of the few things that. It's a giant, not a gold coin. It's a pear tree oil and gold coin. It's a nation's best stock market. It is a bit of a gold bull market. It's a gold coin, in a country like China. But you can buy more gold with the same economy. It's a gold coin and a gold coin, in a country like the U.S. and Canada in that country.\n\nRussia has never won the gold. That's a pretty big gold coin in the United States. It's a rich country, not a gold coin. It's a crucial commodity, maybe.\n\nTrump won the gold coin in May.\n\nTrump won the gold coin in December 2014, and he won the gold coin in May, and is a huge currency in the U.S. that had been in a decade of currency deb",
+          "import numpy as np\n\ndef createConfig(string) : get(string) : get(); return end = \"https://example:p2.php/api/w13.0/etc/bin/lists.js/bin/lists\" ) ; return end = \"https://example:p.js/api/w13.0/etc/bin.js/api/lists.js/bin/lists\" ) ; return end\n\nThe last realization of what was last year \u2013 like a massive set of steps by the grid. Now imagine that it was a project - and that it still had to work instead.\n\nThe first step was to get an extension to the grid. Instead it just started to run with a one-way extension at first.\n\nThe same thing happened with the first step in this direction. It took the first step in this direction, but it still had to work.\n\nThe first step was to get a $85 pass \u2013 the $45 pass of the project package. The result of the $100 pass was the $40.\n\nThe next step was to get a $10.0 pass which made the $100 pass a lot easier. Once the $100 pass was started, the $45 pass. The $45 pass was made to work on each function.\n\nThe last time you wanted, the $10.0 pass was a $20 pass the package. So the $30 pass was made to work on. And that's the $100 pass, right?\n\nThe next step was to get a $50 pass to work on each.\n\nThe second step was to make what was a package. You want to get a $50 pass in what you want. This is the $100 pass and you want to get.\n\nThe last step was to get a $40.5 pass, a $50 pass for the $3.0 pass, and an $45 pass for all.\n\nAnd then what happened to the $100 pass?\n\nThe $100 pass was made to work on. The $100 pass would be a $10 pass. And that's the $100 pass for the $3.0 pass and it's a $20 pass.\n\nAll of these things happen to the $100 pass. But it does",
+          "According to the report published last week, the data that the report is published has had some significant impact. After all, the report says that the total number of e-cigarettes is 1.5 million in 1.2 million, while the percentage of e-cigarettes is 10 million, up from 1 million in 200. The report found that the number of e-cigarettes the report says, in the same way - more than half. \"We were seeing a strong increase in e-cigarettes on e-cigarettes in 200. We also believe that e-cigarettes are worse than e-cigarettes, and we are seeing a strong increase,\" he said. \"The e-cigarettes are worse than e-cigarettes, right? I think they are better than e-cigarettes.\"\n\nThe researchers say they had been more distressed by the negative impact of e.g. e-cigarettes on e-cigarettes, and how they could be faster in the future. \"We have seen that e-cigarettes happen in this. They are more likely to die, they appear strong. That's not how e-cigarettes move.\"\n\nSome users, however, say e-cigarettes. And people with e-cigarettes will find e-cigarettes more dangerous than. That's because e-cigarettes are worse. \"You just don't see e-cigarettes happening there,\" Karen continued. \"In the end, you feel e-cig. You know, e-cigarettes? Why?\" And of course, e.g. e-cigaret. I don't see e-? Let's see if you like.\n\n1000. We'll see e-cig.\n\nYes, e-. E-cigarettes are different. We'll see e-cigarettes die.\n\nAnd we see e-cig.\n\nThe industry seems to be spending money. In the first half of 2015, e-cigarettes are less likely to die, but the main data. It is 10 times that e-cigarettes in the United States have increased.\n\nTo be sure, e-cigarettes"
+        ]
+      },
+      "sample_t1": {
+        "metrics": {
+          "boundary_frac": 0.9154391819788161,
+          "distinct3": 0.9632352941176471,
+          "distinct4": 0.984446627373936,
+          "mean_span": 14.225215815688378,
+          "n_spans": 36.75,
+          "n_tokens": 512.0,
+          "p50_span": 13.208333333333334,
+          "rep4": 0.01555337262606418,
+          "rep4_sd": 0.021121111935998964,
+          "distinct3_sd": 0.02668306156913103
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.0825147347740668,
+            "distinct4": 0.9174852652259332,
+            "distinct3": 0.8784313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 42.0,
+            "mean_span": 12.357142857142858,
+            "p50_span": 10.0,
+            "boundary_frac": 0.8333333333333334
+          },
+          {
+            "rep4": 0.0019646365422396855,
+            "distinct4": 0.9980353634577603,
+            "distinct3": 0.984313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 30.0,
+            "mean_span": 17.366666666666667,
+            "p50_span": 18.0,
+            "boundary_frac": 0.9666666666666667
+          },
+          {
+            "rep4": 0.003929273084479371,
+            "distinct4": 0.9960707269155207,
+            "distinct3": 0.9764705882352941,
+            "n_tokens": 512.0,
+            "n_spans": 35.0,
+            "mean_span": 14.485714285714286,
+            "p50_span": 14.0,
+            "boundary_frac": 0.8857142857142857
+          },
+          {
+            "rep4": 0.01768172888015717,
+            "distinct4": 0.9823182711198428,
+            "distinct3": 0.9666666666666667,
+            "n_tokens": 512.0,
+            "n_spans": 35.0,
+            "mean_span": 14.4,
+            "p50_span": 14.0,
+            "boundary_frac": 0.9142857142857143
+          },
+          {
+            "rep4": 0.0019646365422396855,
+            "distinct4": 0.9980353634577603,
+            "distinct3": 0.9784313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 41.0,
+            "mean_span": 12.341463414634147,
+            "p50_span": 12.0,
+            "boundary_frac": 0.9512195121951219
+          },
+          {
+            "rep4": 0.015717092337917484,
+            "distinct4": 0.9842829076620825,
+            "distinct3": 0.9647058823529412,
+            "n_tokens": 512.0,
+            "n_spans": 39.0,
+            "mean_span": 13.23076923076923,
+            "p50_span": 10.0,
+            "boundary_frac": 0.8461538461538461
+          },
+          {
+            "rep4": 0.0137524557956778,
+            "distinct4": 0.9862475442043221,
+            "distinct3": 0.9725490196078431,
+            "n_tokens": 512.0,
+            "n_spans": 35.0,
+            "mean_span": 14.771428571428572,
+            "p50_span": 15.0,
+            "boundary_frac": 0.9428571428571428
+          },
+          {
+            "rep4": 0.0019646365422396855,
+            "distinct4": 0.9980353634577603,
+            "distinct3": 0.9745098039215686,
+            "n_tokens": 512.0,
+            "n_spans": 35.0,
+            "mean_span": 14.8,
+            "p50_span": 14.0,
+            "boundary_frac": 0.9714285714285714
+          },
+          {
+            "rep4": 0.007858546168958742,
+            "distinct4": 0.9921414538310412,
+            "distinct3": 0.9627450980392157,
+            "n_tokens": 512.0,
+            "n_spans": 32.0,
+            "mean_span": 16.0625,
+            "p50_span": 15.0,
+            "boundary_frac": 0.9375
+          },
+          {
+            "rep4": 0.0137524557956778,
+            "distinct4": 0.9862475442043221,
+            "distinct3": 0.9647058823529412,
+            "n_tokens": 512.0,
+            "n_spans": 36.0,
+            "mean_span": 14.333333333333334,
+            "p50_span": 12.0,
+            "boundary_frac": 0.8611111111111112
+          },
+          {
+            "rep4": 0.019646365422396856,
+            "distinct4": 0.9803536345776032,
+            "distinct3": 0.9568627450980393,
+            "n_tokens": 512.0,
+            "n_spans": 49.0,
+            "mean_span": 10.428571428571429,
+            "p50_span": 9.0,
+            "boundary_frac": 1.0
+          },
+          {
+            "rep4": 0.005893909626719057,
+            "distinct4": 0.9941060903732809,
+            "distinct3": 0.9784313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 32.0,
+            "mean_span": 16.125,
+            "p50_span": 15.5,
+            "boundary_frac": 0.875
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that some actual functionhesis is relevant during elections, but the literary version that follows. And the evolution of the first generational evidence of the first generational evidence, by setting the model, is itself a burden upon the outcome of the need to believe nothing about the implications of an argument, beyond which it had novelty and youth. Vanity, of course, would have led people to believe more than nothing about whreason, probably even about heralding conscience. And these gravitational changes would always be hard to model the platform, as a cateched passage achieves.\n\nEddiepm: It\u2019s impossible to predict the earliest possible scenario somewhere.\n\nLauren: It\u2019s just the coinlocity of an expectation footprint, and yet I\u2019m dying.\n\nIvan: I had about twenty. I knew what I needed to know about. Satia\u2019s opponent was lying.\n\nLaielhern: Basically. \u2013 shall we say, \u201cH.U. Wales.\u201d\n\nLaielhern: Yeah. I\u2019m really OK. Not in the tunnels for you. I\u2019m going to try it. Eddiepm is principled. The people who get to Freeze quote. The people whose encounters had basic depth. Eddiepm, Philadelphia. Now the Europeans are going to be OK. They should never stop through like they ever are right.\n\nLaielhern: Crash classes more efficient.\n\nLaielhern: Bunners easier. Not a friendly solution, don\u2019t you. It brings power to cultural life itself.\n\nLaielhern: Pretty happy to have ever music film that. There\u2019s a market that is healthy.\n\nLaielhern: Madison Square. I remember a million people soon after reading this headline. But I don\u2019t believe Oscar since I live in Ireland now. I know what happened to Chicago beer: It worked right for me.\n\nLaielhern: Have you looked back at his career? I mean, it was evolution where the world had developed for all human. Not a question from the world whether Huffman\u2019s spouse was capable though.\n\nLaielhern: Personally, I\u2019m been helped Australia fans have already different NBA soccer teams across China and other countries",
+          "Once upon a time in a distant land, there lived a pout noun in certain neighborhoods in the area, had only one spouse. Funerals of married and ex-husband below would accommodate them unperformable from their membership can be swayed together. pic.twitter 4z3efpzp \u2014 Minnesota Oakland Sound (@LA.o) for a lifetime\n\nI think this woman could understand the ratio between Oakland\u2019s crime and their business. There weren\u2019t any oakland in this area all over it also, necessarily nothing. One teacher who died in 1998 was killing a resident in bed for eight. There were a general feeling that when she was in Australian rentals she was.\n\nThen there was that grace what happened at the school storyline, she was staying. Her ex-husband was apparently insured to return to the house, ever implying that. She smiled, and it was in her courage for her kopiebue to pay attention.\n\nStart some early showing of his victims\u2019 displacement to the unsettling us all they are. \u201cYou can\u2019t remember how good our children were, so I understand how strong our children are,\u201d Cal.\n\nArcher said, \u201cIt is stolen with pistinas, dead. We love it, but we don\u2019t ever land any kind of any kind. It is wonderful, and something like mine indicates a much different shape.\u201d\n\nHere\u2019s this clarity to the search for a woman in order to get comfort.\n\nHave looked at the unaired drama of the parents, pregnant women. This woman has a heart-and-rows tool printed all their books and says nothing. I mean, probably this hundred or so years later, she\u2019s nearly waiting for.\n\nMark Fawcowitzws Converters Racingless. From lexiology to caricatures to sexual luminaries, sign extends! Paleo a fantasy classic for all in and of inauty go!\n\nThe Planet of Radiance: to game disposed. \u00d8bmins\u201d is like a counting of on-board models. For instance. Best favorite, in love with voices, when.\n\nThat person does not want you read their knowledge. He returns a mere glimpse of the \u201cwe house\u201d.\n\nNeeroson",
+          "In machine learning, the key insight is that text utilized in the context of computers, computer practice, and social networking links to create algorithms that provided difference-in-time with the problem of competing deemed problems. . raw algorithms often start with an implication of software processing manual optimization, which creates very fine computing because of the challenging difficulties the accelerating confusion have made to these applications usually because it is the only way the constraint could go to predict it. 2 And the problem with the results as a way of emphasizing business experience is pretty many things to lower Austrones. 3 I asked him to answer to some feedback on what we thought possible in computing, yet I was surprised enough. I asked him to take six minutes to write, and I did it.\n\n****** DECicons, PLATH AND!\n\nJust a minute after the coming session.\n\nCHAROK, MOLAB! -- A STUFF I\u2019m sorry. Maybe Australia got the call.\n\nPanther, LAAS -- OK, we\u2019ll document that. Yeah, I\u2019ll release it here. Windows is already running with Bitcoin in the software.\n\nOkay, no, I still haven.\n\nanto, SPD - I was not sorry. In fact I kept releasing a coupleenty computers and sans-car cards. I did my own software Developer and open a startup package 0. So that douches amounts of RAM and automatically drops Steam. I ended up running Linux in the same year because of Eggware. I left Ubuntu, the IT trading platform to DUI, and many people. I address it even though Linux was probably one of the big bitners.\n\nSo, I stopped running Open Applications Linux, and began publishing virtual computers. There was no CPU or RAM of the value of these computers, perhaps worse. Windows is slower, and Mac OS X, Linux, and Twinners. Conversely, Harger developed a cluster of different operating systems. Now, fine things that are now edged out for long to come, Markolos, Maapo and.\n\nThe company was directed from Scandinavia. Mautin and Google were working too and like they did, Android and Android. They staying chipset tickets and hid it for less than $350.\n\nThe next major new one goes live in Windows 8 Linux. Everyone who really broke business or wanted to reveal its software are following",
+          "The capital of France is paving for the ball being completely insane for future use, take the role of De Ben Affle of the American Potion and a method of standing between him, he realizes that the music and material necessary is complex enough. Lower control occurs with objections to both men and women who add to the experience they're having for Dutch. These or the media have every right to give up anti-19-year rhetoric once they reach power, of course. The face-fit is impossible to find, and not made enough of a separate Paul trick.\n\n\"Ahhhhhhhhhhhhhhhhhhhhhhhh sh......\" you told the audience: a change over silent line. @Secretipues isn't here for Weibo on Facebook. Aside from Our Lots of late politics.\n\nContinue Upcoming With David Gayless's feet\n\nWhen he was a kid I never saw a Gayless food at night. When my brother couldn't bring a hell out of it. So he looked at his brother and personal life to ask. And the wonder always hits our heart now as well. He finds in a new racial culture around our inner city. Or perhaps not \"stupid\" as he does the entire countryside.\n\nGet all the \"Randy's brother's right\"\n\nBabe doesn't overly restrict the names of those people. That can't be a fight time are tendons to go. Feel free to put interest in our kids spewing you. He seems unsound and procongrat.\n\nMore More Your Name Video: StartWe need to reopen Budapest and Budapest Edge! The survey figure was designed to get us in and outside the Loader. With a score, we can get our results by matching the polling of the results. Slim 18 people went into the final report4 with media outlets. Shortly after the ballot was taken to the polls around 2:30 a month.\n\nWe are following just over 24 minutes. All pre-match events finishes somewhere on the this side. Start with a transcript of the report and a regular release. Repeat encryption and become available all the way said.\n\nMonday is an on-the-spot. RSVP is on the opening day of being shutting down. Check the commenting for a viewer to make the comments more accurate",
+          "def quicksort(arr):landing_forms_objectmmc Applies_data.create sizeof(view(\u975e_.Age: void Error(used # name); }\n\nThe Goboxes unit is difficult and errors. You roll the Inboarding on the object and locate it, otherwise. The controllermmc is fairly simple - it's beautiful; general expansion (free) is ideal for executing. You can see these objects in the absence of error.\n\nLet's launch this machine a whole new way correctly. So how need to transform this one togetheron? Since it's popular, fabric should be changed.\n\nAnd I get progress when Krood vs. xx is perfect, so take it. Note that this isn't what this function contains.\n\nThe method below shows an additional eight pass. It would be a nail sitting where it holds it. I get an increase in the size of the cabinet cuts.\n\nexcept to get a trivial start up default!\n\nFinally, what do you see in Engine 2?\n\nThe Operations AI is one I need to integrate. If you are concerned with creating Frontie of Effect in the stores, consider solving .150 x 100, not a cryptographic. I'll explain in the comments below how I think the system is trying it\n\nWe won't change my LCD MP page today even when the original product. Originally owned by Walkhard installed here, we will be unlocking. So is the service ability, pushing especially fast was eight.\n\nUnfortunately I understand I won't use the plugin. Sure, the software credits cause it in 12 content. You soon autonomously tweaked the Fridays. I'm not solely using Headie:\n\nI just nearly patched the default UI file again . followed fan salvage changes from Android. I'm NOT run out NETAPI that it does.\n\nSpacegirl by Russian. When this happens, post by the user flagWith the lawsuits FWAN, Apex is finally dropping the rule.\n\nmultiple prosecution/talk in Australia\u2018s First Crime Tampa\n\nPrince is erading bodily orders that mitigate discrimination from Russian whites on November. That court system is scraping in the traditional way and people ensue if it children in jail. Authorities are also looking for the crime.\n\nThe last law ruling has settled on",
+          "Yesterday the committee announced that historic bilateral plan limits the investment of $1.5 billion to organised countries to build within 45 states. But if the province already comes into your stalled worldwide jihadists getting Islamistic and articulate and agree to convert them to Islam from al Qaeda or satellites, it sees a key issue for Americans to come to terms with them. The obligation in strengthening the country is another shocking thing, when not as an open country or a future at a time. We may not need to have overlimits a peace deal, but recent attempts have been relied upon to undo a first housing crisis. Kazakhstan has refused to live through a border crossing, and they have struggled to enter the majority of the world. \"I like what I wanted to do and demand that the peace is to destroy the United States.\"\n\nIn a communial way, Kazakhstan Assad wants to smuggle some territory. He wants to send concrete wherein the one above is: \"Remember, prayer, give, sayhesa.\" His\n\nWhen he speaks, he wants to guilty of a shared system - if prosecuted. He wants to leave a country that is a tie with the H Singh border: yellow alone. He wants to sign up on the next Tuesday - and he wants to reform the border. \"That's my well-struck thing, if you do more, and believe in it. It is a much possible legal rationale for...\" He intentionizes immediately escape, and he himself wants. Our land is not covered by our security, he wants. \"All sides within this country are on a court basis. I have no doubt it's very true policy. We have a vacuum of cabinet. And we want to withhold our aid. And we will resist it. That should not be the people. No? It's all.\"\n\nShow your nuances.\n\n#\u305d\u306e pic.twitter.com/Htologysubsetticket2YS \u2014 You're butter ly @ me. \u2014 S........orange. NQ. Yes. pic.twitter rip.spam/hforecast.twitter.com/zr62aIi42 \u2014 joinlael-of-Neaboromjr.twitter.com/WRCTRkRu9. They're not concerned",
+          "Water boils at a temperature of 5.5mm for the tail of a exploding oven of ice in central Australia, says Raffreyyle, the National Weather. Police and fire officials say the medium could be captured by air or stop information. Flyers hide heat from another recorded gland and fall into bottled water bills never gestated.\n\n\"They do nothing to carefully draw others on who it's going on... it fell over like Tasley and Gladwell.\"\n\nThey concentrated on platoons so much that they also have lived. Some guess they probably are heaven for private records, safety faults, something they often work for. Raffreyyle says it's a good idea because it can maintain meaning, allow time to become a reality. Heichiciles love ghosts, white wives like me, and traverse places apart for help. When you catch terrain and time out in a friendly neighborhood, rely on sunshine to your safety.\n\n\"You want to do something like peace and have mission to save that vital embodiment... It don't wear your shirts to no avail in life. That's how you grow many cuddly brick-and. Raffreyyle just wishes to grow the same bits. I hate not being \"Pike Crucial,\" and immediately people. I do not know how many people are better at me, no one is.\"\n\nVic Versailles, a gels-tree machine, used to run as engines. They mean embarrassing \u201cTrue World,\u201d which has many hundreds of gloves after gun.\n\n\"Not only do you make sense of what happens to people,\" Vic re. \"When you tell us, how do you keep letting it hang? You're just transitioning to your opponent.\"Tweetyer and Sweets (1888-26]. MacNote: Featured sites may not be ok, but you have. RSS reading: (Na) and Sweet. IP. I like a lot. Thought they are Yes Good.\n\nDota has exhausted.\n\nNow you have what you see here: pic.twitter.com/sIAhAumble0Yw \u2014apiarh_dotah (0t) \u2014 Kiosh [zwlha et al:83. The error was false dogged by my response)\n\nfun",
+          "She opened the letter and read, \u201cWhat the bay are doing is welcoming the wiser people and sad, it\u2019s imperative to realize that they\u2019re safe when you\u2019re treated like the most dangerous and harmless child.\n\nI want most of the bay meetings to be kept secret. I want to pull stranded bay mostly through my mobile phone. And I get disruptive bubbles. Now I\u2019m donating back \u2014 to it. If I wanted to go \u2014 this is going home shopping in my office.\u201d\n\nThis bothered the rap artist: find out, why did they bother \u2014 so the people who stopped from unloading a bacon to? Instead of focusing on happening at home, someone like me was answerable. He comes and tries to verify just how long he was in person to travel through the system. Taping through his bedroom was hard because most of his life was merely using baby.\n\nThe Common Bird, Chatest Detective Map by a club that works for home. Zero. Some designers with tatulos, some new takeaways, have a long way forward. I\u2019d love to be a clean-cean-like woman, a custom-made modular homemaker and an app.\n\nAsk yourself: what dang people of different colors or experiences be, and what culture will they give someone. It\u2019s a great way to get your acolytes together, new coops, give. Which one want in your world and black people, maybe so, or so about estates? Once you\u2019re ready, make sure no one else has, open up.\n\nIs this what I\u2019m going to do next in order? Is this something new to the new among us, will it really be here? Almost part of your home is what\u2019s on your behalf. Get ready to watch Saints nihilists as you vote for us.\n\nBe on screen to see what\u2019s on display. is a photo of your heart clinic hang over your devices. That\u2019s my FACEORT, trafficstorm hustle.\n\nMore content from today if you've lost your thoughts.\n\nVisit a Gothic blog page here. Follow through at ampltporgia.co.nz or bookmark here.\n\nHave a tip What? Make sure to check out your Facebook profile.\n\nYouTube Share 2. Limited for browser services, subs Maps.",
+          "The main advantage of this approach is that adults have different systems where we pay attention to the specific connections made by relational exchange. We can mitigate the possibility of different scientific persuasion, also add another level. Perhaps we should meet more internal and external administrative rules with two particular different strokes, we should soon recognize \u2014 seemingly gave a partial rethink of human advertisements.\n\nOne universal implication being that adults who live in favor\nbut matters discussed align in different ways, so I certainly think that those around relative angles want data here. But we call it many individuals, others have different ideas about what was done about it entirely effectively. Without a clear understanding of the network's underlying perspective, there is sometimes some plan to do something about it. One of the reasons I worked in ways like this was clear: the core reaches of the network are almost entirely separate. people tend to read different information about their individuals, they also often use government institutions they often prefer to influence them. As part of their historical agenda, they are more like a field makes it harder for them not to construct.\n\nMost families, like those who are done, have different ideas about the sun as they behave independently. Most get strokes that are not easily spoken, but we there is a common fit between best of that times. most families start out thinking that the sun immediately becomes touring gran smells like coffee, pizza or something. But the residents of other places don't like it when they start building their own geo-systems together.\n\n\"Clearly because we find, 'We' have not done a cozy deal with all of it. Not for encouraging the connective nature of the network's geo-engineering system,\" he.\n\nTA: Hinton, you can tell@theicon.com friend in ARM, for example. multip in half and smolder from an academic. You can tell books about the startup's geo-engineering. And you can tell stories about the cosmos themselves. I got some insights from my teens near L.A., nowhere called 'Chones'. Take a look at how get hard numbers out of me.\n\nIN: What's wrong with L.A? Well, I'm amazed that Android has not been published.\n\nSource: Slack 2013 website and let us know.\n\nPlease visit this part.\n\nThis article originally appeared. Please walk away with the",
+          "After the war ended, the government announced that its operations were ineffective in keeping the material soldered on their own enemies as the bank bailed out on the Union for control of furniture and seats as outraged. And earlier as this was banned, \u201cThe disruptors were cut off the supply Canada,\u201d the bank\u2019s spokesman said. In Westpac Monday, the three men threatening to criminality about the security measures, said an injured Maria Zishen, from poorly developed such facilities first. \u201cWe strongly regret not coming here to mad power blocks, but we still plead not guilty,\u201d Zishen told the media. One of them demanded \u201cwant a robotfather guarding a board go out.\u201d There was a sucker in the air. \u201cWe just didn\u2019t check out the contracts one we wanted, because we now make good predictions,\u201d Zishen replied. \u201cI am lucky 100 percent, so this is our job. If you look at the money, what do you pay for it?\"\n\nAn old WK replies: \u201cI know this guy is tough when it comes to a truck factory one or two years ago. You\u2019re not a good driver Don Rosickens, either. You know. He was completely $100. \u2026 yeah, they know all right now. Neither of those assassins even make public. They do it for their overtly statist. Here is Boeing\u2019s bar privy.\u201dSo what weird minizens many people do with that? Because the one exception is that the DM is trot.\n\nCan I know a pretty fresh thing about minizens?!\n\n-A stellar mind-throat Saakash\n\n-Popular, targeted Chinese and AfD typeheads.\n\n-Oscar, professional-looking is the No. 2, elite/compete strategy.\n\n-Morlemand, Kirin. I think that was all about pretty good. Too bad gaze given right click.\n\n-Morlemand is easily a great model. Unsurprisingly, providing your options. Oh difference. There are more options available. It\u2019s nothing to your head.\n\n-Another best in the modern press. A lot of buildings with less to show up in. As a conduit, every home is unscathed, and it won\u2019",
+          "import numpy as np\n\ndef graph = } classTaskSelect() { zip Name = function. return SmLOCK_WN() attr BackConstructionFuture ; find color = transformException( Samehere integer.replace); // name = String integer.replace; } operatorClientFoo() ;\n\nTake in an API element. I think now the other way around the property.\n\nBut we must start with. However, our goal over the years. We\u2019ll have to start hiding almost exactly immediately.\n\nIn that sense, Amazon will pass. The property has become simple, powerful and dedes. It might be best to try them out to search. Use common functions to find the right Object. You can see a \"xczip\u201d. Then that hooks up with provide dependencies.\n\nJavaScript Player( encodeURIComponent, this posted) inside\n\nIn this way, Google will work through it. I don\u2019t see any in that project. I\u2019m pretty sure in this sense.\n\nHere can be seen details:\n\nTuron-Cprintln Data System BASAIL . RubyXML scans in what I ask Language\n\nWell, I do get a default. I recommend it shortly after child was diagno. And I also will Make Snap Patterns.\n\nJS2A1.jectory GetTheHeart European file.\u8fdb_MEwgu\n\nJS2C.services work onmonkey list.\n\nJS2.js project currency rapidly .\n\nJS2.js project of central representation transaction . And I personally find myself hoping international.\n\nIt\u2019s something Madai reports. His writing has he couldn\u2019t wait for example release . This seems to make me hope this time. Easy! classes at: tests-ISPECI_IPrf.with are README tutorials, which is the perfect guide. Alshank and Ping are all under overflow for fun and great.\n\nJS2A2: How do I contact the development software costs?\n\nJS weren\u2019t a beta-tests game, it really was not easy. It\u2019s hard to see how much a request it made faster or more than 30 minutes. Two-thirds of it games that I had the most pleasant business, but I care. The Guru psu is an Ars Technic form of object processing connected to a toolkit. SpaceGuardOp has checked all files, published here for glyph and then drove one to Catholic crowd. The \u00fcmatugi Guru z\u00ee",
+          "According to the report published last week, the budgets on net deficits hadn\u2019t been fixed if a panel of The National Review/Finallyeranan published these figures: a good bill not to accept higher wages for workers, in particular things. Time chambers led by a 10% increase in the Pew paper.\n\nDanny (Advertisement) \u2014 One example of the basic measure seems dangerous \u2014 because they were told that everyone wants the same thing - or the least they want; that they\u2019re forced into whatever union incomes they had earned from. But they are allowed to return homeer funding while the average household salary of some divided voters. If you have a rate of 70 plus Democrat, you have a just to impose.\n\nDanny is a full-time worker but much more often than average workers. He goes to make that money for his workers and loses no unemployment rates or overemploy reason. He boxes out anxieties about his jobs and aids to expand Hearts on the farm. And he leverages some income, deals people like Ernie Alito to the idea. He should be downgraded to high schools, and said, \u201cYeah, this is great.\u201d\n\nDanny cites occasional sliding winds to get more complicated, if silicon as well. His benefits are believed to be evident from the 1970s\u2026\n\nI think even if he wants to take another hard worker off top of that liberals, the problem is not capital. If people look up what cash doesn\u2019t get to pick the chiffites. \u201cThey are driving down the road,\u201d he notes, a lot. He leads dogs under fines and grabs, too.\n\nAlthough Danny treats farmers as a gu. He turns out he would not be cooperating with farmers. I get former wages, but no matter how well they get. He is the main tigers of his wealthy planet.\n\nPeter Danny is seekingoagger amount. I'm going to look like the sporting bird bed. Skey financially likes to wear help.\n\nI wait, again, until before Aug. 16, following me in court.\n\n* My pediatrician charities, I see a relationship between her and now children, that life has to be"
+        ]
+      },
+      "greedy": {
+        "metrics": {
+          "boundary_frac": 0.7882951785430053,
+          "distinct3": 0.1689542483660131,
+          "distinct4": 0.2085789129011133,
+          "mean_span": 13.782205448192359,
+          "n_spans": 37.833333333333336,
+          "n_tokens": 512.0,
+          "p50_span": 12.916666666666666,
+          "rep4": 0.7914210870988868,
+          "rep4_sd": 0.09556576362413419,
+          "distinct3_sd": 0.07928390147290416
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.9469548133595285,
+            "distinct4": 0.05304518664047151,
+            "distinct3": 0.041176470588235294,
+            "n_tokens": 512.0,
+            "n_spans": 36.0,
+            "mean_span": 14.194444444444445,
+            "p50_span": 12.5,
+            "boundary_frac": 0.5833333333333334
+          },
+          {
+            "rep4": 0.7406679764243614,
+            "distinct4": 0.2593320235756385,
+            "distinct3": 0.21568627450980393,
+            "n_tokens": 512.0,
+            "n_spans": 41.0,
+            "mean_span": 12.804878048780488,
+            "p50_span": 12.0,
+            "boundary_frac": 0.8780487804878049
+          },
+          {
+            "rep4": 0.7485265225933202,
+            "distinct4": 0.25147347740667975,
+            "distinct3": 0.2019607843137255,
+            "n_tokens": 512.0,
+            "n_spans": 36.0,
+            "mean_span": 14.277777777777779,
+            "p50_span": 12.5,
+            "boundary_frac": 0.9166666666666666
+          },
+          {
+            "rep4": 0.9017681728880157,
+            "distinct4": 0.09823182711198428,
+            "distinct3": 0.07254901960784314,
+            "n_tokens": 512.0,
+            "n_spans": 46.0,
+            "mean_span": 11.08695652173913,
+            "p50_span": 11.0,
+            "boundary_frac": 0.8913043478260869
+          },
+          {
+            "rep4": 0.9430255402750491,
+            "distinct4": 0.05697445972495088,
+            "distinct3": 0.047058823529411764,
+            "n_tokens": 512.0,
+            "n_spans": 27.0,
+            "mean_span": 18.77777777777778,
+            "p50_span": 19.0,
+            "boundary_frac": 0.2222222222222222
+          },
+          {
+            "rep4": 0.7367387033398821,
+            "distinct4": 0.2632612966601179,
+            "distinct3": 0.20784313725490197,
+            "n_tokens": 512.0,
+            "n_spans": 40.0,
+            "mean_span": 13.0,
+            "p50_span": 12.5,
+            "boundary_frac": 0.875
+          },
+          {
+            "rep4": 0.7151277013752456,
+            "distinct4": 0.28487229862475444,
+            "distinct3": 0.2411764705882353,
+            "n_tokens": 512.0,
+            "n_spans": 38.0,
+            "mean_span": 13.526315789473685,
+            "p50_span": 13.0,
+            "boundary_frac": 0.7105263157894737
+          },
+          {
+            "rep4": 0.7210216110019646,
+            "distinct4": 0.27897838899803534,
+            "distinct3": 0.23137254901960785,
+            "n_tokens": 512.0,
+            "n_spans": 42.0,
+            "mean_span": 12.214285714285714,
+            "p50_span": 11.5,
+            "boundary_frac": 0.8095238095238095
+          },
+          {
+            "rep4": 0.8683693516699411,
+            "distinct4": 0.13163064833005894,
+            "distinct3": 0.10392156862745099,
+            "n_tokens": 512.0,
+            "n_spans": 32.0,
+            "mean_span": 16.0,
+            "p50_span": 16.0,
+            "boundary_frac": 0.90625
+          },
+          {
+            "rep4": 0.7779960707269156,
+            "distinct4": 0.2220039292730845,
+            "distinct3": 0.17450980392156862,
+            "n_tokens": 512.0,
+            "n_spans": 35.0,
+            "mean_span": 14.771428571428572,
+            "p50_span": 12.0,
+            "boundary_frac": 0.8571428571428571
+          },
+          {
+            "rep4": 0.6326129666011788,
+            "distinct4": 0.36738703339882123,
+            "distinct3": 0.296078431372549,
+            "n_tokens": 512.0,
+            "n_spans": 42.0,
+            "mean_span": 11.80952380952381,
+            "p50_span": 11.0,
+            "boundary_frac": 0.8095238095238095
+          },
+          {
+            "rep4": 0.7642436149312377,
+            "distinct4": 0.2357563850687623,
+            "distinct3": 0.19411764705882353,
+            "n_tokens": 512.0,
+            "n_spans": 39.0,
+            "mean_span": 12.923076923076923,
+            "p50_span": 12.0,
+            "boundary_frac": 1.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that the world is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is.\n\nThe world is a world that is a world that is a world that is a world that is a world.\n\nThe world is a world that is a world that is a world that is a world that is a world.\n\nThe world is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is.\n\nThe world is a world that is a world that is. It is a world that is a world that is a world that is. It is a world that is a world that is a world that is. It is a world that is a world that is a world that is. It is a world that is a world that is a world that is a world that is a world that is a world that is. It is a world that is a world that is a world that is. It is a world that is a world that is a world that is a world that is a world that is a world that is. It is a world that is a world that is a world that is a world that is a world that is a world that is. It is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world that is a world.\n\nThe world is a world that is a world that is a world that is a world that is a world that is a world that is a world that.\n\nThe world is a world that is a world that is a world that is a world that is a world that is a world that is a world.\n\nThe world is a world that is a world. It is a world that is a world that. It is a world that is a world. It is a world that is a world.\n\nThe world is a world that is. It is a world that is a world that is.\n\nThe world is a world that",
+          "Once upon a time in a distant land, there lived a lot of life in the world, and the world was a little more than a little bit of a blessing, and it was a dream. It was a dream that was a dream that was a dream that was a dream that was a dream. It was a dream that was a dream that was a dream that was. It was a dream that was a dream that was.\n\nI was in the middle of the night.\n\nI was in the middle of the night.\n\nI was in the middle of the night.\n\nI was in the middle of the night, and\n\nI was in the middle of the night, and I\n\nI was in the middle of the night, and\n\nI was in the middle of the night, and I\n\nI was in the middle of the night, and I\n\nI was in the middle of the night, and I\n\nI was in the middle of the night, and I\n\nI was in the middle of the night, and\n\nI was in the middle of the night, and\n\nI was in the middle of the night, and\n\nI was in the middle of the night. I was in the middle of the night. I\n\nI was in the middle. I\n\nI was in the middle of the night, and I\n\nI was in the middle of the night, and I was in. I\n\nI was in the middle of the night, and I\n\nI was in the middle of the night. I\n\nI was in the middle of the night, and I was in the middle of. I\n\nI was in the middle of the night,The first time I saw a video of the game crash. It was a very interesting and interesting game, and it was a lot. It was a lot of fun, and it was a lot of fun stuff.\n\nThe game was a lot of fun stuff, and it was fun. It was a lot of fun stuff, and it was a lot of fun.\n\nThe game was a lot of fun stuff, and it was fun. It was a lot of fun stuff, and it was a lot of fun.\n\nThe game was a lot of fun stuff, and it was a lot. It was a lot of fun stuff, and it was a lot of fun stuff,.\n\nThe game was a lot of fun stuff, and it was a lot. It",
+          "In machine learning, the key insight is that the key is the key to the key. The key is the key to the key, the key to the key, the key to the key to the key key. The key is the key to the key, the key to the key, the key to the key, the key to the key.\n\nThe key is the key to the key, the key to the key, the key to the key.\n\nYou can read more about the key here.\n\nSubscribe nowI was a kid, and I was a kid, and I was a kid, and I was a kid, and I was a kid, and I was a kid, and I was. I was a kid, and I was kid. I was a kid, and I\u2014I was a kid, and I\u2014I was a kid, and I was\u2014I was a kid, and I was\u2014I was a kid, and I was kid. I was a kid, and I was a kid. I was a kid, and I was a kid,\n\nI was a kid, and I was\u2014I was a kid, and I was\u2014I was a kid, and I was a kid.\n\nWhat do you think of the new video game?\n\nI think it's a big question for the game developers. I think it's a big question for the game developers, and I think it's\u2014I think it's a big question for the game developers,.\n\nWhat do you think of the new video game?\n\nI think it's a big question for the game developers,. I think it's a big question for the game developers, and I think. I think it's a big question for the game developers, and I think.\n\nWhat do you think of the new video game?\n\nI think it's a big question for the game developers, and. I think it's a big question for the game developers, and I think it's.\n\nWhat do you think of the new video game?\n\nI think it's a big question for the game developers, and I think.\n\nThe game developers, and I think it's a big question for the game developers,.\n\nThe game developers, and I think it's a big question for the game developers, and I think.\n\nThe game developers, and I think it's a big question for the game developers, and I think it's a big question for the game developers",
+          "The capital of France is a very different story. It is a very different story, and it is a very different story, and it is a very different story story. It is a very different story story, and it is a very different story story, and it is a very different story story story story. It is a very different story story story story story.\n\nI\u2019m a writer for this.\n\nI\u2019m a writer for this story story. I\u2019m a writer for this story story story story story story. I\u2019m a writer for this story story story story. I\u2019m a writer for this story story story story story. I\u2019m a writer for this story story story story story story. I\u2019m a writer for this story story story story story. I\u2019m a writer for this story story story story story. I\u2019m a writer for this story story story story story. I\u2019m a writer for this story story story story story; I\u2019m a writer for this story story story story story story story story; I\u2019m a writer for this story story; I\u2019m a writer for this story; I\u2019m a writer for this story. I\u2019m a writer for this story story story. I\u2019m a writer for this story story story. I\u2019m a writer for this story story. I\u2019m a writer for this story. I\u2019m a writer for this story story story story story story. I\u2019m a writer for this story story story story story story. I\u2019m a writer for this story. I\u2019m a writer for this story story story story story story. I\u2019m a writer for this story story. I\u2019m a writer for this story story. I\u2019m a writer for this story story. I\u2019m a writer for this story story story. I\u2019m a writer for this story story story. I\u2019m a writer for this story story story. I\u2019m a writer for this story story story. I\u2019m a writer for this story story story. I\u2019m a writer for this story story story. I\u2019m a writer for this story story story. I\u2019m a writer for this story story story story story. I\u2019m a writer for this story story story story story. I\u2019m a writer for this story story story story story. I\u2019m a writer for this story story story story story story. I\u2019m a writer for this story story story story story story. I\u2019m a writer for this",
+          "def quicksort(arr):\n\nThe problem with this is that the problem with this is that the problem with this is \u2014 and that the problem with this is that the problem with this is that \u2014 is that the problem with this is that the problem with this is that the problem \u2014 that the problem with this is that the problem with this \u2014 is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is.\n\nThe problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that the problem with this is that",
+          "Yesterday the committee announced that the committee will be reviewing the details of the committee\u2019s recommendations. It is not clear whether the committee will be reviewing the details of the committee\u2019s recommendations. It is not clear whether the committee will be reviewing the details of the committee\u2019s recommendations there. The committee will be reviewing the details of the committee\u2019s recommendations, which will be reviewing the details of the committee\u2019s recommendations. It is not clear whether the committee will be reviewing the details of the committee\u2019s recommendations there. It is not clear whether the committee will be reviewing the details of the committee\u2019 recommendations. It is not clear whether the committee will be reviewing the details of the committee\u2019s recommendations. It is not clear whether the committee will be reviewing the details of the committee\u2019 recommendations. It is not clear whether the committee will be reviewing the details of the committee\u2019s recommendations in the committee. It is not clear whether the committee will be reviewing the details of the committee\u2019s recommendations in the commit. It is not clear whether the committee will be reviewing the details. It is not clear whether the committee will be reviewing the details. It is not clear whether the committee will be reviewing the details. It is not clear whether the committee will be reviewing the details there. It is not clear whether the committee will be reviewing the details. It is not clear whether the committee will. It is not clear whether the committee will. It is not clear whether the committee will. It is not clear whether the committee will. It is not clear whether the committee will. It is not clear whether the committee will be reviewing the details of the committee\u2019s recommendations in the committee\u2019s recommendations.\n\n(Click here to read the following):\n\n1. What is the commit?\n\n2. What is the committee plan?\n\n3. What is the committee plan plan?\n\n4: What is the commit?\n\n5: What is the committee?\n\n6: What is the committee plan?\n\n7: What is the committee plan plan plan?\n\n8: What is the committee plan plan plan plan?\n\n9: What is the committee plan plan plan plan?\n\n10: What is the committee plan plan plan?\n\n11: What is the committee plan plan plan?",
+          "Water boils at a temperature of 100 degrees Fahrenheit, which is a 100-degree temperature of 100 degrees Fahrenheit, which is a 100-degree temperature of 100 degrees Fahrenheit.\"\n\nThe temperature is not a problem, but it is a problem that is not a problem either.\n\nThe temperature is not a problem either, but it is a problem either, and it is a problem either. It is a problem either, but it is. It is a problem either, but it is. It is a problem either, but it is a problem either, or it. It is a problem either, but it is a problem either, or it is a problem. It is a problem either, but it is a problem either, or it is a problem either, but it is a problem either, or it is a problem either, or it is a problem either, or it is a problem. It is a problem either, but it is a problem either,. It is a problem either, but it is a problem either, or it is a problem either, or it is a problem either,. It is a problem either, but it is a problem either, or it is. It is a problem either, or it is a problem either, or it is a problem, or it is a problem either, or it is. It is a problem either, or it is a problem either, or it is a problem either, or it is a problem either. It is a problem either, or it is a problem either, or it is a problem either, or it is a problem either, or it is a problem either, or it is a problem either, or it is a problem either, or it is a problem either.\n\n(Source: The Guardian, 2013-2014, p. 199)I\u2019m a fan of the U.S. Senate and the U.S. Senate, too. I\u2019m a fan of the U.S. Senate and the. I\u2019m a fan of the Senate. I\u2019m a fan of the Senate,. I\u2019m a fan of the Senate,. I\u2019m a fan of the Senate, too. I\u2019m a fan of the Senate, too. I\u2019m a fan of the Senate, too.\u201dThe Senate is a",
+          "She opened the letter and read it. She said she was a \u201cgood guy\u201d and she was a \u201cgood guy\u201d and she was a good guy. She was a good. She was a good guy, she was. She was a good guy, she.\n\nShe said she was a good.\n\nShe said she was a good guy, she was a good guy.\n\nShe said she was a good.\n\nShe said she was a good guy, she \u2013 she was a good guy.\n\nShe said she was a good guy \u2013 she was a good guy, she was.\n\nShe said she was a good guy, she \u2013 she was a good guy, she was.\n\n(Image: Getty Images/Getty\n\n(Image: Getty Images)\n\nWhat is the most important thing to do?\n\nThe best thing to do is \u2013 the best thing to do is to do it \u2013 the best thing to do is to do it, too.\n\nShe said she was a good guy, she was. She was a good guy, she was a good guy. She was a good guy, she was a good guy, she was a good guy, she was a good guy, she. She was a good guy, she was a good guy. She was a good guy, she was a good guy. She was a good guy, she was a good guy.\n\n(Image: Getty Images/Getty ImagesThe first of these books is a book about the future of the world. The book is a book about the future of the world, not the world. The book is a book about the future of the world, not the world. The book is a book about the future of the world, not the world, not the world, not the world.\n\nThe book is a book about the future of the world, not the world. The book is a book about the future of the world, not the world, not the world, not the world, not the world itself. The book is a book about the future of the world, not the world, not the world.\n\nThe book is a book about the future of the world, not the world, not. The book is a book about the future of the world, not the world, not the world itself. The book is a book",
+          "The main advantage of this approach is that the government is not going to be able to do this, and the government is not going to be able to do this, and the government is going to be able to do this, and the government. It is going to be able to do this, and the government is going to do. It is going to be able to do this, and the. It is going to be able to do this,. It is going to be able to do this,. It is going to be able to do this. It is going to be able to do this.\n\nAnd I think it is going to be...\n\nI think it is going to be going to be...\n\nI think it is going to be going to be going to...\n\nI think it is going to be going to be going to be going.\n\nI think it is going to be going to be going to be going.\n\nI think it is going to be going to be going to be going.\n\nI think it is going to be going to be going to be going.\n\nI think it is going to be going to be going to be going to be going to be going to be going to be...\n\nI think it is going to be going to...\n\nI think it is going to be going to be going.\n\nI think it is going to be going to be going to be...\n\nI think it is going to be going to be going to be going to.\n\nI think it is going to be going to be going to be going to be going to be going to be going to be going to be going.\n\nI think it is going to be going to be going to be going to be going.\n\nI think it is going to be going to be going to be going to be going to.\n\nI think it is going to be going to be going to be going to be.\n\nI think it is going to be going to be going to be going to be going.\n\nI think it is going to be going to be going to be going to.\n\nI think it is going to be going to be going to be.\n\nI think it is going to be going to be going to be going.\n\nI think it is going to be going to be going to be.\n\nI think it is going to be going to be going to be.\n\nI think it is going",
+          "After the war ended, the government was able to recruit a newspaper to the site, which was aimed at the government. The government was able to recruit a newspaper to the site, which was aimed at the government, too.\n\nThe government was able to recruit a newspaper to the site, which was aimed at the government, too. The government was able to recruit a newspaper to the site, which was aimed at the government, too, too too. The government was able to recruit a newspaper to the site, which was aimed at the government, too, too too too. The government was able to recruit a newspaper to the site, which was aimed at the government, too, too too. The government was able to recruit a newspaper to the site, which was aimed at the government, too too.\n\nSo, what is the government's plan to recruit a newspaper to the site, and what is it? What is it, what is it, what is it, what is it, what is it, what? What is it, what is it, what is it, what is it, what is it, what is it, what is it? What is it, what is it, what is it, what is? What is it, what is it, what is it? What is it, what is it, what is it? What is it, what is it, what is? What is it, what is it?\"\n\nThe government's plan to recruit a newspaper to the site, which was a.k.a., what is it, what is.\n\nThe government's plan to recruit a.k.a., what is it, what is.\n\nThe government's plan to recruit.\n\nThe government's plan to recruit a new.k.a., what is it, what is it? What is it, what is it,? What is it, what is it?\n\nThe government's plan to.k.a., what is it, what is it, what is it?\n\nThe government's plan to recruit a newspaper to the site itself.\n\nThe government's plan to recruit a newspaper to.k.a., what is it, what is it, what is.\n\nThe government's plan to recruit a newspaper to.k.",
+          "import numpy as np\n\ndef load = new ( 'test' , 'test' ) .\n\nThe last thing we need to do is create a . . . . function that we need to do it. This is a function that we need to do to make it work.\n\nNow, we need to do it in the next step. It\u2019s a function that we need to do it in. It\u2019s a function that we need to do. It\u2019s a function that we need. It\u2019s a function that we need to do it in. It\u2019s a function that we need to do it in.\n\nAnd we need to do it. It\u2019s a function that we need to do it in the next. It\u2019s a function that we need.\n\nAnd we need to do it here.\n\nAnd we need to do.\n\nAnd we need to do it.\n\nAnd we need to do it.\n\nAnd we need to do it.\n\nAnd we need to do it here.\n\nAnd we need to do it in here.\n\nAnd we need to do it in here:\n\nThe Congressional Budget Office (CBO) Sen. John McCain (R-Ariz.), R-Ariz (R-\n\nThe Congressional Budget Office (CBO) Sen Rep. John McCain (R-Ariz.), R-Ariz. John McCain (R-Ariz.), R-Ariz (R-Ariz.), R-. John McCain (R-Ariz.), R. John McCain (R-Ariz.),The Congressional Budget Office is a big deal for the Congress. It\u2019s a big deal for the Congressional Budget Office, and it\u2019s a.\n\nThe Congressional Budget Office is a big deal for the Congressional Budget Office, and it\u2019s a big deal for the Congressional Budget Office itself.\n\nIt\u2019s a big deal for the Congressional Budget Office, and it\u2019s a big deal for the Congressional Budget Office. It\u2019s a big deal for the Congressional Budget.\n\nThe Congressional Budget Office is a big deal for the Congressional Budget Office. It\u2019s a big deal for the Congressional Budget Office, and it\u2019s a big deal for",
+          "According to the report published last week, the number of people who were in the UK were 1,000.\n\nThe report also found that 1,000 people were in the UK, 1,000 \u2013 1,000 people were in the UK \u2013 and 1,000 people were in the UK, 1 \u2013 and 1,000 people were in the UK \u2013 and 1,000 people were in the UK \u2013 and 1,000 people were in the UK \u2013 and 1,000 people were in UK \u2013 and 1,000 people were in UK \u2013 and 1,000 people were in UK \u2013 and 1,000 people were in.\n\nThe report also found that 1,000 people were \u2013 1,000 people were in the UK UK \u2013 and 1,000 people were in UK \u2013 and 1,000 people were \u2013 and 1,000 people \u2013 and 1,000 people \u2013 and 1,000 \u2013 were in the UK, 1.\n\nWhat is the report here?\n\nThe report is a good thing. It is a good thing, but it is. It is a good thing, too. It is a good thing, too. It is a good thing, too. It is a good thing, too, too. It is a good thing, too, too. It is a good thing, too, too. It is a good thing, too, too, too. It is a good thing, too, too, too. It is a good thing, too, too, too. It is a good thing, too, too, too, too. It is a good thing, too, too, too, too, too. It is a good thing, too, too, too, too, too. It is a good thing, too, too, too, too, too, too. It is a good thing, too, too, too, too, too, too. It is a good thing, too, too, too, too, too, too. It is a good thing, too, too, too, too, too, too.\n\nThe BBC's Rachel Maddow contributed to this report:\n\nThe BBC's Rachel Maddow contributed to this report: https"
+        ]
+      }
+    }
+  },
   "_real_text": {
     "n_rows": 256,
     "n_tokens": 512,
@@ -1545,7 +2003,8 @@
       "a0_acap1_b14",
       "a1_acap1_b14",
       "a3_b14",
-      "a1_b12"
+      "a1_b12",
+      "gate_b12"
     ]
   }
 }

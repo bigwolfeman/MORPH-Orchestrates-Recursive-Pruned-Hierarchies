@@ -61,41 +61,44 @@ The gate's own length head is weakly predictive: `gate_k_corr` 0.348,
 `gate_k_abs_err` 7.87 tokens against a constant predictor's 8.70 — a skill of 0.82 tokens
 on spans averaging 19.4.
 
-## Result 3 — one decode mode was hiding a repetition loop
+## Result 3 — WITHDRAWN 2026-08-23: the repetition table had no baseline and the wrong length
 
-![Repetition by decode mode](../figures/tul_decode_modes.png)
+> **This section's numbers are retracted.** Two defects, both found by Wolfe:
+>
+> 1. **No non-TUL arm was in it.** A0 builds no TUL parameters, so the sampler printed
+>    `SKIP: this arm builds no TUL layout` and the table compared TUL against TUL. The
+>    question "does the slot loop repeat less than a plain model" was never asked.
+> 2. **128 tokens is below the metric's floor.** Real text was scored at `rep4 = 0.003`
+>    from one batch of 8 rows. Over 256 rows at 128 tokens the same corpus gives
+>    0.0154 ± 0.0385 with a MEDIAN of 0.0000 and 54 % of rows at exactly zero. The
+>    anchor was a low draw from a floored distribution, and every sampled model row was
+>    on that floor too (0.000–0.008), so nothing in the table could be ranked.
+>
+> Replacement, at 512 tokens with a real baseline and paired per-prompt statistics:
+> [`2026-08-23-tul-repetition-sampled-decoding.md`](2026-08-23-tul-repetition-sampled-decoding.md).
+> Its headline reverses part of what was written here: at top-k the gate is **better**
+> than A1 by −0.251 rep4 (t = −3.27, 10/12 prompts), not worse.
+>
+> The one claim from this section that survives, restated at the right length: greedy
+> decoding hides a severe repetition loop that the training loop's single decode setting
+> never sees, and a DIVERGED model scores the best diversity numbers of any arm because
+> incoherent text never repeats. **rep4 and distinct3 are collapse detectors, not quality
+> metrics: read them only inside a band of comparable CE, and read the text.**
 
-`scripts/tul_samples.py`, 8 prompts × 128 new tokens, `results/tul_samples.json`.
+<details>
+<summary>The withdrawn table, kept for the record (8 prompts × 128 tokens)</summary>
 
 | arm | val CE | greedy | top-k 50 t=0.8 | ancestral t=1.0 |
 |---|---:|---:|---:|---:|
 | real text | — | 0.003 | 0.003 | 0.003 |
-| TUL-gate | 3.312 | **0.756** | 0.185 | 0.000 |
+| TUL-gate | 3.312 | 0.756 | 0.185 | 0.000 |
 | TUL-gate halt | — | 0.656 | 0.112 | 0.008 |
-| TUL-A1 | 3.418 | **0.853** | 0.124 | 0.005 |
-| a1r DIVERGED | 6.43 | 0.524 | **0.001** | 0.000 |
+| TUL-A1 | 3.418 | 0.853 | 0.124 | 0.005 |
+| a1r DIVERGED | 6.43 | 0.524 | 0.001 | 0.000 |
 
-(rep4: fraction of repeated 4-grams. Higher is worse.)
+The 0.003 anchor and every model row here are length-artefacts. Do not cite them.
 
-The training loop decodes at ONE setting, the middle column, where every arm looks
-acceptable. Greedy is 4–7× worse and was invisible to it. `gate_20k` greedy emits
-*"the world is a world that is a world that is a world…"* for 128 tokens.
-
-**Ancestral sampling is clean (rep4 0.000–0.008), so the readout is NOT a point mass.**
-That was the failure worth ruling out — it is what killed DiffusionBlocks, where top-p and
-pure sampling returned bit-identical text. Here entropy is fine and only the argmax path
-loops. Ordinary greedy degeneration in a small LM.
-
-**The diversity metrics rank these arms backwards.** The DIVERGED model, CE 6.43, scores
-the best repetition numbers at every mode — its top-k rep4 of 0.001 beats real text's
-0.003 — because incoherent output never repeats. Its text:
-
-> "that has the so far to them, to help them do too," us that maybe. And the hers will be
-> there to] for the first of ours, we come to the G."
-
-Fluent-shaped noise. A diversity-matched comparison, the guard that was correct for
-DiffusionBlocks, would rank it first. **rep4 and distinct3 are collapse detectors, not
-quality metrics: compare them only within a band of comparable CE, and read the text.**
+</details>
 
 Gate vs A1 on generation is MIXED, not a sweep: the gate is less degenerate under greedy
 (0.756 vs 0.853) and more under top-k (0.185 vs 0.124). What is consistent is
@@ -171,10 +174,16 @@ logged live, rather than the expensive Jacobian one measured post-mortem.
 
 - One seed per cell. That is the central weakness and it is the same one the previous
   campaign had.
-- Generation is scored on 8 prompts at 128 tokens; the training loop's `gen/*` uses 3
-  prompts at 100, so the two sets of rep4 numbers are NOT interchangeable.
+- Generation was scored on 8 prompts at 128 tokens, which is below the metric's floor —
+  see the withdrawal at Result 3 and the replacement note. The training loop's `gen/*`
+  uses 3 prompts at 100 tokens and is on the same floor.
 - Generation is not bit-reproducible: rep4/distinct3 repeat but `on_boundary` moved 0.93
   → 0.91 across two runs of the same script. Drift ~0.02 against arm gaps of 0.17.
-- MAUVE, rep4@512 and gen-PPL under an external scorer were not computed.
+- MAUVE and gen-PPL under an external scorer were not computed. rep4@512 now IS, in the
+  replacement note.
+- Every CE in this note is inflated by the causality defect in
+  [`../../../.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md`](../../../.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md)
+  — measured at +0.1433 nats, larger than this note's −0.1054 headline. The gate-minus-A1
+  DIFFERENCE survives (both arms leak equally); the absolute numbers do not.
 - The gate's cost in wall-clock was not isolated; `layer_passes_per_token` is a
   training-time count and does not price the length head.
