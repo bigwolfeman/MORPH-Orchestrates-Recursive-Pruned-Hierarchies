@@ -5,7 +5,8 @@ Top-level navigation for project documentation.
 ## Architecture & Design
 
 - [Paper references and MORPH usage notes](references.md)
-- [Runtime invariants (BPTT, kernels, compile, phases)](runtime-invariants.md)
+- [MORTAR BCSR (sparse MLP format)](mortar-bcsr.md)
+- [Runtime invariants (BPTT, kernels, compile, phases)](../lab/runtime-invariants.md)
 - [Ablation ledger (accepted / rejected / deferred)](ablation-ledger.md)
 - [TUL — Thought Unpack Loop specification](tul-spec.md)
 - [Known-good runs and environment assumptions](../.agents/notes/implemented/process/2026-07-03-known-good-runs.md)

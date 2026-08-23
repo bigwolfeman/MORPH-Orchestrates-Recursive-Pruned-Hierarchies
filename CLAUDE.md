@@ -200,6 +200,7 @@ docs/
 ## Critical Patterns
 
 ### MORTAR Sparsity Schedule
+Format readout (BCSR packing / forward): [docs/mortar-bcsr.md](docs/mortar-bcsr.md).
 Dense → prune (prune_step_blocks, 128×128-aligned) → carve() to MORTAR BCSR at
 compact_step → ReMoE route at route_start. MORTAR is the ONLY sparse backend
 (there is no sparse_backend knob). Saliency is scored at tile_size=16; pruning and
