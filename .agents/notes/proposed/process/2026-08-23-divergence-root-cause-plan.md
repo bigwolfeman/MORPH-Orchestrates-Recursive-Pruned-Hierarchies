@@ -56,19 +56,39 @@ Four phases. Each has a gate; do not start the next until the gate holds.
 
 ### Phase 0 — make the run reproducible  (~1 h for the first two tasks)
 
-- [ ] **0.1 Land the deterministic `bag_mean`.** Replace the `index_add_` pair in
-      `morph/model/tul.py:203-205` with the one-hot `bmm` formulation. Already written and
-      measured in the scratchpad: **0/20 non-identical fwd+bwd**, agrees with the current
-      version within bf16 epsilon (fwd 1.56e-2, bwd 3.91e-3), **10 % FASTER**
-      (0.165 ms vs 0.184 ms fwd+bwd at B=12, L=1152, C=1024), +1.8 MB for the one-hot.
-      EVIDENCE: pending
-- [ ] **0.2 Add a determinism gate test** — `tests/`, call `bag_mean` twice on identical
-      input and require `torch.equal` on both the output and the input gradient. It must
-      FAIL on the `index_add_` version; check that by reverting once.
-      EVIDENCE: pending
-- [ ] **0.3 Audit the rest of the TUL path** for other order-dependent accumulation
-      (the slot scatter-back, the TST `ve_bagged` path, `fused_ce.py:127,224`).
-      EVIDENCE: pending
+- [x] **0.1 Land the deterministic `bag_mean`.** Replaced the `index_add_` pair in
+      `morph/model/tul.py` with the one-hot `bmm` formulation.
+      EVIDENCE: `morph/model/tul.py:199-210`. `pytest tests/test_bag_mean_determinism.py -q`
+      → **7 passed** on the new version. Prior scratchpad measurement: 0/20 non-identical
+      fwd+bwd, agrees with `index_add_` within bf16 epsilon (fwd 1.56e-2, bwd 3.91e-3),
+      **10 % faster** (0.165 ms vs 0.184 ms at B=12, L=1152, C=1024), +1.8 MB one-hot.
+- [x] **0.2 Add a determinism gate test** — `tests/test_bag_mean_determinism.py`, 7 tests:
+      3 CUDA determinism gates (forward, backward, and one under a bag permutation so the
+      test cannot pass by the indices happening to be sorted), plus 4 contract tests
+      (span mean, dump row exactly zero, empty bag → 0 not NaN) that also run on CPU.
+      EVIDENCE: reverted `tul.py` to `index_add_` once and re-ran →
+      **3 failed, 4 passed**, the three failures being exactly the determinism gates;
+      restored the fix → **7 passed in 1.64s**. The gate does fail when the code is broken.
+- [x] **0.3 Audit the rest of the TUL path** for other order-dependent accumulation.
+      EVIDENCE: grep for `index_add_|scatter_add_|index_put_|put_|bincount|scatter_reduce`
+      over `morph/model/**`, `morph/model/layers/**`, `morph/training/**`, plus `atomic_`
+      over `morph/kernels/triton/**`. Findings:
+      - The slot scatter-back (`tul.py:257` `scatter_positions`), the rank scatter
+        (`tul.py:326`) and the label scatter (`transformer.py:1491`) are all `scatter_`
+        **writes**, not accumulations. One source index per destination, and the backward
+        of a write-scatter is a gather. Deterministic; nothing to do.
+      - `fused_ce.py:127` — `scatter_add_` with a `[c, 1]` index, one index per row, so
+        no two atomics can collide. Deterministic in practice.
+      - `fused_ce.py:224` — `scatter_add_` with a `[c, K]` index on the **TST multi-label**
+        path. Collisions are possible only when one row repeats a label. The TUL arms run
+        `tst_bag_size: 0`, so this path is inactive for every run in this programme.
+        NOT VERIFIED: whether it matters on a TST run. Left as a known edge.
+      - The two Triton `tl.atomic_add` sites remain: `fused_csa_attention.py:279` and
+        `fused_hca_attention.py:288`. Both are also in A0, which does not take over.
+      **The residual is real and observable**: two 60-step runs at seed 0 differing ONLY in
+      `grad_probe_every` (0 vs 1, a `no_grad`/`detach` readout that cannot change the math)
+      reached `train/loss` 8.4143 and 8.4520 at step 40. Changed launch timing alone moves
+      the trajectory by 4.5e-2 in loss within 40 steps.
 - [ ] **0.4 THE GATE — does the control replicate?** Run `tul_a1` at ONE seed, twice,
       byte-identical config, to step 2600, eval DISABLED so an eval pass cannot perturb
       the RNG stream. This is RCA §22's P2, prepared 2026-08-18 and never run.
@@ -83,10 +103,22 @@ Four phases. Each has a gate; do not start the next until the gate holds.
 Nobody has looked inside the onset. Every checkpoint is post-mortem, `spec/sigma` logs
 every 100 steps, and the onset lasts about 140.
 
-- [ ] **1.1 Add per-step instrumentation** behind a config flag: pre-clip per-region
-      gradient norms, per-core-block gradient norms, and the **GLA carried-state norm**
-      (the cross-iteration carry is a second recurrent loop and nothing watches it).
-      EVIDENCE: pending
+- [x] **1.1 Add per-step instrumentation** behind a config flag.
+      `training.grad_probe_every` (0 = off, bit-exact) and `training.grad_probe_path`
+      (optional JSONL mirror) in `base.yaml`. Trainer half: `_preclip_probe()` in
+      `morph/training/train.py`, called between `scaler.unscale_()` and
+      `clip_grad_norm_` — the only window where the gradients are both unscaled and
+      unclipped — emitting `preclip/<region>` and `preclip/<region>.<block>`. One fused
+      `torch._foreach_norm` over every gradient and ONE host sync. Model half:
+      `_probe_loop` in `TULTransformer._tul_core`, collecting the **GLA carried-state
+      norm** and the realized per-iteration core gain on GPU, read once per step, emitted
+      as `loop/ret_state_norm_t*` and `loop/core_gain_t*`.
+      EVIDENCE: 12-step smoke wrote 12 JSONL rows × 46 keys with live values, e.g. at
+      step 11 `preclip/lm_mixer` 912.5 of a `preclip/total` 912.5 (the LM head owns the
+      whole gradient before the takeover), `preclip/core` 0.0670, and a carried state that
+      **integrates across the loop**: `ret_state_norm` 4167 → 4465 → 4734 → 4882 → 4945 →
+      4955 → 4943 → 4925 over t=0..7, against a core gain decaying 1.348 → 1.105.
+      Overhead at `grad_probe_every=1`: 2.09 → 2.08 steps/s, **0.5 %**.
 - [ ] **1.2 Re-run the control to 2600** with checkpoints every 25 steps from 1700.
       EVIDENCE: pending
 - [ ] **1.3 Which quantity moves first**, at 25-step resolution, using the probes already

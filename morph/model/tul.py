@@ -196,14 +196,18 @@ def bag_mean(signal: Tensor, bag_id: Tensor, token_sel: Tensor, n_bags: int) -> 
     B, L, C = signal.shape
     n_out = n_bags + 1
     sel = token_sel.unsqueeze(-1).to(signal.dtype)
-    # Fold the batch into the bag index so one flat index_add_ does the whole batch —
-    # much cheaper than a scatter_add_ against a [B, L, C]-expanded index view.
-    flat_bag = (bag_id + torch.arange(B, device=bag_id.device).unsqueeze(1) * n_out).reshape(-1)
-    acc = signal.new_zeros(B * n_out, C)
-    acc.index_add_(0, flat_bag, (signal * sel).reshape(-1, C))
-    cnt = signal.new_zeros(B * n_out)
-    cnt.index_add_(0, flat_bag, sel.reshape(-1))
-    out = (acc / cnt.clamp(min=1.0).unsqueeze(-1)).view(B, n_out, C)
+    # A one-hot [B, n_out, L] bag map times the signal. The obvious index_add_ form uses
+    # float atomics, so its summation ORDER varies run to run and the result is not
+    # bit-reproducible forward OR backward (measured: 20/20 repeats differ, 30.7 % of
+    # backward elements, max 3.9e-3 in bf16). A GEMM has a fixed reduction order, agrees
+    # with index_add_ to bf16 epsilon, and is ~10 % FASTER here. See
+    # .agents/notes/proposed/process/2026-08-23-divergence-root-cause-plan.md task 0.1.
+    # scatter_ WRITES (one bag per position) rather than accumulating, so it is exact.
+    oh = signal.new_zeros(B, n_out, L)
+    oh.scatter_(1, bag_id.unsqueeze(1), 1.0)
+    oh = oh * sel.squeeze(-1).unsqueeze(1)
+    cnt = oh.sum(dim=2, keepdim=True)
+    out = torch.bmm(oh, signal) / cnt.clamp(min=1.0)
     # The dump bin aggregates trailing tokens that have no slot; zero it so the gather
     # at slot positions of tail pads reads 0 rather than a stray span mean.
     out = torch.cat([out[:, :n_bags], out.new_zeros(B, 1, C)], dim=1)

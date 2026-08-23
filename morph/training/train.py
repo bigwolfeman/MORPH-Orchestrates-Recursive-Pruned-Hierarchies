@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import gc
 import math
+import json
 import os
 import sys
 import time
@@ -540,6 +541,65 @@ def load_weights_only(path: str, model: nn.Module, device: torch.device) -> None
 
 
 @torch.no_grad()
+def _preclip_probe(model) -> dict[str, float]:
+    """PRE-CLIP per-region / per-block gradient norms plus the looped-core state probe.
+
+    The onset of the TUL core takeover lasts about 140 steps and every existing gradient
+    log is POST-clip and every 100 steps, so nobody has ever seen inside it (plan task
+    1.1). Post-clip ratios between regions are exact — the clip is one uniform rescale —
+    but the absolute values are not, and it is the absolute pre-clip magnitude that says
+    whether the core is producing a 1e8 gradient or merely the largest share of a healthy
+    one.
+
+    Cost: one fused ``_foreach_norm`` over every gradient plus ONE host sync, so this is
+    affordable every step. Call it AFTER ``scaler.unscale_`` and BEFORE
+    ``clip_grad_norm_`` — that window is the only place the gradients are both unscaled
+    and unclipped.
+
+    Returns a flat wandb-ready dict; the caller logs it at the step it belongs to.
+    """
+    names, grads = [], []
+    for name, p in model.named_parameters():
+        if p.grad is not None:
+            names.append(name)
+            grads.append(p.grad.detach())
+    out: dict[str, float] = {}
+    if grads:
+        # torch.compile wraps the module, so names arrive as "_orig_mod.core.0.…";
+        # strip the wrapper or every parameter lands in one bucket named "_orig_mod".
+        sq = torch.stack(torch._foreach_norm(grads)).float().square().tolist()  # 1 sync
+        acc: dict[str, float] = {}
+        for name, v in zip(names, sq):
+            parts = name.replace("_orig_mod.", "").split(".")
+            acc[parts[0]] = acc.get(parts[0], 0.0) + v
+            # Per-BLOCK for the stacked regions: a region total says the core exploded,
+            # the per-block profile says whether it amplifies geometrically layer by layer
+            # (an unstable backward operator) or runs away in one block alone.
+            if parts[0] in ("prelude", "core", "coda") and len(parts) > 1 and parts[1].isdigit():
+                bk = f"{parts[0]}.{parts[1]}"
+                acc[bk] = acc.get(bk, 0.0) + v
+        out = {f"preclip/{k}": v ** 0.5 for k, v in acc.items()}
+        # Regions only (keys with no dot) — the per-block entries are a subset of them.
+        out["preclip/total"] = sum(v for k, v in acc.items() if "." not in k) ** 0.5
+
+    # The GLA carried state and the realized per-iteration core gain, from the forward
+    # that produced these gradients. The carry is a SECOND recurrent loop inside the core
+    # loop, with a forget gate biased to alpha near 1, and nothing has ever watched it.
+    lp = getattr(getattr(model, "_orig_mod", model), "_loop_probe", None)
+    if lp:
+        for key, t in lp.items():
+            if t is None:
+                continue
+            seq = t.float().tolist()
+            out[f"loop/{key}_max"] = max(seq)
+            out[f"loop/{key}_last"] = seq[-1]
+            # The per-iteration profile itself: a gain that COMPOUNDS with the iteration
+            # index is a different disease from one that spikes at t=0.
+            for i, v in enumerate(seq):
+                out[f"loop/{key}_t{i}"] = v
+    return out
+
+
 def diag_prune_optstate(model, optimizer, step: int, path: str) -> None:
     """Root-cause the AdEMAMix prune divergence (env MORPH_DIAG_OPT=<path>).
 
@@ -1168,6 +1228,11 @@ def main(cfg: DictConfig) -> None:
     # and it was measurable ONLY from a checkpoint autopsy. Log it on EVERY run, penalised or
     # not: with lam=0 `penalty()` early-returns an exact zero, so a logging-only construction
     # leaves the arm bit-exact but no longer blind. 0 disables.
+    # Phase-1 onset probe cadence (steps). 0 = off, and off is bit-exact: the model-side
+    # flag is not set, so _tul_core traces the same graph it always has.
+    _gprobe_every = int(getattr(cfg.training, "grad_probe_every", 0))
+    _gprobe_path = getattr(cfg.training, "grad_probe_path", None) or None
+    _gprobe_fh = None
     _sp_log = int(getattr(cfg.training, "spectral_penalty_log_every", 100))
     _sp_on = _sp_cap > 0.0 and _sp_lam > 0.0
     if _sp_on or _sp_log > 0:
@@ -1191,6 +1256,17 @@ def main(cfg: DictConfig) -> None:
     embed_quant_manifest = _qm["embed_quant"]
     attn_proj_quant_manifest = _qm["attn_proj_quant"]
     fp8_manifest = _qm["fp8"]
+
+    # Phase-1 onset probe: arm the model-side half (the looped-core state collector in
+    # TULTransformer._tul_core). Set before the first forward. Left unset — the default —
+    # _tul_core takes the identical code path it always has.
+    if _gprobe_every > 0:
+        model._probe_loop = True
+        if _gprobe_path:
+            os.makedirs(os.path.dirname(os.path.abspath(_gprobe_path)), exist_ok=True)
+            _gprobe_fh = open(_gprobe_path, "a", buffering=1)
+        print(f"  [probe] pre-clip gradient + loop probe ON, every {_gprobe_every} step(s)"
+              + (f", mirrored to {_gprobe_path}" if _gprobe_path else ""))
 
     # ── torch.compile ─────────────────────────────────────────────────────
     # Compile only the MLP sub-modules (attention uses Triton/SDPA kernels,
@@ -2058,8 +2134,31 @@ def main(cfg: DictConfig) -> None:
             t_start = time.perf_counter()
             continue
 
+        # ── Phase-1 onset probe (plan task 1.1) ───────────────────────────────
+        # PRE-CLIP per-region and per-block gradient norms, at their own cadence,
+        # independent of the 20-step log block and of the 100-step POST-clip block below.
+        # Post-clip ratios are exact but the absolute values are not, and the onset lasts
+        # about 140 steps — 100-step post-clip sampling is why nobody has ever seen inside
+        # it. One fused _foreach_norm over every grad and ONE host sync, so it is cheap
+        # enough to run every step. `grad_probe_every: 0` (the default) skips all of it.
+        _probe_now = _gprobe_every > 0 and step % _gprobe_every == 0
+
         with _rt.region("clip"):
+            # unscale_ ONCE: torch's GradScaler raises if it is called twice for the same
+            # optimizer between update()s, which is why the probe lives inside this block
+            # rather than before it. Between here and clip_grad_norm_ is the only place the
+            # grads are both unscaled and unclipped.
             scaler.unscale_(optimizer)
+            if _probe_now:
+                _probe_log = _preclip_probe(model)
+                wandb.log(_probe_log, step=step)
+                if _gprobe_path is not None:
+                    # Local mirror. wandb is the record of truth, but a per-step probe is
+                    # 100+ series and the API is slow to page through; the onset analysis
+                    # wants a file it can load in one read. Appended, one JSON per line,
+                    # flushed per step so a killed run keeps everything up to the kill.
+                    _gprobe_fh.write(json.dumps({"step": step, **_probe_log}) + "\n")
+                    _gprobe_fh.flush()
             # KEEP THE RETURN VALUE. clip_grad_norm_ already computes the pre-clip global
             # norm; throwing it away costs nothing to compute and everything to diagnose.
             # The 2026-08-17 TUL divergence was invisible in wandb for exactly this reason —

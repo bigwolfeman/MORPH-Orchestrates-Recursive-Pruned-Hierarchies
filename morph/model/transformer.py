@@ -1363,6 +1363,17 @@ class MORPHTransformer(nn.Module):
                                          inj_terms=inj_terms)
 
         g_list: list[Tensor] = []
+        # ── Phase-1 onset probe (plan task 1.1) ───────────────────────────────
+        # The GLA cross-iteration carry is a SECOND recurrent loop inside the core loop
+        # and nothing watches it. Its forget gate is biased to alpha near 1
+        # (retention_gate_bias 2.0), so it can integrate without bound while the carrier
+        # norm stays flat and the loss stays flat. Collected on GPU per iteration and
+        # read once per step by the trainer, so there is no sync inside the loop.
+        # `_probe_loop` is a plain Python bool read at trace time: False (the default)
+        # traces the identical graph as before and costs nothing.
+        _probe = getattr(self, "_probe_loop", False)
+        _pr_ret: list[Tensor] = []
+        _pr_gain: list[Tensor] = []
         for t in range(total_iters):
             active = alive if halt else (depths > t)               # [B, S]
             do_ckpt = self.training and (t - n_nograd) < n_ckpt
@@ -1401,6 +1412,17 @@ class MORPHTransformer(nn.Module):
                 g_t = self.tul_gate.readout(h_new)                 # [B, S]
                 g_list.append(g_t)
 
+            if _probe:
+                with torch.no_grad():
+                    # Gain is measured on the ACTIVE slots only — a finished slot's state is
+                    # frozen, so including it would dilute the runaway we are looking for.
+                    _am = active.view(*active.shape, *([1] * (h.dim() - 2))).to(h.dtype)
+                    _hi = (h * _am).flatten(1).float().norm(dim=1)
+                    _ho = (h_new * _am).flatten(1).float().norm(dim=1)
+                    _pr_gain.append((_ho / (_hi + 1e-6)).max().detach())
+                    _pr_ret.append((rs_new if (track_ret and rs_new is not None)
+                                    else h.new_zeros(())).float().norm().detach())
+
             h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
             if track_ret and rs_new is not None:
                 ret_state = rs_new
@@ -1416,6 +1438,12 @@ class MORPHTransformer(nn.Module):
         if halt:
             depths = torch.where(depths > 0, depths, torch.full_like(depths, total_iters))
             depths = torch.where(layout.slot_valid, depths, torch.ones_like(depths))
+        if _probe:
+            # [T] each, still on GPU and detached. The trainer reads them once per step.
+            self._loop_probe = {
+                "core_gain": torch.stack(_pr_gain) if _pr_gain else None,
+                "ret_state_norm": torch.stack(_pr_ret) if _pr_ret else None,
+            }
         g_traj = torch.stack(g_list, dim=-1) if g_list else None   # [B, S, T]
         return xn, h, depths, g_traj
 

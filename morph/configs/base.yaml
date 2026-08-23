@@ -154,6 +154,16 @@ training:
   # σ_max logging cadence (steps). Independent of the penalty: with lambda=0 the
   # penalty is an exact zero, so this only ADDS the diagnostic. 0 = off.
   spectral_penalty_log_every: 100
+  # PRE-CLIP per-region / per-block gradient norms + the looped-core state probe
+  # (GLA carried-state norm and realized per-iteration core gain), every N steps.
+  # The existing gradnorm/* block is POST-clip and every 100 steps; the TUL core
+  # takeover onset lasts about 140 steps, so 100-step post-clip sampling cannot see
+  # inside it. Costs one fused _foreach_norm and one host sync per probed step.
+  # 0 = off, and off is bit-exact (the model-side flag is never set).
+  grad_probe_every: 0
+  # Optional local JSONL mirror of the probe (one object per probed step). null = wandb
+  # only. Set it per-run; the onset analysis reads this file rather than the wandb API.
+  grad_probe_path: null
   beta1: 0.9
   beta2: 0.95                     # NOTE: AdEMAMix paper recommends beta2=0.999 — set per-arm.
   # ── AdEMAMix (only used when optimizer=ademamix) ──
