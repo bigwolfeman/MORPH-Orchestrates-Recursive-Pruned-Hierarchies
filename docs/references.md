@@ -216,17 +216,6 @@ module ships in the current code. Kept as related work for the removed memory st
 
 
 
-### Multi-Rate Residual (MRR) — MORPH's approach (removed)
-
-An earlier MORPH version used a **Multi-Rate Residual (MRR)**: the d_model-dim hidden state split
-into 3 sub-channels (compute 3N, context 2N, memory N) with per-channel learned γ gains on the
-residual update — a simpler mechanism than HC/mHC, with no cross-stream mixing. It was **removed**
-in favor of the JPmHC Cayley hyper-connection (below), which is now MORPH's sole residual. (The
-block attributes are still named `mrr_attn`/`mrr_mlp` — a retained legacy name for checkpoint
-compatibility — but they hold `HyperConnectionResidual` modules.)
-
-**NOTES:** This was a Claude dumb-dumb moment. Claude said "mHC? I think we should dip our toes into this and do half of that" and proceeded to invent something new that works, but not as well as mHC. But the naming on checkpoints needed to remain consistent so this mHC implementation uses MRR for variable names now. To be addressed in a v2 or before final MORPH release as the last checkpoint breaking change before the final full training run.
-
 ### JPmHC — Jacobian-Preserving Manifold Hyper-Connections (Cayley)
 
 **Title:** JPmHC: Dynamical Isometry via Orthogonal Hyper-Connections  
@@ -435,8 +424,7 @@ via Step Sampling
 **MORPH history (removed):** Step-boundary follow-up to STP (arXiv:2602.22617). Argues that
 sampling the STP geodesic loss at semantic reasoning-step boundaries (rather than random token
 positions) dominates the geometric outcome. MORPH never shipped this variant; it is archived as
-related work for the removed STP / latent-prediction stack (`morph/model/prediction.py` no longer
-exists). Local notes only (no PDF in the archive).
+related work for the removed STP / latent-prediction stack (`morph/model/prediction.py` no longer exists). Local notes only (no PDF in the archive). Inspired punc-STP.
 
 ---
 
@@ -560,6 +548,8 @@ weight α (default 8.0): `update = (m₁ + α·m₂)/(√ν + ε) + λ·p`. α a
 schedulers (`t_alpha`, `t_beta3`) distinct from LR warmup — essential for stability under
 MORPH's flat-LR recipe. Includes prune-aware dead-state masking for CMS-carved weights.
 
+Ablated against AdamW, Muon, and Nested Optimizer. Has the best memory footprint and convergence. β1=0 can be unstable. It seems mostly solved.
+
 ---
 
 
@@ -578,7 +568,7 @@ MORPH's flat-LR recipe. Includes prune-aware dead-state masking for CMS-carved w
 600+ programming languages) for code data in MORPH's mixed OpenWebText + code pretraining.
 The 49k vocab cleanly stacks with a bigram hash-vocab prefix for rare byte patterns.
 
-**NOTES:** I ablated every tokenizer I am aware of between 16k-128k vocab. Starcoder 2 behaves the best per bit with Granite and Phi right behind. This was tested across 3 seeds to 100m tokens and 1 seed with 2 data mixtures.
+**NOTES:** I ablated every tokenizer I am aware of between 16k-128k vocab. Starcoder 2 behaves the best per bit with Granite and Phi right behind. This was tested across 3 seeds to 100m tokens and 1 seed with 2 data mixtures. This tokenizer is particularly strong for math, it subdivides numbers into individual tokens to help the LLM reason about the problem more easily.
 
 ---
 

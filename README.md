@@ -1,10 +1,14 @@
+<p align="center">
+  <img src="docs/figures/hydra.png" alt="MORPH hydra" width="320" />
+</p>
+
 # MORPH
 
 **MORPH** is a PyTorch research model for **looped transformer** training and sparse deployment. The model reuses a small Parcae-style core for variable depth, stabilizes the repeated core with Cayley Hyper-Connections, and trains the MLP stack while pruning low impact weights down to as little as 25% total density before carving it into the MORTAR BCSR runtime. Enabling less than 1% ppl regression and improved memory footprint and training throughput over full density. All while natively quantized trained.
 
-To further improve per bit intelligence and memory foot print for research, it utilizes extensive linear attention methods to enable a lower memory foot print at long contexts. Both GLA and Deepseek CSA/HCA are used.
+To further improve per bit intelligence and memory foot print for research, it utilizes extensive linear attention methods to enable a lower memory foot print at long contexts. Both GLA and Deepseek CSA/HCA are used, with a convolutional based compression of the kv.
 
-Extensive ablations have dredged through dozens of papers and techniques to carve out the MORPH Architecture. It is the goal of the MORPH project to provide a true open source architecture that stays at the bleeding edge of research.
+Extensive ablations have ran through dozens of [papers](docs/references.md) and techniques to carve out the MORPH Architecture. It is the goal of the MORPH project to provide a true open source architecture that stays at the bleeding edge of research.
 
 ---
 
@@ -13,7 +17,7 @@ The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/
 <p align="center">
   <img src="docs/figures/morph_overview.png" alt="MORPH architecture overview: hybrid embeddings into an HC carrier, prelude / looped core / coda, then LM head" width="720" />
 </p>
-<p align="center"><em>Architecture overview — Parcae-style prelude / core loop / coda on a Cayley Hyper-Connection carrier, with a gated GLA retention branch on layer 1.</em></p>
+<p align="center"><em>Architecture overview — Parcae-style prelude / core loop / coda on a <a href="docs/references/residual-streams/2602.18308.md">Cayley Hyper-Connection</a> carrier, with a gated GLA retention branch on layer 1.</em></p>
 
 ## TUL: Thought Unpack Loop (merged, OFF by default)
 

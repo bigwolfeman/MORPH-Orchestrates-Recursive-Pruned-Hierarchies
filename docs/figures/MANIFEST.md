@@ -8,6 +8,7 @@ files (`.aux`, `.log`) are grouped by topic.
 
 | Topic | Diagrams | Preview |
 |---|---|---|
+| Branding | — | `hydra.png` |
 | Architecture | [MORPH overview](architecture/morph_overview.tex), [MORPH block](architecture/morph_block.tex), [TUL mechanism](architecture/tul_mechanism.tex) | `morph_overview.png`, `morph_block.png`, `tul_mechanism.png` |
 | Attention | [Attention stack](attention/morph_attention.tex) | `morph_attention.png` |
 | Embeddings | [Hybrid embeddings](embeddings/morph_embeddings.tex) | `morph_embeddings.png` |
