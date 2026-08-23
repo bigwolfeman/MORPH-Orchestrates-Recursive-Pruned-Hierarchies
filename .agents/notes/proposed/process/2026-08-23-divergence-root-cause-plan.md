@@ -119,12 +119,42 @@ every 100 steps, and the onset lasts about 140.
       **integrates across the loop**: `ret_state_norm` 4167 → 4465 → 4734 → 4882 → 4945 →
       4955 → 4943 → 4925 over t=0..7, against a core gain decaying 1.348 → 1.105.
       Overhead at `grad_probe_every=1`: 2.09 → 2.08 steps/s, **0.5 %**.
-- [ ] **1.2 Re-run the control to 2600** with checkpoints every 25 steps from 1700.
-      EVIDENCE: pending
-- [ ] **1.3 Which quantity moves first**, at 25-step resolution, using the probes already
-      written: `ignore/perf/depth_gain.py` (forward carrier gain, `lin_ratio`; note
-      `sigma_max` is meaningless once `lin_ratio` collapses), and the per-block gains.
-      EVIDENCE: pending
+- [~] **1.2 Re-run the control** with the probe. Run `phase1-onset-s0`: `tul_a1` +
+      `ademamix_alpha_cap=3.5` (the CONTROL — `tul_short.yaml` ships the cure 1.0, so the
+      arm the pre-registration named could never diverge), seed 0, eval and gen off,
+      `grad_probe_every=1`, 5000 steps. It took over: core share 0.0145 at step 1400 →
+      0.9981 by 2400, divergence guard first strike at 2620.
+      **DEFERRED, and this is a real gap:** no dense checkpoints inside the onset. 36
+      optimizer-bearing checkpoints is ~120 GB and hours of I/O, which does not fit the
+      session's 1.5 h ceiling, so the offline `depth_gain` / `lin_ratio` probes STILL have
+      no checkpoint to run on inside the window. Per-step scalars were collected instead.
+      EVIDENCE: `ignore/perf/phase1/onset_s0.jsonl`, 45 series × every step; console log
+      `ignore/perf/phase1/onset_s0.log`; wandb `morph-tul/phase1-onset-s0`.
+- [x] **1.3 Which quantity moves first** — at PER-STEP resolution, not 25.
+      Full writeup and the threshold-sensitivity sweep:
+      [`../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md`](../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md).
+      Analysis rule fixed in `ignore/perf/phase1/onset_order.py`, written and dry-run at
+      step 853 of the run, before any takeover was visible.
+      EVIDENCE, the four findings:
+      1. **The runaway is confined to the FIRST loop iteration**, at every threshold tried
+         (K ∈ {5,10,20}): `core_gain_t0` 1.422 → 16.93, `t1` 1.080 → 1.596, and
+         `t2..t7` never depart. `core_gain_max` equals `core_gain_t0` at EVERY probed step
+         of the run. Evidence AGAINST a compounding-through-depth ρ^T story — the late
+         iterations carry the least gain, and they contract what the first one expands.
+      2. Within the core, **block 0 leads** (1975) and the **coda is last** (2229–2444);
+         prelude/tul/embed sit between at 2031–2043.
+      3. **`preclip/lm_mixer` NEVER departs** in any of 12 (K, R) settings — baseline
+         1.202, value 1.931 at step 3000 while `preclip/core` is 1.3e6. The takeover is
+         not a loss explosion propagating backwards.
+      4. **The GLA carried state is a FOLLOWER** — departs 2330 (K=10), 2417 (K=20), never
+         (K=40); after `preclip/core` at every K ≥ 10. The Phase 1 hypothesis that the
+         carry drives this is REFUTED on this run. It still has to be fixed for causality.
+      Also: the loss reaches its whole-run MINIMUM (4.5500 at 1600–1700) while
+      `core_gain_t0` is already climbing, and is 4.7137 at step 2100 with the core holding
+      81.7 % of the gradient. The loss curve shows a healthy run 500 steps after takeover.
+      NOT ESTABLISHED: that `core_gain_t0` leads `preclip/core`. It leads by 35–183 steps
+      at K ≤ 10 and the order REVERSES at K ≥ 20; MAD units cannot fairly compare a 1e7
+      excursion with a 12× one.
 
 ### Phase 2 — mediation, NOT another cure hunt  (~5 h, needs Phase 1)
 
@@ -135,8 +165,10 @@ with Phase 1's instrumentation, and ask **not** "did it survive" but:
 > control and the placebo, and (b) held below that value by ALL FOUR cures?
 
 - [ ] **2.1 Write the pre-registration** in `docs/experiments/planned/` BEFORE the runs,
-      naming the candidate quantities and the threshold rule. Phase 1 supplies the
-      candidate list, so this cannot be written earlier.
+      naming the candidate quantities and the threshold rule.
+      **Phase 1 has now supplied the candidate list and it is short:** `core_gain_t0`,
+      the pre-clip core share, and `preclip/core.0`. `ret_state_norm` and `lm_mixer` are
+      DEMOTED by Phase 1 findings 3 and 4 — one never moves and the other follows.
       EVIDENCE: pending
 - [ ] **2.2 Run the six arms, 2 seeds each.**
       EVIDENCE: pending
@@ -152,15 +184,29 @@ Then this is a **rate**, not an event — Task #276's phenotype of transient exc
 whose rate climbs until one catches. Two of four control seeds already showed `grad_norm`
 spikes (7.7e4, 4.9e4) that did NOT run away.
 
-- [ ] **3.1 Model the excursion rate against training step** from Phase 1's per-step logs.
-      EVIDENCE: pending
-- [ ] **3.2 Ship an abort criterion instead of a cause.** This is available TODAY and does
-      not depend on any phase: `gradnorm/core` ratchets 0.0092 → 0.0426 → 0.1083 → 0.8996
-      over steps 1800–2100, about **140 steps before** `train/grad_norm` moves, and never
-      returns. It is a RATCHET, not a level — the gate arm touches 0.3462 at step 700 and
-      falls back to 0.0783 without dying, so the rule must be "N consecutive rises", not a
-      threshold.
-      EVIDENCE: pending
+- [x] **3.1 Model the excursion rate against training step** from Phase 1's per-step logs.
+      MEASURED, and it is the #276 phenotype. Probed steps with pre-clip core share > 0.25,
+      per 200-step bin: **0, 0, 0, 0, 0, 0, 0** for steps 0–1400, then **5, 3, 13** for
+      1400–1600, 1600–1800, 1800–2000, then the permanent takeover. Nothing for 1400 steps,
+      then excursions that appear, fall back, and grow more frequent until one does not
+      fall back. **Every pre-takeover excursion above 0.5 is ONE probed step long**, which
+      is why the abort rule's "sustained for N steps" clause is load-bearing — a bare
+      threshold would have false-fired at step ~1450, 570 steps early.
+      EVIDENCE: [`../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md`](../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md)
+      finding 6, and panel 3 of `tul_onset.png`.
+- [~] **3.2 Ship an abort criterion instead of a cause.** The rule is now MEASURED and it
+      is 4× better than the post-clip ratchet it replaces. Against the divergence guard's
+      first strike at step 2620, sustained for 25 consecutive probed steps:
+      pre-clip core share > 0.25 fires at 2031 (**589 steps** of warning), > 0.50 at 2033
+      (587), `preclip/core` > 1.0 at 2032 (588), `core_gain_t0` > 2.0 at 2063 (557),
+      core share > 0.90 at 2192 (428). The old POST-clip `gradnorm/core` ratchet gave ~140.
+      Recommended: **pre-clip core share > 0.5, sustained 25 steps** — 34× above the
+      healthy baseline of 0.0145, against a highest-healthy-value of 0.031 before step
+      1900, and a share needs no per-arm scale calibration.
+      **NOT IMPLEMENTED in `train.py`.** The table is the evidence for the rule, not the
+      rule. Implementing it is the next commit, and it is acceptance criterion 4.
+      EVIDENCE: [`../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md`](../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md)
+      "The abort criterion".
 
 ### Two arms to add to Phase 2
 
