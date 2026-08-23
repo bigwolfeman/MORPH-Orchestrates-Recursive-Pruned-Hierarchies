@@ -9,9 +9,11 @@ data/pretok being present.
 from __future__ import annotations
 
 import dataclasses
+import math
 import json
 
 import numpy as np
+import torch
 import pytest
 
 from morph.model.tul_layout import BoundaryRule, TulDataConfig
@@ -160,3 +162,67 @@ def test_curriculum_stage_transition_keeps_the_tul_layout(tmp_path):
     x, y, layout = after
     assert isinstance(layout, object) and layout is not None
     assert x.shape[1] == tul_cfg.spec_for(1024).l_total, "layout must follow the new seq_len"
+
+
+# ── val PPL aggregation ───────────────────────────────────────────────────────
+#
+# `evaluate` reports TWO perplexities: the baseline's `val/ppl` (from the return value)
+# and TUL's `val/ppl_tokens` (from `extra`). They are compared against each other in
+# docs/ablation-ledger.md, so they must use the SAME aggregation. Until 2026-08-23
+# `val/ppl_tokens` was the mean of the per-batch exp(CE) while `val/ppl` was exp of the
+# mean CE. Jensen makes the first strictly larger whenever the batches differ: on
+# tul-a1-acap1 it read 25.89 against a true 25.14, and that 0.75 PPL gap is 59 % of the
+# 1.27 PPL A1-vs-A0 effect the metric exists to measure.
+
+class _CEStubModel(torch.nn.Module):
+    """Returns a scripted CE per batch so the aggregation is the only thing under test."""
+
+    def __init__(self, ces):
+        super().__init__()
+        self._ces = list(ces)
+        self._i = 0
+
+    def tul_forward_with_plan_nats(self, x, y, layout):
+        ce = self._ces[self._i]
+        self._i += 1
+        return {"loss": torch.tensor(ce), "ce_tokens": ce,
+                "layer_passes": 8.0, "n_tokens": 4.0}
+
+
+class _Layout:
+    stats: dict = {}
+
+    def to(self, device):
+        return self
+
+
+def _run_eval(ces):
+    from morph.training.train import evaluate
+    x = torch.zeros(1, 4, dtype=torch.long)
+    loader = iter([(x, x, _Layout()) for _ in ces])
+    extra: dict = {}
+    avg, ppl = evaluate(_CEStubModel(ces), torch.device("cpu"), loader,
+                        n_batches=len(ces), tul=True, extra=extra)
+    return avg, ppl, extra
+
+
+def test_val_ppl_tokens_is_exp_of_the_mean_not_the_mean_of_exps():
+    ces = [2.0, 4.0, 3.0]                       # spread out, so Jensen bites
+    mean_ce = sum(ces) / len(ces)
+    mean_of_exps = sum(math.exp(c) for c in ces) / len(ces)
+
+    _avg, _ppl, extra = _run_eval(ces)
+
+    assert extra["val/ce_tokens"] == pytest.approx(mean_ce)
+    assert extra["val/ppl_tokens"] == pytest.approx(math.exp(mean_ce))
+    # The old form. exp(3) = 20.09 vs 22.98 — a 14 % overstatement on this input.
+    assert extra["val/ppl_tokens"] != pytest.approx(mean_of_exps)
+
+
+def test_val_ppl_tokens_uses_the_same_aggregation_as_the_baseline_val_ppl():
+    """The two numbers are compared arm-to-arm, so they must agree on identical CE."""
+    ces = [2.0, 4.0, 3.0]
+    _avg, ppl_baseline, extra = _run_eval(ces)
+    # The stub's `loss` equals its `ce_tokens`, so the token path and the baseline path
+    # see the same numbers and must report the same PPL.
+    assert extra["val/ppl_tokens"] == pytest.approx(ppl_baseline)

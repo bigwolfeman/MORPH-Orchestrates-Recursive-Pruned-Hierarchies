@@ -120,7 +120,6 @@ def evaluate(
             losses.append(out["loss"].item())
             ce_tok = float(out["ce_tokens"])
             acc.setdefault("val/ce_tokens", []).append(ce_tok)
-            acc.setdefault("val/ppl_tokens", []).append(math.exp(min(ce_tok, 20.0)))
             if "ce_first_tok" in out:
                 acc.setdefault("val/first_tok_ce", []).append(float(out["ce_first_tok"]))
                 acc.setdefault("val/first_tok_counterfactual", []).append(
@@ -144,7 +143,6 @@ def evaluate(
                 _ceh = float(out_h["ce_tokens"])
                 acc.setdefault("val/halt_loss", []).append(out_h["loss"].item())
                 acc.setdefault("val/halt_ce_tokens", []).append(_ceh)
-                acc.setdefault("val/halt_ppl_tokens", []).append(math.exp(min(_ceh, 20.0)))
                 acc.setdefault("val/halt_depth_mean", []).append(
                     float(out_h["gate/depth_mean"]))
                 acc.setdefault("val/halt_layer_passes_per_token", []).append(
@@ -161,6 +159,16 @@ def evaluate(
     model.train()
     if extra is not None:
         extra.update({k: sum(v) / len(v) for k, v in acc.items() if v})
+        # PPL is exp of the MEAN CE, never the mean of the per-batch exp(CE). Jensen
+        # makes the latter strictly larger: on tul-a1-acap1 it read 25.89 against the
+        # true 25.14, and that 0.75 gap is 59 % of the 1.27 PPL A1-vs-A0 effect it
+        # exists to measure. The baseline path returns exp(mean) (see the return
+        # below), so the per-batch form was NOT comparable to it, despite this
+        # function's docstring claiming exactly that comparability.
+        for _ce_k, _ppl_k in (("val/ce_tokens", "val/ppl_tokens"),
+                              ("val/halt_ce_tokens", "val/halt_ppl_tokens")):
+            if _ce_k in extra:
+                extra[_ppl_k] = math.exp(min(extra[_ce_k], 20.0))
     avg = sum(losses) / max(len(losses), 1)
     return avg, math.exp(min(avg, 20.0))
 

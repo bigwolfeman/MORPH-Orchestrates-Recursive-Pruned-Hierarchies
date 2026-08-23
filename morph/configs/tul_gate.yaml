@@ -1,7 +1,8 @@
 # TUL arm TUL-gate (docs/tul-gate-spec.md §11, docs/ablation-ledger.md).
 # Run: PYTHONPATH=$PWD python -m morph.training.train --config-name tul_gate
 #
-# Everything is tul_a1.yaml — same 20k × 14 × 1024 schedule, same max_slots 64, same
+# Everything is tul_a1.yaml — same 20k × 12 × 1024 schedule (tul_short set batch 12 on
+# 2026-08-22; at 14 this arm OOMed at step 1050), same max_slots 64, same
 # dense/TST-off recipe — so the ONLY difference from the reference arm is the gate:
 # a length head on each slot's core state, a budget embedding into the coda, and the
 # span truncation that stops the budget from being a punctuation oracle.
