@@ -1,6 +1,6 @@
 # Experiment: is `ademamix_alpha_cap=1.0` a cure or a delay?
 
-Status: planned
+Status: failure
 
 Follows `../failures/2026-08-22-tul-divergence-cause.md`, whose own "Next planned
 experiment" section names this measurement. Costs zero training: it reads checkpoints
@@ -120,3 +120,87 @@ Final list, ordered by decisiveness so rows 1-4 answer the question:
 `acap1_15k`, `a0_5k`, `a0_20k`, `a0acap1_5k`, `a0acap1_20k`.
 
 Runner: `ignore/perf/run_order_param.sh`. Not yet run — the GPU is in use.
+
+## Results (2026-08-22, `ignore/perf/order_param_full.log`)
+
+Ten checkpoints. Gate A passed. Gate B passed at **exactly 0.000e+00 on every one**.
+Zero material-missing keys on every load. Random ids, seed 1234, batch 2, seq 256,
+identical for all rows. `k=60`.
+
+| label | cap | TUL | step | composition | worst blk | **ORDER** | realized |
+|---|---|---|---|---|---|---|---|
+| a1_DIVERGED_4540 | 3.5 | yes | 4540 | 40556.21 | 1140.03 | **35.58** | 51.46 |
+| a1r_DIVERGED_3240 | 3.5 | yes | 3240 | 53110.95 | 2519.87 | **21.08** | 97.02 |
+| acap1_5k | 1.0 | yes | 5000 | 83.26 | 16.93 | **4.92** | 1.27 |
+| acap1_10k | 1.0 | yes | 10000 | 91.52 | 20.36 | **4.50** | 1.30 |
+| acap1_15k | 1.0 | yes | 15000 | 160.88 | 42.72 | **3.77** | 1.41 |
+| acap1_20k | 1.0 | yes | 20000 | 197.18 | 50.92 | **3.87** | 1.45 |
+| a0_5k | 3.5 | no | 5000 | 75.89 | 29.15 | **2.60** | 1.64 |
+| a0_20k | 3.5 | no | 20000 | 118.93 | 54.49 | **2.18** | 2.57 |
+| a0acap1_5k | 1.0 | no | 5000 | 110.12 | 24.37 | **4.52** | 1.46 |
+| a0acap1_20k | 1.0 | no | 20000 | 69.11 | 65.22 | **1.06** | 1.64 |
+
+### Scoring
+
+| # | prediction | verdict |
+|---|---|---|
+| 1 | both diverged controls score ORDER > 6 | **correct**, 35.58 and 21.08 — a different scale entirely from every survivor (1.06–4.92) |
+| 2 | cured trajectory rises by less than 1.0 (4.50 -> under 5.5) | **correct in direction, and then some** — it FELL, 4.92 -> 4.50 -> 3.77 -> 3.87 |
+| 3 | healthy arms sit below 4.0 at both 5k and 20k | **half wrong.** True for `tul-a0` (2.60, 2.18). FALSE for `tul-a0-acap1` (4.52 at 5k) — an arm that finished 20k at val CE 3.2805. ORDER ~4.5 is compatible with a perfectly healthy run |
+| 4 | per-block sigma stays within a factor of 2, runaway lives in the composition | **falsified.** The diverged blocks grew 67x (16.93 -> 1140.03). This is NOT pure alignment; magnitude exploded too. Alignment rose as well (4.9 -> 35.6), so both move together |
+
+### What the control bought
+
+`tul-a0-acap1` was added in Amendment 1 and it changed the reading. At 5k:
+A0 uncapped 2.60, A0 **capped** 4.52, A1 capped 4.92. **The cap raises ORDER, not TUL.**
+Going from cap 3.5 to 1.0 moves ORDER 2.60 -> 4.52 in an arm with no TUL at all; TUL then
+adds only 4.52 -> 4.92. Without this row the cured arm's elevated ORDER would have been
+credited to TUL, which is wrong.
+
+### The shape that repeats
+
+**Every surviving arm's ORDER falls over training** while its magnitudes grow:
+
+- `tul-a0` 2.60 -> 2.18 (worst blk 29.2 -> 54.5)
+- `tul-a0-acap1` 4.52 -> **1.06** (worst blk 24.4 -> 65.2 — composition ~ worst block, i.e.
+  the six blocks end up very nearly cancelling)
+- `tul-a1-acap1` 4.92 -> 3.87 (worst blk 16.9 -> 50.9)
+
+A falling ORDER with growing per-block sigma is therefore what ordinary training looks
+like in this architecture. The cured TUL arm has that shape. It ends ~3.7x above the
+capped no-TUL arm (3.87 vs 1.06), so TUL does keep the core more aligned — but declining,
+and nowhere near 21+.
+
+`realized_gain` is **not** a danger signal: the healthiest arm, `tul-a0`, has the highest
+value among survivors (2.57 at 20k) while the cured TUL arm sits at 1.45.
+
+## Verdict
+
+**The cure reading is supported: the capped trajectory does not walk toward the cliff.**
+It has the same declining shape as two independent healthy arms and ends an order of
+magnitude below both diverged controls.
+
+**It is NOT proven, for three reasons that this design cannot retire.**
+
+1. **The diverged evidence is post-mortem.** DIV-GUARD writes those checkpoints after two
+   consecutive evals at ppl > 1000. ORDER 21-36 is the state at death. This establishes
+   that the metric separates dead from alive; it does **not** establish that ORDER climbs
+   *before* death, which is the only thing that would make it an early-warning signal.
+   The checkpoints that would show the run-up do not exist: every diagnostic arm (D, E, F,
+   placebo) ran `ckpt_every=100000` on runs lasting <= 6600 steps and saved nothing.
+2. **The decline is close to the estimator's scatter.** The unseeded start vector made the
+   same checkpoint score composition 76.18 then 83.26 — 9% — against a decline of ~20%.
+   Power iteration approaches sigma_1 from below, so every number here is a lower bound.
+   Fixed (seeded, `--restarts`), re-measurement pending.
+3. **Every number is from batch 14.** The campaign runs batch 12.
+
+Because of 1 and 2 this file goes to `failures/`, not `successes/`: predictions 3 and 4
+were wrong, and the central question — cure or delay — is answered by a *trajectory
+shape* argument, not by the precursor evidence the design set out to get.
+
+### Next planned experiment
+
+Not another offline probe. The missing evidence is a **precursor**, and only a live run
+produces it: log ORDER during training and see whether it rises before a detonation.
+That also gives the abort threshold this campaign lacks. Cheap at low `k` and a coarse
+interval — measure cost 2 s per call at batch 2 / seq 256 against ~0.53 s training steps.
