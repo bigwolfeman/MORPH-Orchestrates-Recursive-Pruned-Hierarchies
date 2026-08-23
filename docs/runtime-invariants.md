@@ -107,13 +107,19 @@ output must depend only on positions ≤ t. This sounds obvious; AI constantly m
 | Invariant | Where |
 | --- | --- |
 | GLA readout norm is **per-token** (S folded into batch) | `morph/model/gla.py` `_readout` |
-| Trailing right-pad must be inert at real positions | gated in Olympiad `tests/models/test_morph_seed.py` |
+| Trailing right-pad must be inert at real positions | gated in Olympiad `tests/models/test_morph_seed.py`, and **here** in `tests/test_causality_contract.py` |
 | Kernel dtype pins `(q * scale).to(tl.float32)` stay | `fused_csa_attention.py`, `fused_hca_attention.py` |
+| ⚠️ **BROKEN 2026-08-23: `retention_carry: true` violates this section.** The GLA final state (a whole-sequence summary) is carried into core iteration t+1, so from iteration 2 every position sees the future. Corrupting tokens after k moves logits at ≤ k by up to **4.08** (mean \|logit\| 2.41); with the carry off, by exactly 0.000. Worth **+0.1433 nats** of val CE, which is larger than the TUL-gate result it was used to measure. | [`.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md`](../.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md) |
 
 
 **Gate:** the future-corruption probe (corrupt tokens after position k, assert
 logits at ≤ k unchanged) is the cheap decisive test for any new branch — norms,
 pooling, attention variants — before it trains. This catches all answer leakage problems reliably.
+It now lives in this repository as `tests/test_causality_contract.py`; for a real
+checkpoint use `ignore/perf/future_corruption_probe.py`, and
+`ignore/perf/causality_bisect.py` hooks every submodule to name the first one that
+diverges. Running the gate ONLY in the Olympiad tree is how the `retention_carry`
+violation above survived from 2026-07-03 to 2026-08-23.
 
 The dtype pins exist because dynamo's kernel re-trace promotes python-float
 kernel args to fp64, poisoning `tl.dot` operands and loop-carried accumulators.

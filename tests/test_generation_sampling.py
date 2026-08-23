@@ -156,3 +156,80 @@ def test_rep4_of_the_same_text_grows_with_the_window():
     r_short = ngram_stats(ids, 4, window=128)[0]
     r_long = ngram_stats(ids, 4, window=1024)[0]
     assert r_long > r_short
+
+
+# ── batched generation must equal the single-row path ───────────────────────────────
+class _CausalSumModel(torch.nn.Module):
+    """Logits at position t depend on the cumulative sum of ids[:t+1].
+
+    Content-dependent on purpose. A stub that ignores its input would pass a batched-vs-
+    single parity test with a cursor bug still in place, which makes the test theatre.
+    Here, reading a row's logits at the batch's max length instead of at the row's own
+    cursor changes the answer, and so does letting padding into the prefix.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.p = torch.nn.Parameter(torch.zeros(1))
+
+    def forward(self, ids, **kw):
+        B, L = ids.shape
+        cs = ids.cumsum(dim=1)                      # [B, L] causal by construction
+        peak = (cs * 7 + torch.arange(L, device=ids.device)) % V
+        logits = torch.zeros(B, L, V, device=ids.device)
+        logits.scatter_(2, peak.unsqueeze(-1), 5.0)
+        return {"logits": logits}
+
+
+def test_batched_plain_generation_equals_the_single_row_path():
+    from morph.inference.plain_generate import generate_plain_batch
+
+    m = _CausalSumModel()
+    dev = torch.device("cpu")
+    # RAGGED on purpose: different prompt lengths is the case the cursor logic exists for.
+    prompts = [[1, 2, 3], [5], [7, 8], [2, 2, 2, 2]]
+    batched = generate_plain_batch(m, prompts, max_new_tokens=12, temperature=0.0,
+                                   top_k=0, device=dev)
+    single = [generate_plain(m, p, max_new_tokens=12, temperature=0.0, top_k=0,
+                             device=dev) for p in prompts]
+    assert batched == single, f"batched != single\n  {batched}\n  {single}"
+
+
+def test_batched_plain_generation_is_not_trivially_constant():
+    # Guard on the guard: if the stub emitted the same token everywhere, the parity test
+    # above would pass on any implementation at all.
+    from morph.inference.plain_generate import generate_plain_batch
+
+    out = generate_plain_batch(_CausalSumModel(), [[1, 2, 3], [5]], max_new_tokens=12,
+                               temperature=0.0, top_k=0, device=torch.device("cpu"))
+    assert len(set(out[0])) > 2, f"row 0 is nearly constant: {out[0]}"
+    assert out[0] != out[1], "two different prompts produced identical continuations"
+
+
+def test_batched_tul_generation_equals_the_single_row_path():
+    from morph.model.tul_layout import BoundaryRule, TulLayoutSpec
+    from morph.inference.tul_generate import generate_tul, generate_tul_batch
+
+    lut = np.zeros(V, dtype=bool)
+    lut[9] = True
+    lut[11] = True
+    rule = BoundaryRule(is_boundary=lut, min_span=2, span_cap=6, eos_id=0)
+    spec = TulLayoutSpec(seq_len=64, prefix_k=2, max_slots=16, slot_id=4)
+    m = _CausalSumModel()
+    dev = torch.device("cpu")
+    prompts = [[1, 2, 3], [5], [7, 8], [2, 2, 2, 2]]
+    batched, blds = generate_tul_batch(m, prompts, rule, spec, max_new_tokens=12,
+                                       temperature=0.0, top_k=0, device=dev)
+    single = [generate_tul(m, p, rule, spec, max_new_tokens=12, temperature=0.0,
+                           top_k=0, device=dev)[0] for p in prompts]
+    assert batched == single, f"batched != single\n  {batched}\n  {single}"
+    # And the rows really did diverge in length -- otherwise the ragged path is untested.
+    assert len({len(b.ids) for b in blds}) > 1, "no length divergence; test has no teeth"
+
+
+def test_batched_generators_reject_a_seed_list_of_the_wrong_length():
+    from morph.inference.plain_generate import generate_plain_batch
+
+    with pytest.raises(ValueError, match="one entry per row"):
+        generate_plain_batch(_CausalSumModel(), [[1], [2]], max_new_tokens=2,
+                             temperature=1.0, seeds=[0], device=torch.device("cpu"))

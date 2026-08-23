@@ -160,7 +160,7 @@ def slot_invariance_check(model, tul_rt, tokenizer, seq_len, n_tokens, device, w
 
 
 def run_one(model, tul_rt, tokenizer, seq_len, n_tokens, device, halt, seed,
-            max_slots=0):
+            max_slots=0, reps=1, only=()):
     """One arm, every decode mode. Per-prompt values are KEPT: the A1-minus-A0 gap is a
     PAIRED difference over the same prompts, and a mean with no spread cannot say whether
     a 0.01 gap is real."""
@@ -172,28 +172,41 @@ def run_one(model, tul_rt, tokenizer, seq_len, n_tokens, device, halt, seed,
             spec = dataclasses.replace(spec, max_slots=max_slots)
     out = {}
     for label, temp, topk in DECODES:
+        if only and label not in only:
+            continue
+        # Greedy is deterministic: repeating it would inflate n with duplicate rows and
+        # shrink the standard error of a quantity that has no sampling variance at all.
+        n_rep = 1 if temp <= 0.0 else max(1, reps)
         per, texts, t0 = [], [], time.time()
         for pi, prompt in enumerate(PROMPTS):
             ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
-            if tul_rt is None:
-                new = generate_plain(model, ids, max_new_tokens=n_tokens,
-                                     temperature=temp, top_k=topk, seed=seed + pi,
-                                     device=device)
-                per.append(generation_metrics(new, window=n_tokens))
-            else:
-                new, builder = generate_tul(model, ids, rule, spec,
-                                            max_new_tokens=n_tokens, temperature=temp,
-                                            top_k=topk, seed=seed + pi, device=device,
-                                            halt=halt)
-                per.append(generation_metrics(new, builder, rule, window=n_tokens))
-            texts.append(tokenizer.decode(ids + new, skip_special_tokens=True))
-        keys = sorted(set().union(*(d.keys() for d in per)))
+            for ri in range(n_rep):
+                sd = seed + pi + 100003 * ri
+                if tul_rt is None:
+                    new = generate_plain(model, ids, max_new_tokens=n_tokens,
+                                         temperature=temp, top_k=topk, seed=sd,
+                                         device=device)
+                    m = generation_metrics(new, window=n_tokens)
+                else:
+                    new, builder = generate_tul(model, ids, rule, spec,
+                                                max_new_tokens=n_tokens, temperature=temp,
+                                                top_k=topk, seed=sd, device=device,
+                                                halt=halt)
+                    m = generation_metrics(new, builder, rule, window=n_tokens)
+                m["prompt_index"] = float(pi)
+                m["draw"] = float(ri)
+                per.append(m)
+                if ri == 0:
+                    texts.append(tokenizer.decode(ids + new, skip_special_tokens=True))
+        # prompt_index / draw are bookkeeping for the paired analysis, not metrics: a
+        # mean over them is meaningless and would sit in the table looking like one.
+        keys = sorted(set().union(*(d.keys() for d in per)) - {"prompt_index", "draw"})
         agg = {k: float(np.mean([d[k] for d in per if k in d])) for k in keys}
         sd = {k + "_sd": float(np.std([d[k] for d in per if k in d])) for k in ("rep4", "distinct3")}
         agg.update(sd)
         out[label] = {"metrics": agg, "per_prompt": per, "samples": texts}
         print(f"    {label:14s} rep4={agg['rep4']:.4f}+-{agg['rep4_sd']:.4f} "
-              f"distinct3={agg['distinct3']:.4f} "
+              f"distinct3={agg['distinct3']:.4f} n={len(per)} "
               f"({time.time() - t0:.0f}s)", flush=True)
     return out
 
@@ -217,10 +230,24 @@ def main():
                          "anything else")
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--anchor-rows", type=int, default=256)
+    ap.add_argument("--samples-per-prompt", type=int, default=1,
+                    help="independent draws per prompt, pooled into per_prompt. rep4 has "
+                         "a per-sample paired sd of ~0.34 at top-k, so n=12 can only "
+                         "resolve an effect of 0.27 and the A1-A0 gap is ~0.03. More "
+                         "draws is the only cheap way to buy power; greedy is "
+                         "deterministic so it is decoded ONCE whatever this is set to.")
+    ap.add_argument("--decodes", default="",
+                    help="comma-separated subset of the decode labels, e.g. "
+                         "topk50_t0.8,sample_t1. Empty = all three.")
     ap.add_argument("--halt", action="store_true",
                     help="also score the gate-driven depth policy (arm TUL-halt)")
     ap.add_argument("--out", default="docs/experiments/results/tul_rep_ab.json")
     a = ap.parse_args()
+
+    only = tuple(x for x in a.decodes.split(",") if x)
+    bad = [x for x in only if x not in {d[0] for d in DECODES}]
+    if bad:
+        sys.exit(f"--decodes: unknown {bad}; valid are {[d[0] for d in DECODES]}")
 
     from transformers import AutoTokenizer
     device = torch.device("cuda")
@@ -234,7 +261,8 @@ def main():
         payload["_real_text"] = anch
         payload["_meta"] = {"n_tokens": args.n_tokens, "seed": args.seed,
                             "max_slots": args.max_slots, "n_prompts": len(PROMPTS),
-                            "decodes": [d[0] for d in DECODES],
+                            "decodes": list(only) or [d[0] for d in DECODES],
+                            "samples_per_prompt": args.samples_per_prompt,
                             "arms_done": [k for k in res if not k.startswith("_")]}
         out.write_text(json.dumps(payload, indent=2))
         print(f"    [flush] {out} now holds {len(payload['_meta']['arms_done'])} arm(s)",
@@ -264,7 +292,8 @@ def main():
         results[label] = {"step": step, "config": cfg_name, "path": path,
                           "tul": tul_rt is not None,
                           "fixed": run_one(model, tul_rt, tok, a.seq, a.n_tokens,
-                                           device, False, a.seed, a.max_slots)}
+                                           device, False, a.seed, a.max_slots,
+                                           a.samples_per_prompt, only)}
         # --halt is a REQUEST, not a promise: the halting policy is the gate choosing
         # each slot's depth, so an arm built without tul.gate has nothing to halt with
         # and generate_tul raises. Applying the flag globally is what killed the first
@@ -275,7 +304,8 @@ def main():
         if a.halt and gated:
             print("    -- halt policy --")
             results[label]["halt"] = run_one(model, tul_rt, tok, a.seq, a.n_tokens,
-                                             device, True, a.seed, a.max_slots)
+                                             device, True, a.seed, a.max_slots,
+                                             a.samples_per_prompt, only)
         del model
         torch.cuda.empty_cache()
         flush(results, anchor, a)

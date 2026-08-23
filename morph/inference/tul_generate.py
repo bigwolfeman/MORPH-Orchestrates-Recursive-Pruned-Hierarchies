@@ -174,3 +174,87 @@ def generate_tul(
         if was_training:
             model.train()
     return emitted, builder
+
+
+@torch.no_grad()
+def generate_tul_batch(
+    model,
+    prompts: list[list[int]],
+    rule: BoundaryRule,
+    spec: TulLayoutSpec,
+    max_new_tokens: int = 128,
+    temperature: float = 1.0,
+    top_k: int = 0,
+    seeds: list[int] | None = None,
+    device=None,
+    halt: bool = False,
+    pad_id: int = 0,
+) -> tuple[list[list[int]], list[TulRowBuilder]]:
+    """`generate_tul` for B rows at once. Returns (new tokens per row, builders).
+
+    Same motivation and same ragged contract as `plain_generate.generate_plain_batch`,
+    with one extra source of raggedness that is specific to TUL: rows insert slots at
+    their own boundaries, so two rows that started at the same length are different
+    lengths a few tokens later. Each row therefore keeps its own cursor, its logits are
+    read at its own last position, and every row's layout is padded out to the batch's
+    current maximum with `bag_id = max_slots` (the dump bin) and `slot_mask = False`, so
+    a padded position is neither a slot nor a member of any span.
+
+    Parity against the single-row generator is asserted in
+    `tests/test_generation_sampling.py`, because the whole point of this file is that the
+    TUL and non-TUL arms are decoded by procedures that differ in nothing but the layout.
+    """
+    was_training = model.training
+    model.eval()
+    device = device or next(model.parameters()).device
+    if not prompts or any(len(p) == 0 for p in prompts):
+        raise ValueError("generate_tul_batch needs a non-empty prompt per row")
+    B = len(prompts)
+    if seeds is not None and len(seeds) != B:
+        raise ValueError(f"seeds must have one entry per row, got {len(seeds)} for {B}")
+    gens = ([torch.Generator(device=str(device)).manual_seed(int(s)) for s in seeds]
+            if seeds is not None else [None] * B)
+
+    builders = [TulRowBuilder(rule=rule, spec=spec) for _ in range(B)]
+    for bld, p in zip(builders, prompts):
+        for t in p:
+            bld.append(int(t))
+    emitted: list[list[int]] = [[] for _ in range(B)]
+    S = spec.max_slots
+    rows = torch.arange(B, device=device)
+    try:
+        for _ in range(max_new_tokens):
+            L = max(len(b.ids) for b in builders)
+            ids = torch.full((B, L), pad_id, dtype=torch.long, device=device)
+            smask = torch.zeros((B, L), dtype=torch.bool, device=device)
+            bag = torch.full((B, L), S, dtype=torch.long, device=device)
+            sidx = torch.zeros((B, S), dtype=torch.long, device=device)
+            svalid = torch.zeros((B, S), dtype=torch.bool, device=device)
+            cur = torch.empty(B, dtype=torch.long, device=device)
+            for i, b in enumerate(builders):
+                n = len(b.ids)
+                cur[i] = n
+                ids[i, :n] = torch.tensor(b.ids, dtype=torch.long, device=device)
+                smask[i, :n] = torch.tensor(b.slot_mask, dtype=torch.bool, device=device)
+                bg = np.asarray(b.bag_id, dtype=np.int64)
+                bg[bg >= b.n_slots] = S            # open span → the dump bin, as in tensors()
+                bag[i, :n] = torch.from_numpy(bg).to(device)
+                if b.slot_first:
+                    sidx[i, :b.n_slots] = torch.tensor(b.slot_first, dtype=torch.long,
+                                                       device=device)
+                    svalid[i, :b.n_slots] = True
+            layout = SlotLayout(slot_mask=smask, bag_id=bag, slot_index=sidx,
+                                slot_valid=svalid, prefix_k=spec.prefix_k)
+            res = (model.tul_forward_halt(ids, None, layout) if halt
+                   else model(ids, slot_layout=layout))
+            last = res["logits"][rows, cur - 1]
+            for i, b in enumerate(builders):
+                if "gate_k" in res and b.n_slots > 0:
+                    b.budget = int(res["gate_k"][i, b.n_slots - 1])
+                nxt = sample_next(last[i], temperature, top_k, gens[i])
+                emitted[i].append(nxt)
+                b.append(nxt)
+    finally:
+        if was_training:
+            model.train()
+    return emitted, builders

@@ -496,7 +496,95 @@ def fig_mechanism(api):
     _save(fig, "tul_divergence_mechanism.png")
 
 
-FIGS = {"ce": fig_ce, "mechanism": fig_mechanism, "decode": fig_decode_modes, "divergence": fig_divergence, "efficiency": fig_efficiency,
+REPAB = ROOT / "docs" / "experiments" / "results" / "tul_rep_ab.json"
+# label -> (display, colour, hatch). The MATCHED pair is first: same batch 14, same seed 0,
+# same alpha cap, same 20k steps, differing only in tul.activate_at.
+REPAB_ARMS = [
+    ("a0_acap1_b14", "A0  no TUL (b14)",   OI["blue"],       ""),
+    ("a1_acap1_b14", "A1  TUL (b14)",      OI["green"],      "///"),
+    ("a3_b14",       "A3  slots, no core", OI["orange"],     "..."),
+    ("a1_b12",       "A1  TUL (b12)",      OI["sky"],        "\\\\"),
+    ("gate_b12",     "gate TUL (b12)",     OI["purple"],     "xxx"),
+]
+REPAB_MODES = [("topk50_t0.8", "top-k 50, t=0.8"), ("sample_t1", "ancestral, t=1.0"),
+               ("greedy", "greedy (diagnostic)")]
+
+
+def fig_rep_ab(_api=None):
+    """Does the slot loop repeat itself less than a plain model? Sampled decoding, 512 tokens.
+
+    The predecessor of this figure had NO non-TUL arm in it and scored 128-token samples,
+    where held-out text itself sits at rep4 0.015 with 54 % of rows at exactly 0.000 --
+    a reference on the floor cannot rank anything. Both are fixed here: A0 is decoded by
+    the matched plain loop, and everything is 512 tokens.
+    """
+    import json
+    import numpy as np
+    d = json.loads(REPAB.read_text())
+    anchor = d.get("_real_text", {})
+    have = [(k, lab, c, h) for k, lab, c, h in REPAB_ARMS if k in d]
+    fig, (ax, axd) = plt.subplots(1, 2, figsize=(12.4, 4.9),
+                                  gridspec_kw={"width_ratios": [1.55, 1]})
+    w = 0.8 / max(len(have), 1)
+    for ai, (key, lab, col, hat) in enumerate(have):
+        ys, es = [], []
+        for mode, _ in REPAB_MODES:
+            m = d[key]["fixed"].get(mode, {}).get("metrics", {})
+            per = [x["rep4"] for x in d[key]["fixed"].get(mode, {}).get("per_prompt", [])]
+            ys.append(m.get("rep4", float("nan")))
+            # standard error over prompts, not the spread: the question is where the MEAN is
+            es.append(np.std(per) / max(len(per) ** 0.5, 1) if per else 0.0)
+        xs = [i + ai * w - 0.4 + w / 2 for i in range(len(REPAB_MODES))]
+        ax.bar(xs, ys, width=w * 0.92, color=col, hatch=hat, edgecolor="white",
+               linewidth=0.6, label=lab, yerr=es, capsize=2.5,
+               error_kw={"elinewidth": 0.9, "ecolor": "#333333"})
+    if anchor:
+        ax.axhline(anchor["rep4"], color=OI["black"], linestyle=(0, (4, 3)), linewidth=1.2)
+        ax.axhspan(max(anchor["rep4"] - anchor["rep4_std"], 0),
+                   anchor["rep4"] + anchor["rep4_std"], color=OI["black"], alpha=0.09, lw=0)
+        ax.annotate(f"held-out text  {anchor['rep4']:.3f} ± {anchor['rep4_std']:.3f} "
+                    f"(n={anchor['n_rows']})",
+                    xy=(0.004, anchor["rep4"]), xycoords=("axes fraction", "data"),
+                    xytext=(0, 6), textcoords="offset points", fontsize=7.5)
+    ax.set_xticks(range(len(REPAB_MODES)))
+    ax.set_xticklabels([lab for _, lab in REPAB_MODES], fontsize=9)
+    _style(ax, f"Repetition at 512 new tokens, {d.get('_meta', {}).get('n_prompts', '?')} prompts",
+           "", "rep4  (fraction of repeated 4-grams; higher is worse)")
+    ax.legend(fontsize=7.5, frameon=False, ncol=2)
+
+    # Right panel: the PAIRED A1 - A0 difference, prompt by prompt. A mean gap of 0.03
+    # against a between-prompt spread of 0.25 is unreadable unless it is paired.
+    if "a0_acap1_b14" in d and "a1_acap1_b14" in d:
+        for mi, (mode, mlab) in enumerate(REPAB_MODES):
+            a0 = [x["rep4"] for x in d["a0_acap1_b14"]["fixed"][mode]["per_prompt"]]
+            a1 = [x["rep4"] for x in d["a1_acap1_b14"]["fixed"][mode]["per_prompt"]]
+            diff = np.array(a1) - np.array(a0)
+            axd.scatter([mi + 0.06 * (i - len(diff) / 2) for i in range(len(diff))], diff,
+                        s=16, color=OI["green"] if diff.mean() < 0 else OI["vermillion"],
+                        marker="o", zorder=3)
+            axd.plot([mi - 0.3, mi + 0.3], [diff.mean()] * 2, color=OI["black"],
+                     linewidth=1.8, zorder=4)
+            se = diff.std(ddof=1) / len(diff) ** 0.5
+            axd.annotate(f"{diff.mean():+.3f}\n±{se:.3f}", xy=(mi, diff.mean()),
+                         xytext=(0, 9), textcoords="offset points", ha="center", fontsize=7.5)
+        axd.axhline(0.0, color=OI["black"], linewidth=0.9)
+        axd.set_xticks(range(len(REPAB_MODES)))
+        axd.set_xticklabels([lab for _, lab in REPAB_MODES], fontsize=8.5)
+        _style(axd, "Paired A1 − A0, same prompt, same decode", "",
+               "rep4 difference (below 0 = TUL repeats less)")
+    fig.tight_layout()
+    _foot(fig, "Matched pair: A0 and A1 both at batch 14, seed 0, alpha cap 1.0, step "
+               "20000, differing only in tul.activate_at. Error bars are the standard "
+               "error over prompts. Read the LEFT panel for the level and the RIGHT one "
+               "for the TUL effect: the between-prompt spread is ~0.2-0.3, so an unpaired "
+               "read of a ~0.03 gap says nothing, and only the paired difference does. "
+               "Greedy is a diagnostic, not a ranking -- it says whether an argmax loop "
+               "exists. A diverged model scores EXCELLENT repetition because incoherent "
+               "text never repeats, so never rank arms on this axis across a CE gap.")
+    _save(fig, "tul_rep_ab.png")
+
+
+FIGS = {"ce": fig_ce, "repab": fig_rep_ab, "mechanism": fig_mechanism, "decode": fig_decode_modes, "divergence": fig_divergence, "efficiency": fig_efficiency,
         "order": fig_order, "bakeoff": fig_bakeoff}
 
 

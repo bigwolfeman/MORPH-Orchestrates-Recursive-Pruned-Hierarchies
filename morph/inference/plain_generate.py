@@ -60,3 +60,68 @@ def generate_plain(
         if was_training:
             model.train()
     return emitted
+
+
+@torch.no_grad()
+def generate_plain_batch(
+    model,
+    prompts: list[list[int]],
+    max_new_tokens: int = 128,
+    temperature: float = 1.0,
+    top_k: int = 0,
+    seeds: list[int] | None = None,
+    device=None,
+    pad_id: int = 0,
+) -> list[list[int]]:
+    """`generate_plain` for B rows at once. Returns one list of NEW tokens per row.
+
+    Why this exists: the A0-vs-A1 repetition question needs statistical power, and one
+    row at a time does not buy it. rep4 has a per-sample paired standard deviation of
+    ~0.34 at top-k while the A1-A0 gap is ~0.03, so n=12 resolves nothing and n in the
+    low thousands is what the question actually costs. At 33 s per 512-token row that is
+    a 12-hour job; batched it is under two.
+
+    RAGGED BY DESIGN. Rows may start from different prompt lengths and, in the TUL twin
+    of this function, grow at different rates. Each row keeps its own write cursor and
+    its logits are read at its OWN last real position; everything past that cursor is
+    padding. This is only sound because the model is strictly causal at position
+    granularity -- compressed blocks are visible only once fully in the past
+    (`_compressed_causal_mask`: block j is causal for query i iff (j+1)*m - 1 < i), and
+    the CCA convolutions are causal. That reasoning is NOT taken on trust:
+    `tests/test_generation_sampling.py` asserts batched greedy equals single-row greedy
+    token for token, which fails if any path peeks past a row's cursor.
+    """
+    was_training = model.training
+    model.eval()
+    device = device or next(model.parameters()).device
+    if not prompts or any(len(p) == 0 for p in prompts):
+        raise ValueError("generate_plain_batch needs a non-empty prompt per row")
+    B = len(prompts)
+    if seeds is not None and len(seeds) != B:
+        raise ValueError(f"seeds must have one entry per row, got {len(seeds)} for {B}")
+    gens = ([torch.Generator(device=str(device)).manual_seed(int(s)) for s in seeds]
+            if seeds is not None else [None] * B)
+
+    lens = [len(p) for p in prompts]
+    total = max(lens) + max_new_tokens
+    ids = torch.full((B, total), pad_id, dtype=torch.long, device=device)
+    for i, p in enumerate(prompts):
+        ids[i, :len(p)] = torch.tensor(p, dtype=torch.long, device=device)
+    cur = torch.tensor(lens, dtype=torch.long, device=device)
+    rows = torch.arange(B, device=device)
+    emitted: list[list[int]] = [[] for _ in range(B)]
+    try:
+        for _ in range(max_new_tokens):
+            T = int(cur.max())
+            res = model(ids[:, :T])
+            logits = res["logits"] if isinstance(res, dict) else res
+            last = logits[rows, cur - 1]                     # [B, V], each row's own tail
+            for i in range(B):
+                nxt = sample_next(last[i], temperature, top_k, gens[i])
+                ids[i, cur[i]] = nxt
+                emitted[i].append(nxt)
+            cur += 1
+    finally:
+        if was_training:
+            model.train()
+    return emitted
