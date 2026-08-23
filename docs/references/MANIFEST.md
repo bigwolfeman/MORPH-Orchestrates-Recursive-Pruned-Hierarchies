@@ -10,7 +10,7 @@ stay together.
 |---|---|
 | Looping & depth | [Parcae / Poisson depth sampling](looping-depth/2604.12946.md) |
 | Attention | [CCA / value shift](attention/2510.04476.md), [DeepSeek-V4 CSA/HCA](attention/deepseek-v4.md), [XSA](attention/2603.09078.md), [Residual Attention](attention/2603.15031.md), [CoPE](attention/2602.05258.md), [Attention Sinks](attention/2309.17453.md) |
-| Memory | [GLA](memory/2312.06635.md), [Titans](memory/2501.00663.md), [Nested Learning](memory/2512.24695.md) |
+| Memory | [GLA](memory/2312.06635.md), [RAVEN](memory/raven.md), [Titans](memory/2501.00663.md), [Nested Learning](memory/2512.24695.md) |
 | Residual streams | [mHC](residual-streams/2512.24880.md), [JPmHC Cayley HC](residual-streams/2602.18308.md), [Hyper-Connections](residual-streams/2409.19606.md) |
 | Embeddings | [Lorentz embeddings](embeddings/1806.03417.md), [Hybrid embeddings](embeddings/hybrid-embeddings-gu2019.md) |
 | Sparsity & routing | [Lottery Ticket Hypothesis](sparsity-routing/1803.03635.md), [Block-ELL](sparsity-routing/block-ell-nvidia.md), [MegaBlocks / STK](sparsity-routing/2211.15841.md), [ReMoE](sparsity-routing/2412.14711.md), [PEER](sparsity-routing/1907.05242.md) |

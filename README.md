@@ -64,7 +64,7 @@ The active stack is:
 - **[Looped transformer body](docs/references.md#parcae--stable-looped-transformer):** prelude blocks, a shared core loop, and coda blocks. Parcae style.
 - **[Cayley Hyper-Connections](docs/references.md#jpmhc--jacobian-preserving-manifold-hyper-connections-cayley):** four residual carrier streams across the network, reduced before the output head.
 - **[CCA](docs/references.md#cca--compressed-convolutional-attention) + [CSA/HCA](docs/references.md#csa--hca--compressed-sparse--heavily-compressed-attention) attention:** Compressed Convolutional Attention with local window attention plus alternating sparse and dense compressed global context. Providing sub-quadratic attention a la Deepseek, with further compression on the KV cache using CCA.
-- **[GLA retention](docs/references.md#gla--gated-linear-attention-retention-branch):** a gated branch beside attention on configured section-local layers, with optional carry across core-loop iterations. Chosen over interleaving full attention blocks. TODO: RAVEN attention applied to GLA.
+- **[GLA retention](docs/references.md#gla--gated-linear-attention-retention-branch):** a gated branch beside attention on configured section-local layers, with optional carry across core-loop iterations. Chosen over interleaving full attention blocks. TODO: [RAVEN](docs/references.md#raven--sparse-memory-routing-planned-on-gla) attention applied to GLA.
 - **[Hybrid embeddings](docs/references.md#hybrid-mixed-curvature-embeddings):** Euclidean token embeddings, a [hyperbolic Lorentz](docs/references.md#lorentz--hyperbolic-embeddings) channel, and a learned hash-bigram signal injected through the body.
 - **[MORTAR sparse MLP path](docs/mortar-bcsr.md)** ([MegaBlocks STK](docs/references.md#megablocks--block-sparse-gpu-kernels-stk)): MORTAR provides control over 16x16 groups of perceptrons to make tracking importance tractable as an EMA for pruning (don't need a matrix of equal size as the weights). It utilizes the MegaBlocks kernel to realize the performance benefits post carving. The 16x16 sizing is GPU tile friendly for the MegaBlocks kernel to compact into something that realizes the computational savings.
 - **[ReMoE routing](docs/references.md#remoe--differentiable-moe-routing):** whole-body hidden-neuron routing after carve. Enables per token routing selection of 16x16 MORTAR tiles.
@@ -169,6 +169,7 @@ docs/
   references.md             # paper map + MORPH usage notes
   references/               # local paper archive (see references/MANIFEST.md)
 ignore/                     # private scratch (wandb, Hydra outputs) — not public
+tile-prover/                # Lean/z3 confirmations of kernel correctness to original algorithm
 ```
 
 ## Figures And References
@@ -193,3 +194,31 @@ MORPH uses a stable snapshot plus research integration model. See `CONTRIBUTING.
 Apache License 2.0. See `LICENSE`.
 
 Vendored third-party components keep their own license notices, including `morph/sparse/stk/LICENSE`.
+
+
+## Thanks
+
+- **DeepSeek** CSA / HCA
+- **DeepSeek** tile-prover methodology
+- **Zyphra** CCA
+- **UCSD / Together AI** Parcae
+- **MIT / IBM Research** GLA
+- **Moonshot AI (Kimi)** Residual Attention
+- **Apple ML Research** XSA
+- **JPMorgan Chase** JPmHC (Cayley Hyper-Connections)
+- **DeepSeek** mHC (related)
+- **ByteDance** Hyper-Connections (related)
+- **FAIR** Lorentz embeddings
+- **Stanford** hybrid / mixed-curvature embeddings
+- **MIT CSAIL** Lottery Ticket Hypothesis
+- **Stanford / MSR / Google** MegaBlocks STK
+- **Tsinghua** ReMoE
+- **FAIR** PEER
+- **Microsoft Research** BitNet / STE ternary
+- **Nous Research** Token Superposition Training
+- **EPFL / Apple** AdEMAMix
+- **BigCode / Hugging Face** StarCoder2 tokenizer
+- **Google** SwiGLU
+
+## TODO
+- [RAVEN](docs/references.md#raven--sparse-memory-routing-planned-on-gla) attention on GLA.

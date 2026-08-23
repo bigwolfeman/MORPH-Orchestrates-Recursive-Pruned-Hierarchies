@@ -174,6 +174,17 @@ output is gated and GroupNorm'd following the paper. Enabled by default (`retent
 `base.yaml`) on configured section-local layers, beside CCA+CSA/HCA attention rather than as a
 full-block interleave.
 
+### RAVEN — Sparse Memory Routing (planned on GLA)
+
+**Title:** Raven: High-Recall Sequence Modeling with Sparse Memory Routing  
+**Authors:** Arshia Afzal, Aviv Bick, Eric P. Xing, Volkan Cevher, Albert Gu (goombalab)  
+**Year:** 2026  
+**PDF:** [github.com/goombalab/raven](https://github.com/goombalab/raven/blob/main/raven.pdf)  
+**Local:** [references/memory/raven.pdf](references/memory/raven.pdf)  
+**MORPH uses:** NOT YET. Planned upgrade to the GLA retention branch: replace dense
+per-slot SSM writes with a learned top-k router over a fixed slot memory (RSM), so
+unselected slots are untouched. README TODO: apply RAVEN attention on GLA.
+
 ### Titans — Neural Memory (removed)
 
 **Title:** Titans: Learning to Memorize at Test Time  
@@ -942,6 +953,7 @@ trajectory as an arm (`tul.stp_lambda`), zero parameters.
 | 2a  | MegaBlocks / STK                          | Gale et al. (Stanford, 2022)              | [2211.15841](https://arxiv.org/abs/2211.15841)                                                                                                 |
 | 3   | CMS Topology                              | Original work — MORPH project             | —                                                                                                                                              |
 | 4   | GLA Retention                             | Yang et al. (2023 / ICML 2024)            | [2312.06635](https://arxiv.org/abs/2312.06635)                                                                                                 |
+| 4b  | RAVEN (planned on GLA)                    | Afzal, Bick, Xing, Cevher, Gu (2026)      | [goombalab/raven PDF](https://github.com/goombalab/raven/blob/main/raven.pdf)                                                                  |
 | 4a  | Neural Memory (Titans) (removed)          | Behrouz, Zhong, Mirrokni (Google, 2025)   | [2501.00663](https://arxiv.org/abs/2501.00663)                                                                                                 |
 | 5   | CCA                                       | Figliolia et al. (Zyphra, 2025)           | [2510.04476](https://arxiv.org/abs/2510.04476)                                                                                                 |
 | 6   | CSA / HCA                                 | DeepSeek-AI (2026)                        | [HF PDF](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf)                                                         |
