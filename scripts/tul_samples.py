@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""Generation samples and degeneration metrics for TUL checkpoints.
+"""Generation samples and degeneration metrics for MORPH checkpoints, TUL or not.
 
-    python scripts/tul_samples.py --ckpt gate_5k=tul_gate=<path>.pt [--ckpt ...]
+    python scripts/tul_samples.py --ckpt a0=tul_a0=<path>.pt --ckpt a1=tul_a1=<path>.pt
 
 Why this is a standalone script and not more logging inside the training loop:
 `gate_bakeoff.sh` launches each arm as its OWN `python -m morph.training.train`, so a
@@ -9,22 +9,23 @@ mid-campaign edit to `train.py` would silently make arms 2 and 3 differ from arm
 more than the variable under test. This reads finished checkpoints instead and cannot
 perturb a running arm.
 
-THREE DECODE MODES, NEVER ONE. A val CE cannot see degeneration and neither can a single
-decode setting:
+THE BASELINE IS NOT OPTIONAL. Arm A0 sets `tul.activate_at: never` and therefore has no
+TUL runtime; version 1 of this script printed "SKIP: this arm builds no TUL layout" and
+produced a table of TUL against TUL. The question the table exists to answer — does the
+slot loop repeat itself less than a plain model — was not in it. An arm with no TUL
+runtime now decodes through `generate_plain`, which is the same eager recompute-per-step
+loop as `generate_tul` and shares its sampling step (`morph.inference.sampling`), so a
+difference between the arms comes from the weights and not from the decoder.
 
-  * greedy (temperature 0) is the deterministic floor. This is where a repetition loop
-    shows up, and a loop scores an EXCELLENT perplexity -- 1.46 measured against real
-    text's 32.44 -- so fluency without a diversity number beside it is worthless.
-  * top-k 50 at t=0.8 is what the training loop's own generation test uses; it keeps
-    this table comparable to `gen/*` in wandb.
-  * pure ancestral (t=1.0, no truncation) is the full-entropy end. If a model's readout
-    has collapsed to a point mass, this is identical to greedy -- that is exactly how
-    the DiffusionBlocks readout was caught, and it is invisible if you only sample with
-    a truncation on.
+RANK ON SAMPLED DECODING. Greedy is reported last and is a DIAGNOSTIC: it says whether an
+argmax loop exists, not how good the model is. Measured on this tree, greedy rep4 runs
+0.5-0.9 for every arm including a diverged one, which is a statement about argmax basins.
 
-Every row carries rep4 and distinct3 from `morph.inference.gen_metrics`, and a REAL TEXT
-row is scored by the same code as the anchor. Rank nothing against a model row whose
-distinct3 is far from the real-text value; a degenerate row is not a better model.
+LENGTH IS PART OF THE METRIC. rep_n is not comparable across lengths, and at 128 tokens
+held-out OpenWebText scores rep4 = 0.015 with 54 % of rows at exactly 0.000 (256 rows) --
+the reference is on the floor, and so was every sampled model row. At 512 tokens the same
+text gives 0.037 with 1 % at 0. Default length is 512 for that reason; the real-text
+anchor is scored at the SAME length, over `--anchor-rows` rows, with a standard deviation.
 """
 from __future__ import annotations
 
@@ -32,13 +33,17 @@ import argparse
 import json
 import os
 import pathlib
+import statistics
 import sys
+import time
 
+import numpy as np
 import torch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from morph.inference.gen_metrics import generation_metrics, ngram_stats  # noqa: E402
+from morph.inference.plain_generate import generate_plain  # noqa: E402
 from morph.inference.tul_generate import generate_tul  # noqa: E402
 from morph.training.sft import build_model_with_quant  # noqa: E402
 from morph.training.tul_setup import build_tul_runtime  # noqa: E402
@@ -52,13 +57,18 @@ PROMPTS = [
     "Yesterday the committee announced that",
     "Water boils at a temperature of",
     "She opened the letter and read",
+    "The main advantage of this approach is",
+    "After the war ended, the government",
+    "import numpy as np\n\ndef",
+    "According to the report published last week,",
 ]
 
-# (label, temperature, top_k)
+# (label, temperature, top_k). Sampled modes FIRST — they are what the arms are ranked
+# on. `greedy` is last because it is a diagnostic, not a ranking.
 DECODES = [
-    ("greedy", 0.0, 0),
     ("topk50_t0.8", 0.8, 50),
     ("sample_t1", 1.0, 0),
+    ("greedy", 0.0, 0),
 ]
 
 
@@ -71,10 +81,10 @@ def load_cfg(name):
 
 
 def load_ckpt(cfg, path, device, tul_cfg):
-    # tul_cfg is REQUIRED here: without it MORPHTransformer builds no E_slot/E_mask/
-    # W_prefix, the checkpoint's TUL tensors load as "unexpected" (silently dropped),
-    # and the first slot_layout= forward raises. That is exactly how the first run of
-    # this script died.
+    # tul_cfg is REQUIRED for a TUL arm: without it MORPHTransformer builds no E_slot/
+    # E_mask/W_prefix, the checkpoint's TUL tensors load as "unexpected" (silently
+    # dropped), and the first slot_layout= forward raises. That is exactly how the first
+    # run of this script died. For a non-TUL arm it is correctly None.
     model = build_model_with_quant(cfg, device, tul=tul_cfg)
     ck = torch.load(path, map_location=device, weights_only=False)
     state = ck["model"] if "model" in ck else ck
@@ -87,59 +97,148 @@ def load_ckpt(cfg, path, device, tul_cfg):
         # produces a table that looks fine and means nothing.
         print(f"LOAD_FAIL {path}: {len(mat)} material-missing, first 5 {mat[:5]}")
         sys.exit(1)
-    print(f"    load ok: {len(unexpected)} unexpected, step {ck.get('step')}")
+    unexp = [k for k in unexpected if "rope" not in k.lower()]
+    if unexp:
+        # A TUL tensor landing here means the model was built without the parameter the
+        # checkpoint trained. Silently dropping it is how you sample a half-loaded model.
+        print(f"LOAD_FAIL {path}: {len(unexp)} unexpected, first 5 {unexp[:5]}")
+        sys.exit(1)
+    print(f"    load ok: step {ck.get('step')}, 0 unexpected, "
+          f"{len(missing) - len(mat)} rope/cache-missing")
     return model.eval(), int(ck.get("step", -1))
 
 
-def real_text_anchor(cfg, tokenizer, n_tokens, device):
-    """rep4/distinct3 of held-out text, scored by the SAME code as the model rows."""
+def real_text_anchor(cfg, n_tokens, n_rows):
+    """rep4/distinct3 of held-out text, scored by the SAME code as the model rows.
+
+    Reported with a standard deviation and percentiles over `n_rows` rows. Version 1 of
+    this script used ONE batch of 8 rows and reported rep4 = 0.003 with no spread; the
+    same corpus over 256 rows at the same length gives 0.015 +- 0.039 with a median of
+    0.000, so that figure was a low draw from a floored distribution and it anchored the
+    whole table too low.
+    """
     from morph.training.data import create_dataloader
-    loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 512, 8,
-                               split="validation", skip_samples=0, bag_size=0, tul=None)
-    ids = next(loader)[0]
-    rows = [ids[i, :n_tokens].tolist() for i in range(min(len(PROMPTS), ids.shape[0]))]
-    r4 = [ngram_stats(r, 4)[0] for r in rows]
-    d3 = [ngram_stats(r, 3)[1] for r in rows]
-    return {"rep4": sum(r4) / len(r4), "distinct3": sum(d3) / len(d3)}
+    loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset,
+                               max(512, n_tokens), 8, split="validation",
+                               skip_samples=0, bag_size=0, tul=None)
+    rows = []
+    while len(rows) < n_rows:
+        ids = next(loader)[0]
+        rows.extend(ids[i, :n_tokens].tolist() for i in range(ids.shape[0]))
+    rows = rows[:n_rows]
+    r4 = np.array([ngram_stats(r, 4, window=n_tokens)[0] for r in rows])
+    d3 = np.array([ngram_stats(r, 3, window=n_tokens)[1] for r in rows])
+    return {
+        "n_rows": int(n_rows), "n_tokens": int(n_tokens),
+        "rep4": float(r4.mean()), "rep4_std": float(r4.std()),
+        "rep4_p10": float(np.percentile(r4, 10)), "rep4_p50": float(np.percentile(r4, 50)),
+        "rep4_p90": float(np.percentile(r4, 90)),
+        "rep4_frac_zero": float((r4 == 0).mean()),
+        "distinct3": float(d3.mean()), "distinct3_std": float(d3.std()),
+    }
 
 
-def run_one(model, tul_rt, tokenizer, seq_len, n_tokens, device, halt, seed):
-    spec = tul_rt.data_cfg.spec_for(seq_len)
+def slot_invariance_check(model, tul_rt, tokenizer, seq_len, n_tokens, device, wide):
+    """Widening the slot budget must not change a greedy sample. If it does, the layout
+    padding is reaching the model and every number below is measuring the padding."""
+    base = tul_rt.data_cfg.spec_for(seq_len)
     rule = tul_rt.data_cfg.rule
+    import dataclasses
+    wide_spec = dataclasses.replace(base, max_slots=wide)
+    ids = tokenizer(PROMPTS[0], add_special_tokens=False)["input_ids"]
+    a, _ = generate_tul(model, ids, rule, base, max_new_tokens=n_tokens,
+                        temperature=0.0, top_k=0, seed=0, device=device)
+    b, _ = generate_tul(model, ids, rule, wide_spec, max_new_tokens=n_tokens,
+                        temperature=0.0, top_k=0, seed=0, device=device)
+    if a != b:
+        n = sum(1 for x, y in zip(a, b) if x != y)
+        sys.exit(f"SLOT_INVARIANCE_FAIL: max_slots {base.max_slots} vs {wide} changed "
+                 f"{n}/{len(a)} greedy tokens; first divergence at "
+                 f"{next(i for i, (x, y) in enumerate(zip(a, b)) if x != y)}")
+    print(f"    slot-invariance ok: max_slots {base.max_slots} vs {wide}, "
+          f"{len(a)} greedy tokens identical")
+
+
+def run_one(model, tul_rt, tokenizer, seq_len, n_tokens, device, halt, seed,
+            max_slots=0):
+    """One arm, every decode mode. Per-prompt values are KEPT: the A1-minus-A0 gap is a
+    PAIRED difference over the same prompts, and a mean with no spread cannot say whether
+    a 0.01 gap is real."""
+    if tul_rt is not None:
+        spec = tul_rt.data_cfg.spec_for(seq_len)
+        rule = tul_rt.data_cfg.rule
+        if max_slots:
+            import dataclasses
+            spec = dataclasses.replace(spec, max_slots=max_slots)
     out = {}
     for label, temp, topk in DECODES:
-        per, texts = [], []
+        per, texts, t0 = [], [], time.time()
         for pi, prompt in enumerate(PROMPTS):
             ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
-            new, builder = generate_tul(model, ids, rule, spec,
-                                        max_new_tokens=n_tokens, temperature=temp,
-                                        top_k=topk, seed=seed + pi, device=device,
-                                        halt=halt)
-            per.append(generation_metrics(new, builder, rule))
+            if tul_rt is None:
+                new = generate_plain(model, ids, max_new_tokens=n_tokens,
+                                     temperature=temp, top_k=topk, seed=seed + pi,
+                                     device=device)
+                per.append(generation_metrics(new, window=n_tokens))
+            else:
+                new, builder = generate_tul(model, ids, rule, spec,
+                                            max_new_tokens=n_tokens, temperature=temp,
+                                            top_k=topk, seed=seed + pi, device=device,
+                                            halt=halt)
+                per.append(generation_metrics(new, builder, rule, window=n_tokens))
             texts.append(tokenizer.decode(ids + new, skip_special_tokens=True))
-        agg = {k: float(sum(d[k] for d in per) / len(per)) for k in per[0]}
-        out[label] = {"metrics": agg, "samples": texts}
-        print(f"    {label:14s} rep4={agg['rep4']:.3f} distinct3={agg['distinct3']:.3f} "
-              f"mean_span={agg['mean_span']:.1f} on_boundary={agg['boundary_frac']:.2f}",
-              flush=True)
+        keys = sorted(set().union(*(d.keys() for d in per)))
+        agg = {k: float(np.mean([d[k] for d in per if k in d])) for k in keys}
+        sd = {k + "_sd": float(np.std([d[k] for d in per if k in d])) for k in ("rep4", "distinct3")}
+        agg.update(sd)
+        out[label] = {"metrics": agg, "per_prompt": per, "samples": texts}
+        print(f"    {label:14s} rep4={agg['rep4']:.4f}+-{agg['rep4_sd']:.4f} "
+              f"distinct3={agg['distinct3']:.4f} "
+              f"({time.time() - t0:.0f}s)", flush=True)
     return out
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", action="append", required=True,
-                    help="LABEL=CONFIG=PATH")
-    ap.add_argument("--n-tokens", type=int, default=128)
+    ap.add_argument("--ckpt", action="append", required=True, help="LABEL=CONFIG=PATH")
+    ap.add_argument("--n-tokens", type=int, default=512,
+                    help="512 by default: at 128 the real-text reference is on the floor")
     ap.add_argument("--seq", type=int, default=1024)
+    ap.add_argument("--max-slots", type=int, default=0,
+                    help="widen the layout's fixed slot budget for generation. The "
+                         "builder RAISES when a row needs more slots than the budget, "
+                         "and a 512-token sample at the rule's min_span of 4 can need "
+                         "128. 0 keeps the config value. Widening pads the layout with "
+                         "more INVALID slots; slot_valid masks them, so the emitted "
+                         "text must be unchanged -- asserted by --assert-slot-invariance.")
+    ap.add_argument("--assert-slot-invariance", action="store_true",
+                    help="greedy-decode one prompt at the config budget and at "
+                         "--max-slots and require identical token ids before doing "
+                         "anything else")
     ap.add_argument("--seed", type=int, default=1234)
+    ap.add_argument("--anchor-rows", type=int, default=256)
     ap.add_argument("--halt", action="store_true",
                     help="also score the gate-driven depth policy (arm TUL-halt)")
-    ap.add_argument("--out", default="docs/experiments/results/tul_samples.json")
+    ap.add_argument("--out", default="docs/experiments/results/tul_rep_ab.json")
     a = ap.parse_args()
 
     from transformers import AutoTokenizer
     device = torch.device("cuda")
     results, anchor = {}, None
+    out = pathlib.Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    def flush(res, anch, args):
+        """Write the table after every arm. Partial output beats a lost sweep."""
+        payload = dict(res)
+        payload["_real_text"] = anch
+        payload["_meta"] = {"n_tokens": args.n_tokens, "seed": args.seed,
+                            "max_slots": args.max_slots, "n_prompts": len(PROMPTS),
+                            "decodes": [d[0] for d in DECODES],
+                            "arms_done": [k for k in res if not k.startswith("_")]}
+        out.write_text(json.dumps(payload, indent=2))
+        print(f"    [flush] {out} now holds {len(payload['_meta']['arms_done'])} arm(s)",
+              flush=True)
 
     for spec_s in a.ckpt:
         parts = spec_s.split("=", 2)
@@ -151,33 +250,36 @@ def main():
         tok = AutoTokenizer.from_pretrained(cfg.data.tokenizer)
         tul_rt = build_tul_runtime(cfg)
         if tul_rt is None:
-            print("    SKIP: this arm builds no TUL layout"); continue
-        model, step = load_ckpt(cfg, path, device, tul_rt.model_cfg)
+            # NOT a skip. This is the baseline arm, decoded by the matched plain loop.
+            print("    no TUL runtime -> plain (baseline) decoding", flush=True)
+        model, step = load_ckpt(cfg, path, device, None if tul_rt is None else tul_rt.model_cfg)
+        if a.assert_slot_invariance and tul_rt is not None and a.max_slots:
+            slot_invariance_check(model, tul_rt, tok, a.seq, 48, device, a.max_slots)
         if anchor is None:
-            anchor = real_text_anchor(cfg, tok, a.n_tokens, device)
-            print(f"    REAL TEXT anchor rep4={anchor['rep4']:.3f} "
-                  f"distinct3={anchor['distinct3']:.3f}")
+            anchor = real_text_anchor(cfg, a.n_tokens, a.anchor_rows)
+            print(f"    REAL TEXT anchor n={anchor['n_rows']} L={anchor['n_tokens']} "
+                  f"rep4={anchor['rep4']:.4f}+-{anchor['rep4_std']:.4f} "
+                  f"(p50 {anchor['rep4_p50']:.4f}, {100 * anchor['rep4_frac_zero']:.0f}% zero) "
+                  f"distinct3={anchor['distinct3']:.4f}", flush=True)
         results[label] = {"step": step, "config": cfg_name, "path": path,
+                          "tul": tul_rt is not None,
                           "fixed": run_one(model, tul_rt, tok, a.seq, a.n_tokens,
-                                           device, False, a.seed)}
+                                           device, False, a.seed, a.max_slots)}
         # --halt is a REQUEST, not a promise: the halting policy is the gate choosing
         # each slot's depth, so an arm built without tul.gate has nothing to halt with
         # and generate_tul raises. Applying the flag globally is what killed the first
         # full run of this script, after the gate arm had already been scored.
-        gated = getattr(tul_rt.model_cfg, "gate", None) is not None
+        gated = tul_rt is not None and getattr(tul_rt.model_cfg, "gate", None) is not None
         if a.halt and not gated:
             print("    -- halt policy SKIPPED: this arm has no gate --")
         if a.halt and gated:
             print("    -- halt policy --")
             results[label]["halt"] = run_one(model, tul_rt, tok, a.seq, a.n_tokens,
-                                             device, True, a.seed)
+                                             device, True, a.seed, a.max_slots)
         del model
         torch.cuda.empty_cache()
+        flush(results, anchor, a)
 
-    results["_real_text"] = anchor
-    out = pathlib.Path(a.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(results, indent=2))
     print(f"\nwrote {out}")
 
 

@@ -28,6 +28,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from morph.inference.sampling import sample_next
 from morph.model.tul_layout import BoundaryRule, SlotLayout, TulLayoutSpec
 
 __all__ = ["TulRowBuilder", "generate_tul"]
@@ -159,21 +160,14 @@ def generate_tul(
             # the gate asks for a token instead of running the fixed mean depth.
             res = (model.tul_forward_halt(ids, None, layout) if halt
                    else model(ids, slot_layout=layout))
-            logits = res["logits"][0, -1].float()
+            logits = res["logits"][0, -1]
             if "gate_k" in res and builder.n_slots > 0:
                 # The newest slot's plan covers the span we are about to emit (§8). Read
                 # it fresh every step: the whole row is recomputed, so this IS the value
                 # the coda was conditioned on for these positions.
                 builder.budget = int(res["gate_k"][0, builder.n_slots - 1])
-            if temperature <= 0.0:
-                nxt = int(logits.argmax())
-            else:
-                logits = logits / temperature
-                if top_k > 0:
-                    kth = torch.topk(logits, min(top_k, logits.numel())).values[-1]
-                    logits = logits.masked_fill(logits < kth, float("-inf"))
-                probs = torch.softmax(logits, dim=-1)
-                nxt = int(torch.multinomial(probs, 1, generator=gen))
+            # ONE sampling step for both generators — see morph/inference/sampling.py.
+            nxt = sample_next(logits, temperature, top_k, gen)
             emitted.append(nxt)
             builder.append(nxt)
     finally:

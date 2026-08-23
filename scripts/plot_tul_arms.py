@@ -407,7 +407,96 @@ def fig_decode_modes(_api=None):
     _save(fig, "tul_decode_modes.png")
 
 
-FIGS = {"ce": fig_ce, "decode": fig_decode_modes, "divergence": fig_divergence, "efficiency": fig_efficiency,
+# The 2026-08-23 batch-12 campaign: one arm died, two lived, and all three log the
+# per-core-linear spectral norms that make the mechanism visible.
+MECH = {
+    "0ujvtukf": ("A1r seed 1 (diverged, step 4140)", OI["vermillion"], ":",  "x"),
+    "c23dwx4a": ("A1  seed 0 (lived, 20k)",          OI["green"],      "-",  "^"),
+    "2rk7mguo": ("gate seed 0 (lived, 20k)",         OI["blue"],       "--", "s"),
+}
+CORE_LIN = [f"spec/sigma/core.{i}.mlp.0.{w}" for i in range(6) for w in ("gate_up", "down")]
+
+
+def fig_mechanism(api):
+    """Why the TUL core detonates, in the four quantities that say it is not a seed.
+
+    Panel 1 is the whole argument: through the onset window the loss sits at 4.5-4.8 in
+    every arm while `train/grad_norm` crosses six orders of magnitude. The diverged arm's
+    loss does drift upward, but only AFTER step ~2200, once the gradient has already
+    exploded -- so the loss is a lagging consequence here, not the trigger.
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(11.4, 7.6))
+    (a1, a2), (a3, a4) = axes
+    LO, HI = 1500, 3000
+
+    for rid, (lab, col, ls, mk) in MECH.items():
+        run = api.run(f"{PROJECT}/{rid}")
+        rows = [r for r in run.history(keys=None, samples=25000, pandas=False)]
+        rows.sort(key=lambda r: r["_step"])
+
+        def col_of(key, lo=LO, hi=HI):
+            xs = [(r["_step"], r[key]) for r in rows
+                  if r.get(key) is not None and lo <= r["_step"] <= hi]
+            return [x for x, _ in xs], [y for _, y in xs]
+
+        st, ls_ = col_of("train/loss")
+        a1.plot(st, ls_, color=col, linestyle=ls, linewidth=1.3, label=lab)
+        st, gn = col_of("train/grad_norm")
+        a2.plot(st, gn, color=col, linestyle=ls, linewidth=1.3, label=lab)
+        st, gc = col_of("gradnorm/core")
+        a3.plot(st, gc, color=col, linestyle=ls, marker=mk, markersize=4.5,
+                linewidth=1.3, label=lab)
+        # Per-core-block one-pass gain, sigma(gate_up) * sigma(down), block 0 vs the
+        # median block. A runaway concentrated in ONE block is the shape to see.
+        pts = [r for r in rows if r.get(CORE_LIN[0]) is not None and LO <= r["_step"] <= HI]
+        st = [r["_step"] for r in pts]
+        b0 = [r["spec/sigma/core.0.mlp.0.gate_up"] * r["spec/sigma/core.0.mlp.0.down"]
+              for r in pts]
+        rest = []
+        for r in pts:
+            g = sorted(r[f"spec/sigma/core.{i}.mlp.0.gate_up"]
+                       * r[f"spec/sigma/core.{i}.mlp.0.down"] for i in range(1, 6))
+            rest.append(g[len(g) // 2])
+        a4.plot(st, b0, color=col, linestyle=ls, marker=mk, markersize=4.5,
+                linewidth=1.4, label=f"{lab.split('(')[0].strip()} — block 0")
+        a4.plot(st, rest, color=col, linestyle=ls, linewidth=0.9, alpha=0.45,
+                label=f"{lab.split('(')[0].strip()} — median block")
+
+    for ax in (a2,):
+        ax.set_yscale("log")
+    a4.set_yscale("log")
+    for ax in (a1, a2, a3, a4):
+        ax.axvspan(1900, 2040, color=OI["orange"], alpha=0.13, lw=0)
+    a1.annotate("core gradient share starts\nratcheting here", xy=(1900, a1.get_ylim()[0]),
+                xytext=(2120, a1.get_ylim()[0] + 0.25), fontsize=7.5, color=OI["orange"])
+
+    _style(a1, "1. train/loss — flat through the onset, degrades only afterwards",
+           "step", "training loss")
+    _style(a2, "2. train/grad_norm — six orders of magnitude", "step", "grad norm (log)")
+    _style(a3, "3. gradnorm/core — the looped weights' share of the norm",
+           "step", "core share of total grad norm")
+    _style(a4, "4. one-pass core gain, block 0 vs the median block",
+           "step", "sigma(gate_up) x sigma(down)  (log)")
+    a1.legend(fontsize=7.5, frameon=False)
+    a4.legend(fontsize=6.5, frameon=False, ncol=2)
+    fig.tight_layout()
+    _foot(fig, "The shaded band is steps 1900-2040. Panel 1 is the finding: through that "
+               "window the loss sits at 4.5-4.8 in every arm, including the one whose "
+               "gradient is about to cross six orders of magnitude, and it only degrades "
+               "after step ~2200 when the damage is already done. So this is not the usual "
+               "bad-batch loss spike -- "
+               "and the two A1 arms eat the SAME batches (paired residual correlation of "
+               "train/loss over steps 0-1900 is 0.938 at lag 0 and 0.233 at lag 1), so the "
+               "seed changes the weight init, not the data. Panel 3 is the precursor: the "
+               "core's share of the gradient norm ratchets 0.009 -> 0.043 -> 0.108 -> 0.90 "
+               "and never returns, ~140 steps before the norm explodes. It is a RATCHET, "
+               "not a level -- the gate arm touches 0.35 at step 700 and falls back. Panel "
+               "4 shows the shape: the FIRST core block's gain runs away to 23x while the "
+               "rest of the stack sits at 4.5-5.3 and declines.")
+    _save(fig, "tul_divergence_mechanism.png")
+
+
+FIGS = {"ce": fig_ce, "mechanism": fig_mechanism, "decode": fig_decode_modes, "divergence": fig_divergence, "efficiency": fig_efficiency,
         "order": fig_order, "bakeoff": fig_bakeoff}
 
 

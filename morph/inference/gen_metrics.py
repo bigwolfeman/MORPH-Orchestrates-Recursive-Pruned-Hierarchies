@@ -64,10 +64,24 @@ def span_stats(builder, rule) -> dict[str, float]:
     }
 
 
-def generation_metrics(emitted: list[int], builder, rule) -> dict[str, float]:
-    """Everything §10 asks for about one generated sample, in one dict."""
-    rep4, d4 = ngram_stats(emitted, n=4)
-    _r3, d3 = ngram_stats(emitted, n=3)
+def generation_metrics(emitted: list[int], builder=None, rule=None,
+                       window: int = 512) -> dict[str, float]:
+    """Everything §10 asks for about one generated sample, in one dict.
+
+    ``builder``/``rule`` are OPTIONAL: the A0 baseline arm builds no slots, so it has no
+    span geometry to report, and refusing to score it is how the first version of this
+    table ended up with no baseline row in it. Absent a builder, the n-gram half is
+    still scored by exactly this code, which is what makes the arms comparable.
+
+    ``window`` must be passed explicitly whenever samples are longer than the default:
+    rep_n is NOT comparable across lengths (measured on held-out OpenWebText, 256 rows:
+    rep4 = 0.015 at 128 tokens with 54 % of rows at exactly 0, against 0.037 at 512
+    tokens with 1 % at 0). At 128 tokens the reference itself is on the floor, so the
+    metric cannot rank anything.
+    """
+    rep4, d4 = ngram_stats(emitted, n=4, window=window)
+    _r3, d3 = ngram_stats(emitted, n=3, window=window)
     out = {"rep4": rep4, "distinct4": d4, "distinct3": d3, "n_tokens": float(len(emitted))}
-    out.update(span_stats(builder, rule))
+    if builder is not None and rule is not None:
+        out.update(span_stats(builder, rule))
     return out
