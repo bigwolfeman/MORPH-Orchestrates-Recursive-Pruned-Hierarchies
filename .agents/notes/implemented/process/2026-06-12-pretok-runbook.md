@@ -10,7 +10,7 @@ Imported: 2026-08-20. Pre-format working note; body is the original record.
 # Pretokenize → HF → Train — Runbook
 
 Status (2026-06-13): pretokenizer + hub script BUILT + GATED, multi-source w/ concurrent local∥remote
-overlap. Full run HELD for Wolfe's "go". Decisions locked: **full OWT**, Dolma3+Nemotron **~5B tok each**,
+overlap. Full run HELD 's "go". Decisions locked: **full OWT**, Dolma3+Nemotron **~5B tok each**,
 repo **`bigwolfe/morph-pretok` (private)**. ⚠ **Nemotron access lapsed — re-request** at
 huggingface.co/datasets/nvidia/Nemotron-CC-v2 (logged in as bigwolfe) before the full run includes it.
 
@@ -46,15 +46,15 @@ Ratios are sample-read judgment (synthetic qa/reasoning/math = .45/.35/.20), not
 PYTHONPATH=$PWD /home/wolfe/.venv/bin/python scripts/pretokenize.py --out data/pretok --num-proc 8
 ```
 - owt (local mp8) runs FOREGROUND while dolma/nemotron/code stream in BACKGROUND processes — the
-  network download hides under owt's CPU and fills its idle cores.
+ network download hides under owt's CPU and fills its idle cores.
 - Tune subset: `--remote-max-tokens 5e9` (default). Disable overlap: `--sequential`.
 - If Nemotron 403s (gated lapse), it fails LOUD (exit 1) but all other shards are written OK; re-run
-  `--only nemotron` after re-gating.
+ `--only nemotron` after re-gating.
 
-## 2. Verify integrity (hard gate)  →  3. Upload (outward, --yes)  →  4. Local proof train
+## 2. Verify integrity (hard gate) → 3. Upload (outward, --yes) → 4. Local proof train
 ```bash
-PYTHONPATH=$PWD /home/wolfe/.venv/bin/python scripts/pretok_hub.py verify   --pretok-dir data/pretok
-PYTHONPATH=$PWD /home/wolfe/.venv/bin/python scripts/pretok_hub.py upload   --pretok-dir data/pretok --repo bigwolfe/morph-pretok --private --yes
+PYTHONPATH=$PWD /home/wolfe/.venv/bin/python scripts/pretok_hub.py verify --pretok-dir data/pretok
+PYTHONPATH=$PWD /home/wolfe/.venv/bin/python scripts/pretok_hub.py upload --pretok-dir data/pretok --repo bigwolfe/morph-pretok --private --yes
 PYTHONPATH=$PWD /home/wolfe/.venv/bin/python -m morph.training.train --config-name pretrain_curriculum
 ```
 TODO before step 4: fold dolma/nemotron into the curriculum `blend:` in pretrain_curriculum.yaml
@@ -65,9 +65,9 @@ TODO before step 4: fold dolma/nemotron into the curriculum `blend:` in pretrain
 config (dims TBD, own mem_probe) + bigger batch + 32K. Shards are model-size-agnostic.
 
 ## Measured perf (9950X3D, pyarrow-direct + vectorized writer)
-| np | tok/s | busy-cores | peak RSS |  | remote stream |
+| np | tok/s | busy-cores | peak RSS | | remote stream |
 |----|------:|-----------:|---------:|--|---|
-| 4  | 12.21 | 58% | 10.3 GiB | | ~3.5 M tok/s/stream (network-bound) |
+| 4 | 12.21 | 58% | 10.3 GiB | | ~3.5 M tok/s/stream (network-bound) |
 | **8** | **14.29** | 68% | **19.2 GiB** | | 5B ≈ 24 min/source |
 | 16 | 15.14 | 77% | 36.9 GiB | | parallel streams → HF 429, DON'T |
 
@@ -76,5 +76,5 @@ streams fill the rest. Probes: `ignore/sat_probe.py`, `ignore/stream_probe.py`.
 
 ## Verified gates (2026-06-13)
 - GATE1 batched==per-doc tokens. GATE3 loader reads shards (NTP correct). GATE4 file-shard mp==single
-  doc-set. GATE5 pyarrow==datasets doc-set (401,692/532,893,939). Concurrent test: owt∥dolma+jsonl,
-  4 shards + integrity green, dolma budget-stop correct. --limit seq path + nemotron fail-loud verified.
+ doc-set. GATE5 pyarrow==datasets doc-set (401,692/532,893,939). Concurrent test: owt∥dolma+jsonl,
+ 4 shards + integrity green, dolma budget-stop correct. --limit seq path + nemotron fail-loud verified.

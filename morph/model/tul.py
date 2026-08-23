@@ -1,6 +1,6 @@
 """TUL model pieces — slot parameters and the gather/scatter that the core loops on.
 
-Spec: ``lab/tul/tul-spec.md`` §3.2 (slot input embedding), §3.3 (core on slots only),
+Spec: ``docs/tul-spec.md`` §3.2 (slot input embedding), §3.3 (core on slots only),
 §3.4 (coda, token-state dropout, prefix projections), §5 (losses), §7.2 (metrics).
 The forward that uses these lives in :mod:`morph.model.transformer`; this module
 holds the parameters and the pure tensor plumbing so ``transformer.py`` stays

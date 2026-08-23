@@ -35,14 +35,14 @@ cure) first, then AdamW8bit. Goal: extend the TST phase so MOST pruning happens 
 - `transformer.py` kernel loss branch — `if labels.ndim==3:` route to MCE (`labels.reshape(-1, s)`); else single-hot (unchanged). NTP path byte-identical → cure + sparse pipeline untouched at bag=0.
 - eager else branch — same `ndim==3` guard → `multi_hot_cross_entropy_reference` (defensive; eval forces bag=0).
 - **Gate `ignore/gate_tst_mce_wiring.py` → TST_MCE_WIRING_GATE_PASS** (live 33.2M model, bf16):
-  - TST bag_size=6 loss=8.28 (log V=7.62, bug=5.83) — MCE WIRED, far from bug.
-  - NTP bag_size=0 loss=8.90 ≈ log V — single-hot unregressed.
-  - MCE backward → finite nonzero embed grads.
-  - MCE @ K=1 vs single-hot Δ=0.00e+00 (bit-exact reduction, isolated at fused_ce API).
+ - TST bag_size=6 loss=8.28 (log V=7.62, bug=5.83) — MCE WIRED, far from bug.
+ - NTP bag_size=0 loss=8.90 ≈ log V — single-hot unregressed.
+ - MCE backward → finite nonzero embed grads.
+ - MCE @ K=1 vs single-hot Δ=0.00e+00 (bit-exact reduction, isolated at fused_ce API).
 
 ## 4. Run plan (50k)
 - **Config deltas only:** `training.steps=50000`, `training.tst_ratio=0.4`. (tst_bag_size=6 already default.)
-- **Schedule UNCHANGED (Wolfe's call — don't front-load):** prune_start 3000 / interval 167 / target_density 0.25 (completes ~27k by geometry, total-independent); compact_step 29000; route_start 30000. LR FLAT 1e-4 (validated mortar winner; do NOT add WSD — confounds the A/B + deviates from validated recipe).
+- **Schedule UNCHANGED (locked decision — don't front-load):** prune_start 3000 / interval 167 / target_density 0.25 (completes ~27k by geometry, total-independent); compact_step 29000; route_start 30000. LR FLAT 1e-4 (validated mortar winner; do NOT add WSD — confounds the A/B + deviates from validated recipe).
 - **r=0.4 → TST boundary @20k:** prune (3k–~27k) SPANS the boundary, ~71% of prune events in TST (= "most pruning during TST"); carve@29k + route@30k fall in RECOVERY → un-stacks the objective-switch cusp. Within paper envelope (r≤0.4).
 - **Run 1 (ademamix, FIRST):** coord-cap cure config (stale_push_cap_coord=0.5, eps_inside=false, fused=false, g_snr_gate κ=0.3/floor=0.1, update_clip=5, β2=β3=0.999, α=8/cap3.5/t_alpha=8000) + TST on.
 - **Run 2 (adamw):** `optimizer=adamw adam8bit=true` (defaults) + identical TST setup.

@@ -48,8 +48,6 @@ This is based on a series of experiments run on
 [Quiet-STaR](docs/references/tul-latent-emission/2403.09629.md)
 (paper map: [docs/references.md](docs/references.md) §13).
 
-Disabled in config for testing.
-
 <p align="center">
   <img src="docs/figures/tul_mechanism.png" alt="TUL: shared token/slot sequence into prelude; think (core × T on slots) saves z; freeze z in sequence; decode next span; cut on punctuation" width="720" />
 </p>
@@ -127,56 +125,63 @@ Training logs the resolved Hydra config to Weights & Biases when W&B is enabled.
 ## Repository Map
 
 ```text
+.agents/notes/              # Public decision records (see AGENTS.md)
+lab/                        # Spikes + campaign finals (TUL arms, runtime-invariants)
+tests/
+scripts/                    # verify_template, pretok, probes
 morph/
   model/
-    transformer.py          # MORPHTransformer, looped core, DiagonalInjection, _SwiGLUMortar host
-    attention.py            # CCA, local window, CSA/HCA attention
-    embeddings.py           # Euclidean + Lorentz + hash-bigram embeddings
-    hyper_connections.py    # HyperConnectionResidual
-    mhc.py                  # MORPHBlock wiring and ChannelInject
+    transformer.py          # MORPHTransformer, looped core, TUL forward paths
+    tul.py / tul_layout.py  # Thought Unpack Loop (slots, boundary packer)
+    attention.py            # CCA + CSA/HCA + XSA + ResAttn + CoPE
+    embeddings.py           # Euclidean + Lorentz + hash-bigram
+    hyper_connections.py    # HyperConnectionResidual (Cayley n=4)
+    mhc.py                  # MORPHBlock wiring (mrr_* attrs = HC, legacy names)
     gla.py                  # GLA retention branch
-    sparsity.py             # MortarLinear wrapper
-    routing.py              # TileRouter
+    sparsity.py             # MortarLinear (dense → MORTAR BCSR)
+    layers/                 # CMSBlockLinear, topology scorer, norms
+    routing.py              # TileRouter (whole-body ReMoE)
     ternary_qat.py          # Ternary forward-STE QAT
     embed_quant.py          # int8/int6 embedding QAT
-    attn_proj_quant.py      # attention-projection QAT experiments
-    fused_ce.py             # chunked/fused cross-entropy
-    kv_quant.py             # inference KV cache quantization
-  kernels/
-    triton/                 # fused attention, HC, GLA, decode, router, CE/support kernels
-    l2_persist.py           # L2 cache persistence helper
-  sparse/stk/               # vendored BCSR sparse execution backend
+    attn_proj_quant.py      # attention-projection QAT (opt-in)
+    fused_ce.py / kv_quant.py / fp8_scope.py
+  kernels/triton/           # fused attention, HC, GLA, decode, router, CE
+  sparse/stk/               # vendored MegaBlocks STK (MORTAR BCSR exec)
   training/
-    train.py                # Hydra training entry point
-    pruning.py              # prune -> carve -> route coordinator
-    optimizer.py            # AdamW, 8-bit AdamW, ternary shadow optimizer support
-    ademamix_b1zero.py      # beta1=0 AdEMAMix optimizer w/ 8-bit support
-    spectral_penalty.py     # core-map spectral-norm penalty
-    data.py                 # OpenWebText + StarCoder2 streaming loader
-    curriculum_data.py      # pretokenized multi-source curriculum loader
-    curriculum.py           # context-length curriculum schedule
-  inference/                # generation engine, KV cache, deploy quantization
+    train.py                # Hydra entry point
+    pruning.py              # dense → prune → carve → route
+    tul_setup.py            # resolve tul: Hydra block
+    optimizer.py / ademamix_b1zero.py
+    data.py / curriculum*.py / sft*.py
+  inference/                # generation, KV cache, TUL generate
   posttrain/                # deploy artifacts, masks, validation
-  jax/                      # JAX/Flax mirror; not feature-parity with PyTorch
-  interop/                  # PyTorch/JAX checkpoint conversion
-  configs/                  # Hydra configs
+  jax/                      # JAX/Flax mirror (lags PyTorch)
+  interop/                  # PT ↔ JAX checkpoint conversion
+  configs/                  # Hydra YAML (base.yaml is recipe SoT)
 docs/
-  MANIFEST.md               # top-level docs navigator
-  runtime-invariants.md     # BPTT / kernel / compile / phase notes
-  ablation-ledger.md        # accepted / rejected / deferred components
-  known-good-runs.md        # default recipe and env assumptions
-  figures/                  # top-level PNG previews + topic-grouped TikZ/PDF sources
-  references.md             # paper map and implementation notes
-  references/               # Topic-grouped local reference archive
+  MANIFEST.md               # docs navigator
+  mortar-bcsr.md            # MORTAR BCSR format readout
+  ablation-ledger.md        # accepted / rejected / deferred
+  tul-spec.md               # Thought Unpack Loop contract
+  olympiad-interop.md       # PT ↔ JAX / Olympiad notes
+  figures/                  # PNG previews + topic-grouped TikZ sources
+  references.md             # paper map + MORPH usage notes
+  references/               # local paper archive (see references/MANIFEST.md)
+ignore/                     # private scratch (wandb, Hydra outputs) — not public
 ```
 
 ## Figures And References
 
-The three figures above are the README highlights. The full set — block internals, attention stack, embeddings, GLA memory, deploy stack — lives under `docs/figures/` (PNG previews at the top; TikZ/PDF sources topic-grouped underneath). Start with `docs/MANIFEST.md` for docs navigation; regeneration steps are in `docs/figures/MANIFEST.md` (`pdftoppm -singlefile` so previews are not written as `<name>-1.png`).
+The figures above are the README highlights. The full set lives under `docs/figures/`
+(PNG previews at the top; TikZ/PDF sources topic-grouped underneath). Start with
+[`docs/MANIFEST.md`](docs/MANIFEST.md). Regeneration: [`docs/figures/MANIFEST.md`](docs/figures/MANIFEST.md).
 
-The paper map lives in `docs/references.md`, with topic-grouped local notes indexed by `docs/references/MANIFEST.md`.
-
-Also useful: `docs/runtime-invariants.md`, `docs/ablation-ledger.md`, `docs/known-good-runs.md`. Longer campaign logs and gate scripts left out of public repo for cleanliness.
+Paper map: [`docs/references.md`](docs/references.md); local copies indexed by
+[`docs/references/MANIFEST.md`](docs/references/MANIFEST.md). MORTAR format:
+[`docs/mortar-bcsr.md`](docs/mortar-bcsr.md). Ablations: [`docs/ablation-ledger.md`](docs/ablation-ledger.md).
+Runtime invariants: [`lab/runtime-invariants.md`](lab/runtime-invariants.md).
+Known-good runs: [`.agents/notes/implemented/process/2026-07-03-known-good-runs.md`](.agents/notes/implemented/process/2026-07-03-known-good-runs.md).
+Campaign logs and gate scripts stay under `ignore/` / `lab/`.
 
 ## Contributing
 

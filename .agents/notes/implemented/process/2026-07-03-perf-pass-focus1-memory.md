@@ -34,7 +34,7 @@ is the honest number.)
 ## Allocation attribution (allocator snapshots, mb2, eager-HC forced)
 
 CAVEAT: allocator history hooks NULL the fused HC autograd Function (SystemError:
-apply() returns NULL). Snapshots REQUIRE MORPH_HC_FORCE_EAGER=1. Eager HC materializes
+apply returns NULL). Snapshots REQUIRE MORPH_HC_FORCE_EAGER=1. Eager HC materializes
 huge carrier intermediates the fused kernel avoids → HC blocks in the snapshot are
 **eager-inflated artifacts, discard them**. HC is identical in both dense+routed eager
 snapshots, so it CANCELS in the dense-vs-routed diff. Valid, non-HC, routed-only:
@@ -45,23 +45,23 @@ snapshots, so it CANCELS in the dense-vs-routed diff. Valid, non-HC, routed-only
 ## Fragmentation: real but small in the fused path
 
 - Eager-HC mb2 showed reserved 18.98 vs alloc 14.0 = 5GB gap → **that gap is eager-HC's
-  own variable-size intermediate churn, not the deployment path.**
+ own variable-size intermediate churn, not the deployment path.**
 - Fused mb4: gap is 0.64GB dense / 0.80GB routed → routed-specific fragmentation only
-  +0.16GB. `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (bit-exact, alloc-only)
-  would reclaim ≤0.8GB total — LOW value, deprioritized.
+ +0.16GB. `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (bit-exact, alloc-only)
+ would reclaim ≤0.8GB total — LOW value, deprioritized.
 - The carve-rebuild path already frees correctly (train.py:1700-1718:
-  optimizer.state.clear + gc.collect + empty_cache before rebuilding).
+ optimizer.state.clear + gc.collect + empty_cache before rebuilding).
 
 ## Router fp32 reclaim options
 
 - No free bit-exact hoist: `iter_embed.to(proj_dtype)` is already a no-op (fp32 Param);
-  `x_flat.to(fp32)` is a genuine required upcast because router params are fp32.
+ `x_flat.to(fp32)` is a genuine required upcast because router params are fp32.
 - bf16 router = **class B** (numerics change): halves the ~650MB AND speeds the fp32
-  query_proj GEMM. Wolfe opt-in. Parked with the class-B menu.
+ query_proj GEMM. opt-in. Parked with the class-B menu.
 
 ## Reframe of ckpt_grad_iters (the actual speed knob)
 
-Wolfe's premise "memory blocks ckpt_grad_iters" is NOT confirmed for local d768 mb4:
+the premise "memory blocks ckpt_grad_iters" is NOT confirmed for local d768 mb4:
 there's ~11GB headroom at routed peak. ckpt_grad_iters=-1 (checkpoint ALL core iters)
 is current. Reducing it trades memory for recompute-saved speed. **Next: measure
 routed mb4 with ckpt_grad_iters=2 for BOTH peak mem and ms/step** — if it fits in
@@ -90,7 +90,7 @@ ckpt=-1) evaporates after 2 eager iters.
 **CONCLUSION: on the local 5090, ckpt_grad_iters cannot be reduced below -1.**
 The bit-exact reclaim available (router bf16 ≈0.65GB [class B] + expandable_segments
 ≈0.8GB [class A]) totals ~1.5GB — far short of the ~7GB one eager-iter step needs.
-So memory reclaim does NOT unlock the local speed knob. Wolfe's premise ("memory
+So memory reclaim does NOT unlock the local speed knob. the premise ("memory
 blocks ckpt_grad_iters") is CONFIRMED, and stronger than expected: it's blocked by
 a wide margin locally, unblockable by the cheap fixes.
 

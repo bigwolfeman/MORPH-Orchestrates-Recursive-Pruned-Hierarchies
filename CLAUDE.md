@@ -68,13 +68,13 @@ touching the model for TUL. Short mental model:
   boundary). One config per arm: `tul_a0` / `tul_a1` / `tul_a1r` / `tul_a3`, all at batch 14.
 - NEVER decode a span from one vector + offset with no token path (Huginn 2026-08-16 collapse;
   MegaByte T7; Bowman T2; Hourglass T6). Never regress onto the slot state (LCM, CoCoMix, BT §4.2).
-- Arms and gates: `docs/ablation-ledger.md` "Planned — TUL"; campaign logs:
-  `lab/tul/`; invariants: `runtime-invariants.md` §6b (LIVE, each row names the test that
-  fails when it breaks).
+- Arms and gates: `docs/ablation-ledger.md` TUL section; campaign logs:
+  `lab/tul/` (first comparison: `lab/tul/arms-result.md`); invariants:
+  `lab/runtime-invariants.md` §6b (LIVE, each row names the test that fails when it breaks).
 - Lineage: successor of coconut's `tul/` + `ltd/` (fine-tunes/model surgery of Huggin; left behind).
 - The Thought Unpack Loop forces the loop to handle whole semantic thoughts that are then sequentially decoded similar to future lens. This reduces per token looping and improves ppl. It is much more flop efficient.
 
-**Where the code is** (v1, `pytest tests/` → 116 passed; no arm has been TRAINED yet):
+**Where the code is** (v1; short-schedule A0/A1/A3 measured — further testing ongoing):
 
 | File | What |
 | --- | --- |

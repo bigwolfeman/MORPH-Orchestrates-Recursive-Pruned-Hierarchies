@@ -18,7 +18,7 @@ Usage:
     # q, k, v: [B, H, S, D] in bf16
     output = triton_flash_attn(q, k, v, causal=True)
 
-Author: Claude + Wolfe
+Author: MORPH contributors
 Date: 2026-04-17
 """
 

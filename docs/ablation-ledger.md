@@ -39,22 +39,24 @@ single campaign or partial stack; **low** = directional / incomplete.
 | Zyphra-RSA | Deferred | Outer inference harness | Requires RL; not in training path | low | CLAUDE.md / architecture notes |
 | JAX-parity | Deferred | `morph/jax/` | Mirror lags (still MRR residual); PT is source of truth | high | `morph/jax/`, interop converter |
 
-## Planned — TUL (`experiments/tul`; short schedule `morph/configs/tul_short.yaml`: seq 1024 × batch 14 × 20k steps = 287 M tokens, TST off, prune/carve/route off (dense), TUL from step 0; first pass = A0, A1, A1r, A3)
+## TUL (`morph/configs/tul_short.yaml`: seq 1024 × batch 14 × 20k steps = 287 M tokens, TST off, prune/carve/route off (dense), TUL from step 0)
 
-Arms from [tul-spec.md](tul-spec.md) §7. Every row is PLANNED; confidence is
-blank until a gate script exists under `ignore/`. Do not cite these as results.
+Arms from [tul-spec.md](tul-spec.md) §7. First comparison (A0c / A1c / A3):
+[lab/tul/arms-result.md](../lab/tul/arms-result.md) — A1 beats dense A0 (~0.056
+nats `val/ce_tokens`, ~1.6× wall clock). Further testing in progress; remaining
+rows stay `planned` until gated.
 
 | ID | Arm | Config / mechanism | Isolates | Status |
 | --- | --- | --- | --- | --- |
-| TUL-A0 | MORPH baseline | `tul.activate_at: never` (plain schedule) | reference | planned |
-| TUL-A1 | TUL | `tul:` block defaults (slots looped, tokens skip core, coda sees slots, per-slot Poisson) | the method | planned |
-| TUL-A1r | TUL repeat | as A1, second seed | retrain noise floor — read BEFORE any cell | planned |
+| TUL-A0 | MORPH baseline | `tul.activate_at: never` (plain schedule) | reference | measured |
+| TUL-A1 | TUL | `tul:` block defaults (slots looped, tokens skip core, coda sees slots, per-slot Poisson) | the method | measured (beats A0) |
+| TUL-A1r | TUL repeat | as A1, second seed | retrain noise floor — read BEFORE any cell | incomplete (aborted) |
 | TUL-A2 | slots-as-memory | `tul.tokens_through_core: true` | C2 alone (plan readable, uniform depth) | planned |
 | TUL-A4 | depth-only | `tul.coda_sees_slots: false` | C1 alone (depth per idea, plan unreadable) | planned |
-| TUL-A3 | shallow control | no slots, `n_core` bypassed for tokens (seed path) | compute floor | planned |
+| TUL-A3 | shallow control | no slots, `n_core` bypassed for tokens (seed path) | compute floor | measured (caveat in arms-result) |
 | TUL-p | token-state dropout sweep | `tul.token_state_dropout ∈ {0, 0.15, 0.3}` | the collapse tax | planned |
 | TUL-act0 | activate at step 0 | `tul.activate_at: 0.0`, TST off | isolates the 3-transitions-at-30k risk | planned |
-| TUL-stp | punc-STP on slot trajectory | `tul.stp_lambda > 0` | slot warm-up (Wolfe's punc-STP finding) | planned |
+| TUL-stp | punc-STP on slot trajectory | `tul.stp_lambda > 0` | slot warm-up (MORPH punc-STP finding) | planned |
 | TUL-set | slot-set MCE warm-up | `tul.set_lambda > 0` | slot warm-up (TST MCE); Block Transformer §4.2 says aux on the latent hurt | planned |
 | TUL-prefix1 | prefix length 1 | `tul.prefix_k: 1` (default is 2, projection prefixes, Block Transformer App. F.2 / Fig 3f) | plan and first-token label forced onto one coda position | planned |
 | TUL-A1+ | TUL reinvest | `n_coda: 8`, `tul.slot_mean_depth: 12` (≤ A0 layer-passes/token) | the fair-compute cell | planned |
@@ -66,8 +68,8 @@ blank until a gate script exists under `ignore/`. Do not cite these as results.
 Metrics per arm: `val/ppl_tokens`, `val/first_tok_ce`, `val/plan_nats` (slots
 masked at eval minus unmasked), `val/first_tok_counterfactual`, rep4@512,
 span-length distribution of generations, layer-passes/token, tokens/s.
-All of them are logged by `morph/training/train.py` as of the implementation
-(2026-08-16); none has been RUN, so every row above stays `planned`.
+Logged by `morph/training/train.py`; cite [lab/tul/arms-result.md](../lab/tul/arms-result.md)
+for measured A0/A1/A3, not the planned rows.
 
 Measured SHAPE facts for the arms (5090, `tul_short.yaml`, 13-25 steps,
 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`) — engineering numbers, not

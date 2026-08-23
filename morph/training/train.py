@@ -1903,7 +1903,7 @@ def main(cfg: DictConfig) -> None:
             optimizer.graph_invalidate("prune event")
 
         # Phase boundary (compact / routing) changed the param set → rebuild a FRESH
-        # optimizer (Wolfe: fresh optimizer after compact). This step's backward grads
+        # optimizer (fresh optimizer after compact). This step's backward grads
         # live on the OLD params (weight, pre-router); the new params (values, router)
         # have no grads yet, so we skip this step's update and train normally next step.
         # _step_optimizer closes over `optimizer` by name → reassigning here is picked up.
@@ -1948,7 +1948,7 @@ def main(cfg: DictConfig) -> None:
             # path's compute is the opaque BCSR custom-op GEMM (not fusable), the
             # surrounding elementwise is cheap, and compiling it thrashes on grad_mode
             # guards (recompile_limit-64 hit). The eager_on_recompile fallback below IS
-            # the fast path. The ~+5% Wolfe saw is overhead dilution of the +22%
+            # the fast path. The ~+5% seen in early carve A/Bs is overhead dilution of the +22%
             # model-compute carving win, NOT lost fusion. Kept for cloud-scale revisit
             # where a larger d_model changes the GEMM-vs-elementwise economics.
             # When ON: open ONE controlled recompile window (default stance, warm every
