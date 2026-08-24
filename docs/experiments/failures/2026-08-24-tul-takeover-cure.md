@@ -443,6 +443,34 @@ second one of those presented as a fix. What it IS worth having is a large CE ga
 seeds and a doubled time-to-failure, which is why the code ships off rather than not at
 all.
 
+## Every arm, one table
+
+Reproduce with `python lab/divergence/score_arms.py <name>=<probe.jsonl> ...`. The
+`shareAt` / `gainAt` columns are blank wherever the probe cadence is too coarse for the
+criterion's window; the tool refuses to report a number that looks like the guard's and is
+not.
+
+| arm | config | probed to | end share | gain | r2 | val CE min | at | val CE end | rise | verdict |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| `det-ctrl` | deterministic b6 s0 | 1866 | 0.6023 | 1.303 | 0.90 | — | — | — | — | TOOK OVER |
+| `det-cure` | + soft cap 1.5 | 2099 | 0.0122 | 0.955 | 0.24 | — | — | — | — | held |
+| `a1r-ctrl` | b12 s1, alpha_cap 1.0 | 5975 | 0.0105 | 1.045 | 0.08 | 3.7732 | 4500 | 3.7878 | +0.015 | held |
+| `a35-ctrl` | b12 s1, alpha_cap 3.5 | 6975 | 1.0000 | 2.772 | 0.97 | 4.7881 | 1000 | 5.9742 | +1.186 | TOOK OVER |
+| `a35-soft15` | + soft cap 1.5 | 2025 | 0.9979 | 2.038 | 0.97 | 5.4525 | 500 | 8.1891 | +2.737 | TOOK OVER |
+| `a35-soft30` | + soft cap 3.0 | 2000 | 0.9982 | 2.003 | 0.96 | 5.1054 | 1000 | 7.2813 | +2.176 | TOOK OVER |
+| `a35-proj15` | + hard cap 1.5, MLP | 2025 | 0.9529 | 1.659 | 0.95 | 4.8084 | 1000 | 8.3046 | +3.496 | TOOK OVER |
+| `a35-projattn` | + hard cap 1.5, MLP+attn | 2225 | 0.9416 | 1.828 | 0.96 | 4.7418 | 1500 | 5.8500 | +1.108 | TOOK OVER |
+| `b10-ctrl` | b10 s1, alpha_cap 3.5 | 3975 | 0.9999 | 2.445 | 0.97 | 4.8528 | 1500 | 5.3855 | +0.533 | TOOK OVER |
+| `b10-bptt2` | + bptt_depth 2 | 3975 | 0.9992 | 2.784 | 0.98 | 4.9124 | 1500 | 5.1046 | +0.192 | TOOK OVER |
+| **`b10-slotembed`** | **+ per_slot_embed** | 3975 | **0.0223** | **1.052** | 0.48 | **4.0747** | 3500 | **4.0747** | **0.000** | **held** |
+| `s0-slotembed` | same, seed 0 | 3975 | 0.9998 | 2.501 | 0.97 | 4.3929 | 3000 | 4.5115 | +0.119 | TOOK OVER |
+| `s0-stack` | + bptt 2 AND per_slot, s0 | 3975 | 1.0000 | 2.838 | 0.98 | 4.8163 | 3000 | 4.9647 | +0.148 | TOOK OVER |
+
+Two rows are worth staring at. `a1r-ctrl` is a control that was EXPECTED to fail and did
+not, which is why the deciding pair moved to `alpha_cap` 3.5. And the four `a35-*`
+intervention rows all have a HIGHER validation-CE rise than the control they were meant to
+protect.
+
 ## What the cap sweep says, and what it does not
 
 Projecting the core's linears onto `sigma_max <= cap` in the SICK state (`ROLL_step_1850`)
