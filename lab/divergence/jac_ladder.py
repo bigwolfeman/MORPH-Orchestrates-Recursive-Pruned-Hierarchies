@@ -243,6 +243,51 @@ def cotangent_rank(model, x, y, layout, seed: int, token_path: bool = False) -> 
             "n_calls_per_block": {i: len(v) for i, v in per_block.items()}}
 
 
+def spectral_gap(model, n_iter: int = 200) -> dict:
+    """sigma_1 / sigma_2 per core linear, by DEFLATED power iteration.
+
+    Power iteration onto a matrix's top singular direction converges like
+    `(sigma_1 / sigma_2)^k`, so the gap is the quantity that governs how fast the
+    weight-shared loop can align its cotangent. It is NOT what a spectral norm cap
+    constrains (a uniform rescale leaves every ratio untouched), and it is NOT what the
+    isometry spread sees either — a random direction puts only `1/n` of its energy on the
+    top singular vector, so in 1024 dimensions a single dominant direction is invisible to a
+    bulk statistic.
+
+    sigma_2 comes from the same iteration run in the orthogonal complement of the converged
+    top right-singular vector, re-projected every step so it cannot drift back.
+    """
+    from morph.training.spectral_penalty import _power_iter_sigma, collect_core_linears
+    lins, _ = collect_core_linears(model, True, "spectral_gap")
+    out = {}
+    for name, lin, inf in lins:
+        w = next(lin.parameters())
+        g = torch.Generator(device=w.device).manual_seed(0)
+        v1 = torch.randn(inf, device=w.device, dtype=w.dtype, generator=g)
+        with torch.enable_grad():
+            s1, v1 = _power_iter_sigma(lin, v1, n_iter)
+        s1 = float(s1.detach())
+        # sigma_2: power iteration restricted to v1's orthogonal complement.
+        v2 = torch.randn(inf, device=w.device, dtype=w.dtype, generator=g)
+        v2 = v2 - (v2 @ v1) * v1
+        v2 = v2 / (v2.norm() + 1e-12)
+        s2 = 0.0
+        for _ in range(n_iter):
+            v2 = v2.detach().requires_grad_(True)
+            wv = lin(v2.unsqueeze(0)).squeeze(0)
+            (g2,) = torch.autograd.grad(0.5 * (wv * wv).sum(), v2)
+            g2 = g2.detach()
+            g2 = g2 - (g2 @ v1) * v1                     # stay in the complement
+            n = g2.norm()
+            if float(n) < 1e-20:
+                break
+            v2 = g2 / n
+        with torch.no_grad():
+            s2 = float(lin(v2.unsqueeze(0)).squeeze(0).norm())
+        out[name] = {"sigma1": s1, "sigma2": s2, "gap": s1 / max(s2, 1e-12)}
+    return out
+
+
 def measure(model, points, iters, power_iters, per_block):
     probe = CoreJacobianProbe(model, n_iter=power_iters, seed=0, per_block=per_block)
     by_iter = {int(p["iter_idx"]): p for p in points}
@@ -271,6 +316,8 @@ def main():
     ap.add_argument("--dump-sigmas", action="store_true")
     ap.add_argument("--rank-probe", action="store_true",
                     help="effective positions carrying the cotangent, instead of sigma")
+    ap.add_argument("--gap-probe", action="store_true",
+                    help="sigma_1/sigma_2 per core linear, instead of the Jacobian")
     ap.add_argument("--rank-token-path", action="store_true",
                     help="with --rank-probe: run the SAME weights on the token path (A0)")
     ap.add_argument("--no-blocks", action="store_true")
@@ -300,6 +347,16 @@ def main():
             pre_sigmas = core_sigmas(model) if a.dump_sigmas else None
             moved = (project_core_linears(model, cap, a.project_scope)
                      if cap else {})
+            if a.gap_probe:
+                gp = spectral_gap(model, n_iter=a.power_iters)
+                results.append({"ckpt": os.path.basename(path), "step": step, "gap": gp})
+                gaps = sorted(gp.items(), key=lambda kv: -kv[1]["gap"])
+                worst = gaps[0]
+                med = sorted(v["gap"] for v in gp.values())[len(gp) // 2]
+                print(f"{os.path.basename(path):<22} median gap={med:.3f} "
+                      f"worst={worst[1]['gap']:.3f} ({worst[0]}) "
+                      f"s1={worst[1]['sigma1']:.3f} s2={worst[1]['sigma2']:.3f}", flush=True)
+                continue
             if a.rank_probe:
                 rk = cotangent_rank(model, x, y, layout, a.seed, a.rank_token_path)
                 row = {"ckpt": os.path.basename(path), "step": step, "cap": cap, "rank": rk}

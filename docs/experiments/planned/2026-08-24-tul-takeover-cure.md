@@ -150,6 +150,42 @@ at 10000 steps against the free uncapped control `c23dwx4a` (train loss 3.74 at 
 
 Nothing in Predictions is edited.
 
+## Method amendment 2, 2026-08-24 13:58 — the lever is not in the weights
+
+Four size-based interventions have now failed at `alpha_cap` 3.5, all against the same
+control, all scored at a common step 2050 by the same rule. Written before the arm below
+started.
+
+| arm | share criterion fires | val CE rise |
+|---|---:|---:|
+| `a35-ctrl` no control | 1700 | +0.623 |
+| `a35-spec` soft cap 1.5 | 1225 | +2.737 |
+| `a35-cap30` soft cap 3.0 | 1225 | +2.176 |
+| `a35-proj15` hard cap 1.5, MLP | 1625 | +3.496 |
+| `a35-proj15attn` hard cap 1.5, MLP + attention | 1675 | +1.108 |
+
+Two measurements say why, and both were taken before this amendment:
+
+* **No core weight's spectral GAP grows.** `sigma_1 / sigma_2` per core linear, by deflated
+  power iteration on the same ladder: median 1.069 -> 1.132 across the whole onset, and the
+  WORST gap falls, 2.647 -> 2.421. Power iteration aligns at rate `(sigma_1/sigma_2)^k`, so
+  if no matrix's gap is opening, no single matrix's spectrum is driving the alignment.
+* **The concentration that IS measured is over POSITIONS.** The cotangent falls from 13
+  effective slot positions to 2.5, while the same weights on the token path keep 26 to 59.
+
+So the alignment is a property of the composition and of how few positions the cotangent is
+spread over, not of any weight matrix's spectrum. Every intervention tried so far acts in
+feature space. The next one acts in position space.
+
+P10. **The slot budget.** `tul.max_slots` 64 -> 128 at `alpha_cap` 3.5, 7000 steps, against
+     `a35-ctrl`. Prediction: the share criterion does NOT fire before step 3400, twice the
+     control's 1700, and validation CE at 2000 is below its own minimum plus 0.3 nats where
+     the control is +0.623. Confound declared in advance: more slots means ~12 % more tokens
+     per row (1161 against 1033), so a CE comparison against the control is not
+     token-matched and only the takeover verdict is clean.
+
+Nothing in Predictions is edited.
+
 ## Risks
 
 * n = 1 per arm. Bit-reproducibility makes the microcosm pair a controlled comparison, not
