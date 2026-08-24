@@ -47,55 +47,90 @@ def _power_iter_sigma(lin: nn.Module, v: torch.Tensor, n_iter: int) -> tuple[tor
     return sigma, v
 
 
+def collect_core_linears(model: nn.Module, include_attn: bool,
+                         who: str) -> list[tuple[str, nn.Module, int]]:
+    """(name, module, in_features) for the core linears a spectral control acts on.
+
+    ONE enumeration, shared by the soft penalty and the hard projection, so the two cannot
+    drift apart about what "the core linears" means.
+
+    The MLP's gate_up and down are the ONLY MortarLinear under a core block (attention's CCA
+    projections are separate types), and the MLP is nested in a _KwargSequential, so this
+    enumerates by TYPE via named_modules rather than by a hardcoded path.
+
+    Attention is opt-in. Only nn.Linear is eligible there: the CCA convolutions (conv_q_dw
+    and friends) are not rank-2 maps on the last dim, so the power iteration's
+    [1, in_features] probe does not apply to them, and skipping them in silence would be the
+    same class of defect as the unused hook this replaced.
+    """
+    from morph.model.sparsity import MortarLinear
+    root = getattr(model, "_orig_mod", model)
+    out: list[tuple[str, nn.Module, int]] = []
+    for li, blk in enumerate(root.core):
+        for sub_name, sub in blk.named_modules():
+            if isinstance(sub, MortarLinear) and getattr(sub, "in_features", None):
+                out.append((f"core.{li}.{sub_name}", sub, sub.in_features))
+    n_mlp = len(out)
+    if not out:
+        raise RuntimeError(f"{who} found 0 core MLP linears — enumeration broke; refusing to "
+                           f"silently run a no-op.")
+    if include_attn:
+        for li, blk in enumerate(root.core):
+            attn = getattr(blk, "attention", None)
+            if attn is None:
+                continue
+            for sub_name, sub in attn.named_modules():
+                if type(sub) is nn.Linear and sub.weight.dim() == 2:
+                    out.append((f"core.{li}.attention.{sub_name}", sub, sub.in_features))
+        if len(out) == n_mlp:
+            raise RuntimeError(
+                f"{who}(include_attn=True) found 0 attention linears — enumeration broke; "
+                f"refusing to run a control that silently covers less than it claims.")
+    return out, n_mlp
+
+
+def raw_weight(mod: nn.Module) -> torch.Tensor:
+    """The tensor the optimizer owns for `mod`, through the wrappers between them.
+
+    Two layers to get past, and a projection that skipped either would be silently wrong:
+
+    * `MortarLinear` HOLDS NO WEIGHT. It delegates to an inner `CMSBlockLinear` at `._cms`;
+      asking a MortarLinear for `.weight` raises.
+    * MORPH ternarises the core MLP with a `TernarySTE` weight PARAMETRIZATION, so the
+      inner module's `.weight` is a computed property and the trainable leaf is
+      `parametrizations.weight.original`. Writing to `.weight` would be discarded on the
+      next forward.
+    """
+    inner = getattr(mod, "_cms", None)
+    if inner is not None:
+        mod = inner
+    par = getattr(mod, "parametrizations", None)
+    if par is not None and "weight" in par:
+        return par["weight"].original
+    return mod.weight
+
+
 class CoreSpectralPenalty:
-    """Soft spectral-norm penalty over the core-block MLP linears. Stateless wrt the optimizer."""
+    """Soft spectral-norm penalty over the core-block linears. Stateless wrt the optimizer.
+
+    MEASURED LIMIT, read this before choosing it over the projection below: a soft
+    loss-side hinge is a TUG OF WAR, and it can lose. At `ademamix_alpha_cap` 3.5, batch 12,
+    where the control's sigma_max reaches 5.69 by step 1600, `cap 1.5, lambda 10` failed to
+    hold sigma at all — 1.49 at step 300, 2.86 at 1200, 4.26 at 1800 — and the arm took over
+    at step 1225, EARLIER than its own control's 1700, with validation CE 2.74 nats above its
+    minimum against the control's 1.19. Once the excess is large the quadratic hinge's
+    gradient dominates the loss and the model optimises the penalty instead of the data.
+    Use `CoreSpectralProjection` when the drive is strong.
+    """
 
     def __init__(self, model: nn.Module, cap: float, lam: float, n_iter: int = 1,
                  include_attn: bool = False):
-        from morph.model.sparsity import MortarLinear
-        root = getattr(model, "_orig_mod", model)
         self.cap = float(cap)
         self.lam = float(lam)
         self.n_iter = int(n_iter)
         self.include_attn = bool(include_attn)
-        self._linears: list[tuple[str, nn.Module, int]] = []   # (name, module, in_features)
-        # Collect the core-block MLP linears (gate_up, down) — they are the ONLY MortarLinear under
-        # each core block (attention's CCA projections are separate types). The MLP is nested in a
-        # _KwargSequential, so enumerate by TYPE via named_modules rather than a hardcoded path.
-        for li, blk in enumerate(root.core):
-            for sub_name, sub in blk.named_modules():
-                if isinstance(sub, MortarLinear) and getattr(sub, "in_features", None):
-                    self._linears.append((f"core.{li}.{sub_name}", sub, sub.in_features))
-        self._n_mlp = len(self._linears)
-        if not self._linears:
-            raise RuntimeError("CoreSpectralPenalty found 0 core MLP linears — enumeration broke; "
-                               "refusing to silently run a no-op penalty.")
-        # ── attention (opt-in) ────────────────────────────────────────────────────────────
-        # OFF by default because MLP-only is the configuration measured to prevent the
-        # takeover in training. It is worth having because the cap sweep on the sick
-        # checkpoint says what it buys: capping the twelve MLP linears at 1.5 takes the core
-        # step's alignment from 1.92 to 1.24, and adding the attention projections at the same
-        # cap takes it to 1.05, back inside the healthy band of 0.99 to 1.14
-        # (docs/experiments/results/2026-08-24-tul-takeover-cure.md).
-        # Only nn.Linear is eligible: the CCA convolutions (conv_q_dw and friends) are not
-        # rank-2 maps on the last dim, so the power iteration's [1, in_features] probe does not
-        # apply to them, and silently skipping them without saying so would be the same class
-        # of defect as the unused hook this replaces.
-        if self.include_attn:
-            n_before = len(self._linears)
-            for li, blk in enumerate(root.core):
-                attn = getattr(blk, "attention", None)
-                if attn is None:
-                    continue
-                for sub_name, sub in attn.named_modules():
-                    if type(sub) is nn.Linear and sub.weight.dim() == 2:
-                        self._linears.append(
-                            (f"core.{li}.attention.{sub_name}", sub, sub.in_features))
-            if len(self._linears) == n_before:
-                raise RuntimeError(
-                    "CoreSpectralPenalty(include_attn=True) found 0 attention linears — "
-                    "enumeration broke; refusing to run a penalty that silently covers less "
-                    "than it claims.")
+        self._linears, self._n_mlp = collect_core_linears(
+            model, self.include_attn, "CoreSpectralPenalty")
         self._v: dict[str, torch.Tensor] = {}
 
     @torch.no_grad()
@@ -131,6 +166,79 @@ class CoreSpectralPenalty:
             over = (sig.float() - self.cap).clamp_min(0.0)
             total = total + over * over
         return self.lam * total
+
+
+
+class CoreSpectralProjection:
+    """HARD projection of the core linears onto the spectral ball, after the optimizer step.
+
+    `W <- W * min(1, cap / sigma_max(W_eff))`, applied in place once per step. Why this and
+    not the soft hinge above:
+
+    * **It cannot lose.** The hinge adds a term to the loss and then argues with the data
+      gradient about it; the projection is applied afterwards and the constraint holds by
+      construction. Measured: at `alpha_cap` 3.5 the hinge at `cap 1.5, lambda 10` let
+      sigma_max reach 4.26 by step 1800 and made the arm WORSE than its control.
+    * **It does not compete with the objective.** No term is added to the loss, so the
+      gradient the model follows is the data's, and `train/loss` stays comparable across
+      arms.
+    * **It is cheaper.** No autograd through the power iteration, no second backward.
+
+    Scaling the raw weight scales the EFFECTIVE map exactly on MORPH's path: the ternary
+    STE is a weight parametrization whose per-tensor scale is `mean(|W|)`, recomputed from
+    `W` every forward, so `W -> cW` gives an unchanged code pattern and `W_eff -> c W_eff`.
+    `verify=True` re-measures after each projection and RAISES if it did not land on the
+    cap, so that assumption cannot rot silently.
+
+    Interaction with the optimizer: this is projected gradient descent. The optimizer's
+    moments are left alone — they describe the unprojected step, which is what the next
+    step's momentum should be built from.
+    """
+
+    def __init__(self, model: nn.Module, cap: float, n_iter: int = 2,
+                 include_attn: bool = False, verify: bool = False):
+        self.cap = float(cap)
+        self.n_iter = max(1, int(n_iter))
+        self.include_attn = bool(include_attn)
+        self.verify = bool(verify)
+        self._linears, self._n_mlp = collect_core_linears(
+            model, self.include_attn, "CoreSpectralProjection")
+        self._v: dict[str, torch.Tensor] = {}
+
+    def _sigma(self, name: str, lin: nn.Module, in_features: int, n_iter: int) -> float:
+        w = raw_weight(lin)
+        if name not in self._v:
+            g = torch.Generator(device="cpu").manual_seed(hash(name) & 0x7fffffff)
+            v = torch.randn(in_features, generator=g).to(device=w.device, dtype=w.dtype)
+            self._v[name] = v / (v.norm() + 1e-12)
+        with torch.enable_grad():
+            sig, vnew = _power_iter_sigma(lin, self._v[name].to(w.dtype), n_iter)
+        self._v[name] = vnew
+        return float(sig.detach())
+
+    def step(self) -> dict[str, float]:
+        """Project every over-cap linear. Returns telemetry; call AFTER optimizer.step()."""
+        if self.cap <= 0.0:
+            return {}
+        n_hit, worst = 0, 0.0
+        with torch.no_grad():
+            for name, lin, inf in self._linears:
+                s = self._sigma(name, lin, inf, self.n_iter)
+                worst = max(worst, s)
+                if s > self.cap:
+                    n_hit += 1
+                    raw_weight(lin).mul_(self.cap / s)
+                    if self.verify:
+                        s2 = self._sigma(name, lin, inf, max(self.n_iter, 20))
+                        if abs(s2 - self.cap) / self.cap > 0.05:
+                            raise RuntimeError(
+                                f"CoreSpectralProjection: {name} did not land on the cap — "
+                                f"sigma {s:.4f} -> {s2:.4f}, wanted {self.cap:.4f}. The "
+                                f"effective map is not homogeneous in the raw weight on this "
+                                f"path, so the projection means nothing.")
+        return {"specproj/n_projected": float(n_hit),
+                "specproj/sigma_max_preproj": worst,
+                "specproj/frac_projected": n_hit / len(self._linears)}
 
 
 # ──────────────────────────────────────────────────────────────────────────────────────────────

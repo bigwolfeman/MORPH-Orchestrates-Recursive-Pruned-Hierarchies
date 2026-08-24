@@ -240,3 +240,90 @@ def test_sigmas_covers_every_selected_linear():
     sig = pen.sigmas()
     assert len(sig) == len(pen._linears)
     assert all(v > 0 for v in sig.values())
+
+
+# ── the hard projection ─────────────────────────────────────────────────────────────────
+
+def test_projection_enforces_the_cap_on_the_effective_map():
+    """THE contract. After one step() every selected linear's EFFECTIVE sigma is at the cap
+    or below. A soft hinge only argues for this; the projection must deliver it."""
+    from morph.training.spectral_penalty import CoreSpectralProjection
+    m = _model()
+    before = CoreSpectralPenalty(m, cap=0.0, lam=0.0).sigmas()
+    cap = min(before.values()) * 0.7
+    proj = CoreSpectralProjection(m, cap=cap, n_iter=40, verify=True)
+    stats = proj.step()
+    assert stats["specproj/n_projected"] == len(proj._linears), stats
+    after = CoreSpectralPenalty(m, cap=0.0, lam=0.0).sigmas()
+    for name, s in after.items():
+        assert s <= cap * 1.05, f"{name} still at {s:.4f} against cap {cap:.4f}"
+
+
+def test_projection_leaves_an_under_cap_model_untouched_bit_for_bit():
+    from morph.training.spectral_penalty import CoreSpectralProjection
+    m = _model()
+    snap = {n: p.detach().clone() for n, p in m.named_parameters()}
+    stats = CoreSpectralProjection(m, cap=1e6, n_iter=40).step()
+    assert stats["specproj/n_projected"] == 0.0
+    for n, p in m.named_parameters():
+        assert torch.equal(p.detach(), snap[n]), n
+
+
+def test_projection_writes_through_the_parametrization():
+    """MORPH ternarises the core MLP with a weight parametrization, so `mod.weight` is a
+    computed property and the trainable leaf is `parametrizations.weight.original`. A
+    projection that wrote to `mod.weight` would be discarded on the next forward."""
+    from morph.training.spectral_penalty import CoreSpectralProjection, raw_weight
+    import torch.nn.utils.parametrize as parametrize
+
+    class Double(nn.Module):
+        def forward(self, w):
+            return 2.0 * w
+
+    m = _model()
+    lin = CoreSpectralPenalty(m, cap=0.0, lam=0.0)._linears[0][1]
+    inner = lin._cms
+    parametrize.register_parametrization(inner, "weight", Double())
+    assert raw_weight(inner) is inner.parametrizations["weight"].original
+    orig = raw_weight(inner).detach().clone()
+    sig = CoreSpectralPenalty(m, cap=0.0, lam=0.0).sigmas()
+    cap = min(sig.values()) * 0.5
+    CoreSpectralProjection(m, cap=cap, n_iter=40).step()
+    assert not torch.equal(raw_weight(inner).detach(), orig), \
+        "the projection did not reach the parametrized leaf"
+
+
+def test_projection_verify_catches_a_non_homogeneous_map():
+    """The projection assumes `W -> cW` gives `W_eff -> c W_eff`. That is true of the ternary
+    parametrization in use and NOT true of CMSBlockLinear.enable_ternary, whose scale is a
+    frozen buffer. verify=True must RAISE rather than report a cap it did not enforce."""
+    from morph.training.spectral_penalty import CoreSpectralProjection
+    import torch.nn.utils.parametrize as parametrize
+
+    class FrozenScale(nn.Module):
+        """Effective weight = sign(W) * const — magnitude of W is discarded, so scaling W
+        does not scale the map."""
+        def __init__(self, ref):
+            super().__init__()
+            self.register_buffer("g", ref.detach().abs().mean().clamp(min=1e-8))
+
+        def forward(self, w):
+            return torch.sign(w) * self.g
+
+    m = _model()
+    lin = CoreSpectralPenalty(m, cap=0.0, lam=0.0)._linears[0][1]
+    inner = lin._cms
+    parametrize.register_parametrization(inner, "weight", FrozenScale(inner.weight))
+    sig = CoreSpectralPenalty(m, cap=0.0, lam=0.0).sigmas()
+    with pytest.raises(RuntimeError, match="did not land on the cap"):
+        CoreSpectralProjection(m, cap=min(sig.values()) * 0.5, n_iter=40, verify=True).step()
+
+
+def test_projection_and_penalty_agree_on_what_the_core_linears_are():
+    from morph.training.spectral_penalty import CoreSpectralProjection
+    m = _model()
+    for attn in (False, True):
+        a = CoreSpectralPenalty(m, cap=1.0, lam=1.0, include_attn=attn)
+        b = CoreSpectralProjection(m, cap=1.0, include_attn=attn)
+        assert [n for n, _, _ in a._linears] == [n for n, _, _ in b._linears]
+        assert a._n_mlp == b._n_mlp

@@ -1391,8 +1391,26 @@ def main(cfg: DictConfig) -> None:
         _gprobe_every = 1
     _gprobe_path = getattr(cfg.training, "grad_probe_path", None) or None
     _gprobe_fh = None
+    # ── HARD spectral projection (the cure; the soft hinge above is the one that can lose) ──
+    # W <- W * min(1, cap/sigma) applied after each optimizer step. 0 disables and nothing is
+    # constructed. See CoreSpectralProjection's docstring for why this and not the penalty.
+    _spec_proj = None
+    _spj_cap = float(getattr(cfg.training, "spectral_project_cap", 0.0))
     _sp_log = int(getattr(cfg.training, "spectral_penalty_log_every", 100))
     _sp_on = _sp_cap > 0.0 and _sp_lam > 0.0
+    if _spj_cap > 0.0:
+        from morph.training.spectral_penalty import CoreSpectralProjection
+        _spec_proj = CoreSpectralProjection(
+            model, cap=_spj_cap,
+            n_iter=int(getattr(cfg.training, "spectral_project_n_iter", 2)),
+            include_attn=bool(getattr(cfg.training, "spectral_penalty_include_attn", False)),
+            verify=bool(getattr(cfg.training, "spectral_project_verify", False)))
+        print(f"  Core spectral PROJECTION ON: cap={_spj_cap} "
+              f"n_iter={_spec_proj.n_iter} verify={_spec_proj.verify} "
+              f"on {len(_spec_proj._linears)} core linears "
+              f"({_spec_proj._n_mlp} MLP + "
+              f"{len(_spec_proj._linears) - _spec_proj._n_mlp} attention)")
+
     if _sp_on or _sp_log > 0:
         from morph.training.spectral_penalty import CoreSpectralPenalty
         _sp_attn = bool(getattr(cfg.training, "spectral_penalty_include_attn", False))
@@ -2155,6 +2173,9 @@ def main(cfg: DictConfig) -> None:
         # → byte-identical to the single fwd/bwd path (loss/1 == loss). The curriculum uses it to
         # hold a constant effective batch as the per-stage micro-batch drops with context length.
         _ga = cur_grad_accum if curriculum_enabled else 1
+        # The spectral penalty's value at this step, so train/loss can report the MODEL's
+        # loss and train/loss_total the full objective. 0.0 when no penalty is built.
+        _sp_value = 0.0
         for _micro in range(_ga):
             with _rt.region("data"):
                 try:
@@ -2208,6 +2229,7 @@ def main(cfg: DictConfig) -> None:
                 # `cap` (bit-exact); only fires on σ_max runaway. Loss-side → optimizer-agnostic.
                 if _spec_pen is not None:
                     _sp = _spec_pen.penalty()
+                    _sp_value = float(_sp.detach())
                     loss = loss + _sp.to(loss.dtype)
 
             with _rt.region("bwd"):
@@ -2383,6 +2405,10 @@ def main(cfg: DictConfig) -> None:
 
         with _rt.region("opt"):
             _step_optimizer()
+            # Projected gradient: the constraint is enforced AFTER the update, so it cannot
+            # be argued with by the data gradient. Optimizer moments are left alone — they
+            # describe the unprojected step, which is what momentum should be built from.
+            _proj_log = _spec_proj.step() if _spec_proj is not None else {}
 
         # ── Prune-divergence diagnostic (env MORPH_DIAG_OPT=<path>) ─────────
         # Post-step, grads still live (zero_grad is top-of-next-iter). Dequants m₂/ν and
@@ -2437,6 +2463,13 @@ def main(cfg: DictConfig) -> None:
             peak_alloc = torch.cuda.max_memory_allocated() / 2**20
             peak_resv = torch.cuda.max_memory_reserved() / 2**20
             _lv = loss.item()
+            # train/loss must be the MODEL's loss, not the objective's. A regulariser added
+            # to `loss` used to land in train/loss and train/ppl, which made a penalised arm
+            # incomparable to its control and let the perplexity divergence guard fire on the
+            # penalty instead of on the model. Measured: `a35-spec` logged ppl 4.9e8 while its
+            # validation CE was 8.19. `train/loss_total` keeps the full objective.
+            _lv_total = _lv
+            _lv = _lv - _sp_value
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
             #    after its external watchdog died in a power loss). A NaN/Inf loss NEVER
             #    recovers — save an emergency ckpt for forensics and stop, instead of burning
@@ -2471,6 +2504,7 @@ def main(cfg: DictConfig) -> None:
                 _div_strikes = 0
             log: dict = {
                 "train/loss": _lv,
+                "train/loss_total": _lv_total,
                 "train/ppl": math.exp(min(_lv, 20.0)),
                 "train/lr": lr,
                 "perf/steps_per_sec": sps,
@@ -2582,6 +2616,8 @@ def main(cfg: DictConfig) -> None:
             # Core-map σ_max (docs: the iterative-map note). The per-region gradnorm above says
             # the core owns the whole gradient; this says WHY — the core map's gain. Cheap:
             # 10 power-iteration matvecs on 12 linears. Never affects the loss when lam=0.
+            if _spec_proj is not None and _proj_log:
+                log.update(_proj_log)
             if _spec_pen is not None and _sp_log > 0 and step % _sp_log == 0:
                 _sg = _spec_pen.sigmas()
                 _vals = list(_sg.values())

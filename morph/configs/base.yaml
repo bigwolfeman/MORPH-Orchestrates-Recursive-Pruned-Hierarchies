@@ -163,6 +163,18 @@ training:
   # and adding attention at the same cap takes it to 1.05, back inside the healthy band of
   # 0.99 to 1.14. See docs/experiments/results/2026-08-24-tul-takeover-cure.md.
   spectral_penalty_include_attn: false
+  # ── HARD spectral projection: W <- W * min(1, cap/sigma), after each optimizer step ──
+  # The soft penalty above is a tug of war and it can LOSE: at ademamix_alpha_cap 3.5 with
+  # cap 1.5 and lambda 10 it let sigma_max reach 4.26 by step 1800 and the arm took over at
+  # 1225, earlier than its own control's 1700, with validation CE 2.74 nats above its
+  # minimum against the control's 1.19. The projection is applied AFTER the update, so the
+  # constraint holds by construction, it adds no term to the loss, and it is cheaper.
+  # 0 = off, nothing constructed. n_iter is the warm-started power iterations per step.
+  # verify re-measures after each projection and RAISES if it missed the cap (costs a second
+  # power iteration on the linears that were hit — use it in a smoke run, not in production).
+  spectral_project_cap: 0.0
+  spectral_project_n_iter: 2
+  spectral_project_verify: false
   spectral_penalty_lambda: 0.0
   spectral_penalty_n_iter: 1
   # σ_max logging cadence (steps). Independent of the penalty: with lambda=0 the
