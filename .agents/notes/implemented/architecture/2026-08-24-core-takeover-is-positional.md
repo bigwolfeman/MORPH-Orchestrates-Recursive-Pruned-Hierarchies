@@ -17,9 +17,24 @@ What it could not say was WHERE the amplification lives, and therefore what to b
 
 ## Decision
 
-**Do not enable any spectral control by default.** The evidence says a control on the core
-weights' spectrum cannot reach this failure, and two of the four arms that tried made it
-WORSE than doing nothing.
+**Do not enable any spectral control by default, and fix the slot states instead.** A control
+on the core weights' spectrum cannot reach this failure — two of the four arms that tried
+made it WORSE than doing nothing — while one config key aimed at the measured degeneracy
+holds it.
+
+`tul.per_slot_embed` gives each slot INDEX its own input embedding row instead of adding one
+shared `E_slot` to all of them. Against a control that took over (end core share 0.9999,
+per-block backward gain 2.445 at r2 0.97, validation CE +0.533 above its own minimum), the
+cured arm ends at core share **0.0204**, gain **1.030** at r2 0.36 — the flat healthy
+signature — and a validation CE that is monotone for the whole run and finishes at its own
+minimum, **0.78 nats below the control's best-ever value**. `sigma_max` of the core MLP came
+down as a CONSEQUENCE, 2.88 at step 1500 against the control's 4.86, with no spectral control
+active.
+
+It is left OFF by default. One 4000-step arm at one seed is thinner evidence than this
+recipe's other standing settings carry. What would justify flipping it is in the experiment
+record: a second seed, a 20000-step arm against `tul-a0`, and a `per_slot_embed_std: 0` arm
+to separate "the model can now tell its slots apart" from "the symmetry was broken at init".
 
 What ships instead is the ability to see the thing: `morph/training/core_jacobian.py`
 measures the core map's Jacobian at the live operating point, `lab/divergence/jac_ladder.py`
@@ -84,9 +99,8 @@ in the RCA.
 * **Cut `bptt_depth` 4 -> 2.** RUN, as the pre-registered discriminator. It cuts the
   validation CE damage by 64 % (+0.192 against the control's +0.533) and does not prevent the
   takeover — which is what favours the forward reading over the pure backward one.
-* **Per-slot input embeddings** (`tul.per_slot_embed`), which break the input degeneracy by
-  giving every slot INDEX its own row. Implemented, tested, off by default, and run once at
-  the end of this work; see the experiment record.
+* **Per-slot input embeddings** (`tul.per_slot_embed`). ADOPTED as the answer, not rejected —
+  see the Decision above. Implemented, tested, off by default pending confirmation.
 
 ## Consequences
 
@@ -103,3 +117,8 @@ in the RCA.
   `grad_probe_every=1`; the case for turning it on for TUL arms is now quantified.
 * Anyone reaching for a spectral cap in this tree should read the experiment record first.
   Four arms, one control and one pre-fixed rule is enough evidence to stop.
+* The earliest indicator this programme has is now a FORWARD one and costs one no-grad pass:
+  the ratio of the slot states' effective rank out of the loop to their rank into it. It
+  crosses 1 between steps 1750 and 1800, before the core share moves. It is measured by
+  `lab/divergence/jac_ladder.py --state-probe` and is NOT yet wired into the trainer as an
+  abort criterion, which is the obvious next piece of plumbing.
