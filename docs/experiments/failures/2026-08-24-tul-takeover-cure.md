@@ -13,6 +13,7 @@ Pre-registration: [2026-08-24-tul-takeover-cure](../planned/2026-08-24-tul-takeo
 (with two method amendments, both written before the arms they changed).
 Mechanism this builds on: [the RCA](../results/2026-08-24-tul-takeover-rca.md).
 Procedure: [measuring the core map's operator](../../cookbook/measuring-the-core-map.md).
+Decision record: [the takeover is positional](../../../.agents/notes/implemented/architecture/2026-08-24-core-takeover-is-positional.md).
 Figure: `docs/experiments/figures/tul_takeover_cure.png`.
 
 ## Summary
