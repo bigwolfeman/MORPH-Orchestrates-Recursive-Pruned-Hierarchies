@@ -24,7 +24,7 @@ live in `.agents/notes/`; these are the runs behind them.
 - [What makes the TUL arms diverge?](experiments/failures/2026-08-22-tul-divergence-cause.md)
 - [Is `ademamix_alpha_cap=1.0` a cure or a delay?](experiments/failures/2026-08-22-tul-order-parameter.md)
 - [Root cause of the TUL core takeover](experiments/results/2026-08-24-tul-takeover-rca.md) — the per-block backward gain, and what does not stop it
-- [The takeover is a forward state collapse](experiments/failures/2026-08-24-tul-takeover-cure.md) — four weight-space cures fail; per-slot input embeddings hold, at 0.78 nats better CE than the control's best
+- [The takeover is a forward state collapse](experiments/failures/2026-08-24-tul-takeover-cure.md) — four weight-space cures fail; per-slot input embeddings double the time to failure and improve CE on both seeds, and still do not cure
 
 ## Cookbook
 

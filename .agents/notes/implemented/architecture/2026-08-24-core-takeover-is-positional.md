@@ -17,24 +17,26 @@ What it could not say was WHERE the amplification lives, and therefore what to b
 
 ## Decision
 
-**Do not enable any spectral control by default, and fix the slot states instead.** A control
-on the core weights' spectrum cannot reach this failure — two of the four arms that tried
-made it WORSE than doing nothing — while one config key aimed at the measured degeneracy
-holds it.
+**Do not enable any spectral control by default. Nothing found here is a cure; the best
+lever is upstream, in the slot states.** A control on the core weights' spectrum cannot reach
+this failure — two of the four arms that tried made it WORSE than doing nothing.
 
 `tul.per_slot_embed` gives each slot INDEX its own input embedding row instead of adding one
-shared `E_slot` to all of them. Against a control that took over (end core share 0.9999,
-per-block backward gain 2.445 at r2 0.97, validation CE +0.533 above its own minimum), the
-cured arm ends at core share **0.0223**, gain **1.052** at r2 0.48 — the flat healthy
-signature — and a validation CE that is monotone for the whole run and finishes at its own
-minimum, **0.78 nats below the control's best-ever value**. `sigma_max` of the core MLP came
-down as a CONSEQUENCE, 2.88 at step 1500 against the control's 4.86, with no spectral control
-active.
+shared `E_slot` to all of them, aimed at exactly the degeneracy measured above. It is the
+largest single improvement found and it is NOT a cure: it holds seed 1 for the full 4000
+steps (end core share 0.0223, gain 1.052 at r2 0.48 — the flat healthy signature — validation
+CE monotone and finishing at its own minimum) and it takes over at seed 0, at step 2225.
 
-It is left OFF by default. One 4000-step arm at one seed is thinner evidence than this
-recipe's other standing settings carry. What would justify flipping it is in the experiment
-record: a second seed, a 20000-step arm against `tul-a0`, and a `per_slot_embed_std: 0` arm
-to separate "the model can now tell its slots apart" from "the symmetry was broken at init".
+What survives both seeds is worth having: the takeover is delayed from step 1150 to 2225,
+the validation CE damage falls from +0.533 to +0.119, and the best CE reached is 0.78 and
+0.46 nats BELOW the control's best-ever on the two seeds. `sigma_max` also falls as a
+CONSEQUENCE — 2.88 and 2.45 at step 1500 against the control's 4.86 — with no spectral
+control active, and only climbs once the takeover starts.
+
+It is left OFF by default, and the second seed is the reason. A setting that holds one seed
+of two is exactly what `ademamix_alpha_cap: 1.0` already is, and this recipe does not need a
+second one of those presented as a fix. Had the second seed not been run, this note would
+have said "cure".
 
 What ships instead is the ability to see the thing: `morph/training/core_jacobian.py`
 measures the core map's Jacobian at the live operating point, `lab/divergence/jac_ladder.py`
@@ -99,8 +101,8 @@ in the RCA.
 * **Cut `bptt_depth` 4 -> 2.** RUN, as the pre-registered discriminator. It cuts the
   validation CE damage by 64 % (+0.192 against the control's +0.533) and does not prevent the
   takeover — which is what favours the forward reading over the pure backward one.
-* **Per-slot input embeddings** (`tul.per_slot_embed`). ADOPTED as the answer, not rejected —
-  see the Decision above. Implemented, tested, off by default pending confirmation.
+* **Per-slot input embeddings** (`tul.per_slot_embed`). The best lever found and not a cure —
+  see the Decision above. Implemented, tested, off by default.
 
 ## Consequences
 

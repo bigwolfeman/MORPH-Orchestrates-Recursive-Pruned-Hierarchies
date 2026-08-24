@@ -1,4 +1,4 @@
-# The TUL core takeover: a forward state collapse, cured by fixing the slot states
+# The TUL core takeover: a forward state collapse that no weight-space cure reaches
 
 Status: failure
 
@@ -28,14 +28,15 @@ rising). The flip is between steps 1750 and 1800, where the core share goes 0.02
 It is a FORWARD quantity, it needs one no-grad pass, and it is the earliest indicator in this
 programme.
 
-**Giving each slot its own input embedding cures it, in the arm that was run.** One config
-key, `tul.per_slot_embed`, aimed at exactly the degeneracy above and pre-registered before it
-reported. Against a control that took over — end core share 0.9999, block gain 2.445,
-validation CE +0.533 above its own minimum — the cured arm ends at core share **0.0223**,
-block gain **1.052**, and a validation CE that is monotone for the whole run and finishes at
-its own minimum. It is also the best model in this work: 4.0747 against the control's
-best-ever 4.8528, **0.78 nats better**. n = 1, 4000 steps, one seed, at a setting where the
-failure is otherwise 5 out of 5.
+**Giving each slot its own input embedding is the largest improvement found, and is still
+not a cure.** One config key, `tul.per_slot_embed`, aimed at exactly the degeneracy above and
+pre-registered before it reported. At seed 1 it holds for the whole 4000 steps — end core
+share **0.0223** against the control's 0.9999, block gain **1.052** against 2.445, validation
+CE monotone and finishing at its own minimum. At seed 0 it takes over at step 2225. What
+survives both seeds: the takeover is DELAYED from step 1150 to 2225, the validation CE damage
+falls from +0.533 to +0.119, and the best CE reached is 0.78 and 0.46 nats BELOW the
+control's best-ever 4.8528 on the two seeds. It is left off by default, because a setting
+that holds one seed of two is exactly what `ademamix_alpha_cap: 1.0` already is.
 
 **Four weight-space interventions failed first, and two were worse than doing nothing.**
 Including a hard projection that pinned `sigma_max` at exactly 1.50 for a whole run and came
@@ -52,9 +53,14 @@ cuts the validation CE damage by 64 %, from +0.533 to +0.192, while the run stil
 around. That is the pre-registered discriminator, and it is what moved the reading from
 "backward power iteration" to "forward collapse, sharpened by backward power iteration".
 
-The cure is implemented, tested and OFF by default. One 4000-step arm is thinner evidence
-than this recipe's other standing settings carry, and what would justify flipping it is
-written down rather than assumed.
+So the takeover is diagnosed further than it was, it is reproducible, it now has a forward
+leading indicator that costs one no-grad pass, an entire family of interventions is
+eliminated with a measurement that says why, and the best intervention found doubles the
+time to failure and improves CE on both seeds without preventing it. It is not cured.
+
+Every claim in this document that a single arm would have supported was checked against a
+second one. The headline above said "cured" for thirty minutes, on one arm, until the second
+seed came back.
 
 ## What the failure actually is
 
@@ -367,19 +373,53 @@ Note also that it does eventually climb, to 4.76 by step 3900, so this is not a 
 (compare the healthy 20000-step run in the table above, which reaches 4.02 only at step
 19900 — this arm is faster than that, and holding).
 
+### The second seed took over — P13 falsified
+
+The confirmation arm was launched at 15:40 and pre-registered before it reported. It does
+not confirm.
+
+| arm | seed | first share > 0.5 | end share | block gain | r2 | val CE min | at | val CE end | rise | verdict |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| `b10-ctrl` | 1 | **1150** | 0.9999 | 2.445 | 0.97 | 4.8528 | 1500 | 5.3855 | +0.533 | TOOK OVER |
+| `b10-slotembed` | 1 | 3625 | 0.0223 | 1.052 | 0.48 | 4.0747 | 3500 | 4.0747 | 0.000 | held |
+| `s0-slotembed` | 0 | **2225** | 0.9998 | 2.501 | 0.97 | 4.3929 | 3000 | 4.5115 | +0.119 | **TOOK OVER** |
+
+So `per_slot_embed` is NOT a cure. It is in the same category as the incumbent
+`ademamix_alpha_cap: 1.0` — it holds one seed and loses the other — and this document would
+have claimed otherwise on one arm if the second had not been run.
+
+What survives the second seed, and it is not nothing:
+
+* **It delays.** The takeover moves from step 1150 to 2225, roughly double.
+* **It reduces the harm.** Validation CE ends +0.119 above its own minimum against the
+  control's +0.533, a 78 % reduction, and the `bptt_depth` arm's +0.192.
+* **It is a better model on BOTH seeds.** Best validation CE 4.0747 (seed 1) and 4.3929
+  (seed 0), against the control's best-ever 4.8528 — 0.78 and 0.46 nats better.
+* **It slows the drive it was not aimed at.** `sigma_max` of the core MLP at step 1500:
+  control 4.86, seed-1 arm 2.88, seed-0 arm 2.45. It only climbs once the takeover starts
+  (seed 0: 2.45 at 1500, 4.71 at 2500, 6.38 at 3500), which is the ordering a cause-to-symptom
+  reading predicts.
+
+And the diagnosis is untouched by this. The forward state degeneracy is measured on
+checkpoints, not inferred from an arm; the four spectral controls still failed; the
+`bptt_depth` discriminator still landed where it landed. What the second seed changes is the
+claim about the FIX, from "the cure" to "the largest single improvement found, and still not
+enough".
+
 ### What this is, and what it is not
 
-It is one arm. n = 1, 4000 steps, one seed, one configuration (`alpha_cap` 3.5, batch 10),
-with kernels on and therefore not bit-reproducible. What makes a single arm worth reporting
-is the prior: at this exact setting the failure is 5 out of 5 across this work and the
-historical record, so an arm that holds is not a coin landing the same way as the others.
+Two arms, 4000 steps each, one configuration (`alpha_cap` 3.5, batch 10), kernels on and
+therefore not bit-reproducible. One held and one did not.
 
 It also is not free of confounds. It adds `max_slots x d_model` = 65k parameters, 0.02 % of
 286M, so the arms are not iso-parameter. And the jitter at seating means the arm does not
 start from bit-identical weights.
 
-It is NOT enabled by default. One 4000-step arm is thinner evidence than this recipe's other
-standing settings carry, and the honest next step is written below rather than acted on.
+It is NOT enabled by default, and the second seed is why. A setting that holds one seed of
+two is exactly what `ademamix_alpha_cap: 1.0` already is, and this recipe does not need a
+second one of those presented as a fix. What it IS worth having is a large CE gain on both
+seeds and a doubled time-to-failure, which is why the code ships off rather than not at
+all.
 
 ## What the cap sweep says, and what it does not
 
