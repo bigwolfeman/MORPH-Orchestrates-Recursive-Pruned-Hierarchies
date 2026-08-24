@@ -24,6 +24,13 @@ live in `.agents/notes/`; these are the runs behind them.
 - [What makes the TUL arms diverge?](experiments/failures/2026-08-22-tul-divergence-cause.md)
 - [Is `ademamix_alpha_cap=1.0` a cure or a delay?](experiments/failures/2026-08-22-tul-order-parameter.md)
 
+## Cookbook
+
+Step-by-step procedures. How to do a thing, not why it is done that way.
+
+- [Replaying the TUL core takeover from a checkpoint](cookbook/replaying-the-core-takeover.md)
+- [Measuring the looped core's operator, not its magnitudes](cookbook/measuring-the-core-map.md)
+
 ## Local Archives
 
 - [Reference archive by topic](references/MANIFEST.md)
