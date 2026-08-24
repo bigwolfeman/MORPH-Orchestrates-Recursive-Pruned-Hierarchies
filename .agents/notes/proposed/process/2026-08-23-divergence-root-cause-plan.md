@@ -210,7 +210,21 @@ spikes (7.7e4, 4.9e4) that did NOT run away.
       threshold would have false-fired at step ~1450, 570 steps early.
       EVIDENCE: [`../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md`](../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md)
       finding 6, and panel 3 of `tul_onset.png`.
-- [~] **3.2 Ship an abort criterion instead of a cause.** The rule is now MEASURED and it
+- [x] **3.2 Ship an abort criterion instead of a cause.** SHIPPED, then FIXED after it
+      missed a real divergence. `morph/training/divergence_guard.py` + `training.abort_core_share`.
+      The first rule was "N consecutive probed steps above the threshold", validated on ONE
+      trajectory with 12 passing tests, and it missed `repl-det-b` — a run that really took
+      over (final share 0.8131) whose onset is intermittent (0.967, 0.768, 0.264, 0.624,
+      0.989) with a longest consecutive stretch of 21 against a patience of 25.
+      The shipped rule is a FRACTION over a sliding window, validated on three labelled
+      trajectories: fires at 2038 on `phase1-onset-s0` (took over) and 3369 on `repl-det-b`
+      (took over), never on `repl-det-a`, which PEAKED at a core share of 0.9369 and
+      recovered to 0.0152. 20 of 27 swept parameter combinations separate all three.
+      Verified LIVE end to end, not only in replay: config → forced probe → fire at step 13
+      → `TAKEOVER_step_13.pt` → stop, exit 4.
+      EVIDENCE: `tests/test_divergence_guard.py` (15 tests, three real trajectories as
+      fixtures) and `ignore/perf/phase1/guard_smoke.log`. Superseded detail below.
+- [~] *(superseded)* **3.2 first attempt.** The rule is now MEASURED and it
       is 4× better than the post-clip ratchet it replaces. Against the divergence guard's
       first strike at step 2620, sustained for 25 consecutive probed steps:
       pre-clip core share > 0.25 fires at 2031 (**589 steps** of warning), > 0.50 at 2033
@@ -236,6 +250,30 @@ spikes (7.7e4, 4.9e4) that did NOT run away.
       the driver, removing it should move the divergence rate. Phase 0 gives this arm for
       free.
       EVIDENCE: pending
+
+## UNBLOCKED 2026-08-23: a bit-reproducible configuration exists
+
+The gate failed, and then the blocker it exposed was solved the same evening. The fused
+CSA/HCA attention backward is the dominant source and is outside PyTorch's determinism
+machinery. With `model.use_kernels=false` + the new `training.deterministic=true` +
+`CUBLAS_WORKSPACE_CONFIG=:4096:8` exported before the process, **two 300-step training runs
+are bit-identical on all 300 steps across all 85 probe series**, every console loss matching
+exactly. Cost: 2.28× fewer tokens/s and roughly half the batch.
+
+- [`the reproducibility result`](../../../../docs/experiments/results/2026-08-23-morph-bit-reproducible.md)
+- [`the Agent Note`](../../implemented/architecture/2026-08-23-deterministic-training-mode.md)
+
+**What this changes for the rest of this plan.** Phase 2's mediation becomes possible for
+the first time, because two arms can now differ by their intervention alone. Three caveats
+that are not optional:
+
+1. The halved batch changes the gradient noise scale, so **every arm in a comparison must
+   use the reproducible configuration**; a reproducible arm cannot be compared against the
+   stored fast-configuration runs.
+2. The takeover statistics do not transfer. Different attention implementation and half the
+   batch: the base rate, the onset distribution and the abort thresholds must all be
+   re-measured there before any arm is read.
+3. Only 300 steps are verified bit-identical. A 4000-step run is not.
 
 ## Alternatives considered
 

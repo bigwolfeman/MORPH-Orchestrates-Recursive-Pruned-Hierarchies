@@ -1,7 +1,8 @@
 # Experiment: is the TUL takeover caused by the FIRST loop iteration alone?
 
-Status: planned. Written BEFORE the M0/M1 runs, while the Phase 0.4 replicate pair is
-still on the GPU.
+Status: **planned, arms NOT run.** M0 was started and killed at step ~90; M1 never started.
+See "Why the arms were stopped" below. The predictions stand and the experiment is ready to
+run on the reproducible configuration.
 
 ## Question
 
@@ -167,3 +168,43 @@ floor, which is the other reason it was run first.
   at which the known cures were validated. A 4000-step survivor is a first read.
 - Changing the clip changes the forward pass, so M0 and M1 are not the same model as the
   control after step 0. Any loss comparison between arms is confounded and is not used.
+
+
+---
+
+## Why the arms were stopped (2026-08-23)
+
+M0 was launched and killed after ~90 steps; M1 was never started. The reason is the
+replicate pair that ran immediately before them, and it is a design problem, not a
+scheduling one.
+
+**The control replicates disagree with each other by more than any effect these arms could
+show.** `repl-det-a` and `repl-det-b` are byte-identical runs at the same seed. One finished
+healthy (final core share 0.0152) and the other took over (0.8131). On the ramp readouts
+this amendment introduced:
+
+| readout | replicate A | replicate B |
+|---|---|---|
+| `core_gain_t0`, step 200 → 4000 | 1.466 → 2.028 (**+0.56**) | 1.339 → 2.981 (**+1.64**) |
+| `delta_ratio_t0` | 1.792 → 2.241 (**+0.45**) | 1.284 → 3.116 (**+1.83**) |
+| `in_norm_t7` | 557 → 1441 (**+884**) | 536 → 1110 (**+575**) |
+| `spec/sigma_max` at step 3900 | 4.41 | 3.77 |
+
+The two controls differ by 3–4× on the ramps. The amendment above said in advance that "a
+trend difference smaller than the control pair's own spread is not readable", and the spread
+turned out to swamp everything. With a control that takes over in one run of two, a single
+surviving M0 is a coin flip. Running the arms would have spent 70 minutes of GPU to produce
+a number that could not be interpreted, so they were stopped.
+
+**This is not a negative result about iteration 0.** It is a statement that the experiment
+could not be run in that configuration. Prediction P4 was scored, offline and at zero GPU
+cost, and it held: on the unclipped control a `core_gain_clip` of 1.5 would have bound on
+40.9 % of pre-onset steps at t = 0 and **0.0 %** at t = 2..7, before or after onset, so the
+known cure never acted on the later iterations.
+
+**What unblocks it:** a bit-reproducible configuration now exists
+([`the result`](../results/2026-08-23-morph-bit-reproducible.md)). Re-run these arms with
+`training.deterministic=true`, `model.use_kernels=false` and the reduced batch, with the
+control re-measured in the SAME configuration — its takeover base rate and ramp spread do
+not transfer from the fast configuration. That is the first experiment the reproducible
+mode should be spent on.
