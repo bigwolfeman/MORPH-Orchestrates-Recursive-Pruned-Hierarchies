@@ -1230,6 +1230,10 @@ def main(cfg: DictConfig) -> None:
     grad_clip = float(getattr(tr, "grad_clip", 1.0))
     eval_every = int(getattr(tr, "eval_every", 500))
     ckpt_every = int(getattr(tr, "ckpt_every", 2500))
+    # Rolling pre-onset capture (see the ring buffer in the training loop). 0 = off.
+    _roll_every = int(getattr(tr, "ckpt_rolling_every", 0))
+    _roll_keep = max(1, int(getattr(tr, "ckpt_rolling_keep", 8)))
+    _roll_paths: list[str] = []
     gen_every = int(getattr(tr, "gen_every", 0))  # 0 = disabled
     n_eval_batches = int(getattr(tr, "n_eval_batches", 20))
     resume_path: Optional[str] = getattr(tr, "resume", None)
@@ -2631,6 +2635,25 @@ def main(cfg: DictConfig) -> None:
             ck_path = os.path.join(ckpt_dir, f"step_{step}.pt")
             save_checkpoint(ck_path, step, model, optimizer, scaler, pruning, next_step=step + 1)
             print(f"  Checkpoint: {ck_path}")
+
+        # ── Rolling pre-onset capture ─────────────────────────────────────
+        # A ring buffer of recent checkpoints. Its purpose is a state saved just BEFORE a
+        # failure, so the failure can be replayed from it on demand instead of waited for:
+        # in the deterministic configuration a resume continues the same trajectory, so a
+        # pre-onset checkpoint turns a thousand-step wait into a short, repeatable audit.
+        # Anything the abort guards write is a normal file and is never rotated away.
+        if _roll_every > 0 and step % _roll_every == 0 and step > 0:
+            _rp = os.path.join(ckpt_dir, f"ROLL_step_{step}.pt")
+            save_checkpoint(_rp, step, model, optimizer, scaler, pruning, next_step=step + 1)
+            _roll_paths.append(_rp)
+            while len(_roll_paths) > _roll_keep:
+                _old = _roll_paths.pop(0)
+                try:
+                    os.remove(_old)
+                except OSError as _e:
+                    print(f"  [roll] could not remove {_old}: {_e}", flush=True)
+            print(f"  [roll] {_rp}  (keeping {len(_roll_paths)} of the last "
+                  f"{_roll_keep} × {_roll_every} steps)", flush=True)
 
         # ── Reset step timer ───────────────────────────────────────────────
         # Anchor the next step's _dt here, AFTER logging/eval/gen/ckpt, so those

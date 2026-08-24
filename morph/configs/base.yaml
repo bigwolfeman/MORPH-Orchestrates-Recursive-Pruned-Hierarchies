@@ -196,6 +196,12 @@ training:
   abort_core_share_fraction: 0.3
   abort_core_share_warmup: 200
   grad_probe_every: 0
+  # Rolling pre-onset checkpoint capture: save every N steps and keep only the last K,
+  # so the survivors bracket whatever the run does next. Paired with abort_block_gain /
+  # abort_core_share this leaves a state saved just BEFORE the failure, which in the
+  # deterministic configuration replays the failure on demand. 0 = off. ~2.4 GB each.
+  ckpt_rolling_every: 0
+  ckpt_rolling_keep: 8
   # Optional local JSONL mirror of the probe (one object per probed step). null = wandb
   # only. Set it per-run; the onset analysis reads this file rather than the wandb API.
   grad_probe_path: null
