@@ -69,8 +69,30 @@ def _scan(path: str, rx) -> list[tuple[int, float]]:
 
 def fires(rows: list[tuple[int, float]], thr: float, window: int, frac: float,
           gate: list[bool] | None = None) -> int | None:
-    """First step at which more than `frac` of the trailing `window` probed steps exceed
-    `thr`. `gate` masks steps that do not qualify (the r2 floor for the block gain)."""
+    """First step at which more than `frac` of the trailing `window` TRAINING STEPS exceed
+    `thr`. `gate` masks steps that do not qualify (the r2 floor for the block gain).
+
+    `window` is in training steps, not in probed samples, and the two are the same thing
+    ONLY when `grad_probe_every` is 1 — which is what the shipped guard forces. An arm
+    probed every 25 steps has 1/25 as many samples, so applying the guard's window of 200 to
+    200 SAMPLES would emulate a 5000-step window and report a firing step 3275 steps late.
+    Measured on a35-ctrl: 4975 the wrong way, 1650 the right way.
+    """
+    cadence = 1
+    if len(rows) >= 3:
+        deltas = [rows[i + 1][0] - rows[i][0] for i in range(len(rows) - 1)]
+        cadence = max(1, min(deltas))
+    n_samples = window // cadence
+    if n_samples < 20:
+        # REFUSE rather than report. The rule is "more than `frac` of a `window`-step
+        # stretch", and with only a handful of samples in that stretch the threshold is
+        # 3-of-8 rather than 60-of-200 — a different, far noisier criterion that fires
+        # hundreds of steps early. Measured on the alpha_cap 3.5 arms, probed every 25:
+        # emulating the 200-step window with 8 samples put the control at 1325 and one arm
+        # at 175. The firing step is only meaningful at grad_probe_every=1, which is what
+        # the shipped guard forces.
+        return None
+    window = n_samples
     buf: list[bool] = []
     for i, (step, v) in enumerate(rows):
         ok = v is not None and v > thr and (gate is None or gate[i])

@@ -360,6 +360,7 @@ spectral cap DOES cure the takeover.
 | block-gain fit r2 | 0.898 | 0.161 |
 | block-gain criterion fires | 1760 | **never** |
 | core-share criterion fires | 1788 | **never** |
+| `sigma_max` at step 1800 | 3.30 | 1.50 |
 | train loss at 1800 | 5.1289 | 5.1348 |
 | outcome | aborted at 1866 | ran to 2100 |
 
@@ -383,18 +384,27 @@ table above), batch 12, kernels on, `ademamix_t_beta3` pinned to 20000 so every 
 an optimizer schedule. Scored at a common step 2050 by the rule fixed in the RCA: TAKEN OVER
 = core share above 0.5 on more than 30 % of the last 50 probed steps.
 
-| arm | what it constrains | share fires | block gain | end share | val CE min | val CE @2000 | rise | verdict |
+| arm | what it constrains | end share | block gain | r2 | val CE min | val CE @2000 | rise | verdict |
 |---|---|---:|---:|---:|---:|---:|---:|---|
-| `a35-ctrl` | nothing | 1700 | 1.402 | 0.9523 | 4.7881 @1000 | 5.4116 | +0.623 | TOOK OVER |
-| `a35-spec` | soft cap 1.5, MLP | **1225** | 2.038 | 0.9979 | 5.4525 @500 | 8.1891 | +2.737 | TOOK OVER, worse |
-| `a35-cap30` | soft cap 3.0, MLP | **1225** | 2.003 | 0.9982 | 5.1054 @1000 | 7.2813 | +2.176 | TOOK OVER, worse |
-| `a35-proj15` | HARD cap 1.5, MLP | 1625 | 1.659 | 0.9529 | 4.8084 @1000 | 8.3046 | +3.496 | TOOK OVER |
-| `a35-proj15attn` | HARD cap 1.5, MLP + attention | 1675 | 1.571 | 0.9148 | **4.7418 @1500** | 5.8500 | +1.108 | TOOK OVER |
+| `a35-ctrl` | nothing | 0.9523 | 1.402 | 0.91 | 4.7881 @1000 | 5.4116 | +0.623 | TOOK OVER |
+| `a35-spec` | soft cap 1.5, MLP | 0.9979 | 2.038 | 0.97 | 5.4525 @500 | 8.1891 | **+2.737** | TOOK OVER, worse |
+| `a35-cap30` | soft cap 3.0, MLP | 0.9982 | 2.003 | 0.96 | 5.1054 @1000 | 7.2813 | **+2.176** | TOOK OVER, worse |
+| `a35-proj15` | HARD cap 1.5, MLP | 0.9529 | 1.659 | 0.95 | 4.8084 @1000 | 8.3046 | **+3.496** | TOOK OVER |
+| `a35-proj15attn` | HARD cap 1.5, MLP + attention | 0.9148 | 1.571 | 0.94 | **4.7418 @1500** | 5.8500 | +1.108 | TOOK OVER |
+
+No firing STEP is quoted for these arms, on purpose. The abort criteria are defined over a
+window of consecutive TRAINING steps at `grad_probe_every=1`, which is what the guard forces
+when it is enabled; these arms probed every 25 steps to save time, so emulating a 200-step
+window gives 8 samples and a 3-of-8 threshold rather than 60-of-200 — a different and far
+noisier criterion. `lab/divergence/score_arms.py` now refuses to report a firing step when
+the cadence is too coarse for the window, rather than reporting a number that looks like the
+guard's and is not. Firing steps ARE quoted for the deterministic microcosm, which probes
+every step.
 
 Read the rows in pairs.
 
-**Soft against hard.** The two soft arms fire 475 steps EARLIER than the control and end
-2.2 to 2.7 nats above their minima. A loss-side hinge is a tug of war and it lost: it never
+**Soft against hard.** The two soft arms end 2.2 to 2.7 nats above their own minima, against
+the control's 0.62 — they are WORSE than doing nothing. A loss-side hinge is a tug of war and it lost: it never
 pinned `sigma_max` anywhere near its cap (1.49 at step 300, 2.86 at 1200, 4.26 at 1800,
 against a cap of 1.5). Once the excess is large its quadratic gradient dominates the loss
 and the model optimises the regulariser instead of the data, which is what the validation
@@ -405,8 +415,8 @@ the BEST validation CE of any arm here, 4.7418, better than the control's 4.7881
 **MLP against MLP plus attention.** Adding the CCA projections delays the fire by 50 steps
 and more than halves the CE damage. It still takes over.
 
-**None of them cures.** The best case is an intervention that costs nothing and buys
-50 steps.
+**None of them cures.** The best case is an intervention that costs nothing, reaches a
+better validation CE than the control, and still takes over.
 
 ### Why none of them could have
 
