@@ -99,9 +99,9 @@ High-level schedule:
 | Phase | Config keys |
 | --- | --- |
 | Dense masked training | `training.prune_start`, `training.prune_interval` |
-| CMS pruning | `training.target_density`, `training.cms_score_mode` |
-| MORTAR carve | `training.compact_step` |
-| ReMoE routing | `routing.route_start`, `routing.route_scope` |
+| [CMS pruning](docs/mortar-bcsr.md#cms-how-blocks-die) | `training.target_density`, `training.cms_score_mode` |
+| [MORTAR carve](docs/mortar-bcsr.md#carve-what-actually-happens) | `training.compact_step` |
+| [ReMoE routing](docs/references.md#remoe--differentiable-moe-routing) | `routing.route_start`, `routing.route_scope` |
 | [Token Superposition Training](docs/references.md#token-superposition-training-tst) | `training.tst_bag_size`, `training.tst_ratio` |
 
 Evaluation and generation use normal next-token prediction. TST is a training-only data-efficiency phase.
@@ -161,7 +161,7 @@ morph/
   configs/                  # Hydra YAML (base.yaml is recipe SoT)
 docs/
   MANIFEST.md               # docs navigator
-  mortar-bcsr.md            # MORTAR BCSR format readout
+  mortar-bcsr.md            # CMS prune + MORTAR BCSR readout
   ablation-ledger.md        # accepted / rejected / deferred
   tul-spec.md               # Thought Unpack Loop contract
   olympiad-interop.md       # PT ↔ JAX / Olympiad notes

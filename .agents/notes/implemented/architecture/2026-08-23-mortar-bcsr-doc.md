@@ -10,20 +10,19 @@ easy to confuse with CMS scoring, ReMoE, or Block-ELL.
 
 ## Decision
 
-Ship `docs/mortar-bcsr.md` as the single architecture readout for the format:
-pre/post carve storage, 128×128 geometry, buffer names, carve/forward pseudocode,
-scope, explicit “not CMS / not ReMoE / not Block-ELL,” and operator gotchas.
-Link from `docs/MANIFEST.md`. Recipe integers stay in `base.yaml`. CMS schedule
-story stays on the lifecycle figure / pruning module.
+Ship `docs/mortar-bcsr.md` as the architecture readout for the sparse MLP path:
+CMS (Taylor EMA on 16×16 tiles → 128×128 block prune under a dense mask) plus
+MORTAR BCSR (carve packing, buffers, forward). ReMoE / ternary QAT stay out;
+recipe integers stay in `base.yaml`. Lifecycle figure remains the schedule visual.
 
 ## Alternatives considered
 
 - Fold into `docs/references.md` MegaBlocks entry — rejected; MORTAR is not that paper.
-- Expand the CMS lifecycle figure caption into a full writeup — rejected; figure is
-  schedule, not format semantics.
-- Full paper-style draft — rejected; user asked for a readout, not a paper.
+- Keep CMS only on the lifecycle figure — rejected; operators need the score→mask→carve
+  hand-off next to the BCSR layout.
+- Full paper-style draft — rejected; readout, not a paper.
 
 ## Consequences
 
-- Cite `docs/mortar-bcsr.md` for “what is MORTAR.”
+- Cite `docs/mortar-bcsr.md` for “what is CMS + MORTAR.”
 - STK lineage remains under references (MegaBlocks); this doc owns MORPH packing/wiring.

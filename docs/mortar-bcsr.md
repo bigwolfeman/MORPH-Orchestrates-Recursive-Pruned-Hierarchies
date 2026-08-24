@@ -2,13 +2,48 @@
 
 **Status:** implemented (MORPH-original; no paper)  
 **Code:** `morph/model/layers/block_sparse.py`, `morph/model/sparsity.py`, `morph/sparse/stk/`  
-**Schedule companion:** [CMS lifecycle figure](figures/morph_cms_lifecycle.png) · prune policy lives in `morph/training/pruning.py`  
-**Not this doc:** CMS saliency / `prune_step_blocks`, ReMoE / `TileRouter`, ternary QAT details
+**Schedule:** [CMS lifecycle figure](figures/morph_cms_lifecycle.png) · `morph/training/pruning.py`  
+**Not this doc:** ReMoE / `TileRouter` internals, ternary QAT details
 
 MORTAR (**M**acro-**O**rchestrated **R**outing and **T**ile-**A**ligned **R**ecompaction) is
 MORPH’s post-carve sparse weight format: a **128×128 block-CSR (BCSR)** packing of an MLP
 linear, executed by the vendored MegaBlocks STK Triton kernels. It is the **only** sparse
 backend in tree. Provides a surface for routing ReMoE per tile.
+
+CMS picks which blocks survive. MORTAR packs them.
+
+---
+
+## CMS (how blocks die)
+
+CMS is the **pre-carve** topology path on the same `CMSBlockLinear`: an EMA of per-tile
+saliency, then scheduled drops of whole **128×128** blocks under a dense mask.
+
+**Score.** Default `cms_score_mode: taylor`. After every `backward` (before
+`zero_grad`), `accumulate_scores()` updates `block_score_ema` on **16×16** tiles:
+
+```
+tile score  ←  ‖ W_tile ⊙ ∇W_tile ‖_F     # Taylor; alt: grad-only or magnitude
+block_score_ema ← EMA(block_score_ema, tile score)
+```
+
+Under ternary QAT, grads come from the smooth shadow leaf (STE), not the discrete forward weight.
+
+**Prune.** From `prune_start`, every `prune_interval` steps, `prune_step_blocks`:
+
+```
+pool 8×8 tile EMAs → one score per 128×128 block
+drop ~prune_rate of lowest-score ALIVE blocks   # global top-k
+constraints: ≥1 block kept per block-row; optional protection never drops
+expand deaths → 16×16 tile mask (exactly block-aligned)
+apply_prune_mask() every step so dead tiles (+ grads) stay zero
+```
+
+Still **dense** `F.linear` until carve — only the mask is sparse. Stops when density ≤
+`target_density`. Orchestration: `PruningSchedule.step` in `pruning.py`.
+
+**Hand-off.** `carve()` at `compact_step` reads that block-aligned mask and packs survivors
+into MORTAR BCSR (next sections). Recipe integers stay in `morph/configs/base.yaml`.
 
 ---
 
@@ -18,10 +53,10 @@ A `nn.Linear`-shaped layer (`CMSBlockLinear`, wrapped as `MortarLinear`) has two
 
 | Phase | Storage | Matmul |
 |---|---|---|
-| Pre-carve | dense `weight [out, in]` | `F.linear` (cuBLAS) |
+| Pre-carve | dense `weight [out, in]` + CMS prune mask | `F.linear` (cuBLAS) |
 | Post-carve | `mortar_data [nnz, 128, 128]` + BCSR index buffers | `stk_dds` (Triton) |
 
-CMS pruning (separate piece) zeroes **128×128** blocks in the dense matrix while training.
+CMS zeroes **128×128** blocks in the dense matrix while training.
 `carve()` runs once at `compact_step`: it **packs the surviving blocks** into BCSR and
 **deletes** the dense `weight`. Topology is frozen after that.
 
@@ -46,7 +81,8 @@ dense [out × in]                 after carve
 - **Block grid:** `Rb = out/128`, `Cb = in/128`.
 - **`nnz`:** number of kept blocks = `mortar_data.shape[0]`.
 - **Density (post-carve):** `nnz / (Rb · Cb)`.
-- **Saliency tiles (CMS only):** 16×16 — eight-by-eight of them make one 128×128 block. Scoring is not part of the BCSR format; carve consumes a **block** mask.
+- **CMS saliency tiles:** 16×16 — eight-by-eight of them make one 128×128 block. Carve
+  consumes the **block** mask CMS produced (§ CMS).
 
 ---
 
@@ -144,8 +180,10 @@ Attention, embeddings, and norms are not MORTAR.
 
 | Thing | Relation |
 |---|---|
-| **CMS prune / Taylor saliency** | Chooses *which* blocks die **before** carve. MORTAR only packs what’s left. |
-| **ReMoE / TileRouter** | Activation MoE over `d_ff` **clusters** after SiLU·up. Orthogonal to which weight blocks exist. Arms after `route_start`. MORTAR does provide the map for the TileRouter.|
+| **ReMoE / TileRouter** | Activation MoE over `d_ff` **clusters** after SiLU·up. Orthogonal to which weight blocks exist. Arms after `route_start`. MORTAR supplies the tile map the router selects over. |
+| **Block-ELL** | Removed legacy sparse backend. MORTAR BCSR + STK only. |
+
+CMS is in this doc (§ CMS): it chooses *which* blocks die; MORTAR packs what’s left.
 
 ---
 
@@ -155,9 +193,8 @@ Attention, embeddings, and norms are not MORTAR.
    `density ≈ 1.0`. You still have “BCSR,” but it’s a dense matrix in sparse clothing.
    Trust `[prune] density=` logs before claiming 0.25.
 2. **`training.sparse_backend`** must be MORTAR (or unset). Anything else raises.
-3. Miss **`accumulate_scores` between `backward` and `zero_grad`** and saliency is a
-   silent no-op — that hurts *prune*, not the BCSR format itself, but it is why
-   carve often freezes a still-dense model.
+3. Miss **`accumulate_scores` between `backward` and `zero_grad`** and CMS saliency is a
+   silent no-op — prune never learns; carve often freezes a still-dense model.
 
 Recipe step numbers (`prune_start`, `compact_step`, `target_density`) live in
 `morph/configs/base.yaml` — not restated here.
@@ -168,10 +205,10 @@ Recipe step numbers (`prune_start`, `compact_step`, `target_density`) live in
 
 | Path | Role |
 |---|---|
-| `morph/model/layers/block_sparse.py` | `CMSBlockLinear`, `carve`, `_forward_mortar`, buffers |
+| `morph/model/layers/block_sparse.py` | `CMSBlockLinear` (score, prune, carve, `_forward_mortar`) |
 | `morph/model/sparsity.py` | `MortarLinear` wrapper |
 | `morph/model/transformer.py` | `_SwiGLUMortar` wiring |
-| `morph/training/pruning.py` | when `carve()` fires; MORTAR-only guard |
+| `morph/training/pruning.py` | CMS schedule: score / prune / carve / route gates |
 | `morph/sparse/stk/` | vendored STK Matrix, `stk_dds`, Triton kernels |
 
 Ledger acceptance of the 0.25 deploy path: [ablation-ledger.md](ablation-ledger.md) row **MORTAR-0.25**.

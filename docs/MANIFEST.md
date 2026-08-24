@@ -5,7 +5,7 @@ Top-level navigation for project documentation.
 ## Architecture & Design
 
 - [Paper references and MORPH usage notes](references.md)
-- [MORTAR BCSR (sparse MLP format)](mortar-bcsr.md)
+- [MORTAR BCSR + CMS (sparse MLP path)](mortar-bcsr.md)
 - [Runtime invariants (BPTT, kernels, compile, phases)](../lab/runtime-invariants.md)
 - [Ablation ledger (accepted / rejected / deferred)](ablation-ledger.md)
 - [TUL — Thought Unpack Loop specification](tul-spec.md)
