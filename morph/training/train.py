@@ -1663,9 +1663,31 @@ def main(cfg: DictConfig) -> None:
             print("  [opt] resume_fresh_optimizer=True → FRESH optimizer (momentum starts at "
                   "zero; topology+weights+RNG restored). Fork-continue mode.", flush=True)
         else:
+            # torch's load_state_dict replaces param_groups WHOLESALE with the saved
+            # ones, hyperparameters included. Every optimizer setting a resume passes on
+            # the command line is therefore silently reverted to whatever the checkpoint
+            # was written with, and only `lr` survives because the scheduler rewrites it
+            # each step. Found 2026-08-24: an arm resuming with ademamix_alpha_cap=1.0
+            # against a checkpoint written at 3.5 came out BIT-IDENTICAL to the control.
+            #
+            # So snapshot the hyperparameters of the freshly-built (config-derived)
+            # optimizer, let load_state_dict bring in the moment/EMA tensors, then put the
+            # configured hyperparameters back and say which ones moved.
+            _cfg_hp = [{k: v for k, v in g.items() if k != "params"}
+                       for g in optimizer.param_groups]
             optimizer.load_state_dict(_opt_state)
+            _changed = {}
+            for _g, _want in zip(optimizer.param_groups, _cfg_hp):
+                for _k, _v in _want.items():
+                    if _g.get(_k) != _v:
+                        _changed.setdefault(_k, (_g.get(_k), _v))
+                    _g[_k] = _v
             _n_restored = sum(len(g["params"]) for g in optimizer.param_groups)
             print(f"  [opt] optimizer state restored ({_n_restored} param tensors)", flush=True)
+            if _changed:
+                print("  [opt] re-applied config hyperparameters over the checkpoint's: "
+                      + ", ".join(f"{k} {a}→{b}" for k, (a, b) in sorted(_changed.items())),
+                      flush=True)
         # MEMORY: optimizer.load_state_dict deep-copies into the live optimizer's tensors;
         # the checkpoint copy is a dead duplicate (~1.7GB on GPU for this model) that
         # otherwise lingers for the whole run (a local held by the train() frame). Dropping
