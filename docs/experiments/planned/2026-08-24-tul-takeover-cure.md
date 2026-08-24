@@ -259,6 +259,27 @@ Falsifier: if this arm turns around like the rest, then breaking the INPUT degen
 enough and the collapse is being generated inside the loop, which points at the core's own
 attention over slots rather than at what it is fed.
 
+## P13 and P14 — written 2026-08-24 15:40, arms launched 15:40
+
+P12 held: `b10-slotembed` ends at core share 0.0223 and block gain 1.052 against a control
+at 0.9999 and 2.445, with a monotone validation CE finishing at its own minimum, 0.78 nats
+below the control's best. Two arms follow, both launched before either reported.
+
+P13. **The other seed.** The same arm at `training.seed=0`, 4000 steps. The control is NOT
+     re-run: at `ademamix_alpha_cap` 3.5 the failure is 5 of 5 across this work and the
+     historical record, so the prior for an arm holding by chance is small. Prediction: it
+     holds — end core share below 0.1 and validation CE at 3500 within 0.15 nats of its own
+     minimum.
+
+P14. **Which half of the cure works.** `per_slot_embed_std: 0.0` keeps the per-index
+     PARAMETERS and removes the jitter, so the forward at step 0 is identical to the shared
+     version and the rows have to learn to differ. Prediction, and it is a genuine open
+     question rather than a confident one: it holds too, but later and with less CE gain
+     than the jittered arm, because a symmetric init is a saddle the optimizer has to be
+     pushed off rather than a barrier. If it fails outright, the cure is the broken symmetry
+     at init and not the added capacity, which would make a cheaper fix available — jitter
+     the shared `E_slot` per slot without adding parameters at all.
+
 ## Risks
 
 * n = 1 per arm. Bit-reproducibility makes the microcosm pair a controlled comparison, not
