@@ -3,12 +3,14 @@
 
 Six panels, in the order the argument is made:
 
-  A  the map barely changes, its directions align  — operator vs gradient on the onset ladder
-  B  the cotangent concentrates                    — effective positions, slots vs tokens
-  C  what has to shrink, and by how much           — cap sweep, by family of core linear
-  D  the cure holds the gain below 1               — deterministic microcosm, control vs cure
-  E  the harm, and its absence                     — validation CE, control vs cure
-  F  the level of sigma_max is not the criterion   — sigma_max history across four runs
+  A  the loop stops separating the slot states  — effective rank per loop iteration, by rung
+  B  the flip leads the symptom                 — rank ratio across the loop vs the core share
+  C  the cotangent concentrates                 — effective positions, slot path vs token path
+  D  the map barely changes, directions align   — operator vs gradient on the onset ladder
+  E  the spectral gap does not open             — sigma_1/sigma_2, why a norm cap had no target
+  F  the microcosm cure holds the gain below 1  — deterministic pair, control vs cure
+  G  the harm is a turnaround                   — validation CE, every arm
+  H  the level is not the criterion, the rate is — sigma_max history across four runs
 
 COLOUR IS NEVER THE ONLY CHANNEL: every series carries its own line style and marker, and
 the two arms of every pair are solid versus dotted.
@@ -68,7 +70,7 @@ def panel_a(ax, path, ctrl_probe):
             label="alignment across the 6 blocks")
     ax.axhline(1.0, color=OI["black"], lw=0.8, ls=":")
     ax.set_xlabel("step"); ax.set_ylabel("gain (dimensionless)")
-    ax.set_title("A  the map barely changes;\nits directions align", fontsize=9)
+    ax.set_title("D  the map barely changes;\nits directions align", fontsize=9)
     ax.legend(fontsize=7, loc="upper left")
 
 
@@ -83,7 +85,7 @@ def panel_b(ax, slots_path, tokens_path):
         ax.plot(xs, ys, label=lab, **style)
     ax.set_yscale("log")
     ax.set_xlabel("step"); ax.set_ylabel("effective positions at core block 0")
-    ax.set_title("B  the cotangent concentrates\n(same weights, both paths)", fontsize=9)
+    ax.set_title("C  the cotangent concentrates\n(same weights, both paths)", fontsize=9)
     ax.legend(fontsize=7)
 
 
@@ -104,9 +106,56 @@ def panel_c(ax, gap_path):
     ax.plot(steps, worst, color=OI["orange"], ls="--", marker="s", ms=4, label="worst gap")
     ax.axhline(1.0, color=OI["black"], lw=0.8, ls=":")
     ax.set_xlabel("step"); ax.set_ylabel("sigma_1 / sigma_2 of a core linear")
-    ax.set_title("C  the spectral GAP does not open\n(so the norm cure had no target)",
+    ax.set_title("E  the spectral GAP does not open\n(so the norm cap had no target)",
                  fontsize=9)
     ax.legend(fontsize=7)
+
+
+def panel_state(ax, path):
+    """The headline: what the loop DOES to the slot states, per iteration.
+
+    Effective rank of the 50 valid slot states in 1024 dimensions. Healthy rungs rise across
+    the loop; the sick ones fall. The sign flip is the earliest indicator in the programme.
+    """
+    if not os.path.exists(path):
+        return
+    rows = json.load(open(path))
+    styles = [("-", "o", OI["blue"]), ("-", "s", OI["sky"]), ("-", "^", OI["green"]),
+              ("--", "D", OI["orange"]), (":", "x", OI["vermillion"]),
+              (":", "+", OI["purple"])]
+    for r, (ls, mk, c) in zip(rows, styles):
+        pi = r["state"]["per_iter"]
+        ax.plot([p["iter"] for p in pi], [p["eff_rank"] for p in pi],
+                ls=ls, marker=mk, color=c, ms=4, lw=1.7, label=f"step {r['step']}")
+    ax.set_xlabel("core loop iteration"); ax.set_ylabel("effective rank of 50 slot states")
+    ax.set_title("A  the loop stops separating\nthe slot states", fontsize=9)
+    ax.legend(fontsize=6.5, ncol=2)
+
+
+def panel_flip(ax, state_path, ctrl_probe):
+    """The sign flip against the symptom it precedes."""
+    if not os.path.exists(state_path):
+        return
+    rows = json.load(open(state_path))
+    steps = [r["step"] for r in rows]
+    ratio = [r["state"]["per_iter"][-1]["eff_rank"] / r["state"]["per_iter"][0]["eff_rank"]
+             for r in rows]
+    share = [ctrl_probe.get(s, {}).get("preclip/core", float("nan"))
+             / max(ctrl_probe.get(s, {}).get("preclip/total", 1.0), 1e-9) for s in steps]
+    ax.plot(steps, ratio, color=OI["blue"], ls="-", marker="o", ms=5, lw=2,
+            label="rank out / rank in")
+    ax.axhline(1.0, color=OI["black"], lw=0.9, ls=":")
+    ax.annotate("above 1: the loop separates\nbelow 1: the loop collapses", (steps[0], 1.0),
+                fontsize=7, textcoords="offset points", xytext=(2, 4))
+    ax2 = ax.twinx()
+    ax2.plot(steps, share, color=OI["vermillion"], ls="--", marker="x", ms=5, lw=1.6,
+             label="core share")
+    ax2.set_ylabel("core share of the gradient")
+    ax.set_xlabel("step"); ax.set_ylabel("slot-state rank ratio across the loop")
+    ax.set_title("B  the flip leads the symptom", fontsize=9)
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, fontsize=7, loc="upper left")
 
 
 def panel_d(ax, ctrl_probe, cure_probe, upto):
@@ -118,7 +167,7 @@ def panel_d(ax, ctrl_probe, cure_probe, upto):
         ax.plot(ks, v, label=lab, **s)
     ax.axhline(1.0, color=OI["black"], lw=0.8, ls=":")
     ax.set_xlabel("step"); ax.set_ylabel("block backward gain (median of 25)")
-    ax.set_title("D  deterministic microcosm\nseed 0, batch 6", fontsize=9)
+    ax.set_title("F  deterministic microcosm\nseed 0, batch 6", fontsize=9)
     ax.legend(fontsize=7, loc="upper left")
 
 
@@ -132,7 +181,7 @@ def panel_e(ax, arms):
         lo = min(pts, key=lambda t: t[1])
         ax.plot([lo[0]], [lo[1]], marker="v", ms=8, color=style["color"], ls="none")
     ax.set_xlabel("step"); ax.set_ylabel("validation CE (nats)")
-    ax.set_title("E  the harm is a turnaround\ntriangle = each arm's own minimum", fontsize=9)
+    ax.set_title("G  the harm is a turnaround\ntriangle = each arm's own minimum", fontsize=9)
     ax.legend(fontsize=7)
 
 
@@ -154,7 +203,7 @@ def panel_f(ax, hist_path, cure_probe_log):
         ax.plot(xs, ys, label=lab, lw=1.7, markevery=max(1, len(xs) // 12), **st_)
     ax.set_xscale("log")
     ax.set_xlabel("step (log)"); ax.set_ylabel("sigma_max of the core MLP linears")
-    ax.set_title("F  the LEVEL is not the criterion,\nthe RATE is", fontsize=9)
+    ax.set_title("H  the LEVEL is not the criterion,\nthe RATE is", fontsize=9)
     ax.legend(fontsize=7, loc="upper left")
 
 
@@ -168,12 +217,14 @@ def main():
     det_ctrl = load_probe(f"{S}/phase1/capture.jsonl")
     det_cure = load_probe(f"{S}/phase1/rca/spec_scratch.jsonl")
 
-    fig, axes = plt.subplots(2, 3, figsize=(16.5, 8.6))
-    panel_a(axes[0][0], f"{C}/ladder.json", det_ctrl)
-    panel_b(axes[0][1], f"{C}/rank_slots.json", f"{C}/rank_tokens.json")
-    panel_c(axes[0][2], f"{C}/gap.json")
-    panel_d(axes[1][0], det_ctrl, det_cure, 2100)
-    panel_e(axes[1][1], [
+    fig, axes = plt.subplots(2, 4, figsize=(21.5, 8.6))
+    panel_state(axes[0][0], f"{C}/state.json")
+    panel_flip(axes[0][1], f"{C}/state.json", det_ctrl)
+    panel_b(axes[0][2], f"{C}/rank_slots.json", f"{C}/rank_tokens.json")
+    panel_a(axes[0][3], f"{C}/ladder.json", det_ctrl)
+    panel_c(axes[1][0], f"{C}/gap.json")
+    panel_d(axes[1][1], det_ctrl, det_cure, 2100)
+    panel_e(axes[1][2], [
         ("control", f"{C}/a35-ctrl.log", CTRL),
         ("soft cap 1.5", f"{C}/a35-spec.log",
          dict(color=OI["purple"], ls="--", marker="^", lw=1.5, ms=4)),
@@ -185,7 +236,7 @@ def main():
         ("slots 128, batch 10", f"{C}/b10-slots128.log",
          dict(color=OI["green"], ls="-", marker="D", lw=1.8, ms=4)),
     ])
-    panel_f(axes[1][2], f"{C}/sigma_hist.json", None)
+    panel_f(axes[1][3], f"{C}/sigma_hist.json", None)
     for row in axes:
         for ax in row:
             ax.grid(alpha=0.25, lw=0.5)
