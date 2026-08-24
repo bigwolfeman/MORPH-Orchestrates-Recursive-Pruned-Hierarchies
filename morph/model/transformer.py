@@ -1429,7 +1429,12 @@ class MORPHTransformer(nn.Module):
                 self._jac_capture.append({
                     "h": h.detach(), "e": e.detach(), "inj": inj.detach(),
                     "ret_state": None if ret_state is None else ret_state.detach(),
-                    "iter_idx": t, "active": active.detach(),
+                    # `active & slot_valid`, never `active` alone. A pad slot enters the
+                    # loop at h = 0 (gather_valid zeroes it) and depths is 1 there, so it is
+                    # "active" at t = 0 — and an RMSNorm at h = 0 has a Jacobian of order
+                    # 1/eps, which puts the top singular direction entirely in the pad
+                    # subspace and returns a sigma of ~1e6 that means nothing. Measured.
+                    "iter_idx": t, "active": (active & layout.slot_valid).detach(),
                 })
             do_ckpt = self.training and (t - n_nograd) < n_ckpt
             if t < n_nograd:

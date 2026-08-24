@@ -57,8 +57,13 @@ class JacobianResult:
     iter_idx: int
     sigma_step: float
     """sigma_max(J) of the WHOLE core step (injection + all n_core blocks)."""
+    rms_step: float = float("nan")
+    """Typical gain ||J||_F / sqrt(n) of the WHOLE core step — the gain a generic
+    direction sees, which is what the realized backward gain measures."""
     sigma_blocks: list[float] = field(default_factory=list)
     """sigma_max(J) of each core block on its own, at that block's live input."""
+    rms_blocks: list[float] = field(default_factory=list)
+    """Typical gain of each core block on its own."""
     rel_change: float = float("nan")
     """|sigma_k - sigma_{k-1}| / sigma_k on the last power iteration — convergence."""
     n_iter: int = 0
@@ -71,13 +76,36 @@ class JacobianResult:
             p *= s
         return p
 
+    @property
+    def rms_block_gain(self) -> float:
+        """Geometric mean of the per-block typical gains — the operator-side counterpart
+        of `preclip/core_block_gain`, which fits one uniform gain across the blocks."""
+        if not self.rms_blocks:
+            return float("nan")
+        p = 1.0
+        for s in self.rms_blocks:
+            p *= max(s, 1e-30)
+        return p ** (1.0 / len(self.rms_blocks))
 
-def _power_iterate(fn, h0: Tensor, mask: Tensor, n_iter: int,
-                   seed: int) -> tuple[float, float]:
-    """sigma_max of `d fn / d h` at `h0`, restricted to the subspace `mask` selects.
 
-    `fn` must map a tensor shaped like `h0` to a tensor shaped like `h0`. Returns
-    `(sigma, rel_change_on_last_iteration)`. `mask` broadcasts against `h0`.
+def _jacobian_stats(fn, h0: Tensor, mask: Tensor, n_iter: int, seed: int,
+                    n_probe: int = 8) -> tuple[float, float, float]:
+    """Spectral norm AND typical gain of `d fn / d h` at `h0`, restricted to `mask`.
+
+    Returns `(sigma_max, rel_change_on_the_last_power_iteration, rms_gain)`.
+
+    Both numbers are needed and they answer different questions. `sigma_max` is the
+    WORST-CASE amplification over all directions; a residual block can carry a large one
+    in a direction the data never occupies (a slot whose carrier norm is small makes the
+    RMSNorm Jacobian large there), so on its own it over-reads. `rms_gain` is
+    `sqrt(E ||J v||^2 / ||v||^2)` over isotropic `v`, i.e. `||J||_F / sqrt(n)`, the gain a
+    TYPICAL direction sees — and the realized backward gain the trainer logs is a typical
+    direction, not the worst one. `sigma_max >= rms_gain` always; the two together say
+    whether an expansive direction exists and whether the operator is expansive on
+    average.
+
+    `fn` must map a tensor shaped like `h0` to a tensor shaped like `h0`. `mask`
+    broadcasts against `h0`.
     """
     h = h0.detach().float().requires_grad_(True)
     y = fn(h)
@@ -107,7 +135,7 @@ def _power_iterate(fn, h0: Tensor, mask: Tensor, n_iter: int,
         s = float(jv.norm())
         prev, sigma = sigma, s
         if s < 1e-20:                      # the map annihilates this direction
-            return 0.0, 0.0
+            return 0.0, 0.0, 0.0
         (w,) = torch.autograd.grad(y, h, grad_outputs=jv, retain_graph=True)
         w = w * mask
         wn = w.norm()
@@ -116,7 +144,20 @@ def _power_iterate(fn, h0: Tensor, mask: Tensor, n_iter: int,
         v = w / wn
         if prev == prev:                   # not NaN → we have two iterates to compare
             rel = abs(sigma - prev) / max(sigma, 1e-20)
-    return sigma, rel
+
+    # Typical gain: Hutchinson over isotropic directions inside the mask. n is the number
+    # of UNMASKED coordinates, which is what the estimate is normalised by.
+    n_free = float(mask.expand_as(h0).sum())
+    acc = 0.0
+    for k in range(max(1, n_probe)):
+        gk = torch.Generator(device="cpu").manual_seed(seed + 9973 * (k + 1))
+        p = torch.randn(h0.shape, generator=gk).to(device=h0.device, dtype=torch.float32)
+        p = p * mask
+        (jp,) = torch.autograd.grad(g, u, grad_outputs=p, retain_graph=True)
+        jp = jp * mask
+        acc += float((jp * jp).sum()) / max(float((p * p).sum()), 1e-30)
+    rms = (acc / max(1, n_probe)) ** 0.5
+    return sigma, rel, rms
 
 
 class CoreJacobianProbe:
@@ -178,14 +219,16 @@ class CoreJacobianProbe:
             return out
 
         with torch.autocast("cuda", enabled=False):
-            sigma, rel = _power_iterate(step, h0, mask, self.n_iter, self.seed)
+            sigma, rel, rms = _jacobian_stats(step, h0, mask, self.n_iter, self.seed)
             blocks: list[float] = []
+            rms_blocks: list[float] = []
             if self.per_block:
-                blocks = self._block_sigmas(h0, e, inj, ret, t, mask)
-        return JacobianResult(iter_idx=t, sigma_step=sigma, sigma_blocks=blocks,
+                blocks, rms_blocks = self._block_sigmas(h0, e, inj, ret, t, mask)
+        return JacobianResult(iter_idx=t, sigma_step=sigma, rms_step=rms,
+                              sigma_blocks=blocks, rms_blocks=rms_blocks,
                               rel_change=rel, n_iter=self.n_iter)
 
-    def _block_sigmas(self, h0, e, inj, ret, t, mask) -> list[float]:
+    def _block_sigmas(self, h0, e, inj, ret, t, mask) -> tuple[list[float], list[float]]:
         """sigma_max of each core block on its own, each at the input it really sees.
 
         The blocks are walked in forward order and the live input is carried forward, so
@@ -196,6 +239,7 @@ class CoreJacobianProbe:
         np_ = root.cfg.n_prelude
         mlp_kw = {"iter_idx": t}
         out: list[float] = []
+        rms_out: list[float] = []
         with torch.no_grad():
             h = root.injection(h0.float(), e)
         for i, layer in enumerate(root.core):
@@ -208,11 +252,12 @@ class CoreJacobianProbe:
                 return _layer(hh, mlp_kwargs=mlp_kw,
                               ret_state=ret if _is_ret else None, ret_capture=cap)
 
-            s, _ = _power_iterate(one_block, h, mask, self.n_iter, self.seed + i)
+            s, _, r = _jacobian_stats(one_block, h, mask, self.n_iter, self.seed + i)
             out.append(s)
+            rms_out.append(r)
             with torch.no_grad():
                 h = one_block(h.float()).detach()
-        return out
+        return out, rms_out
 
 
 # ──────────────────────────────────────────────────────────────────────────────────────
@@ -230,7 +275,7 @@ def _gate() -> None:
     true = float(torch.linalg.svdvals(W)[0])
     h0 = torch.randn(1, 4, n, device=dev)
     mask = torch.ones(1, 4, 1, device=dev)
-    est, rel = _power_iterate(lambda h: h @ W.t(), h0, mask, 60, seed=0)
+    est, rel, _ = _jacobian_stats(lambda h: h @ W.t(), h0, mask, 60, seed=0)
     e1 = abs(est - true) / true
     g1 = e1 < 1e-4
     print(f"  [Gate1] linear map: est={est:.6f} true={true:.6f} relerr={e1:.2e} "
@@ -246,7 +291,7 @@ def _gate() -> None:
     J = torch.eye(n, device=dev) + W2.t() / 4.0
     true2 = float(torch.linalg.svdvals(J)[0])
     h0b = torch.zeros(1, 4, n, device=dev)
-    est2, rel2 = _power_iterate(lambda h: h + torch.tanh(h @ W2.t()) / 4.0, h0b, mask, 600, seed=1)
+    est2, rel2, _ = _jacobian_stats(lambda h: h + torch.tanh(h @ W2.t()) / 4.0, h0b, mask, 600, seed=1)
     e2 = abs(est2 - true2) / true2
     g2 = e2 < 1e-4
     print(f"  [Gate2] nonlinear residual at 0: est={est2:.6f} true={true2:.6f} "
@@ -257,11 +302,24 @@ def _gate() -> None:
     # position 1 and 0.5x on position 0; masking to position 0 must report 0.5, not 10.
     scale = torch.tensor([0.5, 10.0, 1.0, 1.0], device=dev).view(1, 4, 1)
     m0 = torch.tensor([1.0, 0.0, 0.0, 0.0], device=dev).view(1, 4, 1)
-    est3, _ = _power_iterate(lambda h: h * scale, torch.randn(1, 4, n, device=dev), m0, 40, seed=2)
+    est3, _, _ = _jacobian_stats(lambda h: h * scale, torch.randn(1, 4, n, device=dev), m0, 40, seed=2)
     g3 = abs(est3 - 0.5) < 1e-5
     print(f"  [Gate3] masked to a 0.5x position: est={est3:.6f} expect 0.500000 "
           f"-> {'PASS' if g3 else 'FAIL'}")
     ok &= g3
+
+    # Gate 4: the typical-gain estimator. For a linear map the exact value is
+    # ||W||_F / sqrt(n), so the Hutchinson estimate must land on it within its own
+    # sampling error (~1/sqrt(2*n_probe*n) relative, tiny here because n = 4*48).
+    Wf = torch.randn(n, n, device=dev) / 3.0
+    true4 = float(Wf.norm() / n ** 0.5)
+    _, _, rms4 = _jacobian_stats(lambda h: h @ Wf.t(), torch.randn(1, 4, n, device=dev),
+                                 mask, 3, seed=3, n_probe=32)
+    e4 = abs(rms4 - true4) / true4
+    g4 = e4 < 5e-3
+    print(f"  [Gate4] typical gain: est={rms4:.6f} true={true4:.6f} relerr={e4:.2e} "
+          f"-> {'PASS' if g4 else 'FAIL'}")
+    ok &= g4
 
     print("CORE_JACOBIAN_GATE_PASS" if ok else "CORE_JACOBIAN_GATE_FAIL")
 
