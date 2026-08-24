@@ -205,6 +205,19 @@ training:
   # Optional local JSONL mirror of the probe (one object per probed step). null = wandb
   # only. Set it per-run; the onset analysis reads this file rather than the wandb API.
   grad_probe_path: null
+  # ── Core-map Jacobian probe (morph/training/core_jacobian.py) ──
+  # sigma_max of the core map's Jacobian at the LIVE operating point. The gradient probe
+  # above measures magnitudes; this measures the OPERATOR, which is the only way to tell
+  # "the map became expansive" from "the realized direction rotated into an amplifying
+  # direction the map always had". 0 = off and nothing is constructed. It costs one extra
+  # no-grad forward plus ~2*power_iters backward passes over ONE core step, and it saves
+  # and restores the RNG so a probed run stays bit-identical to an unprobed one.
+  # A residual Jacobian has its singular values clustered near 1, so power iteration is
+  # slow here — 200 is the measured floor for a converged reading; jac/sigma_conv_t* is
+  # the convergence residual and must be read alongside the value.
+  jac_probe_every: 0
+  jac_probe_iters: [0]
+  jac_probe_power_iters: 200
   beta1: 0.9
   beta2: 0.95                     # NOTE: AdEMAMix paper recommends beta2=0.999 — set per-arm.
   # ── AdEMAMix (only used when optimizer=ademamix) ──

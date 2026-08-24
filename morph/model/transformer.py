@@ -463,6 +463,12 @@ class LMHeadMixer(nn.Module):
 
 class MORPHTransformer(nn.Module):
 
+    # Operating-point capture for the core-map Jacobian probe
+    # (morph/training/core_jacobian.py). `None` — the default — makes every capture site
+    # a Python-level no-op, so the forward is bit-identical when the probe is off. Set to
+    # a list to collect one dict per core-loop iteration.
+    _jac_capture: list | None = None
+
     def __init__(self, cfg: MORPHConfig):
         super().__init__()
         self.cfg = cfg
@@ -1172,6 +1178,15 @@ class MORPHTransformer(nn.Module):
                 # checkpoint input so backward recompute reuses it instead of rebuilding.
                 args = (h_a, e_s[:n_active], inj_s[:, :n_active])
                 rs_a = ret_state_s[:n_active] if track_ret else None
+                # Jacobian probe capture — see the twin in `_tul_core`. None by default,
+                # so this branch traces out and the forward stays bit-identical.
+                if self._jac_capture is not None:
+                    self._jac_capture.append({
+                        "h": h_a.detach(), "e": args[1].detach(), "inj": args[2].detach(),
+                        "ret_state": None if rs_a is None else rs_a.detach(),
+                        "iter_idx": t,
+                        "active": h_a.new_ones(h_a.shape[:2], dtype=torch.bool),
+                    })
 
                 # Checkpoint this grad-iteration? Only in training, and only the first n_ckpt grad
                 # iters (later ones run eager → no recompute). n_nograd iters are frozen (no_grad).
@@ -1403,6 +1418,19 @@ class MORPHTransformer(nn.Module):
         _pr_delta: list[Tensor] = []
         for t in range(total_iters):
             active = alive if halt else (depths > t)               # [B, S]
+            # ── Jacobian probe capture (morph/training/core_jacobian.py) ──────────
+            # `_jac_capture` is None by default, so this is a Python-level branch that
+            # traces out and costs nothing; the forward stays bit-identical. When a list
+            # is attached, the probe needs the EXACT operating point of one core step —
+            # the map f_theta is `_apply_core_step` bound to (e, inj, ret_state, t), and
+            # sigma_max of its Jacobian is only meaningful at the h the run actually
+            # reached. Detached: the probe rebuilds its own graph.
+            if self._jac_capture is not None:
+                self._jac_capture.append({
+                    "h": h.detach(), "e": e.detach(), "inj": inj.detach(),
+                    "ret_state": None if ret_state is None else ret_state.detach(),
+                    "iter_idx": t, "active": active.detach(),
+                })
             do_ckpt = self.training and (t - n_nograd) < n_ckpt
             if t < n_nograd:
                 with torch.no_grad():

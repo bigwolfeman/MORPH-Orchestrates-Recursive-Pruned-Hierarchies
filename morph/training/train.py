@@ -576,6 +576,50 @@ def _block_gain(acc: dict[str, float], region: str) -> dict[str, float]:
     }
 
 
+def _jacobian_probe(model, probe, x, y, layout, bag_size, iters) -> dict[str, float]:
+    """sigma_max(J_core) at this step's operating point, as a flat wandb-ready dict.
+
+    The gradient probe measures MAGNITUDES; this measures the OPERATOR. The block
+    backward gain says the core amplifies, but not whether the map became expansive or
+    whether the realized direction merely rotated into an amplifying direction the map
+    always had. Only sigma_max(J) can tell those apart (see the module docstring).
+
+    RNG NEUTRALITY IS LOAD-BEARING. The probe needs the real operating point, so it runs
+    one extra forward in TRAINING mode, which draws the Poisson slot depths and the token
+    dropout mask — that would shift every later step and destroy the bit-reproducibility
+    the whole divergence programme rests on. The CPU and CUDA generator states are saved
+    and restored around the forward, so a run with the probe on is bit-identical to the
+    same run with it off. `tests/test_core_jacobian.py::test_probe_is_rng_neutral` fails
+    if that stops being true.
+    """
+    cpu_rng = torch.get_rng_state()
+    cuda_rng = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
+    try:
+        with probe.capture() as points:
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                model(x, labels=y, bag_size=bag_size, slot_layout=layout)
+    finally:
+        torch.set_rng_state(cpu_rng)
+        if cuda_rng is not None:
+            torch.cuda.set_rng_state(cuda_rng)
+    out: dict[str, float] = {}
+    by_iter = {int(pt["iter_idx"]): pt for pt in points}
+    for t in iters:
+        pt = by_iter.get(int(t))
+        if pt is None:
+            continue
+        res = probe.measure(pt)
+        out[f"jac/sigma_t{t}"] = res.sigma_step
+        out[f"jac/sigma_conv_t{t}"] = res.rel_change
+        if res.sigma_blocks:
+            out[f"jac/sigma_blockprod_t{t}"] = res.block_product
+            for i, sb in enumerate(res.sigma_blocks):
+                out[f"jac/sigma_b{i}_t{t}"] = sb
+    if points:
+        out["jac/n_iters_captured"] = float(len(points))
+    return out
+
+
 def _preclip_probe(model) -> dict[str, float]:
     """PRE-CLIP per-region / per-block gradient norms plus the looped-core state probe.
 
@@ -1295,6 +1339,21 @@ def main(cfg: DictConfig) -> None:
     # linears. Binds module references (stable across compile/resume). penalty() calls
     # forward() at train time so the ternary STE is applied live. OFF when cap or lambda ≤ 0
     # (exact baseline, never constructed).
+    # Core-map Jacobian probe. 0 (the default) never constructs it and never runs the
+    # extra forward, so the training path is untouched. It costs one no-grad forward plus
+    # ~2*power_iters backward passes over ONE core step, so it belongs at a coarse cadence.
+    _jac_every = int(getattr(cfg.training, "jac_probe_every", 0))
+    _jac_iters = list(getattr(cfg.training, "jac_probe_iters", [0]) or [0])
+    _jac_power = int(getattr(cfg.training, "jac_probe_power_iters", 200))
+    # Core-map Jacobian probe — built only when a cadence is configured (0 = never), so
+    # the default path allocates nothing.
+    _jac_probe = None
+    if _jac_every > 0:
+        from morph.training.core_jacobian import CoreJacobianProbe
+        _jac_probe = CoreJacobianProbe(model, n_iter=_jac_power, seed=0)
+        print(f"  [jac] core-map Jacobian probe every {_jac_every} steps at core "
+              f"iterations {_jac_iters}, {_jac_power} power iterations")
+
     _spec_pen = None
     _sp_cap = float(getattr(cfg.training, "spectral_penalty_cap", 0.0))
     _sp_lam = float(getattr(cfg.training, "spectral_penalty_lambda", 0.0))
@@ -2264,14 +2323,23 @@ def main(cfg: DictConfig) -> None:
         # enough to run every step. `grad_probe_every: 0` (the default) skips all of it.
         _probe_now = _gprobe_every > 0 and step % _gprobe_every == 0
 
+        # ── Core-map Jacobian probe ───────────────────────────────────────────
+        # Run BEFORE the optimizer step so sigma_max(J) is measured at the SAME weights
+        # that produced this step's gradients — the two numbers are then comparable.
+        _jac_log: dict[str, float] = {}
+        if _jac_probe is not None and step % _jac_every == 0:
+            _jac_log = _jacobian_probe(model, _jac_probe, x, y, _layout,
+                                       phase.bag_size, _jac_iters)
+
         with _rt.region("clip"):
             # unscale_ ONCE: torch's GradScaler raises if it is called twice for the same
             # optimizer between update()s, which is why the probe lives inside this block
             # rather than before it. Between here and clip_grad_norm_ is the only place the
             # grads are both unscaled and unclipped.
             scaler.unscale_(optimizer)
-            if _probe_now:
-                _probe_log = _preclip_probe(model)
+            if _probe_now or _jac_log:
+                _probe_log = _preclip_probe(model) if _probe_now else {}
+                _probe_log.update(_jac_log)
                 wandb.log(_probe_log, step=step)
                 if _gprobe_path is not None:
                     # Local mirror. wandb is the record of truth, but a per-step probe is
