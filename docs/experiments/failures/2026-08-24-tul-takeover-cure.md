@@ -352,11 +352,18 @@ all — no spectral control is active on this arm:
 | 500 | 1.76 | 1.79 | 1.87 |
 | 1000 | 2.45 | 4.19 | 2.81 |
 | 1500 | 4.86 | 4.36 | **2.88** |
-| 2000 | 5.21 | 4.71 | — |
+| 2000 | 5.21 | 4.71 | **2.92** |
+| 3000 | 5.82 | 6.25 | **3.05** |
+| 3900 | 6.73 | 7.26 | **4.76** |
 
 Four arms spent the day trying to force `sigma_max` down and every one of them failed or
 made things worse. Fixing the slot states' input diversity brought it down as a
-CONSEQUENCE, which is what a cause looks like next to a symptom.
+CONSEQUENCE — flat at 2.9 to 3.1 through the whole window where the control climbs from 4.9
+to 5.8 — with no spectral control active. That is what a cause looks like next to a symptom.
+Note also that it does eventually climb, to 4.76 by step 3900, so this is not a run in which
+`sigma_max` stopped growing; it is one in which the growth stayed on the healthy trajectory
+(compare the healthy 20000-step run in the table above, which reaches 4.02 only at step
+19900 — this arm is faster than that, and holding).
 
 ### What this is, and what it is not
 
@@ -371,6 +378,7 @@ start from bit-identical weights.
 
 It is NOT enabled by default. One 4000-step arm is thinner evidence than this recipe's other
 standing settings carry, and the honest next step is written below rather than acted on.
+
 ## What the cap sweep says, and what it does not
 
 Projecting the core's linears onto `sigma_max <= cap` in the SICK state (`ROLL_step_1850`)
