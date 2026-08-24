@@ -135,27 +135,34 @@ def _linear_deq(code: torch.Tensor, amax: torch.Tensor, block: int = 256) -> tor
 
 # ── the measurement ──────────────────────────────────────────────────────────────────
 def param_stats(m2: torch.Tensor, nu: torch.Tensor, alpha: float, bc2: float,
-                eps: float) -> dict:
-    """Per-parameter channel decomposition.
+                eps: float, eps_inside: bool, update_clip: float) -> dict:
+    """Per-parameter channel decomposition. Sums, not means, so regions aggregate.
 
-    `slow_sq` and `n` are returned rather than an RMS so regions can be aggregated by
-    summing, which an RMS cannot be.
+    THE DENOMINATOR IS NOT A DETAIL. `eps_inside` selects between
+
+        True   denom = sqrt(nu/bc2 + eps)      floored at sqrt(eps) = 1e-4
+        False  denom = sqrt(nu/bc2) + eps      true-Adam normalisation
+
+    and MORPH runs the second (`base.yaml: ademamix_eps_inside: false`). The first version
+    of this reader hardcoded the floored form and reported that 99.2 to 100 % of core
+    coordinates sat on the floor, which would have meant the optimizer was not normalising
+    at all. It was reading a denominator the run never used. The value is taken from the
+    resolved config and printed with every row so the substitution cannot repeat silently.
+
+    `update_clip` is the trainer's per-coordinate cap on (g + alpha*m2)/denom, 5.0 here. A
+    slow channel above it is not merely large, it is saturating the clip on its own.
     """
-    denom = (nu / bc2 + eps).sqrt()
+    q = nu / bc2
+    denom = (q + eps).sqrt() if eps_inside else q.sqrt() + eps
     slow = (alpha * m2) / denom
+    # The FAST channel, now measurable rather than assumed: E[g**2] per coordinate IS
+    # nu/bc2, so RMS(g/denom) = sqrt(mean(q/denom**2)). Under eps-outside this lands at
+    # essentially 1 and the assumption in the pre-registration holds; under eps-inside it
+    # would not, which is exactly why it is computed and not asserted.
+    fast_sq = q / denom.square()
     live = nu > 0
-    # COHERENCE, as a ratio of AGGREGATES and not an aggregate of ratios:
-    #     coh = RMS(m2) / RMS_ema(g) = sqrt( sum(m2**2) / (sum(nu)/bc2) )
-    # MEASURED 2026-08-24, and the reason this is not the per-coordinate version: the
-    # per-coordinate ratio |m2|/sqrt(nu/bc2) has an unbounded tail wherever nu is small but
-    # non-zero, so its RMS is set by a handful of coordinates. On the onset ladder that
-    # version returned 5.98, 2.88, 0.92, 28.4, 1.62, 2.83, 8.30, 18.4, 39.3, 0.087, 0.068 —
-    # three orders of magnitude of noise with no relation to the onset. It is kept below as
-    # `coh_percoord` so the record shows what was rejected and why.
-    # White-noise floor: an EMA at beta3 of an uncorrelated sequence gives
-    # E[m2**2]/E[g**2] = (1-b3)/(1+b3), so coh -> 0.0224 at beta3 = 0.999.
     if live.any():
-        pc = m2[live].abs() / (nu[live] / bc2).sqrt()
+        pc = m2[live].abs() / q[live].sqrt()
         coh_pc_sq_sum = float(pc.square().sum())
         n_live = int(live.sum())
     else:
@@ -163,10 +170,15 @@ def param_stats(m2: torch.Tensor, nu: torch.Tensor, alpha: float, bc2: float,
     return {
         "n": m2.numel(),
         "slow_sq_sum": float(slow.square().sum()),
+        "fast_sq_sum": float(fast_sq.sum()),
         "m2_sq_sum": float(m2.square().sum()),
         "nu_sum": float(nu.sum()),
         "coh_pc_sq_sum": coh_pc_sq_sum,
         "n_live": n_live,
+        # counts, so they aggregate: how many coordinates the slow channel alone would
+        # push past 1 Adam unit, and past the trainer's per-coordinate clip.
+        "n_slow_gt1": int((slow.abs() > 1.0).sum()),
+        "n_slow_gt_clip": int((slow.abs() > update_clip).sum()) if update_clip else 0,
     }
 
 
@@ -177,20 +189,29 @@ def aggregate(per_param: dict[str, dict]) -> dict[str, dict]:
         for key in (region_of(name), "all", "noncore" if region_of(name) != "core" else None):
             if key is None:
                 continue
-            a = acc.setdefault(key, {"n": 0, "slow_sq_sum": 0.0, "m2_sq_sum": 0.0,
-                                     "nu_sum": 0.0, "coh_pc_sq_sum": 0.0, "n_live": 0})
-            for f in ("n", "slow_sq_sum", "m2_sq_sum", "nu_sum", "coh_pc_sq_sum",
-                      "n_live"):
+            a = acc.setdefault(key, {k: 0 if k.startswith("n") else 0.0 for k in
+                                     ("n", "slow_sq_sum", "fast_sq_sum", "m2_sq_sum",
+                                      "nu_sum", "coh_pc_sq_sum", "n_live",
+                                      "n_slow_gt1", "n_slow_gt_clip")})
+            for f in a:
                 a[f] += s[f]
     out = {}
     for k, a in acc.items():
+        n = a["n"] or 1
+        slow_rms = (a["slow_sq_sum"] / n) ** 0.5
+        fast_rms = (a["fast_sq_sum"] / n) ** 0.5
         out[k] = {
             "n": a["n"],
             "n_live": a["n_live"],
-            "slow_rms": (a["slow_sq_sum"] / a["n"]) ** 0.5 if a["n"] else 0.0,
+            "slow_rms": slow_rms,
+            "fast_rms": fast_rms,
+            # THE headline: the slow channel in units of the fast one, both measured.
+            "slow_over_fast": slow_rms / fast_rms if fast_rms else 0.0,
             "coh": (a["m2_sq_sum"] / a["nu_sum"]) ** 0.5 if a["nu_sum"] > 0 else 0.0,
             "coh_percoord": ((a["coh_pc_sq_sum"] / a["n_live"]) ** 0.5
                              if a["n_live"] else 0.0),
+            "frac_slow_gt1": a["n_slow_gt1"] / n,
+            "frac_slow_gt_clip": a["n_slow_gt_clip"] / n,
         }
     return out
 
@@ -242,7 +263,7 @@ def _model_tensors(ck: dict, names: list[str]) -> dict[str, torch.Tensor]:
 
 
 def read_checkpoint(path: str, names: list[str], helper: AdEMAMixB1Zero,
-                    want_weights: bool) -> dict:
+                    want_weights: bool, eps_inside: bool, update_clip: float) -> dict:
     ck = torch.load(path, map_location="cpu", weights_only=False)
     opt = ck["optimizer"]
     groups = opt["param_groups"]
@@ -273,11 +294,13 @@ def read_checkpoint(path: str, names: list[str], helper: AdEMAMixB1Zero,
             raise AssertionError(f"{path}: state[{idx}] -> {name}: {m2.numel()} elements, "
                                  f"parameter has {numel}")
         n_mapped += 1
-        per_param[name] = param_stats(m2, nu, alpha, bc2, eps)
+        per_param[name] = param_stats(m2, nu, alpha, bc2, eps, eps_inside,
+                                      update_clip)
 
     out = {
         "path": os.path.basename(path), "step": step, "alpha": alpha, "bc2": bc2,
-        "eps": eps, "n_mapped": n_mapped, "n_without_state": n_nostate,
+        "eps": eps, "eps_inside": eps_inside, "update_clip": update_clip,
+        "n_mapped": n_mapped, "n_without_state": n_nostate,
         "regions": aggregate(per_param),
         "per_param": {k: v for k, v in per_param.items() if region_of(k) == "core"},
     }
@@ -399,6 +422,13 @@ def main() -> int:
     model, _tul = build_model(cfg, device=a.device)
     wd = float(getattr(cfg.training, "weight_decay", 0.1))
     names = param_names_in_optimizer_order(model, wd)
+    # From the RESOLVED CONFIG, never from the checkpoint: `eps_inside` and `update_clip`
+    # are instance attributes of the optimizer, not param-group defaults, so
+    # `optimizer.state_dict()` does not carry them.
+    eps_inside = bool(getattr(cfg.training, "ademamix_eps_inside", False))
+    update_clip = float(getattr(cfg.training, "ademamix_update_clip", 0.0))
+    print(f"denominator: {'sqrt(nu/bc2 + eps)' if eps_inside else 'sqrt(nu/bc2) + eps'}"
+          f"   update_clip={update_clip}")
     helper = _deq_helper(a.device)
 
     if a.self_test:
@@ -406,7 +436,8 @@ def main() -> int:
 
     rows, prev_w, prev_d = [], None, None
     for p in paths:
-        r = read_checkpoint(p, names, helper, want_weights=a.drift)
+        r = read_checkpoint(p, names, helper, want_weights=a.drift,
+                            eps_inside=eps_inside, update_clip=update_clip)
         w = r.pop("weights")
         if a.drift and prev_w is not None:
             d = drift_between(prev_w, w, names)
@@ -431,8 +462,10 @@ def main() -> int:
         reg = r["regions"]
         dr = r.get("drift", {}).get("core", {})
         print(f"{r['path']:<24} step={r['step']:<6} alpha={r['alpha']:.2f} "
-              f"core slow_rms={reg['core']['slow_rms']:.4f} coh={reg['core']['coh']:.4f} "
-              f"| noncore slow_rms={reg['noncore']['slow_rms']:.4f} "
+              f"core s/f={reg['core']['slow_over_fast']:.4f} "
+              f"fast={reg['core']['fast_rms']:.3f} coh={reg['core']['coh']:.4f} "
+              f"gt1={reg['core']['frac_slow_gt1']:.2e} "
+              f"| noncore s/f={reg['noncore']['slow_over_fast']:.4f} "
               f"coh={reg['noncore']['coh']:.4f}"
               + (f" | dW_core={dr['norm']:.4f} share={dr['share']:.4f}"
                  if "norm" in dr else "")

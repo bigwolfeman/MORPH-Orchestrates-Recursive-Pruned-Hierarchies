@@ -456,6 +456,15 @@ autocorrelation over a window. It is computable from checkpoints that already ex
 pre-clip core share is compromised for the same class of reason — the soft-penalty arms
 already fooled it once.
 
+> **MEASURED 2026-08-24, and the proposal in the paragraph above is WRONG.** See
+> [2026-08-24-tul-optimizer-state-decomposition.md](2026-08-24-tul-optimizer-state-decomposition.md).
+> `clip_grad_norm_` rescales every gradient to a fixed global norm, so `||dW_core||` is close
+> to a constant of the schedule, and the directional autocorrelation is +0.4341 to +0.5738 at
+> EVERY rung of the onset ladder, healthy and sick alike — at 25-step spacing consecutive
+> displacements are correlated in any run. The composite spreads 1.577x across an onset that
+> moves the core share from 0.017 to 0.961. What DOES separate is gradient coherence,
+> `RMS(m2)/RMS_ema(g)`, and its core-to-non-core ratio. Post-hoc, untested out of sample.
+
 ### Stacking the levers does not help either — P15 falsified
 
 Pre-registered at 16:16, before the arm started. Three levers each help and none cures, and
@@ -888,15 +897,24 @@ one, differing only by seed — is the sharpest single piece of evidence in this
 it cost zero GPU time to obtain.
 ## What the measurements say to do next
 
-1. **Decompose the optimizer state first — it costs zero GPU-training minutes.** The
-   checkpoints on disk carry the optimizer state. Split the applied core update at rungs
-   1700 to 1866 into its `g/sqrt(v)` and `alpha * m_slow` components and project each onto
-   the actual `dW` between rungs. `m_slow` is a ~1e4-step integral of the gradient, i.e. pure
-   accumulated history, which is exactly the kind of object a SEED decides — so it is the
-   natural candidate for why `per_slot_embed` holds one seed and not the other, and for why
-   `alpha_cap` does the same. Onset timing is circumstantially consistent: the `b10` control
-   first crosses share 0.5 at step 1150, where `alpha` is about 2.5 of 3.5 on the
-   `t_alpha` 1600 ramp. Running more arms before knowing this risks wasting them.
+1. ~~**Decompose the optimizer state first.**~~ **DONE, 2026-08-24, and the answer is no.**
+   See [2026-08-24-tul-optimizer-state-decomposition.md](2026-08-24-tul-optimizer-state-decomposition.md).
+   The slow accumulator stays between 17 % and 24 % of the `g/sqrt(v)` channel across the
+   whole onset, never approaches parity, and across seven arms it is ANTI-correlated with
+   harm at spearman −0.393 — the healthiest arm carries the largest slow-channel share.
+   `alpha * m_slow` does not explain the seed dependence, and that line is closed.
+
+   Two corrections to this document came out of it. **The severity measure proposed below in
+   "the per-block gain is the wrong severity measure" does not work either**:
+   `clip_grad_norm_` pins the global norm, so `||dW_core||` is near-constant, and the
+   directional autocorrelation is +0.43 to +0.57 at EVERY rung, healthy and sick, at 25-step
+   spacing. The composite spreads 1.577x across an onset that moves the core share from
+   0.017 to 0.961. What does separate is **gradient coherence**, `RMS(m2)/RMS_ema(g)`, and
+   its core-to-non-core ratio: 1.001 to 2.103 across the ladder, spearman +0.857 against
+   harm on seven clean arms where the per-block gain gives +0.536, no inversion on
+   `bptt_depth` 2, and the only candidate of five that also ranks the three penalised arms.
+   It is POST-HOC and untested out of sample — read the source before relying on it.
+
 2. **Make the diversity STRUCTURAL rather than initial.** `per_slot_embed`'s rows are
    learnable and every slot index plays nearly the same role, so they receive nearly the same
    gradient and can re-converge — which would explain a fix that shifts the basin without
