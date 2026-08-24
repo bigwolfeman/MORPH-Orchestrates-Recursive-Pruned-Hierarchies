@@ -1,6 +1,29 @@
 # Agent Note: Explorative Modeling applies to the TUL plan vector, not to the token head
 
-Status: proposed
+Status: rejected — reader alignment measured at 1.36-1.45 (1.0 = random) and flat across the onset; the readers do not pull the plan apart
+
+> **REJECTED the same day it was written, by its own acceptance test.** The mechanism below
+> — that `h_i` is a compromise between conflicting readers — is measured and false. See
+> [../../../../docs/experiments/failures/2026-08-24-tul-reader-gradient-conflict.md](../../../../docs/experiments/failures/2026-08-24-tul-reader-gradient-conflict.md).
+> Normalised reader alignment is **1.36 to 1.45** across the whole onset, where 1.0 is K
+> independent random directions: the readers agree slightly BETTER than random, with a mean
+> pairwise cosine of +0.02, and the value is FLAT while the core share goes from 0.017 to
+> 0.961.
+>
+> The accounting below is also wrong in a way worth keeping. The slot's own label carries
+> 2.8 % of its span's LOSS WEIGHT but delivers about **half the gradient** reaching `h_i`
+> (`route_frac` 0.45 to 0.64). Loss weight is not gradient share — the direct route is one
+> projection into one coda position, while the reader route passes through attention, which
+> attenuates it. **Do not repeat the "the core is trained 97 % indirectly" claim.** It is
+> reasoning about the wrong quantity, and it is the reason this note existed.
+>
+> What is NOT refuted, and was flagged in Risks below before the test ran: the
+> across-dataset form. Under teacher forcing the next span is given, so the probe measures
+> disagreement among readers of ONE known continuation. XM's one-to-many coupling is about
+> the same state serving different continuations in different EXAMPLES. That needs a
+> data-construction experiment, not a probe, and nothing here speaks to it. Lever 3 below
+> (XM on the plan) rests on that untested form alone; levers 1 and 2 rested on the refuted
+> mechanism and should not be built on this note's reasoning.
 
 ## Problem
 

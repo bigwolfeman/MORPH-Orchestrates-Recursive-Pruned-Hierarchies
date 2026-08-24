@@ -877,13 +877,20 @@ this generative expressivity limitation entirely, as even highly scalable genera
 modeling approaches, such as diffusion and autoregression, can leave modes uncaptured when
 single predictions inside their factored procedure face many valid targets at once."
 
-**What TUL takes:** the reading that the SLOT STATE is such a single prediction. Its own
-label is 2.8 % of its span's loss weight; the other 97 % arrives as a SUM of per-reader
-attention gradients onto one vector. See
-[../.agents/notes/proposed/architecture/2026-08-24-xm-applies-to-the-plan-not-the-head.md](../.agents/notes/proposed/architecture/2026-08-24-xm-applies-to-the-plan-not-the-head.md)
-for the credit-assignment accounting, the three proposed levers and the test that has to
-pass first. The transfer is by GEOMETRY, not by the paper's literal definition — `h_i` is a
-representation and the coda downstream of it still has a softmax.
+**What TUL tried to take, and what survived.** The reading was that the SLOT STATE is such
+a single prediction: its own label is 2.8 % of its span's loss weight, so the rest must
+arrive as a SUM of per-reader attention gradients onto one vector, and a point estimate
+under conflicting demands lands at the compromise. **Measured and refuted the same day** —
+normalised reader alignment is 1.36 to 1.45 where 1.0 is random, flat across the whole
+onset, and the slot's own label delivers about HALF the gradient reaching `h_i` rather than
+3 % of it (loss weight is not gradient share). See
+[../.agents/notes/rejected/architecture/2026-08-24-xm-applies-to-the-plan-not-the-head.md](../.agents/notes/rejected/architecture/2026-08-24-xm-applies-to-the-plan-not-the-head.md)
+and [experiments/failures/2026-08-24-tul-reader-gradient-conflict.md](experiments/failures/2026-08-24-tul-reader-gradient-conflict.md).
+
+What is NOT refuted is the across-dataset form: the same slot state serving different
+continuations in different EXAMPLES. Teacher forcing hides it from any single-batch probe,
+so testing it is a data-construction problem. XM's own escape-clause sentence still applies
+to that case and to nothing else here.
 
 ---
 
