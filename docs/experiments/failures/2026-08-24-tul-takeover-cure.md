@@ -406,10 +406,32 @@ checkpoints, not inferred from an arm; the four spectral controls still failed; 
 claim about the FIX, from "the cure" to "the largest single improvement found, and still not
 enough".
 
+### Stacking the levers does not help either — P15 falsified
+
+Pre-registered at 16:16, before the arm started. Three levers each help and none cures, and
+they act on three different objects, so combining them looked like the cheapest thing left.
+`bptt_depth` 2 AND `per_slot_embed`, at seed 0 — the seed where `per_slot_embed` alone
+failed — and `alpha_cap` 3.5.
+
+| arm | seed | end share | block gain | r2 | val CE min | at | val CE end | rise |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `b10-ctrl` | 1 | 0.9999 | 2.445 | 0.97 | 4.8528 | 1500 | 5.3855 | +0.533 |
+| `s0-slotembed` | 0 | 0.9998 | 2.501 | 0.97 | **4.3929** | 3000 | 4.5115 | +0.119 |
+| `s0-stack` | 0 | 1.0000 | **2.838** | 0.98 | 4.8163 | 3000 | 4.9647 | +0.148 |
+
+It took over, with the highest per-block gain of any arm in this document, and it reached a
+WORSE best CE than `per_slot_embed` alone at the same seed — 4.8163 against 4.3929. Adding
+`bptt_depth` 2 on top cost 0.42 nats and bought nothing.
+
+So the levers are not additive. Each shortens or softens the failure on its own and putting
+two together is worse than the better one alone, which is a fact about this system and not a
+detail: it says the three are not three independent brakes on one runaway.
+
 ### What this is, and what it is not
 
-Two arms, 4000 steps each, one configuration (`alpha_cap` 3.5, batch 10), kernels on and
-therefore not bit-reproducible. One held and one did not.
+Three arms, 4000 steps each, one configuration (`alpha_cap` 3.5, batch 10), kernels on and
+therefore not bit-reproducible. One held; the other seed did not; stacking a second lever on
+top was worse than either.
 
 It also is not free of confounds. It adds `max_slots x d_model` = 65k parameters, 0.02 % of
 286M, so the arms are not iso-parameter. And the jitter at seating means the arm does not
@@ -788,13 +810,11 @@ one, differing only by seed — is the sharpest single piece of evidence in this
 it cost zero GPU time to obtain.
 ## What the measurements say to do next
 
-1. **Stack the levers that each help.** Three things now measurably delay or reduce this
-   failure and NONE of them cures it alone: `ademamix_alpha_cap` 1.0 (holds one seed of
-   three), `bptt_depth` 2 (harm 64 % lower), and `per_slot_embed` (time-to-failure doubled,
-   harm 78 % lower, CE better on both seeds). They act on three different objects — the
-   optimizer's slow-EMA term, the number of operator applications, and the state geometry —
-   so there is no reason to expect them to be redundant, and nobody has run them together.
-   That is the cheapest thing left and it is one config line.
+1. **Not stacking.** Tried, at the end of this work: `bptt_depth` 2 plus `per_slot_embed`
+   at the harder seed took over with the highest per-block gain of any arm here and reached
+   a CE 0.42 nats worse than `per_slot_embed` alone. The levers are not three independent
+   brakes on one runaway, and the next person should not spend an hour finding that out
+   again.
 2. **Separate the two things `per_slot_embed` changes.** It adds per-index parameters AND
    jitters them at seating. `per_slot_embed_std: 0.0` keeps the parameters and starts every
    row equal, so the forward at step 0 is identical to the shared version. Launched at the
