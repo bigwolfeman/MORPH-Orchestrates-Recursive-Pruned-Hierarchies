@@ -31,8 +31,8 @@ programme.
 **Giving each slot its own input embedding cures it, in the arm that was run.** One config
 key, `tul.per_slot_embed`, aimed at exactly the degeneracy above and pre-registered before it
 reported. Against a control that took over — end core share 0.9999, block gain 2.445,
-validation CE +0.533 above its own minimum — the cured arm ends at core share **0.0204**,
-block gain **1.030**, and a validation CE that is monotone for the whole run and finishes at
+validation CE +0.533 above its own minimum — the cured arm ends at core share **0.0223**,
+block gain **1.052**, and a validation CE that is monotone for the whole run and finishes at
 its own minimum. It is also the best model in this work: 4.0747 against the control's
 best-ever 4.8528, **0.78 nats better**. n = 1, 4000 steps, one seed, at a setting where the
 failure is otherwise 5 out of 5.
@@ -333,12 +333,12 @@ else: same optimizer, same batch, same schedule, same control.
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | `b10-ctrl` | 0.9999 | 2.445 | 0.97 | 4.8528 | 1500 | 5.3855 | +0.533 | TOOK OVER |
 | `b10-bptt2` | 0.9992 | 2.784 | 0.98 | 4.9124 | 1500 | 5.1046 | +0.192 | TOOK OVER |
-| **`b10-slotembed`** | **0.0204** | **1.030** | 0.36 | **4.0747** | **3500** | **4.0747** | **0.000** | **HELD** |
+| **`b10-slotembed`** | **0.0223** | **1.052** | 0.48 | **4.0747** | **3500** | **4.0747** | **0.000** | **HELD** |
 
 Its validation CE is monotone for the whole run — 5.5336, 4.9235, 4.5847, 4.4717, 4.4296,
 4.0923, 4.0747 — with the minimum at the LAST eval. It never turns around. The core ends
-holding 2.0 % of the pre-clip gradient where the control holds 100 %, and the per-block
-backward gain sits at 1.030 with a fit r2 of 0.36, which is the healthy signature (flat and
+holding 2.2 % of the pre-clip gradient where the control holds 100 %, and the per-block
+backward gain sits at 1.052 with a fit r2 of 0.48, which is the healthy signature (flat and
 noisy) rather than the geometric one.
 
 And it is not a trade. The cured arm's validation CE, 4.0747, is **0.78 nats below the

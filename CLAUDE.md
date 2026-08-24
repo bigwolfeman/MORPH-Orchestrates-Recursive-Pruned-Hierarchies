@@ -53,7 +53,7 @@ renorm), not symptom-clamping — that also preserves the β1=0 memory win + α�
 > before reaching for a spectral cap in this tree. What DID hold is upstream of the map: the
 > 50 slot states of a row sit at effective rank 1.7–4.8 in 1024 dimensions because a slot's
 > input is one shared `E_slot` plus a bag-mean, and the loop's effect on that rank flips sign
-> at the onset. `tul.per_slot_embed` (off by default, n=1) holds the arm at core share 0.0204
+> at the onset. `tul.per_slot_embed` (off by default, n=1) holds the arm at core share 0.0223
 > against the control's 0.9999 and reaches 0.78 nats better val CE.
 
 ## ⭐ TUL — Thought Unpack Loop — MERGED TO MASTER, OFF BY DEFAULT, ARMS RUN

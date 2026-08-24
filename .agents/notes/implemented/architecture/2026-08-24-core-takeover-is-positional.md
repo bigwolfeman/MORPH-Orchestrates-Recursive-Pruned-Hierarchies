@@ -25,7 +25,7 @@ holds it.
 `tul.per_slot_embed` gives each slot INDEX its own input embedding row instead of adding one
 shared `E_slot` to all of them. Against a control that took over (end core share 0.9999,
 per-block backward gain 2.445 at r2 0.97, validation CE +0.533 above its own minimum), the
-cured arm ends at core share **0.0204**, gain **1.030** at r2 0.36 — the flat healthy
+cured arm ends at core share **0.0223**, gain **1.052** at r2 0.48 — the flat healthy
 signature — and a validation CE that is monotone for the whole run and finishes at its own
 minimum, **0.78 nats below the control's best-ever value**. `sigma_max` of the core MLP came
 down as a CONSEQUENCE, 2.88 at step 1500 against the control's 4.86, with no spectral control
