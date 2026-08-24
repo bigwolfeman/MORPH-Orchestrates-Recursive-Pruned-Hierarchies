@@ -308,6 +308,34 @@ def read_checkpoint(path: str, names: list[str], helper: AdEMAMixB1Zero,
     return out
 
 
+def state_by_name(ck: dict, names: list[str], helper: AdEMAMixB1Zero,
+                  ) -> tuple[dict[str, tuple[torch.Tensor, torch.Tensor]], dict]:
+    """{parameter name: (m2, nu)} plus the schedule scalars, from one checkpoint.
+
+    The shared entry point for anything that needs the optimizer state keyed by NAME
+    rather than by torch's positional index. Parameters with no state are absent from the
+    mapping rather than present with zeros.
+    """
+    opt = ck["optimizer"]
+    groups = opt["param_groups"]
+    step = int(groups[0].get("step", ck.get("step", 0)))
+    alpha, _b2, _b3 = AdEMAMixB1Zero._sched(step, groups[0])
+    sched = {"step": step, "alpha": alpha, "eps": float(groups[0]["eps"]),
+             "bc2": 1.0 - groups[0]["betas"][1] ** step}
+    flat = [i for g in groups for i in g["params"]]
+    if len(flat) != len(names):
+        raise AssertionError(f"optimizer holds {len(flat)} params, model offers {len(names)}")
+    tensors = _model_tensors(ck, names)
+    out = {}
+    for pos, idx in enumerate(flat):
+        e = opt["state"].get(idx)
+        if e is None:
+            continue
+        name = names[pos]
+        out[name] = dequant_state(e, tensors[name].numel(), helper)
+    return out, sched
+
+
 # ── self test ────────────────────────────────────────────────────────────────────────
 def self_test(ckpt: str, names: list[str], helper: AdEMAMixB1Zero, sabotage: str) -> int:
     """Prove the map and the dequant, and FAIL when either is broken.
