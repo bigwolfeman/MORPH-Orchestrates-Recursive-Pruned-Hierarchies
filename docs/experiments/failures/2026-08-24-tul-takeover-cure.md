@@ -190,7 +190,16 @@ state; it does not touch the spectrum, so the direction to align onto is still t
 Halving the learning rate slows the walk without changing where it walks to. `alpha_cap`
 bounds one term of the optimizer's update, not the operator.
 
+One qualification, added after the interventions ran. `sigma_max` per block does rise 2.35
+to 3.23, but the RATIO `sigma_1/sigma_2` of the individual weight matrices does NOT — median
+1.069 to 1.132, worst gap FALLING. So `sigma_2` rises with `sigma_1`, and the headroom that
+opens is not a widening gap in any single map. Whatever is aligning is a property of the
+COMPOSITION and of the positions the cotangent occupies, not of one matrix's spectrum. That
+is the finding that killed every intervention below, and it is measured in the next two
+sections.
+
 Why arm A1 and not A0 is answered by the next section, which measures it.
+
 ## Where the concentration actually is: positions
 
 Power iteration converges onto a DIRECTION, and the cotangent at a core block is a sum over
@@ -236,7 +245,7 @@ It also explains, after the fact, why five feature-space interventions failed: t
 constrain what the map does to a VECTOR, and the thing that is concentrating is which
 POSITIONS carry the vector.
 
-## The cap is read off a curve, not tuned
+## What the cap sweep says, and what it does not
 
 Projecting the core's linears onto `sigma_max <= cap` in the SICK state (`ROLL_step_1850`)
 and re-measuring the operator says which family carries the amplification and how far it
