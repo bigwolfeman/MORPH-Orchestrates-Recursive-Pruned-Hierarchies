@@ -30,6 +30,13 @@ model:
   # HC residual); only fires on gain runaway (weight-shared core amplifies T× per depth).
   # Typical τ≈1.5–2.0.
   core_gain_clip: 0.0
+  # Which loop iterations the governor applies to, inclusive; -1 as the upper bound means
+  # no upper bound. (0, -1) is every iteration and is bit-identical to not having these
+  # keys. The measured per-iteration gain on the divergent control is 1.42 at t=0 and
+  # 1.08-1.13 at t=1..7, so a typical cap of 1.5 can only bind on the FIRST iteration --
+  # these keys make that testable rather than assumed.
+  core_gain_clip_iter_lo: 0
+  core_gain_clip_iter_hi: -1
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth
   # grad-iterations; later ones run eager (activations retained → no backward recompute → faster),
   # at the cost of retained activation memory. -1 = checkpoint ALL (default, bit-identical/safest).

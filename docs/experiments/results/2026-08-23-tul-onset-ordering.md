@@ -155,6 +155,22 @@ anywhere before step 1900 is 0.031.
 
 NOT implemented in `train.py` yet. This table is the evidence for the rule, not the rule.
 
+## Confound found later, on 2026-08-23: the step budget moves the optimizer schedule
+
+`base.yaml` ships `ademamix_t_beta3: null`, and null means **default to `training.steps`**
+(base.yaml line 182, resolved in `morph/training/ademamix_b1zero.py`). The β3 warmup
+horizon therefore tracks the run length silently. A 4000-step run warms the slow-EMA decay
+to full strength 25 % faster than the 5000-step run this result came from.
+
+`ademamix_t_alpha` does NOT have this problem — `tul_short.yaml` pins it at 1600.
+
+Consequence: **this run (5000 steps) is not directly comparable to any arm run at a
+different `training.steps`.** Every arm in a comparison must share one step budget, and
+the reason is the optimizer, not the data. The mediation arms in
+[`the iteration-0 test`](../planned/2026-08-23-tul-iteration0-mediation.md) and the
+Phase 0.4 replicate pair are all run at 4000 for exactly this reason; they are internally
+consistent with each other and NOT with the table above.
+
 ## What this run cannot say
 
 - **It is one run.** The Phase 0.4 replication gate has not been run — that needs two runs

@@ -231,6 +231,18 @@ class MORPHConfig:
     # shrinks the runaway-gain step that the weight-shared core amplifies T× (the β1=0
     # gain runaway mode). 0.0 = OFF (bit-identical to baseline). Typical τ≈1.5–2.0.
     core_gain_clip: float = 0.0
+    # WHICH loop iterations the governor applies to, inclusive, 0-indexed by iteration.
+    # (0, -1) — the default — means every iteration and is exactly the behaviour above.
+    # -1 as the upper bound means "no upper bound".
+    #
+    # This exists because the governor's cap is not applied where anyone assumed. Measured
+    # on the divergent control (docs/experiments/results/2026-08-23-tul-onset-ordering.md):
+    # the realized per-iteration gain is 1.422 at t=0 and 1.08–1.13 at t=1..7, so a typical
+    # τ≈1.5 can only ever bind on the FIRST iteration. Selecting the range makes that
+    # testable instead of assumed — see
+    # docs/experiments/planned/2026-08-23-tul-iteration0-mediation.md.
+    core_gain_clip_iter_lo: int = 0
+    core_gain_clip_iter_hi: int = -1
 
 
 class DiagonalInjection(nn.Module):
@@ -1183,7 +1195,7 @@ class MORPHTransformer(nn.Module):
                 # uniformly across the no_grad / checkpoint / eager branches (outside the checkpoint
                 # so the scaling lives in the outer graph). τ=0 → skipped entirely → bit-identical.
                 _tau = self.cfg.core_gain_clip
-                if _tau > 0.0:
+                if _tau > 0.0 and self._clip_applies(t):
                     _in_n = h_a.flatten(1).norm(dim=1)
                     _out_n = h_new.flatten(1).norm(dim=1)
                     _scale = torch.clamp(_tau * _in_n / (_out_n + 1e-6), max=1.0)
@@ -1237,6 +1249,17 @@ class MORPHTransformer(nn.Module):
             # function-preserving core insertion depends on.
             x = self.input_norm(x)
         return x
+
+    def _clip_applies(self, t: int) -> bool:
+        """Does the core-gain governor apply at loop iteration ``t``?
+
+        ``t`` is a Python int from the loop, so this is a trace-time constant per
+        iteration: the branch never reaches the graph and the default range keeps the
+        traced code identical to the un-ranged version.
+        """
+        lo = self.cfg.core_gain_clip_iter_lo
+        hi = self.cfg.core_gain_clip_iter_hi
+        return t >= lo and (hi < 0 or t <= hi)
 
     # ── TUL regions (docs/tul-spec.md §3) ─────────────────────────────────
     # Reached only when a `slot_layout` is passed. Every helper below is a no-op for
@@ -1374,6 +1397,7 @@ class MORPHTransformer(nn.Module):
         _probe = getattr(self, "_probe_loop", False)
         _pr_ret: list[Tensor] = []
         _pr_gain: list[Tensor] = []
+        _pr_bind: list[Tensor] = []
         _pr_in: list[Tensor] = []
         _pr_out: list[Tensor] = []
         _pr_delta: list[Tensor] = []
@@ -1390,7 +1414,7 @@ class MORPHTransformer(nn.Module):
                 h_new, rs_new = _core_step(h, e, inj, ret_state=ret_state, iter_idx=t)
 
             _tau = self.cfg.core_gain_clip
-            if _tau > 0.0:
+            if _tau > 0.0 and self._clip_applies(t):
                 # PAD SLOTS ARE EXCLUDED from the norm. The gain clip is per SAMPLE, so a
                 # row's pad slots would otherwise put the number of REAL slots in that row
                 # into the scale applied to every real slot — padding would change the
@@ -1403,6 +1427,12 @@ class MORPHTransformer(nn.Module):
                 _out_n = (h_new * _vm).flatten(1).norm(dim=1)
                 _scale = torch.clamp(_tau * _in_n / (_out_n + 1e-6), max=1.0)
                 h_new = h_new * _scale.view(-1, *([1] * (h_new.dim() - 1)))
+                if _probe:
+                    # Fraction of samples the cap actually SHRANK at this iteration.
+                    # Where a clip is applied and where it acts are different questions.
+                    _pr_bind.append((_scale < 1.0).float().mean().detach())
+            elif _probe:
+                _pr_bind.append(h.new_zeros(()))
 
             # ── gate readout (docs/tul-gate-spec.md §4) ────────────────────────
             # OUTSIDE the checkpoint / no_grad block on purpose: it then shapes the core
@@ -1461,6 +1491,7 @@ class MORPHTransformer(nn.Module):
                 "in_norm": torch.stack(_pr_in) if _pr_in else None,
                 "out_norm": torch.stack(_pr_out) if _pr_out else None,
                 "delta_ratio": torch.stack(_pr_delta) if _pr_delta else None,
+                "clip_bind": torch.stack(_pr_bind) if _pr_bind else None,
             }
         g_traj = torch.stack(g_list, dim=-1) if g_list else None   # [B, S, T]
         return xn, h, depths, g_traj

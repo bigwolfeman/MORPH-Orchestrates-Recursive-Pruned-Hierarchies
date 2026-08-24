@@ -335,6 +335,8 @@ def build_morph_config(cfg: DictConfig, tul=None) -> MORPHConfig:
         retention_carry=bool(getattr(m, "retention_carry", True)),
         retention_gate_bias=float(getattr(m, "retention_gate_bias", 2.0)),
         core_gain_clip=float(getattr(m, "core_gain_clip", 0.0)),
+        core_gain_clip_iter_lo=int(getattr(m, "core_gain_clip_iter_lo", 0)),
+        core_gain_clip_iter_hi=int(getattr(m, "core_gain_clip_iter_hi", -1)),
         dropout=float(tr.dropout),
     )
 
