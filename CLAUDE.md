@@ -39,6 +39,19 @@ renorm), not symptom-clamping — that also preserves the β1=0 memory win + α�
 **Full writeup + evidence chain + the decisive `ρ(J_core)` probe:**
 [`.agents/notes/implemented/architecture/2026-06-19-iterative-map-dynamics.md`](.agents/notes/implemented/architecture/2026-06-19-iterative-map-dynamics.md).
 
+> **2026-08-24 correction, measured.** "Target contractivity" is right about WHERE to look
+> and wrong about WHAT to bound. `ρ(J_core)` is now measurable
+> ([`morph/training/core_jacobian.py`](morph/training/core_jacobian.py), procedure in
+> [docs/cookbook/measuring-the-core-map.md](docs/cookbook/measuring-the-core-map.md)), and on
+> the TUL takeover it says the map's per-block gain moves +2.5 % while its blocks' amplifying
+> directions ALIGN x2.9 and the backward cotangent collapses from 13 effective slot positions
+> to 2.5. Five interventions that bound the core weights' spectrum — including a hard
+> projection that pinned `σ_max` at 1.50 for a whole run — all failed, and two made it worse
+> than doing nothing. A uniform rescale leaves every singular vector and every ratio
+> `σ_1/σ_2` untouched, so it cannot slow an alignment. Read
+> [docs/experiments/failures/2026-08-24-tul-takeover-cure.md](docs/experiments/failures/2026-08-24-tul-takeover-cure.md)
+> before reaching for a spectral cap in this tree.
+
 ## ⭐ TUL — Thought Unpack Loop — MERGED TO MASTER, OFF BY DEFAULT, ARMS RUN
 
 Status: implemented, run, and measured. It is a **conditional-compute** win (1.6x wall
