@@ -139,6 +139,16 @@ class TULConfig:
     xattn: bool = False                  # arm (§3.5)
     bcast: bool = False                  # arm (§3.5)
     gate: "TULGateConfig | None" = None  # docs/tul-gate-spec.md; None = arm A1 (nothing built)
+    # Per-slot-INDEX input embedding instead of one shared E_slot. 0 = off (one shared
+    # vector, the shipped behaviour); >0 = that many rows, and the slot at index s gets row
+    # s. Motivated by measurement, not taste: the 50 valid slot states of a row have an
+    # effective rank of 1.7 to 4.8 in a 1024-dimensional space with a mean pairwise cosine
+    # of +0.39 to +0.71, at EVERY checkpoint including the healthy ones. They are built from
+    # one shared E_slot plus a span bag-mean, and a mean over many token embeddings
+    # concentrates, so the slots are near-parallel by construction. See
+    # docs/experiments/failures/2026-08-24-tul-takeover-cure.md.
+    per_slot_embed: int = 0
+    per_slot_embed_std: float = 0.0      # jitter added to each row at seating; 0 = rows equal
     coda_token_cut: int = 0              # arm CW (docs/tul-compaction-window-spec.md) — drop
                                           # TOKEN positions with row index < C from the coda's
                                           # sequence; every slot stays regardless of its index.
@@ -353,7 +363,11 @@ class TULSlots(nn.Module):
     def __init__(self, d_model: int, tul: TULConfig):
         super().__init__()
         self.tul = tul
-        self.E_slot = nn.Parameter(torch.zeros(d_model))
+        # [d] shared, or [per_slot_embed, d] one row per slot INDEX. The shared shape stays
+        # the default so every existing checkpoint loads and every existing run is unchanged.
+        self.E_slot = nn.Parameter(
+            torch.zeros(tul.per_slot_embed, d_model) if tul.per_slot_embed > 0
+            else torch.zeros(d_model))
         self.E_mask = nn.Parameter(torch.zeros(d_model))
         eye = torch.eye(d_model).unsqueeze(0).repeat(tul.prefix_k, 1, 1)
         self.W_prefix = nn.Parameter(eye)
@@ -367,7 +381,20 @@ class TULSlots(nn.Module):
         which a randomly-initialised table cannot provide. Idempotent-unsafe by design —
         the training loop calls it exactly once and records it in the checkpoint.
         """
-        self.E_slot.copy_(lm_weight.mean(dim=0).to(self.E_slot.dtype))
+        mean = lm_weight.mean(dim=0).to(self.E_slot.dtype)
+        if self.E_slot.dim() == 1:
+            self.E_slot.copy_(mean)
+            return
+        # Per-slot rows: every row starts at the same mean, so the forward at the activation
+        # step is IDENTICAL to the shared version, plus optional jitter that breaks the
+        # degeneracy from step 0. Deterministic — a fixed generator, no draw from the global
+        # stream — so the TUL model's base weights still match a baseline at the same seed.
+        self.E_slot.copy_(mean.unsqueeze(0).expand_as(self.E_slot))
+        if self.tul.per_slot_embed_std > 0.0:
+            g = torch.Generator(device="cpu").manual_seed(0x5107)
+            j = torch.randn(self.E_slot.shape, generator=g).to(self.E_slot.device,
+                                                               self.E_slot.dtype)
+            self.E_slot.add_(j * (self.tul.per_slot_embed_std * float(mean.std())))
 
     # -- forward helpers ---------------------------------------------------
     def slot_input(self, signal: Tensor, layout: SlotLayout, add_e_slot: bool) -> Tensor:
@@ -383,7 +410,11 @@ class TULSlots(nn.Module):
         at_pos = torch.gather(
             bags, 1, layout.bag_id.unsqueeze(-1).expand(*layout.bag_id.shape, signal.shape[-1]))
         if add_e_slot:
-            at_pos = at_pos + self.E_slot.to(signal.dtype)
+            e = self.E_slot.to(signal.dtype)
+            # [d] broadcasts over every position; [S, d] is indexed by the position's OWN
+            # slot index, which `bag_id` already carries for both token and slot positions.
+            at_pos = at_pos + (e[layout.bag_id.clamp(max=e.shape[0] - 1)]
+                               if e.dim() == 2 else e)
         return torch.where(layout.slot_mask.unsqueeze(-1), at_pos, signal)
 
     def prefix_project(self, h_slots: Tensor, layout: SlotLayout, l_total: int) -> Tensor:

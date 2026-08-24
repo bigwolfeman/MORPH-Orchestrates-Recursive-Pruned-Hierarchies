@@ -669,3 +669,80 @@ def test_pad_slots_do_not_enter_the_core_gain_norm():
     assert gap < 1e-5, (
         f"real slots moved by {gap:.3e} when the PAD COUNT changed — a reduction over "
         f"the slot axis (the gain-clip norm) is counting pad slots")
+
+
+# ── per-slot input embedding (docs/experiments/failures/2026-08-24-tul-takeover-cure.md) ──
+
+def test_per_slot_embed_off_is_the_shipped_shape_and_forward():
+    """Default MUST be one shared vector and a bit-identical forward — every existing
+    checkpoint and every existing arm depends on it."""
+    x, y, layout, _ = _batch(_spec())
+    a = _model(TULConfig(prefix_k=2, slot_id=4))
+    assert a.tul.E_slot.dim() == 1
+    torch.manual_seed(3)
+    la = a(x, labels=y, slot_layout=layout)["loss"]
+    b = _model(TULConfig(prefix_k=2, slot_id=4, per_slot_embed=0))
+    torch.manual_seed(3)
+    lb = b(x, labels=y, slot_layout=layout)["loss"]
+    assert torch.equal(la, lb)
+
+
+def test_per_slot_embed_gives_each_slot_index_its_own_row():
+    spec = _spec()
+    x, y, layout, _ = _batch(spec)
+    m = _model(TULConfig(prefix_k=2, slot_id=4, per_slot_embed=spec.max_slots))
+    assert m.tul.E_slot.shape == (spec.max_slots, m.cfg.d_model)
+    # plant a distinct, large value in one row and check ONLY that slot's input moves
+    with torch.no_grad():
+        m.tul.E_slot.zero_()
+        m.tul.E_slot[1] = 100.0
+    emb = torch.randn(x.shape[0], layout.l_total, m.cfg.d_model)
+    got = m.tul.slot_input(emb, layout, add_e_slot=True)
+    base = m.tul.slot_input(emb, layout, add_e_slot=False)
+    moved = ((got - base).abs().sum(-1) > 1.0)
+    for b in range(x.shape[0]):
+        for p in range(layout.l_total):
+            is_slot1 = bool(layout.slot_mask[b, p]) and int(layout.bag_id[b, p]) == 1
+            assert bool(moved[b, p]) == is_slot1, (b, p, int(layout.bag_id[b, p]))
+
+
+def test_per_slot_embed_seating_starts_every_row_equal_unless_jittered():
+    """Seating with std 0 must leave the rows identical, so the activation step is the same
+    forward the shared version gives. With std > 0 the rows must differ — that is the whole
+    point, since the measured problem is that the slot states start near-parallel."""
+    spec = _spec()
+    lm = torch.randn(V, 64)
+    flat = _model(TULConfig(prefix_k=2, slot_id=4, per_slot_embed=spec.max_slots))
+    flat.tul.init_at_activation(lm)
+    assert torch.allclose(flat.tul.E_slot[0], flat.tul.E_slot[1])
+    jit = _model(TULConfig(prefix_k=2, slot_id=4, per_slot_embed=spec.max_slots,
+                           per_slot_embed_std=0.5))
+    jit.tul.init_at_activation(lm)
+    assert not torch.allclose(jit.tul.E_slot[0], jit.tul.E_slot[1])
+    # deterministic: a second model seats to exactly the same rows
+    jit2 = _model(TULConfig(prefix_k=2, slot_id=4, per_slot_embed=spec.max_slots,
+                            per_slot_embed_std=0.5))
+    jit2.tul.init_at_activation(lm)
+    assert torch.equal(jit.tul.E_slot, jit2.tul.E_slot)
+
+
+def test_per_slot_embed_raises_the_slot_states_effective_rank():
+    """THE reason it exists. With one shared row the slot inputs are the bag-means plus a
+    constant and their effective rank is low; with jittered per-slot rows it must rise."""
+    spec = _spec()
+    x, y, layout, _ = _batch(spec)
+    emb = torch.randn(x.shape[0], layout.l_total, 64) * 0.05     # low-variance bag-means
+
+    def erank(m):
+        s = m.tul.slot_input(emb, layout, add_e_slot=True)
+        h = s[0][layout.slot_mask[0]]
+        sv = torch.linalg.svdvals(h.double()) ** 2
+        return float(((sv.sum() ** 2) / (sv ** 2).sum()).detach())
+
+    lm = torch.randn(V, 64)
+    shared = _model(TULConfig(prefix_k=2, slot_id=4))
+    shared.tul.init_at_activation(lm)
+    per = _model(TULConfig(prefix_k=2, slot_id=4, per_slot_embed=spec.max_slots,
+                           per_slot_embed_std=1.0))
+    per.tul.init_at_activation(lm)
+    assert erank(per) > erank(shared) * 1.5, (erank(shared), erank(per))

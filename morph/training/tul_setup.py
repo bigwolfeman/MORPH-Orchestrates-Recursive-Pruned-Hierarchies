@@ -156,6 +156,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
+    # Per-slot input embedding: `tul.per_slot_embed: true` sizes it from the DERIVED slot
+    # budget, so it cannot silently disagree with the layout's max_slots. An int is honoured
+    # as-is for the odd case where someone wants a different number.
+    _pse = tc.get("per_slot_embed", 0)
+    model_cfg.per_slot_embed = (spec.max_slots if _pse is True
+                                else 0 if _pse is False else int(_pse))
+    model_cfg.per_slot_embed_std = float(tc.get("per_slot_embed_std", 0.0))
     # Everything that is DERIVED rather than typed goes into the wandb config, so a run
     # is reproducible from its config alone (no re-deriving ids from a tokenizer version).
     manifest = {
@@ -177,6 +184,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "coda_sees_slots": model_cfg.coda_sees_slots,
         "tokens_through_core": model_cfg.tokens_through_core,
         "coda_token_cut": model_cfg.coda_token_cut,
+        "per_slot_embed": model_cfg.per_slot_embed,
+        "per_slot_embed_std": model_cfg.per_slot_embed_std,
         "slot_mean_depth": model_cfg.slot_mean_depth or int(cfg.model.mean_depth),
         "slot_max_depth": model_cfg.slot_max_depth or int(cfg.model.max_depth),
         "gate": gate_cfg is not None,

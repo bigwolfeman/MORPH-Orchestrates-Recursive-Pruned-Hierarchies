@@ -385,6 +385,19 @@ tul:
   max_slots: 0             # 0 → seq_len // 8 (the fixed slot budget; L_total = seq_len + prefix_k·max_slots)
   prefix_k: 2              # coda positions per slot, by projection from ONE looped state [W]
                            # (Block Transformer App. F.2 / Fig 3f: length 2 beats 1). 1 = arm TUL-prefix1.
+  # Per-slot-INDEX input embedding instead of ONE shared E_slot added to every slot.
+  # false = shipped behaviour. true = one row per slot, sized from the derived max_slots.
+  # Measured motivation: the valid slot states of a row have an effective rank of 1.7 to 4.8
+  # in 1024 dimensions with a mean pairwise cosine of +0.39 to +0.71, at every checkpoint
+  # including the healthy ones — they are near-parallel by construction, because they are
+  # one shared vector plus a span bag-mean and a mean over many token embeddings
+  # concentrates. At the takeover the core loop starts REDUCING that rank across its
+  # iterations (2.71 -> 1.81) where a healthy checkpoint's loop increases it (2.82 -> 4.18).
+  # See docs/experiments/failures/2026-08-24-tul-takeover-cure.md.
+  # per_slot_embed_std jitters each row at seating, in units of the embedding-mean std;
+  # 0 leaves every row equal, so the activation step is identical to the shared version.
+  per_slot_embed: false
+  per_slot_embed_std: 0.0
   token_state_dropout: 0.15   # Bowman word dropout on the coda's token input; 0 = off, arm sweep {0, 0.15, 0.3}
   slot_mean_depth: 0       # 0 → model.mean_depth (per-slot Poisson depth [W])
   slot_max_depth: 0        # 0 → model.max_depth

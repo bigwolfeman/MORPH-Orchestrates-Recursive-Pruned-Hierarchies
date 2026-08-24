@@ -288,6 +288,91 @@ def spectral_gap(model, n_iter: int = 200) -> dict:
     return out
 
 
+def state_geometry(model, x, y, layout, seed: int) -> dict:
+    """Is the FORWARD collapsing, or only the backward concentrating?
+
+    The competing reading of the same numbers: the 57 slot states are built from one shared
+    `E_slot` plus a span bag-mean, so they start near-parallel, and then the SAME six blocks
+    are applied to them 6 to 8 times. That is the oversmoothing regime. If the slot states
+    are losing rank across the loop, the backward's concentration is a SYMPTOM and the lever
+    is state diversity, not anything in the backward.
+
+    Per loop iteration, on the valid slots of each row: the participation ratio of the
+    squared singular values of the [S_valid, C] state matrix (its effective rank), and the
+    mean pairwise cosine between slot states. Both read off the operating points the Jacobian
+    probe already captures, so this costs one forward.
+
+    Also returns WHICH slots carry the backward cotangent, and whether the same ones carry it
+    at every core block — a stable sink is a different disease from a drifting one.
+    """
+    root = getattr(model, "_orig_mod", model)
+    probe = CoreJacobianProbe(model)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    with probe.capture() as pts:
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+            model(x, labels=y, slot_layout=layout)
+    per_iter = []
+    for p in pts:
+        h = p["h"].float()
+        h = h.mean(dim=2) if h.dim() == 4 else h            # reduce the n hyper-connection streams
+        m = p["active"]
+        erank, cos = [], []
+        for b in range(h.shape[0]):
+            hb = h[b][m[b]]
+            if hb.shape[0] < 2:
+                continue
+            sv = torch.linalg.svdvals(hb.double())
+            e = sv ** 2
+            erank.append(float((e.sum() ** 2) / (e ** 2).sum()))
+            hn = hb / (hb.norm(dim=1, keepdim=True) + 1e-12)
+            g = hn @ hn.t()
+            n = g.shape[0]
+            cos.append(float((g.sum() - n) / (n * (n - 1))))
+        per_iter.append({"iter": int(p["iter_idx"]),
+                         "eff_rank": sum(erank) / max(len(erank), 1),
+                         "mean_cos": sum(cos) / max(len(cos), 1),
+                         "n_slots": int(m[0].sum())})
+
+    # which slots carry the cotangent, per core block
+    share, handles = {i: [] for i in range(len(root.core))}, []
+
+    def mk(i):
+        def hook(_m, _gi, go):
+            g = go[0]
+            if g is None:
+                return
+            a = g.detach().float().flatten(2).pow(2).sum(-1)[0]     # row 0, [S]
+            share[i].append((a / a.sum().clamp_min(1e-30)).cpu())
+        return hook
+
+    for i, blk in enumerate(root.core):
+        handles.append(blk.register_full_backward_hook(mk(i)))
+    try:
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            out = model(x, labels=y, slot_layout=layout)
+        out["loss"].backward()
+    finally:
+        for h_ in handles:
+            h_.remove()
+        model.zero_grad(set_to_none=True)
+    tops = {}
+    for i, lst in share.items():
+        if not lst:
+            continue
+        a = sum(lst) / len(lst)
+        v, idx = torch.topk(a, k=min(5, a.numel()))
+        tops[i] = {"top_idx": idx.tolist(), "top_share": [round(float(t), 4) for t in v]}
+    agree = None
+    if len(tops) >= 2:
+        sets = [set(t["top_idx"][:3]) for t in tops.values()]
+        inter = set.intersection(*sets)
+        agree = len(inter) / 3.0
+    return {"per_iter": per_iter, "cotangent_top": tops, "top3_agreement_across_blocks": agree}
+
+
 def measure(model, points, iters, power_iters, per_block):
     probe = CoreJacobianProbe(model, n_iter=power_iters, seed=0, per_block=per_block)
     by_iter = {int(p["iter_idx"]): p for p in points}
@@ -316,6 +401,9 @@ def main():
     ap.add_argument("--dump-sigmas", action="store_true")
     ap.add_argument("--rank-probe", action="store_true",
                     help="effective positions carrying the cotangent, instead of sigma")
+    ap.add_argument("--state-probe", action="store_true",
+                    help="forward slot-state effective rank per loop iteration, and which "
+                         "slots carry the cotangent")
     ap.add_argument("--gap-probe", action="store_true",
                     help="sigma_1/sigma_2 per core linear, instead of the Jacobian")
     ap.add_argument("--rank-token-path", action="store_true",
@@ -347,6 +435,18 @@ def main():
             pre_sigmas = core_sigmas(model) if a.dump_sigmas else None
             moved = (project_core_linears(model, cap, a.project_scope)
                      if cap else {})
+            if a.state_probe:
+                st = state_geometry(model, x, y, layout, a.seed)
+                results.append({"ckpt": os.path.basename(path), "step": step, "state": st})
+                er = " ".join(f"{r['eff_rank']:.2f}" for r in st["per_iter"])
+                co = " ".join(f"{r['mean_cos']:+.3f}" for r in st["per_iter"])
+                print(f"{os.path.basename(path):<22} slots={st['per_iter'][0]['n_slots']:>3} "
+                      f"eff_rank/iter={er}", flush=True)
+                print(f"{'':<22} mean_cos/iter={co}", flush=True)
+                print(f"{'':<22} cotangent top3 block0={st['cotangent_top'][0]['top_idx'][:3]} "
+                      f"share={st['cotangent_top'][0]['top_share'][:3]} "
+                      f"block-agreement={st['top3_agreement_across_blocks']}", flush=True)
+                continue
             if a.gap_probe:
                 gp = spectral_gap(model, n_iter=a.power_iters)
                 results.append({"ckpt": os.path.basename(path), "step": step, "gap": gp})

@@ -222,6 +222,43 @@ And the cotangent is ALREADY concentrated when it enters the core: 13 effective 
 token-to-slot attention is the only thing that routes gradient to slots — so the loop
 amplifies a concentration it is handed rather than creating it.
 
+## P12, the state-side intervention — written 2026-08-24 15:07, arm launched 15:06
+
+The forward measurement that prompted it, taken at 15:03 on the same ladder. Effective rank
+of the 50 valid slot states per loop iteration, in 1024 dimensions, and their mean pairwise
+cosine:
+
+| step | eff. rank across iterations 0..7 | mean cosine across iterations 0..7 | core share |
+|---:|---|---|---:|
+| 1625 | 2.82 2.52 3.53 4.01 4.78 4.51 4.45 4.18 | +.517 +.588 +.499 +.458 +.411 +.409 +.417 +.390 | 0.016 |
+| 1750 | 2.04 1.84 1.91 2.28 2.95 3.27 3.40 2.98 | +.640 +.709 +.702 +.649 +.548 +.502 +.476 +.482 | 0.021 |
+| 1800 | 2.40 2.16 2.13 2.28 2.53 2.53 2.57 2.42 | +.561 +.650 +.656 +.630 +.599 +.588 +.574 +.585 | 0.372 |
+| 1850 | 2.71 1.69 1.94 1.88 1.93 1.89 1.83 1.81 | +.582 +.689 +.674 +.688 +.664 +.668 +.674 +.697 | 0.890 |
+
+Two things. The slot states are near-degenerate at EVERY rung — effective rank 1.7 to 4.8
+out of 50, mean pairwise cosine +0.39 to +0.71 — which is a property of the architecture,
+not of the sickness: they are one shared `E_slot` plus a span bag-mean, and a mean over many
+token embeddings concentrates. And the LOOP's effect on that rank FLIPS SIGN at the onset.
+At the healthy rungs it diversifies (2.82 -> 4.18, cosine -0.127); by 1850 it collapses
+(2.71 -> 1.81, cosine +0.115). The flip is between 1750 and 1800, which is where the core
+share goes 0.021 -> 0.372.
+
+The cotangent also sits on a STABLE sink: the same top-3 slots at every core block
+(agreement 1.0 at five of six rungs), with the top slot's share of it rising 0.18 -> 0.54.
+
+P12. **Per-slot input embeddings.** `tul.per_slot_embed: true` with
+     `per_slot_embed_std: 1.0` replaces the one shared `E_slot` with one row per slot INDEX,
+     seated at the embedding mean plus deterministic jitter, which injects up to
+     `min(max_slots, d)` of guaranteed input diversity. Run at batch 10, `alpha_cap` 3.5,
+     4000 steps, against `b10-ctrl`. Prediction: the arm does NOT take over — validation CE
+     at 3500 is within 0.15 nats of its own minimum, against the control's +0.533 and the
+     `bptt_depth` arm's +0.192. Confound declared: it adds `max_slots x d_model` parameters
+     (65k against 286M, 0.02 %), so the arms are not iso-parameter.
+
+Falsifier: if this arm turns around like the rest, then breaking the INPUT degeneracy is not
+enough and the collapse is being generated inside the loop, which points at the core's own
+attention over slots rather than at what it is fed.
+
 ## Risks
 
 * n = 1 per arm. Bit-reproducibility makes the microcosm pair a controlled comparison, not
