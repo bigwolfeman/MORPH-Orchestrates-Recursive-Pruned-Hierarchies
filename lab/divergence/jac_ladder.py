@@ -168,6 +168,66 @@ def core_sigmas(model, scope: str = "all", n_iter: int = 60) -> dict:
     return out
 
 
+def cotangent_rank(model, x, y, layout, seed: int, token_path: bool = False) -> dict:
+    """Effective number of positions carrying the backward cotangent at the core.
+
+    The alignment reading says the loop power-iterates the cotangent onto the core map's
+    top singular direction. Power iteration can only concentrate on a direction the
+    cotangent is free to occupy, and the cotangent at a core block is a SUM over the
+    active positions — so its effective rank is bounded by how many positions there are.
+    That is the standing explanation for why arm A1 (64 slots) fails where A0 (1024 token
+    positions) does not, and this measures it instead of assuming it. `token_path=True`
+    runs the SAME weights with `slot_layout=None`, i.e. the core looping over every token
+    position — arm A0's code path — so the comparison holds the operator fixed and varies
+    only how many positions the cotangent is spread over.
+
+    Participation ratio over positions, `PR = (sum a_p)^2 / (n * sum a_p^2)` with
+    `a_p = ||dL/dh_p||^2`; `PR * n` is the effective number of positions. Read off
+    `register_full_backward_hook` on each core block, so it uses only public API and needs
+    no model change.
+    """
+    root = getattr(model, "_orig_mod", model)
+    per_block: dict[int, list[float]] = {i: [] for i in range(len(root.core))}
+    handles = []
+
+    def mk(i):
+        def hook(_mod, _gin, gout):
+            g = gout[0]
+            if g is None:
+                return
+            a = g.detach().float().flatten(2).pow(2).sum(-1)      # [B, S]
+            s1 = a.sum(dim=1)
+            s2 = a.pow(2).sum(dim=1)
+            n = a.shape[1]
+            pr = (s1 * s1) / (s2.clamp_min(1e-30) * n)            # [B] in (0, 1]
+            per_block[i].append(float(pr.mean()) * n)
+        return hook
+
+    for i, blk in enumerate(root.core):
+        handles.append(blk.register_full_backward_hook(mk(i)))
+    try:
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            out = (model(x, labels=y) if token_path
+                   else model(x, labels=y, slot_layout=layout))
+        out["loss"].backward()
+    finally:
+        for h in handles:
+            h.remove()
+        model.zero_grad(set_to_none=True)
+    if token_path:
+        n_pos = int(x.shape[1])
+        n_valid = float(n_pos)
+    else:
+        n_pos = int(layout.slot_valid.shape[1])
+        n_valid = float(layout.slot_valid.float().sum(dim=1).mean())
+    return {"n_positions": n_pos, "mean_valid_slots": n_valid,
+            "eff_positions_per_block": {i: (sum(v) / len(v) if v else float("nan"))
+                                        for i, v in per_block.items()},
+            "n_calls_per_block": {i: len(v) for i, v in per_block.items()}}
+
+
 def measure(model, points, iters, power_iters, per_block):
     probe = CoreJacobianProbe(model, n_iter=power_iters, seed=0, per_block=per_block)
     by_iter = {int(p["iter_idx"]): p for p in points}
@@ -194,6 +254,10 @@ def main():
     ap.add_argument("--sweep-ckpt", default="")
     ap.add_argument("--project-scope", default="all", choices=["all", "mlp", "attn"])
     ap.add_argument("--dump-sigmas", action="store_true")
+    ap.add_argument("--rank-probe", action="store_true",
+                    help="effective positions carrying the cotangent, instead of sigma")
+    ap.add_argument("--rank-token-path", action="store_true",
+                    help="with --rank-probe: run the SAME weights on the token path (A0)")
     ap.add_argument("--no-blocks", action="store_true")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
@@ -219,6 +283,15 @@ def main():
             pre_sigmas = core_sigmas(model) if a.dump_sigmas else None
             moved = (project_core_linears(model, cap, a.project_scope)
                      if cap else {})
+            if a.rank_probe:
+                rk = cotangent_rank(model, x, y, layout, a.seed, a.rank_token_path)
+                row = {"ckpt": os.path.basename(path), "step": step, "cap": cap, "rank": rk}
+                results.append(row)
+                eff = rk["eff_positions_per_block"]
+                print(f"{os.path.basename(path):<22} valid_slots={rk['mean_valid_slots']:.1f} "
+                      f"eff_positions=" + " ".join(f"{eff[i]:.2f}" for i in sorted(eff)),
+                      flush=True)
+                continue
             pts = operating_points(model, x, y, layout, a.seed)
             m = measure(model, pts, iters, a.power_iters, not a.no_blocks)
             row = {"ckpt": os.path.basename(path), "step": step, "cap": cap,

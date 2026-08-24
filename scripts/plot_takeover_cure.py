@@ -59,20 +59,33 @@ def series(probe, key, upto=None):
 
 
 def panel_a(ax, ladder_path, ctrl_probe):
+    """The three numbers that separate 'the map grew' from 'the map aligned'.
+
+    isotropic  = the gain a generic direction sees through one core block
+    realized   = the gain the actual backward cotangent sees (fitted from grad norms)
+    alignment  = whole-step gain / product of the per-block gains; below 1 the blocks'
+                 amplifying directions disagree, above 1 they agree
+    """
     lad = json.load(open(ladder_path))
     steps = [r["step"] for r in lad]
-    op = [r["sigma"]["t0"]["rms_block_gain"] for r in lad]
+    iso = [r["sigma"]["t0"]["rms_block_gain"] for r in lad]
+    align = []
+    for r in lad:
+        prod = 1.0
+        for v in r["sigma"]["t0"]["rms_blocks"]:
+            prod *= v
+        align.append(r["sigma"]["t0"]["rms"] / prod)
     grad = [ctrl_probe.get(s, {}).get("preclip/core_block_gain", float("nan"))
             for s in steps]
-    ax.plot(steps, op, color=OI["blue"], ls="-", marker="o", ms=4,
-            label="operator: Jacobian typical gain")
+    ax.plot(steps, iso, color=OI["blue"], ls="-", marker="o", ms=4,
+            label="operator, isotropic per block")
     ax.plot(steps, grad, color=OI["orange"], ls="--", marker="s", ms=4,
-            label="gradient: fitted block gain")
-    ax.axhline(1.0, color=OI["black"], lw=0.8, ls="-.")
-    ax.annotate("contractive below 1", (steps[0], 1.0), textcoords="offset points",
-                xytext=(2, -12), fontsize=7)
-    ax.set_xlabel("step"); ax.set_ylabel("per-block gain")
-    ax.set_title("A  operator vs gradient\n(onset-capture ladder)", fontsize=9)
+            label="realized per block (gradient)")
+    ax.plot(steps, align, color=OI["purple"], ls="-.", marker="^", ms=4,
+            label="alignment across the 6 blocks")
+    ax.axhline(1.0, color=OI["black"], lw=0.8, ls=":")
+    ax.set_xlabel("step"); ax.set_ylabel("gain (dimensionless)")
+    ax.set_title("A  the map barely changes;\nits directions align", fontsize=9)
     ax.legend(fontsize=7, loc="upper left")
 
 

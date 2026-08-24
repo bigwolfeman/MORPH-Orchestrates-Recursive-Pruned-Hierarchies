@@ -148,8 +148,32 @@ spectral norm is not the lever. That reading is withdrawn: the manipulation chec
 penalty did work on its target (σ_max 3.41 → 2.00), but the arm cannot be separated from its
 own introduction transient.
 
-The unconfounded test — penalty on from step 0, matched against `onset-capture` which took
-over at 1866 under otherwise identical settings — is **PENDING** (`spec-scratch`).
+### The unconfounded test: the penalty ON FROM STEP 0
+
+`spec-scratch` runs the identical configuration as `onset-capture` — deterministic, batch
+6, seed 0, 2100 steps — plus `spectral_penalty_cap=1.5`, `spectral_penalty_lambda=10.0`
+from step 0. No resume, so no introduction transient.
+
+| | control (`onset-capture`) | `spec-scratch` |
+|---|---:|---:|
+| core share at step 1866 | 0.602 | **0.011** |
+| block gain (median, last 50) | 1.303 | **0.968** |
+| block-gain fit r2 | 0.898 | 0.161 |
+| block-gain criterion fires | step 1760 | **never** |
+| core-share criterion fires | step 1788 | **never** |
+| train loss at 1800 | 5.1289 | 5.1348 |
+| outcome | aborted at 1866 | ran to 2100 |
+
+The intervention holds the block gain below 1 through the step at which the control took
+over, and it costs 0.006 nats at step 1800. **This is the affirmative test the mechanism
+needed.** It is followed up at a second seed and a longer horizon in
+[the cure experiment](2026-08-24-tul-takeover-cure.md), which also measures the OPERATOR
+and finds that what changes across the onset is not the map's size but the alignment of
+its blocks' amplifying directions.
+
+Caveat kept in view: 2100 steps is 234 steps past the control's abort. A perturbation that
+merely delayed the takeover would look the same over that window, which is why the seed-1
+arms run to 6000 and 12000.
 
 ## Harness defects this exposed
 
@@ -163,10 +187,10 @@ over at 1866 under otherwise identical settings — is **PENDING** (`spec-scratc
 
 ## Not verified
 
-- That the block gain is CAUSAL. It is an ordering and a separation across five
-  trajectories, plus a panel showing what does not stop it. The affirmative test — an
-  intervention that holds the block gain below 1 and thereby prevents the takeover — is the
-  pending spectral arm.
+- ~~That the block gain is CAUSAL.~~ ANSWERED above by `spec-scratch`, and followed up in
+  [the cure experiment](2026-08-24-tul-takeover-cure.md). What is still not verified is
+  that the block gain is the ONLY route in: nothing here rules out a second failure mode
+  that this cure does not touch.
 - Anything about interventions applied EARLY. Every arm here starts at step 1750. A cure
   that works by shaping weights across thousands of steps could still work while failing
   here, and the old "cures" were all applied from step 0.
