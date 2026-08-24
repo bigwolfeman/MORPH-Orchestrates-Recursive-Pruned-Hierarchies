@@ -1374,6 +1374,9 @@ class MORPHTransformer(nn.Module):
         _probe = getattr(self, "_probe_loop", False)
         _pr_ret: list[Tensor] = []
         _pr_gain: list[Tensor] = []
+        _pr_in: list[Tensor] = []
+        _pr_out: list[Tensor] = []
+        _pr_delta: list[Tensor] = []
         for t in range(total_iters):
             active = alive if halt else (depths > t)               # [B, S]
             do_ckpt = self.training and (t - n_nograd) < n_ckpt
@@ -1420,6 +1423,18 @@ class MORPHTransformer(nn.Module):
                     _hi = (h * _am).flatten(1).float().norm(dim=1)
                     _ho = (h_new * _am).flatten(1).float().norm(dim=1)
                     _pr_gain.append((_ho / (_hi + 1e-6)).max().detach())
+                    # SEPARATE the ratio's numerator from its denominator. A gain of 17 at
+                    # iteration 0 and 1.1 everywhere else has two readings that this ratio
+                    # alone cannot tell apart: the map amplifies more on its first
+                    # application, or ‖h_in‖ is smaller there because iteration 0's input is
+                    # input_norm(prelude) rather than a previous core output. Logging both
+                    # norms and the RELATIVE UPDATE ‖h_new − h‖/‖h‖ separates them —
+                    # delta_ratio is the size of what the core ADDS, independent of the
+                    # carrier's scale, so it is the term a residual stream actually controls.
+                    _pr_in.append(_hi.max().detach())
+                    _pr_out.append(_ho.max().detach())
+                    _pr_delta.append((((h_new - h) * _am).flatten(1).float().norm(dim=1)
+                                      / (_hi + 1e-6)).max().detach())
                     _pr_ret.append((rs_new if (track_ret and rs_new is not None)
                                     else h.new_zeros(())).float().norm().detach())
 
@@ -1443,6 +1458,9 @@ class MORPHTransformer(nn.Module):
             self._loop_probe = {
                 "core_gain": torch.stack(_pr_gain) if _pr_gain else None,
                 "ret_state_norm": torch.stack(_pr_ret) if _pr_ret else None,
+                "in_norm": torch.stack(_pr_in) if _pr_in else None,
+                "out_norm": torch.stack(_pr_out) if _pr_out else None,
+                "delta_ratio": torch.stack(_pr_delta) if _pr_delta else None,
             }
         g_traj = torch.stack(g_list, dim=-1) if g_list else None   # [B, S, T]
         return xn, h, depths, g_traj
