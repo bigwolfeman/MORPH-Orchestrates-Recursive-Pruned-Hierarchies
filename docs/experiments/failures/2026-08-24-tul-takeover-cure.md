@@ -530,30 +530,31 @@ one, differing only by seed — is the sharpest single piece of evidence in this
 it cost zero GPU time to obtain.
 ## Not verified
 
-* **That this is the only route in.** The cure removes the headroom the loop's power
-  iteration climbs into. Nothing here rules out a second failure mode that does not go
-  through the core map's spectrum.
+* **That position count is CAUSAL.** The concentration is measured and it separates A1 from
+  A0 at identical weights, but the arms that act on it are at the end of this document and
+  they change the method, not a defect.
 * **Alignment ACROSS the unrolled steps.** What is measured is alignment within one core
   step, across its six blocks. The backward passes through `bptt_depth` = 4 such steps with
-  the same operator, and the realized per-block gain (1.43 to 1.88) is well above what the
-  within-step number alone accounts for. The extra is presumably the same effect
-  compounding, but it is not separately measured.
-* **The long horizon.** The longest cure arm here is 10000 steps. `tul_short` runs 20000
-  and the deploy recipe runs 100000. A cap of 1.5 is far below where a HEALTHY 20000-step
-  run's `sigma_max` ends up (4.02), so a capacity cost that only appears late is a real
-  possibility and not a formality.
+  the same operator, and the realized per-block gain (1.43 to 1.88) is above what the
+  within-step number alone accounts for. The remainder is presumably the same effect
+  compounding; it is not separately measured.
+* **Why the cotangent picks the slots it picks.** Nothing here says WHICH slots end up
+  carrying it, or whether they are the low-carrier-norm ones (where an RMSNorm Jacobian is
+  large), the deep-Poisson-depth ones, or the ones the loss weights most. That is the
+  measurement that would turn "more positions" from a lever into a fix.
+* **Anything at `alpha_cap` 1.0, the SHIPPED setting.** The deciding pair had to move to 3.5
+  because at 1.0 the failure is a coin flip — two of three runs at that setting are healthy,
+  including one run here that was expected to fail and did not. No spectral control was
+  tested at 1.0 in the real configuration, and a single arm there would prove nothing.
+* **The long horizon.** No arm here ran past 7000 steps. `tul_short` runs 20000 and the
+  deploy recipe 100000.
 * **The deploy recipe.** Everything here is dense TUL at `seq_len` 1024. `base.yaml` runs
-  prune, carve and ReMoE routing, none of which has been run with the penalty active. That
-  is why `base.yaml` keeps `spectral_penalty_cap: 0.0`.
-* **`include_attn` in training.** The cap sweep says extending the penalty to the CCA
-  projections would take the sick state's alignment from 1.24 to 1.05, inside the healthy
-  band. No training run has used it. It is implemented, unit-tested, and off.
-* **The rate-limited cap.** A trailing cap that allows the healthy growth rate (1.3e-4 per
-  step) and forbids the runaway one (1.4e-3) is better targeted than a fixed level and is
-  not implemented.
+  prune, carve and ReMoE routing, none of which has been run with any of this.
 * **n = 1 per arm outside the deterministic microcosm.** Kernels-on runs are not
   bit-reproducible and the measured run-to-run spread on the gradient norm is 6.5 %. The
-  seed-1 control at `alpha_cap` 1.0 is the standing reminder: it was expected to fail, and
-  it did not.
-* **Generation quality.** Every number here is teacher-forced CE. `gen_every` was set to 0
-  on every arm to buy GPU time, so nothing here says the cured model GENERATES as well.
+  seed-1 control at `alpha_cap` 1.0 is the standing reminder.
+* **Generation quality.** Every number here is teacher-forced CE. `gen_every` was 0 on every
+  arm to buy GPU time, so nothing here says anything about what these models GENERATE.
+* **The shipped `CoreSpectralProjection` at length.** It is unit-tested, smoke-tested on the
+  real model with `verify=true`, and run for 2000 to 7000 steps in three arms. It is off by
+  default and nobody should turn it on without reading this document.
