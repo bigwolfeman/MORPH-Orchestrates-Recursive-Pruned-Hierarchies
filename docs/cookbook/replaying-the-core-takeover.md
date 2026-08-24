@@ -77,6 +77,49 @@ run could never give — see
 [the failed replication gate](../experiments/failures/2026-08-23-tul-run-replication.md)
 for what n=1 was worth before.
 
+## Verified end to end (2026-08-23)
+
+Not a procedure on paper — this was run.
+
+**Capture.** `onset-capture`, the reproducible control, aborted at step **1866** with the
+ring buffer intact. What it left on disk, read from the probe JSONL:
+
+| checkpoint | core share | block gain | r² | state |
+|---|---:|---:|---:|---|
+| `ROLL_step_1700` | 0.0124 | 1.057 | 0.306 | healthy |
+| `ROLL_step_1750` | 0.0205 | 1.066 | 0.182 | healthy |
+| `ROLL_step_1775` | 0.0541 | 1.106 | **0.869** | share still looks healthy, r² has already moved |
+| `ROLL_step_1800` | 0.3723 | 1.329 | 0.836 | onset |
+| `ROLL_step_1825` | 0.1184 | 1.240 | 0.837 | falls back |
+| `ROLL_step_1850` | 0.8903 | 1.434 | 0.924 | taken over |
+| `TAKEOVER_step_1866` | — | — | — | written by the guard |
+
+Last step with core share below 0.05: **1822**. Onset width: **44 steps**, matching the
+~40 measured on the earlier control.
+
+**Replay.** Resumed from `ROLL_step_1750` and ran to the abort:
+
+- data fast-forward of 1751 batches took **10.2 s**
+- steps 1751–1861 versus the original: **0 of 111 differ**, across **87** probe series
+- the takeover recreated itself exactly — share 0.0541 → 0.3723 → 0.1184 → 0.8903 at steps
+  1775 / 1800 / 1825 / 1850, matching the original to every logged digit
+
+A takeover that cost 1866 steps to reach now reproduces in about 110.
+
+One expected difference: the replay's guard fired at step 1861 against the original's 1866.
+The guard's sliding window starts empty on a resume and needs `window` steps to fill, so
+that 5-step gap is guard state, not model state — the trajectory itself is bit-identical.
+
+**Recommended seed:** `ROLL_step_1750`. It is 72 steps clear of the last healthy step and
+116 clear of the abort, so an intervention has room to act before onset, and the replay is
+short.
+
+**Note for the r² readers:** at `ROLL_step_1775` the core share is 0.0541 — which reads as
+healthy — while the block-gain fit's r² has already jumped to 0.869. The geometric
+structure appears before the share does, which is the same lead the
+[block-gain result](../experiments/results/2026-08-23-tul-block-backward-gain.md) measures
+on other trajectories.
+
 ## Cautions
 
 - **The reproducible configuration is not the production one.** `use_kernels=false` runs
