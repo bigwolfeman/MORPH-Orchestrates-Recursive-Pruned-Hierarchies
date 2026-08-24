@@ -402,6 +402,31 @@ an optimizer schedule. Scored at a common step 2050 by the rule fixed in the RCA
 | `a35-proj15` | HARD cap 1.5, MLP | 0.9529 | 1.659 | 0.95 | 4.8084 @1000 | 8.3046 | **+3.496** | TOOK OVER |
 | `a35-proj15attn` | HARD cap 1.5, MLP + attention | 0.9148 | 1.571 | 0.94 | **4.7418 @1500** | 5.8500 | +1.108 | TOOK OVER |
 
+**Two of these four rows are confounded, and the confound is mine.** The pre-clip probe
+measures `p.grad` after the backward of the FULL objective, so on a penalised arm the
+spectral penalty's own gradient — which lands entirely on core MLP weights — is inside
+`preclip/core` and therefore inside the core share the verdict is computed from. It shows
+up plainly in the pre-clip TOTAL, which is the budget the single global clip divides:
+
+| step | ctrl | soft 1.5 | soft 3.0 | hard 1.5 | hard 1.5 +attn |
+|---:|---:|---:|---:|---:|---:|
+| 700 | 3.15 | 3.28 | 3.07 | 3.21 | 3.16 |
+| 900 | 1.61 | **1.67e4** | **784** | 1.56 | 1.53 |
+| 1100 | 1.35 | **1.61e5** | **2.56e7** | 1.35 | 1.32 |
+
+The two HARD arms keep a normal gradient norm and a normal core share right up to their own
+onset — they are clean tests. The two SOFT arms' core share reaching 0.998 is the
+REGULARISER's gradient swamping the model's, not the core map taking over. Their validation
+CE is penalty-free and still 2.2 to 2.7 nats above their own minima, so they still failed,
+but they failed by a different route than the label suggests: a core-local penalty inflates
+exactly the metric the takeover is judged by, and starves every non-core parameter of the
+one global clip budget.
+
+That is a third harness defect this work exposed, and it is unfixed: `_preclip_probe` cannot
+separate the data gradient from a regulariser's without a second backward. Anyone adding a
+loss term that is not uniform over the parameter tree must read `preclip/core_share` as
+contaminated.
+
 No firing STEP is quoted for these arms, on purpose. The abort criteria are defined over a
 window of consecutive TRAINING steps at `grad_probe_every=1`, which is what the guard forces
 when it is enabled; these arms probed every 25 steps to save time, so emulating a 200-step
@@ -414,7 +439,12 @@ every step.
 Read the rows in pairs.
 
 **Soft against hard.** The two soft arms end 2.2 to 2.7 nats above their own minima, against
-the control's 0.62 — they are WORSE than doing nothing. A loss-side hinge is a tug of war and it lost: it never
+the control's 0.62 — they are WORSE than doing nothing. Two reasons, and the second is the
+one worth carrying away. A loss-side hinge is a tug of war and it lost, never pinning
+`sigma_max` anywhere near its cap (1.49 at step 300, 2.86 at 1200, 4.26 at 1800, against a
+cap of 1.5). And its gradient is CORE-LOCAL, so as the excess grows the penalty takes over
+the single global clip budget and every parameter outside the core stops moving — the
+regulariser feeds the failure it was added to prevent. A loss-side hinge is a tug of war and it lost: it never
 pinned `sigma_max` anywhere near its cap (1.49 at step 300, 2.86 at 1200, 4.26 at 1800,
 against a cap of 1.5). Once the excess is large its quadratic gradient dominates the loss
 and the model optimises the regulariser instead of the data, which is what the validation
@@ -427,6 +457,15 @@ and more than halves the CE damage. It still takes over.
 
 **None of them cures.** The best case is an intervention that costs nothing, reaches a
 better validation CE than the control, and still takes over.
+
+**And the hard cap made the realized gain WORSE.** `a35-proj15` pinned `sigma_max` at 1.50
+and its realized per-block backward gain reached **1.659**, against the uncapped control's
+1.402 at the same step. That is not noise around the control, it is the wrong direction, and
+it has a reading: if the dynamics are driving toward some composed gain, capping each
+block's magnitude leaves rotating the blocks' top subspaces INTO each other as the only way
+to get there. On that reading a per-block spectral cap does not merely fail to slow the
+alignment — it converts magnitude growth into alignment growth. The alignment factor is not
+measured on these arms' checkpoints, so this is a reading of one number and not a result.
 
 ### Why none of them could have
 

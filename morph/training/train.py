@@ -635,6 +635,14 @@ def _preclip_probe(model) -> dict[str, float]:
     ``clip_grad_norm_`` — that window is the only place the gradients are both unscaled
     and unclipped.
 
+    CAUTION, measured 2026-08-24: this reads `p.grad` after the backward of the FULL
+    objective, so a regulariser that is not uniform over the parameter tree lands inside the
+    region it constrains and inflates that region's share. The spectral penalty is
+    core-local, and on a penalised arm `preclip/total` reached 1.6e5 while its control sat at
+    1.35 — the core share went to 0.998 because of the PENALTY's gradient, not the model's.
+    Separating them needs a second backward, which this probe deliberately does not do. Read
+    `preclip/core_share` as contaminated on any run with a region-local loss term.
+
     Returns a flat wandb-ready dict; the caller logs it at the step it belongs to.
     """
     names, grads = [], []

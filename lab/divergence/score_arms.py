@@ -5,6 +5,12 @@ reused unchanged here so arms scored on different days are comparable:
 
     TAKEN OVER = core share > 0.5 on more than 30 % of the last 50 probed steps.
 
+    The share is contaminated on any arm with a REGION-LOCAL loss term. The pre-clip probe
+    reads p.grad after the backward of the full objective, so a core-local regulariser is
+    inside preclip/core. Measured: a spectral-penalty arm reached preclip/total 1.6e5 while
+    its control sat at 1.35, and its share went to 0.998 on the penalty's gradient. On such
+    arms read the validation CE, which is penalty-free.
+
 Also reported, because the share is the SYMPTOM and the block backward gain is the
 mechanism: the median block gain and its r2 over the same window, the first step at which
 each criterion fires, and — read off the console log — the loss minimum and the loss at the
