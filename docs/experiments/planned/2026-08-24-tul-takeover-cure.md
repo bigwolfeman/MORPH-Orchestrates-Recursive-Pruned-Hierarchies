@@ -127,6 +127,29 @@ All runs on the 5090.
 The verdict rule for "took over" is the one already fixed in the RCA: core share above 0.5
 on more than 30 % of the last 50 probed steps.
 
+## Method amendment, 2026-08-24 10:40 — the seed-1 control is a coin flip
+
+Reason, written while the control was still running and before any cure arm at this
+configuration had started. `cure-a1r-ctrl` (seed 1, `alpha_cap` 1.0, no penalty) is at step
+3500 with val CE falling monotonically — 5.42, 4.80, 4.62, 4.55, 4.16, 4.10, 4.05 — and
+`spec/sigma_max` at 2.53, which tracks the HEALTHY seed-0 run (2.58 at step 3000) and not
+the seed-1 run it was meant to reproduce (4.87 at step 3000). At `alpha_cap` 1.0 the
+failure is roughly a coin flip: it held seed 0 for 20000 steps and killed seed 1 at 4140.
+A single arm at a configuration that fails half the time cannot carry a comparison, whether
+it fails or not.
+
+So the deciding pair moves to `ademamix_alpha_cap` 3.5, which `tul_short.yaml` records as
+diverging 5/5 at abort steps 2080, 3240, 4540, 5900 and 6200, with a matched control run
+under the same code on the same day: `a35-ctrl` and `a35-spec`, 7000 steps each, differing
+only by the two penalty keys. `cure-a1r-ctrl` still runs to 6000 and is reported whatever
+it does — a control that failed to fail is a fact about the phenomenon's variability, not
+an arm to discard. P5 is judged against `a35-ctrl`; P4 is judged against `a35-spec` at
+`alpha_cap` 3.5, which is a HARDER test than the one predicted, since it removes the
+incumbent fix as well. The `cure-a1r-spec` arm keeps its role as the CE-cost measurement,
+at 10000 steps against the free uncapped control `c23dwx4a` (train loss 3.74 at 12000).
+
+Nothing in Predictions is edited.
+
 ## Risks
 
 * n = 1 per arm. Bit-reproducibility makes the microcosm pair a controlled comparison, not
