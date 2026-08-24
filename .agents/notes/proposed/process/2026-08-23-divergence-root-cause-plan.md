@@ -89,14 +89,30 @@ Four phases. Each has a gate; do not start the next until the gate holds.
       `grad_probe_every` (0 vs 1, a `no_grad`/`detach` readout that cannot change the math)
       reached `train/loss` 8.4143 and 8.4520 at step 40. Changed launch timing alone moves
       the trajectory by 4.5e-2 in loss within 40 steps.
-- [ ] **0.4 THE GATE — does the control replicate?** Run `tul_a1` at ONE seed, twice,
+- [x] **0.4 THE GATE — FAILED. The run is still not reproducible.** Run `tul_a1` at ONE seed, twice,
       byte-identical config, to step 2600, eval DISABLED so an eval pass cannot perturb
       the RNG stream. This is RCA §22's P2, prepared 2026-08-18 and never run.
       **Decision rule, pre-registered:** the two runs must agree on the onset step within
       ±25 AND on `train/loss` at step 1000 to 4 decimals. If they do, the phenomenon is
       bisectable and Phase 1 starts. If they do not, the kernel atomics are the next
       suspect and Phase 0 continues — do NOT proceed to Phase 1 on an irreproducible run.
-      EVIDENCE: pending
+      
+      **RESULT (2026-08-23): FAIL, on the FIRST BACKWARD PASS.** Two runs, one seed, one
+      driver script so no edit could land between them, code pinned at `a81a158`. They
+      share a data order, so at every step they see the same batch and any difference is
+      nondeterminism alone. `preclip/total` relative difference: **>1e-6 at step 0**,
+      1e-4 at step 5, 1e-2 at step 9, 0.1 at step **11**, 1.0 at step 50; median 6.5 %
+      after step 100. Step-0 forward loss is 11.0681 in BOTH, so the models are identical
+      at init and the first backward is where they part.
+      `bag_mean` was necessary and nowhere near sufficient. Per this plan's own decision
+      rule, cross-run bisection stays blocked and the attention-backward atomics move to
+      the top of the queue.
+      **Two consequences:** (a) any n=1 two-run comparison on this model is unreadable
+      unless its effect beats the measured spread — median 6.5 % on the pre-clip gradient
+      norm and median 0.0788 on `core_gain_t0` after step 100; every past single-run arm in
+      this programme should be re-read against those numbers. (b) Within-run measurements
+      are untouched, which is why Phase 1's ordering stands.
+      EVIDENCE: [`../../../../docs/experiments/failures/2026-08-23-tul-run-replication.md`](../../../../docs/experiments/failures/2026-08-23-tul-run-replication.md)
 
 ### Phase 1 — watch the onset  (~45 min, needs 0.4)
 

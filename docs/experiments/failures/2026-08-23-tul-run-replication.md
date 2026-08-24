@@ -1,6 +1,6 @@
 # Experiment: does a fixed-seed TUL run replicate?
 
-Status: planned
+Status: failure — the hypothesis is falsified. The run is STILL not reproducible.
 
 ## Question
 
@@ -114,3 +114,84 @@ onset at all. If neither replicate pair takes over by 2600, P3 is untestable as 
 and the comparison falls back to the P2/P4 loss-agreement predictions plus a trajectory
 distance (`|loss_a − loss_b|` against step). That fallback is named here, in advance, so
 it is not invented after seeing the data.
+
+
+---
+
+# Results (2026-08-23)
+
+Arms R1a / R1b: `tul_a1`, `ademamix_alpha_cap=3.5`, seed 0, eval and generation disabled,
+`grad_probe_every=1`, 4000 steps, launched back-to-back from one driver script
+(`ignore/perf/phase1/run_replicates.sh`) so that no code edit could land between them.
+Code pinned at commit `a81a158`. wandb `morph-tul/repl-det-a`, `repl-det-b`.
+
+## The gate FAILS, and it fails on the first backward pass
+
+The console logs loss every 200 steps, so P2's "loss at step 100" has no data point. The
+per-step probe gives a strictly better test: the two runs share a seed and therefore a
+data order, so at every step they see the SAME batch and any difference is nondeterminism
+alone. Comparing `preclip/total`, the pre-clip global gradient norm:
+
+| step | run A | run B | relative difference |
+|---:|---:|---:|---:|
+| 0 | 83028.5 | 83023.1 | 6.5e-5 |
+| 1 | 1116.79 | 1116.80 | 8.3e-6 |
+| 5 | 1587.62 | 1592.38 | 3.0e-3 |
+| 10 | 10.4298 | 11.0606 | 6.0e-2 |
+| 20 | 4.89593 | 3.55799 | 2.7e-1 |
+| 50 | 1.93006 | 13.9245 | 6.2 |
+
+First step at which the relative difference exceeds each level: **1e-6 at step 0**, 1e-4 at
+step 5, 1e-2 at step 9, 0.1 at step 11, 1.0 at step 50. Median relative difference after
+step 100: **6.5 %**.
+
+**Step 0 already differs.** The two models are bit-identical at initialisation — the
+step-0 forward loss is 11.0681 in both — so the first BACKWARD pass is where they part.
+`bag_mean` is deterministic now, so this is the residual, and the named suspects are the
+`tl.atomic_add` calls in `fused_csa_attention.py:279` and `fused_hca_attention.py:288`.
+
+## Prediction scoring
+
+| | prediction | outcome |
+|---|---|---|
+| P1 | the `index_add_` version does not replicate | **not tested this session.** Prior evidence stands (RCA §17: `G-a1-b6-seed0` and `D8` shared config and seed and behaved differently) and the operator-level determinism result is direct, but neither is this experiment's own run. |
+| P2 | with deterministic `bag_mean`, loss at step 100 agrees to 4 dp | **FAIL.** No step-100 console point, and the per-step gradient does not agree even at step 0. |
+| P3 | onset steps agree within ±25 | **UNTESTABLE.** Neither run took over. Run A's highest core share over 4000 steps is 0.1105, and that is a step-122 startup transient; it finished at 0.0143. The pre-registered fallback applies. |
+| P4 | loss at step 1000 still differs by more than 1e-6 | confirmed, but this was a caveat, not a goal. The observed divergence is ~4 orders of magnitude larger than P4 anticipated. |
+
+## Verdict
+
+**The hypothesis is falsified.** `bag_mean` was necessary but nowhere near sufficient. It
+cut a single-step gradient error from 3.92e-2 to 3.17e-3 (12×) and it removed a genuine
+defect that the standard `torch.use_deterministic_algorithms(True)` guard does not flag —
+but at the level of a training RUN it changes nothing. Two identical runs decorrelate to
+10 % in **eleven steps**.
+
+Per this plan's own pre-registered decision rule, cross-run bisection stays blocked and
+the attention-backward atomics move to the top of the queue.
+
+## Updated hypothesis
+
+The residual is the fused CSA/HCA attention backward. Two consequences follow that were
+not obvious before:
+
+1. **Any experiment on this model that compares two RUNS at n=1 is unreadable**, whatever
+   it varies, unless its effect exceeds the run-to-run spread measured here. That spread
+   is now quantified: median 6.5 % on the pre-clip gradient norm and median 0.0788 on
+   `core_gain_t0` after step 100. Every past single-run arm in the divergence programme
+   should be re-read against those numbers.
+2. **Within-run measurements are unaffected**, which is why
+   [Phase 1's ordering result](../results/2026-08-23-tul-onset-ordering.md) stands — it was
+   pre-declared as a within-run temporal comparison for exactly this reason.
+
+## What this does NOT say
+
+- It does not prove the attention atomics are the source. That attribution is the obvious
+  next probe (`ignore/perf/phase1/attn_determinism.py`, kernels on versus off) and is
+  **not yet run** — it needs a free card.
+- It does not measure whether the divergence base rate differs from the Phase 1 control,
+  because the step-budget confound (`ademamix_t_beta3` follows `training.steps`) means the
+  5000-step Phase 1 run and this 4000-step pair do not share an optimizer schedule.
+- Run A finishing healthy at 4000 is NOT evidence that the control does not diverge. RCA
+  §13 recorded control abort steps of 2080, 3240, 4540, 5900 and 6200; 4000 sits inside
+  that spread.
