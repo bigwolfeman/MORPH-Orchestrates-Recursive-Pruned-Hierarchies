@@ -41,18 +41,43 @@ def _log_map_origin(x: Tensor) -> Tensor:
 
     Drops the time component x₀ and returns a d-dimensional tangent vector.
 
+    On the hyperboloid x₀ = sqrt(1 + ‖xs‖²), so the geodesic distance
+    ``acosh(x₀)`` is EXACTLY ``asinh(‖xs‖)`` and the tangent vector is
+
+        asinh(‖xs‖) / ‖xs‖ · xs
+
+    which is also what makes this map the Lorentz channel's normalisation: the
+    coefficient decays like ``ln‖xs‖ / ‖xs‖``, so embedding norms grow
+    logarithmically rather than linearly.
+
+    Computing it that way instead of through ``acosh``/``sqrt(x₀² − 1)`` removes
+    three defects at once (2026-08-23):
+
+    1. ``x₀ * x₀ - 1.0`` is catastrophic cancellation for small ‖xs‖ — x₀ is
+       1 + O(‖xs‖²), so the subtraction discards most of the mantissa. That is
+       what the clamps were compensating for.
+    2. The old L'Hôpital guard was DEAD CODE. It tested ``denom < 1e-4`` while
+       ``denom`` was floored at ``sqrt(_EPS) = 1e-3``, so it could never fire.
+    3. Because it never fired, the coefficient was a constant **1.3811** for
+       ‖xs‖ < ~2e-3 instead of the correct limit of 1.0 — a 38 % error with a
+       discontinuity at the boundary.
+
+    Not currently reachable: measured over two checkpoints (a diverged one and a
+    healthy 20k one), 0 of 49169 vocabulary rows have ‖xs‖ below 2e-3, and the
+    minimum is 0.072 — about 36× above it. This is a latent defect being removed
+    before it is reached, not an explanation of any observed failure.
+
     Args:
         x: [..., d+1] Lorentz vector (x₀ is first component).
 
     Returns:
         [..., d] tangent vector at the origin.
     """
-    x0 = x[..., :1]                                            # time component
     xs = x[..., 1:]                                            # spatial components
-    alpha = torch.acosh(torch.clamp(x0, min=1.0 + _EPS))      # geodesic distance
-    denom = torch.sqrt(torch.clamp(x0 * x0 - 1.0, min=_EPS))
-    # Near the origin denom→0; coefficient → 1 (L'Hôpital).
-    coeff = torch.where(denom < 1e-4, torch.ones_like(denom), alpha / denom)
+    n = xs.norm(dim=-1, keepdim=True)
+    # asinh is well conditioned at 0; the ratio is the only removable singularity,
+    # and _EPS is far below the smallest norm any trained table has shown.
+    coeff = torch.where(n < _EPS, torch.ones_like(n), torch.asinh(n) / n.clamp(min=_EPS))
     return coeff * xs
 
 
