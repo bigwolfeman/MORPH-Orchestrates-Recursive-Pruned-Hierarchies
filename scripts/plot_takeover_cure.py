@@ -1,19 +1,17 @@
-"""Figure for the TUL core-takeover cure (docs/experiments/results/2026-08-24-*-cure.md).
+"""Figure for the TUL core-takeover cure
+(docs/experiments/results/2026-08-24-tul-takeover-cure.md).
 
-Four panels, left to right:
+Six panels, in the order the argument is made:
 
-  A  Operator versus gradient. The per-block typical gain read off the core map's
-     Jacobian (lab/divergence/jac_ladder.py) against the per-block backward gain fitted
-     from gradient norms, on the ROLL_1625..1850 ladder. Two independent measurements of
-     the same quantity; they either agree or the mechanism story is wrong.
-  B  The deterministic microcosm. Block backward gain, control versus cure.
-  C  The seed-1 real configuration. Train loss, control versus cure. The harm is a
-     TURNAROUND, so this is the panel that says whether it was cured.
-  D  The cap sweep. Typical block gain in the SICK state as a function of the spectral
-     cap, by which family of core linears is capped.
+  A  the map barely changes, its directions align  — operator vs gradient on the onset ladder
+  B  the cotangent concentrates                    — effective positions, slots vs tokens
+  C  what has to shrink, and by how much           — cap sweep, by family of core linear
+  D  the cure holds the gain below 1               — deterministic microcosm, control vs cure
+  E  the harm, and its absence                     — validation CE, control vs cure
+  F  the level of sigma_max is not the criterion   — sigma_max history across four runs
 
-COLOUR IS NEVER THE ONLY CHANNEL: every series also carries its own line style and
-marker, and the two arms of every pair are solid versus dashed.
+COLOUR IS NEVER THE ONLY CHANNEL: every series carries its own line style and marker, and
+the two arms of every pair are solid versus dotted.
 """
 from __future__ import annotations
 
@@ -21,7 +19,6 @@ import argparse
 import json
 import os
 import pathlib
-import re
 import statistics as st
 import sys
 
@@ -33,17 +30,23 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # lab/ is a spike tree, not a package (its directory names are not importable), so the
 # shared loaders are pulled in by path rather than by making lab/ into one.
 sys.path.insert(0, str(ROOT / "lab" / "divergence"))
-from score_arms import load_loss, load_probe                       # noqa: E402
+from score_arms import load_probe, load_val                       # noqa: E402
 
 FIGDIR = ROOT / "docs" / "experiments" / "figures"
 OI = {"black": "#000000", "orange": "#E69F00", "sky": "#56B4E9", "green": "#009E73",
       "blue": "#0072B2", "vermillion": "#D55E00", "purple": "#CC79A7"}
-CTRL = dict(color=OI["vermillion"], ls=":", marker="x", lw=1.8)
-CURE = dict(color=OI["blue"], ls="-", marker="o", lw=1.8, ms=3.5)
+CTRL = dict(color=OI["vermillion"], ls=":", marker="x", lw=1.9, ms=4)
+CURE = dict(color=OI["blue"], ls="-", marker="o", lw=1.9, ms=4)
 
 
-def smooth(xs, ys, k=9):
-    """Centred median filter — the per-step probe is noisy and the trend is the claim."""
+def alignment(t):
+    p = 1.0
+    for v in t["rms_blocks"]:
+        p *= v
+    return t["rms"] / p
+
+
+def smooth(xs, ys, k=25):
     out = []
     for i in range(len(ys)):
         lo, hi = max(0, i - k // 2), min(len(ys), i + k // 2 + 1)
@@ -51,37 +54,17 @@ def smooth(xs, ys, k=9):
     return xs, out
 
 
-def series(probe, key, upto=None):
-    ks = sorted(k for k in probe if upto is None or k <= upto)
-    if key == "share":
-        return ks, [probe[k]["preclip/core"] / probe[k]["preclip/total"] for k in ks]
-    return ks, [probe[k].get(key, float("nan")) for k in ks]
-
-
-def panel_a(ax, ladder_path, ctrl_probe):
-    """The three numbers that separate 'the map grew' from 'the map aligned'.
-
-    isotropic  = the gain a generic direction sees through one core block
-    realized   = the gain the actual backward cotangent sees (fitted from grad norms)
-    alignment  = whole-step gain / product of the per-block gains; below 1 the blocks'
-                 amplifying directions disagree, above 1 they agree
-    """
-    lad = json.load(open(ladder_path))
+def panel_a(ax, path, ctrl_probe):
+    lad = json.load(open(path))
     steps = [r["step"] for r in lad]
     iso = [r["sigma"]["t0"]["rms_block_gain"] for r in lad]
-    align = []
-    for r in lad:
-        prod = 1.0
-        for v in r["sigma"]["t0"]["rms_blocks"]:
-            prod *= v
-        align.append(r["sigma"]["t0"]["rms"] / prod)
-    grad = [ctrl_probe.get(s, {}).get("preclip/core_block_gain", float("nan"))
-            for s in steps]
+    ali = [alignment(r["sigma"]["t0"]) for r in lad]
+    grad = [ctrl_probe.get(s, {}).get("preclip/core_block_gain", float("nan")) for s in steps]
     ax.plot(steps, iso, color=OI["blue"], ls="-", marker="o", ms=4,
             label="operator, isotropic per block")
     ax.plot(steps, grad, color=OI["orange"], ls="--", marker="s", ms=4,
             label="realized per block (gradient)")
-    ax.plot(steps, align, color=OI["purple"], ls="-.", marker="^", ms=4,
+    ax.plot(steps, ali, color=OI["purple"], ls="-.", marker="^", ms=5,
             label="alignment across the 6 blocks")
     ax.axhline(1.0, color=OI["black"], lw=0.8, ls=":")
     ax.set_xlabel("step"); ax.set_ylabel("gain (dimensionless)")
@@ -89,50 +72,93 @@ def panel_a(ax, ladder_path, ctrl_probe):
     ax.legend(fontsize=7, loc="upper left")
 
 
-def panel_b(ax, ctrl_probe, cure_probe, upto):
-    for probe, style, lab in ((ctrl_probe, CTRL, "control"), (cure_probe, CURE, "cure")):
-        ks, v = series(probe, "preclip/core_block_gain", upto)
-        ks, v = smooth(ks, v, 25)
-        ax.plot(ks, v, label=lab, markevery=200, **style)
-    ax.axhline(1.0, color=OI["black"], lw=0.8, ls="-.")
-    ax.set_xlabel("step"); ax.set_ylabel("block backward gain (median of 25)")
-    ax.set_title("B  deterministic microcosm\nseed 0, batch 6", fontsize=9)
-    ax.legend(fontsize=7, loc="upper left")
-
-
-def panel_c(ax, pairs):
-    for label, path, style in pairs:
-        pts = load_loss(path)
-        if not pts:
-            continue
-        xs, ys = zip(*pts)
-        ax.plot(xs, ys, label=label, markevery=max(1, len(xs) // 12), **style)
-        lo = min(pts, key=lambda t: t[1])
-        ax.plot([lo[0]], [lo[1]], marker="v", ms=7, color=style["color"], ls="none")
-    ax.set_xlabel("step"); ax.set_ylabel("train loss (nats)")
-    ax.set_title("C  seed 1, real configuration\ntriangle = each arm's own minimum",
-                 fontsize=9)
-    ax.legend(fontsize=7)
-
-
-def panel_d(ax, sweeps):
-    marks = {"mlp": ("o", "-", OI["blue"]), "attn": ("s", "--", OI["orange"]),
-             "all": ("D", "-.", OI["green"])}
-    for scope, path in sweeps:
+def panel_b(ax, slots_path, tokens_path):
+    for path, style, lab in ((slots_path, CURE, "slot path (A1), 57 valid slots"),
+                             (tokens_path, CTRL, "token path (A0 code path), 1152")):
         if not os.path.exists(path):
             continue
         rows = json.load(open(path))
-        caps = [r["cap"] for r in rows]
-        gains = [r["sigma"]["t0"]["rms_block_gain"] for r in rows]
-        m, ls, c = marks[scope]
-        order = sorted(range(len(caps)), key=lambda i: caps[i])
-        ax.plot([caps[i] for i in order], [gains[i] for i in order],
-                marker=m, ls=ls, color=c, label=f"cap {scope}", lw=1.8)
-    ax.axhline(1.0, color=OI["black"], lw=0.8, ls="-.")
-    ax.set_xlabel("spectral cap on the core linears")
-    ax.set_ylabel("typical block gain, sick state")
-    ax.set_title("D  what has to shrink\n(ROLL_step_1850)", fontsize=9)
+        xs = [r["step"] for r in rows]
+        ys = [r["rank"]["eff_positions_per_block"]["0"] for r in rows]
+        ax.plot(xs, ys, label=lab, **style)
+    ax.set_yscale("log")
+    ax.set_xlabel("step"); ax.set_ylabel("effective positions at core block 0")
+    ax.set_title("B  the cotangent concentrates\n(same weights, both paths)", fontsize=9)
     ax.legend(fontsize=7)
+
+
+def panel_c(ax, sweeps, ladder_path):
+    marks = {"mlp": ("o", "-", OI["blue"]), "attn": ("s", "--", OI["orange"]),
+             "all": ("D", "-.", OI["green"])}
+    lad = json.load(open(ladder_path))
+    sick = [r for r in lad if r["step"] == 1850][0]["sigma"]["t0"]
+    healthy = [alignment(r["sigma"]["t0"]) for r in lad if r["step"] <= 1750]
+    for scope, path in sweeps:
+        if not os.path.exists(path):
+            continue
+        rows = sorted(json.load(open(path)), key=lambda r: r["cap"])
+        m, ls, c = marks[scope]
+        ax.plot([r["cap"] for r in rows], [alignment(r["sigma"]["t0"]) for r in rows],
+                marker=m, ls=ls, color=c, label={"mlp": "cap the MLP", "attn": "cap attention", "all": "cap everything"}[scope], lw=1.9, ms=5)
+    ax.axhline(alignment(sick), color=OI["vermillion"], lw=1.0, ls=":")
+    ax.annotate("uncapped, sick", (1.0, alignment(sick)), fontsize=7,
+                textcoords="offset points", xytext=(2, 3))
+    ax.axhspan(min(healthy), max(healthy), color=OI["black"], alpha=0.10)
+    ax.annotate("healthy band", (2.4, max(healthy)), fontsize=7,
+                textcoords="offset points", xytext=(0, 3))
+    ax.set_xlabel("spectral cap applied to the core linears")
+    ax.set_ylabel("alignment, sick state")
+    ax.set_title("C  what has to shrink\n(ROLL_step_1850)", fontsize=9)
+    ax.legend(fontsize=7, loc="lower right")
+
+
+def panel_d(ax, ctrl_probe, cure_probe, upto):
+    for probe, style, lab in ((ctrl_probe, CTRL, "control"), (cure_probe, CURE, "cure")):
+        ks = sorted(k for k in probe if k <= upto)
+        v = [probe[k].get("preclip/core_block_gain", float("nan")) for k in ks]
+        ks, v = smooth(ks, v)
+        s = dict(style); s["marker"] = "None"
+        ax.plot(ks, v, label=lab, **s)
+    ax.axhline(1.0, color=OI["black"], lw=0.8, ls=":")
+    ax.set_xlabel("step"); ax.set_ylabel("block backward gain (median of 25)")
+    ax.set_title("D  deterministic microcosm\nseed 0, batch 6", fontsize=9)
+    ax.legend(fontsize=7, loc="upper left")
+
+
+def panel_e(ax, arms):
+    for label, path, style in arms:
+        pts = load_val(path)
+        if not pts:
+            continue
+        xs, ys = zip(*pts)
+        ax.plot(xs, ys, label=label, **style)
+        lo = min(pts, key=lambda t: t[1])
+        ax.plot([lo[0]], [lo[1]], marker="v", ms=8, color=style["color"], ls="none")
+    ax.set_xlabel("step"); ax.set_ylabel("validation CE (nats)")
+    ax.set_title("E  the harm is a turnaround\ntriangle = each arm's own minimum", fontsize=9)
+    ax.legend(fontsize=7)
+
+
+def panel_f(ax, hist_path, cure_probe_log):
+    if not os.path.exists(hist_path):
+        return
+    hist = json.load(open(hist_path))
+    styles = {
+        "c23dwx4a": ("tul-a1 s0, healthy to 20k", dict(color=OI["green"], ls="-", marker="o", ms=3)),
+        "0ujvtukf": ("tul-a1r s1, died at 4140", dict(color=OI["vermillion"], ls=":", marker="x", ms=4)),
+        "capture": ("onset-capture, took over 1866", dict(color=OI["orange"], ls="--", marker="s", ms=3)),
+        "spec-scratch": ("cure, cap 1.5", dict(color=OI["blue"], ls="-.", marker="^", ms=3)),
+    }
+    for key, (lab, st_) in styles.items():
+        if key not in hist:
+            continue
+        xs = [p[0] for p in hist[key]]
+        ys = [p[1] for p in hist[key]]
+        ax.plot(xs, ys, label=lab, lw=1.7, markevery=max(1, len(xs) // 12), **st_)
+    ax.set_xscale("log")
+    ax.set_xlabel("step (log)"); ax.set_ylabel("sigma_max of the core MLP linears")
+    ax.set_title("F  the LEVEL is not the criterion,\nthe RATE is", fontsize=9)
+    ax.legend(fontsize=7, loc="upper left")
 
 
 def main():
@@ -142,22 +168,25 @@ def main():
     a = ap.parse_args()
     S, C = a.scratch, os.path.join(a.scratch, "cure")
 
-    ctrl_probe = load_probe(f"{S}/phase1/capture.jsonl")
-    cure_probe = load_probe(f"{S}/phase1/rca/spec_scratch.jsonl")
+    det_ctrl = load_probe(f"{S}/phase1/capture.jsonl")
+    det_cure = load_probe(f"{S}/phase1/rca/spec_scratch.jsonl")
 
-    fig, axes = plt.subplots(1, 4, figsize=(17, 4.0))
-    panel_a(axes[0], f"{C}/ladder.json", ctrl_probe)
-    panel_b(axes[1], ctrl_probe, cure_probe, 2100)
-    panel_c(axes[2], [("control (no penalty)", f"{C}/cure-a1r-ctrl.log", CTRL),
-                      ("cure (spectral cap 1.5)", f"{C}/cure-a1r-spec.log", CURE),
-                      ("dose control (cap 3.0)", f"{C}/cure-a1r-cap30.log",
-                       dict(color=OI["purple"], ls="--", marker="^", lw=1.5, ms=3.5))])
-    panel_d(axes[3], [("mlp", f"{C}/sweep_mlp.json"), ("attn", f"{C}/sweep_attn.json"),
-                      ("all", f"{C}/sweep_all.json")])
-    for ax in axes:
-        ax.grid(alpha=0.25, lw=0.5)
+    fig, axes = plt.subplots(2, 3, figsize=(16.5, 8.6))
+    panel_a(axes[0][0], f"{C}/ladder.json", det_ctrl)
+    panel_b(axes[0][1], f"{C}/rank_slots.json", f"{C}/rank_tokens.json")
+    panel_c(axes[0][2], [("mlp", f"{C}/sweep_mlp.json"), ("attn", f"{C}/sweep_attn.json"),
+                         ("all", f"{C}/sweep_all.json")], f"{C}/ladder.json")
+    panel_d(axes[1][0], det_ctrl, det_cure, 2100)
+    panel_e(axes[1][1], [("control, alpha_cap 3.5", f"{C}/a35-ctrl.log", CTRL),
+                         ("cure, cap 1.5", f"{C}/a35-spec.log", CURE),
+                         ("cure, cap 3.0", f"{C}/a35-cap30.log",
+                          dict(color=OI["purple"], ls="--", marker="^", lw=1.6, ms=4))])
+    panel_f(axes[1][2], f"{C}/sigma_hist.json", None)
+    for row in axes:
+        for ax in row:
+            ax.grid(alpha=0.25, lw=0.5)
     fig.tight_layout()
-    fig.savefig(a.out, dpi=160)
+    fig.savefig(a.out, dpi=150)
     print(f"wrote {a.out}")
 
 
