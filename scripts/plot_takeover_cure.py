@@ -87,29 +87,26 @@ def panel_b(ax, slots_path, tokens_path):
     ax.legend(fontsize=7)
 
 
-def panel_c(ax, sweeps, ladder_path):
-    marks = {"mlp": ("o", "-", OI["blue"]), "attn": ("s", "--", OI["orange"]),
-             "all": ("D", "-.", OI["green"])}
-    lad = json.load(open(ladder_path))
-    sick = [r for r in lad if r["step"] == 1850][0]["sigma"]["t0"]
-    healthy = [alignment(r["sigma"]["t0"]) for r in lad if r["step"] <= 1750]
-    for scope, path in sweeps:
-        if not os.path.exists(path):
-            continue
-        rows = sorted(json.load(open(path)), key=lambda r: r["cap"])
-        m, ls, c = marks[scope]
-        ax.plot([r["cap"] for r in rows], [alignment(r["sigma"]["t0"]) for r in rows],
-                marker=m, ls=ls, color=c, label={"mlp": "cap the MLP", "attn": "cap attention", "all": "cap everything"}[scope], lw=1.9, ms=5)
-    ax.axhline(alignment(sick), color=OI["vermillion"], lw=1.0, ls=":")
-    ax.annotate("uncapped, sick", (1.0, alignment(sick)), fontsize=7,
-                textcoords="offset points", xytext=(2, 3))
-    ax.axhspan(min(healthy), max(healthy), color=OI["black"], alpha=0.10)
-    ax.annotate("healthy band", (2.4, max(healthy)), fontsize=7,
-                textcoords="offset points", xytext=(0, 3))
-    ax.set_xlabel("spectral cap applied to the core linears")
-    ax.set_ylabel("alignment, sick state")
-    ax.set_title("C  what has to shrink\n(ROLL_step_1850)", fontsize=9)
-    ax.legend(fontsize=7, loc="lower right")
+def panel_c(ax, gap_path):
+    """The repair that also fails: no core weight's spectral GAP is opening.
+
+    Power iteration aligns at rate (sigma_1/sigma_2)^k, so if the gap is flat, no single
+    matrix's spectrum is driving the alignment — which is why five feature-space
+    interventions all failed.
+    """
+    if not os.path.exists(gap_path):
+        return
+    rows = json.load(open(gap_path))
+    steps = [r["step"] for r in rows]
+    med = [sorted(v["gap"] for v in r["gap"].values())[len(r["gap"]) // 2] for r in rows]
+    worst = [max(v["gap"] for v in r["gap"].values()) for r in rows]
+    ax.plot(steps, med, color=OI["blue"], ls="-", marker="o", ms=4, label="median gap")
+    ax.plot(steps, worst, color=OI["orange"], ls="--", marker="s", ms=4, label="worst gap")
+    ax.axhline(1.0, color=OI["black"], lw=0.8, ls=":")
+    ax.set_xlabel("step"); ax.set_ylabel("sigma_1 / sigma_2 of a core linear")
+    ax.set_title("C  the spectral GAP does not open\n(so the norm cure had no target)",
+                 fontsize=9)
+    ax.legend(fontsize=7)
 
 
 def panel_d(ax, ctrl_probe, cure_probe, upto):
@@ -174,13 +171,20 @@ def main():
     fig, axes = plt.subplots(2, 3, figsize=(16.5, 8.6))
     panel_a(axes[0][0], f"{C}/ladder.json", det_ctrl)
     panel_b(axes[0][1], f"{C}/rank_slots.json", f"{C}/rank_tokens.json")
-    panel_c(axes[0][2], [("mlp", f"{C}/sweep_mlp.json"), ("attn", f"{C}/sweep_attn.json"),
-                         ("all", f"{C}/sweep_all.json")], f"{C}/ladder.json")
+    panel_c(axes[0][2], f"{C}/gap.json")
     panel_d(axes[1][0], det_ctrl, det_cure, 2100)
-    panel_e(axes[1][1], [("control, alpha_cap 3.5", f"{C}/a35-ctrl.log", CTRL),
-                         ("cure, cap 1.5", f"{C}/a35-spec.log", CURE),
-                         ("cure, cap 3.0", f"{C}/a35-cap30.log",
-                          dict(color=OI["purple"], ls="--", marker="^", lw=1.6, ms=4))])
+    panel_e(axes[1][1], [
+        ("control", f"{C}/a35-ctrl.log", CTRL),
+        ("soft cap 1.5", f"{C}/a35-spec.log",
+         dict(color=OI["purple"], ls="--", marker="^", lw=1.5, ms=4)),
+        ("hard cap 1.5 MLP", f"{C}/a35-proj15.log",
+         dict(color=OI["orange"], ls="-.", marker="s", lw=1.5, ms=4)),
+        ("hard cap 1.5 +attn", f"{C}/a35-proj15attn.log", CURE),
+        ("control, batch 10", f"{C}/b10-ctrl.log",
+         dict(color=OI["sky"], ls=":", marker="x", lw=1.5, ms=4)),
+        ("slots 128, batch 10", f"{C}/b10-slots128.log",
+         dict(color=OI["green"], ls="-", marker="D", lw=1.8, ms=4)),
+    ])
     panel_f(axes[1][2], f"{C}/sigma_hist.json", None)
     for row in axes:
         for ax in row:

@@ -141,7 +141,7 @@ MLP — which is ternarised by a weight parametrization — it is not the matrix
 applies, and it is not comparable to `spec/sigma_max`, which measures the EFFECTIVE map and
 reports 3.30 at step 1800 on this same run. And a spectral norm of the weights is not the
 spectral norm of the block's Jacobian; the operator itself is measured in
-[the cure experiment](2026-08-24-tul-takeover-cure.md).
+[the cure experiment](../failures/2026-08-24-tul-takeover-cure.md).
 
 ## Confound found and declared: the mid-run spectral arms
 
@@ -174,7 +174,7 @@ from step 0. No resume, so no introduction transient.
 The intervention holds the block gain below 1 through the step at which the control took
 over, and it costs 0.006 nats at step 1800. **This is the affirmative test the mechanism
 needed.** It is followed up at a second seed and a longer horizon in
-[the cure experiment](2026-08-24-tul-takeover-cure.md), which also measures the OPERATOR
+[the cure experiment](../failures/2026-08-24-tul-takeover-cure.md), which also measures the OPERATOR
 and finds that what changes across the onset is not the map's size but the alignment of
 its blocks' amplifying directions.
 
@@ -195,7 +195,7 @@ arms run to 6000 and 12000.
 ## Not verified
 
 - ~~That the block gain is CAUSAL.~~ ANSWERED above by `spec-scratch`, and followed up in
-  [the cure experiment](2026-08-24-tul-takeover-cure.md). What is still not verified is
+  [the cure experiment](../failures/2026-08-24-tul-takeover-cure.md). What is still not verified is
   that the block gain is the ONLY route in: nothing here rules out a second failure mode
   that this cure does not touch.
 - Anything about interventions applied EARLY. Every arm here starts at step 1750. A cure
