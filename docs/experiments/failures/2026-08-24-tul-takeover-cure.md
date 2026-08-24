@@ -313,10 +313,12 @@ Under that picture the alignment factor and the cotangent's participation ratio 
 SYMPTOMS of a forward state collapse, and every weight-norm intervention failed because it
 was treating a symptom's symptom.
 
-The `bptt_depth` arm is the evidence that this reading beats the pure backward one: halving
-the backward's applications from 24 to 12 — four orders of magnitude off the compounding —
-reduced the harm by 64 % and did not prevent it, and the FORWARD still loops 6 to 8 times
-regardless of `bptt_depth`.
+Two arms test that reading and both support it. The `bptt_depth` one is the cheap
+discriminator: halving the backward's applications from 24 to 12 — four orders of magnitude
+off the compounding — reduced the harm by 64 % and did not prevent it, and the FORWARD still
+loops 6 to 8 times regardless of `bptt_depth`. The next section is the expensive one: an
+intervention aimed at the slot states' degeneracy and at nothing else holds the run, and
+brings `sigma_max` down as a side effect.
 
 ## The intervention aimed at the measured cause
 
