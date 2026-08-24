@@ -66,6 +66,29 @@ as `_preclip_probe` (first dotted component of the name, `_orig_mod.` stripped):
   `ac_k = cos(dW_core[k], dW_core[k+1])`, and their product. This is the parent document's
   named severity measure, at the 25-step scale rather than per step.
 
+## Method amendments
+
+**Amendment 1, 2026-08-24, after the first ladder pass and before any prediction was
+scored.** `coh` was defined as an aggregate of per-coordinate ratios,
+`RMS(|m2| / sqrt(nu/bc2))`. That estimator has an unbounded tail wherever `nu` is small but
+non-zero, so its value is set by a few coordinates. Measured on the 11 rungs it returned
+5.98, 2.88, 0.92, 28.4, 1.62, 2.83, 8.30, 18.4, 39.3, 0.087, 0.068 — three orders of
+magnitude with no relation to the onset. It is replaced by the ratio of aggregates,
+
+    coh = RMS(m2) / RMS_ema(g) = sqrt( sum(m2**2) / (sum(nu)/bc2) )
+
+which is the same quantity at the tensor level and is not outlier-driven. The white-noise
+floor is unchanged at 0.0224. **P4's thresholds were written against the rejected
+definition and are scored against the new one; that substitution is recorded here rather
+than hidden, and P4 is reported as scored-under-amendment whatever it does.** The rejected
+per-coordinate number is still computed and stored as `coh_percoord`.
+
+**Amendment 2, same pass, same reason.** `||dW||` is added to as a SHARE of the whole
+model's displacement, not only as a magnitude. `clip_grad_norm_` rescales every gradient to
+a fixed global norm each step, so `||dW_all||` is close to a constant of the schedule and
+`||dW_core||` inherits that. The share is the part that can still move. This adds a derived
+column; it changes no prediction.
+
 ## Predictions
 
 Written before the instrument was run. Six of them can fail.

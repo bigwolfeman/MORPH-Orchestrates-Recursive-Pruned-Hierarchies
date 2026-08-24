@@ -31,33 +31,19 @@ import re
 import sys
 
 import torch
-from hydra import compose, initialize_config_dir
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _ROOT)
 
-from morph.model.transformer import MORPHTransformer          # noqa: E402
+from lab.divergence._build import build_cfg, build_model       # noqa: E402
 from morph.training.core_jacobian import CoreJacobianProbe    # noqa: E402
 from morph.training.data import create_dataloader             # noqa: E402
-from morph.training.quant_setup import apply_quantization     # noqa: E402
-from morph.training.train import build_morph_config, load_checkpoint  # noqa: E402
-from morph.training.tul_setup import build_tul_runtime        # noqa: E402
+from morph.training.train import load_checkpoint              # noqa: E402
 
 
 def build(config_name: str, overrides: list[str]):
-    with initialize_config_dir(version_base=None,
-                               config_dir=os.path.join(_ROOT, "morph", "configs")):
-        cfg = compose(config_name=config_name, overrides=overrides)
-    tul_rt = build_tul_runtime(cfg)
-    model = MORPHTransformer(build_morph_config(cfg, tul=tul_rt.model_cfg if tul_rt else None))
-    model = model.cuda()
-    # QAT BEFORE any load. The core MLP's ternary STE is registered as a weight
-    # PARAMETRIZATION, so an unquantised model's key is `..._cms.weight` while the
-    # checkpoint's is `..._cms.parametrizations.weight.original`. Skipping this and loading
-    # with strict=False drops every MLP tensor in silence and leaves them at random init —
-    # measured, on the first version of this script: the cap sweep reported that NO core
-    # linear exceeded 2.0 while the run's own log had sigma_max at 3.30.
-    apply_quantization(model, cfg)
+    cfg = build_cfg(config_name, overrides)
+    model, tul_rt = build_model(cfg, device="cuda")
     loader = iter(create_dataloader(cfg.data.tokenizer, cfg.data.dataset,
                                     int(cfg.data.seq_len), int(cfg.training.batch_size),
                                     split="validation", skip_samples=50_000,
