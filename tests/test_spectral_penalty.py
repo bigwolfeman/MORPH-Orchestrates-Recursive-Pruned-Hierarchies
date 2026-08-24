@@ -327,3 +327,33 @@ def test_projection_and_penalty_agree_on_what_the_core_linears_are():
         b = CoreSpectralProjection(m, cap=1.0, include_attn=attn)
         assert [n for n, _, _ in a._linears] == [n for n, _, _ in b._linears]
         assert a._n_mlp == b._n_mlp
+
+
+def test_projection_converges_sigma_before_the_first_step():
+    """Two power iterations from a RANDOM start under-read sigma. Measured on the real
+    model at step 0: 1.2674 against a converged 1.4293, an 11 % under-read, which made the
+    first projection land 13 % above the cap it was asked for. The constructor converges the
+    vectors once so `n_iter` per step only has to TRACK, not to find."""
+    from morph.training.spectral_penalty import CoreSpectralProjection
+    m = _model()
+    cold = CoreSpectralProjection(m, cap=1e6, n_iter=2, warmup_iters=0)
+    warm = CoreSpectralProjection(m, cap=1e6, n_iter=2, warmup_iters=120)
+    ref = CoreSpectralProjection(m, cap=1e6, n_iter=2, warmup_iters=600)
+    name, lin, inf = warm._linears[0]
+    truth = ref._sigma(name, lin, inf, 600)
+    cold_est = cold._sigma(name, lin, inf, 2)
+    warm_est = warm._sigma(name, lin, inf, 2)
+    assert cold_est < truth * 0.99, (cold_est, truth)
+    assert abs(warm_est - truth) / truth < 5e-3, (warm_est, truth)
+
+
+def test_projection_with_verify_survives_a_full_step_on_a_warmed_model():
+    """The end-to-end contract the smoke run exercises: warm up, project, verify, no raise."""
+    from morph.training.spectral_penalty import CoreSpectralProjection
+    m = _model()
+    cap = min(CoreSpectralPenalty(m, cap=0.0, lam=0.0).sigmas().values()) * 0.8
+    proj = CoreSpectralProjection(m, cap=cap, n_iter=2, verify=True, warmup_iters=80)
+    stats = proj.step()          # must not raise
+    assert stats["specproj/n_projected"] > 0
+    after = CoreSpectralPenalty(m, cap=0.0, lam=0.0).sigmas()
+    assert max(after.values()) <= cap * 1.05, max(after.values())

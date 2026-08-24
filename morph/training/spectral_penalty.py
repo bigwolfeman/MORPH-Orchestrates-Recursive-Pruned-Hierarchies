@@ -141,13 +141,21 @@ class CoreSpectralPenalty:
             self._v[name] = v / (v.norm() + 1e-12)
 
     def sigmas(self) -> dict[str, float]:
-        """Diagnostic: current σ_max per core linear (no grad)."""
+        """Diagnostic: current sigma_max per core linear (no grad).
+
+        50 iterations, not 10. Power iteration on a matrix whose top singular values are
+        close converges slowly, and 10 from a cold cache UNDER-reads: measured on the tiny
+        fixture, 1.891 against a converged 1.947, and on the real model 1.2674 against
+        1.4293. The cache warm-starts across calls so a mid-run reading is closer than a
+        step-0 one, but the number goes into wandb as `spec/sigma_max` and is read as if it
+        were the spectral norm, so it should be one.
+        """
         out = {}
         for name, lin, inf in self._linears:
             ref = next(lin.parameters())
             self._ensure_v(name, inf, ref)
             with torch.enable_grad():
-                sig, vnew = _power_iter_sigma(lin, self._v[name].to(ref.dtype), max(self.n_iter, 10))
+                sig, vnew = _power_iter_sigma(lin, self._v[name].to(ref.dtype), max(self.n_iter, 50))
             self._v[name] = vnew
             out[name] = float(sig.detach())
         return out
@@ -196,7 +204,8 @@ class CoreSpectralProjection:
     """
 
     def __init__(self, model: nn.Module, cap: float, n_iter: int = 2,
-                 include_attn: bool = False, verify: bool = False):
+                 include_attn: bool = False, verify: bool = False,
+                 warmup_iters: int = 60):
         self.cap = float(cap)
         self.n_iter = max(1, int(n_iter))
         self.include_attn = bool(include_attn)
@@ -204,6 +213,17 @@ class CoreSpectralProjection:
         self._linears, self._n_mlp = collect_core_linears(
             model, self.include_attn, "CoreSpectralProjection")
         self._v: dict[str, torch.Tensor] = {}
+        # CONVERGE the top singular vectors once, before the first projection. Two
+        # iterations from a RANDOM start under-estimate sigma badly — measured on the real
+        # model at step 0: 1.2674 against a converged 1.4293, an 11 % under-read, which made
+        # the first projection land 13 % above the cap it was asked for. After this warmup
+        # the weights move slowly enough that `n_iter` per step tracks.
+        self.warmup(warmup_iters)
+
+    @torch.no_grad()
+    def warmup(self, n_iter: int = 60) -> None:
+        for name, lin, inf in self._linears:
+            self._sigma(name, lin, inf, n_iter)
 
     def _sigma(self, name: str, lin: nn.Module, in_features: int, n_iter: int) -> float:
         w = raw_weight(lin)
@@ -233,9 +253,12 @@ class CoreSpectralProjection:
                         if abs(s2 - self.cap) / self.cap > 0.05:
                             raise RuntimeError(
                                 f"CoreSpectralProjection: {name} did not land on the cap — "
-                                f"sigma {s:.4f} -> {s2:.4f}, wanted {self.cap:.4f}. The "
-                                f"effective map is not homogeneous in the raw weight on this "
-                                f"path, so the projection means nothing.")
+                                f"sigma {s:.4f} -> {s2:.4f}, wanted {self.cap:.4f}. Either "
+                                f"the power iteration under-read sigma (raise n_iter or "
+                                f"warmup_iters) or the effective map is not homogeneous in "
+                                f"the raw weight on this path (CMSBlockLinear.enable_ternary "
+                                f"freezes its scale in a buffer, and is not). Either way the "
+                                f"projection is not enforcing what it claims.")
         return {"specproj/n_projected": float(n_hit),
                 "specproj/sigma_max_preproj": worst,
                 "specproj/frac_projected": n_hit / len(self._linears)}
