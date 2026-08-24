@@ -1,4 +1,4 @@
-# Agent Note: the core takeover is a POSITION-space concentration, so no weight control reaches it
+# Agent Note: the core takeover is a forward state collapse, so no weight control reaches it
 
 Status: implemented
 
@@ -36,11 +36,21 @@ The measurements behind the decision, all on the same `onset-capture` ladder
   SAME weights on the token path — arm A0's code path, 1152 positions — keep 26 to 59.
 * No core weight's spectral GAP opens. Median `sigma_1/sigma_2` 1.069 -> 1.132 and the worst
   gap FALLS, 2.647 -> 2.421.
+* **And upstream of all of it, the forward states are already degenerate and the loop's
+  effect on them flips sign at the onset.** The 50 valid slot states of a row occupy an
+  effective rank of 1.7 to 4.8 in 1024 dimensions at EVERY rung; at healthy rungs the loop
+  RAISES that rank across its iterations (x1.23 to x1.48) and by step 1850 it LOWERS it
+  (x0.67), with the flip between 1750 and 1800 where the core share goes 0.021 to 0.372.
+  The cotangent sits on the same top-3 slots at every core block.
 
 The loop is power iteration — 24 applications of the same `J^T` — and power iteration
-concentrates onto a direction. The direction it is concentrating in is POSITION space, which
-is why A1 (64 slots) fails and A0 (1024 token positions) does not at the same weights and a
-less protective optimizer setting.
+concentrates onto a direction. But it sharpens a concentration it is HANDED: the slot states
+are near-parallel before the loop touches them, because a slot's input is one shared
+`E_slot` plus a span bag-mean and a mean over many embeddings concentrates. That is why A1
+(64 near-parallel slots) fails and A0 (1024 diverse token positions) does not, at the same
+weights and a LESS protective optimizer setting. It is also why halving `bptt_depth` from 4
+to 2 — four orders of magnitude off the backward compounding — cuts the harm by 64 % and
+does not cure: the FORWARD still loops 6 to 8 times regardless.
 
 ## Alternatives considered
 
@@ -68,9 +78,15 @@ in the RCA.
 * **Cut `bptt_depth` 4 -> 2.** Not tested. It halves the exponent AND halves the power
   iteration's progress per backward, so it has the clearest mechanism behind it of anything
   untried — but it changes the credit-assignment window, which is a change to the METHOD.
-* **Raise `tul.max_slots`.** The intervention the measurement points at, tested at the end of
-  this work; see the experiment record for its result. It also changes the method (tokens per
-  row moves 1033 -> 1161), so it is a design question, not a defect fix.
+* **Raise `tul.max_slots`.** NOT RUN — a measured OOM at batch 12 and at batch 10, and
+  probably close to a no-op anyway, since a typical row uses 57 of the 64 slots and only
+  7.7 % saturate.
+* **Cut `bptt_depth` 4 -> 2.** RUN, as the pre-registered discriminator. It cuts the
+  validation CE damage by 64 % (+0.192 against the control's +0.533) and does not prevent the
+  takeover — which is what favours the forward reading over the pure backward one.
+* **Per-slot input embeddings** (`tul.per_slot_embed`), which break the input degeneracy by
+  giving every slot INDEX its own row. Implemented, tested, off by default, and run once at
+  the end of this work; see the experiment record.
 
 ## Consequences
 

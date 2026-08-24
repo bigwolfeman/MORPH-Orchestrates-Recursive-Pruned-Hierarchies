@@ -1,16 +1,14 @@
-# The TUL core takeover: the mechanism, and why no weight-space cure reaches it
+# The TUL core takeover: it is a forward state collapse, and no weight-space cure reaches it
 
 Status: failure
 
 The experiment asked whether bounding the core map's spectral norm cures the takeover. It
-does not. The predictions that mattered — P4 (the cure holds at a second seed in the real
-configuration) and P9 (the spectral cap stands alone) — are both falsified, so this is filed
-under `failures/` whatever else it established. What it DID establish is the mechanism, in
-much sharper form than the RCA had, and it eliminated an entire family of interventions with
-a measurement that says why.
+does not, and the two predictions that mattered — P4 and P9 — are falsified, so this is filed
+by outcome. What it established instead is a much sharper diagnosis and the elimination of an
+entire family of interventions with a measurement that says why.
 
 Pre-registration: [2026-08-24-tul-takeover-cure](../planned/2026-08-24-tul-takeover-cure.md)
-(with two method amendments, both written before the arms they changed).
+(three method amendments and three late predictions, each written before the arm it names).
 Mechanism this builds on: [the RCA](../results/2026-08-24-tul-takeover-rca.md).
 Procedure: [measuring the core map's operator](../../cookbook/measuring-the-core-map.md).
 Decision record: [the takeover is positional](../../../.agents/notes/implemented/architecture/2026-08-24-core-takeover-is-positional.md).
@@ -18,33 +16,41 @@ Figure: `docs/experiments/figures/tul_takeover_cure.png`.
 
 ## Summary
 
-**The mechanism is now measured on the operator, not inferred from gradients.** The core is
-weight-shared, so the backward applies the same `J^T` `n_core x bptt_depth` = 24 times. That
-is power iteration, and it converges the cotangent onto the map's amplifying direction.
-Across the onset the map's isotropic per-block gain moves **+2.5 %** while the ALIGNMENT of
-its six blocks moves **x2.9** and the realized per-block gain moves **+34.5 %**. The map
-barely changes. Its directions align.
+**The slot states are near-degenerate by design, and at the onset the loop starts making
+them worse instead of better.** Fifty valid slot states of a row occupy an effective rank of
+1.7 to 4.8 in a 1024-dimensional space, with a mean pairwise cosine of +0.39 to +0.71, at
+EVERY checkpoint including healthy ones — they are one shared `E_slot` plus a span bag-mean,
+and a mean over many token embeddings concentrates. What changes at the onset is the SIGN of
+what the core loop does to that rank: at healthy rungs it raises it across its iterations
+(x1.23 to x1.48, cosine falling), and by step 1850 it lowers it (x0.67, cosine rising). The
+flip is between steps 1750 and 1800, which is where the core share goes 0.021 to 0.372. It
+is a FORWARD quantity, it needs one no-grad pass, and it is the earliest indicator in this
+programme.
 
-**The alignment is in POSITION space, not feature space.** The backward cotangent collapses
-from about **13 effective slot positions to 2.5** across the onset, tracking the core share
-step for step. The SAME weights run through the token path — arm A0's code path, 1152
-positions — keep 26 to 59. Meanwhile, on the same checkpoints, no core weight matrix's
-spectrum explains anything: `sigma_max` per block rises only 2.35 -> 3.23, the spectral GAP
-`sigma_1/sigma_2` has a median of 1.069 -> 1.132 with the WORST gap FALLING, and the bulk
-spread of the spectrum does not move.
+**The backward measurements are downstream of that.** The map's isotropic per-block gain
+moves +2.5 % across the onset while the ALIGNMENT of its six blocks moves x2.9; the backward
+cotangent collapses from 13 effective slot positions to 2.5, onto the same top-3 slots at
+every core block, while the SAME weights on the token path keep 26 to 59. The loop is 24
+applications of one `J^T`, i.e. power iteration, and it sharpens a concentration it is
+handed.
 
-**Four interventions in feature space were tried and all four failed** at the configuration
-that turns around 4 times out of 4. Including a hard projection that held `sigma_max` at
-exactly 1.50 for the whole run. That is not four unlucky guesses; it is what the gap
-measurement predicts, since a norm cap leaves every singular vector and every ratio
-`sigma_i/sigma_j` untouched and therefore cannot slow an alignment at all.
+**Four weight-space interventions failed, and two were worse than doing nothing.** Including
+a hard projection that held `sigma_max` at exactly 1.50 for a whole run — whose realized
+per-block gain came out HIGHER than its uncapped control's. No core weight matrix's spectral
+gap opens across the onset (median 1.069 -> 1.132, worst gap FALLING), so there was nothing
+in the weight spectra for a norm control to grip.
 
-**One cure works in the deterministic microcosm and does not transfer.** The soft spectral
-cap at 1.5 prevents the takeover at batch 6 (control took over at 1866; the arm held to 2100
-at equal CE) and loses at batch 12, where the drive is four times faster.
+**Halving the backward's depth helps and does not cure.** `bptt_depth` 4 -> 2 takes 24
+applications to 12 — four orders of magnitude off the compounding — and cuts the validation
+CE damage by 64 %, from +0.533 to +0.192, while the run still turns around. That is the
+pre-registered discriminator, and it favours the forward reading.
 
-So: the takeover is understood, it is reproducible, it has a leading indicator, and it is
-not yet cured. What follows is the evidence for each of those, in the order it was taken.
+**One thing does cure it, in one place.** The soft spectral cap prevents the takeover in the
+bit-reproducible microcosm at batch 6, at equal CE, and loses at batch 12.
+
+So the takeover is understood better than it was, it is reproducible, it now has a forward
+leading indicator, and it is not cured. What follows is the evidence, in the order it was
+taken.
 
 ## What the failure actually is
 
@@ -245,6 +251,69 @@ It also explains, after the fact, why every feature-space intervention failed: t
 constrain what the map does to a VECTOR, and the thing that is concentrating is which
 POSITIONS carry the vector.
 
+## The forward is already degenerate, and the loop's effect on it flips sign
+
+The probe above measures the BACKWARD. Running the same capture forward — the operating
+points the Jacobian probe already collects — and asking what the slot states look like as
+GEOMETRY gives the sharpest number in this document.
+
+Effective rank (participation ratio of the squared singular values) of the 50 valid slot
+states of a row, in 1024 dimensions, per loop iteration; and their mean pairwise cosine:
+
+| step | effective rank, iterations 0 -> 7 | mean pairwise cosine, 0 -> 7 | core share |
+|---:|---|---|---:|
+| 1625 | 2.82 2.52 3.53 4.01 4.78 4.51 4.45 **4.18** | +.517 ... **+.390** | 0.016 |
+| 1700 | 2.25 2.34 2.40 2.60 3.27 3.45 3.41 **2.77** | +.606 ... **+.504** | 0.012 |
+| 1750 | 2.04 1.84 1.91 2.28 2.95 3.27 3.40 **2.98** | +.640 ... **+.482** | 0.021 |
+| 1800 | 2.40 2.16 2.13 2.28 2.53 2.53 2.57 **2.42** | +.561 ... **+.585** | 0.372 |
+| 1850 | 2.71 1.69 1.94 1.88 1.93 1.89 1.83 **1.81** | +.582 ... **+.697** | 0.890 |
+| 1866 | 3.18 2.46 2.97 2.98 2.97 3.11 2.74 **2.77** | +.537 ... **+.479** | 0.961 |
+
+**The slot states are near-degenerate everywhere, healthy included.** Fifty vectors in a
+1024-dimensional space with an effective rank between 1.7 and 4.8 and a mean pairwise cosine
+between +0.39 and +0.71. That is not the disease; it is the design. A slot's input is one
+SHARED `E_slot` plus the bag-mean of its span's token embeddings, and a mean over many
+embeddings concentrates, so the 50 slots start nearly parallel and nothing downstream is
+given a reason to separate them.
+
+**What changes at the onset is the SIGN of what the loop does to that rank.**
+
+| step | rank, last iteration / first | cosine, last − first | reading |
+|---:|---:|---:|---|
+| 1625 | 1.48 | −0.127 | the loop DIVERSIFIES |
+| 1700 | 1.23 | −0.102 | diversifies |
+| 1750 | 1.46 | −0.158 | diversifies |
+| 1800 | 1.01 | **+0.023** | neutral — the flip |
+| 1850 | **0.67** | **+0.115** | the loop COLLAPSES |
+| 1866 | 0.87 | −0.058 | collapsing |
+
+The flip sits between steps 1750 and 1800. The core share over the same two rungs goes
+0.021 to 0.372. This is the earliest indicator in this whole programme — earlier than the
+core share, earlier than the block-gain fit's r2, and it is a FORWARD quantity, measurable
+with one no-grad pass.
+
+**And the cotangent sits on a stable sink.** The top three slots carrying the backward are
+the SAME at every one of the six core blocks (agreement 1.0 at five of six rungs), and the
+single top slot's share of it rises from 0.18 at step 1625 to 0.54 at 1850.
+
+### What this does to the reading
+
+The picture that fits all of it: the slot states are handed to the loop already
+near-parallel; a weight-shared loop applied 6 to 8 times is the oversmoothing regime, and
+whether it separates or collapses them is a property the weights drift across; once it
+collapses them, the gradient has almost nothing to distinguish slots by, concentrates on a
+few, and the backward's 24 applications of the same operator sharpen that concentration
+further.
+
+Under that picture the alignment factor and the cotangent's participation ratio are both
+SYMPTOMS of a forward state collapse, and every weight-norm intervention failed because it
+was treating a symptom's symptom.
+
+The `bptt_depth` arm is the evidence that this reading beats the pure backward one: halving
+the backward's applications from 24 to 12 — four orders of magnitude off the compounding —
+reduced the harm by 64 % and did not prevent it, and the FORWARD still loops 6 to 8 times
+regardless of `bptt_depth`.
+
 ## What the cap sweep says, and what it does not
 
 Projecting the core's linears onto `sigma_max <= cap` in the SICK state (`ROLL_step_1850`)
@@ -370,7 +439,6 @@ spectral cap DOES cure the takeover.
 | block-gain fit r2 | 0.898 | 0.161 |
 | block-gain criterion fires | 1760 | **never** |
 | core-share criterion fires | 1788 | **never** |
-| `sigma_max` at step 1800 | 3.30 | 1.50 |
 | train loss at 1800 | 5.1289 | 5.1348 |
 | outcome | aborted at 1866 | ran to 2100 |
 
@@ -490,6 +558,37 @@ The median gap moves 6 % across the entire onset and **the worst gap falls**. No
 weight matrix is opening a dominant direction. Whatever is aligning, it is not the spectrum
 of any single map.
 
+## The discriminator: halving the number of applications
+
+Pre-registered at 14:51, before the verdict, as the arm that separates two readings of the
+same measurements. `model.bptt_depth` 4 -> 2 takes the backward from 24 applications of the
+same `J^T` to 12. Same batch, same optimizer settings, same control.
+
+| arm | end core share | block gain | r2 | val CE min | val CE @3500 | rise | verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `b10-ctrl` | 0.9999 | 2.445 | 0.97 | 4.8528 @1500 | 5.3855 | +0.533 | TOOK OVER |
+| `b10-bptt2` | 0.9992 | **2.784** | 0.98 | 4.9124 @1500 | 5.1046 | **+0.192** | TOOK OVER |
+
+**It did not prevent it.** The core still ends holding 99.9 % of the pre-clip gradient, with
+a per-block gain that is HIGHER than the control's, and the loss still turns around. What it
+did is reduce the harm by 64 %: +0.192 nats against +0.533 at the same step.
+
+The prediction written before the result was that a backward-power-iteration disease should
+make this arm unmissable, because `2.78^12 = 1.1e5` against `2.45^24 = 2.3e9` is four orders
+of magnitude off the compounding. It is not unmissable. So:
+
+* **The backward compounding is real and it is not the whole story.** Removing four orders
+  of magnitude from it leaves a run that still turns around.
+* **The core's SHARE is not the damage.** A gain above 1 compounded even 12 deep still swamps
+  a coda that is compounded not at all, so the share saturates either way. Anything that
+  reads the share as a severity measure — including this document's verdict rule — is
+  reading a saturating quantity.
+* **The competing reading gains ground.** The slot states are 57 vectors built from one
+  shared `E_slot` plus a span bag-mean, so they start near-parallel, and the FORWARD applies
+  the same six blocks to them 6 to 8 times regardless of `bptt_depth`. If the states are
+  losing rank across the loop, the backward's concentration is a symptom and halving the
+  backward should do roughly what it did: help, and not cure.
+
 ## The instruments, and what each cost to build
 
 `morph/training/spectral_penalty.py` now holds two controls over the core linears, both off
@@ -540,6 +639,19 @@ of three runs at that setting are healthy — and that is exactly why the decidi
 to `alpha_cap` 3.5, which fails 4 out of 4. The move was made and committed while this
 control was still at step 3500 and before any cure arm at the new configuration had started
 (pre-registration, "Method amendment").
+### The control that refused to fail
+
+`cure-a1r-ctrl` was the FIRST control run for this experiment: seed 1, `alpha_cap` 1.0,
+6000 steps, no penalty — the configuration in which wandb `0ujvtukf` turned around at step
+2000 and was aborted at 4140. It did not fail. Validation CE fell monotonically to 3.7732 at
+step 4500 and ended at 3.7878; the core share ended at 0.0105 and the block gain at 1.045;
+`sigma_max` reached 2.67, tracking the HEALTHY seed-0 run rather than the dying seed-1 one.
+
+It is reported, not discarded. At `alpha_cap` 1.0 the failure is roughly a coin flip — two
+of three runs at that setting are healthy — and that is exactly why the deciding pair moved
+to `alpha_cap` 3.5, which fails 4 out of 4. The move was made and committed while this
+control was still at step 3500 and before any cure arm at the new configuration had started
+(pre-registration, "Method amendment").
 ## What this exposed
 
 **A silent measurement defect in my own tooling, found by a number that disagreed.** The
@@ -567,6 +679,36 @@ construction (`spectral_penalty_log_every: 100`, `lambda` 0) has been in the tra
 enough that the two 20000-step arms carry it. Their comparison — a healthy seed and a dying
 one, differing only by seed — is the sharpest single piece of evidence in this document and
 it cost zero GPU time to obtain.
+## What the measurements say to try next
+
+In the order the evidence supports them. None is a defect fix; all change the method, which
+is the honest shape of the conclusion.
+
+1. **Keep the slot states apart inside the loop.** The forward measurement is the sharpest
+   signal here and it is the one thing no intervention has touched: the loop's effect on the
+   slot states' effective rank flips sign at the onset. `per_slot_embed` breaks the INPUT
+   degeneracy; if that is not enough, the collapse is generated inside the loop, and the
+   candidates are the core's attention over slots (a stable sink carries the cotangent at
+   every block) and a direction-preserving per-iteration renormalisation that acts on the
+   state geometry rather than its magnitude.
+2. **Find out WHY those slots.** Nothing here says whether the 2 or 3 slots that end up
+   carrying the cotangent are the low-carrier-norm ones, the deep-Poisson-depth ones, or
+   whatever the coda's token-to-slot attention weights most. That measurement is one forward
+   and one backward on checkpoints that already exist, and it would turn "keep the states
+   apart" from a direction into a fix.
+3. **Fewer applications of the same operator.** `bptt_depth` 4 -> 2 was run: it cuts the
+   harm by 64 % and does not cure. Going further, or breaking the weight sharing outright,
+   would keep buying at the same rate — but weight sharing is most of what makes a looped
+   transformer a looped transformer.
+4. **More slot positions.** `max_slots` 64 -> 128 was attempted and is a measured OOM at
+   batch 12 and at batch 10 without expandable segments. It is also probably close to a
+   no-op: a typical row uses 57 of the 64 slots and `tul_a1.yaml` records only 7.7 % of rows
+   saturating, so the budget is rarely the binding constraint. NOT RUN, and its null result
+   would not have meant much.
+
+What the evidence says NOT to try: anything that bounds the size of the core weights. Four
+arms, one control, one pre-fixed rule, and a spectral-gap measurement that says why.
+
 ## Not verified
 
 * **That position count is CAUSAL.** The concentration is measured and it separates A1 from
