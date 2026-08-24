@@ -167,6 +167,15 @@ training:
   # takeover onset lasts about 140 steps, so 100-step post-clip sampling cannot see
   # inside it. Costs one fused _foreach_norm and one host sync per probed step.
   # 0 = off, and off is bit-exact (the model-side flag is never set).
+  # Core-takeover abort criterion. Fires when the looped core's share of the PRE-CLIP
+  # gradient stays above `abort_core_share` for `_patience` consecutive probed steps.
+  # 0.0 = off. Measured on the 2026-08-23 control: 0.5 fires at step 2033, which is 587
+  # steps before the ppl guard struck, against a healthy baseline of 0.0145. It must be a
+  # ratchet, not a level — every pre-takeover excursion above 0.5 lasted ONE step.
+  # Turning this on forces grad_probe_every to 1 (costs 0.5 %), since it reads that probe.
+  abort_core_share: 0.0
+  abort_core_share_patience: 25
+  abort_core_share_warmup: 200
   grad_probe_every: 0
   # Optional local JSONL mirror of the probe (one object per probed step). null = wandb
   # only. Set it per-run; the onset analysis reads this file rather than the wandb API.

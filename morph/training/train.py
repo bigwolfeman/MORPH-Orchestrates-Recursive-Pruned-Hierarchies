@@ -79,6 +79,7 @@ import wandb
 
 from morph.model.transformer import MORPHConfig, MORPHTransformer
 from morph.model.routing import collect_routing_aux_losses, collect_routing_stats
+from morph.training.divergence_guard import CoreShareGuard
 from morph.training.data import create_dataloader
 from morph.training.optimizer import create_optimizer, create_lr_schedule
 from morph.training.pruning import PruningSchedule
@@ -1232,7 +1233,22 @@ def main(cfg: DictConfig) -> None:
     # leaves the arm bit-exact but no longer blind. 0 disables.
     # Phase-1 onset probe cadence (steps). 0 = off, and off is bit-exact: the model-side
     # flag is not set, so _tul_core traces the same graph it always has.
+    # Core-takeover abort criterion (plan task 3.2). The shipped ppl guard struck at step
+    # 2620 on the measured control, 587 steps after the takeover began; this fires at 2033.
+    # 0.0 = off. The rule lives in morph/training/divergence_guard.py and is replayed
+    # against a real diverging trajectory in tests/test_divergence_guard.py.
+    _core_guard = CoreShareGuard(
+        threshold=float(getattr(cfg.training, "abort_core_share", 0.0)),
+        patience=int(getattr(cfg.training, "abort_core_share_patience", 25)),
+        warmup=int(getattr(cfg.training, "abort_core_share_warmup", 200)),
+    )
     _gprobe_every = int(getattr(cfg.training, "grad_probe_every", 0))
+    if _core_guard.enabled and _gprobe_every != 1:
+        # The guard reads the share the probe computes. Rather than let a config produce a
+        # guard that silently never fires, turn the probe on and say so — it costs 0.5 %.
+        print(f"  [guard] abort_core_share={_core_guard.threshold} needs the per-step "
+              f"probe; forcing grad_probe_every 1 (was {_gprobe_every})")
+        _gprobe_every = 1
     _gprobe_path = getattr(cfg.training, "grad_probe_path", None) or None
     _gprobe_fh = None
     _sp_log = int(getattr(cfg.training, "spectral_penalty_log_every", 100))
@@ -2161,6 +2177,21 @@ def main(cfg: DictConfig) -> None:
                     # flushed per step so a killed run keeps everything up to the kill.
                     _gprobe_fh.write(json.dumps({"step": step, **_probe_log}) + "\n")
                     _gprobe_fh.flush()
+                _tot = _probe_log.get("preclip/total", 0.0)
+                if _core_guard.enabled and _tot > 0.0:
+                    _share = _probe_log.get("preclip/core", 0.0) / _tot
+                    wandb.log({"preclip/core_share": _share}, step=step)
+                    if _core_guard.update(step, _share):
+                        _ep = os.path.join(ckpt_dir, f"TAKEOVER_step_{step}.pt")
+                        print(f"[ABORT] core takeover — {_core_guard.reason()}. "
+                              f"Saving {_ep} and stopping.", flush=True)
+                        try:
+                            save_checkpoint(_ep, step, model, optimizer, scaler, pruning,
+                                            next_step=step)
+                        except Exception as _e:
+                            print(f"[ABORT] emergency ckpt failed: {_e}", flush=True)
+                        _aborted = True
+                        break
             # KEEP THE RETURN VALUE. clip_grad_norm_ already computes the pre-clip global
             # norm; throwing it away costs nothing to compute and everything to diagnose.
             # The 2026-08-17 TUL divergence was invisible in wandb for exactly this reason —
