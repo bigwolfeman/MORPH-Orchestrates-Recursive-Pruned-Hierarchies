@@ -1395,6 +1395,8 @@ def main(cfg: DictConfig) -> None:
     # W <- W * min(1, cap/sigma) applied after each optimizer step. 0 disables and nothing is
     # constructed. See CoreSpectralProjection's docstring for why this and not the penalty.
     _spec_proj = None
+    _iso_pen = None
+    _iso_mu = float(getattr(cfg.training, "isometry_penalty_mu", 0.0))
     _spj_cap = float(getattr(cfg.training, "spectral_project_cap", 0.0))
     _sp_log = int(getattr(cfg.training, "spectral_penalty_log_every", 100))
     _sp_on = _sp_cap > 0.0 and _sp_lam > 0.0
@@ -1410,6 +1412,17 @@ def main(cfg: DictConfig) -> None:
               f"on {len(_spec_proj._linears)} core linears "
               f"({_spec_proj._n_mlp} MLP + "
               f"{len(_spec_proj._linears) - _spec_proj._n_mlp} attention)")
+
+    if _iso_mu > 0.0:
+        from morph.training.spectral_penalty import CoreIsometryPenalty
+        _iso_pen = CoreIsometryPenalty(
+            model, mu=_iso_mu,
+            n_probe=int(getattr(cfg.training, "isometry_penalty_probes", 8)),
+            include_attn=bool(getattr(cfg.training, "spectral_penalty_include_attn", False)),
+            seed=int(getattr(cfg.training, "seed", 0)))
+        print(f"  Core ISOMETRY penalty ON: mu={_iso_mu} "
+              f"probes={_iso_pen.n_probe} on {len(_iso_pen._linears)} core linears "
+              f"({_iso_pen._n_mlp} MLP + {len(_iso_pen._linears) - _iso_pen._n_mlp} attention)")
 
     if _sp_on or _sp_log > 0:
         from morph.training.spectral_penalty import CoreSpectralPenalty
@@ -2231,6 +2244,13 @@ def main(cfg: DictConfig) -> None:
                     _sp = _spec_pen.penalty()
                     _sp_value = float(_sp.detach())
                     loss = loss + _sp.to(loss.dtype)
+                # Isometry penalty: flattens the core linears' spectrum without constraining
+                # its size. Counted into _sp_value for the same reason — train/loss must be
+                # the MODEL's loss, comparable across arms.
+                if _iso_pen is not None:
+                    _ip = _iso_pen.penalty()
+                    _sp_value += float(_ip.detach())
+                    loss = loss + _ip.to(loss.dtype)
 
             with _rt.region("bwd"):
                 scaler.scale(loss / _ga).backward()
@@ -2618,6 +2638,12 @@ def main(cfg: DictConfig) -> None:
             # 10 power-iteration matvecs on 12 linears. Never affects the loss when lam=0.
             if _spec_proj is not None and _proj_log:
                 log.update(_proj_log)
+            if _iso_pen is not None and _sp_log > 0 and step % _sp_log == 0:
+                _sv = _iso_pen.spread()
+                log["iso/spread_max"] = max(_sv.values())
+                log["iso/spread_mean"] = sum(_sv.values()) / len(_sv)
+                print(f"  [iso] step={step} spread_max={max(_sv.values()):.3f} "
+                      f"mean={sum(_sv.values()) / len(_sv):.3f}", flush=True)
             if _spec_pen is not None and _sp_log > 0 and step % _sp_log == 0:
                 _sg = _spec_pen.sigmas()
                 _vals = list(_sg.values())
