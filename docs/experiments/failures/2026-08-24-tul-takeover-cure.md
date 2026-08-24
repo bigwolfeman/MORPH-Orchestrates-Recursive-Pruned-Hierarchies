@@ -1,56 +1,60 @@
-# The TUL core takeover: it is a forward state collapse, and no weight-space cure reaches it
+# The TUL core takeover: a forward state collapse, cured by fixing the slot states
 
 Status: failure
 
-The experiment asked whether bounding the core map's spectral norm cures the takeover. It
-does not, and the two predictions that mattered — P4 and P9 — are falsified, so this is filed
-by outcome. What it established instead is a much sharper diagnosis and the elimination of an
-entire family of interventions with a measurement that says why.
+Filed by outcome, not by mood. The experiment ASKED whether bounding the core map's spectral
+norm cures the takeover, and the two predictions that carried it — P4 and P9 — are falsified:
+four weight-space interventions all failed and two were worse than doing nothing. The
+diagnosis that replaced them, and the one arm that does hold, are the late predictions P10
+to P12, each written before the arm it names.
 
 Pre-registration: [2026-08-24-tul-takeover-cure](../planned/2026-08-24-tul-takeover-cure.md)
-(three method amendments and three late predictions, each written before the arm it names).
+(three method amendments and three late predictions, each timestamped before its arm).
 Mechanism this builds on: [the RCA](../results/2026-08-24-tul-takeover-rca.md).
 Procedure: [measuring the core map's operator](../../cookbook/measuring-the-core-map.md).
-Decision record: [the takeover is positional](../../../.agents/notes/implemented/architecture/2026-08-24-core-takeover-is-positional.md).
+Decision record: [the takeover is a forward state collapse](../../../.agents/notes/implemented/architecture/2026-08-24-core-takeover-is-positional.md).
 Figure: `docs/experiments/figures/tul_takeover_cure.png`.
 
 ## Summary
 
 **The slot states are near-degenerate by design, and at the onset the loop starts making
-them worse instead of better.** Fifty valid slot states of a row occupy an effective rank of
+them worse instead of better.** The 50 valid slot states of a row occupy an effective rank of
 1.7 to 4.8 in a 1024-dimensional space, with a mean pairwise cosine of +0.39 to +0.71, at
-EVERY checkpoint including healthy ones — they are one shared `E_slot` plus a span bag-mean,
-and a mean over many token embeddings concentrates. What changes at the onset is the SIGN of
-what the core loop does to that rank: at healthy rungs it raises it across its iterations
-(x1.23 to x1.48, cosine falling), and by step 1850 it lowers it (x0.67, cosine rising). The
-flip is between steps 1750 and 1800, which is where the core share goes 0.021 to 0.372. It
-is a FORWARD quantity, it needs one no-grad pass, and it is the earliest indicator in this
+EVERY checkpoint including healthy ones — a slot's input is one SHARED `E_slot` plus a span
+bag-mean, and a mean over many token embeddings concentrates. What changes at the onset is
+the SIGN of what the core loop does to that rank: at healthy rungs it RAISES it across its
+iterations (x1.23 to x1.48, cosine falling), and by step 1850 it LOWERS it (x0.67, cosine
+rising). The flip is between steps 1750 and 1800, where the core share goes 0.021 to 0.372.
+It is a FORWARD quantity, it needs one no-grad pass, and it is the earliest indicator in this
 programme.
 
-**The backward measurements are downstream of that.** The map's isotropic per-block gain
-moves +2.5 % across the onset while the ALIGNMENT of its six blocks moves x2.9; the backward
-cotangent collapses from 13 effective slot positions to 2.5, onto the same top-3 slots at
-every core block, while the SAME weights on the token path keep 26 to 59. The loop is 24
-applications of one `J^T`, i.e. power iteration, and it sharpens a concentration it is
-handed.
+**Giving each slot its own input embedding cures it, in the arm that was run.** One config
+key, `tul.per_slot_embed`, aimed at exactly the degeneracy above and pre-registered before it
+reported. Against a control that took over — end core share 0.9999, block gain 2.445,
+validation CE +0.533 above its own minimum — the cured arm ends at core share **0.0204**,
+block gain **1.030**, and a validation CE that is monotone for the whole run and finishes at
+its own minimum. It is also the best model in this work: 4.0747 against the control's
+best-ever 4.8528, **0.78 nats better**. n = 1, 4000 steps, one seed, at a setting where the
+failure is otherwise 5 out of 5.
 
-**Four weight-space interventions failed, and two were worse than doing nothing.** Including
-a hard projection that held `sigma_max` at exactly 1.50 for a whole run — whose realized
-per-block gain came out HIGHER than its uncapped control's. No core weight matrix's spectral
-gap opens across the onset (median 1.069 -> 1.132, worst gap FALLING), so there was nothing
-in the weight spectra for a norm control to grip.
+**Four weight-space interventions failed first, and two were worse than doing nothing.**
+Including a hard projection that pinned `sigma_max` at exactly 1.50 for a whole run and came
+out with a realized per-block gain HIGHER than its uncapped control's. No core weight
+matrix's spectral gap opens across the onset (median 1.069 -> 1.132, worst gap FALLING), so
+there was nothing in the weight spectra for a norm control to grip. Fixing the slot states
+brought `sigma_max` down as a consequence — 2.88 at step 1500 against the control's 4.86 —
+without any spectral control being active, which is what a cause looks like next to a
+symptom.
 
 **Halving the backward's depth helps and does not cure.** `bptt_depth` 4 -> 2 takes 24
-applications to 12 — four orders of magnitude off the compounding — and cuts the validation
-CE damage by 64 %, from +0.533 to +0.192, while the run still turns around. That is the
-pre-registered discriminator, and it favours the forward reading.
+applications of the same `J^T` to 12 — four orders of magnitude off the compounding — and
+cuts the validation CE damage by 64 %, from +0.533 to +0.192, while the run still turns
+around. That is the pre-registered discriminator, and it is what moved the reading from
+"backward power iteration" to "forward collapse, sharpened by backward power iteration".
 
-**One thing does cure it, in one place.** The soft spectral cap prevents the takeover in the
-bit-reproducible microcosm at batch 6, at equal CE, and loses at batch 12.
-
-So the takeover is understood better than it was, it is reproducible, it now has a forward
-leading indicator, and it is not cured. What follows is the evidence, in the order it was
-taken.
+The cure is implemented, tested and OFF by default. One 4000-step arm is thinner evidence
+than this recipe's other standing settings carry, and what would justify flipping it is
+written down rather than assumed.
 
 ## What the failure actually is
 
@@ -94,7 +98,7 @@ Everything runs on one 5090, serially.
 `model.use_kernels=false`, `training.batch_size=6`, seed 0, 2100 steps, with
 `CUBLAS_WORKSPACE_CONFIG=:4096:8` exported before the process starts. Two runs in this
 configuration agree on all 300 probed steps across 85 series
-([evidence](../results/2026-08-23-morph-bit-reproducible.md)), so a one-run comparison here is a
+([evidence](2026-08-23-morph-bit-reproducible.md)), so a one-run comparison here is a
 CONTROLLED comparison. It costs 2.28x throughput and half the batch, and it grows
 `sigma_max` about eight times faster than the batch-12 recipe, so it is an accelerated
 version of the failure rather than a different one.
@@ -314,6 +318,59 @@ the backward's applications from 24 to 12 — four orders of magnitude off the c
 reduced the harm by 64 % and did not prevent it, and the FORWARD still loops 6 to 8 times
 regardless of `bptt_depth`.
 
+## The intervention aimed at the measured cause
+
+Pre-registered as P12 at 15:07, one minute after the arm launched and before it reported
+anything, on the strength of the forward measurement above.
+
+`tul.per_slot_embed: true` with `per_slot_embed_std: 1.0` replaces the ONE shared `E_slot`
+added to every slot with one row per slot INDEX, seated at the embedding-table mean plus
+deterministic jitter. It injects up to `min(max_slots, d_model)` of guaranteed input
+diversity into exactly the quantity that was measured to be degenerate. It changes nothing
+else: same optimizer, same batch, same schedule, same control.
+
+| arm | end core share | block gain | r2 | val CE min | at | val CE @3500 | rise | verdict |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| `b10-ctrl` | 0.9999 | 2.445 | 0.97 | 4.8528 | 1500 | 5.3855 | +0.533 | TOOK OVER |
+| `b10-bptt2` | 0.9992 | 2.784 | 0.98 | 4.9124 | 1500 | 5.1046 | +0.192 | TOOK OVER |
+| **`b10-slotembed`** | **0.0204** | **1.030** | 0.36 | **4.0747** | **3500** | **4.0747** | **0.000** | **HELD** |
+
+Its validation CE is monotone for the whole run — 5.5336, 4.9235, 4.5847, 4.4717, 4.4296,
+4.0923, 4.0747 — with the minimum at the LAST eval. It never turns around. The core ends
+holding 2.0 % of the pre-clip gradient where the control holds 100 %, and the per-block
+backward gain sits at 1.030 with a fit r2 of 0.36, which is the healthy signature (flat and
+noisy) rather than the geometric one.
+
+And it is not a trade. The cured arm's validation CE, 4.0747, is **0.78 nats below the
+control's best-ever value** of 4.8528. It is the best model produced anywhere in this work.
+
+`sigma_max` of the core MLP tells the same story from the side, without being constrained at
+all — no spectral control is active on this arm:
+
+| step | `b10-ctrl` | `b10-bptt2` | `b10-slotembed` |
+|---:|---:|---:|---:|
+| 500 | 1.76 | 1.79 | 1.87 |
+| 1000 | 2.45 | 4.19 | 2.81 |
+| 1500 | 4.86 | 4.36 | **2.88** |
+| 2000 | 5.21 | 4.71 | — |
+
+Four arms spent the day trying to force `sigma_max` down and every one of them failed or
+made things worse. Fixing the slot states' input diversity brought it down as a
+CONSEQUENCE, which is what a cause looks like next to a symptom.
+
+### What this is, and what it is not
+
+It is one arm. n = 1, 4000 steps, one seed, one configuration (`alpha_cap` 3.5, batch 10),
+with kernels on and therefore not bit-reproducible. What makes a single arm worth reporting
+is the prior: at this exact setting the failure is 5 out of 5 across this work and the
+historical record, so an arm that holds is not a coin landing the same way as the others.
+
+It also is not free of confounds. It adds `max_slots x d_model` = 65k parameters, 0.02 % of
+286M, so the arms are not iso-parameter. And the jitter at seating means the arm does not
+start from bit-identical weights.
+
+It is NOT enabled by default. One 4000-step arm is thinner evidence than this recipe's other
+standing settings carry, and the honest next step is written below rather than acted on.
 ## What the cap sweep says, and what it does not
 
 Projecting the core's linears onto `sigma_max <= cap` in the SICK state (`ROLL_step_1850`)
@@ -679,41 +736,43 @@ construction (`spectral_penalty_log_every: 100`, `lambda` 0) has been in the tra
 enough that the two 20000-step arms carry it. Their comparison — a healthy seed and a dying
 one, differing only by seed — is the sharpest single piece of evidence in this document and
 it cost zero GPU time to obtain.
-## What the measurements say to try next
+## What the measurements say to do next
 
-In the order the evidence supports them. None is a defect fix; all change the method, which
-is the honest shape of the conclusion.
+1. **Confirm the cure, then turn it on.** One 4000-step arm at one seed is what stands
+   behind `per_slot_embed` today. What would justify making it a default in
+   `tul_short.yaml`: a second seed at the same configuration, and one full 20000-step arm
+   against `tul-a0` (val CE 3.1749) to show the CE gain is not an early-schedule artifact.
+   Both are ordinary runs, roughly 40 minutes and 3 hours on a 5090.
+2. **Separate the two things `per_slot_embed` changes.** It adds per-index parameters AND
+   jitters them at seating. `per_slot_embed_std: 0.0` keeps the parameters and starts every
+   row equal, so the forward at step 0 is identical to the shared version; running that arm
+   says whether the cure is the learnable per-slot capacity or the broken symmetry at init.
+   It is one config key and one 40-minute run, and it is the sharpest remaining question.
+3. **Find out WHY those slots.** The cotangent sits on the same top-3 slots at every core
+   block, with the top slot's share rising 0.18 -> 0.54. Nothing here says whether they are
+   the low-carrier-norm ones, the deep-Poisson-depth ones, or whatever the coda's
+   token-to-slot attention weights most. One forward and one backward on checkpoints that
+   already exist.
+4. **Watch the rank ratio.** The loop's effect on the slot states' effective rank crosses 1
+   between steps 1750 and 1800, before the core share moves. It costs one no-grad forward
+   and it is a better abort criterion than anything currently shipped. It is measured by
+   `lab/divergence/jac_ladder.py --state-probe` and is NOT yet wired into the trainer.
 
-1. **Keep the slot states apart inside the loop.** The forward measurement is the sharpest
-   signal here and it is the one thing no intervention has touched: the loop's effect on the
-   slot states' effective rank flips sign at the onset. `per_slot_embed` breaks the INPUT
-   degeneracy; if that is not enough, the collapse is generated inside the loop, and the
-   candidates are the core's attention over slots (a stable sink carries the cotangent at
-   every block) and a direction-preserving per-iteration renormalisation that acts on the
-   state geometry rather than its magnitude.
-2. **Find out WHY those slots.** Nothing here says whether the 2 or 3 slots that end up
-   carrying the cotangent are the low-carrier-norm ones, the deep-Poisson-depth ones, or
-   whatever the coda's token-to-slot attention weights most. That measurement is one forward
-   and one backward on checkpoints that already exist, and it would turn "keep the states
-   apart" from a direction into a fix.
-3. **Fewer applications of the same operator.** `bptt_depth` 4 -> 2 was run: it cuts the
-   harm by 64 % and does not cure. Going further, or breaking the weight sharing outright,
-   would keep buying at the same rate — but weight sharing is most of what makes a looped
-   transformer a looped transformer.
-4. **More slot positions.** `max_slots` 64 -> 128 was attempted and is a measured OOM at
-   batch 12 and at batch 10 without expandable segments. It is also probably close to a
-   no-op: a typical row uses 57 of the 64 slots and `tul_a1.yaml` records only 7.7 % of rows
-   saturating, so the budget is rarely the binding constraint. NOT RUN, and its null result
-   would not have meant much.
-
-What the evidence says NOT to try: anything that bounds the size of the core weights. Four
-arms, one control, one pre-fixed rule, and a spectral-gap measurement that says why.
-
+What the evidence says NOT to do: bound the size of the core weights. Four arms, one control,
+one pre-fixed rule, and a spectral-gap measurement that says why. `max_slots` 64 -> 128 is
+also not worth the memory — it OOMs at batch 12 and at batch 10, and a typical row uses 57 of
+its 64 slots, so the budget is rarely the binding constraint.
 ## Not verified
 
-* **That position count is CAUSAL.** The concentration is measured and it separates A1 from
-  A0 at identical weights, but the arms that act on it are at the end of this document and
-  they change the method, not a defect.
+* **The cure at n > 1.** One arm, one seed, 4000 steps, one configuration, kernels on and
+  therefore not bit-reproducible. It is reported because at that setting the failure is 5 of
+  5, not because one arm is enough on its own.
+* **WHICH half of the cure works.** `per_slot_embed` adds per-index parameters AND jitters
+  them at seating. Nothing here separates "the model can now tell its slots apart" from "the
+  symmetry was broken at step 0".
+* **That the state collapse is CAUSAL rather than merely upstream.** The cure is aimed at it
+  and works, which is the strongest evidence here, but it is one arm and the intervention
+  changes the architecture rather than isolating the variable.
 * **Alignment ACROSS the unrolled steps.** What is measured is alignment within one core
   step, across its six blocks. The backward passes through `bptt_depth` = 4 such steps with
   the same operator, and the realized per-block gain (1.43 to 1.88) is above what the
