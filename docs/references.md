@@ -860,6 +860,31 @@ decodability claim; punc-STP at `.;!?--\n` and the "next token ~80% decodable fr
 boundary state" observation are MORPH's own (§7 notes). TUL carries punc-STP on the SLOT
 trajectory as an arm (`tul.stp_lambda`), zero parameters.
 
+### Explorative Modeling (XM) — Gladstone, Ji, Du, arXiv:2607.27372 (2026-07-29)
+
+Defines **generative expressivity** `E`: the number of distinct modes a training OBJECTIVE
+lets a prediction keep, independent of parameters and data. Direct regressors have `E = 1`
+— "even with unlimited parameters and data, their best possible output (loss minimizer) is
+still a single blurred mean of all the modes" — because a single input is coupled
+one-to-many to valid targets across the dataset. XM factors the TRAINING LOOP instead of
+the generation procedure: explore K candidate matches between generation and data, train on
+the closest, which raises `E` to at least K.
+
+**Argues against nothing TUL does at the token head**, and MORPH originally dismissed it on
+exactly that ground: MORPH trains AR next-token prediction, whose softmax CE already has
+`E > 1`. The paper closes that escape clause itself — "factoring generation does not remove
+this generative expressivity limitation entirely, as even highly scalable generative
+modeling approaches, such as diffusion and autoregression, can leave modes uncaptured when
+single predictions inside their factored procedure face many valid targets at once."
+
+**What TUL takes:** the reading that the SLOT STATE is such a single prediction. Its own
+label is 2.8 % of its span's loss weight; the other 97 % arrives as a SUM of per-reader
+attention gradients onto one vector. See
+[../.agents/notes/proposed/architecture/2026-08-24-xm-applies-to-the-plan-not-the-head.md](../.agents/notes/proposed/architecture/2026-08-24-xm-applies-to-the-plan-not-the-head.md)
+for the credit-assignment accounting, the three proposed levers and the test that has to
+pass first. The transfer is by GEOMETRY, not by the paper's literal definition — `h_i` is a
+representation and the coda downstream of it still has a softmax.
+
 ---
 
 ## Quick Reference Table
