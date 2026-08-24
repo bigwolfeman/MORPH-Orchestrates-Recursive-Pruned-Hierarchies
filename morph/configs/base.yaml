@@ -181,6 +181,16 @@ training:
   # backward is outside PyTorch's determinism machinery) and CUBLAS_WORKSPACE_CONFIG=:4096:8
   # exported before the process starts. Costs 2.28x throughput and ~half the batch.
   deterministic: false
+  # The MECHANISM criterion, preferred over the share below: the core's per-block BACKWARD
+  # gain. Fires when it exceeded `abort_block_gain` (1.0 = where the backward stops
+  # contracting) on more than `_fraction` of the last `_window` probed steps, counting only
+  # steps whose geometric fit reaches `_min_r2`. It leads the share criterion by 599 steps
+  # on one diverging run and 506 on another, and never fires on the run that recovered.
+  # The r2 floor is load-bearing: without it the guard false-fires on that survivor.
+  abort_block_gain: 0.0
+  abort_block_gain_min_r2: 0.5
+  abort_block_gain_window: 200
+  abort_block_gain_fraction: 0.3
   abort_core_share: 0.0
   abort_core_share_window: 50
   abort_core_share_fraction: 0.3

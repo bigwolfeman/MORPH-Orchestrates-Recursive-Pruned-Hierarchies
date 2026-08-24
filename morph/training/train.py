@@ -79,7 +79,7 @@ import wandb
 
 from morph.model.transformer import MORPHConfig, MORPHTransformer
 from morph.model.routing import collect_routing_aux_losses, collect_routing_stats
-from morph.training.divergence_guard import CoreShareGuard
+from morph.training.divergence_guard import BlockGainGuard, CoreShareGuard
 from morph.training.data import create_dataloader
 from morph.training.optimizer import create_optimizer, create_lr_schedule
 from morph.training.pruning import PruningSchedule
@@ -544,6 +544,38 @@ def load_weights_only(path: str, model: nn.Module, device: torch.device) -> None
 
 
 @torch.no_grad()
+def _block_gain(acc: dict[str, float], region: str) -> dict[str, float]:
+    """Per-block backward gain of a stacked region, from its per-block squared grad norms.
+
+    Returns ``{}`` when the region has fewer than 3 blocks — a two-point "fit" is a ratio
+    wearing a regression's clothes, and its r2 is always exactly 1.
+    """
+    import math
+
+    vals = []
+    i = 0
+    while f"{region}.{i}" in acc:
+        vals.append(acc[f"{region}.{i}"])
+        i += 1
+    pts = [(j, 0.5 * math.log(v)) for j, v in enumerate(vals) if v > 0]  # 0.5: acc holds squares
+    if len(pts) < 3:
+        return {}
+    n = len(pts)
+    mx = sum(p[0] for p in pts) / n
+    my = sum(p[1] for p in pts) / n
+    sxx = sum((x - mx) ** 2 for x, _ in pts)
+    if sxx == 0:
+        return {}
+    b = sum((x - mx) * (y - my) for x, y in pts) / sxx
+    a = my - b * mx
+    ss_res = sum((y - (a + b * x)) ** 2 for x, y in pts)
+    ss_tot = sum((y - my) ** 2 for _, y in pts)
+    return {
+        f"preclip/{region}_block_gain": math.exp(-b),
+        f"preclip/{region}_block_gain_r2": (1 - ss_res / ss_tot) if ss_tot > 0 else 0.0,
+    }
+
+
 def _preclip_probe(model) -> dict[str, float]:
     """PRE-CLIP per-region / per-block gradient norms plus the looped-core state probe.
 
@@ -584,6 +616,14 @@ def _preclip_probe(model) -> dict[str, float]:
         out = {f"preclip/{k}": v ** 0.5 for k, v in acc.items()}
         # Regions only (keys with no dot) — the per-block entries are a subset of them.
         out["preclip/total"] = sum(v for k, v in acc.items() if "." not in k) ** 0.5
+        # The per-block BACKWARD gain of the core, as one number. See
+        # docs/experiments/results/2026-08-23-tul-block-backward-gain.md: the backward runs
+        # core.N-1 -> core.0, so a uniform per-block amplification g puts block 0 a factor
+        # g^(N-1) above the last block. Fit log‖grad_i‖ = a + b·i and report exp(-b).
+        # r2 is reported WITH it and is not optional: a healthy profile is flat and noisy
+        # (r2 ~ 0.1) so the gain estimate means nothing there, while a sick one is cleanly
+        # geometric (median r2 0.971). Read them as a pair.
+        out.update(_block_gain(acc, "core"))
 
     # The GLA carried state and the realized per-iteration core gain, from the forward
     # that produced these gradients. The carry is a SECOND recurrent loop inside the core
@@ -1270,12 +1310,21 @@ def main(cfg: DictConfig) -> None:
         fraction=float(getattr(cfg.training, "abort_core_share_fraction", 0.3)),
         warmup=int(getattr(cfg.training, "abort_core_share_warmup", 200)),
     )
+    # The mechanism criterion. Leads the share by ~500-600 steps on every run that took
+    # over, and stays quiet on the one that recovered. See divergence_guard.py.
+    _gain_guard = BlockGainGuard(
+        threshold=float(getattr(cfg.training, "abort_block_gain", 0.0)),
+        min_r2=float(getattr(cfg.training, "abort_block_gain_min_r2", 0.5)),
+        window=int(getattr(cfg.training, "abort_block_gain_window", 200)),
+        fraction=float(getattr(cfg.training, "abort_block_gain_fraction", 0.3)),
+        warmup=int(getattr(cfg.training, "abort_core_share_warmup", 200)),
+    )
     _gprobe_every = int(getattr(cfg.training, "grad_probe_every", 0))
-    if _core_guard.enabled and _gprobe_every != 1:
+    if (_core_guard.enabled or _gain_guard.enabled) and _gprobe_every != 1:
         # The guard reads the share the probe computes. Rather than let a config produce a
         # guard that silently never fires, turn the probe on and say so — it costs 0.5 %.
-        print(f"  [guard] abort_core_share={_core_guard.threshold} needs the per-step "
-              f"probe; forcing grad_probe_every 1 (was {_gprobe_every})")
+        print(f"  [guard] abort criteria need the per-step probe; forcing "
+              f"grad_probe_every 1 (was {_gprobe_every})")
         _gprobe_every = 1
     _gprobe_path = getattr(cfg.training, "grad_probe_path", None) or None
     _gprobe_fh = None
@@ -2206,20 +2255,28 @@ def main(cfg: DictConfig) -> None:
                     _gprobe_fh.write(json.dumps({"step": step, **_probe_log}) + "\n")
                     _gprobe_fh.flush()
                 _tot = _probe_log.get("preclip/total", 0.0)
+                _hit = None
                 if _core_guard.enabled and _tot > 0.0:
                     _share = _probe_log.get("preclip/core", 0.0) / _tot
                     wandb.log({"preclip/core_share": _share}, step=step)
                     if _core_guard.update(step, _share):
-                        _ep = os.path.join(ckpt_dir, f"TAKEOVER_step_{step}.pt")
-                        print(f"[ABORT] core takeover — {_core_guard.reason()}. "
-                              f"Saving {_ep} and stopping.", flush=True)
-                        try:
-                            save_checkpoint(_ep, step, model, optimizer, scaler, pruning,
-                                            next_step=step)
-                        except Exception as _e:
-                            print(f"[ABORT] emergency ckpt failed: {_e}", flush=True)
-                        _aborted = True
-                        break
+                        _hit = _core_guard.reason()
+                if _hit is None and _gain_guard.enabled:
+                    if _gain_guard.update(step,
+                                          _probe_log.get("preclip/core_block_gain", float("nan")),
+                                          _probe_log.get("preclip/core_block_gain_r2", float("nan"))):
+                        _hit = _gain_guard.reason()
+                if _hit is not None:
+                    _ep = os.path.join(ckpt_dir, f"TAKEOVER_step_{step}.pt")
+                    print(f"[ABORT] core takeover — {_hit}. Saving {_ep} and stopping.",
+                          flush=True)
+                    try:
+                        save_checkpoint(_ep, step, model, optimizer, scaler, pruning,
+                                        next_step=step)
+                    except Exception as _e:
+                        print(f"[ABORT] emergency ckpt failed: {_e}", flush=True)
+                    _aborted = True
+                    break
             # KEEP THE RETURN VALUE. clip_grad_norm_ already computes the pre-clip global
             # norm; throwing it away costs nothing to compute and everything to diagnose.
             # The 2026-08-17 TUL divergence was invisible in wandb for exactly this reason —
