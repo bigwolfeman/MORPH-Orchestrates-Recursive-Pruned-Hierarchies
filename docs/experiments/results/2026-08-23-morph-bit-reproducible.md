@@ -67,6 +67,23 @@ Run twice (`detrepro-a`, `detrepro-b`, wandb `morph-tul`):
 Compare the same test on the fast configuration, where the pre-clip gradient norm differs
 at step 0 and by a factor of 6 at step 50.
 
+## Resume is bit-exact too
+
+Reproducibility across two fresh runs is not the same property as reproducibility across a
+save/load boundary, and the second one is what makes a checkpoint useful as a replay seed.
+Measured separately: run 0→120 straight through with rolling checkpoints, then resume from
+the step-80 checkpoint and run to 120.
+
+- Overlapping steps 81–119: **0 of 39 differ**, across **87** probe series.
+
+The checkpoint carries model, optimizer, scaler and CPU + all-CUDA RNG state, and the
+training stream is unshuffled so the resume fast-forwards the batch count to the exact next
+batch. Verified over a 39-step overlap; a longer replay is expected to hold and is not yet
+measured.
+
+This is what [`the replay cookbook`](../../cookbook/replaying-the-core-takeover.md) is
+built on.
+
 ## What it costs
 
 Measured on `tul_a1`, 60 steps, same card:

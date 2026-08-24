@@ -208,3 +208,36 @@ known cure never acted on the later iterations.
 control re-measured in the SAME configuration — its takeover base rate and ramp spread do
 not transfer from the fast configuration. That is the first experiment the reproducible
 mode should be spent on.
+
+
+## Second attempt, also not readable (2026-08-23, later)
+
+Re-run in the reproducible configuration after the deterministic mode landed. All three
+arms, 1600 steps, seed 0, on the fast venv:
+
+| arm | max core share | final | `gain_t0` (median, last 200) | block gain |
+|---|---:|---:|---:|---:|
+| control | 0.3409 | 0.0114 | 1.552 | 0.959 |
+| M0 (clip t=0 only) | 0.7384 | 0.0249 | 1.470 | 1.093 |
+
+**Neither took over**, so the arms are again uninterpretable: M0 "surviving" says nothing
+when the control also survives. M1 was not run.
+
+The numbers are recorded rather than read. Taken at face value M0 looks slightly WORSE than
+the control on both share and block gain, which is the opposite of P1 — but with no
+divergence in either arm and n = 1, that comparison has no power, and stating it as a
+finding would be exactly the error this file has already made once.
+
+The cause is a budget problem, not a design problem: the same control took over at step
+1093 on the other venv and ran healthy past 1600 here, because the two torch builds are not
+numerically identical (29 of 30 steps differ). The onset step for THIS build is unknown and
+must be measured before the arms are worth running.
+
+**The prerequisite is now running** (`onset-capture`): the control on this build, to 5000
+steps, with a rolling pre-onset checkpoint buffer. When it aborts it will give both the
+onset step for this build AND a pre-onset state to replay from. After that these arms
+should be run as resumes from that ONE checkpoint rather than from step 0 — identical
+starting state, identical data stream, one variable changed. See
+[`the replay cookbook`](../../cookbook/replaying-the-core-takeover.md). That is a strictly
+better design than what this file specifies, and it costs ~300 steps per arm instead of
+1600.
