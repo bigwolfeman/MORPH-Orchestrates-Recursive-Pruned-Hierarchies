@@ -280,6 +280,30 @@ P14. **Which half of the cure works.** `per_slot_embed_std: 0.0` keeps the per-i
      at init and not the added capacity, which would make a cheaper fix available — jitter
      the shared `E_slot` per slot without adding parameters at all.
 
+## P15 — written 2026-08-24 16:16, before the arm starts; P14 stopped to make room
+
+P13 falsified P12's generality: `per_slot_embed` holds seed 1 and takes over at seed 0, step
+2225. Three levers now each measurably help and NONE cures alone. They act on three different
+objects, so there is no reason to expect them to be redundant, and nobody has combined them:
+
+| lever | acts on | effect alone |
+|---|---|---|
+| `ademamix_alpha_cap` 1.0 | the optimizer's slow-EMA term | holds 2 of 3 runs |
+| `bptt_depth` 2 | the number of operator applications | harm 64 % lower, still takes over |
+| `per_slot_embed` | the state geometry the loop is fed | time-to-failure doubled, harm 78 % lower, holds 1 of 2 |
+
+P15. **Stack two of them at the harder seed.** `bptt_depth` 2 AND `per_slot_embed`, at
+     `training.seed=0` and `ademamix_alpha_cap` 3.5 — the seed where `per_slot_embed` alone
+     failed and the setting where the failure is 5 of 5. `alpha_cap` stays at 3.5 rather than
+     1.0 on purpose: at 1.0 the failure is a coin flip and a hold would prove less. 4000
+     steps, against `b10-ctrl`. Prediction: it holds — no core share above 0.5 at any step,
+     against `per_slot_embed` alone reaching it at 2225 and the control at 1150.
+
+P14 (`per_slot_embed_std: 0.0`, which half of the improvement works) was launched at 15:40
+and STOPPED at ~100 steps to free the GPU for P15. It is not reported and its result is
+unknown. That is a deliberate trade of a mechanistic question for a shipping one, made with
+about an hour of budget left, and it is recorded rather than quietly dropped.
+
 ## Risks
 
 * n = 1 per arm. Bit-reproducibility makes the microcosm pair a controlled comparison, not
