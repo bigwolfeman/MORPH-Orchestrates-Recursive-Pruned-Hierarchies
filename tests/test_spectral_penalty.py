@@ -53,7 +53,8 @@ def test_sigma_matches_svdvals():
     with torch.enable_grad():
         sig, _ = _power_iter_sigma(lin, v, n_iter=300)
     true = float(torch.linalg.svdvals(lin.weight.detach())[0])
-    assert abs(float(sig) - true) / true < 1e-5, f"{float(sig)} vs {true}"
+    got = float(sig.detach())
+    assert abs(got - true) / true < 1e-5, f"{got} vs {true}"
 
 
 def test_sigma_reads_the_effective_map_not_the_raw_parameter():
@@ -79,8 +80,9 @@ def test_sigma_reads_the_effective_map_not_the_raw_parameter():
     mod = Scaled(W, 3.0).double()
     with torch.enable_grad():
         sig, _ = _power_iter_sigma(mod, torch.randn(32, dtype=torch.float64), 300)
-    assert abs(float(sig) - 3.0 * true) / (3.0 * true) < 1e-5, \
-        f"read {float(sig)}, raw sigma is {true}, effective is {3.0 * true}"
+    got = float(sig.detach())
+    assert abs(got - 3.0 * true) / (3.0 * true) < 1e-5, \
+        f"read {got}, raw sigma is {true}, effective is {3.0 * true}"
 
 
 # ── the penalty on a real model ─────────────────────────────────────────────────────────
@@ -189,3 +191,52 @@ def test_the_penalty_actually_pulls_sigma_down():
     after = max(CoreSpectralPenalty(m, cap=0.0, lam=0.0).sigmas().values())
     assert after < before - (before - cap) * 0.5, \
         f"sigma barely moved: {before:.4f} -> {after:.4f} against a cap of {cap:.4f}"
+
+
+# ── the opt-in attention scope ──────────────────────────────────────────────────────────
+
+def test_include_attn_adds_attention_linears_and_keeps_the_mlp_ones():
+    m = _model()
+    mlp_only = CoreSpectralPenalty(m, cap=1.0, lam=1.0)
+    both = CoreSpectralPenalty(m, cap=1.0, lam=1.0, include_attn=True)
+    assert both._n_mlp == mlp_only._n_mlp == 2 * m.cfg.n_core
+    assert len(both._linears) > len(mlp_only._linears)
+    added = [n for n, _, _ in both._linears[both._n_mlp:]]
+    assert added and all(".attention." in n for n in added), added
+    # every added module must be a plain Linear — the CCA convolutions are not rank-2 maps
+    # on the last dim and the [1, in_features] power-iteration probe does not apply to them.
+    for _, mod, inf in both._linears[both._n_mlp:]:
+        assert type(mod) is nn.Linear, type(mod)
+        assert mod.in_features == inf
+
+
+def test_include_attn_penalty_reaches_the_attention_weights():
+    m = _model()
+    pen = _warm(CoreSpectralPenalty(m, cap=0.05, lam=1.0, include_attn=True))
+    m.zero_grad(set_to_none=True)
+    pen.penalty().backward()
+    touched = {n for n, p in m.named_parameters()
+               if p.grad is not None and float(p.grad.abs().sum()) > 0}
+    assert any(".attention." in n for n in touched), sorted(touched)[:8]
+    assert any("mlp" in n for n in touched), sorted(touched)[:8]
+    for n in touched:
+        assert n.startswith("core."), n
+
+
+def test_include_attn_refuses_to_be_a_silent_no_op():
+    """The hook this replaces was a parameter that was accepted and ignored. If the
+    enumeration ever stops finding attention linears it must RAISE, not quietly fall back
+    to the MLP-only penalty while the config says otherwise."""
+    m = _model()
+    for blk in m.core:
+        blk.attention = nn.Identity()
+    with pytest.raises(RuntimeError, match="0 attention linears"):
+        CoreSpectralPenalty(m, cap=1.0, lam=1.0, include_attn=True)
+
+
+def test_sigmas_covers_every_selected_linear():
+    m = _model()
+    pen = CoreSpectralPenalty(m, cap=0.0, lam=0.0, include_attn=True)
+    sig = pen.sigmas()
+    assert len(sig) == len(pen._linears)
+    assert all(v > 0 for v in sig.values())

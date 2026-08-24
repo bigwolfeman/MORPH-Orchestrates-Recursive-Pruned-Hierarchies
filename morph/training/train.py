@@ -1395,12 +1395,15 @@ def main(cfg: DictConfig) -> None:
     _sp_on = _sp_cap > 0.0 and _sp_lam > 0.0
     if _sp_on or _sp_log > 0:
         from morph.training.spectral_penalty import CoreSpectralPenalty
+        _sp_attn = bool(getattr(cfg.training, "spectral_penalty_include_attn", False))
         _spec_pen = CoreSpectralPenalty(model, cap=_sp_cap if _sp_on else 0.0,
                                         lam=_sp_lam if _sp_on else 0.0,
-                                        n_iter=int(getattr(cfg.training, "spectral_penalty_n_iter", 1)))
+                                        n_iter=int(getattr(cfg.training, "spectral_penalty_n_iter", 1)),
+                                        include_attn=_sp_attn)
         print(f"  Core spectral-norm penalty {'ON' if _sp_on else 'OFF (logging only)'}: "
-              f"cap={_sp_cap} lambda={_sp_lam} log_every={_sp_log} "
-              f"on {len(_spec_pen._linears)} core MLP linears")
+              f"cap={_sp_cap} lambda={_sp_lam} log_every={_sp_log} include_attn={_sp_attn} "
+              f"on {len(_spec_pen._linears)} core linears "
+              f"({_spec_pen._n_mlp} MLP + {len(_spec_pen._linears) - _spec_pen._n_mlp} attention)")
 
     # ── Quantization / QAT ─────────────────────────────────────
     # Ternary → embedding → CMS scoring → attention-projection → FP8, in that order

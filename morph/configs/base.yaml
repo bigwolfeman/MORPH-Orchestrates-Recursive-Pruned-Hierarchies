@@ -156,6 +156,13 @@ training:
   # (healthy values ~1.5; cap~3 only fires on runaway). Loss-side → optimizer-agnostic.
   # OFF when cap or lambda ≤ 0 (exact baseline). See morph/training/spectral_penalty.py.
   spectral_penalty_cap: 0.0
+  # Extend the cap to the core's CCA attention projections (nn.Linear only — the CCA
+  # convolutions are not rank-2 maps on the last dim). OFF: MLP-only is the configuration
+  # measured to prevent the takeover. The cap sweep on the sick checkpoint says what this
+  # would buy — capping the MLP at 1.5 takes the core step's alignment from 1.92 to 1.24,
+  # and adding attention at the same cap takes it to 1.05, back inside the healthy band of
+  # 0.99 to 1.14. See docs/experiments/results/2026-08-24-tul-takeover-cure.md.
+  spectral_penalty_include_attn: false
   spectral_penalty_lambda: 0.0
   spectral_penalty_n_iter: 1
   # σ_max logging cadence (steps). Independent of the penalty: with lambda=0 the

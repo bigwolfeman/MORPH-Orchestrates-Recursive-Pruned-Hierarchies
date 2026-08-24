@@ -57,6 +57,7 @@ class CoreSpectralPenalty:
         self.cap = float(cap)
         self.lam = float(lam)
         self.n_iter = int(n_iter)
+        self.include_attn = bool(include_attn)
         self._linears: list[tuple[str, nn.Module, int]] = []   # (name, module, in_features)
         # Collect the core-block MLP linears (gate_up, down) — they are the ONLY MortarLinear under
         # each core block (attention's CCA projections are separate types). The MLP is nested in a
@@ -65,12 +66,36 @@ class CoreSpectralPenalty:
             for sub_name, sub in blk.named_modules():
                 if isinstance(sub, MortarLinear) and getattr(sub, "in_features", None):
                     self._linears.append((f"core.{li}.{sub_name}", sub, sub.in_features))
+        self._n_mlp = len(self._linears)
         if not self._linears:
             raise RuntimeError("CoreSpectralPenalty found 0 core MLP linears — enumeration broke; "
                                "refusing to silently run a no-op penalty.")
-        # NOTE: attention (CCA) projections deliberately excluded — M3 located the runaway in the
-        # core MLP (gate_up); attn is multi-projection/quantized and far harder to spectral-bound.
-        # include_attn left as a future hook (currently unused) — flagged so it isn't silently missing.
+        # ── attention (opt-in) ────────────────────────────────────────────────────────────
+        # OFF by default because MLP-only is the configuration measured to prevent the
+        # takeover in training. It is worth having because the cap sweep on the sick
+        # checkpoint says what it buys: capping the twelve MLP linears at 1.5 takes the core
+        # step's alignment from 1.92 to 1.24, and adding the attention projections at the same
+        # cap takes it to 1.05, back inside the healthy band of 0.99 to 1.14
+        # (docs/experiments/results/2026-08-24-tul-takeover-cure.md).
+        # Only nn.Linear is eligible: the CCA convolutions (conv_q_dw and friends) are not
+        # rank-2 maps on the last dim, so the power iteration's [1, in_features] probe does not
+        # apply to them, and silently skipping them without saying so would be the same class
+        # of defect as the unused hook this replaces.
+        if self.include_attn:
+            n_before = len(self._linears)
+            for li, blk in enumerate(root.core):
+                attn = getattr(blk, "attention", None)
+                if attn is None:
+                    continue
+                for sub_name, sub in attn.named_modules():
+                    if type(sub) is nn.Linear and sub.weight.dim() == 2:
+                        self._linears.append(
+                            (f"core.{li}.attention.{sub_name}", sub, sub.in_features))
+            if len(self._linears) == n_before:
+                raise RuntimeError(
+                    "CoreSpectralPenalty(include_attn=True) found 0 attention linears — "
+                    "enumeration broke; refusing to run a penalty that silently covers less "
+                    "than it claims.")
         self._v: dict[str, torch.Tensor] = {}
 
     @torch.no_grad()
