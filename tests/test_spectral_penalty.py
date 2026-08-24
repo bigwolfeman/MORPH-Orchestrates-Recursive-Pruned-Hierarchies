@@ -119,7 +119,7 @@ def test_lambda_zero_is_exactly_zero_and_still_reports_sigmas():
 def test_below_the_cap_the_penalty_is_exactly_zero():
     m = _model()
     pen = CoreSpectralPenalty(m, cap=1e6, lam=10.0)
-    assert float(pen.penalty()) == 0.0
+    assert float(pen.penalty().detach()) == 0.0
 
 
 def _warm(pen, n=25):
@@ -133,8 +133,8 @@ def _warm(pen, n=25):
 def test_above_the_cap_the_penalty_is_positive_and_grows_with_the_excess():
     m = _model()
     worst = max(CoreSpectralPenalty(m, cap=0.0, lam=0.0).sigmas().values())
-    lo = float(_warm(CoreSpectralPenalty(m, cap=worst * 0.9, lam=1.0)).penalty())
-    hi = float(_warm(CoreSpectralPenalty(m, cap=worst * 0.5, lam=1.0)).penalty())
+    lo = float(_warm(CoreSpectralPenalty(m, cap=worst * 0.9, lam=1.0)).penalty().detach())
+    hi = float(_warm(CoreSpectralPenalty(m, cap=worst * 0.5, lam=1.0)).penalty().detach())
     assert lo > 0.0, (lo, worst)
     assert hi > lo * 2.0, (lo, hi)
 
@@ -147,8 +147,8 @@ def test_one_power_iteration_from_cold_underestimates_sigma():
     m = _model()
     true_worst = max(CoreSpectralPenalty(m, cap=0.0, lam=0.0).sigmas().values())
     cold = CoreSpectralPenalty(m, cap=true_worst * 0.9, lam=1.0)
-    first = float(cold.penalty())
-    warmed = float(_warm(cold).penalty())
+    first = float(cold.penalty().detach())
+    warmed = float(_warm(cold).penalty().detach())
     assert first < warmed, (first, warmed)
     assert warmed > 0.0
 
