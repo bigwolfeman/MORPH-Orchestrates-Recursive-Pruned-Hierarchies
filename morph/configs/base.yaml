@@ -168,13 +168,22 @@ training:
   # inside it. Costs one fused _foreach_norm and one host sync per probed step.
   # 0 = off, and off is bit-exact (the model-side flag is never set).
   # Core-takeover abort criterion. Fires when the looped core's share of the PRE-CLIP
-  # gradient stays above `abort_core_share` for `_patience` consecutive probed steps.
-  # 0.0 = off. Measured on the 2026-08-23 control: 0.5 fires at step 2033, which is 587
-  # steps before the ppl guard struck, against a healthy baseline of 0.0145. It must be a
-  # ratchet, not a level — every pre-takeover excursion above 0.5 lasted ONE step.
+  # gradient exceeded `abort_core_share` on more than `_fraction` of the last `_window`
+  # probed steps. 0.0 = off; 0.25 is the validated setting.
+  #
+  # A FRACTION over a window, not N consecutive steps. Validated on three labelled 2026-08-23
+  # trajectories: it fires at step 2038 on phase1-onset-s0 (took over) and 3369 on
+  # repl-det-b (took over, final share 0.8131), and never on repl-det-a, which PEAKED at a
+  # core share of 0.9369 and recovered to 0.0152. A consecutive-run rule was tried first and
+  # missed repl-det-b, whose onset is intermittent. See morph/training/divergence_guard.py.
   # Turning this on forces grad_probe_every to 1 (costs 0.5 %), since it reads that probe.
+  # Bit-reproducible training. Requires model.use_kernels=false (the fused attention
+  # backward is outside PyTorch's determinism machinery) and CUBLAS_WORKSPACE_CONFIG=:4096:8
+  # exported before the process starts. Costs 2.28x throughput and ~half the batch.
+  deterministic: false
   abort_core_share: 0.0
-  abort_core_share_patience: 25
+  abort_core_share_window: 50
+  abort_core_share_fraction: 0.3
   abort_core_share_warmup: 200
   grad_probe_every: 0
   # Optional local JSONL mirror of the probe (one object per probed step). null = wandb

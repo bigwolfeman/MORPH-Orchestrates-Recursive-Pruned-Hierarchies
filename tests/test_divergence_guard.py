@@ -1,14 +1,19 @@
-"""The core-takeover abort criterion, replayed against a REAL diverging trajectory.
+"""The core-takeover abort criterion, replayed against THREE real labelled trajectories.
 
-`tests/data_core_share_control.json` is the per-step pre-clip core share from the
-2026-08-23 control run `phase1-onset-s0` (3522 steps, wandb morph-tul), the run whose
-onset is written up in docs/experiments/results/2026-08-23-tul-onset-ordering.md. The
-guard object under test is the same one `train.py` drives live, so these tests cannot pass
-against a re-implementation that has drifted from the shipped rule.
+Fixtures are the per-step pre-clip core share from three 2026-08-23 runs (wandb morph-tul):
 
-This is acceptance criterion 4 of
-.agents/notes/proposed/process/2026-08-23-divergence-root-cause-plan.md: the criterion
-must fire on the stored control trajectory before step 2100.
+  data_core_share_control.json  phase1-onset-s0  TOOK OVER
+  data_core_share_repl_b.json   repl-det-b       TOOK OVER (final share 0.8131)
+  data_core_share_repl_a.json   repl-det-a       RECOVERED (peak 0.9369, final 0.0152)
+
+repl_a and repl_b are byte-identical runs at the same seed. One diverged and one did not,
+which is both the reason this guard is needed and the reason it must be validated on more
+than the trajectory it was tuned on. The first version of the rule was
+"N consecutive steps above the threshold"; it passed 12 tests against the control alone
+and MISSED repl_b, whose takeover is intermittent.
+
+The object under test is the one train.py drives, so these cannot pass against a drifted
+re-implementation.
 """
 
 from __future__ import annotations
@@ -20,87 +25,103 @@ import pytest
 
 from morph.training.divergence_guard import CoreShareGuard
 
-CONTROL = json.loads((Path(__file__).parent / "data_core_share_control.json").read_text())
-PPL_GUARD_STRUCK_AT = 2620  # the existing guard's first strike on this same run
+_D = Path(__file__).parent
+CONTROL = json.loads((_D / "data_core_share_control.json").read_text())
+REPL_A = json.loads((_D / "data_core_share_repl_a.json").read_text())
+REPL_B = json.loads((_D / "data_core_share_repl_b.json").read_text())
+
+DIVERGED = {"control": CONTROL, "repl_b": REPL_B}
+PPL_GUARD_STRUCK_AT = 2620  # the existing ppl guard's first strike on the control run
 
 
-def _replay(guard: CoreShareGuard, rows=CONTROL) -> int | None:
+def _replay(guard: CoreShareGuard, rows) -> int | None:
     for r in rows:
         if guard.update(r["step"], r["share"]):
             return guard.fired_at
     return None
 
 
-def test_it_fires_on_the_real_control_before_step_2100():
-    fired = _replay(CoreShareGuard(threshold=0.5))
-    assert fired is not None, "the guard never fired on a trajectory that really diverged"
-    assert fired < 2100, f"fired at {fired}, too late to be worth having"
+# ── the contract: fire on every run that died, on none that lived ────────────
+
+@pytest.mark.parametrize("name", list(DIVERGED))
+def test_it_fires_on_every_run_that_actually_took_over(name):
+    fired = _replay(CoreShareGuard(threshold=0.25), DIVERGED[name])
+    assert fired is not None, f"missed {name}, which really did take over"
 
 
-def test_it_beats_the_existing_ppl_guard_by_hundreds_of_steps():
-    """The whole point. The shipped ppl guard struck at 2620 on this run."""
-    fired = _replay(CoreShareGuard(threshold=0.5))
-    warning = PPL_GUARD_STRUCK_AT - fired
-    assert warning > 400, f"only {warning} steps of warning; not worth the code"
+def test_it_does_not_fire_on_the_run_that_recovered():
+    """repl_a peaked at a core share of 0.9369 and finished healthy at 0.0152. A guard
+    that aborts it is worse than no guard."""
+    assert max(r["share"] for r in REPL_A) > 0.9          # fixture sanity
+    assert _replay(CoreShareGuard(threshold=0.25), REPL_A) is None
 
 
-def test_it_does_not_fire_on_the_healthy_prefix():
-    """Steps before 1400 are healthy in this run — the highest share there is 0.144.
-    A guard that fires on them would abort good runs."""
+def test_a_consecutive_run_rule_would_miss_repl_b():
+    """Pins WHY the rule is a fraction over a window. window=fraction=1.0 with a long
+    window is the closest this class comes to 'N consecutive', and it must fail here —
+    repl_b's longest consecutive stretch above 0.25 is shorter than its window."""
+    windowed = _replay(CoreShareGuard(threshold=0.25, window=50, fraction=0.3), REPL_B)
+    strict = _replay(CoreShareGuard(threshold=0.25, window=50, fraction=0.98), REPL_B)
+    assert windowed is not None
+    assert strict is None, "the strict rule caught it; the regression this guards is gone"
+
+
+def test_it_beats_the_existing_ppl_guard_on_the_control():
+    fired = _replay(CoreShareGuard(threshold=0.25), CONTROL)
+    assert PPL_GUARD_STRUCK_AT - fired > 400, "not enough warning to be worth the code"
+
+
+def test_it_does_not_fire_on_the_healthy_prefix_of_the_control():
     healthy = [r for r in CONTROL if r["step"] < 1400]
-    assert max(r["share"] for r in healthy) < 0.25  # fixture sanity
-    assert _replay(CoreShareGuard(threshold=0.5), healthy) is None
+    assert max(r["share"] for r in healthy) < 0.25        # fixture sanity
+    assert _replay(CoreShareGuard(threshold=0.25), healthy) is None
 
 
-def test_patience_is_load_bearing_against_single_step_excursions():
-    """Every pre-takeover excursion above 0.5 in this run lasted ONE probed step. With
-    patience=1 the guard false-fires long before the real takeover; with the shipped
-    patience it does not."""
-    impatient = _replay(CoreShareGuard(threshold=0.5, patience=1))
-    patient = _replay(CoreShareGuard(threshold=0.5, patience=25))
-    assert impatient is not None and patient is not None
-    assert impatient < patient - 400, (
-        f"patience bought only {patient - impatient} steps; the ratchet is not doing work")
+def test_the_defaults_are_the_validated_rule():
+    g = CoreShareGuard(threshold=0.25)
+    assert (g.window, g.fraction, g.warmup) == (50, 0.3, 200)
+
+
+@pytest.mark.parametrize("rows,expected", [(CONTROL, 2038), (REPL_B, 3369)])
+def test_the_shipped_defaults_fire_where_the_docs_say(rows, expected):
+    """Pins code to the published numbers so they cannot drift apart silently."""
+    assert _replay(CoreShareGuard(threshold=0.25), rows) == expected
+
+
+# ── mechanics ────────────────────────────────────────────────────────────────
+
+def test_a_single_spike_never_fires():
+    rows = [{"step": s, "share": 0.9 if s == 500 else 0.01} for s in range(300, 900)]
+    assert _replay(CoreShareGuard(threshold=0.25, window=50, fraction=0.3), rows) is None
 
 
 def test_warmup_ignores_the_startup_transient():
-    """A measured startup transient reached 0.1105 at step 122. A low threshold plus no
-    warmup must be catchable, and the shipped warmup must suppress it."""
-    rows = [{"step": s, "share": 0.9} for s in range(0, 60)]
-    assert _replay(CoreShareGuard(threshold=0.5, patience=25, warmup=0), rows) == 0
-    assert _replay(CoreShareGuard(threshold=0.5, patience=25, warmup=200), rows) is None
+    rows = [{"step": s, "share": 0.9} for s in range(0, 120)]
+    assert _replay(CoreShareGuard(threshold=0.25, window=50, fraction=0.3, warmup=0), rows) == 49
+    assert _replay(CoreShareGuard(threshold=0.25, window=50, fraction=0.3, warmup=200), rows) is None
 
 
-def test_a_fallback_resets_the_run():
-    """The ratchet must count CONSECUTIVE steps. One dip below the threshold restarts it."""
-    g = CoreShareGuard(threshold=0.5, patience=5, warmup=0)
-    rows = [{"step": s, "share": 0.9} for s in range(4)]
-    rows += [{"step": 4, "share": 0.1}]                       # the dip
-    rows += [{"step": s, "share": 0.9} for s in range(5, 10)]
-    assert _replay(g, rows) == 5, "the counter did not reset on the dip"
-
-
-def test_it_reports_the_start_of_the_run_not_the_confirmation_step():
-    g = CoreShareGuard(threshold=0.5, patience=10, warmup=0)
-    rows = [{"step": s, "share": 0.9} for s in range(100, 120)]
-    assert _replay(g, rows) == 100
+def test_the_window_slides_so_old_excursions_expire():
+    """A burst long ago must not add to a burst now."""
+    rows = [{"step": s, "share": 0.9} for s in range(300, 310)]
+    rows += [{"step": s, "share": 0.0} for s in range(310, 900)]
+    rows += [{"step": s, "share": 0.9} for s in range(900, 910)]
+    assert _replay(CoreShareGuard(threshold=0.25, window=50, fraction=0.3), rows) is None
 
 
 def test_threshold_zero_disables_it_completely():
     g = CoreShareGuard(threshold=0.0)
     assert not g.enabled
-    assert _replay(g) is None
+    assert _replay(g, CONTROL) is None
 
 
 def test_it_fires_only_once():
-    g = CoreShareGuard(threshold=0.5)
+    g = CoreShareGuard(threshold=0.25)
     fired = [r["step"] for r in CONTROL if g.update(r["step"], r["share"])]
     assert len(fired) == 1, f"fired {len(fired)} times; the abort would re-trigger"
 
 
-@pytest.mark.parametrize("thr", [0.25, 0.5, 0.9])
-def test_every_documented_threshold_fires_where_the_results_doc_says(thr):
-    """The results table names 2031 / 2033 / 2192 for thresholds 0.25 / 0.5 / 0.9.
-    If the shipped rule drifts from the published numbers, this fails."""
-    expected = {0.25: 2031, 0.5: 2033, 0.9: 2192}[thr]
-    assert _replay(CoreShareGuard(threshold=thr)) == expected
+def test_fraction_one_can_never_fire():
+    """Strictly-greater-than means a saturated window still does not trip fraction=1.0."""
+    rows = [{"step": s, "share": 1.0} for s in range(300, 900)]
+    assert _replay(CoreShareGuard(threshold=0.25, window=50, fraction=1.0), rows) is None

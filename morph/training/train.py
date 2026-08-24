@@ -1147,6 +1147,33 @@ def main(cfg: DictConfig) -> None:
     # identical-config runs produced different trajectories (found by the perf-pass
     # bit-exactness gate, 2026-07-03; violates the reproducible-from-config rule).
     # Seeded before ANY tensor creation (model build, warmup randint, data).
+    # ── Bit-reproducibility (opt-in) ──────────────────────────────────────
+    # Measured 2026-08-23 (ignore/perf/phase1/attn_determinism.py): the fused CSA/HCA
+    # attention backward is nondeterministic and is NOT reachable by PyTorch's determinism
+    # machinery — with kernels on, 6/6 repeated backwards differ across 119 of 150
+    # parameters at 2.4e-4 relative, deterministic mode or not. With `model.use_kernels=false`
+    # AND this flag, the backward is bit-identical 0/6 across 0 of 150 parameters.
+    #
+    # Costs, measured on tul_a1: 2.28x fewer tokens/s (24780 -> 10845) and roughly half the
+    # batch, because eager attention materialises what the kernels fuse (batch 12 OOMs;
+    # batch 6 peaks at 18.6 GB). Use it for experiments that must bisect, not for production
+    # runs. CUBLAS_WORKSPACE_CONFIG must be exported BEFORE the process starts — setting it
+    # in-process is too late, and with warn_only the result is silently wrong rather than an
+    # error, which is how a first attempt at this measurement produced garbage.
+    if bool(getattr(tr, "deterministic", False)):
+        if not os.environ.get("CUBLAS_WORKSPACE_CONFIG"):
+            raise RuntimeError(
+                "training.deterministic=true requires CUBLAS_WORKSPACE_CONFIG=:4096:8 to be "
+                "exported BEFORE the process starts; setting it here would be too late and "
+                "would give wrong results instead of an error.")
+        torch.use_deterministic_algorithms(True, warn_only=True)
+        torch.backends.cudnn.benchmark = False
+        _uk = bool(getattr(cfg.model, "use_kernels", True))
+        print(f"  [determinism] use_deterministic_algorithms(True), cudnn.benchmark=False"
+              + ("" if not _uk else
+                 "\n  [determinism] WARNING: model.use_kernels=true — the fused attention "
+                 "backward stays nondeterministic and this run will NOT be reproducible."))
+
     _seed = int(getattr(tr, "seed", 0))
     import random as _random
     _random.seed(_seed)
@@ -1239,7 +1266,8 @@ def main(cfg: DictConfig) -> None:
     # against a real diverging trajectory in tests/test_divergence_guard.py.
     _core_guard = CoreShareGuard(
         threshold=float(getattr(cfg.training, "abort_core_share", 0.0)),
-        patience=int(getattr(cfg.training, "abort_core_share_patience", 25)),
+        window=int(getattr(cfg.training, "abort_core_share_window", 50)),
+        fraction=float(getattr(cfg.training, "abort_core_share_fraction", 0.3)),
         warmup=int(getattr(cfg.training, "abort_core_share_warmup", 200)),
     )
     _gprobe_every = int(getattr(cfg.training, "grad_probe_every", 0))
