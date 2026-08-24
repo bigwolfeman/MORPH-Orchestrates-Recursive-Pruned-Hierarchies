@@ -39,7 +39,8 @@ sys.path.insert(0, _ROOT)
 from morph.model.transformer import MORPHTransformer          # noqa: E402
 from morph.training.core_jacobian import CoreJacobianProbe    # noqa: E402
 from morph.training.data import create_dataloader             # noqa: E402
-from morph.training.train import build_morph_config           # noqa: E402
+from morph.training.quant_setup import apply_quantization     # noqa: E402
+from morph.training.train import build_morph_config, load_checkpoint  # noqa: E402
 from morph.training.tul_setup import build_tul_runtime        # noqa: E402
 
 
@@ -50,6 +51,13 @@ def build(config_name: str, overrides: list[str]):
     tul_rt = build_tul_runtime(cfg)
     model = MORPHTransformer(build_morph_config(cfg, tul=tul_rt.model_cfg if tul_rt else None))
     model = model.cuda()
+    # QAT BEFORE any load. The core MLP's ternary STE is registered as a weight
+    # PARAMETRIZATION, so an unquantised model's key is `..._cms.weight` while the
+    # checkpoint's is `..._cms.parametrizations.weight.original`. Skipping this and loading
+    # with strict=False drops every MLP tensor in silence and leaves them at random init —
+    # measured, on the first version of this script: the cap sweep reported that NO core
+    # linear exceeded 2.0 while the run's own log had sigma_max at 3.30.
+    apply_quantization(model, cfg)
     loader = iter(create_dataloader(cfg.data.tokenizer, cfg.data.dataset,
                                     int(cfg.data.seq_len), int(cfg.training.batch_size),
                                     split="validation", skip_samples=50_000,
@@ -80,7 +88,12 @@ def _raw_weight(mod):
     if par is not None and "weight" in par:
         return par["weight"].original
     w = getattr(mod, "weight", None)
-    return w if (w is not None and w.dim() == 2 and w.numel() >= 1024) else None
+    # `named_modules()` also yields the parametrization machinery itself, whose `.weight` is
+    # a ParametrizationList, not a tensor — hence the isinstance guard rather than a
+    # duck-typed `.dim()`.
+    if not isinstance(w, torch.Tensor) or w.dim() != 2 or w.numel() < 1024:
+        return None
+    return w
 
 
 def core_linears(model, scope: str):
@@ -94,6 +107,8 @@ def core_linears(model, scope: str):
     root = getattr(model, "_orig_mod", model)
     for li, blk in enumerate(root.core):
         for sub_name, sub in blk.named_modules():
+            if sub_name.endswith("parametrizations") or ".parametrizations" in sub_name:
+                continue          # the STE modules, not the linear maps
             if _raw_weight(sub) is None:
                 continue
             name = f"core.{li}.{sub_name}"
@@ -274,12 +289,14 @@ def main():
     caps = [float(c) for c in a.sweep_caps.split(",") if c.strip()] or [None]
 
     results = []
+    scaler = torch.amp.GradScaler("cuda", enabled=False)
     for path in ckpts:
-        raw = torch.load(path, map_location="cuda", weights_only=False)
-        base_sd = raw.get("model", raw)
-        step = int(raw.get("step", -1))
+        step = int(torch.load(path, map_location="cpu", weights_only=False).get("step", -1))
         for cap in caps:
-            model.load_state_dict(base_sd, strict=False)
+            # THE loader the trainer uses: `_orig_mod` key alignment on both sides, and it
+            # RAISES when a checkpoint tensor finds no home. Re-loaded per cap because the
+            # projection mutates the weights in place.
+            load_checkpoint(path, model, scaler, torch.device("cuda"))
             pre_sigmas = core_sigmas(model) if a.dump_sigmas else None
             moved = (project_core_linears(model, cap, a.project_scope)
                      if cap else {})

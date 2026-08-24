@@ -136,6 +136,13 @@ growing. The realized per-block backward gain over the same interval moves **1.0
 from "the per-block amplifying directions aligned". The clean discriminator is the spectral
 arm below.
 
+Two cautions on this table, both found later. It reads the RAW parameter, so for the core
+MLP — which is ternarised by a weight parametrization — it is not the matrix the forward
+applies, and it is not comparable to `spec/sigma_max`, which measures the EFFECTIVE map and
+reports 3.30 at step 1800 on this same run. And a spectral norm of the weights is not the
+spectral norm of the block's Jacobian; the operator itself is measured in
+[the cure experiment](2026-08-24-tul-takeover-cure.md).
+
 ## Confound found and declared: the mid-run spectral arms
 
 `spec_cap2` and `spec_cap15` introduced the penalty AT the resume. Ten steps later the

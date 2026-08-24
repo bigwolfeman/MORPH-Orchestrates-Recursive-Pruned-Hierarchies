@@ -23,7 +23,7 @@ import re
 import statistics as st
 
 LOSS_RE = re.compile(r"^\[\s*(\d+)/\s*\d+\]\s+loss=([0-9.]+)")
-VAL_RE = re.compile(r"val[/ ]ce[_a-z]*[=: ]+([0-9.]+)", re.I)
+VAL_RE = re.compile(r"^\s*\[VAL\s+(\d+)\]\s+loss=([0-9.]+)")
 
 
 def load_probe(path: str) -> dict[int, dict]:
@@ -45,12 +45,23 @@ def load_probe(path: str) -> dict[int, dict]:
 
 
 def load_loss(path: str) -> list[tuple[int, float]]:
+    """Per-step TRAIN loss — one batch, so it is noisy and its minimum is a fluctuation."""
+    return _scan(path, LOSS_RE)
+
+
+def load_val(path: str) -> list[tuple[int, float]]:
+    """Validation CE over n_eval_batches. THIS is the series the turnaround claim rests on:
+    a train-loss minimum can move a nat on batch noise alone."""
+    return _scan(path, VAL_RE)
+
+
+def _scan(path: str, rx) -> list[tuple[int, float]]:
     out = []
     if not os.path.exists(path):
         return out
     with open(path) as f:
         for line in f:
-            m = LOSS_RE.match(line)
+            m = rx.match(line)
             if m:
                 out.append((int(m.group(1)), float(m.group(2))))
     return out
@@ -71,7 +82,8 @@ def fires(rows: list[tuple[int, float]], thr: float, window: int, frac: float,
     return None
 
 
-def summarise(probe: dict[int, dict], loss: list[tuple[int, float]], upto: int | None):
+def summarise(probe: dict[int, dict], loss: list[tuple[int, float]],
+              val: list[tuple[int, float]], upto: int | None):
     ks = sorted(k for k in probe if upto is None or k <= upto)
     if len(ks) < 10:
         return None
@@ -84,6 +96,8 @@ def summarise(probe: dict[int, dict], loss: list[tuple[int, float]], upto: int |
              if probe[k].get("preclip/core_block_gain_r2") is not None]
     ls = [(s, v) for s, v in loss if upto is None or s <= upto]
     lo = min(ls, key=lambda t: t[1]) if ls else (None, float("nan"))
+    vs = [(s, v) for s, v in val if upto is None or s <= upto]
+    vlo = min(vs, key=lambda t: t[1]) if vs else (None, float("nan"))
     return {
         "n": len(ks), "last": ks[-1],
         "end_share": st.median(tail),
@@ -95,6 +109,9 @@ def summarise(probe: dict[int, dict], loss: list[tuple[int, float]], upto: int |
         "loss_min": lo[1], "loss_min_at": lo[0],
         "loss_end": ls[-1][1] if ls else float("nan"),
         "loss_rise": (ls[-1][1] - lo[1]) if ls else float("nan"),
+        "val_min": vlo[1], "val_min_at": vlo[0],
+        "val_end": vs[-1][1] if vs else float("nan"),
+        "val_rise": (vs[-1][1] - vlo[1]) if vs else float("nan"),
     }
 
 
@@ -106,19 +123,22 @@ def main():
     a = ap.parse_args()
 
     hdr = (f"{'arm':<20}{'probed':>7}{'last':>7}{'endshare':>9}{'gain':>7}{'r2':>6}"
-           f"{'shareAt':>9}{'gainAt':>8}{'lossMin':>9}{'@':>7}{'lossEnd':>9}{'rise':>7}  verdict")
+           f"{'shareAt':>9}{'gainAt':>8}{'valMin':>8}{'@':>7}{'valEnd':>8}{'valRise':>8}"
+           f"{'trnMin':>8}  verdict")
     print(hdr)
     print("-" * len(hdr))
     for spec in a.arms:
         name, _, path = spec.partition("=")
-        s = summarise(load_probe(path), load_loss(path.replace(".jsonl", ".log")), a.window)
+        log = path.replace(".jsonl", ".log")
+        s = summarise(load_probe(path), load_loss(log), load_val(log), a.window)
         if s is None:
             print(f"{name:<20}{'(too few probed steps)':>40}")
             continue
         print(f"{name:<20}{s['n']:>7}{s['last']:>7}{s['end_share']:>9.4f}{s['gain']:>7.3f}"
               f"{s['r2']:>6.2f}{str(s['share_fires']):>9}{str(s['gain_fires']):>8}"
-              f"{s['loss_min']:>9.4f}{str(s['loss_min_at']):>7}{s['loss_end']:>9.4f}"
-              f"{s['loss_rise']:>7.3f}  {'TOOK OVER' if s['took'] else 'held'}")
+              f"{s['val_min']:>8.4f}{str(s['val_min_at']):>7}{s['val_end']:>8.4f}"
+              f"{s['val_rise']:>8.3f}{s['loss_min']:>8.4f}  "
+              f"{'TOOK OVER' if s['took'] else 'held'}")
 
 
 if __name__ == "__main__":
