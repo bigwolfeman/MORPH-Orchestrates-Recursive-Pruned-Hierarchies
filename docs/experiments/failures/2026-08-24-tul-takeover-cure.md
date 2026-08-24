@@ -279,6 +279,27 @@ states of a row, in 1024 dimensions, per loop iteration; and their mean pairwise
 | 1850 | 2.71 1.69 1.94 1.88 1.93 1.89 1.83 **1.81** | +.582 ... **+.697** | 0.890 |
 | 1866 | 3.18 2.46 2.97 2.98 2.97 3.11 2.74 **2.77** | +.537 ... **+.479** | 0.961 |
 
+One methodological caveat, raised and then closed. The participation ratio of squared
+singular values is NORM-WEIGHTED, so a single slot with a large carrier norm reads as low
+rank even when the directions are perfectly spread — which matters here precisely because a
+stable sink slot exists. Re-running the probe on the UNIT-NORMALISED states separates "one
+slot is big" from "the directions merged", and the answer is the directions:
+
+| step | rank ratio, norm-weighted | rank ratio, unit-normalised |
+|---:|---:|---:|
+| 1625 | 1.48 | 1.41 |
+| 1700 | 1.23 | 1.28 |
+| 1750 | 1.46 | 1.47 |
+| 1800 | 1.01 | **0.92** |
+| 1850 | 0.67 | **0.71** |
+| 1866 | 0.87 | 1.06 |
+
+The separation is if anything CLEANER once the norms are divided out: every healthy rung is
+at or above 1.28, every sick one at or below 1.06, and the 1800 rung moves from ambiguous
+(1.01) to clearly below 1 (0.92). The 1866 row moves the other way, to 1.06, which is the
+second reason this document claims "the diversifying behaviour is lost" rather than "the
+states collapse".
+
 **The slot states are near-degenerate everywhere, healthy included.** Fifty vectors in a
 1024-dimensional space with an effective rank between 1.7 and 4.8 and a mean pairwise cosine
 between +0.39 and +0.71. That is not the disease; it is the design. A slot's input is one
@@ -293,9 +314,16 @@ given a reason to separate them.
 | 1625 | 1.48 | −0.127 | the loop DIVERSIFIES |
 | 1700 | 1.23 | −0.102 | diversifies |
 | 1750 | 1.46 | −0.158 | diversifies |
-| 1800 | 1.01 | **+0.023** | neutral — the flip |
+| 1800 | 1.01 | +0.023 | the flip |
 | 1850 | **0.67** | **+0.115** | the loop COLLAPSES |
-| 1866 | 0.87 | −0.058 | collapsing |
+| 1866 | 0.87 | −0.058 | the two measures disagree |
+
+**Stated carefully, because one row does not support the strong version.** What holds at all
+three sick rungs is that the DIVERSIFYING behaviour is LOST: the ratio is 1.23 to 1.48 at
+every healthy rung and 1.01, 0.67, 0.87 at the sick ones. What does NOT hold at all three is
+active collapse — that is clean only at 1850, where both measures agree; at 1866 the rank
+ratio is still below 1 while the cosine is falling, so the two disagree and the row is not
+evidence for collapse. The claim this document makes is the first one.
 
 The flip sits between steps 1750 and 1800. The core share over the same two rungs goes
 0.021 to 0.372. This is the earliest indicator in this whole programme — earlier than the
@@ -405,6 +433,28 @@ checkpoints, not inferred from an arm; the four spectral controls still failed; 
 `bptt_depth` discriminator still landed where it landed. What the second seed changes is the
 claim about the FIX, from "the cure" to "the largest single improvement found, and still not
 enough".
+
+### The per-block gain is the wrong severity measure
+
+Two interventions RAISED the per-block backward gain while REDUCING the harm:
+
+| arm | per-block gain vs its control | val CE rise vs its control |
+|---|---|---|
+| `a35-proj15` hard cap 1.5 | 1.659 against 1.402 | worse |
+| `b10-bptt2` bptt_depth 2 | 2.784 against 2.445 | +0.192 against +0.533 |
+
+The second one is the clean case: same control, higher gain, 64 % less damage. So gain and
+harm can move in opposite directions, and the gain is a readout of the map's response PER
+APPLICATION while the harm is the integrated weight motion that survives truncation,
+clipping and the optimizer. `bptt_depth` 2 raises the response and truncates the amplified
+cotangent before it reaches the weights; the projection raises the response and strips the
+net weight motion each step. Both cut the integral while inflating the instantaneous number.
+
+The severity measure this document should have used, and did not, is post-optimizer coherent
+core drift: per-step `||dW_core||` after clipping and projection, times its directional
+autocorrelation over a window. It is computable from checkpoints that already exist. The
+pre-clip core share is compromised for the same class of reason — the soft-penalty arms
+already fooled it once.
 
 ### Stacking the levers does not help either — P15 falsified
 
@@ -838,22 +888,38 @@ one, differing only by seed — is the sharpest single piece of evidence in this
 it cost zero GPU time to obtain.
 ## What the measurements say to do next
 
-1. **Not stacking.** Tried, at the end of this work: `bptt_depth` 2 plus `per_slot_embed`
+1. **Decompose the optimizer state first — it costs zero GPU-training minutes.** The
+   checkpoints on disk carry the optimizer state. Split the applied core update at rungs
+   1700 to 1866 into its `g/sqrt(v)` and `alpha * m_slow` components and project each onto
+   the actual `dW` between rungs. `m_slow` is a ~1e4-step integral of the gradient, i.e. pure
+   accumulated history, which is exactly the kind of object a SEED decides — so it is the
+   natural candidate for why `per_slot_embed` holds one seed and not the other, and for why
+   `alpha_cap` does the same. Onset timing is circumstantially consistent: the `b10` control
+   first crosses share 0.5 at step 1150, where `alpha` is about 2.5 of 3.5 on the
+   `t_alpha` 1600 ramp. Running more arms before knowing this risks wasting them.
+2. **Make the diversity STRUCTURAL rather than initial.** `per_slot_embed`'s rows are
+   learnable and every slot index plays nearly the same role, so they receive nearly the same
+   gradient and can re-converge — which would explain a fix that shifts the basin without
+   removing the attractor. Two checks and one arm: measure the pairwise cosine of the 64
+   embedding rows over the FAILING seed-0 run's checkpoints (does it climb back toward 1
+   before onset at 2225?), and if it does, run frozen non-learnable orthogonal per-slot
+   offsets, which cannot be trained away.
+3. **Not stacking.** Tried, at the end of this work: `bptt_depth` 2 plus `per_slot_embed`
    at the harder seed took over with the highest per-block gain of any arm here and reached
    a CE 0.42 nats worse than `per_slot_embed` alone. The levers are not three independent
    brakes on one runaway, and the next person should not spend an hour finding that out
    again.
-2. **Separate the two things `per_slot_embed` changes.** It adds per-index parameters AND
+4. **Separate the two things `per_slot_embed` changes.** It adds per-index parameters AND
    jitters them at seating. `per_slot_embed_std: 0.0` keeps the parameters and starts every
    row equal, so the forward at step 0 is identical to the shared version. Launched at the
    end of this work and not reported here. If the jitter is what matters, a cheaper fix
    exists that adds no parameters at all: jitter the shared `E_slot` per slot index.
-3. **Find out WHY those slots.** The cotangent sits on the same top-3 slots at every core
+5. **Find out WHY those slots.** The cotangent sits on the same top-3 slots at every core
    block, with the top slot's share rising 0.18 -> 0.54. Nothing here says whether they are
    the low-carrier-norm ones, the deep-Poisson-depth ones, or whatever the coda's
    token-to-slot attention weights most. One forward and one backward on checkpoints that
    already exist.
-4. **Watch the rank ratio.** The loop's effect on the slot states' effective rank crosses 1
+6. **Watch the rank ratio.** The loop's effect on the slot states' effective rank crosses 1
    between steps 1750 and 1800, before the core share moves. It costs one no-grad forward
    and it is a better abort criterion than anything currently shipped. It is measured by
    `lab/divergence/jac_ladder.py --state-probe` and is NOT yet wired into the trainer.
@@ -864,12 +930,21 @@ also not worth the memory — it OOMs at batch 12 and at batch 10, and a typical
 its 64 slots, so the budget is rarely the binding constraint.
 ## Not verified
 
+* **Whether the `bptt_depth` result has a second reading.** A plausible one, offered as a
+  second opinion on this work and not tested: the gradient can only shape the loop's
+  multi-iteration behaviour through the iterations it reaches, so `bptt_depth` 2 may remove
+  the very training signal that teaches the loop to keep the states apart. That would explain
+  both its high per-block gain and why stacking it with `per_slot_embed` was worse than either
+  alone. It rests on one seed and this document does not claim it.
 * **The cure at n > 1.** One arm, one seed, 4000 steps, one configuration, kernels on and
   therefore not bit-reproducible. It is reported because at that setting the failure is 5 of
   5, not because one arm is enough on its own.
 * **WHICH half of the cure works.** `per_slot_embed` adds per-index parameters AND jitters
   them at seating. Nothing here separates "the model can now tell its slots apart" from "the
   symmetry was broken at step 0".
+* **The bag-mean confound, raised and REFUTED by reading the code.** `per_slot_embed` adds
+  the per-index row TO the span bag-mean (`at_pos = at_pos + e[bag_id]` in
+  `TULSlots.slot_input`); it does not replace it. The arm changes one thing.
 * **That the state collapse is CAUSAL rather than merely upstream.** The cure is aimed at it
   and works, which is the strongest evidence here, but it is one arm and the intervention
   changes the architecture rather than isolating the variable.

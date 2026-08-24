@@ -317,7 +317,7 @@ def state_geometry(model, x, y, layout, seed: int) -> dict:
         h = p["h"].float()
         h = h.mean(dim=2) if h.dim() == 4 else h            # reduce the n hyper-connection streams
         m = p["active"]
-        erank, cos = [], []
+        erank, cos, urank = [], [], []
         for b in range(h.shape[0]):
             hb = h[b][m[b]]
             if hb.shape[0] < 2:
@@ -326,11 +326,19 @@ def state_geometry(model, x, y, layout, seed: int) -> dict:
             e = sv ** 2
             erank.append(float((e.sum() ** 2) / (e ** 2).sum()))
             hn = hb / (hb.norm(dim=1, keepdim=True) + 1e-12)
+            # UNIT-NORMALISED rank too. The participation ratio of squared singular values
+            # is norm-weighted, so ONE slot with a huge carrier norm reads as low rank even
+            # when the directions are perfectly spread. Normalising first separates "one
+            # slot is big" from "the directions merged", and the two disagreeing is itself
+            # a finding.
+            svu = torch.linalg.svdvals(hn.double()) ** 2
+            urank.append(float((svu.sum() ** 2) / (svu ** 2).sum()))
             g = hn @ hn.t()
             n = g.shape[0]
             cos.append(float((g.sum() - n) / (n * (n - 1))))
         per_iter.append({"iter": int(p["iter_idx"]),
                          "eff_rank": sum(erank) / max(len(erank), 1),
+                         "eff_rank_unit": sum(urank) / max(len(urank), 1),
                          "mean_cos": sum(cos) / max(len(cos), 1),
                          "n_slots": int(m[0].sum())})
 
@@ -439,9 +447,11 @@ def main():
                 st = state_geometry(model, x, y, layout, a.seed)
                 results.append({"ckpt": os.path.basename(path), "step": step, "state": st})
                 er = " ".join(f"{r['eff_rank']:.2f}" for r in st["per_iter"])
+                eu = " ".join(f"{r['eff_rank_unit']:.2f}" for r in st["per_iter"])
                 co = " ".join(f"{r['mean_cos']:+.3f}" for r in st["per_iter"])
                 print(f"{os.path.basename(path):<22} slots={st['per_iter'][0]['n_slots']:>3} "
                       f"eff_rank/iter={er}", flush=True)
+                print(f"{'':<22} unit_rank/iter={eu}", flush=True)
                 print(f"{'':<22} mean_cos/iter={co}", flush=True)
                 print(f"{'':<22} cotangent top3 block0={st['cotangent_top'][0]['top_idx'][:3]} "
                       f"share={st['cotangent_top'][0]['top_share'][:3]} "
