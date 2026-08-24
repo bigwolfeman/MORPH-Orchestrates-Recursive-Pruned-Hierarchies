@@ -186,6 +186,42 @@ P10. **The slot budget.** `tul.max_slots` 64 -> 128 at `alpha_cap` 3.5, 7000 ste
 
 Nothing in Predictions is edited.
 
+## P11, a free discriminator — written 2026-08-24 14:51, before its verdict
+
+`b10-bptt2` (`model.bptt_depth` 4 -> 2, otherwise the `b10-ctrl` configuration) has been
+running since 14:34 and is at roughly step 2400 of 4000. Its validation curve is visible to
+step 1500 only — 5.4756, 4.9933, 4.9124, still falling, against the control's 5.5597,
+4.9183, 4.8528 whose MINIMUM is at 1500. So the verdict is not determined and the
+prediction below is not retrofitted, but I have seen three of its eight eval points and say
+so.
+
+The arm discriminates two readings of the same measurements:
+
+* **Backward power iteration.** The disease is 24 applications of the same `J^T`. Halving
+  `bptt_depth` halves that to 12 and halves the iteration's progress per backward, so it
+  should help A LOT — the share criterion should not fire and validation CE at 3500 should
+  be within 0.1 nats of its own minimum, against the control's +0.533.
+* **Forward rank collapse.** The slot states are 57 near-parallel vectors (one shared
+  `E_slot` plus a bag mean) hit by the same six blocks 6 to 8 times, which is the
+  oversmoothing regime; the backward concentration is then a symptom. Under this reading
+  `bptt_depth` should barely help, because the FORWARD still loops T = 6 to 8 regardless.
+
+A middling result — some delay, still takes over — supports the second reading over the
+first, since halving the exponent from 24 to 12 is a factor of `g^12` and should be
+unmissable if the backward is the disease.
+
+## Two cautions on P10, same timestamp
+
+`max_slots` 64 -> 128 is probably a near-no-op and its null result must not be read as
+evidence about position count. A typical row uses **57** of the 64 slots and `tul_a1.yaml`
+records only 7.7 % of rows saturating at 64, so the cap is rarely the binding constraint.
+The arm tests "a bigger budget", not "more positions per row".
+
+And the cotangent is ALREADY concentrated when it enters the core: 13 effective positions of
+57 at the healthy rungs. Whatever sets that initial 13 is upstream of the loop — the coda's
+token-to-slot attention is the only thing that routes gradient to slots — so the loop
+amplifies a concentration it is handed rather than creating it.
+
 ## Risks
 
 * n = 1 per arm. Bit-reproducibility makes the microcosm pair a controlled comparison, not
