@@ -1,4 +1,4 @@
-# The TUL core takeover: the mechanism, and five cures that failed
+# The TUL core takeover: the mechanism, and why no weight-space cure reaches it
 
 Status: failure
 
@@ -33,9 +33,9 @@ spectrum explains anything: `sigma_max` per block rises only 2.35 -> 3.23, the s
 `sigma_1/sigma_2` has a median of 1.069 -> 1.132 with the WORST gap FALLING, and the bulk
 spread of the spectrum does not move.
 
-**Five interventions in feature space were tried and all five failed** at the configuration
+**Four interventions in feature space were tried and all four failed** at the configuration
 that turns around 4 times out of 4. Including a hard projection that held `sigma_max` at
-exactly 1.50 for the whole run. That is not five unlucky guesses; it is what the gap
+exactly 1.50 for the whole run. That is not four unlucky guesses; it is what the gap
 measurement predicts, since a norm cap leaves every singular vector and every ratio
 `sigma_i/sigma_j` untouched and therefore cannot slow an alignment at all.
 
@@ -241,7 +241,7 @@ differs is how many independent terms the cotangent is a sum of — 57 slots aga
 token positions — and therefore how sharply 24 applications of the same `J^T` can
 concentrate it.
 
-It also explains, after the fact, why five feature-space interventions failed: they all
+It also explains, after the fact, why every feature-space intervention failed: they all
 constrain what the map does to a VECTOR, and the thing that is concentrating is which
 POSITIONS carry the vector.
 
@@ -387,7 +387,7 @@ So the microcosm result is real and it is narrow: it says the mechanism is causa
 intervention that holds the block gain below 1 does prevent the takeover — and it does not
 say the intervention is a cure at the recipe's own scale.
 
-## Five interventions, one control, one rule
+## Four interventions, one control, one rule
 
 All at `--config-name tul_a1r`, `ademamix_alpha_cap` 3.5 (which turns around 4/4 in the
 table above), batch 12, kernels on, `ademamix_t_beta3` pinned to 20000 so every arm shares

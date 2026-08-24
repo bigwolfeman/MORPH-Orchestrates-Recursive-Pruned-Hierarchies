@@ -18,7 +18,7 @@ What it could not say was WHERE the amplification lives, and therefore what to b
 ## Decision
 
 **Do not enable any spectral control by default.** The evidence says a control on the core
-weights' spectrum cannot reach this failure, and two of the five arms that tried made it
+weights' spectrum cannot reach this failure, and two of the four arms that tried made it
 WORSE than doing nothing.
 
 What ships instead is the ability to see the thing: `morph/training/core_jacobian.py`
@@ -56,7 +56,7 @@ in the RCA.
   1.50 for its whole life and took over anyway. KEPT IN THE TREE, off by default, because it
   is strictly the better instrument if a spectral bound is ever wanted: the constraint holds
   by construction, nothing enters the loss, and it costs 6 % of throughput.
-* **Hard projection over MLP plus attention.** REJECTED. The best arm of the five — it
+* **Hard projection over MLP plus attention.** REJECTED. The best arm of the four — it
   reaches validation CE 4.7418, better than the control's 4.7881 — and it still takes over.
 * **A penalty on the spectral GAP, and one on the bulk spread.** The spread version was
   written, unit-tested and then DELETED, because measuring its target took twenty minutes
@@ -86,4 +86,4 @@ in the RCA.
   measured control (1700 against 6640). It is still off by default because it forces
   `grad_probe_every=1`; the case for turning it on for TUL arms is now quantified.
 * Anyone reaching for a spectral cap in this tree should read the experiment record first.
-  Five arms is enough evidence to stop.
+  Four arms, one control and one pre-fixed rule is enough evidence to stop.

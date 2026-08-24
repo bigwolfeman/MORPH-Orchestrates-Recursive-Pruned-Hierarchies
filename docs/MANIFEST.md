@@ -24,7 +24,7 @@ live in `.agents/notes/`; these are the runs behind them.
 - [What makes the TUL arms diverge?](experiments/failures/2026-08-22-tul-divergence-cause.md)
 - [Is `ademamix_alpha_cap=1.0` a cure or a delay?](experiments/failures/2026-08-22-tul-order-parameter.md)
 - [Root cause of the TUL core takeover](experiments/results/2026-08-24-tul-takeover-rca.md) — the per-block backward gain, and what does not stop it
-- [The mechanism, and five cures that failed](experiments/failures/2026-08-24-tul-takeover-cure.md) — the alignment is in POSITION space, so no weight-norm control reaches it
+- [The mechanism, and why no weight-space cure reaches it](experiments/failures/2026-08-24-tul-takeover-cure.md) — the alignment is in POSITION space, so no weight-norm control reaches it
 
 ## Cookbook
 

@@ -45,7 +45,7 @@ renorm), not symptom-clamping — that also preserves the β1=0 memory win + α�
 > [docs/cookbook/measuring-the-core-map.md](docs/cookbook/measuring-the-core-map.md)), and on
 > the TUL takeover it says the map's per-block gain moves +2.5 % while its blocks' amplifying
 > directions ALIGN x2.9 and the backward cotangent collapses from 13 effective slot positions
-> to 2.5. Five interventions that bound the core weights' spectrum — including a hard
+> to 2.5. Four interventions that bound the core weights' spectrum — including a hard
 > projection that pinned `σ_max` at 1.50 for a whole run — all failed, and two made it worse
 > than doing nothing. A uniform rescale leaves every singular vector and every ratio
 > `σ_1/σ_2` untouched, so it cannot slow an alignment. Read
