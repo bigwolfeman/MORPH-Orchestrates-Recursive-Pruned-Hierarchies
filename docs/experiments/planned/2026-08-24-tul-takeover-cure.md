@@ -80,6 +80,20 @@ P7. **The cap is derivable, not tuned.** Projecting the core linears of the SICK
     monotone curve, and the largest `c` at which `sigma_max(J_core) <= 1` lands between
     1.0 and 2.0 — the region the chosen cap of 1.5 sits in.
 
+P8. **Dose response, not generic regularisation.** A second arm at `cap` 3.0 with the
+    same lambda — a cap that barely binds, since the control's worst core linear reaches
+    3.41 — TAKES OVER by step 6000 under the same verdict rule. A strong regulariser that
+    happened to move the trajectory would help at 3.0 too; only a spectral bound has to
+    bind to work.
+
+P9. **Can the spectral cap stand alone?** A third arm restores `ademamix_alpha_cap` to
+    3.5 — the setting `tul_short.yaml` records as diverging 5/5, at abort steps 2080,
+    3240, 4540, 5900 and 6200 — and keeps only the spectral cap. Expectation: it does NOT
+    take over by 6000. This one is a genuine open question rather than a confident
+    prediction; the two fixes act on different objects (the optimizer's slow-EMA weight
+    versus the map's spectral norm) and nothing measured yet says the second subsumes the
+    first.
+
 Falsifiers. P4 failing makes the microcosm result seed 0 luck, exactly the way
 `alpha_cap` 1.0 failed, and kills the cure. P5 failing makes the seed-1 pair unreadable
 and the experiment must be redone. P6 failing means the block gain is not an operator-norm
@@ -98,7 +112,11 @@ All runs on the 5090.
 * Seed-1 arms: `--config-name tul_a1r`, stock `tul_short` settings (batch 12, kernels on,
   `alpha_cap` 1.0), `training.steps=4200`, `training.ademamix_t_beta3=20000` so the
   optimizer schedule matches the 20000-step control `0ujvtukf`, `grad_probe_every=25`.
-  Control and cure differ ONLY by the two penalty keys.
+  Control and cure differ ONLY by the two penalty keys. Arms, in the order they run:
+  `cure-a1r-ctrl` (6000), `cure-a1r-spec` (12000, cap 1.5), `cure-a1r-cap30` (6000, cap
+  3.0), `cure-a35-spec` (6000, cap 1.5 with `alpha_cap` back at 3.5).
+  `spectral_penalty_log_every` is 100 on EVERY arm including the control, so sigma_max of
+  the core MLP linears is on the record whether or not the penalty is active.
 * Mechanism: `lab/divergence/jac_ladder.py` over
   `checkpoints/morph/onset-capture/ROLL_step_*.pt`, one fixed batch and one fixed depth
   draw for every rung, 300 power iterations, convergence residual reported with every
