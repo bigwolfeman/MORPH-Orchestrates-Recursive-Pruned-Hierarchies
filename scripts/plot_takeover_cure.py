@@ -181,7 +181,7 @@ def panel_e(ax, arms):
         lo = min(pts, key=lambda t: t[1])
         ax.plot([lo[0]], [lo[1]], marker="v", ms=8, color=style["color"], ls="none")
     ax.set_xlabel("step"); ax.set_ylabel("validation CE (nats)")
-    ax.set_title("G  the harm is a turnaround —\nand the cured arm never turns", fontsize=9)
+    ax.set_title("G  the harm is a turnaround —\nthe best lever delays it, one seed of two", fontsize=9)
     ax.legend(fontsize=7)
 
 
@@ -235,8 +235,10 @@ def main():
          dict(color=OI["sky"], ls=":", marker="x", lw=1.5, ms=4)),
         ("bptt_depth 2, batch 10", f"{C}/b10-bptt2.log",
          dict(color=OI["vermillion"], ls="--", marker="v", lw=1.5, ms=4)),
-        ("PER-SLOT EMBED, batch 10", f"{C}/b10-slotembed.log",
+        ("per-slot embed, seed 1", f"{C}/b10-slotembed.log",
          dict(color=OI["green"], ls="-", marker="D", lw=2.4, ms=5)),
+        ("per-slot embed, seed 0", f"{C}/s0-slotembed.log",
+         dict(color=OI["green"], ls="--", marker="*", lw=1.8, ms=6)),
     ])
     panel_f(axes[1][3], f"{C}/sigma_hist.json", None)
     for row in axes:

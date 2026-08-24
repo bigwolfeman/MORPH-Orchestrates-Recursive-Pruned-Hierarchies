@@ -788,16 +788,18 @@ one, differing only by seed — is the sharpest single piece of evidence in this
 it cost zero GPU time to obtain.
 ## What the measurements say to do next
 
-1. **Confirm the cure, then turn it on.** One 4000-step arm at one seed is what stands
-   behind `per_slot_embed` today. What would justify making it a default in
-   `tul_short.yaml`: a second seed at the same configuration, and one full 20000-step arm
-   against `tul-a0` (val CE 3.1749) to show the CE gain is not an early-schedule artifact.
-   Both are ordinary runs, roughly 40 minutes and 3 hours on a 5090.
+1. **Stack the levers that each help.** Three things now measurably delay or reduce this
+   failure and NONE of them cures it alone: `ademamix_alpha_cap` 1.0 (holds one seed of
+   three), `bptt_depth` 2 (harm 64 % lower), and `per_slot_embed` (time-to-failure doubled,
+   harm 78 % lower, CE better on both seeds). They act on three different objects — the
+   optimizer's slow-EMA term, the number of operator applications, and the state geometry —
+   so there is no reason to expect them to be redundant, and nobody has run them together.
+   That is the cheapest thing left and it is one config line.
 2. **Separate the two things `per_slot_embed` changes.** It adds per-index parameters AND
    jitters them at seating. `per_slot_embed_std: 0.0` keeps the parameters and starts every
-   row equal, so the forward at step 0 is identical to the shared version; running that arm
-   says whether the cure is the learnable per-slot capacity or the broken symmetry at init.
-   It is one config key and one 40-minute run, and it is the sharpest remaining question.
+   row equal, so the forward at step 0 is identical to the shared version. Launched at the
+   end of this work and not reported here. If the jitter is what matters, a cheaper fix
+   exists that adds no parameters at all: jitter the shared `E_slot` per slot index.
 3. **Find out WHY those slots.** The cotangent sits on the same top-3 slots at every core
    block, with the top slot's share rising 0.18 -> 0.54. Nothing here says whether they are
    the low-carrier-norm ones, the deep-Poisson-depth ones, or whatever the coda's
