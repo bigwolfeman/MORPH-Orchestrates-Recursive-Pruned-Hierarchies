@@ -386,6 +386,18 @@ training:
   eval_every: 500
   n_eval_batches: 20
   ckpt_every: 2500
+  # How many periodic `step_*.pt` files to keep. The oldest is deleted once this many
+  # exist, so a run's checkpoint cost is BOUNDED at ckpt_keep_last x ~2.3 GB regardless
+  # of how long it runs. 0 disables retention and keeps every checkpoint.
+  #
+  # 8 matches ckpt_rolling_keep below, and covers every probe ladder this project has
+  # actually read (the drift/forcing-bias sweeps read 7 rungs per run). Raise it for an
+  # experiment that needs a longer ladder; do not set 0 unless you mean unbounded.
+  #
+  # Why this exists: without it, checkpoints/morph/ reached 292 GB. A four-seed
+  # 3500-step sweep at ckpt_every=500 wrote 63 GB, and a 100k-step run at 2500 writes
+  # 90 GB. The abort guards' files (DIVERGED_*.pt) are never rotated away.
+  ckpt_keep_last: 8
   gen_every: 0      # 0 = disabled; set e.g. 5000 for generation samples
   gen_test: false   # run generation test at end of training
 

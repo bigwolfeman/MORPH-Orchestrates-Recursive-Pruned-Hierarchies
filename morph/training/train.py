@@ -19,6 +19,8 @@ import sys
 import time
 from typing import Optional
 
+from morph.training.ckpt_retention import RetentionRing, existing_step_checkpoints
+
 # Diagnostic-only: env-guarded single-shot faulthandler to capture the stack of an
 # intermittent step-0 backward hang (gradient-checkpoint recompute). Single dump
 # (NOT repeat=True — repeated dumps SIGSEGV under live CUDA). Set MORPH_FAULT_TIMEOUT
@@ -1293,10 +1295,16 @@ def main(cfg: DictConfig) -> None:
     grad_clip = float(getattr(tr, "grad_clip", 1.0))
     eval_every = int(getattr(tr, "eval_every", 500))
     ckpt_every = int(getattr(tr, "ckpt_every", 2500))
+    # Retention for the periodic `step_*.pt` checkpoints. 0 = keep every one, which is
+    # UNBOUNDED: a 100k-step run at ckpt_every=2500 writes 40 files of ~2.3 GB = 90 GB,
+    # and a four-seed 3500-step sweep at ckpt_every=500 wrote 63 GB. That is how
+    # checkpoints/morph/ reached 292 GB on 2026-08-25. The rolling ring buffer below has
+    # always rotated; this path never did. Only `step_*.pt` is rotated — whatever the
+    # abort guards write (DIVERGED_*.pt, TAKEOVER_*.pt) is a normal file and is kept.
+    _ck_ring = RetentionRing(int(getattr(tr, "ckpt_keep_last", 8)))
     # Rolling pre-onset capture (see the ring buffer in the training loop). 0 = off.
     _roll_every = int(getattr(tr, "ckpt_rolling_every", 0))
-    _roll_keep = max(1, int(getattr(tr, "ckpt_rolling_keep", 8)))
-    _roll_paths: list[str] = []
+    _roll_ring = RetentionRing(max(1, int(getattr(tr, "ckpt_rolling_keep", 8))), tag="roll")
     gen_every = int(getattr(tr, "gen_every", 0))  # 0 = disabled
     n_eval_batches = int(getattr(tr, "n_eval_batches", 20))
     resume_path: Optional[str] = getattr(tr, "resume", None)
@@ -1709,6 +1717,17 @@ def main(cfg: DictConfig) -> None:
         _run_tag = wandb.run.name or str(wandb.run.id) or "run"
     ckpt_dir = os.path.join(_MORPH_ROOT, "checkpoints", "morph", _run_tag)
     os.makedirs(ckpt_dir, exist_ok=True)
+    # Seed the retention ring from what is already on disk, so a RESUMED run enforces
+    # ckpt_keep_last over the whole run and not just over the checkpoints this process
+    # happens to write. Sorted by step number, not lexically: step_900 precedes step_1000.
+    if _ck_ring.enabled:
+        _ck_ring.seed(existing_step_checkpoints(ckpt_dir))
+        print(f"  [ckpt] retention: keeping the last {_ck_ring.keep} step_*.pt "
+              f"({len(_ck_ring.paths)} already on disk). "
+              f"Set training.ckpt_keep_last=0 to keep all.", flush=True)
+    else:
+        print("  [ckpt] retention: OFF (ckpt_keep_last=0) — step_*.pt will accumulate "
+              "without bound.", flush=True)
     # Persist the wandb run id so a future resume continues the same run (read back as
     # the wandb_id.txt sidecar above, before wandb.init).
     if wandb.run is not None:
@@ -2786,6 +2805,7 @@ def main(cfg: DictConfig) -> None:
             ck_path = os.path.join(ckpt_dir, f"step_{step}.pt")
             save_checkpoint(ck_path, step, model, optimizer, scaler, pruning, next_step=step + 1)
             print(f"  Checkpoint: {ck_path}")
+            _ck_ring.add(ck_path)
 
         # ── Rolling pre-onset capture ─────────────────────────────────────
         # A ring buffer of recent checkpoints. Its purpose is a state saved just BEFORE a
@@ -2796,15 +2816,9 @@ def main(cfg: DictConfig) -> None:
         if _roll_every > 0 and step % _roll_every == 0 and step > 0:
             _rp = os.path.join(ckpt_dir, f"ROLL_step_{step}.pt")
             save_checkpoint(_rp, step, model, optimizer, scaler, pruning, next_step=step + 1)
-            _roll_paths.append(_rp)
-            while len(_roll_paths) > _roll_keep:
-                _old = _roll_paths.pop(0)
-                try:
-                    os.remove(_old)
-                except OSError as _e:
-                    print(f"  [roll] could not remove {_old}: {_e}", flush=True)
-            print(f"  [roll] {_rp}  (keeping {len(_roll_paths)} of the last "
-                  f"{_roll_keep} × {_roll_every} steps)", flush=True)
+            _roll_ring.add(_rp)
+            print(f"  [roll] {_rp}  (keeping {len(_roll_ring.paths)} of the last "
+                  f"{_roll_ring.keep} × {_roll_every} steps)", flush=True)
 
         # ── Reset step timer ───────────────────────────────────────────────
         # Anchor the next step's _dt here, AFTER logging/eval/gen/ckpt, so those
