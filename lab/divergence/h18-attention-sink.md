@@ -4,7 +4,7 @@ Working document. It is the plan, the running log, and the place the numbers lan
 Updated as each phase closes. The ledger entry it resolves is `takeover-campaign.md` H18.
 
 Status: **CLOSED 2026-08-25 — H18 NOT SUPPORTED.** The follow-on H24 is screened and its
-PAIRED ARM IS RUNNING (`lab/divergence/h24_arm.sh`, 8 runs, ~7 h). See the bottom.
+BINARY ARM IS RUNNING (2 seeds x 2 configs, ~2.6 h). See the bottom.
 Opened 2026-08-25.
 
 ## Why this hypothesis
@@ -244,38 +244,40 @@ Two of the three substantive predictions keyed on rung 1850 alone, called "the c
 sick rung" because the campaign's two rank measures agreed there. It turned out to be the
 hardest one. A calibration error, recorded rather than corrected away.
 
-### The arm — LAUNCHED 2026-08-25 14:22
+### The arm — the BINARY design, launched 2026-08-25 15:29
 
-Pre-registration: [`docs/experiments/planned/2026-08-25-h24-hca-branch-arm.md`](../../docs/experiments/planned/2026-08-25-h24-hca-branch-arm.md).
-Runner `lab/divergence/h24_arm.sh`, scorer `lab/divergence/score_h24_arm.py`, both
-committed before launch.
+Pre-registration: [`docs/experiments/planned/2026-08-25-h24-hca-branch-arm-binary.md`](../../docs/experiments/planned/2026-08-25-h24-hca-branch-arm-binary.md).
+Runner `lab/divergence/h24_arm.sh`, scorer `lab/divergence/score_h24_arm.py`.
 
-`model.core_hca_compress_ratio: 16` (config `tul_a1_hca16`) against `tul_a1`, seeds 0-3,
-PAIRED and INTERLEAVED, sequential, 6000 steps at batch 6 / `alpha_cap` 3.5 /
-`use_kernels=false`. 8 runs at ~51 min = ~7 h. Measured at launch: 1.94 steps/s, 369 W,
-80 % GPU — well under the UPS threshold.
+**Two earlier designs were rejected before producing a scored panel, and both died the same
+way: they ran where the control mostly SURVIVES.** A control that survives answers nothing,
+because the signal here is binary — the divergence guard fires or it does not.
 
-The knob is a new construction-time field scoped to the CORE. Verified on the real model:
-`tul_a1` still reports `n_blocks = 0` and `|out_comp| = 0.0000` at core blocks 1/3/5, and
-`tul_a1_hca16` reports `n_blocks = 4` and `|out_comp|` 228-244. A global
-`model.hca_compress_ratio` would have re-blocked two prelude and two coda layers too,
-making the arm differ by seven modules instead of three.
+| design | why it was rejected |
+|---|---|
+| [4 seeds](../../docs/experiments/failures/2026-08-25-h24-hca-branch-arm-4seed.md) | scope cut to fewer seeds [W]; its P1/P3 are written as "how many of the four", so they cannot be re-scored |
+| [1 seed](../../docs/experiments/failures/2026-08-25-h24-hca-branch-arm-1seed.md) | batch 6 at 3500 steps diverges on 1 seed in 4; and it fixed the budget confound by SHORTENING the run, which truncates the window the failure lives in |
 
-6000 steps and not the sweep's 3500: at 3500 only control seed 0 of four diverges, while
-seeds 1-3 finish with rises of 0.129 / 0.090 / 0.127 nats — inside the measured 0.168-nat
-healthy noise floor. The known abort steps at `alpha_cap` 3.5 are 2080, 3240, 4540, 5900,
-6200, so 6000 covers four of five.
+The live design runs the regime the failure is documented in
+(`docs/tul-divergence-rca.md` §1): batch 12, `alpha_cap` 3.5, production kernels, and
+`ademamix_t_beta3` **pinned at 20000** so the optimizer schedule is the RCA one while the
+run stops at 6000 — past both documented abort steps, 4540 (A1) and 3240 (A1r, seed 1),
+recorded there as "Two seeds fail the same way. This is structural, not seed luck."
 
-Confounds declared in the plan file: not iso-parameter (`B_a` is `[m, c]`, so the arm has
-46 080 FEWER parameters, 0.016 %); capacity rather than mechanism; one `m` value; four
-seeds.
+`ademamix_t_beta3` is pinned and not inherited because `morph/training/optimizer.py:152`
+falls back to `training.steps` when the key is null, which `base.yaml` ships. An earlier
+launch changed the budget to 6000 instead of pinning the horizon; its control then completed
+all 6000 steps healthy (min 4.0929, rise 0.122, core gradnorm ~0.006) where the seed sweep's
+seed 0 had aborted at step 2040 with a +1.17 nat rise. Kept at `morph-scratch/h24arm6000/`.
 
-Second Phase 0 finding, separate and smaller: **CSA's sparse selection never fires on the
-short schedule.** `top_k: 256` exceeds `n_blocks` at `seq_len: 1024` (144 blocks), so
-`tk == n_blocks` and CSA runs as dense pooled attention. At the deploy `seq_len: 4096`
-there are 512 blocks and selection does fire, so this is a short-schedule artifact and the
-deploy recipe is unaffected. It still means every TUL arm measured to date ran a CSA that
-was never sparse.
+Seeds 0 and 1, control and arm, interleaved, sequential. Measured at launch: 2.14 steps/s,
+20.65 GB peak, 445 W — about 2.6 h for all four.
+
+**Diverged means the run's own `[ABORT] ... step_N` line.** No CE threshold, no rise, no
+judgement. Validation CE enters once, in P3, only to catch a degenerate pass that dodges the
+guard by learning nothing.
+
+P1 is the whole experiment: **neither arm seed aborts.**
 
 ## Declared not verified
 
@@ -303,4 +305,10 @@ was never sparse.
   2/2 sabotage passes caught. Attention geometry recorded in `morph/model/CLAUDE.md` and
   `docs/runtime-invariants.md` §6b, and the old brief line that made the defect silent was
   corrected.
-- 2026-08-25 14:22 — H24 PAIRED ARM LAUNCHED. 8 runs, ~7 h.
+- 2026-08-25 14:22 — H24 arm launched at 4 seeds; scope cut to fewer seeds [W], design rejected.
+- 2026-08-25 15:20 — 1-seed design rejected too. Both earlier designs ran where the control
+  mostly SURVIVES, which cannot answer a binary question. Found and recorded my own error:
+  `training.steps` silently sets `ademamix_t_beta3` (optimizer.py:152), and the 6000-step
+  control never took over where the 3500-step seed sweep aborted at 2040.
+- 2026-08-25 15:29 — BINARY ARM LAUNCHED in the RCA regime with `ademamix_t_beta3` pinned.
+  4 runs, ~2.6 h. Verified live: 2.14 steps/s, 20.65 GB peak, 445 W, no OOM.
