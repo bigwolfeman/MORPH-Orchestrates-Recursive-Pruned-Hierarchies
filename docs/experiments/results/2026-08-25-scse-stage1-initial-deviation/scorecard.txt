@@ -1,0 +1,44 @@
+VALIDITY GATE
+  passed: trajectory gates clean; baseline holds R_0 = 1 and Delta_0 = 0
+
+P1  Stage 1 |Delta_0|/|h*| >= 1e-03 at EVERY checkpoint
+    s0: min over rungs = 0.0425   (R_0 = 0.998, must NOT be 1.000)
+    s1: min over rungs = 0.0418   (R_0 = 0.999, must NOT be 1.000)
+    s2: min over rungs = 0.0415   (R_0 = 0.998, must NOT be 1.000)
+    s3: min over rungs = 0.0421   (R_0 = 0.996, must NOT be 1.000)
+    -> HELD
+
+P2  max b_t over rungs is LOWER than the control seed's, in >= 3 of 4
+     seed   base max b   scse max b    ratio  lower?
+        0       82.519       14.139    0.171  YES
+        1        8.323       38.157    4.585  no
+        2        4.184        6.692    1.599  no
+        3        1.977       10.861    5.493  no
+    1 of 4 lower -> FAILED
+
+P3  no Stage 1 seed trips the divergence guard  [LOW POWER, declared in advance]
+    control diverged: [0]   Stage 1 diverged: [0]
+    -> FAILED
+    Under the null with the control's 1-of-4 base rate, a clean sweep has probability 0.32. This endpoint CANNOT decide H23 alone and is not read as if it could.
+
+P4  mean final val CE not worse than control by more than 0.17 nats
+    (threshold = the MEASURED within-run noise floor, H21 amendment 2)
+    s1: base 4.6863 -> scse 5.5751  (+0.8888)
+    s2: base 4.5303 -> scse 5.1077  (+0.5774)
+    s3: base 4.5073 -> scse 5.4870  (+0.9797)
+    mean over seeds healthy in BOTH arms [1, 2, 3]: 4.5746 -> 5.3899  (+0.8153) -> FAILED
+
+REFUTER  b_t maxima >= control in 2+ seeds AND a seed still diverges
+  not-lower seeds = 3, Stage 1 divergences = 1 -> REFUTER FIRED
+  H23 REFUTED: a non-zero initial deviation does not touch the mechanism. Go to Stage 2 (deviation coordinates, source injection moved into the anchor) or abandon the port.
+
+b_t/|h*| by rung  (base -> scse)
+  step                  s0                  s1                  s2                  s3
+   500   13.13 ->     1.56    1.61 ->     1.52    1.47 ->     1.26    1.63 ->     1.49
+  1000   15.92 ->     1.77    1.70 ->     1.41    1.66 ->     1.31    1.73 ->     1.72
+  1500   22.21 ->     5.16    1.58 ->    14.36    1.72 ->     1.64    1.59 ->     2.03
+  2000   69.63 ->    14.14    1.67 ->    31.77    1.92 ->     1.58    1.70 ->     2.98
+  2040   82.52 ->     8.72       - ->        -       - ->        -       - ->        -
+  2500       - ->        -    2.21 ->    25.38    2.05 ->     3.41    1.98 ->     6.73
+  3000       - ->        -    5.23 ->    38.16    3.05 ->     5.22    1.95 ->    10.86
+  3500       - ->        -    8.32 ->    17.20    4.18 ->     6.69    1.97 ->     6.14

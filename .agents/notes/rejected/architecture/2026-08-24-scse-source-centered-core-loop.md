@@ -1,6 +1,40 @@
 # Agent Note: Source-centered state evolution for the MORPH core loop
 
-Status: proposed
+Status: rejected — Stage 1 measured on four seeds: b_t grew on 3 of 4, CE +0.815 nats (5x the noise floor), the divergence recurred, and MORPH's R_t falls with depth where the paper's rises, so MORPH is not in SCSE's regime
+
+## Outcome, 2026-08-25 — Stage 1 measured and REJECTED
+
+Stage 1 shipped, ran on four seeds, and made MORPH strictly worse:
+`b_t` grew LARGER on three of four seeds (up to 5.5x), final CE was **+0.815 nats** worse
+(about five times the measured noise floor), and the seed that diverged under the control
+diverged again at the same guard step. The pre-registered refuter fired.
+Full record: [H23](../../../../docs/experiments/failures/2026-08-25-scse-stage1-initial-deviation.md).
+
+The mechanism was verified live before the verdict was read — `|Delta_0|/|h*| = 0.042` and the
+`R_0 = 1` identity correctly broken — so this is an intervention that engaged and went the
+wrong way, not a null.
+
+Two measurements from that run bear on the WHOLE port, not just Stage 1:
+
+* **MORPH is not in the paper's regime.** SCSE's looped baseline runs `R_0 = 1.000` rising to
+  `R_47 = 4.35-5.44`. MORPH's runs `R_0 = 1.000` FALLING to 0.056-1.906. The quantity the
+  paper exists to bound grows with depth in their system and shrinks in ours.
+* **`G_theta(0) = 0` already holds exactly** on the real 286.1M model, fp32 and bf16
+  (`tests/test_scse_core_init.py`). The reparameterisation Stage 3 was budgeted for is
+  largely free here, and it still bought nothing.
+
+Together with [H21](../../../../docs/experiments/failures/2026-08-24-tul-forcing-bias-predicts-divergence.md),
+which showed the forcing bias does not predict which seeds fail, three independent
+measurements now point away from the forcing bias being MORPH's mechanism.
+
+**Stages 2-3 are NOT scheduled.** Stage 2 rewires the carrier, the embedding injection paths
+and every divergence instrument. That cost is not justified before a measurement puts MORPH
+inside the paper's regime. The Stage 1 code stays in the tree at `core_init_scale: 0.0`, which
+is bit-identical to not having it, so revisiting costs one config field rather than a rebuild.
+
+The analysis below is the pre-measurement plan, kept because its derivation is still correct:
+`Delta_0 = 0` really does make the whole trajectory the propagated forcing response. What the
+measurement showed is that fixing that does not help MORPH.
 
 ## Problem
 

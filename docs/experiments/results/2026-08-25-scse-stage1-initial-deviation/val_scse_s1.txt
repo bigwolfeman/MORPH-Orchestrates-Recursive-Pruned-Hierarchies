@@ -1,0 +1,13 @@
+  [VAL     250] loss=6.4678  ppl=644.07  ppl_tok=641.82  first_tok=5.0318  plan_nats=+0.0051  cf=-0.1398  lp/tok=10.66
+  [VAL     500] loss=6.0868  ppl=440.03  ppl_tok=438.78  first_tok=4.8325  plan_nats=+0.0057  cf=-0.1166  lp/tok=10.58
+  [VAL     750] loss=5.4973  ppl=244.04  ppl_tok=243.14  first_tok=4.3251  plan_nats=+0.0061  cf=-0.1527  lp/tok=10.66
+  [VAL    1000] loss=5.1557  ppl=173.42  ppl_tok=172.71  first_tok=4.2356  plan_nats=+0.0057  cf=-0.1662  lp/tok=10.64
+  [VAL    1250] loss=5.1619  ppl=174.50  ppl_tok=168.38  first_tok=5.5289  plan_nats=+0.0036  cf=-1.4785  lp/tok=10.53
+  [VAL    1500] loss=5.3962  ppl=220.56  ppl_tok=209.96  first_tok=6.3439  plan_nats=+0.0066  cf=-1.8547  lp/tok=11.07
+  [VAL    1750] loss=5.3637  ppl=213.51  ppl_tok=205.23  first_tok=6.3943  plan_nats=+0.0134  cf=-1.6724  lp/tok=10.50
+  [VAL    2000] loss=5.5714  ppl=262.79  ppl_tok=252.09  first_tok=6.5263  plan_nats=+0.0134  cf=-1.7313  lp/tok=10.58
+  [VAL    2250] loss=5.2114  ppl=183.35  ppl_tok=177.61  first_tok=5.9757  plan_nats=+0.0173  cf=-1.2687  lp/tok=10.76
+  [VAL    2500] loss=5.3417  ppl=208.87  ppl_tok=205.19  first_tok=6.0205  plan_nats=+0.0203  cf=-0.6939  lp/tok=10.70
+  [VAL    2750] loss=5.5777  ppl=264.46  ppl_tok=261.36  first_tok=6.0310  plan_nats=+0.0302  cf=-0.4884  lp/tok=10.63
+  [VAL    3000] loss=5.4156  ppl=224.88  ppl_tok=222.80  first_tok=5.9719  plan_nats=+0.0240  cf=-0.3976  lp/tok=10.63
+  [VAL    3250] loss=5.5751  ppl=263.77  ppl_tok=262.89  first_tok=5.9785  plan_nats=+0.0236  cf=-0.1318  lp/tok=10.67

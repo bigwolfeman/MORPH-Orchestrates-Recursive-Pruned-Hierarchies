@@ -150,6 +150,10 @@ Verdict is the outcome of a PRE-REGISTERED test unless marked otherwise.
 - **A turnaround threshold picked without measuring the metric's noise floor is not a threshold.** H21 pre-registered "0.1 nats" for a validation CE whose within-run recovered rise reaches **0.168 nats**. Three healthy seeds with peak rises of 0.168 / 0.151 / 0.156 — the same behaviour — were split into different classes by where the final eval happened to land. Measure the floor first, and require several consecutive evals with no new minimum instead of reading one point.
 - **All predictions HELD plus the refuter firing is one seed carrying the panel, not a success.** In H21 every HELD verdict came from seed 0, whose `b` is 8x-40x every other seed. Removing it took P3 from 5.193x to **1.002x**. Always re-run the group contrast with the extreme member removed before believing it.
 
+- **A ratio diagnostic can be driven the "right" way by the wrong term.** SCSE's `R_t = ||b||^2/||realised update||^2` FELL sharply under Stage 1 (seed 3 at 3500: 0.520 -> 0.006), which by the paper's metric reads as success. `b_t` had gone UP 1.6x-5.5x and CE was 0.815 nats worse; `R` fell because the denominator inflated. Never report a ratio's direction without reporting which term moved.
+- **MORPH is not in SCSE's regime, measured.** Their looped baseline runs `R_0 = 1.000` rising to `R_47 = 4.35-5.44`; MORPH's runs `R_0 = 1.000` FALLING to 0.056-1.906 at the last iteration. Before importing a cure, check the disease is the same one.
+- **An intervention that engages and makes things worse is worth more than another correlation study.** H21 spent a sweep establishing the forcing bias does not predict failure. H23 spent one sweep intervening on it and got a decisive answer. When a correlation study comes back null, intervene next.
+
 ## Loose ends
 
 * `docs/experiments/planned/2026-08-23-tul-iteration0-mediation.md` — pre-registered, never
