@@ -1,6 +1,22 @@
-# Experiment: H24 arm — train with the core's HCA compressed branch alive
+> **REJECTED 2026-08-25 14:30, 8 minutes into run 1 of 8.** Wolfe scoped the campaign to a
+> single seed. Predictions P1 and P3 are written in terms of "how many of the four seeds",
+> so they cannot be re-scored at n=1, and the rules forbid editing Predictions during a run.
+> This file is therefore rejected rather than amended, and
+> [`2026-08-25-h24-hca-branch-arm-1seed.md`](../planned/2026-08-25-h24-hca-branch-arm-1seed.md)
+> replaces it. Kept because its Method, failure threshold, and declared confounds carry over
+> verbatim, and because a rejected design is part of the audit trail.
+>
+> **What had been observed when the replacement's predictions were written:** the control
+> seed-0 run had reached step ~400 with one validation point, `[VAL 250] loss=6.5285`. No
+> ARM number existed — the arm had not been launched. The seed sweep of 2026-08-24 is prior
+> data and is cited in both files.
+>
+> **Not wasted:** the control seed-0 run was left alive and becomes the control of the
+> replacement experiment. Only the runner loop was stopped.
 
-Status: planned
+# Experiment: H24 arm, 4-seed design — REJECTED MID-RUN, superseded
+
+Status: failure
 
 Ledger: `lab/divergence/takeover-campaign.md` H24.
 Agent Note: [`.agents/notes/proposed/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md`](../../../.agents/notes/proposed/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md)

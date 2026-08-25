@@ -6,6 +6,11 @@ Committed BEFORE the runs, so no threshold here can be fitted to the data. The v
 gate runs first and refuses the whole panel, as in `score_stage0.py`, `score_scse.py` and
 `score_h18.py`.
 
+ONE SEED [W, 2026-08-25]. What that costs is written into the plan file and repeated in
+the output: a HELD panel here is a SCREEN result that licenses a multi-seed arm, not a
+claim that the branch is a lever. A REFUTED panel is strong at n=1, because "the arm blew
+up the same way at the same step" needs no seed count.
+
 Usage:
     python lab/divergence/score_h24_arm.py --dir /home/wolfe/morph-scratch/h24arm
 """
@@ -16,16 +21,15 @@ import os
 import re
 
 # ── pre-registered constants ───────────────────────────────────────────────────────
-SEEDS = (0, 1, 2, 3)
 RISE_DIVERGED = 0.35     # nats above a run's own minimum; healthy noise floor is 0.168
-V1_MIN_SURVIVORS = 2     # of control seeds 1,2,3
-V1_SURVIVOR_STEP = 3250
-P2_MIN_LATER = 0.20      # arm's failure step at least 20 % later
-P3_MIN_SEEDS = 3         # arm's final CE lower on this many seeds
-P3_MIN_MEAN_GAIN = 0.10  # nats, mean over surviving seeds
+V1_CONTROL_BY = 3000     # the control must fail by here; the seed sweep aborted at 2040
+P2_MIN_GAIN = 0.20       # nats, arm below control at the control's failure step
+P3_MIN_MIN_GAIN = 0.10   # nats, arm's run minimum below the control's
+REFUTE_STEP_TOL = 0.20   # arm aborts within this fraction of the control's abort step
 REFUTE_CE_TOL = 0.05     # nats
 
 _VAL = re.compile(r"\[VAL\s+(\d+)\]\s+loss=([0-9.]+)")
+_ABORT = re.compile(r"\[ABORT\][^\n]*?step[_ ](\d+)")
 
 
 def curve(path: str) -> list[tuple[int, float]]:
@@ -38,17 +42,32 @@ def curve(path: str) -> list[tuple[int, float]]:
     return out
 
 
-def summarise(path: str, exit_code: int | None) -> dict:
-    """`diverged`, the step it happened, and the CE numbers the panel reads."""
+def abort_step(path: str) -> int | None:
+    """The step in the run's own `[ABORT] ... step_N` line, or None if it never fired.
+
+    Read from the LOG and not from an exit code: the control of this experiment was
+    orphaned when the rejected 4-seed runner was stopped, so no wrapper recorded its exit.
+    The log line is the run's own statement and is available either way.
+    """
+    with open(path, errors="replace") as f:
+        for line in f:
+            m = _ABORT.search(line)
+            if m:
+                return int(m.group(1))
+    return None
+
+
+def summarise(path: str) -> dict:
+    """Everything the panel reads from one run's log."""
     c = curve(path)
+    ab = abort_step(path)
     if not c:
-        return {"n_evals": 0, "diverged": None, "fail_step": None,
-                "final": None, "min": None, "rise": None, "last_step": None,
-                "exit": exit_code}
+        return {"n_evals": 0, "curve": [], "abort": ab, "diverged": None,
+                "fail_step": ab, "final": None, "min": None, "rise": None,
+                "last_step": None}
     lo = min(v for _, v in c)
     final = c[-1][1]
-    rise = final - lo
-    # First eval at or past the threshold, measured against the minimum seen SO FAR, so a
+    # First eval at or past the threshold measured against the minimum seen SO FAR, so a
     # late minimum cannot retro-actively erase an earlier turnaround.
     fail_step, run_lo = None, c[0][1]
     for st, v in c:
@@ -56,116 +75,106 @@ def summarise(path: str, exit_code: int | None) -> dict:
         if v - run_lo >= RISE_DIVERGED:
             fail_step = st
             break
-    guard = exit_code is not None and exit_code != 0
-    if guard and fail_step is None:
-        fail_step = c[-1][0]
-    return {"n_evals": len(c), "diverged": bool(guard or rise >= RISE_DIVERGED),
-            "guard": guard, "fail_step": fail_step, "final": final, "min": lo,
-            "rise": rise, "last_step": c[-1][0], "exit": exit_code}
+    if ab is not None and (fail_step is None or ab < fail_step):
+        fail_step = ab
+    return {"n_evals": len(c), "curve": c, "abort": ab,
+            "diverged": bool(ab is not None or (final - lo) >= RISE_DIVERGED),
+            "fail_step": fail_step, "final": final, "min": lo, "rise": final - lo,
+            "last_step": c[-1][0]}
 
 
-def exits(d: str) -> dict[str, int]:
-    """`{tag: exit_code}` from the runner's own echo lines."""
-    out = {}
-    for name in ("runner.log", "h24_runner.log"):
-        p = os.path.join(d, name)
-        if os.path.exists(p):
-            for line in open(p, errors="replace"):
-                m = re.match(r"(\S+) exit=(\d+)", line.strip())
-                if m:
-                    out[m.group(1)] = int(m.group(2))
-    return out
+def at_or_before(c: list[tuple[int, float]], step: int) -> tuple[int, float] | None:
+    """The last evaluation at or before `step`."""
+    hits = [(s, v) for s, v in c if s <= step]
+    return hits[-1] if hits else None
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", required=True)
     a = ap.parse_args()
-    ex = exits(a.dir)
 
     R = {}
-    for arm in ("ctrl", "hca16"):
-        for sd in SEEDS:
-            tag = f"{arm}-s{sd}"
-            p = os.path.join(a.dir, f"{tag}.log")
-            R[tag] = summarise(p, ex.get(tag)) if os.path.exists(p) else None
+    for tag in ("ctrl-s0", "hca16-s0"):
+        p = os.path.join(a.dir, f"{tag}.log")
+        R[tag] = summarise(p) if os.path.exists(p) else None
 
     print(f"{'run':>10} {'evals':>6} {'last':>6} {'min':>8} {'final':>8} {'rise':>7} "
-          f"{'exit':>5} {'DIVERGED':>9} {'at':>6}")
-    for tag in sorted(R):
+          f"{'ABORT':>7} {'DIVERGED':>9} {'at':>6}")
+    for tag in ("ctrl-s0", "hca16-s0"):
         r = R[tag]
         if r is None:
             print(f"{tag:>10}   MISSING")
             continue
         f = lambda k, w, p=4: ("%*.*f" % (w, p, r[k])) if r[k] is not None else " " * w
-        print(f"{tag:>10} {r['n_evals']:>6} {str(r['last_step']):>6} {f('min',8)} "
-              f"{f('final',8)} {f('rise',7,3)} {str(r['exit']):>5} "
+        print(f"{tag:>10} {r['n_evals']:>6} {str(r['last_step']):>6} {f('min', 8)} "
+              f"{f('final', 8)} {f('rise', 7, 3)} {str(r['abort']):>7} "
               f"{str(r['diverged']):>9} {str(r['fail_step']):>6}")
 
     # ── validity gate ──────────────────────────────────────────────────────────────
     print("\nVALIDITY GATE")
     fails = []
-    missing = [t for t, r in R.items() if r is None or r["n_evals"] == 0]
-    if missing:
-        fails.append(f"V2: no eval lines for {sorted(missing)}")
-    c0 = R.get("ctrl-s0")
-    if c0 and c0["n_evals"] and not c0["diverged"]:
-        fails.append("V1: control seed 0 did NOT diverge; every prior control lost it")
-    surv = [sd for sd in (1, 2, 3)
-            if (r := R.get(f"ctrl-s{sd}")) and r["n_evals"]
-            and not r["diverged"] and r["last_step"] >= V1_SURVIVOR_STEP]
-    if len(surv) < V1_MIN_SURVIVORS:
-        fails.append(f"V1: only {len(surv)} of control seeds 1-3 survived to "
-                     f"{V1_SURVIVOR_STEP} (needed {V1_MIN_SURVIVORS}): {surv}")
+    for tag in ("ctrl-s0", "hca16-s0"):
+        if R[tag] is None or R[tag]["n_evals"] == 0:
+            fails.append(f"V2: no eval lines for {tag}")
+    if not fails:
+        c, arm = R["ctrl-s0"], R["hca16-s0"]
+        if not (c["diverged"] and c["fail_step"] is not None
+                and c["fail_step"] <= V1_CONTROL_BY):
+            fails.append(f"V1: the control did not fail by step {V1_CONTROL_BY} "
+                         f"(diverged={c['diverged']}, at={c['fail_step']}); the seed sweep "
+                         f"aborted at 2040, so there is nothing to compare against")
+        for tag, r in (("ctrl-s0", c), ("hca16-s0", arm)):
+            if r["abort"] is None and r["last_step"] is not None and r["last_step"] < 5750:
+                fails.append(f"V2: {tag} stopped at step {r['last_step']} with no [ABORT] "
+                             f"line — a crash or an interrupt, not a result")
     if fails:
         print("  FAILED: " + "; ".join(fails))
         print("  V3 was checked with attn_sink_probe.py --geometry before the runs.")
         raise SystemExit(1)
-    print(f"  V1 control seed 0 diverged; {len(surv)} of seeds 1-3 survived to "
-          f"{V1_SURVIVOR_STEP}")
-    print("  V2 every run produced eval lines")
+    c, arm = R["ctrl-s0"], R["hca16-s0"]
+    print(f"  V1 the control failed at step {c['fail_step']} (needed <= {V1_CONTROL_BY})")
+    print("  V2 both runs finished or aborted on their own guard")
     print("  V3 checked before the runs (geometry probe on both configs)\n")
 
     # ── panel ──────────────────────────────────────────────────────────────────────
-    dc = {sd for sd in SEEDS if R[f"ctrl-s{sd}"]["diverged"]}
-    da = {sd for sd in SEEDS if R[f"hca16-s{sd}"]["diverged"]}
-    p1 = len(da) < len(dc)
-    both = sorted(dc & da)
-    later = [(sd, R[f"ctrl-s{sd}"]["fail_step"], R[f"hca16-s{sd}"]["fail_step"])
-             for sd in both]
-    p2 = all(b is not None and c is not None and b >= c * (1 + P2_MIN_LATER)
-             for _, c, b in later) if later else None
-    lower = [sd for sd in SEEDS
-             if R[f"hca16-s{sd}"]["final"] < R[f"ctrl-s{sd}"]["final"]]
-    alive = sorted(set(SEEDS) - dc - da)
-    gain = ([R[f"ctrl-s{sd}"]["final"] - R[f"hca16-s{sd}"]["final"] for sd in alive]
-            if alive else [])
-    mean_gain = sum(gain) / len(gain) if gain else float("nan")
-    p3 = len(lower) >= P3_MIN_SEEDS and (mean_gain >= P3_MIN_MEAN_GAIN if gain else False)
-    p4 = len(da) >= 1
+    fs = c["fail_step"]
+    p1 = (arm["fail_step"] is None or arm["fail_step"] > fs) and (
+        arm["last_step"] is not None and arm["last_step"] >= fs)
+    ca, aa = at_or_before(c["curve"], fs), at_or_before(arm["curve"], fs)
+    gain = (ca[1] - aa[1]) if (ca and aa) else float("nan")
+    p2 = bool(ca and aa and gain >= P2_MIN_GAIN)
+    min_gain = c["min"] - arm["min"]
+    p3 = min_gain >= P3_MIN_MIN_GAIN
 
-    print(f"P1  arm diverges on fewer seeds: ctrl {sorted(dc)} vs arm {sorted(da)} "
+    print(f"P1  arm still training at the control's failure step {fs}: "
+          f"arm fail_step={arm['fail_step']}, arm reached {arm['last_step']} "
           f"-> {'HELD' if p1 else 'FAILED'}")
-    if later:
-        print("P2  arm fails later where both fail: " +
-              ", ".join(f"s{sd} {c}->{b}" for sd, c, b in later) +
-              f" -> {'HELD' if p2 else 'FAILED'}")
+    if ca and aa:
+        print(f"P2  arm CE below control by >= {P2_MIN_GAIN} at the last common eval "
+              f"<= {fs} (step {ca[0]} vs {aa[0]}): {ca[1]:.4f} - {aa[1]:.4f} = "
+              f"{gain:+.4f} -> {'HELD' if p2 else 'FAILED'}")
     else:
-        print("P2  no seed diverged in BOTH arms; not evaluated")
-    print(f"P3  arm CE lower on >={P3_MIN_SEEDS}/4 seeds and mean gain >= "
-          f"{P3_MIN_MEAN_GAIN}: lower on {sorted(lower)}, mean gain over surviving "
-          f"seeds {alive} = {mean_gain:+.4f} -> {'HELD' if p3 else 'FAILED'}")
-    print(f"P4  arm still diverges somewhere: {sorted(da)} -> "
-          f"{'HELD' if p4 else 'FAILED — and that is BETTER than predicted, not a miss'}")
+        print(f"P2  no common evaluation at or before step {fs}; not evaluable")
+    print(f"P3  arm run-minimum below the control's by >= {P3_MIN_MIN_GAIN}: "
+          f"{c['min']:.4f} - {arm['min']:.4f} = {min_gain:+.4f} "
+          f"-> {'HELD' if p3 else 'FAILED'}")
 
-    mc = sum(R[f"ctrl-s{sd}"]["final"] for sd in SEEDS) / len(SEEDS)
-    ma = sum(R[f"hca16-s{sd}"]["final"] for sd in SEEDS) / len(SEEDS)
-    refuted = dc == da and abs(mc - ma) < REFUTE_CE_TOL
-    print(f"\nREFUTER  same divergence set ({dc == da}) and mean final CE within "
-          f"{REFUTE_CE_TOL}: {mc:.4f} vs {ma:.4f} = {abs(mc - ma):.4f} "
-          f"-> {'H24 REFUTED as a lever' if refuted else 'not refuted'}")
-    held = [n for n, v in (("P1", p1), ("P2", p2), ("P3", p3), ("P4", p4)) if v]
-    print(f"\nSUMMARY  {len(held)} held: {', '.join(held) or 'none'}")
+    # ── refuter ────────────────────────────────────────────────────────────────────
+    close_step = (arm["fail_step"] is not None and fs
+                  and abs(arm["fail_step"] - fs) <= REFUTE_STEP_TOL * fs)
+    close_ce = abs(min_gain) < REFUTE_CE_TOL
+    refuted = bool(close_step and close_ce)
+    print(f"\nREFUTER  arm fails within {REFUTE_STEP_TOL:.0%} of the control's step "
+          f"({close_step}) AND run-minima within {REFUTE_CE_TOL} ({close_ce}) "
+          f"-> {'H24 REFUTED as a lever at m=16' if refuted else 'not refuted'}")
+
+    held = [n for n, v in (("P1", p1), ("P2", p2), ("P3", p3)) if v]
+    print(f"\nSUMMARY  {len(held)}/3 held: {', '.join(held) or 'none'}")
+    print("\nSCOPE, fixed before the run: n = 1. A HELD panel is a SCREEN result that "
+          "licenses a\nmulti-seed arm. It is NOT a claim that the branch is a lever. A "
+          "REFUTED panel is strong\nat n = 1, because 'the arm blew up the same way at the "
+          "same step' needs no seed count.")
 
 
 if __name__ == "__main__":
