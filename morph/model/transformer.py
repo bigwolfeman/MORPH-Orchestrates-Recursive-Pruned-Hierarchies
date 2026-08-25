@@ -133,6 +133,20 @@ class MORPHConfig:
     mean_depth: int = 6
     max_depth: int = 8
     bptt_depth: int = 4
+
+    # ── SCSE Stage 1 (arXiv:2607.27656) — the loop's initial deviation ──────────
+    # MORPH starts the core loop at ``h_0 = e``, so with the natural input-conditioned
+    # anchor ``h* = e`` the initial deviation is EXACTLY zero. The paper's Theorem 2 then
+    # makes the whole loop trajectory the propagated forcing response
+    # ``Delta_T = sum_k Phi_E(T, k+1) b_k(e)``, with nothing bounding a quantity Corollary 5
+    # shows can grow like ``rho^T``. This scale gives the loop a state of its own:
+    #     h_0 = e + core_init_scale * H_0(e)          (Listing 1's `init_delta_proj`)
+    # 0.0 → the ``_CloneInit`` path, which has NO parameters, draws NO RNG at build, and is
+    # bit-identical to the old ``h = e.clone()``. The paper uses 0.1.
+    # Follows the `tul` / `retention` convention: the value gates CONSTRUCTION, never a
+    # forward branch, so torch.compile still sees a straight-line graph.
+    core_init_scale: float = 0.0
+
     # Selective activation checkpointing of the core-loop grad-iterations (throughput knob).
     # The bptt_depth grad-iterations are checkpointed (recomputed in backward) to save activation
     # memory. ckpt_grad_iters = how many of them (counting from the FIRST grad iter) to checkpoint;
@@ -299,6 +313,43 @@ class _KwargSequential(nn.Sequential):
     @property
     def d_ff(self):
         return self[0].d_ff
+
+
+class _CloneInit(nn.Module):
+    """``h_0 = e`` — MORPH's historical loop entry, as a module.
+
+    Exists so the forward path is ``h = self.core_init(e)`` with no flag read and no
+    branch, which is what keeps the compiled graph straight-line (Design Principles: "No
+    runtime feature flags"). It holds no parameters, so building it advances the RNG
+    stream by nothing and a baseline model's weights stay byte-identical to a model built
+    before this module existed.
+    """
+
+    def forward(self, e: Tensor) -> Tensor:
+        return e.clone()
+
+
+class _SCSEInit(nn.Module):
+    """``h_0 = e + s * H_0(e)`` — SCSE Listing 1's ``init_delta_proj``, s = 0.1.
+
+    The point is narrow and structural: it makes ``Delta_0 = h_0 - e`` NON-ZERO. At
+    ``Delta_0 = 0`` the paper's bias-subtracted counterfactual is identically zero by
+    induction, so the entire deviation trajectory IS the propagated forcing response and
+    there is no off-anchor computation to preserve.
+
+    ``bias=True`` matches the paper's reference implementation rather than MORPH's
+    core-wide ``bias=False`` convention. That is deliberate: this projection runs ONCE at
+    loop entry, not inside the recurrence, so it is not part of the ``G_theta(0) = 0``
+    surface that Stage 3's zero-deviation mask depends on.
+    """
+
+    def __init__(self, d_model: int, scale: float):
+        super().__init__()
+        self.scale = float(scale)
+        self.proj = nn.Linear(d_model, d_model)
+
+    def forward(self, e: Tensor) -> Tensor:
+        return e + self.scale * self.proj(e)
 
 
 def _make_swiglu(d_model: int, d_ff: int, dropout: float) -> nn.Module:
@@ -618,6 +669,15 @@ class MORPHTransformer(nn.Module):
         # byte-identical to arm A1's (docs/tul-gate-spec.md §9 invariant 1).
         _gc = cfg.tul.gate if cfg.tul is not None else None
         self.tul_gate: TULGate | None = TULGate(d, _gc) if _gc is not None else None
+
+        # ── SCSE Stage 1 loop entry ────────────────────────────────────────
+        # Built LAST, for the same reason TULSlots is: `_CloneInit` draws no RNG at all,
+        # and `_SCSEInit` draws its Linear init AFTER every other parameter, so a baseline
+        # model and an SCSE model built from the same seed share byte-identical weights
+        # everywhere except this projection. The arms then differ by the mechanism alone.
+        self.core_init: nn.Module = (
+            _SCSEInit(d, cfg.core_init_scale) if cfg.core_init_scale > 0.0
+            else _CloneInit())
 
         # Master kernel switch → drives the fused-Triton-vs-eager-reference
         # dispatch in the attention kernels (process-global flag). Set at build
@@ -1040,7 +1100,7 @@ class MORPHTransformer(nn.Module):
         if self.cfg.n_core > 0:
             e = self.input_norm(x)
             with _prof("carrier::h_clone"):
-                h = e.clone()
+                h = self.core_init(e)
 
             if self.training:
                 depths = self._sample_depths(B, x.device)
@@ -1356,7 +1416,7 @@ class MORPHTransformer(nn.Module):
         xn = self.input_norm(x)
         e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
         with _prof("carrier::h_clone"):
-            h = e.clone()
+            h = self.core_init(e)
 
         # Loop-invariant injection, built ON THE COMPACT SEQUENCE (the x0/bigram hoist
         # of the token path, applied to 9-19× fewer positions). Value-embeds never fire

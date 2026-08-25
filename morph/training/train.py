@@ -308,6 +308,7 @@ def build_morph_config(cfg: DictConfig, tul=None) -> MORPHConfig:
         max_depth=int(m.max_depth),
         bptt_depth=int(m.bptt_depth),
         ckpt_grad_iters=int(getattr(m, "ckpt_grad_iters", -1)),
+        core_init_scale=float(getattr(m, "core_init_scale", 0.0)),
         channel_dims=channel_dims,
         compression=int(m.compression),
         n_kv_heads=int(m.n_kv_heads),
