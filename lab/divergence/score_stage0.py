@@ -44,9 +44,11 @@ def b_by_step(path: str) -> dict[int, float]:
         spread = (max(vals) - min(vals)) / max(abs(vals[0]), 1e-30)
         if spread > 1e-3:
             raise RuntimeError(
-                f"{path} step {r['step']}: b_rel varies {spread:.2e} across loop iterations. "
-                f"It is constant by construction before route_start, so either the core map "
-                f"gained a t dependence or the probe is reading the wrong operating point.")
+                f"{path} step {r['step']}: b_rel varies {spread:.2e} across loop iterations, "
+                f"over this file's 1e-3 tolerance. The core map IS t-dependent through the GLA "
+                f"retention carry (see the docstring), so a spread this size means the rung is "
+                f"outside the range where iteration 0 stands in for the mean. Read it with "
+                f"score_h21.b_by_step, which averages over iterations.")
         out[int(r["step"])] = vals[0]
     return out
 
