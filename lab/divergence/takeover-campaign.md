@@ -3,7 +3,10 @@
 **Read this first.** Every hypothesis tried, its verdict, the number that decided it, and
 where the detail lives. One line per idea. If an idea is not here, it has not been tried.
 
-Last updated 2026-08-24 19:0x. Owner: whoever picks this up next.
+Last updated 2026-08-24. **This is a LAB REPORT** — trial and error, kept in
+`lab/` on purpose. Settled claims graduate to `docs/experiments/` and
+`.agents/notes/`; this file indexes them AND everything that did not settle.
+The instruments it refers to are its neighbours in this directory.
 
 ## The problem, in four lines
 
@@ -30,20 +33,20 @@ Verdict is the outcome of a PRE-REGISTERED test unless marked otherwise.
 
 | # | Hypothesis | Verdict | The deciding number | Record |
 |---|---|---|---|---|
-| H1 | Backward power iteration through the weight-shared core drives it | **partly — descriptive** | per-block gain 2.4–2.8, r² 0.97, but gain is the WRONG severity measure: `bptt_depth` 2 has a HIGHER gain (2.784 vs 2.445) with 64 % LESS harm | [takeover-cure](experiments/failures/2026-08-24-tul-takeover-cure.md) |
+| H1 | Backward power iteration through the weight-shared core drives it | **partly — descriptive** | per-block gain 2.4–2.8, r² 0.97, but gain is the WRONG severity measure: `bptt_depth` 2 has a HIGHER gain (2.784 vs 2.445) with 64 % LESS harm | [takeover-cure](../../docs/experiments/failures/2026-08-24-tul-takeover-cure.md) |
 | H2 | The core's weight spectrum runs away; cap `sigma_max` | **REFUTED** | 4 arms (soft 1.5/3.0, hard 1.5 MLP and MLP+attn). ALL FOUR had a worse CE rise than the control they protected | same |
 | H3 | A spectral gap opens in the core weights | **REFUTED** | median sigma1/sigma2 1.069 → 1.132; the worst case FALLS | same |
-| H4 | The forward slot states collapse in rank | **CONFIRMED, not causal** | rank ratio across the loop 1.23–1.48 healthy, 0.67–1.06 sick; flip precedes the gradient-share flip by ~50 steps | [core-takeover-is-positional](../.agents/notes/implemented/architecture/2026-08-24-core-takeover-is-positional.md) |
-| H5 | `per_slot_embed` cures it by adding input diversity | **best lever, not a cure** | holds seed 1, fails seed 0 at 2225. Doubles time-to-failure, cuts harm 78 %, 0.46–0.78 nats better CE on BOTH seeds | [takeover-cure](experiments/failures/2026-08-24-tul-takeover-cure.md) |
+| H4 | The forward slot states collapse in rank | **CONFIRMED, not causal** | rank ratio across the loop 1.23–1.48 healthy, 0.67–1.06 sick; flip precedes the gradient-share flip by ~50 steps | [core-takeover-is-positional](../../.agents/notes/implemented/architecture/2026-08-24-core-takeover-is-positional.md) |
+| H5 | `per_slot_embed` cures it by adding input diversity | **best lever, not a cure** | holds seed 1, fails seed 0 at 2225. Doubles time-to-failure, cuts harm 78 %, 0.46–0.78 nats better CE on BOTH seeds | [takeover-cure](../../docs/experiments/failures/2026-08-24-tul-takeover-cure.md) |
 | H6 | Levers stack | **REFUTED** | `bptt2` + `per_slot_embed` at seed 0: highest gain of any arm, and 0.42 nats WORSE than `per_slot_embed` alone | same |
-| H7 | `alpha * m_slow` explains the seed dependence | **REFUTED** | 17–24 % of the `g/sqrt(v)` channel throughout; spearman −0.393 against harm over 7 arms — anti-correlated | [optstate](experiments/failures/2026-08-24-tul-optimizer-state-decomposition.md) |
+| H7 | `alpha * m_slow` explains the seed dependence | **REFUTED** | 17–24 % of the `g/sqrt(v)` channel throughout; spearman −0.393 against harm over 7 arms — anti-correlated | [optstate](../../docs/experiments/failures/2026-08-24-tul-optimizer-state-decomposition.md) |
 | H8 | `\|\|dW_core\|\| x` directional autocorrelation is the right severity measure | **REFUTED** | clip pins `\|\|dW\|\|`; ac is +0.434 to +0.574 at EVERY rung. Spread 1.577x across an onset that moves core share 0.017 → 0.961 | same |
 | H9 | Core/non-core gradient coherence is a better severity measure | **CONFIRMED, post-hoc** | 1.001 → 2.103 across the ladder, ~90 steps of lead. Spearman +0.857 vs harm on 7 arms where per-block gain gives +0.536. **Untested out of sample** | same |
-| H10 | The core map is under-determined on the slot manifold | **REFUTED** | the input span is nearly full rank — 935 of 1024 directions hold 99 % of input energy | [under-determined](experiments/failures/2026-08-24-tul-core-underdetermined.md) |
+| H10 | The core map is under-determined on the slot manifold | **REFUTED** | the input span is nearly full rank — 935 of 1024 directions hold 99 % of input energy | [under-determined](../../docs/experiments/failures/2026-08-24-tul-core-underdetermined.md) |
 | H11 | More looped positions would fix it | **UNDERCUT** | the same sick weights collapse on 1024 TOKEN positions too: input eff rank 75.16 → 27.50 | same |
 | H12 | The per-slot embedding rows re-converge, which is why seed 0 fails | **REFUTED, opposite direction** | the arm that FAILED had MORE row diversity: centred eff rank 42.92 vs 27.15 | same |
-| H13 | Span mean-pooling dilutes slot diversity as `1/sqrt(L)` | **CONFIRMED** | slope −0.473 / −0.504 / −0.527 at three caps, r² up to 0.93, and deviation depends on L ALONE not on the config | [pooling-law](experiments/successes/2026-08-24-tul-span-pooling-law.md) |
-| H14 | Explorative Modeling applies: the plan is a compromise between conflicting readers | **REFUTED** | reader alignment 1.36–1.45 where 1.0 is random, FLAT across the onset. The slot's own label is 2.8 % of loss weight but ~50 % of the gradient | [reader-conflict](experiments/failures/2026-08-24-tul-reader-gradient-conflict.md), [rejected note](../.agents/notes/rejected/architecture/2026-08-24-xm-applies-to-the-plan-not-the-head.md) |
+| H13 | Span mean-pooling dilutes slot diversity as `1/sqrt(L)` | **CONFIRMED** | slope −0.473 / −0.504 / −0.527 at three caps, r² up to 0.93, and deviation depends on L ALONE not on the config | [pooling-law](../../docs/experiments/successes/2026-08-24-tul-span-pooling-law.md) |
+| H14 | Explorative Modeling applies: the plan is a compromise between conflicting readers | **REFUTED** | reader alignment 1.36–1.45 where 1.0 is random, FLAT across the onset. The slot's own label is 2.8 % of loss weight but ~50 % of the gradient | [reader-conflict](../../docs/experiments/failures/2026-08-24-tul-reader-gradient-conflict.md), [rejected note](../../.agents/notes/rejected/architecture/2026-08-24-xm-applies-to-the-plan-not-the-head.md) |
 | H15 | The per-iteration input re-injection decays, so the loop forgets each slot | **REFUTED** | anchor `dt/(1-A)` is 1.8015 → 1.8047 across all 11 rungs. Flat to four decimals | this file, 2026-08-24 |
 
 ## The two numbers that still point somewhere

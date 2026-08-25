@@ -86,7 +86,7 @@ touching the model for TUL. Short mental model:
 - NEVER decode a span from one vector + offset with no token path (Huginn 2026-08-16 collapse;
   MegaByte T7; Bowman T2; Hourglass T6). Never regress onto the slot state (LCM, CoCoMix, BT §4.2).
 - **The A1 core takeover is UNSOLVED. Before touching it read
-  [docs/tul-takeover-campaign.md](docs/tul-takeover-campaign.md)** — the running index of
+  [lab/divergence/takeover-campaign.md](lab/divergence/takeover-campaign.md)** — the running index of
   every hypothesis tried, its verdict, the number that decided it, the instruments already
   built and the traps already fallen into. 15 hypotheses, 11 refuted. Do not re-derive them.
 - Arms and gates: `docs/ablation-ledger.md` "Planned — TUL"; invariants: `runtime-invariants.md` §6b
