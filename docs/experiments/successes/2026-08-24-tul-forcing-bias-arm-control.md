@@ -1,6 +1,6 @@
 # Experiment: is the zero-deviation forcing bias arm-linked, or a property of the recipe?
 
-Status: planned
+Status: success on the question asked — the forcing bias IS arm-linked; the refuter did not fire. P1, P2 and P3 held; **P4 FAILED** — neither arm turned around within 1900 steps, so this is an arm comparison between two HEALTHY models at matched training steps, NOT sick-against-healthy.
 
 ## Question
 
@@ -80,3 +80,79 @@ list, and the SCSE port loses the one measurement that currently distinguishes t
 If P4 fails — A1 does not turn around by 1900 steps on this build — then P1 to P3 are still
 readable as an arm comparison at matched steps, but NOT as sick-against-healthy, and the writeup
 must say so rather than borrowing the 5090 run's takeover.
+
+## Results
+
+Both arms trained to 1900 steps on the 5090, exit 0. Seven rungs each (300, 600, 900, 1200,
+1500, 1800, 1900). Artifacts in `../results/2026-08-24-tul-forcing-bias-arm-control/`.
+
+**Validity gate passed.** `R_0 = 1.000` at every checkpoint of both arms, and the probe's
+trajectory gate read exactly `0.0` at all 14 checkpoints — the replayed core map reproduces the
+captured trajectory bit for bit on both code paths.
+
+| step | A0 `b/‖h*‖` | A1 `b/‖h*‖` | A1/A0 |
+|---|---|---|---|
+| 300 | 1.400 | 1.668 | 1.191 |
+| 600 | 1.334 | 1.736 | 1.301 |
+| 900 | 1.355 | 1.689 | 1.246 |
+| 1200 | 1.378 | 1.622 | 1.177 |
+| 1500 | 1.386 | 1.741 | 1.257 |
+| 1800 | 1.423 | 1.764 | 1.240 |
+| 1900 | 1.452 | 1.793 | 1.235 |
+
+* **P1 HELD.** `b` rises for both arms: A0 +3.7 %, A1 +7.5 % over 300 → 1900.
+* **P2 HELD.** A1 exceeds A0 by 23.5 % at the last rung, against a 15 % floor.
+* **P3 HELD.** A1 grows twice as fast: +7.5 % against +3.7 %.
+* **P4 FAILED.** Neither arm turned around. A1's validation CE fell monotonically,
+  5.9560 → 5.5417 → 5.0715, and A0's fell 6.1477 → 5.7670 → 5.2301. Turnaround 0.000 nats for
+  both.
+* **Refuter did not fire.** A0 is outside 10 % of A1 at every one of the seven rungs
+  (1.177 to 1.301). The forcing bias is not a property of the recipe shared by both arms.
+
+## Verdict
+
+**The zero-deviation forcing bias is arm-linked.** On separately trained models, in one build,
+at matched training steps, arm A1 carries 18 % to 30 % more anchor response than arm A0 at every
+rung, and it grows twice as fast. This is the first quantity in the takeover campaign that
+separates the arms rather than matching across them — `rel_last` matched at 1.081 against 1.077,
+and `C_last` fell on both.
+
+**What P4's failure costs.** A1 did not reproduce the takeover in 1900 steps, so the 1.235 gap
+is between two HEALTHY models. It establishes that the gap is intrinsic to the arm and present
+before any pathology. It does NOT establish that the gap causes the failure, and this writeup
+must not borrow the `onset-capture` run's takeover to close that gap.
+
+Two reasons P4 failed, neither fixable after the fact:
+
+1. 1900 steps is inside the campaign's own stated window for the minimum (step 500-2000), so
+   the run can end AT the minimum without ever showing the rise.
+2. This is not a replay. `onset-capture/README.md`'s replay recipe specifies
+   `training.eval_every=999999` and `deterministic=true`; this run used `eval_every=500` because
+   P4 needs the validation curve, and evaluation consumes RNG. MORPH runs decorrelate within 11
+   steps of any perturbation at a fixed seed, so this is a fresh sample from the same
+   distribution rather than the same trajectory.
+
+Extending the run to chase a turnaround was considered and REJECTED: P4 says "before step 1900",
+and moving that line after seeing the data is the failure pre-registration exists to prevent.
+
+## Observation, not a tested prediction
+
+Comparing this healthy A1 against the `onset-capture` A1 that DID take over — same build, same
+config, same seed, same `alpha_cap` — at matched steps:
+
+| | step 1800 | step 1850 |
+|---|---|---|
+| A1, healthy (this run) | 1.764 | — |
+| A1, took over (`onset-capture`) | 2.265 | 2.471 |
+
+The diverging run carries 28 % more forcing bias at step 1800 than the healthy one. This was NOT
+pre-registered, it is n=1 against n=1, and the campaign's own trap list warns that single-run
+comparisons in MORPH are unreadable. It is recorded because it is the shape a causal link would
+have, and because it is cheap to test properly: the next experiment is a small set of A1 seeds
+run past 3000 steps, scoring `b_t` against whether each seed turns around.
+
+## Updated hypothesis
+
+H20 survives its first real control. The forcing bias is arm-linked, not a recipe property, and
+SCSE keeps the one measurement that distinguishes arm A1. What is still missing is the link from
+the gap to the FAILURE, which needs A1 arms that actually diverge.

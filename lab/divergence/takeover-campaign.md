@@ -24,7 +24,7 @@ affected.
 | | |
 |---|---|
 | Nothing running | `g6-ctrl` took over at step 650; `g6-fine` at 975 and aborted 19:01. Finer spans DELAY 1.5x, do not cure |
-| Next | H20 — the forcing bias `b_t` is the first number that separates the position sets (1.23-1.44x, widening). Needs a step-matched A0 ladder to become a verdict. The FIRST core iteration is the other arm-specific asymmetry (A1 `C_first/P` 0.44-0.58 vs A0's 0.17-0.19) — see H19 and the untested [iteration-0 mediation](../../docs/experiments/planned/2026-08-23-tul-iteration0-mediation.md) |
+| Next | A1 seeds run past 3000 steps, scoring `b_t` against whether each seed turns around. H20 is arm-linked on trained models but the link to FAILURE is untested, because neither Stage 0 arm diverged (A1 `C_first/P` 0.44-0.58 vs A0's 0.17-0.19) — see H19 and the untested [iteration-0 mediation](../../docs/experiments/planned/2026-08-23-tul-iteration0-mediation.md) |
 | Blocked on a decision | is TUL on the near path? If not, stop after `g6-fine` and ship the mitigations |
 
 ## Hypothesis ledger
@@ -52,7 +52,7 @@ Verdict is the outcome of a PRE-REGISTERED test unless marked otherwise.
 | H17 | The LEARNABLE attention sink absorbs the mass | **REFUTED** | core `sink_logits` are 0.0036 → 0.0053 across all 11 rungs (sigmoid 0.5009 → 0.5013). The explicit sink parameter never engages | this file, 2026-08-24 |
 | H18 | A POSITIONAL attention sink — mass concentrating on one slot — compounds over T | **UNTESTED, top open lead** | the cotangent already sits on the same top-3 slots at every core block with the top slot's share rising 0.18 → 0.54. That is a sink signature, measured, never followed up | — |
 | H19 | The zero-deviation forcing bias (SCSE) drives it: `e` re-injected every iteration leaves `G_theta(0) != 0`, so the state drifts and the drift compounds over T | **REFUTED, opposite direction** | the shared component of the per-iteration displacement DECAYS ~100x across the loop (`C_last/C_first` = 0.0076 where the prediction needed >= 3), zeroing the repeated additive injection moves it from 1.13 to 1.12, and the faithful once-only counterfactual (source at iteration 0 only, no decay) RAISES state diversity at 10 of 11 rungs, so the "SCSE would remove a de-correlator" argument is withdrawn — the port fails on its diagnosis, not on its effect | [forcing-bias](../../docs/experiments/failures/2026-08-24-tul-zero-deviation-forcing-bias.md) |
-| H20 | The paper's own primitive `b_t(e) = T_t(0;e)` — the shared map's response AT the anchor — is large and arm-linked | **OPEN, first arm-separating number** | `||b||/||h*||` is 1.809 -> 2.471 across the onset ladder at the SLOT anchor against 1.448 -> 1.723 at the token anchor on the SAME weights; ratio 1.23-1.44 at all 11 rungs and WIDENING. H19 never measured this — it tested a derived consequence. No step-matched healthy control exists (A0-trained weights only at step 130) | [forcing-bias](../../docs/experiments/failures/2026-08-24-tul-zero-deviation-forcing-bias.md) |
+| H20 | The paper's own primitive `b_t(e) = T_t(0;e)` — the shared map's response AT the anchor — is large and arm-linked | **SURVIVES its first real control** | separately TRAINED A0 and A1, one build, 7 matched rungs: A1 carries 18-30% more anchor response at EVERY rung (1.177-1.301) and grows twice as fast (+7.5% vs +3.7%). Refuter did not fire. BUT neither arm turned around in 1900 steps, so this is healthy-vs-healthy — the gap is intrinsic to the arm, NOT yet shown to cause the failure | [arm-control](../../docs/experiments/successes/2026-08-24-tul-forcing-bias-arm-control.md) |
 
 ## The two numbers that still point somewhere
 
@@ -143,6 +143,8 @@ Verdict is the outcome of a PRE-REGISTERED test unless marked otherwise.
 - **Never compare an effective rank across normalisations.** Centred and uncentred ranks of the same states differ by 3-4x here (10.7 against 3.0 at loop entry), because the states carry a mean pairwise cosine near +0.5. The campaign's headline finding survived for days on exactly this mistake.
 - **Never compare an effective rank across ACTIVE-SET sizes.** The Poisson depth draw shrinks the slot path from 342 positions to 96 across the loop. Measure the trend on the intersection.
 - **Test the source's OWN primitive, not your operationalisation of it.** H19 pre-registered predictions about coherent accumulation along the trajectory and refuted them, then reported the paper refuted. The paper's quantity is `T_t(0;e)`, evaluated AT the anchor, and it had never been computed. It turned out to be large and arm-linked.
+- **1900 steps is not long enough to reproduce the takeover from scratch.** The campaign's own window for the CE minimum is step 500-2000, so a 1900-step arm can end AT the minimum and show nothing. Budget past 3000.
+- **Adding evaluation changes the trajectory.** `onset-capture`'s replay recipe sets `eval_every=999999` for a reason: eval consumes RNG, and MORPH decorrelates within 11 steps of any perturbation at a fixed seed. A run with evals is a fresh sample, not a replay — you cannot have both the val curve and the exact trajectory.
 
 ## Loose ends
 

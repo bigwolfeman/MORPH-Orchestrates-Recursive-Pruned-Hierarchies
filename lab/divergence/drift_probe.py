@@ -401,21 +401,33 @@ def forcing_bias(root, points: list[dict]) -> list[dict]:
         cm = common[:nrow]
         if not bool(cm.any()):
             continue
-        at_anchor = dict(p)
-        at_anchor["h"] = anchor[:nrow]
-        at_anchor["e"] = p["e"][:nrow]
-        at_anchor["inj"] = p["inj"][:, :nrow]
-        if p["ret_state"] is not None:
-            at_anchor["ret_state"] = p["ret_state"][:nrow]
-        b = select(step_at(root, at_anchor) - anchor[:nrow], cm)
-        h0 = select(anchor[:nrow], cm)
+        # BOTH evaluations must be truncated to the same `nrow`. On the token path the
+        # active set shrinks PER SAMPLE (`h_a = h_s[:n_active]`), so the common mask can be
+        # as narrow as one row while `p["h"]` still holds six. Truncating only one side let
+        # the subtraction broadcast back up to the full batch and then indexed it with a
+        # one-row mask -- an IndexError, and the reason this is a helper rather than two
+        # inline slices. The A1 slot path never hits it: there `active` is [B, S] with B
+        # fixed, so nrow is always the full batch.
+        def _truncated(src_h):
+            q = dict(p)
+            q["h"] = src_h[:nrow]
+            q["e"] = p["e"][:nrow]
+            q["inj"] = p["inj"][:, :nrow]
+            if p["ret_state"] is not None:
+                q["ret_state"] = p["ret_state"][:nrow]
+            return q
+
+        at_anchor = _truncated(anchor)
+        live = _truncated(p["h"])
+        b = select(step_at(root, at_anchor) - at_anchor["h"], cm)
+        h0 = select(at_anchor["h"], cm)
         c, rms = concentration(b)
         # R_t, eq. (9): pointwise anchor-response energy over REALISED recurrent-update
         # energy. Reported so MORPH lands on the same axis as the paper's Table 3, where the
         # looped baseline is 1.000 at t=0 and 4.35-5.44 at t=47, and SCSE is 0.000.
         # MORPH's baseline anchor is h* = h_0 = e (the paper's `h* = e` row), so
         # Delta_{t+1} - Delta_t = h_{t+1} - h_t, which is exactly the realised displacement.
-        d = select(step_at(root, p) - p["h"][:nrow], cm)
+        d = select(step_at(root, live) - live["h"], cm)
         num = float(b.pow(2).sum(-1).mean())
         den = float(d.pow(2).sum(-1).mean())
         out.append({"iter": int(p["iter_idx"]),
