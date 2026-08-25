@@ -23,8 +23,8 @@ affected.
 
 | | |
 |---|---|
-| Running | `g6-fine` (`span_cap` 8, `max_slots` 160, batch 6) against `g6-ctrl`, which took over and aborted at 18:14 |
-| Next, awaiting a go | widen `DiagonalInjection` from 320 to all 1024 channels |
+| Nothing running | `g6-ctrl` took over at step 650; `g6-fine` at 975 and aborted 19:01. Finer spans DELAY 1.5x, do not cure |
+| Next | positional attention-sink probe (cheap, no training), then SCSE-style anchored recurrence |
 | Blocked on a decision | is TUL on the near path? If not, stop after `g6-fine` and ship the mitigations |
 
 ## Hypothesis ledger
@@ -48,6 +48,9 @@ Verdict is the outcome of a PRE-REGISTERED test unless marked otherwise.
 | H13 | Span mean-pooling dilutes slot diversity as `1/sqrt(L)` | **CONFIRMED** | slope −0.473 / −0.504 / −0.527 at three caps, r² up to 0.93, and deviation depends on L ALONE not on the config | [pooling-law](../../docs/experiments/successes/2026-08-24-tul-span-pooling-law.md) |
 | H14 | Explorative Modeling applies: the plan is a compromise between conflicting readers | **REFUTED** | reader alignment 1.36–1.45 where 1.0 is random, FLAT across the onset. The slot's own label is 2.8 % of loss weight but ~50 % of the gradient | [reader-conflict](../../docs/experiments/failures/2026-08-24-tul-reader-gradient-conflict.md), [rejected note](../../.agents/notes/rejected/architecture/2026-08-24-xm-applies-to-the-plan-not-the-head.md) |
 | H15 | The per-iteration input re-injection decays, so the loop forgets each slot | **REFUTED** | anchor `dt/(1-A)` is 1.8015 → 1.8047 across all 11 rungs. Flat to four decimals | this file, 2026-08-24 |
+| H16 | Finer spans (`span_cap` 8) prevent it | **partial — delays, does not cure** | `g6-ctrl` takes over at step 650, `g6-fine` at 975. 1.5x delay. Confounded: `g6-fine` also has 2.5x the core positions | this file, 2026-08-24 |
+| H17 | The LEARNABLE attention sink absorbs the mass | **REFUTED** | core `sink_logits` are 0.0036 → 0.0053 across all 11 rungs (sigmoid 0.5009 → 0.5013). The explicit sink parameter never engages | this file, 2026-08-24 |
+| H18 | A POSITIONAL attention sink — mass concentrating on one slot — compounds over T | **UNTESTED, top open lead** | the cotangent already sits on the same top-3 slots at every core block with the top slot's share rising 0.18 → 0.54. That is a sink signature, measured, never followed up | — |
 
 ## The two numbers that still point somewhere
 
@@ -64,7 +67,9 @@ Verdict is the outcome of a PRE-REGISTERED test unless marked otherwise.
 
 | Idea | Cost | Why it might work | Why it might not |
 |---|---|---|---|
-| Widen `DiagonalInjection` to all 1024 channels | 1 line + 40 min | targets the 69 % unanchored fraction; holds depth, FLOPs, sharing, capacity fixed; causal | H15 says the anchor that EXISTS is healthy, so more of it may change nothing |
+| **SCSE — anchored deviation recurrence** (arXiv:2607.27656, Kim, Hayashi, Kamiya, Koyama, Iwasawa, Matsuo, 2026-07-30) | days | learn an anchor `h*(e)`, evolve the DEVIATION `Δ_t = h_t − h*(e)` through a zero-preserving core so `T_t(0;e) = 0` exactly. MORPH's `h = A·h + dt·e` is precisely the additive-injection form the paper says carries a non-zero forcing bias that accumulates over depth. Survives the entire ruled-out list: it re-parameterises the recurrence, it does not cap weights or touch the optimizer | a real re-architecture of the core loop; evaluated at 139M on WikiText, not at MORPH's scale or with stochastic depth |
+| Positional attention-sink probe | ~1 h, no training | Wolfe's hypothesis. The learnable sink is refuted (H17) but positional concentration is not measured. Would explain rank collapse, its compounding over T, and its reproduction on the token path — all without a weight-spectrum change | if attention is diffuse, the last cheap forward hypothesis dies |
+| Widen `DiagonalInjection` to all 1024 channels | 1 line + 40 min | targets the 69 % unanchored fraction; holds depth, FLOPs, sharing, capacity fixed; causal | H15 says the existing anchor is healthy, so more of it may change nothing. It is ALSO a weaker version of SCSE, which fixes the forcing bias rather than the channel count |
 | `span_cap` 8 / `max_slots` 160 (RUNNING) | 40 min | measured 1.97x on slot-input eff rank | not compute-matched: `L_total` 1152 → 1344 and core positions 57 → 142. Granularity and slot count are inseparable at fixed `seq_len` |
 | Wire H9's coherence ratio into the trainer | ~1 h | gives H9 its out-of-sample test AND ~90 steps of abort warning; makes every later arm cheaper | not a cure |
 | Multi-token slot labels (next span's token SET) | half a day | raises the direct route above 2.8 % of loss weight | H14 showed loss weight is not gradient share; the direct route is already ~50 % of the gradient |
