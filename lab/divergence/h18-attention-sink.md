@@ -3,7 +3,8 @@
 Working document. It is the plan, the running log, and the place the numbers land.
 Updated as each phase closes. The ledger entry it resolves is `takeover-campaign.md` H18.
 
-Status: **CLOSED 2026-08-25 — H18 NOT SUPPORTED.** The follow-on lead is H24; see the bottom.
+Status: **CLOSED 2026-08-25 — H18 NOT SUPPORTED.** The follow-on, H24, is screened and
+awaiting its arm; see the bottom.
 Opened 2026-08-25.
 
 ## Why this hypothesis
@@ -203,15 +204,56 @@ spends `g_comp ~ 0.50` on it. A0 loops over 1152 token positions; the same weigh
 Nothing here shows the dead branch CAUSES the takeover. It is a hypothesis this run
 generated, not one it tested.
 
-Two ways to test it, cheapest first:
+### The no-training screen — RUN 2026-08-25, and it says "lever, not cure"
 
-1. **A no-training screen.** `GatedPoolCompressor`'s parameters are per-POSITION linears
-   reshaped to `[B, n_blocks, m, c]`, so `m` is not in any weight shape. The SAME ladder
-   checkpoint can be run with `hca_compress_ratio: 16` and the branch comes alive with
-   trained weights. Measure whether the slot-state rank ratio H4 tracks moves back above 1
-   at the sick rungs. ~20 min, forward only. Pre-register it like anything else.
-2. **The arm.** `hca_compress_ratio: 16` from step 0, paired seeds against a control.
-   ~5 h per arm. A single run comparison is unreadable here.
+[`docs/experiments/failures/2026-08-25-h24-hca-branch-screen.md`](../../docs/experiments/failures/2026-08-25-h24-hca-branch-screen.md).
+Instrument: `lab/divergence/h24_screen.py`.
+
+The first attempt failed to load: the plan claimed `m` is in no weight shape, and that was
+WRONG — `GatedPoolCompressor` carries `B_a` of shape `[m, c]`. Method Amendment 1 records
+it; `B_a` is sliced to 16 rows and the surgery is scoped to the CORE blocks only.
+
+Validity gate passed cleanly: the control reproduces the published H4 unit-rank ratios to
+**0.004**, and iteration-0 rank is identical between the arms to **0.000e+00**, so the
+surgery touches the loop and nothing upstream of it.
+
+`ratio = eff_rank_unit(last) / eff_rank_unit(first)`, above 1 = the loop diversifies:
+
+| step | class | control | revived | delta |
+|---:|---|---:|---:|---:|
+| 1625 | HEALTHY | 1.408 | 1.498 | +0.090 |
+| 1700 | HEALTHY | 1.277 | 1.445 | +0.168 |
+| 1750 | HEALTHY | 1.469 | 1.584 | +0.115 |
+| 1775 | HEALTHY | 1.009 | 1.075 | +0.066 |
+| 1800 | SICK | 0.923 | **1.146** | +0.224 |
+| 1825 | ambig | 0.954 | **1.144** | +0.189 |
+| 1850 | SICK | 0.714 | 0.780 | +0.066 |
+| 1866 | SICK | 1.059 | 1.054 | −0.006 |
+
+**1 of 4 predictions held.** The deciding number:
+
+    mean delta over HEALTHY rungs = +0.0939
+    mean delta over SICK    rungs = +0.0947
+
+Identical. The revived branch lifts the loop's rank ratio by ~+0.09 EVERYWHERE. It is a
+uniform capacity effect, not a targeted repair. The two sign crossings at 1800 and 1825 are
+that uniform shift crossing a threshold those rungs happen to sit near; rung 1850 gets the
+same lift and stays at 0.780.
+
+Two of the three substantive predictions keyed on rung 1850 alone, called "the cleanest
+sick rung" because the campaign's two rank measures agreed there. It turned out to be the
+hardest one. A calibration error, recorded rather than corrected away.
+
+### What is left to do on H24
+
+**The arm.** `hca_compress_ratio: 16` from step 0, paired seeds against a control, ~5 h per
+arm. The screen says to expect a LEVER of the H5 `per_slot_embed` class — buys time, does
+not cure — and to size the arm for time-to-failure and CE rather than for a rescue. It also
+fixes a real defect whatever it does to the divergence.
+
+Confound to declare in that arm: `B_a` shrinks from `[256, 64]` to `[16, 64]`, so the arm
+has 15 360 FEWER parameters per HCA block. It is not iso-parameter, in the direction that
+makes an improvement harder to explain away as capacity.
 
 Second Phase 0 finding, separate and smaller: **CSA's sparse selection never fires on the
 short schedule.** `top_k: 256` exceeds `n_blocks` at `seq_len: 1024` (144 blocks), so
@@ -237,3 +279,8 @@ was never sparse.
   run. Smoke-tested on the random-init model only.
 - 2026-08-25 — ladder run and scored. 1/5 held, refuter did not fire, H18 NOT SUPPORTED.
   Ledger updated: H18 closed, H24 opened as the new top lead.
+- 2026-08-25 — H24 no-training screen pre-registered, corrected (`B_a` IS `[m, c]`), run
+  and scored. Validity gate exact. 1/4 held. The lift is UNIFORM (+0.0939 healthy vs
+  +0.0947 sick), so the defect is confirmed and the mechanism is not. Expect a lever.
+- 2026-08-25 — 11 contract tests added for the probe, all four sabotage passes caught by
+  the intended test; one strict-xfail added that guards the dead-branch defect itself.
