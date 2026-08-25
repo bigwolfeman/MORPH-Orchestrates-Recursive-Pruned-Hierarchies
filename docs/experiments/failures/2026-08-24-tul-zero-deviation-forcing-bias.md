@@ -94,6 +94,13 @@ uncorrelated displacements of similar size, or ONE position holding nearly all t
 a sink drives `C` to 1 just as hard as isotropy does. The participation ratio over positions
 and the top position's energy share were added to separate them. Predictions untouched.
 
+**Amendment 3 (2026-08-24, after the first writeup over-claimed from it).** The injection
+ablation replaced the WHOLE `DiagonalInjection` with a pass-through, which drops the fresh
+per-slot injection `dt * e_ctx` AND the decay `A * h_ctx` together — so the effect could not be
+attributed to either, and the first writeup credited it to the injection anyway. The ablation is
+now split: `dt = 0` with the decay intact, and `A = 1` with the injection intact. Both were
+re-run on both paths at all 11 rungs. The conclusion holds and is now attributed; see below.
+
 **Amendment 2 (2026-08-24, forced by the trajectory gate).** The first run failed the gate at
 24 % relative error. Cause: `model.train()` runs `nn.Dropout(0.1)` inside every core block, so
 a replayed step draws a different mask than the captured one and the replayed map is not a
@@ -126,7 +133,9 @@ the isotropic reading at every iteration and on both paths.
 | `rel_first` | 1.788 | 2.169 | 1.444 | 1.740 |
 | `rel_last` | 0.702 | **1.081** | 0.682 | **1.077** |
 | `C_last`, `inj_terms` zeroed | 2.06 | 1.12 | 12.52 | 3.12 |
-| `C_last`, DiagonalInjection off | 7.50 | 1.31 | 41.52 | 4.17 |
+| `C_last`, fresh injection off (`dt = 0`) | 8.50 | 1.41 | 42.83 | 3.85 |
+| `C_last`, decay off (`A = 1`) | 6.24 | 1.31 | 46.45 | 4.98 |
+| `C_last`, whole DiagonalInjection off | 7.50 | 1.31 | 41.52 | 4.17 |
 | top position's share of displacement | 0.024 | 0.035 | 0.004 | 0.004 |
 
 ### Verdict on each prediction

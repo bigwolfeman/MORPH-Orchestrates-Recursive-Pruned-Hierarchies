@@ -138,18 +138,53 @@ def dropout_off(model):
             m.p = q
 
 
-class _Identity(nn.Module):
-    """Stand-in for DiagonalInjection that passes the carrier through untouched."""
+class _DiagVariant(nn.Module):
+    """`DiagonalInjection` with either half of it switched off.
 
-    def forward(self, h, e):        # noqa: D102 - signature mirrors DiagonalInjection
-        return h
+    The real module is `h_ctx <- A * h_ctx + dt * e_ctx`. Replacing the WHOLE module with a
+    pass-through removes both halves at once — the fresh per-slot injection `dt * e_ctx`
+    AND the decay `A * h_ctx` — so an effect measured that way cannot be attributed to
+    either. The first pass of this probe did exactly that and the writeup over-claimed from
+    it. These flags separate them:
+
+    * `drop_inject` sets `dt = 0`: the decay still runs, no fresh per-slot content enters.
+      This is the ablation that tests whether the INJECTION carries the position-specific
+      signal, i.e. the term SCSE replaces with a once-only anchor.
+    * `drop_decay` sets `A = 1`: the fresh content still enters, the ctx channels no longer
+      contract toward it.
+
+    Both flags together reproduce the pass-through, which is the self-test.
+
+    The base module is stored with `object.__setattr__` so it is NOT registered as a
+    submodule: registering it would graft a second name for `log_A` / `log_dt` onto the
+    model for the duration of the swap, which a later `state_dict` or parameter walk would
+    see.
+    """
+
+    def __init__(self, base, drop_inject: bool = False, drop_decay: bool = False):
+        super().__init__()
+        object.__setattr__(self, "base", base)
+        self.drop_inject = drop_inject
+        self.drop_decay = drop_decay
+
+    def forward(self, h, e):        # signature mirrors DiagonalInjection
+        b = self.base
+        a = b.log_A.exp().clamp(max=0.9999)
+        dt = b.log_dt.exp()
+        if self.drop_decay:
+            a = torch.ones_like(a)
+        if self.drop_inject:
+            dt = torch.zeros_like(dt)
+        s, e_ = b.start, b.end
+        new_ctx = a * h[..., s:e_] + dt * e[..., s:e_]
+        return torch.cat([h[..., :s], new_ctx, h[..., e_:]], dim=-1)
 
 
 @contextlib.contextmanager
-def diag_off(root):
-    """Replace the DiagonalInjection with a pass-through for the body of the block."""
+def diag_variant(root, *, drop_inject: bool = False, drop_decay: bool = False):
+    """Swap the DiagonalInjection for a variant with one or both halves off."""
     old = root.injection
-    root.injection = _Identity()
+    root.injection = _DiagVariant(old, drop_inject, drop_decay)
     try:
         yield
     finally:
@@ -157,7 +192,8 @@ def diag_off(root):
 
 
 # ── the core map, replayed at a captured operating point ───────────────────────────
-def step_at(root, point: dict, *, zero_inj: bool = False, no_diag: bool = False):
+def step_at(root, point: dict, *, zero_inj: bool = False, no_diag: bool = False,
+            no_dt: bool = False, no_decay: bool = False):
     """`f_theta(h_t)` at the captured point, optionally with an injection removed.
 
     Runs under the SAME autocast the capture ran under, so the replay reproduces the
@@ -165,7 +201,11 @@ def step_at(root, point: dict, *, zero_inj: bool = False, no_diag: bool = False)
     """
     h, e = point["h"], point["e"]
     inj = torch.zeros_like(point["inj"]) if zero_inj else point["inj"]
-    ctx = diag_off(root) if no_diag else contextlib.nullcontext()
+    if no_diag or no_dt or no_decay:
+        ctx = diag_variant(root, drop_inject=no_diag or no_dt,
+                           drop_decay=no_diag or no_decay)
+    else:
+        ctx = contextlib.nullcontext()
     with dropout_off(root), ctx, torch.no_grad(), \
             torch.autocast("cuda", dtype=torch.bfloat16):
         out, _ = root._apply_core_step(h, e, None, None, None,
@@ -229,7 +269,8 @@ def drift(root, points: list[dict]) -> dict:
         row["eff_pos_h"] = eff_h
         row["max_share_h"] = share_h
         for tag, kw in (("full", {}), ("noinj", {"zero_inj": True}),
-                        ("nodiag", {"no_diag": True})):
+                        ("nodiag", {"no_diag": True}), ("nodt", {"no_dt": True}),
+                        ("nodecay", {"no_decay": True})):
             d = select(step_at(root, p, **kw) - p["h"], m)
             c, rms = concentration(d)
             eff, share = spread(d)
@@ -294,6 +335,31 @@ def self_test() -> None:
     assert sh_sink > 0.99, f"a sink must hold ~all the energy, got {sh_sink}"
     assert sh_iso < 0.05, f"isotropic max_share should be small, got {sh_iso}"
 
+    # _DiagVariant with both flags off must be the module it replaces, exactly; with both
+    # flags on it must be the pass-through the first version of this probe used.
+    from morph.model.transformer import DiagonalInjection
+    torch.manual_seed(1)
+    di = DiagonalInjection(4, 10)
+    with torch.no_grad():
+        di.log_A.normal_(-0.5, 0.3)
+        di.log_dt.normal_(-0.2, 0.3)
+    hh, ee = torch.randn(2, 5, 16), torch.randn(2, 5, 16)
+    ref = di(hh, ee)
+    assert torch.equal(_DiagVariant(di)(hh, ee), ref), "_DiagVariant is not the identity swap"
+    both = _DiagVariant(di, drop_inject=True, drop_decay=True)(hh, ee)
+    assert torch.equal(both, hh), "both flags on must reproduce the pass-through"
+    only_dt = _DiagVariant(di, drop_inject=True)(hh, ee)
+    only_decay = _DiagVariant(di, drop_decay=True)(hh, ee)
+    assert not torch.equal(only_dt, ref) and not torch.equal(only_decay, ref), \
+        "a single flag changed nothing"
+    assert not torch.equal(only_dt, only_decay), "the two flags are not distinguishable"
+    # the flags must touch ONLY the ctx band
+    for v in (only_dt, only_decay, both):
+        assert torch.equal(v[..., :4], hh[..., :4]) and torch.equal(v[..., 10:], hh[..., 10:]), \
+            "a variant modified channels outside [start, end)"
+    assert not hasattr(_DiagVariant(di), "_modules") or \
+        "base" not in _DiagVariant(di)._modules, "base leaked in as a registered submodule"
+
     # rms scale: a field of unit-norm rows must report rms_norm 1.
     unit = torch.nn.functional.normalize(torch.randn(p, f), dim=-1)
     _, rms = concentration(unit)
@@ -349,10 +415,11 @@ def main() -> None:
         eh = " ".join(f"{r['eff_pos_h']:7.1f}" for r in pi)
         print(f"{'':<22} effpos_d/iter= {es}", flush=True)
         print(f"{'':<22} effpos_h/iter= {eh}", flush=True)
-        print(f"{'':<22} C_noinj last = {pi[-1]['C_noinj']:.1f}  "
-              f"C_nodiag last = {pi[-1]['C_nodiag']:.1f}  "
-              f"maxshare_d last = {pi[-1]['max_share_full']:.3f}  "
-              f"C_inj = {pi[-1]['C_inj']}", flush=True)
+        z = pi[-1]
+        print(f"{'':<22} C last: full={z['C_full']:.2f} noinj={z['C_noinj']:.2f} "
+              f"nodt={z['C_nodt']:.2f} nodecay={z['C_nodecay']:.2f} "
+              f"nodiag={z['C_nodiag']:.2f}   maxshare_d={z['max_share_full']:.3f}",
+              flush=True)
     with open(a.out, "w") as f:
         json.dump(results, f, indent=1)
     print(f"wrote {a.out}")

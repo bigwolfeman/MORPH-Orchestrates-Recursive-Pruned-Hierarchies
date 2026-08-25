@@ -37,9 +37,12 @@ rungs (`checkpoints/morph/onset-capture`) and measures the per-iteration displac
   at least 3.
 * Zeroing the repeated additive injection — the exact term SCSE's `G_theta(0) = 0` constraint
   removes — moves the last iteration's shared concentration from 1.13 to 1.12.
-* Turning the `DiagonalInjection` OFF *raises* shared concentration at every rung on both code
-  paths: 1.13 to 1.31 at TAKEOVER, 8.40 to 15.44 at rung 1700, 12.50 to 41.52 on the token path
-  at rung 1625. MORPH's re-injection is what keeps the positions apart.
+* Removing the fresh per-step injection alone — `dt = 0`, the decay `A * h_ctx` left running —
+  *raises* shared concentration at 22 of 22 rung-path pairs, by 1.24x to 4.28x: 2.07 to 8.50 at
+  rung 1625, 8.40 to 15.63 at rung 1700, 1.13 to 1.41 at TAKEOVER, 12.50 to 42.83 on the token
+  path at rung 1625. Removing the decay instead raises it by a similar amount, so the two halves
+  act together; the injection's own contribution is nonetheless isolated and confirmed. MORPH's
+  re-injection is part of what keeps the positions apart.
 
 The third point is the decisive one for the port. SCSE replaces per-step injection with a
 once-only anchor. In MORPH that would delete the only term measured to de-correlate the slot
