@@ -3,8 +3,8 @@
 Working document. It is the plan, the running log, and the place the numbers land.
 Updated as each phase closes. The ledger entry it resolves is `takeover-campaign.md` H18.
 
-Status: **CLOSED 2026-08-25 — H18 NOT SUPPORTED.** The follow-on, H24, is screened and
-awaiting its arm; see the bottom.
+Status: **CLOSED 2026-08-25 — H18 NOT SUPPORTED.** The follow-on H24 is screened and its
+PAIRED ARM IS RUNNING (`lab/divergence/h24_arm.sh`, 8 runs, ~7 h). See the bottom.
 Opened 2026-08-25.
 
 ## Why this hypothesis
@@ -244,16 +244,31 @@ Two of the three substantive predictions keyed on rung 1850 alone, called "the c
 sick rung" because the campaign's two rank measures agreed there. It turned out to be the
 hardest one. A calibration error, recorded rather than corrected away.
 
-### What is left to do on H24
+### The arm — LAUNCHED 2026-08-25 14:22
 
-**The arm.** `hca_compress_ratio: 16` from step 0, paired seeds against a control, ~5 h per
-arm. The screen says to expect a LEVER of the H5 `per_slot_embed` class — buys time, does
-not cure — and to size the arm for time-to-failure and CE rather than for a rescue. It also
-fixes a real defect whatever it does to the divergence.
+Pre-registration: [`docs/experiments/planned/2026-08-25-h24-hca-branch-arm.md`](../../docs/experiments/planned/2026-08-25-h24-hca-branch-arm.md).
+Runner `lab/divergence/h24_arm.sh`, scorer `lab/divergence/score_h24_arm.py`, both
+committed before launch.
 
-Confound to declare in that arm: `B_a` shrinks from `[256, 64]` to `[16, 64]`, so the arm
-has 15 360 FEWER parameters per HCA block. It is not iso-parameter, in the direction that
-makes an improvement harder to explain away as capacity.
+`model.core_hca_compress_ratio: 16` (config `tul_a1_hca16`) against `tul_a1`, seeds 0-3,
+PAIRED and INTERLEAVED, sequential, 6000 steps at batch 6 / `alpha_cap` 3.5 /
+`use_kernels=false`. 8 runs at ~51 min = ~7 h. Measured at launch: 1.94 steps/s, 369 W,
+80 % GPU — well under the UPS threshold.
+
+The knob is a new construction-time field scoped to the CORE. Verified on the real model:
+`tul_a1` still reports `n_blocks = 0` and `|out_comp| = 0.0000` at core blocks 1/3/5, and
+`tul_a1_hca16` reports `n_blocks = 4` and `|out_comp|` 228-244. A global
+`model.hca_compress_ratio` would have re-blocked two prelude and two coda layers too,
+making the arm differ by seven modules instead of three.
+
+6000 steps and not the sweep's 3500: at 3500 only control seed 0 of four diverges, while
+seeds 1-3 finish with rises of 0.129 / 0.090 / 0.127 nats — inside the measured 0.168-nat
+healthy noise floor. The known abort steps at `alpha_cap` 3.5 are 2080, 3240, 4540, 5900,
+6200, so 6000 covers four of five.
+
+Confounds declared in the plan file: not iso-parameter (`B_a` is `[m, c]`, so the arm has
+46 080 FEWER parameters, 0.016 %); capacity rather than mechanism; one `m` value; four
+seeds.
 
 Second Phase 0 finding, separate and smaller: **CSA's sparse selection never fires on the
 short schedule.** `top_k: 256` exceeds `n_blocks` at `seq_len: 1024` (144 blocks), so
@@ -284,3 +299,8 @@ was never sparse.
   +0.0947 sick), so the defect is confirmed and the mechanism is not. Expect a lever.
 - 2026-08-25 — 11 contract tests added for the probe, all four sabotage passes caught by
   the intended test; one strict-xfail added that guards the dead-branch defect itself.
+- 2026-08-25 — `model.core_hca_compress_ratio` added (default null, bit-identical), 6 tests,
+  2/2 sabotage passes caught. Attention geometry recorded in `morph/model/CLAUDE.md` and
+  `docs/runtime-invariants.md` §6b, and the old brief line that made the defect silent was
+  corrected.
+- 2026-08-25 14:22 — H24 PAIRED ARM LAUNCHED. 8 runs, ~7 h.
