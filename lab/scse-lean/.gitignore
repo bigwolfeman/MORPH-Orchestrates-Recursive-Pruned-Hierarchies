@@ -1,0 +1,2 @@
+# Mathlib oleans and build products: several GB, reproducible with `lake exe cache get`.
+.lake/
