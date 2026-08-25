@@ -322,6 +322,8 @@ def build_morph_config(cfg: DictConfig, tul=None) -> MORPHConfig:
         n_kv_heads=int(m.n_kv_heads),
         csa_compress_ratio=int(m.csa_compress_ratio),
         hca_compress_ratio=int(m.hca_compress_ratio),
+        core_hca_compress_ratio=(None if m.get("core_hca_compress_ratio", None) is None
+                                 else int(m.core_hca_compress_ratio)),
         top_k=int(m.top_k),
         window_size=int(m.window_size),
         context_len=int(m.context_len),

@@ -187,6 +187,21 @@ class MORPHConfig:
     n_kv_heads: int = 4
     csa_compress_ratio: int = 4
     hca_compress_ratio: int = 128
+    # The CORE's HCA ratio, when it must differ from the rest of the stack. None inherits
+    # `hca_compress_ratio` and is bit-identical to not having this field.
+    #
+    # It exists because the looped core does NOT run at the stack's sequence length. Under
+    # TUL the core loops over SLOT positions — 64 with `tul.max_slots: 64` — while prelude
+    # and coda run on all 1152. `GatedPoolCompressor` computes `n_blocks = S // m`, so a
+    # ratio sized for the token stream floors to ZERO on the slot path and the compressed
+    # branch produces nothing at all, silently, for a whole run. Measured 2026-08-25:
+    # `|out_comp|` is exactly 0.0000 on core blocks 1/3/5 while the gate still spends
+    # ~0.50 of its mixture on that zero tensor. See
+    # `.agents/notes/proposed/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md`.
+    #
+    # Scoped to the core on purpose: setting `hca_compress_ratio` globally would also
+    # re-block prelude and coda, which do not have the problem.
+    core_hca_compress_ratio: int | None = None
     top_k: int = 128
     d_indexer: int = 32
     window_size: int = 128
@@ -715,10 +730,15 @@ class MORPHTransformer(nn.Module):
             init_gain=cfg.hc_init_gain, use_kernel=cfg.hc_use_kernel,
         )
 
-        def _make_block(layer_idx: int) -> MORPHBlock:
+        # The core alone may re-block its HCA branch; see `core_hca_compress_ratio`.
+        core_attn_kw = dict(attn_kw)
+        if cfg.core_hca_compress_ratio is not None:
+            core_attn_kw["hca_compress_ratio"] = int(cfg.core_hca_compress_ratio)
+
+        def _make_block(layer_idx: int, kw: dict | None = None) -> MORPHBlock:
             return MORPHBlock(
                 norm_attn=RMSNorm(d),
-                attn=MORPHAttention(layer_idx=layer_idx, **attn_kw),
+                attn=MORPHAttention(layer_idx=layer_idx, **(kw or attn_kw)),
                 norm_mlp=RMSNorm(d),
                 mlp=_make_swiglu(d, d_ff, cfg.dropout),
                 d_model=d,
@@ -737,7 +757,7 @@ class MORPHTransformer(nn.Module):
 
         # ── Core (shared across loop iterations — MortarLinear for CMS pruning)
         self.core = nn.ModuleList([
-            _make_block(cfg.n_prelude + i)
+            _make_block(cfg.n_prelude + i, core_attn_kw)
             for i in range(cfg.n_core)
         ])
 

@@ -85,6 +85,16 @@ model:
   n_kv_heads: 4
   csa_compress_ratio: 8
   hca_compress_ratio: 256
+  # The CORE's HCA ratio when it must differ from prelude/coda. null inherits the line
+  # above and is bit-identical to not having this key.
+  #
+  # The looped core does NOT run at the stack's sequence length. Under TUL it loops over
+  # SLOT positions (64 with tul.max_slots 64) while prelude/coda run on all 1152, and
+  # GatedPoolCompressor computes n_blocks = S // m — so a token-stream ratio floors to
+  # ZERO on the slot path and the compressed branch silently produces nothing for a whole
+  # run. Measured 2026-08-25. Deploy (seq_len 4096, 512 slots) is unaffected; the TUL
+  # short schedule is not. See docs/experiments/failures/2026-08-25-h18-positional-attention-sink.md
+  core_hca_compress_ratio: null
   top_k: 256
   window_size: 256
   context_len: 8192  # common CoPE taper anchor across seed/base/cloud
