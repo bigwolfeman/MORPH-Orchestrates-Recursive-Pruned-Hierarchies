@@ -431,6 +431,37 @@ class _SCSE(nn.Module):
             return delta
         return delta + self.kappa * self.cond_proj(h_star)
 
+    def update(self, delta: Tensor, stack_out: Tensor) -> Tensor:
+        """``Delta_{t+1} = Delta_t + m * s * G(Delta_t)`` with ``G(D) = stack(D) - D``.
+
+        THE SUBTRACTION IS NOT COSMETIC, and getting it wrong was a real bug in the first
+        version of this port (found by audit, 2026-08-25).
+
+        The paper's ``G_theta`` carries NO top-level identity: its residual has been hoisted
+        to loop level, which is what "residual step scale" names. Proof from the paper's own
+        text rather than from taste — the tuned adapter is
+        ``h_{t+1} = h_t + s*B_theta(h_t + alpha*W_in*h*)``, and if ``B_theta`` contained the
+        identity that map would gain ``(1+s)`` every step and reach ``1.5^48 ~ 1e8`` at the
+        T = 48 the paper evaluates at. Its T = 48 numbers are ordinary.
+
+        MORPH's core blocks are full residual blocks — the HyperConnection carrier passthrough
+        is INSIDE ``stack`` — so ``Delta + s*stack(Delta)`` applies the residual twice.
+        Measured on a real checkpoint at the converged operating point:
+        ``cos(stack(D), D) = 0.88`` and ``||stack(D)||/||D|| = 0.90``, i.e. ``stack`` is
+        essentially "identity plus an update of about half the size". The doubled form gains
+        **1.414x per iteration** (16x over eight); this form gains **0.923x**.
+
+        Subtracting ``delta`` restores the paper's structure. Equivalently
+        ``Delta_{t+1} = (1 - s)*Delta_t + s*stack(Delta_t)``, so ``s`` is a damping factor
+        between "no update" (s = 0) and MORPH's own core map in deviation coordinates
+        (s = 1). Zero-preservation survives: ``stack(0) = 0`` gives ``G(0) = 0``.
+
+        Both loop bodies AND the drift probe call THIS method. A previous version inlined the
+        arithmetic in three places, and an audit removed the mask from one of them without a
+        single test failing.
+        """
+        return delta + self.gate(delta) * (self.step_scale * (stack_out - delta))
+
     def gate(self, delta: Tensor) -> Tensor:
         """``m_{b,t} = 1{ ||Delta_t^{(b)}||_F^2 > eps }`` (Eq. 4) — per EXAMPLE.
 
@@ -1312,8 +1343,7 @@ class MORPHTransformer(nn.Module):
                 g_out, new_ret = self._apply_core_step(
                     _scse.recurrent_input(h_in, e_in), None, None, None, None,
                     ret_state=ret_state, iter_idx=iter_idx, inj_terms=None, source_free=True)
-                q = _scse.step_scale * g_out                       # Eq. 3
-                return h_in + _scse.gate(h_in) * q, new_ret        # Eqs. 4-5
+                return _scse.update(h_in, g_out), new_ret          # Eqs. 3-5
 
             # ── Active-set shrinking ────────────────────────────────────────────
             # A sample is updated only while iteration t < its Poisson depth, then
@@ -1668,8 +1698,7 @@ class MORPHTransformer(nn.Module):
             g_out, new_ret = self._apply_core_step(
                 _scse.recurrent_input(h_in, e_in), None, None, None, None,
                 ret_state=ret_state, iter_idx=iter_idx, inj_terms=None, source_free=True)
-            q = _scse.step_scale * g_out                       # Eq. 3
-            return h_in + _scse.gate(h_in) * q, new_ret        # Eqs. 4-5
+            return _scse.update(h_in, g_out), new_ret          # Eqs. 3-5
 
         g_list: list[Tensor] = []
         # ── Phase-1 onset probe (plan task 1.1) ───────────────────────────────

@@ -395,8 +395,13 @@ def test_forcing_bias_is_zero_on_the_real_model():
             g_out, _ = root._apply_core_step(
                 root.scse.recurrent_input(zero_delta, anchor), None, None, None, None,
                 ret_state=None, iter_idx=0, inj_terms=None, source_free=True)
-            step = root.scse.gate(zero_delta) * (root.scse.step_scale * g_out)
-        assert float(step.abs().max()) == 0.0, (
+            nxt = root.scse.update(zero_delta, g_out)
+        # Assert the CORE's own output first. Checking only the masked step would be
+        # near-tautological: `gate(0) = 0` zeroes the product whatever the core returned, so
+        # that assertion can fail only on a non-finite value. This is the real claim.
+        assert float(g_out.abs().max()) == 0.0, (
+            f"G_theta(0) != 0 in {label}: peak |stack(0)| = {float(g_out.abs().max()):.3e}")
+        assert float(nxt.abs().max()) == 0.0, (
             f"b_t != 0 in {label}: the anchor is not a one-step fixed point")
 
 
@@ -501,3 +506,109 @@ def test_real_model_loop_is_source_free_and_anchored():
     assert n_inj[0] == 0, f"the REAL loop injected the source {n_inj[0]} times"
     assert n_anchor[0] == 1, f"the REAL loop built the anchor {n_anchor[0]} times"
     assert torch.isfinite(out["loss"]), "the real SCSE forward produced a non-finite loss"
+
+
+# ── the recurrence FORM itself (audit 2026-08-25) ───────────────────────────────────────
+
+def test_update_subtracts_the_deviation_from_the_stack_output():
+    """`G(D) = stack(D) - D`, NOT `stack(D)`. This is the bug the first port shipped.
+
+    MORPH's core blocks carry their own residual, so `D + s*stack(D)` applies the residual
+    twice and gains `(1+s)` per iteration on top of whatever the update does -- measured at
+    1.414x per iteration against the corrected form's 0.923x. The paper's `G_theta` has no
+    top-level identity: if it did, its own tuned-adapter formula would reach `1.5^48` at the
+    T = 48 it evaluates at.
+
+    Pinned in closed form so the subtraction cannot be quietly removed again.
+    """
+    s = _SCSE(8, step_scale=0.5, anchor_scale=0.1, init_scale=0.1, eps=1e-8, kappa=0.0)
+    d = torch.randn(2, 3, 4, 8) * 3.0        # well above the mask threshold
+    stack_out = torch.randn(2, 3, 4, 8)
+    got = s.update(d, stack_out)
+    assert torch.allclose(got, d + 0.5 * (stack_out - d), rtol=0, atol=1e-6)
+    assert not torch.allclose(got, d + 0.5 * stack_out, rtol=0, atol=1e-4), (
+        "update() is computing the DOUBLED form D + s*stack(D)")
+    # s = 1 must recover MORPH's own core map in deviation coordinates. That is the check
+    # that the damping interpretation of `s` is real and not a rationalisation.
+    s1 = _SCSE(8, step_scale=1.0, anchor_scale=0.1, init_scale=0.1, eps=1e-8, kappa=0.0)
+    assert torch.allclose(s1.update(d, stack_out), stack_out, rtol=0, atol=1e-6)
+
+
+# ── gaps found by the 2026-08-25 audit: three sabotages that survived the whole suite ───
+
+def test_the_core_receives_the_BARE_deviation():
+    """Audit sabotage A: `recurrent_input` returning `delta + h_star` passed all 25 tests.
+
+    The old S3 tests counted `DiagonalInjection` calls and `x0_injects` gradients -- MORPH's
+    LEGACY source paths -- and nothing looked at the tensor actually handed to the blocks.
+    The anchor is threaded through the loop as the second argument for the kappa path, so
+    smuggling it into the recurrent input was invisible. This reads the real tensor.
+    """
+    m = _build(0, scse_enabled=True)
+    m.eval()
+    seen: list[torch.Tensor] = []
+    m.core[0].register_forward_pre_hook(
+        lambda _mod, args: seen.append(args[0].detach().clone()))
+    m._jac_capture = []
+    with torch.no_grad():
+        m(torch.randint(0, V, (2, 32)))
+    caps, m._jac_capture = m._jac_capture, None
+    assert len(seen) >= len(caps) >= 2, f"{len(seen)} block inputs, {len(caps)} captures"
+    for c, inp in zip(caps, seen):
+        assert torch.equal(inp, c["h"]), (
+            f"iter {c['iter_idx']}: the first core block received something that is NOT the "
+            f"bare deviation (max diff {float((inp - c['h']).abs().max()):.3e})")
+
+
+def test_mask_freezes_a_below_threshold_deviation_on_the_TUL_path():
+    """Audit sabotage B: deleting the gate from `_tul_core` ALONE passed all 25 tests.
+
+    The only in-loop mask test ran the token path, and the arms run `tul_a1`, which goes
+    through `_tul_core`. The shipped path was unprotected. (The recurrence is now a single
+    `_SCSE.update`, so there is one place to break rather than three -- but the path still
+    needs its own test, because the loop body chooses whether to call it.)
+    """
+    x, y, layout, _ = _batch()
+    m = _build(1, tul=TULConfig(prefix_k=2, slot_id=4), scse_enabled=True)
+    _force_zero_initial_deviation(m)
+    with torch.no_grad():
+        m.scse.init_proj.weight.add_(1e-9)
+    m.eval()
+    m._jac_capture = []
+    with torch.no_grad():
+        m(x, labels=y, slot_layout=layout)
+    caps, m._jac_capture = m._jac_capture, None
+    d0 = caps[0]["h"]
+    nsq = d0.float().pow(2).sum(dim=tuple(range(1, d0.dim())))
+    assert float(nsq.max()) > 0.0, "the perturbation did not take"
+    assert float(nsq.max()) < 1e-8, f"not below threshold: {float(nsq.max()):.3e}"
+    for c in caps[1:]:
+        assert torch.equal(c["h"], d0), (
+            f"iter {c['iter_idx']}: a sub-threshold deviation moved on the TUL path")
+
+
+def test_h_star_is_aligned_with_the_ORIGINAL_batch_order():
+    """Audit sabotage C: `x = h_star[perm] + x` passed the entire 384-test suite.
+
+    Every other test evaluates with uniform depths, where the depth-sort permutation is the
+    identity and the bug is invisible. In training the depths are Poisson, and this class of
+    error silently adds another SAMPLE'S anchor to each deviation. Depths are pinned here
+    rather than sampled so the permutation is guaranteed non-trivial.
+    """
+    m = _build(0, scse_enabled=True, scse_step_scale=0.0)
+    m.eval()
+    pinned = torch.tensor([1, 3, 2, 3])
+    m._sample_depths = lambda B, dev: pinned.to(dev)     # non-identity sort order
+    m.training = True                                    # take the sampled-depth branch
+    c = m.cfg
+    torch.manual_seed(7)
+    x = torch.randn(4, 8, c.hc_streams, c.d_model)
+    with torch.no_grad():
+        out = m._core_region(x, x, None)
+        e = m.input_norm(x)
+        h_star, d0 = m.scse.entry(e)
+    # step_scale = 0 freezes Delta at Delta_0 for EVERY sample whatever its depth, so the
+    # region must return h* + Delta_0 row for row.
+    assert torch.allclose(out, h_star + d0, rtol=0, atol=1e-5), (
+        f"anchor/deviation batch misalignment: max diff "
+        f"{float((out - (h_star + d0)).abs().max()):.3e}")

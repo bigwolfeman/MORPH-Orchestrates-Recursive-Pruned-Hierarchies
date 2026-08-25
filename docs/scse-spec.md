@@ -121,14 +121,52 @@ leave the loop and the source is carried by the anchor instead.
 **The deviation exists only inside the loop.** Entry `Delta_0 = H_0(e) - h*`, exit
 `h = h* + Delta_T`. Both loop bodies (`_core_region` for the token path, `_tul_core` for the
 TUL slot path) return an ABSOLUTE carrier exactly as today, so the prelude, the coda, the
-readout, the scatter, the gate head and every checkpoint key are untouched.
+readout, the scatter and every checkpoint key are untouched.
+
+**One exception, and it is not "untouched":** the TUL halting-gate readout is moved. It reads
+the slot STATE, so under SCSE it is fed `h* + Delta` rather than the raw carrier, which is now
+the deviation. That is the correct choice — a halting head scoring a deviation is scoring a
+different quantity — but it IS a change, and an earlier draft of this section wrongly listed
+the gate head as untouched. The arms do not build the gate, so nothing measured here depends
+on it.
 
 ### 3.2 The SCSE core map
 
-    G_theta(Delta) := the n_core shared blocks applied to Delta, with NO source injection.
+    G_theta(Delta) := stack(Delta) - Delta,
+    where stack(Delta) := the n_core shared blocks applied to Delta, NO source injection.
 
-Concretely: skip `self.injection` and skip `_apply_injection` for the core layers. What
-remains is `for layer in self.core: x = layer(x)`.
+Concretely: skip `self.injection` and skip `_apply_injection` for the core layers, leaving
+`for layer in self.core: x = layer(x)` — and then **subtract the input**.
+
+**The subtraction is load-bearing, and the first version of this port omitted it.** Found by
+audit on 2026-08-25; the corrected form is `_SCSE.update`.
+
+The paper's `G_theta` carries no top-level identity — its residual has been hoisted to loop
+level, which is exactly what the name "residual step scale" means. The paper never says this
+in one sentence, so here is the argument from its own text. Its tuned adapter is
+`h_{t+1} = h_t + s*B_theta(h_t + alpha*W_in*h*)`. If `B_theta` contained the identity, that
+map would gain `(1+s)` every step and reach `1.5^48 ~ 1e8` at the `T = 48` the paper
+evaluates at. Its T = 48 numbers are ordinary, so it does not.
+
+MORPH's core blocks are full residual blocks — the HyperConnection carrier passthrough is
+INSIDE `stack` — so `Delta + s*stack(Delta)` applies a residual twice. Measured on a real
+SCSE checkpoint at the converged operating point (iterations 3-5):
+
+| iteration | `\|\|stack(D)\|\|/\|\|D\|\|` | `cos(stack(D), D)` | `\|\|stack(D)-D\|\|/\|\|D\|\|` |
+| --- | --- | --- | --- |
+| 3 | 0.921 | 0.780 | 0.642 |
+| 4 | 0.874 | 0.838 | 0.546 |
+| 5 | 0.902 | 0.883 | 0.470 |
+
+`cos = 0.88` is the identity. One-step norm gain: the doubled form **1.414x per iteration**
+(about 16x over eight), the corrected form **0.923x**. Against this repo's standing model of
+its own failure mode — `rho(J_core)` crossing 1 is the disease
+([iterative-map-dynamics](../.agents/notes/implemented/architecture/2026-06-19-iterative-map-dynamics.md))
+— the doubled form builds the disease into the recurrence.
+
+Equivalently `Delta_{t+1} = (1 - s)*Delta_t + s*stack(Delta_t)`, so `s` is a damping factor
+between "no update" at `s = 0` and MORPH's own core map in deviation coordinates at `s = 1`.
+That reading is pinned by a test. Zero-preservation survives: `stack(0) = 0` gives `G(0) = 0`.
 
 `G_theta(0) = 0` for this map is already verified numerically on the real 286.1M `tul_a1`
 model, fp32 and bf16 autocast, peak `|out| = 0.000e+00`
@@ -182,8 +220,12 @@ independently initialised projections.
 **D3 — `DiagonalInjection` is dropped from the SCSE loop, not fed a zero source.**
 Feeding `e = 0` would leave `h_ctx <- A * h_ctx` with `A ~= 0.447`, which multiplies the
 deviation's context channels by ~0.447 every iteration and annihilates them over 8 steps
-(`0.447^8 ~= 1.6e-3`); in the baseline that decay is refilled by `dt * e_ctx` each iteration,
-and under SCSE there is nothing to refill it. Dropping the module makes the core the shared
+(`0.447^8 ~= 1.6e-3` at the INIT value); in the baseline that decay is refilled by
+`dt * e_ctx` each iteration, and under SCSE there would be nothing to refill it.
+**Caveat, added after audit:** `log_A` is a learnable parameter clamped at 0.9999, so a
+zero-fed injection could in principle learn `A -> 1` and become a no-op rather than a decay.
+The arithmetic above is the init-value behaviour, not a proof. The deviation is taken on the
+stronger ground that the paper's `core` is the bare block stack, not on the decay argument. Dropping the module makes the core the shared
 block stack, which is what the paper's `core` is ("RMSNorm pre-normalization, causal
 self-attention, and SwiGLU updates"). Consequence: `self.injection` and
 `x0_injects[n_prelude : n_prelude+n_core]` receive no gradient when SCSE is on. Their signal is
@@ -218,6 +260,27 @@ bf16 would subtract two tensors of the carrier's magnitude to recover a quantity
 smaller and lose most of its significant bits. It also makes `Delta_0` EXACTLY zero wherever
 `e` is zero, which is what invariant S8 (TUL pad slots) depends on.
 
+## 4b. Other behaviour SCSE changes (named, after audit)
+
+These were real changes that lived only in code comments until the 2026-08-25 audit. None is
+load-bearing for the arms, and all are listed so no reader has to discover them.
+
+* **The GLA retention state is NOT frozen by the mask.** The anchor is a one-step fixed point
+  of `Delta`, but the model's full state is `(Delta, ret_state)` and the retention carry keeps
+  evolving even on an example whose gate is 0. The paper has no retention branch, so it says
+  nothing about this. In practice a masked example has `Delta = 0`, the core runs on zeros and
+  `G(0) = 0`, so the state it feeds forward is the zero-input GLA state rather than a frozen
+  one. Worth knowing before anyone reads a "frozen" example as fully frozen.
+* **`_diag_corecos` and the PERITER gain log now measure the DEVIATION, not the state.** Same
+  numbers, different quantity. Both are off by default.
+* **The eval-only trajectory capture reconstructs `h* + Delta`** so the forecastability probe
+  keeps receiving absolute states. It relies on eval running a uniform depth, which makes the
+  permutation the identity; that assumption is already load-bearing in the existing code.
+* **`scse_kappa > 0` is NOT exactly the paper's SC-Cond reference.** It builds `cond_proj` but
+  not the `leak = 0.02` term the paper pairs with it in the secondary diagnostic. It is a
+  source-conditioned variant, and calling it "the SC-Cond control" without that caveat would
+  overclaim. It defaults to 0 and no arm uses it.
+
 ## 5. Invariants the implementation must satisfy
 
 Each one names the check that fails when it breaks.
@@ -235,7 +298,18 @@ Each one names the check that fails when it breaks.
 | S8 | TUL pad slots enter at `h* = 0` and `Delta_0 = 0` exactly | `test_pad_slots_enter_at_zero` |
 | S9 | a real optimizer step runs with the now-dead injection params at `grad is None` | `test_optimizer_step_runs_with_dead_injection_params` |
 | S10 | both loop bodies are ported, and it fires on the SHIPPED model | `test_tul_slot_path_uses_scse`, `test_real_model_loop_is_source_free_and_anchored` |
+| S12 | `G(D) = stack(D) - D`: the block residual is NOT applied twice | `test_update_subtracts_the_deviation_from_the_stack_output` |
+| S13 | the first core block receives the BARE deviation, not the anchor | `test_the_core_receives_the_BARE_deviation` |
+| S14 | the mask fires on the TUL path, which is the path the arms run | `test_mask_freezes_a_below_threshold_deviation_on_the_TUL_path` |
+| S15 | `h*` is added in ORIGINAL batch order, under a non-identity depth sort | `test_h_star_is_aligned_with_the_ORIGINAL_batch_order` |
 | S11 | the construction guards raise instead of silently changing meaning | `test_scse_and_stage1_are_mutually_exclusive`, `test_scse_rejects_the_core_gain_governor`, `test_scse_rejects_a_coreless_model`, `test_kappa_zero_builds_no_cond_proj` |
+
+**S12-S15 exist because an independent audit broke the implementation four ways and the
+whole 384-test suite stayed green.** Three of those (core fed the anchor, mask deleted from
+the TUL path, `h*` permuted) were live gaps; the fourth is the recurrence bug that audit
+found. The lesson recorded here: the original S3 tests counted calls to MORPH's LEGACY source
+modules rather than reading the tensor the blocks actually receive, and every other test ran
+at uniform eval depth where the batch permutation is the identity.
 
 **S4 and S4b are separate on purpose.** A sabotage pass on 2026-08-25 disabled the mask
 entirely and S4 still passed: MORPH's core is zero-preserving, so `Delta_1 = 0 + s*G(0) = 0`

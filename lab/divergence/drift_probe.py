@@ -324,7 +324,10 @@ def step_at(root, point: dict, *, zero_inj: bool = False, no_diag: bool = False,
                 s.recurrent_input(h, e), None, None, None, None,
                 ret_state=point["ret_state"], iter_idx=int(point["iter_idx"]),
                 inj_terms=None, source_free=True)
-            return h + s.gate(h) * (s.step_scale * g_out)
+            # THE SAME method the training loop calls — never a second copy of the
+            # arithmetic. The probe reporting a different recurrence from the one the model
+            # runs is the exact failure this campaign has already shipped once.
+            return s.update(h, g_out)
     with dropout_off(root), ctx, torch.no_grad(), \
             torch.autocast("cuda", dtype=torch.bfloat16):
         out, _ = root._apply_core_step(h, e, None, None, None,
