@@ -32,8 +32,14 @@ measured arms: [lab/tul/arms-result.md](lab/tul/arms-result.md).
 default recipe is bit-identical to plain MORPH and the main line's behaviour is unchanged.
 
 **Results of TUL:** Over the same 20k steps the TUL arm beat the dense
-baseline by 0.056 nats of `val/ce_tokens` (slightly outside noise) while running 177 minutes against 278 — a 1.6x
-wall-clock win at slightly better loss. 
+baseline by 0.056 nats of `val/ce_tokens` (slightly more than noise) while running 177 minutes against 278. A 1.6x
+wall-clock win at slightly better loss.
+
+**FLOPs (same runs — `no-tul-a0-acap1` / `tul-a1-acap1`):** ~4× fewer FLOPs per token
+(1793 → ~452 MFLOP forward pass; ~5.84 → ~1.47 GFLOP executed total) and ~3.9× fewer total
+FLOPs over the run, at nearly equal token count. Wall clock only moved 1.6×
+because the step is still launch / fixed-overhead bound. Details:
+[lab/tul/arms-result.md](lab/tul/arms-result.md). Needs further optimization.
 
 **TUL For Dummies:** 
 - After the core loop save the hidden state, lets call z1.
@@ -48,6 +54,25 @@ This is based on a series of experiments run on
 [Quiet-STaR](docs/references/tul-latent-emission/2403.09629.md)
 (paper map: [docs/references.md](docs/references.md) §13).
 
+From experimentation with looping and halting, no halting mechanism gives a real win over no learned halting.
+The likely reason for this is what inspired TUL.
+
+Future lens shows us that the middle layers contain whole semantic thoughts. We can decode many tokens from it successfully.
+Measurements I made with STP showed me that over a span of tokens (a whole thought or sentence) this latent barely moves.
+The final hidden state moves a lot more, as it is decoding the actual token from the thought based on the position in the sequence.
+The text gives state for what comes next in the sentence.
+
+So looping more deeply gives a deeper thought. Every token in the span needs that thought to decode accurately.
+Because previous methods are still doing autoregressive next token prediction, this looping must match per token in the span.
+The difficulty that needs deeper thought lives at the span level and not the token level.
+
+TUL gives a method of exploiting this, while genuinely reducing compute costs.
+
+Testing is happening for a gated version. Initial results are good. It is based on Quiet-STaR.
+The gate can produce a variable k, and k=0 is to loop. The magnitude of k determines how many tokens to decode for the next span.
+Because we are delimitting the spans at easily detected values (punctuation), it is self supervised training for halting.
+
+
 <p align="center">
   <img src="docs/figures/tul_mechanism.png" alt="TUL: shared token/slot sequence into prelude; think (core × T on slots) saves z; freeze z in sequence; decode next span; cut on punctuation" width="720" />
 </p>
@@ -57,7 +82,7 @@ This is based on a series of experiments run on
 
 The default local model is defined in `morph/configs/base.yaml`: `3 + 6xT + 3` blocks, `d_model=768`, `d_ff=2048`, sequence length 4096, Poisson loop depth with mean 6 and max 8, and truncated BPTT over the last four core iterations. This is used for small scale testing and ablation. This fits comfortably on a 5090 at batch 4, and should fit on a 4090 if allocations do not fragment too much. Smaller sequence lengths can increase batch for these scales. 4k is selected to stress test during A/B ablation.
 
-The cloud target is `4 + 8xT + 4` at `d_model=2048`. Roughly 1B parameters.
+The cloud target is to prune from 3b to 1b params.
 
 The active stack is:
 
