@@ -59,6 +59,20 @@ model:
   scse_init_scale: 0.1      # Listing 1 default
   scse_eps: 1.0e-8          # zero-deviation mask threshold
   scse_kappa: 0.0           # 0 → SCSE proper; > 0 builds the SC-Cond control's cond_proj
+  # What the core map RECEIVES each loop iteration.
+  #   deviation — Delta alone. SCSE proper, and what the 2026-08-25 arm ran.
+  #   state     — h* + Delta. The update then accumulates the CHANGE the core made to it.
+  # MORPH's blocks are PRE-NORM, so RMSNorm divides out the size of the core's input and
+  # the output size comes from the weights. Measured on trained weights
+  # (lab/divergence/scale_probe.py on onset-capture/ROLL_step_1750): shrink the input
+  # 1000x and the output moves 31 %, with ||stack(D)||/||D|| going 1.79 -> 1235. A small
+  # Delta therefore returns at the map's own scale after ONE iteration, which is the
+  # measured 230x jump. "state" removes that by construction: the core never sees a small
+  # input. Delta still changes every iteration — it is the only thing that does.
+  scse_input_mode: deviation
+  # Cap on Delta's per-example RMS. 0.0 = off. Bounds how far Delta travels; it does NOT
+  # stop Delta changing.
+  scse_delta_clip: 0.0
   # L1 core-gain governor: cap per-iteration looped-core amplification ‖h_new‖/‖h_a‖ per
   # sample to ratio τ. 0.0 = OFF (bit-identical). Identity when gain≈1 (norm-preserving
   # HC residual); only fires on gain runaway (weight-shared core amplifies T× per depth).

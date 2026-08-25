@@ -168,6 +168,21 @@ class MORPHConfig:
     scse_init_scale: float = 0.1       # Listing 1 default
     scse_eps: float = 1.0e-8           # zero-deviation mask threshold
     scse_kappa: float = 0.0            # 0 → SCSE proper; > 0 builds cond_proj (SC-Cond control)
+    # What the core map RECEIVES each loop iteration.
+    #   "deviation" — Delta alone. SCSE proper, and what the 2026-08-25 arm ran.
+    #   "state"     — h* + Delta, the full-size state; the update then accumulates the
+    #                 CHANGE the core made to it. Arm C.
+    # Why the choice exists: MORPH's blocks are PRE-NORM, so RMSNorm divides out the size
+    # of the core's input and the output size comes from the weights. Measured on trained
+    # weights (lab/divergence/scale_probe.py, onset-capture/ROLL_step_1750): shrinking the
+    # input 1000x moves the output 31 %, and ||stack(D)||/||D|| goes 1.79 -> 1235. So a
+    # deliberately small Delta comes back at the map's own scale after ONE iteration. The
+    # "can only damp" argument in _SCSE.update holds at a normal-size D and fails at a
+    # small one, which is why the deviation grew 230x in the first iteration.
+    scse_input_mode: str = "deviation"
+    # Cap on the deviation's per-example RMS. 0.0 = no cap. Bounds how far Delta travels;
+    # it does NOT stop Delta changing, which is what makes the loop iterate.
+    scse_delta_clip: float = 0.0
 
     # Selective activation checkpointing of the core-loop grad-iterations (throughput knob).
     # The bptt_depth grad-iterations are checkpointed (recomputed in backward) to save activation
@@ -407,8 +422,13 @@ class _SCSE(nn.Module):
     """
 
     def __init__(self, d_model: int, *, step_scale: float, anchor_scale: float,
-                 init_scale: float, eps: float, kappa: float):
+                 init_scale: float, eps: float, kappa: float,
+                 input_mode: str = "deviation", delta_clip: float = 0.0):
         super().__init__()
+        if input_mode not in ("deviation", "state"):
+            raise ValueError(f"scse_input_mode must be 'deviation' or 'state', got {input_mode!r}")
+        self.input_mode = str(input_mode)
+        self.delta_clip = float(delta_clip)
         self.step_scale = float(step_scale)
         self.anchor_scale = float(anchor_scale)
         self.init_scale = float(init_scale)
@@ -444,12 +464,21 @@ class _SCSE(nn.Module):
         return e + a, self.init_scale * self.init_proj(e) - a
 
     def recurrent_input(self, delta: Tensor, h_star: Tensor) -> Tensor:
-        """What ``G_theta`` actually receives. SCSE proper: the deviation ALONE."""
-        if self.cond_proj is None:
-            return delta
-        return delta + self.kappa * self.cond_proj(h_star)
+        """What ``G_theta`` actually receives.
 
-    def update(self, delta: Tensor, stack_out: Tensor) -> Tensor:
+        ``"deviation"`` — the deviation ALONE. SCSE proper.
+        ``"state"`` — ``h* + Delta``, the full-size state (arm C). The core then always sees
+        an input at the scale it was trained on, so the pre-norm cannot erase the deviation;
+        :meth:`update` subtracts the SAME tensor back off, so what accumulates into Delta is
+        the CHANGE the core made. Delta still changes every iteration — it is the only thing
+        that does — so the loop still iterates.
+        """
+        base = (h_star + delta) if self.input_mode == "state" else delta
+        if self.cond_proj is None:
+            return base
+        return base + self.kappa * self.cond_proj(h_star)
+
+    def update(self, delta: Tensor, stack_out: Tensor, rec_in: Tensor | None = None) -> Tensor:
         """``Delta_{t+1} = Delta_t + m * s * G(Delta_t)`` with ``G(D) = stack(D) - D``.
 
         THE SUBTRACTION IS NOT COSMETIC, and getting it wrong was a real bug in the first
@@ -485,7 +514,24 @@ class _SCSE(nn.Module):
         arithmetic in three places, and an audit removed the mask from one of them without a
         single test failing.
         """
-        return delta + self.gate(delta) * (self.step_scale * (stack_out - delta))
+        base = delta if rec_in is None else rec_in
+        d = delta + self.gate(delta) * (self.step_scale * (stack_out - base))
+        return self.clip(d)
+
+    def clip(self, delta: Tensor) -> Tensor:
+        """Cap the deviation's per-EXAMPLE RMS at ``delta_clip``. 0.0 = off, and then this
+        returns the tensor unchanged so the baseline graph is untouched.
+
+        Per example, matching :meth:`gate`'s reduction: a per-position or per-stream cap
+        would be a different method. Only ever SHRINKS (``min(1, cap/rms)``), so it can
+        never inflate a deviation that is already small.
+        """
+        if self.delta_clip <= 0.0:
+            return delta
+        dims = tuple(range(1, delta.dim()))
+        rms = delta.float().pow(2).mean(dim=dims, keepdim=True).sqrt()
+        scale = (self.delta_clip / rms.clamp_min(1e-12)).clamp(max=1.0)
+        return delta * scale.to(delta.dtype)
 
     def gate(self, delta: Tensor) -> Tensor:
         """``m_{b,t} = 1{ ||Delta_t^{(b)}||_F^2 > eps }`` (Eq. 4) — per EXAMPLE.
@@ -858,7 +904,8 @@ class MORPHTransformer(nn.Module):
                 "model.scse_enabled with n_core=0: there is no core loop to reparameterise.")
         self.scse: _SCSE | None = (
             _SCSE(d, step_scale=cfg.scse_step_scale, anchor_scale=cfg.scse_anchor_scale,
-                  init_scale=cfg.scse_init_scale, eps=cfg.scse_eps, kappa=cfg.scse_kappa)
+                  init_scale=cfg.scse_init_scale, eps=cfg.scse_eps, kappa=cfg.scse_kappa,
+                  input_mode=cfg.scse_input_mode, delta_clip=cfg.scse_delta_clip)
             if cfg.scse_enabled else None)
 
         # Master kernel switch → drives the fused-Triton-vs-eager-reference
@@ -1370,10 +1417,14 @@ class MORPHTransformer(nn.Module):
                 # the SC-Cond reference; SCSE proper ignores it). The signature is kept
                 # byte-for-byte so the checkpoint / no_grad / eager call sites below, and
                 # the truncated-BPTT window they implement, are untouched.
+                # `_rec` is bound once and handed to BOTH calls: whatever went INTO the
+                # core is what `update` must subtract back off, or the two disagree the
+                # moment `scse_input_mode` is not "deviation".
+                _rec = _scse.recurrent_input(h_in, e_in)
                 g_out, new_ret = self._apply_core_step(
-                    _scse.recurrent_input(h_in, e_in), None, None, None, None,
+                    _rec, None, None, None, None,
                     ret_state=ret_state, iter_idx=iter_idx, inj_terms=None, source_free=True)
-                return _scse.update(h_in, g_out), new_ret          # Eqs. 3-5
+                return _scse.update(h_in, g_out, _rec), new_ret    # Eqs. 3-5
 
             # ── Active-set shrinking ────────────────────────────────────────────
             # A sample is updated only while iteration t < its Poisson depth, then
@@ -1725,10 +1776,12 @@ class MORPHTransformer(nn.Module):
             # `h_in` IS Delta_t; `e_in` carries h*. Signature unchanged so the three call
             # sites (no_grad / checkpoint / eager) and the truncated-BPTT window they
             # implement are untouched.
+            # `_rec` is bound once and handed to BOTH calls — see the twin in `_tul_core`.
+            _rec = _scse.recurrent_input(h_in, e_in)
             g_out, new_ret = self._apply_core_step(
-                _scse.recurrent_input(h_in, e_in), None, None, None, None,
+                _rec, None, None, None, None,
                 ret_state=ret_state, iter_idx=iter_idx, inj_terms=None, source_free=True)
-            return _scse.update(h_in, g_out), new_ret          # Eqs. 3-5
+            return _scse.update(h_in, g_out, _rec), new_ret    # Eqs. 3-5
 
         g_list: list[Tensor] = []
         # ── Phase-1 onset probe (plan task 1.1) ───────────────────────────────
