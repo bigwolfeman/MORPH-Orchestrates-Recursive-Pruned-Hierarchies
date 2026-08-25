@@ -21,11 +21,15 @@ affected.
 
 ## Status right now
 
+Updated 2026-08-25 18:30. Nothing is running; the GPU is idle.
+
 | | |
 |---|---|
-| Nothing running | `g6-ctrl` took over at step 650; `g6-fine` at 975 and aborted 19:01. Finer spans DELAY 1.5x, do not cure |
-| Next | A1 seeds run past 3000 steps, scoring `b_t` against whether each seed turns around. H20 is arm-linked on trained models but the link to FAILURE is untested, because neither Stage 0 arm diverged (A1 `C_first/P` 0.44-0.58 vs A0's 0.17-0.19) — see H19 and the untested [iteration-0 mediation](../../docs/experiments/planned/2026-08-23-tul-iteration0-mediation.md) |
-| Blocked on a decision | is TUL on the near path? If not, stop after `g6-fine` and ship the mitigations |
+| Cures found | **none, 22 hypotheses in.** H5 `per_slot_embed` is still the only lever: doubles time-to-failure, cuts harm 78 %, 0.46-0.78 nats better CE on both seeds — and still fails seed 0 at step 2225 |
+| Closed this session | H18 NOT SUPPORTED (attention is diffuse, not a sink). H24 defect CONFIRMED but REFUTED as a cure. H23 REFUTED. The full SCSE method's refuter fired — it stalls at step ~250 |
+| **The blocking problem** | **This machine has no regime where the CONTROL diverges 2 of 2, so every binary arm is unreadable.** The RCA's 2-of-2 aborts (3240, 4540) were at batch 14; batch 12 gives 1 of 2. Three arm designs have been spent on this. Next is a standalone pre-registered CALIBRATION over batch size and `alpha_cap`, not another arm |
+| Still open, untouched | [iteration-0 mediation](../../docs/experiments/planned/2026-08-23-tul-iteration0-mediation.md) — arms written, never run. It is the only pre-registered causal test of the one arm-specific forward asymmetry left (lead 4 below) |
+| Blocked on a decision | **is TUL on the near path?** If not, stop and ship the mitigations. TUL is already OFF by default (`tul.activate_at: never`), so nothing shipping is exposed |
 
 ## Hypothesis ledger
 
