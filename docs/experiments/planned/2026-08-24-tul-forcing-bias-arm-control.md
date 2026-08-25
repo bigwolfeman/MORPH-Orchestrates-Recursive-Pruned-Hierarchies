@@ -33,14 +33,23 @@ Two arms, `tul_a0` and `tul_a1`, from scratch, seed 0, 1900 steps, batch 6,
 Runner: `../../lab/divergence/stage0_spark.sh`. Probe:
 `../../lab/divergence/drift_probe.py --ckpt-dir <arm>`.
 
-**Both arms run in the same build, on the DGX Spark** (torch 2.13.0+cu130, aarch64, GB10
-sm_121). `checkpoints/morph/onset-capture/README.md` records that two torch builds gave
-different trajectories from the same seed, so pairing a Spark A0 ladder against the 5090 A1
-ladder would confound the arm with the build. The existing 5090 A1 ladder is therefore NOT the
-control for this experiment; the Spark A1 arm is.
+**Both arms run in the same build.** `checkpoints/morph/onset-capture/README.md` records that
+two torch builds gave different trajectories from the same seed, so pairing arms across
+machines would confound the arm with the build.
 
-Concurrent rather than sequential: measured GPU utilisation is 25 % at 0.12 sps, so the
-workload is launch-bound and the two processes interleave on an otherwise idle GPU.
+**Method amendment, 2026-08-24, before either arm reached step 200.** The arms were launched on
+the DGX Spark because the 5090 was in use. The 5090 was freed, so both arms were killed at step
+~0 and relaunched there. Reason: the Spark measured 0.12 sps against the 5090's 2.12 sps, an 18x
+penalty from launch-bound work on the ARM cores, turning a 30-minute panel into a 5-hour one.
+The amendment strictly improves the design — the 5090 is the SAME build that produced the
+existing `onset-capture` A1 ladder, so the new arms are comparable both to each other AND to
+that ladder, which the Spark run could not have been. No Spark checkpoint was written and no
+Spark number was read, so nothing was seen before this change. Predictions are untouched.
+
+Sequential rather than concurrent on the 5090. Concurrency was justified on the Spark by 25 %
+GPU utilisation (launch-bound, so the arms interleave); the 5090 does not have that headroom,
+and two training processes plus a loaded GPU is the configuration that trips this workstation's
+UPS.
 
 **Validity gate, checked before any comparison.** `R_0` (eq. 9) must equal 1.000 at every
 checkpoint of both arms. With MORPH's anchor `h* = h_0 = e`, the first realised update IS the
