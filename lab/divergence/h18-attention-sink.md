@@ -3,7 +3,7 @@
 Working document. It is the plan, the running log, and the place the numbers land.
 Updated as each phase closes. The ledger entry it resolves is `takeover-campaign.md` H18.
 
-Status: **Phase 1 — building the probe** (Phase 0 CLOSED, all four checks held)
+Status: **CLOSED 2026-08-25 — H18 NOT SUPPORTED.** The follow-on lead is H24; see the bottom.
 Opened 2026-08-25.
 
 ## Why this hypothesis
@@ -157,28 +157,83 @@ cannot be fitted to the data.
 
 Predictions are written in that file. Do not restate them here.
 
-## Phase 3 — run and score
+## Phase 3 — run and score — DONE 2026-08-25
 
-11 rungs x 6 core blocks x 8 loop iterations, forward-only, `no_grad`, batch 6.
-Low GPU load, so no UPS risk.
+    PYTHONPATH=$PWD python lab/divergence/attn_sink_probe.py \
+        --ckpt-dir checkpoints/morph/onset-capture --out attn_sink.json
+    python lab/divergence/score_h18.py --json attn_sink.json
 
-## Phase 4 — intervention, ONLY if H18 holds
+Under 60 s for all 11 rungs x 2 batches. Validity gate PASSED. **1 of 5 predictions
+held**, and the one that held (P1) does not discriminate, because the healthy rungs
+concentrate at 4 of 6 blocks too.
 
-Not chosen yet; the geometry decides it. Candidates: give the core a real global branch on
-the slot path (`hca_compress_ratio` <= 16), or a sink-breaking mask. ~5 h per arm and it
-needs PAIRED SEEDS — a single run comparison is unreadable here (MORPH runs decorrelate in
-11 steps at a fixed seed, 6.5 % median spread).
+Full numbers and the verdict:
+[`docs/experiments/failures/2026-08-25-h18-positional-attention-sink.md`](../../docs/experiments/failures/2026-08-25-h18-positional-attention-sink.md).
 
-## Declared not-verified
+The short version: **the core's forward attention is DIFFUSE.** Window participation ratio
+0.59-0.68 of 57 valid slots; the top key holds 6.4-8.4 % of the mass; `argmax` is slot 0
+or 1 at every rung, which is the causal+XSA artifact Phase 0 predicted, and the rows of a
+batch agree on it only 0.47-0.81 of the time. A sink is `pr -> 1` and `top1 -> 1`. This is
+not within an order of magnitude of one.
+
+The one real signal points the right way and is about half the pre-registered size: the
+loop compresses attention entropy by -2 % at rung 1625 and by -13 % at 1800 and 1850, then
+recovers to -5 % at 1866 — the same shape and the same non-monotone tail as H4's state
+rank. A weak correlate inside a diffuse regime.
+
+The pre-registered refuter did NOT fire (44 of 48 cells within 10 %, it needed 48), so the
+honest verdict is NOT SUPPORTED rather than REFUTED. The campaign's own next-step table
+said "if attention is diffuse, the last cheap forward hypothesis dies". It is diffuse.
+
+## What this cost and what it bought
+
+About three hours, no training, ~60 s of GPU. It killed the campaign's top open lead and
+it turned up H24 on the way, which is a better lead than the one it killed.
+
+## The follow-on: H24
+
+**The HCA compressed branch is identically zero on the slot path, and that is a measured
+architectural difference between the SICK arm and the HEALTHY one.**
+
+A1 loops the core over 64 slots; `hca_compress_ratio: 256` gives `n_blocks = 0`, so core
+blocks 1, 3 and 5 output exactly 0.0000 from their compressed branch while the gate still
+spends `g_comp ~ 0.50` on it. A0 loops over 1152 token positions; the same weights give
+`n_blocks = 4` and `|out_comp| ~ 1030`. A1 diverges. A0 does not.
+
+Nothing here shows the dead branch CAUSES the takeover. It is a hypothesis this run
+generated, not one it tested.
+
+Two ways to test it, cheapest first:
+
+1. **A no-training screen.** `GatedPoolCompressor`'s parameters are per-POSITION linears
+   reshaped to `[B, n_blocks, m, c]`, so `m` is not in any weight shape. The SAME ladder
+   checkpoint can be run with `hca_compress_ratio: 16` and the branch comes alive with
+   trained weights. Measure whether the slot-state rank ratio H4 tracks moves back above 1
+   at the sick rungs. ~20 min, forward only. Pre-register it like anything else.
+2. **The arm.** `hca_compress_ratio: 16` from step 0, paired seeds against a control.
+   ~5 h per arm. A single run comparison is unreadable here.
+
+Second Phase 0 finding, separate and smaller: **CSA's sparse selection never fires on the
+short schedule.** `top_k: 256` exceeds `n_blocks` at `seq_len: 1024` (144 blocks), so
+`tk == n_blocks` and CSA runs as dense pooled attention. At the deploy `seq_len: 4096`
+there are 512 blocks and selection does fire, so this is a short-schedule artifact and the
+deploy recipe is unaffected. It still means every TUL arm measured to date ran a CSA that
+was never sparse.
+
+## Declared not verified
 
 - fused vs eager window paths are not compared; the probe runs eager, matching how the
   ladder was produced (`model.use_kernels=false`)
-- the ladder is seed 0 only, so a sink measured here is not shown to generalize
+- the ladder is seed 0 only, so nothing here is shown to generalize
+- H24 is untested
 
 ## Log
 
 - 2026-08-25 — opened. Phase 0 pending. Geometry table above is READ, not measured.
 - 2026-08-25 — Phase 0 RUN and CLOSED. P0.1-P0.4 all held. Two defects found that were
   not part of H18: the HCA compressed branch is identically zero on the slot path, and
-  CSA's sparse selection never fires anywhere in this config (`top_k` 256 >= n_blocks).
-  Both get their own Agent Note; neither is yet shown to CAUSE the divergence.
+  CSA's sparse selection never fires on the short schedule.
+- 2026-08-25 — probe, pre-registration and scorer committed (21b1753) BEFORE any ladder
+  run. Smoke-tested on the random-init model only.
+- 2026-08-25 — ladder run and scored. 1/5 held, refuter did not fire, H18 NOT SUPPORTED.
+  Ledger updated: H18 closed, H24 opened as the new top lead.
