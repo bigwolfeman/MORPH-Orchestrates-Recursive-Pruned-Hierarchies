@@ -138,7 +138,8 @@ tile-only mask keeps any partially alive 128×128 whole (dead tiles ride as zero
 numerically exact, worse compression; code warns.
 
 **Optimizer rebuild** is required after carve: the dense `weight` is gone;
-`mortar_data` is the new trainable.
+`mortar_data` is the new trainable. This causes a brief loss spike that settles out.
+It is like resuming a checkpoint with out optimizer state.
 
 ---
 

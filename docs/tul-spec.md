@@ -382,6 +382,62 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
   by tokens processed and width) is a knob to add if the core under-trains
   on 9–19× fewer positions; log per-group update norms.
 
+### 5.1 Credit assignment (what reaches the backbone)
+
+The looped core only ever sees slot states. Almost all of a span's CE still
+reaches those states — through coda attention, not through a per-token core
+pass. Diagram of the two routes (labels match §3.1 / §5). Block counts and
+`d` are illustrative; recipe depths live in config.
+
+```
+# ---------------- FORWARD ----------------
+e = embed(tokens)                                  # [L_total, d]
+for i, span in enumerate(spans):
+    e[slot_pos[i]] = E_slot + mean(e[j] for j in span)   # POOL. this is the 1/sqrt(L) law
+
+x = prelude(e)                    # ALL positions. slots DO see real tokens here.
+
+h = gather(input_norm(x), slot_positions)          # slots only (e.g. 64 of 1152)
+for t in range(T_i):                               # per-slot Poisson depth
+    h = core(h + inj)                              # <<< THE BACKBONE. weight-shared.
+                                                   #     tokens never enter here.
+
+x_coda = input_norm(x)                             # tokens SKIP the core (n_core == 0 path)
+for i in slots:
+    for k in range(prefix_k):
+        x_coda[slot_pos[i] + k] = h[i] @ W_prefix[k]
+
+y      = coda(x_coda)             # ALL positions. tokens ATTEND slots.
+logits = lm_head(y)
+
+# labels and weights, from §3.1 / §5
+#   slot i, k=0            : NO LABEL          (plan only)
+#   slot i, k=1            : t_1(span i+1)     weight 0.5
+#   last token of span i   : t_1(span i+1)     weight 0.5   (plain-LM counterfactual)
+#   every other token      : its next token    weight 1.0
+loss = weighted_CE(logits, labels, weights)
+
+# ---------------- BACKWARD: what actually reaches the backbone ----------------
+g_h[i] = 0
+
+# ROUTE A — the slot's own label. ONE token of direct supervision.
+g_h[i] += d(loss_at[slot_pos[i] + 1]) / d(h[i])          # weight 0.5  ->  ~few % of the span
+
+# ROUTE B — every token whose coda attention read this slot. ~most of the span.
+for r in token_positions:
+    if coda_attn[r, slot_pos[i]] > 0:
+        g_h[i] += d(loss_at[r]) / d(h[i])   # <<< SUMMED. not averaged, not arbitrated,
+                                            #     and h[i] is ONE point in R^d with no
+                                            #     way to say "70% this, 30% that".
+
+# then backward through the weight-shared loop
+g = g_h
+for t in reversed(range(min(T_i, bptt_depth))):          # truncated BPTT
+    g = J_core.T @ g                                     # the SAME J.T, repeatedly
+
+grad_theta_core = sum over slots, iterations of outer(g, h)
+```
+
 ## 6. Generation (eager, v1)
 
 ```
