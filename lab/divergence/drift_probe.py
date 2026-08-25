@@ -354,6 +354,58 @@ def capture(model, x, y, layout, seed: int, token_path: bool,
     return [dict(p) for p in pts]
 
 
+def forcing_bias(root, points: list[dict]) -> list[dict]:
+    """SCSE's `b_t(e) = T_t(0; e)` — the shared transition's response AT the anchor.
+
+    arXiv:2607.27656 eq. (1) defines the zero-deviation forcing bias as the one-step map
+    evaluated at zero anchor-relative deviation. `drift()` does NOT measure this: it
+    measures `f(h_t) - h_t` at the state the run actually reached, which is `T_t(Delta_t)`
+    for a nonzero deviation. The two coincide only if the trajectory sits at the anchor,
+    which it does not after iteration 0. The first verdict on this hypothesis was read off
+    `drift()` and therefore never tested the paper's quantity.
+
+    MORPH's anchor is `h_0 = input_norm(x)`: a reference state computed ONCE from the input
+    before the loop and unchanged by it, which is exactly the paper's `h*(e)`. So
+
+        b_t = f_theta(h_0; e, inj_t, ret_t, t) - h_0,
+
+    the core step at loop index `t` fed the anchor instead of the live state. Reported
+    relative to the anchor's own norm so it is comparable across rungs, and on the fixed
+    common position set so the trend across `t` is not a trend across sample sizes.
+
+    `b_t = 0` at every `t` is SCSE's design objective. A `b_t` that is large and does not
+    shrink with `t` is the condition SCSE exists to remove.
+    """
+    anchor = points[0]["h"]
+    out = []
+    common = None
+    for p in points:
+        a = p["active"]
+        if common is None:
+            common = a.clone()
+        else:
+            n = min(common.shape[0], a.shape[0])
+            common = common[:n] & a[:n]
+    for p in points:
+        nrow = min(anchor.shape[0], p["inj"].shape[1], common.shape[0])
+        cm = common[:nrow]
+        if not bool(cm.any()):
+            continue
+        at_anchor = dict(p)
+        at_anchor["h"] = anchor[:nrow]
+        at_anchor["e"] = p["e"][:nrow]
+        at_anchor["inj"] = p["inj"][:, :nrow]
+        if p["ret_state"] is not None:
+            at_anchor["ret_state"] = p["ret_state"][:nrow]
+        b = select(step_at(root, at_anchor) - anchor[:nrow], cm)
+        h0 = select(anchor[:nrow], cm)
+        c, rms = concentration(b)
+        out.append({"iter": int(p["iter_idx"]),
+                    "b_rel": rms / max(float(h0.pow(2).sum(-1).mean().sqrt()), 1e-30),
+                    "b_C": c, "n_pos": int(cm.sum())})
+    return out
+
+
 def drift(root, points: list[dict], plain: bool = False, once_only: bool = False) -> dict:
     """Per-iteration displacement geometry, plus the injection ablations.
 
@@ -580,7 +632,7 @@ def main() -> None:
         gate = trajectory_gate(root, pts, a.gate_tol)
         d = drift(root, pts)
         d.update({"ckpt": os.path.basename(path), "step": step, "gate_rel_err": gate,
-                  "token_path": a.token_path})
+                  "token_path": a.token_path, "forcing_bias": forcing_bias(root, pts)})
         if a.once_only:
             once = capture(model, x, y, layout, a.seed, a.token_path, once_only=True)
             # Gate: iteration 0 is BEFORE the injection has fired differently, so the two
@@ -607,6 +659,11 @@ def main() -> None:
         eh = " ".join(f"{r['eff_pos_h']:7.1f}" for r in pi)
         print(f"{'':<22} effpos_d/iter= {es}", flush=True)
         print(f"{'':<22} effpos_h/iter= {eh}", flush=True)
+        fb = d["forcing_bias"]
+        print(f"{'':<22} b_t/|h*|     = " +
+              " ".join(f"{r['b_rel']:7.3f}" for r in fb), flush=True)
+        print(f"{'':<22} b_t conc     = " +
+              " ".join(f"{r['b_C']:7.1f}" for r in fb), flush=True)
         print(f"{'':<22} rank_h/iter  = " +
               " ".join(f"{r['rank_h']:7.2f}" for r in pi), flush=True)
         print(f"{'':<22} cos_h/iter   = " +

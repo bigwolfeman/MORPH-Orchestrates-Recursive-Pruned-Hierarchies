@@ -261,6 +261,46 @@ embedding-to-prelude path, UPSTREAM of the core.
 And diversity rises MOST at the rung where the model is worst: TAKEOVER turns 2.41 into 9.18,
 the largest gain on the ladder. State diversity is therefore not the failing quantity either.
 
+## Correction: the paper's own quantity was never measured, and it is large
+
+`b_t(e) := T_t(0; e)` — eq. (1) — is the one-step map evaluated AT the anchor. Every number
+above measures `f(h_t) - h_t` at the REALISED state, which is `T_t(Delta_t)` for a large
+non-zero deviation. They are different quantities. The verdict above tested a derived
+consequence of a large `b_t` (coherent accumulation along the trajectory) and never tested
+`b_t` itself.
+
+MORPH has the anchor the paper describes: `h_0 = input_norm(x)`, a reference state computed
+ONCE from the input before the loop and unchanged by it. `forcing_bias()` feeds it to the core
+step at each loop index and reports `||b_t|| / ||h*||` on the fixed common position set.
+
+| rung | 1625 | 1650 | 1675 | 1700 | 1725 | 1750 | 1775 | 1800 | 1825 | 1850 | 1866 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| slot anchor (arm A1) | 1.809 | 1.799 | 1.884 | 1.933 | 2.011 | 2.217 | 2.189 | 2.265 | 2.195 | **2.471** | 2.195 |
+| token anchor, same weights | 1.448 | 1.461 | 1.483 | 1.533 | 1.539 | 1.611 | 1.676 | 1.707 | 1.695 | 1.720 | 1.723 |
+| ratio | 1.25 | 1.23 | 1.27 | 1.26 | 1.31 | 1.38 | 1.31 | 1.33 | 1.30 | **1.44** | 1.27 |
+
+Three readings, in decreasing strength.
+
+1. **The forcing bias is large.** The shared transition moves the anchor by 1.8 to 2.5 times
+   the anchor's own norm. SCSE's design objective is that this be zero.
+2. **It grows with the onset.** +37 % at the slot anchor from rung 1625 to 1850, against +19 %
+   at the token anchor on the same weights.
+3. **It is larger at the slot anchor than at the token anchor, at all 11 rungs, and the gap
+   widens.** This is the first quantity in the campaign that separates the two position sets
+   instead of matching across them, which is what killed `rel_last` and `C_last` as leads.
+
+`b_t` is flat in `t` to four significant figures. That is expected rather than a finding:
+`T_t` depends on `t` only through `inj_terms` (loop-invariant) and the ReMoE router (inactive
+before `route_start`), so the core map is genuinely the same map at every iteration. It is a
+sanity check the probe passed.
+
+**What this comparison is NOT.** Both rows use the SAME arm-A1 checkpoints; the second row runs
+those weights on the token code path. It controls the operator and varies the position set. It
+is NOT sick weights against healthy weights. The only A0-TRAINED checkpoints in the tree are at
+step 130, and `b_t` rises with training step, so comparing them to a 1625-1866 ladder would
+measure the step count rather than the arm. A step-matched healthy control does not exist and
+would need an A0 run through the onset region with `b_t` logged.
+
 ## Updated hypothesis
 
 The zero-deviation forcing bias is a correct description of MORPH's FORM and a wrong
@@ -271,6 +311,13 @@ Two of the campaign's working assumptions died with it. The loop does not destro
 diversity — it raises it, most of all at the takeover rung — so "restore diversity in the loop"
 was never a lever, which is consistent with every diversity-targeting arm having failed. And the
 per-step injection is not what holds the states apart; removing it holds them further apart.
+
+The verdict on H19 as pre-registered stands: the harmful regime the paper names — coherent
+accumulation of the forcing response over depth — is absent, and the shared component decays
+about 100x along the trajectory. But the paper's taxonomy allows a large `b_t` to be contracted
+or cancelled rather than accumulated, and that is where MORPH sits. So SCSE names a real, large,
+growing defect in this loop, AND the one mechanism by which it is supposed to do harm is not
+running. Both are true, and the earlier writeup collapsed them into a rejection.
 
 What survives as arm-specific is the FIRST core iteration: A1's first-step displacement is ~3x
 more shared than A0's (`C_first / P` 0.44-0.58 against 0.17-0.19), and the states enter the loop
