@@ -1,6 +1,6 @@
 # Experiment: H24 screen — does reviving the HCA compressed branch change the core's state geometry?
 
-Status: planned
+Status: failure
 
 Ledger: `lab/divergence/takeover-campaign.md` H24.
 Agent Note: [`.agents/notes/proposed/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md`](../../../.agents/notes/proposed/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md)
@@ -108,3 +108,103 @@ planned experiment fixes the gate. "The numbers were unclear" is not an outcome.
 - seed 0 only, one batch
 - the HCA compressor weights also serve the TOKEN path at `m = 256`; this screen changes
   `m` on BOTH paths, so it is not the same single-variable change the arm would be
+
+## Results — run 2026-08-25
+
+    PYTHONPATH=$PWD python lab/divergence/h24_screen.py \
+        --ckpt-dir checkpoints/morph/onset-capture --control --out h24_ctrl2.json
+    PYTHONPATH=$PWD python lab/divergence/h24_screen.py \
+        --ckpt-dir checkpoints/morph/onset-capture --m 16 --out h24_revive.json
+
+### Validity gate — PASSED, and cleanly
+
+V1, the control against the published H4 unit-rank ratios (tolerance +/- 0.15):
+
+| step | published | measured | \|diff\| |
+|---:|---:|---:|---:|
+| 1625 | 1.41 | 1.408 | 0.002 |
+| 1700 | 1.28 | 1.277 | 0.003 |
+| 1750 | 1.47 | 1.469 | 0.001 |
+| 1800 | 0.92 | 0.923 | 0.003 |
+| 1850 | 0.71 | 0.714 | 0.004 |
+| 1866 | 1.06 | 1.059 | 0.001 |
+
+V2, iteration-0 unit rank between the arms: max difference **0.000e+00** across all 11
+rungs. The surgery is exactly scoped to the core; nothing upstream of the loop moved.
+
+### The panel
+
+`ratio = eff_rank_unit(last iteration) / eff_rank_unit(iteration 0)`. Above 1 the loop
+DIVERSIFIES the slot states.
+
+| step | class | control | revived | delta | crosses 1 |
+|---:|---|---:|---:|---:|---|
+| 1625 | HEALTHY | 1.408 | 1.498 | +0.090 | — |
+| 1650 | HEALTHY | 1.320 | 1.425 | +0.106 | — |
+| 1675 | HEALTHY | 1.425 | 1.514 | +0.089 | — |
+| 1700 | HEALTHY | 1.277 | 1.445 | +0.168 | — |
+| 1725 | HEALTHY | 1.326 | 1.350 | +0.023 | — |
+| 1750 | HEALTHY | 1.469 | 1.584 | +0.115 | — |
+| 1775 | HEALTHY | 1.009 | 1.075 | +0.066 | — |
+| 1800 | SICK | 0.923 | **1.146** | +0.224 | **yes** |
+| 1825 | ambig | 0.954 | **1.144** | +0.189 | **yes** |
+| 1850 | SICK | 0.714 | 0.780 | +0.066 | no |
+| 1866 | SICK | 1.059 | 1.054 | −0.006 | — |
+
+| prediction | outcome |
+|---|---|
+| S1 ratio rises at ALL three sick rungs | **FAILED** — 1800 +0.224, 1850 +0.066, 1866 **−0.006** |
+| S2 rise at 1850 >= +0.15 | **FAILED** — +0.066 |
+| S3 revived ratio at 1850 above 1.0 | **FAILED** — 0.780 |
+| S4 no healthy rung falls by more than 0.15 | **HELD** — the smallest healthy delta is +0.023, every healthy rung rose |
+| REFUTER: \|delta\| < 0.05 at EVERY rung | **did NOT fire** — 1800 alone is +0.224 |
+
+**1 of 4 held.**
+
+### The number that decides it
+
+    mean delta over HEALTHY rungs = +0.0939
+    mean delta over SICK    rungs = +0.0947
+
+**Identical.** Reviving the branch lifts the loop's rank ratio by about +0.09 EVERYWHERE.
+It does not act selectively on the sick rungs.
+
+The two sign crossings, at 1800 and 1825, are that uniform shift crossing a threshold
+those two rungs happen to sit near (0.923 and 0.954). They are not a repair; a rung at
+0.714 gets the same lift and stays at 0.780.
+
+## Verdict
+
+**The screen does not support H24's mechanism.** The dead HCA branch is real and it does
+change the forward map — a +0.09 lift in the loop's rank ratio is well outside the
+measurement noise, and the validity gate reproduces the published control to 0.004 — but
+the change is a general capacity effect, not a targeted repair of the sick rungs, and it
+does not rescue the deepest one.
+
+Two of the three substantive predictions keyed on rung 1850, called "the cleanest sick
+rung" in the plan because it is where the campaign's two rank measures agreed. It turned
+out to be the hardest one. That is a calibration error in the predictions, recorded here
+rather than corrected away.
+
+## Updated hypothesis
+
+The A1/A0 asymmetry is NOT explained by the dead branch acting through slot-state rank.
+The branch is still a defect worth fixing on its own terms — three of six core blocks
+running at half attention output is not a design choice — but as a divergence cure it now
+looks like the class H5 `per_slot_embed` belongs to: a uniform lift in state diversity that
+buys time and does not cure.
+
+That is not a reason to skip the arm. H5, the best lever this campaign has, works exactly
+that way: it doubled time-to-failure, cut harm 78 %, and improved validation CE on both
+seeds without curing seed 0. A +0.09 uniform lift is the same shape of intervention, it is
+a one-line config change, and it fixes a real bug at the same time. It IS a reason to
+expect a lever and not a cure, and to size the arm accordingly.
+
+## Declared not verified
+
+- fixed weights trained WITH the dead branch. This screens the forward map, not training.
+- `B_a` was SLICED from 256 rows to 16 (Method Amendment 1). A model trained at `m = 16`
+  would learn a 16-wide gate instead of reusing the first 16 rows of a 256-wide one, so the
+  screen understates what a trained arm could do. It does not overstate it.
+- seed 0, one batch, one `m` value. `m = 8` and `m = 32` are untried.
+- nothing here measures training loss, so nothing here says the arm will or will not help.

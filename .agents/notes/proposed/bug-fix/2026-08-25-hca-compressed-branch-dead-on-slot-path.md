@@ -111,3 +111,18 @@ after), so the change adds no parameters and existing checkpoints stay loadable.
   is held at its current ratio.
 - One run is unreadable in this regime: MORPH runs decorrelate in 11 steps at a fixed seed
   with a 6.5 % median spread. Paired seeds are mandatory.
+
+## Update 2026-08-25 — the no-training screen
+
+[`docs/experiments/failures/2026-08-25-h24-hca-branch-screen.md`](../../../../docs/experiments/failures/2026-08-25-h24-hca-branch-screen.md)
+
+Reviving the branch at fixed weights (core blocks only, `B_a` sliced to 16 rows) lifts the
+loop's slot-state rank ratio by **+0.0939 on healthy rungs and +0.0947 on sick ones**. The
+validity gate reproduced the published H4 ratios to 0.004 and iteration 0 was identical to
+0.000e+00 between the arms, so the measurement is sound and the lift is real.
+
+It is a UNIFORM capacity effect, not a targeted repair. That does not change the case for
+fixing the defect — three of six core blocks at half attention output is not a design
+choice — but it lowers what the fix should be expected to do for the TUL divergence, from
+"cure" to "lever of the H5 class". The Acceptance criteria above are unchanged; the Risks
+section's first bullet is now MEASURED rather than anticipated.
