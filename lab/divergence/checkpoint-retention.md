@@ -106,3 +106,25 @@ Large `.pt`/`.safetensors` outside this project, for the record:
 
 None of these were touched. They are other projects, and pruning them needs their own
 results-cited keep-set the way the DB testbed got one.
+
+## Incident during this cleanup: "no checkpoints yet" is not "dead"
+
+While removing the 74 leftover run dirs that held only a `wandb_id.txt`, the rule used
+was "no `.pt` file inside". That rule matched **`h24-hca16-s1`, the run that was
+executing at that moment** — it was at step 800 with `ckpt_every=1000`, so it had not
+written its first checkpoint yet. The directory was deleted.
+
+Consequences and what was done:
+
+- The directory itself. `train.py` calls `os.makedirs(ckpt_dir, exist_ok=True)` once at
+  startup, so the missing directory would have raised `FileNotFoundError` inside
+  `torch.save` at step 1000 and killed the run. Recreated immediately.
+- The `wandb_id.txt` sidecar. Read only at startup for resume, so the live run was
+  unaffected, but a later resume would have started a new wandb run. Recovered from the
+  run's own log (`runs/w9rgy73e`) and rewritten byte-exact: 8 bytes, no trailing
+  newline, verified with `od -c` against a sibling.
+
+The lesson is the rule, not the recovery. **Emptiness is not a liveness test.** A dir
+with no `.pt` is either a dead run or a young one, and the two are indistinguishable
+from the filesystem alone. Check the process list first, and exclude the run tags a
+live runner script is going to use — not just the ones it has already used.
