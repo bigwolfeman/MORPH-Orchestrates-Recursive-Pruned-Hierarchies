@@ -94,6 +94,28 @@ def peak_rise(curve: list[tuple[int, float]]) -> float:
     return best
 
 
+def recovery_profile(curve: list[tuple[int, float]]) -> tuple[float, int]:
+    """(largest rise that LATER recovered to a new minimum, evals since the last new minimum).
+
+    STRICTLY DESCRIPTIVE. Added on 2026-08-24 AFTER seeing seeds 0 and 1, so it is barred
+    from every verdict in this file and is printed only to make one thing visible: a rise
+    that recovers and a rise that does not are different phenomena, and the pre-registered
+    0.1-nat threshold cannot tell them apart. Seed 1 rose 0.168 nats above its running
+    minimum and then set a new minimum, which puts the pre-registered threshold BELOW this
+    metric's own noise floor. That is a defect in the pre-registration and it is owned in
+    the writeup, not repaired here by moving the threshold after the fact.
+    """
+    lo = math.inf
+    largest_recovered = 0.0
+    for i, (_, v) in enumerate(curve):
+        if v > lo and any(v2 < lo for _, v2 in curve[i + 1:]):
+            largest_recovered = max(largest_recovered, v - lo)
+        lo = min(lo, v)
+    best = min(v for _, v in curve)
+    last_min_i = max(i for i, (_, v) in enumerate(curve) if v == best)
+    return largest_recovered, len(curve) - 1 - last_min_i
+
+
 def min_step(curve: list[tuple[int, float]]) -> int:
     return min(curve, key=lambda sv: sv[1])[0]
 
@@ -154,7 +176,10 @@ def main() -> None:
     # ---- turnaround table -------------------------------------------------
     print("VALIDATION CURVES")
     print(f"{'seed':>5} {'min CE':>8} {'@step':>6} {'last CE':>8} {'@step':>6} "
-          f"{'rise(scored)':>13} {'peak_rise':>10} {'turned?':>8}")
+          f"{'rise(scored)':>13} {'peak_rise':>10} {'turned?':>8} | {'recov_rise':>10} "
+          f"{'evals_since_min':>15}")
+    print(f"{'':>5} {'':>8} {'':>6} {'':>8} {'':>6} {'<-- these decide -->':>13} {'':>10} "
+          f"{'':>8} | {'<-- descriptive only, no verdict -->':>10}")
     turned, not_turned, tstep = [], [], {}
     for sd in seeds:
         c = curves[sd]
@@ -165,9 +190,24 @@ def main() -> None:
         t = r >= TURNAROUND_NATS
         (turned if t else not_turned).append(sd)
         tstep[sd] = ms if t else math.inf
+        rr, since = recovery_profile(c)
         print(f"{sd:>5} {lo:>8.4f} {ms:>6} {c[-1][1]:>8.4f} {c[-1][0]:>6} "
-              f"{r:>13.3f} {pr:>10.3f} {'YES' if t else 'no':>8}")
+              f"{r:>13.3f} {pr:>10.3f} {'YES' if t else 'no':>8} | {rr:>10.3f} {since:>15}")
     print(f"\n  turned around: {turned or '(none)'}   held: {not_turned or '(none)'}")
+    floor = max(recovery_profile(curves[sd])[0] for sd in seeds)
+    if floor >= TURNAROUND_NATS:
+        marginal = [sd for sd in turned
+                    if turnaround(curves[sd]) < floor]
+        print(f"\n  !! THRESHOLD BELOW NOISE FLOOR. Some seed rose {floor:.3f} nats above its "
+              f"running minimum and then set a NEW minimum, so a rise of that size is noise in "
+              f"this metric. The pre-registered threshold is {TURNAROUND_NATS:.2f}.")
+        if marginal:
+            print(f"     Seed(s) {marginal} are scored as turned around on a rise SMALLER than "
+                  f"that noise floor. The pre-registered verdict stands as written and is "
+                  f"reported as such, but it does not distinguish those seeds from noise. This "
+                  f"is a defect in the pre-registration, and the next planned run must set the "
+                  f"threshold from a measured noise floor and require N consecutive evals with "
+                  f"no new minimum.")
     disagree = [sd for sd in seeds
                 if (turnaround(curves[sd]) >= TURNAROUND_NATS)
                 != (peak_rise(curves[sd]) >= TURNAROUND_NATS)]

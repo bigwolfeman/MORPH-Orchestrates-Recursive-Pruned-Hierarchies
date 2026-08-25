@@ -65,6 +65,41 @@ checkpoint, so the amendment cannot have been fitted to the quantity under test.
 version of this experiment wants a genuinely pre-turnaround rung it needs `ckpt_every` at 100
 or less over the first few hundred steps, which is a different run.
 
+## Method amendment 2, 2026-08-24, recorded BEFORE any `b_t` was measured on seeds 1-3
+
+Seeds 0 and 1 have finished. Seed 1's validation CE rose above its running minimum four times
+while still trending down, and three of those rises RECOVERED to a new minimum afterwards:
+
+| step | rise above running min | outcome |
+|---|---|---|
+| 1500 | +0.057 | recovered |
+| 2000 | +0.129 | recovered |
+| 2500 | +0.005 | recovered |
+| 2750 | **+0.168** | recovered |
+| 3250 | +0.121 | last eval, no chance to recover |
+
+**Consequence: P1's threshold is below this metric's noise floor.** A rise of 0.168 nats is
+demonstrably noise here, because the run set a new minimum after it. P1 calls anything at or
+above 0.100 nats a turnaround. Seed 1 therefore scores as "turned around" on a final rise of
+0.121 nats that is smaller than a rise the same seed already recovered from.
+
+Seed 0 is a different phenomenon by the same measure: every eval after step 250 sat above the
+running minimum, the rise grew monotonically to +0.797, no eval ever recovered, and the
+divergence guard aborted the run at step 2040.
+
+**Predictions are NOT changed.** P1 through P4 are scored exactly as written, and this defect is
+reported alongside the verdict rather than repaired by moving a threshold after seeing the data.
+Two strictly descriptive columns are added to the scorer — the largest rise that recovered, and
+the number of evals since the last new minimum — and both are barred from every verdict.
+
+The defect is mine: the 0.1-nat threshold was chosen without first measuring the within-run
+spread of this validation metric. The next planned run in this line must set its threshold from
+a measured noise floor and must require several consecutive evals with no new minimum, rather
+than reading a single final point.
+
+This is recorded before the drift probe has been run on any seed of this sweep, so it cannot
+have been fitted to the quantity under test.
+
 ## Predictions
 
 Written before any seed reached step 500.
