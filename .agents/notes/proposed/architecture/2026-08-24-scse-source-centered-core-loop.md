@@ -74,9 +74,28 @@ anchor: `a_omega(e)` absorbs the `DiagonalInjection` steady state and the sum of
 layer `inj_term_i`. See "what must not happen" below. Gate: CE against Stage 1 at matched steps.
 
 **Stage 3 — exactness.** Audit the core for additive bias terms so `G_theta(0) = 0` holds
-before masking, then add the per-example zero-deviation mask. RMSNorm maps zero to zero and the
-attention sink adds a logit rather than an output offset, so this is expected to be an audit
-rather than a rewrite — but it is an audit, not an assumption.
+before masking, then add the per-example zero-deviation mask.
+
+**Audit done 2026-08-24 (code read, not yet a numerical check).** It comes back clean, which
+makes this stage much cheaper than budgeted. Every additive parameter in the core is either a
+logit inside a softmax or a coefficient in a linear mixing; every value-carrying projection is
+`bias=False`.
+
+| term | where | why `G(0) = 0` survives |
+|---|---|---|
+| `gate_up`, `down` | `transformer.py:348-349` | `MortarLinear(..., bias=False)` — the whole SwiGLU path is bias-free |
+| `W_aKV`, `W_aZ`, `W_bKV`, `W_bZ` | `attention.py:271-277` | `nn.Linear(..., bias=False)` |
+| `B_a`, `B_b` | `attention.py:274,279` | added to `Z_a`, which is a **softmax logit**; the output is `(softmax(Z_a) * C_a).sum()` and `C_a` is bias-free, so at `x = 0` it is `w * 0 = 0` whatever `B_a` is |
+| `sink_logits` | `attention.py:475` | one logit appended before softmax; the values are bias-free linear in `x`, so a zero input still gives a zero output |
+| `temp`, `alpha` | `attention.py:459,465` | multiplicative |
+| `proj.bias` | `hyper_connections.py:139` | the only `bias=True` in the core. It sets the three `n x n` **mixing coefficient** blocks, and mixing zero streams gives zero |
+| RMSNorm `scale`, `log_scale`, `ret_gate` | `norms.py:59`, `mhc.py:76,206` | multiplicative; `RMSNorm(0) = 0` |
+
+So the mask is expected to be a belt-and-braces boundary condition rather than the thing doing
+the work, which matches the paper's own statement that the zero-preserving core is the primary
+reparameterization. **Still required before Stage 3 ships: a numerical check that a zero
+carrier through the real core returns zero.** The GPU was training when this audit was written,
+so it has not been run.
 
 ## Alternatives considered
 
@@ -101,7 +120,9 @@ rather than a rewrite — but it is an audit, not an assumption.
 1. Stage 1 raises `Delta_0` off zero and `R_t` moves toward the paper's adapter band.
 2. Stage 2 does not lose the bigram, `x0`, or value-embedding signal: the anchor carries them.
    Checked by an equality test on `a_omega(e)` against the current `inj_term` sum at init.
-3. `G_theta(0) = 0` verified numerically before the mask is enabled, not assumed.
+3. `G_theta(0) = 0` verified NUMERICALLY before the mask is enabled. The code audit under
+   Stage 3 is necessary and not sufficient: it establishes there is no additive output offset,
+   but only a forward pass on a zero carrier proves it.
 4. CE at matched steps, against the `g6-ctrl` control, with the control run first.
 5. Every stage keeps `bptt_depth` at 4 and does not vary loop depth (both are standing vetoes).
 
