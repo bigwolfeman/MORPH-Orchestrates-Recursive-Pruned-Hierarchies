@@ -731,6 +731,41 @@ readout on a hidden state, always reported against `teacher_acc` and a bigram fl
 
 Used as a probe to confirm behaviors during initial testing.
 
+### ACT — Adaptive Computation Time
+
+**Title:** Adaptive Computation Time for Recurrent Neural Networks  
+**Authors:** Alex Graves (DeepMind)  
+**Year:** 2016  
+**arXiv:** [1603.08983](https://arxiv.org/abs/1603.08983)  
+**Local:** [references/tul-latent-emission/1603.08983.md](references/tul-latent-emission/1603.08983.md)  
+**TUL uses:** The canonical per-token halting / ponder-depth method. TUL's claim is the
+opposite grain: depth that buys a deeper thought should be allocated per **span**, not
+varied per token inside the span.
+
+### PonderNet
+
+**Title:** PonderNet: Learning to Ponder  
+**Authors:** Andrea Banino, Jan Balaguer, Charles Blundell (DeepMind)  
+**Year:** 2021  
+**arXiv:** [2107.05407](https://arxiv.org/abs/2107.05407)  
+**Local:** [references/tul-latent-emission/2107.05407.md](references/tul-latent-emission/2107.05407.md)  
+**TUL uses:** Probabilistic successor to ACT for adaptive compute. Same contrast: TUL
+loops per slot/span; PonderNet (and ACT) still decide how long to think **per token**.
+
+### J-lens / J-space (Anthropic)
+
+**Title:** Verbalizable Representations Form a Global Workspace in Language Models  
+**Authors:** Wes Gurnee, Nicholas Sofroniew, et al.; Jack Lindsey (Anthropic)  
+**Year:** 2026  
+**Writeup:** [transformer-circuits.pub/2026/workspace](https://transformer-circuits.pub/2026/workspace/index.html)  
+**Summary:** [anthropic.com/research/global-workspace](https://www.anthropic.com/research/global-workspace)  
+**arXiv:** [2607.15495](https://arxiv.org/abs/2607.15495)  
+**Local:** [references/tul-latent-emission/2607.15495.md](references/tul-latent-emission/2607.15495.md)  
+**TUL uses:** Jacobian lens (J-lens) reads mid-depth **J-space** — concepts poised for
+future verbal report, not only next-token logits. Aligns with Future Lens: middle layers
+hold whole semantic thoughts (ST) that stay available across a span while late layers
+decode the surface token.
+
 ### Blockwise Parallel Decoding
 
 **Title:** Blockwise Parallel Decoding for Deep Autoregressive Models  
@@ -993,6 +1028,9 @@ trajectory as an arm (`tul.stp_lambda`), zero parameters.
 | 38  | Patch-Level Training (TUL)                | Shao, Meng, Zhou (2024)                   | [2407.12665](https://arxiv.org/abs/2407.12665)                                                                                                 |
 | 39  | DeepSeek-V3 MTP module (TUL)              | DeepSeek-AI (2024)                        | [2412.19437](https://arxiv.org/abs/2412.19437)                                                                                                 |
 | 40  | Future Lens (TUL)                         | Pal et al. (Northeastern, 2023)           | [2311.04897](https://arxiv.org/abs/2311.04897)                                                                                                 |
+| 40a | ACT (TUL contrast)                        | Graves (DeepMind, 2016)                   | [1603.08983](https://arxiv.org/abs/1603.08983)                                                                                                 |
+| 40b | PonderNet (TUL contrast)                  | Banino et al. (DeepMind, 2021)            | [2107.05407](https://arxiv.org/abs/2107.05407)                                                                                                 |
+| 40c | J-lens / J-space (TUL)                    | Gurnee, Sofroniew, Lindsey et al. (Anthropic, 2026) | [2607.15495](https://arxiv.org/abs/2607.15495) / [writeup](https://transformer-circuits.pub/2026/workspace/index.html)              |
 | 41  | Blockwise Parallel Decoding (TUL)         | Stern, Shazeer, Uszkoreit (2018)          | [1811.03115](https://arxiv.org/abs/1811.03115)                                                                                                 |
 | 42  | Medusa (TUL, cited only)                  | Cai et al. (2024)                         | [2401.10774](https://arxiv.org/abs/2401.10774)                                                                                                 |
 | 43  | Coconut (TUL)                             | Hao et al. (Meta FAIR, 2024)              | [2412.06769](https://arxiv.org/abs/2412.06769)                                                                                                 |

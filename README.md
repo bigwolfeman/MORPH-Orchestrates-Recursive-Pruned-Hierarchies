@@ -43,7 +43,7 @@ because the step is still launch / fixed-overhead bound. Details:
 
 **TUL For Dummies:** 
 - After the core loop save the hidden state, lets call z1.
-- Use a frozen z1 to decode a span. A span goes to the next punctuation mark, or 32 tokens max.
+- Use a frozen z1 to decode a span. A span goes to the next punctuation mark, or 32 tokens max. This is a loop through the coda.
 - z1 kept in the sequence
 
 So the core loop is forced to contain the full semantic thought and amortize the loop cost over many tokens. As opposed to looping many times per token.
@@ -54,17 +54,21 @@ This is based on a series of experiments run on
 [Quiet-STaR](docs/references/tul-latent-emission/2403.09629.md)
 (paper map: [docs/references.md](docs/references.md) §13).
 
-From experimentation with looping and halting, no halting mechanism gives a real win over no learned halting.
-The likely reason for this is what inspired TUL.
+---
 
-Future lens shows us that the middle layers contain whole semantic thoughts. We can decode many tokens from it successfully.
-Measurements I made with STP showed me that over a span of tokens (a whole thought or sentence) this latent barely moves.
-The final hidden state moves a lot more, as it is decoding the actual token from the thought based on the position in the sequence.
-The text gives state for what comes next in the sentence.
+From experimentation with looping and halting, halting mechanisms don't give a real win over no halting.
+HRM dropped ACT for their LLM for this reason. The likely cause for this is what inspired TUL.
 
-So looping more deeply gives a deeper thought. Every token in the span needs that thought to decode accurately.
+[Future Lens](docs/references/tul-latent-emission/2311.04897.md) shows us that the middle layers contain whole semantic thoughts, lets call ST. We can decode many tokens from it successfully.
+Anthropic's [J-lens / J-space](docs/references/tul-latent-emission/2607.15495.md) is the same picture from the other direction: mid-depth verbalizable concepts held for future report, not just the next token.
+Measurements I made while pretraining showed me that over a span of tokens (a ST or sentence) this latent barely moves.
+The final hidden state moves a lot more, as it is decoding the actual token from the ST based on the position in the sequence.
+The text gives state for what comes next in the sentence, and it mostly effects lower layers.
+
+If looping more deeply gives a deeper thought. Every token in the span needs that thought to decode accurately.
 Because previous methods are still doing autoregressive next token prediction, this looping must match per token in the span.
-The difficulty that needs deeper thought lives at the span level and not the token level.
+[PonderNet](docs/references/tul-latent-emission/2107.05407.md) and [ACT](docs/references/tul-latent-emission/1603.08983.md) ignore this and try to vary per token.
+Difficulty that needs deeper thought lives at the span level and not the token level.
 
 TUL gives a method of exploiting this, while genuinely reducing compute costs.
 
