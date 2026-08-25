@@ -47,6 +47,24 @@ perfect rank ordering of four items has probability 1/24 = 0.042 under the null,
 ordering IS meaningful at this n; anything short of near-perfect is not. No correlation
 coefficient will be quoted as if it were significant.
 
+## Method amendment 1, 2026-08-24, recorded BEFORE any `b_t` was measured
+
+Seed 0's validation minimum is at step **250** — 6.6820, then 6.7751 at 500 and 7.0968 at 750,
+with train loss at 7.26 by step 1000. That is earlier than the campaign's stated 500-2000 window
+for the minimum, and earlier than this experiment's first checkpoint at step 500.
+
+**Consequence: P2's premise fails for seed 0.** P2 reads `b_t` at step 1000 and calls it "before
+any turnaround". For seed 0 it is not; the turnaround began before the first rung exists.
+
+**Predictions are NOT changed.** P2 will be scored at step 1000 exactly as written, and its
+premise failure reported alongside the verdict. `b_t` at step 500 will be reported as an
+EXPLORATORY secondary readout, labelled as such, and no verdict will rest on it.
+
+This is recorded at the moment the val curve was seen and before the probe was run on any
+checkpoint, so the amendment cannot have been fitted to the quantity under test. If a future
+version of this experiment wants a genuinely pre-turnaround rung it needs `ckpt_every` at 100
+or less over the first few hundred steps, which is a different run.
+
 ## Predictions
 
 Written before any seed reached step 500.
