@@ -58,12 +58,48 @@ the same number the TOKEN path gets at `seq_len 1024`.
 
 Shared settings, the protocol that produced the seed sweep and the `onset-capture` ladder:
 
-    training.steps=6000 training.batch_size=6 training.ademamix_alpha_cap=3.5
+    training.steps=3500 training.batch_size=6 training.ademamix_alpha_cap=3.5
     model.use_kernels=false training.eval_every=250 training.gen_every=0
-    training.ckpt_every=1000 training.seed=0
+    training.ckpt_every=500 training.seed=0
 
 Sequential, one trainer at a time. Runner `lab/divergence/h24_arm.sh`, scorer
 `lab/divergence/score_h24_arm.py`.
+
+### Method Amendment 1, 2026-08-25 15:20 — the step budget was NOT a free knob
+
+This section originally said `training.steps=6000`, chosen to raise the divergence base
+rate. That was an error and it cost the first control. `morph/training/optimizer.py:152`:
+
+    t_beta3 = int(_tb) if _tb is not None else int(tr.steps)
+
+and `base.yaml` ships `ademamix_t_beta3: null`. So a 6000-step run gives the optimizer a
+beta3 warmup horizon **71 % longer** than the 3500-step seed sweep it was meant to be
+compared against — and beta3 governs the slow EMA that this campaign's whole takeover
+story runs on.
+
+Measured consequence. At seed 0, identical in every other setting:
+
+| run | budget | t_beta3 | VAL 250 | min | final | outcome |
+|---|---:|---:|---:|---:|---:|---|
+| `seedsweep-s0`, 2026-08-24 | 3500 | 3500 | 6.6820 | 6.3056 | 7.4790 | **ABORT at step 2040**, +1.17 nats |
+| `h24-ctrl-s0`, 2026-08-25 | 6000 | 6000 | 6.5285 | 4.0929 | 4.2152 | completed 6000, rise 0.122, core gradnorm ~0.006 — **healthy** |
+
+The budget is now the runner's second argument, echoed at start, defaulting to 3500. The
+6000-step control is kept at `morph-scratch/h24arm6000/` as a data point in its own right;
+its arm was killed 200 steps in rather than finished, because a pair whose control cannot
+take over cannot answer the question the pair was built for.
+
+`docs/experiments/failures/2026-08-23-tul-run-replication.md` names this confound in
+writing — "the step-budget confound (`ademamix_t_beta3` follows `training.steps`) means the
+5000-step Phase 1 run and this 4000-step pair do not share an optimizer schedule". It was
+read the same day and the budget was changed anyway.
+
+**Predictions are UNCHANGED.** None of them names a step count except V1's "by step 3000",
+which the seed sweep's abort at 2040 already satisfies with room. A second, separate
+caveat now stands on its own: the same replication document measures that two IDENTICAL
+runs decorrelate to 10 % in eleven steps, so even at the right budget the control may not
+reproduce its abort. If it does not, V1 fails and the answer is "the control did not
+reproduce" — which is what V1 is for.
 
 **Failure definition, unchanged from the rejected design.** A run DIVERGED if its own abort
 guard fired (an `[ABORT] ... at step N` line in its log) OR its final validation CE is at
