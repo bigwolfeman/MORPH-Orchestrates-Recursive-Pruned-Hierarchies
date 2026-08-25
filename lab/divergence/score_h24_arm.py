@@ -30,11 +30,18 @@ REFUTE_STEP_TOL = 0.20   # arm aborts within this fraction of its control's step
 _VAL = re.compile(r"\[VAL\s+(\d+)\]\s+loss=([0-9.]+)")
 _ABORT = re.compile(r"\[ABORT\][^\n]*?step[_ ](\d+)")
 _STEP = re.compile(r"^\[\s*(\d+)/\d+\]")
+# The completion marker. CORRECTED 2026-08-25, AFTER the runs, and it cannot change any
+# verdict: V1 already failed on its own (control seed 1 did not abort), so the panel is
+# refused either way. The bug: V2 read `last_step` from the periodic progress line, whose
+# cadence is 200 steps and which the loop's FINAL step does not emit — so a run that
+# completed all 6000 steps showed last_step=5800 and was called "a crash or an interrupt".
+# Both ctrl-s1 and hca16-s0 wrote `Final checkpoint: .../step_6000.pt` and exited 0.
+_DONE = re.compile(r"Final checkpoint:.*?step_(\d+)\.pt")
 
 
 def read_run(path: str) -> dict:
     """`abort` step or None, the val curve, and the last training step reached."""
-    curve, abort, last = [], None, None
+    curve, abort, last, done = [], None, None, None
     with open(path, errors="replace") as f:
         for line in f:
             m = _VAL.search(line)
@@ -45,11 +52,19 @@ def read_run(path: str) -> dict:
             if m:
                 last = int(m.group(1))
                 continue
+            m = _DONE.search(line)
+            if m:
+                done = int(m.group(1))
+                continue
             if abort is None:
                 m = _ABORT.search(line)
                 if m:
                     abort = int(m.group(1))
-    return {"curve": curve, "abort": abort, "last_step": last,
+    # A run that wrote its final checkpoint reached that step, whatever the progress
+    # cadence last printed.
+    if done is not None:
+        last = done if last is None else max(last, done)
+    return {"curve": curve, "abort": abort, "last_step": last, "completed": done,
             "final": curve[-1][1] if curve else None,
             "min": min((v for _, v in curve), default=None),
             "n_evals": len(curve)}

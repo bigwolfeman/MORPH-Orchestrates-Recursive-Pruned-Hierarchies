@@ -1,6 +1,6 @@
 # Experiment: H24 — does reviving the core's HCA branch stop the TUL takeover?
 
-Status: planned
+Status: failure
 
 Ledger: `lab/divergence/takeover-campaign.md` H24.
 Supersedes: [the 4-seed design](../failures/2026-08-25-h24-hca-branch-arm-4seed.md) and
@@ -116,3 +116,87 @@ a lever. The defect is still a defect and the fix still ships on its own terms.
 - `seq_len 1024` short schedule only; the deploy recipe at 4096 does not have the defect
 - `alpha_cap 3.5`, the regime where the takeover is reliable, not the shipped 1.0
 - no generation samples (`gen_every=0`), so nothing here reads the teacher-forcing leak
+
+---
+
+# Results
+
+Status: failure
+
+Ran 2026-08-25, 15:29:36 to 18:02:51, four runs sequential on the 5090.
+Artifacts: [`../results/2026-08-25-h24-hca-branch-arm-binary/`](../results/2026-08-25-h24-hca-branch-arm-binary/)
+(four training logs, the runner log, and the scorecard).
+Scored with the thresholds committed in `lab/divergence/score_h24_arm.py` before the runs.
+
+| run | last step | min CE | final CE | ABORT |
+|---|---:|---:|---:|---|
+| ctrl-s0 | 2880 | 5.1713 | 6.4192 | **2880** |
+| ctrl-s1 | 6000 | 5.0040 | 5.5881 | none |
+| hca16-s0 | 6000 | 4.7523 | 5.5666 | none |
+| hca16-s1 | 2940 | 5.5720 | 6.6818 | **2940** |
+
+## Validity gate: FAILED on V1
+
+**V1 required both control seeds to abort by step 6000. Control seed 1 completed all
+6000 steps.** The RCA regime is 2 of 2, at 3240 and 4540, so one control surviving is a
+real miss and the pre-registered panel is refused as a whole.
+
+This is the caveat stated before the run, and it was the right one: the RCA aborts were
+measured at **batch 14**, and this arm ran at **batch 12**. Batch 12 does not reproduce
+the 2-of-2 divergence. The regime is still not one where the control reliably fails.
+
+V2 passed. V3 was checked with `attn_sink_probe.py --geometry` before the runs.
+
+*Scorer correction, made after the runs and unable to change any verdict:* V2 originally
+read the last step from the periodic progress line, whose cadence is 200 and which the
+loop's final step does not emit, so a run that finished all 6000 steps reported 5800 and
+was called "a crash or an interrupt". `read_run` now also reads the `Final checkpoint:
+.../step_<N>.pt` marker. Both ctrl-s1 and hca16-s0 wrote it and exited 0. V1 failed
+independently, so the panel was refused before and after the fix.
+
+## What the numbers say anyway
+
+**P1 FAILS, and its failure does not depend on V1.** P1 was "neither arm seed aborts".
+`hca16-s1` aborted at 2940. V1 exists to make an arm SURVIVING meaningful — it is not
+needed to make an arm DIVERGING meaningful, because an arm that diverges cannot be a
+cure whatever the control did. **H24 is refuted as a cure for the divergence.**
+
+**P2 is unevaluable, not failed.** P2 compared each arm abort against its own control's
+abort. The aborting seed flipped: the control aborted on seed 0 only, the arm on seed 1
+only. There is no matched-seed pair to compare, so the lever reading is not available
+from this experiment.
+
+**The REFUTER does not fire literally.** It required the arm to abort on BOTH seeds
+within 20 % of its own control. The arm aborted on one.
+
+Three observations, offered as observations and not as anything the panel licenses:
+
+- Divergence rate is **1 of 2 in the control and 1 of 2 in the arm**. Reviving the dead
+  HCA branch does not move the rate.
+- The two aborts land at **2880 and 2940, 2.1 % apart**, on opposite seeds. That is the
+  signature of a coin flip near a 50 % base rate, not of a mechanism responding to the
+  intervention.
+- `hca16-s0` has the lowest min CE of the four runs, 4.7523 against the control's 5.0040.
+  One seed each way is far inside the 6.5 % run-to-run spread measured in
+  [`2026-08-23-tul-run-replication.md`](2026-08-23-tul-run-replication.md), so this is
+  not evidence of anything.
+
+## Verdict
+
+**Failure.** H24 is refuted as a cure. The dead-HCA-branch defect is real and is fixed by
+a shipped knob, but reviving the branch does not prevent the takeover.
+
+The campaign still has no regime at 5090 scale where the control diverges 2 of 2. Every
+binary arm is unreadable until it does. That, not H24, is the blocking problem.
+
+## Updated hypothesis
+
+The takeover does not live in the core's compressed attention branch. Combined with H18
+(no positional sink) and the H24 screen (the rank-ratio lift was uniform across healthy
+and sick rungs, +0.0939 against +0.0947), the core's ATTENTION geometry is not where the
+disease is. The next lead should target the state collapse itself, not the paths feeding
+it.
+
+Before any further binary arm: find the batch size and `alpha_cap` at which the control
+aborts on 2 of 2 seeds locally, and pre-register THAT as a standalone calibration run.
+Running an arm against a control that fails half the time has now cost three arm designs.

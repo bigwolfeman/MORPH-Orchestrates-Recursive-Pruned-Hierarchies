@@ -312,3 +312,33 @@ P1 is the whole experiment: **neither arm seed aborts.**
   control never took over where the 3500-step seed sweep aborted at 2040.
 - 2026-08-25 15:29 — BINARY ARM LAUNCHED in the RCA regime with `ademamix_t_beta3` pinned.
   4 runs, ~2.6 h. Verified live: 2.14 steps/s, 20.65 GB peak, 445 W, no OOM.
+
+## 2026-08-25, final — the H24 arm is done and H24 is refuted as a cure
+
+H18 turned up H24; H24's arm has now run and failed. Both leads are closed.
+
+| run | ABORT | min CE | final CE |
+|---|---|---:|---:|
+| ctrl-s0 | **2880** | 5.1713 | 6.4192 |
+| ctrl-s1 | none, 6000 | 5.0040 | 5.5881 |
+| hca16-s0 | none, 6000 | 4.7523 | 5.5666 |
+| hca16-s1 | **2940** | 5.5720 | 6.6818 |
+
+The panel is refused on V1: control seed 1 never aborted, where the RCA regime is 2 of 2.
+P1 fails regardless — the arm diverged on seed 1 — and an arm that diverges cannot be a
+cure whatever the control did. 1 of 2 in both groups, aborts 2.1 % apart on opposite
+seeds: a coin flip, not a mechanism.
+
+Full writeup, including the scorer correction and what the refused panel does and does
+not license:
+[`docs/experiments/failures/2026-08-25-h24-hca-branch-arm-binary.md`](../../docs/experiments/failures/2026-08-25-h24-hca-branch-arm-binary.md).
+
+**Where this leaves the campaign.** H18 said the attention is diffuse, not a sink. The
+H24 screen said reviving the dead branch lifts the loop's rank ratio uniformly across
+healthy and sick rungs (+0.0939 against +0.0947). The H24 arm says reviving it does not
+change the divergence rate. Together: **the core's attention geometry is not where the
+takeover lives.** The next lead should target the state collapse itself.
+
+The blocking problem is not H24. It is that this machine still has no regime where the
+control diverges 2 of 2, so every binary arm is unreadable. That needs its own
+pre-registered calibration run before another arm is worth the GPU time.

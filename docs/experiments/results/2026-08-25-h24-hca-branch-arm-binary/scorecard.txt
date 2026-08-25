@@ -1,0 +1,9 @@
+       run  evals   last   min CE  final CE  ABORT at
+   ctrl-s0     11   2800   5.1713    6.4192      2880
+   ctrl-s1     23   6000   5.0040    5.5881      None
+  hca16-s0     23   6000   4.7523    5.5666      None
+  hca16-s1     11   2800   5.5720    6.6818      2940
+
+VALIDITY GATE
+  FAILED: V1: control seed 1 did NOT abort (reached step 6000); the RCA regime is 2 of 2 at 3240 and 4540
+  V3 was checked with attn_sink_probe.py --geometry before the runs.

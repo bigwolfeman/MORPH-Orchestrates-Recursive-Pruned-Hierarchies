@@ -126,3 +126,37 @@ fixing the defect — three of six core blocks at half attention output is not a
 choice — but it lowers what the fix should be expected to do for the TUL divergence, from
 "cure" to "lever of the H5 class". The Acceptance criteria above are unchanged; the Risks
 section's first bullet is now MEASURED rather than anticipated.
+
+## Update 2026-08-25 — the training arm, and why this note stays `proposed`
+
+The binary training arm is filed as a failure:
+[`docs/experiments/failures/2026-08-25-h24-hca-branch-arm-binary.md`](../../../../docs/experiments/failures/2026-08-25-h24-hca-branch-arm-binary.md).
+
+| run | ABORT | min CE |
+|---|---|---:|
+| ctrl-s0 | 2880 | 5.1713 |
+| ctrl-s1 | none | 5.0040 |
+| hca16-s0 | none | 4.7523 |
+| hca16-s1 | 2940 | 5.5720 |
+
+Reviving the branch does **not** stop the takeover: 1 of 2 seeds diverged in each group,
+and the two aborts land 2.1 % apart on opposite seeds.
+
+What that changes, and what it does not:
+
+- **The defect is unaffected.** It is measured, not inferred: `n_blocks = 0`,
+  `|out_comp| = 0.0000`, and the gate still spends `g_comp ≈ 0.50` on that zero tensor
+  on every odd core block. Half of one gate's capacity buys nothing.
+- **The fix mechanism is built and tested.** `model.core_hca_compress_ratio` reaches only
+  the core, `tests/test_core_hca_ratio.py` covers it, and the default `null` is
+  bit-identical to before.
+- **The default is NOT changed, so this note is not `implemented`.** The branch is still
+  dead on the slot path in every shipped recipe.
+
+The note stays `proposed` because the remaining question is no longer about divergence.
+It is whether a live core HCA branch is worth its compute on the slot path at all — a
+capacity question that needs a matched-token CE comparison, not a divergence arm.
+`hca16-s0` has the best min CE of the four runs (4.7523 against 5.0040), but one seed each
+way sits well inside the 6.5 % run-to-run spread in
+[`2026-08-23-tul-run-replication.md`](../../../../docs/experiments/failures/2026-08-23-tul-run-replication.md),
+so it is not evidence. Do not cite it as any.
