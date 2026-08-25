@@ -18,10 +18,27 @@ confirmed moves at the onset — the slot-state effective rank across the loop (
 
 ## Why this is cheap and why it is legitimate
 
-`GatedPoolCompressor`'s parameters are per-position linears; `m` enters only in the
-reshape that follows. So `m` is in NO weight shape, and the same ladder checkpoint can be
-run at `hca_compress_ratio: 16` with TRAINED weights and no re-init. The whole screen is
-two forward passes per rung.
+`GatedPoolCompressor`'s projections are per-position linears; `m` enters in the reshape
+that follows. The screen is two forward passes per rung at fixed weights.
+
+**Method Amendment 1, 2026-08-25, written after the first attempt failed and before any
+revived-arm number was read.** The paragraph above originally claimed `m` is in NO weight
+shape. That was WRONG: `GatedPoolCompressor` carries `B_a` of shape `[m, c]`, a learned
+gate bias per within-block position, and `model.hca_compress_ratio=16` fails to load the
+checkpoint with seven size mismatches (log: `h24_screen.log`, `REVIVE exit=1`). The screen
+therefore needs an approximation and a scope, both fixed here:
+
+1. `B_a` is SLICED to its first `m_new` rows. Those rows are trained — every HCA block in
+   prelude and coda uses all 256 at S = 1152 — but the slice repurposes a 256-wide
+   positional gate as a 16-wide one. The screen is a forward-map probe of "what if this
+   branch contributed", NOT a faithful model of the trained alternative. That weakens what
+   a positive result can claim and does not weaken a negative one.
+2. The surgery is confined to the CORE blocks. Rewriting prelude and coda would move the
+   carrier that ENTERS the loop and would break validity gate V2 by construction.
+3. Both arms run through the SAME script, `lab/divergence/h24_screen.py`, the control with
+   `--control`, so they differ by the surgery alone.
+
+The predictions below are UNCHANGED and were committed before any of this.
 
 **Scope limit, stated before the run.** These weights were trained WITH the dead branch.
 The screen measures what the branch does to the forward map at fixed weights. It cannot
