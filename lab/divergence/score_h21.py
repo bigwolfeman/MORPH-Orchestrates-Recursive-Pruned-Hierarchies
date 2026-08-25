@@ -42,18 +42,62 @@ R0_TOL = 1e-3            # validity gate on the paper's identity R_0 = 1
 GATE_TOL = 1e-2          # the probe's own trajectory-replay tolerance
 
 
+# MEASURED 2026-08-25, and it corrected a false premise this file shipped with.
+#
+# The first version of b_by_step() asserted that b_rel is "constant by construction before
+# route_start" and raised above 1e-3. It raised on the real data. The premise was wrong.
+#
+# What the measurement showed, on seedsweep-s1/step_3500.pt:
+#   * The probe is BIT-EXACT run to run (max same-iteration difference 0.00e+00 over two
+#     independent runs), so the variation is deterministic, not kernel nondeterminism.
+#   * Pinning ret_state to iteration 0's collapses the across-iteration spread to EXACTLY
+#     0.00e+00. Pinning iter_idx instead leaves it unchanged at 3.87e-03.
+#   * Therefore MORPH's core map IS t-dependent, entirely through the GLA retention state
+#     carried across loop iterations. T_t is not T.
+#
+# This does not conflict with SCSE: their Theorem 2 already indexes the forcing bias as b_k,
+# so a t-dependent bias is what the theory expects. It conflicts only with my assertion.
+#
+# The bound below is derived, not tuned to pass. The guard's job is to ensure the choice of
+# iteration cannot flip a seed-to-seed comparison. The TIGHTEST comparison this experiment
+# resolves is at rung 1000, where s2 = 1.663 and s3 = 1.730 -- a gap of 4.0 %. A within-run
+# spread of 1 % leaves a factor of four of margin. Every observed spread is <= 0.43 %.
+B_SPREAD_MAX = 1e-2
+
+
 def b_by_step(path: str) -> dict[int, float]:
-    """`{training_step: ||b||/||h*||}`. Raises if b_rel is not flat across loop iterations."""
+    """`{training_step: mean_t ||b_t||/||h*||}`, averaged over loop iterations.
+
+    The mean rather than iteration 0, because b_t genuinely varies with t through the
+    carried retention state. The choice is verdict-neutral -- the spread is under 0.5 %
+    where the differences under test are 5x to 40x -- and `--show-spread` prints both so
+    that claim can be checked rather than taken on trust.
+    """
     out = {}
     for r in json.load(open(path)):
         vals = [x["b_rel"] for x in r["forcing_bias"]]
-        spread = (max(vals) - min(vals)) / max(abs(vals[0]), 1e-30)
-        if spread > 1e-3:
+        mean = sum(vals) / len(vals)
+        spread = (max(vals) - min(vals)) / max(abs(mean), 1e-30)
+        if spread > B_SPREAD_MAX:
             raise RuntimeError(
-                f"{path} step {r['step']}: b_rel varies {spread:.2e} across loop iterations. "
-                f"It is constant by construction before route_start, so either the core map "
-                f"gained a t dependence or the probe is reading the wrong operating point.")
-        out[int(r["step"])] = vals[0]
+                f"{path} step {r['step']}: b_rel varies {spread:.2e} across loop iterations, "
+                f"over the {B_SPREAD_MAX:.0e} bound. A t dependence of that size is large "
+                f"enough to flip a seed-to-seed comparison, so the rung is not readable.")
+        out[int(r["step"])] = mean
+    return out
+
+
+def b_iter0_by_step(path: str) -> dict[int, float]:
+    """Iteration 0 only -- printed beside the mean to show the choice changes no verdict."""
+    return {int(r["step"]): r["forcing_bias"][0]["b_rel"] for r in json.load(open(path))}
+
+
+def b_spread_by_step(path: str) -> dict[int, float]:
+    out = {}
+    for r in json.load(open(path)):
+        vals = [x["b_rel"] for x in r["forcing_bias"]]
+        mean = sum(vals) / len(vals)
+        out[int(r["step"])] = (max(vals) - min(vals)) / max(abs(mean), 1e-30)
     return out
 
 
@@ -218,11 +262,31 @@ def main() -> None:
 
     # ---- b_t table --------------------------------------------------------
     shared = sorted(set.intersection(*(set(B[sd]) for sd in seeds)))
-    print(f"\nFORCING BIAS b_t/|h*| at rungs common to all seeds: {shared}")
+    print(f"\nFORCING BIAS b_t/|h*| (mean over loop iterations) at rungs common to all "
+          f"seeds: {shared}")
     hdr = "".join(f"{('s%d' % sd):>9}" for sd in seeds)
     print(f"{'step':>6}{hdr}")
-    for s in shared:
-        print(f"{s:>6}" + "".join(f"{B[sd][s]:>9.3f}" for sd in seeds))
+    for st in shared:
+        print(f"{st:>6}" + "".join(f"{B[sd][st]:>9.3f}" for sd in seeds))
+
+    # The mean-vs-iteration-0 choice must not move anything. Show it instead of claiming it.
+    worst_delta = 0.0
+    worst_spread = 0.0
+    for sd in seeds:
+        i0 = b_iter0_by_step(os.path.join(a.dir, a.probe_glob.format(seed=sd)))
+        sp = b_spread_by_step(os.path.join(a.dir, a.probe_glob.format(seed=sd)))
+        for st in B[sd]:
+            worst_delta = max(worst_delta, abs(B[sd][st] - i0[st]) / abs(B[sd][st]))
+            worst_spread = max(worst_spread, sp[st])
+    print(f"  within-run t spread (GLA retention carry): worst {worst_spread:.2e}")
+    print(f"  mean vs iteration-0 readout: worst relative difference {worst_delta:.2e}")
+    tight = min((abs(B[i][RUNG_P2] - B[j][RUNG_P2]) / max(B[i][RUNG_P2], B[j][RUNG_P2])
+                 for i in seeds for j in seeds
+                 if i < j and RUNG_P2 in B[i] and RUNG_P2 in B[j]), default=float("inf"))
+    print(f"  tightest seed-to-seed gap at rung {RUNG_P2}: {tight:.2e}"
+          + (f"  -> readout choice is {tight/max(worst_delta,1e-30):.0f}x smaller than the "
+             f"gap it must resolve, so it moves no verdict"
+             if worst_delta > 0 else "  -> readout choice is exact"))
     missing = {sd: sorted(set(B[sd]) - set(shared)) for sd in seeds}
     for sd, m in missing.items():
         if m:

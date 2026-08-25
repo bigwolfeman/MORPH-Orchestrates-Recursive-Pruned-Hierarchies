@@ -24,9 +24,18 @@ import re
 def b_by_step(path: str) -> dict[int, float]:
     """`{training_step: ||b||/||h*||}` from a drift_probe run over a checkpoint dir.
 
-    `b_rel` is flat across loop iterations by construction (MORPH's core map has no `t`
-    dependence before `route_start`), and the probe reproduces that to four significant
-    figures, so iteration 0 is taken as the value and the spread is reported as a check.
+    CORRECTED 2026-08-25. This docstring used to claim MORPH's core map "has no `t`
+    dependence before `route_start`". That is FALSE. Measured on seedsweep-s1/step_3500.pt:
+    the probe is bit-exact run to run (0.00e+00), pinning `ret_state` to iteration 0's
+    collapses the across-iteration spread to exactly 0.00e+00, and pinning `iter_idx`
+    instead leaves it unchanged. `T_t` depends on `t` through the GLA retention state
+    carried across loop iterations.
+
+    Stage 0's numbers are unaffected: its `b_rel` values are 1.4-2.5, where the measured
+    spread stays under the 1e-3 tolerance below, so the guard never fired and iteration 0
+    and the mean agree to well within the arm gap being resolved. The claim was still
+    wrong. See docs/experiments/failures/2026-08-24-tul-forcing-bias-predicts-divergence.md
+    and `B_SPREAD_MAX` in score_h21.py, which reads the mean instead.
     """
     out = {}
     for r in json.load(open(path)):
