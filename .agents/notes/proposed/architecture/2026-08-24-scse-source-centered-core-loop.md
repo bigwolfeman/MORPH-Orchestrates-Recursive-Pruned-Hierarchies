@@ -1,40 +1,43 @@
 # Agent Note: Source-centered state evolution for the MORPH core loop
 
-Status: rejected — Stage 1 measured on four seeds: b_t grew on 3 of 4, CE +0.815 nats (5x the noise floor), the divergence recurred, and MORPH's R_t falls with depth where the paper's rises, so MORPH is not in SCSE's regime
+Status: proposed
 
-## Outcome, 2026-08-25 — Stage 1 measured and REJECTED
+## Status, 2026-08-25 — Stage 1 measured and dead; the PORT is untested, not refuted
 
-Stage 1 shipped, ran on four seeds, and made MORPH strictly worse:
-`b_t` grew LARGER on three of four seeds (up to 5.5x), final CE was **+0.815 nats** worse
-(about five times the measured noise floor), and the seed that diverged under the control
-diverged again at the same guard step. The pre-registered refuter fired.
+**Correction of the 2026-08-25 rejection.** This note was briefly filed under `rejected/`
+with a status line that claimed "MORPH is not in SCSE's regime". That claim is withdrawn.
+It compared MORPH's `R_t` at loop iteration <= 7 against the paper's value at **t = 47**,
+and the paper reports NO baseline `R_t` anywhere between t = 0 and t = 47 (their Table 3
+and Figure 5 report exactly those two steps). `R_0 = 1` is an identity in both systems, so
+there is no measurement in common. The paper's gains are also NOT confined to extrapolated
+depth: WikiText-103 95.6M at **T = 8**, inside the training range, goes 117.1 -> 96.9 PPL
+(their Table 1). Withdrawing this leaves no evidence against running the real method.
+
+**What is actually established.** Stage 1 (a non-zero initial deviation, nothing else)
+ran on four seeds and made MORPH strictly worse: CE +0.815 nats, `b_t` up on three of four
+seeds, and the diverging seed diverged again.
 Full record: [H23](../../../../docs/experiments/failures/2026-08-25-scse-stage1-initial-deviation.md).
 
-The mechanism was verified live before the verdict was read — `|Delta_0|/|h*| = 0.042` and the
-`R_0 = 1` identity correctly broken — so this is an intervention that engaged and went the
-wrong way, not a null.
+**Why that does not condemn the port.** The paper's own abstract says the ablations
+"identify the learned anchor and the anchor-coordinate deviation recurrence as the primary
+contributors to the gain". Stage 1 implements NEITHER. It also is **not** the paper's
+"tuned adapter" family, as an earlier draft of this note claimed: the tuned adapter keeps
+the learned anchor `h* = e + a_omega(e)` and a learned scalar source gain `alpha` in
+`h_{t+1} = h_t + s*B_theta(h_t + alpha*W_in*h*)`. Stage 1 has neither. The paper contains
+no initial-deviation-only control at all, so Stage 1 tested a configuration the paper never
+reports, and its result transfers to nothing.
 
-Two measurements from that run bear on the WHOLE port, not just Stage 1:
+**Decision: run the full method (Stage 2 + Stage 3 together).** Specification:
+[docs/scse-spec.md](../../../../docs/scse-spec.md). Stages 2 and 3 are merged because the
+zero-deviation mask is meaningless without deviation coordinates, and deviation coordinates
+without the mask lose the exact anchor invariance that is the paper's construction.
 
-* **MORPH is not in the paper's regime.** SCSE's looped baseline runs `R_0 = 1.000` rising to
-  `R_47 = 4.35-5.44`. MORPH's runs `R_0 = 1.000` FALLING to 0.056-1.906. The quantity the
-  paper exists to bound grows with depth in their system and shrinks in ours.
-* **`G_theta(0) = 0` already holds exactly** on the real 286.1M model, fp32 and bf16
-  (`tests/test_scse_core_init.py`). The reparameterisation Stage 3 was budgeted for is
-  largely free here, and it still bought nothing.
-
-Together with [H21](../../../../docs/experiments/failures/2026-08-24-tul-forcing-bias-predicts-divergence.md),
-which showed the forcing bias does not predict which seeds fail, three independent
-measurements now point away from the forcing bias being MORPH's mechanism.
-
-**Stages 2-3 are NOT scheduled.** Stage 2 rewires the carrier, the embedding injection paths
-and every divergence instrument. That cost is not justified before a measurement puts MORPH
-inside the paper's regime. The Stage 1 code stays in the tree at `core_init_scale: 0.0`, which
-is bit-identical to not having it, so revisiting costs one config field rather than a rebuild.
-
-The analysis below is the pre-measurement plan, kept because its derivation is still correct:
-`Delta_0 = 0` really does make the whole trajectory the propagated forcing response. What the
-measurement showed is that fixing that does not help MORPH.
+**One earlier risk in this note is also withdrawn.** "Do not delete `inj_term_i` ... those
+paths are load-bearing" is overstated. The core's injection term carries the hash-bigram and
+`x0` only (value-embeds never fire at core layer indices), and BOTH reach the model through
+the prelude injections (`x0_injects[:n_prelude]`), the coda injections
+(`x0_injects[n_prelude+n_core:]`), and `e` itself, which is the prelude output. What SCSE
+removes is RE-injection at core depth, which is the method, not a casualty of it.
 
 ## Problem
 
@@ -99,8 +102,10 @@ is not sick-against-healthy. About 40 minutes of GPU. Gate: does a healthy arm c
 **Stage 1 — `H_0` only. `Delta_0 != 0`, additive loop untouched.** Replace `h = e.clone()` with
 `h = e + 0.1 * H_0(e)` for a learned `H_0`, and keep everything else. This is the smallest
 change that breaks Fact 1: the loop gets a state of its own that is not the propagated forcing
-response. It is the paper's "tuned adapter" family, whose `R_47` falls from 4.351 to 1.619 with
-PPL between the baseline and SCSE (their Table 3, Table 1). About 20 lines. Gate: `R_t` and CE.
+response. **CORRECTED 2026-08-25: this is NOT the paper's "tuned adapter" family.** The tuned adapter
+keeps the learned anchor and a learned scalar source gain in an additive update; Stage 1 has
+neither, and the paper reports no initial-deviation-only control. About 20 lines. Gate: `R_t`
+and CE. **MEASURED AND DEAD** — see the Status section.
 
 **Stage 2 — deviation coordinates.** Loop on `Delta` instead of `h`; add `a_omega`; reconstruct
 `h_T = h* + Delta_T`. The two per-iteration source injections move OUT of the loop and INTO the

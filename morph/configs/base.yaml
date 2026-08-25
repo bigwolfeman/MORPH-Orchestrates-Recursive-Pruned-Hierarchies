@@ -37,6 +37,24 @@ model:
   # NOTE the ordering constraint: SCSE's zero-deviation mask (Stage 3) must NEVER be enabled
   # while this is 0.0 -- at Delta_0 = 0 the mask sets m = 0 forever and the loop stops updating.
   core_init_scale: 0.0
+
+  # ── SCSE — Source-Centered State Evolution (docs/scse-spec.md) ────────────────
+  # arXiv:2607.27656. The FULL method, not the core_init_scale probe above (which was
+  # measured 0.815 nats WORSE and is dead). Enabling both RAISES at build time.
+  #   h*        = e + scse_anchor_scale * a_omega(e)        built ONCE, held fixed
+  #   Delta_0   = scse_init_scale*H_0(e) - scse_anchor_scale*a_omega(e)
+  #   Delta_t+1 = Delta_t + 1{||Delta_t||_F^2 > scse_eps} * scse_step_scale * G(Delta_t)
+  #   h_T       = h* + Delta_T
+  # G is the core block stack with NO source injection — the source enters through the
+  # anchor once instead of on every iteration. false → no parameters built, no RNG drawn,
+  # bitwise identical to a model built before this existed.
+  scse_enabled: false
+  scse_step_scale: 0.5      # s. The paper's value is tuned for a ONE-block core; MORPH
+                            # applies n_core blocks per step, so this may need its own sweep.
+  scse_anchor_scale: 0.1    # Listing 1 default
+  scse_init_scale: 0.1      # Listing 1 default
+  scse_eps: 1.0e-8          # zero-deviation mask threshold
+  scse_kappa: 0.0           # 0 → SCSE proper; > 0 builds the SC-Cond control's cond_proj
   # L1 core-gain governor: cap per-iteration looped-core amplification ‖h_new‖/‖h_a‖ per
   # sample to ratio τ. 0.0 = OFF (bit-identical). Identity when gain≈1 (norm-preserving
   # HC residual); only fires on gain runaway (weight-shared core amplifies T× per depth).

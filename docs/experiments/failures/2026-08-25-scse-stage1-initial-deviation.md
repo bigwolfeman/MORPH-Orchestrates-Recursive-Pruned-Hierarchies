@@ -192,3 +192,38 @@ away from the forcing bias being MORPH's mechanism: H21 (not predictive), H23 (i
 it makes things worse), and the `R_t` regime mismatch (MORPH is not the system the paper
 describes). If SCSE is revisited it should be after a measurement that puts MORPH INSIDE the
 paper's regime, not before.
+
+## Amendment 2026-08-25 — the recommendation above is WITHDRAWN
+
+Two claims in the sections above do not survive a re-read of the paper. The **verdict is
+unchanged**: H23 is refuted, Stage 1 costs 0.815 nats, and every number in the tables
+reproduces (independently recomputed from the raw JSONs and logs by an audit pass on
+2026-08-25). What is withdrawn is the reasoning that went BEYOND the verdict.
+
+**1. "MORPH is not in the regime SCSE's diagnostic was calibrated on" — unsupported.**
+The comparison is MORPH's `R_t` at loop iteration <= 7 against the paper's `R_47`. The paper
+reports baseline `R_t` at exactly two steps, t = 0 and t = 47 (their Table 3, Figure 5), and
+`R_0 = 1.000` is an identity that holds in both systems by construction. There is therefore
+no overlapping measurement, and the paper's baseline could equally sit below 1 at t = 7.
+The defensible statement is narrower and is a within-MORPH one: MORPH never runs depth
+extrapolation, and MORPH's own measurements (H19, H21) do not show the forcing response
+accumulating in MORPH's operating range.
+
+**2. "Recommendation: do not run Stage 2 next" — withdrawn.**
+It rested on claim 1 plus the Stage 1 null. The paper's abstract states the ablations
+"identify the learned anchor and the anchor-coordinate deviation recurrence as the primary
+contributors to the gain". Stage 1 implements neither. Recommending against the only
+configuration the authors credit with the improvement, on the strength of a configuration
+they never report, is not supported by this experiment.
+
+**3. A precision fix on `G_theta(0) = 0`.** `tests/test_scse_core_init.py` zeroes the
+carrier, the source `e`, AND the injection terms. It therefore proves the core BLOCK STACK
+is bias-free — which is `G_theta(0) = 0` for a **source-free** core, the one SCSE actually
+uses. It does NOT show that MORPH's current core map, which takes `e` every iteration, is
+zero-preserving. That map is not, and cannot be: `injection(0, e) != 0`.
+
+Also corrected, both immaterial to any verdict: the Predictions section lists control seed 3's
+`b_t` max as 1.966 where the scorer and the results table say 1.977, and the `delta0_rel`
+range top is quoted as 0.0432 where seed 0 reaches 0.0439.
+
+The full method is specified in [docs/scse-spec.md](../../scse-spec.md) and is being run.

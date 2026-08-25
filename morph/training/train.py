@@ -309,6 +309,14 @@ def build_morph_config(cfg: DictConfig, tul=None) -> MORPHConfig:
         bptt_depth=int(m.bptt_depth),
         ckpt_grad_iters=int(getattr(m, "ckpt_grad_iters", -1)),
         core_init_scale=float(getattr(m, "core_init_scale", 0.0)),
+        # SCSE, the full method (docs/scse-spec.md). Every field goes through the
+        # config so a run is reproducible from its wandb config alone.
+        scse_enabled=bool(getattr(m, "scse_enabled", False)),
+        scse_step_scale=float(getattr(m, "scse_step_scale", 0.5)),
+        scse_anchor_scale=float(getattr(m, "scse_anchor_scale", 0.1)),
+        scse_init_scale=float(getattr(m, "scse_init_scale", 0.1)),
+        scse_eps=float(getattr(m, "scse_eps", 1.0e-8)),
+        scse_kappa=float(getattr(m, "scse_kappa", 0.0)),
         channel_dims=channel_dims,
         compression=int(m.compression),
         n_kv_heads=int(m.n_kv_heads),
@@ -2769,7 +2777,10 @@ def main(cfg: DictConfig) -> None:
             model.train()
 
         # ── Checkpoint ────────────────────────────────────────────────────
-        if step % ckpt_every == 0 and step > 0:
+        # ckpt_every <= 0 means "never checkpoint" (short probe / smoke runs). Guarded
+        # because `step % 0` is a ZeroDivisionError that kills the run after step 0 —
+        # hit for real on 2026-08-25 with `training.ckpt_every=0`.
+        if ckpt_every > 0 and step % ckpt_every == 0 and step > 0:
             ck_path = os.path.join(ckpt_dir, f"step_{step}.pt")
             save_checkpoint(ck_path, step, model, optimizer, scaler, pruning, next_step=step + 1)
             print(f"  Checkpoint: {ck_path}")

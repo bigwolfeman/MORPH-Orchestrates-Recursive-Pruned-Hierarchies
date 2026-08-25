@@ -147,6 +147,25 @@ class MORPHConfig:
     # forward branch, so torch.compile still sees a straight-line graph.
     core_init_scale: float = 0.0
 
+    # ── SCSE — Source-Centered State Evolution (docs/scse-spec.md) ───────────────
+    # The FULL method of arXiv:2607.27656, not the Stage 1 initial-deviation probe above.
+    # The abstract credits the gain to "the learned anchor and the anchor-coordinate
+    # deviation recurrence", which are precisely the two things `core_init_scale` does NOT
+    # implement, so these are separate switches and enabling both RAISES.
+    #     h*        = e + scse_anchor_scale * a_omega(e)          built ONCE, held fixed
+    #     Delta_0   = scse_init_scale * H_0(e) - scse_anchor_scale * a_omega(e)
+    #     Delta_t+1 = Delta_t + 1{||Delta_t||_F^2 > eps} * s * G_theta(Delta_t)
+    #     h_T       = h* + Delta_T
+    # G_theta is the core block stack with NO source injection: the whole point is that the
+    # source enters through the anchor once instead of on every iteration. Construction-time
+    # only, like `tul` and `retention` — never a forward branch.
+    scse_enabled: bool = False
+    scse_step_scale: float = 0.5       # s — the paper's value for a ONE-block core (spec D7)
+    scse_anchor_scale: float = 0.1     # Listing 1 default
+    scse_init_scale: float = 0.1       # Listing 1 default
+    scse_eps: float = 1.0e-8           # zero-deviation mask threshold
+    scse_kappa: float = 0.0            # 0 → SCSE proper; > 0 builds cond_proj (SC-Cond control)
+
     # Selective activation checkpointing of the core-loop grad-iterations (throughput knob).
     # The bptt_depth grad-iterations are checkpointed (recomputed in backward) to save activation
     # memory. ckpt_grad_iters = how many of them (counting from the FIRST grad iter) to checkpoint;
@@ -350,6 +369,83 @@ class _SCSEInit(nn.Module):
 
     def forward(self, e: Tensor) -> Tensor:
         return e + self.scale * self.proj(e)
+
+
+class _SCSE(nn.Module):
+    """Source-Centered State Evolution — the FULL method. Spec: ``docs/scse-spec.md``.
+
+    Paper: "Looped Transformers with Source-Centered State Evolution", arXiv:2607.27656,
+    Kim, Hayashi, Kamiya, Koyama, Iwasawa, Matsuo, 30 July 2026. Reference implementation
+    is its Listing 1; the equation numbers below are the paper's.
+
+    This holds the two learned modules and the four constants. It deliberately does NOT
+    own the loop: the recurrence lives in ``_core_region`` / ``_tul_core`` because MORPH's
+    per-sample Poisson depth, active-set shrinking and truncated-BPTT window all have to
+    apply to the deviation exactly as they apply to the carrier today (spec D5).
+
+    ``bias=False`` on both projections, where Listing 1's ``nn.Linear`` defaults to True
+    (spec D2). Under TUL, ``gather_valid`` zeroes pad slots, so ``e = 0`` there; a bias
+    would put ``h*`` and ``Delta_0`` off zero at pads and give padding a forward effect.
+    """
+
+    def __init__(self, d_model: int, *, step_scale: float, anchor_scale: float,
+                 init_scale: float, eps: float, kappa: float):
+        super().__init__()
+        self.step_scale = float(step_scale)
+        self.anchor_scale = float(anchor_scale)
+        self.init_scale = float(init_scale)
+        self.eps = float(eps)
+        self.kappa = float(kappa)
+        self.anchor_proj = nn.Linear(d_model, d_model, bias=False)   # a_omega
+        self.init_proj = nn.Linear(d_model, d_model, bias=False)     # init_delta_proj / H_0
+        # SCSE proper sets cond_proj=None and kappa=0 (Listing 1 caption). A non-zero kappa
+        # builds the paper's source-conditioned anchor-coordinate (SC-Cond) reference, whose
+        # core is NOT zero-preserving — the mask then supplies the boundary condition.
+        self.cond_proj = nn.Linear(d_model, d_model, bias=False) if kappa != 0.0 else None
+
+    def entry(self, e: Tensor) -> tuple[Tensor, Tensor]:
+        """``(h*, Delta_0)`` for one forward. The ONLY way the loop is entered.
+
+        ``h* = e + anchor_scale * a_omega(e)`` (Eq. 2), and
+        ``Delta_0 = H_0(e) - h*`` with ``H_0(e) = e + init_scale * init_proj(e)``.
+
+        Both come from one method, and ``a_omega(e)`` is evaluated ONCE and reused, for two
+        reasons. It halves the projection cost, and it makes "the anchor is built exactly
+        once per forward" checkable by counting calls to ``anchor_proj`` (invariant S2) —
+        with a separate ``anchor()`` / ``initial_deviation()`` pair the honest count was two
+        and the invariant could not be stated crisply.
+
+        ``Delta_0`` is formed as ``init_scale*init_proj(e) - anchor_scale*anchor_proj(e)``,
+        never as the literal ``H_0(e) - h*``: the ``e`` terms cancel exactly in real
+        arithmetic, and subtracting two bf16 tensors of the carrier's magnitude to recover a
+        quantity ~20x smaller would throw away most of its significant bits (spec D8). It
+        also makes ``Delta_0`` EXACTLY zero wherever ``e`` is zero, which is what keeps TUL
+        pad slots off the forward path (invariant S8).
+        """
+        a = self.anchor_scale * self.anchor_proj(e)
+        return e + a, self.init_scale * self.init_proj(e) - a
+
+    def recurrent_input(self, delta: Tensor, h_star: Tensor) -> Tensor:
+        """What ``G_theta`` actually receives. SCSE proper: the deviation ALONE."""
+        if self.cond_proj is None:
+            return delta
+        return delta + self.kappa * self.cond_proj(h_star)
+
+    def gate(self, delta: Tensor) -> Tensor:
+        """``m_{b,t} = 1{ ||Delta_t^{(b)}||_F^2 > eps }`` (Eq. 4) — per EXAMPLE.
+
+        Listing 1 reduces over ``dim=(1, 2)`` of a ``[B, S, C]`` tensor, i.e. everything
+        except the batch axis, and the paper's text says "The per-example mask". MORPH's
+        carrier carries an extra HyperConnection stream axis, so the reduction is over every
+        axis except 0 (spec D1); reducing over fewer would silently make this per position
+        or per stream, which is a different method.
+
+        Accumulated in fp32 (spec D4): the training path runs bf16 autocast and a sum of
+        ~1.2e7 squares in bf16 cannot support an ``eps = 1e-8`` comparison.
+        """
+        dims = tuple(range(1, delta.dim()))
+        nsq = delta.float().pow(2).sum(dim=dims, keepdim=True)
+        return (nsq > self.eps).to(delta.dtype)
 
 
 def _make_swiglu(d_model: int, d_ff: int, dropout: float) -> nn.Module:
@@ -679,6 +775,31 @@ class MORPHTransformer(nn.Module):
             _SCSEInit(d, cfg.core_init_scale) if cfg.core_init_scale > 0.0
             else _CloneInit())
 
+        # ── SCSE, the full method (docs/scse-spec.md) ──────────────────────────────
+        # Also built LAST, and after `core_init`, for the same RNG-neutrality reason: with
+        # `scse_enabled: false` NO parameter is created and NO RNG is drawn, so a control
+        # model's weights stay byte-identical to master (invariant S1).
+        if cfg.scse_enabled and cfg.core_init_scale > 0.0:
+            raise ValueError(
+                "model.scse_enabled and model.core_init_scale are mutually exclusive. SCSE "
+                "defines its own initial state (Delta_0 = H_0(e) - h*, spec section 2); "
+                "core_init_scale is the Stage 1 probe that sets h_0 only and was measured "
+                "0.815 nats WORSE (docs/experiments/failures/"
+                "2026-08-25-scse-stage1-initial-deviation.md). Set core_init_scale=0.0.")
+        if cfg.scse_enabled and cfg.core_gain_clip > 0.0:
+            raise ValueError(
+                f"model.scse_enabled with core_gain_clip={cfg.core_gain_clip} (spec D6). The "
+                "governor caps ||h_new||/||h_old|| on the LOOP CARRIER, which under SCSE is "
+                "the deviation, not the state — the same tau means a different constraint. "
+                "Set core_gain_clip=0.0, or extend the governor deliberately and update D6.")
+        if cfg.scse_enabled and cfg.n_core == 0:
+            raise ValueError(
+                "model.scse_enabled with n_core=0: there is no core loop to reparameterise.")
+        self.scse: _SCSE | None = (
+            _SCSE(d, step_scale=cfg.scse_step_scale, anchor_scale=cfg.scse_anchor_scale,
+                  init_scale=cfg.scse_init_scale, eps=cfg.scse_eps, kappa=cfg.scse_kappa)
+            if cfg.scse_enabled else None)
+
         # Master kernel switch → drives the fused-Triton-vs-eager-reference
         # dispatch in the attention kernels (process-global flag). Set at build
         # so the choice is captured in the run; the fused-CE branch in forward()
@@ -768,7 +889,7 @@ class MORPHTransformer(nn.Module):
             return h + term
 
     def _apply_core_step(self, h_in, e_in, ids, x0_terms, bg,
-                         ret_state=None, iter_idx=0, inj_terms=None):
+                         ret_state=None, iter_idx=0, inj_terms=None, source_free=False):
         """ONE core-loop step: SSM diagonal injection → the n_core shared blocks
         (each with per-layer x0/bigram injection + optional GLA retention carry).
         Returns ``(h, new_ret_state)`` (new_ret None unless a core layer carries retention).
@@ -792,17 +913,24 @@ class MORPHTransformer(nn.Module):
         """
         np_ = self.cfg.n_prelude
         mlp_kw = {"iter_idx": iter_idx}
-        h_injected = self.injection(h_in, e_in)
+        # `source_free` is SCSE's G_theta (docs/scse-spec.md section 3.2): the shared block
+        # stack with NO source entering the recurrence. Both injections are skipped, not fed
+        # zeros — feeding e = 0 would leave DiagonalInjection's `h_ctx <- A*h_ctx` decaying
+        # the deviation's context channels by ~0.447 per iteration with nothing to refill
+        # them (spec D3). It is a Python bool that is constant per call site, so it traces
+        # out and the baseline graph is unchanged.
+        h_injected = h_in if source_free else self.injection(h_in, e_in)
         ret_cap = {} if self._core_has_retention else None
         for i, layer in enumerate(self.core):
             gi = np_ + i
-            if inj_terms is not None:
-                term = inj_terms[i]
-            else:
-                term = self._build_injection_term(
-                    gi, x0_terms[i], ids, bg, h_injected.dtype
-                )
-            h_injected = self._apply_injection(h_injected, term)
+            if not source_free:
+                if inj_terms is not None:
+                    term = inj_terms[i]
+                else:
+                    term = self._build_injection_term(
+                        gi, x0_terms[i], ids, bg, h_injected.dtype
+                    )
+                h_injected = self._apply_injection(h_injected, term)
             # Retention carry only for the designated core layer(s); others get None.
             is_ret = ret_cap is not None and (i in self._retention_layers)
             rs_arg = ret_state if is_ret else None
@@ -1099,8 +1227,18 @@ class MORPHTransformer(nn.Module):
         # injection would still perturb the ctx channel every iteration. Used by seed models.
         if self.cfg.n_core > 0:
             e = self.input_norm(x)
+            # SCSE (docs/scse-spec.md): a Python-level constant, so every branch on it below
+            # is resolved at trace time and the non-SCSE graph is unchanged.
+            _scse = self.scse
             with _prof("carrier::h_clone"):
-                h = self.core_init(e)
+                if _scse is None:
+                    h = self.core_init(e)
+                    h_star = None
+                else:
+                    # THE LOOP CARRIER IS NOW THE DEVIATION. h* is built ONCE here and is
+                    # never recomputed inside the loop (invariant S2); the absolute state is
+                    # reconstructed as h* + Delta_T at the single loop exit below (S6).
+                    h_star, h = _scse.entry(e)
 
             if self.training:
                 depths = self._sample_depths(B, x.device)
@@ -1121,10 +1259,19 @@ class MORPHTransformer(nn.Module):
             # is the same sum-over-iterations as the per-iteration form.
             n_core = self.cfg.n_core
             np_ = self.cfg.n_prelude
-            x0_core_terms = torch.stack(
+            # SCSE runs a source-free core (spec D3), so neither stack is ever read. Skip
+            # BUILDING them too: they are n_core full [B,S,*] projections per forward, and
+            # constructing tensors only to leave them unused would be a real cost, not a
+            # cosmetic one. `_inj_none` keeps the `args` tuple below a fixed 3-tuple so the
+            # checkpoint call sites are identical in both modes.
+            _inj_none = h.new_zeros(0)
+            if _scse is not None:
+                x0_core_terms = inj_core_terms = _inj_none
+            else:
+              x0_core_terms = torch.stack(
                 [self.x0_injects[np_ + i].precompute(x0) for i in range(n_core)],
                 dim=0,
-            )  # [n_core, B, S, ctx_width]
+              )  # [n_core, B, S, ctx_width]
 
             # ── Hoist the loop-invariant PER-CORE-LAYER injection term out of the loop ──
             # `_build_injection_term(np_+i, x0_core_terms[i], input_ids, bigram_emb, dtype)`
@@ -1139,12 +1286,12 @@ class MORPHTransformer(nn.Module):
             # carrier dtype `h.dtype` (== the old `h_injected.dtype`, bf16). Stacked so the
             # active-set slice is a cheap view and the checkpoint recompute reuses it (no rebuild
             # in backward either — doubles the saving on the checkpointed grad-iters).
-            inj_core_terms = torch.stack(
+              inj_core_terms = torch.stack(
                 [self._build_injection_term(np_ + i, x0_core_terms[i], input_ids,
                                             bigram_emb, h.dtype)
                  for i in range(n_core)],
                 dim=0,
-            )  # [n_core, B, S, C]
+              )  # [n_core, B, S, C]
 
             def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0):
                 # Thin closure → the bound `_apply_core_step` method (single source of truth so
@@ -1153,9 +1300,20 @@ class MORPHTransformer(nn.Module):
                 # are unchanged; np_ (= cfg.n_prelude) is now recomputed inside the method.
                 # ids/x0_terms/bg are None here: the injection is precomputed (inj_terms) and
                 # threaded as a checkpoint input so the recompute reuses it.
-                return self._apply_core_step(h_in, e_in, None, None, None,
-                                             ret_state=ret_state, iter_idx=iter_idx,
-                                             inj_terms=inj_terms)
+                if _scse is None:
+                    return self._apply_core_step(h_in, e_in, None, None, None,
+                                                 ret_state=ret_state, iter_idx=iter_idx,
+                                                 inj_terms=inj_terms)
+                # ── SCSE, Eqs. 3-5 ──────────────────────────────────────────────────
+                # `h_in` IS Delta_t and `e_in` carries h* (used only when kappa > 0 builds
+                # the SC-Cond reference; SCSE proper ignores it). The signature is kept
+                # byte-for-byte so the checkpoint / no_grad / eager call sites below, and
+                # the truncated-BPTT window they implement, are untouched.
+                g_out, new_ret = self._apply_core_step(
+                    _scse.recurrent_input(h_in, e_in), None, None, None, None,
+                    ret_state=ret_state, iter_idx=iter_idx, inj_terms=None, source_free=True)
+                q = _scse.step_scale * g_out                       # Eq. 3
+                return h_in + _scse.gate(h_in) * q, new_ret        # Eqs. 4-5
 
             # ── Active-set shrinking ────────────────────────────────────────────
             # A sample is updated only while iteration t < its Poisson depth, then
@@ -1171,11 +1329,14 @@ class MORPHTransformer(nn.Module):
             inv_perm = torch.argsort(perm)
             with _prof("carrier::perm_gather"):
                 h_s = h[perm]
-                e_s = e[perm]
+                # Under SCSE `e_s` carries the ANCHOR, not the source: the loop's second
+                # positional argument is what `_core_step` forwards to `recurrent_input`,
+                # and SCSE's recurrence never sees `e` again after Delta_0 and h* are built.
+                e_s = (h_star if _scse is not None else e)[perm]
                 # ids_s / bg_s / x0_s gathers are gone: the injection is precomputed
                 # (inj_core_terms) and only IT needs sorting into active-set order. This also
                 # drops 3 gather kernels/step (input_ids, bigram, x0-stack) from the hot loop.
-                inj_s = inj_core_terms[:, perm]          # [n_core, B, S, C], sorted order
+                inj_s = _inj_none if _scse is not None else inj_core_terms[:, perm]
 
             # Selective checkpointing: checkpoint the first `n_ckpt` grad-iterations, run the rest
             # (the last grad-iters) eager (activations retained → no backward recompute). -1 → all.
@@ -1227,7 +1388,11 @@ class MORPHTransformer(nn.Module):
             _capture_traj = getattr(self, "_capture_traj", False)
             _traj: list[Tensor] = []
             if _capture_traj:
-                _traj.append((e_s.mean(dim=2) if self._is_hc else e_s).detach())  # z_0 (pre-loop)
+                # Under SCSE the carrier is the deviation, so the absolute pre-loop state is
+                # h* + Delta_0 (= e_s + h_s here). Recording the raw carrier would hand the
+                # forecastability probe a different quantity under a different name.
+                _z0 = (e_s + h_s) if _scse is not None else e_s
+                _traj.append((_z0.mean(dim=2) if self._is_hc else _z0).detach())  # z_0 (pre-loop)
             for t in range(total_iters):
                 n_active = active_counts[t]
                 if n_active == 0:
@@ -1236,7 +1401,8 @@ class MORPHTransformer(nn.Module):
                 # inj_s[:, :n_active]: the precomputed injection sliced to the active prefix
                 # (per-sample terms, no cross-sample mixing → slicing is exact). Passed as a
                 # checkpoint input so backward recompute reuses it instead of rebuilding.
-                args = (h_a, e_s[:n_active], inj_s[:, :n_active])
+                args = (h_a, e_s[:n_active],
+                        _inj_none if _scse is not None else inj_s[:, :n_active])
                 rs_a = ret_state_s[:n_active] if track_ret else None
                 # Jacobian probe capture — see the twin in `_tul_core`. None by default,
                 # so this branch traces out and the forward stays bit-identical.
@@ -1246,6 +1412,10 @@ class MORPHTransformer(nn.Module):
                         "ret_state": None if rs_a is None else rs_a.detach(),
                         "iter_idx": t,
                         "active": h_a.new_ones(h_a.shape[:2], dtype=torch.bool),
+                        # Under SCSE "h" is the DEVIATION and "e" is the ANCHOR. Any probe
+                        # that reads these as (state, source) describes the wrong operator,
+                        # so the mode travels WITH the data instead of being assumed.
+                        "scse": _scse is not None,
                     })
 
                 # Checkpoint this grad-iteration? Only in training, and only the first n_ckpt grad
@@ -1277,7 +1447,11 @@ class MORPHTransformer(nn.Module):
                     h_new = h_new * _scale.view(-1, *([1] * (h_new.dim() - 1)))
 
                 if _capture_traj:  # eval-only interp: capture EVERY iteration's carrier (z_1..z_T)
-                    _traj.append((h_new.mean(dim=2) if self._is_hc else h_new).detach())
+                    # Eval runs a UNIFORM depth, so perm is the identity and n_active is the
+                    # full batch (see the comment where _capture_traj is read); e_s therefore
+                    # aligns with h_new row for row and h* + Delta is the absolute state.
+                    _zt = (e_s + h_new) if _scse is not None else h_new
+                    _traj.append((_zt.mean(dim=2) if self._is_hc else _zt).detach())
 
                 if self._diag_corecos:
                     _a = h_a.flatten(0, 1); _b = h_new.flatten(0, 1)          # [n*S, C] per-token
@@ -1316,6 +1490,12 @@ class MORPHTransformer(nn.Module):
 
             with _prof("carrier::inv_perm_gather"):
                 x = h_s[inv_perm]                    # restore original batch order
+                if _scse is not None:
+                    # Eq. 5 tail: h_T = h* + Delta_T (invariant S6). The deviation exists
+                    # ONLY between the two lines marked S2/S6 — everything downstream (coda,
+                    # readout, scatter, gate head, every checkpoint key) sees the absolute
+                    # carrier exactly as it does today. h_star is already in batch order.
+                    x = h_star + x
         else:
             # n_core == 0 (seed models): the loop path hands the coda
             # h = input_norm(prelude_out) (+ core deltas), so the coreless path
@@ -1415,18 +1595,39 @@ class MORPHTransformer(nn.Module):
 
         xn = self.input_norm(x)
         e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
+        _scse = self.scse           # Python-level constant → every branch below traces out
         with _prof("carrier::h_clone"):
-            h = self.core_init(e)
+            if _scse is None:
+                h = self.core_init(e)
+                h_star = None
+            else:
+                # THE LOOP CARRIER IS THE DEVIATION (docs/scse-spec.md section 3.1). h* is
+                # built ONCE (S2); the absolute slot state is rebuilt at the return (S6).
+                # `gather_valid` zeroes pad slots, and both projections are bias-free, so a
+                # pad has h* = 0 AND Delta_0 = 0 exactly — invariant S8.
+                h_star, h = _scse.entry(e)
 
         # Loop-invariant injection, built ON THE COMPACT SEQUENCE (the x0/bigram hoist
         # of the token path, applied to 9-19× fewer positions). Value-embeds never fire
         # in the core (gi ≥ n_prelude is not in _ve_layer_map), so input_ids is not needed.
-        x0_s = gather_valid(x0, gidx, gvalid)
-        bg_s = gather_valid(bigram_emb, gidx, gvalid) if bigram_emb is not None else None
-        inj = torch.stack(
-            [self._build_injection_term(np_ + i, self.x0_injects[np_ + i].precompute(x0_s),
-                                        None, bg_s, h.dtype)
-             for i in range(n_core)], dim=0)
+        # SCSE's core is source-free (spec D3), so the x0/bigram stack is never read — and
+        # building it anyway would cost n_core projections over the compact sequence per
+        # forward. `_inj_none` keeps the call signature below identical in both modes.
+        _inj_none = h.new_zeros(0)
+        if _scse is not None:
+            x0_s = bg_s = None
+            inj = _inj_none
+        else:
+            x0_s = gather_valid(x0, gidx, gvalid)
+            bg_s = gather_valid(bigram_emb, gidx, gvalid) if bigram_emb is not None else None
+            inj = torch.stack(
+                [self._build_injection_term(np_ + i, self.x0_injects[np_ + i].precompute(x0_s),
+                                            None, bg_s, h.dtype)
+                 for i in range(n_core)], dim=0)
+        # What the loop actually hands `_core_step`. Under SCSE the second argument carries
+        # the ANCHOR (read only when kappa > 0) and the third is unused.
+        _e_arg = h_star if _scse is not None else e
+        _inj_arg = _inj_none if _scse is not None else inj
 
         if halt:
             if self.tul_gate is None:
@@ -1456,9 +1657,19 @@ class MORPHTransformer(nn.Module):
             ret_state = None
 
         def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0):
-            return self._apply_core_step(h_in, e_in, None, None, None,
-                                         ret_state=ret_state, iter_idx=iter_idx,
-                                         inj_terms=inj_terms)
+            if _scse is None:
+                return self._apply_core_step(h_in, e_in, None, None, None,
+                                             ret_state=ret_state, iter_idx=iter_idx,
+                                             inj_terms=inj_terms)
+            # ── SCSE, Eqs. 3-5 ──────────────────────────────────────────────────────
+            # `h_in` IS Delta_t; `e_in` carries h*. Signature unchanged so the three call
+            # sites (no_grad / checkpoint / eager) and the truncated-BPTT window they
+            # implement are untouched.
+            g_out, new_ret = self._apply_core_step(
+                _scse.recurrent_input(h_in, e_in), None, None, None, None,
+                ret_state=ret_state, iter_idx=iter_idx, inj_terms=None, source_free=True)
+            q = _scse.step_scale * g_out                       # Eq. 3
+            return h_in + _scse.gate(h_in) * q, new_ret        # Eqs. 4-5
 
         g_list: list[Tensor] = []
         # ── Phase-1 onset probe (plan task 1.1) ───────────────────────────────
@@ -1487,7 +1698,11 @@ class MORPHTransformer(nn.Module):
             # reached. Detached: the probe rebuilds its own graph.
             if self._jac_capture is not None:
                 self._jac_capture.append({
-                    "h": h.detach(), "e": e.detach(), "inj": inj.detach(),
+                    "h": h.detach(), "e": _e_arg.detach(), "inj": _inj_arg.detach(),
+                    # Under SCSE "h" is the DEVIATION and "e" is the ANCHOR — see the twin
+                    # in `_core_region`. The mode travels with the data so no probe can read
+                    # these as (state, source) by accident.
+                    "scse": _scse is not None,
                     "ret_state": None if ret_state is None else ret_state.detach(),
                     # `active & slot_valid`, never `active` alone. A pad slot enters the
                     # loop at h = 0 (gather_valid zeroes it) and depths is 1 there, so it is
@@ -1499,12 +1714,15 @@ class MORPHTransformer(nn.Module):
             do_ckpt = self.training and (t - n_nograd) < n_ckpt
             if t < n_nograd:
                 with torch.no_grad():
-                    h_new, rs_new = _core_step(h, e, inj, ret_state=ret_state, iter_idx=t)
+                    h_new, rs_new = _core_step(h, _e_arg, _inj_arg, ret_state=ret_state,
+                                               iter_idx=t)
             elif do_ckpt:
-                h_new, rs_new = checkpoint(_core_step, h, e, inj, ret_state=ret_state,
-                                           iter_idx=t, use_reentrant=False)
+                h_new, rs_new = checkpoint(_core_step, h, _e_arg, _inj_arg,
+                                           ret_state=ret_state, iter_idx=t,
+                                           use_reentrant=False)
             else:
-                h_new, rs_new = _core_step(h, e, inj, ret_state=ret_state, iter_idx=t)
+                h_new, rs_new = _core_step(h, _e_arg, _inj_arg, ret_state=ret_state,
+                                           iter_idx=t)
 
             _tau = self.cfg.core_gain_clip
             if _tau > 0.0 and self._clip_applies(t):
@@ -1535,7 +1753,10 @@ class MORPHTransformer(nn.Module):
             # Read off h_new, not the masked h: for an active slot they are equal, and
             # the halting policy below needs this iteration's fresh state.
             if self.tul_gate is not None:
-                g_t = self.tul_gate.readout(h_new)                 # [B, S]
+                # Under SCSE `h_new` is the deviation; the halting head is a readout of the
+                # slot STATE, so it must see h* + Delta, not the deviation alone.
+                g_t = self.tul_gate.readout(
+                    (h_star + h_new) if _scse is not None else h_new)   # [B, S]
                 g_list.append(g_t)
 
             if _probe:
@@ -1587,6 +1808,10 @@ class MORPHTransformer(nn.Module):
                 "clip_bind": torch.stack(_pr_bind) if _pr_bind else None,
             }
         g_traj = torch.stack(g_list, dim=-1) if g_list else None   # [B, S, T]
+        if _scse is not None:
+            # Eq. 5 tail: h_T = h* + Delta_T (invariant S6). The deviation lives ONLY inside
+            # this function; `_forward_tul` scatters an absolute carrier exactly as today.
+            h = h_star + h
         return xn, h, depths, g_traj
 
     def _tul_half_weights(self, labels: Tensor, layout: SlotLayout):
