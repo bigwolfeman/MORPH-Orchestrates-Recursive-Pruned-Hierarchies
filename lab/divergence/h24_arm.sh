@@ -1,47 +1,45 @@
 #!/bin/bash
-# H24 arm — does training with the core's HCA branch alive change the takeover?
-# Pre-registration: docs/experiments/planned/2026-08-25-h24-hca-branch-arm-1seed.md
+# H24 — does training with the core's HCA compressed branch alive stop the TUL takeover?
+# Pre-registration: docs/experiments/planned/2026-08-25-h24-hca-branch-arm-binary.md
 #
-# ONE SEED [W, 2026-08-25]. Seed 0 is the strongest single signal in this campaign: it
-# aborted at step 2040 in the seed sweep with a +1.17 nat rise while seeds 1-3 stayed
-# inside the 0.168-nat healthy noise floor. The 4-seed design is rejected, not amended:
-# docs/experiments/failures/2026-08-25-h24-hca-branch-arm-4seed.md.
+# THE SIGNAL IS BINARY: the divergence guard fires, or it does not. Everything here is
+# chosen so the CONTROL reliably fires, because a control that survives answers nothing.
 #
-# SEQUENTIAL: one trainer at a time against a loaded GPU (the UPS trips on GPU-100% plus
-# CPU load together).
+# REGIME = the one in docs/tul-divergence-rca.md §1, where A1 aborted at step 4540 and
+# A1r (seed 1) at 3240 — "Two seeds fail the same way. This is structural, not seed luck."
+# That means tul_a1 at batch 12, alpha_cap 3.5, PRODUCTION KERNELS, and the full 20k-step
+# optimizer schedule.
 #
-# The CONTROL may already be running from the rejected 4-seed launch. Pass `arm` to run
-# only the arm, or `both` (default) for both.
+# ademamix_t_beta3 IS PINNED. `morph/training/optimizer.py:152` falls back to
+# training.steps when the key is null, which base.yaml ships — so shortening a run
+# silently shortens the optimizer's beta3 warmup, the slow EMA this whole failure runs on.
+# Pinning 20000 reproduces the RCA schedule exactly while stopping at 6000, which is past
+# both documented abort steps. An earlier launch of this arm changed the budget instead of
+# pinning the horizon and its control never took over at all.
 #
-# STEP BUDGET IS NOT A FREE KNOB. `morph/training/optimizer.py:152`:
-#   t_beta3 = int(_tb) if _tb is not None else int(tr.steps)
-# and `base.yaml` ships `ademamix_t_beta3: null`. So changing `training.steps` changes the
-# optimizer's beta3 WARMUP HORIZON — the slow EMA the whole takeover story runs on. The
-# first launch of this arm used 6000 against a seed sweep run at 3500 and the control then
-# failed to take over at all. Second argument is the budget so it is always explicit and
-# always visible in the log; 3500 matches the seed sweep and the onset ladder.
+# SEQUENTIAL and INTERLEAVED: one trainer at a time (the UPS trips on GPU-100% plus CPU
+# load together), and ctrl/arm alternate per seed so machine drift hits both.
 set -u
 cd /home/wolfe/morph-perf
 PY=/home/wolfe/11-DiffusionBlocks-Testing/.venv/bin/python
-WHICH=${1:-both}
-STEPS=${2:-3500}
-S=/home/wolfe/morph-scratch/h24arm$STEPS
+S=/home/wolfe/morph-scratch/h24bin
 mkdir -p $S
-echo "budget: training.steps=$STEPS  ->  ademamix_t_beta3=$STEPS (null in the yaml)"
 
-COMMON="training.steps=$STEPS training.batch_size=6 training.ademamix_alpha_cap=3.5
-        model.use_kernels=false training.eval_every=250 training.gen_every=0
-        training.ckpt_every=500 training.seed=0"
+COMMON="training.steps=6000 training.ademamix_t_beta3=20000 training.batch_size=12
+        training.ademamix_alpha_cap=3.5 training.eval_every=250 training.gen_every=0
+        training.ckpt_every=1000"
 
-run () {   # run <tag> <config-name>
+run () {   # run <tag> <config-name> <seed>
   echo "START $1 $(date +%H:%M:%S)"
   WANDB_DIR=/home/wolfe/morph-scratch PYTHONPATH=$PWD PYTHONUNBUFFERED=1 \
   $PY -m morph.training.train --config-name $2 \
-    hydra.run.dir=$S/hy-$1 $COMMON wandb.name=h24-$1-$STEPS \
+    hydra.run.dir=$S/hy-$1 $COMMON training.seed=$3 wandb.name=h24-$1 \
     > $S/$1.log 2>&1
   echo "$1 exit=$? at $(date +%H:%M:%S)"
 }
 
-[ "$WHICH" = "arm" ] || run ctrl-s0  tul_a1
-run hca16-s0 tul_a1_hca16
-echo "H24 ARM ALL DONE at $(date +%H:%M:%S)"
+for sd in 0 1; do
+  run ctrl-s$sd  tul_a1        $sd
+  run hca16-s$sd tul_a1_hca16  $sd
+done
+echo "H24 BINARY ARM ALL DONE at $(date +%H:%M:%S)"

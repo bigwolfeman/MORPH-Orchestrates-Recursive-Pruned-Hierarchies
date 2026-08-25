@@ -1,6 +1,30 @@
-# Experiment: H24 arm at one seed — train with the core's HCA compressed branch alive
+> **REJECTED 2026-08-25 15:35, before it produced a scored result.** Two things were wrong
+> with it, and only one was the seed count.
+>
+> 1. **The regime could not deliver the signal.** It ran `tul_a1` at batch 6 for 3500 steps,
+>    where the control diverges on 1 of 4 seeds. The question is BINARY — the guard fires or
+>    it does not — so the experiment must run where the control reliably fires.
+>    `docs/tul-divergence-rca.md` §1 has that regime: batch 12, `alpha_cap` 3.5, production
+>    kernels, full 20k schedule, where A1 aborted at 4540 and A1r at 3240, recorded as
+>    "Two seeds fail the same way. This is structural, not seed luck."
+> 2. **Shortening the run was the wrong fix for the budget confound.** `ademamix_t_beta3` is
+>    an explicit config key. Pinning it holds the optimizer schedule while the run stays long
+>    enough to see the failure. Amendment 1 below shortened the RUN instead, which kept the
+>    confound out but also truncated the window the failure lives in.
+>
+> Replaced by [`2026-08-25-h24-hca-branch-arm-binary.md`](../planned/2026-08-25-h24-hca-branch-arm-binary.md),
+> which pins `ademamix_t_beta3=20000`, runs the RCA regime, and predicts the binary outcome
+> directly instead of CE deltas against a noise floor.
+>
+> **What ran under this file:** one control at 6000 steps / batch 6, which completed healthy
+> (min 4.0929, final 4.2152, rise 0.122, core gradnorm ~0.006) — kept at
+> `morph-scratch/h24arm6000/`; its arm was killed at step 200. A second control at 3500
+> steps / batch 6 was killed at step 600. Neither produced a scored panel. No ARM number
+> exists from either, so the replacement's predictions are still written blind to the arm.
 
-Status: planned
+# Experiment: H24 arm at one seed — REJECTED, superseded by the binary design
+
+Status: failure
 
 Ledger: `lab/divergence/takeover-campaign.md` H24.
 Supersedes: [the 4-seed design](../failures/2026-08-25-h24-hca-branch-arm-4seed.md), rejected
