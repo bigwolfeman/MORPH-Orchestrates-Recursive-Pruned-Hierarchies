@@ -612,3 +612,47 @@ def test_h_star_is_aligned_with_the_ORIGINAL_batch_order():
     assert torch.allclose(out, h_star + d0, rtol=0, atol=1e-5), (
         f"anchor/deviation batch misalignment: max diff "
         f"{float((out - (h_star + d0)).abs().max()):.3e}")
+
+
+def test_the_core_receives_the_BARE_deviation_on_the_TUL_path():
+    """Re-audit sabotage: feeding `h_in + e_in` to the blocks in `_tul_core` ALONE passed all
+    29 tests. S13 hooks `core[0]` but drives only the token path, and the arms run
+    `tul_a1` -> `_tul_core`. This is the TUL twin, exactly as S14 is the TUL twin of the mask
+    test. Same lesson twice: a guard on the token path is not a guard on the shipped path.
+    """
+    x, y, layout, _ = _batch()
+    m = _build(1, tul=TULConfig(prefix_k=2, slot_id=4), scse_enabled=True)
+    m.eval()
+    seen: list[torch.Tensor] = []
+    m.core[0].register_forward_pre_hook(
+        lambda _mod, args: seen.append(args[0].detach().clone()))
+    m._jac_capture = []
+    with torch.no_grad():
+        m(x, labels=y, slot_layout=layout)
+    caps, m._jac_capture = m._jac_capture, None
+    assert len(seen) >= len(caps) >= 2, f"{len(seen)} block inputs, {len(caps)} captures"
+    for c, inp in zip(caps, seen):
+        assert torch.equal(inp, c["h"]), (
+            f"iter {c['iter_idx']}: the TUL slot path fed the core something that is NOT the "
+            f"bare deviation (max diff {float((inp - c['h']).abs().max()):.3e})")
+
+
+def test_update_gradients_are_correct_not_merely_present():
+    """Re-audit finding: `stack_out - delta.detach()` leaves the FORWARD bit-identical and the
+    BACKWARD wrong, and passed every test. Every other test here asserts forward values or
+    gradient EXISTENCE, never gradient VALUES.
+
+    Closed in closed form rather than by autograd comparison, because the derivative of
+    `D + m*s*(S - D)` is exact and known: with the mask active, `d/dD = (1 - s)` and
+    `d/dS = s`. A detached `D` inside the update makes the first `1` instead of `1 - s`.
+    Run in float64 so the equality is a real check and not a tolerance.
+    """
+    s = _SCSE(4, step_scale=0.5, anchor_scale=0.1, init_scale=0.1,
+              eps=1e-8, kappa=0.0).double()
+    d = (torch.randn(2, 3, 4, 4, dtype=torch.float64) * 3.0).requires_grad_(True)
+    so = torch.randn(2, 3, 4, 4, dtype=torch.float64).requires_grad_(True)
+    s.update(d, so).sum().backward()
+    assert torch.allclose(d.grad, torch.full_like(d.grad, 1.0 - 0.5), rtol=0, atol=1e-12), (
+        "d(update)/d(delta) is not (1 - s): the deviation is detached or double-counted")
+    assert torch.allclose(so.grad, torch.full_like(so.grad, 0.5), rtol=0, atol=1e-12), (
+        "d(update)/d(stack_out) is not s")

@@ -42,15 +42,19 @@ model:
   # arXiv:2607.27656. The FULL method, not the core_init_scale probe above (which was
   # measured 0.815 nats WORSE and is dead). Enabling both RAISES at build time.
   #   h*        = e + scse_anchor_scale * a_omega(e)        built ONCE, held fixed
-  #   Delta_0   = scse_init_scale*H_0(e) - scse_anchor_scale*a_omega(e)
+  #   Delta_0   = scse_init_scale*init_proj(e) - scse_anchor_scale*a_omega(e)
   #   Delta_t+1 = Delta_t + 1{||Delta_t||_F^2 > scse_eps} * scse_step_scale * G(Delta_t)
   #   h_T       = h* + Delta_T
-  # G is the core block stack with NO source injection — the source enters through the
-  # anchor once instead of on every iteration. false → no parameters built, no RNG drawn,
+  #   G(D)      = stack(D) - D      <-- the subtraction is load-bearing
+  # `stack` is the core block stack with NO source injection: the source enters through the
+  # anchor once instead of on every iteration. `stack` carries its OWN residual, so feeding
+  # stack(D) straight in would apply a residual TWICE (~1.41x gain per iteration). false → no parameters built, no RNG drawn,
   # bitwise identical to a model built before this existed.
   scse_enabled: false
-  scse_step_scale: 0.5      # s. The paper's value is tuned for a ONE-block core; MORPH
-                            # applies n_core blocks per step, so this may need its own sweep.
+  scse_step_scale: 0.5      # s. With G(D) = stack(D) - D this DAMPS between no update (0)
+                            # and MORPH's own core map in deviation coordinates (1). Every
+                            # s in (0,1] is non-expansive, so 1.0 is the natural second
+                            # point of a sweep, not a smaller value.
   scse_anchor_scale: 0.1    # Listing 1 default
   scse_init_scale: 0.1      # Listing 1 default
   scse_eps: 1.0e-8          # zero-deviation mask threshold

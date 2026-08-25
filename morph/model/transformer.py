@@ -153,11 +153,14 @@ class MORPHConfig:
     # deviation recurrence", which are precisely the two things `core_init_scale` does NOT
     # implement, so these are separate switches and enabling both RAISES.
     #     h*        = e + scse_anchor_scale * a_omega(e)          built ONCE, held fixed
-    #     Delta_0   = scse_init_scale * H_0(e) - scse_anchor_scale * a_omega(e)
+    #     Delta_0   = scse_init_scale * init_proj(e) - scse_anchor_scale * a_omega(e)
     #     Delta_t+1 = Delta_t + 1{||Delta_t||_F^2 > eps} * s * G_theta(Delta_t)
     #     h_T       = h* + Delta_T
-    # G_theta is the core block stack with NO source injection: the whole point is that the
-    # source enters through the anchor once instead of on every iteration. Construction-time
+    #     G_theta(D) = stack(D) - D    <-- the SUBTRACTION is load-bearing; see _SCSE.update
+    # `stack` is the core block stack with NO source injection: the source enters through
+    # the anchor once instead of on every iteration. `stack` carries its OWN residual, so
+    # feeding stack(D) straight in would apply a residual TWICE (~1.41x gain per iteration).
+    # Construction-time
     # only, like `tul` and `retention` — never a forward branch.
     scse_enabled: bool = False
     scse_step_scale: float = 0.5       # s — the paper's value for a ONE-block core (spec D7)
@@ -451,7 +454,14 @@ class _SCSE(nn.Module):
         essentially "identity plus an update of about half the size". The doubled form gains
         **1.414x per iteration** (16x over eight); this form gains **0.923x**.
 
-        Subtracting ``delta`` restores the paper's structure. Equivalently
+        Subtracting ``delta`` restores the LOOP-LEVEL residual structure. It APPROXIMATES
+        the paper's ``B_theta``; it is not an equivalence, and spec section 3.2 says so.
+        MORPH's HyperConnection carry is an orthogonal Cayley MIX ``M``, not the identity,
+        so ``stack(D) = M(D) + U(D)`` and ``stack(D) - D = U(D) + (M - I)(D)`` where the
+        paper's update is ``U`` alone. Measured at init the mixers sit about 2 % off
+        identity, so the extra term is small; and it is SAFE in the useful direction --
+        the resulting carry ``(1 - s)I + s*M`` has every eigenvalue of magnitude <= 1 for
+        orthogonal ``M``, so it can only DAMP the deviation, never expand it. Equivalently
         ``Delta_{t+1} = (1 - s)*Delta_t + s*stack(Delta_t)``, so ``s`` is a damping factor
         between "no update" (s = 0) and MORPH's own core map in deviation coordinates
         (s = 1). Zero-preservation survives: ``stack(0) = 0`` gives ``G(0) = 0``.

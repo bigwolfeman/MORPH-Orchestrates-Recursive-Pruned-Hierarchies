@@ -168,6 +168,39 @@ Equivalently `Delta_{t+1} = (1 - s)*Delta_t + s*stack(Delta_t)`, so `s` is a dam
 between "no update" at `s = 0` and MORPH's own core map in deviation coordinates at `s = 1`.
 That reading is pinned by a test. Zero-preservation survives: `stack(0) = 0` gives `G(0) = 0`.
 
+#### 3.2.1 This is an APPROXIMATION of the paper's `B_theta`, not an equivalence
+
+Stated plainly because the first draft of this section said "restores the paper's structure",
+which overclaims. MORPH's HyperConnection carry is an **orthogonal Cayley mix**, not the
+identity (`hyper_connections.py`: `x_out = Hres*x + Hpost*(y (x) 1)`), so
+
+    stack(D)      = M(D)*D + U(D)          M = 12 orthogonal mixers (2 per block x 6 blocks)
+    stack(D) - D  = U(D) + (M - I)*D       the paper's update is U ALONE
+
+The implemented form therefore folds the rotation increment `(M - I)*D` into the damped
+update; the effective carry becomes `(1 - s)I + s*M` instead of `M`. Three things make this
+the right form to ship anyway:
+
+1. **The extra term is small.** Measured at init, `||Hres - I||_F` is 0.046 mean and 0.088
+   max over 16 HC applications, against `||I||_F = 2.0` — the mixers sit about 2 % off
+   identity, so `stack(D) - D` is the pure branch update to within a few percent. What is NOT
+   measured is how far `Hres` drifts from identity over a long run. That is an open edge and
+   it is worth logging during any long campaign.
+2. **The error can only damp, never expand.** For orthogonal `M`, every eigenvalue of
+   `(1 - s)I + s*M` has magnitude `|(1 - s) + s*e^{i.theta}| <= 1` for any `s` in `(0, 1]`.
+   This is the opposite failure direction from the bug it replaces, which is why it is safe to
+   ship an approximation here at all.
+3. **No exact analogue exists.** The alternative — scaling only the `Hpost` branch write by
+   `s` inside the core blocks, keeping the carry isometric — is still not the paper's map:
+   MORPH interleaves 12 residual writes across six blocks, each feeding the next block's
+   mixer, and the paper's one-block `G` has a single hoisted residual. There is nothing to be
+   exactly equal to.
+
+**One cost to name:** `s` now damps the loop's Cayley stream MIXING by the same factor as the
+update, so at `s = 0.5` the loop's HC routing runs at half strength relative to the prelude
+and coda blocks. That is a deviation from JPmHC's exact-isometry intent. It is a documented
+approximation, not a bug, and it is an argument against ever lowering `s` below 0.5.
+
 `G_theta(0) = 0` for this map is already verified numerically on the real 286.1M `tul_a1`
 model, fp32 and bf16 autocast, peak `|out| = 0.000e+00`
 (`tests/test_scse_core_init.py::test_zero_carrier_returns_zero_on_the_REAL_model`, which
@@ -249,9 +282,15 @@ sorted prefix, on the TUL path it is a `torch.where` masked update over the full
 quantity, so the same tau means something else. The arms run `core_gain_clip: 0.0` (dormant).
 Enabling both must raise at build time rather than quietly change meaning.
 
-**D7 — `s = 0.50` is the paper's value for a ONE-block core.** MORPH applies `n_core = 6`
-blocks per recurrent step, so the per-step gain is not comparable and `s` may need its own
-sweep. The port uses 0.50 as specified; the first arm is not a tuning run.
+**D7 — `s = 0.50` is the paper's value for a ONE-block core, and with the corrected `G` it
+now means DAMPING.** MORPH applies `n_core = 6` blocks per recurrent step, so the per-step
+gain is not directly comparable. But since `G(D) = stack(D) - D`, the recurrence is
+`(1 - s)D + s*stack(D)`, which is non-expansive for every `s` in `(0, 1]` (section 3.2.1), so
+stability no longer depends on the value. The measured effective per-step relative update at
+`s = 0.5` is about 0.23-0.32, a sane operating point. The natural SECOND point of any sweep is
+therefore `s = 1.0` — exactly MORPH's own core map in deviation coordinates — and NOT a
+smaller value, because small `s` also damps the loop's stream mixing. The port runs 0.50 as
+specified; the first arm is not a tuning run.
 
 **D8 — `Delta_0` is formed directly, not as `H_0(e) - h*`.** The two expressions are equal
 in real arithmetic because the `e` terms cancel, so the implementation evaluates
@@ -302,6 +341,8 @@ Each one names the check that fails when it breaks.
 | S13 | the first core block receives the BARE deviation, not the anchor | `test_the_core_receives_the_BARE_deviation` |
 | S14 | the mask fires on the TUL path, which is the path the arms run | `test_mask_freezes_a_below_threshold_deviation_on_the_TUL_path` |
 | S15 | `h*` is added in ORIGINAL batch order, under a non-identity depth sort | `test_h_star_is_aligned_with_the_ORIGINAL_batch_order` |
+| S13b | the TUL slot path also feeds the core the BARE deviation | `test_the_core_receives_the_BARE_deviation_on_the_TUL_path` |
+| S16 | `update`'s GRADIENTS are right, not merely present: `d/dD = 1-s`, `d/dS = s` | `test_update_gradients_are_correct_not_merely_present` |
 | S11 | the construction guards raise instead of silently changing meaning | `test_scse_and_stage1_are_mutually_exclusive`, `test_scse_rejects_the_core_gain_governor`, `test_scse_rejects_a_coreless_model`, `test_kappa_zero_builds_no_cond_proj` |
 
 **S12-S15 exist because an independent audit broke the implementation four ways and the
@@ -310,6 +351,12 @@ the TUL path, `h*` permuted) were live gaps; the fourth is the recurrence bug th
 found. The lesson recorded here: the original S3 tests counted calls to MORPH's LEGACY source
 modules rather than reading the tensor the blocks actually receive, and every other test ran
 at uniform eval depth where the batch permutation is the identity.
+
+**S13b and S16 came from a SECOND audit round on the fix itself.** A TUL-path anchor leak
+still survived all 29 tests, because S13 hooked `core[0]` but drove only the token path — the
+same class of gap, on the same shipped path, twice. And a `stack_out - delta.detach()` left
+the forward bit-identical while corrupting the backward, which every test missed because they
+all assert forward values or gradient EXISTENCE, never gradient VALUES.
 
 **S4 and S4b are separate on purpose.** A sabotage pass on 2026-08-25 disabled the mask
 entirely and S4 still passed: MORPH's core is zero-preserving, so `Delta_1 = 0 + s*G(0) = 0`
