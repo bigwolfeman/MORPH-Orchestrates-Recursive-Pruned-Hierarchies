@@ -437,7 +437,10 @@ def forcing_bias(root, points: list[dict]) -> list[dict]:
             n = min(common.shape[0], a.shape[0])
             common = common[:n] & a[:n]
     for p in points:
-        nrow = min(anchor.shape[0], p["inj"].shape[1], common.shape[0])
+        # SCSE carries a 0-element injection placeholder (it builds no injection at all), so
+        # the batch width has to come from the carrier there rather than from `inj`.
+        _bw = p["h"].shape[0] if scse else p["inj"].shape[1]
+        nrow = min(anchor.shape[0], _bw, common.shape[0])
         cm = common[:nrow]
         if not bool(cm.any()):
             continue
@@ -452,7 +455,7 @@ def forcing_bias(root, points: list[dict]) -> list[dict]:
             q = dict(p)
             q["h"] = src_h[:nrow]
             q["e"] = p["e"][:nrow]
-            q["inj"] = p["inj"][:, :nrow]
+            q["inj"] = p["inj"] if scse else p["inj"][:, :nrow]
             if p["ret_state"] is not None:
                 q["ret_state"] = p["ret_state"][:nrow]
             return q
@@ -539,7 +542,13 @@ def drift(root, points: list[dict], plain: bool = False, once_only: bool = False
         # states, which is a different question and — because iteration 0 is shared — makes
         # the first two iterations identical by construction. That defect shipped once.
         base_kw = {"no_diag": True} if (once_only and int(p["iter_idx"]) > 0) else {}
-        modes = (("full", base_kw),) if plain else (
+        # Under SCSE there is NO source in the recurrence, so every injection ablation is
+        # undefined rather than merely uninteresting: `zero_inj` would zero a tensor the map
+        # never reads, and the four variants would return four copies of "full" wearing
+        # different names. `step_at` raises rather than return that; here we simply do not
+        # ask. Recorded so a reader of the JSON knows why the ablation columns are absent.
+        _scse = bool(p.get("scse"))
+        modes = (("full", base_kw),) if (plain or _scse) else (
             ("full", base_kw), ("noinj", {"zero_inj": True}), ("nodiag", {"no_diag": True}),
             ("nodt", {"no_dt": True}), ("nodecay", {"no_decay": True}))
         for tag, kw in modes:
@@ -550,10 +559,17 @@ def drift(root, points: list[dict], plain: bool = False, once_only: bool = False
             row[f"rel_{tag}"] = rms / max(h_rms, 1e-30)
             row[f"eff_pos_{tag}"] = eff
             row[f"max_share_{tag}"] = share
-        # concentration of the loop-invariant additive term itself, per core layer
-        inj = p["inj"]
-        row["C_inj"] = [round(concentration(select(inj[i], m))[0], 3)
-                        for i in range(inj.shape[0])]
+        # concentration of the loop-invariant additive term itself, per core layer.
+        # SCSE builds no such term (spec D3) and the capture carries a 0-element placeholder,
+        # so the column is explicitly None rather than an empty list that reads as "measured
+        # nothing concentrated".
+        if _scse:
+            row["C_inj"] = None
+            row["scse"] = True
+        else:
+            inj = p["inj"]
+            row["C_inj"] = [round(concentration(select(inj[i], m))[0], 3)
+                            for i in range(inj.shape[0])]
         per_iter.append(row)
     return {"per_iter": per_iter}
 
@@ -785,10 +801,17 @@ def main() -> None:
             print(f"{'':<22} ONCE COMMON centred = " +
                   " ".join(f"{r['rank_h_common_centred']:6.2f}" for r in o), flush=True)
         z = pi[-1]
-        print(f"{'':<22} C last: full={z['C_full']:.2f} noinj={z['C_noinj']:.2f} "
-              f"nodt={z['C_nodt']:.2f} nodecay={z['C_nodecay']:.2f} "
-              f"nodiag={z['C_nodiag']:.2f}   maxshare_d={z['max_share_full']:.3f}",
-              flush=True)
+        if "C_noinj" in z:
+            print(f"{'':<22} C last: full={z['C_full']:.2f} noinj={z['C_noinj']:.2f} "
+                  f"nodt={z['C_nodt']:.2f} nodecay={z['C_nodecay']:.2f} "
+                  f"nodiag={z['C_nodiag']:.2f}   maxshare_d={z['max_share_full']:.3f}",
+                  flush=True)
+        else:
+            # SCSE (or --plain): there are no injection ablations to report, because there
+            # is no injection in the recurrence. Say so rather than printing zeros.
+            print(f"{'':<22} C last: full={z['C_full']:.2f}   "
+                  f"maxshare_d={z['max_share_full']:.3f}   "
+                  f"(no injection ablations: source-free core)", flush=True)
     with open(a.out, "w") as f:
         json.dump(results, f, indent=1)
     print(f"wrote {a.out}")
