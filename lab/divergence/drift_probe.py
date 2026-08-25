@@ -374,10 +374,10 @@ def forcing_bias(root, points: list[dict]) -> list[dict]:
     which it does not after iteration 0. The first verdict on this hypothesis was read off
     `drift()` and therefore never tested the paper's quantity.
 
-    MORPH's anchor is `h_0 = input_norm(x)`: a reference state computed ONCE from the input
+    MORPH's anchor is `e = input_norm(x)`: a reference state computed ONCE from the input
     before the loop and unchanged by it, which is exactly the paper's `h*(e)`. So
 
-        b_t = f_theta(h_0; e, inj_t, ret_t, t) - h_0,
+        b_t = f_theta(h*; e, inj_t, ret_t, t) - h*,
 
     the core step at loop index `t` fed the anchor instead of the live state. Reported
     relative to the anchor's own norm so it is comparable across rungs, and on the fixed
@@ -385,8 +385,23 @@ def forcing_bias(root, points: list[dict]) -> list[dict]:
 
     `b_t = 0` at every `t` is SCSE's design objective. A `b_t` that is large and does not
     shrink with `t` is the condition SCSE exists to remove.
+
+    THE ANCHOR IS `p["e"]`, NOT `points[0]["h"]`, AND THE DIFFERENCE IS THE WHOLE POINT.
+    Until SCSE Stage 1 landed those two were the same tensor, because the loop entered at
+    `h = e.clone()`. Stage 1 enters at `h_0 = e + s * H_0(e)`, and reading the anchor off
+    `points[0]["h"]` would then have measured:
+
+      * `b_t` at the WRONG operating point -- at `h_0`, not at `h*` -- so not the paper's
+        quantity at all; and, far worse,
+      * `Delta_0 = h_0 - anchor = 0` by construction AGAIN, making `R_0 = 1.000` hold and
+        the probe report an SCSE model as though nothing had changed.
+
+    The instrument would have been blind to exactly the intervention it was built to
+    measure. The port plan lists this file under "instrument breakage" for this reason.
+    `e` is loop-invariant (the same tensor is passed to every iteration), so any point's
+    copy is the anchor.
     """
-    anchor = points[0]["h"]
+    anchor = points[0]["e"]
     out = []
     common = None
     for p in points:
@@ -425,14 +440,22 @@ def forcing_bias(root, points: list[dict]) -> list[dict]:
         # R_t, eq. (9): pointwise anchor-response energy over REALISED recurrent-update
         # energy. Reported so MORPH lands on the same axis as the paper's Table 3, where the
         # looped baseline is 1.000 at t=0 and 4.35-5.44 at t=47, and SCSE is 0.000.
-        # MORPH's baseline anchor is h* = h_0 = e (the paper's `h* = e` row), so
-        # Delta_{t+1} - Delta_t = h_{t+1} - h_t, which is exactly the realised displacement.
+        # h* is constant through the loop, so Delta_{t+1} - Delta_t = h_{t+1} - h_t, which
+        # is exactly the realised displacement. That holds whatever h_0 is.
+        # NOTE R_0 = 1 is an identity ONLY when Delta_0 = 0, i.e. h_0 == h*. It is a
+        # validity gate for the BASELINE and it must NOT be one for Stage 1: there
+        # R_0 != 1 is the mechanism working. Read `delta0_rel` to tell the two apart.
         d = select(step_at(root, live) - live["h"], cm)
         num = float(b.pow(2).sum(-1).mean())
         den = float(d.pow(2).sum(-1).mean())
+        # Delta_0 relative to the anchor: SCSE Stage 1's P1 validity check, and the field
+        # that tells a baseline probe from a Stage 1 probe. Exactly 0.0 for `h = e.clone()`.
+        d0 = select(points[0]["h"][:nrow] - at_anchor["h"], cm)
+        anchor_rms = max(float(h0.pow(2).sum(-1).mean().sqrt()), 1e-30)
         out.append({"iter": int(p["iter_idx"]),
-                    "b_rel": rms / max(float(h0.pow(2).sum(-1).mean().sqrt()), 1e-30),
+                    "b_rel": rms / anchor_rms,
                     "b_C": c, "n_pos": int(cm.sum()),
+                    "delta0_rel": float(d0.pow(2).sum(-1).mean().sqrt()) / anchor_rms,
                     "R_t": num / max(den, 1e-12)})
     return out
 
@@ -706,6 +729,9 @@ def main() -> None:
               " ".join(f"{r['b_rel']:7.3f}" for r in fb), flush=True)
         print(f"{'':<22} R_t (eq.9)   = " +
               " ".join(f"{r['R_t']:7.3f}" for r in fb), flush=True)
+        print(f"{'':<22} |Delta_0|/|h*| = {fb[0]['delta0_rel']:.4f}"
+              f"   ({'SCSE Stage 1 ACTIVE' if fb[0]['delta0_rel'] > 1e-6 else 'baseline, h_0 = h*'})",
+              flush=True)
         print(f"{'':<22} b_t conc     = " +
               " ".join(f"{r['b_C']:7.1f}" for r in fb), flush=True)
         print(f"{'':<22} rank_h/iter  = " +
