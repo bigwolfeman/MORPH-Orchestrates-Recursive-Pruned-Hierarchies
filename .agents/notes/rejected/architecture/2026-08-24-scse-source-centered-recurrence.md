@@ -1,7 +1,9 @@
 # Agent Note: SCSE source-centered recurrence for the TUL core loop
 
 Status: rejected — the forcing-bias mechanism SCSE removes is measurably absent from MORPH's
-loop, and the injection SCSE deletes is the only measured de-correlator in it.
+loop. A second argument against the port, that it would remove a de-correlator, was made here
+and is WITHDRAWN: measured directly, the once-only source handling raises state diversity at 10
+of 11 rungs.
 
 ## Problem
 
@@ -38,11 +40,17 @@ rungs (`checkpoints/morph/onset-capture`) and measures the per-iteration displac
 * Zeroing the repeated additive injection — the exact term SCSE's `G_theta(0) = 0` constraint
   removes — moves the last iteration's shared concentration from 1.13 to 1.12.
 * Removing the fresh per-step injection alone — `dt = 0`, the decay `A * h_ctx` left running —
-  *raises* shared concentration at 22 of 22 rung-path pairs, by 1.24x to 4.28x: 2.07 to 8.50 at
-  rung 1625, 8.40 to 15.63 at rung 1700, 1.13 to 1.41 at TAKEOVER, 12.50 to 42.83 on the token
-  path at rung 1625. Removing the decay instead raises it by a similar amount, so the two halves
-  act together; the injection's own contribution is nonetheless isolated and confirmed. MORPH's
-  re-injection is part of what keeps the positions apart.
+  raises shared displacement concentration at 22 of 22 rung-path pairs. This was read as "the
+  injection de-correlates, so SCSE would hurt", and that reading was WRONG. With the decay still
+  running, `dt = 0` lets the ctx band decay toward zero, so the positions lose their identity by
+  ERASURE. SCSE does the opposite: it holds each position's identity in a persistent anchor.
+
+* The faithful counterfactual — source injected at iteration 0 only, no decay afterwards, run
+  over the whole loop at every rung — goes the other way. Centred unit-direction effective rank
+  of the slot states at the last iteration, on a fixed set of 96 positions: 18.79 to **30.83** at
+  rung 1625, 11.27 to **24.71** at rung 1700, 25.02 to **29.86** at TAKEOVER. Higher at 10 of 11
+  rungs, tied at the eleventh. SCSE's source handling would spread the slot states FURTHER apart,
+  not merge them.
 
 The third point is the decisive one for the port. SCSE replaces per-step injection with a
 once-only anchor. In MORPH that would delete the only term measured to de-correlate the slot
@@ -63,6 +71,21 @@ states, in a model whose failure mode IS the slot states merging.
   iteration — the one arm-specific forward asymmetry this run produced (A1's `C_first/P` is
   0.44-0.58 against A0's 0.17-0.19).
 
+## What changed after this note was first written
+
+The de-correlation argument was withdrawn the same day, after the ablation behind it was found
+not to model SCSE at all. Two things follow, and they point in opposite directions, so both are
+recorded:
+
+* Against the port: its DIAGNOSIS is absent. That is the surviving reason, and it was always the
+  stronger one.
+* For the port, or at least against dismissing it: its source handling measurably raises state
+  diversity in MORPH's loop. That benefit is probably worthless here, because the same run showed
+  diversity is NOT the failing quantity — the loop raises diversity at every rung and raises it
+  most at TAKEOVER, where the model is worst.
+
+Do not re-derive the de-correlation argument. It was measured and it is false.
+
 ## Acceptance criteria
 
 These were the gates the port would have had to clear, and the first one is what failed.
@@ -75,10 +98,18 @@ These were the gates the port would have had to clear, and the first one is what
 3. The mechanism is arm-specific: the healthy token path does not show it. **Not reached** —
    the control matches the failing arm on every trend, so no verdict about A1's failure could
    have been read from gates 1 and 2 even had they passed.
+4. The port would not remove something MORPH needs. **Passed** — the once-only counterfactual
+   raises state diversity at 10 of 11 rungs. This gate was added after the first version of this
+   note asserted its failure without testing it.
 
 ## Risks
 
-The risk of this rejection is that SCSE is right about a MORPH failure this probe cannot see.
+The first version of this note carried a second, untested argument and stated it with the same
+confidence as the measured one. That is the risk this section exists to catch and it was not
+caught. The general lesson is recorded in the campaign's trap list: an ablation that removes a
+term is not a model of an alternative that REPLACES it.
+
+The remaining risk is that SCSE is right about a MORPH failure this probe cannot see.
 The probe measures displacement geometry over positions in one forward pass at a fixed depth
 draw; it does not measure the loop's fixed-point structure over training, and it cannot see a
 drift that is common to every position AND every example, because such a component sits inside

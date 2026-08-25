@@ -138,6 +138,43 @@ def dropout_off(model):
             m.p = q
 
 
+def state_geom(h: torch.Tensor, cap: int = 2048, seed: int = 0,
+               centred: bool = False) -> tuple[float, float]:
+    """`(eff_rank, mean_pairwise_cos)` of the DIRECTIONS of the states `h` shaped `[P, F]`.
+
+    Rows are unit-normalised first. The participation ratio of a norm-weighted spectrum
+    reads "one position has a huge carrier" as low rank even when the directions are
+    perfectly spread, and the question here is whether the positions have MERGED, which is
+    a statement about directions. Same normalisation as `jac_ladder.state_geometry`'s
+    `eff_rank_unit`, so the numbers are comparable to the campaign's earlier readings.
+
+    Rows are subsampled to `cap` with a fixed seed when there are more, because the token
+    path carries 6912 positions and a 6912x4096 double SVD costs minutes per rung for a
+    number that does not move under subsampling. The cap is reported in the output so a
+    reader never has to guess whether it bound.
+
+    `centred` subtracts the mean state first, and it is not a cosmetic choice. These states
+    carry a mean pairwise cosine near +0.5, so one large common component dominates the
+    uncentred spectrum and pins the rank near 3 however spread the residuals are. The
+    campaign's slot-INPUT diversity number (~28) was computed CENTRED and its post-loop
+    number was not, so "the loop destroys 10x more diversity than pooling" compared two
+    different measures. Both are reported here, on the same tensors, per iteration.
+    """
+    if h.shape[0] > cap:
+        g = torch.Generator(device="cpu").manual_seed(seed)
+        idx = torch.randperm(h.shape[0], generator=g)[:cap].to(h.device)
+        h = h[idx]
+    if centred:
+        h = h - h.mean(0, keepdim=True)
+    hn = h / h.norm(dim=1, keepdim=True).clamp_min(1e-12)
+    sv = torch.linalg.svdvals(hn.double()).pow(2)
+    eff = float(sv.sum().pow(2) / sv.pow(2).sum().clamp_min(1e-300))
+    gram = hn.double() @ hn.double().t()
+    n = gram.shape[0]
+    cos = float((gram.sum() - n) / (n * (n - 1)))
+    return eff, cos
+
+
 class _DiagVariant(nn.Module):
     """`DiagonalInjection` with either half of it switched off.
 
@@ -178,6 +215,59 @@ class _DiagVariant(nn.Module):
         s, e_ = b.start, b.end
         new_ctx = a * h[..., s:e_] + dt * e[..., s:e_]
         return torch.cat([h[..., :s], new_ctx, h[..., e_:]], dim=-1)
+
+
+class _OnceOnlyDiag(nn.Module):
+    """`DiagonalInjection` that fires on the FIRST core iteration only.
+
+    This is MORPH's analogue of how SCSE handles the source: use `e` ONCE to set an anchor,
+    then evolve without re-injecting it. Iteration 0 runs the real
+    `A * h_ctx + dt * e_ctx`; every later iteration passes the carrier through untouched,
+    i.e. `A = 1, dt = 0`, so the identity written at iteration 0 PERSISTS instead of
+    decaying away.
+
+    That last part is the whole point, and it is what the `dt = 0` ablation gets wrong as an
+    SCSE stand-in: with the decay still running, killing the injection lets the ctx band
+    decay toward zero, so the positions lose their identity by erasure rather than by the
+    substitution SCSE actually proposes. This module tests the substitution.
+
+    The iteration index is a CALL COUNTER, not an argument, because the module's signature
+    is `(h, e)`. `_apply_core_step` calls it exactly once per loop iteration on both code
+    paths, so call `k` is iteration `k` within one forward. `reset()` must be called before
+    every forward; `self_test` checks the counter, and the caller checks that iteration 0 of
+    the patched capture is bit-identical to the baseline's.
+
+    What this does NOT model: SCSE's bias-free core (`G_theta(0) = 0`) and its zero-deviation
+    mask. It isolates the source handling, which is the only part the de-correlation argument
+    turns on.
+    """
+
+    def __init__(self, base):
+        super().__init__()
+        object.__setattr__(self, "base", base)
+        self.calls = 0
+
+    def reset(self) -> None:
+        self.calls = 0
+
+    def forward(self, h, e):        # signature mirrors DiagonalInjection
+        k, self.calls = self.calls, self.calls + 1
+        if k > 0:
+            return h
+        return self.base(h, e)
+
+
+@contextlib.contextmanager
+def diag_once(root):
+    """Swap in the once-only injection for the body of the block, counter reset."""
+    old = root.injection
+    mod = _OnceOnlyDiag(old)
+    mod.reset()
+    root.injection = mod
+    try:
+        yield mod
+    finally:
+        root.injection = old
 
 
 @contextlib.contextmanager
@@ -244,33 +334,81 @@ def trajectory_gate(root, points: list[dict], tol: float = 1e-2) -> float:
     return worst
 
 
-def capture(model, x, y, layout, seed: int, token_path: bool) -> list[dict]:
-    """One operating point per core-loop iteration at a FIXED depth draw."""
+def capture(model, x, y, layout, seed: int, token_path: bool,
+            once_only: bool = False) -> list[dict]:
+    """One operating point per core-loop iteration at a FIXED depth draw.
+
+    `once_only` runs the WHOLE forward with the source injected at iteration 0 only, so the
+    captured trajectory is the counterfactual one rather than a one-step counterfactual off
+    the real trajectory. The depth draw is seeded identically, so the two trajectories are
+    compared at the same input and the same active sets.
+    """
+    root = getattr(model, "_orig_mod", model)
     probe = CoreJacobianProbe(model)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    with dropout_off(model), probe.capture() as pts:
+    patch = diag_once(root) if once_only else contextlib.nullcontext()
+    with dropout_off(model), patch, probe.capture() as pts:
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
             model(x, labels=y, slot_layout=None if token_path else layout)
     return [dict(p) for p in pts]
 
 
-def drift(root, points: list[dict]) -> dict:
-    """Per-iteration displacement geometry, plus the two injection ablations."""
+def drift(root, points: list[dict], plain: bool = False, once_only: bool = False) -> dict:
+    """Per-iteration displacement geometry, plus the injection ablations.
+
+    Two position sets are reported, and the difference matters. The per-iteration `active`
+    set SHRINKS as the Poisson depth draw freezes positions — 342 to 96 on the slot path —
+    and an effective rank read off fewer samples is biased downward, so a rank measured on
+    `active` at iteration 0 and at iteration 7 is a comparison across sample sizes, which
+    this campaign's own trap list forbids. `*_common` repeats the state geometry on the
+    INTERSECTION of every iteration's active set, a fixed group, which is the comparison a
+    trend across iterations may actually be read from.
+    """
     per_iter = []
+    common = None
+    for p in points:
+        if not bool(p["active"].any()):
+            continue
+        a = p["active"]
+        if common is None:
+            common = a.clone()
+        else:
+            n = min(common.shape[0], a.shape[0])
+            common = common[:n] & a[:n]
     for p in points:
         m = p["active"]
         if not bool(m.any()):
             continue
+        nrow = min(m.shape[0], common.shape[0])
+        cm = common[:nrow]
         h = select(p["h"], m)
         h_rms = float(h.pow(2).sum(-1).mean().sqrt())
         row = {"iter": int(p["iter_idx"]), "n_pos": int(m.sum()), "h_rms": h_rms}
         eff_h, share_h = spread(h)
         row["eff_pos_h"] = eff_h
         row["max_share_h"] = share_h
-        for tag, kw in (("full", {}), ("noinj", {"zero_inj": True}),
-                        ("nodiag", {"no_diag": True}), ("nodt", {"no_dt": True}),
-                        ("nodecay", {"no_decay": True})):
+        rank_h, cos_h = state_geom(h)
+        rank_c, cos_c = state_geom(h, centred=True)
+        row["rank_h"] = rank_h
+        row["cos_h"] = cos_h
+        row["rank_h_centred"] = rank_c
+        row["cos_h_centred"] = cos_c
+        hc = select(p["h"][:nrow], cm)
+        row["n_pos_common"] = int(cm.sum())
+        row["rank_h_common"] = state_geom(hc)[0]
+        row["rank_h_common_centred"], row["cos_h_common"] = state_geom(hc, centred=True)[0], \
+            state_geom(hc)[1]
+        row["rank_capped"] = bool(h.shape[0] > 2048)
+        # A once-only trajectory must be replayed with the once-only MAP. Replaying it with
+        # the real injection restored measures what the real map would do at counterfactual
+        # states, which is a different question and — because iteration 0 is shared — makes
+        # the first two iterations identical by construction. That defect shipped once.
+        base_kw = {"no_diag": True} if (once_only and int(p["iter_idx"]) > 0) else {}
+        modes = (("full", base_kw),) if plain else (
+            ("full", base_kw), ("noinj", {"zero_inj": True}), ("nodiag", {"no_diag": True}),
+            ("nodt", {"no_dt": True}), ("nodecay", {"no_decay": True}))
+        for tag, kw in modes:
             d = select(step_at(root, p, **kw) - p["h"], m)
             c, rms = concentration(d)
             eff, share = spread(d)
@@ -360,6 +498,43 @@ def self_test() -> None:
     assert not hasattr(_DiagVariant(di), "_modules") or \
         "base" not in _DiagVariant(di)._modules, "base leaked in as a registered submodule"
 
+    # _OnceOnlyDiag: real on call 0, pass-through after, and resettable.
+    once = _OnceOnlyDiag(di)
+    once.reset()
+    assert torch.equal(once(hh, ee), ref), "once-only must run the real map on call 0"
+    assert torch.equal(once(hh, ee), hh), "once-only must pass through on call 1"
+    assert torch.equal(once(hh, ee), hh), "once-only must pass through on call 2"
+    once.reset()
+    assert torch.equal(once(hh, ee), ref), "reset() did not restore the first-call behaviour"
+
+    # state_geom: orthogonal rows are full rank and mutually orthogonal; copies of ONE
+    # direction are rank 1 and cos 1. A sign-flipped pair must read cos 0, not 1 — the
+    # measure has to see anti-alignment, which an abs() would hide.
+    q = torch.linalg.qr(torch.randn(64, 64))[0]
+    r_o, c_o = state_geom(q)
+    assert r_o > 60, f"orthogonal rows should be near-full rank, got {r_o}"
+    assert abs(c_o) < 0.05, f"orthogonal rows should have cos ~ 0, got {c_o}"
+    one = torch.randn(1, 64).expand(64, 64).contiguous()
+    r_1, c_1 = state_geom(one)
+    assert r_1 < 1.05, f"identical directions should be rank 1, got {r_1}"
+    assert c_1 > 0.99, f"identical directions should have cos 1, got {c_1}"
+    pair = torch.cat([one[:32], -one[:32]])
+    r_p, c_p = state_geom(pair)
+    assert r_p < 1.05 and abs(c_p) < 0.02, f"sign-flipped pair: rank {r_p}, cos {c_p}"
+    # centring: a field with a big common component reads LOW uncentred and HIGH centred.
+    # This is the artefact that made the campaign's pre/post loop comparison invalid, so it
+    # gets an assertion rather than a comment.
+    shared = 5.0 * torch.randn(1, 64) + torch.randn(200, 64)
+    r_un, _ = state_geom(shared)
+    r_ct, _ = state_geom(shared, centred=True)
+    assert r_un < 5.0, f"uncentred rank should be dominated by the common part: {r_un}"
+    assert r_ct > 8 * r_un, f"centring must expose the residual spread: {r_un} -> {r_ct}"
+
+    # the subsample cap must not move the answer on homogeneous input
+    big = torch.randn(5000, 64)
+    r_b, _ = state_geom(big)
+    assert 55 < r_b < 65, f"capped eff rank drifted: {r_b}"
+
     # rms scale: a field of unit-norm rows must report rms_norm 1.
     unit = torch.nn.functional.normalize(torch.randn(p, f), dim=-1)
     _, rms = concentration(unit)
@@ -376,6 +551,9 @@ def main() -> None:
     ap.add_argument("--token-path", action="store_true",
                     help="arm A0's code path (slot_layout=None) on the SAME weights")
     ap.add_argument("--gate-tol", type=float, default=1e-2)
+    ap.add_argument("--once-only", action="store_true",
+                    help="also capture the counterfactual trajectory with the source "
+                         "injected at iteration 0 ONLY (SCSE's source handling)")
     ap.add_argument("--out")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args()
@@ -403,6 +581,20 @@ def main() -> None:
         d = drift(root, pts)
         d.update({"ckpt": os.path.basename(path), "step": step, "gate_rel_err": gate,
                   "token_path": a.token_path})
+        if a.once_only:
+            once = capture(model, x, y, layout, a.seed, a.token_path, once_only=True)
+            # Gate: iteration 0 is BEFORE the injection has fired differently, so the two
+            # trajectories must agree there exactly. If they do not, the patch changed
+            # something other than the source handling and the comparison is void.
+            if not torch.equal(once[0]["h"], pts[0]["h"]):
+                raise RuntimeError(
+                    "once-only capture differs from the baseline at iteration 0 — the patch "
+                    "moved something other than the injection, so the counterfactual is not "
+                    "comparable to the trajectory it is being compared against.")
+            if len(once) != len(pts):
+                raise RuntimeError(f"depth draw differed: {len(pts)} vs {len(once)} iters")
+            d["once_only"] = drift(root, once, plain=True,
+                                   once_only=True)["per_iter"]
         results.append(d)
         pi = d["per_iter"]
         cs = " ".join(f"{r['C_full']:7.1f}" for r in pi)
@@ -415,6 +607,28 @@ def main() -> None:
         eh = " ".join(f"{r['eff_pos_h']:7.1f}" for r in pi)
         print(f"{'':<22} effpos_d/iter= {es}", flush=True)
         print(f"{'':<22} effpos_h/iter= {eh}", flush=True)
+        print(f"{'':<22} rank_h/iter  = " +
+              " ".join(f"{r['rank_h']:7.2f}" for r in pi), flush=True)
+        print(f"{'':<22} cos_h/iter   = " +
+              " ".join(f"{r['cos_h']:+7.3f}" for r in pi), flush=True)
+        print(f"{'':<22} rankC_h/iter = " +
+              " ".join(f"{r['rank_h_centred']:7.2f}" for r in pi), flush=True)
+        print(f"{'':<22} COMMON(P={pi[0]['n_pos_common']:>3}) rank = " +
+              " ".join(f"{r['rank_h_common']:6.2f}" for r in pi), flush=True)
+        print(f"{'':<22} COMMON centred rank = " +
+              " ".join(f"{r['rank_h_common_centred']:6.2f}" for r in pi), flush=True)
+        if a.once_only:
+            o = d["once_only"]
+            print(f"{'':<22} ONCE C/iter  = " +
+                  " ".join(f"{r['C_full']:7.1f}" for r in o), flush=True)
+            print(f"{'':<22} ONCE rank_h  = " +
+                  " ".join(f"{r['rank_h']:7.2f}" for r in o), flush=True)
+            print(f"{'':<22} ONCE cos_h   = " +
+                  " ".join(f"{r['cos_h']:+7.3f}" for r in o), flush=True)
+            print(f"{'':<22} ONCE rankC_h = " +
+                  " ".join(f"{r['rank_h_centred']:7.2f}" for r in o), flush=True)
+            print(f"{'':<22} ONCE COMMON centred = " +
+                  " ".join(f"{r['rank_h_common_centred']:6.2f}" for r in o), flush=True)
         z = pi[-1]
         print(f"{'':<22} C last: full={z['C_full']:.2f} noinj={z['C_noinj']:.2f} "
               f"nodt={z['C_nodt']:.2f} nodecay={z['C_nodecay']:.2f} "

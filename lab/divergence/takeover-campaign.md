@@ -51,14 +51,23 @@ Verdict is the outcome of a PRE-REGISTERED test unless marked otherwise.
 | H16 | Finer spans (`span_cap` 8) prevent it | **partial — delays, does not cure** | `g6-ctrl` takes over at step 650, `g6-fine` at 975. 1.5x delay. Confounded: `g6-fine` also has 2.5x the core positions | this file, 2026-08-24 |
 | H17 | The LEARNABLE attention sink absorbs the mass | **REFUTED** | core `sink_logits` are 0.0036 → 0.0053 across all 11 rungs (sigmoid 0.5009 → 0.5013). The explicit sink parameter never engages | this file, 2026-08-24 |
 | H18 | A POSITIONAL attention sink — mass concentrating on one slot — compounds over T | **UNTESTED, top open lead** | the cotangent already sits on the same top-3 slots at every core block with the top slot's share rising 0.18 → 0.54. That is a sink signature, measured, never followed up | — |
-| H19 | The zero-deviation forcing bias (SCSE) drives it: `e` re-injected every iteration leaves `G_theta(0) != 0`, so the state drifts and the drift compounds over T | **REFUTED, opposite direction** | the shared component of the per-iteration displacement DECAYS ~100x across the loop (`C_last/C_first` = 0.0076 where the prediction needed >= 3), zeroing the repeated additive injection moves it from 1.13 to 1.12, and turning the DiagonalInjection OFF *raises* it 1.13 -> 1.31. The injections de-correlate the states; they do not drive them together | [forcing-bias](../../docs/experiments/failures/2026-08-24-tul-zero-deviation-forcing-bias.md) |
+| H19 | The zero-deviation forcing bias (SCSE) drives it: `e` re-injected every iteration leaves `G_theta(0) != 0`, so the state drifts and the drift compounds over T | **REFUTED, opposite direction** | the shared component of the per-iteration displacement DECAYS ~100x across the loop (`C_last/C_first` = 0.0076 where the prediction needed >= 3), zeroing the repeated additive injection moves it from 1.13 to 1.12, and the faithful once-only counterfactual (source at iteration 0 only, no decay) RAISES state diversity at 10 of 11 rungs, so the "SCSE would remove a de-correlator" argument is withdrawn — the port fails on its diagnosis, not on its effect | [forcing-bias](../../docs/experiments/failures/2026-08-24-tul-zero-deviation-forcing-bias.md) |
 
 ## The two numbers that still point somewhere
 
-1. **The loop, not the input, is where the diversity dies.** Slot states enter the core at
-   effective rank ~28 and leave at 1.7–4.8. Pooling costs about 2x; the loop costs about
-   10x. Every intervention so far has acted on the optimizer, the truncation, the weights
-   or the input — **never on the loop's own map**.
+1. ~~**The loop, not the input, is where the diversity dies.**~~ **WITHDRAWN 2026-08-24 —
+   this was a comparison between two different measures.** The ~28 came from `pooling_probe`
+   on the slot INPUT, CENTRED, over at most 57 spans; the 1.7–4.8 came from
+   `state_geometry` on the in-loop carrier, UNCENTRED and norm-weighted, averaged per row
+   over ~50 slots. Different tensors, different normalisations, different group sizes — the
+   last of which this file's own trap list forbids. Measured consistently on a FIXED set of
+   96 slot positions, the loop RAISES unit-direction effective rank at all 11 rungs:
+   3.01 → 7.06 uncentred and 10.67 → 18.79 centred at rung 1625, 2.41 → 9.18 and
+   11.88 → 25.02 at TAKEOVER. `jac_ladder --state-probe` agrees on its own numbers — 3.18 →
+   2.77, flat, never falling. Diversity rises MOST at the rung where the model is worst, so
+   state diversity is not the failing quantity, which is consistent with every
+   diversity-targeting arm having failed. The real drop, ~28 of 57 down to ~10.7 of 96
+   centred, happens UPSTREAM of the core, in the embedding-to-prelude path.
 2. **Only 320 of 1024 channels are re-anchored** to the slot's own input each iteration
    (`channel_dims: [512, 320, 192]`, `DiagonalInjection` covers the middle band). The other
    704 iterate the shared map with no per-example anchor. Structural, read off the model,
@@ -129,6 +138,9 @@ Verdict is the outcome of a PRE-REGISTERED test unless marked otherwise.
 * Two arms were lost to a control that refused to fail. **Run the control first.**
 - **A replay probe in `model.train()` is not replaying the same map.** Every core block runs `nn.Dropout(0.1)`, so a replayed step draws a different mask than the captured one and lands 24 % away from the captured next state. `drift_probe.py`'s trajectory gate caught it; `core_jacobian.py`'s own replay has the same exposure and no gate. Zero the rates, do not switch to `eval()` — that also changes Poisson depths to a uniform `mean_depth`, i.e. a different operating point.
 - **A concentration measure near 1 does not mean isotropic.** One position holding all the energy drives `P*||mean||^2/mean||.||^2` to 1 just as hard. Always pair it with the participation ratio over positions.
+- **An ablation that REMOVES a term is not a model of an alternative that REPLACES it.** Setting `dt = 0` with the decay left running erases the ctx band toward zero; SCSE holds the same information in a persistent anchor. The first reading of that ablation produced a confident, published, wrong argument against the SCSE port. Build the counterfactual, do not infer it.
+- **Never compare an effective rank across normalisations.** Centred and uncentred ranks of the same states differ by 3-4x here (10.7 against 3.0 at loop entry), because the states carry a mean pairwise cosine near +0.5. The campaign's headline finding survived for days on exactly this mistake.
+- **Never compare an effective rank across ACTIVE-SET sizes.** The Poisson depth draw shrinks the slot path from 342 positions to 96 across the loop. Measure the trend on the intersection.
 
 ## Loose ends
 

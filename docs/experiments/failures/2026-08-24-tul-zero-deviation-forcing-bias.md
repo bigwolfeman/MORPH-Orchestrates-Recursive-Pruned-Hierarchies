@@ -94,6 +94,25 @@ uncorrelated displacements of similar size, or ONE position holding nearly all t
 a sink drives `C` to 1 just as hard as isotropy does. The participation ratio over positions
 and the top position's energy share were added to separate them. Predictions untouched.
 
+**Amendment 5 (2026-08-24, the position set).** Effective rank read off the per-iteration
+active set is a comparison across sample sizes — the Poisson depth draw shrinks it from 342 to
+96 across the loop, and a participation ratio from fewer samples is biased downward. Every rank
+trend is now also reported on the INTERSECTION of all iterations' active sets, a fixed group of
+96, which is the only version a trend across iterations may be read from.
+
+**Amendment 4 (2026-08-24, the counterfactual, and the reason for it).** The writeup argued that
+porting SCSE would remove a de-correlator. That inference did not follow from the `dt = 0`
+ablation: with the decay still running, killing the injection lets the ctx band decay toward
+ZERO, so the positions lose their identity by erasure — whereas SCSE holds each position's
+identity in a PERSISTENT anchor. `_OnceOnlyDiag` runs the whole forward with the source injected
+at iteration 0 only and no decay afterwards (`A = 1, dt = 0` for `t >= 1`), which is MORPH's
+analogue of SCSE's source handling. It is gated two ways: iteration 0 must be bit-identical to
+the baseline, and iteration 1 must NOT be — the second gate exists because the first version
+replayed the counterfactual trajectory with the REAL injection restored, which makes iterations
+0 and 1 agree by construction. That defect shipped for one run. State geometry (unit-direction
+effective rank, centred and uncentred, plus mean pairwise cosine) was added at the same time,
+because the question the argument turns on is about the STATES, not the displacements.
+
 **Amendment 3 (2026-08-24, after the first writeup over-claimed from it).** The injection
 ablation replaced the WHOLE `DiagonalInjection` with a pass-through, which drops the fresh
 per-slot injection `dt * e_ctx` AND the decay `A * h_ctx` together — so the effect could not be
@@ -197,10 +216,64 @@ Three facts, none of them H19.
    pass, and it lands on the same iteration as the untested
    `../planned/2026-08-23-tul-iteration0-mediation.md`.
 
+## Correction: the de-correlation argument is withdrawn
+
+The counterfactual was run at all 11 rungs. On the fixed common set of 96 slot positions,
+centred unit-direction effective rank at the last loop iteration:
+
+| rung | 1625 | 1650 | 1675 | 1700 | 1725 | 1750 | 1775 | 1800 | 1825 | 1850 | 1866 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| per-step injection (real) | 18.79 | 15.56 | 11.43 | 11.27 | 16.21 | 21.93 | 39.59 | 45.42 | 34.32 | 25.71 | 25.02 |
+| once-only source (SCSE-like) | **30.83** | **30.44** | **23.43** | **24.71** | **29.33** | **38.12** | **47.70** | 45.06 | **40.09** | **28.42** | **29.86** |
+
+Injecting the source ONCE gives HIGHER state diversity at 10 of 11 rungs and a tie at the
+eleventh. The displacement also becomes LESS shared, not more (`C` at the last iteration falls
+from 46.2 to 18.2 at rung 1625, 50.5 to 24.5 at 1700, 31.3 to 13.5 at 1775).
+
+So the claim "porting SCSE would remove the only measured de-correlator" is refuted by direct
+measurement of the thing it predicted. The per-step re-injection writes the SAME `e_ctx` into
+every iteration, which PINS the ctx band to a fixed per-position value; removing it lets the
+state evolve further apart. The rejection of SCSE now rests only on its diagnosis being absent
+(P1, P2, P4), which is where it should have rested from the start.
+
+## Correction: the loop does not destroy state diversity
+
+Measured on the fixed common set of 96 slot positions, the unit-direction effective rank of the
+slot states RISES across the loop at all 11 rungs, in both normalisations:
+
+* uncentred: 3.01 → 7.06 at rung 1625; 2.41 → 9.18 at TAKEOVER.
+* centred: 10.67 → 18.79 at rung 1625; 11.88 → 25.02 at TAKEOVER, peaking at 32.84.
+
+The campaign's own instrument agrees. `jac_ladder.py --state-probe` on TAKEOVER reports
+`eff_rank/iter = 3.18 2.46 2.97 2.98 2.97 3.11 2.74 2.77` and
+`unit_rank/iter = 3.04 2.53 3.43 3.65 3.51 3.64 3.34 3.22` — flat across the loop, never
+falling. Artifact: `../results/2026-08-24-tul-zero-deviation-forcing-bias/state_takeover.json`.
+
+The campaign's standing claim that "the loop destroys ~10x more diversity than pooling"
+compared the slot-INPUT rank (~28, from `pooling_probe`, CENTRED, over at most 57 spans) with
+the in-loop carrier rank (1.7-4.8, from `state_geometry`, UNCENTRED and norm-weighted, averaged
+per row over ~50 slots). Different tensors, different normalisations, different group sizes —
+the campaign's own trap list forbids the last of those. Within the loop, measured consistently,
+diversity does not fall. The drop from the slot input to the loop's first iteration is real
+(28 of at most 57 spans against 10.7 of 96 positions, centred) but it happens in the
+embedding-to-prelude path, UPSTREAM of the core.
+
+And diversity rises MOST at the rung where the model is worst: TAKEOVER turns 2.41 into 9.18,
+the largest gain on the ladder. State diversity is therefore not the failing quantity either.
+
 ## Updated hypothesis
 
 The zero-deviation forcing bias is a correct description of MORPH's FORM and a wrong
 explanation of its FAILURE. The looped core is not accumulating a source-driven drift; it is
-losing its shared structure fast and moving by order-1 amounts forever. Attention should go to
-what is arm-specific — the first iteration's shared displacement is the one candidate this run
-produced — and away from any cure whose mechanism is equally present in arm A0.
+losing its shared structure fast and moving by order-1 amounts forever.
+
+Two of the campaign's working assumptions died with it. The loop does not destroy state
+diversity — it raises it, most of all at the takeover rung — so "restore diversity in the loop"
+was never a lever, which is consistent with every diversity-targeting arm having failed. And the
+per-step injection is not what holds the states apart; removing it holds them further apart.
+
+What survives as arm-specific is the FIRST core iteration: A1's first-step displacement is ~3x
+more shared than A0's (`C_first / P` 0.44-0.58 against 0.17-0.19), and the states enter the loop
+already at centred rank ~11 of 96 after a slot input measured at ~28 of at most 57. Both point
+UPSTREAM of the core, at the slot construction and the prelude, which is where the untested
+`../planned/2026-08-23-tul-iteration0-mediation.md` already aims.
