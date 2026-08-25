@@ -20,6 +20,7 @@ import time
 from typing import Optional
 
 from morph.training.ckpt_retention import RetentionRing, existing_step_checkpoints
+from morph.training.optimizer import align_optimizer_state
 
 # Diagnostic-only: env-guarded single-shot faulthandler to capture the stack of an
 # intermittent step-0 backward hang (gradient-checkpoint recompute). Single dump
@@ -509,7 +510,10 @@ def load_checkpoint(
     print(f"  Resumed model+scaler+RNG from checkpoint step {ckpt_step}; "
           f"next_step={step} "
           f"(compact={is_compact} routed={is_routed} → optimizer_rebuild={needs_rebuild})")
-    return step, ckpt["optimizer"], needs_rebuild
+    # The checkpoint's MODEL parameter names travel with the optimizer state so the caller
+    # can re-index it when the live model has parameters the checkpoint does not (an
+    # intervention arm that adds a module). See optimizer.align_optimizer_state.
+    return step, ckpt["optimizer"], needs_rebuild, set(ckpt["model"].keys())
 
 
 def load_weights_only(path: str, model: nn.Module, device: torch.device) -> None:
@@ -1754,7 +1758,7 @@ def main(cfg: DictConfig) -> None:
     start_step = 0
     if resume_path and os.path.isfile(resume_path):
         print(f"Resuming from {resume_path}")
-        start_step, _opt_state, _needs_rebuild = load_checkpoint(
+        start_step, _opt_state, _needs_rebuild, _ckpt_pnames = load_checkpoint(
             resume_path, model, scaler, device, pruning)
         if _needs_rebuild:
             # Carve/route changed the param set → the dense optimizer built above is stale.
@@ -1795,6 +1799,19 @@ def main(cfg: DictConfig) -> None:
             # configured hyperparameters back and say which ones moved.
             _cfg_hp = [{k: v for k, v in g.items() if k != "params"}
                        for g in optimizer.param_groups]
+            # Re-index by NAME when the live model has parameters the checkpoint lacks.
+            # torch matches saved state to live parameters by POSITION, and an added module
+            # inserts its parameters wherever it sits in `named_parameters()` — for SCSE
+            # that is the middle of the decay group — which shifts every later index and
+            # pairs parameters with other parameters' moments. torch only raises when the
+            # group SIZES differ; that raise is the lucky case, and it is what stopped the
+            # first SCSE screen on 2026-08-25.
+            _opt_state, _added = align_optimizer_state(_opt_state, model, _ckpt_pnames)
+            if _added:
+                print(f"  [opt] {len(_added)} parameters are new since this checkpoint and "
+                      f"start with fresh optimizer state: "
+                      + ", ".join(_added[:4]) + (" …" if len(_added) > 4 else ""),
+                      flush=True)
             optimizer.load_state_dict(_opt_state)
             _changed = {}
             for _g, _want in zip(optimizer.param_groups, _cfg_hp):

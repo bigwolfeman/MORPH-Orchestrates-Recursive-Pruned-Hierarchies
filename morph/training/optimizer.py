@@ -51,23 +51,124 @@ _NO_DECAY_KEYWORDS = (
 )
 
 
-def _param_groups(model: nn.Module, weight_decay: float) -> list[dict]:
-    """Split parameters into decay / no-decay groups."""
-    decay_params = []
-    no_decay_params = []
+def _split_by_decay(model: nn.Module) -> tuple[list, list, list[str], list[str]]:
+    """`(decay_params, no_decay_params, decay_names, no_decay_names)`, in group order.
 
+    ONE walk of `named_parameters()` produces both the tensors and their names, so the
+    optimizer's group layout and any name-based view of it cannot drift apart. They did
+    drift once: `param_group_names` below is what re-aligns optimizer state on a resume,
+    and a second independent walk would have made it silently wrong the first time the
+    split rule changed.
+    """
+    decay, no_decay, decay_n, no_decay_n = [], [], [], []
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
         if any(kw in name for kw in _NO_DECAY_KEYWORDS):
-            no_decay_params.append(p)
+            no_decay.append(p)
+            no_decay_n.append(name)
         else:
-            decay_params.append(p)
+            decay.append(p)
+            decay_n.append(name)
+    return decay, no_decay, decay_n, no_decay_n
 
+
+def _param_groups(model: nn.Module, weight_decay: float) -> list[dict]:
+    """Split parameters into decay / no-decay groups."""
+    decay_params, no_decay_params, _, _ = _split_by_decay(model)
     return [
         {"params": decay_params, "weight_decay": weight_decay},
         {"params": no_decay_params, "weight_decay": 0.0},
     ]
+
+
+def param_group_names(model: nn.Module) -> list[list[str]]:
+    """Parameter NAMES per optimizer group, in the exact order `_param_groups` uses.
+
+    `torch.optim.Optimizer.load_state_dict` matches saved state to live parameters by
+    POSITION within the flattened group order. That is fine for a plain resume and wrong
+    the moment a resume adds parameters: an intervention arm that introduces a module
+    (SCSE's two projections, for example) inserts them wherever the module sits in
+    `named_parameters()` — for SCSE that is the MIDDLE of the decay group, not the end —
+    which shifts every later index by one and silently pairs each parameter with another
+    parameter's moments. Torch does not detect that; it only raises when the group SIZES
+    differ, which is the lucky case.
+
+    :func:`align_optimizer_state` uses these names to re-index instead.
+    """
+    _, _, decay_n, no_decay_n = _split_by_decay(model)
+    return [decay_n, no_decay_n]
+
+
+def align_optimizer_state(state: dict, model: nn.Module,
+                          ckpt_param_names: set[str]) -> tuple[dict, list[str]]:
+    """Re-index a checkpoint's optimizer state onto `model`'s CURRENT parameters.
+
+    Returns `(aligned_state, added_names)`. Parameters the checkpoint does not contain get
+    NO entry in `state`, so the optimizer creates their moments lazily on the first step —
+    which is what "the new module starts cold" should mean.
+
+    Args:
+        state:            the checkpoint's `optimizer` state dict.
+        model:            the live model, which may have parameters the checkpoint lacks.
+        ckpt_param_names: names present in the checkpoint's MODEL state dict. Anything the
+                          live model has and this set does not is treated as added.
+
+    Only ADDITIONS are supported. If the checkpoint holds state for more parameters in a
+    group than the live model has after removing the added ones, the alignment is not a
+    pure insertion and this raises rather than guessing — a wrong alignment pairs a
+    parameter with another parameter's moments and shows up as a plausible-looking run.
+    """
+    live_names = param_group_names(model)
+    added = [n for g in live_names for n in g if n not in ckpt_param_names]
+    added_set = set(added)
+
+    # Validate BEFORE the no-additions shortcut. A checkpoint holding MORE parameters than
+    # the live model has is a REMOVAL, which reports zero additions and would otherwise
+    # take the shortcut and hand torch a mismatched dict. Caught by
+    # tests/test_optimizer_align.py::test_a_REMOVED_parameter_raises_instead_of_guessing.
+    old_groups = state.get("param_groups", [])
+    if len(old_groups) != len(live_names):
+        raise ValueError(
+            f"checkpoint has {len(old_groups)} optimizer groups, model needs "
+            f"{len(live_names)}; alignment handles ADDED PARAMETERS, not a changed "
+            f"group layout")
+
+    for gi, names in enumerate(live_names):
+        kept = len([n for n in names if n not in added_set])
+        want = len(old_groups[gi]["params"])
+        if kept != want:
+            raise ValueError(
+                f"optimizer group {gi}: checkpoint holds {want} parameters but the live "
+                f"model has {kept} once the {len(added)} added ones are removed. "
+                f"This is not a pure insertion; refusing to guess an alignment.")
+    if not added:
+        return state, []
+
+    # Flattened old index -> flattened new index. The old order is the live order with the
+    # added names removed, because additions do not reorder what was already there.
+    old_to_new: dict[int, int] = {}
+    new_flat = 0
+    old_flat = 0
+    for gi, names in enumerate(live_names):
+        for n in names:
+            if n not in added_set:
+                old_to_new[old_flat] = new_flat
+                old_flat += 1
+            new_flat += 1
+
+    aligned = dict(state)
+    aligned["state"] = {old_to_new[k]: v for k, v in state["state"].items()
+                        if k in old_to_new}
+    groups = []
+    flat = 0
+    for gi, names in enumerate(live_names):
+        g = dict(old_groups[gi])
+        g["params"] = list(range(flat, flat + len(names)))
+        flat += len(names)
+        groups.append(g)
+    aligned["param_groups"] = groups
+    return aligned, added
 
 
 def _register_embedding_32bit_overrides(model: nn.Module, opt) -> None:
