@@ -167,9 +167,19 @@ def state_geom(h: torch.Tensor, cap: int = 2048, seed: int = 0,
     if centred:
         h = h - h.mean(0, keepdim=True)
     hn = h / h.norm(dim=1, keepdim=True).clamp_min(1e-12)
-    sv = torch.linalg.svdvals(hn.double()).pow(2)
-    eff = float(sv.sum().pow(2) / sv.pow(2).sum().clamp_min(1e-300))
     gram = hn.double() @ hn.double().t()
+    # Squared singular values of `hn` ARE the eigenvalues of its Gram matrix, so the
+    # participation ratio can be read off either. Use the Gram route for two reasons.
+    # (1) Correctness on aarch64: `torch.linalg.svdvals` returns ALL-NAN for a
+    #     rank-deficient input on the DGX Spark's torch 2.13.0+cu130 build, in fp32 and
+    #     fp64 alike, while full-rank input is fine and `eigvalsh` is correct on the same
+    #     matrices. The probe's self-test caught it. Measured 2026-08-24.
+    # (2) Cost: the states are [P, F] with P around 342 and F = 4096, so the P x P Gram is
+    #     an order of magnitude smaller than the SVD of the full matrix, and it is already
+    #     built for the mean-cosine below.
+    # Round-off can push the smallest eigenvalues slightly negative; clamp before squaring.
+    ev = torch.linalg.eigvalsh(gram).clamp_min(0)
+    eff = float(ev.sum().pow(2) / ev.pow(2).sum().clamp_min(1e-300))
     n = gram.shape[0]
     cos = float((gram.sum() - n) / (n * (n - 1)))
     return eff, cos
@@ -590,6 +600,17 @@ def self_test() -> None:
     r_ct, _ = state_geom(shared, centred=True)
     assert r_un < 5.0, f"uncentred rank should be dominated by the common part: {r_un}"
     assert r_ct > 8 * r_un, f"centring must expose the residual spread: {r_un} -> {r_ct}"
+
+    # the Gram route must agree with the SVD route wherever the SVD route is trustworthy
+    # (full-rank input). This is what licenses the platform fix above.
+    for shape in ((120, 300), (300, 120)):
+        m = torch.randn(*shape).double()
+        mn = m / m.norm(dim=1, keepdim=True)
+        sv2 = torch.linalg.svdvals(mn).pow(2)
+        eff_svd = float(sv2.sum().pow(2) / sv2.pow(2).sum())
+        eff_gram, _ = state_geom(m)
+        assert abs(eff_svd - eff_gram) / eff_svd < 1e-8, \
+            f"Gram and SVD participation ratios disagree at {shape}: {eff_svd} vs {eff_gram}"
 
     # the subsample cap must not move the answer on homogeneous input
     big = torch.randn(5000, 64)
