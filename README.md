@@ -57,7 +57,7 @@ This is based on a series of experiments run on
 ---
 
 From experimentation with looping and halting, halting mechanisms don't give a real win over no halting.
-HRM dropped ACT for their LLM for this reason. The likely cause for this is what inspired TUL.
+HRM dropped [ACT](docs/references/tul-latent-emission/1603.08983.md) for their LLM for this reason. The likely cause for this is what inspired TUL.
 
 [Future Lens](docs/references/tul-latent-emission/2311.04897.md) shows us that the middle layers contain whole semantic thoughts, lets call ST. We can decode many tokens from it successfully.
 Anthropic's [J-lens / J-space](docs/references/tul-latent-emission/2607.15495.md) is the same picture from the other direction: mid-depth verbalizable concepts held for future report, not just the next token.
