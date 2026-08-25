@@ -84,6 +84,29 @@ one must be able to die honestly or not at all.
   the training logs and the probe JSONs and prints a verdict per prediction with no judgement
   calls.
 
+## Method amendment 2026-08-25 — stopped at 3 pairs
+
+The campaign was cut from 4 pairs + a seed-0 divergence probe to **3 pairs**
+(seeds 1, 2, 3). Predictions are UNCHANGED; only the number of replicates is.
+
+Reason, recorded before the remaining runs finished and with only pair 1 in hand: pair 1
+returned control 4.6863 against SCSE 6.4277, a gap of 1.74 nats — about ten times the
+0.168-nat noise floor — and, more importantly, the SCSE arm's TRAINING loss is flat from
+step 200 (6.53 / 6.55 / 6.38 / 6.53 at steps 200 / 1000 / 3000 / 3400). That is a stall, not
+an underperformance: a method that merely fails to help tracks below the control and keeps
+descending. A live probe of the seed-1 checkpoints shows the deviation running 10-33x the
+anchor norm and jumping 80x in a single loop iteration.
+
+Three pairs is the minimum this file already specifies as scorable, so the verdict on P2-P5
+is still issued under the original thresholds. The GPU hours freed go to diagnosing the
+stall, which is worth more than a fourth replicate of a gap that is already ten times the
+noise floor. Decision taken by the user after being shown pair 1.
+
+Consequences for scoring, stated now rather than after the fact:
+* P3 reads as "SCSE lower on all 3 of 3 pairs", which this file already provides for.
+* The seed-0 divergence probe is NOT run, so P4 is scored on seeds 1-3 only.
+* Nothing else moves. The refuter is unchanged and can still fire.
+
 ## Results
 
 Not yet run.
