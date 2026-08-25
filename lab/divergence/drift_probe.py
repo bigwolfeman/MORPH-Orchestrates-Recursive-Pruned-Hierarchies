@@ -400,9 +400,18 @@ def forcing_bias(root, points: list[dict]) -> list[dict]:
         b = select(step_at(root, at_anchor) - anchor[:nrow], cm)
         h0 = select(anchor[:nrow], cm)
         c, rms = concentration(b)
+        # R_t, eq. (9): pointwise anchor-response energy over REALISED recurrent-update
+        # energy. Reported so MORPH lands on the same axis as the paper's Table 3, where the
+        # looped baseline is 1.000 at t=0 and 4.35-5.44 at t=47, and SCSE is 0.000.
+        # MORPH's baseline anchor is h* = h_0 = e (the paper's `h* = e` row), so
+        # Delta_{t+1} - Delta_t = h_{t+1} - h_t, which is exactly the realised displacement.
+        d = select(step_at(root, p) - p["h"][:nrow], cm)
+        num = float(b.pow(2).sum(-1).mean())
+        den = float(d.pow(2).sum(-1).mean())
         out.append({"iter": int(p["iter_idx"]),
                     "b_rel": rms / max(float(h0.pow(2).sum(-1).mean().sqrt()), 1e-30),
-                    "b_C": c, "n_pos": int(cm.sum())})
+                    "b_C": c, "n_pos": int(cm.sum()),
+                    "R_t": num / max(den, 1e-12)})
     return out
 
 
@@ -662,6 +671,8 @@ def main() -> None:
         fb = d["forcing_bias"]
         print(f"{'':<22} b_t/|h*|     = " +
               " ".join(f"{r['b_rel']:7.3f}" for r in fb), flush=True)
+        print(f"{'':<22} R_t (eq.9)   = " +
+              " ".join(f"{r['R_t']:7.3f}" for r in fb), flush=True)
         print(f"{'':<22} b_t conc     = " +
               " ".join(f"{r['b_C']:7.1f}" for r in fb), flush=True)
         print(f"{'':<22} rank_h/iter  = " +
