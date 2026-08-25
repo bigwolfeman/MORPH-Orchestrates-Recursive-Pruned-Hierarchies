@@ -306,6 +306,25 @@ def step_at(root, point: dict, *, zero_inj: bool = False, no_diag: bool = False,
                            drop_decay=no_diag or no_decay)
     else:
         ctx = contextlib.nullcontext()
+    if point.get("scse"):
+        # Under SCSE the captured "h" is the DEVIATION and "e" is the ANCHOR (the capture
+        # carries the flag so this cannot be got wrong by assumption). The map to replay is
+        # the DEVIATION map T_t(Delta) = Delta + m*s*G(Delta), not the old core map — using
+        # `_apply_core_step` directly here would replay an operator the model never applies
+        # and report a forcing bias for a recurrence that does not exist.
+        if zero_inj or no_diag or no_dt or no_decay:
+            raise ValueError(
+                "the injection ablations (zero_inj/no_diag/no_dt/no_decay) are meaningless "
+                "under SCSE: its core takes no source at all (docs/scse-spec.md D3). "
+                "Asking for one here would silently return the un-ablated number.")
+        s = root.scse
+        with dropout_off(root), torch.no_grad(), \
+                torch.autocast("cuda", dtype=torch.bfloat16):
+            g_out, _ = root._apply_core_step(
+                s.recurrent_input(h, e), None, None, None, None,
+                ret_state=point["ret_state"], iter_idx=int(point["iter_idx"]),
+                inj_terms=None, source_free=True)
+            return h + s.gate(h) * (s.step_scale * g_out)
     with dropout_off(root), ctx, torch.no_grad(), \
             torch.autocast("cuda", dtype=torch.bfloat16):
         out, _ = root._apply_core_step(h, e, None, None, None,
@@ -401,7 +420,13 @@ def forcing_bias(root, points: list[dict]) -> list[dict]:
     `e` is loop-invariant (the same tensor is passed to every iteration), so any point's
     copy is the anchor.
     """
-    anchor = points[0]["e"]
+    # THE ANCHOR STATE, in whatever coordinates the loop runs in. For the baseline the loop
+    # carries the absolute state and the anchor is `h* = e`. Under SCSE the loop already
+    # carries the deviation, so the anchor IS the zero deviation — feeding `e` there would
+    # evaluate the deviation map at the anchor's own magnitude instead of at zero, which is
+    # not `T_t(0; e)` and not any quantity the paper defines.
+    scse = bool(points[0].get("scse"))
+    anchor = torch.zeros_like(points[0]["h"]) if scse else points[0]["e"]
     out = []
     common = None
     for p in points:
@@ -435,7 +460,10 @@ def forcing_bias(root, points: list[dict]) -> list[dict]:
         at_anchor = _truncated(anchor)
         live = _truncated(p["h"])
         b = select(step_at(root, at_anchor) - at_anchor["h"], cm)
-        h0 = select(at_anchor["h"], cm)
+        # Normalise by the ANCHOR STATE's norm in both modes. Under SCSE `at_anchor["h"]` is
+        # a zero deviation, so using it would divide by zero; the anchor state there is h*,
+        # which the capture stores in "e".
+        h0 = select((p["e"][:nrow] if scse else at_anchor["h"]), cm)
         c, rms = concentration(b)
         # R_t, eq. (9): pointwise anchor-response energy over REALISED recurrent-update
         # energy. Reported so MORPH lands on the same axis as the paper's Table 3, where the
