@@ -1,43 +1,48 @@
 # Agent Note: Source-centered state evolution for the MORPH core loop
 
-Status: proposed
+Status: rejected — the FULL method was built, audited twice, machine-checked in Lean, and measured on 3 paired seeds: +1.68 nats mean CE against the control, 0 of 3 pairs improved, and the SCSE arm stops learning at step 200. The refuter fired.
 
-## Status, 2026-08-25 — Stage 1 measured and dead; the PORT is untested, not refuted
+## Outcome, 2026-08-25 — the full method was RUN and does not transfer
 
-**Correction of the 2026-08-25 rejection.** This note was briefly filed under `rejected/`
-with a status line that claimed "MORPH is not in SCSE's regime". That claim is withdrawn.
-It compared MORPH's `R_t` at loop iteration <= 7 against the paper's value at **t = 47**,
-and the paper reports NO baseline `R_t` anywhere between t = 0 and t = 47 (their Table 3
-and Figure 5 report exactly those two steps). `R_0 = 1` is an identity in both systems, so
-there is no measurement in common. The paper's gains are also NOT confined to extrapolated
-depth: WikiText-103 95.6M at **T = 8**, inside the training range, goes 117.1 -> 96.9 PPL
-(their Table 1). Withdrawing this leaves no evidence against running the real method.
+This supersedes the 2026-08-25 Stage 1 rejection, which was withdrawn as an overreach and is
+kept below for the record. The port has now had a fair test.
 
-**What is actually established.** Stage 1 (a non-zero initial deviation, nothing else)
-ran on four seeds and made MORPH strictly worse: CE +0.815 nats, `b_t` up on three of four
-seeds, and the diverging seed diverged again.
-Full record: [H23](../../../../docs/experiments/failures/2026-08-25-scse-stage1-initial-deviation.md).
+**What was measured** ([experiment](../../../../docs/experiments/failures/2026-08-25-scse-full-method.md)):
 
-**Why that does not condemn the port.** The paper's own abstract says the ablations
-"identify the learned anchor and the anchor-coordinate deviation recurrence as the primary
-contributors to the gain". Stage 1 implements NEITHER. It also is **not** the paper's
-"tuned adapter" family, as an earlier draft of this note claimed: the tuned adapter keeps
-the learned anchor `h* = e + a_omega(e)` and a learned scalar source gain `alpha` in
-`h_{t+1} = h_t + s*B_theta(h_t + alpha*W_in*h*)`. Stage 1 has neither. The paper contains
-no initial-deviation-only control at all, so Stage 1 tested a configuration the paper never
-reports, and its result transfers to nothing.
+| seed | control | SCSE | delta |
+| --- | --- | --- | --- |
+| 1 | 4.6863 | 6.4277 | +1.7414 |
+| 2 | 4.5303 | 6.1722 | +1.6419 |
+| 3 | 4.5073 | 6.1715 | +1.6642 |
 
-**Decision: run the full method (Stage 2 + Stage 3 together).** Specification:
-[docs/scse-spec.md](../../../../docs/scse-spec.md). Stages 2 and 3 are merged because the
-zero-deviation mask is meaningless without deviation coordinates, and deviation coordinates
-without the mask lose the exact anchor invariance that is the paper's construction.
+Three seeds inside 0.10 nats of each other. The pre-registered validity gate PASSED, so this
+is a result about SCSE and not about a broken arm. The failure mode is a STALL: the arm tracks
+the control to step ~250 and then stops learning.
 
-**One earlier risk in this note is also withdrawn.** "Do not delete `inj_term_i` ... those
-paths are load-bearing" is overstated. The core's injection term carries the hash-bigram and
-`x0` only (value-embeds never fire at core layer indices), and BOTH reach the model through
-the prelude injections (`x0_injects[:n_prelude]`), the coda injections
-(`x0_injects[n_prelude+n_core:]`), and `e` itself, which is the prelude output. What SCSE
-removes is RE-injection at core depth, which is the method, not a casualty of it.
+**Why this verdict is trustworthy where the last one was not.** The Stage 1 rejection tested a
+configuration the paper never reports and then recommended abandoning the port. This one:
+implements the two things the abstract actually credits (the learned anchor and the
+anchor-coordinate deviation recurrence); survived two adversarial audit rounds that found a
+structural bug and five fake tests; carries a machine-checked Lean proof
+([lab/scse-lean](../../../../lab/scse-lean/README.md)) that the recurrence recovers the paper's
+stability regime and reduces EXACTLY to the published algorithm when the carry is an identity;
+and pre-registered a refuter that could kill it, which fired.
+
+**What is NOT concluded.** Nothing about SCSE as published. The paper evaluates 22M-139M models
+on WikiText-2/103, OpenWebText and C4, with uniform depth sampling and without truncated BPTT,
+stochastic depth, ternary QAT or structured sparsity. MORPH has all of those, a 6-block core
+where the paper has one, and a HyperConnection carry the paper does not model. This is a
+statement about this port on this model, at this scale.
+
+**Leading explanation, still a hypothesis.** `Delta_0` enters at ~0.1x the anchor norm while
+MORPH's core blocks are RMSNorm-pre-normalised, so the first core application rescales the
+deviation ~80x; `sigma_max` then runs to 6.04 against the control's 3.03, and in the bf16 the
+model trains in, one core step carries 41-71 % error against 4.5-7.7 % for the control. Three
+follow-up experiments are listed in the experiment file, in value order, none run.
+
+**The code stays in the tree at `scse_enabled: false`**, which builds no parameters and draws
+no RNG, so a control model is bitwise identical to one built before SCSE existed. Revisiting
+costs one config field, not a rebuild.
 
 ## Problem
 
