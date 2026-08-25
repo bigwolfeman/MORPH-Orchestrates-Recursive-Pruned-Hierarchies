@@ -25,6 +25,18 @@ model:
   mean_depth: 6
   max_depth: 8
   bptt_depth: 4
+  # SCSE Stage 1 (arXiv:2607.27656): the core loop's INITIAL DEVIATION.
+  # MORPH historically entered the loop at h_0 = e, so against the input-conditioned anchor
+  # h* = e the initial deviation is EXACTLY zero. The paper's Theorem 2 then makes the whole
+  # loop trajectory the propagated forcing response sum_k Phi_E(T,k+1) b_k(e), and Corollary 5
+  # shows that response can grow like rho^T with nothing in MORPH bounding it. This scale gives
+  # the loop a state of its own:  h_0 = e + core_init_scale * H_0(e)  (their Listing 1).
+  # 0.0 = OFF and BIT-IDENTICAL: it builds a parameter-free _CloneInit that draws no RNG, so a
+  # model built with 0.0 matches one built before this key existed, weight for weight
+  # (tests/test_scse_core_init.py). The paper uses 0.1.
+  # NOTE the ordering constraint: SCSE's zero-deviation mask (Stage 3) must NEVER be enabled
+  # while this is 0.0 -- at Delta_0 = 0 the mask sets m = 0 forever and the loop stops updating.
+  core_init_scale: 0.0
   # L1 core-gain governor: cap per-iteration looped-core amplification ‖h_new‖/‖h_a‖ per
   # sample to ratio τ. 0.0 = OFF (bit-identical). Identity when gain≈1 (norm-preserving
   # HC residual); only fires on gain runaway (weight-shared core amplifies T× per depth).
