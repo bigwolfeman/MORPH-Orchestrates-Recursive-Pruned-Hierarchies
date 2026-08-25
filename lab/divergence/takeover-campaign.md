@@ -24,7 +24,7 @@ affected.
 | | |
 |---|---|
 | Nothing running | `g6-ctrl` took over at step 650; `g6-fine` at 975 and aborted 19:01. Finer spans DELAY 1.5x, do not cure |
-| Next | positional attention-sink probe (cheap, no training), then SCSE-style anchored recurrence |
+| Next | the FIRST core iteration is the one arm-specific forward asymmetry left (A1 `C_first/P` 0.44-0.58 vs A0's 0.17-0.19) — see H19 and the untested [iteration-0 mediation](../../docs/experiments/planned/2026-08-23-tul-iteration0-mediation.md) |
 | Blocked on a decision | is TUL on the near path? If not, stop after `g6-fine` and ship the mitigations |
 
 ## Hypothesis ledger
@@ -51,6 +51,7 @@ Verdict is the outcome of a PRE-REGISTERED test unless marked otherwise.
 | H16 | Finer spans (`span_cap` 8) prevent it | **partial — delays, does not cure** | `g6-ctrl` takes over at step 650, `g6-fine` at 975. 1.5x delay. Confounded: `g6-fine` also has 2.5x the core positions | this file, 2026-08-24 |
 | H17 | The LEARNABLE attention sink absorbs the mass | **REFUTED** | core `sink_logits` are 0.0036 → 0.0053 across all 11 rungs (sigmoid 0.5009 → 0.5013). The explicit sink parameter never engages | this file, 2026-08-24 |
 | H18 | A POSITIONAL attention sink — mass concentrating on one slot — compounds over T | **UNTESTED, top open lead** | the cotangent already sits on the same top-3 slots at every core block with the top slot's share rising 0.18 → 0.54. That is a sink signature, measured, never followed up | — |
+| H19 | The zero-deviation forcing bias (SCSE) drives it: `e` re-injected every iteration leaves `G_theta(0) != 0`, so the state drifts and the drift compounds over T | **REFUTED, opposite direction** | the shared component of the per-iteration displacement DECAYS ~100x across the loop (`C_last/C_first` = 0.0076 where the prediction needed >= 3), zeroing the repeated additive injection moves it from 1.13 to 1.12, and turning the DiagonalInjection OFF *raises* it 1.13 -> 1.31. The injections de-correlate the states; they do not drive them together | [forcing-bias](../../docs/experiments/failures/2026-08-24-tul-zero-deviation-forcing-bias.md) |
 
 ## The two numbers that still point somewhere
 
@@ -63,11 +64,25 @@ Verdict is the outcome of a PRE-REGISTERED test unless marked otherwise.
    704 iterate the shared map with no per-example anchor. Structural, read off the model,
    not inferred.
 
+3. **The loop stops settling at the onset — on BOTH arms.** The last iteration's
+   displacement relative to the state, `rel_last`, rises from 0.702 to 1.081 on the slot
+   path across the onset ladder, and from 0.682 to 1.077 on the token path. At takeover
+   every core iteration moves the state by more than its own norm. This is the
+   forward-trajectory form of `rho(J_core) >= 1`. It agrees to three decimals between the
+   FAILING arm and the HEALTHY one, so it is a background condition of the recipe, not a
+   sufficient cause — and any cure that only restores contractivity has to explain why A0
+   never needed it.
+4. **The one arm-specific forward asymmetry left is the FIRST iteration.** Half of A1's
+   first-step displacement energy lies in one direction shared by all 342 slots and all 6
+   rows (`C_first/P` = 0.44-0.58); A0's is 0.17-0.19. It is flat across the onset ladder, so
+   it is a property of the slot construction rather than of the failure — but nothing else
+   measured in the forward pass separates the arms this cleanly.
+
 ## Open ideas, ranked
 
 | Idea | Cost | Why it might work | Why it might not |
 |---|---|---|---|
-| **SCSE — anchored deviation recurrence** (arXiv:2607.27656, Kim, Hayashi, Kamiya, Koyama, Iwasawa, Matsuo, 2026-07-30) | days | learn an anchor `h*(e)`, evolve the DEVIATION `Δ_t = h_t − h*(e)` through a zero-preserving core so `T_t(0;e) = 0` exactly. MORPH's `h = A·h + dt·e` is precisely the additive-injection form the paper says carries a non-zero forcing bias that accumulates over depth. Survives the entire ruled-out list: it re-parameterises the recurrence, it does not cap weights or touch the optimizer | a real re-architecture of the core loop; evaluated at 139M on WikiText, not at MORPH's scale or with stochastic depth |
+| ~~**SCSE — anchored deviation recurrence**~~ (arXiv:2607.27656, Kim, Hayashi, Kamiya, Koyama, Iwasawa, Matsuo, 2026-07-30) — **DOWNGRADED by H19** | days | learn an anchor `h*(e)`, evolve the DEVIATION `Δ_t = h_t − h*(e)` through a zero-preserving core so `T_t(0;e) = 0` exactly. MORPH's `h = A·h + dt·e` is precisely the additive-injection form the paper says carries a non-zero forcing bias that accumulates over depth. Survives the entire ruled-out list: it re-parameterises the recurrence, it does not cap weights or touch the optimizer | H19 measured the mechanism and it is absent: the drift does not accumulate, and the injection SCSE deletes is the only measured de-correlator in MORPH's loop (removing the DiagonalInjection raises shared concentration 1.2-3.3x at every rung on both paths). Porting it unmodified would remove that. Also evaluated at 139M on WikiText, without stochastic depth or truncated BPTT |
 | Positional attention-sink probe | ~1 h, no training | Wolfe's hypothesis. The learnable sink is refuted (H17) but positional concentration is not measured. Would explain rank collapse, its compounding over T, and its reproduction on the token path — all without a weight-spectrum change | if attention is diffuse, the last cheap forward hypothesis dies |
 | Widen `DiagonalInjection` to all 1024 channels | 1 line + 40 min | targets the 69 % unanchored fraction; holds depth, FLOPs, sharing, capacity fixed; causal | H15 says the existing anchor is healthy, so more of it may change nothing. It is ALSO a weaker version of SCSE, which fixes the forcing bias rather than the channel count |
 | `span_cap` 8 / `max_slots` 160 (RUNNING) | 40 min | measured 1.97x on slot-input eff rank | not compute-matched: `L_total` 1152 → 1344 and core positions 57 → 142. Granularity and slot count are inseparable at fixed `seq_len` |
@@ -97,6 +112,7 @@ Verdict is the outcome of a PRE-REGISTERED test unless marked otherwise.
 | `lab/divergence/pooling_probe.py` | span-length law, slot-input diversity, `1/sqrt(L)` slope |
 | `lab/divergence/reader_conflict_probe.py` | per-reader gradients at the plan, `sqrt(K)`-normalised alignment |
 | `lab/divergence/slot_rows_probe.py` | centred diversity of the per-slot embedding rows |
+| `lab/divergence/drift_probe.py` | per-iteration displacement geometry off the captured core trajectory: shared concentration `C`, relative displacement `rel`, participation ratio over positions, and the two injection ablations. Has a trajectory gate that RAISES unless the replayed step reproduces the next captured state |
 | `lab/divergence/score_arms.py` | the arm verdict rule; refuses a firing step when the probe cadence is too coarse |
 
 ## Traps this campaign has already fallen into
@@ -111,6 +127,8 @@ Verdict is the outcome of a PRE-REGISTERED test unless marked otherwise.
 * `tul.boundary_chars` cannot be a Hydra command-line override: the escaped comma arrives as
   the literal string `.;!?\,`. Use a config file.
 * Two arms were lost to a control that refused to fail. **Run the control first.**
+- **A replay probe in `model.train()` is not replaying the same map.** Every core block runs `nn.Dropout(0.1)`, so a replayed step draws a different mask than the captured one and lands 24 % away from the captured next state. `drift_probe.py`'s trajectory gate caught it; `core_jacobian.py`'s own replay has the same exposure and no gate. Zero the rates, do not switch to `eval()` — that also changes Poisson depths to a uniform `mean_depth`, i.e. a different operating point.
+- **A concentration measure near 1 does not mean isotropic.** One position holding all the energy drives `P*||mean||^2/mean||.||^2` to 1 just as hard. Always pair it with the participation ratio over positions.
 
 ## Loose ends
 
