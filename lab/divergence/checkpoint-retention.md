@@ -24,7 +24,8 @@ the probe JSON, the training log and the saved Hydra config. That is the precede
 |---|---:|:--:|---|
 | `onset-capture` | 25 G | 1, 2 | The takeover ladder, `ROLL_step_{1625..1850}` + `TAKEOVER_step_1866`, 25-step spacing. **This event cannot be re-made.** Two runs of MORPH at a fixed seed decorrelate to 10 % in eleven steps (`docs/experiments/failures/2026-08-23-tul-run-replication.md`), so re-running `tul_a1` seed 0 does not reproduce this takeover. Both live planned experiments read it, and so does every filed probe. |
 | `onset-sub` | 12 K | — | Symlinks into `onset-capture`. Free. |
-| `h24-ctrl-s0`, `h24-hca16-s0`, `h24-ctrl-s1`, `h24-hca16-s1` | ~34 G | 2 | The H24 binary arm, running now against `docs/experiments/planned/2026-08-25-h24-hca-branch-arm-binary.md`. Delete after that experiment is filed. |
+| ~~`h24-*` step ladders~~ | 0 | — | **Pruned 2026-08-25 18:20**, 44 G, once the arm was filed as a failure. The rule said "delete after that experiment is filed" and it was applied to itself. |
+| `h24-ctrl-s0/DIVERGED_step_2880.pt`, `h24-hca16-s1/DIVERGED_step_2940.pt` | 4.5 G | 1 | The two abort captures. They are the only state that exists for either divergence, and the retention ring is built never to rotate a guard file away. |
 | `tul-a1/step_20000.pt`, `tul-gate/step_20000.pt` | 4.5 G | 3 | 20k-step trained TUL models, about 2.5 GPU-hours each. |
 | `tul-a1/DIVERGED_step_5900.pt` | 2.3 G | 1 | The only snapshot of the original batch-14 production-kernel divergence, which is a different regime from `onset-capture`. |
 
