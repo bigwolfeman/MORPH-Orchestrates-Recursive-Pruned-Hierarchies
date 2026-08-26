@@ -69,3 +69,71 @@ those parameters anywhere in the first place.
   its input through, which is the closest thing to "absent" for a residual stack, but it is
   not the only defensible definition.
 - Nothing here says which intervention fixes it.
+
+---
+
+## Follow-up 2026-08-25: it is the PLAN that is empty, not just the loop
+
+Raised in conversation: 0.0007 nats reads like the core is SKIPPED, not like it is competing
+for credit. That was right, and it exposed a flaw in the measurement above.
+
+**Ablating the core by identity removes the LOOP, not the SLOT.** The slot position still
+carries `E_slot + mean(embed(span))` through the prelude, so the coda still gets a span
+summary. `lab/divergence/slot_path_worth.py` separates them by zeroing what
+`prefix_project` writes into the shared sequence — positions and validity untouched, only
+the plan's content removed:
+
+| removed | total | `ce_main` | `ce_emit` |
+|---|---:|---:|---:|
+| the LOOP (slot keeps its bag-mean) | 0.0169 | **0.0051** | 0.5420 |
+| the WHOLE PLAN (slot values zeroed) | 0.0777 | **0.0191** | 2.6564 |
+
+"no-plan" and "neither" agree to four decimals — once the plan is zeroed the loop cannot
+matter. That is the consistency check.
+
+The plan path is **connected**: zeroing it costs 0.0191 on `ce_main`, not 0.0000. If tokens
+could not attend the slots it would be exactly zero. `window_size` is 256 against
+`span_cap` 32, so reach was never the problem.
+
+### Is the plan empty, or capable but never asked?
+
+`lab/divergence/token_tax_sweep.py` sweeps `token_state_dropout` at EVAL — the tax whose
+stated purpose is to force the coda to decode from the plan. Deterministically seeded, so
+every condition masks the same positions and the comparison is paired.
+
+| token drop `p` | `ce_main` with plan | without plan | plan worth |
+|---:|---:|---:|---:|
+| 0.00 | 4.8093 | 4.8284 | 0.0191 |
+| 0.15 (the shipped value) | 5.0934 | 5.1278 | 0.0344 |
+| 0.50 | 5.8454 | 5.9029 | 0.0575 |
+| 0.90 | 7.0219 | 7.0794 | 0.0574 |
+| 1.00 | 7.5327 | 7.6026 | **0.0699** |
+
+**Mask every token state and the plan is still worth 0.0699 nats**, while `ce_main`
+collapses to 7.5327. The coda cannot recover the span from the plan because the plan does
+not contain it.
+
+### The causal chain, end to end
+
+1. The core's only DIRECT supervision is `ce_emit` — predict ONE token, the next span's
+   first. Worth 2.6564 nats to that target.
+2. Its INDIRECT route, helping the coda predict the span, is worth **0.0191** nats, so
+   almost no gradient arrives that way.
+3. So the plan learns to be a one-token predictor. That is the only thing it is asked for.
+4. Hence it carries ~0.07 nats about the span even with the token path fully removed.
+5. So for actual token decoding the core is, as suspected, close to skipped.
+6. And it still loses its one job to the free token path: `ce_plast − ce_emit` is −0.2191.
+
+**TUL's plan is trained to predict one token and is then expected to carry a thought.**
+Nothing in the loss asks it to summarise the span, so it does not.
+
+### What this changes about the fix
+
+Raising `token_state_dropout` is the spec's own "collapse tax" and is the obvious lever, but
+this sweep is EVAL-ONLY on a model trained at `p = 0.15`. It shows the plan is empty NOW. It
+does NOT show the plan cannot be FILLED if training ran at a high `p`, where the coda's
+`ce_main` would depend on the plan and real gradient would reach the core. That is the
+experiment, and it must be pre-registered.
+
+The `p = 1.0` row is out of distribution — the model never trained there — so read the trend
+(0.0191 → 0.0344 → 0.0575) rather than the endpoint.
