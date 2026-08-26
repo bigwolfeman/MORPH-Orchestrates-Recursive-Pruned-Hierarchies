@@ -250,6 +250,7 @@ Vendored third-party components keep their own license notices, including `morph
 - **EPFL / Apple** AdEMAMix
 - **BigCode / Hugging Face** StarCoder2 tokenizer
 - **Google** SwiGLU
+- **Bits n Bytes** AdEMAMix reference implementation
 
 ## TODO
 - [RAVEN](docs/references.md#raven--sparse-memory-routing-planned-on-gla) attention on GLA.
