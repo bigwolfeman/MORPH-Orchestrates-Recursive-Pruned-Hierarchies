@@ -31,7 +31,8 @@ from .fused_ce import (
 from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .sparsity import MortarLinear
 from .tul import (TULConfig, TULGate, TULGateConfig, TULSlots, compact_index,
-                  cw2_retain_mask, gather_positions, gather_valid, scatter_positions,
+                  cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
+                  scatter_positions,
                   window_drop_mask)
 from .tul_layout import SlotLayout
 
@@ -1947,9 +1948,49 @@ class MORPHTransformer(nn.Module):
         p_idx = torch.where(layout.slot_valid, base - 1, BL).reshape(-1)
         z_idx = torch.where(layout.slot_valid, base + layout.prefix_k - 1, BL).reshape(-1)
         w = labels.new_ones(BL + 1, dtype=torch.float32)
-        w[p_idx] = 0.5
-        w[z_idx] = 0.5
+        w[p_idx] = self.cfg.tul.plast_weight
+        w[z_idx] = self.cfg.tul.emit_weight
         return w[:BL], p_idx, z_idx
+
+    def _tul_mux_loss(self, h_slots: Tensor, input_ids: Tensor,
+                      layout: SlotLayout) -> Tensor:
+        """MUX local head (arXiv 2607.18264): weighted CE of each slot's NEXT span.
+
+        The slot's post-core state is read out through the model's OWN LM-head path
+        (``_readout`` → unembedding) — zero new parameters — and trained toward the
+        geometric superposition of its next span's tokens. The KL to that target
+        equals this weighted CE up to the target's (constant) entropy, and the
+        dense ``|V|`` target is never materialised: the loss gathers log-probs at
+        the span's own token ids only (``mux_span_targets``).
+
+        Why this exists: the plan's only direct supervision was ``ce_emit``, a
+        one-token race the free token path wins (the 2026-08-25 pivot). This head
+        gives z span-level content gradient that does not route through the coda's
+        suppressed readout, and MUX Prop 16 shows a low local loss also protects
+        the answer-side routing TO the latents. Reads h_slots BEFORE the gate's
+        budget conditioning — the plan is supervised, not the budget arithmetic.
+
+        Cost: logits over slots only, ``[B, S, V]`` fp32 ≈ 75 MB at B=6, S=64 —
+        ~24x smaller than one row of full-sequence logits (why fused CE exists).
+        """
+        tc = self.cfg.tul
+        z = self._readout(h_slots)                            # [B, S, C]
+        w_head = self.embed.lm_weight()                       # [V, C]
+        logits = (z @ w_head.t()).float() / tc.mux_tau        # fp32: stable log_softmax
+        logits = logits.index_fill(
+            -1, torch.tensor([tc.slot_id], device=logits.device), float("-inf"))
+        logp = torch.log_softmax(logits, dim=-1)              # [B, S, V]
+        pos_valid, alpha, tgt_slot, sup = mux_span_targets(input_ids, layout, tc.mux_rho)
+        B = input_ids.shape[0]
+        V = logp.shape[-1]
+        # logp[b, tgt_slot[b,p], input_ids[b,p]] without a [B, L, V] gather.
+        # Invalid positions gather id 0, NOT their own id: a slot position's own id
+        # is slot_id, whose logp is the masked -inf, and 0 * -inf = NaN (caught by
+        # test_mux_loss_decomposes_as_ce_plus_weighted_term before it ever ran).
+        safe_ids = torch.where(pos_valid, input_ids, torch.zeros_like(input_ids))
+        lp = logp.reshape(B, -1).gather(1, tgt_slot * V + safe_ids)    # [B, L]
+        ce = -torch.where(pos_valid, alpha * lp, torch.zeros_like(lp)).sum()
+        return ce / sup.sum().to(ce.dtype).clamp(min=1.0)
 
     def _tul_group_losses(self, x: Tensor, labels: Tensor, layout: SlotLayout | None,
                           want_groups: bool = True) -> dict:
@@ -2041,6 +2082,11 @@ class MORPHTransformer(nn.Module):
                 "tul.gate has no defined interaction with arm A2 (tokens_through_core): "
                 "A2 has no per-slot looped state to read a length off. Not specified, so "
                 "this raises rather than silently picking a behaviour.")
+        if tc.mux_beta > 0.0 and tc.tokens_through_core:
+            raise NotImplementedError(
+                "tul.mux_beta has no defined interaction with arm A2 (tokens_through_core): "
+                "A2 has no per-slot looped state to read a plan off. Raises rather than "
+                "silently picking a behaviour (the tul.gate precedent).")
         if tc.tokens_through_core:
             # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
             # RESOLVED SPEC AMBIGUITY — §7.1's A2 row says "Poisson/slot" in the depth
@@ -2048,10 +2094,12 @@ class MORPHTransformer(nn.Module):
             # the presence of slots ALONE (it isolates C2), so it reuses today's core
             # region unchanged; a per-position Poisson depth would change two things at once.
             x_coda = self._core_region(x, x0, bigram_emb, input_ids)
-            depths, g_traj = None, None
+            depths, g_traj, mux_loss = None, None, None
         else:
             xn, h_slots, depths, g_traj = self._tul_core(x, x0, bigram_emb, layout,
                                                          halt=halt)
+            mux_loss = (self._tul_mux_loss(h_slots, input_ids, layout)
+                        if tc.mux_beta > 0.0 else None)
             if self.tul_gate is not None:
                 budget_ids = self._tul_budget_ids(layout, depths, g_traj)
                 h_slots = self.tul_gate.apply_budget(h_slots, budget_ids)
@@ -2105,6 +2153,16 @@ class MORPHTransformer(nn.Module):
                 groups = dict(groups)
                 groups["loss_tokens"] = groups["loss"]
                 groups["loss"] = groups["loss"] + self.cfg.tul.gate.lam * _g["loss_gate"]
+
+        if mux_loss is not None and groups is not None:
+            groups = dict(groups)
+            groups["mux_local"] = mux_loss.detach()
+            # The WEIGHTED term, exposed so train.py can report train/loss and
+            # val loss as the MODEL's CE (the spectral-penalty precedent: an
+            # auxiliary term inside train/loss makes the arm incomparable to its
+            # control and lets the ppl divergence guard fire on the objective).
+            groups["mux_weighted"] = (tc.mux_beta * mux_loss).detach()
+            groups["loss"] = groups["loss"] + tc.mux_beta * mux_loss
 
         if groups is not None:
             out.update(groups)

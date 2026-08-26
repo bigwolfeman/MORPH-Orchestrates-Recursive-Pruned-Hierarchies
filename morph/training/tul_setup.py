@@ -153,6 +153,11 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         xattn=bool(tc.get("xattn", False)),
         bcast=bool(tc.get("bcast", False)),
         coda_token_cut=int(tc.get("coda_token_cut", 0)),
+        emit_weight=float(tc.get("emit_weight", 0.5)),
+        plast_weight=float(tc.get("plast_weight", 0.5)),
+        mux_beta=float(tc.get("mux_beta", 0.0)),
+        mux_rho=float(tc.get("mux_rho", 0.9)),
+        mux_tau=float(tc.get("mux_tau", 1.0)),
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
@@ -171,6 +176,11 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "slot_id": int(slot_id),
         "eos_id": eos_id,
         "n_boundary_ids": int(lut.sum()),
+        "emit_weight": model_cfg.emit_weight,
+        "plast_weight": model_cfg.plast_weight,
+        "mux_beta": model_cfg.mux_beta,
+        "mux_rho": model_cfg.mux_rho,
+        "mux_tau": model_cfg.mux_tau,
         "boundary_chars": str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
         "boundary_substrings": list(substrings),
         "min_span": rule.min_span,

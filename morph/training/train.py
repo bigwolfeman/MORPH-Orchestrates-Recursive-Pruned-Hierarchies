@@ -122,13 +122,18 @@ def evaluate(
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 _m = getattr(model, "_orig_mod", model)
                 out = _m.tul_forward_with_plan_nats(x, y, layout)
-            losses.append(out["loss"].item())
+            _l = out["loss"].item()
+            if out.get("mux_weighted") is not None:
+                _l -= float(out["mux_weighted"])   # val loss = model CE (see train/loss note)
+            losses.append(_l)
             ce_tok = float(out["ce_tokens"])
             acc.setdefault("val/ce_tokens", []).append(ce_tok)
             if "ce_first_tok" in out:
                 acc.setdefault("val/first_tok_ce", []).append(float(out["ce_first_tok"]))
                 acc.setdefault("val/first_tok_counterfactual", []).append(
                     float(out["first_tok_counterfactual"]))
+            if "mux_local" in out:
+                acc.setdefault("val/mux_local", []).append(float(out["mux_local"]))
             if "ce_tokens_no_slots" in out:
                 # §7.2: CE without the plan MINUS CE with it. Positive ⇒ the coda is
                 # actually using the slot state (the C2 number, the h_z ablation).
@@ -2527,6 +2532,10 @@ def main(cfg: DictConfig) -> None:
             # validation CE was 8.19. `train/loss_total` keeps the full objective.
             _lv_total = _lv
             _lv = _lv - _sp_value
+            # Same rule for the MUX local head (arm v1a): keep train/loss and the
+            # divergence guard on the model's CE, not the composite objective.
+            if isinstance(out, dict) and out.get("mux_weighted") is not None:
+                _lv = _lv - float(out["mux_weighted"])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
             #    after its external watchdog died in a power loss). A NaN/Inf loss NEVER
             #    recovers — save an emergency ckpt for forensics and stop, instead of burning
@@ -2622,7 +2631,7 @@ def main(cfg: DictConfig) -> None:
                     _npos = float(out["n_tokens"])
                     log["tul/layer_passes_per_token"] = float(out["layer_passes"]) / max(_npos, 1.0)
                     log["tul/tokens_per_batch"] = _npos
-                for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual"):
+                for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual", "mux_local"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # docs/tul-gate-spec.md §10 — every step, because a gate that stops moving

@@ -1,8 +1,14 @@
-# Experiment: does span-level soft-min credit make the plan load-bearing?
+# Experiment v1b: does K-candidate soft-min credit beat the deterministic plan?
 
-Status: **planned, NOT run. One design switch still open (the MUX local head — Wolfe
-is reading the paper).** Predictions are frozen against measured baselines; do not
-edit them after the run starts.
+Status: **planned, NOT run. SPLIT 2026-08-25: the MUX head + emit retirement now
+run FIRST and alone as [arm v1a](2026-08-25-mux-head-arm-v1a.md); this arm (v1b)
+is the K-candidate soft-min upgrade ON TOP of v1a, gated on v1a's outcome.**
+Predictions are frozen against measured baselines; do not edit them after the run
+starts. Cost is now MEASURED, not estimated: coda+loss is f = 0.270 of a
+kernels+compile step (batch 6), so K=4 ≈ **1.81x** step time (2.09x with the
+conservative f_upper = 0.362); the batch-24 full-fold proxy does NOT fit in
+32 GB, but the arm's coda-only fold at batch 6 is estimated ~19 GB — fits.
+See lab/experiments/results/2026-08-25-coda-k-cost/.
 
 ## Question
 

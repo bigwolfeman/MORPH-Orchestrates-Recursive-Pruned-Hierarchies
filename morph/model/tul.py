@@ -22,7 +22,7 @@ from torch import Tensor
 from .attention import RMSNorm
 from .tul_layout import SlotLayout
 
-__all__ = ["TULConfig", "TULGate", "TULGateConfig", "TULSlots", "bag_mean",
+__all__ = ["TULConfig", "TULGate", "TULGateConfig", "TULSlots", "bag_mean", "mux_span_targets",
            "compact_index", "cw2_retain_mask", "gather_positions", "scatter_positions",
            "window_drop_mask"]
 
@@ -153,6 +153,23 @@ class TULConfig:
                                           # TOKEN positions with row index < C from the coda's
                                           # sequence; every slot stays regardless of its index.
                                           # 0 = off, bit-identical (no new tensors, no new ops).
+    # ── §5 double-label weights (arm v1a makes them knobs) ────────────────────
+    # The spec weights the twice-predicted first token 0.5/0.5. Arm v1a
+    # (lab/experiments/planned/2026-08-25-mux-head-arm-v1a.md) retires the slot's
+    # private one-token race by setting emit_weight=0.0 / plast_weight=1.0: the
+    # emit position stays a METRIC (ce_emit) but carries no training gradient.
+    # Defaults keep every existing arm bit-identical.
+    emit_weight: float = 0.5             # training weight of the slot's emit position
+    plast_weight: float = 0.5            # training weight of the t_last token position
+    # ── MUX local head (arXiv 2607.18264; arm v1a) ────────────────────────────
+    # mux_beta > 0 builds nothing (the head reuses _readout + the unembedding —
+    # zero new parameters) but adds beta * KL(mux_geo(next span) || softmax(W z / tau))
+    # to the loss, where z is the slot's post-core state read out through the
+    # model's own LM-head path. beta = 0.0 → the branch is a construction-time
+    # constant and the arm is bit-identical to A1.
+    mux_beta: float = 0.0                # weight of the local loss (paper: 1.0)
+    mux_rho: float = 0.9                 # geometric decay of the span weighting (Prop 5i)
+    mux_tau: float = 1.0                 # softmax temperature of the head (paper: 1.0)
 
     def __post_init__(self) -> None:
         if self.prefix_k < 1:
@@ -162,6 +179,14 @@ class TULConfig:
         if not 0.0 <= self.token_state_dropout <= 1.0:
             raise ValueError(
                 f"tul.token_state_dropout must be in [0,1], got {self.token_state_dropout}")
+        if self.emit_weight < 0.0 or self.plast_weight < 0.0:
+            raise ValueError("tul.emit_weight / tul.plast_weight must be >= 0")
+        if self.mux_beta < 0.0:
+            raise ValueError(f"tul.mux_beta must be >= 0, got {self.mux_beta}")
+        if not 0.0 < self.mux_rho < 1.0:
+            raise ValueError(f"tul.mux_rho must be in (0,1), got {self.mux_rho}")
+        if self.mux_tau <= 0.0:
+            raise ValueError(f"tul.mux_tau must be > 0, got {self.mux_tau}")
         if self.coda_token_cut < 0:
             raise ValueError(
                 f"tul.coda_token_cut must be ≥ 0, got {self.coda_token_cut}")
@@ -659,3 +684,54 @@ class TULGate(nn.Module):
         out["gate_bias"] = self.b.detach().squeeze()
         out["gate_w_norm"] = self.w.detach().norm()
         return out
+
+
+def mux_span_targets(input_ids: Tensor, layout: SlotLayout, rho: float
+                     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Geometric MUX weights of each slot's NEXT span (arXiv 2607.18264 Eq. 2).
+
+    Slot ``i`` sits AFTER span ``i`` and its plan is decoded into span ``i+1``, so
+    slot ``i``'s local target is the position-weighted superposition of span
+    ``i+1``'s tokens: ``alpha_j ∝ rho^j`` (j = 0-based position inside the span),
+    normalised within the span. The dense ``|V|``-vector is never built — the KL
+    reduces to a weighted CE over the span's own token ids, so this returns
+    per-POSITION weights and the slot each position supervises.
+
+    A span ``k`` supervises slot ``k−1``, and only when BOTH slots exist: slot
+    ``k−1`` (the plan being supervised) and slot ``k`` (which terminates the span,
+    proving it complete). The trailing unterminated text (``bag_id`` dump bin) and
+    span 0 (no preceding slot) supervise nothing.
+
+    Returns ``(pos_valid [B,L] bool, alpha [B,L] fp32, tgt_slot [B,L] int64,
+    slot_supervised [B,S] bool)``. ``tgt_slot`` is clamped to 0 at invalid
+    positions — mask with ``pos_valid`` before use.
+    """
+    import math
+
+    B, L = input_ids.shape
+    S = layout.slot_index.shape[1]
+    dev = input_ids.device
+    k = layout.bag_id                                        # [B, L]
+    kc = k.clamp(0, S - 1)
+    span_done = torch.gather(layout.slot_valid, 1, kc)       # slot k exists
+    prev_ok = torch.gather(layout.slot_valid, 1, (kc - 1).clamp(min=0))
+    pos_valid = (~layout.slot_mask) & (k >= 1) & (k < S) & span_done & prev_ok
+
+    # position inside the span: p − (slot_index[k−1] + prefix_k)
+    start = torch.gather(layout.slot_index, 1, (kc - 1).clamp(min=0)) + layout.prefix_k
+    j = (torch.arange(L, device=dev).unsqueeze(0) - start).clamp(min=0)
+    w = torch.exp(j.to(torch.float32) * math.log(rho))
+    w = torch.where(pos_valid, w, torch.zeros_like(w))
+
+    # normalise per (row, span). Invalid positions scatter into a DUMP column at
+    # S+1 — NOT S, which slot_supervised below reads as "span S": pos_valid already
+    # forbids k ≥ S, so column S must stay empty for slot S−1 to read as
+    # unsupervised. (Column S collides with the dump only if the dump sits there.)
+    idx = torch.where(pos_valid, kc, torch.full_like(kc, S + 1))
+    denom = torch.zeros(B, S + 2, device=dev, dtype=w.dtype)
+    denom.scatter_add_(1, idx, w)
+    alpha = w / torch.gather(denom, 1, idx).clamp(min=1e-20)
+
+    tgt_slot = (kc - 1).clamp(min=0)
+    slot_supervised = denom[:, 1:S + 1] > 0                  # span k ≥ 1 → slot k−1
+    return pos_valid, alpha, tgt_slot, slot_supervised
