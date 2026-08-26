@@ -3,7 +3,7 @@
 Status: failure
 
 Written 2026-08-24, after the optimizer-state decomposition
-(`docs/experiments/failures/2026-08-24-tul-optimizer-state-decomposition.md`) closed the
+(`lab/experiments/failures/2026-08-24-tul-optimizer-state-decomposition.md`) closed the
 `alpha * m_slow` line. Nothing here was computed before this file was committed.
 
 ## Question

@@ -37,7 +37,7 @@ cd /home/wolfe/morph-perf && PYTHONPATH=/home/wolfe/morph-perf \
   --ckpts checkpoints/morph/onset-capture/ROLL_step_1650.pt \
           checkpoints/morph/onset-capture/ROLL_step_1750.pt \
           checkpoints/morph/onset-capture/ROLL_step_1850.pt \
-  --out docs/experiments/results/2026-08-25-readout-jacobian/results.json
+  --out lab/experiments/results/2026-08-25-readout-jacobian/results.json
 ```
 
 Exit code 0. Raw numbers: `results.json` (this directory).

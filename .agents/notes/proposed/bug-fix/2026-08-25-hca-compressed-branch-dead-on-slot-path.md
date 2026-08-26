@@ -38,7 +38,7 @@ Two consequences:
    (`lab/divergence/takeover-campaign.md`). No hypothesis in that campaign has used this.
 
 Found while auditing geometry for H18
-([`docs/experiments/failures/2026-08-25-h18-positional-attention-sink.md`](../../../../docs/experiments/failures/2026-08-25-h18-positional-attention-sink.md)),
+([`lab/experiments/failures/2026-08-25-h18-positional-attention-sink.md`](../../../../lab/experiments/failures/2026-08-25-h18-positional-attention-sink.md)),
 which is also where the ledger entry H24 comes from.
 
 **Scope.** The deploy recipe is not affected: at `seq_len: 4096` the derived
@@ -114,7 +114,7 @@ after), so the change adds no parameters and existing checkpoints stay loadable.
 
 ## Update 2026-08-25 — the no-training screen
 
-[`docs/experiments/failures/2026-08-25-h24-hca-branch-screen.md`](../../../../docs/experiments/failures/2026-08-25-h24-hca-branch-screen.md)
+[`lab/experiments/failures/2026-08-25-h24-hca-branch-screen.md`](../../../../lab/experiments/failures/2026-08-25-h24-hca-branch-screen.md)
 
 Reviving the branch at fixed weights (core blocks only, `B_a` sliced to 16 rows) lifts the
 loop's slot-state rank ratio by **+0.0939 on healthy rungs and +0.0947 on sick ones**. The
@@ -130,7 +130,7 @@ section's first bullet is now MEASURED rather than anticipated.
 ## Update 2026-08-25 — the training arm, and why this note stays `proposed`
 
 The binary training arm is filed as a failure:
-[`docs/experiments/failures/2026-08-25-h24-hca-branch-arm-binary.md`](../../../../docs/experiments/failures/2026-08-25-h24-hca-branch-arm-binary.md).
+[`lab/experiments/failures/2026-08-25-h24-hca-branch-arm-binary.md`](../../../../lab/experiments/failures/2026-08-25-h24-hca-branch-arm-binary.md).
 
 | run | ABORT | min CE |
 |---|---|---:|
@@ -158,5 +158,5 @@ It is whether a live core HCA branch is worth its compute on the slot path at al
 capacity question that needs a matched-token CE comparison, not a divergence arm.
 `hca16-s0` has the best min CE of the four runs (4.7523 against 5.0040), but one seed each
 way sits well inside the 6.5 % run-to-run spread in
-[`2026-08-23-tul-run-replication.md`](../../../../docs/experiments/failures/2026-08-23-tul-run-replication.md),
+[`2026-08-23-tul-run-replication.md`](../../../../lab/experiments/failures/2026-08-23-tul-run-replication.md),
 so it is not evidence. Do not cite it as any.

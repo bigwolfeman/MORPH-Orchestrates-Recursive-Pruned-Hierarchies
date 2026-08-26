@@ -6,7 +6,7 @@ puts them in one table and asks the only question that matters for a severity me
 does it rank the runs the way their harm does?
 
 Reported next to the per-block backward gain, which
-`docs/experiments/failures/2026-08-24-tul-takeover-cure.md` shows is the WRONG severity
+`lab/experiments/failures/2026-08-24-tul-takeover-cure.md` shows is the WRONG severity
 measure — `bptt_depth 2` scores 2.784 against its control's 2.445 with 64 % less harm. A
 replacement has to beat that, not merely differ from it.
 
@@ -74,7 +74,7 @@ def spearman(a: list[float], b: list[float]) -> float:
 
 
 # Every arm with a measured harm, transcribed from the ONE table in
-# docs/experiments/failures/2026-08-24-tul-takeover-cure.md. `harm` is the validation-CE
+# lab/experiments/failures/2026-08-24-tul-takeover-cure.md. `harm` is the validation-CE
 # rise above the arm's own minimum, lower is better. `gain` is the per-block backward
 # gain, the measure being replaced. Nothing else in this file is typed by hand.
 ARM_HARM = {

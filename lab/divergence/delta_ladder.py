@@ -1,7 +1,7 @@
 """How big does the deviation get, iteration by iteration, under each SCSE arm?
 
 The 2026-08-25 SCSE port failed in ONE loop iteration. Measured from its saved probe data
-(docs/experiments/results/2026-08-25-scse-full-method/scse-s1.json, training step 1000),
+(lab/experiments/results/2026-08-25-scse-full-method/scse-s1.json, training step 1000),
 the carrier RMS ran 6.5 -> 1499.6 -> ... -> 4706.8 across eight iterations: 230x in the
 FIRST step and 722x overall, against the control's 64.2 -> 124.2, i.e. 1.9x. After that
 first step SCSE's per-iteration relative change actually FELL (1.20, 0.93, 0.78, 0.67,

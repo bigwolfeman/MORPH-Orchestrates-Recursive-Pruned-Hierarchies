@@ -1,6 +1,6 @@
 #!/bin/bash
 # H23 part 2: prove the probe change is a no-op on baseline data, THEN probe Stage 1.
-# Pre-registration: docs/experiments/planned/2026-08-25-scse-stage1-initial-deviation.md
+# Pre-registration: lab/experiments/planned/2026-08-25-scse-stage1-initial-deviation.md
 #
 # Step 1 is a REGRESSION GATE, not a formality. `forcing_bias` changed its anchor from
 # `points[0]["h"]` to `points[0]["e"]`. Those are the same tensor for a baseline model

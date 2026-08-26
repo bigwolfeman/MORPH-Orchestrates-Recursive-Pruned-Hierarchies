@@ -5,7 +5,7 @@ Status: success
 **Process note, stated rather than hidden.** The prediction below — slope −0.5 — was made
 in conversation BEFORE the probe was written or run, and the arithmetic
 `sqrt(32/11) = 1.71` against a previously measured 1.78x was the reason for running it. It
-was not committed to `docs/experiments/planned/` first. The prediction is genuinely prior
+was not committed to `lab/experiments/planned/` first. The prediction is genuinely prior
 to the data; the FILE is not. Read the slope as a confirmed prediction and the rest of this
 document as description.
 

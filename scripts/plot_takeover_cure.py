@@ -1,5 +1,5 @@
 """Figure for the TUL core-takeover cure
-(docs/experiments/results/2026-08-24-tul-takeover-cure.md).
+(lab/experiments/results/2026-08-24-tul-takeover-cure.md).
 
 Six panels, in the order the argument is made:
 

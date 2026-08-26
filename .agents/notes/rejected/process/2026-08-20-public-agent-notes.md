@@ -33,7 +33,7 @@ Fixing those is a docs edit, not done here.
 
 ## Template pieces not adopted
 
-No `docs/constitution.md`, `docs/experiments/`, `docs/cookbook/`, or `docs/postmortem/`. No `src/` rename. No CI job for `verify_template.py`. No pytest wrapper. `CLAUDE.md` is not a symlink to `AGENTS.md`.
+No `docs/constitution.md`, `lab/experiments/`, `docs/cookbook/`, or `docs/postmortem/`. No `src/` rename. No CI job for `verify_template.py`. No pytest wrapper. `CLAUDE.md` is not a symlink to `AGENTS.md`.
 
 ## Harness extras dropped
 

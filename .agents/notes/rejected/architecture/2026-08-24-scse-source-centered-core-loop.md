@@ -7,7 +7,7 @@ Status: rejected — the FULL method was built, audited twice, machine-checked i
 This supersedes the 2026-08-25 Stage 1 rejection, which was withdrawn as an overreach and is
 kept below for the record. The port has now had a fair test.
 
-**What was measured** ([experiment](../../../../docs/experiments/failures/2026-08-25-scse-full-method.md)):
+**What was measured** ([experiment](../../../../lab/experiments/failures/2026-08-25-scse-full-method.md)):
 
 | seed | control | SCSE | delta |
 | --- | --- | --- | --- |

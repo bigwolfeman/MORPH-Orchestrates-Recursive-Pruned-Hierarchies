@@ -302,11 +302,11 @@ class MORPHConfig:
     # -1 as the upper bound means "no upper bound".
     #
     # This exists because the governor's cap is not applied where anyone assumed. Measured
-    # on the divergent control (docs/experiments/results/2026-08-23-tul-onset-ordering.md):
+    # on the divergent control (lab/experiments/results/2026-08-23-tul-onset-ordering.md):
     # the realized per-iteration gain is 1.422 at t=0 and 1.08–1.13 at t=1..7, so a typical
     # τ≈1.5 can only ever bind on the FIRST iteration. Selecting the range makes that
     # testable instead of assumed — see
-    # docs/experiments/planned/2026-08-23-tul-iteration0-mediation.md.
+    # lab/experiments/planned/2026-08-23-tul-iteration0-mediation.md.
     core_gain_clip_iter_lo: int = 0
     core_gain_clip_iter_hi: int = -1
 
@@ -891,7 +891,7 @@ class MORPHTransformer(nn.Module):
                 "model.scse_enabled and model.core_init_scale are mutually exclusive. SCSE "
                 "defines its own initial state (Delta_0 = H_0(e) - h*, spec section 2); "
                 "core_init_scale is the Stage 1 probe that sets h_0 only and was measured "
-                "0.815 nats WORSE (docs/experiments/failures/"
+                "0.815 nats WORSE (lab/experiments/failures/"
                 "2026-08-25-scse-stage1-initial-deviation.md). Set core_init_scale=0.0.")
         if cfg.scse_enabled and cfg.core_gain_clip > 0.0:
             raise ValueError(

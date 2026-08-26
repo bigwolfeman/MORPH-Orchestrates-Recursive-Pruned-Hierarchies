@@ -3,7 +3,7 @@
 #
 # Everything is tul_a1.yaml. The ONLY difference is model.core_hca_compress_ratio.
 #
-# Why. Measured 2026-08-25 (docs/experiments/failures/2026-08-25-h18-positional-attention-sink.md
+# Why. Measured 2026-08-25 (lab/experiments/failures/2026-08-25-h18-positional-attention-sink.md
 # Phase 0): the looped core runs on 64 SLOT positions while hca_compress_ratio is 256, so
 # GatedPoolCompressor computes n_blocks = 64 // 256 = 0 and core blocks 1/3/5 output
 # EXACTLY 0.0000 from their compressed branch — while the learned gate still spends

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Render the TUL arm figures from wandb history into docs/experiments/figures/.
+"""Render the TUL arm figures from wandb history into lab/experiments/figures/.
 
     python scripts/plot_tul_arms.py            # all four figures
     python scripts/plot_tul_arms.py --only ce  # one of: ce, divergence, efficiency, order
@@ -7,7 +7,7 @@
 Every wandb-derived figure is regenerated from the run history, never from a pasted
 number, so a figure cannot drift from the run it describes. The one figure that is not
 in wandb -- the offline order-parameter probe -- reads
-`docs/experiments/results/tul_order_parameter.csv`, which is versioned next to it.
+`lab/experiments/results/tul_order_parameter.csv`, which is versioned next to it.
 
 COLOUR: the palette is Okabe-Ito, which is safe for red-green colour blindness, and no
 figure uses colour as its only channel -- every series also carries its own line style

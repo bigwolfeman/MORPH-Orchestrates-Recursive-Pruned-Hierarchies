@@ -1,6 +1,6 @@
 """Score the full-SCSE experiment against its pre-registered predictions.
 
-Pre-registration: docs/experiments/planned/2026-08-25-scse-full-method.md
+Pre-registration: lab/experiments/planned/2026-08-25-scse-full-method.md
 Implementation:   docs/scse-spec.md
 
 Committed BEFORE the first arm produced a checkpoint, so no threshold here can have been

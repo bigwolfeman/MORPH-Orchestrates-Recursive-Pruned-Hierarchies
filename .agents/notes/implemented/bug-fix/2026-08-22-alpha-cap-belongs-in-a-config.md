@@ -60,7 +60,7 @@ Verified by Hydra compose: `base` resolves to `batch=4, alpha_cap=3.5`;
   change it was not, which is exactly why the bake-off's divergence was mysterious.
 - The cap remains **verified at batch 14 only**. `tul_short.yaml` now sets batch 12, which
   changes the gradient noise scale that drives the slow EMA the cap throttles. That gap is
-  the subject of `docs/experiments/planned/2026-08-22-tul-order-parameter.md`.
+  the subject of `lab/experiments/planned/2026-08-22-tul-order-parameter.md`.
 - A broader lesson, worth its own check: a fix is adopted when it lands in a **tracked**
   file that the run path reads. A markdown note recording a fix is documentation, not
   adoption.

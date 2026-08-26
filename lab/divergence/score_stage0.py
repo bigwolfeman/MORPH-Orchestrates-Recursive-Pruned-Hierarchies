@@ -1,6 +1,6 @@
 """Score Stage 0 against its pre-registered predictions, without judgement calls.
 
-Pre-registration: docs/experiments/planned/2026-08-24-tul-forcing-bias-arm-control.md
+Pre-registration: lab/experiments/planned/2026-08-24-tul-forcing-bias-arm-control.md
 
 Written and committed BEFORE either arm produced a checkpoint, so the thresholds cannot be
 fitted to the data. Every number the verdicts use is read from the two `drift_probe.py`
@@ -34,7 +34,7 @@ def b_by_step(path: str) -> dict[int, float]:
     Stage 0's numbers are unaffected: its `b_rel` values are 1.4-2.5, where the measured
     spread stays under the 1e-3 tolerance below, so the guard never fired and iteration 0
     and the mean agree to well within the arm gap being resolved. The claim was still
-    wrong. See docs/experiments/failures/2026-08-24-tul-forcing-bias-predicts-divergence.md
+    wrong. See lab/experiments/failures/2026-08-24-tul-forcing-bias-predicts-divergence.md
     and `B_SPREAD_MAX` in score_h21.py, which reads the mean instead.
     """
     out = {}

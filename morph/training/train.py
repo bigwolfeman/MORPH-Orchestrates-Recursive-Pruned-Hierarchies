@@ -688,7 +688,7 @@ def _preclip_probe(model) -> dict[str, float]:
         # Regions only (keys with no dot) — the per-block entries are a subset of them.
         out["preclip/total"] = sum(v for k, v in acc.items() if "." not in k) ** 0.5
         # The per-block BACKWARD gain of the core, as one number. See
-        # docs/experiments/results/2026-08-23-tul-block-backward-gain.md: the backward runs
+        # lab/experiments/results/2026-08-23-tul-block-backward-gain.md: the backward runs
         # core.N-1 -> core.0, so a uniform per-block amplification g puts block 0 a factor
         # g^(N-1) above the last block. Fit log‖grad_i‖ = a + b·i and report exp(-b).
         # r2 is reported WITH it and is not optional: a healthy profile is flat and noisy

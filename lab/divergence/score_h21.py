@@ -1,6 +1,6 @@
 """Score H21 -- does the forcing bias predict WHICH A1 seeds diverge? -- without judgement calls.
 
-Pre-registration: docs/experiments/planned/2026-08-24-tul-forcing-bias-predicts-divergence.md
+Pre-registration: lab/experiments/planned/2026-08-24-tul-forcing-bias-predicts-divergence.md
 
 Every threshold here is copied from that file. Nothing is re-derived and nothing is tuned.
 The validity gate runs first and refuses the whole panel if it fails, because this campaign

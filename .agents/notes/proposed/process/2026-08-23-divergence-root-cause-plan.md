@@ -28,7 +28,7 @@ The reason it is unexplained is a method problem, not a shortage of runs:
   ~750 and detonated within ~50).
 - The order-parameter framing the RCA closes on is **also not the discriminator**:
   measured 2026-08-23, `rho_eff` is 1.9–3.2 at depth 6–8 on every checkpoint that trains
-  to 20k. [`docs/experiments/failures/2026-08-23-tul-forward-backward-asymmetry.md`](../../../../docs/experiments/failures/2026-08-23-tul-forward-backward-asymmetry.md).
+  to 20k. [`lab/experiments/failures/2026-08-23-tul-forward-backward-asymmetry.md`](../../../../lab/experiments/failures/2026-08-23-tul-forward-backward-asymmetry.md).
 
 **And the runs are not reproducible at fixed seed.** RCA §17 suspected `bag_mean`'s
 `index_add_` float atomics and marked it NOT VERIFIED. Verified 2026-08-23:
@@ -112,7 +112,7 @@ Four phases. Each has a gate; do not start the next until the gate holds.
       norm and median 0.0788 on `core_gain_t0` after step 100; every past single-run arm in
       this programme should be re-read against those numbers. (b) Within-run measurements
       are untouched, which is why Phase 1's ordering stands.
-      EVIDENCE: [`../../../../docs/experiments/failures/2026-08-23-tul-run-replication.md`](../../../../docs/experiments/failures/2026-08-23-tul-run-replication.md)
+      EVIDENCE: [`../../../../lab/experiments/failures/2026-08-23-tul-run-replication.md`](../../../../lab/experiments/failures/2026-08-23-tul-run-replication.md)
 
 ### Phase 1 — watch the onset  (~45 min, needs 0.4)
 
@@ -148,7 +148,7 @@ every 100 steps, and the onset lasts about 140.
       `ignore/perf/phase1/onset_s0.log`; wandb `morph-tul/phase1-onset-s0`.
 - [x] **1.3 Which quantity moves first** — at PER-STEP resolution, not 25.
       Full writeup and the threshold-sensitivity sweep:
-      [`../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md`](../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md).
+      [`../../../../lab/experiments/results/2026-08-23-tul-onset-ordering.md`](../../../../lab/experiments/results/2026-08-23-tul-onset-ordering.md).
       Analysis rule fixed in `ignore/perf/phase1/onset_order.py`, written and dry-run at
       step 853 of the run, before any takeover was visible.
       EVIDENCE, the four findings:
@@ -180,7 +180,7 @@ with Phase 1's instrumentation, and ask **not** "did it survive" but:
 > Which single logged quantity is (a) driven monotonically past some value in BOTH the
 > control and the placebo, and (b) held below that value by ALL FOUR cures?
 
-- [ ] **2.1 Write the pre-registration** in `docs/experiments/planned/` BEFORE the runs,
+- [ ] **2.1 Write the pre-registration** in `lab/experiments/planned/` BEFORE the runs,
       naming the candidate quantities and the threshold rule.
       **Phase 1 has now supplied the candidate list and it is short:** `core_gain_t0`,
       the pre-clip core share, and `preclip/core.0`. `ret_state_norm` and `lm_mixer` are
@@ -208,7 +208,7 @@ spikes (7.7e4, 4.9e4) that did NOT run away.
       fall back. **Every pre-takeover excursion above 0.5 is ONE probed step long**, which
       is why the abort rule's "sustained for N steps" clause is load-bearing — a bare
       threshold would have false-fired at step ~1450, 570 steps early.
-      EVIDENCE: [`../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md`](../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md)
+      EVIDENCE: [`../../../../lab/experiments/results/2026-08-23-tul-onset-ordering.md`](../../../../lab/experiments/results/2026-08-23-tul-onset-ordering.md)
       finding 6, and panel 3 of `tul_onset.png`.
 - [x] **3.2 Ship an abort criterion instead of a cause.** SHIPPED, then FIXED after it
       missed a real divergence. `morph/training/divergence_guard.py` + `training.abort_core_share`.
@@ -235,7 +235,7 @@ spikes (7.7e4, 4.9e4) that did NOT run away.
       1900, and a share needs no per-arm scale calibration.
       **NOT IMPLEMENTED in `train.py`.** The table is the evidence for the rule, not the
       rule. Implementing it is the next commit, and it is acceptance criterion 4.
-      EVIDENCE: [`../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md`](../../../../docs/experiments/results/2026-08-23-tul-onset-ordering.md)
+      EVIDENCE: [`../../../../lab/experiments/results/2026-08-23-tul-onset-ordering.md`](../../../../lab/experiments/results/2026-08-23-tul-onset-ordering.md)
       "The abort criterion".
 
 ### Two arms to add to Phase 2
@@ -260,7 +260,7 @@ machinery. With `model.use_kernels=false` + the new `training.deterministic=true
 are bit-identical on all 300 steps across all 85 probe series**, every console loss matching
 exactly. Cost: 2.28× fewer tokens/s and roughly half the batch.
 
-- [`the reproducibility result`](../../../../docs/experiments/results/2026-08-23-morph-bit-reproducible.md)
+- [`the reproducibility result`](../../../../lab/experiments/results/2026-08-23-morph-bit-reproducible.md)
 - [`the Agent Note`](../../implemented/architecture/2026-08-23-deterministic-training-mode.md)
 
 **What this changes for the rest of this plan.** Phase 2's mediation becomes possible for
@@ -348,7 +348,7 @@ that are not optional:
 - Prior art to read before acting, in this order:
   [`docs/tul-divergence-rca.md`](../../../../docs/tul-divergence-rca.md) Parts 3, 5 and 7
   (the two withdrawn claims and the placebo), then
-  [`docs/experiments/failures/2026-08-23-tul-forward-backward-asymmetry.md`](../../../../docs/experiments/failures/2026-08-23-tul-forward-backward-asymmetry.md)
+  [`lab/experiments/failures/2026-08-23-tul-forward-backward-asymmetry.md`](../../../../lab/experiments/failures/2026-08-23-tul-forward-backward-asymmetry.md)
   (0 of 5 predictions confirmed, and why `sigma_max` has no referent post-onset).
 - Pre-registration for Phase 0.4 is already written:
-  [`docs/experiments/planned/2026-08-23-tul-run-replication.md`](../../../../docs/experiments/planned/2026-08-23-tul-run-replication.md).
+  [`lab/experiments/planned/2026-08-23-tul-run-replication.md`](../../../../lab/experiments/planned/2026-08-23-tul-run-replication.md).

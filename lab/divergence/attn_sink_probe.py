@@ -1,11 +1,11 @@
 """H18 — is there a POSITIONAL attention sink in the looped core?
 
 Working document: `lab/divergence/h18-attention-sink.md`.
-Pre-registration: docs/experiments/planned/2026-08-25-h18-positional-attention-sink.md
+Pre-registration: lab/experiments/planned/2026-08-25-h18-positional-attention-sink.md
 
 The cotangent already sits on a stable sink — the same top-3 slots at every one of the six
 core blocks, top slot's share rising 0.18 -> 0.54 across the onset ladder
-(`docs/experiments/failures/2026-08-24-tul-takeover-cure.md`). The LEARNABLE sink is
+(`lab/experiments/failures/2026-08-24-tul-takeover-cure.md`). The LEARNABLE sink is
 refuted (H17: `sink_logits` never leave 0.005). The FORWARD attention has never been
 measured. This probe measures it.
 

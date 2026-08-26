@@ -107,7 +107,7 @@ model:
   # GatedPoolCompressor computes n_blocks = S // m — so a token-stream ratio floors to
   # ZERO on the slot path and the compressed branch silently produces nothing for a whole
   # run. Measured 2026-08-25. Deploy (seq_len 4096, 512 slots) is unaffected; the TUL
-  # short schedule is not. See docs/experiments/failures/2026-08-25-h18-positional-attention-sink.md
+  # short schedule is not. See lab/experiments/failures/2026-08-25-h18-positional-attention-sink.md
   core_hca_compress_ratio: null
   top_k: 256
   window_size: 256
@@ -219,7 +219,7 @@ training:
   # measured to prevent the takeover. The cap sweep on the sick checkpoint says what this
   # would buy — capping the MLP at 1.5 takes the core step's alignment from 1.92 to 1.24,
   # and adding attention at the same cap takes it to 1.05, back inside the healthy band of
-  # 0.99 to 1.14. See docs/experiments/results/2026-08-24-tul-takeover-cure.md.
+  # 0.99 to 1.14. See lab/experiments/results/2026-08-24-tul-takeover-cure.md.
   spectral_penalty_include_attn: false
   # ── HARD spectral projection: W <- W * min(1, cap/sigma), after each optimizer step ──
   # The soft penalty above is a tug of war and it can LOSE: at ademamix_alpha_cap 3.5 with
@@ -463,7 +463,7 @@ tul:
   # one shared vector plus a span bag-mean and a mean over many token embeddings
   # concentrates. At the takeover the core loop starts REDUCING that rank across its
   # iterations (2.71 -> 1.81) where a healthy checkpoint's loop increases it (2.82 -> 4.18).
-  # See docs/experiments/failures/2026-08-24-tul-takeover-cure.md.
+  # See lab/experiments/failures/2026-08-24-tul-takeover-cure.md.
   # per_slot_embed_std jitters each row at seating, in units of the embedding-mean std;
   # 0 leaves every row equal, so the activation step is identical to the shared version.
   per_slot_embed: false

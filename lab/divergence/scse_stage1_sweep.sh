@@ -1,6 +1,6 @@
 #!/bin/bash
 # H23: does SCSE Stage 1 (Delta_0 != 0) stop the A1 takeover?
-# Pre-registration: docs/experiments/planned/2026-08-25-scse-stage1-initial-deviation.md
+# Pre-registration: lab/experiments/planned/2026-08-25-scse-stage1-initial-deviation.md
 #
 # Identical to lab/divergence/seedsweep.sh except model.core_init_scale=0.1.
 # The control is that sweep's output; core_init_scale=0.0 is bit-identical to the code

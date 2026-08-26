@@ -69,7 +69,7 @@ core-share column:
 - AMBIGUOUS, excluded from both: 1825
 
 Published control values on unit-normalised states
-(`docs/experiments/failures/2026-08-24-tul-takeover-cure.md`): 1625 = 1.41, 1700 = 1.28,
+(`lab/experiments/failures/2026-08-24-tul-takeover-cure.md`): 1625 = 1.41, 1700 = 1.28,
 1750 = 1.47, 1800 = 0.92, 1850 = 0.71, 1866 = 1.06.
 
 ## Predictions

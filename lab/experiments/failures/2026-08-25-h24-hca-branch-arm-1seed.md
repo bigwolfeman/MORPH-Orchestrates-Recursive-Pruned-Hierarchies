@@ -113,7 +113,7 @@ The budget is now the runner's second argument, echoed at start, defaulting to 3
 its arm was killed 200 steps in rather than finished, because a pair whose control cannot
 take over cannot answer the question the pair was built for.
 
-`docs/experiments/failures/2026-08-23-tul-run-replication.md` names this confound in
+`lab/experiments/failures/2026-08-23-tul-run-replication.md` names this confound in
 writing — "the step-budget confound (`ademamix_t_beta3` follows `training.steps`) means the
 5000-step Phase 1 run and this 4000-step pair do not share an optimizer schedule". It was
 read the same day and the budget was changed anyway.

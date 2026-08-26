@@ -104,7 +104,7 @@ merely largest, it is larger by `g^24`.
 
 - **That the block gain is causal.** It is an ordering and a separation on four
   trajectories, three of which are the same architecture at one seed. The intervention test
-  is running (`docs/experiments/planned/2026-08-23-tul-iteration0-mediation.md`).
+  is running (`lab/experiments/planned/2026-08-23-tul-iteration0-mediation.md`).
 - **The `g^24` arithmetic is an estimate**, not a derivation. It assumes the per-block gain
   applies uniformly across iterations and ignores the HC residual's contribution, so treat
   the agreement as consistency, not proof.

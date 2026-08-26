@@ -72,7 +72,7 @@ positions — 64 with `tul.max_slots: 64` — while prelude and coda run on all 
    ladder the window participation ratio is 0.59–0.68 of 57 valid slots and the top key holds
    6.4–8.4 % of the mass. There is no attention sink in the core — the cotangent sink that
    the backward shows is a consequence of the slot-state rank collapse, not its cause
-   (`docs/experiments/failures/2026-08-25-h18-positional-attention-sink.md`).
+   (`lab/experiments/failures/2026-08-25-h18-positional-attention-sink.md`).
 
 **The general lesson, which is why this section exists.** A module correct at its design
 shape can be degenerate at the shape a new subtree runs it at, and integer floor division to

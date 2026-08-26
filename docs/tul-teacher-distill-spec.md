@@ -4,7 +4,7 @@ Status: SPEC. Not implemented. Written 2026-08-18.
 
 ## The result this exists to fix
 
-Arm CW, re-scored by stratum (docs/experiments/results/2026-08-18-tul-arms-first-comparison.md, 200 batches, 1.42M tokens,
+Arm CW, re-scored by stratum (lab/experiments/results/2026-08-18-tul-arms-first-comparison.md, 200 batches, 1.42M tokens,
 cut 576). Splitting predictions by whether the target's last prior sighting is inside
 the deleted region:
 

@@ -9,7 +9,7 @@ Two runs with identical code, config, seed and data order parted on the **first 
 pass** and reached a 10 % difference in the pre-clip gradient norm by step 11. One of the
 pair finished healthy and the other suffered the core takeover — byte-identical commands,
 opposite outcomes
-([the failed gate](../../../../docs/experiments/failures/2026-08-23-tul-run-replication.md)).
+([the failed gate](../../../../lab/experiments/failures/2026-08-23-tul-run-replication.md)).
 
 This blocked an entire investigation. Two checkpoints at the same step from two runs are
 not comparable if the runs are different trajectories, so no bisection, no onset study and
@@ -72,4 +72,4 @@ batch 6 peaks at 18.6 GB).
   4000 is not.
 
 Full measurements, including two probe bugs that produced wrong answers first:
-[`the reproducibility result`](../../../../docs/experiments/results/2026-08-23-morph-bit-reproducible.md).
+[`the reproducibility result`](../../../../lab/experiments/results/2026-08-23-morph-bit-reproducible.md).

@@ -76,7 +76,7 @@ The theorem is about the abstraction, not the network. Stated plainly so nobody 
    guarantee. A trained network might keep naive iterates bounded anyway; nothing protects it.
 5. **It does NOT say SCSE works on MORPH.** The 2026-08-25 campaign says it does not — seeds 1
    and 2 give +1.74 and +1.64 nats against the control, with training loss flat from step 200.
-   See `docs/experiments/`. A proof cannot dismiss a measurement.
+   See `lab/experiments/`. A proof cannot dismiss a measurement.
 
 ## What it DOES buy, and it is pointed
 

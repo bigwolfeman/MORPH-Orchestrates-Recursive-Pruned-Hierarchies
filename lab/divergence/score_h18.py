@@ -1,6 +1,6 @@
 """Score H18 against its pre-registered predictions, without judgement calls.
 
-Pre-registration: docs/experiments/planned/2026-08-25-h18-positional-attention-sink.md
+Pre-registration: lab/experiments/planned/2026-08-25-h18-positional-attention-sink.md
 
 Written and COMMITTED BEFORE the ladder ran, so no threshold here can be fitted to the
 data. The validity gate runs first and refuses the whole panel, in the same spirit as

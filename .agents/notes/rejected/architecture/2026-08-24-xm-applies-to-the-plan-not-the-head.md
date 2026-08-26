@@ -4,7 +4,7 @@ Status: rejected — reader alignment measured at 1.36-1.45 (1.0 = random) and f
 
 > **REJECTED the same day it was written, by its own acceptance test.** The mechanism below
 > — that `h_i` is a compromise between conflicting readers — is measured and false. See
-> [../../../../docs/experiments/failures/2026-08-24-tul-reader-gradient-conflict.md](../../../../docs/experiments/failures/2026-08-24-tul-reader-gradient-conflict.md).
+> [../../../../lab/experiments/failures/2026-08-24-tul-reader-gradient-conflict.md](../../../../lab/experiments/failures/2026-08-24-tul-reader-gradient-conflict.md).
 > Normalised reader alignment is **1.36 to 1.45** across the whole onset, where 1.0 is K
 > independent random directions: the readers agree slightly BETTER than random, with a mean
 > pairwise cosine of +0.02, and the value is FLAT while the core share goes from 0.017 to
@@ -58,7 +58,7 @@ Measured on the shipped configuration:
 * The slot's input is already a plain mean of its span's token embeddings, whose deviation
   from the corpus mean falls as `1/sqrt(L)` — measured slope −0.473 / −0.504 / −0.527 at
   three caps, see
-  [docs/experiments/successes/2026-08-24-tul-span-pooling-law.md](../../../../docs/experiments/successes/2026-08-24-tul-span-pooling-law.md).
+  [lab/experiments/successes/2026-08-24-tul-span-pooling-law.md](../../../../lab/experiments/successes/2026-08-24-tul-span-pooling-law.md).
 
 So the plan is blurred on the way in and graded by a sum of conflicting demands on the way
 out, while the token head downstream of it keeps `E > 1` and looks perfectly healthy. The
@@ -91,9 +91,9 @@ Three levers, increasing in ambition, listed so the cheap one is tried first:
   costs about 2x of input rank while the loop costs about 10x, so the input is not where
   most of the diversity dies.
 * **Blame the optimizer's slow accumulator.** Measured and refuted —
-  [docs/experiments/failures/2026-08-24-tul-optimizer-state-decomposition.md](../../../../docs/experiments/failures/2026-08-24-tul-optimizer-state-decomposition.md).
+  [lab/experiments/failures/2026-08-24-tul-optimizer-state-decomposition.md](../../../../lab/experiments/failures/2026-08-24-tul-optimizer-state-decomposition.md).
 * **Blame under-determination of the core map.** Measured and refuted —
-  [docs/experiments/failures/2026-08-24-tul-core-underdetermined.md](../../../../docs/experiments/failures/2026-08-24-tul-core-underdetermined.md).
+  [lab/experiments/failures/2026-08-24-tul-core-underdetermined.md](../../../../lab/experiments/failures/2026-08-24-tul-core-underdetermined.md).
   The input span is nearly full rank and the concentration reproduces on the token path.
 * **Adopt XM at the token head.** Rejected: the head already has `E > 1` through softmax
   CE. The paper's gains there are for reconstructive objectives MORPH does not run.

@@ -68,7 +68,7 @@ version: reverting gives **6 failed, 10 passed**; restoring gives **16 passed**.
   `‖xs‖ = 0` — rather than papering over a conditioning problem.
 - **This is not an explanation of the TUL core takeover.** That is an unstable BACKWARD
   operator inside the core stack
-  ([`the block-gain result`](../../../../docs/experiments/results/2026-08-23-tul-block-backward-gain.md));
+  ([`the block-gain result`](../../../../lab/experiments/results/2026-08-23-tul-block-backward-gain.md));
   the embedding region's gradient *follows* the core's by roughly 600 steps rather than
   leading it. This note fixes a latent defect found while checking that hypothesis, and
   rules the embedding out as the driver.

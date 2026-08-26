@@ -3,7 +3,7 @@
 Status: failure
 
 Written 2026-08-24, after the takeover-cure campaign
-(`docs/experiments/failures/2026-08-24-tul-takeover-cure.md`) and BEFORE any number in
+(`lab/experiments/failures/2026-08-24-tul-takeover-cure.md`) and BEFORE any number in
 this file was computed. Nothing here is launched on the GPU as a training run: every
 input already exists on disk.
 

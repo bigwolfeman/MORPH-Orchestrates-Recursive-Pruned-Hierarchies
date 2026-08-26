@@ -110,7 +110,7 @@ Consequences for scoring, stated now rather than after the fact:
 ## Results
 
 Scored by `lab/divergence/score_scse.py` (committed before the first run) against the probe
-JSONs and training logs. Raw: `docs/experiments/results/2026-08-25-scse-full-method/`.
+JSONs and training logs. Raw: `lab/experiments/results/2026-08-25-scse-full-method/`.
 
 **P1 VALIDITY GATE — PASSED at every checkpoint of both arms.** The SCSE arm has
 `b_t = 0.000` at all 8 loop iterations and `||Delta_0||/||h*||` = 0.12; the control has

@@ -147,7 +147,7 @@ conditioning disabled.
 ## Process
 
 This was a re-measurement ordered to correct a defective one, so it has no pre-registered
-prediction file, and `docs/experiments/AGENTS.md` requires one for a hypothesis test. The
+prediction file, and `lab/experiments/AGENTS.md` requires one for a hypothesis test. The
 gate-vs-A1 repetition result is therefore **exploratory**: it was found by looking, not
 predicted in advance. It needs a pre-registered confirmation before it is cited as
 established.

@@ -32,7 +32,7 @@ It is rejected. The structural match is real and is not evidence.
 `lab/divergence/drift_probe.py` replays the captured core trajectory at all 11 onset-ladder
 rungs (`checkpoints/morph/onset-capture`) and measures the per-iteration displacement
 `d_t = f_theta(h_t) - h_t`. Full record and artifacts:
-[../../../../docs/experiments/failures/2026-08-24-tul-zero-deviation-forcing-bias.md](../../../../docs/experiments/failures/2026-08-24-tul-zero-deviation-forcing-bias.md).
+[../../../../lab/experiments/failures/2026-08-24-tul-zero-deviation-forcing-bias.md](../../../../lab/experiments/failures/2026-08-24-tul-zero-deviation-forcing-bias.md).
 
 * The shared component of `d_t` does not accumulate across the loop. It DECAYS about 100x:
   `C_last / C_first` is 0.0076 at the TAKEOVER rung, where the pre-registered prediction needed

@@ -1,6 +1,6 @@
 """Score the H24 arm against its pre-registered predictions, without judgement calls.
 
-Pre-registration: docs/experiments/planned/2026-08-25-h24-hca-branch-arm-binary.md
+Pre-registration: lab/experiments/planned/2026-08-25-h24-hca-branch-arm-binary.md
 
 Committed BEFORE the runs, so no threshold here can be fitted to the data. The validity
 gate runs first and refuses the whole panel, as in `score_stage0.py`, `score_scse.py` and

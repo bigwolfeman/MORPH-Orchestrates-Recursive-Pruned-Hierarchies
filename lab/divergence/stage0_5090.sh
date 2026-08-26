@@ -1,6 +1,6 @@
 #!/bin/bash
 # Stage 0 of the SCSE plan, on the 5090.
-# Pre-registration: docs/experiments/planned/2026-08-24-tul-forcing-bias-arm-control.md
+# Pre-registration: lab/experiments/planned/2026-08-24-tul-forcing-bias-arm-control.md
 #
 # SEQUENTIAL, not concurrent. Concurrency was justified on the Spark by 25% GPU utilisation
 # (launch-bound work, so two arms interleave). The 5090 does not have that headroom, and two

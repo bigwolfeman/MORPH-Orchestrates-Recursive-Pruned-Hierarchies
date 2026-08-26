@@ -241,7 +241,7 @@ def main():
                          "topk50_t0.8,sample_t1. Empty = all three.")
     ap.add_argument("--halt", action="store_true",
                     help="also score the gate-driven depth policy (arm TUL-halt)")
-    ap.add_argument("--out", default="docs/experiments/results/tul_rep_ab.json")
+    ap.add_argument("--out", default="lab/experiments/results/tul_rep_ab.json")
     a = ap.parse_args()
 
     only = tuple(x for x in a.decodes.split(",") if x)

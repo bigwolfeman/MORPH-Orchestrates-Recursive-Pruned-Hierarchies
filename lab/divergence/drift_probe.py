@@ -1,6 +1,6 @@
 """Zero-deviation forcing bias in the looped core — the SCSE reading, measured.
 
-Pre-registration: docs/experiments/planned/2026-08-24-tul-zero-deviation-forcing-bias.md
+Pre-registration: lab/experiments/planned/2026-08-24-tul-zero-deviation-forcing-bias.md
 
 SCSE (arXiv:2607.27656, Fig. 1) contrasts a recurrence that re-injects the source at every
 step, `h_{t+1} = G_theta(h_t + e)`, with one that uses the source ONCE to set an anchor and

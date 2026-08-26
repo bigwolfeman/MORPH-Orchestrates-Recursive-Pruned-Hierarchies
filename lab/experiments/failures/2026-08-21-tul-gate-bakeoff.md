@@ -3,7 +3,7 @@
 Status: failure (no verdict — every arm died before its question could be answered)
 
 Predictions for these arms were pre-registered in `docs/tul-gate-spec.md` §11, committed as
-`3bad5eb` before any code was written. There was no `docs/experiments/planned/` file; that is
+`3bad5eb` before any code was written. There was no `lab/experiments/planned/` file; that is
 itself a process gap, and this record exists because §11 says "a results note is written for
 these arms whether they win or lose."
 
@@ -64,7 +64,7 @@ so the pre-registered prediction is neither confirmed nor falsified.
 
 ## Verdict
 
-Inconclusive, which under `docs/experiments/AGENTS.md` is a protocol failure and is filed here.
+Inconclusive, which under `lab/experiments/AGENTS.md` is a protocol failure and is filed here.
 
 **What the method could not distinguish:** anything about the gate. The design assumed the A1
 reference was a stable baseline. It had never been run, and it is not stable. A bake-off cannot
@@ -76,5 +76,5 @@ would have exposed the divergence in 20 minutes.
 
 ## Next
 
-`docs/experiments/planned/2026-08-22-tul-divergence-cause.md` — find and fix the divergence
+`lab/experiments/planned/2026-08-22-tul-divergence-cause.md` — find and fix the divergence
 first. The bake-off is re-run only after a TUL reference arm holds for 6000+ steps.

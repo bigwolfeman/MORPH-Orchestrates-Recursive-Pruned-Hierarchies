@@ -10,7 +10,7 @@ giving `mean(exp(CE))`. Jensen's inequality makes the second strictly larger whe
 validation batches differ, and they always differ.
 
 The two numbers are compared arm-to-arm. `docs/ablation-ledger.md` names
-`val/ppl_tokens` as the primary per-arm metric, and `docs/experiments/results/2026-08-18-tul-arms-first-comparison.md` printed it
+`val/ppl_tokens` as the primary per-arm metric, and `lab/experiments/results/2026-08-18-tul-arms-first-comparison.md` printed it
 in the same table as the baseline's `exp(mean CE)`. The `evaluate()` docstring stated the
 opposite of the truth:
 
@@ -44,7 +44,7 @@ over batches of deliberately different CE:
 Both **fail** against the previous code (27.358 against an expected 20.086) and pass
 after. `pytest tests/` → 192 passed.
 
-`docs/experiments/results/2026-08-18-tul-arms-first-comparison.md` is corrected in the same change, with the old figure and the
+`lab/experiments/results/2026-08-18-tul-arms-first-comparison.md` is corrected in the same change, with the old figure and the
 reason recorded inline rather than silently overwritten.
 
 ## Alternatives considered

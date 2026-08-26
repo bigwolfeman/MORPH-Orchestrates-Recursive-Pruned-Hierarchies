@@ -1,6 +1,6 @@
 #!/bin/bash
 # Stage 0, part 2: probe both arms' checkpoints, then score against the pre-registration.
-# Pre-registration: docs/experiments/planned/2026-08-24-tul-forcing-bias-arm-control.md
+# Pre-registration: lab/experiments/planned/2026-08-24-tul-forcing-bias-arm-control.md
 #
 # Each arm is probed on the code path it ACTUALLY runs, which is the comparison the
 # experiment asks for:

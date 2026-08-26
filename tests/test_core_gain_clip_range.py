@@ -2,11 +2,11 @@
 
 Why the range exists: measured on the divergent TUL control, the realized per-iteration
 gain is 1.422 at t=0 and 1.08-1.13 at t=1..7
-(docs/experiments/results/2026-08-23-tul-onset-ordering.md), so a typical cap of 1.5 can
+(lab/experiments/results/2026-08-23-tul-onset-ordering.md), so a typical cap of 1.5 can
 only ever bind on the FIRST iteration. Every previous run applied the cap to every
 iteration and read the result as "the governor cures it". These tests make the range a
 contract so the mediation arms in
-docs/experiments/planned/2026-08-23-tul-iteration0-mediation.md mean what they say.
+lab/experiments/planned/2026-08-23-tul-iteration0-mediation.md mean what they say.
 
 CPU only, tiny config, no tokenizer — mirrors tests/test_tul_forward.py.
 """

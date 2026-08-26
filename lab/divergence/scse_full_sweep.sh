@@ -1,6 +1,6 @@
 #!/bin/bash
 # The FULL SCSE method against a matched tul_a1 control.
-# Pre-registration: docs/experiments/planned/2026-08-25-scse-full-method.md
+# Pre-registration: lab/experiments/planned/2026-08-25-scse-full-method.md
 # Implementation:   docs/scse-spec.md
 #
 # Sequential by design (UPS: one trainer at a time against a loaded GPU — two threads at

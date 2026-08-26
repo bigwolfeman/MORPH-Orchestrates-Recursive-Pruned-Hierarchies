@@ -1,6 +1,6 @@
 #!/bin/bash
 # Full-SCSE experiment, part 2: the P1 validity gate.
-# Pre-registration: docs/experiments/planned/2026-08-25-scse-full-method.md
+# Pre-registration: lab/experiments/planned/2026-08-25-scse-full-method.md
 #
 # Step 1 is a REGRESSION GATE, not a formality. `drift_probe.step_at` and `forcing_bias`
 # both grew an SCSE branch. Those branches key off `point["scse"]`, which is False on every

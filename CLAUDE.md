@@ -49,7 +49,7 @@ renorm), not symptom-clamping — that also preserves the β1=0 memory win + α�
 > projection that pinned `σ_max` at 1.50 for a whole run — all failed, and two made it worse
 > than doing nothing. A uniform rescale leaves every singular vector and every ratio
 > `σ_1/σ_2` untouched, so it cannot slow an alignment. Read
-> [docs/experiments/failures/2026-08-24-tul-takeover-cure.md](docs/experiments/failures/2026-08-24-tul-takeover-cure.md)
+> [lab/experiments/failures/2026-08-24-tul-takeover-cure.md](lab/experiments/failures/2026-08-24-tul-takeover-cure.md)
 > before reaching for a spectral cap in this tree. What DID hold is upstream of the map: the
 > 50 slot states of a row sit at effective rank 1.7–4.8 in 1024 dimensions because a slot's
 > input is one shared `E_slot` plus a bag-mean, and the loop's effect on that rank flips sign
@@ -61,7 +61,7 @@ renorm), not symptom-clamping — that also preserves the β1=0 memory win + α�
 
 Status: implemented, run, and measured. It is a **conditional-compute** win (1.6x wall
 clock at slightly better CE), NOT a latent-memory mechanism — the memory claim was
-falsified by the stratified re-score in `docs/experiments/results/2026-08-18-tul-arms-first-comparison.md`. `base.yaml` keeps
+falsified by the stratified re-score in `lab/experiments/results/2026-08-18-tul-arms-first-comparison.md`. `base.yaml` keeps
 `tul.activate_at: never`, which builds no TUL parameters at all.
 
 `docs/tul-spec.md` is the source of truth; `docs/figures/tul_overview.png` is the diagram;

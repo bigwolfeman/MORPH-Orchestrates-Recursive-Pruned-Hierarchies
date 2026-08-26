@@ -1,6 +1,6 @@
 #!/bin/bash
 # H21 part 2: probe every seed's checkpoints, then score against the pre-registration.
-# Pre-registration: docs/experiments/planned/2026-08-24-tul-forcing-bias-predicts-divergence.md
+# Pre-registration: lab/experiments/planned/2026-08-24-tul-forcing-bias-predicts-divergence.md
 #
 # All four seeds are arm A1, so all four are probed on the slot path with the same config.
 # The anchor is each seed's own h_0 = input_norm(x) on its own slot positions.

@@ -1,7 +1,7 @@
 """Offline decomposition of the AdEMAMix update, and the coherent-drift severity measure.
 
 Two questions, one reader, zero GPU training minutes. Pre-registration:
-`docs/experiments/planned/2026-08-24-tul-optimizer-state-decomposition.md`.
+`lab/experiments/planned/2026-08-24-tul-optimizer-state-decomposition.md`.
 
 Q1  The b1=0 AdEMAMix update is
 
@@ -13,7 +13,7 @@ Q1  The b1=0 AdEMAMix update is
     slow channel is EXACT here and the fast channel is a near-1 reference, not a
     measurement. Read `slow_rms` as "the slow channel in units of the fast channel".
 
-Q2  `docs/experiments/failures/2026-08-24-tul-takeover-cure.md` names the severity measure
+Q2  `lab/experiments/failures/2026-08-24-tul-takeover-cure.md` names the severity measure
     it should have used and did not: post-optimizer coherent core drift, `||dW_core||`
     times its directional autocorrelation. Consecutive checkpoints give it at the spacing
     of the ladder (25 steps), which is NOT the per-step version. `coh` below is the

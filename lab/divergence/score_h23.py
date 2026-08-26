@@ -1,6 +1,6 @@
 """Score H23 -- does SCSE Stage 1 stop the A1 takeover? -- without judgement calls.
 
-Pre-registration: docs/experiments/planned/2026-08-25-scse-stage1-initial-deviation.md
+Pre-registration: lab/experiments/planned/2026-08-25-scse-stage1-initial-deviation.md
 
 Written and committed BEFORE any Stage 1 checkpoint was probed. Every threshold is copied
 from that file. The control is H21's sweep, which is legitimate because `core_init_scale=0.0`

@@ -3,7 +3,7 @@
 The load-bearing one is `test_alignment_normalises_out_the_reader_count`. Raw
 `||sum g_r|| / sum ||g_r||` falls like `1/sqrt(K)` for INDEPENDENT gradients, so comparing
 it between slots with different reader counts compares the reader counts. Every verdict in
-`docs/experiments/failures/2026-08-24-tul-reader-gradient-conflict.md` is read off the
+`lab/experiments/failures/2026-08-24-tul-reader-gradient-conflict.md` is read off the
 `sqrt(K)`-normalised statistic for that reason.
 """
 import math

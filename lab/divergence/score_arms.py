@@ -1,6 +1,6 @@
 """Score divergence arms from their grad-probe mirrors and their console logs.
 
-ONE verdict rule, fixed in docs/experiments/results/2026-08-24-tul-takeover-rca.md and
+ONE verdict rule, fixed in lab/experiments/results/2026-08-24-tul-takeover-rca.md and
 reused unchanged here so arms scored on different days are comparable:
 
     TAKEN OVER = core share > 0.5 on more than 30 % of the last 50 probed steps.

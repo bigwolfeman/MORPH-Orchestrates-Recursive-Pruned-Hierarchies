@@ -13,7 +13,7 @@ Pre-registration: [2026-08-24-tul-takeover-cure](../planned/2026-08-24-tul-takeo
 Mechanism this builds on: [the RCA](../results/2026-08-24-tul-takeover-rca.md).
 Procedure: [measuring the core map's operator](../../cookbook/measuring-the-core-map.md).
 Decision record: [the takeover is a forward state collapse](../../../.agents/notes/implemented/architecture/2026-08-24-core-takeover-is-positional.md).
-Figure: `docs/experiments/figures/tul_takeover_cure.png`.
+Figure: `lab/experiments/figures/tul_takeover_cure.png`.
 
 ## Summary
 
@@ -997,7 +997,7 @@ its 64 slots, so the budget is rarely the binding constraint.
 
 # Pre-registration, moved here from `planned/`
 
-`docs/experiments/README.md`: "A `planned/` file moves to `results/` or `failures/` when it
+`lab/experiments/README.md`: "A `planned/` file moves to `results/` or `failures/` when it
 has an answer." This experiment's pre-registration was left behind in `planned/` while the
 results were filed here, so the results referenced P13 and P15 by number with the numbers
 living in another file. Merged 2026-08-24. **Nothing below is edited** — the predictions

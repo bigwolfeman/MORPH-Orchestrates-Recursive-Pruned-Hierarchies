@@ -9,7 +9,7 @@ deleted and why.
 A checkpoint survives only if one of these is true:
 
 1. **It is irreplaceable.** The run cannot be re-made by re-running the same command.
-2. **A live experiment reads it.** Live means a file in `docs/experiments/planned/`.
+2. **A live experiment reads it.** Live means a file in `lab/experiments/planned/`.
 3. **It is the trained product of a long run**, i.e. real GPU time that a future run
    could start from.
 
@@ -22,7 +22,7 @@ the probe JSON, the training log and the saved Hydra config. That is the precede
 
 | dir | size | rule | why |
 |---|---:|:--:|---|
-| `onset-capture` | 25 G | 1, 2 | The takeover ladder, `ROLL_step_{1625..1850}` + `TAKEOVER_step_1866`, 25-step spacing. **This event cannot be re-made.** Two runs of MORPH at a fixed seed decorrelate to 10 % in eleven steps (`docs/experiments/failures/2026-08-23-tul-run-replication.md`), so re-running `tul_a1` seed 0 does not reproduce this takeover. Both live planned experiments read it, and so does every filed probe. |
+| `onset-capture` | 25 G | 1, 2 | The takeover ladder, `ROLL_step_{1625..1850}` + `TAKEOVER_step_1866`, 25-step spacing. **This event cannot be re-made.** Two runs of MORPH at a fixed seed decorrelate to 10 % in eleven steps (`lab/experiments/failures/2026-08-23-tul-run-replication.md`), so re-running `tul_a1` seed 0 does not reproduce this takeover. Both live planned experiments read it, and so does every filed probe. |
 | `onset-sub` | 12 K | — | Symlinks into `onset-capture`. Free. |
 | ~~`h24-*` step ladders~~ | 0 | — | **Pruned 2026-08-25 18:20**, 44 G, once the arm was filed as a failure. The rule said "delete after that experiment is filed" and it was applied to itself. |
 | `h24-ctrl-s0/DIVERGED_step_2880.pt`, `h24-hca16-s1/DIVERGED_step_2940.pt` | 4.5 G | 1 | The two abort captures. They are the only state that exists for either divergence, and the retention ring is built never to rotate a guard file away. |
@@ -31,7 +31,7 @@ the probe JSON, the training log and the saved Hydra config. That is the precede
 
 ## Deleted
 
-Every campaign below is **filed** (`docs/experiments/successes/` or `failures/`), and for
+Every campaign below is **filed** (`lab/experiments/successes/` or `failures/`), and for
 every one the probe JSON, the training log and the Hydra config live outside the
 checkpoint tree. Verified before deleting, not assumed.
 
@@ -39,7 +39,7 @@ checkpoint tree. Verified before deleting, not assumed.
 |---|---:|---|---|
 | `seedsweep-s0..s3` | 55 G | `failures/2026-08-24-tul-forcing-bias-predicts-divergence.md` | `morph-scratch/seedsweep/drift_s{0..3}.json`, `s{0..3}.log`, `hy-s{0..3}/` |
 | `scse1-s0..s3` | 57 G | `failures/2026-08-25-scse-stage1-initial-deviation.md` | `morph-scratch/scse1/drift_s{0..3}.json`, `regress_s3.json`, logs, Hydra dirs |
-| `scse2-{ctrl,scse}-s{1,2,3}` | 53 G | `failures/2026-08-25-scse-full-method.md` | `docs/experiments/results/2026-08-25-scse-full-method/` (JSON + logs, tracked) |
+| `scse2-{ctrl,scse}-s{1,2,3}` | 53 G | `failures/2026-08-25-scse-full-method.md` | `lab/experiments/results/2026-08-25-scse-full-method/` (JSON + logs, tracked) |
 | `stage0-tul_a0`, `stage0-tul_a1` | 31 G | `successes/2026-08-24-tul-forcing-bias-arm-control.md` | `morph-scratch/drift_a0.json`, `drift_a1.json`, `morph-scratch/stage0/` |
 | `tul-a1r` | 4.4 G | `docs/tul-divergence-rca.md` | Two `DIVERGED_*.pt` only, no clean rungs. The abort steps (2080, 4160) are in the RCA text. |
 | `s0-slotembed` | 4.4 G | H5 lever, filed | training log |

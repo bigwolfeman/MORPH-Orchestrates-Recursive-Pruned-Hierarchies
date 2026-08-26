@@ -101,7 +101,7 @@ def adamix_update(g: torch.Tensor, m2: torch.Tensor, nu: torch.Tensor,
 
     MORPH runs `ademamix_eps_inside: false`. The floored form is a ~100x error at MORPH's
     gradient scale — see
-    `docs/experiments/failures/2026-08-24-tul-optimizer-state-decomposition.md`.
+    `lab/experiments/failures/2026-08-24-tul-optimizer-state-decomposition.md`.
     """
     return (g + alpha * m2) / ((nu / bc2).sqrt() + eps)
 

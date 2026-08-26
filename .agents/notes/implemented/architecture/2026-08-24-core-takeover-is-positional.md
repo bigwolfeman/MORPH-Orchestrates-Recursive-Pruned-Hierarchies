@@ -10,7 +10,7 @@ between steps 500 and 2000 and then climbs by 1.3 to 2.4 nats. Four runs at
 `ademamix_alpha_cap: 1.0` and calls it "THE TUL DIVERGENCE FIX"; it is not one, it holds seed
 0 for 20000 steps and let seed 1 die at 4140.
 
-The [RCA](../../../../docs/experiments/results/2026-08-24-tul-takeover-rca.md) found the
+The [RCA](../../../../lab/experiments/results/2026-08-24-tul-takeover-rca.md) found the
 signature — the core's per-block BACKWARD gain crossing 1, compounding over
 `n_core x bptt_depth` = 24 weight-shared blocks — and a panel in which nothing stopped it.
 What it could not say was WHERE the amplification lives, and therefore what to bound.
@@ -45,7 +45,7 @@ probes, and `CoreSpectralProjection` exists — off by default — because it is
 version of the instrument if anyone reaches for one again.
 
 The measurements behind the decision, all on the same `onset-capture` ladder
-([full record](../../../../docs/experiments/failures/2026-08-24-tul-takeover-cure.md)):
+([full record](../../../../lab/experiments/failures/2026-08-24-tul-takeover-cure.md)):
 
 * The map barely changes size. Isotropic per-block gain +2.5 % across the whole onset.
 * Its blocks' amplifying directions ALIGN, x2.9, tracking the core share step for step.

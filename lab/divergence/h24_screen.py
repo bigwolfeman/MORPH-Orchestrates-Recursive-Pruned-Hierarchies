@@ -1,6 +1,6 @@
 """H24 screen — revive the CORE's dead HCA compressed branch at fixed weights.
 
-Pre-registration: docs/experiments/planned/2026-08-25-h24-hca-branch-screen.md
+Pre-registration: lab/experiments/planned/2026-08-25-h24-hca-branch-screen.md
 (Method Amendment 1, 2026-08-25, is what this file implements.)
 
 Phase 0 of H18 measured that on the TUL slot path (S = 64) the three HCA core blocks have

@@ -69,7 +69,7 @@ PYTHONPATH=$PWD python ignore/perf/depth_gain.py --config morph/configs/tul_a1.y
   --ckpt a1_lived_5k=tul_a1=checkpoints/morph/tul-a1/step_5000.pt \
   --ckpt gate_lived_5k=tul_gate=checkpoints/morph/tul-gate/step_5000.pt \
   --depths 1,2,3,4,6,8 --kpow 60 --restarts 3 --real-text --seq 256 --batch 2 \
-  --csv docs/experiments/results/tul_depth_gain.csv
+  --csv lab/experiments/results/tul_depth_gain.csv
 ```
 
 One batch of real validation text is drawn ONCE and reused for every checkpoint, fp32

@@ -671,7 +671,7 @@ def test_pad_slots_do_not_enter_the_core_gain_norm():
         f"the slot axis (the gain-clip norm) is counting pad slots")
 
 
-# ── per-slot input embedding (docs/experiments/failures/2026-08-24-tul-takeover-cure.md) ──
+# ── per-slot input embedding (lab/experiments/failures/2026-08-24-tul-takeover-cure.md) ──
 
 def test_per_slot_embed_off_is_the_shipped_shape_and_forward():
     """Default MUST be one shared vector and a bit-identical forward — every existing

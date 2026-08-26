@@ -146,7 +146,7 @@ class TULConfig:
     # of +0.39 to +0.71, at EVERY checkpoint including the healthy ones. They are built from
     # one shared E_slot plus a span bag-mean, and a mean over many token embeddings
     # concentrates, so the slots are near-parallel by construction. See
-    # docs/experiments/failures/2026-08-24-tul-takeover-cure.md.
+    # lab/experiments/failures/2026-08-24-tul-takeover-cure.md.
     per_slot_embed: int = 0
     per_slot_embed_std: float = 0.0      # jitter added to each row at seating; 0 = rows equal
     coda_token_cut: int = 0              # arm CW (docs/tul-compaction-window-spec.md) — drop

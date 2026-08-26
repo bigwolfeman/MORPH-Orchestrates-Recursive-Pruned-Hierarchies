@@ -1,6 +1,6 @@
 #!/bin/bash
 # Does the forcing bias predict WHICH A1 seeds diverge?
-# Pre-registration: docs/experiments/planned/2026-08-24-tul-forcing-bias-predicts-divergence.md
+# Pre-registration: lab/experiments/planned/2026-08-24-tul-forcing-bias-predicts-divergence.md
 # Sequential (UPS: one trainer at a time against a loaded GPU).
 set -u
 cd /home/wolfe/morph-perf

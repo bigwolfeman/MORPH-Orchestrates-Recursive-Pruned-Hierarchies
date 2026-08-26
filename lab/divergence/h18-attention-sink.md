@@ -9,7 +9,7 @@ Opened 2026-08-25.
 
 ## Why this hypothesis
 
-From `docs/experiments/failures/2026-08-24-tul-takeover-cure.md`:
+From `lab/experiments/failures/2026-08-24-tul-takeover-cure.md`:
 
 - H4 CONFIRMED: the loop's effect on slot-state effective rank FLIPS SIGN between step
   1750 and 1800. Healthy rungs diversify (rank ratio 1.23–1.48), sick rungs do not
@@ -152,7 +152,7 @@ Plus a CONTENT-SHUFFLE run: same slot count, different text. Sink stays on the s
 
 ## Phase 2 — pre-registration
 
-`docs/experiments/planned/2026-08-25-h18-positional-attention-sink.md`, committed BEFORE
+`lab/experiments/planned/2026-08-25-h18-positional-attention-sink.md`, committed BEFORE
 the run. Thresholds live in `lab/divergence/score_h18.py`, also committed first, so they
 cannot be fitted to the data.
 
@@ -169,7 +169,7 @@ held**, and the one that held (P1) does not discriminate, because the healthy ru
 concentrate at 4 of 6 blocks too.
 
 Full numbers and the verdict:
-[`docs/experiments/failures/2026-08-25-h18-positional-attention-sink.md`](../../docs/experiments/failures/2026-08-25-h18-positional-attention-sink.md).
+[`lab/experiments/failures/2026-08-25-h18-positional-attention-sink.md`](../../lab/experiments/failures/2026-08-25-h18-positional-attention-sink.md).
 
 The short version: **the core's forward attention is DIFFUSE.** Window participation ratio
 0.59-0.68 of 57 valid slots; the top key holds 6.4-8.4 % of the mass; `argmax` is slot 0
@@ -206,7 +206,7 @@ generated, not one it tested.
 
 ### The no-training screen — RUN 2026-08-25, and it says "lever, not cure"
 
-[`docs/experiments/failures/2026-08-25-h24-hca-branch-screen.md`](../../docs/experiments/failures/2026-08-25-h24-hca-branch-screen.md).
+[`lab/experiments/failures/2026-08-25-h24-hca-branch-screen.md`](../../lab/experiments/failures/2026-08-25-h24-hca-branch-screen.md).
 Instrument: `lab/divergence/h24_screen.py`.
 
 The first attempt failed to load: the plan claimed `m` is in no weight shape, and that was
@@ -246,7 +246,7 @@ hardest one. A calibration error, recorded rather than corrected away.
 
 ### The arm — the BINARY design, launched 2026-08-25 15:29
 
-Pre-registration: [`docs/experiments/planned/2026-08-25-h24-hca-branch-arm-binary.md`](../../docs/experiments/planned/2026-08-25-h24-hca-branch-arm-binary.md).
+Pre-registration: [`lab/experiments/planned/2026-08-25-h24-hca-branch-arm-binary.md`](../../lab/experiments/planned/2026-08-25-h24-hca-branch-arm-binary.md).
 Runner `lab/divergence/h24_arm.sh`, scorer `lab/divergence/score_h24_arm.py`.
 
 **Two earlier designs were rejected before producing a scored panel, and both died the same
@@ -255,8 +255,8 @@ because the signal here is binary — the divergence guard fires or it does not.
 
 | design | why it was rejected |
 |---|---|
-| [4 seeds](../../docs/experiments/failures/2026-08-25-h24-hca-branch-arm-4seed.md) | scope cut to fewer seeds [W]; its P1/P3 are written as "how many of the four", so they cannot be re-scored |
-| [1 seed](../../docs/experiments/failures/2026-08-25-h24-hca-branch-arm-1seed.md) | batch 6 at 3500 steps diverges on 1 seed in 4; and it fixed the budget confound by SHORTENING the run, which truncates the window the failure lives in |
+| [4 seeds](../../lab/experiments/failures/2026-08-25-h24-hca-branch-arm-4seed.md) | scope cut to fewer seeds [W]; its P1/P3 are written as "how many of the four", so they cannot be re-scored |
+| [1 seed](../../lab/experiments/failures/2026-08-25-h24-hca-branch-arm-1seed.md) | batch 6 at 3500 steps diverges on 1 seed in 4; and it fixed the budget confound by SHORTENING the run, which truncates the window the failure lives in |
 
 The live design runs the regime the failure is documented in
 (`docs/tul-divergence-rca.md` §1): batch 12, `alpha_cap` 3.5, production kernels, and
@@ -331,7 +331,7 @@ seeds: a coin flip, not a mechanism.
 
 Full writeup, including the scorer correction and what the refused panel does and does
 not license:
-[`docs/experiments/failures/2026-08-25-h24-hca-branch-arm-binary.md`](../../docs/experiments/failures/2026-08-25-h24-hca-branch-arm-binary.md).
+[`lab/experiments/failures/2026-08-25-h24-hca-branch-arm-binary.md`](../../lab/experiments/failures/2026-08-25-h24-hca-branch-arm-binary.md).
 
 **Where this leaves the campaign.** H18 said the attention is diffuse, not a sink. The
 H24 screen said reviving the dead branch lifts the loop's rank ratio uniformly across

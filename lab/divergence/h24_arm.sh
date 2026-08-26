@@ -1,6 +1,6 @@
 #!/bin/bash
 # H24 — does training with the core's HCA compressed branch alive stop the TUL takeover?
-# Pre-registration: docs/experiments/planned/2026-08-25-h24-hca-branch-arm-binary.md
+# Pre-registration: lab/experiments/planned/2026-08-25-h24-hca-branch-arm-binary.md
 #
 # THE SIGNAL IS BINARY: the divergence guard fires, or it does not. Everything here is
 # chosen so the CONTROL reliably fires, because a control that survives answers nothing.
