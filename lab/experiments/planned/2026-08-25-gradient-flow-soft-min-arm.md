@@ -55,12 +55,19 @@ no-flags rule):
    `L = −τ · log( (1/K) Σ_k exp(−L_k / τ) )` — the XM smooth objective, exact
    mixture NLL at τ=1, hard min as τ→0. Anneal τ 1.0 → 0.1, sigmoidal, midpoint
    at step 1750. All schedule constants in the Hydra config, logged to wandb.
-4. **OPEN SWITCH — MUX local head** (decide before run, then amend Method with
-   date): auxiliary KL( mux_geo(next span) ‖ softmax(W_unembed · z / τ_h) ),
-   geometric ρ = 0.9 (MUX, arXiv 2607.18264, Prop 5i), weight β = 0.1. Gives z
-   direct span-content gradient that does not route through the coda readout.
-   Token path untouched — this is not a sequential single-vector decode, so the
-   Huginn ban does not apply.
+4. **MUX local head — IN** (switch closed 2026-08-25 after full read of
+   arXiv 2607.18264 incl. appendix; Wolfe's call): auxiliary
+   KL( mux_geo(next span) ‖ softmax(W_unembed · z / τ_h) ), geometric ρ = 0.9,
+   τ_h = 1.0, weight **β = 1.0** (the paper's setting in every config; my drafted
+   0.1 was unfounded). Gives z direct span-content gradient that does not route
+   through the coda readout, and Prop 16 (§9.3) shows low local KL lower-bounds
+   the answer-side attention mass routed to the latents — it protects the
+   readout, not just the content. Their §8.1 shows the local loss works without
+   any global/teacher loss (23/24 settings), which is our regime. Token path
+   untouched — not a sequential single-vector decode, so the Huginn ban does not
+   apply. Caveat carried from their §12: losslessness is exact-arithmetic; at our
+   S ≤ 32 and bf16 the demux guarantee is gone, the informative-target property
+   is what we are buying.
 
 The TUL gate (Quiet-STaR mixing head, prior testing in another dir) is
 deliberately OUT of v1 — one lever family per arm.
@@ -79,6 +86,11 @@ ROLL_step_1750; readout raw ratio 0.055 (1750), falling trend; A1 aborts at
   3000 is HIGHER than the arm's own step-1650 value — the falling trend reverses.
 - **P4 (no tax):** val CE at step 3000 within **+0.05 nats** of the A1 control at
   the same step (control from the same seed, same schedule).
+- **P6 (MUX head bites):** at step 3000, the model's mean local KL to the
+  mux target is < 0.8x the KL of the corpus **unigram prior** to the same
+  targets (the best span-independent predictor, measured on the same batches).
+  If not, z carries no span-specific content beyond the corpus prior and the
+  head is decorative.
 - **P5 (diversity, refuter):** after the τ-anneal midpoint, median per-step spread
   `max_k L_k − min_k L_k` > **0.02 nats**. If ~0, the candidates collapsed and the
   soft-min degenerated to mode-averaging — the arm is refuted regardless of P1–P4.
