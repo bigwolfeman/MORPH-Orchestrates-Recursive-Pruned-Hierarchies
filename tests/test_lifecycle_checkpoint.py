@@ -28,11 +28,17 @@ def _fresh():
 
 def _load_step(path: str) -> int:
     model, _, scaler = _fresh()
-    step, opt_state, needs_rebuild = load_checkpoint(
+    step, opt_state, needs_rebuild, ckpt_pnames = load_checkpoint(
         path, model, scaler, torch.device("cpu"), pruning=None
     )
     assert isinstance(opt_state, dict)
     assert not needs_rebuild
+    # The 4th element is the checkpoint's MODEL parameter names, which the caller needs to
+    # re-index optimizer state when a resume adds parameters (optimizer.align_optimizer_state).
+    # Asserted here so the contract is pinned: a caller that drops it silently loses the
+    # ability to detect added parameters.
+    assert isinstance(ckpt_pnames, set) and ckpt_pnames, "names must travel with the state"
+    assert all(isinstance(n, str) for n in ckpt_pnames)
     return step
 
 
