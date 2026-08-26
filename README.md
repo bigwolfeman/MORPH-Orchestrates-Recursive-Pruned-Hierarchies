@@ -22,6 +22,13 @@ The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/
 
 ## TUL: Thought Unpack Loop (merged, OFF by default)
 
+
+<p align="center">
+  <img src="docs/figures/tul_mechanism.png" alt="TUL: shared token/slot sequence into prelude; think (core × T on slots) saves z; freeze z in sequence; decode next span; cut on punctuation" width="720" />
+</p>
+<p align="center"><em>TUL — loop once per thought, freeze <code>z</code> in the sequence, amortize decode over the next span.</em></p>
+
+
 TUL loops the Parcae core over one **thought slot per span** (punctuation-bounded) instead
 of over every token, and decodes tokens with the slot's looped state visible as an attended
 prefix position. Tokens run prelude → coda only. Specification, provenance and planned
@@ -32,7 +39,7 @@ measured arms: [lab/tul/arms-result.md](lab/tul/arms-result.md).
 default recipe is bit-identical to plain MORPH and the main line's behaviour is unchanged.
 
 **Results of TUL:** Over the same 20k steps the TUL arm beat the dense
-baseline by 0.056 nats of `val/ce_tokens` (slightly more than noise) while running 177 minutes against 278. A 1.6x
+baseline by 0.056 nats of `val/ce_tokens` (slightly better than noise) while running 177 minutes against 278. A 1.6x
 wall-clock win at slightly better loss.
 
 **FLOPs (same runs — `no-tul-a0-acap1` / `tul-a1-acap1`):** ~4× fewer FLOPs per token
@@ -76,11 +83,6 @@ Testing is happening for a gated version. Initial results are good. It is based 
 The gate can produce a variable k, and k=0 is to loop. The magnitude of k determines how many tokens to decode for the next span.
 Because we are delimitting the spans at easily detected values (punctuation), it is self supervised training for halting.
 
-
-<p align="center">
-  <img src="docs/figures/tul_mechanism.png" alt="TUL: shared token/slot sequence into prelude; think (core × T on slots) saves z; freeze z in sequence; decode next span; cut on punctuation" width="720" />
-</p>
-<p align="center"><em>TUL — loop once per thought, freeze <code>z</code> in the sequence, amortize decode over the next span.</em></p>
 
 ## Current Architecture
 
