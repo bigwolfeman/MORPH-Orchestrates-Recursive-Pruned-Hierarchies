@@ -21,7 +21,79 @@ affected.
 
 ## Status right now
 
-Updated 2026-08-25 18:30. Nothing is running; the GPU is idle.
+Updated 2026-08-25 21:00. Nothing is running; the GPU is idle.
+
+## >>> THE CAMPAIGN HAS PIVOTED. READ THIS BEFORE ANYTHING BELOW. <<<
+
+**The takeover is a GRADIENT FLOW failure, not a stability failure.** Everything in the
+hypothesis ledger below was aimed at stabilising the looped core. It is now measured that
+there was almost nothing holding those parameters anywhere to begin with.
+
+Measured 2026-08-25, `onset-capture/ROLL_step_1750`, 8 fixed val batches, eager kernels.
+Full writeup: [`docs/experiments/results/2026-08-25-region-shapley/README.md`](../../docs/experiments/results/2026-08-25-region-shapley/README.md).
+
+1. **Exact Shapley over prelude / core / coda.** Three players, 8 coalitions, no sampling;
+   the values sum to `v(all)` at every checkpoint, which is the arithmetic check.
+
+   | ckpt | core on total loss | **core on `ce_main`** | core on `ce_emit` |
+   |---|---:|---:|---:|
+   | 1625 healthy | 0.0065 | 0.0015 | 0.2274 |
+   | 1750 healthy | 0.0080 | **0.0007** | 0.3296 |
+   | 1850 taken over | −0.0015 | −0.0010 | −0.0314 |
+
+   Prelude and coda score 2.5–2.7 throughout. **Shapley, not leave-one-out, is what refutes
+   redundancy** — a core the coda covered for would still score high. It scores 0.0007.
+
+2. **The plan is EMPTY, not outcompeted.** Ablating the core by identity removes the LOOP,
+   not the SLOT (the slot keeps `E_slot + mean(embed(span))`). Zeroing what
+   `prefix_project` writes separates them: the loop is worth 0.0051 on `ce_main`, the WHOLE
+   plan 0.0191. Sweeping `token_state_dropout` at eval, paired and seeded, the plan is worth
+   0.0191 (p=0) → 0.0344 (p=0.15, shipped) → **0.0699 (p=1.0**, where `ce_main` collapses to
+   7.53). Mask every token and the plan still carries 0.07 nats of its span.
+
+3. **Why.** The core's only DIRECT supervision is `ce_emit` — predict ONE token, the next
+   span's first, worth 2.6564 nats to that target. Its INDIRECT route through the coda is
+   worth 0.0191, so almost no gradient arrives that way. So the plan learns to be a
+   one-token predictor and never becomes a span summary. And it loses even that job to the
+   free token path: `ce_plast − ce_emit` is −0.2191 at 1750 and −0.4842 at 1850. That is the
+   `cf` field in every VAL line and it is negative in every run on disk (−0.103 to −1.047).
+
+   Beside H14 (slot label = 2.8 % of loss weight, ~50 % of the gradient) and >90 % gradient
+   share at takeover: **gradient share and value are decoupled by three orders of magnitude.**
+
+### The next focus is gradient flow
+
+The question is no longer "how do we stop the takeover". It is **"how does the looped core
+earn gradient in proportion to the value it provides"**. Candidates, none pre-registered:
+
+| lever | one-line? | why | why not |
+|---|---|---|---|
+| Train at high `token_state_dropout` | yes, `tul.token_state_dropout` | it is the spec's own collapse tax, shipped at 0.15. Raising it makes the coda's `ce_main` depend on the plan, which is the only route that would give the core real gradient | the sweep is EVAL-ONLY on a model trained at 0.15. It proves the plan is empty NOW, not that it cannot be FILLED by training at high p. Also: a coda that cannot see tokens may just get worse |
+| Re-weight `emit` / `plast` | yes, `_tul_half_weights` | today they split 0.5/0.5 on the SAME target, so the core's only direct route is one it loses. `emit 1.0 / plast 0.0` forces the plan to carry it; `emit 0.0 / plast 1.0` removes the private route so the core earns only by helping the coda | the second may leave the core with no gradient at all — which at 0.0007 nats may be the honest answer, but it is not TUL working |
+| A span-content objective for `z` | no | gives the core a job only it can do | the spec forbids decoding a span from one vector with no token path (Huginn collapse 2026-08-16, MegaByte T7, Bowman T2). Needs design, not a bolt-on |
+
+**Do not open another stability arm.** Every one below failed and now there is a measured
+reason why.
+
+### Instruments built for this (do not rebuild)
+
+| tool | measures |
+|---|---|
+| `lab/divergence/region_shapley.py` | exact Shapley over prelude/core/coda, per loss group |
+| `lab/divergence/slot_path_worth.py` | loop vs whole-plan, four conditions, one eval set |
+| `lab/divergence/token_tax_sweep.py` | plan worth against `token_state_dropout`, paired and seeded |
+| `lab/divergence/delta_ablation.py` | nats a region is worth; `--ablate prelude/coda` is its own control (+3.22 / +3.11) |
+| `lab/divergence/scale_probe.py` | whether the core map's output depends on its input size (it does not: pre-norm) |
+
+### Two traps that each cost an experiment today
+
+- **`ademamix_t_beta3` is `null` in `base.yaml` and falls back to `training.steps`.** Run
+  length silently sets the AdEMAMix beta3 horizon. It flipped SCSE arm C from "survives to
+  2506" to "dies at 1800". PIN IT in every arm script and check the
+  `[opt] re-applied config hyperparameters` line.
+- **A forward-only probe ranks arms backwards.** `delta_ladder.py` ranked arm A best and C
+  second-worst; in training A was catastrophic and C was the only one that helped. A frozen
+  probe measures how big a quantity is; the takeover is about where the gradient goes.
 
 | | |
 |---|---|
