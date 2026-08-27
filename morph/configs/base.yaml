@@ -155,6 +155,12 @@ model:
   retention_gate_bias: 2.0       # GLA forget-gate logit bias (α near 1 = long memory)
 
 training:
+
+  # NTP dropout: fraction of steps that run with NO slot layout at all -- the
+  # plain MORPH path, from a separate slot-free loader. 0.0 = off and no second
+  # loader is built. See .agents/notes/proposed/feature/2026-08-27-ntp-dropout.md
+  # for the rationale and the risk (it can make the plan MORE decorative).
+  ntp_dropout_p: 0.0
   # docs/tul-gate-spec.md §10: fail the run if the gate direction is still at its zero
   # init by this step (⇒ the parameter is frozen and the gate emits a constant).
   gate_alive_check_step: 2000

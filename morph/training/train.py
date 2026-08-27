@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import gc
 import math
+import random as _random
 import json
 import os
 import sys
@@ -1952,6 +1953,37 @@ def main(cfg: DictConfig) -> None:
                                        tul_on=phase.tul_on))
     val_loader = _make_val_loader(phase.tul_on)
 
+    # ── NTP dropout (.agents/notes/proposed/feature/2026-08-27-ntp-dropout.md) ──
+    # A fraction of steps run with NO slots at all: the plain MORPH path, core
+    # looping over token positions. `slot_layout=None` is already the
+    # bit-identical baseline forward and the loader already yields a 2-tuple for
+    # it, so this needs no model change and no runtime flag — only a second
+    # loader and a per-step coin.
+    #
+    # The batch MUST come from a slot-free loader. Reusing the TUL batch with
+    # slot_layout=None would train the model to predict the inserted slot_id
+    # positions as if they were text.
+    _ntp_p = float(getattr(tr, "ntp_dropout_p", 0.0) or 0.0)
+    if not 0.0 <= _ntp_p < 1.0:
+        raise ValueError(f"training.ntp_dropout_p must be in [0,1), got {_ntp_p}")
+    _ntp_loader = None
+    if _ntp_p > 0.0:
+        if not phase.tul_on:
+            raise ValueError(
+                "training.ntp_dropout_p > 0 with TUL off: every step is already an "
+                "NTP step, so the knob would silently do nothing.")
+        if curriculum_enabled:
+            raise NotImplementedError(
+                "ntp_dropout_p is not defined for the curriculum loader (it blends "
+                "sources per stage); raises rather than quietly using the base stream.")
+        _ntp_loader = _make_train_loader(phase.bag_size, tul_on=False)
+        print(f"  [ntp-drop] p={_ntp_p}: that fraction of steps run slot-free "
+              f"(plain MORPH path, separate loader)", flush=True)
+    # Dedicated stream so the coin does not consume torch's RNG and shift every
+    # other stochastic decision relative to a p=0 run at the same seed.
+    _ntp_rng = _random.Random(int(getattr(tr, "seed", 0)) * 7919 + 13)
+    _ntp_steps = 0
+
     # ── Optimizer step closure (resolved once, no per-step isinstance) ───
     def _step_optimizer():
         scaler.step(optimizer)
@@ -2257,15 +2289,23 @@ def main(cfg: DictConfig) -> None:
         # The spectral penalty's value at this step, so train/loss can report the MODEL's
         # loss and train/loss_total the full objective. 0.0 when no penalty is built.
         _sp_value = 0.0
+        # One coin per STEP, not per micro-batch: a step whose micro-batches
+        # disagreed would mix two objectives into one optimizer update.
+        _is_ntp = _ntp_loader is not None and _ntp_rng.random() < _ntp_p
+        _ntp_steps += int(_is_ntp)
         for _micro in range(_ga):
             with _rt.region("data"):
                 try:
-                    batch = next(train_loader)
+                    batch = next(_ntp_loader if _is_ntp else train_loader)
                 except StopIteration:
                     # Curriculum .batches() is infinite so this is a non-curriculum-only refill; still,
                     # branch defensively so a curriculum run can never silently fall back to the base OWT stream.
-                    train_loader = _rebuild_train_loader()
-                    batch = next(train_loader)
+                    if _is_ntp:
+                        _ntp_loader = _make_train_loader(phase.bag_size, tul_on=False)
+                        batch = next(_ntp_loader)
+                    else:
+                        train_loader = _rebuild_train_loader()
+                        batch = next(train_loader)
                 # TUL loaders yield a 3-tuple (input_ids, labels, slot_layout); every
                 # other path keeps the 2-tuple contract untouched.
                 if len(batch) == 3:
@@ -2645,6 +2685,8 @@ def main(cfg: DictConfig) -> None:
             if phase.tul_on:
                 # Boundary statistics (spec §4) + the layer-pass accounting (spec §2).
                 log["tul/active"] = 1
+                if _ntp_loader is not None:
+                    log["tul/ntp_step_frac"] = _ntp_steps / max(step - start_step + 1, 1)
                 if _layout is not None and _layout.stats:
                     for _k, _v in _layout.stats.items():
                         log[f"tul/{_k}"] = _v
