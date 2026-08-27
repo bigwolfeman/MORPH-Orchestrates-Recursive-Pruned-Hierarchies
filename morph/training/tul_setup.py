@@ -159,6 +159,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         mux_rho=float(tc.get("mux_rho", 0.9)),
         mux_tau=float(tc.get("mux_tau", 1.0)),
         mux_detach_head=bool(tc.get("mux_detach_head", True)),
+        mux_activate_at=float(tc.get("mux_activate_at", 0.0)),
+        sigreg_lambda=float(tc.get("sigreg_lambda", 0.0)),
+        sigreg_slices=int(tc.get("sigreg_slices", 256)),
+        sigreg_activate_at=float(tc.get("sigreg_activate_at", 0.0)),
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
@@ -183,6 +187,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "mux_rho": model_cfg.mux_rho,
         "mux_tau": model_cfg.mux_tau,
         "mux_detach_head": model_cfg.mux_detach_head,
+        "mux_activate_at": model_cfg.mux_activate_at,
+        "sigreg_lambda": model_cfg.sigreg_lambda,
+        "sigreg_slices": model_cfg.sigreg_slices,
+        "sigreg_activate_at": model_cfg.sigreg_activate_at,
         "boundary_chars": str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
         "boundary_substrings": list(substrings),
         "min_span": rule.min_span,

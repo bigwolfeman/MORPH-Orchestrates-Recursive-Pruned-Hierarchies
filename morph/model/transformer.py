@@ -29,6 +29,7 @@ from .fused_ce import (
     multi_hot_cross_entropy_reference,
 )
 from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
+from .sigreg import sigreg_epps_pulley
 from .sparsity import MortarLinear
 from .tul import (TULConfig, TULGate, TULGateConfig, TULSlots, compact_index,
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
@@ -836,6 +837,11 @@ class MORPHTransformer(nn.Module):
         # ── LM head ──────────────────────────────────────────────────
         self.lm_mixer = LMHeadMixer(d, channel_dims=ch)
         self.final_norm = RMSNorm(d)
+        # Auxiliary-objective gates (arm: warmup schedules). Non-persistent so no
+        # checkpoint gains a key; the trainer writes them each step, and because
+        # they are BUFFERS not Python floats, flipping one costs no recompile.
+        self.register_buffer("mux_gate", torch.ones(()), persistent=False)
+        self.register_buffer("sigreg_gate", torch.ones(()), persistent=False)
 
 
         # ── Retention branch (#230) ────────────────────────────────────
@@ -1998,6 +2004,24 @@ class MORPHTransformer(nn.Module):
         ce = -torch.where(pos_valid, alpha * lp, torch.zeros_like(lp)).sum()
         return ce / sup.sum().to(ce.dtype).clamp(min=1.0)
 
+    def _tul_sigreg_loss(self, h_slots: Tensor, layout: SlotLayout) -> Tensor:
+        """SIGReg over the VALID slot states (LeJEPA; see morph/model/sigreg.py).
+
+        Reads the same post-core plan state the MUX head reads, through the
+        model's own readout, and pushes the distribution of those states toward
+        an isotropic standard Gaussian. Pad slots are excluded — they are a
+        fixed-shape artefact, and including them would let the regulariser
+        "fix" the distribution by moving vectors that mean nothing.
+
+        Applied to the plan states rather than to token states on purpose: the
+        collapse this targets was measured THERE (effective rank 1.7-4.8, mean
+        pairwise cosine +0.39..+0.71).
+        """
+        z = self._readout(h_slots)                          # [B, S, C]
+        valid = layout.slot_valid.reshape(-1)               # [B*S]
+        z = z.reshape(-1, z.shape[-1])[valid]               # [N_valid, C]
+        return sigreg_epps_pulley(z, num_slices=self.cfg.tul.sigreg_slices)
+
     def _tul_group_losses(self, x: Tensor, labels: Tensor, layout: SlotLayout | None,
                           want_groups: bool = True) -> dict:
         """Training loss (ONE weighted CE) plus, at eval, the §7.2 metric breakdown.
@@ -2088,6 +2112,11 @@ class MORPHTransformer(nn.Module):
                 "tul.gate has no defined interaction with arm A2 (tokens_through_core): "
                 "A2 has no per-slot looped state to read a length off. Not specified, so "
                 "this raises rather than silently picking a behaviour.")
+        if tc.sigreg_lambda > 0.0 and tc.tokens_through_core:
+            raise NotImplementedError(
+                "tul.sigreg_lambda has no defined interaction with arm A2 "
+                "(tokens_through_core): A2 has no per-slot looped state to "
+                "regularise. Raises rather than silently picking a behaviour.")
         if tc.mux_beta > 0.0 and tc.tokens_through_core:
             raise NotImplementedError(
                 "tul.mux_beta has no defined interaction with arm A2 (tokens_through_core): "
@@ -2100,12 +2129,14 @@ class MORPHTransformer(nn.Module):
             # the presence of slots ALONE (it isolates C2), so it reuses today's core
             # region unchanged; a per-position Poisson depth would change two things at once.
             x_coda = self._core_region(x, x0, bigram_emb, input_ids)
-            depths, g_traj, mux_loss = None, None, None
+            depths, g_traj, mux_loss, sigreg_loss = None, None, None, None
         else:
             xn, h_slots, depths, g_traj = self._tul_core(x, x0, bigram_emb, layout,
                                                          halt=halt)
             mux_loss = (self._tul_mux_loss(h_slots, input_ids, layout)
                         if tc.mux_beta > 0.0 else None)
+            sigreg_loss = (self._tul_sigreg_loss(h_slots, layout)
+                           if tc.sigreg_lambda > 0.0 else None)
             if self.tul_gate is not None:
                 budget_ids = self._tul_budget_ids(layout, depths, g_traj)
                 h_slots = self.tul_gate.apply_budget(h_slots, budget_ids)
@@ -2160,6 +2191,13 @@ class MORPHTransformer(nn.Module):
                 groups["loss_tokens"] = groups["loss"]
                 groups["loss"] = groups["loss"] + self.cfg.tul.gate.lam * _g["loss_gate"]
 
+        if sigreg_loss is not None and groups is not None:
+            groups = dict(groups)
+            groups["sigreg"] = sigreg_loss.detach()
+            _sw = tc.sigreg_lambda * self.sigreg_gate * sigreg_loss
+            groups["sigreg_weighted"] = _sw.detach()
+            groups["loss"] = groups["loss"] + _sw
+
         if mux_loss is not None and groups is not None:
             groups = dict(groups)
             groups["mux_local"] = mux_loss.detach()
@@ -2167,8 +2205,9 @@ class MORPHTransformer(nn.Module):
             # val loss as the MODEL's CE (the spectral-penalty precedent: an
             # auxiliary term inside train/loss makes the arm incomparable to its
             # control and lets the ppl divergence guard fire on the objective).
-            groups["mux_weighted"] = (tc.mux_beta * mux_loss).detach()
-            groups["loss"] = groups["loss"] + tc.mux_beta * mux_loss
+            _mw = tc.mux_beta * self.mux_gate * mux_loss
+            groups["mux_weighted"] = _mw.detach()
+            groups["loss"] = groups["loss"] + _mw
 
         if groups is not None:
             out.update(groups)

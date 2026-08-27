@@ -1,0 +1,22 @@
+# TUL arm SIGReg — LeJEPA's isotropic-Gaussian regulariser on the slot states.
+# Pre-registration: lab/experiments/planned/2026-08-27-warmup-sigreg-ntpdrop.md
+# ONE change from tul_a1 (the control config): add SIGReg. No MUX head here --
+# this arm asks whether fixing the slot states' COLLAPSE alone does anything,
+# independently of any span-level target.
+# Measured pathology it targets: 50 valid slot states per row with effective
+# rank 1.7-4.8 in 1024 dims, mean pairwise cosine +0.39..+0.71, at EVERY
+# checkpoint including healthy ones.
+# sigreg_lambda is set from the magnitude probe (see the pre-registration): the
+# statistic scales with the number of valid slots and with how far the states
+# are from N(0,I), so it must be read before it is weighted.
+defaults:
+  - tul_a1
+  - _self_
+
+tul:
+  sigreg_lambda: 0.001      # PROVISIONAL - probe first, see pre-registration
+  sigreg_slices: 256
+  sigreg_activate_at: 0.0
+
+wandb:
+  name: tul-sigreg

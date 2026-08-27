@@ -125,6 +125,8 @@ def evaluate(
             _l = out["loss"].item()
             if out.get("mux_weighted") is not None:
                 _l -= float(out["mux_weighted"])   # val loss = model CE (see train/loss note)
+            if out.get("sigreg_weighted") is not None:
+                _l -= float(out["sigreg_weighted"])
             losses.append(_l)
             ce_tok = float(out["ce_tokens"])
             acc.setdefault("val/ce_tokens", []).append(ce_tok)
@@ -134,6 +136,8 @@ def evaluate(
                     float(out["first_tok_counterfactual"]))
             if "mux_local" in out:
                 acc.setdefault("val/mux_local", []).append(float(out["mux_local"]))
+            if "sigreg" in out:
+                acc.setdefault("val/sigreg", []).append(float(out["sigreg"]))
             if "ce_tokens_no_slots" in out:
                 # §7.2: CE without the plan MINUS CE with it. Positive ⇒ the coda is
                 # actually using the slot state (the C2 number, the h_z ablation).
@@ -2085,7 +2089,22 @@ def main(cfg: DictConfig) -> None:
                     _fh.dump_traceback()
         _thr.Thread(target=_watchdog, daemon=True).start()
 
+    # Auxiliary-objective warmup gates (tul.mux_activate_at / sigreg_activate_at).
+    # Resolved once: fractions of the run, same shape as tul.activate_at. Written
+    # into non-persistent BUFFERS each step, so flipping one costs no recompile
+    # and the arm stays a schedule rather than a branch in the forward.
+    _mdl = getattr(model, "_orig_mod", model)
+    _tulc = getattr(_mdl.cfg, "tul", None)
+    _mux_on_at = int(float(getattr(_tulc, "mux_activate_at", 0.0)) * total_steps) if _tulc else 0
+    _sig_on_at = int(float(getattr(_tulc, "sigreg_activate_at", 0.0)) * total_steps) if _tulc else 0
+    if _tulc is not None and (_mux_on_at or _sig_on_at):
+        print(f"  [aux] mux head on at step {_mux_on_at}, sigreg on at step {_sig_on_at} "
+              f"(of {total_steps})", flush=True)
+
     for step in range(start_step, total_steps):
+        if _tulc is not None and hasattr(_mdl, "mux_gate"):
+            _mdl.mux_gate.fill_(1.0 if step >= _mux_on_at else 0.0)
+            _mdl.sigreg_gate.fill_(1.0 if step >= _sig_on_at else 0.0)
         if step == _nsys_a:
             torch.cuda.profiler.start()
             print(f"[nsys] cudaProfilerStart @ step {step}", flush=True)
@@ -2536,6 +2555,8 @@ def main(cfg: DictConfig) -> None:
             # divergence guard on the model's CE, not the composite objective.
             if isinstance(out, dict) and out.get("mux_weighted") is not None:
                 _lv = _lv - float(out["mux_weighted"])
+            if isinstance(out, dict) and out.get("sigreg_weighted") is not None:
+                _lv = _lv - float(out["sigreg_weighted"])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
             #    after its external watchdog died in a power loss). A NaN/Inf loss NEVER
             #    recovers — save an emergency ckpt for forensics and stop, instead of burning
@@ -2631,7 +2652,8 @@ def main(cfg: DictConfig) -> None:
                     _npos = float(out["n_tokens"])
                     log["tul/layer_passes_per_token"] = float(out["layer_passes"]) / max(_npos, 1.0)
                     log["tul/tokens_per_batch"] = _npos
-                for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual", "mux_local"):
+                for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual", "mux_local",
+                           "sigreg"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # docs/tul-gate-spec.md §10 — every step, because a gate that stops moving

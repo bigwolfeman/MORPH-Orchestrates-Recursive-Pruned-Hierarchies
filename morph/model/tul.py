@@ -181,6 +181,19 @@ class TULConfig:
     # healthy past 3250 (lab/experiments/failures/2026-08-25-mux-head-arm-v1a.md).
     # False is kept ONLY so that failure stays reproducible as an ablation.
     mux_detach_head: bool = True
+    # Fraction of TOTAL steps before the MUX head switches on. Wolfe's point:
+    # MUX starts from a PRETRAINED model, so its latents predict spans using
+    # representations that already exist; we asked a random-init model to do it
+    # and it learned only the corpus marginal (7.03 vs unigram 7.32). 0.0 = on
+    # from step 0 (v1a behaviour). Same schedule shape as `tul.activate_at`.
+    mux_activate_at: float = 0.0
+    # ── SIGReg on the slot states (LeJEPA arXiv 2511.08544; morph/model/sigreg.py)
+    # Attacks a MEASURED pathology: slot states have effective rank 1.7-4.8 in
+    # 1024 dims with mean pairwise cosine +0.39..+0.71 at every checkpoint. 0.0
+    # builds nothing and adds no term.
+    sigreg_lambda: float = 0.0
+    sigreg_slices: int = 256             # M directions (paper default)
+    sigreg_activate_at: float = 0.0      # same schedule shape as mux_activate_at
 
     def __post_init__(self) -> None:
         if self.prefix_k < 1:
@@ -198,6 +211,14 @@ class TULConfig:
             raise ValueError(f"tul.mux_rho must be in (0,1), got {self.mux_rho}")
         if self.mux_tau <= 0.0:
             raise ValueError(f"tul.mux_tau must be > 0, got {self.mux_tau}")
+        if self.sigreg_lambda < 0.0:
+            raise ValueError(f"tul.sigreg_lambda must be >= 0, got {self.sigreg_lambda}")
+        if self.sigreg_slices < 1:
+            raise ValueError(f"tul.sigreg_slices must be >= 1, got {self.sigreg_slices}")
+        for _n in ("mux_activate_at", "sigreg_activate_at"):
+            _v = getattr(self, _n)
+            if not 0.0 <= _v < 1.0:
+                raise ValueError(f"tul.{_n} must be in [0,1), got {_v}")
         if self.coda_token_cut < 0:
             raise ValueError(
                 f"tul.coda_token_cut must be ≥ 0, got {self.coda_token_cut}")
