@@ -76,3 +76,40 @@ next question is the target, not another weight.
 - Sequential runs only (UPS). wandb on; the tul manifest logs `mux_detach_head`.
 - `train/loss`, val loss and the divergence guard all report the MODEL's CE with
   `mux_weighted` subtracted; the console step line prints the raw objective.
+
+---
+
+# Extension: seed replication of 2b (rule fixed 2026-08-27, BEFORE the runs)
+
+2b finished 3500 steps with core gradient share flat at 0.011-0.024 and never
+crossed 0.5 — no takeover — and `val/ce_tokens` 4.5418 against control
+`seedsweep-s1`'s 4.7902.
+
+**That comparison is not readable at n=1, and an interim report of mine treated
+it as a win.** The control's own seeds spread widely, and one of them never takes
+over either:
+
+| control seed | takeover (share > 0.5) | max share | ppl_tok @3250 |
+| --- | --- | --- | --- |
+| s0 | aborted twice | — | — |
+| s1 | step 2800 | 0.926 | 105.54 |
+| s2 | step 3000 | 0.829 | 91.77 |
+| s3 | **never** | 0.054 | 90.28 |
+| **v1a-2b s1** | **never** | **0.024** | **92.80** |
+
+So 2b's CE sits INSIDE the control's completed-seed range (90.28 - 105.54), not
+above it, and "no takeover" has a base rate of 1 in 4 under the control itself.
+A single non-taking-over run is therefore p ≈ 0.25 evidence — encouraging, not a
+result.
+
+**Decision rule, fixed before running:** replicate 2b at seeds 0, 2, 3 (same
+protocol, `t_beta3` left null and matched by construction at 3500 steps).
+
+- **2b prevents the takeover** if **≥ 3 of 4** 2b seeds never cross share 0.5,
+  against the control's 1 of 4. Seed 0 is the sharpest single test: the control
+  aborted there twice.
+- **2b is CE-neutral-or-better** if the 2b seed MEDIAN `ppl_tok` at 3250 is
+  ≤ the control's completed-seed median (91.77). A median inside the control
+  spread means the mux head costs nothing, which is itself worth knowing.
+- **Refuted** if ≤ 2 of 4 seeds avoid the takeover: then 2b's first run was the
+  control's own 1-in-4 lucky draw.
