@@ -164,6 +164,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         sigreg_lambda=float(tc.get("sigreg_lambda", 0.0)),
         sigreg_slices=int(tc.get("sigreg_slices", 256)),
         sigreg_activate_at=float(tc.get("sigreg_activate_at", 0.0)),
+        tg_restrict=bool(tc.get("tg_restrict", False)),
+        tg_soft_prev_span=bool(tc.get("tg_soft_prev_span", False)),
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
@@ -193,6 +195,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "sigreg_lambda": model_cfg.sigreg_lambda,
         "sigreg_slices": model_cfg.sigreg_slices,
         "sigreg_activate_at": model_cfg.sigreg_activate_at,
+        "tg_restrict": model_cfg.tg_restrict,
+        "tg_soft_prev_span": model_cfg.tg_soft_prev_span,
         "boundary_chars": str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
         "boundary_substrings": list(substrings),
         "min_span": rule.min_span,
@@ -234,5 +238,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"budget_cond={gate_cfg.budget_cond} truncate_p={gate_spec.truncate_p} "
               f"huber_beta={gate_cfg.huber_beta} drives_depth={gate_cfg.drives_depth} "
               f"seed={data_cfg.seed} (docs/tul-gate-spec.md)", flush=True)
+    if model_cfg.tg_restrict:
+        print(f"  TUL TG-RESTRICT ON: soft_prev_span={model_cfg.tg_soft_prev_span} "
+              f"— window branch restricted to same-span-or-slot, compressed branch "
+              f"restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels "
+              f"must be false", flush=True)
     return TulRuntime(model_cfg=model_cfg, data_cfg=data_cfg,
                       activate_at=activate_at, manifest=manifest)

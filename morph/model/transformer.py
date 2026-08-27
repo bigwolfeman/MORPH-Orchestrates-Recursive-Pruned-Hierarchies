@@ -35,7 +35,7 @@ from .tul import (TULConfig, TULGate, TULGateConfig, TULSlots, compact_index,
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
                   scatter_positions,
                   window_drop_mask)
-from .tul_layout import SlotLayout
+from .tul_layout import SlotLayout, tg_allow_mask, tg_reset_mask
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
 # zero production cost). Set MORPH_PROFILE_REGIONS=1 to name forward carrier sites so the
@@ -733,6 +733,19 @@ class MORPHTransformer(nn.Module):
 
         d_ff = cfg.d_ff if cfg.d_ff > 0 else ((d * 8 // 3 + 63) // 64 * 64)
 
+        # ── TG restriction (docs/tul-tg-spec.md) ────────────────────────────
+        # Construction-time only: gates which attention modules get built (§3) and
+        # what `_forward_tul` threads into every prelude/coda call. Validated HERE,
+        # before anything else is built, so a bad config never gets partway through
+        # constructing a model it is going to refuse.
+        self._tg_restrict = bool(cfg.tul.tg_restrict) if cfg.tul is not None else False
+        if self._tg_restrict and cfg.use_kernels:
+            raise ValueError(
+                "model.tul.tg_restrict=true requires model.use_kernels=false "
+                "(docs/tul-tg-spec.md §2/§6): the TG arms run eager only — the fused "
+                "window/CSA/HCA kernels do not know about the restriction, and a "
+                "silent unmasked kernel path is forbidden.")
+
         # Channel boundaries
         ch = cfg.channel_dims
         assert sum(ch) == d
@@ -766,6 +779,7 @@ class MORPHTransformer(nn.Module):
             max_seq_len=cfg.max_seq_len,
             conv_kernel=cfg.conv_kernel,
             init_alpha=cfg.init_alpha,
+            tg_restrict=self._tg_restrict,
         )
 
         # ── Residual = n-stream Hyper-Connection (Cayley/JPmHC), the sole residual ──
@@ -1246,8 +1260,15 @@ class MORPHTransformer(nn.Module):
     # identical ops in the identical order as the old inline code.
 
     def _front_tail(self, x: Tensor, input_ids: Tensor, bigram_emb,
-                    ve_bagged) -> tuple[Tensor, Tensor]:
-        """x0 skip-clone → HC stream expansion → prelude blocks. Returns (x, x0)."""
+                    ve_bagged, attn_kwargs: dict | None = None,
+                    ret_reset_mask: Tensor | None = None) -> tuple[Tensor, Tensor]:
+        """x0 skip-clone → HC stream expansion → prelude blocks. Returns (x, x0).
+
+        ``attn_kwargs`` / ``ret_reset_mask`` (docs/tul-tg-spec.md §§1-4): the SAME
+        tg_allow / slot-mask / GLA-reset-mask dict, built ONCE per forward, threaded
+        into every prelude block. None on every non-TG path → the calls below are
+        exactly ``layer(x)`` as before (bit-identical, spec T4).
+        """
         B, T = x.shape[0], x.shape[1]
         x0 = x.clone()      # single-stream skip signal (broadcast into HC streams)
 
@@ -1267,7 +1288,7 @@ class MORPHTransformer(nn.Module):
                 ve_bagged=ve_bagged,
             )
             x = self._apply_injection(x, term)
-            x = layer(x)
+            x = layer(x, attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
         return x, x0
 
     def _front_region(self, input_ids: Tensor) -> tuple[Tensor, Tensor, Tensor | None]:
@@ -1280,7 +1301,9 @@ class MORPHTransformer(nn.Module):
 
     def _back_region(self, x: Tensor, x0: Tensor, bigram_emb,
                      input_ids: Tensor | None = None,
-                     inject_keep: Tensor | None = None) -> Tensor:
+                     inject_keep: Tensor | None = None,
+                     attn_kwargs: dict | None = None,
+                     ret_reset_mask: Tensor | None = None) -> Tensor:
         """BACK region: coda blocks → HC stream mean → lm_mixer → final_norm.
         input_ids is only threaded into _build_injection_term for signature parity —
         value-embeds fire exclusively in the prelude (gi ≥ n_prelude+n_core is never in
@@ -1292,7 +1315,14 @@ class MORPHTransformer(nn.Module):
         (spec §3.4 token-state dropout). x0 carries proj(embed(t)) and the bigram term
         carries hash(t, t−1), so without this the dropped token leaks straight back in
         and Bowman's word dropout becomes a no-op. None on every non-TUL path → the
-        ops below are unchanged and bit-identical."""
+        ops below are unchanged and bit-identical.
+
+        ``attn_kwargs`` / ``ret_reset_mask``: see :meth:`_front_tail` — the same
+        per-forward tg_allow / slot-mask / GLA-reset-mask dict, threaded into every
+        coda block. Only meaningful for the FULL-``L`` coda call (``coda_sees_slots
+        and coda_token_cut == 0``); the gathered-subset coda callers never pass these
+        (docs/tul-tg-spec.md does not define the restriction on a gathered index
+        space — see ``_forward_tul``'s raise for that combination)."""
         for i, layer in enumerate(self.coda):
             gi = self.cfg.n_prelude + self.cfg.n_core + i
             term = self._build_injection_term(
@@ -1301,7 +1331,7 @@ class MORPHTransformer(nn.Module):
             if inject_keep is not None:
                 term = term * inject_keep.to(term.dtype)
             x = self._apply_injection(x, term)
-            x = layer(x)
+            x = layer(x, attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
 
         return self._readout(x)
 
@@ -1638,7 +1668,9 @@ class MORPHTransformer(nn.Module):
     # Reached only when a `slot_layout` is passed. Every helper below is a no-op for
     # the plain path because the plain path never calls it.
 
-    def _tul_front(self, input_ids: Tensor, layout: SlotLayout):
+    def _tul_front(self, input_ids: Tensor, layout: SlotLayout,
+                   attn_kwargs: dict | None = None,
+                   ret_reset_mask: Tensor | None = None):
         """Embed + slot inputs + prelude over ALL positions (spec §3.2).
 
         The slot's input embedding is ``E_slot + mean_j embed(t_j)`` over its span's
@@ -1646,6 +1678,9 @@ class MORPHTransformer(nn.Module):
         exactly the TST ``ve_bagged`` path with a data-dependent bag map (spec §3.2;
         Dynamic Token Pooling mean-pool; BLT Eq. 5). The prelude itself is unchanged:
         the slot's output is the in-context pooled span summary (BLT §3.2.2).
+
+        ``attn_kwargs`` / ``ret_reset_mask``: passed straight through to
+        :meth:`_front_tail` (docs/tul-tg-spec.md §§1-4).
         """
         tok_emb = self.tul.slot_input(self.embed(input_ids), layout, add_e_slot=True)
         x = self.embed_drop(tok_emb)
@@ -1659,7 +1694,8 @@ class MORPHTransformer(nn.Module):
                 layout, add_e_slot=False)
             for k in range(n_ve)
         ] if n_ve > 0 else None)
-        x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged)
+        x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged,
+                                 attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
         return x, x0, bigram_emb
 
     def _sample_slot_depths(self, layout: SlotLayout, device) -> Tensor:
@@ -2105,7 +2141,19 @@ class MORPHTransformer(nn.Module):
                 f"dropped from the coda, leaving nothing to predict. Lower the cut."
             )
 
-        x, x0, bigram_emb = self._tul_front(input_ids, layout)
+        # ── TG restriction (docs/tul-tg-spec.md §§1-4) — built ONCE per forward ────
+        # tg_attn_kwargs feeds the window branch's extra_mask (tg_allow) and the
+        # compressed branch's slot mask; tg_reset feeds the GLA segment reset. Both
+        # None on a tg_restrict=false model (bit-identical, spec T4).
+        tg_attn_kwargs = tg_reset = None
+        if self._tg_restrict:
+            tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span)
+            tg_attn_kwargs = {"tg_allow": tg_allow, "tg_slot_mask": layout.slot_mask}
+            tg_reset = tg_reset_mask(layout)
+
+        x, x0, bigram_emb = self._tul_front(input_ids, layout,
+                                            attn_kwargs=tg_attn_kwargs,
+                                            ret_reset_mask=tg_reset)
 
         if tc.gate is not None and tc.tokens_through_core:
             raise NotImplementedError(
@@ -2121,6 +2169,13 @@ class MORPHTransformer(nn.Module):
             raise NotImplementedError(
                 "tul.mux_beta has no defined interaction with arm A2 (tokens_through_core): "
                 "A2 has no per-slot looped state to read a plan off. Raises rather than "
+                "silently picking a behaviour (the tul.gate precedent).")
+        if self._tg_restrict and tc.tokens_through_core:
+            raise NotImplementedError(
+                "tul.tg_restrict has no defined interaction with arm A2 "
+                "(tokens_through_core): docs/tul-tg-spec.md's mental model is 'core loop "
+                "on slots only, the one channel to the past' — A2 runs the core over "
+                "every position instead. Not specified, so this raises rather than "
                 "silently picking a behaviour (the tul.gate precedent).")
         if tc.tokens_through_core:
             # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
@@ -2147,7 +2202,8 @@ class MORPHTransformer(nn.Module):
 
         out: dict = {"logits": None}
         if tc.coda_sees_slots and tc.coda_token_cut == 0:
-            xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep)
+            xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
+                                   attn_kwargs=tg_attn_kwargs, ret_reset_mask=tg_reset)
             groups = (self._tul_group_losses(xh, labels, layout, want_groups=not self.training)
                       if labels is not None else None)
             coda_positions = L
@@ -2157,6 +2213,15 @@ class MORPHTransformer(nn.Module):
             # union of "every slot" and "every token below the cut". coda_token_cut=0
             # never reaches this branch when coda_sees_slots is True (checked above), so
             # the pre-CW A4 path is untouched when CW is off.
+            if self._tg_restrict:
+                raise NotImplementedError(
+                    "tul.tg_restrict has no defined interaction with coda_sees_slots=False "
+                    "or coda_token_cut>0: the coda then runs on a GATHERED subset of "
+                    "positions, and neither tg_allow nor the GLA reset mask is re-derived "
+                    "for that index space (docs/tul-tg-spec.md does not specify it). Not "
+                    "run by the TG arms (tul_a1's coda_sees_slots=true, coda_token_cut=0); "
+                    "raises rather than silently building an unrestricted or mis-masked "
+                    "coda pass.")
             drop_mask = self._tul_coda_drop_mask(layout, tc)
             xh, groups, coda_positions = self._tul_coda_gather(
                 x_coda, x0, bigram_emb, keep, labels, layout, drop_mask)
@@ -2167,6 +2232,16 @@ class MORPHTransformer(nn.Module):
             # ALREADY exactly the slots-removed pass (A4 with coda_token_cut=0) can it be
             # reused — arm CW's normal pass also removes early tokens, a different
             # ablation, so it must be recomputed fresh from x_coda in that case too.
+            if self._tg_restrict:
+                raise NotImplementedError(
+                    "plan_nats (§7.2) has no defined interaction with tg_restrict: it "
+                    "removes every slot position from the coda's gathered sequence — "
+                    "exactly the channel tg_restrict forces context through — and "
+                    "docs/tul-tg-spec.md does not specify the resulting mask. The TG "
+                    "arms' pre-registration "
+                    "(lab/experiments/planned/2026-08-27-tg-restriction.md) reports plan "
+                    "worth as 'enormous by construction, decides nothing' and does not "
+                    "require this path.")
             if tc.coda_sees_slots or tc.coda_token_cut > 0:
                 _xh, g_pn, _ = self._tul_coda_without_slots(
                     x_coda, x0, bigram_emb, keep, labels, layout)
@@ -2348,6 +2423,11 @@ class MORPHTransformer(nn.Module):
             every arm goes through the same code path so there is no weighting asymmetry
             between them). ``n_targets`` is identical across all four by construction.
         """
+        if self._tg_restrict:
+            raise NotImplementedError(
+                "tul.tg_restrict has no defined interaction with arm CW "
+                "(tul_forward_cw_arms always runs the gathered-subset coda — see the "
+                "same raise in _forward_tul). docs/tul-tg-spec.md does not specify it.")
         B, L = layout.slot_mask.shape
         if not 0 <= cut < L:
             raise ValueError(
@@ -2410,8 +2490,20 @@ class MORPHTransformer(nn.Module):
         A separate entry point rather than a forward flag — the training path must not
         carry a branch that decides how much work to do (CONTRIBUTING: no runtime
         feature flags in hot paths), and this doubles the coda cost.
+
+        Under ``tg_restrict`` the plan-nats gather is undefined (its no-slots coda runs
+        on a gathered index space the tg masks are not re-derived for — see the raise
+        in ``_forward_tul``) and the pre-registration
+        (lab/experiments/planned/2026-08-27-tg-restriction.md) declares plan worth
+        non-discriminating there ("enormous by construction"). Eval therefore SKIPS the
+        ablation pass on a TG model: ``val/plan_nats`` is simply absent from the logs
+        (evaluate() already guards on the key), instead of every TG training run dying
+        at its first eval step. Plan/loop worth for the TG arms comes from
+        ``lab/divergence/slot_path_worth.py``, which zeroes ``prefix_project`` VALUES
+        on the full-L sequence — fully defined under the restriction.
         """
-        return self._forward_single(input_ids, labels, 0, None, slot_layout, _plan_nats=True)
+        return self._forward_single(input_ids, labels, 0, None, slot_layout,
+                                    _plan_nats=not self._tg_restrict)
 
     def _forward_single(self, input_ids: Tensor,
                         labels: Tensor | None = None,
@@ -2428,6 +2520,17 @@ class MORPHTransformer(nn.Module):
                     "(invariant 6)."
                 )
             return self._forward_tul(input_ids, labels, slot_layout, _plan_nats, halt=_halt)
+        if self._tg_restrict:
+            # docs/tul-tg-spec.md builds the restriction as a per-forward DATA argument
+            # derived from the layout — there is no defined "unrestricted" fallback for
+            # a tg_restrict model, and every real call site (train.py, tul_generate.py)
+            # always supplies a layout once TUL is active. A missing layout here would
+            # otherwise silently run the plain/TST path with none of the restriction
+            # applied — the exact silent-fallback theater the spec forbids.
+            raise RuntimeError(
+                "model built with tul.tg_restrict=true but forward() got no slot_layout "
+                "(docs/tul-tg-spec.md): there is no unrestricted fallback path for a TG "
+                "model. Pass slot_layout explicitly.")
         # ── Token-Superposition Training input bagging (TST, arXiv 2605.06546) ──
         # bag_size==0 → baseline path, BIT-IDENTICAL to pre-TST (and what eval/gen
         # always use). bag_size==s>0 → the superposition phase: input_ids arrives as

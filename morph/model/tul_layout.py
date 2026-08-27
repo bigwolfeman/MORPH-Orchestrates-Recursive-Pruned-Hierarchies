@@ -617,6 +617,70 @@ class SlotLayout:
         )
 
 
+# ── TG restriction masks (docs/tul-tg-spec.md §1, §4) ────────────────────────
+#
+# The ONE builder both the window branch (via `_window_fallback`'s `extra_mask`) and
+# the tests share for the causal "same-span-or-slot" allow relation. The compressed
+# branch's own mask (`causal AND slot_mask[j]`, spec §3) is a strict subset of this
+# one and is built directly from `layout.slot_mask` at the call site — it needs no
+# `bag_id` term, so it is not this function's job.
+
+
+def tg_allow_mask(layout: "SlotLayout", soft_prev_span: bool = False) -> Tensor:
+    """``[B, 1, L, L]`` bool: TG1's within-span-or-slot allow relation (spec §1).
+
+        allow(i, j) = (j <= i)                             # causal
+                      AND ( bag_id[i] == bag_id[j]          # same span (tokens+own slot)
+                            OR slot_mask[j] )                # or j is any slot position
+
+    ``soft_prev_span=True`` (TG3, spec §6) adds one more disjunct:
+    ``bag_id[i] == bag_id[j] + 1`` — spans are numbered in row order (the packer's
+    ``n_b_before`` increments by exactly one per boundary, ``pack_tul_row``), so the
+    previous span's id is always the current one minus one.
+
+    CONSERVATIVE READING (not spelled out in the spec, documented here): the extra
+    term is gated on the QUERY not itself being in the tail dump bin
+    (``bag_id[i] < max_slots``). Tail-pad / post-last-slot positions all share the
+    dump bin id ``max_slots`` (spec §1 note), so ``bag_id[i] - 1 == max_slots - 1``
+    would otherwise open every dump-bin tail position onto the LAST real span — a
+    grant "soft mode" does not intend, since the dump bin is not a span at all. No
+    such gating is needed on the KEY side: a dump-bin key never satisfies
+    ``bag_id[j] + 1 == bag_id[i]`` for any real span id, because dump-bin positions
+    all carry the same id ``max_slots``, one past every real span.
+    """
+    bag_id = layout.bag_id                                    # [B, L] int64
+    slot_mask = layout.slot_mask                               # [B, L] bool
+    device = bag_id.device
+    L = bag_id.shape[1]
+    row = torch.arange(L, device=device).unsqueeze(1)
+    col = torch.arange(L, device=device).unsqueeze(0)
+    causal = (col <= row)                                       # [L, L], j <= i
+
+    bag_i = bag_id.unsqueeze(2)                                 # [B, L, 1]
+    bag_j = bag_id.unsqueeze(1)                                 # [B, 1, L]
+    allow = (bag_i == bag_j) | slot_mask.unsqueeze(1)            # [B, L, L]
+    if soft_prev_span:
+        i_not_dump = bag_i < layout.max_slots                    # [B, L, 1]
+        allow = allow | ((bag_i == bag_j + 1) & i_not_dump)
+    allow = allow & causal.unsqueeze(0)
+    return allow.unsqueeze(1)                                   # [B, 1, L, L]
+
+
+def tg_reset_mask(layout: "SlotLayout") -> Tensor:
+    """``[B, L]`` bool: GLA segment-reset positions (spec §4).
+
+        reset[i] = (i == 0) OR (bag_id[i] != bag_id[i-1])
+
+    True at every segment start — a segment is a span's tokens plus its own slot
+    (the dump bin counts as one trailing segment too, since it is one constant id).
+    """
+    bag_id = layout.bag_id
+    reset = torch.zeros_like(bag_id, dtype=torch.bool)
+    reset[:, 0] = True
+    reset[:, 1:] = bag_id[:, 1:] != bag_id[:, :-1]
+    return reset
+
+
 @dataclass
 class TulDataConfig:
     """What a loader needs to emit TUL batches (spec §4, §8 `tul:` keys).

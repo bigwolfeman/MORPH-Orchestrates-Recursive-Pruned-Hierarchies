@@ -74,15 +74,25 @@ branches scan the FULL token sequence and would carry past-span state around the
 mask. Fix, zero new scan code:
 
     reset[i] = (i == 0) OR (bag_id[i] != bag_id[i-1])       # segment starts
-    log_alpha[reset positions] = LOG_ALPHA_RESET = -30.0    # before the scan
 
-`alpha = exp(-30) ≈ 9.4e-14` annihilates the carried state inside the EXISTING
-recurrent and chunked paths (fp32 state accumulation), with no `-inf` cumsum NaNs.
-`GatedLinearAttention.forward` gains an optional `reset_mask` argument; `MORPHBlock`
-threads it via a new `ret_reset_mask` forward arg. The CORE loop's GLA (slot
-sequence — the allowed memory channel) gets NO reset and keeps `retention_carry`.
-Equivalence gate: chunked-with-reset vs recurrent-oracle-with-true-zero-state,
-rel err ≤ 1e-5 in fp32 (test T2).
+AMENDED 2026-08-27 (same day, during build): the spec first prescribed flooring
+`log_alpha` to −30 at reset positions. The build measured that this collides with
+`_chunked`'s PRE-EXISTING −30 overflow clamp on the chunk-global cumsum: with
+several resets per chunk (the tg_restrict regime) the cumsum dives past −30, the
+clamp pins later positions to one value, and the relative decay is destroyed
+(up to ~780% rel err at span-density resets). The shipped mechanism is
+STRUCTURAL instead: `_recurrent` zeroes the state entering a reset position
+(exact); `_chunked` computes the cumulative log-gate RELATIVE TO EACH RESET
+SEGMENT, masks intra-chunk pairs that cross a reset, feeds the carried state
+only to pre-first-reset positions, and carries only the last segment out of the
+chunk — each segment is then exactly the single-segment case the −30 clamp was
+designed for. `GatedLinearAttention.forward` gains an optional `reset_mask`
+argument (kernel mode raises); `MORPHBlock` threads it via a new
+`ret_reset_mask` forward arg. The CORE loop's GLA (slot sequence — the allowed
+memory channel) gets NO reset and keeps `retention_carry`.
+Equivalence gate: recurrent-with-reset EXACTLY equals, and chunked-with-reset
+matches to rel err ≤ 1e-5 (fp32), the per-segment recurrent oracle run from true
+zero state — including multi-reset-per-chunk and misaligned boundaries (test T2).
 
 ## 5. Accepted local leaks (documented, bounded, adjacent-only)
 

@@ -209,6 +209,18 @@ class TULConfig:
     sigreg_slices: int = 256             # M directions (paper default)
     sigreg_activate_at: float = 0.0      # same schedule shape as mux_activate_at
 
+    # ── TG restriction (docs/tul-tg-spec.md) ──────────────────────────────────
+    # False builds nothing new and adds no mask (bit-identical to master, spec T4).
+    # True closes the token shortcut: within-span attention only in the window
+    # branch, direct slot attention in the compressed branch (spec §§1-3). The
+    # model constructor RAISES if this is set with `use_kernels=true` — the TG
+    # arms are eager-only (spec §2/§6).
+    tg_restrict: bool = False
+    # TG3 (spec §6): soften the restriction with one extra allow term — the
+    # PREVIOUS span, not just the current one and the slots. Meaningless without
+    # `tg_restrict` (there would be nothing to soften).
+    tg_soft_prev_span: bool = False
+
     def __post_init__(self) -> None:
         if self.prefix_k < 1:
             raise ValueError(f"tul.prefix_k must be ≥ 1, got {self.prefix_k}")
@@ -251,6 +263,11 @@ class TULConfig:
                     f"tul.{name}=true — arm '{name}' (spec §3.5) is specified but NOT "
                     f"implemented in v1. Leave it false."
                 )
+        if self.tg_soft_prev_span and not self.tg_restrict:
+            raise ValueError(
+                "tul.tg_soft_prev_span=true requires tul.tg_restrict=true "
+                "(docs/tul-tg-spec.md §6: TG3 SOFTENS the restriction — there is "
+                "nothing to soften when the restriction itself is off).")
 
 
 # ── pure tensor plumbing ─────────────────────────────────────────────────────

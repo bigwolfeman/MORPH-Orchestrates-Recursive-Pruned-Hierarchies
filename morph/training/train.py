@@ -1212,6 +1212,7 @@ def diag_forward_norms(model, step: int, path: str) -> None:
 def warmup_compile_all_shapes(
     model, batch_size: int, seq_len: int, device, passes_per_size: int,
     tag: str = "startup",
+    tul_rt=None,
 ) -> None:
     """Forced-depth fwd+bwd passes so EVERY compile variant builds NOW, not mid-loop.
 
@@ -1221,7 +1222,41 @@ def warmup_compile_all_shapes(
     Triton kernel size-specialization compile here. Shared by the thread-free
     startup window and the MORTAR/route phase-boundary recompile — see the two
     call sites for the (different) fork-safety reasoning at each.
+
+    ``tul_rt``: required when the model is built with ``tul.tg_restrict`` — a TG model
+    has NO plain-forward path (transformer.forward raises without a slot_layout, by
+    design: docs/tul-tg-spec.md), so the warmup synthesizes a TUL batch with the SAME
+    packer the loader uses and warms the REAL path instead. The forced-size loop is
+    skipped there on purpose: it exists for the hand-written Triton kernels' per-size
+    JIT specializations, and tg_restrict is use_kernels=false-only (no Triton on the
+    path); the core MLPs are compiled dynamic=True, so slot-count variance needs no
+    per-size passes either.
     """
+    if getattr(model, "_tg_restrict", False):
+        if tul_rt is None:
+            raise RuntimeError("warmup for a tg_restrict model needs tul_rt (its packer)")
+        from morph.model.tul_layout import pack_tul_batch
+        spec = tul_rt.data_cfg.spec_for(seq_len)
+        rule = tul_rt.data_cfg.rule
+        print(f"  Warmup compile [{tag}] (TG path, {passes_per_size} packed TUL passes)...",
+              flush=True)
+        t0 = time.perf_counter()
+        g = torch.Generator().manual_seed(0)
+        for _ in range(passes_per_size):
+            need = batch_size * (spec.l_total + 1)
+            buf = torch.randint(0, model.cfg.vocab_size, (need + 8,), generator=g).tolist()
+            ids, labs, layout = pack_tul_batch(buf, rule, spec, batch_size)
+            ids, labs, layout = ids.to(device), labs.to(device), layout.to(device)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                out = model(ids, labels=labs, slot_layout=layout)
+            out["loss"].backward()
+            model.zero_grad(set_to_none=True)
+            del ids, labs, layout, out
+        torch.cuda.synchronize()
+        print(f"  Warmup compile [{tag}] done in {time.perf_counter()-t0:.1f}s "
+              f"({passes_per_size} TG passes)", flush=True)
+        return
+
     mx = int(model.cfg.max_depth)
 
     def _forced(K):
@@ -1539,6 +1574,7 @@ def main(cfg: DictConfig) -> None:
         warmup_compile_all_shapes(
             model, int(cfg.training.batch_size), seq_len, device,
             int(getattr(tr, "warmup_passes_per_size", 4)), tag="startup thread-free",
+            tul_rt=tul_rt,
         )
 
         # Final safety net: forbid NEW compilation during the training loop. The warmup
@@ -2450,7 +2486,7 @@ def main(cfg: DictConfig) -> None:
                         warmup_compile_all_shapes(
                             model, int(cfg.training.batch_size), seq_len, device,
                             int(getattr(tr, "warmup_passes_per_size", 4)),
-                            tag=f"phase-boundary step {step}",
+                            tag=f"phase-boundary step {step}", tul_rt=tul_rt,
                         )
                 finally:
                     torch.compiler.set_stance("eager_on_recompile")
@@ -2828,10 +2864,14 @@ def main(cfg: DictConfig) -> None:
             wandb.log(val_log, step=step)
             _tul_msg = ""
             if phase.tul_on:
+                # plan_nats is ABSENT (not NaN) on a tg_restrict model — eval skips the
+                # ablation pass there (see tul_forward_with_plan_nats). Printing a NaN
+                # placeholder would trip every divergence grep on a healthy run.
+                _plan = _val_extra.get("val/plan_nats")
                 _tul_msg = (f"  ppl_tok={_val_extra.get('val/ppl_tokens', float('nan')):.2f}"
                             f"  first_tok={_val_extra.get('val/first_tok_ce', float('nan')):.4f}"
-                            f"  plan_nats={_val_extra.get('val/plan_nats', float('nan')):+.4f}"
-                            f"  cf={_val_extra.get('val/first_tok_counterfactual', float('nan')):+.4f}"
+                            + (f"  plan_nats={_plan:+.4f}" if _plan is not None else "")
+                            + f"  cf={_val_extra.get('val/first_tok_counterfactual', float('nan')):+.4f}"
                             f"  lp/tok={_val_extra.get('val/layer_passes_per_token', float('nan')):.2f}")
                 if "val/gate/loss_gate" in _val_extra:
                     # docs/tul-gate-spec.md §10: the numbers that separate a WORKING gate
