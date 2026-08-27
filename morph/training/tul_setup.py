@@ -158,6 +158,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         mux_beta=float(tc.get("mux_beta", 0.0)),
         mux_rho=float(tc.get("mux_rho", 0.9)),
         mux_tau=float(tc.get("mux_tau", 1.0)),
+        mux_detach_head=bool(tc.get("mux_detach_head", True)),
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
@@ -181,6 +182,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "mux_beta": model_cfg.mux_beta,
         "mux_rho": model_cfg.mux_rho,
         "mux_tau": model_cfg.mux_tau,
+        "mux_detach_head": model_cfg.mux_detach_head,
         "boundary_chars": str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
         "boundary_substrings": list(substrings),
         "min_span": rule.min_span,

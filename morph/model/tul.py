@@ -170,6 +170,17 @@ class TULConfig:
     mux_beta: float = 0.0                # weight of the local loss (paper: 1.0)
     mux_rho: float = 0.9                 # geometric decay of the span weighting (Prop 5i)
     mux_tau: float = 1.0                 # softmax temperature of the head (paper: 1.0)
+    # Detach the readout matrix inside the MUX head. TRUE is the corrected default and
+    # the setting the paper's own protocol implies: MUX LoRA-finetunes a PRETRAINED
+    # model and uses W as a FIXED readout for supervision. MORPH trains from scratch,
+    # and worse, `embed.lm_weight()` is WEIGHT-TIED to the INPUT embeddings — so an
+    # undetached head sends the auxiliary gradient into the embedding table that (a)
+    # every token's representation depends on and (b) the slot input itself is a
+    # bag-mean OF (`E_slot + mean(embed(span))`), a feedback loop. Measured with
+    # detach OFF: arm v1a diverged and aborted at step 2800 while its control ran
+    # healthy past 3250 (lab/experiments/failures/2026-08-25-mux-head-arm-v1a.md).
+    # False is kept ONLY so that failure stays reproducible as an ablation.
+    mux_detach_head: bool = True
 
     def __post_init__(self) -> None:
         if self.prefix_k < 1:

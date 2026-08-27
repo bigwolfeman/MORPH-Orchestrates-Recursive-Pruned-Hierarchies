@@ -1975,7 +1975,13 @@ class MORPHTransformer(nn.Module):
         """
         tc = self.cfg.tul
         z = self._readout(h_slots)                            # [B, S, C]
+        # `lm_weight()` is WEIGHT-TIED to the input embeddings, so an undetached
+        # head trains the embedding table on the auxiliary target — see
+        # TULConfig.mux_detach_head for the measured consequence. Python-level
+        # constant: the branch traces out, no runtime flag in the graph.
         w_head = self.embed.lm_weight()                       # [V, C]
+        if tc.mux_detach_head:
+            w_head = w_head.detach()
         logits = (z @ w_head.t()).float() / tc.mux_tau        # fp32: stable log_softmax
         logits = logits.index_fill(
             -1, torch.tensor([tc.slot_id], device=logits.device), float("-inf"))

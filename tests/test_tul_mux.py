@@ -174,3 +174,50 @@ def test_mux_gradient_reaches_the_slot_path():
     g0a, g0b, g1 = grad(0.0), grad(0.0), grad(1.0)
     assert torch.equal(g0a, g0b), "RNG pinning broken — the comparison below is void"
     assert not torch.allclose(g0a, g1), "mux gradient never reached E_slot"
+
+
+# ── mux_detach_head: the auxiliary must not train the tied embedding table ────
+
+def _mux_only_embed_grad(detach: bool, x, y, layout, seed=1234):
+    """Grad on the euclidean embedding table from the MUX loss ALONE.
+
+    Runs the real front/core/head methods (not a stand-in) so the test breaks if
+    the shipped path changes. The CE is deliberately NOT included: it touches
+    every vocabulary row through the fused head, which would mask the very
+    difference under test.
+    """
+    m = _model(TULConfig(slot_id=4, mux_beta=1.0, mux_detach_head=detach), seed=seed)
+    m.eval()
+    torch.manual_seed(7)
+    xx, x0, bg = m._tul_front(x, layout)
+    _xn, h_slots, _d, _g = m._tul_core(xx, x0, bg, layout)
+    m._tul_mux_loss(h_slots, x, layout).backward()
+    return m.embed.hybrid.euc_embed.weight.grad.clone()
+
+
+def test_detached_head_leaves_absent_vocab_rows_untouched():
+    """`lm_weight()` is WEIGHT-TIED to the input embeddings, so an undetached head
+    trains the embedding table on the auxiliary target — the v1a divergence.
+
+    The readout term puts gradient on EVERY vocabulary row (softmax is dense); the
+    legitimate path — mux → z → core → slot input `mean(embed(span))` — can only
+    reach rows whose token is actually in the batch. Rows absent from the batch are
+    therefore an exact discriminator, not a magnitude heuristic.
+    """
+    x, y, layout, _ = _batch(_spec())
+    present = set(int(v) for v in x.unique())
+    absent = [v for v in range(5, V) if v not in present and v != 4]
+    assert len(absent) >= 5, "fixture has no absent vocabulary rows to test with"
+
+    g_det = _mux_only_embed_grad(True, x, y, layout)
+    g_raw = _mux_only_embed_grad(False, x, y, layout)
+    # the control: the undetached head DOES reach rows the batch never used
+    assert g_raw[absent].abs().max() > 0, "undetached head did not reach absent rows — test void"
+    # the contract: the detached head does not
+    assert torch.equal(g_det[absent], torch.zeros_like(g_det[absent]))
+    # and it still trains the plan: present rows keep gradient through the slot input
+    assert g_det.abs().max() > 0, "detached head produced NO embedding gradient at all"
+
+
+def test_detach_default_is_on():
+    assert TULConfig(slot_id=4, mux_beta=1.0).mux_detach_head is True
