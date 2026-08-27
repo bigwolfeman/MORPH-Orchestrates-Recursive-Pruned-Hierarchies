@@ -201,8 +201,9 @@ It is very collapse prone. SigREG helps a lot but the fast weights still tend to
 Then the backbone model attention sinks so heavily on the prepended tokens that it goes totally divergent.  
 The worst part is that this behavior is sensitive to the data. If a data mix survives long enough the memory generally won't collapse.
 
-My current thinking is that it needs a better loss function to fight the divergence, or it is related to the decay (RAVEN may work) I ablated several  
-JEPA-like hidden state predictors that seemed to help, but were still unstable. It is difficult to have a second  
+My current thinking is that it needs a better loss function to fight the divergence, or it is related to the decay (RAVEN may work) 
+
+I ablated several JEPA-like hidden state predictors that seemed to help, but were still unstable. It is difficult to have a second  
 loss function, as the fast weights update during forward pass and applying a second GD after that is a total lobotomy.  
 The 2 loss values must modify the same gradient update. 
 
