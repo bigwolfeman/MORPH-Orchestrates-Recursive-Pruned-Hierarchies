@@ -33,6 +33,41 @@ takeover (s0 aborts, s1 takes over at 2800, s2 at 3000, s3 never).
 - **`tul_ntpdrop`** — not built; see
   [the design note](../../.agents/notes/proposed/feature/2026-08-27-ntp-dropout.md).
 
+### Method amended 2026-08-27, after the first launch, before any arm finished
+
+**Change:** every arm now runs with `training.grad_probe_every=1` and
+`training.grad_probe_path=<run>/probe.jsonl`. The abort guards stay at `0.0`.
+
+**Reason:** the first launch used the shipped default `grad_probe_every: 0`, so
+`preclip/core_share` was never logged. The only share series such a run has is
+`gradnorm/*`, sampled every 100 steps, and
+[`score_arms.py`](../../divergence/score_arms.py)`::fires` refuses a window with
+fewer than 20 samples — its 50-step rule gets none at that cadence. Every arm
+would have finished unscorable against S2, C2 and N1, which are the predictions
+this experiment exists to test. The probe is read-only (one `_foreach_norm`, one
+host sync, no RNG draw), so it costs ~0.5 % throughput and changes no result.
+The guards stay off because the predictions ask whether the share CROSSES 0.5,
+not whether a guard fires; aborting would replace the measurement with an
+intervention.
+
+**Not amended, and it limits the record:** `tul_v1a2b` seeds 0 and 1 already ran
+under the coarse series and are NOT re-run. Seed 0's maximum share there is
+0.026, twenty times under the threshold, so a finer probe cannot move its
+verdict. Seeds 2 and 3 carry the fine probe. The replication is therefore scored
+on the coarse series, which all four seeds have.
+
+**Confound recorded here rather than discovered later:** `_preclip_probe` reads
+`p.grad` after the backward of the FULL objective, so an auxiliary term that is
+not uniform over the parameter tree lands inside the region it touches. Both the
+MUX head and SIGReg push gradient into the core through the slot states, so
+`preclip/core_share` on `tul_warmup`, `tul_sigreg` and every v1a arm counts the
+auxiliary's own gradient as the core's. Measured precedent: a spectral-penalty
+arm reached `preclip/total` 1.6e5 against a control's 1.35 and a share of 0.998,
+all of it the penalty. This is a further reason **P** decides — the plan-off
+ablation is auxiliary-free — and it means an arm that "avoids the takeover" by
+share alone has proved less than it looks. `tul_center` and `tul_ntpdrop` add no
+auxiliary loss and are clean on this point.
+
 ### SIGReg weight: probe before weighting
 
 `tul_sigreg_probe` runs ~100 steps at `sigreg_lambda: 1e-8` — the term is
