@@ -1,0 +1,27 @@
+# TUL arm TAX30 — the token tax at the level base.yaml itself designed for.
+# Pre-registration: lab/experiments/planned/2026-08-27-token-tax-headroom.md
+#
+# ADDED after tax50 seed 1 took over by step 300 (core share 0.98, val loss
+# RISING 7.15 -> 7.78 where the control descends 6.46 -> 6.05). base.yaml line
+# 477 names the intended range as "arm sweep {0, 0.15, 0.3}"; the 0.5 and 0.85
+# rungs were chosen without reading it, and if both destabilise the panel has no
+# healthy rung and T2/T3 are unreadable through the T5 health gate. This is the
+# rung that can be healthy.
+#
+# ONE change from tul_a1: tul.token_state_dropout 0.15 -> 0.3. p is the
+# probability a TOKEN coda input is DROPPED (replaced with E_mask), NOT kept —
+# morph/model/tul.py::apply_token_dropout, `drop = (rand < p) & ~slot_mask`.
+#
+# THE DISCRIMINATOR IS LOOP WORTH, NOT THE LOSS. CE degrades with p in BOTH the
+# "plan has content the coda ignores" and "plan has nothing" cases, so the loss
+# cannot separate them. Plan worth alone is also wrong: it includes the span
+# bag-mean, which the slot carries without looping at all.
+defaults:
+  - tul_a1
+  - _self_
+
+tul:
+  token_state_dropout: 0.3
+
+wandb:
+  name: tul-tax30

@@ -46,6 +46,34 @@ loop worth   +0.0042  -0.0002  +0.0013     median 0.0013, max 0.0042
 ce_main       4.5459   4.4586   4.4680
 ```
 
+### Method amended 2026-08-27, 15 minutes into the first arm
+
+**Change:** a fourth rung, `tul_tax30` (p=0.3), seeds 1/2/3, queued after the two
+frozen arms. **Predictions are untouched** — T1's monotonicity now reads over
+p ∈ {0.15, 0.3, 0.5, 0.85}, and T2/T3/T5 still name p=0.85.
+
+**Reason, and it is my error:** `base.yaml` line 477 states the designed range in
+its own comment — *"arm sweep {0, 0.15, 0.3}"*. I chose 0.5 and 0.85 without
+reading it. Fifteen minutes in, `tax50` seed 1 had already taken over: core share
+**0.71 at step 200 and 0.98 by step 300**, 515 of its first 676 probed steps over
+0.5, with validation loss RISING 7.147 → 7.777 where the control at the same
+steps descends 6.465 → 6.054. If p=0.5 destabilises, p=0.85 certainly will, the
+T5 health gate fails on every rung above the control, and **T2 and T3 become
+unreadable** — the panel would answer nothing. p=0.3 is the rung that can be
+healthy.
+
+**Not cut:** the two frozen arms run to 3500 steps as pre-registered. Stopping a
+diverging arm early after seeing its first seed would be a data-driven protocol
+change, and one recorded precedent (`repl-det-a`) peaked at core share 0.9369 and
+recovered.
+
+**An observation, not yet a result:** raising the tax may itself trigger the
+takeover — masking token inputs forces the coda onto the slot path, which
+concentrates gradient on the core, which is the condition the takeover needs.
+If that replicates across seeds it is a constraint on the whole "tax the token
+path" family, separate from whatever T2/T3 say about content. It is one seed at
+step 676.
+
 ## Predictions (frozen 2026-08-27, before any run)
 
 - **T1 (dose–response):** median plan-off worth at step 3000 is monotone
