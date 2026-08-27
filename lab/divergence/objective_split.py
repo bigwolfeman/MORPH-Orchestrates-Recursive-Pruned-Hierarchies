@@ -50,6 +50,7 @@ from morph.training.data import create_dataloader           # noqa: E402
 from morph.training.train import load_checkpoint            # noqa: E402
 
 CE_GROUPS = ("main", "plast", "emit")
+_FP32 = [False]      # set from --fp32 before any pass; see `grads_of`
 
 
 def region_of(name: str) -> str:
@@ -112,7 +113,9 @@ def grads_of(model, x, y, layout, group: str, seed: int, *, unit: bool,
     # objectives are compared on two different forwards and the cosine is noise.
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    with ce_group(root, group, unit), torch.autocast("cuda", dtype=torch.bfloat16):
+    ctx = (contextlib.nullcontext() if _FP32[0]
+           else torch.autocast("cuda", dtype=torch.bfloat16))
+    with ce_group(root, group, unit), ctx:
         out = model(x, labels=y, slot_layout=layout)
     loss, n_t = out["loss"], float(out["n_targets"])
     (loss * (scale if scale is not None else 1.0)).backward()
@@ -125,10 +128,19 @@ def grads_of(model, x, y, layout, group: str, seed: int, *, unit: bool,
 
 
 def cos(a: torch.Tensor, b: torch.Tensor) -> float:
-    na, nb = a.norm(), b.norm()
+    """Cosine, accumulated in float64.
+
+    NOT cosmetic. The first live run reported self-cosines of 1.0156 — a cosine
+    cannot exceed 1, so that was pure accumulation error: these vectors hold tens
+    of millions of fp32 entries whose magnitudes reach 1e3, and a plain fp32 dot
+    over 6e7 terms loses more than the 1e-2 differences this probe is trying to
+    resolve. Every reduction here is float64 for the same reason.
+    """
+    a64, b64 = a.double(), b.double()
+    na, nb = a64.norm(), b64.norm()
     if na == 0 or nb == 0:
         return float("nan")
-    return float((a @ b) / (na * nb))
+    return float(torch.dot(a64, b64) / (na * nb))
 
 
 def main() -> int:
@@ -142,6 +154,11 @@ def main() -> int:
     ap.add_argument("--det-tol", type=float, default=0.99,
                     help="determinism: min cosine of one objective against itself")
     ap.add_argument("--region", default="core", help="region the verdict is read on")
+    ap.add_argument("--fp32", action="store_true",
+                    help="run the forward in fp32 instead of bf16 autocast. The DECOMPOSITION "
+                         "is exact in real arithmetic, so any additivity error is rounding; "
+                         "bf16 carries ~3 decimal digits and its rounding is measurement "
+                         "noise, not the training signal this probe is after.")
     ap.add_argument("--out", default="")
     ap.add_argument("--sabotage", default="none", choices=["none", "scale", "seed"],
                     help="deliberately break one gate. Used by tests/test_objective_split.py "
@@ -150,6 +167,7 @@ def main() -> int:
                          "reseeds between the two self-runs so determinism must fail.")
     a = ap.parse_args()
 
+    _FP32[0] = a.fp32
     cfg = build_cfg(a.config, ["training.batch_size=6", "model.use_kernels=false"])
     model, tul_rt = build_model(cfg, device="cuda")
     root = getattr(model, "_orig_mod", model)
@@ -216,8 +234,8 @@ def main() -> int:
         if mux_b > 0.0:
             parts["mux"] = {r: g_full[r] - g_cefull[r] for r in g_full}
 
-        ref = g_cefull[a.region]
-        err = float((summed[a.region] - ref).norm() / ref.norm().clamp(min=1e-30))
+        ref = g_cefull[a.region].double()
+        err = float((summed[a.region].double() - ref).norm() / ref.norm().clamp(min=1e-30))
         add_err.append(err)
 
         row = {}
