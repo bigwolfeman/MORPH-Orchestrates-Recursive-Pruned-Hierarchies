@@ -18,6 +18,29 @@ stands (the takeover is credit assignment, not stability).
 - **Do not `git commit` while a subagent is writing the tree.** Already burned
   once (`d3a86da` swept an agent's files).
 
+## The queue is RUNNING — check it before starting anything
+
+`ignore/overnight_queue.sh`, launched 2026-08-27 ~01:46 with `setsid nohup`.
+Progress log: `/home/wolfe/morph-scratch/queue/queue.log`. Per-run logs:
+`/home/wolfe/morph-scratch/queue/<name>-s<seed>/run.log`.
+
+It waits for a clear GPU between every job (`pgrep` on the trainer), so it is
+safe alongside the replication that was already running. Order:
+
+1. SIGReg magnitude probe (100 steps, λ=1e-8 so the term cannot move the model),
+   then λ chosen mechanically by the pre-registered rule — weighted term ≈ 5 %
+   of `train/loss`, one significant figure — and written to
+   `/home/wolfe/morph-scratch/queue/sigreg_lambda.txt`.
+2. `tul_warmup` seeds 0, 1.
+3. `tul_sigreg` seeds 0, 1 at the probed λ.
+4. `tul_ntpdrop`: a 200-step SMOKE first (this path has no unit test — it needs
+   a real loader), then seeds 0, 1 only if the smoke exits 0.
+
+Roughly 4 hours after the replication finishes. **To check:**
+`tail /home/wolfe/morph-scratch/queue/queue.log`. **To stop:**
+`kill <pid of bash ignore/overnight_queue.sh>` — check with
+`ps -eo pid,args | grep overnight_queue`, NOT `pgrep -f`, which self-matches.
+
 ## State at handoff
 
 | arm | status |
@@ -25,7 +48,8 @@ stands (the takeover is credit assignment, not stability).
 | v1a (mux, no detach) | FAILED, filed in `../experiments/failures/` |
 | v1a-2a (detach, β=1.0) | done: no abort, +0.65 nats tax |
 | v1a-2b (detach, β=0.1) | done seed 1: no takeover, CE inside control spread |
-| **2b replication seeds 0/2/3** | **RUNNING** — decision rule in the v1a-2 doc |
+| **2b replication seeds 0/2/3** | **RUNNING** — decision rule in the v1a-2 doc. Seed 0 passed step 1400 with no abort; the CONTROL aborts at seed 0, so this is already the sharp test going the right way. |
+| warmup / SIGReg / NTP-dropout | implemented, tested, pre-registered, QUEUED |
 
 ## The three arms Wolfe asked for, in build order
 
