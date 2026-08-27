@@ -117,6 +117,21 @@ result, never as a success.
   equality.
 - **NTP dropout cuts both ways** — see the design note's Risks section. The
   criterion is P, not perplexity.
+- **"Crosses 0.5" is the wrong reading at cadence 1, and this is recorded before
+  any arm finished.** The first fine-probed arm (`tul-warmup-s0`) hit a share of
+  **0.8855 at step 411** and sat at 0.001-0.02 on the other 515 probed steps —
+  one step in 516. The campaign's validated rule, fixed in the
+  [RCA](../results/2026-08-24-tul-takeover-rca.md) and shipped in
+  [`score_arms.py`](../../divergence/score_arms.py), is *share > 0.5 on more than
+  30 % of the last 50 probed steps*, and it was validated precisely against this
+  pattern: it does NOT fire on `repl-det-a`, which PEAKED at 0.9369 and recovered
+  to 0.0152, while it does fire at 2038 on `phase1-onset-s0` and 3369 on
+  `repl-det-b`. A one-step transient is therefore known NOT to be a takeover.
+  **S2, C2 and N1 are scored on the shipped rule. The literal first crossing is
+  reported alongside it, never instead of it**, and
+  [`score_0827_arms.py`](../../divergence/score_0827_arms.py) prints both. The
+  predictions are unchanged; this fixes only which of two readings of the same
+  words is used, and it is fixed before any arm's outcome is known.
 
 ---
 
