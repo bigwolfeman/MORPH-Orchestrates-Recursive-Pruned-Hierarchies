@@ -1,0 +1,532 @@
+{
+ "arm": "tul-v1a-s1 (MUX local head, mux_beta=1.0, mux_rho=0.9, emit_weight=0.0, plast_weight=1.0)",
+ "control": "seedsweep-s1 (tul_a1, same batch 6 / 3500 steps / seed 1)",
+ "wandb": {
+  "arm": "adew-me/morph-tul/1q4geafo",
+  "control": "adew-me/morph-tul/ne3t9917"
+ },
+ "preregistration": "lab/experiments/planned/2026-08-25-mux-head-arm-v1a.md",
+ "forensics_preregistered": false,
+ "outcome": "ARM FAILED \u2014 [ABORT] sustained divergence at step 2800 (DIV-GUARD ppl>1000, 2 strikes); control healthy past 3250.",
+ "probe_set": {
+  "config": "tul_v1a",
+  "batch_size": 6,
+  "batches": 8,
+  "loader": "create_dataloader(split='validation', skip_samples=60000, tul=val_data_cfg)",
+  "note": "identical loader args to region_shapley.py / slot_path_worth.py / readout_jacobian.py"
+ },
+ "P1_survival": {
+  "prediction": "reaches step 3500 with no takeover abort AND median core pre-clip gradient share < 0.5",
+  "verdict": "FAILED (conjunction; the abort clause failed, the median clause held)",
+  "abort_step": 2800,
+  "target_step": 3500,
+  "core_grad_share_median_arm": 0.13522888666063615,
+  "core_grad_share_median_control": 0.0009789864685929956,
+  "core_grad_share_series_arm": [
+   [
+    0,
+    1.5002945444199463e-09
+   ],
+   [
+    100,
+    0.00017433704523105937
+   ],
+   [
+    200,
+    0.006981803799896375
+   ],
+   [
+    300,
+    0.010175765542245906
+   ],
+   [
+    400,
+    0.030013965897997527
+   ],
+   [
+    500,
+    0.013897925680819144
+   ],
+   [
+    600,
+    0.04252611184304727
+   ],
+   [
+    700,
+    0.013992297937681348
+   ],
+   [
+    800,
+    0.023530002656211555
+   ],
+   [
+    900,
+    0.03134492995038983
+   ],
+   [
+    1000,
+    0.030858713209537033
+   ],
+   [
+    1100,
+    0.13522888666063615
+   ],
+   [
+    1200,
+    0.031260254097699065
+   ],
+   [
+    1300,
+    0.1219081865348474
+   ],
+   [
+    1400,
+    0.09904339572193717
+   ],
+   [
+    1500,
+    0.5326903214859753
+   ],
+   [
+    1600,
+    0.9640193951812401
+   ],
+   [
+    1700,
+    0.9624050271655175
+   ],
+   [
+    1800,
+    0.9747139799047685
+   ],
+   [
+    1900,
+    0.9676483165636827
+   ],
+   [
+    2000,
+    0.9918725958019664
+   ],
+   [
+    2100,
+    0.9748950864575002
+   ],
+   [
+    2200,
+    0.9907842916060875
+   ],
+   [
+    2300,
+    0.9830578613694373
+   ],
+   [
+    2400,
+    0.98459996134814
+   ],
+   [
+    2500,
+    0.9942338982537701
+   ],
+   [
+    2600,
+    0.9976381191560801
+   ],
+   [
+    2700,
+    0.9973320734617421
+   ]
+  ],
+  "core_grad_share_series_control": [
+   [
+    0,
+    1.2030324856413426e-11
+   ],
+   [
+    100,
+    4.109166355613059e-05
+   ],
+   [
+    200,
+    0.005290936878755697
+   ],
+   [
+    300,
+    0.0007285926832998877
+   ],
+   [
+    400,
+    0.0009940769971376936
+   ],
+   [
+    500,
+    0.0005535908252941389
+   ],
+   [
+    600,
+    0.00020378999863840234
+   ],
+   [
+    700,
+    0.00028628823950792146
+   ],
+   [
+    800,
+    0.00027360785348675044
+   ],
+   [
+    900,
+    0.00047433565622386967
+   ],
+   [
+    1000,
+    0.0031952166841611868
+   ],
+   [
+    1100,
+    0.0017527965538057186
+   ],
+   [
+    1200,
+    0.0006739503154877916
+   ],
+   [
+    1300,
+    0.0004545975278594935
+   ],
+   [
+    1400,
+    0.0004103957486993908
+   ],
+   [
+    1500,
+    0.0005305427531569065
+   ],
+   [
+    1600,
+    0.0009493332864926745
+   ],
+   [
+    1700,
+    0.00032955880393482
+   ],
+   [
+    1800,
+    0.002380295275330674
+   ],
+   [
+    1900,
+    0.0005314592335995456
+   ],
+   [
+    2000,
+    0.0008656309771519009
+   ],
+   [
+    2100,
+    0.03738438035769624
+   ],
+   [
+    2200,
+    0.0009789864685929956
+   ],
+   [
+    2300,
+    0.0009347097236026672
+   ],
+   [
+    2400,
+    0.01802021416908934
+   ],
+   [
+    2500,
+    0.0014532090509698635
+   ],
+   [
+    2600,
+    0.00796337789673786
+   ],
+   [
+    2700,
+    0.14339894666825012
+   ],
+   [
+    2800,
+    0.9685013619397311
+   ],
+   [
+    2900,
+    0.993328459657586
+   ],
+   [
+    3000,
+    0.9835965959708936
+   ],
+   [
+    3100,
+    0.9955580378071076
+   ],
+   [
+    3200,
+    0.9930539215443268
+   ],
+   [
+    3300,
+    0.9886210287787662
+   ],
+   [
+    3400,
+    0.9947164831075562
+   ]
+  ],
+  "takeover_onset_arm_step": 1500,
+  "takeover_onset_control_step": 2700,
+  "note": "share is clip-invariant (uniform rescale), so post-clip share == pre-clip share; sampled every 100 steps"
+ },
+ "P2_plan_worth": {
+  "prediction": "plan-off ablation cost >= 0.04 nats at step 3000",
+  "verdict": "FAILED",
+  "note": "step 3000 does not exist \u2014 the run aborted at 2800. Measured at 500 / 2000 / 2500.",
+  "baseline_control_family_ROLL_step_1750_nats": 0.0191,
+  "threshold_nats": 0.04,
+  "plan_off_cost_nats": {
+   "500": {
+    "loss": 0.008843779563903809,
+    "ce_main": 0.008797705173492432,
+    "ce_plast": 0.009886562824249268,
+    "ce_emit": 1.3696873784065247
+   },
+   "2000": {
+    "loss": 0.018499135971069336,
+    "ce_main": 0.018909990787506104,
+    "ce_plast": 0.010983526706695557,
+    "ce_emit": 0.5011568665504456
+   },
+   "2500": {
+    "loss": 0.003661632537841797,
+    "ce_main": 0.003636181354522705,
+    "ce_plast": 0.003631114959716797,
+    "ce_emit": 1.281692624092102
+   }
+  },
+  "conditions": {
+   "500": {
+    "full": {
+     "loss": 13.08386504650116,
+     "ce_main": 5.942322731018066,
+     "ce_plast": 4.832623481750488,
+     "ce_emit": 6.31475043296814
+    },
+    "no-loop (slot keeps bag-mean)": {
+     "loss": 13.503310918807983,
+     "ce_main": 5.944103240966797,
+     "ce_plast": 4.8401007652282715,
+     "ce_emit": 6.950147390365601
+    },
+    "no-plan (slot values zeroed)": {
+     "loss": 13.092708826065063,
+     "ce_main": 5.951120436191559,
+     "ce_plast": 4.8425100445747375,
+     "ce_emit": 7.684437811374664
+    },
+    "neither": {
+     "loss": 13.510125517845154,
+     "ce_main": 5.951120436191559,
+     "ce_plast": 4.8425100445747375,
+     "ce_emit": 7.684437811374664
+    }
+   },
+   "2000": {
+    "full": {
+     "loss": 12.634716629981995,
+     "ce_main": 5.1939199566841125,
+     "ce_plast": 4.530453205108643,
+     "ce_emit": 7.8574559688568115
+    },
+    "no-loop (slot keeps bag-mean)": {
+     "loss": 15.255874276161194,
+     "ce_main": 5.204854249954224,
+     "ce_plast": 4.539686739444733,
+     "ce_emit": 8.448759377002716
+    },
+    "no-plan (slot values zeroed)": {
+     "loss": 12.653215765953064,
+     "ce_main": 5.212829947471619,
+     "ce_plast": 4.541436731815338,
+     "ce_emit": 8.358612835407257
+    },
+    "neither": {
+     "loss": 15.263533234596252,
+     "ce_main": 5.212829947471619,
+     "ce_plast": 4.541436731815338,
+     "ce_emit": 8.358612835407257
+    }
+   },
+   "2500": {
+    "full": {
+     "loss": 13.762284636497498,
+     "ce_main": 6.228476285934448,
+     "ce_plast": 5.260590553283691,
+     "ce_emit": 7.3837544322013855
+    },
+    "no-loop (slot keeps bag-mean)": {
+     "loss": 13.808056831359863,
+     "ce_main": 6.245387494564056,
+     "ce_plast": 5.261801898479462,
+     "ce_emit": 7.397192478179932
+    },
+    "no-plan (slot values zeroed)": {
+     "loss": 13.76594626903534,
+     "ce_main": 6.232112467288971,
+     "ce_plast": 5.264221668243408,
+     "ce_emit": 8.665447056293488
+    },
+    "neither": {
+     "loss": 13.795536756515503,
+     "ce_main": 6.232112467288971,
+     "ce_plast": 5.264221668243408,
+     "ce_emit": 8.665447056293488
+    }
+   }
+  }
+ },
+ "P3_readout": {
+  "prediction": "raw slot/token Jacobian ratio at step 3000 HIGHER than at the arm's own step 1500 (falling trend reverses)",
+  "verdict": "FAILED",
+  "note": "step 3000 does not exist; measured 500 / 2000 / 2500. The trend keeps falling.",
+  "control_family_reference": {
+   "1650": 0.063,
+   "1750": 0.055,
+   "1850": 0.042
+  },
+  "ratio_median_g_slot_over_token": {
+   "step_500.pt": 0.032538211005499015,
+   "step_2000.pt": 0.008818581637826738,
+   "step_2500.pt": 0.0044810684156066745
+  },
+  "ratio_median_gh_slot_over_token": {
+   "step_500.pt": 0.20582319456605508,
+   "step_2000.pt": 0.17298697180820602,
+   "step_2500.pt": 0.17864592333956503
+  },
+  "ce_main_mean": {
+   "step_500.pt": 5.942322731018066,
+   "step_2000.pt": 5.1939199566841125,
+   "step_2500.pt": 6.228476285934448
+  },
+  "sanity": {
+   "step_500.pt": {
+    "capture_fired_once_per_forward": true,
+    "grad_not_none": true,
+    "ce_main_finite_and_plausible": true,
+    "slot_input_norms_nonzero": true,
+    "token_grad_norms_nonzero": true
+   },
+   "step_2000.pt": {
+    "capture_fired_once_per_forward": true,
+    "grad_not_none": true,
+    "ce_main_finite_and_plausible": true,
+    "slot_input_norms_nonzero": true,
+    "token_grad_norms_nonzero": true
+   },
+   "step_2500.pt": {
+    "capture_fired_once_per_forward": true,
+    "grad_not_none": true,
+    "ce_main_finite_and_plausible": true,
+    "slot_input_norms_nonzero": true,
+    "token_grad_norms_nonzero": true
+   }
+  }
+ },
+ "P4_no_tax": {
+  "prediction": "val/ce_tokens at step 3000 within +0.05 nats of seedsweep-s1",
+  "verdict": "FAILED",
+  "note": "step 3000 does not exist; nearest common eval is step 2750.",
+  "step": 2750,
+  "arm_ppl_tok": 972.59,
+  "control_ppl_tok": 116.93,
+  "arm_ce_tokens_nats": 6.879962616197725,
+  "control_ce_tokens_nats": 4.7615754651522275,
+  "delta_nats": 2.1183871510454972,
+  "tolerance_nats": 0.05
+ },
+ "P5_head_bites": {
+  "prediction": "mean MUX local CE beats 0.8x the corpus unigram prior's CE against the same targets",
+  "verdict": "FAILED",
+  "unigram_baseline_ce_nats": 7.322685463244192,
+  "threshold_0.8x_nats": 5.858148370595354,
+  "uniform_prior_ln_V_nats": 10.803018622594942,
+  "unigram_train_tokens": 2457600,
+  "unigram_vocab_observed": 23438,
+  "unigram_ce_per_batch": [
+   7.159687856716822,
+   7.2023994896470285,
+   7.244171204669053,
+   7.275701345979554,
+   7.257981994968606,
+   7.311317298738917,
+   7.9256640602293436,
+   7.204560455004213
+  ],
+  "model_mux_local_on_probe_set": {
+   "step_500.pt": 7.192652702331543,
+   "step_1000.pt": 7.026744723320007,
+   "step_1500.pt": 7.029695093631744,
+   "step_2000.pt": 7.471208393573761,
+   "step_2500.pt": 7.578524112701416,
+   "DIVERGED_step_2800.pt": 7.899460792541504
+  },
+  "ratio_to_unigram_on_probe_set": {
+   "step_500.pt": 0.9822424762656622,
+   "step_1000.pt": 0.9595857638007746,
+   "step_1500.pt": 0.9599886720407292,
+   "step_2000.pt": 1.020282576805336,
+   "step_2500.pt": 1.0349378176546558,
+   "DIVERGED_step_2800.pt": 1.0787655474473679
+  },
+  "wandb_val_mux_local": {
+   "250": 7.2456364870071415,
+   "500": 7.297699785232544,
+   "750": 7.082710266113281,
+   "1000": 6.9660724401474,
+   "1250": 6.963999915122986,
+   "1500": 7.069558906555176,
+   "1750": 7.369096279144287,
+   "2000": 7.612685418128967,
+   "2250": 7.379733681678772,
+   "2500": 7.572179222106934,
+   "2750": 7.957002949714661
+  },
+  "wandb_train_mux_local_step0": 11.1979,
+  "wandb_train_mux_local_step1320": 6.3592,
+  "wandb_train_mux_local_run_min": {
+   "step": 2660,
+   "value": 6.2546
+  },
+  "wandb_train_mux_local_step2640": 7.629,
+  "best_ever_vs_threshold": "best single-step train value 6.2546 > threshold 5.8581; best val value 6.9640 (step 1250) > 5.8581 \u2014 the head never bit, at any point, on any series."
+ },
+ "scripts": {
+  "P5": "lab/divergence/mux_unigram_baseline.py (new, written for this forensics)",
+  "P2": "lab/divergence/slot_path_worth.py (existing)",
+  "P3": "lab/divergence/readout_jacobian.py (existing)"
+ },
+ "concurrency": {
+  "commit_landed_mid_session": "d3a86da (2026-08-27 00:07:57) \u2014 'Fix the MUX head's gradient path: detach the weight-tied readout'; modified morph/model/transformer.py and morph/model/tul.py at 00:06:01 and also committed this directory's p2/p3/p5 json and lab/divergence/mux_unigram_baseline.py. These forensics did NOT run git commit.",
+  "output_mtimes": {
+   "p5_unigram.json": "00:04:48 (pre-change, certain)",
+   "p2_slot_path_worth_step500.json": "00:05:14 (pre-change, certain)",
+   "p2_slot_path_worth_step2000.json": "00:05:26 (pre-change, certain)",
+   "p2_slot_path_worth_step2500.json": "00:05:39 (pre-change, certain)",
+   "p3_readout_jacobian.json": "00:06:23 (AMBIGUOUS \u2014 process start between 00:05:40 and 00:06:23)"
+  },
+  "code_change_mtime": "2026-08-27 00:06:01",
+  "invariance_argument": [
+   "git show d3a86da --numstat: 0 deletions in every morph/ file; the only transformer.py hunk is at line 1975, inside _tul_mux_loss (1955-1993).",
+   "readout_jacobian.py backwards ce_main only; ce_main has no dependence on mux_loss, so a detach() inside _tul_mux_loss cannot reach it.",
+   "slot_path_worth.py runs under torch.no_grad(); detach() never changes a forward value.",
+   "Cross-check: readout_jacobian ce_main means (5.9423/5.1939/6.2285) equal slot_path_worth 'full' ce_main at the same checkpoints to 4 decimals; slot_path_worth ran wholly pre-change."
+  ],
+  "definitive_rerun": "ATTEMPTED AND FAILED: re-running readout_jacobian.py under the current code exited 1 with torch.OutOfMemoryError (409 MiB free) because training run tul-v1a2a-s1 (PID 3675202, started 00:09:24, 22 GB VRAM) now holds the GPU. Not retried.",
+  "new_training_run_started_after_all_measurements": "tul-v1a2a-s1, PID 3675202, 2026-08-27 00:09:24 \u2014 started by a parallel session, not by these forensics."
+ }
+}
