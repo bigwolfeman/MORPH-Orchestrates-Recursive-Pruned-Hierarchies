@@ -20,26 +20,32 @@ stands (the takeover is credit assignment, not stability).
 
 ## The queue is RUNNING — check it before starting anything
 
-`ignore/overnight_queue.sh`, launched 2026-08-27 ~01:46 with `setsid nohup`.
-Progress log: `/home/wolfe/morph-scratch/queue/queue.log`. Per-run logs:
-`/home/wolfe/morph-scratch/queue/<name>-s<seed>/run.log`.
+`ignore/overnight_queue_v2.sh`, launched 2026-08-27 02:11 with `setsid nohup`.
+Progress log: `/home/wolfe/morph-scratch/queue2/queue.log`. Per-run logs and
+probe mirrors: `/home/wolfe/morph-scratch/queue2/<name>-s<seed>/{run.log,probe.jsonl}`.
 
-It waits for a clear GPU between every job (`pgrep` on the trainer), so it is
-safe alongside the replication that was already running. Order:
+**It replaced three earlier scripts, and the reason matters.**
+`overnight_queue{,2}.sh` launched with the shipped default
+`training.grad_probe_every: 0`, so **no `preclip/core_share` was logged at all**.
+The only share series such a run has is `gradnorm/*`, sampled every 100 steps,
+and `score_arms.py::fires` refuses a window with under 20 samples — its 50-step
+rule gets none at that cadence. Every arm would have finished unscorable against
+S2, C2 and N1, the predictions the experiment exists to test. v2 runs
+`grad_probe_every=1` (~0.5 % throughput, read-only, no RNG draw) and mirrors the
+probe to JSONL. The abort guards stay at `0.0`: this is measurement, not
+intervention. Method amendment recorded in the pre-registration.
+`overnight_queue3.sh` was the repair queue for a run a concurrent launch
+OOM-killed; v2 absorbs it and serialises every launch under `flock`, which
+closes the check-then-act race that caused the kill.
 
-1. SIGReg magnitude probe (100 steps, λ=1e-8 so the term cannot move the model),
-   then λ chosen mechanically by the pre-registered rule — weighted term ≈ 5 %
-   of `train/loss`, one significant figure — and written to
-   `/home/wolfe/morph-scratch/queue/sigreg_lambda.txt`.
-2. `tul_warmup` seeds 0, 1.
-3. `tul_sigreg` seeds 0, 1 at the probed λ.
-4. `tul_ntpdrop`: a 200-step SMOKE first (this path has no unit test — it needs
-   a real loader), then seeds 0, 1 only if the smoke exits 0.
+Order (~33 min each, ~6 h total): warmup s0/s1 → **center s0/s1** → ntpdrop
+smoke then s0/s1 → sigreg s0/s1 at λ=0.001 → v1a2b s2/s3. CENTER runs second
+because C2 is the sharpest question in the plan.
 
-Roughly 4 hours after the replication finishes. **To check:**
-`tail /home/wolfe/morph-scratch/queue/queue.log`. **To stop:**
-`kill <pid of bash ignore/overnight_queue.sh>` — check with
-`ps -eo pid,args | grep overnight_queue`, NOT `pgrep -f`, which self-matches.
+**To check:** `tail /home/wolfe/morph-scratch/queue2/queue.log`, then
+`python lab/divergence/score_0827_arms.py <label>=<run.log> ...`.
+**To stop:** `kill <pid>` found with `ps -eo pid,args | grep overnight_queue`,
+NOT `pgrep -f`, which self-matches.
 
 ## State at handoff
 
@@ -47,9 +53,24 @@ Roughly 4 hours after the replication finishes. **To check:**
 | --- | --- |
 | v1a (mux, no detach) | FAILED, filed in `../experiments/failures/` |
 | v1a-2a (detach, β=1.0) | done: no abort, +0.65 nats tax |
-| v1a-2b (detach, β=0.1) | done seed 1: no takeover, CE inside control spread |
-| **2b replication seeds 0/2/3** | **RUNNING** — decision rule in the v1a-2 doc. Seed 0 passed step 1400 with no abort; the CONTROL aborts at seed 0, so this is already the sharp test going the right way. |
-| warmup / SIGReg / NTP-dropout | implemented, tested, pre-registered, QUEUED |
+| v1a-2b (detach, β=0.1) | done seeds 0 and 1: no takeover on the coarse series, ppl_tok@3250 94.87 / 92.80, both inside the control spread 90.28-105.54 |
+| **2b replication seeds 2/3** | queued last in v2. Rule in the v1a-2 doc: real if ≥3 of 4 seeds never take over. Seeds 0/1 keep only the coarse series and are NOT re-run — seed 0's max there is 0.026, twenty times under threshold. |
+| warmup / center / SIGReg / NTP-dropout | implemented, tested, pre-registered, RUNNING in v2 |
+
+## What the logs already say, before any new arm finishes
+
+Measured on CPU from logs that already existed, so it costs nothing to know:
+`val/plan_nats` at step 3000 is **0.0049 / 0.0037 / 0.0027** on control seeds
+1/2/3 against **0.0096 / 0.0092** on v1a-2b seeds 0/1 — the MUX arm's plan is
+worth about twice the control's best seed. Two seeds against three is not a
+result, and `val/plan_nats` gathers the slots OUT while the criterion below
+zeroes `prefix_project`'s values, so **this is not P**. It is the first sign the
+head did something to the plan and not only to the loss.
+
+First fine-probed arm, `tul-warmup-s0`: core share **0.8855 at step 411**, and
+0.001-0.02 on the other 515 probed steps. The coarse series never sees it
+(max 0.0110) and the shipped 30 %-of-50 rule correctly does not fire. Read the
+shipped rule, not the literal first crossing — see the plan's confounds.
 
 ## The three arms Wolfe asked for, in build order
 
