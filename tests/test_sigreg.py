@@ -169,3 +169,75 @@ def test_zero_gate_removes_the_auxiliary_gradient():
     assert torch.allclose(g_off, g_base, atol=1e-6), "gate=0 still changed the gradient"
     assert not torch.allclose(g_on, g_base, atol=1e-6), "gate=1 changed nothing — test void"
     assert abs(l_off - float(o["loss"])) < 1e-5
+
+
+# ── centered bag-mean (the root cause of slot collapse) ──────────────────────
+
+def _slot_cosine(m, x, layout) -> float:
+    """Mean pairwise cosine between the VALID slot input vectors of one row."""
+    emb = m.embed.hybrid.euc_embed(x) if False else None      # unused; see below
+    with torch.no_grad():
+        xx, _x0, _bg = m._tul_front(x, layout)
+    v = layout.slot_valid[0]
+    idx = layout.slot_index[0][v]
+    s = xx[0, idx].reshape(len(idx), -1)
+    s = s / s.norm(dim=-1, keepdim=True).clamp(min=1e-9)
+    g = s @ s.t()
+    off = ~torch.eye(len(idx), dtype=torch.bool)
+    return float(g[off].mean())
+
+
+def test_centering_lowers_the_slot_pairwise_cosine():
+    """The collapse is arithmetic: a bag-mean shrinks per-token deviations by
+    1/sqrt(span) but preserves the embedding table's common mean exactly, so
+    every slot inherits it. Measured on a real checkpoint 2026-08-27:
+    ||mean embedding|| 0.423 vs mean deviation 1.049, predicting cosines of
+    0.394 (span 4) to 0.839 (span 32) against a measured +0.39..+0.71.
+
+    Centering must therefore REDUCE the pairwise cosine. A model whose embedding
+    table happens to be near zero-mean would make this vacuous, so the control
+    asserts the uncentered cosine is materially positive first."""
+    x, y, layout, _ = _batch()
+    # give the embedding table a deliberate common mean, as a trained one has
+    m_off = _model(TULConfig(slot_id=4))
+    with torch.no_grad():
+        m_off.embed.hybrid.euc_embed.weight += 0.5
+    torch.manual_seed(1234)
+    m_on = _model(TULConfig(slot_id=4, center_bag_mean=True))
+    with torch.no_grad():
+        m_on.embed.hybrid.euc_embed.weight += 0.5
+
+    c_off = _slot_cosine(m_off, x, layout)
+    c_on = _slot_cosine(m_on, x, layout)
+    assert c_off > 0.3, f"control is vacuous: uncentered cosine only {c_off:.3f}"
+    assert c_on < c_off, f"centering did not decollapse: {c_on:.3f} vs {c_off:.3f}"
+
+
+def test_center_bag_mean_off_is_bit_identical():
+    x, y, layout, _ = _batch()
+    o0 = _loss(_model(TULConfig(slot_id=4)), x, y, layout)
+    o1 = _loss(_model(TULConfig(slot_id=4, center_bag_mean=False)), x, y, layout)
+    assert torch.equal(o0["loss"], o1["loss"])
+
+
+def test_centering_does_not_touch_the_dump_bin():
+    """bag_mean's documented invariant: the dump row is exactly 0 so tail pads
+    receive E_slot ALONE. Centering must not hand them -mu instead.
+
+    Driven with a synthetic full-width signal with a deliberate nonzero mean —
+    that mean is exactly what centering subtracts, so if the dump bin were
+    included the assertion below would fail by that vector."""
+    x, y, layout, _ = _batch()
+    m = _model(TULConfig(slot_id=4, center_bag_mean=True))
+    B, L = x.shape
+    C = m.cfg.d_model
+    torch.manual_seed(0)
+    sig = torch.randn(B, L, C) + 3.0            # large common mean
+    with torch.no_grad():
+        out = m.tul.slot_input(sig, layout, add_e_slot=True)
+    dump = (layout.bag_id >= layout.slot_index.shape[1]) & layout.slot_mask
+    if not bool(dump.any()):
+        return                      # no tail pads in this fixture; nothing to check
+    e = m.tul.E_slot.detach()
+    e = e if e.dim() == 1 else e[0]
+    assert torch.allclose(out[dump], e.expand_as(out[dump]), atol=1e-5)

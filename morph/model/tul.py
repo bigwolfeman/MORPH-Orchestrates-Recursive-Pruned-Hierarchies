@@ -181,6 +181,20 @@ class TULConfig:
     # healthy past 3250 (lab/experiments/failures/2026-08-25-mux-head-arm-v1a.md).
     # False is kept ONLY so that failure stays reproducible as an ablation.
     mux_detach_head: bool = True
+    # Subtract the batch's mean TOKEN signal from every span bag-mean.
+    # Measured 2026-08-27 on tul-v1a2b step_3500: the embedding table has a
+    # common mean of norm 0.423 against a mean per-token deviation of 1.049.
+    # A bag-mean over a span shrinks the DEVIATIONS by 1/sqrt(span) but preserves
+    # that common mean EXACTLY, so every slot inherits the same vector. Predicted
+    # pairwise cosine from this geometry alone: 0.394 (span 4) to 0.839 (span 32),
+    # against a MEASURED slot cosine of +0.39..+0.71 — the collapse is arithmetic,
+    # not a training pathology.
+    # The subtraction is DETACHED: it must not put a dense gradient on the
+    # embedding table (the mistake that made arm v1a diverge).
+    # Honest caveat: `E_slot` is added to the same bag-mean, so a CONSTANT shift is
+    # already within the model's reach. The value here is that the batch mean
+    # TRACKS the drifting embedding mean, which one learned vector cannot.
+    center_bag_mean: bool = False
     # Fraction of TOTAL steps before the MUX head switches on. Wolfe's point:
     # MUX starts from a PRETRAINED model, so its latents predict spans using
     # representations that already exist; we asked a random-init model to do it
@@ -466,6 +480,18 @@ class TULSlots(nn.Module):
         bags = bag_mean(signal, layout.bag_id, token_sel, layout.max_slots)
         at_pos = torch.gather(
             bags, 1, layout.bag_id.unsqueeze(-1).expand(*layout.bag_id.shape, signal.shape[-1]))
+        if self.tul.center_bag_mean:
+            # Remove the common mean the bag-mean would otherwise preserve exactly.
+            # Applied AFTER the gather and only at REAL slots, so the dump bin stays
+            # exactly zero (bag_mean's documented invariant: tail pads get E_slot
+            # alone) and empty pad slots are not handed a spurious -mu.
+            sel = token_sel.unsqueeze(-1)
+            mu = ((signal * sel).sum(dim=(0, 1)) / sel.sum().clamp(min=1.0)).detach()
+            n_slots = layout.slot_index.shape[1]
+            valid_at = torch.gather(layout.slot_valid, 1,
+                                    layout.bag_id.clamp(max=n_slots - 1))
+            real = ((layout.bag_id < n_slots) & valid_at).unsqueeze(-1)
+            at_pos = torch.where(real, at_pos - mu, at_pos)
         if add_e_slot:
             e = self.E_slot.to(signal.dtype)
             # [d] broadcasts over every position; [S, d] is indexed by the position's OWN

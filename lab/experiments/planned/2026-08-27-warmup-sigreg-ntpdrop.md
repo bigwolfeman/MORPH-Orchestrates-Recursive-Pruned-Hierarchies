@@ -82,3 +82,58 @@ result, never as a success.
   equality.
 - **NTP dropout cuts both ways** — see the design note's Risks section. The
   criterion is P, not perplexity.
+
+---
+
+# Added arm: CENTER — the root-cause version of SIGReg (added 2026-08-27, before the run)
+
+Wolfe asked whether SIGReg could act per token. It cannot in the form he
+remembered — SIGReg's population is SAMPLES, and the design choice is only what
+counts as a sample — but the question pointed at the right level, and chasing it
+produced a measurement that reframes the SIGReg arm.
+
+**Measured on `tul-v1a2b/step_3500.pt` (CPU, embedding table only):**
+
+```
+||mean embedding||            = 0.4230
+mean ||token - mean||         = 1.0491
+```
+
+A span bag-mean averages the per-token DEVIATIONS down by 1/sqrt(span) but
+preserves that common mean EXACTLY, so every slot inherits the same vector.
+Predicted pairwise cosine between two spans' bag-means,
+`cos ≈ ||mu||² / (||mu||² + dev²/span)`:
+
+| span | 4 | 10 | 20 | 32 |
+| --- | --- | --- | --- | --- |
+| predicted cos | 0.394 | 0.619 | 0.765 | 0.839 |
+
+against a **measured** slot-state pairwise cosine of **+0.39 to +0.71** (spans
+are min 4, cap 32, ~20 mean on OpenWebText). Both ends agree. The slot collapse
+that motivated the SIGReg arm is therefore ARITHMETIC — a property of the
+bag-mean construction plus embedding anisotropy — not a training pathology.
+
+**Arm `tul_center`:** `tul_a1` + `center_bag_mean: true`, which subtracts the
+batch's mean token signal (DETACHED — no dense gradient on the embedding table,
+the mistake that killed v1a) from every real slot's bag-mean, leaving the dump
+bin untouched so tail pads still receive `E_slot` alone.
+
+Honest caveat, recorded because it limits the claim: `E_slot` is added to the
+same bag-mean, so a CONSTANT shift is already within the model's reach. What
+centering adds is that the batch mean TRACKS the drifting embedding mean, which
+one learned vector cannot. This is an optimization/geometry intervention, not an
+expressivity one — the same class as a normalization layer.
+
+## Predictions for CENTER (frozen before the run)
+
+- **C1 (it decollapses):** slot-state mean pairwise cosine at the step-3000
+  checkpoint **< 0.20**, from a measured baseline of +0.39..+0.71.
+- **C2 (does the geometry matter?):** core gradient share never crosses 0.5 in
+  **both** screened seeds. This is the interesting one: if centering alone
+  prevents the takeover, the entire campaign's disease reduces to a construction
+  artefact and SIGReg is treating a symptom.
+- **C3 (the criterion):** plan-off worth at step 3000 **> 0.0191 nats**.
+- **C4 (no CE cost):** ppl_tok seed median at 3250 ≤ the control median 91.77.
+
+If C1 holds and C2 fails, the collapse is real but not the cause of the
+takeover, and that is worth knowing before any more geometry work.
