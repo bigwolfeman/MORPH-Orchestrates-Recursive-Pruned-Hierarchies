@@ -74,6 +74,54 @@ If that replicates across seeds it is a constraint on the whole "tax the token
 path" family, separate from whatever T2/T3 say about content. It is one seed at
 step 676.
 
+### Method amended again 2026-08-27 — scope cut, at Wolfe's direction
+
+**Change:** `tul_tax85` runs **one** seed, not three, and the MUX confirmation
+drops its control arm. Twelve queued runs become six. Predictions are untouched.
+
+**Reason:** Wolfe called six-seed arms wasteful, and on the p=0.85 rung he is
+plainly right — `tul_tax50` destabilised **2 of 3** seeds (takeover fires at step
+170 and 1030; both aborted on sustained divergence at 2040 and 2140), so p=0.85
+failing the T5 health gate is a foregone conclusion and two more seeds establish
+nothing that one does not.
+
+**What this costs, stated rather than buried:** T2, T3 and T5 are written
+*"≥ 2 of 3 seeds"* at p=0.85 and are now **UNSCORABLE as written** at that rung.
+Nothing decidable is lost, because T5 was already going to fail there and T2/T3
+are explicitly unreadable when it does — but **the entire T6 decision now rests
+on the p=0.3 rung.** If p=0.3 is also unstable, this experiment answers nothing
+about the plan's content and only reports a property of the tax.
+
+**And the confirmation is now weaker than designed.** Reusing the three control
+seeds already measured (plan worth 0.0124/0.0148/0.0164, loop worth
+−0.0002/+0.0013/+0.0042) replicates the ARM against a fixed reference instead of
+replicating both sides. Those control numbers were themselves part of the
+post-hoc framing being confirmed, which is exactly the circularity the fresh
+control was meant to break. M1/M2 are still scorable; they are just a weaker
+test than the pre-registration specified.
+
+### First result, from the completed p=0.5 rung
+
+| seed | outcome | takeover fires |
+| --- | --- | --- |
+| 1 | aborted, sustained divergence @2040 | **170** |
+| 2 | completed | never |
+| 3 | aborted, sustained divergence @2140 | **1030** |
+
+The one surviving seed, against the matched control band:
+
+```
+                 tax50 seed 2      control (3 seeds)
+plan worth          +0.0086         +0.0124 .. +0.0164
+loop worth          +0.0029         -0.0002 .. +0.0042
+ce_main              4.8407          4.459  ..  4.546
+```
+
+Hiding half the token inputs did not raise the plan's worth. It **lowered** it,
+below the control's worst seed, and left loop worth inside the control band.
+That is the signature of the plan having nothing to fall back on. **One healthy
+seed. Not a verdict** — that is what the p=0.3 rung is for.
+
 ## Predictions (frozen 2026-08-27, before any run)
 
 - **T1 (dose–response):** median plan-off worth at step 3000 is monotone
