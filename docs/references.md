@@ -439,6 +439,73 @@ Gabriel Synnaeve (Meta FAIR)
 **Status:** Not in the current code — there are no MTP heads in `morph/`; the training loss is
 plain single-token next-token cross-entropy. Kept as a citation. Requires larger scale to benefit.
 
+### Multi-objective gradient assignment (TUL, diagnostic — nothing shipped)
+
+Read together, these decide the NEXT move rather than justify a current one. The
+TUL core carries several objectives at once — `ce_emit` (direct, one token),
+`ce_main` and `ce_plast` (indirect, through the coda's attention over slots), and
+the MUX head on the arms that build it. `train.py::_preclip_probe` reads `p.grad`
+after the backward of the SUMMED objective, so it cannot tell these three modes
+apart, and they take opposite fixes. `lab/divergence/objective_split.py` measures
+the split; pre-registration in
+`lab/experiments/planned/2026-08-27-objective-split.md`.
+
+| mode | signature | fix, and its paper |
+| --- | --- | --- |
+| conflict | `cos(g_a, g_b) < 0` | project — PCGrad, CAGrad |
+| domination | `cos ≈ 0`, one norm ≫ the other | rescale — GradNorm, MGDA |
+| starvation | `cos > 0`, one norm tiny | decouple — spectral decoupling |
+
+**Gradient Starvation: A Learning Proclivity in Neural Networks** — Pezeshki,
+Kaba, Bengio, Courville, Precup, Lajoie (NeurIPS 2021),
+[2011.09468](https://arxiv.org/abs/2011.09468). Under cross-entropy, features
+that explain the target early SUPPRESS the learning of others: they couple
+through the logits, and the dominant feature keeps the residual small so nothing
+else receives gradient. **TUL relevance:** this is a literal description of
+`ce_plast − ce_emit = −0.2191` — the coda's free token path already explains the
+next span's first token, so the slot path never gets a residual to learn from.
+Their fix, **spectral decoupling**, is an L2 penalty on the LOGITS rather than
+the weights, which removes the coupling term. Not tried here.
+
+**Gradient Surgery for Multi-Task Learning (PCGrad)** — Yu, Kumar, Gupta, Levine,
+Hausman, Finn (NeurIPS 2020), [2001.06782](https://arxiv.org/abs/2001.06782).
+Project one task gradient onto the normal plane of another when their cosine is
+negative. **TUL relevance:** the fix IF the split comes back with a negative
+cosine, and a no-op if it does not — there is nothing to project away at cos ≈ 0.
+
+**Conflict-Averse Gradient Descent (CAGrad)** — Liu et al. (NeurIPS 2021),
+[2110.14048](https://arxiv.org/abs/2110.14048). Unlike PCGrad it provably
+converges to a minimum of the AVERAGE loss, which matters here: TUL has one
+objective it actually cares about (`ce_main`) and the rest are means to it, so an
+arbitrary Pareto point is not an acceptable landing place.
+
+**Adapting Auxiliary Losses Using Gradient Similarity** — Du, Czarnecki,
+Jayakumar, Farajtabar, Pascanu, Lakshminarayanan (2018),
+[1812.02224](https://arxiv.org/abs/1812.02224). Gate an auxiliary loss on the
+cosine between its gradient and the main task's; guaranteed to converge to
+critical points of the main task. **TUL relevance:** the cheapest possible use of
+the split probe — if `cos(g_mux, g_main) < 0` at some point in training, drop the
+head there instead of tuning `mux_beta`.
+
+**Revisiting Locally Supervised Learning (InfoPro)** — Wang, Ni, Song, Yang,
+Huang (ICLR 2021), [2101.10832](https://arxiv.org/abs/2101.10832). Training
+gradient-isolated modules with a LOCAL loss "tends to collapse task-relevant
+information at early layers"; their fix preserves input information alongside the
+local objective rather than enlarging the local target. **TUL relevance: the
+closest match in the literature to our disease.** `ce_emit` is a local loss on
+the core, and "the plan became a one-token predictor" is InfoPro's predicted
+outcome, not a surprise. It also argues against the naive fix: a BIGGER local
+target is not what worked for them.
+
+**In Defense of the Unitary Scalarization for Deep Multi-Task Learning** — Kurin,
+De Palma, Kostrikov, Whiteson, Kumar (NeurIPS 2022),
+[2201.04122](https://arxiv.org/abs/2201.04122). Plain summed losses, with
+ordinary regularization, match or beat PCGrad/CAGrad/MGDA across their benchmarks
+at a fraction of the memory and runtime. **Recorded as the reason NOT to start
+with gradient surgery** — it is the counter-evidence to the three rows above, and
+it means the split probe must show a real negative cosine before any of them is
+worth the per-task gradient cost.
+
 ### STE Ternary — Straight-Through Estimator + BitNet b1.58
 
 **Title:** The Era of 1-bit LLMs: All Large Language Models are in 1.58 Bits  
@@ -965,5 +1032,11 @@ to that case and to nothing else here.
 | 59  | SpaceByte (TUL)                        | Slagle (2024)                             | [2404.14408](https://arxiv.org/abs/2404.14408)                                                                                                 |
 | 60  | AU-Net (TUL)                           | Videau et al. (Meta FAIR, 2025)           | [2506.14761](https://arxiv.org/abs/2506.14761)                                                                                                 |
 | 61  | Hierarchical AT (TUL)                  | Neitemeier et al. (Aleph Alpha, 2025)     | [2501.10322](https://arxiv.org/abs/2501.10322)                                                                                                 |
+| 62  | Gradient Starvation (TUL, diagnostic)  | Pezeshki et al. (NeurIPS 2021)            | [2011.09468](https://arxiv.org/abs/2011.09468)                                                                                                 |
+| 63  | PCGrad (TUL, diagnostic)               | Yu et al. (NeurIPS 2020)                  | [2001.06782](https://arxiv.org/abs/2001.06782)                                                                                                 |
+| 64  | CAGrad (TUL, diagnostic)               | Liu et al. (NeurIPS 2021)                 | [2110.14048](https://arxiv.org/abs/2110.14048)                                                                                                 |
+| 65  | Auxiliary loss gating (TUL, diagnostic)| Du et al. (2018)                          | [1812.02224](https://arxiv.org/abs/1812.02224)                                                                                                 |
+| 66  | InfoPro / local supervision (TUL)      | Wang et al. (ICLR 2021)                   | [2101.10832](https://arxiv.org/abs/2101.10832)                                                                                                 |
+| 67  | Unitary scalarization (TUL, counter)   | Kurin et al. (NeurIPS 2022)               | [2201.04122](https://arxiv.org/abs/2201.04122)                                                                                                 |
 
 
