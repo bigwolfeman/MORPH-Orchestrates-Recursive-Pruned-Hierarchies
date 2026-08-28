@@ -195,3 +195,29 @@ over unigram) may not exist for this design at this vocabulary.
 
 The replacement uses the model's OWN coda — already trained to read z — so nothing has to be
 learned: ../planned/2026-08-28-plan-span-specificity.md.
+
+
+## The control behaved differently — recorded as SUGGESTIVE, not as a result
+
+`ctrlworth-s3` (UNRESTRICTED, `tul_a1`) completed attempt 2 with a different profile from
+the two restricted arms:
+
+    checkpoint      SHUFFLED - PLAN    PLAN - SUMMARY
+    tg2-s1  (restr)     +0.0031           -0.0036
+    tg2-s2  (restr)     +0.0001           -0.0002
+    ctrlworth-s3        +0.0139           +0.1167
+
+Both quantities are larger on the control, and `PLAN - SUMMARY = +0.1167` points the way the
+"z is a SUMMARY of its own span, not a plan for the next" reading would: the decoder does
+better on span i from the control's z than on span i+1.
+
+**This is NOT reported as a finding, and the reason is the point of having a bar.** R3 failed
+— the decoder beats a unigram model by 0.0414 nats — and A2-R5 required BOTH the gate and a
+0.30 margin over unigram. A relative comparison can survive a miscalibrated instrument only
+if the instrument has power at all, and this one barely does. 0.1167 sits under the
+pre-registered 0.20 headline threshold in any case.
+
+What it is good for: a HYPOTHESIS for the replacement instrument to test with real power —
+that the unrestricted control's z reads as a summary of its own span while the restricted
+arms' z reads as neither. If the span-specificity panel finds the control span-specific and
+the restricted arms not, that is the same story told by a measurement that can carry it.
