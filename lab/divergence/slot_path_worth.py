@@ -69,6 +69,56 @@ def plan_off(root):
 
 
 @contextlib.contextmanager
+def token_tax(root, p: float):
+    """Force the coda's token-state dropout ON at EVAL, at rate ``p`` (spec §3.4).
+
+    ADDED 2026-08-28 to answer the question the 2026-08-25 note at the bottom of this file
+    posed and never implemented: **is the plan EMPTY, or is the coda BYPASSING a usable
+    one?**
+
+    `apply_token_dropout` returns unchanged input when `training` is False, so at eval the
+    coda always has every token state and can predict a span straight from its own tokens.
+    `token_state_dropout` (0.15 in training) is the ONLY pressure that makes it consult the
+    plan instead. Measuring the plan with the token path fully intact therefore measures
+    what the coda BOTHERS to use, not what it COULD use.
+
+    At p = 1.0 every token state is replaced by ``E_mask`` — Bowman's inputless decoder,
+    the extreme end of the §3.4 arm sweep — so the coda has nothing but the plans and the
+    positions. Combined with `plan_shuffled`, that is the decisive pair:
+
+        shuffle costs ~0 at p=1.0  -> z holds no span-specific content. Nothing to read.
+        shuffle costs a lot at p=1.0 -> z HOLDS content the coda ignores whenever the
+                                        tokens are available. The READER is the bottleneck,
+                                        not the target, and an objective that writes MORE
+                                        into z (flow matching) is well motivated.
+
+    Implemented by flipping the config value and forcing the training branch of the SHIPPED
+    function, not by reimplementing the drop: the mask also has to zero the coda's x0 and
+    bigram injections at dropped positions (see `apply_token_dropout`'s docstring), and a
+    copy of that logic here would drift from it silently.
+
+    The caller must seed the global RNG before each condition — the drop is sampled inside
+    the shipped function — so that every condition drops the SAME positions. Without that
+    the conditions differ by which tokens were masked as well as by the plan, and the
+    comparison is worthless.
+    """
+    tul = root.tul
+    orig_fn = tul.apply_token_dropout
+    orig_p = tul.tul.token_state_dropout
+
+    def taxed(x, layout, training):
+        return orig_fn(x, layout, True)          # force the train-time path at eval
+
+    tul.tul.token_state_dropout = float(p)
+    tul.apply_token_dropout = taxed
+    try:
+        yield
+    finally:
+        tul.apply_token_dropout = orig_fn
+        tul.tul.token_state_dropout = orig_p
+
+
+@contextlib.contextmanager
 def plan_shuffled(root, seed: int = 0):
     """Permute the plan ACROSS SLOTS, keeping every value a real plan.
 

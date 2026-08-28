@@ -489,3 +489,53 @@ def test_plan_shuffled_runs_on_a_REAL_model_forward():
     assert not torch.equal(base, shuf), \
         "shuffling the plan did not change the loss — the condition is a silent no-op"
     torch.testing.assert_close(base, after, rtol=0, atol=0)   # cleanly restored
+
+
+# ── token_tax: forcing the coda's token dropout ON at eval ────────────────────────
+
+def test_token_tax_masks_token_states_at_eval_and_restores():
+    """`apply_token_dropout` is a no-op at eval, which is why every worth panel so far
+    measured the plan with the coda's token path fully intact. `token_tax` forces the
+    train-time branch on so the coda can be starved of tokens and asked whether it can
+    fall back on the plan. Drives a REAL model forward: the stub-rank bug earlier today
+    is why this is not tested against a hand-built tensor."""
+    from lab.divergence.slot_path_worth import token_tax
+
+    spec = _spec()
+    x, y, layout, _ = _batch(spec)
+    m = _model(TULConfig(prefix_k=2, slot_id=4, token_state_dropout=0.15))
+    m.eval()
+    with torch.no_grad():
+        base = m(x, labels=y, slot_layout=layout)["loss"]      # eval: no dropout applied
+        with token_tax(m, 1.0):
+            starved = m(x, labels=y, slot_layout=layout)["loss"]
+        after = m(x, labels=y, slot_layout=layout)["loss"]
+
+    assert torch.isfinite(starved)
+    # p=1.0 replaces EVERY token state with E_mask, so the output must move a LOT. The
+    # assertion is on MAGNITUDE, not direction: this fixture is a randomly initialised
+    # 0.4M model whose loss sits above uniform (log 64 = 4.16), so starving its inputs
+    # pulls it TOWARDS uniform and the loss goes DOWN. Asserting "worse" passed on a
+    # trained model and failed here for a reason that has nothing to do with the tax.
+    # Direction is only meaningful on a trained checkpoint, which is what the sweep runs on.
+    assert abs(starved - base) > 0.2, (
+        f"token_tax(1.0) barely moved the loss ({base:.4f} -> {starved:.4f}); the tax is "
+        f"not reaching the coda input")
+    torch.testing.assert_close(base, after, rtol=0, atol=0)     # cleanly restored
+    assert m.tul.tul.token_state_dropout == 0.15, "token_tax leaked its p past the block"
+
+
+def test_token_tax_zero_is_the_untaxed_path():
+    """p=0.0 must reproduce the ordinary eval forward exactly, so the sweep's first row is
+    a true baseline rather than a slightly different model."""
+    from lab.divergence.slot_path_worth import token_tax
+
+    spec = _spec()
+    x, y, layout, _ = _batch(spec)
+    m = _model(TULConfig(prefix_k=2, slot_id=4, token_state_dropout=0.15))
+    m.eval()
+    with torch.no_grad():
+        base = m(x, labels=y, slot_layout=layout)["loss"]
+        with token_tax(m, 0.0):
+            taxed0 = m(x, labels=y, slot_layout=layout)["loss"]
+    torch.testing.assert_close(base, taxed0, rtol=0, atol=0)
