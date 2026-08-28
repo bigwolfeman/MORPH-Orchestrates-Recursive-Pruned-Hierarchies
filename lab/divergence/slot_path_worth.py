@@ -69,6 +69,63 @@ def plan_off(root):
 
 
 @contextlib.contextmanager
+def plan_shuffled(root, seed: int = 0):
+    """Permute the plan ACROSS SLOTS, keeping every value a real plan.
+
+    ADDED 2026-08-28, after the blind-decoder probe
+    (lab/divergence/plan_content_probe.py) failed its own power check twice: at 41k fit
+    examples it beat a unigram model by 0.04 nats, against a pre-registered 0.30 line, so
+    it could not have detected a 0.20-nat signal. That probe had to LEARN LANGUAGE from
+    scratch to read z. This condition does not — it uses the model's own coda, which was
+    trained to read z, as the decoder.
+
+    `plan_off` answers "is the plan path used at all" by zeroing it. It cannot separate
+    two very different worlds:
+
+        z carries SPAN-SPECIFIC content  -> shuffling it should cost about as much as
+                                            zeroing it
+        z is a useful CONSTANT           -> shuffling costs ~0 while zeroing costs a lot,
+                                            because every slot's plan is interchangeable
+
+    The second world is what "the plan is EMPTY" means in the only sense that matters: the
+    coda gains from the slot POSITIONS, not from what any particular span put there.
+
+    The permutation is over the SLOT axis within each row, so every value the coda reads is
+    still a genuine plan produced by this model on this batch — only the correspondence
+    between a plan and its own span is destroyed. That is what makes this a control and not
+    a corruption: the distribution the coda sees is unchanged, unlike `seed_bagmean`, whose
+    out-of-distribution shock swamped the signal it was meant to isolate (prediction B2,
+    falsified 3.6-7.3x).
+
+    Rows are permuted independently and derangement is not enforced: with S=64 slots the
+    expected fixed-point count is 1, so about 1.6% of slots keep their own plan. That
+    biases the measured cost DOWNWARD by ~1.6%, far below the effect sizes in question,
+    and enforcing a derangement would cost more in complexity than it buys.
+    """
+    tul = root.tul
+    orig = tul.prefix_project
+
+    def shuffled(h_slots, layout, l_total):
+        values, pos = orig(h_slots, layout, l_total)
+        # values is [B, S*K, C]: slot s owns rows [s*K, (s+1)*K). Permute WHOLE slots so a
+        # plan's prefix_k values stay together and stay in their own order — scrambling
+        # within a slot would test something else entirely.
+        B, SK, C = values.shape
+        K = tul.tul.prefix_k
+        S = SK // K
+        g = torch.Generator(device="cpu").manual_seed(seed)
+        perm = torch.stack([torch.randperm(S, generator=g) for _ in range(B)]).to(values.device)
+        idx = (perm[:, :, None] * K + torch.arange(K, device=values.device)[None, None, :])
+        return values.gather(1, idx.reshape(B, SK)[:, :, None].expand(B, SK, C)), pos
+
+    tul.prefix_project = shuffled
+    try:
+        yield
+    finally:
+        tul.prefix_project = orig
+
+
+@contextlib.contextmanager
 def seed_bagmean(root):
     """Force ``slot_input`` back to the bag-mean seed, whatever the arm was TRAINED with.
 
@@ -188,14 +245,15 @@ def main() -> None:
     # it and printed "removing no-loop" for BOTH no-loop rows, which is precisely the
     # ambiguity the patch exists to remove.
     conds = [("full", "full", contextlib.nullcontext()),
-             ("no-loop (slot keeps its seed)", "no-loop [own seed]", loop_off(root)),
-             ("no-plan (slot values zeroed)", "no-plan", plan_off(root)),
-             ("neither", "neither", both(root))]
+             ("no-loop (slot keeps its seed)", "removing no-loop [own seed]", loop_off(root)),
+             ("no-plan (slot values zeroed)", "removing no-plan", plan_off(root)),
+             ("plan SHUFFLED across slots", "SHUFFLING the plan", plan_shuffled(root)),
+             ("neither", "removing neither", both(root))]
     # On a bag_mean arm this condition IS `no-loop`, so running it would only spend eval
     # time to reprint the same row. Emit it exactly when the arm's seed differs.
     if seed != "bag_mean":
         conds.insert(2, (f"no-loop, bag-mean seed (was {seed})",
-                         "no-loop [bag-mean]", loop_off_bagmean(root)))
+                         "removing no-loop [bag-mean]", loop_off_bagmean(root)))
 
     res = {}
     W = max(32, max(len(n) for n, _, _ in conds) + 1)
@@ -209,10 +267,10 @@ def main() -> None:
 
     f = res["full"]
     print()
-    print(f"{'what it is worth (nats)':<{W}} {'loss':>8} {'ce_main':>8} {'ce_plast':>9} {'ce_emit':>8}")
+    print(f"{'what each costs (nats)':<{W}} {'loss':>8} {'ce_main':>8} {'ce_plast':>9} {'ce_emit':>8}")
     for name, short, _ctx in conds[1:]:
         d = res[name]
-        print(f"{'removing ' + short:<{W}} "
+        print(f"{short:<{W}} "
               + " ".join(f"{d[k] - f[k]:>8.4f}" if k != 'ce_plast' else f"{d[k] - f[k]:>9.4f}"
                          for k in ("loss", "ce_main", "ce_plast", "ce_emit")))
     print()
@@ -231,6 +289,17 @@ def main() -> None:
         print("  distribution shift dominates; this is an OOD-SHOCK number, not a loop worth.")
         print("  Loop worth compares only WITHIN one slot_seed. Across seed modes it needs")
         print("  matched TRAINING — see seed_bagmean's docstring.")
+    print()
+    zero = res["no-plan (slot values zeroed)"]["ce_main"] - f["ce_main"]
+    shuf = res["plan SHUFFLED across slots"]["ce_main"] - f["ce_main"]
+    frac = shuf / zero if abs(zero) > 1e-9 else float("nan")
+    print()
+    print(f"IS THE PLAN SPAN-SPECIFIC?  shuffled costs {shuf:+.4f} of the {zero:+.4f} that")
+    print(f"  zeroing costs = {100*frac:.1f}%. Near 100%: the coda uses WHICH span wrote the")
+    print("  plan. Near 0%: the plan is an interchangeable constant and the coda gains from")
+    print("  the slot POSITIONS, not from any span's content — 'empty' in the sense that")
+    print("  matters. This uses the model's OWN coda as the reader, so unlike a blind")
+    print("  decoder it needs to learn nothing.")
     print()
     print("CROSS-ARM CAVEAT on 'no-plan' (added 2026-08-28): under tg_restrict a token's ONLY")
     print("route to any earlier span is the slot path, so zeroing the plan removes ALL")

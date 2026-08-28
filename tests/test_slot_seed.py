@@ -385,3 +385,74 @@ def test_seed_bagmean_restores_on_exception():
         with seed_bagmean(m):
             raise RuntimeError("boom")
     assert m.tul.tul.slot_seed == "boundary"
+
+
+# ── plan_shuffled: the span-specificity control (lab/divergence/slot_path_worth.py) ──
+
+def _fake_root_for_shuffle(prefix_k=2, n_slots=6, C=3, B=2):
+    """A stand-in exposing only what plan_shuffled touches: root.tul.prefix_project and
+    root.tul.tul.prefix_k. The real TULSlots needs a built model; the permutation logic
+    does not, and testing it directly is what catches an index-math error."""
+    import types
+
+    def prefix_project(h_slots, layout, l_total):
+        # value (s, k) is encoded as s*10 + k so a moved or reordered block is visible.
+        v = torch.zeros(B, n_slots * prefix_k, C)
+        for b in range(B):
+            for s in range(n_slots):
+                for k in range(prefix_k):
+                    v[b, s * prefix_k + k, :] = s * 10 + k
+        return v, torch.zeros(B, n_slots * prefix_k, dtype=torch.long)
+
+    tul = types.SimpleNamespace(prefix_project=prefix_project,
+                                tul=types.SimpleNamespace(prefix_k=prefix_k))
+    return types.SimpleNamespace(tul=tul), prefix_project
+
+
+def test_plan_shuffled_moves_whole_slots_and_keeps_their_order():
+    """Each output slot must hold ONE input slot's prefix_k values, in their original
+    order. Scrambling WITHIN a slot would measure something else entirely, and an
+    off-by-K in the index math is exactly the bug that would do it silently."""
+    from lab.divergence.slot_path_worth import plan_shuffled
+
+    K, S, B = 2, 6, 2
+    root, orig = _fake_root_for_shuffle(prefix_k=K, n_slots=S, B=B)
+    with plan_shuffled(root, seed=0):
+        out, _pos = root.tul.prefix_project(None, None, 0)
+
+    for b in range(B):
+        seen = []
+        for s in range(S):
+            block = out[b, s * K:(s + 1) * K, 0]
+            src = int(block[0]) // 10
+            # the block must be exactly source slot `src`'s values, in order
+            want = torch.tensor([src * 10 + k for k in range(K)], dtype=block.dtype)
+            assert torch.equal(block, want), f"row {b} slot {s}: block {block} is not intact"
+            seen.append(src)
+        assert sorted(seen) == list(range(S)), \
+            f"row {b} is not a permutation of the slots: {sorted(seen)}"
+
+
+def test_plan_shuffled_actually_permutes_and_restores():
+    """It must CHANGE the values (else the condition is a silent no-op that would report
+    'the plan is not span-specific' for every arm), and it must restore prefix_project."""
+    from lab.divergence.slot_path_worth import plan_shuffled
+
+    root, orig = _fake_root_for_shuffle(n_slots=16)
+    base, _ = orig(None, None, 0)
+    with plan_shuffled(root, seed=0):
+        out, _ = root.tul.prefix_project(None, None, 0)
+    assert not torch.equal(base, out), "plan_shuffled left the values unchanged"
+    assert root.tul.prefix_project is orig, "plan_shuffled leaked past its with-block"
+
+
+def test_plan_shuffled_permutes_rows_independently():
+    """A permutation shared across the batch would correlate the control with the data in
+    a way a per-row shuffle does not."""
+    from lab.divergence.slot_path_worth import plan_shuffled
+
+    root, _ = _fake_root_for_shuffle(n_slots=32, B=4)
+    with plan_shuffled(root, seed=0):
+        out, _ = root.tul.prefix_project(None, None, 0)
+    rows = [tuple(int(out[b, s * 2, 0]) // 10 for s in range(32)) for b in range(4)]
+    assert len(set(rows)) > 1, "every row got the SAME permutation"
