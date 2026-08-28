@@ -1,0 +1,25 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+MORPHTransformer: 282.5M params, loop 4:6×6:4 (kernels=EAGER, residual=hc_cayley(n=4))
+  Ternary QAT ON: scope=backbone threshold=0.5 mode=symmetric group=tensor dtype=fp16 modules=43 ({'backbone': 43, 'attention': 0, 'embeddings': 0}) params_ternary=126.7M (44.9% of model)
+  Embed QAT ON: mode=int6 modules=2 (['embed.hybrid.euc_embed', 'embed.bigram.embed']). LM head: LM head is WEIGHT-TIED to euc_embed (no separate weight). lm_head_quant is a NO-
+  CMS score_mode=taylor on 28 CMSBlockLinear layers
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+[data] TUL layout: seq_len=1024 prefix_k=2 max_slots=64 L_total=1152 slot_id=4
+  Resumed model+scaler+RNG from checkpoint step 3500; next_step=3500 (compact=False routed=False → optimizer_rebuild=False)
+
+== tg2-s1@3500   overrides=['training.batch_size=6', 'model.use_kernels=false']
+slots=342  span_len mean=18.04 median=17 q25/75/90=9/28/32 max=32
+eff_rank(slot inputs, centred) = 27.62 over 342 slots; at a fixed 200 slots = 27.42
+mean deviation 0.3027 vs ||E_slot|| 0.2378  -> signal/constant = 1.2730
+slope of log(dev) vs log(L) = -0.470 (r2 0.922)   [-0.5 = plain-mean pooling law]
+  span len     n   mean dev  eff rank   at n=30
+   4-5        36     0.5162     11.29     11.69
+   6-7        30     0.4268     16.17     16.17
+   8-11       42     0.3456     22.69     17.51
+  12-15       46     0.2927     29.39     21.91
+  16-23       67     0.2497     37.74     21.83
+  24-32      119     0.2102     48.57     20.03
+wrote lab/experiments/results/2026-08-27-tg-restriction/pooling-tg2-s1.json
