@@ -90,3 +90,70 @@ move the loss by more than 0.2 nats. The magnitude assertion is deliberate: the 
 is randomly initialised and sits above uniform, so starving it pulls the loss DOWN. Asserting
 "worse" passes on a trained model and fails here for a reason unrelated to the tax.
 Verified to FAIL when `token_tax` is stubbed to a no-op. Full file: 26 passed.
+
+
+## Results (filled 2026-08-28 15:00). The coda is NOT bypassing. The plans are EMPTY.
+
+Shuffle cost (nats of ce_main) as the coda is starved of its token states:
+
+    arm            aux   p=0.00   p=0.50   p=0.90   p=1.00   rise    zero cost @1.0
+    ctrlworth-s3   ON    0.0096   0.0409   0.0800   0.0867   9.0x       0.0863
+    a1noaux-s1     OFF   0.0001   0.0001   0.0004   0.0008  14.8x       0.0278
+    tg2-s1         OFF  -0.0001   0.0003   0.0006   0.0013     —        0.1082
+    tg3b-s1        OFF   0.0002   0.0002   0.0039   0.0104  45.6x      -0.0187
+
+**R1 HELD.** `full` ce_main rises 4.47 → 7.47 on the control and similarly on every arm —
+about 3 nats from p=0 to p=1. The tax reaches the coda.
+
+**R2 HELD, and it is what makes the rest readable.** On the one arm with a content-bearing
+plan the shuffle cost rises **9.0x**, and at p=1.0 specificity reaches **100.5%** — with no
+token states left, shuffling costs exactly what zeroing costs, i.e. EVERY bit of the plan's
+value is span-specific. The instrument detects bypassing where bypassing is possible.
+
+**R3 HELD on all three aux-off arms.** Shuffle cost at p=1.0 is 0.0008 / 0.0013 / 0.0104,
+all far under the 0.05 line. Starve the coda of every token state and shuffling the plans
+STILL costs essentially nothing.
+
+### The answer
+
+**The coda is not bypassing a usable plan. In the aux-off arms there is nothing to bypass.**
+The instrument is proven able to detect content — it finds it in ctrl-s3 and drives its
+specificity to 100% under starvation — and it finds none in tg2, tg3b or a1noaux even at
+full starvation.
+
+So the earlier reading stands and is now causal rather than circumstantial: those arms'
+objective never wrote anything into z, and **no reader-side fix can help them.** Raising
+`token_state_dropout` is retired as a fix on its own — this sweep IS that fix, applied at
+eval and taken to its limit, and it recovers 0.0008–0.0104 nats.
+
+### What this says about the flow-matching / diffusion path
+
+Per the decision rule, R2+R3 is exactly the case that MOTIVATES flow matching: writing more
+into z is the only lever that can work, because there is nothing to read and no reader fix
+helps. The shape is right, and it must target span **i+1**, never span i.
+
+**But the sweep also measures the CEILING, and it is small.** ctrl-s3 is the only healthy
+content-bearing plan in the campaign. Its plan is worth **0.0148 nats** in normal operation
+and **0.0867 nats** with the coda fully starved. That is what a 65%-to-100% span-specific
+plan buys at `seq_len 1024`. A flow-matching objective would have to beat a ~0.09-nat ceiling
+to matter, and only 0.015 of that is reachable without also changing the reader.
+
+That is the same conclusion the whole campaign keeps arriving at from different directions:
+at this context length, with the tokens right there, a compressed plan has very little to do.
+
+### R4 FAILED on tg3b-s1 at p=1.0, and the cause is arithmetic, not a broken condition
+
+    tg3b-s1 @ p=1.0:  full 7.8090   no-plan 7.7902   shuffled 7.8194
+
+Zeroing the plan IMPROVES the loss (−0.0187) while shuffling hurts it (+0.0104), so the
+specificity RATIO reads −55.4%. The ratio's denominator has collapsed through zero and the
+percentage is meaningless there. The condition is not broken — the same instrument produced a
+coherent 100.5% on ctrl-s3 at the same tax.
+
+Two real things are visible underneath: with every token masked, tg3b's plan is worth nothing
+at all, and a WRONG-span plan is mildly HARMFUL — the coda has learned to read those
+positions, so feeding them someone else's plan is worse than feeding them nothing. The same
+effect appeared on the e_slot arms, where `no-loop` cost more than `no-plan`.
+
+**Methodological note for anyone reusing this instrument: report the shuffle COST, not the
+specificity FRACTION, whenever the zero cost is not comfortably positive.**
