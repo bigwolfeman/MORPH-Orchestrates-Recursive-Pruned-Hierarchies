@@ -3,7 +3,7 @@
 - **Authors:** Trevor Gale, Deepak Narayanan, Cliff Young, Matei Zaharia (Stanford, Microsoft Research, Google Research)
 - **Year:** 2022 (MLSys 2023)
 - **Source:** https://arxiv.org/abs/2211.15841
-- **MORPH uses:** Block-sparse GPU kernels (Sparse Toolkit / STK, vendored in `morph/sparse/stk`) for MORTAR 128×128 BCSR sparse matmul. Originally developed for dropless MoE routing; MORPH adopted the stk Triton backend after Block-ELL proved too slow post pruning (see `block-ell-nvidia.md`).
+- **MORPH uses:** Block-sparse GPU kernels (Sparse Toolkit / STK, vendored in `morph/sparse/stk`) for MORTAR 128×128 BCSR sparse matmul. Originally developed for dropless MoE routing; MORPH adopted the stk Triton backend after Block-ELL proved too slow post pruning (see `../block-ell-nvidia/block-ell-nvidia.md`).
 
 ---
 

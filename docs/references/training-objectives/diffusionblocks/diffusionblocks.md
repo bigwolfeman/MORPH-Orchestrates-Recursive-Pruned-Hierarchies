@@ -14,13 +14,13 @@
   paper applies (1) to Huginn, which is MORPH's closest published relative — and for that
   case it explicitly does **NOT** partition into blocks. What happened when we built it,
   with the numbers and the UNVERIFIED list:
-  [`.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md`](../../../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md).
+  [`.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md`](../../../../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md).
   Short version: at a matched 143.4M-token budget, plain next-token training reached
   held-out CE 4.0010 and the best DB arm 5.0801 at sigma_max, where the EDM skip path
   vanishes and a DB model is doing nothing but next-token prediction from clean context.
 - **Conversion note:** body below is machine-converted from the arXiv HTML (v4). Equations
   are the paper's own LaTeX (`alttext`); figures are omitted and marked. The PDF beside this
-  file (`2506.14202.pdf`) is authoritative.
+  file (`diffusionblocks.pdf`) is authoritative.
 
 ---
 

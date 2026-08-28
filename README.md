@@ -5,7 +5,7 @@
 MORPH
 </h1>
 
-**MORPH** is a PyTorch research model for **looped transformer** training and sparse deployment. The model reuses a small Parcae-style core for variable depth, stabilizes the repeated core with <a href="docs/references/residual-streams/2602.18308.md">Cayley Hyper-Connection</a>, and trains the MLP stack while pruning low impact weights down to as little as 25% total density before carving it into the MORTAR BCSR runtime. Enabling less than 1% ppl regression and improved memory footprint and training throughput over full density. All while natively quantized trained.
+**MORPH** is a PyTorch research model for **looped transformer** training and sparse deployment. The model reuses a small Parcae-style core for variable depth, stabilizes the repeated core with <a href="docs/references/residual-streams/jpmhc/jpmhc.md">Cayley Hyper-Connection</a>, and trains the MLP stack while pruning low impact weights down to as little as 25% total density before carving it into the MORTAR BCSR runtime. Enabling less than 1% ppl regression and improved memory footprint and training throughput over full density. All while natively quantized trained.
 
 To further improve per bit intelligence and memory foot print for research, it utilizes extensive linear attention methods to enable a lower memory foot print at long contexts. Both GLA and Deepseek CSA/HCA are used, with a convolutional based compression of the kv.
 
@@ -18,7 +18,7 @@ The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/
 <p align="center">
   <img src="docs/figures/morph_overview.png" alt="MORPH architecture overview: hybrid embeddings into an HC carrier, prelude / looped core / coda, then LM head" width="720" />
 </p>
-<p align="center"><em>Architecture overview — Parcae-style prelude / core loop / coda on a <a href="docs/references/residual-streams/2602.18308.md">Cayley Hyper-Connection</a> carrier, with a gated GLA retention branch on layer 1.</em></p>
+<p align="center"><em>Architecture overview — Parcae-style prelude / core loop / coda on a <a href="docs/references/residual-streams/jpmhc/jpmhc.md">Cayley Hyper-Connection</a> carrier, with a gated GLA retention branch on layer 1.</em></p>
 
 ## TUL: Thought Unpack Loop (merged, OFF by default)
 
@@ -56,25 +56,25 @@ because the step is still launch / fixed-overhead bound. Details:
 So the core loop is forced to contain the full semantic thought and amortize the loop cost over many tokens. As opposed to looping many times per token.
 
 This is based on a series of experiments run on
-[Coconut](docs/references/tul-latent-emission/2412.06769.md),
-[AGCLR](docs/references/tul-latent-emission/2606.07720.md), and
-[Quiet-STaR](docs/references/tul-latent-emission/2403.09629.md)
+[Coconut](docs/references/tul-latent-emission/coconut/coconut.md),
+[AGCLR](docs/references/tul-latent-emission/agclr/agclr.md), and
+[Quiet-STaR](docs/references/tul-latent-emission/quiet-star/quiet-star.md)
 (paper map: [docs/references.md](docs/references.md) §13).
 
 ---
 
 From experimentation with looping and halting, halting mechanisms don't give a real win over no halting.
-HRM dropped [ACT](docs/references/tul-latent-emission/1603.08983.md) for their LLM for this reason. The likely cause for this is what inspired TUL.
+HRM dropped [ACT](docs/references/tul-latent-emission/act/act.md) for their LLM for this reason. The likely cause for this is what inspired TUL.
 
-[Future Lens](docs/references/tul-latent-emission/2311.04897.md) shows us that the middle layers contain whole semantic thoughts, lets call ST. We can decode many tokens from it successfully.
-Anthropic's [J-lens / J-space](docs/references/tul-latent-emission/2607.15495.md) is the same picture from the other direction: mid-depth verbalizable concepts held for future report, not just the next token.
+[Future Lens](docs/references/tul-latent-emission/future-lens/future-lens.md) shows us that the middle layers contain whole semantic thoughts, lets call ST. We can decode many tokens from it successfully.
+Anthropic's [J-lens / J-space](docs/references/tul-latent-emission/j-space/j-space.md) is the same picture from the other direction: mid-depth verbalizable concepts held for future report, not just the next token.
 Measurements I made while pretraining showed me that over a span of tokens (a ST or sentence) this latent barely moves.
 The final hidden state moves a lot more, as it is decoding the actual token from the ST based on the position in the sequence.
 The text gives state for what comes next in the sentence, and it mostly effects lower layers.
 
 If looping more deeply gives a deeper thought. Every token in the span needs that thought to decode accurately.
 Because previous methods are still doing autoregressive next token prediction, this looping must match per token in the span.
-[PonderNet](docs/references/tul-latent-emission/2107.05407.md) and [ACT](docs/references/tul-latent-emission/1603.08983.md) ignore this and try to vary per token.
+[PonderNet](docs/references/tul-latent-emission/pondernet/pondernet.md) and [ACT](docs/references/tul-latent-emission/act/act.md) ignore this and try to vary per token.
 Difficulty that needs deeper thought lives at the span level and not the token level.
 
 TUL gives a method of exploiting this, while genuinely reducing compute costs.

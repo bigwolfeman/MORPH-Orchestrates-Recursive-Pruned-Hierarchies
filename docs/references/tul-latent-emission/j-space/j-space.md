@@ -5,7 +5,7 @@
 - **Writeup:** https://transformer-circuits.pub/2026/workspace/index.html
 - **Summary:** https://www.anthropic.com/research/global-workspace
 - **arXiv:** https://arxiv.org/abs/2607.15495
-- **PDF:** [2607.15495.pdf](2607.15495.pdf)
+- **PDF:** [j-space.pdf](j-space.pdf)
 - **MORPH / TUL uses:** Jacobian lens (J-lens) finds mid-depth **J-space** —
   verbalizable concepts held for future report, not only next-token. Supports the
   TUL claim that middle layers carry whole semantic thoughts (ST) that stay stable

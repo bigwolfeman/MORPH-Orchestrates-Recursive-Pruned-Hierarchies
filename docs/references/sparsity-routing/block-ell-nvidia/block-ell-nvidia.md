@@ -5,7 +5,7 @@
 - **Source URLs:**
   - cuSPARSE Blocked-ELL storage format documentation: https://docs.nvidia.com/cuda/cusparse/storage-formats.html
   - NVIDIA Developer Blog — "Accelerating Matrix Multiplication with Block Sparse Format and NVIDIA Tensor Cores": https://developer.nvidia.com/blog/accelerating-matrix-multiplication-with-block-sparse-format-and-nvidia-tensor-cores/
-- **MORPH uses:** Early pruning backend. Superseded by MegaBlocks STK kernels — see `2211.15841.md`.
+- **MORPH uses:** Early pruning backend. Superseded by MegaBlocks STK kernels — see `../megablocks/megablocks.md`.
 
 ---
 

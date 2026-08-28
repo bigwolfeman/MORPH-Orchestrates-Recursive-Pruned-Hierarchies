@@ -180,7 +180,7 @@ full-block interleave.
 **Authors:** Arshia Afzal, Aviv Bick, Eric P. Xing, Volkan Cevher, Albert Gu (goombalab)  
 **Year:** 2026  
 **PDF:** [github.com/goombalab/raven](https://github.com/goombalab/raven/blob/main/raven.pdf)  
-**Local:** [references/memory/raven.pdf](references/memory/raven.pdf)  
+**Local:** [references/memory/raven/raven.pdf](references/memory/raven/raven.pdf)  
 **MORPH uses:** NOT YET. Planned upgrade to the GLA retention branch: replace dense
 per-slot SSM writes with a learned top-k router over a fixed slot memory (RSM), so
 unselected slots are untouched. README TODO: apply RAVEN attention on GLA.
@@ -738,7 +738,7 @@ Used as a probe to confirm behaviors during initial testing.
 **Authors:** Alex Graves (DeepMind)  
 **Year:** 2016  
 **arXiv:** [1603.08983](https://arxiv.org/abs/1603.08983)  
-**Local:** [references/tul-latent-emission/1603.08983.md](references/tul-latent-emission/1603.08983.md)  
+**Local:** [references/tul-latent-emission/act/act.md](references/tul-latent-emission/act/act.md)  
 **TUL uses:** The canonical per-token halting / ponder-depth method. TUL's claim is the
 opposite grain: depth that buys a deeper thought should be allocated per **span**, not
 varied per token inside the span.
@@ -749,7 +749,7 @@ varied per token inside the span.
 **Authors:** Andrea Banino, Jan Balaguer, Charles Blundell (DeepMind)  
 **Year:** 2021  
 **arXiv:** [2107.05407](https://arxiv.org/abs/2107.05407)  
-**Local:** [references/tul-latent-emission/2107.05407.md](references/tul-latent-emission/2107.05407.md)  
+**Local:** [references/tul-latent-emission/pondernet/pondernet.md](references/tul-latent-emission/pondernet/pondernet.md)  
 **TUL uses:** Probabilistic successor to ACT for adaptive compute. Same contrast: TUL
 loops per slot/span; PonderNet (and ACT) still decide how long to think **per token**.
 
@@ -761,7 +761,7 @@ loops per slot/span; PonderNet (and ACT) still decide how long to think **per to
 **Writeup:** [transformer-circuits.pub/2026/workspace](https://transformer-circuits.pub/2026/workspace/index.html)  
 **Summary:** [anthropic.com/research/global-workspace](https://www.anthropic.com/research/global-workspace)  
 **arXiv:** [2607.15495](https://arxiv.org/abs/2607.15495)  
-**Local:** [references/tul-latent-emission/2607.15495.md](references/tul-latent-emission/2607.15495.md)  
+**Local:** [references/tul-latent-emission/j-space/j-space.md](references/tul-latent-emission/j-space/j-space.md)  
 **TUL uses:** Jacobian lens (J-lens) reads mid-depth **J-space** — concepts poised for
 future verbal report, not only next-token logits. Aligns with Future Lens: middle layers
 hold whole semantic thoughts (ST) that stay available across a span while late layers
@@ -793,7 +793,7 @@ deferred emission-path idea, orthogonal to TUL's claims.
 **Authors:** Hao, Sukhbaatar, Su, Li, Hu, Weston, Tian (Meta FAIR)  
 **Year:** 2024  
 **arXiv:** [2412.06769](https://arxiv.org/abs/2412.06769)  
-**Local:** [references/tul-latent-emission/2412.06769.md](references/tul-latent-emission/2412.06769.md)  
+**Local:** [references/tul-latent-emission/coconut/coconut.md](references/tul-latent-emission/coconut/coconut.md)  
 **TUL uses:** the latent as an ATTENDED POSITION (thoughts enter as previous positions in
 the sequence and later tokens read them through the KV cache) — TUL's slots are positions
 for the same reason; loss masked on latent thoughts. Also the warning: without the
@@ -806,7 +806,7 @@ language curriculum a slot with only downstream token loss learns nothing (14.4 
 **Authors:** Zelikman, Harik, Shao, Jayasiri, Haber, Goodman  
 **Year:** 2024  
 **arXiv:** [2403.09629](https://arxiv.org/abs/2403.09629)  
-**Local:** [references/tul-latent-emission/2403.09629.md](references/tul-latent-emission/2403.09629.md)  
+**Local:** [references/tul-latent-emission/quiet-star/quiet-star.md](references/tul-latent-emission/quiet-star/quiet-star.md)  
 **TUL uses:** think-before-speak on ordinary text — rationales inserted before tokens to
 improve future-token prediction (not QA-only CoT). Provenance for amortizing thought
 over upcoming content; TUL's slots play that role as punctuation-bounded span plans
@@ -819,7 +819,7 @@ Continuous Latent Reasoning
 **Authors:** Farhan, Chaudhary  
 **Year:** 2026  
 **arXiv:** [2606.07720](https://arxiv.org/abs/2606.07720)  
-**Local:** [references/tul-latent-emission/2606.07720.md](references/tul-latent-emission/2606.07720.md)  
+**Local:** [references/tul-latent-emission/agclr/agclr.md](references/tul-latent-emission/agclr/agclr.md)    
 **TUL uses:** Adaptive Gated Continuous Latent Reasoning — three learned gates (read /
 forget / write) on a persistent concept stream over Coconut-style latent passes. Named
 in the compaction-window discipline as the cautionary case where three constants were
