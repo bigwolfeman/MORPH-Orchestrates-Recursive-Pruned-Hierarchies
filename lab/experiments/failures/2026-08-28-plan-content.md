@@ -99,3 +99,40 @@ the gate is stubbed to always-readable. Full file: 19 passed.
 **If the gate fires**, the recorded outcome is "method could not distinguish", the run is
 filed under `failures/` per the protocol, and the next planned file raises `--weight-decay`
 or shrinks the decoder. It is NOT a licence to re-run until the gate happens to pass.
+
+## Results (filled 2026-08-28 07:10): REFUSED BY THE MEMORIZATION GATE. Status: failure.
+
+    checkpoint      PLAN     SUMMARY  SHUFFLED  POSITION  unigram(i+1)  POSITION train
+    tg2-s1         8.0267    8.0462   8.0267    8.0008      8.1484         7.1137
+    tg2-s2         8.0266    8.0461   8.0266    8.0008      8.1484         7.1137
+    ctrlworth-s3   8.0084    8.0156   8.0298    8.0008      8.1484         7.1137
+
+    MEMORIZATION GATE  POSITION eval 8.0008 - train 7.1137 = +0.8872 nats
+                       (refuse above 0.50) -> REFUSED, on all three checkpoints
+
+**The gate did its job.** The printed band reads EMPTY on all three, and
+`SHUFFLED - PLAN` is −0.0000 / +0.0000 / +0.0214. Without the gate, added at 02:2x on the
+same day and BEFORE any of this data existed, the honest-looking report available here was
+"the plan is EMPTY on both restricted seeds" — a headline conclusion drawn from a broken
+instrument. It is refused instead.
+
+**Diagnosis, and it is not subtle.** The probe fitted a **13,251,840-parameter** decoder on
+**1,654 examples** (z_dim 2048, `--fit-batches 6` at batch 6). That is ~8,000 parameters per
+example. Two independent symptoms confirm memorization rather than measurement:
+
+- POSITION, which is handed NO z at all, scores 8.0008 — **better than PLAN's 8.0267**. A
+  condition with strictly less information should not win. Extra input dimensions bought
+  extra capacity to memorize the fit set, and that cost more than z was worth.
+- Every condition sits within 0.15 nats of the unigram floor (8.1484). The decoder barely
+  learned anything at all, in any condition.
+
+`weight_decay=1e-2` was found on a synthetic sweep at toy vocabulary, exactly as the
+`fit_decoder` docstring warned, and it does not hold at 49k vocab.
+
+**Per this file's own rule**, the outcome is "the method could not distinguish", filed under
+`failures/`, and the re-run gets a NEW planned file with a bounded, pre-declared procedure
+rather than a licence to re-run until the gate happens to pass. See
+../planned/2026-08-28-plan-content-rerun.md.
+
+**Nothing about the plan's content is known.** Every downstream decision gated on
+EMPTY-vs-FULL — the flow-matching objective in particular — stays gated.
