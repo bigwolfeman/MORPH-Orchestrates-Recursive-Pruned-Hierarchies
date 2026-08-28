@@ -65,9 +65,59 @@ ban is about the SHIPPED path, not about a frozen-weights probe.
 DECIDES: high recovery -> the plan is full and the coda is not reading it; the fix is
 the reader. Low recovery -> the plan is empty; the fix is provenance/objective.
 
-### A4. max_slots trim  [config, recovers ~6-7% compute]
-64 -> 56, after checking the truncation rate on a real-data sweep (row 0 hit 55).
-NOTE: this becomes BINDING, not slack, if span_cap is ever lowered — see below.
+### A4. max_slots — MEASURED 2026-08-28, RECOMMENDATION REVERSED. DO NOT TRIM.
+Over 360 real rows (60 batches), span_cap=32:
+
+    spans/row: mean 51.84  median 51  p90 64  p99 64  MAX 64
+    39 of 360 rows (10.8%) sit at EXACTLY 64 -> max_slots is ALREADY BINDING
+    max_slots=56 -> 20.8% of rows truncate;  52 -> 39.7%;  48 -> 67.2%
+
+`pack_tul_row` handles saturation by ENDING THE ROW EARLY (`n_tok = min(n_tok, bpos[S])`,
+tul_layout.py:412-414), NOT by dropping boundaries — the spec is explicit and the leftover
+tokens return to the buffer for the next row. So this is a documented, bounded cost (a
+saturated row carries 1024 tokens instead of up to ~1072), not a silent data defect. I
+raised it as an alarm first; it is not one.
+
+TWO CORRECTIONS TO MY OWN EARLIER NUMBERS IN THIS FILE:
+- The padding audit's "~44 valid of 64" came from ONE batch. Over 360 rows the mean is
+  **51.84**, so core-loop pad is **19%**, not 31% — about **4%** of total compute, not 6-7%.
+- Trimming max_slots is therefore WRONG in both directions: it saves ~4% at best and
+  truncates 21% of rows at 56. Recovering the 19% honestly needs a ragged/compact gather
+  (which breaks the fixed shapes torch.compile wants), not a smaller cap. PARKED, not queued.
+
+### A4c. RAISE max_slots — CENSORING CONFIRMED 2026-08-28, this is the real defect
+
+The top-tail histogram over 360 real rows settles it. Counts fall smoothly, then pile up
+at exactly the cap:
+
+    span count : 56  57  58  59  60  61  62  63  64
+    rows       : 16   7   6   6   8   2   5   2  39   <-- 10-20x the neighbouring bins
+
+That is textbook right-censoring. **max_slots=64 binds on 10.8% of rows**, and
+`pack_tul_row` responds by ENDING THE ROW EARLY, so those rows carry fewer tokens.
+
+How far does the natural tail actually reach? Re-packing with the cap lifted:
+
+    max_slots :  64    80    96   128   192
+    observed MAX : 60    64    66    68    74
+
+So the true demand tops out near **74**. `max_slots = 80` captures essentially all of it.
+
+**CAREFUL — `L_total = seq_len + max_slots * prefix_k`.** Raising max_slots alone LENGTHENS
+the sequence (64->1152, 80->1184, 96->1216) and hands the row more tokens, so a naive bump
+changes three things at once and is not a clean arm.
+
+CLEAN ARM: `max_slots: 80` WITH `data.seq_len: 992`, which holds `L_total = 992 + 160 = 1152`
+exactly. Then the ONLY change is the slot budget. Compute impact is confined to the core
+loop's compact sequence (64 -> 80 = +25% core = ~+5.5% total); attention and the coda are
+unchanged because L_total is unchanged.
+This also directly tests the CHANNEL CAPACITY hypothesis that A9-DOWN was reaching for,
+without the row-shortening confound that made span_cap 24 unsafe.
+
+### A4b. RAISE span_cap instead  [config only — this is the lever A4 thought it was]
+Raising span_cap is strictly better than raising max_slots: it relieves the saturation,
+adds token positions, improves KV compression, AND matches TG's ablation direction. It is
+the same knob as A9-UP below.
 
 ### A5. TG6 — restriction + small cross-boundary window  [small mask change]
 Allow each token a ~32-token window ACROSS span boundaries, on top of span+slots.
@@ -115,9 +165,13 @@ spans means more slot positions means FEWER token positions of LM signal per ste
 
 So span_cap is an allocation knob with a real trade in BOTH directions, and the two
 hypotheses are symmetric and untested here:
-- **DOWN (Wolfe's 24):** +21% slots = +21% plan channel capacity. Worth testing IF the
-  0.17-0.42 nat deficit is the channel being capacity-limited. Costs 18.6 token
-  positions/row and drops KV compression 11.8x -> 9.6x.
+- **DOWN (Wolfe's 24): now measured as UNSAFE.** The sweep's re-packed buffer understated
+  span counts — real data gives mean 51.84 spans/row at cap=32, with 10.8% of rows ALREADY
+  at the max_slots=64 ceiling. Lowering the cap can only raise the span count, so cap=24
+  would saturate most rows and shorten them. The "+21% channel capacity" argument does not
+  survive: the extra slots cannot be allocated, the ceiling is already binding. If the
+  capacity hypothesis is worth testing, test it by RAISING max_slots, not by lowering the
+  cap — that isolates capacity from row length.
 - **UP (48):** +18 token positions/row, KV compression 11.8x -> 14.9x, and TG's own
   ablation runs this way (sentence length 64 beats 32 by 0.6 PPL).
 RUN BOTH, one seed each, AFTER A1 — the pooling law was the only argument that ever
@@ -147,3 +201,18 @@ favoured short spans, and A1 deletes it.
   memory write (29.8 -> 35.0 PPL; nothing else in their table moves >0.7). Our core
   runs mean depth 6 with `bptt_depth=4`, so 2 of 6 iterations execute under
   `no_grad`. Wolfe's call, not mine.
+
+## Incidental finding — validation is the TRAIN stream, offset (2026-08-28)
+
+`create_dataloader` falls back to `split="train"` for OpenWebText because OWT has no
+validation split (data.py:103-105). `train.py:1755` separates them with
+`skip_samples=50_000` instead. So validation is the SAME stream, 50k documents ahead.
+
+- **Safe at our current rung.** 3500 steps x b6 x 1153 tokens = 24.2M tokens, roughly 24k
+  documents — about half way to the validation region. Every number in this campaign is
+  clean.
+- **HAZARD for the long runs discussed.** Past roughly **7,000 steps at batch 6** training
+  walks into its own validation set. Any >=10k-step run MUST raise `skip_samples` first, or
+  it will report a validation loss on text it has trained on.
+- (My earlier train-vs-validation comparison returned byte-identical statistics. That was my
+  test being degenerate — I passed the same `skip_samples` to both — not evidence of a leak.)

@@ -221,6 +221,27 @@ class TULConfig:
     # `tg_restrict` (there would be nothing to soften).
     tg_soft_prev_span: bool = False
 
+    # ── slot seed (arms TG4a/TG4b; lab/divergence/TG-WORKLIST.md A1) ──────────
+    # `pooling_probe` on tg2-s1@3500 confirms the plain-mean pooling law (slope
+    # -0.470, r2 0.922): slot-seed signal falls from 0.516 (span 4-5) to 0.210
+    # (span 24-32) against a shared constant ||E_slot||=0.238. Under `tg_restrict`
+    # the slot already attends its whole span through the prelude, so the bag-mean
+    # is redundant AND diluting. Construction-time dispatch — the mode is fixed at
+    # init, never branched on per call.
+    #   "bag_mean" : E_slot + mean_j embed(t_j) over the span (today's behaviour,
+    #                the default, bit-identical to master).
+    #   "e_slot"   : E_slot alone. No bag-mean term is computed at all (arm TG4a).
+    #   "boundary" : E_slot + W_sent . embed(t_last), t_last the LAST token of the
+    #                span (arm TG4b). This is a SEED-LEVEL approximation of Thought
+    #                Gestalt's mid-layer tap (arXiv 2512.25026's m_t = W_sent .
+    #                H^(l_s)_{i_EOS}) — it reads the raw token embedding, not a
+    #                mid-prelude hidden state, so it is NOT the faithful TG tap.
+    #                Builds a new bias-free `nn.Linear(d, d)` (`TULSlots.W_sent`)
+    #                ONLY in this mode — an unused Linear still draws weight decay
+    #                and perturbs the RNG stream, so the other two modes build
+    #                nothing.
+    slot_seed: str = "bag_mean"
+
     def __post_init__(self) -> None:
         if self.prefix_k < 1:
             raise ValueError(f"tul.prefix_k must be ≥ 1, got {self.prefix_k}")
@@ -268,6 +289,21 @@ class TULConfig:
                 "tul.tg_soft_prev_span=true requires tul.tg_restrict=true "
                 "(docs/tul-tg-spec.md §6: TG3 SOFTENS the restriction — there is "
                 "nothing to soften when the restriction itself is off).")
+        _legal_slot_seed = ("bag_mean", "e_slot", "boundary")
+        if self.slot_seed not in _legal_slot_seed:
+            raise ValueError(
+                f"tul.slot_seed must be one of {_legal_slot_seed}, got {self.slot_seed!r}")
+        if self.center_bag_mean and self.slot_seed != "bag_mean":
+            # Judgment call beyond the letter of the brief (which named only "e_slot"):
+            # "boundary" ALSO computes no bag-mean (E_slot + W_sent . embed(t_last), not
+            # a mean over the span), so `center_bag_mean` would silently do nothing there
+            # too — the exact "config key silently ignored" failure this file already
+            # bans loudly for stp_lambda/set_lambda above. Raise for both non-bag_mean
+            # modes rather than leave one of them a silent no-op.
+            raise ValueError(
+                f"tul.center_bag_mean=true with tul.slot_seed={self.slot_seed!r} is a "
+                f"contradiction: only 'bag_mean' computes a bag-mean; there is nothing "
+                f"to center.")
 
 
 # ── pure tensor plumbing ─────────────────────────────────────────────────────
@@ -309,6 +345,41 @@ def bag_mean(signal: Tensor, bag_id: Tensor, token_sel: Tensor, n_bags: int) -> 
     # The dump bin aggregates trailing tokens that have no slot; zero it so the gather
     # at slot positions of tail pads reads 0 rather than a stray span mean.
     out = torch.cat([out[:, :n_bags], out.new_zeros(B, 1, C)], dim=1)
+    return out
+
+
+def boundary_token_index(bag_id: Tensor, token_sel: Tensor, n_bags: int) -> Tensor:
+    """Position of the LAST token of each bag — the "boundary token" (arm TG4b).
+
+    Companion to :func:`bag_mean`: same inputs, but instead of averaging the span's
+    token signal it locates the single position that terminates it. Vectorized with
+    ``scatter_reduce_(reduce="amax")`` over the position index — no Python loop over
+    slots (a per-row Python loop over up to ``max_slots`` spans would be the actual
+    hot-path cost here; this is one kernel launch regardless of span count).
+
+    Args:
+        bag_id:    ``[B, L]`` int64 — see :func:`bag_mean`.
+        token_sel: ``[B, L]`` bool/float, 1/True at token positions — see :func:`bag_mean`.
+        n_bags:    number of real bags (``max_slots``).
+
+    Returns:
+        ``[B, n_bags + 1]`` int64. Row ``s`` is the largest token position ``p`` with
+        ``bag_id[p] == s``, or ``-1`` when bag ``s`` owns no token position — a real
+        slot index the row never reached, OR the dump bin. The ``-1`` sentinel is the
+        pad-slot / dump-bin invariant callers must check before gathering.
+    """
+    B, L = bag_id.shape
+    n_out = n_bags + 1
+    pos = torch.arange(L, device=bag_id.device).unsqueeze(0).expand(B, L)
+    sel = token_sel.to(torch.bool)
+    cand = torch.where(sel, pos, pos.new_full((), -1))
+    out = bag_id.new_full((B, n_out), -1)
+    out.scatter_reduce_(1, bag_id, cand, reduce="amax", include_self=True)
+    # The dump bin (index n_bags) aggregates TOKEN positions past the row's last
+    # boundary (bag_mean's tail-pad case) — force it to -1 so the gather at a
+    # tail-pad SLOT position (bag_mean's documented invariant: tail pads get
+    # E_slot alone) never picks up a stray "boundary" from those leftover tokens.
+    out[:, n_bags] = -1
     return out
 
 
@@ -428,7 +499,7 @@ def cw2_retain_mask(candidates: Tensor, budget: Tensor, seed: int) -> Tensor:
 # ── parameters ───────────────────────────────────────────────────────────────
 
 class TULSlots(nn.Module):
-    """The three TUL parameter groups (spec §3.1/§3.2/§3.4/§5).
+    """The TUL parameter groups (spec §3.1/§3.2/§3.4/§5).
 
     * ``E_slot`` ``[d]`` — the slot token's own embedding, added to the span bag-mean.
       Initialised to the MEAN of the embedding table at the activation step, following
@@ -441,11 +512,24 @@ class TULSlots(nn.Module):
       slot's ``prefix_k`` coda positions (spec §3.1; Block Transformer App. F.2 / Fig 3f
       picks prefix length 2 over 1). Init identity, so at the activation step both coda
       positions see ``h_i`` unchanged and the extra position costs nothing.
+    * ``W_sent`` ``[d, d]``, bias-free — ONLY built when ``tul.slot_seed == "boundary"``
+      (arm TG4b, lab/divergence/TG-WORKLIST.md A1). Projects the span's boundary token
+      embedding into the slot input. An unused Linear still draws weight decay and
+      perturbs the optimizer state, so the other two ``slot_seed`` modes build nothing.
+      Init ``std=0.02``, matching the rest of the model's Linear/Embedding inits
+      (``embeddings.py``, ``gla.py``, ``mhc.py``) rather than the zero/identity
+      convention below — see the RNG-neutrality note there for why that convention
+      does NOT extend to this parameter.
 
     Constructed only when TUL is configured, and LAST in ``MORPHTransformer.__init__``
     so a non-TUL model is byte-identical to the baseline (the ``attach_retention``
-    convention). All three inits are deterministic — zero RNG draws — so even the TUL
-    model's base weights match a baseline built with the same seed.
+    convention). Every init here is RNG-NEUTRAL: ``E_slot`` / ``E_mask`` / ``W_prefix``
+    are deterministic (zero draws) and ``W_sent`` takes its one real draw from a
+    PRIVATE fixed generator, so the global RNG stream is untouched and a TUL model's
+    base weights match a baseline built with the same seed. Verified 2026-08-28:
+    models built from ``tul_tg2`` / ``tul_tg4a`` / ``tul_tg4b`` at seed 1 share all
+    494 parameters byte-identically, with ``tul.W_sent.weight`` the sole addition in
+    TG4b.
     """
 
     def __init__(self, d_model: int, tul: TULConfig):
@@ -459,6 +543,23 @@ class TULSlots(nn.Module):
         self.E_mask = nn.Parameter(torch.zeros(d_model))
         eye = torch.eye(d_model).unsqueeze(0).repeat(tul.prefix_k, 1, 1)
         self.W_prefix = nn.Parameter(eye)
+        self.W_sent: nn.Linear | None = None
+        if tul.slot_seed == "boundary":
+            self.W_sent = nn.Linear(d_model, d_model, bias=False)
+            # RNG-NEUTRAL init from a FIXED generator, the `_seat` precedent below.
+            # W_sent is the only TUL parameter with no meaningful zero/identity init
+            # (unlike E_slot there is no activation-step re-init to rescue a zero
+            # start), so it needs a real draw — but taking that draw from the GLOBAL
+            # stream would shift every parameter built AFTER TULSlots, and
+            # `MORPHTransformer.__init__` builds `core_init` after it (`_SCSEInit`
+            # draws a Linear init whenever `core_init_scale > 0`). A private generator
+            # keeps arm TG4b's base weights byte-identical to TG4a's under EVERY
+            # config, not merely the ones where core_init happens to be RNG-free.
+            g = torch.Generator(device="cpu").manual_seed(0x5E17)
+            with torch.no_grad():
+                self.W_sent.weight.copy_(
+                    torch.empty(self.W_sent.weight.shape, device="cpu").normal_(
+                        mean=0.0, std=0.02, generator=g))
 
     @torch.no_grad()
     def init_at_activation(self, lm_weight: Tensor) -> None:
@@ -485,15 +586,58 @@ class TULSlots(nn.Module):
             self.E_slot.add_(j * (self.tul.per_slot_embed_std * float(mean.std())))
 
     # -- forward helpers ---------------------------------------------------
-    def slot_input(self, signal: Tensor, layout: SlotLayout, add_e_slot: bool) -> Tensor:
-        """Replace slot positions of ``signal`` ``[B, L, C]`` with the span bag-mean.
+    def _e_slot_term(self, bag_id: Tensor, dtype: torch.dtype) -> Tensor:
+        """``E_slot`` broadcast over every position, indexed by its OWN slot index.
 
-        ``add_e_slot`` is True for the token embedding (the slot's input embedding is
-        ``E_slot + mean_j embed(t_j)``, spec §3.2) and False for the bigram / value-embed
-        signals, whose slot value is the plain bag-mean of the span ("bigram/value-embed
-        signals for the slot are the bag-mean, exactly the TST ``ve_bagged`` path").
+        ``[d]`` (shared) broadcasts over every position; ``[S, d]`` (``per_slot_embed``)
+        is indexed by the position's own slot index, which ``bag_id`` already carries
+        for both token and slot positions. Shared by all three ``slot_seed`` modes.
+        """
+        e = self.E_slot.to(dtype)
+        return e[bag_id.clamp(max=e.shape[0] - 1)] if e.dim() == 2 else e
+
+    def slot_input(self, signal: Tensor, layout: SlotLayout, add_e_slot: bool) -> Tensor:
+        """Replace slot positions of ``signal`` ``[B, L, C]`` with the slot's input.
+
+        ``add_e_slot`` is True for the token embedding and False for the bigram /
+        value-embed signals. ``tul.slot_seed`` (construction-time; TG-WORKLIST A1)
+        changes ONLY the ``add_e_slot=True`` path — bigram / value-embed signals stay
+        the plain bag-mean of the span in EVERY mode ("bigram/value-embed signals for
+        the slot are the bag-mean, exactly the TST ``ve_bagged`` path"), so a caller
+        with ``add_e_slot=False`` always falls through to the code below unchanged:
+
+            "bag_mean" (default): ``E_slot + mean_j embed(t_j)`` over the span
+                        (spec §3.2) — bit-identical to pre-``slot_seed`` master.
+            "e_slot"   (``add_e_slot=True`` only): ``E_slot`` alone. No bag-mean is
+                        computed — the slot value does not depend on the span's
+                        token embeddings at all.
+            "boundary" (``add_e_slot=True`` only): ``E_slot + W_sent . embed(t_last)``,
+                        ``t_last`` the span's LAST token position. A slot with no span
+                        (a tail-pad position, bag_id at the dump bin) gets ``E_slot``
+                        alone — see :func:`boundary_token_index`'s dump-bin handling.
         """
         token_sel = (~layout.slot_mask).to(signal.dtype)
+
+        if add_e_slot and self.tul.slot_seed == "e_slot":
+            at_pos = signal.new_zeros(signal.shape) + self._e_slot_term(layout.bag_id,
+                                                                        signal.dtype)
+            return torch.where(layout.slot_mask.unsqueeze(-1), at_pos, signal)
+
+        if add_e_slot and self.tul.slot_seed == "boundary":
+            assert self.W_sent is not None    # built iff slot_seed == "boundary" (__init__)
+            b_idx = boundary_token_index(layout.bag_id, token_sel, layout.max_slots)
+            b_idx_at_pos = torch.gather(b_idx, 1, layout.bag_id)              # [B, L]
+            valid = (b_idx_at_pos >= 0).unsqueeze(-1)                         # False: no span
+            safe_idx = b_idx_at_pos.clamp(min=0)
+            boundary_sig = torch.gather(
+                signal, 1, safe_idx.unsqueeze(-1).expand(*safe_idx.shape, signal.shape[-1]))
+            proj = self.W_sent(boundary_sig.to(signal.dtype))
+            at_pos = torch.where(valid, proj, torch.zeros_like(proj))
+            at_pos = at_pos + self._e_slot_term(layout.bag_id, signal.dtype)
+            return torch.where(layout.slot_mask.unsqueeze(-1), at_pos, signal)
+
+        # "bag_mean" (default), and every add_e_slot=False caller in EVERY mode: the
+        # plain bag-mean, unchanged from master.
         bags = bag_mean(signal, layout.bag_id, token_sel, layout.max_slots)
         at_pos = torch.gather(
             bags, 1, layout.bag_id.unsqueeze(-1).expand(*layout.bag_id.shape, signal.shape[-1]))
@@ -510,11 +654,7 @@ class TULSlots(nn.Module):
             real = ((layout.bag_id < n_slots) & valid_at).unsqueeze(-1)
             at_pos = torch.where(real, at_pos - mu, at_pos)
         if add_e_slot:
-            e = self.E_slot.to(signal.dtype)
-            # [d] broadcasts over every position; [S, d] is indexed by the position's OWN
-            # slot index, which `bag_id` already carries for both token and slot positions.
-            at_pos = at_pos + (e[layout.bag_id.clamp(max=e.shape[0] - 1)]
-                               if e.dim() == 2 else e)
+            at_pos = at_pos + self._e_slot_term(layout.bag_id, signal.dtype)
         return torch.where(layout.slot_mask.unsqueeze(-1), at_pos, signal)
 
     def prefix_project(self, h_slots: Tensor, layout: SlotLayout, l_total: int) -> Tensor:

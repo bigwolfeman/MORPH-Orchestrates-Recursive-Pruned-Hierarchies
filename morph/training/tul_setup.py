@@ -166,6 +166,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         sigreg_activate_at=float(tc.get("sigreg_activate_at", 0.0)),
         tg_restrict=bool(tc.get("tg_restrict", False)),
         tg_soft_prev_span=bool(tc.get("tg_soft_prev_span", False)),
+        slot_seed=str(tc.get("slot_seed", "bag_mean")),
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
@@ -197,6 +198,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "sigreg_activate_at": model_cfg.sigreg_activate_at,
         "tg_restrict": model_cfg.tg_restrict,
         "tg_soft_prev_span": model_cfg.tg_soft_prev_span,
+        "slot_seed": model_cfg.slot_seed,
         "boundary_chars": str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
         "boundary_substrings": list(substrings),
         "min_span": rule.min_span,
@@ -228,7 +230,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
     print(f"  TUL ON: activate_at={activate_at} slot_token={slot_token!r}(id {slot_id}) "
           f"|B|={int(lut.sum())} min_span={rule.min_span} span_cap={rule.span_cap} "
           f"prefix_k={prefix_k} max_slots={spec.max_slots} L_total={spec.l_total} "
-          f"p_drop={model_cfg.token_state_dropout}"
+          f"p_drop={model_cfg.token_state_dropout} slot_seed={model_cfg.slot_seed!r}"
           + (f" fixed_stride={rule.fixed_stride}" if rule.fixed_stride else "")
           + (f" coda_token_cut={model_cfg.coda_token_cut}" if model_cfg.coda_token_cut else ""),
           flush=True)
