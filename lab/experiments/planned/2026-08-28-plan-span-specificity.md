@@ -174,3 +174,61 @@ emit head is untrained and its `ce_emit` (13.7 nats, worse than the 10.8 of a un
 distribution over the 49k vocabulary) is not a readable signal. On arms where the head IS
 trained the number does behave: ctrlworth-s3 shuffles at 81% of its zeroing cost on ce_emit,
 tg1-s1 at 7.8% — the same story as ce_main, from a head that was actually trained.
+
+
+## CORRECTION 2026-08-28 12:50 — the fourth cell arrived and the headline was WRONG
+
+The panel above measured three cells of the 2x2 and I read the restriction as the cause.
+`tul_a1_noaux` (no restriction, aux losses OFF) completed under a pinned optimizer horizon
+and fills the fourth. It changes the conclusion.
+
+| | aux losses ON | aux losses OFF |
+|---|---|---|
+| **restriction OFF** | ctrl-s3 **65.1%** (zeroing +0.0148) | a1noaux-s1 **0.4%** (zeroing +0.0130) |
+| **restriction ON** | tg1-s1 **3.0%** (zeroing +0.0637) | tg2-s2 **0.3%** (zeroing +0.0516) |
+
+**Prediction N2 FAILED.** It predicted a1noaux specificity ≥ 3.0% — above the best restricted
+arm — on the reading that the restriction was what erased the content. Measured **0.4%**, and
+0.9% at step 4500. It was written so it could contradict my own headline, and it did.
+
+### What is actually true
+
+**The aux losses (`emit_weight` / `plast_weight`) are the SOURCE of span-specific content.**
+With them off, the plan is generic — 0.3–0.4% — whether the restriction is on or not. There
+is no content to speak of without them. That makes sense mechanically: the emit loss trains
+the slot to predict the next span's first token, which is span-specific supervision by
+construction, and nothing else in the objective asks z to be about its own span.
+
+**The restriction then degrades that content ~20x** — 65.1% → 3.0% — but only where content
+exists to degrade. Both effects are real; my earlier reading credited the restriction with
+the whole story and never asked where the content came from.
+
+**Corrected statement, replacing "the restriction destroyed exactly the thing it was
+introduced to create":** the emit/plast losses WRITE the plan's span-specific content and the
+restriction degrades it by ~20x. Neither alone produces a content-bearing plan.
+
+**The irony worth recording:** TG2 — the arm this campaign called its best, and the base for
+TG3b, TG4a, TG4b and cap64 — is exactly `restriction ON + aux OFF`, the cell with the LEAST
+plan content available. Removing the aux losses to kill the takeover also removed the only
+mechanism writing content into the plan. Every downstream arm inherited an empty plan by
+construction, which is why they all measure 0.1–0.6%.
+
+### What survives unchanged
+
+The restriction still raises the POSITION value ~4x (zeroing costs 0.0130–0.0148 unrestricted
+vs 0.0516–0.0637 restricted, at either aux setting). So it does make the coda lean on the
+slot positions harder while their content gets worse. That part stands.
+
+And the core finding of the panel stands: **in every arm this campaign has actually run, the
+plan is an interchangeable constant.** Only the unrestricted aux-ON control ever carried real
+per-span content, and it was worth 0.0148 nats.
+
+### N3 also FAILED, and it points the same way
+
+N3 predicted a1noaux's ce_main@3000 within 0.05 of the control band midpoint (4.5023).
+Measured **4.6428** — removing the aux losses COSTS 0.175 nats against ctrl-s3's 4.4680 in
+the unrestricted setting. Under the restriction the same change was roughly neutral
+(tg1 4.8104 → tg2 4.8763). So the aux losses earn their place when tokens can see the whole
+context, and stop earning it under the restriction.
+
+**N1 is tracking**: a1noaux seed 1 completed 4500 steps with no takeover (1 of 2).
