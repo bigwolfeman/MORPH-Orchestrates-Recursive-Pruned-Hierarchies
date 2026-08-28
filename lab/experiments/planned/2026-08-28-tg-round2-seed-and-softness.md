@@ -176,3 +176,46 @@ means what it always meant).
 4.791 over TG4a's two seeds against 4.794 over TG2's (4.8763 / 4.7121). Deleting the
 bag-mean moved CE by 0.003 nats — nothing, well inside the seed spread. The pooling-law
 argument predicted the bag-mean was diluting; removing it neither helped nor hurt.
+
+
+## Results — TG3 seed 1: DIVERGED (filled 2026-08-28 02:52)
+
+**T3 HELD, and more strongly than the prediction asked for.** T3 said "at least 1 of 2
+seeds fires the takeover rule". tg3-s1 did not merely fire it — it diverged and the
+training guard aborted the run.
+
+    end core share  0.9986      share rule fired at step  842
+    block gain      1.953       gain rule fired at step   730     (r2 0.97)
+    val minimum     5.8166 @750 -> val at abort 7.4760            (+1.659 nats)
+    DIV-GUARD strike 1/2 ppl 1226.5 @2020, strike 2/2 ppl 1967.7 @2040
+    [ABORT] step 2040, forensic ckpt DIVERGED_step_2040.pt, NO step-3000 checkpoint
+
+Block gain 1.953 at r² 0.97 is the expansive core map (`ρ(J_core) > 1`) named in
+`.agents/notes/implemented/architecture/2026-06-19-iterative-map-dynamics.md` — the same
+mechanism, not a new one. End share 0.9986 matches tg1-s2's 0.9986 to four figures: the
+same attractor.
+
+**T1 and T2 are UNSCOREABLE on tg3-s1.** Both were written against step 3000 and no such
+checkpoint exists. The surviving checkpoints (500, 1000, 1500, 2000) are all at or past the
+takeover onset at step 842 except step 500, so a substitute comparison at a matched earlier
+step would measure a model already collapsing. Recording this as a protocol outcome — the
+method could not distinguish — rather than quietly re-scoring at a step the predictions were
+not written for. If tg3-s2 survives to 3000, T1 and T2 become scoreable at n=1 and must be
+read as n=1.
+
+**What this says beyond the prediction.** The takeover record is now:
+
+| base | aux losses | seeds run | takeovers |
+|---|---|---|---|
+| tul_tg1 | ON | tg1 s1, tg1 s2, tg3 s1 | 2 (tg1-s2 @1258, tg3-s1 @842) |
+| tul_tg2 | OFF | tg2 s1, tg2 s2, tg4a s1, tg4a s2 | **0 of 4** |
+
+Softening the mask did NOT rescue the takeover; removing the aux losses did. That is a
+clean confirmation of the O5 objective-split account, obtained for free from an arm that
+failed at its own question.
+
+**Consequence: TG3 cannot answer the question it was built for**, because it dies of a
+cause unrelated to mask softness. A `tul_tg2`-based soft arm can. Built as
+`morph/configs/tul_tg3b.yaml`, pre-registered in
+./2026-08-28-tg3b-soft-restriction-no-aux.md, and chained to run LAST — after the
+plan-content probes, so it cannot delay the result that redirects everything.
