@@ -232,3 +232,50 @@ the unrestricted setting. Under the restriction the same change was roughly neut
 context, and stop earning it under the restriction.
 
 **N1 is tracking**: a1noaux seed 1 completed 4500 steps with no takeover (1 of 2).
+
+
+## NEW FINDING 2026-08-28 14:20: the TAKEOVER destroys the plan's content
+
+`a1-s1` in the slot-pay panel is `tul_a1` seed 1 — bit-identical to `ctrl-s1` (same config,
+same seed, same pinned horizon; both report VAL@3000 = 4.5653). Scoring the control family
+by the takeover rule splits it:
+
+    seed        verdict              shareAt  gainAt   specificity @3000
+    ctrl-s0     DIVERGED @2040          —       —          —
+    ctrl-s1     TOOK OVER              2739    2153       1.2%   (= a1-s1)
+    ctrl-s2     TOOK OVER              2970    2244        —
+    ctrl-s3     HELD                   never   1102       65.1%
+
+**Same config, same aux losses, no restriction. The seed that stayed healthy has a 65%
+span-specific plan; the seed that took over has 1.2%.** At step 4500 a1-s1 reads 1.5%, so it
+does not recover.
+
+This is n=1 against n=1 and must not be over-read, but it is mechanistically consistent with
+the campaign's existing account of the takeover as a forward slot-state RANK COLLAPSE
+(`morph-takeover-is-state-collapse`): if the core's output collapses onto a low-rank
+direction, the per-span structure in z is exactly what gets lost.
+
+### Consequence for every specificity number, including mine
+
+**A specificity measurement is only interpretable alongside the takeover status of that
+checkpoint.** A low number can mean an empty plan OR a collapsed run, and those are different
+diseases. Checked for the 2x2's four cells, using whether either criterion fired BEFORE the
+step-3000 checkpoint:
+
+    cell                          verdict at ckpt   specificity
+    ctrl-s3   (no restr, aux ON)  HELD                65.1%
+    a1noaux-s1(no restr, aux OFF) healthy — share fired 3556, gain 3347, both AFTER 3000   0.4%
+    tg1-s1    (restr,   aux ON)   HELD (gain fired 895 but r2 0.28, under the 0.5 gate)     3.0%
+    tg2-s2    (restr,   aux OFF)  HELD (neither fired)                                     0.3%
+
+**All four cells are from models that were healthy at their checkpoints, so the 2x2 stands**
+and the correction it produced — the aux losses write the content, the restriction degrades
+it — is unaffected.
+
+The restricted arms' 0.1–0.6% is therefore genuinely an EMPTY PLAN, not a collapsed run.
+
+### And it makes ctrl-s3 the most valuable checkpoint in the campaign
+
+It is the ONLY run measured so far that is both healthy AND carries a content-bearing plan.
+Every conclusion about what a working plan looks like rests on it, at n=1. A second healthy
+aux-ON unrestricted seed is worth more than another arm variant.
