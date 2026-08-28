@@ -70,3 +70,55 @@ Same three checkpoints at matched step 3000 — `tg2-s1`, `tg2-s2` (restricted) 
 the coda actually reads), same four conditions, same frozen-weights guards
 (`assert_frozen`, `param_fingerprint` before/after, `assert_disjoint_batches`, fresh
 unembedding). GPU is free; the round-2 queue and TG3b have both completed.
+
+## ATTEMPT 1 RESULT + AMENDMENT (2026-08-28 07:17) — the failure mode CHANGED
+
+Attempt 1 on `tg2-s1` (fit 150 / eval 20 / steps 3000, ~120k eval tokens):
+
+    PLAN      7.5956   SUMMARY  7.5991   SHUFFLED 7.5956   POSITION 7.5386
+    unigram(i+1) 7.4635        unigram(i) 7.4645
+    train losses: PLAN 7.6214   SUMMARY 7.4359   SHUFFLED 7.6215   POSITION 7.5538
+    MEMORIZATION GATE  POSITION eval 7.5386 - train 7.5538 = -0.0152  -> OK
+
+**R1 HELD.** The gate passes with room to spare: the 0.8872-nat gap is now −0.0152. Data
+volume was indeed the binding constraint on memorization.
+
+**R2 FAILED.** PLAN (7.5956) is not below POSITION (7.5386). A condition given strictly
+more information is still doing worse.
+
+**R3 FAILED, and it is the diagnostic one.** POSITION was predicted to beat unigram(i+1) by
+≥ 0.30 nats. It is **0.075 nats WORSE** (7.5386 vs 7.4635). **Every condition loses to a
+unigram model.** Train loss ≈ eval loss in every condition, so this is not overfitting — it
+is a decoder that has not been fitted at all.
+
+R2 and R3 were pre-registered precisely to catch a panel whose gate passes but whose
+instrument has no power. They fired. **The bands are NOT quotable from attempt 1.**
+
+### The amendment, and why it is not fishing
+
+The declared attempt 2 is "less capacity" (`--hidden-dim 64 --weight-decay 0.1`). That was
+written when the observed failure was MEMORIZATION. The observed failure is now the
+OPPOSITE — underfitting — so running attempt 2 as written would knowingly spend a run
+making a underfitted decoder smaller. Following the letter of the procedure would produce a
+result I already know is useless.
+
+Attempt 2 is therefore redirected to **more optimization, not less capacity**:
+`--steps 20000 --decoder-batch 256 --lr 1e-3`. At attempt 1's settings the decoder saw
+3000 × 32 = 96k draws over ~41k examples — **2.3 epochs**. The redirect gives 5.1M draws,
+about 125 epochs.
+
+What keeps this honest, stated explicitly:
+
+- The redirect is driven by a MEASURED diagnosis (train ≈ eval, and every condition below
+  the unigram floor), not by an unwanted band. The band is not the thing being changed.
+- `CANARY_MAX` stays **0.50**. The decision bands (0.20 FULL / 0.05 EMPTY) are untouched.
+- The budget stays at **two attempts total**. This redirect IS attempt 2; there is no
+  attempt 3.
+- R2 and R3 remain live as pass/fail gates on attempt 2. If the decoder still cannot beat
+  unigram, the reported result is that the blind-decoder probe cannot be fitted at this
+  scale, and EMPTY-vs-FULL stays OPEN.
+
+**A2-R5 (new, frozen now).** Attempt 2's POSITION beats unigram(i+1) by ≥ 0.30 nats AND its
+memorization gate passes. Both, or the probe design is reported as inadequate. Failing one
+while passing the other means the valid window between underfitting and memorization is too
+narrow for this decoder, which is itself the finding.
