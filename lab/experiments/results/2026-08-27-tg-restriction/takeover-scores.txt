@@ -1,0 +1,6 @@
+arm                  probed   last endshare   gain    r2  shareAt  gainAt  valMin      @  valEnd valRise  trnMin  verdict
+-------------------------------------------------------------------------------------------------------------------------
+tg1-s1                 3500   3499   0.0242  1.053  0.28     None     895     nan   None     nan     nan     nan  held
+tg1-s2                 2921   2920   0.9986  2.049  0.98     1258    1062     nan   None     nan     nan     nan  TOOK OVER
+tg2-s1                 3500   3499   0.0020  1.014  0.07     None    None     nan   None     nan     nan     nan  held
+tg2-s2                 3500   3499   0.0035  0.963  0.29     None    None     nan   None     nan     nan     nan  held
