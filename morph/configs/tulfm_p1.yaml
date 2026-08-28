@@ -1,0 +1,93 @@
+# TUL-FM Phase 1 — the flow-matching span planner on a FROZEN A3 backbone.
+#
+# Arc:        .agents/notes/proposed/architecture/2026-08-28-tul-fm-arc.md
+# Gates:      docs/tul-fm-probing.md §5 (P1)
+# Pre-reg:    lab/experiments/planned/2026-08-28-tulfm-p1.md
+# Entry:      PYTHONPATH=$PWD python -m lab.tulfm.train_p1
+#
+# THIS FILE IS STANDALONE ON PURPOSE. It does NOT compose base.yaml: the backbone's
+# architecture, tokenizer, dataset and span rule all come from the BACKBONE's own config
+# (`backbone.config_name`, composed at startup), so there is exactly one place each of
+# those values can live and the planner can never disagree with the checkpoint it is
+# reading features out of.
+
+backbone:
+  # Hydra config name (in this directory) describing the FROZEN model's architecture.
+  # It also supplies data.tokenizer, data.dataset and the whole `tul:` span rule.
+  config_name: tul_a3
+  # Checkpoint to load into that architecture. null → a randomly-initialised backbone,
+  # which is a CPU/smoke path only: a random backbone's features are not a plan target.
+  checkpoint: checkpoints/morph/a3-s2/step_4500.pt
+  # The prelude read-out. true → input_norm(prelude), i.e. EXACTLY the tensor the A3
+  # coda consumes (n_core == 0 makes _core_region reduce to input_norm). The SAME
+  # tensor is used for the context AND for the pooled targets.
+  apply_input_norm: true
+  # Hydra overrides applied to the BACKBONE's config (not to this one). For smoke runs
+  # that need a smaller frozen model without editing a shipped arm file. Everything set
+  # here is logged, because the whole resolved backbone config goes to wandb.
+  overrides: []
+
+planner:
+  d_p: 512
+  n_layers: 4
+  n_heads: 8
+  # SwiGLU, so the hidden bank is 2*d_ff wide. 1408 = 2.75 x d_p, the same ratio
+  # base.yaml uses (d_model 1024 -> d_ff 2816). At d_ff 2048 the planner is 25.97 M,
+  # just outside the declared band — the band is the constraint, not the round number.
+  d_ff: 1408
+  cond_dim: 256
+  dropout: 0.0
+  # ~22.0 M params at these dims (P1 target band: 15-25 M). Asserted at startup.
+  min_params_m: 15.0
+  max_params_m: 25.0
+
+sigma:
+  # EDM / DiffusionBlocks constants, read off the authors' code and audited in
+  # docs/diffusionblocks-reference-audit.md §3. These are NOT defaults to taste — the
+  # equi-probability band edges are computed FROM them.
+  p_mean: -1.2
+  p_std: 1.2
+  # 0.5 — our own DB oracle sweep picked it independently of the paper. Note the
+  # documented tension with unit-norm targets in lab/tulfm/fm_planner.py's docstring.
+  sigma_data: 0.5
+  # Equi-probability bands for the per-band loss curves. The HIGH bands are the real
+  # prediction regime; the low bands are the autoencoding regime. Both go to wandb.
+  n_bands: 6
+  # Euler steps at inference. A FIXED constant in P1 — no loop-depth variation (Wolfe
+  # veto, arc note).
+  infer_steps: 6
+
+data:
+  seq_len: 1024
+  batch_size: 8
+  # Slot budget per row. 0 → seq_len // min_span, the true upper bound the boundary rule
+  # can produce, so the budget drops nothing and `slots/dropped_frac` measures the RULE
+  # rather than the budget.
+  max_slots: 0
+  # Documents skipped by the held-out loader so val never sees a train document.
+  val_skip_samples: 100000
+
+training:
+  steps: 4000
+  lr: 3.0e-4
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  grad_clip: 1.0
+  warmup: 200
+  min_lr_frac: 0.1
+  seed: 0
+  log_every: 20
+  eval_every: 500
+  n_eval_batches: 8
+  ckpt_every: 1000
+  ckpt_dir: checkpoints/tulfm/p1
+  # bf16 autocast on CUDA (grads stay fp32); plain fp32 on CPU. CPU has no bf16 path
+  # worth having here and the tests must be exact.
+  amp: true
+  device: cuda
+
+wandb:
+  project: morph-tul
+  entity: null
+  name: tulfm-p1
+  mode: online

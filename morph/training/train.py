@@ -526,8 +526,16 @@ def load_checkpoint(
     return step, ckpt["optimizer"], needs_rebuild, set(ckpt["model"].keys())
 
 
-def load_weights_only(path: str, model: nn.Module, device: torch.device) -> None:
+def load_weights_only(path: str, model: nn.Module,
+                      device: torch.device) -> tuple[list, list]:
     """Initialise model WEIGHTS from a checkpoint, but reset the run to step 0.
+
+    Returns ``(missing, unexpected)`` from ``load_state_dict``. The trainer ignores the
+    return (its own guard is the 50 %-matched raise below); a caller that rebuilds a
+    trained model outside the trainer SHOULD check it, because the count-based guard is
+    weak where it matters: the QAT parametrizations rename only ~27 of 348 tensors, and
+    those 27 are the embedding table and every MLP. See
+    ``morph/training/quant_setup.py`` — apply the same transforms BEFORE this call.
 
     Unlike load_checkpoint (full resume: weights + optimizer + scaler + step), this
     loads ONLY the model tensors and leaves the optimizer/scaler FRESH and the step
@@ -570,6 +578,7 @@ def load_weights_only(path: str, model: nn.Module, device: torch.device) -> None
           f"seed step was {ckpt.get('step', '?')}; matched {n_loaded}/{len(model_keys)} "
           f"tensors via {'raw' if state is raw else 'stripped'} keys; "
           f"{len(missing)} missing / {len(unexpected)} unexpected", flush=True)
+    return list(missing), list(unexpected)
 
 
 @torch.no_grad()

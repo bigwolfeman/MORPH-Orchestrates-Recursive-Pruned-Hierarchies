@@ -24,9 +24,46 @@ from morph.model.tul_layout import (
     boundary_lut_from_tokenizer,
 )
 
-__all__ = ["TulRuntime", "build_tul_runtime"]
+__all__ = ["TulRuntime", "build_tul_runtime", "build_boundary_rule"]
 
 NEVER = "never"
+
+
+def build_boundary_rule(cfg, cache_dir: str = "ignore/tul_cache"):
+    """``(rule, lut, eos_id, substrings)`` — THE span rule, from ``cfg.tul`` + the tokenizer.
+
+    Extracted from :func:`build_tul_runtime` so the rule has ONE construction site. It is
+    a property of the DATA, not of whether the slot apparatus is built, so it resolves
+    even when ``tul.activate_at: never`` (arm A3) — which is exactly the case TUL-FM P1
+    needs: a frozen A3 backbone has no slots, and the planner still has to segment rows
+    with the same ``.;!?`` + newline/dash rule, the same ``min_span``, the same
+    ``span_cap``, and the same EOS handling as every TUL arm.
+    """
+    tokenizer_name = str(cfg.data.tokenizer)
+    vocab_size = int(cfg.model.vocab_size)
+    tc = getattr(cfg, "tul", None)
+    if tc is None:
+        tc = {}
+
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(tokenizer_name)
+    eos_id = int(tok.eos_token_id if tok.eos_token_id is not None else 0)
+    substrings = tuple(tc.get("boundary_substrings", BOUNDARY_SUBSTRINGS))
+    lut = boundary_lut_from_tokenizer(
+        tokenizer_name, vocab_size, eos_id,
+        cache_dir=cache_dir,
+        suffix_chars=str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
+        substrings=substrings,
+    )
+    rule = BoundaryRule(
+        is_boundary=lut,
+        min_span=int(tc.get("min_span", 4)),
+        span_cap=int(tc.get("span_cap", 32)),
+        eos_id=eos_id,
+        fixed_stride=int(tc.get("fixed_stride", 0)),
+    )
+    return rule, lut, eos_id, substrings
 
 
 @dataclass
@@ -86,29 +123,15 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         raise ValueError(
             f"tul.slot_token {slot_token!r} does not resolve to a valid id for "
             f"{tokenizer_name} (got {slot_id}, vocab {vocab_size})")
-    eos_id = int(tok.eos_token_id if tok.eos_token_id is not None else 0)
+
+    rule, lut, eos_id, substrings = build_boundary_rule(cfg, cache_dir=cache_dir)
     if slot_id == eos_id:
         raise ValueError("tul.slot_token resolves to EOS — pick an unused special token")
-
-    substrings = tuple(tc.get("boundary_substrings", BOUNDARY_SUBSTRINGS))
-    lut = boundary_lut_from_tokenizer(
-        tokenizer_name, vocab_size, eos_id,
-        cache_dir=cache_dir,
-        suffix_chars=str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
-        substrings=substrings,
-    )
     if bool(lut[slot_id]):
         raise ValueError(
             f"tul.slot_token {slot_token!r} (id {slot_id}) is itself a boundary token — "
             f"it would cut spans it is only supposed to mark")
 
-    rule = BoundaryRule(
-        is_boundary=lut,
-        min_span=int(tc.get("min_span", 4)),
-        span_cap=int(tc.get("span_cap", 32)),
-        eos_id=eos_id,
-        fixed_stride=int(tc.get("fixed_stride", 0)),
-    )
     prefix_k = int(tc.get("prefix_k", 2))
 
     # ── the span-length gate (docs/tul-gate-spec.md §1, §3, §12) ──────────────

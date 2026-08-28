@@ -1354,6 +1354,39 @@ class MORPHTransformer(nn.Module):
         x = self.final_norm(x)
         return x
 
+    def prelude_states(self, input_ids: Tensor, apply_input_norm: bool = True) -> Tensor:
+        """``[B, L, d_model]`` FEATURE READ-OUT after the prelude. Adds no behaviour.
+
+        Written for TUL-FM P1 (``lab/tulfm/``), which trains a separate planner on a
+        FROZEN backbone and needs the backbone's states over the context. Nothing in the
+        training or inference path calls it, so every existing path stays bit-identical:
+        this is a new public entry point that reuses :meth:`_front_region`, the same
+        boundary norm ``_core_region`` applies, and the same stream reduction
+        :meth:`_readout` applies.
+
+        With ``apply_input_norm=True`` on an ``n_core == 0`` model (arm A3), the returned
+        tensor is EXACTLY what the coda consumes: ``_core_region`` reduces to
+        ``self.input_norm(x)`` there. On a model with a core it is the state the core
+        loop starts from, before any iteration.
+
+        The HC carrier is reduced by the mean over streams — the same scale-preserving
+        readout :meth:`_readout` uses — so the result is single-stream ``[B, L, d_model]``
+        whatever ``hc_streams`` is.
+
+        Raises in ``train()`` mode: embed/MLP dropout would make the "frozen features"
+        stochastic, and a silently-noisy feature is worse than a missing one.
+        """
+        if self.training:
+            raise RuntimeError(
+                "prelude_states() is a frozen-feature read-out and must run in eval mode "
+                "(dropout would make the features stochastic). Call model.eval() first.")
+        x, _x0, _bigram = self._front_region(input_ids)
+        if apply_input_norm:
+            x = self.input_norm(x)
+        if self._is_hc:
+            x = x.mean(dim=2)
+        return x
+
     def _core_region(self, x: Tensor, x0: Tensor, bigram_emb,
                      input_ids: Tensor | None = None) -> Tensor:
         """CORE region: input_norm → the Poisson-depth core loop → the looped carrier.
