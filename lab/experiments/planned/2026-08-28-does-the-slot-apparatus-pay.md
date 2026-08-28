@@ -148,3 +148,66 @@ at matched steps — not the share, and not the run-length-confounded "held" tal
 **Required follow-up before any takeover claim is repeated:** re-run tg2 (or tg3b) for 4500
 steps with the same pinned horizon and score the rule. Until then, cite the GAIN, never the
 "0 of 4".
+
+
+## VERDICT (filled 2026-08-28 15:00). The slot apparatus does not pay. It is NEGATIVE.
+
+All six runs, 4500 steps, batch 6, `ademamix_t_beta3` pinned to 3500 and verified from each
+run's frozen Hydra config.
+
+    arm         params   sps    VAL@3000   VAL@4250   best     takeover
+    a3-s1       207.7M   4.52    4.4226     4.0250            no core to take over
+    a3-s2       207.7M   4.51    4.3564     3.9873            no core to take over
+    a1noaux-s1  286.1M   1.90    4.6696     4.4874            TOOK OVER @3556
+    a1noaux-s2  286.1M   1.90    4.3699     4.1918            TOOK OVER @3505
+    a1-s1       286.1M   1.90    4.5653     5.3160            TOOK OVER @2739
+    a1-s2       286.1M   1.89    4.4458     4.3709            TOOK OVER @2970
+
+    means       A3       4.3895   4.0061   best 4.0061
+                A1       4.5055   4.8434   best 4.4681
+                a1noaux  4.5198   4.3396   best 4.3396
+
+**D1 FAILED — in the direction the decision rule did not cover.** Predicted |A1 − A3| ≤ 0.05
+at step 3000; measured **0.116, with A3 AHEAD**. By step 4250 the gap is **0.837**. The
+pre-registration's D1-fails branch was written one-sided ("A1 beats A3 by > 0.05") and the
+observed outcome falls outside it. Recording that drafting flaw rather than reading the
+result into the branch that happens to fit: A3 does not merely match the slot apparatus, it
+beats it, and the apparatus is therefore NEGATIVE value at this scale.
+
+**D2 HELD.** 4.515 / 1.895 = **2.38x** throughput, against a predicted ≥ 2x.
+
+**D3 HELD, 2 of 2.** Both A1 seeds took over (shares 0.9972 / 0.9718, gains 1.915 / 1.653 at
+r² 0.98).
+
+**N1 FAILED, N2 FAILED, N3 FAILED** — filed above.
+
+### The single cleanest statement the panel supports
+
+**Every arm with a core loop took over. Four of four.** a1 s1/s2 and a1noaux s1/s2, at
+4500 steps, with and without the aux losses. A3 has `n_core: 0` and so has no core to take
+over — the disease is structurally impossible for it.
+
+A3 is smaller (207.7M vs 286.1M), 2.4x faster, better on loss at every step measured, and
+cannot take over. The slot-and-loop apparatus costs parameters, costs throughput, costs loss,
+and introduces the campaign's central failure mode.
+
+### The confound, restated because it cuts the right way
+
+A3 is NOT iso-parameter: `n_core: 0` removes the core's weights, so it is smaller AND
+shallower. That makes the result STRONGER, not weaker — a strictly smaller model beats the
+apparatus at 2.4x the speed.
+
+### Refinement to the takeover-destroys-content finding: there is a TIME COURSE
+
+Specificity against how long after the takeover the checkpoint was taken:
+
+    checkpoint          took over at   measured at   steps after   specificity
+    ctrl-s3             never          3000            —              65.1%
+    a1-s2               2970           3000             30            31.8%
+    a1-s1               2739           3000            261             1.2%
+    a1-s2               2970           4500           1530             1.9%
+
+The plan's span-specific content decays after the takeover fires. a1-s2 caught 30 steps in
+still holds half of ctrl-s3's; the same run 1500 steps later holds almost none. This is a
+dose-response, from four checkpoints, and it strengthens the rank-collapse account: the
+content is not absent from the architecture, it is destroyed by the collapse.
