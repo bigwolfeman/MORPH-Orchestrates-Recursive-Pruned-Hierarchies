@@ -98,7 +98,34 @@ the TUL thesis needs to be restated.
 
 ## Gated / rejected for now
 
-- **span_cap 32 -> 16 (Wolfe's proposal): NOT recommended, see the audit above.**
+### A9. span_cap sweep  [config only, 2 arms]
+Measured 2026-08-28 by re-packing one real OWT stream at each cap (ABSOLUTE means are
+inflated vs the true stream — the reconstruction concatenates across removed slot ids —
+but the TREND across caps is valid, all caps share one buffer):
+
+    cap    mean  spans/row  slotpos   tokpos  at_cap%   KVcomp
+    16    14.04       64.0    242.3    909.7    72.7%    7.02x  << max_slots SATURATED
+    24    19.26       53.7    107.3   1044.7    61.5%    9.63x
+    32    23.63       44.3     88.7   1063.3    49.2%   11.82x   (current)
+    48    29.87       35.3     70.7   1081.3    34.0%   14.93x
+    64    33.23       32.0     64.7   1087.3    24.0%   16.61x
+
+**The sequence is FULL: tokens and slots compete for the same 1152 positions.** More
+spans means more slot positions means FEWER token positions of LM signal per step.
+
+So span_cap is an allocation knob with a real trade in BOTH directions, and the two
+hypotheses are symmetric and untested here:
+- **DOWN (Wolfe's 24):** +21% slots = +21% plan channel capacity. Worth testing IF the
+  0.17-0.42 nat deficit is the channel being capacity-limited. Costs 18.6 token
+  positions/row and drops KV compression 11.8x -> 9.6x.
+- **UP (48):** +18 token positions/row, KV compression 11.8x -> 14.9x, and TG's own
+  ablation runs this way (sentence length 64 beats 32 by 0.6 PPL).
+RUN BOTH, one seed each, AFTER A1 — the pooling law was the only argument that ever
+favoured short spans, and A1 deletes it.
+
+- **span_cap 32 -> 16: NOT recommended. MEASURED SATURATION.** cap=16 drives spans/row to
+  exactly max_slots=64, so boundaries get DROPPED, and token positions fall 1063 -> 910
+  (a 14% loss of LM signal per step). KV compression falls to 7.0x.
   The stated motivation (less padding) does not hold — padding is 1.36%. Measured
   mean span is 18.73 (median 18), not 12. Lowering the cap to 16 truncates ~53% of
   spans, pushes spans/row from ~44 to ~85 which EXCEEDS max_slots=64, and cuts KV
