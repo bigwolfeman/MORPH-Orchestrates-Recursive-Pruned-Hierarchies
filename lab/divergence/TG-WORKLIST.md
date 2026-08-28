@@ -194,6 +194,61 @@ WHY: the core loop is ~24% of layer passes and buys at most 0.036 nats. This ans
 P2 from the other direction — if CE is unchanged at T=1, the loop is dead weight and
 the TUL thesis needs to be restated.
 
+## Expected-value pass, rewritten 2026-08-28 02:50 after TG4a's two seeds
+
+Tonight moved five things. The ranking below follows from them, and it demotes work that
+was near the top this morning.
+
+**What is now known.**
+1. **The slot SEED does not matter for CE.** TG4a (no bag-mean) vs TG2 (bag-mean):
+   4.791 vs 4.794 mean ce_main@3000, a 0.003-nat gap inside the seed spread (0.036).
+2. **Loop worth is not comparable across `slot_seed` modes**, and no eval-time ablation
+   fixes it (prediction B2 falsified 3.6-7.3x in the wrong direction). Cross-seed loop
+   claims need matched TRAINING.
+3. **Plan worth vs the control is structurally confounded** — the restriction removes a
+   token's only alternative route, so a restricted arm must score higher whatever its plan
+   holds. Only `plan_content_probe.py` decides content.
+4. **Raising `max_slots` is a capacity arm, not an efficiency win** (+0.77% tokens for
+   ~+5.5% compute and core pad 18.1% -> 33.9%).
+5. **The takeover is SOLVED** and it is the most seed-stable result we have: core share
+   0.0020 / 0.0035 (TG2) and 0.0011 / 0.0010 (TG4a), against a control that fires 3 of 4.
+
+**Ranked by expected value per GPU-hour, highest first.**
+
+- **A7 FlexAttention.** Now clearly first. The restriction's 10.96x pair reduction is
+  measured and entirely unrealised — implemented as a dense mask, TG arms run 1.73 sps
+  against the control's 1.82, a 5% LOSS. This is the only remaining item that changes the
+  COST side of the ledger, and the TUL thesis was always partly a FLOP-efficiency claim.
+  It does not need CE to improve to pay. Spike the `score_mod`/`mask_mod` pair against XSA
+  self-exclusion + CoPE + per-head sink logits FIRST; that compatibility is unverified.
+- **A3 plan-content probe.** Built, gated, chained. Decides EMPTY vs FULL, which is the
+  question every remaining objective idea is gated on. Costs minutes, not hours.
+- **A8 T=1 loop-off.** Config only. If CE is unchanged with the loop off under the
+  restriction, the loop is dead weight and the thesis needs restating — a cheap, decisive
+  negative. Note the prior: the whole looped core has measured 0.017 nats before.
+- **A5 cross-boundary window.** Still reasonable. TG names copying as its own weak spot,
+  and OWT is far more copy-heavy than their WikiText-103, so copying is the best single
+  candidate for our 0.17-0.42 deficit. It attacks the DEFICIT, which is the number that
+  matters, rather than the plan.
+- **A6 asymmetric restriction.** Same tier as A5, slightly weaker: it enriches the channel
+  rather than closing the deficit, and finding 1 says channel changes have been cheap.
+
+**Demoted.**
+- **A4c raise max_slots.** A capacity question, honest but not urgent, and finding 1 is
+  evidence AGAINST the seed/channel family paying. Costs ~+5.5% compute.
+- **A4b / A9-UP raise span_cap.** Keep, but for the packing reason (fewer spans/row without
+  widening the core), not as a CE lever. Sweep running.
+- **TG4b (queued, seeds 1-2).** Marginal after finding 1 — it is another SEED variant, and
+  seeds moved CE by 0.003. Left in the queue because it is already running, the GPU is
+  otherwise idle overnight, and it completes B3's 0-of-4 takeover count. Do not read a CE
+  result from it as informative either way.
+
+**The honest summary of the TG track.** On CE it is close to exhausted: the restriction
+costs 0.17-0.42 nats, TG's own prize is ~0.03 nats and DECLINES with model size in their
+sweep, and neither the seed nor the objective count nor the mask softness has moved us
+toward the band. What TG bought us is the TAKEOVER cure and a measured 10.96x attention
+sparsity we have not cashed. Those two are worth finishing. More short CE arms are not.
+
 ## Gated / rejected for now
 
 ### A9. span_cap sweep  [config only, 2 arms]
