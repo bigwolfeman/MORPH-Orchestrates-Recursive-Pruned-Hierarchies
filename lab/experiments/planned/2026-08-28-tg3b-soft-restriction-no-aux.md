@@ -93,3 +93,50 @@ result FIRST — it may retire S3 as a question worth asking.
 NOT controlled: nothing new. TG3b differs from TG2 by the mask alone, which is the whole
 point and is what makes the comparison clean — unlike TG3, which differed from TG4a/TG4b in
 both mask softness and objective count.
+
+## Results (filled 2026-08-28 07:15). ALL FOUR PREDICTIONS HELD.
+
+| arm | ce_main@3000 | @3500 | loop worth 3000/3500 | plan worth 3000/3500 | end core share |
+|---|---|---|---|---|---|
+| tg3b-s1 | 4.6767 | 4.5703 | 0.0342 / 0.0233 | 0.0407 / 0.0372 | 0.0009 held |
+| tg3b-s2 | 4.6872 | 4.5918 | 0.0344 / 0.0385 | 0.0365 / 0.0354 | 0.0010 held |
+| **mean** | **4.6820** | **4.5811** | 0.0343 / 0.0309 | **0.0386** | — |
+| TG2 (reference) | 4.8763 / 4.7121 → **4.794** | — | 0.0276 / 0.0378 | 0.1232 / 0.0516 → **0.0874** | 0.0020 / 0.0035 |
+
+**S1 HELD.** 0 of 2 fired; core shares 0.0009 / 0.0010, the campaign's lowest pair.
+
+**S2 HELD, and by more than the decision rule's 0.10 threshold.** Mean ce_main@3000 4.6820
+against TG2's 4.794 — **an improvement of 0.112 nats**, the largest single move this
+campaign has produced without divergence. The deficit against the control band roughly
+HALVES: TG2 sat 0.248–0.335 nats behind, TG3b sits **0.136–0.223** behind.
+
+**S3 HELD — and this is the test of the 2026-08-28 confound correction.** Mean plan
+worth@3000 fell from TG2's 0.0874 to **0.0386**, a 56% drop, when the ONLY change was
+giving tokens a direct route to the previous span. The correction predicted exactly this:
+plan worth tracks what the mask FORBIDS, not what the plan CONTAINS. Had plan worth held up
+or risen, the correction was wrong and the round-1 verdict's original wording would have
+been reinstated. It did not. **The correction stands, and it is now tested rather than
+merely argued.**
+
+**S4 HELD.** Loop worth 0.0342 / 0.0344 at step 3000 and 0.0233 / 0.0385 at 3500 — all
+under 0.05, on a `bag_mean` arm where the column means what it has always meant. The loop
+has now missed its line under every seed, objective, and mask variant tried.
+
+## Verdict
+
+**success** (4 of 4 predictions held). Per this file's own decision rule, S2 holding by more
+than 0.10 nats means: **the hard restriction WAS too tight, the deficit IS attackable by
+mask design, and the TG track's CE story is NOT closed.**
+
+That REVERSES the expected-value assessment written into `lab/divergence/TG-WORKLIST.md` at
+02:50, which called the track "close to exhausted" on the evidence then available (seed
+doesn't matter, objectives don't matter, and TG3 had just died). The missing arm was the one
+TG3 was supposed to be. Mask geometry is a live lever; seed and objective count are not.
+
+## What this does NOT show
+
+TG3b is still 0.136–0.223 nats behind the control band at matched step 3000. Halving a
+deficit is not closing it. And the loop — the thing TUL is named for — still earns under
+0.05 nats here, so the CE gain comes from giving TOKENS more context, not from the plan or
+the loop doing more work. Read alongside the plan-content probe, whose first panel was
+REFUSED by its own memorization gate.
