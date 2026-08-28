@@ -90,3 +90,61 @@ reported per arm.
 
 A3 also has no slots, so it has no plan and no worth passes — its rows in the worth table
 are structurally absent, not missing data.
+
+
+## Results — a1noaux, both seeds (filled 2026-08-28 13:35)
+
+    arm          ce_main@3000  end share   gain    r2   shareAt  gainAt   specificity
+    a1noaux-s1      4.6428      0.9999    2.568  0.96    3556     3347    0.4% / -0.3%
+    a1noaux-s2        —         1.0000    2.114  0.91    3505     2061    0.0% / -0.2%
+
+**N1 FAILED. Both seeds TOOK OVER.** Aux-off alone does NOT cure the takeover without the
+restriction. Per this file's decision rule that means the restriction IS doing stability
+work, and the aux-loss account of the takeover is incomplete — which arm TG4b-s1 (aux OFF,
+restriction ON, end share 1.0000 at step 1951) had already hinted at.
+
+**MY REPORTING ERROR, recorded because it changed what I told Wolfe.** At 12:50 I reported
+"a1noaux seed 1 completed 4500 steps with no takeover (1 of 2)". I read the runner's
+`exit=0` as "no takeover". It means only that the DIVERGENCE GUARD did not abort the run.
+The takeover RULE — core share > 0.5 over more than 30% of the last 50 probed steps — fired
+at step 3556 and the run finished at share 0.9999. Completing a run and holding are
+different things, and `score_arms.py` is the only thing that decides the second.
+
+**N2 FAILED on both seeds** (0.4% and 0.0% at step 3000), confirming the correction already
+filed: the aux losses, not the mask, write the plan's span-specific content.
+
+**N3 FAILED.** a1noaux-s1 ce_main@3000 = 4.6428 against the control band midpoint 4.5023 —
+removing the aux losses costs ~0.175 nats when unrestricted.
+
+## THE SERIOUS PROBLEM THIS EXPOSES: every "held" verdict is at 3500 steps
+
+Core share, median over a 100-step window, at matched steps:
+
+    arm          @2500    @3000    @3400    @3499   gain@3000-3499   last step
+    a1noaux-s1   0.0011   0.0012   0.0013   0.0010      1.074          4499
+    a1noaux-s2   0.0020   0.0031   0.0076   0.0543      1.129          4499
+    tg2-s1       0.0017   0.0015   0.0018   0.0020      0.939          3499
+    tg3b-s1      0.0008   0.0012   0.0010   0.0009      0.926          3499
+    tg4a-s1      0.0017   0.0010   0.0011   0.0011      0.865          3499
+
+**At step 3499 a1noaux-s1 is indistinguishable from every arm this campaign called "held"**
+(0.0010 against 0.0009–0.0020). It took over 57 steps later. Every `tul_tg2`-based arm STOPS
+at 3500, which is precisely where a takeover-bound arm still looks healthy.
+
+**Therefore "0 of 4 tul_tg2-based seeds held" is NOT established**, and neither is the
+"eight seeds split cleanly on the aux losses" claim written into the TG3 writeup and the
+ledger this morning. Those runs may simply have ended before the event. Nothing about them
+is falsified — but nothing is confirmed either, and the honest status is UNTESTED PAST 3500.
+
+**What DOES separate them at matched steps: the block gain.** The aux-off restricted arms sit
+at 0.865–0.939 (contractive, ρ < 1) while both a1noaux arms sit at 1.074–1.129 (expansive,
+ρ > 1) over the SAME step window, while the share shows nothing. That is the iterative-map
+note's central claim doing real work: the gain is the mechanism and the share is the symptom.
+a1noaux-s2's gain criterion fired at step 2061, 1444 steps before its share criterion.
+
+**So the restriction plausibly IS doing stability work**, and the evidence for it is the gain
+at matched steps — not the share, and not the run-length-confounded "held" tally.
+
+**Required follow-up before any takeover claim is repeated:** re-run tg2 (or tg3b) for 4500
+steps with the same pinned horizon and score the rule. Until then, cite the GAIN, never the
+"0 of 4".
