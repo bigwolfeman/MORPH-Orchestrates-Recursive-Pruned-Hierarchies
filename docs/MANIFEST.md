@@ -10,6 +10,7 @@ Top-level navigation for project documentation.
 - [TUL — Thought Unpack Loop specification (`lab/experiments/tul`)](tul-spec.md)
 - [SCSE — Source-Centered State Evolution port specification](scse-spec.md)
 - [TUL Gate — span-length and halting gates](tul-gate-spec.md) — BUILT 2026-08-22; §13 lists what building it changed in the spec
+- [TUL-FM probing doctrine (flow-matching arc: instruments, controls, phase gates)](tul-fm-probing.md) — PROPOSED 2026-08-28; arc note in `.agents/notes/proposed/architecture/`
 - [Known-good runs and environment assumptions](../.agents/notes/implemented/process/2026-07-03-known-good-runs.md)
 - [Data placement design spec](../.agents/notes/implemented/architecture/2026-07-03-data-placement-design.md)
 - [MORPH / Olympiad-AI interop contract](olympiad-interop.md)
