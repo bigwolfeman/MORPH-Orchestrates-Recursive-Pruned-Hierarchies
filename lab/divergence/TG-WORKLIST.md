@@ -131,6 +131,34 @@ CLEAN ARM: `max_slots: 80` WITH `data.seq_len: 992`, which holds `L_total = 992 
 exactly. Then the ONLY change is the slot budget. Compute impact is confined to the core
 loop's compact sequence (64 -> 80 = +25% core = ~+5.5% total); attention and the coda are
 unchanged because L_total is unchanged.
+
+**MEASURED 2026-08-28 over 3.25 M real OWT tokens, L_total held at 1152 throughout.**
+
+    config                  tok/row   slots  pinned   core width   core pad
+    seq1024 max64 SHIPPED    1032.9    52.4    8.3%       64         18.1%
+    seq 992 max80  (A4c)     1040.8    52.9    1.8%       80         33.9%
+    seq 960 max96            1043.7    53.0    1.1%       96         44.8%
+    seq1024 max80 (L=1184)   1069.3    54.3    2.0%       80         32.1%
+
+This CONFIRMS the sizing table in `morph/configs/tul_a1.yaml` (3.0 M tokens: 1033.4
+tok/row, 52.5 slots, 7.7% saturated at max64; 1069.4 tok/row, 54.3 slots at max80/L=1184).
+Both independent measurements agree to ~0.5 tok/row. The shipped numbers are good.
+
+**CORRECTION TO MY OWN 400-ROW PASS EARLIER THE SAME DAY.** A first run over 400 rows gave
+1043.9 tok/row, 51.6 slots and 5.5% pinned at max64, and I reported from it that raising
+max_slots was FREE. Both halves were wrong. At matched sample size the shipped figures
+reproduce exactly, and the gain is +0.77% token positions, not +0.39%.
+
+**A4c IS NOT FREE, and the reason is the core loop.** `_tul_core` gathers
+`slot_index [B, max_slots]` and loops the FULL compact sequence as a MASKED update, never a
+per-position gather (invariant 2: frozen slots must keep serving the same K/V). So
+`max_slots 64 -> 80` widens the core by 25% and pushes core-loop padding from 18.1% to
+33.9% — it spends MORE compute on zeroed pad slots than it recovers. It buys +0.77% token
+positions and removes 6.5 points of row truncation for ~+5.5% total compute.
+
+VERDICT: A4c is a CHANNEL-CAPACITY arm (does more plan bandwidth help?), which is a real
+question. It is NOT an efficiency win and must not be sold as one. `max_slots: 96` is
+strictly worse than 80 on every axis here — 44.8% core pad for +0.27% more tokens.
 This also directly tests the CHANNEL CAPACITY hypothesis that A9-DOWN was reaching for,
 without the row-shortening confound that made span_cap 24 unsafe.
 
