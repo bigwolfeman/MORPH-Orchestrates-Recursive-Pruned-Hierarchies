@@ -99,12 +99,32 @@ plan 0.0124–0.0164, takeover fires 3 of 4 control seeds by ~3000.
 ## Verdict
 
 failure (P2 — the pre-registered loop-worth line was missed; 3 of 4 predictions held).
-The RESTRICTION moves the plan: plan worth rose from the control band's 0.0124–0.0164
-to 0.033–0.155 — 2× to 10× depending on seed, so the effect is real but far more
-seed-variable than a single headline number suggests — and removing the aux losses
-under it eliminates the takeover entirely (P3). The LOOP is still not earning 0.05
-nats. TG2's loop worth (0.024–0.036) is suggestive but sub-threshold and
-seed-inconsistent in direction (s1 rising, s2 falling 3000→3500).
+Plan worth rose from the control band's 0.0124–0.0164 to 0.033–0.155, and removing the
+aux losses under the restriction eliminates the takeover entirely (P3). The LOOP is
+still not earning 0.05 nats. TG2's loop worth (0.024–0.036) is suggestive but
+sub-threshold and seed-inconsistent in direction (s1 rising, s2 falling 3000→3500).
+
+**CONFOUND CORRECTION 2026-08-28 — the plan-worth rise is NOT evidence the plan holds
+more.** This verdict originally read "The RESTRICTION moves the plan … 2× to 10×". That
+inference does not survive inspection of what the ablation removes. `no-plan` zeroes
+what `prefix_project` writes into the shared sequence. Under `tg_restrict` a token's
+ONLY route to any earlier span is that slot path, so zeroing it removes ALL cross-span
+information. The UNRESTRICTED control keeps full causal attention and recovers the same
+information directly from earlier tokens, so its plan worth is low **by construction**,
+whatever its plan contains. A restricted arm must therefore show a higher plan worth
+than the control even if the two plans carry byte-identical content.
+
+What the number does support: within the restricted family, the plan path is load-bearing
+for the coda — removing it costs 0.033–0.155 nats and nothing else recovers that. What it
+does NOT support: any claim about the plan's information CONTENT relative to the control.
+Only a direct read of `z` separates those, which is what
+`lab/divergence/plan_content_probe.py` was built to do
+(pre-registration: ../planned/2026-08-28-plan-content.md). Treat the content question as
+OPEN until that probe reports.
+
+This is the second confound of one family found in this campaign: **the ablation's
+FALLBACK differs between the things being compared.** The other is the slot-seed
+confound recorded below.
 
 **The number that matters most, and that P1 was too permissive to catch.** At MATCHED
 step 3000 the restriction COSTS 0.17–0.42 nats of ce_main against the control band
@@ -201,4 +221,6 @@ copy that knob until the seed stops being a mean.
 - **The strategic caveat:** TG has NO loop. Its entire measured effect is ~0.03 nats from
   sentence memory plus gradient flow. Even a perfect TG replication does not deliver the
   ~0.1 nats the TUL LOOP thesis needs. TG is evidence for the PLAN, not for the LOOP —
-  and TG2 has already banked the plan result (2–10× plan worth, takeover 0/2).
+  and TG2 has already banked the takeover result (0/2). Its plan-worth rise over the
+  control is confounded by the restriction itself — see the CONFOUND CORRECTION in the
+  Verdict — so it is not a banked result and the plan-content probe decides it.

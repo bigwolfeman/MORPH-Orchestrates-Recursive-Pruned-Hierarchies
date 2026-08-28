@@ -334,3 +334,54 @@ def test_boundary_token_index_matches_brute_force_on_a_real_packed_batch():
                 assert int(got[b, s]) >= 0
             else:
                 assert int(got[b, s]) == -1
+
+
+# ── the eval-time flip used by lab/divergence/slot_path_worth.py ──────────────────
+
+def test_seed_bagmean_flip_restores_the_bag_mean_seed():
+    """`seed_bagmean` must make an e_slot model's slot input EQUAL a bag_mean model's.
+
+    The worth harness compares arms by ablating the loop, and `loop_off` leaves the slot
+    carrying its own INPUT. On an e_slot arm that input is a constant, so the plain
+    "no-loop" column measures "loop vs nothing" while a bag_mean arm's measures "loop vs
+    a span summary". `seed_bagmean` flips `slot_seed` at eval time so both fall back to
+    the same thing. This test is the reason that flip is trusted: it asserts the flipped
+    output is bit-equal to the real bag_mean path and that the flip is UNDONE on exit.
+    """
+    from lab.divergence.slot_path_worth import seed_bagmean
+
+    spec = _spec()
+    x, _y, layout, _ = _batch(spec)
+    m = _model(TULConfig(prefix_k=2, slot_id=4, slot_seed="e_slot"))
+    ref = _model(TULConfig(prefix_k=2, slot_id=4, slot_seed="bag_mean"))
+    with torch.no_grad():
+        m.tul.E_slot.normal_(std=1.0)            # a zero E_slot hides a broken flip
+    ref.load_state_dict(m.state_dict())          # same weights, different seed mode
+
+    with torch.no_grad():
+        emb = m.embed(x)
+        as_eslot = m.tul.slot_input(emb, layout, add_e_slot=True)
+        want = ref.tul.slot_input(emb, layout, add_e_slot=True)
+        with seed_bagmean(m):
+            assert m.tul.tul.slot_seed == "bag_mean"
+            got = m.tul.slot_input(emb, layout, add_e_slot=True)
+
+    # The flip is the whole point: it must CHANGE the output, and change it to the
+    # bag_mean path exactly. An assertion on only one of those passes on a no-op.
+    slots = layout.slot_mask.unsqueeze(-1)
+    assert not torch.equal(as_eslot[slots.expand_as(as_eslot)],
+                           want[slots.expand_as(want)]), "e_slot and bag_mean agree — " \
+        "the fixture cannot detect a broken flip"
+    torch.testing.assert_close(got, want, rtol=0, atol=0)
+    assert m.tul.tul.slot_seed == "e_slot", "seed_bagmean leaked past its with-block"
+
+
+def test_seed_bagmean_restores_on_exception():
+    """A raising body must not leave the model in bag_mean mode for every later eval."""
+    from lab.divergence.slot_path_worth import seed_bagmean
+
+    m = _model(TULConfig(prefix_k=2, slot_id=4, slot_seed="boundary"))
+    with pytest.raises(RuntimeError):
+        with seed_bagmean(m):
+            raise RuntimeError("boom")
+    assert m.tul.tul.slot_seed == "boundary"

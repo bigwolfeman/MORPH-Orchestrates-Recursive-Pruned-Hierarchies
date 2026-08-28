@@ -40,6 +40,17 @@ recover.
 ## Arms, in the order I would run them
 
 ### A1. TG4a — delete the bag-mean  [1 line, no new params, 35 min/seed]
+**RUN 2026-08-28, seed 1 (seed 2 in flight).** ce_main@3000 4.8094, @3500 4.7146 —
+statistically on top of tg1-s1 (4.8104 / 4.7154) and still 0.26–0.35 nats behind the
+control band. Takeover HELD, end core share **0.0011**, the campaign's lowest.
+**Do NOT quote its 0.0921 loop worth.** `loop_off` falls back to the slot's own INPUT,
+which this arm deliberately stripped of span content, so that column measures "loop vs
+a CONSTANT" while a bag_mean arm's measures "loop vs a span summary". The fix is the
+`no-loop, bag-mean seed` condition added to `slot_path_worth.py` on 2026-08-28
+(`seed_bagmean`); tg4a-s1's two checkpoints predate it and need a backfill re-run.
+Pre-registration for the rest of round 2, and the two process failures behind it:
+../experiments/planned/2026-08-28-tg-round2-seed-and-softness.md
+
 `slot_input = E_slot` alone; drop `+ mean_j embed(t_j)`.
 WHY: `pooling_probe` on tg2-s1@3500 confirms the plain-mean law at slope -0.470,
 r2 0.922. Slot-seed signal falls 0.516 (spans 4-5) -> 0.210 (spans 24-32) against
