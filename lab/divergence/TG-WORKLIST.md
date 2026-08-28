@@ -194,6 +194,8 @@ WHY: the core loop is ~24% of layer passes and buys at most 0.036 nats. This ans
 P2 from the other direction — if CE is unchanged at T=1, the loop is dead weight and
 the TUL thesis needs to be restated.
 
+## SUPERSEDED — read the 2026-08-28 11:30 pass below first
+
 ## Expected-value pass, rewritten 2026-08-28 02:50 after TG4a's two seeds
 
 Tonight moved five things. The ranking below follows from them, and it demotes work that
@@ -319,3 +321,46 @@ validation split (data.py:103-105). `train.py:1755` separates them with
   it will report a validation loss on text it has trained on.
 - (My earlier train-vs-validation comparison returned byte-identical statistics. That was my
   test being degenerate — I passed the same `skip_samples` to both — not evidence of a leak.)
+
+
+## Expected-value pass #3, 2026-08-28 11:30 — the ground moved twice since 02:50
+
+Two results since the last pass invert its conclusions.
+
+**1. TG3b: mask geometry IS a live lever (02:50's pass said the track was closed).** Softening
+the restriction recovered 0.112 nats, 4 of 4 predictions held, and the deficit against the
+control band roughly halved (0.248–0.335 → 0.136–0.223).
+
+**2. The span-specificity panel: the restriction destroys the plan's content.** 65.1%
+(unrestricted) → 3.0% (restricted) at MATCHED aux losses, and 0.1–0.6% on every aux-off
+restricted arm. The restriction makes the coda lean on the slot POSITIONS more while reading
+their CONTENT ~20x less. It does the opposite of what it was adopted for.
+
+**Consequence: the restriction is retired unless the running panel rescues it.** Its only
+durable win was the takeover cure, and TG2 changed the objective AND the mask together. The
+`tul_a1_noaux` arm now running tests whether aux-off alone does it. If it does, the
+restriction costs 0.14–0.22 nats and 20x of plan specificity and returns nothing.
+
+**A7 FlexAttention is DEMOTED from first.** Its whole payoff was cashing the restriction's
+10.96x attention sparsity. If the restriction goes, so does the sparsity, and A7 has nothing
+to cash. Do not start it until the restriction's fate is settled.
+
+**What is actually first now: does the slot apparatus pay at all?** Pre-registration:
+../experiments/planned/2026-08-28-does-the-slot-apparatus-pay.md. Preliminary, A3 at 2 seeds
+against the 3-seed control at matched step 3000:
+
+    arm            params   sps    VAL@3000   VAL@4500
+    A3 (no slots, no core)  207.7M  4.5   4.3895    4.0062
+    control (full TUL)      286.1M  ~1.8  4.4928      —
+
+A3 is 0.103 nats BETTER with 78M fewer parameters at 2.5x throughput. The scored comparison
+is A3 vs A1 inside the same panel and has not run yet. If it holds, the honest move is to
+keep the cheap part (tokens skipping the core) and drop the slots — or move the whole
+question to long context, where a compressed plan has a job it does not have at seq_len 1024
+with the tokens right there.
+
+**Standing lesson from tonight, applies to every arm script:** PIN
+`training.ademamix_t_beta3`. base.yaml ships it null → `training.steps`, so changing run
+length silently moves the optimizer horizon. It has now cost three experiments, this panel
+included. Audited 2026-08-28: every arm this week ran steps=3500 with t_beta3 resolving to
+3500, so they ARE mutually comparable; the pin is 3500 in the new panel to match.
