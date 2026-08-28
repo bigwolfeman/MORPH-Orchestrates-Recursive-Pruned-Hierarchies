@@ -121,3 +121,58 @@ so the control band stays comparable. Sequential on the 5090 (UPS). Driver:
 NOT controlled, and named rather than hidden: TG3 is tul_tg1-based while TG4a/TG4b are
 tul_tg2-based, so TG3 differs from the seed arms in BOTH mask softness and objective count.
 TG3 is readable only against TG1, never against TG4a/TG4b.
+
+## Results — TG4a, both seeds (filled 2026-08-28 02:31, arms tg3/tg4b still running)
+
+All ce_main, from `slot_path_worth.py`; takeover from `score_arms.py` unchanged.
+
+| arm | ce_main@3000 | @3500 | no-loop [own seed] 3000→3500 | no-loop [bag-mean] | no-plan 3000→3500 | end core share |
+|---|---|---|---|---|---|---|
+| tg4a-s1 | 4.8094 | 4.7146 | 0.0921 → 0.1172 | not measured (pre-patch) | 0.2042 → 0.1934 | 0.0011 held |
+| tg4a-s2 | 4.7735 | 4.6903 | 0.0764 → 0.1333 | 0.5589 → 0.4794 | 0.0953 → 0.0988 | 0.0010 held |
+
+**A2 HELD.** tg4a-s2 ce_main@3000 = 4.7735, inside the predicted [4.659, 4.959]. TG4a is
+readable as a 2-seed arm.
+
+**B3 on track.** 2 of 2 tg2-based seeds held, core shares 0.0011 / 0.0010 — the two lowest
+of the campaign, and far more seed-stable than ce_main (spread 0.036) or plan worth
+(spread 2.1x). Awaiting tg4b's two seeds for the full 0-of-4.
+
+**B4 holding.** min ce_main@3000 so far 4.7735, still clear of the band's 4.5459.
+
+**B2 FAILED, and the failure is the informative one.**
+
+| step | no-loop [own seed] | no-loop [bag-mean] | predicted | measured |
+|---|---|---|---|---|
+| 3000 | 0.0764 | 0.5589 | bag-mean SMALLER | 7.3x LARGER |
+| 3500 | 0.1333 | 0.4794 | bag-mean SMALLER | 3.6x LARGER |
+
+Forcing the bag-mean is worse than zeroing the plan outright (no-plan 0.0953 / 0.0988). The
+prediction assumed the information a bag-mean carries would outweigh the distribution shift
+of injecting a seed the weights never trained on. It does not, by 3.6-7.3x.
+
+Per this file's own decision rule ("B2 fails → stop using the new column"), the column is
+NOT repaired and NOT used as a loop worth. It is relabelled in the instrument as what it
+actually measures — an OOD-shock number, i.e. how far an arm's downstream weights have
+specialised to their own seed. No eval-time substitution can do better: swapping a seed the
+weights never saw measures the shock, not the loop.
+
+**The standing consequence for the campaign's metric.** Loop worth is comparable only
+WITHIN a fixed `slot_seed`. Across seed modes it needs matched TRAINING, not a smarter
+ablation. The confound that motivated the column is REAL — tg4a's naive 0.0921 is still not
+a loop result — but the repair is not available at eval time.
+
+**A second reason the naive column is uninterpretable on an e_slot arm.** At step 3500,
+`no-loop` (0.1333) costs MORE than `no-plan` (0.0988): removing less hurts more. `E_slot` is
+a constant the coda has learned to READ, so an uninformative-but-valid plan actively
+misleads it while zeroing is clean. The fallback is not merely uninformative, it is harmful.
+
+**T4 is unscoreable on TG4a** for the same reason, and this is recorded rather than
+resolved: the own-seed column crosses 0.05 (0.0764-0.1333), but on this arm that column does
+not measure the loop. T4 stays open, to be read on TG3 (a bag_mean arm, where the column
+means what it always meant).
+
+**What TG4a says about the SEED, which is what the arm was for.** ce_main@3000 averages
+4.791 over TG4a's two seeds against 4.794 over TG2's (4.8763 / 4.7121). Deleting the
+bag-mean moved CE by 0.003 nats — nothing, well inside the seed spread. The pooling-law
+argument predicted the bag-mean was diluting; removing it neither helped nor hurt.

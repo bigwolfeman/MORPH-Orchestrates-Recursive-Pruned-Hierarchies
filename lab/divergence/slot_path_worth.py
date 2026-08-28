@@ -96,6 +96,32 @@ def seed_bagmean(root):
     UPPER bound on the loop's cross-arm worth. The truth for such an arm is bracketed
     BELOW that number and BELOW the naive `full - no-loop`. Report both; claim neither
     as the loop's worth.
+
+    MEASURED 2026-08-28, AND IT FALSIFIED THE PREDICTION THIS CONDITION WAS ADDED ON.
+    Pre-registered prediction B2 said the forced bag-mean fallback would be MORE
+    informative than a constant, so `full - no-loop-bagmean` would come out SMALLER than
+    the naive `full - no-loop`. On tg4a-s2 it came out 6-7x LARGER:
+
+        step 3000:  own seed 0.0764   bag-mean 0.5589   (predicted <, measured 7.3x >)
+        step 3500:  own seed 0.1333   bag-mean 0.4794   (predicted <, measured 3.6x >)
+
+    Forcing the bag-mean is worse than zeroing the plan outright (no-plan 0.0953/0.0988).
+    The distribution shift DOMINATES the information the bag-mean carries, by a wide
+    margin. So this condition does NOT deliver a cross-arm loop worth, and no eval-time
+    substitution can: swapping a seed the weights never saw measures the SHOCK, not the
+    loop. Read it as an OOD-sensitivity number — how far the arm's downstream weights
+    have specialised to their own seed — and nothing else.
+
+    WHAT THIS MEANS FOR THE CAMPAIGN'S LOOP METRIC: loop worth is comparable only WITHIN
+    a fixed `slot_seed`. Comparing it across seed modes needs matched TRAINING, not a
+    smarter ablation. The confound the condition was built to expose is real; the repair
+    is not available at eval time.
+
+    A SECOND reason the naive column is uninterpretable on an e_slot arm, also measured
+    here: at step 3500 `no-loop` (0.1333) costs MORE than `no-plan` (0.0988) — removing
+    less hurts more. E_slot is a constant the coda has learned to READ, so an
+    uninformative-but-valid plan actively misleads it, while zeroing is clean. The
+    fallback is not merely uninformative; it is harmful.
     """
     tul_cfg = root.tul.tul
     orig = tul_cfg.slot_seed
@@ -195,10 +221,16 @@ def main() -> None:
     print("slot path is inert for token prediction and TUL is not doing what it claims.")
     if seed != "bag_mean":
         print()
-        print(f"slot_seed={seed}: read 'no-loop, bag-mean seed' for the CROSS-ARM loop worth.")
-        print("The plain 'no-loop' row falls back to this arm's own seed, which carries less")
-        print("span content than a bag_mean arm's does, so it credits the loop for the seed's")
-        print("deletion. Both rows are UPPER bounds (see seed_bagmean's docstring).")
+        print(f"slot_seed={seed}: NEITHER no-loop row is a cross-arm loop worth.")
+        print("  [own seed] falls back to a seed this arm stripped of span content, so it")
+        print("  credits the loop for the seed's deletion — and on an e_slot arm that seed is")
+        print("  a constant the coda still READS, so the fallback is actively harmful, not")
+        print("  merely uninformative (measured: no-loop can cost MORE than no-plan).")
+        print("  [bag-mean] forces a seed these weights never trained on. MEASURED on")
+        print("  tg4a-s2: 6-7x LARGER than [own seed], and worse than zeroing the plan. The")
+        print("  distribution shift dominates; this is an OOD-SHOCK number, not a loop worth.")
+        print("  Loop worth compares only WITHIN one slot_seed. Across seed modes it needs")
+        print("  matched TRAINING — see seed_bagmean's docstring.")
     print()
     print("CROSS-ARM CAVEAT on 'no-plan' (added 2026-08-28): under tg_restrict a token's ONLY")
     print("route to any earlier span is the slot path, so zeroing the plan removes ALL")
