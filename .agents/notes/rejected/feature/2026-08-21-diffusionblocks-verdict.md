@@ -184,3 +184,22 @@ simply does not train it as well as predicting the next token does.
 * **Metrics not run.** MAUVE and rep4@512 were never computed; the paper reports MAUVE.
 * **The MORPH-side implementation** was never trained to a budget comparable to the testbed's. The
   verdict rests on the clean-room measurements, not on the MORPH arms.
+
+## Post-audit addendum (2026-08-28)
+
+A full re-audit of `feat/db-objective-l2` against the paper (prompted by Wolfe's
+suspicion of implementation error) confirmed the MORPH-branch arms were
+artifact-contaminated three ways: SliceScaler target scale (77–98% of training in the
+autoencoding regime; reverted on the park line but never on feat), a non-paper
+L2-to-embeddings main objective on two of three arms (App. B specifies CE), and
+generation judged only through the softmax-mixture bridge at 4–6 Euler steps. **None of
+this touches the verdict above**, which rests on the clean testbed
+(`11-DiffusionBlocks-Testing`) where all three defects are fixed and DB still loses.
+
+**One NEW finding — read this before reviving any concat arm:** the concat arms seed
+the noisy stream's GLA retention scan with the CLEAN stream's FINAL state, which
+integrates every target token. Every anti-leak proof covered only the attention
+branches (the unit tests build `retention=False`; the shipped arms inherit
+`retention: true, retention_layers: [1]`). The gate inits near zero and the falsifier
+showed gap≈0 at 2000 steps, so it was likely unexploited — but "leak ruled out 3 ways"
+is NOT true for the GLA path. Code-reading result, no runtime probe.
