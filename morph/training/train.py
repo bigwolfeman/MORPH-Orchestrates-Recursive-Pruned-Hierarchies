@@ -1489,7 +1489,16 @@ def main(cfg: DictConfig) -> None:
               f"({_spec_proj._n_mlp} MLP + "
               f"{len(_spec_proj._linears) - _spec_proj._n_mlp} attention)")
 
-    if _sp_on or _sp_log > 0:
+    # A model with no core (arm TUL-A3, `model.n_core: 0`) has no core linears to
+    # penalise or log, and `collect_core_linears` rightly REFUSES an empty enumeration
+    # rather than run a silent no-op. That guard is correct for every model that HAS a
+    # core; here zero is the configuration, not a broken enumeration. Skip the whole
+    # block and say so, rather than weakening the guard for everyone else.
+    # (A3 crashed on this at 10:10 on 2026-08-28: "found 0 core MLP linears".)
+    if (_sp_on or _sp_log > 0) and int(getattr(cfg.model, "n_core", 0)) == 0:
+        print("  Core spectral-norm penalty SKIPPED: model.n_core=0, so there are no core "
+              "linears to penalise or log (arm TUL-A3's compute floor).")
+    elif _sp_on or _sp_log > 0:
         from morph.training.spectral_penalty import CoreSpectralPenalty
         _sp_attn = bool(getattr(cfg.training, "spectral_penalty_include_attn", False))
         _spec_pen = CoreSpectralPenalty(model, cap=_sp_cap if _sp_on else 0.0,
