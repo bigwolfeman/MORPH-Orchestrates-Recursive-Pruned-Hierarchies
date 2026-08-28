@@ -6,8 +6,16 @@ Panel result and the paper analysis that motivates all of this:
 
 ## Where we stand (measured, 2026-08-27/28)
 
-- TG restriction WORKS on the plan: plan worth 0.033–0.155 ce_main vs control band
-  0.0124–0.0164. Takeover eliminated in TG2 (0/2, end core share 0.0020/0.0035).
+- Takeover eliminated in TG2 (0/2, end core share 0.0020/0.0035) and again in TG4a
+  (0.0011, campaign lowest). That result stands on its own.
+- **The plan-worth claim does NOT stand. CONFOUND, corrected 2026-08-28.** This line used
+  to read "TG restriction WORKS on the plan: plan worth 0.033–0.155 vs control band
+  0.0124–0.0164". `no-plan` zeroes what `prefix_project` writes; under `tg_restrict` that
+  is a token's ONLY route to any earlier span, while the unrestricted control recovers the
+  same information through causal attention. A restricted arm MUST score higher even with
+  byte-identical plan content. What survives: within the restricted family the plan path
+  is load-bearing for the coda. What does not: any claim about CONTENT relative to the
+  control. `plan_content_probe.py` decides that, and it is chained to run.
 - It COSTS 0.17–0.42 nats ce_main at matched step 3000. TG's own whole prize is
   ~0.03 nats and DECLINES with model size in their sweep. So the deficit is the
   thing to attack, and a longer single-pass run is not the way.
@@ -31,11 +39,12 @@ pad. We are NOT fighting sequence padding for gradient.**
 
 **But the instinct was right in a different place.** `_tul_core` gathers
 `slot_index [B, max_slots]` and loops a FIXED 64-slot compact sequence while only
-~44 are valid, so ~31% of core-loop compute runs on zeroed pad slots.
+~52 are valid, so ~19% of core-loop compute runs on zeroed pad slots. (This paragraph
+first read "~44 valid" and "~31%" off ONE batch; the 360-row figure below supersedes it
+and is the number to quote.)
 `gather_valid` zeroes them, so there is no content pollution — real slots attend
 zero-vectors, which dilutes the softmax denominator slightly and buys nothing.
-The core is ~20-24% of layer passes, so this is ~6-7% of total compute, free to
-recover.
+The core is ~20-24% of layer passes, so this is ~4% of total compute.
 
 ## Arms, in the order I would run them
 

@@ -393,3 +393,50 @@ def test_probe_detects_the_leak_on_an_unrestricted_model():
     _finite_logit_sum(out["logits"], t, spec.slot_id).backward()
     g = captured["embed_out"].grad[0, u, :]
     assert torch.any(g != 0), f"probe found NO gradient on the unrestricted model (u={u}, t={t})"
+
+
+# ── the SHIPPED forward under soft_prev_span (arm TG3) ────────────────────────────
+#
+# Everything above verifies `tg_allow_mask` against a brute-force reference for BOTH
+# soft_prev_span values, and verifies the config validation. Nothing above ever RUNS a
+# forward with soft_prev_span=True. That is the gap this campaign has been bitten by
+# before — a mask function can be perfectly correct while the forward that consumes it
+# has a shape or dtype bug, and every arm runs the shipped path, not the helper.
+# TG3 is queued to train, so its forward gets executed here first.
+
+def test_soft_prev_span_forward_and_backward_run():
+    """One real forward+backward on the SHIPPED path with soft_prev_span=True."""
+    spec = _spec()
+    rule = _rule()
+    x, y, layout, _stats = _batch(spec, rule, B=2, n=200, seed=5)
+    m = _model(TULConfig(prefix_k=2, slot_id=4, tg_restrict=True, tg_soft_prev_span=True))
+    out = m(x, labels=y, slot_layout=layout)
+    loss = out["loss"]
+    assert torch.isfinite(loss), f"non-finite loss under soft_prev_span: {loss}"
+    loss.backward()
+    grads = [(n, p.grad) for n, p in m.named_parameters() if p.grad is not None]
+    assert grads, "no parameter received a gradient"
+    assert all(torch.isfinite(g).all() for _n, g in grads), \
+        "non-finite gradient under soft_prev_span"
+
+
+def test_soft_prev_span_forward_differs_from_the_hard_restriction():
+    """The softening must CHANGE the output. Identical logits would mean the flag never
+    reached the attention mask, and the arm would silently be a duplicate of TG1 — a
+    whole training run spent re-measuring an arm we already have."""
+    spec = _spec()
+    rule = _rule()
+    x, y, layout, _stats = _batch(spec, rule, B=2, n=200, seed=5)
+    hard = _model(TULConfig(prefix_k=2, slot_id=4, tg_restrict=True))
+    soft = _model(TULConfig(prefix_k=2, slot_id=4, tg_restrict=True, tg_soft_prev_span=True))
+    soft.load_state_dict(hard.state_dict())         # identical weights; only the mask differs
+    hard.eval()
+    soft.eval()
+    with torch.no_grad():
+        # labels=None: with labels the fused/chunked CE host returns the loss and leaves
+        # "logits" None, so this comparison needs the logits-returning path.
+        lh = hard(x, labels=None, slot_layout=layout)["logits"]
+        ls = soft(x, labels=None, slot_layout=layout)["logits"]
+    assert lh is not None and ls is not None, "no logits returned — check the labels path"
+    assert not torch.allclose(lh, ls), \
+        "soft_prev_span produced identical logits — the flag never reached the mask"
