@@ -219,3 +219,35 @@ cause unrelated to mask softness. A `tul_tg2`-based soft arm can. Built as
 `morph/configs/tul_tg3b.yaml`, pre-registered in
 ./2026-08-28-tg3b-soft-restriction-no-aux.md, and chained to run LAST — after the
 plan-content probes, so it cannot delay the result that redirects everything.
+
+
+## Results — TG3 seed 2: ALSO DIVERGED (filled 2026-08-28 03:13). TG3 is 2 of 2.
+
+    arm      end share   gain   r2    shareAt  gainAt   valMin @      valEnd   valRise   abort
+    tg3-s1     0.9986   1.953  0.97     842     730     5.8166 @750   7.4760   +1.659    @2040
+    tg3-s2     0.9927   1.752  0.98    1390    1294     5.2394 @1750  6.2664   +1.027    @2120
+
+**T3 HELD in full.** It asked for at least 1 of 2 seeds; both fired, both diverged, both
+were aborted by the guard. Both show the expansive core map (gain 1.75-1.95 at r² 0.97-0.98)
+before the share rule fires — the gain criterion leads the share criterion by 96-112 steps
+in both seeds, which is the mechanism-before-symptom ordering the iterative-map note
+predicts.
+
+**T1 and T2 are UNSCOREABLE, definitively.** Neither seed produced a step-3000 checkpoint.
+T2 was the falsifiable test of the 2026-08-28 confound correction — "plan worth must FALL
+when the mask softens" — and TG3 cannot deliver it. This is a protocol outcome, filed as
+"the method could not distinguish", NOT re-scored at some earlier step the predictions were
+never written against. The question is re-asked as S3 in
+./2026-08-28-tg3b-soft-restriction-no-aux.md on a base that can reach step 3000.
+
+**The takeover tally, now with 8 seeds:**
+
+| base | aux losses | seeds | diverged / took over |
+|---|---|---|---|
+| tul_tg1 | ON | tg1-s1, tg1-s2, tg3-s1, tg3-s2 | **3 of 4** (s2 @1258, tg3-s1 @842, tg3-s2 @1390) |
+| tul_tg2 | OFF | tg2-s1, tg2-s2, tg4a-s1, tg4a-s2 | **0 of 4** (0.0020, 0.0035, 0.0011, 0.0010) |
+
+Eight seeds, a clean split, and the mask softness varies WITHIN the aux-ON group (tg1 hard,
+tg3 soft) without changing the outcome. The aux objectives are the takeover's fuel; the mask
+is not. This is the strongest form of the O5 result the campaign has, and it came from two
+arms that both failed at the question they were asked.
