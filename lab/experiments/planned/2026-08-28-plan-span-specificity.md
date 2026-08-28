@@ -93,3 +93,84 @@ Tests: three cases in `tests/test_slot_seed.py`, verified to FAIL under both an 
 index error (which would scramble WITHIN slots instead of across them) and an identity
 permutation (a silent no-op that would report "not span-specific" for every arm).
 `tests/test_slot_seed.py` → 22 passed.
+
+## Results (filled 2026-08-28 09:45). ALL FOUR PREDICTIONS HELD — and the control inverts the programme.
+
+All at step 3000, ce_main, 8 fixed eval batches.
+
+| arm | restriction | aux losses | zeroing costs | shuffling costs | **specificity** |
+|---|---|---|---|---|---|
+| ctrlworth-s3 | **OFF** | ON | +0.0148 | +0.0096 | **65.1%** |
+| tg1-s1 | ON | ON | +0.0637 | +0.0019 | **3.0%** |
+| tg2-s1 | ON | OFF | +0.1232 | −0.0001 | −0.1% |
+| tg2-s2 | ON | OFF | +0.0516 | +0.0002 | 0.3% |
+| tg3b-s1 | ON (soft) | OFF | +0.0407 | +0.0002 | 0.6% |
+| tg3b-s2 | ON (soft) | OFF | +0.0365 | +0.0000 | 0.1% |
+| cap64-s2 | ON | OFF | +0.0454 | +0.0001 | 0.2% |
+
+**P1 HELD** — every shuffle cost is ≥ 0 within noise (the one negative is −0.0001).
+**P2 HELD**, and not marginally: mean specificity over the four restricted seeds is **0.2%**
+against a predicted line of 50%.
+**P3 HELD** — seeds agree (tg2 −0.1/0.3%, tg3b 0.6/0.1%).
+**P4 HELD** — TG3b's mean (0.35%) is within 0.25 of TG2's (0.1%). Softening the mask changed
+how much the coda NEEDS the plan but not what fraction of it is span-specific.
+
+### The finding
+
+**In every restricted arm the plan is an interchangeable constant.** The coda gains
+0.037–0.123 nats from the slot path, and **essentially none of it depends on which span
+wrote the plan.** Hand the coda a different span's plan and its token predictions are
+unchanged to four decimal places. The slot path's value is STRUCTURAL — it comes from the
+positions — not informational.
+
+### The control inverts the programme's premise, and the confound is controlled
+
+`ctrlworth-s3` is **65.1%** span-specific. Its plan is worth far LESS in total (0.0148 vs
+0.0637–0.1232) but most of that value is real per-span content.
+
+The obvious objection is that the control differs in TWO ways: no restriction AND aux losses
+on (`emit_weight`/`plast_weight` default to 0.5, and the emit loss trains z directly to
+predict the next span's first token — exactly span-specific content). **tg1-s1 settles it.**
+TG1 is `tul_a1` plus the restriction, with the aux losses left ON, so tg1-s1 vs ctrlworth-s3
+differ by the RESTRICTION alone:
+
+    aux ON, restriction OFF   ctrlworth-s3   65.1%
+    aux ON, restriction ON    tg1-s1          3.0%
+
+A 20x collapse from the restriction alone. Aux losses do contribute — within the restricted
+family they lift specificity from ~0.3% to 3.0%, about 10x — but that is an order of
+magnitude short of what the restriction removes.
+
+(Accepted, already-recorded confound: TG arms do not build the compressed branch's
+compressor/indexer, so tg1 vs ctrl also carries that parameter delta. It is the same
+confound noted in ../failures/2026-08-27-tg-restriction.md and is not plausibly worth 62
+points of specificity.)
+
+### Why this matters more than the CE numbers
+
+The restriction was adopted to make the plan LOAD-BEARING. Measured, it does the opposite of
+what was intended at the level that matters:
+
+- it makes the coda depend on the slot **positions** more (plan worth 0.0148 → 0.0637–0.1232)
+- it makes the coda depend on the plan's **content** ~20x less (65.1% → 3.0%)
+
+When tokens cannot see earlier spans, the slot positions become a structural crutch and the
+model stops reading what is in them. **The restriction destroyed exactly the thing it was
+introduced to create.** The earlier "plan worth rose 2–10x, the restriction moves the plan"
+reading — already withdrawn on 2026-08-28 as structurally confounded — is now not merely
+unsupported but backwards.
+
+### What this does NOT establish
+
+The shuffle asks whether the CODA uses span-specific content. It cannot tell "z contains no
+span-specific information" apart from "z contains it and the coda ignores it". Both give a
+shuffle cost of zero. The blind decoder was supposed to separate those and failed
+(../failures/2026-08-28-plan-content.md).
+
+**Retraction of a claim I made from this panel earlier today:** I said the slot's own emit
+head "does notice which span wrote the plan" because `ce_emit` moved 0.36 under shuffling on
+cap64-s2. That is not supportable — cap64 is `tul_tg2`-based with `emit_weight = 0`, so its
+emit head is untrained and its `ce_emit` (13.7 nats, worse than the 10.8 of a uniform
+distribution over the 49k vocabulary) is not a readable signal. On arms where the head IS
+trained the number does behave: ctrlworth-s3 shuffles at 81% of its zeroing cost on ce_emit,
+tg1-s1 at 7.8% — the same story as ce_main, from a head that was actually trained.
