@@ -362,6 +362,35 @@ def eval_decoder(dec: BlindSpanDecoder, z: Tensor, targets: Tensor, *, vocab_siz
     return total_nll / max(total_n, 1), total_n
 
 
+# ── memorization gate ─────────────────────────────────────────────────────────
+
+CANARY_MAX = 0.5
+
+
+def memorization_gate(position: dict, max_gap: float = CANARY_MAX) -> tuple[float, bool]:
+    """``(gap, readable)`` from the POSITION condition's train/eval split.
+
+    `fit_decoder`'s docstring names the failure this guards: too little weight decay lets
+    the decoder MEMORIZE the fit set, its train loss collapses below the marginal entropy,
+    and eval loss on fresh z comes out WORSE than SHUFFLED — flipping the SIGN of the
+    deciding number. `weight_decay=1e-2` was found on a SYNTHETIC sweep; nothing yet shows
+    it holds at 49k vocab on a real checkpoint.
+
+    POSITION is the canary, and it is free: it is handed NO z, so it cannot legitimately
+    learn anything z-specific, while sharing every other condition's decoder size, step
+    budget, LR and seed. Its train/eval gap is therefore memorization capacity that ALL
+    four conditions had to spend. Above ``max_gap`` the panel is refused rather than
+    reported — the `score_arms.py` convention, and the reason a too-coarse probe cadence
+    there returns None instead of a noisier verdict.
+
+    Added 2026-08-28, BEFORE any probe produced data, so the threshold cannot be fitted to
+    a result. Recorded as a method amendment in
+    ../experiments/planned/2026-08-28-plan-content.md.
+    """
+    gap = float(position["nats_per_token"]) - float(position["final_train_loss"])
+    return gap, gap <= max_gap
+
+
 # ── unigram floor ─────────────────────────────────────────────────────────────
 
 def unigram_floor(fit_tokens: Tensor, eval_targets: Tensor, vocab_size: int
@@ -580,6 +609,29 @@ def main() -> None:
     print(f"{'unigram(i+1)':<10} {uf_ip1:>11.4f} {n_uf_ip1:>10}")
     print(f"{'unigram(i)':<10} {uf_i:>11.4f} {n_uf_i:>10}")
 
+    # ── MEMORIZATION GATE (added 2026-08-28, BEFORE any probe data existed) ──────────
+    # `fit_decoder`'s own docstring names the failure this guards: with too little weight
+    # decay the decoder MEMORIZES the fit set, its train loss collapses below the marginal
+    # entropy, and eval loss on fresh z comes out WORSE than SHUFFLED — which flips the
+    # sign of the deciding number. `weight_decay=1e-2` was found on a SYNTHETIC sweep, so
+    # nothing yet shows it holds at 49k vocab on real checkpoints.
+    #
+    # POSITION is the canary and costs nothing extra: it is handed NO z, so it cannot
+    # legitimately learn anything z-specific, and every condition shares its decoder size,
+    # step budget, LR and seed. Any train/eval gap POSITION shows is memorization capacity
+    # that all four conditions had. If the canary sings, REFUSE the readout rather than
+    # print a number whose sign cannot be trusted — the `score_arms.py` convention.
+    pos = results["POSITION"]
+    canary_gap, readable = memorization_gate(pos)
+    print(f"\nMEMORIZATION GATE  POSITION eval {pos['nats_per_token']:.4f} - train "
+          f"{pos['final_train_loss']:.4f} = {canary_gap:+.4f} nats "
+          f"(refuse above {CANARY_MAX:.2f}) -> {'OK' if readable else 'REFUSED'}")
+    if not readable:
+        print("  POSITION gets NO z, so this gap is pure memorization of the fit targets,")
+        print("  and every condition had the same decoder capacity to spend on it. The")
+        print("  deciding numbers below are NOT readable. Re-run with a higher")
+        print("  --weight-decay or a smaller decoder before quoting either band.")
+
     # SIGN NOTE (judgment call — see the final report's "judgment calls" section): nats
     # per token is a LOSS, lower is better. `probe-spec.md` writes the deciding
     # quantities as "PLAN - SHUFFLED" and "SUMMARY - PLAN" and requires >=0.20 to read
@@ -602,6 +654,8 @@ def main() -> None:
     print(f"z is better on its OWN span (PLAN - SUMMARY)  = {summary_minus_plan:+.4f} "
           f"nats/token  [>=0.20 means z reads as a SUMMARY of its own span, not a plan; "
           f"spec calls this 'SUMMARY - PLAN']")
+    if not readable:
+        print("\n*** BOTH NUMBERS ABOVE ARE REFUSED BY THE MEMORIZATION GATE. ***")
 
     out = {
         "ckpt": a.ckpt, "config": a.config, "label": a.label,
@@ -628,6 +682,11 @@ def main() -> None:
             "eval_total_valid_slots": eval_ex.n_total_valid,
         },
         "results": results,
+        "memorization_gate": {
+            "position_eval_nats": pos["nats_per_token"],
+            "position_train_loss": pos["final_train_loss"],
+            "gap": canary_gap, "max": CANARY_MAX, "readable": readable,
+        },
         "unigram_floor": {
             "span_ip1": {"nats_per_token": uf_ip1, "n_tokens": n_uf_ip1},
             "span_i": {"nats_per_token": uf_i, "n_tokens": n_uf_i},

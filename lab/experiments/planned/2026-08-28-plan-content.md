@@ -68,3 +68,34 @@ Checkpoints, all at matched step 3000:
 Self-test (`tests/test_plan_content_probe.py`, 16 tests): a synthetic positive control
 where z encodes the target must show a large saving, and a noise-z negative control must
 show ~0. A probe that cannot separate those two cannot be trusted here.
+
+## METHOD AMENDMENT 2026-08-28 (before any probe produced data)
+
+Added a **memorization gate** to `plan_content_probe.py`
+(`memorization_gate`, `CANARY_MAX = 0.5`). Predictions above are UNCHANGED; this amends
+the Method only, and it is recorded here because the protocol requires an amendment to
+carry its date and reason rather than appear silently in the code.
+
+**Reason.** `fit_decoder`'s docstring already named the failure: with too little weight
+decay the decoder MEMORIZES the fit set, its train loss collapses below the marginal
+entropy, and eval loss on fresh z comes out WORSE than SHUFFLED — which flips the SIGN of
+the deciding number, not merely its size. `weight_decay=1e-2` was found on a SYNTHETIC
+sweep at a toy vocabulary. Nothing yet shows it holds at 49k vocab on a real checkpoint,
+and this probe was built to settle a question the campaign has circled for weeks. A
+silently sign-flipped answer is the worst outcome available.
+
+**Mechanism.** POSITION is the canary and costs nothing extra: it is handed NO z, so it
+cannot legitimately learn anything z-specific, while sharing every other condition's
+decoder size, step budget, LR and seed. Its train/eval gap is memorization capacity that
+ALL four conditions had to spend. Above 0.5 nats the panel is REFUSED rather than
+reported — the `score_arms.py` convention of refusing a verdict the method cannot support.
+
+**Why this cannot be fitted to a result.** No probe has run. The three chained runs
+(tg2-s1, tg2-s2, ctrlworth-s3) start only after the round-2 training queue drains.
+
+**Tests.** Three cases in `tests/test_plan_content_probe.py`, each verified to FAIL when
+the gate is stubbed to always-readable. Full file: 19 passed.
+
+**If the gate fires**, the recorded outcome is "method could not distinguish", the run is
+filed under `failures/` per the protocol, and the next planned file raises `--weight-decay`
+or shrinks the decoder. It is NOT a licence to re-run until the gate happens to pass.

@@ -405,3 +405,40 @@ def test_forward_still_produces_the_real_values_capture_is_transparent():
 
     assert torch.equal(out1["loss"], out2["loss"]), (
         "capture_prefix_project changed the forward's output — it must be transparent")
+
+
+# ── memorization gate (added 2026-08-28, before any probe data existed) ───────────
+
+def test_memorization_gate_passes_a_healthy_position_condition():
+    """A decoder that did NOT memorize has eval close to train, so the panel is readable."""
+    from lab.divergence.plan_content_probe import memorization_gate
+
+    gap, readable = memorization_gate(
+        {"nats_per_token": 6.20, "final_train_loss": 6.05})
+    assert abs(gap - 0.15) < 1e-9
+    assert readable
+
+
+def test_memorization_gate_refuses_a_memorizing_decoder():
+    """The failure fit_decoder's docstring names: train loss collapses under the marginal
+    entropy while eval does not follow. That gap is capacity EVERY condition had, so the
+    deciding numbers cannot be trusted and the gate must refuse."""
+    from lab.divergence.plan_content_probe import memorization_gate
+
+    gap, readable = memorization_gate(
+        {"nats_per_token": 6.40, "final_train_loss": 2.10})
+    assert gap > 4.0
+    assert not readable, "a 4.3-nat train/eval gap on a z-FREE condition must be refused"
+
+
+def test_memorization_gate_boundary_is_inclusive():
+    """Exactly at the line reads as readable — the refusal is for gaps ABOVE it, so the
+    threshold means the same thing here as `fires`'s '> thr' does in score_arms.py."""
+    from lab.divergence.plan_content_probe import CANARY_MAX, memorization_gate
+
+    _gap, readable = memorization_gate(
+        {"nats_per_token": 6.0, "final_train_loss": 6.0 - CANARY_MAX})
+    assert readable
+    _gap, readable = memorization_gate(
+        {"nats_per_token": 6.0, "final_train_loss": 6.0 - CANARY_MAX - 1e-6})
+    assert not readable
