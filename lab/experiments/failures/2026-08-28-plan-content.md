@@ -136,3 +136,62 @@ rather than a licence to re-run until the gate happens to pass. See
 
 **Nothing about the plan's content is known.** Every downstream decision gated on
 EMPTY-vs-FULL — the flow-matching objective in particular — stays gated.
+
+
+## Attempt 2 (the redirect) and the FINAL verdict on this instrument, 2026-08-28 08:10
+
+Settings: fit 150 / eval 20 batches, steps 20000, decoder-batch 256, lr 1e-3
+(~41k fit examples, ~125 epochs). Full precision, from the output JSONs:
+
+    checkpoint    PLAN         SUMMARY      SHUFFLED     POSITION     unigram(i+1)
+    tg2-s1        7.49422125   7.49451206   7.49733750   7.42210594   7.4635
+    tg2-s2        7.49418440   7.49440176   7.49432029   7.42210594   7.4635
+
+    MEMORIZATION GATE  POSITION eval 7.4221 - train 7.3271 = +0.0950 -> OK (passes)
+
+**Scored against the frozen predictions:**
+
+- **R1 HELD** (both attempts). The gate passes.
+- **R2 FAILED.** PLAN (7.4942) is ABOVE POSITION (7.4221) by 0.072 nats. A condition given
+  strictly MORE information still does WORSE. True in both attempts, on every checkpoint.
+- **R3 FAILED.** POSITION beats the unigram floor by **0.0414 nats** against a
+  pre-registered 0.30 line.
+- **R4 HELD** (the two restricted seeds agree), but on a degenerate quantity.
+- **A2-R5 FAILED** — it required BOTH the gate passing AND ≥0.30 over unigram. Exactly the
+  case it was written for: the gate passes while the fit does not.
+
+**VERDICT, per the bounded procedure: the blind-decoder probe cannot be fitted at this
+scale. EMPTY-vs-FULL stays OPEN. No attempt 3. `CANARY_MAX` was never moved.**
+
+An instrument that clears a unigram model by 0.04 nats cannot detect a 0.20-nat signal.
+`SHUFFLED - PLAN` came out +0.0031 and +0.0001 — deep inside the EMPTY band — and that
+number is NOT reported as a result, because the same instrument cannot show that offset
+alone predicts anything either, and offset alone certainly does.
+
+### A false alarm I raised and then resolved, recorded so it is not re-raised
+
+The 4-decimal console table printed tg2-s1 and tg2-s2 as IDENTICAL on PLAN, POSITION and
+both train losses. Two different seeds should not do that, and the natural suspicion is that
+`load_checkpoint` is not taking effect. It is. Checked two ways:
+
+1. The two checkpoints genuinely differ — **410 of 494 tensors differ**, with max absolute
+   differences up to 0.90 (`embed.bigram.lambdas`).
+2. At full precision PLAN, SUMMARY and SHUFFLED all differ between the seeds; only the
+   5th decimal onward separates them, which 4-decimal printing hid.
+
+**POSITION is bit-identical across checkpoints, and that is CORRECT** — POSITION is handed
+no z, so with the same data, the same seed and the same decoder init it MUST reproduce
+exactly. It is a determinism check passing, not a bug. The rounding, not the loading, was
+the problem.
+
+### Why this instrument was the wrong shape, for whoever revisits it
+
+The blind decoder has to **learn language from scratch** to read z: predict K tokens of a
+span over a 49k vocabulary from one vector, with no token context. That is a much harder
+task than the question being asked, and it is why the decoder sits within 0.04 nats of a
+unigram model after 125 epochs on 41k examples. The window between "too few examples, it
+memorises" (attempt 1, gap 0.8872) and "enough examples, it cannot fit" (attempt 2, 0.0414
+over unigram) may not exist for this design at this vocabulary.
+
+The replacement uses the model's OWN coda — already trained to read z — so nothing has to be
+learned: ../planned/2026-08-28-plan-span-specificity.md.
