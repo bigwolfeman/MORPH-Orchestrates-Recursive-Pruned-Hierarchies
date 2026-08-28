@@ -107,16 +107,23 @@ def plan_shuffled(root, seed: int = 0):
 
     def shuffled(h_slots, layout, l_total):
         values, pos = orig(h_slots, layout, l_total)
-        # values is [B, S*K, C]: slot s owns rows [s*K, (s+1)*K). Permute WHOLE slots so a
-        # plan's prefix_k values stay together and stay in their own order — scrambling
-        # within a slot would test something else entirely.
-        B, SK, C = values.shape
+        # values is [B, S*K, *tail]: slot s owns rows [s*K, (s+1)*K). `tail` is (C,) for a
+        # plain carrier and (n, C) for the HC carrier — `prefix_project` documents
+        # `mid = h_slots.shape[2:-1]  # () plain, (n,) HC`, and MORPH runs HC n=4, so the
+        # shipped rank is 4, not 3. Written rank-agnostically after a 3-D assumption here
+        # crashed the first real cap64 worth pass.
+        # Permute WHOLE slots so a plan's prefix_k values stay together and in their own
+        # order — scrambling within a slot would test something else entirely.
+        B, SK = values.shape[0], values.shape[1]
+        tail = values.shape[2:]
         K = tul.tul.prefix_k
         S = SK // K
         g = torch.Generator(device="cpu").manual_seed(seed)
         perm = torch.stack([torch.randperm(S, generator=g) for _ in range(B)]).to(values.device)
-        idx = (perm[:, :, None] * K + torch.arange(K, device=values.device)[None, None, :])
-        return values.gather(1, idx.reshape(B, SK)[:, :, None].expand(B, SK, C)), pos
+        idx = (perm[:, :, None] * K
+               + torch.arange(K, device=values.device)[None, None, :]).reshape(B, SK)
+        idx = idx.reshape(B, SK, *([1] * len(tail))).expand(B, SK, *tail)
+        return values.gather(1, idx), pos
 
     tul.prefix_project = shuffled
     try:

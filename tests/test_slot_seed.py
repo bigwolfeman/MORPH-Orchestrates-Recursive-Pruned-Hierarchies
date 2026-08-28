@@ -389,7 +389,7 @@ def test_seed_bagmean_restores_on_exception():
 
 # ── plan_shuffled: the span-specificity control (lab/divergence/slot_path_worth.py) ──
 
-def _fake_root_for_shuffle(prefix_k=2, n_slots=6, C=3, B=2):
+def _fake_root_for_shuffle(prefix_k=2, n_slots=6, C=3, B=2, n_hc=4):
     """A stand-in exposing only what plan_shuffled touches: root.tul.prefix_project and
     root.tul.tul.prefix_k. The real TULSlots needs a built model; the permutation logic
     does not, and testing it directly is what catches an index-math error."""
@@ -397,11 +397,14 @@ def _fake_root_for_shuffle(prefix_k=2, n_slots=6, C=3, B=2):
 
     def prefix_project(h_slots, layout, l_total):
         # value (s, k) is encoded as s*10 + k so a moved or reordered block is visible.
-        v = torch.zeros(B, n_slots * prefix_k, C)
+        # Shape is the SHIPPED one: [B, S*K, n, C] for the HC carrier (n_hc=0 -> [B,S*K,C]).
+        shape = ((B, n_slots * prefix_k, C) if n_hc == 0
+                 else (B, n_slots * prefix_k, n_hc, C))
+        v = torch.zeros(*shape)
         for b in range(B):
             for s in range(n_slots):
                 for k in range(prefix_k):
-                    v[b, s * prefix_k + k, :] = s * 10 + k
+                    v[b, s * prefix_k + k] = s * 10 + k
         return v, torch.zeros(B, n_slots * prefix_k, dtype=torch.long)
 
     tul = types.SimpleNamespace(prefix_project=prefix_project,
@@ -409,21 +412,22 @@ def _fake_root_for_shuffle(prefix_k=2, n_slots=6, C=3, B=2):
     return types.SimpleNamespace(tul=tul), prefix_project
 
 
-def test_plan_shuffled_moves_whole_slots_and_keeps_their_order():
+@pytest.mark.parametrize("n_hc", [4, 0])
+def test_plan_shuffled_moves_whole_slots_and_keeps_their_order(n_hc):
     """Each output slot must hold ONE input slot's prefix_k values, in their original
     order. Scrambling WITHIN a slot would measure something else entirely, and an
     off-by-K in the index math is exactly the bug that would do it silently."""
     from lab.divergence.slot_path_worth import plan_shuffled
 
     K, S, B = 2, 6, 2
-    root, orig = _fake_root_for_shuffle(prefix_k=K, n_slots=S, B=B)
+    root, orig = _fake_root_for_shuffle(prefix_k=K, n_slots=S, B=B, n_hc=n_hc)
     with plan_shuffled(root, seed=0):
         out, _pos = root.tul.prefix_project(None, None, 0)
 
     for b in range(B):
         seen = []
         for s in range(S):
-            block = out[b, s * K:(s + 1) * K, 0]
+            block = out[b, s * K:(s + 1) * K].reshape(K, -1)[:, 0]
             src = int(block[0]) // 10
             # the block must be exactly source slot `src`'s values, in order
             want = torch.tensor([src * 10 + k for k in range(K)], dtype=block.dtype)
@@ -454,5 +458,34 @@ def test_plan_shuffled_permutes_rows_independently():
     root, _ = _fake_root_for_shuffle(n_slots=32, B=4)
     with plan_shuffled(root, seed=0):
         out, _ = root.tul.prefix_project(None, None, 0)
-    rows = [tuple(int(out[b, s * 2, 0]) // 10 for s in range(32)) for b in range(4)]
+    rows = [tuple(int(out[b, s * 2].reshape(-1)[0]) // 10 for s in range(32))
+            for b in range(4)]
     assert len(set(rows)) > 1, "every row got the SAME permutation"
+
+
+def test_plan_shuffled_runs_on_a_REAL_model_forward():
+    """The shipped path, not a stub.
+
+    The stub tests above were written at rank 3 ([B, S*K, C]) and passed, while the real
+    `prefix_project` returns the HC carrier at rank 4 ([B, S*K, n, C]). The 3-D unpack got
+    all the way to a real cap64 checkpoint before crashing:
+    `ValueError: too many values to unpack (expected 3)`. That is the third time this
+    campaign has been bitten by a test that exercised an adjacent path instead of the one
+    every arm runs, so this test drives an actual MORPHTransformer forward.
+    """
+    from lab.divergence.slot_path_worth import plan_shuffled
+
+    spec = _spec()
+    x, y, layout, _ = _batch(spec)
+    m = _model(TULConfig(prefix_k=2, slot_id=4))
+    m.eval()
+    with torch.no_grad():
+        base = m(x, labels=y, slot_layout=layout)["loss"]
+        with plan_shuffled(m):
+            shuf = m(x, labels=y, slot_layout=layout)["loss"]
+        after = m(x, labels=y, slot_layout=layout)["loss"]
+
+    assert torch.isfinite(shuf), f"non-finite loss under plan_shuffled: {shuf}"
+    assert not torch.equal(base, shuf), \
+        "shuffling the plan did not change the loss — the condition is a silent no-op"
+    torch.testing.assert_close(base, after, rtol=0, atol=0)   # cleanly restored
