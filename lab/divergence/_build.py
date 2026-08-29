@@ -19,6 +19,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from morph.model.transformer import MORPHTransformer          # noqa: E402
+from morph.training.fm_setup import build_fm_runtime          # noqa: E402
 from morph.training.quant_setup import apply_quantization     # noqa: E402
 from morph.training.train import build_morph_config           # noqa: E402
 from morph.training.tul_setup import build_tul_runtime        # noqa: E402
@@ -45,7 +46,9 @@ def build_model(cfg, device: str = "cuda"):
     linear exceeded 2.0 while the run's own log had sigma_max at 3.30.
     """
     tul_rt = build_tul_runtime(cfg)
-    model = MORPHTransformer(build_morph_config(cfg, tul=tul_rt.model_cfg if tul_rt else None))
+    fm_rt = build_fm_runtime(cfg, tul_rt)
+    model = MORPHTransformer(build_morph_config(cfg, tul=tul_rt.model_cfg if tul_rt else None,
+                                                fm=fm_rt))
     model = model.to(torch.device(device))
     apply_quantization(model, cfg)
     return model, tul_rt
