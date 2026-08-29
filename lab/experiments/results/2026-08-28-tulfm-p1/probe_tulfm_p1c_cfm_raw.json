@@ -1,0 +1,629 @@
+{
+  "planner_ckpt": "checkpoints/tulfm/p1c_cfm_raw/step_4000.pt",
+  "backbone_ckpt": "checkpoints/morph/a3-s2/step_4500.pt",
+  "step": 4000,
+  "n_batches": 8,
+  "batch_size": 8,
+  "seq_len": 1024,
+  "seed": 1234,
+  "planner_cfg": {
+    "objective": "cfm",
+    "d_ctx": 1024,
+    "d_target": 1024,
+    "d_p": 512,
+    "n_layers": 4,
+    "n_heads": 8,
+    "d_ff": 1408,
+    "cond_dim": 256,
+    "sigma_n_freq": 0,
+    "max_slots": 256,
+    "max_ctx_len": 1024,
+    "sigma_data": 0.5,
+    "source_std": 0.03125,
+    "t_embed_scale": 1.0,
+    "dropout": 0.0
+  },
+  "objective": "cfm",
+  "whitened": false,
+  "whiten_rank": 0,
+  "infer_steps": 6,
+  "target_effective_rank": 25.468624076943833,
+  "target_mean_pairwise_cos": 0.6303926259279251,
+  "target_dim_scored": 1024,
+  "chance": 0.0025164252147078514,
+  "dropped_frac": 0.019732664426957175,
+  "trained": {
+    "top1": 0.01164570654509589,
+    "top5": 0.0502642379142344,
+    "mrr": 0.04302761913277209,
+    "median_rank": 121.375,
+    "n_candidates": 398.875,
+    "chance": 0.0025164252147078514
+  },
+  "untrained": {
+    "top1": 0.0028203751717228442,
+    "top5": 0.013976891990751028,
+    "mrr": 0.016974440426565707,
+    "median_rank": 194.25,
+    "n_candidates": 398.875,
+    "chance": 0.0025164252147078514
+  },
+  "shuffled_ctx": {
+    "top1": 0.0009075040288735181,
+    "top5": 0.00810618995456025,
+    "mrr": 0.014437333215028048,
+    "median_rank": 197.75,
+    "n_candidates": 398.875,
+    "chance": 0.0025164252147078514
+  },
+  "trained_within_row": {
+    "top1": 0.037093049846589565,
+    "top5": 0.16939516365528107,
+    "mrr": 0.1274650525301695,
+    "median_rank": 19.75,
+    "n_candidates": 50.383811950683594,
+    "chance": 0.020131402416154742
+  },
+  "untrained_within_row": {
+    "top1": 0.022579613490961492,
+    "top5": 0.0973786162212491,
+    "mrr": 0.09106553811579943,
+    "median_rank": 25.0,
+    "n_candidates": 50.383811950683594,
+    "chance": 0.020131402416154742
+  },
+  "shuffled_ctx_within_row": {
+    "top1": 0.01584301795810461,
+    "top5": 0.09969767462462187,
+    "mrr": 0.08652972616255283,
+    "median_rank": 25.5,
+    "n_candidates": 50.383811950683594,
+    "chance": 0.020131402416154742
+  },
+  "per_batch": [
+    {
+      "slots": {
+        "n_valid": 426,
+        "n_spans_total": 434,
+        "dropped_frac": 0.018433179723502335,
+        "n_dropped_budget": 0
+      },
+      "target_effective_rank": 29.249786526121973,
+      "target_mean_pairwise_cos": 0.6089443564414978,
+      "target_raw_dim": 1024,
+      "target_dim": 1024,
+      "target_norm_mean": 1.0,
+      "whitened": false,
+      "trained": {
+        "n_candidates": 426.0,
+        "n_queries": 426,
+        "chance": 0.002347417874261737,
+        "top1": 0.009389671497046947,
+        "top5": 0.044600941240787506,
+        "mrr": 0.03783676400780678,
+        "median_rank": 152.0
+      },
+      "trained_within_row": {
+        "n_candidates": 53.77934265136719,
+        "n_queries": 426,
+        "chance": 0.018779342994093895,
+        "top1": 0.035211268812417984,
+        "top5": 0.1666666716337204,
+        "mrr": 0.12163200229406357,
+        "median_rank": 22.0
+      },
+      "shuffled_ctx": {
+        "n_candidates": 426.0,
+        "n_queries": 426,
+        "chance": 0.002347417874261737,
+        "top1": 0.002347417874261737,
+        "top5": 0.014084506779909134,
+        "mrr": 0.014803080819547176,
+        "median_rank": 213.0
+      },
+      "shuffled_ctx_within_row": {
+        "n_candidates": 53.77934265136719,
+        "n_queries": 426,
+        "chance": 0.018779342994093895,
+        "top1": 0.018779342994093895,
+        "top5": 0.09389671683311462,
+        "mrr": 0.0824948251247406,
+        "median_rank": 28.0
+      },
+      "untrained": {
+        "n_candidates": 426.0,
+        "n_queries": 426,
+        "chance": 0.002347417874261737,
+        "top1": 0.002347417874261737,
+        "top5": 0.014084506779909134,
+        "mrr": 0.014955823309719563,
+        "median_rank": 208.0
+      },
+      "untrained_within_row": {
+        "n_candidates": 53.77934265136719,
+        "n_queries": 426,
+        "chance": 0.018779342994093895,
+        "top1": 0.014084506779909134,
+        "top5": 0.10093896836042404,
+        "mrr": 0.08048368245363235,
+        "median_rank": 26.0
+      }
+    },
+    {
+      "slots": {
+        "n_valid": 420,
+        "n_spans_total": 428,
+        "dropped_frac": 0.01869158878504673,
+        "n_dropped_budget": 0
+      },
+      "target_effective_rank": 25.280053397032592,
+      "target_mean_pairwise_cos": 0.6070341467857361,
+      "target_raw_dim": 1024,
+      "target_dim": 1024,
+      "target_norm_mean": 1.0,
+      "whitened": false,
+      "trained": {
+        "n_candidates": 420.0000305175781,
+        "n_queries": 420,
+        "chance": 0.0023809524718672037,
+        "top1": 0.01428571529686451,
+        "top5": 0.0476190485060215,
+        "mrr": 0.04566222429275513,
+        "median_rank": 112.0
+      },
+      "trained_within_row": {
+        "n_candidates": 53.27619171142578,
+        "n_queries": 420,
+        "chance": 0.01904761977493763,
+        "top1": 0.02857143059372902,
+        "top5": 0.14523810148239136,
+        "mrr": 0.11171110719442368,
+        "median_rank": 21.0
+      },
+      "shuffled_ctx": {
+        "n_candidates": 420.0000305175781,
+        "n_queries": 420,
+        "chance": 0.0023809524718672037,
+        "top1": 0.0,
+        "top5": 0.004761904943734407,
+        "mrr": 0.01274507213383913,
+        "median_rank": 203.0
+      },
+      "shuffled_ctx_within_row": {
+        "n_candidates": 53.27619171142578,
+        "n_queries": 420,
+        "chance": 0.01904761977493763,
+        "top1": 0.009523809887468815,
+        "top5": 0.08571428805589676,
+        "mrr": 0.0767628401517868,
+        "median_rank": 27.0
+      },
+      "untrained": {
+        "n_candidates": 420.0000305175781,
+        "n_queries": 420,
+        "chance": 0.0023809524718672037,
+        "top1": 0.004761904943734407,
+        "top5": 0.007142857648432255,
+        "mrr": 0.015478239394724369,
+        "median_rank": 196.0
+      },
+      "untrained_within_row": {
+        "n_candidates": 53.27619171142578,
+        "n_queries": 420,
+        "chance": 0.01904761977493763,
+        "top1": 0.007142857648432255,
+        "top5": 0.07380952686071396,
+        "mrr": 0.07378390431404114,
+        "median_rank": 26.0
+      }
+    },
+    {
+      "slots": {
+        "n_valid": 357,
+        "n_spans_total": 365,
+        "dropped_frac": 0.021917808219178103,
+        "n_dropped_budget": 0
+      },
+      "target_effective_rank": 26.99182396105448,
+      "target_mean_pairwise_cos": 0.6446390748023987,
+      "target_raw_dim": 1024,
+      "target_dim": 1024,
+      "target_norm_mean": 1.0,
+      "whitened": false,
+      "trained": {
+        "n_candidates": 357.0,
+        "n_queries": 357,
+        "chance": 0.002801120514050126,
+        "top1": 0.011204482056200504,
+        "top5": 0.05042016878724098,
+        "mrr": 0.04365271329879761,
+        "median_rank": 100.0
+      },
+      "trained_within_row": {
+        "n_candidates": 45.57143020629883,
+        "n_queries": 357,
+        "chance": 0.02240896411240101,
+        "top1": 0.03641456738114357,
+        "top5": 0.190476194024086,
+        "mrr": 0.13807401061058044,
+        "median_rank": 17.0
+      },
+      "shuffled_ctx": {
+        "n_candidates": 357.0,
+        "n_queries": 357,
+        "chance": 0.002801120514050126,
+        "top1": 0.0,
+        "top5": 0.008403361774981022,
+        "mrr": 0.01372582372277975,
+        "median_rank": 185.0
+      },
+      "shuffled_ctx_within_row": {
+        "n_candidates": 45.57143020629883,
+        "n_queries": 357,
+        "chance": 0.02240896411240101,
+        "top1": 0.016806723549962044,
+        "top5": 0.095238097012043,
+        "mrr": 0.08993040025234222,
+        "median_rank": 23.0
+      },
+      "untrained": {
+        "n_candidates": 357.0,
+        "n_queries": 357,
+        "chance": 0.002801120514050126,
+        "top1": 0.0,
+        "top5": 0.019607843831181526,
+        "mrr": 0.016292160376906395,
+        "median_rank": 175.0
+      },
+      "untrained_within_row": {
+        "n_candidates": 45.57143020629883,
+        "n_queries": 357,
+        "chance": 0.02240896411240101,
+        "top1": 0.02240896411240101,
+        "top5": 0.11764705926179886,
+        "mrr": 0.09954442083835602,
+        "median_rank": 22.0
+      }
+    },
+    {
+      "slots": {
+        "n_valid": 372,
+        "n_spans_total": 380,
+        "dropped_frac": 0.021052631578947323,
+        "n_dropped_budget": 0
+      },
+      "target_effective_rank": 25.910533313612184,
+      "target_mean_pairwise_cos": 0.6423038840293884,
+      "target_raw_dim": 1024,
+      "target_dim": 1024,
+      "target_norm_mean": 1.0,
+      "whitened": false,
+      "trained": {
+        "n_candidates": 372.0,
+        "n_queries": 372,
+        "chance": 0.0026881720405071974,
+        "top1": 0.018817204982042313,
+        "top5": 0.059139784425497055,
+        "mrr": 0.05383210629224777,
+        "median_rank": 98.0
+      },
+      "trained_within_row": {
+        "n_candidates": 46.978492736816406,
+        "n_queries": 372,
+        "chance": 0.02150537632405758,
+        "top1": 0.04838709533214569,
+        "top5": 0.1666666716337204,
+        "mrr": 0.13383474946022034,
+        "median_rank": 18.0
+      },
+      "shuffled_ctx": {
+        "n_candidates": 372.0,
+        "n_queries": 372,
+        "chance": 0.0026881720405071974,
+        "top1": 0.0,
+        "top5": 0.005376344081014395,
+        "mrr": 0.01580272987484932,
+        "median_rank": 172.0
+      },
+      "shuffled_ctx_within_row": {
+        "n_candidates": 46.978492736816406,
+        "n_queries": 372,
+        "chance": 0.02150537632405758,
+        "top1": 0.029569892212748528,
+        "top5": 0.12365591526031494,
+        "mrr": 0.10429273545742035,
+        "median_rank": 23.0
+      },
+      "untrained": {
+        "n_candidates": 372.0,
+        "n_queries": 372,
+        "chance": 0.0026881720405071974,
+        "top1": 0.008064515888690948,
+        "top5": 0.02150537632405758,
+        "mrr": 0.024093354120850563,
+        "median_rank": 182.0
+      },
+      "untrained_within_row": {
+        "n_candidates": 46.978492736816406,
+        "n_queries": 372,
+        "chance": 0.02150537632405758,
+        "top1": 0.037634409964084625,
+        "top5": 0.11021505296230316,
+        "mrr": 0.1076200008392334,
+        "median_rank": 22.0
+      }
+    },
+    {
+      "slots": {
+        "n_valid": 406,
+        "n_spans_total": 414,
+        "dropped_frac": 0.019323671497584516,
+        "n_dropped_budget": 0
+      },
+      "target_effective_rank": 20.54509729062668,
+      "target_mean_pairwise_cos": 0.6894298195838928,
+      "target_raw_dim": 1024,
+      "target_dim": 1024,
+      "target_norm_mean": 1.0,
+      "whitened": false,
+      "trained": {
+        "n_candidates": 406.0,
+        "n_queries": 406,
+        "chance": 0.002463054144755006,
+        "top1": 0.007389162667095661,
+        "top5": 0.029556650668382645,
+        "mrr": 0.029198424890637398,
+        "median_rank": 164.0
+      },
+      "trained_within_row": {
+        "n_candidates": 51.14778137207031,
+        "n_queries": 406,
+        "chance": 0.019704433158040047,
+        "top1": 0.03448275849223137,
+        "top5": 0.14039409160614014,
+        "mrr": 0.11618390679359436,
+        "median_rank": 23.0
+      },
+      "shuffled_ctx": {
+        "n_candidates": 406.0,
+        "n_queries": 406,
+        "chance": 0.002463054144755006,
+        "top1": 0.0,
+        "top5": 0.004926108289510012,
+        "mrr": 0.012357506901025772,
+        "median_rank": 204.0
+      },
+      "shuffled_ctx_within_row": {
+        "n_candidates": 51.14778137207031,
+        "n_queries": 406,
+        "chance": 0.019704433158040047,
+        "top1": 0.014778325334191322,
+        "top5": 0.11822660267353058,
+        "mrr": 0.08930090814828873,
+        "median_rank": 26.0
+      },
+      "untrained": {
+        "n_candidates": 406.0,
+        "n_queries": 406,
+        "chance": 0.002463054144755006,
+        "top1": 0.007389162667095661,
+        "top5": 0.019704433158040047,
+        "mrr": 0.02084718644618988,
+        "median_rank": 196.0
+      },
+      "untrained_within_row": {
+        "n_candidates": 51.14778137207031,
+        "n_queries": 406,
+        "chance": 0.019704433158040047,
+        "top1": 0.02463054098188877,
+        "top5": 0.09605911374092102,
+        "mrr": 0.09118404239416122,
+        "median_rank": 26.0
+      }
+    },
+    {
+      "slots": {
+        "n_valid": 394,
+        "n_spans_total": 402,
+        "dropped_frac": 0.01990049751243783,
+        "n_dropped_budget": 0
+      },
+      "target_effective_rank": 22.64847547818826,
+      "target_mean_pairwise_cos": 0.6162088513374329,
+      "target_raw_dim": 1024,
+      "target_dim": 1024,
+      "target_norm_mean": 1.0,
+      "whitened": false,
+      "trained": {
+        "n_candidates": 394.0,
+        "n_queries": 394,
+        "chance": 0.0025380707811564207,
+        "top1": 0.015228426083922386,
+        "top5": 0.05076142027974129,
+        "mrr": 0.049791932106018066,
+        "median_rank": 94.0
+      },
+      "trained_within_row": {
+        "n_candidates": 49.28934097290039,
+        "n_queries": 394,
+        "chance": 0.020304568111896515,
+        "top1": 0.03553299605846405,
+        "top5": 0.20812182128429413,
+        "mrr": 0.1347634345293045,
+        "median_rank": 18.0
+      },
+      "shuffled_ctx": {
+        "n_candidates": 394.0,
+        "n_queries": 394,
+        "chance": 0.0025380707811564207,
+        "top1": 0.0,
+        "top5": 0.005076142027974129,
+        "mrr": 0.0146174356341362,
+        "median_rank": 190.0
+      },
+      "shuffled_ctx_within_row": {
+        "n_candidates": 49.28934097290039,
+        "n_queries": 394,
+        "chance": 0.020304568111896515,
+        "top1": 0.010152284055948257,
+        "top5": 0.10913705080747604,
+        "mrr": 0.086720772087574,
+        "median_rank": 25.0
+      },
+      "untrained": {
+        "n_candidates": 394.0,
+        "n_queries": 394,
+        "chance": 0.0025380707811564207,
+        "top1": 0.0,
+        "top5": 0.012690355069935322,
+        "mrr": 0.015351036563515663,
+        "median_rank": 184.0
+      },
+      "untrained_within_row": {
+        "n_candidates": 49.28934097290039,
+        "n_queries": 394,
+        "chance": 0.020304568111896515,
+        "top1": 0.025380710139870644,
+        "top5": 0.0939086303114891,
+        "mrr": 0.0934741199016571,
+        "median_rank": 24.0
+      }
+    },
+    {
+      "slots": {
+        "n_valid": 427,
+        "n_spans_total": 435,
+        "dropped_frac": 0.01839080459770115,
+        "n_dropped_budget": 0
+      },
+      "target_effective_rank": 24.780827819212146,
+      "target_mean_pairwise_cos": 0.6094956994056702,
+      "target_raw_dim": 1024,
+      "target_dim": 1024,
+      "target_norm_mean": 0.9999999403953552,
+      "whitened": false,
+      "trained": {
+        "n_candidates": 426.9999694824219,
+        "n_queries": 427,
+        "chance": 0.002341920044273138,
+        "top1": 0.011709601618349552,
+        "top5": 0.06088992580771446,
+        "mrr": 0.04380622133612633,
+        "median_rank": 131.0
+      },
+      "trained_within_row": {
+        "n_candidates": 54.161590576171875,
+        "n_queries": 427,
+        "chance": 0.018735362216830254,
+        "top1": 0.04215456545352936,
+        "top5": 0.17564402520656586,
+        "mrr": 0.1360604166984558,
+        "median_rank": 20.0
+      },
+      "shuffled_ctx": {
+        "n_candidates": 426.9999694824219,
+        "n_queries": 427,
+        "chance": 0.002341920044273138,
+        "top1": 0.0023419202771037817,
+        "top5": 0.009367681108415127,
+        "mrr": 0.014970206655561924,
+        "median_rank": 220.0
+      },
+      "shuffled_ctx_within_row": {
+        "n_candidates": 54.161590576171875,
+        "n_queries": 427,
+        "chance": 0.018735362216830254,
+        "top1": 0.011709601618349552,
+        "top5": 0.08430913090705872,
+        "mrr": 0.0790904089808464,
+        "median_rank": 28.0
+      },
+      "untrained": {
+        "n_candidates": 426.9999694824219,
+        "n_queries": 427,
+        "chance": 0.002341920044273138,
+        "top1": 0.0,
+        "top5": 0.009367681108415127,
+        "mrr": 0.014822280034422874,
+        "median_rank": 212.0
+      },
+      "untrained_within_row": {
+        "n_candidates": 54.161590576171875,
+        "n_queries": 427,
+        "chance": 0.018735362216830254,
+        "top1": 0.02107728272676468,
+        "top5": 0.09133489429950714,
+        "mrr": 0.08710306137800217,
+        "median_rank": 28.0
+      }
+    },
+    {
+      "slots": {
+        "n_valid": 389,
+        "n_spans_total": 397,
+        "dropped_frac": 0.02015113350125941,
+        "n_dropped_budget": 0
+      },
+      "target_effective_rank": 28.342394829702346,
+      "target_mean_pairwise_cos": 0.625085175037384,
+      "target_raw_dim": 1024,
+      "target_dim": 1024,
+      "target_norm_mean": 1.0,
+      "whitened": false,
+      "trained": {
+        "n_candidates": 389.0,
+        "n_queries": 389,
+        "chance": 0.0025706938467919827,
+        "top1": 0.005141388159245253,
+        "top5": 0.05912596359848976,
+        "mrr": 0.04044056683778763,
+        "median_rank": 120.0
+      },
+      "trained_within_row": {
+        "n_candidates": 48.86632537841797,
+        "n_queries": 389,
+        "chance": 0.02056555263698101,
+        "top1": 0.03598971664905548,
+        "top5": 0.16195373237133026,
+        "mrr": 0.1274607926607132,
+        "median_rank": 19.0
+      },
+      "shuffled_ctx": {
+        "n_candidates": 389.0,
+        "n_queries": 389,
+        "chance": 0.0025706938467919827,
+        "top1": 0.0025706940796226263,
+        "top5": 0.012853470630943775,
+        "mrr": 0.016476809978485107,
+        "median_rank": 195.0
+      },
+      "shuffled_ctx_within_row": {
+        "n_candidates": 48.86632537841797,
+        "n_queries": 389,
+        "chance": 0.02056555263698101,
+        "top1": 0.01542416401207447,
+        "top5": 0.08740359544754028,
+        "mrr": 0.08364491909742355,
+        "median_rank": 24.0
+      },
+      "untrained": {
+        "n_candidates": 389.0,
+        "n_queries": 389,
+        "chance": 0.0025706938467919827,
+        "top1": 0.0,
+        "top5": 0.007712082006037235,
+        "mrr": 0.013955443166196346,
+        "median_rank": 201.0
+      },
+      "untrained_within_row": {
+        "n_candidates": 48.86632537841797,
+        "n_queries": 389,
+        "chance": 0.02056555263698101,
+        "top1": 0.02827763557434082,
+        "top5": 0.09511568397283554,
+        "mrr": 0.09533107280731201,
+        "median_rank": 26.0
+      }
+    }
+  ]
+}
