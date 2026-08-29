@@ -2804,9 +2804,15 @@ class MORPHTransformer(nn.Module):
         z = self._readout(h_slots).float()                     # [B, S, C]
         valid = layout.slot_valid
         rows = z[valid]
+        # eigvalsh goes through cusolver on CUDA, and cusolverDnCreate failed with
+        # INTERNAL_ERROR at GL1b's first eval (2026-08-29 smoke) once the mux terms and
+        # attn-lift hooks shared eval memory — the same call had run clean in GL1. The
+        # covariance is [C, C] = 8 MB; the CPU eigendecomposition costs milliseconds and
+        # removes the cusolver surface from this eval-only probe entirely.
+        z_cpu, valid_cpu = z.cpu(), valid.cpu()
         return {
-            "slot_eff_rank": effective_rank(z, valid),
-            "slot_pairwise_cos": mean_pairwise_cos(z, valid),
+            "slot_eff_rank": effective_rank(z_cpu, valid_cpu),
+            "slot_pairwise_cos": mean_pairwise_cos(z_cpu, valid_cpu),
             "slot_norm_mean": float(rows.norm(dim=-1).mean()),
             # The scale SIGReg's statistic actually sees. `_readout` ends in RMSNorm, so
             # this sits at ~1 by construction and no standardisation is applied before
