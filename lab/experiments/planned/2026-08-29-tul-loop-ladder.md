@@ -84,3 +84,17 @@ The n_core>0 + tg_restrict + slot_seed=boundary + mux composition has never
 run on GPU (CPU tests only: 683 passed, 2 xfailed at commit time). The db_loop
 memory profile (db_mux_iters=4 × [B,S,V] fp32 logit graphs ≈ +0.3 GB) is
 arithmetic, not measurement — the smoke gates it.
+
+**Method amendment (2026-08-29 15:45, harness failure — L2 cap never armed):** the first
+`tul-l2` run (wandb name `tul-l2`) trained with the spectral projection OFF: `tul_l2.yaml`
+put `spectral_project_cap` under `model:` while `train.py` reads
+`cfg.training.spectral_project_cap` (base.yaml defines it under `training:`). Hydra merged
+the stray key silently and the run log printed `Core spectral-norm penalty OFF ... cap=0.0`;
+σ_max free-climbed past 4.7. `tests/test_tul_loop_ladder.py` asserted the same wrong path,
+so it validated the mistake instead of catching it. Both fixed in this change (yaml key moved
+to `training:`, test asserts `("training","spectral_project_cap")`, 7/7 pass on CPU;
+compose check prints `training.spectral_project_cap = 1.5`). The mis-configured run is
+RECLASSIFIED as an L1 same-seed replicate (config-identical to tul-l1) and will be used only
+to calibrate run-to-run spread; it does not score as L2. The corrected L2 arm runs after
+tul-l1-adamw under wandb name `tul-l2-cap`, gated on its startup log printing
+`Core spectral PROJECTION ON: cap=1.5`. Predictions untouched.

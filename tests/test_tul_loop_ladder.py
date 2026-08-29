@@ -42,7 +42,7 @@ def test_the_ladder_configs_resolve():
         "tul_l1": {("model", "n_core"): 6, ("model", "bptt_depth"): 8,
                    ("model", "max_depth"): 8, ("tul", "mux_beta"): 1.0,
                    ("tul", "tg_restrict"): True, ("tul", "db_loop", None): None},
-        "tul_l2": {("model", "spectral_project_cap"): 1.5, ("model", "n_core"): 6},
+        "tul_l2": {("training", "spectral_project_cap"): 1.5, ("model", "n_core"): 6},
         "tul_l3": {("tul", "db_loop"): True, ("tul", "db_mux_iters"): 4,
                    ("model", "bptt_depth"): 8},
     }

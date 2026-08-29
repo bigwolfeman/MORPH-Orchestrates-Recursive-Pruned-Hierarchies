@@ -14,7 +14,7 @@ defaults:
   - tul_l1
   - _self_
 
-model:
+training:
   spectral_project_cap: 1.5
 
 wandb:
