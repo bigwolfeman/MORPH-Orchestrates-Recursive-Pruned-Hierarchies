@@ -61,3 +61,45 @@ a 95% bootstrap CI over batches for the two oracle deltas.
   decision moves to the principled-reliance design (research synthesis in
   progress), NOT to more eval probes. Files to `failures/` (H1 predicted, so the
   filing is expected).
+
+---
+
+## Results (filed 2026-08-28, ckpt `fm1-cw-s1/step_4500.pt`, 100 val batches, paired)
+
+Status: success (all four predictions held)
+
+Artifact: `lab/experiments/results/2026-08-28-oracle-prefix-probe/probe.json`.
+Script: `lab/tulfm/oracle_prefix_probe.py`.
+
+| condition | ce_tokens | Δ vs normal | 95% CI |
+|---|---|---|---|
+| normal | 4.5791 | — | — |
+| zero | 4.5847 | +0.0056 | [+0.0051, +0.0060] |
+| shuffle | 4.5794 | +0.0003 | [+0.0002, +0.0005] |
+| oracle_y_unit | 4.5791 | −0.0000 | [−0.0001, +0.0001] |
+| oracle_y_scaled | 4.5791 | −0.0000 | [−0.0001, +0.0001] |
+| zero_scaled_noise | 4.5794 | +0.0003 | [+0.0002, +0.0005] |
+
+- H1 HELD: both oracle deltas ≈ 0 (|Δ| < 0.0001, far under the 0.01 line).
+- H2 HELD (vacuously strong): unit-norm oracle did not even hurt — the coda is so
+  content-blind that a 30× norm excursion at the prefix changes nothing.
+- H3 HELD: zero/shuffle reproduce the run's readings.
+- H4 HELD: scaled noise == shuffle exactly (+0.0003) — the entire non-zero part of
+  the "content" signal is an is-something-there energy cue, not content.
+
+Note: the prereg's decision-rule line said this outcome "files to failures/" —
+that contradicted the protocol (success = the predictions held; they all did).
+Filed under successes/ per protocol; the misprediction was in the label, not the
+science.
+
+## Verdict
+
+The additive `W_prefix(z)` interface, as trained in FM1-CW, delivers zero
+decodable content — even PERFECT content (the true target itself). Combined with
+the scope caveat (eval-only; reading machinery may form under training with a
+reason to form), the conclusion is exactly the pre-registered branch: no more
+eval probes; the next move is the principled-reliance design. The strongest
+single lead from the research sweep: the TG paper's own Table 1 ablation measured
+that DETACHING the memory-write gradient costs 10× PPL — and FM1's z is fully
+detached. The reading machinery has no gradient reason to exist and (He et al.
+2019) the collapsed optimum is stable from initialization.
