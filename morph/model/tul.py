@@ -169,6 +169,18 @@ class TULConfig:
     # constant and the arm is bit-identical to A1.
     mux_beta: float = 0.0                # weight of the local loss (paper: 1.0)
     mux_rho: float = 0.9                 # geometric decay of the span weighting (Prop 5i)
+    # WHICH span a slot is supervised toward (arm GL1b).
+    #   "next" — slot i is supervised toward span i+1. The PLAN framing: the slot is a
+    #            forecast, which is what every FM/TUL arm before GL1 assumed. Default,
+    #            so every existing arm is unchanged.
+    #   "own"  — slot i is supervised toward span i, the span it terminates. The GIST
+    #            framing: under `tg_restrict` the slot is the ONLY route by which a
+    #            later token can reach that span, so "be a lossless record of what you
+    #            replaced" is the job the architecture actually assigns it. MUX's own
+    #            latent replaces a CoT step it must encode, which is this role and not
+    #            the forecasting one — the paper's Eq. 2 target is the span the latent
+    #            STANDS FOR.
+    mux_target: str = "next"
     mux_tau: float = 1.0                 # softmax temperature of the head (paper: 1.0)
     # Detach the readout matrix inside the MUX head. TRUE is the corrected default and
     # the setting the paper's own protocol implies: MUX LoRA-finetunes a PRETRAINED
@@ -264,6 +276,9 @@ class TULConfig:
             raise ValueError(f"tul.mux_rho must be in (0,1), got {self.mux_rho}")
         if self.mux_tau <= 0.0:
             raise ValueError(f"tul.mux_tau must be > 0, got {self.mux_tau}")
+        if self.mux_target not in ("own", "next"):
+            raise ValueError(
+                f"tul.mux_target must be 'own' or 'next', got {self.mux_target!r}")
         if self.sigreg_lambda < 0.0:
             raise ValueError(f"tul.sigreg_lambda must be >= 0, got {self.sigreg_lambda}")
         if self.sigreg_slices < 1:
@@ -907,12 +922,24 @@ class TULGate(nn.Module):
         return out
 
 
-def mux_span_targets(input_ids: Tensor, layout: SlotLayout, rho: float
+def mux_span_targets(input_ids: Tensor, layout: SlotLayout, rho: float,
+                     target: str = "next"
                      ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-    """Geometric MUX weights of each slot's NEXT span (arXiv 2607.18264 Eq. 2).
+    """Geometric MUX weights of the span a slot is supervised toward (Eq. 2).
 
-    Slot ``i`` sits AFTER span ``i`` and its plan is decoded into span ``i+1``, so
-    slot ``i``'s local target is the position-weighted superposition of span
+    ``target="own"`` (arm GL1b) supervises slot ``i`` toward span ``i`` — the span it
+    TERMINATES and, under ``tg_restrict``, the span it is the only route to. Span ``i``
+    runs from ``slot_index[i-1] + prefix_k`` (or 0 for span 0) through the token before
+    ``slot_index[i]``; the position index ``j`` restarts at 0 at the span's first token,
+    so ``w_j = rho^j`` decays from the start of the span exactly as Eq. 2 specifies.
+    Every valid slot is supervised, span 0 included — it has a terminating slot, which
+    is the only thing "own" requires.
+
+    ``target="next"`` (the default, unchanged) supervises slot ``i`` toward span
+    ``i+1`` — the plan framing every arm before GL1 used. Its docstring follows.
+
+    NEXT: slot ``i`` sits AFTER span ``i`` and its plan is decoded into span ``i+1``,
+    so slot ``i``'s local target is the position-weighted superposition of span
     ``i+1``'s tokens: ``alpha_j ∝ rho^j`` (j = 0-based position inside the span),
     normalised within the span. The dense ``|V|``-vector is never built — the KL
     reduces to a weighted CE over the span's own token ids, so this returns
@@ -929,11 +956,32 @@ def mux_span_targets(input_ids: Tensor, layout: SlotLayout, rho: float
     """
     import math
 
+    if target not in ("own", "next"):
+        raise ValueError(f"mux target must be 'own' or 'next', got {target!r}")
     B, L = input_ids.shape
     S = layout.slot_index.shape[1]
     dev = input_ids.device
     k = layout.bag_id                                        # [B, L]
     kc = k.clamp(0, S - 1)
+
+    if target == "own":
+        # Span k supervises slot k. Valid when slot k is real and the position is a
+        # token of that span. Span 0 starts at position 0; span k>0 starts right after
+        # slot k-1's prefix block.
+        own_ok = torch.gather(layout.slot_valid, 1, kc)
+        pos_valid = (~layout.slot_mask) & (k < S) & own_ok
+        prev_end = torch.gather(layout.slot_index, 1, (kc - 1).clamp(min=0))
+        start = torch.where(kc >= 1, prev_end + layout.prefix_k,
+                            torch.zeros_like(prev_end))
+        j = (torch.arange(L, device=dev).unsqueeze(0) - start).clamp(min=0)
+        w = torch.exp(j.to(torch.float32) * math.log(rho))
+        w = torch.where(pos_valid, w, torch.zeros_like(w))
+        # Normalise per (row, span); invalid positions scatter into a dump column.
+        idx = torch.where(pos_valid, kc, torch.full_like(kc, S))
+        denom = torch.zeros(B, S + 1, device=dev, dtype=w.dtype)
+        denom.scatter_add_(1, idx, w)
+        alpha = w / torch.gather(denom, 1, idx).clamp(min=1e-20)
+        return pos_valid, alpha, kc * pos_valid.long(), denom[:, :S] > 0
     span_done = torch.gather(layout.slot_valid, 1, kc)       # slot k exists
     prev_ok = torch.gather(layout.slot_valid, 1, (kc - 1).clamp(min=0))
     pos_valid = (~layout.slot_mask) & (k >= 1) & (k < S) & span_done & prev_ok

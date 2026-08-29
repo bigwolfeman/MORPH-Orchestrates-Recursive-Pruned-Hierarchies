@@ -144,6 +144,10 @@ def evaluate(
                 acc.setdefault("val/mux_local", []).append(float(out["mux_local"]))
             if "sigreg" in out:
                 acc.setdefault("val/sigreg", []).append(float(out["sigreg"]))
+            for _mk in ("mux_local", "mux_kl", "mux_entropy", "mux_null", "mux_rel",
+                        "mux_n_supervised"):
+                if _mk in out:
+                    acc.setdefault(f"val/{_mk}", []).append(float(out[_mk]))
             if "ce_tokens_no_slots" in out:
                 # §7.2: CE without the plan MINUS CE with it. Positive ⇒ the coda is
                 # actually using the slot state (the C2 number, the h_z ablation).
@@ -195,6 +199,16 @@ def evaluate(
                     float(_ow["ce_tokens"]) - ce_tok)
                 for _k, _v in _m.tul_slot_state_probe(x, layout).items():
                     acc.setdefault(f"val/{_k}", []).append(float(_v))
+                # MUX §8.3 reasoning attention lift, WINDOW branch only (see
+                # morph/model/attn_lift.py for exactly which branch and why). Eager only.
+                for _k, _v in _m.tul_attn_lift_probe(x, layout).items():
+                    if _v == _v:                       # skip NaN (no eligible query)
+                        acc.setdefault(f"val/{_k}", []).append(float(_v))
+                if float(getattr(_tul_cfg, "mux_beta", 0.0)) > 0.0:
+                    # The FM2 scar, observable: how much of the tied embedding table's
+                    # gradient the auxiliary owns.
+                    for _k, _v in _m.tul_mux_grad_share(x, y, layout).items():
+                        acc.setdefault(f"val/{_k}", []).append(float(_v))
             if _has_fm:
                 if "fm" in out:
                     acc.setdefault("val/fm", []).append(float(out["fm"]))

@@ -2188,8 +2188,50 @@ class MORPHTransformer(nn.Module):
         w[z_idx] = self.cfg.tul.emit_weight
         return w[:BL], p_idx, z_idx
 
+    @staticmethod
+    def _mux_reference_terms(pos_valid: Tensor, alpha: Tensor, tgt_slot: Tensor,
+                             safe_ids: Tensor, n_sup: Tensor, S: int,
+                             vocab: int) -> tuple[float, float]:
+        """``(H(target), CE(target, marginal))`` — the two reference points for mux_rel.
+
+        Neither needs the model: both are pure functions of the multiplexed targets, so
+        the honesty null costs one extra pass over ``[B, L]`` and NOT a second
+        ``[B, S, V]`` forward.
+
+        H(target) uses the identity ``H = -sum_j alpha_j log m_{v(j)}`` where ``m_v`` is
+        the AGGREGATED mass of vocab item ``v`` in that span. Aggregation matters: Eq. 2
+        sums one-hots, so a subword appearing twice in a span carries the sum of its two
+        alphas, and ``-sum_j alpha_j log alpha_j`` would be a different (larger) number.
+        The aggregation is done with a compact ``unique`` over ``(row, slot, token)``
+        keys rather than a dense ``[B, S, V]`` buffer.
+
+        The null predictor is the batch MARGINAL ``pbar = mean_i target_i`` — the
+        unigram baseline. It is strictly tighter than uniform (a test asserts it) and,
+        unlike a batch-mean of the MODEL's predictions, it does not move as the model
+        trains, so ``mux_rel`` is a stationary reference rather than a moving one.
+        """
+        m = pos_valid.reshape(-1)
+        if not bool(m.any()):
+            return 0.0, 0.0
+        a = alpha.reshape(-1)[m].double()
+        ids = safe_ids.reshape(-1)[m]
+        B = pos_valid.shape[0]
+        row = (torch.arange(B, device=alpha.device)
+               .unsqueeze(1).expand_as(pos_valid).reshape(-1)[m])
+        key = (row * S + tgt_slot.reshape(-1)[m]) * vocab + ids
+        _u, inv = torch.unique(key, return_inverse=True)
+        mass = torch.zeros(int(inv.max()) + 1, device=a.device, dtype=a.dtype)
+        mass.scatter_add_(0, inv, a)
+        ent = -(a * mass[inv].clamp_min(1e-30).log()).sum() / n_sup
+
+        pbar = torch.zeros(vocab, device=a.device, dtype=a.dtype)
+        pbar.scatter_add_(0, ids, a)
+        pbar = pbar / n_sup.double()
+        ce_null = -(a * pbar[ids].clamp_min(1e-30).log()).sum() / n_sup
+        return float(ent), float(ce_null)
+
     def _tul_mux_loss(self, h_slots: Tensor, input_ids: Tensor,
-                      layout: SlotLayout) -> Tensor:
+                      layout: SlotLayout, stats: dict | None = None) -> Tensor:
         """MUX local head (arXiv 2607.18264): weighted CE of each slot's NEXT span.
 
         The slot's post-core state is read out through the model's OWN LM-head path
@@ -2222,7 +2264,8 @@ class MORPHTransformer(nn.Module):
         logits = logits.index_fill(
             -1, torch.tensor([tc.slot_id], device=logits.device), float("-inf"))
         logp = torch.log_softmax(logits, dim=-1)              # [B, S, V]
-        pos_valid, alpha, tgt_slot, sup = mux_span_targets(input_ids, layout, tc.mux_rho)
+        pos_valid, alpha, tgt_slot, sup = mux_span_targets(
+            input_ids, layout, tc.mux_rho, target=tc.mux_target)
         B = input_ids.shape[0]
         V = logp.shape[-1]
         # logp[b, tgt_slot[b,p], input_ids[b,p]] without a [B, L, V] gather.
@@ -2232,7 +2275,27 @@ class MORPHTransformer(nn.Module):
         safe_ids = torch.where(pos_valid, input_ids, torch.zeros_like(input_ids))
         lp = logp.reshape(B, -1).gather(1, tgt_slot * V + safe_ids)    # [B, L]
         ce = -torch.where(pos_valid, alpha * lp, torch.zeros_like(lp)).sum()
-        return ce / sup.sum().to(ce.dtype).clamp(min=1.0)
+        n_sup = sup.sum().to(ce.dtype).clamp(min=1.0)
+        loss = ce / n_sup
+        if stats is not None:
+            # THE HONESTY NULL, the fm_rel shape. The optimised quantity is the weighted
+            # CE, which equals the paper's Eq. 4 KL up to the target's entropy — a
+            # constant in the parameters, so the GRADIENT is the paper's exactly. But a
+            # CE that only ever falls to the target entropy looks like progress it is
+            # not, so report all three: the KL (0 at a perfect predictor), the entropy
+            # floor, and mux_rel against a null predictor that knows only the corpus
+            # marginal. mux_rel == 1.0 exactly at that predictor (tested).
+            with torch.no_grad():
+                ent, ce_null = self._mux_reference_terms(
+                    pos_valid, alpha, tgt_slot, safe_ids, n_sup,
+                    layout.slot_index.shape[1], V)
+            stats["mux_ce"] = float(loss.detach())
+            stats["mux_entropy"] = ent
+            stats["mux_kl"] = float(loss.detach()) - ent
+            stats["mux_null"] = ce_null
+            stats["mux_rel"] = float(loss.detach()) / max(ce_null, 1e-12)
+            stats["mux_n_supervised"] = float(n_sup)
+        return loss
 
     def _tul_sigreg_loss(self, h_slots: Tensor, layout: SlotLayout) -> Tensor:
         """SIGReg over the VALID slot states (LeJEPA; see morph/model/sigreg.py).
@@ -2381,12 +2444,14 @@ class MORPHTransformer(nn.Module):
             x_coda = self._core_region(x, x0, bigram_emb, input_ids)
             depths, g_traj, mux_loss, sigreg_loss = None, None, None, None
             fm_y = fm_geom = fm_ctx = None
+            mux_stats = {}
         elif self.fm_planner is not None:
             # FM1 (morph/model/tul_fm.py). The planner replaces the core loop; the plan
             # is DETACHED before it reaches W_prefix, so the coda's CE never touches the
             # ladder and there is no BPTT through an iterated map.
             xn, h_slots, fm_y, fm_geom, fm_ctx = self._tul_fm_core(x, layout)
             depths, g_traj, mux_loss, sigreg_loss = None, None, None, None
+            mux_stats = {}
             h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
             x_coda = scatter_positions(xn, pos, values)
@@ -2394,7 +2459,8 @@ class MORPHTransformer(nn.Module):
             fm_y = fm_geom = fm_ctx = None
             xn, h_slots, depths, g_traj = self._tul_core(x, x0, bigram_emb, layout,
                                                          halt=halt)
-            mux_loss = (self._tul_mux_loss(h_slots, input_ids, layout)
+            mux_stats: dict = {}
+            mux_loss = (self._tul_mux_loss(h_slots, input_ids, layout, stats=mux_stats)
                         if tc.mux_beta > 0.0 else None)
             sigreg_loss = (self._tul_sigreg_loss(h_slots, layout)
                            if tc.sigreg_lambda > 0.0 else None)
@@ -2527,6 +2593,11 @@ class MORPHTransformer(nn.Module):
         if mux_loss is not None and groups is not None:
             groups = dict(groups)
             groups["mux_local"] = mux_loss.detach()
+            # UNDETACHED handle, for tul_mux_grad_share only (the gate's `loss_tokens`
+            # precedent). Every logging site reads `mux_local`, which stays detached.
+            groups["mux_local_live"] = mux_loss
+            for _k, _v in mux_stats.items():
+                groups[_k] = mux_loss.new_tensor(_v)
             # The WEIGHTED term, exposed so train.py can report train/loss and
             # val loss as the MODEL's CE (the spectral-penalty precedent: an
             # auxiliary term inside train/loss makes the arm incomparable to its
@@ -2634,6 +2705,82 @@ class MORPHTransformer(nn.Module):
         if self.fm_planner is None:
             raise RuntimeError("tul_fm_forward needs a model built with MORPHConfig(fm=...)")
         return self.tul_forward_ablated(input_ids, labels, layout, plan_mode)
+
+    def _euc_embed_leaf(self) -> Tensor:
+        """The euclidean embedding table's LEAF parameter.
+
+        Not ``embed.hybrid.euc_embed.weight``: under the int6 embedding QAT that every
+        real arm runs, ``.weight`` is a ``torch.nn.utils.parametrize`` PROPERTY that
+        recomputes a fresh non-leaf tensor on every access, so a tensor grabbed after the
+        forward is not the one the forward used and ``autograd.grad(..., allow_unused=
+        True)`` silently returns None. That read as "the auxiliary touches nothing",
+        which is the opposite of what the probe exists to detect.
+        """
+        for name, prm in self.embed.named_parameters():
+            if "euc_embed" in name:
+                return prm
+        raise RuntimeError("no euclidean embedding parameter found")
+
+    def tul_mux_grad_share(self, input_ids: Tensor, labels: Tensor,
+                           layout: SlotLayout) -> dict:
+        """Eval-only: how much of the tied embedding table's gradient the MUX term owns.
+
+        THE FM2 SCAR, made observable. FM2's emit CE could not reach the planner's
+        WEIGHTS — a test proved it — and degraded the planner anyway, by reshaping the
+        shared prelude features that defined its targets (copy_gap 0.47 -> 0.26). An
+        auxiliary loss on a WEIGHT-TIED head is the same hazard one level up: with
+        ``mux_detach_head: false`` the MUX gradient lands directly on the embedding
+        table that the token CE also owns and that every span target is built from.
+
+        Reports ``||g_mux|| / (||g_mux|| + ||g_ce||)`` on the euclidean embedding table.
+        Near 0 means MUX is a passenger; approaching or above 0.5 means the auxiliary is
+        steering the representation the main objective and its own targets are made of.
+        """
+        if self.tul is None or self.cfg.tul.mux_beta <= 0.0:
+            raise RuntimeError("tul_mux_grad_share needs a model with tul.mux_beta > 0")
+        was = self.training
+        self.eval()
+        try:
+            # enable_grad explicitly: the trainer's eval loop is @torch.no_grad, and
+            # this is the one eval instrument that NEEDS a backward graph.
+            with torch.enable_grad():
+                out = self(input_ids, labels, slot_layout=layout)
+                w = self._euc_embed_leaf()
+                ce = out["loss"] - out["mux_weighted"]   # mux_weighted is detached
+                g_ce = torch.autograd.grad(ce, w, retain_graph=True,
+                                           allow_unused=True)[0]
+                mux_w = self.cfg.tul.mux_beta * self.mux_gate * out["mux_local_live"]
+                g_mx = torch.autograd.grad(mux_w, w, retain_graph=False,
+                                           allow_unused=True)[0]
+        finally:
+            self.train(was)
+        n_ce = 0.0 if g_ce is None else float(g_ce.norm())
+        n_mx = 0.0 if g_mx is None else float(g_mx.norm())
+        tot = n_ce + n_mx
+        return {"mux_embed_grad_share": (n_mx / tot) if tot > 0 else 0.0,
+                "mux_embed_grad_norm": n_mx, "ce_embed_grad_norm": n_ce}
+
+    @torch.no_grad()
+    def tul_attn_lift_probe(self, input_ids: Tensor, layout: SlotLayout) -> dict:
+        """Eval-only: MUX §8.3's reasoning attention lift, on the WINDOW branch.
+
+        "The slot is the only route" is architecture; "the token actually looks at it"
+        is behaviour, and only the second one predicts whether the gist is carrying
+        anything. See ``morph/model/attn_lift.py`` for exactly which branch is counted
+        and why the compressed branch is not.
+
+        Eager only — it swaps the window-branch reference implementation for one forward.
+        Works on the unrestricted control too (same reference path), so the two arms are
+        comparable on this metric.
+        """
+        if self.tul is None:
+            raise RuntimeError("tul_attn_lift_probe needs MORPHConfig(tul=...)")
+        from morph.model.attn_lift import AttnLiftStats, capture_attn_lift
+
+        stats = AttnLiftStats()
+        with capture_attn_lift(layout, stats):
+            self(input_ids, labels=None, slot_layout=layout)
+        return stats.summary()
 
     @torch.no_grad()
     def tul_slot_state_probe(self, input_ids: Tensor, layout: SlotLayout) -> dict:
