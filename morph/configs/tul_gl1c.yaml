@@ -1,0 +1,61 @@
+# ARM GL1c — warmup-then-mask curriculum.
+#
+# Decision note: .agents/notes/proposed/architecture/2026-08-29-gist-loop.md.
+# Sibling arms: tul_gl1.yaml (tg_restrict: true, cold start) and its matched control
+# (tul_gl1.yaml + tul.tg_restrict=false, run as wandb `tul-gl1-ctrl`, checkpointed to
+# checkpoints/morph/gl1-ctrl-s1/).
+#
+# THE CURRICULUM: GL1's own gate showed the mask costs 0.34 nats vs the unrestricted
+# twin (docs/tul-tg-spec.md decision note: "0.17-0.42 nats vs unrestricted at matched
+# steps" is the pre-existing TG-family range; GL1's own run landed at the top of it).
+# The bet here is that most of that gap is the model having to LEARN language and the
+# gist-write discipline from a cold start at the same time — if the backbone already
+# knows the language (2000 steps of unrestricted training, ctrl's own checkpoint), only
+# the discipline is left to learn once the mask turns on.
+#
+#   step 0..2000   unrestricted (ctrl's own run) — plain language modelling, HCA/CSA
+#                  compressed branches fully built and trained.
+#   step 2000      GL1c starts HERE via `training.init_from`, weights only. Step
+#                  counter resets to 0 (load_weights_only, morph/training/train.py) —
+#                  the run below is its OWN 4500-step schedule (matching GL1's), not a
+#                  continuation of ctrl's step axis. ademamix_t_beta3 stays pinned to
+#                  4500 for the same reason tul_gl1.yaml pins it: a null value falls
+#                  back to training.steps, and GL1c's steps are 4500, not 2000+4500.
+#   step 0..4500   tg_restrict: true (inherited from tul_gl1) — the mask is on from
+#                  GL1c's first step. The compressor/comp_norm/indexer modules the
+#                  ckpt's unrestricted twin trained are simply not part of this arm's
+#                  graph; see the tensor-subset note below.
+#
+# THE TENSOR-SUBSET LOAD (verified by tests/test_tul_gl1c.py, real shapes, CPU):
+# tg_restrict REPLACES the HCA dense-compressed / CSA sparse-indexer branches with
+# `_tg_slot_attention` (morph/model/attention.py _CCACSAAttention / _CCAHCAAttention,
+# `if tg_restrict: self.compressor = None; ...`) rather than building-and-ignoring them.
+# The restricted model's parameter set is therefore a SUBSET of the unrestricted
+# checkpoint's: tests/test_tul_gl1.py::test_the_control_is_config_matched_but_NOT_parameter_matched
+# already measured this pre-existing gap at THIS model's real dims — 60 extra tensors,
+# 2.037 M params (+0.98%) — all named `*.compressor.*` / `*.comp_norm.*` /
+# `*.indexer.*` under `.attention._impl.`. Loading gl1-ctrl-s1/step_2000.pt (the
+# UNRESTRICTED twin) into GL1c's restricted model must therefore report those ~60
+# tensors as UNEXPECTED (dropped, not an error — `load_state_dict(strict=False)` in
+# `load_weights_only`) and ZERO tensors MISSING (every restricted-model tensor name
+# already exists, same shape, in the unrestricted checkpoint — the restriction removes
+# modules, it does not rename or reshape anything it keeps). If the run's own
+# `init_from ...: loaded WEIGHTS only ... N missing / M unexpected` banner reports a
+# different N or M, THAT banner is the source of truth, not this comment — the model or
+# quantization stack moved since this note was written and the config note above it.
+#
+# THE OPTIMIZER IS FRESH, not carried over from ctrl's run: `training.init_from` hits
+# the `elif init_from_path:` branch in train.py (morph/training/train.py, the sibling
+# `if resume_path:` branch above it is what restores optimizer/scaler/step and it is
+# skipped whenever init_from is used instead of resume), so AdEMAMix's m/m_slow/nu
+# start from scratch under the new architecture rather than inheriting state shaped for
+# a model that had a compressed branch this one does not.
+defaults:
+  - tul_gl1
+  - _self_
+
+training:
+  init_from: checkpoints/morph/gl1-ctrl-s1/step_2000.pt
+
+wandb:
+  name: gl1c
