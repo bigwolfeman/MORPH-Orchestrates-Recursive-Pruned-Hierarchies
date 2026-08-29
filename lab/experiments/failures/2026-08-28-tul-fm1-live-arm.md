@@ -89,3 +89,60 @@ Seed 2 runs only if seed 1 is healthy (F1 holds). The panel's external
 The GPU path (bf16 ladder, memory at batch 6, step time), the fused AdEMAMix
 with these params, and SIGReg at M=1024 slices — the CPU build could not touch
 any of these; first 100 steps of seed 1 are the smoke test.
+
+---
+
+## Results (filed 2026-08-28, run `adew-me/morph-tul/h4s01ngk`, exit 0, 28.4 min wall)
+
+Status: failure (per the frozen verdict rule — see below; the content is a discovery)
+
+Eval history: `lab/experiments/results/2026-08-28-tul-fm1/eval_history.json` (17 evals).
+
+| Prediction | Result | Score |
+|---|---|---|
+| F1 stability (rise ≤ 0.10 over running min) | max rise **0.1523** (one eval bump 2250→2750, fully recovered next eval; run ends at its minimum, no takeover) | **FAILED by letter** — threshold too tight for eval noise; the takeover signature (sustained detonation) did NOT occur |
+| F2 speed ≥ 3.0 sps | **3.30 sps**, peak 16.71 GB | HELD |
+| F3 CE @3000 in [4.36,4.58] | **4.6293** — 0.05 above band | FAILED |
+| F3 CE @4250 in [3.99,4.45] | **4.3501** | HELD (above the 4.20 point) |
+| F4 plan worth < 0.01 | worth_shuffle in [-0.0003, +0.0004] at every eval — **exactly zero** | HELD; gate silent |
+| F5 copy_gap ≤ 0.005 | **0.32–0.55 at every eval** (final 0.4921) | **FAILED — the gate fires at all 17 evals** |
+| F6 eff_rank ≥ 100, cos < 0.35 | 141.4 and **-0.0016** (crossed 100 by step 1000) | HELD |
+| F7 fm_rel < 0.6 | **~0.91 flat** all run | FAILED |
+
+Reference: a3-s1/s2 = 4.4226/4.3564 @3000, 4.0250/3.9873 @4250; a1-s2 = 4.4362/4.3472.
+FM1 = **A1's final CE at 1.74× A1's speed** (4.3501 vs 4.3472; 3.30 vs 1.9 sps), but
+~0.35 nats behind A3 at matched steps.
+
+## Verdict
+
+NOT SUCCESS by the frozen rule (F1 letter + F3@3000 failed), so this files as a
+failure — but two hypotheses died, one of them ours:
+
+1. **The frozen-backbone information cap is DEAD.** P1's surviving explanation was
+   that the backbone's features could not identify the next span. Co-trained, the
+   planner retrieves the true next-span target at **top-1 0.66–0.77** within-row
+   (chance 0.02, copy floor 0.18–0.34) from the very first eval. The plan KNOWS
+   the future now.
+2. **And the coda still pays zero nats for it.** plan_worth_shuffle ≈ 0.0000 at
+   every eval while copy_gap ≈ 0.5. An accurate plan the decoder will not read.
+   The bottleneck was never the planner — it is the coda's incentive to consume
+   the prefix when full token context is available (token dropout 0.15 is not
+   enough forced reliance).
+
+Mechanism note for (1): SIGReg collapsed target pairwise cos from 0.63 (frozen) to
+~0.00 within 250 steps. Retrieval got easy because the TARGET GEOMETRY was fixed,
+not because the planner got smarter — fm_rel stayed at 0.91 (F7 failed), so the
+planner still fits only ~10% of the velocity variance, but on decorrelated targets
+that weak signal ranks at 70%. P1's cap was target geometry, not information.
+
+## Updated hypothesis
+
+A plan worth reading exists; the reader has no need for it. The next experiment
+must remove the reader's alternative: the compaction window (arm CW,
+`docs/tul-compaction-window-spec.md` — keep the last 2 spans of tokens, replace
+older context with plan latents only). Under CW the plan is the ONLY carrier of
+distant context and worth_shuffle cannot stay at zero if the plan is 70% accurate
+— either it pays, or prefix-reading itself is broken, which CW would expose.
+Prediction to carry forward: CW × FM1 shows worth_shuffle > 0.01 or the TUL-FM
+program ends. Seed 2 of plain FM1 is NOT earned (rule) and would not change the
+verdict: every load-bearing number is far from its threshold in both directions.
