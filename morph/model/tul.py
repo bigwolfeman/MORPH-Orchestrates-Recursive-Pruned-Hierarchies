@@ -241,6 +241,12 @@ class TULConfig:
     #                and perturbs the RNG stream, so the other two modes build
     #                nothing.
     slot_seed: str = "bag_mean"
+    # Eval-only instrument switch (arm GL1). false = every existing arm's eval is
+    # unchanged in COST as well as in value. true adds, at each eval batch: the
+    # zero / shuffle / wrong-seed plan ablations and the slot-state geometry probe —
+    # three extra coda passes and one extra prelude pass, which is why it is a knob
+    # and not a default.
+    eval_ablations: bool = False
 
     def __post_init__(self) -> None:
         if self.prefix_k < 1:

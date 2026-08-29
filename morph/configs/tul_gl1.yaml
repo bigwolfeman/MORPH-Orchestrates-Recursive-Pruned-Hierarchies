@@ -1,0 +1,111 @@
+# ARM GL1 — the gist-loop baseline. THE UNEXPLORED CELL.
+#
+# Decision note: .agents/notes/proposed/architecture/2026-08-29-gist-loop.md (+ the
+# 2026-08-29 addendum). Why this and not more training pressure:
+# lab/experiments/failures/2026-08-29-tul-fm2.md — tax (dropout), deletion (CW),
+# rerouting (TG) and direct supervision (emit) are ALL null on the additive prefix
+# interface. The training-pressure family is closed.
+#
+# THE CELL: gisting mask + gradient-carrying write + NO LOOP ANYWHERE + SIGReg on the
+# written slot states. TG4b ran mask + tap WITH the loop. Nothing has run it without.
+#
+#   tg_restrict: true    the mask — slots are the only route to older context
+#   slot_seed: boundary  the tap seed (see "the tap is a seed" below)
+#   n_core: 0            NO LOOP. Not in the graph, not out of it. There is none.
+#   fm.enabled: false    no planner either — GL1 is the baseline GL2 will add one to
+#   sigreg_lambda: 0.02  on the WRITTEN slot states, aimed at the homogeneity TG4b
+#                        measured (value-sensitivity 0.48-0.56 nats, shuffle ~0 —
+#                        the pipe reads, and every value it reads is the same value)
+#
+# NO DETACH ANYWHERE ON THE SLOT PATH, and that is the mechanism, not an oversight.
+# Under the mask a later span's CE can only reach an earlier span THROUGH a slot, so
+# the gradient must flow back through the slot state into W_sent and the prelude
+# (gisting, Mu et al. 2023; TG paper Table 1: detaching the write costs 10x PPL).
+# Every other arm in this campaign had to protect against that gradient because it
+# unrolled an iterated map. With n_core: 0 there is no iterated map to unroll, so the
+# thing that was fatal everywhere else is simply the objective here.
+# Gated by tests/test_tul_gl1.py::test_later_span_ce_reaches_the_tap_only_through_slots.
+#
+# THE TAP IS A SEED, NOT A MID-LAYER TAP — the decision note calls it a "hidden-state
+# TAP" but `tul.slot_seed: boundary` reads the boundary token's EMBEDDING
+# (`E_slot + W_sent . embed(t_last)`, morph/model/tul.py), which tul_tg4b.yaml already
+# records as "NOT the faithful TG tap". What the CODA reads is still a hidden state:
+# the slot position runs through all 4 prelude layers under the mask, so the written
+# state is `input_norm(prelude(...))` at the slot. Seed-level in, hidden-state out.
+# A faithful mid-prelude tap is a separate change and is NOT in this arm.
+#
+# HONEST REFERENCE (decision note): the TG restriction cost 0.17-0.42 nats vs
+# unrestricted at matched steps. GL1's bet is that the tap write closes that gap. The
+# MATCHED CONTROL is required by the prereg and is one CLI override — see below.
+#
+# Run GL1:
+#   PYTHONPATH=$PWD python -m morph.training.train --config-name tul_gl1 \
+#     training.steps=4500 training.batch_size=6 training.eval_every=250 \
+#     training.ckpt_every=500 training.ademamix_alpha_cap=3.5 \
+#     training.grad_probe_every=1
+#
+# Run the MATCHED CONTROL (unrestricted; everything else identical):
+#   ... same command ... tul.tg_restrict=false wandb.name=tul-gl1-ctrl
+#   Nothing else couples to tg_restrict: the mask is built per-forward from the layout
+#   (`tg_allow_mask` / `tg_reset_mask`) and `model.use_kernels: false` is inherited from
+#   tul_tg1 either way, so the control runs the SAME eager kernels and the arms differ
+#   by the mask alone. Verified by composing both.
+#
+# tul_tg4b = tul_tg2 + slot_seed boundary; tul_tg2 = tul_tg1 + no aux CE;
+# tul_tg1 = tul_a1 + tg_restrict. Composing tg4b instead of restating its keys keeps
+# the lineage in one place.
+defaults:
+  - tul_tg4b
+  - _self_
+
+model:
+  # THE LOOP IS GONE. `_tul_core` grows a coreless branch for this (it used to raise
+  # "stack expects a non-empty TensorList" on the per-core-layer injection stack);
+  # the slot state becomes the prelude's own output at the slot position, after the
+  # same boundary norm the coreless TOKEN path has always applied.
+  n_core: 0
+
+training:
+  # PINNED, per docs/tul-fm-probing.md §4 rule 5: a null ademamix_t_beta3 silently
+  # falls back to training.steps, so the optimizer's beta3 horizon moves whenever the
+  # run length does. Matches the FM arms (4500).
+  ademamix_t_beta3: 4500
+
+tul:
+  # DELIBERATELY 1.0, NOT tg2's 0.0. `t_last` is an ORDINARY TOKEN position that
+  # happens to predict the next span's first token; the 0.5/0.5 split exists only so
+  # that token is not counted twice when the slot ALSO predicts it, and emit_weight 0
+  # already removes the double count. At 0.0 (tg2's setting) ~1 token in 20 silently
+  # leaves training — the exact tokens a plan is supposed to help with. This is the
+  # same call FM1 made; `first_tok_ce` / `first_tok_counterfactual` are computed as
+  # eval METRICS regardless of the weight, so the gate is unaffected. Verified:
+  # n_targets == n_tokens.
+  plast_weight: 1.0
+  emit_weight: 0.0
+
+  # ── SIGReg on the WRITTEN slot states (the new component) ────────────────
+  # Machinery already shipped: `_tul_sigreg_loss` -> morph/model/sigreg.py. It reads
+  # the same post-write state the coda reads, through the model's own `_readout`.
+  #
+  # NO STANDARDISATION IS APPLIED, and that is a MEASURED choice, not an omission.
+  # `_readout` ends in RMSNorm, so the states arrive at per-component std 0.9991 and
+  # row norm exactly sqrt(d) — already the scale the N(0,1) statistic asks for.
+  # Standardising on top would make the loss vacuous (morph/model/sigreg.py says so in
+  # its own docstring: "NOT standardised first ... the whole point is that it PULLS the
+  # distribution to N(0, I)"). The remaining deviation is the MEAN (-0.0535 measured)
+  # and the direction distribution — which is exactly the homogeneity this arm targets.
+  # `val/slot_component_std` logs the number every eval so a change to `_readout`
+  # cannot silently move the target out from under the regulariser.
+  sigreg_lambda: 0.02
+  sigreg_slices: 1024        # M random directions, resampled every step. CLI-able.
+  sigreg_activate_at: 0.0    # from step 0 — the homogeneity is present from step 0
+
+  # Eval instruments (three extra coda passes + one prelude pass per eval batch, which
+  # is why it is a knob): plan worth zero + shuffle, the WRONG-PLAN probe (forced
+  # fallback seed — the instrument that caught TG4b's value-sensitivity; read it as OOD
+  # shock, not worth), and the slot-state eff-rank / pairwise-cos that SIGReg must move.
+  # first_tok_ce and first_tok_counterfactual come from the shipped §7.2 eval path.
+  eval_ablations: true
+
+wandb:
+  name: tul-gl1

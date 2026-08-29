@@ -511,7 +511,7 @@ def test_shuffle_permutes_within_a_row_and_keeps_pads_out():
     B, S = lay.slot_valid.shape
     h = torch.arange(B * S, dtype=torch.float32).reshape(B, S, 1).expand(B, S, 5).clone()
     torch.manual_seed(2)
-    out = m._fm_plan_ablate(h, lay, "shuffle")
+    out = m._tul_plan_ablate(h, lay, "shuffle")
     for b in range(B):
         nv = int(lay.slot_valid[b].sum())
         got = set(out[b, :nv, 0].tolist())

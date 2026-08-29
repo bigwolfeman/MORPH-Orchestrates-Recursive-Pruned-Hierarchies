@@ -167,18 +167,35 @@ def evaluate(
                     float(out_h["gate/depth_mean"]))
                 acc.setdefault("val/halt_layer_passes_per_token", []).append(
                     float(out_h["layer_passes"]) / max(float(out_h["n_tokens"]), 1.0))
-            if getattr(_m, "fm_planner", None) is not None:
-                # FM1 (morph/model/tul_fm.py). Plan WORTH is the ce_tokens COST of
-                # removing the plan (zero) or of destroying only its correspondence to
-                # the slot (shuffle). Report the COST, never a specificity fraction:
-                # the fraction's denominator collapses through zero (docs/tul-fm-probing
-                # .md §4 rule 1, the tg3b -55.4 % reading).
-                _oz = _m.tul_fm_forward(x, y, layout, plan_mode="zero")
-                _os = _m.tul_fm_forward(x, y, layout, plan_mode="shuffle")
+            _has_fm = getattr(_m, "fm_planner", None) is not None
+            # getattr-chained on purpose: this function is also driven by the CE stub
+            # models in tests/test_train_phase.py, which have no `cfg` at all.
+            _tul_cfg = getattr(getattr(_m, "cfg", None), "tul", None)
+            _ablate = bool(getattr(_tul_cfg, "eval_ablations", False))
+            if _has_fm or _ablate:
+                # Plan WORTH is the ce_tokens COST of removing the plan (zero) or of
+                # destroying only its correspondence to the slot (shuffle). Report the
+                # COST, never a specificity fraction: the fraction's denominator
+                # collapses through zero (docs/tul-fm-probing.md §4 rule 1, the tg3b
+                # -55.4 % reading).
+                _oz = _m.tul_forward_ablated(x, y, layout, plan_mode="zero")
+                _os = _m.tul_forward_ablated(x, y, layout, plan_mode="shuffle")
                 acc.setdefault("val/plan_worth_zero", []).append(
                     float(_oz["ce_tokens"]) - ce_tok)
                 acc.setdefault("val/plan_worth_shuffle", []).append(
                     float(_os["ce_tokens"]) - ce_tok)
+            if _ablate:
+                # THE WRONG-PLAN PROBE (arm GL1). A valid-but-wrong slot value instead
+                # of no value. TG4b: 0.48-0.56 nats here against 0.10 for zeroing —
+                # "removing LESS hurts MORE", which is how we know the coda reads the
+                # slot's VALUE even when shuffling costs nothing. It is an OOD-shock
+                # number, not a worth number (see tul_forward_ablated's docstring).
+                _ow = _m.tul_forward_ablated(x, y, layout, plan_mode="wrong_seed")
+                acc.setdefault("val/plan_worth_wrong_seed", []).append(
+                    float(_ow["ce_tokens"]) - ce_tok)
+                for _k, _v in _m.tul_slot_state_probe(x, layout).items():
+                    acc.setdefault(f"val/{_k}", []).append(float(_v))
+            if _has_fm:
                 if "fm" in out:
                     acc.setdefault("val/fm", []).append(float(out["fm"]))
                     acc.setdefault("val/fm_rel", []).append(float(out["fm_rel"]))

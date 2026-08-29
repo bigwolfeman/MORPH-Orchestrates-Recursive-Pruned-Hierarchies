@@ -1912,6 +1912,37 @@ class MORPHTransformer(nn.Module):
 
         xn = self.input_norm(x)
         e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
+
+        # ── n_core == 0: NO LOOP AT ALL (arm GL1, the gist baseline) ─────────
+        # .agents/notes/proposed/architecture/2026-08-29-gist-loop.md. The slot state IS
+        # the prelude's own output at the slot position, after the same boundary norm the
+        # coreless TOKEN path applies (`_core_region`'s n_core == 0 branch) — so a
+        # coreless TUL model is exactly a coreless baseline that happens to have slot
+        # positions, which is the growth invariant the seed path already depends on.
+        #
+        # Nothing is detached. Under `tg_restrict` the slot is the only route from an
+        # earlier span to a later one, so a later span's CE MUST backpropagate through
+        # this state into the boundary tap and the prelude. That gradient-carrying write
+        # is the arm's entire mechanism (gisting; TG paper Table 1: detaching the write
+        # costs 10x PPL), and there is no iterated map left for it to unroll — which is
+        # what makes it safe here and unsafe in every arm that kept the loop.
+        #
+        # Without this branch the code below raises "stack expects a non-empty
+        # TensorList" on the x0/bigram injection stack, because that stack has one entry
+        # per core layer. Verified before the branch existed.
+        if n_core == 0:
+            if halt:
+                raise RuntimeError(
+                    "halt=True needs a core loop to halt (docs/tul-gate-spec.md §7); "
+                    "n_core == 0 has no iterations to stop.")
+            if self.tul_gate is not None:
+                raise NotImplementedError(
+                    "tul.gate has no defined meaning at n_core == 0: §4 reads the span "
+                    "length off the core's per-iteration trajectory and there is no "
+                    "trajectory. Raises rather than silently emitting a one-step gate.")
+            depths = torch.zeros_like(gidx)
+            return xn, e, depths, None
+
         _scse = self.scse           # Python-level constant → every branch below traces out
         with _prof("carrier::h_clone"):
             if _scse is None:
@@ -2356,7 +2387,7 @@ class MORPHTransformer(nn.Module):
             # ladder and there is no BPTT through an iterated map.
             xn, h_slots, fm_y, fm_geom, fm_ctx = self._tul_fm_core(x, layout)
             depths, g_traj, mux_loss, sigreg_loss = None, None, None, None
-            h_slots = self._fm_plan_ablate(h_slots, layout, plan_mode)
+            h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
             x_coda = scatter_positions(xn, pos, values)
         else:
@@ -2370,6 +2401,10 @@ class MORPHTransformer(nn.Module):
             if self.tul_gate is not None:
                 budget_ids = self._tul_budget_ids(layout, depths, g_traj)
                 h_slots = self.tul_gate.apply_budget(h_slots, budget_ids)
+            # Same eval-only ablation the FM branch takes, applied at the same seam.
+            # `normal` returns its input unchanged, so the training forward is
+            # bit-identical to a model with no ablation code at all.
+            h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
             x_coda = scatter_positions(xn, pos, values)
 
@@ -2517,8 +2552,13 @@ class MORPHTransformer(nn.Module):
         out["n_tokens"] = (~layout.slot_mask).sum()
         return out
 
-    def _fm_plan_ablate(self, h_slots: Tensor, layout: SlotLayout, mode: str) -> Tensor:
+    def _tul_plan_ablate(self, h_slots: Tensor, layout: SlotLayout, mode: str) -> Tensor:
         """Eval-only plan ablations for ``val/plan_worth_*`` (docs/tul-fm-probing.md §1).
+
+        Applies to EVERY slot path — the FM planner's plans, the core loop's looped
+        states, and GL1's one-step tap states — because it operates on ``h_slots`` just
+        before :meth:`TULSlots.prefix_project`, which is the single point where any of
+        them becomes something the coda can read.
 
         ``normal`` is the shipped path and returns its input unchanged, so the training
         forward is bit-identical to a model that has no ablation code at all.
@@ -2544,18 +2584,91 @@ class MORPHTransformer(nn.Module):
         idx = perm.reshape(B, S, *([1] * (h_slots.dim() - 2))).expand_as(h_slots)
         return h_slots.gather(1, idx)
 
-    def tul_fm_forward(self, input_ids: Tensor, labels: Tensor | None,
-                       layout: SlotLayout, plan_mode: str = "normal") -> dict:
-        """Eval-only FM1 entry point with the plan ablated (``normal|zero|shuffle``).
+    def tul_forward_ablated(self, input_ids: Tensor, labels: Tensor | None,
+                            layout: SlotLayout, plan_mode: str = "normal") -> dict:
+        """Eval-only forward with the slot state ablated. Works on ANY TUL arm.
+
+        ``normal`` — the shipped path.
+        ``zero``   — the slot values written into the coda are zeroed. Removes the
+                     plan's content AND the fact that a plan is there.
+        ``shuffle``— whole slots permuted WITHIN a row. Removes only the correspondence
+                     between a slot and its span, which is what makes it the
+                     span-SPECIFICITY number. Report the shuffle COST, never a
+                     specificity fraction (docs/tul-fm-probing.md §4 rule 1).
+        ``wrong_seed`` — THE WRONG-PLAN PROBE. Swaps ``tul.slot_seed`` for a mode the arm
+                     was NOT trained on, so the slot carries a valid-but-wrong value
+                     instead of no value. This is the instrument that caught TG4b's
+                     value-sensitivity (0.48-0.56 nats where zeroing cost 0.10 —
+                     "removing LESS hurts MORE"), and it works because
+                     :meth:`TULSlots.slot_input` dispatches on ``slot_seed`` at CALL
+                     time, not at construction (``lab/divergence/slot_path_worth.py``
+                     ``seed_bagmean``). READ IT AS OOD SHOCK, NOT AS WORTH: that file
+                     measured the forced fallback costing 6-7x more than zeroing the
+                     plan outright, because swapping a seed the weights never saw
+                     measures the distribution shift. It answers "does the coda read the
+                     slot's VALUE at all", and nothing else.
 
         A separate entry point rather than a forward flag, for the reason
         :meth:`tul_forward_with_plan_nats` gives: the training path must not carry a
         branch that decides how much work to do.
         """
+        if self.tul is None:
+            raise RuntimeError(
+                "tul_forward_ablated needs a model built with MORPHConfig(tul=...)")
+        if plan_mode != "wrong_seed":
+            return self._forward_single(input_ids, labels, 0, None, layout,
+                                        _plan_mode=plan_mode)
+        tc = self.cfg.tul
+        orig = tc.slot_seed
+        alt = "bag_mean" if orig != "bag_mean" else "e_slot"
+        tc.slot_seed = alt
+        try:
+            return self._forward_single(input_ids, labels, 0, None, layout)
+        finally:
+            tc.slot_seed = orig
+
+    def tul_fm_forward(self, input_ids: Tensor, labels: Tensor | None,
+                       layout: SlotLayout, plan_mode: str = "normal") -> dict:
+        """FM1's name for :meth:`tul_forward_ablated`, kept so the FM1 gates and the
+        trainer's FM eval block keep pointing at the same call."""
         if self.fm_planner is None:
             raise RuntimeError("tul_fm_forward needs a model built with MORPHConfig(fm=...)")
-        return self._forward_single(input_ids, labels, 0, None, layout,
-                                    _plan_mode=plan_mode)
+        return self.tul_forward_ablated(input_ids, labels, layout, plan_mode)
+
+    @torch.no_grad()
+    def tul_slot_state_probe(self, input_ids: Tensor, layout: SlotLayout) -> dict:
+        """Eval-only: the homogeneity dial. Effective rank and mean pairwise cosine of
+        the WRITTEN slot states, read at the point the coda reads them.
+
+        This is the number arm GL1 exists to move. TG4b measured the gisting pipe
+        WORKING as a pipe — a wrong-but-present plan cost 0.48-0.56 nats where zeroing
+        cost 0.10 — while shuffling whole slots cost ~0. Both readings are true at once
+        only if the written states are near-IDENTICAL across slots: the coda reads the
+        value, and every value is the same value. Slot states across the campaign sat at
+        effective rank 1.7-4.8 in 1024 dims with mean pairwise cosine +0.39..+0.71.
+        SIGReg is aimed exactly here, and without this probe its effect is invisible.
+        """
+        if self.tul is None:
+            raise RuntimeError("tul_slot_state_probe needs MORPHConfig(tul=...)")
+        from morph.model.fm_planner import effective_rank, mean_pairwise_cos
+
+        x, x0, bigram = self._tul_front(input_ids, layout)
+        _xn, h_slots, _d, _g = self._tul_core(x, x0, bigram, layout)
+        z = self._readout(h_slots).float()                     # [B, S, C]
+        valid = layout.slot_valid
+        rows = z[valid]
+        return {
+            "slot_eff_rank": effective_rank(z, valid),
+            "slot_pairwise_cos": mean_pairwise_cos(z, valid),
+            "slot_norm_mean": float(rows.norm(dim=-1).mean()),
+            # The scale SIGReg's statistic actually sees. `_readout` ends in RMSNorm, so
+            # this sits at ~1 by construction and no standardisation is applied before
+            # the statistic — standardising would make the loss vacuous (see
+            # morph/model/sigreg.py). Logged so a change to the readout cannot silently
+            # move the target the regulariser is chasing.
+            "slot_component_std": float(rows.std()),
+            "slot_component_mean": float(rows.mean()),
+        }
 
     @torch.no_grad()
     def fm_eval_probe(self, input_ids: Tensor, layout: SlotLayout) -> dict:

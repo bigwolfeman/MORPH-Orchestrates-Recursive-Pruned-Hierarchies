@@ -190,6 +190,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         tg_restrict=bool(tc.get("tg_restrict", False)),
         tg_soft_prev_span=bool(tc.get("tg_soft_prev_span", False)),
         slot_seed=str(tc.get("slot_seed", "bag_mean")),
+        eval_ablations=bool(tc.get("eval_ablations", False)),
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
@@ -222,6 +223,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "tg_restrict": model_cfg.tg_restrict,
         "tg_soft_prev_span": model_cfg.tg_soft_prev_span,
         "slot_seed": model_cfg.slot_seed,
+        "eval_ablations": model_cfg.eval_ablations,
         "boundary_chars": str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
         "boundary_substrings": list(substrings),
         "min_span": rule.min_span,
