@@ -1038,5 +1038,26 @@ to that case and to nothing else here.
 | 65  | Auxiliary loss gating (TUL, diagnostic)| Du et al. (2018)                          | [1812.02224](https://arxiv.org/abs/1812.02224)                                                                                                 |
 | 66  | InfoPro / local supervision (TUL)      | Wang et al. (ICLR 2021)                   | [2101.10832](https://arxiv.org/abs/2101.10832)                                                                                                 |
 | 67  | Unitary scalarization (TUL, counter)   | Kurin et al. (NeurIPS 2022)               | [2201.04122](https://arxiv.org/abs/2201.04122)                                                                                                 |
+| 68  | MUX multiplexed latent tokens (TUL/GL) | Suleymanzade et al. (2026)                | [2607.18264](https://arxiv.org/abs/2607.18264)                                                                                                 |
 
 
+
+### MUX — Continuous Reasoning via Multiplexed Tokens (row 68, read 2026-08-29, full text verified)
+
+The write-target prescription for the GL arc. A latent token's training target is a
+POSITION-WEIGHTED CONVEX COMBINATION of the span's one-hot subwords on the vocab
+simplex (Eq. 2), supervised by KL through the model's OWN TIED unembedding at
+temperature τ (Eqs. 3–4). Injective iff the weights' subset-sum separation E(α)>0
+(Prop. 3/Def. 2 — geometric ρ∈(0,1) qualifies for practical ρ), so the target is
+provably span-distinctive; driving the local KL low FORCES realized latents apart
+(Prop. 9) and provably preserves the attention-routing margin onto the latents
+(Prop. 16). Fig. 3: 32.7%→48.2% as local distillation covers 0→6 latent tokens —
+the local span-level loss IS the payload; γ=0 (no global/teacher term) still beats
+SIM-CoT in 23/24. Beats every latent-reasoning baseline in all 32 settings; does
+NOT beat explicit SFT-CoT above 1B (15/32 overall). Caveats for us: LoRA on
+pretrained LMs (only a toy model from scratch), math-reasoning scope, latents
+replace a CoT trace rather than serve as long-context memory. The digest's
+"decay factors degrade long-range tracking" failure mode is FABRICATED — not in
+the paper (grep-verified). Also adopt §8.3's attention-lift diagnostic: separates
+"coda routes attention to slots" from "slot content matters" — the split our
+worth_shuffle alone cannot make.
