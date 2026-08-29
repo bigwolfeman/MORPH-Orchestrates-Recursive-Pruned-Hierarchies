@@ -103,3 +103,31 @@ longer-context backbone, or wiring the coda so the plan trains against token los
 under scarcity (P2) — a different experiment with a different gate, not a P1 iteration.
 Per the frozen decision rules of BOTH P1 files, P1 is closed: mechanism proven
 (conditional, causal, stable, cheap, no-BPTT), magnitude under gate.
+
+## Post-verdict calibration addendum (2026-08-28, prompted by Wolfe: "how poor is it?")
+
+The probe lacked a temporal-continuity floor. Added: the COPY baseline — guess that the
+next span's rep equals the CURRENT span's rep. Zero parameters, zero training. Scored on
+the identical 3,127 within-row queries with the self-match candidate excluded, and the
+best planner (cfm_white 12k) rescored under the same exclusion:
+
+| | top-1 | top-5 | MRR | median rank /50 |
+|---|---|---|---|---|
+| copy current span (0 params) | 0.0678 | 0.2210 | 0.1632 | 18.0 |
+| best trained planner (22M) | 0.0588 | 0.2245 | 0.1616 | 15.0 |
+
+**The trained planner is approximately equal to the copy heuristic** — slightly worse
+top-1, equal MRR, better median rank. Two consequences, both process lessons:
+
+1. **The 0.06 gate was miscalibrated**: it sits BELOW the copy floor (0.068), so an arm
+   could have "passed" on topical continuity alone. Every probe of a next-X predictor
+   needs a copy/persistence baseline from day 1. (The batch-wide scope had its
+   document-cue floor; the within-row scope was missing its continuity floor. My miss.)
+2. **"Shuffle-killable" never distinguished prediction from continuity** — copying the
+   current span also requires reading the context, so the shuffle control kills both.
+   The controls proved the signal was contextual, not that it was predictive.
+
+Verdict unchanged in direction, sharpened in magnitude: the planner learned
+approximately "the next sentence resembles this one" and nothing measurably beyond it
+except a better rank tail (median 15 vs 18). Scripts: `results/2026-08-28-tulfm-p1/
+copy_baseline2.py`, `planner_excl.py`.
