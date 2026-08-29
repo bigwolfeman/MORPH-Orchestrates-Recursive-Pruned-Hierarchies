@@ -86,3 +86,34 @@ replacement has no trained component to confound:
   control band at step 3000.
 - **P3 (from scratch):** beat A3 at matched WALL-CLOCK, or at 4096 beat A3 on CE
   stratified by distance-to-evidence, or win multi-span coherence at matched CE.
+
+## 6. Model-level comparison against the non-TUL baseline (Wolfe directive, 2026-08-28)
+
+Planner-level losses are incommensurable across objectives (an EDM weighted-denoising
+loss, a CFM velocity loss, and a token CE cannot be ranked against each other), and the
+DiffusionBlocks paper's own §5.4 admits it cannot compute true perplexity — its
+MAUVE + teacher gen-PPL numbers are NOT 1:1 with held-out CE. Therefore:
+
+- **At the planner level (P1x):** the ONLY cross-arm gate is the retrieval probe. It is
+  objective-agnostic by construction — every arm answers the same lineup question — so
+  EDM vs CFM vs any future objective compare 1:1. Never rank arms by their training
+  losses, even rescaled.
+- **At the model level (P2/P3):** the comparison against the non-TUL baseline (A3) is
+  (a) **held-out token CE** — valid because TUL-FM leaves the token path on ordinary CE,
+  so `val/ce_tokens` stays a real likelihood on both sides; and
+  (b) **AR generation**: gen-PPL under a judge model PLUS the diversity guard
+  (rep4 / distinct-3, sampled decoding ranks, greedy as diagnostic only —
+  a repetition loop scores gen-PPL 1.46 vs real text's 32.44).
+- **Never MAUVE.** And never invent a "planner perplexity" — the planner path has no
+  likelihood, and dressing its loss up as one is theater.
+
+## 7. True flow matching is a required arm, not a variant
+
+The EDM denoiser is the DiffusionBlocks formulation. A genuine conditional
+flow-matching arm (straight-line interpolation, velocity target, uniform t) must run
+beside it under the SAME retrieval gate before any objective-level conclusion is
+drawn — the two differ in weighting, source distribution, and conditioning variable,
+and P1's sigma_data episode showed exactly how much those choices move the result.
+CFM knob to respect: the SOURCE distribution's scale is load-bearing at low capacity
+(DeepWeightFlow App. H: source std 0.001 vs 0.01 flipped a ViT result by 4.6 points
+with 20x the variance).
