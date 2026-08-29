@@ -177,9 +177,16 @@ def run_one(model, tul_rt, tokenizer, seq_len, n_tokens, device, halt, seed,
     if tul_rt is not None:
         spec = tul_rt.data_cfg.spec_for(seq_len)
         rule = tul_rt.data_cfg.rule
+        import dataclasses
         if max_slots:
-            import dataclasses
             spec = dataclasses.replace(spec, max_slots=max_slots)
+        else:
+            # Degenerate decodes (greedy loops on '.'/newline) can cut a boundary on
+            # nearly every token and overflow the trained budget of 64 — which crashed
+            # the whole arm instead of recording the diagnostic. Each appended token
+            # adds at most one slot, so prompt-budget + n_tokens can never overflow;
+            # the slot-invariance check shows a wider budget is behavior-preserving.
+            spec = dataclasses.replace(spec, max_slots=spec.max_slots + n_tokens)
     out = {}
     for label, temp, topk in DECODES:
         if only and label not in only:
