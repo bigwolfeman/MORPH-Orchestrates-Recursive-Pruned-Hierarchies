@@ -1,0 +1,34 @@
+# ARM FM2 — FM1 + the emit CE turned back on: train the READER.
+#
+# FM1 (h4s01ngk) and FM1-CW (hzwjin1e) proved the plan is accurate (retrieval top-1
+# ~0.70) and completely unread (worth_shuffle 0.0000; oracle probe: even the TRUE
+# target planted at the prefix is worth 0.0000). The research synthesis
+# (.agents/notes/proposed/architecture/2026-08-28-fm-reader-bottleneck-cw.md,
+# addendum) identifies the failure as posterior collapse: nothing trains the read
+# path. The only mechanism that ever produced decodable slot content is the emit CE
+# (2x2: 65.1% specificity aux-on vs 0.1-0.6% off).
+#
+# THE CHANGE: the spec §5 weights. emit_weight 0.5 scores the slot's own position
+# against its packed label (the next span's first token) — the slot's one privileged
+# information source is W_prefix(z), so minimizing this CE requires learning to
+# decode the plan. plast_weight 0.5 halves the span-final token carrying the same
+# label (no double counting).
+#
+# WHY THE TAKEOVER FUEL FINDING (TG P3) DOES NOT APPLY: emit gradients detonated
+# the CORE LOOP via BPTT. FM2 has no core loop and z is DETACHED — emit gradients
+# stop at W_prefix / E_slot / coda, which IS the reading machinery we want built.
+# Gated by tests/test_tul_fm1.py::test_emit_ce_reaches_the_reader_not_the_planner.
+#
+# SUCCESS SIGNATURE (prereg lab/experiments/planned/2026-08-29-tul-fm2.md):
+# val/first_tok_counterfactual crosses ZERO (negative at every checkpoint ever
+# measured) and val/plan_worth_shuffle leaves 0.0000.
+defaults:
+  - tul_fm1
+  - _self_
+
+tul:
+  emit_weight: 0.5
+  plast_weight: 0.5
+
+wandb:
+  name: fm2

@@ -629,3 +629,43 @@ def test_cw_plan_ablations_run_and_stay_paired():
         # planner leaves the Euler ladder at its noise source, not at zero.)
         assert float(out["n_targets"]) == pytest.approx(kept_tok), \
             f"plan_mode={mode} scored a different position set than the cut defines"
+
+
+# ── 9. ARM FM2 (emit CE as the reader-trainer) ───────────────────────────────
+
+def test_emit_ce_reaches_the_reader_not_the_planner():
+    """FM2's safety property: with emit_weight=0.5 the WEIGHTED CE now scores the slot
+    positions themselves — and it must STILL not reach a single planner parameter (z is
+    detached; there is no core loop). Positive controls: the same weighted CE must reach
+    W_prefix, E_slot, and the embedding table (the reading machinery emit exists to
+    train), and the emit labels must actually be in the loss (n_targets grows vs the
+    emit_weight=0 model on the identical batch)."""
+    x, y, lay, _ = _batch()
+    tul2 = TULConfig(prefix_k=2, slot_id=SLOT_ID, token_state_dropout=0.0,
+                     emit_weight=0.5, plast_weight=0.5)
+    m = _model(_fm_arm(), tul=tul2)
+    m.train()
+    out = m(x, y, slot_layout=lay)
+
+    m0 = _model(_fm_arm())     # the FM1 weighting (emit 0.0 / plast 1.0)
+    out0 = m0(x, y, slot_layout=lay)
+    n_slot_labels = int((lay.slot_mask & (y != -100)).sum())
+    assert n_slot_labels > 0, "fixture carries no emit labels; test is toothless"
+    assert float(out["n_targets"]) > float(out0["n_targets"]) - 1e-6, \
+        "emit_weight=0.5 did not add the slot positions to the scored set"
+
+    planner_params = list(m.fm_planner.parameters())
+    g_ce = torch.autograd.grad(out["loss_tokens_only"], planner_params,
+                               allow_unused=True, retain_graph=True)
+    leaked = [n for (n, _p), t in zip(m.fm_planner.named_parameters(), g_ce)
+              if t is not None]
+    assert leaked == [], (
+        f"{len(leaked)} planner parameters entered the CE graph under emit_weight=0.5: "
+        f"{leaked[:5]} — the reader-trainer is backpropagating into the writer.")
+
+    for name, prm in (("W_prefix", m.tul.W_prefix), ("E_slot", m.tul.E_slot),
+                      ("embed", m.embed.hybrid.euc_embed.weight)):
+        t = torch.autograd.grad(out["loss_tokens_only"], prm, allow_unused=True,
+                                retain_graph=True)[0]
+        assert t is not None and float(t.abs().sum()) > 0, \
+            f"emit CE does not reach {name} — the reading machinery gets no gradient"
