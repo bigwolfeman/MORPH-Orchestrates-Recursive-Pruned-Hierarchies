@@ -87,7 +87,8 @@ def per_token_ce(model, inp, layout, labels, device, mode: str) -> torch.Tensor:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", action="append", required=True, help="LABEL=CONFIG=PATH")
+    ap.add_argument("--ckpt", action="append", required=True,
+                    help="LABEL=CONFIG=PATH[=OVR1,OVR2] (extra Hydra overrides, comma-split)")
     ap.add_argument("--rows", type=int, default=96)
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--boot", type=int, default=2000)
@@ -103,8 +104,10 @@ def main() -> None:
 
     results: dict[str, dict] = {}
     for triple in a.ckpt:
-        label, config, path = triple.split("=", 2)
-        cfg = build_cfg(config, ["model.use_kernels=false"])
+        parts = triple.split("=", 3)
+        label, config, path = parts[0], parts[1], parts[2]
+        ovr = parts[3].split(",") if len(parts) == 4 and parts[3] else []
+        cfg = build_cfg(config, ["model.use_kernels=false", *ovr])
         tul_rt = build_tul_runtime(cfg)
         model, step = load_ckpt(cfg, path if path.startswith("/") else f"{ROOT}/{path}",
                                 device, tul_rt.model_cfg if tul_rt else None)
