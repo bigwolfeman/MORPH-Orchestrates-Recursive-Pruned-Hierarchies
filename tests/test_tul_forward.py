@@ -237,10 +237,10 @@ def test_uniform_per_slot_depth_reduces_to_a_plain_loop():
     _force_depths(m, torch.where(layout.slot_valid, 3, 1))
     with torch.no_grad():
         xa, x0a, bga = m._tul_front(x, layout)
-        _, h_masked, _, _ = m._tul_core(xa, x0a, bga, layout)
+        _, h_masked, _, _, *_ = m._tul_core(xa, x0a, bga, layout)
         # every slot at depth 3 → nothing is ever frozen
         _force_depths(m, torch.full_like(layout.slot_valid, 3, dtype=torch.long))
-        _, h_plain, _, _ = m._tul_core(xa, x0a, bga, layout)
+        _, h_plain, _, _, *_ = m._tul_core(xa, x0a, bga, layout)
     assert torch.equal(h_masked[:, :n_valid], h_plain[:, :n_valid]), (
         "masked update over real slots must equal the unmasked loop at uniform depth")
 
@@ -255,7 +255,7 @@ def test_batch_of_mixed_depths_matches_separate_single_row_runs():
     _force_depths(m, depths)
     with torch.no_grad():
         xa, x0a, bga = m._tul_front(x, layout)
-        _, h_both, _, _ = m._tul_core(xa, x0a, bga, layout)
+        _, h_both, _, _, *_ = m._tul_core(xa, x0a, bga, layout)
     for b in range(2):
         row = type(layout)(
             slot_mask=layout.slot_mask[b: b + 1], bag_id=layout.bag_id[b: b + 1],
@@ -264,7 +264,7 @@ def test_batch_of_mixed_depths_matches_separate_single_row_runs():
         _force_depths(m, depths[b: b + 1])
         with torch.no_grad():
             xr, x0r, bgr = m._tul_front(x[b: b + 1], row)
-            _, h_one, _, _ = m._tul_core(xr, x0r, bgr, row)
+            _, h_one, _, _, *_ = m._tul_core(xr, x0r, bgr, row)
         nv = int(row.slot_valid.sum())
         assert torch.allclose(h_both[b, :nv], h_one[0, :nv], atol=1e-5), (
             f"row {b} differs between the batched and the single-row run")
@@ -603,7 +603,7 @@ def test_prefix_projections_are_distinct_channels():
     with torch.no_grad():
         m.tul.W_prefix[1].mul_(2.0)                    # W_2 = 2·W_1
         front = m._tul_front(x, layout)
-        _xn, h, _d, _g = m._tul_core(*front, layout)
+        _xn, h, _d, _g, *_ = m._tul_core(*front, layout)
         values, pos = m.tul.prefix_project(h, layout, layout.l_total)
     s = 0
     assert bool(layout.slot_valid[0, s]), "need a real slot"

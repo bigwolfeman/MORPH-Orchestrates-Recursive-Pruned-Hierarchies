@@ -182,6 +182,17 @@ class TULConfig:
     #            STANDS FOR.
     mux_target: str = "next"
     mux_tau: float = 1.0                 # softmax temperature of the head (paper: 1.0)
+    # ── DB-shaped loop (arm L3, lab/experiments/planned/2026-08-29-tul-loop-ladder.md) ──
+    # The core loop runs in the FORWARD but the carry is DETACHED between iterations
+    # (retention state too), so no gradient ever crosses an iteration boundary — the
+    # DiffusionBlocks training shape transplanted to the slot loop. Each supervised
+    # iteration's state gets its own LOCAL mux loss (same target, weights summing to
+    # mux_beta); the seed's injection stays live, so every local loss shapes the write
+    # through exactly ONE core application, never an unrolled iterate.
+    db_loop: bool = False
+    # How many iterations get the local mux loss (evenly spaced, always including the
+    # seed t=0 and the final state). Caps the [B,S,V] fp32 logit cost per step.
+    db_mux_iters: int = 4
     # Detach the readout matrix inside the MUX head. TRUE is the corrected default and
     # the setting the paper's own protocol implies: MUX LoRA-finetunes a PRETRAINED
     # model and uses W as a FIXED readout for supervision. MORPH trains from scratch,

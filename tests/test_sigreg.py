@@ -132,7 +132,7 @@ def test_sigreg_ignores_pad_slots():
     torch.manual_seed(7)
     m.eval()
     xx, x0, bg = m._tul_front(x, layout)
-    _xn, h_slots, _d, _g = m._tul_core(xx, x0, bg, layout)
+    _xn, h_slots, _d, _g, *_ = m._tul_core(xx, x0, bg, layout)
     assert not bool(layout.slot_valid.all()), "fixture has no pad slots — test void"
     torch.manual_seed(3)
     a = float(m._tul_sigreg_loss(h_slots, layout))

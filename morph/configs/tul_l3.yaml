@@ -1,0 +1,24 @@
+# ARM L3 — the DiffusionBlocks-shaped loop: iterate in the forward, never in the graph.
+#
+# Prereg: lab/experiments/planned/2026-08-29-tul-loop-ladder.md.
+#
+# L1's loop with tul.db_loop: the carry (and the retention state) is DETACHED between
+# iterations, so NO gradient ever crosses an iteration boundary — immune to both the
+# instability story and the iterated-write story by construction. Supervision is
+# per-iteration and LOCAL (the DB training shape): db_mux_iters evenly spaced states
+# (seed and final always included) each get the mux loss, weights summing to mux_beta;
+# each local loss reaches its own core application plus the live seed injection — ONE
+# core application between any loss and the write, never an unrolled iterate. The
+# coda's CE reaches the seed the same way (through the final application's live
+# injection). If L1/L2 fail and this trains with worth_shuffle intact, this is the
+# looped architecture.
+defaults:
+  - tul_l1
+  - _self_
+
+tul:
+  db_loop: true
+  db_mux_iters: 4
+
+wandb:
+  name: tul-l3

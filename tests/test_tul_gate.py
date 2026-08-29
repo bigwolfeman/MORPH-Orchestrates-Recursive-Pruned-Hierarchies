@@ -346,7 +346,7 @@ def test_the_gate_gradient_reaches_the_core_inside_the_bptt_window():
     with torch.no_grad():
         m.tul_gate.w.normal_(0.0, 0.1)      # d g / d h is w; at w = 0 there is no path
     xf, x0f, bgf = m._tul_front(x, layout)
-    _xn, _h, depths, traj = m._tul_core(xf, x0f, bgf, layout)
+    _xn, _h, depths, traj, *_ = m._tul_core(xf, x0f, bgf, layout)
     assert traj is not None and traj.shape[:2] == layout.slot_index.shape
     g = m.tul_gate.loss(traj, depths, layout)["loss_gate"]
     core_w = next(p for p in m.core[0].parameters() if p.dim() == 2)

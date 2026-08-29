@@ -118,7 +118,7 @@ def test_the_slot_state_is_the_prelude_output_at_the_slot_position():
     m.eval()
     with torch.no_grad():
         xf, x0, bg = m._tul_front(x, lay)
-        xn, h_slots, depths, g_traj = m._tul_core(xf, x0, bg, lay)
+        xn, h_slots, depths, g_traj, *_ = m._tul_core(xf, x0, bg, lay)
         want = m.input_norm(xf)
     assert torch.equal(xn, want)
     assert g_traj is None and int(depths.abs().sum()) == 0, \
@@ -148,7 +148,7 @@ def test_the_slot_state_carries_gradient_and_nothing_on_the_path_is_detached():
     m = _model()
     m.train()
     xf, x0, bg = m._tul_front(x, lay)
-    _xn, h_slots, _d, _g = m._tul_core(xf, x0, bg, lay)
+    _xn, h_slots, _d, _g, *_ = m._tul_core(xf, x0, bg, lay)
     assert h_slots.requires_grad, (
         "the slot state is detached — GL1's entire mechanism is that a later span's CE "
         "backpropagates through the write into the tap and the prelude")
@@ -250,7 +250,7 @@ def test_sigreg_fires_on_the_written_slot_states_and_enters_the_loss():
                                                           rel=1e-6)
     # and it reaches the tap: the regulariser must be able to move the WRITE
     xf, x0, bg = m._tul_front(x, lay)
-    _xn, h_slots, _d, _g = m._tul_core(xf, x0, bg, lay)
+    _xn, h_slots, _d, _g, *_ = m._tul_core(xf, x0, bg, lay)
     sig = m._tul_sigreg_loss(h_slots, lay)
     g = torch.autograd.grad(sig, m.tul.W_sent.weight, allow_unused=True)[0]
     assert g is not None and float(g.abs().sum()) > 0, \

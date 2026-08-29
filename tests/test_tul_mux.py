@@ -190,7 +190,7 @@ def _mux_only_embed_grad(detach: bool, x, y, layout, seed=1234):
     m.eval()
     torch.manual_seed(7)
     xx, x0, bg = m._tul_front(x, layout)
-    _xn, h_slots, _d, _g = m._tul_core(xx, x0, bg, layout)
+    _xn, h_slots, _d, _g, *_ = m._tul_core(xx, x0, bg, layout)
     m._tul_mux_loss(h_slots, x, layout).backward()
     return m.embed.hybrid.euc_embed.weight.grad.clone()
 

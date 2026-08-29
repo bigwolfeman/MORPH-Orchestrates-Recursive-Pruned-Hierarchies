@@ -1,0 +1,21 @@
+# ARM L2 — L1 + the validated contractivity control (HARD spectral projection).
+#
+# Prereg: lab/experiments/planned/2026-08-29-tul-loop-ladder.md.
+#
+# Identical to L1 except the core linears are projected to σ_max ≤ 1.5 after every
+# optimizer step. The cap and the mechanism are the MEASURED cure from the takeover
+# campaign (lab/experiments/results/2026-08-24-tul-takeover-cure.md: capping the MLP
+# at 1.5 takes the core step's alignment 1.92 → 1.24; the SOFT penalty lost the same
+# fight — cap 1.5 λ10 let σ_max reach 4.26 — which is why this is the projection, not
+# the penalty). Decision logic: if L1 fails with instability signatures and L2 trains
+# clean, instability was the disease and looping is viable (Wolfe's framing). If L2
+# fails the same way at controlled σ, the loop itself is implicated (the old framing).
+defaults:
+  - tul_l1
+  - _self_
+
+model:
+  spectral_project_cap: 1.5
+
+wandb:
+  name: tul-l2

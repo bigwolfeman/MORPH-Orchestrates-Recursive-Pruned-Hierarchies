@@ -1941,9 +1941,17 @@ class MORPHTransformer(nn.Module):
                     "length off the core's per-iteration trajectory and there is no "
                     "trajectory. Raises rather than silently emitting a one-step gate.")
             depths = torch.zeros_like(gidx)
-            return xn, e, depths, None
+            return xn, e, depths, None, None
 
         _scse = self.scse           # Python-level constant → every branch below traces out
+        # ── DB-shaped loop (arm L3): detached carry, per-iteration local supervision ──
+        # See TULConfig.db_loop. A Python-level constant read once, so every branch on it
+        # below traces out and the db_loop=False graph is unchanged.
+        _db = bool(self.cfg.tul.db_loop)
+        if _db and _scse is not None:
+            raise NotImplementedError(
+                "tul.db_loop under SCSE is not defined: the carry is the DEVIATION and "
+                "detaching it detaches h* reconstruction. Build it when an arm needs it.")
         with _prof("carrier::h_clone"):
             if _scse is None:
                 h = self.core_init(e)
@@ -1954,6 +1962,10 @@ class MORPHTransformer(nn.Module):
                 # `gather_valid` zeroes pad slots, and both projections are bias-free, so a
                 # pad has h* = 0 AND Delta_0 = 0 exactly — invariant S8.
                 h_star, h = _scse.entry(e)
+        # Trajectory for the local losses: OUTER-graph states, one per iteration, returned
+        # (never a side channel — the g_traj / ret_capture lesson). _db_traj[0] is the seed
+        # state; entry t is the post-update state after iteration t-1.
+        _db_traj: list[Tensor] | None = [h] if _db else None
 
         # Loop-invariant injection, built ON THE COMPACT SEQUENCE (the x0/bigram hoist
         # of the token path, applied to 9-19× fewer positions). Value-embeds never fire
@@ -1991,7 +2003,10 @@ class MORPHTransformer(nn.Module):
         else:
             depths = self._sample_slot_depths(layout, x.device)
             total_iters = int(depths.max().item())
-        n_nograd = max(0, total_iters - self.cfg.bptt_depth)
+        # db_loop: the truncated-BPTT window is meaningless (no gradient crosses an
+        # iteration boundary by construction), and a no_grad iteration would silently
+        # drop that iteration's LOCAL loss — so every iteration carries grad.
+        n_nograd = 0 if _db else max(0, total_iters - self.cfg.bptt_depth)
         n_grad_iters = total_iters - n_nograd
         _ck = self.cfg.ckpt_grad_iters
         n_ckpt = n_grad_iters if _ck < 0 else max(0, min(_ck, n_grad_iters))
@@ -2061,16 +2076,20 @@ class MORPHTransformer(nn.Module):
                     "iter_idx": t, "active": (active & layout.slot_valid).detach(),
                 })
             do_ckpt = self.training and (t - n_nograd) < n_ckpt
+            # db_loop: the CARRY is detached — iteration t's graph reaches the seed only
+            # through the live e/injection (ONE core application), never through h. The
+            # retention state is detached below for the same reason.
+            _h_in = h.detach() if _db else h
             if t < n_nograd:
                 with torch.no_grad():
-                    h_new, rs_new = _core_step(h, _e_arg, _inj_arg, ret_state=ret_state,
+                    h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
                                                iter_idx=t)
             elif do_ckpt:
-                h_new, rs_new = checkpoint(_core_step, h, _e_arg, _inj_arg,
+                h_new, rs_new = checkpoint(_core_step, _h_in, _e_arg, _inj_arg,
                                            ret_state=ret_state, iter_idx=t,
                                            use_reentrant=False)
             else:
-                h_new, rs_new = _core_step(h, _e_arg, _inj_arg, ret_state=ret_state,
+                h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
                                            iter_idx=t)
 
             _tau = self.cfg.core_gain_clip
@@ -2132,8 +2151,10 @@ class MORPHTransformer(nn.Module):
                                     else h.new_zeros(())).float().norm().detach())
 
             h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
+            if _db:
+                _db_traj.append(h)
             if track_ret and rs_new is not None:
-                ret_state = rs_new
+                ret_state = rs_new.detach() if _db else rs_new
 
             if halt:
                 # A slot that asks for k ≥ 1 token has finished thinking (§7/§8). Slots
@@ -2161,7 +2182,7 @@ class MORPHTransformer(nn.Module):
             # Eq. 5 tail: h_T = h* + Delta_T (invariant S6). The deviation lives ONLY inside
             # this function; `_forward_tul` scatters an absolute carrier exactly as today.
             h = h_star + h
-        return xn, h, depths, g_traj
+        return xn, h, depths, g_traj, _db_traj
 
     def _tul_half_weights(self, labels: Tensor, layout: SlotLayout):
         """``([N] row weights, t_last index, emit index)`` for the §5 double label.
@@ -2231,7 +2252,8 @@ class MORPHTransformer(nn.Module):
         return float(ent), float(ce_null)
 
     def _tul_mux_loss(self, h_slots: Tensor, input_ids: Tensor,
-                      layout: SlotLayout, stats: dict | None = None) -> Tensor:
+                      layout: SlotLayout, stats: dict | None = None,
+                      slot_keep: Tensor | None = None) -> Tensor:
         """MUX local head (arXiv 2607.18264): weighted CE of each slot's NEXT span.
 
         The slot's post-core state is read out through the model's OWN LM-head path
@@ -2266,6 +2288,14 @@ class MORPHTransformer(nn.Module):
         logp = torch.log_softmax(logits, dim=-1)              # [B, S, V]
         pos_valid, alpha, tgt_slot, sup = mux_span_targets(
             input_ids, layout, tc.mux_rho, target=tc.mux_target)
+        if slot_keep is not None:
+            # db_loop: supervise only the slots whose state is FRESH at this iteration
+            # (depths ≥ t). A frozen slot's state equals its final one; supervising it
+            # again at every later iteration would over-weight shallow slots. [B, S] bool,
+            # ANDed into both the per-position weights and the normaliser.
+            sup = sup & slot_keep
+            keep_pos = slot_keep.gather(1, tgt_slot)          # [B, L]
+            pos_valid = pos_valid & keep_pos
         B = input_ids.shape[0]
         V = logp.shape[-1]
         # logp[b, tgt_slot[b,p], input_ids[b,p]] without a [B, L, V] gather.
@@ -2457,11 +2487,36 @@ class MORPHTransformer(nn.Module):
             x_coda = scatter_positions(xn, pos, values)
         else:
             fm_y = fm_geom = fm_ctx = None
-            xn, h_slots, depths, g_traj = self._tul_core(x, x0, bigram_emb, layout,
-                                                         halt=halt)
+            xn, h_slots, depths, g_traj, db_traj = self._tul_core(x, x0, bigram_emb,
+                                                                  layout, halt=halt)
             mux_stats: dict = {}
-            mux_loss = (self._tul_mux_loss(h_slots, input_ids, layout, stats=mux_stats)
-                        if tc.mux_beta > 0.0 else None)
+            if tc.mux_beta <= 0.0:
+                mux_loss = None
+            elif db_traj is None:
+                mux_loss = self._tul_mux_loss(h_slots, input_ids, layout, stats=mux_stats)
+            else:
+                # ── db_loop local losses ──────────────────────────────────────────
+                # Evenly spaced supervised iterations, always including the seed (t=0)
+                # and the final state; each state's grad reaches core application t and
+                # the live seed injection ONLY (the carry is detached in _tul_core).
+                # Weights sum to 1 so mux_beta means the same thing as in gl1b; stats
+                # come from the FINAL state so mux_rel stays comparable across arms.
+                T_states = len(db_traj)                                  # T+1 entries
+                n_pick = max(2, min(tc.db_mux_iters, T_states))
+                idxs = sorted({round(i * (T_states - 1) / (n_pick - 1))
+                               for i in range(n_pick)})
+                terms = []
+                for t_i in idxs:
+                    # Seed and FINAL states supervise every valid slot (a frozen slot's
+                    # final state keeps its graph through the where-carry, so the grad
+                    # still reaches that slot's last application). Intermediate picks
+                    # supervise only slots still fresh at that iteration.
+                    keep = None if t_i in (0, idxs[-1]) else (depths >= t_i)
+                    st = mux_stats if t_i == idxs[-1] else None
+                    terms.append(self._tul_mux_loss(db_traj[t_i], input_ids, layout,
+                                                    stats=st, slot_keep=keep))
+                mux_loss = torch.stack(terms).mean()
+                mux_stats["mux_db_n_iters"] = float(len(idxs))
             sigreg_loss = (self._tul_sigreg_loss(h_slots, layout)
                            if tc.sigreg_lambda > 0.0 else None)
             if self.tul_gate is not None:
@@ -2800,7 +2855,7 @@ class MORPHTransformer(nn.Module):
         from morph.model.fm_planner import effective_rank, mean_pairwise_cos
 
         x, x0, bigram = self._tul_front(input_ids, layout)
-        _xn, h_slots, _d, _g = self._tul_core(x, x0, bigram, layout)
+        _xn, h_slots, _d, _g, *_ = self._tul_core(x, x0, bigram, layout)
         z = self._readout(h_slots).float()                     # [B, S, C]
         valid = layout.slot_valid
         rows = z[valid]
@@ -2942,7 +2997,7 @@ class MORPHTransformer(nn.Module):
                 "raises rather than silently picking a behaviour."
             )
         x, x0, bigram_emb = self._tul_front(input_ids, layout)
-        xn, h_slots, depths, g_traj = self._tul_core(x, x0, bigram_emb, layout)
+        xn, h_slots, depths, g_traj, *_ = self._tul_core(x, x0, bigram_emb, layout)
         if self.tul_gate is not None:
             h_slots = self.tul_gate.apply_budget(
                 h_slots, self._tul_budget_ids(layout, depths, g_traj))

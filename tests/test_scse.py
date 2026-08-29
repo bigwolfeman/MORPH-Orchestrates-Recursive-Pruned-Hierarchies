@@ -440,7 +440,7 @@ def test_tul_core_reconstructs_the_absolute_state():
     c = m.cfg
     carrier = torch.randn(x.shape[0], x.shape[1], c.hc_streams, c.d_model)
     with torch.no_grad():
-        _xn, h, _d, _g = m._tul_core(carrier, carrier, None, layout)
+        _xn, h, _d, _g, *_ = m._tul_core(carrier, carrier, None, layout)
         e = gather_valid(m.input_norm(carrier), layout.slot_index, layout.slot_valid)
         h_star, d0 = m.scse.entry(e)
     assert torch.allclose(h, h_star + d0, rtol=0, atol=1e-6), "S6 broken on the TUL path"
