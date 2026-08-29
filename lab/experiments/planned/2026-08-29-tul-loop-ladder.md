@@ -69,6 +69,15 @@ params and per-iteration compute on the compact slot sequence):
 3. Prune each run's checkpoints to step_4500 after its verdict; artifacts to
    `lab/experiments/results/2026-08-29-tul-loop-ladder/`.
 
+**Method amendment (2026-08-29 13:50, before any arm completed).** First launch
+aborted: tul-l1 OOM'd at step-0 eval inside `tul_mux_grad_share` — the one
+grad-enabled eval instrument, which runs with eval-mode checkpointing OFF and
+so retained the full-BPTT loop's activations at batch 6. Fix (commit 28549d0):
+the probe slices to 2 rows. The smoke gate is amended to steps=12/eval_every=5
+so the eval path is exercised (the no-eval smoke waved the bug through).
+Predictions are UNTOUCHED. tul-l1's 3-minute aborted run (yzmy9jli) is
+discarded as a harness failure, not evidence about any hypothesis.
+
 ## Not verified before launch
 
 The n_core>0 + tg_restrict + slot_seed=boundary + mux composition has never
