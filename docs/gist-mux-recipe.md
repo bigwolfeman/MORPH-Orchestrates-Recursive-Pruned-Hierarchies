@@ -1,6 +1,9 @@
 # The Gist-Slot Recipe — the code that made slot content load-bearing
 
-Status: LIVE. Written 2026-08-29, the night GL1b inverted the mask's price.
+Status: LIVE, CORRECTED. Written 2026-08-29, the night GL1b appeared to invert
+the mask's price; corrected the same day by the round-2 confound arm (see the
+CORRECTION section — the frozen prereg `lab/experiments/failures/2026-08-29-tul-gl1-line2.md`
+killed the inversion claim). The code below is unchanged and still the recipe.
 This is a literate record: the ACTUAL shipped code of every load-bearing piece,
 with the measured number each piece produced, so the win cannot be lost to a
 refactor or a compaction. Source of truth for the code is the tree at commit
@@ -14,7 +17,30 @@ where it lives.
 | every prefix arm (FM1/FM2/CW…) | no | no (z detached) | none or myopic | ≤ 0.0006 | 4.29–4.35 |
 | gl1-ctrl-s1 (`hvxl7vky`) | no | yes | none | 0.001–0.005 | **4.6656** (the ruler) |
 | GL1 `gl1-s1` (`qbr69h5r`) | yes | yes | none (SIGReg only) | 0.05–0.07 | 5.0033 (+0.34 price) |
-| **GL1b `gl1b-s1` (`juatgwkg`)** | yes | yes | **MUX span targets** | **0.05–0.096** | **4.4047 (−0.26 vs ruler)** |
+| **GL1b `gl1b-s1` (`juatgwkg`)** | yes | yes | **MUX span targets** | **0.05–0.096** | **4.4047** |
+| GL1b `gl1b-s2` (`hjpzdf6f`) | yes | yes | MUX span targets | 0.003–0.028 (!) | 4.3714 |
+| gl1b-nomask-s1 (`xf7547do`) | no | yes | MUX span targets | 0.007–0.022 | **4.3102** (the CORRECT ruler) |
+| gl1bc-s1 (`iyw8gcgy`) | yes | yes | MUX + curriculum warm-start | **0.053–0.097, every eval** | 4.4025 |
+
+## CORRECTION (2026-08-29, round 2 — read this before quoting the table)
+
+Round 1 compared GL1b against a ruler with NO mux, and the −0.26 looked like the
+mask's price inverting. The pre-registered confound arm (`gl1b-nomask-s1`:
+identical mux, mask off) landed at **4.3102** — under the binding 4.40 line —
+so the inversion claim is **dead**. The corrected reading:
+
+1. **MUX is the CE lever, with or without the mask** (0.36 nats over the plain
+   control on its own). The mask still COSTS ~0.02–0.09 nats against the mux'd
+   ruler. (Caveat: the nomask twin keeps the HCA branch, +2.04M params.)
+2. **The mask+MUX reliance signal is seed-dependent**: seed 1 fired
+   (worth 0.05–0.096), seed 2 did not (max 0.028). n=1 strikes again.
+3. **Mask + MUX + curriculum (`gl1bc`) is the robust-reliance recipe**:
+   worth_shuffle ≥ 0.053 at all 17 evals from step 250, CE 4.4025 — the mask's
+   price paid for a slot bottleneck that is verifiably load-bearing.
+
+What survives uncorrected: the three-piece mechanism below (mask ⇒ necessary,
+loop-free write grad ⇒ trainable, MUX ⇒ worth reading), the ablation map's
+prefix/GL1 rows, and every number in this file — only the RULER changed.
 
 Three pieces, all required. The mask makes the slots *necessary*. The gradient-
 carrying write makes them *trainable*. The MUX target makes them *worth reading*.
@@ -188,7 +214,9 @@ event).
 | no mask, no write grad, no/myopic supervision | FM1, FM2, FM1-CW, oracle probe | ≤ 0.0006 | content unread; even a PERFECT plan at the prefix = 0.0000 |
 | mask only (write grad through a LOOP, aux off) | TG2 family | shuffle ~0, wrong-value 0.5 | pipe reads VALUES, writes homogeneous |
 | mask + loop-free write grad + SIGReg | GL1 | 0.05–0.07 | content load-bearing, price 0.34 |
-| **mask + loop-free write grad + MUX target** | **GL1b** | **0.05–0.096** | **price INVERTED: −0.26 vs the unmasked ruler** |
+| **mask + loop-free write grad + MUX target** | **GL1b** | 0.05–0.096 (s1) / ≤0.028 (s2) | CE 4.37–4.40; reliance seed-dependent (CORRECTION above) |
+| no mask + write grad + MUX target | gl1b-nomask | 0.007–0.022 | **best CE 4.3102** — MUX alone is the CE lever; slots ignored again |
+| mask + write grad + MUX + curriculum | gl1bc | **0.053–0.097 sustained** | robust reliance at 4.4025; price ~0.09 vs the mux'd ruler |
 
 ## Run it
 

@@ -1,0 +1,428 @@
+{
+ "gl1b-s2": {
+  "id": "hjpzdf6f",
+  "state": "finished",
+  "rows": [
+   {
+    "val/slot_eff_rank": 15.406227818016827,
+    "_step": 250,
+    "val/ce_tokens": 6.795936632156372,
+    "val/plan_worth_shuffle": 0.004468250274658203,
+    "val/plan_worth_zero": 0.013979578018188476,
+    "val/mux_rel": 0.963145649433136
+   },
+   {
+    "_step": 500,
+    "val/ce_tokens": 6.429203820228577,
+    "val/plan_worth_shuffle": 0.003236055374145508,
+    "val/plan_worth_zero": 0.026001858711242675,
+    "val/mux_rel": 0.6749365240335464,
+    "val/slot_eff_rank": 64.15179021857764
+   },
+   {
+    "val/plan_worth_zero": 0.07101759910583497,
+    "val/mux_rel": 0.6018870621919632,
+    "val/slot_eff_rank": 67.95322609836467,
+    "_step": 750,
+    "val/ce_tokens": 5.80968029499054,
+    "val/plan_worth_shuffle": 0.006565499305725098
+   },
+   {
+    "val/plan_worth_zero": 0.1090059757232666,
+    "val/mux_rel": 0.5664350986480713,
+    "val/slot_eff_rank": 64.03588082052245,
+    "_step": 1000,
+    "val/ce_tokens": 5.4131221055984495,
+    "val/plan_worth_shuffle": 0.011915779113769532
+   },
+   {
+    "val/plan_worth_zero": 0.10137624740600586,
+    "val/mux_rel": 0.5670385867357254,
+    "val/slot_eff_rank": 60.06448151417631,
+    "_step": 1250,
+    "val/ce_tokens": 5.27076096534729,
+    "val/plan_worth_shuffle": 0.010836362838745117
+   },
+   {
+    "_step": 1500,
+    "val/ce_tokens": 5.268575668334961,
+    "val/plan_worth_shuffle": 0.023817276954650878,
+    "val/plan_worth_zero": 0.13399870395660402,
+    "val/mux_rel": 0.5599520564079284,
+    "val/slot_eff_rank": 51.02686283352142
+   },
+   {
+    "_step": 1750,
+    "val/ce_tokens": 5.11167094707489,
+    "val/plan_worth_shuffle": 0.01016995906829834,
+    "val/plan_worth_zero": 0.11888842582702637,
+    "val/mux_rel": 0.5659040480852127,
+    "val/slot_eff_rank": 54.71649358520125
+   },
+   {
+    "_step": 2000,
+    "val/ce_tokens": 5.23338749408722,
+    "val/plan_worth_shuffle": 0.010026097297668457,
+    "val/plan_worth_zero": 0.1348031759262085,
+    "val/mux_rel": 0.5727569818496704,
+    "val/slot_eff_rank": 51.96691931834778
+   },
+   {
+    "val/slot_eff_rank": 53.21636699758883,
+    "_step": 2250,
+    "val/ce_tokens": 4.762914443016053,
+    "val/plan_worth_shuffle": 0.01772727966308594,
+    "val/plan_worth_zero": 0.136118745803833,
+    "val/mux_rel": 0.534033028781414
+   },
+   {
+    "val/mux_rel": 0.5287296235561371,
+    "val/slot_eff_rank": 52.12639914711686,
+    "_step": 2500,
+    "val/ce_tokens": 4.756731629371643,
+    "val/plan_worth_shuffle": 0.019324350357055663,
+    "val/plan_worth_zero": 0.15240831375122071
+   },
+   {
+    "val/plan_worth_zero": 0.17668304443359376,
+    "val/mux_rel": 0.5400340974330902,
+    "val/slot_eff_rank": 46.29079665452557,
+    "_step": 2750,
+    "val/ce_tokens": 4.885687375068665,
+    "val/plan_worth_shuffle": 0.020675063133239746
+   },
+   {
+    "val/plan_worth_zero": 0.1882709503173828,
+    "val/mux_rel": 0.5390557199716568,
+    "val/slot_eff_rank": 46.43172108744961,
+    "_step": 3000,
+    "val/ce_tokens": 4.640350484848023,
+    "val/plan_worth_shuffle": 0.016092562675476076
+   },
+   {
+    "val/mux_rel": 0.5277157634496689,
+    "val/slot_eff_rank": 45.66556228090094,
+    "_step": 3250,
+    "val/ce_tokens": 4.675630521774292,
+    "val/plan_worth_shuffle": 0.02370450496673584,
+    "val/plan_worth_zero": 0.1720719814300537
+   },
+   {
+    "_step": 3500,
+    "val/ce_tokens": 4.6743125200271605,
+    "val/plan_worth_shuffle": 0.015525627136230468,
+    "val/plan_worth_zero": 0.15694966316223144,
+    "val/mux_rel": 0.5315079167485237,
+    "val/slot_eff_rank": 49.94964665026326
+   },
+   {
+    "val/slot_eff_rank": 48.58639228052079,
+    "_step": 3750,
+    "val/ce_tokens": 4.527862620353699,
+    "val/plan_worth_shuffle": 0.016982650756835936,
+    "val/plan_worth_zero": 0.1701364040374756,
+    "val/mux_rel": 0.5259165197610856
+   },
+   {
+    "_step": 4000,
+    "val/ce_tokens": 4.5231263637542725,
+    "val/plan_worth_shuffle": 0.02814180850982666,
+    "val/plan_worth_zero": 0.1800100564956665,
+    "val/mux_rel": 0.5057828143239022,
+    "val/slot_eff_rank": 45.04713472531041
+   },
+   {
+    "_step": 4250,
+    "val/ce_tokens": 4.3714056491851805,
+    "val/plan_worth_shuffle": 0.02787604331970215,
+    "val/plan_worth_zero": 0.1810063600540161,
+    "val/mux_rel": 0.5155184760689735,
+    "val/slot_eff_rank": 44.28564145844856
+   }
+  ]
+ },
+ "gl1b-nomask-s1": {
+  "id": "xf7547do",
+  "state": "finished",
+  "rows": [
+   {
+    "val/slot_eff_rank": 43.338970189726126,
+    "_step": 250,
+    "val/ce_tokens": 6.720914340019226,
+    "val/plan_worth_shuffle": 0.013836336135864259,
+    "val/plan_worth_zero": 0.01298828125,
+    "val/mux_rel": 0.8787263840436935
+   },
+   {
+    "_step": 500,
+    "val/ce_tokens": 6.287112903594971,
+    "val/plan_worth_shuffle": 0.02122774124145508,
+    "val/plan_worth_zero": 0.025733637809753417,
+    "val/mux_rel": 0.7265714555978775,
+    "val/slot_eff_rank": 73.24110940803124
+   },
+   {
+    "val/mux_rel": 0.6559101462364196,
+    "val/slot_eff_rank": 85.84709040613095,
+    "_step": 750,
+    "val/ce_tokens": 5.681258010864258,
+    "val/plan_worth_shuffle": 0.018966817855834962,
+    "val/plan_worth_zero": 0.032828760147094724
+   },
+   {
+    "_step": 1000,
+    "val/ce_tokens": 5.325604486465454,
+    "val/plan_worth_shuffle": 0.011952924728393554,
+    "val/plan_worth_zero": 0.025654864311218262,
+    "val/mux_rel": 0.6102518707513809,
+    "val/slot_eff_rank": 86.5515545752149
+   },
+   {
+    "val/ce_tokens": 5.204470443725586,
+    "val/plan_worth_shuffle": 0.01091303825378418,
+    "val/plan_worth_zero": 0.015793728828430175,
+    "val/mux_rel": 0.6026228815317154,
+    "val/slot_eff_rank": 87.32122630197713,
+    "_step": 1250
+   },
+   {
+    "val/plan_worth_shuffle": 0.011345219612121583,
+    "val/plan_worth_zero": 0.018047499656677245,
+    "val/mux_rel": 0.5966636061668396,
+    "val/slot_eff_rank": 81.56584113026392,
+    "_step": 1500,
+    "val/ce_tokens": 5.2232507228851315
+   },
+   {
+    "_step": 1750,
+    "val/ce_tokens": 5.0741798877716064,
+    "val/plan_worth_shuffle": 0.013429379463195801,
+    "val/plan_worth_zero": 0.02091555595397949,
+    "val/mux_rel": 0.5945208311080933,
+    "val/slot_eff_rank": 83.45303747659088
+   },
+   {
+    "_step": 2000,
+    "val/ce_tokens": 5.196186542510986,
+    "val/plan_worth_shuffle": 0.015985679626464844,
+    "val/plan_worth_zero": 0.02793893814086914,
+    "val/mux_rel": 0.6013289600610733,
+    "val/slot_eff_rank": 78.81307933278791
+   },
+   {
+    "val/slot_eff_rank": 83.68774012238553,
+    "_step": 2250,
+    "val/ce_tokens": 4.729663968086243,
+    "val/plan_worth_shuffle": 0.012647557258605956,
+    "val/plan_worth_zero": 0.017579531669616698,
+    "val/mux_rel": 0.5581324189901352
+   },
+   {
+    "val/slot_eff_rank": 81.96839763463069,
+    "_step": 2500,
+    "val/ce_tokens": 4.723946928977966,
+    "val/plan_worth_shuffle": 0.01643071174621582,
+    "val/plan_worth_zero": 0.02593569755554199,
+    "val/mux_rel": 0.5529649049043656
+   },
+   {
+    "val/plan_worth_shuffle": 0.021708035469055177,
+    "val/plan_worth_zero": 0.025798559188842773,
+    "val/mux_rel": 0.5656125843524933,
+    "val/slot_eff_rank": 78.68670529734257,
+    "_step": 2750,
+    "val/ce_tokens": 4.848744654655457
+   },
+   {
+    "val/slot_eff_rank": 77.84071116842493,
+    "_step": 3000,
+    "val/ce_tokens": 4.596625947952271,
+    "val/plan_worth_shuffle": 0.015452909469604491,
+    "val/plan_worth_zero": 0.025169968605041504,
+    "val/mux_rel": 0.5608805835247039
+   },
+   {
+    "_step": 3250,
+    "val/ce_tokens": 4.648672008514405,
+    "val/plan_worth_shuffle": 0.00952765941619873,
+    "val/plan_worth_zero": 0.020806241035461425,
+    "val/mux_rel": 0.5473163574934006,
+    "val/slot_eff_rank": 82.427861854594
+   },
+   {
+    "val/plan_worth_shuffle": 0.009800457954406738,
+    "val/plan_worth_zero": 0.016248512268066406,
+    "val/mux_rel": 0.5507413446903229,
+    "val/slot_eff_rank": 82.40723578879968,
+    "_step": 3500,
+    "val/ce_tokens": 4.649447989463806
+   },
+   {
+    "val/ce_tokens": 4.484587717056274,
+    "val/plan_worth_shuffle": 0.00727384090423584,
+    "val/plan_worth_zero": 0.017897701263427733,
+    "val/mux_rel": 0.5428534626960755,
+    "val/slot_eff_rank": 76.51339484503865,
+    "_step": 3750
+   },
+   {
+    "val/mux_rel": 0.5221391871571541,
+    "val/slot_eff_rank": 81.5348090047315,
+    "_step": 4000,
+    "val/ce_tokens": 4.4817786693573,
+    "val/plan_worth_shuffle": 0.012227272987365723,
+    "val/plan_worth_zero": 0.02080347537994385
+   },
+   {
+    "_step": 4250,
+    "val/ce_tokens": 4.310152328014373,
+    "val/plan_worth_shuffle": 0.013600921630859375,
+    "val/plan_worth_zero": 0.023924541473388673,
+    "val/mux_rel": 0.5292866230010986,
+    "val/slot_eff_rank": 75.67962684924058
+   }
+  ]
+ },
+ "gl1bc-s1": {
+  "id": "iyw8gcgy",
+  "state": "finished",
+  "rows": [
+   {
+    "val/plan_worth_shuffle": 0.052606844902038576,
+    "val/plan_worth_zero": 0.09475090503692626,
+    "val/mux_rel": 0.9684260755777359,
+    "val/slot_eff_rank": 12.566230903076981,
+    "_step": 250,
+    "val/ce_tokens": 5.438642144203186
+   },
+   {
+    "val/mux_rel": 0.8878267347812653,
+    "val/slot_eff_rank": 19.185164257979828,
+    "_step": 500,
+    "val/ce_tokens": 5.446512174606323,
+    "val/plan_worth_shuffle": 0.06407501697540283,
+    "val/plan_worth_zero": 0.11253213882446289
+   },
+   {
+    "val/plan_worth_shuffle": 0.06262068748474121,
+    "val/plan_worth_zero": 0.13177649974822997,
+    "val/mux_rel": 0.7619614183902741,
+    "val/slot_eff_rank": 32.571729356608294,
+    "_step": 750,
+    "val/ce_tokens": 5.187268471717834
+   },
+   {
+    "val/plan_worth_shuffle": 0.06378638744354248,
+    "val/plan_worth_zero": 0.1741464376449585,
+    "val/mux_rel": 0.6581481993198395,
+    "val/slot_eff_rank": 46.339112104649196,
+    "_step": 1000,
+    "val/ce_tokens": 4.992758774757386
+   },
+   {
+    "val/ce_tokens": 4.9622441053390505,
+    "val/plan_worth_shuffle": 0.07072632312774658,
+    "val/plan_worth_zero": 0.1541890859603882,
+    "val/mux_rel": 0.6209188133478165,
+    "val/slot_eff_rank": 53.47457297141491,
+    "_step": 1250
+   },
+   {
+    "val/slot_eff_rank": 49.86400071346447,
+    "_step": 1500,
+    "val/ce_tokens": 5.069918775558472,
+    "val/plan_worth_shuffle": 0.07582261562347412,
+    "val/plan_worth_zero": 0.14537425041198732,
+    "val/mux_rel": 0.5972982794046402
+   },
+   {
+    "_step": 1750,
+    "val/ce_tokens": 4.961325931549072,
+    "val/plan_worth_shuffle": 0.0691375732421875,
+    "val/plan_worth_zero": 0.11867842674255372,
+    "val/mux_rel": 0.5875805079936981,
+    "val/slot_eff_rank": 55.18740555374559
+   },
+   {
+    "val/slot_eff_rank": 52.96040212492825,
+    "_step": 2000,
+    "val/ce_tokens": 5.120050573348999,
+    "val/plan_worth_shuffle": 0.08594410419464112,
+    "val/plan_worth_zero": 0.12004532814025878,
+    "val/mux_rel": 0.5868636310100556
+   },
+   {
+    "val/ce_tokens": 4.67557430267334,
+    "val/plan_worth_shuffle": 0.06436622142791748,
+    "val/plan_worth_zero": 0.1278813362121582,
+    "val/mux_rel": 0.5441927433013916,
+    "val/slot_eff_rank": 55.84428554718805,
+    "_step": 2250
+   },
+   {
+    "_step": 2500,
+    "val/ce_tokens": 4.693431329727173,
+    "val/plan_worth_shuffle": 0.09228801727294922,
+    "val/plan_worth_zero": 0.1171942949295044,
+    "val/mux_rel": 0.5343925148248673,
+    "val/slot_eff_rank": 56.24131483482516
+   },
+   {
+    "val/ce_tokens": 4.861458945274353,
+    "val/plan_worth_shuffle": 0.08941433429718018,
+    "val/plan_worth_zero": 0.10473432540893554,
+    "val/mux_rel": 0.5458168834447861,
+    "val/slot_eff_rank": 52.58952221003848,
+    "_step": 2750
+   },
+   {
+    "_step": 3000,
+    "val/ce_tokens": 4.6389607191085815,
+    "val/plan_worth_shuffle": 0.08741414546966553,
+    "val/plan_worth_zero": 0.10339934825897217,
+    "val/mux_rel": 0.5407489001750946,
+    "val/slot_eff_rank": 52.83573593815763
+   },
+   {
+    "val/plan_worth_shuffle": 0.09245941638946534,
+    "val/plan_worth_zero": 0.10153827667236329,
+    "val/mux_rel": 0.5259494632482529,
+    "val/slot_eff_rank": 53.54077515804107,
+    "_step": 3250,
+    "val/ce_tokens": 4.67467200756073
+   },
+   {
+    "val/slot_eff_rank": 56.61919160629178,
+    "_step": 3500,
+    "val/ce_tokens": 4.686299300193786,
+    "val/plan_worth_shuffle": 0.0790067434310913,
+    "val/plan_worth_zero": 0.1150217056274414,
+    "val/mux_rel": 0.5273059800267219
+   },
+   {
+    "val/ce_tokens": 4.542210102081299,
+    "val/plan_worth_shuffle": 0.08276135921478271,
+    "val/plan_worth_zero": 0.11213531494140624,
+    "val/mux_rel": 0.5197416946291924,
+    "val/slot_eff_rank": 55.619546531130766,
+    "_step": 3750
+   },
+   {
+    "val/mux_rel": 0.49741493314504626,
+    "val/slot_eff_rank": 52.588921436436976,
+    "_step": 4000,
+    "val/ce_tokens": 4.55208387374878,
+    "val/plan_worth_shuffle": 0.0969550609588623,
+    "val/plan_worth_zero": 0.13253653049468994
+   },
+   {
+    "val/plan_worth_zero": 0.12655155658721923,
+    "val/mux_rel": 0.507320286333561,
+    "val/slot_eff_rank": 52.52068069229862,
+    "_step": 4250,
+    "val/ce_tokens": 4.402465796470642,
+    "val/plan_worth_shuffle": 0.09670226573944092
+   }
+  ]
+ }
+}
