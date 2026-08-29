@@ -30,13 +30,18 @@ from lab.tulfm.fm_planner import (
     FMPlanner,
     FMPlannerConfig,
     SpanGeometry,
+    TargetWhitener,
+    analytic_null_floor,
     band_edges,
+    band_edges_for,
     band_of_sigma,
     build_masks,
     build_schedule,
     effective_rank,
+    fit_whitener,
     fm_loss,
     generate_plans,
+    make_targets,
     mean_pairwise_cos,
     pool_targets,
     segment_rows,
@@ -72,11 +77,11 @@ def _ids_with_boundaries_at(positions: list[int], length: int,
 
 def _planner(d_ctx: int, max_slots: int, max_ctx_len: int, seed: int = 0,
              d_p: int = 64, n_layers: int = 2, n_heads: int = 4, d_ff: int = 128,
-             cond_dim: int = 32) -> FMPlanner:
+             cond_dim: int = 32, **kw) -> FMPlanner:
     torch.manual_seed(seed)
     return FMPlanner(FMPlannerConfig(
         d_ctx=d_ctx, d_p=d_p, n_layers=n_layers, n_heads=n_heads, d_ff=d_ff,
-        cond_dim=cond_dim, max_slots=max_slots, max_ctx_len=max_ctx_len)).eval()
+        cond_dim=cond_dim, max_slots=max_slots, max_ctx_len=max_ctx_len, **kw)).eval()
 
 
 def _wake_up(planner: FMPlanner, std: float = 0.05) -> FMPlanner:
@@ -376,6 +381,7 @@ def test_a_perfect_denoiser_would_give_zero_loss_and_a_null_one_would_not():
 
     class _Perfect(torch.nn.Module):
         precond = p.precond
+        cfg = p.cfg          # fm_loss dispatches on cfg.objective (P1c)
 
         def encode_ctx(self, hh):
             return p.encode_ctx(hh)
@@ -416,6 +422,7 @@ def test_the_null_floor_equals_the_loss_of_the_untrained_planner():
 
     class _Perfect(torch.nn.Module):
         precond = p.precond
+        cfg = p.cfg          # fm_loss dispatches on cfg.objective (P1c)
 
         def encode_ctx(self, hh):
             return p.encode_ctx(hh)
@@ -673,3 +680,394 @@ def test_end_to_end_the_pipeline_can_pass_signal():
         f"{trained['top1']:.3f} — the planner is not reading THIS row")
     assert effective_rank(y, geom.valid) > 10.0, \
         "toy targets collapsed; the retrieval number would be meaningless"
+
+
+# ── 10. P1c: conditional flow matching ───────────────────────────────────────
+
+def _cfm_fixture(d: int = 24, span: int = 6, length: int = 30, source_std: float = 0.2):
+    ids = _ids_with_boundaries_at(list(range(span - 1, length, span)), length=length)
+    g = segment_rows(ids, _rule(), max_slots=8)
+    torch.manual_seed(21)
+    h = torch.randn(1, length, d)
+    p = _planner(d_ctx=d, max_slots=8, max_ctx_len=length,
+                 objective="cfm", source_std=source_std)
+    return g, h, p
+
+
+def test_cfm_zero_net_loss_equals_the_analytic_null():
+    """``E‖v‖² = E‖y‖² + d·s²`` with ``v̂ ≡ 0``. Gates the CFM objective's arithmetic AND
+    the formula ``loss_scale: auto`` divides by — if either drifts, this fails."""
+    d, ss = 24, 0.2
+    g, h, p = _cfm_fixture(d=d, source_std=ss)
+    y, _ = make_targets(h, g)
+    assert p.cfg.objective == "cfm" and p.cfg.d_target == d
+    e_y_sq = float(y[g.valid].pow(2).sum(-1).mean())
+    assert e_y_sq == pytest.approx(1.0, abs=1e-5), "targets are supposed to be unit L2"
+
+    sch = build_schedule()
+    losses = []
+    for seed in range(200):
+        loss, st = fm_loss(p, h, g, sch, generator=torch.Generator().manual_seed(seed))
+        losses.append(float(loss.detach()))
+        # the planner IS the zero net at init, so rel is exactly 1
+        assert st["rel_loss"] == pytest.approx(1.0, abs=1e-6)
+    got = sum(losses) / len(losses)
+
+    want = analytic_null_floor(p.cfg, sch, e_y_sq)
+    assert want == pytest.approx(e_y_sq + d * ss ** 2, rel=1e-9), \
+        "analytic_null_floor is not using the CFM closed form"
+    assert got == pytest.approx(want, rel=0.05), \
+        f"measured CFM zero-net loss {got:.4f} vs analytic {want:.4f}"
+
+
+def test_cfm_euler_integration_recovers_x1_exactly_for_a_constant_velocity():
+    """``x_t = (1−t)x₀ + t·y`` has a CONSTANT velocity, so forward Euler is EXACT.
+
+    If the integrator has the wrong step count, the wrong step size, or an off-by-one in
+    the t grid, this fails — a test that only checked "the output is finite" would not.
+    """
+    d = 16
+    g, h, p = _cfm_fixture(d=d)
+    B, S = g.valid.shape
+    torch.manual_seed(5)
+    v_const = torch.randn(B, S, d)
+
+    class _ConstV(torch.nn.Module):
+        cfg = p.cfg
+        precond = p.precond
+
+        def encode_ctx(self, hh):
+            return p.encode_ctx(hh)
+
+        def velocity(self, x_t, t, ctx, geom, sm, cm):
+            return v_const
+
+    for n_steps in (2, 6, 17):
+        gen_a = torch.Generator().manual_seed(11)
+        x1 = generate_plans(_ConstV(), h, g, build_schedule(), n_steps=n_steps,
+                            generator=gen_a)
+        # reproduce the source draw the integrator made
+        gen_b = torch.Generator().manual_seed(11)
+        x0 = torch.randn((B, S, d), generator=gen_b) * p.cfg.source_std
+        want = ((x0 + v_const) * g.valid[..., None].float())
+        assert torch.allclose(x1, want, atol=1e-5), \
+            f"Euler with {n_steps} steps did not land on x0 + v"
+
+
+def test_cfm_conditioning_cannot_see_past_e_i():
+    """The leak gate, on the NEW head. A second forward path must not bypass the mask."""
+    g, h_a, h_b = _leak_setup(perturb_at=20)          # strictly after e_1 = 15
+    p = _wake_up(_planner(d_ctx=32, max_slots=8, max_ctx_len=32, objective="cfm"))
+    sm, cm = build_masks(g)
+    torch.manual_seed(99)
+    x = torch.randn(*g.valid.shape, 32)
+    t = torch.full(g.valid.shape, 0.5)
+    with torch.no_grad():
+        va = p.velocity(x, t, p.encode_ctx(h_a), g, sm, cm)
+        vb = p.velocity(x, t, p.encode_ctx(h_b), g, sm, cm)
+    assert torch.equal(va[0, 1], vb[0, 1]), "cfm velocity head leaks the future"
+
+    g2, h2_a, h2_b = _leak_setup(perturb_at=10)       # visible, before e_1
+    with torch.no_grad():
+        sm2, cm2 = build_masks(g2)
+        wa = p.velocity(x, t, p.encode_ctx(h2_a), g2, sm2, cm2)
+        wb = p.velocity(x, t, p.encode_ctx(h2_b), g2, sm2, cm2)
+    assert not torch.equal(wa[0, 1], wb[0, 1]), \
+        "perturbing a VISIBLE token did nothing — the cfm conditioning path is dead"
+
+
+def test_cfm_bands_are_equal_width_and_equal_mass():
+    sch = build_schedule()
+    e = band_edges_for("cfm", sch, 6)
+    assert torch.allclose(e, torch.linspace(0.0, 1.0, 7), atol=1e-7)
+    # t ~ U(0,1) => equal width is equal mass, matching edm's equi-probability sigma bands
+    t = torch.rand(60000, generator=torch.Generator().manual_seed(0))
+    counts = torch.bincount(band_of_sigma(t, e), minlength=6).float() / t.numel()
+    assert bool((counts - 1 / 6).abs().max() < 0.02), counts.tolist()
+    assert not torch.allclose(band_edges_for("edm", sch, 6), e), \
+        "edm and cfm must not share a band grid"
+
+
+# ── 11. P1c: whitened targets ────────────────────────────────────────────────
+
+def _anisotropic_rows(n: int, d: int, live: int, seed: int = 0) -> torch.Tensor:
+    """Unit-L2 rows concentrated on ``live`` directions plus an off-centre mean — the
+    shape P1 actually measured (effective rank ~25 of 1024, pairwise cosine ~0.61)."""
+    g = torch.Generator().manual_seed(seed)
+    basis = torch.linalg.qr(torch.randn(d, d, generator=g))[0][:live]     # [live, d]
+    scale = torch.linspace(1.0, 0.15, live)
+    coeff = torch.randn(n, live, generator=g) * scale
+    mean_dir = F.normalize(torch.randn(d, generator=g), dim=-1)
+    return F.normalize(coeff @ basis + 1.5 * mean_dir, dim=-1)
+
+
+def test_whitening_round_trip_and_unit_component_std():
+    d, live, rank = 48, 12, 8
+    rows = _anisotropic_rows(600, d, live)
+    wh = fit_whitener(rows, rank)
+    assert wh.rank == rank and wh.d_in == d
+
+    w = wh.apply(rows)
+    assert torch.allclose(w.mean(0), torch.zeros(rank), atol=1e-4), \
+        "whitened calibration set is not centred"
+    assert torch.allclose(w.std(0, unbiased=True), torch.ones(rank), atol=1e-4), \
+        f"per-component std is not 1: {w.std(0).tolist()}"
+
+    # Round trip recovers the RANK-r PROJECTION of the original, not the original.
+    back = wh.invert(w)
+    proj = wh.mu + (rows - wh.mu) @ wh.basis.T @ wh.basis
+    assert torch.allclose(back, proj, atol=1e-4)
+    # and the projection is a real approximation, not the identity in disguise
+    assert (back - rows).norm() > 1e-3
+    assert wh.explained_var > 0.5
+
+    # Invalid slots stay EXACTLY zero, even though whitening subtracts a non-zero mu.
+    assert float(wh.mu.norm()) > 0.1
+    y3 = rows[:10].reshape(2, 5, d)
+    valid = torch.ones(2, 5, dtype=torch.bool)
+    valid[:, 3:] = False
+    out = wh.apply(y3, valid)
+    assert torch.equal(out[:, 3:], torch.zeros_like(out[:, 3:]))
+    assert out[:, :3].abs().sum() > 0
+
+
+def test_whitener_survives_the_checkpoint_round_trip():
+    """The probe rebuilds the whitener from the planner blob rather than re-fitting one.
+    If ``state_dict``/``from_state_dict`` ever lost a field, plans would be scored against
+    targets in a basis the planner never trained in — and the probe would still print a
+    plausible-looking table."""
+    rows = _anisotropic_rows(400, 32, live=10)
+    wh = fit_whitener(rows, 6)
+    back = TargetWhitener.from_state_dict(wh.state_dict())
+    assert back.rank == wh.rank and back.d_in == wh.d_in
+    assert back.calib_slots == wh.calib_slots
+    assert back.explained_var == pytest.approx(wh.explained_var)
+    assert torch.equal(back.apply(rows), wh.apply(rows))
+    assert back.manifest() == wh.manifest()
+
+
+def test_fit_whitener_refuses_a_degenerate_rank_instead_of_flooring_it():
+    rows = _anisotropic_rows(300, 32, live=6)
+    with pytest.raises(ValueError, match="degenerate"):
+        fit_whitener(rows, 24)          # far past the 6 occupied directions
+    with pytest.raises(ValueError, match="exceeds"):
+        fit_whitener(rows[:5], 20)
+
+
+def test_whitening_moves_the_target_geometry_it_was_built_to_move():
+    """The motivation, as a measurement: raw targets are a thin off-centre pencil;
+    whitened ones are isotropic in the retained subspace."""
+    d, rank = 48, 8
+    rows = _anisotropic_rows(600, d, live=12)
+    valid = torch.ones(1, 600, dtype=torch.bool)
+    raw = rows[None]
+    assert mean_pairwise_cos(raw, valid) > 0.3, "fixture is not anisotropic enough"
+
+    wh = fit_whitener(rows, rank)
+    w = wh.apply(rows)[None]
+    assert abs(mean_pairwise_cos(w, valid)) < 0.05
+    assert effective_rank(w, valid) > 0.9 * rank
+
+
+def test_make_targets_reports_the_raw_space_for_the_collapse_guard():
+    ids = _ids_with_boundaries_at([5, 11, 19], length=28)
+    g = segment_rows(ids, _rule(), max_slots=8)
+    torch.manual_seed(31)
+    h = torch.randn(1, 28, 16)
+    rows = _anisotropic_rows(200, 16, live=6)
+    wh = fit_whitener(rows, 4)
+
+    y, y_raw = make_targets(h, g, wh)
+    assert y.shape[-1] == 4 and y_raw.shape[-1] == 16
+    assert torch.allclose(y_raw[g.valid].norm(dim=-1),
+                          torch.ones(int(g.valid.sum())), atol=1e-6)
+    y2, y2_raw = make_targets(h, g, None)
+    assert torch.equal(y2, y2_raw)
+
+
+def test_whitened_edm_bands_balance_where_raw_ones_do_not():
+    """The claim in tulfm_p1c_edm_white.yaml, gated.
+
+    Raw unit-L2 targets at sigma_data 0.5: the low-sigma null floor is ~d and the
+    high-sigma one is ~4 — the 256x imbalance P1 documented. Whitened targets at
+    sigma_data 1.0: both limits are `rank`. The ratio must collapse toward 1.
+    """
+    sch = build_schedule()
+    d, rank = 64, 16
+
+    def _ratio(planner, y, geom, h):
+        edges = band_edges(sch, 6)
+        lo, hi = [], []
+        for seed in range(24):
+            _, st = fm_loss(planner, h, geom, sch, y=y, edges=edges,
+                            generator=torch.Generator().manual_seed(seed))
+            if st["band0/n"] > 0:
+                lo.append(st["band0/null"])
+            if st["band5/n"] > 0:
+                hi.append(st["band5/null"])
+        return (sum(lo) / len(lo)) / (sum(hi) / len(hi))
+
+    ids = _ids_with_boundaries_at(list(range(5, 200, 6)), length=256)
+    geom = segment_rows(ids, _rule(), max_slots=64)
+    torch.manual_seed(41)
+    h = torch.randn(1, 256, d)
+
+    y_raw, _ = make_targets(h, geom, None)
+    p_raw = _planner(d_ctx=d, max_slots=64, max_ctx_len=256, sigma_data=0.5)
+    r_raw = _ratio(p_raw, y_raw, geom, h)
+
+    wh = fit_whitener(_anisotropic_rows(400, d, live=24), rank)
+    y_w, _ = make_targets(h, geom, wh)
+    p_w = _planner(d_ctx=d, d_target=rank, max_slots=64, max_ctx_len=256, sigma_data=1.0)
+    r_w = _ratio(p_w, y_w, geom, h)
+
+    assert r_raw > 5.0, f"raw fixture is not imbalanced ({r_raw:.2f}); test is inert"
+    assert r_w < 2.0, f"whitened bands did not balance: low/high null ratio {r_w:.2f}"
+
+
+# ── 12. P1c: loss scaling ────────────────────────────────────────────────────
+
+def test_analytic_null_floor_matches_the_measured_zero_net_loss_for_edm():
+    """``loss_scale: auto`` divides by this number, so the derivation is load-bearing.
+
+    It is a Monte-Carlo integral of a closed form over the sigma schedule; this checks it
+    against the loss the shipped ``_edm_loss`` actually reports for the zero network.
+    """
+    d = 64
+    ids = _ids_with_boundaries_at(list(range(5, 200, 6)), length=256)
+    geom = segment_rows(ids, _rule(), max_slots=64)
+    torch.manual_seed(43)
+    h = torch.randn(1, 256, d)
+    y, _ = make_targets(h, geom, None)
+    sch = build_schedule()
+    p = _planner(d_ctx=d, max_slots=64, max_ctx_len=256, sigma_data=0.5)
+
+    got = sum(float(fm_loss(p, h, geom, sch, y=y,
+                            generator=torch.Generator().manual_seed(s))[0].detach())
+              for s in range(150)) / 150.0
+    want = analytic_null_floor(p.cfg, sch, e_y_sq=1.0)
+    assert got == pytest.approx(want, rel=0.08), \
+        f"measured EDM zero-net loss {got:.2f} vs analytic {want:.2f}"
+
+
+def test_loss_scale_leaves_the_argmin_unchanged():
+    """A constant divisor must scale the gradient by ``1/k`` and change nothing else.
+
+    Compared as a VECTOR (relative L2 error and direction), not element by element.
+    Backward runs at a 137x smaller magnitude in the scaled case, so individual
+    coordinates differ by fp32 rounding — measured median relative error 3.3e-7, with the
+    outliers sitting on coordinates whose gradient is ~0. The claim being gated is that
+    the search direction is identical, which is what "same argmin" means.
+    """
+    d = 32
+    ids = _ids_with_boundaries_at([7, 15, 23], length=32)
+    geom = segment_rows(ids, _rule(), max_slots=8)
+    torch.manual_seed(47)
+    h = torch.randn(1, 32, d)
+    sch = build_schedule()
+    k = 137.0
+
+    for obj in ("edm", "cfm"):
+        p = _wake_up(_planner(d_ctx=d, max_slots=8, max_ctx_len=32, objective=obj))
+        p.train()
+        y, _ = make_targets(h, geom, None)
+
+        def _grads(scale):
+            p.zero_grad(set_to_none=True)
+            loss, _ = fm_loss(p, h, geom, sch, y=y, loss_scale=scale,
+                              generator=torch.Generator().manual_seed(3))
+            loss.backward()
+            return torch.cat([q.grad.reshape(-1).clone() for q in p.parameters()
+                              if q.grad is not None])
+
+        g1, gk = _grads(1.0), _grads(k)
+        assert g1.norm() > 0
+        a, b = g1.double(), gk.double()
+        rel_l2 = float((b - a / k).norm() / (a / k).norm())
+        assert rel_l2 < 1e-5, \
+            f"[{obj}] loss_scale moved the gradient vector: relative L2 error {rel_l2:.3e}"
+        cos = float((a @ b) / (a.norm() * b.norm()))
+        assert cos == pytest.approx(1.0, abs=1e-9), f"[{obj}] cosine {cos}"
+        assert float(a.norm() / b.norm()) == pytest.approx(k, rel=1e-5), \
+            f"[{obj}] gradient norm ratio is not the loss scale"
+        # A DIFFERENT scale must not be mistaken for the same one — pin that the test
+        # would notice if the divisor silently stopped being applied.
+        assert not torch.allclose(gk, g1, rtol=1e-3)
+
+        # and the reported stats stay in UNSCALED units so band curves stay comparable
+        _, st1 = fm_loss(p, h, geom, sch, y=y, loss_scale=1.0,
+                         generator=torch.Generator().manual_seed(3))
+        _, stk = fm_loss(p, h, geom, sch, y=y, loss_scale=k,
+                         generator=torch.Generator().manual_seed(3))
+        assert st1["loss_unscaled"] == pytest.approx(stk["loss_unscaled"], rel=1e-9)
+        assert st1["rel_loss"] == pytest.approx(stk["rel_loss"], rel=1e-9)
+
+
+# ── 13. P1c: the end-to-end signal test, repeated for CFM ────────────────────
+
+def test_end_to_end_cfm_can_pass_signal():
+    """The same known-answer toy as the EDM test, on the CFM objective and integrator.
+
+    Source std is matched to the targets' per-component std (1/sqrt(d)), which is the
+    rule both shipped CFM arms follow.
+    """
+    B, L, d, span, steps = 6, 48, 32, 6, 400
+    gen = torch.Generator().manual_seed(0)
+    a_mat = torch.randn(d, d, generator=gen) / d ** 0.5
+    kw = dict(objective="cfm", source_std=1.0 / d ** 0.5)
+
+    p = _planner(d_ctx=d, max_slots=L // span, max_ctx_len=L, seed=0,
+                 d_p=96, n_layers=2, n_heads=4, d_ff=192, cond_dim=32, **kw)
+    p.train()
+    untrained = _planner(d_ctx=d, max_slots=L // span, max_ctx_len=L, seed=17,
+                         d_p=96, n_layers=2, n_heads=4, d_ff=192, cond_dim=32, **kw)
+
+    sch = build_schedule()
+    opt = torch.optim.AdamW(p.parameters(), lr=3e-3, weight_decay=0.0)
+    for _ in range(steps):
+        h, geom, y = _toy_batch(B, L, d, span, a_mat, gen)
+        loss, _ = fm_loss(p, h, geom, sch, generator=gen, y=y)
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(p.parameters(), 1.0)
+        opt.step()
+
+    p.eval()
+    held = torch.Generator().manual_seed(9999)
+    h, geom, y = _toy_batch(B, L, d, span, a_mat, held)
+    z = generate_plans(p, h, geom, sch, n_steps=6,
+                       generator=torch.Generator().manual_seed(3))
+    z0 = generate_plans(untrained, h, geom, sch, n_steps=6,
+                        generator=torch.Generator().manual_seed(3))
+    zs = generate_plans(p, h.roll(1, dims=0), geom, sch, n_steps=6,
+                        generator=torch.Generator().manual_seed(3))
+
+    trained = retrieval_scores(z, y, geom.valid)
+    control = retrieval_scores(z0, y, geom.valid)
+    shuffled = retrieval_scores(zs, y, geom.valid)
+    chance = trained["chance"]
+
+    assert trained["top1"] > 0.9, (
+        f"cfm pipeline cannot pass signal: top1={trained['top1']:.3f} "
+        f"(chance={chance:.4f})")
+    assert control["top1"] < 5 * chance, \
+        f"untrained cfm control is not at chance: {control['top1']:.3f}"
+    assert shuffled["top1"] < 0.5 * trained["top1"], \
+        f"shuffled cfm context scored {shuffled['top1']:.3f}"
+
+
+def test_edm_path_is_untouched_by_the_p1c_defaults():
+    """`objective` defaults to edm and the default planner is the P1 planner exactly."""
+    c = FMPlannerConfig(d_ctx=64, max_slots=8, max_ctx_len=32)
+    assert c.objective == "edm" and c.d_target == 64
+    ids = _ids_with_boundaries_at([7, 15, 23], length=32)
+    geom = segment_rows(ids, _rule(), max_slots=8)
+    torch.manual_seed(53)
+    h = torch.randn(1, 32, 64)
+    p = _wake_up(_planner(d_ctx=64, max_slots=8, max_ctx_len=32))
+    sch = build_schedule()
+    # loss_scale defaults to 1.0 => byte-identical to the P1 call signature
+    a, _ = fm_loss(p, h, geom, sch, generator=torch.Generator().manual_seed(1))
+    b, _ = fm_loss(p, h, geom, sch, generator=torch.Generator().manual_seed(1),
+                   loss_scale=1.0)
+    assert torch.equal(a, b)

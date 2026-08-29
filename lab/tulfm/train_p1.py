@@ -34,11 +34,15 @@ from omegaconf import DictConfig, OmegaConf
 from lab.tulfm.fm_planner import (
     FMPlanner,
     FMPlannerConfig,
-    band_edges,
+    TargetWhitener,
+    analytic_null_floor,
+    band_edges_for,
     build_schedule,
     effective_rank,
+    fit_whitener,
     fm_loss,
     generate_plans,
+    make_targets,
     mean_pairwise_cos,
     pool_targets,
     segment_rows,
@@ -49,7 +53,8 @@ from morph.training.data import create_dataloader
 from morph.training.train import build_morph_config, load_weights_only
 from morph.training.tul_setup import build_boundary_rule
 
-__all__ = ["build_backbone", "make_loader", "compose_backbone_cfg", "main"]
+__all__ = ["build_backbone", "make_loader", "compose_backbone_cfg",
+           "calibrate_whitener", "resolve_loss_scale", "main"]
 
 
 # ── backbone ─────────────────────────────────────────────────────────────────
@@ -148,6 +153,63 @@ def make_loader(bcfg: DictConfig, seq_len: int, batch_size: int, skip_samples: i
 
 # ── schedule ─────────────────────────────────────────────────────────────────
 
+def calibrate_whitener(backbone: MORPHTransformer, loader, rule, max_slots: int,
+                       device: torch.device, apply_input_norm: bool,
+                       rank: int, calib_batches: int) -> TargetWhitener:
+    """Run ``calib_batches`` through the FROZEN backbone and fit the target whitener.
+
+    Uses the TRAIN loader's stream, so calibration and training see the same document
+    distribution and the held-out probe stream is untouched. The backbone is frozen, so
+    the fitted basis is a constant of (checkpoint, span rule, this many documents) — it
+    is stored in the planner checkpoint and the probe rebuilds it exactly rather than
+    re-fitting on its own batches.
+    """
+    rows = []
+    for _ in range(int(calib_batches)):
+        ids = next(loader)[0].to(device)
+        geom = segment_rows(ids, rule, max_slots)
+        if int(geom.valid.sum()) < 2:
+            continue
+        with torch.no_grad():
+            h = backbone.prelude_states(ids, apply_input_norm=apply_input_norm).float()
+            rows.append(pool_targets(h, geom)[geom.valid].cpu())
+    if not rows:
+        raise RuntimeError("whitener calibration collected no valid slots")
+    y = torch.cat(rows, dim=0)
+    wh = fit_whitener(y, rank)
+    m = wh.manifest()
+    print(f"[whiten] rank {wh.rank} of {wh.d_in} from {wh.calib_slots} slots: "
+          f"explained_var {m['whiten/explained_var']:.4f} "
+          f"scale {m['whiten/scale_min']:.4e}..{m['whiten/scale_max']:.4e} "
+          f"(condition {m['whiten/condition']:.1f}) mu_norm {m['whiten/mu_norm']:.4f}")
+    return wh.to(device)
+
+
+def resolve_loss_scale(mode: str, pcfg: FMPlannerConfig, schedule,
+                       whitener: TargetWhitener | None) -> tuple[float, float]:
+    """``(loss_scale, e_y_sq)`` for ``training.loss_scale`` in ``{auto, none}``.
+
+    WHY. Both P1 runs sat on ``grad_clip = 1.0`` with a gradient norm around 150 at every
+    single step, because the loss is O(500-1000) by construction (its null floor is
+    ``~d``). ``auto`` divides the loss by the ANALYTIC mean null floor
+    (:func:`analytic_null_floor`), so the objective starts at ~1.0 and the clip threshold
+    means what it says.
+
+    Be precise about what this does and does not change. Adam is invariant to a CONSTANT
+    rescale of the loss, and decoupled weight decay does not see the loss at all, so the
+    argmin is untouched (gated by a test). What it changes is clipping: a clip that fires
+    every step applies a per-step-VARYING rescale ``1/‖g‖`` to the gradients that feed
+    Adam's second-moment estimate, which is not a constant and therefore is not neutral.
+    ``auto`` removes that hidden rescale. It is normalisation, not tuning.
+    """
+    e_y_sq = float(whitener.rank) if whitener is not None else 1.0
+    if str(mode) == "none":
+        return 1.0, e_y_sq
+    if str(mode) != "auto":
+        raise ValueError(f"training.loss_scale must be 'auto' or 'none', got {mode!r}")
+    return analytic_null_floor(pcfg, schedule, e_y_sq), e_y_sq
+
+
 def lr_at(step: int, total: int, base_lr: float, warmup: int, min_frac: float) -> float:
     """Linear warmup → cosine decay to ``min_frac * base_lr``."""
     if warmup > 0 and step < warmup:
@@ -164,7 +226,9 @@ def lr_at(step: int, total: int, base_lr: float, warmup: int, min_frac: float) -
 @torch.no_grad()
 def evaluate(planner: FMPlanner, backbone: MORPHTransformer, loader, rule, cfg: DictConfig,
              schedule, edges, max_slots: int, device: torch.device,
-             n_batches: int, generator: torch.Generator) -> dict:
+             n_batches: int, generator: torch.Generator,
+             whitener: TargetWhitener | None = None,
+             loss_scale: float = 1.0) -> dict:
     """Held-out FM loss, per-band loss, retrieval top-1, and the target effective rank.
 
     Retrieval runs at EVERY eval, not only at the end — the arc note names target gaming
@@ -182,9 +246,9 @@ def evaluate(planner: FMPlanner, backbone: MORPHTransformer, loader, rule, cfg: 
             continue
         h = backbone.prelude_states(
             ids, apply_input_norm=bool(cfg.backbone.apply_input_norm)).float()
-        y = pool_targets(h, geom)
+        y, y_raw = make_targets(h, geom, whitener)
         loss, stats = fm_loss(planner, h, geom, schedule, generator=generator,
-                              edges=edges, y=y)
+                              edges=edges, y=y, loss_scale=loss_scale)
         z = generate_plans(planner, h, geom, schedule,
                            n_steps=int(cfg.sigma.infer_steps), generator=generator)
         r = retrieval_scores(z, y, geom.valid)
@@ -202,8 +266,11 @@ def evaluate(planner: FMPlanner, backbone: MORPHTransformer, loader, rule, cfg: 
             if k.startswith("band"):
                 bands.setdefault(k, []).append(v)
         n += 1
-        last_rank = effective_rank(y, geom.valid)
-        last_cos = mean_pairwise_cos(y, geom.valid)
+        # Collapse guards on the RAW targets always: whitened targets have effective
+        # rank ~= rank and pairwise cosine ~= 0 by construction, so reading the guard in
+        # the whitened space would report health the whitener manufactured.
+        last_rank = effective_rank(y_raw, geom.valid)
+        last_cos = mean_pairwise_cos(y_raw, geom.valid)
 
     planner.train()
     if n == 0:
@@ -252,12 +319,35 @@ def main(cfg: DictConfig) -> None:
           f"seq_len={seq_len} max_slots={max_slots} "
           f"rule(min_span={rule.min_span}, span_cap={rule.span_cap}, |B|={int(lut.sum())})")
 
+    # ── data (built BEFORE the planner: whitener calibration needs the stream) ──
+    batch_size = int(cfg.data.batch_size)
+    train_loader = make_loader(bcfg, seq_len, batch_size)
+    val_loader = make_loader(bcfg, seq_len, batch_size,
+                             skip_samples=int(cfg.data.val_skip_samples))
+
+    # ── target whitening (P1c) ───────────────────────────────────────────
+    # Calibration draws from the TRAIN stream, so the held-out probe stream is untouched
+    # and training simply starts a few documents further along.
+    wcfg = cfg.target.whiten
+    whitener = None
+    if bool(wcfg.enabled):
+        whitener = calibrate_whitener(
+            backbone, train_loader, rule, max_slots, device,
+            bool(cfg.backbone.apply_input_norm), int(wcfg.rank), int(wcfg.calib_batches))
+    d_target = whitener.rank if whitener is not None else d_ctx
+
     # ── planner ──────────────────────────────────────────────────────────
+    objective = str(cfg.objective)
     pcfg = FMPlannerConfig(
-        d_ctx=d_ctx, d_p=int(cfg.planner.d_p), n_layers=int(cfg.planner.n_layers),
+        objective=objective,
+        d_ctx=d_ctx, d_target=d_target,
+        d_p=int(cfg.planner.d_p), n_layers=int(cfg.planner.n_layers),
         n_heads=int(cfg.planner.n_heads), d_ff=int(cfg.planner.d_ff),
         cond_dim=int(cfg.planner.cond_dim), max_slots=max_slots, max_ctx_len=seq_len,
-        sigma_data=float(cfg.sigma.sigma_data), dropout=float(cfg.planner.dropout),
+        sigma_data=float(cfg.sigma.sigma_data),
+        source_std=float(cfg.cfm.source_std),
+        t_embed_scale=float(cfg.cfm.t_embed_scale),
+        dropout=float(cfg.planner.dropout),
     )
     planner = FMPlanner(pcfg).to(device)
     n_p = planner.n_params()
@@ -267,7 +357,8 @@ def main(cfg: DictConfig) -> None:
             f"planner has {n_p/1e6:.2f}M params, outside the declared P1 band "
             f"[{lo/1e6:.1f}, {hi/1e6:.1f}]M. Either the dims changed or the band did; "
             f"say which in the config rather than letting the size drift.")
-    print(f"[p1] planner: {n_p/1e6:.2f}M params (d_p={pcfg.d_p} x{pcfg.n_layers} layers)")
+    print(f"[p1] objective={objective} planner: {n_p/1e6:.2f}M params "
+          f"(d_p={pcfg.d_p} x{pcfg.n_layers} layers, target space R^{d_target})")
 
     # ── the freeze, proven against the optimizer's own parameter set ─────
     backbone_ids = {id(p) for p in backbone.parameters()}
@@ -279,10 +370,11 @@ def main(cfg: DictConfig) -> None:
                             betas=tuple(float(b) for b in tr.betas),
                             weight_decay=float(tr.weight_decay))
 
-    # ── σ machinery ──────────────────────────────────────────────────────
+    # ── σ / t machinery ──────────────────────────────────────────────────
     schedule = build_schedule(float(cfg.sigma.p_mean), float(cfg.sigma.p_std),
                               float(cfg.sigma.sigma_data))
-    edges = band_edges(schedule, int(cfg.sigma.n_bands)).to(device)
+    edges = band_edges_for(objective, schedule, int(cfg.sigma.n_bands)).to(device)
+    loss_scale, e_y_sq = resolve_loss_scale(str(tr.loss_scale), pcfg, schedule, whitener)
     sigma_manifest = {
         "sigma/band_edges_ascending": [float(x) for x in edges.tolist()],
         "sigma/inference_ladder_descending":
@@ -290,9 +382,20 @@ def main(cfg: DictConfig) -> None:
         **{k: v for k, v in schedule.manifest().items()
            if k.split("/")[-1] in ("sigma_min", "sigma_max", "p_mean", "p_std",
                                    "sigma_data", "overlap_gamma", "n_blocks")},
+        "loss_scale/mode": str(tr.loss_scale),
+        "loss_scale/value": loss_scale,
+        "loss_scale/e_y_sq": e_y_sq,
+        "loss_scale/analytic_null": analytic_null_floor(pcfg, schedule, e_y_sq),
+        "objective": objective,
+        "cfm/source_std": pcfg.source_std,
+        "cfm/t_embed_scale": pcfg.t_embed_scale,
+        "d_target": d_target,
+        **(whitener.manifest() if whitener is not None else {"whiten/rank": 0}),
     }
-    print(f"[p1] sigma bands (ascending): "
+    print(f"[p1] bands (ascending, {'t' if objective == 'cfm' else 'sigma'}): "
           f"{[round(float(x), 4) for x in edges.tolist()]}")
+    print(f"[p1] loss_scale={str(tr.loss_scale)} -> {loss_scale:.4f} "
+          f"(analytic null floor; E||y||^2 = {e_y_sq:.4f}, d_target = {d_target})")
 
     # ── wandb: the FULL resolved config, both halves, plus every derived number ──
     full_cfg = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False)
@@ -321,11 +424,6 @@ def main(cfg: DictConfig) -> None:
         settings=wandb.Settings(_service_wait=60),
     )
 
-    # ── data ─────────────────────────────────────────────────────────────
-    batch_size = int(cfg.data.batch_size)
-    train_loader = make_loader(bcfg, seq_len, batch_size)
-    val_loader = make_loader(bcfg, seq_len, batch_size,
-                             skip_samples=int(cfg.data.val_skip_samples))
     gen = torch.Generator(device=device).manual_seed(int(tr.seed))
 
     ckpt_dir = str(tr.ckpt_dir)
@@ -343,6 +441,10 @@ def main(cfg: DictConfig) -> None:
             "backbone_cfg": OmegaConf.to_container(bcfg, resolve=True,
                                                    throw_on_missing=False),
             "sigma_manifest": sigma_manifest,
+            # The whitener is part of the model contract, not a preprocessing detail:
+            # without it the probe cannot map a plan back into the space it was trained
+            # in, and a re-fit on the probe's own batches would be a DIFFERENT basis.
+            "whitener": whitener.state_dict() if whitener is not None else None,
         }, path)
         print(f"[p1] saved planner-only checkpoint {path}")
         return path
@@ -368,12 +470,14 @@ def main(cfg: DictConfig) -> None:
                     ids, apply_input_norm=bool(cfg.backbone.apply_input_norm))
         h = h.float()
 
+        y, _y_raw = make_targets(h, geom, whitener)
         if use_amp:
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 loss, stats = fm_loss(planner, h, geom, schedule, generator=gen,
-                                      edges=edges)
+                                      edges=edges, y=y, loss_scale=loss_scale)
         else:
-            loss, stats = fm_loss(planner, h, geom, schedule, generator=gen, edges=edges)
+            loss, stats = fm_loss(planner, h, geom, schedule, generator=gen, edges=edges,
+                                  y=y, loss_scale=loss_scale)
 
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -383,7 +487,10 @@ def main(cfg: DictConfig) -> None:
         if step % int(tr.log_every) == 0:
             rec = {
                 "step": step,
-                "train/fm_loss": float(loss.item()),
+                # fm_loss is the UNSCALED objective, so the curve is directly
+                # comparable to P1/P1b; fm_loss_scaled is what the optimizer sees.
+                "train/fm_loss": stats["loss_unscaled"],
+                "train/fm_loss_scaled": float(loss.item()),
                 "train/grad_norm": float(gnorm),
                 "train/lr": opt.param_groups[0]["lr"],
                 "slots/n_valid": stats["n_valid"],
@@ -391,9 +498,11 @@ def main(cfg: DictConfig) -> None:
                 "slots/n_dropped_budget": geom.n_dropped_budget,
                 "train/sq_mean": stats["sq_mean"],
                 "train/y_norm_mean": stats["y_norm_mean"],
-                "train/sigma_mean": stats["sigma_mean"],
+                **({"train/sigma_mean": stats["sigma_mean"]} if "sigma_mean" in stats
+                   else {"train/t_mean": stats["t_mean"]}),
                 "train/null_loss": stats["null_loss"],
                 "train/rel_loss": stats["rel_loss"],
+                "train/y_sq_mean": stats["y_sq_mean"],
                 "perf/steps_per_s": (step + 1) / max(time.perf_counter() - t0, 1e-9),
             }
             for k, v in stats.items():
@@ -406,7 +515,8 @@ def main(cfg: DictConfig) -> None:
 
         if int(tr.eval_every) > 0 and step > 0 and step % int(tr.eval_every) == 0:
             ev = evaluate(planner, backbone, val_loader, rule, cfg, schedule, edges,
-                          max_slots, device, int(tr.n_eval_batches), gen)
+                          max_slots, device, int(tr.n_eval_batches), gen,
+                          whitener=whitener, loss_scale=loss_scale)
             wandb.log({**ev, "step": step}, step=step)
             print(f"  EVAL {step:>6}  fm {ev['val/fm_loss']:.4f} "
                   f"(rel {ev['val/rel_loss']:.4f})  "
@@ -420,7 +530,8 @@ def main(cfg: DictConfig) -> None:
             _save(step)
 
     ev = evaluate(planner, backbone, val_loader, rule, cfg, schedule, edges, max_slots,
-                  device, int(tr.n_eval_batches), gen)
+                  device, int(tr.n_eval_batches), gen, whitener=whitener,
+                  loss_scale=loss_scale)
     wandb.log({**ev, "step": total}, step=total)
     _save(total)
     print(f"[p1] done: {total} steps in {(time.perf_counter()-t0)/60:.1f} min; "

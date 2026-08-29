@@ -1,0 +1,32 @@
+# TUL-FM P1c arm 3 — TRUE conditional flow matching on WHITENED targets.
+#
+# Both changes at once, on purpose: it is the cell that tells you whether the objective
+# and the geometry interact, which arms 1 and 2 cannot. Read it against arm 1 (geometry
+# alone) and arm 2 (objective alone) — three cells of a 2x2 whose fourth cell is P1b.
+#
+# source_std 1.0 is the matched source for whitened targets, whose components have unit
+# variance by construction. It is the same matching rule arm 2 applies at 1/sqrt(d).
+#
+# Run: PYTHONPATH=$PWD python -m lab.tulfm.train_p1 --config-name tulfm_p1c_cfm_white
+defaults:
+  - tulfm_p1
+  - _self_
+
+objective: cfm
+
+cfm:
+  source_std: 1.0
+  t_embed_scale: 1.0
+
+target:
+  whiten:
+    enabled: true
+    rank: 64
+    calib_batches: 6
+
+training:
+  loss_scale: auto
+  ckpt_dir: checkpoints/tulfm/p1c_cfm_white
+
+wandb:
+  name: tulfm-p1c-cfm-white

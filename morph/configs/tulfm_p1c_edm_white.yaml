@@ -1,0 +1,36 @@
+# TUL-FM P1c arm 1 — EDM objective on WHITENED targets.
+#
+# ONE variable vs P1b: the target geometry. P1b kept the raw unit-L2 pooled states
+# (effective rank ~25 of 1024, mean pairwise cosine ~0.61) and rescaled sigma_data to
+# 1/sqrt(d); this arm whitens instead, which is the fix sigma_data cannot be.
+#
+# Why sigma_data: 1.0 is the RIGHT value here and not a knob. After whitening every kept
+# component has unit variance, so E||y||^2 = rank and d_target = rank. The two EDM limits
+# of the preconditioned objective then read:
+#     low sigma  ->  floor = d_target      = rank
+#     high sigma ->  floor = E||y||^2 / sigma_data^2 = rank
+# Same number. The 256x imbalance documented in lab/tulfm/fm_planner.py disappears, and
+# the analytic null floor that loss_scale=auto divides by is ~rank in every band.
+#
+# Run: PYTHONPATH=$PWD python -m lab.tulfm.train_p1 --config-name tulfm_p1c_edm_white
+defaults:
+  - tulfm_p1
+  - _self_
+
+objective: edm
+
+target:
+  whiten:
+    enabled: true
+    rank: 64
+    calib_batches: 6
+
+sigma:
+  sigma_data: 1.0
+
+training:
+  loss_scale: auto
+  ckpt_dir: checkpoints/tulfm/p1c_edm_white
+
+wandb:
+  name: tulfm-p1c-edm-white

@@ -1,0 +1,33 @@
+# TUL-FM P1c arm 2 — TRUE conditional flow matching on RAW unit-L2 targets.
+#
+# ONE variable vs P1b: the objective. Same targets P1b used (raw, unit L2 norm, d = 1024),
+# same backbone, same probe — but x_t = (1-t)*x0 + t*y with a velocity regression instead
+# of EDM preconditioning. This is the arm that isolates "is the DiffusionBlocks-style
+# denoiser the wrong objective for this problem" from "is the target geometry wrong".
+#
+# source_std 0.031 = 1/sqrt(1024) matches the per-component std of a unit-L2 target in
+# 1024 dims. That matching is the point (DeepWeightFlow App. H): a source whose scale is
+# far from the data's makes v = y - x0 dominated by one term and the net learns that term
+# instead of the map. It is the CFM analogue of P1b's sigma_data choice.
+#
+# Run: PYTHONPATH=$PWD python -m lab.tulfm.train_p1 --config-name tulfm_p1c_cfm_raw
+defaults:
+  - tulfm_p1
+  - _self_
+
+objective: cfm
+
+cfm:
+  source_std: 0.03125     # 1/sqrt(1024), the per-component std of a unit-L2 target
+  t_embed_scale: 1.0
+
+target:
+  whiten:
+    enabled: false
+
+training:
+  loss_scale: auto
+  ckpt_dir: checkpoints/tulfm/p1c_cfm_raw
+
+wandb:
+  name: tulfm-p1c-cfm-raw

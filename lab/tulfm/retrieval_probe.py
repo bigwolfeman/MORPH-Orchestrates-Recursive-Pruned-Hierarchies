@@ -54,11 +54,12 @@ from lab.tulfm.fm_planner import (
     FMPlanner,
     FMPlannerConfig,
     SpanGeometry,
+    TargetWhitener,
     build_schedule,
     effective_rank,
     generate_plans,
+    make_targets,
     mean_pairwise_cos,
-    pool_targets,
     segment_rows,
 )
 
@@ -130,14 +131,25 @@ def row_index_of_valid(valid: Tensor) -> Tensor:
 
 def probe_batch(planner: FMPlanner, untrained: FMPlanner, h_ctx: Tensor,
                 geom: SpanGeometry, schedule, n_steps: int,
-                generator: torch.Generator | None = None) -> dict:
+                generator: torch.Generator | None = None,
+                whitener: TargetWhitener | None = None) -> dict:
     """All three conditions plus the collapse guard, on ONE batch.
 
     The same ``generator`` state is NOT reused across conditions on purpose — each
     condition draws its own ladder noise. What IS held fixed is the batch, the geometry
     and the targets, which is what makes the three numbers comparable.
+
+    ``whitener`` sets the space everything is scored in. Cosine in the whitened space is
+    a different metric from cosine in the raw space, so a whitened arm's numbers are
+    internally consistent but not literally the same measurement as a raw arm's. That is
+    why BOTH controls run in the same space as the arm: untrained and shuffled-context
+    move with the metric, so "how far above its own floor is this arm" stays comparable
+    across arms even though the raw cosines are not.
+
+    The collapse guards are always read off the RAW pooled targets, never the whitened
+    ones — whitening manufactures effective rank ``rank`` and pairwise cosine ~0.
     """
-    y = pool_targets(h_ctx, geom)
+    y, y_raw = make_targets(h_ctx, geom, whitener)
     out = {
         "slots": {
             "n_valid": int(geom.valid.sum().item()),
@@ -145,10 +157,14 @@ def probe_batch(planner: FMPlanner, untrained: FMPlanner, h_ctx: Tensor,
             "dropped_frac": float(geom.dropped_fraction),
             "n_dropped_budget": int(geom.n_dropped_budget),
         },
-        "target_effective_rank": effective_rank(y, geom.valid),
-        "target_mean_pairwise_cos": mean_pairwise_cos(y, geom.valid),
+        # RAW-space guards (a constant of the frozen checkpoint, comparable across arms)
+        "target_effective_rank": effective_rank(y_raw, geom.valid),
+        "target_mean_pairwise_cos": mean_pairwise_cos(y_raw, geom.valid),
+        "target_raw_dim": int(y_raw.shape[-1]),
+        # SCORING-space facts (whitened when the arm is whitened)
         "target_dim": int(y.shape[-1]),
         "target_norm_mean": float(y[geom.valid].norm(dim=-1).mean().item()),
+        "whitened": whitener is not None,
     }
 
     rows = row_index_of_valid(geom.valid)
@@ -214,6 +230,12 @@ def run_probe(planner_ckpt: str, n_batches: int, batch_size: int, seq_len: int,
     backbone = build_backbone(cfg, bcfg, device)
     rule, _lut, _eos, _subs = build_boundary_rule(bcfg)
 
+    # The whitener travels WITH the planner. Re-fitting one here on the probe's own
+    # batches would be a different basis, and the plans would be scored against targets
+    # the planner never saw.
+    wsd = blob.get("whitener", None)
+    whitener = TargetWhitener.from_state_dict(wsd).to(device) if wsd else None
+
     pcfg = FMPlannerConfig(**blob["planner_cfg"])
     planner = FMPlanner(pcfg).to(device)
     planner.load_state_dict(blob["planner"])
@@ -236,7 +258,8 @@ def run_probe(planner_ckpt: str, n_batches: int, batch_size: int, seq_len: int,
             h = backbone.prelude_states(
                 ids, apply_input_norm=bool(cfg.backbone.apply_input_norm)).float()
         per_batch.append(probe_batch(planner, untrained, h, geom, schedule,
-                                     int(cfg.sigma.infer_steps), generator=gen))
+                                     int(cfg.sigma.infer_steps), generator=gen,
+                                     whitener=whitener))
 
     summary = {
         "planner_ckpt": planner_ckpt,
@@ -247,9 +270,13 @@ def run_probe(planner_ckpt: str, n_batches: int, batch_size: int, seq_len: int,
         "seq_len": seq_len,
         "seed": seed,
         "planner_cfg": asdict(pcfg),
+        "objective": pcfg.objective,
+        "whitened": whitener is not None,
+        "whiten_rank": whitener.rank if whitener is not None else 0,
         "infer_steps": int(cfg.sigma.infer_steps),
         "target_effective_rank": _mean_of(per_batch, ("target_effective_rank",)),
         "target_mean_pairwise_cos": _mean_of(per_batch, ("target_mean_pairwise_cos",)),
+        "target_dim_scored": per_batch[0]["target_dim"],
         "chance": _mean_of(per_batch, ("trained", "chance")),
         "dropped_frac": _mean_of(per_batch, ("slots", "dropped_frac")),
     }
@@ -282,9 +309,12 @@ def main() -> None:
 
     s = run_probe(a.planner, a.batches, a.batch_size, a.seq_len, a.seed, a.device,
                   a.out, backbone_ckpt=a.backbone)
-    print(f"\n  chance(batch-wide)={s['chance']:.4f}  "
-          f"target_eff_rank={s['target_effective_rank']:.2f} / {s['planner_cfg']['d_ctx']}  "
-          f"target_pairwise_cos={s['target_mean_pairwise_cos']:.4f}")
+    print(f"\n  objective={s['objective']}  whitened={s['whitened']}"
+          f"(rank {s['whiten_rank']})  scored in R^{s['target_dim_scored']}")
+    print(f"  chance(batch-wide)={s['chance']:.4f}  "
+          f"RAW target_eff_rank={s['target_effective_rank']:.2f} "
+          f"/ {s['planner_cfg']['d_ctx']}  "
+          f"RAW target_pairwise_cos={s['target_mean_pairwise_cos']:.4f}")
     print(f"  {'condition':<26} {'N':>7} {'chance':>8} {'top1':>8} {'top5':>8} "
           f"{'mrr':>8} {'med rank':>9}")
     for cond in ("trained", "untrained", "shuffled_ctx",

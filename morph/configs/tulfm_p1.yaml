@@ -11,6 +11,40 @@
 # those values can live and the planner can never disagree with the checkpoint it is
 # reading features out of.
 
+# ── the objective (P1c) ──────────────────────────────────────────────────────
+# edm — the DiffusionBlocks-style preconditioned denoiser that P1 and P1b ran.
+# cfm — TRUE conditional flow matching: x_t = (1-t)*x0 + t*y, regress v = y - x0.
+#       No preconditioning at all. Same body, same masks, same targets, same probe.
+objective: edm
+
+cfm:
+  # Std of the CFM source x0 ~ N(0, source_std^2 I), in TARGET space. LOAD-BEARING:
+  # DeepWeightFlow App. H found the source variance decides whether a low-capacity
+  # velocity net learns anything, because it sets the scale of v = y - x0. Match it to
+  # the target's per-component std — 1/sqrt(d) = 0.031 for raw unit-L2 targets at
+  # d = 1024, and 1.0 for whitened targets (unit variance per component by construction).
+  source_std: 1.0
+  # Multiplier on t before the audited SigmaConditioning basis. 1.0 is the literal spec.
+  # See lab/tulfm/fm_planner.py FMPlannerConfig for what that basis does with raw t.
+  t_embed_scale: 1.0
+
+# ── target geometry (P1c) ────────────────────────────────────────────────────
+target:
+  whiten:
+    # P1/P1b measured the frozen pooled targets at effective rank ~25 in 1024 dims with
+    # mean pairwise cosine ~0.61, and the band-0 subspace diagnostic showed the planner
+    # spending its capacity on the ~999 dead directions (live-subspace rel 1.018 vs
+    # dead-subspace 0.717). sigma_data is one scalar and cannot fix a geometry.
+    # enabled=true mean-centres, projects onto the top-`rank` PCA basis and standardises
+    # each component, so the planner works natively in R^rank with unit per-component
+    # variance. The probe then scores cosine in that space; both controls move with it,
+    # so cross-arm comparison stays fair.
+    enabled: false
+    rank: 64
+    # Batches drawn from the TRAIN stream to fit (mu, basis, scales). 6 x batch 8 x ~53
+    # slots ~= 2500 rows, comfortably more than rank.
+    calib_batches: 6
+
 backbone:
   # Hydra config name (in this directory) describing the FROZEN model's architecture.
   # It also supplies data.tokenizer, data.dataset and the whole `tul:` span rule.
@@ -49,6 +83,9 @@ sigma:
   p_std: 1.2
   # 0.5 — our own DB oracle sweep picked it independently of the paper. Note the
   # documented tension with unit-norm targets in lab/tulfm/fm_planner.py's docstring.
+  # P1 ran 0.5 (failed), P1b ran 1/sqrt(1024) = 0.03125 (2.1x chance, under gate).
+  # With target.whiten.enabled=true, 1.0 is EXACTLY right per component and the two EDM
+  # limits balance at `rank` — that is what tulfm_p1c_edm_white.yaml sets.
   sigma_data: 0.5
   # Equi-probability bands for the per-band loss curves. The HIGH bands are the real
   # prediction regime; the low bands are the autoencoding regime. Both go to wandb.
@@ -76,6 +113,15 @@ training:
   warmup: 200
   min_lr_frac: 0.1
   seed: 0
+  # auto — divide the loss by the ANALYTIC mean null floor for the active objective, so
+  # the objective starts near 1.0 and grad_clip=1.0 means what it says. Both P1 runs sat
+  # on the clip at |g| ~ 150 every single step because the loss is O(500-1000) by
+  # construction. Adam is invariant to a constant loss rescale and decoupled weight decay
+  # never sees the loss, so the argmin is untouched (gated by a test); what this removes
+  # is the per-step-VARYING 1/||g|| rescale that constant clipping was feeding into
+  # Adam's second moment. Formula: lab/tulfm/fm_planner.py::analytic_null_floor.
+  # NOTE FOR REPRODUCTION: P1 and P1b ran before this key existed, i.e. loss_scale=none.
+  loss_scale: auto
   log_every: 20
   eval_every: 500
   n_eval_batches: 8
