@@ -165,9 +165,13 @@ def test_forward_coda_token_cut_zero_is_bit_identical_to_the_pre_cw_branch():
 
 def test_forward_coda_token_cut_positive_drops_only_early_tokens():
     """arm CW1 through the ordinary forward: n_targets after the cut must equal the
-    number of (slot emit labels) + (token labels with row index >= cut), and must be
-    strictly fewer real targets than the uncut pass (proves something was actually
-    removed, not a no-op gather)."""
+    number of token labels with row index >= cut — token positions ONLY, per the spec's
+    scoring rule ("Score CE on the kept token positions only"), which the eval screen
+    (tul_forward_cw_arms) always applied. Until 2026-08-28 the TRAINING path leaked the
+    slot emit labels into the gathered plain CE at weight 1.0 (this test used to assert
+    that as n_emit + n_tok_late); the mask in _forward_tul's gather branch now pins
+    training to the screen's contract. Must still be strictly fewer real targets than
+    the uncut pass (proves something was actually removed, not a no-op gather)."""
     x, y, layout, _ = _batch(_spec(), B=1)
     cut = 10
     m0 = _model(TULConfig(prefix_k=2, slot_id=4, coda_token_cut=0))
@@ -180,9 +184,11 @@ def test_forward_coda_token_cut_positive_drops_only_early_tokens():
     pos = torch.arange(layout.l_total).unsqueeze(0)
     early_tok = (~layout.slot_mask) & (pos < cut)
     assert early_tok.sum() > 0, "fixture must have early tokens for this test to bite"
-    n_emit = int(layout.slot_valid.sum())
-    n_tok_late = int(((~layout.slot_mask) & (pos >= cut)).sum())
-    assert int(oC["n_targets"]) == n_emit + n_tok_late
+    n_tok_late = int(((~layout.slot_mask) & (pos >= cut) & (y != -100)).sum())
+    n_slot_labels = int((layout.slot_mask & (y != -100)).sum())
+    assert n_slot_labels > 0, "fixture must carry slot emit labels for this test to bite"
+    assert int(oC["n_targets"]) == n_tok_late
+    assert int(oC["n_targets"]) < int(o0["n_targets"])
 
 
 def test_coda_sees_slots_false_with_zero_cut_is_unchanged_a4():

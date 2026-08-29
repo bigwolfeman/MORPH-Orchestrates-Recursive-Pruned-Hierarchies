@@ -2398,8 +2398,19 @@ class MORPHTransformer(nn.Module):
                     "raises rather than silently building an unrestricted or mis-masked "
                     "coda pass.")
             drop_mask = self._tul_coda_drop_mask(layout, tc)
+            # CW keeps slots in the gathered sequence, and _tul_coda_gather scores a
+            # PLAIN CE (layout=None) over everything it keeps — so the slot emit labels
+            # (label = next span's first token) must be masked here or CW training
+            # silently reinstates the emit loss at weight 1.0 and double-counts every
+            # span's first token. The eval screen (tul_forward_cw_arms) already scores
+            # token positions only; this makes training match it. A no-op for arm A4,
+            # whose drop_mask removes the slot positions themselves.
+            labels_g = labels
+            if labels is not None and tc.coda_sees_slots:
+                labels_g = torch.where(layout.slot_mask,
+                                       torch.full_like(labels, -100), labels)
             xh, groups, coda_positions = self._tul_coda_gather(
-                x_coda, x0, bigram_emb, keep, labels, layout, drop_mask)
+                x_coda, x0, bigram_emb, keep, labels_g, layout, drop_mask)
         if plan_nats and labels is not None:
             # §7.2: CE over the same tokens with the slots removed from the coda sequence.
             # Reported MINUS the normal token CE; a positive value is the plan actually
