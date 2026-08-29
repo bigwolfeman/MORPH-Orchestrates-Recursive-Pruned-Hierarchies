@@ -11,6 +11,7 @@ Top-level navigation for project documentation.
 - [SCSE — Source-Centered State Evolution port specification](scse-spec.md)
 - [TUL Gate — span-length and halting gates](tul-gate-spec.md) — BUILT 2026-08-22; §13 lists what building it changed in the spec
 - [TUL-FM probing doctrine (flow-matching arc: instruments, controls, phase gates)](tul-fm-probing.md) — PROPOSED 2026-08-28; arc note in `.agents/notes/proposed/architecture/`
+- [The Gist-Slot Recipe — the code that made slot content load-bearing](gist-mux-recipe.md) — LIVE 2026-08-29; literate record of GL1b (mask + gradient write + MUX target), the arm that inverted the mask's price
 - [Known-good runs and environment assumptions](../.agents/notes/implemented/process/2026-07-03-known-good-runs.md)
 - [Data placement design spec](../.agents/notes/implemented/architecture/2026-07-03-data-placement-design.md)
 - [MORPH / Olympiad-AI interop contract](olympiad-interop.md)
