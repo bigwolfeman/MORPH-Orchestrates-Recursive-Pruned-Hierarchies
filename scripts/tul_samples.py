@@ -146,10 +146,11 @@ def slot_invariance_check(model, tul_rt, tokenizer, seq_len, n_tokens, device, w
     import dataclasses
     wide_spec = dataclasses.replace(base, max_slots=wide)
     ids = tokenizer(PROMPTS[0], add_special_tokens=False)["input_ids"]
+    src = emit_source_for(tul_rt)
     a, _ = generate_tul(model, ids, rule, base, max_new_tokens=n_tokens,
-                        temperature=0.0, top_k=0, seed=0, device=device)
+                        temperature=0.0, top_k=0, seed=0, device=device, emit_source=src)
     b, _ = generate_tul(model, ids, rule, wide_spec, max_new_tokens=n_tokens,
-                        temperature=0.0, top_k=0, seed=0, device=device)
+                        temperature=0.0, top_k=0, seed=0, device=device, emit_source=src)
     if a != b:
         n = sum(1 for x, y in zip(a, b) if x != y)
         sys.exit(f"SLOT_INVARIANCE_FAIL: max_slots {base.max_slots} vs {wide} changed "
@@ -157,6 +158,15 @@ def slot_invariance_check(model, tul_rt, tokenizer, seq_len, n_tokens, device, w
                  f"{next(i for i, (x, y) in enumerate(zip(a, b)) if x != y)}")
     print(f"    slot-invariance ok: max_slots {base.max_slots} vs {wide}, "
           f"{len(a)} greedy tokens identical")
+
+
+def emit_source_for(tul_rt) -> str:
+    """Read span-first tokens from the position training actually supervised.
+
+    emit_weight == 0 arms (the whole GL line) never train the slot readout; sampling
+    from it is the missing-space-after-period artifact (emit_space_probe.py). The
+    boundary-token position is trained at weight 1 in every arm."""
+    return "token" if float(tul_rt.model_cfg.emit_weight) == 0.0 else "slot"
 
 
 def run_one(model, tul_rt, tokenizer, seq_len, n_tokens, device, halt, seed,
@@ -191,7 +201,8 @@ def run_one(model, tul_rt, tokenizer, seq_len, n_tokens, device, halt, seed,
                     new, builder = generate_tul(model, ids, rule, spec,
                                                 max_new_tokens=n_tokens, temperature=temp,
                                                 top_k=topk, seed=sd, device=device,
-                                                halt=halt)
+                                                halt=halt,
+                                                emit_source=emit_source_for(tul_rt))
                     m = generation_metrics(new, builder, rule, window=n_tokens)
                 m["prompt_index"] = float(pi)
                 m["draw"] = float(ri)

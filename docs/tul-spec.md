@@ -407,6 +407,19 @@ loop:
       emit the first token of the next span from the slot's logits
       span_len = 0
 ```
+**v1 DEVIATION (implemented 2026-08-29) — `emit_source`.** "emit the first token
+of the next span from the slot's logits" is correct ONLY when training put weight
+on the slot emit label. `tul.emit_weight = 0` arms (the whole GL line) never train
+that readout, and sampling from it is the measured missing-space-after-period
+artifact: emit-position space mass 0.47–0.58 vs 0.81 at the boundary-token
+position, ranking the per-arm artifact rate 4/4
+(`lab/divergence/emit_space_probe.py`). Both generators therefore take
+`emit_source ∈ {"slot","token"}`: `"slot"` is this section's text and stays the
+DEFAULT; `"token"` reads the boundary TOKEN's position — the one position
+`pack_tul_row` supervises at weight 1 in every arm — and is selected by the
+sampler and the trainer's gen path whenever `emit_weight == 0`. Slot insertion
+and layouts are identical in both modes.
+
 Train/generation parity: the boundary rule, `min_span`, `span_cap` and the
 run-collapse are the same function at both ends (one implementation,
 `morph/model/tul_layout.py`, called by the loader and by the generator).

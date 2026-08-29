@@ -129,13 +129,28 @@ def generate_tul(
     seed: int | None = None,
     device=None,
     halt: bool = False,
+    emit_source: str = "slot",
 ) -> tuple[list[int], TulRowBuilder]:
     """Generate ``max_new_tokens`` TOKENS (slots are inserted by the rule, not counted).
 
     ``temperature = 0`` → greedy. Returns ``(token_ids, builder)``; the builder carries
     the realised layout so a caller can assert parity against the loader's packer or
     read the span-length distribution (spec §7.2 generation metrics).
+
+    ``emit_source`` decides which position's logits produce a span's FIRST token when
+    the row currently ends with a freshly inserted slot:
+      - ``"slot"``  — the slot's emitting position (spec §6 v1). Correct ONLY when
+        training put weight on the slot emit label (``tul.emit_weight > 0``).
+      - ``"token"`` — the boundary TOKEN's position, the one position that is always
+        trained at weight 1 (``pack_tul_row``: token labels skip slots). Use this for
+        ``emit_weight == 0`` arms: their slot readout is untrained (or MUX-shaped
+        toward the PREVIOUS span), measured as the missing-space-after-period artifact
+        (lab/divergence/emit_space_probe.py — emit-position space mass 0.47–0.58 vs
+        0.81 at the token position on the GL arms).
+    Slot insertion, layouts, and every other part of the procedure are identical.
     """
+    if emit_source not in ("slot", "token"):
+        raise ValueError(f"emit_source must be 'slot' or 'token', got {emit_source!r}")
     was_training = model.training
     model.eval()
     device = device or next(model.parameters()).device
@@ -160,7 +175,11 @@ def generate_tul(
             # the gate asks for a token instead of running the fixed mean depth.
             res = (model.tul_forward_halt(ids, None, layout) if halt
                    else model(ids, slot_layout=layout))
-            logits = res["logits"][0, -1]
+            # Row ends with the K slot positions exactly when the last append cut a
+            # boundary; `emit_source="token"` then reads the last TOKEN position.
+            back = (1 + spec.prefix_k
+                    if emit_source == "token" and builder.slot_mask[-1] else 1)
+            logits = res["logits"][0, -back]
             if "gate_k" in res and builder.n_slots > 0:
                 # The newest slot's plan covers the span we are about to emit (§8). Read
                 # it fresh every step: the whole row is recomputed, so this IS the value
@@ -189,6 +208,7 @@ def generate_tul_batch(
     device=None,
     halt: bool = False,
     pad_id: int = 0,
+    emit_source: str = "slot",
 ) -> tuple[list[list[int]], list[TulRowBuilder]]:
     """`generate_tul` for B rows at once. Returns (new tokens per row, builders).
 
@@ -204,6 +224,8 @@ def generate_tul_batch(
     `tests/test_generation_sampling.py`, because the whole point of this file is that the
     TUL and non-TUL arms are decoded by procedures that differ in nothing but the layout.
     """
+    if emit_source not in ("slot", "token"):
+        raise ValueError(f"emit_source must be 'slot' or 'token', got {emit_source!r}")
     was_training = model.training
     model.eval()
     device = device or next(model.parameters()).device
@@ -247,7 +269,14 @@ def generate_tul_batch(
                                 slot_valid=svalid, prefix_k=spec.prefix_k)
             res = (model.tul_forward_halt(ids, None, layout) if halt
                    else model(ids, slot_layout=layout))
-            last = res["logits"][rows, cur - 1]
+            # Same rule as the single-row generator, applied per row.
+            if emit_source == "token":
+                back = torch.tensor(
+                    [1 + spec.prefix_k if b.slot_mask[-1] else 1 for b in builders],
+                    dtype=torch.long, device=device)
+            else:
+                back = torch.ones(B, dtype=torch.long, device=device)
+            last = res["logits"][rows, cur - back]
             for i, b in enumerate(builders):
                 if "gate_k" in res and b.n_slots > 0:
                     b.budget = int(res["gate_k"][i, b.n_slots - 1])

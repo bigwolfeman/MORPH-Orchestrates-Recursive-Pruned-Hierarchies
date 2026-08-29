@@ -313,7 +313,10 @@ def run_generation_test(
             ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
             new, builder = generate_tul(_m, ids, rule, spec,
                                         max_new_tokens=n_tokens, temperature=0.8,
-                                        top_k=50, seed=step, device=device)
+                                        top_k=50, seed=step, device=device,
+                                        emit_source=("token"
+                                                     if tul_rt.model_cfg.emit_weight == 0.0
+                                                     else "slot"))
             text = tokenizer.decode(ids + new, skip_special_tokens=True)
             mt = generation_metrics(new, builder, rule)
             per.append(mt)

@@ -233,3 +233,73 @@ def test_batched_generators_reject_a_seed_list_of_the_wrong_length():
     with pytest.raises(ValueError, match="one entry per row"):
         generate_plain_batch(_CausalSumModel(), [[1], [2]], max_new_tokens=2,
                              temperature=1.0, seeds=[0], device=torch.device("cpu"))
+
+
+# ── emit_source: where a span's FIRST token is read from ────────────────────────────
+class _PosStub(torch.nn.Module):
+    """Greedy argmax at position l returns (l + 10) % V — the read position, made visible."""
+
+    def __init__(self):
+        super().__init__()
+        self.p = torch.nn.Parameter(torch.zeros(1))
+
+    def forward(self, ids, **kw):
+        B, L = ids.shape
+        z = torch.zeros(B, L, V)
+        pos = (torch.arange(L) + 10) % V
+        z[:, torch.arange(L), pos] = 4.0
+        return {"logits": z}
+
+
+def _boundary_setup():
+    from morph.model.tul_layout import BoundaryRule, TulLayoutSpec
+    lut = np.zeros(V, dtype=bool)
+    lut[9] = True
+    rule = BoundaryRule(is_boundary=lut, min_span=2, span_cap=8, eos_id=0)
+    spec = TulLayoutSpec(seq_len=64, prefix_k=2, max_slots=8, slot_id=4)
+    return rule, spec
+
+
+def test_emit_source_token_reads_the_boundary_token_position():
+    # Prompt [1,2,9] cuts after 9 → row is [1,2,9,slot,slot] (K=2). The slot emit
+    # position is index 4, the boundary TOKEN position is index 2. emit_weight=0 arms
+    # never train index 4 (lab/divergence/emit_space_probe.py: 0.47–0.58 space mass vs
+    # 0.81 at the token position), so "token" must read index 2.
+    from morph.inference.tul_generate import generate_tul
+    rule, spec = _boundary_setup()
+    out_tok, b_tok = generate_tul(_PosStub(), [1, 2, 9], rule, spec, max_new_tokens=2,
+                                  temperature=0.0, top_k=0, device=torch.device("cpu"),
+                                  emit_source="token")
+    out_slot, b_slot = generate_tul(_PosStub(), [1, 2, 9], rule, spec, max_new_tokens=2,
+                                    temperature=0.0, top_k=0, device=torch.device("cpu"),
+                                    emit_source="slot")
+    assert b_tok.n_slots == 1 and b_slot.n_slots == 1, "prompt must have cut one slot"
+    assert out_tok[0] == 12, "token mode: read index 2 (boundary token) → (2+10)%V"
+    assert out_slot[0] == 14, "slot mode (spec §6 v1 default): read index 4 (emit pos)"
+    # Mid-span steps are identical in both modes: next read is the row's last position.
+    assert out_tok[1] == out_slot[1] == 15
+
+
+def test_emit_source_default_is_slot_and_bad_value_raises():
+    from morph.inference.tul_generate import generate_tul
+    rule, spec = _boundary_setup()
+    out_default, _ = generate_tul(_PosStub(), [1, 2, 9], rule, spec, max_new_tokens=1,
+                                  temperature=0.0, top_k=0, device=torch.device("cpu"))
+    assert out_default == [14], "default must stay spec §6 v1 (slot) — no silent change"
+    with pytest.raises(ValueError, match="emit_source"):
+        generate_tul(_PosStub(), [1, 2, 9], rule, spec, max_new_tokens=1,
+                     temperature=0.0, top_k=0, device=torch.device("cpu"),
+                     emit_source="tok")
+
+
+def test_emit_source_token_batch_matches_single():
+    from morph.inference.tul_generate import generate_tul, generate_tul_batch
+    rule, spec = _boundary_setup()
+    prompts = [[1, 2, 9], [1, 2], [5, 6, 9]]
+    batched, _ = generate_tul_batch(_PosStub(), prompts, max_new_tokens=6,
+                                    rule=rule, spec=spec, temperature=0.0, top_k=0,
+                                    device=torch.device("cpu"), emit_source="token")
+    single = [generate_tul(_PosStub(), p, rule, spec, max_new_tokens=6, temperature=0.0,
+                           top_k=0, device=torch.device("cpu"), emit_source="token")[0]
+              for p in prompts]
+    assert batched == single
