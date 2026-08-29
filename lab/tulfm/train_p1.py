@@ -31,7 +31,7 @@ import torch
 import wandb
 from omegaconf import DictConfig, OmegaConf
 
-from lab.tulfm.fm_planner import (
+from morph.model.fm_planner import (
     FMPlanner,
     FMPlannerConfig,
     TargetWhitener,

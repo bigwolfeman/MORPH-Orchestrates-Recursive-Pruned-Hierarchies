@@ -50,7 +50,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from lab.tulfm.fm_planner import (
+from morph.model.fm_planner import (
     FMPlanner,
     FMPlannerConfig,
     SpanGeometry,

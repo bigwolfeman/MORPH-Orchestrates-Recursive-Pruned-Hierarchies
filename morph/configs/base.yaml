@@ -543,6 +543,33 @@ data_runtime:
   prefetch_batches: 4      # 0 = synchronous (bit-exact repro escape hatch)
   shuffle_window_docs: 100000   # tier C only (unused in phase 1)
 
+# ── FM1: the flow-matching planner arm (morph/model/tul_fm.py, arm tul_fm1.yaml) ──
+# enabled: false builds NOTHING — no planner parameter, no loss term, no branch — so
+# every config that does not turn it on is byte-identical to today. The arm requires
+# tul.activate_at != never and model.n_core == 0; both are checked at build.
+fm:
+  enabled: false
+  # planner (target space is the model's d_model; the plan is NOT whitened here —
+  # sigreg shapes the targets instead)
+  d_p: 512
+  n_layers: 4
+  n_heads: 8
+  d_ff: 1408
+  cond_dim: 256
+  objective: cfm         # cfm | edm  (cfm = true conditional flow matching)
+  infer_steps: 6         # Euler steps for plan GENERATION. Fixed constant, no variation.
+  source_std: 1.0        # x0 ~ N(0, source_std^2 I). See the [MISMATCHED] startup line.
+  t_embed_scale: 1.0
+  dropout: 0.0
+  # losses
+  fm_weight: 1.0
+  loss_scale: auto       # divide the fm term by its analytic null floor -> starts ~1.0
+  sigreg_lambda: 0.02    # LeJEPA arXiv 2511.08544, on the POOLED TARGETS
+  sigreg_slices: 1024    # M random directions, resampled every step
+  # 0 -> take the loader's own slot budget (TulDataConfig.spec_for). Leave at 0.
+  max_slots: 0
+  l_total: 0
+
 wandb:
   project: morph
   entity: null   # null → logged-in account default entity; override for a shared team

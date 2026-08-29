@@ -11,6 +11,7 @@ Config determines dimensions and sizes, not whether features exist.
 
 from __future__ import annotations
 
+import math
 import os
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -292,6 +293,13 @@ class MORPHConfig:
     # called with a `slot_layout`. `slot_layout=None` is bit-identical either way
     # (runtime-invariants §6b).
     tul: TULConfig | None = None
+
+    # ── FM1: the flow-matching planner arm (morph/model/tul_fm.py) ────────
+    # None → NO planner is constructed and every path is byte-identical (the `tul`
+    # convention). Set it and the model gains an FMPlanner whose Euler ladder produces
+    # the slot states in place of the core loop. Requires `tul` (FM1 is a TUL arm) and
+    # `n_core == 0` (the core loop is what FM1 removes) — both checked at construction.
+    fm: "FMArmConfig | None" = None
 
     # L1 core-gain governor: cap the per-iteration looped-core
     # amplification ‖h_new‖/‖h_a‖ (per sample) to this ratio τ. The HC residual is
@@ -893,6 +901,16 @@ class MORPHTransformer(nn.Module):
         # byte-identical to arm A1's (docs/tul-gate-spec.md §9 invariant 1).
         _gc = cfg.tul.gate if cfg.tul is not None else None
         self.tul_gate: TULGate | None = TULGate(d, _gc) if _gc is not None else None
+
+        # ── FM1 planner (morph/model/tul_fm.py) ────────────────────────────
+        # Built LAST so a non-FM model's weights are byte-identical to today's: every
+        # parameter drawn below advances the global RNG, so any earlier placement would
+        # change the baseline's own initialisation.
+        self.fm_planner = None
+        self._fm_schedule = None
+        self._fm_loss_scale = 1.0
+        if cfg.fm is not None:
+            self._build_fm(cfg, d)
 
         # ── SCSE Stage 1 loop entry ────────────────────────────────────────
         # Built LAST, for the same reason TULSlots is: `_CloneInit` draws no RNG at all,
@@ -1686,6 +1704,118 @@ class MORPHTransformer(nn.Module):
             x = self.input_norm(x)
         return x
 
+    def _build_fm(self, cfg: "MORPHConfig", d: int) -> None:
+        """Construct the FM1 planner and its σ/t machinery. Called only when ``cfg.fm``.
+
+        Two hard preconditions, both checked rather than assumed:
+
+        * ``cfg.tul`` must be set. FM1 is a TUL arm — it writes into the slot prefix
+          positions through ``W_prefix``, which only exists on a TUL model.
+        * ``cfg.n_core`` must be 0. The planner REPLACES the core loop; leaving a core
+          in place would build two slot-state producers and silently use one.
+        """
+        from morph.model.fm_planner import analytic_null_floor, build_schedule
+        from morph.model.tul_fm import FMArmConfig
+
+        if not isinstance(cfg.fm, FMArmConfig):
+            raise TypeError(f"cfg.fm must be an FMArmConfig, got {type(cfg.fm).__name__}")
+        if cfg.tul is None:
+            raise ValueError(
+                "MORPHConfig(fm=...) requires tul=... — FM1 writes its plans into the "
+                "slot prefix positions through W_prefix, which only a TUL model has.")
+        if cfg.n_core != 0:
+            raise ValueError(
+                f"MORPHConfig(fm=...) requires n_core == 0, got {cfg.n_core}. The FM "
+                "planner REPLACES the core loop; building both would leave two slot-state "
+                "producers in the model and use only one of them.")
+        if cfg.tul.tokens_through_core:
+            raise NotImplementedError(
+                "fm has no defined interaction with arm A2 (tokens_through_core): A2 runs "
+                "the core over every position and FM1 has no core. Raises rather than "
+                "silently picking a behaviour (the tul.gate precedent).")
+        if cfg.tul.sigreg_lambda > 0.0:
+            raise ValueError(
+                "tul.sigreg_lambda regularises the CORE's slot states, which FM1 does not "
+                "have — its slot states are DETACHED plans, so the term would have no "
+                "gradient path at all. Use fm.sigreg_lambda, which regularises the pooled "
+                "TARGETS (morph/model/tul_fm.py::fm_sigreg_loss).")
+
+        from morph.model.fm_planner import FMPlanner
+        fmc = cfg.fm
+        # The slot budget and the padded row length the loader will produce. max_slots
+        # follows TulDataConfig's rule (seq_len // 8 when unset) and l_total adds the
+        # prefix positions; both are upper bounds, and the planner only needs them to
+        # size its slot-index embedding and its position table.
+        fallback_slots = cfg.max_seq_len // 8
+        fallback_l = cfg.max_seq_len + cfg.tul.prefix_k * fallback_slots
+        pcfg = fmc.planner_cfg(d, fallback_slots, fallback_l)
+        self.fm_planner = FMPlanner(pcfg)
+        self._fm_schedule = build_schedule(sigma_data=1.0)
+        self._fm_loss_scale = (
+            analytic_null_floor(pcfg, self._fm_schedule, e_y_sq=1.0)
+            if fmc.loss_scale == "auto" else 1.0)
+
+        # LOUD, because it is the one number most likely to be wrong. The targets are
+        # UNIT L2 in d dims, so their per-component std is 1/sqrt(d); the matched CFM
+        # source scale is therefore 1/sqrt(d), not 1. At source_std = 1 the source carries
+        # d times the variance of the target, so ||v||^2 = ||y||^2 + d*s^2 is ~1 + d
+        # instead of ~2 and the velocity the net must fit is dominated by reconstructing
+        # x0. This is the DeepWeightFlow App. H failure mode and the direct analogue of
+        # P1's sigma_data scar. Printed, not silently corrected: the value is a config key.
+        matched = 1.0 / math.sqrt(d)
+        note = "MATCHED" if abs(fmc.source_std - matched) < 0.25 * matched else "MISMATCHED"
+        print(f"  FM1 planner: {sum(p.numel() for p in self.fm_planner.parameters())/1e6:.1f}M "
+              f"params, objective={fmc.objective} T={fmc.infer_steps} "
+              f"target R^{d} max_slots={pcfg.max_slots} "
+              f"L_total={pcfg.max_ctx_len}", flush=True)
+        print(f"  FM1 loss: fm_weight={fmc.fm_weight} loss_scale={fmc.loss_scale}"
+              f"(-> {self._fm_loss_scale:.4f}) sigreg_lambda={fmc.sigreg_lambda} "
+              f"M={fmc.sigreg_slices}", flush=True)
+        print(f"  FM1 source_std={fmc.source_std} vs matched 1/sqrt(d)={matched:.4f} "
+              f"[{note}] -> E||v||^2 = ||y||^2 + d*s^2 = "
+              f"{1.0 + d * fmc.source_std ** 2:.1f}", flush=True)
+
+    def _tul_fm_core(self, x: Tensor, layout: SlotLayout):
+        """FM1's replacement for :meth:`_tul_core`. Returns ``(xn, h_slots, y, geom)``.
+
+        1. ``xn = input_norm(prelude)`` — the SAME boundary norm the ``n_core == 0`` seed
+           path applies, so the coda sees the carrier it always sees.
+        2. pooled unit-L2 targets ``y`` for every slot's NEXT span, LIVE (not detached):
+           this is SIGReg's gradient path into the backbone.
+        3. plans ``z`` from the Euler ladder under ``no_grad``, then ``detach()``.
+
+        The context handed to the planner is the stream-MEAN of the carrier — the same
+        scale-preserving reduction :meth:`_readout` uses — detached, so the ladder can
+        never backpropagate into the prelude.
+        """
+        from morph.model.fm_planner import generate_plans
+        from morph.model.tul_fm import fm_geometry, fm_span_targets
+
+        pc = self.fm_planner.cfg
+        if layout.max_slots > pc.max_slots or layout.l_total > pc.max_ctx_len:
+            raise ValueError(
+                f"FM planner is sized for max_slots={pc.max_slots}, "
+                f"max_ctx_len={pc.max_ctx_len} but the layout is "
+                f"max_slots={layout.max_slots}, l_total={layout.l_total}. Set "
+                f"fm.max_slots / fm.l_total (morph/training/fm_setup.py passes the "
+                f"loader's exact values), or raise model.max_seq_len.")
+        xn = self.input_norm(x)
+        h_ctx = xn.mean(dim=2) if self._is_hc else xn          # [B, L, C]
+        geom = fm_geometry(layout)
+        y = fm_span_targets(h_ctx, layout, geom)               # LIVE — SIGReg reads this
+
+        with torch.no_grad():
+            z = generate_plans(self.fm_planner, h_ctx.detach().float(), geom,
+                               self._fm_schedule,
+                               n_steps=int(self.cfg.fm.infer_steps))
+        # THE DETACH. Everything downstream of here is in the CE graph; the ladder is not.
+        h_slots = z.detach().to(xn.dtype)                      # [B, S, C]
+        if self._is_hc:
+            # A single-stream signal broadcast into every stream — the same convention
+            # `_front_tail` uses for the initial carrier expansion.
+            h_slots = h_slots.unsqueeze(2).expand(-1, -1, self._n_streams, -1)
+        return xn, h_slots, y, geom, h_ctx
+
     def _clip_applies(self, t: int) -> bool:
         """Does the core-gain governor apply at loop iteration ``t``?
 
@@ -2156,7 +2286,8 @@ class MORPHTransformer(nn.Module):
         return out
 
     def _forward_tul(self, input_ids: Tensor, labels: Tensor | None,
-                     layout: SlotLayout, plan_nats: bool, halt: bool = False) -> dict:
+                     layout: SlotLayout, plan_nats: bool, halt: bool = False,
+                     plan_mode: str = "normal") -> dict:
         """The TUL forward (docs/tul-spec.md §3). One shared position axis."""
         if self.tul is None:
             raise RuntimeError(
@@ -2218,7 +2349,18 @@ class MORPHTransformer(nn.Module):
             # region unchanged; a per-position Poisson depth would change two things at once.
             x_coda = self._core_region(x, x0, bigram_emb, input_ids)
             depths, g_traj, mux_loss, sigreg_loss = None, None, None, None
+            fm_y = fm_geom = fm_ctx = None
+        elif self.fm_planner is not None:
+            # FM1 (morph/model/tul_fm.py). The planner replaces the core loop; the plan
+            # is DETACHED before it reaches W_prefix, so the coda's CE never touches the
+            # ladder and there is no BPTT through an iterated map.
+            xn, h_slots, fm_y, fm_geom, fm_ctx = self._tul_fm_core(x, layout)
+            depths, g_traj, mux_loss, sigreg_loss = None, None, None, None
+            h_slots = self._fm_plan_ablate(h_slots, layout, plan_mode)
+            values, pos = self.tul.prefix_project(h_slots, layout, L)
+            x_coda = scatter_positions(xn, pos, values)
         else:
+            fm_y = fm_geom = fm_ctx = None
             xn, h_slots, depths, g_traj = self._tul_core(x, x0, bigram_emb, layout,
                                                          halt=halt)
             mux_loss = (self._tul_mux_loss(h_slots, input_ids, layout)
@@ -2299,6 +2441,36 @@ class MORPHTransformer(nn.Module):
                 groups["loss_tokens"] = groups["loss"]
                 groups["loss"] = groups["loss"] + self.cfg.tul.gate.lam * _g["loss_gate"]
 
+        if self.fm_planner is not None and groups is not None:
+            # THREE TERMS, THREE GRADIENT PATHS (morph/model/tul_fm.py header table):
+            #   ce     -> backbone + E_slot/E_mask/W_prefix (already in groups["loss"])
+            #   fm     -> the planner ONLY (context detached, target detached)
+            #   sigreg -> the backbone, THROUGH the live pooled targets
+            from morph.model.fm_planner import fm_loss as _fm_loss
+            from morph.model.tul_fm import fm_sigreg_loss as _fm_sigreg
+
+            fmc = self.cfg.fm
+            groups = dict(groups)
+            fm_val, fm_stats = _fm_loss(
+                self.fm_planner, fm_ctx.detach().float(), fm_geom, self._fm_schedule,
+                y=fm_y.detach().float(), loss_scale=self._fm_loss_scale)
+            groups["fm"] = fm_val.detach()
+            groups["fm_rel"] = fm_val.new_tensor(fm_stats["rel_loss"])
+            groups["fm_weighted"] = (fmc.fm_weight * fm_val).detach()
+            total = groups["loss"] + fmc.fm_weight * fm_val
+            if fmc.sigreg_lambda > 0.0:
+                sig = _fm_sigreg(fm_y, fm_geom.valid, fmc.sigreg_slices)
+                groups["fm_sigreg"] = sig.detach()
+                groups["fm_sigreg_weighted"] = (fmc.sigreg_lambda * sig).detach()
+                total = total + fmc.sigreg_lambda * sig
+            # UNDETACHED on purpose (the gate's `loss_tokens` precedent). It is the
+            # token-CE tensor with its graph intact, which is what lets
+            # tests/test_tul_fm1.py assert — with autograd.grad(..., allow_unused=True)
+            # — that NO planner parameter is in the CE graph at all. A detached copy
+            # would make that assertion vacuous. train.py detaches it when logging.
+            groups["loss_tokens_only"] = groups["loss"]
+            groups["loss"] = total
+
         if sigreg_loss is not None and groups is not None:
             groups = dict(groups)
             groups["sigreg"] = sigreg_loss.detach()
@@ -2332,6 +2504,74 @@ class MORPHTransformer(nn.Module):
                 out["gate_k"] = budget_ids
         out["layer_passes"] = self._tul_layer_passes(layout, depths, coda_positions)
         out["n_tokens"] = (~layout.slot_mask).sum()
+        return out
+
+    def _fm_plan_ablate(self, h_slots: Tensor, layout: SlotLayout, mode: str) -> Tensor:
+        """Eval-only plan ablations for ``val/plan_worth_*`` (docs/tul-fm-probing.md §1).
+
+        ``normal`` is the shipped path and returns its input unchanged, so the training
+        forward is bit-identical to a model that has no ablation code at all.
+
+        ``zero`` removes the plan's CONTENT AND the fact that a plan is there; ``shuffle``
+        permutes whole slots WITHIN a row, removing only the correspondence. The doctrine
+        is emphatic that the shuffle COST is the number to report whenever the zero cost
+        is not comfortably positive, because the specificity FRACTION's denominator
+        collapses through zero (the tg3b −55.4 % reading).
+        """
+        if mode == "normal":
+            return h_slots
+        if mode == "zero":
+            return torch.zeros_like(h_slots)
+        if mode != "shuffle":
+            raise ValueError(f"plan_mode must be normal|zero|shuffle, got {mode!r}")
+        B, S = layout.slot_valid.shape
+        # Pads sort last (score 2.0 > any uniform draw), so real slots are permuted
+        # among the real slot POSITIONS only — SlotLayout guarantees pads are last.
+        r = torch.rand(B, S, device=h_slots.device)
+        r = torch.where(layout.slot_valid, r, torch.full_like(r, 2.0))
+        perm = r.argsort(dim=1)
+        idx = perm.reshape(B, S, *([1] * (h_slots.dim() - 2))).expand_as(h_slots)
+        return h_slots.gather(1, idx)
+
+    def tul_fm_forward(self, input_ids: Tensor, labels: Tensor | None,
+                       layout: SlotLayout, plan_mode: str = "normal") -> dict:
+        """Eval-only FM1 entry point with the plan ablated (``normal|zero|shuffle``).
+
+        A separate entry point rather than a forward flag, for the reason
+        :meth:`tul_forward_with_plan_nats` gives: the training path must not carry a
+        branch that decides how much work to do.
+        """
+        if self.fm_planner is None:
+            raise RuntimeError("tul_fm_forward needs a model built with MORPHConfig(fm=...)")
+        return self._forward_single(input_ids, labels, 0, None, layout,
+                                    _plan_mode=plan_mode)
+
+    @torch.no_grad()
+    def fm_eval_probe(self, input_ids: Tensor, layout: SlotLayout) -> dict:
+        """Eval-only FM1 instruments: target geometry and the copy gap.
+
+        Re-runs the prelude rather than plumbing tensors out of the training forward —
+        the training path must not carry eval bookkeeping, and eval is 20 batches.
+
+        ``copy_gap`` is the number P1 was taught by: a zero-parameter baseline that
+        guesses "the next span looks like the current one" scored 0.0678 within-row
+        top-1 while the trained standalone planner scored 0.0516. A retrieval figure
+        that is not reported against that baseline says nothing.
+        """
+        if self.fm_planner is None:
+            raise RuntimeError("fm_eval_probe needs a model built with MORPHConfig(fm=...)")
+        from morph.model.fm_planner import effective_rank, mean_pairwise_cos
+        from morph.model.tul_fm import copy_gap_scores
+
+        x, _x0, _bg = self._tul_front(input_ids, layout)
+        _xn, h_slots, y, geom, _ctx = self._tul_fm_core(x, layout)
+        # Undo the stream broadcast: every stream carries the same plan by construction.
+        z = h_slots[:, :, 0, :] if self._is_hc else h_slots
+        out = copy_gap_scores(z.float(), y.float(), geom.valid)
+        out["target_eff_rank"] = effective_rank(y.float(), geom.valid)
+        out["target_pairwise_cos"] = mean_pairwise_cos(y.float(), geom.valid)
+        out["target_norm_mean"] = float(y[geom.valid].norm(dim=-1).mean())
+        out["fm_slots_valid"] = float(geom.valid.sum())
         return out
 
     def _tul_coda_drop_mask(self, layout: SlotLayout, tc: TULConfig) -> Tensor:
@@ -2544,7 +2784,8 @@ class MORPHTransformer(nn.Module):
                         seq_lens: Tensor | None = None,
                         slot_layout: SlotLayout | None = None,
                         _plan_nats: bool = False,
-                        _halt: bool = False) -> dict:
+                        _halt: bool = False,
+                        _plan_mode: str = "normal") -> dict:
         if slot_layout is not None:
             if bag_size > 0:
                 raise ValueError(
@@ -2552,7 +2793,8 @@ class MORPHTransformer(nn.Module):
                     "TST switch (spec §5), and val/gen always run TUL on with bag_size 0 "
                     "(invariant 6)."
                 )
-            return self._forward_tul(input_ids, labels, slot_layout, _plan_nats, halt=_halt)
+            return self._forward_tul(input_ids, labels, slot_layout, _plan_nats,
+                                     halt=_halt, plan_mode=_plan_mode)
         if self._tg_restrict:
             # docs/tul-tg-spec.md builds the restriction as a per-forward DATA argument
             # derived from the layout — there is no defined "unrestricted" fallback for

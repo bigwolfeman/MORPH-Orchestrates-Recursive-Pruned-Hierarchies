@@ -1,4 +1,11 @@
-"""TUL-FM Phase 1 — the flow-matching span planner.
+"""The flow-matching span planner — TUL-FM's write objective.
+
+Lives in ``morph/model/`` and not in ``lab/`` because the FM1 training arm
+(``morph/model/tul_fm.py``, ``morph/configs/tul_fm1.yaml``) builds one INSIDE
+``MORPHTransformer``. Shipped model code must not import from the spike tree. The P1
+scripts in ``lab/tulfm/`` import it from here.
+
+PHASE 1 (the standalone planner on a frozen backbone).
 
 Arc: ``.agents/notes/proposed/architecture/2026-08-28-tul-fm-arc.md``.
 Gates: ``docs/tul-fm-probing.md`` §5 (P1).

@@ -128,6 +128,11 @@ def evaluate(
                 _l -= float(out["mux_weighted"])   # val loss = model CE (see train/loss note)
             if out.get("sigreg_weighted") is not None:
                 _l -= float(out["sigreg_weighted"])
+            # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
+            # language model and not on an auxiliary (the spectral-penalty precedent).
+            for _aux in ("fm_weighted", "fm_sigreg_weighted"):
+                if out.get(_aux) is not None:
+                    _l -= float(out[_aux])
             losses.append(_l)
             ce_tok = float(out["ce_tokens"])
             acc.setdefault("val/ce_tokens", []).append(ce_tok)
@@ -162,6 +167,25 @@ def evaluate(
                     float(out_h["gate/depth_mean"]))
                 acc.setdefault("val/halt_layer_passes_per_token", []).append(
                     float(out_h["layer_passes"]) / max(float(out_h["n_tokens"]), 1.0))
+            if getattr(_m, "fm_planner", None) is not None:
+                # FM1 (morph/model/tul_fm.py). Plan WORTH is the ce_tokens COST of
+                # removing the plan (zero) or of destroying only its correspondence to
+                # the slot (shuffle). Report the COST, never a specificity fraction:
+                # the fraction's denominator collapses through zero (docs/tul-fm-probing
+                # .md §4 rule 1, the tg3b -55.4 % reading).
+                _oz = _m.tul_fm_forward(x, y, layout, plan_mode="zero")
+                _os = _m.tul_fm_forward(x, y, layout, plan_mode="shuffle")
+                acc.setdefault("val/plan_worth_zero", []).append(
+                    float(_oz["ce_tokens"]) - ce_tok)
+                acc.setdefault("val/plan_worth_shuffle", []).append(
+                    float(_os["ce_tokens"]) - ce_tok)
+                if "fm" in out:
+                    acc.setdefault("val/fm", []).append(float(out["fm"]))
+                    acc.setdefault("val/fm_rel", []).append(float(out["fm_rel"]))
+                if "fm_sigreg" in out:
+                    acc.setdefault("val/fm_sigreg", []).append(float(out["fm_sigreg"]))
+                for _k, _v in _m.fm_eval_probe(x, layout).items():
+                    acc.setdefault(f"val/{_k}", []).append(float(_v))
             if layout.stats:
                 for k, v in layout.stats.items():
                     acc.setdefault(f"val/span_{k}", []).append(float(v))
@@ -296,9 +320,10 @@ def run_generation_test(
 
 # ── Config → MORPHConfig ───────────────────────────────────────────────────────
 
-def build_morph_config(cfg: DictConfig, tul=None) -> MORPHConfig:
+def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
     """``tul`` (a TULConfig or None) gates CONSTRUCTION of the TUL parameters;
-    None ⇒ byte-identical to the baseline model (runtime-invariants §6b)."""
+    None ⇒ byte-identical to the baseline model (runtime-invariants §6b).
+    ``fm`` (an FMArmConfig or None) does the same for the FM1 planner."""
     m = cfg.model
     tr = cfg.training
 
@@ -309,6 +334,7 @@ def build_morph_config(cfg: DictConfig, tul=None) -> MORPHConfig:
 
     return MORPHConfig(
         tul=tul,
+        fm=fm,
         d_model=int(m.d_model),
         n_heads=int(m.n_heads),
         d_ff=d_ff_raw,
@@ -1407,9 +1433,12 @@ def main(cfg: DictConfig) -> None:
     # rebuild — only E_slot's re-init from the live embedding table (spec §5).
     from morph.training.flops import build_flop_model, perf_metrics
     from morph.training.tul_setup import build_tul_runtime
+    from morph.training.fm_setup import build_fm_runtime
     from morph.training.phase import PhaseSchedule
     tul_rt = build_tul_runtime(cfg)
-    morph_cfg = build_morph_config(cfg, tul=tul_rt.model_cfg if tul_rt else None)
+    fm_rt = build_fm_runtime(cfg, tul_rt)
+    morph_cfg = build_morph_config(cfg, tul=tul_rt.model_cfg if tul_rt else None,
+                                   fm=fm_rt)
     model = MORPHTransformer(morph_cfg).to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
@@ -1618,6 +1647,19 @@ def main(cfg: DictConfig) -> None:
     # config too, so an arm is reproducible from wandb alone without re-deriving ids from
     # a tokenizer version. None when TUL is off.
     full_config_dict["tul_manifest"] = tul_rt.manifest if tul_rt else None
+    # Everything DERIVED about FM1 — the planner shapes, the analytic loss scale the fm
+    # term is divided by, the param count — so a run is reproducible from its wandb
+    # config alone and "what source_std did we try?" is greppable.
+    if fm_rt is not None:
+        _mdl = getattr(model, "_orig_mod", model)
+        full_config_dict["fm_manifest"] = {
+            **fm_rt.manifest(),
+            "fm/planner_params": int(sum(p.numel() for p in _mdl.fm_planner.parameters())),
+            "fm/loss_scale_value": float(_mdl._fm_loss_scale),
+            "fm/d_target": int(_mdl.fm_planner.cfg.d_target),
+        }
+    else:
+        full_config_dict["fm_manifest"] = None
     # The FLOP model's own version + per-region costs: an MFU from model v1 is not
     # comparable to one from v2, and without this nobody can tell them apart later.
     full_config_dict["flops_manifest"] = _flops.manifest()
