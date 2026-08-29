@@ -2793,6 +2793,18 @@ class MORPHTransformer(nn.Module):
         """
         if self.tul is None or self.cfg.tul.mux_beta <= 0.0:
             raise RuntimeError("tul_mux_grad_share needs a model with tul.mux_beta > 0")
+        # SLICE TO 2 ROWS. This is the one eval instrument that runs a forward WITH a
+        # backward graph, and in eval mode the core loop's checkpointing is off
+        # (do_ckpt = self.training and ...), so a full-BPTT looped arm retains every
+        # iteration's activations. At batch 6 that OOM'd the 5090 at step-0 eval
+        # (tul-l1, 2026-08-29: 25.6 GiB in use, died on a 146 MiB alloc). A gradient
+        # NORM RATIO does not need the full batch.
+        import dataclasses as _dc
+        k = min(2, input_ids.shape[0])
+        input_ids, labels = input_ids[:k], labels[:k]
+        layout = _dc.replace(layout, **{f.name: getattr(layout, f.name)[:k]
+                                        for f in _dc.fields(layout)
+                                        if isinstance(getattr(layout, f.name), Tensor)})
         was = self.training
         self.eval()
         try:
