@@ -1,6 +1,6 @@
 # Planned: cond-zero probe — is the AdaLN shortcut load-bearing at eval, or did training reorganize the weights?
 
-Status: planned
+Status: success
 Date: 2026-08-30, frozen before the run. Follows the ILV pair filing
 (successes/2026-08-30-tul-ilv50-l2capcond.md), which queued this probe in its
 Updated hypothesis. No training — one 48-row forced-depth sweep on a modified
@@ -42,3 +42,40 @@ restores nothing.
 That zeroing to_mod on THIS trained checkpoint reproduces the unconditioned
 forward exactly (the bit-identity test proves it at init; the module keeps the
 same functional form, so it should hold, but the sweep itself is the check).
+
+## Results
+
+Same 48-row instrument, same eval rows as the intact sweep.
+
+| K | intact CE | cond-zero CE |
+|---|---|---|
+| 1 | 4.4292 | 4.4303 |
+| 6 | 4.4165 | 4.4175 |
+| earned (K1−K6) | 0.0127 | 0.0128 |
+
+- **P1 PASS** (bar < 0.05): earned 0.0128 — the curve is unchanged. No hidden
+  composition; story (b) holds.
+- **P2 FAIL** (bar ≥ 0.05 degradation at K=6): degradation is ~0.001 nats. The
+  trained model barely reads the conditioning at eval at all.
+- Artifact: `lab/experiments/results/2026-08-30-tul-ilv50-l2capcond/depth_sweep_condzero.json`
+  (filed with the parent pair's results).
+
+## Verdict
+
+The binding prediction held (P1, 75%); P2 (60%) missed informatively. The
+conditioning module is nearly functionally inert in the trained model — zeroing
+it costs ~0.001 nats — yet its presence during training collapsed the depth
+curve from 0.233 to 0.013. The damage is a TRAINING-DYNAMICS effect: the
+shortcut steered optimization into a non-composing basin and was then largely
+abandoned by the network. There is no "train with cond, strip at inference"
+trick to salvage.
+
+## Updated hypothesis
+
+Iteration-differentiating side-channels do their harm during formation, not at
+inference. For the gate-vs-cap ladder this sharpens the constraint: it is not
+enough that a gate is cheap to remove later — it must never give the optimizer
+an index-keyed way to differentiate iterations DURING training. State-keyed
+gates remain admissible; anything keyed on the iteration counter (embeddings,
+schedules, per-iteration learned scalars) is presumptively poisonous to
+depth-earning.

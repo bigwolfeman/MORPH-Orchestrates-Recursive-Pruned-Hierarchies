@@ -1,0 +1,58 @@
+{
+ "condzero": {
+  "step": 4500,
+  "rows": 48,
+  "eval_mode": "auto",
+  "train_eval_depth": 6,
+  "depths": {
+   "1": {
+    "ce_tokens": 4.430337715438634,
+    "ce_span_first": 3.895310490155461,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "2": {
+    "ce_tokens": 4.420458051452954,
+    "ce_span_first": 3.879094731494634,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "3": {
+    "ce_tokens": 4.417791026398493,
+    "ce_span_first": 3.8726646222971906,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "4": {
+    "ce_tokens": 4.417536287935187,
+    "ce_span_first": 3.871861017400568,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "5": {
+    "ce_tokens": 4.417464074304001,
+    "ce_span_first": 3.8724719114977906,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "6": {
+    "ce_tokens": 4.417524636168209,
+    "ce_span_first": 3.8726319469105115,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "7": {
+    "ce_tokens": 4.418041822387881,
+    "ce_span_first": 3.873694340869634,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "8": {
+    "ce_tokens": 4.418192612256675,
+    "ce_span_first": 3.8742584413470644,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   }
+  }
+ }
+}
