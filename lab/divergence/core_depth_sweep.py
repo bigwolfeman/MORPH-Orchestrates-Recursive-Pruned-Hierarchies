@@ -35,9 +35,10 @@ from tul_samples import load_ckpt  # noqa: E402
 
 
 @torch.no_grad()
-def ce_maps(model, inp, layout, labels, device) -> torch.Tensor:
+def ce_maps(model, inp, layout, labels, device, step_mode=None) -> torch.Tensor:
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
-        res = model.tul_forward_ablated(inp.to(device), None, layout, plan_mode="normal")
+        res = model.tul_forward_ablated(inp.to(device), None, layout, plan_mode="normal",
+                                        tul_step_mode=step_mode)
     logits = res["logits"].float()
     B, L, V = logits.shape
     lab = labels.to(device).clone()
@@ -55,6 +56,12 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--eval-mode", default="auto", choices=["auto", "force-loop"],
+                    help="auto: sigma-conditioned models use the Euler ladder "
+                         "(db1_ladder_steps=d). force-loop: run the plain _tul_core "
+                         "loop at forced depth d even on a sigma model (measures the "
+                         "bptt-trained loop of a step_mix arm; tul_step_mode='bptt' "
+                         "at eval opts out of the auto-ladder).")
     a = ap.parse_args()
     device = a.device
     depths = [int(x) for x in a.depths.split(",")]
@@ -107,9 +114,12 @@ def main() -> None:
             masks.append((tokpos, first))
         orig_mean = int(model.cfg.tul.slot_mean_depth)
         orig_max = int(model.cfg.tul.slot_max_depth)
-        arm = {"step": step, "rows": rows_done, "train_eval_depth":
+        arm = {"step": step, "rows": rows_done, "eval_mode": a.eval_mode,
+               "train_eval_depth":
                orig_mean or int(cfg.model.mean_depth), "depths": {}}
-        _sigma = getattr(model.cfg.tul, "core_stage_cond", "none") == "sigma"
+        _sigma = (getattr(model.cfg.tul, "core_stage_cond", "none") == "sigma"
+                  and a.eval_mode == "auto")
+        _step_mode = "bptt" if a.eval_mode == "force-loop" else None
         orig_ladder = int(getattr(model.cfg.tul, "db1_ladder_steps", 0))
         try:
             for d in depths:
@@ -122,7 +132,8 @@ def main() -> None:
                 model.cfg.tul.slot_max_depth = max(d, orig_max or int(cfg.model.max_depth))
                 tot = tot_n = fst = fst_n = 0.0
                 for (inp, labels, layout), (tokpos, first) in zip(batches, masks):
-                    ce = ce_maps(model, inp, layout, labels, device).cpu()
+                    ce = ce_maps(model, inp, layout, labels, device,
+                                 step_mode=_step_mode).cpu()
                     tot += float(ce[tokpos].sum()); tot_n += int(tokpos.sum())
                     fst += float(ce[first].sum()); fst_n += int(first.sum())
                 arm["depths"][d] = {"ce_tokens": tot / tot_n, "ce_span_first": fst / fst_n,

@@ -2663,7 +2663,8 @@ class MORPHTransformer(nn.Module):
         training step (:meth:`_tul_core_db1`) in place of the T-iteration loop; it is
         a TRAINING-time selector only — at eval (``not self.training``) a model built
         with ``tul.core_stage_cond="sigma"`` runs the deterministic Euler-ladder
-        (:meth:`_tul_core_db1_ladder`) regardless of ``tul_step_mode``, matching the
+        (:meth:`_tul_core_db1_ladder`) unless ``tul_step_mode='bptt'`` explicitly opts
+        into the plain ``_tul_core`` loop (the forced-depth sweep's path), matching the
         paper's "trained single-pass, sampled with the original K-iteration procedure".
         """
         if self.tul is None:
@@ -2775,7 +2776,12 @@ class MORPHTransformer(nn.Module):
             if tul_step_mode == "db1":
                 xn, h_slots, depths, g_traj, db_traj = self._tul_core_db1(
                     x, x0, bigram_emb, layout)
-            elif not self.training and self._core_stage_cond_mode == "sigma":
+            elif (not self.training and self._core_stage_cond_mode == "sigma"
+                  and tul_step_mode != "bptt"):
+                # An explicit "bptt" at eval opts OUT of the auto-ladder and runs the
+                # plain _tul_core loop (conditioning unused) — this is what the bptt
+                # half of a step_mix arm trains, and the forced-depth sweep needs to
+                # measure it separately from the sigma/Euler path.
                 xn, h_slots, depths, g_traj, db_traj = self._tul_core_db1_ladder(
                     x, x0, bigram_emb, layout)
             else:
@@ -3003,7 +3009,8 @@ class MORPHTransformer(nn.Module):
         return h_slots.gather(1, idx)
 
     def tul_forward_ablated(self, input_ids: Tensor, labels: Tensor | None,
-                            layout: SlotLayout, plan_mode: str = "normal") -> dict:
+                            layout: SlotLayout, plan_mode: str = "normal",
+                            tul_step_mode: str | None = None) -> dict:
         """Eval-only forward with the slot state ablated. Works on ANY TUL arm.
 
         ``normal`` — the shipped path.
@@ -3035,13 +3042,15 @@ class MORPHTransformer(nn.Module):
                 "tul_forward_ablated needs a model built with MORPHConfig(tul=...)")
         if plan_mode != "wrong_seed":
             return self._forward_single(input_ids, labels, 0, None, layout,
-                                        _plan_mode=plan_mode)
+                                        _plan_mode=plan_mode,
+                                        tul_step_mode=tul_step_mode)
         tc = self.cfg.tul
         orig = tc.slot_seed
         alt = "bag_mean" if orig != "bag_mean" else "e_slot"
         tc.slot_seed = alt
         try:
-            return self._forward_single(input_ids, labels, 0, None, layout)
+            return self._forward_single(input_ids, labels, 0, None, layout,
+                                        tul_step_mode=tul_step_mode)
         finally:
             tc.slot_seed = orig
 

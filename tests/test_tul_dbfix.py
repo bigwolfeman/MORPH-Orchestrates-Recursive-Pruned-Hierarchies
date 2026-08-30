@@ -446,3 +446,53 @@ def test_none_mode_is_deterministic_and_reuses_master_dispatch():
     assert torch.equal(out_a["loss"], out_b["loss"])
     assert m.tul_stage_cond is None and m._db1_sampler is None
     assert m._core_stage_cond_mode == "none"
+
+
+# ── eval opt-out: tul_step_mode="bptt" runs the plain loop on a sigma model ──
+
+
+def test_eval_bptt_opts_out_of_auto_ladder():
+    """`tul_step_mode='bptt'` at eval must run `_tul_core` (the plain loop the bptt
+    half of a step_mix arm trains), not the auto-fired Euler ladder — the
+    forced-depth sweep on an ilv50-style checkpoint depends on this routing."""
+    x, y, lay, _ = _batch()
+    m = _sigma_model()
+    m.eval()
+
+    calls = {"ladder": 0, "core": 0}
+    orig_ladder, orig_core = m._tul_core_db1_ladder, m._tul_core
+
+    def spy_ladder(*a, **kw):
+        calls["ladder"] += 1
+        return orig_ladder(*a, **kw)
+
+    def spy_core(*a, **kw):
+        calls["core"] += 1
+        return orig_core(*a, **kw)
+
+    m._tul_core_db1_ladder, m._tul_core = spy_ladder, spy_core
+    try:
+        with torch.no_grad():
+            m(x, y, slot_layout=lay)  # default: auto-ladder
+        assert calls == {"ladder": 1, "core": 0}, calls
+        with torch.no_grad():
+            m(x, y, slot_layout=lay, tul_step_mode="bptt")
+        assert calls == {"ladder": 1, "core": 1}, calls
+        with torch.no_grad():
+            m.tul_forward_ablated(x, None, lay, plan_mode="normal",
+                                  tul_step_mode="bptt")
+        assert calls == {"ladder": 1, "core": 2}, calls
+    finally:
+        m._tul_core_db1_ladder, m._tul_core = orig_ladder, orig_core
+
+
+def test_eval_bptt_flag_is_inert_on_an_unconditioned_model():
+    """On a cond='none' model the flag must be a no-op: bit-identical logits with
+    and without it (the sweep passes it unconditionally in force-loop mode)."""
+    x, _, lay, _ = _batch()
+    m = _plain_model()
+    m.eval()
+    with torch.no_grad():
+        a = m(x, slot_layout=lay)["logits"]
+        b = m(x, slot_layout=lay, tul_step_mode="bptt")["logits"]
+    assert torch.equal(a, b)
