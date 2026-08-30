@@ -2,7 +2,7 @@
   <img src="docs/figures/hydra.png" alt="MORPH hydra" width="320" />
 </p>
 <h1 style="text-align: center;">
-MORPH
+MORPH 0.1
 </h1>
 
 **MORPH** is a PyTorch research model for **looped transformer** training and sparse deployment. The model reuses a small Parcae-style core for variable depth, stabilizes the repeated core with [Cayley Hyper-Connection](docs/references/residual-streams/jpmhc/jpmhc.md), and trains the MLP stack while pruning low impact weights down to as little as 25% total density before carving it into the MORTAR BCSR runtime. Enabling less than 1% ppl regression and improved memory footprint and training throughput over full density. All while natively quantized trained.
@@ -18,7 +18,7 @@ The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/
 <p align="center">
   <img src="docs/figures/morph_overview.png" alt="MORPH architecture overview: hybrid embeddings into an HC carrier, prelude / looped core / coda, then LM head" width="720" />
 </p>
-<p align="center"><em>Architecture overview — Parcae-style prelude / core loop / coda on a <a href="docs/references/residual-streams/jpmhc/jpmhc.md">Cayley Hyper-Connection</a> carrier, with a gated <a href="docs/references/memory/gla/gla.md">GLA</a> retention branch on layer 1.</em></p>
+<p align="center"><em>Architecture overview: Parcae-style prelude / core loop / coda on a <a href="docs/references/residual-streams/jpmhc/jpmhc.md">Cayley Hyper-Connection</a> carrier, with a gated <a href="docs/references/memory/gla/gla.md">GLA</a> retention branch on layer 1.</em></p>
 
 ## TUL: Thought Unpack Loop (merged, OFF by default)
 
@@ -26,7 +26,7 @@ The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/
 <p align="center">
   <img src="docs/figures/tul_mechanism.png" alt="TUL: shared token/slot sequence into prelude; think (core × T on slots) saves z; freeze z in sequence; decode next span; cut on punctuation" width="720" />
 </p>
-<p align="center"><em>TUL — loop once per thought, freeze <code>z</code> in the sequence, amortize decode over the next span.</em></p>
+<p align="center"><em>TUL: loop once per thought, freeze <code>z</code> in the sequence, amortize decode over the next span.</em></p>
 
 
 TUL loops the Parcae core over one **thought slot per span** (punctuation-bounded) instead
@@ -42,7 +42,7 @@ default recipe is bit-identical to plain MORPH and the main line's behaviour is 
 baseline by 0.056 nats of `val/ce_tokens` (slightly better than noise) while running 177 minutes against 278. A 1.6x
 wall-clock win at slightly better loss.
 
-**FLOPs (same runs — `no-tul-a0-acap1` / `tul-a1-acap1`):** ~4× fewer FLOPs per token
+**FLOPs (same runs: `no-tul-a0-acap1` / `tul-a1-acap1`):** ~4× fewer FLOPs per token
 (1793 → ~452 MFLOP forward pass; ~5.84 → ~1.47 GFLOP executed total) and ~3.9× fewer total
 FLOPs over the run, at nearly equal token count. Wall clock only moved 1.6×
 because the step is still launch / fixed-overhead bound. Details:
@@ -105,12 +105,12 @@ The active stack is:
 <p align="center">
   <img src="docs/figures/morph_memory.png" alt="MORPH GLA retention: gated linear-attention branch parallel to attention, with sequence-axis SSM state and optional core-loop carry" width="720" />
 </p>
-<p align="center"><em>Retention — GLA branch on layer 1 of prelude / core / coda; sequence-axis SSM state always on, cross-iteration carry core-only and optional.</em></p>
+<p align="center"><em>Retention: GLA branch on layer 1 of prelude / core / coda; sequence-axis SSM state always on, cross-iteration carry core-only and optional.</em></p>
 
 <p align="center">
   <img src="docs/figures/morph_attention.png" alt="MORPH attention triple-axis compression: CCA prologue into local window and alternating CSA/HCA global-compressed branches, gated blend to attn out" width="720" />
 </p>
-<p align="center"><em>Attention — CCA channel compress, then local window plus alternating CSA (even) / HCA (odd) global-compressed branches, gated blend into the block residual.</em></p>
+<p align="center"><em>Attention: CCA channel compress, then local window plus alternating CSA (even) / HCA (odd) global-compressed branches, gated blend into the block residual.</em></p>
 
 Paper attributions: [docs/references.md](docs/references.md).
 
@@ -123,7 +123,7 @@ Paper attributions: [docs/references.md](docs/references.md).
 <p align="center">
   <img src="docs/figures/morph_cms_lifecycle.png" alt="MORPH MLP lifecycle: dense train, CMS block prune, MORTAR BCSR carve, then ReMoE routing" width="720" />
 </p>
-<p align="center"><em>MLP lifecycle — dense train → CMS prune to ~25% density → carve to MORTAR BCSR → whole-body ReMoE routing.</em></p>
+<p align="center"><em>MLP lifecycle: dense train → CMS prune to ~25% density → carve to MORTAR BCSR → whole-body ReMoE routing.</em></p>
 
 High-level schedule:
 
@@ -199,7 +199,7 @@ docs/
   figures/                  # PNG previews + topic-grouped TikZ sources
   references.md             # paper map + MORPH usage notes
   references/               # local paper archive (see references/MANIFEST.md)
-ignore/                     # private scratch (wandb, Hydra outputs) — not public
+ignore/                     # private scratch (wandb, Hydra outputs), not public
 tile-prover/                # Lean/z3 confirmations of kernel correctness to original algorithm
 ```
 
@@ -218,7 +218,30 @@ Campaign logs and gate scripts stay under `ignore/` / `lab/`.
 
 ## Contributing
 
-MORPH uses a stable snapshot plus research integration model. See `CONTRIBUTING.md` for branch policy, evidence expectations, and release rules.
+MORPH uses a stable snapshot plus research integration model. See `CONTRIBUTING.md` for branch policy, evidence expectations, and release rules. 
+
+The biggest contributions towards MORPH would be benefiting the FOSS ML
+ecosystem in other ways beyond this project. Such as building and testing RL environments.
+Or thoroughly tested implementations of closed research papers.
+Or hard forks to test variants of MORPH that can help steer design decisions across major versions.
+
+The number of times open implementations dramatically sped up development of MORPH was huge. 
+Often times I would drop a research direction for a few days and come back to 
+it to find someone had released on github a related implementation in that time frame.
+A lot of these are not referenced in docs because the due dilligence wasn't there
+in recreating *at least* a facsimile of the original paper. Or there were claims/behaviors in the project
+that I was not seeing in my testing. Overall a lot of these projects were sloppy, and tended to poison the LLM working on MORPH.
+
+These projects sometimes were a giant waste of time, often times they still helped catch oversights
+on implementation details even when other aspects were quite poor. The dilligence needs to be higher on these projects. Try to break the mechanism.
+Show where it is weak. Test it on different architectures and data. And PLEASE stop training
+things that are 95% embedding matrix and trying to use that as proof of concept or verification.
+Aceing CIFAR is basically noise at this point. At least try to torch.compile.
+
+These issues are often times upstream of the implementation. If you are recreating an implementation
+of a closed paper you are likely walking into a minefield of things left unsaid and under specified.
+You resolve this ambiguity by trying to break it. Found an attention mechanism that sounds really good?
+It shows a 110% NIAH retrieval at 20m tok seqlen? Does it work on semantic retrieval too and not just word matching? Did you perturb the mechanism to prove its actually contributing?
 
 ## License
 
