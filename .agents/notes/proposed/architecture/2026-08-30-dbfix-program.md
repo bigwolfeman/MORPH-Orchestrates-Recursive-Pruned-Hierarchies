@@ -82,3 +82,11 @@ one-pass DB ~36 (est.), 50/50 ~51±5 (est.) per 4500 steps @ batch 6.
   (smoke-gated before any real run).
 - 50/50 could get neither benefit (half the depth training, half the wall-clock
   saving) — that is what the arm measures.
+
+## Addendum (2026-08-30): gate-vs-cap arm queued behind the DB-fix pair
+
+Wolfe flagged arXiv 2608.15062 (Gated Recurrent Transformers — references.md row
+69): a learned convex gate per iteration is contractivity control by architecture,
+bias-init near-identity. Next-batch arm after task 8/9: **cap vs gate vs both** on
+the TUL loop, plus a uniform-{1..R} depth-sampling variant (our clamped Poisson(6)
+barely trains depths 1-2). Not built yet; prereg before any run, same rules.

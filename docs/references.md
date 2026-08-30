@@ -1039,6 +1039,7 @@ to that case and to nothing else here.
 | 66  | InfoPro / local supervision (TUL)      | Wang et al. (ICLR 2021)                   | [2101.10832](https://arxiv.org/abs/2101.10832)                                                                                                 |
 | 67  | Unitary scalarization (TUL, counter)   | Kurin et al. (NeurIPS 2022)               | [2201.04122](https://arxiv.org/abs/2201.04122)                                                                                                 |
 | 68  | MUX multiplexed latent tokens (TUL/GL) | Suleymanzade et al. (2026)                | [2607.18264](https://arxiv.org/abs/2607.18264)                                                                                                 |
+| 69  | Gated Recurrent Transformers (loop)    | Hegazy, Alanwar, Elhoushi (2026)          | [2608.15062](https://arxiv.org/abs/2608.15062)                                                                                                 |
 
 
 
@@ -1061,3 +1062,21 @@ replace a CoT trace rather than serve as long-context memory. The digest's
 the paper (grep-verified). Also adopt §8.3's attention-lift diagnostic: separates
 "coda routes attention to slots" from "slot content matters" — the split our
 worth_shuffle alone cannot make.
+
+
+### Gated Recurrent Transformers (row 69, added 2026-08-30, summary from one structured fetch — close read pending)
+
+Prelude/core/coda looped transformer (Geiping lineage) where each iteration is a
+GATED convex blend `h_new = g*h_prev + (1-g)*f(h)`, g in [0,1] per element,
+conditioned on normalized state + prelude + injected noise (Eqs. 2-5); gate bias
+init +4 so the loop STARTS near-identity (g~0.98) — contractivity control by
+architecture, the same disease our l2cap treats with the post-step sigma<=1.5
+projection. Depth sampled UNIFORM {1..R} in training -> every depth trained, free
+early-exit, no per-iteration losses. Beats MoR / heavy-tail Poisson / approaches
+RRT across 9 isoFLOPs/isoParams cells (GPT-2 family). Their main tax — R x KV
+expansion — mostly does not apply to TUL (loop runs on <=64 slots). Why it is in
+the pile: (1) the natural post-DB-fix ladder is CAP vs GATE vs BOTH on the TUL
+loop; (2) uniform depth sampling vs our clamped Poisson(6) that almost never
+trains depth 1-2; (3) their stated limits (fixed R, no halting) are exactly where
+TUL-gate/halt already goes further. Mirror:
+`docs/references/looping-depth/gated-recurrent-transformers/` (PDF, arXiv v3).
