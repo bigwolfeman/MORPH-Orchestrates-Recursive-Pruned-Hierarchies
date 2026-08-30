@@ -1,0 +1,25 @@
+# ARM L3-WAKE — DB-init, then standard end-to-end training to wake the loop.
+#
+# Prereg: lab/experiments/planned/2026-08-30-tul-l3-wake.md (frozen before launch).
+#
+# tul-l3 (db_loop: detached carry, per-iteration local mux) trained to CE 4.3519 with a
+# loop that is CE-INERT at eval: forcing depth 1 vs 6 moves token CE by 0.0001 nats
+# (core_depth_sweep smoke, 2026-08-30). Wolfe's hypothesis: use the DB phase as the
+# stable INITIALIZER, then full-BPTT AdamW ("standard training") teaches the model to
+# actually use iterations 2+. This arm is that test: identical architecture, weights
+# seeded from tul-l3 step_4500 (training.init_from: weights only, fresh optimizer,
+# step axis restarts at 0), gradient topology flipped to full BPTT (db_loop: false),
+# AdamW (l1-adamw showed sigma stays ~1.9 under it — no cap needed a priori).
+defaults:
+  - tul_l3
+  - _self_
+
+tul:
+  db_loop: false
+
+training:
+  optimizer: adamw
+  init_from: checkpoints/morph/tul-l3/step_4500.pt
+
+wandb:
+  name: tul-l3wake
