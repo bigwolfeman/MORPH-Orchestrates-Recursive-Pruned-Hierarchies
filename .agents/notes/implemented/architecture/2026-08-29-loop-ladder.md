@@ -1,6 +1,6 @@
 # Agent Note: The loop ladder — is iteration the disease, or just uncontrolled iteration?
 
-Status: proposed
+Status: implemented
 
 ## Problem
 
@@ -15,7 +15,7 @@ build on (Huginn, Parcae, UT) loops successfully — though their loops carry
 token states with losses everywhere, never a sole-channel bottleneck like the
 slot write.
 
-## Proposal
+## Decision
 
 Four ~30-min panel arms on the gl1b config (mask + MUX held fixed), each
 instrumented with the per-iteration loop probe and σ_max logging that the TG2
@@ -45,15 +45,14 @@ era lacked:
   product goal is a looped model with amortized decoding, and the "fatal" claim
   is currently load-bearing while resting on unmeasured evidence.
 
-## Acceptance criteria
+## Consequences
 
-Prereg `lab/experiments/planned/2026-08-29-tul-loop-ladder.md` (frozen before
-smoke). The "iterated write is fatal" claim is falsified by any full-BPTT arm
-sustaining worth_shuffle ≥ 0.04 at CE ≤ 4.50.
-
-## Risks
-
-L1/L4 detonation is a possible outcome, not a failure of the experiment — the
-probes make a detonation informative. Memory: full BPTT on the slot loop adds
-~6 core layers of params (+~22M) and checkpointed loop activations; the smoke
-run gates VRAM before the panel.
+Filed as a SUCCESS: `../../../../lab/experiments/successes/2026-08-29-tul-loop-ladder.md`
+(results + both new instruments). The binding falsifier F fired: `tul-l2-cap` (full
+BPTT + σ≤1.5 hard projection) is the campaign's first load-bearing loop — CE @4250
+4.3489, worth 0.146 still climbing, 0.233 nats of depth-earned CE, span-wide plan
+carrier (worth_profile), uniquely degeneration-resistant generation. Every uncapped
+loop trains stably but its iterations are CE-inert. Contractivity control is a
+REQUIREMENT for a trainable iterated write, not a safety rail. The "iterated write is
+fatal" claims are corrected in place (gist-loop note; 2026-08-23 block-backward-gain).
+Follow-up: L3-WAKE (prereg 2026-08-30) tests waking l3's inert loop post-hoc.

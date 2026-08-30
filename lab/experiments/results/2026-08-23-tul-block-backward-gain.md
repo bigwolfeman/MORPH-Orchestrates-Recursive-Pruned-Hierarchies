@@ -84,6 +84,9 @@ blocks deep. With `n_core = 6` and `bptt_depth = 4`, that is 24 blocks. At the m
 against an observed pre-clip core gradient rising from ~0.015 healthy to ~1e6 — a ratio of
 about 7e7. Same order of magnitude, from one measured number and two config constants. A
 per-block gain of 1.9 is unremarkable in a feed-forward stack; it is fatal in a loop.
+*(Correction 2026-08-30: fatal in an UNCONTROLLED loop. With the hard σ≤1.5 projection
+the same full-BPTT loop trains clean and earns 0.233 nats of depth —
+`lab/experiments/successes/2026-08-29-tul-loop-ladder.md`.)*
 
 This is also why the single global clip starves everything else: the core's gradient is not
 merely largest, it is larger by `g^24`.
