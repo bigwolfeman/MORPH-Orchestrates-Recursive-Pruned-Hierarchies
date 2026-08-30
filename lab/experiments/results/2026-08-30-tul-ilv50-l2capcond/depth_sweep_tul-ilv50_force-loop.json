@@ -1,0 +1,58 @@
+{
+ "tul-ilv50": {
+  "step": 4500,
+  "rows": 48,
+  "eval_mode": "force-loop",
+  "train_eval_depth": 6,
+  "depths": {
+   "1": {
+    "ce_tokens": 4.473217271845521,
+    "ce_span_first": 3.9083525193339645,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "2": {
+    "ce_tokens": 4.473744841214326,
+    "ce_span_first": 3.910153919566761,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "3": {
+    "ce_tokens": 4.473699483247062,
+    "ce_span_first": 3.9096019891295772,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "4": {
+    "ce_tokens": 4.473389374494114,
+    "ce_span_first": 3.9084875611584597,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "5": {
+    "ce_tokens": 4.4735730313236965,
+    "ce_span_first": 3.908180054943971,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "6": {
+    "ce_tokens": 4.473718746721111,
+    "ce_span_first": 3.909303977272727,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "7": {
+    "ce_tokens": 4.473469531624731,
+    "ce_span_first": 3.909005459872159,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "8": {
+    "ce_tokens": 4.473551640475108,
+    "ce_span_first": 3.9087277930673925,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   }
+  }
+ }
+}

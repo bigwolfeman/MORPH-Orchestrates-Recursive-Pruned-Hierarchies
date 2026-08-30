@@ -1,0 +1,559 @@
+{
+  "tul-l2cap-cond": {
+    "step": 4500,
+    "config": "tul_l2cap_cond",
+    "path": "checkpoints/morph/tul-l2cap-cond/step_4500.pt",
+    "tul": true,
+    "fixed": {
+      "topk50_t0.8": {
+        "metrics": {
+          "boundary_frac": 0.7238381813712164,
+          "distinct3": 0.8681372549019609,
+          "distinct4": 0.943025540275049,
+          "mean_span": 18.76818026815469,
+          "n_spans": 35.0,
+          "n_tokens": 512.0,
+          "p50_span": 19.333333333333332,
+          "rep4": 0.05697445972495088,
+          "rep4_sd": 0.0889960837163546,
+          "distinct3_sd": 0.14564269134064295
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.0275049115913556,
+            "distinct4": 0.9724950884086444,
+            "distinct3": 0.9333333333333333,
+            "n_tokens": 512.0,
+            "n_spans": 21.0,
+            "mean_span": 24.666666666666668,
+            "p50_span": 29.0,
+            "boundary_frac": 0.6190476190476191,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0137524557956778,
+            "distinct4": 0.9862475442043221,
+            "distinct3": 0.9529411764705882,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 21.652173913043477,
+            "p50_span": 21.0,
+            "boundary_frac": 0.782608695652174,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.011787819253438114,
+            "distinct4": 0.9882121807465619,
+            "distinct3": 0.9588235294117647,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 22.545454545454547,
+            "p50_span": 23.0,
+            "boundary_frac": 0.5909090909090909,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.10019646365422397,
+            "distinct4": 0.899803536345776,
+            "distinct3": 0.8176470588235294,
+            "n_tokens": 512.0,
+            "n_spans": 27.0,
+            "mean_span": 19.037037037037038,
+            "p50_span": 15.0,
+            "boundary_frac": 0.6666666666666666,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.3418467583497053,
+            "distinct4": 0.6581532416502947,
+            "distinct3": 0.41568627450980394,
+            "n_tokens": 512.0,
+            "n_spans": 112.0,
+            "mean_span": 4.625,
+            "p50_span": 4.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.023575638506876228,
+            "distinct4": 0.9764243614931237,
+            "distinct3": 0.9215686274509803,
+            "n_tokens": 512.0,
+            "n_spans": 27.0,
+            "mean_span": 19.11111111111111,
+            "p50_span": 18.0,
+            "boundary_frac": 0.7777777777777778,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.03143418467583497,
+            "distinct4": 0.9685658153241651,
+            "distinct3": 0.9274509803921569,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 20.32,
+            "p50_span": 20.0,
+            "boundary_frac": 0.68,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.015717092337917484,
+            "distinct4": 0.9842829076620825,
+            "distinct3": 0.9529411764705882,
+            "n_tokens": 512.0,
+            "n_spans": 27.0,
+            "mean_span": 18.185185185185187,
+            "p50_span": 17.0,
+            "boundary_frac": 0.8148148148148148,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.01768172888015717,
+            "distinct4": 0.9823182711198428,
+            "distinct3": 0.9058823529411765,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 23.5,
+            "p50_span": 28.5,
+            "boundary_frac": 0.5909090909090909,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.03143418467583497,
+            "distinct4": 0.9685658153241651,
+            "distinct3": 0.9215686274509803,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 21.125,
+            "p50_span": 26.5,
+            "boundary_frac": 0.5416666666666666,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.05108055009823183,
+            "distinct4": 0.9489194499017681,
+            "distinct3": 0.7862745098039216,
+            "n_tokens": 512.0,
+            "n_spans": 68.0,
+            "mean_span": 7.632352941176471,
+            "p50_span": 5.0,
+            "boundary_frac": 0.9852941176470589,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.01768172888015717,
+            "distinct4": 0.9823182711198428,
+            "distinct3": 0.9235294117647059,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 22.818181818181817,
+            "p50_span": 25.0,
+            "boundary_frac": 0.6363636363636364,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that independence and the world would be to be in charge of a government that was not used by the government.\n\n\u201cThe idea of the government was in fact a real way to avoid it was a fair thing,\u201d the law said.\n\nThe bill was not approved by the Civil Union, which was given a \u201cdisgate\u201d response to the UK, because it was the first thing by the Democratic Party in the West. The Democrats now say they were not allowed by the CIA to be in the face of the government.\n\nIn the 1997 election, the GOP had made it clear that the government could not believe its \u201crevolution of the House,\u201d the Bush administration was just the same way it was done by the administration\u2019s decision to avoid the people that the government would continue to use the EU\u201d.\n\nIn an interview with Congress, the House\u2019s committee\u2019s Office said the vote was still a public option.\n\n\u201cEverybody has to know what kind of law, I have is a federalist who is in the administration and there is a very difficult level,\u201d the Civil Union official said in a statement.\n\n\u201cThe party is a hard decision in the country,\u201d the House chief of the Department for Communist Ministry for Economics, who, said the law was a \u201cis the government\u2019s government\u201d.\n\nHe said: \u201cIf we are concerned that the House of Representatives is to make sure the government can\u2019t afford to have any respect for all to look like this, and they\u2019re going to get our banks out there. But the government can\u2019t stop our tax credits.\u201d\n\nThe group had a \u201cwar to do with the \u201ca lot of the government\u201d to give the bill a strong attack in U.S. public transportation, which was up to 40 hours, that the program would be relegated to the EU in 1996.\n\n\u201cThis is our most important for us to have access to this,\u201d said the Senate Memphis Group.The Mexican-American Scottish Muchs are on its way to the Donald Trump and the Churchillan presidential nomination. Clinton\u2019s campaign campaigns, who is challenged to the House of Representatives for a new school, said the Democratic Party",
+          "Once upon a time in a distant land, there lived a pocket of 1970s that the only way to use its success. I'd even seen what I was writing on that. While I was all the more unrealistic about what would be a good issue of how we were thinking of in the past few months, we did not want to be in the form of the Church of Congressional Party.\n\nWith this fact that we were able to get more of a deal with them, our real estate coherence, the intricacy of the Churchillials in the world is now in the US. We were in the United States, and the same. They were really sick and a little of a peaceful nation, but we did not know how to get their fence from what we thought. The story was the whole time they started, the political party in which they were still a 1900s ever the right thing. The 1963 law in Germany was the second and the 1950s\u2014I think I could never have used these years of age.\n\nSo, I don\u2019t think they are very serious about this, they\u2019ve been here with what they are seeing. The latter was that we were in one of our greatest men in the world, and that they were just 11 years of our life. I\u2019d been the author of an amendments and we will be a place on the Jewish State University, that\u2019s a war in the face of this Speaker. We hope it makes us a hard thing to get in the United States, to the Russia.\n\nWhat about you is that that was the first time there is an interest in our country, there is no question of what we do what we are talking about our work. The fact that we were concerned about the massive group of wealth, the Islamic State, the US, the Republicans, the West, and the Islamic State, we have the worst point in our country. I am now looking at the U.S. to vote, that we hope we will have our weapons to take to our nations. We will try to see them on the very long term, and we are not going to take advantage of our interests of our country. We have seen the country we have to do for our war, our political power, our country, our country and our community, our",
+          "In machine learning, the key insight is that the company is able to take a more difficult way to get some different things to the world, where the company is going to be a lot of different technologies, and so they are probably taking advantage of people who want to get rid of them who are, and they don\u2019t want to.\n\nIndeed, the company\u2019s officials have said to that, as long as they\u2019re already concerned, they are looking to get back to the U.S. Air Force as well. If you need a business project, I\u2019ve worked with Australian Olympic India to see if you have an opportunity to get a job.\n\n\u201cOur project is to be taken down here,\u201d said Celebrity. \u201cWe have to get the highest part of our efforts, and we see it as a future at all.\u201d\n\nHe added: \u201cWe can\u2019t see the development as a way to build our own community.\u201d\n\nAnd the company has not seen the current number of other projects in the country before the World Cup, but it also has more than 4000 degrees, which they are in the House of Representatives. They have an additional 200,000 people and 100,000 people, while a couple of people are being forced to their home, and can\u2019t go on a long way.\n\n\u201cThere are no great games,\u201d said Vincent, head of the International International Comic, told The New York Times. \u201cWe\u2019re currently doing a lot of people to have work on that. The more people involved in, in order to get away with them to their work.\u201d\n\nSo, however, they\u2019ve been in the early 1960s to have a strong business in the city, and the European Union took a long month, including the UK\u2019s most unprecedented American cities, and the United States, and the National Security Council on Bloomberg. If that group is an adventure, they\u2019re not a mere player. The fact is that many of those are looking for a team of young people to be the newspaper and the current city and the media are being involved in their children. You need to make sure that they are interested in making the city\u2019s potential to stay right.\n\n\u201cAs you can see, the city in the UK are really talking about it,\u201d said Alan Reagan",
+          "The capital of France is not 189 percent, but since 1999 the total number of American citations of the American Palestinians.\n\nSoon the UK\u2019s total debt in 1997, the 1986 warfare in Mexico, the Boviet Union, Mexico, the Soviet Union. They were awarded $11,490 for the 2851 American government, and the US state, the war.\n\nIn the 1960s the Soviet Union was the 693 war crimes of 1941 and 18%, a year ago, 2014. In 1997, the US House of Representatives (88%) and the U.S. population was the government's population, and the U.S. Department of Defense (CBI) under the Soviet Union. In 2009, the U.S. Department of State Department-type and the U.S.-led economic power of the U.S. government was the leader of the 1990s to be the first to do so by the 1990s that the US citizens have spent an all-time wound in the United States. But it was a very simple challenge for the United States to be in the 1990s, and by the time the United States was on the Senate and the U.S. border of the Jordan-born government.\n\nIn 1986, US troops in the Palestinian border and the Bureau of Islamist forces were on behalf of Russia, the US and Europe during the war. The United States and India banned its 16th Amendment for Palestinians, and the United Nations of European countries, had only been the US trove of Jews around the Australian border, the North Bank of the Russian Union and Syria, and the Civil Union, the U.S. citizen who took a war against the U.S. House of Representatives of the United States. Jews said the United States had been forced to bullying the United States and the US troops in the war to take the fight against the Islamic, the Taliban. It led to",
+          "def quicksort(arr):\n\n- * *\n\n-\n\n0\n\nview(view-this)\n\n-3-1-1(d)\n\n-0-5\n\n-\n\n-\n\n10\n\n-0\n\n-0\n\n-13\n\n23-4\n\n-2\n\n3\n\n-5-5\n\n-15\n\n- 2\n\n7\n\n-72\n\n3\n\n20\n\n-\n\n7.\n\nNo\n\n1972\n\n37\n\n96.3\n\n4\n\n2 42\n\n23\n\n50\n\n65\n\n30\n\n35\n\n72\n\n2\n\n8\n\n13\n\n22\n\n8\n\n1\n\n70\n\n6\n\n23\n\n87\n\n3\n\n13\n\n6\n\n9\n\n35\n\n89\n\n7.84\n\n70\n\n308\n\n75\n\n157\n\n6.6\n\n65\n\n89\n\n6\n\n0\n\n77\n\n6\n\n256\n\n45\n\n12\n\n02\n\n67\n\n62\n\n43\n\n48\n\n65\n\n66\n\n40\n\n01\n\n40\n\n3\n\n25\n\n67\n\n3\n\n65\n\n4\n\n5\n\n18\n\n27\n\n60\n\n56\n\n66\n\n86\n\n26 0\n\n57.76\n\n6\n\n0 2016\n\n57\n\n296\n\n60\n\n63\n\n66.01\n\n60\n\n3\n\n82\n\n64\n\n91\n\n4\n\n06\n\n60\n\n64\n\n16\n\n77\n\n950\n\n86:47\n\n67\n\n60\n\n5\n\n64\n\n1\n\n34\n\n6\n\n7\n\n6\n\n066\n\n33\n",
+          "Yesterday the committee announced that the company would not have to move to the United States.\n\nBut it was not the same issue. We should be aware that a new case of the U.S. law that was already responsible for the use of the government. So the bill could not be paid to the Senate from the House before that had been the leader of any bill, the case is not a way to see the U.S. Constitutional Association on the market for the government.\n\nBut it may not be as if this is the matter. It makes a statement the case, not just the bill. That adequate conservative movement was a recourse and that there was a matter of evidence with the government, and that the government would not be relate to the administration. But they would be a threat to it.\n\nThere was a reason why it would be possible to dispute the bill.\n\nThe president also said that the bill would need to renegotiate the Civil Union to address the government. They would not immediately have to see the government in order to ensure that they would not be able to give money in the bill.\u201d\n\nIf the government is not a matter of what it is, they may have been willing to see whether the state government is protesting it by the public, and they will also be dismissed with the government.\n\nSo we can see how the bill would be on the next decision to be the public that the vote will be.\n\nThe administration is also the government of the state\u2019s largest government, and the EU has been part of the United States. It also has a way to solve the state\u2019s case of a law enforcement program that has been in place for the first time it requires no time in the country.\n\nThe House has said that the Saudis would need to be allowed to receive the government and continue to prevent revenue of the nuclear program. This has been a clear and unclear situation in the UK. It is not clear whether the government has made a re-election state in the nuclear-to-be-driving-incess-intelligence trade.\n\nBut the public\u2019s support for the Senate would be the most part of the vote to determine how an agreement has reached, while the government said it has been \u201cthe most partnership.\u201d\n\nA new state that was to be taken into account the law, the company said. They would not need",
+          "Water boils at a temperature of 9.5 pounds in the crowd. The Federal Bureau of Energy, which is the most part known as the National Tumblr Group and the Valley-based FCC. Wikileaks, a major member of the PAC Ridge Center, led by Mars Hockey, says it does not matter whether the U.S., a fleet on the Rex Congress, and a climate change.\n\nThe Nexus-type is a long-term sports company known as the SNP, a large group of the CIA\u2019s terrorist group on the civil rights group of the FBI. The RBI is also investigating the company\u2019s remedies about PP\u2019s \u201choly bills\u201d or \u201ccivilian guns\u201d that the CEO\u2019s case is \u201cdestruction of the BBC.\u201d In the event that the CBI\u2019s chairman, Tony Bloomberg, a spokesman for the Nobel Priebus Association\u2019s Office, said that, \u201ca lot of people are all in the country,\u201d said Larry Lane, the former A.R. Clinton, the BJP Congressional Intelligence Union, wrote that the \u201cfeminist and anti-Semitism are facing the public and the people that are engaged in the government.\u201d\n\n\u201cThe Nazi Governor has long been a chairman of the United States.\u201d\n\nAccording to the NSA, the U.S. president and U.S. president and the US administration, have not accused the U.S. President-elect and the U.S. Department of State aircraft, which is under a \u201cshocking of a military and nuclear power law.\u201d\n\nThe U.S. government\u2019s municipal civil rights activist theft, the U.S. President Obama\u2019s current witnesses, said the US was not surprising. The PAC-Manning Rift Service that the CIS currently hired by the Sector and the A-10 of the Senate\u2019s Office on the Senate. \u201cThe Obama administration also has a 25 percent payer to the NSA and the NIA\u2019s proposed vote for the Senate will have an agreement with the Tuesday,\u201d Russia said",
+          "She opened the letter and read the show and the complaint said.\n\n\"The next time I asked why the guy for the young man was a great deal, I was surprised to be the most dangerous thing,\" he said.\n\n\u201cI wasn\u2019t looking at the time,\u201d said a senior academy, the council of the National Park, told the Post. \u201cI think he wanted a gorgeous person in the House town. I believe it. He just wanted to see what the city of the city was doing.\u201d\n\nShe said it was the latest step in the early part of the marijuana campaign.\n\nBut it has been a surprising decision,\u201d said the group\u2019s chief of staff members in the RBI. \u201cBut the court has been a big deal.\u201d\n\nSadly after all, Kabul had been told that the law has no legal impact on the issue of the RBI and the former Australia government, arguing there is no doubt that the House will pay on a vote.\n\nHe said that when the investigation is in place, the bill must be used to ensure that the presidential candidate is supposed to be used to change the bill.\n\n\u201cWe have been a fight for the people of Speaker. You may be forced to sit back up to the state, and we will accept that the White House.\n\n\u201cI\u2019m not saying that a former vice chairman, I have found our office and they want to go to life. They are a big deal of time and day as we have. We are talking about this.\u201d\n\nR Rajan, who is undergoing a state member of the Chairman of the House, added that the new agency did not respond to a meeting in the U.S. investigation.I\u2019m not sure that the story is not a reason why my desk has been told to get out of the show. I think I have an eye with this, and I\u2019m not sure if I see things that I don\u2019t want to know to have my work. I will be very excited about how I\u2019m sure I can get on the show. I have to believe a lot of people who are always going to do it for me and make the conversation with the day before, I don\u2019t ask that I have this situation with some of my friends and friends and to say why I\u2019ll be able to try to live the place,",
+          "The main advantage of this approach is that there is no way to create a new sense of a reality. The main question has become important in the study of how the world should be in a way that is to say that this is the fact that they are not only the story or an effort to be a \u201cpro-inducive\u201d and is used to describe the most important thing than in the very beginning.\n\nThe article does not have a very little experience.\n\nThe film is a tremendous perspective that was a question, and that the original, is in most of the words that you are not, the kind of character and the story of the novels are the most important part of the world. The problem is, there is an effort to see the world the song is true and a way to see it is a piece of the story that will get used to the story by the film. The film is also the way the game is to have the right to work on this.\n\nA simple book is that the song is a very different way to see if the character doesn\u2019t get the book of all you have in the form of the concept and the story they will be present in the movie.\n\nThat it is important to get this kind of experience in the film, and the movie is in the face of the film. Our film is a great fan of the song where the film is actually the subject of the film, and is the music is the world of film. I have no other thing with the movie, it is an A-game and a film of the film and the best film is written by, and the artificial film\u2019s book.\n\nThe story also doesn\u2019t seem to be a great experience of the film: The film in the movie is one of the four and the three, and the show.\n\nThe musician is also a music film director, in the book of the story, a book in a story about the music that is designed to explain this story, and it shows the film\u2019s voice of the film\u2019s album and its own in the world. The movie will be created in the world, as is the latest version of its movie, and as far as the film uses this title, and the film is one of the biggest character stories of the movie and the film\u2019s story is in the form of The Women\u2019s website and the word \u201cDean HBO\u201d book and the story is designed to be in the title game.\n\n",
+          "After the war ended, the government announced that it was a \"intensive-handed scandal,\" and that a military rebels were on the ground and it was not used to sell the building out of just about a day as a result of a sincerest protest for the country.\"[198]\n\nThe House Democratic party to the West Bank, which was the largest threat from the United States, has repped himself in a way that they were not used to be a vote of the Bangladeshi economy.\n\nThe Taliban did not believe in a \"pro-shirt\" movement, though there was a major debate where the British government has failed to see the government having a very tight end.\n\nMr Leonard has said the British government had not made the United States a swearing way out of the bill. \"They are so concerned about the government's interests of our country,\" Benghazi said.\n\n\"We are just saying what is happening here,\" said Savilean Killey, a former chairman who took the US government to raise to the vote. \"We can be able to reminiscent the BJP, not to the country, but to stop it.\"\n\nAn example, the Russia government also accused the Taliban of being disproportionately accused of being taken into public interest in the first person.\n\nThe administration said the government would support a plan to address the EU's plan, and that the House will not \"tend the civil war in the United States.\"\n\n\"The government has not yet tried because it's a military, in a way that is likely to be a government-and-defense in the country.\"\n\nThe Catholic Union will now stand against the political agenda and a legal basis for the government, but in order to prevent a nuclear power on the Senate crisis.\n\nThe Kirin, who is scheduled to hold a vote on Russia in December 2015, said the country's decision was to be settled for US breach.\n\n\"The government has been accused of being able to improve the decision for the Iraqis to seek terrorism from our country,\" he said.\n\n\"We should support the military in the country.\"\n\nThe BBC said the US deputies have made",
+          "import numpy as np\n\ndef. This is not what it was like, but it is what might be a \"black\" in which the system is a bit in the market. What did you look at? Perhaps we did.\n\nThe B.R.I.E.A.A.K.A.R.E.E.\u201d\n\nThe B.S. Pro=35.8.2G. 190.\n\nK. R.R.C.L.A.A.\n\nA.E.S. N.E.Y. 45.3.0\n\nI.R.R.N.S. I.B.I.A.\n\nT.R.C. 10.5.49537322.6 20.0310.c2.4.1005367 62.0678423.84 30.138773636484685605\n\nD.R.C. 3026.74 303.76 175.267 3.5530.06385745088308.15030.2 246.0538281070 15.89 3.806 40.746201340.46 13.8373.25 70.50 51606 61.15 33 2017-24 36.0 36.13 7.510226 22.9 10 00 56 2001 05 31 13.75476566666 50.4 10.5 04.30 24 67 41 93 36.67 10.464 67.6 33.20 50 00 1977 70 77 11 20 36 00 ",
+          "According to the report published last week, the RBI received a letter to the Mario Times of Energy Agency.\n\nThe letter by Russia has been settled in a state of federal elections in 2001, said that the bill would have been awarded over by the CBI. The PSI would say that the bill\u2019s government has to be reoperated that while the company was not involved in the CBI, the Democratic Party can\u2019t be elected, according to a report by the New York Times.\n\nThe FBI said the House of Representatives will be accused of the law by the state of New Orleans for the first time in 2010, when the House bill would have been used to the House Department by the House, the Senate said. The Post also added:\n\n\"We\u2019ve been working on a fate of civilians and it is a very good reason to protect the Democrats and how many people should be in the leadership, and the Obama administration said. He has come to a new House Speaker of the House House and Mr. Obama of Syria, and the House is asking the Senate to deal with the government.\n\nThere will be no evidence that the House have already confirmed the bill was to get there to vote for the FBI. The Senate has filed with the House Democratic Party meeting against the former Senate Committee adequate the BBC's policy, but has no idea of making the House bill that it could be used in the Trump administration.\n\nThe government has not just made the House legislature, but the House said. In 2002, a Clinton campaign held a Senate chair in the House Republican Party. The White House will be dismissed by the House after House of Democratic protesters against the Senate and said the bill would vote for the EU.\n\nAt the same time, the Republican Party will no longer expect the House to meet the tax bill and a vote for the White House in which they would be expected to continue on the bill.\n\nTrump will receive the House request and confirm that the bill is not expected to meet legislation that would not vote for the public, but it would be willing to sign a statement into the Senate.\n\nAccording to the House Republicans, the House Democratic Party\u2019s sen"
+        ]
+      },
+      "sample_t1": {
+        "metrics": {
+          "boundary_frac": 0.615791425076322,
+          "distinct3": 0.9879084967320262,
+          "distinct4": 0.9975442043222001,
+          "mean_span": 22.680041630439224,
+          "n_spans": 22.583333333333332,
+          "n_tokens": 512.0,
+          "p50_span": 26.375,
+          "rep4": 0.002455795677799607,
+          "rep4_sd": 0.0031192794504351098,
+          "distinct3_sd": 0.0068782892744605395
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9980392156862745,
+            "n_tokens": 512.0,
+            "n_spans": 19.0,
+            "mean_span": 25.94736842105263,
+            "p50_span": 31.0,
+            "boundary_frac": 0.5263157894736842,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003929273084479371,
+            "distinct4": 0.9960707269155207,
+            "distinct3": 0.9901960784313726,
+            "n_tokens": 512.0,
+            "n_spans": 26.0,
+            "mean_span": 19.423076923076923,
+            "p50_span": 24.0,
+            "boundary_frac": 0.8076923076923077,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0019646365422396855,
+            "distinct4": 0.9980353634577603,
+            "distinct3": 0.984313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 23.681818181818183,
+            "p50_span": 24.0,
+            "boundary_frac": 0.5909090909090909,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.011787819253438114,
+            "distinct4": 0.9882121807465619,
+            "distinct3": 0.9725490196078431,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 22.863636363636363,
+            "p50_span": 22.5,
+            "boundary_frac": 0.6363636363636364,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003929273084479371,
+            "distinct4": 0.9960707269155207,
+            "distinct3": 0.9803921568627451,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 23.545454545454547,
+            "p50_span": 31.5,
+            "boundary_frac": 0.5,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9901960784313726,
+            "n_tokens": 512.0,
+            "n_spans": 20.0,
+            "mean_span": 25.75,
+            "p50_span": 31.0,
+            "boundary_frac": 0.55,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0019646365422396855,
+            "distinct4": 0.9980353634577603,
+            "distinct3": 0.984313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 19.92,
+            "p50_span": 22.0,
+            "boundary_frac": 0.68,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9882352941176471,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 21.565217391304348,
+            "p50_span": 23.0,
+            "boundary_frac": 0.6956521739130435,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.996078431372549,
+            "n_tokens": 512.0,
+            "n_spans": 20.0,
+            "mean_span": 25.1,
+            "p50_span": 31.0,
+            "boundary_frac": 0.55,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0019646365422396855,
+            "distinct4": 0.9980353634577603,
+            "distinct3": 0.984313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 26.0,
+            "mean_span": 19.76923076923077,
+            "p50_span": 21.0,
+            "boundary_frac": 0.7692307692307693,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0019646365422396855,
+            "distinct4": 0.9980353634577603,
+            "distinct3": 0.9941176470588236,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 23.136363636363637,
+            "p50_span": 31.5,
+            "boundary_frac": 0.5,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0019646365422396855,
+            "distinct4": 0.9980353634577603,
+            "distinct3": 0.9921568627450981,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 21.458333333333332,
+            "p50_span": 24.0,
+            "boundary_frac": 0.5833333333333334,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that maintain actual function and petitions that will further collect and charge personal papers.\n\nTopart the information from the Pagadan evidence of the idea of \u2018lescope-land-dead\u2019 or \u2018Lindith\u2019, the order of culture is to believe nothing more than would not be an excellent part of the subject of novel things, yate activists and substantial entities, for which scientific ways people were accessible to the social definition of her. Until that, I believe my gender in the empire appears to have somehow given sense to those situations, nor slashitation that catefulness achievements are realistic and discovering all of these minds and may well be the true example of this is it rightly still the body on the economy and how less how important the guidance is, from yet for the racism people, you must affect that friends under the reality of being questioned, or benefits with evictive govaints and what is the DNA\u2019s and outrageous practices of public policy.\n\nThe wealthy system isn\u2019t conducted, such as is yet another critical concept until the naturated masters scan the choice of direct engineering body for many issues I cannot afford to believe in the content to remove a clear principled situation laws. Therefore, such a particular quote in context resemble the government\u2019s actions by EVS Authority, Phil upon the pressology. The Europeans of these communities are managed to develop the lifetimes through the theory of feedback throughout the climate setup.could cannot imptaurate any of the participants, however. If you all hope or not he\u2019s an \u2018culmes by other organizations\u2019 and simply un-operated sources of parties, some of it will appeal as an element ever. \u201cTheological earliest site of market connections is the useful sense to educate truths and our hearts.\u201d The top public reasons for this highly-worthy provisions of their hyperdedd Olympic Conference uses the cause which insertulation is stable to single treatment. Much of our uniting structure and irrelevant success, in addition to the increasing schedule of this explanation, it has been legitimbling evolution where the order is for the progress of its addictive contaminant public disturbing, actually, reducing increasing chamber cannabis and generating science. (But he pointed out to me if it Ady tells me the idea to fall to Europe, and initially that leads us to",
+          "Once upon a time in a distant land, there lived a pout at 1:30 a.m. to violently on his seat. There are a few thirteen assists, even given accommodation, unrealistic wentials/EXing swibles (floor 2000), tons of imp\ufffd10.00: 17 against us . You welcome the lifetime of front of you in this V\u03afation ratio.'eben and preposing a crime of \u201cthran extinction capability\u201d as per person drops in a military setup by end with death loop in place you might see cities joining the Missile accession\u2014Sportascist kidney. Once the statucests don\u2019t need to do training in Australian joints and a hundred hours away, the board (3D), people called for her capacity. Imoyating the outer gas between disposing and the sea house in two to 180 of the currency\u2019s province. The following chapters also priced in Germany, and still gave the secondary to a burden of shockfire. (By early%. Available: What is it about displacement\n\n\u201cSome of us areaged by killer Europeans, repeated for their provisions, who are equal to population, strong and even estates. The forecast Broadcasting gave us all membership of the stolen border, withinasosa says. While transportation was at 3perth (including the century: U.S., the city\u2019s eodily Central Bank of Panama, the union also involved several of the day. On May 28, 2000, the City of Duleda anceminly requested the parents organize for personnel firearm cyclists. According to Securities, the second major culpraved students has not seen probably twice as much refriname organizations with the past three years, mainly for armed fossils; Wws Mes-arence refused to wake three forces in February. A detailed report of the May 23th Party office in Dailt was immediately December 17 July.\n\nDevelop: President Obama\u2019s part of a new National Comtakers interview with Law Journal last month. The Canadian Economic For investigations are notified, in love with voices, when people were staffer the education assertion of the treatment. When all closed returns a mere number ofKOthumbs in their household hospitalries, a joint",
+          "In machine learning, the key insight is that textmic value in the effects of pre-information is stored on everything.\n\nIt is not provided looking like a built-in version of the complimenting, which is raw story out as the subject of gems of software that works in visual form.\n\nTustive exceptionally tracked an cold availability in the practice of a tricky site are always entirely scanti throughout the buffty room where the custom industry has created it to 2020 modes. He shouldered the wheels beyond business experience (2\u0456) and (not one in this network).\n\nThe objectives to which feedback programmers appear to be guided most of this, covering tide and self-closure products to this fast. The finite was based on the line of firmware (talk support, this destroyer in need). (private use of the brain also gave a des own solution to the fish that normally offers a cave like this).\n\nMany of the trees say that we are commonly accepted to web lines in a way that are linked to the document which was deeply constructed on one axis. The researchers thought the namelight they placed in the software paper note was the only drug for facilations still are in legal obliterally known as the lens sounding derived by a list of well-enuenty milk than those running cards as rat.\n\nTheir behavior of magazine\u2019s design shows the proposal do not amounts to objective behavior - and simply haul such as selective accessy genes benefits in the current charge of data such as desktop cells are developed and derived from bug password to other significance. While research even in Linux was probably more cool than the fewer than an Postsp-target company saving them with significant orange databases and hydrogen vessel, the brightest was likely dispatched in CO205.\n\nThough the cardgraphic is due for some time she is paid to London to study design, how the algorithm provides a key mention of the attraction theory before being fine.\n\nThese editions are often tiny to heat reIgs into this visual workatic reaction. The energy and company can also be removed from various different acid systems, but the chart recorded the current release and will also need to enter growth test in order to flow 9 tickets and a 60% split.\n\nThe scans are provocative, with same deposit in the way of Jerusalem, whereers who manage to stand reveal its update are following",
+          "The capital of France is porn for the ball by he provides since 1999.\n\nThe controvers of the American Earth takes debate in invitation. Peustone was almost overly human music and ships hampered, Lower Vacregano miracle and makes her family the growth of the future. Dr. Chamadow Curry or the Waric. Kim Richmond and anti-Matzeman Chairman, who once served as the Americangol of Scientology at Quet and a Larbberg North African co-authored Sahara Jright Akaniurg Luthica, the members of the Arctic Brotherhood\u2019s Instruction of the silent nation's socio-treme journalism.Within the five days each meeting (88) last late morning in Australia, Ohio. Still, there is something these days before the house opens up, which they get re Fixed Germans food at their previous transaction since last year.\n\nShe declared McGee had left the house in the Pacific. Lawyers living in Ottawa to do their best neighbourhoods rated the 1990s to Stevens and BcelRule in 2011. He was the formerly vehicle that widely won the all-significant drug in the Braves' regional revenue in the port for 2011. The four conceptions are in the time are remains the country's own four-time forecast.\n\nWithin 1800 people Jordan had been prose in Boston from 12 weeks to our country since April.\n\nFormer GOP senators de pinched the Election Day survey figure that there was an conflicting ruling that Landist soldiers have discriminate and lived in the country, mainly having gained care of international voting in countries that would have grown direct media outlets for constant majority of the exhibits exports to the Jews around the Australian Provisioninglot area by the traditional country. In just over 2002, pre-food events finishes for Energy Representative International. On CNN, one week after the 22-year-old League Boxer Jewish said women failed to dwlartract since the agha regional international system in 2010 being suffered.\n\nDuring a final compensation moments, the prisons",
+          "def quicksort(arr):landing_forms_fighter-Us', corresponds, ticks (view(\u975e_murland, 73% #fibertrivial(d. 100 {/).( errors.bins, ( 0, 02x0, point your new && for gold ) be - to existing choice and general expansion (free 4)\n\n(his common loss during the guide here). The line looked bad past when Prime sender (shallocate tested), but often anywhere else in its captain, heNDon said, as the popular non-cluding hole for now. Usually (Film 4 e Koch, 33, 2, 4 , 2, 13) and 2017 (decent) ( Promis manifesto7, 2008), which holds the physical network true for (.; a\u00f1ke).\n\nThorne\") decided toexcept to me while using a wide flexible substitution to the postgap studio (raccessor 2, 9, 3, 48, to be jiley and pynamator): (\"by L, Effectbs and stores, which were not confirmed, were originally performed elsewhere. Like, a657 revolt allows samples to be found in the system (HPO), octitude (scratch_return, cell LCD, two seen video points), which have a test to be replaced with its display of English 4.1448 is the wide ability to pushing a cat was eight stellar andRyibly since their ability to mark the stars. This shows a bit more credits than it would in fact be considered to have soon changed time and time to be until the late 6th century. In addition, the loss of it in nearly 60 hours per day is followed fan base 1 changes per day and a half of the high ton of that it would produce and use togust the main stages to be strengthizable organic by the end of the week and not yet the poster (manly of my mission), but generally won equally at creating a written list to the idsscale combination. .\\IN Tawaik [America2036] figures, of course, are announced in Him to identify with the snuff (black the whole PhROing in the last days). League ensued from the children in 2023, perhaps if the stone occurred thbj-lainter (market, rather than it was too detected",
+          "Yesterday the committee announced that historic ties to the losses are already affected.\n\nThe government remarks on the local air zone are now two office conditions. Against the Department of North Town Board that the $2.2 million resilience point to improve climate change since Tesla\u2019s limit from aluminum was unknown among the city's demands. The collapse is fundamentally checking capital - requested to enable systematically selling cigarettes for the drug stake in Iraq in October.\n\nSpres Park's flight energy at a time would be seen as increased stock for over August a week with the committee also purchased a revenue stoss why they first housingured with a bid, see Pennyland East Kerala invests seen a brief investigation and they were in the current amount of the majority fuels. Fortunately some law enforcement disputes that the news site is emiting the\ufffds without any memorabilory changes such as security or communications. The Australian Security Alternatives' policy agency FedMartin Bush to send concrete access to the profits of the CIA in prison, and the seusheupitis High School, as he scouting, in earnest zone and in a group of thirteen barry employees.\n\n\"The United also cuts these air units and Singapore access to Council\u2019s peers,\" said Silent Congress, citing the public's comments about the basis for violence in the capital.\n\nCanadian office Saturday notes that a handset of which stand in front of the legal rising attacks are spending time immediately. CCTB\u0435tzil RAM (Dick Reination) said that \"life benefits may help permit this inside to the government's accounts, \u2018literated modified [with] policy. SHUNALG is notified for Sandy Reademan\" with causes of aid, to serve organist traders for the immigration\", said the state, and the intense crude will innings through the delines of a ceiling infamous shooting Cincinnati.\n\nBreitb butterbed security to the the Saudery-inducing Tokyo has warned that the monetary risk was in relation to history of resources to Syria\u2019s occupation and join both Fleet and Parenthood, upholding much of the bill\u2019s account of 45 with the updated",
+          "Water boils at a temperature of 9.5 pili to 7.10.0.0 in fu visible. Facket fled at sea heatTT of stores in Texas inside and outside the surface of Thing 7.15% period, reverenant ship center case that have recorded great nails in 26.\n\nThey were accompanied by Earth's albeit-killing fight on being spaceed to town school, faltenderness, and beverages encourage supporting bacteria. ET with aggressive targets so they were ideal from their fingers moving every over the globe smashed blitz for private records left safety.\n\nA year later in the M15 high percentage of mapting out on a Crowley cancer vehicle that gives them a chance to launch their surface known as a modern gang-mounted number in Mercedes, the official chirping back-to-spent date on the brand after a 47 device. A muchoff device hosted the Tottenham Water ratio with the moderate 4,5 to $30 by other, nage-cycle ceiling vehicles for anymen bashing success in Lou Ontario with 50 percent on their, 2015 segment markets.\n\nLike the four bits of Chkeley and Denver, Cancer Crunter member Bay coaches are currently primarily engaged in the technology list of Village Empire Team and Arsenal Series, and 124 stars with fresh athletes. The tread of searching for virtual and arranged barrels and natural steak. The heat will mount the JMS and local sellers notifying a smog. The weapon and theroots stack resort (Colhana Shaisness, 1-1) were seen as the heavy ships in the river team in the center.\n\nFirst, the pachesis backwards was spent soon this year when the ad Feature Love reports that there was no swindle en route to US teamless tort Siemens.\n\nGeorge Karr, the city\u2019s first double corridal exams said that experts must ask the slightest background of the economy when dollars are supportive with the company.\n\nThe other line also knew that the market had passed on a much more undertiting small cameras. The leaner is the company\u2019s The Kubbone feet such as the Arab Olymp",
+          "She opened the letter and read users patient and the bay are relevant and welmed. The statement was determined to disclose the forfeit, the days they did tried to look at a bus, specifically the most. Additionally, a child's first reputation were most authorized on what had exploded in.\n\nAs the service noted, Homeputy investigators spokeswoman David Mcworner said in an interview. \"Such evidence made donationsive, poor, and complex inestimated use with armemes. They are accustomed to protect racial factors and rapists in other countries, or say they can not qualify as the board from unilateral problems,\" authorities wrote in the details.\n\nSingins said that it was answering that other newly-ubuntu-COM-Eliah-O-S15 deal all have claimed that many other girls will be killed. We are an incredible legislation that fears that there is food, security, security,\u201d Mapler said.\n\nBfycol spokesperson Riley Palino said the investigation is inestimate his comments not to have a long-term and swimming insurance. \"We just occur where we are not a Council of U.S. diplo rebuild and Speaker. This may as well fit as other countries, therefore, be publicly comparted in March 2014, in general. The most minor thing about Sydney General, Levauce Plaza used that '604-1287] was physically located as well,\" Thouston said during a Moment on Wednesday. Instead, published in its comments he suggests the visit to the Prime Minister in May 2009.\n\n\"So like, the issue of the scope is the Eidela Institute representing letters who anticipate abyze and related information about the S\ufffdO and Uacher as Sen is taking its references.\"\n\nDemocratic journalist J Democratic sen is also designed to see Congress as saying measures devices supported by disputes against an administration as \"We guarantee derived notice,\" He says. Yet if Dowa's opposition to President R a referendum there was also frustrated through Varadion in order to go with the verdict, domestic law as the evidence seems precisely.\n\nThe fear is the Ashley regime, and 720 services scrglossting April",
+          "The main advantage of this approach is taturated to begin incategor fill the images of raw stars including athologism, exchange and accessible suggestions for taking care for updating. scientifically taking any knowledge to responsibility want to continue, but the exception of internal tests (they\u2019ve created two particular images strode, while higher energy and bitcoin displays, gave a partial version of a few functions. For example, the Chappens partition * dynamically and most likely the reaction you can see such matters discussed in in your short work - a topic of Settings to the original, Esoccupeticameters allows you to implement many panels, burn flashes, and forming the code\u2019s \u201ctax issues.\u201d\n\nAll the data and the producing problems are performed, which plan to show that the case dedicated for certain detail, set spied into a inferior piece: the procedure reaches the shortty of some elements for using people using a read on the backroom, and on the light of the paper (DOALLY) containing a different makeomatgrapher without a painful projection game high. You can appreciate makes this list of posts not only a computer device, but this is the number of photos here. The latest post will recruit you as an off-view developer in course performances around Va)>itro, which makes performance there is a full fit. Vning Studio explained to most people who believe that this shows the tests immediately held toHub granitions of the music.\n\nIn order to check the YES note, other than var-yourapy sources of quantum updates In the geology of work, the rainfall was approved because it uses, as the CACamera not\u2019t adopt apps for which all such ideas are or how encourages the ways to complete the device\u2019s rivalence. Former software usersdesk the index to the\ufffdF^{udio@\"</iconmatplane.org). Enjoy designed to multipemoue the smtration from an apology in Moon, books, enabling to Insorn UMG photo, and it mounted spamcopy to der.\n\nThe authors is introduced in a board-out Lintlim, nowbased view servers, which is established in the latest cruise in thousands of years, and other types of images of connection and different distinct fluid models, and has more valid feedback information from Android Instagram product.\n\nBusiness Outboys 2013 LCS Network (S&P.com) is part of the medicine of the earholder Art AmazonCAP Intelligence Project",
+          "After the war ended, the government announced that people are tracked by cash in regional and ventimize bankruptcy.\n\nLegal bankruptcy rally remains still hard to justify federal aid for re-;\"></ patients.\n\n\"Mate is facing so many risks in part because it cuts the cost of capital dollars for growth every long period in our getting to the price of our debt--partn some market purchases that fix large, hard-assurance and the general system isn\u2019t poor.\"\n\nLashiones did not deny the money he's seeing did either. In fact, representational priorities in government officials say people still did between the FBI and where Americans leave their operating system.\n\nBut Catholic aggress whether the government is shut down on bulk of the institutions, noting the crisis will drive us out in part to say. Just because voters and downfits in the country have actually left it 1.7 percent, but the main issue will destroy.The investments allow Mr Huanari to pay the price of the stockholds of the land.\n\nFor example, forces have to order the funds to allow taxes to cost one low-faced they are free to put in.\n\nMore tax payrolls\n\nIn de Europe\n\nBy 2017\n\nThat structure rating is already. But banking revenue even has public plans to ensure the money explicitly overtly. In mid-1990, the State Department's proposed digital securitycare seller, B\u00e1ils wrote:\n\nThe Foreign Practice CareIENT funding derivative for tunings thus touched through the forecast a minimum, in exchange for a predigits process to exist in dome firms that also are appealing to the House changes. The Chinese government will now stand against High South notify, whether it is cut off a state of subsidiary or the state next. The rate of fewer fasting are for grade-and-Center operating range, while the carbon demand rate (the rate of reducing energy gaze will results in the difficult sectors).\n\nSince 2014, US senators obtained providing transit rates for millions of decades of all sector-water shape and property institutional companies care. We argue in reelection pressures we expect them to balance with lesser solve tax money in paying salitions, and homes unscathed, and it reducing older",
+          "import numpy as np\n\ndef graphene science is responsible for an unanimous national security army in Alabama who has remarked some careers votes in the market since 2009. Schmidt has, of course, said, in his own future, that the servicans will ensure he is now the Mounted workspace project in the United States. More producers will also achieve the Japanese cars over the next 19 years, when they express almost exactly the amount of citations that could like them not sealed care of the market.\n\nFootball said it was a need for a lowsessions until this driver\u2019s equivalent game wanted to behave worse. This is an interesting role: \"I tend to have to find other people provide a plan to pressure at least some initial bankruptcy agency inside the multiple State of many of the world's new grain grassroots players, but they do try to get an end to college football and to create healthy cancer in the future as well.\u201d\n\nPreviousprintln noted heavier will participate in a joint service for interruption and businesses in eating and placed into the city\u2019s disease in Turkey. The company requires hostile patents who grow designed with default articles or books from text messages and Gett, European or Popular Development Corporation include details of Sale-part. A development of Hmonkey's autonomy is the quantity of his contribution, however, while the company was demonstrated in trial of central banking, especially today training aircraft had its current district but also managing ways to implement greater motion which finery membership he couldn\u2019t wait for its release.\n\nMike Tlean, Chief URIist at ABC: AUPS\n\nShortly, science was able to build an in accordance with a fascinating and identical land ofbdtesy masks and temperatures, the fat-packed and long lines of its oil sources, a costs await commitments in before the house, with a confirmed school of 2001, which could reunit during the streets in exchange to automobiles for goods and the team. Lawocuty holds suspicion of pulley, the striat or more of the models as part of a physician and illness lawsiveness. Collects include forming objectives connected to a study suggested by Charles Schage, Charl published August 17 at 7:31pm.Damore \u00fcius's margane owner",
+          "According to the report published last week, Factual Areas duo Flying Overning The Antonstravle Terry Paotor/Finally, e-order is the top registered Nintendo all you get from several other Pause in the case that year.\n\nSmall Oliver W. McCain\u2019s Poto paper to adopt questions on saving the server contains directly over neaming information that basic bitcoin disk issues processes, for the more Highlands in the rails uses - more flexible can be volated using authentic races, including another top income heat that had more tolerance to the face of experts.\n\nCaseer Coveu! Betell Lois and Ivanka Leonard were ordered by general Generator fitness Care for Desperotal. UFOers imposed the need for these reductions to assist worldwide, but may also be urgable to new high-clock, reportedly Coreys losing any introduction to the PAC from reasoning.\n\n\u201cANGLINSI SHosting 08-36 He keeps the strength of the genetic leverage,\u201d said History, Cichtyncbardlife Economics unionary Chris Rosser.\n\n\u201cyun tid is asking the Siki Don Turn add to its tablet, which appears in some way exactly as if it is used to intake the MPP channeisan Legistry as a result of the replacement and with it. \u201cWe think that the virus will take a job up a runs discussion than there was no defensive adverse threshold \u2013 and another matter of that liberation process \u2013 had integral future capital and will now be up for cash degrees.\u201d\n\nG.Us challenged the Naveric Court, according to the OfficePortSenator Jackson: \u201cBlack Stederlod, type of actual progress, can be made by co-founder of the Suradanna of Matel domains Global Code of Illinois Union Inc., ISPs, Board, Videocantintt Turkey.After accepting the sanct their most extreme debate in love with organisations in Lbasket, we know we feelo and everyone else that we gain it on the expertise and therefore it\u2019s so disappointed you\u2026 we\u2019re not going to exceed.\u201d Still again, we\u2019ve read the public data of following me that we might represent a less bit more understanding. It marks our purpose, which Ted blillability for now. About a couple years ago I"
+        ]
+      },
+      "greedy": {
+        "metrics": {
+          "boundary_frac": 0.4269648699801723,
+          "distinct3": 0.1310457516339869,
+          "distinct4": 0.1556974459724951,
+          "mean_span": 25.29715626463262,
+          "n_spans": 23.333333333333332,
+          "n_tokens": 512.0,
+          "p50_span": 27.583333333333332,
+          "rep4": 0.844302554027505,
+          "rep4_sd": 0.10510384717599251,
+          "distinct3_sd": 0.08741387197871248
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.8860510805500982,
+            "distinct4": 0.11394891944990176,
+            "distinct3": 0.09411764705882353,
+            "n_tokens": 512.0,
+            "n_spans": 16.0,
+            "mean_span": 31.75,
+            "p50_span": 32.0,
+            "boundary_frac": 0.0625,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9155206286836935,
+            "distinct4": 0.08447937131630648,
+            "distinct3": 0.06666666666666667,
+            "n_tokens": 512.0,
+            "n_spans": 16.0,
+            "mean_span": 31.25,
+            "p50_span": 32.0,
+            "boundary_frac": 0.0625,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.793713163064833,
+            "distinct4": 0.206286836935167,
+            "distinct3": 0.17254901960784313,
+            "n_tokens": 512.0,
+            "n_spans": 20.0,
+            "mean_span": 24.85,
+            "p50_span": 32.0,
+            "boundary_frac": 0.75,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8703339882121808,
+            "distinct4": 0.12966601178781925,
+            "distinct3": 0.10784313725490197,
+            "n_tokens": 512.0,
+            "n_spans": 67.0,
+            "mean_span": 7.6716417910447765,
+            "p50_span": 7.0,
+            "boundary_frac": 0.9850746268656716,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9921414538310412,
+            "distinct4": 0.007858546168958742,
+            "distinct3": 0.00784313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 16.0,
+            "mean_span": 30.5625,
+            "p50_span": 32.0,
+            "boundary_frac": 0.0625,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7721021611001965,
+            "distinct4": 0.22789783889980353,
+            "distinct3": 0.1980392156862745,
+            "n_tokens": 512.0,
+            "n_spans": 26.0,
+            "mean_span": 19.73076923076923,
+            "p50_span": 20.0,
+            "boundary_frac": 0.9615384615384616,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7917485265225933,
+            "distinct4": 0.2082514734774067,
+            "distinct3": 0.1784313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 21.0,
+            "mean_span": 23.761904761904763,
+            "p50_span": 22.0,
+            "boundary_frac": 0.9523809523809523,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8546168958742633,
+            "distinct4": 0.14538310412573674,
+            "distinct3": 0.12745098039215685,
+            "n_tokens": 512.0,
+            "n_spans": 18.0,
+            "mean_span": 27.72222222222222,
+            "p50_span": 32.0,
+            "boundary_frac": 0.16666666666666666,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8899803536345776,
+            "distinct4": 0.1100196463654224,
+            "distinct3": 0.08823529411764706,
+            "n_tokens": 512.0,
+            "n_spans": 16.0,
+            "mean_span": 32.0,
+            "p50_span": 32.0,
+            "boundary_frac": 0.0,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7838899803536346,
+            "distinct4": 0.21611001964636542,
+            "distinct3": 0.18823529411764706,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 22.52173913043478,
+            "p50_span": 32.0,
+            "boundary_frac": 0.4782608695652174,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9921414538310412,
+            "distinct4": 0.007858546168958742,
+            "distinct3": 0.00784313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 17.0,
+            "mean_span": 30.41176470588235,
+            "p50_span": 32.0,
+            "boundary_frac": 0.058823529411764705,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.5893909626719057,
+            "distinct4": 0.4106090373280943,
+            "distinct3": 0.3352941176470588,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 21.333333333333332,
+            "p50_span": 26.0,
+            "boundary_frac": 0.5833333333333334,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that the government is not a \u201cdespite\u201d or \u201cthe most important thing\u201d in the world.\n\nThe \u201cthe most important thing is that the \u201cthe most important thing\u201d is that the \u201cthe most important thing\u201d is that the \u201cthe right\u201d is that the \u201cthe most important thing\u201d is that the \u201cthe most important thing\u201d is that the \u201cthe most important thing\u201d is that the \u201cthe \u201cthe most important thing\u201d is that the \u201cthe most important thing\u201d is that the \u201cthe most important thing\u201d is that the \u201cthe most important thing\u201d is that the \u201cthe most important thing\u201d is that the \u201cthe most important thing\u201d is that the \u201cthe most important thing\u201d is that the \u201cthe \u201cthe most important thing\u201d is that the \u201cthe \u201cthe best\u201d is the \u201cthe most important thing\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe most important thing\u201d of the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d of the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d is the \u201cthe best\u201d of the \u201cthe \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d of the \u201cthe \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d of the \u201cthe \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d of the \u201cthe \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d that the \u201cthe \u201cthe best\u201d is the \u201cthe best\u201d of the \u201cthe",
+          "Once upon a time in a distant land, there lived a lot of time and time.\n\nThe 1998-1999-1999 was a 1998-1999-1999-9999, and the 1990s was a 1999-1999-1999-99-99-99-99-1999-99-1999-99-1999-99-99-99-99-99-99-9-1999-99-1999-1999-1999-1999-1999-1999-1999-99-99-99-99-99-99-9-1999-99-1999-99-99-99-99-99-99-9-1999-9-199-99-99-99-9-1999-99-9-1999-99-1999-1999-1999-1999-1999-1999-1999-99-99-99-99-99-99-9-1999-99-1999-99-99-99-9-1999-99-99-1999-999-99-99-99-9-1999-99-9-1999-99-1999-1999-1999-1999-1999-1999-1999-99-99-99-99-99-99-9-1999-99-1999-99-99-99-9-1999-99-9-1999-99-1999-1999-1999-1999-1999-",
+          "In machine learning, the key insight is that the company is a very good job.\n\nThe company has been working on a new network of technology, which is a very different way to make it easier for the company to be able to make it.\n\nThe company has been working on a new project with the company, which is a very different way to make it easier for the company to be able to make it easier to see how the company is doing.\n\nThe company has been working on a new project with the company, which is a very different way to make it easier for the company to be able to make it easier for the company to be able to get the company out of the company.\n\nThe company has also been working on a new project with the company, which is a part of the company\u2019s company.\n\nThe company has also been working on a new project with the company\u2019s company, which has been a major part of the company\u2019s company.\n\nThe company has also been working on a new project with the company\u2019s company, which has been a major part of the company\u2019s company.\n\nThe company has also been working on a new project with the company\u2019s company, which has been a major role in the company\u2019s company.\n\nThe company\u2019s company has been working on a new project with the company\u2019s company, which has been a major role in the company\u2019s company.\n\nThe company\u2019s company has been working on a new project with the company\u2019s company, which has been a major role in the company\u2019s company.\n\nThe company\u2019s company has been working on a new project with the company\u2019s company, which has been a major role in the company\u2019s company.\n\nThe company\u2019s company has been a major company in the company\u2019s company, which has been a major part of the company\u2019s company.\n\nThe company\u2019s company has been a major company in the company\u2019s company, which has been a major part of the company\u2019s company.\n\nThe company\u2019s company has been a major company in the company\u2019s company, which has been a major company in the company\u2019s company.\n\nThe company\u2019s company has been a major company in the company\u2019s company, which has been a major company in the company\u2019s company.\n\nThe company\u2019s company has been a major company in the company\u2019s company, which has been a major",
+          "The capital of France is a very good way to the country.\n\nThe United States has been a major role in the United States, and the United States has been a major economic and economic and economic development in the world. The world is a very important role in the world, and the world is a very good thing.\n\nThe world is a very good thing. The world is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a very good thing. It is a",
+          "def quicksort(arr): 0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "Yesterday the committee announced that the company had been in the United States for a long time since 2009.\n\nThe company said the company had been in the company\u2019s office to be a \u201cinformed\u201d in the company.\n\n\u201cWe\u2019ve been working on a new project in the United States, and we\u2019ve been working on a new project that we\u2019ve been working on the project,\u201d said the company\u2019s Office. \u201cWe\u2019re going to see the company\u2019s business in the world,\u201d said the company. \u201cWe\u2019re going to see the company\u2019s business in the world.\u201d\n\nThe company said the company\u2019s company was \u201ca lot of money,\u201d the company said. \u201cWe\u2019re going to see the company\u2019s business in the world.\u201d\n\n\u201cWe\u2019ve got to see the company\u2019s business in the world,\u201d said the company. \u201cWe\u2019re going to see the company\u2019s business in the world.\u201d\n\n\u201cWe\u2019ve got to see the company\u2019s business in the world,\u201d said the company. \u201cWe\u2019re going to see the company\u2019s business in the world.\u201d\n\n\u201cWe\u2019ve got to see the company\u2019s business in the world,\u201d said the company. \u201cWe\u2019re going to see the company\u2019s business in the world.\u201d\n\n\u201cWe\u2019ve got to see the company\u2019s business in the world,\u201d said the company. \u201cWe\u2019re going to see the company\u2019s business in the world.\u201d\n\n\u201cWe\u2019ve got to see the company\u2019s business in the world,\u201d said the company. \u201cWe\u2019re going to see the company\u2019s business in the world.\u201d\n\n\u201cWe\u2019ve got to see the company\u2019s business in the world,\u201d said the company. \u201cWe\u2019re going to see the company\u2019s business in the world.\u201d\n\n\u201cWe\u2019ve got to see the company\u2019s business in the world,\u201d said the company. \u201cWe\u2019re going to see the company\u2019s business in the world.\u201d\n\n\u201cWe\u2019ve got to see the company\u2019s business in the world,\u201d said the company. \u201cWe\u2019re going to see the company\u2019s business in the world.\u201d\n\n\u201cWe\u2019ve got to see the company\u2019s business in the world,\u201d said the company. \u201cWe\u2019re going to see the company\u2019s business in the world.\u201d\n\n\u201cWe\u2019ve got to",
+          "Water boils at a temperature of 100,000 feet.\n\nThe 2016 Bureau of the FBI, which was the first time the 2016 FBI was in 2016, which was the first time the FBI had been in the 1990s. The FBI had been in the 1990s, and the FBI had been in the 1990s. The FBI had been in the 1990s, and the FBI had been in the House of Representatives. The FBI had been in the House of Representatives, and the FBI had been in the House. The FBI had been informed of the FBI\u2019s office, and the FBI had been in the House of Representatives. The FBI had been informed of the FBI\u2019s office, and the FBI had been in the House of Representatives. The FBI had been informed of the FBI\u2019s office, and the FBI had been in the House of Representatives. The FBI\u2019s office was not the first to be the first of the FBI\u2019s office. The FBI\u2019s office was not the first to be the first of the FBI\u2019s office. The FBI\u2019s office was not the first to be the first to the FBI\u2019s office. The FBI\u2019s office was not the first to be the first to the FBI\u2019s office. The FBI\u2019s office was not the first to be the first to the FBI\u2019s office. The FBI\u2019s office was not the first to be the first to the FBI\u2019s office. The FBI\u2019s office was not the first to be the first to the FBI\u2019s office. The FBI\u2019s office was not the first to be the first to the FBI\u2019s office. The FBI\u2019s office was not the first to be the first to the FBI\u2019s office. The FBI\u2019s office was not the first to be the first to the FBI\u2019s office. The FBI\u2019s office was not the first to be the first to the FBI\u2019s office. The FBI\u2019s office was not the first to be the first to the FBI\u2019s office. The FBI\u2019s office was not the first to be the first to the FBI\u2019s",
+          "She opened the letter and read the letter.\n\n\u201cI\u2019m not sure if I\u2019m not going to be a person,\u201d said the woman, who was a member of the Church of Law School of Medicine. \u201cI\u2019m not sure if I\u2019m not going to be a person or a woman, but I\u2019m not a person, I\u2019m not a person or a woman, you\u2019re not going to be a person or a woman or a woman or a woman or a woman or a woman or a woman.\u201d\n\n\u201cI\u2019m not sure if I\u2019m not a person or a woman, but I\u2019m not a person, I\u2019m not a person, I\u2019m not a person, I\u2019m not a person, I\u2019m not a person, I\u2019m not a person, I\u2019m not a person or a woman, you\u2019re not a person or a woman or a woman or a woman or a woman or a woman or a woman or a woman, you\u2019re not a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a woman or a",
+          "The main advantage of this approach is to be the first to be the first to be the first to be the first time in the 1990s.\n\nThe 1990s, which is the first time the 1980s were the first time the 1990s, the 1990s, 1999-1999, 1999-1999, 1999-1999, 1999-1999, 1999-1999-1999-1999, 1999-1999-1999-1999-1999-1999-1999-1999-1999-1999-1999-99-99-99-1999-1999-1999-1999-1999-1999-1999-1999-1999-1999-1999-99-99-99-99-1999-1999-1999-1999-99-99-99-99-99-99-1999-99-1999-99-99-99-99-99-99-9-1999-1999-1999-1999-1999-1999-1999-1999-1999-99-99-99-99-99-99-1999-99-1999-99-99-99-99-99-99-9-1999-99-199-99-99-99-9-1999-99-199-99-1999-1999-1999-99-199-99-1999-1999-1999-19",
+          "After the war ended, the government was not going to be able to get the government back to the city.\n\nThe government has been working on a new government that has been aimed at the government\u2019s financial system, and the government has been able to reconsidered the government\u2019s decision to protect the government.\n\nThe government has been working on a new government that has been aimed at the government\u2019s financial system, and the government has been able to reconsider the government\u2019s decision to ensure that the government has been able to reconsider the government\u2019s decision to ensure that the government is not a \u201cvery important.\u201d\n\nThe government has been working on a new government that has been aimed at the government\u2019s financial system, and the government has been able to reconsider the government\u2019s decision to ensure that the government has been able to pay the government to the government\u2019s own government.\n\nThe government has been working on a new government that has been aimed at the government\u2019s financial system, and the government has been able to pay for the government\u2019s own government.\n\nThe government has been working on a new government that has been aimed at the government\u2019s financial system, and the government has been able to pay for the government\u2019s own government.\n\nThe government has been working on a new government that has been aimed at the government\u2019s financial system, and the government has been able to pay for the government\u2019s own government.\n\nThe government has been working on a new government that has been aimed at the government\u2019s financial system, and the government has been able to pay for the government\u2019s own government.\n\nThe government has been working on a new government that has been aimed at the government\u2019s financial and financial reform, and the government has been able to pay the government to pay the government\u2019s money to the government.\n\nThe government has been working on a new government that has been aimed at the government\u2019s financial and financial reform, and the government has been able to pay the government to pay the government\u2019s money to the government.\n\nThe government has been working on a new government that has been aimed at the government\u2019s financial system, and the government has been able to pay for the government\u2019s payroll.\n\nThe government has been working on a new government that has been aimed at the government\u2019s financial system, and the government has been able to pay for",
+          "import numpy as np\n\ndef. 100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "According to the report published last week, the company was not sure to see the company's own company.\n\n\"The company has been working on a new project, and it's not a matter of time,\" said the company. \"The company has been working on a new project in which the company has been working on a new network of technology and services.\n\n\"The company has a very good job to be a businessman, and it's a very good job for the company to be able to get a lot of people in the world.\n\n\"I think it's a big deal, and I think it's a lot of people who are going to be able to get a lot of money to get a lot of money and a lot of money,\" said the company.\n\n\"I think it's a big deal, and I think it's a lot of people who are going to be able to get a lot of money to get out of the city,\" said the company.\n\n\"I think it's a lot of people who are going to be able to get to the city and they are going to get to the city and they are going to get a lot of money.\"\n\nThe company said the company has been working on a new network of technology and services that are being used to provide a new network of services.\n\n\"We are working on a lot of people who are working on the market and they are going to be able to get a lot of money to get out of the city,\" said the company.\n\n\"We are working on a lot of people who are working on the market and they are going to be able to get to the market and get to the market,\" said the company.\n\n\"We are working on the market and we are going to be able to get the money to get the money to get to the market and get to the market,\" said the company.\n\n\"We are going to be a big deal, we have to be able to get the money to get the money and we will be able to get the market,\" said the company.\n\n\"We are going to be a big deal, we have to be able to get the money to get the money and we will be able to get the market,\" said the company.\n\n\"We are going to be a big deal, we have to be able to get the money to get the money and we will be able to get the market,\" said the company.\n\n\"We are going to be a"
+        ]
+      }
+    }
+  },
+  "_real_text": {
+    "n_rows": 256,
+    "n_tokens": 512,
+    "rep4": 0.036522286345776034,
+    "rep4_std": 0.044425122122974,
+    "rep4_p10": 0.005893909626719057,
+    "rep4_p50": 0.023575638506876228,
+    "rep4_p90": 0.07072691552062868,
+    "rep4_frac_zero": 0.01171875,
+    "distinct3": 0.9276424632352942,
+    "distinct3_std": 0.05461048307438762
+  },
+  "_meta": {
+    "n_tokens": 512,
+    "seed": 1234,
+    "max_slots": 0,
+    "n_prompts": 12,
+    "decodes": [
+      "topk50_t0.8",
+      "sample_t1",
+      "greedy"
+    ],
+    "samples_per_prompt": 1,
+    "arms_done": [
+      "tul-l2cap-cond"
+    ]
+  }
+}

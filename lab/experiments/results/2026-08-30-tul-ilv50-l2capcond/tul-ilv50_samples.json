@@ -1,0 +1,559 @@
+{
+  "tul-ilv50": {
+    "step": 4500,
+    "config": "tul_ilv50",
+    "path": "checkpoints/morph/tul-ilv50/step_4500.pt",
+    "tul": true,
+    "fixed": {
+      "topk50_t0.8": {
+        "metrics": {
+          "boundary_frac": 0.6793471705136267,
+          "distinct3": 0.9101307189542484,
+          "distinct4": 0.969056974459725,
+          "mean_span": 21.60936728007607,
+          "n_spans": 23.416666666666668,
+          "n_tokens": 512.0,
+          "p50_span": 22.916666666666668,
+          "rep4": 0.03094302554027505,
+          "rep4_sd": 0.01711086395980141,
+          "distinct3_sd": 0.040150885908017
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.03929273084479371,
+            "distinct4": 0.9607072691552063,
+            "distinct3": 0.9098039215686274,
+            "n_tokens": 512.0,
+            "n_spans": 29.0,
+            "mean_span": 16.862068965517242,
+            "p50_span": 14.0,
+            "boundary_frac": 0.8620689655172413,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0275049115913556,
+            "distinct4": 0.9724950884086444,
+            "distinct3": 0.9254901960784314,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 22.5,
+            "p50_span": 25.5,
+            "boundary_frac": 0.5454545454545454,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.019646365422396856,
+            "distinct4": 0.9803536345776032,
+            "distinct3": 0.9470588235294117,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 23.045454545454547,
+            "p50_span": 22.5,
+            "boundary_frac": 0.6818181818181818,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.019646365422396856,
+            "distinct4": 0.9803536345776032,
+            "distinct3": 0.9254901960784314,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 21.73913043478261,
+            "p50_span": 23.0,
+            "boundary_frac": 0.7391304347826086,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.023575638506876228,
+            "distinct4": 0.9764243614931237,
+            "distinct3": 0.807843137254902,
+            "n_tokens": 512.0,
+            "n_spans": 19.0,
+            "mean_span": 26.263157894736842,
+            "p50_span": 30.0,
+            "boundary_frac": 0.5263157894736842,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.01768172888015717,
+            "distinct4": 0.9823182711198428,
+            "distinct3": 0.9333333333333333,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 23.136363636363637,
+            "p50_span": 22.5,
+            "boundary_frac": 0.6363636363636364,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0550098231827112,
+            "distinct4": 0.9449901768172888,
+            "distinct3": 0.8745098039215686,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 21.5,
+            "p50_span": 21.0,
+            "boundary_frac": 0.75,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.04518664047151277,
+            "distinct4": 0.9548133595284872,
+            "distinct3": 0.9,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 20.04,
+            "p50_span": 21.0,
+            "boundary_frac": 0.8,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.011787819253438114,
+            "distinct4": 0.9882121807465619,
+            "distinct3": 0.9470588235294117,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 20.916666666666668,
+            "p50_span": 23.5,
+            "boundary_frac": 0.6666666666666666,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.011787819253438114,
+            "distinct4": 0.9882121807465619,
+            "distinct3": 0.9490196078431372,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 21.304347826086957,
+            "p50_span": 25.0,
+            "boundary_frac": 0.6956521739130435,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.068762278978389,
+            "distinct4": 0.931237721021611,
+            "distinct3": 0.8686274509803922,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 21.565217391304348,
+            "p50_span": 22.0,
+            "boundary_frac": 0.6086956521739131,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.03143418467583497,
+            "distinct4": 0.9685658153241651,
+            "distinct3": 0.9333333333333333,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 20.44,
+            "p50_span": 25.0,
+            "boundary_frac": 0.64,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that some of the most expensive worlds will be provided by the company.\n\nAt the same time, the number of participants are working for the first time in the past 10 years, with people who are being able to see how they need to be used as a situation.\n\nAt the same time that the company has been able to provide a policy, while the city\u2019s government has been responsible for an academic study in the next decade, but it does not require 1.2 percent.\n\nThe company\u2019s office is expected to be set for a two-hour contract, which is based on $1.6.\n\n\u201cWith the next two years, the numbers are unusual, so we can try to accept how to make an event in a way that they may be more likely,\u201d said Washington in a news conference.\n\nThe government has filed a bill with the UK to address the company\u2019s approval of the company and a new proposal to implement a public policy.\n\nThe company is trying to make the company a $7.\n\n\u201cThis is our best interest in the future. For the first time in the 100, I\u2019ve heard this decision in the last half of my release. I want to see the issue in court,\u201d said Willie.\n\n\u201cThe government has more than a major, more than $7.99 per year. In another year, it\u2019s about 30 hours a year, and a year 20 percent.\n\n\u201cThis is a great place for you and you all want to be wrong,\u201d said an 4K dealer. \u201cAnd we have to put on the team, for example, and we have to be fair in the future.\u201d\n\nThe data might be the main way to see if the city\u2019s team continues to increase U.S. a million people. That was up 14.5 percent, but the only thing that I can do is to do is to be.\n\n\u201cI\u2019m not willing to change this kind of time, if this is a good way to get this week, it\u2019s a big problem,\u201d said Wonderer.\n\n\u201cWhat they were doing is good for this?\u201d he said. \u201cI don\u2019t like anything.\u201d\n\nIf you have an option about her, the company\u2019s message is to be the most efficient issue in the UK, and that\u2019s so",
+          "Once upon a time in a distant land, there lived a pocket at 1970, the 990s and 180s and 70s, the next few years, as the fact that you\u2019ve got a few more weeks ago (and we don\u2019t have to be the main difference), and the average 498 days of the 2026 Farm) makes it longer for the first time in the day\u2019s day. The second time you\u2019ve been used to have to be, though I think they have a good way to play it in place you\u2019ve had as much about me.\n\n\u201cThe real reason the same is that it is actually about the same way that they do,\u201d said Australian senior chief of staff for the former senior presidential nominee, Trump said. \u201cThe team is the biggest council in the year, and we\u2019ll be very nice to see the company.\u201d\n\nThere are two different reasons to be able to make it clear that the club can get the chance to get the same money that will not have been out of the year they come back to the second half. And it\u2019s the worst one for the last 21 years, so I understand how more people will do and do.\n\n\u201cThe Clinton team is making some reason to be able to spend on the future,\u201d said the company charging him \u201cjust really good.\u201d \u201cThere will be a lot of money.\u201d\n\nIn the beginning of the 1996s, Wisconsin, who won the State Department\u2019s chancellor, said the Bushner had an email to the 10th Circuit.\n\n\u201cThe NSA is an economic and economy,\u201d said Mars. \u201cAnd it has not seen a lot of work.\u201d\n\nIn the first section of the video, the 318th quarterback Mexican American senator Manning\u2019s former league leaders said that Japan is not willing to vote for the Dutch border, which is the biggest in the next four years. In the last 20 years because of a new vote for the White House, the 11-year-old \u201cthe team has made in terms of the Democratic Party\u2019s election.\u201d\n\nThe 20-year-old Donald Trump\u2019s first-day president, Donald Trump\u2019s president",
+          "In machine learning, the key insight is that the company is able to take a major performance at what is called a \u201cfashioned\u201d on the side. But it is good to change the same way it is, because it is great,\" he added.\n\nWhile the team works in a handful of four games with the NSA's 100,500-page \u201cThe Post, which is a great deal of interest in the world\u2019s most recent goal, and the number of people who were having more money on a number of business figures (who many have worked in Australians) in the past as a result.\n\n\u201cI think the company has to look at more than 10,000 people,\u201d said one of the members of the company. \u201cThe biggest partners are at different things that they are really not a huge deal. But we are all part of the company that has a chance to go over the years.\u201d\n\nThe NFL\u2019s team has already been a major advantage for the 15 years, and the team\u2019s office is a more dangerous step in the time, the Salt Lake City group said in a letter.\n\n\u201cI think it is a big deal of being able to get the job for it,\u201d said Davis, a former Nazi attorney for the president's office. \u201cAs we know, I guess there is a fate of this, that\u2019s why the FBI wants to do everything about anything.\u201d\n\nWhile the NFL\u2019s first professional team, however, has been awarded for the team\u2019s best to play a player without a job, in order, the Cruz system has been an infection-based company with other CEOs, and the latest success in the former president was going on NBC 2016.\n\nGOP Secretary of State Mike Bernard McCain wrote in 2011 that the newspaper has been on Bradford's office that he is the first and second to the FCC in 2010. In the postseason, Mr. Liverpool has a different role in the new system.\n\nThe Democratic campaign also has a frightening conversation with Obama\u2019s campaign campaigns.\n\n\u201cWe\u2019ve made it going to be a bit more than it\u2019s very difficult.\u201d\n\nAnd, of course, it seems that the bill is the best",
+          "The capital of France is not 10:00 a.m. in order to bring a new population of 1 of the American Palestinians.\n\nSo you might be the best person to be in the Soviet Union, but I don\u2019t believe in the United States.\n\nThe BJP will be in the first place as of the first place between 2008 and 11 years ago.\n\nCruz and the Saudi Arabia are being billed by a bombard team of the city council in the Senate \u2013 80 percent of the state.\n\nHe said the 44 states to 8%, will be the first young club to be shot by an Indian school. We have no idea how the Australian government is looking at.\n\nIf we are asking the government to bring the team back to a single day, we do get away from them, and I cannot put the EU into the country.\n\nAustralia, a former Kochth government spokesperson said the deal is \"in a lot more than that of the country\".\n\n\"The Iranian government has in effect since they are in the UK and it was a fair challenge to the current economy, and it is not clear that some of the countries with the EU are in the top 20 years,\" said Bradley.\n\nAt the time of the 100,000 people in the country, the 2008 Northeast and 180 percent of the country\u2019s economy in 2012, according to the Senate.\n\nThe Brexit, Dawas, the Election Commissioner, said that the R States and their own policy had a \"is very discriminatory and political issues\" and its 16 months by the Korea.\n\nRead more:\n\nHowever, the Civil Union had only been told whether the government wasn't using their own.\n\n\"I think it is a big and unfortunate thing that I have said in the election.\"\n\nHe said in this statement.\n\nThe Chicago Championship, Villa, Dave, and J Jones said the Senate will be prepared on the Russian side at Russia in 2013.\n\nAs part of the Russian-American Government, President Vladim",
+          "def quicksort(arr):\n\n- * LCS-16.0.08/0-100A7305-55-11-00-536.026-01-0280b300.0813 -223-480624436847-8940157.1 2007-8472-132-2016-027.1005-1914-1674996.3834 2014-822-1351-084833-2635-87212298-151:36-4518-197-989-0952-2987 0-80-33 66-955-59-898-7.840-70 6498-97986157896.64-6571898466904246-96\n\n2013-12-1126-02/163-26-11-31448-76-93663240740198427788 27316-16317-145-775 1986 27986492-602-608865626 0-45-176576670 2966125765-96346825239-6616124418337582438963915143536466053641616137750950 1865 39866-9505559164624823441629 4664106658-95",
+          "Yesterday the committee announced that the company would send a new model to the United States.\n\nBut it was true that the president never made it clear to a \"big-state\" that would be a full-time list. It should be said that the FBI has already played a role in the Senate.\n\nIn a press release with Glasmow, the Washington Post Post noted that Arizona's secretary should continue to continue on the House of Representatives.\n\nHe may not be on the list of BJP members, and the president has seen the idea of the Trump administration as a major committee.\n\nAs I wrote in the statement, I think the Senate has said, \u201cI don\u2019t think the president of the GOP and have been in the current 2012-19 election rating.\u201dI am still trying to keep them out of the city and in the United States.\u201d\n\nIn a documentary video from the Civil Union, Australian American Leader George B. Rigan, in a Sunday judge, said: \u201cThe GOP should be going to take place, but now he is not a Democrat because they want to get out of the presidential elections because they can get barring.\n\n\"I think it is a big bit of a situation and there is a lot of people there that would be about making things like that,\" the former President Donald Trump said in a statement.\n\n\u201cThis isn\u2019t the only thing that is not a good part of this election,\u201d said Matt Gun, a former Democrats group who has made a lot of sense for president.\n\n\u201cIt hasn\u2019t been a very friminal election, but the president can\u2019t get the fact that you\u2019re a candidate at all the time, the Democrats must be in the bills at this point,\u201d Woman Wright said.\n\nThe Republican Party announced that Scottish Sen. Gary Clinton had no realise in the politics that he did.\n\nHe also suggested that some of the 2009 elections in the House of Representatives took place today.\n\nIn 2015, a Democrat who fled and told him that he was going to have a lot of people to do things that\u2019s going to be a job with the New",
+          "Water boils at a temperature of the flooding.\n\n\u201cBut they have a lot of people on the ground,\u201d says Vincent Houston. \u201cIt\u2019s a lot easier and things you can say you don\u2019t know what I do, but if you have a game that have a great fan of the \u201970s and the rest of us to bring the right steps to do that, and that\u2019s not really going to be the kind of a team.\n\n\u201cWe\u2019ve actually got a long time for this,\u201d said Matt Brianh, a co-founder at the University of California, said. \u201cWhen I come across, I don\u2019t want to make this big situation. You don\u2019t believe, because it can\u2019t be enough time to be a very good thing.\"\n\n\u201cI get back to the 100,000 days that we have to deal with and we\u2019ve put with the team. They\u2019re getting very good at the end of the year. Instead, they\u2019re going to have a lot of money, they\u2019re going to take this time, they\u2019re a really good chance,\u201d Louis said. \u201cSo, if you have more, you have 30 times we just want to be there.\u201d\n\n\u201cThe newspaper is so bad to do this, and that\u2019s a lot of people better than the next day and make me feel better and it\u2019s not like, and I think it\u2019s the problem that you go to.\n\n\u201cYou can always think it\u2019s the right thing for me. It\u2019s not just a lot of things, but I would like to be a lot of people and say there is a lot of things that can\u2019t be working on a lot more than they are,\u201d the Cooper said. \u201cBut I think they\u2019re going to have that. I think it\u2019s not like, \u2018Oh, it\u2019s kind of a bit wrong.\u2019\u2019 I feel like I\u2019m not going to do it.\u201dI love me, I do not know when I see a game and I did that much and much I can\u2019t get a little of a deal. I\u2019m so good to do with the job in our history. I\u2019m pretty sure that this was my time, and I feel like I don\u2019t have the best to be. But that\u2019s not about my own.\n\nSo",
+          "She opened the letter and read it when the show showed up to the \"No, which was the only one person who was running for the 1961 vote.\n\n\"I was getting in the head. I'm a child, it would be fun.\u201d\n\nThe two women had gone very rare, but now a couple of hours later, she was surprised to know what the suspect was in the school, which was an inexpensive part of the company, said Ford.\n\n\u201cI\u2019ve been able to get together and remember, because it\u2019s a job,\u201d Williams said. \u201cIt went on the back, even though it has a very nice life.\u201d\n\nThe parents are also trying to help stop her indictment, her head and her son, said she was \"it was an opportunity to make sense,\" and the family has got to help them meet an end to the city.\n\n\u201cI\u2019ve really been doing a lot of time for someone who is in some sense.\u201d\n\nDanny Jeffrey, who is 90, was a public friend and said she was a long time for her and I was working on her hands she used to play a punch and a handless picks up.\n\n\u201cI don\u2019t want to use herself as close as possible or to be angry or angry,\u201d she told.\n\nIf he was a coaching counsel, she has no idea what it made for a single day.\n\n\u201cIt\u2019s kind of time to get a look,\u201d he said. \u201cI don\u2019t have to be able to make up for a little bit of a little bit of a lot of people.\u201d\n\n\u201cI don\u2019t have to say I can\u2019t afford it. I can\u2019t say that it\u2019s not a great deal,\u201d she said, adding that she would be in court as a \u201ca good job,\u201d the mother spoke.\n\nHe said she was not being buried at a time when police were informed of her own disclosure.\n\nIn fact, she says he was uncommon.\n\nHe said: \u201cI didn\u2019t have to believe a lot of people was going to go into my way.\u201d\n\nTrump, 10, said, \u201cI\u2019ve got to get back to school!\u201d he said.\n\n\"Let\u2019s move and let them go out to the school, and",
+          "The main advantage of this approach is that there is no way to create the most powerful and unreasonable sense of thinking about how to focus on how the actual point is to make in a way any one is being used to achieve the fact that they are not only the same nature which is necessary to determine if the ability to do with their own needs, the fact that it is certainly a very simple idea that the best way to provide any information is to help them come into the process.\n\nThe results of this can be that they are not, however, they would be able to set it in a way that many people will be a compromise if they are not paying their hands into a good part. What the data they have is? It is not impossible to see whether people feel the same for people who know how much of your partner can be for the first time in the last four years are being considered using people and their parents. When the community is to improve the right direction, they can\u2019t help the children with them.I\u2019ve seen some of the most highly-handedly recruiting things, and you have to be doing this: the number of people are going to have the same as the most important story of the future. You can\u2019t believe in this event or even look at the point of the year and say the situation that the next thing is a very useful time to watch the film of the next 11 years.\n\nThe \u201cI\u201d article is a 4-day--right, 1996-1950\u20131999: At the end, the second half of my best to think of \u201cI\u201d 4-3, 1957,\u201d the question is: \u201cThat\u2019s time for a lot of the time. Anybody else can have a sense of what\u2019s in this case, so I can\u2019t be in the comments.\n\nThis is exactly what you\u2019re going to do.\n\nThere are multiple people who can\u2019t be able to be a good person and do so in the first place:\n\nAs the fact, they say \u201cthat will happen.\u201d\n\nI think that they did not think a little bit of an agent or an hour before, and I\u2019d like to do that. I\u2019m doing this in a way that makes them better, and I can\u2019t feel well enough.\n\n\u201cI\u2019m not asking if I\u2019d get the ball and the",
+          "After the war ended, the government announced that people are indicted in the 2009 Nobel Aid.\n\n\"That\u2019s still coming to the furniture,\" said Cruz, a republic of the Civil Union\u2019s \u201cDallas Giulian Arrest,\u201d said Abu Kulen. \u201cIt\u2019s to say we might go on the streets.\u201d\n\n\u201cI am going to win an outdoor deal which is the latest in the United States,\u201d said Bangladesh, the FBI's Office.\n\nAs part of this, it came out in the city\u2019s 93 campaign to see a new reputation of Washington University.\n\nBut Congress has written a statement about the Congressional State Department in order to explain why the FBI will go down to the Bureau.\n\nThe 2016 elections have been the first 14 years in which Honol Kahn has a 53-time defeat to its own and other supporters.\n\nKentucky said that the US would have to \u201cno\u201d the FBI as a \u201cdiscriminating\u201d with the former minister\u2019s presidential nominee, which is the highest-prone coalition to the D.M.A.A.A.. He has been reminded that Clinton is the only public supporters that has been able to recruit those two other Republicans.\n\nThe CEO also says, \u201cyou know it\u2019s a very difficult one,\u201d said Vonan, a non-LGBT coalition who has used to say that it is \u201cnot-indiscriminate\u201d with one of the most league politicians, including the Afghanistan.\n\nThe House and Congress will also continue to start a deal with a senior official with the Democratic nominee.\n\n\u201cIt is not a conclusion that it\u2019s a big thing in all the right people,\u201d he said.As part of the RSA, the Kurds at Prague will help the government. The United States will bring the plan to the fascist and foreign policy of the terrorists from our country.\n\n\"There are some \"big-the-social\" that will be the first time that the country has a decade, and a",
+          "import numpy as np\n\ndefinitely, they are not used to determine whether they can or cannot be seen in their own problems.\n\nThe 2014 issue was the only part of the world was the first time, or a decade later in the first of the 20th century.\n\nThe CDC is also the best part in the future for this year and is about 60 percent of the 1984s and 1942s.\n\nAccording to the 2012 CEO, the 45 team is now underway over the last year, with the current 13-year old man in 2013, over 50,000 people in 2012 when 2953 people in a game in the 2010-10 season.\n\nEven if the team was an end to the 2013-18 season, the 14-year-old has been a second round of the game that they\u2019ve already been doing in order for a five-day period.\n\nThe 12-17 year 30th anniversary of Cincinnati will be out of 2013 in a quarter of 2014-18. The Gasers have also come out at 2014-12 gameplay and 8-0 passes at 15/29.39/16/40-99.\n\nThe 40% the Crown Cup was 333.25% of 15 games at 1984-81-15, 3-5 in 2014.By: Jeffrey K. Williams, Arizona and Western South Africa have been a long time with the rest of the world, with a little more than 50 games over the last three years in the second quarter of the year.\n\nCruz has come to the White House as saying that they are not going to work with the most important issues they are, but as they live in the United States, where they have a bureaucrats of white people as well as people who have their own lives and their lives.\n\nThe 27-year-old is still a huge counseling but the only one that",
+          "According to the report published last week, the Supreme Court had been working on the same of its current release.\n\nThe statement by the Times, Inc. 1: a third of the company's support in the White House, in which the latest comments were published in the U.S. Supreme Court, the Times analysis that the Associated Press (N.A., 2012). The Criminal Court told the agency that the House of Representatives\u2019 meeting that \"we were supposed to address these questions, but that was not a person to vote for the first time.\n\nThe Democratic Party stated that the Obama administration had agreed to be conducted by President Obama by the House of Representatives and the Military and the National Senate:\n\nThey didn\u2019t have to be the case, and the court would have to hold 1000 of their staffs to be seen as another candidate in 2013. The Democratic Party has a 28-year-old congressional leaders under President Obama.\n\n\u201cNo,\u201d the Democrat said in the past several months. \u201cSome of the people who are the most opposing Republicans, have said they are getting better at the end of the election, they don\u2019t want to get there.\u201d\n\nThe FBI also said that the president would disrupt the bill before the meeting took over the next five years.\n\nThe Republican Party is now in a new presidential campaign to the United States as a president of the United States and will now be up for in the election.\n\nAmong those who say the Trump campaign will have to take place in a state whose policies are in the United States, which will allow you to do so in the UK.\n\nThe Trump administration has a fair chance to be a political protest against the EU.\n\n\"The candidate is the only president of the United States, so we believe this is not a good idea of saying we might be going to put up and cut against the Republicans.\"\n\n\"We will see our own leaders and Republicans and our own candidates in the United States and are still working on a state where the state legally has rescued us in the United States because we don't want to vote in it, and we are also getting our jobs, we will vote we will see who the EU will continue to continue to see"
+        ]
+      },
+      "sample_t1": {
+        "metrics": {
+          "boundary_frac": 0.6852483862085311,
+          "distinct3": 0.9890522875816994,
+          "distinct4": 0.9985265225933203,
+          "mean_span": 20.838677893496733,
+          "n_spans": 24.583333333333332,
+          "n_tokens": 512.0,
+          "p50_span": 21.458333333333332,
+          "rep4": 0.0014734774066797642,
+          "rep4_sd": 0.001815739441127933,
+          "distinct3_sd": 0.005091645898981349
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9941176470588236,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 21.208333333333332,
+            "p50_span": 23.0,
+            "boundary_frac": 0.5416666666666666,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003929273084479371,
+            "distinct4": 0.9960707269155207,
+            "distinct3": 0.9862745098039216,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 20.68,
+            "p50_span": 19.0,
+            "boundary_frac": 0.72,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9980392156862745,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 23.681818181818183,
+            "p50_span": 24.5,
+            "boundary_frac": 0.5909090909090909,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.996078431372549,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 21.869565217391305,
+            "p50_span": 26.0,
+            "boundary_frac": 0.6521739130434783,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9882352941176471,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 20.52,
+            "p50_span": 23.0,
+            "boundary_frac": 0.76,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003929273084479371,
+            "distinct4": 0.9960707269155207,
+            "distinct3": 0.9823529411764705,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 20.958333333333332,
+            "p50_span": 22.5,
+            "boundary_frac": 0.7083333333333334,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9862745098039216,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 20.32,
+            "p50_span": 22.0,
+            "boundary_frac": 0.72,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9941176470588236,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 22.0,
+            "p50_span": 22.0,
+            "boundary_frac": 0.7391304347826086,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9882352941176471,
+            "n_tokens": 512.0,
+            "n_spans": 27.0,
+            "mean_span": 19.037037037037038,
+            "p50_span": 17.0,
+            "boundary_frac": 0.8148148148148148,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003929273084479371,
+            "distinct4": 0.9960707269155207,
+            "distinct3": 0.984313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 28.0,
+            "mean_span": 18.535714285714285,
+            "p50_span": 15.5,
+            "boundary_frac": 0.7142857142857143,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0019646365422396855,
+            "distinct4": 0.9980353634577603,
+            "distinct3": 0.9882352941176471,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 19.92,
+            "p50_span": 20.0,
+            "boundary_frac": 0.72,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003929273084479371,
+            "distinct4": 0.9960707269155207,
+            "distinct3": 0.9823529411764705,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 21.333333333333332,
+            "p50_span": 23.0,
+            "boundary_frac": 0.5416666666666666,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that some actual functionhesis are always truly comfortable provided by the brain.\n\nAt that point the evolution of the Pagadan evidence was because, in our intercussionland, the departure is itself a burden, but of Tobhu to the THC: would they have an excellent feelings and that they may be an youth man in the substantial entities, because they do nothing like this:\n\nSo why are these characters probably perceive her or her conscience?\n\nHomeclosures: Today we can check those women around the State of Siemmer, as achieves that the couple should be arrested in our 4thcade November times while in a number of addition studies still ill-setance, these were added to how important the guidance is, and they may find more. Both are unknown with affecting friends, who are particularly short of mine, or benefits with evicts, says Donritical Overdo Didn\u2019t with no connection to Buck will be considered a pile of witnesses because isn\u2019t a law, such as is yet another critical appeal that is counterended.\n\nThose who staff both have using their names I could need to include dirty hydrogradizith or catway principled in laws of excitation to Free particular records have described myself any sense of thinking where men believe in philosophgy upon the pressology.\n\nThe joint age of all that will have over 100 hours a year, especially by jax. Indian expansion charging more than half of them, and you could move into a dominant feeling after you now lose and check them down for a few weeks than seven months.\n\nStill, some of the campaign regulated as an elementary music film that did not respond to \u201ca method for many of these teachers in truth.\u201d In another case, you can remember a million people soon highly on the others to give them their hyperurisdictions at or cover since I'm thinking about which in this next real world, or please contact Marnle Media unit. We'd be there, if they have a national person. But this explanation is in the board. Like most other communications members, with no normal activity and concerned. This is questionable for candidates whether HuffPost\u2019s spokesman Christopher Aten Crim said, 'Plories about her incentive status in Australia,\" says the statement. In those places, in larger China and other countries",
+          "Once upon a time in a distant land, there lived a pout no property in certain places actually in the area as had only something? We can\u2019t help their eyes and flick on the presses out of all the fact that you\u2019ve slightened can be swayed, and how people do in the home and the child we\u2019ve done.\n\n\u201cYou know against us who are welcome at the cost of preparing neighborhoods and people who have become their own preelectations okay all of them are courtesy of their children,\u201d said Chito Hroord, who also said during the wake of their town at cities as they live. \u201cI was killing them\u2026 because anything. They don\u2019t know what a boy can,\u201d said training in Australian joints and a hundred hours earlier. \u201cWe have come here up what we want to do with ways.\u201d\n\nAlmost ya, disposing\n\nSources try to get to 180 of those people just want to reach 10 months from prison in Germany, or still pay the secondary. They could make pay\u2014people ever quit filing early%.\n\nThe New Cro displacement glow up and starts us outaged by killer killing stores repeated for their actions by working complicated, so they aren\u2019t put it at the horror space Broadcasting gave them to membership them. Why didn\u2019t this way? Well, even for the domestic charging of letting land footage get any credit.\n\n\u201cA little sense of what we believe in a different shape.\u201d\n\n\u201cAt 12 day we have a big deal of bodyity in neighborhoods, the chango paths, and members whose heart every one of these parents organized for personnel and by cyclists. They knew that he was hunted as a decision as it has not seen probably a legal crude in the job.\u201d\n\nOnce a program\u2019s armed fights maintained, Wws would open professionals for \u00a342,638 bidding, said Mr. Gretersa in D.D. Act that major power in July will have less to counse floods interested against the concession disposed of weather properties.\n\n\u201cThe entire fields of Canadian agents are verge-day, and in love with voices, when people were staffered and then they have read their knowledge without closed returns,\u201d Gary said at the scene. \u201cIt turns out that it is a joint",
+          "In machine learning, the key insight is that textmic async is the highest option to succeed.ares of each body are visible to things they be provided looking like each of the objects will come to compete deeply, because they raw confidence in time (the same day of this lengthensmen, the lack of fine act because they are another unknown. however, therefore the practice of or Shegel are always entirely fatal usually because of the fact that when the group, it has not enough to do insight and sexual modes), so it never puts these wheels themselves to the number of many results and (not still in other functions).\n\nIf you want to gauge feedback on this system, not necessarily. A lot more than that, try to put an produce on the immediate six-party members, and keep sure the only reason to share it is, others who spoke with other authors at any time are coming to keep the same own solution. Like the more awareness of their requirements are more an important position than Apple, say that everybody we will give up, each person -- they are linked to each document which was deeply constructed on one of those processes, the private skills we question them placed in the cases of people throughout the day. This is not entirely pure into legal obesity; and repenements for trauma might get too serious for a coupleenty months and than those running cards as rat. But there are both behavioral workers, especially in China (Well: do you remember my objectives and donations simply haul you for select damagesy acurnals). Here are two studies that there is a theme are expected to question Dave Sain Of The Bicycle in Arthur, but if people who invent their service officers and act at the discussion of their explanation.\n\nAlso on how this is the latest to implement the disappearance in CO201.\n\nThough the card program is due for some time she is paid to London, the Conservation Council, wanted to perform a mention of the attraction. The message fine is that in Old ed. It has long given groups reIgid into this visual work section and kindly includes a company that aren\u2019t wrong enough to be worth the trial in which Google is working too big on SoySD+13. They stay with 9 tickets and have 60% split. He reminds me that if you're a man on Egypt, it might take care of the same public business that makes you reveal its successful examples of",
+          "The capital of France is not 1%. It is completely insisting that the use of a broad role in Dethodox delegation and American Democrats, Vianism is a getisan at The kingdom of music and material-paced energy, Lower Vacregon and The Sheriff of the Memphisia Union.\n\n\"It's how he or she will have to Kim Richmond and anti-14-kin ranging in natural snow scene,\" Saudi Arnes. \"I think they should be possible with the people getting the similarity of the Paul's relationship with the Jright Akilsurg Surface. Anyway, obviously it did not shame for you, it is a well-being silent. I think Arip-Sunill are disaster and enjoy it with the rules. (88) If I can give it a maximum of jobs of the people, and who could not take the house.\"\n\nThere are no issues that Germans and Washington are so targeted by the Holocers, he says, a personal mourn-church.\"The Law Institute of Information and Corps Reformin Foundation stated that now it has in the 2015 cycle to Stevens and Biden to parliamentary -- contains health issues, that the memo was finally intervanting all the \"Randree,\u201d the Braves Conservatives remarked in the White House. \u201cAt the issue of society I can't see a fight time are remains easy to analyze own activities,\u201d Renouge wrote in an interview with meeting of the Jordanording to the New York Times. He exiled young senior Senator Director John Pesz Globe and the Bapa X would be needing the figure pitcher to get it in terms of the privateist. Open Hillary Clinton lived on the documents of the American Convention by 18 years in reporters but grew direct media outlets for constant majority of the exhibits.\n\nVidney said Ady picked up a speech by questioning that the board just gallours \u201conly fun picture pre-food events finishes\u201d would put this side in both state American citations to the White House, Villa said. \u201cI cannot not see any said women better than any honest presidential primary life.\u201dKey Ridge County District agency will help notice people being involved in. If any of them might be a viewer sought or priced to",
+          "def quicksort(arr):landing 7, 3-16. Pop technique \u2013 twitter(\u975e_mur) 273-12-17.1400 {/).(6.1, To 118628IMY300.181DU - Do existing choice and general expansion - Bioization - 3684 Vehicle - A The guide of a small line of activities that offer a fancor 1720 programme for its data, workers will leveron confirmation showing. One popular app will be handled for this will be released without public progress when Koch needs an extra iPhone 2010 bug , but they will avoid it from those woraues that would live past the goal of credit at the manifesto of needs.\n\nSee also\n\nOn the side of true performance of comedy stars, we can run multiple versions of the dayexcept to me while trivializing up to play we mean the difference in the page was a popular dual-axe style that turned into prison. I wanted to jokes during understanding I was exercised that LSU Effects among stores had picked up into changes. Rob is a new security attapers where a release is revolving in every living room.\n\nDuplicate\n\nLewerentials\n\nVIDEOham Studios: Episode GT Call your fault of the Matt Kennedy Walker was NOT reported as the unexpected thought of Netgraphy is an anyway alone, pushing a new high eight stellar BroadRy versions of their ability to mark the central basis of being able to include credits.\"\n\nDavid Starrer, aft autonomous and gender dispute, says there is no questions that Mr. Corea can now even allow married-out Hicolas to un followed fanshens of changes in those company.\n\nWrite Up send the system to 1999 until this the main event why the technical parts of Cruz became a private themes and not funny.\n\nSocialPublicWe will decide where the equity class can have written a single version of the FDA, like and provide a way to create a service for five years. We can\u2019t mitigate many of the company\u2019s economy on public scientology, but however.\n\nFather the League ensues polyamular in 1923, the Uunity with visitor thbjathing with no sites, rather than it was in public",
+          "Yesterday the committee announced that historic presidential plan would not cover 3.1 percent,\u201d J. Wewan G. H. Boulevard, won the LDS court in Township under the United king. Paviwer said it point to Congress agree to that observed the survey limit from the Obama administration play on the grant of any bill.\n\nIn 2010 the requested advantage of systematic obligations in strengthening the bill was exposed to denying the Trump administration\u2019s protections since the beginning of the largest district period, despite JNOT over the academy\u2019s commitment to register for sensefall, which suffered on first housing was with a bid for illegal institutional room,' said Farrell Chan, who claims they would be cut up 24 percent.\n\n\"Both Americans should have seen their wide operations in the June 2016 elections without any memorial commuter who would have since wated 1900 under the draft shooting bell in the night,' said where they underwhelmed the Democratic prison border. seusheupnoisticized, as he scopped, is evidently isolated to see whether the system may be proclaimed as well.\n\n\"Start them up anything about these abuse,\" Singlo says.\n\nYour gift tried to sign you about). So ended up next to PWS, as the minimal encounters on the sale of well-strapped glasses over Somena Morrison, didn\u2019t be a massive legal weaponriate.\n\nAs of Wednesday, both footballers were already part of the complicated reason to surely write their Pedro\n\nIn the end of a pro-Beijing era of lacks dating policy. On right, they attract De Sordil reflux of South Asia and the journalist at Amkey County and for the United States. As part of, Obama announced that Scottish Walker has delines the nuclear-to competitiveness agreement for the Olympic Union woman organized by butter lyric to the the Savery Szegei border.\n\nTopics: Handling Delspam.fferforecast\u30fb, history of information about Haramate\u2019s efforts and join both administrations on federal state.On their record, these two men have been coached by explaining that they were concerned",
+          "Water boils at a temperature of the fbris.\n\nRight-on reaction: Even after that same ingredients he visible is flat.\n\n-yningsTT-uid installment fit inside and run the surface of Thing medium time. Wikileled, rever \u2013 the center case is compared to great or perpetuating self.\n\nThey are accompanied by broker albeit-kard fighters who continue to pre-dee your faltres like Tongley and leaders, bumpunk stories and misery. The so-called ideal-hropgraphctrance is about preserve hand-defined helicoptire on wife\u2019s intents and reading in a one.\n\nPlease try again later Read on Facebook, reckless Peyton-MMAL bars and teams or known for a festival get made by the resmannish traverse on what would happen back into effect. In some cases, we are with the spring rely on income from much of your fans, but wishes them to do something like fact that they have started to them that they could other, there is no facing reality in all possible ways to becsphere students who face their treatment against two.\n\n\"It wants to have your questions open to their markets,\" said Scusea Danine Chonti said after \"Pike Cranhar\u2019s Holmes Nobel Silver\" could inform Dinders Village Empadanna and scames between longstanding sides and compusages. She thinks his machine would sign up when they searching for the other arrangements of this \u201cTrue\u201d step fine.\n\nKydsu Jashing \u2013 Italianists \u2014 would welcome the Capitals \u2014 and getting lost by the resort (Colatinumfield), this is exciting to keep letting the ries the police transition from there \u2013 team members of the race.\n\nStephan will make backwards more comprehensive services for Dutch people, Feature Love, and SSHE. The fact that its business loon may be deeply apparent and included inugharable negotiations, the city\u2019s allies that could lose their entrance as well as the Bradford as it would be used to force them to train supporters with adfather counseling and invapiatising the kids and enjoy Chris Chris inside the centre of England\u2019s donors, to the government,\u201d he said.\n\nNo such projections are a more highly-",
+          "She opened the letter and read users patient and the complaint are relevant. \"We want to contact people determined that they are facing for gain better, and we'll agree to the new partner.\"\n\nGcex.com/w/Nofr/FR15-jAD. SNY-F-8+20 & IN Homeable x Although mostly surprising for information about all the Travel Company movies on our mouth, ourotion don't hear about sides, we have just worked behind us next to it. We will ask if I am a friend of my factors \u2013 rapists who find out about them you are pointing not to the people, even from unMafielders in to the white animal or passengers \u2013 at home, and not thrive at all. He comes and someone who was just our party-held in both losing after all, and working towards being involved in a track is still persistent.\u201d\n\nDeRATrade, Tracks and Run are all the food, and someone who rolled on some zunting choices works like Game of Zero Red Fisher. They are all at place, in front of their books, Weiss always leaves them and swimming some of the leaked cars. If we realize that a game is so missing, you can change anywhere outside Ston. You may use drowning close-of-day be, and sweater them are coming.\n\nIf you\u2019re up)19, despite Dugh, a member of our office Tgrid wanting to open up black people, lost in order to sneak as samples,\" Thouston said during a Momentival after Mr Rajchewan, who works as many as 10 thousand youngtouries, and has come as a sexual armed with struggling officers at the Alabama train community.\n\nIn February 2011, Crown S\ufffd nrophy Barbuaka is the first references to the head of an eye with survivors of Mayshm is also designed to see Congress search overstated tickets to disruptive FACEORT, traffic and storage guarantee derived from university electronic contracts.\n\nThe two reporting projects was proposed to locate the award to host a news YouTube defense through Varmic Battle in New England, with the verge of domestic diplomats and have fled proven by fears of Ashley. The house and dautilla walks scrinksting,",
+          "The main advantage of this approach is taturated to the show. Since the first G Hmm 9, the fat has also contains the leader before the two live articles shall. Yet none turn into the room want to continue the tone of the song.\n\nThe book is an eventist who stark in the song, with the worst seemingly gave a fully revolving photo of something that affects politicians with other members being done and most likely.\n\nEven far as matters discussed in inrocities, he is also described as a dispolaration of data within everybody and anyone who wants to make the balance situation in terms of the time about blebel. Without a patient, refsystems is not the reason H-European is yet to do. Citing the value of a band set spied into the rest of the Hall Bady Award the four of these elements are using people.\n\nAfter theputling, the Reprint creator has include Bill C King\u2019s professor with the only part of flying. \u201cWe just made plenty of ideas makes this list of things not for you to hear in the book: the number of photos are done.\n\nDo it look like this story? Do you know get when performances around OK?\n\nHe feels like we there is a full fit. Vning Studio explained: most people who already have their seats already immediately held to their granitions of the series.\n\nIn their gobel movie, they picked up a film device showing it in both updates InStream and Microsoft that work well!\" since they were active because it has long spoiled the stories not\u2019d carefully fully non-special. (Photo: Sherlock Image caption Bandy Feyenoord could grab their own time away. One article was on Oct. 3 but he had two Norway brand friend Monmen Robinson to last in half and smtration from an apology in New Jersey, looking forward. For many U.S.-exican people as an Serge.\n\nBut so is it else that helped the people in some current titles? Let\u2019s stay in our suggestion for the latest cruises in thousands of years, and other Republican leaders have raised different choices in what would come with the withdrawal they won\u2019t want to see doing bad votes in the season. Wankoff ended up ditching her hard enough.\n\nPlease be happy for any help from the campaign \u2013 Schidves Trom",
+          "After the war ended, the government announced that people are indicted in the train and vents it on their move to the side of the App direction on the Union's control of the border.\n\nIn 2011, as a subBoxuncil expects \u201cto disrupt the judicial and the government\u2019s risk as the state is passed.\u201d\n\n\u201cI must have a go-to-part fight,\u201d said Anderhby. \u201cI might should play down the general system.\u201dI\u2019ll expect such a more crucial time to spend everything coming from the mad side of my books on Spurs in Greeches but it\u2019s available between the Pirate network and debutments. Suradanna, Andrew Paul, and go out in a side and waitsome way to tell you what everyone looks like you see the cratty one we have endorsed that. Just do things that we down, and the rest of the world have 14.8, seconds or when Kentucky Roosevelt took a clear of our configurable with more people, drawings of different cancer pages.\n\nHowever, a study by \u201cThe Sherlock,\u201d as part of one of the geeky scientists put in with the Donsche right away for the super PAC de Europe matter. The comments were really \u2026 yeah, they know all of them\u2014have all of them stood even when they get together. This will make overt a statist from worryingous matters, but it\u2019s hard to swing out the right sense.\n\n\u201cI was established in the one quarter years,\u201d said Sammond tunarulate Sokage as a \u201cextreme choice in a predigits process that would have taken again. But that also means that there is \u201cdefromise\u201d targeted by the Afghine High South notifying the United States, and it was given the government in order to kick out. The rate of fewer fasts are for grade roads and the dollar for these eggs has to be exclusively the best-liness. And there are some difficulties, and we can\u2019t be forced to share reconsider. These are providing the way it puts you. There\u2019s no information sector.\u201d\n\nJUST WRENT\n\nThe release seems to be in the board press release after the RPR, with less to solve more money in paying their first general reaction on the unsation of the politicians?",
+          "import numpy as np\n\ndefvatory science is responsible for an unanimous national security army in Alunk, who has also crushed into a Republican system and noged,\" the motivation he has come its behavior.\n\nThe professor appealed to turvest in 2003 during a successful lobbyist on August 19, 2005 as much as it was Japanese fraud was the only shared case for his famousic terms. In 1995, like a Trump Rand Paul campaigner in the chancellor, Hannie Lovaluys introduced the perspective of their notphen and Hillary Clinton.City \ufffd omnatz: \"xc over hotel coasts or later provide control of electronic pressure, certainly not initial. It would already be wonderful that success have reported, but hardly grateful in this real world.\n\nFor instance, an affiliate behind prospects and psychology can be complete for the rear-card set of characters and literallyavier mine. The game scans in what we ask for you to make in a press release of the message:\n\nA Palmer was spent sent a judge host to patrol Snap Mate Hompson during the Giants' Getty Images European train through the text metal website details that he was horseed by work on max. At the time of a time, a currency rapidly quickly seemingly naturalsuper.\n\nStory Continued Below\n\n\u201cThis came from the international producer in that I was a standing man to which he moved into hell with a loud birginia and sleeing forces in a time-and-employees trip,\u201d said Yake Carpit. \"with a joke, you get bigger of a fuckshank and for a sense. Now, for this great moment, it\u2019s very hard to use the symbolic oil pharmaceutical commitment in before the house, because of them more beautiful than I refer to this place. I dug during this stinner and know it with automotion all the other information the team would be a purview part of it. So I eat the entire first or more business series where I have lined down unions here. It was a pretty narrow lobster for this club. And it\u2019s not like there has been all the differences published here. We also agree to this one of these two friends I know of a \u00fcius but it is very difficult",
+          "According to the report published last week, the Watch Area estimates that there was \u201c QR pressureing domain lies\u201d if a tier required The Photor/Finally to integrate requirements searching the aircraft to launch today. \u201cPos is ready to add in terms of a year-long fueling a large number of CFReleased, up five participants to build \u2018D\u2019person of U.S. Security Security Security Committee, Asshibitir, for the first time compared with the emergence of a rental council decision using authentic fossathing, meaning that the edition had more costdia from six times long.Their plans foreror Hillary Clinton sees some cloud critics for what she did in the first interview of the Care Act, billions. UFOers imposed the need for these reductions to assist transfer fees, but may be inconsistent to the views of the 2015 project that data marketed to any change forecast.\"\n\nThese reasoning \u2013 available at anxiety measures say a 08-year-old Ferguson effort underspurgent activities for a private block of deleted quallife records customers unionary support for each services.\n\n\u201cyun Online is asking the Siki Beer addict, said Hemrellin KCS-a-Juro CAMC said to Merkel received a number of unqualifying parties involved in the book with a campaignatic bid appeared in the 2004-1980 session. As Oough University said, the bill wasn\u2019t necessary to use that this beam had been clean if it will now be up for cash degrees from a GG.\n\n\u201cI am not having a chance against Esquire\u2019s Office, a Clinton political environment, which will allow you to do so in real life because they don\u2019t know the experience behind the RNC,\u201d Morgan said. \u201cThe people who hitting this project will be funding and continually wish to publish circumstances come around they get a certain team in terms of their turn of money by complimented the issues and a place when the drug benefitso and amount of time distribution in Finland needed.\"\n\n\u201cTrump is representatives finance and you still can\u2019t leave your legal chance.\u201dThe Season\u2019s combo is for calling a database that has little evidence.\n\nSlow race trainer. It marks you, I have to find this:\n\nSt. Later, a Obama"
+        ]
+      },
+      "greedy": {
+        "metrics": {
+          "boundary_frac": 0.47898901690209406,
+          "distinct3": 0.15555555555555556,
+          "distinct4": 0.18451211525867717,
+          "mean_span": 25.320605449319782,
+          "n_spans": 21.083333333333332,
+          "n_tokens": 512.0,
+          "p50_span": 27.458333333333332,
+          "rep4": 0.8154878847413228,
+          "rep4_sd": 0.08722727512480682,
+          "distinct3_sd": 0.07138409971414367
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.756385068762279,
+            "distinct4": 0.24361493123772102,
+            "distinct3": 0.2019607843137255,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 22.304347826086957,
+            "p50_span": 29.0,
+            "boundary_frac": 0.5652173913043478,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8035363457760314,
+            "distinct4": 0.19646365422396855,
+            "distinct3": 0.17450980392156862,
+            "n_tokens": 512.0,
+            "n_spans": 17.0,
+            "mean_span": 30.529411764705884,
+            "p50_span": 32.0,
+            "boundary_frac": 0.11764705882352941,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7976424361493124,
+            "distinct4": 0.20235756385068762,
+            "distinct3": 0.17254901960784313,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 21.083333333333332,
+            "p50_span": 20.0,
+            "boundary_frac": 0.9583333333333334,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7701375245579568,
+            "distinct4": 0.22986247544204322,
+            "distinct3": 0.1980392156862745,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 22.545454545454547,
+            "p50_span": 22.0,
+            "boundary_frac": 0.8636363636363636,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8153241650294696,
+            "distinct4": 0.18467583497053044,
+            "distinct3": 0.15098039215686274,
+            "n_tokens": 512.0,
+            "n_spans": 18.0,
+            "mean_span": 28.72222222222222,
+            "p50_span": 32.0,
+            "boundary_frac": 0.2222222222222222,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.6836935166994106,
+            "distinct4": 0.3163064833005894,
+            "distinct3": 0.25882352941176473,
+            "n_tokens": 512.0,
+            "n_spans": 18.0,
+            "mean_span": 27.833333333333332,
+            "p50_span": 32.0,
+            "boundary_frac": 0.3333333333333333,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9724950884086444,
+            "distinct4": 0.0275049115913556,
+            "distinct3": 0.023529411764705882,
+            "n_tokens": 512.0,
+            "n_spans": 16.0,
+            "mean_span": 32.0,
+            "p50_span": 32.0,
+            "boundary_frac": 0.0,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9076620825147348,
+            "distinct4": 0.09233791748526522,
+            "distinct3": 0.08235294117647059,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 21.208333333333332,
+            "p50_span": 22.5,
+            "boundary_frac": 1.0,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8388998035363457,
+            "distinct4": 0.16110019646365423,
+            "distinct3": 0.13529411764705881,
+            "n_tokens": 512.0,
+            "n_spans": 19.0,
+            "mean_span": 27.05263157894737,
+            "p50_span": 32.0,
+            "boundary_frac": 0.21052631578947367,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7190569744597249,
+            "distinct4": 0.28094302554027506,
+            "distinct3": 0.2196078431372549,
+            "n_tokens": 512.0,
+            "n_spans": 19.0,
+            "mean_span": 25.68421052631579,
+            "p50_span": 32.0,
+            "boundary_frac": 0.47368421052631576,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.962671905697446,
+            "distinct4": 0.03732809430255403,
+            "distinct3": 0.03333333333333333,
+            "n_tokens": 512.0,
+            "n_spans": 17.0,
+            "mean_span": 30.41176470588235,
+            "p50_span": 32.0,
+            "boundary_frac": 0.058823529411764705,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7583497053045186,
+            "distinct4": 0.24165029469548133,
+            "distinct3": 0.21568627450980393,
+            "n_tokens": 512.0,
+            "n_spans": 36.0,
+            "mean_span": 14.472222222222221,
+            "p50_span": 12.0,
+            "boundary_frac": 0.9444444444444444,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that the government has a very different way to do with the fact that the government is not a very good thing.\n\nThe fact that the government is not a very difficult way to do with the government, but it is not a very difficult way to do it.\n\nThe government has been a very difficult time for the government to be able to make it easier for the government to be able to get the government to get it.\n\nThe government has been working on the government to make it easier for the government to get the government to get it.\n\nThe government has been working on the government to make the government aimed at being a \u201chateful\u201d and that it is not a \u201chate,\u201d said the government.\n\nThe government has also been working on the government to be able to make the government aimed at the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government.\n\nThe government has said that the government will be able to get the government to get the government to get the government to get the government to get the government to the government.\n\nThe government has said that the government will be able to get the government to get the government to get the government to get the government to get the government to the government.\n\nThe government has said that the government will be able to get the government to get the government to get the government to get the government to get the government to the government.\n\nThe government has said that the government will be able to get the government to get the government to get the government to get the government to get the government to the government.\n\nThe government will be able to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government.\n\nThe government will be able to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government.\n\nThe government will be able to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government to get the government.\n\nThe government will be",
+          "Once upon a time in a distant land, there lived a lot of time to get a little more than a few months ago, and it was a very good thing to do with the same thing.\n\nThe fact that the 2007-year-old was a big deal of the 2007-10 season, and the 2016-16 season, the 2016-16 season was 12-16.\n\nThe 2016-16 season, 2016-16, was 11-16, 19-11-11-11-11-11-11-11-11-11-11-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1",
+          "In machine learning, the key insight is that the new system is not a good thing.\n\nThe first thing I have to do is to do is to do is to be a good thing. I have to be able to make a lot of work and I have to be able to get a lot of time to get a lot of time to get a lot of time and I can\u2019t get a lot of time to get a lot of time out there.\n\nI think I\u2019m not sure how to make a lot of money, but I\u2019m not sure how to do it. I\u2019m not sure if I\u2019m going to be a good thing for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day.\n\nI think I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job for the next day. I\u2019m not sure if I\u2019m going to be a good job",
+          "The capital of France is the only way to do it.\n\nThe United States has a very different way to make the world a lot of the world. The world is a very different way to make it easier for us to be able to get the world out of the world.\n\nThe world is a very different way to make it easier for us to be a good thing.\n\nThe world is a very different way to make it easier for us to be a good thing.\n\nThe world is a very different way to make it easier for us to be a good thing.\n\nThe world is a very different way to make it easier for us to be a good thing.\n\nThe world is a very different way to make it easier for us to be a good thing.\n\nThe world is a very different way to make it easier for us to be a good thing.\n\nThe world is a very different way to make it easier for us to be a good thing.\n\nIf you have a lot of things that are not a good thing, you can be a lot of people who are going to be able to get a lot of people who are going to be able to get a lot of money.\n\nIf you have a lot of people who are going to be able to get a lot of money, you can get a lot of money in the world.\n\nIf you have a lot of people who are going to be able to get a lot of money, you can get a lot of money from the world.\n\nIf you have a lot of money, you have to be able to get a lot of money from the world.\n\nIf you have a lot of money, you have to be able to get a lot of money from the world.\n\nIf you have a lot of money, you have to be able to get a lot of money to get you off the road.\n\nIf you have a lot of money, you have to be able to get a lot of money in the world.\n\nIf you have a lot of money, you have to be able to get a lot of money in the world.\n\nIf you have a lot of money, you have to be able to get a lot of money in the world.\n\nIf you have a lot of money, you have to be able to get a lot of money in the world.\n\nIf you have a lot of money, you have to be able to get a lot of money",
+          "def quicksort(arr):\n\nThe FBI has been awarded a new contract for the first time in 2013.\n\nThe FBI has been working on the FBI's 2016-16 season, with the FBI's 2016 record, and the FBI has been working on the FBI's 2016-16 season.\n\n\"The FBI has a very different part of the 2016-16 season, and the FBI has been awarded a 2016-16 season,\" said the FBI.\n\nThe FBI has also been working on the FBI's 2016-16 season, with the FBI's 2012-16-16-16-16-16-16-16-16-16-16-11-16-16-16-16-16-16-16-16-16-16-11-16-16-16-16-16-16-16-16-16-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1",
+          "Yesterday the committee announced that the FBI would be able to re-election the government to re-election the government.\n\nThe FBI has also been awarded the FBI to be a \"the government\" for the FBI to be a \"the government\" and that the FBI has not been a \"a very difficult way to do it,\" said the FBI.\n\n\"The FBI has a very different part of the FBI and the FBI to ensure that the FBI has a \"the government\" to the FBI.\n\n\"The FBI has a very different part of the FBI and the FBI to ensure that the FBI has a \"the government\" and that the FBI is a \"the government\" that is not a \"the government\" that is not a \"the government\" or \"the government\" that is a \"the government\" that is not a \"the government\" or \"the government\" that is not a \"the government\" or \"the government\" or \"the government is not a \"the government\" or \"the government\" or \"the government\" or \"the government\" or \"the government\" or \"the government is not a \"the government\" or \"the government\" or \"the government\" or \"the government\" or \"the \"the government\" or \"the government is not a \"the government\" or \"the government\" or \"the government\" or \"the government\" or \"the \"the government\" and \"the \"the government\" is \"the only way to do.\"\n\nThe FBI has also been a \"the government\" for the FBI, which is the first time the FBI has been in the past year.\n\nThe FBI has also been a \"the FBI\" that has been a \"the only way to do it is to be a \"the government\" that is \"the only way to do it is to be a \"the government\" that is not a \"the government\" or \"the government\" that is not a \"the government\" or \"the government\" or \"the government\" or \"the government\" or \"the government\" or \"the government\" or \"the government is not a \"the government\" or \"the government\" or \"the government\" or \"the government\" or \"the government\" or \"the \"the government\" is \"the only way to do.\"\n\nThe FBI has also been a \"the government\" for the FBI's \"the",
+          "Water boils at a temperature of 100,000 square feet, and 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "She opened the letter and read the book.\n\n\u201cI\u2019m not sure if I\u2019m going to be a good idea,\u201d said the book. \u201cI\u2019m not sure if I\u2019m going to be a good job.\u201d\n\n\u201cI\u2019m not sure if I\u2019m going to be a good job for the next day,\u201d said the book. \u201cI\u2019m not sure if I\u2019m going to be a good job.\u201d\n\n\u201cI\u2019m not sure if I\u2019m going to be a good job for the next day,\u201d said the book. \u201cI\u2019m not sure if I\u2019m going to be a good job for the next day.\u201d\n\n\u201cI\u2019m not sure if I\u2019m going to be a good job for the next day,\u201d he said. \u201cI\u2019m not sure if I\u2019m going to be a good job.\u201d\n\n\u201cI\u2019m not sure if I\u2019m going to be a good job for the next day.\u201d\n\n\u201cI\u2019m not sure if I\u2019m going to be a good job for the next day,\u201d he said. \u201cI\u2019m not sure if I\u2019m going to be a good job.\u201d\n\n\u201cI\u2019m not sure if I\u2019m going to be a good job for the next day,\u201d he said. \u201cI\u2019m not sure if I\u2019m going to be a good job.\u201d\n\n\u201cI\u2019m not sure if I\u2019m going to be a good job for the next day,\u201d he said. \u201cI\u2019m not sure if I\u2019m going to be a good job.\u201d\n\n\u201cI\u2019m not sure if I\u2019m going to be a good job for the next day,\u201d he said. \u201cI\u2019m not sure if I\u2019m going to be a good job.\u201d\n\n\u201cI\u2019m not sure if I\u2019m going to be a good job for the next day,\u201d he said. \u201cI\u2019m not sure if I\u2019m going to be a good job.\u201d\n\n\u201cI\u2019m not sure if I\u2019m going to be a good job for the next day,\u201d he said. \u201cI\u2019m not sure if I\u2019m going to be a good job.\u201d\n\n\u201cI\u2019m not sure if I\u2019m going to be a good job for the next day,\u201d he said. \u201cI\u2019m not sure if I\u2019m going to be a good job.\u201d\n\n\u201cI\u2019m not sure if I",
+          "The main advantage of this approach is to be the first time the 2016 season was to be the first time the 100-year-old team in the 2016 season.\n\nThe 2016 season will be the first time in the 2016 season, but the team will be the first time in the first round of the 2016 season.\n\nThe 2016 season will be the first time in the first quarter of the season, with the 2016 season 2016 season.\n\nThe 2016 season will be the first time in the first quarter of the season, with the 2016 season 2016 season.\n\nThe 2016 season will be 10 games, 10 games, 10 games, 10 games, 10 games and 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10 games, 10, 10 games, 10 games, 10 games, 10 games, 10 games, 10, 10, 10 games, 10 games, 10 games, 10 games, 10 games, 1, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10",
+          "After the war ended, the government was not in the first place.\n\nThe first time the city was in the first place, the city was in the first place. The first time the city was in the first place, and the city was still in the first place.\n\nThe city\u2019s first city, which was the first time the city was in the first place, was the first time the city was in the first place. The city was awarded a 10-year-old, 1997-1999-99, and the 1990s.\n\nThe city\u2019s first-year contractor, the city\u2019s first-year-old, was the first time the city was in the first place in the 1990s. The first time the team was 10 years ago, and the 1990s was 1999.\n\nThe 1990s, 1999, was the first time the team was 1999, and the 1990s and 1990s. The 1990s, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999.\n\nThe 1999-1990s, 1999, was 1999, and the 1990s and 1990s, the 1990s and 1990s, 1999, 1999, 1999, 1999, 1999, 1999.\n\nThe 1999-1990s, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 199",
+          "import numpy as np\n\ndefining the 2016-1970s, the 2016-16-16-16-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-",
+          "According to the report published last week, the company was \"a very good thing for the next day,\" and that the company was not in the first time.\n\nThe company said the company was not able to make the company aimed at the company's own, but it was not clear that the company was not a \"intentional\" to be a \"the government\" and \"the government\" that would be a \"the government\" for the company.\n\n\"I think it's a very difficult time to do that, and I think it's a very difficult time to do it. I think it's a very good thing to do with the company, and I think it's a good thing to do it. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that. I think it's a lot of time to do that."
+        ]
+      }
+    }
+  },
+  "_real_text": {
+    "n_rows": 256,
+    "n_tokens": 512,
+    "rep4": 0.036522286345776034,
+    "rep4_std": 0.044425122122974,
+    "rep4_p10": 0.005893909626719057,
+    "rep4_p50": 0.023575638506876228,
+    "rep4_p90": 0.07072691552062868,
+    "rep4_frac_zero": 0.01171875,
+    "distinct3": 0.9276424632352942,
+    "distinct3_std": 0.05461048307438762
+  },
+  "_meta": {
+    "n_tokens": 512,
+    "seed": 1234,
+    "max_slots": 0,
+    "n_prompts": 12,
+    "decodes": [
+      "topk50_t0.8",
+      "sample_t1",
+      "greedy"
+    ],
+    "samples_per_prompt": 1,
+    "arms_done": [
+      "tul-ilv50"
+    ]
+  }
+}

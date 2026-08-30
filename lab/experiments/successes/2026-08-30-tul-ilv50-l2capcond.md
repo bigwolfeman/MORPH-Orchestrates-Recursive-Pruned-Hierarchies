@@ -1,6 +1,6 @@
 # Planned: ilv50 + l2cap_cond — the revived pair (Wolfe's call, new questions)
 
-Status: planned
+Status: success
 Date: 2026-08-30 (frozen before launch; GPU currently in use by Wolfe — launches
 only on his word). The dbfix-pair decision rule cancelled these arms; Wolfe
 revived them explicitly ("ilv50 and l2cap cond are both worth doing"). Their
@@ -75,3 +75,70 @@ The mixed bptt+db1 cycle has never executed in a live main() loop. The
 iter-conditioning + spectral-projection combination has never run on GPU (CPU
 bit-identity only). The dual-mode sweep for ilv50 (forced-depth AND ladder on one
 checkpoint) has not been exercised.
+
+## Results
+
+Wall-clock from queue-log stamps. Both arms trained clean, seed 1, batch 6, eager.
+Smoke gates verified live before launch (mixed cycle `['bptt', 'db1']` + spectral
+projection cap=1.5 on 12 core linears, quoted from the smoke logs).
+
+| cell | bar | measured | verdict |
+|---|---|---|---|
+| I1 ilv50 S1-clean | no eval >0.20 over running min ×2 after step 1000 | max excursion +0.133 (step 2750) | **PASS** |
+| I2 ilv50 depth (binding) | force-loop CE(K=1) − CE(K=6) ≥ 0.10 | **−0.0005** (4.4732 → 4.4737, flat to 4 decimals) | **FAIL** |
+| I3 ilv50 wall-clock | ≤ 55 min | 54.2 min (13:29:48→14:24:02) | **PASS** |
+| I4 ilv50 CE | @4250 ≤ 4.40 | 4.4441 | **FAIL** |
+| LC1 l2cap_cond S1-clean | same as I1 | max excursion +0.142 (step 2750) | **PASS** |
+| LC2 l2cap_cond depth (binding) | ≥ 0.20 nats | **0.0127** (4.4292 → 4.4165) | **FAIL** |
+| LC3 l2cap_cond CE | @4250 < 4.3489 | 4.3727 (worse by 0.024, inside replicate spread — "no better") | **FAIL** |
+
+Supporting numbers:
+
+- tul-ilv50: final val 4.4975@4500, wandb `4e2iqeoc`. Euler-ladder (auto) sweep:
+  shallow bowl, best K=3 (4.4883 vs 4.5062 at K=1), spread 0.018 — inert.
+  Force-loop sweep of the bptt-trained loop: 4.4732/4.4737/4.4737/4.4734/4.4736/
+  4.4737/4.4735/4.4736 for K=1..8. Samples: topk50 rep4 0.031, sample_t1 0.0015,
+  greedy rep4 0.816.
+- tul-l2cap-cond: final val 4.4235@4500, CE@4250 4.3727, 68.6 min
+  (14:51:37→16:00:15), wandb `orzhq1a1`. Depth sweep: 4.4292/4.4183/4.4163/
+  4.4157/4.4159/4.4165/4.4166/4.4166 for K=1..8 — earned 0.0127 vs l2cap's 0.233
+  on the same instrument. Samples: topk50 rep4 0.057, sample_t1 0.0025, greedy
+  rep4 **0.844** — l2cap's greedy resistance (0.61) is gone with the depth curve,
+  the campaign-wide "generation health tracks mechanism" pattern again.
+- Artifacts: `lab/experiments/results/2026-08-30-tul-ilv50-l2capcond/` (three
+  depth sweeps, two eval histories, two sample JSONs).
+
+## Verdict
+
+Predictions: I1, I3, LC1 held at their favored priors; I2 (40%) and LC3 (35%)
+failed on the side my priors leaned; I4 was a coin (50%) and failed; **LC2 (55%)
+is the one miss** — I leaned pass and it failed hard. 5 of 7 held → filed to
+successes with the miss named.
+
+Both binding rules fire on their fail branches: **the interleave line is closed
+permanently** (wall-clock must come from compile/kernels), and **conditioning
+stays out of capped recipes for good**.
+
+The pair's real finding is the reinterpretation LC2 forces: ilv50's total erasure
+looked like mixed-objective poisoning, but l2cap_cond — the exact l2cap recipe
+with ONLY the AdaLN-Zero iteration signal added, full BPTT every step — collapsed
+the depth curve by ~95% on its own. Per-iteration conditioning is by itself
+sufficient to kill depth-earning. Mechanism (consistent, not independently
+probed): the conditioning gives the network a cheap per-iteration scale/shift to
+differentiate iterations, so the dynamics no longer need to build a composition —
+the iteration index is absorbed by AdaLN instead of by the map. ilv50 remains
+confounded (mix + conditioning); with both lines closed the confound is moot.
+
+## Updated hypothesis
+
+Depth-earning under the capped recipe is fragile to ANYTHING that lets the
+iterations differentiate without composing: a one-pass objective on alternate
+steps, or a per-iteration conditioning signal on every step. The gate-vs-cap
+ladder must therefore run its arms with NO conditioning module, and the gated
+blend (Gated Recurrent Transformers) needs scrutiny on exactly this axis — a
+learned per-iteration gate is ALSO an iteration-indexed shortcut unless the gate
+input is state-dependent rather than index-dependent. Test state-keyed gates,
+never index-keyed ones. A cheap discriminating probe exists before any new run:
+zero the conditioning weights on the l2cap-cond checkpoint and re-sweep — if the
+curve stays dead, the weights themselves reorganized; if it partially revives,
+the shortcut is load-bearing at eval time.
