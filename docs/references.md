@@ -1064,14 +1064,23 @@ the paper (grep-verified). Also adopt §8.3's attention-lift diagnostic: separat
 worth_shuffle alone cannot make.
 
 
-### Gated Recurrent Transformers (row 69, added 2026-08-30, summary from one structured fetch — close read pending)
+### Gated Recurrent Transformers (row 69, added 2026-08-30; close read of the PDF done 2026-08-30 — Eqs. 2-5 verified)
 
 Prelude/core/coda looped transformer (Geiping lineage) where each iteration is a
-GATED convex blend `h_new = g*h_prev + (1-g)*f(h)`, g in [0,1] per element,
-conditioned on normalized state + prelude + injected noise (Eqs. 2-5); gate bias
-init +4 so the loop STARTS near-identity (g~0.98) — contractivity control by
-architecture, the same disease our l2cap treats with the post-step sigma<=1.5
-projection. Depth sampled UNIFORM {1..R} in training -> every depth trained, free
+GATED convex blend (Eq. 4) `h = g (*) h_prev + (1-g) (*) o`, g in [0,1]^{T x d}
+elementwise. Verified detail: the gate (Eq. 5) is g = sigmoid(f_g([LN(h_prev),
+LN(h_pre)])/tau + eps_g) — a TWO-LAYER SiLU MLP (hidden dim d) over the
+layer-normed state AND layer-normed prelude, with per-scalar gate noise in
+training; second linear's bias init +4 (g~0.98, copy branch dominates at start).
+Their own ablation sweeps bias in {-2,0,+2,+4}: spread 0.019 nats — the init is
+NOT load-bearing. Eq. 2 additionally re-injects the prelude every step
+(h_tilde = W_proj[h_prev + eps_x, h_pre], ~10d^2/step); MORPH's core already
+injects the prelude per iteration, so a MORPH arm adds only the gate (see
+.agents/notes/proposed/architecture/2026-08-30-gate-ladder-program.md).
+Contractivity control by architecture — the disease our l2cap treats with the
+post-step sigma<=1.5 projection. Everything in Eqs. 2-5 is state/prelude-keyed;
+no iteration index anywhere, so it passes the cond-zero constraint by
+construction. Depth sampled UNIFORM {1..R} in training -> every depth trained, free
 early-exit, no per-iteration losses. Beats MoR / heavy-tail Poisson / approaches
 RRT across 9 isoFLOPs/isoParams cells (GPT-2 family). Their main tax — R x KV
 expansion — mostly does not apply to TUL (loop runs on <=64 slots). Why it is in
