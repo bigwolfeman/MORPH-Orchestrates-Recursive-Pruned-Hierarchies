@@ -1357,6 +1357,44 @@ def warmup_compile_all_shapes(
           f"({len(sizes) * passes_per_size} passes, all active-set sizes)", flush=True)
 
 
+def build_step_mix_cycle(step_mix: dict) -> list[str]:
+    """Deterministic ``tul_step_mode`` schedule from an integer-ratio dict
+    (``training.step_mix``, e.g. ``{bptt: 1, db1: 1}``) — the faithful DiffusionBlocks
+    interleave arm (``tul_ilv50``, CLAUDE.md).
+
+    Returns a cycle of length ``sum(step_mix.values())``; the mode at global step
+    ``s`` is ``cycle[s % len(cycle)]`` — a pure function of the step INDEX, so it is
+    resume-safe (no RNG, no run-local counter) and independent of the seed.
+
+    Uses the standard weighted-round-robin ("most uniform spread") construction
+    rather than laying out all of one mode followed by all of the other: at 1:1 that
+    means alternating ``bptt, db1, bptt, db1, …`` instead of a run of 50 followed by a
+    run of 50, which would correlate a long block of optimizer steps with the same
+    objective — bad for anything that assumes steps are roughly IID (e.g. AdEMAMix's
+    slow EMA). Ties broken by key order in ``step_mix`` (the YAML's own order, which
+    Hydra/OmegaConf preserve), so the construction is fully deterministic.
+    """
+    if not step_mix:
+        raise ValueError("build_step_mix_cycle needs a non-empty step_mix dict")
+    keys = list(step_mix.keys())
+    counts = {k: int(v) for k, v in step_mix.items()}
+    if any(c <= 0 for c in counts.values()):
+        raise ValueError(f"training.step_mix ratios must be positive ints, got {step_mix}")
+    total = sum(counts.values())
+    cycle: list[str] = []
+    produced = {k: 0 for k in keys}
+    for i in range(total):
+        best_k, best_score = None, None
+        for k in keys:
+            score = (i + 1) * counts[k] / total - produced[k]
+            if best_score is None or score > best_score + 1e-12:
+                best_k, best_score = k, score
+        cycle.append(best_k)
+        produced[best_k] += 1
+    assert produced == counts, (produced, counts)   # the construction's own invariant
+    return cycle
+
+
 # ── Main training loop ────────────────────────────────────────────────────────
 
 @hydra.main(config_path="../configs", config_name="base", version_base=None)
@@ -1581,6 +1619,21 @@ def main(cfg: DictConfig) -> None:
               f"cap={_sp_cap} lambda={_sp_lam} log_every={_sp_log} include_attn={_sp_attn} "
               f"on {len(_spec_pen._linears)} core linears "
               f"({_spec_pen._n_mlp} MLP + {len(_spec_pen._linears) - _spec_pen._n_mlp} attention)")
+
+    # ── step_mix interleave schedule (faithful DiffusionBlocks, CLAUDE.md) ─────
+    # training.step_mix: {bptt: 1, db1: 1} → alternate tul_step_mode per step, a pure
+    # function of the GLOBAL step index (build_step_mix_cycle above) so it survives a
+    # resume unchanged. Absent (the default) → `_step_mix_cycle` is None and every
+    # forward call passes `tul_step_mode=None`, bit-identical to before this existed.
+    _step_mix_raw = getattr(cfg.training, "step_mix", None)
+    _step_mix_cycle = (build_step_mix_cycle(dict(_step_mix_raw))
+                       if _step_mix_raw else None)
+    _step_mix_stats: dict[str, dict[str, float]] = {}   # mode -> {"n": int, "loss_sum": float}
+    if _step_mix_cycle is not None:
+        print(f"  step_mix ON: cycle={_step_mix_cycle} (from {dict(_step_mix_raw)})",
+              flush=True)
+        for _m in set(_step_mix_cycle):
+            _step_mix_stats[_m] = {"n": 0, "loss_sum": 0.0}
 
     # ── Quantization / QAT ─────────────────────────────────────
     # Ternary → embedding → CMS scoring → attention-projection → FP8, in that order
@@ -2423,6 +2476,11 @@ def main(cfg: DictConfig) -> None:
         # disagreed would mix two objectives into one optimizer update.
         _is_ntp = _ntp_loader is not None and _ntp_rng.random() < _ntp_p
         _ntp_steps += int(_is_ntp)
+        # step_mix mode for THIS step — a function of `step` alone (see
+        # build_step_mix_cycle), computed once per step (not per micro-batch) so a
+        # grad-accumulated step never mixes two objectives into one optimizer update.
+        _cur_tul_mode = (_step_mix_cycle[step % len(_step_mix_cycle)]
+                         if _step_mix_cycle is not None else None)
         for _micro in range(_ga):
             with _rt.region("data"):
                 try:
@@ -2465,11 +2523,20 @@ def main(cfg: DictConfig) -> None:
             _cum_tokens += _step_tokens
             _cum_passes += _step_tokens * _flops.flop_proxy()
 
+            # step_mix requires a slot layout (it selects a TUL core loop mode); a step
+            # where TUL is off (no layout — e.g. before tul.activate_at) or a non-TUL
+            # loader batch runs the ordinary forward, same as step_mix being unset.
+            _tsm = _cur_tul_mode if _layout is not None else None
+
             with _rt.region("fwd"):
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     out = model(x, labels=y, bag_size=phase.bag_size,
-                                slot_layout=_layout)
+                                slot_layout=_layout, tul_step_mode=_tsm)
                     loss = out["loss"]
+                    if _tsm is not None:
+                        _sms = _step_mix_stats.setdefault(_tsm, {"n": 0, "loss_sum": 0.0})
+                        _sms["n"] += 1
+                        _sms["loss_sum"] += float(loss.detach())
 
                 # Routing aux loss (load balance) — only active after route_start
                 if pruning.is_routed:
@@ -2778,6 +2845,14 @@ def main(cfg: DictConfig) -> None:
                 "train/grad_norm": _gnorm,
                 "train/clip_factor": min(1.0, grad_clip / max(_gnorm, 1e-12)),
             }
+            # step_mix: per-mode cumulative step count + running mean loss (mission
+            # spec keys, e.g. train/steps_db1, train/loss_db1). Cumulative across the
+            # whole run (like _ntp_steps above), not just this log interval, so a
+            # dashboard reads the SAME curve whether it samples every step or every
+            # log_every steps.
+            for _m, _s in _step_mix_stats.items():
+                log[f"train/steps_{_m}"] = _s["n"]
+                log[f"train/loss_{_m}"] = _s["loss_sum"] / max(_s["n"], 1)
             # ── FLOP efficiency (gate A3) ─────────────────────────────────
             # tok/s and peak memory alone are misleading on a launch-bound model: A0's step
             # is ~16 % fixed overhead and a DB arm's is ~50-60 %. Always read flop_proxy

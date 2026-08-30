@@ -60,7 +60,6 @@ from morph.model.fm_planner import (
     generate_plans,
     make_targets,
     mean_pairwise_cos,
-    segment_rows,
 )
 
 __all__ = ["retrieval_scores", "row_index_of_valid", "probe_batch", "run_probe"]
@@ -215,8 +214,8 @@ def run_probe(planner_ckpt: str, n_batches: int, batch_size: int, seq_len: int,
     """
     from omegaconf import OmegaConf
 
-    from lab.tulfm.train_p1 import build_backbone, make_loader
-    from morph.training.tul_setup import build_boundary_rule
+    from lab.tulfm.train_p1 import build_backbone, draw_geometry, extract_context, make_loader
+    from morph.training.tul_setup import build_boundary_rule, build_tul_runtime
 
     device = torch.device(device_str)
     torch.manual_seed(seed)
@@ -227,7 +226,14 @@ def run_probe(planner_ckpt: str, n_batches: int, batch_size: int, seq_len: int,
     if backbone_ckpt is not None:
         cfg.backbone.checkpoint = backbone_ckpt
 
-    backbone = build_backbone(cfg, bcfg, device)
+    # Same TG-restrict gate train_p1.main() uses, read off the SAME backbone config the
+    # planner checkpoint logged — a probe run can never silently drift from how its
+    # planner was actually trained (the whole point of rebuilding from ``cfg``/``bcfg``
+    # rather than re-deriving from the caller's own arguments).
+    tul_rt = build_tul_runtime(bcfg)
+    is_tul = bool(tul_rt.model_cfg.tg_restrict) if tul_rt is not None else False
+    backbone = build_backbone(cfg, bcfg, device,
+                              tul_model_cfg=tul_rt.model_cfg if is_tul else None)
     rule, _lut, _eos, _subs = build_boundary_rule(bcfg)
 
     # The whitener travels WITH the planner. Re-fitting one here on the probe's own
@@ -246,17 +252,21 @@ def run_probe(planner_ckpt: str, n_batches: int, batch_size: int, seq_len: int,
 
     schedule = build_schedule(float(cfg.sigma.p_mean), float(cfg.sigma.p_std),
                               float(cfg.sigma.sigma_data))
+    val_tul_cfg = tul_rt.val_data_cfg if is_tul else None
     loader = make_loader(bcfg, seq_len, batch_size,
-                         skip_samples=int(cfg.data.val_skip_samples))
+                         skip_samples=int(cfg.data.val_skip_samples), tul=val_tul_cfg)
 
     gen = torch.Generator(device=device).manual_seed(seed)
     per_batch = []
     for _ in range(n_batches):
-        ids = next(loader)[0].to(device)
-        geom = segment_rows(ids, rule, pcfg.max_slots)
+        # pcfg.max_slots is what the planner was ACTUALLY trained with — the packer's
+        # own spec.max_slots on the TG path (train_p1.main() set it there), the
+        # independent cfg.data.max_slots on the a3 path. Either way it is the right
+        # geometry width for THIS planner, so there is nothing to re-derive here.
+        ids, layout, geom = draw_geometry(loader, rule, pcfg.max_slots, device, is_tul)
         with torch.no_grad():
-            h = backbone.prelude_states(
-                ids, apply_input_norm=bool(cfg.backbone.apply_input_norm)).float()
+            h = extract_context(backbone, ids, layout,
+                                bool(cfg.backbone.apply_input_norm), False).float()
         per_batch.append(probe_batch(planner, untrained, h, geom, schedule,
                                      int(cfg.sigma.infer_steps), generator=gen,
                                      whitener=whitener))

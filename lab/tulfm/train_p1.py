@@ -27,13 +27,16 @@ import os
 import time
 
 import hydra
+import numpy as np
 import torch
 import wandb
 from omegaconf import DictConfig, OmegaConf
+from torch import Tensor
 
 from morph.model.fm_planner import (
     FMPlanner,
     FMPlannerConfig,
+    SpanGeometry,
     TargetWhitener,
     analytic_null_floor,
     band_edges_for,
@@ -49,12 +52,16 @@ from morph.model.fm_planner import (
 )
 from lab.tulfm.retrieval_probe import retrieval_scores, row_index_of_valid
 from morph.model.transformer import MORPHTransformer
+from morph.model.tul import TULConfig
+from morph.model.tul_layout import SlotLayout, TulDataConfig
 from morph.training.data import create_dataloader
 from morph.training.train import build_morph_config, load_weights_only
-from morph.training.tul_setup import build_boundary_rule
+from morph.training.tul_setup import build_boundary_rule, build_tul_runtime
 
 __all__ = ["build_backbone", "make_loader", "compose_backbone_cfg",
-           "calibrate_whitener", "resolve_loss_scale", "main"]
+           "calibrate_whitener", "resolve_loss_scale",
+           "geometry_from_layout", "compact_token_states",
+           "draw_geometry", "extract_context", "main"]
 
 
 # ── backbone ─────────────────────────────────────────────────────────────────
@@ -85,8 +92,8 @@ def compose_backbone_cfg(config_name: str, device: torch.device,
     return compose(config_name=config_name, overrides=overrides)
 
 
-def build_backbone(cfg: DictConfig, bcfg: DictConfig,
-                   device: torch.device) -> MORPHTransformer:
+def build_backbone(cfg: DictConfig, bcfg: DictConfig, device: torch.device,
+                   tul_model_cfg: TULConfig | None = None) -> MORPHTransformer:
     """Build the frozen model, load its weights COMPLETELY, freeze it, and prove both.
 
     ``apply_quantization`` is not optional and it must run BEFORE the load. Every QAT
@@ -103,10 +110,20 @@ def build_backbone(cfg: DictConfig, bcfg: DictConfig,
     and ``lm_mixer``. ``load_weights_only``'s own guard passes, because it counts tensors
     and 321/348 is comfortably over half. The features would have been half random and
     every P1 number meaningless. Hence the hard ``missing == 0`` check below.
+
+    ``tul_model_cfg`` (TG-restrict backbones, e.g. ``tul_l2`` / ``checkpoints/morph/
+    tul-l2-cap``): the ``TULConfig`` to build the model WITH — pass
+    ``build_tul_runtime(bcfg).model_cfg`` whenever ``bcfg.tul.tg_restrict`` is true.
+    ``None`` (default) is the a3 path, bit-identical to before: ``build_morph_config(bcfg,
+    tul=None)`` builds plain attention (``_impl.compressor.*``). A gl1b-lineage TG
+    checkpoint has TG-restrict attention instead (``_impl.cca.*``, structurally different
+    weights) and TUL-only parameters (``E_slot`` / ``E_mask`` / ``W_prefix``) — built
+    with ``tul=None`` those 105 tensors have no home on the model and the ``missing == 0``
+    guard below fires loud rather than silently loading a partly-random backbone.
     """
     from morph.training.quant_setup import apply_quantization
 
-    morph_cfg = build_morph_config(bcfg, tul=None)
+    morph_cfg = build_morph_config(bcfg, tul=tul_model_cfg)
     model = MORPHTransformer(morph_cfg).to(device)
     qm = apply_quantization(model, bcfg)
     live_q = [k for k, v in qm.items() if v is not None]
@@ -139,8 +156,18 @@ def build_backbone(cfg: DictConfig, bcfg: DictConfig,
     return model
 
 
-def make_loader(bcfg: DictConfig, seq_len: int, batch_size: int, skip_samples: int = 0):
-    """The ordinary MORPH OWT loader. No TUL packing — P1 segments rows itself."""
+def make_loader(bcfg: DictConfig, seq_len: int, batch_size: int, skip_samples: int = 0,
+                tul: TulDataConfig | None = None):
+    """The ordinary MORPH OWT loader.
+
+    ``tul=None`` (default, the a3 path): plain ``(input_ids, labels)`` batches, no TUL
+    packing — P1 segments rows itself with :func:`segment_rows`. Bit-identical to before.
+
+    ``tul`` given (TG-restrict backbones): ``create_dataloader``'s own TUL path yields
+    ``(input_ids, labels, slot_layout)`` triples, packed with the SAME
+    ``pack_tul_batch``/``BoundaryRule`` the checkpoint was trained with (invariant 1,
+    docs/tul-spec.md) — not a second packer reimplemented here.
+    """
     return create_dataloader(
         tokenizer_name=str(bcfg.data.tokenizer),
         dataset_name=str(bcfg.data.dataset),
@@ -148,14 +175,154 @@ def make_loader(bcfg: DictConfig, seq_len: int, batch_size: int, skip_samples: i
         batch_size=int(batch_size),
         split="train",
         skip_samples=int(skip_samples),
+        tul=tul,
     )
+
+
+# ── TG-restrict layout adapter ──────────────────────────────────────────────
+#
+# The a3 path has no slot tokens: segment_rows cuts spans directly off the plain
+# token ids, and prelude_states(ids) is already a token-only [B, L, d] tensor. A TG
+# backbone's own forward requires a packed layout (slot positions interleaved with
+# token positions, spec §3.1), and prelude_states(ids, layout=...) therefore returns a
+# [B, L_total, d] tensor that mixes the two. The two functions below turn that back
+# into EXACTLY the same shapes segment_rows/pool_targets expect — a token-only context
+# tensor and a SpanGeometry over its own (compacted) position axis — so every
+# downstream FM-planner function (make_targets, fm_loss, generate_plans, retrieval)
+# runs UNCHANGED on either backbone.
+
+def compact_token_states(h_full: Tensor, layout: SlotLayout) -> Tensor:
+    """``[B, L_total, d] -> [B, L_total, d]``: every row's TOKEN positions moved to a
+    contiguous prefix (original order preserved), slot positions pushed past them and
+    zeroed.
+
+    No truncation: the output keeps ``L_total`` columns because that is a safe upper
+    bound on any row's real token count (a row with zero boundaries spends its whole
+    budget on tokens — spec §3.1's ``L_total = seq_len + prefix_k · max_slots`` is the
+    packer's ceiling, not ``seq_len``). Columns past a row's own token count are
+    zeroed, not left as slot content, so a geometry bug that ever read past
+    ``n_tok`` would see zero rather than a plausible-looking slot state.
+    :func:`geometry_from_layout` reads span boundaries off THIS SAME compacted axis
+    (token rank within the row), so the two must always be used together.
+    """
+    B, L, d = h_full.shape
+    is_tok = ~layout.slot_mask                                        # [B, L] bool
+    # Stable sort on "is this a slot" (0=token, 1=slot) keeps within-group order and
+    # puts every token position before every slot position.
+    order = torch.argsort(layout.slot_mask.to(torch.int8), dim=1, stable=True)
+    out = torch.gather(h_full, 1, order.unsqueeze(-1).expand(-1, -1, d))
+    n_tok = is_tok.sum(dim=1)                                          # [B]
+    col = torch.arange(L, device=h_full.device).unsqueeze(0)
+    out = out * (col < n_tok.unsqueeze(1)).unsqueeze(-1).to(out.dtype)
+    return out
+
+
+def geometry_from_layout(layout: SlotLayout) -> SpanGeometry:
+    """:class:`SpanGeometry` read off ``layout.bag_id`` — the layout IS the span
+    structure, so this does NOT re-cut spans with the boundary rule (unlike
+    :func:`segment_rows`, which has no packed layout to read and must).
+
+    Indices are in :func:`compact_token_states`'s compacted axis: token rank within
+    the row, in original left-to-right order. A span's tokens are a CONTIGUOUS run of
+    that rank by construction (``pack_tul_row``: token i lands at row position
+    ``i + prefix_k·(#boundaries before i)``, constant within one span), so a span's
+    first/last occurrence among token positions fully describes its range — no
+    scan-for-runs needed beyond a single first/last-index pass.
+
+    Slot ``i`` (0-indexed, matching ``layout.slot_valid``) is valid exactly when span
+    ``i+1`` exists in the packed row (mirrors ``segment_rows``: ``m`` packed slots give
+    ``m-1`` valid targets; the packed row's own OPEN tail — bag id ``layout.max_slots``,
+    the dump bin — is never a target, same as segment_rows' open tail after the last
+    boundary). ``n_dropped_budget`` is always 0 here: the packer already applied its own
+    slot budget when it built ``layout``, so there is no further geometry-side drop to
+    report — the packer's own ``pad_frac``/``dropped`` stats already record that.
+    """
+    slot_mask = layout.slot_mask.detach().cpu().numpy()
+    bag_id = layout.bag_id.detach().cpu().numpy()
+    slot_valid = layout.slot_valid.detach().cpu().numpy()
+    B, L = slot_mask.shape
+    S = slot_valid.shape[1]
+
+    slot_end = np.zeros((B, S), dtype=np.int64)
+    tgt_start = np.zeros((B, S), dtype=np.int64)
+    tgt_end = np.zeros((B, S), dtype=np.int64)
+    valid = np.zeros((B, S), dtype=bool)
+
+    n_spans_total = 0
+    n_slots_valid = 0
+    for b in range(B):
+        tok_bag = bag_id[b][~slot_mask[b]]              # bag id per TOKEN position,
+                                                          # in compacted-axis order
+        n_slots_row = int(slot_valid[b].sum())
+        n_spans_total += n_slots_row
+        if n_slots_row == 0 or tok_bag.size == 0:
+            continue
+        first: dict[int, int] = {}
+        last: dict[int, int] = {}
+        for c, bg in enumerate(tok_bag.tolist()):
+            if bg >= n_slots_row:
+                continue                                  # dump bin / open tail
+            if bg not in first:
+                first[bg] = c
+            last[bg] = c
+        for i in range(max(n_slots_row - 1, 0)):
+            if i in last and (i + 1) in first:
+                slot_end[b, i] = last[i]
+                tgt_start[b, i] = first[i + 1]
+                tgt_end[b, i] = last[i + 1]
+                valid[b, i] = True
+        n_slots_valid += int(valid[b].sum())
+
+    return SpanGeometry(
+        slot_end=torch.from_numpy(slot_end), tgt_start=torch.from_numpy(tgt_start),
+        tgt_end=torch.from_numpy(tgt_end), valid=torch.from_numpy(valid),
+        n_spans_total=n_spans_total, n_slots_valid=n_slots_valid,
+        n_dropped_budget=0, seq_len=int(L),
+    )
+
+
+def draw_geometry(loader, rule, max_slots: int, device: torch.device, is_tul: bool):
+    """One batch's model input plus its :class:`SpanGeometry` — no backbone call, so
+    the ``geom.valid.sum() < 2`` early-continue (every call site) stays cheap on
+    either backbone.
+
+    Returns ``(ids, layout, geom)``; ``layout`` is ``None`` on the a3 path
+    (``is_tul=False``, untouched: :func:`segment_rows` on the plain batch) and the
+    packed :class:`SlotLayout` on the TG path.
+    """
+    if not is_tul:
+        ids = next(loader)[0].to(device)
+        return ids, None, segment_rows(ids, rule, max_slots)
+    ids, _labels, layout = next(loader)
+    ids = ids.to(device)
+    layout = layout.to(device)
+    return ids, layout, geometry_from_layout(layout).to(device)
+
+
+def extract_context(backbone: MORPHTransformer, ids: Tensor, layout: SlotLayout | None,
+                    apply_input_norm: bool, use_amp: bool) -> Tensor:
+    """``input_norm(prelude)`` at TOKEN positions — the tensor the coda consumes — on
+    EITHER backbone. ``layout=None`` is the a3 path (:meth:`prelude_states` unchanged,
+    already token-only); given, runs the TUL prelude and compacts to token positions.
+    """
+    def _run() -> Tensor:
+        if layout is None:
+            return backbone.prelude_states(ids, apply_input_norm=apply_input_norm)
+        h_full = backbone.prelude_states(ids, apply_input_norm=apply_input_norm,
+                                         layout=layout)
+        return compact_token_states(h_full, layout)
+
+    if use_amp:
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            return _run()
+    return _run()
 
 
 # ── schedule ─────────────────────────────────────────────────────────────────
 
 def calibrate_whitener(backbone: MORPHTransformer, loader, rule, max_slots: int,
                        device: torch.device, apply_input_norm: bool,
-                       rank: int, calib_batches: int) -> TargetWhitener:
+                       rank: int, calib_batches: int, is_tul: bool = False) -> TargetWhitener:
     """Run ``calib_batches`` through the FROZEN backbone and fit the target whitener.
 
     Uses the TRAIN loader's stream, so calibration and training see the same document
@@ -163,15 +330,18 @@ def calibrate_whitener(backbone: MORPHTransformer, loader, rule, max_slots: int,
     the fitted basis is a constant of (checkpoint, span rule, this many documents) — it
     is stored in the planner checkpoint and the probe rebuilds it exactly rather than
     re-fitting on its own batches.
+
+    ``is_tul=False`` (default) is the a3 path, untouched. ``is_tul=True`` draws packed
+    TG batches (:func:`draw_geometry`) and reads the SAME feature at token positions
+    only (:func:`extract_context`).
     """
     rows = []
     for _ in range(int(calib_batches)):
-        ids = next(loader)[0].to(device)
-        geom = segment_rows(ids, rule, max_slots)
+        ids, layout, geom = draw_geometry(loader, rule, max_slots, device, is_tul)
         if int(geom.valid.sum()) < 2:
             continue
         with torch.no_grad():
-            h = backbone.prelude_states(ids, apply_input_norm=apply_input_norm).float()
+            h = extract_context(backbone, ids, layout, apply_input_norm, False).float()
             rows.append(pool_targets(h, geom)[geom.valid].cpu())
     if not rows:
         raise RuntimeError("whitener calibration collected no valid slots")
@@ -228,24 +398,27 @@ def evaluate(planner: FMPlanner, backbone: MORPHTransformer, loader, rule, cfg: 
              schedule, edges, max_slots: int, device: torch.device,
              n_batches: int, generator: torch.Generator,
              whitener: TargetWhitener | None = None,
-             loss_scale: float = 1.0) -> dict:
+             loss_scale: float = 1.0, is_tul: bool = False) -> dict:
     """Held-out FM loss, per-band loss, retrieval top-1, and the target effective rank.
 
     Retrieval runs at EVERY eval, not only at the end — the arc note names target gaming
     as the risk the loss curve cannot see, and a probe that only runs once cannot catch a
     target space that collapsed at step 900 and recovered by step 4000.
+
+    ``is_tul=False`` (default) is the a3 path, untouched. ``is_tul=True`` draws packed
+    TG batches and reads the context at token positions only — see
+    :func:`draw_geometry` / :func:`extract_context`.
     """
     planner.eval()
     tot_loss, tot_top1, tot_mrr, tot_rank, tot_chance, n = 0.0, 0.0, 0.0, 0.0, 0.0, 0
     tot_rel, tot_wtop1, tot_wchance = 0.0, 0.0, 0.0
     bands: dict[str, list[float]] = {}
     for _ in range(n_batches):
-        ids = next(loader)[0].to(device)
-        geom = segment_rows(ids, rule, max_slots)
+        ids, layout, geom = draw_geometry(loader, rule, max_slots, device, is_tul)
         if int(geom.valid.sum()) < 2:
             continue
-        h = backbone.prelude_states(
-            ids, apply_input_norm=bool(cfg.backbone.apply_input_norm)).float()
+        h = extract_context(backbone, ids, layout,
+                            bool(cfg.backbone.apply_input_norm), False).float()
         y, y_raw = make_targets(h, geom, whitener)
         loss, stats = fm_loss(planner, h, geom, schedule, generator=generator,
                               edges=edges, y=y, loss_scale=loss_scale)
@@ -310,20 +483,44 @@ def main(cfg: DictConfig) -> None:
     # ── frozen backbone + its own config (architecture, tokenizer, data, span rule) ──
     bcfg = compose_backbone_cfg(str(cfg.backbone.config_name), device,
                                 list(cfg.backbone.get("overrides", []) or []))
-    backbone = build_backbone(cfg, bcfg, device)
+    # TG-restrict gate: read straight off the composed backbone config, not a CLI flag
+    # or a name convention. `is_tul=False` for EVERY backbone without `tul.tg_restrict:
+    # true` (including a plain a3 backbone, and a TUL backbone that never sets it) runs
+    # every line below exactly as it did before this change — no new branch is live for
+    # that model, so it is bit-identical BY CONSTRUCTION, not by a matching test.
+    tul_rt = build_tul_runtime(bcfg)
+    is_tul = bool(tul_rt.model_cfg.tg_restrict) if tul_rt is not None else False
+    backbone = build_backbone(cfg, bcfg, device,
+                              tul_model_cfg=tul_rt.model_cfg if is_tul else None)
     rule, lut, eos_id, substrings = build_boundary_rule(bcfg)
     d_ctx = int(bcfg.model.d_model)
     seq_len = int(cfg.data.seq_len)
-    max_slots = int(cfg.data.max_slots) or (seq_len // rule.min_span)
+    if is_tul:
+        # The packer's OWN slot budget (spec.max_slots), not P1's independent
+        # cfg.data.max_slots — pack_tul_batch has already fixed the row's slot count
+        # to the value the checkpoint was TRAINED with; there is no free choice left
+        # here, and `layout.max_slots` (== this) sizes every geometry tensor below.
+        tul_spec = tul_rt.data_cfg.spec_for(seq_len)
+        max_slots = tul_spec.max_slots
+        max_ctx_len = tul_spec.l_total    # the planner's context axis is the FULL
+                                          # packed row width (compact_token_states
+                                          # does not shrink it — see its docstring)
+        print(f"[p1] TG-restrict backbone: max_slots={max_slots} (from the packer's "
+              f"own spec, not cfg.data.max_slots) L_total={tul_spec.l_total}")
+    else:
+        max_slots = int(cfg.data.max_slots) or (seq_len // rule.min_span)
+        max_ctx_len = seq_len
     print(f"[p1] backbone d_model={d_ctx} n_core={int(bcfg.model.n_core)} "
-          f"seq_len={seq_len} max_slots={max_slots} "
+          f"seq_len={seq_len} max_slots={max_slots} is_tul={is_tul} "
           f"rule(min_span={rule.min_span}, span_cap={rule.span_cap}, |B|={int(lut.sum())})")
 
     # ── data (built BEFORE the planner: whitener calibration needs the stream) ──
     batch_size = int(cfg.data.batch_size)
-    train_loader = make_loader(bcfg, seq_len, batch_size)
+    train_tul_cfg = tul_rt.data_cfg if is_tul else None
+    val_tul_cfg = tul_rt.val_data_cfg if is_tul else None
+    train_loader = make_loader(bcfg, seq_len, batch_size, tul=train_tul_cfg)
     val_loader = make_loader(bcfg, seq_len, batch_size,
-                             skip_samples=int(cfg.data.val_skip_samples))
+                             skip_samples=int(cfg.data.val_skip_samples), tul=val_tul_cfg)
 
     # ── target whitening (P1c) ───────────────────────────────────────────
     # Calibration draws from the TRAIN stream, so the held-out probe stream is untouched
@@ -333,7 +530,8 @@ def main(cfg: DictConfig) -> None:
     if bool(wcfg.enabled):
         whitener = calibrate_whitener(
             backbone, train_loader, rule, max_slots, device,
-            bool(cfg.backbone.apply_input_norm), int(wcfg.rank), int(wcfg.calib_batches))
+            bool(cfg.backbone.apply_input_norm), int(wcfg.rank), int(wcfg.calib_batches),
+            is_tul=is_tul)
     d_target = whitener.rank if whitener is not None else d_ctx
 
     # ── planner ──────────────────────────────────────────────────────────
@@ -343,7 +541,7 @@ def main(cfg: DictConfig) -> None:
         d_ctx=d_ctx, d_target=d_target,
         d_p=int(cfg.planner.d_p), n_layers=int(cfg.planner.n_layers),
         n_heads=int(cfg.planner.n_heads), d_ff=int(cfg.planner.d_ff),
-        cond_dim=int(cfg.planner.cond_dim), max_slots=max_slots, max_ctx_len=seq_len,
+        cond_dim=int(cfg.planner.cond_dim), max_slots=max_slots, max_ctx_len=max_ctx_len,
         sigma_data=float(cfg.sigma.sigma_data),
         source_std=float(cfg.cfm.source_std),
         t_embed_scale=float(cfg.cfm.t_embed_scale),
@@ -413,6 +611,8 @@ def main(cfg: DictConfig) -> None:
                 "planner_cfg": {k: getattr(pcfg, k) for k in pcfg.__dataclass_fields__},
                 "d_ctx": d_ctx,
                 "max_slots": max_slots,
+                "max_ctx_len": max_ctx_len,
+                "is_tul": is_tul,
                 "boundary_ids": int(lut.sum()),
                 "eos_id": eos_id,
                 "boundary_substrings": list(substrings),
@@ -455,19 +655,13 @@ def main(cfg: DictConfig) -> None:
             g["lr"] = lr_at(step, total, float(tr.lr), int(tr.warmup),
                             float(tr.min_lr_frac))
 
-        ids = next(train_loader)[0].to(device)
-        geom = segment_rows(ids, rule, max_slots)
+        ids, layout, geom = draw_geometry(train_loader, rule, max_slots, device, is_tul)
         if int(geom.valid.sum()) < 2:
             continue
 
         with torch.no_grad():
-            if use_amp:
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    h = backbone.prelude_states(
-                        ids, apply_input_norm=bool(cfg.backbone.apply_input_norm))
-            else:
-                h = backbone.prelude_states(
-                    ids, apply_input_norm=bool(cfg.backbone.apply_input_norm))
+            h = extract_context(backbone, ids, layout,
+                                bool(cfg.backbone.apply_input_norm), use_amp)
         h = h.float()
 
         y, _y_raw = make_targets(h, geom, whitener)
@@ -516,7 +710,7 @@ def main(cfg: DictConfig) -> None:
         if int(tr.eval_every) > 0 and step > 0 and step % int(tr.eval_every) == 0:
             ev = evaluate(planner, backbone, val_loader, rule, cfg, schedule, edges,
                           max_slots, device, int(tr.n_eval_batches), gen,
-                          whitener=whitener, loss_scale=loss_scale)
+                          whitener=whitener, loss_scale=loss_scale, is_tul=is_tul)
             wandb.log({**ev, "step": step}, step=step)
             print(f"  EVAL {step:>6}  fm {ev['val/fm_loss']:.4f} "
                   f"(rel {ev['val/rel_loss']:.4f})  "
@@ -531,7 +725,7 @@ def main(cfg: DictConfig) -> None:
 
     ev = evaluate(planner, backbone, val_loader, rule, cfg, schedule, edges, max_slots,
                   device, int(tr.n_eval_batches), gen, whitener=whitener,
-                  loss_scale=loss_scale)
+                  loss_scale=loss_scale, is_tul=is_tul)
     wandb.log({**ev, "step": total}, step=total)
     _save(total)
     print(f"[p1] done: {total} steps in {(time.perf_counter()-t0)/60:.1f} min; "

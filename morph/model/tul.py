@@ -193,6 +193,46 @@ class TULConfig:
     # How many iterations get the local mux loss (evenly spaced, always including the
     # seed t=0 and the final state). Caps the [B,S,V] fp32 logit cost per step.
     db_mux_iters: int = 4
+    # ── faithful DiffusionBlocks (arXiv 2506.14202 App. B "recurrent-depth
+    # architectures", §3.3, App. C) — morph/model/iter_cond.py ─────────────────
+    # `db_loop` above kept the T-iteration UNROLLED LOOP and only detached the carry
+    # between iterations; it built NO σ/timestep conditioning, so every iteration got
+    # the identical job and specialised at nothing (measured depth-inertness). This is
+    # the paper's ACTUAL recipe: "iter" gives every core-layer application an AdaLN-Zero
+    # signal for WHICH loop iteration it is (works inside today's T-iteration loop —
+    # arms tul_l2cap_cond / tul_db_cond). "sigma" builds the SAME AdaLN machinery keyed
+    # on an EDM noise level instead, which is what unlocks the one-pass training step
+    # (`tul_step_mode="db1"`, morph/model/transformer.py::_tul_core_db1) and the
+    # deterministic Euler-ladder eval (`_tul_core_db1_ladder`) — see CLAUDE.md for the
+    # dispatch rule. "none" (default) builds nothing: zero new parameters, zero RNG
+    # draws, forward untouched.
+    core_stage_cond: str = "none"
+    # Width of the σ/iteration embedding fed to each core layer's AdaLN gate. Same
+    # role and same default as diffusion_blocks.DBConfig.cond_dim; kept as its own key
+    # because the TUL core's d_model can differ from the whole-model DB arm's.
+    db1_cond_dim: int = 256
+    # EDM / DiffusionBlocks σ schedule (App. C, App. E defaults — the paper's own
+    # numbers, NOT re-derived): log σ ~ N(p_mean, p_std²) truncated to
+    # [sigma_min, sigma_max], sampled by equal probability MASS (§3.3). Local to TUL —
+    # see morph/model/iter_cond.py's module docstring for why these are NOT the
+    # diffusion_blocks.py module globals.
+    db1_sigma_min: float = 0.002
+    db1_sigma_max: float = 80.0
+    db1_p_mean: float = -1.2
+    db1_p_std: float = 1.2
+    db1_sigma_data: float = 0.5
+    # Loss weighting hook (mission spec): EDM's w(σ) = (σ²+σ_d²)/(σ·σ_d)² (App. C),
+    # multiplied into the per-step loss when a caller reads it (train.py). False (the
+    # default) means w(σ) == 1.0 everywhere — the diffusion_blocks.py finding (2026-08-19,
+    # TULConfig docstring above) is that this weighting, derived for an L2 regression
+    # loss, badly over-weights the near-trivial low-σ region of a CROSS-ENTROPY loss.
+    # Exposed as a knob rather than baked to True/False permanently because it has not
+    # been re-measured against the CE-supervised db1 step specifically.
+    db1_w_sigma: bool = False
+    # Euler-ladder eval step count. 0 -> model.mean_depth (mission spec: "K = the
+    # model's mean_depth by default"), so a db1 arm's inference cost tracks the SAME
+    # loop depth its bptt sibling would have paid, with no separate knob to forget.
+    db1_ladder_steps: int = 0
     # Detach the readout matrix inside the MUX head. TRUE is the corrected default and
     # the setting the paper's own protocol implies: MUX LoRA-finetunes a PRETRAINED
     # model and uses W as a FIXED readout for supervision. MORPH trains from scratch,
@@ -325,6 +365,29 @@ class TULConfig:
         if self.slot_seed not in _legal_slot_seed:
             raise ValueError(
                 f"tul.slot_seed must be one of {_legal_slot_seed}, got {self.slot_seed!r}")
+        _legal_stage_cond = ("none", "iter", "sigma")
+        if self.core_stage_cond not in _legal_stage_cond:
+            raise ValueError(
+                f"tul.core_stage_cond must be one of {_legal_stage_cond}, "
+                f"got {self.core_stage_cond!r}")
+        if self.db1_cond_dim < 1:
+            raise ValueError(f"tul.db1_cond_dim must be >= 1, got {self.db1_cond_dim}")
+        if not 0.0 < self.db1_sigma_min < self.db1_sigma_max:
+            raise ValueError(
+                f"tul.db1_sigma_min/db1_sigma_max must satisfy 0 < min < max, got "
+                f"{self.db1_sigma_min}, {self.db1_sigma_max}")
+        if self.db1_p_std <= 0.0:
+            raise ValueError(f"tul.db1_p_std must be > 0, got {self.db1_p_std}")
+        if self.db1_sigma_data <= 0.0:
+            raise ValueError(f"tul.db1_sigma_data must be > 0, got {self.db1_sigma_data}")
+        if self.db1_ladder_steps < 0:
+            raise ValueError(
+                f"tul.db1_ladder_steps must be >= 0 (0 -> model.mean_depth), "
+                f"got {self.db1_ladder_steps}")
+        if self.core_stage_cond != "sigma" and self.db1_w_sigma:
+            raise ValueError(
+                "tul.db1_w_sigma=true has no defined meaning without "
+                "tul.core_stage_cond='sigma' (there is no sampled sigma to weight by).")
         if self.center_bag_mean and self.slot_seed != "bag_mean":
             # Judgment call beyond the letter of the brief (which named only "e_slot"):
             # "boundary" ALSO computes no bag-mean (E_slot + W_sent . embed(t_last), not

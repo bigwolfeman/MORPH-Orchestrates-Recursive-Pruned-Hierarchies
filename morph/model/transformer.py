@@ -23,12 +23,14 @@ from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
 from .attention import MORPHAttention, RMSNorm
+from .diffusion_blocks import euler_step
 from .embeddings import MORPHEmbedding
 from .fused_ce import (
     fused_linear_cross_entropy,
     fused_linear_cross_entropy_mce,
     multi_hot_cross_entropy_reference,
 )
+from .iter_cond import CoreStageConditioning, DB1Sampler, iter_stage_value
 from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .sigreg import sigreg_epps_pulley
 from .sparsity import MortarLinear
@@ -902,6 +904,27 @@ class MORPHTransformer(nn.Module):
         _gc = cfg.tul.gate if cfg.tul is not None else None
         self.tul_gate: TULGate | None = TULGate(d, _gc) if _gc is not None else None
 
+        # ── Core-stage conditioning (faithful DiffusionBlocks, morph/model/iter_cond.py)
+        # Built AFTER TULSlots/tul_gate for the same RNG-neutrality reason: "none" (the
+        # default) constructs nothing, draws no RNG, and every OTHER arm's base weights
+        # stay byte-identical to a build from before this module existed.
+        # `_core_stage_cond_mode` is a Python-level constant read once at construction —
+        # every branch on it below traces out, so the "none" graph is unchanged.
+        self._core_stage_cond_mode: str = cfg.tul.core_stage_cond if cfg.tul is not None else "none"
+        self.tul_stage_cond: CoreStageConditioning | None = None
+        self._db1_sampler: DB1Sampler | None = None
+        if self._core_stage_cond_mode != "none":
+            if cfg.n_core <= 0:
+                raise ValueError(
+                    "tul.core_stage_cond requires model.n_core > 0 — there are no core "
+                    "layers to condition (docs: morph/model/iter_cond.py).")
+            self.tul_stage_cond = CoreStageConditioning(
+                cfg.n_core, d, cond_dim=cfg.tul.db1_cond_dim)
+            self._db1_sampler = DB1Sampler(
+                sigma_min=cfg.tul.db1_sigma_min, sigma_max=cfg.tul.db1_sigma_max,
+                p_mean=cfg.tul.db1_p_mean, p_std=cfg.tul.db1_p_std,
+                sigma_data=cfg.tul.db1_sigma_data)
+
         # ── FM1 planner (morph/model/tul_fm.py) ────────────────────────────
         # Built LAST so a non-FM model's weights are byte-identical to today's: every
         # parameter drawn below advances the global RNG, so any earlier placement would
@@ -1036,7 +1059,8 @@ class MORPHTransformer(nn.Module):
             return h + term
 
     def _apply_core_step(self, h_in, e_in, ids, x0_terms, bg,
-                         ret_state=None, iter_idx=0, inj_terms=None, source_free=False):
+                         ret_state=None, iter_idx=0, inj_terms=None, source_free=False,
+                         stage_cond=None):
         """ONE core-loop step: SSM diagonal injection → the n_core shared blocks
         (each with per-layer x0/bigram injection + optional GLA retention carry).
         Returns ``(h, new_ret_state)`` (new_ret None unless a core layer carries retention).
@@ -1057,6 +1081,13 @@ class MORPHTransformer(nn.Module):
         iteration's carrier accumulates the SAME sum-over-iterations gradient to
         proj/bigram/value-embed as the per-iteration form (identical to the x0 hoist).
         None → rebuild in-place (the σ_max probe / any caller without a precomputed stack).
+
+        ``stage_cond`` (faithful DiffusionBlocks, morph/model/iter_cond.py):
+        ``[B, cond_dim]`` or ``None``. ``None`` is bit-identical to before this
+        parameter existed — every pre-existing call site passes nothing, so the
+        default keeps the graph unchanged. When given, EVERY core layer's input is
+        AdaLN-modulated by ``self.tul_stage_cond`` before that layer runs (zero-init,
+        so this is a no-op until training moves the gate weights).
         """
         np_ = self.cfg.n_prelude
         mlp_kw = {"iter_idx": iter_idx}
@@ -1078,6 +1109,8 @@ class MORPHTransformer(nn.Module):
                         gi, x0_terms[i], ids, bg, h_injected.dtype
                     )
                 h_injected = self._apply_injection(h_injected, term)
+            if stage_cond is not None:
+                h_injected = self.tul_stage_cond.modulate(h_injected, stage_cond, i)
             # Retention carry only for the designated core layer(s); others get None.
             is_ret = ret_cap is not None and (i in self._retention_layers)
             rs_arg = ret_state if is_ret else None
@@ -1372,20 +1405,37 @@ class MORPHTransformer(nn.Module):
         x = self.final_norm(x)
         return x
 
-    def prelude_states(self, input_ids: Tensor, apply_input_norm: bool = True) -> Tensor:
+    def prelude_states(self, input_ids: Tensor, apply_input_norm: bool = True,
+                       layout: "SlotLayout | None" = None) -> Tensor:
         """``[B, L, d_model]`` FEATURE READ-OUT after the prelude. Adds no behaviour.
 
         Written for TUL-FM P1 (``lab/tulfm/``), which trains a separate planner on a
         FROZEN backbone and needs the backbone's states over the context. Nothing in the
         training or inference path calls it, so every existing path stays bit-identical:
-        this is a new public entry point that reuses :meth:`_front_region`, the same
-        boundary norm ``_core_region`` applies, and the same stream reduction
+        this is a new public entry point that reuses :meth:`_front_region` (``layout is
+        None``) or :meth:`_tul_front` (``layout`` given), the same boundary norm
+        ``_core_region`` / ``_tul_core`` applies, and the same stream reduction
         :meth:`_readout` applies.
 
         With ``apply_input_norm=True`` on an ``n_core == 0`` model (arm A3), the returned
         tensor is EXACTLY what the coda consumes: ``_core_region`` reduces to
         ``self.input_norm(x)`` there. On a model with a core it is the state the core
         loop starts from, before any iteration.
+
+        ``layout`` (TUL-FM P1's TG-restrict backbones): runs the TUL prelude over the
+        packed ``[B, L_total]`` sequence (token AND slot positions) instead of the plain
+        one. Requires a model built with ``MORPHConfig(tul=...)``. Under ``tg_restrict``
+        this builds the SAME ``tg_allow`` / ``tg_slot_mask`` / GLA-reset-mask
+        ``_forward_tul`` builds, for the same reason :meth:`_forward_tul` builds them
+        ONCE per forward rather than never: a bare ``_tul_front(..., attn_kwargs=None)``
+        call would silently hand ``_tg_slot_attention`` a ``None`` slot mask, which its
+        own docstring defines as "every position is a slot" — a WRONG answer (every token
+        position would be treated as attendable in the compressed branch), not a raise.
+        Returns the FULL packed-position tensor (input_norm(prelude) at every position,
+        exactly :meth:`_tul_core`'s own ``xn = self.input_norm(x)``, spec's own "tokens
+        keep it, the n_core==0 seed path"); the caller restricts to TOKEN positions
+        (``~layout.slot_mask``) itself, exactly as the ``layout is None`` path is already
+        a token-only tensor with no slot positions to strip.
 
         The HC carrier is reduced by the mean over streams — the same scale-preserving
         readout :meth:`_readout` uses — so the result is single-stream ``[B, L, d_model]``
@@ -1398,7 +1448,26 @@ class MORPHTransformer(nn.Module):
             raise RuntimeError(
                 "prelude_states() is a frozen-feature read-out and must run in eval mode "
                 "(dropout would make the features stochastic). Call model.eval() first.")
-        x, _x0, _bigram = self._front_region(input_ids)
+        if layout is not None:
+            if self.tul is None:
+                raise RuntimeError(
+                    "prelude_states(layout=...) requires a model built with "
+                    "MORPHConfig(tul=...); this model has no TUL parameters "
+                    "(E_slot / E_mask / W_prefix).")
+            tc = self.cfg.tul
+            if layout.prefix_k != tc.prefix_k:
+                raise ValueError(
+                    f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
+            tg_attn_kwargs = tg_reset = None
+            if self._tg_restrict:
+                tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span)
+                tg_attn_kwargs = {"tg_allow": tg_allow, "tg_slot_mask": layout.slot_mask}
+                tg_reset = tg_reset_mask(layout)
+            x, _x0, _bigram = self._tul_front(input_ids, layout,
+                                              attn_kwargs=tg_attn_kwargs,
+                                              ret_reset_mask=tg_reset)
+        else:
+            x, _x0, _bigram = self._front_region(input_ids)
         if apply_input_norm:
             x = self.input_norm(x)
         if self._is_hc:
@@ -2019,11 +2088,11 @@ class MORPHTransformer(nn.Module):
         else:
             ret_state = None
 
-        def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0):
+        def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0, stage_cond=None):
             if _scse is None:
                 return self._apply_core_step(h_in, e_in, None, None, None,
                                              ret_state=ret_state, iter_idx=iter_idx,
-                                             inj_terms=inj_terms)
+                                             inj_terms=inj_terms, stage_cond=stage_cond)
             # ── SCSE, Eqs. 3-5 ──────────────────────────────────────────────────────
             # `h_in` IS Delta_t; `e_in` carries h*. Signature unchanged so the three call
             # sites (no_grad / checkpoint / eager) and the truncated-BPTT window they
@@ -2032,7 +2101,8 @@ class MORPHTransformer(nn.Module):
             _rec = _scse.recurrent_input(h_in, e_in)
             g_out, new_ret = self._apply_core_step(
                 _rec, None, None, None, None,
-                ret_state=ret_state, iter_idx=iter_idx, inj_terms=None, source_free=True)
+                ret_state=ret_state, iter_idx=iter_idx, inj_terms=None, source_free=True,
+                stage_cond=stage_cond)
             return _scse.update(h_in, g_out, _rec), new_ret    # Eqs. 3-5
 
         g_list: list[Tensor] = []
@@ -2051,8 +2121,16 @@ class MORPHTransformer(nn.Module):
         _pr_in: list[Tensor] = []
         _pr_out: list[Tensor] = []
         _pr_delta: list[Tensor] = []
+        # "iter" mode (faithful DiffusionBlocks, morph/model/iter_cond.py): every
+        # core-layer application in the T-loop gets an AdaLN-Zero signal for WHICH
+        # iteration it is. Python-level constant — `_iter_mode=False` (every model
+        # except a `core_stage_cond="iter"` build) makes `_sc` permanently None below
+        # and the loop is bit-identical to before this existed.
+        _iter_mode = self._core_stage_cond_mode == "iter"
         for t in range(total_iters):
             active = alive if halt else (depths > t)               # [B, S]
+            _sc = self.tul_stage_cond.stage_embed(iter_stage_value(t, x.device)) \
+                if _iter_mode else None
             # ── Jacobian probe capture (morph/training/core_jacobian.py) ──────────
             # `_jac_capture` is None by default, so this is a Python-level branch that
             # traces out and costs nothing; the forward stays bit-identical. When a list
@@ -2083,14 +2161,14 @@ class MORPHTransformer(nn.Module):
             if t < n_nograd:
                 with torch.no_grad():
                     h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
-                                               iter_idx=t)
+                                               iter_idx=t, stage_cond=_sc)
             elif do_ckpt:
                 h_new, rs_new = checkpoint(_core_step, _h_in, _e_arg, _inj_arg,
-                                           ret_state=ret_state, iter_idx=t,
+                                           ret_state=ret_state, iter_idx=t, stage_cond=_sc,
                                            use_reentrant=False)
             else:
                 h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
-                                           iter_idx=t)
+                                           iter_idx=t, stage_cond=_sc)
 
             _tau = self.cfg.core_gain_clip
             if _tau > 0.0 and self._clip_applies(t):
@@ -2183,6 +2261,170 @@ class MORPHTransformer(nn.Module):
             # this function; `_forward_tul` scatters an absolute carrier exactly as today.
             h = h_star + h
         return xn, h, depths, g_traj, _db_traj
+
+    def _tul_db1_precheck(self, what: str) -> None:
+        """Shared guards for :meth:`_tul_core_db1` and :meth:`_tul_core_db1_ladder`.
+
+        Every raise here is a combination the mission left undefined rather than a bug:
+        no gate readout exists for a state produced by ONE (or K sigma-stepped)
+        conditioned application(s) instead of a T-iteration trajectory, SCSE's carry is
+        the DEVIATION (the same reason ``db_loop`` raises under SCSE), and
+        ``core_gain_clip`` governs the T-iteration carrier's growth — a single EDM-
+        preconditioned pass has no such carrier to clip.
+        """
+        if self._core_stage_cond_mode != "sigma":
+            raise RuntimeError(
+                f"{what} requires a model built with tul.core_stage_cond='sigma' "
+                f"(got {self._core_stage_cond_mode!r}).")
+        if self.scse is not None:
+            raise NotImplementedError(
+                f"{what} under SCSE is not defined: the carry is the DEVIATION and the "
+                f"EDM noising target here is the ABSOLUTE slot state (see db_loop's twin "
+                f"raise in _tul_core).")
+        if self.tul_gate is not None:
+            raise NotImplementedError(
+                f"{what} has no defined gate interaction: §4 reads the span length off "
+                f"the core's per-iteration trajectory and {what} builds no such "
+                f"trajectory (one — or K sigma-stepped — conditioned applications, not "
+                f"a T-iteration loop).")
+        if self.cfg.core_gain_clip > 0.0:
+            raise NotImplementedError(
+                f"{what} has no defined interaction with model.core_gain_clip: the clip "
+                f"governs the T-iteration carrier's realised growth, which {what} does "
+                f"not have (EDM preconditioning is the analogous control here). Set "
+                f"core_gain_clip=0.0.")
+
+    def _tul_core_db1(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout):
+        """ONE σ-conditioned core application — the faithful DiffusionBlocks training
+        step (arXiv 2506.14202 App. B "recurrent-depth architectures"; morph/model/
+        iter_cond.py). Replaces the T-iteration loop for ONE training step.
+
+        Design (flagged per the mission's request — every judgment call named):
+
+        * **The "clean" reference is the slot SEED state** ``h_0 = core_init(e)``, i.e.
+          exactly what ``_tul_core`` calls ``h`` before its first iteration — NOT a
+          separately-observed target. Unlike image diffusion (where ``y`` is the real
+          training example), MORPH's downstream task supplies supervision only through
+          the coda's CE/mux loss on the DECODED state, so there is no directly-observed
+          "clean state" to regress an L2 loss against; this mirrors MORPH's own prior
+          finding (``.agents/notes/rejected/feature/2026-08-21-diffusionblocks-
+          verdict.md`` "Post-audit addendum": a "ce" objective escapes L2 regression-
+          to-mean where an L2-to-embedding objective does not). ``h_0`` doubles as
+          BOTH the noised variable ``z`` (``z_σ = h_0 + σ·ε``) AND the clean
+          conditioning input ``x`` the paper's ``D_θ(z_σ, x, σ)`` reads through the
+          UNCHANGED ``DiagonalInjection``/x0-injection path — the same split
+          ``_tul_core`` already makes between its evolving carry ``h`` and its
+          loop-invariant source ``e``.
+        * **σ is sampled per BATCH SAMPLE, not per slot.** The mission text says "per
+          slot"; TUL's ``[B, S, n, C]`` carrier would support a per-(B,S) σ, but this
+          v1 samples ``[B]`` (broadcast over every slot in a row) — the paper itself
+          never conditions sub-batch, and per-slot σ raises open questions (would a
+          slot's OWN depth/Poisson draw also need to correlate with its σ range?) that
+          are unmeasured. Flagged, not resolved.
+        * **The core layer stack runs EXACTLY ONCE** — one ``_apply_core_step`` call,
+          not a T-iteration loop — which is the entire point (paper: "reducing
+          computational cost by factor K").
+        * Downstream (coda, mux/CE loss) is UNCHANGED: the returned ``h`` lands exactly
+          where ``_tul_core``'s ``h_slots`` does today, so ``_forward_tul``'s existing
+          ``elif db_traj is None:`` branch supervises it with the SAME weighted-CE /
+          mux machinery every other arm uses — no new loss code (mission spec).
+        """
+        self._tul_db1_precheck("tul_step_mode='db1'")
+        np_, n_core = self.cfg.n_prelude, self.cfg.n_core
+        gidx, gvalid = layout.slot_index, layout.slot_valid
+
+        xn = self.input_norm(x)
+        e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
+        h0 = self.core_init(e)                                        # the "clean" seed
+
+        B = x.shape[0]
+        sampler = self._db1_sampler
+        sigma = sampler.sample(B, device=h0.device)                   # [B]
+        eps = torch.randn(h0.shape, device=h0.device, dtype=torch.float32)
+        _bview = sigma.view(-1, *([1] * (h0.dim() - 1)))
+        z_sigma = h0.float() + _bview * eps
+
+        c_skip, c_out, c_in, c_noise = sampler.precond.coeffs(sigma)
+        _cs = c_skip.view(-1, *([1] * (h0.dim() - 1)))
+        _co = c_out.view(-1, *([1] * (h0.dim() - 1)))
+        _ci = c_in.view(-1, *([1] * (h0.dim() - 1)))
+        net_in = (_ci * z_sigma).to(h0.dtype)
+
+        x0_s = gather_valid(x0, gidx, gvalid)
+        bg_s = gather_valid(bigram_emb, gidx, gvalid) if bigram_emb is not None else None
+        inj = torch.stack(
+            [self._build_injection_term(np_ + i, self.x0_injects[np_ + i].precompute(x0_s),
+                                        None, bg_s, net_in.dtype)
+             for i in range(n_core)], dim=0)
+
+        stage_cond = self.tul_stage_cond.stage_embed(c_noise)         # [B, cond_dim]
+        f_out, _ = self._apply_core_step(net_in, e, None, None, None,
+                                         ret_state=None, iter_idx=0, inj_terms=inj,
+                                         stage_cond=stage_cond)
+        h = (_cs * z_sigma + _co * f_out.float()).to(h0.dtype)
+        depths = torch.ones_like(gidx)     # metric only — ONE conditioned application
+        return xn, h, depths, None, None
+
+    def _tul_core_db1_ladder(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
+                             k_steps: int | None = None):
+        """K conditioned applications, σ stepping σ_max → σ_min — the eval/inference
+        counterpart of :meth:`_tul_core_db1` (paper App. B: "maintaining the original
+        K-iteration inference procedure").
+
+        Judgment call (flagged): the ladder's INITIAL noised state uses the SAME
+        ``z_σ = h_0 + σ·ε`` construction training used (at ``σ = σ_max``), rather than
+        pure noise with no seed signal (the paper's literal image-generation Eq. 5
+        ``z_0 = σ_max·ε``). TUL's seed already carries real per-span content the model
+        must condition on; discarding it at eval would create a train/eval σ_max
+        mismatch (training never sees a σ_max sample with the seed's signal entirely
+        absent) as well as throwing away the one input inference actually has. The
+        noise draw uses a FIXED generator (seed 0) so the ladder is deterministic
+        (mission spec / test (d)) rather than reading the ambient RNG stream.
+        """
+        self._tul_db1_precheck("the db1 Euler-ladder eval")
+        np_, n_core = self.cfg.n_prelude, self.cfg.n_core
+        gidx, gvalid = layout.slot_index, layout.slot_valid
+
+        xn = self.input_norm(x)
+        e = gather_valid(xn, gidx, gvalid)
+        h0 = self.core_init(e)
+        B = x.shape[0]
+
+        sampler = self._db1_sampler
+        K = int(k_steps or self.cfg.tul.db1_ladder_steps or self.cfg.mean_depth)
+        sigmas = sampler.ladder(K)                                     # [K] descending
+
+        gen = torch.Generator(device="cpu" if h0.device.type == "mps" else h0.device)
+        gen.manual_seed(0)
+        eps = torch.randn(h0.shape, device=h0.device, dtype=torch.float32, generator=gen)
+        z = h0.float() + float(sigmas[0]) * eps
+
+        x0_s = gather_valid(x0, gidx, gvalid)
+        bg_s = gather_valid(bigram_emb, gidx, gvalid) if bigram_emb is not None else None
+        inj = torch.stack(
+            [self._build_injection_term(np_ + i, self.x0_injects[np_ + i].precompute(x0_s),
+                                        None, bg_s, h0.dtype)
+             for i in range(n_core)], dim=0)
+
+        d_hat = None
+        for k in range(K):
+            s = sigmas[k].to(h0.device).expand(B)
+            c_skip, c_out, c_in, c_noise = sampler.precond.coeffs(s)
+            _cs = c_skip.view(-1, *([1] * (h0.dim() - 1)))
+            _co = c_out.view(-1, *([1] * (h0.dim() - 1)))
+            _ci = c_in.view(-1, *([1] * (h0.dim() - 1)))
+            net_in = (_ci * z).to(h0.dtype)
+            stage_cond = self.tul_stage_cond.stage_embed(c_noise)
+            f_out, _ = self._apply_core_step(net_in, e, None, None, None,
+                                             ret_state=None, iter_idx=k, inj_terms=inj,
+                                             stage_cond=stage_cond)
+            d_hat = _cs * z + _co * f_out.float()
+            if k < K - 1:
+                next_s = sigmas[k + 1].to(h0.device).expand(B)
+                z = euler_step(z, d_hat, s, next_s)
+        h = d_hat.to(h0.dtype)
+        depths = torch.full_like(gidx, K)
+        return xn, h, depths, None, None
 
     def _tul_half_weights(self, labels: Tensor, layout: SlotLayout):
         """``([N] row weights, t_last index, emit index)`` for the §5 double label.
@@ -2411,14 +2653,51 @@ class MORPHTransformer(nn.Module):
 
     def _forward_tul(self, input_ids: Tensor, labels: Tensor | None,
                      layout: SlotLayout, plan_nats: bool, halt: bool = False,
-                     plan_mode: str = "normal") -> dict:
-        """The TUL forward (docs/tul-spec.md §3). One shared position axis."""
+                     plan_mode: str = "normal",
+                     tul_step_mode: str | None = None) -> dict:
+        """The TUL forward (docs/tul-spec.md §3). One shared position axis.
+
+        ``tul_step_mode`` (faithful DiffusionBlocks, morph/model/iter_cond.py) is a
+        per-forward DATA argument, the ``slot_layout`` pattern: ``None`` (default) is
+        BIT-IDENTICAL to before this parameter existed. ``"db1"`` selects the one-pass
+        training step (:meth:`_tul_core_db1`) in place of the T-iteration loop; it is
+        a TRAINING-time selector only — at eval (``not self.training``) a model built
+        with ``tul.core_stage_cond="sigma"`` runs the deterministic Euler-ladder
+        (:meth:`_tul_core_db1_ladder`) regardless of ``tul_step_mode``, matching the
+        paper's "trained single-pass, sampled with the original K-iteration procedure".
+        """
         if self.tul is None:
             raise RuntimeError(
                 "forward(slot_layout=...) requires a model built with MORPHConfig(tul=...); "
                 "this model has no TUL parameters (E_slot / E_mask / W_prefix)."
             )
         tc = self.cfg.tul
+        if tul_step_mode not in (None, "bptt", "db1"):
+            raise ValueError(
+                f"tul_step_mode must be one of None, 'bptt', 'db1', got {tul_step_mode!r}")
+        if tul_step_mode == "db1":
+            if tc.tokens_through_core:
+                raise NotImplementedError(
+                    "tul_step_mode='db1' has no defined interaction with "
+                    "tul.tokens_through_core (A2): A2 takes an earlier branch in "
+                    "_forward_tul that never reaches the db1 core — a silent ignore, "
+                    "so this raises instead.")
+            if self.fm_planner is not None:
+                raise NotImplementedError(
+                    "tul_step_mode='db1' has no defined interaction with an FM planner "
+                    "(tul.fm): the FM branch takes an earlier branch in _forward_tul "
+                    "that never reaches the db1 core — a silent ignore, so this raises "
+                    "instead.")
+            if halt:
+                raise NotImplementedError(
+                    "tul_step_mode='db1' is a TRAINING step; halt=True is EVAL-only "
+                    "(docs/tul-gate-spec.md §7) and the two have no defined interaction.")
+        if halt and self._core_stage_cond_mode == "sigma":
+            raise NotImplementedError(
+                "halt=True (arm TUL-halt) has no defined interaction with "
+                "tul.core_stage_cond='sigma': eval on a sigma-conditioned model runs the "
+                "deterministic Euler ladder, which drives no gate and reads no halting "
+                "decision.")
         if layout.prefix_k != tc.prefix_k:
             raise ValueError(f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
         B, L = input_ids.shape
@@ -2487,8 +2766,21 @@ class MORPHTransformer(nn.Module):
             x_coda = scatter_positions(xn, pos, values)
         else:
             fm_y = fm_geom = fm_ctx = None
-            xn, h_slots, depths, g_traj, db_traj = self._tul_core(x, x0, bigram_emb,
-                                                                  layout, halt=halt)
+            # ── faithful DiffusionBlocks dispatch (morph/model/iter_cond.py) ────────
+            # "db1" is a TRAINING selector; the Euler ladder auto-fires at eval on a
+            # sigma-conditioned model regardless of tul_step_mode (docstring above).
+            # Both are scoped to THIS branch only — the tokens_through_core/fm_planner
+            # branches above already raise on tul_step_mode="db1" rather than silently
+            # ignoring it (see the guards at the top of this function).
+            if tul_step_mode == "db1":
+                xn, h_slots, depths, g_traj, db_traj = self._tul_core_db1(
+                    x, x0, bigram_emb, layout)
+            elif not self.training and self._core_stage_cond_mode == "sigma":
+                xn, h_slots, depths, g_traj, db_traj = self._tul_core_db1_ladder(
+                    x, x0, bigram_emb, layout)
+            else:
+                xn, h_slots, depths, g_traj, db_traj = self._tul_core(x, x0, bigram_emb,
+                                                                      layout, halt=halt)
             mux_stats: dict = {}
             if tc.mux_beta <= 0.0:
                 mux_loss = None
@@ -3097,8 +3389,10 @@ class MORPHTransformer(nn.Module):
 
     def forward(self, input_ids: Tensor, labels: Tensor | None = None,
                 bag_size: int = 0, seq_lens: Tensor | None = None,
-                slot_layout: SlotLayout | None = None) -> dict:
-        return self._forward_single(input_ids, labels, bag_size, seq_lens, slot_layout)
+                slot_layout: SlotLayout | None = None,
+                tul_step_mode: str | None = None) -> dict:
+        return self._forward_single(input_ids, labels, bag_size, seq_lens, slot_layout,
+                                    tul_step_mode=tul_step_mode)
 
     def tul_forward_with_plan_nats(self, input_ids: Tensor, labels: Tensor,
                                    slot_layout: SlotLayout) -> dict:
@@ -3129,7 +3423,8 @@ class MORPHTransformer(nn.Module):
                         slot_layout: SlotLayout | None = None,
                         _plan_nats: bool = False,
                         _halt: bool = False,
-                        _plan_mode: str = "normal") -> dict:
+                        _plan_mode: str = "normal",
+                        tul_step_mode: str | None = None) -> dict:
         if slot_layout is not None:
             if bag_size > 0:
                 raise ValueError(
@@ -3138,7 +3433,12 @@ class MORPHTransformer(nn.Module):
                     "(invariant 6)."
                 )
             return self._forward_tul(input_ids, labels, slot_layout, _plan_nats,
-                                     halt=_halt, plan_mode=_plan_mode)
+                                     halt=_halt, plan_mode=_plan_mode,
+                                     tul_step_mode=tul_step_mode)
+        if tul_step_mode is not None:
+            raise ValueError(
+                "tul_step_mode requires slot_layout (faithful DiffusionBlocks conditions "
+                "the TUL slot loop only; there is no core loop to condition here).")
         if self._tg_restrict:
             # docs/tul-tg-spec.md builds the restriction as a per-forward DATA argument
             # derived from the layout — there is no defined "unrestricted" fallback for
