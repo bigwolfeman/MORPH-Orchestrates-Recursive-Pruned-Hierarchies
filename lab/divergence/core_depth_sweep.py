@@ -109,8 +109,15 @@ def main() -> None:
         orig_max = int(model.cfg.tul.slot_max_depth)
         arm = {"step": step, "rows": rows_done, "train_eval_depth":
                orig_mean or int(cfg.model.mean_depth), "depths": {}}
+        _sigma = getattr(model.cfg.tul, "core_stage_cond", "none") == "sigma"
+        orig_ladder = int(getattr(model.cfg.tul, "db1_ladder_steps", 0))
         try:
             for d in depths:
+                if _sigma:
+                    # sigma-conditioned (db1) models: eval depth = Euler-ladder steps K
+                    # (transformer.py: K = k_steps or cfg.tul.db1_ladder_steps or mean_depth);
+                    # slot_mean_depth is ignored by that path.
+                    model.cfg.tul.db1_ladder_steps = d
                 model.cfg.tul.slot_mean_depth = d
                 model.cfg.tul.slot_max_depth = max(d, orig_max or int(cfg.model.max_depth))
                 tot = tot_n = fst = fst_n = 0.0
@@ -125,6 +132,8 @@ def main() -> None:
         finally:
             model.cfg.tul.slot_mean_depth = orig_mean
             model.cfg.tul.slot_max_depth = orig_max
+            if _sigma:
+                model.cfg.tul.db1_ladder_steps = orig_ladder
         results[label] = arm
         del model
         if device == "cuda":
