@@ -98,3 +98,30 @@ GLA being load-bearing per se. Round 2, frozen before launch:
 
 Original predictions untouched. BG0C0's original P-G0C0 (40% depth-earning
 restored) still applies IF it trains to 4500.
+
+### Method amendment — 2026-08-31 17:10 (BG0C0 scored; criterion defect recorded)
+
+**Criterion defect, recorded rather than papered over:** the frozen "≥ 0.10
+nats" threshold is satisfied by the flat REFERENCE itself (0.120) — it cannot
+discriminate. Written intent was a contrast against the flat baseline; scoring
+below uses Δ(K1−K6) vs notul-l2nc's 0.120 with the ±0.01 sweep floor. BC0's
+0.142 (Δ +0.022) stays scored FLAT under either reading of intent; it is
+nowhere near a regime change.
+
+**BG0C0 result (4500, clean, exit=0):** K1 4.4261, K2 4.2621, K3 4.2228,
+K4 4.2091, K6 4.2059, K8 4.2089. K1−K6 = **0.220** (Δ +0.100 vs baseline,
+PPL +24.6% at K1 vs baseline's +12.7%); K3−K6 = 0.017 (unchanged). Earning
+concentrated in K1→K3; saturated by K4. Absolute: val 4.13@4250, K6 4.206 —
+BEATS baseline (4.344) and BC0 (4.401) by ~0.14 nats with 18.9M fewer params.
+
+**Scored: the conjunction GLA×cap is implicated** (P-G0C0 40% side hit on the
+Δ contrast; singles both null ⇒ conjunctive, as the 40% prior anticipated).
+Not yet TitanMAC regime (T1 +35–44%, gains through T4): halfway there on the
+K1 axis, trained-support K3−K6 still flat.
+
+**Binding executed:** re-run the winning cell at TitanMAC's depth regime —
+notul_bg0c0 + `model.mean_depth=8 model.max_depth=14`, 4500 steps, sweep
+depths 1,2,3,4,6,8,10,12,14 (arm: notul-bg0c0-d8). Frozen before launch:
+**P-D8: 45%** that d8 K1−K8 ≥ 0.30 nats (regime shift toward TitanMAC's
+curve); sub-prediction 70% it trains clean (uncapped, deeper loop, TBPTT 4
+unchanged). Runs after BG0-seed2 completes.
