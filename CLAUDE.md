@@ -38,6 +38,10 @@ nets generally): target **contractivity** (`ρ≤1`: spectral/Lipschitz control,
 renorm), not symptom-clamping — that also preserves the β1=0 memory win + α·m_slow gains.
 **Full writeup + evidence chain + the decisive `ρ(J_core)` probe:**
 [`.agents/notes/implemented/architecture/2026-06-19-iterative-map-dynamics.md`](.agents/notes/implemented/architecture/2026-06-19-iterative-map-dynamics.md).
+**The 2026-08 campaign settled the cure: the l2cap recipe (full BPTT + hard σ≤1.5
+post-step projection, `morph/configs/tul_l2.yaml`) is the ONE recipe whose loop earns
+depth (0.233 nats), and the identity-escape law says why every alternative failed —**
+[`.agents/notes/implemented/architecture/2026-08-30-l2cap-winning-recipe.md`](.agents/notes/implemented/architecture/2026-08-30-l2cap-winning-recipe.md).
 
 > **2026-08-24 correction, measured.** "Target contractivity" is right about WHERE to look
 > and wrong about WHAT to bound. `ρ(J_core)` is now measurable

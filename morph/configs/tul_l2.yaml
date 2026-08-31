@@ -1,4 +1,10 @@
-# ARM L2 — L1 + the validated contractivity control (HARD spectral projection).
+# ARM L2 — ⭐ THE WINNING RECIPE (l2cap) — full BPTT + hard sigma<=1.5 projection.
+#
+# Canonical record with the full evidence chain and the identity-escape law:
+# .agents/notes/implemented/architecture/2026-08-30-l2cap-winning-recipe.md
+# 0.233 nats depth-earned CE; the ONLY recipe (of 15+ arms) whose loop earns its
+# iterations. Do not add per-iteration mechanisms (conditioning, convex gates,
+# step mixing) to this config — each is a falsified line; see the note's table.
 #
 # Prereg: lab/experiments/planned/2026-08-29-tul-loop-ladder.md.
 #
