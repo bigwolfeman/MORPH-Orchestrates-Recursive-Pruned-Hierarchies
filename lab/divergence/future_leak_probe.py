@@ -49,6 +49,12 @@ def main() -> None:
                     help="LABEL=CONFIG=PATH[=OVR1,OVR2]")
     ap.add_argument("--ks", default="700,900")
     ap.add_argument("--depths", default="1,3,6")
+    ap.add_argument("--boundary", action="store_true",
+                    help="v2 attribution mode: corrupt token positions >= k and score "
+                         "ONLY the last token position before k (its label's input "
+                         "copy is corrupted, so the carry holds nothing about it). "
+                         "v1 (default off) leaves every scored position's label "
+                         "inside the clean carry summary — far-future test only.")
     ap.add_argument("--rows", type=int, default=48)
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--device", default="cuda")
@@ -99,11 +105,25 @@ def main() -> None:
                 cells: dict[str, dict] = {"clean": {}, "corrupt": {}}
                 for bi, (inp, labels, layout) in enumerate(batches):
                     tokpos = (~layout.slot_mask.cpu()) & (labels >= 0)
-                    scored = tokpos & (pos < k).unsqueeze(0)
-                    # corrupted twin: random non-special ids at token positions > k
+                    if a.boundary:
+                        # score ONLY the last token position strictly before k whose
+                        # label's input copy (the NEXT token position) is >= k, i.e.
+                        # corrupted. With corruption starting AT k, that is simply the
+                        # last token position < k, provided the next token position
+                        # after it is >= k — true by construction for the last one.
+                        scored = torch.zeros_like(tokpos)
+                        for b in range(inp.shape[0]):
+                            idx = (tokpos[b] & (pos < k)).nonzero().flatten()
+                            if len(idx):
+                                scored[b, idx[-1]] = True
+                    else:
+                        scored = tokpos & (pos < k).unsqueeze(0)
+                    # corrupted twin: random non-special ids at token positions after
+                    # the cut (>= k in boundary mode, > k in v1)
                     g = torch.Generator().manual_seed(1000 + bi)
                     rand = torch.randint(100, vocab, inp.shape, generator=g)
-                    after = (~layout.slot_mask.cpu()) & (pos > k).unsqueeze(0)
+                    cut = (pos >= k) if a.boundary else (pos > k)
+                    after = (~layout.slot_mask.cpu()) & cut.unsqueeze(0)
                     inp_c = torch.where(after, rand, inp)
                     for d in depths:
                         model.cfg.tul.slot_mean_depth = d
