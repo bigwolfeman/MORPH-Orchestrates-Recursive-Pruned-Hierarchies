@@ -1,6 +1,6 @@
 # Planned: retention-carry leak audit of the l2cap depth-earning claim
 
-Status: planned
+Status: success — all three predictions held; the l2cap depth-earning claim is falsified as leak artifact
 Date: 2026-08-31 (frozen BEFORE any probe runs; written on discovery of the
 tul-30k val CE anomaly, while arm A's gen samples were still generating).
 
@@ -73,3 +73,45 @@ Whether retention_carry lands as an eval-time rebuild cleanly through
 core_depth_sweep's build_cfg override path (carry_leak_cost.py used its own
 loader); whether the sweep's skip_samples=0 rows (seen once at step ~0-100)
 bias the absolute CE — the paired carry-on/off delta cancels row identity.
+
+## Results (2026-08-31, artifacts: /home/wolfe/morph-scratch/tulfm/depth_sweep_carry_off.{json,log}, 48 rows, paired vs the carry-on sweeps)
+
+| checkpoint | mode | CE@K1 | CE@K6 | "earned" K1−K6 |
+|---|---|---:|---:|---:|
+| tul-l2-cap step_4500 | carry ON (the recipe claim) | 4.6220 | 4.3892 | +0.2328 |
+| tul-l2-cap step_4500 | carry OFF | 4.6220 | 5.7418 | **−1.1198** |
+| tul-30k step_30000 | carry ON | 4.2917 | 1.1192 | +3.1725 |
+| tul-30k step_30000 | carry OFF | 4.2917 | 4.9646 | **−0.6729** |
+
+CE@K1 is bit-identical between modes on both checkpoints (the carry is unused at
+K1), confirming the override cut exactly the carry and nothing else. Carry-off
+CE rises monotonically with depth on l2cap-4500 (5.148 / 5.509 / 5.671 / 5.731 /
+5.742 at K2..K6) and near-monotonically on tul-30k. Span-first CE tells the same
+story (30k K6: 0.719 carry-on vs 4.717 carry-off).
+
+Supporting: carry-on CE@K1 across tul-30k checkpoints moved only 4.484 → 4.311 →
+4.292 over steps 10k→30k while CE@K6 collapsed 3.782 → 2.250 → 1.119 — 25k steps
+of training improved the honest single-iteration model by 0.19 nats and the leak
+channel by 2.66. Gen samples corroborate (generation cannot read the future):
+tul-30k greedy output is phrase-looping word salad, a CE≈4 model's text, at
+teacher-forced CE 1.12.
+
+## Verdict
+
+P1 TRUE (leak at 30k native depth = 4.965−1.119 = 3.85 nats ≥ 1.8). P2 TRUE
+(honest earning −1.12 < 0.10 — not reduced, INVERTED). P3 TRUE. The l2cap
+recipe's depth-earning is retention-carry exploitation enabled by full BPTT;
+with the channel cut, its iterations actively damage the state. No recipe in
+the campaign has been shown to earn depth honestly (every other arm was flat
+WITH the leak available). Binding consequences executed: dated correction in
+the winning-recipe note; 30k head-to-head aborted (arm B cancelled at ~step
+500 — its axes would measure leak-exploitation capacity); the 2026-08-23
+retention-carry note is now the gating work item for ALL loop claims.
+
+## Updated hypothesis
+
+The looped core has never been shown to compose. The optimizer, given any
+cheap channel (identity escape OR future access), takes the channel; full BPTT
+selects which channels are learnable. The next loop experiment runs with
+retention_carry=false (or a causal carry) from step 0, and every depth claim
+must include a carry-off sweep as a standing control.

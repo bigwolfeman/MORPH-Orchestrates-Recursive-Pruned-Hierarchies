@@ -100,6 +100,18 @@ Bench complete (4×450 steps, seed 1, batch 6, queue log 22:57–23:26):
   With compiled attention, A is ~21% faster than B in steps/hour — the ≤64-slot
   loop plus compile beats the 1152-position loop plus kernels.
 
+### Method amendment — 2026-08-31 (ABORT after arm A)
+
+Arm A completed (5.18 h, exit 0) but its val CE (1.24) triggered the carry-leak
+audit (`../successes/2026-08-31-carry-leak-audit.md`): the depth-earning and CE
+collapse are retention-carry exploitation, not modeling. Arm B was paused at
+~step 500 for the audit and then CANCELLED — under the current recipe H1/H2
+would compare leak-exploitation capacity across geometries (B's carry
+summarizes 1152 positions vs A's 64), H3/H5 are leak-confounded by
+construction, and only H4 (stability; A was S1-clean through 30k) survives.
+This file stays in planned/ as the record; the head-to-head re-runs under a
+carry-fixed recipe with a fresh prereg. Predictions above were never scored.
+
 ## Not verified before launch
 
 The capped recipe has never run past 4500 steps (H4 is a real question, and

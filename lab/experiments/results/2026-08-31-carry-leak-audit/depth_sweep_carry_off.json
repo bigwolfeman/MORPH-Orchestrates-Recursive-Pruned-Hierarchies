@@ -1,0 +1,114 @@
+{
+ "l2cap4500-nocarry": {
+  "step": 4500,
+  "rows": 48,
+  "eval_mode": "auto",
+  "train_eval_depth": 6,
+  "depths": {
+   "1": {
+    "ce_tokens": 4.622002587824267,
+    "ce_span_first": 4.1509766118213385,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "2": {
+    "ce_tokens": 5.147992332239538,
+    "ce_span_first": 4.9604361239346595,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "3": {
+    "ce_tokens": 5.5093781110413005,
+    "ce_span_first": 5.442117266414141,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "4": {
+    "ce_tokens": 5.670707364135323,
+    "ce_span_first": 5.6417811908143936,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "5": {
+    "ce_tokens": 5.730848905975198,
+    "ce_span_first": 5.7222506806344695,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "6": {
+    "ce_tokens": 5.741800630108822,
+    "ce_span_first": 5.73192565301452,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "7": {
+    "ce_tokens": 5.745559056854065,
+    "ce_span_first": 5.731173453282828,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "8": {
+    "ce_tokens": 5.733358388210489,
+    "ce_span_first": 5.707907270951704,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   }
+  }
+ },
+ "tul30k-nocarry": {
+  "step": 30000,
+  "rows": 48,
+  "eval_mode": "auto",
+  "train_eval_depth": 6,
+  "depths": {
+   "1": {
+    "ce_tokens": 4.291678155790331,
+    "ce_span_first": 3.9014642765546084,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "2": {
+    "ce_tokens": 4.654661241562325,
+    "ce_span_first": 4.267114035866477,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "3": {
+    "ce_tokens": 4.712874698966744,
+    "ce_span_first": 4.310839325875947,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "4": {
+    "ce_tokens": 4.9993595041257795,
+    "ce_span_first": 4.617449864859533,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "5": {
+    "ce_tokens": 5.235415735045767,
+    "ce_span_first": 4.982696101641414,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "6": {
+    "ce_tokens": 4.964581048520065,
+    "ce_span_first": 4.7173368450126265,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "7": {
+    "ce_tokens": 5.120288489943491,
+    "ce_span_first": 4.879664960148358,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "8": {
+    "ce_tokens": 5.166569952446738,
+    "ce_span_first": 4.97729400943024,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   }
+  }
+ }
+}

@@ -2,6 +2,21 @@
 
 Status: implemented
 
+> ## ⚠️ CORRECTION — 2026-08-31: the depth-earning is a causality-leak artifact
+>
+> The carry-off audit (`lab/experiments/successes/2026-08-31-carry-leak-audit.md`)
+> falsifies this note's headline claim. With `model.retention_carry=false` at
+> eval (same weights; CE@K1 bit-identical), the 4500-step l2cap checkpoint's
+> depth curve INVERTS: 4.622@K1 → 5.742@K6 (−1.12 nats, monotone). The 0.233
+> nats "earned" was the model reading the future through the GLA carry
+> (`.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md`),
+> a channel only full BPTT can train — which is why truncated arms looked
+> "unable to form composition". At 30k steps the exploit grows to 3.85 nats and
+> val CE reads an impossible 1.12. The five ingredients below are retained as
+> the record of what was believed and why; the recipe as a loop-formation claim
+> is DEAD until retention_carry is fixed (causal carry or off-from-step-0) and a
+> carry-off sweep — now a standing control for every depth claim — shows earning.
+
 ## Problem
 
 The 2026-08 campaign had to find a training recipe under which MORPH's TUL core

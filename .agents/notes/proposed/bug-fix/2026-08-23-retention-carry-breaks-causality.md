@@ -131,3 +131,16 @@ and was never run here.
 - Whether the leak's size grows with `mean_depth` (more iterations = more carries) or with
   sequence length. Both are plausible and neither was measured.
 - Whether the JAX mirror (`morph/jax/`) has the same path.
+
+
+## Addendum — 2026-08-31: the leak is LEARNED and full BPTT trains it
+
+The +0.1433-nat figure above was measured on a truncated-BPTT arm and badly
+understates the ceiling. The l2cap recipe (full BPTT, σ-cap) trained 30k steps
+turns the channel into **3.85 nats** (carry-off CE@K6 4.965 vs carry-on 1.119,
+same weights), while its carry-free CE@K1 improved only 0.19 nats over the last
+20k steps. The recipe's entire "depth-earned CE" was this channel
+(`lab/experiments/successes/2026-08-31-carry-leak-audit.md`). This note is now
+the gating work item for all loop claims: no depth result is admissible without
+a carry-off sweep, and the next loop run trains with `retention_carry=false`
+or a causal (per-position prefix) carry.
