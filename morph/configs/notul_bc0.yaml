@@ -1,0 +1,11 @@
+# Bisect cell BC0 — spectral projection cap OFF (suspect 3), GLA kept.
+# Prereg: lab/experiments/planned/2026-08-31-loop-killer-bisect.md (f595c26).
+defaults:
+  - notul_l2
+  - _self_
+
+training:
+  spectral_project_cap: 0.0
+
+wandb:
+  name: notul-bc0
