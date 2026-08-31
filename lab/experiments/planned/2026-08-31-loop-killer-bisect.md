@@ -151,3 +151,17 @@ BG0's stall was never an init artifact.
   ship no-GLA no-cap; memory branch only returns as a causal decode-time
   mechanism. P-PC1 FALSE ⇒ GLA steals gradient from anywhere; remove, and do
   NOT port Raven into this position without a new hypothesis.
+
+### Scoring — 2026-08-31 18:30 (P-G0s2, P-D8)
+
+- **P-G0s2 TRUE** (75% side): seed-2 BG0 stalls identically (val 7.85→7.40→
+  7.45 over 1250 steps). The GLA-off+cap-on stall is deterministic.
+- **P-D8 FALSE** (55% side): notul-bg0c0-d8 K1 4.5119, K4 4.3284, K8 4.3191,
+  K14 4.3253. K1−K8 = 0.193 < 0.30; sub-prediction (70% clean) TRUE — trained
+  clean, and degrades gracefully past trained depth. Deeper training regime
+  did NOT move the curve shape (still saturates by K4) and cost 0.11 nats
+  absolute vs the mean-6 cell at equal steps. The conjunction removal buys
+  shallow depth utility only; the remaining gap to TitanMAC's regime lives in
+  the remaining diffs (attention stack / HC residual / QAT / injection /
+  d1024 / data), or in the training dynamics of depth itself. Next-round axis
+  decision deferred to Wolfe with tonight's BGpc + BWS results.
