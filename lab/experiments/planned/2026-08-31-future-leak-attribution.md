@@ -41,6 +41,18 @@ l2cap's greedy rep4 0.61 — at decode the carry is causal (all context is
 past), so the old model's generation advantage, if it survives comparison,
 is H-memory evidence independent of this probe.
 
+### Method amendment — 2026-08-31 11:20 (v1 design flaw, discovered on read-out)
+
+v1 corrupted only positions > k while scoring all token positions < k — but a
+scored position's LABEL sits inside the clean region and inside the carry's
+summary, so the label-leak path was intact for every scored position. v1 is
+kept as a far-future result only: the 30k model's CE 1.2 persists with the far
+future destroyed (its cheat is NEAR-future/label reading through the carry),
+and the l2nc control is bit-identical clean-vs-corrupt (live causality proof,
+P2 scored TRUE). v2 (boundary mode) corrupts token positions ≥ k and scores
+ONLY the last token position before k — its label's input copy is corrupted —
+sweeping k in a stride-64 grid. P1 is scored on v2. Predictions untouched.
+
 ## Predictions (frozen)
 
 - **P1 (attribution, binding).** l2cap-4500's earning at scored positions
