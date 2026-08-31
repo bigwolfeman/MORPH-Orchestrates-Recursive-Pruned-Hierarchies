@@ -68,3 +68,33 @@ K3−K6. Reference flat baseline: notul-l2nc (K1−K6 = 0.120, K3−K6 = 0.015).
 verifies construction); uncapped causal token-path stability unknown; the
 depth sweep's sensitivity floor (~±0.01 nats at 48 rows) is well below the
 0.10 threshold.
+
+### Method amendment — 2026-08-31 16:00 (after BG0/BC0, before round 2)
+
+Round-1 outcomes: **BC0 flat** (K1−K6 0.142, K3−K6 0.013 vs baseline
+0.120/0.015; trained clean to val 4.32 — S1-clean TRUE, P-C0 resolved on the
+75% no-effect side). **BG0 catastrophic** — an unpredicted third outcome: flat
+at unigram CE ~7.4 from step 250, upward drift, div-guard abort at 2080
+(`DIVERGED_step_2080.pt`). Branch-norm probe (d562088) on the trained baseline
+shows attention alive in all 14 blocks and gated GLA at only 5–6% of attn RMS
+(42% coda.1) with ret_gates at init — GLA is near-inert at convergence yet
+training collapses without it.
+
+BG0C0's original trigger ("both singles flat") did not materialize, but the
+cell is now decisive for a NEW question: BG0's projection was BINDING
+(σ mean 1.41 / cap 1.5), so the stall may be a GLA-off × cap interaction
+(attention forced to carry everything while spectrally capped) rather than
+GLA being load-bearing per se. Round 2, frozen before launch:
+
+- **BG0C0** (retention=false, cap=0) runs UNCONDITIONALLY, full 4500 + sweep.
+  **P-G0C0r (new, frozen): 40%** that it escapes the unigram basin
+  (val < 6.0 by step 1500). Escape ⇒ interaction story; GLA = workaround for
+  over-constriction; the loop-killer hunt turns to the cap+attention geometry.
+  Stall ⇒ GLA is required for training in this architecture; next arms must
+  keep GLA and manipulate it (bootstrap-then-close; core-site-only removal).
+- **BG0-seed2** (notul_bg0, training.seed=2, 1500 steps, no sweep) closes the
+  RNG-shift confound (module removal changes every other tensor's init under
+  seed=1). **P-G0s2 (frozen): 75%** it stalls the same way (val > 6.5 at 1500).
+
+Original predictions untouched. BG0C0's original P-G0C0 (40% depth-earning
+restored) still applies IF it trains to 4500.
