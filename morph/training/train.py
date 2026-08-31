@@ -419,7 +419,9 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         retention_heads=int(getattr(m, "retention_heads", 0)),
         retention_chunk=int(getattr(m, "retention_chunk", 128)),
         retention_gate_init=float(getattr(m, "retention_gate_init", -6.0)),
-        retention_carry=bool(getattr(m, "retention_carry", True)),
+        # str|bool pass-through; MORPHConfig.retention_carry_mode normalizes+validates.
+        # Default "none" = causal (post-2026-08-31 fix).
+        retention_carry=getattr(m, "retention_carry", "none"),
         retention_gate_bias=float(getattr(m, "retention_gate_bias", 2.0)),
         core_gain_clip=float(getattr(m, "core_gain_clip", 0.0)),
         core_gain_clip_iter_lo=int(getattr(m, "core_gain_clip_iter_lo", 0)),

@@ -151,7 +151,9 @@ model:
   retention_heads: 8             # d_head=128; seed 4 x2, cloud 16 /2
   retention_chunk: 256           # GLA chunk length; larger=faster (launch-bound)
   retention_gate_init: -6.0      # branch-gate logit; sigmoid(-6)≈0.0025 → ≈ identity at init
-  retention_carry: true          # core: carry GLA state across loop iterations (false → reset)
+  retention_carry: "none"        # cross-iteration GLA carry: "none" (causal, DEFAULT since the
+                                 # 2026-08-31 leak fix) | "acausal_final" (pre-fix whole-sequence
+                                 # carry — a causality leak; load old checkpoints only)
   retention_gate_bias: 2.0       # GLA forget-gate logit bias (α near 1 = long memory)
 
 training:

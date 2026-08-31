@@ -16,7 +16,7 @@ Each test is written so it FAILS when the thing it names is broken:
 The causality tests run the backbone with the A3 arm's REAL settings — retention on,
 ``retention_carry`` on — because the previous generation of anti-leak tests in this
 project all ran with retention OFF and therefore protected nothing
-(``.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md``).
+(``.agents/notes/implemented/bug-fix/2026-08-23-retention-carry-breaks-causality.md``).
 """
 
 from __future__ import annotations

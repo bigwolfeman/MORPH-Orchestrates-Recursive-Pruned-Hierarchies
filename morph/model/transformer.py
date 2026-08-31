@@ -281,8 +281,16 @@ class MORPHConfig:
     retention_heads: int = 0                   # 0 → use n_heads
     retention_chunk: int = 128
     retention_gate_init: float = -6.0          # branch-gate logit; sigmoid(-6)≈0.0025 ≈ identity@init
-    retention_carry: bool = True               # core: carry GLA state across loop iterations
-                                               # (False → reset each iter = global retention, no memory)
+    # Cross-iteration GLA carry mode. "none" (DEFAULT since 2026-08-31): the core's GLA
+    # state resets each loop iteration — strictly causal (runtime-invariants §5).
+    # "acausal_final": the pre-fix behaviour — iteration t's END-OF-SEQUENCE state (a
+    # summary of ALL positions, future included) seeds iteration t+1, so from iteration 2
+    # every position sees the future. It is a LEARNED leak: 0.14 nats on a truncated-BPTT
+    # arm, 3.85 nats after 30k full-BPTT steps, and it faked the l2cap depth-earning
+    # (lab/experiments/successes/2026-08-31-carry-leak-audit.md). Kept ONLY as an explicit
+    # opt-in for loading/diagnosing checkpoints trained before the fix. Bools are accepted
+    # for config back-compat: False → "none", True → "acausal_final".
+    retention_carry: bool | str = "none"
     retention_gate_bias: float = 2.0           # GLA internal forget-gate logit bias (α near 1 = long memory)
 
     # Training
@@ -322,6 +330,21 @@ class MORPHConfig:
     # lab/experiments/planned/2026-08-23-tul-iteration0-mediation.md.
     core_gain_clip_iter_lo: int = 0
     core_gain_clip_iter_hi: int = -1
+
+    @property
+    def retention_carry_mode(self) -> str:
+        """Normalized ``retention_carry``: "none" | "acausal_final" (bools mapped).
+
+        Every read site MUST use this property, never the raw field — a raw
+        truthiness check reads the string "none" as True and silently resurrects
+        the causality leak this normalization exists to kill."""
+        v = self.retention_carry
+        if isinstance(v, bool):
+            v = "acausal_final" if v else "none"
+        if v not in ("none", "acausal_final"):
+            raise ValueError(
+                f"retention_carry must be 'none', 'acausal_final', or a bool; got {v!r}")
+        return v
 
 
 class DiagonalInjection(nn.Module):
@@ -1000,6 +1023,12 @@ class MORPHTransformer(nn.Module):
         # graphed front/back callables + capture shapes. Deliberately NOT a submodule.
         self._static_graphs: dict = {}
 
+        if cfg.retention_carry_mode == "acausal_final":
+            print("  WARNING: retention_carry='acausal_final' — the cross-iteration GLA "
+                  "carry feeds the WHOLE-SEQUENCE final state into loop iteration 2+, so "
+                  "every position sees the future (runtime-invariants §5 violation; the "
+                  "leak that faked the l2cap depth-earning). Load/diagnose pre-2026-08-31 "
+                  "checkpoints only; NEVER train new models with it.")
         n_params = sum(p.numel() for p in self.parameters())
         _res = self._residual_mode + (f"(n={self._n_streams})" if self._is_hc else "")
         print(f"MORPHTransformer: {n_params/1e6:.1f}M params, "
@@ -1648,7 +1677,8 @@ class MORPHTransformer(nn.Module):
             # state, so when it enters the first grad iteration the gradient does NOT flow back into
             # the frozen window (truncated-BPTT boundary, automatic). retention_carry=False → never
             # tracked (each iter reseeds zero = global retention with no memory).
-            track_ret = self._core_has_retention and self.cfg.retention_carry
+            track_ret = (self._core_has_retention
+                         and self.cfg.retention_carry_mode == "acausal_final")
             if track_ret:
                 _rh = self.cfg.retention_heads or self.cfg.n_heads
                 _rdh = self.cfg.d_model // _rh
@@ -2099,7 +2129,8 @@ class MORPHTransformer(nn.Module):
         _ck = self.cfg.ckpt_grad_iters
         n_ckpt = n_grad_iters if _ck < 0 else max(0, min(_ck, n_grad_iters))
 
-        track_ret = self._core_has_retention and self.cfg.retention_carry
+        track_ret = (self._core_has_retention
+                         and self.cfg.retention_carry_mode == "acausal_final")
         if track_ret:
             _rh = self.cfg.retention_heads or self.cfg.n_heads
             _rdh = self.cfg.d_model // _rh

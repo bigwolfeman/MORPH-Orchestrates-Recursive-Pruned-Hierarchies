@@ -120,7 +120,7 @@ conditioning disabled.
 ## Caveats
 
 - Every arm here carries the causality defect in
-  [`.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md`](../../../.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md):
+  [`.agents/notes/implemented/bug-fix/2026-08-23-retention-carry-breaks-causality.md`](../../../.agents/notes/implemented/bug-fix/2026-08-23-retention-carry-breaks-causality.md):
   `retention_carry: true` lets every position read the whole sequence from core iteration 2
   onward, worth +0.1433 nats of teacher-forced CE. Generation cannot use that lookahead,
   which is the most likely reason a model at PPL 27 emits rep4 0.51. **The repetition

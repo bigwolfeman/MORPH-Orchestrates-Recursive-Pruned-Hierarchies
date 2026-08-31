@@ -80,7 +80,7 @@ model:
   retention_chunk: 256           # GLA chunk length; eager is launch-bound → larger=faster
                                  # (+48%→+17% wall at 64→256; clamp keeps it stable). Kernel later.
   retention_gate_init: -6.0      # branch-gate logit; sigmoid(-6)≈0.0025 → ≈ identity at init
-  retention_carry: true          # core: carry GLA state across loop iterations (false → reset/no memory)
+  retention_carry: "none"        # causal (post-2026-08-31 fix); "acausal_final" = pre-fix leak, old ckpts only
   retention_gate_bias: 2.0       # GLA forget-gate logit bias (α near 1 = long memory)
 
   # ── Loop-axis SSM ablation (#232) — Ai-notes/06-07-2026/MORPH-LoopSSM-Ablation/design.md ──

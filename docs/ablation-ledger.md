@@ -94,7 +94,7 @@ All of them are logged by `morph/training/train.py` as of the implementation
 > 0.009 → 0.043 → 0.108 → 0.90 about 140 steps before the norm explodes.
 > [mechanism](experiments/failures/2026-08-23-tul-forward-backward-asymmetry.md)
 > (2) **Every ABSOLUTE CE in this table is inflated** by the causality defect in
-> [`retention-carry-breaks-causality`](../.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md):
+> [`retention-carry-breaks-causality`](../.agents/notes/implemented/bug-fix/2026-08-23-retention-carry-breaks-causality.md):
 > `retention_carry: true` lets every position read the whole sequence from core iteration
 > 2 onward, measured at **+0.1433 nats** — larger than the −0.105 gate result. Arm-minus-arm
 > differences survive because every arm carries it. Absolute numbers do not.

@@ -182,7 +182,7 @@ logged live, rather than the expensive Jacobian one measured post-mortem.
 - MAUVE and gen-PPL under an external scorer were not computed. rep4@512 now IS, in the
   replacement note.
 - Every CE in this note is inflated by the causality defect in
-  [`../../../.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md`](../../../.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md)
+  [`../../../.agents/notes/implemented/bug-fix/2026-08-23-retention-carry-breaks-causality.md`](../../../.agents/notes/implemented/bug-fix/2026-08-23-retention-carry-breaks-causality.md)
   — measured at +0.1433 nats, larger than this note's −0.1054 headline. The gate-minus-A1
   DIFFERENCE survives (both arms leak equally); the absolute numbers do not.
 - The gate's cost in wall-clock was not isolated; `layer_passes_per_token` is a

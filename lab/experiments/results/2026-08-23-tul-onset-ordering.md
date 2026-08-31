@@ -101,7 +101,7 @@ every setting at K ≥ 10, and after `core_gain_t0` in every setting tried. Its 
 trace is noise (3479–5983 with no trend) while `core_gain_t0` is already climbing.
 
 The carry still has to be fixed — it breaks causality
-([`the causality note`](../../../.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md))
+([`the causality note`](../../../.agents/notes/implemented/bug-fix/2026-08-23-retention-carry-breaks-causality.md))
 — but on this evidence it is not the takeover's cause.
 
 ### 5. The loss is not merely flat through the onset. It IMPROVES.

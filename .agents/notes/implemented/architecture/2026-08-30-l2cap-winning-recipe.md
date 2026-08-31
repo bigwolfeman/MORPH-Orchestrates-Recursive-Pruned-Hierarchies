@@ -9,7 +9,7 @@ Status: implemented
 > eval (same weights; CE@K1 bit-identical), the 4500-step l2cap checkpoint's
 > depth curve INVERTS: 4.622@K1 → 5.742@K6 (−1.12 nats, monotone). The 0.233
 > nats "earned" was the model reading the future through the GLA carry
-> (`.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md`),
+> (`.agents/notes/implemented/bug-fix/2026-08-23-retention-carry-breaks-causality.md`),
 > a channel only full BPTT can train — which is why truncated arms looked
 > "unable to form composition". At 30k steps the exploit grows to 3.85 nats and
 > val CE reads an impossible 1.12. The five ingredients below are retained as

@@ -420,12 +420,14 @@ def decode_step(model, token_ids: Tensor, cache: MORPHKVCache) -> Tensor:
     cached incremental step.
 
     Retention (#230): prelude/coda GLA branches are decoded EXACTLY (pure causal token-axis
-    accumulator per site). The CORE retention layer's cross-iteration carry (retention_carry) is
-    non-causal in the full forward (it carries iter t's END-OF-SEQUENCE state — including future
-    tokens — into iter t+1), so it has no bit-exact O(1) form. We approximate it causally: each
-    (core layer, iter t) site keeps its own token-axis running state, seeded at pos==0 from the
-    previous iteration's freshly-updated state. Error is bounded by the (tiny ~1.3%) retention
-    gate; quantified against the O(T^2) full-recompute generation in ignore/verify_kv_cache.py.
+    accumulator per site). The CORE cross-iteration carry depends on retention_carry_mode:
+    "none" (the post-2026-08-31 causal default) resets state each iteration and decodes
+    EXACTLY. "acausal_final" (pre-fix checkpoints only) carries iter t's END-OF-SEQUENCE
+    state — including future tokens — into iter t+1 in the full forward, which has no
+    bit-exact O(1) form; we approximate it causally: each (core layer, iter t) site keeps
+    its own token-axis running state, seeded at pos==0 from the previous iteration's
+    freshly-updated state. Error is bounded by the (tiny ~1.3%) retention gate; quantified
+    against the O(T^2) full-recompute generation in ignore/verify_kv_cache.py.
     """
     cfg = model.cfg
     ids = token_ids.view(-1, 1)                                   # [B,1]
@@ -473,9 +475,14 @@ def decode_step(model, token_ids: Tensor, cache: MORPHKVCache) -> Tensor:
             sc = cache.site(f"core.{i}.{t}")
             ret_in = None
             if i in ret_layers:
-                # cross-iteration carry seed at pos==0: from the previous iteration's site,
-                # freshly updated earlier in THIS decode_step (causal approximation).
-                if sc.ret_state is None and t > 0:
+                # Cross-iteration carry seed at pos==0 from the previous iteration's site
+                # (freshly updated earlier in THIS decode_step — the causal decode
+                # approximation of the ACAUSAL training carry). Gate on the config: with
+                # retention_carry="none" (the post-2026-08-31 default) the trained model
+                # resets GLA state every iteration, so decode must too — an unconditional
+                # seed here would decode a different model than was trained.
+                if (model.cfg.retention_carry_mode == "acausal_final"
+                        and sc.ret_state is None and t > 0):
                     sc.ret_state = cache.site(f"core.{i}.{t - 1}").ret_state
                 ret_in = sc.ret_state
             h, new_ret = _block_step(layer, h, sc, pos, t, ret_in, csa_pool)

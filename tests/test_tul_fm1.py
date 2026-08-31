@@ -11,7 +11,7 @@ false while the loss curve looked fine.
 Tiny dims, CPU, real settings where they matter: the causality gate runs with retention
 ON, because the previous generation of anti-leak tests in this project all ran with it
 off and therefore protected nothing
-(``.agents/notes/proposed/bug-fix/2026-08-23-retention-carry-breaks-causality.md``).
+(``.agents/notes/implemented/bug-fix/2026-08-23-retention-carry-breaks-causality.md``).
 """
 
 from __future__ import annotations
