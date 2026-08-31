@@ -1,6 +1,6 @@
 # Planned: honest token-path loop contribution — causal no-TUL MORPH, 4500 steps
 
-Status: planned
+Status: success — P1 landed on the prior side (loop honestly flat in both geometries); P2 missed informatively
 Date: 2026-08-31 (frozen before launch; Wolfe: "let's check a MORPH with out
 tul for loop contribution").
 
@@ -49,3 +49,38 @@ contract on the kernel path is covered by tests only for the eager path —
 the fused-GLA path's carry wiring goes through the same track_ret sites, but
 no fused-path corruption probe has run (flagged; the eager/fused parity gate
 in gla.py is the standing evidence).
+
+## Results (2026-08-31; artifacts results/2026-08-31-notul-causal-loop-worth/; run 52.9 min, 1.45-1.49 sps)
+
+Token-path depth curve (48 rows, paired):
+K1 4.4640, K2 4.3835, K3 4.3592, K4 4.3488, K5 4.3453, K6 4.3439, K7 4.3441, K8 4.3475.
+
+- **P1 FALSE (prior side, 80% → held).** Trained-support earning K3−K6 =
+  **+0.0153** nats. With slots (l2nc): 0.006. The core loop is honestly flat
+  in BOTH geometries.
+- **P2 FALSE — a genuine miss (predicted TRUE at 70%).** The OOD-shallow
+  spread K1−K3 is only **+0.105**, not ≥0.5. The bench-450 acausal model's
+  ~8-nat K1→K2 cliff was therefore mostly the CARRY (absent at K1, feeding
+  K2+), not undertrained shallow depth. Every dramatic depth effect ever
+  measured in this project traces to the leak.
+- **P3 TRUE.** S1-clean: monotone val/loss 5.66→4.29 across every observed
+  eval (wandb sampled history returned 4 of the periodic points + the final;
+  all monotone, worst excursion 0.0000).
+
+Bonus paired observation (both arms causal, same seed/steps/batch):
+no-TUL val CE 4.294 vs TUL 4.390 — token-matched, no-TUL is 0.096 nats
+better (every token gets the core); TUL is 1.7× faster (2.50 vs 1.45 sps).
+A 4500-step preview of the honest head-to-head's two axes.
+
+## Verdict
+
+Binding rule executed: the loop is honestly flat in both geometries — "no
+demonstrated way to make the core contribute at this scale/task" is the
+standing conclusion; the conditional-compute head-to-head proceeds unchanged.
+
+## Updated hypothesis
+
+Depth utility is not blocked by slot geometry. The capped core map is
+contractive and hits its fixed point by ~K5 in both geometries (curves flat
+past K5, slightly up at K8). If loop contribution is ever to appear, the
+lever is the TASK (distributions where iteration pays), not the wiring.

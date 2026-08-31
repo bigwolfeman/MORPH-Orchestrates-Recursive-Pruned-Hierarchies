@@ -1,0 +1,49 @@
+{
+ "notul-l2nc": {
+  "step": 4500,
+  "rows": 48,
+  "train_eval_depth": 6,
+  "depths": {
+   "1": {
+    "ce_tokens": 4.463997349143028,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "2": {
+    "ce_tokens": 4.383522599935532,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "3": {
+    "ce_tokens": 4.359184071421623,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "4": {
+    "ce_tokens": 4.348753020167351,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "5": {
+    "ce_tokens": 4.345321074128151,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "6": {
+    "ce_tokens": 4.343923836946487,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "7": {
+    "ce_tokens": 4.3441371619701385,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "8": {
+    "ce_tokens": 4.347541660070419,
+    "n_batches": 16,
+    "batch": 3
+   }
+  }
+ }
+}
