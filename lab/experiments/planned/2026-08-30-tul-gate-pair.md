@@ -66,6 +66,15 @@ batch 6, 4500 steps, seed 1, eager, mux on. GRT's own short-horizon note
 3. Wall-clock from queue-log START→DONE stamps. Artifacts →
    `lab/experiments/results/2026-08-30-tul-gate-pair/`.
 
+**Method amendment (2026-08-30 19:10, before any full run):** the first G1 smoke
+built 283.5M params — no gate. `tul_setup.py` constructs TULConfig from an
+explicit key list and silently dropped `recur_gate` (the tul_l2 misplaced-key
+failure again; the compose-level test checked one level too shallow). Fixed the
+resolver, added `tests/test_tul_recur_gate.py::test_g_configs_land_at_the_consumer`
+(revert-checked: fails on the buggy resolver), and a `TUL RECUR GATE ON` startup
+line; both smokes now GATE on that line plus the param-count increase. No
+training step had run; predictions untouched.
+
 ## Not verified before launch
 
 The gate has never run on GPU (CPU tests only). Its interaction with the

@@ -135,3 +135,20 @@ def test_the_g_configs_resolve():
     assert "spectral_project_cap" not in g1.training or not g1.training.get("spectral_project_cap")
     assert g2.training.spectral_project_cap == 1.5
     assert g1.wandb.name == "tul-g1" and g2.wandb.name == "tul-g2"
+
+
+def test_g_configs_land_at_the_consumer():
+    """The tul_setup RESOLVER, not just Hydra compose — the exact failure the first
+    G1 smoke hit: `recur_gate: grt` composed fine and was silently dropped by the
+    TULConfig key list, building 283.5M params (no gate) instead of 285.3M."""
+    import os
+    from hydra import compose, initialize_config_dir
+    from morph.training.tul_setup import build_tul_runtime
+    cfg_dir = os.path.abspath("morph/configs")
+    with initialize_config_dir(version_base=None, config_dir=cfg_dir):
+        for name in ("tul_g1", "tul_g2"):
+            cfg = compose(config_name=name)
+            rt = build_tul_runtime(cfg)
+            assert rt is not None and rt.model_cfg.recur_gate == "grt", name
+            assert rt.model_cfg.recur_gate_bias == 4.0
+            assert rt.model_cfg.recur_gate_noise == 0.1

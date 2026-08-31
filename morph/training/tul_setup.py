@@ -186,6 +186,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         db_loop=bool(tc.get("db_loop", False)),
         db_mux_iters=int(tc.get("db_mux_iters", 4)),
         core_stage_cond=str(tc.get("core_stage_cond", "none")),
+        recur_gate=str(tc.get("recur_gate", "none")),
+        recur_gate_bias=float(tc.get("recur_gate_bias", 4.0)),
+        recur_gate_noise=float(tc.get("recur_gate_noise", 0.1)),
+        recur_gate_tau=float(tc.get("recur_gate_tau", 1.0)),
         db1_cond_dim=int(tc.get("db1_cond_dim", 256)),
         db1_sigma_min=float(tc.get("db1_sigma_min", 0.002)),
         db1_sigma_max=float(tc.get("db1_sigma_max", 80.0)),
@@ -227,6 +231,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "db_loop": model_cfg.db_loop,
         "db_mux_iters": model_cfg.db_mux_iters,
         "core_stage_cond": model_cfg.core_stage_cond,
+        "recur_gate": model_cfg.recur_gate,
         "db1_cond_dim": model_cfg.db1_cond_dim,
         "db1_sigma_min": model_cfg.db1_sigma_min,
         "db1_sigma_max": model_cfg.db1_sigma_max,
@@ -283,6 +288,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
           + (f" fixed_stride={rule.fixed_stride}" if rule.fixed_stride else "")
           + (f" coda_token_cut={model_cfg.coda_token_cut}" if model_cfg.coda_token_cut else ""),
           flush=True)
+    if model_cfg.recur_gate != "none":
+        print(f"  TUL RECUR GATE ON: {model_cfg.recur_gate} "
+              f"bias={model_cfg.recur_gate_bias} sigma_g={model_cfg.recur_gate_noise} "
+              f"tau={model_cfg.recur_gate_tau} (morph/model/recur_gate.py)", flush=True)
     if gate_cfg is not None:
         print(f"  TUL GATE ON: k_max={gate_cfg.k_max}"
               f"(decode≤{gate_cfg.k_decode_max}) lambda={gate_cfg.lam} "
