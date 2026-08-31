@@ -1,6 +1,6 @@
 # Planned: future-leak vs past-memory — attributing the old l2cap depth-earning
 
-Status: planned
+Status: success
 Date: 2026-08-31 (frozen before the probe runs; trigger: Wolfe — "we had such
 strong results before. something is wrong here... figure out the root cause").
 
@@ -78,3 +78,41 @@ Whether the acausal_final opt-in reproduces the pre-fix forward bit-for-bit on
 a real checkpoint (the fork agent smoke-tested tiny models only) — the probe's
 clean-condition K1/K6 numbers must match the audit sweep (4.622/4.389 ± noise)
 as its own sanity gate, and a mismatch aborts the read.
+
+## Results (v2 boundary mode, 16-point k-grid 128..1088 stride 64, 48 rows/k)
+
+Aggregated over the k-grid (`$Q/future_leak_probe_v2.json`; per-k cells in the
+file; re-measured from the artifact at filing time):
+
+| arm | earning clean (K1−K6) | earning corrupt | collapse |
+|---|---|---|---|
+| l2cap-4500 (acausal_final) | **+0.2580** | **−0.0128** | **105%** |
+| tul-30k (acausal_final) | **+3.2727** | **−5.5200** | 269% (K6 corrupt CE 9.84 — transcribes the garbage) |
+| l2nc-4500 (carry none) | +0.0171 | +0.0171 | 0% — bit-identical clean vs corrupt |
+
+Sanity gate held: l2cap clean K1/K6 across the grid bracket the audit sweep's
+4.622/4.389 (per-k spread is doc-content noise; the paired earning is the
+statistic). v1 (far-future mode) is retained in `$Q/future_leak_probe.json` as
+the far-future null: earning survives when only positions > k+lookahead are
+corrupted, because the cheat reads the NEAR future / label copies.
+
+## Verdict
+
+**P1 TRUE** (≥70% collapse required; measured 105% at 4500, 269% at 30k) —
+**H-leak. The l2cap depth-earning was 100% future-reading at teacher-forced
+eval.** Corrupt-K6 going ABOVE corrupt-K1 (negative earning) means iterations
+actively transcribe the corrupted future into the scored position.
+**P2 TRUE** (l2nc moved 0.000000 < 0.01 nats at every depth — live causality
+contract on a trained model).
+
+Binding applied: the falsification stands as filed; the loop program stays
+paused pending the loop-killer bisect (prereg
+`lab/experiments/planned/2026-08-31-loop-killer-bisect.md`).
+
+## Updated hypothesis
+
+The carry's teacher-forced value is pure leak. Its GENERATION value (old
+l2cap greedy rep4 0.614 vs l2nc 0.902) is not addressed by this probe and
+remains real H-memory evidence at decode time, where the carry is causal by
+construction — that motivates a future causal-carry design, but as a NEW
+mechanism, not a rehabilitation of the old numbers.
