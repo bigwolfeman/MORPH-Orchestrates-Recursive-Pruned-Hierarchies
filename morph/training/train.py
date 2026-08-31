@@ -1665,6 +1665,7 @@ def main(cfg: DictConfig) -> None:
     # Compile only the MLP sub-modules (attention uses Triton/SDPA kernels,
     # which are incompatible with fullgraph compile).
     compile_attention = bool(getattr(tr, "compile_attention", False))
+    compile_blocks = bool(getattr(tr, "compile_blocks", False))
     if use_compile:
         for group in [model.prelude, model.core, model.coda]:
             # Core MLPs see a VARIABLE batch each loop iteration (active-set
@@ -1672,7 +1673,24 @@ def main(cfg: DictConfig) -> None:
             # dynamic batch to avoid a recompile per distinct sub-batch size.
             # Prelude/coda see a fixed batch → let Dynamo auto-decide (None).
             dyn = True if group is model.core else None
-            for layer in group:
+            for i in range(len(group)):
+                layer = group[i]
+                if compile_blocks:
+                    # Opt-in (training.compile_blocks): compile the WHOLE MORPHBlock —
+                    # norms, HC residual mixing, injections, and casts included. The
+                    # eager step is launch-bound (self-CPU 820 ms vs self-CUDA 371 ms
+                    # per step; lab/perf/compile_coverage_bench.py), and block compile
+                    # measured 1.84× fwd+bwd over eager, 1.64× over the mlp+attention
+                    # compile, at the SAME numeric drift class as mlp+attention. The
+                    # GLA retention branch stays a graph break (the same eager code
+                    # runs): Inductor hits an upstream SplitScan codegen bug on its
+                    # chunked cumsum. Eager-only path (use_kernels=false) — the fused
+                    # Triton kernels are not compilable and do not need this.
+                    if getattr(layer, "retention", None) is not None:
+                        layer.retention.forward = torch.compiler.disable(
+                            layer.retention.forward)
+                    group[i] = torch.compile(layer, mode=compile_mode, dynamic=dyn)
+                    continue
                 if hasattr(layer, "mlp"):
                     layer.mlp = torch.compile(layer.mlp, mode=compile_mode, dynamic=dyn)
                 # Opt-in (training.compile_attention): compile the eager attention too.
@@ -1683,8 +1701,12 @@ def main(cfg: DictConfig) -> None:
                 if compile_attention and hasattr(layer, "attention"):
                     layer.attention = torch.compile(layer.attention, mode=compile_mode,
                                                     dynamic=dyn)
-        print(f"  MLPs compiled (mode={compile_mode}, core dynamic-batch)"
-              + (", attention compiled" if compile_attention else ""))
+        if compile_blocks:
+            print(f"  BLOCKS compiled (mode={compile_mode}, core dynamic-batch, "
+                  "GLA graph-broken)")
+        else:
+            print(f"  MLPs compiled (mode={compile_mode}, core dynamic-batch)"
+                  + (", attention compiled" if compile_attention else ""))
 
         # ── Warmup compile — runs in the THREAD-FREE window (pre-wandb, pre-dataloader) ──
         # Two compilation systems fork subprocesses here and must finish before any thread

@@ -180,6 +180,7 @@ training:
   bf16: true
   compile: true
   compile_attention: false  # opt-in: also torch.compile the eager attention (TUL/TG path; benchmarked 2026-08-30)
+  compile_blocks: false        # opt-in: torch.compile whole MORPHBlocks (GLA graph-broken); 1.84x eager fwd+bwd, see lab/perf/compile_coverage_bench.py
   compile_mode: default
   checkpointing: true
 
