@@ -77,10 +77,33 @@ gen_every=0, grad_probe_every=50 (thinned for throughput).
 4. Artifacts → `lab/experiments/results/2026-08-30-tul-vs-notul-30k/`; wandb
   `adew-me/morph-tul`, names tul-30k / notul-30k.
 
+### Method amendment — 2026-08-30 (speed bench results; predictions untouched)
+
+Bench complete (4×450 steps, seed 1, batch 6, queue log 22:57–23:26):
+
+| arm | sps | tok/s |
+|---|---|---|
+| l2cap as-is (eager) | 1.31 | 8,042 |
+| l2cap + compiled attention | **1.55** | **9,498** |
+| no-TUL + kernels | 1.28 | 7,877 |
+| no-TUL eager | 0.72 | 4,422 |
+
+- **compile_attention conditional: RESOLVED TRUE.** All three criteria met:
+  +18% sps (≥10%), zero recompile churn in the log (the single grep hit is the
+  standard `eager_on_recompile` stance line), loss sane at step 400 (12.32 vs
+  12.94 as-is — within run-decorrelation noise). Arm A runs with
+  `training.compile_attention=true`.
+- **Arm B implementation confirmed**: kernels are worth 1.78× on the no-TUL
+  full-sequence path (1.28 vs 0.72) — `use_kernels=true` is its best form, as
+  planned.
+- **Expected durations**: A ≈ 30000/1.55 = 5.4 h; B ≈ 30000/1.28 = 6.5 h.
+  With compiled attention, A is ~21% faster than B in steps/hour — the ≤64-slot
+  loop plus compile beats the 1152-position loop plus kernels.
+
 ## Not verified before launch
 
 The capped recipe has never run past 4500 steps (H4 is a real question, and
 t_beta3=3500 at 30k steps is an untested optimizer regime). compile_attention
-is unbenchmarked until the running bench lands. The token-path depth-sweep
-instrument for B does not exist yet. `tul.activate_at=never` composed from the
-tul_l2 chain is smoke-tested only via the bench arms.
+is benchmarked at 450 steps only — 30k-step compile stability is unverified.
+The token-path depth-sweep instrument for B does not exist yet. `tul.activate_at=never`
+composed from the tul_l2 chain is smoke-tested only via the bench arms.
