@@ -279,6 +279,7 @@ class MORPHConfig:
     retention: bool = True
     retention_layers: tuple[int, ...] = (1,)   # which layer index per section gets the branch
     retention_sections: tuple[str, ...] = ("prelude", "core", "coda")  # which sections get it
+    retention_write_shift: bool = False  # FWA next-latent write alignment (k_{t-1}, v_t)
     retention_heads: int = 0                   # 0 → use n_heads
     retention_chunk: int = 128
     retention_gate_init: float = -6.0          # branch-gate logit; sigmoid(-6)≈0.0025 ≈ identity@init
@@ -905,6 +906,8 @@ class MORPHTransformer(nn.Module):
         if cfg.retention:
             from .gla import GatedLinearAttention
             rheads = cfg.retention_heads or cfg.n_heads
+            if cfg.retention_write_shift:
+                print("  GLA WRITE-SHIFT ON: next-latent alignment (k_{t-1}, v_t) — FWA eq 2.3")
             for sname, section in (("prelude", self.prelude), ("core", self.core),
                                    ("coda", self.coda)):
                 if sname not in ret_sections:
@@ -916,7 +919,8 @@ class MORPHTransformer(nn.Module):
                                 d, rheads,
                                 mode="kernel" if cfg.use_kernels else "chunked",
                                 chunk=cfg.retention_chunk,
-                                gate_logit_bias=cfg.retention_gate_bias),
+                                gate_logit_bias=cfg.retention_gate_bias,
+                                write_shift=cfg.retention_write_shift),
                             RMSNorm(d), gate_init=cfg.retention_gate_init)
 
         # ── TUL slot parameters (docs/tul-spec.md §3.1-§3.4) ───────────────

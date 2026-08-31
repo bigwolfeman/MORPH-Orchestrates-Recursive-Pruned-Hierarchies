@@ -418,6 +418,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         retention_layers=tuple(int(x) for x in getattr(m, "retention_layers", (1,))),
         retention_sections=tuple(
             str(x) for x in getattr(m, "retention_sections", ("prelude", "core", "coda"))),
+        retention_write_shift=bool(getattr(m, "retention_write_shift", False)),
         retention_heads=int(getattr(m, "retention_heads", 0)),
         retention_chunk=int(getattr(m, "retention_chunk", 128)),
         retention_gate_init=float(getattr(m, "retention_gate_init", -6.0)),

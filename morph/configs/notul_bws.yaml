@@ -1,0 +1,17 @@
+# GLA write-alignment arm — FWA next-latent shift (arXiv:2608.27763) on the
+# SAME sites/recipe as BC0 (GLA everywhere, cap off), isolating the write
+# objective as the only difference. Prereg:
+# lab/experiments/planned/2026-08-31-gla-write-alignment.md
+defaults:
+  - notul_l2
+  - _self_
+
+model:
+  retention: true
+  retention_write_shift: true
+
+training:
+  spectral_project_cap: 0.0
+
+wandb:
+  name: notul-bws

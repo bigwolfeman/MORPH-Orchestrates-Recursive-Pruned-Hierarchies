@@ -71,8 +71,17 @@ class GatedLinearAttention(nn.Module):
     """
 
     def __init__(self, d_model: int, n_heads: int, mode: str = "chunked",
-                 chunk: int = 256, gate_logit_bias: float = 2.0):
+                 chunk: int = 256, gate_logit_bias: float = 2.0,
+                 write_shift: bool = False):
         super().__init__()
+        # write_shift (FWA next-latent alignment, arXiv:2608.27763 eq 2.3): the state
+        # WRITE pairs the previous position's key feature with the current value,
+        # S_t = diag(a_t)*S_{t-1} + k_{t-1} v_t^T (k~_1 = 0 boundary sentinel), so the
+        # state is trained as a next-latent PREDICTOR instead of a same-step archive.
+        # Reads (q) and the per-step forget gate are untouched. Implemented as a
+        # pre-transform of k after _project, so recurrent/chunked/fused-kernel paths
+        # all inherit it unchanged.
+        self.write_shift = bool(write_shift)
         assert d_model % n_heads == 0
         self.d_model = d_model
         self.n_heads = n_heads
@@ -259,6 +268,12 @@ class GatedLinearAttention(nn.Module):
     def forward(self, x: Tensor, initial_state: Tensor | None = None,
                 return_state: bool = True, reset_mask: Tensor | None = None):
         q, k, v, log_alpha, r_pre = self._project(x)
+        if self.write_shift:
+            k = torch.cat([torch.zeros_like(k[:, :1]), k[:, :-1]], dim=1)
+            if reset_mask is not None:
+                # a reset position starts a fresh segment: its shifted key would leak
+                # the PREVIOUS segment's feature into the new segment's first write.
+                k = k.masked_fill(reset_mask[:, :, None, None], 0.0)
         # reset_mask ([B, S] bool | None): GLA segment reset (docs/tul-tg-spec.md §4).
         # Implemented STRUCTURALLY inside _recurrent (state zeroed entering a reset
         # position) and _chunked (per-segment cumulative gate + cross-reset pair
