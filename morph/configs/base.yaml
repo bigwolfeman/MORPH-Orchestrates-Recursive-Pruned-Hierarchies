@@ -177,6 +177,7 @@ training:
   grad_clip: 1.0
   bf16: true
   compile: true
+  compile_attention: false  # opt-in: also torch.compile the eager attention (TUL/TG path; benchmarked 2026-08-30)
   compile_mode: default
   checkpointing: true
 

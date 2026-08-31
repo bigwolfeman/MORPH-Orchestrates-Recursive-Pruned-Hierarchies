@@ -1662,6 +1662,7 @@ def main(cfg: DictConfig) -> None:
     # ── torch.compile ─────────────────────────────────────────────────────
     # Compile only the MLP sub-modules (attention uses Triton/SDPA kernels,
     # which are incompatible with fullgraph compile).
+    compile_attention = bool(getattr(tr, "compile_attention", False))
     if use_compile:
         for group in [model.prelude, model.core, model.coda]:
             # Core MLPs see a VARIABLE batch each loop iteration (active-set
@@ -1672,7 +1673,16 @@ def main(cfg: DictConfig) -> None:
             for layer in group:
                 if hasattr(layer, "mlp"):
                     layer.mlp = torch.compile(layer.mlp, mode=compile_mode, dynamic=dyn)
-        print(f"  MLPs compiled (mode={compile_mode}, core dynamic-batch)")
+                # Opt-in (training.compile_attention): compile the eager attention too.
+                # Only meaningful when use_kernels=false (the TUL/TG path) — the fused
+                # Triton attention is not compilable and does not need this. Shapes on
+                # the TUL path are static per region (tokens [B,L]; slots [B,S]), so
+                # let Dynamo auto-decide guards.
+                if compile_attention and hasattr(layer, "attention"):
+                    layer.attention = torch.compile(layer.attention, mode=compile_mode,
+                                                    dynamic=dyn)
+        print(f"  MLPs compiled (mode={compile_mode}, core dynamic-batch)"
+              + (", attention compiled" if compile_attention else ""))
 
         # ── Warmup compile — runs in the THREAD-FREE window (pre-wandb, pre-dataloader) ──
         # Two compilation systems fork subprocesses here and must finish before any thread
