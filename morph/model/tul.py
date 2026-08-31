@@ -207,6 +207,16 @@ class TULConfig:
     # dispatch rule. "none" (default) builds nothing: zero new parameters, zero RNG
     # draws, forward untouched.
     core_stage_cond: str = "none"
+    # GRT recurrence gate (morph/model/recur_gate.py, arXiv 2608.15062 Eqs. 4-5;
+    # program note .agents/notes/proposed/architecture/2026-08-30-gate-ladder-program.md).
+    # "grt" wraps every core-loop iteration in the elementwise convex blend
+    # h <- g*h_prev + (1-g)*o with g keyed on STATE + PRELUDE only (the cond-zero
+    # constraint: no iteration index may enter the training graph). "none" (default)
+    # builds nothing: zero parameters, zero RNG draws, forward untouched.
+    recur_gate: str = "none"
+    recur_gate_bias: float = 4.0    # fc2 bias init: g ~ 0.98 at init (their App. A)
+    recur_gate_noise: float = 0.1   # sigma_g, per-scalar logit noise, training only
+    recur_gate_tau: float = 1.0     # gate temperature (their B.4: 1.0 is optimal)
     # Width of the σ/iteration embedding fed to each core layer's AdaLN gate. Same
     # role and same default as diffusion_blocks.DBConfig.cond_dim; kept as its own key
     # because the TUL core's d_model can differ from the whole-model DB arm's.
@@ -365,6 +375,27 @@ class TULConfig:
         if self.slot_seed not in _legal_slot_seed:
             raise ValueError(
                 f"tul.slot_seed must be one of {_legal_slot_seed}, got {self.slot_seed!r}")
+        _legal_recur_gate = ("none", "grt")
+        if self.recur_gate not in _legal_recur_gate:
+            raise ValueError(
+                f"tul.recur_gate must be one of {_legal_recur_gate}, got {self.recur_gate!r}")
+        if self.recur_gate != "none":
+            if self.db_loop:
+                raise ValueError(
+                    "tul.recur_gate with tul.db_loop is not defined: the db carry is "
+                    "detached per iteration and a convex blend with a detached branch "
+                    "silently changes what the local losses supervise. Build it when an "
+                    "arm needs it.")
+            if self.core_stage_cond != "none":
+                raise ValueError(
+                    "tul.recur_gate with tul.core_stage_cond is banned outright: "
+                    "iteration conditioning poisons depth-earning during formation "
+                    "(lab/experiments/successes/2026-08-30-tul-condzero-probe.md).")
+            if self.tokens_through_core:
+                raise ValueError(
+                    "tul.recur_gate is wired into the SLOT loop (_tul_core) only; "
+                    "tokens_through_core runs the token core region, which has no gate. "
+                    "Raises rather than silently running an ungated token loop.")
         _legal_stage_cond = ("none", "iter", "sigma")
         if self.core_stage_cond not in _legal_stage_cond:
             raise ValueError(

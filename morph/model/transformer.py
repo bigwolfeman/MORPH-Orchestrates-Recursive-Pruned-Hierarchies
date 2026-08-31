@@ -31,6 +31,7 @@ from .fused_ce import (
     multi_hot_cross_entropy_reference,
 )
 from .iter_cond import CoreStageConditioning, DB1Sampler, iter_stage_value
+from .recur_gate import RecurrenceGate
 from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .sigreg import sigreg_epps_pulley
 from .sparsity import MortarLinear
@@ -924,6 +925,24 @@ class MORPHTransformer(nn.Module):
                 sigma_min=cfg.tul.db1_sigma_min, sigma_max=cfg.tul.db1_sigma_max,
                 p_mean=cfg.tul.db1_p_mean, p_std=cfg.tul.db1_p_std,
                 sigma_data=cfg.tul.db1_sigma_data)
+
+        # ── GRT recurrence gate (morph/model/recur_gate.py, gate-ladder G1/G2) ──
+        # Built after stage-cond, before FM, same RNG-neutrality contract: "none" (the
+        # default) constructs nothing and every other arm's weights are byte-identical.
+        self.tul_recur_gate: RecurrenceGate | None = None
+        if cfg.tul is not None and cfg.tul.recur_gate == "grt":
+            if cfg.n_core <= 0:
+                raise ValueError(
+                    "tul.recur_gate requires model.n_core > 0 — there is no recurrence "
+                    "to gate.")
+            if cfg.scse_enabled:
+                raise NotImplementedError(
+                    "tul.recur_gate under SCSE is not defined: the loop carrier is the "
+                    "DEVIATION and a convex blend of deviations is not a convex blend of "
+                    "states. Build it when an arm needs it.")
+            self.tul_recur_gate = RecurrenceGate(
+                d, tau=cfg.tul.recur_gate_tau, bias_init=cfg.tul.recur_gate_bias,
+                noise=cfg.tul.recur_gate_noise)
 
         # ── FM1 planner (morph/model/tul_fm.py) ────────────────────────────
         # Built LAST so a non-FM model's weights are byte-identical to today's: every
@@ -2190,6 +2209,24 @@ class MORPHTransformer(nn.Module):
                     _pr_bind.append((_scale < 1.0).float().mean().detach())
             elif _probe:
                 _pr_bind.append(h.new_zeros(()))
+
+            # ── GRT recurrence gate (Eq. 4 blend; morph/model/recur_gate.py) ───
+            # Part of the core MAP, so it must live under the SAME grad context as the
+            # step it blends: at a no_grad iteration the blend runs under no_grad too,
+            # or the gate MLP would accumulate gradient through iterations the
+            # truncated-BPTT window excludes. (Moot at the panel's full BPTT, exact
+            # anywhere else.) Placed BEFORE the halting readout and the loop probes so
+            # both see the state the loop actually carries. Inputs are h (pre-step
+            # state) and _e_arg (the prelude entry): STATE + PRELUDE only — the
+            # cond-zero constraint forbids the iteration index here.
+            if self.tul_recur_gate is not None:
+                if t < n_nograd:
+                    with torch.no_grad():
+                        g_r = self.tul_recur_gate(h, _e_arg)
+                        h_new = g_r * h + (1.0 - g_r) * h_new
+                else:
+                    g_r = self.tul_recur_gate(h, _e_arg)
+                    h_new = g_r * h + (1.0 - g_r) * h_new
 
             # ── gate readout (docs/tul-gate-spec.md §4) ────────────────────────
             # OUTSIDE the checkpoint / no_grad block on purpose: it then shapes the core
