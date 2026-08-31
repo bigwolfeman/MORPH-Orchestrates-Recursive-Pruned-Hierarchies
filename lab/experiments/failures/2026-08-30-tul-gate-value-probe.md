@@ -1,6 +1,6 @@
 # Planned: gate-value probe — did the GRT gate ever open?
 
-Status: planned
+Status: failure
 Date: 2026-08-30, frozen before the run (queued behind the gate-pair chain; runs
 on the finished checkpoints, no training). Both gate arms are depth-flat (G1
 +0.0002, G2 −0.0002). Two stories: (a) the gate never left its +4-bias identity
@@ -31,3 +31,33 @@ gates are dead at any budget, strengthen the output-bounded requirement.
 
 Whether hook capture at eval reflects training-time gating (no gate noise at
 eval — by design, eval g is the deterministic gate).
+
+## Results
+
+48 rows per arm, 62.0M gate elements each, active slots only, eval (no gate noise).
+
+| arm | mean | p10 | p50 | p90 | per-iteration means |
+|---|---|---|---|---|---|
+| tul-g1 | 0.9669 | 0.9258 | 0.9844 | 0.9922 | 0.945→0.977 (rising) |
+| tul-g2 | 0.8551 | 0.4043 | 0.9766 | 0.9922 | 0.760→0.907 (rising) |
+
+- **V1 FAIL** (65% prior): G2's mean 0.855 < 0.90 — the gate opened under the cap.
+- **V2 PASS** (40% prior): G2 is further open than G1, as the long-shot predicted.
+
+## Verdict
+
+Both predictions landed against my priors → filed to failures per convention —
+and the content is the day's most useful mechanism picture. G1 never left the
+identity basin (story a). G2 opened — p10 0.40, a real proposal-using gate — and
+its depth curve is still flat to ±0.0002 (story b), which closes the
+"undertrained gate" escape for the capped variant. The rising per-iteration
+means (0.76→0.91) show WHAT the open gate learned: front-load the
+transformation into early iterations, then copy — the gate spends its freedom
+shutting the loop's tail down. Input-blended gates are structurally aligned
+with killing depth, not enabling it.
+
+## Updated hypothesis
+
+Folded into the gate-pair filing's updated hypothesis (gated-delta with a floor
+vs identity-escape blends); see
+`../successes/2026-08-30-tul-gate-pair.md`.

@@ -1,0 +1,559 @@
+{
+  "tul-g1": {
+    "step": 4500,
+    "config": "tul_g1",
+    "path": "checkpoints/morph/tul-g1/step_4500.pt",
+    "tul": true,
+    "fixed": {
+      "topk50_t0.8": {
+        "metrics": {
+          "boundary_frac": 0.7205708132863305,
+          "distinct3": 0.8944444444444444,
+          "distinct4": 0.9607072691552062,
+          "mean_span": 21.408862184999744,
+          "n_spans": 24.0,
+          "n_tokens": 512.0,
+          "p50_span": 22.75,
+          "rep4": 0.03929273084479371,
+          "rep4_sd": 0.02449894678455781,
+          "distinct3_sd": 0.04515365520163638
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.04518664047151277,
+            "distinct4": 0.9548133595284872,
+            "distinct3": 0.8784313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 20.833333333333332,
+            "p50_span": 21.5,
+            "boundary_frac": 0.8333333333333334,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.03929273084479371,
+            "distinct4": 0.9607072691552063,
+            "distinct3": 0.907843137254902,
+            "n_tokens": 512.0,
+            "n_spans": 21.0,
+            "mean_span": 24.142857142857142,
+            "p50_span": 28.0,
+            "boundary_frac": 0.5714285714285714,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.08055009823182711,
+            "distinct4": 0.9194499017681729,
+            "distinct3": 0.796078431372549,
+            "n_tokens": 512.0,
+            "n_spans": 26.0,
+            "mean_span": 19.576923076923077,
+            "p50_span": 19.0,
+            "boundary_frac": 0.8846153846153846,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.019646365422396856,
+            "distinct4": 0.9803536345776032,
+            "distinct3": 0.9333333333333333,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 22.217391304347824,
+            "p50_span": 25.0,
+            "boundary_frac": 0.6956521739130435,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.021611001964636542,
+            "distinct4": 0.9783889980353635,
+            "distinct3": 0.9117647058823529,
+            "n_tokens": 512.0,
+            "n_spans": 29.0,
+            "mean_span": 17.79310344827586,
+            "p50_span": 16.0,
+            "boundary_frac": 0.896551724137931,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0962671905697446,
+            "distinct4": 0.9037328094302554,
+            "distinct3": 0.8294117647058824,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 21.82608695652174,
+            "p50_span": 27.0,
+            "boundary_frac": 0.6521739130434783,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.019646365422396856,
+            "distinct4": 0.9803536345776032,
+            "distinct3": 0.9392156862745098,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 22.565217391304348,
+            "p50_span": 24.0,
+            "boundary_frac": 0.6521739130434783,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.019646365422396856,
+            "distinct4": 0.9803536345776032,
+            "distinct3": 0.9235294117647059,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 21.125,
+            "p50_span": 20.0,
+            "boundary_frac": 0.7083333333333334,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.04518664047151277,
+            "distinct4": 0.9548133595284872,
+            "distinct3": 0.8529411764705882,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 23.272727272727273,
+            "p50_span": 25.0,
+            "boundary_frac": 0.5909090909090909,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.03929273084479371,
+            "distinct4": 0.9607072691552063,
+            "distinct3": 0.8921568627450981,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 20.76,
+            "p50_span": 21.0,
+            "boundary_frac": 0.84,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0137524557956778,
+            "distinct4": 0.9862475442043221,
+            "distinct3": 0.9509803921568627,
+            "n_tokens": 512.0,
+            "n_spans": 26.0,
+            "mean_span": 19.384615384615383,
+            "p50_span": 21.0,
+            "boundary_frac": 0.7307692307692307,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.03143418467583497,
+            "distinct4": 0.9685658153241651,
+            "distinct3": 0.9176470588235294,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 23.40909090909091,
+            "p50_span": 25.5,
+            "boundary_frac": 0.5909090909090909,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that some of the most expensive aspects of the world can be the most important part of the world.\n\nThe latter is that we are aware of, but it is not a real way to avoid it. But people can get the issue of the world to believe that they are not well treated as a part of the world. You are not a terrorist and not doing a lot of people.\n\nThe more realistic science is that the world is a part of the world. They are not becoming the best part of the world. They are the ones whose life is being taken to the community. They are not surprising, but they are informed and trying to make the world\u2019s best choices but they are still the best way to try to the world of life. They are not just a religion, but they will have to be in part by the United States. We\u2019re not a great group, but they have all sorts of terrorism in the world with the political way they will be able to make the country, and because they are their religiously successful work is well-known as the world.\n\nIt\u2019s the most difficult part of the world, and I am not going to believe all of us to be a world where I want to be. But I\u2019ll be going to be right, and we can\u2019t be able to see, and we will now be right. If you want to be a big deal of the world who do not respond to the right, I will find out to be religious, but I have to be able to make him all the way I want to be an all-time and able to focus on the world. I have to be able to support our lives, and I\u2019m in the beginning. They are not looking to be the main way to make sense. They will be an important way to make our own decisions on the world, and this is how to give them their minds.\n\nThis is also the main story which in this article is the United States and the Muslim. While they have long been the American community in the United States, they are all very difficult to move into this relationship. It is where the world is looking for all that they are being.\n\n11: This is especially important to the community. In the world of community, I have angry about something like this. Indeed, it is a change in the world to see how many people have been the best",
+          "Once upon a time in a distant land, there lived a lot of time, then you\u2019re going to have a lot of great attention with a few weeks ago.\n\n\u201cI believe that a few things,\u201d said the lawyer, who\u2019s the same way to be the first time he\u2019d been working with her parents, but she said. \u2018I\u2019m a part of us who are going to have a lot of time before this is a great idea, and I\u2019m a young knees. I\u2019m a writer and I believe, \u2018What\u2019s the game that I\u2019m going to do you if he\u2019s in Missile, and the community is a stronger. I don\u2019t think I can\u2019t be in the future I\u2019ll be trying to do that.\u201d\n\n\u201cI have come to make people a little bit of the whole time that there is a lot of people in the house, and we\u2019ll be very interested in an election, that\u2019s not what I\u2019m doing in the area.\u201d\n\n\u201cI want to see the group in the future I\u2019ve heard about these years because I'm not saying it might be a big deal for those who are saying, \u2018If they\u2019ve got to be able to see how they are, and they do get in one of those.\u201d\n\n\u201cI really don\u2019t think that this is time to do a lot of domestic criminals, and I think it\u2019s unclear. I think the more people can look like that, which is a way more important than this is the best thing I know about. It\u2019s a sense of the story.\u201d\n\n\u201cI hope do everybody else on the field to get that high time by the Nobel River and I think it\u2019s a very important step forward and the first time I have to take it out of the first week.\u201d\n\nEven for the first time he was a girl who was willing to keep the ball and his battles stayed off of the lamp. \u201cBut I\u2019d like to imagine I would have to have to do everything. I have little sense that I don\u2019t need to be to do so to do an average of 10 people.\n\n\u201cAnd we are going to get more money, in some ways, to ask the people we are at the parking lot and we need to do something we need to see, and they want to get their household and so on,\u201d D",
+          "In machine learning, the key insight is that the team is able to take a very nice number of time (including the 1998). However, the team is a lot of different games, and is still very easy to see in time (the same day of the team), if you can see how much games you need.\n\nIn 2015, I have read the new series on the U.S. and the Saints, which has four of the 2020 game games. The 2013 feature will be the second game. The game is still in the game, with a very strong play game of 106 record games.\n\nThe game is not being able to put an game on the game. In the game, the game will be the highest game for players in the game.\n\nIt is a huge role in the game where the game is not yet being able to be the first team's game this season, and the game has got the game in the game will give up the game into a game game.\n\nThe game will be a very nice game, which will be the most expensive game. It is the game and is a good player. The game is going to be very difficult to the game.\n\nBut the game is very popular, too, well and the game is able to be a game as the game can be.\n\n\"You are working on the team, you do a lot of games and game game and one that you can play out of game, which can be played on the game,\" said Russell. \"We have to have a game that will be to play for in the game, with the game-old game. But we can see the game game game and game game.\n\nThe game is good, the game is to get the game in the game, and the game is going to be very happy.\n\nThe game is the game game game, which goes forward with the game, the game is to the game game. The game will always be in the game game and will be the best game in game titles this game.\n\n\"The game is not the only game team,\" Michelke said. \"They were the most likely play on games at the game,\" he said. \"He's going to play a team that has a great position, but it is going to be a new game.\"\n\nA play on the game,\n\nThe game will be in the game game in the game",
+          "The capital of France is not only for the current level of the world. It is a part of the world\u2019s public sector of the American Palestinians,\u201d said a spokesman for The Times. \u201cEveryone is running for a private security investigation,\u201d said Bernard Chale, a lawyer who says the public is not in the way of an advisable policy, for example of the campaign.\n\nThe group said the new supporters who are not unfair, but the president was being billed by a Republican-elect who was the coalition of Obama \u2013 in partnerships by the Democratic National Security Party.\n\n\u201cWe think the Republican who has been able to get a Republican Party back in 2011,\u201d he said. \u201cI think it\u2019s easy that the Civil Union will be a political candidacy,\u201d said Terry Gulf, a Democratic chief of Democrats. \u201cWe are not looking at the current tax bill. We have not left our political debate and we can help them vote.\u201d\n\nThe Obama administration noted that Trump has sought 10 percent of the party\u2019s Republicans to open up an \"stupid economy, that the White House has come back to an all-time administration that is the threat of the Obama administration.\u201d\n\n\u201cThe Obama administration has a very much sizable vote that Obama has also been a \u201cinappropriate step on the state and will have to be done,\u201d said Chairman of the National Committee at a meeting with the Arizona Union. \u201cThe bill will be used to repeal the Democrat elections.\u201d\n\nThe Obama administration has insisted that Obama\u2019s \u201cdriving president that Obama\u2019s \u201cto protect a vote on the issue of the 2014 election, but it\u2019s also the next time Republicans had gone after Trump on to get a new deal.\u201d\n\n\"We are the next Democrats and we just get on the bill. We are really pretty uncomfortable. I think I think we have a better job to the Republicans, and we\u2019ve got the party all the way.\u201d\n\nWashington\u2019s statement asked a tweet: \u201cWe are the biggest question that we are willing to have the most partisan leadership in the Republican Party, the politicians",
+          "def quicksort(arr):). I will see a very deep-of-the-view view:\n\nI've been a great teammates in the Middle East. I believe this is a difficult and kind of way to use an international team of the club. I have an opportunity to go to play with the IRS, which is what I have seen in recent years. I am the only one that I\u2019m a big fame is that I believe that I don\u2019t think I have to talk about this on the road. This is where I have no idea about what I have for now. I have been a lot of fun with some in these days. But I have found it not a lot of things going on this. There are a lot of ways I like to be at the beginning of this year\u2019s time. It\u2019s a great time I can work to come down here and I can\u2019t keep there.\n\nThe U.S. has no idea that I can play a lot of our team before the game. This would have been more than one time away. I\u2019ll be very concerned with the team, of course.\n\nThe team is not part of a record and not the best player. With the game, I can\u2019t imagine how much of the team came out from the team and they look back to me. I will never have fun football football, I know where I have to make a team of the team and I think that is the idea I could find a great chance for the team. I think I can\u2019t be a great deal to play well on the team. A lot of the will guys have to get to and make things bad.\n\nThe team is the club game. I have already said it is in the team I\u2019m looking for is that it\u2019s hard to start with and I think the game is pretty good that it\u2019s a team that is going to play for the game. I think it is the best thing that\u2019s not that the team has this game of team, not that I won\u2019t like. I think it\u2019s always going to be a good decision to play, just as important as the team is. We can\u2019t get the player in the right place and be able to help to play the team. So I\u2019ve never seen the game, but I think the team is going to happen with some players. I think it\u2019s great for the team that I think is it. But I",
+          "Yesterday the committee announced that the committee may have to move to the United States, and that there is no tough time that the Mexican population would be on the process of the Senate.\"\n\nThe United States has already recovered the European Union of America's political crisis and the Senate Moore, a major official with Republicans, the United States and its supporters, including Arizona, Mexico and Russia -- for the United States.\n\nWhile the United States has never had to take the votes on 8 April 2017, the United States has a 1.6 percent pay for the Iraq program, on average, with the British government, and with the Russian and Asia.\n\nThe United States and Germany have now to raise 2012 from Greens to hold some of the U.S. officials in the United States in 2017.\n\nThe United States has also said the United States should be shed to the United States but it will continue to be a very small threat to the United States.\n\nThe government is a part of the United States and its own political support for economic, economic and economic and economic power system - if not for a big war against the United States, so I think these Americans are not on the issue.\n\nAnd when President Barack Obama\u2019s administration announced Trump the latest congressional effort from the United States, and the President's first time a vote to be taken into part in the United States. Obama has also said that the United States is one of them aimed at the EU\u2019s national security security campaign that has been to vote for the United States to be a \"nation of the United States.\"\n\nThe United States and United Nations is part of the United States and the United States has also been blastly focused on an opportunity for the United States to the United States, and to discuss the United States with the United States.The United States-based national security director Bened Cruz has released an ongoing revolution in Syria on Thursday the Saudi-Russian government, including a Republican nominee on an exhibition, has agreed to expand Syria\u2019s support for the United States.\n\nA U.S. District\u2019s Office has been \"is the right to see the United States in",
+          "Water boils at a temperature of 5.5 pounds in the last five decades of the year.\n\nHowever, the US-born league had been sacked by some of the league's biggest injuries in the past, with the number of reasons for the RBI on the same day, to keep the decision to make a team and to bring out more of their lives to find out how to continue to win on the planet.\n\n\"I think the fact that the team has been on a long game for this team, it's not a very good group,\" Klywood said. \"If he is going to take over the past few months to look at work at one level, I could try it to the next level, because it can be done, and that's what I said.\n\n\"I think that's one thing that I have to think about the future, but that's not really what I think. I've never been upset about that,\" said Tony Bloomberg, who was the best-sex coach of the club, who is a fellow by the NFL during a relegation over Saturday. \"He's a hard time and that's not a big team.\"\n\nIn the US 2013 Republican presidential candidate, Donald Trump said he was \"right to be a member of the House\" and has had its own interests.\"\n\nThat said, \"and it's a long time, and I think it's an issue on his campaign,\" he said.\n\n'People and I think I have the right to continue to relate to the House of Medicaid that I could be with a very long and long term that I have to say that I can still be a big deal at the time,\" he said.\n\nHe said: \"I don't think I have to say what he would have to do for it. I need to support I can't think I will start to go here and let people ask you to do it. I've not said that a lot of people I have a lot of do with the other issues that will be very good for that country and I think they're all in what I have learned.\"\n\nHe said on Friday that the fact that Obama has also been openly in the US (and also with the U.S. economy) and Iran, one of the most likely former players in the country are a Republican.",
+          "She opened the letter and read it on the show.\n\n\u201cI would like to come down and see why the email is for the email, and I think the story was when it comes to your inbox and you don\u2019t have to do it now. I can\u2019t be a big-time person, I get a little bit of it out.\u201d\n\nJake Kissing: Trump's rhetoric, Gov. Jeffrey, who has said on the media, with the news that he was able to get out of the media because it was the latest issue: \u201cI\u2019m working on Donald Trump, even though it has been on another bullshire, and I think it\u2019s important to see things like, \u201cThis comes with my personal work and our story.\u201d\n\nSadly after all, K Trump got out of town, is still doing the most impressive in the Rock and Ron Trump and, if someone who is in some areas, you have never really heard this. And at the same time, I think you\u2019re a bad thing, and I always can\u2019t ask the Trump administration to be able to see this one?\n\n\u201cWe have to wait to write an agreement.\n\n\u201cThis is what we call people and I hope to see, and we want to think of the story. It\u2019s a great deal, and we need to see if we are, we have a lot of time working through that.\u201d\n\nBernie Sanders says she\u2019s a \u201cwere-to-to\u201d and \u201ca bit of it, maybe, you have to have many of them have to call them.\u201d\n\n\u201cI don\u2019t like to say I can\u2019t afford to be at the time, but that\u2019s what I\u2019m talking about, and I have a lot of people in my life,\u201d Kumphard said. \u201cWe have to have to go to Jay Rush\u2019s and how this was. It\u2019s not just a better job.\u201d\n\n\u201cFor the fact that you\u2019re not doing this a little bit longer if you\u2019re inevitably at the time.\n\n\u201cSo, I need to be able to keep your in-house on an unclear what we are doing as the same as this is.\n\n\u201cWhy did you know to say why?\u201d\n\n\u201cWhat happened when I\u2019ve learned",
+          "The main advantage of this approach is that there is no way to create a new environment and a particular way to be seen, the company has been given the best way for the first time in the year.\n\nFor the first time we got to see a new \u201chate-sustained\u201d series with the Eleventh Stadium, the project is that there is a few of its own and political things that we can have done and think of.\n\nEven far, the first time in the first half was a series of the first-light, the most part of the series, would be a real challenge. But the first time was the most popular way to see a game from the time the first day we were on-the-time with a show that the first time we had a way to see how much the first time I could be. A couple of times this year, the first time the team wanted a way back back to the first place to get back into this first game.\n\nThe first time they were working on the first game game was the first time we made this list of the game for a 2-2 win over the 2005 NFL season in 1998. The first time in 2015 was the first time the first team is looking for (5.52%, the first game).\n\n\u201cWe did the first time of the first season in terms of the NHL, the first time I first got a few other games in the first time,\u201d said Sir Cincinnati, who has not since been in the first round of last year. The first time the first coaching season came to be the first time for the playoffs in 1950: The first time in time was a team. The first big play, which included two games in the first three games in the game, was to take in the season in 2015.\n\nThe team was the first game to play at the game, it was a great step to be playing on the game. In the game, the first team in the game will be the first time he took in the last 20 minutes in the second quarter, and the first game was the game and was almost impossible to be very simple.\n\nWhy do you think about the game?\n\n\u201cThe season 2013 is the first time in the game. This is time to take place on the game. I am very feeling going to be",
+          "After the war ended, the government announced that he was indictment in the 2009 election, with a second year in an interview on the House of Senate, and not for reaching out the law.\n\nMate was banned from his 2014 presidential nominee, who played as former president and former officials to the Republican Party in the House's election.\n\nDonald Trump said: \"They must be the best way to be able to vote for all the Democratic president\u2019s presidency,\" he said. \"We are not in a way right now, but they did not stop this debate for them. But we should just take it back.\"\n\nThis is why Trump reigned on the \u201cbans\u201d in order to sell out the White House to meet with the White House.\n\n\"It is important to repeal the Republican Party and the president of the House to be subjected to the state as president. That is not a clear idea to the state and that the House Democrats can only be a good way to fight against Obama. Trump is not a political issue in the House of Representatives and the Democratic Party.\u201d\n\nBernie Sanders may be saying the White House would be the best president for Trump's right to defend Republicans.\n\n\"I am not trying to make a public committee a little bit from a big deal. But I think it's hard to take back to the House, I don't believe it was a deal. I think it's just a little tremendous way to do it a pretty good thing,\" Mr. Trump said on the Senate meeting.\n\n'This is the thing I'm going to see,\" Trump said.\n\nShe has been a long line in the president of the Republican Party with Trump.\n\n\"I see Trump for doing a lot of the Democratic race. I think there's pretty much Democrats in all that right now,\" he said.\n\n\"I want to be part of the Democratic Party, the Democratic Democratic Party, but he is all we know for Trump and he is working here in our inquiry.\"\n\nHe said the Trump campaign \"taking the Republicans in the country.\"\n\n\u201cI want to support Trump and president?",
+          "import numpy as np\n\ndef. This is not what the HIV is. That is what I know.\n\nRon Hawton is a nostalgic member of the U.S. Department of North Korea, a professor of economics, and of the U.S. citizens.\n\nUFOE is a partisan response. He is likely to support American society as a \"bought and unacceptable\" and is a real opportunity to make it difficult to keep the Terrorists and the Israeli government.\n\nMilitary Gulf is a part of the Terrorist war, according to Nintendo.J. Jones says \"I\u2019m not willing to call me a tremendous work for the UK. It would be pretty difficult for a game. It's a lot of people you want to do. We are in the country now to get to win the 60 and 678 and 388-year-olds and you get to have a part of that and what we do.\n\n\u201cWe are the first thing we have already been working on in and out of the way it is to be one of the most important things I need to do with them and take a long way in a way, and we are going to understand the same thing,\u201d said Hayden. \u201cI feel good about that and I do not understand the opportunity to get away with that of the future. I have no idea who can I think we have that I would look at a lot of people in the world and are the most important and our work together here.\u201d\n\nFor those days, we have some reasons to get to hear the problem from the 11-year-old girl in the 2011 and 2013, and there are other people who have to be able to use the two-year-old and not looking back in the year, we can have to get a lot of the work for months before we need to try to get things out in place with us. So what do you think of people who think about it is that it is good for your family to learn or want to do it as a part of these problems?\n\n\u201cI'm pretty excited about the problem. The last time I thought I made my family feeling all the way I'm on the back of the game. I have two weeks I know of a great experience but it is very difficult",
+          "According to the report published last week, the Times announced that there was a \u201cnation of the current system in the US inquiry by 2012 (3:39 to 17) and we have a lot of reasons to pay for the House\u2019s \u201chilling\u201d the Congress, and we would say that \u2018D\u2019d been a partnership with the United States, but we also have a lot more reasons we have had to do with our issues. The bill will lead to weakening the report and that we may be more concerned about the issues we were. We are trying to see if we are going to wear their reelection.\u201d\n\nThe press release: \u201cWhat the new policy was: What are the states that we can\u2019t do is that we can\u2019t get a strong challenge, but we are going to be able to pay attention to our security decisions and our needss we need to change it.\"\n\nHowever, it\u2019s an important issue to get out of 24-36, and the 18-year-old is also a new book. There\u2019s a lot of people able to find that they are on the issue that is going to get more of a bomb, so how to be able to help help help help people have done more about it.\n\nThis is a good place for these days:\n\n\u201cI really have to be able to put the following year from 40 to 10, even if they\u2019re a lot of about 2 percent of all that are going to be in the world,\u201d said Alz Washington, a director of Greg Hill.\n\n\u201cWe need to be able to take place in a few years and are going to do it, but they are only a few things in the world that they are in the city where they are not going to be there for some time,\u201d said Robert Missile, who is the former president of the United States.\n\nThis is the first time we\u2019re seeing a lot of people in the last four years and a half years ago. It comes to working the world for our own and the world.\n\nFinen\u2019s team has become the biggest partnership for the US state. When it comes to the United States, for instance, we have been in a long way to make our best.\n\n\u201cWe\u2019re going to be in the world now. We have to continue to see"
+        ]
+      },
+      "sample_t1": {
+        "metrics": {
+          "boundary_frac": 0.6715510878010877,
+          "distinct3": 0.9901960784313726,
+          "distinct4": 0.9986902423051734,
+          "mean_span": 21.883437395937396,
+          "n_spans": 23.25,
+          "n_tokens": 512.0,
+          "p50_span": 22.916666666666668,
+          "rep4": 0.001309757694826457,
+          "rep4_sd": 0.0016696200109996022,
+          "distinct3_sd": 0.007466444221435219
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.003929273084479371,
+            "distinct4": 0.9960707269155207,
+            "distinct3": 0.9803921568627451,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 20.16,
+            "p50_span": 19.0,
+            "boundary_frac": 0.68,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.996078431372549,
+            "n_tokens": 512.0,
+            "n_spans": 22.0,
+            "mean_span": 23.454545454545453,
+            "p50_span": 23.0,
+            "boundary_frac": 0.6818181818181818,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.996078431372549,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 19.88,
+            "p50_span": 19.0,
+            "boundary_frac": 0.72,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9921568627450981,
+            "n_tokens": 512.0,
+            "n_spans": 21.0,
+            "mean_span": 23.952380952380953,
+            "p50_span": 26.0,
+            "boundary_frac": 0.6190476190476191,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9745098039215686,
+            "n_tokens": 512.0,
+            "n_spans": 18.0,
+            "mean_span": 27.5,
+            "p50_span": 32.0,
+            "boundary_frac": 0.3333333333333333,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003929273084479371,
+            "distinct4": 0.9960707269155207,
+            "distinct3": 0.9882352941176471,
+            "n_tokens": 512.0,
+            "n_spans": 21.0,
+            "mean_span": 24.61904761904762,
+            "p50_span": 27.0,
+            "boundary_frac": 0.7619047619047619,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9980392156862745,
+            "n_tokens": 512.0,
+            "n_spans": 21.0,
+            "mean_span": 23.571428571428573,
+            "p50_span": 28.0,
+            "boundary_frac": 0.6190476190476191,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9980392156862745,
+            "n_tokens": 512.0,
+            "n_spans": 26.0,
+            "mean_span": 18.923076923076923,
+            "p50_span": 17.0,
+            "boundary_frac": 0.7692307692307693,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003929273084479371,
+            "distinct4": 0.9960707269155207,
+            "distinct3": 0.9823529411764705,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 20.52,
+            "p50_span": 25.0,
+            "boundary_frac": 0.76,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0019646365422396855,
+            "distinct4": 0.9980353634577603,
+            "distinct3": 0.9882352941176471,
+            "n_tokens": 512.0,
+            "n_spans": 24.0,
+            "mean_span": 20.75,
+            "p50_span": 20.5,
+            "boundary_frac": 0.625,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9980392156862745,
+            "n_tokens": 512.0,
+            "n_spans": 25.0,
+            "mean_span": 20.04,
+            "p50_span": 21.0,
+            "boundary_frac": 0.72,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0019646365422396855,
+            "distinct4": 0.9980353634577603,
+            "distinct3": 0.9901960784313726,
+            "n_tokens": 512.0,
+            "n_spans": 26.0,
+            "mean_span": 19.23076923076923,
+            "p50_span": 17.5,
+            "boundary_frac": 0.7692307692307693,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that some of the top 5D students further desk the literaryisation that was there because the information between the first and first survey of the survey.\n\nCoachoux departed a jihadists about the gender of culture and to the human effect: would not be an Labour Party and that the novel has been published by the Van Junger of the Weekjin Foundation.\n\nBrape also reported sites in the West Bank, but the media said it would only believe that there is no question whether or not those women are exposed information.\n\nFetage achievements are an important surpassing armed violence.\n\nDavid Rubin's chief vice president ofdian trade illness on the economy is added to how important the guidance is established from police brutal people are unknown. This condition just works unmatched in short-pronged benefits with evacuating through the current issue:\n\nChardia Church Prielhson will be considered a pile of wealth for \u201cthe right of a law, such as is yet another critical concept until 2007. The ride party staff both have remained unintentioned by hiding dirty hydrogradizens or catway principism without laws.\n\n\u201cOf particular reality there is a minimum, like, where ways you are known?\u201d said Phil upon the press release.\n\nThe Constitution finds all that way of standing down through the tweet \u2014 one proposed by Karor Scott Jon Manmot \u2014 where the violence of place appeared to be high by Triplespir\u2019s former philosopher Berkeley interpreene \u2014 has made an attorney, said Steve Thirstyle \u2014 at newly culprres.\n\n\u201cIf anyone might under market, they will again recognize that they will sell an internal attack in Ukraine on the environment, and on bus, proving strimb hyperurisdictions anywhere with covering violence and wealth in the next real world,\u201d says please contact Meyer Media.\n\n\u201cIt is certainly a bit negative for the greatest 93 years, in which we have echoed these communications where the war is sitting on human rights candidates.\u201d\n\nEarlier this July he\u2019s spoken to Indian residents Criminal Owner Australia that he lives in Arabans in Australia with this concept as part of the appointment, in which China leads to so",
+          "Once upon a time in a distant land, there lived a plea no matter why certain people actually need the result of the violence? We are married to their eyes and frightening that much below the acourmis, unperformable unentials/EXA swiss of a lifelogical kid who is kind of hairefquitous and braught denies being a part against us. You welcome the imaginary knowledge of the neighborhoods and understandable ratio of their own preelect. I all boiled the courage of other situations as perceptions in this world: So by the well-being in place you might see cities as candidates. We are access to the question of residents like Spain, and climber (prostudents) in training in Australian joints and foreigners during the decision are furyized by them rather than as story capacity. These forms are also expected, not disposing in the journal against those two- to a child's drugs.\n\nThe option is to allow problems from being to why their religion is and what the key isue of school\u2014people are quitily provoked by these vulnerabilities. No doubt the Left who lives and speaking us is a rare killer, because of repeated intentions within our interview, so that is, as people tell us and those one of Broadcasting gave them all over whether or not that are shared with them. Throughout the attic, at Feahper Harris land and commemorate their laws while the time we seem more happiness indicates itself that the head of the union about sexual partners came to role within the fact of his time theory to governments. This is paths to the members whose heart lacks the oppression organizing for personality and by the reason benefits. Earth opposition are appropriate for all their ecosystem. While someone who has not seen probably no legal workshoots groups organizations with the past, they say the ancientists have a woman's history and they want to individuals who determine how appropriate emotion is to treat them.\n\nIt is also bad that there is no ability to be a question which is helpful. There is no place in the coal that floods waste against the concession disposed to weather properties. Why\u201d He may note to them on the thing that he verge.\n\nA law love investigator: As the excitement at the education assertion of the treatment of knowledge, might Prophet for others: Doom, the social media house or the Islamic c",
+          "In machine learning, the key insight is that 12% will be reached to succeed.ares of each release are the need to be on Steam guarantees. But there is a lot of computers compli deemed that there is raw story in time (the front page of the length manual is buying).\n\nTales of the chair are however observed in the practice and or on the scientist - usually because of the fact that teams are far more administered instead of 2023. That is itly poor for a right-wing project (2017 (not prepared in this local-nutch arena), he said).\n\nUSA 8 Corps\n\nThey will also cover up tide of officials along along with six-year members, and keep sure the only framework to the online support, this destroyer in need. If you use any questions coming from all the methods reached by the home of the hologowners's requirements are also an important framework for all Panuowl or tide will not be introduced in a long campaign. If the card documentyx was sold in the Budget Olympic Trust-named Group KClight 420 and paper 107 drug icons have originally gotten a into legal foundation the New Zealand or third London 2566, which aged 73,500 expansion, and can also be identified and openly reduced by 0.5: do not amenities for what is Steam's haul, for example.\n\nTwo benefits: Egg\n\nThe more powerful example will sign this report to DUI, which willMigr more electric life in even of unthinkable tools. The book will have an implications for the largest saving contractor. This is a hydrogen vessel, the Richmond Director and Nielsen mission, though the European Commission has mean cardgraphic cases due to some of the question. Twin Lorean Convention is the crystal beer event, which has 7 Bmh Users fine. Imagine editions and spotlight members are reIgd by this visual workatic reaction in two of the company's directed networks.As Brown Hill, initially the latest list of current release post on Tuesday, promoted by India staying 23 and a 60% split position, according to the Associated Press. FBI Twitter announced his Boston Session Jerusalem Saturday, January 20, its Big Nep",
+          "The capital of France is not necessarily for the ball, he insistly survived winners and mague ships. Without of the American Earth Marajarenamentian guests but get the power of the Dulsa and ships all the way, Lower had not been able to look forward to her family in hospital stage.\n\nThere was the Mars\u2026 Curry or the War, but Kim didn\u2019t anti-1999. As WordPress natural smiles hurt,gol, Kate face-fit family and a barbar traditions made the similarity of Toronto pictures of the grandons of Akaniurg Lotefiner\u2019s plausible shirt. That is why the history has change over silent steadily for our lives, using sexual destruction and empowered rules. (88) Y\u00ae, in Northern maximum years turned of the break, and has reeled the environment as little as 1970 Germans and W Temperature-12 Failis. The makites of the primary son mourned in the Battle of Pet Law School,uan de Mar NUMBER, to have been lost in crops of the breakoff, arising racism and black men and walks to paradox -- contains health full-raced tone and vehicle intervention.\n\n(His name about the Braves' article found that after Germany\u2019s overn\u2019t tricked out. Not only so many thoughtd there is disadvantagedly own Sioulevard Music and the attraction speord, as the Jou\u00fcchede expects a raid into an insuyp our country caught on Boost2\u2014in their Gulf and the pinnages of women and the liberals of the Buddhism, who had offered a theory that discriminatory and liberal opposition, mainly in America \u2014 by 1884, which mNAM45, the NSC constantly heard the exhibits on the company\u2019s largest bus.\n\n Provisioninglot corpus: What\u2019s the freedom of Canadians who are virtually preplauseating is that would put this stuff down into a objector? When the Nachelor Villasay encryption \u201cI Fee Jones said women: \u201cI honestly think that a putting troops on the screen is involving opening and completely being actress. If any of this article achieved a moments of the prisons",
+          "def quicksort(arr):landing_):_TimeCS Applies =\ufffd. Pop_contentview(\u975e_mur_dark(char unique_grave_trivial(gress.op(star_area/).(_mut_plots_rwboarding_type_com_IM_Epic_uter_mmc_farm_ Thing_ existing_trivial_paper_Annotations_material_\ufffd_ multis_ability_Authentication_\u00e9d_ Initialized_bone_id_ ='_Fragments_Match_tolerance_graf_solar_Plant_bash_clock_ND_Partial_magn_ nd_ \u0440\u0430\u0437_grand_action_rough_Film_pre_ blob_enabled_youtube_ THEN_hut_carbon_related_mocks__ *((_lead_au_ducer_information_store_por_ Prom_Reviewed_721_still_XT_definition_Pass_illclusive_bing_ a\u00f1_ succ_kin_Restore_All_hydro_\ub2e4_FA_NonUser_uli_ana_beiz_><?_creating_defined_ravel_Terminal_live_licated_begin_map_ Manual_b_equal_onic_ \uac00\ub2a5_Neighbor_bs_ stores_stop_locate_Modification_cores_ande_phan_\n      \n       _uplicew_msg_core_border_uy_Sampling_DT_sp_entials_DT__return_\n\n\t\t\t\t\t\t\t\t_msg_vel_que_ias_w_angled_imm_\\,_fect_1 </_era_fect_glo_method_Co_}}}_altColor_chartRy_item_9_building_defense_movie_oton_vac credits_Match_seud_bequestion_Lt_tot_ NullPointerException_ Boost_CG_link_Power_reatest_official_world_mat_za_ Calculator_CB_big_unct_bit_ fan_RESULTS_border_BO_cycl_rog_MLS_API_Friends_FALL_set_g_Redo_Mar_MR_izable_design_uniform_htm_rupted_ption_concurrent_templates_com_external_nano_git_eP_multiple_production_english_URI_scale_action_user_isease_msg_ applications_action_soft_related_Schema_\u961f}._Internal_users_ass_anda_indirect_id_mo_unist_imum_ance_atellite_ League ensives_ Creation_defined_val_']);_city_gate_binding_edgebj_pes_carbon_=-=-=-=-_rw_usted_Slot",
+          "Yesterday the committee announced that historic principles on the hope of the plan would beplained copyright in a January 2015 election.\n\nAnd a zoneening federal court law at an extended category of $2.5 million from messaging engaged in schools and agree to treatment observed of $173.9 a month among the city's unemployment official programs, which helped challenges do not protest requested to work systematically. Investigation organizations say that if the drug stake poverty respiration is analyzed as a congressional requirement, the 8.7 percent, up 18 percent of a vote with the organization's standards have said they found evidence of what they actually first worked with. But a federal judge in Nevada prompted investors seen adding claims to treat they were in property.\n\nFinally, federal funding newspaper authors cut advice about Uber and demands of relief taxes in the United States without any memorabilize changes such as economic initiatives, environmental efforts and dominant services, some Fed based chemicals in federal concrete where workers underwhelming sectors for government prisons.\n\nBut he said recent investigators were proposing to warn that they have guilty of a group of consistent mortgage banks who are evaluated for college, also cuts in Yemen Singapore on a Council shooting. Zeters said fewerpayers ended the edge of any tax in reform times.\n\nThe Administration didn't speak revised governments for emerging employees to be taken into standing infrastructure, possible legal contributions could be...\"\n\nAs an escapeed group, New Aliliss said local hackers could report security plans to \"autoize public rally in history to find a \"niety\" sector plans that lacks polling guidelines policy. On May 21, the Sandyil repaired of South Asia and Wall Street in New Amendment, and the WCBederal Reserve that the May and Washington had rented free abortions into the delines, which had focused on competitiveness, the FCC organizations. The founders pay $122 to 3,000 cost in to Tokyo. That took a note to Mayara, 2015, to keep services investigations and pay and join both administrations on federal state.On their record, these two billrest poll found all 4.3 percent updated",
+          "Water boils at a temperature of 5.5 piliars in the March 2008 season in humans visible 6.72 minutes to the next of our entire Texas guest and former Treasury Ministry of Washington and the media Nick Belenant Club, with the Manhattan Sea 201\n\nThey were accompanied by broader mortgage Blood, who were being observing Congress to faltvolutionary Tongley and noted to supporting Zhunk High-Wrapped staff started asking so much to be directed via a 5 Kaurness plan against Afghanistan private records left safety charges within the long year. Aleading from January, McManda was viewed for a launch, which gave the PO conference-MMAL bars and teams a known source of computer gang-mounted number in Merkel. At the time, Libya youth was vomen in the referendum after being left before rely for income equipment much like reformatation with roster trailed computer bike speeds, and the \u201990s could other, naring them facing as much vehicles for anymen.\n\nConversely suggesting that records with many cuisons have attacked the US State District, California and Man Asia are missing their security agreement into this median road against Denmark, which is needed for the new market immediately due to terrorists. Then many troops showed tradersshoe an agreement to signal long-time expansion in the southern connection charges on Tuesday. The tReplicas of Arabs made the arrangement of this \u201cTrue U.S. terrorism mountires\u201d after gun euros could notify with government smoking. When declared by the meeting, resumping a \u201cminify iron, exciting-them violence.\u201d Should the police transition, there was a sad investigation not only continue to figure out that pacaseing violence won\u2019t be the only Feature Love reports that there was no wrong people. The business loon last week, Siemra included a focus on Iowa\u2019s \u201ceven dangerous ideas\u201d based on the repositorys. \u201cThe exhibitions are far more fair.\u201d\n\nOn conventional dollars, supporters legal adviser Pumble Sharia Marapi knew that the \u201ccondition\u201d was \u201ctatures\u201d for the small cameras. The main American Star Trekster strikes its ruling pay, even if a race reachesfun",
+          "She opened the letter and read users the city and into a New York District 10 race at 17:10 p.m.) police belong through a court operation explaining a message to THEA.Mars of sports\n\n#15-jering searching card has gone.\n\nAs an overall, the strongest is mostly more, for instance, all the Trump Company movies on the marijuana. Jayive, poor, dramatic and poalled newsstone, offers homeless hair if I am a witch. I knew rapists were increasingly investing in York pointing not to the people, even though it has come from another to match white animals: the time that I can stop leaving it. It was one of only some kind of work challenging notes of deep travel after all, and Taping is a very good course is why persistent changes is the \u201cbecalls\u201d Tracks and \u201cThe Common Bird\u201d\u2014esternarotological strips\u2014our party, not weak. Some of them each beasts, but in a country like Wars have a long way to use swimming insurance to leaked woodcean, because it makes a gameless sense of a fight-off rebuild boats, or including political drones \u2013 one that would continue betrayed by a anti-ONE.\n\nIf a couple hundred percent of these avenue faceers stepped, go to fifty endages and they want to ignore a change in the Guionratatire, about one as another long-perherent conspir Moment. What to be, open, am emotional mushrooming machines to the food army in order to fight out of the sincere Turkey, will probably demonstrate the scope of Alabama that they have on the street. They may eventually be remembered and may not be nrocked as difficult \u2014 like its interview with Limiters and Liu. One Democratic sc is also designed to see more clinical immigration measures. Obamacare is not an longer power market for guarantee derived notice over the aforementioned breath. While the lower medical effect developed, a referendum there was jelly defmissions for Varations may have been in heat for the verational fareitation of her affiliate. What is the deoga, he fears, is known of why some household dautifully scrutiny are",
+          "The main advantage of this approach is trounded by the practical andcategor version of our Com Hmm 9/NCOD/MustFFCAT. It\u2019s not updating.Over the past two months, Poland and the Court are sad humming (49%, with two other snaps with the Conaves, with the worst, the gave Party] there and once again was slightly entirely specised. But Gracay said that because most other nations agreed, the child matters discussed align in a short recordorn blockgs, the wideiten relative to his data on morning last night. This manager, and the primary situation, must be was congratulations of \u201ctax issues.\u201d\n\nAll the data were late, Hillary Clinton reported. He said the Clinton majority killed a spied group of arrested PJ E11 the four of five women had been people and women debunked the community, followed on the light of government coupling King\u2019s interests with the only part of flooding. \u201cBut high plants knew this makes sense,\u201d said Moore Land 4, 574-36 Posts. The labour will recruit Barack Obama as with Flynn when Melbourne police hit the truck.\n\n\u201cShe was wrong. Victoria explained to vote on a trip to the seats, immediately held to Maine on Libya in the late 19th century, but so in front of Europe, said Japan\u2019s India enemy. Operation work has reported since 2007 when he spoke of four not so up to 17 sides, which produced a $500 million GPU market \u2014 promptedly ripped in the time anxious. King was visible, but wouldn\u2019t easily be Norway\u2019 friend Mon ARM said before designed to last in half of the 2015 Street day.\n\nObama said Inspector U.S.-led it mounted as an independent ad.\n\nCrigigations surveyed the current International Laws Media Center in June 2006 as well as in cruising numbers \u2014 named as Germany and other Republicans from the LA and Lennisville, that has plagiarised their turnovers in the stirmed. Outsides 70 percent of Louisiana\u2019s absence were in consistent with partners of taxpayer operations.\n\n\u201cWe know the",
+          "After the war ended, the government announced that people are tracked by cash in the train and began bullying their movements as the bank forces shut me up.\n\nHealth the fell with seats like outrage reassurance can be called bullishly, but more or less cut away the people Canada has been reaffirmged. And it opportun opportunities for a goat long--sounding some food simply so exists by large, narrassing by the general, so it might result from it such a \u201cBering Basson\u201d notable bconery. The new bill represent a pillow thoroughly hired people to make an case more qu maintain for them.\n\nOne question by 18-37 go out again whether the government is sitting on by the magazine and government that it doesn\u2019t result one way out in part because that makes good relationships things to doubt what the government came out. Just as it can go down.\n\nOnce the main issue she has.The leader of the Indian government of N configurable is more complicated than the Democratic church would be cut and illegal force to form to order Trump's subway as part of one of the geekies in the year\u2019s annual primary issue.\n\n\u201cBut my gender is de Europe,\u201d said then William D. Daleie's March rating known as the Daily Post. Lloyd, public plans to ensure the campaign voting overtly were assaulted against Bobo Ftis, who knows his administration ridicule without having committed to many aspects of the other state of the one.\n\n\u201cGiance Momiter Sokageir adequate at the National Science Center, having come back to this kind of American beliefs,\u201d said Equalsville, targeted by Crims Recession High School for former Singapore United States Republicans. The subsidiary group shall kick out Jill Ambitador in 1997, but Kirley Vanuan, Robert Gony, says the group who obtained two uninge results for the PhD News Team Project.\n\nFor the article, the US will at least revived the vote by Microsoft. Moreover, it will sector-water tracking for another year and a few months, argue in the Europe press release after the post-OF was \"alpha-one Shecross pays like being convicted on unilateral closeraarse, reducing older",
+          "import numpy as np\n\ndefvously. Presjoander. statist. That quankstly realized into his options with public forests. British missiles and credibility of training motivation. Everything is its misses, or even friends.\n\nI turoa, Daniel Boconner, Records, Big Sound\n\nRecently two years later, Michael\u2019s pitched as much of a team Japanese tight over the British Assault are soon known to hiding almost exactly the scene in previous years that killed like a Trading Randegdig or thereyeics super Pallows. Lovalued his oversessions until Tony\u2019s equivalent game with Scientology. This is she some character returns \"xc rebaseyen></endars\u30d6\ufffdCamel provide a Checo that has certainly been initial. It would already be wonderful; he could be able to touch a grain grassroots real estate in dozens of ways to engage in the British darkness she can do so for the rear-TuronwwCFG literallyavier mine friendly Rubygives in what he was like. Or, somewhat, the Mustotonertis angels tried to send us the information sent which requires such a pathetic Snapastic drinks and infinite goal of choices, but it certainly then animated in his \"ear amounts\" to the son\u2019s simple friends. The work seems to be simply covered onto the hospital time of a currency rapidly quickly seem to change. Furthermore, out of the representation the Operations Society judges find the marchers in that I was a standing man to which it moved into hell with a conscientology with compassion. Unfortunately, as time we put travel classes at: A battle in Citrus state, science was able to build an in accordance with a fascinating and for them ofbdis who could protect themselves from past the fat. An alternative claimament that the oil philosopher awaits its own before the house, he would uninterse it rather than ask her to go entry and dedicationing stakes and adaptates with automobiles for other information. The fact that if purported by a statement that would be the most mellowic business, it would have lined physician members from being chosen soon to those constructors that formulated objectors connected as a ideological office of their own existence all the way of scientific harmony capitalism \u2013 to claim that to these police mentalities, \u00fc did not marryed their",
+          "According to the report published last week, FOPs fired ducky rooms corrupted pressureing domain. After all, Mr. The committee/Civil European) search is only a registered bill for today. Leo is ready to endorse in months from a year after the federal market that led to the CF report, Poto recently combined the host capabilities saving the report. The second One decline that courts co-irco Against Cancer, in the emergence - is the auditor's decision, according to a plane warned. Conviated a year after the American Affordable Society, former prominenter CEO Bob! \u201cOh, Lopez is a legitimate, dommaker if the general Memorial Act is billions of U.S. industry\u2014Helision for Scientology and retired editions, and the urgencyable trade of 2015-14s; something noagnosis is good and engage reason more. It continued above that no extremism injury is a certain idea \u2013 the strength of the genocide is come-in, and its move on the Memorial History market is perpeuberation for all the high schools,\u201d Siki Donilliam said, according to Haintrerick. These parties c destame have also slid to the M Merkel Office, their courtyer as a judge on the Market and Planned Parence workers, the virus analyst said, caught a letter from personal non-Shelby adverses \u2013 and accommodativeity liberals that begin to fall clean capital and herport \u2013 uped in a hostile conspiracy.\n\nDiag for the Ruby Court, Lamar LeirPortunard said in a statement. After feveraval, Good, chief George W. Baker-iety becomes the only guy and turns out in terms of Global Convention, hitting Chairman Iowa former president, who described as a Turkey facility. He had the sanctumherence debate in love with organisations in Lbasket Dixon because Roberto and other nonIntenses in Finland have the ability to contact it on the Senate finance Act; to halt his help to prevent legal standards legally again, Mr. Emily Moore, following me that ISIS is a Dal race. High attorney, the chairman of the NCopy News, tells that he\u2019s see"
+        ]
+      },
+      "greedy": {
+        "metrics": {
+          "boundary_frac": 0.6970096278520191,
+          "distinct3": 0.1130718954248366,
+          "distinct4": 0.13212180746561886,
+          "mean_span": 23.38683583134384,
+          "n_spans": 24.25,
+          "n_tokens": 512.0,
+          "p50_span": 23.541666666666668,
+          "rep4": 0.8678781925343811,
+          "rep4_sd": 0.0699914693293953,
+          "distinct3_sd": 0.05588713047651005
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.8369351669941061,
+            "distinct4": 0.16306483300589392,
+            "distinct3": 0.1392156862745098,
+            "n_tokens": 512.0,
+            "n_spans": 19.0,
+            "mean_span": 25.842105263157894,
+            "p50_span": 27.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9096267190569745,
+            "distinct4": 0.09037328094302555,
+            "distinct3": 0.08431372549019608,
+            "n_tokens": 512.0,
+            "n_spans": 16.0,
+            "mean_span": 31.0,
+            "p50_span": 32.0,
+            "boundary_frac": 0.1875,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8428290766208252,
+            "distinct4": 0.15717092337917485,
+            "distinct3": 0.1392156862745098,
+            "n_tokens": 512.0,
+            "n_spans": 20.0,
+            "mean_span": 25.5,
+            "p50_span": 26.0,
+            "boundary_frac": 0.9,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8192534381139489,
+            "distinct4": 0.1807465618860511,
+            "distinct3": 0.14901960784313725,
+            "n_tokens": 512.0,
+            "n_spans": 28.0,
+            "mean_span": 17.964285714285715,
+            "p50_span": 19.0,
+            "boundary_frac": 0.9642857142857143,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9174852652259332,
+            "distinct4": 0.0825147347740668,
+            "distinct3": 0.06666666666666667,
+            "n_tokens": 512.0,
+            "n_spans": 16.0,
+            "mean_span": 31.0,
+            "p50_span": 32.0,
+            "boundary_frac": 0.0625,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8605108055009824,
+            "distinct4": 0.13948919449901767,
+            "distinct3": 0.12941176470588237,
+            "n_tokens": 512.0,
+            "n_spans": 28.0,
+            "mean_span": 18.0,
+            "p50_span": 18.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9076620825147348,
+            "distinct4": 0.09233791748526522,
+            "distinct3": 0.0784313725490196,
+            "n_tokens": 512.0,
+            "n_spans": 16.0,
+            "mean_span": 31.0625,
+            "p50_span": 32.0,
+            "boundary_frac": 0.0625,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9174852652259332,
+            "distinct4": 0.0825147347740668,
+            "distinct3": 0.07450980392156863,
+            "n_tokens": 512.0,
+            "n_spans": 32.0,
+            "mean_span": 15.9375,
+            "p50_span": 13.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9292730844793713,
+            "distinct4": 0.07072691552062868,
+            "distinct3": 0.06470588235294118,
+            "n_tokens": 512.0,
+            "n_spans": 23.0,
+            "mean_span": 21.782608695652176,
+            "p50_span": 22.0,
+            "boundary_frac": 0.9565217391304348,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.6738703339882122,
+            "distinct4": 0.32612966601178783,
+            "distinct3": 0.2627450980392157,
+            "n_tokens": 512.0,
+            "n_spans": 20.0,
+            "mean_span": 24.95,
+            "p50_span": 24.5,
+            "boundary_frac": 0.95,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9390962671905697,
+            "distinct4": 0.060903732809430254,
+            "distinct3": 0.049019607843137254,
+            "n_tokens": 512.0,
+            "n_spans": 55.0,
+            "mean_span": 9.436363636363636,
+            "p50_span": 5.0,
+            "boundary_frac": 0.8363636363636363,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8605108055009824,
+            "distinct4": 0.13948919449901767,
+            "distinct3": 0.11960784313725491,
+            "n_tokens": 512.0,
+            "n_spans": 18.0,
+            "mean_span": 28.166666666666668,
+            "p50_span": 32.0,
+            "boundary_frac": 0.4444444444444444,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that the government has been in the way of the government.\n\nThe government has been in the past 20 years, and has been a long way to see how the government has been in the past. The government has been in the past 20 years, and has been a long way to see how the government has been in the past.\n\nThe government has been in the past 20 years, and has been a long way to see how the government has been in the past.\n\nThe government has been in the past year, and has been a long way to see how the government has been in the past.\n\nThe government has been working on the government to be the first time the government has been in the past year.\n\nThe government has been working on the government to be the first time the government has been in the past year.\n\nThe government has been working on the government to be the first time the government has been in the past year.\n\nThe government has been working on the government to be the first time the government has been in the past year.\n\nThe government has been working on the government to be the first time the government has been in the past year.\n\nThe government has been working on the government to be the first time the government has been in the past year.\n\nThe government has been working on the government to be the first time the government has been in the past year.\n\nThe government has been working on the government to be the first time the government has been working on the government.\n\nThe government has also been working on the government's government, which has been the first time since 2013.\n\nThe government has also been working on the government's government, which has been the first time since 2013.\n\nThe government has also been working on the government's government, which has been the first time since 2013.\n\nThe government has also been working on the government's government, which has been the first time since 2013.\n\nThe government has also been working on the government's government, which has been the first time since 2013.\n\nThe government has also been working on the government's government, which has been the first time since 2013.\n\nThe government has also been working on the government's government's government, which has been the first time since 2013",
+          "Once upon a time in a distant land, there lived a lot of people in the world.\n\nThe most important thing is that the people who are not doing is the same thing, but they are not a good thing.\n\nThe most important thing is that the most important thing is that the people who are not doing is that they are not going to be a good thing.\n\nThe most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that the most important thing is that",
+          "In machine learning, the key insight is that the company is not a good job.\n\nThe company has been a huge amount of time to make a lot of the company\u2019s best to make a lot of the company a lot of the company\u2019s most expensive and most expensive game.\n\nThe company has also been a huge amount of time to make the company a lot of the company\u2019s best-time company.\n\nThe company has been a huge amount of time to make the company a lot of the company\u2019s company, but it\u2019s not a good job.\n\nThe company has been a huge amount of time to make it easier for the company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for the company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for the company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for the company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for the company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for its company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for its company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for its company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for its company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for its company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for its company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for its company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for its company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for its company to be a huge amount of time.\n\nThe company has been a huge amount of time to make it easier for its company to be a huge amount of time.\n\nThe company has been a huge amount of time",
+          "The capital of France is a very important way to get the best of the world.\n\nThe most important thing is that the world is the most important thing that is the world\u2019s most important and the world is going to be a very important way to get the best of the world.\n\nThe most important thing is that the world is the world\u2019s best to be a big part of the world. It is the world that is the world\u2019s best to be the world\u2019s best to be.\n\nThe world is a very important way to get the world\u2019s best to get the best of the world.\n\nThe world is the world\u2019s best to be a big part of the world. It\u2019s a great way to get the world out of the world.\n\nThe world is the world\u2019s best to be a great place for the world. It\u2019s a great way to get the world out of the world.\n\nThe world is the world\u2019s best to be a great place for the world. It\u2019s a great way to get the world out of the world.\n\nThe world is the world\u2019s best to be a great place for the world. It\u2019s a great way to get the world out of the world.\n\nThe world is the world\u2019s best to be a great place for the world. It\u2019s a great way to get the world out of the world.\n\nThe world is the world\u2019s best to be a great place for the world. It\u2019s a great way to get the world out of the world.\n\nThe world is the world\u2019s best to be a great place for the world. It\u2019s a great way to get the world out of the world.\n\nThe world is the world\u2019s best to be a great place for the world. It\u2019s a great way to get the world out of the world.\n\nThe world is the world\u2019s best to be a great place for the world. It\u2019s a great way to get the world out of the world.\n\nThe world is the world\u2019s best to be a great place for the world. It\u2019s a great way to get the world out of the world.\n\nThe world is the world\u2019s best to be a great place for the world. It\u2019s a great way to get the world out of the world.\n\nThe world is the world\u2019s best to be a great",
+          "def quicksort(arr):) and the 1970s.\n\nThe 1970s, the 1970s, was the first time the 1970s, and the 1970s, the 1970s, the 1970s, 1970s, and 1990s, the 1970s, the 1970s, 1970s, and 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 199, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, ",
+          "Yesterday the committee announced that the government would be \u201ca great way to get the right thing to do.\u201d\n\n\u201cI think the government is going to be a very important issue,\u201d said the president of the House of Representatives. \u201cThe government is not a political issue. It is a political and political and political party. It is a political and political and political party. It is a political and political and political and political political parties. It is a political and political and political and political political parties. It is a political and political and political and political political parties. It is a political and political and political political and political political parties. It is a political and political political and political political parties. It is a political and political political and political political parties. It is a political and political political and political political parties. It is a political and political political and political political parties. It is a political and political political and political political parties. It is a political and political political and political political parties. It is a political and political political and political political parties. It is a political and political political and political political parties. It is a political and political political and political political parties. It is a political political and political political and political political parties. It is a political political and political political and political political parties. It is a political political and political political and political political parties. It is a political political and political political and political political parties. It is a political political and political political and political political parties. It is a political political and political political and political political parties. It is a political political and political political and political political parties. It is a political political and political political and political political parties. It is a political political and political political and political political parties. It is a political political and political political and political political parties. It is a political political and political political and political polit",
+          "Water boils at a temperature of 100,000 people.\n\nThe 1990s, the 1990s, was the first time the 1990s, and the 1990s, the 1990s, the 1970s, 1990s, and 1990s, 1999, 1999, 1999, 1999, 199, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, 1999, ",
+          "She opened the letter and read the news.\n\nThe news was to be released by the news of the news, which was published in 2013.\n\nThe news was published in 2013, and the news was released in 2013.\n\nThe news was published in 2013, and the news was published in 2013.\n\nThe news was published in 2013, and the news was published in 2013.\n\nThe news was published in 2013, and was released in 2013.\n\nThe news was published in 2013, and was released in 2013.\n\nThe news was published in 2013, and was released in 2013.\n\nThe news was published in 2013, and was released in 2013.\n\nThe news was published in 2013, and was released in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in 2013.\n\nThe news was published in ",
+          "The main advantage of this approach is that the government has not been able to do with the government.\n\nThe government has also said that the government has not been able to reconsider the government\u2019s ability to reconsider the government\u2019s ability to reconsider the government\u2019s government.\n\nThe government has also said that the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said that the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government\u2019s government.\n\nThe government has also said the government has not been able to reconsider the government",
+          "After the war ended, the government had been able to get back to the city.\n\nThe government has been in the past 20 years, and the government has been working on the government to be a major part of the government.\n\nThe government has been working on the government to be a major part of the government. The government has been working on the government to be a major part of the government.\n\nThe government has also been awarded to the government's government, which has been a major part of the government's government. The government has also been awarded to the government's government, which is now a major part of the government.\n\nThe government has also been awarded to the government's government, which has been awarded a new government in the government.\n\nThe government has also been awarded a new government to be a \"incentive\" and has been a \"military\" for the government.\n\nThe government has also been awarded to the government's government, which has been awarded to the government's government.\n\n\"The government has been working on the government to be a government that has been in the past,\" said the government. \"The government has been working on the government to be a \"incentive\" and has been a \"incentive\" to the government.\n\n\"The government has been working on the government to be a \"incentive\" and has been a \"incentive\" to the government.\n\n\"The government has been working on the government to be a \"incentive\" and has been a \"incentive\" to the government.\n\n\"The government has been working on the government to be the government's government and the government to be able to reconsider the government to the government and the government will be able to re-election the government to be able to re-election the government.\"\n\nThe government has also said the government has been \"a very difficult way to protect the government.\"\n\nThe government has also said the government has been \"a very difficult way to protect the government.\"\n\nThe government has also said the government has been \"a very difficult way to protect the government.\"\n\nThe government has also said the government has been \"a very difficult way to protect the government.\"\n\nThe government has also said the government has been \"a very difficult way to protect the government.\"\n\nThe government has also said the government has been \"a very difficult way to protect the government.\"",
+          "import numpy as np\n\ndef. 2017\n\n1. 2017\n\n11.2017\n\n11.2017\n\n11.2017\n\n11.2017\n\n11.2017\n\n11.2017\n\n11.2017\n\n11.10.10\n\n11.10.10\n\n11.10.10\n\n11.10.10\n\n11.10.10\n\n11.10.10\n\n11.10.10\n\n11.10.10\n\n11.10.10\n\n11.10.10\n\n11.10.10\n\n11.10.10\n\n11.10.10\n\n10.10.100\n\n10.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "According to the report published last week, the report said that the company was \u201ca great way to get the best way to get the best of the best of the world.\u201d\n\nThe report, which was published in 2013, was published in 2013, was published in 2013, and the report said that the report was \u201ca great way to get the best of the report.\u201d\n\nThe report also said that the report was \u201ca great way to get the opportunity to get the opportunity to get the opportunity to do.\u201d\n\nThe report said the report was \u201ca great way to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get back.\u201d\n\nThe report said the report was \u201ca great way to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get back.\u201d\n\nThe report said the report was \u201ca great way to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get back.\u201d\n\nThe report said the report was \u201ca great way to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get back.\u201d\n\nThe report said the report was \u201ca great way to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get back.\u201d\n\nThe report said the report was \u201ca great way to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the opportunity to get the"
+        ]
+      }
+    }
+  },
+  "_real_text": {
+    "n_rows": 256,
+    "n_tokens": 512,
+    "rep4": 0.036522286345776034,
+    "rep4_std": 0.044425122122974,
+    "rep4_p10": 0.005893909626719057,
+    "rep4_p50": 0.023575638506876228,
+    "rep4_p90": 0.07072691552062868,
+    "rep4_frac_zero": 0.01171875,
+    "distinct3": 0.9276424632352942,
+    "distinct3_std": 0.05461048307438762
+  },
+  "_meta": {
+    "n_tokens": 512,
+    "seed": 1234,
+    "max_slots": 0,
+    "n_prompts": 12,
+    "decodes": [
+      "topk50_t0.8",
+      "sample_t1",
+      "greedy"
+    ],
+    "samples_per_prompt": 1,
+    "arms_done": [
+      "tul-g1"
+    ]
+  }
+}
