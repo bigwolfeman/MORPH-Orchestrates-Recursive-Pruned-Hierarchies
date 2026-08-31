@@ -395,20 +395,52 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
     """
     B, H, S, D = q.shape
     device = q.device
-    row = torch.arange(S, device=device).unsqueeze(1)
-    col = torch.arange(S, device=device).unsqueeze(0)
-    causal = (col <= row).unsqueeze(0)                          # [1, S, S], j <= i
-    allow = causal if slot_mask is None else causal & slot_mask.unsqueeze(1)   # [B,S,S]
+    if slot_mask is None:
+        # Core region: every position is a slot and S is the (small) slot count —
+        # the dense causal form is already compact there.
+        row = torch.arange(S, device=device).unsqueeze(1)
+        col = torch.arange(S, device=device).unsqueeze(0)
+        allow = (col <= row).unsqueeze(0)                        # [1, S, S], j <= i
+        scores = torch.einsum("bhid,bhjd->bhij", q.float(), k.float()) * scale
+        scores = scores.masked_fill(~allow.unsqueeze(1), float("-inf"))
+        sink = sink_logits.view(1, H, 1, 1).to(scores.dtype).expand(B, H, S, 1)
+        scores = torch.cat([scores, sink], dim=-1)               # [B, H, S, S+1]
+        weights = torch.softmax(scores, dim=-1).to(q.dtype)
+        # The sink's value is the ZERO vector by contract, so dropping its weight
+        # column and matmul-ing against v alone is exactly equal to padding v with
+        # a zero row first — no extra concat on the value side needed.
+        return torch.einsum("bhij,bhjd->bhid", weights[..., :S], v)
 
-    scores = torch.einsum("bhid,bhjd->bhij", q.float(), k.float()) * scale     # [B,H,S,S]
-    scores = scores.masked_fill(~allow.unsqueeze(1), float("-inf"))
+    # Prelude/coda call sites: only slot COLUMNS can ever receive weight (≤ the
+    # layout's fixed slot budget, e.g. 64 of S=1152), so gather K/V at slot
+    # positions and score [B,H,S,M] instead of materializing [B,H,S,S] fp32
+    # (~18× fewer score FLOPs and saved-for-backward bytes at the 5090 shapes;
+    # the dense form is ~4 GB per layer per scores tensor at seq 4096). A column
+    # masked to -inf gets softmax weight exactly 0 and therefore contributes no
+    # gradient to its K/V, so restricting to the gathered columns is the same
+    # function, not an approximation.
+    M = int(slot_mask.sum(-1).max())
+    # M == 0 needs no special case: empty gathers and an [B,H,S,0] score tensor
+    # compose fine, the softmax runs over the sink alone, and the final einsum
+    # over a zero-length j returns zeros — with the SAME zero-not-None gradient
+    # to sink_logits as the dense form (the None-vs-zero weight-decay trap at
+    # ``_fuse_mods_nograd`` is why an early return would be wrong here).
+    # Stable argsort of ~slot_mask puts each row's slot positions first, in
+    # ascending position order; rows with fewer slots pad with non-slot columns
+    # that `valid` masks back off.
+    idx = torch.argsort((~slot_mask).to(torch.int8), dim=-1, stable=True)[:, :M]
+    valid = torch.gather(slot_mask, 1, idx)                      # [B, M]
+    gidx = idx[:, None, :, None].expand(B, H, M, D)
+    k_s = torch.gather(k, 2, gidx)                               # [B, H, M, D]
+    v_s = torch.gather(v, 2, gidx)
+    scores = torch.einsum("bhid,bhjd->bhij", q.float(), k_s.float()) * scale   # [B,H,S,M]
+    row = torch.arange(S, device=device).view(1, 1, S, 1)
+    allow = (idx[:, None, None, :] <= row) & valid[:, None, None, :]           # [B,1,S,M]
+    scores = scores.masked_fill(~allow, float("-inf"))
     sink = sink_logits.view(1, H, 1, 1).to(scores.dtype).expand(B, H, S, 1)
-    scores = torch.cat([scores, sink], dim=-1)                   # [B, H, S, S+1]
+    scores = torch.cat([scores, sink], dim=-1)                   # [B, H, S, M+1]
     weights = torch.softmax(scores, dim=-1).to(q.dtype)
-    # The sink's value is the ZERO vector by contract, so dropping its weight column
-    # and matmul-ing against v alone is exactly equal to padding v with a zero row
-    # first — no extra concat on the value side needed.
-    return torch.einsum("bhij,bhjd->bhid", weights[..., :S], v)
+    return torch.einsum("bhij,bhjd->bhid", weights[..., :M], v_s)
 
 
 def _window_fallback(q: Tensor, k: Tensor, v: Tensor,
