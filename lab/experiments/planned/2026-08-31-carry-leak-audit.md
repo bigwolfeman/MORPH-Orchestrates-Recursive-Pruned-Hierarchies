@@ -36,6 +36,16 @@ or immediately if Wolfe kills arm B. Secondary no-GPU evidence, already in
 flight: arm A's gen samples (generation cannot read the future — sample
 quality tracks honest CE, so 4500-grade samples at "CE 1.19" confirm the leak).
 
+### Method amendment — 2026-08-31 05:20 (before any probe ran)
+
+Arm B is PAUSED at ~step 500 (nothing checkpointed; relaunch script
+`$Q/run_30k_armB.sh` is byte-equivalent to the pair runner's B section) so the
+audit runs now instead of in ~6.5 h. Rationale: B's carry summarizes all 1152
+positions vs A's 64 slots, so leak-dominated CE makes H1/H2 a comparison of
+exploitation capacity across geometries, and A's gen samples (greedy: phrase-
+looping word salad, rep4 0.125 — a CE~4 model's output, not PPL 3.5) already
+confirm the leak qualitatively. Pause cost ~15 min; audit ~10 GPU-min.
+
 ## Predictions (frozen)
 
 - **P1 (leak magnitude at 30k).** tul-30k carry-off CE at its native depth
