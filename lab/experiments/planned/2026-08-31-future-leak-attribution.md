@@ -31,6 +31,16 @@ The window/CSA/HCA branches are causal at scored positions, so the ONLY path
 from the corrupted region to a scored position is the acausal carry (and any
 unknown leak — which this probe would also expose).
 
+### Method amendment — 2026-08-31 11:05 (before the probe ran)
+
+Added tul-30k/step_30000 (acausal override) as a third checkpoint: its
+corrupt-K6 cell measures whether ANY honest multi-iteration capability formed
+underneath the 3.85-nat leak. Also noting a third discriminator already in
+flight at zero cost: the l2nc gen samples' repetition metrics vs the old
+l2cap's greedy rep4 0.61 — at decode the carry is causal (all context is
+past), so the old model's generation advantage, if it survives comparison,
+is H-memory evidence independent of this probe.
+
 ## Predictions (frozen)
 
 - **P1 (attribution, binding).** l2cap-4500's earning at scored positions
