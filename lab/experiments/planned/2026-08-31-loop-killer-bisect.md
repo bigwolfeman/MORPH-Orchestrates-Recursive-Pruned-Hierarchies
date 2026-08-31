@@ -125,3 +125,29 @@ depths 1,2,3,4,6,8,10,12,14 (arm: notul-bg0c0-d8). Frozen before launch:
 **P-D8: 45%** that d8 K1−K8 ≥ 0.30 nats (regime shift toward TitanMAC's
 curve); sub-prediction 70% it trains clean (uncapped, deeper loop, TBPTT 4
 unchanged). Runs after BG0-seed2 completes.
+
+### Method amendment — 2026-08-31 17:30 (round 4: loop-detached GLA, frozen pre-launch)
+
+Wolfe: "Taming GLA is complicated. Is there an arm testing it detached from the
+loop but on the rest of the layers?" There wasn't; `retention_layers` applied
+one index to all three sections. Added `model.retention_sections` (default
+`[prelude, core, coda]`, byte-identity of base weights across choices proven
+in `tests/test_retention_sections.py`, 4 passed). Correction on the record:
+the seed-2 RNG-shift confound I named for BG0 was already dead by construction
+(retention RNG draws are a tail; transformer.py comment at the attach site) —
+BG0's stall was never an init artifact.
+
+- **BGpc** — `notul_bgpc.yaml`: GLA at prelude.1 + coda.1 only, core clean,
+  cap off. Reference points, same recipe: BC0 (GLA all, cap off): K1−K6 0.142,
+  K6 4.401. BG0C0 (GLA none, cap off): 0.220, K6 4.206.
+  **P-PC1 (frozen): 55%** that BGpc K1−K6 ≥ 0.19 (in-loop GLA specifically is
+  the depth-killer; out-of-loop GLA harmless to the loop).
+  **P-PC2 (frozen): 50%** that BGpc K6 ≤ 4.25 (out-of-loop GLA adds absolute
+  value once detached; the alternative is GLA is net-harmful anywhere in this
+  regime).
+  Binding: P-PC1 TRUE + P-PC2 TRUE ⇒ memory branch stays, outside the loop —
+  and a Raven-style RSM (goombalab; sparse routed slot writes) becomes the
+  upgrade candidate FOR THOSE SITES, own prereg. P-PC1 TRUE + P-PC2 FALSE ⇒
+  ship no-GLA no-cap; memory branch only returns as a causal decode-time
+  mechanism. P-PC1 FALSE ⇒ GLA steals gradient from anywhere; remove, and do
+  NOT port Raven into this position without a new hypothesis.

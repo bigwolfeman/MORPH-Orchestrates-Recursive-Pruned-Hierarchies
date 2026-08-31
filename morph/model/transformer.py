@@ -278,6 +278,7 @@ class MORPHConfig:
     # forward branch — keeps init RNG draw identical).
     retention: bool = True
     retention_layers: tuple[int, ...] = (1,)   # which layer index per section gets the branch
+    retention_sections: tuple[str, ...] = ("prelude", "core", "coda")  # which sections get it
     retention_heads: int = 0                   # 0 → use n_heads
     retention_chunk: int = 128
     retention_gate_init: float = -6.0          # branch-gate logit; sigmoid(-6)≈0.0025 ≈ identity@init
@@ -898,12 +899,16 @@ class MORPHTransformer(nn.Module):
         # near 0 at init, retention-on ≈ baseline at step 0, and the ablation isolates exactly
         # the retention branch (no confound from a different random init of the rest of the net).
         self._retention_layers = tuple(cfg.retention_layers)
-        self._core_has_retention = cfg.retention and any(
+        ret_sections = tuple(cfg.retention_sections)
+        self._core_has_retention = cfg.retention and "core" in ret_sections and any(
             i in self._retention_layers for i in range(cfg.n_core))
         if cfg.retention:
             from .gla import GatedLinearAttention
             rheads = cfg.retention_heads or cfg.n_heads
-            for section in (self.prelude, self.core, self.coda):
+            for sname, section in (("prelude", self.prelude), ("core", self.core),
+                                   ("coda", self.coda)):
+                if sname not in ret_sections:
+                    continue
                 for si, blk in enumerate(section):
                     if si in self._retention_layers:
                         blk.attach_retention(

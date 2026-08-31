@@ -148,6 +148,7 @@ model:
   # Off → GLA not constructed → bit-identical to baseline.
   retention: true
   retention_layers: [1]          # within-section layer index that gets the branch (0-based)
+  retention_sections: [prelude, core, coda]  # which sections get the branch (loop-detach arm: [prelude, coda])
   retention_heads: 8             # d_head=128; seed 4 x2, cloud 16 /2
   retention_chunk: 256           # GLA chunk length; larger=faster (launch-bound)
   retention_gate_init: -6.0      # branch-gate logit; sigmoid(-6)≈0.0025 → ≈ identity at init
