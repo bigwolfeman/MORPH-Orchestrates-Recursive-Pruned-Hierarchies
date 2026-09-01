@@ -39,8 +39,8 @@ data/
 
 # Private scratch repo (morph-scratch) + root symlinks into it
 ignore/
-ai-notes/
-Ai-notes/
+ai-notes
+Ai-notes
 Incomplete
 
 # Claude Code agent/worktree state

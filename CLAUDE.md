@@ -65,10 +65,11 @@ depth (0.233 nats), and the identity-escape law says why every alternative faile
 
 Status: implemented, run, and measured. It is a **conditional-compute** win (1.6x wall
 clock at slightly better CE), NOT a latent-memory mechanism — the memory claim was
-falsified by the stratified re-score in `lab/experiments/results/2026-08-18-tul-arms-first-comparison.md`. `base.yaml` keeps
+falsified by the stratified re-score in `lab/tul/arms-result.md`. `base.yaml` keeps
 `tul.activate_at: never`, which builds no TUL parameters at all.
 
-`docs/tul-spec.md` is the source of truth; `docs/figures/tul_overview.png` is the diagram;
+`docs/tul-spec.md` is the source of truth; `docs/figures/tul_mechanism.png` is the diagram
+(source: `docs/figures/architecture/tul_mechanism.tex`);
 `docs/references.md` §13 lists every paper a decision comes from. Read all three before
 touching the model for TUL. Short mental model:
 
@@ -93,8 +94,9 @@ touching the model for TUL. Short mental model:
   [lab/divergence/takeover-campaign.md](lab/divergence/takeover-campaign.md)** — the running index of
   every hypothesis tried, its verdict, the number that decided it, the instruments already
   built and the traps already fallen into. 15 hypotheses, 11 refuted. Do not re-derive them.
-- Arms and gates: `docs/ablation-ledger.md` "Planned — TUL"; invariants: `runtime-invariants.md` §6b
-  (LIVE, each row names the test that fails when it breaks).
+- Arms and gates: `docs/ablation-ledger.md` TUL section; campaign logs:
+  `lab/tul/` (first comparison: `lab/tul/arms-result.md`); invariants:
+  `lab/runtime-invariants.md` §6b (LIVE, each row names the test that fails when it breaks).
 - **The GATE** (`docs/tul-gate-spec.md`, invariants §6c, `--config-name tul_gate`): a
   span-length head on each slot's core state plus a budget embedding into the coda, so the
   model chooses how many tokens the next span covers. Self-supervised — the label is the
@@ -109,7 +111,7 @@ touching the model for TUL. Short mental model:
 - Lineage: successor of coconut's `tul/` + `ltd/` (fine-tunes/model surgery of Huggin; left behind).
 - The Thought Unpack Loop forces the loop to handle whole semantic thoughts that are then sequentially decoded similar to future lens. This reduces per token looping and improves ppl. It is much more flop efficient.
 
-**Where the code is** (v1, `pytest tests/` → 116 passed; no arm has been TRAINED yet):
+**Where the code is** (v1; short-schedule A0/A1/A3 measured — further testing ongoing):
 
 | File | What |
 | --- | --- |
@@ -136,10 +138,12 @@ Do not dump new markdown at repo root or into `Ai-notes/`. That path is gitignor
 | Specs, invariants, paper notes, figures, ablation table | `docs/` — **do not restructure** that tree; add a file or a section, or link. Start at [docs/MANIFEST.md](docs/MANIFEST.md). |
 | Why we chose X, what we gave up | `.agents/notes/{proposed\|implemented\|rejected\|archived}/{class}/yyyy-mm-dd-slug.md` — read [.agents/notes/README.md](.agents/notes/README.md) before writing one |
 | Hot-path subtree brief | [morph/model/CLAUDE.md](morph/model/CLAUDE.md) |
-| Spikes | `lab/` |
+| Spikes, Experimental runs | `lab/` |
 | wandb, Hydra `outputs/`, throwaway scripts | `ignore/` (private) |
 
 After adding or moving Agent Notes, run `python scripts/verify_template.py`.
+
+
 
 ## Architecture
 
@@ -207,7 +211,7 @@ ruff check morph/
 
 ```
 .agents/notes/           # Public decision records (see AGENTS.md)
-lab/                     # Spikes, not production
+lab/                     # Spikes, Test various algorithms, optimizations, and changes on a branch and document FINAL results here. Implementation and intermediate results go in .agents/notes/
 morph/
   model/
     transformer.py       # Core looped transformer (Parcae loop, DiagonalInjection; _SwiGLUMortar hosts the ReMoE router)
@@ -251,6 +255,7 @@ docs/
 ## Critical Patterns
 
 ### MORTAR Sparsity Schedule
+Format readout (CMS prune + MORTAR BCSR): [docs/mortar-bcsr.md](docs/mortar-bcsr.md).
 Dense → prune (prune_step_blocks, 128×128-aligned) → carve() to MORTAR BCSR at
 compact_step → ReMoE route at route_start. MORTAR is the ONLY sparse backend
 (there is no sparse_backend knob). Saliency is scored at tile_size=16; pruning and

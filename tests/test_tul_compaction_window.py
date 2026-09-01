@@ -1,4 +1,4 @@
-"""Arm CW — the compaction window (docs/tul-compaction-window-spec.md).
+"""Arm CW — the compaction window (.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md).
 
 Covers: ``coda_token_cut=0`` is bit-identical to the pre-CW code path (proven by
 reconstructing that exact old path by hand and comparing, not by reading the diff —

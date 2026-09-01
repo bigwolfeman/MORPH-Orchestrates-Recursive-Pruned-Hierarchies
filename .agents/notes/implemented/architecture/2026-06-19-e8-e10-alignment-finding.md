@@ -87,28 +87,28 @@ inter-block singular-subspace alignment → composition σ_max runaway → singl
 ## Entry injection — analytically ruled out (no probe needed)
 
 `DiagonalInjection` (the one operator inside J_core but excluded from the per-block measurements):
-`A = log_A.exp().clamp(max=0.9999)`; non-ctx channels pass through unchanged (Jacobian = 1); `e` is
+`A = log_A.exp.clamp(max=0.9999)`; non-ctx channels pass through unchanged (Jacobian = 1); `e` is
 independent of `h_in` (the `dt·e_ctx` term is constant wrt the perturbation). ⇒ **σ_max(J_injection) ≡
 1.0 by hard clamp** — "spectral radius < 1 guaranteed by construction" holds. Not the amplifier.
 
 ## Conclusion + cure implications
 
 - **MLP weights** (E9), **per-block norms** (E10), and the **entry injection** (analytic) are all ruled
-  out. The σ_max(J_core) runaway is **inter-block singular-subspace alignment** — a property of the
-  blocks' *relative orientation*, not any operator's norm.
+ out. The σ_max(J_core) runaway is **inter-block singular-subspace alignment** — a property of the
+ blocks' *relative orientation*, not any operator's norm.
 - **DEAD:** per-block / per-linear / per-operator spectral penalties (incl. raising λ or extending E8 to
-  attention/HC). Each operator is individually fine; there is nothing locally over any cap to penalize.
+ attention/HC). Each operator is individually fine; there is nothing locally over any cap to penalize.
 - **Mechanism hypothesis:** β1=0 (no fast-momentum smoothing) + α=8 (heavy slow EMA) = a coherent,
-  sustained directional drift that rotates the blocks' singular subspaces into alignment over ~1250
-  steps. AdamW's noisier/shorter-memory updates don't sustain that coherence → it holds σ_max in the
-  tens (E5).
-- **Next-cure candidates (SURFACED to Wolfe — expensive build + real re-route risk):**
-  - **(a) Composition-level σ_max(J_core) penalty** — penalize the order parameter directly via a JVP
-    power-iteration through the whole core step (cap ~100 ≈ 2× healthy). Directly de-aligns. Cost
-    ~+15–30%/step; risk: alignment may re-route around a single composition cap; differentiable-σ
-    through the checkpointed/dynamo-disabled core is non-trivial.
-  - **(b) Optimizer-level** — address *why* long-memory AdEMAMix drives coherent subspace alignment
-    (e.g. the slow-EMA branch's coherence on the subspace-controlling params).
+ sustained directional drift that rotates the blocks' singular subspaces into alignment over ~1250
+ steps. AdamW's noisier/shorter-memory updates don't sustain that coherence → it holds σ_max in the
+ tens (E5).
+- **Next-cure candidates (SURFACED — expensive build + real re-route risk):**
+ - **(a) Composition-level σ_max(J_core) penalty** — penalize the order parameter directly via a JVP
+ power-iteration through the whole core step (cap ~100 ≈ 2× healthy). Directly de-aligns. Cost
+ ~+15–30%/step; risk: alignment may re-route around a single composition cap; differentiable-σ
+ through the checkpointed/dynamo-disabled core is non-trivial.
+ - **(b) Optimizer-level** — address *why* long-memory AdEMAMix drives coherent subspace alignment
+ (e.g. the slow-EMA branch's coherence on the subspace-controlling params).
 
 ## E11 — α-sweep: α IS the alignment knob, sharp threshold between 4 and 6
 
@@ -126,7 +126,7 @@ frozen, 2500 steps, varied ONLY α. After each arm, E10 on the latest ckpt for t
 
 **The alignment ratio is MONOTONIC in α** with a sharp critical horizon between α=4 (ratio 0.56,
 stable) and α=6 (ratio 1.32 at step_1250, detonates @1800). α=8 aligns harder/faster (9.5, @1400).
-This is direct evidence for the local-linearity / curved-manifold mechanism (Wolfe): **α = how far
+This is direct evidence for the local-linearity / curved-manifold mechanism : **α = how far
 back the slow EMA's stale tangent reaches**; past the critical horizon the accumulated direction
 drifts off the current local linearization → rotates the blocks' subspaces into alignment → detonates.
 α=0 surviving shows the gate+clip stack stabilizes β1=0 by itself; the α-boost re-introduces the
@@ -135,18 +135,18 @@ instability only above the horizon.
 **α=4 (β1=0) = largest stable, non-aligned config in this screen** — keeps a real slow-momentum boost.
 CAVEATS (no-theater): NO-PRUNE / frozen / 2500-step SCREEN only (α=6 reached 1800 before dying, so a
 survivor still needs a longer confirmation); deploy prune-shock UNTESTED; whether α=4 gives a real
-convergence WIN over AdamW8bit needs a longer head-to-head (Wolfe's wandb quality call). Scripts:
+convergence WIN over AdamW8bit needs a longer head-to-head (wandb quality call). Scripts:
 `ignore/E11_alpha_sweep.sh` + `.summary`, arm runlogs `ignore/E11_alpha{0,2,4,6}.runlog`,
 ckpts `checkpoints/morph/b1zero_E11_alpha{0,2,4}.0/step_2500.pt`.
 
-### Next: optimizer-side de-coherence (Wolfe's plan)
+### Next: optimizer-side de-coherence (the plan)
 The α-sweep is the empirical map of the tolerable EMA horizon. The de-coherence goal: let α=8's gain
 run WITHOUT the alignment — i.e. keep the slow-EMA magnitude but strip its off-manifold COHERENCE
-(the component that systematically rotates subspaces). Candidate framings to refine with Wolfe:
+(the component that systematically rotates subspaces). Candidate framings to refine :
 - the slow EMA m₂ assumes local linearity over its memory horizon; on the curved looped manifold the
-  stale-tangent component is what aligns. A de-coherence step would project/whiten m₂ to remove the
-  component that's no longer a valid local descent direction (e.g. orthogonalize m₂ against the current
-  gradient's complement, or decay the part of m₂ that has rotated away from the live gradient).
+ stale-tangent component is what aligns. A de-coherence step would project/whiten m₂ to remove the
+ component that's no longer a valid local descent direction (e.g. orthogonalize m₂ against the current
+ gradient's complement, or decay the part of m₂ that has rotated away from the live gradient).
 
 ## E12 — slow-EMA geometry: m₂ goes STALE (⊥g) + FROZEN, and detonates when g collapses
 
@@ -206,32 +206,32 @@ step_18800, frozen, 1600 steps, with engagement verification + post-run E10.
 | **CAP** | stale_push_cap=5 | detonated @1400 (delayed ~300) | stale_cap_ev 2948→40907 at cliff | delays, no cure |
 | both | STP+CAP | (STP-poisoned) | — | — |
 
-- **Loop-axis STP (Wolfe's idea) FAILED — actively harmful at λ=0.3.** It *did* flatten the loop
-  trajectory (loop_stp 1.12→0.84) but the model detonated FASTER than baseline (400 vs 1200). The aux
-  gradient destabilizes the already-fragile optimization — the exact symptom-mask trap pre-registered
-  (regularize the realized trajectory, miss/worsen the off-trajectory σ_max). Could be λ-too-high, but
-  the direction is bad. Same failure class as the earlier max_gain-clamp and the #266/#268 world-model
-  aux objectives (aux on the looped carrier → touchy/divergent).
+- **Loop-axis STP (the idea) FAILED — actively harmful at λ=0.3.** It *did* flatten the loop
+ trajectory (loop_stp 1.12→0.84) but the model detonated FASTER than baseline (400 vs 1200). The aux
+ gradient destabilizes the already-fragile optimization — the exact symptom-mask trap pre-registered
+ (regularize the realized trajectory, miss/worsen the off-trajectory σ_max). Could be λ-too-high, but
+ the direction is bad. Same failure class as the earlier max_gain-clamp and the #266/#268 world-model
+ aux objectives (aux on the looped carrier → touchy/divergent).
 - **CAP (per-tensor ‖α·m₂‖≤5‖g‖) is the best cure so far but only DELAYS.** Held ppl healthy through
-  step 1200 (baseline was ppl ~2071 there), cap firing at a low steady ~2.5 tensors/step. At the cliff
-  the event count explodes 2948→40907 (~190/step = every tensor capped every step = GLOBAL g-collapse)
-  and it detonates anyway (post-cliff E10 σ_max 2.2e8). ⇒ the cap addresses the FIRST failure mode
-  (local g-collapse lets stale m₂ dominate) but a SECOND mechanism takes over at the global cliff. A
-  tighter c (2–3) might extend the delay but the re-route suggests it won't fully cure.
+ step 1200 (baseline was ppl ~2071 there), cap firing at a low steady ~2.5 tensors/step. At the cliff
+ the event count explodes 2948→40907 (~190/step = every tensor capped every step = GLOBAL g-collapse)
+ and it detonates anyway (post-cliff E10 σ_max 2.2e8). ⇒ the cap addresses the FIRST failure mode
+ (local g-collapse lets stale m₂ dominate) but a SECOND mechanism takes over at the global cliff. A
+ tighter c (2–3) might extend the delay but the re-route suggests it won't fully cure.
 
 **Conclusion:** the loss-side/optimizer-side cures do not cleanly hold α=8 at these settings. PIVOT
-(Wolfe): **deploy at the stable α=4** (E11) instead of curing α=8. Two unknowns decide if it's worth
+: **deploy at the stable α=4** (E11) instead of curing α=8. Two unknowns decide if it's worth
 shipping over AdamW8bit: (1) prune-shock survival @29k (untested — all historical deaths were
 prune-triggered), (2) does α=4's gain beat AdamW8bit ppl 31-32 (untested — at 2500 steps from a
 converged seed all α looked identical). Both die in one real deploy-schedule run. Free upgrade:
 **α=4 + stale_push_cap=5** — at α=4 the amR stays ≤1.1 (E13) so the cap is bit-inert in healthy
 training (never fires below 5) but auto-catches a prune-shock spike → strictly-dominant insurance at
 the one untested risk. Decision: run the full deploy schedule at α=4(+cap) after the E14 'both' arm
-completes (Wolfe's call). Scripts: `ignore/E14_decoherence_ab.sh` + `.summary`; cures in
+completes (locked decision). Scripts: `ignore/E14_decoherence_ab.sh` + `.summary`; cures in
 `morph/model/transformer.py` (loop_stp), `morph/training/ademamix_b1zero.py` (stale_push_cap).
 
 ## Artifacts
 - `ignore/E8_spectral_cure_2500.sh` (+ `.runlog`), ckpt `checkpoints/morph/b1zero_E8_spectral_cure_2500/step_1250.pt`
 - `ignore/E9_diag_sigmas.py`, `ignore/E10_localize_sigma.py`
 - `morph/training/spectral_penalty.py` (the E8 penalty — gated, but targets the wrong object; keep as the
-  building block for a composition-level variant)
+ building block for a composition-level variant)

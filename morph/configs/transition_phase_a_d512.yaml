@@ -12,137 +12,137 @@
 # share. It cannot: the typed IR executor is ARITHMETIC-ONLY, so proof-stage traces
 # have no certification path yet. The certified-unique inventory (measured, see
 # dataset_manifests in the logged wandb config) is:
-#     wp_ir_views        ~614M   IR-native word problems, 5 paired views, 100% certified
-#     gsm8k_ir_views     3.08M   GSM8K->IR (5,651 train records, 83.7% source yield), 4 views
-#     olympiad_math      291.4M  stages 2-10 replay (canonical traces, NOT typed-IR)
-#     fineweb_edu        450.8M  general/edu text
-#     finemath           382.0M  math prose
-#     mathpile_textbooks 203.0M  math prose (textbooks)
-#     qa_stackexchange   152.6M  QA discourse
+# wp_ir_views ~614M IR-native word problems, 5 paired views, 100% certified
+# gsm8k_ir_views 3.08M GSM8K->IR (5,651 train records, 83.7% source yield), 4 views
+# olympiad_math 291.4M stages 2-10 replay (canonical traces, NOT typed-IR)
+# fineweb_edu 450.8M general/edu text
+# finemath 382.0M math prose
+# mathpile_textbooks 203.0M math prose (textbooks)
+# qa_stackexchange 152.6M QA discourse
 # At 2.0B the max repetition factor is ~3.2x (gsm8k, tiny source); every other
 # source is <=1.8x and the bulk shares are ~0.3-1.4x. At 5B fineweb would be 3.3x
 # and the olympiad share ~3.9x over unique data — that is memorization, not
-# capability acquisition, so the budget is sized to the data (Wolfe authorized).
+# capability acquisition, so the budget is sized to the data (authorized).
 #
 # ── Olympiad share composition (55% total) — honest 70/20/10 mapping ──
-#   "current band"    = certified IR views (wp 0.360 + gsm8k 0.005) = 66% of share
-#   "completed late"  = ZERO. No proof-IR exists; stages 11+ are NOT certifiable
-#                       through the arithmetic executor and are NOT in this run.
-#   "stages 2-10"     = olympiad_math replay 0.185 = 34% of share
+# "current band" = certified IR views (wp 0.360 + gsm8k 0.005) = 66% of share
+# "completed late" = ZERO. No proof-IR exists; stages 11+ are NOT certifiable
+# through the arithmetic executor and are NOT in this run.
+# "stages 2-10" = olympiad_math replay 0.185 = 34% of share
 # The PLAN band schedule (11-24 / 25-44 / 45-64) therefore collapses to a single
 # stage for this run; band advancement resumes when a proof IR exists.
 #
 # Launch (from MORPH repo, MORPH venv):
-#   env -C <MORPH> OLYMPIAD_REPO=/mnt/sda1/Projects/00NN/Olympiad-AI PYTHONPATH=<MORPH> \
-#     HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1 /home/wolfe/.venv/bin/python \
-#     -m morph.training.train --config-name transition_phase_a_d512
+# env -C <MORPH> OLYMPIAD_REPO=/mnt/sda1/Projects/00NN/Olympiad-AI PYTHONPATH=<MORPH> \
+# HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1 /home/wolfe/.venv/bin/python \
+# -m morph.training.train --config-name transition_phase_a_d512
 defaults:
-  - base
-  - _self_
+ - base
+ - _self_
 
 model:
-  d_model: 512
-  n_heads: 4
-  n_kv_heads: 4
-  d_ff: 1376
-  vocab_size: 49169
-  n_prelude: 4
-  n_core: 0
-  n_coda: 4
-  mean_depth: 1
-  max_depth: 1
-  bptt_depth: 1
-  ckpt_grad_iters: -1
-  channel_dims: [256, 160, 96]
-  compression: 2
-  csa_compress_ratio: 8
-  hca_compress_ratio: 256
-  top_k: 256
-  window_size: 256
-  context_len: 512
-  max_seq_len: 512
-  lorentz_fraction: 0.25
-  bigram_hash_vocab: 0
-  n_ve: 3
-  ce_chunk_size: 8192
-  use_kernels: true
-  hc_streams: 4
-  hc_tau: 1.0
-  hc_cayley_iters: 3
-  hc_cayley_alpha: 0.1
-  hc_init_gain: 0.1
-  hc_use_kernel: true
-  retention: true
-  retention_layers: [1]
-  retention_heads: 4
-  retention_chunk: 128
-  retention_gate_init: -6.0
-  retention_carry: true
-  retention_gate_bias: 2.0
-  core_gain_clip: 0.0
+ d_model: 512
+ n_heads: 4
+ n_kv_heads: 4
+ d_ff: 1376
+ vocab_size: 49169
+ n_prelude: 4
+ n_core: 0
+ n_coda: 4
+ mean_depth: 1
+ max_depth: 1
+ bptt_depth: 1
+ ckpt_grad_iters: -1
+ channel_dims: [256, 160, 96]
+ compression: 2
+ csa_compress_ratio: 8
+ hca_compress_ratio: 256
+ top_k: 256
+ window_size: 256
+ context_len: 512
+ max_seq_len: 512
+ lorentz_fraction: 0.25
+ bigram_hash_vocab: 0
+ n_ve: 3
+ ce_chunk_size: 8192
+ use_kernels: true
+ hc_streams: 4
+ hc_tau: 1.0
+ hc_cayley_iters: 3
+ hc_cayley_alpha: 0.1
+ hc_init_gain: 0.1
+ hc_use_kernel: true
+ retention: true
+ retention_layers: [1]
+ retention_heads: 4
+ retention_chunk: 128
+ retention_gate_init: -6.0
+ retention_carry: true
+ retention_gate_bias: 2.0
+ core_gain_clip: 0.0
 
 training:
-  # Clean pre-wordbridge checkpoint (355 model tensors; verified). Weights only,
-  # step reset to 0, FRESH optimizer.
-  init_from: /mnt/BigAssDrive/00projects/00DeepNet/00-MORPH-Orchestrates-Recursive-Pruned-Hierarchies/checkpoints/morph/prepretrain-math-d512/step_46000.pt
-  ternary: true
-  ternary_scope: backbone
-  ternary_scale_group: tensor
-  embed_quant: "int6"
-  attn_proj_quant: "off"
-  adam8bit: false
-  bf16: true
-  compile: false
-  compile_mode: default
-  dropout: 0.0
-  prune_start: 999999999          # prune OFF
-  compact_step: 999999999         # carve OFF
-  cms_score_mode: grad
-  steps: 61000                    # 2.0B tokens @ 32,768 tok/step (eff_batch 64 x seq 512)
-  lr_decay_steps: 61000           # cosine over the FULL committed budget (PLAN: 1e-4 -> 2e-5)
-  tst_bag_size: 0                 # TST OFF (PLAN: architecture curricula resume after this gate)
-  tst_ratio: 0.0
-  optimizer: ademamix_b1zero
-  lr: 1.0e-4                      # continuation-scale (NOT the 3e-4 near-cold-start schedule)
-  lr_schedule: cosine
-  min_lr: 2.0e-5
-  warmup: 500
-  grad_clip: 1.0
-  weight_decay: 0.1
-  beta1: 0.9
-  beta2: 0.95
-  eval_every: 4500                # ~147M tokens (PLAN: ~150M) — held-out language ppl lane
-  n_eval_batches: 20
-  ckpt_every: 9000                # ~295M tokens (PLAN: ~300M)
-  gen_every: 0
-  seed: 0
+ # Clean pre-wordbridge checkpoint (355 model tensors; verified). Weights only,
+ # step reset to 0, FRESH optimizer.
+ init_from: /mnt/BigAssDrive/00projects/00DeepNet/00-MORPH-Orchestrates-Recursive-Pruned-Hierarchies/checkpoints/morph/prepretrain-math-d512/step_46000.pt
+ ternary: true
+ ternary_scope: backbone
+ ternary_scale_group: tensor
+ embed_quant: "int6"
+ attn_proj_quant: "off"
+ adam8bit: false
+ bf16: true
+ compile: false
+ compile_mode: default
+ dropout: 0.0
+ prune_start: 999999999 # prune OFF
+ compact_step: 999999999 # carve OFF
+ cms_score_mode: grad
+ steps: 61000 # 2.0B tokens @ 32,768 tok/step (eff_batch 64 x seq 512)
+ lr_decay_steps: 61000 # cosine over the FULL committed budget (PLAN: 1e-4 -> 2e-5)
+ tst_bag_size: 0 # TST OFF (PLAN: architecture curricula resume after this gate)
+ tst_ratio: 0.0
+ optimizer: ademamix_b1zero
+ lr: 1.0e-4 # continuation-scale (NOT the 3e-4 near-cold-start schedule)
+ lr_schedule: cosine
+ min_lr: 2.0e-5
+ warmup: 500
+ grad_clip: 1.0
+ weight_decay: 0.1
+ beta1: 0.9
+ beta2: 0.95
+ eval_every: 4500 # ~147M tokens (PLAN: ~150M) — held-out language ppl lane
+ n_eval_batches: 20
+ ckpt_every: 9000 # ~295M tokens (PLAN: ~300M)
+ gen_every: 0
+ seed: 0
 
 routing:
-  route_start: 999999999          # ReMoE OFF
+ route_start: 999999999 # ReMoE OFF
 
 curriculum:
-  enabled: true
-  pretok_dir: ${oc.env:OLYMPIAD_REPO,/mnt/sda1/Projects/00NN/Olympiad-AI}/data/transition_mix
-  allowed_source_roles: [pretrain_bulk, reasoning_midtrain, posttrain_gold]
-  eff_batch: 64                   # micro_batch 32 x grad_accum 2
-  # 55/30/10/5 target over REAL shards (repetition factor at 2.0B in parens):
-  blend:
-    wp_ir_views: 0.360            # certified IR views, 5 paired renderers   (~1.2x)
-    gsm8k_ir_views: 0.005         # certified GSM8K IR views                 (~3.2x — tiny source, capped)
-    olympiad_math: 0.185          # stages 2-10 replay, math preservation    (~1.3x)
-    fineweb_edu: 0.300            # general/edu text                         (~1.3x)
-    finemath: 0.070               # math prose                               (~0.4x)
-    mathpile_textbooks: 0.030     # math prose (textbooks)                   (~0.3x)
-    qa_stackexchange: 0.050       # QA discourse                             (~0.7x)
-  stages:
-    - {seq_len: 512, context_len: 512, micro_batch: 32, steps: 61000}
+ enabled: true
+ pretok_dir: ${oc.env:OLYMPIAD_REPO,/mnt/sda1/Projects/00NN/Olympiad-AI}/data/transition_mix
+ allowed_source_roles: [pretrain_bulk, reasoning_midtrain, posttrain_gold]
+ eff_batch: 64 # micro_batch 32 x grad_accum 2
+ # 55/30/10/5 target over REAL shards (repetition factor at 2.0B in parens):
+ blend:
+ wp_ir_views: 0.360 # certified IR views, 5 paired renderers (~1.2x)
+ gsm8k_ir_views: 0.005 # certified GSM8K IR views (~3.2x — tiny source, capped)
+ olympiad_math: 0.185 # stages 2-10 replay, math preservation (~1.3x)
+ fineweb_edu: 0.300 # general/edu text (~1.3x)
+ finemath: 0.070 # math prose (~0.4x)
+ mathpile_textbooks: 0.030 # math prose (textbooks) (~0.3x)
+ qa_stackexchange: 0.050 # QA discourse (~0.7x)
+ stages:
+ - {seq_len: 512, context_len: 512, micro_batch: 32, steps: 61000}
 
 data:
-  dataset: /home/wolfe/.cache/huggingface/datasets/openwebtext/**/openwebtext-train-*.arrow
-  tokenizer: bigcode/starcoder2-7b
-  seq_len: 512
+ dataset: /home/wolfe/.cache/huggingface/datasets/openwebtext/**/openwebtext-train-*.arrow
+ tokenizer: bigcode/starcoder2-7b
+ seq_len: 512
 
 wandb:
-  project: MORPH-Math
-  name: transition-phase-a-d512-v1
-  tags: [morph-seed, transition, phase-a, ir-views, paired-renderers, d512, ademamix, trace-treatment]
+ project: MORPH-Math
+ name: transition-phase-a-d512-v1
+ tags: [morph-seed, transition, phase-a, ir-views, paired-renderers, d512, ademamix, trace-treatment]

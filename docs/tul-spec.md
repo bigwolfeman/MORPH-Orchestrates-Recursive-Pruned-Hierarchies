@@ -1,31 +1,23 @@
 # TUL — Thought Unpack Loop: specification v0.1
 
-Status: **implemented, not yet run.** Branch `experiments/tul`
-(2026-08-16). The v1 mechanism is in the tree and gated by `pytest tests/` (116
-passed): the causal boundary rule and packer (`morph/model/tul_layout.py`), the slot
-parameters and plumbing (`morph/model/tul.py`), the TUL forward inside
+Status: **implemented, run, and measured** — A1 beats dense A0 on the short
+schedule (see [lab/tul/arms-result.md](../lab/tul/arms-result.md)); further
+testing in progress. Off by default in `base.yaml` (`tul.activate_at: never`).
+The v1 mechanism is in the tree and gated by `pytest tests/`: the causal
+boundary rule and packer (`morph/model/tul_layout.py`), the slot parameters and
+plumbing (`morph/model/tul.py`), the TUL forward inside
 `morph/model/transformer.py`, the `tul:` Hydra block resolved by
 `morph/training/tul_setup.py`, loader support in `morph/training/data.py` (and
 `curriculum_data.py`), and the eager generator (`morph/inference/tul_generate.py`).
 NOT implemented and asserted-zero rather than ignored: the `stp_lambda`,
 `set_lambda`, `carry`, `xattn` and `bcast` arms (§3.5) all RAISE on a non-default
-value. NOT run: no arm has been trained; every ledger row is still `planned`.
-Two v1 deviations from the text below are recorded in §3.1 (run collapse is causal)
-and §4 (the packer's tail padding). Branch `experiments/tul` on the `00-MORPH-TUL`
-copy. Written 2026-08-16 from the prior-art review in
-`ignore/Ai-notes/08-16-2026/prior-art/` (SYNTHESIS.md, MORPH-READ.md, 28
-per-paper notes) and from a read of `morph/model/transformer.py`,
-`morph/training/train.py`, `morph/training/data.py`, `morph/inference/kv_cache.py`.
-Decisions marked **[W]** were taken by Wolfe in the design conversation; the
-rest are defaults he can override. Every mechanism names the paper it comes
-from; the provenance table in §11 is the index.
-
-Lineage: TUL on MORPH is the successor of the `tul/` and `ltd/` work in the
-`coconut` repo (sequence-latent TUL, then Looped Thought Decoding on Huginn).
-Both were fine-tunes of a frozen-pretrained model and both are left behind:
-the last measurement there (2026-08-16) showed the span decoder collapsing to
-`.` at 7.12 nats, and the literature says why (§1). The name is kept because
-the concept is right; the implementation is new.
+value. Two v1 deviations from the text below are recorded in §3.1 (run collapse
+is causal) and §4 (the packer's tail padding). Written 2026-08-16 from the
+prior-art review in `ignore/Ai-notes/08-16-2026/prior-art/` (SYNTHESIS.md,
+MORPH-READ.md, 28 per-paper notes) and from a read of
+`morph/model/transformer.py`, `morph/training/train.py`,
+`morph/training/data.py`, `morph/inference/kv_cache.py`.
+Markers **[W]** are project design decisions (not paper defaults).
 
 ---
 
@@ -320,7 +312,7 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
 | inference engine port | separate work; eager generation for the test | — | later **[W]** |
 | `prefix_k = 1` (one coda position per slot, the plan and the first-token label on one vector) | Block Transformer Fig 3f: length 1 loses to 2–6; LTD think-position conflict | BT Fig 3f | arm `prefix1` |
 | slot-set multi-hot warm-up (`set_lambda`) | block-level aux losses hurt in BT §4.2; TST validated MCE only as a phase-1 objective | TST; CODI/CCoT for the need | arm, default 0 |
-| punc-STP on the slot trajectory (`stp_lambda`) | zero params, Wolfe's punc-STP finding (next token ~80% decodable from the boundary state); the STP paper itself has no boundary or pretraining claim | STP; MORPH punc-STP | arm, default 0 |
+| punc-STP on the slot trajectory (`stp_lambda`) | zero params; MORPH punc-STP finding (next token ~80% decodable from the boundary state); the STP paper itself has no boundary or pretraining claim | STP; MORPH punc-STP | arm, default 0 |
 
 ## 4. Data and segmentation
 
@@ -392,6 +384,62 @@ signals for the slot are the bag-mean, exactly the TST `ve_bagged` path).
   the core on slot positions — note in the ledger). Per-stage LR (H-Net App. C: outer stages higher,
   by tokens processed and width) is a knob to add if the core under-trains
   on 9–19× fewer positions; log per-group update norms.
+
+### 5.1 Credit assignment (what reaches the backbone)
+
+The looped core only ever sees slot states. Almost all of a span's CE still
+reaches those states — through coda attention, not through a per-token core
+pass. Diagram of the two routes (labels match §3.1 / §5). Block counts and
+`d` are illustrative; recipe depths live in config.
+
+```
+# ---------------- FORWARD ----------------
+e = embed(tokens)                                  # [L_total, d]
+for i, span in enumerate(spans):
+    e[slot_pos[i]] = E_slot + mean(e[j] for j in span)   # POOL. this is the 1/sqrt(L) law
+
+x = prelude(e)                    # ALL positions. slots DO see real tokens here.
+
+h = gather(input_norm(x), slot_positions)          # slots only (e.g. 64 of 1152)
+for t in range(T_i):                               # per-slot Poisson depth
+    h = core(h + inj)                              # <<< THE BACKBONE. weight-shared.
+                                                   #     tokens never enter here.
+
+x_coda = input_norm(x)                             # tokens SKIP the core (n_core == 0 path)
+for i in slots:
+    for k in range(prefix_k):
+        x_coda[slot_pos[i] + k] = h[i] @ W_prefix[k]
+
+y      = coda(x_coda)             # ALL positions. tokens ATTEND slots.
+logits = lm_head(y)
+
+# labels and weights, from §3.1 / §5
+#   slot i, k=0            : NO LABEL          (plan only)
+#   slot i, k=1            : t_1(span i+1)     weight 0.5
+#   last token of span i   : t_1(span i+1)     weight 0.5   (plain-LM counterfactual)
+#   every other token      : its next token    weight 1.0
+loss = weighted_CE(logits, labels, weights)
+
+# ---------------- BACKWARD: what actually reaches the backbone ----------------
+g_h[i] = 0
+
+# ROUTE A — the slot's own label. ONE token of direct supervision.
+g_h[i] += d(loss_at[slot_pos[i] + 1]) / d(h[i])          # weight 0.5  ->  ~few % of the span
+
+# ROUTE B — every token whose coda attention read this slot. ~most of the span.
+for r in token_positions:
+    if coda_attn[r, slot_pos[i]] > 0:
+        g_h[i] += d(loss_at[r]) / d(h[i])   # <<< SUMMED. not averaged, not arbitrated,
+                                            #     and h[i] is ONE point in R^d with no
+                                            #     way to say "70% this, 30% that".
+
+# then backward through the weight-shared loop
+g = g_h
+for t in reversed(range(min(T_i, bptt_depth))):          # truncated BPTT
+    g = J_core.T @ g                                     # the SAME J.T, repeatedly
+
+grad_theta_core = sum over slots, iterations of outer(g, h)
+```
 
 ## 6. Generation (eager, v1)
 
@@ -475,7 +523,7 @@ clear by `plan_nats`.
   COMPLETION, not prediction. Size it by `val/first_tok_ce` and
   `val/plan_nats`; report whole-span exact-match as the word-accuracy analogue.
 
-### 7.3 Pre-registered gates (margins to be set by Wolfe before the runs)
+### 7.3 Pre-registered gates (margins set before the runs)
 
 * **Works:** `plan_nats > A1r spread`, and A1's rep4@512 ≤ A0's, and no
   collapse in samples (span length distribution within ±30% of the data's).
@@ -554,7 +602,7 @@ No runtime flags in the forward: `slot_layout` is a per-forward argument like
 | TUL from step 0, TST off (5090 arms); activate at TST switch (full variant) | [W] 2026-08-16; Patch-level training (patch phase then token phase) for the full variant | — |
 | 2×2 arms + repeat | CoCoMix Fig 6(d); coconut noise-floor findings | attribution |
 | plan-nats ablation as the C2 metric | Kaiser T4 (oracle code vs predicted), He Fig 5 (MI not KL) | measure usage, not loss |
-| STP on slot trajectory (arm) | STP Eq.; MORPH punc-STP note in `references.md` §7 | Wolfe's finding, not the paper's |
+| STP on slot trajectory (arm) | STP Eq.; MORPH punc-STP note in `references.md` §7 | MORPH finding, not the paper's |
 | slot-set MCE warm-up (arm, off) | TST MCE; CODI/CCoT/Coconut (untargeted slot learns nothing) vs BT §4.2 (aux hurt) | contested → arm |
 | do not per-offset inject as the ONLY input | Block Transformer, Hourglass, MegaByte, Huginn 2026-08-16 | weakest everywhere |
 | deep compute at boundary positions only, read back through the causal token stream | SpaceByte T1/T6, AU-Net T2/T5, Hierarchical AT T1 | ties BPE at matched compute (word scale); depth belongs at the coarse level (AU-Net T5: 75 % > 50 % > 25 %) |

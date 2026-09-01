@@ -15,6 +15,27 @@ MORPH uses a stable snapshot plus research integration model:
 
 Frozen releases may also be mirrored into separate read-only repositories when that helps citation, reproducibility, or long-term use. Active development should remain centralized unless there is a strong reason to split it.
 
+### What To Contribute
+
+There are 3 primary kinds of contributions.
+
+- Architectural changes
+    - If you do not want to fork, start a discussion on the proposed changes.
+    - If you do fork, start a discussion so everything related can be easily indexed by LLMs.
+- Bug fixes
+    - Provide a PR that meets the requirements in this document.
+- Optimizations
+    - Provide a PR that meets the requirements of this document.
+    - Recursive self improvement is currently very messy, here is a work flow to approach this best:
+        - Fork and branch.
+        - Test the changes, document it on a per algorithm level in literate programming documentation in the labs/optimizations dir.
+        - Pull only the winners carefully into a fresh branch and test stability.
+        - Provide a request on `next` branch
+        - For kernel work, prove correctness in z3/lean (prompt included in lab/optimizations)
+        - For performance optimizations ensure exact bit correctness against a baseline
+        - For loss/ppl/per bit intelligence improvements, ensure results survive across seeds and beyond noise
+            - The trade off between compute and improvement must be considered per change
+
 ## What Belongs Where
 
 Bug fixes may target `main` when they preserve the current release behavior. If a bug fix changes training dynamics, checkpoint compatibility, kernels, or public configs, target `next` unless the maintainer explicitly asks otherwise.
@@ -35,6 +56,7 @@ Good first contributions:
 - Add focused tests for existing behavior.
 - Reproduce an existing ablation or benchmark.
 - Fix isolated bugs without changing the architecture.
+- Benchmark finished checkpoints or fresh training runs.
 
 Advanced contributions:
 
@@ -53,7 +75,7 @@ Not accepted without prior discussion:
 - Mock data paths that can affect development or production runs.
 - Changes that make `main` less reproducible.
 
-You are free to fork the project and ablate various methodoligies to prove the worth of an idea. Reach out on discord with details on the changes and results. Most contributions will be manually merged.
+You are free to fork the project and ablate various methodoligies to prove the worth of an idea. Reach out in github discussions or issues with details on the changes and results. Most contributions will be manually merged.
 
 ## Architecture Policy
 
@@ -71,7 +93,7 @@ Every accepted component should earn its place by improving one or more of:
 
 Avoid adding a second implementation when the existing one can be fixed. If a new mechanism replaces an old one, remove the displaced logic instead of leaving both paths active.
 
-Do not add silent fallbacks. Operators should know when a kernel, dataset, checkpoint, quantization path, or training feature fails.
+**Do not add silent fallbacks. Operators should know when a kernel, dataset, checkpoint, quantization path, or training feature fails.**
 
 ## Evidence Expectations
 
@@ -141,7 +163,7 @@ The project is open source, but not open-ended. The standard is not "can this be
 
 ## AI Policy
 
-The use of AI is allowed and encouraged. Eventually this project will be subject to recursive self improvement, if such a thing proves to be reliable and useful.
+The use of AI is allowed and encouraged. Eventually this project will be subject to recursive self improvement. ~~If such a thing proves to be reliable and useful.~~
 
 As of July 2026 LLMs make too many mistakes to be fully trusted with contribution. The LLM user must ensure coherence of ideas and results and take accountability of every line of contribution.
 

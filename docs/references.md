@@ -23,7 +23,11 @@ Local markdown copies are grouped by topic in `[references/MANIFEST.md](referenc
 
 ---
 
+
+
 ## 1. Looping & Depth
+
+
 
 ### Parcae — Stable Looped Transformer
 
@@ -56,12 +60,15 @@ Poisson depth sampling forces the iterative map to generalize across a wide rang
 Applies a diffusion interpretation to Huginn's looped core and trains it as a single-pass denoiser
 instead of looping with truncated BPTT. The mode most relevant to MORPH's Parcae core, which is
 why it was built and measured. It lost to plain next-token training on every axis that mattered;
-the code is off this branch. Verdict: [`.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md`](../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md).
-
+the code is off this branch. Verdict: `[.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md](../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md)`.
 
 ---
 
+
+
 ## 2. Attention
+
+
 
 ### CCA — Compressed Convolutional Attention
 
@@ -149,7 +156,11 @@ CCA mechanism. No independent prior paper. See the CCA entry above.
 
 ---
 
+
+
 ## 3. Memory
+
+
 
 ### GLA — Gated Linear Attention (retention branch)
 
@@ -163,6 +174,26 @@ output is gated and GroupNorm'd following the paper. Enabled by default (`retent
 `base.yaml`) on configured section-local layers, beside CCA+CSA/HCA attention rather than as a
 full-block interleave.
 
+### RAVEN — Sparse Memory Routing (planned on GLA)
+
+**Title:** Raven: High-Recall Sequence Modeling with Sparse Memory Routing  
+**Authors:** Arshia Afzal, Aviv Bick, Eric P. Xing, Volkan Cevher, Albert Gu (goombalab)  
+**Year:** 2026  
+**PDF:** [github.com/goombalab/raven](https://github.com/goombalab/raven/blob/main/raven.pdf)  
+**Local:** [references/memory/raven/raven.pdf](references/memory/raven/raven.pdf)  
+**MORPH uses:** NOT YET. Planned upgrade to the GLA retention branch: replace dense
+per-slot SSM writes with a learned top-k router over a fixed slot memory (RSM), so
+unselected slots are untouched. README TODO: apply RAVEN attention on GLA.
+
+### Fast Weight Attention for Continual Learning
+
+**Title:** Fast Weight Attention for Continual Learning  
+**Authors:** Yifan Zhang, Steve Ta, Jasper Zhang, Jichen Feng, Shuzhen Li, Yongxin Zhang, Yifeng Liu, Huizhuo Yuan, Mengdi Wang, Quanquan Gu, Andrew Chi-Chih Yao (ByteDance Seed, Princeton, Tsinghua, UCLA, Hyperbolic Labs)  
+**Year:** 2026  
+**arXiv:** [2608.27763](https://arxiv.org/abs/2608.27763) · [Hugging Face](https://huggingface.co/papers/2608.27763)  
+**Local:** [references/memory/fast-weight-attention/fast-weight-attention.md](references/memory/fast-weight-attention/fast-weight-attention.md)  
+**MORPH relevance:** Unified framework analyzing recurrent fast weights and selective SSMs under read-after-write autoregressive semantics. Introduces the Falcon family of normalized first-order updates (scalar NLMS, per-column, sliding-window mini-batch) and positive-decay renormalization that stabilize associative memory updates against divergence during autoregressive inference and continual learning.
+
 ### Titans — Neural Memory (removed)
 
 **Title:** Titans: Learning to Memorize at Test Time  
@@ -172,15 +203,16 @@ full-block interleave.
 **MORPH history (removed):** An earlier MORPH version used the Titans Memory-Augmented Context
 (MAC) variant: a deep-MLP memory M updated on the forward pass via momentum-accelerated
 associative-loss minimization (S_t = η_t·S_{t-1} − θ_t·∇‖M(k)−v‖², M_t = (1−α_t)·M_{t-1} + S_t).
-This module was **removed**; the current cross-iteration memory is the GLA retention branch above.
+This module was **removed**; any benefits are dubious, instability is common.
 
 **NOTES:** This is extremely unstable. Spent months working with it across various modalities and architectures.  
-It is very collapse prone. SigREG helps a lot but the fast weights still tend to collapse all the weights and rely on attention only.  
+It is very collapse prone. SigREG helps a lot but the fast weights still tend to collapse all the MLP weights and rely on attention only.  
 Then the backbone model attention sinks so heavily on the prepended tokens that it goes totally divergent.  
 The worst part is that this behavior is sensitive to the data. If a data mix survives long enough the memory generally won't collapse.
 
-My current thinking is that it needs another loss function to fight the divergent attraction. I ablated several  
-JEPA-like hidden state predictors that seemed to help, but were still unstable. It is difficult to have a second  
+My current thinking is that it needs a better loss function to fight the divergence, or it is related to the decay (RAVEN may work) 
+
+I ablated several JEPA-like hidden state predictors that seemed to help, but were still unstable. It is difficult to have a second  
 loss function, as the fast weights update during forward pass and applying a second GD after that is a total lobotomy.  
 The 2 loss values must modify the same gradient update. 
 
@@ -199,18 +231,11 @@ module ships in the current code. Kept as related work for the removed memory st
 
 ---
 
+
+
 ## 4. Residual Streams
 
-### Multi-Rate Residual (MRR) — MORPH's approach (removed)
 
-An earlier MORPH version used a **Multi-Rate Residual (MRR)**: the d_model-dim hidden state split
-into 3 sub-channels (compute 3N, context 2N, memory N) with per-channel learned γ gains on the
-residual update — a simpler mechanism than HC/mHC, with no cross-stream mixing. It was **removed**
-in favor of the JPmHC Cayley hyper-connection (below), which is now MORPH's sole residual. (The
-block attributes are still named `mrr_attn`/`mrr_mlp` — a retained legacy name for checkpoint
-compatibility — but they hold `HyperConnectionResidual` modules.)
-
-**NOTES:** This was a Claude dumb-dumb moment. Claude said "mHC? I think we should dip our toes into this and do half of that" and proceeded to invent something new that works, but not as well as mHC. But the naming on checkpoints needed to remain consistent so this mHC implementation uses MRR for variable names now. To be addressed in a v2 or before final MORPH release as the last checkpoint breaking change before the final full training run.
 
 ### JPmHC — Jacobian-Preserving Manifold Hyper-Connections (Cayley)
 
@@ -251,7 +276,11 @@ mixing matrices; MORPH's manifold-constrained JPmHC (Cayley) variant descends fr
 
 ---
 
+
+
 ## 5. Embeddings
+
+
 
 ### Lorentz / Hyperbolic Embeddings
 
@@ -280,7 +309,11 @@ MORPH's `embeddings.py` implements this as eucl ⊕ Lorentz with learned mixing 
 
 ---
 
+
+
 ## 6. Sparsity & Routing
+
+
 
 ### Lottery Ticket Hypothesis (LTH)
 
@@ -346,7 +379,11 @@ computation — clusters remain full-rank, not rank-k projections).
 
 ---
 
+
+
 ## 7. Regularization & Self-Supervised Objectives
+
+
 
 ### STP — Semantic Tube Prediction (Geodesic Regularizer) (removed)
 
@@ -408,12 +445,15 @@ via Step Sampling
 **MORPH history (removed):** Step-boundary follow-up to STP (arXiv:2602.22617). Argues that
 sampling the STP geodesic loss at semantic reasoning-step boundaries (rather than random token
 positions) dominates the geometric outcome. MORPH never shipped this variant; it is archived as
-related work for the removed STP / latent-prediction stack (`morph/model/prediction.py` no longer
-exists). Local notes only (no PDF in the archive).
+related work for the removed STP / latent-prediction stack (`morph/model/prediction.py` no longer exists). Local notes only (no PDF in the archive). Inspired punc-STP.
 
 ---
 
+
+
 ## 8. Feed-Forward Networks
+
+
 
 ### SwiGLU — Gated Feed-Forward Activation
 
@@ -427,7 +467,11 @@ that consistently outperforms GELU/ReLU variants on perplexity at equal paramete
 
 ---
 
+
+
 ## 9. Training Objectives
+
+
 
 ### MTP — Multi-Token Prediction (removed)
 
@@ -547,7 +591,7 @@ TST (`pretrain_curriculum.yaml`).
 **arXiv:** [2506.14202](https://arxiv.org/abs/2506.14202)  
 **MORPH uses:** NOTHING. Built, trained, measured, rejected 2026-08-21; the implementation was
 removed from `master` and parked on `park/db-master-line` and `feat/db-objective-l2`. Verdict and
-numbers: [`.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md`](../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md);
+numbers: `[.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md](../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md)`;
 ledger row: `ablation-ledger.md` "Rejected — DiffusionBlocks". Two separable modes.
 (a) *Block-wise*: cut `L` layers into `B` σ-range-specialised blocks, each trained by its own
 denoising objective, cutting params + grads + **optimizer state** by `B` (unlike gradient
@@ -572,7 +616,11 @@ schedule; use the EDM (Karras et al. 2022, Alg. 2) form. See the assessment doc 
 
 ---
 
+
+
 ## 10. Optimizer
+
+
 
 ### AdEMAMix — Dual-EMA Adam Variant
 
@@ -588,9 +636,15 @@ weight α (default 8.0): `update = (m₁ + α·m₂)/(√ν + ε) + λ·p`. α a
 schedulers (`t_alpha`, `t_beta3`) distinct from LR warmup — essential for stability under
 MORPH's flat-LR recipe. Includes prune-aware dead-state masking for CMS-carved weights.
 
+Ablated against AdamW, Muon, and Nested Optimizer. Has the best memory footprint and convergence. β1=0 can be unstable. It seems mostly solved.
+
 ---
 
+
+
 ## 11. Tokenization & Data
+
+
 
 ### StarCoder2 — Tokenizer
 
@@ -602,11 +656,15 @@ MORPH's flat-LR recipe. Includes prune-aware dead-state masking for CMS-carved w
 600+ programming languages) for code data in MORPH's mixed OpenWebText + code pretraining.
 The 49k vocab cleanly stacks with a bigram hash-vocab prefix for rare byte patterns.
 
-**NOTES:** I ablated every tokenizer I am aware of between 16k-128k vocab. Starcoder 2 behaves the best per bit with Granite and Phi right behind. This was tested across 3 seeds to 100m tokens and 1 seed with 2 data mixtures.
+**NOTES:** I ablated every tokenizer I am aware of between 16k-128k vocab. Starcoder 2 behaves the best per bit with Granite and Phi right behind. This was tested across 3 seeds to 100m tokens and 1 seed with 2 data mixtures. This tokenizer is particularly strong for math, it subdivides numbers into individual tokens to help the LLM reason about the problem more easily.
 
 ---
 
+
+
 ## 12. Inference Scaling
+
+
 
 ### Zyphra RSA — Markovian Recurrent Speculative Aggregation
 
@@ -621,6 +679,8 @@ unbounded reasoning with constant KV memory. MORPH's outer loop is designed to s
 harness deployment after RL training, currently deferred.
 
 ---
+
+
 
 ## 13. TUL — Thought Unpack Loop (latent emission & hierarchy) (spec, `experiments/tul`)
 
@@ -733,9 +793,9 @@ per depth; helps already at 2.4B active. TUL's coda is token-fed by construction
 
 ### Multi-token prediction (Gloeckle et al.) — see §9 (MTP, removed)
 
-**TUL note:** the blind-heads variant helps only ≥3B (Table S7: worse at 0.3B/0.6B, even
-at 1.3B) and hurts once next-token circuits form. Cited here as the reason TUL does not
-decode blind; the entry stays in §9.
+**TUL note:** the blind-heads variant helps only ≥3B (Table S7: worse at 0.3B/0.6B, even at 1.3B) and hurts once next-token circuits form. Cited here as the reason TUL does not decode blind; the entry stays in §9. The literature is pretty mixed on whether blind heads or not are best. The risk is that all the previous computation is just noise and the small stack of layers just learn to fit while ignoring it.
+
+Based on the literature this seems to get worse the more layers there are in the coda.
 
 ### Future Lens
 
@@ -744,11 +804,44 @@ decode blind; the entry stays in §9.
 **Year:** 2023  
 **arXiv:** [2311.04897](https://arxiv.org/abs/2311.04897)  
 **TUL uses:** the instrument for "does the slot carry the plan" (linear/soft-prompt
-readout on a hidden state, always reported against `teacher_acc` and a bigram floor).
-Table 2: blind linear probes 0.292/0.190/0.158 at t+2/3/4 (bigram 0.201); the
-learned-prompt reader 0.484/0.437/0.469 is TOKEN-FED (Eq. 9/11) — evidence for the
-fed-back decoder, not for blind decode. Fig 4 (read from the PDF): linear t+2 peaks late
-in the stack; the mid-stack peak belongs to the token-fed reader.
+readout on a hidden state, always reported against `teacher_acc` and a bigram floor). Table 2: blind linear probes 0.292/0.190/0.158 at t+2/3/4 (bigram 0.201); the learned-prompt reader 0.484/0.437/0.469 is TOKEN-FED (Eq. 9/11) — evidence for the fed-back decoder, not for blind decode. Fig 4 (read from the PDF): linear t+2 peaks late in the stack; the mid-stack peak belongs to the token-fed reader. 
+
+Used as a probe to confirm behaviors during initial testing.
+
+### ACT — Adaptive Computation Time
+
+**Title:** Adaptive Computation Time for Recurrent Neural Networks  
+**Authors:** Alex Graves (DeepMind)  
+**Year:** 2016  
+**arXiv:** [1603.08983](https://arxiv.org/abs/1603.08983)  
+**Local:** [references/tul-latent-emission/act/act.md](references/tul-latent-emission/act/act.md)  
+**TUL uses:** The canonical per-token halting / ponder-depth method. TUL's claim is the
+opposite grain: depth that buys a deeper thought should be allocated per **span**, not
+varied per token inside the span.
+
+### PonderNet
+
+**Title:** PonderNet: Learning to Ponder  
+**Authors:** Andrea Banino, Jan Balaguer, Charles Blundell (DeepMind)  
+**Year:** 2021  
+**arXiv:** [2107.05407](https://arxiv.org/abs/2107.05407)  
+**Local:** [references/tul-latent-emission/pondernet/pondernet.md](references/tul-latent-emission/pondernet/pondernet.md)  
+**TUL uses:** Probabilistic successor to ACT for adaptive compute. Same contrast: TUL
+loops per slot/span; PonderNet (and ACT) still decide how long to think **per token**.
+
+### J-lens / J-space (Anthropic)
+
+**Title:** Verbalizable Representations Form a Global Workspace in Language Models  
+**Authors:** Wes Gurnee, Nicholas Sofroniew, et al.; Jack Lindsey (Anthropic)  
+**Year:** 2026  
+**Writeup:** [transformer-circuits.pub/2026/workspace](https://transformer-circuits.pub/2026/workspace/index.html)  
+**Summary:** [anthropic.com/research/global-workspace](https://www.anthropic.com/research/global-workspace)  
+**arXiv:** [2607.15495](https://arxiv.org/abs/2607.15495)  
+**Local:** [references/tul-latent-emission/j-space/j-space.md](references/tul-latent-emission/j-space/j-space.md)  
+**TUL uses:** Jacobian lens (J-lens) reads mid-depth **J-space** — concepts poised for
+future verbal report, not only next-token logits. Aligns with Future Lens: middle layers
+hold whole semantic thoughts (ST) that stay available across a span while late layers
+decode the surface token.
 
 ### Blockwise Parallel Decoding
 
@@ -776,11 +869,44 @@ deferred emission-path idea, orthogonal to TUL's claims.
 **Authors:** Hao, Sukhbaatar, Su, Li, Hu, Weston, Tian (Meta FAIR)  
 **Year:** 2024  
 **arXiv:** [2412.06769](https://arxiv.org/abs/2412.06769)  
+**Local:** [references/tul-latent-emission/coconut/coconut.md](references/tul-latent-emission/coconut/coconut.md)  
 **TUL uses:** the latent as an ATTENDED POSITION (thoughts enter as previous positions in
 the sequence and later tokens read them through the KV cache) — TUL's slots are positions
 for the same reason; loss masked on latent thoughts. Also the warning: without the
 language curriculum a slot with only downstream token loss learns nothing (14.4 vs No-CoT
 16.5 GSM8k).
+
+### Quiet-STaR
+
+**Title:** Quiet-STaR: Language Models Can Teach Themselves to Think Before Speaking  
+**Authors:** Zelikman, Harik, Shao, Jayasiri, Haber, Goodman  
+**Year:** 2024  
+**arXiv:** [2403.09629](https://arxiv.org/abs/2403.09629)  
+**Local:** [references/tul-latent-emission/quiet-star/quiet-star.md](references/tul-latent-emission/quiet-star/quiet-star.md)  
+**TUL uses:** think-before-speak on ordinary text — rationales inserted before tokens to
+improve future-token prediction (not QA-only CoT). Provenance for amortizing thought
+over upcoming content; TUL's slots play that role as punctuation-bounded span plans
+rather than per-token verbalized rationales.
+
+### AGCLR
+
+**Title:** Why Limit the Residual Stream to Layers and Not Tokens? Persistent Memory for
+Continuous Latent Reasoning  
+**Authors:** Farhan, Chaudhary  
+**Year:** 2026  
+**arXiv:** [2606.07720](https://arxiv.org/abs/2606.07720)  
+**Local:** [references/tul-latent-emission/agclr/agclr.md](references/tul-latent-emission/agclr/agclr.md)    
+**TUL uses:** Adaptive Gated Continuous Latent Reasoning — three learned gates (read /
+forget / write) on a persistent concept stream over Coconut-style latent passes. Named
+in the compaction-window discipline as the cautionary case where three constants were
+mistaken for a mechanism; informs why TUL prefers attended slot positions over an
+untargeted gated carry unless an arm proves otherwise.
+
+This was tested on top of TUL direclty to give essentially a decaying tape memory, it doesn't beat just keeping the hidden states from the loop in the sequence. So it doesnt justify the machinery for an already finnicky portion of the model. I think there is some kind of tape system that can beat the naive approach. I think likely though it is just something like, 'at compaction keep all the hidden states and put them at the top of the sequence.' Likely it has some issues with attention sinking. 
+
+## **TODO: attention sinking mitigation ablations**
+
+
 
 ### CODI / CCoT (latent chain-of-thought)
 
@@ -862,15 +988,13 @@ own decoded by a pretrained AR decoder via cross-attention reaches Rouge-L 99.2.
 keeps AR emission inside the span; distillation from an AR teacher is a fallback if the
 first-token position stays weak.
 
-### Explorative Modeling (XM)
+### Explorative Modeling (XM) (REMOVED)
 
 **Title:** Explorative Modeling  
 **Authors:** Gladstone, Ji, Du  
 **Year:** 2026  
 **arXiv:** [2607.27372](https://arxiv.org/abs/2607.27372)  
-**TUL uses:** the explanation of the `.` collapse — one-shot multi-target regression has
-generative expressivity 1 and predicts the mean; MDLM XM-1 emits "the the the". Best-of-K
-search over the latent is a deferred alternative to a warm-up loss.
+**TUL uses:** XM was used for testing to see if the latent could directly be targeted for exploration during pretraining. Since this is still next token prediction, there isn't ambiguity that causes exposure bias while under teacher forcing. Hypothetically a specific curriculum could achieve this sort of pretraining exploration of language on the latent directly. The XM paper shows a method using a vector DB for this taht is just not tractable for real training. 
 
 ### SpaceByte
 
@@ -961,6 +1085,8 @@ to that case and to nothing else here.
 
 ---
 
+
+
 ## Quick Reference Table
 
 
@@ -971,6 +1097,8 @@ to that case and to nothing else here.
 | 2a  | MegaBlocks / STK                       | Gale et al. (Stanford, 2022)              | [2211.15841](https://arxiv.org/abs/2211.15841)                                                                                                 |
 | 3   | CMS Topology                           | Original work — MORPH project             | —                                                                                                                                              |
 | 4   | GLA Retention                          | Yang et al. (2023 / ICML 2024)            | [2312.06635](https://arxiv.org/abs/2312.06635)                                                                                                 |
+| 4b  | RAVEN (planned on GLA)                    | Afzal, Bick, Xing, Cevher, Gu (2026)                | [goombalab/raven PDF](https://github.com/goombalab/raven/blob/main/raven.pdf)                                                                  |
+| 4c  | Fast Weight Attention                     | Zhang et al. (ByteDance/Princeton/Tsinghua, 2026)   | [2608.27763](https://arxiv.org/abs/2608.27763)                                                                                                 |
 | 4a  | Neural Memory (Titans) (removed)       | Behrouz, Zhong, Mirrokni (Google, 2025)   | [2501.00663](https://arxiv.org/abs/2501.00663)                                                                                                 |
 | 5   | CCA                                    | Figliolia et al. (Zyphra, 2025)           | [2510.04476](https://arxiv.org/abs/2510.04476)                                                                                                 |
 | 6   | CSA / HCA                              | DeepSeek-AI (2026)                        | [HF PDF](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf)                                                         |

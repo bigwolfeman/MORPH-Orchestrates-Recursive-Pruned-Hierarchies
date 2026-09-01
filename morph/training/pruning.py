@@ -216,7 +216,7 @@ class PruningSchedule:
                       f"density={new_density:.4f} (target {self.target_density})", flush=True)
 
         # ── Phase 3: carve (MORTAR) ───────────────────────────────────────
-        # Hidden-neuron routing (Wolfe's choice) does NOT need output-cluster
+        # Hidden-neuron routing (whole-body ReMoE) does NOT need output-cluster
         # metadata — the router builds its own d_ff neuron→cluster map. For ternary
         # layers we carve the SMOOTH shadow (leave_parametrized=False) — NOT the baked
         # discrete ternary — so QAT keeps a real gradient signal, then re-register the

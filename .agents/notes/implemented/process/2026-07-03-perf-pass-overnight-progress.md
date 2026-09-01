@@ -94,11 +94,11 @@ depth resample + thermal + loader). A single launch/kernel win (−535 launches 
 or a −220µs kernel) is BELOW this noise → invisible in step ms even when real.
 Consequences for the rest of the arc:
 - Attribute with **GPU-region time** (`bwd gpu`, `fwd gpu` from MORPH_PERF_REGIONS) or
-  **kernel-isolated microbench** (like sdd_split.py), NOT wall step time.
+ **kernel-isolated microbench** (like sdd_split.py), NOT wall step time.
 - The 2× is only visible after **stacking** many launch cuts (enough to relieve the
-  225ms command-buffer stall) OR at larger d (cloud) where per-op work grows.
+ 225ms command-buffer stall) OR at larger d (cloud) where per-op work grows.
 - For each candidate: prove bit-exactness (loss-trace ≤ noise floor) + measure the
-  ISOLATED effect; don't expect the full-step ms to move for any single change.
+ ISOLATED effect; don't expect the full-step ms to move for any single change.
 
 ## Measured routed baseline (mb4 seq4k, ademamix_b1zero, resume step_36000, seed 1234)
 
@@ -110,20 +110,20 @@ aten::copy_ ~6.4k. Command Buffer Full ~2.4k events (the launch wall).
 ## IN PROGRESS
 
 - **Attention small-GEMM batching (#3)** — worktree Fable agent. aten::mm ~2565/step
-  @48µs ≈ 121ms/step = biggest single lever. CPU-parity prototypes for qkv-concat GEMM
-  / per-head bmm; GPU-gate on return.
+ @48µs ≈ 121ms/step = biggest single lever. CPU-parity prototypes for qkv-concat GEMM
+ / per-head bmm; GPU-gate on return.
 
 ## QUEUE (not started)
 
 - #2 Optimizer CUDA graph: needs set_to_none=False (grads get fresh addrs now) +
-  tensor-scalar plumbing for warmup scalars. ~400-800 launches. Class A.
+ tensor-scalar plumbing for warmup scalars. ~400-800 launches. Class A.
 - #4 Static-region graphs (embed+prelude, coda+head+CE). Class A pending dropout-RNG gate.
-- #5 Router elementwise-tail fusion (class A) + bf16 router (class B, Wolfe opt-in).
+- #5 Router elementwise-tail fusion (class A) + bf16 router (class B, opt-in).
 - #6 RoPE cos/sin cast cache (~120 casts/step). Class A.
 - CLOUD-only: core-loop CUDA graph + ckpt_grad_iters reduction (both blocked local by
-  the +7GB/iter wall; unlock at 96GB).
+ the +7GB/iter wall; unlock at 96GB).
 
-## CLASS-B MENU (needs Wolfe opt-in — do NOT land silently)
+## CLASS-B MENU (needs operator opt-in — do NOT land silently)
 
 - bf16 router: ~0.65GB mem + faster fp32 query_proj GEMM (Focus 1 + Focus 3).
 - CSA indexer top-128 restructure (741µs/call, tie-break-sensitive).

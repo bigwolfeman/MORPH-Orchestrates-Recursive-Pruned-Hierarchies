@@ -20,7 +20,7 @@ model:
   n_prelude: 4
   n_core: 35
   n_coda: 4
-  mean_depth: 4   # Wolfe 2026-06-11: halved from 8 for B=1 decode (≈2× less core-loop weight re-streaming; ~3% ppl trade). Storage/param count unchanged.
+  mean_depth: 4   # 2026-06-11: halved from 8 for B=1 decode (≈2× less core-loop weight re-streaming; ~3% ppl trade). Storage/param count unchanged.
   max_depth: 10
   bptt_depth: 4
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth

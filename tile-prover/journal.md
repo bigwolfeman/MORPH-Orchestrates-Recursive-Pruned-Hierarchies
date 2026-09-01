@@ -43,7 +43,7 @@
 **Per-kernel (gemv_bw_30b):** mortar gate_up 43.62→41.90 (-3.9%), mortar down 39.49→37.41 (-5.3%), ternary down 75.04→71.63 (-4.5%), ternary gate_up flat (memory-bound).
 **Live 30B tok/s:** base [44.06, 45.41] vs magic [43.61, 44.92] — OVERLAPPING, ~3% noise band. NO end-to-end change: full decode is HBM-bound (51% peak, 17.97 GB/tok). Parity argmax 8/8 cos 0.99981 PASS.
 **HONEST VERDICT:** Lever-1 magic dequant gives a real, Z3-bit-exact, zero-risk per-kernel compute win (mortar/ternary down −4 to −5%) but it does NOT move headline 30B tok/s because the aggregate decode is bandwidth-bound. Lever-2 occupancy = null. The per-kernel win is bankable for any future config where MLP compute becomes the e2e bottleneck (denser carve, B>1, faster attn). ncu confirmation of the SM%/occupancy delta is owed (admin-gated).
-**Next:** Wolfe integrates into `morph/model/attention.py` behind a flag (do NOT
+**Next:** integrate into `morph/model/attention.py` behind a flag (do NOT
 modify attention.py per instructions). Unverified: torch.compile interaction, S not
 divisible by nothing-special (kernel is per-row so any S works), D!=32 (P7 covers 64
 but no runtime test for D=64), multi-GPU.
@@ -67,7 +67,7 @@ cosines d_input/d_w_dw/d_w_gp = 1.0000 for all 8 dim cases. Speed (B=2 S=2048, 3
 ISOLATED grouped backward (the profiler target) = 1.95x (Q) / 2.31x (K) faster than cuDNN.
 Full stacked-pair fwd+bwd: Q 1.42x, fwd 1.39x; K fwd 1.82x but K full fwd+bwd 0.70-0.85x
 (SLOWER — tiny stream, 5-launch overhead beats cuDNN). Z3: 88/88 proven.
-**Next:** Wolfe integrates. NOT verified: torch.compile interaction; K-stream full-pair is
+**Next:** integrate. NOT verified: torch.compile interaction; K-stream full-pair is
 honestly slower (the win is the grouped wgrad, which dominates the real profile); only
 D=32/K=4/B=2 benchmarked; CUDA-graph capture; numerical drift over long training.
 

@@ -20,18 +20,18 @@ wall (fake constant grads, launch-bound). Bench: `ignore/bench_cure_step.py`, `i
 
 Knob attribution of the +71.8ms cure overhead (diag ON):
 SNR gate +31.9 | per-coord cap +20.9 | update_clip +16.1. Root cause = PER-TENSOR PYTHON
-DIAGNOSTIC LOOPS over 454 tensors: snr-gate `float(gt.mean())`+`int((gt<0.5).sum())` (~900 GPU→CPU
-syncs/step), update_clip `int((|u|>c).sum())` (454 syncs), per-coord-cap `(o>0).sum()` (454 launches,
+DIAGNOSTIC LOOPS over 454 tensors: snr-gate `float(gt.mean)`+`int((gt<0.5).sum)` (~900 GPU→CPU
+syncs/step), update_clip `int((|u|>c).sum)` (454 syncs), per-coord-cap `(o>0).sum` (454 launches,
 sync-free but launch-bound). The cure MATH (foreach) is cheap; the telemetry was the cost.
 
 ## TIER 1 ✅ DONE — gate diagnostics + batch clamp (bit-identical, gated DIAG_PARITY_GATE_PASS)
 Changes (`ademamix_b1zero.py` + `optimizer.py` + `base.yaml`):
 - New `track_diag` flag (default **False**). Gates ALL three per-tensor diag loops. Config key
-  `ademamix_track_diag` (default false); plumbed via create_optimizer.
+ `ademamix_track_diag` (default false); plumbed via create_optimizer.
 - update_clip clamp: per-tensor `u.clamp_(-c,c)` loop → batched `torch._foreach_clamp_min_/max_`
-  (numerics-identical — clamp is elementwise/order-free).
+ (numerics-identical — clamp is elementwise/order-free).
 - Gate proves max|Δparam|=0 AND max|Δstate|=0 between diag off↔on, and foreach-clamp==per-tensor
-  clamp_ (`ignore/gate_diag_parity.py` → DIAG_PARITY_GATE_PASS).
+ clamp_ (`ignore/gate_diag_parity.py` → DIAG_PARITY_GATE_PASS).
 
 RESULT (AFTER), opt.step ms:
 - **CURE FULL deploy (track_diag=False): 65.5 ms** (was 99.4 → **−34ms reclaimed, bit-exact**)
@@ -62,9 +62,9 @@ diag counters (track_diag) are de-fused-only by design.
 
 GATE `ignore/gate_fused_cure_parity.py` → FUSED_CURE_PARITY_GATE_PASS:
 - PART A: fused step-1 (full cure, eps-outside) vs hand fp32 ref → rel **8e-8** (math bit-exact; step-1
-  has zero quant round-trip since m2/ν init at 0). PART B: bare/eps-inside backward-compat rel 8e-8.
+ has zero quant round-trip since m2/ν init at 0). PART B: bare/eps-inside backward-compat rel 8e-8.
 - PART C: fused-cure (linear-int8) vs de-fused-cure (bnb dynamic qmap), 30 steps, g-collapse →
-  worst rel|Δparam| **2.9e-4**, no divergence (different quant ⇒ small bounded drift).
+ worst rel|Δparam| **2.9e-4**, no divergence (different quant ⇒ small bounded drift).
 
 BENCH (`ignore/bench_cure_step.py`): **FUSED+CURE = 4.87 ms** (bare-fused 3.61, +1.26ms for the cure;
 de-fused cure 59.7; AdamW8bit 13.7). END-TO-END 99.4→4.87 ms = **−94.5ms/step**; cured β1=0 now 3×
@@ -76,20 +76,20 @@ by the kernel's sqrt-ν storage + code-1 floor + update_clip=5.
 
 ### TIER 2 TRAINING A/B (1600 steps, real grads, same seed/data; `ignore/validate_fused_cure_ab.sh`)
 - **STABILITY ✅ RESOLVED:** fused-cure ran 1600 real steps, NO divergence / NO NaN. The eps-outside-
-  on-int8 concern (the whole reason a training run was needed) is PUT TO BED — sqrt-ν floor + update_clip
-  contain it through real ternary-STE cusps. (Note: prune_start=3000 so this 1600-step run did NOT hit a
-  prune event — prune-cusp stability on fused still relies on the de-fused cure's gauntlet pass + the
-  guarded TST run.)
+ on-int8 concern (the whole reason a training run was needed) is PUT TO BED — sqrt-ν floor + update_clip
+ contain it through real ternary-STE cusps. (Note: prune_start=3000 so this 1600-step run did NOT hit a
+ prune event — prune-cusp stability on fused still relies on the de-fused cure's gauntlet pass + the
+ guarded TST run.)
 - **QUALITY ⚠️ NOT loss-neutral:** fused sits a SYSTEMATIC ~0.10 nats ABOVE de-fused (same seed/data, so
-  not noise — the quant scheme: fused linear-int8 sqrt-ν vs de-fused bnb dynamic qmap). Steps 400-1400 Δ
-  ≈ 0.075-0.12 (worst incl. early step 0.32). At loss ~4.8 (early training) this is INDISTINGUISHABLE
-  between a CLOSING LAG (fused ~50-100 steps behind on the same trajectory, vanishes as curves flatten)
-  and a PERSISTENT TAX (coarser int8 state = real convergence cost). 1600 steps too early to tell.
+ not noise — the quant scheme: fused linear-int8 sqrt-ν vs de-fused bnb dynamic qmap). Steps 400-1400 Δ
+ ≈ 0.075-0.12 (worst incl. early step 0.32). At loss ~4.8 (early training) this is INDISTINGUISHABLE
+ between a CLOSING LAG (fused ~50-100 steps behind on the same trajectory, vanishes as curves flatten)
+ and a PERSISTENT TAX (coarser int8 state = real convergence cost). 1600 steps too early to tell.
 - **VERDICT: Tier 2 is STABLE + 94ms-faster but NOT yet proven loss-neutral.** Tier 1 de-fused (65ms,
-  bit-exact) remains the zero-risk fallback for science runs.
+ bit-exact) remains the zero-risk fallback for science runs.
 
 ### LONG A/B IN PROGRESS (lag-vs-tax, 6000 steps, PRUNE DISABLED to isolate quant; `validate_fused_cure_long.sh`)
-Wolfe's call: settle it before deploying fused. Clean isolation (prune_start=999999 → only diff is the
+locked decision: settle it before deploying fused. Clean isolation (prune_start=999999 → only diff is the
 optimizer quant). Prints Δloss trend: first-half mean|Δ| vs second-half mean|Δ| → CLOSING-LAG if it
 shrinks, PERSISTENT-TAX if flat. Run `valfcl_master.log` ends in `VALFCL_DONE verdict=...`. PENDING.
 DECISION RULE: lag → adopt fused (4.87ms) for deploy; tax → either keep Tier-1 de-fused (65ms, bit-exact)
@@ -112,22 +112,22 @@ dead-mask can't confuse code-0≠value-0); `_mask_dead_state` dynamic branch (m2
 
 GATES (GPU, run on the freed card after killing the long A/B):
 - `ignore/gate_fused_dynamic_qmap.py` → **GATE_FUSED_DYNAMIC_QMAP_PASS**. 4-arm controlled (heavy-
-  tailed quadratic, 500 steps, shared init/grad): fused-dynamic (C) ↔ de-fused bnb reference (A)
-  param drift = **1.9e-5** (reproduces the validated reference); quant error vs fp32-no-quant:
-  dynamic **0.056 = de-fused ref**, linear **0.146** (2.6× worse). NOTE: the static-toy *objective*
-  ordering is NOT a valid quality arbiter (constant gradient field) — dropped as a criterion;
-  parameter-drift-from-no-quant is the right metric and it's decisive.
+ tailed quadratic, 500 steps, shared init/grad): fused-dynamic (C) ↔ de-fused bnb reference (A)
+ param drift = **1.9e-5** (reproduces the validated reference); quant error vs fp32-no-quant:
+ dynamic **0.056 = de-fused ref**, linear **0.146** (2.6× worse). NOTE: the static-toy *objective*
+ ordering is NOT a valid quality arbiter (constant gradient field) — dropped as a criterion;
+ parameter-drift-from-no-quant is the right metric and it's decisive.
 - `ignore/gate_fused_cure_parity.py` → **FUSED_CURE_PARITY_GATE_PASS** still (rel 8e-8) — the linear
-  path is untouched / bit-exact (the dynamic branches are constexpr-off by default). No regression.
+ path is untouched / bit-exact (the dynamic branches are constexpr-off by default). No regression.
 - CPU pre-check: `_nearest_code` 8-step bisect == brute-force argmin on both real bnb maps (0 genuine
-  errors). signed-map zero @idx 127, unsigned-map zero @idx 0 (confirms dead-mask indices).
+ errors). signed-map zero @idx 127, unsigned-map zero @idx 0 (confirms dead-mask indices).
 
 PROVEN: kernel correct + reproduces the gauntlet-winning de-fused quantizer at full fused speed
 (~4.87ms+LUT/bisect overhead; benchmark TBD). NOT YET DIRECTLY MEASURED (no-theater): the real-
 training loss tax is gone — strongly implied (fused-dynamic == de-fused, and de-fused beat fused-
 linear by 0.10 nat in the 1600-step A/B) but the definitive check is a short fused-dynamic-vs-defused
 real-training A/B (should now OVERLAY, vs linear's +0.10). DEPLOY: `ademamix_fused=true
-ademamix_fused_dynamic_qmap=true ademamix_eps_inside=false`. Long lag-vs-tax A/B was KILLED (Wolfe:
+ademamix_fused_dynamic_qmap=true ademamix_eps_inside=false`. Long lag-vs-tax A/B was KILLED (:
 "you basically just fixed it") — its verdict is moot now that the fix exists.
 
 ## TIER 2 — (original notes) fused-kernel port
@@ -135,7 +135,7 @@ de-fused 65ms vs FUSED 3.7ms ⇒ ~60ms more reclaimable. Requires porting the cu
 kernel (`ademamix_b1zero_kernel.py`): per-coord cap + SNR gate + an eps-**outside** option (the
 kernel currently HARDCODES eps-inside, which cost ~0.5 nats convergence on de-fused — see the
 eps_inside comments). Needs: kernel work (tile-prover/cuda agent), a numerics parity gate vs the
-de-fused cure (the validated reference), and re-validating eps placement. Decision pending Wolfe.
+de-fused cure (the validated reference), and re-validating eps placement. Decision pending.
 
 ## Files
 `morph/training/ademamix_b1zero.py` (track_diag flag + gated diags + foreach clamp),

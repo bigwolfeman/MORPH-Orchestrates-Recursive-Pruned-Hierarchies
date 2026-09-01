@@ -12,6 +12,8 @@ This can be backed off, but an ideal schedule hasn't been found. Expect degredat
 The synthetic math itself comes from another project. Previous attemps at generating math data generally lacks 
 reasoning traces (which reduce the number of steps needed to learn by providing a clearer signal), and volume/diversity. So a bespoke generator was needed to get the volume, coverage, and signal clarity for this kind of training.
 
+I am maintaining this as a private repo at this time. The plan is to use it as a seed for the full train model and refactor it for release after checkpoints.
+
 # MORPH ⇄ Olympiad-AI Interop Contract
 
 Both repos publish independently. Everything that crosses the boundary is listed here;

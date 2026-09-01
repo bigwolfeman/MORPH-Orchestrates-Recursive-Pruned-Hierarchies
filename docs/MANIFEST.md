@@ -5,9 +5,10 @@ Top-level navigation for project documentation.
 ## Architecture & Design
 
 - [Paper references and MORPH usage notes](references.md)
-- [Runtime invariants (BPTT, kernels, compile, phases)](runtime-invariants.md)
+- [MORTAR BCSR + CMS (sparse MLP path)](mortar-bcsr.md)
+- [Runtime invariants (BPTT, kernels, compile, phases)](../lab/runtime-invariants.md)
 - [Ablation ledger (accepted / rejected / deferred)](ablation-ledger.md)
-- [TUL — Thought Unpack Loop specification (`lab/experiments/tul`)](tul-spec.md)
+- [TUL — Thought Unpack Loop specification](tul-spec.md)
 - [SCSE — Source-Centered State Evolution port specification](scse-spec.md)
 - [TUL Gate — span-length and halting gates](tul-gate-spec.md) — BUILT 2026-08-22; §13 lists what building it changed in the spec
 - [TUL-FM probing doctrine (flow-matching arc: instruments, controls, phase gates)](tul-fm-probing.md) — PROPOSED 2026-08-28; arc note in `.agents/notes/proposed/architecture/`
@@ -22,7 +23,7 @@ What happened when we measured, one file per experiment, filed by outcome. Decis
 live in `.agents/notes/`; these are the runs behind them.
 
 - [Experiment records — layout, naming and figure regeneration](../lab/experiments/README.md)
-- [TUL arms — the first complete comparison](../lab/experiments/results/2026-08-18-tul-arms-first-comparison.md) — A0 / A0c / A1c / A3 at 20k steps
+- [TUL arms — the first complete comparison](../lab/tul/arms-result.md) — A0 / A0c / A1c / A3 at 20k steps
 - [The gated-TUL bake-off](../lab/experiments/failures/2026-08-21-tul-gate-bakeoff.md) — no verdict; every arm died
 - [What makes the TUL arms diverge?](../lab/experiments/failures/2026-08-22-tul-divergence-cause.md)
 - [Is `ademamix_alpha_cap=1.0` a cure or a delay?](../lab/experiments/failures/2026-08-22-tul-order-parameter.md)
@@ -35,6 +36,14 @@ Step-by-step procedures. How to do a thing, not why it is done that way.
 
 - [Replaying the TUL core takeover from a checkpoint](cookbook/replaying-the-core-takeover.md)
 - [Measuring the looped core's operator, not its magnitudes](cookbook/measuring-the-core-map.md)
+
+## TUL satellites (not in this folder)
+
+Canonical contract stays here as `tul-spec.md`. Campaign logs and spikes live under
+[`lab/tul/`](../lab/tul/). Arm CW / Arm D design notes:
+
+- [Arm CW — compaction window (implemented)](../.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md)
+- [Arm D — teacher distill (proposed)](../.agents/notes/proposed/architecture/2026-08-18-tul-teacher-distill.md)
 
 ## Local Archives
 

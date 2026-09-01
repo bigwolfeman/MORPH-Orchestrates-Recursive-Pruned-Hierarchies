@@ -4,7 +4,7 @@ Status: proposed
 
 ## Problem
 
-The deploy-scale run is not tractable at today's throughput. Wolfe's 2026-08-21 target:
+The deploy-scale run is not tractable at today's throughput. 2026-08-21 target:
 train on ~8 rented RTX 5090s, order $400 budget, and reach as many tokens as possible on
 the cloud model (d2048, 4:8:4, ~850M physical params, ~3.5B effective params per token
 before pruning, ~1B after the MORTAR prune to 0.25 density). The earlier perf pass
@@ -30,13 +30,13 @@ practical kernel headroom. The cost is FLOPs per token: the loop and the recompu
 
 ## Proposal
 
-### A. Levers that do not change the loop budget (Wolfe: loop budget is out of scope for now)
+### A. Levers that do not change the loop budget (: loop budget is out of scope for now)
 
 | # | Lever | Expected | Class | Status |
 |---|---|---|---|---|
 | 1 | `ckpt_grad_iters=0` (no backward recompute of the 4 grad iterations) | **×1.21 measured** at equal batch | exact within the noise floor (control-run gated) | measured 2026-08-21, see A2; VRAM-gated: +0.61 GB per retained row-iteration |
 | 2 | Non-core region cut: profile the A3 arm, not A0. Targets: fused CE (a 201 MB fp32 `grad_w` per call), hybrid-embedding + Lorentz `lm_weight()` rebuild, int6 embed STE, HC expand/reduce, the 284M-param optimizer step | ×1.1–1.15 on the full step | mostly exact | not profiled |
-| 3 | TUL on (`tul_a1`) | **×1.6 measured** (28.1k tok/s, slightly better CE, [the arms result](../../../../lab/experiments/results/2026-08-18-tul-arms-first-comparison.md)) | validated on the 5090 arms; not validated with prune/carve/route | measured |
+| 3 | TUL on (`tul_a1`) | **×1.6 measured** (28.1k tok/s, slightly better CE, [the arms result](../../../../lab/tul/arms-result.md)) | validated on the 5090 arms; not validated with prune/carve/route | measured |
 | 4 | FP8 GEMMs on the ternary backbone. Ternary {−1,0,+1}×γ is exact in e4m3, so only activations are newly quantized. 5090 FP8 tensor rate is 2× bf16 | **~×1.07** (was ≤×1.3 — withdrawn, see A4) | B (numerics); `base.yaml` says ternary and FP8 are mutually exclusive per layer — a code constraint from the d768 era, not a math one | not built |
 | 6 | Dead saliency scoring: `accumulate_scores()` ran on all 14 MortarLinears every step even when `prune_start` can never fire (the dense TUL arms). Measured **50 ms wall / step** of a 950 ms step (MORPH_PERF_REGIONS `prune` region, A0 batch 14, 2026-08-21). `PruningSchedule.scoring_live` now skips it when `prune_start >= total_steps` | ×1.05 on dense arms; 0 on the deploy recipe (which prunes) | exact (touches only the EMA buffers, never params) | built; `tests/test_lifecycle_phase_transition.py::test_scoring_is_skipped_when_prune_can_never_fire` |
 | 5 | Lorentz/int6/QAT fusion and the `_to_copy` cast storm (5,091/step at d768) | part of #2 | exact | see structural-2x-hunt |
@@ -225,15 +225,15 @@ hook, mostly overlapped → ~5–10% visible. NVLink does not pay for itself (ta
 MORPH-specific items a generic DDP wrap gets wrong:
 
 1. **Poisson-depth straggler.** `_sample_depths` (`transformer.py:616`) draws per rank.
-   The sum of depths over 14 sequences has ~11% std, so the slowest of 8 ranks runs
-   ~15% longer than the mean every step and every all-reduce waits for it. Draw depths
-   from a rank-shared generator so every rank sees the same depth multiset. Free, exact.
+ The sum of depths over 14 sequences has ~11% std, so the slowest of 8 ranks runs
+ ~15% longer than the mean every step and every all-reduce waits for it. Draw depths
+ from a rank-shared generator so every rank sees the same depth multiset. Free, exact.
 2. **Prune-saliency divergence.** `block_score_ema` (`block_sparse.py:453`) accumulates
-   from local grads. Without an all-reduce before each prune event, ranks prune different
-   blocks and the replicas desync. Carve and route topology: compute on rank 0, broadcast.
+ from local grads. Without an all-reduce before each prune event, ranks prune different
+ blocks and the replicas desync. Carve and route topology: compute on rank 0, broadcast.
 3. Loader rank-sharding on the RAM/mmap placement path; rank-0-only wandb, eval, ckpt.
 4. `torch.compile` + DDP + the optgraph static-graph path; the GradScaler `found_inf`
-   becomes a collective.
+ becomes a collective.
 5. Checkpoints pushed off-box every `ckpt_every`; rented boxes die (97–99.5% reliability).
 
 Develop and measure this on a rented **4×3090 box at $0.41/hr** (under $10/day), not on
@@ -287,29 +287,29 @@ These change numerics or the training recipe. Each needs an ablation arm. Ranked
 expected size.
 
 1. **FP8 with ternary weights** (lever 4). The weight side is exact; the open question
-   is activation scaling (per-tensor delayed vs per-block) through the looped core,
-   where errors compound `ρ^T`.
+ is activation scaling (per-tensor delayed vs per-block) through the looped core,
+ where errors compound `ρ^T`.
 2. **Sparse-kernel efficiency at 0.25 density** (section B). If stk cannot reach >2×
-   over cuBLAS at d2048, alternatives: 2:4 structured sparsity on the tensor cores
-   (hardware 2× on SM120, but 0.5 density not 0.25), or block size 256 for fewer,
-   fatter BCSR tiles.
+ over cuBLAS at d2048, alternatives: 2:4 structured sparsity on the tensor cores
+ (hardware 2× on SM120, but 0.5 density not 0.25), or block size 256 for fewer,
+ fatter BCSR tiles.
 3. **Core-loop CUDA graph** — blocked locally by dynamic `[n_active, S, n, C]` shapes
-   and VRAM ([structural-2x-hunt](2026-07-03-structural-2x-hunt.md)); on multi-GPU with
-   smaller per-GPU batch and lever 1 the VRAM blocker lifts. Pad `n_active` to a fixed
-   bucket to lift the shape blocker. Exact.
+ and VRAM ([structural-2x-hunt](2026-07-03-structural-2x-hunt.md)); on multi-GPU with
+ smaller per-GPU batch and lever 1 the VRAM blocker lifts. Pad `n_active` to a fixed
+ bucket to lift the shape blocker. Exact.
 4. **Cross-iteration KV sharing (CLA)** — plumbing exists (`cla_capture`/`cla_kv`);
-   prior arm `cla_iter1_b4`. Removes K/V projection + CCA conv from T−1 of T iterations.
-   Parked pending ablation.
+ prior arm `cla_iter1_b4`. Removes K/V projection + CCA conv from T−1 of T iterations.
+ Parked pending ablation.
 5. **Router cost** (regime 4, 70% of the run): route once per loop-iteration group or
-   share gates across iterations; bf16 router. Class B.
+ share gates across iterations; bf16 router. Class B.
 6. **HC carrier width** n=4 → n=2: halves the residual's memory traffic (the
-   bandwidth-bound half of the step). The n2-vs-n4 quant A/B in remaining-kernel-work
-   decides; re-run at d1024+.
+ bandwidth-bound half of the step). The n2-vs-n4 quant A/B in remaining-kernel-work
+ decides; re-run at d1024+.
 7. **Sequence-length curriculum** (short seq early): attention is 1.8% of FLOPs, so
-   this buys little here; skip unless the data side wants it.
+ this buys little here; skip unless the data side wants it.
 8. **Fewer gradient iterations (`bptt_depth` 4 → 3)** cuts backward FLOPs of the loop by
-   25% — this is a loop-budget change and is explicitly out of scope for now; listed so
-   nobody re-derives it.
+ 25% — this is a loop-budget change and is explicitly out of scope for now; listed so
+ nobody re-derives it.
 
 ### G. Iso-depth scaling law (verified 2026-08-21)
 
@@ -329,37 +329,37 @@ supervision "collapses free generation" — evidence against Rho-1-style selecti
 ## Alternatives considered
 
 - **Keep the bit-exact launch-cut path from 2026-07-03.** It produced 5% and the
-  command-buffer stall analysis says the stack is worth ≤ 2× only at the cloud shape.
-  Lost because the measured MFU is already 47%: launch cuts cannot give the asked 1.5–4×.
+ command-buffer stall analysis says the stack is worth ≤ 2× only at the cloud shape.
+ Lost because the measured MFU is already 47%: launch cuts cannot give the asked 1.5–4×.
 - **Rent H100/B200 for NVLink and FP8 transformer engine.** 2–2.5× worse per FLOP-dollar
-  than 5090s; this model's all-reduce fits PCIe. Lost on price.
+ than 5090s; this model's all-reduce fits PCIe. Lost on price.
 - **Rent 3090s for the train run.** Best per dollar (3.2) but 3× the wall-clock, which
-  busts the duration caps and the 2–3 day goal. Kept as the dev box.
+ busts the duration caps and the 2–3 day goal. Kept as the dev box.
 - **Go straight to 8×5090 without a dev run.** Lost because DDP is greenfield and the two
-  MORPH-specific desync bugs (depth straggler, prune saliency) would burn paid hours.
-- **Attention-kernel work first** (Wolfe's initial guess). Attention score/value FLOPs
-  are 1.8% of the step at seq 1024 and the skinny projections were already fused in
-  July. Lost on the numbers.
+ MORPH-specific desync bugs (depth straggler, prune saliency) would burn paid hours.
+- **Attention-kernel work first** (the initial guess). Attention score/value FLOPs
+ are 1.8% of the step at seq 1024 and the skinny projections were already fused in
+ July. Lost on the numbers.
 
 ## Acceptance criteria
 
 1. Lever 1 gated: loss trace within the 5.9e-4 noise floor over 200 steps vs
-   `ckpt_grad_iters=-1`, and tok/s reported with `perf/flop_proxy` and peak alloc.
+ `ckpt_grad_iters=-1`, and tok/s reported with `perf/flop_proxy` and peak alloc.
 2. A3-region profile exists with a ms breakdown of the ~165 ms non-layer time.
 3. stk dds/sdd microbench at d2048 / density 0.25 vs cuBLAS dense, same shapes, reported
-   as a ratio. This decides the 30B-vs-70B row.
+ as a ratio. This decides the 30B-vs-70B row.
 4. DDP on 4×3090: scaling efficiency measured; depth multiset identical across ranks
-   (assert); prune masks identical across ranks after a prune event (assert).
+ (assert); prune masks identical across ranks after a prune event (assert).
 5. $25 pilot on 1×5090: image boots, corpus ingests, checkpoint leaves the box.
 6. Only then the $400 run, with the model size chosen from section E.
 
 ## Risks
 
 - The relative-speed column is vendor peaks scaled by one measured card; the 3090 and
-  4090 rows could be off by ±20%.
+ 4090 rows could be off by ±20%.
 - Comm overlap assumes PCIe P2P works on the rented GeForce box; if P2P is disabled the
-  all-reduce goes through host memory at ~10 GB/s and d2048 sees ~20% visible.
+ all-reduce goes through host memory at ~10 GB/s and d2048 sees ~20% visible.
 - TUL is validated dense only; its interaction with prune/carve/route is untested.
 - Rented boxes die; an unpushed checkpoint is lost money.
 - The pruning FLOP saving (section B) may not materialize; plan against the 30B row
-  until the gate passes.
+ until the gate passes.
