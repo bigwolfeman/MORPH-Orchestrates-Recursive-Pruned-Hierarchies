@@ -46,3 +46,4 @@ Incomplete
 # Claude Code agent/worktree state
 .claude/
 .venv/
+.playwright-mcp/
