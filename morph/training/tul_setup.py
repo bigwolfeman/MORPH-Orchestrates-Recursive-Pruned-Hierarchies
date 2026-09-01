@@ -208,6 +208,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         tg_span_gate=bool(tc.get("tg_span_gate", False)),
         tg_soft_prev_span=bool(tc.get("tg_soft_prev_span", False)),
         slot_seed=str(tc.get("slot_seed", "bag_mean")),
+        # Sized from the DATA's own span_cap, never a separate config key: `bound_R`
+        # (built only when slot_seed=="bound") must never silently disagree with what
+        # the loader can actually produce — see TULConfig.bound_span_cap's docstring.
+        bound_span_cap=rule.span_cap,
         eval_ablations=bool(tc.get("eval_ablations", False)),
     )
     seq_len = int(cfg.data.seq_len)
@@ -256,6 +260,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "tg_span_gate": model_cfg.tg_span_gate,
         "tg_soft_prev_span": model_cfg.tg_soft_prev_span,
         "slot_seed": model_cfg.slot_seed,
+        "bound_span_cap": model_cfg.bound_span_cap,
         "eval_ablations": model_cfg.eval_ablations,
         "boundary_chars": str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
         "boundary_substrings": list(substrings),

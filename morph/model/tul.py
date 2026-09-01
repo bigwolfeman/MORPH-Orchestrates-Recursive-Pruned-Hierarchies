@@ -22,7 +22,8 @@ from torch import Tensor
 from .attention import RMSNorm
 from .tul_layout import SlotLayout
 
-__all__ = ["TULConfig", "TULGate", "TULGateConfig", "TULSlots", "bag_mean", "mux_span_targets",
+__all__ = ["TULConfig", "TULGate", "TULGateConfig", "TULSlots", "bag_mean", "bound_seed",
+           "build_bound_rotations", "mux_span_targets",
            "compact_index", "cw2_retain_mask", "gather_positions", "scatter_positions",
            "window_drop_mask"]
 
@@ -332,7 +333,34 @@ class TULConfig:
     #                ONLY in this mode — an unused Linear still draws weight decay
     #                and perturbs the RNG stream, so the other two modes build
     #                nothing.
+    #   "content"  : E2's `bag` column (lab/experiments/failures/2026-09-01-bound-
+    #                seed-rank.md): the plain span bag-mean, exactly "bag_mean"
+    #                minus the E_slot additive term. Arm W1 of the write-side
+    #                ladder (lab/experiments/planned/2026-09-01-write-side-ladder.md)
+    #                — E2 measured that the shared E_slot constant collapses every
+    #                seed to ~rank-1 (unit rank 3.07 -> 38.30 for "bound" alone with
+    #                E_slot removed), so this mode tests whether dropping ONLY the
+    #                constant is enough to restore write-side rank. Builds nothing new.
+    #   "bound"    : HRR-style binding — a frozen per-offset orthogonal rotation
+    #                applied to each token of the span before summing, no E_slot term
+    #                (arm W2 of the same ladder; exactly the E2 probe's "bound_noeslot"
+    #                column, lab/divergence/bound_seed_rank.py). seed = (1/sqrt(n)) *
+    #                sum_j R[offset_j] @ embed(t_j), offset_j the token's 0-based
+    #                position within its span, R frozen (:func:`build_bound_rotations`,
+    #                seed 17 — the exact rotation the probe used). A token whose
+    #                offset falls at or past `bound_span_cap` is DROPPED from the sum
+    #                (see :func:`bound_seed`). Builds one new persistent=False buffer
+    #                (`TULSlots.bound_R`, `[bound_span_cap, d, d]`) ONLY in this mode.
     slot_seed: str = "bag_mean"
+    # Rotation-table size for slot_seed="bound" — must be >= the data's `tul.span_cap`
+    # (the loader forces a boundary at that length, so no span exceeds it). Duplicated
+    # here rather than read from the loader's BoundaryRule because TULConfig is a
+    # construction-time, data-independent object (module docstring: "the segmentation
+    # keys ... belong to the loader and never reach the model") and `bound_R` must be
+    # sized before any batch is seen. `morph/training/tul_setup.py` sets this from
+    # `rule.span_cap` so it can never silently disagree with the data. Ignored (and
+    # nothing built) unless `slot_seed == "bound"`.
+    bound_span_cap: int = 32
     # Eval-only instrument switch (arm GL1). false = every existing arm's eval is
     # unchanged in COST as well as in value. true adds, at each eval batch: the
     # zero / shuffle / wrong-seed plan ablations and the slot-state geometry probe —
@@ -400,10 +428,13 @@ class TULConfig:
                 "tul.tg_soft_prev_span=true requires tul.tg_restrict=true "
                 "(docs/tul-tg-spec.md §6: TG3 SOFTENS the restriction — there is "
                 "nothing to soften when the restriction itself is off).")
-        _legal_slot_seed = ("bag_mean", "e_slot", "boundary")
+        _legal_slot_seed = ("bag_mean", "e_slot", "boundary", "content", "bound")
         if self.slot_seed not in _legal_slot_seed:
             raise ValueError(
                 f"tul.slot_seed must be one of {_legal_slot_seed}, got {self.slot_seed!r}")
+        if self.bound_span_cap < 1:
+            raise ValueError(
+                f"tul.bound_span_cap must be >= 1, got {self.bound_span_cap}")
         _legal_recur_gate = ("none", "grt")
         if self.recur_gate not in _legal_recur_gate:
             raise ValueError(
@@ -450,15 +481,18 @@ class TULConfig:
                 "tul.core_stage_cond='sigma' (there is no sampled sigma to weight by).")
         if self.center_bag_mean and self.slot_seed != "bag_mean":
             # Judgment call beyond the letter of the brief (which named only "e_slot"):
-            # "boundary" ALSO computes no bag-mean (E_slot + W_sent . embed(t_last), not
-            # a mean over the span), so `center_bag_mean` would silently do nothing there
-            # too — the exact "config key silently ignored" failure this file already
-            # bans loudly for stp_lambda/set_lambda above. Raise for both non-bag_mean
-            # modes rather than leave one of them a silent no-op.
+            # "boundary" computes no bag-mean at all (E_slot + W_sent . embed(t_last),
+            # not a mean over the span), so `center_bag_mean` would silently do nothing
+            # there — the exact "config key silently ignored" failure this file already
+            # bans loudly for stp_lambda/set_lambda above. "content" and "bound" DO
+            # compute a span aggregate, but centering was written and measured against
+            # the "bag_mean" path only (write-side ladder note,
+            # lab/experiments/planned/2026-09-01-write-side-ladder.md); kept scoped to
+            # that one mode rather than silently reused against an aggregate it was
+            # never validated on. Raise for every non-"bag_mean" mode.
             raise ValueError(
-                f"tul.center_bag_mean=true with tul.slot_seed={self.slot_seed!r} is a "
-                f"contradiction: only 'bag_mean' computes a bag-mean; there is nothing "
-                f"to center.")
+                f"tul.center_bag_mean=true with tul.slot_seed={self.slot_seed!r} is not "
+                f"supported: centering is scoped to slot_seed='bag_mean' only.")
 
 
 # ── pure tensor plumbing ─────────────────────────────────────────────────────
@@ -535,6 +569,107 @@ def boundary_token_index(bag_id: Tensor, token_sel: Tensor, n_bags: int) -> Tens
     # tail-pad SLOT position (bag_mean's documented invariant: tail pads get
     # E_slot alone) never picks up a stray "boundary" from those leftover tokens.
     out[:, n_bags] = -1
+    return out
+
+
+def build_bound_rotations(d_model: int, span_cap: int, seed: int = 17) -> Tensor:
+    """``[span_cap, d_model, d_model]`` frozen per-offset orthogonal rotations.
+
+    One QR-orthogonalised matrix per within-span token offset (arm "bound",
+    ``TULConfig.slot_seed``; the exact construction of the E2 probe,
+    ``lab/divergence/bound_seed_rank.py``'s ``R``). Drawn from a PRIVATE generator —
+    never ``torch.default_generator`` — so calling this at model construction never
+    perturbs the global RNG stream: a model built with ``slot_seed="boundary"`` (or
+    any other mode) draws byte-identical everything-else whether or not a "bound"
+    model was built earlier in the same process. Same neutrality convention
+    :class:`TULSlots` already documents for ``W_sent``.
+    """
+    g = torch.Generator().manual_seed(seed)
+    return torch.stack([torch.linalg.qr(torch.randn(d_model, d_model, generator=g))[0]
+                        for _ in range(int(span_cap))])
+
+
+def bound_seed(signal: Tensor, bag_id: Tensor, token_sel: Tensor, n_bags: int,
+               R: Tensor) -> Tensor:
+    """HRR-bound span seed (arm "bound"): ``sum_j R[offset_j] @ embed(t_j) / sqrt(n)``.
+
+    Companion to :func:`bag_mean` — same inputs, same ``[B, n_bags+1, C]`` output
+    shape and dump-bin-is-zero contract — but instead of the plain mean it binds
+    each token to a frozen rotation keyed on its 0-based OFFSET within the span
+    (order of appearance) before summing, and divides by ``sqrt(n)`` rather than
+    ``n``. Exactly the "bound_noeslot" column of
+    ``lab/divergence/bound_seed_rank.py``'s E2 probe, vectorized for the batched
+    training path (no python loop over batch elements or slots).
+
+    A token whose offset falls at or past ``span_cap = R.shape[0]`` — a span longer
+    than the rotation table, which cannot happen under a :class:`BoundaryRule` that
+    forces a boundary at ``span_cap`` but CAN happen if a layout is built with a
+    different ``span_cap`` than ``TULConfig.bound_span_cap`` — is DROPPED from both
+    the sum and the ``n`` used for the ``sqrt`` normalisation, rather than clamped
+    into the table's last row (a silent wrong-rotation collision is worse than a
+    silently smaller sum).
+
+    Method (offset, GEMM-only, no per-position ``[..., d, d]`` tensor is ever
+    materialised — that would be ``B · L · d²`` floats, ~65 GB at a training batch's
+    shape):
+
+      1. ``offset[b, l]`` = (# token positions with the same ``bag_id`` at or before
+         ``l``) − 1, via one cumulative sum along ``L`` of the same one-hot bag map
+         :func:`bag_mean` builds (deterministic — a prefix sum has one fixed
+         reduction order, unlike ``index_add_``'s atomics).
+      2. For each offset ``k`` in ``range(span_cap)`` (a loop over a small FIXED
+         constant, not over batch or slots): mask ``signal`` to the positions with
+         that offset (each bag has at most one), reduce into bags with the same
+         one-hot GEMM :func:`bag_mean` uses (``[B, n_out, L] @ [B, L, C]`` — cheap,
+         since the mask has already zeroed everything but one position per bag),
+         THEN apply ``R[k]`` to the resulting ``[B, n_out, C]`` bag vectors — matrix
+         composition lets the rotation move to after the reduction
+         (``oh @ (x_k @ Rk^T) == (oh @ x_k) @ Rk^T``, associativity), so ``R[k]`` is
+         ever applied at bag width (``n_out``), never at sequence width (``L``).
+
+    Args:
+        signal:    ``[B, L, C]``.
+        bag_id:    ``[B, L]`` int64 — see :func:`bag_mean`.
+        token_sel: ``[B, L]`` — see :func:`bag_mean`.
+        n_bags:    number of real bags (``max_slots``).
+        R:         ``[span_cap, C, C]`` frozen orthogonal rotations
+                   (:func:`build_bound_rotations`; ``TULSlots.bound_R``).
+
+    Returns:
+        ``[B, n_bags + 1, C]``; row ``n_bags`` (the dump bin) is exactly 0.
+    """
+    B, L, C = signal.shape
+    span_cap = int(R.shape[0])
+    n_out = n_bags + 1
+    sel = token_sel.to(torch.bool)
+
+    oh = signal.new_zeros(B, n_out, L)
+    oh.scatter_(1, bag_id.unsqueeze(1), 1.0)
+    oh = oh * sel.unsqueeze(1).to(signal.dtype)
+
+    # Offset of each token within its span: cumulative count of same-bag token
+    # positions up to and including this one, minus one. `cumsum` is a fixed-order
+    # prefix reduction (no atomics) — the same reproducibility bar bag_mean's GEMM
+    # meets, just via a different deterministic primitive.
+    count_at = torch.gather(oh.cumsum(dim=2), 1, bag_id.unsqueeze(1)).squeeze(1)  # [B, L]
+    offset = (count_at - 1).to(torch.int64)
+    keep = sel & (offset >= 0) & (offset < span_cap)
+    offset_safe = offset.clamp(min=0, max=span_cap - 1)
+
+    out = signal.new_zeros(B, n_out, C)
+    cnt = signal.new_zeros(B, n_out)
+    keep_f = keep.to(signal.dtype)
+    for k in range(span_cap):
+        mask_k = (keep_f * (offset_safe == k).to(signal.dtype)).unsqueeze(-1)  # [B, L, 1]
+        x_k = signal * mask_k                                    # zero outside bag/offset
+        bagged_k = torch.bmm(oh, x_k)                             # [B, n_out, C]
+        out = out + bagged_k @ R[k].to(signal.dtype).transpose(0, 1)
+        cnt = cnt + torch.bmm(oh, mask_k).squeeze(-1)             # kept-token count per bag
+
+    out = out / cnt.clamp(min=1.0).sqrt().unsqueeze(-1)
+    # Zero the dump bin exactly, matching bag_mean's contract (tail pads get E_slot
+    # alone, or nothing, in every mode).
+    out = torch.cat([out[:, :n_bags], out.new_zeros(B, 1, C)], dim=1)
     return out
 
 
@@ -675,16 +810,26 @@ class TULSlots(nn.Module):
       (``embeddings.py``, ``gla.py``, ``mhc.py``) rather than the zero/identity
       convention below — see the RNG-neutrality note there for why that convention
       does NOT extend to this parameter.
+    * ``bound_R`` ``[bound_span_cap, d, d]`` buffer, ``persistent=False`` — ONLY built
+      when ``tul.slot_seed == "bound"`` (write-side ladder arm W2). Frozen per-offset
+      orthogonal rotations from :func:`build_bound_rotations` (private generator, seed
+      17 — the exact one ``lab/divergence/bound_seed_rank.py``'s E2 probe used).
+      ``persistent=False`` is REQUIRED, not a style choice: at ``bound_span_cap=32``,
+      ``d=768`` fp32 this is ``32·768·768·4 ≈ 75 MB`` — reproducible deterministically
+      from the seed at construction, so paying that in every checkpoint would be pure
+      waste. It still moves with the module's ``.to(device)`` (buffers always do); it
+      is simply excluded from ``state_dict()``.
 
     Constructed only when TUL is configured, and LAST in ``MORPHTransformer.__init__``
     so a non-TUL model is byte-identical to the baseline (the ``attach_retention``
     convention). Every init here is RNG-NEUTRAL: ``E_slot`` / ``E_mask`` / ``W_prefix``
-    are deterministic (zero draws) and ``W_sent`` takes its one real draw from a
-    PRIVATE fixed generator, so the global RNG stream is untouched and a TUL model's
-    base weights match a baseline built with the same seed. Verified 2026-08-28:
-    models built from ``tul_tg2`` / ``tul_tg4a`` / ``tul_tg4b`` at seed 1 share all
-    494 parameters byte-identically, with ``tul.W_sent.weight`` the sole addition in
-    TG4b.
+    are deterministic (zero draws) and ``W_sent`` / ``bound_R`` take their one real draw
+    from a PRIVATE fixed generator each, so the global RNG stream is untouched and a
+    TUL model's base weights match a baseline built with the same seed. Verified
+    2026-08-28: models built from ``tul_tg2`` / ``tul_tg4a`` / ``tul_tg4b`` at seed 1
+    share all 494 parameters byte-identically, with ``tul.W_sent.weight`` the sole
+    addition in TG4b (``bound_R`` is a buffer, not a parameter, and is verified the
+    same way in ``tests/test_slot_seed_modes.py``).
     """
 
     def __init__(self, d_model: int, tul: TULConfig):
@@ -715,6 +860,13 @@ class TULSlots(nn.Module):
                 self.W_sent.weight.copy_(
                     torch.empty(self.W_sent.weight.shape, device="cpu").normal_(
                         mean=0.0, std=0.02, generator=g))
+        # Frozen rotation table — ONLY in "bound" mode; None in every other mode (no
+        # buffer entry with a live tensor, nothing to move to device, nothing to save).
+        # PRIVATE generator (seed 17, matching the E2 probe exactly): building this must
+        # not perturb the global RNG stream, the same neutrality W_sent needs above.
+        bound_R = (build_bound_rotations(d_model, tul.bound_span_cap)
+                  if tul.slot_seed == "bound" else None)
+        self.register_buffer("bound_R", bound_R, persistent=False)
 
     @torch.no_grad()
     def init_at_activation(self, lm_weight: Tensor) -> None:
@@ -770,6 +922,13 @@ class TULSlots(nn.Module):
                         ``t_last`` the span's LAST token position. A slot with no span
                         (a tail-pad position, bag_id at the dump bin) gets ``E_slot``
                         alone — see :func:`boundary_token_index`'s dump-bin handling.
+            "content"  (``add_e_slot=True`` only; arm W1): ``mean_j embed(t_j)`` over
+                        the span — exactly the "bag_mean" formula with the ``E_slot``
+                        term dropped. A slot with no span (dump bin) resolves to
+                        exactly 0, not ``E_slot`` — there is nothing else to add here.
+            "bound"    (``add_e_slot=True`` only; arm W2): the HRR-bound span sum, no
+                        ``E_slot`` term — see :func:`bound_seed`. Same dump-bin-is-zero
+                        contract as "content".
         """
         token_sel = (~layout.slot_mask).to(signal.dtype)
 
@@ -789,6 +948,25 @@ class TULSlots(nn.Module):
             proj = self.W_sent(boundary_sig.to(signal.dtype))
             at_pos = torch.where(valid, proj, torch.zeros_like(proj))
             at_pos = at_pos + self._e_slot_term(layout.bag_id, signal.dtype)
+            return torch.where(layout.slot_mask.unsqueeze(-1), at_pos, signal)
+
+        if add_e_slot and self.tul.slot_seed == "content":
+            # "bag_mean" minus the E_slot term — the plain span content mean, and
+            # NOTHING else added, so a no-span dump-bin position is exactly 0 (unlike
+            # every other mode, which has an E_slot term to fall back on there).
+            bags = bag_mean(signal, layout.bag_id, token_sel, layout.max_slots)
+            at_pos = torch.gather(
+                bags, 1, layout.bag_id.unsqueeze(-1).expand(*layout.bag_id.shape,
+                                                            signal.shape[-1]))
+            return torch.where(layout.slot_mask.unsqueeze(-1), at_pos, signal)
+
+        if add_e_slot and self.tul.slot_seed == "bound":
+            assert self.bound_R is not None    # built iff slot_seed == "bound" (__init__)
+            bags = bound_seed(signal, layout.bag_id, token_sel, layout.max_slots,
+                              self.bound_R.to(signal.dtype))
+            at_pos = torch.gather(
+                bags, 1, layout.bag_id.unsqueeze(-1).expand(*layout.bag_id.shape,
+                                                            signal.shape[-1]))
             return torch.where(layout.slot_mask.unsqueeze(-1), at_pos, signal)
 
         # "bag_mean" (default), and every add_e_slot=False caller in EVERY mode: the

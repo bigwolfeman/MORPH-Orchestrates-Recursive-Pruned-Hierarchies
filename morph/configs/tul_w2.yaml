@@ -1,0 +1,18 @@
+# Write-side ladder arm W2 — "bound" slot seed: HRR-style per-offset orthogonal
+# rotation binding, WITHOUT the shared E_slot term. Prereg:
+# lab/experiments/planned/2026-09-01-write-side-ladder.md.
+#
+# E2 measured "bound_noeslot" at unit rank 38.30 against "bag_noeslot"'s 3.47 and
+# the shipped seed's 1.58 — the largest rank recovery of any seeding scheme tried.
+# ONE change from tul_g0c0: `tul.slot_seed: bound` — builds one new persistent=False
+# buffer (`TULSlots.bound_R`, frozen, deterministic from seed 17; zero trained
+# parameters, morph/model/tul.py `TULSlots.slot_input` / `bound_seed`).
+defaults:
+  - tul_g0c0
+  - _self_
+
+tul:
+  slot_seed: bound
+
+wandb:
+  name: tul-w2
