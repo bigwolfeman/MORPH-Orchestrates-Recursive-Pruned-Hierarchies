@@ -426,7 +426,10 @@ def _tg_span_attention(q: Tensor, k: Tensor, v: Tensor, bag_id: Tensor,
         # to deviate. Gate logit reads the position's own post-projection k
         # (saliency = "how well does this token represent its span"); the same
         # normalized weights pool k and v.
-        g = torch.einsum("bhsd,hd->bhs", k.float(), gate_w.float())     # [B, H, S]
+        # .float() on the OUTPUT too: under CUDA autocast the einsum returns
+        # bf16 while torch.exp promotes to fp32 — the scatter_add_ below then
+        # dtype-mismatches. Pin the whole gate computation to fp32.
+        g = torch.einsum("bhsd,hd->bhs", k.float(), gate_w.float()).float()
         g = g.masked_fill(~token_sel.unsqueeze(1), float("-inf"))
         idx_h = bag_id.clamp(max=M).unsqueeze(1).expand(B, H, S)
         gmax = g.new_full((B, H, M + 1), float("-inf"))
