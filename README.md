@@ -6,6 +6,7 @@
 MORPH 0.1
 </h1>
 </p>
+
 **MORPH** is a PyTorch research model for **looped transformer** training and sparse deployment. The model reuses a small Parcae-style core for variable depth, stabilizes the repeated core with [Cayley Hyper-Connection](docs/references/residual-streams/jpmhc/jpmhc.md), and trains the MLP stack while pruning low impact weights down to as little as 25% total density before carving it into the MORTAR BCSR runtime. Enabling less than 1% ppl regression and improved memory footprint and training throughput over full density. All while natively quantized trained.
 
 To further improve per bit intelligence and memory foot print for research, it utilizes extensive linear attention methods to enable a lower memory foot print at long contexts. Both [GLA](docs/references/memory/gla/gla.md) and [DeepSeek CSA/HCA](docs/references/attention/deepseek-v4/deepseek-v4.md) are used, with a convolutional based compression of the kv ([CCA](docs/references/attention/cca/cca.md)).
