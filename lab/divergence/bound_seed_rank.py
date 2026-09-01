@@ -69,7 +69,7 @@ def main() -> None:
     spec = tul_rt.data_cfg.spec_for(cfg.data.seq_len)
     rule = tul_rt.data_cfg.rule
     tc = model.cfg.tul
-    assert tc.slot_seed == "bag_mean", f"expected shipped bag_mean seed, got {tc.slot_seed}"
+    print(f"shipped slot_seed mode: {tc.slot_seed}", flush=True)
 
     # Frozen per-offset orthogonal rotations: QR of a seeded Gaussian, one per
     # within-span offset up to span_cap. det sign is irrelevant (any orthogonal
@@ -77,7 +77,7 @@ def main() -> None:
     d = model.cfg.d_model
     g = torch.Generator().manual_seed(a.rot_seed)
     R = torch.stack([torch.linalg.qr(torch.randn(d, d, generator=g))[0]
-                     for _ in range(int(tc.span_cap))]).to(device)
+                     for _ in range(int(rule.span_cap))]).to(device)
 
     loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8,
                                split="validation", skip_samples=0, bag_size=0, tul=None)
@@ -101,7 +101,7 @@ def main() -> None:
             for b in range(B):
                 slots = torch.nonzero(layout.slot_mask[b] & layout_valid(layout, b),
                                       as_tuple=False).flatten()
-                s_bag, s_bound, es = [], [], []
+                s_ship, s_bag, s_bound, s_et = [], [], [], []
                 for p in slots.tolist():
                     bag = int(layout.bag_id[b, p])
                     tok_pos = torch.nonzero((layout.bag_id[b] == bag) & token_sel[b],
@@ -111,20 +111,24 @@ def main() -> None:
                         continue
                     e = signal[b, tok_pos]                            # [n, C]
                     bound = torch.einsum("kij,kj->i", R[:n].float(), e) / (n ** 0.5)
-                    s_bag.append(seeded[b, p])
-                    s_bound.append(model.tul._e_slot_term(
+                    et = model.tul._e_slot_term(
                         layout.bag_id[b, p:p + 1].unsqueeze(0), signal.dtype
-                    ).reshape(-1) + bound)
-                    es.append(e.mean(0))                              # bare bag term
+                    ).reshape(-1)
+                    s_ship.append(seeded[b, p])                       # the ARM's seed
+                    s_bag.append(et + e.mean(0))                      # spec default
+                    s_bound.append(et + bound)
+                    s_et.append(et)
                 if len(s_bag) < 3:
                     continue
+                Sh = torch.stack(s_ship).cpu()
                 Sb = torch.stack(s_bag).cpu()
                 So = torch.stack(s_bound).cpu()
-                Se = torch.stack(es).cpu()                            # no-E_slot bag
+                Et = torch.stack(s_et).cpu()
                 row = {}
-                for name, S in (("bag", Sb), ("bound", So),
-                                ("bag_noeslot", Se),
-                                ("bound_noeslot", So - (Sb - Se))):
+                for name, S in (("ship", Sh), ("bag", Sb), ("bound", So),
+                                ("ship_noeslot", Sh - Et),
+                                ("bag_noeslot", Sb - Et),
+                                ("bound_noeslot", So - Et)):
                     r_raw, r_unit = eff_ranks(S)
                     row[name] = {"rank_raw": r_raw, "rank_unit": r_unit,
                                  "pair_cos": mean_pair_cos(S), "n_slots": S.shape[0]}
@@ -134,7 +138,7 @@ def main() -> None:
                 print(f"rows {rows_done}/{a.rows}", flush=True)
 
     summary: dict[str, dict] = {}
-    for name in ("bag", "bound", "bag_noeslot", "bound_noeslot"):
+    for name in ("ship", "bag", "bound", "ship_noeslot", "bag_noeslot", "bound_noeslot"):
         for key in ("rank_raw", "rank_unit", "pair_cos"):
             vals = [r[name][key] for r in per_row]
             summary.setdefault(name, {})[key] = sum(vals) / len(vals)
@@ -144,7 +148,7 @@ def main() -> None:
            "summary": summary, "rank_unit_ratio_bound_over_bag": ratio}
     with open(a.out, "w") as f:
         json.dump(out, f, indent=1)
-    for name in ("bag", "bound", "bag_noeslot", "bound_noeslot"):
+    for name in ("ship", "bag", "bound", "ship_noeslot", "bag_noeslot", "bound_noeslot"):
         s = summary[name]
         print(f"{name:14s} rank_unit={s['rank_unit']:.2f} rank_raw={s['rank_raw']:.2f} "
               f"|cos|={s['pair_cos']:.3f}", flush=True)
