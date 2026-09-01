@@ -185,6 +185,15 @@ full-block interleave.
 per-slot SSM writes with a learned top-k router over a fixed slot memory (RSM), so
 unselected slots are untouched. README TODO: apply RAVEN attention on GLA.
 
+### Fast Weight Attention for Continual Learning
+
+**Title:** Fast Weight Attention for Continual Learning  
+**Authors:** Yifan Zhang, Steve Ta, Jasper Zhang, Jichen Feng, Shuzhen Li, Yongxin Zhang, Yifeng Liu, Huizhuo Yuan, Mengdi Wang, Quanquan Gu, Andrew Chi-Chih Yao (ByteDance Seed, Princeton, Tsinghua, UCLA, Hyperbolic Labs)  
+**Year:** 2026  
+**arXiv:** [2608.27763](https://arxiv.org/abs/2608.27763) · [Hugging Face](https://huggingface.co/papers/2608.27763)  
+**Local:** [references/memory/fast-weight-attention/fast-weight-attention.md](references/memory/fast-weight-attention/fast-weight-attention.md)  
+**MORPH relevance:** Unified framework analyzing recurrent fast weights and selective SSMs under read-after-write autoregressive semantics. Introduces the Falcon family of normalized first-order updates (scalar NLMS, per-column, sliding-window mini-batch) and positive-decay renormalization that stabilize associative memory updates against divergence during autoregressive inference and continual learning.
+
 ### Titans — Neural Memory (removed)
 
 **Title:** Titans: Learning to Memorize at Test Time  
@@ -990,6 +999,7 @@ trajectory as an arm (`tul.stp_lambda`), zero parameters.
 | 3   | CMS Topology                              | Original work — MORPH project                       | —                                                                                                                                              |
 | 4   | GLA Retention                             | Yang et al. (2023 / ICML 2024)                      | [2312.06635](https://arxiv.org/abs/2312.06635)                                                                                                 |
 | 4b  | RAVEN (planned on GLA)                    | Afzal, Bick, Xing, Cevher, Gu (2026)                | [goombalab/raven PDF](https://github.com/goombalab/raven/blob/main/raven.pdf)                                                                  |
+| 4c  | Fast Weight Attention                     | Zhang et al. (ByteDance/Princeton/Tsinghua, 2026)   | [2608.27763](https://arxiv.org/abs/2608.27763)                                                                                                 |
 | 4a  | Neural Memory (Titans) (removed)          | Behrouz, Zhong, Mirrokni (Google, 2025)             | [2501.00663](https://arxiv.org/abs/2501.00663)                                                                                                 |
 | 5   | CCA                                       | Figliolia et al. (Zyphra, 2025)                     | [2510.04476](https://arxiv.org/abs/2510.04476)                                                                                                 |
 | 6   | CSA / HCA                                 | DeepSeek-AI (2026)                                  | [HF PDF](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf)                                                         |
