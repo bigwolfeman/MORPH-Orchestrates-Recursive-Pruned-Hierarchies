@@ -49,3 +49,14 @@ Which exact signal the shipped bag-mean pools (embedding alone vs
 embedding+bigram+value-embed) — the probe must read the call site in
 `transformer.py` and pool the SAME signal; the prereg binds to "the same
 signal", not to a named tensor.
+
+### Method amendment — 2026-09-01 09:35 (before any data read)
+
+The probe's assert surfaced that `tul_g0c0` (the 20k arm's config, via the
+`tul_l2` line) trains with `slot_seed: boundary` — E_slot + W_sent·embed of
+the span's LAST token — not the spec-default bag_mean. So the shipped 20k
+slots carry at most one token's identity. The probe now measures THREE seed
+populations on the same spans: `ship` (the arm's actual boundary seed, via
+`slot_input`), `bag` (E_slot + span mean, the spec default the predictions
+name), and `bound`. P-B1/P-B2 score exactly as frozen (bag vs bound); `ship`
+is a diagnostic column. Predictions untouched.
