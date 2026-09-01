@@ -82,3 +82,17 @@ decay-parameterized contraction rather than "no control at all".
 GLA's harm in MORPH is not (shown to be) the same-step objective; the
 write-objective axis is untested in a stable regime. The no-GLA verdict from
 BGpc stands on its own evidence.
+
+## Follow-up diagnostics — 2026-08-31 20:55 (frozen before run, Wolfe's go)
+
+- **D1** `notul_bws` + `model.use_kernels=false`, 600 steps (onset was 303):
+  discriminates fused-kernel numerics vs dynamics. **P-D1: 70%** eager ALSO
+  explodes (preclip/core > 1e6 by step 600) — dynamics, not a kernel bug.
+- **D2** `notul_bws` + `training.spectral_project_cap=1.5`, 1000 steps:
+  tests the uncapped-margin story. **P-D2: 65%** trains clean (no >1e6
+  excursion, val descending).
+- Binding: D1-stable ⇒ fused_gla backward bug with zero-sentinel key row —
+  fix the kernel path. D1-explodes ∧ D2-clean ⇒ margin story confirmed;
+  write-alignment retest waits for the contraction redesign. Both explode ⇒
+  the raw shifted write is inherently unstable in-loop ⇒ Falcon NLMS
+  normalizer pre-transform is the next arm.
