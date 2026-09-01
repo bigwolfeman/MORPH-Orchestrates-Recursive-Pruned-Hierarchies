@@ -1,6 +1,6 @@
 # Planned: the loop-killer bisect — what MORPH added that TitanMAC didn't have
 
-Status: planned
+Status: success
 Date: 2026-08-31 (frozen before any cell runs; written pre-compaction).
 
 ## Question
@@ -177,3 +177,33 @@ BGpc: K1 4.4887, K3 4.3208, K6 4.3025, K8 4.3062; val 4.23@4250.
   pure in-loop bypass. Binding applied: no GLA at any site; BG0C0 config is
   the campaign's shipping candidate; no Raven port into these positions
   without a new hypothesis (BWS is that test).
+
+## Final verdict — 2026-09-01 (campaign closed)
+
+Six cells + diagnostics (BG0 +seed2, BC0, BG0C0, d8, BGpc, BWS +D1/D2)
+answered the question decisively: **the GLA×σ-cap conjunction killed the
+depth-earning.** Singles are null or catastrophic (BC0 flat at 0.142; BG0
+stalls at unigram 7.4 deterministically); removing BOTH doubles the earning
+(0.220) AND wins absolute CE (4.206 vs 4.344 baseline) with 18.9M fewer
+params. The 2x3 matrix (see failures/2026-08-31-gla-write-alignment.md)
+reads: same-step GLA's one real job was bootstrapping the CAPPED model out
+of the unigram basin — a training-dynamics crutch, not a capability — and a
+gradient parasite once the cap is off (monotone site ladder 0.142 -> 0.186
+-> 0.220).
+
+Prediction scorecard: P-C0 no-effect side (75%) hit; P-G0 resolved outside
+its two anticipated outcomes (stall, not flat/restored); P-G0C0 40% side hit
+on the disclosed Δ-contrast (criterion defect recorded above); P-G0s2 (75%)
+hit; P-D8 (55% no-shift side) hit; P-PC1 FALSE by 0.004 (inside sweep
+floor), P-PC2 FALSE. P-HCprobe never run — the HC/plain-residual arm was
+parked by Wolfe's veto along with the deep-composition hunt (saturation by
+K4 vs TitanMAC's through-T4 curve remains unattributed; candidate causes:
+attention stack, HC residual, QAT, injection, d1024, data, training length).
+
+**Shipping outcome: BG0C0 (retention off, cap 0, carry none) is the winner
+recipe.** Confirmed at 20k in successes/2026-08-31-tul-vs-notul-20k.md
+(K1-K6 0.207 replication, stable uncapped both geometries). GLA removed
+from the recipe at every site; no Raven port into GLA's parallel-branch
+position without a new hypothesis (that test was BWS: detonated) — R1/R2/R3
+lanes are in .agents/notes/proposed/feature/2026-08-31-raven-memory-arms.md
+behind a contraction-first gate.
