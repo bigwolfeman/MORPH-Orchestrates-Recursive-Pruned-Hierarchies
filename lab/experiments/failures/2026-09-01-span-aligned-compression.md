@@ -1,6 +1,6 @@
 # Planned: E-SAC — span-aligned compression, the E1-derived recovery arm
 
-Status: planned
+Status: failure
 Date: 2026-09-01 (frozen before launch; Wolfe: "Prereg the span-aligned
 compression arm and run it this is our most promising direction right now.")
 
@@ -73,3 +73,48 @@ wall-clock cost at seq 1152 x 20k steps; post-RoPE mean-phase keys are a
 guess v1 accepts; P-S4's ablation harness (checkpoint loads into the
 tg_span_comp=false build trivially — zero new keys — but the eval run itself
 is post-hoc).
+
+## Results (2026-09-01, run tul-sac, wandb fpdokxt2, filed same day)
+
+Run: 20000/20000 steps, exit 0, 79 evals, no div-guard, no NaN. Wall clock
+10:05:49 -> 14:41:46 = 4.60 h vs tul-20k's 4.50 h (+2.1 % for the pooling).
+
+| Metric | tul-sac | tul-20k | notul-20k |
+|---|---|---|---|
+| last-5 val CE (18750-19750) | **3.8623** | 3.8461 | 3.4894 |
+| sweep K6 ce (48 rows, matched harness) | **3.7853** | 3.7568 | — |
+| sweep K6 span_first | 3.3896 | 3.3580 | — |
+| sweep K1-K8 loop contribution | 0.0022 | 0.0152 | 0.207 (token axis) |
+
+P-S4 ablation (`core_depth_sweep.py --ckpt sac-off=tul_g0c0=...step_20000.pt`,
+same 48 rows): sac-off K6 ce = 3.9721 vs sac-on 3.7853 -> **0.187 nats**
+degradation; span_first 3.8273 vs 3.3896 (**0.438**). Artifacts:
+`$Q/core_depth_sweep_tul-sac.json`, `$Q/core_depth_sweep_sac-off.json`,
+`$Q/tul-sac/run.log`, prereg commit 5f1bcb6.
+
+- **P-S1 FALSE** (65% claimed). 3.8623 > 3.746; did not even match tul-20k
+  (+0.016 last-5, +0.028 on the matched sweep).
+- **P-S2 FALSE** (45%). No gap recovery at all.
+- **P-S3 TRUE** (75%). Clean run.
+- **P-S4 TRUE** (70%). The branch is heavily load-bearing at eval.
+
+## Verdict
+
+FAILURE. Span-aligned mean-pooled compression is load-bearing (0.187 nats at
+eval) yet recovers zero of the 0.357-nat gap — it SUBSTITUTES for capacity
+the slot-comp model finds elsewhere instead of adding to it. The E1
+mask-surgery arithmetic (0.231 nats for the compressor swap on trained
+notul-20k) does not transfer to training-from-scratch: a model trained under
+either comp-branch variant converges to the same token-axis CE. The loop
+contribution also fell (0.015 -> 0.002); the pooled summaries make the slot
+loop even less necessary.
+
+## Updated hypothesis
+
+Post-hoc surgery on a trained model measures what THAT model built on the
+deleted pathway, not what a fresh model can rebuild around the restriction.
+The tul-20k gap is not explained by which global-compression carrier the coda
+reads (slot states vs span-pooled K/V both land ~3.78-3.85); the binding's
+one learned-gated-pooling variant tests the last pooling degree of freedom,
+after which the lane closes and the gap hunt moves to the window-branch
+visibility restriction (e1b's 0.487 > e1c's 0.231) or the training recipe.
