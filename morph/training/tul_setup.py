@@ -205,6 +205,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         sigreg_activate_at=float(tc.get("sigreg_activate_at", 0.0)),
         tg_restrict=bool(tc.get("tg_restrict", False)),
         tg_span_comp=bool(tc.get("tg_span_comp", False)),
+        tg_span_gate=bool(tc.get("tg_span_gate", False)),
         tg_soft_prev_span=bool(tc.get("tg_soft_prev_span", False)),
         slot_seed=str(tc.get("slot_seed", "bag_mean")),
         eval_ablations=bool(tc.get("eval_ablations", False)),
@@ -252,6 +253,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "sigreg_activate_at": model_cfg.sigreg_activate_at,
         "tg_restrict": model_cfg.tg_restrict,
         "tg_span_comp": model_cfg.tg_span_comp,
+        "tg_span_gate": model_cfg.tg_span_gate,
         "tg_soft_prev_span": model_cfg.tg_soft_prev_span,
         "slot_seed": model_cfg.slot_seed,
         "eval_ablations": model_cfg.eval_ablations,
@@ -308,5 +310,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
     if model_cfg.tg_span_comp:
         print("  TUL TG SPAN-COMP ON: compressed branch = per-span mean-pooled "
               "live K/V (E-SAC; zero new params; span-granular causality)", flush=True)
+    if model_cfg.tg_span_gate:
+        print("  TUL TG SPAN-GATE ON: learned per-head gated softmax span pool "
+              "(E-SAC-G; one zero-init [H,D] gate per attn layer — mean pool at "
+              "init)", flush=True)
     return TulRuntime(model_cfg=model_cfg, data_cfg=data_cfg,
                       activate_at=activate_at, manifest=manifest)

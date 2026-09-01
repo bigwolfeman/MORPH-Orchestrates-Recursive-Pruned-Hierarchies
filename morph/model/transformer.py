@@ -817,6 +817,8 @@ class MORPHTransformer(nn.Module):
             conv_kernel=cfg.conv_kernel,
             init_alpha=cfg.init_alpha,
             tg_restrict=self._tg_restrict,
+            tg_span_gate=(bool(cfg.tul.tg_span_gate) if cfg.tul is not None
+                          else False),
         )
 
         # ── Residual = n-stream Hyper-Connection (Cayley/JPmHC), the sole residual ──

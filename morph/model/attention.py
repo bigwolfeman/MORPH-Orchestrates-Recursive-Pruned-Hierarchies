@@ -376,7 +376,8 @@ def _compressed_causal_mask(S: int, n_blocks: int, m: int, device) -> Tensor:
 
 def _tg_span_attention(q: Tensor, k: Tensor, v: Tensor, bag_id: Tensor,
                        token_sel: Tensor, span_end: Tensor,
-                       sink_logits: Tensor, scale: float) -> Tensor:
+                       sink_logits: Tensor, scale: float,
+                       gate_w: Tensor | None = None) -> Tensor:
     """E-SAC compressed branch (tul.tg_span_comp): attention over per-SPAN
     mean-pooled K/V instead of slot positions.
 
@@ -406,16 +407,48 @@ def _tg_span_attention(q: Tensor, k: Tensor, v: Tensor, bag_id: Tensor,
     device = q.device
     sel = token_sel.to(q.dtype).unsqueeze(-1)                      # [B, S, 1]
     idx = bag_id.clamp(max=M).unsqueeze(-1)                        # [B, S, 1]
-    kf = (k.permute(0, 2, 1, 3).reshape(B, S, H * D)) * sel
-    vf = (v.permute(0, 2, 1, 3).reshape(B, S, H * D)) * sel
-    pooled_k = kf.new_zeros(B, M + 1, H * D)
-    pooled_v = vf.new_zeros(B, M + 1, H * D)
-    pooled_k.scatter_add_(1, idx.expand(-1, -1, H * D), kf)
-    pooled_v.scatter_add_(1, idx.expand(-1, -1, H * D), vf)
-    counts = kf.new_zeros(B, M + 1, 1)
-    counts.scatter_add_(1, idx, sel)
-    pooled_k = (pooled_k / counts.clamp(min=1.0))[:, :M]           # [B, M, H*D]
-    pooled_v = (pooled_v / counts.clamp(min=1.0))[:, :M]
+    if gate_w is None:
+        kf = (k.permute(0, 2, 1, 3).reshape(B, S, H * D)) * sel
+        vf = (v.permute(0, 2, 1, 3).reshape(B, S, H * D)) * sel
+        pooled_k = kf.new_zeros(B, M + 1, H * D)
+        pooled_v = vf.new_zeros(B, M + 1, H * D)
+        pooled_k.scatter_add_(1, idx.expand(-1, -1, H * D), kf)
+        pooled_v.scatter_add_(1, idx.expand(-1, -1, H * D), vf)
+        counts = kf.new_zeros(B, M + 1, 1)
+        counts.scatter_add_(1, idx, sel)
+        pooled_k = (pooled_k / counts.clamp(min=1.0))[:, :M]       # [B, M, H*D]
+        pooled_v = (pooled_v / counts.clamp(min=1.0))[:, :M]
+    else:
+        # E-SAC-G (tul.tg_span_gate): learned per-head gated softmax pool over
+        # the span's token positions. gate_w [H, D] is ZERO at init, which makes
+        # the within-span softmax exactly uniform — bit-for-bit the mean pool
+        # above up to summation order — so the arm STARTS as tul-sac and learns
+        # to deviate. Gate logit reads the position's own post-projection k
+        # (saliency = "how well does this token represent its span"); the same
+        # normalized weights pool k and v.
+        g = torch.einsum("bhsd,hd->bhs", k.float(), gate_w.float())     # [B, H, S]
+        g = g.masked_fill(~token_sel.unsqueeze(1), float("-inf"))
+        idx_h = bag_id.clamp(max=M).unsqueeze(1).expand(B, H, S)
+        gmax = g.new_full((B, H, M + 1), float("-inf"))
+        gmax.scatter_reduce_(2, idx_h, g, reduce="amax")
+        # empty spans keep gmax=-inf; their exp is forced to 0 by the where, and
+        # the vis mask below already makes them unreachable.
+        ex = torch.where(token_sel.unsqueeze(1),
+                         torch.exp(g - gmax.gather(2, idx_h)),
+                         torch.zeros((), dtype=g.dtype, device=g.device))
+        denom = g.new_zeros(B, H, M + 1)
+        denom.scatter_add_(2, idx_h, ex)
+        wpos = ex / denom.gather(2, idx_h).clamp(min=1e-20)             # [B, H, S]
+        wf = wpos.permute(0, 2, 1).reshape(B, S, H, 1).expand(B, S, H, D) \
+                 .reshape(B, S, H * D)
+        kf = (k.permute(0, 2, 1, 3).reshape(B, S, H * D)).float() * wf
+        vf = (v.permute(0, 2, 1, 3).reshape(B, S, H * D)).float() * wf
+        pooled_k = kf.new_zeros(B, M + 1, H * D)
+        pooled_v = vf.new_zeros(B, M + 1, H * D)
+        pooled_k.scatter_add_(1, idx.expand(-1, -1, H * D), kf)
+        pooled_v.scatter_add_(1, idx.expand(-1, -1, H * D), vf)
+        pooled_k = pooled_k[:, :M].to(q.dtype)                # weights sum to 1
+        pooled_v = pooled_v[:, :M].to(q.dtype)
     k_s = pooled_k.reshape(B, M, H, D).permute(0, 2, 1, 3)         # [B, H, M, D]
     v_s = pooled_v.reshape(B, M, H, D).permute(0, 2, 1, 3)
     pos = torch.arange(S, device=device).view(1, S, 1)
@@ -801,7 +834,7 @@ class _CCACSAAttention(nn.Module):
                  compression: int, csa_compress_ratio: int, top_k: int,
                  d_indexer: int, max_seq_len: int, context_len: int,
                  window_size: int, init_alpha: float, conv_kernel: int,
-                 tg_restrict: bool = False):
+                 tg_restrict: bool = False, tg_span_gate: bool = False):
         super().__init__()
         self.top_k = top_k
         self.compress_ratio = csa_compress_ratio
@@ -819,6 +852,10 @@ class _CCACSAAttention(nn.Module):
             self.compressor: nn.Module | None = None
             self.comp_norm: nn.Module | None = None
             self.indexer: nn.Module | None = None
+            # E-SAC-G: zero-init per-head span-pool gate (== mean pool at init).
+            self.tg_span_gate_w: nn.Parameter | None = (
+                nn.Parameter(torch.zeros(n_heads, self.cca.d_head))
+                if tg_span_gate else None)
             self._fuse_mods = (
                 self.cca.W_down_q, self.cca.W_down_k,
                 self.cca.W_v_curr, self.cca.W_v_prev,
@@ -884,7 +921,8 @@ class _CCACSAAttention(nn.Module):
                 x, n_skip_rope, return_klat=True, pre=pre_cca)
             if tg_span is not None:
                 out_comp = _tg_span_attention(q, k, v, sink_logits=self.cca.sink_logits,
-                                              scale=scale, **tg_span)
+                                              scale=scale,
+                                              gate_w=self.tg_span_gate_w, **tg_span)
             else:
                 out_comp = _tg_slot_attention(q, k, v, tg_slot_mask,
                                               self.cca.sink_logits, scale)
@@ -978,7 +1016,7 @@ class _CCAHCAAttention(nn.Module):
                  compression: int, hca_compress_ratio: int,
                  max_seq_len: int, context_len: int,
                  window_size: int, init_alpha: float, conv_kernel: int,
-                 tg_restrict: bool = False):
+                 tg_restrict: bool = False, tg_span_gate: bool = False):
         super().__init__()
         self.compress_ratio = hca_compress_ratio
         self.tg_restrict = tg_restrict
@@ -992,6 +1030,10 @@ class _CCAHCAAttention(nn.Module):
             # indexer to begin with, so only the pooled compressor drops out.
             self.compressor: nn.Module | None = None
             self.comp_norm: nn.Module | None = None
+            # E-SAC-G: zero-init per-head span-pool gate (== mean pool at init).
+            self.tg_span_gate_w: nn.Parameter | None = (
+                nn.Parameter(torch.zeros(n_heads, self.cca.d_head))
+                if tg_span_gate else None)
             self._fuse_mods = (
                 self.cca.W_down_q, self.cca.W_down_k,
                 self.cca.W_v_curr, self.cca.W_v_prev,
@@ -1036,7 +1078,8 @@ class _CCAHCAAttention(nn.Module):
                 x, n_skip_rope, return_klat=True, pre=pre_cca)
             if tg_span is not None:
                 out_comp = _tg_span_attention(q, k, v, sink_logits=self.cca.sink_logits,
-                                              scale=scale, **tg_span)
+                                              scale=scale,
+                                              gate_w=self.tg_span_gate_w, **tg_span)
             else:
                 out_comp = _tg_slot_attention(q, k, v, tg_slot_mask,
                                               self.cca.sink_logits, scale)
@@ -1137,6 +1180,7 @@ class MORPHAttention(nn.Module):
         init_alpha: float = 0.1,
         conv_kernel: int = 4,
         tg_restrict: bool = False,
+        tg_span_gate: bool = False,
     ):
         super().__init__()
 
@@ -1145,7 +1189,7 @@ class MORPHAttention(nn.Module):
             compression=compression, max_seq_len=max_seq_len,
             context_len=context_len, window_size=window_size,
             init_alpha=init_alpha, conv_kernel=conv_kernel,
-            tg_restrict=tg_restrict,
+            tg_restrict=tg_restrict, tg_span_gate=tg_span_gate,
         )
 
         if layer_idx % 2 == 0:

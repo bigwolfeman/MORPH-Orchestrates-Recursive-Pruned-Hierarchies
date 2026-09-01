@@ -300,6 +300,14 @@ class TULConfig:
     # would leak the span's future tokens). Zero new parameters, no RNG draws —
     # false is bit-identical. Requires tg_restrict.
     tg_span_comp: bool = False
+    # E-SAC-G (the frozen binding of lab/experiments/failures/
+    # 2026-09-01-span-aligned-compression.md, P-S1 FALSE): replace the mean pool
+    # with a LEARNED per-head gated softmax pool over each span's token
+    # positions — gate logit = <k_pos, W_g[h]>, softmax within the span, the
+    # same weights pool k and v. W_g is one [n_heads, d_head] zero-init
+    # parameter per attention layer, so at init the pool is EXACTLY the mean
+    # (uniform softmax) and the arm starts as tul-sac. Requires tg_span_comp.
+    tg_span_gate: bool = False
     # TG3 (spec §6): soften the restriction with one extra allow term — the
     # PREVIOUS span, not just the current one and the slots. Meaningless without
     # `tg_restrict` (there would be nothing to soften).
@@ -382,6 +390,11 @@ class TULConfig:
                 "tul.tg_span_comp=true requires tul.tg_restrict=true (E-SAC replaces "
                 "the tg compressed branch; there is no such branch without the "
                 "restriction).")
+        if self.tg_span_gate and not self.tg_span_comp:
+            raise ValueError(
+                "tul.tg_span_gate=true requires tul.tg_span_comp=true (the gate "
+                "parameterizes the span pool; there is no span pool without "
+                "tg_span_comp).")
         if self.tg_soft_prev_span and not self.tg_restrict:
             raise ValueError(
                 "tul.tg_soft_prev_span=true requires tul.tg_restrict=true "
