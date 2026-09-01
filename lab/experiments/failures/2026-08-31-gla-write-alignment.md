@@ -96,3 +96,27 @@ BGpc stands on its own evidence.
   write-alignment retest waits for the contraction redesign. Both explode ⇒
   the raw shifted write is inherently unstable in-loop ⇒ Falcon NLMS
   normalizer pre-transform is the next arm.
+
+### Diagnostic results — 2026-08-31 22:45
+
+- **P-D1 TRUE** (70%): eager explodes too (first >1e6 at step 405, max
+  2.0e9). The fused kernel is exonerated; the instability is dynamics.
+- **P-D2 FALSE**: capped run never explodes (max preclip 1.2e4) but STALLS at
+  unigram (val 7.44/7.61/7.37 at 700–900) — the BG0 stall signature.
+
+The 2×3 matrix this completes (rows: cap; cols: GLA variant):
+
+|            | same-step GLA | no GLA        | shifted GLA |
+|------------|---------------|---------------|-------------|
+| cap 1.5    | trains (4.34) | stalls 7.4    | stalls 7.4  |
+| cap off    | trains (4.40) | trains (4.21) | explodes    |
+
+Reading: same-step GLA's ONE real contribution is the early escape from the
+unigram basin under the cap — the archive objective is an easy bootstrap
+signal. The shifted (predictive) write provides no such bootstrap (capped ⇒
+stall, same as no GLA) AND is actively destabilizing uncapped (worse than no
+GLA, which trains fine). The naive alignment retrofit is dead on both rows.
+The Falcon NLMS-normalized version remains the only live form of the idea,
+and only matters if a memory branch ever returns; with the no-GLA campaign
+verdict, priority is low. Final: GLA = training-dynamics crutch whose job
+disappears with the cap; not a capability.
