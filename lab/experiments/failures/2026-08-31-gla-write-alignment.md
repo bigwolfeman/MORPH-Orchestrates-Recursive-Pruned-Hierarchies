@@ -1,6 +1,6 @@
 # Planned: GLA write alignment — same-step archive vs next-latent predictor
 
-Status: planned
+Status: failure
 Date: 2026-08-31 (frozen before the run; trigger: Wolfe — FWA paper
 arXiv:2608.27763, "we will likely try it either way").
 
@@ -49,3 +49,36 @@ Fused-kernel path with the shifted k stream on real shapes (contract tests
 are eager CPU; the shift is a pre-transform so the kernel sees ordinary
 inputs, but the live smoke is the check). Interaction of shift with
 retention_gate_bias timing (gate stays same-step by design; not ablated).
+
+## Results
+
+Div-guard abort at step 2040 (`DIVERGED_step_2040.pt`). Loss thrashed 7.4–8.6
+(above unigram) from ~step 500, never trained. Forensics: branch gates AT INIT
+(sigmoid 0.0028; GLA gate_bias exactly 2.000) — the branch stayed inert at the
+output. Grad probe: preclip/core median 2.57e11, first >1e6 excursion at step
+303, 78% of steps exploded; BC0 and BG0C0 (same recipe, no shift) never once
+exceed 1e6 in 4500 steps (median 0.57). Localization at steps 300–400: coda
+O(1), core.0–5 UNIFORMLY 1e5–1e8, prelude and embed likewise — the signature
+of backward amplification THROUGH the loop (ρ_backward > 1, iterative-map
+note), originating in-core and flowing down, not a branch-parameter blowup.
+
+## Verdict
+
+**P-A1 FALSE** (the 10% branch; a 90% prediction badly missed — recorded).
+P-A2/P-A3 unmeasurable (no completed checkpoint). Failure class: the naive
+alignment retrofit (shifted write on raw gated GLA, no normalized update)
+detonates the UNCAPPED looped core via backward amplification, with the
+branch output-inert. What this method cannot distinguish: (a) alignment is
+inherently destabilizing in-loop, (b) alignment requires Falcon's normalized
+NLMS step + renormalization (the paper never runs raw shifted writes), (c)
+alignment × uncapped-core interaction that a σ-cap or decay-parameterized
+contraction would absorb. Discriminators, if ever needed: BWS+cap=1.5 (45
+min), or Falcon-2 proper. Campaign-level: reinforces that the uncapped core
+has THIN stability margin — the shipping config needs TitanMAC-style
+decay-parameterized contraction rather than "no control at all".
+
+## Updated hypothesis
+
+GLA's harm in MORPH is not (shown to be) the same-step objective; the
+write-objective axis is untested in a stable regime. The no-GLA verdict from
+BGpc stands on its own evidence.
