@@ -165,3 +165,15 @@ BG0's stall was never an init artifact.
   the remaining diffs (attention stack / HC residual / QAT / injection /
   d1024 / data), or in the training dynamics of depth itself. Next-round axis
   decision deferred to Wolfe with tonight's BGpc + BWS results.
+
+### Scoring — 2026-08-31 19:25 (round 4, BGpc)
+
+BGpc: K1 4.4887, K3 4.3208, K6 4.3025, K8 4.3062; val 4.23@4250.
+- **P-PC1**: K1−K6 = 0.186 vs bar 0.19 — FALSE by 0.004, inside the ±0.01
+  sweep floor. Three-point ladder BC0 0.142 → BGpc 0.186 → BG0C0 0.220:
+  in-loop removal recovers ~56% of the earning gap, out-of-loop the rest.
+- **P-PC2 FALSE**: K6 4.303 > 4.25; still 0.10 nats worse than BG0C0.
+- Monotone in sites removed on BOTH metrics ⇒ global gradient-stealing, not
+  pure in-loop bypass. Binding applied: no GLA at any site; BG0C0 config is
+  the campaign's shipping candidate; no Raven port into these positions
+  without a new hypothesis (BWS is that test).
