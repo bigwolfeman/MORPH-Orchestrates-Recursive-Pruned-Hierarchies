@@ -289,6 +289,17 @@ class TULConfig:
     # model constructor RAISES if this is set with `use_kernels=true` — the TG
     # arms are eager-only (spec §2/§6).
     tg_restrict: bool = False
+    # E-SAC (span-aligned compression, .agents/notes/proposed/architecture/
+    # 2026-09-01-slot-channel-recovery.md + the E1 mask-surgery result): the
+    # prelude/coda COMPRESSED branch attends per-SPAN mean-pooled K/V of the
+    # span's token positions (computed from the LIVE post-projection k/v at each
+    # layer) instead of the slot positions. Slots stay readable through the
+    # window branch's tg_allow ("or j is any slot position"). Causality is at
+    # span granularity: summary j is visible to position i iff span j's LAST
+    # token position < i, so a token never sees its own span's summary (which
+    # would leak the span's future tokens). Zero new parameters, no RNG draws —
+    # false is bit-identical. Requires tg_restrict.
+    tg_span_comp: bool = False
     # TG3 (spec §6): soften the restriction with one extra allow term — the
     # PREVIOUS span, not just the current one and the slots. Meaningless without
     # `tg_restrict` (there would be nothing to soften).
@@ -366,6 +377,11 @@ class TULConfig:
                     f"tul.{name}=true — arm '{name}' (spec §3.5) is specified but NOT "
                     f"implemented in v1. Leave it false."
                 )
+        if self.tg_span_comp and not self.tg_restrict:
+            raise ValueError(
+                "tul.tg_span_comp=true requires tul.tg_restrict=true (E-SAC replaces "
+                "the tg compressed branch; there is no such branch without the "
+                "restriction).")
         if self.tg_soft_prev_span and not self.tg_restrict:
             raise ValueError(
                 "tul.tg_soft_prev_span=true requires tul.tg_restrict=true "

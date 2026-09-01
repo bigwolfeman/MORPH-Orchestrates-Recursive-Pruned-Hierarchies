@@ -35,7 +35,8 @@ from .recur_gate import RecurrenceGate
 from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .sigreg import sigreg_epps_pulley
 from .sparsity import MortarLinear
-from .tul import (TULConfig, TULGate, TULGateConfig, TULSlots, compact_index,
+from .tul import (TULConfig, TULGate, TULGateConfig, TULSlots, boundary_token_index,
+                  compact_index,
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
                   scatter_positions,
                   window_drop_mask)
@@ -1519,6 +1520,14 @@ class MORPHTransformer(nn.Module):
             if self._tg_restrict:
                 tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span)
                 tg_attn_kwargs = {"tg_allow": tg_allow, "tg_slot_mask": layout.slot_mask}
+                if tc.tg_span_comp:
+                    # E-SAC: per-span pooled compressed branch (attention.py
+                    # _tg_span_attention). Built once per forward like tg_allow.
+                    _tok_sel = ~layout.slot_mask
+                    tg_attn_kwargs["tg_span"] = {
+                        "bag_id": layout.bag_id, "token_sel": _tok_sel,
+                        "span_end": boundary_token_index(
+                            layout.bag_id, _tok_sel, layout.max_slots)}
                 tg_reset = tg_reset_mask(layout)
             x, _x0, _bigram = self._tul_front(input_ids, layout,
                                               attn_kwargs=tg_attn_kwargs,
@@ -2794,6 +2803,14 @@ class MORPHTransformer(nn.Module):
         if self._tg_restrict:
             tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span)
             tg_attn_kwargs = {"tg_allow": tg_allow, "tg_slot_mask": layout.slot_mask}
+            if tc.tg_span_comp:
+                # E-SAC: per-span pooled compressed branch (attention.py
+                # _tg_span_attention). Built once per forward like tg_allow.
+                _tok_sel = ~layout.slot_mask
+                tg_attn_kwargs["tg_span"] = {
+                    "bag_id": layout.bag_id, "token_sel": _tok_sel,
+                    "span_end": boundary_token_index(
+                        layout.bag_id, _tok_sel, layout.max_slots)}
             tg_reset = tg_reset_mask(layout)
 
         x, x0, bigram_emb = self._tul_front(input_ids, layout,

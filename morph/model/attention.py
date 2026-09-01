@@ -374,6 +374,62 @@ def _compressed_causal_mask(S: int, n_blocks: int, m: int, device) -> Tensor:
     return block_end.unsqueeze(0) < query_pos.unsqueeze(1)              # [S, nb]
 
 
+def _tg_span_attention(q: Tensor, k: Tensor, v: Tensor, bag_id: Tensor,
+                       token_sel: Tensor, span_end: Tensor,
+                       sink_logits: Tensor, scale: float) -> Tensor:
+    """E-SAC compressed branch (tul.tg_span_comp): attention over per-SPAN
+    mean-pooled K/V instead of slot positions.
+
+    The E1 mask-surgery result (lab/experiments/successes/
+    2026-09-01-mask-surgery-decomposition.md) priced the pooled global branch at
+    0.231 nats on the trained no-TUL model; this restores that mechanism inside
+    the TG restriction, snapped to the data-dependent span boundaries. The pool
+    is the mean of the span's TOKEN positions' post-projection k/v at THIS layer
+    (live hidden-state summaries, per layer — the property the input-time slot
+    seed lacks). Zero parameters; the sink logit is the layer's existing one.
+
+    q, k, v:   [B, H, S, D] — the same _cca_project outputs the window uses
+               (k already RoPE'd; the pooled key carries the span's mean phase,
+               a v1 simplification recorded in the prereg).
+    bag_id:    [B, S] int64 span ids (dump bin = max_slots).
+    token_sel: [B, S] bool, True at token positions (slots never pollute pools).
+    span_end:  [B, M+1] int64 — boundary_token_index output; row j is the LAST
+               token position of span j, -1 when the span owns no token.
+    Visibility: summary j is attendable from position i iff 0 <= span_end[j] < i.
+    Strictly causal: every pooled position of span j is <= span_end[j] < i, and a
+    token can NEVER see its own span's summary (span_end[own] >= i). A query with
+    nothing visible resolves to the sink (zero value vector), same contract as
+    _tg_slot_attention.
+    """
+    B, H, S, D = q.shape
+    M = span_end.shape[1] - 1                       # real spans; drop the dump bin
+    device = q.device
+    sel = token_sel.to(q.dtype).unsqueeze(-1)                      # [B, S, 1]
+    idx = bag_id.clamp(max=M).unsqueeze(-1)                        # [B, S, 1]
+    kf = (k.permute(0, 2, 1, 3).reshape(B, S, H * D)) * sel
+    vf = (v.permute(0, 2, 1, 3).reshape(B, S, H * D)) * sel
+    pooled_k = kf.new_zeros(B, M + 1, H * D)
+    pooled_v = vf.new_zeros(B, M + 1, H * D)
+    pooled_k.scatter_add_(1, idx.expand(-1, -1, H * D), kf)
+    pooled_v.scatter_add_(1, idx.expand(-1, -1, H * D), vf)
+    counts = kf.new_zeros(B, M + 1, 1)
+    counts.scatter_add_(1, idx, sel)
+    pooled_k = (pooled_k / counts.clamp(min=1.0))[:, :M]           # [B, M, H*D]
+    pooled_v = (pooled_v / counts.clamp(min=1.0))[:, :M]
+    k_s = pooled_k.reshape(B, M, H, D).permute(0, 2, 1, 3)         # [B, H, M, D]
+    v_s = pooled_v.reshape(B, M, H, D).permute(0, 2, 1, 3)
+    pos = torch.arange(S, device=device).view(1, S, 1)
+    se = span_end[:, :M].unsqueeze(1)                              # [B, 1, M]
+    vis = (se >= 0) & (se < pos)                                   # [B, S, M]
+    scores = torch.einsum("bhid,bhjd->bhij", q.float(), k_s.float()) * scale
+    scores = scores.masked_fill(~vis.unsqueeze(1), float("-inf"))
+    sink = sink_logits.view(1, H, 1, 1).to(scores.dtype).expand(B, H, S, 1)
+    scores = torch.cat([scores, sink], dim=-1)                     # [B, H, S, M+1]
+    weights = torch.softmax(scores, dim=-1).to(q.dtype)
+    # Sink value is the ZERO vector by contract — drop its column.
+    return torch.einsum("bhij,bhjd->bhid", weights[..., :M], v_s)
+
+
 def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None,
                        sink_logits: Tensor, scale: float) -> Tensor:
     """TG compressed branch (docs/tul-tg-spec.md §3): direct attention over slot
@@ -802,7 +858,8 @@ class _CCACSAAttention(nn.Module):
 
     def forward(self, x: Tensor, n_skip_rope: int = 0,
                 cla_capture: dict | None = None, cla_kv: dict | None = None,
-                tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None) -> Tensor:
+                tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
+                tg_span: dict | None = None) -> Tensor:
         B, S, _ = x.shape
         H, D = self.cca.n_heads, self.cca.d_head
         scale = D ** -0.5
@@ -825,7 +882,12 @@ class _CCACSAAttention(nn.Module):
                 pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
             q, k, v, q_lat, k_lat = self.cca._cca_project(
                 x, n_skip_rope, return_klat=True, pre=pre_cca)
-            out_comp = _tg_slot_attention(q, k, v, tg_slot_mask, self.cca.sink_logits, scale)
+            if tg_span is not None:
+                out_comp = _tg_span_attention(q, k, v, sink_logits=self.cca.sink_logits,
+                                              scale=scale, **tg_span)
+            else:
+                out_comp = _tg_slot_attention(q, k, v, tg_slot_mask,
+                                              self.cca.sink_logits, scale)
             out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope,
                                             extra_mask=tg_allow)
             return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
@@ -952,7 +1014,8 @@ class _CCAHCAAttention(nn.Module):
 
     def forward(self, x: Tensor, n_skip_rope: int = 0,
                 cla_capture: dict | None = None, cla_kv: dict | None = None,
-                tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None) -> Tensor:
+                tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
+                tg_span: dict | None = None) -> Tensor:
         B, S, _ = x.shape
         H, D = self.cca.n_heads, self.cca.d_head
         scale = D ** -0.5
@@ -971,7 +1034,12 @@ class _CCAHCAAttention(nn.Module):
                 pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
             q, k, v, q_lat, k_lat = self.cca._cca_project(
                 x, n_skip_rope, return_klat=True, pre=pre_cca)
-            out_comp = _tg_slot_attention(q, k, v, tg_slot_mask, self.cca.sink_logits, scale)
+            if tg_span is not None:
+                out_comp = _tg_span_attention(q, k, v, sink_logits=self.cca.sink_logits,
+                                              scale=scale, **tg_span)
+            else:
+                out_comp = _tg_slot_attention(q, k, v, tg_slot_mask,
+                                              self.cca.sink_logits, scale)
             out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope,
                                             extra_mask=tg_allow)
             return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
@@ -1090,6 +1158,7 @@ class MORPHAttention(nn.Module):
 
     def forward(self, x: Tensor, n_skip_rope: int = 0,
                 cla_capture: dict | None = None, cla_kv: dict | None = None,
-                tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None) -> Tensor:
+                tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
+                tg_span: dict | None = None) -> Tensor:
         return self._impl(x, n_skip_rope, cla_capture=cla_capture, cla_kv=cla_kv,
-                          tg_allow=tg_allow, tg_slot_mask=tg_slot_mask)
+                          tg_allow=tg_allow, tg_slot_mask=tg_slot_mask, tg_span=tg_span)
