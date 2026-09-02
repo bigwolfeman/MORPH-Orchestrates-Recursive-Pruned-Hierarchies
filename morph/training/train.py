@@ -407,6 +407,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         n_ve=int(m.n_ve) if getattr(m, "n_ve", None) is not None else None,
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
+        tg_scoped_kernels=bool(getattr(m, "tg_scoped_kernels", False)),
         hc_streams=int(getattr(m, "hc_streams", 4)),
         hc_tau=float(getattr(m, "hc_tau", 1.0)),
         hc_cayley_iters=int(getattr(m, "hc_cayley_iters", 3)),

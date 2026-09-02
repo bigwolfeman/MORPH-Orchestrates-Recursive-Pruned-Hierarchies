@@ -130,3 +130,34 @@ exercises — first real exposure of either mode to a live gradient at scale.
 Whether 5000 steps is long enough for a slot-seed rank change to show up as
 a depth-earning signal at all (the ladder is short by design — a full 20k
 commitment is gated on P-L1 AND (P-L3 or P-L4) per the binding).
+
+## Method amendment — 2026-09-01 20:55 (before launch; predictions untouched)
+
+The three TUL arms (R0/W1/W2) run with `+model.tg_scoped_kernels=true`
+(commit this change): the process-global force_eager flag stays OFF so the
+structurally-safe fused kernels engage (HC-Cayley, CCA prologue/conv, the
+core-region window — where every position is a slot and the TG restriction
+is vacuous). Every TG-restricted attention branch stays eager BY
+CONSTRUCTION: prelude/coda window calls always carry tg_allow (extra_mask
+routes to the reference path unconditionally, attention.py:773) and the TG
+compressed branches are pure eager functions. CE stays chunked. R1 (notul)
+is unchanged (already fused).
+
+Reason: the post-sacg kineto profile ($Q/prof_tul_g0c0.kernels.txt) showed
+no hot kernel — an eager elementwise soup (~13k copies/step) leaving the
+GPU ~50% idle. Verification before this amendment: (1) GPU parity A/B, same
+model + same packed val batches, eager vs scoped: max logit diff 0.073,
+mean 0.0057, 98% argmax agreement (bf16 kernel-order numerics; a masking
+bug would be O(1)+); (2) bitwise causality under scoped mode at 2 perturbed
+token positions (prefix torch.equal, suffix changed), forward determinism
+gate passed; (3) 30-step A/B training smoke: sps 1.41 -> 2.14 (+52%),
+peak mem 17.25 -> 12.08 GB, loss inside the documented nondeterminism band
+(final val 7.774 vs 7.809); (4) tests/test_tg_scoped_kernels.py (3 CPU
+contract tests) + full suite 759 passed / 8 skipped / 1 xfailed.
+Smoke gates now REQUIRE kernels=EAGER+TGSCOPED + the "TG SCOPED KERNELS ON"
+print on the TUL arms.
+
+All four arms remain internally comparable (identical treatment across
+R0/W1/W2; R1 untouched); the depth sweeps still run use_kernels=false via
+core/token_depth_sweep.py, so every prereg metric stays on the reference
+eval path.

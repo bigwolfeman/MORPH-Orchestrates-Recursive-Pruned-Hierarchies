@@ -252,6 +252,16 @@ class MORPHConfig:
     # and throughput. The bit-exact loop opts (x0-hoist, active-set) stay on in
     # BOTH arms (they are not "kernels" and have no downside).
     use_kernels: bool = True
+    tg_scoped_kernels: bool = False  # tg_restrict only: leave the process-global force_eager
+                                     # flag OFF so the structurally-safe fused kernels engage
+                                     # (HC-Cayley, CCA prologue/conv, the core-region window —
+                                     # where the TG restriction is vacuous: every core position
+                                     # is a slot). Every TG-restricted branch stays eager by
+                                     # construction: prelude/coda window calls always carry
+                                     # tg_allow (extra_mask routes to the reference path
+                                     # unconditionally) and the TG compressed branches are
+                                     # pure eager functions. CE stays chunked (that branch
+                                     # reads use_kernels directly).
 
     # Residual = Hyper-Connection (JPmHC, Cayley): widens the residual stream to n=hc_streams
     # parallel C-dim streams ([B,S,n,C]) across the whole network (expand after embeddings,
@@ -776,6 +786,10 @@ class MORPHTransformer(nn.Module):
         # before anything else is built, so a bad config never gets partway through
         # constructing a model it is going to refuse.
         self._tg_restrict = bool(cfg.tul.tg_restrict) if cfg.tul is not None else False
+        if cfg.tg_scoped_kernels and not self._tg_restrict:
+            raise ValueError(
+                "model.tg_scoped_kernels=true requires tul.tg_restrict=true: outside TG "
+                "restriction use model.use_kernels for the full fused path instead.")
         if self._tg_restrict and cfg.use_kernels:
             raise ValueError(
                 "model.tul.tg_restrict=true requires model.use_kernels=false "
@@ -1029,7 +1043,10 @@ class MORPHTransformer(nn.Module):
         # so the choice is captured in the run; the fused-CE branch in forward()
         # reads self.cfg.use_kernels directly.
         from morph.kernels.triton._eager_flag import set_force_eager
-        set_force_eager(not cfg.use_kernels)
+        set_force_eager(not cfg.use_kernels and not cfg.tg_scoped_kernels)
+        if cfg.tg_scoped_kernels:
+            print("  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; "
+                  "TG-restricted attention branches eager by construction; CE chunked")
 
         # Static-region CUDA graphs (MORPH_STATIC_GRAPHS): plain dict attr — holds the
         # graphed front/back callables + capture shapes. Deliberately NOT a submodule.
@@ -1045,7 +1062,8 @@ class MORPHTransformer(nn.Module):
         _res = self._residual_mode + (f"(n={self._n_streams})" if self._is_hc else "")
         print(f"MORPHTransformer: {n_params/1e6:.1f}M params, "
               f"loop {cfg.n_prelude}:{cfg.n_core}×{cfg.mean_depth}:{cfg.n_coda} "
-              f"(kernels={'fused' if cfg.use_kernels else 'EAGER'}, residual={_res})")
+              f"(kernels={'fused' if cfg.use_kernels else ('EAGER+TGSCOPED' if cfg.tg_scoped_kernels else 'EAGER')}, "
+              f"residual={_res})")
 
     # ── Helpers ───────────────────────────────────────────────────────
 
