@@ -51,3 +51,9 @@ optimizer/guard (A2c cap, alpha_cap/t_beta3 retune per the history dig).
 P-N1-side outcome => the ternary x beta1=0 x loop interaction is real;
 the next arm tests ternary-on with a smoothed optimizer (beta1>0 or capped
 alpha) before touching the deploy quant stack.
+
+## Method amendment — 2026-09-02 14:27 (before any successful run)
+
+The override key is `training.ternary=false`, not `model.ternary=false`
+(the first three launch attempts died at Hydra parse in 2 s each — no
+training occurred, no draws consumed). Predictions untouched.
