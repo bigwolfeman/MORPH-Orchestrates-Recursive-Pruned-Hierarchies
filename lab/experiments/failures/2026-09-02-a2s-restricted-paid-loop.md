@@ -1,6 +1,6 @@
 # Planned: A2s — the restricted paid loop, and the frozen 20k selection
 
-Status: planned
+Status: failure
 Date: 2026-09-02 (frozen before launch, ~03:00; Wolfe's directive: "we need
 to do a2s then which ever had lower loss (a2 vs a2s) needs a 20k run")
 
@@ -67,3 +67,38 @@ masked paid core); a2_depth_sweep on an A2s checkpoint (same code path as
 A2's, but the masked-core eval is new); the sps of the eager+scoped paid
 core (estimated ~0.5-0.7 from R0's 2.4 at 4.3x fewer passes — the 20k
 duration estimate hangs on it).
+
+## Results (2026-09-02, runs tul-a2s attempts 1+2)
+
+Both draws detonated with the beta1=0 signature and died at the div-guard's
+first checking opportunity (the ppl>1000 tripwire begins at step 2000; both
+runs were sick from ~step 400-500). Attempt 1: gradients oscillating 1e3-1e4
+through core/prelude, coda quiet. Attempt 2: full explosion, preclip total
+8.5e13 by step 1900. Forensics: run.log(.attempt1), probe.jsonl(.attempt1),
+DIVERGED_step_2040(.attempt1).pt.
+
+- **P-S1 (85%): FALSE.** Zero completions in two draws.
+- **P-S2 (55%) / P-S3 (35%): UNMEASURABLE** — no completed run, no sweep,
+  no final val. Not scored.
+
+Paid-axis stability tally: A2s 0/2, A2 1/2, R1 1/2 — 4 detonations in 6
+draws overall; the restricted paid core is the worst cell so far.
+
+## Verdict
+
+**FAILURE — A2s cannot currently be trained at these flags.** The mechanism
+is verified correct (bitwise causality, reorder-equivariance, masks reach
+the core) but the training dynamics detonate before step 2000 in both
+draws. Consistent with the restriction AGGRAVATING the paid-axis
+instability: the same gradient volume is forced through fewer attention
+routes (same-span-or-slot only). n=2 vs n=2; suggestive, not conclusive.
+
+## Binding applied (dated 2026-09-02 13:50)
+
+The frozen winner rule requires A2s's Final val_loss; A2s produced none in
+two permitted draws, so it cannot win. Per the directive's plain meaning
+("whichever had lower loss"), **A2 (4.2315) wins by walkover** and receives
+the 20k run (tul-a2-20k, fused, no auto-retry, no gen samples). The
+stability question — including whether a spectral cap behaves differently
+on the paid axis than it did against the slot-loop takeover — is now the
+first post-20k experiment.
