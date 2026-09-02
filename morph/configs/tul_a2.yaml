@@ -1,0 +1,28 @@
+# ARM A2 — tokens_through_core (spec §7.1): tokens AND slots run the per-sample
+# core. The PAID-axis arm of the write-side campaign: the ladder (2026-09-01)
+# showed no seed mode moves loop earning while tokens ride free; A2 makes every
+# position pay (proxy ~44 passes/token, notul cost) and asks whether the loop
+# earns when paid, with slots present in the sequence.
+#
+# Four deltas vs tul_g0c0 (R0), each forced by a construction-time raise or by
+# the arm's question:
+#   tokens_through_core=true  — the arm itself
+#   tg_restrict=false         — tg_restrict×A2 is unspecified (raises); the A2
+#                               question is vs R1 (notul), which is unrestricted
+#   mux_beta=0                — mux×A2 is unspecified (raises)
+#   use_kernels=true          — legal without tg_restrict; A2 needs fused speed
+# Prereg: lab/experiments/planned/2026-09-01-a2-paid-loop.md
+defaults:
+  - tul_g0c0
+  - _self_
+
+model:
+  use_kernels: true
+
+tul:
+  tokens_through_core: true
+  tg_restrict: false
+  mux_beta: 0.0
+
+wandb:
+  name: tul-a2
