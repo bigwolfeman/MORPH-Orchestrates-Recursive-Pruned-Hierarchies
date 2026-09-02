@@ -1,6 +1,6 @@
 # Planned: the write-side ladder — does restoring slot-seed rank let the core loop earn depth?
 
-Status: planned
+Status: failure
 Date: 2026-09-01 (frozen before launch; follows on E2,
 lab/experiments/failures/2026-09-01-bound-seed-rank.md)
 
@@ -161,3 +161,59 @@ All four arms remain internally comparable (identical treatment across
 R0/W1/W2; R1 untouched); the depth sweeps still run use_kernels=false via
 core/token_depth_sweep.py, so every prereg metric stays on the reference
 eval path.
+
+## Results (2026-09-02, runs tul-r0-5k / notul-r1-5k(+retry) / tul-w1 / tul-w2)
+
+All numbers at step 5000 unless noted; sweeps over 48 paired rows in
+$Q/nightladder/. R1's first attempt detonated at step 2080 (beta1=0
+gradient explosion, preclip total 1.02e9 by step 2000, loss pinned ~7.4 by
+clipping; step-1 probe identical to notul-20k's to 4 decimals — a bad
+nondeterminism draw of the guardless recipe, not a code change); the
+documented same-command retry ran clean and provides the sweep numbers,
+with the caveat that the retry is itself a WEAK draw (train 6.16@3000 vs
+notul-20k's 4.89@2000), so its loop contribution is the honest matched
+number but its absolute CE understates notul.
+
+| arm | K1−K6 | K6 ce_tokens | val/slot_eff_rank | pairwise_cos |
+|---|---|---|---|---|
+| R0 boundary | +0.0113 | 4.4689 | 40.2 | 0.18 |
+| W1 content | +0.0007 | 4.3395 | 73.3 | 0.21 |
+| W2 bound | +0.0019 | 4.4170 | 48.2 | 0.19 |
+| R1 notul (retry) | +0.1937 | 4.7548 | — | — |
+
+- **P-L1 (70%): TRUE.** W1 rank 73.3 >= 3.0 — but see the instrument
+  caveat recorded mid-run (vlt tul-span-jepa, 21:40, before any scoring):
+  `val/slot_eff_rank` measures the WRITTEN states (post-core h_slots via
+  `_readout`), which climb with training in EVERY arm (R0's boundary seed
+  reads 40.2; the sacg smoke read 1.73 at step 30). The threshold was
+  anchored on E2's static SEED ranks and is trivially cleared. TRUE as
+  written, weak as evidence.
+- **P-L2 (75%): FALSE.** W2 48.2 < W1 73.3 — the ordering INVERTS the
+  static E2 gap (bound 38.30 vs content 3.47). Static seed rank does not
+  survive training contact.
+- **P-L3 (25%): FALSE.** W1 K1−K6 = 0.0007 < 0.0313 (R0 + 0.02).
+- **P-L4 (20%): FALSE.** W2 0.0019 vs W1 0.0007 — both at the floor;
+  rank and depth-earning do not move together.
+- **P-L5 (85%): TRUE.** Bar = 0.0968 (half of R1's 0.1937); W1 and W2 miss
+  it by two orders of magnitude.
+- **P-L6 (70%): FALSE.** R1 attempt 1 div-guard aborted (retry clean;
+  2 of 4 paid-axis draws detonated across the night).
+
+## Verdict
+
+**FAILURE of the manipulated hypothesis — the favoured competing hypothesis
+held.** No seed mode moves loop earning; the core ignores its input rank.
+Binding branch 2 fires (rank moved where measurable, depth flat): stop seed
+engineering, pivot to the paid axis. Executed the same night:
+successes/2026-09-01-a2-paid-loop.md ran A2 (tokens_through_core) and the
+loop earned 0.1685 nats with slots present — confirming the competing
+hypothesis's own mechanism ("nothing in the LOSS rewards the loop" on the
+free axis; when token CE depends on core output, the loop earns).
+
+## Updated hypothesis
+
+Loop earning follows PAYMENT, not seeding. The write side is a second-order
+lever on absolute CE (W1's content seed is worth 0.13 nats over boundary
+and stays worth keeping) but not on depth. Next: the efficient hybrid
+(A2s / asymmetric depth) per the A2 binding, and the reopened stability
+question for paid arms (2/4 draws detonated with no spectral guard).
