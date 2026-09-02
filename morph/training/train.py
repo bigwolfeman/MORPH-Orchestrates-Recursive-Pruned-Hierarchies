@@ -1589,6 +1589,9 @@ def main(cfg: DictConfig) -> None:
     # W <- W * min(1, cap/sigma) applied after each optimizer step. 0 disables and nothing is
     # constructed. See CoreSpectralProjection's docstring for why this and not the penalty.
     _spec_proj = None
+    # gamma slow-EMA pairs (cusp-vault fix): collected ONCE; empty when off.
+    from morph.model.ternary_qat import collect_scale_ema_stes, update_scale_emas
+    _tern_ema_pairs = collect_scale_ema_stes(model)
     _spj_cap = float(getattr(cfg.training, "spectral_project_cap", 0.0))
     _sp_log = int(getattr(cfg.training, "spectral_penalty_log_every", 100))
     _sp_on = _sp_cap > 0.0 and _sp_lam > 0.0
@@ -2765,6 +2768,8 @@ def main(cfg: DictConfig) -> None:
             # be argued with by the data gradient. Optimizer moments are left alone — they
             # describe the unprojected step, which is what momentum should be built from.
             _proj_log = _spec_proj.step() if _spec_proj is not None else {}
+            if _tern_ema_pairs:
+                update_scale_emas(_tern_ema_pairs)
 
         # ── Prune-divergence diagnostic (env MORPH_DIAG_OPT=<path>) ─────────
         # Post-step, grads still live (zero_grad is top-of-next-iter). Dequants m₂/ν and

@@ -384,6 +384,12 @@ training:
   ternary_scale_mode: symmetric  # symmetric wins at this scale (A-series result)
   ternary_scale_group: tensor    # per-tensor scale
   ternary_scale_dtype: fp16      # fp16 scale storage
+  ternary_scale_ema_beta: 0.0    # γ slow-EMA (cusp-vault fix, 2026-09-02): γ ← β·γ + (1-β)·mean|W|
+                                 # ONCE per optimizer step; forward READS the buffer (pure). A
+                                 # coherent weight drift re-thresholds gradually instead of mass-
+                                 # flipping a whole tensor in one step (the paid-axis detonation
+                                 # trigger — M2G onset capture + 3/3 ternary-off draws). 0 = off
+                                 # (live per-forward scale, bit-identical legacy behaviour).
   ternary_scale_clip_mult: 0.0   # Per-group upper bound on ternary scale γ=mean(|W|), anchored
                                  # at this × initial γ (prevents blowup from ratcheting the scale
                                  # upward). γ is the full magnitude carrier of {-1,0,+1}×γ weights

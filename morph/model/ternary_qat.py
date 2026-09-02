@@ -182,6 +182,7 @@ def _apply_grouped_ste(
     threshold: float,
     encode_scale: Callable[[Tensor], Tensor],
     scale_cap: Tensor | None = None,
+    scale_override: Tensor | None = None,
 ) -> Tensor:
     """Symmetric grouped STE: effective_weight = encode(mean(|W_g|)) * codes_g.
 
@@ -196,8 +197,13 @@ def _apply_grouped_ste(
     out_dim, in_dim = w.shape
 
     if group_size <= 0 or group_size >= out_dim:
-        # Per-tensor (group_size=tensor).
-        scale = encode_scale(w.detach().abs().mean().clamp(min=1e-8).unsqueeze(0))[0]
+        # Per-tensor (group_size=tensor). scale_override (the gamma slow-EMA buffer,
+        # [1,1]) replaces the live mean(|W|); encode still applies so dtype semantics
+        # (fp16/int8/pow2 quantized-scale storage) are identical on both paths.
+        if scale_override is not None:
+            scale = encode_scale(scale_override.reshape(1))[0]
+        else:
+            scale = encode_scale(w.detach().abs().mean().clamp(min=1e-8).unsqueeze(0))[0]
         if scale_cap is not None:
             scale = torch.minimum(scale, scale_cap[0])
         w_norm = w / scale
@@ -211,7 +217,10 @@ def _apply_grouped_ste(
         gs = group_size
         ng = out_dim // gs
         wr = w.reshape(ng, gs * in_dim)
-        s = wr.detach().abs().mean(dim=1, keepdim=True).clamp(min=1e-8)   # encode=identity
+        if scale_override is not None:
+            s = scale_override.reshape(ng, 1)                             # gamma EMA buffer
+        else:
+            s = wr.detach().abs().mean(dim=1, keepdim=True).clamp(min=1e-8)   # encode=identity
         if scale_cap is not None:
             s = torch.minimum(s, scale_cap.view(ng, 1))
         w_n = wr / s
@@ -282,6 +291,7 @@ class TernarySTE(nn.Module):
         device: torch.device | None = None,
         weight_init: torch.Tensor | None = None,
         scale_clip_mult: float = 0.0,
+        scale_ema_beta: float = 0.0,
     ) -> None:
         super().__init__()
         assert mode in VALID_MODES, f"unknown mode={mode!r}"
@@ -327,6 +337,30 @@ class TernarySTE(nn.Module):
             ref = self._compute_group_scale_init(weight_init, out_dim, n_groups, device)
             cap = (self.scale_clip_mult * ref).float()
         self.register_buffer("_scale_cap", cap)  # None placeholder when off (valid buffer value)
+
+        # ── gamma slow-EMA (2026-09-02, the cusp-vault fix) ─────────────────────
+        # The vault mechanism (Task #276 DIRECTION-REVIEW §6(ii), confirmed on the
+        # paid axis by the M2G onset capture): gamma=mean(|W|) recomputed every
+        # forward means a coherent one-step weight drift re-thresholds the WHOLE
+        # tensor at once — a mass code flip the looped core amplifies T-fold. With
+        # beta>0 the forward READS this buffer instead of recomputing (pure — safe
+        # under torch.compile, the core loop's repeated application, and checkpoint
+        # recompute); `update_scale_ema` advances it ONCE per optimizer step
+        # (train.py post-step hook): gamma <- beta*gamma + (1-beta)*mean(|W|).
+        # A drift that would have moved gamma by X moves it by (1-beta)*X per step,
+        # so re-thresholding happens as many micro-flips instead of one vault.
+        # 0.0 = off -> no buffer, bit-identical live-scale behaviour. Symmetric
+        # mode only; grouped is supported on the fp16 (identity-encode) path only.
+        self.scale_ema_beta = float(scale_ema_beta)
+        ema = None
+        if self.scale_ema_beta > 0.0:
+            assert mode == "symmetric", "scale_ema_beta supports symmetric mode only"
+            assert (self.group <= 0 or scale_dtype == "fp16"), \
+                "grouped scale-EMA requires fp16 (identity) scale encoding"
+            assert weight_init is not None, "scale_ema_beta needs weight_init for gamma_0"
+            ema = _compute_group_scales(weight_init.to(device) if device is not None
+                                        else weight_init, self.group).float()
+        self.register_buffer("_scale_ema", ema)
 
     def _compute_group_scale_init(
         self,
@@ -374,13 +408,28 @@ class TernarySTE(nn.Module):
     def forward(self, w: Tensor) -> Tensor:
         return self._forward_fn(w)
 
+    @torch.no_grad()
+    def update_scale_ema(self, w: Tensor) -> None:
+        """Advance the gamma EMA one optimizer step: gamma <- b*gamma + (1-b)*mean|W|.
+
+        Called from the trainer's post-step hook (NEVER from forward — the forward
+        must stay pure so the core loop / checkpoint recompute cannot double-apply).
+        No-op when scale_ema_beta == 0 (buffer is None).
+        """
+        if self._scale_ema is None:
+            return
+        cur = _compute_group_scales(w, self.group).float().to(self._scale_ema.device)
+        b = self.scale_ema_beta
+        self._scale_ema.mul_(b).add_(cur * (1.0 - b))
+
     def _forward_symmetric(self, w: Tensor) -> Tensor:
         """BIT-IDENTICAL to the original TernarySTE for group=tensor, dtype=fp16.
 
         For group>0 or non-fp16 dtype: same math, grouped/encoded.
         """
         return _apply_grouped_ste(w, self.group, self.threshold, self._encode_scale,
-                                  scale_cap=self._scale_cap)
+                                  scale_cap=self._scale_cap,
+                                  scale_override=self._scale_ema)
 
     def _forward_ttq(self, w: Tensor) -> Tensor:
         """TTQ: separate LEARNABLE γ₊, γ₋ per group (real grad through both).
@@ -586,6 +635,26 @@ def _categorize(name: str, module: nn.Module, attn_ids: set[int]) -> str | None:
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
+def collect_scale_ema_stes(model: nn.Module) -> list[tuple["TernarySTE", nn.Module]]:
+    """All (TernarySTE-with-EMA, host module) pairs — collected ONCE at setup so the
+    per-step hook is a plain loop with zero discovery cost. Empty when the EMA is off."""
+    out: list[tuple[TernarySTE, nn.Module]] = []
+    for _name, module in model.named_modules():
+        if not parametrize.is_parametrized(module, "weight"):
+            continue
+        for pz in module.parametrizations.weight:
+            if isinstance(pz, TernarySTE) and pz.scale_ema_beta > 0.0:
+                out.append((pz, module))
+    return out
+
+
+@torch.no_grad()
+def update_scale_emas(pairs: list[tuple["TernarySTE", nn.Module]]) -> None:
+    """Post-optimizer-step hook body: advance every gamma EMA by one step."""
+    for ste, module in pairs:
+        ste.update_scale_ema(module.parametrizations.weight.original)
+
+
 def apply_ternary_qat(
     model: nn.Module,
     scope: str = "backbone",
@@ -594,6 +663,7 @@ def apply_ternary_qat(
     scale_group: str = "tensor",
     scale_dtype: str = "fp16",
     scale_clip_mult: float = 0.0,
+    scale_ema_beta: float = 0.0,
 ) -> dict:
     """Register the ternary STE parametrization on every weight matrix selected
     by ``scope``. Call AFTER model construction and BEFORE torch.compile and
@@ -674,6 +744,7 @@ def apply_ternary_qat(
             device=w_device,
             weight_init=w.detach(),  # for mean(|W|) gamma initialization
             scale_clip_mult=scale_clip_mult,  # per-group ternary-scale upper bound
+            scale_ema_beta=scale_ema_beta,    # gamma slow-EMA (cusp-vault fix); 0 = live scale
         )
         parametrize.register_parametrization(module, "weight", ste)
         counts[cat] += 1
