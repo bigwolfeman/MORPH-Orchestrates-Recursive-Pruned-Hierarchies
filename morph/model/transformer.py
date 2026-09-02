@@ -1138,7 +1138,7 @@ class MORPHTransformer(nn.Module):
 
     def _apply_core_step(self, h_in, e_in, ids, x0_terms, bg,
                          ret_state=None, iter_idx=0, inj_terms=None, source_free=False,
-                         stage_cond=None):
+                         stage_cond=None, attn_kw=None):
         """ONE core-loop step: SSM diagonal injection → the n_core shared blocks
         (each with per-layer x0/bigram injection + optional GLA retention carry).
         Returns ``(h, new_ret_state)`` (new_ret None unless a core layer carries retention).
@@ -1194,7 +1194,8 @@ class MORPHTransformer(nn.Module):
             rs_arg = ret_state if is_ret else None
             rc_arg = ret_cap if is_ret else None
             h_injected = layer(h_injected, mlp_kwargs=mlp_kw,
-                               ret_state=rs_arg, ret_capture=rc_arg)
+                               ret_state=rs_arg, ret_capture=rc_arg,
+                               attn_kwargs=attn_kw)
         new_ret = ret_cap.get("state") if ret_cap is not None else None
         return h_injected, new_ret
 
@@ -1561,7 +1562,8 @@ class MORPHTransformer(nn.Module):
         return x
 
     def _core_region(self, x: Tensor, x0: Tensor, bigram_emb,
-                     input_ids: Tensor | None = None) -> Tensor:
+                     input_ids: Tensor | None = None,
+                     attn_kwargs: dict | None = None) -> Tensor:
         """CORE region: input_norm → the Poisson-depth core loop → the looped carrier.
 
         Pure code motion out of ``_forward_single`` (the ``_front_region`` /
@@ -1644,7 +1646,8 @@ class MORPHTransformer(nn.Module):
                 dim=0,
               )  # [n_core, B, S, C]
 
-            def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0):
+            def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0,
+                           attn_kw=None):
                 # Thin closure → the bound `_apply_core_step` method (single source of truth so
                 # the σ_max probe / diagnostics exercise the EXACT training core map). Kept as a
                 # closure so `checkpoint(_core_step, ...)` and the eager/no_grad call sites below
@@ -1654,7 +1657,7 @@ class MORPHTransformer(nn.Module):
                 if _scse is None:
                     return self._apply_core_step(h_in, e_in, None, None, None,
                                                  ret_state=ret_state, iter_idx=iter_idx,
-                                                 inj_terms=inj_terms)
+                                                 inj_terms=inj_terms, attn_kw=attn_kw)
                 # ── SCSE, Eqs. 3-5 ──────────────────────────────────────────────────
                 # `h_in` IS Delta_t and `e_in` carries h* (used only when kappa > 0 builds
                 # the SC-Cond reference; SCSE proper ignores it). The signature is kept
@@ -1666,7 +1669,8 @@ class MORPHTransformer(nn.Module):
                 _rec = _scse.recurrent_input(h_in, e_in)
                 g_out, new_ret = self._apply_core_step(
                     _rec, None, None, None, None,
-                    ret_state=ret_state, iter_idx=iter_idx, inj_terms=None, source_free=True)
+                    ret_state=ret_state, iter_idx=iter_idx, inj_terms=None, source_free=True,
+                    attn_kw=attn_kw)
                 return _scse.update(h_in, g_out, _rec), new_ret    # Eqs. 3-5
 
             # ── Active-set shrinking ────────────────────────────────────────────
@@ -1691,6 +1695,18 @@ class MORPHTransformer(nn.Module):
                 # (inj_core_terms) and only IT needs sorting into active-set order. This also
                 # drops 3 gather kernels/step (input_ids, bigram, x0-stack) from the hot loop.
                 inj_s = _inj_none if _scse is not None else inj_core_terms[:, perm]
+                # A2s (tokens_through_core + tg_restrict): the per-sample TG masks must
+                # follow the SAME active-set permutation as the carrier, or a sorted
+                # sample attends under another sample's mask. Sorted ONCE here; sliced
+                # [:n_active] per iteration below, exactly like h_s / inj_s. None (every
+                # non-TG caller) leaves the loop bit-identical.
+                if attn_kwargs:
+                    _tg_allow_f = attn_kwargs.get("tg_allow")
+                    _tg_smask_f = attn_kwargs.get("tg_slot_mask")
+                    allow_s = _tg_allow_f[perm] if _tg_allow_f is not None else None
+                    smask_s = _tg_smask_f[perm] if _tg_smask_f is not None else None
+                else:
+                    allow_s = smask_s = None
 
             # Selective checkpointing: checkpoint the first `n_ckpt` grad-iterations, run the rest
             # (the last grad-iters) eager (activations retained → no backward recompute). -1 → all.
@@ -1759,6 +1775,13 @@ class MORPHTransformer(nn.Module):
                 args = (h_a, e_s[:n_active],
                         _inj_none if _scse is not None else inj_s[:, :n_active])
                 rs_a = ret_state_s[:n_active] if track_ret else None
+                akw = None
+                if allow_s is not None or smask_s is not None:
+                    akw = {}
+                    if allow_s is not None:
+                        akw["tg_allow"] = allow_s[:n_active]
+                    if smask_s is not None:
+                        akw["tg_slot_mask"] = smask_s[:n_active]
                 # Jacobian probe capture — see the twin in `_tul_core`. None by default,
                 # so this branch traces out and the forward stays bit-identical.
                 if self._jac_capture is not None:
@@ -1779,13 +1802,15 @@ class MORPHTransformer(nn.Module):
 
                 if t < n_nograd:
                     with torch.no_grad():
-                        h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t)
+                        h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t,
+                                                   attn_kw=akw)
                 elif do_ckpt:
                     h_new, rs_new = checkpoint(_core_step, *args, ret_state=rs_a, iter_idx=t,
-                                               use_reentrant=False)
+                                               attn_kw=akw, use_reentrant=False)
                 else:
                     # eval, OR a grad-iter we chose not to checkpoint (activations retained).
-                    h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t)
+                    h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t,
+                                               attn_kw=akw)
 
                 # ── L1 core-gain governor (#276) ──────────────────────────────────────────
                 # Cap this iteration's per-sample looped-core amplification ‖h_new‖/‖h_a‖ ≤ τ.
@@ -2852,20 +2877,20 @@ class MORPHTransformer(nn.Module):
                 "tul.mux_beta has no defined interaction with arm A2 (tokens_through_core): "
                 "A2 has no per-slot looped state to read a plan off. Raises rather than "
                 "silently picking a behaviour (the tul.gate precedent).")
-        if self._tg_restrict and tc.tokens_through_core:
-            raise NotImplementedError(
-                "tul.tg_restrict has no defined interaction with arm A2 "
-                "(tokens_through_core): docs/tul-tg-spec.md's mental model is 'core loop "
-                "on slots only, the one channel to the past' — A2 runs the core over "
-                "every position instead. Not specified, so this raises rather than "
-                "silently picking a behaviour (the tul.gate precedent).")
+        # A2s (2026-09-02): tg_restrict × tokens_through_core is now DEFINED — the
+        # restriction means the same thing in the core as in the prelude/coda: the
+        # window branch carries tg_allow (same-span-or-slot) and the compressed
+        # branch carries tg_slot_mask (slot K/V only). _core_region threads the
+        # masks through the active-set sort. Prereg:
+        # lab/experiments/planned/2026-09-02-a2s-restricted-paid-loop.md.
         if tc.tokens_through_core:
             # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
             # RESOLVED SPEC AMBIGUITY — §7.1's A2 row says "Poisson/slot" in the depth
             # column but "uniform depth" in the isolates column. A2 must differ from A0 by
             # the presence of slots ALONE (it isolates C2), so it reuses today's core
             # region unchanged; a per-position Poisson depth would change two things at once.
-            x_coda = self._core_region(x, x0, bigram_emb, input_ids)
+            x_coda = self._core_region(x, x0, bigram_emb, input_ids,
+                                       attn_kwargs=tg_attn_kwargs)
             depths, g_traj, mux_loss, sigreg_loss = None, None, None, None
             fm_y = fm_geom = fm_ctx = None
             mux_stats = {}

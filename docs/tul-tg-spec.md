@@ -138,3 +138,18 @@ See the pre-registration for predictions and decision rules. TG1 = restriction o
 (losses untouched). TG2 = restriction + `plast_weight=0, emit_weight=0` (TG's own
 single-objective recipe; also removes the takeover's fuel, per the O5 result).
 TG3 = soft restriction, run only if TG1's CE craters past the pre-registered line.
+
+## §A2s addendum (2026-09-02) — tg_restrict × tokens_through_core is defined
+
+The former `NotImplementedError` is resolved: under arm A2s the restriction
+means the SAME thing in the core as in the prelude/coda. Every core-loop
+attention call carries `tg_allow` (window branch: same-span-or-slot) and
+`tg_slot_mask` (compressed branch: slot K/V only). `_core_region` accepts
+`attn_kwargs` and threads the per-sample masks through the active-set sort
+(sorted once with `perm`, sliced `[:n_active]` per iteration alongside the
+carrier — a mask that did not follow the sort would attach one sample's
+visibility to another sample's rows; pinned by
+`tests/test_a2s_restricted_core.py::test_reorder_equivariance_at_nonuniform_depth`).
+`attn_kwargs=None` (every non-TG caller) leaves the loop bit-identical.
+The eval-only `tul_slot_state_probe` still runs the SLOT loop without masks;
+it is a probe, not the training path.
