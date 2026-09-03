@@ -216,9 +216,12 @@ Things that are OUT, with the reason, so they do not come back by accident:
   behind wu5k. A frozen rule decides whether the 20k pair runs with retention: at least
   two healthy draws, mean val at 2500 at most 4.4915 (0.05 below the warmup mean), mean
   earning at least 0.026.
-- **Earning at 5k under warmup.** `2026-09-02-a2-warmup-5k-earning.md`, one draw in
-  flight; the depth-1-to-8 sweep at 5000 against clean A2's 0.1685 says whether the
-  ramp killed or delayed the loop's earning.
+- **Earning at 5k under warmup: MEASURED 2026-09-03 00:16, reduced, not delayed.**
+  `failures/2026-09-02-a2-warmup-5k-earning.md`: wu5k healthy to 5000, final val 4.1807
+  (clean A2 4.2315), K1−K6 0.058 against clean A2's 0.1685 at the same step, saturated by
+  depth 5, depth-8 tail flat. The warmup model's depth-1 CE (4.152) beats clean A2's
+  depth-6 CE (4.171). The loop is a smaller, saturating contributor under the ramp; the
+  recipe is better anyway. If the pair confirms it at 20k, mean depth can come down.
 - **The matched 20k pair.** `2026-09-02-warmup-20k-pair.md`: A2 and notul, both on the
   ramp, same seed, tripwired; the honest prior for "A2 beats notul at 20k" is 40%,
   because the notul twin was 0.05 nats ahead at 5k on the flat schedule.

@@ -1,0 +1,59 @@
+{
+ "wu5k_5000": {
+  "step": 5000,
+  "rows": 48,
+  "eval_mode": "a2_model_depth",
+  "depth_lever": "model.cfg.mean_depth",
+  "train_eval_depth": 6,
+  "depths": {
+   "1": {
+    "ce_tokens": 4.1517313979247445,
+    "ce_span_first": 3.5963077182962437,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "2": {
+    "ce_tokens": 4.111207879545478,
+    "ce_span_first": 3.5735493484651197,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "3": {
+    "ce_tokens": 4.098986054259683,
+    "ce_span_first": 3.5642899206912877,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "4": {
+    "ce_tokens": 4.095190779045337,
+    "ce_span_first": 3.563644735933554,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "5": {
+    "ce_tokens": 4.093993691729454,
+    "ce_span_first": 3.5627110336766097,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "6": {
+    "ce_tokens": 4.094139934091205,
+    "ce_span_first": 3.5670793752959282,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "7": {
+    "ce_tokens": 4.094841128450016,
+    "ce_span_first": 3.5667591318458016,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "8": {
+    "ce_tokens": 4.097665891495623,
+    "ce_span_first": 3.571574102844855,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   }
+  }
+ }
+}
