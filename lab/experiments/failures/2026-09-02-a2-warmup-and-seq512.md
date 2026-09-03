@@ -1,6 +1,6 @@
 # Planned: A2 with a 1000-step LR warmup, and A2 at seq_len 512 — does the danger window close?
 
-Status: planned
+Status: failure
 Date: 2026-09-02 (frozen ~21:20, before launch; trigger: Wolfe — "do the run.
 also maybe try a 512 seq length too, see if that blows up")
 
@@ -112,3 +112,64 @@ launched; wu3 ran on under its own process and is scored post hoc by
 `finish_wu.sh`, which also runs the K1/K6 sweeps). P-S1 and P-S2 are NOT RUN
 and will not be scored. The 20k on this schedule needs a matched notul-20k on
 the same schedule (Wolfe, 22:33); both are his call.
+
+## Results (2026-09-02 21:18-23:05, tul-a2-wu1/2/3; S arm not run)
+
+Tripwire never fired. Post-hoc verdicts (max preclip/total at step >= 200):
+wu1 27.1, wu2 34.6, wu3 36.7 — all HEALTHY. 0/3 detonations against a ~70%
+per-draw base rate (P(0/3) ≈ 0.027 under the base rate).
+
+Val CE (same evaluate(), 20 batches):
+
+| step | 500 | 1000 | 1500 | 2000 | 2250 | final 2500 |
+|---|---|---|---|---|---|---|
+| clean A2 | 6.369 | 5.391 | 5.227 | 5.175 | 4.689 | 4.6776 |
+| wu1 | 6.364 | 5.204 | 5.067 | 5.015 | 4.539 | 4.5391 |
+| wu2 | — | 5.214 | — | 5.033 | 4.544 | 4.5440 |
+| wu3 | — | — | — | — | — | 4.5413 |
+
+Earning, `a2_depth_sweep.py --depths 1,6 --rows 48`, identical rows for all
+four (clean A2 step_2500 swept 23:05 on the same instrument;
+lab/experiments/results/a2_sweep_tul-a2-{2500,wu1,wu2,wu3}.json):
+
+| ckpt @2500 | K1 | K6 | K1−K6 |
+|---|---|---|---|
+| clean A2 | 4.7743 | 4.6534 | 0.1209 |
+| wu1 | 4.5591 | 4.5128 | 0.0463 |
+| wu2 | 4.5656 | 4.5167 | 0.0489 |
+| wu3 | 4.5655 | 4.5199 | 0.0456 |
+
+- **P-W1 (55%): TRUE.** 0/3.
+- **P-W2 (50%): TRUE.** All three within 0.25 of 4.6776; in fact 0.13-0.14
+  BETTER, and a 0.005 spread across draws.
+- **P-W3 (65%): FALSE.** 0.046-0.049, under the 0.08 bar; 38-40% of clean
+  A2's earning at the same step. The warmup model's K1 (4.56) beats the flat
+  model's K6 (4.65).
+- **P-S1, P-S2: NOT RUN** (cancelled 22:40).
+
+## Verdict
+
+**FAILURE by protocol (P-W3), and the recipe question is answered in the
+direction that matters.** A 1000-step LR warmup closes the danger window
+(0/3), costs nothing in CE (it is 0.14 nats ahead at 2500 with a 0.005
+spread), and leaves the loop earning less at 2500 than the flat schedule
+did. Two readings the method cannot separate at 2500:
+
+- (killed) the ramp lets the coda/prelude solve what the loop was solving,
+  the cap trap in a gentler form;
+- (delayed) the earning is a late-forming feature (clean A2: 0.12 at 2500,
+  0.17 at 5000) and the ramp shifts its formation by ~the ramp length.
+
+Distinguishing them needs the SAME sweep at 5000 on a warmup draw:
+`2026-09-02-a2-warmup-5k-earning.md`.
+
+Recipe bookkeeping (Wolfe, 22:33 and 22:40): the schedule change is
+`training.warmup=1000` on the existing cosine-flat 1e-4, seq_len untouched,
+and any 20k on it needs a matched notul-20k on the same schedule. Old
+flat-LR ledger numbers stay valid for flat-LR runs.
+
+## Updated hypothesis
+
+The paid-axis detonation is an early-phase step-size problem that a standard
+LR ramp fixes; ternary is the surface it shows on, not the cause. The open
+question is now the earning's TIMING, not stability.
