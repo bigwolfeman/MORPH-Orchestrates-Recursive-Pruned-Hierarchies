@@ -34,6 +34,8 @@ from .mhc import ChannelInject, MORPHBlock
 from .sparsity import MortarLinear
 from .tul import TULConfig, TULSlots, scatter_positions
 from .tul_layout import SlotLayout
+from .dmorph import DmCtx, DmorphConfig, DmorphStream
+from . import dmorph as _dmorph
 
 if TYPE_CHECKING:  # construction-time annotation only; the planner imports this module
     from .tul_fm import FMArmConfig
@@ -311,6 +313,16 @@ class MORPHConfig:
     # the slot states in place of the core loop. Requires `tul` (FM1 is a TUL arm) and
     # `n_core == 0` (the core loop is what FM1 removes) — both checked at construction.
     fm: "FMArmConfig | None" = None
+
+    # ── dmorph: the no-loop DiffusionBlocks-routed noisy stream (morph/model/dmorph.py) ──
+    # None → NO noisy-stream parameter is constructed and every path is byte-identical
+    # (the `tul` / `fm` convention). Set it and the model gains a DmorphStream (time
+    # conditioning, per-layer AdaLN-Zero gates, velocity head) that runs a second,
+    # flow-matched stream through ONE block of the flat stack per row, AFTER the clean
+    # forward. Requires `tul` (the packed row) and `n_core == 0` (a flat stack) — both
+    # checked at construction. Design: .agents/notes/proposed/architecture/
+    # 2026-09-03-dmorph-v1.md.
+    dmorph: DmorphConfig | None = None
 
     # L1 core-gain governor: cap the per-iteration looped-core
     # amplification ‖h_new‖/‖h_a‖ (per sample) to this ratio τ. The HC residual is
@@ -958,6 +970,34 @@ class MORPHTransformer(nn.Module):
                   input_mode=cfg.scse_input_mode, delta_clip=cfg.scse_delta_clip)
             if cfg.scse_enabled else None)
 
+        # ── dmorph noisy stream (morph/model/dmorph.py) ────────────────────────────
+        # Built LAST of all: its t-embedding MLP draws from the global RNG, so any
+        # earlier placement would move the baseline's own initialisation. With
+        # `dmorph=None` nothing is built and no RNG is drawn (invariant: the control and
+        # the dmorph arms share byte-identical base weights at the same seed).
+        self.dmorph: DmorphStream | None = None
+        if cfg.dmorph is not None:
+            if cfg.tul is None:
+                raise ValueError(
+                    "MORPHConfig(dmorph=...) requires tul=...: the noisy stream runs over "
+                    "the packed TUL row (its hs target lives at the slot positions).")
+            if cfg.n_core != 0:
+                raise ValueError(
+                    f"MORPHConfig(dmorph=...) requires n_core == 0, got {cfg.n_core}. "
+                    "dmorph is the NO-loop arm: its blocks are contiguous groups of the "
+                    "flat prelude+coda stack, and a looped core has no fixed layer index.")
+            if cfg.fm is not None:
+                raise ValueError("MORPHConfig(dmorph=...) and fm=... are mutually exclusive.")
+            self.dmorph = DmorphStream(d, cfg.n_prelude + cfg.n_coda, cfg.dmorph)
+            print(f"  dmorph ON: arm={cfg.dmorph.arm} n_blocks={cfg.dmorph.n_blocks} "
+                  f"layers/block={self.dmorph.layers_per_block} "
+                  f"lambda_fm={cfg.dmorph.lambda_fm} lambda_ce={cfg.dmorph.lambda_ce} "
+                  f"source_std={cfg.dmorph.source_std} null_floor={self.dmorph.null_floor:.3f} "
+                  f"in_gain={cfg.dmorph.in_gain} detach_ctx={cfg.dmorph.detach_ctx} "
+                  f"t_per_position={cfg.dmorph.t_per_position} "
+                  f"params={sum(p.numel() for p in self.dmorph.parameters())/1e6:.2f}M",
+                  flush=True)
+
         # Master kernel switch → drives the fused-Triton-vs-eager-reference
         # dispatch in the attention kernels (process-global flag). Set at build
         # so the choice is captured in the run; the fused-CE branch in forward()
@@ -1296,8 +1336,12 @@ class MORPHTransformer(nn.Module):
     # identical ops in the identical order as the old inline code.
 
     def _front_tail(self, x: Tensor, input_ids: Tensor, bigram_emb,
-                    ve_bagged) -> tuple[Tensor, Tensor]:
-        """x0 skip-clone → HC stream expansion → prelude blocks. Returns (x, x0)."""
+                    ve_bagged, attn_caps: list[dict] | None = None) -> tuple[Tensor, Tensor]:
+        """x0 skip-clone → HC stream expansion → prelude blocks. Returns (x, x0).
+
+        ``attn_caps`` (dmorph only): one dict per GLOBAL layer; prelude layer ``i``
+        stashes its clean K/V bundle into ``attn_caps[i]`` (``cla_capture``). None on
+        every other path → the layer call below is the untouched ``layer(x)``."""
         B, T = x.shape[0], x.shape[1]
         x0 = x.clone()      # single-stream skip signal (broadcast into HC streams)
 
@@ -1317,7 +1361,10 @@ class MORPHTransformer(nn.Module):
                 ve_bagged=ve_bagged,
             )
             x = self._apply_injection(x, term)
-            x = layer(x)
+            if attn_caps is None:
+                x = layer(x)
+            else:
+                x = layer(x, attn_kwargs={"cla_capture": attn_caps[i]})
         return x, x0
 
     def _front_region(self, input_ids: Tensor) -> tuple[Tensor, Tensor, Tensor | None]:
@@ -1330,7 +1377,8 @@ class MORPHTransformer(nn.Module):
 
     def _back_region(self, x: Tensor, x0: Tensor, bigram_emb,
                      input_ids: Tensor | None = None,
-                     inject_keep: Tensor | None = None) -> Tensor:
+                     inject_keep: Tensor | None = None,
+                     attn_caps: list[dict] | None = None) -> Tensor:
         """BACK region: coda blocks → HC stream mean → lm_mixer → final_norm.
         input_ids is only threaded into _build_injection_term for signature parity —
         value-embeds fire exclusively in the prelude (gi ≥ n_prelude+n_core is never in
@@ -1342,7 +1390,10 @@ class MORPHTransformer(nn.Module):
         (spec §3.4 token-state dropout). x0 carries proj(embed(t)) and the bigram term
         carries hash(t, t−1), so without this the dropped token leaks straight back in
         and Bowman's word dropout becomes a no-op. None on every non-TUL path → the
-        ops below are unchanged and bit-identical."""
+        ops below are unchanged and bit-identical.
+
+        ``attn_caps`` (dmorph only): coda layer ``i`` stashes its clean K/V bundle into
+        ``attn_caps[n_prelude + n_core + i]``; None everywhere else (``layer(x)``)."""
         for i, layer in enumerate(self.coda):
             gi = self.cfg.n_prelude + self.cfg.n_core + i
             term = self._build_injection_term(
@@ -1351,7 +1402,10 @@ class MORPHTransformer(nn.Module):
             if inject_keep is not None:
                 term = term * inject_keep.to(term.dtype)
             x = self._apply_injection(x, term)
-            x = layer(x)
+            if attn_caps is None:
+                x = layer(x)
+            else:
+                x = layer(x, attn_kwargs={"cla_capture": attn_caps[gi]})
 
         return self._readout(x)
 
@@ -1420,7 +1474,7 @@ class MORPHTransformer(nn.Module):
             if layout.prefix_k != tc.prefix_k:
                 raise ValueError(
                     f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
-            x, _x0, _bigram = self._tul_front(input_ids, layout)
+            x, _x0, _bigram, _ve = self._tul_front(input_ids, layout)
         else:
             x, _x0, _bigram = self._front_region(input_ids)
         if apply_input_norm:
@@ -1850,8 +1904,13 @@ class MORPHTransformer(nn.Module):
     # Reached only when a `slot_layout` is passed. Every helper below is a no-op for
     # the plain path because the plain path never calls it.
 
-    def _tul_front(self, input_ids: Tensor, layout: SlotLayout):
+    def _tul_front(self, input_ids: Tensor, layout: SlotLayout,
+                   attn_caps: list[dict] | None = None):
         """Embed + slot inputs + prelude over ALL positions (spec §3.2).
+
+        Returns ``(x, x0, bigram_emb, ve_bagged)``. ``ve_bagged`` is returned so the
+        dmorph noisy stream can apply the SAME per-layer injection terms as the clean
+        prelude; ``attn_caps`` threads the clean K/V capture (see :meth:`_front_tail`).
 
         The slot's input embedding is its seed (``TULSlots.slot_input``: the boundary tap
         or the span bag-mean, per ``tul.slot_seed``), and its bigram / value-embed signals
@@ -1872,8 +1931,8 @@ class MORPHTransformer(nn.Module):
                 layout, add_e_slot=False)
             for k in range(n_ve)
         ] if n_ve > 0 else None)
-        x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged)
-        return x, x0, bigram_emb
+        x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged, attn_caps=attn_caps)
+        return x, x0, bigram_emb, ve_bagged
 
     def _tul_half_weights(self, labels: Tensor, layout: SlotLayout):
         """``([N] row weights, t_last index, emit index)`` for the §5 double label.
@@ -1984,7 +2043,13 @@ class MORPHTransformer(nn.Module):
             raise ValueError(f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
         B, L = input_ids.shape
 
-        x, x0, bigram_emb = self._tul_front(input_ids, layout)
+        # dmorph: capture every layer's clean K/V bundle during the clean pass. Every
+        # layer, every forward — the set of blocks a step needs is data-dependent and a
+        # capture that varies per step would vary the compile guards with it. None on a
+        # model without the stream, and then nothing below changes.
+        caps = ([dict() for _ in range(self.cfg.n_prelude + self.cfg.n_core + self.cfg.n_coda)]
+                if self.dmorph is not None else None)
+        x, x0, bigram_emb, ve_bagged = self._tul_front(input_ids, layout, attn_caps=caps)
 
         fm_y = fm_geom = fm_ctx = None
         if self.fm_planner is not None:
@@ -2010,11 +2075,27 @@ class MORPHTransformer(nn.Module):
             x_coda = self._core_region(x, x0, bigram_emb, input_ids, jac_active=~pad_pos)
 
         x_coda, keep = self.tul.apply_token_dropout(x_coda, layout, self.training)
-        xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep)
+        xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
+                               attn_caps=caps)
         groups = (self._tul_group_losses(xh, labels, layout, want_groups=not self.training)
                   if labels is not None else None)
 
         out: dict = {"logits": None}
+        if self.dmorph is not None and groups is not None:
+            # THE NOISY STREAM (morph/model/dmorph.py), after the clean forward and
+            # reading only what it captured. The clean head's CE is already in
+            # groups["loss"]; it is kept UNDETACHED under `loss_tokens_only` (the FM1
+            # convention) so a test can assert with autograd.grad what the clean CE's
+            # graph does and does not contain.
+            groups = dict(groups)
+            row_w, _p, _z = self._tul_half_weights(labels, layout)
+            dm_add, dm_groups = _dmorph.training_terms(
+                self, xh=xh, labels=labels, layout=layout, kv=caps,
+                ctx=DmCtx(x0=x0, bigram=bigram_emb, input_ids=input_ids, ve_bagged=ve_bagged),
+                row_w=row_w, want_eval=not self.training)
+            groups["loss_tokens_only"] = groups["loss"]
+            groups["loss"] = groups["loss"] + dm_add
+            groups.update(dm_groups)
         if self.fm_planner is not None and groups is not None:
             # THREE TERMS, THREE GRADIENT PATHS (morph/model/tul_fm.py header table):
             #   ce     -> backbone + E_slot/E_mask/W_prefix (already in groups["loss"])
@@ -2135,7 +2216,7 @@ class MORPHTransformer(nn.Module):
         from morph.model.fm_planner import effective_rank, mean_pairwise_cos
         from morph.model.tul_fm import copy_gap_scores
 
-        x, _x0, _bg = self._tul_front(input_ids, layout)
+        x, _x0, _bg, _ve = self._tul_front(input_ids, layout)
         _xn, h_slots, y, geom, _ctx = self._tul_fm_core(x, layout)
         # Undo the stream broadcast: every stream carries the same plan by construction.
         z = h_slots[:, :, 0, :] if self._is_hc else h_slots
@@ -2145,6 +2226,35 @@ class MORPHTransformer(nn.Module):
         out["target_norm_mean"] = float(y[geom.valid].norm(dim=-1).mean())
         out["fm_slots_valid"] = float(geom.valid.sum())
         return out
+
+    @torch.no_grad()
+    def dmorph_infer(self, input_ids: Tensor, layout: SlotLayout) -> dict:
+        """Eval-only: the clean pass with capture, then the ``K``-step ladder.
+
+        Returns ``{"logits": clean head [B, L, V], "ladder_logits": [B, L, V]}`` — the
+        ladder's last UNBRIDGED ``D̂`` through the tied head at ``head_scale``, with the
+        structural ``slot_id`` masked in both. The generator
+        (``morph/inference/dmorph_generate.py``) samples from either; the eval loop
+        scores the same ladder through ``dm_ladder_*`` without materialising logits.
+        """
+        if self.dmorph is None:
+            raise RuntimeError("dmorph_infer needs a model built with MORPHConfig(dmorph=...)")
+        if self.training:
+            raise RuntimeError("dmorph_infer is an eval-only read-out; call model.eval() first")
+        tc = self.cfg.tul
+        caps = [dict() for _ in range(self.cfg.n_prelude + self.cfg.n_core + self.cfg.n_coda)]
+        x, x0, bigram_emb, ve_bagged = self._tul_front(input_ids, layout, attn_caps=caps)
+        x_coda = self._core_region(x, x0, bigram_emb, input_ids)
+        xh = self._back_region(x_coda, x0, bigram_emb, input_ids, attn_caps=caps)
+        w_head = self.embed.lm_weight()
+        ctx = DmCtx(x0=x0, bigram=bigram_emb, input_ids=input_ids, ve_bagged=ve_bagged)
+        d_last, _x = _dmorph.ladder(self, caps, ctx, tuple(xh.shape),
+                                    bridge=(self.cfg.dmorph.arm == "tok"), w_head=w_head)
+        mask = torch.tensor([tc.slot_id], device=xh.device)
+        clean = self.embed.attend(xh).index_fill(-1, mask, float("-inf"))
+        lad = ((d_last.float() * self.dmorph.head_scale.float()) @ w_head.float().t()
+               ).index_fill(-1, mask, float("-inf"))
+        return {"logits": clean, "ladder_logits": lad}
 
     def _tul_layer_passes(self, layout: SlotLayout) -> Tensor:
         """Total layer-passes in this batch (spec §2's accounting, for the wandb curve).
@@ -2157,8 +2267,13 @@ class MORPHTransformer(nn.Module):
         L = layout.l_total
         B = layout.slot_mask.shape[0]
         n_pos = float(L * B)
-        return torch.tensor(n_pos * (cfg.n_prelude + cfg.n_coda + cfg.n_core * cfg.mean_depth),
-                            device=layout.slot_mask.device)
+        passes = n_pos * (cfg.n_prelude + cfg.n_coda + cfg.n_core * cfg.mean_depth)
+        if self.dmorph is not None:
+            # The noisy stream: one block per row (or every block, per-position t) over
+            # every packed position — v1 runs the hs arm on full-row tensors too.
+            k = self.dmorph.layers_per_block
+            passes += n_pos * k * (cfg.dmorph.n_blocks if cfg.dmorph.t_per_position else 1)
+        return torch.tensor(passes, device=layout.slot_mask.device)
 
     # ── Forward ───────────────────────────────────────────────────────
 

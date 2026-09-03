@@ -142,7 +142,7 @@ def test_the_generated_plan_carries_no_graph_at_all():
     x, _y, lay, _ = _batch()
     m = _model(_fm_arm())
     m.train()
-    xf, _x0, _bg = m._tul_front(x, lay)
+    xf, _x0, _bg, _ve = m._tul_front(x, lay)
     _xn, h_slots, y_t, geom, ctx = m._tul_fm_core(xf, lay)
     assert not h_slots.requires_grad, "the plan carries a graph into the coda"
     assert ctx.requires_grad, (
@@ -298,7 +298,7 @@ def test_the_fm_path_touches_only_the_slot_prefix_positions():
         m.tul.W_prefix.normal_(0.0, 0.3)
         for p in m.fm_planner.parameters():
             p.add_(0.1 * torch.randn_like(p))
-        xf, _x0, _bg = m._tul_front(x, lay)
+        xf, _x0, _bg, _ve = m._tul_front(x, lay)
         xn, h_slots, _y_t, _geom, _c = m._tul_fm_core(xf, lay)
         values, pos = m.tul.prefix_project(h_slots, lay, lay.l_total)
         from morph.model.tul import scatter_positions
@@ -383,7 +383,7 @@ def test_plans_are_causal_in_the_span_axis():
 
     def _plans(xx, ll):
         torch.manual_seed(3)                       # same ladder noise both sides
-        xf, _x0, _bg = m._tul_front(xx, ll)
+        xf, _x0, _bg, _ve = m._tul_front(xx, ll)
         _xn, h, _y, geom, _c = m._tul_fm_core(xf, ll)
         return h[:, :, 0, :], geom
 

@@ -620,6 +620,13 @@ def _categorize(name: str, module: nn.Module, attn_ids: set[int]) -> str | None:
     if (name.endswith("injection.W_a") or name.endswith("injection.W_dt")
             or name.endswith("injection.B")):
         return None
+    # Guard: never ternarize the dmorph noisy stream's own Linears (morph/model/dmorph.py):
+    # the t-embedding MLP, the per-layer AdaLN-Zero gates and the zero-init velocity
+    # head are CONTROL paths in the exact sense of the two guards above — tiny,
+    # precision-sensitive, and zero-initialised, which a ternary rounding would pin at
+    # zero. Always bf16, regardless of scope. Lives at ``dmorph.*``.
+    if name == "dmorph" or name.startswith("dmorph."):
+        return None
     # CMSBlockLinear (inside MortarLinear) holds a dense [out, in] nn.Parameter
     # named `weight` in dense mode — quantize it like any other linear.
     is_cms = type(module).__name__ == "CMSBlockLinear"

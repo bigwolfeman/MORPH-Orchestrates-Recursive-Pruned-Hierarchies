@@ -1,0 +1,30 @@
+# dmorph panel CONTROL: the coreless bar on the dmorph backbone (design note, "Control").
+# tul_a2's panel (20k steps, seq 1024, batch 6, dense, TST off, TUL on from step 0) on a
+# FLAT 6:0:6 stack — the paper's 12-layer AR depth and a clean 4-block partition. The
+# packed row is ON; dmorph is OFF, so the model is byte-identical to a plain TUL model of
+# this depth (tests/test_dmorph_off_is_bit_identical.py). Both dmorph arms compose from
+# this file, so the pair (dmorph_ctl, dmorph_tok|hs) isolates the noisy stream alone.
+# The 4:0:4 bar (4.3102) is a DIFFERENT network and is not the control here.
+# Panel flags of the warmup pair (prereg, lab/experiments/planned/2026-09-03-dmorph-v1-panel.md).
+defaults:
+  - tul_a2
+  - _self_
+
+model:
+  n_prelude: 6
+  n_core: 0                   # NO loop. The flat stack is the whole model.
+  n_coda: 6
+
+training:
+  warmup: 1000
+  ademamix_alpha_cap: 3.5
+  ademamix_t_beta3: 3500      # PINNED (docs/tul-fm-probing.md §4 rule 5)
+  eval_every: 250
+  gen_every: 0
+
+dmorph:
+  enabled: false
+
+wandb:
+  project: morph-tul
+  name: dmorph-ctl

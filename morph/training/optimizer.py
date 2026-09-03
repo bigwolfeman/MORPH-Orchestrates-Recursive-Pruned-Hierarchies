@@ -31,6 +31,7 @@ _NO_DECAY_KEYWORDS = (
     "lm_mixer",                                    # LM head mixer
     "embed",                                       # Embedding tables
     "ste_gain", "ste_temp",                        # LSTE per-layer params
+    "head_scale",                                  # dmorph read-out gain (a scalar)
     # ── TUL (docs/tul-spec.md §3.1-§3.4) ──
     # E_slot / E_mask are EMBEDDINGS (E_slot is initialised to the mean of the embedding
     # table, spec §5) and every other embedding here is no-decay; they were landing in the

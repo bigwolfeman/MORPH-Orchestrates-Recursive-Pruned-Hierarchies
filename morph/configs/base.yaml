@@ -550,6 +550,32 @@ fm:
   max_slots: 0
   l_total: 0
 
+# ── dmorph: the no-loop DiffusionBlocks-routed flow-matching stream (morph/model/dmorph.py) ──
+# enabled: false builds NOTHING — no noisy-stream parameter, no loss term, no branch — so
+# every config that does not turn it on is byte-identical to today (proven by
+# tests/test_dmorph_off_is_bit_identical.py). The arms live in dmorph_tok.yaml /
+# dmorph_hs.yaml, composed from dmorph_ctl.yaml (the coreless bar on the same depth).
+# Design + every number's source: .agents/notes/proposed/architecture/2026-09-03-dmorph-v1.md.
+# Requires tul.activate_at != never and model.n_core == 0; both checked at build.
+dmorph:
+  enabled: false
+  arm: tok               # tok = next-token embedding at every position | hs = detached post-stack slot state
+  n_blocks: 4            # B equal-width bands on t = B contiguous layer blocks; must divide n_prelude + n_coda
+  gamma: 0.1             # band overlap, fraction of the band width each side (paper App. C, text setting)
+  lambda_fm: 1.0         # flow-matching term, divided by its analytic null floor (loss_scale auto)
+  lambda_ce: 1.0         # CE through the tied head from D_hat (testbed Option B), UNWEIGHTED
+  source_std: matched    # x0 ~ N(0, s^2 I); matched = 1/sqrt(d) for unit-L2 targets (E||v||^2 = 2)
+  in_gain: auto          # x_t enters its block at sqrt(d) x (per-component RMS ~1, input_norm's scale)
+  detach_ctx: false      # true: the FM gradient never reaches the clean stream (paper: one network, false)
+  t_per_position: false  # one t per ROW keeps one block per sample (what makes the routing pay)
+  sigreg_lambda: 0.0     # hs only: > 0 keeps the target LIVE under LeJEPA's SIGReg guard
+  sigreg_slices: 1024
+  infer_steps: 0         # Euler ladder steps at inference; 0 -> n_blocks (one block per step, in order)
+  cond_dim: 256          # width of the t embedding fed to the AdaLN-Zero gates
+  t_embed_scale: 16.0    # t x 16 into the sinusoidal basis (fm_planner.py: raw t covers 1/6 of a cycle)
+  loss_scale: auto       # auto | none
+  block_visit: null      # training visit distribution over blocks; null = uniform (the paper's rule)
+
 wandb:
   project: morph
   entity: null   # null → logged-in account default entity; override for a shared team

@@ -1,0 +1,14 @@
+# dm-hs: the control's backbone + the noisy stream at the SLOT positions with
+# y = normalize(stopgrad(h_final)) — the clean stream's own post-stack slot state, the
+# "post-core carriers" cell the FM-planner rejection left open (design note, "Arm dm-hs").
+# v1 runs the stream on full-row tensors with token positions masked out of both terms.
+defaults:
+  - dmorph_ctl
+  - _self_
+
+dmorph:
+  enabled: true
+  arm: hs
+
+wandb:
+  name: dmorph-hs

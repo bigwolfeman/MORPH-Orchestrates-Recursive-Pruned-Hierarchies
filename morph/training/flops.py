@@ -153,6 +153,12 @@ class FlopModel:
     attn_prelude: int = 0          # attention score/value terms, MODELLED
     attn_core: int = 0
     attn_coda: int = 0
+    # dmorph (morph/model/dmorph.py): the noisy stream's extra layer passes PER PACKED
+    # POSITION (one block = n_layers/n_blocks layers per row; every block under
+    # t_per_position), and its GEMM/attention FLOPs per position. 0 without dmorph.
+    extra_passes: float = 0.0
+    gemm_extra: int = 0
+    attn_extra: int = 0
     assumptions: dict = field(default_factory=dict)
 
     # ── layer-pass proxy (exact, config-derived) ─────────────────────────────
@@ -200,6 +206,7 @@ class FlopModel:
             n += self.n_coda * positions_per_token
         if "core" in sec:
             n += self.n_core * depth * core_position_frac
+        n += self.extra_passes * positions_per_token
         return n
 
     def flop_proxy(self, positions_per_token: float = 1.0,
@@ -254,6 +261,8 @@ class FlopModel:
         if "core" in sec:
             gemm += self.gemm_core * core_pos * depth
             attn += self.attn_core * core_pos * depth
+        gemm += self.gemm_extra * pos
+        attn += self.attn_extra * pos
         gemm *= density
         total = (gemm + attn) * batch * backward_multiplier
         return int(total), int(attn * batch * backward_multiplier)
@@ -273,6 +282,9 @@ class FlopModel:
             "flops/realized_depth": expected_clamped_poisson(
                 float(self.mean_depth), 1, self.max_depth),
             "flops/nominal_proxy_a0": self.flop_proxy(),
+            "flops/extra_passes_per_position": self.extra_passes,
+            "flops/gemm_extra_per_token": self.gemm_extra,
+            "flops/attn_extra_per_token": self.attn_extra,
             **{f"flops/assume_{k}": v for k, v in self.assumptions.items()},
         }
 
@@ -339,6 +351,31 @@ def build_flop_model(model: nn.Module, cfg, seq_len: int) -> FlopModel:
     assumptions["counted"] = "weight GEMMs (exact) + attention score/value (modelled)"
     assumptions["not_counted"] = "norms, activations, softmax, HC Cayley, RoPE/CoPE"
 
+    # dmorph: the noisy stream runs ONE block of the flat stack per row (every block
+    # under t_per_position) at every packed position. Its GEMMs are the block's share of
+    # the prelude+coda GEMMs plus the stream's own head/gates (`dmorph.*`, bucketed as
+    # "other" above and moved here); its attention is modelled as a full layer's worth
+    # per block layer (q-only recompute + the same score/value terms). Design note,
+    # "FLOP accounting": 13.4 → 16.8 passes/token at 6:0:6, B=4.
+    extra_passes = 0.0
+    gemm_extra = 0
+    attn_extra = 0
+    dmc = getattr(cfg, "dmorph", None)
+    if dmc is not None and bool(dmc.get("enabled", False)):
+        n_blocks = int(dmc.get("n_blocks", 4))
+        n_layers = n_prelude + n_coda
+        k = n_layers // max(n_blocks, 1)
+        mult = n_blocks if bool(dmc.get("t_per_position", False)) else 1
+        extra_passes = float(k * mult)
+        own = sum(_linear_flops(mod) for path, mod in model.named_modules()
+                  if path == "dmorph" or path.startswith("dmorph."))
+        buckets["other"] -= own
+        gemm_extra = int(((buckets["prelude"] + buckets["coda"]) * k / max(n_layers, 1)) * mult
+                         + own)
+        attn_extra = int(attn_per_layer * k * mult)
+        assumptions["dmorph_extra"] = (f"one {k}-layer block per row x{mult}; q-only attention "
+                                       f"modelled as a full layer")
+
     return FlopModel(
         version=FLOP_MODEL_VERSION,
         d_model=int(mc.d_model),
@@ -355,6 +392,9 @@ def build_flop_model(model: nn.Module, cfg, seq_len: int) -> FlopModel:
         attn_prelude=attn_per_layer * n_prelude,
         attn_core=attn_per_layer * n_core,
         attn_coda=attn_per_layer * n_coda,
+        extra_passes=extra_passes,
+        gemm_extra=gemm_extra,
+        attn_extra=attn_extra,
         assumptions=assumptions,
     )
 

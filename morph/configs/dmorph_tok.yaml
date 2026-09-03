@@ -1,0 +1,14 @@
+# dm-tok: the control's backbone + the noisy stream at EVERY position with
+# y = normalize(E[label]) — the paper's autoregressive DiffusionBlocks target,
+# FM-parameterised (design note, "Arm dm-tok"). Every number is base.yaml's `dmorph:`
+# block; only the switches that make this arm differ from the control live here.
+defaults:
+  - dmorph_ctl
+  - _self_
+
+dmorph:
+  enabled: true
+  arm: tok
+
+wandb:
+  name: dmorph-tok

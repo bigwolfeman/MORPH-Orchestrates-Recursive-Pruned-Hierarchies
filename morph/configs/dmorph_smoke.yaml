@@ -1,0 +1,54 @@
+# CPU / tiny smoke of the dmorph path: builds in seconds, runs 12 steps, exercises eval
+# (per-band losses, the ladder, the hs worth), checkpoint and the generator once. Run all
+# three arms before a launch:
+#   python -m morph.training.train --config-name dmorph_smoke                     # tok
+#   python -m morph.training.train --config-name dmorph_smoke dmorph.arm=hs
+#   python -m morph.training.train --config-name dmorph_smoke dmorph.enabled=false  # control
+# 4 layers, 4 blocks: one layer per block, so every band→block seam is exercised.
+defaults:
+  - dmorph_tok
+  - _self_
+
+model:
+  d_model: 256
+  n_heads: 4
+  n_kv_heads: 2
+  d_ff: 512
+  n_prelude: 2
+  n_core: 0
+  n_coda: 2
+  mean_depth: 2
+  max_depth: 3
+  bptt_depth: 2
+  channel_dims: [128, 80, 48]
+  max_seq_len: 1024
+  context_len: 512
+  csa_compress_ratio: 4
+  hca_compress_ratio: 32
+  top_k: 32
+  window_size: 64
+  retention_heads: 4
+  retention_chunk: 32
+
+training:
+  steps: 12
+  batch_size: 2
+  warmup: 2
+  ademamix_t_beta3: 12
+  eval_every: 5
+  n_eval_batches: 2
+  ckpt_every: 10
+  gen_every: 0
+  compile: false
+  ternary: false
+  adam8bit: false
+  embed_quant: "off"
+
+data:
+  seq_len: 256
+
+dmorph:
+  n_blocks: 4
+
+wandb:
+  name: dmorph-smoke

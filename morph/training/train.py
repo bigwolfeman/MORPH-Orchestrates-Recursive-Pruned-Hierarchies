@@ -81,6 +81,7 @@ _MORPH_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 import wandb
 
 from morph.model.transformer import MORPHConfig, MORPHTransformer
+from morph.model.dmorph import aggregate_eval as _dm_aggregate_eval
 from morph.model.routing import collect_routing_aux_losses, collect_routing_stats
 from morph.training.divergence_guard import BlockGainGuard, CoreShareGuard
 from morph.training.data import create_dataloader
@@ -123,12 +124,19 @@ def evaluate(
             _l = out["loss"].item()
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
             # language model and not on an auxiliary (the spectral-penalty precedent).
-            for _aux in ("fm_weighted", "fm_sigreg_weighted"):
+            for _aux in ("fm_weighted", "fm_sigreg_weighted",
+                         "dm_fm_weighted", "dm_ce_weighted", "dm_sigreg_weighted"):
                 if out.get(_aux) is not None:
                     _l -= float(out[_aux])
             losses.append(_l)
             ce_tok = float(out["ce_tokens"])
             acc.setdefault("val/ce_tokens", []).append(ce_tok)
+            # dmorph (morph/model/dmorph.py): every `dm_*` term the eval forward emits —
+            # the per-band FM/CE, the ladder read-outs, the hs cosine and the
+            # four-condition worth — under val/. Costs, never fractions.
+            for _k, _v in out.items():
+                if _k.startswith("dm_") and _v is not None:
+                    acc.setdefault(f"val/{_k}", []).append(float(_v))
             if "ce_first_tok" in out:
                 acc.setdefault("val/first_tok_ce", []).append(float(out["ce_first_tok"]))
                 acc.setdefault("val/first_tok_counterfactual", []).append(
@@ -167,7 +175,11 @@ def evaluate(
             losses.append(out["loss"].item())
     model.train()
     if extra is not None:
-        extra.update({k: sum(v) / len(v) for k, v in acc.items() if v})
+        # dmorph terms are COUNT-weighted over the eval set (a batch with no row in a
+        # band must not pull that band's mean toward 0); `aggregate_eval` owns the rule.
+        _dm = _dm_aggregate_eval(acc)
+        extra.update({k: sum(v) / len(v) for k, v in acc.items() if v and k not in _dm})
+        extra.update(_dm)
         # PPL is exp of the MEAN CE, never the mean of the per-batch exp(CE). Jensen
         # makes the latter strictly larger: on tul-a1-acap1 it read 25.89 against the
         # true 25.14, and that 0.75 gap is 59 % of the 1.27 PPL A1-vs-A0 effect it
@@ -291,10 +303,11 @@ def run_generation_test(
 
 # ── Config → MORPHConfig ───────────────────────────────────────────────────────
 
-def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
+def build_morph_config(cfg: DictConfig, tul=None, fm=None, dmorph=None) -> MORPHConfig:
     """``tul`` (a TULConfig or None) gates CONSTRUCTION of the TUL parameters;
     None ⇒ byte-identical to the baseline model (runtime-invariants §6b).
-    ``fm`` (an FMArmConfig or None) does the same for the FM1 planner."""
+    ``fm`` (an FMArmConfig or None) does the same for the FM1 planner, and
+    ``dmorph`` (a DmorphConfig or None) for the dmorph noisy stream."""
     m = cfg.model
     tr = cfg.training
 
@@ -306,6 +319,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
     return MORPHConfig(
         tul=tul,
         fm=fm,
+        dmorph=dmorph,
         d_model=int(m.d_model),
         n_heads=int(m.n_heads),
         d_ff=d_ff_raw,
@@ -1385,11 +1399,13 @@ def main(cfg: DictConfig) -> None:
     from morph.training.flops import build_flop_model, perf_metrics
     from morph.training.tul_setup import build_tul_runtime
     from morph.training.fm_setup import build_fm_runtime
+    from morph.training.dmorph_setup import build_dmorph_runtime
     from morph.training.phase import PhaseSchedule
     tul_rt = build_tul_runtime(cfg)
     fm_rt = build_fm_runtime(cfg, tul_rt)
+    dm_rt = build_dmorph_runtime(cfg, tul_rt)
     morph_cfg = build_morph_config(cfg, tul=tul_rt.model_cfg if tul_rt else None,
-                                   fm=fm_rt)
+                                   fm=fm_rt, dmorph=dm_rt.model_cfg if dm_rt else None)
     model = MORPHTransformer(morph_cfg).to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
@@ -1639,6 +1655,14 @@ def main(cfg: DictConfig) -> None:
         }
     else:
         full_config_dict["fm_manifest"] = None
+    # Everything DERIVED about dmorph (morph/training/dmorph_setup.py) plus the live
+    # module's own manifest (band bounds, null floor, parameter count) — the run must
+    # be reproducible from its wandb config alone.
+    if dm_rt is not None:
+        _mdl = getattr(model, "_orig_mod", model)
+        full_config_dict["dmorph_manifest"] = {**dm_rt.manifest, **_mdl.dmorph.manifest()}
+    else:
+        full_config_dict["dmorph_manifest"] = None
     # The FLOP model's own version + per-region costs: an MFU from model v1 is not
     # comparable to one from v2, and without this nobody can tell them apart later.
     full_config_dict["flops_manifest"] = _flops.manifest()
@@ -2736,6 +2760,13 @@ def main(cfg: DictConfig) -> None:
                 for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
+                # dmorph loss groups (morph/model/dmorph.py::training_terms). The clean
+                # head's own CE is `loss_tokens_only`; `train/loss` above is the total.
+                if out.get("loss_tokens_only") is not None:
+                    log["dm/loss_tokens_only"] = float(out["loss_tokens_only"].detach())
+                for _k, _v in out.items():
+                    if _k.startswith("dm_") and _v is not None:
+                        log[f"dm/{_k[3:]}"] = float(_v)
 
             # Retention gate diagnostic (#230): sigmoid(ret_gate) per retention block — THE key
             # signal for whether the model actually USES the retention branch (gate opens from ~0)
@@ -2860,6 +2891,12 @@ def main(cfg: DictConfig) -> None:
                             f"  first_tok={_val_extra.get('val/first_tok_ce', float('nan')):.4f}"
                             f"  cf={_val_extra.get('val/first_tok_counterfactual', float('nan')):+.4f}"
                             f"  lp/tok={_val_extra.get('val/layer_passes_per_token', float('nan')):.2f}")
+                if "val/dm_fm" in _val_extra:
+                    _tul_msg += (f"  dm_fm={_val_extra['val/dm_fm']:.4f}"
+                                 f"  dm_ce={_val_extra.get('val/dm_ce', float('nan')):.4f}"
+                                 f"  dm_fm_b0={_val_extra.get('val/dm_fm_band0', float('nan')):.4f}"
+                                 f"  ladder_ce={_val_extra.get('val/dm_ladder_ce', float('nan')):.4f}"
+                                 f"  cos={_val_extra.get('val/dm_cos', float('nan')):.3f}")
             print(
                 f"  [VAL {step:7d}] loss={val_loss:.4f}  ppl={val_ppl:.2f}{_tul_msg}",
                 flush=True,

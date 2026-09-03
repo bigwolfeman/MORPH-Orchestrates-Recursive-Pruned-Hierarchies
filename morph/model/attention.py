@@ -375,13 +375,15 @@ def _compressed_causal_mask(S: int, n_blocks: int, m: int, device) -> Tensor:
 
 def _window_fallback(q: Tensor, k: Tensor, v: Tensor,
                      window_size: int, device, scale: float,
-                     n_skip_rope: int = 0) -> Tensor:
+                     n_skip_rope: int = 0, exclude_self: bool = True) -> Tensor:
     """Causal sliding-window attention with XSA (self-token excluded).
 
     Position j is attended by query i iff:
       - j <= i  (causal)
       - i - j < window_size  (within window)
-      - j != i  (XSA: exclude self-token)
+      - j != i  (XSA: exclude self-token; ``exclude_self=False`` keeps it — the
+        cross-stream ``cla_kv`` read, whose query lives in ANOTHER stream and whose
+        own residual does not carry key j = i)
     OR j >= S - n_skip_rope (suffix tokens always visible to all queries)
     OR i >= S - n_skip_rope (suffix queries can see all keys).
     """
@@ -390,7 +392,9 @@ def _window_fallback(q: Tensor, k: Tensor, v: Tensor,
     col = torch.arange(S, device=device).unsqueeze(0)
     dist = row - col
 
-    mask = (dist >= 0) & (dist < window_size) & (dist != 0)
+    mask = (dist >= 0) & (dist < window_size)
+    if exclude_self:
+        mask = mask & (dist != 0)
     if n_skip_rope > 0:
         is_suffix_col = col >= S - n_skip_rope
         is_suffix_row = row >= S - n_skip_rope
@@ -600,7 +604,8 @@ class _CCABase(nn.Module):
         return q
 
     def _window_attn(self, q: Tensor, k: Tensor, v: Tensor,
-                     device, scale: float, n_skip_rope: int = 0) -> Tensor:
+                     device, scale: float, n_skip_rope: int = 0,
+                     exclude_self: bool = True) -> Tensor:
         # _USE_FUSED_WINDOW is only a capability flag (Triton importable + not
         # DISABLE_FUSED_KERNELS at import). The RUNTIME kernel-off switch is
         # force_eager() — fused_window_attention() honours it internally now, so
@@ -609,8 +614,9 @@ class _CCABase(nn.Module):
         # when kernels are off (matches the seed's use_kernels=False regime).
         if _USE_FUSED_WINDOW and not force_eager():
             return fused_window_attention(
-                q, k, v, self.window_size, n_skip_rope, True, scale=scale)
-        return _window_fallback(q, k, v, self.window_size, device, scale, n_skip_rope)
+                q, k, v, self.window_size, n_skip_rope, exclude_self, scale=scale)
+        return _window_fallback(q, k, v, self.window_size, device, scale, n_skip_rope,
+                                exclude_self)
 
     def _gate_combine_up(self, x: Tensor,
                           out_comp: Tensor, out_win: Tensor,
@@ -715,8 +721,13 @@ class _CCACSAAttention(nn.Module):
             out_comp = fused_csa_attention(
                 q, cla_kv["C_comp"][:bsz], cla_kv["top_idx"][:bsz],
                 cla_kv["invalid_mask"][:bsz], self.cca.sink_logits, scale)
+            # Cross-stream read (morph/model/dmorph.py): the query is another stream's,
+            # so key j = i is NOT the query's own token and XSA does not apply — the
+            # window covers j <= i, the paper's noisy -> clean mask
+            # (tests/test_dmorph_no_leak.py proves j <= i and never i + 1).
             out_win = self.cca._window_attn(
-                q, cla_kv["k"][:bsz], cla_kv["v"][:bsz], x.device, scale, n_skip_rope)
+                q, cla_kv["k"][:bsz], cla_kv["v"][:bsz], x.device, scale, n_skip_rope,
+                exclude_self=False)
             return self.cca._gate_combine_up(x, out_comp, out_win)
 
         pre_cca = pre_comp = pre_idx = gate_pre = None
@@ -822,8 +833,13 @@ class _CCAHCAAttention(nn.Module):
             bsz = x.shape[0]
             q = self.cca._cca_q_only(x, cla_kv["k_lat"][:bsz], n_skip_rope)
             out_comp = fused_hca_attention(q, cla_kv["C_comp"][:bsz], self.cca.sink_logits, m, scale)
+            # Cross-stream read (morph/model/dmorph.py): the query is another stream's,
+            # so key j = i is NOT the query's own token and XSA does not apply — the
+            # window covers j <= i, the paper's noisy -> clean mask
+            # (tests/test_dmorph_no_leak.py proves j <= i and never i + 1).
             out_win = self.cca._window_attn(
-                q, cla_kv["k"][:bsz], cla_kv["v"][:bsz], x.device, scale, n_skip_rope)
+                q, cla_kv["k"][:bsz], cla_kv["v"][:bsz], x.device, scale, n_skip_rope,
+                exclude_self=False)
             return self.cca._gate_combine_up(x, out_comp, out_win)
 
         pre_cca = pre_comp = gate_pre = None
