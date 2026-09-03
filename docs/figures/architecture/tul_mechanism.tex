@@ -38,9 +38,12 @@
     minimum height=1.05cm, font=\small\sffamily, align=center, inner sep=7pt},
   tok/.style={draw=bdr, fill=fGray, minimum width=0.78cm, minimum height=0.68cm,
     font=\footnotesize\sffamily, inner sep=1pt},
-  tokNext/.style={draw=cbTeal, thick, fill=fTeal, minimum width=0.78cm,
+  tokDone/.style={draw=cbTeal, thick, fill=fTeal, minimum width=0.78cm,
     minimum height=0.68cm, font=\footnotesize\sffamily\bfseries, inner sep=1pt,
     text=cbTeal!70!black},
+  tokNext/.style={draw=cbOrange!70!black, thick, fill=fOrange!55, minimum width=0.78cm,
+    minimum height=0.68cm, font=\footnotesize\sffamily, inner sep=1pt,
+    text=cbOrange!75!black},
   punct/.style={draw=cbOrange, very thick, fill=fOrange, minimum width=0.78cm,
     minimum height=0.68cm, font=\footnotesize\sffamily\bfseries, inner sep=1pt,
     text=cbOrange!75!black},
@@ -95,7 +98,7 @@
 
 % title centered with the main column
 \node[font=\Large\sffamily\bfseries] (title) at ($(amid)+(0,2.55)$)
-  {TUL: Thought Unpack Loop --- the paid loop};
+  {TUL: Thought Unpack Loop};
 
 \draw[decorate, decoration={brace, mirror, amplitude=3pt}]
   ($(a1.south west)+(0,-0.06)$) -- ($(a5.south east)+(0,-0.06)$)
@@ -112,48 +115,49 @@
   \textbf{PRELUDE}: all positions, once};
 \draw[A] ($(amid)-(0,0.55)$) -- (pre.north);
 
-% ── CORE × T on the WHOLE row ───────────────────────────────────────────────
-\node[B, fill=fPurple, draw=loopC, line width=1.6pt, below=0.7cm of pre] (core) {%
-  \textbf{CORE} $\times\,T$ on \textbf{all positions} --- tokens and slots looped together\\[2pt]
-  {\scriptsize $T\sim\mathrm{Poi}(6)$ per sample, max 8 \;$\cdot$\; full BPTT \;$\cdot$\; nothing gathered, projected or scattered}};
-\draw[A] (pre.south) -- (core.north);
+% ── THINK: the core loops the WHOLE row; the slot cells come out as the thought ──
+\node[B, fill=fPurple, draw=loopC, line width=1.6pt, below=0.7cm of pre] (think) {%
+  \textbf{THINK}: core $\times\,T$ on \textbf{all positions} --- tokens and slots looped together\\[2pt]
+  {\scriptsize $T\sim\mathrm{Poi}(6)$ per sample, max 8 \;$\cdot$\; full BPTT \;$\cdot$\; the loop's output at the slot cells is the thought $z$}};
+\draw[A] (pre.south) -- (think.north);
 
 % ×T loop: out=0/in=0 U-turn on the right edge.
 \draw[loopC, line width=1.55pt, line cap=round, shorten >=1.2pt,
       -{Latex[length=2.4mm, width=1.65mm, flex']}]
-  ([xshift=-2.5pt, yshift=2.4mm]core.east)
+  ([xshift=-2.5pt, yshift=2.4mm]think.east)
     to[out=0, in=0, min distance=8.5mm]
-  ([yshift=-2.4mm]core.east);
+  ([yshift=-2.4mm]think.east);
 \node[font=\small\sffamily\bfseries, text=loopC, anchor=west]
-  at ([xshift=11mm]core.east) {$\times T$};
+  at ([xshift=11mm]think.east) {$\times T$};
 
-% ── CODA ────────────────────────────────────────────────────────────────────
-\node[B, fill=fTeal, draw=cbTeal, line width=1.4pt, below=0.7cm of core] (coda) {%
-  \textbf{CODA}: all positions, once \;$\to$\; tied head at every position\\[2pt]
-  {\scriptsize token-state dropout 0.15 on the coda's token input \;$\cdot$\; the slot-id logit is masked}};
-\draw[A] (core.south) -- (coda.north);
+% keep annotation: what conditions on z
+\node[draw=cbPurple, thick, rounded corners=4pt, fill=fPurple!60,
+      font=\scriptsize\sffamily, inner sep=5pt, align=center,
+      below=0.45cm of think] (keep) {%
+  $z$ stays in the row: every later position attends to it, in the core and in the coda};
+\draw[A, draw=cbPurple] (think.south) -- (keep.north);
 
-% ── LOSS / READ callout ─────────────────────────────────────────────────────
-\node[note, draw=cbPurple, fill=fPurple!60, below=0.45cm of coda] (loss) {%
-  \textbf{ONE weighted CE.} every token position keeps its label (\texttt{plast\_weight} 1.0)
-  \;$\cdot$\; the slot's own emit label carries \textbf{no loss} (\texttt{emit\_weight} 0)\\[1pt]
-  generation reads the next span's first token at the \textbf{boundary token}; the whole row is recomputed each step (no KV cache in v1)};
-\draw[A, draw=cbPurple] (coda.south) -- (loss.north);
+% ── DECODE: the coda reads the row and the head emits the next token ────────
+\node[B, fill=fTeal, draw=cbTeal, line width=1.4pt, below=0.55cm of keep] (dec) {%
+  \textbf{DECODE}: coda on all positions, once $\to$ head emits the next token $d$\\[2pt]
+  {\scriptsize span $i{+}1$'s tokens attend $z_i$ \;$\cdot$\; stop at punct / $\le 32$ \;$\cdot$\; training: next-token CE at every token, none at a slot cell}};
+\draw[A] (keep.south) -- (dec.north);
 
 % ── OUTPUT ROW (bottom) — same x as the in-row ──────────────────────────────
-\coordinate (bout) at (a1 |- loss.south);
-\node[tok, below=1.05cm of bout] (b1) {tok};
+\coordinate (bout) at (a1 |- dec.south);
+\node[tok, below=1.35cm of bout] (b1) {tok};
 \node[tok, right=0.08cm of b1] (b2) {tok};
 \node[tok, right=0.08cm of b2] (b3) {tok};
 \node[tok, right=0.08cm of b3] (b4) {tok};
 \node[punct, right=0.08cm of b4] (b5) {.};
 \node[slot, right=0.08cm of b5] (bz1) {$z_i$};
 \node[slot, right=0.04cm of bz1] (bz1b) {$z_i'$};
-\node[tokNext, right=0.08cm of bz1b] (b6) {$d$};
-\node[tok, right=0.08cm of b6] (b7) {tok};
-\node[tok, right=0.08cm of b7] (b8) {tok};
-\node[tok, right=0.08cm of b8] (b9) {tok};
-\node[tok, right=0.08cm of b9] (b10) {tok};
+% active span: emitted so far (z_i thought + toks through current d); future stays outside the box
+\node[tokDone, right=0.28cm of bz1b] (b6) {$d_{-2}$};
+\node[tokDone, right=0.22cm of b6] (b7) {$d_{-1}$};
+\node[tokDone, right=0.22cm of b7] (b8) {$d$};
+\node[tokNext, right=0.28cm of b8] (b9) {$d_{+1}$};
+\node[tokNext, right=0.08cm of b9] (b10) {$d_{+2}$};
 \node[punct, right=0.08cm of b10] (b11) {;};
 \node[slot, right=0.08cm of b11] (bz2) {$z_{i+1}$};
 \node[slot, right=0.04cm of bz2] (bz2b) {$z_{i+1}'$};
@@ -168,12 +172,33 @@
 
 \node[ph, text=bdr, left=0.35cm of b1, align=right] {output\\row};
 
-% d: the next span's first token, read at the boundary token position "."
-\draw[A, draw=cbTeal, line width=1.5pt]
-  (loss.south -| b5) -- (b5.north)
-  node[midway, right=3pt, font=\scriptsize\sffamily\bfseries, text=cbTeal!70!black, align=left]
-  {$d$ = first token of span $i{+}1$,\\read at the boundary token};
+% frame = everything emitted so far (span toks + punct + z_i + … + current d)
+\begin{scope}[on background layer]
+  \node[draw=cbTeal, thick, rounded corners=5pt, fill=fTeal!20,
+        fit=(b1)(b2)(b3)(b4)(b5)(bz1)(bz1b)(b6)(b7)(b8),
+        inner xsep=4.5pt, inner ysep=6pt] (spanBox) {};
+\end{scope}
+\node[sub, text=cbTeal!75!black, anchor=west]
+  at ($(spanBox.north east)+(0.12,0.12)$) {emitted so far (through $d$)};
 
+% d: vertical drop from DECODE's bottom edge aligned over $d$
+\draw[A, draw=cbTeal, line width=1.5pt]
+  (dec.south -| b8) -- (b8.north)
+  node[midway, right=3pt, font=\small\sffamily\bfseries, text=cbTeal] {$d$};
+
+% generation feedback: the emitted row goes back through the WHOLE stack
+\coordinate (fbStart) at ([xshift=0.45cm]spanBox.north west);
+\draw[cbTeal, line width=1.5pt, rounded corners=3pt,
+      -{Stealth[length=2.8mm,width=2.2mm]}]
+  (fbStart) |- (pre.west);
+\node[font=\scriptsize\sffamily, text=cbTeal!80!black, anchor=east, align=right]
+  at ([xshift=-0.12cm]fbStart |- keep.west)
+  {append $d$, run the\\whole row again\\(v1: no KV cache)};
+\node[font=\scriptsize\sffamily, text=cbOrange!75!black, anchor=east, align=right]
+  at ([xshift=-0.12cm]fbStart |- dec.west)
+  {a boundary emitted\\$\Rightarrow$ two slot cells\\inserted after it};
+
+% braces: span i+1 is the full token run including future + punct
 \draw[decorate, decoration={brace, mirror, amplitude=3pt}]
   ($(b1.south west)+(0,-0.06)$) -- ($(b5.south east)+(0,-0.06)$)
   node[midway, below=3pt, sub] {span $i$};
@@ -188,7 +213,7 @@
 \node[draw=cbPurple, thick, rounded corners=4pt, fill=fPurple,
       font=\scriptsize\sffamily\bfseries, align=center, inner sep=5pt,
       below=0.95cm of bz2] (kept)
-  {$z$ kept in the row: looped with the tokens,\\read by every later position through attention};
+  {$z$ kept in the row:\\not thrown away, looped again with every later step};
 \draw[cbPurple, thick, densely dashed]
   (kept.west) -| (bz1b.south);
 \draw[cbPurple, thick, densely dashed]
