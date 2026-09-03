@@ -62,3 +62,23 @@ then the six runs (three arms × two seeds) sequentially on the 5090 with
 `preclip/total > 1e4` after step 200. Artifacts to
 `lab/experiments/results/2026-09-03-dmorph-v1-panel/`. File under `successes/` iff
 every prediction resolves on its majority side, else `failures/`.
+
+### Method amendment, 2026-09-03 (before launch; Predictions untouched)
+
+1. **5,000 steps per run, not 20,000.** Wolfe, 2026-09-03: "let's just send them for
+   5k". Every read that said "at 20k" is read at 5k: the last-20 eval mean over
+   evals every 250 steps, and the same-rows sweep at step 5000. The matched-wall-clock
+   read is taken at the step where each dmorph arm's cumulative wall clock equals the
+   control's wall clock at 5,000. `training.warmup` stays 1000 and
+   `training.ademamix_t_beta3` stays 3500 (pinned; the note's rule 5).
+2. **`dmorph.source_std = 1.0` on both dmorph arms**, not the note's matched `1/√d`.
+   Reason: the builder's decodability read at init (`lab/dmorph/decodability.py`,
+   implementation record in the design note) put 88.6 % of the tok arm's training mass
+   where `x_t` is already nearest-neighbour decodable against the table; the design
+   note's Risks section set ~40 % as the reshape trigger. `source_std 0.5` gives 31 %,
+   `1.0` gives 16 %. P6 (the trap exceeds 40 % with the matched source) is therefore
+   resolved BEFORE the run, on the tok arm at init, on its majority side (TRUE), and the
+   panel runs the reshaped source. The hs arm gets the same value so the two arms differ
+   only in the target.
+3. The run names carry the step count: `dmorph-{ctl,tok,hs}-s{1,2}-5k`.
+
