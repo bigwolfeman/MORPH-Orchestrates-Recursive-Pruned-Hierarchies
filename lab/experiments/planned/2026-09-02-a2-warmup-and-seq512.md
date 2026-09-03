@@ -100,3 +100,15 @@ window, then 1024) using the existing loader
 arm at 2500 steps vs wu1's 4.5391 at matched steps and matched tokens. If S
 detonates >= 2/3 while W does not, length is not the lever and the LR ramp
 is the only cheap early-phase fix found.
+
+### Method amendment — 2026-09-02 22:40 (S arm CANCELLED before it started; predictions untouched)
+
+Wolfe: "if lowering seq and lr works, we only add cosine lr warmup and leave
+seq Len alone ... no point doing only a single probe about stability." With
+wu1 and wu2 both healthy (P-W1 already TRUE), the recipe amendment is the LR
+warmup only; the seq-length question is deferred to Wolfe's later warmup-on-
+seq-length work. The runner was stopped at step 2400 of wu3 (no S draw was
+launched; wu3 ran on under its own process and is scored post hoc by
+`finish_wu.sh`, which also runs the K1/K6 sweeps). P-S1 and P-S2 are NOT RUN
+and will not be scored. The 20k on this schedule needs a matched notul-20k on
+the same schedule (Wolfe, 22:33); both are his call.
