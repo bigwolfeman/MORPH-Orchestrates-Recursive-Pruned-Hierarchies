@@ -115,3 +115,142 @@ number with a bootstrap CI; each later step is a preregistered experiment under
   guard to run under, not the ramp.
 - Step 2's starved token path lowers the control's CE too; the comparison must be at
   matched wall clock against a control with the SAME cheap token path and no slot.
+
+---
+
+## Revision 2026-09-03 (evening) — branch `tul/think-once` from `d9e04e6`, the MUX reading, and the round-1 panel
+
+Written after re-reading MUX (arXiv 2607.18264, full text) and every slot-loop filing.
+No code and no run yet. Three corrections to the sections above, then the panel.
+
+### Correction 1 — the recipe confound is NOT what killed the slot loop
+
+The loop-killer bisect (`successes/2026-08-31-loop-killer-bisect.md`) found the token
+loop's earning was killed by GLA × spectral cap, and the leak audit found full-BPTT loop
+claims were `retention_carry` exploitation. Both were found AFTER the slot campaign, so
+every slot-loop number from August carries at least one of GLA on, the cap, the leak, or
+warmup 0. But `tul-20k` (`successes/2026-08-31-tul-vs-notul-20k.md`) already re-ran the
+gist design (mask + MUX own + boundary seed + full-BPTT slot loop) under the fixed recipe
+(retention off, cap 0, carry none) on the flat schedule: the slot loop earned K1−K6 =
+0.015 at 20k while the token loop earned 0.207 on the same recipe, and the arm finished
+0.357 nats behind the plain looped model. The fixed recipe did not unlock the slot loop.
+
+### Correction 2 — what the ramp does and does not do (Wolfe's hypothesis, stated fairly)
+
+Wolfe (2026-09-03): "It is totally possible the LR warmup resolves this and the original
+TUL design was fine." Two different failures are in play and the ramp has only been
+measured on one:
+
+| failure | arms | mechanism (measured) | ramp status |
+|---|---|---|---|
+| paid-axis detonation | every arm on the flat winner recipe | early transient, steps 200–775, ternary trigger, core map organizes expansive | CURED, 0/9 draws (`DIVERGENCE-README.md` §A) |
+| slot-loop takeover | A1 family (bag mean, emit/plast 0.5/0.5, no mask) | slow turnaround at 1000–3000; fuel is the emit/plast gradient into the shared core; removing the aux (TG2 0/2, v1a2b 0/4, tul-20k 20k clean) removes it | NEVER TESTED — every slot-loop arm ran under `warmup: 0` (base.yaml flipped to 1000 at d9e04e6, the last slot commit) |
+
+So the ramp on the original A1 is an honest open cell, and cheap. My priors, to be frozen
+in the prereg: A1 survives 2/2 under the ramp (60%); its slot loop still earns ≤ 0.02
+nats on trained support (80%); its plan is still worth ≤ 0.04 nats (75%); it beats the
+cheap-decode floor A3 by less than its slot compute is worth (75%). Reason: the ramp keeps
+the core map near identity (`successes/2026-09-03-warmup-core-map.md`), which is why it is
+stable, and it cut the plain loop's earning 0.207 → 0.04 for the same reason. Stability
+and emptiness are different problems; the ramp addresses the first.
+
+### Correction 3 — Step 0 is not "find a regime"; it is "give the loop a job" (MUX)
+
+Step 0 above asked for a plain-model regime where K3−K6 ≥ 0.10. Re-reading MUX changes
+that. The paper's payload is the LOCAL loss alone (γ=0 still beats every latent baseline,
+Table 6; Fig. 3 rises 32.7 → 48.2% as local targets cover 0 → 6 tokens), and the loop we
+already have is the paper's own parallel variant: MUX* generates K=24 latent tokens with
+T=3 Jacobi iterations (App. E.1) — a per-sample loop over the latent block — and it beats
+the sequential model (Table 1, 58.0 vs 56.7 ID). What MUX gives the slot loop is a job
+with headroom that the loop can earn on directly, measured WITHOUT any reader:
+`mux_local` at the slot as a function of forced depth. That is the instrument the August
+campaign never had — every loop-worth number went through the coda.
+
+Two MUX targets exist in the tree and they are different designs:
+
+- `mux_target: own` — the slot is a lossless record of the span it terminates (memory).
+  Deterministic target; a one-pass encoder reached `mux_rel` 0.51 with `n_core: 0`
+  (GL1b). I expect the loop to earn ~0 on it: nothing to think about.
+- `mux_target: next` — the slot is the multiplexed FORECAST of the span about to be
+  decoded. This is "think once per span": the thought holds the next span in
+  superposition (the paper's §4.3 parallel-hypotheses property), the cheap coda
+  demultiplexes it token by token. The target has headroom (v1a2b, detached head, β 0.1,
+  bag-mean seed, warmup 0: `mux_local` 6.83 vs unigram 7.32 at 3500 steps) and it is the
+  one objective that ever moved loop worth (v1a2b: 5–8x control, 4/4 seeds, 0/4
+  takeovers; `failures/2026-08-27-warmup-sigreg-ntpdrop.md`). Never run through the tied
+  head at β=1 (the paper's recipe), never with the boundary seed, never under the winner
+  recipe or the ramp, and its depth-earning was never measured.
+
+MUX settings to keep from the paper (Table 9): β=1.0, τ=1.0, geometric ρ=0.9, loss
+through the model's own tied unembedding (no detach), random chunking (our boundary
+jitter `gate_truncate_p` is the same augmentation). Caveat the paper states: losslessness
+of ρ=0.9 is proven for S ≤ 11 in fp32; our spans reach 32, so late tokens carry
+0.9^31 ≈ 0.04 of the first token's weight. ρ is a knob for round 2, not round 1.
+
+### Round-1 panel (proposed; predictions to be frozen in `lab/experiments/planned/` before launch)
+
+Common recipe for every arm: the winner recipe (`model.retention=false`,
+`training.spectral_project_cap=0`, `retention_carry: none`) + the ramp
+(`training.warmup=1000`, flat 1e-4 after), ternary on, `ademamix_alpha_cap 3.5`,
+`ademamix_t_beta3 3500` pinned, seq 1024, batch 6, seed 1, **5000 steps** (so the kept
+`notul-20k-wu/step_5000.pt` and `tul-a2-20k-wu/step_5000.pt` are rulers on the same
+recipe), `eval_every 250`, `grad_probe_every 1` + tripwire, `tul.eval_ablations=true`,
+checkpoints at 2500 and 5000. One trainer on the 5090, sequential.
+
+| # | arm | base config at d9e04e6 | isolates | est. |
+|---|---|---|---|---|
+| R0 | **A3-wu** — coreless, no slots | `tul_a3` + recipe | the cheap-decode FLOOR (8 layers/token). Every TUL arm must beat this at matched token compute | 12 min |
+| R1 | **A1-wu** ×2 seeds — the original TUL | `tul_a1` + recipe | Wolfe's hypothesis: takeover rule, slot K-sweep, plan worth, CE vs R0 | 2 × 25 min |
+| R3 | **M-own** — A1 + boundary seed + emit 0/plast 1 + MUX own, β 1, through the head, NO mask, full BPTT | `tul_g0c0` + `tul.tg_restrict=false` | does the loop earn on a deterministic memory target? (`mux_local(own)` vs depth) | 30 min |
+| R4 | **M-next** — as R3 with `mux_target: next` | `tul_g0c0` + `tg_restrict=false` + `mux_target=next` | THE ARM: does the loop earn on a forecast? (`mux_local(next)` vs depth); does the coda read it (worth_zero/shuffle, attn_lift); CE vs R0/R3 | 30 min |
+| R5 | **M-next-mask** — R4 + `tg_restrict` | `tul_g0c0` + `mux_target=next` | the plan as the only route: price vs R4, worth, depth | 35 min (eager) |
+| R6 (optional) | **M-own-mask** = the gist loop under the ramp | `tul_g0c0` as is | the direct "does the ramp rescue tul-20k's design" datum; own vs next under the mask | 35 min |
+
+Rulers on the same recipe at step 5000 (48 rows; re-sweep at 480): notul-wu K1 3.9879 /
+K6 3.9488; A2 (paid loop) K1 4.1380 / K6 4.0812.
+
+Readouts per arm, all on the same 480 fixed rows, paired by row:
+1. `core_depth_sweep.py` depths 1..8 → token CE and span-first CE vs slot depth (K1−K6,
+   K3−K6) — PLUS the new column `mux_local` per depth (the slot's own loss vs depth), with
+   a paired bootstrap CI over rows. This column is the decisive number for "can the loop
+   think"; it needs a ~40-line change to the sweep (report the mux loss the forward
+   already computes).
+2. `slot_path_worth.py` (plan-off / loop-off / shuffle), `worth_profile.py` (offset-in-span
+   profile: first-token spike vs span-wide carrier), `val/attn_lift`.
+3. `score_arms.py::fires` (takeover rule) and the tripwire (detonation).
+4. `jac_ladder.py` on the slot path at 2500/5000 (map gain; is the slot map near identity
+   under the ramp as the token map is).
+5. Token CE vs R0 at matched steps AND at matched wall clock (queue-log epochs), and vs
+   notul-wu step_5000.
+
+Decision rule (proposed, to freeze): the slot loop "thinks" iff an arm's `mux_local` K1−K6
+on 480 rows has a bootstrap CI above 0 AND its K3−K6 > 0.01. The thought "pays" iff that
+arm's token CE beats R0 at matched wall clock. Round 2 is conditional: a thinking arm goes
+to 20k against `notul-20k-wu` and a 20k R0; no thinking arm ⇒ the loop cannot earn on
+slots at this depth/scale with any target we have, and the program moves to loop
+composition itself (MORPH-general: the token loop saturates at K3–K4 too) or to a slot
+stack that is deep without weight sharing.
+
+### What the final design should do differently (speculation, to be tested by the panel)
+
+1. **The thought is a forecast, not a memory.** `mux_target: next` on the looped slot
+   state, trained through the tied head (the paper's Eq. 3–4). A memory is a one-pass job;
+   a forecast has headroom and is what "decode cheaply" needs. Prop. 9 makes the slot
+   states non-collapsing by construction — the rank collapse the takeover campaign
+   measured (1.7–4.8 of 1024) is the failure this target is proven to prevent.
+2. **The slot input is the boundary tap plus a per-slot embedding** (the two measured
+   levers: pooling law −0.47 slope; per-slot embed doubled time-to-failure).
+3. **The reader is the prefix** (Block Transformer; TG's own ablation: in-context prefix
+   costs 0.4 PPL against per-layer cross-attention). Full attention by default; the mask
+   is an arm (R5) whose price is measured 0.09–0.36 nats, not the design.
+4. **Boundary jitter as augmentation** (the paper's random chunking is its best chunking;
+   `gate_truncate_p` already does this on the gate arm) — round 2.
+5. **Post-ramp LR for the core.** The ramp trades earning for stability by holding the
+   core map near identity. A core-only LR boost after step 1000 (param groups; small code)
+   is the next knob if R4 thinks but earns little — round 2, with the tripwire on.
+6. **Decoding.** Think-once decoding needs a slot cache: run the core once when a
+   boundary is emitted, then prelude + coda per token over a KV cache. The v1 generator
+   recomputes the row per step. Engineering after the science, not before.
+7. **The ceiling is MORPH's loop, not TUL's.** The token loop saturates by K4 on every
+   recipe measured; TUL cannot earn more depth than the shared core composes. The Raven
+   attention work is orthogonal to this panel and may be the real unlock.
