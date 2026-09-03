@@ -27,3 +27,5 @@ checkpoint reads and the row-by-row resolutions:
 `lab/experiments/results/2026-09-03-dmorph-v1-panel/README.md`. `score_logs.py` turns the
 run logs into the last-N eval means those tables use; `run_panel.sh` takes `DMORPH_ARMS`
 (e.g. `dmorph_tok_fpf`) and `DMORPH_SEEDS`.
+
+**Closed 2026-09-03.** Due-diligence branch; not merged. Both arms and the FPF follow-up are measured and filed above. Checkpoints for the four runs stay under the worktree at /home/wolfe/morph-dmorph/checkpoints/morph/ until deleted by hand.
