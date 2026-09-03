@@ -15,8 +15,6 @@ Provenance of the rule (spec §3.1, sources in §11): deterministic punctuation
 boundaries with a collapse/merge/cap rule are within noise of learned ones and
 beat fixed stride — BLT §4, Dynamic Token Pooling Table 2 (whitespace 1.133 ≈
 unigram 1.134 > Gumbel 1.136 > entropy 1.138, fixed SF2 1.149), H-Net Table 1.
-The fixed-stride control (``fixed_stride``) is arm A5, the SpaceByte Table 1 /
-Hierarchical AT Table 1 control that separates alignment from depth.
 
 RESOLVED SPEC AMBIGUITY — run collapse is causal (see ignore/Ai-notes/08-16-2026/
 tul-impl/IMPL.md, "run collapse"). §3.1 rule 2 places the boundary after the LAST
@@ -44,7 +42,6 @@ __all__ = [
     "BoundaryRule",
     "SlotLayout",
     "TulDataConfig",
-    "TulGateSpec",
     "TulLayoutSpec",
     "boundary_lut_from_strings",
     "boundary_lut_from_tokenizer",
@@ -148,17 +145,12 @@ class BoundaryRule:
                      suppressed and the short piece merges into the same span.
         span_cap:    spec §3.1 rule 4 [W] — a boundary is FORCED at this length.
         eos_id:      EOS ends a span unconditionally (see :meth:`cut`).
-        fixed_stride: arm A5 (spec §3.5/§7.1). ``>0`` replaces the punctuation
-                     rule with "a slot every N tokens"; EOS still cuts so spans
-                     never straddle a document, which is what makes A5 a control
-                     for alignment rather than for document mixing.
     """
 
     is_boundary: np.ndarray
     min_span: int = 4
     span_cap: int = 32
     eos_id: int = 0
-    fixed_stride: int = 0
 
     def __post_init__(self) -> None:
         if self.min_span < 1:
@@ -168,8 +160,6 @@ class BoundaryRule:
                 f"span_cap ({self.span_cap}) < min_span ({self.min_span}): the cap would "
                 f"force boundaries the min-span rule suppresses"
             )
-        if self.fixed_stride < 0:
-            raise ValueError(f"fixed_stride must be ≥ 0, got {self.fixed_stride}")
         if self.is_boundary.dtype != np.bool_:
             raise TypeError(f"is_boundary must be bool, got {self.is_boundary.dtype}")
 
@@ -203,14 +193,9 @@ class BoundaryRule:
             return np.empty(0, dtype=np.int64), span_len
 
         eos_idx = np.flatnonzero(ids == self.eos_id)
-        if self.fixed_stride > 0:
-            cand_idx = np.empty(0, dtype=np.int64)      # A5: no punctuation rule
-            cap = self.fixed_stride
-            min_span = self.fixed_stride                # unreachable (no candidates)
-        else:
-            cand_idx = np.flatnonzero(self.is_boundary[ids])
-            cap = self.span_cap
-            min_span = self.min_span
+        cand_idx = np.flatnonzero(self.is_boundary[ids])
+        cap = self.span_cap
+        min_span = self.min_span
 
         out: list[int] = []
         # base is the index of the previous boundary; span_len(i) == i - base.
@@ -228,78 +213,6 @@ class BoundaryRule:
             out.append(pos)
             base = pos
         return np.asarray(out, dtype=np.int64), (n - 1) - base
-
-
-# ── The gate augmentation (docs/tul-gate-spec.md §3) ─────────────────────────
-
-@dataclass(frozen=True)
-class TulGateSpec:
-    """Loader-side settings of the span-length gate (docs/tul-gate-spec.md §3).
-
-    ``truncate_p`` is the ONLY augmentation. Spec §3 listed two (start jitter and end
-    truncation); they are the two halves of ONE edit, so this implements one knob —
-    see :func:`insert_truncations`. AMENDMENT recorded in the spec.
-
-    Args:
-        k_max:      ``gate_k_max`` — the length label is ``span_len / k_max``, so
-                    ``span_cap`` must not exceed it (checked in :func:`insert_truncations`'s
-                    caller, :func:`pack_tul_row`); otherwise the label saturates silently.
-        truncate_p: per-span probability of inserting an extra RNG boundary. 0 = off,
-                    and off is bit-identical to the pre-gate packer (no RNG is drawn).
-    """
-
-    k_max: int = 32
-    truncate_p: float = 0.0
-
-    def __post_init__(self) -> None:
-        if self.k_max < 1:
-            raise ValueError(f"gate_k_max must be ≥ 1, got {self.k_max}")
-        if not 0.0 <= self.truncate_p <= 1.0:
-            raise ValueError(f"gate_truncate_p must be in [0,1], got {self.truncate_p}")
-
-
-def insert_truncations(
-    bpos: np.ndarray, rule: BoundaryRule, gate: "TulGateSpec | None", rng
-) -> tuple[np.ndarray, np.ndarray]:
-    """Split spans at random interior points → ``(boundaries, is_rng)``.
-
-    docs/tul-gate-spec.md §3.2: a span cut SHORT of its unit's boundary ends without
-    punctuation, and the next span then starts mid-unit. That second span is exactly
-    §3.1's "start jitter" — one insertion produces both — so this is the single
-    augmentation, and §3.1's separate ``jitter_p`` is not built. (A row-phase offset
-    would jitter ONE span per row; at ``truncate_p`` 0.15 over the ~55 spans of a
-    1024-token row this jitters ~8, from the same knob.)
-
-    The insertion is CONSISTENT with the rule, not a violation of it: the cut lands in
-    ``[s + min_span − 1, e − min_span]``, and ``BoundaryRule.cut`` never places a
-    candidate strictly inside that window (its first eligible candidate at or after
-    ``s + min_span − 1`` IS ``e``, whether ``e`` came from punctuation, EOS or the cap).
-    So restarting the state machine at the inserted cut still yields ``e`` next —
-    which is what lets the generator force a cut at ``k`` tokens and stay in sync
-    (``tests/test_tul_gate.py::test_truncation_is_consistent_with_the_rule``).
-
-    Returns:
-        ``(bpos_aug, is_rng)`` — sorted boundary positions, and a bool of the same
-        shape that is True exactly at the inserted (RNG-chosen) ones. Those slots'
-        length label is OUR noise, so §6 masks them out of the length term.
-    """
-    n = int(bpos.shape[0])
-    if gate is None or gate.truncate_p <= 0.0 or n == 0:
-        return bpos, np.zeros(n, dtype=bool)
-    ms = rule.min_span
-    starts = np.concatenate([[0], bpos[:-1] + 1])
-    lens = bpos - starts + 1
-    room = lens - 2 * ms                       # ≥ 0 ⇒ both halves clear min_span
-    sel = (room >= 0) & (rng.random(n) < gate.truncate_p)
-    n_sel = int(sel.sum())
-    if n_sel == 0:
-        return bpos, np.zeros(n, dtype=bool)
-    off = np.floor(rng.random(n_sel) * (room[sel] + 1)).astype(np.int64)
-    cuts = starts[sel] + ms - 1 + off
-    aug = np.concatenate([bpos, cuts])
-    flags = np.concatenate([np.zeros(n, dtype=bool), np.ones(n_sel, dtype=bool)])
-    order = np.argsort(aug, kind="stable")
-    return aug[order], flags[order]
 
 
 # ── Row packing (spec §3.1 "Fixed shapes", §4) ───────────────────────────────
@@ -331,8 +244,6 @@ def pack_tul_row(
     ids: np.ndarray,
     rule: BoundaryRule,
     spec: TulLayoutSpec,
-    gate: TulGateSpec | None = None,
-    rng=None,
 ) -> tuple[dict[str, np.ndarray], int, dict[str, float]]:
     """Pack one fixed-shape TUL row out of a token buffer.
 
@@ -351,22 +262,12 @@ def pack_tul_row(
               the row consumes — the last row token's label is the next token.
         rule: the shared boundary rule.
         spec: the fixed-shape budget.
-        gate: docs/tul-gate-spec.md §3. ``None`` (or ``truncate_p`` 0) draws NO random
-              number and produces byte-identical output to the pre-gate packer, which
-              is what keeps the reference arm reproducible.
-        rng:  ``np.random.Generator``; required when ``gate.truncate_p > 0``.
 
     Returns:
         ``(arrays, n_consumed, stats)`` where ``arrays`` holds ``input_ids``,
         ``labels``, ``slot_mask``, ``bag_id`` (each ``[L_total]``) plus
-        ``slot_index`` / ``slot_valid`` / ``span_len`` / ``len_supervised``
-        (each ``[max_slots]``), and ``n_consumed`` is how many tokens of ``ids``
-        the row used (the label peek is NOT consumed).
-
-    ``span_len`` is the token count of each slot's span, clamped to ``gate.k_max``;
-    ``len_supervised`` is False at pad slots and at slots whose span was ended by the
-    truncation RNG rather than by the data (docs/tul-gate-spec.md §6 masks those out
-    of the length term — grading a head on our own noise is label noise, not signal).
+        ``slot_index`` / ``slot_valid`` (each ``[max_slots]``), and ``n_consumed`` is
+        how many tokens of ``ids`` the row used (the label peek is NOT consumed).
     """
     L, K, S = spec.l_total, spec.prefix_k, spec.max_slots
     n_buf = int(ids.shape[0])
@@ -385,22 +286,6 @@ def pack_tul_row(
     # Boundaries over the whole buffer; the row is a prefix of it, and the rule is
     # causal, so a prefix's boundaries are exactly this array truncated.
     bpos, _ = rule.cut(ids, span_len=0)
-    k_max = gate.k_max if gate is not None else rule.span_cap
-    if gate is not None and rule.span_cap > k_max:
-        # The length label is span_len / k_max, so a span longer than k_max cannot be
-        # expressed. Saturating silently would train the head on a wrong target for the
-        # longest spans — exactly the class of silent label corruption the packer's
-        # slot_id check already refuses (docs/tul-gate-spec.md §3.3).
-        raise ValueError(
-            f"tul.span_cap={rule.span_cap} > tul.gate_k_max={k_max}: the length label "
-            f"would saturate. Raise gate_k_max or lower span_cap.")
-    # The LABEL is clamped to span_cap, never to k_max: k_max is only the denominator, and
-    # it carries deliberate headroom above span_cap so no target sits on the sigmoid's
-    # asymptote. A label above span_cap would also index a budget row that has no
-    # training example. The one length that is not a real span — the row's open tail — is
-    # what this clamp actually bites on.
-    lab_max = rule.span_cap
-    bpos, b_is_rng = insert_truncations(bpos, rule, gate, rng)
 
     # cost(i) = positions used after placing tokens 0..i = (i+1) + K·(#boundaries ≤ i)
     is_b = np.zeros(n_buf, dtype=np.int64)
@@ -464,31 +349,6 @@ def pack_tul_row(
         slot_index[:n_slots] = slot_first
         slot_valid[:n_slots] = True
 
-    # ── gate labels (docs/tul-gate-spec.md §3.3) ──────────────────────────
-    # THE LABEL IS THE **NEXT** SPAN'S LENGTH, not the slot's own.
-    # Slot i is built from span i's tokens and sits AFTER them, so causal attention lets
-    # it condition only what comes after: span i+1. The budget the coda needs is therefore
-    # the length of the span it is ABOUT TO DECODE, and a gate graded on span i's length —
-    # a quantity slot i already contains, and one generation cannot use — would be reading
-    # out the past while generation asks it to predict the future. (Spec §1's "the data's
-    # own span length" was ambiguous about which span; AMENDED, see §3.3.)
-    #
-    # Invariant: 0 / False at every pad slot. A pad slot's slot_index is 0, so a missing
-    # validity mask would silently train the gate on row 0's first span.
-    span_len_arr = np.zeros(S, dtype=np.int64)
-    len_sup = np.zeros(S, dtype=bool)
-    if n_slots and gate is not None:
-        _lens = np.diff(np.concatenate([[-1], row_b]))      # _lens[i] = len(span i)
-        _next = np.empty(n_slots, dtype=np.int64)
-        _next[:n_slots - 1] = _lens[1:n_slots]
-        # The last slot's next span is the row's OPEN tail: real tokens the coda does
-        # decode, so they are conditioned on their true count, but a count our row
-        # boundary chose — so it is not graded (same rule as an RNG truncation).
-        _next[n_slots - 1] = max(1, (n_tok - 1) - int(row_b[-1]))
-        span_len_arr[:n_slots] = np.clip(_next, 1, lab_max)
-        len_sup[:n_slots - 1] = ~b_is_rng[1:n_slots]
-        len_sup[n_slots - 1] = False
-
     # ── boundary statistics (spec §4) ─────────────────────────────────────
     if n_slots:
         span_lens = np.diff(np.concatenate([[-1], row_b])).astype(np.float64)
@@ -510,14 +370,6 @@ def pack_tul_row(
         "slot_index": slot_index,
         "slot_valid": slot_valid,
     }
-    if gate is not None:
-        # Only when the gate is configured: the reference arm's layout tensors, its
-        # wandb stat keys and its host→device copies stay exactly what they were.
-        arrays["span_len"] = span_len_arr
-        arrays["len_supervised"] = len_sup
-        stats["trunc_frac"] = float(b_is_rng[:n_slots].mean()) if n_slots else 0.0
-        stats["len_sup_frac"] = float(len_sup[:n_slots].mean()) if n_slots else 0.0
-        stats["gate_span_mean"] = (float(span_len_arr[:n_slots].mean()) if n_slots else 0.0)
     return arrays, n_tok, stats
 
 
@@ -544,10 +396,6 @@ class SlotLayout:
         slot_valid: ``[B, max_slots]`` bool — real slots. Pads are last (§3.3), so
                     causal attention over the compact slot sequence is unchanged.
         prefix_k:   coda positions per slot (§3.1).
-        span_len:   ``[B, max_slots]`` int64 — tokens this slot's span covers, 1…k_max;
-                    0 at pad slots (docs/tul-gate-spec.md §3.3). None ⇒ no gate.
-        len_supervised: ``[B, max_slots]`` bool — True when ``span_len`` is the DATA's
-                    answer; False at pad slots and at RNG-truncated ones (gate §6).
     """
 
     slot_mask: Tensor
@@ -556,8 +404,6 @@ class SlotLayout:
     slot_valid: Tensor
     prefix_k: int
     stats: dict[str, float] | None = None    # per-batch boundary statistics (spec §4)
-    span_len: Tensor | None = None           # gate §3.3
-    len_supervised: Tensor | None = None     # gate §3.3
 
     def __post_init__(self) -> None:
         B, L = self.slot_mask.shape
@@ -567,13 +413,6 @@ class SlotLayout:
             raise ValueError("slot_index and slot_valid must share a shape")
         if self.slot_index.shape[0] != B:
             raise ValueError("slot_index batch dim must match slot_mask")
-        for _n in ("span_len", "len_supervised"):
-            _t = getattr(self, _n)
-            if _t is not None and _t.shape != self.slot_index.shape:
-                raise ValueError(
-                    f"{_n} {tuple(_t.shape)} != slot_index {tuple(self.slot_index.shape)}")
-        if (self.span_len is None) != (self.len_supervised is None):
-            raise ValueError("span_len and len_supervised must both be set or both None")
 
     @property
     def max_slots(self) -> int:
@@ -584,7 +423,6 @@ class SlotLayout:
         return int(self.slot_mask.shape[1])
 
     def to(self, device) -> "SlotLayout":
-        _mv = lambda t: None if t is None else t.to(device, non_blocking=True)
         return SlotLayout(
             slot_mask=self.slot_mask.to(device, non_blocking=True),
             bag_id=self.bag_id.to(device, non_blocking=True),
@@ -592,8 +430,6 @@ class SlotLayout:
             slot_valid=self.slot_valid.to(device, non_blocking=True),
             prefix_k=self.prefix_k,
             stats=self.stats,
-            span_len=_mv(self.span_len),
-            len_supervised=_mv(self.len_supervised),
         )
 
     @staticmethod
@@ -603,8 +439,6 @@ class SlotLayout:
         agg = None
         if stats:
             agg = {k: float(np.mean([s[k] for s in stats])) for k in stats[0]}
-        _st = lambda k: (torch.from_numpy(np.stack([r[k] for r in rows]))
-                         if k in rows[0] else None)
         return SlotLayout(
             slot_mask=torch.from_numpy(np.stack([r["slot_mask"] for r in rows])),
             bag_id=torch.from_numpy(np.stack([r["bag_id"] for r in rows])),
@@ -612,73 +446,7 @@ class SlotLayout:
             slot_valid=torch.from_numpy(np.stack([r["slot_valid"] for r in rows])),
             prefix_k=prefix_k,
             stats=agg,
-            span_len=_st("span_len"),
-            len_supervised=_st("len_supervised"),
         )
-
-
-# ── TG restriction masks (docs/tul-tg-spec.md §1, §4) ────────────────────────
-#
-# The ONE builder both the window branch (via `_window_fallback`'s `extra_mask`) and
-# the tests share for the causal "same-span-or-slot" allow relation. The compressed
-# branch's own mask (`causal AND slot_mask[j]`, spec §3) is a strict subset of this
-# one and is built directly from `layout.slot_mask` at the call site — it needs no
-# `bag_id` term, so it is not this function's job.
-
-
-def tg_allow_mask(layout: "SlotLayout", soft_prev_span: bool = False) -> Tensor:
-    """``[B, 1, L, L]`` bool: TG1's within-span-or-slot allow relation (spec §1).
-
-        allow(i, j) = (j <= i)                             # causal
-                      AND ( bag_id[i] == bag_id[j]          # same span (tokens+own slot)
-                            OR slot_mask[j] )                # or j is any slot position
-
-    ``soft_prev_span=True`` (TG3, spec §6) adds one more disjunct:
-    ``bag_id[i] == bag_id[j] + 1`` — spans are numbered in row order (the packer's
-    ``n_b_before`` increments by exactly one per boundary, ``pack_tul_row``), so the
-    previous span's id is always the current one minus one.
-
-    CONSERVATIVE READING (not spelled out in the spec, documented here): the extra
-    term is gated on the QUERY not itself being in the tail dump bin
-    (``bag_id[i] < max_slots``). Tail-pad / post-last-slot positions all share the
-    dump bin id ``max_slots`` (spec §1 note), so ``bag_id[i] - 1 == max_slots - 1``
-    would otherwise open every dump-bin tail position onto the LAST real span — a
-    grant "soft mode" does not intend, since the dump bin is not a span at all. No
-    such gating is needed on the KEY side: a dump-bin key never satisfies
-    ``bag_id[j] + 1 == bag_id[i]`` for any real span id, because dump-bin positions
-    all carry the same id ``max_slots``, one past every real span.
-    """
-    bag_id = layout.bag_id                                    # [B, L] int64
-    slot_mask = layout.slot_mask                               # [B, L] bool
-    device = bag_id.device
-    L = bag_id.shape[1]
-    row = torch.arange(L, device=device).unsqueeze(1)
-    col = torch.arange(L, device=device).unsqueeze(0)
-    causal = (col <= row)                                       # [L, L], j <= i
-
-    bag_i = bag_id.unsqueeze(2)                                 # [B, L, 1]
-    bag_j = bag_id.unsqueeze(1)                                 # [B, 1, L]
-    allow = (bag_i == bag_j) | slot_mask.unsqueeze(1)            # [B, L, L]
-    if soft_prev_span:
-        i_not_dump = bag_i < layout.max_slots                    # [B, L, 1]
-        allow = allow | ((bag_i == bag_j + 1) & i_not_dump)
-    allow = allow & causal.unsqueeze(0)
-    return allow.unsqueeze(1)                                   # [B, 1, L, L]
-
-
-def tg_reset_mask(layout: "SlotLayout") -> Tensor:
-    """``[B, L]`` bool: GLA segment-reset positions (spec §4).
-
-        reset[i] = (i == 0) OR (bag_id[i] != bag_id[i-1])
-
-    True at every segment start — a segment is a span's tokens plus its own slot
-    (the dump bin counts as one trailing segment too, since it is one constant id).
-    """
-    bag_id = layout.bag_id
-    reset = torch.zeros_like(bag_id, dtype=torch.bool)
-    reset[:, 0] = True
-    reset[:, 1:] = bag_id[:, 1:] != bag_id[:, :-1]
-    return reset
 
 
 @dataclass
@@ -694,12 +462,6 @@ class TulDataConfig:
     prefix_k: int = 2
     slot_id: int = 4
     max_slots: int = 0                # 0 → seq_len // 8 (spec §8)
-    # docs/tul-gate-spec.md §3. `gate=None` ⇒ no span_len/len_supervised arrays and NO
-    # random draw, i.e. the reference arm's loader is untouched. The VAL loader always
-    # gets truncate_p 0 (train.py builds it with `for_val=True`): a val CE that depends
-    # on our augmentation RNG is not comparable to the reference arm's.
-    gate: TulGateSpec | None = None
-    seed: int = 0                     # seeds the truncation RNG; logged in the manifest
 
     def spec_for(self, seq_len: int) -> TulLayoutSpec:
         """The fixed-shape budget for a stage of ``seq_len`` tokens."""
@@ -708,8 +470,7 @@ class TulDataConfig:
 
 
 def pack_tul_batch(buf: list[int], rule: BoundaryRule, spec: TulLayoutSpec,
-                   batch_size: int, gate: TulGateSpec | None = None,
-                   rng=None) -> tuple[Tensor, Tensor, SlotLayout]:
+                   batch_size: int) -> tuple[Tensor, Tensor, SlotLayout]:
     """Consume ``batch_size`` rows from ``buf`` (MUTATED in place) → one TUL batch.
 
     The single batching entry point for every loader. ``buf`` must hold at least
@@ -727,7 +488,7 @@ def pack_tul_batch(buf: list[int], rule: BoundaryRule, spec: TulLayoutSpec,
     rows, ins, labs, stats = [], [], [], []
     for _ in range(batch_size):
         cur = np.asarray(buf[:spec.l_total + 1], dtype=np.int64)
-        arrays, n_used, st = pack_tul_row(cur, rule, spec, gate=gate, rng=rng)
+        arrays, n_used, st = pack_tul_row(cur, rule, spec)
         del buf[:n_used]
         rows.append(arrays)
         ins.append(arrays["input_ids"])
@@ -744,8 +505,6 @@ def slot_layout_from_ids(
     ids: np.ndarray,
     rule: BoundaryRule,
     spec: TulLayoutSpec,
-    gate: TulGateSpec | None = None,
-    rng=None,
 ) -> tuple[Tensor, Tensor, SlotLayout, list[dict[str, float]]]:
     """Pack a ``[B, n]`` token buffer into ``(input_ids, labels, layout, stats)``.
 
@@ -756,7 +515,7 @@ def slot_layout_from_ids(
     """
     rows, ins, labs, stats = [], [], [], []
     for b in range(ids.shape[0]):
-        arrays, _n, st = pack_tul_row(ids[b], rule, spec, gate=gate, rng=rng)
+        arrays, _n, st = pack_tul_row(ids[b], rule, spec)
         rows.append(arrays)
         ins.append(arrays["input_ids"])
         labs.append(arrays["labels"])

@@ -199,7 +199,7 @@ def _step_of(p):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config-name", default="tul_a1")
+    ap.add_argument("--config-name", default="tul_a2")
     ap.add_argument("--overrides", default="training.batch_size=4,model.use_kernels=false")
     ap.add_argument("--extra", default="", help="SEMICOLON-separated hydra overrides")
     ap.add_argument("--ckpt-dir", default="")

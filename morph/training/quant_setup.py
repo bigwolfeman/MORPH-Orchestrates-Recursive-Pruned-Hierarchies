@@ -51,7 +51,12 @@ def apply_quantization(model: nn.Module, cfg: DictConfig) -> dict:
             scale_group=str(getattr(cfg.training, "ternary_scale_group", "tensor")),
             scale_dtype=str(getattr(cfg.training, "ternary_scale_dtype", "fp16")),
             scale_clip_mult=float(getattr(cfg.training, "ternary_scale_clip_mult", 0.0)),
+            scale_ema_beta=float(getattr(cfg.training, "ternary_scale_ema_beta", 0.0)),
         )
+        _ema_b = float(getattr(cfg.training, "ternary_scale_ema_beta", 0.0))
+        if _ema_b > 0.0:
+            print(f"  TERNARY SCALE EMA ON: beta={_ema_b} — gamma advances once per "
+                  f"optimizer step (cusp-vault fix); forward reads the buffer")
         print(
             f"  Ternary QAT ON: scope={ternary_manifest['scope']} "
             f"threshold={ternary_manifest['threshold']} "

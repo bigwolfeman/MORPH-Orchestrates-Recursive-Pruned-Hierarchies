@@ -1,5 +1,11 @@
 # TUL Gate — specification (`TUL-gate`, `TUL-halt`)
 
+> **RETIRED 2026-09-03.** The gate left the tree with the slot-only core (the paid loop,
+> [tul-paid-loop-recipe.md](tul-paid-loop-recipe.md), has no per-slot depth for a gate to
+> drive). This spec, its §9 invariants and the measured result stay as the record; the
+> last commit that runs it is `d9e04e6`. Decision:
+> `.agents/notes/rejected/feature/2026-08-21-gated-tul.md`.
+
 Status: **BUILT** (2026-08-22). Code map at the end of §13. `pytest tests/` → 185 passed;
 `tests/test_tul_gate.py` is one test per §9 row and every one of them was
 mutation-checked (13 deliberate breakages, 13 caught).

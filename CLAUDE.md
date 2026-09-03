@@ -16,11 +16,22 @@ exists under `morph/jax/` but lags the PyTorch path (see gotcha below).
 > not been ported to HC-Cayley; do not assume PT/JAX parity.
 
 > **Source of truth for the training recipe is `morph/configs/base.yaml`** (heavily
-> commented). Current schedule: flat LR 1e-4 (warmup=0, min_lr==lr), taylor saliency,
+> commented). Current schedule: 1000-step linear LR ramp then flat 1e-4 (min_lr==lr), taylor saliency,
 > prune_start=3000 / prune_interval=167 (density hits 0.25 by ~step 27050) →
 > carve at compact_step=29000 → whole-body ReMoE at route_start=30000, all inside a
 > 100k-step run with TST superposition for the first 30k steps. Do not restate these
 > numbers elsewhere — read the YAML.
+
+## 🚨 STRANGE DIVERGENCE? READ [lab/divergence/DIVERGENCE-README.md](lab/divergence/DIVERGENCE-README.md) FIRST
+
+Two campaigns (2026-08 slot-loop takeover, 2026-09 paid-axis detonation) already refuted
+spectral caps, `core_gain_clip`, ternary-γ EMA and freeze, GLA-as-stabilizer, and dense
+warmup. The README has the 60-second triage, the measured abort rule (`preclip/total >
+1e4` at any step ≥ 200: 17/17 detonations caught by step 775, 0 false positives in 44
+healthy runs), the open levers in priority order, and every instrument that already
+exists. Do not re-derive any of it. **The cure is measured (2026-09-03): a 1000-step LR
+ramp, now `training.warmup: 1000` in `base.yaml`, 0 detonations in 9 of 9 draws. Do not
+override it to 0 on the ternary+AdEMAMix recipe.**
 
 ## ⭐ Core mental model — MORPH is a NESTED dynamical system (read before optimizing)
 
@@ -57,75 +68,80 @@ depth (0.233 nats), and the identity-escape law says why every alternative faile
 > before reaching for a spectral cap in this tree. What DID hold is upstream of the map: the
 > 50 slot states of a row sit at effective rank 1.7–4.8 in 1024 dimensions because a slot's
 > input is one shared `E_slot` plus a bag-mean, and the loop's effect on that rank flips sign
-> at the onset. `tul.per_slot_embed` (off by default) is the best lever found and NOT a cure:
+> at the onset. `tul.per_slot_embed` (removed from the tree 2026-09-03 with the slot path) was the best lever found and NOT a cure:
 > it holds one seed of two, doubles the time to failure (step 1150 -> 2225) and reaches 0.78
 > and 0.46 nats better val CE on the two seeds.
 
-## ⭐ TUL — Thought Unpack Loop — MERGED TO MASTER, OFF BY DEFAULT, ARMS RUN
+## ⭐ TUL — Thought Unpack Loop — THE PAID LOOP IS THE SHIPPED FORWARD (2026-09-03)
 
-Status: implemented, run, and measured. It is a **conditional-compute** win (1.6x wall
-clock at slightly better CE), NOT a latent-memory mechanism — the memory claim was
-falsified by the stratified re-score in `lab/tul/arms-result.md`. `base.yaml` keeps
-`tul.activate_at: never`, which builds no TUL parameters at all.
+Status: implemented, run, measured, and ON in `base.yaml` (`tul.activate_at:
+${training.tst_ratio}` — TUL switches on when the TST phase ends). The shipped forward is
+the **paid loop** (`docs/tul-paid-loop-recipe.md`): tokens and slots are ONE sequence and
+the ordinary per-sample Poisson-depth core runs over ALL of it. The slot-only arms
+(A0/A1/A3/A4, the span-length gate, the TG restriction, the gist mux, the DB interleave,
+per-slot embeddings, the fixed-stride rule) were **cut from the tree on 2026-09-03**;
+their specs and results stay as records (`docs/tul-spec.md` §3.3, `docs/tul-gate-spec.md`,
+`docs/tul-tg-spec.md`, `docs/gist-mux-recipe.md`, `docs/ablation-ledger.md`) and the last
+commit that runs them is `d9e04e6`. Decision record with the alternatives weighed:
+[`.agents/notes/implemented/architecture/2026-09-03-ship-the-paid-loop-cut-the-arms.md`](.agents/notes/implemented/architecture/2026-09-03-ship-the-paid-loop-cut-the-arms.md).
 
-`docs/tul-spec.md` is the source of truth; `docs/figures/tul_mechanism.png` is the diagram
-(source: `docs/figures/architecture/tul_mechanism.tex`);
-`docs/references.md` §13 lists every paper a decision comes from. Read all three before
-touching the model for TUL. Short mental model:
+Why the paid loop and not the slot loop: on the slot-only arms the loop was a free ride
+(K1−K6 ≤ 0.011 nats however long it ran); paying the loop on every position is the ONE
+arm whose loop earns depth (0.168 nats at 5k, 0.100 at 20k —
+`lab/experiments/successes/2026-09-02-*`, `failures/2026-09-02-warmup-20k-pair.md`).
+The measured caveat, not to be hidden: at 20k on seq 1024 the paid arm sits 0.022 nats
+BEHIND the plain model on 480 identical rows at 1.33x the wall clock; its matched-step
+deficit closed 0.132 → 0.012 from 5k to 20k. Wolfe's 2026-09-03 call: ship it as the
+recipe — the wall-clock gap is optimization work, not architecture. The `base.yaml`
+conjunction (TUL × TST × prune/carve/route × seq 4096 × batch 4) is UNMEASURED beyond a
+startup smoke.
+
+Short mental model:
 
 - ONE shared sequence of token positions and **slot positions** (one slot after each span;
   boundary rule `.;!?` + newline + dashes, NO comma; a `.`+`\n` run is ONE boundary;
-  min span 4; cap 32). Slot input = `E_slot` + mean of the span's token embeddings
-  (TST-native). Prelude runs on all positions.
-- **Core loops on SLOT positions only** (gather → loop → scatter), per-SLOT Poisson depth as a
-  masked update (never a per-position gather — frozen slots still serve K/V). Tokens skip
-  the core: coda input for tokens = `input_norm(prelude)` (the existing `n_core == 0` path).
-- Coda runs on all positions; tokens attend slots as ordinary positions (the plan is a
-  PREFIX the coda refines — Block Transformer Fig 3f, Coconut). Slot label = first token of
-  the next span; the slot's CORE state has no loss of its own. `slot_id` logit is masked.
-- Token-state dropout `p` on the coda input (Bowman word dropout) is the collapse tax.
-- `slot_layout` is a per-forward ARGUMENT like `bag_size`; `None` ⇒ bit-identical to today.
-  The 5090 arms (`tul_short.yaml`) run it from step 0 with TST off and prune/carve/route off;
-  `tul.activate_at = ${training.tst_ratio}` is the full-schedule variant (switch at the TST
-  boundary). One config per arm: `tul_a0` / `tul_a1` / `tul_a1r` / `tul_a3`, all at batch 14.
-- NEVER decode a span from one vector + offset with no token path (Huginn 2026-08-16 collapse;
-  MegaByte T7; Bowman T2; Hourglass T6). Never regress onto the slot state (LCM, CoCoMix, BT §4.2).
-- **The A1 core takeover is UNSOLVED. Before touching it read
-  [lab/divergence/takeover-campaign.md](lab/divergence/takeover-campaign.md)** — the running index of
-  every hypothesis tried, its verdict, the number that decided it, the instruments already
-  built and the traps already fallen into. 15 hypotheses, 11 refuted. Do not re-derive them.
-- Arms and gates: `docs/ablation-ledger.md` TUL section; campaign logs:
-  `lab/tul/` (first comparison: `lab/tul/arms-result.md`); invariants:
-  `lab/runtime-invariants.md` §6b (LIVE, each row names the test that fails when it breaks).
-- **The GATE** (`docs/tul-gate-spec.md`, invariants §6c, `--config-name tul_gate`): a
-  span-length head on each slot's core state plus a budget embedding into the coda, so the
-  model chooses how many tokens the next span covers. Self-supervised — the label is the
-  DATA's own span length, from the same boundary rule. Three things to know before touching
-  it: the label is the **NEXT** span's length (slot i sits after span i, so that is the only
-  span it can condition); `gate_k_max` (40) is the regression DENOMINATOR and deliberately
-  EXCEEDS `span_cap` (32), because 24.5 % of real labels are a capped span and would
-  otherwise sit on the sigmoid's asymptote; and `gate_train_zeros` is OFF because the
-  Poisson depth is unobservable, so a "0 until the last iteration" target converges to the
-  hazard and scales the length away (measured k=5.00 vs gold 18.98). `tul.gate: false`
-  builds nothing at all and draws no random number.
-- Lineage: successor of coconut's `tul/` + `ltd/` (fine-tunes/model surgery of Huggin; left behind).
-- The Thought Unpack Loop forces the loop to handle whole semantic thoughts that are then sequentially decoded similar to future lens. This reduces per token looping and improves ppl. It is much more flop efficient.
+  min span 4; cap 32; `prefix_k` = 2 positions per slot). Slot input (`slot_seed:
+  boundary`) = `E_slot + W_sent · embed(t_last)`, `t_last` the span's LAST token;
+  `bag_mean` (spec §3.2, `E_slot` + span mean) is the kept control.
+- Prelude, the per-sample Poisson-depth core (`_core_region` — the SAME code the plain
+  path runs) and the coda all run on every position. Nothing is gathered, projected or
+  scattered. `W_prefix` exists only on the FM planner (`cfg.fm`, `n_core: 0`).
+- Loss: ONE weighted CE. `emit_weight: 0.0` (the slot's own emit label carries no loss),
+  `plast_weight: 1.0` (the boundary token keeps its ordinary label); the `slot_id` logit
+  is masked; pad slots are −100. Token-state dropout 0.15 on the coda input (Bowman).
+- `slot_layout` is a per-forward ARGUMENT like `bag_size`; `None` ⇒ bit-identical to the
+  plain model (invariants §6b). Generation reads a span's first token from the boundary
+  TOKEN position (`emit_source="token"`, the only trained head under `emit_weight: 0`).
+- Configs: `base.yaml` (production: seq 4096, TST on, prune/carve/route on, batch 4,
+  warmup 1000, retention off, `bptt_depth: 8` = full BPTT, spectral cap 0);
+  `tul_a2.yaml` (the 5090 panel: seq 1024, batch 6, 20k steps, TUL from step 0,
+  TST/prune/route off); `notul.yaml` (the same with `activate_at: never` — the matched
+  control); `tul_smoke.yaml` (12-step small smoke); `tul_fm1.yaml` (FM planner arc).
+- The detonation (`preclip/total > 1e4` at step ≥ 200) and its cure, the 1000-step LR
+  ramp: `lab/divergence/DIVERGENCE-README.md`. The old slot-loop takeover campaign:
+  `lab/divergence/takeover-campaign.md` (historical — the slot path is gone).
+- NEVER decode a span from one vector + offset with no token path (Huginn 2026-08-16
+  collapse; MegaByte T7; Bowman T2; Hourglass T6). Never regress onto the slot state
+  (LCM, CoCoMix, BT §4.2).
+- Old checkpoints carry `tul.W_prefix`; the loaders drop that ONE key, loudly, for a model
+  without an FM planner (`morph/training/train.py::drop_retired_tul_keys`,
+  `tests/test_checkpoint_compat.py`). Every other homeless key still raises.
 
-**Where the code is** (v1; short-schedule A0/A1/A3 measured — further testing ongoing):
+**Where the code is**:
 
 | File | What |
 | --- | --- |
 | `morph/model/tul_layout.py` | The ONE causal boundary rule (`BoundaryRule.cut`, a resumable state machine used by the loader AND the generator), the fixed-shape row packer (`pack_tul_row` / `pack_tul_batch`), `SlotLayout`. |
-| `morph/model/tul.py` | `TULConfig` (construction-time switches), `TULSlots` (`E_slot`, `E_mask`, `W_prefix`), the span bag-mean, gather/scatter, token-state dropout. |
-| `morph/model/transformer.py` | `_core_region` (the old inline core loop, extracted verbatim), `_tul_front` / `_tul_core` / `_tul_group_losses` / `_forward_tul`. `slot_layout` is a forward ARGUMENT; `None` is the untouched baseline. |
-| `morph/training/tul_setup.py` | Resolves the `tul:` Hydra block once → ids, rule, configs, wandb manifest. |
+| `morph/model/tul.py` | `TULConfig` (six fields: `prefix_k`, `slot_id`, `token_state_dropout`, `emit_weight`, `plast_weight`, `slot_seed`), `TULSlots` (`E_slot`, `E_mask`, `W_sent`; `W_prefix` iff `with_prefix`), `bag_mean`, `boundary_token_index`, gather/scatter (FM planner + probes), token-state dropout. |
+| `morph/model/transformer.py` | `_tul_front` → `_core_region` → `_back_region` → `_tul_group_losses`, wired in `_forward_tul`. `_tul_fm_core` / `tul_forward_ablated` are FM-planner only. `slot_layout` is a forward ARGUMENT; `None` is the untouched baseline. |
+| `morph/training/tul_setup.py` | Resolves the `tul:` Hydra block once → ids, rule, configs, wandb manifest. Unknown `tul.*` keys RAISE. |
 | `morph/inference/tul_generate.py` | Eager recompute-per-step generator (spec §6 v1 — no KV cache by design). |
+| `tests/test_tul_forward.py`, `test_slot_seed.py`, `test_tul_layout.py`, `test_checkpoint_compat.py` | The contracts, one test per invariant row. |
 
 Two v1 deviations from the spec text, both recorded in `tul-spec.md` and §6b: run
 collapse is CAUSAL (boundary after the FIRST token of a run — the spec's "after the
 LAST" needs a lookahead the generator cannot have), and the packer pads a row's last
-≤ `prefix_k` positions rather than dropping a boundary. Arms `stp_lambda`,
-`set_lambda`, `carry`, `xattn`, `bcast` are NOT built and RAISE if configured.
+≤ `prefix_k` positions rather than dropping a boundary.
 
 ## Documentation map (where to put / find writing)
 

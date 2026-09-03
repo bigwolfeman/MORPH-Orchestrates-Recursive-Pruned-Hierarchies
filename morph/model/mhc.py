@@ -213,7 +213,6 @@ class MORPHBlock(nn.Module):
         next_inject_term: Tensor | None = None,
         ret_state: Tensor | None = None,
         ret_capture: dict | None = None,
-        ret_reset_mask: Tensor | None = None,
     ) -> Tensor:
         """Forward pass: attention sublayer then MLP sublayer with HC residuals.
 
@@ -231,9 +230,6 @@ class MORPHBlock(nn.Module):
                          is written to ret_capture["state"]. The CALLER must RETURN that state
                          from any checkpointed region (side-channel capture is not checkpoint-safe
                          on its own); _core_step does exactly that.
-            ret_reset_mask: [B, T] bool | None — GLA segment-reset mask (docs/tul-tg-spec.md
-                         §4), forwarded to the retention branch untouched. Ignored when this
-                         block has no retention branch.
 
         Returns:
             [B, T, D] updated residual stream.
@@ -244,8 +240,7 @@ class MORPHBlock(nn.Module):
         def _attn_fn(x: Tensor) -> Tensor:
             a = self.attention(self.norm_attn(x), **attn_kwargs)
             if self.retention is not None:
-                g_out, s_out = self.retention(self.norm_ret(x), initial_state=ret_state,
-                                              reset_mask=ret_reset_mask)
+                g_out, s_out = self.retention(self.norm_ret(x), initial_state=ret_state)
                 if ret_capture is not None:
                     ret_capture["state"] = s_out
                 a = a + torch.sigmoid(self.ret_gate).to(a.dtype) * g_out

@@ -708,7 +708,7 @@ def self_test() -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config-name", default="tul_a1")
+    ap.add_argument("--config-name", default="tul_a2")
     ap.add_argument("--overrides", default="training.batch_size=6,model.use_kernels=false")
     ap.add_argument("--ckpt-dir")
     ap.add_argument("--seed", type=int, default=0)

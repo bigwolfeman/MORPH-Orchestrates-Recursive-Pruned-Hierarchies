@@ -16,7 +16,7 @@ kind:
 | Kind | Destination |
 |---|---|
 | Arms comparison, divergence RCA, trace-inverter spike | [`lab/tul/`](../../../../lab/tul/) |
-| Arm CW contract (shipped eval + `coda_token_cut`) | [implemented/architecture/2026-08-18-tul-compaction-window.md](../architecture/2026-08-18-tul-compaction-window.md) |
+| Arm CW contract (shipped eval + `coda_token_cut`) | [archived/architecture/2026-08-18-tul-compaction-window.md](../architecture/2026-08-18-tul-compaction-window.md) |
 | Arm D teacher-distill (unbuilt) | [proposed/architecture/2026-08-18-tul-teacher-distill.md](../../proposed/architecture/2026-08-18-tul-teacher-distill.md) |
 
 Update inbound links in README, CLAUDE, configs, model comments, and

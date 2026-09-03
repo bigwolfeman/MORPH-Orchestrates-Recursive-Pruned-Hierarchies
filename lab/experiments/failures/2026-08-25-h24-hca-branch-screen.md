@@ -3,7 +3,7 @@
 Status: failure
 
 Ledger: `lab/divergence/takeover-campaign.md` H24.
-Agent Note: [`.agents/notes/proposed/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md`](../../../.agents/notes/proposed/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md)
+Agent Note: [`.agents/notes/rejected/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md`](../../../.agents/notes/rejected/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md)
 Source of the finding: [`2026-08-25-h18-positional-attention-sink.md`](../failures/2026-08-25-h18-positional-attention-sink.md) Phase 0.
 
 ## Question

@@ -74,7 +74,7 @@ def _slot_budget(cfg_name: str) -> tuple[int, int]:
     """
     base = _yaml("base")
     arm = _yaml(cfg_name)
-    short = _yaml("tul_short")
+    short = _yaml("tul_a2")
     seq_len = int((arm.get("data") or {}).get("seq_len")
                   or (short.get("data") or {}).get("seq_len")
                   or base["data"]["seq_len"])
@@ -93,7 +93,7 @@ def _slot_budget(cfg_name: str) -> tuple[int, int]:
     "then guards it."))
 def test_core_hca_branch_gets_at_least_one_block_at_the_tul_slot_budget():
     """A TUL arm must not run the core with a dead compressed branch."""
-    slots, m = _slot_budget("tul_a1")
+    slots, m = _slot_budget("tul_a2")
     assert slots // m >= 1, (
         f"tul_a1 gives the core {slots} slot positions against hca_compress_ratio {m}, "
         f"so n_blocks = {slots // m}: three of six core blocks output exactly zero from "

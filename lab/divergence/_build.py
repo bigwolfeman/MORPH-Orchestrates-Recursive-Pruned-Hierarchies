@@ -24,7 +24,7 @@ from morph.training.quant_setup import apply_quantization     # noqa: E402
 from morph.training.train import build_morph_config           # noqa: E402
 from morph.training.tul_setup import build_tul_runtime        # noqa: E402
 
-__all__ = ["build_cfg", "build_model", "ROOT"]
+__all__ = ["build_cfg", "build_model", "DepthLever", "ROOT"]
 
 ROOT = _ROOT
 
@@ -52,3 +52,27 @@ def build_model(cfg, device: str = "cuda"):
     model = model.to(torch.device(device))
     apply_quantization(model, cfg)
     return model, tul_rt
+
+
+class DepthLever:
+    """The ONE eval-time forced-depth knob.
+
+    The paid loop (every TUL model since 2026-09-03, and every plain model) runs the
+    ordinary per-sample core over the whole row, so eval depth is ``model.cfg.mean_depth``
+    (the ``else`` of ``_core_region``'s ``if self.training``). ``a2_depth_sweep.py`` and
+    ``future_leak_probe.py`` both mutate the knob in place and restore it; this is that
+    logic in one home. ``tul_rt`` and ``fallback_max_depth`` are accepted for the
+    callers' existing signatures; neither changes the lever any more.
+    """
+
+    def __init__(self, model, tul_rt=None, fallback_max_depth: int = 0):
+        self.model = model
+        self.a2 = True
+        self.name = "model.cfg.mean_depth"
+        self._orig = (int(model.cfg.mean_depth),)
+
+    def set(self, depth: int) -> None:
+        self.model.cfg.mean_depth = int(depth)
+
+    def restore(self) -> None:
+        self.model.cfg.mean_depth = self._orig[0]

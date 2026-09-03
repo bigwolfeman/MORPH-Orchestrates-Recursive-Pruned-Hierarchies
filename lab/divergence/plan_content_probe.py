@@ -503,7 +503,7 @@ def decision_band(x: float) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--config", default="tul_a1")
+    ap.add_argument("--config", default="tul_a2")
     ap.add_argument("--batches", type=int, default=8,
                     help="total eval-stream batches to pull (fit+eval) when "
                          "--fit-batches is not given")

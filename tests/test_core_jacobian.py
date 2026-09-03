@@ -144,15 +144,22 @@ def test_capture_is_off_by_default_and_the_forward_is_unchanged():
 
 
 def _padded_fixture(seed=1234):
-    """A layout that really does contain PAD slots — few boundaries, generous budget."""
+    """A layout that really does contain tail-pad slot positions.
+
+    A slot budget above the span count leaves the packer's last <= prefix_k positions of
+    a row as E_slot-only pads (slot_mask at the dump bin) — the only positions of a packed
+    row that carry no information. Boundaries every 6 tokens against max_slots=8 give
+    6 such positions and 9 unused slot indices on this buffer (measured)."""
     spec = TulLayoutSpec(seq_len=32, prefix_k=2, max_slots=8, slot_id=4)
-    rule = BoundaryRule(is_boundary=np.zeros(V, dtype=bool), min_span=4, span_cap=16,
-                        eos_id=0)
+    lut = np.zeros(V, dtype=bool)
+    lut[[10, 11]] = True
+    rule = BoundaryRule(is_boundary=lut, min_span=4, span_cap=8, eos_id=0)
     rng = np.random.default_rng(5)
     ids = rng.integers(5, V, size=(3, 200))
     ids[ids == spec.slot_id] = 5
+    ids[:, ::6] = 10
     x, y, layout, _ = slot_layout_from_ids(ids.astype(np.int64), rule, spec)
-    assert bool((~layout.slot_valid).any()), "this fixture must contain pad slots"
+    assert bool((~layout.slot_valid).any()), "this fixture must contain unused slot indices"
     torch.manual_seed(seed)
     model = MORPHTransformer(_tiny(tul=TULConfig(slot_id=spec.slot_id,
                                                  prefix_k=spec.prefix_k,
@@ -162,13 +169,15 @@ def _padded_fixture(seed=1234):
 
 
 def test_capture_collects_one_point_per_loop_iteration_and_excludes_pads():
-    # A PADDED layout, on purpose. A pad slot enters the loop at h = 0 with depth 1, so it
-    # is "active" at t = 0; without the validity mask the probe's top singular direction
-    # sits in the pad subspace, where an RMSNorm Jacobian is of order 1/eps. Measured on
-    # the real model: 1.5e6 before the mask, 198 after. A fixture with no pad slots cannot
-    # catch that, so this test uses one that has them.
+    # A PADDED layout, on purpose. Under the paid loop the packed row's tail-pad slot
+    # positions (slot_mask at the dump bin: E_slot alone, no label) run through the loop
+    # like every other position, but they carry no information; without the mask the
+    # probe's top singular direction can sit in that constant subspace. A fixture with no
+    # pad positions cannot catch a dropped mask, so this test uses one that has them.
     model, x, y, layout = _padded_fixture()
-    assert bool((~layout.slot_valid).any())
+    model.eval()          # uniform depth -> the active set is the batch in original order
+    pad_pos = layout.slot_mask & (layout.bag_id == layout.max_slots)
+    assert bool(pad_pos.any()), "this fixture must contain tail-pad slot positions"
     probe = CoreJacobianProbe(model, n_iter=3)
     with probe.capture() as pts:
         with torch.no_grad():
@@ -176,10 +185,10 @@ def test_capture_collects_one_point_per_loop_iteration_and_excludes_pads():
     assert len(pts) >= 1
     assert [p["iter_idx"] for p in pts] == list(range(len(pts)))
     for p in pts:
-        assert p["h"].shape[:2] == layout.slot_valid.shape
-        # every captured "active" position must be a REAL slot
-        assert bool((p["active"] & ~layout.slot_valid).sum() == 0), \
-            "a pad slot survived into the probe mask"
+        assert p["h"].shape[:2] == tuple(x.shape), "the paid loop captures the FULL row"
+        assert p["active"].shape == p["h"].shape[:2]
+        # every tail-pad position is out, every real token / slot position is in
+        assert torch.equal(p["active"], ~pad_pos), "the probe mask must exclude exactly the pads"
         assert not p["h"].requires_grad, "captured state must be detached"
 
 

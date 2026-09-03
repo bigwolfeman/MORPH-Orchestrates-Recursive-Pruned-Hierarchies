@@ -87,7 +87,7 @@ def eval_groups(model, batches) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--config", default="tul_a1")
+    ap.add_argument("--config", default="tul_a2")
     ap.add_argument("--batches", type=int, default=8)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()

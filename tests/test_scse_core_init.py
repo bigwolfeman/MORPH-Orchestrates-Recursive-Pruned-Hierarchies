@@ -234,7 +234,7 @@ def test_zero_carrier_returns_zero_on_the_REAL_model():
     from drift_probe import build  # noqa: E402
 
     _cfg, model, _x, _y, _layout = build(
-        "tul_a1", ["training.batch_size=2", "model.use_kernels=false"])
+        "tul_a2", ["training.batch_size=2", "model.use_kernels=false"])
     model.eval()
     root = getattr(model, "_orig_mod", model)
     c = root.cfg

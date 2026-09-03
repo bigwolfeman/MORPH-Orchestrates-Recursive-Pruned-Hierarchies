@@ -41,8 +41,14 @@ Measured 2026-08-25 with `lab/divergence/attn_sink_probe.py --geometry --token-p
 `csa_compress_ratio 8`, `hca_compress_ratio 256`, `top_k 256`). **Print this before
 reasoning about core attention. Three of the four rows were a surprise.**
 
-The looped core does NOT run at the stack's sequence length. Under TUL it loops over SLOT
-positions — 64 with `tul.max_slots: 64` — while prelude and coda run on all 1152.
+**2026-09-03: the slot path is gone.** The shipped TUL forward is the paid loop
+(`docs/tul-paid-loop-recipe.md`): the core runs over the FULL packed row (`L_total` =
+1152 at seq 1024, `max_slots` 64), so the core's attention is the TOKEN-PATH column of the
+table below at every layer. The slot-path column is kept as the record of what the
+retired arms ran and why three of their rows were a surprise.
+
+Historical (arms A0–A4, last commit `d9e04e6`): under the slot loop the core looped over
+SLOT positions — 64 with `tul.max_slots: 64` — while prelude and coda ran on all 1152.
 
 | core layer | branch | slot path, S = 64 | token path, S = 1152 |
 |---|---|---|---|

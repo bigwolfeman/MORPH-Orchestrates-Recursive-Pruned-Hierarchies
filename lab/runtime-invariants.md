@@ -134,50 +134,39 @@ These are observation-only when unset: `MORPH_EXACT_TRACE`, `MORPH_MEM_PROBE`,
 `MORPH_EXACT_TRACE=<path>` appends per-step loss hex for bit-identical A/B gates.
 Use only on gate runs (adds a host sync per step).
 
-## 6b. TUL invariants (`experiments/tul`, LIVE — see `tul-spec.md` §9)
+## 6b. TUL invariants (LIVE — the paid loop, `docs/tul-paid-loop-recipe.md`; layout rules from `tul-spec.md` §9)
 
-These are runtime invariants now, not aspirations: each row names the test that
-fails when it is broken (`tests/test_tul_layout.py`, `tests/test_tul_forward.py`;
-116 tests pass at implementation time). Each was also mutation-checked — the code
-was deliberately broken and the named test observed to go red.
+These are runtime invariants, not aspirations: each row names the test that fails when it
+is broken (`tests/test_tul_layout.py`, `tests/test_tul_forward.py`,
+`tests/test_slot_seed.py`, `tests/test_checkpoint_compat.py`). Rows about the retired
+slot-only core (gather → loop on slots → scatter, per-slot masked depth, the arm keys) were
+REPLACED on 2026-09-03 when the slot path left the tree; the record of those rows is at
+commit `d9e04e6`.
 
 | Invariant | Why |
 | --- | --- |
 | The boundary rule (`.;!?` + newline + dashes, `min_span`, `span_cap`, EOS) is ONE function used by the loader and the generator, parity-tested. | The slot layout is structural; a train/generation mismatch silently decodes without the plan (the coconut `assert_layout_parity` lesson). `test_incremental_parity`, `test_generator_row_builder_matches_the_packer`. |
 | **Run collapse is CAUSAL: the boundary lands after the FIRST token of a run of boundary tokens, and `min_span` absorbs the rest.** | `tul-spec.md` §3.1 rule 2 places it after the LAST token of the run, which cannot be decided without reading the NEXT token — so it is not implementable at generation, where the rule must be causal (§6, and invariant 1 above). A `.`+`\n` run still yields exactly ONE boundary, which is what rule 2 was for. `test_run_of_boundary_tokens_yields_exactly_one_boundary`. |
 | The packer fills a row to exactly `L_total`; when the next unit does not fit, the leftover ≤ `prefix_k` positions become TAIL PADS (input `slot_id`, label −100, in `slot_mask`, absent from `slot_index`). | Fixed shapes without ever dropping a boundary inside the row. Measured cost on OWT at `max_slots 64`: 1.18 % of positions. `test_l_total_is_fixed_and_token_count_varies`. |
-| Per-slot depth is a masked update over the full compact slot sequence, never a per-position gather. The token path's active-set shrinking is deliberately NOT used on it. | Frozen slots must still serve same-iteration K/V; a gather changes what they attend to. `test_per_slot_depth_is_a_masked_update_not_a_gather`, `test_batch_of_mixed_depths_matches_separate_single_row_runs`. |
+| The forward with a layout runs the SAME per-sample core (`_core_region`) exactly once, over the FULL packed row; nothing is gathered, projected or scattered, and `layer_passes` charges every packed position for prelude + `n_core × mean_depth` + coda. | The paid loop is the one arm whose loop earned depth; a gather/scatter regression or a coreless regression is a silent change of model. `test_tul_forward_runs_the_whole_packed_row_through_the_core`, `test_layer_passes_charge_every_packed_position_for_the_loop`, `test_eval_forward_is_deterministic_at_the_mean_depth`. |
 | Slot core states have no loss; a slot's only label is the first token of the next span; pad slots are `-100`. | Loss-free latent (MegaByte, H-Net, LD4LG, Pred-Sent); the LTD think-position failure. A pad slot's `slot_index` is 0, so a missing validity mask would silently train on the PREVIOUS row's last token. `test_pad_slots_are_excluded_from_every_loss_group`. |
 | `slot_id` is masked from the LM head in the fused CE (`mask_token_id`) and at generation (`index_fill`). Its logit is −inf, so its probability and its gradient are exactly 0. | The model must never emit a slot; slots are inserted by the rule. Two masking sites, one test each: `test_masked_vocab_row_receives_zero_gradient`, `test_slot_id_logit_is_minus_inf_and_never_top_1`. |
 | `L_total = tokens + prefix_k · slots` is fixed per curriculum stage; token count varies per row and is logged. | Fixed shapes for kernels/graphs; BLT's tokens-per-batch control held in expectation. |
+| Old checkpoints carry `tul.W_prefix`; the loaders drop that ONE key, loudly, for a model without an FM planner, and every other homeless key still raises. | `morph/training/train.py::drop_retired_tul_keys`; `tests/test_checkpoint_compat.py`. |
 | Val/gen run with the TUL layout ON and `bag_size 0`; passing both raises. | Val PPL over token positions stays comparable to the baseline. `test_bag_size_and_slot_layout_are_mutually_exclusive`. |
 | The §5 half-weight double label is ONE weighted CE call, not one call per label group. | Each `fused_linear_cross_entropy` call allocates and saves a `[V, d]` fp32 `grad_w` (201 MB at V=49169, d=1024). The per-group CEs are §7.2 METRICS and run at eval only. `test_weighted_ce_equals_the_explicit_half_weight_combination`. |
 | The static-region CUDA graphs are never captured while the TUL layout is on, and are invalidated at a mid-run activation. | They capture the PLAIN front/back at the plain shape; `L_total ≠ seq_len` so they could never replay, and their private pool permanently reserves ~9 GB. |
 | `slot_layout=None` is bit-identical to today's forward, and building the TUL parameters does not perturb the baseline. | The TST phase and every pre-TUL checkpoint must reproduce. VERIFIED against `b268ba3`: loss, every parameter and every gradient `torch.equal`, with and without `MORPHConfig(tul=...)` (all three TUL inits are deterministic and constructed last, so zero RNG draws move). `test_tul_params_do_not_perturb_the_plain_path`. |
-| A config key for an unimplemented arm RAISES; it is never silently ignored. | `tul.stp_lambda`, `tul.set_lambda`, `tul.carry`, `tul.xattn`, `tul.bcast` are specified (§3.5) but not built. `test_unimplemented_arm_keys_raise`. |
-| **NOT HELD TODAY.** A TUL arm must not run the looped core with a DEAD compressed branch: the core's `hca_compress_ratio` must divide into the slot budget at least once. | `GatedPoolCompressor` computes `n_blocks = S // m`. The core loops over SLOT positions (64 at `tul.max_slots: 64`) while `base.yaml` ships `hca_compress_ratio: 256`, so `n_blocks = 0`, `fused_hca_attention` has nothing to attend to, and `_gate_combine_up` blends `g_comp ~ 0.50` into a tensor that is exactly 0.0000 — three of six core blocks at half their attention output, silently, for the whole run. The token path at the same weights has 4 blocks and `\|out_comp\| ~ 1030`. Measured 2026-08-25 with `lab/divergence/attn_sink_probe.py --geometry --token-path`. The fix is `model.core_hca_compress_ratio` (default `null` = today's behaviour, scoped to the core); whether it ships depends on the H24 arm. Guarded by a STRICT xfail so the day it starts holding, the suite says so: `test_core_hca_branch_gets_at_least_one_block_at_the_tul_slot_budget`. The knob's own wiring is covered by `tests/test_core_hca_ratio.py`. Deploy (`seq_len 4096`, 512 slots) is unaffected. |
+| A retired or unknown `tul.*` key RAISES; it is never silently ignored. `plan_mode` other than `normal` RAISES on the paid loop. | `TULConfig` has exactly six fields, so a retired arm key is a `TypeError` at construction, and `build_tul_runtime` rejects any `tul:` key outside its known set BEFORE touching the tokenizer (`test_unknown_tul_config_key_raises`). A `val/plan_worth_*` that is 0 by construction is worse than none (`test_plan_ablations_are_refused_on_the_paid_loop`). |
+| The core's compressed attention branch is LIVE under TUL. | RESOLVED by the paid loop: the core runs at `L_total`, the token-path shapes, where `n_blocks = L_total // hca_compress_ratio` is never 0 (`morph/model/CLAUDE.md`, token column). The dead-branch finding belonged to the retired slot path (record: `.agents/notes/rejected/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md`). |
 
-## 6c. TUL gate invariants (LIVE — see `tul-gate-spec.md` §9)
+## 6c. TUL gate invariants — RETIRED 2026-09-03
 
-Built 2026-08-22. `pytest tests/` → 189 pass; the named tests are in
-`tests/test_tul_gate.py`, one per row. Every row was mutation-checked: the code was
-deliberately broken and the named test observed to go red (15 mutations, 15 caught).
-
-| Invariant | Why / the test that fails |
-| --- | --- |
-| **`tul.gate: false` builds NOTHING** — no parameter, no layout field, no random draw — and `gate_lambda = 0` with `gate_budget_cond = false` is bit-identical to arm A1: same loss, same gradients. | `nn.Linear`/`nn.Embedding` draw from the global RNG in `reset_parameters`; a draw would advance the stream and change every later Poisson depth and dropout mask. The head is therefore a rank-1 linear written as two zero parameters and the budget table a zero `Parameter`. `test_building_the_gate_draws_no_random_number`, `test_lambda_zero_and_no_budget_cond_is_bit_identical_to_a1`, `test_gate_off_leaves_the_packer_byte_identical`. |
-| **A loss now touches the slot core state, and §6b's "slot core states have no loss" is narrowed on purpose.** A scalar/discrete READOUT is allowed; a vector regression onto a target representation stays forbidden. | The §6b citation set (MegaByte, H-Net, LD4LG, Pred-Sent, the LTD think-position failure, Block Transformer §4.2) is about reconstructing the latent, not reading a scalar off it. Tested structurally, not asserted: `test_the_gate_reads_a_scalar_and_regresses_nothing_vector_valued`. |
-| The length label is the **NEXT** span's length, not the slot's own. | Slot i sits after span i, so causal attention lets it condition only span i+1 — the span generation asks it about. Grading span i would read out the past. `test_the_label_is_the_NEXT_span_length`. |
-| `span_len` is 0 and `len_supervised` is False at every pad slot, and pad slots contribute exactly zero to the gate loss. | A pad slot's `slot_index` is 0, so a missing validity mask trains on row 0's first span — the existing §6b pad-slot trap. `test_pad_slots_carry_no_label`, `test_pad_slots_contribute_exactly_zero_to_the_gate_loss`. |
-| An RNG-truncated slot, and the row's last slot, are conditioned on their realised length but never GRADED on it. | The truncation point and the row boundary are ours, not the data's. Grading a length head on them is label noise. `test_an_rng_truncated_span_is_not_graded`, `test_an_unsupervised_slot_supervises_the_zeros_but_not_the_value`. |
-| No label lands on the sigmoid's asymptote: `gate_k_max > span_cap`, and the decoded `k` is clamped to `span_cap`. | Measured: at `k_max = span_cap` **24.5 %** of real labels are exactly 1.0, where the gradient vanishes. A decoded `k` above `span_cap` would index a budget row no example ever trains and hand the coda a zero vector. `test_no_label_lands_on_the_sigmoid_asymptote`, `test_choose_k_never_exceeds_the_rule_s_span_cap`, `test_the_open_tail_label_is_clamped_to_span_cap_not_to_k_max`. |
-| The coda gets the **realised** length in training and the **predicted** length at generation, never a mixture. The layout carrying a label IS the switch. | Mixing makes the LM loss chase the gate's error. Scheduled sampling is §12's unbuilt key and RAISES. `test_training_uses_the_realised_length_and_generation_the_predicted_one`. |
-| `g_traj` leaves the core region as a RETURN VALUE, and the readout runs OUTSIDE the checkpoint. | The `ret_capture` lesson: a side channel is not checkpoint-safe. Outside the checkpoint the gate shapes the core on exactly the truncated-BPTT window the token loss uses, and the head is still supervised on the frozen iterations — otherwise the ~28 % of slots whose depth falls inside that window would have no gradient at all. `test_the_gate_gradient_reaches_the_core_inside_the_bptt_window`. |
-| Truncation is a pure INSERTION: both halves clear `min_span`, and restarting the rule at an inserted cut still yields the same next DATA boundary. | This is what makes a wrong `k` at generation cost one span's quality instead of desynchronising every later span in the row. `test_truncation_is_consistent_with_the_rule`, `test_both_halves_of_a_truncation_clear_min_span`, `test_a_forced_cut_leaves_the_rule_in_the_same_state_as_a_real_one`. |
-| Every gate parameter is in the optimizer's **no-decay** group, and the run REFUSES to start if any gate parameter is missing from the optimizer, sits at `lr = 0`, or has a smaller travel budget than its targets need. | Weight decay on a zero-init readout direction pulls against the only gradient it has. The predecessor lost a whole ladder to a bias that moved 0.04 % of what it needed, with nothing in the run saying so. `test_the_gate_lands_in_the_no_decay_optimizer_group`, `test_the_audit_refuses_a_gate_that_is_not_in_the_optimizer`, `test_the_audit_refuses_a_step_budget_too_small_to_move_the_gate`, `test_a_frozen_gate_direction_fails_the_alive_check`. |
-| Val runs the DATA's segmentation: `gate_truncate_p` is 0 on the val loader whatever the train loader uses. | A val CE that moves with our augmentation seed is not comparable to the reference arm's. |
-| `gate_drives_depth` is EVAL ONLY and caps at `slot_max_depth`; every slot emits `k ≥ 1`. | Training teacher-forces the depth (§4), so the two arms are one checkpoint scored twice. A slot that never halts must not hang the generator. `test_halt_is_eval_only`, `test_halt_depths_stay_inside_one_and_max_depth`, `test_halt_and_fixed_depth_share_every_weight`. |
-| A config key for an unimplemented gate arm RAISES. | `gate_scheduled_sampling`, `gate_stop_head`, `gate_ponder_lambda` are specified (§12) and not built. `test_unimplemented_gate_keys_raise`. |
+The span-length gate (`docs/tul-gate-spec.md`, arms TUL-gate / TUL-halt) left the tree with
+the slot-only core; `tests/test_tul_gate.py` and its 13 mutation-checked rows went with it.
+The spec and the measured result (`lab/experiments/`, `docs/ablation-ledger.md`) stay as the
+record; the last commit that runs the gate is `d9e04e6`. Decision:
+`.agents/notes/rejected/feature/2026-08-21-gated-tul.md`.
 
 ## 7. What not to “fix”
 
@@ -188,10 +177,9 @@ deliberately broken and the named test observed to go red (15 mutations, 15 caug
 - Calling `carve()` while density is still ~1.0 (produces a “sparse” model with
   K/C=1.0).
 - Silent fallbacks when a kernel, dataset path, or checkpoint topology fails.
-- Turning `tul.gate_train_zeros` back on because "the predecessor did it that way": the
-  per-slot depth is a Poisson draw the head cannot observe, so that target's optimum is
-  the hazard and the length is scaled away (measured `k = 5.00` against gold `18.98`;
-  `tul-gate-spec.md` §6).
+- Rebuilding the slot-only core (gather → loop on slots → scatter) as "the cheaper TUL":
+  its loop never earned depth (K1−K6 ≤ 0.011 nats at any length; `docs/tul-paid-loop-recipe.md`
+  §2), and the gate's `gate_train_zeros` lesson (`tul-gate-spec.md` §6) went with it.
 - Reverting `@kernel_fence` to hard `@torch.compiler.disable` (kills graph
   composition), or flipping `MORPH_DYNAMO_FENCE=0` into the default without an
   fp32 parity gate on the target torch version.

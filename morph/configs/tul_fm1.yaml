@@ -35,7 +35,7 @@
 # and the planner (~22.0 M at d_p 512 x 4). Expect ~232 M. Printed at startup by
 # MORPHTransformer and by the FM1 banner; if the printed number is not near 232, stop.
 defaults:
-  - tul_a1
+  - tul_a2
   - _self_
 
 model:

@@ -1,0 +1,23 @@
+{
+ "tul-a2-20k-wu_20000": {
+  "step": 20000,
+  "rows": 480,
+  "eval_mode": "a2_model_depth",
+  "depth_lever": "model.cfg.mean_depth",
+  "train_eval_depth": 6,
+  "depths": {
+   "1": {
+    "ce_tokens": 3.5738087263083433,
+    "ce_span_first": 3.2355333213284236,
+    "n_tokens": 501106.0,
+    "n_first": 24339.0
+   },
+   "6": {
+    "ce_tokens": 3.4701384667973816,
+    "ce_span_first": 3.1558261781843986,
+    "n_tokens": 501106.0,
+    "n_first": 24339.0
+   }
+  }
+ }
+}

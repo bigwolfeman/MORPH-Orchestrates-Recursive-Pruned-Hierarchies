@@ -1,5 +1,11 @@
 # The Gist-Slot Recipe — the code that made slot content load-bearing
 
+> **RETIRED 2026-09-03.** The gist / mux machinery (`mux_span_targets`, the gist loop,
+> the compaction window, `compact_index`) left the tree with the slot-only core. The paid
+> loop ([tul-paid-loop-recipe.md](tul-paid-loop-recipe.md)) is the shipped forward. This
+> file is the record of the code as it ran at `d9e04e6`. Decision:
+> `.agents/notes/rejected/architecture/2026-08-29-gist-loop.md`.
+
 Status: LIVE, CORRECTED. Written 2026-08-29, the night GL1b appeared to invert
 the mask's price; corrected the same day by the round-2 confound arm (see the
 CORRECTION section — the frozen prereg `lab/experiments/failures/2026-08-29-tul-gl1-line2.md`
@@ -250,6 +256,6 @@ table does not already answer. What remains is promotion, in order:
    longer budget hold.
 
 Provenance: preregs+filings `lab/experiments/*/2026-08-29-tul-gl1*.md`; decision
-note `.agents/notes/proposed/architecture/2026-08-29-gist-loop.md`; wandb runs
+note `.agents/notes/rejected/architecture/2026-08-29-gist-loop.md`; wandb runs
 named in the table; commits `769b50c` (GL1), `1a161d9` (GL1b), `6a9a524` (GL1c),
 `4ea5a56` (probe fix). The cake is real.

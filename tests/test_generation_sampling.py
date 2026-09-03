@@ -275,17 +275,20 @@ def test_emit_source_token_reads_the_boundary_token_position():
                                     emit_source="slot")
     assert b_tok.n_slots == 1 and b_slot.n_slots == 1, "prompt must have cut one slot"
     assert out_tok[0] == 12, "token mode: read index 2 (boundary token) → (2+10)%V"
-    assert out_slot[0] == 14, "slot mode (spec §6 v1 default): read index 4 (emit pos)"
+    assert out_slot[0] == 14, "slot mode (spec §6 v1, emit_weight>0 arms): read index 4"
     # Mid-span steps are identical in both modes: next read is the row's last position.
     assert out_tok[1] == out_slot[1] == 15
 
 
-def test_emit_source_default_is_slot_and_bad_value_raises():
+def test_emit_source_default_is_token_and_bad_value_raises():
+    """base.yaml ships ``emit_weight: 0.0``: the slot's emit position is never trained,
+    so the generator's default MUST read the span's first token from the boundary TOKEN
+    position. A silent flip back to "slot" would sample from an untrained head."""
     from morph.inference.tul_generate import generate_tul
     rule, spec = _boundary_setup()
     out_default, _ = generate_tul(_PosStub(), [1, 2, 9], rule, spec, max_new_tokens=1,
                                   temperature=0.0, top_k=0, device=torch.device("cpu"))
-    assert out_default == [14], "default must stay spec §6 v1 (slot) — no silent change"
+    assert out_default == [12], "default must be the token position (emit_weight=0 recipe)"
     with pytest.raises(ValueError, match="emit_source"):
         generate_tul(_PosStub(), [1, 2, 9], rule, spec, max_new_tokens=1,
                      temperature=0.0, top_k=0, device=torch.device("cpu"),

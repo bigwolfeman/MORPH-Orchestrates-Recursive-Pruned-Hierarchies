@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import os
+from typing import TYPE_CHECKING
 from contextlib import nullcontext
 from dataclasses import dataclass
 
@@ -23,23 +24,19 @@ from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
 from .attention import MORPHAttention, RMSNorm
-from .diffusion_blocks import euler_step
 from .embeddings import MORPHEmbedding
 from .fused_ce import (
     fused_linear_cross_entropy,
     fused_linear_cross_entropy_mce,
     multi_hot_cross_entropy_reference,
 )
-from .iter_cond import CoreStageConditioning, DB1Sampler, iter_stage_value
-from .recur_gate import RecurrenceGate
-from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
-from .sigreg import sigreg_epps_pulley
+from .mhc import ChannelInject, MORPHBlock
 from .sparsity import MortarLinear
-from .tul import (TULConfig, TULGate, TULGateConfig, TULSlots, compact_index,
-                  cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
-                  scatter_positions,
-                  window_drop_mask)
-from .tul_layout import SlotLayout, tg_allow_mask, tg_reset_mask
+from .tul import TULConfig, TULSlots, scatter_positions
+from .tul_layout import SlotLayout
+
+if TYPE_CHECKING:  # construction-time annotation only; the planner imports this module
+    from .tul_fm import FMArmConfig
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
 # zero production cost). Set MORPH_PROFILE_REGIONS=1 to name forward carrier sites so the
@@ -298,13 +295,14 @@ class MORPHConfig:
     # Training
     dropout: float = 0.1
 
-    # ── TUL — Thought Unpack Loop (docs/tul-spec.md) ──────────────────────
+    # ── TUL — Thought Unpack Loop (docs/tul-spec.md, docs/tul-paid-loop-recipe.md) ──
     # None → NO TUL parameters are constructed and the model is byte-identical to the
     # baseline (the `retention` convention: the flag gates CONSTRUCTION, not a forward
-    # branch). Set it and the model gains E_slot / E_mask / W_prefix (spec §3.1-§3.4),
+    # branch). Set it and the model gains E_slot / E_mask / W_sent (spec §3.1-§3.4),
     # which stay inert — grad None, so the optimizer skips them — until a forward is
     # called with a `slot_layout`. `slot_layout=None` is bit-identical either way
-    # (runtime-invariants §6b).
+    # (runtime-invariants §6b). The forward with a layout is the PAID loop: tokens and
+    # slots are one sequence and the ordinary per-sample core loop runs over all of it.
     tul: TULConfig | None = None
 
     # ── FM1: the flow-matching planner arm (morph/model/tul_fm.py) ────────
@@ -450,12 +448,12 @@ class _SCSE(nn.Module):
     is its Listing 1; the equation numbers below are the paper's.
 
     This holds the two learned modules and the four constants. It deliberately does NOT
-    own the loop: the recurrence lives in ``_core_region`` / ``_tul_core`` because MORPH's
+    own the loop: the recurrence lives in ``_core_region`` because MORPH's
     per-sample Poisson depth, active-set shrinking and truncated-BPTT window all have to
     apply to the deviation exactly as they apply to the carrier today (spec D5).
 
     ``bias=False`` on both projections, where Listing 1's ``nn.Linear`` defaults to True
-    (spec D2). Under TUL, ``gather_valid`` zeroes pad slots, so ``e = 0`` there; a bias
+    (spec D2). A zero source row (a masked position) gives ``e = 0``; a bias
     would put ``h*`` and ``Delta_0`` off zero at pads and give padding a forward effect.
     """
 
@@ -769,19 +767,6 @@ class MORPHTransformer(nn.Module):
 
         d_ff = cfg.d_ff if cfg.d_ff > 0 else ((d * 8 // 3 + 63) // 64 * 64)
 
-        # ── TG restriction (docs/tul-tg-spec.md) ────────────────────────────
-        # Construction-time only: gates which attention modules get built (§3) and
-        # what `_forward_tul` threads into every prelude/coda call. Validated HERE,
-        # before anything else is built, so a bad config never gets partway through
-        # constructing a model it is going to refuse.
-        self._tg_restrict = bool(cfg.tul.tg_restrict) if cfg.tul is not None else False
-        if self._tg_restrict and cfg.use_kernels:
-            raise ValueError(
-                "model.tul.tg_restrict=true requires model.use_kernels=false "
-                "(docs/tul-tg-spec.md §2/§6): the TG arms run eager only — the fused "
-                "window/CSA/HCA kernels do not know about the restriction, and a "
-                "silent unmasked kernel path is forbidden.")
-
         # Channel boundaries
         ch = cfg.channel_dims
         assert sum(ch) == d
@@ -815,7 +800,6 @@ class MORPHTransformer(nn.Module):
             max_seq_len=cfg.max_seq_len,
             conv_kernel=cfg.conv_kernel,
             init_alpha=cfg.init_alpha,
-            tg_restrict=self._tg_restrict,
         )
 
         # ── Residual = n-stream Hyper-Connection (Cayley/JPmHC), the sole residual ──
@@ -887,12 +871,6 @@ class MORPHTransformer(nn.Module):
         # ── LM head ──────────────────────────────────────────────────
         self.lm_mixer = LMHeadMixer(d, channel_dims=ch)
         self.final_norm = RMSNorm(d)
-        # Auxiliary-objective gates (arm: warmup schedules). Non-persistent so no
-        # checkpoint gains a key; the trainer writes them each step, and because
-        # they are BUFFERS not Python floats, flipping one costs no recompile.
-        self.register_buffer("mux_gate", torch.ones(()), persistent=False)
-        self.register_buffer("sigreg_gate", torch.ones(()), persistent=False)
-
 
         # ── Retention branch (#230) ────────────────────────────────────
         # Attach AFTER all base modules → GLA's RNG draws are a tail, so the base model is
@@ -924,57 +902,16 @@ class MORPHTransformer(nn.Module):
                             RMSNorm(d), gate_init=cfg.retention_gate_init)
 
         # ── TUL slot parameters (docs/tul-spec.md §3.1-§3.4) ───────────────
-        # Constructed LAST, after retention, for the same reason: all three inits are
-        # DETERMINISTIC (zeros / identity — zero RNG draws), so a TUL model's base weights
-        # are byte-identical to a baseline built with the same seed, and the arms differ by
-        # the mechanism alone. E_slot is re-initialised from the live embedding table at the
-        # activation step (Block Transformer §3.7) — see TULSlots.init_at_activation.
-        self.tul: TULSlots | None = TULSlots(d, cfg.tul) if cfg.tul is not None else None
-        # The gate is built AFTER TULSlots for the same reason and with the same
-        # discipline: every one of its inits is a deterministic zero/one, so building it
-        # advances the RNG stream by nothing and arm TUL-gate's base weights are
-        # byte-identical to arm A1's (docs/tul-gate-spec.md §9 invariant 1).
-        _gc = cfg.tul.gate if cfg.tul is not None else None
-        self.tul_gate: TULGate | None = TULGate(d, _gc) if _gc is not None else None
-
-        # ── Core-stage conditioning (faithful DiffusionBlocks, morph/model/iter_cond.py)
-        # Built AFTER TULSlots/tul_gate for the same RNG-neutrality reason: "none" (the
-        # default) constructs nothing, draws no RNG, and every OTHER arm's base weights
-        # stay byte-identical to a build from before this module existed.
-        # `_core_stage_cond_mode` is a Python-level constant read once at construction —
-        # every branch on it below traces out, so the "none" graph is unchanged.
-        self._core_stage_cond_mode: str = cfg.tul.core_stage_cond if cfg.tul is not None else "none"
-        self.tul_stage_cond: CoreStageConditioning | None = None
-        self._db1_sampler: DB1Sampler | None = None
-        if self._core_stage_cond_mode != "none":
-            if cfg.n_core <= 0:
-                raise ValueError(
-                    "tul.core_stage_cond requires model.n_core > 0 — there are no core "
-                    "layers to condition (docs: morph/model/iter_cond.py).")
-            self.tul_stage_cond = CoreStageConditioning(
-                cfg.n_core, d, cond_dim=cfg.tul.db1_cond_dim)
-            self._db1_sampler = DB1Sampler(
-                sigma_min=cfg.tul.db1_sigma_min, sigma_max=cfg.tul.db1_sigma_max,
-                p_mean=cfg.tul.db1_p_mean, p_std=cfg.tul.db1_p_std,
-                sigma_data=cfg.tul.db1_sigma_data)
-
-        # ── GRT recurrence gate (morph/model/recur_gate.py, gate-ladder G1/G2) ──
-        # Built after stage-cond, before FM, same RNG-neutrality contract: "none" (the
-        # default) constructs nothing and every other arm's weights are byte-identical.
-        self.tul_recur_gate: RecurrenceGate | None = None
-        if cfg.tul is not None and cfg.tul.recur_gate == "grt":
-            if cfg.n_core <= 0:
-                raise ValueError(
-                    "tul.recur_gate requires model.n_core > 0 — there is no recurrence "
-                    "to gate.")
-            if cfg.scse_enabled:
-                raise NotImplementedError(
-                    "tul.recur_gate under SCSE is not defined: the loop carrier is the "
-                    "DEVIATION and a convex blend of deviations is not a convex blend of "
-                    "states. Build it when an arm needs it.")
-            self.tul_recur_gate = RecurrenceGate(
-                d, tau=cfg.tul.recur_gate_tau, bias_init=cfg.tul.recur_gate_bias,
-                noise=cfg.tul.recur_gate_noise)
+        # Constructed LAST, after retention, for the same reason: E_slot / E_mask are
+        # zero-initialised (zero RNG draws) and W_sent draws from a private generator, so
+        # a TUL model's base weights are byte-identical to a baseline built with the same
+        # seed, and the arms differ by the mechanism alone. E_slot is re-initialised from
+        # the live embedding table at the activation step (Block Transformer §3.7) — see
+        # TULSlots.init_at_activation. W_prefix exists only for an FM planner, the one
+        # path that projects a plan into the slot's prefix positions.
+        self.tul: TULSlots | None = (
+            TULSlots(d, cfg.tul, with_prefix=cfg.fm is not None)
+            if cfg.tul is not None else None)
 
         # ── FM1 planner (morph/model/tul_fm.py) ────────────────────────────
         # Built LAST so a non-FM model's weights are byte-identical to today's: every
@@ -1042,7 +979,8 @@ class MORPHTransformer(nn.Module):
         _res = self._residual_mode + (f"(n={self._n_streams})" if self._is_hc else "")
         print(f"MORPHTransformer: {n_params/1e6:.1f}M params, "
               f"loop {cfg.n_prelude}:{cfg.n_core}×{cfg.mean_depth}:{cfg.n_coda} "
-              f"(kernels={'fused' if cfg.use_kernels else 'EAGER'}, residual={_res})")
+              f"(kernels={'fused' if cfg.use_kernels else 'EAGER'}, "
+              f"residual={_res})")
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -1116,8 +1054,7 @@ class MORPHTransformer(nn.Module):
             return h + term
 
     def _apply_core_step(self, h_in, e_in, ids, x0_terms, bg,
-                         ret_state=None, iter_idx=0, inj_terms=None, source_free=False,
-                         stage_cond=None):
+                         ret_state=None, iter_idx=0, inj_terms=None, source_free=False):
         """ONE core-loop step: SSM diagonal injection → the n_core shared blocks
         (each with per-layer x0/bigram injection + optional GLA retention carry).
         Returns ``(h, new_ret_state)`` (new_ret None unless a core layer carries retention).
@@ -1138,13 +1075,6 @@ class MORPHTransformer(nn.Module):
         iteration's carrier accumulates the SAME sum-over-iterations gradient to
         proj/bigram/value-embed as the per-iteration form (identical to the x0 hoist).
         None → rebuild in-place (the σ_max probe / any caller without a precomputed stack).
-
-        ``stage_cond`` (faithful DiffusionBlocks, morph/model/iter_cond.py):
-        ``[B, cond_dim]`` or ``None``. ``None`` is bit-identical to before this
-        parameter existed — every pre-existing call site passes nothing, so the
-        default keeps the graph unchanged. When given, EVERY core layer's input is
-        AdaLN-modulated by ``self.tul_stage_cond`` before that layer runs (zero-init,
-        so this is a no-op until training moves the gate weights).
         """
         np_ = self.cfg.n_prelude
         mlp_kw = {"iter_idx": iter_idx}
@@ -1166,8 +1096,6 @@ class MORPHTransformer(nn.Module):
                         gi, x0_terms[i], ids, bg, h_injected.dtype
                     )
                 h_injected = self._apply_injection(h_injected, term)
-            if stage_cond is not None:
-                h_injected = self.tul_stage_cond.modulate(h_injected, stage_cond, i)
             # Retention carry only for the designated core layer(s); others get None.
             is_ret = ret_cap is not None and (i in self._retention_layers)
             rs_arg = ret_state if is_ret else None
@@ -1368,15 +1296,8 @@ class MORPHTransformer(nn.Module):
     # identical ops in the identical order as the old inline code.
 
     def _front_tail(self, x: Tensor, input_ids: Tensor, bigram_emb,
-                    ve_bagged, attn_kwargs: dict | None = None,
-                    ret_reset_mask: Tensor | None = None) -> tuple[Tensor, Tensor]:
-        """x0 skip-clone → HC stream expansion → prelude blocks. Returns (x, x0).
-
-        ``attn_kwargs`` / ``ret_reset_mask`` (docs/tul-tg-spec.md §§1-4): the SAME
-        tg_allow / slot-mask / GLA-reset-mask dict, built ONCE per forward, threaded
-        into every prelude block. None on every non-TG path → the calls below are
-        exactly ``layer(x)`` as before (bit-identical, spec T4).
-        """
+                    ve_bagged) -> tuple[Tensor, Tensor]:
+        """x0 skip-clone → HC stream expansion → prelude blocks. Returns (x, x0)."""
         B, T = x.shape[0], x.shape[1]
         x0 = x.clone()      # single-stream skip signal (broadcast into HC streams)
 
@@ -1396,7 +1317,7 @@ class MORPHTransformer(nn.Module):
                 ve_bagged=ve_bagged,
             )
             x = self._apply_injection(x, term)
-            x = layer(x, attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
+            x = layer(x)
         return x, x0
 
     def _front_region(self, input_ids: Tensor) -> tuple[Tensor, Tensor, Tensor | None]:
@@ -1409,9 +1330,7 @@ class MORPHTransformer(nn.Module):
 
     def _back_region(self, x: Tensor, x0: Tensor, bigram_emb,
                      input_ids: Tensor | None = None,
-                     inject_keep: Tensor | None = None,
-                     attn_kwargs: dict | None = None,
-                     ret_reset_mask: Tensor | None = None) -> Tensor:
+                     inject_keep: Tensor | None = None) -> Tensor:
         """BACK region: coda blocks → HC stream mean → lm_mixer → final_norm.
         input_ids is only threaded into _build_injection_term for signature parity —
         value-embeds fire exclusively in the prelude (gi ≥ n_prelude+n_core is never in
@@ -1423,14 +1342,7 @@ class MORPHTransformer(nn.Module):
         (spec §3.4 token-state dropout). x0 carries proj(embed(t)) and the bigram term
         carries hash(t, t−1), so without this the dropped token leaks straight back in
         and Bowman's word dropout becomes a no-op. None on every non-TUL path → the
-        ops below are unchanged and bit-identical.
-
-        ``attn_kwargs`` / ``ret_reset_mask``: see :meth:`_front_tail` — the same
-        per-forward tg_allow / slot-mask / GLA-reset-mask dict, threaded into every
-        coda block. Only meaningful for the FULL-``L`` coda call (``coda_sees_slots
-        and coda_token_cut == 0``); the gathered-subset coda callers never pass these
-        (docs/tul-tg-spec.md does not define the restriction on a gathered index
-        space — see ``_forward_tul``'s raise for that combination)."""
+        ops below are unchanged and bit-identical."""
         for i, layer in enumerate(self.coda):
             gi = self.cfg.n_prelude + self.cfg.n_core + i
             term = self._build_injection_term(
@@ -1439,7 +1351,7 @@ class MORPHTransformer(nn.Module):
             if inject_keep is not None:
                 term = term * inject_keep.to(term.dtype)
             x = self._apply_injection(x, term)
-            x = layer(x, attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
+            x = layer(x)
 
         return self._readout(x)
 
@@ -1471,7 +1383,7 @@ class MORPHTransformer(nn.Module):
         training or inference path calls it, so every existing path stays bit-identical:
         this is a new public entry point that reuses :meth:`_front_region` (``layout is
         None``) or :meth:`_tul_front` (``layout`` given), the same boundary norm
-        ``_core_region`` / ``_tul_core`` applies, and the same stream reduction
+        ``_core_region`` applies, and the same stream reduction
         :meth:`_readout` applies.
 
         With ``apply_input_norm=True`` on an ``n_core == 0`` model (arm A3), the returned
@@ -1479,18 +1391,11 @@ class MORPHTransformer(nn.Module):
         ``self.input_norm(x)`` there. On a model with a core it is the state the core
         loop starts from, before any iteration.
 
-        ``layout`` (TUL-FM P1's TG-restrict backbones): runs the TUL prelude over the
-        packed ``[B, L_total]`` sequence (token AND slot positions) instead of the plain
-        one. Requires a model built with ``MORPHConfig(tul=...)``. Under ``tg_restrict``
-        this builds the SAME ``tg_allow`` / ``tg_slot_mask`` / GLA-reset-mask
-        ``_forward_tul`` builds, for the same reason :meth:`_forward_tul` builds them
-        ONCE per forward rather than never: a bare ``_tul_front(..., attn_kwargs=None)``
-        call would silently hand ``_tg_slot_attention`` a ``None`` slot mask, which its
-        own docstring defines as "every position is a slot" — a WRONG answer (every token
-        position would be treated as attendable in the compressed branch), not a raise.
-        Returns the FULL packed-position tensor (input_norm(prelude) at every position,
-        exactly :meth:`_tul_core`'s own ``xn = self.input_norm(x)``, spec's own "tokens
-        keep it, the n_core==0 seed path"); the caller restricts to TOKEN positions
+        ``layout`` (TUL-FM P1's backbones): runs the TUL prelude over the packed
+        ``[B, L_total]`` sequence (token AND slot positions) instead of the plain one.
+        Requires a model built with ``MORPHConfig(tul=...)``. Returns the FULL
+        packed-position tensor (input_norm(prelude) at every position, the ``n_core==0``
+        seed path's own boundary norm); the caller restricts to TOKEN positions
         (``~layout.slot_mask``) itself, exactly as the ``layout is None`` path is already
         a token-only tensor with no slot positions to strip.
 
@@ -1510,19 +1415,12 @@ class MORPHTransformer(nn.Module):
                 raise RuntimeError(
                     "prelude_states(layout=...) requires a model built with "
                     "MORPHConfig(tul=...); this model has no TUL parameters "
-                    "(E_slot / E_mask / W_prefix).")
+                    "(E_slot / E_mask / W_sent).")
             tc = self.cfg.tul
             if layout.prefix_k != tc.prefix_k:
                 raise ValueError(
                     f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
-            tg_attn_kwargs = tg_reset = None
-            if self._tg_restrict:
-                tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span)
-                tg_attn_kwargs = {"tg_allow": tg_allow, "tg_slot_mask": layout.slot_mask}
-                tg_reset = tg_reset_mask(layout)
-            x, _x0, _bigram = self._tul_front(input_ids, layout,
-                                              attn_kwargs=tg_attn_kwargs,
-                                              ret_reset_mask=tg_reset)
+            x, _x0, _bigram = self._tul_front(input_ids, layout)
         else:
             x, _x0, _bigram = self._front_region(input_ids)
         if apply_input_norm:
@@ -1532,15 +1430,18 @@ class MORPHTransformer(nn.Module):
         return x
 
     def _core_region(self, x: Tensor, x0: Tensor, bigram_emb,
-                     input_ids: Tensor | None = None) -> Tensor:
+                     input_ids: Tensor | None = None,
+                     jac_active: Tensor | None = None) -> Tensor:
         """CORE region: input_norm → the Poisson-depth core loop → the looped carrier.
 
         Pure code motion out of ``_forward_single`` (the ``_front_region`` /
         ``_back_region`` precedent): the ops and their order are IDENTICAL to the old
-        inline block, so every non-TUL path is bit-identical. It is a method so the TUL
-        arm A2 (``tokens_through_core``, spec §7.1) can run the SAME per-sample core over
-        a sequence that happens to contain slot positions, instead of forking a second
-        implementation of the loop."""
+        inline block, so every non-TUL path is bit-identical. ``jac_active`` (``[B, L]`` bool, optional) is read ONLY by the Jacobian probe
+        capture: positions that carry no information (the packed row's tail-pad slot
+        positions) are excluded from the probe's active set. It is a method so the TUL
+        forward (the paid loop, docs/tul-paid-loop-recipe.md) can run the SAME per-sample
+        core over a sequence that happens to contain slot positions, instead of forking a
+        second implementation of the loop."""
         B = x.shape[0]
         # ── Core loop ─────────────────────────────────────────────────
         # n_core == 0 → prelude output flows straight to the coda. The whole loop
@@ -1654,6 +1555,7 @@ class MORPHTransformer(nn.Module):
             inv_perm = torch.argsort(perm)
             with _prof("carrier::perm_gather"):
                 h_s = h[perm]
+                jac_s = None if jac_active is None else jac_active[perm]
                 # Under SCSE `e_s` carries the ANCHOR, not the source: the loop's second
                 # positional argument is what `_core_step` forwards to `recurrent_input`,
                 # and SCSE's recurrence never sees `e` again after Delta_0 and h* are built.
@@ -1730,14 +1632,15 @@ class MORPHTransformer(nn.Module):
                 args = (h_a, e_s[:n_active],
                         _inj_none if _scse is not None else inj_s[:, :n_active])
                 rs_a = ret_state_s[:n_active] if track_ret else None
-                # Jacobian probe capture — see the twin in `_tul_core`. None by default,
+                # Jacobian probe capture (morph/training/core_jacobian.py). None by default,
                 # so this branch traces out and the forward stays bit-identical.
                 if self._jac_capture is not None:
                     self._jac_capture.append({
                         "h": h_a.detach(), "e": args[1].detach(), "inj": args[2].detach(),
                         "ret_state": None if rs_a is None else rs_a.detach(),
                         "iter_idx": t,
-                        "active": h_a.new_ones(h_a.shape[:2], dtype=torch.bool),
+                        "active": (h_a.new_ones(h_a.shape[:2], dtype=torch.bool)
+                                   if jac_s is None else jac_s[:n_active]),
                         # Under SCSE "h" is the DEVIATION and "e" is the ANCHOR. Any probe
                         # that reads these as (state, source) describes the wrong operator,
                         # so the mode travels WITH the data instead of being assumed.
@@ -1855,17 +1758,6 @@ class MORPHTransformer(nn.Module):
                 f"MORPHConfig(fm=...) requires n_core == 0, got {cfg.n_core}. The FM "
                 "planner REPLACES the core loop; building both would leave two slot-state "
                 "producers in the model and use only one of them.")
-        if cfg.tul.tokens_through_core:
-            raise NotImplementedError(
-                "fm has no defined interaction with arm A2 (tokens_through_core): A2 runs "
-                "the core over every position and FM1 has no core. Raises rather than "
-                "silently picking a behaviour (the tul.gate precedent).")
-        if cfg.tul.sigreg_lambda > 0.0:
-            raise ValueError(
-                "tul.sigreg_lambda regularises the CORE's slot states, which FM1 does not "
-                "have — its slot states are DETACHED plans, so the term would have no "
-                "gradient path at all. Use fm.sigreg_lambda, which regularises the pooled "
-                "TARGETS (morph/model/tul_fm.py::fm_sigreg_loss).")
 
         from morph.model.fm_planner import FMPlanner
         fmc = cfg.fm
@@ -1903,7 +1795,7 @@ class MORPHTransformer(nn.Module):
               f"{1.0 + d * fmc.source_std ** 2:.1f}", flush=True)
 
     def _tul_fm_core(self, x: Tensor, layout: SlotLayout):
-        """FM1's replacement for :meth:`_tul_core`. Returns ``(xn, h_slots, y, geom)``.
+        """FM1's slot-state producer (no core loop). Returns ``(xn, h_slots, y, geom, h_ctx)``.
 
         1. ``xn = input_norm(prelude)`` — the SAME boundary norm the ``n_core == 0`` seed
            path applies, so the coda sees the carrier it always sees.
@@ -1958,19 +1850,15 @@ class MORPHTransformer(nn.Module):
     # Reached only when a `slot_layout` is passed. Every helper below is a no-op for
     # the plain path because the plain path never calls it.
 
-    def _tul_front(self, input_ids: Tensor, layout: SlotLayout,
-                   attn_kwargs: dict | None = None,
-                   ret_reset_mask: Tensor | None = None):
+    def _tul_front(self, input_ids: Tensor, layout: SlotLayout):
         """Embed + slot inputs + prelude over ALL positions (spec §3.2).
 
-        The slot's input embedding is ``E_slot + mean_j embed(t_j)`` over its span's
-        tokens, and its bigram / value-embed signals are the same bag-mean — this is
-        exactly the TST ``ve_bagged`` path with a data-dependent bag map (spec §3.2;
-        Dynamic Token Pooling mean-pool; BLT Eq. 5). The prelude itself is unchanged:
-        the slot's output is the in-context pooled span summary (BLT §3.2.2).
-
-        ``attn_kwargs`` / ``ret_reset_mask``: passed straight through to
-        :meth:`_front_tail` (docs/tul-tg-spec.md §§1-4).
+        The slot's input embedding is its seed (``TULSlots.slot_input``: the boundary tap
+        or the span bag-mean, per ``tul.slot_seed``), and its bigram / value-embed signals
+        are the span bag-mean — exactly the TST ``ve_bagged`` path with a data-dependent
+        bag map (spec §3.2; Dynamic Token Pooling mean-pool; BLT Eq. 5). The prelude
+        itself is unchanged: the slot's output is the in-context pooled span summary
+        (BLT §3.2.2).
         """
         tok_emb = self.tul.slot_input(self.embed(input_ids), layout, add_e_slot=True)
         x = self.embed_drop(tok_emb)
@@ -1984,524 +1872,8 @@ class MORPHTransformer(nn.Module):
                 layout, add_e_slot=False)
             for k in range(n_ve)
         ] if n_ve > 0 else None)
-        x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged,
-                                 attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
+        x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged)
         return x, x0, bigram_emb
-
-    def _sample_slot_depths(self, layout: SlotLayout, device) -> Tensor:
-        """``[B, max_slots]`` per-slot Poisson depth (spec §3.3 [W]).
-
-        Parcae samples one depth per SEQUENCE; TUL samples one per SLOT — claim C1 is
-        "depth per idea", so the depth must vary per idea. Eval is the deterministic
-        mean depth. Pad slots get depth 1 so they never inflate ``total_iters``; their
-        update is masked out regardless.
-        """
-        tc = self.cfg.tul
-        mean_d = tc.slot_mean_depth or self.cfg.mean_depth
-        max_d = tc.slot_max_depth or self.cfg.max_depth
-        shape = layout.slot_index.shape
-        if self.training:
-            d = torch.poisson(torch.full(shape, float(mean_d), device=device)).long()
-            d = d.clamp(min=1, max=max_d)
-        else:
-            d = torch.full(shape, int(mean_d), device=device, dtype=torch.long)
-        return torch.where(layout.slot_valid, d, torch.ones_like(d))
-
-    def _tul_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
-                  halt: bool = False):
-        """Gather slots → masked per-slot depth loop → looped states (spec §3.3).
-
-        Returns ``(xn, h_slots, depths, g_traj)``: ``xn = input_norm(prelude)`` for the
-        whole carrier (token positions keep it — the ``n_core == 0`` seed path, BLT
-        Eq. 9), ``h_slots`` ``[B, max_slots, …]`` the looped state of each slot, the
-        realised per-slot ``depths``, and — when the gate is built — ``g_traj``
-        ``[B, max_slots, T]``, the gate output after EVERY iteration
-        (docs/tul-gate-spec.md §4). ``g_traj`` is a RETURN VALUE, never a side channel:
-        the ``ret_capture`` lesson is that a side channel is not checkpoint-safe.
-
-        ``halt`` (arm ``TUL-halt``, gate §7) replaces the Poisson depth with the gate's
-        own stop decision — a slot loops until it asks for ``k ≥ 1`` token, capped at
-        ``slot_max_depth``. EVAL ONLY: §4 teacher-forces the depth during training, so
-        ``TUL-gate`` and ``TUL-halt`` are one training run scored twice, which makes the
-        comparison exactly paired.
-
-        Invariant 2 (runtime-invariants §6b): the depth is a MASKED UPDATE over the
-        full compact slot sequence, never a per-position gather. The active-set
-        shrinking of the token path is deliberately NOT used here — MORPH recomputes
-        K/V from the current carrier every iteration, so shrinking the sequence would
-        change what a frozen slot's keys are, and frozen slots must keep serving the
-        same K/V. The compact sequence is 9-19× shorter than the token stream, which
-        is what makes the lost shrink affordable (spec §3.3).
-        """
-        B, L = x.shape[0], x.shape[1]
-        np_, n_core = self.cfg.n_prelude, self.cfg.n_core
-        gidx, gvalid = layout.slot_index, layout.slot_valid
-
-        xn = self.input_norm(x)
-        e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
-
-        # ── n_core == 0: NO LOOP AT ALL (arm GL1, the gist baseline) ─────────
-        # .agents/notes/proposed/architecture/2026-08-29-gist-loop.md. The slot state IS
-        # the prelude's own output at the slot position, after the same boundary norm the
-        # coreless TOKEN path applies (`_core_region`'s n_core == 0 branch) — so a
-        # coreless TUL model is exactly a coreless baseline that happens to have slot
-        # positions, which is the growth invariant the seed path already depends on.
-        #
-        # Nothing is detached. Under `tg_restrict` the slot is the only route from an
-        # earlier span to a later one, so a later span's CE MUST backpropagate through
-        # this state into the boundary tap and the prelude. That gradient-carrying write
-        # is the arm's entire mechanism (gisting; TG paper Table 1: detaching the write
-        # costs 10x PPL), and there is no iterated map left for it to unroll — which is
-        # what makes it safe here and unsafe in every arm that kept the loop.
-        #
-        # Without this branch the code below raises "stack expects a non-empty
-        # TensorList" on the x0/bigram injection stack, because that stack has one entry
-        # per core layer. Verified before the branch existed.
-        if n_core == 0:
-            if halt:
-                raise RuntimeError(
-                    "halt=True needs a core loop to halt (docs/tul-gate-spec.md §7); "
-                    "n_core == 0 has no iterations to stop.")
-            if self.tul_gate is not None:
-                raise NotImplementedError(
-                    "tul.gate has no defined meaning at n_core == 0: §4 reads the span "
-                    "length off the core's per-iteration trajectory and there is no "
-                    "trajectory. Raises rather than silently emitting a one-step gate.")
-            depths = torch.zeros_like(gidx)
-            return xn, e, depths, None, None
-
-        _scse = self.scse           # Python-level constant → every branch below traces out
-        # ── DB-shaped loop (arm L3): detached carry, per-iteration local supervision ──
-        # See TULConfig.db_loop. A Python-level constant read once, so every branch on it
-        # below traces out and the db_loop=False graph is unchanged.
-        _db = bool(self.cfg.tul.db_loop)
-        if _db and _scse is not None:
-            raise NotImplementedError(
-                "tul.db_loop under SCSE is not defined: the carry is the DEVIATION and "
-                "detaching it detaches h* reconstruction. Build it when an arm needs it.")
-        with _prof("carrier::h_clone"):
-            if _scse is None:
-                h = self.core_init(e)
-                h_star = None
-            else:
-                # THE LOOP CARRIER IS THE DEVIATION (docs/scse-spec.md section 3.1). h* is
-                # built ONCE (S2); the absolute slot state is rebuilt at the return (S6).
-                # `gather_valid` zeroes pad slots, and both projections are bias-free, so a
-                # pad has h* = 0 AND Delta_0 = 0 exactly — invariant S8.
-                h_star, h = _scse.entry(e)
-        # Trajectory for the local losses: OUTER-graph states, one per iteration, returned
-        # (never a side channel — the g_traj / ret_capture lesson). _db_traj[0] is the seed
-        # state; entry t is the post-update state after iteration t-1.
-        _db_traj: list[Tensor] | None = [h] if _db else None
-
-        # Loop-invariant injection, built ON THE COMPACT SEQUENCE (the x0/bigram hoist
-        # of the token path, applied to 9-19× fewer positions). Value-embeds never fire
-        # in the core (gi ≥ n_prelude is not in _ve_layer_map), so input_ids is not needed.
-        # SCSE's core is source-free (spec D3), so the x0/bigram stack is never read — and
-        # building it anyway would cost n_core projections over the compact sequence per
-        # forward. `_inj_none` keeps the call signature below identical in both modes.
-        _inj_none = h.new_zeros(0)
-        if _scse is not None:
-            x0_s = bg_s = None
-            inj = _inj_none
-        else:
-            x0_s = gather_valid(x0, gidx, gvalid)
-            bg_s = gather_valid(bigram_emb, gidx, gvalid) if bigram_emb is not None else None
-            inj = torch.stack(
-                [self._build_injection_term(np_ + i, self.x0_injects[np_ + i].precompute(x0_s),
-                                            None, bg_s, h.dtype)
-                 for i in range(n_core)], dim=0)
-        # What the loop actually hands `_core_step`. Under SCSE the second argument carries
-        # the ANCHOR (read only when kappa > 0) and the third is unused.
-        _e_arg = h_star if _scse is not None else e
-        _inj_arg = _inj_none if _scse is not None else inj
-
-        if halt:
-            if self.tul_gate is None:
-                raise RuntimeError("halt=True needs a model built with tul.gate (§7)")
-            if self.training:
-                raise RuntimeError(
-                    "halt=True is EVAL ONLY (docs/tul-gate-spec.md §4: training "
-                    "teacher-forces the depth). Scoring a training step with the gate "
-                    "driving the depth would make the LM loss chase the gate's error.")
-            total_iters = self.cfg.tul.slot_max_depth or self.cfg.max_depth
-            alive = layout.slot_valid.clone()
-            depths = torch.zeros_like(layout.slot_index)
-        else:
-            depths = self._sample_slot_depths(layout, x.device)
-            total_iters = int(depths.max().item())
-        # db_loop: the truncated-BPTT window is meaningless (no gradient crosses an
-        # iteration boundary by construction), and a no_grad iteration would silently
-        # drop that iteration's LOCAL loss — so every iteration carries grad.
-        n_nograd = 0 if _db else max(0, total_iters - self.cfg.bptt_depth)
-        n_grad_iters = total_iters - n_nograd
-        _ck = self.cfg.ckpt_grad_iters
-        n_ckpt = n_grad_iters if _ck < 0 else max(0, min(_ck, n_grad_iters))
-
-        track_ret = (self._core_has_retention
-                         and self.cfg.retention_carry_mode == "acausal_final")
-        if track_ret:
-            _rh = self.cfg.retention_heads or self.cfg.n_heads
-            _rdh = self.cfg.d_model // _rh
-            ret_state = h.new_zeros(h.shape[0], _rh, _rdh, _rdh, dtype=torch.float32)
-        else:
-            ret_state = None
-
-        def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0, stage_cond=None):
-            if _scse is None:
-                return self._apply_core_step(h_in, e_in, None, None, None,
-                                             ret_state=ret_state, iter_idx=iter_idx,
-                                             inj_terms=inj_terms, stage_cond=stage_cond)
-            # ── SCSE, Eqs. 3-5 ──────────────────────────────────────────────────────
-            # `h_in` IS Delta_t; `e_in` carries h*. Signature unchanged so the three call
-            # sites (no_grad / checkpoint / eager) and the truncated-BPTT window they
-            # implement are untouched.
-            # `_rec` is bound once and handed to BOTH calls — see the twin in `_tul_core`.
-            _rec = _scse.recurrent_input(h_in, e_in)
-            g_out, new_ret = self._apply_core_step(
-                _rec, None, None, None, None,
-                ret_state=ret_state, iter_idx=iter_idx, inj_terms=None, source_free=True,
-                stage_cond=stage_cond)
-            return _scse.update(h_in, g_out, _rec), new_ret    # Eqs. 3-5
-
-        g_list: list[Tensor] = []
-        # ── Phase-1 onset probe (plan task 1.1) ───────────────────────────────
-        # The GLA cross-iteration carry is a SECOND recurrent loop inside the core loop
-        # and nothing watches it. Its forget gate is biased to alpha near 1
-        # (retention_gate_bias 2.0), so it can integrate without bound while the carrier
-        # norm stays flat and the loss stays flat. Collected on GPU per iteration and
-        # read once per step by the trainer, so there is no sync inside the loop.
-        # `_probe_loop` is a plain Python bool read at trace time: False (the default)
-        # traces the identical graph as before and costs nothing.
-        _probe = getattr(self, "_probe_loop", False)
-        _pr_ret: list[Tensor] = []
-        _pr_gain: list[Tensor] = []
-        _pr_bind: list[Tensor] = []
-        _pr_in: list[Tensor] = []
-        _pr_out: list[Tensor] = []
-        _pr_delta: list[Tensor] = []
-        # "iter" mode (faithful DiffusionBlocks, morph/model/iter_cond.py): every
-        # core-layer application in the T-loop gets an AdaLN-Zero signal for WHICH
-        # iteration it is. Python-level constant — `_iter_mode=False` (every model
-        # except a `core_stage_cond="iter"` build) makes `_sc` permanently None below
-        # and the loop is bit-identical to before this existed.
-        _iter_mode = self._core_stage_cond_mode == "iter"
-        for t in range(total_iters):
-            active = alive if halt else (depths > t)               # [B, S]
-            _sc = self.tul_stage_cond.stage_embed(iter_stage_value(t, x.device)) \
-                if _iter_mode else None
-            # ── Jacobian probe capture (morph/training/core_jacobian.py) ──────────
-            # `_jac_capture` is None by default, so this is a Python-level branch that
-            # traces out and costs nothing; the forward stays bit-identical. When a list
-            # is attached, the probe needs the EXACT operating point of one core step —
-            # the map f_theta is `_apply_core_step` bound to (e, inj, ret_state, t), and
-            # sigma_max of its Jacobian is only meaningful at the h the run actually
-            # reached. Detached: the probe rebuilds its own graph.
-            if self._jac_capture is not None:
-                self._jac_capture.append({
-                    "h": h.detach(), "e": _e_arg.detach(), "inj": _inj_arg.detach(),
-                    # Under SCSE "h" is the DEVIATION and "e" is the ANCHOR — see the twin
-                    # in `_core_region`. The mode travels with the data so no probe can read
-                    # these as (state, source) by accident.
-                    "scse": _scse is not None,
-                    "ret_state": None if ret_state is None else ret_state.detach(),
-                    # `active & slot_valid`, never `active` alone. A pad slot enters the
-                    # loop at h = 0 (gather_valid zeroes it) and depths is 1 there, so it is
-                    # "active" at t = 0 — and an RMSNorm at h = 0 has a Jacobian of order
-                    # 1/eps, which puts the top singular direction entirely in the pad
-                    # subspace and returns a sigma of ~1e6 that means nothing. Measured.
-                    "iter_idx": t, "active": (active & layout.slot_valid).detach(),
-                })
-            do_ckpt = self.training and (t - n_nograd) < n_ckpt
-            # db_loop: the CARRY is detached — iteration t's graph reaches the seed only
-            # through the live e/injection (ONE core application), never through h. The
-            # retention state is detached below for the same reason.
-            _h_in = h.detach() if _db else h
-            if t < n_nograd:
-                with torch.no_grad():
-                    h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
-                                               iter_idx=t, stage_cond=_sc)
-            elif do_ckpt:
-                h_new, rs_new = checkpoint(_core_step, _h_in, _e_arg, _inj_arg,
-                                           ret_state=ret_state, iter_idx=t, stage_cond=_sc,
-                                           use_reentrant=False)
-            else:
-                h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
-                                           iter_idx=t, stage_cond=_sc)
-
-            _tau = self.cfg.core_gain_clip
-            if _tau > 0.0 and self._clip_applies(t):
-                # PAD SLOTS ARE EXCLUDED from the norm. The gain clip is per SAMPLE, so a
-                # row's pad slots would otherwise put the number of REAL slots in that row
-                # into the scale applied to every real slot — padding would change the
-                # forward. Pads start at 0 (gather_valid) but the first core step moves
-                # them off zero, so zeroing here is not redundant. Dormant at the arms'
-                # core_gain_clip = 0.0; correct if it is ever turned on (reviewer).
-                _vm = layout.slot_valid.view(*layout.slot_valid.shape,
-                                             *([1] * (h.dim() - 2))).to(h.dtype)
-                _in_n = (h * _vm).flatten(1).norm(dim=1)
-                _out_n = (h_new * _vm).flatten(1).norm(dim=1)
-                _scale = torch.clamp(_tau * _in_n / (_out_n + 1e-6), max=1.0)
-                h_new = h_new * _scale.view(-1, *([1] * (h_new.dim() - 1)))
-                if _probe:
-                    # Fraction of samples the cap actually SHRANK at this iteration.
-                    # Where a clip is applied and where it acts are different questions.
-                    _pr_bind.append((_scale < 1.0).float().mean().detach())
-            elif _probe:
-                _pr_bind.append(h.new_zeros(()))
-
-            # ── GRT recurrence gate (Eq. 4 blend; morph/model/recur_gate.py) ───
-            # Part of the core MAP, so it must live under the SAME grad context as the
-            # step it blends: at a no_grad iteration the blend runs under no_grad too,
-            # or the gate MLP would accumulate gradient through iterations the
-            # truncated-BPTT window excludes. (Moot at the panel's full BPTT, exact
-            # anywhere else.) Placed BEFORE the halting readout and the loop probes so
-            # both see the state the loop actually carries. Inputs are h (pre-step
-            # state) and _e_arg (the prelude entry): STATE + PRELUDE only — the
-            # cond-zero constraint forbids the iteration index here.
-            if self.tul_recur_gate is not None:
-                if t < n_nograd:
-                    with torch.no_grad():
-                        g_r = self.tul_recur_gate(h, _e_arg)
-                        h_new = g_r * h + (1.0 - g_r) * h_new
-                else:
-                    g_r = self.tul_recur_gate(h, _e_arg)
-                    h_new = g_r * h + (1.0 - g_r) * h_new
-
-            # ── gate readout (docs/tul-gate-spec.md §4) ────────────────────────
-            # OUTSIDE the checkpoint / no_grad block on purpose: it then shapes the core
-            # state on exactly the iterations inside the truncated-BPTT window and is a
-            # pure readout on the frozen ones — the same window the token loss uses —
-            # while the head itself (w, b, norm.scale) is supervised on EVERY iteration.
-            # Read off h_new, not the masked h: for an active slot they are equal, and
-            # the halting policy below needs this iteration's fresh state.
-            if self.tul_gate is not None:
-                # Under SCSE `h_new` is the deviation; the halting head is a readout of the
-                # slot STATE, so it must see h* + Delta, not the deviation alone.
-                g_t = self.tul_gate.readout(
-                    (h_star + h_new) if _scse is not None else h_new)   # [B, S]
-                g_list.append(g_t)
-
-            if _probe:
-                with torch.no_grad():
-                    # Gain is measured on the ACTIVE slots only — a finished slot's state is
-                    # frozen, so including it would dilute the runaway we are looking for.
-                    _am = active.view(*active.shape, *([1] * (h.dim() - 2))).to(h.dtype)
-                    _hi = (h * _am).flatten(1).float().norm(dim=1)
-                    _ho = (h_new * _am).flatten(1).float().norm(dim=1)
-                    _pr_gain.append((_ho / (_hi + 1e-6)).max().detach())
-                    # SEPARATE the ratio's numerator from its denominator. A gain of 17 at
-                    # iteration 0 and 1.1 everywhere else has two readings that this ratio
-                    # alone cannot tell apart: the map amplifies more on its first
-                    # application, or ‖h_in‖ is smaller there because iteration 0's input is
-                    # input_norm(prelude) rather than a previous core output. Logging both
-                    # norms and the RELATIVE UPDATE ‖h_new − h‖/‖h‖ separates them —
-                    # delta_ratio is the size of what the core ADDS, independent of the
-                    # carrier's scale, so it is the term a residual stream actually controls.
-                    _pr_in.append(_hi.max().detach())
-                    _pr_out.append(_ho.max().detach())
-                    _pr_delta.append((((h_new - h) * _am).flatten(1).float().norm(dim=1)
-                                      / (_hi + 1e-6)).max().detach())
-                    _pr_ret.append((rs_new if (track_ret and rs_new is not None)
-                                    else h.new_zeros(())).float().norm().detach())
-
-            h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
-            if _db:
-                _db_traj.append(h)
-            if track_ret and rs_new is not None:
-                ret_state = rs_new.detach() if _db else rs_new
-
-            if halt:
-                # A slot that asks for k ≥ 1 token has finished thinking (§7/§8). Slots
-                # that never ask keep the cap, so the generator cannot hang.
-                stop = alive & (self.tul_gate.choose_k(g_t) >= 1)
-                depths = torch.where(stop, torch.full_like(depths, t + 1), depths)
-                alive = alive & ~stop
-                if not bool(alive.any()):
-                    break
-        if halt:
-            depths = torch.where(depths > 0, depths, torch.full_like(depths, total_iters))
-            depths = torch.where(layout.slot_valid, depths, torch.ones_like(depths))
-        if _probe:
-            # [T] each, still on GPU and detached. The trainer reads them once per step.
-            self._loop_probe = {
-                "core_gain": torch.stack(_pr_gain) if _pr_gain else None,
-                "ret_state_norm": torch.stack(_pr_ret) if _pr_ret else None,
-                "in_norm": torch.stack(_pr_in) if _pr_in else None,
-                "out_norm": torch.stack(_pr_out) if _pr_out else None,
-                "delta_ratio": torch.stack(_pr_delta) if _pr_delta else None,
-                "clip_bind": torch.stack(_pr_bind) if _pr_bind else None,
-            }
-        g_traj = torch.stack(g_list, dim=-1) if g_list else None   # [B, S, T]
-        if _scse is not None:
-            # Eq. 5 tail: h_T = h* + Delta_T (invariant S6). The deviation lives ONLY inside
-            # this function; `_forward_tul` scatters an absolute carrier exactly as today.
-            h = h_star + h
-        return xn, h, depths, g_traj, _db_traj
-
-    def _tul_db1_precheck(self, what: str) -> None:
-        """Shared guards for :meth:`_tul_core_db1` and :meth:`_tul_core_db1_ladder`.
-
-        Every raise here is a combination the mission left undefined rather than a bug:
-        no gate readout exists for a state produced by ONE (or K sigma-stepped)
-        conditioned application(s) instead of a T-iteration trajectory, SCSE's carry is
-        the DEVIATION (the same reason ``db_loop`` raises under SCSE), and
-        ``core_gain_clip`` governs the T-iteration carrier's growth — a single EDM-
-        preconditioned pass has no such carrier to clip.
-        """
-        if self._core_stage_cond_mode != "sigma":
-            raise RuntimeError(
-                f"{what} requires a model built with tul.core_stage_cond='sigma' "
-                f"(got {self._core_stage_cond_mode!r}).")
-        if self.scse is not None:
-            raise NotImplementedError(
-                f"{what} under SCSE is not defined: the carry is the DEVIATION and the "
-                f"EDM noising target here is the ABSOLUTE slot state (see db_loop's twin "
-                f"raise in _tul_core).")
-        if self.tul_gate is not None:
-            raise NotImplementedError(
-                f"{what} has no defined gate interaction: §4 reads the span length off "
-                f"the core's per-iteration trajectory and {what} builds no such "
-                f"trajectory (one — or K sigma-stepped — conditioned applications, not "
-                f"a T-iteration loop).")
-        if self.cfg.core_gain_clip > 0.0:
-            raise NotImplementedError(
-                f"{what} has no defined interaction with model.core_gain_clip: the clip "
-                f"governs the T-iteration carrier's realised growth, which {what} does "
-                f"not have (EDM preconditioning is the analogous control here). Set "
-                f"core_gain_clip=0.0.")
-
-    def _tul_core_db1(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout):
-        """ONE σ-conditioned core application — the faithful DiffusionBlocks training
-        step (arXiv 2506.14202 App. B "recurrent-depth architectures"; morph/model/
-        iter_cond.py). Replaces the T-iteration loop for ONE training step.
-
-        Design (flagged per the mission's request — every judgment call named):
-
-        * **The "clean" reference is the slot SEED state** ``h_0 = core_init(e)``, i.e.
-          exactly what ``_tul_core`` calls ``h`` before its first iteration — NOT a
-          separately-observed target. Unlike image diffusion (where ``y`` is the real
-          training example), MORPH's downstream task supplies supervision only through
-          the coda's CE/mux loss on the DECODED state, so there is no directly-observed
-          "clean state" to regress an L2 loss against; this mirrors MORPH's own prior
-          finding (``.agents/notes/rejected/feature/2026-08-21-diffusionblocks-
-          verdict.md`` "Post-audit addendum": a "ce" objective escapes L2 regression-
-          to-mean where an L2-to-embedding objective does not). ``h_0`` doubles as
-          BOTH the noised variable ``z`` (``z_σ = h_0 + σ·ε``) AND the clean
-          conditioning input ``x`` the paper's ``D_θ(z_σ, x, σ)`` reads through the
-          UNCHANGED ``DiagonalInjection``/x0-injection path — the same split
-          ``_tul_core`` already makes between its evolving carry ``h`` and its
-          loop-invariant source ``e``.
-        * **σ is sampled per BATCH SAMPLE, not per slot.** The mission text says "per
-          slot"; TUL's ``[B, S, n, C]`` carrier would support a per-(B,S) σ, but this
-          v1 samples ``[B]`` (broadcast over every slot in a row) — the paper itself
-          never conditions sub-batch, and per-slot σ raises open questions (would a
-          slot's OWN depth/Poisson draw also need to correlate with its σ range?) that
-          are unmeasured. Flagged, not resolved.
-        * **The core layer stack runs EXACTLY ONCE** — one ``_apply_core_step`` call,
-          not a T-iteration loop — which is the entire point (paper: "reducing
-          computational cost by factor K").
-        * Downstream (coda, mux/CE loss) is UNCHANGED: the returned ``h`` lands exactly
-          where ``_tul_core``'s ``h_slots`` does today, so ``_forward_tul``'s existing
-          ``elif db_traj is None:`` branch supervises it with the SAME weighted-CE /
-          mux machinery every other arm uses — no new loss code (mission spec).
-        """
-        self._tul_db1_precheck("tul_step_mode='db1'")
-        np_, n_core = self.cfg.n_prelude, self.cfg.n_core
-        gidx, gvalid = layout.slot_index, layout.slot_valid
-
-        xn = self.input_norm(x)
-        e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
-        h0 = self.core_init(e)                                        # the "clean" seed
-
-        B = x.shape[0]
-        sampler = self._db1_sampler
-        sigma = sampler.sample(B, device=h0.device)                   # [B]
-        eps = torch.randn(h0.shape, device=h0.device, dtype=torch.float32)
-        _bview = sigma.view(-1, *([1] * (h0.dim() - 1)))
-        z_sigma = h0.float() + _bview * eps
-
-        c_skip, c_out, c_in, c_noise = sampler.precond.coeffs(sigma)
-        _cs = c_skip.view(-1, *([1] * (h0.dim() - 1)))
-        _co = c_out.view(-1, *([1] * (h0.dim() - 1)))
-        _ci = c_in.view(-1, *([1] * (h0.dim() - 1)))
-        net_in = (_ci * z_sigma).to(h0.dtype)
-
-        x0_s = gather_valid(x0, gidx, gvalid)
-        bg_s = gather_valid(bigram_emb, gidx, gvalid) if bigram_emb is not None else None
-        inj = torch.stack(
-            [self._build_injection_term(np_ + i, self.x0_injects[np_ + i].precompute(x0_s),
-                                        None, bg_s, net_in.dtype)
-             for i in range(n_core)], dim=0)
-
-        stage_cond = self.tul_stage_cond.stage_embed(c_noise)         # [B, cond_dim]
-        f_out, _ = self._apply_core_step(net_in, e, None, None, None,
-                                         ret_state=None, iter_idx=0, inj_terms=inj,
-                                         stage_cond=stage_cond)
-        h = (_cs * z_sigma + _co * f_out.float()).to(h0.dtype)
-        depths = torch.ones_like(gidx)     # metric only — ONE conditioned application
-        return xn, h, depths, None, None
-
-    def _tul_core_db1_ladder(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
-                             k_steps: int | None = None):
-        """K conditioned applications, σ stepping σ_max → σ_min — the eval/inference
-        counterpart of :meth:`_tul_core_db1` (paper App. B: "maintaining the original
-        K-iteration inference procedure").
-
-        Judgment call (flagged): the ladder's INITIAL noised state uses the SAME
-        ``z_σ = h_0 + σ·ε`` construction training used (at ``σ = σ_max``), rather than
-        pure noise with no seed signal (the paper's literal image-generation Eq. 5
-        ``z_0 = σ_max·ε``). TUL's seed already carries real per-span content the model
-        must condition on; discarding it at eval would create a train/eval σ_max
-        mismatch (training never sees a σ_max sample with the seed's signal entirely
-        absent) as well as throwing away the one input inference actually has. The
-        noise draw uses a FIXED generator (seed 0) so the ladder is deterministic
-        (mission spec / test (d)) rather than reading the ambient RNG stream.
-        """
-        self._tul_db1_precheck("the db1 Euler-ladder eval")
-        np_, n_core = self.cfg.n_prelude, self.cfg.n_core
-        gidx, gvalid = layout.slot_index, layout.slot_valid
-
-        xn = self.input_norm(x)
-        e = gather_valid(xn, gidx, gvalid)
-        h0 = self.core_init(e)
-        B = x.shape[0]
-
-        sampler = self._db1_sampler
-        K = int(k_steps or self.cfg.tul.db1_ladder_steps or self.cfg.mean_depth)
-        sigmas = sampler.ladder(K)                                     # [K] descending
-
-        gen = torch.Generator(device="cpu" if h0.device.type == "mps" else h0.device)
-        gen.manual_seed(0)
-        eps = torch.randn(h0.shape, device=h0.device, dtype=torch.float32, generator=gen)
-        z = h0.float() + float(sigmas[0]) * eps
-
-        x0_s = gather_valid(x0, gidx, gvalid)
-        bg_s = gather_valid(bigram_emb, gidx, gvalid) if bigram_emb is not None else None
-        inj = torch.stack(
-            [self._build_injection_term(np_ + i, self.x0_injects[np_ + i].precompute(x0_s),
-                                        None, bg_s, h0.dtype)
-             for i in range(n_core)], dim=0)
-
-        d_hat = None
-        for k in range(K):
-            s = sigmas[k].to(h0.device).expand(B)
-            c_skip, c_out, c_in, c_noise = sampler.precond.coeffs(s)
-            _cs = c_skip.view(-1, *([1] * (h0.dim() - 1)))
-            _co = c_out.view(-1, *([1] * (h0.dim() - 1)))
-            _ci = c_in.view(-1, *([1] * (h0.dim() - 1)))
-            net_in = (_ci * z).to(h0.dtype)
-            stage_cond = self.tul_stage_cond.stage_embed(c_noise)
-            f_out, _ = self._apply_core_step(net_in, e, None, None, None,
-                                             ret_state=None, iter_idx=k, inj_terms=inj,
-                                             stage_cond=stage_cond)
-            d_hat = _cs * z + _co * f_out.float()
-            if k < K - 1:
-                next_s = sigmas[k + 1].to(h0.device).expand(B)
-                z = euler_step(z, d_hat, s, next_s)
-        h = d_hat.to(h0.dtype)
-        depths = torch.full_like(gidx, K)
-        return xn, h, depths, None, None
 
     def _tul_half_weights(self, labels: Tensor, layout: SlotLayout):
         """``([N] row weights, t_last index, emit index)`` for the §5 double label.
@@ -2528,143 +1900,7 @@ class MORPHTransformer(nn.Module):
         w[z_idx] = self.cfg.tul.emit_weight
         return w[:BL], p_idx, z_idx
 
-    @staticmethod
-    def _mux_reference_terms(pos_valid: Tensor, alpha: Tensor, tgt_slot: Tensor,
-                             safe_ids: Tensor, n_sup: Tensor, S: int,
-                             vocab: int) -> tuple[float, float]:
-        """``(H(target), CE(target, marginal))`` — the two reference points for mux_rel.
-
-        Neither needs the model: both are pure functions of the multiplexed targets, so
-        the honesty null costs one extra pass over ``[B, L]`` and NOT a second
-        ``[B, S, V]`` forward.
-
-        H(target) uses the identity ``H = -sum_j alpha_j log m_{v(j)}`` where ``m_v`` is
-        the AGGREGATED mass of vocab item ``v`` in that span. Aggregation matters: Eq. 2
-        sums one-hots, so a subword appearing twice in a span carries the sum of its two
-        alphas, and ``-sum_j alpha_j log alpha_j`` would be a different (larger) number.
-        The aggregation is done with a compact ``unique`` over ``(row, slot, token)``
-        keys rather than a dense ``[B, S, V]`` buffer.
-
-        The null predictor is the batch MARGINAL ``pbar = mean_i target_i`` — the
-        unigram baseline. It is strictly tighter than uniform (a test asserts it) and,
-        unlike a batch-mean of the MODEL's predictions, it does not move as the model
-        trains, so ``mux_rel`` is a stationary reference rather than a moving one.
-        """
-        m = pos_valid.reshape(-1)
-        if not bool(m.any()):
-            return 0.0, 0.0
-        a = alpha.reshape(-1)[m].double()
-        ids = safe_ids.reshape(-1)[m]
-        B = pos_valid.shape[0]
-        row = (torch.arange(B, device=alpha.device)
-               .unsqueeze(1).expand_as(pos_valid).reshape(-1)[m])
-        key = (row * S + tgt_slot.reshape(-1)[m]) * vocab + ids
-        _u, inv = torch.unique(key, return_inverse=True)
-        mass = torch.zeros(int(inv.max()) + 1, device=a.device, dtype=a.dtype)
-        mass.scatter_add_(0, inv, a)
-        ent = -(a * mass[inv].clamp_min(1e-30).log()).sum() / n_sup
-
-        pbar = torch.zeros(vocab, device=a.device, dtype=a.dtype)
-        pbar.scatter_add_(0, ids, a)
-        pbar = pbar / n_sup.double()
-        ce_null = -(a * pbar[ids].clamp_min(1e-30).log()).sum() / n_sup
-        return float(ent), float(ce_null)
-
-    def _tul_mux_loss(self, h_slots: Tensor, input_ids: Tensor,
-                      layout: SlotLayout, stats: dict | None = None,
-                      slot_keep: Tensor | None = None) -> Tensor:
-        """MUX local head (arXiv 2607.18264): weighted CE of each slot's NEXT span.
-
-        The slot's post-core state is read out through the model's OWN LM-head path
-        (``_readout`` → unembedding) — zero new parameters — and trained toward the
-        geometric superposition of its next span's tokens. The KL to that target
-        equals this weighted CE up to the target's (constant) entropy, and the
-        dense ``|V|`` target is never materialised: the loss gathers log-probs at
-        the span's own token ids only (``mux_span_targets``).
-
-        Why this exists: the plan's only direct supervision was ``ce_emit``, a
-        one-token race the free token path wins (the 2026-08-25 pivot). This head
-        gives z span-level content gradient that does not route through the coda's
-        suppressed readout, and MUX Prop 16 shows a low local loss also protects
-        the answer-side routing TO the latents. Reads h_slots BEFORE the gate's
-        budget conditioning — the plan is supervised, not the budget arithmetic.
-
-        Cost: logits over slots only, ``[B, S, V]`` fp32 ≈ 75 MB at B=6, S=64 —
-        ~24x smaller than one row of full-sequence logits (why fused CE exists).
-        """
-        tc = self.cfg.tul
-        z = self._readout(h_slots)                            # [B, S, C]
-        # `lm_weight()` is WEIGHT-TIED to the input embeddings, so an undetached
-        # head trains the embedding table on the auxiliary target — see
-        # TULConfig.mux_detach_head for the measured consequence. Python-level
-        # constant: the branch traces out, no runtime flag in the graph.
-        w_head = self.embed.lm_weight()                       # [V, C]
-        if tc.mux_detach_head:
-            w_head = w_head.detach()
-        logits = (z @ w_head.t()).float() / tc.mux_tau        # fp32: stable log_softmax
-        logits = logits.index_fill(
-            -1, torch.tensor([tc.slot_id], device=logits.device), float("-inf"))
-        logp = torch.log_softmax(logits, dim=-1)              # [B, S, V]
-        pos_valid, alpha, tgt_slot, sup = mux_span_targets(
-            input_ids, layout, tc.mux_rho, target=tc.mux_target)
-        if slot_keep is not None:
-            # db_loop: supervise only the slots whose state is FRESH at this iteration
-            # (depths ≥ t). A frozen slot's state equals its final one; supervising it
-            # again at every later iteration would over-weight shallow slots. [B, S] bool,
-            # ANDed into both the per-position weights and the normaliser.
-            sup = sup & slot_keep
-            keep_pos = slot_keep.gather(1, tgt_slot)          # [B, L]
-            pos_valid = pos_valid & keep_pos
-        B = input_ids.shape[0]
-        V = logp.shape[-1]
-        # logp[b, tgt_slot[b,p], input_ids[b,p]] without a [B, L, V] gather.
-        # Invalid positions gather id 0, NOT their own id: a slot position's own id
-        # is slot_id, whose logp is the masked -inf, and 0 * -inf = NaN (caught by
-        # test_mux_loss_decomposes_as_ce_plus_weighted_term before it ever ran).
-        safe_ids = torch.where(pos_valid, input_ids, torch.zeros_like(input_ids))
-        lp = logp.reshape(B, -1).gather(1, tgt_slot * V + safe_ids)    # [B, L]
-        ce = -torch.where(pos_valid, alpha * lp, torch.zeros_like(lp)).sum()
-        n_sup = sup.sum().to(ce.dtype).clamp(min=1.0)
-        loss = ce / n_sup
-        if stats is not None:
-            # THE HONESTY NULL, the fm_rel shape. The optimised quantity is the weighted
-            # CE, which equals the paper's Eq. 4 KL up to the target's entropy — a
-            # constant in the parameters, so the GRADIENT is the paper's exactly. But a
-            # CE that only ever falls to the target entropy looks like progress it is
-            # not, so report all three: the KL (0 at a perfect predictor), the entropy
-            # floor, and mux_rel against a null predictor that knows only the corpus
-            # marginal. mux_rel == 1.0 exactly at that predictor (tested).
-            with torch.no_grad():
-                ent, ce_null = self._mux_reference_terms(
-                    pos_valid, alpha, tgt_slot, safe_ids, n_sup,
-                    layout.slot_index.shape[1], V)
-            stats["mux_ce"] = float(loss.detach())
-            stats["mux_entropy"] = ent
-            stats["mux_kl"] = float(loss.detach()) - ent
-            stats["mux_null"] = ce_null
-            stats["mux_rel"] = float(loss.detach()) / max(ce_null, 1e-12)
-            stats["mux_n_supervised"] = float(n_sup)
-        return loss
-
-    def _tul_sigreg_loss(self, h_slots: Tensor, layout: SlotLayout) -> Tensor:
-        """SIGReg over the VALID slot states (LeJEPA; see morph/model/sigreg.py).
-
-        Reads the same post-core plan state the MUX head reads, through the
-        model's own readout, and pushes the distribution of those states toward
-        an isotropic standard Gaussian. Pad slots are excluded — they are a
-        fixed-shape artefact, and including them would let the regulariser
-        "fix" the distribution by moving vectors that mean nothing.
-
-        Applied to the plan states rather than to token states on purpose: the
-        collapse this targets was measured THERE (effective rank 1.7-4.8, mean
-        pairwise cosine +0.39..+0.71).
-        """
-        z = self._readout(h_slots)                          # [B, S, C]
-        valid = layout.slot_valid.reshape(-1)               # [B*S]
-        z = z.reshape(-1, z.shape[-1])[valid]               # [N_valid, C]
-        return sigreg_epps_pulley(z, num_slices=self.cfg.tul.sigreg_slices)
-
-    def _tul_group_losses(self, x: Tensor, labels: Tensor, layout: SlotLayout | None,
+    def _tul_group_losses(self, x: Tensor, labels: Tensor, layout: SlotLayout,
                           want_groups: bool = True) -> dict:
         """Training loss (ONE weighted CE) plus, at eval, the §7.2 metric breakdown.
 
@@ -2679,9 +1915,6 @@ class MORPHTransformer(nn.Module):
         computed only when ``want_groups`` (eval), where there is no backward graph to
         retain, and they carry no training signal that the weighted call does not
         already carry.
-
-        ``layout=None`` (arm A4 / the plan-nats gather, where slots are not in the
-        sequence at all) → a plain unweighted CE over the token positions.
         """
         B, L, C = x.shape
         w_head = self.embed.lm_weight()
@@ -2690,12 +1923,6 @@ class MORPHTransformer(nn.Module):
         flat = x.reshape(-1, C)
         lab = labels.reshape(-1)
         BL = flat.shape[0]
-
-        if layout is None:
-            ce = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
-                                            chunk_size=chunk, mask_token_id=mask_id)
-            return {"loss": ce, "ce_main": ce, "ce_tokens": ce,
-                    "n_targets": (lab != -100).sum().to(ce.dtype)}
 
         row_w, p_idx, z_idx = self._tul_half_weights(labels, layout)
         loss = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
@@ -2729,260 +1956,65 @@ class MORPHTransformer(nn.Module):
         return out
 
     def _forward_tul(self, input_ids: Tensor, labels: Tensor | None,
-                     layout: SlotLayout, plan_nats: bool, halt: bool = False,
-                     plan_mode: str = "normal",
-                     tul_step_mode: str | None = None) -> dict:
-        """The TUL forward (docs/tul-spec.md §3). One shared position axis.
+                     layout: SlotLayout, plan_mode: str = "normal") -> dict:
+        """The TUL forward (docs/tul-spec.md §3, docs/tul-paid-loop-recipe.md).
 
-        ``tul_step_mode`` (faithful DiffusionBlocks, morph/model/iter_cond.py) is a
-        per-forward DATA argument, the ``slot_layout`` pattern: ``None`` (default) is
-        BIT-IDENTICAL to before this parameter existed. ``"db1"`` selects the one-pass
-        training step (:meth:`_tul_core_db1`) in place of the T-iteration loop; it is
-        a TRAINING-time selector only — at eval (``not self.training``) a model built
-        with ``tul.core_stage_cond="sigma"`` runs the deterministic Euler-ladder
-        (:meth:`_tul_core_db1_ladder`) unless ``tul_step_mode='bptt'`` explicitly opts
-        into the plain ``_tul_core`` loop (the forced-depth sweep's path), matching the
-        paper's "trained single-pass, sampled with the original K-iteration procedure".
+        ONE shared position axis. Tokens and slots are ordinary positions of one
+        sequence: the prelude runs over all of them (:meth:`_tul_front`), the SAME
+        per-sample core loop :meth:`_core_region` runs over all of them — the PAID loop,
+        the only arm whose loop earned depth — and the coda reads the looped carrier at
+        every position. Nothing is gathered, projected or scattered; the slot differs
+        from a token only by its input seed, by having no label of its own at the
+        prefix positions, and by the ``slot_id`` logit being masked at the head.
+
+        With an FM planner (``cfg.fm``, ``n_core == 0``) the planner's plans are
+        projected into the slot's ``prefix_k`` positions through ``W_prefix`` instead
+        (the planner is the one remaining consumer of that parameter). ``plan_mode`` is
+        that branch's eval-only ablation (``zero`` / ``shuffle``); the paid loop RAISES
+        on anything but ``normal`` rather than silently ignoring it — a
+        ``val/plan_worth_*`` that is identically 0 by construction is worse than none.
         """
         if self.tul is None:
             raise RuntimeError(
                 "forward(slot_layout=...) requires a model built with MORPHConfig(tul=...); "
-                "this model has no TUL parameters (E_slot / E_mask / W_prefix)."
+                "this model has no TUL parameters (E_slot / E_mask / W_sent)."
             )
         tc = self.cfg.tul
-        if tul_step_mode not in (None, "bptt", "db1"):
-            raise ValueError(
-                f"tul_step_mode must be one of None, 'bptt', 'db1', got {tul_step_mode!r}")
-        if tul_step_mode == "db1":
-            if tc.tokens_through_core:
-                raise NotImplementedError(
-                    "tul_step_mode='db1' has no defined interaction with "
-                    "tul.tokens_through_core (A2): A2 takes an earlier branch in "
-                    "_forward_tul that never reaches the db1 core — a silent ignore, "
-                    "so this raises instead.")
-            if self.fm_planner is not None:
-                raise NotImplementedError(
-                    "tul_step_mode='db1' has no defined interaction with an FM planner "
-                    "(tul.fm): the FM branch takes an earlier branch in _forward_tul "
-                    "that never reaches the db1 core — a silent ignore, so this raises "
-                    "instead.")
-            if halt:
-                raise NotImplementedError(
-                    "tul_step_mode='db1' is a TRAINING step; halt=True is EVAL-only "
-                    "(docs/tul-gate-spec.md §7) and the two have no defined interaction.")
-        if halt and self._core_stage_cond_mode == "sigma":
-            raise NotImplementedError(
-                "halt=True (arm TUL-halt) has no defined interaction with "
-                "tul.core_stage_cond='sigma': eval on a sigma-conditioned model runs the "
-                "deterministic Euler ladder, which drives no gate and reads no halting "
-                "decision.")
         if layout.prefix_k != tc.prefix_k:
             raise ValueError(f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
         B, L = input_ids.shape
-        if tc.coda_token_cut >= L:
-            raise ValueError(
-                f"tul.coda_token_cut={tc.coda_token_cut} >= seq_len {L} "
-                f"(.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md): every token position would be "
-                f"dropped from the coda, leaving nothing to predict. Lower the cut."
-            )
 
-        # ── TG restriction (docs/tul-tg-spec.md §§1-4) — built ONCE per forward ────
-        # tg_attn_kwargs feeds the window branch's extra_mask (tg_allow) and the
-        # compressed branch's slot mask; tg_reset feeds the GLA segment reset. Both
-        # None on a tg_restrict=false model (bit-identical, spec T4).
-        tg_attn_kwargs = tg_reset = None
-        if self._tg_restrict:
-            tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span)
-            tg_attn_kwargs = {"tg_allow": tg_allow, "tg_slot_mask": layout.slot_mask}
-            tg_reset = tg_reset_mask(layout)
+        x, x0, bigram_emb = self._tul_front(input_ids, layout)
 
-        x, x0, bigram_emb = self._tul_front(input_ids, layout,
-                                            attn_kwargs=tg_attn_kwargs,
-                                            ret_reset_mask=tg_reset)
-
-        if tc.gate is not None and tc.tokens_through_core:
-            raise NotImplementedError(
-                "tul.gate has no defined interaction with arm A2 (tokens_through_core): "
-                "A2 has no per-slot looped state to read a length off. Not specified, so "
-                "this raises rather than silently picking a behaviour.")
-        if tc.sigreg_lambda > 0.0 and tc.tokens_through_core:
-            raise NotImplementedError(
-                "tul.sigreg_lambda has no defined interaction with arm A2 "
-                "(tokens_through_core): A2 has no per-slot looped state to "
-                "regularise. Raises rather than silently picking a behaviour.")
-        if tc.mux_beta > 0.0 and tc.tokens_through_core:
-            raise NotImplementedError(
-                "tul.mux_beta has no defined interaction with arm A2 (tokens_through_core): "
-                "A2 has no per-slot looped state to read a plan off. Raises rather than "
-                "silently picking a behaviour (the tul.gate precedent).")
-        if self._tg_restrict and tc.tokens_through_core:
-            raise NotImplementedError(
-                "tul.tg_restrict has no defined interaction with arm A2 "
-                "(tokens_through_core): docs/tul-tg-spec.md's mental model is 'core loop "
-                "on slots only, the one channel to the past' — A2 runs the core over "
-                "every position instead. Not specified, so this raises rather than "
-                "silently picking a behaviour (the tul.gate precedent).")
-        if tc.tokens_through_core:
-            # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
-            # RESOLVED SPEC AMBIGUITY — §7.1's A2 row says "Poisson/slot" in the depth
-            # column but "uniform depth" in the isolates column. A2 must differ from A0 by
-            # the presence of slots ALONE (it isolates C2), so it reuses today's core
-            # region unchanged; a per-position Poisson depth would change two things at once.
-            x_coda = self._core_region(x, x0, bigram_emb, input_ids)
-            depths, g_traj, mux_loss, sigreg_loss = None, None, None, None
-            fm_y = fm_geom = fm_ctx = None
-            mux_stats = {}
-        elif self.fm_planner is not None:
+        fm_y = fm_geom = fm_ctx = None
+        if self.fm_planner is not None:
             # FM1 (morph/model/tul_fm.py). The planner replaces the core loop; the plan
             # is DETACHED before it reaches W_prefix, so the coda's CE never touches the
             # ladder and there is no BPTT through an iterated map.
             xn, h_slots, fm_y, fm_geom, fm_ctx = self._tul_fm_core(x, layout)
-            depths, g_traj, mux_loss, sigreg_loss = None, None, None, None
-            mux_stats = {}
             h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
             x_coda = scatter_positions(xn, pos, values)
         else:
-            fm_y = fm_geom = fm_ctx = None
-            # ── faithful DiffusionBlocks dispatch (morph/model/iter_cond.py) ────────
-            # "db1" is a TRAINING selector; the Euler ladder auto-fires at eval on a
-            # sigma-conditioned model regardless of tul_step_mode (docstring above).
-            # Both are scoped to THIS branch only — the tokens_through_core/fm_planner
-            # branches above already raise on tul_step_mode="db1" rather than silently
-            # ignoring it (see the guards at the top of this function).
-            if tul_step_mode == "db1":
-                xn, h_slots, depths, g_traj, db_traj = self._tul_core_db1(
-                    x, x0, bigram_emb, layout)
-            elif (not self.training and self._core_stage_cond_mode == "sigma"
-                  and tul_step_mode != "bptt"):
-                # An explicit "bptt" at eval opts OUT of the auto-ladder and runs the
-                # plain _tul_core loop (conditioning unused) — this is what the bptt
-                # half of a step_mix arm trains, and the forced-depth sweep needs to
-                # measure it separately from the sigma/Euler path.
-                xn, h_slots, depths, g_traj, db_traj = self._tul_core_db1_ladder(
-                    x, x0, bigram_emb, layout)
-            else:
-                xn, h_slots, depths, g_traj, db_traj = self._tul_core(x, x0, bigram_emb,
-                                                                      layout, halt=halt)
-            mux_stats: dict = {}
-            if tc.mux_beta <= 0.0:
-                mux_loss = None
-            elif db_traj is None:
-                mux_loss = self._tul_mux_loss(h_slots, input_ids, layout, stats=mux_stats)
-            else:
-                # ── db_loop local losses ──────────────────────────────────────────
-                # Evenly spaced supervised iterations, always including the seed (t=0)
-                # and the final state; each state's grad reaches core application t and
-                # the live seed injection ONLY (the carry is detached in _tul_core).
-                # Weights sum to 1 so mux_beta means the same thing as in gl1b; stats
-                # come from the FINAL state so mux_rel stays comparable across arms.
-                T_states = len(db_traj)                                  # T+1 entries
-                n_pick = max(2, min(tc.db_mux_iters, T_states))
-                idxs = sorted({round(i * (T_states - 1) / (n_pick - 1))
-                               for i in range(n_pick)})
-                terms = []
-                for t_i in idxs:
-                    # Seed and FINAL states supervise every valid slot (a frozen slot's
-                    # final state keeps its graph through the where-carry, so the grad
-                    # still reaches that slot's last application). Intermediate picks
-                    # supervise only slots still fresh at that iteration.
-                    keep = None if t_i in (0, idxs[-1]) else (depths >= t_i)
-                    st = mux_stats if t_i == idxs[-1] else None
-                    terms.append(self._tul_mux_loss(db_traj[t_i], input_ids, layout,
-                                                    stats=st, slot_keep=keep))
-                mux_loss = torch.stack(terms).mean()
-                mux_stats["mux_db_n_iters"] = float(len(idxs))
-            sigreg_loss = (self._tul_sigreg_loss(h_slots, layout)
-                           if tc.sigreg_lambda > 0.0 else None)
-            if self.tul_gate is not None:
-                budget_ids = self._tul_budget_ids(layout, depths, g_traj)
-                h_slots = self.tul_gate.apply_budget(h_slots, budget_ids)
-            # Same eval-only ablation the FM branch takes, applied at the same seam.
-            # `normal` returns its input unchanged, so the training forward is
-            # bit-identical to a model with no ablation code at all.
-            h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
-            values, pos = self.tul.prefix_project(h_slots, layout, L)
-            x_coda = scatter_positions(xn, pos, values)
+            if plan_mode != "normal":
+                raise ValueError(
+                    f"plan_mode={plan_mode!r} is an FM-planner ablation: the paid loop has "
+                    f"no separate plan tensor to zero or shuffle (the slot IS a looped "
+                    f"position). Raises rather than reporting a zero-by-construction "
+                    f"plan_worth.")
+            # The paid loop: the ordinary per-sample core over the whole packed row.
+            # Tail-pad slot positions (slot_mask at the dump bin) carry E_slot alone and no
+            # label; they are looped like every other position but excluded from the
+            # Jacobian probe's active set (a [B, L] mask, read only under capture).
+            pad_pos = layout.slot_mask & (layout.bag_id == layout.max_slots)
+            x_coda = self._core_region(x, x0, bigram_emb, input_ids, jac_active=~pad_pos)
 
         x_coda, keep = self.tul.apply_token_dropout(x_coda, layout, self.training)
+        xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep)
+        groups = (self._tul_group_losses(xh, labels, layout, want_groups=not self.training)
+                  if labels is not None else None)
 
         out: dict = {"logits": None}
-        if tc.coda_sees_slots and tc.coda_token_cut == 0:
-            xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
-                                   attn_kwargs=tg_attn_kwargs, ret_reset_mask=tg_reset)
-            groups = (self._tul_group_losses(xh, labels, layout, want_groups=not self.training)
-                      if labels is not None else None)
-            coda_positions = L
-        else:
-            # Arm A4 (coda_sees_slots=False) and/or arm CW (coda_token_cut>0, spec
-            # .agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md) — ONE gather whose drop_mask is the
-            # union of "every slot" and "every token below the cut". coda_token_cut=0
-            # never reaches this branch when coda_sees_slots is True (checked above), so
-            # the pre-CW A4 path is untouched when CW is off.
-            if self._tg_restrict:
-                raise NotImplementedError(
-                    "tul.tg_restrict has no defined interaction with coda_sees_slots=False "
-                    "or coda_token_cut>0: the coda then runs on a GATHERED subset of "
-                    "positions, and neither tg_allow nor the GLA reset mask is re-derived "
-                    "for that index space (docs/tul-tg-spec.md does not specify it). Not "
-                    "run by the TG arms (tul_a1's coda_sees_slots=true, coda_token_cut=0); "
-                    "raises rather than silently building an unrestricted or mis-masked "
-                    "coda pass.")
-            drop_mask = self._tul_coda_drop_mask(layout, tc)
-            # CW keeps slots in the gathered sequence, and _tul_coda_gather scores a
-            # PLAIN CE (layout=None) over everything it keeps — so the slot emit labels
-            # (label = next span's first token) must be masked here or CW training
-            # silently reinstates the emit loss at weight 1.0 and double-counts every
-            # span's first token. The eval screen (tul_forward_cw_arms) already scores
-            # token positions only; this makes training match it. A no-op for arm A4,
-            # whose drop_mask removes the slot positions themselves.
-            labels_g = labels
-            if labels is not None and tc.coda_sees_slots:
-                labels_g = torch.where(layout.slot_mask,
-                                       torch.full_like(labels, -100), labels)
-            xh, groups, coda_positions = self._tul_coda_gather(
-                x_coda, x0, bigram_emb, keep, labels_g, layout, drop_mask)
-        if plan_nats and labels is not None:
-            # §7.2: CE over the same tokens with the slots removed from the coda sequence.
-            # Reported MINUS the normal token CE; a positive value is the plan actually
-            # being used (the h_z-ablation, the C2 number). Only when the normal pass IS
-            # ALREADY exactly the slots-removed pass (A4 with coda_token_cut=0) can it be
-            # reused — arm CW's normal pass also removes early tokens, a different
-            # ablation, so it must be recomputed fresh from x_coda in that case too.
-            if self._tg_restrict:
-                raise NotImplementedError(
-                    "plan_nats (§7.2) has no defined interaction with tg_restrict: it "
-                    "removes every slot position from the coda's gathered sequence — "
-                    "exactly the channel tg_restrict forces context through — and "
-                    "docs/tul-tg-spec.md does not specify the resulting mask. The TG "
-                    "arms' pre-registration "
-                    "(lab/experiments/planned/2026-08-27-tg-restriction.md) reports plan "
-                    "worth as 'enormous by construction, decides nothing' and does not "
-                    "require this path.")
-            if tc.coda_sees_slots or tc.coda_token_cut > 0:
-                _xh, g_pn, _ = self._tul_coda_without_slots(
-                    x_coda, x0, bigram_emb, keep, labels, layout)
-                out["ce_tokens_no_slots"] = g_pn["ce_main"]
-            else:
-                out["ce_tokens_no_slots"] = groups["ce_main"]
-
-        if self.tul_gate is not None and g_traj is not None:
-            # `depths` here is the REALISED depth per slot — the Poisson draw in training
-            # and at fixed-depth eval, the gate's own stop index under `halt`. §6's target
-            # is defined against that, so the halting arm is scored on what it actually did.
-            _g = self.tul_gate.loss(g_traj, depths, layout) if layout.span_len is not None \
-                else {}
-            for _k, _v in _g.items():
-                out[f"gate/{_k}"] = _v
-            # The realised depth: the Poisson draw at fixed depth, the gate's own stop
-            # index under `halt`. This is what separates the two arms, so it is logged.
-            _vm = layout.slot_valid.float()
-            out["gate/depth_mean"] = (depths.float() * _vm).sum() / _vm.sum().clamp(min=1)
-            if groups is not None and self.cfg.tul.gate.lam > 0.0:
-                groups = dict(groups)
-                groups["loss_tokens"] = groups["loss"]
-                groups["loss"] = groups["loss"] + self.cfg.tul.gate.lam * _g["loss_gate"]
-
         if self.fm_planner is not None and groups is not None:
             # THREE TERMS, THREE GRADIENT PATHS (morph/model/tul_fm.py header table):
             #   ce     -> backbone + E_slot/E_mask/W_prefix (already in groups["loss"])
@@ -3005,36 +2037,12 @@ class MORPHTransformer(nn.Module):
                 groups["fm_sigreg"] = sig.detach()
                 groups["fm_sigreg_weighted"] = (fmc.sigreg_lambda * sig).detach()
                 total = total + fmc.sigreg_lambda * sig
-            # UNDETACHED on purpose (the gate's `loss_tokens` precedent). It is the
-            # token-CE tensor with its graph intact, which is what lets
-            # tests/test_tul_fm1.py assert — with autograd.grad(..., allow_unused=True)
-            # — that NO planner parameter is in the CE graph at all. A detached copy
-            # would make that assertion vacuous. train.py detaches it when logging.
+            # UNDETACHED on purpose: it is the token-CE tensor with its graph intact,
+            # which is what lets tests/test_tul_fm1.py assert — with
+            # autograd.grad(..., allow_unused=True) — that NO planner parameter is in the
+            # CE graph at all. train.py detaches it when logging.
             groups["loss_tokens_only"] = groups["loss"]
             groups["loss"] = total
-
-        if sigreg_loss is not None and groups is not None:
-            groups = dict(groups)
-            groups["sigreg"] = sigreg_loss.detach()
-            _sw = tc.sigreg_lambda * self.sigreg_gate * sigreg_loss
-            groups["sigreg_weighted"] = _sw.detach()
-            groups["loss"] = groups["loss"] + _sw
-
-        if mux_loss is not None and groups is not None:
-            groups = dict(groups)
-            groups["mux_local"] = mux_loss.detach()
-            # UNDETACHED handle, for tul_mux_grad_share only (the gate's `loss_tokens`
-            # precedent). Every logging site reads `mux_local`, which stays detached.
-            groups["mux_local_live"] = mux_loss
-            for _k, _v in mux_stats.items():
-                groups[_k] = mux_loss.new_tensor(_v)
-            # The WEIGHTED term, exposed so train.py can report train/loss and
-            # val loss as the MODEL's CE (the spectral-penalty precedent: an
-            # auxiliary term inside train/loss makes the arm incomparable to its
-            # control and lets the ppl divergence guard fire on the objective).
-            _mw = tc.mux_beta * self.mux_gate * mux_loss
-            groups["mux_weighted"] = _mw.detach()
-            groups["loss"] = groups["loss"] + _mw
 
         if groups is not None:
             out.update(groups)
@@ -3044,22 +2052,16 @@ class MORPHTransformer(nn.Module):
             # index_fill is out-of-place, so this is safe under grad as well as no_grad.
             out["logits"] = self.embed.attend(xh).index_fill(
                 -1, torch.tensor([tc.slot_id], device=xh.device), float("-inf"))
-            if self.tul_gate is not None:
-                # The generator needs the model's OWN budget for each slot: how many
-                # tokens the plan it just built covers (§8). It is the same tensor the
-                # coda was conditioned on, never a second, separately-decoded one.
-                out["gate_k"] = budget_ids
-        out["layer_passes"] = self._tul_layer_passes(layout, depths, coda_positions)
+        out["layer_passes"] = self._tul_layer_passes(layout)
         out["n_tokens"] = (~layout.slot_mask).sum()
         return out
 
     def _tul_plan_ablate(self, h_slots: Tensor, layout: SlotLayout, mode: str) -> Tensor:
         """Eval-only plan ablations for ``val/plan_worth_*`` (docs/tul-fm-probing.md §1).
 
-        Applies to EVERY slot path — the FM planner's plans, the core loop's looped
-        states, and GL1's one-step tap states — because it operates on ``h_slots`` just
-        before :meth:`TULSlots.prefix_project`, which is the single point where any of
-        them becomes something the coda can read.
+        Operates on the FM planner's plans just before :meth:`TULSlots.prefix_project`,
+        the single point where a plan becomes something the coda can read. The paid loop
+        has no such tensor and raises on a non-``normal`` mode (see ``_forward_tul``).
 
         ``normal`` is the shipped path and returns its input unchanged, so the training
         forward is bit-identical to a model that has no ablation code at all.
@@ -3086,50 +2088,27 @@ class MORPHTransformer(nn.Module):
         return h_slots.gather(1, idx)
 
     def tul_forward_ablated(self, input_ids: Tensor, labels: Tensor | None,
-                            layout: SlotLayout, plan_mode: str = "normal",
-                            tul_step_mode: str | None = None) -> dict:
-        """Eval-only forward with the slot state ablated. Works on ANY TUL arm.
+                            layout: SlotLayout, plan_mode: str = "normal") -> dict:
+        """Eval-only forward with the FM planner's plan ablated.
 
         ``normal`` — the shipped path.
-        ``zero``   — the slot values written into the coda are zeroed. Removes the
+        ``zero``   — the plan values written into the coda are zeroed. Removes the
                      plan's content AND the fact that a plan is there.
-        ``shuffle``— whole slots permuted WITHIN a row. Removes only the correspondence
+        ``shuffle``— whole plans permuted WITHIN a row. Removes only the correspondence
                      between a slot and its span, which is what makes it the
                      span-SPECIFICITY number. Report the shuffle COST, never a
                      specificity fraction (docs/tul-fm-probing.md §4 rule 1).
-        ``wrong_seed`` — THE WRONG-PLAN PROBE. Swaps ``tul.slot_seed`` for a mode the arm
-                     was NOT trained on, so the slot carries a valid-but-wrong value
-                     instead of no value. This is the instrument that caught TG4b's
-                     value-sensitivity (0.48-0.56 nats where zeroing cost 0.10 —
-                     "removing LESS hurts MORE"), and it works because
-                     :meth:`TULSlots.slot_input` dispatches on ``slot_seed`` at CALL
-                     time, not at construction (``lab/divergence/slot_path_worth.py``
-                     ``seed_bagmean``). READ IT AS OOD SHOCK, NOT AS WORTH: that file
-                     measured the forced fallback costing 6-7x more than zeroing the
-                     plan outright, because swapping a seed the weights never saw
-                     measures the distribution shift. It answers "does the coda read the
-                     slot's VALUE at all", and nothing else.
 
-        A separate entry point rather than a forward flag, for the reason
-        :meth:`tul_forward_with_plan_nats` gives: the training path must not carry a
-        branch that decides how much work to do.
+        A separate entry point rather than a forward flag: the training path must not
+        carry a branch that decides how much work to do. Defined for a model with an FM
+        planner only; the paid loop raises inside ``_forward_tul``.
         """
-        if self.tul is None:
+        if self.fm_planner is None:
             raise RuntimeError(
-                "tul_forward_ablated needs a model built with MORPHConfig(tul=...)")
-        if plan_mode != "wrong_seed":
-            return self._forward_single(input_ids, labels, 0, None, layout,
-                                        _plan_mode=plan_mode,
-                                        tul_step_mode=tul_step_mode)
-        tc = self.cfg.tul
-        orig = tc.slot_seed
-        alt = "bag_mean" if orig != "bag_mean" else "e_slot"
-        tc.slot_seed = alt
-        try:
-            return self._forward_single(input_ids, labels, 0, None, layout,
-                                        tul_step_mode=tul_step_mode)
-        finally:
-            tc.slot_seed = orig
+                "tul_forward_ablated needs a model built with MORPHConfig(fm=...): the "
+                "plan ablations act on the planner's plans, and the paid loop has none.")
+        return self._forward_single(input_ids, labels, 0, None, layout,
+                                    _plan_mode=plan_mode)
 
     def tul_fm_forward(self, input_ids: Tensor, labels: Tensor | None,
                        layout: SlotLayout, plan_mode: str = "normal") -> dict:
@@ -3138,135 +2117,6 @@ class MORPHTransformer(nn.Module):
         if self.fm_planner is None:
             raise RuntimeError("tul_fm_forward needs a model built with MORPHConfig(fm=...)")
         return self.tul_forward_ablated(input_ids, labels, layout, plan_mode)
-
-    def _euc_embed_leaf(self) -> Tensor:
-        """The euclidean embedding table's LEAF parameter.
-
-        Not ``embed.hybrid.euc_embed.weight``: under the int6 embedding QAT that every
-        real arm runs, ``.weight`` is a ``torch.nn.utils.parametrize`` PROPERTY that
-        recomputes a fresh non-leaf tensor on every access, so a tensor grabbed after the
-        forward is not the one the forward used and ``autograd.grad(..., allow_unused=
-        True)`` silently returns None. That read as "the auxiliary touches nothing",
-        which is the opposite of what the probe exists to detect.
-        """
-        for name, prm in self.embed.named_parameters():
-            if "euc_embed" in name:
-                return prm
-        raise RuntimeError("no euclidean embedding parameter found")
-
-    def tul_mux_grad_share(self, input_ids: Tensor, labels: Tensor,
-                           layout: SlotLayout) -> dict:
-        """Eval-only: how much of the tied embedding table's gradient the MUX term owns.
-
-        THE FM2 SCAR, made observable. FM2's emit CE could not reach the planner's
-        WEIGHTS — a test proved it — and degraded the planner anyway, by reshaping the
-        shared prelude features that defined its targets (copy_gap 0.47 -> 0.26). An
-        auxiliary loss on a WEIGHT-TIED head is the same hazard one level up: with
-        ``mux_detach_head: false`` the MUX gradient lands directly on the embedding
-        table that the token CE also owns and that every span target is built from.
-
-        Reports ``||g_mux|| / (||g_mux|| + ||g_ce||)`` on the euclidean embedding table.
-        Near 0 means MUX is a passenger; approaching or above 0.5 means the auxiliary is
-        steering the representation the main objective and its own targets are made of.
-        """
-        if self.tul is None or self.cfg.tul.mux_beta <= 0.0:
-            raise RuntimeError("tul_mux_grad_share needs a model with tul.mux_beta > 0")
-        # SLICE TO 2 ROWS. This is the one eval instrument that runs a forward WITH a
-        # backward graph, and in eval mode the core loop's checkpointing is off
-        # (do_ckpt = self.training and ...), so a full-BPTT looped arm retains every
-        # iteration's activations. At batch 6 that OOM'd the 5090 at step-0 eval
-        # (tul-l1, 2026-08-29: 25.6 GiB in use, died on a 146 MiB alloc). A gradient
-        # NORM RATIO does not need the full batch.
-        import dataclasses as _dc
-        k = min(2, input_ids.shape[0])
-        input_ids, labels = input_ids[:k], labels[:k]
-        layout = _dc.replace(layout, **{f.name: getattr(layout, f.name)[:k]
-                                        for f in _dc.fields(layout)
-                                        if isinstance(getattr(layout, f.name), Tensor)})
-        was = self.training
-        self.eval()
-        try:
-            # enable_grad explicitly: the trainer's eval loop is @torch.no_grad, and
-            # this is the one eval instrument that NEEDS a backward graph.
-            with torch.enable_grad():
-                out = self(input_ids, labels, slot_layout=layout)
-                w = self._euc_embed_leaf()
-                ce = out["loss"] - out["mux_weighted"]   # mux_weighted is detached
-                g_ce = torch.autograd.grad(ce, w, retain_graph=True,
-                                           allow_unused=True)[0]
-                mux_w = self.cfg.tul.mux_beta * self.mux_gate * out["mux_local_live"]
-                g_mx = torch.autograd.grad(mux_w, w, retain_graph=False,
-                                           allow_unused=True)[0]
-        finally:
-            self.train(was)
-        n_ce = 0.0 if g_ce is None else float(g_ce.norm())
-        n_mx = 0.0 if g_mx is None else float(g_mx.norm())
-        tot = n_ce + n_mx
-        return {"mux_embed_grad_share": (n_mx / tot) if tot > 0 else 0.0,
-                "mux_embed_grad_norm": n_mx, "ce_embed_grad_norm": n_ce}
-
-    @torch.no_grad()
-    def tul_attn_lift_probe(self, input_ids: Tensor, layout: SlotLayout) -> dict:
-        """Eval-only: MUX §8.3's reasoning attention lift, on the WINDOW branch.
-
-        "The slot is the only route" is architecture; "the token actually looks at it"
-        is behaviour, and only the second one predicts whether the gist is carrying
-        anything. See ``morph/model/attn_lift.py`` for exactly which branch is counted
-        and why the compressed branch is not.
-
-        Eager only — it swaps the window-branch reference implementation for one forward.
-        Works on the unrestricted control too (same reference path), so the two arms are
-        comparable on this metric.
-        """
-        if self.tul is None:
-            raise RuntimeError("tul_attn_lift_probe needs MORPHConfig(tul=...)")
-        from morph.model.attn_lift import AttnLiftStats, capture_attn_lift
-
-        stats = AttnLiftStats()
-        with capture_attn_lift(layout, stats):
-            self(input_ids, labels=None, slot_layout=layout)
-        return stats.summary()
-
-    @torch.no_grad()
-    def tul_slot_state_probe(self, input_ids: Tensor, layout: SlotLayout) -> dict:
-        """Eval-only: the homogeneity dial. Effective rank and mean pairwise cosine of
-        the WRITTEN slot states, read at the point the coda reads them.
-
-        This is the number arm GL1 exists to move. TG4b measured the gisting pipe
-        WORKING as a pipe — a wrong-but-present plan cost 0.48-0.56 nats where zeroing
-        cost 0.10 — while shuffling whole slots cost ~0. Both readings are true at once
-        only if the written states are near-IDENTICAL across slots: the coda reads the
-        value, and every value is the same value. Slot states across the campaign sat at
-        effective rank 1.7-4.8 in 1024 dims with mean pairwise cosine +0.39..+0.71.
-        SIGReg is aimed exactly here, and without this probe its effect is invisible.
-        """
-        if self.tul is None:
-            raise RuntimeError("tul_slot_state_probe needs MORPHConfig(tul=...)")
-        from morph.model.fm_planner import effective_rank, mean_pairwise_cos
-
-        x, x0, bigram = self._tul_front(input_ids, layout)
-        _xn, h_slots, _d, _g, *_ = self._tul_core(x, x0, bigram, layout)
-        z = self._readout(h_slots).float()                     # [B, S, C]
-        valid = layout.slot_valid
-        rows = z[valid]
-        # eigvalsh goes through cusolver on CUDA, and cusolverDnCreate failed with
-        # INTERNAL_ERROR at GL1b's first eval (2026-08-29 smoke) once the mux terms and
-        # attn-lift hooks shared eval memory — the same call had run clean in GL1. The
-        # covariance is [C, C] = 8 MB; the CPU eigendecomposition costs milliseconds and
-        # removes the cusolver surface from this eval-only probe entirely.
-        z_cpu, valid_cpu = z.cpu(), valid.cpu()
-        return {
-            "slot_eff_rank": effective_rank(z_cpu, valid_cpu),
-            "slot_pairwise_cos": mean_pairwise_cos(z_cpu, valid_cpu),
-            "slot_norm_mean": float(rows.norm(dim=-1).mean()),
-            # The scale SIGReg's statistic actually sees. `_readout` ends in RMSNorm, so
-            # this sits at ~1 by construction and no standardisation is applied before
-            # the statistic — standardising would make the loss vacuous (see
-            # morph/model/sigreg.py). Logged so a change to the readout cannot silently
-            # move the target the regulariser is chasing.
-            "slot_component_std": float(rows.std()),
-            "slot_component_mean": float(rows.mean()),
-        }
 
     @torch.no_grad()
     def fm_eval_probe(self, input_ids: Tensor, layout: SlotLayout) -> dict:
@@ -3296,221 +2146,33 @@ class MORPHTransformer(nn.Module):
         out["fm_slots_valid"] = float(geom.valid.sum())
         return out
 
-    def _tul_coda_drop_mask(self, layout: SlotLayout, tc: TULConfig) -> Tensor:
-        """``[B, L]`` bool union drop-mask for :meth:`_tul_coda_gather`: every slot (arm
-        A4, ``coda_sees_slots=False``) and/or every token below the cut (arm CW,
-        ``coda_token_cut>0`` — .agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md)."""
-        if not tc.coda_sees_slots:
-            drop = layout.slot_mask
-            if tc.coda_token_cut > 0:
-                drop = drop | window_drop_mask(layout.slot_mask, tc.coda_token_cut)
-            return drop
-        return window_drop_mask(layout.slot_mask, tc.coda_token_cut)
+    def _tul_layer_passes(self, layout: SlotLayout) -> Tensor:
+        """Total layer-passes in this batch (spec §2's accounting, for the wandb curve).
 
-    def _tul_budget_ids(self, layout: SlotLayout, depths: Tensor, g_traj: Tensor) -> Tensor:
-        """``[B, max_slots]`` token budget to condition the coda on (gate §4/§5/§9).
-
-        The layout carrying a length label IS the training/eval signal: teacher force the
-        REALISED length there, and use the model's OWN choice when it does not (generation,
-        where ``TulRowBuilder`` builds the layout and no label exists). Never a mixture —
-        mixing makes the LM loss chase the gate's error, and scheduled sampling is §12's
-        unbuilt key, not a silent default.
-        """
-        if layout.span_len is not None:
-            return layout.span_len
-        g_fin = g_traj.gather(2, (depths - 1).clamp(min=0).unsqueeze(-1)).squeeze(-1)
-        k = self.tul_gate.choose_k(g_fin).clamp(min=1)
-        return torch.where(layout.slot_valid, k, torch.zeros_like(k))
-
-    def tul_forward_halt(self, input_ids: Tensor, labels: Tensor | None,
-                         slot_layout: SlotLayout) -> dict:
-        """Eval-only: arm ``TUL-halt`` — the gate chooses each slot's loop depth (§7).
-
-        A separate entry point rather than a forward flag, following
-        :meth:`tul_forward_with_plan_nats`: the training path must not carry a branch that
-        decides how much work to do. Scoring the SAME checkpoint through this and through
-        the ordinary forward is the whole bake-off — §4 teacher-forces the depth, so the
-        two arms share every weight and the comparison is exactly paired.
-        """
-        return self._forward_single(input_ids, labels, 0, None, slot_layout, _halt=True)
-
-    def _tul_coda_without_slots(self, x_coda, x0, bigram_emb, keep, labels, layout):
-        """Run the coda on the TOKEN positions only (arm A4 and the plan-nats metric)."""
-        return self._tul_coda_gather(x_coda, x0, bigram_emb, keep, labels, layout,
-                                     layout.slot_mask)
-
-    def _tul_coda_gather(self, x_coda, x0, bigram_emb, keep, labels, layout, drop_mask):
-        """Run the coda after gathering ``drop_mask`` positions out of the sequence.
-
-        Generalises the old slots-only gather (``drop_mask = layout.slot_mask``, arm A4)
-        to also serve arm CW (``drop_mask`` = every token below the cut, or that unioned
-        with every slot — .agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md). The gather itself does not
-        care what kind of position was dropped; it only needs the boolean mask, which is
-        why one function now serves both arms with no new indexing logic (spec §"the
-        change": "Reuse compact_index, gather_positions, and its _g padding helper").
-        """
-        cidx = compact_index(drop_mask)
-        B, L = drop_mask.shape
-
-        def _g(t, fill=None):
-            if t is None:
-                return None
-            if fill is None:
-                pad = torch.cat([t, t.new_zeros(B, 1, *t.shape[2:])], dim=1)
-            else:
-                pad = torch.cat([t, t.new_full((B, 1, *t.shape[2:]), fill)], dim=1)
-            return gather_positions(pad, cidx)
-
-        xc = _g(x_coda)
-        x0c = _g(x0)
-        bgc = _g(bigram_emb)
-        keepc = _g(keep)
-        xh = self._back_region(xc, x0c, bgc, None, inject_keep=keepc)
-        groups = None
-        if labels is not None:
-            labc = _g(labels.unsqueeze(-1), fill=-100).squeeze(-1)
-            groups = self._tul_group_losses(xh, labc, None, want_groups=not self.training)
-        return xh, groups, L
-
-    def _tul_coda_prep(self, input_ids: Tensor, layout: SlotLayout):
-        """Front + core + token-state-dropout — the part of :meth:`_forward_tul` that is
-        IDENTICAL across every arm CW variant (.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md): which
-        positions the CODA sees is decided after this point, never before it. Shared by
-        :meth:`_forward_tul` and :meth:`tul_forward_cw_arms` so the (expensive) core loop
-        runs once per input, not once per arm.
-        """
-        tc = self.cfg.tul
-        if tc.tokens_through_core:
-            raise NotImplementedError(
-                "tul.tokens_through_core (arm A2) has no defined interaction with arm CW "
-                "(.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md) — it is not specified, so this "
-                "raises rather than silently picking a behaviour."
-            )
-        x, x0, bigram_emb = self._tul_front(input_ids, layout)
-        xn, h_slots, depths, g_traj, *_ = self._tul_core(x, x0, bigram_emb, layout)
-        if self.tul_gate is not None:
-            h_slots = self.tul_gate.apply_budget(
-                h_slots, self._tul_budget_ids(layout, depths, g_traj))
-        values, pos = self.tul.prefix_project(h_slots, layout, layout.l_total)
-        x_coda = scatter_positions(xn, pos, values)
-        x_coda, keep = self.tul.apply_token_dropout(x_coda, layout, self.training)
-        return x_coda, x0, bigram_emb, keep, depths
-
-    def tul_forward_cw_arms(self, input_ids: Tensor, labels: Tensor, layout: SlotLayout,
-                            cut: int, seed: int = 0) -> dict[str, dict]:
-        """Eval-only: score CW0/CW1/CW2/CW3 in one pass (.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md).
-
-        Every arm scores CE over the SAME set of labels — original TOKEN positions with
-        row index ``>= cut`` — so the four numbers are directly comparable; that
-        restriction is applied ONCE, to ``labels``, before any arm's gather, rather than
-        four separate times. The front/core/token-dropout prefix is shared (one core loop
-        for all four arms, not four); only the coda gather differs per arm.
-
-        Args:
-            cut:  ``C`` in the spec. Must be ``0 <= cut < seq_len``.
-            seed: seeds arm CW2's random retention (:func:`morph.model.tul.cw2_retain_mask`).
-                  Log this — a different seed picks a different random subset.
-
-        Returns:
-            ``{"CW0": groups, "CW1": groups, "CW2": groups, "CW3": groups}``, each a
-            :meth:`_tul_group_losses` dict (``layout=None`` convention: ``loss`` ==
-            ``ce_main`` == ``ce_tokens``, plain unweighted CE, no slot half-weighting —
-            every arm goes through the same code path so there is no weighting asymmetry
-            between them). ``n_targets`` is identical across all four by construction.
-        """
-        if self._tg_restrict:
-            raise NotImplementedError(
-                "tul.tg_restrict has no defined interaction with arm CW "
-                "(tul_forward_cw_arms always runs the gathered-subset coda — see the "
-                "same raise in _forward_tul). docs/tul-tg-spec.md does not specify it.")
-        B, L = layout.slot_mask.shape
-        if not 0 <= cut < L:
-            raise ValueError(
-                f"arm CW cut={cut} must satisfy 0 <= cut < seq_len={L} "
-                f"(.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md)."
-            )
-        x_coda, x0, bigram_emb, keep, _depths = self._tul_coda_prep(input_ids, layout)
-
-        pos = torch.arange(L, device=layout.slot_mask.device).unsqueeze(0).expand(B, L)
-        score_mask = (~layout.slot_mask) & (pos >= cut)     # SAME labels for all four arms
-        labels_scored = torch.where(score_mask, labels, torch.full_like(labels, -100))
-
-        early_tok = window_drop_mask(layout.slot_mask, cut)         # candidates for CW2
-        budget = layout.prefix_k * layout.slot_valid.sum(dim=1)      # spec: prefix_k * n_valid
-        retain = cw2_retain_mask(early_tok, budget, seed)
-
-        drop_masks = {
-            "CW0": layout.slot_mask.new_zeros(layout.slot_mask.shape),        # ceiling
-            "CW1": early_tok,                                                 # the claim
-            "CW2": layout.slot_mask | (early_tok & ~retain),                  # the decider
-            "CW3": layout.slot_mask | early_tok,                              # floor
-        }
-        out: dict[str, dict] = {}
-        for name, drop_mask in drop_masks.items():
-            _xh, groups, _pos = self._tul_coda_gather(
-                x_coda, x0, bigram_emb, keep, labels_scored, layout, drop_mask)
-            out[name] = groups
-        return out
-
-    def _tul_layer_passes(self, layout: SlotLayout, depths: Tensor | None,
-                          coda_positions: int) -> Tensor:
-        """Total layer-passes in this batch (spec §2: 10.3 vs 44 at OWT span 19.2).
-
-        prelude and coda run on every position; the core runs ``depth`` times on each
-        REAL slot (or, for arm A2, on every position at the sampled per-sample depth).
-        The caller divides by ``n_tokens`` to get the headline number.
+        prelude and coda run on every position; the paid loop's core runs on every
+        position at the nominal mean depth. The caller divides by ``n_tokens`` to get
+        the per-token number.
         """
         cfg = self.cfg
         L = layout.l_total
         B = layout.slot_mask.shape[0]
-        passes = torch.tensor(float(cfg.n_prelude * L * B + cfg.n_coda * coda_positions * B),
-                              device=layout.slot_mask.device)
-        if depths is None:                                   # arm A2: core over all positions
-            passes = passes + float(cfg.n_core * L * B * cfg.mean_depth)
-        else:
-            passes = passes + cfg.n_core * (depths * layout.slot_valid).sum()
-        return passes
+        n_pos = float(L * B)
+        return torch.tensor(n_pos * (cfg.n_prelude + cfg.n_coda + cfg.n_core * cfg.mean_depth),
+                            device=layout.slot_mask.device)
 
     # ── Forward ───────────────────────────────────────────────────────
 
     def forward(self, input_ids: Tensor, labels: Tensor | None = None,
                 bag_size: int = 0, seq_lens: Tensor | None = None,
-                slot_layout: SlotLayout | None = None,
-                tul_step_mode: str | None = None) -> dict:
-        return self._forward_single(input_ids, labels, bag_size, seq_lens, slot_layout,
-                                    tul_step_mode=tul_step_mode)
-
-    def tul_forward_with_plan_nats(self, input_ids: Tensor, labels: Tensor,
-                                   slot_layout: SlotLayout) -> dict:
-        """Eval-only: also run the coda with the slots gathered out (spec §7.2).
-
-        A separate entry point rather than a forward flag — the training path must not
-        carry a branch that decides how much work to do (CONTRIBUTING: no runtime
-        feature flags in hot paths), and this doubles the coda cost.
-
-        Under ``tg_restrict`` the plan-nats gather is undefined (its no-slots coda runs
-        on a gathered index space the tg masks are not re-derived for — see the raise
-        in ``_forward_tul``) and the pre-registration
-        (lab/experiments/planned/2026-08-27-tg-restriction.md) declares plan worth
-        non-discriminating there ("enormous by construction"). Eval therefore SKIPS the
-        ablation pass on a TG model: ``val/plan_nats`` is simply absent from the logs
-        (evaluate() already guards on the key), instead of every TG training run dying
-        at its first eval step. Plan/loop worth for the TG arms comes from
-        ``lab/divergence/slot_path_worth.py``, which zeroes ``prefix_project`` VALUES
-        on the full-L sequence — fully defined under the restriction.
-        """
-        return self._forward_single(input_ids, labels, 0, None, slot_layout,
-                                    _plan_nats=not self._tg_restrict)
+                slot_layout: SlotLayout | None = None) -> dict:
+        return self._forward_single(input_ids, labels, bag_size, seq_lens, slot_layout)
 
     def _forward_single(self, input_ids: Tensor,
                         labels: Tensor | None = None,
                         bag_size: int = 0,
                         seq_lens: Tensor | None = None,
                         slot_layout: SlotLayout | None = None,
-                        _plan_nats: bool = False,
-                        _halt: bool = False,
-                        _plan_mode: str = "normal",
-                        tul_step_mode: str | None = None) -> dict:
+                        _plan_mode: str = "normal") -> dict:
         if slot_layout is not None:
             if bag_size > 0:
                 raise ValueError(
@@ -3518,24 +2180,7 @@ class MORPHTransformer(nn.Module):
                     "TST switch (spec §5), and val/gen always run TUL on with bag_size 0 "
                     "(invariant 6)."
                 )
-            return self._forward_tul(input_ids, labels, slot_layout, _plan_nats,
-                                     halt=_halt, plan_mode=_plan_mode,
-                                     tul_step_mode=tul_step_mode)
-        if tul_step_mode is not None:
-            raise ValueError(
-                "tul_step_mode requires slot_layout (faithful DiffusionBlocks conditions "
-                "the TUL slot loop only; there is no core loop to condition here).")
-        if self._tg_restrict:
-            # docs/tul-tg-spec.md builds the restriction as a per-forward DATA argument
-            # derived from the layout — there is no defined "unrestricted" fallback for
-            # a tg_restrict model, and every real call site (train.py, tul_generate.py)
-            # always supplies a layout once TUL is active. A missing layout here would
-            # otherwise silently run the plain/TST path with none of the restriction
-            # applied — the exact silent-fallback theater the spec forbids.
-            raise RuntimeError(
-                "model built with tul.tg_restrict=true but forward() got no slot_layout "
-                "(docs/tul-tg-spec.md): there is no unrestricted fallback path for a TG "
-                "model. Pass slot_layout explicitly.")
+            return self._forward_tul(input_ids, labels, slot_layout, plan_mode=_plan_mode)
         # ── Token-Superposition Training input bagging (TST, arXiv 2605.06546) ──
         # bag_size==0 → baseline path, BIT-IDENTICAL to pre-TST (and what eval/gen
         # always use). bag_size==s>0 → the superposition phase: input_ids arrives as

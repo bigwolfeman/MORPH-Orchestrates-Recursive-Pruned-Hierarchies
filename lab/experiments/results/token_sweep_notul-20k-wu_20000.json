@@ -1,0 +1,49 @@
+{
+ "notul_20000": {
+  "step": 20000,
+  "rows": 48,
+  "train_eval_depth": 6,
+  "depths": {
+   "1": {
+    "ce_tokens": 3.4904612004756927,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "2": {
+    "ce_tokens": 3.459351286292076,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "3": {
+    "ce_tokens": 3.4496669471263885,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "4": {
+    "ce_tokens": 3.4473729878664017,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "5": {
+    "ce_tokens": 3.4462009370326996,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "6": {
+    "ce_tokens": 3.447000175714493,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "7": {
+    "ce_tokens": 3.446921721100807,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "8": {
+    "ce_tokens": 3.4483472257852554,
+    "n_batches": 16,
+    "batch": 3
+   }
+  }
+ }
+}

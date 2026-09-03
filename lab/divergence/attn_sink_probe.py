@@ -492,7 +492,7 @@ def print_rung(r: dict, n_core: int) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config-name", default="tul_a1")
+    ap.add_argument("--config-name", default="tul_a2")
     ap.add_argument("--overrides", default="training.batch_size=6,model.use_kernels=false")
     ap.add_argument("--geometry", action="store_true", help="Phase 0 audit, no checkpoint")
     ap.add_argument("--smoke", action="store_true",

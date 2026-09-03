@@ -168,7 +168,7 @@ def main() -> None:
                          "kernels: use_kernels=true + torch.compile(mode='default') "
                          "on the MLPs, mirroring morph/training/train.py.")
     ap.add_argument("--batch", type=int, required=True)
-    ap.add_argument("--config", default="tul_a1")
+    ap.add_argument("--config", default="tul_a2")
     ap.add_argument("--depth", type=int, default=8,
                     help="pinned loop depth for ALL variants (default max_depth=8)")
     ap.add_argument("--warmup", type=int, default=10)

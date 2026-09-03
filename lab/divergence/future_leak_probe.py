@@ -5,7 +5,9 @@ Prereg: lab/experiments/planned/2026-08-31-future-leak-attribution.md.
 Corrupt INPUT ids at token positions AFTER packed index k; score CE only at
 token positions BEFORE k (labels there are clean). Every attention branch is
 causal at scored positions, so the only path from the corrupted region into a
-scored position is the acausal retention carry. If forced-depth earning
+scored position is the acausal retention carry (or any unknown leak, which this
+probe exposes the same way: on an arm with the carry off, ANY movement of the scored
+CE under corruption is a leak). If forced-depth earning
 (CE@K1 - CE@K6 on the scored positions) survives corruption, the carry was
 serving PAST-side memory (H-memory); if it collapses, it was reading the
 FUTURE (H-leak).
@@ -15,6 +17,9 @@ Usage:
     --ckpt l2cap=tul_l2=checkpoints/morph/tul-l2-cap/step_4500.pt=model.retention_carry=acausal_final \
     --ckpt l2nc=tul_l2=checkpoints/morph/tul-l2nc/step_4500.pt \
     --ks 700,900 --depths 1,3,6 --rows 48 --out .../future_leak_probe.json
+
+The forced-depth knob is chosen per arm by `_build.DepthLever` (A2 loops the
+per-sample core, so its knob is `model.cfg.mean_depth`, not the slot depth).
 """
 from __future__ import annotations
 
@@ -25,7 +30,7 @@ import sys
 import torch
 import torch.nn.functional as F
 
-from _build import ROOT, build_cfg
+from _build import ROOT, DepthLever, build_cfg
 
 sys.path.insert(0, f"{ROOT}/scripts")
 from tul_samples import load_ckpt  # noqa: E402
@@ -95,9 +100,11 @@ def main() -> None:
             batches.append((inp, labels, layout.to(device)))
             rows_done += a.batch
         vocab = int(model.cfg.vocab_size)
-        orig_mean = int(model.cfg.tul.slot_mean_depth)
-        orig_max = int(model.cfg.tul.slot_max_depth)
-        arm = {"step": step, "rows": rows_done, "carry_mode": carry_mode, "ks": {}}
+        lever = DepthLever(model, tul_rt, int(cfg.model.max_depth))
+        arm = {"step": step, "rows": rows_done, "carry_mode": carry_mode,
+               "depth_lever": lever.name, "mode": "boundary" if a.boundary else "v1",
+               "ks": {}}
+        print(f"{label:8s} depth lever = {lever.name}", flush=True)
         try:
             for k in ks:
                 # scored mask: token positions with packed index < k and a valid label
@@ -126,9 +133,7 @@ def main() -> None:
                     after = (~layout.slot_mask.cpu()) & cut.unsqueeze(0)
                     inp_c = torch.where(after, rand, inp)
                     for d in depths:
-                        model.cfg.tul.slot_mean_depth = d
-                        model.cfg.tul.slot_max_depth = max(
-                            d, orig_max or int(cfg.model.max_depth))
+                        lever.set(d)
                         for cond, x in (("clean", inp), ("corrupt", inp_c)):
                             ce = ce_map(model, x, layout, labels, device)
                             cell = cells[cond].setdefault(d, [0.0, 0])
@@ -149,8 +154,7 @@ def main() -> None:
                       f"corrupt {out_k['earning_corrupt']:+.4f}  "
                       f"(n={out_k['n_scored']})", flush=True)
         finally:
-            model.cfg.tul.slot_mean_depth = orig_mean
-            model.cfg.tul.slot_max_depth = orig_max
+            lever.restore()
         results[label] = arm
         del model
         if device == "cuda":

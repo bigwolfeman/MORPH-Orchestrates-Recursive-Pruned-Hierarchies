@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import math
 import os
-import sys
 
 import torch
 import torch.nn as nn
@@ -374,78 +373,9 @@ def _compressed_causal_mask(S: int, n_blocks: int, m: int, device) -> Tensor:
     return block_end.unsqueeze(0) < query_pos.unsqueeze(1)              # [S, nb]
 
 
-def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None,
-                       sink_logits: Tensor, scale: float) -> Tensor:
-    """TG compressed branch (docs/tul-tg-spec.md §3): direct attention over slot
-    positions instead of pooled compression, under ``tg_restrict``.
-
-        out_comp = softmax(scores masked to [causal AND slot_mask[j]], +sink) @ v
-
-    q, k, v: [B, H, S, D] — the SAME per-position CCA tensors the window branch
-    uses (already computed by ``_cca_project``; K/V already GQA-expanded to H).
-    slot_mask: [B, S] bool, True at slot positions (``layout.slot_mask`` for the
-    prelude/coda call sites). ``None`` means "every position is a slot" — the
-    core's compact slot-gathered sequence has no separate layout of its own (every
-    position IS a slot there), so the mask reduces to plain causal, which is
-    exactly the core's pre-``tg_restrict`` compressed-branch behaviour (spec §4:
-    "the core keeps its existing attention untouched").
-    sink_logits: [H] per-head learnable sink — a LOGIT, not a key, with an
-    implicit ZERO value vector (same contract as the fused CSA/HCA kernels' sink),
-    so a query with no visible slot gets a well-defined softmax and ~zero output.
-    """
-    B, H, S, D = q.shape
-    device = q.device
-    if slot_mask is None:
-        # Core region: every position is a slot and S is the (small) slot count —
-        # the dense causal form is already compact there.
-        row = torch.arange(S, device=device).unsqueeze(1)
-        col = torch.arange(S, device=device).unsqueeze(0)
-        allow = (col <= row).unsqueeze(0)                        # [1, S, S], j <= i
-        scores = torch.einsum("bhid,bhjd->bhij", q.float(), k.float()) * scale
-        scores = scores.masked_fill(~allow.unsqueeze(1), float("-inf"))
-        sink = sink_logits.view(1, H, 1, 1).to(scores.dtype).expand(B, H, S, 1)
-        scores = torch.cat([scores, sink], dim=-1)               # [B, H, S, S+1]
-        weights = torch.softmax(scores, dim=-1).to(q.dtype)
-        # The sink's value is the ZERO vector by contract, so dropping its weight
-        # column and matmul-ing against v alone is exactly equal to padding v with
-        # a zero row first — no extra concat on the value side needed.
-        return torch.einsum("bhij,bhjd->bhid", weights[..., :S], v)
-
-    # Prelude/coda call sites: only slot COLUMNS can ever receive weight (≤ the
-    # layout's fixed slot budget, e.g. 64 of S=1152), so gather K/V at slot
-    # positions and score [B,H,S,M] instead of materializing [B,H,S,S] fp32
-    # (~18× fewer score FLOPs and saved-for-backward bytes at the 5090 shapes;
-    # the dense form is ~4 GB per layer per scores tensor at seq 4096). A column
-    # masked to -inf gets softmax weight exactly 0 and therefore contributes no
-    # gradient to its K/V, so restricting to the gathered columns is the same
-    # function, not an approximation.
-    M = int(slot_mask.sum(-1).max())
-    # M == 0 needs no special case: empty gathers and an [B,H,S,0] score tensor
-    # compose fine, the softmax runs over the sink alone, and the final einsum
-    # over a zero-length j returns zeros — with the SAME zero-not-None gradient
-    # to sink_logits as the dense form (the None-vs-zero weight-decay trap at
-    # ``_fuse_mods_nograd`` is why an early return would be wrong here).
-    # Stable argsort of ~slot_mask puts each row's slot positions first, in
-    # ascending position order; rows with fewer slots pad with non-slot columns
-    # that `valid` masks back off.
-    idx = torch.argsort((~slot_mask).to(torch.int8), dim=-1, stable=True)[:, :M]
-    valid = torch.gather(slot_mask, 1, idx)                      # [B, M]
-    gidx = idx[:, None, :, None].expand(B, H, M, D)
-    k_s = torch.gather(k, 2, gidx)                               # [B, H, M, D]
-    v_s = torch.gather(v, 2, gidx)
-    scores = torch.einsum("bhid,bhjd->bhij", q.float(), k_s.float()) * scale   # [B,H,S,M]
-    row = torch.arange(S, device=device).view(1, 1, S, 1)
-    allow = (idx[:, None, None, :] <= row) & valid[:, None, None, :]           # [B,1,S,M]
-    scores = scores.masked_fill(~allow, float("-inf"))
-    sink = sink_logits.view(1, H, 1, 1).to(scores.dtype).expand(B, H, S, 1)
-    scores = torch.cat([scores, sink], dim=-1)                   # [B, H, S, M+1]
-    weights = torch.softmax(scores, dim=-1).to(q.dtype)
-    return torch.einsum("bhij,bhjd->bhid", weights[..., :M], v_s)
-
-
 def _window_fallback(q: Tensor, k: Tensor, v: Tensor,
                      window_size: int, device, scale: float,
-                     n_skip_rope: int = 0, extra_mask: Tensor | None = None) -> Tensor:
+                     n_skip_rope: int = 0) -> Tensor:
     """Causal sliding-window attention with XSA (self-token excluded).
 
     Position j is attended by query i iff:
@@ -454,10 +384,6 @@ def _window_fallback(q: Tensor, k: Tensor, v: Tensor,
       - j != i  (XSA: exclude self-token)
     OR j >= S - n_skip_rope (suffix tokens always visible to all queries)
     OR i >= S - n_skip_rope (suffix queries can see all keys).
-
-    extra_mask: optional [B,1,S,S] bool, ANDed in on top of the mask above (docs/
-    tul-tg-spec.md §2 — the TG same-span-or-slot restriction). Only ever NARROWS
-    what the base window/XSA/skip-rope rule already allows; never widens it.
     """
     S = q.shape[2]
     row = torch.arange(S, device=device).unsqueeze(1)
@@ -471,8 +397,6 @@ def _window_fallback(q: Tensor, k: Tensor, v: Tensor,
         mask = mask | is_suffix_col | is_suffix_row
 
     mask = mask.unsqueeze(0).unsqueeze(0)              # [1, 1, S, S]
-    if extra_mask is not None:
-        mask = mask & extra_mask                        # [B, 1, S, S]
     bias = torch.where(mask, 0.0, float("-inf"))
     return F.scaled_dot_product_attention(q, k, v, attn_mask=bias, scale=scale)
 
@@ -676,15 +600,7 @@ class _CCABase(nn.Module):
         return q
 
     def _window_attn(self, q: Tensor, k: Tensor, v: Tensor,
-                     device, scale: float, n_skip_rope: int = 0,
-                     extra_mask: Tensor | None = None) -> Tensor:
-        # extra_mask (docs/tul-tg-spec.md §2) is checked FIRST and unconditionally
-        # routes to the reference path: tg_restrict is validated eager-only at model
-        # construction (MORPHTransformer.__init__), so the fused kernel must never
-        # even be considered here — a silent unmasked kernel path is forbidden.
-        if extra_mask is not None:
-            return _window_fallback(q, k, v, self.window_size, device, scale,
-                                    n_skip_rope, extra_mask=extra_mask)
+                     device, scale: float, n_skip_rope: int = 0) -> Tensor:
         # _USE_FUSED_WINDOW is only a capability flag (Triton importable + not
         # DISABLE_FUSED_KERNELS at import). The RUNTIME kernel-off switch is
         # force_eager() — fused_window_attention() honours it internally now, so
@@ -744,32 +660,14 @@ class _CCACSAAttention(nn.Module):
     def __init__(self, d_model: int, n_heads: int, n_kv_heads: int,
                  compression: int, csa_compress_ratio: int, top_k: int,
                  d_indexer: int, max_seq_len: int, context_len: int,
-                 window_size: int, init_alpha: float, conv_kernel: int,
-                 tg_restrict: bool = False):
+                 window_size: int, init_alpha: float, conv_kernel: int):
         super().__init__()
         self.top_k = top_k
         self.compress_ratio = csa_compress_ratio
-        self.tg_restrict = tg_restrict
 
         self.cca = _CCABase(d_model, n_heads, n_kv_heads, compression,
                             max_seq_len, context_len, window_size,
                             init_alpha, conv_kernel)
-
-        if tg_restrict:
-            # docs/tul-tg-spec.md §3: the compressed branch attends directly to slot
-            # positions instead of pooling — the pooled compressor and the top-k
-            # indexer are dead weight under this mode. Build nothing rather than
-            # build-and-ignore (an unused param still draws weight decay).
-            self.compressor: nn.Module | None = None
-            self.comp_norm: nn.Module | None = None
-            self.indexer: nn.Module | None = None
-            self._fuse_mods = (
-                self.cca.W_down_q, self.cca.W_down_k,
-                self.cca.W_v_curr, self.cca.W_v_prev,
-                self.cca.gate[0],
-            )
-            self._fuse_mods_nograd: tuple[nn.Linear, ...] = ()
-            return
 
         self.compressor = GatedPoolCompressor(
             d_model, self.cca.d_head, csa_compress_ratio, two_stream=True)
@@ -801,35 +699,10 @@ class _CCACSAAttention(nn.Module):
         )
 
     def forward(self, x: Tensor, n_skip_rope: int = 0,
-                cla_capture: dict | None = None, cla_kv: dict | None = None,
-                tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None) -> Tensor:
+                cla_capture: dict | None = None, cla_kv: dict | None = None) -> Tensor:
         B, S, _ = x.shape
-        H, D = self.cca.n_heads, self.cca.d_head
+        D = self.cca.d_head
         scale = D ** -0.5
-
-        if self.tg_restrict:
-            # docs/tul-tg-spec.md §3: no pooled compression, no top-k, no CLA reuse —
-            # the inference decode path (cla_kv/cla_capture) has no defined behaviour
-            # under the restriction and is out of scope; raise rather than silently
-            # ignore it (no-theater: a silently-skipped restriction is worse than none).
-            if cla_kv is not None or cla_capture is not None:
-                raise NotImplementedError(
-                    "CLA reuse (cla_kv/cla_capture) is not defined under tg_restrict "
-                    "(docs/tul-tg-spec.md does not specify it; the TUL training/eval "
-                    "path never uses it).")
-            pre_cca = gate_pre = None
-            if _FUSED_ATTN_PROJ:
-                y, (q_lat_p, k_lat_p, v_curr_p, v_prev_p, gate_pre) = _fused_x_proj(
-                    x, self._fuse_mods)
-                qk_pair = y[..., : self.cca.latent_q_dim + self.cca.latent_k_dim]
-                pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
-            q, k, v, q_lat, k_lat = self.cca._cca_project(
-                x, n_skip_rope, return_klat=True, pre=pre_cca)
-            out_comp = _tg_slot_attention(q, k, v, tg_slot_mask, self.cca.sink_logits, scale)
-            out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope,
-                                            extra_mask=tg_allow)
-            return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
-                                             gate_pre=gate_pre)
 
         m = self.compress_ratio
         n_blocks = S // m
@@ -915,27 +788,13 @@ class _CCAHCAAttention(nn.Module):
     def __init__(self, d_model: int, n_heads: int, n_kv_heads: int,
                  compression: int, hca_compress_ratio: int,
                  max_seq_len: int, context_len: int,
-                 window_size: int, init_alpha: float, conv_kernel: int,
-                 tg_restrict: bool = False):
+                 window_size: int, init_alpha: float, conv_kernel: int):
         super().__init__()
         self.compress_ratio = hca_compress_ratio
-        self.tg_restrict = tg_restrict
 
         self.cca = _CCABase(d_model, n_heads, n_kv_heads, compression,
                             max_seq_len, context_len, window_size,
                             init_alpha, conv_kernel)
-
-        if tg_restrict:
-            # docs/tul-tg-spec.md §3: see _CCACSAAttention's twin comment. HCA has no
-            # indexer to begin with, so only the pooled compressor drops out.
-            self.compressor: nn.Module | None = None
-            self.comp_norm: nn.Module | None = None
-            self._fuse_mods = (
-                self.cca.W_down_q, self.cca.W_down_k,
-                self.cca.W_v_curr, self.cca.W_v_prev,
-                self.cca.gate[0],
-            )
-            return
 
         self.compressor = GatedPoolCompressor(
             d_model, self.cca.d_head, hca_compress_ratio, two_stream=False)
@@ -951,31 +810,10 @@ class _CCAHCAAttention(nn.Module):
         )
 
     def forward(self, x: Tensor, n_skip_rope: int = 0,
-                cla_capture: dict | None = None, cla_kv: dict | None = None,
-                tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None) -> Tensor:
+                cla_capture: dict | None = None, cla_kv: dict | None = None) -> Tensor:
         B, S, _ = x.shape
-        H, D = self.cca.n_heads, self.cca.d_head
+        D = self.cca.d_head
         scale = D ** -0.5
-
-        if self.tg_restrict:
-            if cla_kv is not None or cla_capture is not None:
-                raise NotImplementedError(
-                    "CLA reuse (cla_kv/cla_capture) is not defined under tg_restrict "
-                    "(docs/tul-tg-spec.md does not specify it; the TUL training/eval "
-                    "path never uses it).")
-            pre_cca = gate_pre = None
-            if _FUSED_ATTN_PROJ:
-                y, (q_lat_p, k_lat_p, v_curr_p, v_prev_p, gate_pre) = _fused_x_proj(
-                    x, self._fuse_mods)
-                qk_pair = y[..., : self.cca.latent_q_dim + self.cca.latent_k_dim]
-                pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
-            q, k, v, q_lat, k_lat = self.cca._cca_project(
-                x, n_skip_rope, return_klat=True, pre=pre_cca)
-            out_comp = _tg_slot_attention(q, k, v, tg_slot_mask, self.cca.sink_logits, scale)
-            out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope,
-                                            extra_mask=tg_allow)
-            return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
-                                             gate_pre=gate_pre)
 
         m = self.compress_ratio
 
@@ -1039,16 +877,10 @@ class MORPHAttention(nn.Module):
         context_len:        CoPE taper threshold (usually = training seq_len).
         init_alpha:         Initial value for residual-attention α.
         conv_kernel:        Causal conv kernel width.
-        tg_restrict:        docs/tul-tg-spec.md — construction-time dispatch to the
-                            Thought-Gestalt restriction (window branch restricted to
-                            same-span-or-slot, compressed branch restricted to direct
-                            slot attention; no pooled compressor/indexer built).
 
     Forward:
         x: [B, S, d_model]
         n_skip_rope: leading token count that skips CoPE-RoPE (persistent/sink tokens).
-        tg_allow: [B,1,S,S] bool | None — window-branch extra mask under tg_restrict.
-        tg_slot_mask: [B,S] bool | None — compressed-branch slot mask under tg_restrict.
         → [B, S, d_model]
     """
 
@@ -1068,7 +900,6 @@ class MORPHAttention(nn.Module):
         context_len: int = 4096,
         init_alpha: float = 0.1,
         conv_kernel: int = 4,
-        tg_restrict: bool = False,
     ):
         super().__init__()
 
@@ -1077,7 +908,6 @@ class MORPHAttention(nn.Module):
             compression=compression, max_seq_len=max_seq_len,
             context_len=context_len, window_size=window_size,
             init_alpha=init_alpha, conv_kernel=conv_kernel,
-            tg_restrict=tg_restrict,
         )
 
         if layer_idx % 2 == 0:
@@ -1089,7 +919,5 @@ class MORPHAttention(nn.Module):
                 hca_compress_ratio=hca_compress_ratio, **shared)
 
     def forward(self, x: Tensor, n_skip_rope: int = 0,
-                cla_capture: dict | None = None, cla_kv: dict | None = None,
-                tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None) -> Tensor:
-        return self._impl(x, n_skip_rope, cla_capture=cla_capture, cla_kv=cla_kv,
-                          tg_allow=tg_allow, tg_slot_mask=tg_slot_mask)
+                cla_capture: dict | None = None, cla_kv: dict | None = None) -> Tensor:
+        return self._impl(x, n_skip_rope, cla_capture=cla_capture, cla_kv=cla_kv)

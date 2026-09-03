@@ -11,5 +11,5 @@ specs and not Agent Notes.
 
 Canonical TUL contract: [`docs/tul-spec.md`](../docs/tul-spec.md)
 (credit assignment: §5.1).
-Arm CW (implemented): [`.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md`](../.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md).
+Arm CW (implemented): [`.agents/notes/archived/architecture/2026-08-18-tul-compaction-window.md`](../.agents/notes/archived/architecture/2026-08-18-tul-compaction-window.md).
 Arm D (proposed): [`.agents/notes/proposed/architecture/2026-08-18-tul-teacher-distill.md`](../.agents/notes/proposed/architecture/2026-08-18-tul-teacher-distill.md).

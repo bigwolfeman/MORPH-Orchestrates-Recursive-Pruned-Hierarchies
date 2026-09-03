@@ -1,5 +1,11 @@
 # TUL-TG: Thought-Gestalt restriction for TUL
 
+> **RETIRED 2026-09-03.** The TG restriction stack (`tg_*` masks, `_tg_slot_attention`,
+> the truncation gate, iteration conditioning, attention lift) left the tree with the
+> slot-only core; the paid loop ([tul-paid-loop-recipe.md](tul-paid-loop-recipe.md)) runs
+> plain causal attention over the packed row. Record only; last commit that runs it:
+> `d9e04e6`. Results: `lab/experiments/failures/2026-08-2*-tg-*.md`.
+
 Status: SPEC — approved for build 2026-08-27. Source of truth for the TG arms.
 Pre-registration: `lab/experiments/planned/2026-08-27-tg-restriction.md` (committed before build).
 Paper: "Modeling Language as a Sequence of Thoughts" (arXiv 2512.25026, Thought Gestalt / TG).
@@ -138,3 +144,18 @@ See the pre-registration for predictions and decision rules. TG1 = restriction o
 (losses untouched). TG2 = restriction + `plast_weight=0, emit_weight=0` (TG's own
 single-objective recipe; also removes the takeover's fuel, per the O5 result).
 TG3 = soft restriction, run only if TG1's CE craters past the pre-registered line.
+
+## §A2s addendum (2026-09-02) — tg_restrict × tokens_through_core is defined
+
+The former `NotImplementedError` is resolved: under arm A2s the restriction
+means the SAME thing in the core as in the prelude/coda. Every core-loop
+attention call carries `tg_allow` (window branch: same-span-or-slot) and
+`tg_slot_mask` (compressed branch: slot K/V only). `_core_region` accepts
+`attn_kwargs` and threads the per-sample masks through the active-set sort
+(sorted once with `perm`, sliced `[:n_active]` per iteration alongside the
+carrier — a mask that did not follow the sort would attach one sample's
+visibility to another sample's rows; pinned by
+`tests/test_a2s_restricted_core.py::test_reorder_equivariance_at_nonuniform_depth`).
+`attn_kwargs=None` (every non-TG caller) leaves the loop bit-identical.
+The eval-only `tul_slot_state_probe` still runs the SLOT loop without masks;
+it is a probe, not the training path.
