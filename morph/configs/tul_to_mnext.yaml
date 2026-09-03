@@ -1,0 +1,12 @@
+# R4 — M-next: THE ARM. As R3 with the slot supervised toward the NEXT span: the thought
+# is the multiplexed FORECAST of the span about to be decoded (think once per span), the
+# coda demultiplexes it. Never run through the tied head at beta 1, never with the boundary
+# seed, never on the winner recipe or the ramp (v1a2b was detached, beta 0.1, bag mean,
+# warmup 0). Decisive readout: mux_local(next) vs forced depth (core_depth_sweep.py).
+defaults:
+  - tul_to_mown
+  - _self_
+tul:
+  mux_target: next
+wandb:
+  name: to-mnext

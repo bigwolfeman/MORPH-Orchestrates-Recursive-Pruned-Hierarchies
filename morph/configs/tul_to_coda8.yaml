@@ -1,0 +1,11 @@
+# R8 — coda8: R4 with the four extra layers on the TOKEN side (8-layer coda, 12 layers per
+# token) and no conditioning stack; z is the loop's output. The fat-decoder half of the
+# R7/R8 pair. n_layers is documentation only (train.py derives the total from the parts).
+defaults:
+  - tul_to_mnext
+  - _self_
+model:
+  n_coda: 8
+  n_layers: 18
+wandb:
+  name: to-coda8

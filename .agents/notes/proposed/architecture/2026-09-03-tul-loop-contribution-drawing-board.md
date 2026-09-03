@@ -187,7 +187,23 @@ jitter `gate_truncate_p` is the same augmentation). Caveat the paper states: los
 of ρ=0.9 is proven for S ≤ 11 in fp32; our spans reach 32, so late tokens carry
 0.9^31 ≈ 0.04 of the first token's weight. ρ is a knob for round 2, not round 1.
 
-### Round-1 panel (proposed; predictions to be frozen in `lab/experiments/planned/` before launch)
+### Round-1 panel (predictions frozen in `lab/experiments/planned/2026-09-03-tul-think-once-panel.md`)
+
+Wolfe's two added arms (sketch, 2026-09-03 evening): "prelude → core loop → conditioning
+4 layers → frozen z → coda" versus "prelude → core loop → frozen z → 8-layer coda". Two
+readings of "frozen z" lead to different arms, so both run ("Run both settings"): fixed
+per span with full gradient (the MUX paper's own setting) and detached at the coda's
+read. The coda's self-loop in the sketch is read as the per-token decode with z held,
+not a looped token coda (that would be the paid loop again). Knobs `tul.cond_layers`
+and `tul.detach_z`; configs `tul_to_*.yaml` compose each arm's lineage with
+`tul_to_panel.yaml`; tests `tests/test_tul_think_once.py` (block-parameter parity R7 vs
+R8, RNG neutrality, the exact gradient cut of `detach_z`, the layer-pass accounting, the
+sweep's paired bootstrap).
+
+| # | arm | isolates |
+|---|---|---|
+| R7f / R7d | **cond4** — R4 + 4 NON-SHARED layers over the slot sequence after the loop; z is their output; tokens keep the 4-layer coda; `f` full gradient, `d` frozen z | where four layers pay: on ~50 slot positions (decode stays 8 layers/token)… |
+| R8f / R8d | **coda8** — R4 with an 8-layer coda (12 layers/token); z = the loop's output; same block parameters as R7 | …or on every token; and whether a thought the reader cannot shape still helps |
 
 Common recipe for every arm: the winner recipe (`model.retention=false`,
 `training.spectral_project_cap=0`, `retention_carry: none`) + the ramp

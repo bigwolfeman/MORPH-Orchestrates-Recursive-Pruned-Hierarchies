@@ -478,6 +478,13 @@ tul:
   max_slots: 0             # 0 → seq_len // 8 (the fixed slot budget; L_total = seq_len + prefix_k·max_slots)
   prefix_k: 2              # coda positions per slot, by projection from ONE looped state [W]
                            # (Block Transformer App. F.2 / Fig 3f: length 2 beats 1). 1 = arm TUL-prefix1.
+  # ── Think-once panel knobs (branch tul/think-once, arms R7/R8) ──────────────
+  # cond_layers: N non-shared blocks run ONCE over the slot sequence after the loop;
+  # the coda (and the mux loss) read the stack's output. 0 = nothing built.
+  # detach_z: the coda reads z with stop-gradient ("frozen z"); the loop and the stack
+  # then learn from the mux local loss alone. Both default to the untouched model.
+  cond_layers: 0
+  detach_z: false
   # Per-slot-INDEX input embedding instead of ONE shared E_slot added to every slot.
   # false = shipped behaviour. true = one row per slot, sized from the derived max_slots.
   # Measured motivation: the valid slot states of a row have an effective rank of 1.7 to 4.8

@@ -213,6 +213,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         # the loader can actually produce — see TULConfig.bound_span_cap's docstring.
         bound_span_cap=rule.span_cap,
         eval_ablations=bool(tc.get("eval_ablations", False)),
+        cond_layers=int(tc.get("cond_layers", 0)),
+        detach_z=bool(tc.get("detach_z", False)),
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
@@ -262,6 +264,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "slot_seed": model_cfg.slot_seed,
         "bound_span_cap": model_cfg.bound_span_cap,
         "eval_ablations": model_cfg.eval_ablations,
+        "cond_layers": model_cfg.cond_layers,
+        "detach_z": model_cfg.detach_z,
         "boundary_chars": str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
         "boundary_substrings": list(substrings),
         "min_span": rule.min_span,
@@ -297,6 +301,11 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
           + (f" fixed_stride={rule.fixed_stride}" if rule.fixed_stride else "")
           + (f" coda_token_cut={model_cfg.coda_token_cut}" if model_cfg.coda_token_cut else ""),
           flush=True)
+    if model_cfg.cond_layers > 0 or model_cfg.detach_z:
+        print(f"  TUL THINK-ONCE: cond_layers={model_cfg.cond_layers} "
+              f"detach_z={model_cfg.detach_z} (arms R7/R8; the coda reads the "
+              f"conditioning stack's output{', with stop-gradient' if model_cfg.detach_z else ''})",
+              flush=True)
     if model_cfg.recur_gate != "none":
         print(f"  TUL RECUR GATE ON: {model_cfg.recur_gate} "
               f"bias={model_cfg.recur_gate_bias} sigma_g={model_cfg.recur_gate_noise} "

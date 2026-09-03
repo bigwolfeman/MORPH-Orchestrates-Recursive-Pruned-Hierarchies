@@ -1,0 +1,9 @@
+# R7d — cond4 with FROZEN z: the coda reads z with stop-gradient, so the loop and the
+# conditioning stack learn from the MUX next loss alone. The "run both settings" half.
+defaults:
+  - tul_to_cond4
+  - _self_
+tul:
+  detach_z: true
+wandb:
+  name: to-cond4-dz

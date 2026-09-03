@@ -1,0 +1,9 @@
+# R8d — coda8 with FROZEN z (stop-gradient at the coda's read; the loop learns from the
+# MUX next loss alone).
+defaults:
+  - tul_to_coda8
+  - _self_
+tul:
+  detach_z: true
+wandb:
+  name: to-coda8-dz

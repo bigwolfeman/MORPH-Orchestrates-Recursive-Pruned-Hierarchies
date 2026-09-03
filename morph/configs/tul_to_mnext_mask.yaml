@@ -1,0 +1,12 @@
+# R5 — M-next-mask: R4 + the TG restriction, so the forecast is the ONLY route from an
+# earlier span to a later token. Prices the mask against R4 (measured 0.09–0.36 nats in
+# the gist family) and asks whether reliance (worth_shuffle) buys depth-earning.
+defaults:
+  - tul_to_mnext
+  - _self_
+model:
+  use_kernels: false             # tg_restrict forces the eager path
+tul:
+  tg_restrict: true
+wandb:
+  name: to-mnext-mask

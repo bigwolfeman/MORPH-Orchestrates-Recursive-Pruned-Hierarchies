@@ -1,0 +1,10 @@
+# R1 — A1-wu: the ORIGINAL TUL (bag-mean seed, emit/plast 0.5/0.5, no mask, no mux) on
+# the winner recipe + ramp. Wolfe's hypothesis (2026-09-03): "the LR warmup resolves this
+# and the original TUL design was fine." Every A1 run in the record used warmup 0; this is
+# the first on the ramp. Second seed: training.seed=2 wandb.name=to-a1-s2.
+defaults:
+  - tul_a1
+  - tul_to_panel
+  - _self_
+wandb:
+  name: to-a1-s1

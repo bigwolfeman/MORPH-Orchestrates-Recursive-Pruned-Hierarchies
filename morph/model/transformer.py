@@ -1003,6 +1003,34 @@ class MORPHTransformer(nn.Module):
         if cfg.fm is not None:
             self._build_fm(cfg, d)
 
+        # ── Think-once conditioning stack (arm R7, tul.cond_layers) ─────────────────
+        # `cond_layers` NON-SHARED MORPHBlocks that run ONCE over the compact slot
+        # sequence after the core loop and before the coda reads z. They are ordinary
+        # blocks (same constructor as the coda, same attention kwargs as the core) so a
+        # `cond_layers: 4` model has exactly the parameter count of an `n_coda + 4`
+        # model — that equality is what makes R7 (cond4 + coda4) vs R8 (coda8) a fair
+        # question about WHERE four layers pay: on ~50 slot positions or on every token.
+        # Built after the FM planner and only when > 0, so every other arm draws no RNG
+        # here and keeps byte-identical weights (the retention/TULSlots contract).
+        self.tul_cond: nn.ModuleList | None = None
+        if cfg.tul is not None and cfg.tul.cond_layers > 0:
+            if cfg.fm is not None:
+                raise NotImplementedError(
+                    "tul.cond_layers with an FM planner is not defined: the planner "
+                    "already replaces the slot loop and detaches its plan. Pick one.")
+            if cfg.tul.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.cond_layers with tul.tokens_through_core (A2) is not defined: A2 "
+                    "has no compact slot sequence for the stack to run over.")
+            if cfg.tul.db_loop:
+                raise NotImplementedError(
+                    "tul.cond_layers with tul.db_loop is not defined: the db local losses "
+                    "supervise the loop's per-iteration states, which the stack would "
+                    "no longer be the state the coda reads.")
+            self.tul_cond = nn.ModuleList([
+                _make_block(n_total + i, core_attn_kw) for i in range(cfg.tul.cond_layers)
+            ])
+
         # ── SCSE Stage 1 loop entry ────────────────────────────────────────
         # Built LAST, for the same reason TULSlots is: `_CloneInit` draws no RNG at all,
         # and `_SCSEInit` draws its Linear init AFTER every other parameter, so a baseline
@@ -2926,6 +2954,12 @@ class MORPHTransformer(nn.Module):
             else:
                 xn, h_slots, depths, g_traj, db_traj = self._tul_core(x, x0, bigram_emb,
                                                                       layout, halt=halt)
+            # Think-once conditioning (arm R7): the stack runs once over the looped
+            # slot states, and everything downstream — the mux local loss, SIGReg, the
+            # gate budget, the plan ablations, prefix_project — reads ITS output. So z,
+            # the state the coda reads, is the state the forecast target supervises.
+            if self.tul_cond is not None:
+                h_slots = self._tul_cond_apply(h_slots)
             mux_stats: dict = {}
             if tc.mux_beta <= 0.0:
                 mux_loss = None
@@ -2959,6 +2993,12 @@ class MORPHTransformer(nn.Module):
             if self.tul_gate is not None:
                 budget_ids = self._tul_budget_ids(layout, depths, g_traj)
                 h_slots = self.tul_gate.apply_budget(h_slots, budget_ids)
+            # "Frozen z" (arms R7d/R8d, tul.detach_z): the coda reads the thought with
+            # stop-gradient, so the token CE never shapes the loop or the conditioning
+            # stack — they learn from the mux local loss ALONE (computed above, on the
+            # live state). A Python-level constant: False traces the identical graph.
+            if tc.detach_z:
+                h_slots = h_slots.detach()
             # Same eval-only ablation the FM branch takes, applied at the same seam.
             # `normal` returns its input unchanged, so the training forward is
             # bit-identical to a model with no ablation code at all.
@@ -3514,12 +3554,26 @@ class MORPHTransformer(nn.Module):
             out[name] = groups
         return out
 
+    def _tul_cond_apply(self, h_slots: Tensor) -> Tensor:
+        """Run the think-once conditioning stack ONCE over the compact slot sequence.
+
+        ``h_slots`` is ``[B, S, n, C]`` (HC carrier) straight out of the loop. The blocks
+        are called exactly as the core calls its blocks on this sequence: causal
+        attention among slots, no injection term, no mask — pad slots sit at the tail
+        of the compact sequence and a valid slot never attends past itself. No
+        checkpointing: S is 9–19x shorter than the token stream (spec §3.3).
+        """
+        for layer in self.tul_cond:
+            h_slots = layer(h_slots)
+        return h_slots
+
     def _tul_layer_passes(self, layout: SlotLayout, depths: Tensor | None,
                           coda_positions: int) -> Tensor:
         """Total layer-passes in this batch (spec §2: 10.3 vs 44 at OWT span 19.2).
 
         prelude and coda run on every position; the core runs ``depth`` times on each
-        REAL slot (or, for arm A2, on every position at the sampled per-sample depth).
+        REAL slot (or, for arm A2, on every position at the sampled per-sample depth);
+        the think-once conditioning stack runs once per REAL slot.
         The caller divides by ``n_tokens`` to get the headline number.
         """
         cfg = self.cfg
@@ -3531,6 +3585,8 @@ class MORPHTransformer(nn.Module):
             passes = passes + float(cfg.n_core * L * B * cfg.mean_depth)
         else:
             passes = passes + cfg.n_core * (depths * layout.slot_valid).sum()
+        if self.tul_cond is not None:
+            passes = passes + len(self.tul_cond) * layout.slot_valid.sum()
         return passes
 
     # ── Forward ───────────────────────────────────────────────────────

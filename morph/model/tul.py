@@ -183,6 +183,16 @@ class TULConfig:
     #            STANDS FOR.
     mux_target: str = "next"
     mux_tau: float = 1.0                 # softmax temperature of the head (paper: 1.0)
+    # ── Think-once panel knobs (branch tul/think-once, arms R7/R8;
+    #    .agents/notes/proposed/architecture/2026-09-03-tul-loop-contribution-drawing-board.md)
+    # cond_layers: that many NON-SHARED MORPHBlocks run ONCE over the compact slot
+    # sequence after the core loop; the mux loss, the gate, the ablations and
+    # prefix_project all read the stack's output. 0 = nothing built, bit-identical.
+    cond_layers: int = 0
+    # detach_z: the coda reads the slot state with stop-gradient ("frozen z"), so the
+    # loop and the conditioning stack learn from the mux local loss alone. False =
+    # bit-identical (the token CE trains through z, the MUX paper's own setting).
+    detach_z: bool = False
     # ── DB-shaped loop (arm L3, lab/experiments/planned/2026-08-29-tul-loop-ladder.md) ──
     # The core loop runs in the FORWARD but the carry is DETACHED between iterations
     # (retention state too), so no gradient ever crosses an iteration boundary — the
@@ -387,6 +397,12 @@ class TULConfig:
         if self.mux_target not in ("own", "next"):
             raise ValueError(
                 f"tul.mux_target must be 'own' or 'next', got {self.mux_target!r}")
+        if self.cond_layers < 0:
+            raise ValueError(f"tul.cond_layers must be >= 0, got {self.cond_layers}")
+        if self.detach_z and self.tokens_through_core:
+            raise ValueError(
+                "tul.detach_z with tul.tokens_through_core (A2) is not defined: A2 has "
+                "no slot state for the coda to read detached.")
         if self.sigreg_lambda < 0.0:
             raise ValueError(f"tul.sigreg_lambda must be >= 0, got {self.sigreg_lambda}")
         if self.sigreg_slices < 1:
