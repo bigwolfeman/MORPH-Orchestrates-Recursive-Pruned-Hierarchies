@@ -228,6 +228,8 @@ Things that are OUT, with the reason, so they do not come back by accident:
   matched tokens (`.agents/notes/proposed/architecture/2026-08-30-dmorph-handoff.md` on
   branch `feat/db-objective-l2`): a dedicated build session, because the wall-clock
   claim needs its kernel first.
+- **Raven**, a GLA variant Wolfe wants to test once TUL is stable (2026-09-03 00:10),
+  as the second candidate for whatever GLA was buying. No design notes in the repo yet.
 
 When the three runs land, sections 6 and 7 get their numbers and the winner's config is
 updated on this branch. The decision record that points here is
