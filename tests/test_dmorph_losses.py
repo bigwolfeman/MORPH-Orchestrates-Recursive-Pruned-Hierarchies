@@ -12,7 +12,7 @@ import torch
 from morph.model.dmorph import aggregate_eval, eval_weight_key
 from morph.model.dmorph import (DmCtx, band_of_t, fm_euler_step, noisy_stream, targets,
                                 training_terms)
-from _dmorph_common import D, batch, clean_pass, dm_cfg, model
+from _dmorph_common import D, V, batch, clean_pass, dm_cfg, model
 
 
 def test_velocity_is_exactly_zero_at_construction():
@@ -153,3 +153,32 @@ def test_eval_aggregation_weights_by_counts_and_never_averages_an_empty_band_as_
     import pytest
     with pytest.raises(KeyError, match="dm_n_ce"):
         aggregate_eval({"val/dm_ladder_ce": [1.0]})
+
+
+def test_ce_through_d_hat_starts_near_ln_v_at_every_source_scale():
+    """The first panel run (dmorph-tok-s1-5k, 2026-09-03) started its CE-through-D̂ term at
+    41.7 nats — four times ln V — because the raw ``D̂`` (norm ``s·sqrt(d)`` at low t)
+    was read through a ``sqrt(d)`` gain. The readout must depend on D̂'s DIRECTION only:
+    at construction the term sits within one nat of ln V for the matched source AND for
+    ``source_std 1.0`` (the panel's reshaped source), and the hard bridge returns
+    unit rows whatever the input norm."""
+    from morph.model.dmorph import hard_bridge, readout_state
+    x, y, layout, _ = batch(B=3)
+    for src in (1.0 / math.sqrt(D), 1.0):
+        m = model(dm_cfg(n_blocks=2, source_std=src))
+        m.train()
+        torch.manual_seed(0)
+        out = m(x, labels=y, slot_layout=layout)
+        ce = float(out["dm_ce"])
+        assert abs(ce - math.log(V)) < 1.0, (src, ce, math.log(V))
+    scale = torch.tensor(8.0)
+    big = torch.randn(4, 5, D) * 50.0
+    small = torch.randn(4, 5, D) * 0.01
+    for st in (big, small):
+        r = readout_state(st, scale)
+        assert torch.allclose(r.norm(dim=-1), torch.full((4, 5), 8.0), atol=1e-4)
+    w = torch.randn(V, D)
+    rows = hard_bridge(big, w, scale, mask_id=4)
+    assert torch.allclose(rows.norm(dim=-1), torch.ones(4, 5), atol=1e-5)
+    assert torch.equal(rows, hard_bridge(big * 1e-3, w, scale, mask_id=4)), \
+        "the bridge must be invariant to the input's norm"

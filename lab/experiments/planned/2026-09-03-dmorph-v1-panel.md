@@ -82,3 +82,19 @@ every prediction resolves on its majority side, else `failures/`.
    only in the target.
 3. The run names carry the step count: `dmorph-{ctl,tok,hs}-s{1,2}-5k`.
 
+### Method amendment 3, 2026-09-03 14:05 (after the first tok run; Predictions untouched)
+
+`dmorph-tok-s1-5k` (first attempt) was aborted by the trainer's perplexity guard at step
+2040. Two defects, both in the plumbing and neither in the objective: (1) the
+CE-through-D̂ term read the RAW `D̂` through a `sqrt(d)` gain, so with the reshaped
+source (`source_std 1.0`, norm 32 at low t) it started at 41.7 nats — four times ln V —
+and dragged the shared weights (clean-head val 6.65 at step 1000 against the control's
+5.22); (2) the guard judged the TOTAL loss (12.5 nats with that term inside) while the
+clean head sat at 6.20 and falling. Fixes, committed before the rerun: the readout
+normalises `D̂` before the head (`readout_state`; the term now starts within one nat of
+ln V at either source scale, `test_ce_through_d_hat_starts_near_ln_v_at_every_source_scale`),
+and both divergence guards read the clean head's CE when the forward reports it. The
+aborted run's log is kept as `dmorph-tok-s1-5k.ABORTED-r1.log` and its forensic
+checkpoint under `checkpoints/morph/dmorph-tok-s1-5k/DIVERGED_step_2040.pt`; the tok and
+hs arms rerun from scratch. The control run is unaffected (dmorph off).
+

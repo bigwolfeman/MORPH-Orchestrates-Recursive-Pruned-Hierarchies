@@ -51,10 +51,13 @@ run_arm() {
     return 0
   fi
   echo "[panel] $(date +%H:%M:%S) START $name"
+  # `set -e` must NOT end the panel on one failed arm (2026-09-03: the tok abort took
+  # the hs run with it). The trainer's exit code is captured and reported instead.
+  local rc=0
   ( cd "$ROOT" && "$PY" -m morph.training.train --config-name "$cfg" \
       training.steps="$STEPS" training.seed="$seed" wandb.name="$name" "${extra[@]}" \
-      2>&1 | tee "$RESULTS/$name.log" )
-  echo "[panel] $(date +%H:%M:%S) DONE  $name (exit ${PIPESTATUS[0]:-?})"
+      2>&1 | tee "$RESULTS/$name.log"; exit "${PIPESTATUS[0]}" ) || rc=$?
+  echo "[panel] $(date +%H:%M:%S) DONE  $name (exit $rc)"
 }
 
 for seed in $SEEDS; do

@@ -2660,6 +2660,13 @@ def main(cfg: DictConfig) -> None:
             # validation CE was 8.19. `train/loss_total` keeps the full objective.
             _lv_total = _lv
             _lv = _lv - _sp_value
+            # Auxiliary-objective arms (dmorph, FM1) fold their extra terms into `loss`;
+            # train/loss and BOTH divergence guards judge the LANGUAGE MODEL, so they read
+            # the clean head's own CE when the forward reports it. Measured 2026-09-03: the
+            # ppl guard aborted dmorph-tok-s1-5k at step 2040 on a 12-nat TOTAL while the
+            # clean head sat at 6.2 and falling. `train/loss_total` still keeps the objective.
+            if out.get("loss_tokens_only") is not None:
+                _lv = float(out["loss_tokens_only"].detach())
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
             #    after its external watchdog died in a power loss). A NaN/Inf loss NEVER
             #    recovers — save an emergency ckpt for forensics and stop, instead of burning

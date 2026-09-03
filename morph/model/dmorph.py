@@ -328,6 +328,21 @@ def argmax_head(x: Tensor, w_head: Tensor, mask_id: int, chunk: int = 1024) -> T
     return out
 
 
+def readout_state(state: Tensor, head_scale: Tensor) -> Tensor:
+    """``D̂`` → the vector the tied head reads: ``normalize(D̂) · head_scale``, fp32.
+
+    The targets are unit L2, but ``D̂ = x_t + (1 - t)·v̂`` is NOT: at low ``t`` it is
+    dominated by the source ``x0 ~ N(0, s² I)`` whose norm is ``s·sqrt(d)`` — 32 at
+    ``source_std 1.0, d 1024``. Reading the raw ``D̂`` through ``head_scale`` (itself
+    ~sqrt(d)) put logit gaps in the hundreds and the CE-through-D̂ term at 40+ nats on
+    the first panel run (dmorph-tok-s1-5k, 2026-09-03: dm_ce 41.7 at step 250, the
+    shared weights dragged by it, the guard tripped at step 2040). The testbed reads
+    its bridge through the table in TARGET space for the same reason. Normalising
+    first makes the readout depend on D̂'s direction only, so the term starts at the
+    calibrated ``head_scale`` temperature whatever the source scale is."""
+    return F.normalize(state.float(), dim=-1) * head_scale.float()
+
+
 def hard_bridge(d_hat: Tensor, w_head: Tensor, head_scale: Tensor, mask_id: int,
                 chunk: int = 1024) -> Tensor:
     """The HARD bridge: replace ``D̂`` by the unit-normalised embedding row of its argmax
@@ -336,7 +351,7 @@ def hard_bridge(d_hat: Tensor, w_head: Tensor, head_scale: Tensor, mask_id: int,
     (``db-testbed-ladder.md`` B, gen-PPL 584 → 17 when switched). ``[..., d]`` in,
     same shape out, fp32."""
     shp = d_hat.shape
-    flat = (d_hat.float() * head_scale.float()).reshape(-1, shp[-1])
+    flat = readout_state(d_hat, head_scale).reshape(-1, shp[-1])
     idx = argmax_head(flat, w_head.float(), mask_id, chunk)
     rows = F.normalize(w_head.float()[idx], dim=-1)
     return rows.reshape(shp)
@@ -380,12 +395,12 @@ class DmorphStream(nn.Module):
         self.v_gate = AdaLNGate(cfg.cond_dim, d_model)
         self.W_v = nn.Linear(d_model, d_model, bias=False)
         nn.init.zeros_(self.W_v.weight)
-        # Scalar read-out gain on D̂ before the tied head. The targets are unit L2 while
-        # the clean head reads a state of norm ~sqrt(d) (final_norm's per-component RMS
-        # is 1), so without it the logits of a unit vector sit ~sqrt(d) too small and
-        # the CE term cannot leave ln V. Learnable so the ladder head can set its own
-        # temperature; the testbed solved the same constant in closed form
-        # (``db-testbed-ladder.md`` A, "Readout scale").
+        # Scalar read-out gain on normalize(D̂) before the tied head (see
+        # :func:`readout_state`). The clean head reads a state of norm ~sqrt(d)
+        # (final_norm's per-component RMS is 1), so a UNIT vector needs ~sqrt(d) to reach
+        # the same logit temperature; without it the CE term cannot leave ln V. Learnable
+        # so the ladder head can set its own temperature; the testbed solved the same
+        # constant in closed form (``db-testbed-ladder.md`` A, "Readout scale").
         self.head_scale = nn.Parameter(torch.tensor(math.sqrt(float(d_model))))
         # E‖v*‖² of the zero network: E‖y‖² + d·s² with unit-L2 targets.
         self.null_floor = 1.0 + float(d_model) * float(cfg.source_std) ** 2
@@ -629,7 +644,7 @@ def _masked_mean(x: Tensor, m: Tensor) -> Tensor:
 def _ce_from(model, state: Tensor, ce_labels: Tensor, ce_w: Tensor, w_head: Tensor) -> Tensor:
     dm: DmorphStream = model.dmorph
     d = state.shape[-1]
-    flat = (state.float() * dm.head_scale).reshape(-1, d)
+    flat = readout_state(state, dm.head_scale).reshape(-1, d)
     return fused_linear_cross_entropy(
         flat, w_head, ce_labels.reshape(-1), ignore_index=-100,
         chunk_size=model.cfg.ce_chunk_size, mask_token_id=model.cfg.tul.slot_id,
@@ -643,7 +658,7 @@ def _acc_from(model, state: Tensor, ce_labels: Tensor, ce_w: Tensor, w_head: Ten
     m = (lab != -100) & (ce_w > 0)
     if int(m.sum()) == 0:
         return state.new_zeros(())
-    flat = (state.float() * dm.head_scale.float()).reshape(-1, d)[m]
+    flat = readout_state(state, dm.head_scale).reshape(-1, d)[m]
     pred = argmax_head(flat, w_head.float(), model.cfg.tul.slot_id, model.cfg.ce_chunk_size)
     return (pred == lab[m]).float().mean()
 
