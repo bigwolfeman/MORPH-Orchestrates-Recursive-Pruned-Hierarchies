@@ -83,3 +83,20 @@ SIGKILL after 20 s; wandb will mark the run crashed, which is correct); the
 seq-512 packer at real scale (CPU dry build gave L_total 640, max_slots 64);
 whether `training.warmup` interacts with the AdEMAMix alpha ramp beyond the
 LR (read: it should not, the ramp is on lr only).
+
+### Interpretation amendment — 2026-09-02 21:58 (after wu1, before wu2 finished; predictions untouched)
+
+Wolfe: "we expect warm up to be better. we have kept our schedule for
+reproducibility between experiments. but if it causes instability we can
+change it. this is why I said to do lower seq length. warming up longer seq
+length has a similar effect." So W is the REFERENCE for what a warmup buys
+(wu1: healthy, 4.5391 at 2500, 0.14 nats ahead of clean A2), and S is the
+CANDIDATE: a short-context start is a warmup that leaves the LR schedule and
+every cross-experiment comparison untouched. Reading, if S detonates <= 1/3:
+the production recipe is a context-length curriculum (512 through the danger
+window, then 1024) using the existing loader
+(`morph/training/curriculum_data.py`, `curriculum.py`,
+`--config-name pretrain_curriculum`), and the follow-up is that curriculum
+arm at 2500 steps vs wu1's 4.5391 at matched steps and matched tokens. If S
+detonates >= 2/3 while W does not, length is not the lever and the LR ramp
+is the only cheap early-phase fix found.
