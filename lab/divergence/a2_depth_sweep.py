@@ -23,7 +23,7 @@ import sys
 import torch
 import torch.nn.functional as F
 
-from _build import ROOT, build_cfg
+from _build import ROOT, DepthLever, build_cfg
 
 sys.path.insert(0, f"{ROOT}/scripts")
 from tul_samples import load_ckpt  # noqa: E402
@@ -104,12 +104,14 @@ def main() -> None:
                         if 0 < bag < dump:
                             first[b, p] = True
             masks.append((tokpos, first))
-        orig_mean = int(model.cfg.mean_depth)
+        lever = DepthLever(model, tul_rt, int(cfg.model.max_depth))
+        assert lever.a2, "the REFUSE above guarantees an A2 config"
         arm = {"step": step, "rows": rows_done, "eval_mode": "a2_model_depth",
-               "train_eval_depth": orig_mean, "depths": {}}
+               "depth_lever": lever.name,
+               "train_eval_depth": int(model.cfg.mean_depth), "depths": {}}
         try:
             for d in depths:
-                model.cfg.mean_depth = d
+                lever.set(d)
                 tot = tot_n = fir = fir_n = 0.0
                 for (inp, labels, layout), (tokpos, first) in zip(batches, masks):
                     ce = ce_maps(model, inp, layout, labels, device).cpu()
@@ -123,7 +125,7 @@ def main() -> None:
                 print(f"{label:10s} depth={d}  ce_tokens={tot/tot_n:.4f} "
                       f"span_first={fir/fir_n:.4f}", flush=True)
         finally:
-            model.cfg.mean_depth = orig_mean
+            lever.restore()
         results[label] = arm
         del model
         if device == "cuda":

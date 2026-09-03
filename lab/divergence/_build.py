@@ -24,7 +24,7 @@ from morph.training.quant_setup import apply_quantization     # noqa: E402
 from morph.training.train import build_morph_config           # noqa: E402
 from morph.training.tul_setup import build_tul_runtime        # noqa: E402
 
-__all__ = ["build_cfg", "build_model", "ROOT"]
+__all__ = ["build_cfg", "build_model", "DepthLever", "ROOT"]
 
 ROOT = _ROOT
 
@@ -52,3 +52,52 @@ def build_model(cfg, device: str = "cuda"):
     model = model.to(torch.device(device))
     apply_quantization(model, cfg)
     return model, tul_rt
+
+
+class DepthLever:
+    """The ONE eval-time forced-depth knob, chosen by arm.
+
+    Two arms, two knobs, and a probe that sets the wrong one measures nothing while
+    printing a full table:
+
+    * slot-loop arms (A0/A1/A3, l2*) loop the core on SLOT positions; eval depth is
+      ``model.cfg.tul.slot_mean_depth`` (with ``slot_max_depth`` raised to match).
+    * A2 (``tul.tokens_through_core``) runs the ordinary per-sample core over the whole
+      packed row; eval depth is ``model.cfg.mean_depth`` (the ``else`` of
+      ``_core_region``'s ``if self.training``), and the slot knobs are inert.
+
+    ``a2_depth_sweep.py`` and ``future_leak_probe.py`` both mutate the knob in place
+    and restore it; this is that logic in one home.
+    """
+
+    def __init__(self, model, tul_rt, fallback_max_depth: int):
+        self.model = model
+        self.a2 = bool(tul_rt is not None and tul_rt.model_cfg.tokens_through_core)
+        tc = model.cfg.tul
+        if self.a2:
+            self.name = "model.cfg.mean_depth"
+            self._orig = (int(model.cfg.mean_depth),)
+        else:
+            if tc is None:
+                raise ValueError(
+                    "DepthLever: this model has no TUL config, so there is no slot loop to "
+                    "force a depth on. A notul arm's lever is model.cfg.mean_depth via "
+                    "token_depth_sweep.py; this helper serves the packed-row probes only.")
+            self.name = "model.cfg.tul.slot_mean_depth"
+            self._orig = (int(tc.slot_mean_depth), int(tc.slot_max_depth))
+        self._fallback_max = int(fallback_max_depth)
+
+    def set(self, depth: int) -> None:
+        if self.a2:
+            self.model.cfg.mean_depth = int(depth)
+        else:
+            tc = self.model.cfg.tul
+            tc.slot_mean_depth = int(depth)
+            tc.slot_max_depth = max(int(depth), self._orig[1] or self._fallback_max)
+
+    def restore(self) -> None:
+        if self.a2:
+            self.model.cfg.mean_depth = self._orig[0]
+        else:
+            tc = self.model.cfg.tul
+            tc.slot_mean_depth, tc.slot_max_depth = self._orig
