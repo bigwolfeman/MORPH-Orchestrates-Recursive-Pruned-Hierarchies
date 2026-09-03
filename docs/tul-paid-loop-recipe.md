@@ -222,6 +222,12 @@ Things that are OUT, with the reason, so they do not come back by accident:
   depth 5, depth-8 tail flat. The warmup model's depth-1 CE (4.152) beats clean A2's
   depth-6 CE (4.171). The loop is a smaller, saturating contributor under the ramp; the
   recipe is better anyway. If the pair confirms it at 20k, mean depth can come down.
+  **Why, measured 01:10** (`successes/2026-09-03-warmup-core-map.md`): under the ramp the
+  core map is near identity (typical gain 0.994 at 2500, 1.053 at 5000; worst direction
+  26 at both) against the flat run's 1.052 / 1.134 and 55 / 97, with the same alignment
+  ratios. The loop's earning and the loop's instability were the same quantity on the
+  flat schedule: the core map's gain above 1, set in the first ~300 steps by whichever
+  path organizes first. The ramp lets the shallow path win that race.
 - **The matched 20k pair.** `2026-09-02-warmup-20k-pair.md`: A2 and notul, both on the
   ramp, same seed, tripwired; the honest prior for "A2 beats notul at 20k" is 40%,
   because the notul twin was 0.05 nats ahead at 5k on the flat schedule.
