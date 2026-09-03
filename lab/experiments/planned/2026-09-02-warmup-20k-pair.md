@@ -69,3 +69,35 @@ A 20k run on the warmup schedule (longest so far: wu5k, in flight at
 freeze time); disk: 8 checkpoints x 2.25 GB x 2 arms = 36 GB on 1.2 TB free;
 the fused-kernel GLA path on A2 if the rule selects it (the GLA arm's draw 1
 is that smoke).
+
+## Interim results — A2 arm (2026-09-03 07:04; notul arm running; predictions untouched)
+
+tul-a2-20k-wu: HEALTHY to 20000, tripwire silent (max preclip/total 274 at
+step 222). Final val 3.4762; last-5 mean 3.5039; best eval 3.2332 (79 evals).
+Old flat references: notul-20k final 3.5600 / last-5 3.4894 / best 3.2736;
+tul-20k 3.8255 / 3.8461 / 3.6068. 8 checkpoints kept (2500..20000).
+
+Earning over training (`a2_depth_sweep.py --rows 48`, identical rows):
+
+| step | K1 | K6 | K1−K6 |
+|---|---|---|---|
+| 2500 (wu draws, mean of 4) | | | 0.044 |
+| 5000 | 4.1380 | 4.0812 | 0.057 |
+| 10000 | 3.7979 | 3.7258 | 0.072 |
+| 20000 | 3.5592 | 3.4590 | **0.100** |
+
+Full curve at 20000: K1 3.5592, K2 3.4872, K3 3.4682, K4 3.4608, K5 3.4590,
+K6 3.4590, K7 3.4599, K8 3.4615. Saturates by depth 5; the tail is flat.
+The remaining checkpoints (7500, 12500, 15000, 17500) get the 1,6 sweep
+after the notul arm frees the card (a concurrent sweep next to a trainer at
+500 W is the UPS failure condition).
+
+- **P-P1 (60%): A2 half TRUE** (20000 steps, no detonation); notul pending.
+- **P-P3 (50%): TRUE**, on the bar (0.1002 >= 0.10).
+- **P-P4 (65%): TRUE.** 3.4762 < 3.5600.
+- P-P2, P-P5: pending the notul arm.
+
+The loop's share grows monotonically under the ramp (0.044 -> 0.100 over
+2500 -> 20000) where the flat notul's did not (0.220 at 4500, 0.207 at
+20000). Wolfe's "the loop contribution may change over time" (00:35) is
+measured: it does, upward.
