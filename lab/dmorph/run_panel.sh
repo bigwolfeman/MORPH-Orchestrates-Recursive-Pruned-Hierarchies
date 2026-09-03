@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# dmorph v1 panel (lab/experiments/planned/2026-09-03-dmorph-v1-panel.md): three arms x
+# two seeds, 20k steps each, seq 1024 batch 6, ONE trainer at a time on the 5090.
+#
+# PREPARED, NOT LAUNCHED. Wolfe launches it. Nothing here starts on its own.
+#
+#   setsid nohup bash lab/dmorph/run_panel.sh </dev/null >/home/wolfe/morph-scratch/dmorph-panel.log 2>&1 & disown
+#
+# Order: ctl s1, tok s1, hs s1, ctl s2, tok s2, hs s2 — the control first so the bar is
+# on disk before any arm finishes, and seed 1 of every arm before seed 2 of any.
+# Abort rule from the prereg: preclip/total > 1e4 after step 200 is a detonation
+# (lab/divergence/DIVERGENCE-README.md); the trainer's own divergence guard enforces it.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PY="${MORPH_PY:-/home/wolfe/11-DiffusionBlocks-Testing/.venv/bin/python}"
+export PYTHONPATH="$ROOT"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True     # mandatory on the 5090 (CLAUDE.md)
+export WANDB_DIR="${WANDB_DIR:-/home/wolfe/morph-scratch}"
+export WANDB_PROJECT=morph-tul
+export WANDB_ENTITY=adew-me
+STEPS="${DMORPH_STEPS:-20000}"
+RESULTS="$ROOT/lab/experiments/results/2026-09-03-dmorph-v1-panel"
+mkdir -p "$RESULTS"
+
+gpu_is_free() {
+  # Refuse to start while another compute process holds > 2 GiB (Wolfe's desktop
+  # sits at ~1 GiB across two processes).
+  local busy
+  busy=$(nvidia-smi --query-compute-apps=used_memory --format=csv,noheader,nounits \
+         | awk '$1 > 2048 {c++} END {print c+0}')
+  [ "$busy" = "0" ]
+}
+
+run_arm() {
+  local cfg="$1" seed="$2"
+  local name="${cfg/dmorph_/dmorph-}-s${seed}"
+  if [ -f "$ROOT/checkpoints/morph/$name/step_${STEPS}.pt" ]; then
+    echo "[panel] $name already at step $STEPS, skipping"
+    return 0
+  fi
+  until gpu_is_free; do
+    echo "[panel] $(date +%H:%M:%S) GPU busy, waiting 60 s before $name"
+    sleep 60
+  done
+  echo "[panel] $(date +%H:%M:%S) START $name"
+  ( cd "$ROOT" && "$PY" -m morph.training.train --config-name "$cfg" \
+      training.steps="$STEPS" training.seed="$seed" wandb.name="$name" \
+      2>&1 | tee "$RESULTS/$name.log" )
+  echo "[panel] $(date +%H:%M:%S) DONE  $name (exit ${PIPESTATUS[0]:-?})"
+}
+
+for seed in 1 2; do
+  run_arm dmorph_ctl "$seed"
+  run_arm dmorph_tok "$seed"
+  run_arm dmorph_hs  "$seed"
+done
+echo "[panel] all six runs finished $(date)"

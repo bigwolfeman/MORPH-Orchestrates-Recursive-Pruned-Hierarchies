@@ -20,6 +20,7 @@ if _ROOT not in sys.path:
 
 from morph.model.transformer import MORPHTransformer          # noqa: E402
 from morph.training.fm_setup import build_fm_runtime          # noqa: E402
+from morph.training.dmorph_setup import build_dmorph_runtime  # noqa: E402
 from morph.training.quant_setup import apply_quantization     # noqa: E402
 from morph.training.train import build_morph_config           # noqa: E402
 from morph.training.tul_setup import build_tul_runtime        # noqa: E402
@@ -47,8 +48,10 @@ def build_model(cfg, device: str = "cuda"):
     """
     tul_rt = build_tul_runtime(cfg)
     fm_rt = build_fm_runtime(cfg, tul_rt)
+    dm_rt = build_dmorph_runtime(cfg, tul_rt)
     model = MORPHTransformer(build_morph_config(cfg, tul=tul_rt.model_cfg if tul_rt else None,
-                                                fm=fm_rt))
+                                                fm=fm_rt,
+                                                dmorph=dm_rt.model_cfg if dm_rt else None))
     model = model.to(torch.device(device))
     apply_quantization(model, cfg)
     return model, tul_rt
