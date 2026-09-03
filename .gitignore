@@ -47,3 +47,8 @@ Incomplete
 .claude/
 .venv/
 .playwright-mcp/
+# Cursor IDE local state
+.cursor/
+
+# uv lockfile
+uv.lock
