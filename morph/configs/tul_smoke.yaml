@@ -1,11 +1,8 @@
-# TUL wiring smoke — the arm recipe at a size that fits in seconds (not a result).
-# Run: PYTHONPATH=$PWD WANDB_MODE=offline python -m morph.training.train \
-#        --config-name tul_smoke
-# Exercises the whole TUL path end to end: tokenizer → boundary ids → arrow loader →
-# slot layout → forward → grouped CE → eval metrics (plan_nats) → generation →
-# checkpoint. Numbers from this file mean NOTHING; it is a wiring gate.
+# CPU / tiny smoke of the paid-loop TUL path: builds in seconds, runs 12 steps, exercises
+# eval, checkpoint and the generator once. Used by the lifecycle tests and by hand before
+# a real launch (`python -m morph.training.train --config-name tul_smoke`).
 defaults:
-  - tul_a1
+  - tul_a2
   - _self_
 
 model:

@@ -191,11 +191,20 @@ ramped schedule needs the notul baseline rerun on the same schedule, or the ledg
 
 ## 6. The recipe, as of 2026-09-03 11:00
 
-**What the 20k pair licensed is the ramp, not the arm.** `morph/configs/base.yaml` now
-carries `training.warmup: 1000` (1000-step linear ramp to 1e-4, then flat); TUL stays
-default-off there. The paid TUL arm is `--config-name tul_a2` on that schedule, and it
-is the arm to keep measuring, not the production recipe: at 20k it sits 0.022 nats
-behind the plain model on 480 identical rows at 1.33x the wall clock (section 7).
+**2026-09-03 11:00 — the ramp was what the 20k pair licensed. 2026-09-03 afternoon —
+Wolfe made the paid loop the recipe anyway, and `base.yaml` now IS it.** The 20k pair
+(section 7) put the paid arm 0.022 nats behind the plain model on 480 identical rows at
+1.33x the wall clock, and the first draft of this section said "keep measuring, not the
+production recipe". Wolfe's call, verbatim in spirit: TUL is only slower because of
+optimizations still to do; it is the winning recipe; ship it to master and cut the arms
+that did not make it. So `morph/configs/base.yaml` carries the paid loop ON
+(`tul.activate_at: ${training.tst_ratio}`, switching on when TST ends), seq 4096, TST on,
+prune/carve/route on, batch 4, the 1000-step ramp, retention off, `bptt_depth: 8` (full
+BPTT), spectral cap 0, `slot_seed: boundary`, `emit_weight: 0.0`, `plast_weight: 1.0`,
+token-state dropout 0.15, `prefix_k: 2`. **That conjunction (TUL × TST × prune/carve/route
+× seq 4096 × batch 4) has run only as a startup smoke; nothing about it is measured.** The
+slot-only arms were removed from the tree in the same change
+(`.agents/notes/implemented/architecture/2026-09-03-ship-the-paid-loop-cut-the-arms.md`).
 
 The A2 arm as run: `--config-name tul_a2` plus `training.warmup=1000`, with the panel flags used by every
 arm in the campaign (`training.batch_size=6 training.seed=1
@@ -214,7 +223,7 @@ Things that are OUT, with the reason, so they do not come back by accident:
 | dense warmup before ternary | ternary weights organize differently (Wolfe, 2026-09-02) |
 | `core_gain_clip` | clamps the realized magnitude, not the map's gain |
 | seq-length curriculum as the stabilizer | deferred to Wolfe's later warmup-on-length work; one stability probe would not have been worth its GPU |
-| slot-loop-only TUL (A0/A1/A3 as the production arm) | section 2 |
+| slot-loop-only TUL (A0/A1/A3 as the production arm) | section 2 — and the code is gone since 2026-09-03 (last commit that runs it: `d9e04e6`) |
 
 ## 7. OPEN at the time of writing
 

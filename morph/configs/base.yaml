@@ -24,7 +24,9 @@ model:
   n_coda: 4
   mean_depth: 6
   max_depth: 8
-  bptt_depth: 4
+  bptt_depth: 8                  # ≥ max_depth → FULL BPTT (zero no_grad iterations). The
+                                 # truncated window (4) was the l2cap leak's cover: full BPTT
+                                 # trains the loop the coda actually reads (docs/tul-paid-loop-recipe.md §6)
   # SCSE Stage 1 (arXiv:2607.27656): the core loop's INITIAL DEVIATION.
   # MORPH historically entered the loop at h_0 = e, so against the input-conditioned anchor
   # h* = e the initial deviation is EXACTLY zero. The paper's Theorem 2 then makes the whole
@@ -145,8 +147,11 @@ model:
   # ── GLA Retention branch (#230) ──────────────────────────────────────────
   # Gated Linear Attention added in PARALLEL to the windowed attention in the 2nd layer
   # (retention_layers) of prelude/core/coda — a global-context / cross-iteration memory branch.
-  # Off → GLA not constructed → bit-identical to baseline.
-  retention: true
+  # Off → GLA not constructed → bit-identical to baseline. OFF since 2026-09-03: it is a
+  # learned acausal leak under the cross-iteration carry (retention_carry) and, with the
+  # carry off, measured inert under the LR ramp (0.004 nats for 19M params,
+  # lab/experiments/failures/2026-09-02-a2-gla-under-warmup.md). Stays a capability knob.
+  retention: false
   retention_layers: [1]          # within-section layer index that gets the branch (0-based)
   retention_sections: [prelude, core, coda]  # which sections get the branch (loop-detach arm: [prelude, coda])
   retention_write_shift: false   # FWA next-latent write alignment (k_{t-1}, v_t) — arXiv:2608.27763
@@ -165,9 +170,6 @@ training:
   # loader is built. See .agents/notes/proposed/feature/2026-08-27-ntp-dropout.md
   # for the rationale and the risk (it can make the plan MORE decorative).
   ntp_dropout_p: 0.0
-  # docs/tul-gate-spec.md §10: fail the run if the gate direction is still at its zero
-  # init by this step (⇒ the parameter is frozen and the gate emits a constant).
-  gate_alive_check_step: 2000
   steps: 100000
   batch_size: 4
   # Applied at train start (Python/torch/numpy RNG) before model build or data.
@@ -326,8 +328,12 @@ training:
   ademamix_alpha_cap: 3.5        # (b1zero) Hard cap on scheduled α_t. The per-block gain
                                  # runaway threshold is α_t≈4.3–4.5; cap at 3.5 to sustain
                                  # max stable AdEMAMix drive without crossing the threshold. 0=off.
-  ademamix_t_alpha: 8000         # (b1zero) α warmup horizon (validated). null → training.steps
-  ademamix_t_beta3: null         # null → training.steps
+  ademamix_t_alpha: 1600         # (b1zero) α warmup horizon. 1600 = the 2026-09 panel value
+                                 # every stable ramp run used; 8000 was the pre-ternary mortar
+                                 # validation. null → training.steps
+  ademamix_t_beta3: 3500         # β3 horizon. PINNED: null falls back to training.steps, which
+                                 # silently retunes the slow EMA with the run length (it flipped
+                                 # an arm from cure to inert, 2026-08). 3500 = the panel value.
   ademamix_beta3_warmup_start: 0.9  # (b1zero only) β3-warmup START decay; β1=0 makes the
                                  # paper's log(β1) schedule degenerate, so we ramp from here.
   ademamix_fused: true           # (b1zero) true = fused Triton kernel (faster opt.step).
@@ -461,84 +467,41 @@ routing:
   aux_detach_input: true         # feed router x.detach() → load-balance aux grad stays out of
                                  # the looped carrier (prevents OOM from extended BPTT depth)
 
-# ── TUL — Thought Unpack Loop (docs/tul-spec.md §8) ───────────────────────────
-# The Parcae core loops over one SLOT per span of text instead of over every token.
-# activate_at: never ⇒ NO TUL parameters are constructed and the forward never sees a
-# slot layout ⇒ bit-identical to plain MORPH (runtime-invariants §6b). That is the
-# default here because base.yaml is the validated deploy recipe and TUL has no evidence
-# yet; it is also arm TUL-A0. The arms live in tul_short.yaml + tul_a*.yaml and set
-# activate_at: 0.0 (spec §5 [W]: TUL layout from step 0, TST off).
+# ── TUL — Thought Unpack Loop (docs/tul-spec.md; the shipped arm is the PAID loop of
+# docs/tul-paid-loop-recipe.md). Slots are ordinary positions of ONE sequence: one slot
+# after every span (boundary rule below), seeded from the span's boundary token, and the
+# core loops over EVERY position — tokens and slots alike — at the per-sample Poisson
+# depth. The coda reads the looped carrier; the slot's own logit is masked at the head.
+# Measured on the 5090 panel (tul_a2.yaml, 20k steps, seq 1024): earning K1−K6 grows
+# 0.041 → 0.100 nats over training and the run is stable under the 1000-step LR ramp;
+# it lands 0.022 nats behind the plain model at matched steps
+# (lab/experiments/failures/2026-09-02-warmup-20k-pair.md) and is shipped as the recipe
+# on the grounds that the slot path's wall clock is an optimisation debt, not a
+# modelling one (Wolfe, 2026-09-03). `activate_at: never` builds no TUL parameter at
+# all and is bit-identical to plain MORPH (runtime-invariants §6b; notul.yaml).
+# UNMEASURED at this writing: TUL × TST superposition × prune/carve/route × seq 4096 —
+# every panel ran seq 1024, dense, TST off, TUL from step 0.
 tul:
-  activate_at: never       # never | 0.0 (from step 0) | fraction of steps (e.g. ${training.tst_ratio})
+  activate_at: ${training.tst_ratio}   # never | 0.0 (from step 0) | fraction of steps.
+                                       # TUL switches on AT the TST→NTP switch: the layout
+                                       # and superposition are mutually exclusive (invariant 6)
   slot_token: "<fim_pad>"  # QUOTED; resolved to an id at build, asserted absent from the corpus
   boundary_chars: ".;!?"   # a token ENDING in one of these cuts a span. NO comma [W].
   boundary_substrings: ["\n", "—", "–", "--"]   # …or CONTAINING one of these
   min_span: 4              # suppress a boundary below this span length (spec §3.1 rule 3)
   span_cap: 32             # force a boundary at this span length [W] (rule 4)
   max_slots: 0             # 0 → seq_len // 8 (the fixed slot budget; L_total = seq_len + prefix_k·max_slots)
-  prefix_k: 2              # coda positions per slot, by projection from ONE looped state [W]
-                           # (Block Transformer App. F.2 / Fig 3f: length 2 beats 1). 1 = arm TUL-prefix1.
-  # Per-slot-INDEX input embedding instead of ONE shared E_slot added to every slot.
-  # false = shipped behaviour. true = one row per slot, sized from the derived max_slots.
-  # Measured motivation: the valid slot states of a row have an effective rank of 1.7 to 4.8
-  # in 1024 dimensions with a mean pairwise cosine of +0.39 to +0.71, at every checkpoint
-  # including the healthy ones — they are near-parallel by construction, because they are
-  # one shared vector plus a span bag-mean and a mean over many token embeddings
-  # concentrates. At the takeover the core loop starts REDUCING that rank across its
-  # iterations (2.71 -> 1.81) where a healthy checkpoint's loop increases it (2.82 -> 4.18).
-  # See lab/experiments/failures/2026-08-24-tul-takeover-cure.md.
-  # per_slot_embed_std jitters each row at seating, in units of the embedding-mean std;
-  # 0 leaves every row equal, so the activation step is identical to the shared version.
-  per_slot_embed: false
-  per_slot_embed_std: 0.0
-  token_state_dropout: 0.15   # Bowman word dropout on the coda's token input; 0 = off, arm sweep {0, 0.15, 0.3}
-  slot_mean_depth: 0       # 0 → model.mean_depth (per-slot Poisson depth [W])
-  slot_max_depth: 0        # 0 → model.max_depth
-  coda_sees_slots: true    # false = arm TUL-A4 (slots gathered OUT of the coda sequence)
-  tokens_through_core: false  # true = arm TUL-A2 (slots-as-memory: tokens keep the core)
-  # Arms specified in spec §3.5 but NOT implemented in v1. A non-default value RAISES
-  # (a silently-ignored config key is worse than a missing one) — do not run them yet.
-  stp_lambda: 0.0          # arm: punc-STP on the slot trajectory
-  set_lambda: 0.0          # arm: slot-set multi-hot warm-up
-  carry: false             # arm: explicit W·h_{i-1} into slot i+1's input
-  xattn: false             # arm: per-layer cross-attention branch to the slots
-  bcast: false             # arm: AU-Net broadcast-add of h_i over the next span's tokens
-  fixed_stride: 0          # >0 = arm TUL-A5: a slot every N tokens, punctuation rule off
-  # ── The span-length gate (docs/tul-gate-spec.md). `gate: false` builds NOTHING:
-  # no parameter, no layout field, no random draw — the arm is TUL-A1 (§9 invariant 1).
-  gate: false              # true = arms TUL-gate / TUL-halt
-  gate_k_max: 40           # the regression DENOMINATOR (k = round(g·k_max)), NOT the
-                           # largest k: the model never asks for more than span_cap.
-                           # 1.25 × span_cap on purpose. Measured on OWT at span_cap 32,
-                           # 24.5 % of labels are a span of exactly 32 — with k_max = 32
-                           # a quarter of the signal would sit on the target g = 1.0,
-                           # which a sigmoid never reaches. The headroom puts the largest
-                           # target at 0.8 and cuts the q10…q90 logit spread the gate must
-                           # cover from 10.90 to 3.33.
-  gate_lambda: 1.0         # weight of the length term. 1.0 = the predecessor's lambda_g
-                           # (coconut/tul/config.py:81), the setting its gate worked under.
-  gate_train_zeros: false  # §6 AMENDED. true = also supervise g→0 on every iteration
-                           # before a slot's last (the "k=0, keep thinking" half of the
-                           # encoding). OFF, and the reason is arithmetic: the Poisson
-                           # depth is independent of the input, so no head can know which
-                           # iteration is the last — the optimum of that target is the
-                           # HAZARD, which multiplies the length away. Measured: k=5.00
-                           # against gold 18.98 at step 40, matching the hazard table to
-                           # the integer. Stop belongs in the separate head of §12.
-  gate_budget_cond: true   # §5: add budget_embed(span_len) to the slot state before the
-                           # coda. false reproduces the predecessor's defect (the decoder
-                           # was never told k), and is the ablation that isolates §5.
-  gate_truncate_p: 0.15    # §3.2: per-span probability of an extra RNG boundary. Teaches
-                           # the coda to stop on a BUDGET rather than on punctuation, and
-                           # makes the next span start mid-unit (§3.1's jitter, same knob).
-  gate_huber_beta: 1.0     # the Huber knee; 1.0 = the predecessor's delta default
-  gate_drives_depth: false # true = arm TUL-halt. EVAL ONLY — training always teacher-forces
-                           # the depth (§4), so one run scores both arms.
-  gate_seed: 0             # seeds the truncation rng; in the config so the run reproduces
-  # §12: specified and NOT implemented. A non-default value RAISES.
-  gate_scheduled_sampling: 0.0
-  gate_stop_head: false
-  gate_ponder_lambda: 0.0
+  prefix_k: 2              # positions per slot [W] (Block Transformer App. F.2 / Fig 3f: 2 beats 1)
+  token_state_dropout: 0.15   # Bowman word dropout on the coda's token input; 0 = off
+  # The slot's input seed: "boundary" = E_slot + W_sent·embed(t_last) (the shipped mode,
+  # Thought Gestalt's boundary tap at seed level); "bag_mean" = E_slot + mean of the
+  # span's token embeddings (spec §3.2, the original seed). Construction-time.
+  slot_seed: boundary
+  # §5 double label: the next span's first token is predicted from t_last (plain LM,
+  # weight plast_weight) AND from the slot's emit position (weight emit_weight). The
+  # recipe trains the token position only; the emit position stays a metric (ce_emit).
+  emit_weight: 0.0
+  plast_weight: 1.0
 
 data:
   # datasets>=4.x dropped script datasets; load from locally-cached OWT arrow shards instead.

@@ -1,0 +1,12 @@
+# The paid loop's CONTROL: tul_a2's panel with the layout off. The model is byte-identical
+# to plain MORPH (no slot parameters, no layout, no branch — runtime-invariants §6b), so
+# the pair (tul_a2, notul) isolates the slot apparatus and nothing else.
+defaults:
+  - tul_a2
+  - _self_
+
+tul:
+  activate_at: never
+
+wandb:
+  name: notul

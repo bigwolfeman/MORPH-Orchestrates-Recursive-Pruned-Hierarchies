@@ -8,11 +8,11 @@ Top-level navigation for project documentation.
 - [MORTAR BCSR + CMS (sparse MLP path)](mortar-bcsr.md)
 - [Runtime invariants (BPTT, kernels, compile, phases)](../lab/runtime-invariants.md)
 - [Ablation ledger (accepted / rejected / deferred)](ablation-ledger.md)
-- [TUL — Thought Unpack Loop specification](tul-spec.md)
+- [TUL — Thought Unpack Loop specification](tul-spec.md) — layout, slot input, loss and generation contract; its §3.3 slot-only core and §7 arms are RETIRED 2026-09-03 (the paid loop below is the shipped forward)
 - [SCSE — Source-Centered State Evolution port specification](scse-spec.md)
-- [TUL Gate — span-length and halting gates](tul-gate-spec.md) — BUILT 2026-08-22; §13 lists what building it changed in the spec
+- [TUL Gate — span-length and halting gates](tul-gate-spec.md) — BUILT 2026-08-22, RETIRED 2026-09-03 with the slot-only core (record; last commit that runs it `d9e04e6`)
 - [TUL-FM probing doctrine (flow-matching arc: instruments, controls, phase gates)](tul-fm-probing.md) — PROPOSED 2026-08-28; arc note in `.agents/notes/proposed/architecture/`
-- [The paid loop: how TUL came to earn its depth, and the recipe that trains it](tul-paid-loop-recipe.md) — LOCK-IN NOTE 2026-09-03: A2 (tokens through the core) + 1000-step LR warmup; every number cites its filed experiment; decision record in `.agents/notes/implemented/architecture/2026-09-02-paid-loop-warmup-recipe.md`
+- [The paid loop: how TUL came to earn its depth, and the recipe that trains it](tul-paid-loop-recipe.md) — THE SHIPPED FORWARD since 2026-09-03 (`base.yaml`, master); §6 is the recipe and names the unmeasured conjunction; decision note `.agents/notes/implemented/architecture/2026-09-03-ship-the-paid-loop-cut-the-arms.md`
 - [The Gist-Slot Recipe — the code that made slot content load-bearing](gist-mux-recipe.md) — LIVE 2026-08-29; literate record of GL1b (mask + gradient write + MUX target), the arm that inverted the mask's price
 - [Known-good runs and environment assumptions](../.agents/notes/implemented/process/2026-07-03-known-good-runs.md)
 - [Data placement design spec](../.agents/notes/implemented/architecture/2026-07-03-data-placement-design.md)
@@ -43,7 +43,7 @@ Step-by-step procedures. How to do a thing, not why it is done that way.
 Canonical contract stays here as `tul-spec.md`. Campaign logs and spikes live under
 [`lab/tul/`](../lab/tul/). Arm CW / Arm D design notes:
 
-- [Arm CW — compaction window (implemented)](../.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md)
+- [Arm CW — compaction window (implemented)](../.agents/notes/archived/architecture/2026-08-18-tul-compaction-window.md)
 - [Arm D — teacher distill (proposed)](../.agents/notes/proposed/architecture/2026-08-18-tul-teacher-distill.md)
 
 ## Local Archives

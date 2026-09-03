@@ -25,6 +25,7 @@ from lab.divergence.plan_content_probe import (
 )
 from morph.model.transformer import MORPHConfig, MORPHTransformer
 from morph.model.tul import TULConfig
+from morph.model.tul_fm import FMArmConfig
 from morph.model.tul_layout import BoundaryRule, TulLayoutSpec, slot_layout_from_ids
 
 DEVICE = torch.device("cpu")
@@ -71,9 +72,15 @@ def _batch(spec, B=3, n=140, seed=0):
 
 
 def _model(seed=1234, **cfg_kw) -> MORPHTransformer:
+    """An FM-planner model: `prefix_project` is the planner's write path, the only
+    forward that still produces the prefix values this probe captures (the paid loop has
+    no plan tensor — its slot is a looped position)."""
     torch.manual_seed(seed)
-    tul = TULConfig(prefix_k=2, slot_id=4)
-    return MORPHTransformer(_tiny(tul=tul, **cfg_kw))
+    spec = _spec()
+    tul = TULConfig(prefix_k=2, slot_id=4, token_state_dropout=0.0)
+    fm = FMArmConfig(d_p=16, n_layers=1, n_heads=2, d_ff=32, cond_dim=16, sigreg_slices=16,
+                     source_std=1.0 / 8.0, max_slots=spec.max_slots, l_total=spec.l_total)
+    return MORPHTransformer(_tiny(tul=tul, fm=fm, n_core=0, **cfg_kw))
 
 
 # ── 1. reduce_prefix_values ───────────────────────────────────────────────────

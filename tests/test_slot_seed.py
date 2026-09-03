@@ -1,9 +1,10 @@
-"""TUL slot-seed contract (arms TG4a/TG4b; lab/divergence/TG-WORKLIST.md A1).
+"""TUL slot-seed contract (docs/tul-paid-loop-recipe.md; lab/divergence/TG-WORKLIST.md A1).
 
 `TULConfig.slot_seed` is a construction-time enum selecting how a slot's TOKEN
 embedding input is built (`TULSlots.slot_input`, `add_e_slot=True`):
-"bag_mean" (default, master), "e_slot" (TG4a), "boundary" (TG4b). The bigram /
-value-embed signals (`add_e_slot=False`) must stay the plain bag-mean in every mode.
+"boundary" (the shipped default: E_slot + W_sent . embed(t_last)) and "bag_mean"
+(spec §3.2's span mean, kept as the measured control). The bigram / value-embed
+signals (`add_e_slot=False`) must stay the plain bag-mean in both modes.
 CPU only, tiny config, no tokenizer — same convention as test_tul_forward.py.
 """
 
@@ -68,34 +69,23 @@ def _span_positions(layout, b: int, s: int) -> list[int]:
 
 # ── TULConfig.slot_seed: the enum itself ──────────────────────────────────────
 
-def test_slot_seed_default_is_bag_mean():
-    assert TULConfig().slot_seed == "bag_mean"
+def test_slot_seed_default_is_boundary():
+    """base.yaml ships ``slot_seed: boundary``; the dataclass default must agree so a
+    hand-built TULConfig (every CPU test, the lab probes) is the shipped model."""
+    assert TULConfig().slot_seed == "boundary"
 
 
 def test_illegal_slot_seed_raises_with_the_legal_set():
-    with pytest.raises(ValueError, match=r"bag_mean.*e_slot.*boundary"):
+    with pytest.raises(ValueError, match=r"bag_mean.*boundary"):
         TULConfig(slot_seed="mean_pool")
-
-
-def test_center_bag_mean_with_e_slot_raises():
-    with pytest.raises(ValueError, match="center_bag_mean"):
-        TULConfig(slot_seed="e_slot", center_bag_mean=True)
-
-
-def test_center_bag_mean_with_boundary_raises():
-    with pytest.raises(ValueError, match="center_bag_mean"):
-        TULConfig(slot_seed="boundary", center_bag_mean=True)
-
-
-def test_center_bag_mean_with_bag_mean_is_legal():
-    TULConfig(slot_seed="bag_mean", center_bag_mean=True)   # must not raise
+    with pytest.raises(ValueError, match=r"bag_mean.*boundary"):
+        TULConfig(slot_seed="e_slot")       # the retired TG4a arm must not build silently
 
 
 # ── construction-time parameter dispatch: W_sent ──────────────────────────────
 
 def test_w_sent_built_only_in_boundary_mode():
     assert TULSlots(32, TULConfig(slot_seed="bag_mean")).W_sent is None
-    assert TULSlots(32, TULConfig(slot_seed="e_slot")).W_sent is None
     w = TULSlots(32, TULConfig(slot_seed="boundary")).W_sent
     assert w is not None and isinstance(w, torch.nn.Linear) and w.bias is None
     assert w.weight.shape == (32, 32)
@@ -137,64 +127,6 @@ def test_bag_mean_mode_add_e_slot_false_is_the_plain_bag_mean():
         bags, 1, layout.bag_id.unsqueeze(-1).expand(*layout.bag_id.shape, sig.shape[-1]))
     ref = torch.where(layout.slot_mask.unsqueeze(-1), ref_at_pos, sig)
     assert torch.equal(got, ref)
-
-
-# ── "e_slot" mode (arm TG4a) ───────────────────────────────────────────────────
-
-def test_e_slot_mode_every_real_slot_equals_e_slot_exactly():
-    m = _model(TULConfig(prefix_k=2, slot_id=4, slot_seed="e_slot"))
-    spec = _spec()
-    x, y, layout, _ = _batch(spec)
-    with torch.no_grad():
-        m.tul.E_slot.normal_(std=1.0)
-        emb = m.embed(x)
-        got = m.tul.slot_input(emb, layout, add_e_slot=True)
-    slot_pos = layout.slot_mask
-    want = m.tul.E_slot.expand_as(got)
-    assert torch.equal(got[slot_pos], want[slot_pos]), "every slot position must be E_slot exactly"
-    tok = ~slot_pos
-    assert torch.equal(got[tok], emb[tok]), "token positions must be untouched"
-
-
-def test_e_slot_mode_add_e_slot_false_stays_the_plain_bag_mean():
-    """The non-negotiable constraint: add_e_slot=False callers (bigram/value-embed)
-    keep the bag-mean in EVERY mode, including e_slot."""
-    m = _model(TULConfig(prefix_k=2, slot_id=4, slot_seed="e_slot"))
-    spec = _spec()
-    x, y, layout, _ = _batch(spec)
-    sig = torch.randn(x.shape[0], layout.l_total, 64)
-    got = m.tul.slot_input(sig, layout, add_e_slot=False)
-    token_sel = (~layout.slot_mask).float()
-    bags = bag_mean(sig, layout.bag_id, token_sel, layout.max_slots)
-    ref_at_pos = torch.gather(
-        bags, 1, layout.bag_id.unsqueeze(-1).expand(*layout.bag_id.shape, sig.shape[-1]))
-    ref = torch.where(layout.slot_mask.unsqueeze(-1), ref_at_pos, sig)
-    assert torch.equal(got, ref)
-
-
-def test_e_slot_mode_does_not_depend_on_the_span_tokens():
-    """No bag-mean is computed: perturbing a span's token embedding must not move
-    that span's slot value at all."""
-    m = _model(TULConfig(prefix_k=2, slot_id=4, slot_seed="e_slot"))
-    spec = _spec()
-    x, y, layout, _ = _batch(spec)
-    with torch.no_grad():
-        m.tul.E_slot.normal_(std=1.0)
-    b = 0
-    s = next(s for s in range(spec.max_slots)
-             if bool(layout.slot_valid[b, s]) and _span_positions(layout, b, s))
-    emb = m.embed(x).clone()
-    base = m.tul.slot_input(emb, layout, add_e_slot=True)
-    p = _span_positions(layout, b, s)[0]
-    perturbed = emb.clone()
-    perturbed[b, p] += 100.0
-    moved = m.tul.slot_input(perturbed, layout, add_e_slot=True)
-    # Compare SLOT positions only — TOKEN positions pass ``signal`` through unchanged
-    # (that is the invariant `test_e_slot_mode_every_real_slot_equals_e_slot_exactly`
-    # checks separately), so the perturbed token position itself is SUPPOSED to move;
-    # what must not move is every slot position.
-    sm = layout.slot_mask
-    assert torch.equal(base[sm], moved[sm]), "e_slot must be invariant to the span's tokens"
 
 
 # ── "boundary" mode (arm TG4b) ─────────────────────────────────────────────────
@@ -263,7 +195,7 @@ def test_boundary_mode_add_e_slot_false_stays_the_plain_bag_mean():
     assert torch.equal(got, ref)
 
 
-# ── pad / dump-bin invariant, all three modes ──────────────────────────────────
+# ── pad / dump-bin invariant, both modes ──────────────────────────────────
 
 def test_pad_slot_gets_e_slot_alone_in_every_mode():
     """A PAD slot (slot_valid=False, no span) never appears at any real L position —
@@ -279,7 +211,7 @@ def test_pad_slot_gets_e_slot_alone_in_every_mode():
     dump_pos = [(b, p) for b in range(x.shape[0]) for p in range(layout.l_total)
                 if bool(layout.slot_mask[b, p]) and int(layout.bag_id[b, p]) == dump_id]
     assert dump_pos, "this test needs at least one dump-bin (tail-pad) position"
-    for mode in ("bag_mean", "e_slot", "boundary"):
+    for mode in ("bag_mean", "boundary"):
         m = _model(TULConfig(prefix_k=2, slot_id=4, slot_seed=mode))
         with torch.no_grad():
             m.tul.E_slot.normal_(std=1.0)
@@ -337,44 +269,6 @@ def test_boundary_token_index_matches_brute_force_on_a_real_packed_batch():
 
 
 # ── the eval-time flip used by lab/divergence/slot_path_worth.py ──────────────────
-
-def test_seed_bagmean_flip_restores_the_bag_mean_seed():
-    """`seed_bagmean` must make an e_slot model's slot input EQUAL a bag_mean model's.
-
-    The worth harness compares arms by ablating the loop, and `loop_off` leaves the slot
-    carrying its own INPUT. On an e_slot arm that input is a constant, so the plain
-    "no-loop" column measures "loop vs nothing" while a bag_mean arm's measures "loop vs
-    a span summary". `seed_bagmean` flips `slot_seed` at eval time so both fall back to
-    the same thing. This test is the reason that flip is trusted: it asserts the flipped
-    output is bit-equal to the real bag_mean path and that the flip is UNDONE on exit.
-    """
-    from lab.divergence.slot_path_worth import seed_bagmean
-
-    spec = _spec()
-    x, _y, layout, _ = _batch(spec)
-    m = _model(TULConfig(prefix_k=2, slot_id=4, slot_seed="e_slot"))
-    ref = _model(TULConfig(prefix_k=2, slot_id=4, slot_seed="bag_mean"))
-    with torch.no_grad():
-        m.tul.E_slot.normal_(std=1.0)            # a zero E_slot hides a broken flip
-    ref.load_state_dict(m.state_dict())          # same weights, different seed mode
-
-    with torch.no_grad():
-        emb = m.embed(x)
-        as_eslot = m.tul.slot_input(emb, layout, add_e_slot=True)
-        want = ref.tul.slot_input(emb, layout, add_e_slot=True)
-        with seed_bagmean(m):
-            assert m.tul.tul.slot_seed == "bag_mean"
-            got = m.tul.slot_input(emb, layout, add_e_slot=True)
-
-    # The flip is the whole point: it must CHANGE the output, and change it to the
-    # bag_mean path exactly. An assertion on only one of those passes on a no-op.
-    slots = layout.slot_mask.unsqueeze(-1)
-    assert not torch.equal(as_eslot[slots.expand_as(as_eslot)],
-                           want[slots.expand_as(want)]), "e_slot and bag_mean agree — " \
-        "the fixture cannot detect a broken flip"
-    torch.testing.assert_close(got, want, rtol=0, atol=0)
-    assert m.tul.tul.slot_seed == "e_slot", "seed_bagmean leaked past its with-block"
-
 
 def test_seed_bagmean_restores_on_exception():
     """A raising body must not leave the model in bag_mean mode for every later eval."""
@@ -461,34 +355,6 @@ def test_plan_shuffled_permutes_rows_independently():
     rows = [tuple(int(out[b, s * 2].reshape(-1)[0]) // 10 for s in range(32))
             for b in range(4)]
     assert len(set(rows)) > 1, "every row got the SAME permutation"
-
-
-def test_plan_shuffled_runs_on_a_REAL_model_forward():
-    """The shipped path, not a stub.
-
-    The stub tests above were written at rank 3 ([B, S*K, C]) and passed, while the real
-    `prefix_project` returns the HC carrier at rank 4 ([B, S*K, n, C]). The 3-D unpack got
-    all the way to a real cap64 checkpoint before crashing:
-    `ValueError: too many values to unpack (expected 3)`. That is the third time this
-    campaign has been bitten by a test that exercised an adjacent path instead of the one
-    every arm runs, so this test drives an actual MORPHTransformer forward.
-    """
-    from lab.divergence.slot_path_worth import plan_shuffled
-
-    spec = _spec()
-    x, y, layout, _ = _batch(spec)
-    m = _model(TULConfig(prefix_k=2, slot_id=4))
-    m.eval()
-    with torch.no_grad():
-        base = m(x, labels=y, slot_layout=layout)["loss"]
-        with plan_shuffled(m):
-            shuf = m(x, labels=y, slot_layout=layout)["loss"]
-        after = m(x, labels=y, slot_layout=layout)["loss"]
-
-    assert torch.isfinite(shuf), f"non-finite loss under plan_shuffled: {shuf}"
-    assert not torch.equal(base, shuf), \
-        "shuffling the plan did not change the loss — the condition is a silent no-op"
-    torch.testing.assert_close(base, after, rtol=0, atol=0)   # cleanly restored
 
 
 # ── token_tax: forcing the coda's token dropout ON at eval ────────────────────────

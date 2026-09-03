@@ -19,7 +19,7 @@
 Status: failure
 
 Ledger: `lab/divergence/takeover-campaign.md` H24.
-Agent Note: [`.agents/notes/proposed/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md`](../../../.agents/notes/proposed/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md)
+Agent Note: [`.agents/notes/rejected/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md`](../../../.agents/notes/rejected/bug-fix/2026-08-25-hca-compressed-branch-dead-on-slot-path.md)
 Prior: [Phase 0 of H18](../failures/2026-08-25-h18-positional-attention-sink.md) found the defect;
 [the no-training screen](../failures/2026-08-25-h24-hca-branch-screen.md) said to expect a lever.
 

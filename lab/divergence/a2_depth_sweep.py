@@ -1,4 +1,4 @@
-"""A2 (tokens_through_core) depth sweep: token CE vs forced PER-SAMPLE core depth.
+"""A2 (the paid loop, every TUL model since 2026-09-03) depth sweep: token CE vs forced PER-SAMPLE core depth.
 
 A2 runs the ordinary per-sample core over the whole packed TUL sequence, so its
 eval depth lever is `model.cfg.mean_depth` (the `else` of `_core_region`'s
@@ -65,9 +65,10 @@ def main() -> None:
         ovr = parts[3].split(",") if len(parts) == 4 and parts[3] else []
         cfg = build_cfg(config, ["model.use_kernels=false", *ovr])
         tul_rt = build_tul_runtime(cfg)
-        if tul_rt is None or not tul_rt.model_cfg.tokens_through_core:
-            print(f"REFUSE {label}: not an A2 (tokens_through_core) config — use "
-                  f"core_depth_sweep.py (slot loop) or token_depth_sweep.py (notul)")
+        if tul_rt is None:
+            print(f"REFUSE {label}: {config} has tul.activate_at never — a plain model; use "
+                  f"token_depth_sweep.py (notul). Every TUL model is the paid loop since "
+                  f"2026-09-03, so no other check is needed here.")
             sys.exit(1)
         model, step = load_ckpt(cfg, path if path.startswith("/") else f"{ROOT}/{path}",
                                 device, tul_rt.model_cfg)

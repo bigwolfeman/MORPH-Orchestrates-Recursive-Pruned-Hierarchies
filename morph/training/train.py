@@ -16,7 +16,6 @@ import math
 import random as _random
 import json
 import os
-import sys
 import time
 from typing import Optional
 
@@ -99,16 +98,14 @@ def evaluate(
     n_batches: int = 20,
     tul: bool = False,
     extra: dict | None = None,
-    halt: bool = False,
 ) -> tuple[float, float]:
     """Return (avg_loss, ppl) over n_batches validation steps.
 
     ``tul=True``: the val loader yields the 3-tuple (input_ids, labels, slot_layout) and
     the model is called with the layout ON and bag_size 0 (spec invariant 6). The §7.2
-    metrics — val/ppl_tokens, val/first_tok_ce, val/plan_nats,
-    val/first_tok_counterfactual, layer-passes/token — are accumulated into ``extra``.
-    val/ppl_tokens is over TOKEN positions only, so it stays comparable to the
-    baseline's token PPL."""
+    metrics — val/ppl_tokens, val/first_tok_ce, val/first_tok_counterfactual,
+    layer-passes/token — are accumulated into ``extra``. val/ppl_tokens is over TOKEN
+    positions only, so it stays comparable to the baseline's token PPL."""
     model.eval()
     losses: list[float] = []
     acc: dict[str, list[float]] = {}
@@ -122,12 +119,8 @@ def evaluate(
             x, y, layout = x.to(device), y.to(device), layout.to(device)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 _m = getattr(model, "_orig_mod", model)
-                out = _m.tul_forward_with_plan_nats(x, y, layout)
+                out = _m(x, labels=y, slot_layout=layout)
             _l = out["loss"].item()
-            if out.get("mux_weighted") is not None:
-                _l -= float(out["mux_weighted"])   # val loss = model CE (see train/loss note)
-            if out.get("sigreg_weighted") is not None:
-                _l -= float(out["sigreg_weighted"])
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
             # language model and not on an auxiliary (the spectral-penalty precedent).
             for _aux in ("fm_weighted", "fm_sigreg_weighted"):
@@ -140,75 +133,21 @@ def evaluate(
                 acc.setdefault("val/first_tok_ce", []).append(float(out["ce_first_tok"]))
                 acc.setdefault("val/first_tok_counterfactual", []).append(
                     float(out["first_tok_counterfactual"]))
-            if "mux_local" in out:
-                acc.setdefault("val/mux_local", []).append(float(out["mux_local"]))
-            if "sigreg" in out:
-                acc.setdefault("val/sigreg", []).append(float(out["sigreg"]))
-            for _mk in ("mux_local", "mux_kl", "mux_entropy", "mux_null", "mux_rel",
-                        "mux_n_supervised"):
-                if _mk in out:
-                    acc.setdefault(f"val/{_mk}", []).append(float(out[_mk]))
-            if "ce_tokens_no_slots" in out:
-                # §7.2: CE without the plan MINUS CE with it. Positive ⇒ the coda is
-                # actually using the slot state (the C2 number, the h_z ablation).
-                acc.setdefault("val/plan_nats", []).append(
-                    float(out["ce_tokens_no_slots"]) - ce_tok)
             acc.setdefault("val/layer_passes_per_token", []).append(
                 float(out["layer_passes"]) / max(float(out["n_tokens"]), 1.0))
-            for _k, _v in out.items():
-                if _k.startswith("gate/") and _v is not None:
-                    acc.setdefault(f"val/{_k}", []).append(float(_v.detach().mean()))
-            if halt:
-                # Arm TUL-halt (docs/tul-gate-spec.md §7/§11), on the SAME batch and the
-                # SAME weights as the row above: §4 teacher-forces the depth in training,
-                # so the two arms differ only in the depth policy at scoring time and the
-                # comparison is exactly paired — no second run, no seed noise.
-                out_h = _m.tul_forward_halt(x, y, layout)
-                _ceh = float(out_h["ce_tokens"])
-                acc.setdefault("val/halt_loss", []).append(out_h["loss"].item())
-                acc.setdefault("val/halt_ce_tokens", []).append(_ceh)
-                acc.setdefault("val/halt_depth_mean", []).append(
-                    float(out_h["gate/depth_mean"]))
-                acc.setdefault("val/halt_layer_passes_per_token", []).append(
-                    float(out_h["layer_passes"]) / max(float(out_h["n_tokens"]), 1.0))
             _has_fm = getattr(_m, "fm_planner", None) is not None
-            # getattr-chained on purpose: this function is also driven by the CE stub
-            # models in tests/test_train_phase.py, which have no `cfg` at all.
-            _tul_cfg = getattr(getattr(_m, "cfg", None), "tul", None)
-            _ablate = bool(getattr(_tul_cfg, "eval_ablations", False))
-            if _has_fm or _ablate:
+            if _has_fm:
                 # Plan WORTH is the ce_tokens COST of removing the plan (zero) or of
                 # destroying only its correspondence to the slot (shuffle). Report the
                 # COST, never a specificity fraction: the fraction's denominator
                 # collapses through zero (docs/tul-fm-probing.md §4 rule 1, the tg3b
-                # -55.4 % reading).
+                # -55.4 % reading). FM planner only: the paid loop has no plan tensor.
                 _oz = _m.tul_forward_ablated(x, y, layout, plan_mode="zero")
                 _os = _m.tul_forward_ablated(x, y, layout, plan_mode="shuffle")
                 acc.setdefault("val/plan_worth_zero", []).append(
                     float(_oz["ce_tokens"]) - ce_tok)
                 acc.setdefault("val/plan_worth_shuffle", []).append(
                     float(_os["ce_tokens"]) - ce_tok)
-            if _ablate:
-                # THE WRONG-PLAN PROBE (arm GL1). A valid-but-wrong slot value instead
-                # of no value. TG4b: 0.48-0.56 nats here against 0.10 for zeroing —
-                # "removing LESS hurts MORE", which is how we know the coda reads the
-                # slot's VALUE even when shuffling costs nothing. It is an OOD-shock
-                # number, not a worth number (see tul_forward_ablated's docstring).
-                _ow = _m.tul_forward_ablated(x, y, layout, plan_mode="wrong_seed")
-                acc.setdefault("val/plan_worth_wrong_seed", []).append(
-                    float(_ow["ce_tokens"]) - ce_tok)
-                for _k, _v in _m.tul_slot_state_probe(x, layout).items():
-                    acc.setdefault(f"val/{_k}", []).append(float(_v))
-                # MUX §8.3 reasoning attention lift, WINDOW branch only (see
-                # morph/model/attn_lift.py for exactly which branch and why). Eager only.
-                for _k, _v in _m.tul_attn_lift_probe(x, layout).items():
-                    if _v == _v:                       # skip NaN (no eligible query)
-                        acc.setdefault(f"val/{_k}", []).append(float(_v))
-                if float(getattr(_tul_cfg, "mux_beta", 0.0)) > 0.0:
-                    # The FM2 scar, observable: how much of the tied embedding table's
-                    # gradient the auxiliary owns.
-                    for _k, _v in _m.tul_mux_grad_share(x, y, layout).items():
-                        acc.setdefault(f"val/{_k}", []).append(float(_v))
             if _has_fm:
                 if "fm" in out:
                     acc.setdefault("val/fm", []).append(float(out["fm"]))
@@ -235,10 +174,8 @@ def evaluate(
         # exists to measure. The baseline path returns exp(mean) (see the return
         # below), so the per-batch form was NOT comparable to it, despite this
         # function's docstring claiming exactly that comparability.
-        for _ce_k, _ppl_k in (("val/ce_tokens", "val/ppl_tokens"),
-                              ("val/halt_ce_tokens", "val/halt_ppl_tokens")):
-            if _ce_k in extra:
-                extra[_ppl_k] = math.exp(min(extra[_ce_k], 20.0))
+        if "val/ce_tokens" in extra:
+            extra["val/ppl_tokens"] = math.exp(min(extra["val/ce_tokens"], 20.0))
     avg = sum(losses) / max(len(losses), 1)
     return avg, math.exp(min(avg, 20.0))
 
@@ -407,7 +344,6 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         n_ve=int(m.n_ve) if getattr(m, "n_ve", None) is not None else None,
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
-        tg_scoped_kernels=bool(getattr(m, "tg_scoped_kernels", False)),
         hc_streams=int(getattr(m, "hc_streams", 4)),
         hc_tau=float(getattr(m, "hc_tau", 1.0)),
         hc_cayley_iters=int(getattr(m, "hc_cayley_iters", 3)),
@@ -472,8 +408,7 @@ def save_checkpoint(
         # home for them. This records WHICH layout a checkpoint was trained under so a
         # later loader cannot silently pair TUL weights with a plain-MORPH config.
         ckpt["tul"] = {"prefix_k": _mm.cfg.tul.prefix_k, "slot_id": _mm.cfg.tul.slot_id,
-                       "coda_sees_slots": _mm.cfg.tul.coda_sees_slots,
-                       "tokens_through_core": _mm.cfg.tul.tokens_through_core}
+                       "slot_seed": _mm.cfg.tul.slot_seed}
     if pruning is not None:
         # Both topology-phase flags are needed to RECONSTRUCT module structure (carve +
         # routers) before load_state_dict on resume. _is_compact alone is insufficient:
@@ -482,6 +417,31 @@ def save_checkpoint(
         ckpt["pruning_compact"] = pruning.is_compact
         ckpt["pruning_routed"] = pruning.is_routed
     torch.save(ckpt, path)
+
+
+# TUL tensors a checkpoint may carry that the shipped model no longer builds. `tul.W_prefix`
+# was the slot-only arms' prefix projection (cut 2026-09-03 with the arms — the paid loop's
+# slot is a looped position and writes nothing through a projection); it survives ONLY on the
+# FM planner, which still owns that write path. Kept as a tuple so the next retirement is one
+# line and the drop stays visible in the log rather than silent.
+RETIRED_TUL_KEYS = ("tul.W_prefix",)
+
+
+def drop_retired_tul_keys(state: dict, model: nn.Module, path: str) -> list[str]:
+    """Remove RETIRED_TUL_KEYS from a checkpoint's model state, LOUDLY, for a model that
+    does not build them. A model with an FM planner keeps every key (and the strict
+    unexpected-key check downstream still fires if the planner's key is missing a home).
+    Returns the dropped keys. Mutates ``state`` in place."""
+    if getattr(model, "fm_planner", None) is not None:
+        return []
+    dropped = [k for k in state if k.replace("_orig_mod.", "") in RETIRED_TUL_KEYS]
+    for k in dropped:
+        del state[k]
+    if dropped:
+        print(f"  load {path}: dropped {len(dropped)} retired TUL tensor(s) {dropped} — the "
+              f"paid loop builds no prefix projection (docs/tul-paid-loop-recipe.md §3); "
+              f"every other tensor is checked as before", flush=True)
+    return dropped
 
 
 def load_checkpoint(
@@ -542,6 +502,7 @@ def load_checkpoint(
         # Same convention (both compiled, or neither) → as-is. (model-compiled/ckpt-not is
         # not produced by this codebase — compile is applied unconditionally before save.)
         state = dict(ckpt_model)
+    drop_retired_tul_keys(state, model, path)
     # Let load_state_dict report truthfully AFTER the hooks reconstruct mortar_data/routers.
     missing, unexpected = model.load_state_dict(state, strict=False)
     # No-theater: an UNEXPECTED key means a saved tensor found no home (structure drift) →
@@ -630,6 +591,7 @@ def load_weights_only(path: str, model: nn.Module,
         state[canon_to_model.get(_canon(k), k)] = v   # onto the model's real key, else leave → unexpected
     n_raw = sum(1 for k in raw if k in model_keys)
     n_strip = sum(1 for k in raw if _canon(k) in canon_to_model)   # true canonical match count
+    drop_retired_tul_keys(state, model, path)
     missing, unexpected = model.load_state_dict(state, strict=False)
     # Hard guard against a silent partial load: the MLP backbone (gate_up/down shadows)
     # MUST land. If almost nothing matched, the seed is incompatible — fail LOUD.
@@ -781,21 +743,6 @@ def _preclip_probe(model) -> dict[str, float]:
         # geometric (median r2 0.971). Read them as a pair.
         out.update(_block_gain(acc, "core"))
 
-    # The GLA carried state and the realized per-iteration core gain, from the forward
-    # that produced these gradients. The carry is a SECOND recurrent loop inside the core
-    # loop, with a forget gate biased to alpha near 1, and nothing has ever watched it.
-    lp = getattr(getattr(model, "_orig_mod", model), "_loop_probe", None)
-    if lp:
-        for key, t in lp.items():
-            if t is None:
-                continue
-            seq = t.float().tolist()
-            out[f"loop/{key}_max"] = max(seq)
-            out[f"loop/{key}_last"] = seq[-1]
-            # The per-iteration profile itself: a gain that COMPOUNDS with the iteration
-            # index is a different disease from one that spikes at t=0.
-            for i, v in enumerate(seq):
-                out[f"loop/{key}_t{i}"] = v
     return out
 
 
@@ -1287,7 +1234,6 @@ def diag_forward_norms(model, step: int, path: str) -> None:
 def warmup_compile_all_shapes(
     model, batch_size: int, seq_len: int, device, passes_per_size: int,
     tag: str = "startup",
-    tul_rt=None,
 ) -> None:
     """Forced-depth fwd+bwd passes so EVERY compile variant builds NOW, not mid-loop.
 
@@ -1297,41 +1243,7 @@ def warmup_compile_all_shapes(
     Triton kernel size-specialization compile here. Shared by the thread-free
     startup window and the MORTAR/route phase-boundary recompile — see the two
     call sites for the (different) fork-safety reasoning at each.
-
-    ``tul_rt``: required when the model is built with ``tul.tg_restrict`` — a TG model
-    has NO plain-forward path (transformer.forward raises without a slot_layout, by
-    design: docs/tul-tg-spec.md), so the warmup synthesizes a TUL batch with the SAME
-    packer the loader uses and warms the REAL path instead. The forced-size loop is
-    skipped there on purpose: it exists for the hand-written Triton kernels' per-size
-    JIT specializations, and tg_restrict is use_kernels=false-only (no Triton on the
-    path); the core MLPs are compiled dynamic=True, so slot-count variance needs no
-    per-size passes either.
     """
-    if getattr(model, "_tg_restrict", False):
-        if tul_rt is None:
-            raise RuntimeError("warmup for a tg_restrict model needs tul_rt (its packer)")
-        from morph.model.tul_layout import pack_tul_batch
-        spec = tul_rt.data_cfg.spec_for(seq_len)
-        rule = tul_rt.data_cfg.rule
-        print(f"  Warmup compile [{tag}] (TG path, {passes_per_size} packed TUL passes)...",
-              flush=True)
-        t0 = time.perf_counter()
-        g = torch.Generator().manual_seed(0)
-        for _ in range(passes_per_size):
-            need = batch_size * (spec.l_total + 1)
-            buf = torch.randint(0, model.cfg.vocab_size, (need + 8,), generator=g).tolist()
-            ids, labs, layout = pack_tul_batch(buf, rule, spec, batch_size)
-            ids, labs, layout = ids.to(device), labs.to(device), layout.to(device)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                out = model(ids, labels=labs, slot_layout=layout)
-            out["loss"].backward()
-            model.zero_grad(set_to_none=True)
-            del ids, labs, layout, out
-        torch.cuda.synchronize()
-        print(f"  Warmup compile [{tag}] done in {time.perf_counter()-t0:.1f}s "
-              f"({passes_per_size} TG passes)", flush=True)
-        return
-
     mx = int(model.cfg.max_depth)
 
     def _forced(K):
@@ -1361,44 +1273,6 @@ def warmup_compile_all_shapes(
     torch.cuda.synchronize()
     print(f"  Warmup compile [{tag}] done in {time.perf_counter()-t0:.1f}s "
           f"({len(sizes) * passes_per_size} passes, all active-set sizes)", flush=True)
-
-
-def build_step_mix_cycle(step_mix: dict) -> list[str]:
-    """Deterministic ``tul_step_mode`` schedule from an integer-ratio dict
-    (``training.step_mix``, e.g. ``{bptt: 1, db1: 1}``) — the faithful DiffusionBlocks
-    interleave arm (``tul_ilv50``, CLAUDE.md).
-
-    Returns a cycle of length ``sum(step_mix.values())``; the mode at global step
-    ``s`` is ``cycle[s % len(cycle)]`` — a pure function of the step INDEX, so it is
-    resume-safe (no RNG, no run-local counter) and independent of the seed.
-
-    Uses the standard weighted-round-robin ("most uniform spread") construction
-    rather than laying out all of one mode followed by all of the other: at 1:1 that
-    means alternating ``bptt, db1, bptt, db1, …`` instead of a run of 50 followed by a
-    run of 50, which would correlate a long block of optimizer steps with the same
-    objective — bad for anything that assumes steps are roughly IID (e.g. AdEMAMix's
-    slow EMA). Ties broken by key order in ``step_mix`` (the YAML's own order, which
-    Hydra/OmegaConf preserve), so the construction is fully deterministic.
-    """
-    if not step_mix:
-        raise ValueError("build_step_mix_cycle needs a non-empty step_mix dict")
-    keys = list(step_mix.keys())
-    counts = {k: int(v) for k, v in step_mix.items()}
-    if any(c <= 0 for c in counts.values()):
-        raise ValueError(f"training.step_mix ratios must be positive ints, got {step_mix}")
-    total = sum(counts.values())
-    cycle: list[str] = []
-    produced = {k: 0 for k in keys}
-    for i in range(total):
-        best_k, best_score = None, None
-        for k in keys:
-            score = (i + 1) * counts[k] / total - produced[k]
-            if best_score is None or score > best_score + 1e-12:
-                best_k, best_score = k, score
-        cycle.append(best_k)
-        produced[best_k] += 1
-    assert produced == counts, (produced, counts)   # the construction's own invariant
-    return cycle
 
 
 # ── Main training loop ────────────────────────────────────────────────────────
@@ -1444,7 +1318,6 @@ def main(cfg: DictConfig) -> None:
                  "backward stays nondeterministic and this run will NOT be reproducible."))
 
     _seed = int(getattr(tr, "seed", 0))
-    import random as _random
     _random.seed(_seed)
     torch.manual_seed(_seed)          # seeds CPU + all CUDA generators
     try:
@@ -1555,8 +1428,6 @@ def main(cfg: DictConfig) -> None:
     # and it was measurable ONLY from a checkpoint autopsy. Log it on EVERY run, penalised or
     # not: with lam=0 `penalty()` early-returns an exact zero, so a logging-only construction
     # leaves the arm bit-exact but no longer blind. 0 disables.
-    # Phase-1 onset probe cadence (steps). 0 = off, and off is bit-exact: the model-side
-    # flag is not set, so _tul_core traces the same graph it always has.
     # Core-takeover abort criterion (plan task 3.2). The shipped ppl guard struck at step
     # 2620 on the measured control, 587 steps after the takeover began; this fires at 2033.
     # 0.0 = off. The rule lives in morph/training/divergence_guard.py and is replayed
@@ -1629,21 +1500,6 @@ def main(cfg: DictConfig) -> None:
               f"on {len(_spec_pen._linears)} core linears "
               f"({_spec_pen._n_mlp} MLP + {len(_spec_pen._linears) - _spec_pen._n_mlp} attention)")
 
-    # ── step_mix interleave schedule (faithful DiffusionBlocks, CLAUDE.md) ─────
-    # training.step_mix: {bptt: 1, db1: 1} → alternate tul_step_mode per step, a pure
-    # function of the GLOBAL step index (build_step_mix_cycle above) so it survives a
-    # resume unchanged. Absent (the default) → `_step_mix_cycle` is None and every
-    # forward call passes `tul_step_mode=None`, bit-identical to before this existed.
-    _step_mix_raw = getattr(cfg.training, "step_mix", None)
-    _step_mix_cycle = (build_step_mix_cycle(dict(_step_mix_raw))
-                       if _step_mix_raw else None)
-    _step_mix_stats: dict[str, dict[str, float]] = {}   # mode -> {"n": int, "loss_sum": float}
-    if _step_mix_cycle is not None:
-        print(f"  step_mix ON: cycle={_step_mix_cycle} (from {dict(_step_mix_raw)})",
-              flush=True)
-        for _m in set(_step_mix_cycle):
-            _step_mix_stats[_m] = {"n": 0, "loss_sum": 0.0}
-
     # ── Quantization / QAT ─────────────────────────────────────
     # Ternary → embedding → CMS scoring → attention-projection → FP8, in that order
     # (each step checks disjointness against the previous). MUST run BEFORE
@@ -1657,15 +1513,11 @@ def main(cfg: DictConfig) -> None:
     attn_proj_quant_manifest = _qm["attn_proj_quant"]
     fp8_manifest = _qm["fp8"]
 
-    # Phase-1 onset probe: arm the model-side half (the looped-core state collector in
-    # TULTransformer._tul_core). Set before the first forward. Left unset — the default —
-    # _tul_core takes the identical code path it always has.
     if _gprobe_every > 0:
-        model._probe_loop = True
         if _gprobe_path:
             os.makedirs(os.path.dirname(os.path.abspath(_gprobe_path)), exist_ok=True)
             _gprobe_fh = open(_gprobe_path, "a", buffering=1)
-        print(f"  [probe] pre-clip gradient + loop probe ON, every {_gprobe_every} step(s)"
+        print(f"  [probe] pre-clip gradient probe ON, every {_gprobe_every} step(s)"
               + (f", mirrored to {_gprobe_path}" if _gprobe_path else ""))
 
     # ── torch.compile ─────────────────────────────────────────────────────
@@ -1749,7 +1601,6 @@ def main(cfg: DictConfig) -> None:
         warmup_compile_all_shapes(
             model, int(cfg.training.batch_size), seq_len, device,
             int(getattr(tr, "warmup_passes_per_size", 4)), tag="startup thread-free",
-            tul_rt=tul_rt,
         )
 
         # Final safety net: forbid NEW compilation during the training loop. The warmup
@@ -1941,7 +1792,7 @@ def main(cfg: DictConfig) -> None:
         return iter(
             create_dataloader(tokenizer_name, dataset_name, seq_len, batch_size,
                               split="validation", skip_samples=50_000,
-                              tul=tul_rt.val_data_cfg if (tul_rt and tul_on) else None)
+                              tul=tul_rt.data_cfg if (tul_rt and tul_on) else None)
         )
 
     # val_loader is built below, from the SAME PhaseSchedule the training loop reads.
@@ -2147,11 +1998,6 @@ def main(cfg: DictConfig) -> None:
         _mm0 = getattr(model, "_orig_mod", model)
         _mm0.tul.init_at_activation(_mm0.embed.lm_weight())
         print("[TUL] layout ACTIVE from step 0; E_slot ← mean(embedding table)", flush=True)
-    # docs/tul-gate-spec.md §10. Pending until the first real batch: seating reads the
-    # corpus base rate off actual span lengths rather than a hardcoded constant, and the
-    # audit then refuses the run if the seated gate still cannot reach its targets.
-    _gate_pending = getattr(getattr(model, "_orig_mod", model), "tul_gate", None) is not None
-    _gate_alive_step = int(getattr(cfg.training, "gate_alive_check_step", 2000))
 
     def _rebuild_train_loader(skip_batches: int = 0):
         """The ONE way a train loader is built or rebuilt.
@@ -2345,22 +2191,7 @@ def main(cfg: DictConfig) -> None:
                     _fh.dump_traceback()
         _thr.Thread(target=_watchdog, daemon=True).start()
 
-    # Auxiliary-objective warmup gates (tul.mux_activate_at / sigreg_activate_at).
-    # Resolved once: fractions of the run, same shape as tul.activate_at. Written
-    # into non-persistent BUFFERS each step, so flipping one costs no recompile
-    # and the arm stays a schedule rather than a branch in the forward.
-    _mdl = getattr(model, "_orig_mod", model)
-    _tulc = getattr(_mdl.cfg, "tul", None)
-    _mux_on_at = int(float(getattr(_tulc, "mux_activate_at", 0.0)) * total_steps) if _tulc else 0
-    _sig_on_at = int(float(getattr(_tulc, "sigreg_activate_at", 0.0)) * total_steps) if _tulc else 0
-    if _tulc is not None and (_mux_on_at or _sig_on_at):
-        print(f"  [aux] mux head on at step {_mux_on_at}, sigreg on at step {_sig_on_at} "
-              f"(of {total_steps})", flush=True)
-
     for step in range(start_step, total_steps):
-        if _tulc is not None and hasattr(_mdl, "mux_gate"):
-            _mdl.mux_gate.fill_(1.0 if step >= _mux_on_at else 0.0)
-            _mdl.sigreg_gate.fill_(1.0 if step >= _sig_on_at else 0.0)
         if step == _nsys_a:
             torch.cuda.profiler.start()
             print(f"[nsys] cudaProfilerStart @ step {step}", flush=True)
@@ -2517,11 +2348,6 @@ def main(cfg: DictConfig) -> None:
         # disagreed would mix two objectives into one optimizer update.
         _is_ntp = _ntp_loader is not None and _ntp_rng.random() < _ntp_p
         _ntp_steps += int(_is_ntp)
-        # step_mix mode for THIS step — a function of `step` alone (see
-        # build_step_mix_cycle), computed once per step (not per micro-batch) so a
-        # grad-accumulated step never mixes two objectives into one optimizer update.
-        _cur_tul_mode = (_step_mix_cycle[step % len(_step_mix_cycle)]
-                         if _step_mix_cycle is not None else None)
         for _micro in range(_ga):
             with _rt.region("data"):
                 try:
@@ -2545,18 +2371,6 @@ def main(cfg: DictConfig) -> None:
                 x, y = x.to(device), y.to(device)
                 _sg_shape = x.shape          # static-graph build uses the live shape
 
-            if _gate_pending and _layout is not None and _layout.span_len is not None:
-                from morph.training.gate_audit import audit_gate_travel, seat_gate_bias
-                _gm = getattr(model, "_orig_mod", model)
-                _gstats = seat_gate_bias(_gm.tul_gate, _layout)
-                # ‖z‖ at init is exact, not estimated: RMSNorm's scale starts at ones, so
-                # the normalised readout input has RMS 1 and L2 norm √d_model.
-                _gstats.update(audit_gate_travel(
-                    _gm.tul_gate, optimizer, _gstats, total_steps,
-                    z_norm=float(cfg.model.d_model) ** 0.5))
-                wandb.config.update({"gate_audit": _gstats}, allow_val_change=True)
-                _gate_pending = False
-
             # Accumulate the alignment axes BEFORE the forward so a mid-step crash still
             # leaves a consistent count. tokens = real input tokens this step; passes =
             # tokens x nominal proxy, i.e. cumulative layer applications.
@@ -2564,20 +2378,11 @@ def main(cfg: DictConfig) -> None:
             _cum_tokens += _step_tokens
             _cum_passes += _step_tokens * _flops.flop_proxy()
 
-            # step_mix requires a slot layout (it selects a TUL core loop mode); a step
-            # where TUL is off (no layout — e.g. before tul.activate_at) or a non-TUL
-            # loader batch runs the ordinary forward, same as step_mix being unset.
-            _tsm = _cur_tul_mode if _layout is not None else None
-
             with _rt.region("fwd"):
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     out = model(x, labels=y, bag_size=phase.bag_size,
-                                slot_layout=_layout, tul_step_mode=_tsm)
+                                slot_layout=_layout)
                     loss = out["loss"]
-                    if _tsm is not None:
-                        _sms = _step_mix_stats.setdefault(_tsm, {"n": 0, "loss_sum": 0.0})
-                        _sms["n"] += 1
-                        _sms["loss_sum"] += float(loss.detach())
 
                 # Routing aux loss (load balance) — only active after route_start
                 if pruning.is_routed:
@@ -2688,7 +2493,7 @@ def main(cfg: DictConfig) -> None:
                         warmup_compile_all_shapes(
                             model, int(cfg.training.batch_size), seq_len, device,
                             int(getattr(tr, "warmup_passes_per_size", 4)),
-                            tag=f"phase-boundary step {step}", tul_rt=tul_rt,
+                            tag=f"phase-boundary step {step}",
                         )
                 finally:
                     torch.compiler.set_stance("eager_on_recompile")
@@ -2831,12 +2636,6 @@ def main(cfg: DictConfig) -> None:
             # validation CE was 8.19. `train/loss_total` keeps the full objective.
             _lv_total = _lv
             _lv = _lv - _sp_value
-            # Same rule for the MUX local head (arm v1a): keep train/loss and the
-            # divergence guard on the model's CE, not the composite objective.
-            if isinstance(out, dict) and out.get("mux_weighted") is not None:
-                _lv = _lv - float(out["mux_weighted"])
-            if isinstance(out, dict) and out.get("sigreg_weighted") is not None:
-                _lv = _lv - float(out["sigreg_weighted"])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
             #    after its external watchdog died in a power loss). A NaN/Inf loss NEVER
             #    recovers — save an emergency ckpt for forensics and stop, instead of burning
@@ -2888,14 +2687,6 @@ def main(cfg: DictConfig) -> None:
                 "train/grad_norm": _gnorm,
                 "train/clip_factor": min(1.0, grad_clip / max(_gnorm, 1e-12)),
             }
-            # step_mix: per-mode cumulative step count + running mean loss (mission
-            # spec keys, e.g. train/steps_db1, train/loss_db1). Cumulative across the
-            # whole run (like _ntp_steps above), not just this log interval, so a
-            # dashboard reads the SAME curve whether it samples every step or every
-            # log_every steps.
-            for _m, _s in _step_mix_stats.items():
-                log[f"train/steps_{_m}"] = _s["n"]
-                log[f"train/loss_{_m}"] = _s["loss_sum"] / max(_s["n"], 1)
             # ── FLOP efficiency (gate A3) ─────────────────────────────────
             # tok/s and peak memory alone are misleading on a launch-bound model: A0's step
             # is ~16 % fixed overhead and a DB arm's is ~50-60 %. Always read flop_proxy
@@ -2914,7 +2705,7 @@ def main(cfg: DictConfig) -> None:
             _ppt = 1.0
             _cpf = None
             if phase.tul_on and _layout is not None:
-                # TUL: the core runs on SLOT positions only -- that is where its win is.
+                # TUL: the packed row is longer than the token count (slot positions).
                 _n_slots = float(getattr(_layout, "max_slots", 0) or 0)
                 _l_total = float(getattr(_layout, "total_positions", 0) or 0)
                 if _l_total > 0:
@@ -2942,16 +2733,9 @@ def main(cfg: DictConfig) -> None:
                     _npos = float(out["n_tokens"])
                     log["tul/layer_passes_per_token"] = float(out["layer_passes"]) / max(_npos, 1.0)
                     log["tul/tokens_per_batch"] = _npos
-                for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual", "mux_local",
-                           "sigreg"):
+                for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
-                # docs/tul-gate-spec.md §10 — every step, because a gate that stops moving
-                # is only visible as a FLAT curve, and a curve sampled at eval_every is
-                # too coarse to tell "flat" from "converged".
-                for _k, _v in out.items():
-                    if _k.startswith("gate/") and _v is not None:
-                        log[_k] = float(_v.detach().mean())
 
             # Retention gate diagnostic (#230): sigmoid(ret_gate) per retention block — THE key
             # signal for whether the model actually USES the retention branch (gate opens from ~0)
@@ -3064,73 +2848,28 @@ def main(cfg: DictConfig) -> None:
         # ── Validation (every eval_every steps) ──────────────────────────
         if step % eval_every == 0 and step > 0:
             _val_extra: dict = {}
-            _gm_e = getattr(model, "_orig_mod", model)
-            _halt_eval = (phase.tul_on and _gm_e.tul_gate is not None
-                          and _gm_e.cfg.tul.gate.drives_depth)
             val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
-                                         tul=phase.tul_on, extra=_val_extra,
-                                         halt=_halt_eval)
+                                         tul=phase.tul_on, extra=_val_extra)
             val_log: dict = {"val/loss": val_loss, "val/ppl": val_ppl}
             val_log.update(_val_extra)
 
             wandb.log(val_log, step=step)
             _tul_msg = ""
             if phase.tul_on:
-                # plan_nats is ABSENT (not NaN) on a tg_restrict model — eval skips the
-                # ablation pass there (see tul_forward_with_plan_nats). Printing a NaN
-                # placeholder would trip every divergence grep on a healthy run.
-                _plan = _val_extra.get("val/plan_nats")
                 _tul_msg = (f"  ppl_tok={_val_extra.get('val/ppl_tokens', float('nan')):.2f}"
                             f"  first_tok={_val_extra.get('val/first_tok_ce', float('nan')):.4f}"
-                            + (f"  plan_nats={_plan:+.4f}" if _plan is not None else "")
-                            + f"  cf={_val_extra.get('val/first_tok_counterfactual', float('nan')):+.4f}"
+                            f"  cf={_val_extra.get('val/first_tok_counterfactual', float('nan')):+.4f}"
                             f"  lp/tok={_val_extra.get('val/layer_passes_per_token', float('nan')):.2f}")
-                if "val/gate/loss_gate" in _val_extra:
-                    # docs/tul-gate-spec.md §10: the numbers that separate a WORKING gate
-                    # from one sitting at a low loss emitting a constant. In the console,
-                    # not only in wandb — a dead gate must be visible while the run runs.
-                    _tul_msg += (
-                        f"\n              gate: loss={_val_extra['val/gate/loss_gate']:.4f}"
-                        f" corr={_val_extra.get('val/gate/gate_k_corr', float('nan')):+.3f}"
-                        f" skill={_val_extra.get('val/gate/gate_k_skill', float('nan')):+.2f}tok"
-                        f" k={_val_extra.get('val/gate/gate_k_mean', float('nan')):.2f}"
-                        f"/gold {_val_extra.get('val/gate/gate_gold_mean', float('nan')):.2f}"
-                        f" |err|={_val_extra.get('val/gate/gate_k_abs_err', float('nan')):.2f}"
-                        f"/const {_val_extra.get('val/gate/gate_k_mae_const', float('nan')):.2f}"
-                        f" k0={_val_extra.get('val/gate/gate_k_zero_frac', float('nan')):.3f}"
-                        f" b={_val_extra.get('val/gate/gate_bias', float('nan')):+.3f}"
-                        f" |w|={_val_extra.get('val/gate/gate_w_norm', float('nan')):.3f}")
-                if "val/halt_ce_tokens" in _val_extra:
-                    # The bake-off's headline: the SAME weights under the two depth
-                    # policies (§11). Positive `Δ` = fixed depth wins, the pre-registered
-                    # prediction.
-                    _d = _val_extra["val/halt_ce_tokens"] - _val_extra.get(
-                        "val/ce_tokens", float("nan"))
-                    _tul_msg += (
-                        f"\n              halt: ce_tok={_val_extra['val/halt_ce_tokens']:.4f}"
-                        f" (Δ vs fixed {_d:+.4f})"
-                        f" depth={_val_extra.get('val/halt_depth_mean', float('nan')):.2f}"
-                        f" lp/tok={_val_extra.get('val/halt_layer_passes_per_token', float('nan')):.2f}")
             print(
                 f"  [VAL {step:7d}] loss={val_loss:.4f}  ppl={val_ppl:.2f}{_tul_msg}",
                 flush=True,
             )
             model.train()
 
-        # docs/tul-gate-spec.md §10: `w` starts at exactly zero and takes a gradient
-        # every step, so a norm still at the floor here means the parameter is frozen.
-        # Fail at step ~2k rather than score a 3-hour arm whose mechanism never engaged.
-        if step == _gate_alive_step:
-            _gm_a = getattr(model, "_orig_mod", model)
-            if _gm_a.tul_gate is not None and _gm_a.cfg.tul.gate.lam > 0.0:
-                from morph.training.gate_audit import assert_gate_is_alive
-                assert_gate_is_alive(_gm_a.tul_gate, step)
-
         # ── Generation test ───────────────────────────────────────────────
         if gen_every > 0 and step % gen_every == 0 and step > 0:
             gen_text, gen_metrics = run_generation_test(
                 model, device, tokenizer_name, seq_len, step,
-                tul_rt=tul_rt if phase.tul_on else None,
             )
             wandb.log({"gen/sample": wandb.Html(f"<pre>{gen_text}</pre>"), **gen_metrics},
                       step=step)
@@ -3222,7 +2961,6 @@ def main(cfg: DictConfig) -> None:
     if gen_every > 0 or bool(getattr(tr, "gen_test", False)):
         gen_text, gen_metrics = run_generation_test(
             model, device, tokenizer_name, seq_len, total_steps, n_tokens=200,
-            tul_rt=tul_rt if phase.tul_on else None,
         )
         wandb.log({"gen/final": wandb.Html(f"<pre>{gen_text}</pre>"),
                    **{f"{k}_final": v for k, v in gen_metrics.items()}}, step=total_steps)

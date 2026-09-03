@@ -29,13 +29,6 @@ _NO_DECAY_KEYWORDS = (
     "log_scale",                                   # ChannelInject scales
     "x0_injects", "value_embeds",                  # Skip/value inject gates
     "lm_mixer",                                    # LM head mixer
-    "tul_gate",                                    # TUL span-length gate: a norm, a rank-1
-                                                   # readout direction and a small budget
-                                                   # table, all zero-init. Decay on a
-                                                   # zero-init readout direction pulls
-                                                   # against the only gradient it has —
-                                                   # the "provably cannot move" class that
-                                                   # docs/tul-gate-spec.md §10 exists for.
     "embed",                                       # Embedding tables
     "ste_gain", "ste_temp",                        # LSTE per-layer params
     # ── TUL (docs/tul-spec.md §3.1-§3.4) ──

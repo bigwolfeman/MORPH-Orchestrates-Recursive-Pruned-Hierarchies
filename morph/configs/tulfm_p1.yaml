@@ -48,7 +48,7 @@ target:
 backbone:
   # Hydra config name (in this directory) describing the FROZEN model's architecture.
   # It also supplies data.tokenizer, data.dataset and the whole `tul:` span rule.
-  config_name: tul_a3
+  config_name: notul           # the coreless plain backbone: notul + model.n_core=0
   # Checkpoint to load into that architecture. null → a randomly-initialised backbone,
   # which is a CPU/smoke path only: a random backbone's features are not a plan target.
   checkpoint: checkpoints/morph/a3-s2/step_4500.pt
@@ -59,7 +59,7 @@ backbone:
   # Hydra overrides applied to the BACKBONE's config (not to this one). For smoke runs
   # that need a smaller frozen model without editing a shipped arm file. Everything set
   # here is logged, because the whole resolved backbone config goes to wandb.
-  overrides: []
+  overrides: ["model.n_core=0"]
 
 planner:
   d_p: 512

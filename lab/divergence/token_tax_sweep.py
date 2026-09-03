@@ -5,7 +5,7 @@ from morph.training.data import create_dataloader
 from morph.training.train import load_checkpoint
 from lab.divergence.slot_path_worth import plan_off, eval_groups
 
-cfg = build_cfg("tul_a1", ["training.batch_size=6", "model.use_kernels=false"])
+cfg = build_cfg("tul_a2", ["training.batch_size=6", "model.use_kernels=false"])
 model, tul_rt = build_model(cfg, device="cuda")
 root = getattr(model, "_orig_mod", model)
 load_checkpoint("checkpoints/morph/onset-capture/ROLL_step_1750.pt", model,

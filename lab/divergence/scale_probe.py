@@ -37,7 +37,7 @@ def rms(t: torch.Tensor) -> float:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--config", default="tul_a1")
+    ap.add_argument("--config", default="tul_a2")
     ap.add_argument("--iters", default="0,3", help="which loop iterations to probe")
     ap.add_argument("--scales", default="1.0,0.5,0.1,0.01,0.001")
     a = ap.parse_args()

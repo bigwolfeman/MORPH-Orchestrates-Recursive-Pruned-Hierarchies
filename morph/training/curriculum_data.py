@@ -209,13 +209,7 @@ class MultiSourceCurriculumLoader:
                 # switch re-derives max_slots = seq_len // 8 from the new seq_len.
                 spec = tul.spec_for(L)
                 buf = self._fill(batch_size * (spec.l_total + 1))
-                # ONE generator for the life of this loader, seeded from the config
-                # (docs/tul-gate-spec.md §3.2). None when the gate is off ⇒ no draw and a
-                # byte-identical row, which is what keeps the reference arm reproducible.
-                if tul.gate is not None and getattr(self, "_tul_rng", None) is None:
-                    self._tul_rng = np.random.default_rng(tul.seed)
-                out = pack_tul_batch(buf, tul.rule, spec, batch_size, gate=tul.gate,
-                                     rng=getattr(self, "_tul_rng", None))
+                out = pack_tul_batch(buf, tul.rule, spec, batch_size)
                 self._carry = buf + self._carry      # unconsumed tail keeps its order
                 yield out
             elif bag_size > 0:

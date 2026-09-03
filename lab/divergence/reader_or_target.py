@@ -48,7 +48,7 @@ TAXES = (0.0, 0.5, 0.9, 1.0)
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--config", default="tul_a1")
+    ap.add_argument("--config", default="tul_a2")
     ap.add_argument("--batches", type=int, default=8)
     ap.add_argument("--label", default=None)
     ap.add_argument("--out", default=None)

@@ -1,5 +1,11 @@
 # TUL-TG: Thought-Gestalt restriction for TUL
 
+> **RETIRED 2026-09-03.** The TG restriction stack (`tg_*` masks, `_tg_slot_attention`,
+> the truncation gate, iteration conditioning, attention lift) left the tree with the
+> slot-only core; the paid loop ([tul-paid-loop-recipe.md](tul-paid-loop-recipe.md)) runs
+> plain causal attention over the packed row. Record only; last commit that runs it:
+> `d9e04e6`. Results: `lab/experiments/failures/2026-08-2*-tg-*.md`.
+
 Status: SPEC — approved for build 2026-08-27. Source of truth for the TG arms.
 Pre-registration: `lab/experiments/planned/2026-08-27-tg-restriction.md` (committed before build).
 Paper: "Modeling Language as a Sequence of Thoughts" (arXiv 2512.25026, Thought Gestalt / TG).

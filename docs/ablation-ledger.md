@@ -41,6 +41,13 @@ single campaign or partial stack; **low** = directional / incomplete.
 
 ## TUL (`morph/configs/tul_short.yaml`: seq 1024 × batch 14 × 20k steps = 287 M tokens, TST off, prune/carve/route off (dense), TUL from step 0)
 
+> **Status 2026-09-03: this table is a RECORD.** Every slot-only arm below (A0/A1/A1r/A3/A4,
+> A5, the gate, halt, the TG rows, the gist/mux rows) was cut from the tree with the paid-loop
+> merge; the last commit that runs them is `d9e04e6`. The shipped forward and its numbers
+> are in [tul-paid-loop-recipe.md](tul-paid-loop-recipe.md) and
+> `lab/experiments/{successes,failures}/2026-09-02-*`; the surviving configs are `tul_a2`
+> (paid loop, seq 1024 panel), `notul` (matched control) and `base` (production).
+
 Arms from [tul-spec.md](tul-spec.md) §7. First comparison (A0c / A1c / A3):
 [lab/tul/arms-result.md](../lab/tul/arms-result.md) — A1 beats dense A0 (~0.056
 nats `val/ce_tokens`, ~1.6× wall clock). Further testing in progress; remaining

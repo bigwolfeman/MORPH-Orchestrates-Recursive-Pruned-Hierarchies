@@ -55,49 +55,24 @@ def build_model(cfg, device: str = "cuda"):
 
 
 class DepthLever:
-    """The ONE eval-time forced-depth knob, chosen by arm.
+    """The ONE eval-time forced-depth knob.
 
-    Two arms, two knobs, and a probe that sets the wrong one measures nothing while
-    printing a full table:
-
-    * slot-loop arms (A0/A1/A3, l2*) loop the core on SLOT positions; eval depth is
-      ``model.cfg.tul.slot_mean_depth`` (with ``slot_max_depth`` raised to match).
-    * A2 (``tul.tokens_through_core``) runs the ordinary per-sample core over the whole
-      packed row; eval depth is ``model.cfg.mean_depth`` (the ``else`` of
-      ``_core_region``'s ``if self.training``), and the slot knobs are inert.
-
-    ``a2_depth_sweep.py`` and ``future_leak_probe.py`` both mutate the knob in place
-    and restore it; this is that logic in one home.
+    The paid loop (every TUL model since 2026-09-03, and every plain model) runs the
+    ordinary per-sample core over the whole row, so eval depth is ``model.cfg.mean_depth``
+    (the ``else`` of ``_core_region``'s ``if self.training``). ``a2_depth_sweep.py`` and
+    ``future_leak_probe.py`` both mutate the knob in place and restore it; this is that
+    logic in one home. ``tul_rt`` and ``fallback_max_depth`` are accepted for the
+    callers' existing signatures; neither changes the lever any more.
     """
 
-    def __init__(self, model, tul_rt, fallback_max_depth: int):
+    def __init__(self, model, tul_rt=None, fallback_max_depth: int = 0):
         self.model = model
-        self.a2 = bool(tul_rt is not None and tul_rt.model_cfg.tokens_through_core)
-        tc = model.cfg.tul
-        if self.a2:
-            self.name = "model.cfg.mean_depth"
-            self._orig = (int(model.cfg.mean_depth),)
-        else:
-            if tc is None:
-                raise ValueError(
-                    "DepthLever: this model has no TUL config, so there is no slot loop to "
-                    "force a depth on. A notul arm's lever is model.cfg.mean_depth via "
-                    "token_depth_sweep.py; this helper serves the packed-row probes only.")
-            self.name = "model.cfg.tul.slot_mean_depth"
-            self._orig = (int(tc.slot_mean_depth), int(tc.slot_max_depth))
-        self._fallback_max = int(fallback_max_depth)
+        self.a2 = True
+        self.name = "model.cfg.mean_depth"
+        self._orig = (int(model.cfg.mean_depth),)
 
     def set(self, depth: int) -> None:
-        if self.a2:
-            self.model.cfg.mean_depth = int(depth)
-        else:
-            tc = self.model.cfg.tul
-            tc.slot_mean_depth = int(depth)
-            tc.slot_max_depth = max(int(depth), self._orig[1] or self._fallback_max)
+        self.model.cfg.mean_depth = int(depth)
 
     def restore(self) -> None:
-        if self.a2:
-            self.model.cfg.mean_depth = self._orig[0]
-        else:
-            tc = self.model.cfg.tul
-            tc.slot_mean_depth, tc.slot_max_depth = self._orig
+        self.model.cfg.mean_depth = self._orig[0]

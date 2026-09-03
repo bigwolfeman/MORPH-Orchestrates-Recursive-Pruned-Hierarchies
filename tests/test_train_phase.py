@@ -123,7 +123,7 @@ def _tul_cfg():
     lut = np.zeros(VOCAB, dtype=bool)
     lut[[11, 13, 17]] = True                       # a few synthetic boundary ids
     return TulDataConfig(rule=BoundaryRule(is_boundary=lut, min_span=4, span_cap=32,
-                                           eos_id=EOS, fixed_stride=0),
+                                           eos_id=EOS),
                          prefix_k=2, slot_id=SLOT_ID, max_slots=0)
 
 
@@ -182,7 +182,8 @@ class _CEStubModel(torch.nn.Module):
         self._ces = list(ces)
         self._i = 0
 
-    def tul_forward_with_plan_nats(self, x, y, layout):
+    def forward(self, x, labels=None, slot_layout=None, **_kw):
+        assert labels is not None and slot_layout is not None, "evaluate must pass both"
         ce = self._ces[self._i]
         self._i += 1
         return {"loss": torch.tensor(ce), "ce_tokens": ce,

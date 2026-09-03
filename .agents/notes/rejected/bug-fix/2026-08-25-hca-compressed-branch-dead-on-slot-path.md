@@ -1,6 +1,6 @@
 # Agent Note: the HCA compressed branch is dead on the TUL slot path
 
-Status: proposed
+Status: rejected — the slot path this bug lived on left the tree on 2026-09-03; the shipped paid loop runs the core at L_total, where the compressed branch is live (morph/model/CLAUDE.md, token column). Kept because the finding — check n_blocks at the REAL shapes before probing — still prevents a tempting mistake.
 
 ## Problem
 

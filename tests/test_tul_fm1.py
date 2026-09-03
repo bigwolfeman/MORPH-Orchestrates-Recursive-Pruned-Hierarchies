@@ -341,9 +341,6 @@ def test_fm_refuses_the_configurations_it_has_no_meaning_for():
         MORPHTransformer(_cfg(fm=_fm_arm(), n_core=2))
     with pytest.raises(ValueError, match="requires tul"):
         MORPHTransformer(_cfg(fm=_fm_arm(), tul=None))
-    bad_tul = TULConfig(prefix_k=2, slot_id=SLOT_ID, sigreg_lambda=0.1)
-    with pytest.raises(ValueError, match="fm.sigreg_lambda"):
-        MORPHTransformer(_cfg(fm=_fm_arm(), tul=bad_tul))
 
 
 # ── 4. causality ─────────────────────────────────────────────────────────────
@@ -575,60 +572,6 @@ def test_target_effective_rank_is_reported_on_real_targets():
     y = fm_span_targets(h, lay, geom)
     r = effective_rank(y, geom.valid)
     assert 1.0 < r <= 32.0, r
-
-
-# ── 8. ARM CW × FM1 (docs/tul-compaction-window-spec.md) ─────────────────────
-
-def _cw_tul(cut: int) -> TULConfig:
-    return TULConfig(prefix_k=2, slot_id=SLOT_ID, token_state_dropout=0.0,
-                     emit_weight=0.0, plast_weight=1.0, coda_token_cut=cut)
-
-
-def test_cw_scores_only_the_kept_token_positions():
-    """Under coda_token_cut the gathered coda scores a PLAIN CE (layout=None), and the
-    slots stay in the sequence — so slot emit labels MUST be masked out of it, or CW
-    training silently reinstates the emit loss at weight 1.0. The eval screen
-    (tul_forward_cw_arms) always did this; this pins the TRAINING path to it."""
-    from morph.model.tul import window_drop_mask
-    cut = 24
-    x, y, lay, _ = _batch()
-    m = _model(_fm_arm(), tul=_cw_tul(cut))
-    m.train()
-    out = m(x, y, slot_layout=lay)
-
-    dropped = window_drop_mask(lay.slot_mask, cut)
-    kept_tok = (~lay.slot_mask) & (~dropped) & (y != -100)
-    n_slot_labels = int((lay.slot_mask & (y != -100)).sum())
-    assert n_slot_labels > 0, "test is toothless: no slot label existed to leak"
-    assert float(out["n_targets"]) == pytest.approx(float(kept_tok.sum())), \
-        "CW CE must cover exactly the kept token positions — no slot emit labels, " \
-        "no pre-cut tokens"
-    assert torch.isfinite(out["loss"]), "CW×FM1 forward produced a non-finite loss"
-    for k in ("fm", "fm_sigreg"):
-        assert torch.isfinite(out[k]), f"{k} not finite under CW"
-
-
-def test_cw_plan_ablations_run_and_stay_paired():
-    """The plan-worth eval entry points must run under the SAME cut regime as the
-    normal pass, so worth = CE(ablated) − CE(normal) stays an apples-to-apples pair."""
-    from morph.model.tul import window_drop_mask
-    cut = 24
-    x, y, lay, _ = _batch()
-    m = _model(_fm_arm(), tul=_cw_tul(cut))
-    m.eval()
-    with torch.no_grad():
-        outs = {mode: m.tul_fm_forward(x, y, lay, plan_mode=mode)
-                for mode in ("normal", "zero", "shuffle")}
-    dropped = window_drop_mask(lay.slot_mask, cut)
-    kept_tok = float(((~lay.slot_mask) & (~dropped) & (y != -100)).sum())
-    for mode, out in outs.items():
-        assert math.isfinite(float(out["ce_tokens"])), \
-            f"plan_mode={mode} CE not finite under CW"
-        # The pairing: every ablation scores EXACTLY the kept token positions the
-        # normal pass scores. (The plans themselves differ at init — a zero-init
-        # planner leaves the Euler ladder at its noise source, not at zero.)
-        assert float(out["n_targets"]) == pytest.approx(kept_tok), \
-            f"plan_mode={mode} scored a different position set than the cut defines"
 
 
 # ── 9. ARM FM2 (emit CE as the reader-trainer) ───────────────────────────────

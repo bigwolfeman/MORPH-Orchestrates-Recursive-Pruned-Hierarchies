@@ -50,8 +50,6 @@ class TulRowBuilder:
     bag_id: list[int] = field(default_factory=list)
     slot_first: list[int] = field(default_factory=list)
     span_len: int = 0
-    budget: int = 0        # docs/tul-gate-spec.md §8: the model's own k for the OPEN span.
-                           # 0 = no gate, the punctuation rule alone decides (v1 behaviour).
 
     @property
     def n_slots(self) -> int:
@@ -71,14 +69,7 @@ class TulRowBuilder:
         self.slot_mask.append(False)
         self.bag_id.append(self.n_slots)          # the slot that will close this span
         cuts, self.span_len = self.rule.cut(np.array([token_id], dtype=np.int64), self.span_len)
-        if cuts.size == 0 and 0 < self.budget <= self.span_len:
-            # The gate asked for `budget` tokens and the budget-th was not a boundary
-            # (docs/tul-gate-spec.md §8). Cut here anyway: the next span then starts
-            # mid-unit, which is exactly what the loader's end-truncated rows taught, and
-            # the rule restarts from this cut the same way it restarts from a real one —
-            # so a wrong k costs quality, never synchronisation.
-            self.span_len = 0
-        elif cuts.size == 0:
+        if cuts.size == 0:
             return False
         if self.n_slots >= self.spec.max_slots:
             # Out of slot budget: the loader would end the row here (spec §3.1). Keep
@@ -128,8 +119,7 @@ def generate_tul(
     top_k: int = 0,
     seed: int | None = None,
     device=None,
-    halt: bool = False,
-    emit_source: str = "slot",
+    emit_source: str = "token",
 ) -> tuple[list[int], TulRowBuilder]:
     """Generate ``max_new_tokens`` TOKENS (slots are inserted by the rule, not counted).
 
@@ -139,14 +129,14 @@ def generate_tul(
 
     ``emit_source`` decides which position's logits produce a span's FIRST token when
     the row currently ends with a freshly inserted slot:
+      - ``"token"`` — the boundary TOKEN's position, the one position that is always
+        trained at weight 1 (``pack_tul_row``: token labels skip slots). The default and
+        the right choice for the shipped recipe (``tul.emit_weight == 0``): its slot
+        readout is untrained, measured as the missing-space-after-period artifact
+        (lab/divergence/emit_space_probe.py — emit-position space mass 0.47–0.58 vs
+        0.81 at the token position).
       - ``"slot"``  — the slot's emitting position (spec §6 v1). Correct ONLY when
         training put weight on the slot emit label (``tul.emit_weight > 0``).
-      - ``"token"`` — the boundary TOKEN's position, the one position that is always
-        trained at weight 1 (``pack_tul_row``: token labels skip slots). Use this for
-        ``emit_weight == 0`` arms: their slot readout is untrained (or MUX-shaped
-        toward the PREVIOUS span), measured as the missing-space-after-period artifact
-        (lab/divergence/emit_space_probe.py — emit-position space mass 0.47–0.58 vs
-        0.81 at the token position on the GL arms).
     Slot insertion, layouts, and every other part of the procedure are identical.
     """
     if emit_source not in ("slot", "token"):
@@ -171,20 +161,12 @@ def generate_tul(
     try:
         for _ in range(max_new_tokens):
             ids, layout = builder.tensors(device)
-            # `halt` = arm TUL-halt (docs/tul-gate-spec.md §7/§8): each slot loops until
-            # the gate asks for a token instead of running the fixed mean depth.
-            res = (model.tul_forward_halt(ids, None, layout) if halt
-                   else model(ids, slot_layout=layout))
+            res = model(ids, slot_layout=layout)
             # Row ends with the K slot positions exactly when the last append cut a
             # boundary; `emit_source="token"` then reads the last TOKEN position.
             back = (1 + spec.prefix_k
                     if emit_source == "token" and builder.slot_mask[-1] else 1)
             logits = res["logits"][0, -back]
-            if "gate_k" in res and builder.n_slots > 0:
-                # The newest slot's plan covers the span we are about to emit (§8). Read
-                # it fresh every step: the whole row is recomputed, so this IS the value
-                # the coda was conditioned on for these positions.
-                builder.budget = int(res["gate_k"][0, builder.n_slots - 1])
             # ONE sampling step for both generators — see morph/inference/sampling.py.
             nxt = sample_next(logits, temperature, top_k, gen)
             emitted.append(nxt)
@@ -206,9 +188,8 @@ def generate_tul_batch(
     top_k: int = 0,
     seeds: list[int] | None = None,
     device=None,
-    halt: bool = False,
     pad_id: int = 0,
-    emit_source: str = "slot",
+    emit_source: str = "token",
 ) -> tuple[list[list[int]], list[TulRowBuilder]]:
     """`generate_tul` for B rows at once. Returns (new tokens per row, builders).
 
@@ -267,8 +248,7 @@ def generate_tul_batch(
                     svalid[i, :b.n_slots] = True
             layout = SlotLayout(slot_mask=smask, bag_id=bag, slot_index=sidx,
                                 slot_valid=svalid, prefix_k=spec.prefix_k)
-            res = (model.tul_forward_halt(ids, None, layout) if halt
-                   else model(ids, slot_layout=layout))
+            res = model(ids, slot_layout=layout)
             # Same rule as the single-row generator, applied per row.
             if emit_source == "token":
                 back = torch.tensor(
@@ -278,8 +258,6 @@ def generate_tul_batch(
                 back = torch.ones(B, dtype=torch.long, device=device)
             last = res["logits"][rows, cur - back]
             for i, b in enumerate(builders):
-                if "gate_k" in res and b.n_slots > 0:
-                    b.budget = int(res["gate_k"][i, b.n_slots - 1])
                 nxt = sample_next(last[i], temperature, top_k, gens[i])
                 emitted[i].append(nxt)
                 b.append(nxt)

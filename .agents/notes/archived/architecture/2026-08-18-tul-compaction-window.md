@@ -1,6 +1,7 @@
 # Agent Note: TUL Arm CW — compaction window
 
 Status: implemented
+Archived: 2026-09-03 — the code this note describes left the tree with the slot-only core (last commit that runs it: d9e04e6); see implemented/architecture/2026-09-03-ship-the-paid-loop-cut-the-arms.md
 
 ## Problem
 

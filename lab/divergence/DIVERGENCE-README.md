@@ -127,6 +127,21 @@ plain model's loop earning falls from 0.207 to 0.04 nats and stays there; A2's f
 - M2G onset capture (`failures/2026-09-02-m2g-onset-capture.md`) — optimizer-state
   forensics around an onset.
 
+### Retired with the slot path (2026-09-03; they run at `d9e04e6`, not after)
+
+The paid-loop merge removed the slot-only core, the gate, the TG stack and the gist/mux
+machinery. Probes that import that code no longer import; they are kept as the record of
+how their numbers were produced and are NOT to be repaired against the paid loop:
+`mask_surgery.py` (needs `_tg_slot_attention`), `mux_unigram_baseline.py` (needs
+`mux_span_targets`). Probes that still import but whose question was the SLOT path —
+`slot_path_worth.py`'s plan ablations and `seed_bagmean`, `plan_content_probe.py`'s
+capture (now the FM planner's `prefix_project` only), `emit_space_probe.py`,
+`bound_seed_rank.py`, `gate_value_probe.py`, `slot_rows_probe.py` — read their headers
+before trusting a fresh run. Live and arm-general: `a2_depth_sweep.py`,
+`token_depth_sweep.py`, `jac_ladder.py`, `future_leak_probe.py`, `_build.py`, and the
+`tripwire` in `training.grad_probe_every`. Old checkpoints load through
+`load_checkpoint`, which drops the retired `tul.W_prefix` key loudly.
+
 ### Pre-registered records for this campaign
 
 `lab/experiments/{successes,failures}/2026-09-02-*` — a2s-restricted-paid-loop,
