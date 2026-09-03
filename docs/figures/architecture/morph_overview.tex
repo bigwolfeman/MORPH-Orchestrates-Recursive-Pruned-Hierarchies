@@ -113,7 +113,7 @@
   at ($(cm.east)+(2.35,-1.1)$) {$\times T$};
 \node[sub, text=loopC, align=left, anchor=north west]
   at ($(cm.east)+(2.35,-1.55)$)
-  {$T \sim \mathrm{Poi}(\lambda{=}6)$\\truncated BPTT\\(last 4 iters)\\active-set shrink};
+  {$T \sim \mathrm{Poi}(\lambda{=}6)$\\full BPTT\\(\texttt{bptt\_depth} 8 $\ge$ max)\\active-set shrink};
 
 % ── CODA ─────────────────────────────────────────────────────────────
 \node[B, fill=fBlue, above=1.15cm of cm] (da) {

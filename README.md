@@ -26,9 +26,9 @@ The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/
 
 
 <p align="center">
-  <img src="docs/figures/tul_mechanism.png" alt="TUL: shared token/slot sequence into prelude; think (core × T on slots) saves z; freeze z in sequence; decode next span; cut on punctuation" width="720" />
+  <img src="docs/figures/tul_mechanism.png" alt="TUL paid loop: tokens and slots are one row; prelude, the per-sample Poisson-depth core and the coda run on every position; the next span's first token is read at the boundary token; cut on punctuation" width="720" />
 </p>
-<p align="center"><em>TUL: loop once per thought, freeze <code>z</code> in the sequence, amortize decode over the next span.</em></p>
+<p align="center"><em>TUL paid loop: one row of tokens and slots through prelude, core × T and coda; the slots stay in the row and every later position reads them.</em></p>
 
 
 TUL loops the Parcae core over one **thought slot per span** (punctuation-bounded) instead

@@ -41,3 +41,20 @@ slots, not `h`.
 - Spec text in `docs/tul-spec.md` is unchanged; the figure now matches the
   dummies summary and the implemented forward (`_tul_core` → `prefix_project` →
   coda with `coda_sees_slots=true`).
+
+## Update 2026-09-03 — redrawn for the paid loop
+
+The 2026-08-21 figure drew the slot-only loop (core on slot positions, freeze `z` as an
+attended prefix, a separate decode loop over the next span, slot input = span mean). That
+forward was cut on 2026-09-03 (`2026-09-03-ship-the-paid-loop-cut-the-arms.md`). The figure
+now draws the shipped paid loop: tokens and slots are ONE row (two positions per slot),
+prelude, the per-sample Poisson-depth core (full BPTT) and the coda all run on every
+position, nothing is gathered or scattered, and the loss callout states the recipe (every
+token label at `plast_weight` 1.0, the slot's own emit label at `emit_weight` 0, the next
+span's first token read at the boundary token, full recompute per generation step). The
+slot input is the boundary seed `E_slot + W_sent · embed(t_last)`. The "z kept in the row"
+callout stays. `morph_overview.tex` was corrected in the same change from "truncated BPTT
+(last 4 iters)" to full BPTT (`bptt_depth` 8 ≥ max); its GLA branch is drawn as before
+even though `base.yaml` runs `retention: false` (Wolfe: leave GLA in, Raven attention may
+take its place). Still not fixed there: the core is labelled ×2N layers against a prelude
+of N; the recipe is 4:6:4 locally and 4:8:4 on the cloud target.
