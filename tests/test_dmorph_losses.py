@@ -158,11 +158,16 @@ def test_eval_aggregation_weights_by_counts_and_never_averages_an_empty_band_as_
 def test_ce_through_d_hat_starts_near_ln_v_at_every_source_scale():
     """The first panel run (dmorph-tok-s1-5k, 2026-09-03) started its CE-through-D̂ term at
     41.7 nats — four times ln V — because the raw ``D̂`` (norm ``s·sqrt(d)`` at low t)
-    was read through a ``sqrt(d)`` gain. The readout must depend on D̂'s DIRECTION only:
-    at construction the term sits within one nat of ln V for the matched source AND for
-    ``source_std 1.0`` (the panel's reshaped source), and the hard bridge returns
-    unit rows whatever the input norm."""
-    from morph.model.dmorph import hard_bridge, readout_state
+    was read through a ``sqrt(d)`` gain: confidently WRONG, not ignorant. The readout must
+    depend on D̂'s DIRECTION only, so at construction the term can never exceed the
+    uniform head's ln V by more than the calibration slack, for the matched source AND
+    for ``source_std 1.0`` (the panel's reshaped source). It is NOT pinned near ln V from
+    below: at t → 1 the input already carries the target and the tied head decodes it
+    (the decodability trap the prereg's P6 is about), so on a 64-token vocabulary the
+    init value is small. The raw readout is kept as the negative control: at source 1.0
+    it must exceed ln V, which is the defect this test exists for."""
+    from morph.model.dmorph import hard_bridge, readout_state, targets
+    from morph.model.fused_ce import fused_linear_cross_entropy
     x, y, layout, _ = batch(B=3)
     for src in (1.0 / math.sqrt(D), 1.0):
         m = model(dm_cfg(n_blocks=2, source_std=src))
@@ -170,7 +175,20 @@ def test_ce_through_d_hat_starts_near_ln_v_at_every_source_scale():
         torch.manual_seed(0)
         out = m(x, labels=y, slot_layout=layout)
         ce = float(out["dm_ce"])
-        assert abs(ce - math.log(V)) < 1.0, (src, ce, math.log(V))
+        assert ce <= math.log(V) + 0.5, (src, ce, math.log(V))
+    # negative control: the pre-fix readout (raw D̂ · head_scale) at source 1.0 is
+    # overconfident-wrong — a random unit-ish direction blown up to logit gaps of tens.
+    m = model(dm_cfg(n_blocks=2, source_std=1.0))
+    m.eval()
+    torch.manual_seed(1)
+    _xh, _caps, ctx = clean_pass(m, x, layout)
+    w_head = m.embed.lm_weight().detach().float()
+    B, L = y.shape
+    d_hat_raw = torch.randn(B, L, D)            # source-scale noise at s=1: norm ~sqrt(D)
+    lab = y.clone(); lab[layout.slot_mask] = -100
+    raw = fused_linear_cross_entropy((d_hat_raw * m.dmorph.head_scale).reshape(-1, D), w_head,
+                                     lab.reshape(-1), ignore_index=-100, mask_token_id=4)
+    assert float(raw) > math.log(V) + 1.0, f"negative control did not fire: {float(raw):.2f}"
     scale = torch.tensor(8.0)
     big = torch.randn(4, 5, D) * 50.0
     small = torch.randn(4, 5, D) * 0.01
