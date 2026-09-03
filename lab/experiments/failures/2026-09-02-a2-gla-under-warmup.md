@@ -1,6 +1,6 @@
 # Planned: GLA back under warmup — does the retention branch still cost CE and earning once the ramp is the stabilizer?
 
-Status: planned
+Status: failure
 Date: 2026-09-02 (frozen 23:40, before launch; trigger: Wolfe — "didn't we just
 show that a huge portion of the stability was our warm up? We might be able to
 bring GLA back. That's probably another arm we should test tonight")
@@ -53,3 +53,47 @@ recipe). The rule is in `run_gla_then_pair.sh` and is not edited after launch.
 `tokens_through_core` has never trained (bc0 was notul; the fused-kernel GLA
 path on the packed TUL row is exercised first by draw 1, hence the param-count
 gate and the tripwire).
+
+## Results (2026-09-03 00:19-02:28, runs tul-a2-gla1/2/3)
+
+Draw-1 gate passed: 287.1M params (268.2M without retention). Tripwire silent
+on all three; max preclip/total after step 200: 223 / 29.8 / 41.7.
+
+| draw | final val @2500 | K1 | K6 | K1−K6 |
+|---|---|---|---|---|
+| gla1 | 4.5354 | 4.5519 | 4.5112 | 0.041 |
+| gla2 | 4.5387 | 4.5753 | 4.5153 | 0.060 |
+| gla3 | 4.5396 | 4.5609 | 4.5134 | 0.047 |
+| mean | 4.5379 | | | 0.049 |
+| wu1-3 (no GLA) mean | 4.5415 | | | 0.047 |
+
+- **P-G1 (70%): TRUE.** 0/3.
+- **P-G2 (35%): TRUE, against the majority prior.** Mean 4.5379 is 0.004
+  BELOW the wu mean, inside the draw spread (0.005).
+- **P-G3 (50%): TRUE.** Mean earning 0.049 >= 0.026; equal to the wu mean.
+
+Frozen rule applied by the runner at 02:28:14: n=3, mean_val 4.5379 (needs
+<= 4.4915), mean_earning 0.0494 -> **retention off** for the pair.
+
+## Verdict
+
+**FAILURE by protocol (P-G2 resolved on its minority side), and the answer is
+clear: under the ramp GLA is neutral on all three axes.** It neither
+destabilizes nor stabilizes (the ramp already does that), costs nothing and
+buys nothing in CE at 2500, and leaves the loop's earning unchanged. The
+bisect's +0.18 nats cost for GLA on the flat schedule was the instability
+tax, not GLA's own price; the ramp removed the tax and revealed GLA as inert
+at this horizon. It does not earn its 19M parameters, so the pair runs
+without it and the recipe keeps retention off.
+
+What this does not say: whether GLA's retention state pays off past 2500
+steps or at longer context (its purpose is long-range memory; seq 1024 and
+2500 steps are not where that would show). Raven (Wolfe's GLA variant) is the
+next thing to test on that axis, once TUL is locked.
+
+## Updated hypothesis
+
+Every stabilizer measured so far (cap, GLA, gamma freeze) was either
+harmful or inert once the LR ramp is in place; the ramp is the one stabilizer
+that is also a CE win. Retention stays off by default; it is a capability
+question, not a stability one, from here on.

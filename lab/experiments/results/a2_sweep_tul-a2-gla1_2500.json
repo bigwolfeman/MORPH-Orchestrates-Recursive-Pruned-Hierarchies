@@ -1,0 +1,23 @@
+{
+ "tul-a2-gla1_2500": {
+  "step": 2500,
+  "rows": 48,
+  "eval_mode": "a2_model_depth",
+  "depth_lever": "model.cfg.mean_depth",
+  "train_eval_depth": 6,
+  "depths": {
+   "1": {
+    "ce_tokens": 4.551892969093503,
+    "ce_span_first": 3.8978615500710228,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   },
+   "6": {
+    "ce_tokens": 4.511187608984032,
+    "ce_span_first": 3.8735044660471907,
+    "n_tokens": 50036.0,
+    "n_first": 2475.0
+   }
+  }
+ }
+}

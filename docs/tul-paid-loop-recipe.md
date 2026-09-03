@@ -203,7 +203,7 @@ Things that are OUT, with the reason, so they do not come back by accident:
 | lever | why it is out |
 |---|---|
 | spectral cap / projection | four variants failed against the takeover, the cap kills depth-earning, and a uniform rescale cannot slow an alignment (`lab/experiments/failures/2026-08-24-tul-takeover-cure.md`, memory `l2cap-depth-earning-was-the-leak`) |
-| GLA / retention as a stabilizer | cost 0.18 nats and 0.08 of earning in the bisect (`successes/2026-08-31-loop-killer-bisect.md`); the acausal carry was a learned leak (memory `morph-not-causal-retention-carry`). OPEN: whether it earns its place under warmup, see section 7 |
+| GLA / retention as a stabilizer | cost 0.18 nats and 0.08 of earning in the bisect (`successes/2026-08-31-loop-killer-bisect.md`); the acausal carry was a learned leak (memory `morph-not-causal-retention-carry`). Under the ramp it is inert (section 7): 19M parameters for 0.004 nats, so it stays off |
 | ternary-gamma EMA or freeze | section 4 |
 | dense warmup before ternary | ternary weights organize differently (Wolfe, 2026-09-02) |
 | `core_gain_clip` | clamps the realized magnitude, not the map's gain |
@@ -212,10 +212,12 @@ Things that are OUT, with the reason, so they do not come back by accident:
 
 ## 7. OPEN at the time of writing
 
-- **GLA under warmup.** `2026-09-02-a2-gla-under-warmup.md`, three draws queued
-  behind wu5k. A frozen rule decides whether the 20k pair runs with retention: at least
-  two healthy draws, mean val at 2500 at most 4.4915 (0.05 below the warmup mean), mean
-  earning at least 0.026.
+- **GLA under warmup: MEASURED 2026-09-03 02:28, inert.**
+  `failures/2026-09-02-a2-gla-under-warmup.md`: 0 of 3 detonated, mean val 4.5379 vs
+  4.5415 without it, mean earning 0.049 vs 0.047. The bisect's 0.18-nat cost was the
+  instability tax, not GLA's price; under the ramp GLA buys nothing at 2500 steps and seq
+  1024. The frozen rule chose retention off for the pair. Retention is a capability
+  question (long context, raven) from here on, not a stability one.
 - **Earning at 5k under warmup: MEASURED 2026-09-03 00:16, reduced, not delayed.**
   `failures/2026-09-02-a2-warmup-5k-earning.md`: wu5k healthy to 5000, final val 4.1807
   (clean A2 4.2315), K1−K6 0.058 against clean A2's 0.1685 at the same step, saturated by
