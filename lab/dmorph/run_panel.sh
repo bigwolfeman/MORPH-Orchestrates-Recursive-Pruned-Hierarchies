@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dmorph v1 panel (lab/experiments/planned/2026-09-03-dmorph-v1-panel.md): three arms x
+# dmorph v1 panel (lab/experiments/failures/2026-09-03-dmorph-v1-panel.md): three arms x
 # two seeds, 20k steps each, seq 1024 batch 6, ONE trainer at a time on the 5090.
 #
 # PREPARED, NOT LAUNCHED. Wolfe launches it. Nothing here starts on its own.

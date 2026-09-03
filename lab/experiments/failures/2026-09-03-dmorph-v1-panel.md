@@ -1,6 +1,6 @@
 # dmorph v1 panel: two no-loop flow-matching arms against the coreless bar
 
-Status: planned
+Status: failure
 Date written: 2026-09-03 (before any run; predictions frozen at commit time)
 
 ## Question
@@ -98,3 +98,38 @@ aborted run's log is kept as `dmorph-tok-s1-5k.ABORTED-r1.log` and its forensic
 checkpoint under `checkpoints/morph/dmorph-tok-s1-5k/DIVERGED_step_2040.pt`; the tok and
 hs arms rerun from scratch. The control run is unaffected (dmorph off).
 
+
+## Results (2026-09-03 15:50; seed 1 only, 5,000 steps — amendments 1–3)
+
+Full table, checkpoint reads and the resolution row by row:
+`lab/experiments/results/2026-09-03-dmorph-v1-panel/README.md`. Last-4-eval clean head:
+ctl 4.2096, tok 4.3588, hs 4.6140. tok one-pass noisy head 3.8027 (band 0 5.38, band 3
+0.93), ladder 6.3956, ladder accuracy 0.2255 vs clean 0.2896. hs ladder cosine to its
+target 0.1437, worth cost −0.38 (readout artefact, see the README). tok/s ctl 28.9k, tok
+20.0k, hs 19.9k. Matched wall-clock (step 3250): tok 4.5937, hs 4.8167 vs ctl 4.2096.
+
+## Verdict
+
+P1 FALSE, P2 TRUE, P3 TRUE, P4 FALSE, P5 FALSE, P6 TRUE → failure. The noisy stream
+costs the shipped head 0.15 nats (tok) and 0.40 nats (hs) at matched tokens and 0.69× the
+throughput, its one-pass head wins only in the autoencoding bands, and its ladder is 2.6
+nats behind its own one-pass read (tok). The hs ladder is not a copy of the target it was
+trained to reach (cosine 0.14) — which is why P4 failed, and it is not a refinement of it
+either (the run's clean head is the worst of the three).
+
+## Updated hypothesis
+
+On text, DiffusionBlocks routing plus a flow-matching auxiliary stream does not pay for
+itself at 5k on either target, and the arm whose target is the model's own state hurts
+the model most. Wolfe's standing decision holds: the paid TUL loop is the recipe, dmorph is
+informational. The exposure-bias reading of the ladder gap (the FRM paper) was tested next
+in `failures/2026-09-03-dmorph-fpf-tok.md` and did not close the gap either.
+
+## What the method could not distinguish
+
+One seed per arm, so a 0.15-nat clean-head gap is a one-run comparison (runs decorrelate in
+11 steps here; the within-run reads P2–P4 and P6 are the low-noise ones). 5k steps: the v1
+tok arm's ladder was still falling at 5k (6.52 → 6.40 over the last 1,000 steps) and the
+20k read the prereg was written for was never taken. The 480-row same-rows sweep of the
+original Method was not run (the flat stack has no depth to sweep; the last-N eval means
+stand in for it).

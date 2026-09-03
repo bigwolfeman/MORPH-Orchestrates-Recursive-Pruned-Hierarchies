@@ -3,7 +3,7 @@
 # (paper Table 3: rollout probability 0.5). recur 0 = the rollout is the plain
 # self-conditioned Euler ladder, the paper's training integrator; eval still reads the
 # ladder at recur 0 and 2 (dm_ladder_ce_r{0,2}, dm_resid_auroc_r2). Design:
-# .agents/notes/proposed/architecture/2026-09-03-fixed-point-forcing-for-dmorph-and-the-loop.md
+# .agents/notes/rejected/architecture/2026-09-03-fixed-point-forcing-for-dmorph-and-the-loop.md
 defaults:
   - dmorph_tok
   - _self_

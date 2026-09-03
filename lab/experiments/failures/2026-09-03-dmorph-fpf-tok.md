@@ -1,8 +1,8 @@
 # Experiment: dmorph v1.1 — Fixed-Point Forcing on the tok arm
 
-Status: planned
+Status: failure
 
-Design: `.agents/notes/proposed/architecture/2026-09-03-fixed-point-forcing-for-dmorph-and-the-loop.md`.
+Design: `.agents/notes/rejected/architecture/2026-09-03-fixed-point-forcing-for-dmorph-and-the-loop.md`.
 Paper: Flow Reasoning Models (Helbling et al., arXiv 2606.29150), mirrored at
 `docs/references/training-objectives/flow-reasoning-models/`.
 Code: `morph/model/dmorph.py` (`carry_in`, `integrate`, `fpf_rollout`, `residual_auroc`),
@@ -58,3 +58,38 @@ divergence guard (`preclip/total > 1e4` after step 200, on `loss_tokens_only`).
 Artifacts: `lab/experiments/results/2026-09-03-dmorph-v1-panel/dmorph-tok-fpf-s1-5k.log`
 (same directory as the v1 panel it is read against) and the wandb run of that name in
 `adew-me/morph-tul`.
+
+## Results (2026-09-03 15:50)
+
+`lab/experiments/results/2026-09-03-dmorph-v1-panel/README.md`, "The FPF run". Last-3-eval
+means, FPF vs v1 tok: clean head 4.3920 vs 4.3588; one-pass 3.8251 vs 3.8027; ladder r0
+6.7974 vs 6.3956; ladder r2 6.5226; residual AUROC r2 0.4678; tok/s 17,104 vs 19,997
+(0.855×). The rollout ran on 47.4 % of rows (mean `t_start` 0.224) and the carry projection
+trained to norm 24.1 by step 2500.
+
+## Verdict
+
+P1 FALSE (the FPF ladder is 0.40 nats WORSE than v1's, on every eval from step 1250), P2
+FALSE, P3 TRUE (two held-time updates buy 0.27 nats), P4 FALSE (AUROC below chance on 15
+of 16 evals), P5 TRUE, P6 TRUE → failure.
+
+## Updated hypothesis
+
+On text the rollout carry is learned and used but makes the ladder worse, not better, and
+a carry that has stopped moving marks a WRONG position slightly more often than a right
+one — the opposite of the paper's Fig. 6c. The paper's premise is a single correct answer
+per position that the recurrence can converge to; a text position has a distribution, and
+"the carry has converged" there means the stream has committed to one token, which is
+exactly the overconfident fixed point FPF was supposed to remove. Held-time depth still
+helps a little (P3), so the recurrence is not inert; it is aimed at the wrong target. The
+next honest test is not more FPF on this ladder but a target with one answer — the FM
+planner's span-level plan or the hs slot state — with the residual AUROC as the gate, and
+only if someone still wants a decodable-carry recurrence in MORPH at all.
+
+## What the method could not distinguish
+
+One seed, 5k steps, `recur 0` in the rollout (the paper's training integrator) — a rollout
+with held-time updates was not run. The carry form (`normalize(D̂)`, not the categorical
+prediction) is a deviation the run cannot separate from the text-vs-puzzle difference.
+Throughput passed P6 by 0.005; the wall clock (35.5 vs 29.4 min, compile included) says
+0.83×.

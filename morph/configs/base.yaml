@@ -555,7 +555,7 @@ fm:
 # every config that does not turn it on is byte-identical to today (proven by
 # tests/test_dmorph_off_is_bit_identical.py). The arms live in dmorph_tok.yaml /
 # dmorph_hs.yaml, composed from dmorph_ctl.yaml (the coreless bar on the same depth).
-# Design + every number's source: .agents/notes/proposed/architecture/2026-09-03-dmorph-v1.md.
+# Design + every number's source: .agents/notes/rejected/architecture/2026-09-03-dmorph-v1.md.
 # Requires tul.activate_at != never and model.n_core == 0; both checked at build.
 dmorph:
   enabled: false

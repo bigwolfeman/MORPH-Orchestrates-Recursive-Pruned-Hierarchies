@@ -1,7 +1,7 @@
 """dmorph v1.1 — self-conditioning carry + Fixed-Point Forcing (arXiv 2606.29150).
 
 One test per contract of the design note
-(``.agents/notes/proposed/architecture/2026-09-03-fixed-point-forcing-for-dmorph-and-the-loop.md``):
+(``.agents/notes/rejected/architecture/2026-09-03-fixed-point-forcing-for-dmorph-and-the-loop.md``):
 ``fpf_p: 0`` is v1 bit-for-bit; the carry reaches the block only through ``W_s``; the
 rollout carries no gradient and runs exactly the blocks between ``band(t_start)`` and
 ``band(t)``; the integrator with ``recur`` visits each block ``recur + 1`` times; the

@@ -1,6 +1,6 @@
 # Agent Note: Fixed-Point Forcing — train the refinement on its own rollouts, not on one pass
 
-Status: proposed
+Status: rejected — measured 2026-09-03 (lab/experiments/failures/2026-09-03-dmorph-fpf-tok.md): the rollout carry trains and is used but the FPF ladder is 0.40 nats WORSE than v1 and the residual AUROC sits below chance on text; held-time updates buy 0.27; the loop probe is still unbuilt
 
 ## Problem
 
@@ -157,4 +157,4 @@ Built on `feat/dmorph` the same day; the loop probe is NOT built.
   detached + `W_s` trains, the rollout runs exactly the blocks between `band(t_start)`
   and `band(t)`, `integrate(0 → 1)` is the v1 ladder and `recur` repeats each block,
   eval reads only under fpf, AUROC helper). `pytest tests/ -q`: 595 passed, 8 skipped,
-  1 xfailed at this commit. Prereg: `lab/experiments/planned/2026-09-03-dmorph-fpf-tok.md`.
+  1 xfailed at this commit. Prereg: `lab/experiments/failures/2026-09-03-dmorph-fpf-tok.md`.

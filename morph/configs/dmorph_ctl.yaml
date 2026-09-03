@@ -5,7 +5,7 @@
 # this depth (tests/test_dmorph_off_is_bit_identical.py). Both dmorph arms compose from
 # this file, so the pair (dmorph_ctl, dmorph_tok|hs) isolates the noisy stream alone.
 # The 4:0:4 bar (4.3102) is a DIFFERENT network and is not the control here.
-# Panel flags of the warmup pair (prereg, lab/experiments/planned/2026-09-03-dmorph-v1-panel.md).
+# Panel flags of the warmup pair (prereg, lab/experiments/failures/2026-09-03-dmorph-v1-panel.md).
 defaults:
   - tul_a2
   - _self_

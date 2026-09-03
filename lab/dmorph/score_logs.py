@@ -6,7 +6,7 @@ For every log: the mean over the last ``--last`` evals of every key the VAL line
 (loss = the clean head, dm_ce = the one-pass noisy head, ladder_ce, lad_r0/lad_r2/auroc_r2
 under FPF, ...) and the mean ``tok/s`` over training steps ≥ ``--from-step``. Reads the
 trainer's own text; nothing is recomputed. The prereg reads
-(``lab/experiments/planned/2026-09-03-dmorph-v1-panel.md``,
+(``lab/experiments/failures/2026-09-03-dmorph-v1-panel.md``,
 ``2026-09-03-dmorph-fpf-tok.md``) are these means — never one eval (the per-eval spread
 is ~0.085 nats, memory ``morph-warmup-pair-verdict``).
 """

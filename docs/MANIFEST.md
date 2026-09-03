@@ -14,7 +14,7 @@ Top-level navigation for project documentation.
 - [TUL-FM probing doctrine (flow-matching arc: instruments, controls, phase gates)](tul-fm-probing.md) — PROPOSED 2026-08-28; arc note in `.agents/notes/proposed/architecture/`
 - [The paid loop: how TUL came to earn its depth, and the recipe that trains it](tul-paid-loop-recipe.md) — THE SHIPPED FORWARD since 2026-09-03 (`base.yaml`, master); §6 is the recipe and names the unmeasured conjunction; decision note `.agents/notes/implemented/architecture/2026-09-03-ship-the-paid-loop-cut-the-arms.md`
 - [The Gist-Slot Recipe — the code that made slot content load-bearing](gist-mux-recipe.md) — LIVE 2026-08-29; literate record of GL1b (mask + gradient write + MUX target), the arm that inverted the mask's price
-- [dmorph v1 — the no-loop MORPH with DiffusionBlocks-routed flow matching](../.agents/notes/proposed/architecture/2026-09-03-dmorph-v1.md) — BUILT 2026-09-03 on `feat/dmorph`, panel NOT run; its Implementation record lists every deviation; prereg `lab/experiments/planned/2026-09-03-dmorph-v1-panel.md`, code `morph/model/dmorph.py`, scripts `lab/dmorph/`
+- [dmorph v1 — the no-loop MORPH with DiffusionBlocks-routed flow matching](../.agents/notes/rejected/architecture/2026-09-03-dmorph-v1.md) — BUILT 2026-09-03 on `feat/dmorph`, panel NOT run; its Implementation record lists every deviation; prereg `lab/experiments/failures/2026-09-03-dmorph-v1-panel.md`, code `morph/model/dmorph.py`, scripts `lab/dmorph/`
 - [Known-good runs and environment assumptions](../.agents/notes/implemented/process/2026-07-03-known-good-runs.md)
 - [Data placement design spec](../.agents/notes/implemented/architecture/2026-07-03-data-placement-design.md)
 - [MORPH / Olympiad-AI interop contract](olympiad-interop.md)

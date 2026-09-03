@@ -1,7 +1,7 @@
 """dmorph — the no-loop MORPH's DiffusionBlocks-routed rectified-flow noisy stream.
 
-Design: ``.agents/notes/proposed/architecture/2026-09-03-dmorph-v1.md``. Prereg:
-``lab/experiments/planned/2026-09-03-dmorph-v1-panel.md``. The audits every number
+Design: ``.agents/notes/rejected/architecture/2026-09-03-dmorph-v1.md``. Prereg:
+``lab/experiments/failures/2026-09-03-dmorph-v1-panel.md``. The audits every number
 below comes from live in ``lab/dmorph/research/``.
 
 What this is, in one paragraph. The backbone is a FLAT 12-layer MORPH (``n_core == 0``)
@@ -59,7 +59,7 @@ Rules written in blood that this module obeys (each cites its scar):
 
 v1.1 (2026-09-03) — self-conditioning + Fixed-Point Forcing, from Flow Reasoning Models
 (Helbling et al., arXiv 2606.29150; design:
-``.agents/notes/proposed/architecture/2026-09-03-fixed-point-forcing-for-dmorph-and-the-loop.md``).
+``.agents/notes/rejected/architecture/2026-09-03-fixed-point-forcing-for-dmorph-and-the-loop.md``).
 The v1 ladder is the paper's exposure-bias failure by construction: a denoiser trained on
 ONE pass from the ground-truth interpolant, iterated on its own outputs at inference,
 converges to confident wrong fixed points (dmorph-tok-s1-5k: ``ladder_ce`` 7.25 against
