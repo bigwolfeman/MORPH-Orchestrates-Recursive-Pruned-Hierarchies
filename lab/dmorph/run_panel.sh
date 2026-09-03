@@ -24,6 +24,9 @@ STEPS="${DMORPH_STEPS:-20000}"
 DMORPH_SRC="${DMORPH_SOURCE_STD:-1.0}"
 TAG="${DMORPH_TAG:-}"
 SEEDS="${DMORPH_SEEDS:-1 2}"     # Wolfe 2026-09-03: one seed each for the 5k panel (DMORPH_SEEDS=1)
+# Which configs to run, in order. The FPF arm (dmorph_tok_fpf, v1.1) is launched alone:
+#   DMORPH_ARMS=dmorph_tok_fpf DMORPH_SEEDS=1 DMORPH_STEPS=5000 DMORPH_TAG=-5k
+ARMS="${DMORPH_ARMS:-dmorph_ctl dmorph_tok dmorph_hs}"
 RESULTS="$ROOT/lab/experiments/results/2026-09-03-dmorph-v1-panel"
 mkdir -p "$RESULTS"
 
@@ -38,7 +41,7 @@ gpu_is_free() {
 
 run_arm() {
   local cfg="$1" seed="$2"
-  local name="${cfg/dmorph_/dmorph-}-s${seed}${TAG}"
+  local name="${cfg//_/-}-s${seed}${TAG}"          # dmorph_tok_fpf -> dmorph-tok-fpf
   local extra=()
   if [ "$cfg" != "dmorph_ctl" ]; then extra=(dmorph.source_std="$DMORPH_SRC"); fi
   until gpu_is_free; do
@@ -61,8 +64,8 @@ run_arm() {
 }
 
 for seed in $SEEDS; do
-  run_arm dmorph_ctl "$seed"
-  run_arm dmorph_tok "$seed"
-  run_arm dmorph_hs  "$seed"
+  for cfg in $ARMS; do
+    run_arm "$cfg" "$seed"
+  done
 done
-echo "[panel] all runs finished (seeds: $SEEDS) $(date)"
+echo "[panel] all runs finished (arms: $ARMS; seeds: $SEEDS) $(date)"

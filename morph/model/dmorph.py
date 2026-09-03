@@ -57,6 +57,31 @@ Rules written in blood that this module obeys (each cites its scar):
   training, eval and the generator alike. The testbed lost a 573M-token run to two
   σ→block functions that disagreed (``db-testbed-fidelity.md``, "block reversal").
 
+v1.1 (2026-09-03) — self-conditioning + Fixed-Point Forcing, from Flow Reasoning Models
+(Helbling et al., arXiv 2606.29150; design:
+``.agents/notes/proposed/architecture/2026-09-03-fixed-point-forcing-for-dmorph-and-the-loop.md``).
+The v1 ladder is the paper's exposure-bias failure by construction: a denoiser trained on
+ONE pass from the ground-truth interpolant, iterated on its own outputs at inference,
+converges to confident wrong fixed points (dmorph-tok-s1-5k: ``ladder_ce`` 7.25 against
+its own one-pass ``dm_ce`` 4.94 at step 1500). The cure, with NO gradient through the
+iteration:
+
+* a **carry** ``s`` — the stream's previous clean-solution prediction,
+  ``carry_of(D̂) = normalize(D̂)`` (unit L2, the target manifold), ALWAYS stopgrad — enters
+  every block through a zero-init ``W_s`` (:meth:`DmorphStream.carry_in`), so ``s = 0``
+  (the null carry ``∅``) and ``W_s = 0`` are both bit-identical to v1;
+* **one integrator** (:func:`integrate`) runs the band ladder from any ``t_start`` to any
+  ``t_end`` with the carry fed forward and ``recur`` held-time updates per step
+  (paper Eq. 4) — the eval ladder, the generator and the training rollout are the SAME
+  code (the ``band_of_t`` rule again: two integrators that disagree is the testbed's scar);
+* **Fixed-Point Forcing** (:func:`fpf_rollout`, paper Fig. 4 right): with probability
+  ``fpf_p`` per row, ``t_start ~ U(0, t)``, ``x_start = (1 - t_start)·x0 + t_start·y``
+  with the SAME ``x0`` as the supervised interpolant, the integrator runs from ``t_start``
+  to ``t`` under ``no_grad``, and its last prediction is the carry for the loss-bearing
+  pass at the untouched canonical ``x_t``. The rollout crosses at most the blocks between
+  ``band(t_start)`` and ``band(t)``, so it costs at most one flat-stack forward on the
+  rows it touches. ``fpf_p: 0`` draws nothing and is v1 exactly.
+
 Nothing here branches on a runtime flag: :class:`DmorphStream` is built ONLY when
 ``MORPHConfig.dmorph`` is set (construction time, last in ``MORPHTransformer.__init__``),
 and ``dmorph=None`` never reaches this module at all.
@@ -82,14 +107,20 @@ __all__ = [
     "DmorphConfig",
     "DmorphStream",
     "DmCtx",
+    "Integration",
     "argmax_head",
     "band_bounds",
     "band_of_t",
     "block_layers",
+    "carry_of",
     "fm_euler_step",
+    "fpf_rollout",
     "hard_bridge",
+    "integrate",
     "ladder",
+    "ladder_run",
     "noisy_stream",
+    "residual_auroc",
     "sample_blocks",
     "sample_t_in_band",
     "training_terms",
@@ -124,6 +155,8 @@ class DmorphConfig:
     in_gain: float = 32.0            # x_t·in_gain enters the block; the resolved sqrt(d)
     loss_scale: str = "auto"         # "auto": divide the FM term by the analytic null floor
     block_visit: tuple[float, ...] | None = None   # training visit distribution; None = uniform
+    fpf_p: float = 0.0               # Fixed-Point Forcing: P(row's carry comes from its own rollout)
+    recur: int = 0                   # held-time carry updates per integrator step (rollout AND ladder)
 
     def __post_init__(self) -> None:
         if self.arm not in ARMS:
@@ -154,6 +187,14 @@ class DmorphConfig:
         if self.loss_scale not in LOSS_SCALES:
             raise ValueError(
                 f"dmorph.loss_scale must be one of {LOSS_SCALES}, got {self.loss_scale!r}")
+        if not 0.0 <= self.fpf_p <= 1.0:
+            raise ValueError(f"dmorph.fpf_p must be in [0, 1], got {self.fpf_p}")
+        if self.recur < 0:
+            raise ValueError(f"dmorph.recur must be ≥ 0, got {self.recur}")
+        if self.fpf_p > 0.0 and self.t_per_position:
+            raise ValueError(
+                "dmorph.fpf_p > 0 needs one t per ROW (t_per_position: false): the rollout "
+                "integrates a row from t_start to t and a per-position t has no one row time.")
         if self.block_visit is not None:
             v = tuple(float(x) for x in self.block_visit)
             if len(v) != self.n_blocks or any(x <= 0.0 for x in v):
@@ -288,8 +329,11 @@ def aggregate_eval(acc: dict[str, list[float]], prefix: str = "val/") -> dict[st
         w = acc.get(prefix + wk)
         if w is None or len(w) != len(vals):
             raise KeyError(f"{k} needs its count {prefix}{wk} on every batch")
-        tot = sum(w)
-        out[k] = sum(v * wi for v, wi in zip(vals, w)) / tot if tot > 0 else float("nan")
+        # A NaN batch (a residual AUROC with one empty class) drops out with its weight
+        # rather than poisoning the whole eval.
+        pairs = [(v, wi) for v, wi in zip(vals, w) if not math.isnan(v)]
+        tot = sum(wi for _v, wi in pairs)
+        out[k] = sum(v * wi for v, wi in pairs) / tot if tot > 0 else float("nan")
     return out
 
 
@@ -311,6 +355,36 @@ def fm_euler_step(x_t: Tensor, d_hat: Tensor, t: Tensor, t_next: Tensor) -> Tens
     xf, df = x_t.float(), d_hat.float()
     x0_hat = (xf - t * df) / (1.0 - t).clamp(min=1e-6)
     return (1.0 - tn) * x0_hat + tn * df
+
+
+def carry_of(d_hat: Tensor) -> Tensor:
+    """``D̂`` → the self-conditioning carry: ``normalize(D̂)``, fp32, unit L2.
+
+    The paper carries the categorical prediction itself; through MORPH's tied head that
+    prediction is the DIRECTION of ``D̂`` (:func:`readout_state`), so the carry is that
+    direction on the target manifold — the same vector the head reads, before the
+    temperature. Not bridged: a hard bridge would throw away everything but the argmax
+    and leave the carry unable to say "unsure" (the paper's calibration argument, §3.2).
+    """
+    return F.normalize(d_hat.float(), dim=-1)
+
+
+def residual_auroc(resid: Tensor, correct: Tensor) -> Tensor:
+    """AUROC of "small residual ⇒ correct": ``P(resid_correct < resid_wrong)`` over the
+    pairs, the paper's Fig. 6c read (0.50 without FPF, 1.00 with). NaN when either class
+    is empty. Rank-based (Mann–Whitney); ties are not adjusted (fp32 residuals)."""
+    resid = resid.reshape(-1).float()
+    correct = correct.reshape(-1).bool()
+    n_c = int(correct.sum())
+    n_w = int(resid.numel()) - n_c
+    if n_c == 0 or n_w == 0:
+        return resid.new_tensor(float("nan"))
+    order = resid.argsort()
+    ranks = torch.empty_like(order, dtype=torch.float32)
+    ranks[order] = torch.arange(1, resid.numel() + 1, device=resid.device, dtype=torch.float32)
+    # U = #pairs (c, w) with resid_w < resid_c
+    u = ranks[correct].sum() - n_c * (n_c + 1) / 2.0
+    return 1.0 - u / float(n_c * n_w)
 
 
 def argmax_head(x: Tensor, w_head: Tensor, mask_id: int, chunk: int = 1024) -> Tensor:
@@ -395,6 +469,12 @@ class DmorphStream(nn.Module):
         self.v_gate = AdaLNGate(cfg.cond_dim, d_model)
         self.W_v = nn.Linear(d_model, d_model, bias=False)
         nn.init.zeros_(self.W_v.weight)
+        # The self-conditioning carry's input projection (v1.1). Zero-init: with ``W_s = 0``
+        # every carry is a no-op and the module is v1 bit-for-bit; the null carry ``s = 0``
+        # is a no-op whatever ``W_s`` holds. Under ``fpf_p: 0`` no non-null carry is ever
+        # formed in training, so ``W_s`` receives no gradient and stays at zero.
+        self.W_s = nn.Linear(d_model, d_model, bias=False)
+        nn.init.zeros_(self.W_s.weight)
         # Scalar read-out gain on normalize(D̂) before the tied head (see
         # :func:`readout_state`). The clean head reads a state of norm ~sqrt(d)
         # (final_norm's per-component RMS is 1), so a UNIT vector needs ~sqrt(d) to reach
@@ -433,6 +513,15 @@ class DmorphStream(nn.Module):
         residual writes and be drowned by depth 3)."""
         return float(self.cfg.in_gain)
 
+    def carry_in(self, s: Tensor) -> Tensor:
+        """The carry's additive block input: ``W_s(s · in_gain)``, fp32.
+
+        ``s`` is unit L2 (:func:`carry_of`), so it is lifted by the same ``in_gain`` as
+        ``x_t`` to per-component RMS ~1 before the projection. The carry is ALWAYS
+        detached here — the paper's ``stopgrad(s)``; no gradient reaches the pass that
+        produced it."""
+        return self.W_s(s.detach().float() * self.in_gain_value())
+
     def velocity(self, h: Tensor, cond: Tensor) -> Tensor:
         """``[B, L, C]`` block output → ``[B, L, C]`` velocity, fp32.
 
@@ -466,6 +555,8 @@ class DmorphStream(nn.Module):
             "dmorph/head_scale_init": math.sqrt(float(self.d_model)),
             "dmorph/block_visit": (list(c.block_visit) if c.block_visit is not None
                                    else [1.0 / c.n_blocks] * c.n_blocks),
+            "dmorph/fpf_p": c.fpf_p,
+            "dmorph/recur": c.recur,
             "dmorph/n_params": int(sum(p.numel() for p in self.parameters())),
         }
 
@@ -558,7 +649,7 @@ def run_block(model, block: int, x_in: Tensor, cond: Tensor, kv: list[dict],
 
 
 def noisy_stream(model, x_t: Tensor, t: Tensor, band: Tensor, kv: list[dict],
-                 ctx: DmCtx) -> Tensor:
+                 ctx: DmCtx, s: Tensor | None = None) -> Tensor:
     """``v̂`` ``[B, L, d]`` (fp32) for the noisy state ``x_t`` at flow time ``t``.
 
     ``t`` and ``band`` are ``[B]`` (one per row, the default) or ``[B, L]``. Each block
@@ -566,11 +657,18 @@ def noisy_stream(model, x_t: Tensor, t: Tensor, band: Tensor, kv: list[dict],
     velocity is read from its own band's block. In the per-row mode every row belongs
     to exactly one block, so the total work is one block per row — the 1.25× of the
     design note's FLOP table. In the per-position mode every block runs on every row.
+    A per-row band of ``-1`` runs NO block for that row (its velocity is 0) — the
+    integrator's way of leaving inactive rows alone.
+
+    ``s`` ``[B, L, d]`` is the self-conditioning carry (v1.1); ``None`` is the null carry
+    and adds nothing, so a v1 caller is unchanged.
     """
     dm: DmorphStream = model.dmorph
     B, L, d = x_t.shape
     cond = dm.embed_t(t)                                   # [B, c] or [B, L, c]
     x_in = x_t.float() * dm.in_gain_value()
+    if s is not None:
+        x_in = x_in + dm.carry_in(s)
     v_hat = x_t.new_zeros(B, L, d, dtype=torch.float32)
     per_row = band.dim() == 1
     for b in range(dm.cfg.n_blocks):
@@ -698,13 +796,26 @@ def training_terms(model, *, xh: Tensor, labels: Tensor, layout, kv: list[dict],
     tb = _bcast(t, y)
     x_t = (1.0 - tb) * x0 + tb * y
     v_star = y - x0
-    v_hat = noisy_stream(model, x_t, t, band, kv, ctx)
+    w_head = model.embed.lm_weight()
+
+    # ── Fixed-Point Forcing (v1.1): the carry from the row's OWN rollout ──────────
+    # Training only. Eval keeps the null carry so `dm_ce` stays the v1 one-pass read;
+    # the carry's effect is measured on the ladder (`dm_ladder_*`, `dm_resid_*`).
+    s = None
+    fpf_groups: dict = {}
+    if model.training and cfg.fpf_p > 0.0:
+        use = torch.rand(B, device=dev) < cfg.fpf_p
+        s, t_start = fpf_rollout(model, x0, y, t, use, kv, ctx, w_head=w_head.detach())
+        fpf_groups = {
+            "dm_fpf_frac": use.float().mean(),
+            "dm_fpf_t_start": _masked_mean(t_start, use),
+        }
+    v_hat = noisy_stream(model, x_t, t, band, kv, ctx, s)
     d_hat = x_t + (1.0 - tb) * v_hat
 
     sq = (v_hat - v_star).pow(2).sum(-1)                   # [B, L]
     fm_raw = _masked_mean(sq, fm_valid)
     fm = fm_raw / dm.null_floor if cfg.loss_scale == "auto" else fm_raw
-    w_head = model.embed.lm_weight()
     ce = _ce_from(model, d_hat, ce_labels, ce_w, w_head)
 
     add = cfg.lambda_fm * fm + cfg.lambda_ce * ce
@@ -718,6 +829,7 @@ def training_terms(model, *, xh: Tensor, labels: Tensor, layout, kv: list[dict],
         "dm_head_scale": dm.head_scale.detach(),
         "dm_n_fm": fm_valid.sum().float(),
         "dm_n_ce": ((ce_labels != -100) & (ce_w.view(B, L) > 0)).sum().float(),
+        **fpf_groups,
     }
     if cfg.arm == "hs" and cfg.sigreg_lambda > 0.0:
         from .tul_fm import fm_sigreg_loss
@@ -756,13 +868,32 @@ def eval_terms(model, *, xh, y, fm_valid, ce_labels, ce_w, band, sq, d_hat, kv, 
         out[f"dm_ce_band{b}"] = _ce_from(model, d_hat, ce_labels, wb, w_head)
         out[f"dm_n_ce_band{b}"] = ((ce_labels != -100) & (wb.view(B, L) > 0)).sum().float()
 
-    d_last, _x_final = ladder(model, kv, ctx, (B, L, d), bridge=(cfg.arm == "tok"),
-                              w_head=w_head)
+    bridge = cfg.arm == "tok"
+    res = ladder_run(model, kv, ctx, (B, L, d), bridge=bridge, w_head=w_head)
+    d_last = res.d_hat
     out["dm_ladder_ce"] = _ce_from(model, d_last, ce_labels, ce_w, w_head)
     out["dm_ladder_acc"] = _acc_from(model, d_last, ce_labels, ce_w, w_head)
     out["dm_target_ce"] = _ce_from(model, y, ce_labels, ce_w, w_head)
     cos = F.cosine_similarity(d_last, y, dim=-1)
     out["dm_cos"] = _masked_mean(cos, fm_valid)
+    if cfg.fpf_p > 0.0:
+        # The held-time depth curve (paper Fig. 6b) and the convergence-residual read
+        # (Fig. 6c): the ladder at `recur` ∈ {0, 2} besides the configured one, and at
+        # every recur ≥ 1 the residual ‖s_last − s_prev‖ against per-position correctness.
+        ce_m = (ce_labels != -100) & (ce_w.view(B, L) > 0)
+        for r in (0, 2):
+            rr = res if r == cfg.recur else ladder_run(model, kv, ctx, (B, L, d),
+                                                        bridge=bridge, w_head=w_head, recur=r)
+            out[f"dm_ladder_ce_r{r}"] = _ce_from(model, rr.d_hat, ce_labels, ce_w, w_head)
+            out[f"dm_ladder_acc_r{r}"] = _acc_from(model, rr.d_hat, ce_labels, ce_w, w_head)
+            if r >= 1:
+                resid = (rr.s - rr.s_prev).norm(dim=-1)                     # [B, L]
+                pred = argmax_head(readout_state(rr.d_hat, dm.head_scale).reshape(-1, d),
+                                   w_head.float(), model.cfg.tul.slot_id,
+                                   model.cfg.ce_chunk_size).view(B, L)
+                out[f"dm_resid_r{r}"] = _masked_mean(resid, ce_m)
+                out[f"dm_resid_auroc_r{r}"] = residual_auroc(resid[ce_m],
+                                                             (pred == ce_labels)[ce_m])
     if cfg.arm == "tok":
         # The clean head's greedy accuracy on the same positions (prereg P3).
         out["dm_clean_acc"] = (
@@ -812,35 +943,130 @@ def _shuffle_rows_at_slots(y: Tensor, layout) -> Tensor:
     return out
 
 
+@dataclass
+class Integration:
+    """What one :func:`integrate` run leaves behind.
+
+    ``d_hat`` the last UNBRIDGED estimate per row ``[B, L, d]`` (what the head scores);
+    ``x`` the flow state at ``t_end``; ``s`` the carry after the last update and
+    ``s_prev`` the one before it (zeros when a row had one update); ``n_updates`` ``[B]``
+    denoiser evaluations per row. Rows that were never active keep ``d_hat = x`` (the
+    zero-velocity reading), ``s = s_prev = 0``.
+    """
+
+    d_hat: Tensor
+    x: Tensor
+    s: Tensor
+    s_prev: Tensor
+    n_updates: Tensor
+
+
 @torch.no_grad()
-def ladder(model, kv: list[dict], ctx: DmCtx, shape, *, bridge: bool, w_head: Tensor,
-           seed: int = 0) -> tuple[Tensor, Tensor]:
-    """The ``K``-step Euler ladder from pure noise, one block per step in order.
+def integrate(model, x: Tensor, t_start: Tensor, t_end: Tensor, kv: list[dict], ctx: DmCtx,
+              *, bridge: bool, w_head: Tensor, active: Tensor | None = None,
+              recur: int | None = None, s: Tensor | None = None) -> Integration:
+    """THE integrator: the band ladder from ``t_start`` to ``t_end`` per row, carry fed
+    forward, ``recur`` held-time updates per step. Used by the eval ladder, the
+    generator and the FPF training rollout — one code path, on purpose.
 
-    Step ``k`` runs at ``t_k = k/K`` through block :func:`band_of_t` ``(t_k)`` — with
-    ``K == n_blocks`` that is block ``k`` exactly, each block once, in order 0 → B−1
-    (``tests/test_dmorph_ladder.py``). ``D̂_k = x + (1 - t_k)·v̂`` is read; for the tok
-    arm it is then replaced by the HARD bridge before the Euler step to ``t_{k+1}``.
-    Returns ``(D̂_last_prebridge, x_final)`` — the last block's UNBRIDGED estimate is
-    what the head scores (a bridged one is one-hot by construction).
+    The grid is the ladder's: ``K = n_infer_steps`` steps covering ``[k/K, (k+1)/K)``.
+    Row ``r`` takes part in step ``k`` iff its interval ``[t_start, t_end]`` meets the
+    step's, and evaluates at ``τ = max(t_start, k/K)`` through block
+    :func:`band_of_t` ``(τ)`` — so with ``t_start = 0, t_end = 1`` and ``K == n_blocks``
+    this is exactly v1's ladder: block ``k`` at ``t = k/K``, each once, in order. A row
+    with ``t_end`` on a grid point gets one extra zero-length evaluation AT ``t_end``.
+    Per step: ``recur + 1`` evaluations ``D̂ = x + (1 - τ)·v̂(x, τ, s)``, each writing the
+    carry ``s ← carry_of(D̂)`` (paper Eq. 4), then one Euler step to
+    ``min(t_end, (k+1)/K)`` on the bridged (tok) or raw (hs) ``D̂``.
 
-    Noise is drawn from a fixed-seed generator so an eval is reproducible on its rows.
+    ``active`` ``[B]`` bool limits the run to some rows (the rest untouched); ``s`` seeds
+    the carry (None = null). No RNG, no gradient.
     """
     dm: DmorphStream = model.dmorph
     cfg = dm.cfg
+    B, L, d = x.shape
+    dev = x.device
+    K = cfg.n_infer_steps
+    r = cfg.recur if recur is None else int(recur)
+    t_start = t_start.float()
+    t_end = t_end.float()
+    if active is None:
+        active = torch.ones(B, dtype=torch.bool, device=dev)
+    x = x.float()
+    s = torch.zeros_like(x) if s is None else s.float()
+    s_prev = torch.zeros_like(s)
+    d_hat = x.clone()
+    n_upd = torch.zeros(B, device=dev, dtype=torch.float32)
+    for k in range(K):
+        lo, hi = k / K, (k + 1) / K
+        act = active & (t_start < hi) & (t_end >= lo)
+        if not bool(act.any()):
+            continue
+        tau = torch.maximum(t_start, torch.full_like(t_start, lo))
+        tau_next = torch.minimum(t_end, torch.full_like(t_end, hi))
+        band = torch.where(act, band_of_t(tau, cfg.n_blocks), torch.full_like(act, -1, dtype=torch.long))
+        m = act.view(B, 1, 1)
+        one_minus = (1.0 - tau).view(B, 1, 1)
+        for _ in range(r + 1):
+            v = noisy_stream(model, x, tau, band, kv, ctx, s)
+            d_new = x + one_minus * v
+            s_prev = torch.where(m, s, s_prev)
+            s = torch.where(m, carry_of(d_new), s)
+            d_hat = torch.where(m, d_new, d_hat)
+        n_upd = n_upd + act.float() * (r + 1)
+        d_step = (hard_bridge(d_hat, w_head, dm.head_scale, model.cfg.tul.slot_id,
+                              model.cfg.ce_chunk_size) if bridge else d_hat)
+        x = torch.where(m, fm_euler_step(x, d_step, tau, tau_next), x)
+    return Integration(d_hat=d_hat, x=x, s=s, s_prev=s_prev, n_updates=n_upd)
+
+
+@torch.no_grad()
+def ladder_run(model, kv: list[dict], ctx: DmCtx, shape, *, bridge: bool, w_head: Tensor,
+               seed: int = 0, recur: int | None = None) -> Integration:
+    """The full ladder from pure noise at ``t = 0`` to ``t = 1``: :func:`integrate` on
+    every row, source drawn from a fixed-seed generator so an eval is reproducible on
+    its rows. ``recur`` None → the configured ``dmorph.recur``."""
+    cfg = model.dmorph.cfg
     B, L, d = shape
     dev = ctx.x0.device
     g = torch.Generator(device=dev).manual_seed(int(seed))
     x = torch.randn(B, L, d, device=dev, dtype=torch.float32, generator=g) * cfg.source_std
-    K = cfg.n_infer_steps
-    d_hat = x
-    for k in range(K):
-        t_k = torch.full((B,), k / K, device=dev, dtype=torch.float32)
-        band = band_of_t(t_k, cfg.n_blocks)
-        v = noisy_stream(model, x, t_k, band, kv, ctx)
-        d_hat = x + (1.0 - k / K) * v
-        d_step = hard_bridge(d_hat, w_head, dm.head_scale, model.cfg.tul.slot_id,
-                             model.cfg.ce_chunk_size) if bridge else d_hat
-        t_next = torch.full((B,), (k + 1) / K, device=dev, dtype=torch.float32)
-        x = fm_euler_step(x, d_step, t_k, t_next)
-    return d_hat, x
+    zero = torch.zeros(B, device=dev, dtype=torch.float32)
+    return integrate(model, x, zero, zero + 1.0, kv, ctx, bridge=bridge, w_head=w_head,
+                     recur=recur)
+
+
+@torch.no_grad()
+def ladder(model, kv: list[dict], ctx: DmCtx, shape, *, bridge: bool, w_head: Tensor,
+           seed: int = 0, recur: int | None = None) -> tuple[Tensor, Tensor]:
+    """``(D̂_last_prebridge, x_final)`` of :func:`ladder_run` — the last block's UNBRIDGED
+    estimate is what the head scores (a bridged one is one-hot by construction).
+    Kept as the tuple API the generator and the tests use."""
+    res = ladder_run(model, kv, ctx, shape, bridge=bridge, w_head=w_head, seed=seed, recur=recur)
+    return res.d_hat, res.x
+
+
+@torch.no_grad()
+def fpf_rollout(model, x0: Tensor, y: Tensor, t: Tensor, use: Tensor, kv: list[dict],
+                ctx: DmCtx, *, w_head: Tensor) -> tuple[Tensor, Tensor]:
+    """The Fixed-Point Forcing carry (paper Fig. 4, right): per row ``t_start ~ U(0, t)``,
+    ``x_start = (1 - t_start)·x0 + t_start·y`` with the SAME source ``x0`` as the
+    supervised interpolant, then :func:`integrate` from ``t_start`` to ``t`` on the rows
+    in ``use``. Returns ``(s, t_start)``: the rollout's last carry, zeros (the null
+    carry) on rows not in ``use``. No gradient — the carry is stopgrad by construction.
+
+    ``t`` is ``[B]`` (one per row); the rollout is undefined for a per-position ``t``
+    and :class:`DmorphConfig` refuses that pairing.
+    """
+    cfg = model.dmorph.cfg
+    if t.dim() != 1:
+        raise ValueError(f"fpf_rollout needs a per-row t [B], got shape {tuple(t.shape)}")
+    B = t.shape[0]
+    t = t.float()
+    t_start = t * torch.rand(B, device=t.device, dtype=torch.float32)
+    tb = _bcast(t_start, y)
+    x_start = (1.0 - tb) * x0.float() + tb * y.float()
+    res = integrate(model, x_start, t_start, t, kv, ctx, bridge=(cfg.arm == "tok"),
+                    w_head=w_head, active=use)
+    s = torch.where(use.view(B, 1, 1), res.s, torch.zeros_like(res.s))
+    return s, t_start

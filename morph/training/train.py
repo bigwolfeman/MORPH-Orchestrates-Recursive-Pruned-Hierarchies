@@ -2904,6 +2904,10 @@ def main(cfg: DictConfig) -> None:
                                  f"  dm_fm_b0={_val_extra.get('val/dm_fm_band0', float('nan')):.4f}"
                                  f"  ladder_ce={_val_extra.get('val/dm_ladder_ce', float('nan')):.4f}"
                                  f"  cos={_val_extra.get('val/dm_cos', float('nan')):.3f}")
+                    if "val/dm_ladder_ce_r2" in _val_extra:
+                        _tul_msg += (f"  lad_r0={_val_extra.get('val/dm_ladder_ce_r0', float('nan')):.4f}"
+                                     f"  lad_r2={_val_extra['val/dm_ladder_ce_r2']:.4f}"
+                                     f"  auroc_r2={_val_extra.get('val/dm_resid_auroc_r2', float('nan')):.3f}")
             print(
                 f"  [VAL {step:7d}] loss={val_loss:.4f}  ppl={val_ppl:.2f}{_tul_msg}",
                 flush=True,

@@ -2252,7 +2252,7 @@ class MORPHTransformer(nn.Module):
                                     bridge=(self.cfg.dmorph.arm == "tok"), w_head=w_head)
         mask = torch.tensor([tc.slot_id], device=xh.device)
         clean = self.embed.attend(xh).index_fill(-1, mask, float("-inf"))
-        lad = ((d_last.float() * self.dmorph.head_scale.float()) @ w_head.float().t()
+        lad = (_dmorph.readout_state(d_last, self.dmorph.head_scale) @ w_head.float().t()
                ).index_fill(-1, mask, float("-inf"))
         return {"logits": clean, "ladder_logits": lad}
 

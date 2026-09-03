@@ -95,3 +95,28 @@ def test_load_weights_only_loads_an_old_arm_checkpoint_with_no_unexpected_key(tm
     assert torch.equal(dst.tul.E_slot, src.tul.E_slot)
     for (ka, a), (kb, b) in zip(src.state_dict().items(), dst.state_dict().items()):
         assert ka == kb and torch.equal(a, b), ka
+
+
+def test_v1_dmorph_checkpoint_loads_as_v1_with_the_carry_projection_at_zero(tmp_path):
+    """dmorph v1.1 added ``dmorph.W_s`` (the self-conditioning carry's input projection).
+    A v1 dmorph checkpoint has no such tensor; loading it must leave ``W_s`` at its
+    zero init — which IS v1's behaviour (a zero carry projection is a no-op) — and every
+    other tensor must land. The loader warns about the missing key; it must not raise."""
+    from morph.model.dmorph import DmorphConfig
+
+    dm = DmorphConfig(arm="tok", n_blocks=2, source_std=1.0 / 32 ** 0.5, in_gain=32 ** 0.5)
+    torch.manual_seed(1)
+    src = MORPHTransformer(_cfg(n_core=0, n_prelude=1, n_coda=1, dmorph=dm))
+    with torch.no_grad():
+        src.dmorph.W_v.weight.normal_()
+        src.dmorph.W_s.weight.normal_()          # would be a live carry if it survived
+    sd = {k: v.clone() for k, v in src.state_dict().items() if k != "dmorph.W_s.weight"}
+    path = tmp_path / "v1_dmorph.pt"
+    torch.save({"model": sd, "step": 3}, path)
+    torch.manual_seed(2)
+    dst = MORPHTransformer(_cfg(n_core=0, n_prelude=1, n_coda=1, dmorph=dm))
+    missing, unexpected = load_weights_only(str(path), dst, torch.device("cpu"))
+    assert unexpected == []
+    assert missing == ["dmorph.W_s.weight"]
+    assert float(dst.dmorph.W_s.weight.abs().max()) == 0.0
+    assert torch.equal(dst.dmorph.W_v.weight, src.dmorph.W_v.weight)

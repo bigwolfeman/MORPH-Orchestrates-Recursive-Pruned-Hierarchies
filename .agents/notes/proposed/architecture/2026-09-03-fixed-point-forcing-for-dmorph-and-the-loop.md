@@ -122,3 +122,39 @@ measured, not assumed).
   the residual→correctness AUROC is the measurement that says so either way.
 - Rollout cost: ≤ one stack forward per training step at `p_fpf 0.5`, so ≤ +0.5x forward
   FLOPs on top of v1's 1.25x; report tok/s next to `flop_proxy`.
+
+## Implementation record (v1.1, 2026-09-03)
+
+Built on `feat/dmorph` the same day; the loop probe is NOT built.
+
+- `morph/model/dmorph.py`: `DmorphConfig.fpf_p` / `recur`; `DmorphStream.W_s` (zero-init)
+  and `carry_in(s) = W_s(stopgrad(s)·in_gain)`; `noisy_stream(..., s=None)`;
+  `carry_of(D̂) = normalize(D̂)` (NOT bridged — a bridged carry cannot say "unsure");
+  `integrate(...)` is THE integrator (any `t_start → t_end` per row, carry fed forward,
+  `recur + 1` evaluations per step, inactive rows untouched via a band of −1), and the
+  eval ladder (`ladder_run` / `ladder`), the generator (`dmorph_infer`) and the training
+  rollout (`fpf_rollout`) all call it; `residual_auroc` is the Fig. 6c read.
+- Training: `fpf_rollout` draws `t_start = t·U(0,1)` per row, builds `x_start` from the
+  SAME `x0` as the supervised interpolant (the paper's `noise` is one variable), runs
+  `integrate` under `no_grad` on the rows in `use ~ Bernoulli(fpf_p)`, and the loss-bearing
+  pass at the untouched `x_t` gets that carry. The rollout runs in whatever mode the
+  model is in (no `.eval()` toggle inside a forward — compile guards); the configs run
+  dropout 0.
+- Eval keeps the null carry for `dm_ce` (so v1 and v1.1 one-pass reads are the same
+  instrument) and, under `fpf_p > 0`, adds `dm_ladder_ce_r{0,2}`, `dm_ladder_acc_r{0,2}`,
+  `dm_resid_r2`, `dm_resid_auroc_r2`. `aggregate_eval` now drops NaN batches with their
+  weight (an AUROC with one empty class).
+- Deviation from the paper: their carry is the categorical prediction, ours is the
+  direction of `D̂` on the target manifold (what the tied head reads); their integrator
+  has 16 steps, ours has `n_blocks` (4) band steps — the band ladder IS the inference
+  integrator here.
+- Fixed in passing: `dmorph_infer` read the ladder through the RAW `D̂ · head_scale`
+  while eval used `readout_state`; both now use `readout_state`.
+- Compat: a v1 dmorph checkpoint has no `dmorph.W_s.weight`; the loaders leave it at
+  zero (= v1 exactly) and warn (`tests/test_checkpoint_compat.py`).
+- Gates: `tests/test_dmorph_fpf.py` (8 tests: config bounds, `fpf_p: 0` bit-identity with
+  `W_s` untrained, null carry / zero `W_s` no-ops and a live carry not, rollout carry
+  detached + `W_s` trains, the rollout runs exactly the blocks between `band(t_start)`
+  and `band(t)`, `integrate(0 → 1)` is the v1 ladder and `recur` repeats each block,
+  eval reads only under fpf, AUROC helper). `pytest tests/ -q`: 595 passed, 8 skipped,
+  1 xfailed at this commit. Prereg: `lab/experiments/planned/2026-09-03-dmorph-fpf-tok.md`.

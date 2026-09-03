@@ -24,6 +24,7 @@ KNOWN_DMORPH_KEYS = frozenset({
     "enabled", "arm", "n_blocks", "gamma", "lambda_fm", "lambda_ce", "source_std",
     "detach_ctx", "t_per_position", "sigreg_lambda", "sigreg_slices", "infer_steps",
     "cond_dim", "t_embed_scale", "in_gain", "loss_scale", "block_visit",
+    "fpf_p", "recur",
 })
 
 
@@ -115,6 +116,8 @@ def build_dmorph_runtime(cfg, tul_rt) -> DmorphRuntime | None:
         in_gain=in_gain,
         loss_scale=str(dc.get("loss_scale", "auto")),
         block_visit=visit_t,
+        fpf_p=float(dc.get("fpf_p", 0.0)),
+        recur=int(dc.get("recur", 0)),
     )
     matched = 1.0 / math.sqrt(d)
     note = "MATCHED" if abs(source_std - matched) < 0.25 * matched else "MISMATCHED"
@@ -147,12 +150,15 @@ def build_dmorph_runtime(cfg, tul_rt) -> DmorphRuntime | None:
         "block_visit": (list(model_cfg.block_visit) if model_cfg.block_visit is not None
                         else [1.0 / n_blocks] * n_blocks),
         "target_detached": not (arm == "hs" and model_cfg.sigreg_lambda > 0.0),
+        "fpf_p": model_cfg.fpf_p,
+        "recur": model_cfg.recur,
     }
     print(f"  dmorph ON: arm={arm} n_blocks={n_blocks} ({n_layers // n_blocks} layers each) "
           f"gamma={model_cfg.gamma} lambda_fm={model_cfg.lambda_fm} "
           f"lambda_ce={model_cfg.lambda_ce} source_std={source_std:.5f} [{note}] "
           f"in_gain={in_gain:.3f} null_floor={manifest['null_floor']:.3f} "
           f"detach_ctx={model_cfg.detach_ctx} t_per_position={model_cfg.t_per_position} "
-          f"sigreg_lambda={model_cfg.sigreg_lambda} infer_steps={model_cfg.n_infer_steps}",
+          f"sigreg_lambda={model_cfg.sigreg_lambda} infer_steps={model_cfg.n_infer_steps} "
+          f"fpf_p={model_cfg.fpf_p} recur={model_cfg.recur}",
           flush=True)
     return DmorphRuntime(model_cfg=model_cfg, manifest=manifest)

@@ -575,6 +575,8 @@ dmorph:
   t_embed_scale: 16.0    # t x 16 into the sinusoidal basis (fm_planner.py: raw t covers 1/6 of a cycle)
   loss_scale: auto       # auto | none
   block_visit: null      # training visit distribution over blocks; null = uniform (the paper's rule)
+  fpf_p: 0.0             # Fixed-Point Forcing (arXiv 2606.29150): P(row's carry comes from its own no-grad rollout); 0 = v1 exactly
+  recur: 0               # held-time self-conditioning updates per integrator step, in the rollout AND the ladder
 
 wandb:
   project: morph
