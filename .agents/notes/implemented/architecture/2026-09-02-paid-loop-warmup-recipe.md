@@ -15,15 +15,17 @@ map expansive and drifting outward. The full record, with every number's file, i
 
 ## Decision
 
-- Production TUL arm is `tul_a2` (`tul.tokens_through_core: true`, `tg_restrict:
-  false`, `mux_beta: 0`, fused kernels) on the `tul_g0c0` base (retention off,
-  spectral cap 0).
-- The schedule gains a 1000-step linear LR ramp (`training.warmup=1000`) and stays flat
-  at 1e-4 after it. The ramp closed the detonation window 3 of 3 and is 0.14 nats better
-  at step 2500. Seq length stays 1024. This is applied on the branch by config override
-  today; the winner's config file is updated once the GLA arm and the 20k pair land
-  (Wolfe, 2026-09-02 23:35: "we update the config to that winner while we are in this
-  branch"). No master merge in this change.
+- The schedule gains a 1000-step linear LR ramp and stays flat at 1e-4 after it:
+  `training.warmup: 1000` in `morph/configs/base.yaml` since 2026-09-03 (Wolfe,
+  2026-09-02 23:35: "we update the config to that winner while we are in this branch").
+  The ramp closed the detonation window 9 of 9 and is 0.14 nats better at 2500 and 0.09
+  at 20k for the plain model. Seq length stays 1024. No master merge in this change.
+- TUL stays default-off in `base.yaml`. The paid TUL arm is `tul_a2`
+  (`tul.tokens_through_core: true`, `tg_restrict: false`, `mux_beta: 0`, fused kernels)
+  on the `tul_g0c0` base (retention off, spectral cap 0). It is the arm to keep
+  measuring, not the production recipe: at 20k on the ramp it is 0.022 nats behind the
+  plain model on 480 identical rows at 1.33x the wall clock
+  (`lab/experiments/failures/2026-09-02-warmup-20k-pair.md`).
 - Any 20k comparison on the ramped schedule reruns the notul baseline on the same
   schedule. The flat-schedule ledger numbers stay valid for flat-schedule runs only.
 - Every runner applies the measured abort rule: `preclip/total > 1e4` at any step ≥ 200
@@ -41,18 +43,24 @@ map expansive and drifting outward. The full record, with every number's file, i
   differently from dense ones, so the switch is a re-init.
 - **A seq-length curriculum instead of the LR ramp.** Deferred: a single stability probe
   was not worth the GPU; it is part of later warmup-on-length work.
-- **Restoring GLA as the stabilizer.** Open: it cost 0.18 nats and 0.08 of earning in
-  the bisect; three draws under warmup with a frozen selection rule decide whether it
-  rides in the 20k pair.
+- **Restoring GLA as the stabilizer.** Rejected by measurement (2026-09-03): under the
+  ramp it is inert, 0.004 nats and 0.002 of earning for 19M parameters, so the frozen
+  rule kept retention off for the pair. It stays a capability question (raven).
+- **Making `tul_a2` the production recipe.** Rejected by the 20k pair: the plain model
+  on the ramp is ahead at matched steps (0.022) and clearly ahead at matched wall clock
+  (0.12). The ramp is what won.
 - **Keeping the slot-only loop and fixing the slot input (write-side ladder).** Rejected
   by measurement: no seed mode moved the loop's earning above 0.011.
 
 ## Consequences
 
-- The loop's earning under the ramp is 0.046 to 0.049 at 2500 against 0.121 on the flat
-  schedule. Whether that is killed or delayed is the open measurement (wu5k, then the
-  20k pair). If it is killed, the recipe trades depth-earning for stability and CE, and
-  the loop's value has to be re-argued at 20k.
+- The ramp trades loop earning for stability and CE. The plain model's K1−K6 is 0.04 at
+  every checkpoint to 20k (0.207 on the flat schedule) and it is still the best CE in
+  the campaign; A2's earning grows 0.041 → 0.100 by 20k and repairs a depth-1 path that
+  is 0.084 worse. A2's matched-step deficit closes monotonically (0.132 at 5k → 0.012 at
+  20k); the 40k continuation that would show a crossing is preregistered and unlaunched.
+  The loop's value to the production recipe is now ~0.04 nats and has to be re-argued
+  before the mean depth of 6 is kept.
 - A late detonation past step 776 has never been observed but is not excluded; the map's
   outward drift is the reason to keep the tripwire on every long run.
 - `lab/divergence/_build.py::DepthLever` is the one forced-depth knob for the offline

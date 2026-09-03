@@ -92,17 +92,27 @@ has never run on this recipe. Treat "survives past 1000 ⇒ survives" as a bet w
 | dense warmup, then ternary | **not a candidate**: ternary weights organize differently (Wolfe, 2026-09-02) | memory `no-dense-warmup-before-ternary` |
 | GLA / retention as a stabilizer | kills depth-earning; `retention_carry` was a learned acausal leak | `morph-not-causal-retention-carry`, loop-killer bisect |
 
-### What is OPEN (in priority order, 2026-09-02)
+### THE CURE, MEASURED 2026-09-02/03: a 1000-step linear LR ramp (`training.warmup=1000`)
 
-1. **Early-phase optimizer gentleness.** The danger window IS the warmup a normal recipe
-   would have, and this recipe has none: a 1000-step LR warmup, or a lower `alpha_cap` /
-   slower `t_alpha` through step 1000. Cheap, three draws each, earning bar K1−K6 ≥ 0.10.
-2. **Abort-and-retry in the trainer.** The 1e4 rule above, with a checkpoint rollback
-   and a reseed. Works even if the mechanism is never explained.
-3. **Code-assignment hysteresis** on the ternary cusp (0.5γ). The mechanism test that the
+0 detonations in 9 of 9 draws on the ramp (three 2500-step A2 draws, wu5k, three GLA
+draws, and the two 20k arms of the matched pair), against ~70% per draw without it. The
+ramp is also 0.14 nats better at 2500 and 0.09 nats better at 20k for the plain model
+(`lab/experiments/failures/2026-09-02-warmup-20k-pair.md`). Mechanism
+(`successes/2026-09-03-warmup-core-map.md`): under the ramp the core map stays near
+identity (typical gain 0.994 at 2500) instead of organizing expansive in the first ~300
+steps; the loop's earning and the loop's instability were the same quantity. Cost: the
+plain model's loop earning falls from 0.207 to 0.04 nats and stays there; A2's falls to
+0.041 at 2500 and grows back to 0.100 by 20k. **`morph/configs/base.yaml` carries
+`warmup: 1000` since 2026-09-03; a run that overrides it to 0 reopens this window.**
+
+### What is OPEN (in priority order, 2026-09-03)
+
+1. **Abort-and-retry in the trainer.** The 1e4 rule above, with a checkpoint rollback
+   and a reseed. A belt for the ramp's braces.
+2. **Code-assignment hysteresis** on the ternary cusp (0.5γ). The mechanism test that the
    γ experiments could not run, because both of them removed γ's adaptivity.
-4. **Freeze-after-warmup** of γ on a healthy run at ~step 1000, if the γ-contagion
-   question still matters after 1–3.
+3. **Freeze-after-warmup** of γ on a healthy run at ~step 1000, if the γ-contagion
+   question still matters after 1–2.
 
 ### Instruments (all exist; do not rebuild)
 

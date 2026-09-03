@@ -16,7 +16,7 @@ exists under `morph/jax/` but lags the PyTorch path (see gotcha below).
 > not been ported to HC-Cayley; do not assume PT/JAX parity.
 
 > **Source of truth for the training recipe is `morph/configs/base.yaml`** (heavily
-> commented). Current schedule: flat LR 1e-4 (warmup=0, min_lr==lr), taylor saliency,
+> commented). Current schedule: 1000-step linear LR ramp then flat 1e-4 (min_lr==lr), taylor saliency,
 > prune_start=3000 / prune_interval=167 (density hits 0.25 by ~step 27050) →
 > carve at compact_step=29000 → whole-body ReMoE at route_start=30000, all inside a
 > 100k-step run with TST superposition for the first 30k steps. Do not restate these
@@ -29,7 +29,9 @@ spectral caps, `core_gain_clip`, ternary-γ EMA and freeze, GLA-as-stabilizer, a
 warmup. The README has the 60-second triage, the measured abort rule (`preclip/total >
 1e4` at any step ≥ 200: 17/17 detonations caught by step 775, 0 false positives in 44
 healthy runs), the open levers in priority order, and every instrument that already
-exists. Do not re-derive any of it.
+exists. Do not re-derive any of it. **The cure is measured (2026-09-03): a 1000-step LR
+ramp, now `training.warmup: 1000` in `base.yaml`, 0 detonations in 9 of 9 draws. Do not
+override it to 0 on the ternary+AdEMAMix recipe.**
 
 ## ⭐ Core mental model — MORPH is a NESTED dynamical system (read before optimizing)
 

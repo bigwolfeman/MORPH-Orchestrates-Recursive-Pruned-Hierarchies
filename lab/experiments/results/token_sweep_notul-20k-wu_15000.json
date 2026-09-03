@@ -1,0 +1,19 @@
+{
+ "notul_15000": {
+  "step": 15000,
+  "rows": 48,
+  "train_eval_depth": 6,
+  "depths": {
+   "1": {
+    "ce_tokens": 3.571924477815628,
+    "n_batches": 16,
+    "batch": 3
+   },
+   "6": {
+    "ce_tokens": 3.5306813418865204,
+    "n_batches": 16,
+    "batch": 3
+   }
+  }
+ }
+}

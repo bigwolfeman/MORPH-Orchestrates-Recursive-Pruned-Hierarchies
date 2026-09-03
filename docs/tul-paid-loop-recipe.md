@@ -189,9 +189,15 @@ impossible: the map drifts outward while the loss falls, and only one run past 2
 ramped schedule needs the notul baseline rerun on the same schedule, or the ledger's
 0.357 and 0.207 stop meaning anything (Wolfe, 2026-09-02 22:33).
 
-## 6. The recipe, as of 2026-09-03 00:00
+## 6. The recipe, as of 2026-09-03 11:00
 
-`--config-name tul_a2` plus `training.warmup=1000`, with the panel flags used by every
+**What the 20k pair licensed is the ramp, not the arm.** `morph/configs/base.yaml` now
+carries `training.warmup: 1000` (1000-step linear ramp to 1e-4, then flat); TUL stays
+default-off there. The paid TUL arm is `--config-name tul_a2` on that schedule, and it
+is the arm to keep measuring, not the production recipe: at 20k it sits 0.022 nats
+behind the plain model on 480 identical rows at 1.33x the wall clock (section 7).
+
+The A2 arm as run: `--config-name tul_a2` plus `training.warmup=1000`, with the panel flags used by every
 arm in the campaign (`training.batch_size=6 training.seed=1
 training.ademamix_alpha_cap=3.5 training.ademamix_t_beta3=3500`), seq_len 1024,
 retention off, spectral cap 0, ternary QAT on (backbone, 127.8M params), int6 embed QAT,
@@ -230,9 +236,19 @@ Things that are OUT, with the reason, so they do not come back by accident:
   ratios. The loop's earning and the loop's instability were the same quantity on the
   flat schedule: the core map's gain above 1, set in the first ~300 steps by whichever
   path organizes first. The ramp lets the shallow path win that race.
-- **The matched 20k pair.** `2026-09-02-warmup-20k-pair.md`: A2 and notul, both on the
-  ramp, same seed, tripwired; the honest prior for "A2 beats notul at 20k" is 40%,
-  because the notul twin was 0.05 nats ahead at 5k on the flat schedule.
+- **The matched 20k pair: MEASURED 2026-09-03 10:36, A2 does not win.**
+  `failures/2026-09-02-warmup-20k-pair.md`. Both arms healthy to 20000. On 480 identical
+  validation rows at depth 6: A2 3.4701, notul 3.4486 (notul ahead 0.022); depth 1: A2
+  3.5738, notul 3.4900 (A2's shallow path is 0.084 worse). Wall clock 16514 s vs 12421 s
+  (A2 1.33x). One eval has a spread of 0.085 nats, so the prereg's single final eval
+  (3.4762 vs 3.4890, A2 ahead) is noise and every low-noise readout reverses it. Three
+  things the pair did settle: the ramp beats the flat schedule for both arms (notul
+  3.4245 vs 3.5167 on the last-20 eval mean, 0.092 nats); the ramp removes the plain
+  model's loop earning for good (K1−K6 0.04 at every checkpoint, against 0.207 flat) while
+  A2's grows 0.041 → 0.100; and A2's matched-step deficit closes monotonically from 5k
+  (0.132, 0.090, 0.066, 0.057, 0.038, 0.029, 0.012), a straight-line crossing near 22k to
+  25k steps. The 40k continuation is preregistered and not launched
+  (`planned/2026-09-03-warmup-pair-continue-40k.md`).
 - **Trainer-side abort-and-retry** at the 1e4 rule with checkpoint rollback and reseed.
   Bash does it today; the trainer does not.
 - **dmorph**, the no-loop TUL with a flow-matching objective at matched wall-clock and
@@ -242,6 +258,8 @@ Things that are OUT, with the reason, so they do not come back by accident:
 - **Raven**, a GLA variant Wolfe wants to test once TUL is stable (2026-09-03 00:10),
   as the second candidate for whatever GLA was buying. No design notes in the repo yet.
 
-When the three runs land, sections 6 and 7 get their numbers and the winner's config is
-updated on this branch. The decision record that points here is
+The three runs landed 2026-09-03 and the winner's config change (the ramp) is on this
+branch. The claim in section 1 stands with one correction: the paid loop earns depth and
+trains stably, and at 20k it does not beat the plain model on the same schedule. The
+decision record that points here is
 `.agents/notes/implemented/architecture/2026-09-02-paid-loop-warmup-recipe.md`.

@@ -174,7 +174,12 @@ training:
   # Default 0 matches the historical implicit getattr(tr, "seed", 0) behaviour.
   seed: 0
   lr: 1e-4
-  warmup: 0                       # validated mortar winner (phase_c_mortar_full25k_scratch): NO warmup
+  warmup: 1000                    # 1000-step linear ramp to lr, then flat. Measured 2026-09-02/03 on the
+                                  # ternary+AdEMAMix recipe: warmup=0 detonated ~70% of draws in steps
+                                  # 200-775 (lab/divergence/DIVERGENCE-README.md); warmup=1000 was 0/9
+                                  # and 0.09 nats better at 20k for the plain model
+                                  # (lab/experiments/failures/2026-09-02-warmup-20k-pair.md).
+                                  # The older 'NO warmup' validation was the pre-ternary mortar recipe.
   lr_schedule: cosine            # cosine with min_lr==lr ⇒ FLAT 1e-4 (winner recipe; flat LR intentional)
   min_lr: 1e-4                   # == lr → flat LR the whole run (do NOT add cosine decay; validated)
   dropout: 0.1
