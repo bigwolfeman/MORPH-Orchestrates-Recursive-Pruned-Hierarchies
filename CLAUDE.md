@@ -22,6 +22,15 @@ exists under `morph/jax/` but lags the PyTorch path (see gotcha below).
 > 100k-step run with TST superposition for the first 30k steps. Do not restate these
 > numbers elsewhere — read the YAML.
 
+## 🚨 STRANGE DIVERGENCE? READ [lab/divergence/DIVERGENCE-README.md](lab/divergence/DIVERGENCE-README.md) FIRST
+
+Two campaigns (2026-08 slot-loop takeover, 2026-09 paid-axis detonation) already refuted
+spectral caps, `core_gain_clip`, ternary-γ EMA and freeze, GLA-as-stabilizer, and dense
+warmup. The README has the 60-second triage, the measured abort rule (`preclip/total >
+1e4` at any step ≥ 200: 17/17 detonations caught by step 775, 0 false positives in 44
+healthy runs), the open levers in priority order, and every instrument that already
+exists. Do not re-derive any of it.
+
 ## ⭐ Core mental model — MORPH is a NESTED dynamical system (read before optimizing)
 
 The looped core makes MORPH **two** dynamical systems, not one: the **outer** (optimization,

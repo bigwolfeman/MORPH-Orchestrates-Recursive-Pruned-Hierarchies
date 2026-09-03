@@ -23,6 +23,7 @@ Standing orders. Detail lives in the linked file. `CLAUDE.md` holds the model/ru
 - **Non-trivial changes get an Agent Note in the same change.** Exempt only mechanical or local edits.
 - **Ai-notes migration lookup lives here:** [.agents/notes/implemented/process/2026-08-20-ai-notes-migration-manifest.md](.agents/notes/implemented/process/2026-08-20-ai-notes-migration-manifest.md).
 - **Misconfiguration and failed runs fail loud.** Do not swallow errors or skip missing referents.
+- **A run that diverges, stalls, or turns around:** read [lab/divergence/DIVERGENCE-README.md](lab/divergence/DIVERGENCE-README.md) before touching a knob.
 - **Document current state** in `docs/` and `CLAUDE.md`. Change stories belong in commits or Agent Notes.
 - After adding or moving notes, run `python scripts/verify_template.py` and report the result.
 
