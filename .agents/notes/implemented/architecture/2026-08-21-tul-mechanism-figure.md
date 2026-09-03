@@ -49,7 +49,7 @@ attended prefix, a separate decode loop over the next span, slot input = span me
 forward was cut on 2026-09-03 (`2026-09-03-ship-the-paid-loop-cut-the-arms.md`). The figure
 now draws the shipped paid loop: tokens and slots are ONE row (two positions per slot),
 prelude, the per-sample Poisson-depth core (full BPTT) and the coda all run on every
-position, nothing is gathered or scattered, and the loss callout states the recipe (every
+position, nothing is gathered or scattered, and the DECODE box states the recipe in one line (every
 token label at `plast_weight` 1.0, the slot's own emit label at `emit_weight` 0, the next
 span's first token read at the boundary token, full recompute per generation step). The
 slot input is the boundary seed `E_slot + W_sent · embed(t_last)`. The "z kept in the row"
@@ -58,3 +58,10 @@ callout stays. `morph_overview.tex` was corrected in the same change from "trunc
 even though `base.yaml` runs `retention: false` (Wolfe: leave GLA in, Raven attention may
 take its place). Still not fixed there: the core is labelled ×2N layers against a prelude
 of N; the recipe is 4:6:4 locally and 4:8:4 on the cloud target.
+Second pass the same day, after Wolfe's read ("less clear now"): the think / keep /
+decode narrative and the generation feedback loop are back. THINK is the core on the
+whole row with "the loop's output at the slot cells is the thought z"; the keep callout
+says every later position attends to z in the core and the coda; DECODE is the coda on
+all positions with the head emitting d, and the emitted row feeds back into the PRELUDE
+(the whole row is run again; a boundary emitted inserts two slot cells after it). The CE
+statement is one clause inside DECODE, not a separate box.
