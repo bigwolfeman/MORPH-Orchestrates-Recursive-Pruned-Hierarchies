@@ -1,0 +1,13 @@
+# R1b — A1-wu at FULL BPTT (bptt_depth 8): the original TUL (bag-mean seed, emit/plast
+# 0.5/0.5, no mask, no mux) on the winner recipe + ramp, with the slot loop trained through
+# all 8 iterations like every MUX arm. Wolfe 2026-09-03: "The A1 question is if the loop
+# contributes now even if there are stability issues... bptt should probably be 8 on A1."
+# tul_to_a1 (bptt 4, the record's A1 setting) stays as the matched-history control.
+# Second seed: training.seed=2 wandb.name=to-a1-b8-s2.
+defaults:
+  - tul_to_a1
+  - _self_
+model:
+  bptt_depth: 8
+wandb:
+  name: to-a1-b8-s1

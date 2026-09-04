@@ -122,6 +122,26 @@ under `/home/wolfe/morph-to/checkpoints/morph/<name>`; pruned to step_5000 after
 verdict. Artifacts to `lab/experiments/results/2026-09-03-tul-think-once-panel/`.
 Estimated: ~5.5 h of training, ~1.5 h of readouts.
 
+### Method amendment, 2026-09-03 20:30 (during the run; Predictions above untouched)
+
+Reason: `tul_to_a1` inherits `model.bptt_depth: 4` from `base.yaml` (the record's A1
+setting), while every MUX arm trains its slot loop at full BPTT (8). Wolfe: "The A1
+question is if the loop contributes now even if there are stability issues... bptt should
+probably be 8 on A1." A loop trained through 4 of 8 iterations cannot be compared with the
+MUX arms on K1−K6. Added after the panel, same recipe, no other change:
+
+| # | arm | config | one line |
+|---|---|---|---|
+| R1b | A1-wu, full BPTT ×2 | `tul_to_a1_b8` (seed 1; `training.seed=2 wandb.name=to-a1-b8-s2`) | R1 with `model.bptt_depth: 8` |
+
+Runner `/home/wolfe/morph-scratch/to/run_a1_b8.sh` (waits for `PANEL COMPLETE`, then
+`run_think_once_v2.sh` = v1 + `SKIP_RULERS`). The R1 predictions P1a–P1d are scored on
+R1 (bptt 4) as frozen. Stated here for R1b, with the same priors as R1 and dated as an
+amendment, not a frozen prediction: tripwire silent on both seeds 60%; slot K1−K6 ≤ 0.02
+on both 80%; plan worth ≤ 0.04 on both 75%; beats R0 by > 0.05 25%. Record also: to-a1-s2
+(bptt 4, seed 2) DETONATED at step 2041 (onset ≈ 1850–1900, `preclip/core` 0.026 → 8.6 →
+92 → 1.0e4 over steps 1800/1900/2000/2041), so P1a and PS are already FALSE.
+
 ## Not verified before launch
 
 The conditioning stack and `detach_z` on GPU at the real shape (CPU tests only: 10 new
