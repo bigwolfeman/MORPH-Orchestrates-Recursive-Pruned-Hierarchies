@@ -1,0 +1,13 @@
+# ARC E2 — iteration conditioning on the constrained forecast arm. Y2 exactly, plus
+# tul.core_stage_cond=iter: every core-layer application in the slot loop gets a zero-init
+# AdaLN-Zero signal for WHICH iteration it is (morph/model/iter_cond.py, built for the DB
+# work, never run for depth earning). Breaks the exact weight-sharing symmetry that makes
+# the loop a fixed-point iteration, at ~0 parameters and bit-identity at init.
+# Prereg: lab/experiments/planned/2026-09-04-arc-e2-iteration-conditioning.md
+defaults:
+  - tul_to_mnext_y2
+  - _self_
+tul:
+  core_stage_cond: iter
+wandb:
+  name: to-mnext-y2-iter

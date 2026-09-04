@@ -270,3 +270,21 @@ stack that is deep without weight sharing.
 7. **The ceiling is MORPH's loop, not TUL's.** The token loop saturates by K4 on every
    recipe measured; TUL cannot earn more depth than the shared core composes. The Raven
    attention work is orthogonal to this panel and may be the real unlock.
+
+---
+
+## Revision 2026-09-04 — the arc
+
+The round-1 panel answered stability (six of eight draws tripped under the ramp) and
+the forward-lever pair fixed it (the typical-gain hinge; 0 spikes to 5000) and read the
+contribution axis on the stable arm: forecast K3−K6 0.000, token loss flat over depth.
+The next experiments are locked as one arc with gates,
+`lab/experiments/planned/2026-09-04-loop-contribution-arc.md`: E0 (where depth earns,
+eval only) → E1 (gain-target dial 0.95 / 0.98) → E2 (iteration conditioning,
+`core_stage_cond=iter`) → E3 (staged memory-then-forecast targets; code first) → E4 (the
+TG restriction under the constraint) → E5 (20k at matched wall clock on any arm that
+THINKS). The arc's closing rule names the two next programmes if nothing THINKS: a data
+mix where depth pays, or the deep slot stack without weight sharing. Step 0 and Step 1
+of the Proposal above are subsumed: Step 0 by F4 (the plain loop earns 0.04 under the
+ramp at 20k; the flat schedule is the detonation recipe) and Step 1 by E4 (the
+oracle-with-detached-z reading already exists and is 0.0000).

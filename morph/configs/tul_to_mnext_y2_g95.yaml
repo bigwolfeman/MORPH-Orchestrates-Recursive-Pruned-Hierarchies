@@ -1,0 +1,11 @@
+# ARC E1 — gain-target dial, 0.95. Y2 (R4 + clip 4.0 + typical-gain hinge) with the hinge
+# moved from 0.90 to 0.95. Asks whether the slot loop's trajectory contraction (step ratio
+# 0.3-0.5 at target 0.9) follows the typical gain up, and whether forecast K3-K6 moves.
+# Prereg: lab/experiments/planned/2026-09-04-arc-e1-gain-target-dial.md
+defaults:
+  - tul_to_mnext_y2
+  - _self_
+model:
+  slot_gain_target: 0.95
+wandb:
+  name: to-mnext-y2-g95

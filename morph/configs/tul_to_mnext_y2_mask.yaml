@@ -1,0 +1,14 @@
+# ARC E4 — the TG restriction under the constraint. Y2 plus tul.tg_restrict=true (as
+# tul_to_mnext_mask, R5, which the 2026-09-03 stop killed at 1639 before any reading): the
+# forecast slot is the ONLY route from an earlier span to a later token, so the tokens
+# have a gradient reason to read the loop. tg_restrict forces the eager attention path.
+# Prereg: lab/experiments/planned/2026-09-04-arc-e4-mask-under-constraint.md
+defaults:
+  - tul_to_mnext_y2
+  - _self_
+model:
+  use_kernels: false
+tul:
+  tg_restrict: true
+wandb:
+  name: to-mnext-y2-mask

@@ -1,0 +1,10 @@
+# ARC E1 — gain-target dial, 0.98. As tul_to_mnext_y2_g95 with the hinge at 0.98: the
+# closest to the edge the onset capture says the map can sit (spikes at the crossing of 1.0).
+# Prereg: lab/experiments/planned/2026-09-04-arc-e1-gain-target-dial.md
+defaults:
+  - tul_to_mnext_y2
+  - _self_
+model:
+  slot_gain_target: 0.98
+wandb:
+  name: to-mnext-y2-g98
