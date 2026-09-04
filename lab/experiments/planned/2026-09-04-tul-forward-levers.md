@@ -117,3 +117,11 @@ the jac sweep on Y2's own checkpoints is the check, recorded in Results); the re
 interaction with the MUX head's read of the exit state (the head reads a normed state
 either way; unmeasured); λ = 100 (one value, no sweep; the `gain_reg_weighted` trace says
 whether it was too weak or too strong).
+
+### Method note, 2026-09-04 10:20 (Y1 drawing, Y2 not started; Predictions untouched)
+
+Smokes: Y1 exit 0, 44 s, `loop/core_gain_t0` = 1.0 exactly at step 12 (the pin sits on
+the path the probe reads); Y2 exit 0, 32 s, no NaN. Y2's live gain (`gain_est`) reached
+wandb only; before Y2 launches, `train.py`'s probe row also carries `loss/gain_est`,
+`loss/gain_est_max` and `loss/gain_reg_weighted`, so the local `probe.jsonl` holds the
+P-Y2b readout. Instrumentation only; the model code is `34d94a0`.

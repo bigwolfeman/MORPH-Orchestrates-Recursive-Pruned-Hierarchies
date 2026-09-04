@@ -2798,8 +2798,8 @@ def main(cfg: DictConfig) -> None:
                 # whether the forward on that batch was itself abnormal (a forward
                 # explosion moves the loss; a backward-only blow-up does not).
                 _probe_log["loss/total"] = float(loss.detach())
-                for _lk in ("ce_main", "mux_local"):
-                    if _lk in out:
+                for _lk in ("ce_main", "mux_local", "gain_est", "gain_est_max", "gain_reg_weighted"):
+                    if _lk in out and out[_lk] is not None:
                         _probe_log[f"loss/{_lk}"] = float(out[_lk].detach())
                 wandb.log(_probe_log, step=step)
                 if _gprobe_path is not None:
