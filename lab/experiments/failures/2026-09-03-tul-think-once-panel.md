@@ -1,6 +1,6 @@
-# Planned: the think-once round-1 panel — does the slot loop earn on a job of its own?
+# Failure: the think-once round-1 panel — does the slot loop earn on a job of its own?
 
-Status: planned
+Status: failure
 Date: 2026-09-03 (frozen before any arm ran; only 12-step smokes, whose numbers are
 not metrics, may precede launch). Branch `tul/think-once` (from `d9e04e6`), worktree
 `/home/wolfe/morph-to`. Drawing board and the reading of the record:
@@ -150,3 +150,67 @@ activation memory at batch 6 (coda layers are not checkpointed); fused kernels o
 full-BPTT slot loop without the mask at this shape (tul-a1 ran fused at bptt 4; tul_l1
 ran eager); the sweep's mux column on a real checkpoint (unit-tested arithmetic only).
 The smokes gate the first four; the first sweep gates the last.
+
+## Results (2026-09-04 02:20; runner stopped by Wolfe 2026-09-03 22:34 for the onset capture)
+
+Ten draws were planned. Eight ran to a verdict, one (R5) was killed by the stop at
+step 1639, one (R6) never started. NO contribution readout ran (no depth sweep, no worth
+profile, no ruler): P0a–P0b, P1b–P1d, P3, P4a–P4d, P5a–P5c, P7a–P7f are UNMEASURED. The
+panel produced ONE axis, stability, and on it the tripwire (`preclip/total > 1e4` at step
+≥ 200) fired on six of eight finished draws. Per arm, from each draw's `probe.jsonl`
+(`/home/wolfe/morph-scratch/to/<name>/`) and the queue log:
+
+| arm | draw | verdict | first `preclip/total` > 1e3 | peak | last step | val CE (one eval) |
+|---|---|---|---|---|---|---|
+| R0 A3-wu | to-a3 | healthy | never (max 31 at 612) | 31 | 4999 | 4.0473 |
+| R1 A1-wu s1 | to-a1-s1 | healthy | never (max 29 at 244) | 29 | 4999 | 4.1897 |
+| R1 A1-wu s2 | to-a1-s2 | DETONATED 2041 | 1989 | 4.2e5 at 2092 | 2098 | — |
+| R3 M-own | to-mown | healthy | never (max 91 at 244) | 91 | 4999 | 4.2631 |
+| R4 M-next | to-mnext | DETONATED 3618 | 3347 | 3.4e4 at 3618 | 3627 | — |
+| R5 M-next-mask | to-mnext-mask | killed by the stop | none by 1639 (max 233 at 337) | 233 | 1639 | — |
+| R6 M-own-mask | — | never ran | | | | |
+| R7f cond4 | to-cond4 | DETONATED 1009 | 984 | 2.2e4 at 1009 | 1077 | — |
+| R7d cond4 frozen z | to-cond4-dz | DETONATED 1019 | 1000 | 3.4e5 at 1033 | 1064 | — |
+| R8f coda8 | to-coda8 | DETONATED 1384 | 1350 | 1.0e4 at 1384 | 1443 | — |
+| R8d coda8 frozen z | to-coda8-dz | DETONATED 1430 | 1381 | 2.5e6 at 1443 | 1443 | — |
+
+Two shapes, both under the 1000-step ramp:
+
+- **The A1 takeover shape** (to-a1-s2): a monotone core-gradient ramp with onset near
+  1850–1900 (`preclip/core` 0.026 → 8.6 → 92 → 1.0e4 over steps 1800/1900/2000/2041),
+  the same window as the warmup-0 takeovers of the 2026-08 campaign. One seed of two.
+- **The forecast spike train** (every arm with the MUX-next target): the coda's gradient
+  flat (0.55–0.75), the conditioning stack's gradient flat (0.1–0.6), and the core,
+  prelude, slot modules and embedding spiking together on single steps that snap back and
+  escalate once the LR plateau begins. Five of five forecast draws. The memory target
+  (R3) on the same recipe ran clean, so the target, not the loop's presence, selects the
+  face. Its mechanism was measured the same night: `2026-09-03-tul-onset-capture.md`.
+
+Wall clock, from the queue log (START to DONE): R0 13.0 min, R1 s1 34.5 min, R3 44.6 min
+per 5000 steps; R4 3627 steps in 33.0 min (110 steps/min, R3's pace, about 3.5x slower
+per step than R0's 385 steps/min); R7f 1077 steps in 10.0 min, R8f 1443 in 14.5 min,
+R7d 1064 in 10.0 min, R8d 1443 in 14.0 min (P7c's ratios are not scorable on partial
+draws; the two cond4 draws ran at R4's pace, the two coda8 draws at about 0.9x of it).
+
+## Verdict
+
+- **P1a FALSE** (one A1 draw of two detonated). **PS FALSE** (six trips in eight finished
+  draws). The ramp does not cure the A1 takeover and does not touch the forecast face.
+- Every other prediction: **unmeasured**. The method was not completed: the runner was
+  stopped at Wolfe's call ("we should do this before the queue finishes. It is worth
+  stopping for this") once the stability axis had shown that five of five forecast draws
+  die before any 5000-step readout could exist.
+- What the method could not distinguish: whether the slot loop THINKS on the forecast
+  target (P4a/P4b), because no forecast arm survived to a checkpoint that a depth sweep
+  could read. to-mnext left a step-2500 checkpoint (healthy at that step, tripped at
+  3618); the healthy arms left step 2500 and 5000. Those readouts are still runnable and
+  are GPU time at Wolfe's call.
+
+## Updated hypothesis
+
+The forecast target is the target that makes the slot loop's operator gain climb; the
+stability question has to be answered on R4 before any contribution question about R4
+means anything. The capture record names the mechanism (a slow drift of the loop's
+typical gain toward 1 and a backward product through eight iterations past it, with
+ternary QAT as the necessary driver and no forward event) and the lever order. Round 2
+of this panel is conditional on a forecast arm that survives 5000 steps under that lever.

@@ -29,6 +29,8 @@ def load_model_and_batch(config: str, ckpt: str, batch: int, device: str = "cuda
     """(model in train mode, x, y, layout, step) — eager kernels, compile off."""
     cfg = build_cfg(config, ["model.use_kernels=false", "training.compile=false"])
     tul_rt = build_tul_runtime(cfg)
+    if tul_rt is None:
+        raise SystemExit(f"{config} has no TUL block: there is no slot loop to measure")
     model, step = load_ckpt(cfg, ckpt, device, tul_rt.model_cfg if tul_rt else None)
     model.train()
     spec = tul_rt.data_cfg.spec_for(cfg.data.seq_len)
