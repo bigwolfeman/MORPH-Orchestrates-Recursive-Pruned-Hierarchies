@@ -64,3 +64,12 @@ rows; last-four val CE; wall clock against Y2's 45.6 min.
 The hinge at 0.98 against the spike mechanism (the capture saw spikes at the crossing of
 1.00 with a 2 % finite-difference gain estimate; 0.98 + eps 0.02 touches it); the wall
 clock of the dial arms (same code path, expected 1.0x Y2).
+
+### Method note, 2026-09-04 14:52 (launched; Predictions untouched)
+
+12-step compiled smokes on `/home/wolfe/morph-to` detached at 19c5dc3: g95 exit 0, 29 s,
+no NaN, `loss/gain_est` 0.8731 at step 12; g98 exit 0, 28 s, no NaN, `gain_est` 0.8730.
+Both print the same step-12 loss 22.2869 as each other (the hinge is inactive below its
+target at init, as designed). Draws launched in the order g95, g98 by
+`morph-scratch/arc/run_arc_a.sh` (E2's arm follows in the same queue); tripwire on;
+one trainer.

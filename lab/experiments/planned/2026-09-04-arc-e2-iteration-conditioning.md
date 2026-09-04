@@ -61,3 +61,12 @@ per 500-step window (a second bump past t = 3 is the signature of a pass doing n
 torch.compile (the penalty takes `stage_cond` by signature; the CPU tests cover each
 alone). A 12-step compiled smoke with no NaN and `tul/gain_est` present is the
 pre-launch check, recorded as a Method note.
+
+### Method note, 2026-09-04 14:52 (queued; Predictions untouched)
+
+12-step compiled smoke of `tul_to_mnext_y2_iter` on `/home/wolfe/morph-to` at 19c5dc3:
+exit 0, 27 s, no NaN, `loss/gain_est` 0.8751 and `gain_est_max` 0.8769 present at step
+12 (the hinge and the iteration conditioning run together under torch.compile at the
+real shape, the pre-launch check this file asked for). Step-12 loss 22.2869, the same
+print as Y2's dial arms, so the zero-init gates have not moved the loss by step 12.
+Queued third in `morph-scratch/arc/run_arc_a.sh`, after E1's two arms.
