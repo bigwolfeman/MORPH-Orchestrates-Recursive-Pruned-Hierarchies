@@ -1,0 +1,36 @@
+notul: rows 480  K1−K6 = +0.0414 (row mean)
+  P0a Spearman(row CE_1, row earning) = +0.042 [-0.042, +0.127]
+  offset profile (earning per token by offset-in-span):
+     0-0 : +0.0367 [+0.0317, +0.0428]  n=24821
+     1-1 : +0.0449 [+0.0399, +0.0500]  n=24586
+     2-2 : +0.0403 [+0.0363, +0.0446]  n=24547
+     3-3 : +0.0432 [+0.0389, +0.0478]  n=24505
+     4-7 : +0.0410 [+0.0385, +0.0435]  n=88846
+     8-15: +0.0409 [+0.0390, +0.0429]  n=140889
+    16-31: +0.0421 [+0.0403, +0.0440]  n=163326
+  P0b offset-0 earning / mean earning over offsets 4..31 = +0.0367 / +0.0414 = 0.89x
+  P0c top-decile rows: loss share 0.126, earning share 0.106 -> below
+notul: rows 480  K1−K6 = +0.0367 (row mean)
+  P0a Spearman(row CE_1, row earning) = +0.054 [-0.039, +0.144]
+  offset profile (earning per token by offset-in-span):
+     0-0 : +0.0282 [+0.0239, +0.0327]  n=24821
+     1-1 : +0.0394 [+0.0345, +0.0447]  n=24586
+     2-2 : +0.0401 [+0.0356, +0.0446]  n=24547
+     3-3 : +0.0376 [+0.0335, +0.0418]  n=24505
+     4-7 : +0.0350 [+0.0326, +0.0377]  n=88846
+     8-15: +0.0360 [+0.0340, +0.0381]  n=140889
+    16-31: +0.0385 [+0.0366, +0.0403]  n=163326
+  P0b offset-0 earning / mean earning over offsets 4..31 = +0.0282 / +0.0368 = 0.76x
+  P0c top-decile rows: loss share 0.124, earning share 0.101 -> below
+a2: rows 480  K1−K6 = +0.1037 (row mean)
+  P0a Spearman(row CE_1, row earning) = -0.180 [-0.270, -0.088]
+  offset profile (earning per token by offset-in-span):
+     0-0 : +0.0797 [+0.0723, +0.0877]  n=24339
+     1-1 : +0.0924 [+0.0850, +0.1004]  n=24132
+     2-2 : +0.0967 [+0.0899, +0.1037]  n=24118
+     3-3 : +0.0967 [+0.0894, +0.1043]  n=24101
+     4-7 : +0.1018 [+0.0975, +0.1060]  n=87500
+     8-15: +0.1082 [+0.1051, +0.1112]  n=139308
+    16-31: +0.1096 [+0.1064, +0.1127]  n=162533
+  P0b offset-0 earning / mean earning over offsets 4..31 = +0.0797 / +0.1074 = 0.74x
+  P0c top-decile rows: loss share 0.125, earning share 0.089 -> below

@@ -120,7 +120,7 @@ Wolfe's call.
 
 | # | item | status |
 |---|---|---|
-| E0 | where depth earns (eval only; `--profile` on both depth sweeps, `score_arc_e0.py`) | code done, queued behind arc-a2 (`arc/run_e0.sh`) |
+| E0 | where depth earns | FILED `failures/2026-09-04-arc-e0-where-depth-earns.md`: earning is FLAT over offsets and rows and smallest where the loss is largest (P0b, P0d false) |
 | E1-95 / E1-98 | gain dial | FILED `failures/2026-09-04-arc-e1-gain-target-dial.md`: the hinge is a stability dial, not an earning dial; stays at 0.90 |
 | E2 | `to-mnext-y2-iter` | draw 1 DETONATED 2556 (single-sample hinge blind); draw 2 `iter-all` held every iteration at 0.89 with zero spikes, killed by a single-step tripwire FALSE POSITIVE at 1684 (Amendment 2); RESUMED from 1500 as `iter-all-r` with the sustained rule, queued behind E0 |
 | E3 | staged targets (`tul.mux_stage_own_iters`; configs `tul_to_mnext_y2_stage2/3`; prereg `arc-e3-staged-targets.md`) | code done, 823 tests pass; E3-2 queued behind E2 in the GPU window |
