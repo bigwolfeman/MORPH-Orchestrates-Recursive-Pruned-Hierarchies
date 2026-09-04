@@ -123,7 +123,7 @@ Wolfe's call.
 | E0 | where depth earns (eval only; sweep flags `--per-row`, `--per-offset` first) | not started |
 | E1-95 | `to-mnext-y2-g95` | queued 2026-09-04 (runner `morph-scratch/arc/run_arc_a.sh`, tree `/home/wolfe/morph-to` detached at 19c5dc3) |
 | E1-98 | `to-mnext-y2-g98` | queued (same runner) |
-| E2 | `to-mnext-y2-iter` | queued (same runner) |
+| E2 | `to-mnext-y2-iter` | queued for after Wolfe's 17:00 GPU window (`arc/run_arc_a2.sh`; the first runner is held after g98 by `arc/stop_after_g98.sh`) |
 | E3 | staged targets (code: intermediate slot states, per-iteration `mux_local`, sweep columns), then its prereg | not started |
 | E4 | `to-mnext-y2-mask`, on the best arm of E1/E2/E3 (Y2 if none THINKS) | waits on E1/E2 |
 | E5 | 20k matched wall clock on any THINK arm | waits on E4 |
