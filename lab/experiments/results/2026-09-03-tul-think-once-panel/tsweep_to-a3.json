@@ -1,0 +1,14 @@
+{
+ "to-a3": {
+  "step": 5000,
+  "rows": 480,
+  "train_eval_depth": 6,
+  "depths": {
+   "1": {
+    "ce_tokens": 4.020810467004776,
+    "n_batches": 160,
+    "batch": 3
+   }
+  }
+ }
+}

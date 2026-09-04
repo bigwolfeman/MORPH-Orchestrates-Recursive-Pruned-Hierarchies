@@ -1,0 +1,24 @@
+{
+ "notul-wu-5k": {
+  "step": 5000,
+  "rows": 480,
+  "train_eval_depth": 6,
+  "depths": {
+   "1": {
+    "ce_tokens": 4.007439275085926,
+    "n_batches": 160,
+    "batch": 3
+   },
+   "3": {
+    "ce_tokens": 3.972285968065262,
+    "n_batches": 160,
+    "batch": 3
+   },
+   "6": {
+    "ce_tokens": 3.9707383915781973,
+    "n_batches": 160,
+    "batch": 3
+   }
+  }
+ }
+}

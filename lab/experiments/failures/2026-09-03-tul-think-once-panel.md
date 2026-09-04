@@ -214,3 +214,47 @@ means anything. The capture record names the mechanism (a slow drift of the loop
 typical gain toward 1 and a backward product through eight iterations past it, with
 ternary QAT as the necessary driver and no forward event) and the lever order. Round 2
 of this panel is conditional on a forecast arm that survives 5000 steps under that lever.
+
+## Results, part 2 (2026-09-04 09:02; the contribution readouts on the checkpoints the stop left behind)
+
+Run after the onset capture, no trainer alongside (`/home/wolfe/morph-scratch/to/
+run_readouts_now.sh`; sweeps 480 rows batch 3, profiles 192 rows; files
+`results/2026-09-03-tul-think-once-panel/{sweep,worth}_<arm>_<step>.json`,
+`tsweep_*.json`). The forecast arms have no 5000-step checkpoint; M-next is read at its
+pre-onset 2500 and is not matched-step with the others.
+
+| arm | step | 480-row CE at trained depth | slot K1−K6 (CE) | own-loss K1−K6 | own-loss K3−K6 | plan worth, offset 0 (zero) |
+|---|---|---|---|---|---|---|
+| R0 A3 (coreless floor) | 5000 | 4.0208 | — | — | — | — |
+| ruler notul-wu (token loop) | 5000 | K1 4.0074 / K3 3.9723 / K6 3.9707 | 0.037 (token loop) | — | — | — |
+| R1 A1-wu s1 (bptt 4) | 5000 | 4.1502 | +0.0014 [+0.0011, +0.0016] | — | — | +0.064 [+0.055, +0.073] |
+| R3 M-own | 5000 | 4.2235 | +0.0002 [+0.0001, +0.0003] | +0.0371 [+0.0355, +0.0388] | +0.0010 [+0.0004, +0.0016] | +0.048 [+0.041, +0.055] |
+| R4 M-next | 2500 | 4.6584 | +0.0006 [+0.0005, +0.0007] | +0.0123 [+0.0104, +0.0142] | −0.0004 [−0.0010, +0.0003] | +0.070 [+0.061, +0.080] |
+
+Depth curves: M-own's own loss falls 3.179 → 3.143 → 3.141 over depths 1/3/4 and rises
+again to 3.147 at 8; M-next's forecast loss 6.867 → 6.855 → 6.854 → 6.858 at 1/3/4/8.
+Every slot arm's TOKEN loss is flat to 0.001 over depth. The looped token ruler earns
+0.037 nats of CE over depth 1 → 6 and beats the coreless floor by 0.050 at matched steps.
+
+Scored against the frozen predictions (the rest stay unmeasured: no forecast arm
+survived to 5000, R5/R6 never finished):
+
+- **P0a FALSE.** R0 sits 0.050 above the ruler's K6, below the predicted 0.15–0.45.
+- **P0b unscored** (the ruler's wall clock at this shape was not logged in this queue).
+- **P1b TRUE** (slot K1−K6 0.0014 ≤ 0.02 on the surviving seed; seed 2 detonated).
+- **P1c** by the profile's offset-0 reading, 0.064 > 0.04: FALSE on the one measured
+  seed (the prediction named "all tokens"; the profile's all-token mean is in the JSON and
+  smaller, so the offset-0 line is the strict reading).
+- **P1d FALSE.** A1 is 0.129 nats WORSE than R0, not better.
+- **P3 FALSE** on its first clause (K1−K6 0.037 with the CI above 0), but R3 does not
+  THINK by the decision rule: K3−K6 is 0.001, under the 0.01 bar. The loop's whole own-
+  loss earning is in iterations 1–3.
+- **P4a/P4b** at the pre-onset checkpoint only: K1−K6 0.012 with the CI above 0 but under
+  0.02; K3−K6 −0.0004. Not a THINK, and not the 5000-step reading the rule asks for.
+- **P4c** at 2500: shuffle at offset 0 = +0.043 ≥ 0.05? No: FALSE at 2500.
+
+Reading. On this recipe at 5000 steps every slot arm is behind the coreless 8-layer model
+by 0.13–0.20 nats of CE at 2.6–3.4x its wall clock, and the only depth that pays anywhere
+is the token loop's (0.037 nats, 0.05 under the floor). The slot loops do their own-loss
+work in three iterations and their token loss reads none of it. This is the contribution
+axis Wolfe called the canary; on it the panel's arms are all silent past depth 3.
