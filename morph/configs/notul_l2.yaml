@@ -1,0 +1,17 @@
+# Arm B of the 30k head-to-head: the l2cap recipe with TUL OFF and kernels ON.
+# Prereg: lab/experiments/planned/2026-08-30-tul-vs-notul-30k.md.
+# Same cap, same loop depths, same optimizer; no slots -> no mux, no TG-restrict,
+# so the fused kernels are legal and are its best implementation (bench: 1.28 sps
+# vs 0.72 eager). Every token position gets the full looped core.
+defaults:
+  - tul_l2
+  - _self_
+
+model:
+  use_kernels: true
+
+tul:
+  activate_at: never
+
+wandb:
+  name: notul-30k

@@ -51,10 +51,23 @@ def test_shift_matches_manual_pair_recurrence():
     with torch.no_grad():
         q, k, v, la, _ = m._project(x)
         k_shift = torch.cat([torch.zeros_like(k[:, :1]), k[:, :-1]], dim=1)
-        o_ref, s_ref = ref._recurrent(q, k_shift, v, la, None)
+        o_ref, s_ref = ref._recurrent(q, k_shift, v, la, None, reset_mask=None)
         o_ref = ref._readout(x, o_ref, None)
         o, s = m(x)
     assert torch.allclose(o, o_ref, atol=1e-5)
     assert torch.allclose(s, s_ref, atol=1e-5)
 
 
+def test_reset_boundary_zeroes_cross_segment_key():
+    # With a reset at position j, the shifted key there must be zeroed: the
+    # suffix after the reset behaves like a fresh sequence.
+    m = _mk("recurrent", True)
+    x = torch.randn(1, 20, 64)
+    j = 8
+    reset = torch.zeros(1, 20, dtype=torch.bool)
+    reset[0, j] = True
+    with torch.no_grad():
+        o_full, _ = m(x, reset_mask=reset)
+        o_fresh, _ = m(x[:, j:])
+    assert torch.allclose(o_full[:, j:], o_fresh, atol=1e-4), \
+        (o_full[:, j:] - o_fresh).abs().max()

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Generation samples and degeneration metrics for MORPH checkpoints, TUL or not.
 
-    python scripts/tul_samples.py --ckpt plain=notul=<path>.pt --ckpt a2=tul_a2=<path>.pt
+    python scripts/tul_samples.py --ckpt a0=tul_a0=<path>.pt --ckpt a1=tul_a1=<path>.pt
 
 Why this is a standalone script and not more logging inside the training loop:
 `gate_bakeoff.sh` launches each arm as its OWN `python -m morph.training.train`, so a
@@ -33,6 +33,7 @@ import argparse
 import json
 import os
 import pathlib
+import statistics
 import sys
 import time
 
@@ -82,7 +83,7 @@ def load_cfg(name):
 
 def load_ckpt(cfg, path, device, tul_cfg):
     # tul_cfg is REQUIRED for a TUL arm: without it MORPHTransformer builds no E_slot/
-    # E_mask/W_sent, the checkpoint's TUL tensors load as "unexpected" (silently
+    # E_mask/W_prefix, the checkpoint's TUL tensors load as "unexpected" (silently
     # dropped), and the first slot_layout= forward raises. That is exactly how the first
     # run of this script died. For a non-TUL arm it is correctly None.
     model = build_model_with_quant(cfg, device, tul=tul_cfg)
@@ -170,7 +171,7 @@ def emit_source_for(tul_rt) -> str:
     return "token" if float(tul_rt.model_cfg.emit_weight) == 0.0 else "slot"
 
 
-def run_one(model, tul_rt, tokenizer, seq_len, n_tokens, device, seed,
+def run_one(model, tul_rt, tokenizer, seq_len, n_tokens, device, halt, seed,
             max_slots=0, reps=1, only=()):
     """One arm, every decode mode. Per-prompt values are KEPT: the A1-minus-A0 gap is a
     PAIRED difference over the same prompts, and a mean with no spread cannot say whether
@@ -209,6 +210,7 @@ def run_one(model, tul_rt, tokenizer, seq_len, n_tokens, device, seed,
                     new, builder = generate_tul(model, ids, rule, spec,
                                                 max_new_tokens=n_tokens, temperature=temp,
                                                 top_k=topk, seed=sd, device=device,
+                                                halt=halt,
                                                 emit_source=emit_source_for(tul_rt))
                     m = generation_metrics(new, builder, rule, window=n_tokens)
                 m["prompt_index"] = float(pi)
@@ -257,6 +259,8 @@ def main():
     ap.add_argument("--decodes", default="",
                     help="comma-separated subset of the decode labels, e.g. "
                          "topk50_t0.8,sample_t1. Empty = all three.")
+    ap.add_argument("--halt", action="store_true",
+                    help="also score the gate-driven depth policy (arm TUL-halt)")
     ap.add_argument("--out", default="lab/experiments/results/tul_rep_ab.json")
     a = ap.parse_args()
 
@@ -308,8 +312,20 @@ def main():
         results[label] = {"step": step, "config": cfg_name, "path": path,
                           "tul": tul_rt is not None,
                           "fixed": run_one(model, tul_rt, tok, a.seq, a.n_tokens,
-                                           device, a.seed, a.max_slots,
+                                           device, False, a.seed, a.max_slots,
                                            a.samples_per_prompt, only)}
+        # --halt is a REQUEST, not a promise: the halting policy is the gate choosing
+        # each slot's depth, so an arm built without tul.gate has nothing to halt with
+        # and generate_tul raises. Applying the flag globally is what killed the first
+        # full run of this script, after the gate arm had already been scored.
+        gated = tul_rt is not None and getattr(tul_rt.model_cfg, "gate", None) is not None
+        if a.halt and not gated:
+            print("    -- halt policy SKIPPED: this arm has no gate --")
+        if a.halt and gated:
+            print("    -- halt policy --")
+            results[label]["halt"] = run_one(model, tul_rt, tok, a.seq, a.n_tokens,
+                                             device, True, a.seed, a.max_slots,
+                                             a.samples_per_prompt, only)
         del model
         torch.cuda.empty_cache()
         flush(results, anchor, a)

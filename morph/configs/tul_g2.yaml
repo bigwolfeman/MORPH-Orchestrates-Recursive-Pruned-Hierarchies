@@ -1,0 +1,18 @@
+# ARM G2 — GRT recurrence gate + the sigma<=1.5 cap: both contractivity controls.
+#
+# Gate-ladder program (.agents/notes/proposed/architecture/2026-08-30-gate-ladder-program.md).
+# tul_l2 (the l2cap winner: full BPTT + hard spectral projection on the 12 core MLP
+# linears) + the same gate as tul_g1. The cap acts on the core weights; the gate MLP is
+# NOT projected (the cap's measured recipe is the 12 core linears — adding surfaces
+# changes the cure, and the gate's sigmoid already bounds its own contribution).
+# G1 ~ G2 => the cap is redundant under a gate; G1 diverges while G2 trains => the gate
+# alone is insufficient at our depth.
+defaults:
+  - tul_l2
+  - _self_
+
+tul:
+  recur_gate: grt
+
+wandb:
+  name: tul-g2

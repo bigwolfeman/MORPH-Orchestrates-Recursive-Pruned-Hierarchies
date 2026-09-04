@@ -1,0 +1,20 @@
+# Diagnostic family built on arm A1 — the arm that diverged (abort step 4540).
+#
+# Each run changes ONE thing against this file and is read from its gradient trace.
+# lab/tul/divergence-rca.md §5, plus the quant control [W, 2026-08-17]:
+#
+#   D2  reproduce, no change            (validates the new instrument against the abort)
+#   D3  training.ternary=false training.embed_quant=off training.adam8bit=false
+#   D4  model.retention_carry=false     (cross-iteration GLA carry, the pad->real path)
+#   D5  model.core_gain_clip=1.5        (the governor written for gain runaway; was OFF)
+#   D6  model.bptt_depth=1              (gradient through ONE loop iteration, not four)
+#
+# Run:
+#   python -m morph.training.train --config-name tul_diag_a1 wandb.name=D2-a1-repro
+defaults:
+  - tul_a1
+  - _tul_diag_short
+  - _self_
+
+wandb:
+  name: null      # set per run on the command line — a diagnostic arm must be named

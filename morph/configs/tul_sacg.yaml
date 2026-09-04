@@ -1,0 +1,13 @@
+# E-SAC-G: tul_sac + learned gated span pooling (tul.tg_span_gate).
+# The frozen binding of lab/experiments/failures/2026-09-01-span-aligned-compression.md:
+# P-S1 FALSE -> run ONE learned-gated-pooling variant before closing the lane.
+# ONE change vs the measured tul-sac arm; zero-init gates == tul-sac at step 0.
+defaults:
+  - tul_sac
+  - _self_
+
+tul:
+  tg_span_gate: true
+
+wandb:
+  name: tul-sacg

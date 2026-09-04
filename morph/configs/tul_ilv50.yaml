@@ -1,0 +1,39 @@
+# ARM ILV50 — 50/50 interleave: alternate the full-BPTT loop (L2, spectral-projection
+# controlled) with the faithful one-pass DiffusionBlocks step.
+#
+# CLAUDE.md "faithful DiffusionBlocks" mission — the wall-clock lever. Measured
+# panel (all eager, use_kernels=false): coreless 30 min, L2 (full BPTT x6) 66 min,
+# db_loop-as-built 70 min, one-pass db1 estimated ~36 min. A pure db1 run
+# (tul_dbfix) buys the most wall-clock but has never been measured for whether the
+# resulting model keeps a real depth curve; this arm hedges — half the steps still
+# pay full BPTT (tul_l2's own spectral-projection-controlled loop, unchanged) so the
+# T-iteration machinery keeps training even if db1 alone under-specialises, while the
+# other half trains the one-pass step directly. `training.step_mix: {bptt: 1, db1: 1}`
+# alternates per GLOBAL STEP (morph/training/train.py::build_step_mix_cycle) —
+# resume-safe, seed-independent.
+#
+# core_stage_cond: sigma is REQUIRED for the db1 half; on the bptt-selected steps the
+# T-iteration loop runs exactly as tul_l2 does today (sigma conditioning is wired
+# into _tul_core_db1 / the Euler ladder ONLY — "iter" mode, not "sigma", is what
+# conditions the T-iteration loop; see tul_l2cap_cond for that isolation instead).
+defaults:
+  - tul_l2
+  - _self_
+
+tul:
+  core_stage_cond: sigma
+  db1_sigma_min: 0.002
+  db1_sigma_max: 80.0
+  db1_p_mean: -1.2
+  db1_p_std: 1.2
+  db1_sigma_data: 0.5
+  db1_cond_dim: 256
+  db1_ladder_steps: 0
+
+training:
+  step_mix:
+    bptt: 1
+    db1: 1
+
+wandb:
+  name: tul-ilv50

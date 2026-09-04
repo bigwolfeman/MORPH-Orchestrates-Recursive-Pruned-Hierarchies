@@ -1,11 +1,11 @@
 """Checkpoint compatibility for the paid loop (docs/tul-paid-loop-recipe.md §3).
 
-The slot-only arms saved ``tul.W_prefix`` (their prefix projection). The shipped model
-builds none of it, and ``load_checkpoint`` RAISES on an unexpected key by design (a homeless
+The slot-loop arms save ``tul.W_prefix`` (their prefix projection). The paid-loop model
+(``tul.tokens_through_core``) builds none of it, and ``load_checkpoint`` RAISES on an unexpected key by design (a homeless
 tensor is lost state). Every A2 checkpoint under ``checkpoints/morph/`` from before
 2026-09-03 carries the key, so the loaders drop exactly that key, loudly, and only for a
-model without an FM planner — the planner still owns the projection and must keep the
-strict check. CPU only, tiny config.
+model whose TULSlots has no W_prefix — the slot loop and the FM planner still own the
+projection and must keep the strict check. CPU only, tiny config.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ def _cfg(**kw) -> MORPHConfig:
         channel_dims=(16, 10, 6), compression=2, csa_compress_ratio=4,
         hca_compress_ratio=8, top_k=8, window_size=8, retention=False,
         bigram_hash_vocab=V, use_kernels=False, hc_use_kernel=False, dropout=0.0,
-        tul=TULConfig(prefix_k=2, slot_id=4),
+        tul=TULConfig(prefix_k=2, slot_id=4, tokens_through_core=True),
     )
     base.update(kw)
     return MORPHConfig(**base)
@@ -72,7 +72,8 @@ def test_drop_keeps_every_key_on_an_fm_planner_model():
     torch.manual_seed(0)
     fm = FMArmConfig(d_p=16, n_layers=1, n_heads=2, d_ff=32, cond_dim=16, sigreg_slices=16,
                      source_std=1.0 / 8.0, max_slots=4, l_total=40)
-    m = MORPHTransformer(_cfg(n_core=0, fm=fm))
+    # The planner keeps the slot-loop write path (W_prefix); the paid loop + a planner RAISES.
+    m = MORPHTransformer(_cfg(n_core=0, fm=fm, tul=TULConfig(prefix_k=2, slot_id=4)))
     assert m.tul.W_prefix is not None
     state = {k: v.clone() for k, v in m.state_dict().items()}
     assert "tul.W_prefix" in state

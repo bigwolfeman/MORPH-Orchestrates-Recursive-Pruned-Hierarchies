@@ -4,7 +4,11 @@
 knob.** Two campaigns have already burned weeks on this. Almost every idea you are about to
 have is in one of the two indexes below with a number next to it.
 
-Last updated 2026-09-02 21:00 (Wolfe: "we need a big loud note saved about this").
+Last updated 2026-09-04 12:20 (section D: the forward levers hold; the loop is stable and empty).
+
+**Slot-loop run spiking after the ramp? Break glass:
+[BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md](BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md)
+— the constraint is on in `base.yaml` since 2026-09-04; that file says how to read it.**
 
 ## Triage in 60 seconds
 
@@ -15,6 +19,7 @@ Open the run's `probe.jsonl` (written by `training.grad_probe_every=1`, key
 |---|---|---|
 | Did `preclip/total` exceed **1e4** at any step ≥ 200? | **Paid-axis detonation.** Section A. The run is dead; the loss may look fine for another 1500 steps. | keep reading |
 | Is val CE at a MINIMUM and then RISING by nats, on a slot-loop TUL arm (A1/A3, ≤64 looped positions)? | **Core takeover.** [takeover-campaign.md](takeover-campaign.md), 15 hypotheses, 11 refuted. Do not re-derive them. | keep reading |
+| Is the run a slot loop at full BPTT (any target: MUX-next, cond4, coda8, A1 at `bptt_depth` 8), under the 1000-step ramp, and does `preclip/total` show single-step spikes that snap back and escalate once the ramp ends? | **The full-BPTT spike train.** Section D. The loop's typical gain has drifted to 1; `model.slot_state_renorm` or `model.slot_gain_lambda` holds it; a backward clip alone does not. | keep reading |
 | Is val CE flat near 7.3 from the first eval? | The codebook is pinned (a frozen ternary γ, or an equivalent). Section C. | New. Write a prereg before you run anything. |
 
 The step-0 spike (`preclip/total` ~3.6e4 at step 0) is init and is NORMAL. Every verdict
@@ -164,6 +169,108 @@ If val CE never leaves ~7.3 (the unigram floor for this tokenizer), the ternary 
 cannot grow: a γ frozen at the step-0 mean|W| bounds every effective weight at ±γ₀. Seen
 on all three `tul-a2-frz*` draws. The live per-forward γ is load-bearing for learning; a
 near-frozen γ (β=0.99) already costs 0.3 nats at 2500 steps.
+
+## D. The forecast spike train under the ramp (2026-09-03/04, the think-once panel)
+
+Measured in `lab/experiments/successes/2026-09-03-tul-onset-capture.md` (C0/C1/C2, with a
+bit-exact deterministic replay of the onset) after five of five forecast arms of the
+think-once panel tripped the 1e4 rule between steps 1009 and 3618
+(`failures/2026-09-03-tul-think-once-panel.md`). The ramp does not touch this face; the
+memory target (M-own) on the same recipe ran clean.
+
+**Shape.** `preclip/total` sits at 2–4 through the ramp, then single steps spike 10x to
+1000x and snap back, the spikes escalating over ~60 steps to a detonation. The coda's
+gradient and the conditioning stack's gradient stay flat; core, prelude, slot modules and
+embedding spike together. The forward does NOT move: the core's forward norm stays at
+0.8–1.15x its calm median and the loss within 1 nat on 21 of 22 spike steps. The slot
+states' effective rank rises on spike steps (56–61 against 38–52). It is a backward
+event.
+
+**Mechanism, measured.**
+
+| reading | calm (steps 200–1140) | onset window (1150–1200) |
+|---|---|---|
+| typical one-step gain of the slot loop, `jac/rms_t3` | 0.872 at step 0 → 0.912 at 1000 → 0.951 at 1150 (Spearman 0.98 against step) | 0.93–1.04; above 1 on 5 of 16 spike steps, 2 of 33 others; Spearman 0.65 against log `preclip/total` |
+| worst-direction gain, `jac/sigma_t3` | 3.2 → 19 (1000) → 30 (1150) | 46–266 |
+| per-block typical gain | 1.00–1.02 on every block, all along | 1.015–1.022 |
+| product of the six blocks' worst gains | 73 → 47k (1000) → 242k (1150) | 0.2M–3M |
+| cotangent growth back through the loop, `cot_t0/cot_t7` | 1.6–3 | 39–2436 on spike steps, median 18.5 on the others |
+| ternary flips in the core per step | median 73.5k (rising 5k → 78k over the run) | 0.1x–2.3x the calm median on spike steps; NEVER a burst (Spearman flips vs log preclip = −0.49) |
+| forward step size per iteration, `delta_ratio` | 0.68–0.78 after iteration 2 | 0.75–0.87 on spike steps |
+
+Read together: each block is a near-isometry on average and the six weight-shared blocks
+build a map that contracts a generic direction by ~0.9 per loop step while expanding a few
+ALIGNED directions by 100x (the README's "aligned low-rank blow-up", now seen live and
+before the blow-up). Training on the forecast target moves the typical gain toward 1 at a
+steady rate; the spikes begin when it is within ~0.05 of 1, the spike steps carry the
+higher gain (median 0.979 against 0.954), and the crossings cluster on them (5 of 16
+against 2 of 33). The spike is the backward product of eight iterations through that map (the
+growth sits in the last two backward iterations, where the operating point is most
+expansive). **Ternary QAT is necessary** (C0: ternary off, same arm, 5000 steps clean, max
+`preclip/total` 43 against 33,625) but the impulse is NOT a code-flip burst: the cusp-vault
+mechanism of section A is refuted on this face. The offline sweep over the saved checkpoints
+(`jac_sweep.jsonl`, capture record part 2) says the drift needs ternary AND the forecast
+target: ternary off holds the typical gain at 0.89 at 2500 and 5000; M-own with ternary
+moves 0.90 → 0.91 over 2500 steps; both run clean and both converge along their
+trajectory by iteration 4 (step ratio 0.14–0.24), while the ternary forecast arm keeps
+stepping at 0.5–0.7 per iteration. Caveat measured on A1 (bptt 4, token CE): a typical
+gain of 0.975 and a worst gain of 176 at step 2500 with NO cotangent growth (1.7) and no
+spike train. The discriminator is the backward product through the loop, not the gain
+alone.
+
+**Not a kernel bug.** C1 reproduced the face on the eager kernels in deterministic mode
+(onset 1170, detonation 1208), and the replay from the rolling checkpoint at 1150 matched
+C1 to the bit on all 49 steps (`preclip/total` and the loss, relative error 0.0). The
+"Schrödinger bug" is retired: the run IS reproducible from a checkpoint. What was not
+reproducible before 2026-09-03 was any run with `training.jac_probe_every > 0`, because
+the Jacobian probe's measurement consumed the CUDA generator (fixed in
+`train._jacobian_probe`; `tests/test_core_jacobian.py::test_probe_measurement_is_rng_neutral_with_dropout`).
+
+**Clip-through-time alone does NOT cure it (measured 2026-09-04, `to-mnext-ctt`,
+`lab/experiments/planned/2026-09-04-tul-clip-through-time.md`).** With the cotangent
+arriving at every iteration bounded per row to 4x the exit cotangent
+(`model.slot_cot_clip`), the clip bound on every row of every step from 1736, the exit
+cotangent stayed flat (33 → 27) and the run still tripped at 2764. What grew instead: the
+core weight gradient 0.3 → 250 (800x), the prelude's 1.1 → 294, and the FORWARD —
+iteration 0's realised gain 1.5 → 2.0 → 3.8 → 5.8 → 9.6 across training, the exit state
+norm 1017 → 5392, and the successive-step ratio along the trajectory crossing 1.0 at step
+1800, the step the gradient began to climb. So the backward product is the first
+symptom, not the whole disease: bound it and the map keeps moving past the edge and the
+blow-up rides the weight path on an inflating forward. The clip stays in the tree as an
+instrument and a belt (`loop/cot_post_*`, `loop/cot_bind_*`); the levers below are the
+next arms (phase 2, `2026-09-04-tul-forward-levers.md`).
+
+**What this says about the levers** (the capture's decision rule had a gap here: ternary
+is necessary AND the flip burst is absent AND the amplifier predictions hold; the record
+says so rather than patching the rule):
+
+1. Bound the backward product between iterations (clip-through-time), forward untouched.
+   DONE and insufficient (above): the forward inflates once the backward is bounded.
+2. Keep the loop's typical gain away from 1 on the MAP, not by a weight-spectrum cap
+   (section A's four failed caps bound a factor of one block; the map's gain is a product
+   of six blocks whose per-block gains never left 1.00–1.02 while the map's worst gain
+   went 3 → 500). **MEASURED 2026-09-04, both hold**
+   (`lab/experiments/successes/2026-09-04-tul-forward-levers.md`): a per-slot state
+   renorm between iterations (`model.slot_state_renorm`) and a hinge penalty on the map's
+   typical gain measured by a 2 % finite difference every step (`model.slot_gain_lambda`,
+   target 0.9) each take M-next to 5000 steps with the tripwire silent and ZERO spike
+   steps, on the recipe that killed every unregularised forecast draw and the clip-alone
+   draw. The penalty pins the fp32-measured typical gain at 0.887–0.897 for the whole run
+   (the unregularised map drifts 0.885 → 1.000 in 1200 steps); the renorm's raw map
+   drifts to 0.95 and plateaus. Cost: renorm none; penalty 1.05x wall clock. Neither is
+   on in `base.yaml` (a shipped-design decision, Wolfe's). What the levers do NOT do:
+   make the loop earn — both stable arms read forecast K1−K6 0.013 and K3−K6 0.000, and
+   sit 0.18 nats behind the coreless floor at 5000 steps.
+3. Code-assignment hysteresis stays a candidate for section A's face only; it has no
+   evidence on this one.
+
+**Instruments added for this** (`morph/training/train.py`, on since the capture):
+`training.loop_cot_probe=true` (cotangent norm per loop iteration, `loop/cot_norm_t{k}`),
+`training.loop_rank_every=N` (`loop/eff_rank_t{k}`, `loop/delta_mean_t{k}`),
+`training.batch_dump_every=N` + `batch_dump_dir` (token ids, labels and the slot layout of
+each step), `jac/rms_*` (typical gain, whole map and per block), rolling checkpoints
+(`ckpt_rolling_every/keep`), `lab/divergence/onset_locate.py`,
+`lab/divergence/jac_sweep.py`. Runner: `/home/wolfe/morph-scratch/cap/run_onset_capture.sh`.
 
 ## Cross-links
 

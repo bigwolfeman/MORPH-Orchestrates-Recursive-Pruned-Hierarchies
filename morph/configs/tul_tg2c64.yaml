@@ -1,0 +1,60 @@
+# TUL arm TG2-c64 — raise the span cap so a slot summarises a THOUGHT, not a budget.
+#
+# WOLFE'S CALL, 2026-08-28: "if mean span is 18 then we should target 24 maybe."
+# `span_cap: 64` lands mean span at 24.94 (see the table below).
+#
+# THE NUMBER THAT MOTIVATES THIS IS NOT tokens/row, IT IS **AT-CAP**. At the shipped
+# span_cap 32, 26.9% of spans are ended by the BUDGET rather than by a real boundary.
+# A span cut at the cap is not a semantic unit, and the TUL thesis is that a slot
+# summarises one. More than a quarter of our "thoughts" are arbitrary truncations.
+# base.yaml's gate_k_max comment already recorded this independently ("24.5% of labels
+# are a span of exactly 32") without treating it as a defect. It is one.
+#
+# Measured over 1.9 M real OWT tokens, L_total held at 1152, max_slots 64 throughout
+# (morph-scratch/smoke/span_cap_capfrac.py):
+#
+#   span_cap  tok/row  slots  pinned  corepad  meanspan  KVcomp  AT-CAP  1-token
+#      32     1029.5    52.5   9.6%    17.9%     19.71    9.85x   26.9%    0.8%
+#      40     1039.7    48.3   6.6%    24.6%     21.83   10.91x   17.6%    0.9%
+#      48     1045.2    45.9   5.7%    28.3%     23.32   11.66x   11.1%    1.0%
+#      56     1048.6    44.4   5.5%    30.6%     24.32   12.16x    7.0%    1.0%
+#      64     1050.1    43.7   5.7%    31.8%     24.94   12.47x    4.5%    1.1%
+#      80     1051.4    43.0   5.5%    32.9%     25.54   12.77x    2.1%    1.1%
+#
+# Why 64 and not 56 (which is nearer 24.32): AT-CAP halves again, 7.0% -> 4.5%, for
+# +0.14% tokens, and 64 is the max sentence length Thought Gestalt itself uses — their
+# own ablation has length 64 beating length 32 by 0.6 PPL (arXiv 2512.25026). 24.94 is
+# within rounding of the target. Beyond 64 the curve is flat and buys 2.4 points of
+# AT-CAP for nothing else.
+#
+# COMPUTE: `span_cap` is FREE where `max_slots` is not. The core loops a fixed
+# `max_slots`-wide compact sequence (`_tul_core` -> `gather_valid`, a MASKED update),
+# so longer spans mean FEWER spans per row at the SAME core width: +2.00% token
+# positions, +0.0% core compute, KV compression 9.85x -> 12.47x. Contrast A4c
+# (max_slots 64 -> 80): +0.91% tokens for +25% core compute.
+#
+# THE OLD ARGUMENT AGAINST LONG SPANS IS DEAD. The pooling law (slot-seed signal falls
+# 0.516 -> 0.210 as spans lengthen) was the only case for a short cap. Arm TG4a deleted
+# the bag-mean seed outright and moved ce_main by 0.003 nats, so its dilution cannot
+# matter much either. See lab/experiments/planned/2026-08-28-tg-round2-seed-and-softness.md.
+#
+# BASE: tul_tg2, not tul_a1. The control takes over on 3 of 4 seeds, so a 2-seed control
+# arm might return no usable checkpoint; every tul_tg2-based seed has held (0 of 4). This
+# buys reliability at the cost of reading the result against TG2's two seeds
+# (ce_main@3000 4.8763 / 4.7121) rather than against the 4-seed control band.
+#
+# THE DISCRIMINATOR IS ce_main VS TG2's OWN SEEDS. Do NOT claim an expected direction.
+defaults:
+  - tul_tg2
+  - _self_
+
+tul:
+  span_cap: 64
+  # Kept at 1.25 x span_cap, base.yaml's stated rule. The gate is OFF in this arm, so
+  # `tul_setup.py`'s `span_cap > gate_k_max` check never runs — but leaving 40 here would
+  # make the config raise the moment anyone flipped `gate: true`, which is the "config key
+  # that silently means something else" trap the rest of this tree fails loudly on.
+  gate_k_max: 80
+
+wandb:
+  name: tul-tg2c64

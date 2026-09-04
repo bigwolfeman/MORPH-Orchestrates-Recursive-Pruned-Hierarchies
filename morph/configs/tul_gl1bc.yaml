@@ -1,0 +1,12 @@
+# ARM GL1bc — the composition: MUX write supervision (gl1b) + warmup-then-mask
+# curriculum (gl1c) in one arm. Both levers independently cleared their gates
+# (lab/experiments/successes/2026-08-29-tul-gl1b-gl1c.md); this asks if they add.
+defaults:
+  - tul_gl1b
+  - _self_
+
+training:
+  init_from: checkpoints/morph/gl1-ctrl-s1/step_2000.pt
+
+wandb:
+  name: gl1bc

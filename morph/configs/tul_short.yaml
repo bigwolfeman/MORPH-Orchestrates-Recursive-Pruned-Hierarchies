@@ -1,0 +1,85 @@
+# TUL 5090 arm schedule (docs/tul-spec.md §4–§5, §7.1; decided 2026-08-16 [W]).
+# Every TUL arm (A0 baseline, A1, A1r, A3, ...) composes this file; arms differ
+# only in the `tul:` block / model keys named in docs/ablation-ledger.md.
+#
+# The full deploy recipe (base.yaml: 100k steps × 4 × 4096 tokens, TST for the
+# first 30k, carve@29k, route@30k) is 1.64 B positions and ~33 h per arm on the
+# 5090 — too slow for an 8-arm table. This file keeps the recipe and scales the
+# step axis by 0.2: 20k steps × 16 × 1024 = 328 M positions (~5–6 h/arm), the same
+# regime as the validated 25k × 4 × 4096 MORTAR runs.
+#
+# Prune → carve → route are OFF for the TUL arms [W, 2026-08-16]: the question is
+# whether the slot loop works, and MORTAR's staged topology change would be one
+# more thing to attribute a loss jump to. Dense backbone, ternary/int6 QAT and
+# AdEMAMix stay on (as in pretrain_curriculum.yaml, which also runs dense).
+# ademamix_t_alpha scales with the run (8000 of 100k → 1600 of 20k, the same 8 %).
+# TST is OFF (tst_bag_size 0): TUL arms run the slot layout from step 0
+# (spec §5); the TST-switch activation stays a full-schedule variant.
+# Measured 2026-08-16 (A0 smoke, 30 steps, this file): 284.0M params,
+# 0.99 s/step, peak alloc 22.96 GB → 20k steps ≈ 5.5 h for the A0 baseline.
+defaults:
+  - base
+  - _self_
+
+training:
+  steps: 20000
+  # 12 [W, 2026-08-22]. Batch size is held EQUAL across arms — a paired A1−A0 comparison
+  # must not also vary the gradient-noise scale — so ALL arms move together or none do.
+  #
+  # 16 was never possible: A1 at 16 is a measured OOM (its rows are L_total = 1152
+  # positions and the 8 un-checkpointed prelude/coda layers run on all of them).
+  # 14 fit, but only barely, and that is what killed the 08-21 gate bake-off. Full
+  # budget measured 2026-08-22 on tul_gate at batch 14: 22.2 GB of live tensors +
+  # 2.8 GB of caching-allocator slack + 0.6 GB of CUDA context/cuBLAS workspace =
+  # 26.2 GB resident, against a 31.4 GB card carrying a ~6 GB desktop. ~0.6 GB of
+  # margin, and the gate arm died at step 1050 with 157 MiB free. There is no bug and
+  # nothing to reclaim: a bf16 residual carrier, an empty_cache() after the compile
+  # warmup, and garbage_collection_threshold were each measured and each moved the
+  # resident figure by under 150 MiB. The arm simply costs what it costs.
+  #
+  # Activations run ~1.58 GB per row-batch, so 12 lands near 23 GB resident and ~3.8 GB
+  # of margin. Cost: 12288 tok/step instead of 14336, i.e. 14 % fewer tokens per step at
+  # the same step count.
+  batch_size: 12
+  prune_start: 999999999      # never (dense)
+  compact_step: 999999999     # never (no carve)
+  tst_bag_size: 0
+  ademamix_t_alpha: 1600
+  # THE TUL DIVERGENCE FIX. base.yaml ships 3.5 (the deploy value, tuned for the dense
+  # 100k recipe). On the slot core that value detonates: the control diverged 5/5 (abort
+  # steps 2080, 3240, 4540, 5900, 6200) and the placebo — the same arm at 96.7 % of one
+  # unrelated knob — diverged 2/2, so surviving is not free. alpha_cap 1.0 survived 2/2
+  # at 4800 steps and then held BOTH arms for the full 20k: tul-a0-acap1 (val CE 3.2805)
+  # and tul-a1-acap1 (val/ce_tokens 3.2243), wandb project morph-tul, 2026-08-18.
+  # Evidence: docs/tul-divergence-rca.md Part 5-7; lab/experiments/results/2026-08-18-tul-arms-first-comparison.md.
+  #
+  # IT LIVES HERE, not in an arm file, and not on a command line. It is an OPTIMISER
+  # setting, so applying it to A1 alone would make an A1-vs-A0 comparison differ by TWO
+  # things. Every arm composes tul_short.yaml, so every arm gets it and the arms still
+  # differ by tul.activate_at alone. It sat in a gitignored queue script from 2026-08-18
+  # to 2026-08-22; the 08-21 gate bake-off called `train --config-name tul_gate` with no
+  # overrides, inherited 3.5, and lost two of three arms to the divergence this fixes.
+  ademamix_alpha_cap: 1.0
+  eval_every: 500
+  n_eval_batches: 20
+  ckpt_every: 5000
+  # docs/tul-gate-spec.md §10: the teacher-forcing leak is invisible in val CE, so every
+  # arm must also produce generation samples and their rep4 / distinct-3 / span geometry.
+  gen_every: 5000
+
+routing:
+  route_start: 999999999      # never (no ReMoE)
+
+data:
+  seq_len: 1024
+
+wandb:
+  project: morph-tul
+
+tul:
+  # THE SLOT LOOP. base.yaml ships the paid loop (tokens_through_core: true, every position
+  # loops). Every slot-loop arm composes tul_short.yaml, so this one line puts all of them
+  # on _tul_core (only the slot positions loop; W_prefix writes the looped state into the
+  # prefix positions) without each arm file restating it. A1 and the think-once panel
+  # (tul_to_*.yaml) inherit it through tul_a1 / tul_g0c0 / tul_to_mown.
+  tokens_through_core: false

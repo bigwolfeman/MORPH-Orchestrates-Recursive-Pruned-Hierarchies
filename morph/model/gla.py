@@ -155,7 +155,7 @@ class GatedLinearAttention(nn.Module):
         return torch.float32 if dt in (torch.float16, torch.bfloat16) else dt
 
     # ── reference recurrence (the oracle) ─────────────────────────────────
-    def _recurrent(self, q, k, v, log_alpha, S0):
+    def _recurrent(self, q, k, v, log_alpha, S0, reset_mask=None):
         B, S, H, dh = q.shape
         acc = self._acc_dtype(q.dtype)
         state = S0 if S0 is not None else q.new_zeros(B, H, dh, dh)
@@ -166,6 +166,11 @@ class GatedLinearAttention(nn.Module):
             kt = k[:, t].to(acc)
             vt = v[:, t].to(acc)
             qt = q[:, t].to(acc)
+            if reset_mask is not None:
+                # Segment reset (docs/tul-tg-spec.md §4): the state ENTERING a reset
+                # position is zeroed EXACTLY — a true multiply-by-zero, not a decay
+                # floor, so the gate value alpha_t at the reset position is irrelevant.
+                state = state * (~reset_mask[:, t]).to(acc).view(B, 1, 1, 1)
             state = a.unsqueeze(-1) * state + kt.unsqueeze(-1) * vt.unsqueeze(-2)  # [B,H,dk,dv]
             outs.append(torch.einsum("bhk,bhkv->bhv", qt, state))
         o = torch.stack(outs, dim=1)                            # [B,S,H,dv]
@@ -174,7 +179,7 @@ class GatedLinearAttention(nn.Module):
         return o.to(q.dtype), state
 
     # ── chunk-parallel form (the training path) ───────────────────────────
-    def _chunked(self, q, k, v, log_alpha, S0):
+    def _chunked(self, q, k, v, log_alpha, S0, reset_mask=None):
         B, S, H, dh = q.shape
         C = self.chunk
         acc = self._acc_dtype(q.dtype)
@@ -188,6 +193,33 @@ class GatedLinearAttention(nn.Module):
             qc, kc, vc = q[:, s:e], k[:, s:e], v[:, s:e]        # [B,L,H,dh]
             la = log_alpha[:, s:e]                              # [B,L,H,dh] (≤0)
             b = la.cumsum(dim=1)                                # cumulative log-gate within chunk
+            if reset_mask is not None:
+                # Segment reset (docs/tul-tg-spec.md §4), EXACT within fp32: recompute the
+                # cumulative log-gate RELATIVE TO EACH RESET SEGMENT instead of one
+                # chunk-global cumsum. The chunk-global form composes with the -30
+                # overflow clamp below only when the chunk holds ONE segment; with
+                # several resets per chunk the global cumsum dives past -30 and the
+                # clamp pins every later position to the same value, destroying the
+                # relative decay (measured up to ~780% rel err at span-density resets —
+                # the tg_restrict regime). Per-segment offsets make each segment exactly
+                # the single-segment case the clamp was designed for. Three deltas vs
+                # the no-reset path: (a) b is offset per segment, (b) intra-chunk pairs
+                # crossing a reset are masked, (c) the carried state feeds only the
+                # pre-first-reset positions and only the LAST segment leaves the chunk.
+                rm_c = reset_mask[:, s:e]                       # [B, L] bool
+                seg = rm_c.to(torch.long).cumsum(dim=1)         # [B, L]; 0 = carry segment
+                idx = torch.arange(L, device=q.device)
+                # index of each position's segment start (-1 = carry segment: measure
+                # from the chunk start, i.e. keep the raw cumsum, matching no-reset math)
+                start = torch.where(rm_c, idx.unsqueeze(0).expand_as(rm_c),
+                                    torch.full_like(seg, -1)).cummax(dim=1).values
+                b_start = torch.gather(
+                    b, 1, start.clamp(min=0)[:, :, None, None].expand_as(b))
+                b = torch.where((start >= 0)[:, :, None, None], b - b_start, b)
+                carry_pos = (seg == 0)                          # [B, L]
+                same_seg = seg.unsqueeze(2) == seg.unsqueeze(1)  # [B, L, L]
+            else:
+                carry_pos = same_seg = None
             # Clamp the cumulative log-gate floor: the intra-chunk form factors the per-channel
             # decay as exp(b_t)·exp(-b_j); the product exp(b_t-b_j)≤1 is bounded but exp(-b_j)
             # alone OVERFLOWS fp32 once b_j is very negative (aggressive forget over a long chunk).
@@ -198,19 +230,35 @@ class GatedLinearAttention(nn.Module):
             # ---- inter-chunk: contribution of the carried state to each position ----
             # o_inter_t = (q_t ⊙ B_t) · state
             q_dec = qc * b_exp                                  # [B,L,H,dh]
-            o_inter = torch.einsum("blhk,bhkv->blhv", q_dec, state)
+            if carry_pos is not None:
+                # (c): the state carried into the chunk is visible ONLY before the
+                # chunk's first reset. For carry positions b is the raw cumsum (their
+                # segment start is the chunk start), so q_dec there matches no-reset.
+                o_inter = torch.einsum(
+                    "blhk,bhkv->blhv", q_dec * carry_pos[:, :, None, None], state)
+            else:
+                o_inter = torch.einsum("blhk,bhkv->blhv", q_dec, state)
             # ---- intra-chunk: decay-masked linear attention within the chunk ----
             # score_{t,j} = (q_t ⊙ B_t) · (k_j / B_j)   for j <= t
             k_dec = kc * (-b).exp()                             # k_j / B_j
             scores = torch.einsum("blhk,bmhk->bhlm", q_dec, k_dec)   # [B,H,L,L]
             causal = torch.tril(torch.ones(L, L, device=q.device, dtype=torch.bool))
-            scores = scores.masked_fill(~causal, 0.0)
+            if same_seg is None:
+                scores = scores.masked_fill(~causal, 0.0)
+            else:  # (b): additionally mask every pair that crosses a reset
+                scores = scores.masked_fill(~(causal & same_seg).unsqueeze(1), 0.0)
             o_intra = torch.einsum("bhlm,bmhv->blhv", scores, vc)
             outs.append((o_inter + o_intra).to(q.dtype))
             # ---- state update to end of chunk ----
             # state <- diag(B_L) state + sum_j (k_j ⊙ B_L/B_j)^T v_j
             B_L = b_exp[:, -1]                                  # [B,H,dh]  (prod over whole chunk)
             decay_to_end = (b[:, -1:].exp() * (-b).exp())       # B_L / B_j, [B,L,H,dh]
+            if carry_pos is not None:
+                # (c): only the LAST segment survives the chunk. Rows with any reset in
+                # the chunk zero the old-state carry; earlier segments' kv terms zero out.
+                B_L = B_L * carry_pos[:, -1].to(B_L.dtype).view(-1, 1, 1)
+                in_last = (seg == seg[:, -1:])                  # [B, L]
+                decay_to_end = decay_to_end * in_last[:, :, None, None]
             k_end = kc * decay_to_end
             kv = torch.einsum("blhk,blhv->bhkv", k_end, vc)
             state = B_L.unsqueeze(-1) * state + kv
@@ -218,13 +266,28 @@ class GatedLinearAttention(nn.Module):
         return o.to(q.dtype), state            # state stays acc dtype (fp32 carry), o → input dtype
 
     def forward(self, x: Tensor, initial_state: Tensor | None = None,
-                return_state: bool = True):
+                return_state: bool = True, reset_mask: Tensor | None = None):
         q, k, v, log_alpha, r_pre = self._project(x)
         if self.write_shift:
             k = torch.cat([torch.zeros_like(k[:, :1]), k[:, :-1]], dim=1)
+            if reset_mask is not None:
+                # a reset position starts a fresh segment: its shifted key would leak
+                # the PREVIOUS segment's feature into the new segment's first write.
+                k = k.masked_fill(reset_mask[:, :, None, None], 0.0)
+        # reset_mask ([B, S] bool | None): GLA segment reset (docs/tul-tg-spec.md §4).
+        # Implemented STRUCTURALLY inside _recurrent (state zeroed entering a reset
+        # position) and _chunked (per-segment cumulative gate + cross-reset pair
+        # masking) — NOT as a log_alpha floor: a -30 floor collides with _chunked's
+        # pre-existing -30 overflow clamp once a chunk holds several resets (measured
+        # up to ~780% rel err at span-density resets before this formulation).
         if self.mode == "recurrent":
-            o, final_state = self._recurrent(q, k, v, log_alpha, initial_state)
+            o, final_state = self._recurrent(q, k, v, log_alpha, initial_state,
+                                             reset_mask=reset_mask)
         elif self.mode == "kernel":
+            if reset_mask is not None:
+                raise NotImplementedError(
+                    "GLA reset_mask has no fused-kernel implementation; tg_restrict "
+                    "requires use_kernels=false, which builds mode='chunked'.")
             # Fused Triton chunked-GLA (sm_120): 2.9× the eager fwd+bwd, grads cos 1.0 vs the
             # recurrent oracle, final_state kept fp32. Gate: ignore/verify_fused_gla.py.
             #
@@ -245,6 +308,7 @@ class GatedLinearAttention(nn.Module):
             else:
                 o, final_state = self._chunked(q, k, v, log_alpha, initial_state)
         else:  # "chunked" eager reference
-            o, final_state = self._chunked(q, k, v, log_alpha, initial_state)
+            o, final_state = self._chunked(q, k, v, log_alpha, initial_state,
+                                           reset_mask=reset_mask)
         out = self._readout(x, o, r_pre)
         return (out, final_state) if return_state else out

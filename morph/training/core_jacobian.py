@@ -163,7 +163,7 @@ def _jacobian_stats(fn, h0: Tensor, mask: Tensor, n_iter: int, seed: int,
 class CoreJacobianProbe:
     """sigma_max(J_core) at the operating points a live forward actually visited.
 
-    Usage — the capture site in `MORPHTransformer._core_region` is
+    Usage — the capture sites in `MORPHTransformer._tul_core` / `._core_region` are
     Python-level no-ops until `_jac_capture` is a list:
 
         probe = CoreJacobianProbe(model)
@@ -209,7 +209,7 @@ class CoreJacobianProbe:
         inj = point["inj"].float()
         ret = point["ret_state"]
         t = int(point["iter_idx"])
-        # active is [B, L]; h is [B, L, n, C] (hyper-connection) or [B, L, C].
+        # active is [B, S]; h is [B, S, n, C] (hyper-connection) or [B, S, C].
         mask = point["active"].view(*point["active"].shape,
                                     *([1] * (h0.dim() - 2))).to(torch.float32)
 

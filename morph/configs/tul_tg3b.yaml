@@ -1,0 +1,35 @@
+# TUL arm TG3b — the soft restriction WITHOUT the takeover fuel.
+#
+# WHY THIS EXISTS: TG3 (tul_tg1 + tg_soft_prev_span) CANNOT ANSWER ITS OWN QUESTION.
+# It was built to ask "is the hard restriction simply too tight to carry context at
+# this scale", i.e. it targets the 0.17-0.42 nat ce_main DEFICIT against the control
+# band. But it inherits tul_tg1's plast/emit objectives, which the O5 objective-split
+# result and the TG1/TG2 panel both name as the takeover's fuel. Measured 2026-08-28:
+# tg3-s1 TOOK OVER at step 842 (end core share 0.9986, block backward gain 1.953 at
+# r2 0.97 — an expansive core map), the divergence guard aborted it at step 2040, and
+# it produced NO step-3000 checkpoint. The arm died of a cause unrelated to the
+# question it was asked.
+#
+# Takeover record so far, and it is consistent: aux losses ON -> tg1 1 of 2 diverged,
+# tg3 at least 1 of 2 diverged. Aux losses OFF -> tg2 0 of 2, tg4a 0 of 2 (core shares
+# 0.0020/0.0035 and 0.0011/0.0010). SOFTENING THE MASK DID NOT RESCUE THE TAKEOVER;
+# REMOVING THE AUX LOSSES DID. So the soft-restriction question has to be asked from
+# the tul_tg2 base instead.
+#
+# ONE change from tul_tg2: `tul.tg_soft_prev_span: true` — each token may attend its
+# own span, the PREVIOUS span, and the slots (morph/model/tul_layout.py
+# `tg_allow_mask`, docs/tul-tg-spec.md §6). No new parameters.
+#
+# THE DISCRIMINATOR IS ce_main VS THE CONTROL BAND (4.4586-4.5459 at step 3000).
+# Read it against tul_tg2's OWN seeds (4.8763 / 4.7121), which differ from this arm by
+# the mask alone. Do NOT read it against tg1 or tg3 — those carry the aux objectives.
+# Do NOT claim an expected direction.
+defaults:
+  - tul_tg2
+  - _self_
+
+tul:
+  tg_soft_prev_span: true
+
+wandb:
+  name: tul-tg3b

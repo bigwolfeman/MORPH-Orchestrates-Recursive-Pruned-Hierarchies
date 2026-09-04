@@ -1,8 +1,8 @@
 """`tul:` accepts exactly its known keys (runtime-invariants §6b).
 
-A retired arm key in an old override file (`tul.gate: true`, `tul.tg_restrict: true`,
-`tul.coda_sees_slots: false`, …) must never run the shipped paid loop under a name that
-promises something else. The check runs BEFORE the tokenizer is touched, so it is cheap and
+A misspelt key, or a knob that lives under `model:` (the slot-loop gain constraint's
+`slot_gain_*`), must never run the shipped model under a name that promises something
+else. The check runs BEFORE the tokenizer is touched, so it is cheap and
 CPU-only.
 """
 
@@ -24,8 +24,8 @@ def _cfg(**tul):
                              "tul": tul})
 
 
-@pytest.mark.parametrize("bad", ["gate", "tg_restrict", "coda_sees_slots", "tokens_through_core",
-                                 "per_slot_embed", "fixed_stride", "stp_lambda", "slot_seeed"])
+@pytest.mark.parametrize("bad", ["slot_seeed", "tokens_thru_core", "gate_lamda", "emit_weights",
+                                 "gain_lambda", "slot_gain_target"])
 def test_unknown_tul_config_key_raises(bad):
     with pytest.raises(ValueError, match=bad):
         build_tul_runtime(_cfg(activate_at=0.0, **{bad: True}))

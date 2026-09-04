@@ -1,0 +1,12 @@
+# Y1 — phase 2, lever (a): R4 + clip-through-time (kept as belt) + per-slot STATE RENORM
+# between iterations. On X1 (clip alone) the backward was bounded and the forward inflated:
+# iteration 0's realised gain 1.5 -> 9.6, exit norm 1017 -> 5392, weight grads 800x, trip at
+# 2764. The renorm pins every slot's carried norm to its entry norm (direction preserved), so
+# that inflation cannot happen; the question is whether the spike train then still does.
+defaults:
+  - tul_to_mnext_ctt
+  - _self_
+model:
+  slot_state_renorm: true
+wandb:
+  name: to-mnext-y1

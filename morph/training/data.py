@@ -9,6 +9,7 @@ Usage:
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 from typing import Generator, Tuple
 
@@ -124,12 +125,19 @@ def create_dataloader(
         if bag_size > 0:
             raise ValueError("tul and bag_size are mutually exclusive (spec invariant 6)")
         tul_spec = tul.spec_for(seq_len)
+        # ONE generator per loader, seeded from the config, so a run's augmentation is
+        # reproducible from its wandb config alone (docs/tul-gate-spec.md §3.2 — the
+        # truncation point is our RNG, and a number that is not in the config is not a
+        # number the run can be reproduced from). None when the gate is off: no draw.
+        tul_rng = np.random.default_rng(tul.seed) if tul.gate is not None else None
         # A TUL row spends at most L_total tokens and peeks one more for the last label;
         # the peek is left in the buffer to open the next row.
         chunk_len = batch_size * (tul_spec.l_total + 1)
         print(f"[data] TUL layout: seq_len={seq_len} prefix_k={tul_spec.prefix_k} "
               f"max_slots={tul_spec.max_slots} L_total={tul_spec.l_total} "
-              f"slot_id={tul_spec.slot_id}", flush=True)
+              f"slot_id={tul_spec.slot_id}"
+              + (f" gate_truncate_p={tul.gate.truncate_p} seed={tul.seed}"
+                 if tul.gate is not None else ""), flush=True)
 
     while True:
         if is_local_arrow:
@@ -162,7 +170,8 @@ def create_dataloader(
                 if tul_spec is not None:
                     # Consumes only what the rows actually use (token count varies per
                     # row) and leaves the remainder — including the label peek — in buf.
-                    yield pack_tul_batch(buf, tul.rule, tul_spec, batch_size)
+                    yield pack_tul_batch(buf, tul.rule, tul_spec, batch_size,
+                                         gate=tul.gate, rng=tul_rng)
                     continue
                 chunk = buf[:chunk_len]
                 buf = buf[chunk_len:]

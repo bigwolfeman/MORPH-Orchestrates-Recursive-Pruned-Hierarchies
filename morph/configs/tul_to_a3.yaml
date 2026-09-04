@@ -1,0 +1,9 @@
+# R0 — A3-wu: the cheap-decode FLOOR. Coreless, no slots: 4 prelude + 4 coda layers per
+# token, the exact token path every think-once arm keeps. Every TUL arm must beat this at
+# matched token compute; the loop's whole claim is the gap to this number.
+defaults:
+  - tul_a3
+  - tul_to_panel
+  - _self_
+wandb:
+  name: to-a3

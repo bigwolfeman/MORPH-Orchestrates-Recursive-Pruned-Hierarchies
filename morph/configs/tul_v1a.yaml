@@ -1,0 +1,26 @@
+# TUL arm v1a — MUX local head + retire the emit race.
+# Pre-registration: lab/experiments/planned/2026-08-25-mux-head-arm-v1a.md
+# Run: PYTHONPATH=$PWD python -m morph.training.train --config-name tul_v1a
+# Everything is tul_a1 (layout from step 0, max_slots 64); the arm differs by:
+#   1. emit_weight 0.0 / plast_weight 1.0 — the slot's private one-token loss
+#      (ce_emit) carries no gradient; it stays a METRIC. The measured pivot: the
+#      plan LOSES that race everywhere (cf < 0) and the race supplied the useless
+#      >90% gradient share at takeover.
+#   2. mux_beta 1.0 — the MUX local head (arXiv 2607.18264): each slot's post-core
+#      state, read through the model's own LM-head path, is trained toward the
+#      geometric superposition (rho=0.9) of its NEXT span's tokens. beta/rho/tau
+#      are the paper's settings in every config it reports.
+# The control is the tul_a1 seedsweep run at the same batch/steps/seed.
+defaults:
+  - tul_a1
+  - _self_
+
+tul:
+  emit_weight: 0.0
+  plast_weight: 1.0
+  mux_beta: 1.0
+  mux_rho: 0.9
+  mux_tau: 1.0
+
+wandb:
+  name: tul-v1a

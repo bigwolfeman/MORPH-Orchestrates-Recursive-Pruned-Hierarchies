@@ -19,6 +19,17 @@ not by reading the diff.
 
 ## Things that look like bugs and are not
 
+- **`[slot-levers] {...} INERT on this model`** at build: `base.yaml` turns the slot-loop gain
+  constraint on for every model (`slot_gain_lambda`, `slot_cot_clip`), and it acts only inside
+  `_tul_core`. A plain model, a coreless TUL arm, the paid loop (`tokens_through_core`) and the
+  FM planner have no slot loop, so the knobs do nothing there and the model says so once.
+  `lab/divergence/BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md`.
+- **Two extra `_core_step` calls at one iteration per training step** in `_tul_core`
+  (`_slot_gain_penalty`): the finite-difference gain reading, at the detached operating point,
+  with the global RNG saved and restored around them. Not a duplicated forward; the loss and
+  every later random draw are bit-identical to a run with the penalty off
+  (`tests/test_slot_gain_reg.py`).
+
 * `RMSNorm` returns **fp32** even under autocast: its final `* self.weight` promotes.
   Anything that scatters into or concatenates with a normed carrier must cast at the
   boundary — that is why `scatter_positions` does `values.to(pad.dtype)`.
@@ -41,7 +52,9 @@ Measured 2026-08-25 with `lab/divergence/attn_sink_probe.py --geometry --token-p
 `csa_compress_ratio 8`, `hca_compress_ratio 256`, `top_k 256`). **Print this before
 reasoning about core attention. Three of the four rows were a surprise.**
 
-**2026-09-03: the slot path is gone.** The shipped TUL forward is the paid loop
+**2026-09-03: the shipped TUL forward is the paid loop** (`tul.tokens_through_core: true`);
+the slot path is the `tokens_through_core: false` core stage (`_tul_core`, back on master
+2026-09-04 with the gain constraint, reached only through `tul_short.yaml`). The paid loop
 (`docs/tul-paid-loop-recipe.md`): the core runs over the FULL packed row (`L_total` =
 1152 at seq 1024, `max_slots` 64), so the core's attention is the TOKEN-PATH column of the
 table below at every layer. The slot-path column is kept as the record of what the

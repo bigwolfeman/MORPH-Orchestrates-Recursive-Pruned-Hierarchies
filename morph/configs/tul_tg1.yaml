@@ -1,0 +1,25 @@
+# TUL arm TG1 — the Thought-Gestalt restriction, method unchanged (docs/tul-tg-spec.md).
+# Pre-registration: lab/experiments/planned/2026-08-27-tg-restriction.md
+#
+# THE DISCRIMINATOR IS LOOP WORTH AND CE VS THE CONTROL BAND, NOT THE LOSS ALONE
+# (per the pre-registration's P1/P2). ce_main tells you whether the restricted model
+# survives at all; loop worth tells you whether closing the token shortcut actually
+# makes the slot/core load-bearing — CE alone cannot separate "the plan has content
+# the coda ignores" from "the plan has nothing".
+#
+# ONE change from tul_a1: tul.tg_restrict true. Every other key (losses, prefix_k,
+# max_slots, schedule) stays exactly tul_a1's, so the arms differ by the restriction
+# alone. model.use_kernels: false is NOT optional — tg_restrict is eager-only by
+# construction (docs/tul-tg-spec.md §2/§6; the model raises otherwise).
+defaults:
+  - tul_a1
+  - _self_
+
+model:
+  use_kernels: false
+
+tul:
+  tg_restrict: true
+
+wandb:
+  name: tul-tg1

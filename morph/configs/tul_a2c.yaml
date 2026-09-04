@@ -1,0 +1,17 @@
+# ARM A2c — A2 + the l2cap spectral projection (sigma_max <= 1.5 on the core
+# linears after every optimizer step). The STABILITY arm for the paid axis:
+# 5 of 7 unguarded paid-axis draws detonated (beta1=0 explosion through
+# prelude/core/embed). The cap coexisted with depth-earning on the slot axis
+# (tul_l2 earned 0.233 nats WITH it); the winner recipe removed it for
+# conjunction reasons that no longer bind (GLA is out everywhere here).
+# ONE delta vs tul_a2. Prereg:
+# lab/experiments/planned/2026-09-02-a2c-capped-paid-loop.md
+defaults:
+  - tul_a2
+  - _self_
+
+training:
+  spectral_project_cap: 1.5
+
+wandb:
+  name: tul-a2c

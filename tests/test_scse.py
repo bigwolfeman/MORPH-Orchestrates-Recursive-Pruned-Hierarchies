@@ -305,7 +305,7 @@ def test_optimizer_step_runs_with_dead_injection_params():
 # ── S10: both loop bodies are ported ────────────────────────────────────────────────────
 
 def test_tul_slot_path_uses_scse():
-    """S10. The arms run `--config-name tul_a2`, which goes through `_tul_core`, NOT
+    """S10. The arms run `--config-name tul_a1`, which goes through `_tul_core`, NOT
     `_core_region`. Porting only the token path would produce an arm that reports SCSE in its
     config and runs the baseline recurrence.
     """
@@ -379,8 +379,11 @@ def test_forcing_bias_is_zero_on_the_real_model():
     from drift_probe import build  # noqa: E402
 
     _cfg, model, _x, _y, _layout = build(
-        "tul_a2", ["training.batch_size=2", "model.use_kernels=false",
-                   "model.scse_enabled=true"])
+        # base.yaml ships the slot-loop gain constraint ON; under SCSE the carrier is the
+        # DEVIATION and the constraint RAISES by contract, so the SCSE arm turns it off.
+        "tul_a1", ["training.batch_size=2", "model.use_kernels=false",
+                   "model.scse_enabled=true", "model.slot_gain_lambda=0",
+                   "model.slot_cot_clip=0"])
     model.eval()
     root = getattr(model, "_orig_mod", model)
     c = root.cfg
@@ -429,11 +432,10 @@ def test_core_region_reconstructs_the_absolute_state():
     assert not torch.allclose(out, d0, rtol=0, atol=1e-4), "the region returned the deviation"
 
 
-def test_tul_forward_reconstructs_the_absolute_state():
-    """S6, the TUL twin. The paid loop runs the SAME `_core_region` over the packed row
-    (tests/test_tul_forward.py pins that the TUL forward calls it once, on the full
-    row), so the twin runs the region at the packed-row shape on a TUL-built model:
-    the slot positions are ordinary looped positions and must reconstruct too."""
+def test_tul_core_reconstructs_the_absolute_state():
+    """S6, TUL slot path -- the one the arms actually run."""
+    from morph.model.tul import gather_valid
+
     x, y, layout, _ = _batch()
     m = _build(1, tul=TULConfig(prefix_k=2, slot_id=4),
                scse_enabled=True, scse_step_scale=0.0)
@@ -441,11 +443,11 @@ def test_tul_forward_reconstructs_the_absolute_state():
     c = m.cfg
     carrier = torch.randn(x.shape[0], x.shape[1], c.hc_streams, c.d_model)
     with torch.no_grad():
-        out = m._core_region(carrier, carrier, None, x)
-        e = m.input_norm(carrier)
+        _xn, h, _d, _g, *_ = m._tul_core(carrier, carrier, None, layout)
+        e = gather_valid(m.input_norm(carrier), layout.slot_index, layout.slot_valid)
         h_star, d0 = m.scse.entry(e)
-    assert torch.allclose(out, h_star + d0, rtol=0, atol=1e-6), "S6 broken on the TUL path"
-    assert not torch.allclose(out, d0, rtol=0, atol=1e-4), "the TUL path returned the deviation"
+    assert torch.allclose(h, h_star + d0, rtol=0, atol=1e-6), "S6 broken on the TUL path"
+    assert not torch.allclose(h, d0, rtol=0, atol=1e-4), "the slot path returned the deviation"
 
 
 def test_mask_freezes_a_below_threshold_deviation():
@@ -494,8 +496,11 @@ def test_real_model_loop_is_source_free_and_anchored():
     from drift_probe import build  # noqa: E402
 
     _cfg, model, x, y, layout = build(
-        "tul_a2", ["training.batch_size=2", "model.use_kernels=false",
-                   "model.scse_enabled=true"])
+        # base.yaml ships the slot-loop gain constraint ON; under SCSE the carrier is the
+        # DEVIATION and the constraint RAISES by contract, so the SCSE arm turns it off.
+        "tul_a1", ["training.batch_size=2", "model.use_kernels=false",
+                   "model.scse_enabled=true", "model.slot_gain_lambda=0",
+                   "model.slot_cot_clip=0"])
     root = getattr(model, "_orig_mod", model)
     root.eval()
     n_inj, n_anchor = [0], [0]

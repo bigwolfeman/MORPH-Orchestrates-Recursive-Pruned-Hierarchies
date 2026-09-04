@@ -85,6 +85,12 @@ def test_eos_cuts_even_below_min_span():
     assert 2 in pos.tolist(), f"EOS at index 2 must cut, got {pos.tolist()}"
 
 
+def test_fixed_stride_arm_replaces_the_punctuation_rule():
+    ids = np.array([5, DOT, 6, DOT, 7, 8, 9, DOT, 5, 5, 5, 5], dtype=np.int64)
+    pos, _ = _rule(fixed_stride=5).cut(ids)
+    assert pos.tolist() == [4, 9], f"A5 must cut every 5 tokens only, got {pos.tolist()}"
+
+
 def test_incremental_parity_one_token_at_a_time():
     """INVARIANT 1: the generator's per-token call and the loader's whole-row call agree.
 

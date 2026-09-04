@@ -1,0 +1,27 @@
+# Onset capture C1 — R4 (tul_to_mnext) in the bit-reproducible configuration, with the
+# rolling pre-onset checkpoints and every loop instrument on, so the first spike can be
+# replayed from a checkpoint just before it (C2 = this config + training.resume=<ROLL>
+# + per-step probes; see the prereg). Deterministic mode requires model.use_kernels=false
+# and CUBLAS_WORKSPACE_CONFIG=:4096:8 exported before the process starts (train.py). The
+# eager kernels double as the kernel-bug discriminator. compile off: the cotangent hook is
+# a tensor hook inside the loop and must not be traced.
+# Prereg: lab/experiments/planned/2026-09-03-tul-onset-capture.md
+defaults:
+  - tul_to_mnext
+  - _self_
+model:
+  use_kernels: false
+training:
+  deterministic: true
+  compile: false
+  grad_probe_every: 1
+  jac_probe_every: 25
+  jac_probe_iters: [0, 3, 7]
+  jac_probe_power_iters: 100
+  loop_rank_every: 5
+  loop_cot_probe: true
+  ckpt_rolling_every: 50
+  ckpt_rolling_keep: 12
+  ckpt_every: 500
+wandb:
+  name: cap-c1-det

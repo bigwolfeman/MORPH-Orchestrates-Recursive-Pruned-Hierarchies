@@ -1,0 +1,18 @@
+# TUL arm CENTER — subtract the batch's mean token signal from every bag-mean.
+# Pre-registration: lab/experiments/planned/2026-08-27-warmup-sigreg-ntpdrop.md
+# ONE change from tul_a1. The cheapest possible test of a MEASURED mechanism:
+# the embedding table carries a common mean (norm 0.423 vs mean per-token
+# deviation 1.049 on tul-v1a2b step_3500). A bag-mean shrinks the deviations by
+# 1/sqrt(span) but preserves that common mean exactly, so every slot inherits it
+# — predicted pairwise cosine 0.394 (span 4) to 0.839 (span 32) against a
+# MEASURED +0.39..+0.71. If that is the whole story, centering decollapses the
+# slots for free and SIGReg is treating the symptom.
+defaults:
+  - tul_a1
+  - _self_
+
+tul:
+  center_bag_mean: true
+
+wandb:
+  name: tul-center

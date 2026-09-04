@@ -1,0 +1,16 @@
+# R3 — M-own: the gist loop WITHOUT the mask. A1 + boundary seed + emit 0 / plast 1 +
+# MUX `own` (beta 1, through the tied head) + full-BPTT slot loop, fused kernels legal
+# because tg_restrict is off. Question: can the loop earn on a DETERMINISTIC memory
+# target (mux_local(own) vs forced depth)? Lineage: tul_g0c0 = tul_l2 (+ retention off,
+# cap 0) = tul_l1 (loop, bptt 8) = tul_gl1b (mux own) = tul_gl1 (boundary seed, aux off,
+# eval instruments) = tul_tg4b/tg2/tg1 (mask, switched OFF here) = tul_a1.
+defaults:
+  - tul_g0c0
+  - tul_to_panel
+  - _self_
+model:
+  use_kernels: true              # no mask ⇒ the fused path is legal (tul_a2 precedent)
+tul:
+  tg_restrict: false
+wandb:
+  name: to-mown

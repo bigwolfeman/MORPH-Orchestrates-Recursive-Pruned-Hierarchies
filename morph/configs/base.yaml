@@ -87,6 +87,32 @@ model:
   # these keys make that testable rather than assumed.
   core_gain_clip_iter_lo: 0
   core_gain_clip_iter_hi: -1
+  # ── THE SLOT-LOOP GAIN CONSTRAINT — ON since 2026-09-04 for every slot-loop model ──
+  # Break glass: lab/divergence/BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md
+  # A slot loop trained at full BPTT under ternary drifts its map's typical gain from 0.87 to
+  # 1.00 once the LR ramp ends and detonates at the crossing (the spike train: 7 of 7
+  # unregularised draws, every target). These three knobs are the configuration that took
+  # M-next to 5000 steps with zero spikes; they act ONLY inside the slot loop (_tul_core) and
+  # the model prints [slot-levers] INERT when it has no slot loop (no TUL, the paid loop's
+  # tokens_through_core, or an FM planner). All three at 0 / false = bit-identical to before.
+  #
+  # slot_gain_lambda: lambda * relu(g - slot_gain_target)^2 on the map's TYPICAL gain g at one
+  #   random grad iteration per step, g by a finite difference of relative size slot_gain_eps
+  #   (two extra core steps on the compact slot sequence, same dropout masks, global RNG put
+  #   back). Holds the fp32-measured gain at 0.887-0.897 for a whole run at target 0.9; the
+  #   hinge touches ~25 % of steps and costs ~5 % wall clock. THE constraint.
+  # slot_cot_clip: per-row cap on the cotangent arriving at each iteration's output, at this
+  #   ratio times the row's exit cotangent. Alone it does NOT cure the drift (the forward
+  #   inflates instead); it is the belt the measured configuration wore and an instrument
+  #   (loop/cot_post_*, loop/cot_bind_*).
+  # slot_state_renorm: the other measured lever (per-slot norm pinned to the entry norm,
+  #   direction preserved). Same survival, no extra passes; OFF here because the penalty acts
+  #   on the measured quantity. Either one, not both, is the tested configuration.
+  slot_gain_lambda: 100.0
+  slot_gain_target: 0.9
+  slot_gain_eps: 0.02
+  slot_cot_clip: 4.0
+  slot_state_renorm: false
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth
   # grad-iterations; later ones run eager (activations retained → no backward recompute → faster),
   # at the cost of retained activation memory. -1 = checkpoint ALL (default, bit-identical/safest).
@@ -502,6 +528,12 @@ tul:
   # recipe trains the token position only; the emit position stays a metric (ce_emit).
   emit_weight: 0.0
   plast_weight: 1.0
+  # THE PAID LOOP (docs/tul-paid-loop-recipe.md): tokens and slots are one sequence and the
+  # ordinary per-sample core runs over all of it. false = the slot loop (_tul_core: only the
+  # slot positions loop, W_prefix writes one looped state into the prefix positions), the
+  # think-once design that lab/divergence/BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md
+  # constrains; every slot-loop config sets it false through tul_short.yaml.
+  tokens_through_core: true
 
 data:
   # datasets>=4.x dropped script datasets; load from locally-cached OWT arrow shards instead.

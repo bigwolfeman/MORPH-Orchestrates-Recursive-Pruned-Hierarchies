@@ -1,0 +1,15 @@
+# TUL arm v1a-2b — detached readout AND a smaller auxiliary weight.
+# Pre-registration: lab/experiments/planned/2026-08-26-mux-detached-head-v1a2.md
+# beta 0.1: in v1a the auxiliary term (6.4-8.0 nats) OUTWEIGHED the LM objective
+# (~5 nats), which is not the paper's regime — their L_local falls far lower on
+# structured traces than ours can on high-entropy next-span text.
+defaults:
+  - tul_v1a
+  - _self_
+
+tul:
+  mux_detach_head: true
+  mux_beta: 0.1
+
+wandb:
+  name: tul-v1a2b

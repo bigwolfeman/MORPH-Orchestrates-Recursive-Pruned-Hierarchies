@@ -24,6 +24,11 @@ exists under `morph/jax/` but lags the PyTorch path (see gotcha below).
 
 ## 🚨 STRANGE DIVERGENCE? READ [lab/divergence/DIVERGENCE-README.md](lab/divergence/DIVERGENCE-README.md) FIRST
 
+**Slot-loop spike train after the ramp (2026-09-04): the gain constraint is ON in `base.yaml`
+(`model.slot_gain_lambda` 100 @ 0.9, `slot_cot_clip` 4.0). Break glass:
+[lab/divergence/BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md](lab/divergence/BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md).
+It acts only inside `_tul_core`; a model without a slot loop prints `[slot-levers] ... INERT`.**
+
 Two campaigns (2026-08 slot-loop takeover, 2026-09 paid-axis detonation) already refuted
 spectral caps, `core_gain_clip`, ternary-γ EMA and freeze, GLA-as-stabilizer, and dense
 warmup. The README has the 60-second triage, the measured abort rule (`preclip/total >
@@ -72,18 +77,28 @@ depth (0.233 nats), and the identity-escape law says why every alternative faile
 > it holds one seed of two, doubles the time to failure (step 1150 -> 2225) and reaches 0.78
 > and 0.46 nats better val CE on the two seeds.
 
-## ⭐ TUL — Thought Unpack Loop — THE PAID LOOP IS THE SHIPPED FORWARD (2026-09-03)
+## ⭐ TUL — Thought Unpack Loop — TWO FORWARDS, ONE TREE (paid loop shipped 2026-09-03; slot loop back with its constraint 2026-09-04)
 
-Status: implemented, run, measured, and ON in `base.yaml` (`tul.activate_at:
-${training.tst_ratio}` — TUL switches on when the TST phase ends). The shipped forward is
-the **paid loop** (`docs/tul-paid-loop-recipe.md`): tokens and slots are ONE sequence and
-the ordinary per-sample Poisson-depth core runs over ALL of it. The slot-only arms
-(A0/A1/A3/A4, the span-length gate, the TG restriction, the gist mux, the DB interleave,
-per-slot embeddings, the fixed-stride rule) were **cut from the tree on 2026-09-03**;
-their specs and results stay as records (`docs/tul-spec.md` §3.3, `docs/tul-gate-spec.md`,
-`docs/tul-tg-spec.md`, `docs/gist-mux-recipe.md`, `docs/ablation-ledger.md`) and the last
-commit that runs them is `d9e04e6`. Decision record with the alternatives weighed:
-[`.agents/notes/implemented/architecture/2026-09-03-ship-the-paid-loop-cut-the-arms.md`](.agents/notes/implemented/architecture/2026-09-03-ship-the-paid-loop-cut-the-arms.md).
+Status: the **paid loop** is the shipped forward and is ON in `base.yaml`
+(`tul.tokens_through_core: true`; `tul.activate_at: ${training.tst_ratio}` — TUL switches
+on when the TST phase ends): tokens and slots are ONE sequence and the ordinary per-sample
+Poisson-depth core runs over ALL of it (`docs/tul-paid-loop-recipe.md`). The **slot loop**
+(`tul.tokens_through_core: false`: only the slot positions loop, in `_tul_core`, and
+`W_prefix` writes each looped state into its `prefix_k` positions) was cut on 2026-09-03
+(`d9e04e6` was the last commit that ran it) and came BACK on 2026-09-04 when branch
+`tul/think-once` merged: it is the think-once design
+(`.agents/notes/proposed/architecture/2026-09-03-tul-loop-contribution-drawing-board.md`),
+it carries the slot-loop gain constraint (`model.slot_gain_lambda`, the break-glass doc
+above), and every slot-loop config reaches it through `tul_short.yaml`
+(`tokens_through_core: false` there; `tul_a1.yaml`, the gist/TG/DB arms and the think-once
+panel `tul_to_*.yaml` all compose it). The two paths share the boundary rule, the packer,
+`_tul_front`, `_back_region` and `_tul_group_losses`; they differ ONLY in the core stage.
+A paid-loop model on this tree gives a bit-identical loss, logits and parameter set to the
+pre-merge master (`3a94963`) on the A2 step-5000 checkpoint
+(`lab/divergence/paid_loop_gate.py`, run 2026-09-04). Decision records:
+[`2026-09-03-ship-the-paid-loop-cut-the-arms.md`](.agents/notes/implemented/architecture/2026-09-03-ship-the-paid-loop-cut-the-arms.md)
+(with its 2026-09-04 amendment) and
+[`2026-09-04-slot-loop-gain-constraint.md`](.agents/notes/implemented/architecture/2026-09-04-slot-loop-gain-constraint.md).
 
 Why the paid loop and not the slot loop: on the slot-only arms the loop was a free ride
 (K1−K6 ≤ 0.011 nats however long it ran); paying the loop on every position is the ONE
@@ -105,7 +120,9 @@ Short mental model:
   `bag_mean` (spec §3.2, `E_slot` + span mean) is the kept control.
 - Prelude, the per-sample Poisson-depth core (`_core_region` — the SAME code the plain
   path runs) and the coda all run on every position. Nothing is gathered, projected or
-  scattered. `W_prefix` exists only on the FM planner (`cfg.fm`, `n_core: 0`).
+  scattered. `W_prefix` exists only where something writes through it — the slot loop
+  and the FM planner (`cfg.fm`, `n_core: 0`) — never on a paid-loop model
+  (`TULSlots(with_prefix=...)`).
 - Loss: ONE weighted CE. `emit_weight: 0.0` (the slot's own emit label carries no loss),
   `plast_weight: 1.0` (the boundary token keeps its ordinary label); the `slot_id` logit
   is masked; pad slots are −100. Token-state dropout 0.15 on the coda input (Bowman).
@@ -116,27 +133,35 @@ Short mental model:
   warmup 1000, retention off, `bptt_depth: 8` = full BPTT, spectral cap 0);
   `tul_a2.yaml` (the 5090 panel: seq 1024, batch 6, 20k steps, TUL from step 0,
   TST/prune/route off); `notul.yaml` (the same with `activate_at: never` — the matched
-  control); `tul_smoke.yaml` (12-step small smoke); `tul_fm1.yaml` (FM planner arc).
+  control); `tul_smoke.yaml` (12-step small smoke); `tul_fm1.yaml` (FM planner arc,
+  `tokens_through_core: false` — a planner with the paid loop RAISES at build).
+  Slot loop: `tul_short.yaml` is the root (`tokens_through_core: false`), `tul_a1.yaml`
+  the classic arm, `tul_to_mnext.yaml` the think-once M-next arm, `tul_to_mnext_y2.yaml`
+  the constrained one that reached 5000 steps with zero spikes.
 - The detonation (`preclip/total > 1e4` at step ≥ 200) and its cure, the 1000-step LR
   ramp: `lab/divergence/DIVERGENCE-README.md`. The old slot-loop takeover campaign:
-  `lab/divergence/takeover-campaign.md` (historical — the slot path is gone).
+  `lab/divergence/takeover-campaign.md` (historical: the slot loop under `warmup: 0`).
+  The slot loop's LIVE failure is the spike train at full BPTT under ternary — the map's
+  gain drifts 0.87 → 1.00 and spikes at the crossing; the constraint holds it at 0.89
+  (`lab/experiments/successes/2026-09-04-tul-forward-levers.md`).
 - NEVER decode a span from one vector + offset with no token path (Huginn 2026-08-16
   collapse; MegaByte T7; Bowman T2; Hourglass T6). Never regress onto the slot state
   (LCM, CoCoMix, BT §4.2).
-- Old checkpoints carry `tul.W_prefix`; the loaders drop that ONE key, loudly, for a model
-  without an FM planner (`morph/training/train.py::drop_retired_tul_keys`,
-  `tests/test_checkpoint_compat.py`). Every other homeless key still raises.
+- Pre-2026-09-03 paid-loop checkpoints carry `tul.W_prefix`; the loaders drop that ONE
+  key, loudly, for a model whose `TULSlots` has no `W_prefix` (the paid loop —
+  `morph/training/train.py::drop_retired_tul_keys`, `tests/test_checkpoint_compat.py`).
+  A slot-loop or FM model keeps it. Every other homeless key still raises.
 
 **Where the code is**:
 
 | File | What |
 | --- | --- |
 | `morph/model/tul_layout.py` | The ONE causal boundary rule (`BoundaryRule.cut`, a resumable state machine used by the loader AND the generator), the fixed-shape row packer (`pack_tul_row` / `pack_tul_batch`), `SlotLayout`. |
-| `morph/model/tul.py` | `TULConfig` (six fields: `prefix_k`, `slot_id`, `token_state_dropout`, `emit_weight`, `plast_weight`, `slot_seed`), `TULSlots` (`E_slot`, `E_mask`, `W_sent`; `W_prefix` iff `with_prefix`), `bag_mean`, `boundary_token_index`, gather/scatter (FM planner + probes), token-state dropout. |
-| `morph/model/transformer.py` | `_tul_front` → `_core_region` → `_back_region` → `_tul_group_losses`, wired in `_forward_tul`. `_tul_fm_core` / `tul_forward_ablated` are FM-planner only. `slot_layout` is a forward ARGUMENT; `None` is the untouched baseline. |
-| `morph/training/tul_setup.py` | Resolves the `tul:` Hydra block once → ids, rule, configs, wandb manifest. Unknown `tul.*` keys RAISE. |
+| `morph/model/tul.py` | `TULConfig` (`tokens_through_core` picks the path; the paid loop reads `prefix_k`, `slot_id`, `token_state_dropout`, `emit_weight`, `plast_weight`, `slot_seed`; the slot loop reads the rest — depth, mux, gate, TG, DB, think-once knobs), `TULSlots` (`E_slot`, `E_mask`, `W_sent`; `W_prefix` iff `with_prefix`), `TULGate`, `bag_mean`, `boundary_token_index`, gather/scatter, token-state dropout. |
+| `morph/model/transformer.py` | `_tul_front` → {`_core_region` (paid) \| `_tul_core` + `prefix_project` (slot loop)} → `_back_region` → `_tul_group_losses`, wired in `_forward_tul`. `_slot_gain_penalty` and the cotangent hooks are the constraint (slot loop only). `_tul_fm_core` / `tul_forward_ablated` are FM-planner only. `slot_layout` is a forward ARGUMENT; `None` is the untouched baseline. |
+| `morph/training/tul_setup.py` | Resolves the `tul:` Hydra block once → ids, rule, configs, wandb manifest. Unknown `tul.*` keys RAISE (`KNOWN_TUL_KEYS`). |
 | `morph/inference/tul_generate.py` | Eager recompute-per-step generator (spec §6 v1 — no KV cache by design). |
-| `tests/test_tul_forward.py`, `test_slot_seed.py`, `test_tul_layout.py`, `test_checkpoint_compat.py` | The contracts, one test per invariant row. |
+| `tests/test_tul_forward.py`, `test_slot_seed.py`, `test_tul_layout.py`, `test_checkpoint_compat.py`, `test_tul_setup_keys.py`; `test_slot_gain_reg.py`, `test_slot_cot_clip.py`, `test_onset_capture.py` (the constraint) | The contracts, one test per invariant row. |
 
 Two v1 deviations from the spec text, both recorded in `tul-spec.md` and §6b: run
 collapse is CAUSAL (boundary after the FIRST token of a run — the spec's "after the

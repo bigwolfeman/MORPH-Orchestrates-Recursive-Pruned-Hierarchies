@@ -1,0 +1,14 @@
+# Bisect cell BG0C0 — GLA off AND cap off (conjunction cell; runs only if both
+# singles are flat). Prereg: 2026-08-31-loop-killer-bisect.md (f595c26).
+defaults:
+  - notul_l2
+  - _self_
+
+model:
+  retention: false
+
+training:
+  spectral_project_cap: 0.0
+
+wandb:
+  name: notul-bg0c0

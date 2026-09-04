@@ -52,6 +52,10 @@ training:
   ademamix_t_beta3: 4500
 
 tul:
+  # The FM planner replaces the core loop and writes its plans through W_prefix; the
+  # paid loop (base.yaml's tokens_through_core: true) has no projection. MORPHTransformer
+  # raises on the pair, so the planner arcs say so here.
+  tokens_through_core: false
   # The §5 double-label weights. `emit_weight: 0` removes the slot's emitting position
   # from the CE entirely — the FM loss is the write pressure now, so the slot no longer
   # races the free token path for the first token of the next span.

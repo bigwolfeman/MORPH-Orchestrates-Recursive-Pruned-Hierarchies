@@ -1,0 +1,12 @@
+# R6 (optional) — M-own-mask: tul-20k's design (mask + MUX own + boundary seed + full-BPTT
+# slot loop) under the ramp. tul-20k on the flat schedule earned K1−K6 0.015 at 20k and
+# finished 0.357 nats behind notul; this is the direct "does the ramp rescue it" datum.
+defaults:
+  - tul_to_mown
+  - _self_
+model:
+  use_kernels: false
+tul:
+  tg_restrict: true
+wandb:
+  name: to-mown-mask

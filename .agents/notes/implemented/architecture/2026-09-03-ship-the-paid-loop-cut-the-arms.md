@@ -132,3 +132,38 @@ recipe, ship it to master, and clean up the arms that did not make the cut.
 - What is NOT verified here: any training run of the `base.yaml` conjunction past a smoke;
   the 40k continuation (`lab/experiments/planned/2026-09-03-warmup-pair-continue-40k.md`,
   not launched); the JAX mirror, which never had TUL.
+
+## Amendment 2026-09-04 — the slot loop is back as the non-default path
+
+The cut lasted one day. Branch `tul/think-once` (forked from `dab4d02`, the last commit
+before the cut) found and constrained the slot loop's live failure — the map's typical
+gain drifting 0.87 → 1.00 at full BPTT under ternary and spiking at the crossing
+(`lab/divergence/BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md`,
+[2026-09-04-slot-loop-gain-constraint.md](2026-09-04-slot-loop-gain-constraint.md)) —
+and the loop-contribution work Wolfe wants next needs `_tul_core`. Wolfe's call
+(2026-09-04): merge the branch rather than port the constraint to the paid loop's core
+region.
+
+What the merge did (the "surgery"):
+
+- Every file the cut deleted came back; every code file the cut trimmed took the
+  branch's version. The paid loop already existed on the branch as arm A2
+  (`tokens_through_core: true`) with the SAME chain — `_tul_front` → `_core_region` →
+  `apply_token_dropout` → `_back_region` → `_tul_group_losses` — so the "port" was three
+  things: the Jacobian probe's `jac_active` pad mask on `_core_region`, `W_prefix` built
+  only `with_prefix` (slot loop and FM planner, never the paid loop), and the loader's
+  `drop_retired_tul_keys` (generalised: drop iff the model's `TULSlots` has no
+  `W_prefix`). `KNOWN_TUL_KEYS` now lists every key `tul_setup.py` reads.
+- Gate: `lab/divergence/paid_loop_gate.py` on the A2 step-5000 checkpoint gives the
+  same loss (3.6009058952331543), logits checksum and parameter set on the pre-merge
+  master `3a94963` and on the merged tree (eval mode, eager kernels, deterministic
+  algorithms, one fixed validation batch; the master run repeated bit-for-bit).
+- Config policy: `base.yaml` ships `tul.tokens_through_core: true`; `tul_short.yaml`,
+  which every slot-loop arm composes, sets it `false`; `tul_fm1.yaml` sets it `false`
+  and the model RAISES on a planner with the paid loop. `base.yaml` also carries the
+  constraint knobs, which print `[slot-levers] ... INERT` on a paid-loop model.
+
+What did NOT change: the paid loop is still the shipped forward, its recipe and its
+measured caveat above stand, and the slot loop is still 0.18 nats behind the coreless
+floor with a loop that converges by iteration 3 — stability is not contribution
+(`lab/experiments/successes/2026-09-04-tul-forward-levers.md`).

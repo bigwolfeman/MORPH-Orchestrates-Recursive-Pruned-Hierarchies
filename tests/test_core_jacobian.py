@@ -163,7 +163,8 @@ def _padded_fixture(seed=1234):
     torch.manual_seed(seed)
     model = MORPHTransformer(_tiny(tul=TULConfig(slot_id=spec.slot_id,
                                                  prefix_k=spec.prefix_k,
-                                                 token_state_dropout=0.0)))
+                                                 token_state_dropout=0.0,
+                                                 tokens_through_core=True)))  # the PAID loop: the pad mask is a _core_region contract
     model.train()
     return model, x, y, layout
 
@@ -260,3 +261,49 @@ def test_probe_is_rng_neutral():
     assert out, "probe returned nothing — the capture never fired"
     assert torch.equal(baseline, after), \
         f"the probe consumed RNG: {baseline.tolist()} vs {after.tolist()}"
+
+
+def test_probe_measurement_is_rng_neutral_with_dropout():
+    """The MEASUREMENT, not only the capture forward, must leave the generator untouched.
+
+    `probe.measure` rebuilds the core step in training mode; with block dropout > 0 (the
+    production value is 0.1) every power iteration draws a mask from the global generator.
+    The 2026-09-03 onset-capture smoke found the replay diverging one step after every
+    probed step with weights and gradients bit-identical — the restore wrapped the capture
+    forward only. This test builds the fixture WITH dropout, probes per block, and compares
+    the generator STATE, which is stricter than a handful of draws.
+    """
+    from morph.training.train import _jacobian_probe
+
+    spec = TulLayoutSpec(seq_len=32, prefix_k=2, max_slots=5, slot_id=4)
+    rng = np.random.default_rng(0)
+    ids = rng.integers(5, V, size=(2, 90))
+    ids[ids == spec.slot_id] = 5
+    ids[:, ::6] = DOT
+    x, y, layout, _ = slot_layout_from_ids(ids.astype(np.int64), _rule(), spec)
+    torch.manual_seed(1234)
+    model = MORPHTransformer(_tiny(dropout=0.1, tul=TULConfig(slot_id=spec.slot_id,
+                                                              prefix_k=spec.prefix_k,
+                                                              token_state_dropout=0.0)))
+    model.train()
+    assert any(isinstance(m, torch.nn.Dropout) and m.p > 0 for m in model.modules()), \
+        "fixture has no live dropout; the test would prove nothing"
+    probe = CoreJacobianProbe(model, n_iter=3, per_block=True)
+
+    # Sensitivity: a BARE measurement on this fixture must move the generator, or the
+    # assertion below would pass on any implementation.
+    with probe.capture() as points:
+        with torch.no_grad():
+            model(x, labels=y, bag_size=0, slot_layout=layout)
+    torch.manual_seed(11)
+    bare_before = torch.get_rng_state().clone()
+    probe.measure(points[0])
+    assert not torch.equal(bare_before, torch.get_rng_state()), \
+        "a bare measurement did not touch the generator; the fixture cannot detect the leak"
+
+    torch.manual_seed(11)
+    state_before = torch.get_rng_state().clone()
+    out = _jacobian_probe(model, probe, x, y, layout, 0, [0])
+    state_after = torch.get_rng_state()
+    assert out and "jac/sigma_b0_t0" in out, "per-block measurement did not run"
+    assert torch.equal(state_before, state_after), "the measurement consumed RNG"

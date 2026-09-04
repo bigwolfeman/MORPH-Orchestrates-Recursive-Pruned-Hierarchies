@@ -1,0 +1,13 @@
+# Onset capture C0 — the ternary discriminator. R4 (tul_to_mnext: MUX next, beta 1 through
+# the tied head, full-BPTT slot loop, fused kernels) with ternary QAT OFF and nothing else
+# changed. The paid-axis record: ternary off ran 3/3 clean against a ~70% base rate
+# (lab/divergence/DIVERGENCE-README.md, "Ternary is the trigger surface"). If R4's spike
+# regime is the cusp vault under the LR plateau, this arm runs clean.
+# Prereg: lab/experiments/planned/2026-09-03-tul-onset-capture.md
+defaults:
+  - tul_to_mnext
+  - _self_
+training:
+  ternary: false
+wandb:
+  name: cap-c0-nt

@@ -1,0 +1,27 @@
+# The think-once round-1 PANEL recipe — composed AFTER an arm's lineage so every arm
+# on branch tul/think-once shares one recipe and differs by its mechanism alone.
+# Drawing board: .agents/notes/proposed/architecture/2026-09-03-tul-loop-contribution-drawing-board.md
+# (Revision 2026-09-03 evening). Never run standalone: it carries no `defaults:` of its own.
+#
+# The recipe is the loop-killer winner (retention off, cap 0, carry none — the base.yaml
+# default since the 2026-08-31 leak fix) plus the 1000-step ramp (base.yaml since d9e04e6),
+# at the panel shape every ruler was measured at: seq 1024 x batch 6 x seed 1 x 5000 steps,
+# so `checkpoints-keep/{notul,tul-a2}-20k-wu/step_5000.pt` are rulers on the SAME recipe.
+model:
+  retention: false               # the winner recipe: GLA is a gradient parasite once the cap is off
+training:
+  steps: 5000
+  batch_size: 6
+  seed: 1
+  warmup: 1000                   # the ramp (lab/divergence/DIVERGENCE-README.md §A)
+  spectral_project_cap: 0.0      # winner recipe: no cap (it kills depth-earning)
+  ademamix_alpha_cap: 3.5        # panel pin (every 2026-08-2x .. 09-0x arm)
+  ademamix_t_beta3: 3500         # PINNED — null falls back to training.steps (the trap)
+  eval_every: 250
+  ckpt_every: 2500
+  gen_every: 0
+  grad_probe_every: 1            # the tripwire reads preclip/total from probe.jsonl
+tul:
+  eval_ablations: true           # plan worth / shuffle / wrong-plan / slot geometry at eval
+wandb:
+  project: morph-tul
