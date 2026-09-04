@@ -11,3 +11,5 @@ model:
   bptt_depth: 8
 wandb:
   name: to-a1-b8-s1
+training:
+  ckpt_every: 500   # a tripped draw still leaves a canary checkpoint for the depth sweep
