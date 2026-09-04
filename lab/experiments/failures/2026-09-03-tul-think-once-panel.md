@@ -240,7 +240,9 @@ Scored against the frozen predictions (the rest stay unmeasured: no forecast arm
 survived to 5000, R5/R6 never finished):
 
 - **P0a FALSE.** R0 sits 0.050 above the ruler's K6, below the predicted 0.15–0.45.
-- **P0b unscored** (the ruler's wall clock at this shape was not logged in this queue).
+- **P0b TRUE.** The ruler trains at 1.7 steps/s (`tulfm/notul-20k-wu/run.log`), so R0's
+  13.0 min buys it about 1300 steps, where its val CE is 5.00 (step 1250) against R0's
+  final in-run val 4.0473; at matched wall clock the coreless model wins by a nat.
 - **P1b TRUE** (slot K1−K6 0.0014 ≤ 0.02 on the surviving seed; seed 2 detonated).
 - **P1c** by the profile's offset-0 reading, 0.064 > 0.04: FALSE on the one measured
   seed (the prediction named "all tokens"; the profile's all-token mean is in the JSON and
