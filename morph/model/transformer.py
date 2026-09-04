@@ -352,6 +352,24 @@ class MORPHConfig:
     # exactly this product growing 39-2436x through eight iterations against 1.6-3x on calm
     # steps, with a flat forward — so the lever bounds the product and nothing else.
     slot_cot_clip: float = 0.0
+    # Phase 2 of the contractivity programme (.agents/notes/proposed/architecture/
+    # 2026-09-04-loop-contractivity-as-design.md), two levers on the SLOT loop's forward map:
+    #
+    # slot_state_renorm — after every iteration the carried slot state is rescaled, per slot,
+    # to the norm it ENTERED the loop with (direction preserved, pads stay 0). Bounds the
+    # forward by construction: on the clipped M-next draw the exit norm inflated 5x and
+    # iteration 0's realised gain climbed 1.5 -> 9.6 while the backward was bounded. False
+    # traces the identical graph.
+    slot_state_renorm: bool = False
+    # slot_gain_lambda — a hinge penalty on the map's TYPICAL gain at one grad iteration per
+    # step: lambda * relu(g - slot_gain_target)^2 with g = ||f(h + d) - f(h)|| / ||d|| for a
+    # random direction d of relative size slot_gain_eps per slot (finite difference, two
+    # extra core steps at the same dropout masks, the global RNG left exactly where it was).
+    # This is the quantity the capture measured drifting 0.87 -> 1.00 (`jac/rms_t3`), on the
+    # whole map — the thing the four weight-spectrum caps could not see. 0.0 = OFF.
+    slot_gain_lambda: float = 0.0
+    slot_gain_target: float = 0.9
+    slot_gain_eps: float = 0.02
 
     @property
     def retention_carry_mode(self) -> str:
@@ -1075,6 +1093,18 @@ class MORPHTransformer(nn.Module):
             raise ValueError(
                 f"model.slot_cot_clip={cfg.slot_cot_clip} needs a slot loop to clip (a TUL "
                 "model with n_core > 0); the token loop carries no clip-through-time.")
+        if cfg.slot_state_renorm and (cfg.tul is None or cfg.n_core == 0):
+            raise ValueError("model.slot_state_renorm needs a slot loop (a TUL model with n_core > 0)")
+        if cfg.slot_state_renorm and cfg.scse_enabled:
+            raise NotImplementedError(
+                "model.slot_state_renorm under SCSE is not defined: the carrier is the DEVIATION "
+                "and pinning its norm pins the wrong quantity (the db_loop precedent).")
+        if cfg.slot_gain_lambda < 0.0 or cfg.slot_gain_eps <= 0.0:
+            raise ValueError("model.slot_gain_lambda must be >= 0 and slot_gain_eps > 0")
+        if cfg.slot_gain_lambda > 0.0 and (cfg.tul is None or cfg.n_core == 0):
+            raise ValueError("model.slot_gain_lambda needs a slot loop (a TUL model with n_core > 0)")
+        if cfg.slot_gain_lambda > 0.0 and cfg.scse_enabled:
+            raise NotImplementedError("model.slot_gain_lambda under SCSE is not defined (deviation carrier)")
         self.scse: _SCSE | None = (
             _SCSE(d, step_scale=cfg.scse_step_scale, anchor_scale=cfg.scse_anchor_scale,
                   init_scale=cfg.scse_init_scale, eps=cfg.scse_eps, kappa=cfg.scse_kappa,
@@ -2207,7 +2237,7 @@ class MORPHTransformer(nn.Module):
                     "length off the core's per-iteration trajectory and there is no "
                     "trajectory. Raises rather than silently emitting a one-step gate.")
             depths = torch.zeros_like(gidx)
-            return xn, e, depths, None, None
+            return xn, e, depths, None, None, None
 
         _scse = self.scse           # Python-level constant → every branch below traces out
         # ── DB-shaped loop (arm L3): detached carry, per-iteration local supervision ──
@@ -2232,6 +2262,13 @@ class MORPHTransformer(nn.Module):
         # (never a side channel — the g_traj / ret_capture lesson). _db_traj[0] is the seed
         # state; entry t is the post-update state after iteration t-1.
         _db_traj: list[Tensor] | None = [h] if _db else None
+        # slot_state_renorm: the per-slot norm the state ENTERED with is the norm it keeps.
+        # Detached (a constant target); pads enter at 0 and stay there.
+        _renorm = bool(self.cfg.slot_state_renorm)
+        _n0 = h.detach().flatten(2).float().norm(dim=2) if _renorm else None      # [B, S]
+        _gain_lambda = float(self.cfg.slot_gain_lambda)
+        _gain_on = _gain_lambda > 0.0 and torch.is_grad_enabled() and self.training
+        _gain_reg: dict | None = None
 
         # Loop-invariant injection, built ON THE COMPACT SEQUENCE (the x0/bigram hoist
         # of the token path, applied to 9-19× fewer positions). Value-embeds never fire
@@ -2274,6 +2311,13 @@ class MORPHTransformer(nn.Module):
         # drop that iteration's LOCAL loss — so every iteration carries grad.
         n_nograd = 0 if _db else max(0, total_iters - self.cfg.bptt_depth)
         n_grad_iters = total_iters - n_nograd
+        # The regularised iteration: one grad iteration per step, drawn from the global
+        # stream and the stream put back, so the draw is free of side effects on the run.
+        _t_gain = -1
+        if _gain_on and n_grad_iters > 0:
+            _rs = torch.get_rng_state()
+            _t_gain = n_nograd + int(torch.randint(n_grad_iters, (1,)).item())
+            torch.set_rng_state(_rs)
         _ck = self.cfg.ckpt_grad_iters
         n_ckpt = n_grad_iters if _ck < 0 else max(0, min(_ck, n_grad_iters))
 
@@ -2396,6 +2440,18 @@ class MORPHTransformer(nn.Module):
             else:
                 h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
                                            iter_idx=t, stage_cond=_sc)
+
+            if t == _t_gain:
+                _gain_reg = self._slot_gain_penalty(
+                    _core_step, _h_in, _e_arg, _inj_arg, ret_state, t, _sc,
+                    active & layout.slot_valid, _gain_lambda)
+            if _renorm:
+                # Direction preserved, per-slot norm pinned to the entry norm. Runs on the
+                # raw step output, BEFORE the gain governor and the recurrence gate, so it is
+                # part of the map every later reader (gate, probes, exit) sees.
+                _hn = h_new.flatten(2).float().norm(dim=2)                       # [B, S]
+                _rs_ = (_n0 / (_hn + 1e-6)).to(h_new.dtype)
+                h_new = h_new * _rs_.view(*_rs_.shape, *([1] * (h_new.dim() - 2)))
 
             _tau = self.cfg.core_gain_clip
             if _tau > 0.0 and self._clip_applies(t):
@@ -2529,7 +2585,60 @@ class MORPHTransformer(nn.Module):
             # Eq. 5 tail: h_T = h* + Delta_T (invariant S6). The deviation lives ONLY inside
             # this function; `_forward_tul` scatters an absolute carrier exactly as today.
             h = h_star + h
-        return xn, h, depths, g_traj, _db_traj
+        return xn, h, depths, g_traj, _db_traj, _gain_reg
+
+    def _slot_gain_penalty(self, core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond,
+                           mask, lam: float) -> dict:
+        """Hinge penalty on the slot map's typical gain at the live operating point.
+
+        g = ||f(h + d) - f(h)|| / ||d|| over the active real slots, d a Gaussian direction
+        scaled per slot to `slot_gain_eps` of that slot's norm; penalty
+        lam * relu(g - slot_gain_target)^2. Two extra applications of the SAME core step
+        (same weights, same iteration index, same retention state) at the DETACHED operating
+        point, so the gradient shapes the map at h and nothing upstream of it.
+
+        RNG discipline (the Jacobian-probe lesson, `_jacobian_probe`): the direction, and the
+        dropout masks of both applications, are drawn from the global stream with the stream
+        put back afterwards — the two applications see identical masks (the difference is
+        the map's, not dropout's), and every later draw of the run is what it would have been
+        with the penalty off. bf16 is enough here: the two outputs differ by ~eps of their
+        magnitude and rounding noise adds in quadrature over ~1e5 elements (measured against
+        the fp32 power-iteration probe in tests/test_slot_gain_reg.py).
+        """
+        cpu_rng = torch.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state() if h_in.is_cuda else None
+        def _restore():
+            torch.set_rng_state(cpu_rng)
+            if cuda_rng is not None:
+                torch.cuda.set_rng_state(cuda_rng)
+        hp = h_in.detach()
+        # The map's gain in h at a FIXED source: the injection source and the retention
+        # state are detached too, so the penalty shapes the core's weights and nothing
+        # upstream of the loop (tests/test_slot_gain_reg.py: prelude grads bit-identical).
+        e_arg = e_arg.detach() if torch.is_tensor(e_arg) else e_arg
+        inj_arg = inj_arg.detach() if torch.is_tensor(inj_arg) else inj_arg
+        ret_state = ret_state.detach() if torch.is_tensor(ret_state) else ret_state
+        m = mask.view(*mask.shape, *([1] * (hp.dim() - 2))).to(hp.dtype)
+        v = torch.randn_like(hp) * m
+        hn = hp.flatten(2).float().norm(dim=2)                                    # [B, S]
+        vn = v.flatten(2).float().norm(dim=2)
+        scale = (float(self.cfg.slot_gain_eps) * hn / (vn + 1e-6)).to(hp.dtype)
+        d = v * scale.view(*scale.shape, *([1] * (hp.dim() - 2)))
+        try:
+            _restore()
+            f0, _ = core_step(hp, e_arg, inj_arg, ret_state=ret_state, iter_idx=t,
+                              stage_cond=stage_cond)
+            _restore()
+            f1, _ = core_step(hp + d, e_arg, inj_arg, ret_state=ret_state, iter_idx=t,
+                              stage_cond=stage_cond)
+        finally:
+            _restore()
+        num = ((f1 - f0) * m).float().flatten(1).norm(dim=1)                       # [B]
+        den = d.float().flatten(1).norm(dim=1) + 1e-6
+        gain = (num / den)                                                         # [B]
+        hinge = torch.relu(gain - float(self.cfg.slot_gain_target))
+        pen = lam * (hinge * hinge).mean()
+        return {"gain": gain.detach().mean(), "gain_max": gain.detach().max(), "penalty": pen}
 
     def _tul_db1_precheck(self, what: str) -> None:
         """Shared guards for :meth:`_tul_core_db1` and :meth:`_tul_core_db1_ladder`.
@@ -3029,7 +3138,7 @@ class MORPHTransformer(nn.Module):
             # region unchanged; a per-position Poisson depth would change two things at once.
             x_coda = self._core_region(x, x0, bigram_emb, input_ids,
                                        attn_kwargs=tg_attn_kwargs)
-            depths, g_traj, mux_loss, sigreg_loss = None, None, None, None
+            depths, g_traj, mux_loss, sigreg_loss, gain_reg = None, None, None, None, None
             fm_y = fm_geom = fm_ctx = None
             mux_stats = {}
         elif self.fm_planner is not None:
@@ -3037,7 +3146,7 @@ class MORPHTransformer(nn.Module):
             # is DETACHED before it reaches W_prefix, so the coda's CE never touches the
             # ladder and there is no BPTT through an iterated map.
             xn, h_slots, fm_y, fm_geom, fm_ctx = self._tul_fm_core(x, layout)
-            depths, g_traj, mux_loss, sigreg_loss = None, None, None, None
+            depths, g_traj, mux_loss, sigreg_loss, gain_reg = None, None, None, None, None
             mux_stats = {}
             h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
@@ -3062,7 +3171,7 @@ class MORPHTransformer(nn.Module):
                 xn, h_slots, depths, g_traj, db_traj = self._tul_core_db1_ladder(
                     x, x0, bigram_emb, layout)
             else:
-                xn, h_slots, depths, g_traj, db_traj = self._tul_core(x, x0, bigram_emb,
+                xn, h_slots, depths, g_traj, db_traj, gain_reg = self._tul_core(x, x0, bigram_emb,
                                                                       layout, halt=halt)
             # Think-once conditioning (arm R7): the stack runs once over the looped
             # slot states, and everything downstream — the mux local loss, SIGReg, the
@@ -3231,6 +3340,16 @@ class MORPHTransformer(nn.Module):
             _sw = tc.sigreg_lambda * self.sigreg_gate * sigreg_loss
             groups["sigreg_weighted"] = _sw.detach()
             groups["loss"] = groups["loss"] + _sw
+
+        if gain_reg is not None and groups is not None:
+            # The slot map's typical-gain penalty (model.slot_gain_lambda). Same contract as
+            # sigreg: `gain_reg_weighted` is subtracted from every reported model loss so a
+            # penalised arm stays comparable to its control; `gain_est` is the live reading.
+            groups = dict(groups)
+            groups["gain_est"] = gain_reg["gain"]
+            groups["gain_est_max"] = gain_reg["gain_max"]
+            groups["gain_reg_weighted"] = gain_reg["penalty"].detach()
+            groups["loss"] = groups["loss"] + gain_reg["penalty"]
 
         if mux_loss is not None and groups is not None:
             groups = dict(groups)

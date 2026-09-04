@@ -92,6 +92,16 @@ model:
   # over eight iterations is 1.6-3 on calm steps and 39-2436 on spike steps. 0.0 = OFF
   # (bit-identical: no hook is registered). Slot loop only; the token loop has no clip.
   slot_cot_clip: 0.0
+  # Phase 2 levers on the slot loop's FORWARD map (design note 2026-09-04-loop-contractivity-
+  # as-design). slot_state_renorm pins each slot's carried norm to its entry norm after every
+  # iteration (direction preserved). slot_gain_lambda adds lambda * relu(g - target)^2 where
+  # g is the map's typical gain at one grad iteration per step, measured by a finite
+  # difference of relative size slot_gain_eps (two extra core steps on the compact slot
+  # sequence, same dropout masks, global RNG untouched). Both OFF here (bit-identical).
+  slot_state_renorm: false
+  slot_gain_lambda: 0.0
+  slot_gain_target: 0.9
+  slot_gain_eps: 0.02
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth
   # grad-iterations; later ones run eager (activations retained → no backward recompute → faster),
   # at the cost of retained activation memory. -1 = checkpoint ALL (default, bit-identical/safest).

@@ -128,6 +128,8 @@ def evaluate(
                 _l -= float(out["mux_weighted"])   # val loss = model CE (see train/loss note)
             if out.get("sigreg_weighted") is not None:
                 _l -= float(out["sigreg_weighted"])
+            if out.get("gain_reg_weighted") is not None:
+                _l -= float(out["gain_reg_weighted"])
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
             # language model and not on an auxiliary (the spectral-penalty precedent).
             for _aux in ("fm_weighted", "fm_sigreg_weighted"):
@@ -431,6 +433,10 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         core_gain_clip_iter_lo=int(getattr(m, "core_gain_clip_iter_lo", 0)),
         core_gain_clip_iter_hi=int(getattr(m, "core_gain_clip_iter_hi", -1)),
         slot_cot_clip=float(getattr(m, "slot_cot_clip", 0.0)),
+        slot_state_renorm=bool(getattr(m, "slot_state_renorm", False)),
+        slot_gain_lambda=float(getattr(m, "slot_gain_lambda", 0.0)),
+        slot_gain_target=float(getattr(m, "slot_gain_target", 0.9)),
+        slot_gain_eps=float(getattr(m, "slot_gain_eps", 0.02)),
         dropout=float(tr.dropout),
     )
 
@@ -2908,6 +2914,8 @@ def main(cfg: DictConfig) -> None:
                 _lv = _lv - float(out["mux_weighted"])
             if isinstance(out, dict) and out.get("sigreg_weighted") is not None:
                 _lv = _lv - float(out["sigreg_weighted"])
+            if isinstance(out, dict) and out.get("gain_reg_weighted") is not None:
+                _lv = _lv - float(out["gain_reg_weighted"])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
             #    after its external watchdog died in a power loss). A NaN/Inf loss NEVER
             #    recovers — save an emergency ckpt for forensics and stop, instead of burning
@@ -3014,6 +3022,7 @@ def main(cfg: DictConfig) -> None:
                     log["tul/layer_passes_per_token"] = float(out["layer_passes"]) / max(_npos, 1.0)
                     log["tul/tokens_per_batch"] = _npos
                 for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual", "mux_local",
+                           "gain_est", "gain_est_max", "gain_reg_weighted",
                            "sigreg"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
