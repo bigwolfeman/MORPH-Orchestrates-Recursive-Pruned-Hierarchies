@@ -1,0 +1,18 @@
+# R4 + clip-through-time (phase 1 of the contractivity programme, 2026-09-04). The M-next
+# arm exactly as tul_to_mnext (the one that tripped at 3618 fused and 1208 eager), with the
+# slot loop's BACKWARD bounded: the cotangent arriving at each iteration's output is rescaled
+# per row to at most `slot_cot_clip` times that row's exit cotangent; the forward is untouched
+# (morph/model/transformer.py::_loop_cot_hook; base.yaml documents the knob). The onset
+# capture measured the product at 1.6-3 on calm steps and 39-2436 on spike steps, so 4.0 sits
+# above every calm reading and below every spike (per-row calibration on the captured
+# batches in the prereg's Method). Cotangent probe on so the record shows pre/post/bind.
+defaults:
+  - tul_to_mnext
+  - _self_
+model:
+  slot_cot_clip: 4.0
+training:
+  loop_cot_probe: true
+  ckpt_every: 500
+wandb:
+  name: to-mnext-ctt

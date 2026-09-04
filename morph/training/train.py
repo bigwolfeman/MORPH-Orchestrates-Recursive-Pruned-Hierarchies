@@ -430,6 +430,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         core_gain_clip=float(getattr(m, "core_gain_clip", 0.0)),
         core_gain_clip_iter_lo=int(getattr(m, "core_gain_clip_iter_lo", 0)),
         core_gain_clip_iter_hi=int(getattr(m, "core_gain_clip_iter_hi", -1)),
+        slot_cot_clip=float(getattr(m, "slot_cot_clip", 0.0)),
         dropout=float(tr.dropout),
     )
 
@@ -810,10 +811,25 @@ def _preclip_probe(model) -> dict[str, float]:
     # the backward that produced these gradients (`training.loop_cot_probe`). A norm that
     # GROWS with decreasing iteration index is the backward product through the loop; a
     # flat one with a huge core gradient says the blow-up sits in the weights' own path.
-    cot = getattr(getattr(model, "_orig_mod", model), "_loop_cot", None)
+    root = getattr(model, "_orig_mod", model)
+    cot = getattr(root, "_loop_cot", None)
     if cot:
-        for t in sorted(cot):
+        ts = sorted(cot)
+        for t in ts:
             out[f"loop/cot_norm_t{t}"] = float(cot[t])
+        # The product through the loop in one number: first grad iteration over the last.
+        out["loop/cot_ratio"] = float(cot[ts[0]]) / (float(cot[ts[-1]]) + 1e-12)
+        # Clip-through-time (model.slot_cot_clip): what the backward actually carried after
+        # the clip, and the fraction of rows the cap shrank, per iteration.
+        post = getattr(root, "_loop_cot_post", None) or {}
+        bind = getattr(root, "_loop_cot_bind", None) or {}
+        for t in sorted(post):
+            out[f"loop/cot_post_t{t}"] = float(post[t])
+            out[f"loop/cot_bind_t{t}"] = float(bind[t])
+        if post:
+            pts = sorted(post)
+            out["loop/cot_post_ratio"] = float(post[pts[0]]) / (float(cot[ts[-1]]) + 1e-12)
+            out["loop/cot_bind_max"] = max(float(v) for v in bind.values())
     return out
 
 

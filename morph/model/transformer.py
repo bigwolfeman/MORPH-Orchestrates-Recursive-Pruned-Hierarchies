@@ -344,6 +344,14 @@ class MORPHConfig:
     # lab/experiments/planned/2026-08-23-tul-iteration0-mediation.md.
     core_gain_clip_iter_lo: int = 0
     core_gain_clip_iter_hi: int = -1
+    # Clip-through-time on the SLOT loop's backward (DIVERGENCE-README §D). In the backward
+    # the cotangent arriving at each slot-loop iteration's output is rescaled, per row, so
+    # its norm never exceeds this ratio times the norm of the cotangent that arrived at the
+    # loop's EXIT state. The exit cotangent itself is never touched, the forward is never
+    # touched, and 0.0 registers no hook at all (bit-identical). The forecast spike train is
+    # exactly this product growing 39-2436x through eight iterations against 1.6-3x on calm
+    # steps, with a flat forward — so the lever bounds the product and nothing else.
+    slot_cot_clip: float = 0.0
 
     @property
     def retention_carry_mode(self) -> str:
@@ -1061,6 +1069,12 @@ class MORPHTransformer(nn.Module):
         if cfg.scse_enabled and cfg.n_core == 0:
             raise ValueError(
                 "model.scse_enabled with n_core=0: there is no core loop to reparameterise.")
+        if cfg.slot_cot_clip < 0.0:
+            raise ValueError(f"model.slot_cot_clip must be >= 0 (0 = off), got {cfg.slot_cot_clip}")
+        if cfg.slot_cot_clip > 0.0 and (cfg.tul is None or cfg.n_core == 0):
+            raise ValueError(
+                f"model.slot_cot_clip={cfg.slot_cot_clip} needs a slot loop to clip (a TUL "
+                "model with n_core > 0); the token loop carries no clip-through-time.")
         self.scse: _SCSE | None = (
             _SCSE(d, step_scale=cfg.scse_step_scale, anchor_scale=cfg.scse_anchor_scale,
                   init_scale=cfg.scse_init_scale, eps=cfg.scse_eps, kappa=cfg.scse_kappa,
@@ -2090,14 +2104,47 @@ class MORPHTransformer(nn.Module):
             d = torch.full(shape, int(mean_d), device=device, dtype=torch.long)
         return torch.where(layout.slot_valid, d, torch.ones_like(d))
 
-    def _loop_cot_hook(self, t: int, g: Tensor) -> None:
-        """Record the cotangent norm arriving at slot-loop iteration `t`'s output.
+    def _loop_cot_ref_hook(self, g: Tensor) -> None:
+        """Record the per-row norm of the cotangent arriving at the slot loop's EXIT state.
 
-        Registered on `h_new` only when `_probe_cot` is set (onset capture). Returns None,
-        so autograd keeps the gradient it computed; the norm is read once per step by the
-        trainer's pre-clip probe as `loop/cot_norm_t{t}`.
+        Registered on the loop's final carrier when `slot_cot_clip > 0`. Autograd reaches
+        this tensor before any iteration's output, so the reference is in place when the
+        iteration hooks fire. Returns None: the exit cotangent is never clipped.
         """
-        self._loop_cot[int(t)] = g.detach().float().norm()
+        self._loop_cot_ref = g.detach().float().flatten(1).norm(dim=1)
+
+    def _loop_cot_hook(self, t: int, record: bool, g: Tensor) -> Tensor | None:
+        """The cotangent arriving at slot-loop iteration `t`'s output, in the backward.
+
+        Two jobs, both per step:
+          * `record` (the onset-capture probe, `_probe_cot`): the norm goes to
+            `_loop_cot[t]`, read by the trainer's pre-clip probe as `loop/cot_norm_t{t}`.
+            Recording alone returns None, so autograd keeps the gradient it computed
+            (tests/test_onset_capture.py proves the grads are bit-identical).
+          * clip-through-time (`cfg.slot_cot_clip` > 0): the gradient is rescaled per row
+            to at most `slot_cot_clip` times that row's exit cotangent, and the post-clip
+            norm and the fraction of rows the clip shrank go to `_loop_cot_post[t]` /
+            `_loop_cot_bind[t]` when recording. A row the cap does not bind is multiplied
+            by exactly 1.0, so an unbinding cap is bit-identical to no cap
+            (tests/test_slot_cot_clip.py).
+        """
+        if record:
+            self._loop_cot[int(t)] = g.detach().float().norm()
+        r = float(self.cfg.slot_cot_clip)
+        if r <= 0.0:
+            return None
+        ref = self._loop_cot_ref
+        if ref is None:
+            # The exit state did not receive a gradient (no loss reached the loop's
+            # output). There is nothing to clip against; leave the gradient alone.
+            return None
+        rows = g.detach().float().flatten(1).norm(dim=1)
+        scale = torch.clamp(r * ref / (rows + 1e-12), max=1.0)
+        if record:
+            self._loop_cot_rows[int(t)] = rows
+            self._loop_cot_post[int(t)] = (rows * scale).norm()
+            self._loop_cot_bind[int(t)] = (scale < 1.0).float().mean()
+        return g * scale.view(-1, *([1] * (g.dim() - 1))).to(g.dtype)
 
     def _tul_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
                   halt: bool = False):
@@ -2292,6 +2339,15 @@ class MORPHTransformer(nn.Module):
         _probe_write = _probe and torch.is_grad_enabled()
         if _probe_write:
             self._loop_cot = {}
+        # Clip-through-time (cfg.slot_cot_clip, the hooks' docstrings). A Python-level
+        # constant: 0.0 registers nothing and the graph is the one before this existed.
+        _cot_clip = float(self.cfg.slot_cot_clip)
+        _cot_hooks = (_probe_cot or _cot_clip > 0.0) and torch.is_grad_enabled()
+        if _cot_hooks:
+            self._loop_cot_ref = None
+            self._loop_cot_rows = {}
+            self._loop_cot_post = {}
+            self._loop_cot_bind = {}
         # "iter" mode (faithful DiffusionBlocks, morph/model/iter_cond.py): every
         # core-layer application in the T-loop gets an AdaLN-Zero signal for WHICH
         # iteration it is. Python-level constant — `_iter_mode=False` (every model
@@ -2431,8 +2487,8 @@ class MORPHTransformer(nn.Module):
                         else:
                             _er = h.new_ones(()).float()
                         _pr_rank.append(_er.detach())
-                if _probe_cot and h_new.requires_grad:
-                    h_new.register_hook(functools.partial(self._loop_cot_hook, t))
+            if _cot_hooks and h_new.requires_grad:
+                h_new.register_hook(functools.partial(self._loop_cot_hook, t, _probe_cot))
 
             h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
             if _db:
@@ -2451,6 +2507,11 @@ class MORPHTransformer(nn.Module):
         if halt:
             depths = torch.where(depths > 0, depths, torch.full_like(depths, total_iters))
             depths = torch.where(layout.slot_valid, depths, torch.ones_like(depths))
+        if _cot_hooks and _cot_clip > 0.0 and h.requires_grad:
+            # The reference for every iteration's clip: the cotangent that reaches the
+            # loop's exit carrier. Registered on the carrier itself (not on the last
+            # iteration's h_new, whose gradient is masked to the slots still active there).
+            h.register_hook(self._loop_cot_ref_hook)
         if _probe_write:
             # [T] each, still on GPU and detached. The trainer reads them once per step.
             self._loop_probe = {

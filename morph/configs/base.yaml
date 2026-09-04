@@ -85,6 +85,13 @@ model:
   # these keys make that testable rather than assumed.
   core_gain_clip_iter_lo: 0
   core_gain_clip_iter_hi: -1
+  # Clip-through-time on the SLOT loop's backward (lab/divergence/DIVERGENCE-README.md §D).
+  # In the backward, the cotangent arriving at each slot-loop iteration's output is rescaled,
+  # per row, so its norm never exceeds this ratio times the cotangent that left the loop's
+  # exit state. The forward is untouched. Measured on the forecast spike train: the ratio
+  # over eight iterations is 1.6-3 on calm steps and 39-2436 on spike steps. 0.0 = OFF
+  # (bit-identical: no hook is registered). Slot loop only; the token loop has no clip.
+  slot_cot_clip: 0.0
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth
   # grad-iterations; later ones run eager (activations retained → no backward recompute → faster),
   # at the cost of retained activation memory. -1 = checkpoint ALL (default, bit-identical/safest).
