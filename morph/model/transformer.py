@@ -12,6 +12,7 @@ Config determines dimensions and sizes, not whether features exist.
 from __future__ import annotations
 
 import math
+import functools
 import os
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -2089,6 +2090,15 @@ class MORPHTransformer(nn.Module):
             d = torch.full(shape, int(mean_d), device=device, dtype=torch.long)
         return torch.where(layout.slot_valid, d, torch.ones_like(d))
 
+    def _loop_cot_hook(self, t: int, g: Tensor) -> None:
+        """Record the cotangent norm arriving at slot-loop iteration `t`'s output.
+
+        Registered on `h_new` only when `_probe_cot` is set (onset capture). Returns None,
+        so autograd keeps the gradient it computed; the norm is read once per step by the
+        trainer's pre-clip probe as `loop/cot_norm_t{t}`.
+        """
+        self._loop_cot[int(t)] = g.detach().float().norm()
+
     def _tul_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
                   halt: bool = False):
         """Gather slots → masked per-slot depth loop → looped states (spec §3.3).
@@ -2262,6 +2272,26 @@ class MORPHTransformer(nn.Module):
         _pr_in: list[Tensor] = []
         _pr_out: list[Tensor] = []
         _pr_delta: list[Tensor] = []
+        # Onset capture (lab/experiments/planned/2026-09-03-tul-onset-capture.md). Three
+        # more per-iteration readings, each a plain Python flag read at trace time so the
+        # default graph is untouched:
+        #   delta_mean — the MEAN over rows of ‖h_new − h‖/‖h‖ (the max above is one row);
+        #   eff_rank   — entropy effective rank of the active slot states after each
+        #                iteration (the attractor's dimension), only when `_probe_rank`;
+        #   _loop_cot  — the cotangent norm ARRIVING at each grad iteration's output during
+        #                backward, via a tensor hook, only when `_probe_cot`. The hook
+        #                returns None so the gradient itself is untouched (tests/
+        #                test_onset_capture.py proves the grads are bit-identical).
+        _pr_dmean: list[Tensor] = []
+        _pr_rank: list[Tensor] = []
+        _probe_rank = _probe and bool(getattr(self, "_probe_rank", False))
+        _probe_cot = _probe and bool(getattr(self, "_probe_cot", False))
+        # The readings belong to the TRAINING forward. A no-grad forward that runs between
+        # the backward and the trainer's read (the Jacobian probe's capture forward) must
+        # neither erase the cotangent dict nor overwrite `_loop_probe` with its own values.
+        _probe_write = _probe and torch.is_grad_enabled()
+        if _probe_write:
+            self._loop_cot = {}
         # "iter" mode (faithful DiffusionBlocks, morph/model/iter_cond.py): every
         # core-layer application in the T-loop gets an AdaLN-Zero signal for WHICH
         # iteration it is. Python-level constant — `_iter_mode=False` (every model
@@ -2384,8 +2414,25 @@ class MORPHTransformer(nn.Module):
                     _pr_out.append(_ho.max().detach())
                     _pr_delta.append((((h_new - h) * _am).flatten(1).float().norm(dim=1)
                                       / (_hi + 1e-6)).max().detach())
+                    _pr_dmean.append((((h_new - h) * _am).flatten(1).float().norm(dim=1)
+                                      / (_hi + 1e-6)).mean().detach())
                     _pr_ret.append((rs_new if (track_ret and rs_new is not None)
                                     else h.new_zeros(())).float().norm().detach())
+                    if _probe_rank:
+                        # Stream-reduced state of the ACTIVE slots, [n, C]; entropy
+                        # effective rank of its singular values (1 = every active slot
+                        # holds the same vector, n = an orthogonal set). Uncentred: the
+                        # question is the dimension the states span, not their spread.
+                        _z = (h_new.mean(dim=2) if self._is_hc else h_new)[active].float()
+                        if _z.shape[0] > 1:
+                            _sv = torch.linalg.svdvals(_z)
+                            _p = _sv / (_sv.sum() + 1e-12)
+                            _er = torch.exp(-(_p * torch.log(_p + 1e-12)).sum())
+                        else:
+                            _er = h.new_ones(()).float()
+                        _pr_rank.append(_er.detach())
+                if _probe_cot and h_new.requires_grad:
+                    h_new.register_hook(functools.partial(self._loop_cot_hook, t))
 
             h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
             if _db:
@@ -2404,7 +2451,7 @@ class MORPHTransformer(nn.Module):
         if halt:
             depths = torch.where(depths > 0, depths, torch.full_like(depths, total_iters))
             depths = torch.where(layout.slot_valid, depths, torch.ones_like(depths))
-        if _probe:
+        if _probe_write:
             # [T] each, still on GPU and detached. The trainer reads them once per step.
             self._loop_probe = {
                 "core_gain": torch.stack(_pr_gain) if _pr_gain else None,
@@ -2413,6 +2460,8 @@ class MORPHTransformer(nn.Module):
                 "out_norm": torch.stack(_pr_out) if _pr_out else None,
                 "delta_ratio": torch.stack(_pr_delta) if _pr_delta else None,
                 "clip_bind": torch.stack(_pr_bind) if _pr_bind else None,
+                "delta_mean": torch.stack(_pr_dmean) if _pr_dmean else None,
+                "eff_rank": torch.stack(_pr_rank) if _pr_rank else None,
             }
         g_traj = torch.stack(g_list, dim=-1) if g_list else None   # [B, S, T]
         if _scse is not None:

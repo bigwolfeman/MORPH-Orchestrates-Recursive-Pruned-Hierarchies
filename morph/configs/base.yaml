@@ -299,6 +299,18 @@ training:
   # Optional local JSONL mirror of the probe (one object per probed step). null = wandb
   # only. Set it per-run; the onset analysis reads this file rather than the wandb API.
   grad_probe_path: null
+  # ── Onset capture (lab/experiments/planned/2026-09-03-tul-onset-capture.md) ──
+  # Three more readings for the slot loop, all off by default and all needing
+  # grad_probe_every > 0. loop_rank_every: entropy effective rank of the active slot
+  # states after each iteration, every N steps (loop/eff_rank_t*). loop_cot_probe: the
+  # cotangent norm reaching each grad iteration's output in the backward
+  # (loop/cot_norm_t*; a tensor hook that returns None, so gradients are untouched).
+  # batch_dump_every + batch_dump_dir: save the batch (ids, labels, slot layout) the
+  # model is about to see, so a spike step can be replayed offline span by span.
+  loop_rank_every: 0
+  loop_cot_probe: false
+  batch_dump_every: 0
+  batch_dump_dir: null
   # ── Core-map Jacobian probe (morph/training/core_jacobian.py) ──
   # sigma_max of the core map's Jacobian at the LIVE operating point. The gradient probe
   # above measures magnitudes; this measures the OPERATOR, which is the only way to tell

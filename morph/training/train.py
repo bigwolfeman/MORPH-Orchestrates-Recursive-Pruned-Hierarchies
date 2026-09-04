@@ -698,27 +698,37 @@ def _jacobian_probe(model, probe, x, y, layout, bag_size, iters) -> dict[str, fl
     """
     cpu_rng = torch.get_rng_state()
     cuda_rng = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
+    out: dict[str, float] = {}
     try:
         with probe.capture() as points:
             with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                 model(x, labels=y, bag_size=bag_size, slot_layout=layout)
+        # The MEASUREMENT stays inside the restore too. It rebuilds the core step in
+        # training mode, so the blocks' dropout (0.1 in base.yaml) draws from the global
+        # CUDA generator on every power iteration; a restore around the capture alone
+        # left the next training step's dropout masks and Poisson depths shifted by
+        # exactly that draw (onset-capture smoke, 2026-09-03: the replay diverged at the
+        # step after every probed step, weights and gradients bit-identical).
+        by_iter = {int(pt["iter_idx"]): pt for pt in points}
+        results = {int(t): probe.measure(by_iter[int(t)]) for t in iters if int(t) in by_iter}
     finally:
         torch.set_rng_state(cpu_rng)
         if cuda_rng is not None:
             torch.cuda.set_rng_state(cuda_rng)
-    out: dict[str, float] = {}
-    by_iter = {int(pt["iter_idx"]): pt for pt in points}
-    for t in iters:
-        pt = by_iter.get(int(t))
-        if pt is None:
-            continue
-        res = probe.measure(pt)
+    for t, res in results.items():
         out[f"jac/sigma_t{t}"] = res.sigma_step
         out[f"jac/sigma_conv_t{t}"] = res.rel_change
+        # Typical gain (||J||_F / sqrt(n)): what a generic direction sees. sigma is the
+        # worst direction; the two together say whether the map is expansive on average
+        # or only along a direction the data may never occupy (module docstring).
+        out[f"jac/rms_t{t}"] = res.rms_step
         if res.sigma_blocks:
             out[f"jac/sigma_blockprod_t{t}"] = res.block_product
+            out[f"jac/rms_blockgeo_t{t}"] = res.rms_block_gain
             for i, sb in enumerate(res.sigma_blocks):
                 out[f"jac/sigma_b{i}_t{t}"] = sb
+            for i, rb in enumerate(res.rms_blocks):
+                out[f"jac/rms_b{i}_t{t}"] = rb
     if points:
         out["jac/n_iters_captured"] = float(len(points))
     return out
@@ -796,6 +806,14 @@ def _preclip_probe(model) -> dict[str, float]:
             # index is a different disease from one that spikes at t=0.
             for i, v in enumerate(seq):
                 out[f"loop/{key}_t{i}"] = v
+    # Onset capture: the cotangent norm that reached each grad iteration's output during
+    # the backward that produced these gradients (`training.loop_cot_probe`). A norm that
+    # GROWS with decreasing iteration index is the backward product through the loop; a
+    # flat one with a huge core gradient says the blow-up sits in the weights' own path.
+    cot = getattr(getattr(model, "_orig_mod", model), "_loop_cot", None)
+    if cot:
+        for t in sorted(cot):
+            out[f"loop/cot_norm_t{t}"] = float(cot[t])
     return out
 
 
@@ -1538,6 +1556,19 @@ def main(cfg: DictConfig) -> None:
     # ~2*power_iters backward passes over ONE core step, so it belongs at a coarse cadence.
     _jac_every = int(getattr(cfg.training, "jac_probe_every", 0))
     _jac_iters = list(getattr(cfg.training, "jac_probe_iters", [0]) or [0])
+    # Onset capture knobs (lab/experiments/planned/2026-09-03-tul-onset-capture.md). All
+    # off by default; each needs the loop probe (grad_probe_every > 0) to reach the row.
+    _rank_every = int(getattr(cfg.training, "loop_rank_every", 0))
+    _cot_probe = bool(getattr(cfg.training, "loop_cot_probe", False))
+    _bdump_every = int(getattr(cfg.training, "batch_dump_every", 0))
+    _bdump_dir = getattr(cfg.training, "batch_dump_dir", None) or None
+    if (_rank_every or _cot_probe or _bdump_every) and int(getattr(cfg.training, "grad_probe_every", 0)) <= 0:
+        raise ValueError("training.loop_rank_every / loop_cot_probe / batch_dump_every need "
+                         "training.grad_probe_every > 0 (they are read by the pre-clip probe)")
+    if _bdump_every > 0 and not _bdump_dir:
+        raise ValueError("training.batch_dump_every > 0 needs training.batch_dump_dir")
+    if _bdump_dir:
+        os.makedirs(_bdump_dir, exist_ok=True)
     _jac_power = int(getattr(cfg.training, "jac_probe_power_iters", 200))
     # Core-map Jacobian probe — built only when a cadence is configured (0 = never), so
     # the default path allocates nothing.
@@ -1662,6 +1693,12 @@ def main(cfg: DictConfig) -> None:
     # _tul_core takes the identical code path it always has.
     if _gprobe_every > 0:
         model._probe_loop = True
+        # The cotangent hook is a per-forward decision made at trace time in _tul_core;
+        # set it on the ROOT so a compiled wrapper cannot shadow it.
+        getattr(model, "_orig_mod", model)._probe_cot = _cot_probe
+        if _cot_probe or _rank_every or _bdump_every:
+            print(f"  [capture] loop_cot_probe={_cot_probe} loop_rank_every={_rank_every} "
+                  f"batch_dump_every={_bdump_every} dir={_bdump_dir}")
         if _gprobe_path:
             os.makedirs(os.path.dirname(os.path.abspath(_gprobe_path)), exist_ok=True)
             _gprobe_fh = open(_gprobe_path, "a", buffering=1)
@@ -2569,6 +2606,17 @@ def main(cfg: DictConfig) -> None:
             # loader batch runs the ordinary forward, same as step_mix being unset.
             _tsm = _cur_tul_mode if _layout is not None else None
 
+            # Onset capture: arm the per-iteration rank reading for this forward (a plain
+            # attribute read at trace time in _tul_core) and dump the batch the model is
+            # about to see, so a spike step can be replayed offline span by span.
+            if _rank_every > 0:
+                getattr(model, "_orig_mod", model)._probe_rank = (step % _rank_every == 0)
+            if _bdump_every > 0 and step % _bdump_every == 0:
+                torch.save({"step": step, "x": x.cpu(), "y": y.cpu(),
+                            "layout": None if _layout is None else
+                            {k: (v.cpu() if torch.is_tensor(v) else v)
+                             for k, v in vars(_layout).items()}},
+                           os.path.join(_bdump_dir, f"batch_{step:06d}.pt"))
             with _rt.region("fwd"):
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     out = model(x, labels=y, bag_size=phase.bag_size,
@@ -2724,6 +2772,13 @@ def main(cfg: DictConfig) -> None:
             if _probe_now or _jac_log:
                 _probe_log = _preclip_probe(model) if _probe_now else {}
                 _probe_log.update(_jac_log)
+                # The losses of the SAME step, so a gradient spike can be read against
+                # whether the forward on that batch was itself abnormal (a forward
+                # explosion moves the loss; a backward-only blow-up does not).
+                _probe_log["loss/total"] = float(loss.detach())
+                for _lk in ("ce_main", "mux_local"):
+                    if _lk in out:
+                        _probe_log[f"loss/{_lk}"] = float(out[_lk].detach())
                 wandb.log(_probe_log, step=step)
                 if _gprobe_path is not None:
                     # Local mirror. wandb is the record of truth, but a per-step probe is
