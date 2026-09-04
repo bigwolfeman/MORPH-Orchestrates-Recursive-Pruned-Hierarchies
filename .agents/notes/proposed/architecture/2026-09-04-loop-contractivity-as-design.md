@@ -70,6 +70,16 @@ each implies for the architecture:
    even while the step size stays large. Whether that set is the attractor we want, or a
    collapse, is the question the depth sweep on a surviving arm answers.
 
+### Status 2026-09-04 10:00
+
+Candidate (c), clip-through-time, is built (`model.slot_cot_clip`, `4d5a986`) and measured
+on M-next: the clip bound on every step from 1736, the exit cotangent stayed flat, and the
+run tripped at 2764 with the forward inflating (iteration 0's realised gain 1.5 → 9.6,
+exit norm 5x, weight gradients 800x). Bounding the backward alone does not decide the
+regime. Candidates (a) and a finite-difference typical-gain penalty (a trainable version
+of "hold the rate below 1 on the map") are built (`34d94a0`) and pre-registered
+(`lab/experiments/planned/2026-09-04-tul-forward-levers.md`).
+
 ## Alternatives considered
 
 - **Keep clamping the symptom** (`core_gain_clip`, spectral caps): refuted four times on

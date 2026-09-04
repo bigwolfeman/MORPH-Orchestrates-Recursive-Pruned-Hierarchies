@@ -4,7 +4,7 @@
 knob.** Two campaigns have already burned weeks on this. Almost every idea you are about to
 have is in one of the two indexes below with a number next to it.
 
-Last updated 2026-09-04 02:30 (section D, the forecast spike train, and the triage row for it).
+Last updated 2026-09-04 10:00 (section D: the clip-through-time result and the phase-2 arms).
 
 ## Triage in 60 seconds
 
@@ -207,16 +207,32 @@ reproducible before 2026-09-03 was any run with `training.jac_probe_every > 0`, 
 the Jacobian probe's measurement consumed the CUDA generator (fixed in
 `train._jacobian_probe`; `tests/test_core_jacobian.py::test_probe_measurement_is_rng_neutral_with_dropout`).
 
+**Clip-through-time alone does NOT cure it (measured 2026-09-04, `to-mnext-ctt`,
+`lab/experiments/planned/2026-09-04-tul-clip-through-time.md`).** With the cotangent
+arriving at every iteration bounded per row to 4x the exit cotangent
+(`model.slot_cot_clip`), the clip bound on every row of every step from 1736, the exit
+cotangent stayed flat (33 → 27) and the run still tripped at 2764. What grew instead: the
+core weight gradient 0.3 → 250 (800x), the prelude's 1.1 → 294, and the FORWARD —
+iteration 0's realised gain 1.5 → 2.0 → 3.8 → 5.8 → 9.6 across training, the exit state
+norm 1017 → 5392, and the successive-step ratio along the trajectory crossing 1.0 at step
+1800, the step the gradient began to climb. So the backward product is the first
+symptom, not the whole disease: bound it and the map keeps moving past the edge and the
+blow-up rides the weight path on an inflating forward. The clip stays in the tree as an
+instrument and a belt (`loop/cot_post_*`, `loop/cot_bind_*`); the levers below are the
+next arms (phase 2, `2026-09-04-tul-forward-levers.md`).
+
 **What this says about the levers** (the capture's decision rule had a gap here: ternary
 is necessary AND the flip burst is absent AND the amplifier predictions hold; the record
 says so rather than patching the rule):
 
 1. Bound the backward product between iterations (clip-through-time), forward untouched.
-   The gradient is the thing that blows up; the forward is fine on every spike step.
-2. Keep the loop's typical gain away from 1 by construction, not by a weight-spectrum cap
+   DONE and insufficient (above): the forward inflates once the backward is bounded.
+2. Keep the loop's typical gain away from 1 on the MAP, not by a weight-spectrum cap
    (section A's four failed caps bound a factor of one block; the map's gain is a product
    of six blocks whose per-block gains never left 1.00–1.02 while the map's worst gain
-   went 3 → 500).
+   went 3 → 500). Two arms in flight 2026-09-04: a per-slot state renorm between
+   iterations (`model.slot_state_renorm`) and a hinge penalty on the map's typical gain
+   measured by a finite difference every step (`model.slot_gain_lambda`).
 3. Code-assignment hysteresis stays a candidate for section A's face only; it has no
    evidence on this one.
 
