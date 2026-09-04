@@ -183,6 +183,14 @@ class TULConfig:
     #            STANDS FOR.
     mux_target: str = "next"
     mux_tau: float = 1.0                 # softmax temperature of the head (paper: 1.0)
+    # Staged targets (arc E3, lab/experiments/planned/2026-09-04-loop-contribution-arc.md).
+    # > 0 gives the loop TWO jobs in sequence: the state after iteration k
+    # (= this value) is supervised toward the span it TERMINATES (target "own", the
+    # memory the loop earned 0.037 nats on) for the slots whose depth reaches k, and the
+    # FINAL state toward `mux_target` (the forecast) as before. The local loss is the
+    # mean of the two. The carry stays LIVE (full BPTT through the loop; this is not
+    # db_loop, which detaches it). 0 = off: the forward is bit-identical.
+    mux_stage_own_iters: int = 0
     # ── Think-once panel knobs (branch tul/think-once, arms R7/R8;
     #    .agents/notes/proposed/architecture/2026-09-03-tul-loop-contribution-drawing-board.md)
     # cond_layers: that many NON-SHARED MORPHBlocks run ONCE over the compact slot
@@ -394,6 +402,19 @@ class TULConfig:
             raise ValueError(f"tul.mux_rho must be in (0,1), got {self.mux_rho}")
         if self.mux_tau <= 0.0:
             raise ValueError(f"tul.mux_tau must be > 0, got {self.mux_tau}")
+        if self.mux_stage_own_iters < 0:
+            raise ValueError(
+                f"tul.mux_stage_own_iters must be >= 0, got {self.mux_stage_own_iters}")
+        if self.mux_stage_own_iters > 0:
+            if self.mux_beta <= 0.0:
+                raise ValueError("tul.mux_stage_own_iters needs tul.mux_beta > 0 "
+                                 "(the staged targets ARE the local loss)")
+            if self.db_loop:
+                raise ValueError("tul.mux_stage_own_iters with tul.db_loop is not defined: "
+                                 "the stage keeps the carry live, db_loop detaches it")
+            if self.tokens_through_core:
+                raise ValueError("tul.mux_stage_own_iters is a slot-loop lever "
+                                 "(tokens_through_core must be false)")
         if self.mux_target not in ("own", "next"):
             raise ValueError(
                 f"tul.mux_target must be 'own' or 'next', got {self.mux_target!r}")

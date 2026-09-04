@@ -1,0 +1,13 @@
+# ARC E3 — staged targets on the constrained forecast arm. Y2 exactly, plus
+# tul.mux_stage_own_iters=2: the slot state after iteration 2 is supervised toward the
+# span it terminates (MEMORY, target "own": the one target the loop earned 0.037 nats on),
+# the final state toward the next span (FORECAST, mux_target next) as before; the local
+# loss is the mean of the two, the carry stays live (full BPTT). Two jobs in sequence.
+# Prereg: lab/experiments/planned/2026-09-04-arc-e3-staged-targets.md
+defaults:
+  - tul_to_mnext_y2
+  - _self_
+tul:
+  mux_stage_own_iters: 2
+wandb:
+  name: to-mnext-y2-stage2

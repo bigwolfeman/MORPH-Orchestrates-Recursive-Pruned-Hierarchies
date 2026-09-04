@@ -1,0 +1,10 @@
+# ARC E3 — staged targets, memory stage at iteration 3 (the depth where the memory
+# target's own earning was complete on M-own). Otherwise tul_to_mnext_y2_stage2.
+# Prereg: lab/experiments/planned/2026-09-04-arc-e3-staged-targets.md
+defaults:
+  - tul_to_mnext_y2_stage2
+  - _self_
+tul:
+  mux_stage_own_iters: 3
+wandb:
+  name: to-mnext-y2-stage3

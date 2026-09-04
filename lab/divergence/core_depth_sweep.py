@@ -45,7 +45,14 @@ from _stats import paired_bootstrap_ci
 sys.path.insert(0, f"{ROOT}/scripts")
 from tul_samples import load_ckpt  # noqa: E402
 
-MUX_KEYS = ("mux_local", "mux_n_supervised", "mux_rel", "mux_kl")
+MUX_KEYS = ("mux_local", "mux_n_supervised", "mux_rel", "mux_kl",
+            "mux_local_own_final", "mux_n_supervised_own",
+            "mux_local_next_final", "mux_n_supervised_next")
+# metric name -> (value key, count key) for the batch-weighted means and their CIs.
+# The last two exist only on a staged-target arm (tul.mux_stage_own_iters > 0).
+MUX_METRICS = {"mux_local": ("mux_local", "mux_n_supervised"),
+               "mux_local_own": ("mux_local_own_final", "mux_n_supervised_own"),
+               "mux_local_next": ("mux_local_next_final", "mux_n_supervised_next")}
 
 
 @torch.no_grad()
@@ -166,8 +173,8 @@ def main() -> None:
         # per-ROW bookkeeping (token CE) and per-BATCH bookkeeping (mux) for the CIs
         row_sum: dict[int, np.ndarray] = {}
         row_cnt: np.ndarray | None = None
-        mux_sum: dict[int, np.ndarray] = {}
-        mux_cnt: np.ndarray | None = None
+        mux_sum: dict[str, dict[int, np.ndarray]] = {m: {} for m in MUX_METRICS}
+        mux_cnt: dict[str, np.ndarray | None] = {m: None for m in MUX_METRICS}
         try:
             for d in depths:
                 if _sigma:
@@ -180,8 +187,8 @@ def main() -> None:
                 tot = tot_n = fst = fst_n = 0.0
                 rs: list[float] = []
                 rc: list[float] = []
-                ms: list[float] = []
-                mc: list[float] = []
+                ms: dict[str, list[float]] = {m: [] for m in MUX_METRICS}
+                mc: dict[str, list[float]] = {m: [] for m in MUX_METRICS}
                 for (inp, labels, layout), (tokpos, first) in zip(batches, masks):
                     ce, stats = ce_maps(model, inp, layout, labels, device,
                                         step_mode=_step_mode, want_mux=has_mux)
@@ -190,25 +197,28 @@ def main() -> None:
                     fst += float(ce[first].sum()); fst_n += int(first.sum())
                     rs.extend((ce * tokpos).sum(dim=1).tolist())
                     rc.extend(tokpos.sum(dim=1).tolist())
-                    if "mux_local" in stats:
-                        n_sup = stats.get("mux_n_supervised", 1.0)
-                        ms.append(stats["mux_local"] * n_sup)
-                        mc.append(n_sup)
+                    for m, (vk, ck) in MUX_METRICS.items():
+                        if vk in stats:
+                            n_sup = stats.get(ck, 1.0)
+                            ms[m].append(stats[vk] * n_sup)
+                            mc[m].append(n_sup)
                 row_sum[d] = np.asarray(rs)
                 if row_cnt is None:
                     row_cnt = np.asarray(rc)
                 entry = {"ce_tokens": tot / tot_n, "ce_span_first": fst / fst_n,
                          "n_tokens": tot_n, "n_first": fst_n}
-                if ms:
-                    mux_sum[d] = np.asarray(ms)
-                    if mux_cnt is None:
-                        mux_cnt = np.asarray(mc)
-                    entry["mux_local"] = float(np.sum(ms) / np.sum(mc))
-                    entry["mux_n_supervised"] = float(np.sum(mc))
+                for m in MUX_METRICS:
+                    if ms[m]:
+                        mux_sum[m][d] = np.asarray(ms[m])
+                        if mux_cnt[m] is None:
+                            mux_cnt[m] = np.asarray(mc[m])
+                        entry[m] = float(np.sum(ms[m]) / np.sum(mc[m]))
+                        entry[f"{m}_n_supervised"] = float(np.sum(mc[m]))
                 arm["depths"][d] = entry
                 print(f"{label:10s} depth={d}  ce={tot/tot_n:.4f}  "
                       f"span_first={fst/fst_n:.4f}"
-                      + (f"  mux_local={entry['mux_local']:.4f}" if ms else ""), flush=True)
+                      + "".join(f"  {m}={entry[m]:.4f}" for m in MUX_METRICS if m in entry),
+                      flush=True)
         finally:
             model.cfg.tul.slot_mean_depth = orig_mean
             model.cfg.tul.slot_max_depth = orig_max
@@ -216,14 +226,17 @@ def main() -> None:
                 model.cfg.tul.db1_ladder_steps = orig_ladder
         assert row_cnt is not None
         arm["ci_ce_tokens"] = _bootstrap_pairs(depths, row_sum, row_cnt)
-        if mux_sum and mux_cnt is not None:
-            arm["ci_mux_local"] = _bootstrap_pairs(depths, mux_sum, mux_cnt)
+        for m in MUX_METRICS:
+            if mux_sum[m] and mux_cnt[m] is not None:
+                arm[f"ci_{m}"] = _bootstrap_pairs(depths, mux_sum[m], mux_cnt[m])
         for k, v in arm["ci_ce_tokens"].items():
             print(f"{label:10s} ce_tokens {k}: {v['point']:+.4f} "
                   f"[{v['lo']:+.4f}, {v['hi']:+.4f}] over {v['n_units']} rows", flush=True)
-        for k, v in arm.get("ci_mux_local", {}).items():
-            print(f"{label:10s} mux_local {k}: {v['point']:+.4f} "
-                  f"[{v['lo']:+.4f}, {v['hi']:+.4f}] over {v['n_units']} batches", flush=True)
+        for m in MUX_METRICS:
+            for k, v in arm.get(f"ci_{m}", {}).items():
+                print(f"{label:10s} {m} {k}: {v['point']:+.4f} "
+                      f"[{v['lo']:+.4f}, {v['hi']:+.4f}] over {v['n_units']} batches",
+                      flush=True)
         # per-row sums travel with the JSON so arm-vs-arm paired readouts on the same
         # rows can be computed offline without re-running the sweep
         arm["row_ce_sum"] = {str(d): row_sum[d].tolist() for d in depths}

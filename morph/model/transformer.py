@@ -973,6 +973,12 @@ class MORPHTransformer(nn.Module):
         # are byte-identical to a baseline built with the same seed, and the arms differ by
         # the mechanism alone. E_slot is re-initialised from the live embedding table at the
         # activation step (Block Transformer §3.7) — see TULSlots.init_at_activation.
+        if cfg.tul is not None and cfg.tul.mux_stage_own_iters > 0:
+            _kmax = int(cfg.tul.slot_max_depth or cfg.max_depth)
+            if cfg.tul.mux_stage_own_iters > _kmax:
+                raise ValueError(
+                    f"tul.mux_stage_own_iters={cfg.tul.mux_stage_own_iters} exceeds the loop's "
+                    f"max depth {_kmax} (tul.slot_max_depth / model.max_depth)")
         if cfg.tul is not None and cfg.fm is not None and cfg.tul.tokens_through_core:
             raise ValueError(
                 "tul.tokens_through_core=true with an FM planner (cfg.fm): the planner replaces "
@@ -2274,6 +2280,14 @@ class MORPHTransformer(nn.Module):
             raise NotImplementedError(
                 "tul.db_loop under SCSE is not defined: the carry is the DEVIATION and "
                 "detaching it detaches h* reconstruction. Build it when an arm needs it.")
+        # Staged targets (TULConfig.mux_stage_own_iters): the same trajectory list, with the
+        # carry LIVE. Under SCSE the carried state is the deviation, and a readout of it is
+        # not a readout of the slot — the same reason db_loop raises.
+        _stage = int(self.cfg.tul.mux_stage_own_iters) > 0
+        if _stage and _scse is not None:
+            raise NotImplementedError(
+                "tul.mux_stage_own_iters under SCSE is not defined: the trajectory the "
+                "stage supervises is the DEVIATION, not the slot state.")
         with _prof("carrier::h_clone"):
             if _scse is None:
                 h = self.core_init(e)
@@ -2287,7 +2301,7 @@ class MORPHTransformer(nn.Module):
         # Trajectory for the local losses: OUTER-graph states, one per iteration, returned
         # (never a side channel — the g_traj / ret_capture lesson). _db_traj[0] is the seed
         # state; entry t is the post-update state after iteration t-1.
-        _db_traj: list[Tensor] | None = [h] if _db else None
+        _db_traj: list[Tensor] | None = [h] if (_db or _stage) else None
         # slot_state_renorm: the per-slot norm the state ENTERED with is the norm it keeps.
         # Detached (a constant target); pads enter at 0 and stay there.
         _renorm = bool(self.cfg.slot_state_renorm)
@@ -2573,7 +2587,7 @@ class MORPHTransformer(nn.Module):
                 h_new.register_hook(functools.partial(self._loop_cot_hook, t, _probe_cot))
 
             h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
-            if _db:
+            if _db or _stage:
                 _db_traj.append(h)
             if track_ret and rs_new is not None:
                 ret_state = rs_new.detach() if _db else rs_new
@@ -2899,7 +2913,8 @@ class MORPHTransformer(nn.Module):
 
     def _tul_mux_loss(self, h_slots: Tensor, input_ids: Tensor,
                       layout: SlotLayout, stats: dict | None = None,
-                      slot_keep: Tensor | None = None) -> Tensor:
+                      slot_keep: Tensor | None = None,
+                      target: str | None = None) -> Tensor:
         """MUX local head (arXiv 2607.18264): weighted CE of each slot's NEXT span.
 
         The slot's post-core state is read out through the model's OWN LM-head path
@@ -2932,8 +2947,12 @@ class MORPHTransformer(nn.Module):
         logits = logits.index_fill(
             -1, torch.tensor([tc.slot_id], device=logits.device), float("-inf"))
         logp = torch.log_softmax(logits, dim=-1)              # [B, S, V]
+        # `target` overrides the config's target for ONE call (the staged local loss
+        # supervises an intermediate state toward "own" and the final one toward
+        # `tc.mux_target`); None keeps the config's, so every existing call is unchanged.
         pos_valid, alpha, tgt_slot, sup = mux_span_targets(
-            input_ids, layout, tc.mux_rho, target=tc.mux_target)
+            input_ids, layout, tc.mux_rho,
+            target=tc.mux_target if target is None else target)
         if slot_keep is not None:
             # db_loop: supervise only the slots whose state is FRESH at this iteration
             # (depths ≥ t). A frozen slot's state equals its final one; supervising it
@@ -3220,7 +3239,41 @@ class MORPHTransformer(nn.Module):
             mux_stats: dict = {}
             if tc.mux_beta <= 0.0:
                 mux_loss = None
-            elif db_traj is None:
+            elif tc.mux_stage_own_iters > 0:
+                # ── staged targets (arc E3) ───────────────────────────────────────
+                # Two jobs in sequence on ONE live-carry trajectory: the state after
+                # iteration k toward the span the slot terminates (memory), for the slots
+                # whose depth reaches k; the final state toward the forecast. Mean of the
+                # two, so mux_beta keeps its meaning. Stats come from the FINAL (forecast)
+                # term so mux_rel / mux_kl stay comparable with the unstaged arm; the own
+                # term's loss is reported beside them.
+                k = int(tc.mux_stage_own_iters)
+                assert db_traj is not None
+                # The loop runs to the batch's deepest slot; a batch whose deepest slot
+                # stops short of k supervises nothing on the own term (keep is empty and
+                # the loss is 0), so the index is clamped, never raised on (construction
+                # already refused a k past the configured max depth).
+                own_stats: dict = {}
+                own_loss = self._tul_mux_loss(db_traj[min(k, len(db_traj) - 1)], input_ids,
+                                              layout, stats=own_stats,
+                                              slot_keep=(depths >= k), target="own")
+                nxt_loss = self._tul_mux_loss(h_slots, input_ids, layout, stats=mux_stats)
+                mux_loss = 0.5 * (own_loss + nxt_loss)
+                mux_stats["mux_stage_own"] = float(own_loss.detach())
+                mux_stats["mux_stage_own_n"] = own_stats.get("mux_n_supervised", 0.0)
+                mux_stats["mux_stage_next"] = float(nxt_loss.detach())
+                if not self.training:
+                    # The depth sweep's columns: BOTH targets read from the FINAL state at
+                    # the forced depth (core_depth_sweep.py), so a stage arm's memory and
+                    # forecast earning are measured on the same state the reader gets.
+                    fin: dict = {}
+                    fin_own = self._tul_mux_loss(h_slots, input_ids, layout, stats=fin,
+                                                 target="own")
+                    mux_stats["mux_local_own_final"] = float(fin_own.detach())
+                    mux_stats["mux_n_supervised_own"] = fin.get("mux_n_supervised", 0.0)
+                    mux_stats["mux_local_next_final"] = float(nxt_loss.detach())
+                    mux_stats["mux_n_supervised_next"] = mux_stats.get("mux_n_supervised", 0.0)
+            elif db_traj is None or not tc.db_loop:
                 mux_loss = self._tul_mux_loss(h_slots, input_ids, layout, stats=mux_stats)
             else:
                 # ── db_loop local losses ──────────────────────────────────────────
