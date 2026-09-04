@@ -39,15 +39,9 @@ from _build import ROOT, build_cfg
 sys.path.insert(0, f"{ROOT}/scripts")
 from tul_samples import load_ckpt  # noqa: E402  (handles the _orig_mod. compile prefix)
 
-BINS = [(0, 0), (1, 1), (2, 2), (3, 3), (4, 7), (8, 15), (16, 10 ** 9)]
+from _earning import BINS, bin_of  # noqa: E402  (ONE home for the offset bins)
+
 MODES = ("zero", "shuffle", "wrong_seed")
-
-
-def bin_of(off: int) -> int:
-    for i, (lo, hi) in enumerate(BINS):
-        if lo <= off <= hi:
-            return i
-    raise AssertionError(off)
 
 
 def token_strata(layout, labels_row, b: int, spec) -> list[tuple[int, int]]:

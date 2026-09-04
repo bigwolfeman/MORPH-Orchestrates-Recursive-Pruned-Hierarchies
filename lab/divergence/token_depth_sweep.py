@@ -20,8 +20,10 @@ import json
 import sys
 
 import torch
+import torch.nn.functional as F
 
 from _build import ROOT, build_cfg
+from _earning import EarningProfile, offsets_from_ids
 
 sys.path.insert(0, f"{ROOT}/scripts")
 from tul_samples import load_ckpt  # noqa: E402
@@ -34,6 +36,19 @@ def batch_ce(model, x, y, device) -> float:
     return float(out["loss"])
 
 
+@torch.no_grad()
+def ce_map(model, x, y, device) -> torch.Tensor:
+    """[B, L] per-token CE from the full logits (the eager head; use_kernels=false)."""
+    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
+        res = model(x.to(device), labels=None)
+    logits = res["logits"].float()
+    B, L, V = logits.shape
+    lab = y.to(device).clone()
+    lab[lab < 0] = 0
+    return F.cross_entropy(logits.reshape(B * L, V), lab.reshape(B * L),
+                           reduction="none").reshape(B, L)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", action="append", required=True,
@@ -44,12 +59,16 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--profile", action="store_true",
+                    help="arc E0: also write per-row and per-offset-in-span CE sums per "
+                         "depth (spans cut by the boundary rule on the input ids), so "
+                         "score_arc_e0.py can read where the loop earns")
     a = ap.parse_args()
     device = a.device
     depths = [int(x) for x in a.depths.split(",")]
 
     from morph.training.data import create_dataloader
-    from morph.training.tul_setup import build_tul_runtime
+    from morph.training.tul_setup import build_boundary_rule, build_tul_runtime
 
     results: dict[str, dict] = {}
     for triple in a.ckpt:
@@ -76,18 +95,40 @@ def main() -> None:
             x, y = next(loader)[:2]
             batches.append((x, y))
         orig_mean = int(model.cfg.mean_depth)
-        arm = {"step": step, "rows": len(batches) * a.batch,
+        n_rows = len(batches) * a.batch
+        arm = {"step": step, "rows": n_rows,
                "train_eval_depth": orig_mean, "depths": {}}
+        prof = None
+        if a.profile:
+            rule = build_boundary_rule(cfg)[0]
+            offs = [[offsets_from_ids(x[b].numpy(), rule) for b in range(x.shape[0])]
+                    for x, _ in batches]
+            prof = EarningProfile(depths, n_rows)
         try:
             for d in depths:
                 model.cfg.mean_depth = d
-                ces = [batch_ce(model, x, y, device) for x, y in batches]
-                ce = sum(ces) / len(ces)
-                arm["depths"][d] = {"ce_tokens": ce,
-                                    "n_batches": len(ces), "batch": a.batch}
+                if prof is None:
+                    ces = [batch_ce(model, x, y, device) for x, y in batches]
+                    ce = sum(ces) / len(ces)
+                    arm["depths"][d] = {"ce_tokens": ce,
+                                        "n_batches": len(ces), "batch": a.batch}
+                else:
+                    tot = tot_n = 0.0
+                    for i, (x, y) in enumerate(batches):
+                        ce_b = ce_map(model, x, y, device)
+                        valid = (y >= 0)
+                        for b in range(x.shape[0]):
+                            prof.add(d, i * a.batch + b, ce_b[b], valid[b], offs[i][b])
+                        tot += float(ce_b.cpu()[valid].sum())
+                        tot_n += float(valid.sum())
+                    ce = tot / tot_n
+                    arm["depths"][d] = {"ce_tokens": ce, "n_tokens": tot_n,
+                                        "n_batches": len(batches), "batch": a.batch}
                 print(f"{label:10s} depth={d}  ce={ce:.4f}", flush=True)
         finally:
             model.cfg.mean_depth = orig_mean
+        if prof is not None:
+            arm["profile"] = prof.to_json()
         results[label] = arm
         del model
         if device == "cuda":

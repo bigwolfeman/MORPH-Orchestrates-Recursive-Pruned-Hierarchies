@@ -24,6 +24,7 @@ import torch
 import torch.nn.functional as F
 
 from _build import ROOT, DepthLever, build_cfg
+from _earning import EarningProfile, offsets_from_layout
 
 sys.path.insert(0, f"{ROOT}/scripts")
 from tul_samples import load_ckpt  # noqa: E402
@@ -50,6 +51,9 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--profile", action="store_true",
+                    help="arc E0: per-row and per-offset-in-span CE sums per depth "
+                         "(offsets from the packed layout, as worth_profile)")
     a = ap.parse_args()
     device = a.device
     depths = [int(x) for x in a.depths.split(",")]
@@ -105,6 +109,11 @@ def main() -> None:
                         if 0 < bag < dump:
                             first[b, p] = True
             masks.append((tokpos, first))
+        prof = None
+        if a.profile:
+            offs = [[offsets_from_layout(layout, b) for b in range(inp.shape[0])]
+                    for inp, _, layout in batches]
+            prof = EarningProfile(depths, rows_done)
         lever = DepthLever(model, tul_rt, int(cfg.model.max_depth))
         assert lever.a2, "the REFUSE above guarantees an A2 config"
         arm = {"step": step, "rows": rows_done, "eval_mode": "a2_model_depth",
@@ -114,8 +123,11 @@ def main() -> None:
             for d in depths:
                 lever.set(d)
                 tot = tot_n = fir = fir_n = 0.0
-                for (inp, labels, layout), (tokpos, first) in zip(batches, masks):
+                for i, ((inp, labels, layout), (tokpos, first)) in enumerate(zip(batches, masks)):
                     ce = ce_maps(model, inp, layout, labels, device).cpu()
+                    if prof is not None:
+                        for b in range(inp.shape[0]):
+                            prof.add(d, i * a.batch + b, ce[b], tokpos[b], offs[i][b])
                     tot += float(ce[tokpos].sum())
                     tot_n += float(tokpos.sum())
                     fir += float(ce[first].sum())
@@ -127,6 +139,8 @@ def main() -> None:
                       f"span_first={fir/fir_n:.4f}", flush=True)
         finally:
             lever.restore()
+        if prof is not None:
+            arm["profile"] = prof.to_json()
         results[label] = arm
         del model
         if device == "cuda":
