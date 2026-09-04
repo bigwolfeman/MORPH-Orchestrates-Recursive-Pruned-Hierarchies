@@ -1,6 +1,6 @@
-# Planned: ARC E2 — iteration conditioning on the constrained forecast arm
+# Failure: ARC E2 — iteration conditioning on the constrained forecast arm
 
-Status: planned
+Status: failure
 Date: 2026-09-04 (frozen; not launched; GPU time is Wolfe's call)
 Arc: `2026-09-04-loop-contribution-arc.md`, branch (a) MAP REGIME (the symmetry half).
 
@@ -160,3 +160,54 @@ the next tens of steps (`memory: MORPH runs decorrelate in 11 steps at a fixed s
 The resume restores the state; the continuation is a repeat draw, not a replay. wandb
 resumed the killed draw's run id, so its history for 1501–1705 keeps the killed draw's
 rows and rejects the resumed ones as non-monotonic; the local `probe.jsonl` is the record.
+
+## Results, draw 3 (2026-09-04 18:45; `to-mnext-y2-iter-all-r`, resumed from 1500, 17:48–18:39; readouts 18:39–18:45; files in `results/2026-09-04-arc-a/`)
+
+Reached 4999 with the sustained tripwire silent (verdict AMBIGUOUS: thirteen isolated
+rows over 100, the largest 2510 at 4667, every one back at baseline the next step; zero
+spike steps). The every-iteration hinge was barely needed: the per-iteration mean gain
+sat at 0.796 (p10 0.786, p90 0.814), the max over iterations at a median of 0.842
+(p90 0.871, max 1.38), hinge active on 2.3 % of steps. Pace 67 steps/min.
+
+| reading | iter-all-r @5000 | Y2 @5000 (control) |
+|---|---|---|
+| forecast `mux_local` K1−K6 | +0.0087 [+0.0073, +0.0102] | +0.0135 [+0.0118, +0.0154] |
+| forecast K3−K6 | +0.0001 [−0.0003, +0.0006] | +0.0002 [−0.0004, +0.0008] |
+| forecast loss d1 / d3 / d4 / d8 | 6.7610 / 6.7524 / 6.7520 / 6.7532 | 6.7632 / 6.7499 / 6.7492 / 6.7514 |
+| token K1−K6 | +0.0004 | +0.0003 |
+| step-ratio profile t1..t7 (4500–4999 medians) | 0.73 0.55 0.44 0.37 0.33 0.32 0.31 | 0.82 0.60 0.54 0.51 0.49 0.48 0.47 |
+| last-four val CE | 4.3082 | 4.2809 |
+| plan worth offset 0, zero / shuffle | +0.066 / +0.040 | +0.074 / +0.034 |
+| AdaLN gates at 5000 | `to_mod` weights rms 0.0105 (zero-init), bias max 0.05, every core layer | — |
+
+Scored (P2a on the resumed run per Amendment 2):
+
+| prediction | credence | verdict |
+|---|---|---|
+| P2a reaches 5000 without a sustained trip | 65% | TRUE |
+| P2a' all-iterations max gain within 0.02 of 0.90 | 65% | FALSE (0.842; the map sat BELOW the hinge on its own) |
+| P2b the gates leave zero | 80% | TRUE on the weights (the 1 %-of-carrier clause was not measured) |
+| P2c THINKS (K3−K6 > 0.01, CI > 0) | 25% | FALSE (+0.0001); K1−K6 > 0.02: FALSE (+0.0087, below Y2) |
+| P2d ratio profile non-monotone | 35% | FALSE (monotone, and more contractive than Y2 at every t) |
+| P2e val within 0.02 of Y2 | 60% | FALSE (+0.027); below Y2: FALSE |
+
+## Verdict
+
+failure (P2c, P2d, P2e and P2a' falsified; the "P2b TRUE and P2c FALSE" branch of the
+Decision rule). The gates learn to tell the passes apart and the loop still has
+nothing to do with the fourth: held stable, the per-iteration operator earns LESS than
+the shared one (K1−K6 0.0087 vs 0.0135) at a val price of 0.027 and a 1.6x pace price.
+The +0.0077 K3−K6 read at draw 1's pre-onset 2500 checkpoint was the expansive
+iteration-0 map at work (fp32 gain 2.97 there), not depth earning: it vanished the moment
+every iteration was held under 0.90 (−0.0009 at 1500, +0.0001 at 5000).
+
+## Updated hypothesis
+
+Branch (a) of the arc is closed in both halves. Neither slowing the map's contraction
+(E1) nor breaking the weight-sharing symmetry (E2) makes a stable slot loop earn past
+iteration 3 on the forecast target; every earning this campaign has seen past
+iteration 3 came with an expansive map, and it left with it. The one remaining lever on
+the loop itself is the TARGET (E3, staged memory-then-forecast), and E0 says the target
+must be compute-limited in its whole loss, which the forecast is not. The every-iteration
+hinge and the sustained tripwire stay in the tree as the instruments for any future
+per-iteration arm.

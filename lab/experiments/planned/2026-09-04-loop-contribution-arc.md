@@ -122,7 +122,7 @@ Wolfe's call.
 |---|---|---|
 | E0 | where depth earns | FILED `failures/2026-09-04-arc-e0-where-depth-earns.md`: earning is FLAT over offsets and rows and smallest where the loss is largest (P0b, P0d false) |
 | E1-95 / E1-98 | gain dial | FILED `failures/2026-09-04-arc-e1-gain-target-dial.md`: the hinge is a stability dial, not an earning dial; stays at 0.90 |
-| E2 | `to-mnext-y2-iter` | draw 1 DETONATED 2556 (single-sample hinge blind); draw 2 `iter-all` held every iteration at 0.89 with zero spikes, killed by a single-step tripwire FALSE POSITIVE at 1684 (Amendment 2); RESUMED from 1500 as `iter-all-r` with the sustained rule, queued behind E0 |
+| E2 | iteration conditioning | FILED `failures/2026-09-04-arc-e2-iteration-conditioning.md`: held stable it earns LESS than Y2 (K1−K6 0.0087, K3−K6 +0.0001); the +0.0077 at 2500 was the expansive iteration. Branch (a) CLOSED. |
 | E3 | staged targets (`tul.mux_stage_own_iters`; configs `tul_to_mnext_y2_stage2/3`; prereg `arc-e3-staged-targets.md`) | code done, 823 tests pass; E3-2 queued behind E2 in the GPU window |
 | E4 | `to-mnext-y2-mask`, on the best arm of E1/E2/E3 (Y2 if none THINKS) | waits on E1/E2 |
 | E5 | 20k matched wall clock on any THINK arm | waits on E4 |
@@ -137,3 +137,16 @@ is the one lever that has moved earning, and its 5000-step reading needs the
 every-iteration hinge (E2 Amendment 1). So the window's remaining draw is the E2 rerun
 (`to-mnext-y2-iter-all`), and E3-2 moves to the next window. E3's prereg and predictions
 are untouched.
+
+### Method amendment 2 (2026-09-04 18:50; branch (a) closed, order for the next window)
+
+E1 (`failures/2026-09-04-arc-e1-gain-target-dial.md`) and E2
+(`failures/2026-09-04-arc-e2-iteration-conditioning.md`) are filed: neither the map's
+contraction rate nor the weight-sharing symmetry makes a STABLE slot loop earn past
+iteration 3; every earning past iteration 3 this campaign has seen came with an expansive
+map and left with it. E0 (`failures/2026-09-04-arc-e0-where-depth-earns.md`) says the
+loop's earning is a uniform refinement of the predictable part of the loss, never
+concentrated where the target is hard. The next window runs E3-2 (staged targets) then
+E4 (the mask on Y2), `arc/run_next_window.sh`, with the sustained tripwire
+(`lab/divergence/tripwire_sustained.py`) on both. Predictions untouched. If E3 does not
+THINK, the arc's closing rule applies as written.
