@@ -127,3 +127,14 @@ Wolfe's call.
 | E3 | staged targets (`tul.mux_stage_own_iters`; configs `tul_to_mnext_y2_stage2/3`; prereg `arc-e3-staged-targets.md`) | code done, 823 tests pass; E3-2 queued behind E2 in the GPU window |
 | E4 | `to-mnext-y2-mask`, on the best arm of E1/E2/E3 (Y2 if none THINKS) | waits on E1/E2 |
 | E5 | 20k matched wall clock on any THINK arm | waits on E4 |
+
+### Method amendment 1 (2026-09-04 17:08; order only, no prediction touched)
+
+E2's first draw detonated at 2556, but its pre-onset 2500 checkpoint is the first slot
+arm to move the bar: forecast `mux_local` K1−K6 +0.0726 [+0.0688, +0.0765] and K3−K6
++0.0077 [+0.0068, +0.0087] on 480 rows (Y2 at 5000: +0.0135 / +0.0002; g95: +0.0138 /
++0.0014). Token K1−K6 +0.0019 (every other slot arm ≤ 0.0006). The symmetry half of (a)
+is the one lever that has moved earning, and its 5000-step reading needs the
+every-iteration hinge (E2 Amendment 1). So the window's remaining draw is the E2 rerun
+(`to-mnext-y2-iter-all`), and E3-2 moves to the next window. E3's prereg and predictions
+are untouched.
