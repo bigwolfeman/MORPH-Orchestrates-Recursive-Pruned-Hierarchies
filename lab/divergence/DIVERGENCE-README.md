@@ -4,7 +4,7 @@
 knob.** Two campaigns have already burned weeks on this. Almost every idea you are about to
 have is in one of the two indexes below with a number next to it.
 
-Last updated 2026-09-04 10:00 (section D: the clip-through-time result and the phase-2 arms).
+Last updated 2026-09-04 12:20 (section D: the forward levers hold; the loop is stable and empty).
 
 ## Triage in 60 seconds
 
@@ -15,7 +15,7 @@ Open the run's `probe.jsonl` (written by `training.grad_probe_every=1`, key
 |---|---|---|
 | Did `preclip/total` exceed **1e4** at any step ≥ 200? | **Paid-axis detonation.** Section A. The run is dead; the loss may look fine for another 1500 steps. | keep reading |
 | Is val CE at a MINIMUM and then RISING by nats, on a slot-loop TUL arm (A1/A3, ≤64 looped positions)? | **Core takeover.** [takeover-campaign.md](takeover-campaign.md), 15 hypotheses, 11 refuted. Do not re-derive them. | keep reading |
-| Is the run a slot-loop arm with a FORECAST loss (MUX-next, cond4, coda8), under the 1000-step ramp, and does `preclip/total` show single-step spikes that snap back and escalate once the ramp ends? | **Forecast spike train.** Section D. Ternary off removes it; the loop's typical gain has drifted to 1. | keep reading |
+| Is the run a slot loop at full BPTT (any target: MUX-next, cond4, coda8, A1 at `bptt_depth` 8), under the 1000-step ramp, and does `preclip/total` show single-step spikes that snap back and escalate once the ramp ends? | **The full-BPTT spike train.** Section D. The loop's typical gain has drifted to 1; `model.slot_state_renorm` or `model.slot_gain_lambda` holds it; a backward clip alone does not. | keep reading |
 | Is val CE flat near 7.3 from the first eval? | The codebook is pinned (a frozen ternary γ, or an equivalent). Section C. | New. Write a prereg before you run anything. |
 
 The step-0 spike (`preclip/total` ~3.6e4 at step 0) is init and is NORMAL. Every verdict
@@ -230,9 +230,18 @@ says so rather than patching the rule):
 2. Keep the loop's typical gain away from 1 on the MAP, not by a weight-spectrum cap
    (section A's four failed caps bound a factor of one block; the map's gain is a product
    of six blocks whose per-block gains never left 1.00–1.02 while the map's worst gain
-   went 3 → 500). Two arms in flight 2026-09-04: a per-slot state renorm between
-   iterations (`model.slot_state_renorm`) and a hinge penalty on the map's typical gain
-   measured by a finite difference every step (`model.slot_gain_lambda`).
+   went 3 → 500). **MEASURED 2026-09-04, both hold**
+   (`lab/experiments/successes/2026-09-04-tul-forward-levers.md`): a per-slot state
+   renorm between iterations (`model.slot_state_renorm`) and a hinge penalty on the map's
+   typical gain measured by a 2 % finite difference every step (`model.slot_gain_lambda`,
+   target 0.9) each take M-next to 5000 steps with the tripwire silent and ZERO spike
+   steps, on the recipe that killed every unregularised forecast draw and the clip-alone
+   draw. The penalty pins the fp32-measured typical gain at 0.887–0.897 for the whole run
+   (the unregularised map drifts 0.885 → 1.000 in 1200 steps); the renorm's raw map
+   drifts to 0.95 and plateaus. Cost: renorm none; penalty 1.05x wall clock. Neither is
+   on in `base.yaml` (a shipped-design decision, Wolfe's). What the levers do NOT do:
+   make the loop earn — both stable arms read forecast K1−K6 0.013 and K3−K6 0.000, and
+   sit 0.18 nats behind the coreless floor at 5000 steps.
 3. Code-assignment hysteresis stays a candidate for section A's face only; it has no
    evidence on this one.
 

@@ -80,6 +80,17 @@ regime. Candidates (a) and a finite-difference typical-gain penalty (a trainable
 of "hold the rate below 1 on the map") are built (`34d94a0`) and pre-registered
 (`lab/experiments/planned/2026-09-04-tul-forward-levers.md`).
 
+### Status 2026-09-04 12:20
+
+Both forward levers measured (`lab/experiments/successes/2026-09-04-tul-forward-levers.md`):
+M-next survives 5000 steps under either, with zero spike steps. The gain penalty holds the
+fp32-measured typical gain at 0.887–0.897 for the whole run — the first acceptance
+criterion is MET (below 0.95 throughout). The second is NOT: the stable loops' step ratio
+falls with the iteration index (0.3–0.5, refinement-shaped) but forecast K3−K6 is 0.000
+and the coda reads nothing. The third (log the gain on every looped run in `base.yaml`)
+is open. Decision left to Wolfe: which lever ships, and whether the next arm is the
+deep slot stack or the "what is a deeper draw for" question.
+
 ## Alternatives considered
 
 - **Keep clamping the symptom** (`core_gain_clip`, spectral caps): refuted four times on
