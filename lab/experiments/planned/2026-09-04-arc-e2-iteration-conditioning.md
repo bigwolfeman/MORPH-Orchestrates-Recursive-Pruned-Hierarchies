@@ -102,3 +102,14 @@ credence (**60%**) with the added prediction **P2a'**: the all-iterations `gain_
 median over 1000–5000 sits within 0.02 of the target 0.90 (the hinge now binds the
 expansive iteration): **65%**. Cost: about 2x the penalty's extra core steps
 (Y2's penalty cost 5 % wall clock; expected ≤ 1.15x Y2).
+
+### Method note, 2026-09-04 17:14 (rerun launched; Predictions untouched)
+
+12-step compiled smoke of `tul_to_mnext_y2_iter_all` at worktree 2f2ca98: exit 0, 31 s,
+no NaN, step-12 loss 22.2869 (the same print as every Y2 arm), probe row carries
+`loss/gain_est` 0.876 and `loss/gain_est_max` 0.889 (the max now ranges over every grad
+iteration; the two differ, so more than one iteration is measured). `gain_n_iters` is
+in the forward's output but NOT in the local probe row (train.py's probe row lists its
+keys by name; added for later runs, this draw does without it). Draw
+`to-mnext-y2-iter-all` started 17:13:35 by `arc/run_arc_a3.sh`; tripwire on; readout
+and the E0 sweep follow in the same window.

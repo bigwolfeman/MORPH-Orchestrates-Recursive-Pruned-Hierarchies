@@ -2828,7 +2828,7 @@ def main(cfg: DictConfig) -> None:
                 # whether the forward on that batch was itself abnormal (a forward
                 # explosion moves the loss; a backward-only blow-up does not).
                 _probe_log["loss/total"] = float(loss.detach())
-                for _lk in ("ce_main", "mux_local", "gain_est", "gain_est_max", "gain_reg_weighted"):
+                for _lk in ("ce_main", "mux_local", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters"):
                     if _lk in out and out[_lk] is not None:
                         _probe_log[f"loss/{_lk}"] = float(out[_lk].detach())
                 wandb.log(_probe_log, step=step)
@@ -3052,7 +3052,7 @@ def main(cfg: DictConfig) -> None:
                     log["tul/layer_passes_per_token"] = float(out["layer_passes"]) / max(_npos, 1.0)
                     log["tul/tokens_per_batch"] = _npos
                 for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual", "mux_local",
-                           "gain_est", "gain_est_max", "gain_reg_weighted",
+                           "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters",
                            "sigreg"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
