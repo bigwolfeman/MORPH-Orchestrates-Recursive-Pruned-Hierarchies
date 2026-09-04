@@ -1089,20 +1089,29 @@ class MORPHTransformer(nn.Module):
                 "model.scse_enabled with n_core=0: there is no core loop to reparameterise.")
         if cfg.slot_cot_clip < 0.0:
             raise ValueError(f"model.slot_cot_clip must be >= 0 (0 = off), got {cfg.slot_cot_clip}")
-        if cfg.slot_cot_clip > 0.0 and (cfg.tul is None or cfg.n_core == 0):
-            raise ValueError(
-                f"model.slot_cot_clip={cfg.slot_cot_clip} needs a slot loop to clip (a TUL "
-                "model with n_core > 0); the token loop carries no clip-through-time.")
-        if cfg.slot_state_renorm and (cfg.tul is None or cfg.n_core == 0):
-            raise ValueError("model.slot_state_renorm needs a slot loop (a TUL model with n_core > 0)")
+        # The slot-loop levers (slot_cot_clip, slot_state_renorm, slot_gain_lambda) act inside
+        # `_tul_core` and nowhere else. base.yaml carries the measured constraint ON for every
+        # slot-loop model, so a model WITHOUT a slot loop (no TUL, or the paid loop's
+        # tokens_through_core, or the FM planner) must build; it says so once, loudly, instead
+        # of pretending the knob did something (lab/divergence/BREAK-GLASS-IN-CASE-OF-
+        # DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md). A TUL model with n_core == 0 asked for
+        # a lever on a loop it does not have: that is a contradiction and raises.
+        _levers = {k: getattr(cfg, k) for k in ("slot_cot_clip", "slot_state_renorm", "slot_gain_lambda")
+                   if getattr(cfg, k)}
+        _why = ("no TUL block" if cfg.tul is None else
+                "n_core=0 (a coreless TUL model has no loop)" if cfg.n_core == 0 else
+                "tokens_through_core (the paid loop runs _core_region, not _tul_core)"
+                if cfg.tul.tokens_through_core else
+                "an FM planner replaces the slot loop" if cfg.fm is not None else None)
+        if _levers and _why is not None:
+            print(f"  [slot-levers] {_levers} INERT on this model: {_why}. They act only inside "
+                  "the slot loop (_tul_core).", flush=True)
         if cfg.slot_state_renorm and cfg.scse_enabled:
             raise NotImplementedError(
                 "model.slot_state_renorm under SCSE is not defined: the carrier is the DEVIATION "
                 "and pinning its norm pins the wrong quantity (the db_loop precedent).")
         if cfg.slot_gain_lambda < 0.0 or cfg.slot_gain_eps <= 0.0:
             raise ValueError("model.slot_gain_lambda must be >= 0 and slot_gain_eps > 0")
-        if cfg.slot_gain_lambda > 0.0 and (cfg.tul is None or cfg.n_core == 0):
-            raise ValueError("model.slot_gain_lambda needs a slot loop (a TUL model with n_core > 0)")
         if cfg.slot_gain_lambda > 0.0 and cfg.scse_enabled:
             raise NotImplementedError("model.slot_gain_lambda under SCSE is not defined (deviation carrier)")
         self.scse: _SCSE | None = (

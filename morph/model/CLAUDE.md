@@ -19,6 +19,17 @@ not by reading the diff.
 
 ## Things that look like bugs and are not
 
+- **`[slot-levers] {...} INERT on this model`** at build: `base.yaml` turns the slot-loop gain
+  constraint on for every model (`slot_gain_lambda`, `slot_cot_clip`), and it acts only inside
+  `_tul_core`. A plain model, a coreless TUL arm, the paid loop (`tokens_through_core`) and the
+  FM planner have no slot loop, so the knobs do nothing there and the model says so once.
+  `lab/divergence/BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md`.
+- **Two extra `_core_step` calls at one iteration per training step** in `_tul_core`
+  (`_slot_gain_penalty`): the finite-difference gain reading, at the detached operating point,
+  with the global RNG saved and restored around them. Not a duplicated forward; the loss and
+  every later random draw are bit-identical to a run with the penalty off
+  (`tests/test_slot_gain_reg.py`).
+
 * `RMSNorm` returns **fp32** even under autocast: its final `* self.weight` promotes.
   Anything that scatters into or concatenates with a normed carrier must cast at the
   boundary — that is why `scatter_positions` does `values.to(pad.dtype)`.

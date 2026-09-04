@@ -128,8 +128,27 @@ def test_renorm_pins_real_slots_to_their_entry_norm_and_pads_to_zero():
     assert torch.all(exit_n[~valid] == 0.0)
 
 
-def test_knobs_refused_without_a_slot_loop():
-    with pytest.raises(ValueError, match="needs a slot loop"):
-        _model(slot_state_renorm=True, n_core=0)
-    with pytest.raises(ValueError, match="needs a slot loop"):
-        _model(slot_gain_lambda=1.0, n_core=0)
+def test_knobs_are_inert_with_a_notice_where_there_is_no_slot_loop(capsys):
+    # A coreless TUL model (the GL1 arm and its control) builds with base.yaml's constraint
+    # on, and says once that the levers are inert there.
+    capsys.readouterr()
+    _model(slot_state_renorm=True, slot_gain_lambda=1.0, n_core=0)
+    out = capsys.readouterr().out
+    assert "[slot-levers]" in out and "INERT" in out and "n_core=0" in out, out
+    # base.yaml carries the constraint ON; a plain model (no TUL block at all) must build,
+    # carry no slot loop, and say so once.
+    from morph.model.transformer import MORPHConfig
+    from test_tul_gl1 import V
+    torch.manual_seed(0)
+    plain = MORPHConfig(
+        d_model=64, n_heads=2, n_kv_heads=2, vocab_size=V, max_seq_len=256, context_len=256,
+        n_prelude=2, n_core=2, n_coda=2, mean_depth=2, max_depth=2, bptt_depth=1,
+        channel_dims=(32, 20, 12), compression=2, csa_compress_ratio=4, hca_compress_ratio=8,
+        top_k=8, window_size=8, bigram_hash_vocab=V, use_kernels=False, hc_use_kernel=False,
+        dropout=0.0, retention=False, slot_gain_lambda=100.0, slot_cot_clip=4.0)
+    assert plain.tul is None
+    capsys.readouterr()
+    m = MORPHTransformer(plain)
+    out = capsys.readouterr().out
+    assert "[slot-levers]" in out and "INERT" in out and "no TUL block" in out, out
+    assert m.tul is None

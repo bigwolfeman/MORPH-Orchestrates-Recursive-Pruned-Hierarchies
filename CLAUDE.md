@@ -24,6 +24,11 @@ exists under `morph/jax/` but lags the PyTorch path (see gotcha below).
 
 ## 🚨 STRANGE DIVERGENCE? READ [lab/divergence/DIVERGENCE-README.md](lab/divergence/DIVERGENCE-README.md) FIRST
 
+**Slot-loop spike train after the ramp (2026-09-04): the gain constraint is ON in `base.yaml`
+(`model.slot_gain_lambda` 100 @ 0.9, `slot_cot_clip` 4.0). Break glass:
+[lab/divergence/BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md](lab/divergence/BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md).
+It acts only inside `_tul_core`; a model without a slot loop prints `[slot-levers] ... INERT`.**
+
 Two campaigns (2026-08 slot-loop takeover, 2026-09 paid-axis detonation) already refuted
 spectral caps, `core_gain_clip`, ternary-γ EMA and freeze, GLA-as-stabilizer, and dense
 warmup. The README has the 60-second triage, the measured abort rule (`preclip/total >

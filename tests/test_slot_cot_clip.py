@@ -85,8 +85,10 @@ def test_binding_cap_bounds_every_row_and_leaves_the_loss_and_exit_alone():
     assert float(m_c._loop_cot[ts[0]]) < float(m_r._loop_cot[ts[0]])
 
 
-def test_knob_refused_without_a_slot_loop():
-    with pytest.raises(ValueError, match="needs a slot loop"):
-        _model(slot_cot_clip=2.0, n_core=0)
+def test_knob_is_inert_with_a_notice_without_a_slot_loop(capsys):
+    capsys.readouterr()
+    _model(slot_cot_clip=2.0, n_core=0)
+    out = capsys.readouterr().out
+    assert "[slot-levers]" in out and "INERT" in out, out
     with pytest.raises(ValueError, match=">= 0"):
         _model(slot_cot_clip=-1.0)

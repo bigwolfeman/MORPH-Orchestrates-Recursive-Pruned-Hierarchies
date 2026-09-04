@@ -6,6 +6,10 @@ have is in one of the two indexes below with a number next to it.
 
 Last updated 2026-09-04 12:20 (section D: the forward levers hold; the loop is stable and empty).
 
+**Slot-loop run spiking after the ramp? Break glass:
+[BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md](BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md)
+— the constraint is on in `base.yaml` since 2026-09-04; that file says how to read it.**
+
 ## Triage in 60 seconds
 
 Open the run's `probe.jsonl` (written by `training.grad_probe_every=1`, key
