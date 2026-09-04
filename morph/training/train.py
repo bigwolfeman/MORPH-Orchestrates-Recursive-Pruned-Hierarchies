@@ -437,6 +437,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_lambda=float(getattr(m, "slot_gain_lambda", 0.0)),
         slot_gain_target=float(getattr(m, "slot_gain_target", 0.9)),
         slot_gain_eps=float(getattr(m, "slot_gain_eps", 0.02)),
+        slot_gain_all_iters=bool(getattr(m, "slot_gain_all_iters", False)),
         dropout=float(tr.dropout),
     )
 

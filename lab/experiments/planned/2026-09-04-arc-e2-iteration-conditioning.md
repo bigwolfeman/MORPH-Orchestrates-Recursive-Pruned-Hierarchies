@@ -70,3 +70,35 @@ exit 0, 27 s, no NaN, `loss/gain_est` 0.8751 and `gain_est_max` 0.8769 present a
 real shape, the pre-launch check this file asked for). Step-12 loss 22.2869, the same
 print as Y2's dial arms, so the zero-init gates have not moved the loss by step 12.
 Queued third in `morph-scratch/arc/run_arc_a.sh`, after E1's two arms.
+
+## Results, draw 1 (2026-09-04 17:00; `to-mnext-y2-iter`, 16:35–17:00, `arc/queue.log`)
+
+DETONATED at step 2556 (`preclip/total` 1.17e5 at 2557; tripwire kill). **P2a FALSE.**
+Val CE at 2500: 4.7751 (Y2 at 2500 was 4.62; not matched-eval). The probe file says why,
+and it is the P2a-FALSE mechanism this file named:
+
+| window | `preclip/total` | `gain_est` median | `gain_est_max` | hinge active | spike steps |
+|---|---|---|---|---|---|
+| 1500–1999 | 2.9 | 0.766 | 0.778 | 2.4 % | (132 after 1000 in all, from 1070) |
+| 2000–2299 | 7.3 | 0.762 | 0.801 | 14.0 % | |
+| 2300–2529 | 5.4–7.0 | 0.535 | 0.56 | 0.0 % | |
+| 2530–2557 | 36.7 | 0.608 | 0.703 | 14.3 % | |
+
+The single random-iteration sample read a typical gain of 0.53–0.61 for the last 250
+steps (Y2: 0.894) while the run spiked from step 1070 and detonated: with a
+per-iteration operator the sampled iteration is not the expansive one. The hinge bound
+nothing (median penalty 0.000, active on 5 % of steps). P2b–P2e are not scored on a
+detonated draw (no 5000-step checkpoint; the 2500 checkpoint's sweep is on disk for the
+record only).
+
+### Amendment 1 (2026-09-04 17:10; the P2a-FALSE rule of the Decision rule above)
+
+The penalty is amended to hinge EVERY grad iteration (`model.slot_gain_all_iters`,
+commit after this note; the per-iteration hinges SUM, `gain_est` / `gain_est_max` report
+the mean / max over iterations; `tests/test_slot_gain_reg.py`, 3 new tests). The rerun
+arm is `to-mnext-y2-iter-all` (`tul_to_mnext_y2_iter_all`). Predictions P2b–P2e stand
+as written and are scored on the rerun; P2a is re-stated for the rerun at the same
+credence (**60%**) with the added prediction **P2a'**: the all-iterations `gain_est_max`
+median over 1000–5000 sits within 0.02 of the target 0.90 (the hinge now binds the
+expansive iteration): **65%**. Cost: about 2x the penalty's extra core steps
+(Y2's penalty cost 5 % wall clock; expected ≤ 1.15x Y2).

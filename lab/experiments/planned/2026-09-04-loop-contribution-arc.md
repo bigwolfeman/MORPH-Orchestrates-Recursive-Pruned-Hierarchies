@@ -123,7 +123,7 @@ Wolfe's call.
 | E0 | where depth earns (eval only; `--profile` on both depth sweeps, `score_arc_e0.py`) | code done, queued behind arc-a2 (`arc/run_e0.sh`) |
 | E1-95 | `to-mnext-y2-g95` | DRAWN 2026-09-04 (healthy 4999; sweep + worth on disk; not a THINK: K3−K6 +0.0014) |
 | E1-98 | `to-mnext-y2-g98` | DRAWN (reached 4999, AMBIGUOUS 1e3 excursion, 121 spike steps; not a THINK: K3−K6 +0.0005) |
-| E2 | `to-mnext-y2-iter` | drawing (started 16:35, `arc/run_arc_a2.sh`) |
+| E2 | `to-mnext-y2-iter` | DETONATED 2556 (P2a FALSE, single-sample hinge blind to the expansive iteration); rerun `to-mnext-y2-iter-all` with `slot_gain_all_iters` queued for the next window (Amendment 1) |
 | E3 | staged targets (`tul.mux_stage_own_iters`; configs `tul_to_mnext_y2_stage2/3`; prereg `arc-e3-staged-targets.md`) | code done, 823 tests pass; E3-2 queued behind E2 in the GPU window |
 | E4 | `to-mnext-y2-mask`, on the best arm of E1/E2/E3 (Y2 if none THINKS) | waits on E1/E2 |
 | E5 | 20k matched wall clock on any THINK arm | waits on E4 |

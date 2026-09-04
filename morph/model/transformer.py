@@ -370,6 +370,13 @@ class MORPHConfig:
     slot_gain_lambda: float = 0.0
     slot_gain_target: float = 0.9
     slot_gain_eps: float = 0.02
+    # slot_gain_all_iters: regularise EVERY grad iteration of the slot loop instead of one
+    # random one per step (2·n_grad_iters extra core steps on the compact slot sequence).
+    # Needed when the map differs per iteration (tul.core_stage_cond="iter"): one random
+    # sample read 0.53–0.61 while another iteration's map went expansive and the arm
+    # detonated (arc E2, 2026-09-04). The penalty is the SUM of the per-iteration hinges;
+    # gain / gain_max are the mean / max over the iterations.
+    slot_gain_all_iters: bool = False
 
     @property
     def retention_carry_mode(self) -> str:
@@ -2354,10 +2361,12 @@ class MORPHTransformer(nn.Module):
         # The regularised iteration: one grad iteration per step, drawn from the global
         # stream and the stream put back, so the draw is free of side effects on the run.
         _t_gain = -1
-        if _gain_on and n_grad_iters > 0:
+        _gain_all = bool(self.cfg.slot_gain_all_iters)
+        if _gain_on and n_grad_iters > 0 and not _gain_all:
             _rs = torch.get_rng_state()
             _t_gain = n_nograd + int(torch.randint(n_grad_iters, (1,)).item())
             torch.set_rng_state(_rs)
+        _gain_terms: list[dict] = []
         _ck = self.cfg.ckpt_grad_iters
         n_ckpt = n_grad_iters if _ck < 0 else max(0, min(_ck, n_grad_iters))
 
@@ -2481,10 +2490,10 @@ class MORPHTransformer(nn.Module):
                 h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
                                            iter_idx=t, stage_cond=_sc)
 
-            if t == _t_gain:
-                _gain_reg = self._slot_gain_penalty(
+            if t == _t_gain or (_gain_on and _gain_all and t >= n_nograd):
+                _gain_terms.append(self._slot_gain_penalty(
                     _core_step, _h_in, _e_arg, _inj_arg, ret_state, t, _sc,
-                    active & layout.slot_valid, _gain_lambda)
+                    active & layout.slot_valid, _gain_lambda))
             if _renorm:
                 # Direction preserved, per-slot norm pinned to the entry norm. Runs on the
                 # raw step output, BEFORE the gain governor and the recurrence gate, so it is
@@ -2625,6 +2634,15 @@ class MORPHTransformer(nn.Module):
             # Eq. 5 tail: h_T = h* + Delta_T (invariant S6). The deviation lives ONLY inside
             # this function; `_forward_tul` scatters an absolute carrier exactly as today.
             h = h_star + h
+        if _gain_terms:
+            # One sampled iteration: its dict as before. Every iteration: the hinges SUM
+            # (each iteration's map is held under the target), the gains report mean / max.
+            _gain_reg = {
+                "gain": torch.stack([g["gain"] for g in _gain_terms]).mean(),
+                "gain_max": torch.stack([g["gain_max"] for g in _gain_terms]).max(),
+                "penalty": torch.stack([g["penalty"] for g in _gain_terms]).sum(),
+                "n_iters": float(len(_gain_terms)),
+            }
         return xn, h, depths, g_traj, _db_traj, _gain_reg
 
     def _slot_gain_penalty(self, core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond,
@@ -3439,6 +3457,8 @@ class MORPHTransformer(nn.Module):
             groups = dict(groups)
             groups["gain_est"] = gain_reg["gain"]
             groups["gain_est_max"] = gain_reg["gain_max"]
+            if "n_iters" in gain_reg:
+                groups["gain_n_iters"] = gain_reg["gain"].new_tensor(gain_reg["n_iters"])
             groups["gain_reg_weighted"] = gain_reg["penalty"].detach()
             groups["loss"] = groups["loss"] + gain_reg["penalty"]
 

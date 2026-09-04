@@ -1,0 +1,12 @@
+# ARC E2, rerun under the prereg's P2a-FALSE rule: iteration conditioning with the gain
+# hinge sampled at EVERY grad iteration (model.slot_gain_all_iters). The first draw
+# (to-mnext-y2-iter) detonated at 2556 with the single-sample hinge reading 0.53-0.61 on
+# 95 % of steps while another iteration's map went expansive.
+# Prereg: lab/experiments/planned/2026-09-04-arc-e2-iteration-conditioning.md (Amendment 1)
+defaults:
+  - tul_to_mnext_y2_iter
+  - _self_
+model:
+  slot_gain_all_iters: true
+wandb:
+  name: to-mnext-y2-iter-all

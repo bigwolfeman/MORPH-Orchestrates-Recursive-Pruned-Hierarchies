@@ -152,3 +152,32 @@ def test_knobs_are_inert_with_a_notice_where_there_is_no_slot_loop(capsys):
     out = capsys.readouterr().out
     assert "[slot-levers]" in out and "INERT" in out and "no TUL block" in out, out
     assert m.tul is None
+
+
+# ── slot_gain_all_iters: the hinge at EVERY grad iteration (arc E2's rerun rule) ─────────
+
+def test_all_iters_hinge_covers_every_grad_iteration_and_stays_rng_neutral():
+    out_a, _, rng_a = _run(_model(seed=3, slot_gain_lambda=1.0, slot_gain_target=0.0,
+                                  slot_gain_all_iters=True))
+    _, _, rng_0 = _run(_model(seed=3, slot_gain_lambda=0.0))
+    assert float(out_a["gain_n_iters"]) == MAX_DEPTH          # bptt_depth == max_depth here
+    assert torch.equal(rng_a, rng_0), "the every-iteration hinge moved the global RNG stream"
+    assert float(out_a["gain_est_max"]) >= float(out_a["gain_est"])
+
+
+def test_all_iters_unbinding_hinge_adds_exactly_zero():
+    out_p, g_p, _ = _run(_model(seed=3, slot_gain_lambda=1.0, slot_gain_target=1e6,
+                                slot_gain_all_iters=True))
+    out_0, g_0, _ = _run(_model(seed=3, slot_gain_lambda=0.0))
+    assert float(out_p["gain_reg_weighted"]) == 0.0
+    assert torch.equal(out_p["loss"], out_0["loss"]) and _same(g_p, g_0)
+
+
+def test_all_iters_penalty_is_at_least_the_single_sample_penalty_in_expectation():
+    """Every iteration's hinge sums, so with the target at 0 the sum over T iterations is
+    at least any one iteration's term: the all-iters penalty is never below the
+    single-sample penalty of the SAME model at the same RNG seed."""
+    single = _run(_model(seed=3, slot_gain_lambda=1.0, slot_gain_target=0.0))[0]
+    every = _run(_model(seed=3, slot_gain_lambda=1.0, slot_gain_target=0.0,
+                        slot_gain_all_iters=True))[0]
+    assert float(every["gain_reg_weighted"]) >= float(single["gain_reg_weighted"]) * 0.999

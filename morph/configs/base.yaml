@@ -111,6 +111,11 @@ model:
   slot_gain_lambda: 100.0
   slot_gain_target: 0.9
   slot_gain_eps: 0.02
+  # slot_gain_all_iters: hinge EVERY grad iteration (sum of hinges) instead of one random
+  #   one. Required with tul.core_stage_cond=iter, where the map differs per iteration and
+  #   one sample missed the expansive one (arc E2 detonated at 2556). ~2x the penalty's
+  #   extra core steps. false = the measured single-sample constraint.
+  slot_gain_all_iters: false
   slot_cot_clip: 4.0
   slot_state_renorm: false
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth
