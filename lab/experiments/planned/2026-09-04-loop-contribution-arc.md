@@ -115,3 +115,15 @@ at matched wall clock (queue-log epochs), on 480 rows.
 E0 ~15 min eval; E1 92 min; E2 46 min; E3 ~100 min after ~1 day of code; E4 ~50 min;
 E5 ~4 h. About 9.5 GPU-hours end to end, one trainer at a time, none launched without
 Wolfe's call.
+
+## Progress (the task list; status only, predictions untouched)
+
+| # | item | status |
+|---|---|---|
+| E0 | where depth earns (eval only; sweep flags `--per-row`, `--per-offset` first) | not started |
+| E1-95 | `to-mnext-y2-g95` | queued 2026-09-04 (runner `morph-scratch/arc/run_arc_a.sh`, tree `/home/wolfe/morph-to` detached at 19c5dc3) |
+| E1-98 | `to-mnext-y2-g98` | queued (same runner) |
+| E2 | `to-mnext-y2-iter` | queued (same runner) |
+| E3 | staged targets (code: intermediate slot states, per-iteration `mux_local`, sweep columns), then its prereg | not started |
+| E4 | `to-mnext-y2-mask`, on the best arm of E1/E2/E3 (Y2 if none THINKS) | waits on E1/E2 |
+| E5 | 20k matched wall clock on any THINK arm | waits on E4 |
