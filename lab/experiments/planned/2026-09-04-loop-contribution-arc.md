@@ -122,7 +122,7 @@ Wolfe's call.
 |---|---|---|
 | E0 | where depth earns (eval only; `--profile` on both depth sweeps, `score_arc_e0.py`) | code done, queued behind arc-a2 (`arc/run_e0.sh`) |
 | E1-95 / E1-98 | gain dial | FILED `failures/2026-09-04-arc-e1-gain-target-dial.md`: the hinge is a stability dial, not an earning dial; stays at 0.90 |
-| E2 | `to-mnext-y2-iter` | DETONATED 2556 (P2a FALSE, single-sample hinge blind to the expansive iteration); rerun `to-mnext-y2-iter-all` with `slot_gain_all_iters` queued for the next window (Amendment 1) |
+| E2 | `to-mnext-y2-iter` | draw 1 DETONATED 2556 (single-sample hinge blind); draw 2 `iter-all` held every iteration at 0.89 with zero spikes, killed by a single-step tripwire FALSE POSITIVE at 1684 (Amendment 2); RESUMED from 1500 as `iter-all-r` with the sustained rule, queued behind E0 |
 | E3 | staged targets (`tul.mux_stage_own_iters`; configs `tul_to_mnext_y2_stage2/3`; prereg `arc-e3-staged-targets.md`) | code done, 823 tests pass; E3-2 queued behind E2 in the GPU window |
 | E4 | `to-mnext-y2-mask`, on the best arm of E1/E2/E3 (Y2 if none THINKS) | waits on E1/E2 |
 | E5 | 20k matched wall clock on any THINK arm | waits on E4 |

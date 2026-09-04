@@ -113,3 +113,39 @@ in the forward's output but NOT in the local probe row (train.py's probe row lis
 keys by name; added for later runs, this draw does without it). Draw
 `to-mnext-y2-iter-all` started 17:13:35 by `arc/run_arc_a3.sh`; tripwire on; readout
 and the E0 sweep follow in the same window.
+
+## Results, draw 2 (2026-09-04 17:40; `to-mnext-y2-iter-all`, 17:13–17:38, worktree 2f2ca98)
+
+The tripwire killed it at 1684 (`preclip/total` 17034). It was NOT a detonation. The
+every-iteration hinge did what Amendment 1 asked: `gain_est_max` (max over the eight
+iterations) median 0.887–0.897 from 200 to 1690, hinge active 2–10 % of steps, ZERO
+spike steps (`loop/cot_ratio` > 30) against the first draw's 132 — the spike train is
+gone. The kill was a single-step outlier: 1682 core 6.9 (gain max 0.94), 1683 1.1, 1684
+core 17031 with the max gain 1.80 on that one step (penalty 13.5), then 1.3, 1.6, 1.8,
+1.4, 1.8, 1.1, 0.3 — back at the 2.6 baseline by 1691, one blip of 31 at 1692 (gain 1.01),
+and calm 2.4–3.1 through 1720 where the poll killed it. Val CE 5.29 / 5.12 / 5.12 at
+1000 / 1250 / 1500 (Y2: 5.19 / 4.77 / 4.77 at 2000–2500 — different steps, no reading).
+Pace 67 steps/min (0.61x Y2; the hinge at eight iterations).
+
+Scored: **P2a FALSE by the letter** (killed) and **P2a' TRUE** (the all-iterations max
+gain sat within 0.02 of 0.90). P2b–P2e unmeasured (no 5000 checkpoint; the 1500
+checkpoint's sweep is on disk for the record).
+
+### Amendment 2 (2026-09-04 17:45; Method only, Predictions untouched)
+
+The single-step trip rule (`preclip/total` > 1e4 at step ≥ 200) was validated on
+unconstrained runs (17/17 detonations, 0/44 false positives). Under the every-iteration
+hinge a one-step outlier snaps back within seven steps, so that rule produced its first
+false positive. The constrained arms use a SUSTAINED rule from here
+(`lab/divergence/tripwire_sustained.py`): DETONATED iff any row > 1e5, or two rows > 1e4
+within 40 steps; one recovered row > 1e4 is an EXCURSION, not a trip. Calibrated on
+the real detonation (81617 at 2556 and 116930 at 2557: trips at 2557) and on this draw
+(EXCURSION, no trip); every other arc-a probe file keeps its verdict.
+
+The rerun is RESUMED from `to-mnext-y2-iter-all/step_1500.pt` as `to-mnext-y2-iter-all-r`
+(`training.resume`, the full resume: model, step, RNG, scaler, optimizer state), queued
+behind E0 in `arc/run_e2_resume.sh`. P2a is re-stated for the resumed run: reaches 5000
+without a SUSTAINED trip: **65%**. Unverified: that the resume continues the loss trace
+bit for bit (the 40k-continuation prereg named this check and it was never run; the
+resumed run's first 50 steps against wandb's history for 1501–1550 of the killed draw
+is the check, recorded in Results).
