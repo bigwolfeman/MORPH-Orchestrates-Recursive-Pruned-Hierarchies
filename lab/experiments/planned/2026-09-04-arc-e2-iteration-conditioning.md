@@ -149,3 +149,14 @@ without a SUSTAINED trip: **65%**. Unverified: that the resume continues the los
 bit for bit (the 40k-continuation prereg named this check and it was never run; the
 resumed run's first 50 steps against wandb's history for 1501–1550 of the killed draw
 is the check, recorded in Results).
+
+### Method note, 2026-09-04 17:52 (the resume check named in Amendment 2)
+
+`to-mnext-y2-iter-all-r` resumed from step_1500 ("Resumed model+scaler+RNG from
+checkpoint step 1500; next_step=1501", optimizer rebuild not needed). Its first probe row
+(1501) equals the killed draw's bit for bit (`preclip/total` 3.4626, `gain_est` 0.81905 on
+both); from 1502 the two drift apart at the 1e-3 relative level and decorrelate over
+the next tens of steps (`memory: MORPH runs decorrelate in 11 steps at a fixed seed`).
+The resume restores the state; the continuation is a repeat draw, not a replay. wandb
+resumed the killed draw's run id, so its history for 1501–1705 keeps the killed draw's
+rows and rejects the resumed ones as non-monotonic; the local `probe.jsonl` is the record.
