@@ -31,6 +31,19 @@ No existing implemented decision is fully superseded by this unbuilt proposal.
 
 ### Current authorization, 2026-09-05
 
+The latest user correction replaces the slot-only architecture below. The
+[corrected serial TUL proposal](/home/wolfe/parcae/.agents/notes/proposed/architecture/2026-09-05-serial-tul.md)
+owns the design and preparation contract. The old panel is a compressed-slot,
+full-token-coda control. It does not test the intended fixed-thought span decoder.
+Its measured outcomes remain valid for that control, not as a rejection of TUL.
+
+The user authorizes setup and bounded smoke tests only. Do not start or queue
+the new full runs. Earlier launch permissions below describe the completed queue
+and do not authorize this replacement. Migration and MORPH depth selection remain
+unapproved until the corrected mechanism has useful measured results.
+
+### Completed queue authorization, superseded for new work
+
 Wolfe replaces the initial mean8/S1/C panel below with a mean16 panel at BPTT4
 and BPTT8. Do not retrain P8 or train separate K1 controls. The recovered
 `/home/wolfe/morph-to` panel supplies the post-loop four-slot-block conditioner
