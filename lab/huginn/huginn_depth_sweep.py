@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import uuid
 
 import hydra
 import numpy as np
@@ -152,7 +153,7 @@ def execute(cfg):
                        "source_hashes": source_hashes,
                        "remote_code_hash": digest(source / "raven_modeling_minimal.py"),
                        "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()}
-    wandb_id = saved["huginn"]["wandb_id"] if saved else wandb.util.generate_id()
+    wandb_id = saved["huginn"]["wandb_id"] if saved else uuid.uuid4().hex[:8]
     run = wandb.init(project=cfg.wandb.project, name=cfg.wandb.name, id=wandb_id,
                      resume="must" if saved else "never", config=complete_config,
                      dir=str(output), mode="online")
