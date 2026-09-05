@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/mnt/BigAssDrive/00projects/00DeepNet/00-MORPH-Orchestrates-Recursive-Pruned-Hierarchies/lab/divergence/score_arc_e0.py", line 82, in <module>
+    main()
+  File "/mnt/BigAssDrive/00projects/00DeepNet/00-MORPH-Orchestrates-Recursive-Pruned-Hierarchies/lab/divergence/score_arc_e0.py", line 34, in main
+    d = json.load(open(path))
+                  ^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/mnt/BigAssDrive/00projects/00DeepNet/00-MORPH-Orchestrates-Recursive-Pruned-Hierarchies/lab/experiments/results/2026-09-04-huginn-loop-contribution/sweep_huginn.json'
