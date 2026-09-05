@@ -36,6 +36,41 @@ the row-difficulty correlation at (1, 6) and (3, 32). Output
 Comparison rulers (ours, same instruments, 480 rows): notul-20k-wu K1−K6 0.041, K3−K6
 0.002 (20k), a2 K1−K6 0.104; every slot arm K3−K6 ≤ 0.0014.
 
+### Method amendment, 2026-09-05
+
+The earlier external attempt stopped with exit 137 after depths 1 and 2. Its logged
+means were 4.6123 and 3.7694. No completed paired sweep is available from that attempt.
+This amendment precedes the corrected attempt and preserves H1-H6 below.
+
+- Pin model and tokenizer to local snapshot
+  `bb6621b65e90b6a4b9b29ef88dc83866d450470c`. Patch only the in-process Transformers 5
+  tied-weight declaration. Assert the loaded embedding and prediction weights alias.
+- The source is the sorted local OpenWebText training-shard stream, with skip zero.
+  It is not a held-out split. Concatenation followed by Huginn tokenization and row
+  packing gives 480 identical Huginn rows across depths, not document-matched MORPH
+  rows. Save each row's SHA256 and the combined row hash.
+- Reset the RNG to `seed + batch_index` before each forward. This pairs Huginn's
+  random initial latent across depths. Use next-token labels and classify CE by the
+  predicted token's span offset, including the final target outside the input row.
+- Compute every adjacent depth CI as well as the preregistered coarse pairs. H1 uses
+  adjacent pairs up to depth 32. Report thresholds separately from broader causal
+  interpretations. Failure of H1 and H2 does not prove web text is universally flat.
+- The snapshot config says `poisson-lognormal-filling`; the uniform sampler claim
+  above is not established by this evaluation. Cross-tokenizer CE values are not
+  common units. H6 remains a within-Huginn numerical prediction.
+- Hydra config lives in `lab/huginn/configs/depth_sweep.yaml`. Online W&B records the
+  complete experiment config, source model config, versions, source hashes, data
+  hashes, and each depth. Use bf16 evaluation and one CPU thread. Atomically save
+  completed depths for resume. Resume rejects changed experiment, source, or rows.
+- Correctness predictions before the smoke: repeated same-seed forwards give
+  identical CE; independently computed shifted-label CE agrees with Huginn's loss
+  within 2e-5 absolute and relative tolerance; K64 at batch 3 and length 1024 fits
+  the available GPU without competing compute jobs. The smoke uses three prefix
+  rows and depths 1 and 64. It is a runtime gate, not evidence for H1-H6.
+- The corrected output is `ignore/huginn/2026-09-05-corrected/`, with the resolved
+  Hydra config, online W&B, atomic result JSON, stdout log, PID and true exit status.
+  Preserve all earlier artifacts. Do not call a partial result complete.
+
 ## Predictions (frozen)
 
 - **H1.** Huginn's token CE on web text falls monotonically with `num_steps` from 1 to
