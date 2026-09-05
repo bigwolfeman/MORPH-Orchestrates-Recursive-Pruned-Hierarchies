@@ -8,7 +8,7 @@ stay together.
 
 | Topic | Local references |
 |---|---|
-| Looping & depth | [Parcae / Poisson depth sampling](looping-depth/parcae/parcae.md) |
+| Looping & depth | [Parcae / Poisson depth sampling](looping-depth/parcae/parcae.md), [Virtual logical depth: full reading and cache](looping-depth/virtual-logical-depth.md) |
 | Attention | [CCA / value shift](attention/cca/cca.md), [DeepSeek-V4 CSA/HCA](attention/deepseek-v4/deepseek-v4.md), [XSA](attention/xsa/xsa.md), [Residual Attention](attention/residual-attention/residual-attention.md), [CoPE](attention/cope/cope.md), [Attention Sinks](attention/attention-sinks/attention-sinks.md) |
 | Memory | [GLA](memory/gla/gla.md), [RAVEN](memory/raven/raven.md), [Fast Weight Attention](memory/fast-weight-attention/fast-weight-attention.md), [Titans](memory/titans/titans.md), [Nested Learning](memory/nested-learning/nested-learning.md) |
 | Residual streams | [mHC](residual-streams/mhc/mhc.md), [JPmHC Cayley HC](residual-streams/jpmhc/jpmhc.md), [Hyper-Connections](residual-streams/hyper-connections/hyper-connections.md) |
