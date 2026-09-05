@@ -17,6 +17,12 @@ rejects changed config, source code, or tokenized rows. The supervisor records t
 actual child's PID and exit status. Online W&B includes the resolved Hydra config,
 full model config, runtime versions, source hashes, and row hashes.
 
+Effective model configuration uses canonical JSON key types before W&B compares
+it with a resumed configuration. Real value changes remain errors. The one-off
+`migrate_wandb_resume.py` helper accepts only the exact logging repair against its
+pinned old source blob. It backs up the original checkpoint and records the source
+transition. Every measured field and all other source checks remain unchanged.
+
 [The original preregistration](../../../../lab/experiments/planned/2026-09-04-huginn-loop-contribution.md)
 retains its frozen H1-H6 predictions. Its dated method amendment records the known
 earlier partial output, sampling correction, and runtime gate predictions.
@@ -30,6 +36,8 @@ earlier partial output, sampling correction, and runtime gate predictions.
   for the required loading contract, subject to the real CUDA smoke.
 - Call the shard prefix validation data. There is no independent holdout selection
   here. The output instead names the actual train-shard prefix sampling.
+- Permit arbitrary W&B configuration changes on resume. This would hide genuine
+  changes. Canonical serialization fixes only the observed representation mismatch.
 
 ## Consequences
 

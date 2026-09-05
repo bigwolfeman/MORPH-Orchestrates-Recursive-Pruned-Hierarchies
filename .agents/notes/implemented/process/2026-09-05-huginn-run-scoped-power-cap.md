@@ -35,9 +35,10 @@ Usage is in [the launcher README](../../../../lab/huginn/README.md).
 
 ## Consequences
 
-Ten focused tests pass. The live hardware check could not authenticate. Actual
-cap application and restoration are not yet verified. GPU power remains 575 W,
-and Huginn was not restarted without the requested cap. The test record is
+The initial hardware check could not authenticate. A later user-authorized run
+applied 529 W and restored 575 W after the evaluator failed during W&B resume.
+The system journal records both transitions at 01:34:47 and 01:35:05 on September 5.
+Forced SIGKILL restoration remains untested. The initial test record is
 [the operational experiment](../../../../lab/experiments/failures/2026-09-05-huginn-temporary-power-cap.md).
 
 The cap limits GPU board power, not total wall power. It does not guarantee UPS

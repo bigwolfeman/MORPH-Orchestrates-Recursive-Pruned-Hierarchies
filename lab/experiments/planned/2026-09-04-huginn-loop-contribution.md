@@ -71,6 +71,17 @@ This amendment precedes the corrected attempt and preserves H1-H6 below.
   Hydra config, online W&B, atomic result JSON, stdout log, PID and true exit status.
   Preserve all earlier artifacts. Do not call a partial result complete.
 
+### Resume logging repair, 2026-09-05
+
+After the UPS interruption, the capped attempt loaded the model but failed during
+W&B metadata comparison. Persisted JSON used string dictionary keys, while the
+fresh model configuration used integer label keys. The evaluator now canonicalizes
+that logging value through JSON. A one-off migration verifies the exact logging-only
+source patch and every unchanged dependency hash. It preserves the original
+checkpoint bytes and records old/new source hashes. All measured fields remain
+unchanged. The audit is logged on resume. No evaluation math or H1-H6 changes.
+See [the repair check](../successes/2026-09-05-huginn-wandb-resume-serialization.md).
+
 ## Predictions (frozen)
 
 - **H1.** Huginn's token CE on web text falls monotonically with `num_steps` from 1 to
