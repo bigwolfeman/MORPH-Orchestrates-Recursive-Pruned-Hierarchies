@@ -36,7 +36,7 @@ and BPTT8. Do not retrain P8 or train separate K1 controls. The recovered
 `/home/wolfe/morph-to` panel supplies the post-loop four-slot-block conditioner
 and its four-extra-token-block comparison. These are not extra prelude layers.
 
-The current [frozen Parcae protocol](/home/wolfe/parcae/docs/experiments/planned/2026-09-05-parcae-tul-cond4-panel.md)
+The current [Parcae experiment record](/home/wolfe/parcae/docs/experiments/failures/2026-09-05-parcae-tul-cond4-panel.md)
 owns the six full-gradient arm definitions and preparation gates. The
 [Parcae implementation note](/home/wolfe/parcae/.agents/notes/implemented/architecture/2026-09-05-slot-only-tul-panel.md)
 owns the model and queue decisions. Wolfe authorizes serial launch after the
@@ -48,6 +48,12 @@ work. They do not authorize its superseded first panel or its conditional depth
 screen. In particular, this queue cannot claim an advantage over independently
 trained cheap/S1 controls, because those controls are not being run. Migration
 and production depth selection remain contingent on actual results.
+
+The six-arm queue is now complete. Its experiment record rejects useful late
+recurrence and conditioner quality parity under this recipe. This does not
+authorize migration or a new production depth. The implementation works; the
+scientific promotion gate does not pass. The owning record contains the numbers
+and proposed next distinctions. No follow-up training is launched on closeout.
 
 ### 1. Freeze the reference and define success
 
