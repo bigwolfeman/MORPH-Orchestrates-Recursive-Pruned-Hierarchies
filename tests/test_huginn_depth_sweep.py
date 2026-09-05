@@ -64,3 +64,45 @@ def test_adjacent_pairs_and_atomic_output(tmp_path):
     sweep.atomic_json(path, result)
     assert json.loads(path.read_text()) == result
     assert not path.with_suffix(".json.tmp").exists()
+
+
+def test_wandb_resume_json_keys_are_equivalent_but_real_changes_are_rejected():
+    from wandb.sdk.wandb_config import Config
+    from wandb.sdk.lib.config_util import ConfigError
+    original = {"id2label": {0: "LABEL_0", 1: "LABEL_1"}, "n_embd": 5280}
+    persisted = json.loads(json.dumps(original))
+    logged = Config()
+    logged.update({"effective_model_config": persisted})
+    with pytest.raises(ConfigError):
+        logged.update({"effective_model_config": original})
+    normalized = sweep.wandb_model_config(SimpleNamespace(to_dict=lambda: original))
+    logged.update({"effective_model_config": normalized})
+    assert logged["effective_model_config"] == persisted
+    changed = {**original, "n_embd": 123}
+    with pytest.raises(ConfigError):
+        logged.update({"effective_model_config": sweep.wandb_model_config(
+            SimpleNamespace(to_dict=lambda: changed))})
+
+
+def test_logging_migration_preserves_measurements_and_rejects_other_edits():
+    import copy
+    import subprocess
+    from lab.huginn import migrate_wandb_resume as migration
+    old = subprocess.check_output(["git", "show", f"{migration.OLD_COMMIT}:{migration.EVALUATOR}"], cwd=migration.ROOT)
+    current = (migration.ROOT / migration.EVALUATOR).read_bytes()
+    original = {"huginn": {"source_hashes": {migration.EVALUATOR: migration.OLD_SHA256, "other": "fixed"},
+        "row_ce_sum": {"32": [1.234, 5.678]}, "profile": {"bins": [[0, 0]], "counts": [4]},
+        "depths": {"32": {"ce_tokens": 2.49908196379741}}, "data_hash": "data", "wandb_id": "same"}}
+    untouched = copy.deepcopy(original)
+    sources = {**original["huginn"]["source_hashes"], migration.EVALUATOR: migration.sha(current)}
+    updated = migration.migrated_payload(original, old, current, sources)
+    assert original == untouched
+    with pytest.raises(ValueError, match="approved old"):
+        migration.migrated_payload(updated, old, current, sources)
+    del updated["huginn"]["resume_migrations"]
+    updated["huginn"]["source_hashes"] = original["huginn"]["source_hashes"]
+    assert updated == original
+    with pytest.raises(ValueError, match="logging-only"):
+        migration.migrated_payload(original, old, current + b"\n", sources)
+    with pytest.raises(ValueError, match="another source"):
+        migration.migrated_payload(original, old, current, {**sources, "other": "changed"})

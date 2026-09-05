@@ -7,6 +7,7 @@ from pathlib import Path
 import pwd
 import re
 import shutil
+import shlex
 import subprocess
 
 
@@ -100,3 +101,5 @@ def start_capped(plan: PowerPlan, command: list[str], cwd: Path, output: Path,
         # Preserve the request, including failed/cancelled authorization.
         path.rename(output / f"power_limit-launch-error-{os.getpid()}.json")
         raise
+    print("Service created; evaluator readiness is not yet confirmed. Follow progress with:\n"
+          f"  tail -F {shlex.quote(str(output / 'run.log'))}", flush=True)

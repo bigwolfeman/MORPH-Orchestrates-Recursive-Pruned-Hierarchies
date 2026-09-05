@@ -114,6 +114,11 @@ def restore_profile(profile: EarningProfile, saved: dict) -> None:
     profile._counted.update(range(len(profile.row_n)))
 
 
+def wandb_model_config(model_cfg):
+    """Match the JSON key types restored by W&B, without allowing value changes."""
+    return json.loads(json.dumps(model_cfg.to_dict(), allow_nan=False))
+
+
 def execute(cfg):
     import transformers
     import wandb
@@ -176,7 +181,8 @@ def execute(cfg):
             remaining -= len(x)
         data_hash = hashlib.sha256("".join(row_hashes).encode()).hexdigest()
         run.config.update({"row_hashes": row_hashes, "data_hash": data_hash,
-                           "effective_model_config": model_cfg.to_dict()})
+                           "effective_model_config": wandb_model_config(model_cfg),
+                           "resume_source_migrations": saved["huginn"].get("resume_migrations", []) if saved else []})
         profile = EarningProfile(steps, cfg.rows)
         arm = saved["huginn"] if saved else {
             "model": cfg.model.name, "revision": cfg.model.revision, "rows": cfg.rows,

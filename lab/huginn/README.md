@@ -31,12 +31,19 @@ Inspect the system service, not the old user service:
 systemctl status morph-huginn-capped.service
 journalctl -u morph-huginn-capped.service
 nvidia-smi --query-gpu=power.limit --format=csv,noheader
+tail -F ignore/huginn/2026-09-05-corrected/run.log
 ```
 
 Failed services remain available for inspection. Before relaunching a failed capped
 service, clear its failed state with `sudo systemctl reset-failed morph-huginn-capped`.
 Check the current power limit first. A failed restore is an error, not a successful
 run. The launcher does not install a boot-time cap or a passwordless sudo rule.
+
+`Running as unit` confirms service creation, not evaluator readiness. The evaluator
+can fail later during model loading or tracking setup. Check `process.json` and
+the live log. After correcting a failure, `sudo systemctl restart
+morph-huginn-capped.service` reuses the existing unit and its stored cap/restore
+settings. Confirm those settings still match the intended GPU limits first.
 
 Resume preserves the previous `run.log`, `process.json` and cap record in
 `launch_history/`. It keeps the completed-depth checkpoint in place. A partially
