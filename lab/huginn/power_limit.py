@@ -55,19 +55,22 @@ def verify_limit(gpu: str, expected: float) -> None:
 
 
 def service_command(plan: PowerPlan, command: list[str], cwd: Path,
-                    unit: str = "morph-huginn-capped") -> list[str]:
+                    unit: str = "morph-huginn-capped", auth: str = "sudo") -> list[str]:
     if os.geteuid() == 0:
         raise RuntimeError("invoke this launcher as your normal user, not through sudo")
     if not re.fullmatch(r"morph-huginn-capped(?:-[a-zA-Z0-9-]+)?", unit):
         raise ValueError("invalid capped service name")
     smi = shutil.which("nvidia-smi")
     systemd = shutil.which("systemd-run")
-    pkexec = shutil.which("pkexec")
-    if not all((smi, systemd, pkexec)):
-        raise RuntimeError("nvidia-smi, systemd-run and pkexec are required")
+    if auth not in ("sudo", "pkexec"):
+        raise ValueError("authentication must be sudo or pkexec")
+    authorize = shutil.which(auth)
+    if not all((smi, systemd, authorize)):
+        raise RuntimeError(f"nvidia-smi, systemd-run and {auth} are required")
     user = pwd.getpwuid(os.getuid())
-    return [
-        pkexec, "--disable-internal-agent", systemd, "--expand-environment=no", f"--unit={unit}",
+    prefix = [authorize] if auth == "sudo" else [authorize, "--disable-internal-agent"]
+    return prefix + [
+        systemd, "--expand-environment=no", f"--unit={unit}",
         "--description=Huginn with temporary GPU power cap and automatic restoration",
         "--property=Type=exec", "--property=Restart=no", "--property=RemainAfterExit=no",
         f"--property=User={user.pw_uid}", f"--property=Group={user.pw_gid}",
@@ -80,8 +83,8 @@ def service_command(plan: PowerPlan, command: list[str], cwd: Path,
 
 
 def start_capped(plan: PowerPlan, command: list[str], cwd: Path, output: Path,
-                 unit: str = "morph-huginn-capped") -> None:
-    argv = service_command(plan, command, cwd, unit)
+                 unit: str = "morph-huginn-capped", auth: str = "sudo") -> None:
+    argv = service_command(plan, command, cwd, unit, auth)
     # The fixed system-service name prevents two copies from owning the same cap.
     record = {**asdict(plan), "unit": unit, "command": argv,
               "restoration": "systemd ExecStopPost, including failed start and SIGKILL"}
@@ -89,11 +92,11 @@ def start_capped(plan: PowerPlan, command: list[str], cwd: Path, output: Path,
     path = output / "power_limit.json"
     with path.open("x") as stream:
         json.dump(record, stream, indent=2)
-    print(f"Authorize the desktop dialog: {plan.limit_watts} W during this run; "
+    print(f"Authorize {auth}: {plan.limit_watts} W during this run; "
           f"systemd restores {plan.previous_watts:g} W afterward.", flush=True)
     try:
         subprocess.run(argv, check=True)
     except BaseException:
         # Preserve the request, including failed/cancelled authorization.
-        path.rename(output / f"power_limit-unstarted-{os.getpid()}.json")
+        path.rename(output / f"power_limit-launch-error-{os.getpid()}.json")
         raise

@@ -30,7 +30,7 @@ def test_system_service_restores_previous_cap_and_runs_model_unprivileged(monkey
     plan = power.PowerPlan("GPU-abcd", 575, 575, 529, 92)
     child = ["/venv/python", "/repo/launch.py", "resume=true"]
     cmd = power.service_command(plan, child, Path("/repo"))
-    assert cmd[:3] == ["/usr/bin/pkexec", "--disable-internal-agent", "/usr/bin/systemd-run"]
+    assert cmd[:2] == ["/usr/bin/sudo", "/usr/bin/systemd-run"]
     assert "--property=User=1000" in cmd
     assert "--property=Group=1000" in cmd
     assert "--property=KillMode=control-group" in cmd
@@ -39,6 +39,8 @@ def test_system_service_restores_previous_cap_and_runs_model_unprivileged(monkey
     assert cmd[cmd.index("--") + 1:] == child
     assert "--expand-environment=no" in cmd
     assert "--collect" not in cmd
+    gui = power.service_command(plan, child, Path("/repo"), auth="pkexec")
+    assert gui[:3] == ["/usr/bin/pkexec", "--disable-internal-agent", "/usr/bin/systemd-run"]
 
 
 def test_launcher_refuses_work_when_cap_was_not_applied(monkeypatch, tmp_path):

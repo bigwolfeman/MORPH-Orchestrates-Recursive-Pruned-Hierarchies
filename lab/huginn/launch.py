@@ -38,6 +38,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
     parser.add_argument("--power-percent", type=float)
+    parser.add_argument("--auth", choices=("sudo", "pkexec"), default="sudo")
     parser.add_argument("--gpu", default="0")
     parser.add_argument("--expected-power-watts", type=float)
     parser.add_argument("overrides", nargs="*")
@@ -49,7 +50,7 @@ def main():
         plan = make_plan(args.gpu, args.power_percent)
         command = [sys.executable, str(Path(__file__).resolve()), "--output", str(output),
                    "--gpu", plan.uuid, "--expected-power-watts", str(plan.limit_watts), *args.overrides]
-        start_capped(plan, command, Path(__file__).resolve().parents[2], output)
+        start_capped(plan, command, Path(__file__).resolve().parents[2], output, auth=args.auth)
         return
     if args.expected_power_watts is not None:
         verify_limit(args.gpu, args.expected_power_watts)

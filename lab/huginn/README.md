@@ -8,8 +8,10 @@ To run with a temporary 92 percent GPU power limit:
   --output ignore/huginn/2026-09-05-corrected resume=true
 ```
 
-Invoke this as the normal user. A desktop administrator prompt authorizes the
-system service. Do not run the Python launcher with sudo. The service runs the
+Invoke this as the normal user in a terminal. The script uses sudo to request
+your password and create the system service. Do not run the Python launcher
+itself with sudo. Use `--auth pkexec` only if a desktop authentication agent is
+available. The service runs the
 model as the invoking user. Only the NVIDIA power setters run as administrator.
 
 For this 5090, 92 percent of the 575 W default is 529 W. The launcher records the
