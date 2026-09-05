@@ -29,6 +29,26 @@ No existing implemented decision is fully superseded by this unbuilt proposal.
 
 ## Proposal
 
+### Current authorization, 2026-09-05
+
+Wolfe replaces the initial mean8/S1/C panel below with a mean16 panel at BPTT4
+and BPTT8. Do not retrain P8 or train separate K1 controls. The recovered
+`/home/wolfe/morph-to` panel supplies the post-loop four-slot-block conditioner
+and its four-extra-token-block comparison. These are not extra prelude layers.
+
+The current [frozen Parcae protocol](/home/wolfe/parcae/docs/experiments/planned/2026-09-05-parcae-tul-cond4-panel.md)
+owns the six full-gradient arm definitions and preparation gates. The
+[Parcae implementation note](/home/wolfe/parcae/.agents/notes/implemented/architecture/2026-09-05-slot-only-tul-panel.md)
+owns the model and queue decisions. Wolfe authorizes serial launch after the
+correctness and memory gates. The user-set460W cap stays in place throughout.
+The queue stops on failure. Detached/MUX variants are not part of this queue.
+
+The remaining sections preserve the earlier proposal and possible confirmation
+work. They do not authorize its superseded first panel or its conditional depth
+screen. In particular, this queue cannot claim an advantage over independently
+trained cheap/S1 controls, because those controls are not being run. Migration
+and production depth selection remain contingent on actual results.
+
 ### 1. Freeze the reference and define success
 
 Keep the existing checkpoint weights, tokenizer revision, token-cache identities,
