@@ -126,7 +126,8 @@ Wolfe's call.
 | E3 | staged targets (`tul.mux_stage_own_iters`; configs `tul_to_mnext_y2_stage2/3`; prereg `arc-e3-staged-targets.md`) | code done, 823 tests pass; E3-2 queued behind E2 in the GPU window |
 | E4 | `to-mnext-y2-mask` on Y2 (mean 6, the constraint) | FILED `successes/2026-09-04-arc-e4-mask-under-constraint.md` (5 of 5): healthy to 5000; token K1−K6 +0.0209 (the tokens read the slot's depth on a stable map), shuffle worth 0.31, forecast K1−K6 +0.187; K3−K6 still ~0; +0.13 nats vs Y2 at 5000. Binding ⇒ E5 on E4 (Wolfe's call, not queued). |
 | E5 | 20k matched wall clock on any THINK arm | not queued: no arm THINKS; Wolfe 2026-09-07: no 20k yet |
-| E12 | the k=12 panel: four TUL variants (mask, mnext, mask+mtp4, a1) at a FIXED slot depth of 12 with the fixed-point term on the slot loop (`tul.slot_depth_fixed`; configs `tul_k12_*.yaml`; prereg `arc-e12-k12-panel.md`) | code + tests done 2026-09-07 (875 pass); queued in `arc/run_e12.sh` |
+| E12 | the k=12 panel at a FIXED slot depth of 12 (`tul.slot_depth_fixed`) | REJECTED (wrong method: Wolfe asked for a Poisson draw of mean 12); the one arm that ran, `k12-mnext-mask`, detonated at 1446 in E7's mode (first-iteration state scale x170 by step 1100, hinge reading 1.0). `failures/2026-09-07-arc-e12-k12-panel.md`. The knob stays as a readout instrument. |
+| E13 | the mean-12 panel: four TUL variants (mask, mnext, a1, mask+mtp4) at a per-slot Poisson draw of mean 12, max 16, full BPTT, the fixed-point term on the slot loop (configs `tul_m12_*.yaml`; prereg `arc-e13-m12-panel.md`) | queued in `arc/run_e13.sh` 2026-09-07 |
 | H | Huginn-3.5B loop contribution (eval only, the external ruler) | FILED `failures/2026-09-04-huginn-loop-contribution.md`: H2 TRUE (K3−K6 +0.566, K6−K16 +0.206, saturates at 16–24 against a training mean of 32); H1/H3/H4a/H5 false. Decision rule fired: option (i) downgraded, training regime is the candidate cause. |
 | E6 | plain loop at a deep recurrence draw (mean 16, max 24, bptt 8; `notul_deep16.yaml`; prereg `arc-e6-deep-recurrence-draw.md`) | FILED `successes/2026-09-07-arc-e6-deep-recurrence-draw.md` (5 of 6): the draw is the lever on K-diffs (K3−K6 0.277, K6−K12 0.040, saturates at the mean 16–24) AND the deep model is 0.104 nats WORSE than mean-6 on the same rows at 1.23x cost: K-diffs measure depth DEPENDENCE, not depth value. E5 at the deep draw is the matched-compute test. |
 | E10c | the directional gain penalty with the power iteration inside the step (`core_gain_power_iters 2`, STARS' λ·g², `notul_pgain2_wu0.yaml`), 6 draws under the assay; E10b as run was inert (penalty never fired) and its draws count as warmup-0 controls | DONE 2026-09-07 10:30, filed inside E10: 2 of 6 detonated (240, 315), P10b FALSE; the within-step power reading leads the tripwire by 20–40 steps (1.1–1.3 healthy → 3–8 at the onset) where `core_block_gain` is blind, but λ 1e-3 · g² is 0.008–0.036 at the onset and does not act |
@@ -184,3 +185,12 @@ FIXED slot depth of 12, on the actual TUL variants. E12 (`planned/2026-09-07-arc
 panel.md`) takes the window: the fixed-point term ported to `_tul_core`, `tul.slot_depth_
 fixed`, and the E8 heads wired onto the TUL coda, four arms. E5 is not queued (no 20k yet).
 E3 keeps its prereg and follows E12's binding rule. Predictions untouched everywhere.
+
+### Method amendment 5 (2026-09-07 12:05; E12 rejected, E13 replaces it)
+
+Amendment 4 misread Wolfe's "a fixed run at k of 12" as a fixed DEPTH; he meant one run
+per variant at a Poisson slot draw of mean 12. E12 was killed after its first arm (the
+mask arm detonated at 1446 in E7's power-iteration mode) and is filed as a rejected run.
+E13 (`planned/2026-09-07-arc-e13-m12-panel.md`) runs the same four variants at
+`tul.slot_mean_depth 12`, `slot_max_depth 16`, `bptt_depth 16`. E3 follows E13's binding
+rule. Predictions untouched everywhere.

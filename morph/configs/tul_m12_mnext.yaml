@@ -1,0 +1,16 @@
+# ARC E13, the mean-12 panel: M-next (Y2, no mask — tokens keep the direct route) at a
+# per-slot Poisson slot draw of mean 12, max 16, full BPTT. The unmasked reference for
+# tul_m12_mnext_mask.yaml.
+# Prereg: lab/experiments/planned/2026-09-07-arc-e13-m12-panel.md
+defaults:
+  - tul_to_mnext_y2
+  - _self_
+
+model:
+  bptt_depth: 16                 # full BPTT through every drawn iteration (Y2: 8 = full at max 8)
+tul:
+  slot_mean_depth: 12            # per-slot Poisson mean (Y2: model.mean_depth 6)
+  slot_max_depth: 16             # clamp (base: 8 at mean 6)
+
+wandb:
+  name: m12-mnext

@@ -1,0 +1,18 @@
+# ARC E13, the mean-12 panel (2026-09-07, Wolfe: one run per TUL variant at a slot draw of
+# mean 12, Poisson, NOT a fixed depth). M-next-mask (E4's arm: slot loop, forecast MUX,
+# tg_restrict so the tokens read the span only through the slot) at per-slot Poisson mean
+# 12, max 16, full BPTT (bptt_depth 16 ≥ max: no no-grad prefix). Recipe otherwise Y2's
+# (gain hinge 0.9, clip 4.0, the ramp) plus base.yaml's fixed-point term.
+# Prereg: lab/experiments/planned/2026-09-07-arc-e13-m12-panel.md
+defaults:
+  - tul_to_mnext_y2_mask
+  - _self_
+
+model:
+  bptt_depth: 16                 # full BPTT through every drawn iteration (Y2: 8 = full at max 8)
+tul:
+  slot_mean_depth: 12            # per-slot Poisson mean (Y2: model.mean_depth 6)
+  slot_max_depth: 16             # clamp; Poisson(12) exceeds 16 on ~10 % of draws (base: 8 at mean 6, ~15 %)
+
+wandb:
+  name: m12-mnext-mask
