@@ -286,6 +286,14 @@ class MORPHConfig:
     core_gain_target: float = 20.0
     core_gain_eps: float = 0.02
     core_gain_direction: str = "power"
+    # Within-step power iterations for the directional hinge (arc E10c). 0 = the one-shot
+    # reading (the direction is only refined ACROSS steps, and every step is a new batch, so
+    # the batch-averaged response reads ~1.1-1.5 on the plain loop — E10b was inert). k > 0
+    # applies k extra finite-difference power steps at the SAME input before the reading
+    # (each is one more core-step application), warm-started from the buffer, so the reading
+    # approaches sigma_max for this batch. With core_gain_target 0 the hinge is STARS' plain
+    # lambda * g^2.
+    core_gain_power_iters: int = 0
 
     # Master kernel switch. True = fused Triton attention + fused chunked CE
     # (the optimised stack). False = eager PyTorch references + full-logits CE
@@ -1702,6 +1710,16 @@ class MORPHTransformer(nn.Module):
         try:
             _restore()
             f0, _ = core_step(hp, e_d, inj_d, ret_state=rs_d, iter_idx=t, attn_kw=akw)
+            # Within-step power iterations (core_gain_power_iters): refine the direction at
+            # THIS input, no grad (the reading, not the direction, carries the penalty's grad).
+            for _ in range(int(self.cfg.core_gain_power_iters)):
+                _restore()
+                with torch.no_grad():
+                    fk, _ = core_step(hp + d, e_d, inj_d, ret_state=rs_d, iter_idx=t,
+                                      attn_kw=akw)
+                    nv = (fk - f0).float().mean(0)
+                    v = nv / (nv.norm() + 1e-6)
+                    d = v.to(hp.dtype).unsqueeze(0) * scale.view(-1, *([1] * (hp.dim() - 1)))
             _restore()
             f1, _ = core_step(hp + d, e_d, inj_d, ret_state=rs_d, iter_idx=t, attn_kw=akw)
         finally:

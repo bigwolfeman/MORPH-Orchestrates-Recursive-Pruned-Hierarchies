@@ -453,6 +453,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         core_gain_target=float(getattr(m, "core_gain_target", 20.0)),
         core_gain_eps=float(getattr(m, "core_gain_eps", 0.02)),
         core_gain_direction=str(getattr(m, "core_gain_direction", "power")),
+        core_gain_power_iters=int(getattr(m, "core_gain_power_iters", 0)),
         injection_all_decay=float(getattr(m, "injection_all_decay", 0.9)),
         mtp_weight=float(getattr(m, "mtp_weight", 1.0)),
         dropout=float(tr.dropout),

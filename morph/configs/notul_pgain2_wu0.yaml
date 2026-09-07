@@ -1,0 +1,15 @@
+# ARC E10c — the directional gain penalty with the power iteration INSIDE the step (2 FD power
+# steps at the same input, warm-started from the buffer), STARS' plain lambda * g^2 form
+# (target 0), lambda 1e-3, under the detonation assay. E10b (one-shot, shared direction) read
+# 1.1-1.5 and never fired. Prereg: lab/experiments/planned/2026-09-07-arc-e10-loop-loss-terms.md
+defaults:
+  - notul_carry_ctx_wu0
+  - _self_
+model:
+  core_gain_lambda: 0.001
+  core_gain_target: 0.0
+  core_gain_eps: 0.02
+  core_gain_direction: power
+  core_gain_power_iters: 2
+wandb:
+  name: notul-pgain2-wu0

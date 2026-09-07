@@ -67,3 +67,20 @@ Both terms under torch.compile on the GPU (the smoke is the first run); the λ c
 is shared across the batch and updated once per step, so it lags a fast-rotating map;
 the fixed-point term's gradient can be satisfied by a trivially contractive map (E1's
 lesson) — the 5000-step follow-up, not the assay, reads that.
+
+### Method amendment, 2026-09-07 06:25 (E10b inert; E10c added; predictions untouched)
+
+E10b's first draw (seed 301) survived as AMBIGUOUS (max `preclip/total` 1.76e3 at 468) with
+the penalty at exactly 0.0 on all 1200 steps: the reading along the shared, once-per-step
+power direction sat at 1.1–1.5 (max 4.1 in the first 100 steps), never near the target of
+20. Every step is a new batch, so a direction refined only ACROSS steps and averaged over
+samples reads close to the typical gain, not σ_max. E10b as configured is therefore
+INERT, and its six draws are re-designated as six additional warmup-0 CONTROL draws (the
+plain recipe, penalty 0), which the assay can use for P10f / P9b. P10b and P10c are
+unreadable on E10b. E10c replaces it: `notul_pgain2_wu0.yaml`, the same probe with
+`core_gain_power_iters 2` (two finite-difference power steps at the SAME input before the
+reading, warm-started from the buffer) and STARS' plain form (`core_gain_target 0`, λ 1e-3,
+penalty λ·g²). Six draws, seeds 401–406, queued after E11 in `arc/run_e10c.sh`. The
+prediction for E10c is P10b as written (≤ 1 of 6 detonates, 40 %); P10c reads on
+`core_gain_est` with no fixed threshold (the σ_max band on the plain loop is unmeasured;
+E7's slot-loop readings were 11–95).

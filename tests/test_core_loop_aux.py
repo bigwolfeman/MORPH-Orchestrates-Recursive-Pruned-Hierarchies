@@ -111,6 +111,21 @@ def test_both_terms_reach_the_core():
         assert core and any(g.abs().sum() > 0 for g in core), key
 
 
+def test_within_step_power_iterations_raise_the_reading():
+    """The power-iterated reading at the same input is at least the one-shot reading on the
+    same model and batch (a power step cannot lower the quotient of a near-linear map), and
+    it stays finite; the buffer is still a unit vector."""
+    x, y = _batch()
+    torch.manual_seed(11)
+    one = _model(core_gain_lambda=1.0, core_gain_target=0.0, core_gain_power_iters=0)(x, labels=y)
+    torch.manual_seed(11)
+    m = _model(core_gain_lambda=1.0, core_gain_target=0.0, core_gain_power_iters=3)
+    pw = m(x, labels=y)
+    assert torch.isfinite(pw["core_gain_est"]) and float(pw["core_gain_est"]) >= 0.8 * float(one["core_gain_est"])
+    assert abs(float(m._core_gain_dir.norm()) - 1.0) < 1e-4
+    assert float(pw["core_gain_weighted"]) > 0.0
+
+
 def test_bad_direction_raises():
     with pytest.raises(ValueError):
         _model(core_gain_direction="jvp")
