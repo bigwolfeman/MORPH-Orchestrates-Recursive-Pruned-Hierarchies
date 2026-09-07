@@ -1,0 +1,15 @@
+# ARC E14 — the expansive dial (2026-09-07, Wolfe: "worth testing depth behavior if we let
+# it get just a touch over 1.0 so it *can* be expansive"). The mean-12 mask arm
+# (tul_m12_mnext_mask: Poisson mean 12, max 16, full BPTT, fixed-point term) with the
+# typical-gain hinge moved from 0.90 to 1.02, so the map may sit expansive in its typical
+# direction. Everything else unchanged. E1 moved the target to 0.95/0.98 at mean 6 and the
+# map settled at 0.913/0.929 below it; E7 at mean 16 drifted to 1.04 once the hinge lost
+# and detonated in the scale mode.
+# Prereg: lab/experiments/planned/2026-09-07-arc-e14-expansive-dial.md
+defaults:
+  - tul_m12_mnext_mask
+  - _self_
+model:
+  slot_gain_target: 1.02
+wandb:
+  name: m12-mask-g102

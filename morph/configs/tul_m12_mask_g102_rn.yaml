@@ -1,0 +1,14 @@
+# ARC E14 — the expansive dial WITH the state bound. Same as tul_m12_mask_g102 (hinge at
+# 1.02) plus model.slot_state_renorm: every slot's carried norm is pinned to its entry norm
+# after each iteration, direction preserved. The two measured failures of an expansive
+# slot map (E7 at mean 16, E12 at fixed 12) were the SCALE growing at one iteration while
+# the differential gain read ~1; the renorm removes the scale as a degree of freedom and
+# leaves the direction free to be expansive. First run of hinge + renorm together.
+# Prereg: lab/experiments/planned/2026-09-07-arc-e14-expansive-dial.md
+defaults:
+  - tul_m12_mask_g102
+  - _self_
+model:
+  slot_state_renorm: true
+wandb:
+  name: m12-mask-g102-rn
