@@ -126,6 +126,8 @@ Wolfe's call.
 | E3 | staged targets (`tul.mux_stage_own_iters`; configs `tul_to_mnext_y2_stage2/3`; prereg `arc-e3-staged-targets.md`) | code done, 823 tests pass; E3-2 queued behind E2 in the GPU window |
 | E4 | `to-mnext-y2-mask`, on the best arm of E1/E2/E3 (Y2 if none THINKS) | waits on E1/E2 |
 | E5 | 20k matched wall clock on any THINK arm | waits on E4 |
+| H | Huginn-3.5B loop contribution (eval only, the external ruler) | FILED `failures/2026-09-04-huginn-loop-contribution.md`: H2 TRUE (K3−K6 +0.566, K6−K16 +0.206, saturates at 16–24 against a training mean of 32); H1/H3/H4a/H5 false. Decision rule fired: option (i) downgraded, training regime is the candidate cause. |
+| E6 | plain loop at a deep recurrence draw (mean 16, max 24, bptt 8; `notul_deep16.yaml`; prereg `arc-e6-deep-recurrence-draw.md`) | prereg + config written 2026-09-07, NOT smoked, NOT launched (Wolfe's call) |
 
 ### Method amendment 1 (2026-09-04 17:08; order only, no prediction touched)
 
@@ -150,3 +152,18 @@ concentrated where the target is hard. The next window runs E3-2 (staged targets
 E4 (the mask on Y2), `arc/run_next_window.sh`, with the sustained tripwire
 (`lab/divergence/tripwire_sustained.py`) on both. Predictions untouched. If E3 does not
 THINK, the arc's closing rule applies as written.
+
+### Method amendment 3 (2026-09-07; the Huginn rule fired, order for the next window)
+
+The Huginn sweep (`failures/2026-09-04-huginn-loop-contribution.md`, run 2026-09-05,
+scored 2026-09-07) answers the arc's closing option (i) before E3/E4 ran: web text is NOT
+depth-flat. A 3.5B recurrent-depth model trained at a mean of 32 iterations earns
+0.566 nats between iterations 3 and 6 and 0.206 between 6 and 16 on the same rows and
+instruments where every stable MORPH loop earns ≤ 0.002 past 3, and it stops earning
+between 16 and 24, near half its training mean, as MORPH stops at 3, half of its mean 6.
+Its earning also has the shape E0 could not find on MORPH: it rises with offset-in-span
+(1.62x from the span's first token to offsets 16–31) and with row difficulty (Spearman
++0.30). Per the prereg's binding rule, option (i) "data where depth pays" is downgraded
+and the training regime becomes the candidate cause. E6 (`planned/2026-09-07-arc-e6-deep-
+recurrence-draw.md`) is the test and takes the next window's first slot; E3-2 and E4 keep
+their preregs and follow if the window allows. Predictions untouched everywhere.

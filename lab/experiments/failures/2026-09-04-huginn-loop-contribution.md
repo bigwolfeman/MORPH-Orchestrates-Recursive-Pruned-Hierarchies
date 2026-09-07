@@ -1,6 +1,6 @@
-# Planned: loop contribution on Huginn-3.5B (a recurrent-depth model trained to use depth)
+# Failure: loop contribution on Huginn-3.5B (a recurrent-depth model trained to use depth)
 
-Status: planned
+Status: failure
 Date: 2026-09-04 (frozen before the sweep; eval only; Wolfe's call: "we should take huginn
 3.5b and test loop contribution on it")
 
@@ -117,3 +117,100 @@ Huginn's remote code under transformers 5.15 (written for 4.x; the load is the f
 check); its `num_steps` forward on a labelled batch; the boundary rule rebuilt on a
 65k-vocab tokenizer; memory at 64 steps and batch 3 × 1024 (the recurrent block's
 activations are not checkpointed at eval).
+
+## Results (scored 2026-09-07; run `ignore/huginn/2026-09-05-corrected/`, exit 0, status complete, 480 rows, 12 depths, batch 3, seq 1024, bf16, peak 8.75 GB, 674 s at depth 64; wandb `morph-huginn-loop-contribution/d21387a3`; files in `results/2026-09-04-huginn-loop-contribution/`)
+
+Per-token CE over all 480 rows (491,520 targets) at each `num_steps`:
+
+| steps | 1 | 2 | 3 | 4 | 6 | 8 | 12 | 16 | 24 | 32 | 48 | 64 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| CE | 4.614 | 3.768 | 3.274 | 2.989 | 2.708 | 2.592 | 2.518 | 2.502 | 2.499 | 2.499 | 2.499 | 2.500 |
+
+Paired row-bootstrap differences (2000 draws, 95 % CI), earlier depth minus later:
+
+| pair | point | CI |
+|---|---|---|
+| K1−K2 | +0.846 | [+0.833, +0.860] |
+| K2−K3 | +0.494 | [+0.487, +0.500] |
+| K3−K4 | +0.285 | [+0.281, +0.289] |
+| K4−K6 | +0.281 | [+0.277, +0.285] |
+| K6−K8 | +0.116 | [+0.114, +0.119] |
+| K8−K12 | +0.074 | [+0.072, +0.076] |
+| K12−K16 | +0.0151 | [+0.0143, +0.0159] |
+| K16−K24 | +0.0034 | [+0.0030, +0.0039] |
+| K24−K32 | −0.0001 | [−0.0003, +0.0002] |
+| K32−K48 | −0.0004 | [−0.0006, −0.0002] |
+| K32−K64 | −0.0005 | [−0.0007, −0.0003] |
+| K3−K6 | +0.566 | [+0.559, +0.573] |
+| K6−K16 | +0.206 | [+0.201, +0.210] |
+| K16−K32 | +0.0034 | [+0.0028, +0.0040] |
+| K1−K6 | +1.906 | [+1.884, +1.928] |
+| K3−K32 | +0.775 | [+0.764, +0.786] |
+
+`score_arc_e0.py` (`score_1_6.txt`, `score_3_32.txt`, `score_6_16.txt`):
+
+| pair | Spearman(row CE_lo, row earning) | offset-0 / mean(4..31) | earning per token by offset 0, 1, 2, 3, 4-7, 8-15, 16-31 | top-decile loss share / earning share |
+|---|---|---|---|---|
+| (1, 6) | +0.301 [+0.215, +0.389] | 0.63x | 1.248, 1.448, 1.805, 1.854, 1.948, 1.993, 2.022 | 0.114 / 0.108 |
+| (3, 32) | +0.319 [+0.233, +0.398] | 0.59x | 0.485, 0.579, 0.660, 0.711, 0.783, 0.827, 0.840 | 0.118 / 0.110 |
+| (6, 16) | +0.245 [+0.151, +0.329] | 0.60x | 0.131, 0.153, 0.174, 0.185, 0.209, 0.219, 0.224 | 0.121 / 0.115 |
+
+Scored against the frozen predictions:
+
+- **H1 FALSE.** CE falls with every adjacent pair up to 16→24; the 24→32 pair's CI
+  covers zero (−0.0001 [−0.0003, +0.0002]). Monotone to 24, flat from 24 on, and
+  32→48→64 is slightly NEGATIVE (−0.0005 to 64, CI below zero).
+- **H2 TRUE.** K3−K6 = +0.566, eleven times the 0.05 bar, 280x MORPH's 0.002.
+- **H3 FALSE, both halves.** K16−K32 = +0.0034 < 0.01; K32−K64 = −0.0005 < 0.005.
+- **H4 FALSE (flatness), TRUE (first token earns least).** At (1, 6) the bin mean is
+  1.760 and the ±15 % band is [1.50, 2.02]; offsets 0 and 1 (1.25, 1.45) fall below it.
+  The profile RISES with offset-in-span: the last bin earns 1.62x the first token. On
+  every MORPH model the ratio is 0.74–0.89x and the rest of the profile is flat.
+- **H5 FALSE.** Spearman +0.301 [+0.215, +0.389] at (1, 6): Huginn's earning
+  concentrates on the rows it finds hardest. MORPH's a2 reads −0.18. (The top-decile
+  earning share still sits just below the loss share, 0.108 vs 0.114, so the
+  concentration is a rank effect over the whole distribution, not a tail effect.)
+- **H6 TRUE.** 2.499 at 32 steps.
+
+Three of six held (H2, H4's second half, H6). H1 was the 80 % prediction and it missed on
+the last pair; H3, H4's first half and H5 missed on the shape.
+
+## Verdict
+
+The binding rule fires on H2: a recurrent-depth model trained to use depth earns
+0.57 nats between iterations 3 and 6 and 0.21 more between 6 and 16 on the SAME web text
+where every stable MORPH loop earns nothing past iteration 3. Web text is not depth-flat.
+The arc's closing option (i), "data where depth pays", is downgraded as written; the
+training regime is now the candidate cause of MORPH's flat loops.
+
+Two readings, kept apart as the amendment asked:
+
+1. **Threshold reading.** Huginn saturates between 16 and 24 iterations against a
+   training draw centred on 32; MORPH saturates at 3 against a mean of 6. Both stop near
+   HALF their training mean. That is one observation per model, not a law.
+2. **Shape reading.** Huginn's earning is not the uniform refinement E0 measured on
+   MORPH. It grows with offset-in-span (1.25 → 2.02 nats per token from the span's
+   first token to offsets 16–31) and with row difficulty (Spearman +0.30). A loop that
+   uses depth uses it MORE where the context is long and the row is hard. E0's flat
+   profile is MORPH's, not web text's.
+
+Not verified, named: the rows are the sorted OpenWebText TRAIN-shard prefix, not a
+held-out split, and Huginn's 800B-token mix may contain them, so absolute CE (H6) and
+possibly the row-difficulty correlation carry a contamination risk this eval cannot
+bound; depths 1–3 sit outside Huginn's training draw, so K1−K6 mixes "never trained at
+this depth" with earning, and the within-regime numbers are K6−K16 and K12−K16;
+cross-tokenizer CE is not a common unit with MORPH (the comparison is of DIFFERENCES,
+per row, under the same instruments); the boundary rule rebuilt on Huginn's tokenizer
+was not audited span by span.
+
+## Updated hypothesis
+
+A weight-shared loop earns depth up to roughly half the depth it was TRAINED at, and
+MORPH's mean-6 draw is why its loops stop at 3. The test is the next prereg,
+`planned/2026-09-07-arc-e6-deep-recurrence-draw.md`: the plain loop at a Poisson draw
+of mean 16 (max 24) with truncated backprop over the last 8 iterations, the ramp, 5000
+steps, scored on forced-depth K3−K6 and K6−K12 on 480 rows. If it earns past 3, the
+loop question reopens as a regime question (deep draw × long training) and the arc's
+E5 moves to the deep draw. If it does not, the training-depth explanation fails on
+MORPH and the remaining candidates are training length (800B against 0.3B tokens) and
+width.

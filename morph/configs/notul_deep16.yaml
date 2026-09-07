@@ -1,0 +1,27 @@
+# ARC E6 — the plain loop at a DEEP recurrence draw. The Huginn ruler
+# (lab/experiments/failures/2026-09-04-huginn-loop-contribution.md) stops earning near
+# HALF its training mean (16–24 of 32); MORPH stops at 3 of its mean 6. This arm trains
+# the plain (no-TUL) loop at Poisson mean 16, max 24, backprop truncated to the LAST 8
+# iterations (bptt_depth 8, as Huginn trains), the 1000-step ramp, 5000 steps. Everything
+# else is notul.yaml (= tul_a2 with activate_at: never), so the matched control is the
+# notul 5000-step sweep in results/2026-09-04-arc-e0/sweep_notul_5000.json.
+# Prereg: lab/experiments/planned/2026-09-07-arc-e6-deep-recurrence-draw.md.
+defaults:
+  - notul
+  - _self_
+
+model:
+  mean_depth: 16                 # Poisson mean of the per-sample core depth (base: 6)
+  max_depth: 24                  # clamp (base: 8); Poisson(16) exceeds 24 on ~2.5 % of draws
+  bptt_depth: 8                  # TRUNCATED here: only the last 8 of up to 24 iterations carry
+                                 # grad; the earlier ones run under no_grad (Huginn: last 8 of r)
+
+training:
+  steps: 5000
+  eval_every: 250
+  ckpt_every: 2500
+  gen_every: 0
+  grad_probe_every: 1            # the sustained tripwire reads preclip/total from probe.jsonl
+
+wandb:
+  name: notul-deep16

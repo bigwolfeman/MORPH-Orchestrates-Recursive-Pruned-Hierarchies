@@ -1,7 +1,12 @@
-Traceback (most recent call last):
-  File "/mnt/BigAssDrive/00projects/00DeepNet/00-MORPH-Orchestrates-Recursive-Pruned-Hierarchies/lab/divergence/score_arc_e0.py", line 82, in <module>
-    main()
-  File "/mnt/BigAssDrive/00projects/00DeepNet/00-MORPH-Orchestrates-Recursive-Pruned-Hierarchies/lab/divergence/score_arc_e0.py", line 34, in main
-    d = json.load(open(path))
-                  ^^^^^^^^^^
-FileNotFoundError: [Errno 2] No such file or directory: '/mnt/BigAssDrive/00projects/00DeepNet/00-MORPH-Orchestrates-Recursive-Pruned-Hierarchies/lab/experiments/results/2026-09-04-huginn-loop-contribution/sweep_huginn.json'
+huginn: rows 480  K3−K32 = +0.7749 (row mean)
+  P0a Spearman(row CE_3, row earning) = +0.319 [+0.233, +0.398]
+  offset profile (earning per token by offset-in-span):
+     0-0 : +0.4852 [+0.4644, +0.5072]  n=26444
+     1-1 : +0.5790 [+0.5610, +0.5981]  n=26661
+     2-2 : +0.6601 [+0.6401, +0.6809]  n=26589
+     3-3 : +0.7110 [+0.6906, +0.7320]  n=26542
+     4-7 : +0.7828 [+0.7689, +0.7976]  n=95081
+     8-15: +0.8266 [+0.8137, +0.8406]  n=144010
+    16-31: +0.8395 [+0.8256, +0.8543]  n=146193
+  P0b offset-0 earning / mean earning over offsets 4..31 = +0.4852 / +0.8207 = 0.59x
+  P0c top-decile rows: loss share 0.118, earning share 0.110 -> below
