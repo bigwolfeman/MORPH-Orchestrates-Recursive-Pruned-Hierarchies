@@ -1,0 +1,13 @@
+# ARC E12, the k=12 panel: the parallel-decode arm — M-next-mask at fixed depth 12 with
+# arc E8's 4 lookahead heads on the TUL coda (heads read the coda state at TOKEN positions
+# only; model.mtp_weight 1.0 as in E8 so the two are comparable).
+# Prereg: lab/experiments/planned/2026-09-07-arc-e12-k12-panel.md
+defaults:
+  - tul_k12_mnext_mask
+  - _self_
+
+model:
+  mtp_heads: 4
+
+wandb:
+  name: k12-mnext-mask-mtp4

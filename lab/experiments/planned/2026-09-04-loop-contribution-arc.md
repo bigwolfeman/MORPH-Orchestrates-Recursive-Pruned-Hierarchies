@@ -125,7 +125,8 @@ Wolfe's call.
 | E2 | iteration conditioning | FILED `failures/2026-09-04-arc-e2-iteration-conditioning.md`: held stable it earns LESS than Y2 (K1−K6 0.0087, K3−K6 +0.0001); the +0.0077 at 2500 was the expansive iteration. Branch (a) CLOSED. |
 | E3 | staged targets (`tul.mux_stage_own_iters`; configs `tul_to_mnext_y2_stage2/3`; prereg `arc-e3-staged-targets.md`) | code done, 823 tests pass; E3-2 queued behind E2 in the GPU window |
 | E4 | `to-mnext-y2-mask` on Y2 (mean 6, the constraint) | FILED `successes/2026-09-04-arc-e4-mask-under-constraint.md` (5 of 5): healthy to 5000; token K1−K6 +0.0209 (the tokens read the slot's depth on a stable map), shuffle worth 0.31, forecast K1−K6 +0.187; K3−K6 still ~0; +0.13 nats vs Y2 at 5000. Binding ⇒ E5 on E4 (Wolfe's call, not queued). |
-| E5 | 20k matched wall clock on any THINK arm | waits on E4 |
+| E5 | 20k matched wall clock on any THINK arm | not queued: no arm THINKS; Wolfe 2026-09-07: no 20k yet |
+| E12 | the k=12 panel: four TUL variants (mask, mnext, mask+mtp4, a1) at a FIXED slot depth of 12 with the fixed-point term on the slot loop (`tul.slot_depth_fixed`; configs `tul_k12_*.yaml`; prereg `arc-e12-k12-panel.md`) | code + tests done 2026-09-07 (875 pass); queued in `arc/run_e12.sh` |
 | H | Huginn-3.5B loop contribution (eval only, the external ruler) | FILED `failures/2026-09-04-huginn-loop-contribution.md`: H2 TRUE (K3−K6 +0.566, K6−K16 +0.206, saturates at 16–24 against a training mean of 32); H1/H3/H4a/H5 false. Decision rule fired: option (i) downgraded, training regime is the candidate cause. |
 | E6 | plain loop at a deep recurrence draw (mean 16, max 24, bptt 8; `notul_deep16.yaml`; prereg `arc-e6-deep-recurrence-draw.md`) | FILED `successes/2026-09-07-arc-e6-deep-recurrence-draw.md` (5 of 6): the draw is the lever on K-diffs (K3−K6 0.277, K6−K12 0.040, saturates at the mean 16–24) AND the deep model is 0.104 nats WORSE than mean-6 on the same rows at 1.23x cost: K-diffs measure depth DEPENDENCE, not depth value. E5 at the deep draw is the matched-compute test. |
 | E10c | the directional gain penalty with the power iteration inside the step (`core_gain_power_iters 2`, STARS' λ·g², `notul_pgain2_wu0.yaml`), 6 draws under the assay; E10b as run was inert (penalty never fired) and its draws count as warmup-0 controls | DONE 2026-09-07 10:30, filed inside E10: 2 of 6 detonated (240, 315), P10b FALSE; the within-step power reading leads the tripwire by 20–40 steps (1.1–1.3 healthy → 3–8 at the onset) where `core_block_gain` is blind, but λ 1e-3 · g² is 0.008–0.036 at the onset and does not act |
@@ -173,3 +174,13 @@ Its earning also has the shape E0 could not find on MORPH: it rises with offset-
 and the training regime becomes the candidate cause. E6 (`planned/2026-09-07-arc-e6-deep-
 recurrence-draw.md`) is the test and takes the next window's first slot; E3-2 and E4 keep
 their preregs and follow if the window allows. Predictions untouched everywhere.
+
+### Method amendment 4 (2026-09-07 11:40; Wolfe's redirection, order for this window)
+
+E8–E11 ran on the plain loop and produced the second hold (the fixed-point term, shipped in
+`base.yaml`); no slot arm ran with it. Wolfe: the "done by iteration 3 at mean 6" reading is
+the normal half-the-mean shape of a looped model and not a problem; the run to do is a
+FIXED slot depth of 12, on the actual TUL variants. E12 (`planned/2026-09-07-arc-e12-k12-
+panel.md`) takes the window: the fixed-point term ported to `_tul_core`, `tul.slot_depth_
+fixed`, and the E8 heads wired onto the TUL coda, four arms. E5 is not queued (no 20k yet).
+E3 keeps its prereg and follows E12's binding rule. Predictions untouched everywhere.

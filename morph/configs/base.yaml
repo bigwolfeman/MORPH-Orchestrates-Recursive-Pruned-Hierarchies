@@ -167,7 +167,8 @@ model:
   injection_channels: ctx
   injection_all_decay: 0.9
   # Arc E10 loop terms on the core loop (`_core_region`: the plain model AND the paid TUL
-  # loop; the slot loop has no port yet), 0 = off (bit-identical).
+  # loop; `_tul_core`: the slot loop, ported 2026-09-07 for the k=12 panel), 0 = off
+  # (bit-identical).
   # fixed point (SHIPPED 2026-09-07, Wolfe): lambda * mean ||h_T - h_{T-1}||^2 / ||h_T||^2
   # at each sample's last iteration (2608.18222). Measured: 0 of 6 warmup-0 detonations
   # against 4 of 7 controls (lab/experiments/successes/2026-09-07-arc-e10-loop-loss-terms.md)

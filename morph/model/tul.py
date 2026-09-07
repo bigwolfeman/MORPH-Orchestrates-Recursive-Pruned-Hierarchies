@@ -132,6 +132,9 @@ class TULConfig:
     token_state_dropout: float = 0.15    # Bowman word dropout on the coda input (§3.4)
     slot_mean_depth: int = 0             # 0 → cfg.mean_depth
     slot_max_depth: int = 0              # 0 → cfg.max_depth
+    slot_depth_fixed: int = 0            # >0: every valid slot loops EXACTLY this many
+                                         # iterations, train and eval (the k=12 panel,
+                                         # 2026-09-07); 0 → the per-slot Poisson draw
     coda_sees_slots: bool = True         # A4 sets False (§7.1)
     tokens_through_core: bool = False    # A2 sets True (§7.1)
     stp_lambda: float = 0.0              # arm (§3.5) — asserted 0 until implemented

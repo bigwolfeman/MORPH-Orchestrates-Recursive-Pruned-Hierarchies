@@ -1089,24 +1089,21 @@ class MORPHTransformer(nn.Module):
                 raise ValueError(
                     f"tul.mux_stage_own_iters={cfg.tul.mux_stage_own_iters} exceeds the loop's "
                     f"max depth {_kmax} (tul.slot_max_depth / model.max_depth)")
-        # Arc E10 loop terms on a TUL model (2026-09-07). The fixed-point term lives in
-        # `_core_region`, which the paid loop (tokens_through_core) runs unchanged, so it is
-        # DEFINED there and shipped in base.yaml; the slot loop (`_tul_core`) has no
-        # finishing-slice term yet and its own hinge (model.slot_gain_lambda), so a slot-loop
-        # config must set core_fixed_point_lambda 0 (tul_short.yaml does). The gain penalty
-        # was refuted (E10c) and stays plain-loop only. Both raise HERE, not at step 1.
+        # Arc E10 loop terms on a TUL model (2026-09-07). The fixed-point term is defined on
+        # every core loop: `_core_region` (the plain model and the paid loop) and `_tul_core`
+        # (the slot loop, the same finishing-slice term per slot). The gain penalty was
+        # refuted (E10c) and stays plain-loop only; it raises HERE, not at step 1.
         if cfg.tul is not None:
             if cfg.core_gain_lambda > 0.0:
                 raise RuntimeError("model.core_gain_lambda > 0 acts on the plain loop only "
                                    "(arc E10c, refuted); the slot path has its own hinge "
                                    "(model.slot_gain_lambda)")
-            if cfg.core_fixed_point_lambda > 0.0 and not cfg.tul.tokens_through_core:
-                raise RuntimeError(
-                    "model.core_fixed_point_lambda > 0 is defined on the plain loop and the "
-                    "paid loop (both run _core_region); the slot loop (_tul_core) has no "
-                    "finishing-slice term yet. tul_short.yaml sets it to 0 for every "
-                    "slot-loop arm (.agents/notes/implemented/architecture/"
-                    "2026-09-07-fixed-point-objective-as-the-loop-stability-term.md)")
+            _fixed = int(cfg.tul.slot_depth_fixed)
+            _kmax_slot = int(cfg.tul.slot_max_depth or cfg.max_depth)
+            if _fixed < 0 or _fixed > _kmax_slot:
+                raise ValueError(
+                    f"tul.slot_depth_fixed={_fixed} must lie in [0, slot_max_depth={_kmax_slot}] "
+                    f"(0 = the Poisson draw)")
         if cfg.tul is not None and cfg.fm is not None and cfg.tul.tokens_through_core:
             raise ValueError(
                 "tul.tokens_through_core=true with an FM planner (cfg.fm): the planner replaces "
@@ -1784,7 +1781,7 @@ class MORPHTransformer(nn.Module):
             return
         if labels.ndim != 2:
             raise RuntimeError("model.mtp_heads > 1 is undefined with 3-D TST bag labels")
-        out["ce_main"] = out["loss"]
+        out.setdefault("ce_main", out["loss"])
         total = None
         for j, head in enumerate(self.mtp, start=2):
             lab = F.pad(labels[:, j - 1:], (0, j - 1), value=-100)
@@ -2437,7 +2434,13 @@ class MORPHTransformer(nn.Module):
         mean_d = tc.slot_mean_depth or self.cfg.mean_depth
         max_d = tc.slot_max_depth or self.cfg.max_depth
         shape = layout.slot_index.shape
-        if self.training:
+        fixed = int(tc.slot_depth_fixed)
+        if fixed > 0:
+            # The k-fixed panel (2026-09-07): every valid slot loops exactly `fixed` times,
+            # in training AND at eval, so the forced-depth sweep reads a model that never
+            # saw another depth. bptt_depth < fixed truncates uniformly (Parcae's form).
+            d = torch.full(shape, fixed, device=device, dtype=torch.long)
+        elif self.training:
             d = torch.poisson(torch.full(shape, float(mean_d), device=device)).long()
             d = d.clamp(min=1, max=max_d)
         else:
@@ -2586,6 +2589,13 @@ class MORPHTransformer(nn.Module):
         _n0 = h.detach().flatten(2).float().norm(dim=2) if _renorm else None      # [B, S]
         _gain_lambda = float(self.cfg.slot_gain_lambda)
         _gain_on = _gain_lambda > 0.0 and torch.is_grad_enabled() and self.training
+        # The terminal fixed-point term (base.yaml `core_fixed_point_lambda`, the twin of
+        # `_core_region`'s): ||h_T - h_{T-1}||^2 / ||h_T||^2 on every VALID slot at its LAST
+        # iteration, grad iterations only, training only. Stashed in `_core_aux` and consumed
+        # by `_forward_tul` exactly as the paid loop's is. Under SCSE the denominator is the
+        # absolute state h* + Delta. `halt` (eval only) never reaches it.
+        _fp_lam = float(self.cfg.core_fixed_point_lambda) if self.training else 0.0
+        _fp_terms: list[Tensor] = []
         _gain_reg: dict | None = None
 
         # Loop-invariant injection, built ON THE COMPACT SEQUENCE (the x0/bigram hoist
@@ -2865,6 +2875,14 @@ class MORPHTransformer(nn.Module):
                         _pr_rank.append(_er.detach())
             if _cot_hooks and h_new.requires_grad:
                 h_new.register_hook(functools.partial(self._loop_cot_hook, t, _probe_cot))
+            if _fp_lam > 0.0 and t >= n_nograd and not halt:
+                _fin = active & layout.slot_valid & ~(depths > t + 1)        # finish here
+                if bool(_fin.any()):
+                    _fn = h_new.flatten(2).float()
+                    _fo = h.flatten(2).float()
+                    _fd = _fn if _scse is None else _fn + h_star.flatten(2).float()
+                    _rel = (_fn - _fo).pow(2).sum(-1) / (_fd.pow(2).sum(-1) + 1e-6)   # [B, S]
+                    _fp_terms.append(_rel[_fin])
 
             h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
             if _db or _stage:
@@ -2905,6 +2923,9 @@ class MORPHTransformer(nn.Module):
             # Eq. 5 tail: h_T = h* + Delta_T (invariant S6). The deviation lives ONLY inside
             # this function; `_forward_tul` scatters an absolute carrier exactly as today.
             h = h_star + h
+        if _fp_terms:
+            _fp = torch.cat(_fp_terms).mean()
+            self._core_aux = {"fixed_point": _fp.detach(), "fp_weighted": _fp_lam * _fp}
         if _gain_terms:
             # One sampled iteration: its dict as before. Every iteration: the hinges SUM
             # (each iteration's map is held under the target), the gains report mean / max.
@@ -3383,10 +3404,6 @@ class MORPHTransformer(nn.Module):
         # loop runs unchanged, so it is stashed there and consumed at the end of this
         # forward. A slot-loop or gain-penalty model never gets here (rejected at build).
         self._core_aux = None
-        if self.mtp is not None:
-            raise RuntimeError("model.mtp_heads > 1 is not defined on the TUL slot path "
-                               "(labels at slot positions are not a token stream); arc E8 "
-                               "runs it on the plain loop only")
         if self.tul is None:
             raise RuntimeError(
                 "forward(slot_layout=...) requires a model built with MORPHConfig(tul=...); "
@@ -3759,6 +3776,17 @@ class MORPHTransformer(nn.Module):
 
         if groups is not None:
             out.update(groups)
+            if self.mtp is not None:
+                # Arc E8 heads on the TUL coda (the parallel-decode arm of the k=12 panel):
+                # the heads read the coda state at TOKEN positions only, in token order, so
+                # "j-1 labels ahead" means j-1 TOKENS ahead and never crosses a slot.
+                if not (tc.coda_sees_slots and tc.coda_token_cut == 0):
+                    raise NotImplementedError(
+                        "model.mtp_heads > 1 with a gathered coda (coda_sees_slots=False "
+                        "or coda_token_cut > 0) is not defined: the head labels are built "
+                        "from the full-axis layout")
+                x_tok, lab_tok = self._tul_token_compact(xh, labels, layout)
+                self._mtp_apply(out, x_tok, lab_tok, self.embed.lm_weight())
             if self._core_aux is not None:
                 # The paid loop's fixed-point term (stashed by `_core_region`): added to the
                 # loss and exposed as `fixed_point` / `fp_weighted`, the same keys and the
@@ -3779,6 +3807,23 @@ class MORPHTransformer(nn.Module):
         out["layer_passes"] = self._tul_layer_passes(layout, depths, coda_positions)
         out["n_tokens"] = (~layout.slot_mask).sum()
         return out
+
+    @staticmethod
+    def _tul_token_compact(xh: Tensor, labels: Tensor, layout: SlotLayout) -> tuple[Tensor, Tensor]:
+        """The coda readout and labels at TOKEN positions only, in token order, ``[B, n_tok, …]``.
+
+        The packer gives every row the same number of token positions (fixed-shape rows,
+        spec §4), so the compaction is a static gather (:func:`compact_index`). Slot
+        positions, and their emit labels, are dropped; ``labels[b, i]`` on the result is the
+        next TOKEN after token ``i`` of row ``b``, which is what a lookahead head shifts.
+        """
+        n_tok = (~layout.slot_mask).sum(dim=1)
+        n = int(n_tok[0])
+        if bool((n_tok != n).any()):
+            raise RuntimeError("_tul_token_compact expects the same token count on every "
+                               f"row (fixed-shape packing); got {n_tok.tolist()}")
+        cidx = compact_index(layout.slot_mask)[:, :n]
+        return gather_positions(xh, cidx), gather_positions(labels, cidx)
 
     def _tul_plan_ablate(self, h_slots: Tensor, layout: SlotLayout, mode: str) -> Tensor:
         """Eval-only plan ablations for ``val/plan_worth_*`` (docs/tul-fm-probing.md §1).

@@ -159,10 +159,13 @@ def main() -> None:
             masks.append((tokpos, first))
         orig_mean = int(model.cfg.tul.slot_mean_depth)
         orig_max = int(model.cfg.tul.slot_max_depth)
+        # k-fixed arms (tul.slot_depth_fixed > 0, the 2026-09-07 k=12 panel) ignore the mean
+        # at eval, so the forced depth must go through the fixed knob as well.
+        orig_fixed = int(getattr(model.cfg.tul, "slot_depth_fixed", 0))
         has_mux = float(model.cfg.tul.mux_beta) > 0.0
         arm = {"step": step, "rows": rows_done, "batch": a.batch, "eval_mode": a.eval_mode,
                "train_eval_depth":
-               orig_mean or int(cfg.model.mean_depth), "depths": {},
+               orig_fixed or orig_mean or int(cfg.model.mean_depth), "depths": {},
                "mux_target": str(model.cfg.tul.mux_target) if has_mux else None,
                "cond_layers": int(model.cfg.tul.cond_layers),
                "detach_z": bool(model.cfg.tul.detach_z)}
@@ -184,6 +187,8 @@ def main() -> None:
                     model.cfg.tul.db1_ladder_steps = d
                 model.cfg.tul.slot_mean_depth = d
                 model.cfg.tul.slot_max_depth = max(d, orig_max or int(cfg.model.max_depth))
+                if orig_fixed > 0:
+                    model.cfg.tul.slot_depth_fixed = d
                 tot = tot_n = fst = fst_n = 0.0
                 rs: list[float] = []
                 rc: list[float] = []
@@ -222,6 +227,8 @@ def main() -> None:
         finally:
             model.cfg.tul.slot_mean_depth = orig_mean
             model.cfg.tul.slot_max_depth = orig_max
+            if orig_fixed > 0:
+                model.cfg.tul.slot_depth_fixed = orig_fixed
             if _sigma:
                 model.cfg.tul.db1_ladder_steps = orig_ladder
         assert row_cnt is not None

@@ -147,7 +147,7 @@ def _tul_layout(seed=0, B=2, n=90):
     return slot_layout_from_ids(ids.astype(np.int64), rule, spec)
 
 
-def test_paid_loop_carries_the_fixed_point_term_and_the_slot_loop_refuses_it():
+def test_paid_loop_carries_the_fixed_point_term():
     from morph.model.tul import TULConfig
     x, y, layout, _ = _tul_layout()
     paid = dict(tul=TULConfig(prefix_k=2, slot_id=4, tokens_through_core=True))
@@ -173,9 +173,6 @@ def test_paid_loop_carries_the_fixed_point_term_and_the_slot_loop_refuses_it():
     m.train()
     _ = m(x, labels=None, slot_layout=layout)
     assert m._core_aux is None
-    # a slot-loop model (tokens_through_core False) with the term on refuses to BUILD
-    with pytest.raises(RuntimeError, match="slot loop"):
-        _model(core_fixed_point_lambda=1.0, tul=TULConfig(prefix_k=2, slot_id=4))
     # the refuted gain penalty refuses to build on any TUL model
     with pytest.raises(RuntimeError, match="core_gain_lambda"):
         _model(core_gain_lambda=1.0, core_gain_target=0.0, **paid)
