@@ -19,7 +19,7 @@ plain loop (`_core_region`). Evidence, 2026-09-07:
 
 - Under warmup 0 (the detonation assay, `lab/divergence/DIVERGENCE-README.md`): 0 of 6
   draws detonated (max `preclip/total` 11–18) against 4 of 7 controls the same night and
-  17 of 24 in September (`planned/2026-09-07-arc-e10-loop-loss-terms.md`, E10a). The
+  17 of 24 in September (`successes/2026-09-07-arc-e10-loop-loss-terms.md`, E10a). The
   relative change sits at 0.004–0.02 from step 0: the map never leaves the settled regime.
 - Under the shipped ramp at 5000 steps (`successes/2026-09-07-arc-e11-fixed-point-
   ramped.md`): +0.0009 [−0.0022, +0.0040] nats against notul at the trained depth on 480
@@ -34,8 +34,10 @@ standing regime instrument beside `preclip/total`.
 
 - The directional gain hinge (STARS-style). Its one-shot form was inert on the plain loop
   (the reading sat at 1.1–1.5 along a batch-averaged direction); the within-step
-  power-iterated form (E10c) is running. Even if it holds, it costs two to four extra
-  core-step applications per step; the fixed-point term costs one elementwise op.
+  power-iterated form (E10c) detonated 2 of 6 at STARS' λ 1e-3, though its reading leads
+  the onset by 20–40 steps (`successes/2026-09-07-arc-e10-loop-loss-terms.md`). It costs
+  four extra core-step applications per step (1.29x the fixed-point draw's wall clock);
+  the fixed-point term costs one elementwise op.
 - Keeping the ramp alone. It is measured (0 of 9) but it is a schedule: it cannot act on
   a map that goes expansive later (E7 at 2712, E8-16 at 3446, both under the ramp).
 - Parcae's carry constraint. Refuted for the early window (E9).

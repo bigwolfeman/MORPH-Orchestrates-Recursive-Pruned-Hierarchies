@@ -2,7 +2,7 @@
 
 Status: success
 Date: 2026-09-07 06:10 (frozen before launch; the E10 binding rule's follow-up)
-Arc: `2026-09-04-loop-contribution-arc.md`. Follows E10a (`planned/2026-09-07-arc-e10-loop-
+Arc: `2026-09-04-loop-contribution-arc.md`. Follows E10a (`successes/2026-09-07-arc-e10-loop-
 loss-terms.md`: 6 of 6 warmup-0 draws healthy at max `preclip/total` 11–18 where the
 controls detonated by step 419).
 

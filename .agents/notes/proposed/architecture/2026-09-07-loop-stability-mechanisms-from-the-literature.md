@@ -37,6 +37,12 @@ In order:
    map's TOP singular direction instead of a random one. E7's checkpoint read 0.85 on the
    random direction while σ_max sat at 95; healthy arms read 11–22 there, so the target
    is on σ_max (20), not on the typical gain. E10b.
+   **Measured 2026-09-07 (`lab/experiments/successes/2026-09-07-arc-e10-loop-loss-terms.md`):**
+   the once-per-step direction reads the typical gain (1.1–1.5) and the hinge never fires
+   (E10b, inert); with two finite-difference power steps inside the step
+   (`core_gain_power_iters 2`, STARS' λ·g² at λ 1e-3, E10c) the reading leads the
+   detonation by 20–40 steps (1.1–1.3 → 3–8) but 2 of 6 draws detonate: an instrument,
+   not a hold, at that λ. Item 2 (0 of 6, E10a; free at 5k, E11) is the one that held.
 4. **DeepLoop residual scaling for weight-tied depth** (2607.13491, 2606.18524): scale
    the shared block's write into the carrier by the unrolled depth. MORPH's residual is
    the Cayley hyper-connection, so the write scale is its β/read-write vectors, not a
