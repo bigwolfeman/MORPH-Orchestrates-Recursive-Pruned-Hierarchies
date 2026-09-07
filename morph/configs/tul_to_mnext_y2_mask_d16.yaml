@@ -1,0 +1,17 @@
+# ARC E7 — the BLOCK-LOOP: Design 1 of the 2026-09-07 TUL design list. The E4 mask (the
+# forecast slot is the ONLY route from an earlier span to a later token, so the slot's
+# loss is the whole next span's CE through it — the Block Transformer's loss) at a DEEP
+# slot draw: per-slot Poisson mean 16, max 24, gradient through the LAST 8 iterations
+# (bptt_depth 8; the earlier ones run under no_grad and pre-converge the state, as Huginn
+# trains). Everything else is Y2-mask (the hinge at 0.90, lambda 100, cot clip 4, the
+# ramp, the panel pins). Prereg: lab/experiments/planned/2026-09-07-arc-e7-block-loop.md
+defaults:
+  - tul_to_mnext_y2_mask
+  - _self_
+model:
+  bptt_depth: 8                  # truncated: 8 grad iterations of up to 24 (base: 8 = full at max 8)
+tul:
+  slot_mean_depth: 16            # per-slot Poisson mean (Y2: model.mean_depth 6)
+  slot_max_depth: 24             # clamp (Y2: model.max_depth 8)
+wandb:
+  name: to-mnext-y2-mask-d16
