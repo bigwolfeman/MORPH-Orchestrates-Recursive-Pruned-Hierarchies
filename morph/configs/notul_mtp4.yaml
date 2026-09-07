@@ -1,0 +1,21 @@
+# ARC E8 arm 1 — the plain mean-6 loop with parallel multi-token prediction (4 targets per
+# position: t+1 through the coda's own head, t+2..t+4 through three identity-init lookahead
+# heads on the readout, equal weights as in Gloeckle et al. 2024). Everything else is
+# notul.yaml at 5000 steps, so the matched control is the notul 5000-step sweep in
+# results/2026-09-04-arc-e0/sweep_notul_5000.json. The question is whether a lookahead
+# target makes the mean-6 loop earn past iteration 3 (target lever (b)) and what it costs
+# the next-token CE. Prereg: lab/experiments/planned/2026-09-07-arc-e8-multi-token-coda.md
+defaults:
+  - notul
+  - _self_
+model:
+  mtp_heads: 4
+  mtp_weight: 1.0
+training:
+  steps: 5000
+  eval_every: 250
+  ckpt_every: 2500
+  gen_every: 0
+  grad_probe_every: 1
+wandb:
+  name: notul-mtp4

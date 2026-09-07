@@ -1,0 +1,13 @@
+# ARC E8 arm 2 — the deep draw (notul_deep16: mean 16, max 24, bptt 8) with the same four
+# targets per position. E6 showed the deep draw makes the loop earn while the model loses
+# 0.104 nats to mean-6 at matched steps; this arm asks whether a lookahead target turns
+# that earning into value. Control: notul_deep16 (results/2026-09-07-arc-e6) and notul_mtp4.
+# Prereg: lab/experiments/planned/2026-09-07-arc-e8-multi-token-coda.md
+defaults:
+  - notul_deep16
+  - _self_
+model:
+  mtp_heads: 4
+  mtp_weight: 1.0
+wandb:
+  name: notul-deep16-mtp4

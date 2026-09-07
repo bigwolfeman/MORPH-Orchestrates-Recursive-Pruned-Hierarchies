@@ -49,6 +49,28 @@ def ce_map(model, x, y, device) -> torch.Tensor:
                            reduction="none").reshape(B, L)
 
 
+@torch.no_grad()
+def ce_map_heads(model, x, y, device) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Arc E8: per-token CE of each lookahead head j = 2..k against labels shifted by
+    j-1 (tail -100), as ``[(ce [B, L], valid [B, L]), ...]``. Empty on a 1-head model."""
+    if getattr(model, "mtp", None) is None:
+        return []
+    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
+        res = model(x.to(device), labels=None)
+    outs = []
+    for j, lg in enumerate(res["mtp_logits"], start=2):
+        lg = lg.float()
+        B, L, V = lg.shape
+        lab = F.pad(y.to(device)[:, j - 1:], (0, j - 1), value=-100)
+        valid = lab >= 0
+        lab = lab.clone()
+        lab[~valid] = 0
+        ce = F.cross_entropy(lg.reshape(B * L, V), lab.reshape(B * L),
+                             reduction="none").reshape(B, L)
+        outs.append((ce, valid))
+    return outs
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", action="append", required=True,
@@ -98,6 +120,12 @@ def main() -> None:
         n_rows = len(batches) * a.batch
         arm = {"step": step, "rows": n_rows,
                "train_eval_depth": orig_mean, "depths": {}}
+        n_heads = len(model.mtp) if getattr(model, "mtp", None) is not None else 0
+        if n_heads:
+            # Arc E8: the lookahead heads' CE(depth), per head, with per-row sums so the
+            # scorer can pair them (heads[j]["row_ce_sum"][d][row], row_n_tokens).
+            arm["heads"] = {str(j): {"depths": {}, "row_ce_sum": {}, "row_n_tokens": {}}
+                            for j in range(2, n_heads + 2)}
         prof = None
         if a.profile:
             rule = build_boundary_rule(cfg)[0]
@@ -124,7 +152,27 @@ def main() -> None:
                     ce = tot / tot_n
                     arm["depths"][d] = {"ce_tokens": ce, "n_tokens": tot_n,
                                         "n_batches": len(batches), "batch": a.batch}
-                print(f"{label:10s} depth={d}  ce={ce:.4f}", flush=True)
+                if n_heads:
+                    hsum = {j: 0.0 for j in range(2, n_heads + 2)}
+                    hn = {j: 0.0 for j in range(2, n_heads + 2)}
+                    for i, (x, y) in enumerate(batches):
+                        for j, (ce_h, valid_h) in enumerate(ce_map_heads(model, x, y, device),
+                                                            start=2):
+                            hj = arm["heads"][str(j)]
+                            rs = hj["row_ce_sum"].setdefault(str(d), [])
+                            rn = hj["row_n_tokens"].setdefault(str(d), [])
+                            for b in range(x.shape[0]):
+                                rs.append(float(ce_h[b][valid_h[b]].sum()))
+                                rn.append(float(valid_h[b].sum()))
+                            hsum[j] += float(ce_h[valid_h].sum())
+                            hn[j] += float(valid_h.sum())
+                    for j in hsum:
+                        arm["heads"][str(j)]["depths"][d] = {"ce_tokens": hsum[j] / hn[j],
+                                                             "n_tokens": hn[j]}
+                    heads_txt = "  ".join(f"h{j}={hsum[j] / hn[j]:.4f}" for j in hsum)
+                    print(f"{label:10s} depth={d}  ce={ce:.4f}  {heads_txt}", flush=True)
+                else:
+                    print(f"{label:10s} depth={d}  ce={ce:.4f}", flush=True)
         finally:
             model.cfg.mean_depth = orig_mean
         if prof is not None:

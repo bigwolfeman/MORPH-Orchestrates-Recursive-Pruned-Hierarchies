@@ -154,6 +154,13 @@ model:
   # LM head fused cross-entropy chunk size (rows of B·T per chunk).
   # Smaller = less peak VRAM, more launch overhead. Tune per target.
   ce_chunk_size: 1024
+  # Parallel multi-token prediction on the coda readout (arc E8, 2026-09-07). 1 = the plain
+  # next-token head only (bit-identical; no module built). k > 1 adds k-1 heads (RMSNorm ->
+  # identity-init Linear -> the tied LM head) trained on labels shifted by 1..k-1, loss
+  # CE_1 + mtp_weight * sum CE_j. train/loss and val stay the next-token CE. Not defined on
+  # the TUL slot path or with TST bags. Arm configs: notul_mtp4.yaml, notul_deep16_mtp4.yaml.
+  mtp_heads: 1
+  mtp_weight: 1.0
 
   # Master kernel switch: true = fused Triton attn + fused CE (optimised);
   # false = eager references + full-logits CE (un-optimised A/B baseline).

@@ -128,6 +128,7 @@ Wolfe's call.
 | E5 | 20k matched wall clock on any THINK arm | waits on E4 |
 | H | Huginn-3.5B loop contribution (eval only, the external ruler) | FILED `failures/2026-09-04-huginn-loop-contribution.md`: H2 TRUE (K3−K6 +0.566, K6−K16 +0.206, saturates at 16–24 against a training mean of 32); H1/H3/H4a/H5 false. Decision rule fired: option (i) downgraded, training regime is the candidate cause. |
 | E6 | plain loop at a deep recurrence draw (mean 16, max 24, bptt 8; `notul_deep16.yaml`; prereg `arc-e6-deep-recurrence-draw.md`) | FILED `successes/2026-09-07-arc-e6-deep-recurrence-draw.md` (5 of 6): the draw is the lever on K-diffs (K3−K6 0.277, K6−K12 0.040, saturates at the mean 16–24) AND the deep model is 0.104 nats WORSE than mean-6 on the same rows at 1.23x cost: K-diffs measure depth DEPENDENCE, not depth value. E5 at the deep draw is the matched-compute test. |
+| E8 | parallel multi-token prediction on the coda (`model.mtp_heads 4`; `notul_mtp4.yaml`, `notul_deep16_mtp4.yaml`; prereg `arc-e8-multi-token-coda.md`) | code + tests done 2026-09-07 02:30 (Wolfe's arm); queued behind E7 in `arc/run_e8.sh` |
 | E7 | the block-loop: E4 mask at slot draw mean 16 / max 24, grad through 8 (`tul_to_mnext_y2_mask_d16.yaml`; prereg `arc-e7-block-loop.md`) | queued behind E6 in the same runner |
 
 ### Method amendment 1 (2026-09-04 17:08; order only, no prediction touched)

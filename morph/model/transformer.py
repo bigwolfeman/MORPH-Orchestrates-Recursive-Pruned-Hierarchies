@@ -247,6 +247,18 @@ class MORPHConfig:
     # memory / very long context.
     ce_chunk_size: int = 1024
 
+    # Parallel multi-token prediction on the coda readout (Gloeckle et al. 2024, arXiv
+    # 2404.19737; arc E8, 2026-09-07 [W]). mtp_heads = the number of future tokens each
+    # position is trained to predict: 1 = the plain next-token head only (bit-identical, no
+    # module built); k > 1 adds k-1 parallel heads, each RMSNorm -> Linear(d, d) at IDENTITY
+    # init (zero RNG draws) feeding the SAME tied LM head, with labels shifted by 1..k-1 and
+    # the tail padded to -100. Loss = CE_1 + mtp_weight * sum_{j=2..k} CE_j. The heads read
+    # the readout state ONLY (no attention of their own), so every bit of lookahead must
+    # already be in the position's state: the strict form of the target-side lever (b).
+    # Undefined (raises) with 3-D TST bag labels and on the TUL slot path.
+    mtp_heads: int = 1
+    mtp_weight: float = 1.0
+
     # Master kernel switch. True = fused Triton attention + fused chunked CE
     # (the optimised stack). False = eager PyTorch references + full-logits CE
     # (the un-optimised baseline) — same architecture/weights, for A/B on memory
@@ -793,6 +805,25 @@ class LMHeadMixer(nn.Module):
         return self.mix(scaled)
 
 
+class _MTPHead(nn.Module):
+    """One parallel lookahead head: RMSNorm -> Linear(d, d) at identity init.
+
+    Reads the coda readout (post lm_mixer/final_norm) and feeds the tied LM head, so at
+    init every head predicts exactly what the next-token head predicts (and its loss
+    starts at the next-token CE against a shifted label). Deterministic init: no RNG.
+    """
+
+    def __init__(self, d: int):
+        super().__init__()
+        self.norm = RMSNorm(d)
+        self.proj = nn.Linear(d, d, bias=False)
+        with torch.no_grad():
+            self.proj.weight.copy_(torch.eye(d))
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.proj(self.norm(x))
+
+
 class MORPHTransformer(nn.Module):
 
     # Operating-point capture for the core-map Jacobian probe
@@ -973,6 +1004,17 @@ class MORPHTransformer(nn.Module):
                                 gate_logit_bias=cfg.retention_gate_bias,
                                 write_shift=cfg.retention_write_shift),
                             RMSNorm(d), gate_init=cfg.retention_gate_init)
+
+        # ── Multi-token prediction heads (cfg.mtp_heads > 1; arc E8) ───────
+        # Identity init draws no RNG, so a model with heads shares every base weight with
+        # the same-seed model without them (tests/test_mtp_heads.py).
+        if int(cfg.mtp_heads) < 1:
+            raise ValueError(f"model.mtp_heads must be >= 1, got {cfg.mtp_heads}")
+        self.mtp = None
+        if int(cfg.mtp_heads) > 1:
+            self.mtp = nn.ModuleList([_MTPHead(d) for _ in range(int(cfg.mtp_heads) - 1)])
+            print(f"  MTP: {int(cfg.mtp_heads) - 1} parallel lookahead heads on the coda "
+                  f"readout (targets t+2..t+{int(cfg.mtp_heads)}), weight {cfg.mtp_weight}")
 
         # ── TUL slot parameters (docs/tul-spec.md §3.1-§3.4) ───────────────
         # Constructed LAST, after retention, for the same reason: all three inits are
@@ -1570,6 +1612,41 @@ class MORPHTransformer(nn.Module):
             x = layer(x, attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
 
         return self._readout(x)
+
+    def _mtp_apply(self, out: dict, x: Tensor, labels: Tensor | None,
+                   w_full: Tensor | None) -> None:
+        """Multi-token prediction on the readout ``x`` (``[B, T, d]``; arc E8).
+
+        Adds ``ce_mtp_j`` (j = 2..k, the CE of head j against labels shifted by j-1, tail
+        -100), ``mtp_weighted`` (= mtp_weight * their sum, ALREADY added to ``out["loss"]``)
+        and ``ce_main`` to ``out``; with ``labels is None`` (the eager generation / sweep
+        path) it adds ``mtp_logits`` (a list of ``[B, T, V]``) instead. ``w_full`` given ⇒
+        the fused chunked CE (training / kernel eval); None ⇒ full logits (eager).
+        """
+        if labels is None:
+            if w_full is not None:
+                return
+            out["mtp_logits"] = [self.embed.attend(h(x)) for h in self.mtp]
+            return
+        if labels.ndim != 2:
+            raise RuntimeError("model.mtp_heads > 1 is undefined with 3-D TST bag labels")
+        out["ce_main"] = out["loss"]
+        total = None
+        for j, head in enumerate(self.mtp, start=2):
+            lab = F.pad(labels[:, j - 1:], (0, j - 1), value=-100)
+            hx = head(x)
+            if w_full is not None:
+                ce_j = fused_linear_cross_entropy(
+                    hx.reshape(-1, hx.shape[-1]), w_full, lab.reshape(-1),
+                    ignore_index=-100, chunk_size=self.cfg.ce_chunk_size)
+            else:
+                ce_j = F.cross_entropy(
+                    self.embed.attend(hx).reshape(-1, self.cfg.vocab_size),
+                    lab.reshape(-1), ignore_index=-100)
+            out[f"ce_mtp_{j}"] = ce_j
+            total = ce_j if total is None else total + ce_j
+        out["mtp_weighted"] = float(self.cfg.mtp_weight) * total
+        out["loss"] = out["loss"] + out["mtp_weighted"]
 
     def _readout(self, x: Tensor) -> Tensor:
         """HC stream mean → lm_mixer → final_norm.
@@ -3108,6 +3185,10 @@ class MORPHTransformer(nn.Module):
         into the plain ``_tul_core`` loop (the forced-depth sweep's path), matching the
         paper's "trained single-pass, sampled with the original K-iteration procedure".
         """
+        if self.mtp is not None:
+            raise RuntimeError("model.mtp_heads > 1 is not defined on the TUL slot path "
+                               "(labels at slot positions are not a token stream); arc E8 "
+                               "runs it on the plain loop only")
         if self.tul is None:
             raise RuntimeError(
                 "forward(slot_layout=...) requires a model built with MORPHConfig(tul=...); "
@@ -4089,6 +4170,8 @@ class MORPHTransformer(nn.Module):
                 )
             loss = ce_loss
             out = {"logits": None, "loss": loss}
+            if self.mtp is not None:
+                self._mtp_apply(out, x, labels, w_full)
         else:
             logits = self.embed.attend(x)
             out = {"logits": logits}
@@ -4107,5 +4190,7 @@ class MORPHTransformer(nn.Module):
                     )
                 loss = ce_loss
                 out["loss"] = loss
+            if self.mtp is not None:
+                self._mtp_apply(out, x, labels, None)
 
         return out

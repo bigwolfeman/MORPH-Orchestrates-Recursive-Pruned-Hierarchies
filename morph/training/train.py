@@ -227,7 +227,15 @@ def evaluate(
             x, y = x.to(device), y.to(device)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 out = model(x, labels=y)
-            losses.append(out["loss"].item())
+            _l = out["loss"].item()
+            if out.get("mtp_weighted") is not None:
+                # val loss = the next-token CE (the number every arm is compared on);
+                # the lookahead heads are reported on their own (arc E8).
+                _l -= float(out["mtp_weighted"])
+                for _k, _v in out.items():
+                    if _k.startswith("ce_mtp_"):
+                        acc.setdefault(f"val/{_k}", []).append(float(_v))
+            losses.append(_l)
     model.train()
     if extra is not None:
         extra.update({k: sum(v) / len(v) for k, v in acc.items() if v})
@@ -438,6 +446,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_target=float(getattr(m, "slot_gain_target", 0.9)),
         slot_gain_eps=float(getattr(m, "slot_gain_eps", 0.02)),
         slot_gain_all_iters=bool(getattr(m, "slot_gain_all_iters", False)),
+        mtp_heads=int(getattr(m, "mtp_heads", 1)),
+        mtp_weight=float(getattr(m, "mtp_weight", 1.0)),
         dropout=float(tr.dropout),
     )
 
@@ -2828,7 +2838,7 @@ def main(cfg: DictConfig) -> None:
                 # whether the forward on that batch was itself abnormal (a forward
                 # explosion moves the loss; a backward-only blow-up does not).
                 _probe_log["loss/total"] = float(loss.detach())
-                for _lk in ("ce_main", "mux_local", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters"):
+                for _lk in ("ce_main", "mux_local", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters", "mtp_weighted"):
                     if _lk in out and out[_lk] is not None:
                         _probe_log[f"loss/{_lk}"] = float(out[_lk].detach())
                 wandb.log(_probe_log, step=step)
@@ -2946,6 +2956,8 @@ def main(cfg: DictConfig) -> None:
                 _lv = _lv - float(out["sigreg_weighted"])
             if isinstance(out, dict) and out.get("gain_reg_weighted") is not None:
                 _lv = _lv - float(out["gain_reg_weighted"])
+            if isinstance(out, dict) and out.get("mtp_weighted") is not None:
+                _lv = _lv - float(out["mtp_weighted"])   # arc E8: train/loss = next-token CE
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
             #    after its external watchdog died in a power loss). A NaN/Inf loss NEVER
             #    recovers — save an emergency ckpt for forensics and stop, instead of burning
@@ -2981,6 +2993,9 @@ def main(cfg: DictConfig) -> None:
             log: dict = {
                 "train/loss": _lv,
                 "train/loss_total": _lv_total,
+                **({f"train/{_k}": float(_v.detach()) for _k, _v in out.items()
+                    if _k.startswith("ce_mtp_") or _k == "mtp_weighted"}
+                   if isinstance(out, dict) else {}),
                 "train/ppl": math.exp(min(_lv, 20.0)),
                 "train/lr": lr,
                 "perf/steps_per_sec": sps,
