@@ -166,6 +166,16 @@ model:
   # dims starting at decay injection_all_decay with dt = 1 - decay. Arc E9 (2026-09-07).
   injection_channels: ctx
   injection_all_decay: 0.9
+  # Arc E10 loop terms on the plain loop, 0 = off (bit-identical). fixed point: lambda *
+  # mean ||h_T - h_{T-1}||^2 / ||h_T||^2 at each sample's last iteration (2608.18222).
+  # gain: a finite-difference hinge lambda * relu(g - target)^2 at one random grad iteration
+  # along a power-iterated direction (STARS 2605.26733), so g reads sigma_max (healthy
+  # arms 11-22, E7's sick map 95). Arm configs: notul_fp_wu0.yaml, notul_pgain_wu0.yaml.
+  core_fixed_point_lambda: 0.0
+  core_gain_lambda: 0.0
+  core_gain_target: 20.0
+  core_gain_eps: 0.02
+  core_gain_direction: power
 
   # Master kernel switch: true = fused Triton attn + fused CE (optimised);
   # false = eager references + full-logits CE (un-optimised A/B baseline).

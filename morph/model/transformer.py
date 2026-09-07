@@ -270,6 +270,23 @@ class MORPHConfig:
     injection_channels: str = "ctx"
     injection_all_decay: float = 0.9
 
+    # Arc E10 (2026-09-07), two loss terms on the PLAIN loop (`_core_region`), both 0 = off and
+    # bit-identical; both training-only; both raise on the TUL slot path.
+    # (a) Terminal fixed-point objective (arXiv 2608.18222): lambda * mean_b ||h_T - h_{T-1}||^2 /
+    #     ||h_T||^2 at each sample's LAST iteration — asks the loop to settle.
+    core_fixed_point_lambda: float = 0.0
+    # (b) Directional gain hinge (STARS arXiv 2605.26733 by finite difference): at one random
+    #     grad iteration, g = ||f(h + d) - f(h)|| / ||d|| with d = core_gain_eps * ||h|| * v;
+    #     penalty lambda * relu(g - core_gain_target)^2. direction "power": v is a persistent
+    #     buffer updated by one power step per training step (v <- normalize(mean_b (f(h+d) -
+    #     f(h)))), so g tracks the map's TOP singular value (healthy arms read 11-22 there,
+    #     E7's sick map 95; the target is on sigma_max, not the typical gain). "random": a
+    #     fresh Gaussian v each step (the slot hinge's reading).
+    core_gain_lambda: float = 0.0
+    core_gain_target: float = 20.0
+    core_gain_eps: float = 0.02
+    core_gain_direction: str = "power"
+
     # Master kernel switch. True = fused Triton attention + fused chunked CE
     # (the optimised stack). False = eager PyTorch references + full-logits CE
     # (the un-optimised baseline) — same architecture/weights, for A/B on memory
@@ -1046,6 +1063,12 @@ class MORPHTransformer(nn.Module):
             print(f"  MTP: {int(cfg.mtp_heads) - 1} parallel lookahead heads on the coda "
                   f"readout (targets t+2..t+{int(cfg.mtp_heads)}), weight {cfg.mtp_weight}")
 
+        if cfg.core_gain_direction not in ("power", "random"):
+            raise ValueError(f"model.core_gain_direction must be 'power' or 'random', got "
+                             f"{cfg.core_gain_direction!r}")
+        self._core_aux: dict | None = None      # arc E10 loss terms, stashed by _core_region
+        self._core_gain_dir: Tensor | None = None   # the power-iterated probe direction
+
         # ── TUL slot parameters (docs/tul-spec.md §3.1-§3.4) ───────────────
         # Constructed LAST, after retention, for the same reason: all three inits are
         # DETERMINISTIC (zeros / identity — zero RNG draws), so a TUL model's base weights
@@ -1643,6 +1666,71 @@ class MORPHTransformer(nn.Module):
 
         return self._readout(x)
 
+    def _core_gain_penalty(self, core_step, args, rs_a, t: int, akw, lam: float) -> dict:
+        """Directional finite-difference gain hinge on the plain loop (arc E10b).
+
+        Same probe as :meth:`_slot_gain_penalty` (two extra applications of the SAME core
+        step at the detached operating point, RNG stream put back around each) with ONE
+        change: under ``core_gain_direction == "power"`` the direction ``v`` (shape = one
+        sample's state, unit norm, shared across the batch) is a persistent buffer updated
+        by a power step from the probe's own response, so after a few steps ``g`` reads the
+        map's top singular value rather than its typical gain. ``d = core_gain_eps *
+        ||h_b|| * v`` per sample; ``g_b = ||f(h_b + d_b) - f(h_b)|| / ||d_b||``; penalty
+        ``lam * mean relu(g - core_gain_target)^2``.
+        """
+        hp = args[0].detach()
+        e_d = args[1].detach() if torch.is_tensor(args[1]) else args[1]
+        inj_d = args[2].detach() if torch.is_tensor(args[2]) else args[2]
+        rs_d = rs_a.detach() if torch.is_tensor(rs_a) else rs_a
+        cpu_rng = torch.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state() if hp.is_cuda else None
+
+        def _restore():
+            torch.set_rng_state(cpu_rng)
+            if cuda_rng is not None:
+                torch.cuda.set_rng_state(cuda_rng)
+
+        shp = tuple(hp.shape[1:])
+        v = self._core_gain_dir
+        if (self.cfg.core_gain_direction != "power" or v is None or tuple(v.shape) != shp
+                or v.device != hp.device):
+            v = torch.randn(shp, device=hp.device, dtype=torch.float32)
+            v = v / (v.norm() + 1e-6)
+        hn = hp.float().flatten(1).norm(dim=1)                                   # [n]
+        scale = (float(self.cfg.core_gain_eps) * hn).to(hp.dtype)
+        d = v.to(hp.dtype).unsqueeze(0) * scale.view(-1, *([1] * (hp.dim() - 1)))
+        try:
+            _restore()
+            f0, _ = core_step(hp, e_d, inj_d, ret_state=rs_d, iter_idx=t, attn_kw=akw)
+            _restore()
+            f1, _ = core_step(hp + d, e_d, inj_d, ret_state=rs_d, iter_idx=t, attn_kw=akw)
+        finally:
+            _restore()
+        diff = (f1 - f0).float()
+        num = diff.flatten(1).norm(dim=1)
+        den = d.float().flatten(1).norm(dim=1) + 1e-6
+        gain = num / den                                                         # [n]
+        hinge = torch.relu(gain - float(self.cfg.core_gain_target))
+        pen = lam * (hinge * hinge).mean()
+        if self.cfg.core_gain_direction == "power":
+            with torch.no_grad():
+                nv = diff.mean(0)
+                self._core_gain_dir = (nv / (nv.norm() + 1e-6)).detach()
+        return {"gain": gain.detach().mean(), "gain_max": gain.detach().max(), "penalty": pen}
+
+    def _apply_core_aux(self, out: dict) -> None:
+        """Add the arc E10 loop terms stashed by ``_core_region`` to ``out`` and the loss."""
+        aux = self._core_aux
+        self._core_aux = None
+        if not aux:
+            return
+        for k, v in aux.items():
+            out[k] = v
+        if "fp_weighted" in aux:
+            out["loss"] = out["loss"] + aux["fp_weighted"]
+        if "core_gain_weighted" in aux:
+            out["loss"] = out["loss"] + aux["core_gain_weighted"]
+
     def _mtp_apply(self, out: dict, x: Tensor, labels: Tensor | None,
                    w_full: Tensor | None) -> None:
         """Multi-token prediction on the readout ``x`` (``[B, T, d]``; arc E8).
@@ -1982,6 +2070,19 @@ class MORPHTransformer(nn.Module):
                 # forecastability probe a different quantity under a different name.
                 _z0 = (e_s + h_s) if _scse is not None else e_s
                 _traj.append((_z0.mean(dim=2) if self._is_hc else _z0).detach())  # z_0 (pre-loop)
+            # Arc E10 loss terms (training only; 0 = off, and every line below traces out).
+            self._core_aux = None
+            _fp_lam = float(self.cfg.core_fixed_point_lambda) if self.training else 0.0
+            _cg_lam = float(self.cfg.core_gain_lambda) if self.training else 0.0
+            _fp_terms: list[Tensor] = []
+            _cg = None
+            _t_cg = -1
+            if _cg_lam > 0.0 and n_grad_iters > 0:
+                if _scse is not None:
+                    raise RuntimeError("model.core_gain_lambda > 0 is not defined under SCSE")
+                _rs_cpu = torch.get_rng_state()
+                _t_cg = n_nograd + int(torch.randint(n_grad_iters, (1,)).item())
+                torch.set_rng_state(_rs_cpu)
             for t in range(total_iters):
                 n_active = active_counts[t]
                 if n_active == 0:
@@ -2045,6 +2146,17 @@ class MORPHTransformer(nn.Module):
                     _scale = torch.clamp(_tau * _in_n / (_out_n + 1e-6), max=1.0)
                     h_new = h_new * _scale.view(-1, *([1] * (h_new.dim() - 1)))
 
+                if _fp_lam > 0.0 and t >= n_nograd:
+                    # Samples that FINISH at this iteration are the tail of the active prefix
+                    # (sorted by depth, descending): active now, not at t+1.
+                    n_next = active_counts[t + 1] if t + 1 < total_iters else 0
+                    if n_next < n_active:
+                        _fn = h_new[n_next:n_active].float().flatten(1)
+                        _fo = h_a[n_next:n_active].float().flatten(1)
+                        _fp_terms.append((_fn - _fo).pow(2).sum(1) / (_fn.pow(2).sum(1) + 1e-6))
+                if _cg_lam > 0.0 and t == _t_cg:
+                    _cg = self._core_gain_penalty(_core_step, args, rs_a, t, akw, _cg_lam)
+
                 if _capture_traj:  # eval-only interp: capture EVERY iteration's carrier (z_1..z_T)
                     # Eval runs a UNIFORM depth, so perm is the identity and n_active is the
                     # full batch (see the comment where _capture_traj is read); e_s therefore
@@ -2076,6 +2188,17 @@ class MORPHTransformer(nn.Module):
 
             if _capture_traj:
                 self._traj_carriers = _traj  # [z_0 .. z_T], each [B, S, C]; read by the interp probe
+            if _fp_terms or _cg is not None:
+                aux: dict = {}
+                if _fp_terms:
+                    _fp = torch.cat(_fp_terms).mean()
+                    aux["fixed_point"] = _fp.detach()
+                    aux["fp_weighted"] = _fp_lam * _fp
+                if _cg is not None:
+                    aux["core_gain_est"] = _cg["gain"]
+                    aux["core_gain_max"] = _cg["gain_max"]
+                    aux["core_gain_weighted"] = _cg["penalty"]
+                self._core_aux = aux
 
             if self._diag_corecos and self.training and _cc_meanmin is not None:
                 self._fwd_count += 1
@@ -3215,6 +3338,10 @@ class MORPHTransformer(nn.Module):
         into the plain ``_tul_core`` loop (the forced-depth sweep's path), matching the
         paper's "trained single-pass, sampled with the original K-iteration procedure".
         """
+        if self.cfg.core_fixed_point_lambda > 0.0 or self.cfg.core_gain_lambda > 0.0:
+            raise RuntimeError("model.core_fixed_point_lambda / core_gain_lambda act on the "
+                               "plain loop only (arc E10); the slot path has its own hinge "
+                               "(model.slot_gain_lambda)")
         if self.mtp is not None:
             raise RuntimeError("model.mtp_heads > 1 is not defined on the TUL slot path "
                                "(labels at slot positions are not a token stream); arc E8 "
@@ -4202,6 +4329,8 @@ class MORPHTransformer(nn.Module):
             out = {"logits": None, "loss": loss}
             if self.mtp is not None:
                 self._mtp_apply(out, x, labels, w_full)
+            if self._core_aux is not None:
+                self._apply_core_aux(out)
         else:
             logits = self.embed.attend(x)
             out = {"logits": logits}
@@ -4222,5 +4351,7 @@ class MORPHTransformer(nn.Module):
                 out["loss"] = loss
             if self.mtp is not None:
                 self._mtp_apply(out, x, labels, None)
+            if self._core_aux is not None and labels is not None:
+                self._apply_core_aux(out)
 
         return out

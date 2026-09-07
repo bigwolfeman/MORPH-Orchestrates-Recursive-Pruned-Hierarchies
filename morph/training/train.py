@@ -448,6 +448,11 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_all_iters=bool(getattr(m, "slot_gain_all_iters", False)),
         mtp_heads=int(getattr(m, "mtp_heads", 1)),
         injection_channels=str(getattr(m, "injection_channels", "ctx")),
+        core_fixed_point_lambda=float(getattr(m, "core_fixed_point_lambda", 0.0)),
+        core_gain_lambda=float(getattr(m, "core_gain_lambda", 0.0)),
+        core_gain_target=float(getattr(m, "core_gain_target", 20.0)),
+        core_gain_eps=float(getattr(m, "core_gain_eps", 0.02)),
+        core_gain_direction=str(getattr(m, "core_gain_direction", "power")),
         injection_all_decay=float(getattr(m, "injection_all_decay", 0.9)),
         mtp_weight=float(getattr(m, "mtp_weight", 1.0)),
         dropout=float(tr.dropout),
@@ -2840,7 +2845,7 @@ def main(cfg: DictConfig) -> None:
                 # whether the forward on that batch was itself abnormal (a forward
                 # explosion moves the loss; a backward-only blow-up does not).
                 _probe_log["loss/total"] = float(loss.detach())
-                for _lk in ("ce_main", "mux_local", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters", "mtp_weighted"):
+                for _lk in ("ce_main", "mux_local", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters", "mtp_weighted", "fixed_point", "fp_weighted", "core_gain_est", "core_gain_max", "core_gain_weighted"):
                     if _lk in out and out[_lk] is not None:
                         _probe_log[f"loss/{_lk}"] = float(out[_lk].detach())
                 wandb.log(_probe_log, step=step)
@@ -2960,6 +2965,9 @@ def main(cfg: DictConfig) -> None:
                 _lv = _lv - float(out["gain_reg_weighted"])
             if isinstance(out, dict) and out.get("mtp_weighted") is not None:
                 _lv = _lv - float(out["mtp_weighted"])   # arc E8: train/loss = next-token CE
+            for _ak in ("fp_weighted", "core_gain_weighted"):        # arc E10 loop terms
+                if isinstance(out, dict) and out.get(_ak) is not None:
+                    _lv = _lv - float(out[_ak])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
             #    after its external watchdog died in a power loss). A NaN/Inf loss NEVER
             #    recovers — save an emergency ckpt for forensics and stop, instead of burning
@@ -2996,7 +3004,9 @@ def main(cfg: DictConfig) -> None:
                 "train/loss": _lv,
                 "train/loss_total": _lv_total,
                 **({f"train/{_k}": float(_v.detach()) for _k, _v in out.items()
-                    if _k.startswith("ce_mtp_") or _k == "mtp_weighted"}
+                    if _k.startswith("ce_mtp_") or _k in ("mtp_weighted", "fixed_point",
+                                                          "fp_weighted", "core_gain_est",
+                                                          "core_gain_max", "core_gain_weighted")}
                    if isinstance(out, dict) else {}),
                 "train/ppl": math.exp(min(_lv, 20.0)),
                 "train/lr": lr,

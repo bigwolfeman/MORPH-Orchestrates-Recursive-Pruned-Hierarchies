@@ -1,0 +1,14 @@
+# ARC E10b — the directional (power-iterated) gain hinge on the plain loop under the
+# detonation assay. Target 20 on sigma_max (healthy arms 11-22 at iteration 3; E7's sick map
+# 95); lambda 0.01 so a map at sigma 30 pays 1 nat and one at 95 pays 56 (the clip normalises).
+# Prereg: lab/experiments/planned/2026-09-07-arc-e10-loop-loss-terms.md
+defaults:
+  - notul_carry_ctx_wu0
+  - _self_
+model:
+  core_gain_lambda: 0.01
+  core_gain_target: 20.0
+  core_gain_eps: 0.02
+  core_gain_direction: power
+wandb:
+  name: notul-pgain-wu0

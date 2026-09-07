@@ -1,0 +1,11 @@
+# ARC E10a — the terminal fixed-point objective on the plain loop under the detonation assay
+# (notul, warmup 0, 1200 steps; base rate ~70 %). lambda 1.0 on the relative last-iteration
+# change (a settling map reads ~0.05-0.3 per sample, so the term starts at ~0.1-0.3 nats).
+# Prereg: lab/experiments/planned/2026-09-07-arc-e10-loop-loss-terms.md
+defaults:
+  - notul_carry_ctx_wu0
+  - _self_
+model:
+  core_fixed_point_lambda: 1.0
+wandb:
+  name: notul-fp-wu0
