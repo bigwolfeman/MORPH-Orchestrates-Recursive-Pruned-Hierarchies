@@ -1,0 +1,17 @@
+# ARC E11 — the terminal fixed-point objective on the plain loop under the SHIPPED recipe (the
+# ramp, 5000 steps): the price and the earning of the term that held 6 of 6 warmup-0 draws in
+# E10a. Control: notul at 5000 (results/2026-09-04-arc-e0/sweep_notul_5000.json, same rows).
+# Prereg: lab/experiments/planned/2026-09-07-arc-e11-fixed-point-ramped.md
+defaults:
+  - notul
+  - _self_
+model:
+  core_fixed_point_lambda: 1.0
+training:
+  steps: 5000
+  eval_every: 250
+  ckpt_every: 2500
+  gen_every: 0
+  grad_probe_every: 1
+wandb:
+  name: notul-fp
