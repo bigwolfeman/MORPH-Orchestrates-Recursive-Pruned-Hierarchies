@@ -1,6 +1,6 @@
-# Planned: ARC E8 — parallel multi-token prediction on the coda (the target lever, strict form)
+# Failure: ARC E8 — parallel multi-token prediction on the coda (the target lever, strict form)
 
-Status: planned
+Status: failure
 Date: 2026-09-07 (frozen before any smoke; Wolfe: "an arm for testing contribution that uses
 parallel multitoken prediction on the coda. It may help the contribution and assignment.
 It is worth trying.")
@@ -82,3 +82,65 @@ Step time and memory with three fused CE passes (no smoke has run); the fused CE
 the identity-init heads' early loss (equal to the next-token CE against a shifted label,
 so the total starts near 4x log V); whether `train/loss` subtraction of `mtp_weighted`
 is exact under autocast (it is computed from the same tensors, one float cast).
+
+## Results (2026-09-07 04:34; `arc/run_e8.sh` on worktree 901237a; files in `results/2026-09-07-arc-e8/`)
+
+**E8-6** (`notul_mtp4`, mean 6, full BPTT): 5000 steps, healthy (max `preclip/total` 332 at
+2154), 1.45 steps/s, peak 10.1 GB, final val 4.328 (notul run: 4.138). Forced depth on the
+480 rows at 5000:
+
+| depth | next token | t+2 head | t+3 head | t+4 head |
+|---|---|---|---|---|
+| 1 | 4.368 | 5.949 | 6.541 | 6.789 |
+| 3 | 4.317 | 5.914 | 6.518 | 6.773 |
+| 6 | 4.315 | 5.912 | 6.517 | 6.772 |
+| 8 | 4.317 | 5.913 | 6.518 | 6.773 |
+
+Paired (`paired_ci.txt`): next-token K1−K3 +0.0505, K3−K6 +0.0021 [+0.0017, +0.0025],
+K6−K8 −0.0019, K1−K6 +0.0526; E8-6 at depth 6 minus notul at depth 6 on the same rows
+**+0.3445 [+0.3298, +0.3597]**. Heads' K1−K6: +0.0374 (t+2), +0.0238 (t+3), +0.0171 (t+4),
+ratios of means to the next-token K1−K6 0.71, 0.45, 0.32; heads' K3−K6 ≤ +0.0019.
+`score_arc_e0.py` at (1, 6): Spearman(row CE₁, earning) −0.139 [−0.230, −0.044] (notul in
+E0: −0.18); offset-0 earning 0.79x the later offsets; top-decile earning share 0.090 against
+loss share 0.123.
+
+**E8-16** (`notul_deep16_mtp4`, mean 16 / max 24 / bptt 8): DETONATED at 3446 (rows > 1e4 at
+3429 and 3446, max 1.7e4); its control E6 ran 5000 steps at max 35. Pre-onset 2500 sweep:
+next-token 5.183 / 4.935 / 4.844 / 4.822 / 4.804 / 4.800 at depths 1 / 3 / 6 / 8 / 12 / 16
+(E6 at 2500: 5.198 / 4.622 / 4.560 / 4.549 / 4.539 / 4.537); K3−K6 +0.0918, K6−K12 +0.0397,
+K12−K16 +0.0039, K16−K24 −0.0064; **E8-16 at 16 minus E6 at 16, paired, +0.2634 [+0.2578,
++0.2697]**. Heads' K1−K6 ratios to the next-token's: 0.63, 0.44, 0.34.
+
+Scored:
+
+- **P8a TRUE** (+0.345 against a 0.02 bar).
+- **P8b FALSE** (K3−K6 +0.0021 against 0.01).
+- **P8c FALSE** (the t+4 head's K1−K6 is 0.32x the next-token's; the bar was 1.5x). The
+  further ahead the target, the LESS depth it uses, on both draws.
+- **P8d FALSE** (Spearman moved +0.04, bar +0.10).
+- **P8e FALSE** at the only readable checkpoint (E8-16 is 0.26 nats behind E6 at 2500);
+  unscored at 5000.
+- **P8f FALSE** (E8-16 detonated at 3446; E8-6 healthy).
+
+## Verdict
+
+The multi-token target is not a lever on the loop's contribution or its assignment at this
+scale. On the mean-6 loop it leaves the saturation at 3 untouched, the lookahead heads use
+depth less than the next-token head, the earning shape stays MORPH's, and it costs 0.34 nats
+of next-token CE at matched steps (Gloeckle's small-model penalty, larger here). On the deep
+draw it adds 0.26 nats over E6 and detonates where E6 did not: the four-fold summed loss on
+the truncated deep loop (which trains on ~73 % of its samples' loop gradients, the E7-era
+defect) is a stability load, not a contribution one.
+
+Not verified: a one-layer head with attention (the paper's head) rather than the strict
+readout-only head; a lower `mtp_weight` (the prereg's P8f follow-up, not run because the
+mean-6 arm was stable and the deep arm's problem is the draw); whether the heads help at
+20k (deep models converge slower; the 0.34 gap is a 5k number).
+
+## Updated hypothesis
+
+Target-side levers on next-token web text do not move the loop: the forecast target (E1–E3),
+the masked route (E7) and the multi-token target (E8) all leave K3−K6 near zero on a stable
+map. Branch (b) is closed at this width alongside branch (a). What remains is the loop's
+own dynamics (E9, E10: the carry, the fixed point, the directional hinge) and, for TUL, the
+mask's reading on a stable map (E4).

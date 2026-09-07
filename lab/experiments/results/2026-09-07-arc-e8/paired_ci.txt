@@ -1,0 +1,19 @@
+next-token (E8-6 @5000):
+  K1-K3: +0.0505 [+0.0492, +0.0518]
+  K3-K6: +0.0021 [+0.0017, +0.0025]
+  K6-K8: -0.0019 [-0.0021, -0.0017]
+  K1-K6: +0.0526 [+0.0512, +0.0541]
+  E8-6@6 minus notul@6 (paired rows): +0.3445 [+0.3298, +0.3597]
+head t+2: K1-K6 +0.0374 [+0.0362, +0.0387]  K3-K6 +0.0019 [+0.0015, +0.0023]  ratio head/next K1-K6 (row-wise mean) -35.08 [-99.07, 0.73]  ratio of means 0.71
+head t+3: K1-K6 +0.0238 [+0.0227, +0.0249]  K3-K6 +0.0013 [+0.0010, +0.0016]  ratio head/next K1-K6 (row-wise mean) -11.54 [-50.87, 15.80]  ratio of means 0.45
+head t+4: K1-K6 +0.0171 [+0.0162, +0.0181]  K3-K6 +0.0009 [+0.0006, +0.0012]  ratio head/next K1-K6 (row-wise mean) 1.57 [-42.34, 46.69]  ratio of means 0.32
+E8-16 @2500 (pre-onset) next-token:
+  K3-K6: +0.0918 [+0.0902, +0.0934]
+  K6-K12: +0.0397 [+0.0387, +0.0407]
+  K12-K16: +0.0039 [+0.0035, +0.0043]
+  K16-K24: -0.0064 [-0.0070, -0.0059]
+  K1-K6: +0.3399 [+0.3350, +0.3447]
+  E8-16@16 minus E6@16 (paired rows, 2500): +0.2634 [+0.2578, +0.2697]
+  head t+2: K1-K6 +0.2131  K6-K16 +0.0294  ratio of means vs next-token K1-K6 0.63
+  head t+3: K1-K6 +0.1481  K6-K16 +0.0188  ratio of means vs next-token K1-K6 0.44
+  head t+4: K1-K6 +0.1156  K6-K16 +0.0128  ratio of means vs next-token K1-K6 0.34

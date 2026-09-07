@@ -1,0 +1,12 @@
+mtp4: rows 480  K1−K6 = +0.0526 (row mean)
+  P0a Spearman(row CE_1, row earning) = -0.139 [-0.230, -0.044]
+  offset profile (earning per token by offset-in-span):
+     0-0 : +0.0420 [+0.0367, +0.0471]  n=24821
+     1-1 : +0.0557 [+0.0502, +0.0609]  n=24586
+     2-2 : +0.0525 [+0.0474, +0.0577]  n=24547
+     3-3 : +0.0500 [+0.0448, +0.0552]  n=24505
+     4-7 : +0.0499 [+0.0470, +0.0529]  n=88846
+     8-15: +0.0531 [+0.0510, +0.0553]  n=140889
+    16-31: +0.0553 [+0.0532, +0.0573]  n=163326
+  P0b offset-0 earning / mean earning over offsets 4..31 = +0.0420 / +0.0533 = 0.79x
+  P0c top-decile rows: loss share 0.123, earning share 0.090 -> below
