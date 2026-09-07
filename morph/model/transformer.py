@@ -3799,6 +3799,17 @@ class MORPHTransformer(nn.Module):
             # index_fill is out-of-place, so this is safe under grad as well as no_grad.
             out["logits"] = self.embed.attend(xh).index_fill(
                 -1, torch.tensor([tc.slot_id], device=xh.device), float("-inf"))
+            if self.mtp is not None:
+                # The heads' logits on the COMPACT token axis ([B, n_max, V], token order,
+                # a row's ragged tail past its token count is unscored garbage); the same
+                # gather as the training path, so head j at compact index i is the
+                # prediction for the token j-1 TOKENS ahead of token i.
+                if not (tc.coda_sees_slots and tc.coda_token_cut == 0):
+                    raise NotImplementedError(
+                        "model.mtp_heads > 1 with a gathered coda is not defined")
+                x_tok, _ = self._tul_token_compact(
+                    xh, torch.zeros_like(layout.slot_mask, dtype=torch.long), layout)
+                self._mtp_apply(out, x_tok, None, None)
             if self.tul_gate is not None:
                 # The generator needs the model's OWN budget for each slot: how many
                 # tokens the plan it just built covers (§8). It is the same tensor the
@@ -3810,20 +3821,25 @@ class MORPHTransformer(nn.Module):
 
     @staticmethod
     def _tul_token_compact(xh: Tensor, labels: Tensor, layout: SlotLayout) -> tuple[Tensor, Tensor]:
-        """The coda readout and labels at TOKEN positions only, in token order, ``[B, n_tok, …]``.
+        """The coda readout and labels at TOKEN positions only, in token order, ``[B, n_max, …]``.
 
-        The packer gives every row the same number of token positions (fixed-shape rows,
-        spec §4), so the compaction is a static gather (:func:`compact_index`). Slot
-        positions, and their emit labels, are dropped; ``labels[b, i]`` on the result is the
-        next TOKEN after token ``i`` of row ``b``, which is what a lookahead head shifts.
+        Rows carry different token counts (the packer fixes the ROW length, not the split
+        between tokens and slots: a row with more spans has more slots and fewer tokens), so
+        the compaction gathers to the largest count and marks each row's ragged tail with
+        label -100. Token order is preserved (:func:`compact_index`); slot positions and
+        their emit labels are dropped; ``labels[b, i]`` on the result is the next TOKEN after
+        token ``i`` of row ``b``, which is what a lookahead head shifts, and the -100 tail
+        propagates through that shift so no head is scored across a row's end.
         """
-        n_tok = (~layout.slot_mask).sum(dim=1)
-        n = int(n_tok[0])
-        if bool((n_tok != n).any()):
-            raise RuntimeError("_tul_token_compact expects the same token count on every "
-                               f"row (fixed-shape packing); got {n_tok.tolist()}")
-        cidx = compact_index(layout.slot_mask)[:, :n]
-        return gather_positions(xh, cidx), gather_positions(labels, cidx)
+        B, L = layout.slot_mask.shape
+        n_tok = (~layout.slot_mask).sum(dim=1)                                   # [B]
+        n_max = int(n_tok.max())
+        cidx = compact_index(layout.slot_mask)[:, :n_max]                        # tail → L
+        valid = torch.arange(n_max, device=cidx.device).unsqueeze(0) < n_tok.unsqueeze(1)
+        cidx = cidx.clamp(max=L - 1)                                             # no dump row needed
+        x_tok = gather_positions(xh, cidx)
+        lab_tok = torch.where(valid, gather_positions(labels, cidx), labels.new_full((), -100))
+        return x_tok, lab_tok
 
     def _tul_plan_ablate(self, h_slots: Tensor, layout: SlotLayout, mode: str) -> Tensor:
         """Eval-only plan ablations for ``val/plan_worth_*`` (docs/tul-fm-probing.md §1).

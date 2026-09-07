@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 from omegaconf import OmegaConf
 
 from morph.model.transformer import MORPHConfig, MORPHTransformer
@@ -180,3 +181,59 @@ def test_mtp_heads_refuse_a_gathered_coda():
     m = _model(mtp_heads=2, tul=TULConfig(**SLOT, coda_sees_slots=False))
     with pytest.raises(NotImplementedError, match="gathered coda"):
         m(x, labels=y, slot_layout=layout)
+
+
+def _ragged_layout(seed=0, B=2, n=90):
+    """Rows with DIFFERENT token counts: row b puts a boundary every 6 + 3*b tokens."""
+    lut = np.zeros(V, dtype=bool)
+    lut[[10, 11]] = True
+    lut[0] = True
+    rule = BoundaryRule(is_boundary=lut, min_span=4, span_cap=8, eos_id=0)
+    spec = TulLayoutSpec(seq_len=32, prefix_k=2, max_slots=5, slot_id=4)
+    rng = np.random.default_rng(seed)
+    ids = rng.integers(5, V, size=(B, n))
+    ids[ids == 4] = 5
+    for b in range(B):
+        ids[b, ::6 + 3 * b] = 10
+    return slot_layout_from_ids(ids.astype(np.int64), rule, spec)
+
+
+def test_token_compact_handles_ragged_token_counts_with_a_minus_100_tail():
+    x, y, layout, _ = _ragged_layout()
+    n_tok = (~layout.slot_mask).sum(dim=1)
+    assert int(n_tok.min()) < int(n_tok.max()), "fixture must be ragged"
+    B, L = y.shape
+    xh = torch.arange(B * L, dtype=torch.float32).view(B, L, 1).expand(B, L, 3).clone()
+    xt, lt = MORPHTransformer._tul_token_compact(xh, y, layout)
+    assert lt.shape[1] == int(n_tok.max())
+    for b in range(B):
+        tok = (~layout.slot_mask[b]).nonzero().flatten()
+        n = int(n_tok[b])
+        assert torch.equal(lt[b, :n], y[b, tok])
+        assert torch.equal(xt[b, :n, 0], xh[b, tok, 0])
+        assert bool((lt[b, n:] == -100).all())
+
+
+def test_mtp_head_ce_on_ragged_rows_matches_a_per_row_manual_shift():
+    x, y, layout, _ = _ragged_layout()
+    tul = TULConfig(**SLOT, slot_depth_fixed=2)
+    m = _model(mtp_heads=2, mtp_weight=1.0, tul=tul)
+    m.eval()
+    with torch.no_grad():
+        out = m(x, labels=y, slot_layout=layout)
+    assert "ce_mtp_2" in out and torch.isfinite(out["ce_mtp_2"])
+    with torch.no_grad():
+        ev = m(x, labels=None, slot_layout=layout)
+    # the same readout, scored by hand: head 2 at token i of row b predicts the label of
+    # token i+1 of that row; pairs pooled over rows (ignore_index averaging)
+    head2 = ev["mtp_logits"][0]                                    # [B, n_max, V]
+    n_tok = (~layout.slot_mask).sum(dim=1)
+    logits_all, targets_all = [], []
+    for b in range(y.shape[0]):
+        tok = (~layout.slot_mask[b]).nonzero().flatten()
+        lab = y[b, tok]                                             # [n_b]
+        n = int(n_tok[b])
+        logits_all.append(head2[b, : n - 1])
+        targets_all.append(lab[1:n])
+    manual = F.cross_entropy(torch.cat(logits_all), torch.cat(targets_all))
+    assert torch.allclose(out["ce_mtp_2"], manual, atol=1e-5), (float(out["ce_mtp_2"]), float(manual))
