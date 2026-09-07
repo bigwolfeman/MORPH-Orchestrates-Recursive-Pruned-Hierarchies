@@ -2,6 +2,9 @@
 
 Status: proposed
 
+**Wolfe, 2026-09-07: "This is not something for us to be touching right now." Parked. Do not build
+from this note without his say; it records the reading of the paper and nothing more.**
+
 Date: 2026-09-07. Wolfe: the TG mask helps loop contribution for the TUL shape, but the loop
 needs full token granularity; SpiralFormer (arXiv 2602.11698, Yu et al.) "seems to solve that
 very literally". Drawing first, build after review.
