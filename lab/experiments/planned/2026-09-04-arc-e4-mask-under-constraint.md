@@ -54,3 +54,13 @@ Wall clock against `to-mnext-mask`'s eager pace (1639 steps by the stop).
 `tg_restrict` with `slot_gain_lambda` and `slot_cot_clip` in one build (each is tested
 alone; the eager attention path under the hinge's extra core steps is the untested
 conjunction). 12-step eager smoke first.
+
+### Method note, 2026-09-07 03:40 (queue only; predictions untouched)
+
+Queued behind E10 in `arc/run_e4.sh` at the E10 commit (Wolfe: "add e4"): 12-step smoke,
+the 5000-step draw under the SUSTAINED tripwire (`lab/divergence/tripwire_sustained.py`,
+arc Method amendment 2), `core_depth_sweep.py` at depths 1–8 and `worth_profile.py` at
+2500 and 5000 on the arc's 480 rows, then the Jacobian sweep at iterations 0, 3, 7. The
+E7 reading to compare against: at a mean-16 slot draw the masked arm's token K1−K6 read
++0.026 at 2500 on a map that detonated 200 steps later. E4 asks the same question on the
+constrained mean-6 map.

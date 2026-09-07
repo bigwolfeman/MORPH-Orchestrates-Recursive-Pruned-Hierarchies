@@ -124,7 +124,7 @@ Wolfe's call.
 | E1-95 / E1-98 | gain dial | FILED `failures/2026-09-04-arc-e1-gain-target-dial.md`: the hinge is a stability dial, not an earning dial; stays at 0.90 |
 | E2 | iteration conditioning | FILED `failures/2026-09-04-arc-e2-iteration-conditioning.md`: held stable it earns LESS than Y2 (K1−K6 0.0087, K3−K6 +0.0001); the +0.0077 at 2500 was the expansive iteration. Branch (a) CLOSED. |
 | E3 | staged targets (`tul.mux_stage_own_iters`; configs `tul_to_mnext_y2_stage2/3`; prereg `arc-e3-staged-targets.md`) | code done, 823 tests pass; E3-2 queued behind E2 in the GPU window |
-| E4 | `to-mnext-y2-mask`, on the best arm of E1/E2/E3 (Y2 if none THINKS) | waits on E1/E2 |
+| E4 | `to-mnext-y2-mask` on Y2 (mean 6, the constraint) | queued 2026-09-07 03:40 behind E10 in `arc/run_e4.sh` (Wolfe: "add e4"); E7 was the deep-draw version and detonated |
 | E5 | 20k matched wall clock on any THINK arm | waits on E4 |
 | H | Huginn-3.5B loop contribution (eval only, the external ruler) | FILED `failures/2026-09-04-huginn-loop-contribution.md`: H2 TRUE (K3−K6 +0.566, K6−K16 +0.206, saturates at 16–24 against a training mean of 32); H1/H3/H4a/H5 false. Decision rule fired: option (i) downgraded, training regime is the candidate cause. |
 | E6 | plain loop at a deep recurrence draw (mean 16, max 24, bptt 8; `notul_deep16.yaml`; prereg `arc-e6-deep-recurrence-draw.md`) | FILED `successes/2026-09-07-arc-e6-deep-recurrence-draw.md` (5 of 6): the draw is the lever on K-diffs (K3−K6 0.277, K6−K12 0.040, saturates at the mean 16–24) AND the deep model is 0.104 nats WORSE than mean-6 on the same rows at 1.23x cost: K-diffs measure depth DEPENDENCE, not depth value. E5 at the deep draw is the matched-compute test. |
