@@ -1,0 +1,22 @@
+# ARC E9 — the detonation assay with the diagonal carry on ALL carrier dims. The plain
+# winner recipe (notul) with warmup 0, the regime that detonates ~70 % of draws in steps
+# 200-775 (lab/divergence/DIVERGENCE-README.md), plus model.injection_channels: all
+# (Parcae §4.1: rho(A) < 1 on the whole residual; the shipped carry covers the context
+# channel only). 1200 steps per draw: the verdict window closes at 1000. Control:
+# notul_carry_ctx_wu0.yaml (same, carry on ctx only).
+# Prereg: lab/experiments/planned/2026-09-07-arc-e9-widen-the-carry.md
+defaults:
+  - notul
+  - _self_
+model:
+  injection_channels: all
+  injection_all_decay: 0.9
+training:
+  warmup: 0
+  steps: 1200
+  eval_every: 400
+  ckpt_every: 0
+  gen_every: 0
+  grad_probe_every: 1
+wandb:
+  name: notul-carry-all-wu0

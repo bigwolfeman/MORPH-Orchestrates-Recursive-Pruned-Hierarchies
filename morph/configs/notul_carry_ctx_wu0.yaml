@@ -1,0 +1,10 @@
+# ARC E9 control — the shipped carry (context channel only) under warmup 0, 1200 steps:
+# re-measures the ~70 % detonation base rate on tonight's tree beside notul_carry_all.yaml.
+# Prereg: lab/experiments/planned/2026-09-07-arc-e9-widen-the-carry.md
+defaults:
+  - notul_carry_all
+  - _self_
+model:
+  injection_channels: ctx
+wandb:
+  name: notul-carry-ctx-wu0

@@ -447,6 +447,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_eps=float(getattr(m, "slot_gain_eps", 0.02)),
         slot_gain_all_iters=bool(getattr(m, "slot_gain_all_iters", False)),
         mtp_heads=int(getattr(m, "mtp_heads", 1)),
+        injection_channels=str(getattr(m, "injection_channels", "ctx")),
+        injection_all_decay=float(getattr(m, "injection_all_decay", 0.9)),
         mtp_weight=float(getattr(m, "mtp_weight", 1.0)),
         dropout=float(tr.dropout),
     )

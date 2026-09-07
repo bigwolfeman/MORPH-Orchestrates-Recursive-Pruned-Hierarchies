@@ -161,6 +161,11 @@ model:
   # the TUL slot path or with TST bags. Arm configs: notul_mtp4.yaml, notul_deep16_mtp4.yaml.
   mtp_heads: 1
   mtp_weight: 1.0
+  # The diagonal state carry span (Parcae §4.1: rho(A) < 1 on the whole residual). "ctx" =
+  # the context channel only (shipped, bit-identical); "all" = every carrier dim, the other
+  # dims starting at decay injection_all_decay with dt = 1 - decay. Arc E9 (2026-09-07).
+  injection_channels: ctx
+  injection_all_decay: 0.9
 
   # Master kernel switch: true = fused Triton attn + fused CE (optimised);
   # false = eager references + full-logits CE (un-optimised A/B baseline).

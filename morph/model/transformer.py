@@ -259,6 +259,17 @@ class MORPHConfig:
     mtp_heads: int = 1
     mtp_weight: float = 1.0
 
+    # The diagonal state carry (Parcae arXiv 2604.12946 §4.1: rho(A) < 1 on the WHOLE residual
+    # is the paper's stability claim). "ctx" = the shipped DiagonalInjection on the context
+    # channel only (256 of 768 dims; the rest ride the norm-preserving HC residual, Parcae's
+    # Table 1 "marginally stable" row) — bit-identical. "all" = the same carry on every carrier
+    # dim: the context channel keeps its legacy init (decay 0.447, dt 1.0); the other dims start
+    # at decay `injection_all_decay` with dt = 1 - decay, so the linear part's fixed point is
+    # e itself (scale-preserving at init). Arc E9, 2026-09-07 [W: "we wanna try widening the
+    # diag carry"]. Old checkpoints do not load into an "all" model (the carry is 768-wide).
+    injection_channels: str = "ctx"
+    injection_all_decay: float = 0.9
+
     # Master kernel switch. True = fused Triton attention + fused chunked CE
     # (the optimised stack). False = eager PyTorch references + full-logits CE
     # (the un-optimised baseline) — same architecture/weights, for A/B on memory
@@ -413,13 +424,20 @@ class DiagonalInjection(nn.Module):
     Spectral radius < 1 guaranteed by construction.
     """
 
-    def __init__(self, channel_start: int, channel_end: int, init_decay: float = 0.447):
+    def __init__(self, channel_start: int, channel_end: int, init_decay: float = 0.447,
+                 init_decay_vec: Tensor | None = None, init_dt_vec: Tensor | None = None):
         super().__init__()
         self.start = channel_start
         self.end = channel_end
         d = channel_end - channel_start
-        self.log_A = nn.Parameter(torch.full((d,), float(init_decay)).log())
-        self.log_dt = nn.Parameter(torch.zeros(d))
+        if init_decay_vec is None:
+            self.log_A = nn.Parameter(torch.full((d,), float(init_decay)).log())
+            self.log_dt = nn.Parameter(torch.zeros(d))
+        else:
+            # Per-dim init (injection_channels="all"): deterministic, no RNG draw.
+            assert init_decay_vec.shape == (d,) and init_dt_vec.shape == (d,)
+            self.log_A = nn.Parameter(init_decay_vec.float().log())
+            self.log_dt = nn.Parameter(init_dt_vec.float().log())
 
     def forward(self, h: Tensor, e: Tensor) -> Tensor:
         A = self.log_A.exp().clamp(max=0.9999)
@@ -933,7 +951,19 @@ class MORPHTransformer(nn.Module):
 
         # ── Loop state transition ─────────────────────────────────────
         self.input_norm = RMSNorm(d)
-        self.injection = DiagonalInjection(self._ctx_start, self._ctx_end)
+        if cfg.injection_channels == "ctx":
+            self.injection = DiagonalInjection(self._ctx_start, self._ctx_end)
+        elif cfg.injection_channels == "all":
+            _dec = torch.full((d,), float(cfg.injection_all_decay))
+            _dt = 1.0 - _dec
+            _dec[self._ctx_start:self._ctx_end] = 0.447
+            _dt[self._ctx_start:self._ctx_end] = 1.0
+            self.injection = DiagonalInjection(0, d, init_decay_vec=_dec, init_dt_vec=_dt)
+            print(f"  CARRY: diagonal injection on ALL {d} dims (ctx legacy 0.447/1.0; rest "
+                  f"decay {cfg.injection_all_decay}, dt {1 - cfg.injection_all_decay:.3f})")
+        else:
+            raise ValueError(f"model.injection_channels must be 'ctx' or 'all', "
+                             f"got {cfg.injection_channels!r}")
 
         # ── Core (shared across loop iterations — MortarLinear for CMS pruning)
         self.core = nn.ModuleList([
