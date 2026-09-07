@@ -99,5 +99,5 @@ The early detonation is a settling failure: the map organises expansive in the f
 steps because nothing asks it to converge, and once asked (one relative-change term at the
 last iteration) it does not, at no cost to CE. Proposal: ship `core_fixed_point_lambda 1.0`
 in `base.yaml` beside the ramp (belt and braces), port the term to `_tul_core`, and put it on
-the block-loop rerun (`.agents/notes/proposed/architecture/2026-09-07-fixed-point-objective-
+the block-loop rerun (`.agents/notes/implemented/architecture/2026-09-07-fixed-point-objective-
 as-the-loop-stability-term.md`). Wolfe's call on the default.

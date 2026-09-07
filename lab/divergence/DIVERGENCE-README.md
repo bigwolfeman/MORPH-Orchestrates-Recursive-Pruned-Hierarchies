@@ -110,6 +110,24 @@ plain model's loop earning falls from 0.207 to 0.04 nats and stays there; A2's f
 0.041 at 2500 and grows back to 0.100 by 20k. **`morph/configs/base.yaml` carries
 `warmup: 1000` since 2026-09-03; a run that overrides it to 0 reopens this window.**
 
+### THE SECOND HOLD, MEASURED 2026-09-07: the terminal fixed-point term (`model.core_fixed_point_lambda: 1.0`)
+
+λ · mean ‖h_T − h_{T−1}‖² / ‖h_T‖² at each sample's last core iteration. Under warmup 0 it
+held 0 of 6 draws (max `preclip/total` 11–18) against 4 of 7 controls the same night
+(`lab/experiments/successes/2026-09-07-arc-e10-loop-loss-terms.md`); under the ramp at 5k
+it is free, +0.0009 [−0.0022, +0.0040] nats at the trained depth, and makes the depth-1
+readout 0.014 better (`successes/2026-09-07-arc-e11-fixed-point-ramped.md`). Shipped in
+`base.yaml` 2026-09-07 for the plain model and the paid TUL loop; the slot loop has no port
+yet (`tul_short.yaml` zeroes it; a slot-loop model with it on refuses to build).
+`train/fixed_point` is the instrument: 0.2–0.6 in the first 20 steps, 0.003–0.02 after.
+Unmeasured with it on: 20k, the deep draw, prune/carve/route, seq 4096.
+
+The same assay refuted a Jacobian penalty along a power-iterated direction (STARS): inert
+once per step (reads the typical gain), and 2 of 6 with two within-step power iterations at
+λ 1e-3, though that reading leads the crossing by 20–40 steps where `core_block_gain` is
+blind. An instrument, not a hold. Widening the diagonal carry to all 768 dims (Parcae) also
+failed, 2 of 2 (`failures/2026-09-07-arc-e9-widen-the-carry.md`).
+
 ### What is OPEN (in priority order, 2026-09-03)
 
 1. **Abort-and-retry in the trainer.** The 1e4 rule above, with a checkpoint rollback

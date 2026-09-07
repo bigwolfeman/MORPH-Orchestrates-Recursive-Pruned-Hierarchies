@@ -129,3 +129,53 @@ def test_within_step_power_iterations_raise_the_reading():
 def test_bad_direction_raises():
     with pytest.raises(ValueError):
         _model(core_gain_direction="jvp")
+
+
+# ── the paid TUL loop carries the fixed-point term; the slot loop refuses it ──────────
+def _tul_layout(seed=0, B=2, n=90):
+    import numpy as np
+    from morph.model.tul_layout import BoundaryRule, TulLayoutSpec, slot_layout_from_ids
+    lut = np.zeros(V, dtype=bool)
+    lut[[10, 11]] = True
+    lut[0] = True
+    rule = BoundaryRule(is_boundary=lut, min_span=4, span_cap=8, eos_id=0)
+    spec = TulLayoutSpec(seq_len=32, prefix_k=2, max_slots=5, slot_id=4)
+    rng = np.random.default_rng(seed)
+    ids = rng.integers(5, V, size=(B, n))
+    ids[ids == 4] = 5
+    ids[:, ::6] = 10
+    return slot_layout_from_ids(ids.astype(np.int64), rule, spec)
+
+
+def test_paid_loop_carries_the_fixed_point_term_and_the_slot_loop_refuses_it():
+    from morph.model.tul import TULConfig
+    x, y, layout, _ = _tul_layout()
+    paid = dict(tul=TULConfig(prefix_k=2, slot_id=4, tokens_through_core=True))
+    torch.manual_seed(1)
+    off = _model(core_fixed_point_lambda=0.0, **paid)(x, labels=y, slot_layout=layout)
+    torch.manual_seed(1)
+    on_model = _model(core_fixed_point_lambda=1.0, **paid)
+    on = on_model(x, labels=y, slot_layout=layout)
+    assert "fixed_point" in on and "fp_weighted" in on and "fixed_point" not in off
+    assert on["fixed_point"] > 0 and torch.isfinite(on["loss"])
+    # loss = the paid loop's weighted CE + fp_weighted, and nothing else moved
+    assert torch.allclose(on["loss"] - on["fp_weighted"], off["loss"], atol=1e-6)
+    assert torch.equal(on["fixed_point"], on["fp_weighted"])   # lambda 1.0
+    on["fp_weighted"].backward()
+    core = [p.grad for n, p in on_model.named_parameters()
+            if n.startswith("core.") and p.grad is not None]
+    assert core and any(g.abs().sum() > 0 for g in core), "the term must reach the core"
+    # eval never applies it, and a label-less forward leaves no stash behind
+    m = _model(train=False, core_fixed_point_lambda=1.0, **paid)
+    with torch.no_grad():
+        o = m(x, labels=y, slot_layout=layout)
+    assert "fp_weighted" not in o
+    m.train()
+    _ = m(x, labels=None, slot_layout=layout)
+    assert m._core_aux is None
+    # a slot-loop model (tokens_through_core False) with the term on refuses to BUILD
+    with pytest.raises(RuntimeError, match="slot loop"):
+        _model(core_fixed_point_lambda=1.0, tul=TULConfig(prefix_k=2, slot_id=4))
+    # the refuted gain penalty refuses to build on any TUL model
+    with pytest.raises(RuntimeError, match="core_gain_lambda"):
+        _model(core_gain_lambda=1.0, core_gain_target=0.0, **paid)

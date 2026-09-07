@@ -161,6 +161,6 @@ iteration removes (E10a, E11). The map's top-direction gain is a leading INDICAT
 onset (E10c), but a Jacobian penalty at STARS' weight is not a hold; if the penalty lane
 stays open, the next draw is the E10c probe as a tripwire (reading > 3 for 5 steps) and a
 hinge at 2.5 with λ 0.1, six draws, and it must beat 0 of 6 to matter. The lever moves to
-shipping the fixed-point term (Wolfe's call, `.agents/notes/proposed/architecture/2026-09-07-
+shipping the fixed-point term (Wolfe's call, `.agents/notes/implemented/architecture/2026-09-07-
 fixed-point-objective-as-the-loop-stability-term.md`) and porting it to `_tul_core` for the
 block-loop rerun.

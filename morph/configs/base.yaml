@@ -166,12 +166,18 @@ model:
   # dims starting at decay injection_all_decay with dt = 1 - decay. Arc E9 (2026-09-07).
   injection_channels: ctx
   injection_all_decay: 0.9
-  # Arc E10 loop terms on the plain loop, 0 = off (bit-identical). fixed point: lambda *
-  # mean ||h_T - h_{T-1}||^2 / ||h_T||^2 at each sample's last iteration (2608.18222).
-  # gain: a finite-difference hinge lambda * relu(g - target)^2 at one random grad iteration
-  # along a power-iterated direction (STARS 2605.26733), so g reads sigma_max (healthy
-  # arms 11-22, E7's sick map 95). Arm configs: notul_fp_wu0.yaml, notul_pgain_wu0.yaml.
-  core_fixed_point_lambda: 0.0
+  # Arc E10 loop terms on the core loop (`_core_region`: the plain model AND the paid TUL
+  # loop; the slot loop has no port yet), 0 = off (bit-identical).
+  # fixed point (SHIPPED 2026-09-07, Wolfe): lambda * mean ||h_T - h_{T-1}||^2 / ||h_T||^2
+  # at each sample's last iteration (2608.18222). Measured: 0 of 6 warmup-0 detonations
+  # against 4 of 7 controls (lab/experiments/successes/2026-09-07-arc-e10-loop-loss-terms.md)
+  # and FREE under the ramp at 5k, +0.0009 [-0.0022, +0.0040] nats at the trained depth
+  # (successes/2026-09-07-arc-e11-fixed-point-ramped.md). Belt for the ramp's braces;
+  # 20k and the deep draw are unmeasured with it on. train/fixed_point is the instrument.
+  # gain: a finite-difference penalty along a power-iterated direction (STARS 2605.26733);
+  # REFUTED as a hold (E10c: 2 of 6 at lambda 1e-3, the reading leads the onset by 20-40
+  # steps). Arm configs: notul_fp_wu0.yaml, notul_pgain2_wu0.yaml.
+  core_fixed_point_lambda: 1.0
   core_gain_lambda: 0.0
   core_gain_target: 20.0
   core_gain_eps: 0.02

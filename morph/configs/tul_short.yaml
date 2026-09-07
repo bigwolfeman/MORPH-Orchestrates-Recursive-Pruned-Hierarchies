@@ -83,3 +83,11 @@ tul:
   # prefix positions) without each arm file restating it. A1 and the think-once panel
   # (tul_to_*.yaml) inherit it through tul_a1 / tul_g0c0 / tul_to_mown.
   tokens_through_core: false
+
+model:
+  # base.yaml ships the terminal fixed-point term (core_fixed_point_lambda 1.0) on the core
+  # loop; it is defined in _core_region only, which the slot loop does not run, and a
+  # slot-loop model with it on REFUSES TO BUILD. Off here for every slot-loop arm until the
+  # _tul_core port lands (.agents/notes/implemented/architecture/2026-09-07-fixed-point-
+  # objective-as-the-loop-stability-term.md). The slot loop's hold is slot_gain_lambda.
+  core_fixed_point_lambda: 0.0

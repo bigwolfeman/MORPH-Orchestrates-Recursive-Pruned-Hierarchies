@@ -1089,6 +1089,24 @@ class MORPHTransformer(nn.Module):
                 raise ValueError(
                     f"tul.mux_stage_own_iters={cfg.tul.mux_stage_own_iters} exceeds the loop's "
                     f"max depth {_kmax} (tul.slot_max_depth / model.max_depth)")
+        # Arc E10 loop terms on a TUL model (2026-09-07). The fixed-point term lives in
+        # `_core_region`, which the paid loop (tokens_through_core) runs unchanged, so it is
+        # DEFINED there and shipped in base.yaml; the slot loop (`_tul_core`) has no
+        # finishing-slice term yet and its own hinge (model.slot_gain_lambda), so a slot-loop
+        # config must set core_fixed_point_lambda 0 (tul_short.yaml does). The gain penalty
+        # was refuted (E10c) and stays plain-loop only. Both raise HERE, not at step 1.
+        if cfg.tul is not None:
+            if cfg.core_gain_lambda > 0.0:
+                raise RuntimeError("model.core_gain_lambda > 0 acts on the plain loop only "
+                                   "(arc E10c, refuted); the slot path has its own hinge "
+                                   "(model.slot_gain_lambda)")
+            if cfg.core_fixed_point_lambda > 0.0 and not cfg.tul.tokens_through_core:
+                raise RuntimeError(
+                    "model.core_fixed_point_lambda > 0 is defined on the plain loop and the "
+                    "paid loop (both run _core_region); the slot loop (_tul_core) has no "
+                    "finishing-slice term yet. tul_short.yaml sets it to 0 for every "
+                    "slot-loop arm (.agents/notes/implemented/architecture/"
+                    "2026-09-07-fixed-point-objective-as-the-loop-stability-term.md)")
         if cfg.tul is not None and cfg.fm is not None and cfg.tul.tokens_through_core:
             raise ValueError(
                 "tul.tokens_through_core=true with an FM planner (cfg.fm): the planner replaces "
@@ -2171,7 +2189,12 @@ class MORPHTransformer(nn.Module):
                     if n_next < n_active:
                         _fn = h_new[n_next:n_active].float().flatten(1)
                         _fo = h_a[n_next:n_active].float().flatten(1)
-                        _fp_terms.append((_fn - _fo).pow(2).sum(1) / (_fn.pow(2).sum(1) + 1e-6))
+                        # Under SCSE the carrier is the deviation; the step is the same
+                        # (h* is fixed) but the denominator is the ABSOLUTE state h* + Delta,
+                        # so the term is the same quantity as on the plain carrier.
+                        _fd = _fn if _scse is None else \
+                            _fn + e_s[n_next:n_active].float().flatten(1)
+                        _fp_terms.append((_fn - _fo).pow(2).sum(1) / (_fd.pow(2).sum(1) + 1e-6))
                 if _cg_lam > 0.0 and t == _t_cg:
                     _cg = self._core_gain_penalty(_core_step, args, rs_a, t, akw, _cg_lam)
 
@@ -3356,10 +3379,10 @@ class MORPHTransformer(nn.Module):
         into the plain ``_tul_core`` loop (the forced-depth sweep's path), matching the
         paper's "trained single-pass, sampled with the original K-iteration procedure".
         """
-        if self.cfg.core_fixed_point_lambda > 0.0 or self.cfg.core_gain_lambda > 0.0:
-            raise RuntimeError("model.core_fixed_point_lambda / core_gain_lambda act on the "
-                               "plain loop only (arc E10); the slot path has its own hinge "
-                               "(model.slot_gain_lambda)")
+        # Arc E10 loop terms: the fixed-point term lives in `_core_region`, which the paid
+        # loop runs unchanged, so it is stashed there and consumed at the end of this
+        # forward. A slot-loop or gain-penalty model never gets here (rejected at build).
+        self._core_aux = None
         if self.mtp is not None:
             raise RuntimeError("model.mtp_heads > 1 is not defined on the TUL slot path "
                                "(labels at slot positions are not a token stream); arc E8 "
@@ -3736,7 +3759,13 @@ class MORPHTransformer(nn.Module):
 
         if groups is not None:
             out.update(groups)
+            if self._core_aux is not None:
+                # The paid loop's fixed-point term (stashed by `_core_region`): added to the
+                # loss and exposed as `fixed_point` / `fp_weighted`, the same keys and the
+                # same train.py subtraction as the plain path.
+                self._apply_core_aux(out)
         else:
+            self._core_aux = None
             # Generation (labels=None): full logits, with the structural slot id masked
             # out of the head (spec §3.1 / invariant 4 — "masked … at generation").
             # index_fill is out-of-place, so this is safe under grad as well as no_grad.
@@ -4369,7 +4398,10 @@ class MORPHTransformer(nn.Module):
                 out["loss"] = loss
             if self.mtp is not None:
                 self._mtp_apply(out, x, labels, None)
-            if self._core_aux is not None and labels is not None:
-                self._apply_core_aux(out)
+            if self._core_aux is not None:
+                if labels is not None:
+                    self._apply_core_aux(out)
+                else:
+                    self._core_aux = None   # never let a label-less forward's stash leak
 
         return out

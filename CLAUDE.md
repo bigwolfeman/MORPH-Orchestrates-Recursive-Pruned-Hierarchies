@@ -36,7 +36,7 @@ warmup. The README has the 60-second triage, the measured abort rule (`preclip/t
 healthy runs), the open levers in priority order, and every instrument that already
 exists. Do not re-derive any of it. **The cure is measured (2026-09-03): a 1000-step LR
 ramp, now `training.warmup: 1000` in `base.yaml`, 0 detonations in 9 of 9 draws. Do not
-override it to 0 on the ternary+AdEMAMix recipe.**
+override it to 0 on the ternary+AdEMAMix recipe. Second hold, shipped 2026-09-07: the terminal fixed-point term `model.core_fixed_point_lambda 1.0` (0 of 6 warmup-0 detonations vs 4 of 7 controls; free at 5k under the ramp). It runs in `_core_region` (plain model + paid TUL loop); a slot-loop model with it on refuses to build, and `tul_short.yaml` zeroes it. Note: [`2026-09-07-fixed-point-objective-as-the-loop-stability-term.md`](.agents/notes/implemented/architecture/2026-09-07-fixed-point-objective-as-the-loop-stability-term.md).**
 
 ## ⭐ Core mental model — MORPH is a NESTED dynamical system (read before optimizing)
 
