@@ -1,6 +1,6 @@
-# Planned: ARC E9 — widen the diagonal carry to the whole residual (Parcae's ρ(A) < 1) under the detonation assay
+# Failure: ARC E9 — widen the diagonal carry to the whole residual (Parcae's ρ(A) < 1) under the detonation assay
 
-Status: planned
+Status: failure
 Date: 2026-09-07 (frozen before any smoke; Wolfe: "we wanna try widening the diag carry")
 Arc: `2026-09-04-loop-contribution-arc.md`. Follows E7
 (`failures/2026-09-07-arc-e7-block-loop.md`) and the Parcae re-read
@@ -76,3 +76,51 @@ The widened carry under torch.compile (the injection is a plain elementwise op, 
 semantic and bigram channels (Parcae never ablates its init; a second decay value is a
 follow-up, not part of this prereg); the tripwire's exit-code handling in the runner's
 draw loop at 1200 steps (the E6/E7 runner used the sustained variant).
+
+### Method amendment, 2026-09-07 04:45 (draw count cut; predictions untouched)
+
+After the first two widened draws detonated (seeds 201 and 202, at steps 419 and 200)
+P9a ("at most 1 of 6") was decided, and the remaining four widened draws and two control
+draws were cancelled to hand the window to E10 and E4 (`arc/cut_e9.sh`). P9b therefore has
+one control draw (seed 201, detonated at 201), not three; P9c–P9e have no surviving
+widened draw to read.
+
+## Results (2026-09-07 04:34–04:44; `arc/run_e9.sh` on worktree 1d6e292; files in `results/2026-09-07-arc-e9/`)
+
+| draw | carry | verdict | first crossing | max `preclip/total` |
+|---|---|---|---|---|
+| carry-all-s201 | all 768 dims | DETONATED | 419 | 1.29e4 at 419 |
+| carry-ctx-s201 | ctx (control) | DETONATED | 201 | 9.06e5 at 201 |
+| carry-all-s202 | all 768 dims | DETONATED | 200 | 4.61e8 at 225 |
+
+Both widened draws detonated inside the assay's window (200–775); the second reached 4.6e8
+by step 225, larger than any recorded control. The one control detonated at 201.
+
+- **P9a FALSE** (2 of 2 widened draws detonated; the bar was ≤ 1 of 6).
+- **P9b** consistent (1 of 1 control detonated) but under-sampled by the cut.
+- **P9c, P9d, P9e** unreadable (no surviving widened draw).
+
+## Verdict
+
+A ρ < 1 diagonal carry on every carrier dim, at init decay 0.9 / dt 0.1 on the non-context
+dims, does not remove or delay the early detonation on the ternary + AdEMAMix recipe at
+warmup 0. Parcae's constraint is on the state carry; MORPH's early detonation is not on the
+state carry, or not only. Consistent with the Parcae reader's own table: MORPH detonates at
+an LR 20–80x below the LRs at which Parcae's UNconstrained baselines diverge, so the trigger
+here (ternary is the measured trigger surface; the optimizer's slow EMA fills during the
+window) is one Parcae never faced. The E7 power-iteration picture stands unexplained by the
+carry: the 3e4x first-iteration jump is a property of the composed block map, which the
+diagonal carry does not touch.
+
+Not verified: other inits for the widened dims (0.447 everywhere, or a learned Δ as in
+Parcae's ZOH form); the widened carry under the ramp (it may still change the map's late
+dynamics without touching the early detonation, which is what the constraint is for in
+Parcae's 1.3B late-instability case); the four cancelled draws.
+
+## Updated hypothesis
+
+The early detonation is not a carry-spectrum event. Its remaining candidates are the block
+write's scale (E7: block 5's σ_max 9e4 at iteration 0), which a bounded write (Fully-Looped
+attention injection) or a directional hinge (E10b) addresses, and the ternary/optimizer
+trigger, which no map-side term addresses. E10 reads the first; the second needs the
+divergence README's open items (code-assignment hysteresis on the ternary cusp).
