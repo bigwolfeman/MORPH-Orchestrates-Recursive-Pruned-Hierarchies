@@ -1,7 +1,7 @@
 # ARC E16 — the Olympiad panel's control: the plain model (notul: TUL never activates,
 # Poisson core depth mean 6 / max 8 as base.yaml) on the same synthetic math, same
 # 6k steps, seq 512, effective batch 24, the four-stage band curriculum. The arms' token CE and answer accuracy are read against it.
-# Prereg: lab/experiments/planned/2026-09-08-arc-e16-olympiad-curriculum-panel.md
+# Prereg: lab/experiments/failures/2026-09-08-arc-e16-olympiad-curriculum-panel.md
 defaults:
   - notul
   - oly_data

@@ -39,6 +39,14 @@ expansive dial moved the TARGET, which the bias shifts by a constant. The hinge'
 as a HOLD (the spike train at gain 1) is unaffected in kind, since a map drifting to 1.0
 reads ≥ 1.0 in both modes; but its onset on an eager arm was 0.07 early.
 
+**Amendment 2026-09-08 (E16 measured).** The fused path does NOT make the hinge quiet by
+itself: E16's mask arm (`tg_scoped_kernels true`, hinge target 0.9) drifted up to the target
+and sat on it (`loss/gain_est` mean 0.8997, max 1.003 over steps 1000–6000; penalty nonzero
+on 80.5 % of steps; two one-step spikes at gain 0.95–0.96). The mnext and a1 arms sat at 0.88
+and fired on 0.04 % and 0.3 % of steps. So the fix here removes a +0.07 BIAS; it does not
+remove the hinge's work on the masked arm, whose map wants gain ≥ 0.9.
+(`lab/experiments/failures/2026-09-08-arc-e16-olympiad-curriculum-panel.md`.)
+
 ## Proposal
 
 1. Every TG arm runs `model.tg_scoped_kernels: true` (E16 does; `tul_oly_mask.yaml`). The
