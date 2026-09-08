@@ -1,0 +1,15 @@
+# ARC E17 — the Sudoku-Extreme panel: M-next-mask (forecast MUX, tokens reach earlier
+# steps only through the slot) at the mean-12 recipe (tul_m12_mnext_mask: Poisson slot
+# draw mean 12, max 16, full BPTT, hinge 0.9, fixed-point term) on HRM's Sudoku-Extreme
+# (sudoku_data.yaml), 6k steps, seq 182, effective batch 128 boards.
+# Prereg: lab/experiments/planned/2026-09-08-arc-e17-sudoku-depth-grid.md
+defaults:
+  - tul_m12_mnext_mask
+  - sudoku_data
+  - _self_
+model:
+  # E16 audit: `tg_restrict` forces `use_kernels false` process-wide; this flag keeps only
+  # the TG-restricted branches eager and lets the rest run fused (1.63x, -5.4GB there).
+  tg_scoped_kernels: true
+wandb:
+  name: sud-mask

@@ -1,0 +1,11 @@
+# ARC E17 — the Sudoku-Extreme panel's control: the plain model (notul: TUL never
+# activates, Poisson core depth mean 6 / max 8 as base.yaml) on the same Sudoku-Extreme
+# data, same 6k steps, seq 182, effective batch 128 boards. The arms' token CE and
+# board solve-rate are read against it.
+# Prereg: lab/experiments/planned/2026-09-08-arc-e17-sudoku-depth-grid.md
+defaults:
+  - notul
+  - sudoku_data
+  - _self_
+wandb:
+  name: sud-notul

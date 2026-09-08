@@ -197,6 +197,7 @@ def main() -> None:
     docs = load_docs(a.holdout, a.docs, a.seed)
     stream, doc_of, band_of, ans_of = build_stream(docs)
     n_docs = len(docs)
+    doc_band = np.asarray([d["band"] for d in docs])
     bands = sorted(set(int(b) for b in band_of))
     print(f"holdout: {n_docs} docs, {len(stream)} tokens, bands {bands}, "
           f"answer tokens {int(ans_of.sum())}", flush=True)
@@ -303,6 +304,17 @@ def main() -> None:
                          "band_ce_answer": {str(b): (bs_ce[b][0] / bs_ce[b][1] if bs_ce[b][1] else None) for b in bands},
                          "band_acc_answer": {str(b): (bs_acc[b] / bs_ce[b][1] if bs_ce[b][1] else None) for b in bands},
                          "band_n_answer": {str(b): bs_ce[b][1] for b in bands}}
+                # Whole-document solve rate: a doc "solves" at this depth iff every one
+                # of its answer-region tokens is correct (cs counts correct answer
+                # tokens per doc, ac counts total answer tokens per doc -- both already
+                # computed above for ce_answer/acc_answer, so this adds no extra forward).
+                has_ans = ac > 0
+                solved = has_ans & (cs >= ac - 1e-9)
+                entry["solve_rate"] = float(solved[has_ans].mean()) if has_ans.any() else None
+                entry["band_solve_rate"] = {
+                    str(b): (float(solved[has_ans & (doc_band == b)].mean())
+                             if (has_ans & (doc_band == b)).any() else None)
+                    for b in bands}
                 if not plain:
                     entry["ce_span_first"] = float(fst / fst_n) if fst_n else None
                 if ms:
@@ -314,7 +326,8 @@ def main() -> None:
                 print(f"{label:10s} depth={d:<2d} ce_tokens={entry['ce_tokens']:.4f} "
                       f"ce_answer={entry['ce_answer']:.4f} acc_answer={entry['acc_answer']:.4f}"
                       + (f" span_first={entry['ce_span_first']:.4f}" if entry.get("ce_span_first") else "")
-                      + (f" mux_local={entry['mux_local']:.4f}" if "mux_local" in entry else ""),
+                      + (f" mux_local={entry['mux_local']:.4f}" if "mux_local" in entry else "")
+                      + (f" solve_rate={entry['solve_rate']:.4f}" if entry.get("solve_rate") is not None else ""),
                       flush=True)
         finally:
             if plain:

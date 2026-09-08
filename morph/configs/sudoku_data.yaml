@@ -1,0 +1,48 @@
+# ARC E17 mixin — HRM's Sudoku-Extreme (docs/olympiad-interop.md shard format, built by
+# scripts/sudoku_shards.py). One board = 9 puzzle rows + <|A|> + 9 solution rows + <|/A|>
+# + EOS, every row ending in a newline so the TUL boundary rule gives ONE slot per grid
+# row (9 puzzle + 9 solution = 18 slots/board, well under the default max_slots=seq_len//8
+# = 22). Every board serializes to EXACTLY 183 tokens (digits/newline/specials are never
+# re-tokenized, so there is no BPE merge to make it vary — tests/test_sudoku_shards.py).
+# seq_len is pinned to 182 = 183 - 1 so batch_size*(seq_len+1) is always a MULTIPLE of
+# 183: the curriculum loader's carry-split `_fill` only ever pulls whole docs, so its
+# buffer is a multiple of 183 between calls and a board never straddles two packed rows
+# (tests/test_sudoku_shards.py::test_packing_never_splits_a_board — the control at
+# seq_len=200 shows the same loader DOES split when seq_len isn't a multiple-183-minus-1).
+# Validation is the corpus's own held-out test-set boards (`val_source` below; 3,000
+# docs, stratified across rating buckets, disjoint from the 1,000,000-board train shard (1000 puzzles × 1000 augmentations, as HRM) —
+# scripts/sudoku_shards.py's leak check). The per-bucket answer/solve-rate readout is the
+# held-out sweep (lab/divergence/olympiad_sweep.py) at every checkpoint.
+curriculum:
+  enabled: true
+  val_source: holdout
+  val_seed: 1
+  pretok_dir: /home/wolfe/morph-scratch/data/sudoku
+  allowed_source_roles: [reasoning_midtrain]
+  eff_batch: 128                 # micro_batch 32 x grad-accum 4 = 128 boards/step (5,824
+                                 # tokens/micro-batch, near E16's ~6,000-token memory point)
+  blend:
+    train: 1.0
+  stages:
+    - {seq_len: 182, context_len: 182, micro_batch: 32, steps: 6000}
+data:
+  seq_len: 182
+tul:
+  # The mean-12 arm twins inherit `max_slots: 64` from tul_a2 (tuned for seq_len 1024,
+  # ~16 tokens/span on web text). A sudoku board's spans are ~10 tokens (one digit row +
+  # newline) and 18 slots/board + 1 EOS = 19 fit easily; 64 slots at seq_len 182 sizes
+  # L_total = 182 + 2*64 = 310, more than the row needs, and OOMed the mask arm's
+  # tg_scoped prefix_project matmul (8 GiB single alloc) at micro_batch 32 on a 32GB
+  # card. 0 falls back to seq_len // 8 = 22 (spec §8 default, TulLayoutSpec.__post_init__).
+  max_slots: 0
+model:
+  ckpt_grad_iters: 4             # E16 audit (lab/perf/2026-09-08-oly-throughput-audit/):
+                                 # exact, 1.25x throughput at +6.3GB peak on the mask arm
+training:
+  steps: 6000                    # must equal the curriculum stage sum (one 6000-step stage)
+  eval_every: 250
+  ckpt_every: 1500
+  gen_every: 0
+  grad_probe_every: 1            # the sustained tripwire reads preclip/total from probe.jsonl
+wandb:
+  project: morph-tul

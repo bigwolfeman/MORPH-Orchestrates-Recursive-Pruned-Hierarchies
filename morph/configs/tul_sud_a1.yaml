@@ -1,0 +1,11 @@
+# ARC E17 — the Sudoku-Extreme panel: A1 classic (bag-mean seed, emit/plast 0.5/0.5, no
+# MUX, no mask) at the mean-12 recipe (tul_m12_a1: Poisson slot draw mean 12, max 16,
+# full BPTT, hinge 0.9, fixed-point term) on HRM's Sudoku-Extreme (sudoku_data.yaml), 6k
+# steps, seq 182, effective batch 128 boards.
+# Prereg: lab/experiments/planned/2026-09-08-arc-e17-sudoku-depth-grid.md
+defaults:
+  - tul_m12_a1
+  - sudoku_data
+  - _self_
+wandb:
+  name: sud-a1
