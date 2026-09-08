@@ -20,6 +20,7 @@ Open the run's `probe.jsonl` (written by `training.grad_probe_every=1`, key
 | Did `preclip/total` exceed **1e4** at any step ≥ 200? | **Paid-axis detonation.** Section A. The run is dead; the loss may look fine for another 1500 steps. | keep reading |
 | Is val CE at a MINIMUM and then RISING by nats, on a slot-loop TUL arm (A1/A3, ≤64 looped positions)? | **Core takeover.** [takeover-campaign.md](takeover-campaign.md), 15 hypotheses, 11 refuted. Do not re-derive them. | keep reading |
 | Is the run a slot loop at full BPTT (any target: MUX-next, cond4, coda8, A1 at `bptt_depth` 8), under the 1000-step ramp, and does `preclip/total` show single-step spikes that snap back and escalate once the ramp ends? | **The full-BPTT spike train.** Section D. The loop's typical gain has drifted to 1; `model.slot_state_renorm` or `model.slot_gain_lambda` holds it; a backward clip alone does not. | keep reading |
+| Is `loop/core_gain_t0` (state norm after iteration 0 over the entry norm) climbing past 3 on a slot-loop arm while `loss/gain_est` reads ≤ 1? | **First-iteration scale growth.** The tripwire follows in ~500 steps; the hinge and the fixed-point term cannot see it. Seen under a FIXED slot depth, MTP heads at weight 1.0, and the mean-16 draw. Section A, second-hold table. | Not this mode. |
 | Is val CE flat near 7.3 from the first eval? | The codebook is pinned (a frozen ternary γ, or an equivalent). Section C. | New. Write a prereg before you run anything. |
 
 The step-0 spike (`preclip/total` ~3.6e4 at step 0) is init and is NORMAL. Every verdict
@@ -117,10 +118,23 @@ held 0 of 6 draws (max `preclip/total` 11–18) against 4 of 7 controls the same
 (`lab/experiments/successes/2026-09-07-arc-e10-loop-loss-terms.md`); under the ramp at 5k
 it is free, +0.0009 [−0.0022, +0.0040] nats at the trained depth, and makes the depth-1
 readout 0.014 better (`successes/2026-09-07-arc-e11-fixed-point-ramped.md`). Shipped in
-`base.yaml` 2026-09-07 for the plain model and the paid TUL loop; the slot loop has no port
-yet (`tul_short.yaml` zeroes it; a slot-loop model with it on refuses to build).
+`base.yaml` 2026-09-07 for the plain model and the paid TUL loop, and ported to the slot loop
+(`_tul_core`, per-slot last iteration) at 7ff72a0 the same day: every slot-loop arm carries it.
 `train/fixed_point` is the instrument: 0.2–0.6 in the first 20 steps, 0.003–0.02 after.
-Unmeasured with it on: 20k, the deep draw, prune/carve/route, seq 4096.
+Unmeasured with it on: 20k, prune/carve/route, seq 4096.
+
+What the slot loop then showed (E12, E13, E14, all 2026-09-07): the term is free on the
+healthy mean-12 arms (0.0015–0.005) and holds NOTHING against two failure modes it was not
+built for, both scale-blind to it AND to the typical-gain hinge:
+
+| mode | seen on | the reading | what the term / hinge read |
+|---|---|---|---|
+| first-iteration SCALE growth | E12 `k12-mnext-mask` (fixed depth 12, trip 1446); E13 `m12-mnext-mask-mtp4` (3 heads at weight 1.0, trip 2138); E7 (mean 16, trip 2712) | `loop/core_gain_t0` 1.5 → 10 → 100 → 170–190, ~500 steps before the tripwire; the differential gain stays ~1 (an affine scale-up, not a Jacobian gain) | term 0.01–0.04, hinge 0.95–1.0 |
+| single-sample gain spike at typical gain 1 | E14 `m12-mask-g102` (hinge target 1.02, trip 3877) and `g102-rn` (+ state renorm, trip 4639) | hinge reading sits at 0.99; `loss/gain_est_max` 5–16 on the spike step; the state's scale flat (renorm pinned it) — the spike is a few DIRECTIONS of the map | term 0.002–0.003, hinge mean 0.99 |
+
+`lab/experiments/failures/2026-09-07-arc-e12-k12-panel.md`, `…-e13-m12-panel.md`,
+`…-e14-expansive-dial.md`. The missing lever for both is directional (the map's largest
+direction at the live operating point), which no shipped term measures.
 
 The same assay refuted a Jacobian penalty along a power-iterated direction (STARS): inert
 once per step (reads the typical gain), and 2 of 6 with two within-step power iterations at

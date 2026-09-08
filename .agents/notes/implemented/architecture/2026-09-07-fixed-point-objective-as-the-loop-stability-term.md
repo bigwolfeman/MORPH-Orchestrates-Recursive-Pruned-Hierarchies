@@ -24,10 +24,11 @@ subtracted from every reported loss by train.py, logged as `train/fixed_point`).
 SCSE the denominator is the absolute state h* + Δ, so the term is the same quantity on
 both carriers.
 
-The slot loop (`_tul_core`) has no finishing-slice term yet. A slot-loop model with the
-term on REFUSES TO BUILD (build-time raise in `MORPHTransformer.__init__`), and
-`tul_short.yaml`, the root of every slot-loop arm, sets it to 0 with the reason. The
-refuted gain penalty (`core_gain_lambda`) refuses to build on any TUL model.
+The slot loop (`_tul_core`) carries the same term since 7ff72a0 (2026-09-07, for the mean-12
+panel): at each valid slot's last grad iteration, the same relative finishing step, the same
+SCSE denominator rule, the same `_core_aux` stash and `train.py` subtraction
+(`tests/test_slot_loop_aux.py`). `tul_short.yaml` no longer zeroes it. The refuted gain
+penalty (`core_gain_lambda`) still refuses to build on any TUL model.
 
 Evidence, 2026-09-07:
 
@@ -56,10 +57,10 @@ Evidence, 2026-09-07:
 - Keeping the ramp alone. It is measured (0 of 9) but it is a schedule: it cannot act on
   a map that goes expansive later.
 - Parcae's carry constraint. Refuted for the early window (E9).
-- Porting to `_tul_core` before shipping. Rejected for now: the slot loop is not the
-  shipped forward, the port needs its own assay (Y2 with the term, warmup 0, 6 draws),
-  and a build-time refusal plus the `tul_short.yaml` override keeps the two paths honest
-  until it lands.
+- Porting to `_tul_core` before shipping. Rejected on the day of shipping (the slot loop
+  was not the shipped forward), then done the same day for the mean-12 panel; the
+  warmup-0 six-draw assay on the slot loop was never run — E13/E14 ran it under the ramp
+  only.
 - Making the term silently inert on the slot loop (the `[slot-levers] INERT` pattern).
   Rejected: an inert stability term on the one path that still spikes is exactly the
   silent gap this tree has been bitten by before.
@@ -72,7 +73,11 @@ Evidence, 2026-09-07:
   reads `train/fixed_point` beside `preclip/total`.
 - `train/fixed_point` is a standing regime instrument: it peaks 0.2–0.6 inside the first
   20 steps and sits at 0.003–0.02 on a healthy loop.
-- Open: the `_tul_core` port (per-slot depths, the same sorted active-set structure) so
-  the block-loop rerun and the think-once panel carry it; whether λ 1.0 is near a cliff
-  (no other λ was run); the E7 failure shape (one huge first iteration, then rotation),
-  which a last-iteration term has not been tested against.
+- Measured on the slot loop (E12/E13/E14, 2026-09-07): free on the healthy mean-12 arms
+  (0.0015–0.005); NO hold against the E7 failure shape (one huge first iteration, then
+  rotation: `loop/core_gain_t0` → 170–190 while the term reads 0.01–0.04, on a fixed
+  depth and on MTP heads at weight 1.0) nor against the single-sample gain spike at
+  typical gain 1 (E14). Both are invisible to a relative last-step term by construction.
+- Open: whether λ 1.0 is near a cliff (no other λ was run); the warmup-0 assay on the
+  slot loop; a directional term (the map's largest direction at the operating point),
+  which is the lever both slot-loop modes point at.
