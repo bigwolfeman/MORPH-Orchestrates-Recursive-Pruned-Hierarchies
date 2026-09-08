@@ -1,6 +1,6 @@
 # Planned: ARC E14 — the expansive dial: the mean-12 mask arm with the gain hinge at 1.02
 
-Status: planned
+Status: failure
 Date: 2026-09-07 (frozen before launch; queued behind E13. Wolfe: "It is worth testing
 depth behavior if we let it get just a touch over 1.0 so it *can* be expansive.")
 Arc: `2026-09-04-loop-contribution-arc.md`.
@@ -99,3 +99,57 @@ forced depth 24 on a model trained at max 16.
   +0.0005 (unchanged: nothing past iteration 3 on either); token CE at depth 6 4.665 vs
   4.657 (end point 0.008 worse, across runs). The gain target moves how much of the tokens'
   work the loop does, not how deep the loop works.
+
+- 18:07–19:46 `m12-mask-g102-rn` (target 1.02 + `slot_state_renorm`): DETONATED at 4639 on
+  the sustained rule (spike train: 4.5e3 at 4270, 1.4e4 at 4272, then 7.5e4 at 4575, 1.4e4
+  at 4616, 2.8e4 at 4639). The renorm did its job: `loop/core_gain_t0` 1.00 exactly all run,
+  exit norm flat at ~220; the hinge reading averaged 0.997 from 2000; the spikes were
+  single-sample differential-gain excursions (`gain_est_max` 5.2 at 4575), the same
+  backward-product mode as g102, 400 steps later. Sweep@2500 (pre-onset): tokens K1−K6
+  +0.0601 [+0.0578, +0.0623], forecast +0.5406 [+0.5222, +0.5598], tokens K3−K6 +0.0007,
+  token CE at depth 6 4.6572 (0.90 arm at 2500: 4.6571).
+
+## Results
+
+Both arms tripped; neither reached 5000, so every 2500 checkpoint is pre-onset by the arc's
+rule and the depth predictions are scored on them only with that flag.
+
+| prediction | outcome |
+|---|---|
+| P14a hinge reading averages ≥ 1.00 over 2000+ | **false by 0.01** on g102 (0.990) and g102-rn (0.997): the map climbed to the edge of 1 within 1000 steps and sat there, never above |
+| P14b survival: g102 35 %, g102-rn 60 % | **false, false** (3877 single-row; 4639 sustained) |
+| P14c the scale mode leads a g102 trip (75 %); g102-rn's t0 ratio < 3 (85 %) | **false**: `core_gain_t0` 1.0–1.3 all run on g102, never above 3; **true** on g102-rn (1.00 by construction) |
+| P14d forecast K6−K12 > 0.01 / K3−K6 > 0.03 | **false** on both (pre-onset 2500: K3−K6 tokens 0.0007; forecast K3−K6 0.004 / 0.004) |
+| P14e token CE at depth 12 beats the 0.90 arm at 5000 | **unscorable** (no 5000); at 2500 g102 is 0.008 worse and g102-rn equal (4.6572 vs 4.6571) |
+| P14f fixed-point term averages > 0.01 (the terms fight) | **false**: 0.0024 / 0.0031 |
+| P14g `delta_ratio_last` > 0.10 | **false**: 0.031 / 0.045 — a map at typical gain 1 still settles by its last iteration |
+
+The effect (Wolfe: record it), paired over the 480 rows at 2500 against the 0.90 mask arm at
+the same step:
+
+| arm @2500 | tokens K1−K6 | forecast K1−K6 | tokens K3−K6 | token CE @6 |
+|---|---|---|---|---|
+| mask 0.90 | +0.0326 [+0.0312, +0.0338] | +0.4582 [+0.4404, +0.4769] | +0.0005 | 4.6571 |
+| g102 | +0.0425 [+0.0408, +0.0440] | +0.3808 [+0.3630, +0.4005] | +0.0007 | 4.6649 |
+| g102-rn | +0.0601 [+0.0578, +0.0623] | +0.5406 [+0.5222, +0.5598] | +0.0007 | 4.6572 |
+
+## Verdict
+
+Failure on the predictions. Letting the map sit at typical gain 1 does not make the loop
+work deeper (K3−K6 unchanged at 0.0007) and does not keep it alive (both arms spiked in the
+backward-product mode, 3877 and 4639). It does move how much of the tokens' work the loop
+carries: K1−K6 on the tokens goes 0.033 → 0.043 (hinge alone) → 0.060 (hinge + renorm) at
+the same end point (4.657). The renorm bounds the state and delays the spike by ~400 steps;
+it does not remove it, so the spike is the map's Jacobian along a few directions, not the
+state's size — the E7 rank picture, now shown on a run whose scale never moved.
+
+## Updated hypothesis
+
+The gain target is a dial on the loop's SHARE of the tokens' work, not on its depth. Every
+slot-loop arm in this arc, at 0.90, 0.99 (renorm) or 0.99 (free), finishes by iteration 3.
+A map at typical gain 1 spikes from a few expansive directions that neither the typical-gain
+hinge, the state renorm, nor the fixed-point term sees; the lever for THAT would have to be
+directional (a bound on σ_max at the live operating point, or the per-iteration hinge), which
+the 2026-08-24 campaign showed fails as a weight-spectrum cap and has not been tried at the
+operating point. Whether the extra share at gain 1 is worth anything is a 5000-step question
+this experiment could not reach.
