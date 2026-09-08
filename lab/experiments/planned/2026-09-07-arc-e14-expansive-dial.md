@@ -79,3 +79,23 @@ Hinge + renorm together in one build (each is measured alone; the base.yaml comm
 "either one, not both, is the tested configuration"; SCSE is off on this arm so the
 build does not refuse); a target above 1 anywhere (E1 stopped at 0.98); the sweep at
 forced depth 24 on a model trained at max 16.
+
+## Run log (appended during the run; Predictions untouched)
+
+- 16:35–18:00 `m12-mask-g102` (hinge target 1.02): DETONATED at 3877 by the single-row rule
+  (`preclip/total` 1.41e6 at 3877; one earlier blip 5.7e3 at 3867; the probe read 2.2 again by
+  3894 when the kill landed, so the run may have lived through it — unknowable from here).
+  NOT the E7 scale mode: `loop/core_gain_t0` stayed 1.0–1.3 all run (never above 3); the
+  hinge reading climbed 0.89 → 1.00 by step 1000 and averaged 0.990 over 2000–3877, at the
+  edge and never above 1; the exit norm grew 4.5x over the 12 iterations (0.90 arm: 2.2x);
+  the last-iteration relative change stayed 0.031 and the fixed-point term 0.0024, so a
+  map held at gain 1 still settles by its last iteration. The spike was one sample's
+  differential gain reading 15.9 at one iteration (`loss/gain_est_max`), the
+  spike-at-the-crossing mode of 2026-09-04.
+- **The effect to keep (Wolfe, 2026-09-07 18:10).** At 2500, pre-onset, paired over the 480
+  rows against the 0.90 mask arm at the same step: tokens K1−K6 +0.0425 [+0.0408, +0.0440]
+  vs +0.0326 [+0.0312, +0.0338], a third more loop contribution to the tokens from letting
+  the map sit at gain 1; forecast K1−K6 +0.381 vs +0.458 (less); tokens K3−K6 +0.0007 vs
+  +0.0005 (unchanged: nothing past iteration 3 on either); token CE at depth 6 4.665 vs
+  4.657 (end point 0.008 worse, across runs). The gain target moves how much of the tokens'
+  work the loop does, not how deep the loop works.
