@@ -2213,6 +2213,12 @@ def main(cfg: DictConfig) -> None:
         _stage_steps = [int(s.steps) for s in _stages]
         _eff_batch = int(getattr(_curr_cfg, "eff_batch", 8))
         _weights = {str(k): float(v) for k, v in dict(_curr_cfg.blend).items()}
+        # per-stage blend overrides (a data curriculum at one length, arc E15): a stage
+        # may carry `blend: {source: weight}`; None keeps the global blend for that stage
+        _stage_weights = [({str(k): float(v) for k, v in dict(s.blend).items()}
+                           if s.get("blend") is not None else None) for s in _stages]
+        if all(x is None for x in _stage_weights):
+            _stage_weights = None
         _allowed_roles = [str(x) for x in getattr(
             _curr_cfg, "allowed_source_roles", ("pretrain_bulk", "reasoning_midtrain")
         )]
@@ -2222,7 +2228,8 @@ def main(cfg: DictConfig) -> None:
         _curr_loader = MultiSourceCurriculumLoader(
             str(_curr_cfg.pretok_dir), _weights, _boundaries,
             seed=int(getattr(tr, "seed", 0)), allowed_roles=_allowed_roles,
-            data_runtime=DataRuntimeConfig.resolve(getattr(cfg, "data_runtime", None)))
+            data_runtime=DataRuntimeConfig.resolve(getattr(cfg, "data_runtime", None)),
+            stage_weights=_stage_weights)
         # RoPE modules to re-anchor on each step-up (attention is EAGER → safe to mutate
         # cos/sin cache mid-run; compile only wraps the MLPs). Reach through _orig_mod.
         _rope_mods = [m for m in getattr(model, "_orig_mod", model).modules()
@@ -2232,7 +2239,7 @@ def main(cfg: DictConfig) -> None:
         print(f"[curriculum] ENABLED: {len(_stages)} stages seq={_boundaries} "
               f"context={_contexts} micro_batch={_microbatch} eff_batch={_eff_batch} "
               f"stage_steps={_stage_steps} total_steps={total_steps} "
-              f"allowed_roles={_allowed_roles} | "
+              f"allowed_roles={_allowed_roles} stage_blends={_stage_weights} | "
               f"{len(_rope_mods)} RoPE modules", flush=True)
 
     # ── Training phase schedule (morph/training/phase.py) ────────────────────

@@ -52,8 +52,11 @@ class _Source:
                                 dtype=np.uint16, name=name, runtime=runtime)
         self.tokens = self.store.array
         self.eos_id = int(self.meta["eos_id"])
-        # filled by the loader once boundaries are known: stage_idx per doc
-        self.stage_of_doc: np.ndarray | None = None
+        # filled by the loader once boundaries are known: length BUCKET per doc, and the
+        # bucket each stage reads (several stages may share one seq_len: a data curriculum
+        # at a fixed length, arc E15)
+        self.bucket_of_doc: np.ndarray | None = None
+        self.bucket_of_stage: list[int] = []
         # per-stage shuffled doc-index queues + cursor
         self._stage_docs: dict[int, np.ndarray] = {}
         self._cursor: dict[int, int] = {}
@@ -63,15 +66,21 @@ class _Source:
         return np.asarray(self.tokens[a:b], dtype=np.int64)   # includes trailing EOS
 
     def assign_stages(self, boundaries: list[int]):
-        # stage = first bucket whose seq_len >= doc_len; docs longer than the top
-        # boundary fall in the top stage (they'll be carry-split across sequences).
-        b = np.asarray(boundaries)
+        # bucket = first UNIQUE seq_len >= doc_len; docs longer than the top boundary fall
+        # in the top bucket (they'll be carry-split across sequences). A stage reads the
+        # bucket of its own seq_len, so two stages at the same length share every doc.
+        uniq = sorted({int(x) for x in boundaries})
+        b = np.asarray(uniq)
         idx = np.searchsorted(b, self.lens, side="left")     # lens<=b[idx]
-        idx = np.clip(idx, 0, len(boundaries) - 1)
-        self.stage_of_doc = idx.astype(np.int64)
+        idx = np.clip(idx, 0, len(uniq) - 1)
+        self.bucket_of_doc = idx.astype(np.int64)
+        self.bucket_of_stage = [uniq.index(int(x)) for x in boundaries]
+
+    def docs_in_stage(self, stage: int) -> np.ndarray:
+        return self.bucket_of_doc == self.bucket_of_stage[stage]
 
     def build_stage_queue(self, stage: int, rng: np.random.Generator):
-        docs = np.nonzero(self.stage_of_doc == stage)[0]
+        docs = np.nonzero(self.docs_in_stage(stage))[0]
         rng.shuffle(docs)
         self._stage_docs[stage] = docs
         self._cursor[stage] = 0
@@ -92,9 +101,13 @@ class _Source:
 class MultiSourceCurriculumLoader:
     def __init__(self, pretok_dir: str, weights: dict, stage_boundaries: list[int],
                  seed: int = 0, allowed_roles=DEFAULT_ALLOWED_PRETRAIN_ROLES,
-                 data_runtime: DataRuntimeConfig | None = None):
+                 data_runtime: DataRuntimeConfig | None = None,
+                 stage_weights: list[dict | None] | None = None):
         """weights: {source_name: weight} (need not sum to 1). stage_boundaries: ascending
-        seq_lens, e.g. [4096, 8192, 16384] → 3 stages."""
+        seq_lens, e.g. [4096, 8192, 16384] → 3 stages. stage_weights: optional per-stage
+        blend overrides (one entry per stage, None = the global weights); a source absent
+        from a stage's blend, or at 0, is not drawn in that stage. Every name must be a
+        loaded source (positive global weight)."""
         self.boundaries = [int(x) for x in stage_boundaries]
         self.n_stages = len(self.boundaries)
         self.rng = np.random.default_rng(seed)
@@ -113,6 +126,7 @@ class MultiSourceCurriculumLoader:
             self.sources.append(s)
         if not self.sources:
             raise ValueError("no sources with positive weight")
+        self.stage_weights = self._check_stage_weights(stage_weights)
         self.cur_stage = -1
         self.cur_seq_len = self.boundaries[0]
         self._carry: list[int] = []
@@ -132,6 +146,28 @@ class MultiSourceCurriculumLoader:
                       flush=True)
             self._prefetcher = None
 
+    def _check_stage_weights(self, stage_weights) -> list[dict[str, float] | None] | None:
+        if stage_weights is None:
+            return None
+        if len(stage_weights) != self.n_stages:
+            raise ValueError(f"stage_weights has {len(stage_weights)} entries for "
+                             f"{self.n_stages} stages")
+        loaded = {s.name for s in self.sources}
+        out: list[dict[str, float] | None] = []
+        for k, sw in enumerate(stage_weights):
+            if sw is None:
+                out.append(None)
+                continue
+            sw = {str(n): float(v) for n, v in dict(sw).items()}
+            unknown = sorted(n for n in sw if n not in loaded)
+            if unknown:
+                raise ValueError(f"stage {k} blend names sources that are not in the loaded "
+                                 f"blend (give them a positive global weight): {unknown}")
+            if not any(v > 0 for v in sw.values()):
+                raise ValueError(f"stage {k} blend has no positive weight: {sw}")
+            out.append(sw)
+        return out
+
     # ── stage control (driven by CurriculumScheduler) ──────────────────────
     def set_stage(self, k: int):
         if not (0 <= k < self.n_stages):
@@ -140,19 +176,24 @@ class MultiSourceCurriculumLoader:
         self.cur_stage = k
         self.cur_seq_len = self.boundaries[k]
         self._carry = []                                       # flush: no cross-stage bleed
-        active = []
+        sw = self.stage_weights[k] if self.stage_weights is not None else None
+        active: list[_Source] = []
+        stage_w: list[float] = []
         for s in self.sources:
-            s.build_stage_queue(k, self.rng)
-            if s.has_stage(k):
+            s.build_stage_queue(k, self.rng)          # every source, every stage: the RNG
+            w_k = s.weight if sw is None else sw.get(s.name, 0.0)   # stream is unchanged
+            if s.has_stage(k) and w_k > 0.0:
                 active.append(s)
+                stage_w.append(w_k)
         if not active:
             raise RuntimeError(f"stage {k} (seq_len {self.cur_seq_len}) has NO docs in any "
-                               f"source — check bucket boundaries vs data lengths.")
+                               f"source — check bucket boundaries vs data lengths"
+                               + (" and the stage's blend." if sw is not None else "."))
         self._active = active
         # Token-proportioned draw: configured weights are TOKEN fractions (PRETRAINING.md),
         # so per-DOC draw prob must be ∝ weight / mean_doc_len → expected token fraction == weight.
-        w = np.array([s.weight for s in active], dtype=np.float64)
-        mean_len = np.array([float(s.lens[s.stage_of_doc == k].mean()) for s in active])
+        w = np.array(stage_w, dtype=np.float64)
+        mean_len = np.array([float(s.lens[s.docs_in_stage(k)].mean()) for s in active])
         p = w / mean_len
         self._probs = p / p.sum()
         active_names = [f"{s.name}:{s.role}" for s in active]

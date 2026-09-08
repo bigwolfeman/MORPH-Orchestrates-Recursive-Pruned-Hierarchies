@@ -1,6 +1,6 @@
 # ARC E15 — the Olympiad panel's control: the plain model (notul: TUL never activates,
 # Poisson core depth mean 6 / max 8 as base.yaml) on the same synthetic math, same
-# 15k steps, seq 512, batch 24. The arms' token CE and answer accuracy are read against it.
+# 6k steps, seq 512, effective batch 24, the four-stage band curriculum. The arms' token CE and answer accuracy are read against it.
 # Prereg: lab/experiments/planned/2026-09-07-arc-e15-olympiad-panel.md
 defaults:
   - notul

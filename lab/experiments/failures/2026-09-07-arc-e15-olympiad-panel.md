@@ -1,6 +1,6 @@
 # Planned: ARC E15 — the Olympiad panel: three TUL variants and the plain control on synthetic math
 
-Status: planned
+Status: failure (rejected run: method replaced before the first checkpoint)
 Date: 2026-09-07 (frozen before launch; Wolfe: "Olympiad AI ... its all synth math, it should
 show better loop contribution on something that needs it ... do 15k steps and see how they
 progress through the curriculum too. and a larger batch than we've used.")
@@ -91,3 +91,23 @@ first), micro 12 × accum 2 on every arm (only the mask arm at micro 16 was smok
 sweep script's plain path (notul) and its per-band tables on a real checkpoint (exercised
 on an E13 web-text checkpoint before launch), the packer's slot cap (64 at seq 512) against
 ~43 spans per row.
+
+## Results
+
+Launched 22:25 (commit ea57f69); the mask arm's smoke passed (peak 20.67 GB, 0.43 steps/s at
+micro 12 × accum 2) and its draw ran to about step 200 before Wolfe killed the plan at
+22:30: 15k steps at that rate is 9.7 h for one arm ("way too slow"); the run should be 6k
+steps, should walk the Olympiad curriculum in order from stage 2.1 instead of a uniform mix,
+and a throughput audit comes first. No checkpoint, no sweep, no scores.
+
+## Verdict
+
+Rejected: the method changed before any data existed. The predictions are unscored and
+stand as the record of what I expected of a uniform 15k mix; the replacement is E16
+(`planned/2026-09-07-arc-e16-olympiad-curriculum-panel.md`), written after the audit.
+
+## Updated hypothesis
+
+None from data. Two facts for the next prereg: the curriculum's stage sum overrides
+`training.steps` (a smoke must set both), and the eager mask arm's memory is set by the
+attention over 640 positions (micro 16: 26.5 GB; micro 24: OOM), not by the slot loop.

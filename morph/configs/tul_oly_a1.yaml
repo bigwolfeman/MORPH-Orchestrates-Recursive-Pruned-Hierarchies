@@ -1,6 +1,6 @@
 # ARC E15 — the Olympiad panel: A1 classic (bag-mean seed, emit/plast 0.5/0.5, no MUX, no mask) at the mean-12 recipe (tul_m12_a1: Poisson slot draw
 # mean 12, max 16, full BPTT, hinge 0.9, fixed-point term) on synthetic math
-# (oly_data.yaml), 15k steps, seq 512, batch 24.
+# (oly_data.yaml), 6k steps, seq 512, effective batch 24, the four-stage band curriculum.
 # Prereg: lab/experiments/planned/2026-09-07-arc-e15-olympiad-panel.md
 defaults:
   - tul_m12_a1

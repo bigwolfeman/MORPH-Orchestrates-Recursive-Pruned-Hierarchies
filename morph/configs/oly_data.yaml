@@ -8,20 +8,31 @@
 # in the run log is NLP; the math readout is the held-out sweep.
 curriculum:
   enabled: true
-  pretok_dir: ${oc.env:OLYMPIAD_REPO,/mnt/sda1/Projects/00NN/Olympiad-AI}/data/transition_mix
+  # Five per-band VIEWS of the two Olympiad shards (scripts/olympiad_band_views.py: shared
+  # tokens file, sliced doc index): b2_3 103M tok, b4_5 77M, b6_7 81M, b8_10 30M, b11_13 367M.
+  pretok_dir: ${oc.env:OLYMPIAD_REPO,/mnt/sda1/Projects/00NN/Olympiad-AI}/data/olympiad_bands
   allowed_source_roles: [reasoning_midtrain]
   eff_batch: 24                  # micro_batch 12 × grad-accum 2 (12,288 tokens/step; micro 16 peaked 26.5 GB eager)
-  blend:
-    olympiad_stage11_13: 0.5     # 367M tok, stages 11–13 (strategy bands)
-    olympiad_math: 0.5           # 291M tok, stages 2–10 (arithmetic → algebra)
+  blend:                         # LOADING weights (every source a stage names must be here);
+    b2_3: 1.0                    # the per-stage `blend` below is what is drawn
+    b4_5: 1.0
+    b6_7: 1.0
+    b8_10: 1.0
+    b11_13: 1.0
+  # The data curriculum (Wolfe 2026-09-07: "this has a curriculum system, start on 2.1"):
+  # four stages at ONE length whose blends walk up the bands with ~15 % replay of the band
+  # just left. Token fractions per stage; the loader draws docs ∝ weight / mean_len.
   stages:
-    - {seq_len: 512, context_len: 512, micro_batch: 12, steps: 15000}
+    - {seq_len: 512, context_len: 512, micro_batch: 12, steps: 1500, blend: {b2_3: 0.70, b4_5: 0.30}}
+    - {seq_len: 512, context_len: 512, micro_batch: 12, steps: 1500, blend: {b2_3: 0.15, b4_5: 0.45, b6_7: 0.40}}
+    - {seq_len: 512, context_len: 512, micro_batch: 12, steps: 1500, blend: {b4_5: 0.15, b6_7: 0.35, b8_10: 0.50}}
+    - {seq_len: 512, context_len: 512, micro_batch: 12, steps: 1500, blend: {b6_7: 0.15, b8_10: 0.35, b11_13: 0.50}}
 data:
   seq_len: 512
 training:
-  steps: 15000                   # must equal the curriculum stage sum
+  steps: 6000                    # must equal the curriculum stage sum (4 × 1500)
   eval_every: 250
-  ckpt_every: 2500               # six checkpoints: the progression through the curriculum
+  ckpt_every: 1500               # a checkpoint at the end of every curriculum stage
   gen_every: 0
   grad_probe_every: 1            # the sustained tripwire reads preclip/total from probe.jsonl
 wandb:
