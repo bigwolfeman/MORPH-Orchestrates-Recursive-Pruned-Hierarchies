@@ -1,0 +1,28 @@
+# ARC E15 mixin — the Olympiad-AI synthetic-math data for the loop-contribution panel.
+# Composed AFTER an arm config (defaults: [<arm>, oly_data, _self_]): every sample is a
+# question + numbered reasoning steps (one per line) + answer block, ≤ 512 tokens
+# (stage11_13 shard: mean 180, max 363; 2_10 shard: mean 134, p95 275, 20 docs of
+# 2.18M above 512 get carry-split). The TUL boundary rule cuts ONE SPAN PER STEP (mean
+# 12 tokens, 10–14 spans per doc). Shards: docs/olympiad-interop.md; vocab 49169 is
+# already base.yaml's. The val loader still streams OWT (train.py TODO), so `val_loss`
+# in the run log is NLP; the math readout is the held-out sweep.
+curriculum:
+  enabled: true
+  pretok_dir: ${oc.env:OLYMPIAD_REPO,/mnt/sda1/Projects/00NN/Olympiad-AI}/data/transition_mix
+  allowed_source_roles: [reasoning_midtrain]
+  eff_batch: 24                  # micro_batch 12 × grad-accum 2 (12,288 tokens/step; micro 16 peaked 26.5 GB eager)
+  blend:
+    olympiad_stage11_13: 0.5     # 367M tok, stages 11–13 (strategy bands)
+    olympiad_math: 0.5           # 291M tok, stages 2–10 (arithmetic → algebra)
+  stages:
+    - {seq_len: 512, context_len: 512, micro_batch: 12, steps: 15000}
+data:
+  seq_len: 512
+training:
+  steps: 15000                   # must equal the curriculum stage sum
+  eval_every: 250
+  ckpt_every: 2500               # six checkpoints: the progression through the curriculum
+  gen_every: 0
+  grad_probe_every: 1            # the sustained tripwire reads preclip/total from probe.jsonl
+wandb:
+  project: morph-tul
