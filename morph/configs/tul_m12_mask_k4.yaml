@@ -1,0 +1,19 @@
+# ARC E18 — the slot-channel WIDTH sweep (2026-09-08, Wolfe: "okay do the sweep then").
+# The mask arm (M-next-mask: forecast MUX, tg_restrict so a token reaches an earlier span
+# ONLY through that span's slot positions) at E13's mean-12 recipe, with prefix_k = 4
+# positions per slot (every arm before E18 ran 2). L_total = seq_len + prefix_k * max_slots.
+# tg_scoped_kernels as in E16/E17 (the eager hinge reads +0.07 of noise; audit 2026-09-08).
+# Prereg: lab/experiments/planned/2026-09-08-arc-e18-slot-width-sweep.md
+defaults:
+  - tul_m12_mnext_mask
+  - _self_
+model:
+  tg_scoped_kernels: true
+tul:
+  prefix_k: 4
+training:
+  steps: 5000                    # E13's panel length
+  batch_size: 6                  # E13's panel batch (seq 1024)
+  ckpt_every: 2500
+wandb:
+  name: e18-mask-k4

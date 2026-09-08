@@ -1,0 +1,12 @@
+# ARC E18 — the plain control for the width sweep: notul (tul_a2 with activate_at never,
+# the model with no slot positions) at E13's panel length and batch, same seed recipe.
+# Prereg: lab/experiments/planned/2026-09-08-arc-e18-slot-width-sweep.md
+defaults:
+  - notul
+  - _self_
+training:
+  steps: 5000
+  batch_size: 6
+  ckpt_every: 2500
+wandb:
+  name: e18-notul
