@@ -1,0 +1,24 @@
+{
+ "config": "tul_oly_mask",
+ "micro": 12,
+ "overrides": "",
+ "peak_alloc_GB": 20.864165782928467,
+ "peak_resv_GB": 23.18359375,
+ "fwd_ms_mean": 357.5,
+ "fwd_ms_med": 341.6,
+ "bwd_ms_mean": 664.4,
+ "bwd_ms_med": 630.8,
+ "opt_ms_mean": 21.4,
+ "opt_ms_med": 21.4,
+ "data_ms_mean": 6.8,
+ "data_ms_med": 7.1,
+ "step_ms_mean": 1050.4,
+ "step_ms_med": 1047.9,
+ "phases_ms_mean": {
+  "fwd/CE+heads": 35.8,
+  "fwd/back(coda)": 27.6,
+  "fwd/front(embed+prelude)": 32.4,
+  "fwd/gain_hinge": 21.1,
+  "fwd/slot_loop": 237.0
+ }
+}

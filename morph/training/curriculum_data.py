@@ -29,15 +29,29 @@ from morph.training.source_roles import (
     validate_source_for_pretraining,
 )
 
-__all__ = ["MultiSourceCurriculumLoader"]
+__all__ = ["MultiSourceCurriculumLoader", "HOLDOUT_SPLIT"]
+
+HOLDOUT_SPLIT = "eval_holdout"          # meta.json `split` of a validation-only shard
 
 
 class _Source:
     def __init__(self, name: str, sdir: str, weight: float, allowed_roles,
-                 runtime: DataRuntimeConfig | None = None):
+                 runtime: DataRuntimeConfig | None = None, holdout: bool = False):
         self.name = name
         self.weight = float(weight)
         self.meta = json.load(open(os.path.join(sdir, "meta.json")))
+        # A shard built from a shard's eval_holdout (scripts/olympiad_holdout_shard.py)
+        # carries `split: eval_holdout`. It may feed ONLY a holdout loader (the val
+        # stream), and a holdout loader accepts ONLY such shards, so a held-out doc can
+        # neither leak into a training blend nor a training doc pose as validation.
+        is_holdout = str(self.meta.get("split", "train")) == HOLDOUT_SPLIT
+        if is_holdout and not holdout:
+            raise RuntimeError(f"[{name}] {sdir} is an eval-holdout shard (meta split="
+                               f"{HOLDOUT_SPLIT!r}); it cannot enter a training blend")
+        if holdout and not is_holdout:
+            raise RuntimeError(f"[{name}] {sdir} is not an eval-holdout shard (meta split="
+                               f"{self.meta.get('split', 'train')!r}); a validation "
+                               f"loader takes only shards with split={HOLDOUT_SPLIT!r}")
         self.role = validate_source_for_pretraining(
             name,
             explicit_role=self.meta.get("role"),
@@ -102,14 +116,21 @@ class MultiSourceCurriculumLoader:
     def __init__(self, pretok_dir: str, weights: dict, stage_boundaries: list[int],
                  seed: int = 0, allowed_roles=DEFAULT_ALLOWED_PRETRAIN_ROLES,
                  data_runtime: DataRuntimeConfig | None = None,
-                 stage_weights: list[dict | None] | None = None):
+                 stage_weights: list[dict | None] | None = None,
+                 holdout: bool = False, verbose: bool = True):
         """weights: {source_name: weight} (need not sum to 1). stage_boundaries: ascending
         seq_lens, e.g. [4096, 8192, 16384] → 3 stages. stage_weights: optional per-stage
         blend overrides (one entry per stage, None = the global weights); a source absent
         from a stage's blend, or at 0, is not drawn in that stage. Every name must be a
-        loaded source (positive global weight)."""
+        loaded source (positive global weight). holdout: this loader serves VALIDATION
+        (only eval-holdout shards are accepted, and they are refused otherwise); pair it
+        with ``rewind()`` so every eval scores the same docs. verbose: the per-stage
+        report line."""
         self.boundaries = [int(x) for x in stage_boundaries]
         self.n_stages = len(self.boundaries)
+        self.seed = int(seed)
+        self.holdout = bool(holdout)
+        self.verbose = bool(verbose)
         self.rng = np.random.default_rng(seed)
         self.runtime = data_runtime or DataRuntimeConfig.resolve()
         self._prefetcher: Prefetcher | None = None
@@ -121,7 +142,8 @@ class MultiSourceCurriculumLoader:
             if not os.path.isdir(sdir):
                 raise FileNotFoundError(f"pretok shard missing for source {name!r}: {sdir} "
                                         f"(run scripts/pretokenize.py)")
-            s = _Source(name, sdir, w, allowed_roles, runtime=self.runtime)
+            s = _Source(name, sdir, w, allowed_roles, runtime=self.runtime,
+                        holdout=self.holdout)
             s.assign_stages(self.boundaries)
             self.sources.append(s)
         if not self.sources:
@@ -197,10 +219,23 @@ class MultiSourceCurriculumLoader:
         p = w / mean_len
         self._probs = p / p.sum()
         active_names = [f"{s.name}:{s.role}" for s in active]
-        print(f"[curriculum] stage {k}: seq_len={self.cur_seq_len}, "
-              f"active={active_names}, mean_len={mean_len.round(0).tolist()}, "
-              f"token-target={(w / w.sum()).round(3).tolist()}, "
-              f"draw-probs={self._probs.round(3).tolist()}", flush=True)
+        if self.verbose:
+            print(f"[curriculum] stage {k}: seq_len={self.cur_seq_len}, "
+                  f"active={active_names}, mean_len={mean_len.round(0).tolist()}, "
+                  f"token-target={(w / w.sum()).round(3).tolist()}, "
+                  f"draw-probs={self._probs.round(3).tolist()}", flush=True)
+
+    def rewind(self):
+        """Put the loader back at the start of its current stage: the RNG re-seeded, the
+        carry and the TUL gate draw dropped, every queue reshuffled from the fresh RNG,
+        the realized-token counts zeroed. Two rewinds at one stage yield byte-identical
+        batches, and so do two loaders with one seed at one stage — the val loader's
+        contract: every eval, and every arm, scores the SAME held-out docs."""
+        self.rng = np.random.default_rng(self.seed)
+        if hasattr(self, "_tul_rng"):
+            del self._tul_rng
+        self._tok_count = {s.name: 0 for s in self.sources}
+        self.set_stage(self.cur_stage)
 
     def realized_token_fractions(self) -> dict:
         tot = sum(self._tok_count.values()) or 1

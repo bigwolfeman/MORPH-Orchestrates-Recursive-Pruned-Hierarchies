@@ -1,10 +1,22 @@
-# ARC E15 — the Olympiad panel: M-next-mask (forecast MUX, tokens reach earlier steps only through the slot) at the mean-12 recipe (tul_m12_mnext_mask: Poisson slot draw
-# mean 12, max 16, full BPTT, hinge 0.9, fixed-point term) on synthetic math
-# (oly_data.yaml), 6k steps, seq 512, effective batch 24, the four-stage band curriculum.
-# Prereg: lab/experiments/planned/2026-09-07-arc-e15-olympiad-panel.md
+# ARC E16 — the Olympiad panel: M-next-mask (forecast MUX, tokens reach earlier steps only
+# through the slot) at the mean-12 recipe (tul_m12_mnext_mask: Poisson slot draw mean 12,
+# max 16, full BPTT, hinge 0.9, fixed-point term) on synthetic math (oly_data.yaml), 6k
+# steps, seq 512, effective batch 24, the four-stage band curriculum.
+# Prereg: lab/experiments/planned/2026-09-08-arc-e16-olympiad-curriculum-panel.md
 defaults:
   - tul_m12_mnext_mask
   - oly_data
   - _self_
+model:
+  # Audit 2026-09-08: `tg_restrict` forces `use_kernels false`, which turns EVERY fused
+  # kernel off process-wide; this flag keeps the TG-restricted branches eager and lets the
+  # rest run fused (tul_a2s.yaml and every earlier TG arm ran with it). 1.63x and −5.4 GB.
+  # NOT bit-identical (max logit diff 0.073 bf16, CE grad median 0.2 % relative), and it
+  # changes the gain hinge's READING: at slot_gain_eps 0.02 the eager finite difference
+  # reads 0.94 ± 0.014 on a map whose gain is 0.87 (noise bias, closes as eps grows);
+  # fused reads 0.87 at every eps, so the hinge at target 0.9 stops firing. The other
+  # three arms already run fused, so this makes the panel paired on kernels AND on the
+  # hinge. Note: .agents/notes/proposed/bug-fix/2026-09-08-slot-gain-eps-noise-bias.md
+  tg_scoped_kernels: true
 wandb:
   name: oly-mask

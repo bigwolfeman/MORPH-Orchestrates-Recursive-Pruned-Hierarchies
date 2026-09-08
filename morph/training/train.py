@@ -2044,7 +2044,15 @@ def main(cfg: DictConfig) -> None:
     # (val ppl is over token positions only, so it stays comparable to the baseline).
     # Before a mid-run activation the model is still plain MORPH, so val is plain too;
     # _make_val_loader is called again at the switch.
+    # Under a curriculum with `curriculum.val_source`, validation is the corpus's own
+    # held-out shard instead of `data.dataset`'s split: `_curr_val_batches` is set in the
+    # curriculum block below and the eval sites rebuild the loader before every eval, so
+    # every eval (and every arm) scores the SAME held-out docs.
+    _curr_val_batches = None
+
     def _make_val_loader(tul_on: bool):
+        if _curr_val_batches is not None:
+            return _curr_val_batches(tul_on)
         return iter(
             create_dataloader(tokenizer_name, dataset_name, seq_len, batch_size,
                               split="validation", skip_samples=50_000,
@@ -2225,11 +2233,35 @@ def main(cfg: DictConfig) -> None:
         _sched = CurriculumScheduler(_stage_steps)
         total_steps = _sched.total_steps                      # override training.steps
         from morph.training.data_placement import DataRuntimeConfig
+        _data_rt = DataRuntimeConfig.resolve(getattr(cfg, "data_runtime", None))
         _curr_loader = MultiSourceCurriculumLoader(
             str(_curr_cfg.pretok_dir), _weights, _boundaries,
             seed=int(getattr(tr, "seed", 0)), allowed_roles=_allowed_roles,
-            data_runtime=DataRuntimeConfig.resolve(getattr(cfg, "data_runtime", None)),
-            stage_weights=_stage_weights)
+            data_runtime=_data_rt, stage_weights=_stage_weights)
+        # Held-out validation (arc E16): `curriculum.val_source` names an eval-holdout
+        # shard under pretok_dir (scripts/olympiad_holdout_shard.py; the loader refuses
+        # it in a training blend and refuses anything else here). Read synchronously
+        # (no producer thread to close) at the live stage's seq_len and micro-batch, and
+        # REWOUND before every eval: the same docs every time, on every arm.
+        _val_source = getattr(_curr_cfg, "val_source", None)
+        _curr_val = None
+        if _val_source is not None:
+            import dataclasses as _dcs
+            _curr_val = MultiSourceCurriculumLoader(
+                str(_curr_cfg.pretok_dir), {str(_val_source): 1.0}, _boundaries,
+                seed=int(getattr(_curr_cfg, "val_seed", 1)), allowed_roles=_allowed_roles,
+                data_runtime=_dcs.replace(_data_rt, prefetch_batches=0),
+                holdout=True, verbose=False)
+
+            def _curr_val_batches(tul_on: bool):
+                _curr_val.rewind()
+                return _curr_val.batches(
+                    _microbatch[max(cur_stage, 0)], bag_size=0,
+                    tul=tul_rt.val_data_cfg if (tul_rt and tul_on) else None)
+            _vs = _curr_val.sources[0]
+            print(f"[curriculum] val_source={_val_source!r}: {len(_vs.lens):,} held-out docs, "
+                  f"{int(_vs.lens.sum()):,} tokens, max_len {int(_vs.lens.max())}, "
+                  f"val_seed={_curr_val.seed} (rewound before every eval)", flush=True)
         # RoPE modules to re-anchor on each step-up (attention is EAGER → safe to mutate
         # cos/sin cache mid-run; compile only wraps the MLPs). Reach through _orig_mod.
         _rope_mods = [m for m in getattr(model, "_orig_mod", model).modules()
@@ -2239,7 +2271,8 @@ def main(cfg: DictConfig) -> None:
         print(f"[curriculum] ENABLED: {len(_stages)} stages seq={_boundaries} "
               f"context={_contexts} micro_batch={_microbatch} eff_batch={_eff_batch} "
               f"stage_steps={_stage_steps} total_steps={total_steps} "
-              f"allowed_roles={_allowed_roles} stage_blends={_stage_weights} | "
+              f"allowed_roles={_allowed_roles} stage_blends={_stage_weights} "
+              f"val_source={getattr(_curr_cfg, 'val_source', None)!r} | "
               f"{len(_rope_mods)} RoPE modules", flush=True)
 
     # ── Training phase schedule (morph/training/phase.py) ────────────────────
@@ -2546,6 +2579,8 @@ def main(cfg: DictConfig) -> None:
             if hasattr(_mm, "static_graphs_invalidate"):
                 _mm.static_graphs_invalidate(f"curriculum stage {_k} context re-anchor")
             _curr_loader.set_stage(_k)
+            if _curr_val is not None:
+                _curr_val.set_stage(_k)               # val follows the stage's seq_len/micro
             cur_stage = _k
             cur_grad_accum = _ceil_div(_eff_batch, _microbatch[_k])
             seq_len = _boundaries[_k]
@@ -3052,9 +3087,13 @@ def main(cfg: DictConfig) -> None:
             # L_total positions carry fewer real tokens and using seq_len understates the
             # ratio (measured ~2.6x off at a shrunken TUL shape). MORPH's own
             # tul/layer_passes_per_token divides by out["n_tokens"], so match it.
+            # `out` is the LAST MICRO-BATCH, so its n_tokens divides by the MICRO size, not
+            # the effective batch: at micro 12 x accum 2 the effective divisor read the
+            # proxy 16.36 against 12.15 at micro 16 x accum 1 for the same model (the
+            # 2026-09-08 Olympiad throughput audit). tok/s and peak were never affected.
             _tok_per_row = float(seq_len)
             if out is not None and out.get("n_tokens") is not None:
-                _tok_per_row = max(float(out["n_tokens"]) / max(batch_size, 1), 1.0)
+                _tok_per_row = max(float(out["n_tokens"]) / max(batch_size // _ga, 1), 1.0)
             _ppt = 1.0
             _cpf = None
             if phase.tul_on and _layout is not None:
@@ -3212,6 +3251,8 @@ def main(cfg: DictConfig) -> None:
             _gm_e = getattr(model, "_orig_mod", model)
             _halt_eval = (phase.tul_on and _gm_e.tul_gate is not None
                           and _gm_e.cfg.tul.gate.drives_depth)
+            if _curr_val_batches is not None:
+                val_loader = _make_val_loader(phase.tul_on)   # rewound: the same docs
             val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
                                          tul=phase.tul_on, extra=_val_extra,
                                          halt=_halt_eval)
@@ -3356,6 +3397,8 @@ def main(cfg: DictConfig) -> None:
     # val_loader worth touching and the skip lets it exit promptly.
     if eval_every <= total_steps:
         _val_extra = {}
+        if _curr_val_batches is not None:
+            val_loader = _make_val_loader(phase.tul_on)
         val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
                                      tul=phase.tul_on, extra=_val_extra)
         _final = {"val/loss_final": val_loss, "val/ppl_final": val_ppl}

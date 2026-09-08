@@ -1,0 +1,9 @@
+{
+ "tag": "E_noprobe_B",
+ "n_steady": 40,
+ "mean_s": 1.3102,
+ "median_s": 1.27,
+ "sps": 0.7632,
+ "sd_s": 0.0695,
+ "peak_GB": 16.39
+}

@@ -104,7 +104,8 @@ and a throughput audit comes first. No checkpoint, no sweep, no scores.
 
 Rejected: the method changed before any data existed. The predictions are unscored and
 stand as the record of what I expected of a uniform 15k mix; the replacement is E16
-(`planned/2026-09-07-arc-e16-olympiad-curriculum-panel.md`), written after the audit.
+(`planned/2026-09-08-arc-e16-olympiad-curriculum-panel.md`), written after the audit
+(`lab/perf/2026-09-08-oly-throughput-audit/`).
 
 ## Updated hypothesis
 

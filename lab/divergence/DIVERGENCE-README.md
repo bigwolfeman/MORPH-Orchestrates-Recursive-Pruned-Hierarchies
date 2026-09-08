@@ -163,6 +163,11 @@ failed, 2 of 2 (`failures/2026-09-07-arc-e9-widen-the-carry.md`).
   `model.cfg.mean_depth`; the slot knobs are inert on A2).
 - M2G onset capture (`failures/2026-09-02-m2g-onset-capture.md`) — optimizer-state
   forensics around an onset.
+- `loss/gain_est` (the hinge's finite-difference gain) carries an UPWARD noise bias on the
+  EAGER path: at `slot_gain_eps 0.02` it reads 0.94 ± 0.014 on a map whose gain is 0.870;
+  the fused path (`tg_scoped_kernels`) reads 0.870 at every eps. Read an eager arm's hinge
+  0.07 low. `lab/perf/2026-09-08-oly-throughput-audit/scripts/gain_eps.py`; note
+  `.agents/notes/proposed/bug-fix/2026-09-08-slot-gain-eps-noise-bias.md`.
 
 ### Retired with the slot path (2026-09-03; they run at `d9e04e6`, not after)
 
