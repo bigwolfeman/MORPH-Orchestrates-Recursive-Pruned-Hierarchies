@@ -440,3 +440,34 @@ def test_soft_prev_span_forward_differs_from_the_hard_restriction():
     assert lh is not None and ls is not None, "no logits returned — check the labels path"
     assert not torch.allclose(lh, ls), \
         "soft_prev_span produced identical logits — the flag never reached the mask"
+
+
+def test_intact_slot_channel_carries_gradient_on_the_restricted_model():
+    """The complement of the severed probe (added 2026-09-08 after E17): with the
+    channel INTACT on the SAME restricted model, the same later-span logit DOES receive
+    gradient from the same earlier-span token. Together the two tests say: the slot path
+    is the only route (severed ⇒ exactly zero) AND it is a live route (intact ⇒ nonzero),
+    so the restriction is neither leaky nor vacuous."""
+    spec = _spec()
+    rule = _rule()
+    x, _y, layout, _stats = _batch(spec, rule, B=1, n=200, seed=3)
+    u, t = _find_probe_positions(layout)
+    assert u is not None, "test layout did not produce 3 well-separated spans"
+
+    m = _model(TULConfig(prefix_k=spec.prefix_k, slot_id=spec.slot_id, tg_restrict=True),
+              seed=7, use_kernels=False, retention=False)
+    m.eval()
+    captured = {}
+
+    def _embed_hook(module, inp, out):
+        out.retain_grad()
+        captured["embed_out"] = out
+
+    handle = m.embed.register_forward_hook(_embed_hook)
+    out = m(x, labels=None, slot_layout=layout)
+    handle.remove()
+    _finite_logit_sum(out["logits"], t, spec.slot_id).backward()
+    g = captured["embed_out"].grad[0, u, :]
+    assert torch.any(g != 0), (
+        f"restricted model with the channel intact: NO gradient from t={t} to u={u}; "
+        f"the slot path is dead, not merely exclusive")
