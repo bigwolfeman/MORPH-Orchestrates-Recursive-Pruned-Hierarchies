@@ -1,0 +1,12 @@
+# Per-pass-strength panel, arm "threshold-0.3": the ternary dead zone narrowed (|w| > 0.3 mean|W|
+# is nonzero instead of 0.5), ~18 % zeros instead of 31 %, so less of each layer is silenced
+# per pass. Record: lab/experiments/planned/2026-09-09-arc-per-pass-strength.md
+defaults:
+  - notul_parcae_entry
+  - _self_
+
+training:
+  ternary_threshold: 0.3
+
+wandb:
+  name: threshold-0.3

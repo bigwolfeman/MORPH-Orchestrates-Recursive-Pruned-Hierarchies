@@ -104,7 +104,12 @@ _PATH_EXCLUDED_SCOPES: dict[str, str] = {
 }
 
 # Valid choices for each knob.
-VALID_MODES = {"symmetric", "ttq", "dual"}
+VALID_MODES = {"symmetric", "ttq", "dual", "norm_match"}
+# "norm_match": the symmetric codes (|w| > threshold * mean|W_g| -> sign) with the group scale set
+# so the ternary weight's Frobenius norm equals the latent weight's: s_g = ||W_g|| / sqrt(nnz_g).
+# The absmean rule at threshold 0.5 shrinks a Gaussian-shaped layer's output to ~0.67 of its bf16
+# twin (measured 0.668 on the Parcae-entry core, 2026-09-09); this undoes that with no new
+# parameters and one scalar per group, so export reads it like a symmetric scale.
 VALID_GROUPS = {"tensor", "128", "64"}
 VALID_DTYPES = {"fp16", "int8", "pow2"}
 
@@ -339,6 +344,12 @@ class TernarySTE(nn.Module):
             self.delta = nn.Parameter(torch.zeros(n_groups, dtype=torch.float32, device=device))
             self.gamma = nn.Parameter(gamma_init)
             self._forward_fn = self._forward_dual
+        elif mode == "norm_match":
+            # norm_match: symmetric codes, scale = ||W_g|| / sqrt(nnz_g) (detached). No
+            # learnable parameters; not combinable with the scale cap or the gamma EMA.
+            assert scale_clip_mult == 0.0 and scale_ema_beta == 0.0, \
+                "norm_match mode does not combine with scale_clip_mult or scale_ema_beta"
+            self._forward_fn = self._forward_norm_match
         else:
             # symmetric: no learnable parameters — pure straight-through.
             self._forward_fn = self._forward_symmetric
@@ -445,6 +456,38 @@ class TernarySTE(nn.Module):
         return _apply_grouped_ste(w, self.group, self.threshold, self._encode_scale,
                                   scale_cap=self._scale_cap,
                                   scale_override=self._scale_ema)
+
+    def _forward_norm_match(self, w: Tensor) -> Tensor:
+        """Symmetric codes with a norm-matching scale per group.
+
+        codes_g = sign(w) * (|w| > threshold * mean|W_g|)  (the absmean rule, unchanged)
+        s_g     = ||W_g||_F / sqrt(nnz_g)                    (so ||s_g * codes_g||_F == ||W_g||_F)
+        effective = w + (s_g * codes_g - w).detach()          (pure straight-through)
+
+        Per-tensor when group <= 0 or >= out_dim; per-group over out_dim otherwise (a ragged
+        last group is scaled on its own). The encode_scale dtype rule (fp16/int8/pow2) is
+        applied to s_g exactly as the symmetric path applies it to mean|W_g|.
+        """
+        out_dim = w.shape[0]
+        thr = self.threshold
+        if self.group <= 0 or self.group >= out_dim:
+            wd = w.detach()
+            g = wd.abs().mean().clamp(min=1e-8)
+            q = torch.sign(w) * ((w.abs() / g) > thr).to(w.dtype)
+            nnz = q.detach().ne(0).sum().clamp(min=1).to(wd.dtype)
+            s = self._encode_scale((wd.norm() / nnz.sqrt()).clamp(min=1e-8).reshape(1))[0]
+            return w + (s * q - w).detach()
+        gs = self.group
+        parts: list[Tensor] = []
+        for start in range(0, out_dim, gs):
+            w_g = w[start:start + gs]
+            wd = w_g.detach()
+            g = wd.abs().mean().clamp(min=1e-8)
+            q = torch.sign(w_g) * ((w_g.abs() / g) > thr).to(w.dtype)
+            nnz = q.detach().ne(0).sum().clamp(min=1).to(wd.dtype)
+            s = self._encode_scale((wd.norm() / nnz.sqrt()).clamp(min=1e-8).reshape(1))[0]
+            parts.append(w_g + (s * q - w_g).detach())
+        return torch.cat(parts, dim=0)
 
     def _forward_ttq(self, w: Tensor) -> Tensor:
         """TTQ: separate LEARNABLE γ₊, γ₋ per group (real grad through both).

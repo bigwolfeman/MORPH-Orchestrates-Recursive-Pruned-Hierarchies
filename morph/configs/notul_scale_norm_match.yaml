@@ -1,0 +1,13 @@
+# Per-pass-strength panel, arm "scale-norm-match": the ternary scale set so each tensor's
+# ternary weight has the latent weight's norm (the absmean rule shrinks it to 0.668 on the
+# Parcae-entry core). Same codes, no new parameters. Question: loop CONTRIBUTION (K-curve,
+# MLP branch out/in per pass). Record: lab/experiments/planned/2026-09-09-arc-per-pass-strength.md
+defaults:
+  - notul_parcae_entry
+  - _self_
+
+training:
+  ternary_scale_mode: norm_match
+
+wandb:
+  name: scale-norm-match

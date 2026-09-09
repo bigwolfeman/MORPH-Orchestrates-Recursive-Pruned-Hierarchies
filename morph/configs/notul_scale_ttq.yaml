@@ -1,0 +1,12 @@
+# Per-pass-strength panel, arm "scale-ttq": learnable positive and negative ternary scales per
+# tensor (Trained Ternary Quantization; the tree's existing mode), so the optimizer sets each
+# layer's gain. Record: lab/experiments/planned/2026-09-09-arc-per-pass-strength.md
+defaults:
+  - notul_parcae_entry
+  - _self_
+
+training:
+  ternary_scale_mode: ttq
+
+wandb:
+  name: scale-ttq
