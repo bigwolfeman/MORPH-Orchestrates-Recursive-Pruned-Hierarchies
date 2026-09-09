@@ -1,6 +1,6 @@
 # Planned: ARC E17 — the Sudoku-Extreme depth grid: does the loop's accuracy on hard boards rise with iterations?
 
-Status: planned
+Status: success
 Date: 2026-09-08 (frozen before launch; Wolfe: "this was clearly a failure to capture depth
 dependent thinking ... maybe we should try different data?" → "okay we use the Sudoku dataset
 then"). Arc: `2026-09-04-loop-contribution-arc.md`, row E17. Launch is Wolfe's call.
@@ -133,12 +133,82 @@ recurrent model needed ~10 h on a laptop GPU); the augmentation's near-duplicate
 
 ## Results
 
-(after the run)
+Scored 2026-09-08 19:25 by `../results/2026-09-08-arc-e17/score_e17.py` (output in
+`score_e17.txt`; sweep JSONs and run logs beside it; probes under
+`ignored/experiment-artifacts/2026-09-08-arc-e17/`). Both arms ran the full 6,000 steps
+with the tripwire silent; the plain arm's sweeps are the re-sweep at `53b2472` (Method
+amendment 1), which match the trainer's held-out loss to 0.001 at every checkpoint.
+
+The grid at 6,000 (answer-token accuracy over the 91 answer tokens per board, 81 cells + 10
+structure tokens; whole-board solve rate in brackets; 600 boards per bucket):
+
+| arm | bucket | T=1 | T=2 | T=3 | T=6 | T=12 | T=16 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| notul (trained 6) | 0 easiest | 0.947 [0.050] | 0.947 [0.053] | 0.947 [0.057] | 0.947 [0.050] | 0.947 [0.053] | 0.947 [0.055] |
+| | 4 hardest | 0.934 [0.000] | 0.934 [0.000] | 0.934 [0.000] | 0.934 [0.000] | 0.933 [0.000] | 0.934 [0.000] |
+| | all | 0.9385 [0.010] | 0.9383 [0.011] | 0.9384 [0.012] | 0.9384 [0.010] | 0.9382 [0.011] | 0.9381 [0.011] |
+| mask (trained 12) | 0 easiest | 0.791 [0.000] | 0.798 [0.005] | 0.798 [0.007] | 0.798 [0.003] | 0.798 [0.003] | 0.798 [0.002] |
+| | 4 hardest | 0.776 [0.000] | 0.781 [0.000] | 0.781 [0.000] | 0.781 [0.000] | 0.781 [0.000] | 0.781 [0.000] |
+| | all | 0.7799 [0.000] | 0.7865 [0.001] | 0.7867 [0.001] | 0.7868 [0.001] | 0.7865 [0.001] | 0.7865 [0.000] |
+
+Every row is flat past T = 2 to three decimals, on every bucket, on both arms. Difficulty
+moves accuracy by 0.013 (notul) / 0.017 (mask) from bucket 0 to 4 and moves the solve rate
+from 5 % to 0 %. Answer CE on the plain arm rises with depth past its trained 6 (0.1200 at
+6 → 0.1215 at 16).
+
+- **P17a** TRUE, both arms (mask peak preclip 41.9 at step 209, notul 24.5 at 228; both
+  under the 1e4 tripwire by two orders).
+- **P17b** notul acc@6 = 0.938 > 0.50 TRUE; notul bucket-0 solve 0.050 > 0.20 FALSE;
+  bucket-4 solve 0.000 < 0.05 TRUE; mask acc@12 = 0.787 > 0.50 TRUE. The model learns:
+  0.938 sits far above the ≈ 0.33 copy floor on the 91-token answer region.
+- **P17c** FALSE on every clause. Buckets 3–4 pooled, paired over 1,200 boards: notul
+  acc@12 − acc@3 = −0.0000 [−0.0006, +0.0005]; mask −0.0001 [−0.0009, +0.0006]; notul
+  acc@3 − acc@1 = −0.0001 [−0.0006, +0.0003]; mask +0.0057 [+0.0044, +0.0071] (a depth-1
+  hole of 0.006, not the predicted > 0.05). acc@16 − acc@3: notul −0.0002, mask +0.0000.
+- **P17d** FALSE on both arms: gain(3 → 12) on bucket 4 minus bucket 0 = +0.0000 [−0.0010,
+  +0.0012] (notul), −0.0005 [−0.0019, +0.0010] (mask); bucket-4 solve@12 − solve@3 = 0
+  exactly on both. The solve-rate diagonal reads +0.0033 on both arms only because bucket 0
+  LOSES boards from 3 to 12 (mask 0.007 → 0.003); the CI touches 0 (mask) or spans it.
+- **P17e** TRUE: notul@6 − mask@12 = +0.1547 [+0.1511, +0.1586] accuracy, +0.0063
+  [+0.0023, +0.0107] solve rate, paired over the same 3,000 boards. The gap narrows with
+  training (0.187 at 1,500 → 0.164 → 0.155 → 0.155) and is still 0.155 at 6,000.
+- **P17f** mask 3.59 h ≤ 4.0 TRUE; notul 3.40 h ≤ 3.0 FALSE (the 4:6×6:4 plain core at
+  micro 32 is not faster than the scoped mask arm per step: 0.49 vs 0.44 steps/s); peaks
+  21.21 / 19.91 GB < 24 TRUE.
+- **P17g** TRUE: mask `loss/gain_est` mean 0.882 over 1,000–6,000 (max 0.959), the hinge
+  nonzero on 26.7 % of steps. The constraint is quiet on Sudoku where it fired 80 % on
+  math.
+- **P17h** notul held-out loss 0.500 at 5,750: below the predicted 0.60–1.20 range, FALSE
+  (the puzzle-cell floor was overestimated: given a board's structure the puzzle rows are
+  cheap). acc@6000 − acc@3000 = +0.0057, not > 0.05: FALSE. The curve is still falling
+  (0.5219 → 0.5087 → 0.5001) but slowly.
 
 ## Verdict
 
-(after the run)
+**Success: H17 held and H17′ is refuted with the CI at ±0.0006.** On data that needs serial
+constraint propagation and cannot be memorized (0 held-out boards in training; 0.77 epochs
+of 1,000,000 augmented boards), MORPH's looped core learns to 0.938 answer-token accuracy
+and then does not use its loop: every bucket is flat from T = 2 to T = 16 on both arms,
+the hard buckets gain exactly nothing from more iterations, and whole-board solves stay at
+1 %. The masked slot arm behaves as it did on text and math: a 0.006 depth-1 hole, flat
+after 2, and 0.155 behind the plain model at its own trained depth. Binding, second bullet:
+P17c and P17d FALSE on both arms with P17b's first clause TRUE ⇒ the architecture does not
+iterate on any data tried; the slot-loop lane stays closed; the lever is the carrier / the
+write-back, not the target and not the data.
+
+Mispredictions to keep: the mask arm's depth-1 hole on Sudoku is 0.006 (predicted > 0.05
+at 80 %), the plain arm is not faster per step than the scoped mask arm, and the held-out
+loss floor was overestimated by 0.1–0.7 nats.
+
+Not settled here: whether a longer budget (HRM trains its 27M model for far more board
+passes) would move the solve rate off 1 % and open a depth dependence; whether a loss mask
+on the puzzle cells changes what the loop learns. Neither is in scope for the arc (Wolfe,
+2026-09-08: Sudoku "may be a dead end at our epoch count").
 
 ## Updated hypothesis
 
-(after the run)
+The loop's depth-flatness is a property of the architecture's carrier, not of the data: web
+text (E1–E14), math (E16) and now a constraint task (E17) all read K3−K12 ≈ 0 with the CI
+inside ±0.001 once the model is stable. The next test of "does the loop think" must change
+what the loop carries or writes back (the Spiral schedule, the paid loop's write-back), and
+E18 (the slot width) is the last free parameter of the slot family before that.
