@@ -59,9 +59,15 @@ def main() -> None:
     from morph.training.tul_setup import build_tul_runtime
 
     cfg = build_cfg(a.config, ["model.use_kernels=false"])
-    if build_tul_runtime(cfg) is not None:
-        raise SystemExit("core_anatomy reads the PLAIN forward; pass a tul.activate_at=never config")
-    model, step = load_ckpt(cfg, a.ckpt, "cuda", None)
+    # The plain forward (slot_layout=None) of a PAID-loop TUL model is bit-identical to the
+    # plain model's (runtime-invariants §6b), so its core can be read here; the TUL config is
+    # needed only so the checkpoint's slot parameters have a home. A SLOT-loop model has no
+    # plain core path and is refused.
+    tul_rt = build_tul_runtime(cfg)
+    if tul_rt is not None and not bool(cfg.tul.get("tokens_through_core", False)):
+        raise SystemExit("core_anatomy reads the PLAIN forward; a slot-loop model has none "
+                         "(pass a paid-loop or tul.activate_at=never config)")
+    model, step = load_ckpt(cfg, a.ckpt, "cuda", tul_rt.model_cfg if tul_rt else None)
     model.eval()
     loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8,
                                split="validation", skip_samples=0, bag_size=0, tul=None)

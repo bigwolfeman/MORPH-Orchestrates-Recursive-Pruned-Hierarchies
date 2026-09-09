@@ -1,0 +1,16 @@
+# Norm-match recipe read, control "tul-absmean": the paid TUL loop on the Parcae-entry
+# recipe under the OLD absmean ternary rule (ternary_scale_mode: symmetric). Pairs with
+# tul_norm_match.yaml; the two differ in that one key only.
+# Record: lab/experiments/planned/2026-09-09-arc-norm-match-recipe-reads.md
+defaults:
+  - notul_parcae_entry
+  - _self_
+
+training:
+  ternary_scale_mode: symmetric
+
+tul:
+  activate_at: 0.0            # the paid loop from step 0 (notul sets never)
+
+wandb:
+  name: tul-absmean

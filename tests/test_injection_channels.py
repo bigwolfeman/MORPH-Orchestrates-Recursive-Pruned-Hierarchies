@@ -188,6 +188,39 @@ def test_train_config_mapping_carries_the_loop_entry_keys():
             plain.core_state_init) == ("ctx", None, False, "prelude")
 
 
+def test_norm_match_recipe_read_configs_compose_their_one_factor():
+    """The norm-match recipe reads: tul_norm_match / tul_absmean differ from each other in the
+    ternary scale rule only and both turn the PAID TUL loop on over the Parcae-entry recipe;
+    notul_norm_match_20k is scale-norm-match for 20,000 steps with a checkpoint every 5,000."""
+    from hydra import compose, initialize_config_dir
+    from morph.training.train import build_morph_config
+    from morph.training.tul_setup import build_tul_runtime
+    import os
+    cfg_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "morph", "configs"))
+
+    def _compose(name):
+        with initialize_config_dir(version_base=None, config_dir=cfg_dir):
+            return compose(config_name=name)
+
+    nm, ab = _compose("tul_norm_match"), _compose("tul_absmean")
+    for c, mode in ((nm, "norm_match"), (ab, "symmetric")):
+        m = build_morph_config(c)
+        assert m.core_state_init == "noise" and m.injection_B is True and m.core_fixed_point_lambda == 0.0
+        assert str(c.training.ternary_scale_mode) == mode
+        assert bool(c.training.ternary) is True
+        assert int(c.training.steps) == 5000
+        rt = build_tul_runtime(c)
+        assert rt is not None and rt.model_cfg.tokens_through_core is True, "the PAID loop, from step 0"
+        assert float(c.tul.activate_at) == 0.0
+    d = {k for k in nm.training if str(nm.training[k]) != str(ab.training[k])}
+    assert d == {"ternary_scale_mode"}, d
+
+    h = _compose("notul_norm_match_20k")
+    assert str(h.training.ternary_scale_mode) == "norm_match"
+    assert int(h.training.steps) == 20000 and int(h.training.ckpt_every) == 5000
+    assert build_tul_runtime(h) is None
+
+
 def test_depthcand_configs_compose_their_one_factor_and_keep_the_parcae_entry():
     """The three depth-candidate arms (notul_depthcand_*.yaml) each change exactly ONE factor on top of
     notul_parcae_entry; every other E19 loop-entry key must still be there. ternary_scope,

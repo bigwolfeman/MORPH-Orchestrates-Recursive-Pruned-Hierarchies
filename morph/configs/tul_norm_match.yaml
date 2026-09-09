@@ -1,0 +1,18 @@
+# Norm-match recipe read, arm "tul-norm-match": the paid TUL loop (tul_a2's panel: TUL on
+# from step 0, tokens_through_core from base.yaml) on the Parcae-entry recipe under the
+# shipped ternary rule (ternary_scale_mode: norm_match, base.yaml since 2026-09-09).
+# Question: does the loop's contribution under norm_match carry to the shipped TUL forward?
+# Control: tul_absmean.yaml (the same arm under the old absmean rule).
+# Record: lab/experiments/planned/2026-09-09-arc-norm-match-recipe-reads.md
+defaults:
+  - notul_parcae_entry
+  - _self_
+
+training:
+  ternary_scale_mode: norm_match
+
+tul:
+  activate_at: 0.0            # the paid loop from step 0 (notul sets never)
+
+wandb:
+  name: tul-norm-match

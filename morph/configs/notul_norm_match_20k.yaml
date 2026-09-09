@@ -1,0 +1,15 @@
+# Norm-match recipe read, arm "norm-match-20k": the plain Parcae-entry recipe under the
+# shipped ternary rule for 20,000 steps, checkpoints every 5,000 (each gets the
+# loop-contribution readout). Its matched control is the absmean horizon run
+# (notul_horizon_ternary_25k, resumed from its step-10000 checkpoint to 20,000).
+# Record: lab/experiments/planned/2026-09-09-arc-norm-match-recipe-reads.md
+defaults:
+  - notul_scale_norm_match
+  - _self_
+
+training:
+  steps: 20000
+  ckpt_every: 5000
+
+wandb:
+  name: norm-match-20k
