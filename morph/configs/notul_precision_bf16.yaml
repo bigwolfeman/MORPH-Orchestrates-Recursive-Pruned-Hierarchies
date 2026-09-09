@@ -1,0 +1,14 @@
+# Precision axis, third point: NO ternary anywhere (backbone bf16; embeddings keep the
+# recipe's int6 QAT). The other two points already ran: ternary everywhere (parcae-entry)
+# and bf16 core only (depthcand-dense-core). The question is loop CONTRIBUTION (K-curve,
+# branch out/in, state movement), not the 5k-step loss.
+# Record: lab/experiments/planned/2026-09-09-arc-precision-axis.md
+defaults:
+  - notul_parcae_entry
+  - _self_
+
+training:
+  ternary: false
+
+wandb:
+  name: precision-bf16-all
