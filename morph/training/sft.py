@@ -225,7 +225,7 @@ def main(cfg: DictConfig) -> None:
         ids, labels = ids.to(device), labels.to(device)
         lr = lr_fn(step)
         for pg in optimizer.param_groups:
-            pg["lr"] = lr
+            pg["lr"] = lr * pg.get("lr_mult", 1.0)
         optimizer.zero_grad(set_to_none=True)
 
         with torch.autocast("cuda", dtype=torch.bfloat16):

@@ -1,0 +1,14 @@
+# E20 arm "carry-lr20x": every injection parameter (B, log_A, log_dt — name contains
+# "injection") gets its own optimizer group at 20x the base lr (2e-3 vs base.yaml's 1e-4),
+# everything else unchanged. E19 measured these barely moving in 5,000 steps at the base
+# lr; this tests whether the carry is depth-starved or just undertrained.
+# Prereg: lab/experiments/planned/2026-09-09-arc-e20-loop-depth-candidates.md
+defaults:
+  - notul_e19_loop
+  - _self_
+
+training:
+  injection_lr_mult: 20.0
+
+wandb:
+  name: e20-carry-lr20x

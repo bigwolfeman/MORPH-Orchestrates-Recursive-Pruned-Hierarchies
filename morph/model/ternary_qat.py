@@ -69,7 +69,6 @@ _forward_fn reference set at init. torch.compile sees a clean static graph.
 
 from __future__ import annotations
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.utils.parametrize as parametrize
@@ -85,6 +84,23 @@ SCOPES: dict[str, set[str]] = {
     "backbone_attn": {"backbone", "attention"},
     "embeddings": {"embeddings"},          # token/euclidean/bigram only, Lorentz always excluded
     "full": {"backbone", "attention", "embeddings"},  # everything except Lorentz (always excluded)
+    # Same category set as "backbone", but with a PATH exclusion applied in the
+    # apply_ternary_qat loop below: modules whose dotted path starts with "core."
+    # (the looped MORPHTransformer.core ModuleList) stay bf16. Prelude and coda
+    # backbone linears still ternarize. Diagnostic arm (E20 e20-dense-core): keeps
+    # the per-pass map bf16 while the rest of the backbone stays ternary, to test
+    # whether the ternary snap on the shared core weights is what starves the loop's
+    # depth-earning.
+    "backbone_no_core": {"backbone"},
+}
+
+# Scopes whose category membership alone is not enough — apply_ternary_qat also
+# excludes modules by dotted-path prefix for these. Kept as a set so the loop can
+# check membership without re-deriving scope semantics.
+_PATH_EXCLUDED_SCOPES: dict[str, str] = {
+    # scope -> path prefix to exclude (dotted, matches `name == prefix.rstrip(".")`
+    # or `name.startswith(prefix)`).
+    "backbone_no_core": "core.",
 }
 
 # Valid choices for each knob.
@@ -305,7 +321,6 @@ class TernarySTE(nn.Module):
         self.scale_clip_mult = float(scale_clip_mult)
 
         out_dim = weight_shape[0] if len(weight_shape) >= 1 else 1
-        in_dim = weight_shape[1] if len(weight_shape) >= 2 else 1
         n_groups = self._n_groups(out_dim)
 
         if mode == "ttq":
@@ -683,11 +698,14 @@ def apply_ternary_qat(
     model : nn.Module
         The model to parametrize.
     scope : str
-        "backbone" | "backbone_attn" | "embeddings" | "full".
+        "backbone" | "backbone_attn" | "embeddings" | "full" | "backbone_no_core".
         "embeddings" ternarizes only embedding tables (token/euclidean/bigram),
         leaving backbone and attention as bf16. "full" adds backbone+attention on
         top, but still excludes Lorentz. Use "embeddings" for the isolation arm
-        and "full" for the complete stack.
+        and "full" for the complete stack. "backbone_no_core" is "backbone" with a
+        path exclusion: every backbone linear ternarizes EXCEPT modules under the
+        looped ``core.*`` ModuleList, which stay bf16 — the shared per-pass map is
+        smooth while prelude/coda are ternary.
     threshold : float
         Ternary threshold (default 0.5 — Bonsai).
     scale_mode : str
@@ -716,6 +734,12 @@ def apply_ternary_qat(
 
     wanted = SCOPES[scope]
     attn_ids = _attention_linear_ids(model)
+    # Path-based exclusion for scopes like "backbone_no_core": the category set alone
+    # (SCOPES[scope]) cannot express "backbone everywhere except this submodule" — a
+    # module's category ("backbone"/"attention"/"embeddings") carries no information
+    # about WHERE it sits in the tree. So this is a second, orthogonal filter applied
+    # after _categorize, exactly like the Lorentz path guard inside _categorize itself.
+    excl_prefix = _PATH_EXCLUDED_SCOPES.get(scope)
 
     # Parse group size: "tensor" → 0 (per-tensor), "128" → 128, "64" → 64.
     group_size = 0 if scale_group == "tensor" else int(scale_group)
@@ -723,10 +747,16 @@ def apply_ternary_qat(
     counts: dict[str, int] = {"backbone": 0, "attention": 0, "embeddings": 0}
     names: list[str] = []
     n_tern = 0
+    n_excluded_by_path = 0
 
     for name, module in model.named_modules():
         cat = _categorize(name, module, attn_ids)
         if cat is None or cat not in wanted:
+            continue
+        if excl_prefix is not None and (
+            name == excl_prefix.rstrip(".") or name.startswith(excl_prefix)
+        ):
+            n_excluded_by_path += 1
             continue
         if parametrize.is_parametrized(module, "weight"):
             continue  # idempotent — don't double-register
@@ -781,6 +811,7 @@ def apply_ternary_qat(
         "frac_params_ternary": float(n_tern) / max(1, n_total),
         "module_names": names,
         "lorentz_untouched": lorentz_guarded,  # list of Lorentz embed paths confirmed bf16
+        "n_excluded_by_path": n_excluded_by_path,  # e.g. core.* modules skipped under backbone_no_core
     }
 
 

@@ -1,0 +1,16 @@
+# E20 arm "draw8-bptt4": Parcae's depth schedule — mean_depth 8, max_depth 12, truncated
+# backprop over only the LAST bptt_depth=4 iterations (base.yaml ships bptt_depth 8 = full
+# BPTT at mean_depth 6/max_depth 8). Tests whether a deeper draw with truncated BPTT earns
+# more past pass 1 than E19's shallower full-BPTT loop.
+# Prereg: lab/experiments/planned/2026-09-09-arc-e20-loop-depth-candidates.md
+defaults:
+  - notul_e19_loop
+  - _self_
+
+model:
+  mean_depth: 8
+  max_depth: 12
+  bptt_depth: 4
+
+wandb:
+  name: e20-draw8-bptt4

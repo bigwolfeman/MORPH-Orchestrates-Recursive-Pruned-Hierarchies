@@ -186,3 +186,48 @@ def test_train_config_mapping_carries_the_loop_entry_keys():
             loop.core_state_init, loop.core_fixed_point_lambda) == ("all", 0.8, True, "noise", 0.0)
     assert (plain.injection_channels, plain.injection_all_dt, plain.injection_B,
             plain.core_state_init) == ("ctx", None, False, "prelude")
+
+
+def test_e20_configs_compose_their_one_factor_and_keep_the_e19_entry():
+    """The three E20 arms (notul_e20_*.yaml) each change exactly ONE factor on top of
+    notul_e19_loop; every other E19 loop-entry key must still be there. ternary_scope,
+    injection_lr_mult and grad_probe_every are training.* keys `build_morph_config` never
+    touches (it maps model.* one by one — see the test above), so they are read straight
+    off the composed Hydra config, not through MORPHConfig.
+    """
+    from hydra import compose, initialize_config_dir
+    from morph.training.train import build_morph_config
+    import os
+    cfg_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "morph", "configs"))
+
+    def _compose(name):
+        with initialize_config_dir(version_base=None, config_dir=cfg_dir):
+            return compose(config_name=name)
+
+    def _assert_carries_e19_entry(c, m):
+        assert m.core_state_init == "noise"
+        assert m.injection_B is True
+        assert m.core_fixed_point_lambda == 0.0
+        assert float(c.training.grad_probe_every) == 1.0
+
+    c = _compose("notul_e20_dense_core")
+    m = build_morph_config(c)
+    _assert_carries_e19_entry(c, m)
+    assert str(c.training.ternary_scope) == "backbone_no_core"
+    # the other two arms' factors are UNCHANGED from the E19 loop entry on this arm.
+    assert float(getattr(c.training, "injection_lr_mult", 1.0)) == 1.0
+    assert (m.mean_depth, m.max_depth, m.bptt_depth) == (6, 8, 8)
+
+    c = _compose("notul_e20_carry_lr20x")
+    m = build_morph_config(c)
+    _assert_carries_e19_entry(c, m)
+    assert float(c.training.injection_lr_mult) == 20.0
+    assert str(getattr(c.training, "ternary_scope", "backbone")) == "backbone"
+    assert (m.mean_depth, m.max_depth, m.bptt_depth) == (6, 8, 8)
+
+    c = _compose("notul_e20_draw8_bptt4")
+    m = build_morph_config(c)
+    _assert_carries_e19_entry(c, m)
+    assert (m.mean_depth, m.max_depth, m.bptt_depth) == (8, 12, 4)
+    assert str(getattr(c.training, "ternary_scope", "backbone")) == "backbone"
+    assert float(getattr(c.training, "injection_lr_mult", 1.0)) == 1.0

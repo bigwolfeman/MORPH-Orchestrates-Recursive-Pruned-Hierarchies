@@ -2126,8 +2126,9 @@ def main(cfg: DictConfig) -> None:
             gc.collect()
             torch.cuda.empty_cache()
             optimizer = create_optimizer(model, cfg)
+            _lr0 = lr_fn(start_step)
             for pg in optimizer.param_groups:
-                pg["lr"] = lr_fn(start_step)
+                pg["lr"] = _lr0 * pg.get("lr_mult", 1.0)
             print("  [opt] rebuilt optimizer on reconstructed (carved/routed) topology",
                   flush=True)
         # Restore momentum/variance. HARD-FAIL on mismatch — swallowing it here would
@@ -2160,7 +2161,9 @@ def main(cfg: DictConfig) -> None:
             # pairs parameters with other parameters' moments. torch only raises when the
             # group SIZES differ; that raise is the lucky case, and it is what stopped the
             # first SCSE screen on 2026-08-25.
-            _opt_state, _added = align_optimizer_state(_opt_state, model, _ckpt_pnames)
+            _opt_state, _added = align_optimizer_state(
+                _opt_state, model, _ckpt_pnames,
+                injection_lr_mult=float(getattr(cfg.training, "injection_lr_mult", 1.0)))
             if _added:
                 print(f"  [opt] {len(_added)} parameters are new since this checkpoint and "
                       f"start with fresh optimizer state: "
@@ -2656,7 +2659,7 @@ def main(cfg: DictConfig) -> None:
 
         lr = lr_fn(step)
         for pg in optimizer.param_groups:
-            pg["lr"] = lr
+            pg["lr"] = lr * pg.get("lr_mult", 1.0)
 
         optimizer.zero_grad(set_to_none=True)
 
@@ -2818,7 +2821,7 @@ def main(cfg: DictConfig) -> None:
             _mem_freed = torch.cuda.memory_allocated() / 1e9
             optimizer = create_optimizer(model, cfg)
             for pg in optimizer.param_groups:
-                pg["lr"] = lr
+                pg["lr"] = lr * pg.get("lr_mult", 1.0)
             _mem_after = torch.cuda.memory_allocated() / 1e9
             _n_opt = sum(p.numel() for g in optimizer.param_groups for p in g["params"])
             print(f"[opt] rebuilt optimizer @ step {step}: {_n_opt:,} params; "

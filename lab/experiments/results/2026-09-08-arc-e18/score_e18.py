@@ -14,16 +14,18 @@ K-differences within an arm are the sweep's own paired bootstraps. The matched-i
 Method): plain at core depth T costs 6144 + 6144*T; mask-k at slot depth T' costs
 6*(1024 + 64*k) + 384*T'.
 
-Usage: python lab/experiments/results/2026-09-08-arc-e18/score_e18.py [RESULTS_DIR] [QUEUE_LOG]
+Pairing and readers: `lab/divergence/sweep_score.py`.
+
+Usage (repo root): PYTHONPATH=. python lab/experiments/results/2026-09-08-arc-e18/score_e18.py
+                   [RESULTS_DIR] [QUEUE_LOG]
 """
 from __future__ import annotations
 
-import json
 import os
-import re
 import sys
 
-import numpy as np
+from lab.divergence.sweep_score import (ci, fmt, load_sweep, paired, peak_gb, probe_stats,
+                                        val_curve, verdicts, wall_h)
 
 ARMS = ["e18-mask-k2", "e18-mask-k4", "e18-mask-k8", "e18-notul"]
 K = {"e18-mask-k2": 2, "e18-mask-k4": 4, "e18-mask-k8": 8}
@@ -31,105 +33,19 @@ TRAINED = {"e18-mask-k2": "12", "e18-mask-k4": "12", "e18-mask-k8": "12", "e18-n
 CKS = [2500, 5000]
 DEPTHS = ["1", "2", "3", "6", "9", "12", "16"]
 HERE = os.path.dirname(os.path.abspath(__file__))
-N_BOOT, SEED = 2000, 0
 
 
 def load(d: str, arm: str, ck: int) -> dict | None:
-    p = os.path.join(d, f"sweep_{arm}_{ck}.json")
-    return json.load(open(p))[arm] if os.path.exists(p) else None
+    return load_sweep(os.path.join(d, f"sweep_{arm}_{ck}.json"))
 
 
-def ci(s: dict, key: str) -> str:
-    c = s["ci_ce_tokens"][key]
-    return f"{c['point']:+.4f} [{c['lo']:+.4f}, {c['hi']:+.4f}]"
-
-
-BLOCK = 1024  # stream tokens per bootstrap unit
-_TOK: dict[str, dict] = {}
-
-
-def tokens(s: dict) -> dict | None:
-    """The per-token CE arrays of a sweep (``tok_index`` + ``ce_<depth>``), if it wrote them."""
-    p = s.get("tokens_npz")
-    if not p:
-        return None
-    if p not in _TOK:
-        cands = [p, os.path.join(os.path.dirname(sys.argv[1]) if len(sys.argv) > 1 else HERE, os.path.basename(p)),
-                 os.path.join(HERE, os.path.basename(p))]
-        hit = next((c for c in cands if os.path.exists(c)), None)
-        _TOK[p] = dict(np.load(hit)) if hit else None
-    return _TOK[p]
-
-
-def paired(a: dict, da: str, b: dict, db: str) -> tuple[float, float, float, str]:
-    """Token CE of arm a at depth da minus arm b at depth db.
-
-    Token-level when both sweeps carry per-token arrays: the stream indices are
-    intersected, the mean difference is over the shared tokens, and the CI resamples
-    1,024-token stream blocks. Otherwise the row-mean fallback (UNPAIRED across cuts)."""
-    ta, tb = tokens(a), tokens(b)
-    rng = np.random.default_rng(SEED)
-    if ta is not None and tb is not None:
-        ia, ib = ta["tok_index"], tb["tok_index"]
-        common, pa, pb = np.intersect1d(ia, ib, assume_unique=True, return_indices=True)
-        d = ta[f"ce_{da}"][pa].astype(np.float64) - tb[f"ce_{db}"][pb].astype(np.float64)
-        blk = common // BLOCK
-        ub, inv = np.unique(blk, return_inverse=True)
-        bsum = np.bincount(inv, weights=d, minlength=len(ub))
-        bcnt = np.bincount(inv, minlength=len(ub)).astype(float)
-        idx = rng.integers(0, len(ub), size=(N_BOOT, len(ub)))
-        boots = bsum[idx].sum(1) / bcnt[idx].sum(1)
-        return (float(d.mean()), float(np.quantile(boots, 0.025)), float(np.quantile(boots, 0.975)),
-                f"tokens n={len(common)} blocks={len(ub)}")
-    na, nb = np.asarray(a["row_n_tokens"], float), np.asarray(b["row_n_tokens"], float)
-    n = min(len(na), len(nb))
-    d = np.asarray(a["row_ce_sum"][da][:n]) / na[:n] - np.asarray(b["row_ce_sum"][db][:n]) / nb[:n]
-    idx = rng.integers(0, n, size=(N_BOOT, n))
-    boots = (d * nb[:n])[idx].sum(1) / nb[:n][idx].sum(1)
-    return (float((d * nb[:n]).sum() / nb[:n].sum()), float(np.quantile(boots, 0.025)),
-            float(np.quantile(boots, 0.975)), "UNPAIRED rows")
-
-
-def fmt(t: tuple) -> str:
-    return f"{t[0]:+.4f} [{t[1]:+.4f}, {t[2]:+.4f}] ({t[3]})"
+ART = (os.path.join(HERE, "..", "..", "..", "..", "ignored", "experiment-artifacts", "2026-09-08-arc-e18"),)
 
 
 def cost(arm: str, depth: int) -> int:
     if arm == "e18-notul":
         return 6144 + 6144 * depth
     return 6 * (1024 + 64 * K[arm]) + 384 * depth
-
-
-def val_curve(log: str) -> dict[int, float]:
-    return {int(m.group(1)): float(m.group(2))
-            for m in re.finditer(r"\[VAL\s+(\d+)\] loss=([0-9.]+)", open(log).read())}
-
-
-def peak_gb(log: str) -> float:
-    return max(float(x) for x in re.findall(r"peak=([0-9.]+)GB", open(log).read()))
-
-
-def wall_h(queue: str) -> dict[str, float]:
-    t: dict[str, dict[str, int]] = {}
-    for m in re.finditer(r"(START|DONE) (e18-[\w-]+) .*?epoch=(\d+)", open(queue).read()):
-        t.setdefault(m.group(2), {})[m.group(1)] = int(m.group(3))
-    return {a: (v["DONE"] - v["START"]) / 3600 for a, v in t.items() if "START" in v and "DONE" in v}
-
-
-def verdicts(queue: str) -> dict[str, str]:
-    return {m.group(1): m.group(2)
-            for m in re.finditer(r"DONE (e18-[\w-]+) exit=\d+ epoch=\d+ verdict=(\S+.*?) Final", open(queue).read())}
-
-
-def probe_stats(path: str) -> dict:
-    rows = [json.loads(line) for line in open(path) if line.strip()]
-    w = [r for r in rows if 1000 <= r["step"] <= 5000]
-    g = [r["loss/gain_est"] for r in w if "loss/gain_est" in r]
-    out = {"preclip_max_after_200": max((round(r["preclip/total"]), r["step"]) for r in rows if r["step"] >= 200)}
-    if g:
-        out.update(gain_mean=round(float(np.mean(g)), 4), gain_max=round(float(max(g)), 4),
-                   hinge_frac=round(sum(1 for r in w if r.get("loss/gain_reg_weighted", 0) > 0) / len(w), 4))
-    return out
 
 
 def main() -> None:
@@ -145,10 +61,10 @@ def main() -> None:
     print("\n=== P18b (width) at 5000: paired token CE at the trained depth 12")
     for a, b in (("e18-mask-k4", "e18-mask-k2"), ("e18-mask-k8", "e18-mask-k4"), ("e18-mask-k8", "e18-mask-k2")):
         if (a, 5000) in S and (b, 5000) in S:
-            print(f"  {a} - {b} @12: {fmt(paired(S[a, 5000], '12', S[b, 5000], '12'))}")
+            print(f"  {a} - {b} @12: {fmt(paired(S[a, 5000], '12', S[b, 5000], '12', ART))}")
     for a in K:
         if (a, 5000) in S and ("e18-notul", 5000) in S:
-            print(f"  {a}@12 - notul@6: {fmt(paired(S[a, 5000], '12', S['e18-notul', 5000], '6'))}")
+            print(f"  {a}@12 - notul@6: {fmt(paired(S[a, 5000], '12', S['e18-notul', 5000], '6', ART))}")
 
     print("\n=== P18c (depth) at 5000: K3-K6 > 0.005 with CI above 0? K1-K6 > 0.03?")
     for a in K:
@@ -165,15 +81,15 @@ def main() -> None:
         for d in ("3", "6", "12", "16"):
             line = f"  {a + '@' + d:22s} {cost(a, int(d)):7d} {S[a, 5000]['depths'][d]['ce_tokens']:8.4f}"
             if ("e18-notul", 5000) in S:
-                line += f"   {fmt(paired(S[a, 5000], d, S['e18-notul', 5000], '1'))}   {fmt(paired(S[a, 5000], d, S['e18-notul', 5000], '2'))}"
+                line += f"   {fmt(paired(S[a, 5000], d, S['e18-notul', 5000], '1', ART))}   {fmt(paired(S[a, 5000], d, S['e18-notul', 5000], '2', ART))}"
             print(line)
     if ("e18-notul", 5000) in S:
         for d in ("1", "2", "3", "6", "12"):
             print(f"  {'notul@' + d:22s} {cost('e18-notul', int(d)):7d} {S['e18-notul', 5000]['depths'][d]['ce_tokens']:8.4f}")
 
     print("\n=== P18a/e/f/g: survival, hinge, wall clock, peak, val order")
-    wh = wall_h(queue) if os.path.exists(queue) else {}
-    vd = verdicts(queue) if os.path.exists(queue) else {}
+    wh = wall_h(queue, 'e18-') if os.path.exists(queue) else {}
+    vd = verdicts(queue, 'e18-') if os.path.exists(queue) else {}
     finals = {}
     for a in ARMS:
         log = os.path.join(root, f"run_{a}.log")

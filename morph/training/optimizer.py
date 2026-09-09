@@ -51,8 +51,23 @@ _NO_DECAY_KEYWORDS = (
 )
 
 
-def _split_by_decay(model: nn.Module) -> tuple[list, list, list[str], list[str]]:
-    """`(decay_params, no_decay_params, decay_names, no_decay_names)`, in group order.
+def _split_by_decay(
+    model: nn.Module, separate_injection: bool = False
+) -> tuple[list, list, list[str], list[str]] | tuple[list, list, list, list[str], list[str], list[str]]:
+    """Split parameters by weight-decay group (and, optionally, pull the injection
+    params into a third group for `training.injection_lr_mult`).
+
+    Default (`separate_injection=False`): `(decay_params, no_decay_params, decay_names,
+    no_decay_names)`, in group order — today's two-way split, byte-identical to before
+    this knob existed. Injection params (name contains "injection": `B`, `log_A`,
+    `log_dt` on `DiagonalInjection`) stay inside the no-decay group here, exactly as
+    `_NO_DECAY_KEYWORDS` has always placed them.
+
+    `separate_injection=True`: `(decay_params, no_decay_params, injection_params,
+    decay_names, no_decay_names, injection_names)` — injection params are pulled OUT of
+    no-decay into their own list (checked FIRST, so they never land in decay either).
+    Used only when `training.injection_lr_mult != 1.0`, so the default call — the one
+    every existing caller makes — is untouched.
 
     ONE walk of `named_parameters()` produces both the tensors and their names, so the
     optimizer's group layout and any name-based view of it cannot drift apart. They did
@@ -60,29 +75,54 @@ def _split_by_decay(model: nn.Module) -> tuple[list, list, list[str], list[str]]
     and a second independent walk would have made it silently wrong the first time the
     split rule changed.
     """
-    decay, no_decay, decay_n, no_decay_n = [], [], [], []
+    decay, no_decay, injection = [], [], []
+    decay_n, no_decay_n, injection_n = [], [], []
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
-        if any(kw in name for kw in _NO_DECAY_KEYWORDS):
+        if separate_injection and "injection" in name:
+            injection.append(p)
+            injection_n.append(name)
+        elif any(kw in name for kw in _NO_DECAY_KEYWORDS):
             no_decay.append(p)
             no_decay_n.append(name)
         else:
             decay.append(p)
             decay_n.append(name)
+    if separate_injection:
+        return decay, no_decay, injection, decay_n, no_decay_n, injection_n
     return decay, no_decay, decay_n, no_decay_n
 
 
-def _param_groups(model: nn.Module, weight_decay: float) -> list[dict]:
-    """Split parameters into decay / no-decay groups."""
-    decay_params, no_decay_params, _, _ = _split_by_decay(model)
+def _param_groups(model: nn.Module, weight_decay: float,
+                  injection_lr_mult: float = 1.0) -> list[dict]:
+    """Split parameters into decay / no-decay groups (default), or decay / no-decay /
+    injection groups when `injection_lr_mult != 1.0`.
+
+    The third group holds `weight_decay: 0.0` (injection params were already no-decay)
+    plus `lr_mult`, a group-dict key the trainer's LR-schedule writers read
+    (`pg["lr"] = lr * pg.get("lr_mult", 1.0)`) so the multiplier survives every schedule
+    write, including a resume. `injection_lr_mult == 1.0` takes the OLD two-group path
+    exactly (no `lr_mult` key anywhere) — required for byte-identical group layout at the
+    default.
+    """
+    if injection_lr_mult == 1.0:
+        decay_params, no_decay_params, _, _ = _split_by_decay(model)
+        return [
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ]
+    decay_params, no_decay_params, injection_params, _, _, _ = _split_by_decay(
+        model, separate_injection=True)
     return [
         {"params": decay_params, "weight_decay": weight_decay},
         {"params": no_decay_params, "weight_decay": 0.0},
+        {"params": injection_params, "weight_decay": 0.0,
+         "lr_mult": float(injection_lr_mult)},
     ]
 
 
-def param_group_names(model: nn.Module) -> list[list[str]]:
+def param_group_names(model: nn.Module, injection_lr_mult: float = 1.0) -> list[list[str]]:
     """Parameter NAMES per optimizer group, in the exact order `_param_groups` uses.
 
     `torch.optim.Optimizer.load_state_dict` matches saved state to live parameters by
@@ -94,14 +134,23 @@ def param_group_names(model: nn.Module) -> list[list[str]]:
     parameter's moments. Torch does not detect that; it only raises when the group SIZES
     differ, which is the lucky case.
 
+    `injection_lr_mult` must match the value `create_optimizer` built the live optimizer
+    with, or this returns the wrong number of groups (2 vs 3) for `align_optimizer_state`
+    to re-index against — pass `cfg.training.injection_lr_mult` at every call site, same
+    as `_param_groups`.
+
     :func:`align_optimizer_state` uses these names to re-index instead.
     """
-    _, _, decay_n, no_decay_n = _split_by_decay(model)
-    return [decay_n, no_decay_n]
+    if injection_lr_mult == 1.0:
+        _, _, decay_n, no_decay_n = _split_by_decay(model)
+        return [decay_n, no_decay_n]
+    _, _, _, decay_n, no_decay_n, injection_n = _split_by_decay(model, separate_injection=True)
+    return [decay_n, no_decay_n, injection_n]
 
 
 def align_optimizer_state(state: dict, model: nn.Module,
-                          ckpt_param_names: set[str]) -> tuple[dict, list[str]]:
+                          ckpt_param_names: set[str],
+                          injection_lr_mult: float = 1.0) -> tuple[dict, list[str]]:
     """Re-index a checkpoint's optimizer state onto `model`'s CURRENT parameters.
 
     Returns `(aligned_state, added_names)`. Parameters the checkpoint does not contain get
@@ -113,13 +162,16 @@ def align_optimizer_state(state: dict, model: nn.Module,
         model:            the live model, which may have parameters the checkpoint lacks.
         ckpt_param_names: names present in the checkpoint's MODEL state dict. Anything the
                           live model has and this set does not is treated as added.
+        injection_lr_mult: must match the value the live optimizer (rebuilt by
+                          `create_optimizer` before this call) was built with, so the
+                          group count/order here lines up with the checkpoint's.
 
     Only ADDITIONS are supported. If the checkpoint holds state for more parameters in a
     group than the live model has after removing the added ones, the alignment is not a
     pure insertion and this raises rather than guessing — a wrong alignment pairs a
     parameter with another parameter's moments and shows up as a plausible-looking run.
     """
-    live_names = param_group_names(model)
+    live_names = param_group_names(model, injection_lr_mult=injection_lr_mult)
     added = [n for g in live_names for n in g if n not in ckpt_param_names]
     added_set = set(added)
 
@@ -210,6 +262,12 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
                                   (AdEMAMix mix weight + α/β3 warmup horizons; the warmup
                                    horizons default to total steps — essential for stability,
                                    NOT the same as LR warmup)
+        cfg.training.injection_lr_mult (optional float, default 1.0 — every parameter
+                                  whose name contains "injection" (DiagonalInjection's
+                                  B/log_A/log_dt) gets its own THIRD param group at
+                                  lr = base_lr * injection_lr_mult, weight_decay 0.0. At
+                                  1.0 this is a no-op: two groups, byte-identical to
+                                  before the knob existed. See `_param_groups`.)
 
     Returns one of (deploy default first):
       - AdEMAMixB1Zero (optimizer=ademamix_b1zero) — β1=0 AdEMAMix, blockwise-8bit state
@@ -225,8 +283,18 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         float(getattr(tr, "beta1", 0.9)),
         float(getattr(tr, "beta2", 0.95)),
     )
+    injection_lr_mult = float(getattr(tr, "injection_lr_mult", 1.0))
 
-    groups = _param_groups(model, wd)
+    groups = _param_groups(model, wd, injection_lr_mult=injection_lr_mult)
+    if injection_lr_mult != 1.0:
+        # Set the group's OWN lr at construction (torch.optim fills a group's lr from
+        # the optimizer-level `lr=` default only when the group dict has no "lr" key of
+        # its own) — so the injection group starts at the right lr even before the
+        # trainer's first scheduler write, not just after it.
+        groups[2]["lr"] = lr * injection_lr_mult
+        print(f"  injection_lr_mult={injection_lr_mult}: {len(groups[2]['params'])} "
+              f"injection param(s) get their own group at lr={groups[2]['lr']:.2e} "
+              f"(base lr={lr:.2e})", flush=True)
 
     use_8bit = bool(getattr(tr, "adam8bit", False))
     opt_name = str(getattr(tr, "optimizer", "adamw")).lower()
