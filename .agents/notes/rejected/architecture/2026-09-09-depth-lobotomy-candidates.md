@@ -1,6 +1,13 @@
 # Agent Note: why MORPH's loop earns 0.02 nats past iteration 1 where Parcae's fixed point is 8 iterations deep
 
-Status: proposed
+Status: rejected — the panel ran (2026-09-09) and refuted every candidate but the ternary core; superseded by the ternary-core note
+
+> Rejected 2026-09-09: the candidate panel this note proposed ran as the Parcae-entry panel
+> (`lab/experiments/failures/2026-09-09-arc-e19-parcae-loop-entry.md`) and the depth-candidates
+> panel (`lab/experiments/failures/2026-09-09-arc-e20-loop-depth-candidates.md`). The entry, the
+> fixed-point term, the state init, the carry rate and Parcae's depth schedule are cleared; the
+> ternary core is the measured limiter. Superseded by
+> [`../../proposed/architecture/2026-09-09-ternary-core-is-a-weak-per-pass-map.md`](../../proposed/architecture/2026-09-09-ternary-core-is-a-weak-per-pass-map.md).
 
 ## Problem
 

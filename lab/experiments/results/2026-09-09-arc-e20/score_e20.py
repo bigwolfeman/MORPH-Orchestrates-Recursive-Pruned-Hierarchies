@@ -87,13 +87,13 @@ def main() -> None:
               f"  K1-K{t} {k1[0]:+.4f} -> {yes(k1[0] > 0.10)};  K{t}-K12 {k12[0]:+.4f} -> {yes(abs(k12[0]) <= 0.005)};"
               f"  sweep's own K1-K6 {ci(s, 'K1-K6')} K3-K6 {ci(s, 'K3-K6')}")
 
-    print("\n=== P20c (end point): arm@trained - e19-loop@6, token-paired")
+    print("\n=== P20c (end point): arm@trained - parcae-entry@6, token-paired")
     for a in ARMS:
         r = pair((a, 5000), TRAINED[a], (LOOP, 5000), "6")
         if r:
             print(f"  {a:16s} {fmt(r)}  better by >0.02: {yes(r[2] < -0.02)}  within +-0.02: {yes(abs(r[0]) <= 0.02)}  worse by >0.03: {yes(r[1] > 0.03)}")
 
-    print("\n=== P20d (the price): arm@trained - e19-d1@1, token-paired (beats d1 iff CI hi < 0)")
+    print("\n=== P20d (the price): arm@trained - plain-depth1@1, token-paired (beats d1 iff CI hi < 0)")
     for a in ARMS + [LOOP]:
         r = pair((a, 5000), TRAINED[a], (D1, 5000), "1")
         if r:

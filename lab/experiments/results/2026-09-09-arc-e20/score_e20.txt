@@ -1,0 +1,61 @@
+=== the E17 rule: sweep CE at the trained depth vs the trainer's held-out loss at that step
+  depthcand-dense-core@2500 depth 6: sweep 4.4140  trainer 4.4397  gap -0.0257 OK
+  depthcand-dense-core@5000 depth 6: sweep 3.9275  trainer 3.9571  gap -0.0296 OK
+  depthcand-carry-lr20x@2500 depth 6: sweep 4.5226  trainer 4.5446  gap -0.0220 OK
+  depthcand-carry-lr20x@5000 depth 6: sweep 3.9945  trainer 4.0208  gap -0.0263 OK
+  depthcand-draw8-bptt4@2500 depth 8: sweep 4.5231  trainer 4.5433  gap -0.0202 OK
+  depthcand-draw8-bptt4@5000 depth 8: sweep 4.0495  trainer 4.0844  gap -0.0349 OK
+  parcae-entry    @5000 depth 6: sweep 3.9573  trainer 3.9807  gap -0.0234 OK
+  plain-depth1    @5000 depth 1: sweep 3.9612  trainer 3.9887  gap -0.0275 OK
+
+=== token CE by forced depth (480 rows) and the paired K-differences (Kt = trained depth)
+arm                 ck     T=0     T=1     T=2     T=3     T=6     T=8     T=9    T=12    T=16 | K1-Kt | K3-Kt | Kt-K12
+depthcand-dense-core  2500  9.9288  4.5529  4.4471  4.4233  4.4140  4.4144  4.4147  4.4153  4.4155 | +0.1388 | +0.0092 [+0.0086,+0.0098] | -0.0012
+depthcand-dense-core  5000  9.2413  4.0958  3.9695  3.9394  3.9275  3.9282  3.9286  3.9294  3.9297 | +0.1682 | +0.0119 [+0.0113,+0.0125] | -0.0018
+depthcand-carry-lr20x  2500  9.2277  4.5751  4.5353  4.5259  4.5226  4.5228  4.5228  4.5227  4.5228 | +0.0524 | +0.0032 [+0.0029,+0.0036] | -0.0001
+depthcand-carry-lr20x  5000  9.9873  4.0835  4.0181  4.0017  3.9945  3.9945  3.9945  3.9945  3.9945 | +0.0891 | +0.0072 [+0.0066,+0.0078] | -0.0000
+depthcand-draw8-bptt4  2500  9.1076  4.5838  4.5341  4.5257  4.5232  4.5231  4.5231  4.5231  4.5231 | +0.0607 | +0.0026 [+0.0024,+0.0029] | -0.0000
+depthcand-draw8-bptt4  5000  8.9459  4.1091  4.0633  4.0516  4.0495  4.0495  4.0495  4.0495  4.0495 | +0.0597 | +0.0022 [+0.0018,+0.0025] | -0.0000
+parcae-entry      5000  8.8346  3.9905  3.9621  3.9582  3.9573       -  3.9575  3.9574  3.9575 | +0.0332 | +0.0009 [+0.0007,+0.0011] | -0.0001
+plain-depth1      5000  4.5357  3.9612  4.0385  4.2062  4.9569       -  5.6106  6.1242  6.6052 | +0.0000 | +0.2450 [+0.2416,+0.2486] | -2.1631
+
+=== P20b (depth) at 5000: K3-Kt > 0.02 with CI > 0; K1-Kt > 0.10; Kt-K12 within +-0.005
+  depthcand-dense-core K3-K6 +0.0119 lo +0.0113 -> FALSE;  K1-K6 +0.1682 -> TRUE;  K6-K12 -0.0018 -> TRUE;  sweep's own K1-K6 +0.1682 [+0.1654, +0.1711] K3-K6 +0.0119 [+0.0113, +0.0125]
+  depthcand-carry-lr20x K3-K6 +0.0072 lo +0.0066 -> FALSE;  K1-K6 +0.0891 -> FALSE;  K6-K12 -0.0000 -> TRUE;  sweep's own K1-K6 +0.0891 [+0.0864, +0.0917] K3-K6 +0.0072 [+0.0065, +0.0079]
+  depthcand-draw8-bptt4 K3-K8 +0.0022 lo +0.0018 -> FALSE;  K1-K8 +0.0597 -> FALSE;  K8-K12 -0.0000 -> TRUE;  sweep's own K1-K6 +0.0596 [+0.0580, +0.0611] K3-K6 +0.0021 [+0.0018, +0.0024]
+
+=== P20c (end point): arm@trained - parcae-entry@6, token-paired
+  depthcand-dense-core -0.0298 [-0.0326, -0.0271] (tokens n=491520 blocks=481)  better by >0.02: TRUE  within +-0.02: FALSE  worse by >0.03: FALSE
+  depthcand-carry-lr20x +0.0371 [+0.0342, +0.0402] (tokens n=491520 blocks=481)  better by >0.02: FALSE  within +-0.02: FALSE  worse by >0.03: TRUE
+  depthcand-draw8-bptt4 +0.0921 [+0.0891, +0.0952] (tokens n=491520 blocks=481)  better by >0.02: FALSE  within +-0.02: FALSE  worse by >0.03: TRUE
+
+=== P20d (the price): arm@trained - plain-depth1@1, token-paired (beats d1 iff CI hi < 0)
+  depthcand-dense-core -0.0336 [-0.0365, -0.0309] (tokens n=491520 blocks=481)  beats d1: TRUE
+  depthcand-carry-lr20x +0.0333 [+0.0301, +0.0364] (tokens n=491520 blocks=481)  beats d1: FALSE
+  depthcand-draw8-bptt4 +0.0883 [+0.0854, +0.0910] (tokens n=491520 blocks=481)  beats d1: FALSE
+  parcae-entry     -0.0038 [-0.0066, -0.0013] (tokens n=491520 blocks=481)  beats d1: TRUE
+
+=== P20e (anatomy at 5000, depth 8, 3 rows) and init probes
+  depthcand-dense-core movement [0.629, 0.376, 0.201, 0.125, 0.086, 0.061, 0.046]  iter6 > 10 %: FALSE;  B diag 1.0458 (moves > 0.3: FALSE);  A 0.4445 (moves > 0.05: FALSE) dt 0.8119;  branch out/in @6 max 0.957; carrier norm t8 4865 rank 87.7
+  depthcand-carry-lr20x movement [0.458, 0.178, 0.077, 0.043, 0.027, 0.021, 0.018]  iter6 > 10 %: FALSE;  B diag 1.7441 (moves > 0.3: TRUE);  A 0.4212 (moves > 0.05: FALSE) dt 0.4753;  branch out/in @6 max 0.577; carrier norm t8 5306 rank 5.8
+  depthcand-draw8-bptt4 movement [0.394, 0.442, 0.134, 0.096, 0.058, 0.042, 0.032]  iter6 > 10 %: FALSE;  B diag 1.0260 (moves > 0.3: FALSE);  A 0.4442 (moves > 0.05: FALSE) dt 0.7945;  branch out/in @6 max 0.258; carrier norm t8 1285 rank 14.8
+  parcae-entry     movement [0.375, 0.231, 0.072, 0.049, 0.027, 0.021, 0.018]  iter6 > 10 %: FALSE;  B diag 1.0349 (moves > 0.3: FALSE);  A 0.4436 (moves > 0.05: FALSE) dt 0.8023;  branch out/in @6 max 0.236; carrier norm t8 1970 rank 73.0
+  init probe depthcand-dense-core T8 by start: prelude=3.8617 noise_rms=3.8619 zero=3.8618 noise_small=3.8617  spread 0.0002 -> within 0.01: TRUE
+                     full curves: prelude: T1=4.053 T2=3.911 T3=3.877 T4=3.865 T6=3.861 T8=3.862 T12=3.863 T16=3.864 T24=3.864; noise_rms: T1=4.047 T2=3.909 T3=3.876 T4=3.865 T6=3.861 T8=3.862 T12=3.863 T16=3.863 T24=3.864; zero: T1=4.032 T2=3.904 T3=3.874 T4=3.864 T6=3.861 T8=3.862 T12=3.863 T16=3.864 T24=3.864; noise_small: T1=4.032 T2=3.904 T3=3.874 T4=3.864 T6=3.861 T8=3.862 T12=3.863 T16=3.864 T24=3.864
+  init probe depthcand-carry-lr20x T8 by start: prelude=3.9317 noise_rms=3.9316 zero=3.9317 noise_small=3.9316  spread 0.0001 -> within 0.01: TRUE
+                     full curves: prelude: T1=4.023 T2=3.956 T3=3.939 T4=3.934 T6=3.932 T8=3.932 T12=3.932 T16=3.932 T24=3.932; noise_rms: T1=4.024 T2=3.956 T3=3.939 T4=3.933 T6=3.932 T8=3.932 T12=3.932 T16=3.932 T24=3.932; zero: T1=4.020 T2=3.955 T3=3.938 T4=3.933 T6=3.932 T8=3.932 T12=3.932 T16=3.932 T24=3.932; noise_small: T1=4.020 T2=3.955 T3=3.938 T4=3.933 T6=3.932 T8=3.932 T12=3.932 T16=3.932 T24=3.932
+  init probe depthcand-draw8-bptt4 T8 by start: prelude=3.9866 noise_rms=3.9867 zero=3.9867 noise_small=3.9867  spread 0.0001 -> within 0.01: TRUE
+                     full curves: prelude: T1=4.046 T2=4.003 T3=3.989 T4=3.987 T6=3.987 T8=3.987 T12=3.987 T16=3.987 T24=3.987; noise_rms: T1=4.134 T2=4.009 T3=3.991 T4=3.988 T6=3.987 T8=3.987 T12=3.987 T16=3.987 T24=3.987; zero: T1=4.046 T2=4.001 T3=3.990 T4=3.988 T6=3.987 T8=3.987 T12=3.987 T16=3.987 T24=3.987; noise_small: T1=4.046 T2=4.001 T3=3.989 T4=3.988 T6=3.987 T8=3.987 T12=3.987 T16=3.987 T24=3.987
+  init probe parcae-entry     T8 by start: prelude=3.8960 noise_rms=3.8961 zero=3.8960 noise_small=3.8961  spread 0.0001 -> within 0.01: TRUE
+                     full curves: prelude: T1=3.948 T2=3.901 T3=3.896 T4=3.896 T6=3.896 T8=3.896 T12=3.896 T16=3.896 T24=3.896; noise_rms: T1=3.961 T2=3.905 T3=3.897 T4=3.896 T6=3.896 T8=3.896 T12=3.896 T16=3.896 T24=3.896; zero: T1=3.926 T2=3.900 T3=3.896 T4=3.896 T6=3.896 T8=3.896 T12=3.896 T16=3.896 T24=3.896; noise_small: T1=3.926 T2=3.900 T3=3.896 T4=3.896 T6=3.896 T8=3.896 T12=3.896 T16=3.896 T24=3.896
+
+=== P20a/f: survival, tripwire, wall clock, peak, held-out curve
+  depthcand-dense-core verdict=HEALTHY last=4999 max=99.8@612  wall 0.88 h (0.88x loop)  peak 10.17 GB  val@2500 4.4397  final 3.9571  {'preclip_max_after_200': (100, 612)}
+  depthcand-carry-lr20x verdict=HEALTHY last=4999 max=39.6@226  wall 0.88 h (0.88x loop)  peak 10.17 GB  val@2500 4.5446  final 4.0208  {'preclip_max_after_200': (40, 226)}
+  depthcand-draw8-bptt4 verdict=HEALTHY last=4999 max=32@471  wall 0.58 h (0.58x loop)  peak 9.80 GB  val@2500 4.5433  final 4.0844  {'preclip_max_after_200': (32, 471)}
+  parcae-entry     verdict=E19  wall nan h (nanx loop)  peak 10.17 GB  val@2500 4.4453  final 3.9807  {'preclip_max_after_200': (129, 226)}
+  depthcand-dense-core - loop held-out (trainer's batches): 1000:+0.000 2000:+0.012 3000:-0.003 4000:-0.013 4751:-0.024
+  depthcand-carry-lr20x - loop held-out (trainer's batches): 1000:+0.174 2000:+0.128 3000:+0.113 4000:+0.064 4751:+0.040
+  depthcand-draw8-bptt4 - loop held-out (trainer's batches): 1000:+0.112 2000:+0.091 3000:+0.143 4000:+0.114 4751:+0.104
+  P20f: dense-core within 1.1x loop wall: TRUE
+  P20f: draw8-bptt4 wall 0.58x loop -> in [1.15, 1.5]: FALSE
