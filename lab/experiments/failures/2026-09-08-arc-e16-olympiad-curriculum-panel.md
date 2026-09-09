@@ -223,3 +223,8 @@ target so far makes a stable loop earn past iteration 3, and the arms whose loop
 most are the arms furthest behind the plain model. What is left to test is the write-back
 (the Spiral schedule, the paid loop) and staged targets (E3), on deduped data with a
 matched-compute shallow control and 30 % replay.
+
+Caveat added 2026-09-08 (E17): the plain arm's sweeps here ran with `olympiad_sweep.py`'s
+plain rows at stride `seq_len` (fixed to `seq_len + 1` in `53b2472`). Its depth-6 token CE
+matched the trainer's held-out loss at 5750 to 0.0014 (0.4924 vs 0.4910), so the shift did
+not move E16's numbers; they are not re-scored.

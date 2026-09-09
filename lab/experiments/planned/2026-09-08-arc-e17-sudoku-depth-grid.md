@@ -66,6 +66,18 @@ Smokes before this prereg (2026-09-08, 12 steps each, all exit 0, 0 NaN): mask p
 (`EAGER+TGSCOPED`), notul 15.60 GB, mnext 19.82 GB, a1 19.54 GB. Steps/s not recorded by the
 build; the launch smoke records it.
 
+**Method amendment 1 (2026-09-08 19:10, before any prediction was scored).** The runner's
+first plain-arm sweeps read 2.46 nats at step 1500 and 2.86 at 3000 against the trainer's
+held-out 0.548 and 0.522 on the same boards. Cause: `olympiad_sweep.py`'s plain-control
+path advanced rows by `seq_len`, not `seq_len + 1`, so row k started k tokens before its
+board; this model has only ever seen a board at offset 0 (the mask arm packs per document
+and matched its trainer to 0.001; E16's plain arm matched to 0.0014 because packed web
+text has no fixed offset). Fixed in commit `53b2472` (regression test
+`tests/test_olympiad_sweep_plain_rows.py`); `arc/E17_COMMIT` re-pinned to it; the plain
+arm's four sweeps re-run from its saved checkpoints by `arc/run_e17_resweep_then_e18.sh`.
+The shifted JSONs are kept out of the record under `stride_bug/` in the scratch results
+dir. The predictions are untouched.
+
 ## Predictions (frozen)
 
 - **P17a (survival).** Both arms reach 6,000 with the tripwire silent: mask **75 %**, notul
