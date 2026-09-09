@@ -21,8 +21,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 ARMS = ["depthcand-dense-core", "depthcand-carry-lr20x", "depthcand-draw8-bptt4"]
 TRAINED = {"depthcand-dense-core": "6", "depthcand-carry-lr20x": "6", "depthcand-draw8-bptt4": "8",
-           "e19-loop": "6", "e19-d1": "1"}
-LOOP, D1 = "e19-loop", "e19-d1"
+           "parcae-entry": "6", "plain-depth1": "1"}
+LOOP, D1 = "parcae-entry", "plain-depth1"
 CKS = [2500, 5000]
 DEPTHS = ["0", "1", "2", "3", "6", "8", "9", "12", "16"]
 ART = tuple(os.path.join(REPO, "ignored", "experiment-artifacts", d)

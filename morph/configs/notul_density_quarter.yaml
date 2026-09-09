@@ -1,0 +1,17 @@
+# Density panel, quarter arm: notul_parcae_entry (the Parcae-entry loop arm, dense control)
+# with the production prune schedule compressed to fit 5,000 steps, target density 0.25
+# (the production density). Prune only — compact_step and routing.route_start stay never
+# (inherited from tul_a2): masked-dense execution, no MORTAR carve, no ReMoE routing.
+# Prereg: lab/experiments/planned/2026-09-09-arc-density-panel.md
+defaults:
+  - notul_parcae_entry
+  - _self_
+
+training:
+  prune_start: 1500       # after the 1000-step LR ramp
+  prune_interval: 25      # ~46 events to target (step ~2650)
+  prune_rate: 0.03
+  target_density: 0.25
+
+wandb:
+  name: density-quarter

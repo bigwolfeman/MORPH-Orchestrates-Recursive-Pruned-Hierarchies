@@ -123,3 +123,21 @@ def probe_stats(path: str, window: tuple[int, int] = (1000, 5000)) -> dict:
         out.update(gain_mean=round(float(np.mean(g)), 4), gain_max=round(float(max(g)), 4),
                    hinge_frac=round(sum(1 for r in w if r.get("loss/gain_reg_weighted", 0) > 0) / len(w), 4))
     return out
+
+
+def last_prune(log: str) -> tuple[int, float] | None:
+    """(step, density) from the trainer's LAST `[prune] step N: ... density=D` line, or None
+    if the run never pruned (the CLAUDE.md gotcha: a 'sparse' run whose density never fell)."""
+    hits = re.findall(r"\[prune\] step (\d+): .*?density=([0-9.]+)", open(log).read())
+    return (int(hits[-1][0]), float(hits[-1][1])) if hits else None
+
+
+def prune_at(log: str, step: int) -> float | None:
+    """Density after the last prune event at or before `step` (1.0 if none yet), or None if
+    the run never pruned."""
+    hits = [(int(s), float(d)) for s, d in
+            re.findall(r"\[prune\] step (\d+): .*?density=([0-9.]+)", open(log).read())]
+    if not hits:
+        return None
+    before = [d for s, d in hits if s <= step]
+    return before[-1] if before else 1.0
