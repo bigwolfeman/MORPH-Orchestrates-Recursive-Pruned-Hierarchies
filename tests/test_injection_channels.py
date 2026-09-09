@@ -103,3 +103,86 @@ def test_bad_span_raises():
 def test_diagonal_injection_vector_init_shapes():
     with pytest.raises(AssertionError):
         DiagonalInjection(0, 8, init_decay_vec=torch.ones(4), init_dt_vec=torch.ones(8))
+
+
+# ── Parcae's loop entry, faithful (2026-09-09): learned B on the injected e, uniform
+# all-dim init, and the noise state init ─────────────────────────────────────────────
+
+
+def test_B_identity_init_reproduces_the_forward_bit_for_bit():
+    torch.manual_seed(5)
+    e = torch.randn(2, 7, 64)
+    h = torch.randn(2, 7, 64)
+    a = DiagonalInjection(0, 64, init_decay_vec=torch.full((64,), 0.447),
+                          init_dt_vec=torch.full((64,), 0.8))
+    b = DiagonalInjection(0, 64, init_decay_vec=torch.full((64,), 0.447),
+                          init_dt_vec=torch.full((64,), 0.8), use_B=True)
+    assert b.B is not None and torch.equal(b.B, torch.eye(64)) and a.B is None
+    assert torch.equal(a(h, e), b(h, e))
+    with torch.no_grad():
+        b.B.mul_(2.0)
+    assert torch.allclose(b(h, e), 0.447 * h + 0.8 * 2.0 * e, atol=1e-5)
+
+
+def test_all_with_uniform_dt_sets_every_dim_including_ctx():
+    m = _model(injection_channels="all", injection_all_decay=0.447, injection_all_dt=0.8,
+               injection_B=True)
+    A, dt = m.injection.log_A.exp(), m.injection.log_dt.exp()
+    assert torch.allclose(A, torch.full((64,), 0.447)) and torch.allclose(dt, torch.full((64,), 0.8))
+    assert m.injection.B.shape == (64, 64) and torch.equal(m.injection.B, torch.eye(64))
+
+
+def test_B_and_noise_init_add_no_decayed_and_no_ternary_parameters():
+    from morph.training.optimizer import _split_by_decay
+    m = _model(injection_channels="all", injection_all_decay=0.447, injection_all_dt=0.8,
+               injection_B=True, core_state_init="noise")
+    _, _, decay_n, no_decay_n = _split_by_decay(m)
+    assert "injection.B" in no_decay_n and "injection.B" not in decay_n
+    assert not any(n.startswith("core_init") for n, _ in m.named_parameters())
+
+
+def test_noise_state_init_is_small_noise_and_the_forward_runs():
+    m = _model(injection_channels="all", injection_all_decay=0.447, injection_all_dt=0.8,
+               injection_B=True, core_state_init="noise", core_state_init_std=0.02)
+    e = torch.randn(3, 11, 64)
+    torch.manual_seed(1)
+    h0 = m.core_init(e)
+    assert h0.shape == e.shape and abs(float(h0.std()) - 0.02) < 0.005
+    assert not torch.allclose(h0, e)
+    torch.manual_seed(1)
+    assert torch.equal(m.core_init(e), h0)  # seed-deterministic, e-independent
+    x = torch.randint(0, V, (2, 32))
+    out = m(x, labels=x)
+    assert torch.isfinite(out["loss"]) and out["loss"].item() > 0
+    out["loss"].backward()
+    assert m.injection.B.grad is not None and torch.isfinite(m.injection.B.grad).all()
+
+
+def test_noise_state_init_requires_the_all_dim_carry():
+    with pytest.raises(ValueError, match="requires model.injection_channels='all'"):
+        _model(injection_channels="ctx", core_state_init="noise")
+    with pytest.raises(ValueError, match="core_state_init must be"):
+        _model(core_state_init="zeros")
+
+
+def test_prelude_state_init_is_the_shipped_entry():
+    m = _model()
+    e = torch.randn(2, 5, 64)
+    assert torch.equal(m.core_init(e), e) and m.injection.B is None
+
+
+def test_train_config_mapping_carries_the_loop_entry_keys():
+    """train.py maps model keys one by one; a key it does not name is dropped silently."""
+    from hydra import compose, initialize_config_dir
+    from morph.training.train import build_morph_config
+    import os
+    cfg_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "morph", "configs"))
+    with initialize_config_dir(version_base=None, config_dir=cfg_dir):
+        c = compose(config_name="notul_e19_loop")
+        loop = build_morph_config(c)
+        c = compose(config_name="notul_e18")
+        plain = build_morph_config(c)
+    assert (loop.injection_channels, loop.injection_all_dt, loop.injection_B,
+            loop.core_state_init, loop.core_fixed_point_lambda) == ("all", 0.8, True, "noise", 0.0)
+    assert (plain.injection_channels, plain.injection_all_dt, plain.injection_B,
+            plain.core_state_init) == ("ctx", None, False, "prelude")

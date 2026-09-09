@@ -1,0 +1,11 @@
+# E19 arm "fp0": the E18 plain recipe with the fixed-point term off and nothing else changed
+# (the one-factor control for the loop arm's lambda 0).
+defaults:
+  - notul_e18
+  - _self_
+
+model:
+  core_fixed_point_lambda: 0.0
+
+wandb:
+  name: e19-fp0

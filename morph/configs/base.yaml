@@ -166,6 +166,19 @@ model:
   # dims starting at decay injection_all_decay with dt = 1 - decay. Arc E9 (2026-09-07).
   injection_channels: ctx
   injection_all_decay: 0.9
+  # Parcae's loop entry, faithful (2026-09-09, arc E19; measured on Parcae-140m's OWT
+  # checkpoint: state starts as noise at 4 % of its converged scale, e re-injected on EVERY
+  # dim through a learned B, each recurrent block moves the state ~40 % per pass). With
+  # injection_channels "all": injection_all_dt sets ONE dt for every dim, ctx included (null
+  # keeps the E9 split init); injection_B adds the [d, d] identity-initialised B on the
+  # injected e (no weight decay, never ternarised). core_state_init "prelude" = h_0 = e (the
+  # shipped entry); "noise" = h_0 ~ N(0, core_state_init_std^2), requires "all". The
+  # measured MORPH entry (h_0 = e, ctx-only carry) leaves the recurrence 0.02 nats of work:
+  # .agents/notes/proposed/architecture/2026-09-09-depth-lobotomy-candidates.md.
+  injection_all_dt: null
+  injection_B: false
+  core_state_init: prelude
+  core_state_init_std: 0.02
   # Arc E10 loop terms on the core loop (`_core_region`: the plain model AND the paid TUL
   # loop; `_tul_core`: the slot loop, ported 2026-09-07 for the k=12 panel), 0 = off
   # (bit-identical).

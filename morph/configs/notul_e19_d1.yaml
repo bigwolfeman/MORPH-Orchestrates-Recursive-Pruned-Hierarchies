@@ -1,0 +1,14 @@
+# E19 arm "d1": the E18 plain recipe trained at core depth 1 (mean = max = bptt = 1), the
+# matched-tokens control that prices the loop: CE(looped arm at its depth) - CE(this arm).
+defaults:
+  - notul_e18
+  - _self_
+
+model:
+  mean_depth: 1
+  max_depth: 1
+  bptt_depth: 1
+  core_fixed_point_lambda: 0.0    # a one-iteration loop has no terminal pair to compare
+
+wandb:
+  name: e19-d1

@@ -1,0 +1,19 @@
+# E19 arm "loop": the plain model with Parcae's loop entry, faithful — the state starts as
+# small noise, e is re-injected on EVERY carrier dim through a learned B each iteration, no
+# fixed-point term (Parcae has none). Everything else is the E18 plain recipe (notul_e18).
+# Prereg: lab/experiments/planned/2026-09-09-arc-e19-parcae-loop-entry.md
+defaults:
+  - notul_e18
+  - _self_
+
+model:
+  injection_channels: all
+  injection_all_decay: 0.447      # Parcae's init target (exp(-dt), A_log = 0)
+  injection_all_dt: 0.8           # -log(0.447): the ZOH dt that gives that decay
+  injection_B: true
+  core_state_init: noise
+  core_state_init_std: 0.02
+  core_fixed_point_lambda: 0.0
+
+wandb:
+  name: e19-loop

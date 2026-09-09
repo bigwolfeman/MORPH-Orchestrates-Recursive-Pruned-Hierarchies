@@ -269,6 +269,23 @@ class MORPHConfig:
     # diag carry"]. Old checkpoints do not load into an "all" model (the carry is 768-wide).
     injection_channels: str = "ctx"
     injection_all_decay: float = 0.9
+    # Parcae's loop entry, faithful (arXiv 2604.12946 §4.1; measured on its 140m OWT
+    # checkpoint 2026-09-09: the state starts as noise at 4 % of its converged scale, the
+    # adapter re-injects e on EVERY channel through a learned B, and each recurrent block
+    # moves the state by ~40 % of its norm per pass; MORPH's h_0 = e entry with the ctx-only
+    # carry leaves the recurrence 0.02 nats of work — .agents/notes/proposed/architecture/
+    # 2026-09-09-depth-lobotomy-candidates.md). `injection_all_dt` (with "all"): one dt for
+    # EVERY dim, ctx included, replacing the legacy split init; None keeps the E9 init.
+    # `injection_B`: a full [d, d] identity-initialised matrix on the injected e (Parcae's
+    # `ssm_B_identity`); no weight decay (the `injection` keyword), never ternarised (a raw
+    # parameter, not a Linear). `core_state_init`: "prelude" = h_0 = e (the shipped entry);
+    # "noise" = h_0 ~ N(0, core_state_init_std^2) per element (Parcae's like-init; 0.02 is
+    # its embedding-init std), REQUIRES injection_channels "all" — with the ctx-only carry
+    # 704 of 1024 dims would stay noise forever.
+    injection_all_dt: float | None = None
+    injection_B: bool = False
+    core_state_init: str = "prelude"
+    core_state_init_std: float = 0.02
 
     # Arc E10 (2026-09-07), two loss terms on the PLAIN loop (`_core_region`), both 0 = off and
     # bit-identical; both training-only; both raise on the TUL slot path.
@@ -450,11 +467,15 @@ class DiagonalInjection(nn.Module):
     """
 
     def __init__(self, channel_start: int, channel_end: int, init_decay: float = 0.447,
-                 init_decay_vec: Tensor | None = None, init_dt_vec: Tensor | None = None):
+                 init_decay_vec: Tensor | None = None, init_dt_vec: Tensor | None = None,
+                 use_B: bool = False):
         super().__init__()
         self.start = channel_start
         self.end = channel_end
         d = channel_end - channel_start
+        # Parcae's B (identity init, no RNG draw): new_ctx = A * h_ctx + dt * (e_ctx @ B^T).
+        # Registered LAST so a model without it keeps byte-identical parameters and RNG.
+        self.B: nn.Parameter | None = nn.Parameter(torch.eye(d)) if use_B else None
         if init_decay_vec is None:
             self.log_A = nn.Parameter(torch.full((d,), float(init_decay)).log())
             self.log_dt = nn.Parameter(torch.zeros(d))
@@ -469,6 +490,8 @@ class DiagonalInjection(nn.Module):
         dt = self.log_dt.exp()
         h_ctx = h[..., self.start:self.end]
         e_ctx = e[..., self.start:self.end]
+        if self.B is not None:
+            e_ctx = e_ctx @ self.B.to(e_ctx.dtype).T
         new_ctx = A * h_ctx + dt * e_ctx
         return torch.cat([h[..., :self.start], new_ctx, h[..., self.end:]], dim=-1)
 
@@ -517,6 +540,24 @@ class _CloneInit(nn.Module):
 
     def forward(self, e: Tensor) -> Tensor:
         return e.clone()
+
+
+class _NoiseInit(nn.Module):
+    """``h_0 ~ N(0, std^2)`` per element — Parcae's ``like-init`` loop entry.
+
+    The loop state starts as small noise (Parcae 140m: std 0.023 against a converged state
+    RMS of 0.56 per element) and the coda can only read what the recurrence builds from the
+    injected ``e``: the identity-loop solution ``h_T = h_0`` is not available. No
+    parameters, so building it draws no RNG; the forward draws ``randn`` on every call,
+    training and eval alike (as Parcae does).
+    """
+
+    def __init__(self, std: float):
+        super().__init__()
+        self.std = float(std)
+
+    def forward(self, e: Tensor) -> Tensor:
+        return torch.randn_like(e) * self.std
 
 
 class _SCSEInit(nn.Module):
@@ -977,15 +1018,23 @@ class MORPHTransformer(nn.Module):
         # ── Loop state transition ─────────────────────────────────────
         self.input_norm = RMSNorm(d)
         if cfg.injection_channels == "ctx":
-            self.injection = DiagonalInjection(self._ctx_start, self._ctx_end)
+            self.injection = DiagonalInjection(self._ctx_start, self._ctx_end,
+                                               use_B=cfg.injection_B)
         elif cfg.injection_channels == "all":
             _dec = torch.full((d,), float(cfg.injection_all_decay))
-            _dt = 1.0 - _dec
-            _dec[self._ctx_start:self._ctx_end] = 0.447
-            _dt[self._ctx_start:self._ctx_end] = 1.0
-            self.injection = DiagonalInjection(0, d, init_decay_vec=_dec, init_dt_vec=_dt)
-            print(f"  CARRY: diagonal injection on ALL {d} dims (ctx legacy 0.447/1.0; rest "
-                  f"decay {cfg.injection_all_decay}, dt {1 - cfg.injection_all_decay:.3f})")
+            if cfg.injection_all_dt is None:
+                _dt = 1.0 - _dec
+                _dec[self._ctx_start:self._ctx_end] = 0.447
+                _dt[self._ctx_start:self._ctx_end] = 1.0
+                _desc = (f"ctx legacy 0.447/1.0; rest decay {cfg.injection_all_decay}, "
+                         f"dt {1 - cfg.injection_all_decay:.3f}")
+            else:
+                _dt = torch.full((d,), float(cfg.injection_all_dt))
+                _desc = f"every dim decay {cfg.injection_all_decay}, dt {cfg.injection_all_dt}"
+            self.injection = DiagonalInjection(0, d, init_decay_vec=_dec, init_dt_vec=_dt,
+                                               use_B=cfg.injection_B)
+            print(f"  CARRY: diagonal injection on ALL {d} dims ({_desc}"
+                  f"{'; learned B (identity init)' if cfg.injection_B else ''})")
         else:
             raise ValueError(f"model.injection_channels must be 'ctx' or 'all', "
                              f"got {cfg.injection_channels!r}")
@@ -1203,8 +1252,21 @@ class MORPHTransformer(nn.Module):
         # and `_SCSEInit` draws its Linear init AFTER every other parameter, so a baseline
         # model and an SCSE model built from the same seed share byte-identical weights
         # everywhere except this projection. The arms then differ by the mechanism alone.
+        if cfg.core_state_init not in ("prelude", "noise"):
+            raise ValueError(f"model.core_state_init must be 'prelude' or 'noise', "
+                             f"got {cfg.core_state_init!r}")
+        if cfg.core_state_init == "noise":
+            if cfg.injection_channels != "all":
+                raise ValueError(
+                    "model.core_state_init='noise' requires model.injection_channels='all': "
+                    "with the ctx-only carry the other carrier dims would never receive e and "
+                    "stay noise for the whole loop.")
+            if cfg.core_init_scale > 0.0 or cfg.scse_enabled:
+                raise ValueError("model.core_state_init='noise' is not defined with "
+                                 "core_init_scale > 0 or scse_enabled (both are h_0 = e entries).")
         self.core_init: nn.Module = (
             _SCSEInit(d, cfg.core_init_scale) if cfg.core_init_scale > 0.0
+            else _NoiseInit(cfg.core_state_init_std) if cfg.core_state_init == "noise"
             else _CloneInit())
 
         # ── SCSE, the full method (docs/scse-spec.md) ──────────────────────────────
