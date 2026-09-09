@@ -5,16 +5,18 @@ fatal at 30B (60-120 GB). This module materializes the DEPLOY-EFFECTIVE weights 
 their real storage cost:
 
   - MLP backbone (post prune_step_blocks + carve, MORTAR BCSR 0.25): mortar_data is
-    ternarized with the EXACT ``CMSBlockLinear._mortar_effective_data`` formula
-    (per-tensor symmetric, threshold 0.5) and packed 4 codes/byte (2-bit). The bf16
-    mortar_data parameter is DELETED; an instance-bound ``_mortar_effective_data``
-    override dequantizes into a transient bf16 buffer per forward, feeding the
-    unchanged ``_forward_mortar`` / stk BCSR kernel path.
-  - Dense backbone Linears (x0/value ChannelInject projs, LMHeadMixer.mix): same
-    per-tensor symmetric ternary (``TernarySTE`` scope=backbone semantics), packed
-    2-bit, exposed as an ``nn.Linear`` subclass whose ``weight`` is a dequantizing
-    property (so ``isinstance(..., nn.Linear)`` guards and direct ``.weight`` reads
-    — e.g. ``ChannelInject.precompute`` — keep working byte-for-byte).
+    ternarized with the EXACT ``CMSBlockLinear._mortar_effective_data`` rule — the
+    threshold and scale mode the layer TRAINED with (persisted in its ``mortar_ternary``
+    buffer: ``symmetric`` or ``norm_match``, ``morph.model.ternary_rule``) — and packed
+    4 codes/byte (2-bit). The bf16 mortar_data parameter is DELETED; an instance-bound
+    ``_mortar_effective_data`` override dequantizes into a transient bf16 buffer per
+    forward, feeding the unchanged ``_forward_mortar`` / stk BCSR kernel path.
+  - Dense backbone Linears (x0/value ChannelInject projs, LMHeadMixer.mix): the same
+    per-tensor ternary rule read off the ``TernarySTE`` parametrization (scope=backbone
+    semantics; its mode and threshold, never a re-derived one), packed 2-bit, exposed
+    as an ``nn.Linear`` subclass whose ``weight`` is a dequantizing property (so
+    ``isinstance(..., nn.Linear)`` guards and direct ``.weight`` reads — e.g.
+    ``ChannelInject.precompute`` — keep working byte-for-byte).
   - Attention projections: per-output-row int8 (EXACT ``IntNLinearSTE`` semantics:
     s_row = absmax/127, codes = round(w/s).clamp(±127)), stored as int8 codes +
     fp32 row scales.
@@ -37,6 +39,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from morph.model.sparsity import MortarLinear
+from morph.model.ternary_rule import EXPORTABLE_SCALE_MODES, ternary_codes_and_scale
 
 __all__ = [
     "pack_ternary_codes", "unpack_ternary", "extract_ternary_from_parametrized",
@@ -78,42 +81,44 @@ def unpack_ternary(packed: Tensor, numel: int, dtype: torch.dtype) -> Tensor:
     return u.reshape(-1)[:numel].to(dtype) - 1.0
 
 
-def _ternary_quantize(w: Tensor, threshold: float = 0.5) -> tuple[Tensor, Tensor]:
-    """EXACT TernarySTE symmetric per-tensor effective-weight quantization.
+def _ternary_quantize(w: Tensor, threshold: float = 0.5,
+                      scale_mode: str = "symmetric") -> tuple[Tensor, Tensor]:
+    """EXACT per-tensor effective-weight quantization under ``scale_mode`` (the shared
+    rule ``morph.model.ternary_rule.ternary_codes_and_scale``, fp32, identity encoder —
+    what ``CMSBlockLinear._mortar_effective_data`` computes on a carved layer).
 
     Returns (codes ∈ {-1,0,+1} int8, scale fp32 scalar). Effective weight = scale·codes.
 
-    NOTE: this re-derives the scale from `mean(|w|)`. It is CORRECT only when `w` is the
-    smooth *shadow* weight (the live parameter). It is WRONG if `w` is the already-ternarized
-    STE *output* (mean(|γ·codes|) ≠ mean(|shadow|)). For a parametrized module use
-    ``extract_ternary_from_parametrized`` which reads the shadow from the parametrization.
+    NOTE: this derives the scale from the smooth *shadow* weight `w` (the live parameter).
+    It is WRONG on an already-ternarized STE *output* (mean(|γ·codes|) ≠ mean(|shadow|)).
+    For a parametrized module use ``extract_ternary_from_parametrized`` which reads the
+    shadow, the threshold AND the mode from the parametrization.
     """
-    wf = w.detach().float()
-    scale = wf.abs().mean().clamp(min=1e-8)
-    wn = wf / scale
-    q = (torch.sign(wn) * (wn.abs() > threshold)).to(torch.int8)
-    return q, scale
+    q, scale = ternary_codes_and_scale(w.detach().float(), threshold, scale_mode)
+    return q.to(torch.int8), scale
 
 
 def extract_ternary_from_parametrized(
     module: nn.Module, param_name: str = "weight",
 ) -> tuple[Tensor, Tensor, dict]:
     """Extract (codes_int8 [out,in] ∈ {-1,0,+1}, scale, meta) from a TernarySTE-parametrized
-    module, reproducing the STE forward output ``module.weight`` BIT-EXACTLY.
+    module, reproducing the STE forward output ``module.weight`` (``scale·codes``) to
+    floating-point round-off.
 
-    This mirrors ``ternary_qat._apply_grouped_ste`` exactly (symmetric mode), but reads the
-    smooth *shadow* parameter from the parametrization so the scale is the true ``mean(|W|)``
-    the forward uses — NOT the degenerate ``mean(|γ·codes|)`` you would get by re-quantizing
-    the STE output. Handles:
+    The rule is ``morph.model.ternary_rule.ternary_codes_and_scale`` under the
+    parametrization's OWN mode and threshold (``symmetric`` or ``norm_match``), reading
+    the smooth *shadow* parameter so the scale is the one the forward uses — NOT the
+    degenerate ``mean(|γ·codes|)`` you would get by re-quantizing the STE output. Handles:
       - per-tensor scale (group=0, the deployed case) and grouped scale (group=64/128),
       - fp16 / int8 / pow2 scale-encoding (the same ``_encode_scale_*`` the forward applies),
-      - the optional per-group ``_scale_cap`` buffer (scale_clip_mult > 0).
+      - the optional per-group ``_scale_cap`` buffer (symmetric mode, scale_clip_mult > 0).
+    The learnable ``ttq`` / ``dual`` modes have no packed representation and raise.
 
     Returns
     -------
     codes : int8 [out, in], values in {-1, 0, +1}
     scale : fp32. Shape [1] for per-tensor; [n_groups] for grouped (per-output-row-group).
-    meta  : dict {group, n_groups, mode, scale_dtype, out, in, group_size}
+    meta  : dict {group, n_groups, mode, threshold, scale_dtype, out, in, group_size}
     """
     import torch.nn.utils.parametrize as parametrize
     from morph.model.ternary_qat import TernarySTE, _SCALE_ENCODERS
@@ -124,59 +129,44 @@ def extract_ternary_from_parametrized(
     ste = plist[0]
     if not isinstance(ste, TernarySTE):
         raise TypeError(f"parametrization is {type(ste).__name__}, not TernarySTE")
-    if ste.mode != "symmetric":
+    if ste.mode not in EXPORTABLE_SCALE_MODES:
         raise NotImplementedError(
-            f"extract_ternary_from_parametrized supports symmetric mode only "
+            f"extract_ternary_from_parametrized supports {EXPORTABLE_SCALE_MODES} "
             f"(got mode={ste.mode!r}); ttq/dual carry learnable γ that the packed "
             f"per-tensor/group scale format does not represent.")
 
     shadow = plist.original.detach()              # smooth weight, native dtype
     out_dim, in_dim = shadow.shape
     thr = ste.threshold
+    mode = ste.mode
     group = ste.group                             # 0 → per-tensor
     encode = _SCALE_ENCODERS[ste.scale_dtype]
     cap = getattr(ste, "_scale_cap", None)        # buffer or None
 
-    def _scale_for(w_part: Tensor, gidx: int) -> Tensor:
-        # mean(|.|) clamped, encoded, then capped — EXACT order of _apply_grouped_ste.
-        s_raw = w_part.abs().mean().clamp(min=1e-8).unsqueeze(0)
-        s = encode(s_raw)[0]
-        if cap is not None:
-            s = torch.minimum(s, cap[gidx])
-        return s
+    def _group(w_part: Tensor, gidx: int) -> tuple[Tensor, Tensor]:
+        # The shared rule: encoded absmean (capped) → codes → the mode's scale.
+        return ternary_codes_and_scale(
+            w_part, thr, mode, encode,
+            scale_cap=None if cap is None else cap[gidx])
 
     if group <= 0 or group >= out_dim:
         # ── per-tensor ──
-        scale = _scale_for(shadow, 0)
-        w_n = shadow / scale
-        q = torch.sign(w_n) * (w_n.abs() > thr).to(shadow.dtype)
-        codes = q.to(torch.int8)
-        scale_out = scale.reshape(1).float().contiguous()
-        meta = {"group": 0, "n_groups": 1, "mode": "symmetric",
+        q, scale = _group(shadow, 0)
+        meta = {"group": 0, "n_groups": 1, "mode": mode, "threshold": thr,
                 "scale_dtype": ste.scale_dtype, "out": out_dim, "in": in_dim,
                 "group_size": 0}
-        return codes.contiguous(), scale_out, meta
+        return q.to(torch.int8).contiguous(), scale.reshape(1).float().contiguous(), meta
 
-    # ── grouped (per output-row-group) ──
-    n_full = out_dim // group
-    remainder = out_dim % group
-    n_groups = n_full + (1 if remainder else 0)
+    # ── grouped (per output-row-group; a ragged last group on its own) ──
     codes = torch.empty_like(shadow, dtype=torch.int8)
     scales: list[Tensor] = []
-    for g in range(n_full):
-        sl = slice(g * group, (g + 1) * group)
-        s = _scale_for(shadow[sl], g)
-        w_n = shadow[sl] / s
-        codes[sl] = (torch.sign(w_n) * (w_n.abs() > thr).to(shadow.dtype)).to(torch.int8)
-        scales.append(s.reshape(1))
-    if remainder:
-        sl = slice(n_full * group, out_dim)
-        s = _scale_for(shadow[sl], n_full)
-        w_n = shadow[sl] / s
-        codes[sl] = (torch.sign(w_n) * (w_n.abs() > thr).to(shadow.dtype)).to(torch.int8)
+    for gidx, start in enumerate(range(0, out_dim, group)):
+        sl = slice(start, min(start + group, out_dim))
+        q, s = _group(shadow[sl], gidx)
+        codes[sl] = q.to(torch.int8)
         scales.append(s.reshape(1))
     scale_out = torch.cat(scales).float().contiguous()  # [n_groups]
-    meta = {"group": group, "n_groups": n_groups, "mode": "symmetric",
+    meta = {"group": group, "n_groups": len(scales), "mode": mode, "threshold": thr,
             "scale_dtype": ste.scale_dtype, "out": out_dim, "in": in_dim,
             "group_size": group}
     return codes.contiguous(), scale_out, meta
@@ -211,22 +201,24 @@ class PackedTernaryLinear(nn.Linear):
         self.register_parameter("bias", None)
 
     @classmethod
-    def from_linear(cls, lin: nn.Linear, threshold: float = 0.5) -> "PackedTernaryLinear":
+    def from_linear(cls, lin: nn.Linear, threshold: float = 0.5,
+                    scale_mode: str = "symmetric") -> "PackedTernaryLinear":
         """Quantize a PLAIN (non-parametrized) Linear from its dense .weight.
 
         For a TernarySTE-parametrized module use ``from_parametrized`` instead —
         re-deriving the scale from the STE *output* gives the wrong γ.
         """
         assert lin.bias is None, "packed ternary path expects bias-free Linears"
-        q, scale = _ternary_quantize(lin.weight.data, threshold)
+        q, scale = _ternary_quantize(lin.weight.data, threshold, scale_mode)
         return cls(lin.in_features, lin.out_features,
                    pack_ternary_codes(q), scale.reshape(1).float(),
                    dtype=lin.weight.dtype, group_size=0)
 
     @classmethod
     def from_parametrized(cls, lin: nn.Module) -> "PackedTernaryLinear":
-        """Build from a TernarySTE-parametrized Linear (symmetric mode), reproducing
-        the STE forward output bit-exactly. Reads the smooth shadow for the true scale.
+        """Build from a TernarySTE-parametrized Linear (``symmetric`` or ``norm_match``),
+        reproducing the STE forward output to round-off. Reads the smooth shadow, the
+        threshold and the mode from the parametrization.
         """
         assert getattr(lin, "bias", None) is None, "packed ternary path expects bias-free Linears"
         codes, scale, meta = extract_ternary_from_parametrized(lin, "weight")
@@ -341,21 +333,42 @@ class Int6RowEmbedding(nn.Module):
 # MORTAR carved-MLP packing
 # ─────────────────────────────────────────────────────────────────────────────
 
-def pack_mortar_ternary(cms: nn.Module, threshold: float = 0.5) -> dict:
+def pack_mortar_ternary(cms: nn.Module, threshold: float | None = None,
+                        scale_mode: str | None = None) -> dict:
     """Ternarize + 2-bit-pack a carved CMSBlockLinear's mortar_data IN PLACE.
 
-    Quantization is the EXACT ``_mortar_effective_data`` per-tensor symmetric formula.
+    Quantization is the EXACT ``_mortar_effective_data`` per-tensor rule. On a layer whose
+    values-ternary QAT is ON (a trained checkpoint), the threshold and scale mode are the
+    ones the layer TRAINED with (persisted in ``mortar_ternary``); an explicit argument
+    that contradicts them raises, because packing a model at a rule it did not train
+    under is a silent quality change. On a layer that never ran values-ternary QAT (the
+    random-saliency systems path), the arguments apply, defaulting to symmetric / 0.5.
+    The packer turns the live STE off itself (it bakes the snap).
+
     The bf16 ``mortar_data`` parameter is deleted; ``_mortar_effective_data`` is
     rebound on the INSTANCE to dequantize from the packed buffer, so the unchanged
     ``_forward_mortar`` / stk BCSR kernel path consumes it transparently.
     """
     assert getattr(cms, "_mortar", False), "pack_mortar_ternary requires a carved layer"
-    assert not getattr(cms, "_values_ternary_mode", False), \
-        "pack bakes the ternary snap; values-ternary STE must be OFF"
+    if getattr(cms, "_values_ternary_mode", False):
+        trained_thr = float(cms._values_threshold)
+        trained_mode = str(cms._values_scale_mode)
+        if threshold is not None and abs(float(threshold) - trained_thr) > 1e-9:
+            raise ValueError(
+                f"pack_mortar_ternary: layer trained at threshold {trained_thr}, "
+                f"explicit threshold={threshold} would change the deployed weights")
+        if scale_mode is not None and scale_mode != trained_mode:
+            raise ValueError(
+                f"pack_mortar_ternary: layer trained under scale_mode={trained_mode!r}, "
+                f"explicit scale_mode={scale_mode!r} would change the deployed weights")
+        threshold, scale_mode = trained_thr, trained_mode
+        cms._values_ternary_mode = False          # bake the snap; the live STE is over
+    threshold = 0.5 if threshold is None else float(threshold)
+    scale_mode = "symmetric" if scale_mode is None else scale_mode
 
     data = cms.mortar_data.data
     shape = tuple(data.shape)                       # [nnz, blk, blk]
-    q, scale = _ternary_quantize(data, threshold)
+    q, scale = _ternary_quantize(data, threshold, scale_mode)
     packed = pack_ternary_codes(q)
 
     del cms._parameters["mortar_data"]              # free the bf16 shadow
@@ -371,7 +384,8 @@ def pack_mortar_ternary(cms: nn.Module, threshold: float = 0.5) -> dict:
     cms._mortar_effective_data = types.MethodType(_packed_effective_data, cms)
     nz = int(q.ne(0).sum().item())
     return {"nnz_blocks": shape[0], "packed_bytes": packed.numel(),
-            "scale": float(scale), "nonzero_code_frac": nz / max(1, q.numel())}
+            "scale": float(scale), "threshold": threshold, "scale_mode": scale_mode,
+            "nonzero_code_frac": nz / max(1, q.numel())}
 
 
 # Training-only CMS buffer(s) to empty for inference. (The legacy topology buffers
@@ -496,7 +510,7 @@ def _proj_numel(proj: nn.Module) -> int:
 
 
 def materialize_top_level(model: nn.Module, device: str | torch.device = "cuda",
-                          embed_bits: int = 6, threshold: float = 0.5) -> dict:
+                          embed_bits: int = 6, threshold: float | None = None) -> dict:
     """Deploy-format the NON-block modules of a MORPHTransformer, in place.
 
     euc/bigram embeds → int6-in-int8 rows; x0/value ChannelInject projs + LMHeadMixer.mix
@@ -504,10 +518,13 @@ def materialize_top_level(model: nn.Module, device: str | torch.device = "cuda",
     value-embed tables, norms, LoopSSM → bf16 (deploy stack keeps them full precision).
     Finishes with model.to(device) for the bf16 remainder.
 
-    Backbone-proj packing reads the TernarySTE shadow via ``from_parametrized`` when the proj
-    is parametrized (the deploy case) — re-deriving the scale from the STE output is wrong.
+    Backbone-proj packing reads the TernarySTE shadow, threshold and mode via
+    ``from_parametrized`` when the proj is parametrized (the deploy case) — re-deriving the
+    scale from the STE output is wrong. ``threshold`` applies only to a PLAIN proj
+    (``None`` → 0.5).
     """
     import torch.nn.utils.parametrize as parametrize
+    threshold = 0.5 if threshold is None else float(threshold)
     stats: dict = {"int6_embeds": [], "ternary_dense": []}
     hy = model.embed.hybrid
     n_emb = hy.euc_embed.weight.numel() + model.embed.bigram.embed.weight.numel()
@@ -562,7 +579,7 @@ def quantize_attention_linears(module: nn.Module, bits: int = 8) -> int:
 
 def to_deploy_inference(model: nn.Module, device: str | torch.device = "cuda",
                         attn_bits: int = 8, embed_bits: int = 6,
-                        threshold: float = 0.5) -> dict:
+                        threshold: float | None = None) -> dict:
     """Compose the full DEPLOY-QUANT inference build for an ALREADY-CARVED, ALREADY-TERNARY-QAT
     real trained checkpoint, IN PLACE. After this, the StaticDecodeEngine auto-detects
     ``deploy_quant=True`` (via the int8/row attention Linears) and uses the int8/2-bit/bf16
@@ -572,8 +589,10 @@ def to_deploy_inference(model: nn.Module, device: str | torch.device = "cuda",
       1. ``materialize_top_level`` — euc/bigram embeds → int6/row; x0/value ChannelInject
          projs + lm_mixer.mix → packed-2bit ternary (from_parametrized when parametrized).
       2. ``quantize_attention_linears`` over every Attention subtree → int8/row.
-      3. For each CARVED CMSBlockLinear (``_mortar`` True): disable values-ternary STE,
-         ``pack_mortar_ternary`` (2-bit BCSR), ``strip_cms_inference`` (free training buffers).
+      3. For each CARVED CMSBlockLinear (``_mortar`` True): ``pack_mortar_ternary`` at the
+         threshold and scale mode the layer TRAINED with (2-bit BCSR; it turns the live
+         values-ternary STE off), ``strip_cms_inference`` (free training buffers).
+    ``threshold`` reaches only layers that never ran ternary QAT (``None`` → 0.5).
 
     This is for the carved MLPs that ALREADY exist from ``load_checkpoint`` — it does NOT call
     ``shrink_block`` / ``shrink_mlp_to_mortar_ternary`` (those re-prune with random saliency,
@@ -597,9 +616,9 @@ def to_deploy_inference(model: nn.Module, device: str | torch.device = "cuda",
     mortar_freed = 0
     for m in model.modules():
         if type(m).__name__ == "CMSBlockLinear" and getattr(m, "_mortar", False):
-            # The packer bakes the ternary snap; the live values-ternary STE must be OFF.
-            m._values_ternary_mode = False
-            pack_mortar_ternary(m, threshold=threshold)
+            # The packer bakes the ternary snap at the layer's TRAINED rule (it turns the
+            # live values-ternary STE off); `threshold` reaches only never-QAT layers.
+            pack_mortar_ternary(m, threshold=None if m._values_ternary_mode else threshold)
             mortar_freed += strip_cms_inference(m)
             mlps_packed += 1
 
@@ -641,7 +660,7 @@ def _cms_carved_packed(m: nn.Module) -> bool:
 
 
 def ensure_deploy_packed(model: nn.Module, attn_bits: int = 8,
-                         threshold: float = 0.5) -> dict:
+                         threshold: float | None = None) -> dict:
     """Make a CARVED-BUT-UNPACKED training/SFT checkpoint engine-ready, IN PLACE.
 
     The ``StaticDecodeEngine`` fast path requires the DEPLOY storage format produced by
@@ -679,8 +698,8 @@ def ensure_deploy_packed(model: nn.Module, attn_bits: int = 8,
     # Pack only the carved-but-unpacked MLPs (idempotent: packed ones are skipped).
     n_mlp_packed = 0
     for cms in carved_unpacked:
-        cms._values_ternary_mode = False   # bake the snap; live values-ternary STE must be off
-        pack_mortar_ternary(cms, threshold=threshold)
+        # Bake the snap at the layer's TRAINED rule; `threshold` reaches never-QAT layers.
+        pack_mortar_ternary(cms, threshold=None if cms._values_ternary_mode else threshold)
         strip_cms_inference(cms)
         n_mlp_packed += 1
 

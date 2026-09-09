@@ -275,6 +275,9 @@ class CMSBlockLinear(nn.Module):
         # carved forward applies the STE.
         self._values_ternary_mode = False
         self._values_threshold = 0.5
+        # The scale rule the carved STE applies (morph.model.ternary_rule): the SAME rule
+        # the dense TernarySTE ran before the carve; persisted in the mortar_ternary buffer.
+        self._values_scale_mode = "symmetric"
         # MORTAR (Macro-Orchestrated Routing and Tile-Aligned Recompaction): post-carve
         # BCSR block-sparse mode executing 128×128 blocks via the vendored stk Triton
         # backend (morph.sparse.stk). A layer is dense OR MORTAR-carved.
@@ -400,21 +403,28 @@ class CMSBlockLinear(nn.Module):
         result = scale * (w_scaled + (w_ternary - w_scaled).detach())
         return result.permute(0, 2, 1, 3).reshape(self.out_features, self.in_features)
 
-    def enable_values_ternary(self, threshold: float = 0.5) -> None:
-        """Continue ternary QAT on the post-carve ``mortar_data`` (per-tensor symmetric).
+    def enable_values_ternary(self, threshold: float = 0.5,
+                              scale_mode: str = "symmetric") -> None:
+        """Continue ternary QAT on the post-carve ``mortar_data`` (per-tensor).
 
         ``mortar_data`` stays the smooth trainable shadow; the carved forward applies the
-        STE so the effective sparse weight is ternary. Mirrors the dense ``_ternary_mode``
-        path. Per-tensor symmetric (the deploy ``scale_group='tensor'`` config).
+        STE under ``scale_mode`` (``morph.model.ternary_rule``: ``symmetric`` or
+        ``norm_match``, the rule the dense STE ran before the carve) so the effective
+        sparse weight is ternary. Per-tensor (the deploy ``scale_group='tensor'`` config).
         """
+        from morph.model.ternary_rule import scale_mode_code
+
         assert not self._dense_mode, "enable_values_ternary requires a carved (sparse) layer"
+        code = scale_mode_code(scale_mode)          # raises on ttq / dual
         self._values_ternary_mode = True
         self._values_threshold = float(threshold)
+        self._values_scale_mode = scale_mode
         # MORTAR persists these flags in a buffer so they survive save/load.
         mt = getattr(self, "mortar_ternary", None)
         if mt is not None:
             mt[0] = 1.0
             mt[1] = float(threshold)
+            mt[2] = float(code)
 
     def update_ternary_scales(self) -> None:
         """Recompute per-tile scales from current shadow weights."""
@@ -787,13 +797,18 @@ class CMSBlockLinear(nn.Module):
         self.register_buffer("mortar_column_indices_t", column_indices_t)
         self.register_buffer("mortar_offsets_t", offsets_t)
         self.register_buffer("mortar_block_offsets_t", block_offsets_t)
-        # Persisted ternary-QAT state: [flag, threshold]. A plain attr would be lost
-        # across save/load; a buffer rides state_dict. Only exists post-carve, so no
-        # back-compat impact on pre-MORTAR checkpoints.
+        # Persisted ternary-QAT state: [flag, threshold, scale-mode code]. A plain attr
+        # would be lost across save/load; a buffer rides state_dict. Only exists
+        # post-carve, so no back-compat impact on pre-MORTAR checkpoints. Checkpoints
+        # written before 2026-09-09 hold [flag, threshold]; the load hook pads them
+        # (mode symmetric, the only rule that existed).
+        from morph.model.ternary_rule import scale_mode_code
+
         self.register_buffer(
             "mortar_ternary",
             torch.tensor(
-                [1.0 if self._values_ternary_mode else 0.0, self._values_threshold],
+                [1.0 if self._values_ternary_mode else 0.0, self._values_threshold,
+                 float(scale_mode_code(self._values_scale_mode))],
                 dtype=torch.float32, device=data.device,
             ),
         )
@@ -907,15 +922,18 @@ class CMSBlockLinear(nn.Module):
         return nnz
 
     def _mortar_effective_data(self) -> Tensor:
-        """Carved weight actually used in forward: per-tensor symmetric ternary STE on
-        mortar_data when values-ternary QAT is on (forward = scale·q, gradient =
-        identity into the smooth mortar_data shadow)."""
+        """Carved weight actually used in forward: per-tensor ternary STE on mortar_data
+        under ``_values_scale_mode`` when values-ternary QAT is on (forward = scale·q,
+        gradient = identity into the smooth mortar_data shadow). The rule is
+        ``morph.model.ternary_rule.ternary_codes_and_scale`` with the identity scale
+        encoder — bit-identical to the pre-2026-09-09 inline absmean math for
+        ``symmetric``."""
         d = self.mortar_data
         if not getattr(self, "_values_ternary_mode", False):
             return d
-        scale = d.detach().abs().mean().clamp(min=1e-8)
-        d_norm = d / scale
-        q = torch.sign(d_norm) * (d_norm.abs() > self._values_threshold).to(d.dtype)
+        from morph.model.ternary_rule import ternary_codes_and_scale
+
+        q, scale = ternary_codes_and_scale(d, self._values_threshold, self._values_scale_mode)
         return d + (scale * q - d).detach()
 
     def _forward_mortar(self, x: Tensor) -> Tensor:
@@ -1017,8 +1035,17 @@ class CMSBlockLinear(nn.Module):
             # is created with the right values even if super()'s copy is elided.
             mt = state_dict.get(prefix + "mortar_ternary")
             if mt is not None:
+                from morph.model.ternary_rule import scale_mode_code, scale_mode_from_code
+
+                if mt.numel() == 2:
+                    # Pre-2026-09-09 layout [flag, threshold]: the only rule then was
+                    # symmetric. Pad IN the state_dict so super()'s buffer copy matches.
+                    mt = torch.cat([mt.to(torch.float32),
+                                    torch.tensor([float(scale_mode_code("symmetric"))])])
+                    state_dict[prefix + "mortar_ternary"] = mt
                 self._values_ternary_mode = bool(float(mt[0]) > 0)
                 self._values_threshold = float(mt[1])
+                self._values_scale_mode = scale_mode_from_code(mt[2])
 
             self._init_mortar_storage(
                 torch.empty_like(ckpt, device=dev),

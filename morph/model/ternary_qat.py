@@ -73,6 +73,11 @@ import torch
 import torch.nn as nn
 import torch.nn.utils.parametrize as parametrize
 from torch import Tensor
+
+from morph.model.ternary_rule import (
+    EXPORTABLE_SCALE_MODES,
+    ternary_codes_and_scale,
+)
 from typing import Callable
 
 # Which weight categories each scope quantizes.
@@ -284,7 +289,7 @@ def _apply_grouped_ste(
 class TernarySTE(nn.Module):
     """Ternary straight-through estimator parametrization.
 
-    Supports three scale modes, per-group scales, and scale-precision ablations.
+    Supports four scale modes, per-group scales, and scale-precision ablations.
     All dispatch decisions are resolved at construction time (branch-free hotpath).
 
     Parameters
@@ -295,7 +300,8 @@ class TernarySTE(nn.Module):
         Shape of the weight tensor being parametrized. Required to pre-allocate
         learnable parameters (ttq / dual modes).
     mode : str
-        "symmetric" | "ttq" | "dual".
+        "symmetric" | "norm_match" | "ttq" | "dual" (``morph.model.ternary_rule`` for the
+        two exportable rules; ``norm_match`` is the shipped recipe since 2026-09-09).
     group : int
         Group size along output dim. 0 → per-tensor (default).
     scale_dtype : str
@@ -458,34 +464,23 @@ class TernarySTE(nn.Module):
                                   scale_override=self._scale_ema)
 
     def _forward_norm_match(self, w: Tensor) -> Tensor:
-        """Symmetric codes with a norm-matching scale per group.
+        """Symmetric codes with a norm-matching scale per group (pure straight-through).
 
-        codes_g = sign(w) * (|w| > threshold * mean|W_g|)  (the absmean rule, unchanged)
-        s_g     = ||W_g||_F / sqrt(nnz_g)                    (so ||s_g * codes_g||_F == ||W_g||_F)
-        effective = w + (s_g * codes_g - w).detach()          (pure straight-through)
-
-        Per-tensor when group <= 0 or >= out_dim; per-group over out_dim otherwise (a ragged
-        last group is scaled on its own). The encode_scale dtype rule (fp16/int8/pow2) is
-        applied to s_g exactly as the symmetric path applies it to mean|W_g|.
+        The rule lives in ``morph.model.ternary_rule.ternary_codes_and_scale`` (shared with
+        the carved MORTAR path and the deploy packer): codes are the ``symmetric`` codes at
+        the encoded absmean, the scale is ``||W_g||_F / sqrt(nnz_g)`` so that the ternary
+        weight's Frobenius norm equals the latent's. Per-tensor when ``group <= 0`` or
+        ``>= out_dim``; per output-row group otherwise (a ragged last group on its own).
         """
         out_dim = w.shape[0]
-        thr = self.threshold
         if self.group <= 0 or self.group >= out_dim:
-            wd = w.detach()
-            g = wd.abs().mean().clamp(min=1e-8)
-            q = torch.sign(w) * ((w.abs() / g) > thr).to(w.dtype)
-            nnz = q.detach().ne(0).sum().clamp(min=1).to(wd.dtype)
-            s = self._encode_scale((wd.norm() / nnz.sqrt()).clamp(min=1e-8).reshape(1))[0]
+            q, s = ternary_codes_and_scale(w, self.threshold, "norm_match", self._encode_scale)
             return w + (s * q - w).detach()
         gs = self.group
         parts: list[Tensor] = []
         for start in range(0, out_dim, gs):
             w_g = w[start:start + gs]
-            wd = w_g.detach()
-            g = wd.abs().mean().clamp(min=1e-8)
-            q = torch.sign(w_g) * ((w_g.abs() / g) > thr).to(w.dtype)
-            nnz = q.detach().ne(0).sum().clamp(min=1).to(wd.dtype)
-            s = self._encode_scale((wd.norm() / nnz.sqrt()).clamp(min=1e-8).reshape(1))[0]
+            q, s = ternary_codes_and_scale(w_g, self.threshold, "norm_match", self._encode_scale)
             parts.append(w_g + (s * q - w_g).detach())
         return torch.cat(parts, dim=0)
 
@@ -752,7 +747,8 @@ def apply_ternary_qat(
     threshold : float
         Ternary threshold (default 0.5 — Bonsai).
     scale_mode : str
-        "symmetric" (default, bit-identical to pre-ablation) | "ttq" | "dual".
+        "symmetric" (bit-identical to pre-ablation) | "norm_match" (the recipe:
+        ``base.yaml`` ``training.ternary_scale_mode``) | "ttq" | "dual" (training-only).
     scale_group : str
         "tensor" (default) | "128" | "64" — group size along output dim (dim 0).
         For embeddings, dim 0 is the vocabulary axis (per-token-block scales).
@@ -858,23 +854,33 @@ def apply_ternary_qat(
     }
 
 
-def reparametrize_compacted_values_ternary(cms: nn.Module, threshold: float = 0.5) -> bool:
-    """Continue ternary QAT on a compacted CMS layer's ``values`` after compaction.
+def reparametrize_compacted_values_ternary(
+    cms: nn.Module, threshold: float = 0.5, scale_mode: str = "symmetric",
+) -> bool:
+    """Continue ternary QAT on a carved CMS layer's ``mortar_data`` after ``carve()``.
 
-    Call AFTER compact() and BEFORE the optimizer rebuild. Idempotent. Returns True if
+    Call AFTER carve() and BEFORE the optimizer rebuild. Idempotent. Returns True if
     values-ternary QAT was newly enabled. The smooth survivor values stay the trainable
-    shadow; the sparse forward applies a per-tensor symmetric STE so the effective sparse
-    weight is ternary ("keep pretraining the ternary model, now compacted").
+    shadow; the sparse forward applies the per-tensor STE under ``scale_mode`` (the SAME
+    rule the dense STE ran: ``morph.model.ternary_rule``) so the effective sparse weight
+    is ternary ("keep pretraining the ternary model, now carved").
+
+    ``scale_mode`` must be exportable (``symmetric`` / ``norm_match``); the learnable
+    ``ttq`` / ``dual`` scales cannot be carried through the carve and raise.
 
     NB: this uses the CMS internal STE flag (enable_values_ternary), NOT torch.parametrize
     — register_parametrization cannot bind a tensor named "values" (its parametrizations
     ModuleDict reserves the .values() method), so the parametrize path is impossible here.
     """
+    if scale_mode not in EXPORTABLE_SCALE_MODES:
+        raise NotImplementedError(
+            f"carve cannot carry ternary scale_mode={scale_mode!r}: the carved STE and the "
+            f"packed deploy format hold one scalar per tensor; choices={EXPORTABLE_SCALE_MODES}")
     if getattr(cms, "_dense_mode", True):
         raise RuntimeError(
             "reparametrize_compacted_values_ternary requires a compacted (sparse) layer"
         )
     if getattr(cms, "_values_ternary_mode", False):
         return False  # idempotent
-    cms.enable_values_ternary(threshold)
+    cms.enable_values_ternary(threshold, scale_mode)
     return True

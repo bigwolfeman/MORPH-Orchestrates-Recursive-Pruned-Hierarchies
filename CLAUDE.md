@@ -15,6 +15,13 @@ exists under `morph/jax/` but lags the PyTorch path (see gotcha below).
 > The JAX mirror (`morph/jax/model/`) still implements the old MRR residual and has
 > not been ported to HC-Cayley; do not assume PT/JAX parity.
 
+> **Ternary scale rule (2026-09-09): `training.ternary_scale_mode: norm_match`** — symmetric codes,
+> scale `‖W‖_F/√nnz` per tensor, ONE rule shared by the dense STE, the carved MORTAR path and the
+> deploy packer (`morph/model/ternary_rule.py`). The absmean rule (`symmetric`) starved the looped
+> core (MLP branch out/in 0.2, K1−K6 0.033 vs 0.9 / 0.185 under norm_match). `ttq` / `dual` are
+> training-only: the carve and the packer refuse them. Decision note:
+> [`2026-09-09-ternary-core-is-a-weak-per-pass-map.md`](.agents/notes/implemented/architecture/2026-09-09-ternary-core-is-a-weak-per-pass-map.md).
+>
 > **Source of truth for the training recipe is `morph/configs/base.yaml`** (heavily
 > commented). Current schedule: 1000-step linear LR ramp then flat 1e-4 (min_lr==lr), taylor saliency,
 > prune_start=3000 / prune_interval=167 (density hits 0.25 by ~step 27050) →

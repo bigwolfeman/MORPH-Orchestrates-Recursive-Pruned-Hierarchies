@@ -7,7 +7,7 @@ Status: rejected — the panel ran (2026-09-09) and refuted every candidate but 
 > panel (`lab/experiments/failures/2026-09-09-arc-e20-loop-depth-candidates.md`). The entry, the
 > fixed-point term, the state init, the carry rate and Parcae's depth schedule are cleared; the
 > ternary core is the measured limiter. Superseded by
-> [`../../proposed/architecture/2026-09-09-ternary-core-is-a-weak-per-pass-map.md`](../../proposed/architecture/2026-09-09-ternary-core-is-a-weak-per-pass-map.md).
+> [`../../implemented/architecture/2026-09-09-ternary-core-is-a-weak-per-pass-map.md`](../../implemented/architecture/2026-09-09-ternary-core-is-a-weak-per-pass-map.md).
 
 ## Problem
 

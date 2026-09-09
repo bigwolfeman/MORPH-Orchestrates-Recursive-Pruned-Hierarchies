@@ -226,32 +226,47 @@ class PruningSchedule:
         if global_step == self.compact_step and not self._is_compact:
             import torch.nn.utils.parametrize as parametrize
             from morph.model.ternary_qat import reparametrize_compacted_values_ternary
+            from morph.model.ternary_rule import EXPORTABLE_SCALE_MODES
 
             total_live = 0
             n_reternary = 0
             mortar_layers = _find_mortar_layers(model)
-            reparam: list[tuple[nn.Module, float]] = []
+            # Capture each layer's threshold AND scale rule first: the carved STE must
+            # run the rule the dense STE ran (norm_match on the recipe), and a learnable
+            # rule (ttq / dual) cannot be carried — raise BEFORE any layer is carved so
+            # the model is left untouched.
+            plan: list[tuple[str, nn.Module, bool, float, str]] = []
             for _name, layer in mortar_layers:
                 cms = layer._cms
                 was_ternary = parametrize.is_parametrized(cms, "weight")
-                thr = 0.5
+                thr, mode = 0.5, "symmetric"
                 if was_ternary:
-                    # Capture the threshold, then restore the SMOOTH shadow as the leaf
-                    # weight (leave_parametrized=False) so the carve carries continuous
-                    # survivor values, not the discrete ternary.
-                    try:
-                        thr = float(cms.parametrizations.weight[0].threshold)
-                    except (AttributeError, IndexError):
-                        thr = 0.5
+                    ste = cms.parametrizations.weight[0]
+                    thr = float(getattr(ste, "threshold", 0.5))
+                    mode = str(getattr(ste, "mode", "symmetric"))
+                    if mode not in EXPORTABLE_SCALE_MODES:
+                        raise NotImplementedError(
+                            f"[compact] step {global_step}: {_name} runs ternary "
+                            f"scale_mode={mode!r}, which the carve cannot carry "
+                            f"(choices={EXPORTABLE_SCALE_MODES}); disable the carve or "
+                            f"train an exportable rule")
+                plan.append((_name, layer, was_ternary, thr, mode))
+            reparam: list[tuple[nn.Module, float, str]] = []
+            for _name, layer, was_ternary, thr, mode in plan:
+                cms = layer._cms
+                if was_ternary:
+                    # Restore the SMOOTH shadow as the leaf weight (leave_parametrized=
+                    # False) so the carve carries continuous survivor values, not the
+                    # discrete ternary.
                     parametrize.remove_parametrizations(cms, "weight",
                                                         leave_parametrized=False)
                 n_alive = layer.carve(blocking=self.carve_blocking)
                 total_live += n_alive
                 if was_ternary:
-                    reparam.append((cms, thr))
+                    reparam.append((cms, thr, mode))
             # Re-register ternary QAT on the carved `mortar_data` (continues QAT).
-            for cms, thr in reparam:
-                if reparametrize_compacted_values_ternary(cms, thr):
+            for cms, thr, mode in reparam:
+                if reparametrize_compacted_values_ternary(cms, thr, mode):
                     n_reternary += 1
             self._is_compact = True
             stats = self.log_stats(model)

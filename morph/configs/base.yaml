@@ -466,7 +466,19 @@ training:
   ternary: true
   ternary_scope: backbone        # MLP/mix/mhc proj; attn projections stay bf16
   ternary_threshold: 0.5         # |w/scale| > threshold → nonzero (Bonsai default)
-  ternary_scale_mode: symmetric  # symmetric wins at this scale (A-series result)
+  ternary_scale_mode: norm_match # THE RULE (2026-09-09): symmetric codes, scale = ‖W‖_F/√nnz per
+                                 # tensor so the ternary weight keeps the latent's norm. The absmean
+                                 # rule (`symmetric`, γ = mean|W| over ALL entries) shrinks every
+                                 # ternary layer to ~0.67 of its latent norm and makes the looped
+                                 # core a weak per-pass map: MLP branch out/in 0.19–0.24, loop
+                                 # contribution K1−K6 0.033 → norm_match 0.86–1.10 and 0.185
+                                 # (lab/experiments/successes/2026-09-09-arc-per-pass-strength.md).
+                                 # Same codes, no parameters, one scalar per tensor: carried through
+                                 # the carve and exported by deploy_quant (morph/model/ternary_rule.py).
+                                 # `symmetric` stays available (the pre-2026-09-09 arms); `ttq` /
+                                 # `dual` are training-only and refuse the carve. The learnable
+                                 # `ttq` control measured 0.86× absmean: the optimizer does NOT grow
+                                 # the scale on its own, the rule has to impose it.
   ternary_scale_group: tensor    # per-tensor scale
   ternary_scale_dtype: fp16      # fp16 scale storage
   ternary_scale_ema_beta: 0.0    # γ slow-EMA (cusp-vault fix, 2026-09-02): γ ← β·γ + (1-β)·mean|W|
@@ -479,7 +491,8 @@ training:
                                  # at this × initial γ (prevents blowup from ratcheting the scale
                                  # upward). γ is the full magnitude carrier of {-1,0,+1}×γ weights
                                  # → caps layer output magnitude. Optimizer-independent backstop.
-                                 # 0=off; typical range 3–8×. Symmetric mode only.
+                                 # 0=off; typical range 3–8×. Symmetric mode only (norm_match RAISES
+                                 # at build if this or ternary_scale_ema_beta is nonzero).
 
   # 8-bit AdamW via bitsandbytes (quantizes optimizer state m,v to uint8)
   adam8bit: true
