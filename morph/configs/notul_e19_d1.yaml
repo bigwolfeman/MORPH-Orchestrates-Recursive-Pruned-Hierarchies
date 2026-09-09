@@ -10,5 +10,8 @@ model:
   bptt_depth: 1
   core_fixed_point_lambda: 0.0    # a one-iteration loop has no terminal pair to compare
 
+training:
+  grad_probe_every: 1     # the plain lineage inherits 0: the tripwire needs the probe (E19 amendment 1)
+
 wandb:
   name: e19-d1

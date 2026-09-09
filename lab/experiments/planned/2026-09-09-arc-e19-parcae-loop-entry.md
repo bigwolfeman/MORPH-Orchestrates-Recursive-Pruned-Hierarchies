@@ -68,6 +68,12 @@ uses sudo): `~/parcae/experiments/configs/owt_d1.yaml`, Parcae-140m at recurrenc
 5,000 steps; CE(parcae-140m-owt-10k @5000, depth 8 = 3.8685) − CE(this @1) prices Parcae's
 loop at matched tokens. Not part of this file's predictions.
 
+**Method amendment 1 (2026-09-09 02:36, loop arm at step ~250, nothing scored).** The plain
+lineage inherits `training.grad_probe_every: 0`, so the first launch wrote no probe file and
+the sustained tripwire was blind (E18's plain arm had the same gap, judged from its val
+curve). The three E19 configs now set `grad_probe_every: 1` (0.5 % cost); the loop arm was
+stopped at step ~250 and relaunched from step 0 at the re-pinned commit. Predictions untouched.
+
 ## Predictions (frozen)
 
 - **P19a (survival).** Reaches 5,000 with the sustained tripwire silent: loop **70 %**
