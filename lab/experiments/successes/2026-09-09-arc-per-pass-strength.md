@@ -1,6 +1,6 @@
-# Planned: ARC per-pass-strength panel — can a ternary core be a strong per-pass map?
+# ARC per-pass-strength panel — can a ternary core be a strong per-pass map?
 
-Status: planned
+Status: success
 Date: 2026-09-09 (frozen before launch; Wolfe: "once the research comes back plan your next
 arms for 5k runs"). Arc: `2026-09-04-loop-contribution-arc.md`, per-pass-strength row.
 Chained behind the 25k horizon run in the queue (`arc/run_strength.sh` waits for `HORIZON
@@ -51,6 +51,16 @@ against `parcae-entry` (ternary base) and `depthcand-dense-core` (bf16 core). Lo
 CONTRIBUTION is the reading (K-curve, branch out/in, state movement); CE at 5,000 is a
 horizon reading and ranks nothing.
 
+**Amendment 2026-09-09 (after the three ternary arms, before the fourth).** The horizon run
+was stopped at step 10,200 on Wolfe's decision, so the runner launched immediately
+(`NOWAIT=1`, commit `d2670e2`) with the three ternary arms. The arm `threshold-0.3` was
+renamed `threshold-03` before launch (a dotted arm name breaks the shared readers' regex).
+`precision-bf16-all` is deferred to the GPU window after Wolfe's 17:00 CST use of the
+machine; the panel is filed on the three ternary arms (the Binding needs only those) and the
+ceiling reading is appended to Results when it runs. The Binding's recipe change went in the
+same day (commit on master: `base.yaml` `ternary_scale_mode: norm_match`, the rule carried
+through the carve and the deploy packer, the Agent Note moved to `implemented/`).
+
 ## Predictions (frozen)
 
 - **P-str-a (survival).** HEALTHY to 5,000: norm-match **80 %** (a 1.5× gain on every
@@ -94,12 +104,54 @@ change). The ttq mode on a compiled model.
 
 ## Results
 
-(after the run)
+Scored by `results/2026-09-09-per-pass-strength/score_strength.py` (`score_strength.txt`);
+token-paired on 491,520 tokens / 481 blocks; every sweep-vs-trainer gap −0.020 to −0.030 (OK).
+
+| arm | verdict | K1−K6 [CI] | K3−K6 [CI] | K6−K12 | core MLP out/in at pass 6 | attn out/in at 6 | movement per pass (%) | carrier rank t8 | depth-6 CE at 5k | vs base (paired) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `scale-norm-match` | HEALTHY (22@340) | **+0.1849 [+0.1816, +0.1883]** | **+0.0139 [+0.0131, +0.0146]** | −0.0024 | **0.86–1.10** | 0.15–0.56 | 61/28/16/9/6/4/3 | 55.3 | 4.0391 | +0.0817 [+0.0780, +0.0856] |
+| `scale-ttq` | HEALTHY (109@3364) | +0.0410 [+0.0398, +0.0422] | +0.0018 [+0.0015, +0.0021] | −0.0001 | 0.08–0.14 | 0.04–0.31 | 42/17/9/5/3/2/2 | 62.3 | 3.9839 | +0.0266 [+0.0241, +0.0291] |
+| `threshold-03` | HEALTHY (47@226) | +0.0261 [+0.0251, +0.0271] | +0.0004 [+0.0002, +0.0007] | −0.0001 | 0.19–0.24 | 0.06–0.23 | 47/18/8/4/3/2/2 | 86.1 | 4.0185 | +0.0611 [+0.0584, +0.0640] |
+| `parcae-entry` (base) | E19 | +0.0332 | +0.0009 | −0.0001 | 0.19–0.24 | 0.08–0.21 | 37/23/7/5/3/2/2 | 73.0 | 3.9573 | — |
+| `depthcand-dense-core` (bf16 core) | E20 | +0.1682 | +0.0119 | −0.0018 | 0.75–0.96 | 0.14–0.43 | 63/38/20/12/9/6/5 | 87.7 | 3.9275 | −0.0298 |
+| `precision-bf16-all` | NOT RUN (deferred, see Method) | | | | | | | | | |
+
+TTQ learned scales at 5,000 (`step_5000.pt`, γ over the latent's mean|W|): core mean 0.874
+over 12 tensors (gate-up 0.50–0.68, down 0.79–1.40); coda 0.71–1.31; the `x0_injects`
+projections wander to −8 … +21 (no positivity constraint on γ). Wall 0.88–0.89 h (0.89× base),
+peak 10.2 GB, init-probe spread ≤ 0.0002 on every arm (start-independent fixed point). The
+trainer's own held-out curve: norm-match +0.21 at 1k, +0.13 at 2k, +0.11 at 4k, +0.08 at the
+end against the base.
+
+Predictions: P-str-a TRUE on all three (predicted 80–85 %). P-str-b: norm-match TRUE (60 %),
+ttq FALSE (50 %), threshold-03 FALSE (50 %). P-str-c: K1−K6 > 0.08 norm-match TRUE (45 %), ttq
+FALSE, threshold-03 FALSE; K3−K6 > 0.005 with CI > 0 norm-match TRUE (40 %), the others FALSE;
+> 0.02 FALSE on every arm (15 %); every arm converges by 6 (80 %) TRUE. P-str-d FALSE (50 %):
+γ shrank instead. P-str-e: norm-match within ±0.03 of the base FALSE (55 %), threshold-03
+FALSE (60 %). P-str-f TRUE on all three.
 
 ## Verdict
 
-(after the run)
+H-str holds on the norm-matched arm and only there: the scale rule was the limiter. The
+absmean scale is what makes the ternary core a weak per-pass map; matching the latent norm
+puts a ternary core ABOVE the bf16-core diagnostic on every contribution instrument (K1−K6
+0.185 vs 0.168, K3−K6 0.0139 vs 0.0119, MLP branch 0.86–1.10 vs 0.75–0.96). The two controls
+say what the lever is not: the dead zone is not it (threshold 0.3 reads as the base), and a
+free scale is not it (the optimizer shrinks the learnable scales to 0.87× absmean and the
+branch to 0.08–0.14, below the base). The scale has to be imposed.
+
+Binding applied: `norm_match` is the recipe's ternary rule
+(`.agents/notes/implemented/architecture/2026-09-09-ternary-core-is-a-weak-per-pass-map.md`);
+the paid-TUL re-read is open. The 0.08 higher CE at 5k is a horizon reading, and the ttq
+control explains it: at this horizon the loss gradient prefers the weaker map. Ranking the
+rule needs the 20k horizon (Wolfe's call).
 
 ## Updated hypothesis
 
-(after the run)
+The loop's contribution is bounded by the per-pass branch strength, and under ternary the
+branch strength is set by the scale rule, not by the code count and not by anything the
+optimizer will do on its own. With the branch restored the loop still converges by pass 6
+(K3−K6 0.014 against Parcae's K3−K8 0.040); the remaining gap is not a ternary question
+(block and stream count, the optimizer, tokens). Next reads, in order: the paid TUL loop
+under norm_match; the bf16-everywhere ceiling; the 20k horizon of norm_match against the
+existing 20k control.

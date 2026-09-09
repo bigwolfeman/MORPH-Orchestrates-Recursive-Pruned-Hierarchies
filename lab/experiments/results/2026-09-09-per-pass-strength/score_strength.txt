@@ -1,0 +1,104 @@
+NOT RUN YET (no sweep JSON): ['precision-bf16-all']
+=== the E17 rule: sweep CE at the trained depth vs the trainer's held-out loss at that step
+  scale-norm-match    @2500 depth 6: sweep 4.5360  trainer 4.5595  gap -0.0235 OK
+  scale-norm-match    @5000 depth 6: sweep 4.0391  trainer 4.0623  gap -0.0232 OK
+  scale-ttq           @2500 depth 6: sweep 4.4556  trainer 4.4846  gap -0.0290 OK
+  scale-ttq           @5000 depth 6: sweep 3.9839  trainer 4.0119  gap -0.0280 OK
+  threshold-03        @2500 depth 6: sweep 4.4849  trainer 4.5053  gap -0.0204 OK
+  threshold-03        @5000 depth 6: sweep 4.0185  trainer 4.0454  gap -0.0269 OK
+  parcae-entry        @5000 depth 6: sweep 3.9573  trainer 3.9807  gap -0.0234 OK
+  depthcand-dense-core@5000 depth 6: sweep 3.9275  trainer 3.9571  gap -0.0296 OK
+
+=== token CE by forced depth (480 rows) and the paired K-differences
+arm                     ck     T=0     T=1     T=2     T=3     T=6     T=9    T=12    T=16 | K1-K6 | K3-K6 [CI] | K6-K12
+scale-norm-match      2500  9.2550  4.6669  4.5673  4.5449  4.5360  4.5365  4.5368  4.5370 | +0.1309 | +0.0089 [+0.0084,+0.0094] | -0.0008
+scale-norm-match      5000  9.4757  4.2239  4.0879  4.0529  4.0391  4.0404  4.0415  4.0421 | +0.1849 | +0.0139 [+0.0131,+0.0146] | -0.0024
+scale-ttq             2500  9.3306  4.4874  4.4608  4.4564  4.4556  4.4557  4.4557  4.4557 | +0.0317 | +0.0008 [+0.0006,+0.0011] | -0.0001
+scale-ttq             5000  8.5562  4.0249  3.9924  3.9857  3.9839  3.9840  3.9840  3.9840 | +0.0410 | +0.0018 [+0.0015,+0.0021] | -0.0001
+threshold-03          2500  9.4757  4.5067  4.4869  4.4847  4.4849  4.4850  4.4850  4.4850 | +0.0218 | -0.0002 [-0.0004,-0.0000] | -0.0001
+threshold-03          5000  9.2220  4.0445  4.0217  4.0189  4.0185  4.0186  4.0186  4.0186 | +0.0261 | +0.0004 [+0.0002,+0.0007] | -0.0001
+parcae-entry          5000  8.8346  3.9905  3.9621  3.9582  3.9573  3.9575  3.9574  3.9575 | +0.0332 | +0.0009 [+0.0007,+0.0011] | -0.0001
+depthcand-dense-core  5000  9.2413  4.0958  3.9695  3.9394  3.9275  3.9286  3.9294  3.9297 | +0.1682 | +0.0119 [+0.0113,+0.0125] | -0.0018
+
+=== P-str-b (mechanism): core MLP branch out/in at iteration 6 (anatomy, 3 rows); ternary > 0.4, bf16-all > 0.7
+  scale-norm-match     mlp@6 [0.882, 0.863, 0.914, 0.89, 1.103, 0.938] (min > 0.4: TRUE)  attn@6 [0.559, 0.22, 0.223, 0.146, 0.313, 0.486]  movement [0.608, 0.283, 0.157, 0.09, 0.055, 0.035, 0.025]  carrier t8 norm 5271 rank 55.3
+  scale-ttq            mlp@6 [0.085, 0.08, 0.086, 0.111, 0.113, 0.141] (min > 0.4: FALSE)  attn@6 [0.311, 0.051, 0.037, 0.112, 0.082, 0.225]  movement [0.417, 0.172, 0.089, 0.051, 0.034, 0.025, 0.021]  carrier t8 norm 1535 rank 62.3
+  threshold-03         mlp@6 [0.187, 0.213, 0.206, 0.229, 0.239, 0.231] (min > 0.4: FALSE)  attn@6 [0.232, 0.066, 0.182, 0.142, 0.069, 0.062]  movement [0.471, 0.18, 0.075, 0.044, 0.028, 0.022, 0.019]  carrier t8 norm 1773 rank 86.1
+  parcae-entry         mlp@6 [0.185, 0.218, 0.193, 0.236, 0.232, 0.21] (min > 0.4: FALSE)  attn@6 [0.207, 0.079, 0.099, 0.147, 0.178, 0.175]  movement [0.375, 0.231, 0.072, 0.049, 0.027, 0.021, 0.018]  carrier t8 norm 1970 rank 73.0
+  depthcand-dense-core mlp@6 [0.918, 0.926, 0.745, 0.795, 0.866, 0.957] (min > 0.4: TRUE)  attn@6 [0.267, 0.429, 0.277, 0.142, 0.187, 0.421]  movement [0.629, 0.376, 0.201, 0.125, 0.086, 0.061, 0.046]  carrier t8 norm 4865 rank 87.7
+
+=== P-str-c (contribution) at 5000: K1-K6 > 0.08; K3-K6 > 0.005 with CI > 0; > 0.02 (the panel bar); K6-K12 within +-0.005
+  scale-norm-match     K1-K6 +0.1849 -> TRUE;  K3-K6 +0.0139 lo +0.0131 -> >0.005: TRUE >0.02: FALSE;  K6-K12 -0.0024 -> TRUE;  sweep's own K1-K6 +0.1849 [+0.1816, +0.1883] K3-K6 +0.0139 [+0.0131, +0.0146]
+  scale-ttq            K1-K6 +0.0410 -> FALSE;  K3-K6 +0.0018 lo +0.0015 -> >0.005: FALSE >0.02: FALSE;  K6-K12 -0.0001 -> TRUE;  sweep's own K1-K6 +0.0410 [+0.0398, +0.0422] K3-K6 +0.0018 [+0.0015, +0.0021]
+  threshold-03         K1-K6 +0.0261 -> FALSE;  K3-K6 +0.0004 lo +0.0002 -> >0.005: FALSE >0.02: FALSE;  K6-K12 -0.0001 -> TRUE;  sweep's own K1-K6 +0.0261 [+0.0251, +0.0271] K3-K6 +0.0004 [+0.0002, +0.0007]
+
+=== Binding check: a ternary arm with P-str-b TRUE and K1-K6 > 0.08
+  scale-norm-match     branch TRUE  K1-K6 > 0.08 TRUE  -> becomes the rule: TRUE
+  scale-ttq            branch FALSE  K1-K6 > 0.08 FALSE  -> becomes the rule: FALSE
+  threshold-03         branch FALSE  K1-K6 > 0.08 FALSE  -> becomes the rule: FALSE
+
+=== P-str-e (horizon readings, NOT rankings): arm@6 - parcae-entry@6 and - bf16-core@6, token-paired
+  scale-norm-match     vs base +0.0817 [+0.0780, +0.0856] (tokens n=491520 blocks=481)  within +-0.03: FALSE  vs bf16-core +0.1115 [+0.1085, +0.1148] (tokens n=491520 blocks=481)
+  scale-ttq            vs base +0.0266 [+0.0241, +0.0291] (tokens n=491520 blocks=481)  within +-0.03: TRUE  vs bf16-core +0.0564 [+0.0537, +0.0593] (tokens n=491520 blocks=481)
+  threshold-03         vs base +0.0611 [+0.0584, +0.0640] (tokens n=491520 blocks=481)  within +-0.03: FALSE  vs bf16-core +0.0909 [+0.0880, +0.0938] (tokens n=491520 blocks=481)
+
+=== P-str-d: TTQ learned scales at 5000 (γ over the latent's mean|W|)
+  core mean(γ)/mean|W| over 12 tensors: 0.874 -> γ grew past 1.3x its absmean init: FALSE
+    prelude.0.mlp._orig_mod.0.gate_up._cms           γ+/mean|W| 0.419  γ-/mean|W| 0.409
+    prelude.0.mlp._orig_mod.0.down._cms              γ+/mean|W| 0.278  γ-/mean|W| 0.294
+    prelude.1.mlp._orig_mod.0.gate_up._cms           γ+/mean|W| 0.550  γ-/mean|W| 0.476
+    prelude.1.mlp._orig_mod.0.down._cms              γ+/mean|W| 0.421  γ-/mean|W| 0.442
+    prelude.2.mlp._orig_mod.0.gate_up._cms           γ+/mean|W| -0.011  γ-/mean|W| 0.017
+    prelude.2.mlp._orig_mod.0.down._cms              γ+/mean|W| -0.069  γ-/mean|W| -0.119
+    prelude.3.mlp._orig_mod.0.gate_up._cms           γ+/mean|W| 0.401  γ-/mean|W| 0.482
+    prelude.3.mlp._orig_mod.0.down._cms              γ+/mean|W| 0.377  γ-/mean|W| 0.454
+    core.0.mlp._orig_mod.0.gate_up._cms              γ+/mean|W| 0.545  γ-/mean|W| 0.588
+    core.0.mlp._orig_mod.0.down._cms                 γ+/mean|W| 0.811  γ-/mean|W| 0.785
+    core.1.mlp._orig_mod.0.gate_up._cms              γ+/mean|W| 0.499  γ-/mean|W| 0.574
+    core.1.mlp._orig_mod.0.down._cms                 γ+/mean|W| 1.116  γ-/mean|W| 1.122
+    core.2.mlp._orig_mod.0.gate_up._cms              γ+/mean|W| 0.516  γ-/mean|W| 0.583
+    core.2.mlp._orig_mod.0.down._cms                 γ+/mean|W| 1.303  γ-/mean|W| 1.253
+    core.3.mlp._orig_mod.0.gate_up._cms              γ+/mean|W| 0.558  γ-/mean|W| 0.679
+    core.3.mlp._orig_mod.0.down._cms                 γ+/mean|W| 1.129  γ-/mean|W| 1.120
+    core.4.mlp._orig_mod.0.gate_up._cms              γ+/mean|W| 0.544  γ-/mean|W| 0.612
+    core.4.mlp._orig_mod.0.down._cms                 γ+/mean|W| 1.302  γ-/mean|W| 1.292
+    core.5.mlp._orig_mod.0.gate_up._cms              γ+/mean|W| 0.573  γ-/mean|W| 0.681
+    core.5.mlp._orig_mod.0.down._cms                 γ+/mean|W| 1.392  γ-/mean|W| 1.403
+    coda.0.mlp._orig_mod.0.gate_up._cms              γ+/mean|W| 0.782  γ-/mean|W| 0.936
+    coda.0.mlp._orig_mod.0.down._cms                 γ+/mean|W| 0.961  γ-/mean|W| 0.947
+    coda.1.mlp._orig_mod.0.gate_up._cms              γ+/mean|W| 0.771  γ-/mean|W| 0.927
+    coda.1.mlp._orig_mod.0.down._cms                 γ+/mean|W| 1.204  γ-/mean|W| 1.234
+    coda.2.mlp._orig_mod.0.gate_up._cms              γ+/mean|W| 0.815  γ-/mean|W| 0.977
+    coda.2.mlp._orig_mod.0.down._cms                 γ+/mean|W| 0.972  γ-/mean|W| 0.908
+    coda.3.mlp._orig_mod.0.gate_up._cms              γ+/mean|W| 1.013  γ-/mean|W| 1.308
+    coda.3.mlp._orig_mod.0.down._cms                 γ+/mean|W| 0.727  γ-/mean|W| 0.713
+    x0_injects.0.proj                                γ+/mean|W| -3.350  γ-/mean|W| -3.369
+    x0_injects.1.proj                                γ+/mean|W| -1.651  γ-/mean|W| -2.154
+    x0_injects.2.proj                                γ+/mean|W| -3.408  γ-/mean|W| -2.967
+    x0_injects.3.proj                                γ+/mean|W| 3.203  γ-/mean|W| 2.366
+    x0_injects.4.proj                                γ+/mean|W| 11.146  γ-/mean|W| 10.424
+    x0_injects.5.proj                                γ+/mean|W| 10.863  γ-/mean|W| 9.653
+    x0_injects.6.proj                                γ+/mean|W| 7.011  γ-/mean|W| 7.470
+    x0_injects.7.proj                                γ+/mean|W| 2.928  γ-/mean|W| 4.775
+    x0_injects.8.proj                                γ+/mean|W| -6.052  γ-/mean|W| -7.977
+    x0_injects.9.proj                                γ+/mean|W| 12.924  γ-/mean|W| 12.925
+    x0_injects.10.proj                               γ+/mean|W| 6.253  γ-/mean|W| 6.667
+    x0_injects.11.proj                               γ+/mean|W| 12.944  γ-/mean|W| 11.993
+    x0_injects.12.proj                               γ+/mean|W| 20.578  γ-/mean|W| 21.034
+    x0_injects.13.proj                               γ+/mean|W| 17.989  γ-/mean|W| 17.395
+    lm_mixer.mix                                     γ+/mean|W| 0.687  γ-/mean|W| 0.676
+
+=== init probes (T8 CE by loop start; spread within 0.01 = start-independent fixed point)
+  scale-norm-match     prelude=3.9766 noise_rms=3.9765 zero=3.9764 noise_small=3.9764  spread 0.0002 -> TRUE
+  scale-ttq            prelude=3.9192 noise_rms=3.9193 zero=3.9192 noise_small=3.9192  spread 0.0001 -> TRUE
+  threshold-03         prelude=3.9540 noise_rms=3.9540 zero=3.9540 noise_small=3.9539  spread 0.0002 -> TRUE
+  parcae-entry         prelude=3.8960 noise_rms=3.8961 zero=3.8960 noise_small=3.8961  spread 0.0001 -> TRUE
+
+=== P-str-a/f: survival, tripwire, wall clock, peak, held-out curve
+  scale-norm-match     verdict=HEALTHY last=4999 max=22.3@340  wall 0.89 h (0.89x base; within 1.1x: TRUE)  peak 10.17 GB (< 16: TRUE)  val@2500 4.5595  final 4.0623  {'preclip_max_after_200': (22, 340)}
+  scale-ttq            verdict=HEALTHY last=4999 max=109@3364  wall 0.89 h (0.89x base; within 1.1x: TRUE)  peak 10.25 GB (< 16: TRUE)  val@2500 4.4846  final 4.0119  {'preclip_max_after_200': (109, 3364)}
+  threshold-03         verdict=HEALTHY last=4999 max=47.4@226  wall 0.88 h (0.88x base; within 1.1x: TRUE)  peak 10.17 GB (< 16: TRUE)  val@2500 4.5053  final 4.0454  {'preclip_max_after_200': (47, 226)}
+  parcae-entry         verdict=E19  wall nan h (nanx base; within 1.1x: FALSE)  peak 10.17 GB (< 16: TRUE)  val@2500 4.4453  final 3.9807  {'preclip_max_after_200': (129, 226)}
+  scale-norm-match - base held-out (trainer's batches): 1000:+0.213 2000:+0.129 3000:+0.131 4000:+0.107 4751:+0.082
+  scale-ttq - base held-out (trainer's batches): 1000:+0.079 2000:+0.021 3000:+0.046 4000:+0.037 4751:+0.031
+  threshold-03 - base held-out (trainer's batches): 1000:+0.018 2000:+0.044 3000:+0.095 4000:+0.081 4751:+0.065
