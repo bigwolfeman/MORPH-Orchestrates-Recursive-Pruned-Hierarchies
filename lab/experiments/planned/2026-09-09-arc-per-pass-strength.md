@@ -39,7 +39,7 @@ one factor each:
 | --- | --- | --- |
 | `scale-norm-match` | `notul_scale_norm_match` | `ternary_scale_mode: norm_match` (new): symmetric codes, scale = ‖W‖/√nnz per tensor so the ternary norm equals the latent norm; no parameters |
 | `scale-ttq` | `notul_scale_ttq` | `ternary_scale_mode: ttq`: learnable γ₊, γ₋ per tensor (in the no-decay group) |
-| `threshold-0.3` | `notul_threshold_03` | `ternary_threshold: 0.3` (dead zone ~18 % instead of 31 %) |
+| `threshold-03` | `notul_threshold_03` | `ternary_threshold: 0.3` (dead zone ~18 % instead of 31 %) |
 | `precision-bf16-all` | `notul_precision_bf16` | `training.ternary: false` (the precision axis's third point; the ceiling) |
 
 Order as listed. Runner `arc/run_strength.sh`: per arm a 12-step smoke, the draw with the
@@ -54,19 +54,19 @@ horizon reading and ranks nothing.
 ## Predictions (frozen)
 
 - **P-str-a (survival).** HEALTHY to 5,000: norm-match **80 %** (a 1.5× gain on every
-  ternary layer at step 0 under the ramp), ttq **80 %**, threshold-0.3 **85 %**, bf16-all
+  ternary layer at step 0 under the ramp), ttq **80 %**, threshold-03 **85 %**, bf16-all
   **90 %**.
 - **P-str-b (mechanism: core MLP branch out/in at iteration 6, anatomy).** Above 0.4:
-  norm-match **60 %**, ttq **50 %**, threshold-0.3 **50 %**. bf16-all above 0.7: **70 %**.
+  norm-match **60 %**, ttq **50 %**, threshold-03 **50 %**. bf16-all above 0.7: **70 %**.
 - **P-str-c (contribution).** K1−K6 above 0.08: norm-match **45 %**, ttq **40 %**,
-  threshold-0.3 **35 %**; bf16-all within 0.03 of the bf16-core arm's 0.168: **55 %**. K3−K6
-  above 0.005 with the CI above 0: norm-match **40 %**, ttq **35 %**, threshold-0.3 **30 %**;
+  threshold-03 **35 %**; bf16-all within 0.03 of the bf16-core arm's 0.168: **55 %**. K3−K6
+  above 0.005 with the CI above 0: norm-match **40 %**, ttq **35 %**, threshold-03 **30 %**;
   above 0.02 (the panel bar): any ternary arm **15 %**. Every arm converges by 6 (K6−K12
   within ±0.005): **80 %**.
 - **P-str-d (ttq learns a gain).** ttq's mean |γ₊| over the core MLPs at 5,000 exceeds 1.3×
   its init: **50 %**.
 - **P-str-e (horizon readings).** Each ternary arm's token-paired CE at depth 6 against
-  `parcae-entry`: norm-match within ±0.03: **55 %**; threshold-0.3 within ±0.03: **60 %**.
+  `parcae-entry`: norm-match within ±0.03: **55 %**; threshold-03 within ±0.03: **60 %**.
   bf16-all under the bf16-core arm's 3.9275: **60 %**.
 - **P-str-f (cost).** Ternary arms within 1.1× of 1.00 h: **80 %**; peaks under 16 GB: **90 %**.
 
