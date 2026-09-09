@@ -1,6 +1,6 @@
 # Planned: ARC density panel — does the production prune density change what the loop earns?
 
-Status: planned
+Status: failure
 Date: 2026-09-09 (frozen before launch; Wolfe: "we need to test density. i am going to bed.
 get this done"). Arc: `2026-09-04-loop-contribution-arc.md`, density row. Chained behind
 the depth-candidates panel in the queue (`arc/run_density.sh` waits for `DEPTHCAND
@@ -113,12 +113,64 @@ spike on the event step itself).
 
 ## Results
 
-(after the run)
+**Scope note (2026-09-09 10:30).** This panel ran on a misreading of Wolfe's "test density": he
+meant the weight data type (ternary against bf16), which the depth-candidates panel's
+bf16-core arm and the precision-axis arm (`2026-09-09-arc-precision-axis.md`) cover. This
+record stays as what it is, a block-prune side result on loop contribution, and no prune
+panel follows it. Everything below is a 5,000-step reading; the CE gaps rank nothing.
+
+Run 2026-09-09 08:18–10:28 at `137893f`. Scored by `../results/2026-09-09-density-panel/score_density.py`
+(`score_density.txt`); token files and probes under `ignored/experiment-artifacts/2026-09-09-density-panel/`.
+The E17 rule passes on all four sweeps (gaps 0.028–0.032).
+
+**P-den-a: TRUE ×2.** Both HEALTHY (probe peaks 215 at 225 and 43 at 2461). **P-den-b: TRUE.**
+The trainer's own lines: half reaches 0.5000 at step 2,025 after 22 events; quarter reaches
+0.2500 at step 2,525 after 42; the quarter arm's 2,500 checkpoint reads 0.2538 (predicted
+0.25–0.40: TRUE).
+
+**P-den-d (loop contribution) at 5,000:**
+
+| arm | density | K1−K6 | K3−K6 | branch out/in @6 (max) | carrier rank t8 |
+| --- | --- | --- | --- | --- | --- |
+| parcae-entry (dense) | 1.0 | +0.033 | +0.0009 | 0.236 | 73.0 |
+| density-half | 0.5 | +0.043 [+0.042, +0.045] | +0.0028 [+0.0025, +0.0032] | 0.114 | 8.5 |
+| density-quarter | 0.25 | +0.074 [+0.072, +0.075] | +0.0054 [+0.0050, +0.0058] | 0.058 | 4.4 |
+
+K3−K6 > 0.02: FALSE ×2. Quarter's K1−K6 larger than dense by > 0.02: TRUE (half FALSE).
+Both converge by 6 (TRUE). The mechanism reads the other way from the bf16-core arm: the
+pruned MLP branches emit LESS per pass (0.058 and 0.114 against 0.236) and the carrier's
+rank collapses (4.4 and 8.5 against 73), so the larger K1−K6 is a larger SHARE of a
+weaker model's loss carried by the first passes, not more computation in later ones. The
+quarter arm's mid-prune 2,500 checkpoint read K1−K6 0.126 and K3−K6 0.010, the largest of
+the panel, and both fell by 5,000 as the model settled at its density.
+
+**P-den-c / P-den-e (5,000-step CE readings, not rankings):** half@6 − dense@6 = +0.0101
+[+0.0070, +0.0132] (predicted 0.03–0.10: FALSE; within 0.02: TRUE); quarter@6 − dense@6 =
++0.0899 [+0.0870, +0.0929] (predicted 0.10–0.25: FALSE, just under). Against the depth-1
+control: half +0.0063, quarter +0.0861. The half arm's gap to dense shrank from 0.043 at
+2,500 to 0.010 at 5,000 on the trainer's batches; the quarter arm's from 0.174 to 0.097.
+
+**P-den-f:** movement at iteration 6: 3.3 % and 3.6 % (> 10 %: FALSE ×2); branch out/in
+lower than dense by > 0.05: TRUE ×2; init probe spreads 0.0003 and 0.0035 at T = 8 (TRUE
+×2; the quarter arm's zero and small-noise starts read 0.003 under its prelude start).
+**P-den-g:** 0.89 h each, 10.63 GB (TRUE ×2).
 
 ## Verdict
 
-(after the run)
+**failure** (H-density's CE bands missed on both arms; the panel answered a question the
+arc did not ask). On loop contribution the block prune is not a lever: the quarter arm's
+larger K1−K6 comes with a weaker per-pass map (branch out/in 0.058) and a rank-4 carrier,
+the signature of dependence without computation, and K3−K6 stays under 0.006. The
+production prune at 5,000 steps also reads as a recoverable CE gap (half within 0.02 of
+dense by 5,000), which is a horizon reading and ranks nothing.
+
+Binding applied: P-den-d FALSE on K3 ⇒ the depth panels stay dense; the record says why.
+The precision axis (ternary against bf16) is the live lever and runs next.
 
 ## Updated hypothesis
 
-(after the run)
+Removing MLP blocks weakens the per-pass map the same way ternary weights do (smaller branch
+output per pass) and adds a rank collapse of the carrier; neither adds computation to later
+passes. The loop-contribution lever is the per-pass strength of the core's MLPs, which the
+precision axis and the under-ternary scale work address. The production prune's effect on
+the loop at a real horizon is untested and is not this arc's question.

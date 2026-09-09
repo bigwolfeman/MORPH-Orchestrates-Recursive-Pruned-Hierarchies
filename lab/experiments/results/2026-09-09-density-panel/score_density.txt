@@ -1,0 +1,50 @@
+=== P-den-b: did density fall? (the trainer's own [prune] lines)
+  density-half     last prune step 2025 density 0.5000 (target 0.5) -> within 0.02: TRUE;  density at 2500: 0.5000
+  density-quarter  last prune step 2525 density 0.2500 (target 0.25) -> within 0.02: TRUE;  density at 2500: 0.2538
+
+=== the E17 rule: sweep CE at depth 6 vs the trainer's held-out loss at that step
+  density-half    @2500 depth 6: sweep 4.4603  trainer 4.4886  gap -0.0283 OK
+  density-half    @5000 depth 6: sweep 3.9675  trainer 3.9995  gap -0.0320 OK
+  density-quarter @2500 depth 6: sweep 4.5889  trainer 4.6189  gap -0.0300 OK
+  density-quarter @5000 depth 6: sweep 4.0472  trainer 4.0782  gap -0.0310 OK
+  parcae-entry    @5000 depth 6: sweep 3.9573  trainer 3.9807  gap -0.0234 OK
+  plain-depth1    @5000 depth 1: sweep 3.9612  trainer 3.9887  gap -0.0275 OK
+
+=== token CE by forced depth (480 rows) and the paired K-differences
+arm                 ck     T=0     T=1     T=2     T=3     T=6     T=9    T=12    T=16 | K1-K6 | K3-K6 | K6-K12
+density-half      2500 10.2689  4.4975  4.4682  4.4618  4.4603  4.4603  4.4603  4.4603 | +0.0372 [+0.0361, +0.0383] | +0.0015 [+0.0012, +0.0018] | -0.0000
+density-half      5000 11.4127  4.0109  3.9785  3.9703  3.9675  3.9674  3.9674  3.9675 | +0.0434 [+0.0420, +0.0448] | +0.0028 [+0.0025, +0.0032] | +0.0000
+density-quarter   2500 11.5538  4.7153  4.6183  4.5992  4.5889  4.5879  4.5877  4.5877 | +0.1263 [+0.1243, +0.1283] | +0.0103 [+0.0098, +0.0107] | +0.0012
+density-quarter   5000 11.6825  4.1211  4.0654  4.0526  4.0472  4.0471  4.0474  4.0474 | +0.0738 [+0.0722, +0.0755] | +0.0054 [+0.0050, +0.0058] | -0.0001
+parcae-entry      5000  8.8346  3.9905  3.9621  3.9582  3.9573  3.9575  3.9574  3.9575 | +0.0332 [+0.0319, +0.0344] | +0.0009 [+0.0007, +0.0011] | -0.0001
+plain-depth1      5000  4.5357  3.9612  4.0385  4.2062  4.9569  5.6106  6.1242  6.6052 | -0.9958 [-1.0077, -0.9845] | -0.7507 [-0.7611, -0.7411] | -1.1673
+
+=== P-den-d (depth) at 5000
+  density-half     K3-K6 +0.0028 lo +0.0025 -> FALSE;  K1-K6 +0.0434 vs dense +0.0332 -> larger by >0.02: FALSE;  K6-K12 +0.0000 -> within 0.005: TRUE
+  density-quarter  K3-K6 +0.0054 lo +0.0050 -> FALSE;  K1-K6 +0.0738 vs dense +0.0332 -> larger by >0.02: TRUE;  K6-K12 -0.0001 -> within 0.005: TRUE
+
+=== P-den-c (the tax): arm@6 - dense@6, token-paired
+  density-half     +0.0101 [+0.0070, +0.0132] (tokens n=491520 blocks=481)  in 0.03-0.10: FALSE  >0.25: FALSE  within 0.02: TRUE
+  density-quarter  +0.0899 [+0.0870, +0.0929] (tokens n=491520 blocks=481)  in 0.10-0.25: FALSE  >0.25: FALSE  within 0.02: FALSE
+
+=== P-den-e (the price): arm@6 - depth-1 control@1, token-paired (loses iff CI lo > 0)
+  density-half     +0.0063 [+0.0024, +0.0100] (tokens n=491520 blocks=481)  loses to d1: TRUE  beats d1: FALSE
+  density-quarter  +0.0861 [+0.0824, +0.0896] (tokens n=491520 blocks=481)  loses to d1: TRUE  beats d1: FALSE
+  parcae-entry     -0.0038 [-0.0066, -0.0013] (tokens n=491520 blocks=481)  loses to d1: FALSE  beats d1: TRUE
+
+=== P-den-f (anatomy at 5000, depth 8, 3 rows) and init probes
+  parcae-entry     movement [0.375, 0.231, 0.072, 0.049, 0.027, 0.021, 0.018]  iter6 > 10 %: FALSE;  branch out/in @6 max 0.236;  B diag 1.0349 A 0.4436 dt 0.8023;  carrier norm t8 1970 rank 73.0
+  density-half     movement [0.251, 0.132, 0.072, 0.046, 0.033, 0.027, 0.024]  iter6 > 10 %: FALSE;  branch out/in @6 max 0.114 (lower than dense by >0.05: TRUE);  B diag 1.0172 A 0.4448 dt 0.7900;  carrier norm t8 786 rank 8.5
+  density-quarter  movement [0.264, 0.121, 0.074, 0.05, 0.036, 0.028, 0.024]  iter6 > 10 %: FALSE;  branch out/in @6 max 0.058 (lower than dense by >0.05: TRUE);  B diag 1.0026 A 0.4470 dt 0.7829;  carrier norm t8 358 rank 4.4
+  init probe parcae-entry     T8 by start: prelude=3.8960 noise_rms=3.8961 zero=3.8960 noise_small=3.8961  spread 0.0001 -> within 0.01: TRUE
+  init probe density-half     T8 by start: prelude=3.9072 noise_rms=3.9071 zero=3.9070 noise_small=3.9069  spread 0.0003 -> within 0.01: TRUE
+  init probe density-quarter  T8 by start: prelude=3.9916 noise_rms=3.9917 zero=3.9882 noise_small=3.9883  spread 0.0035 -> within 0.01: TRUE
+
+=== P-den-a/g: survival, tripwire, wall clock, peak, held-out curve
+  density-half     verdict=HEALTHY last=4999 max=215@225  wall 0.89 h (0.89x dense)  peak 10.63 GB  val@2500 4.4886  final 3.9995  {'preclip_max_after_200': (215, 225)}
+  density-quarter  verdict=HEALTHY last=4999 max=42.6@2461  wall 0.89 h (0.89x dense)  peak 10.63 GB  val@2500 4.6189  final 4.0782  {'preclip_max_after_200': (43, 2461)}
+  parcae-entry     verdict=dense ref  wall nan h (nanx dense)  peak 10.17 GB  val@2500 4.4453  final 3.9807  {'preclip_max_after_200': (129, 226)}
+  density-half - dense held-out (trainer's batches): 500:+0.005 1000:+0.019 1500:+0.016 2000:+0.058 2500:+0.043 3000:+0.026 3500:+0.023 4000:+0.013 4500:+0.017 4751:+0.019
+  density-quarter - dense held-out (trainer's batches): 500:+0.012 1000:+0.020 1500:+0.015 2000:+0.040 2500:+0.174 3000:+0.133 3500:+0.118 4000:+0.097 4500:+0.100 4751:+0.097
+  P-den-g density-half: wall within 1.1x dense: TRUE; peak < 16 GB: TRUE
+  P-den-g density-quarter: wall within 1.1x dense: TRUE; peak < 16 GB: TRUE
