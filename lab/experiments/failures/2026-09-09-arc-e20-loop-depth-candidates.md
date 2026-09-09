@@ -128,6 +128,8 @@ model (the tests build eager CPU models). The draw8 arm's memory at max depth 12
 
 ## Results
 
+**Horizon caveat (Wolfe, 2026-09-09 10:20).** 5,000 steps is too short to rank a looped model against a depth-1 model, or one density against another, on final loss: deeper and sparser models converge slower and the break-even sits at a longer horizon. The CE differences below are reported as what they are, a matched-step reading at 5,000, and are NOT verdicts on looping or on ternary. The finding of this panel is the LOOP CONTRIBUTION: the K-curve, the branch ratios and the state movement.
+
 Run 2026-09-09 05:20–08:17 at `5c6dec1` (the arms and configs carry descriptive names:
 `depthcand-dense-core`, `depthcand-carry-lr20x`, `depthcand-draw8-bptt4`; references
 `parcae-entry` and `plain-depth1` from the Parcae-entry panel). Scored by
@@ -157,7 +159,7 @@ its trained depth (Kt−K12 within 0.005: TRUE ×3).
 +0.0952] (worse by > 0.03 at matched steps: TRUE; better: FALSE).
 
 **P20d (the price vs plain-depth1@1, token-paired):** dense-core **−0.0336** [−0.0365,
-−0.0309] (beats the depth-1 model: TRUE); carry-lr20x +0.0333 (FALSE); draw8-bptt4
+−0.0309] (ahead of the depth-1 model at 5,000: TRUE); carry-lr20x +0.0333 (FALSE); draw8-bptt4
 +0.0883 (FALSE); parcae-entry −0.0038 (the panel's base, for reference).
 
 **P20e (anatomy at 5,000, depth 8, 3 rows):** carry-lr20x's B diagonal mean 1.744 (moves
@@ -177,19 +179,20 @@ ternary STE costs the difference), carry-lr20x 0.88 h, draw8-bptt4 0.58 h (the t
 backward; predicted 1.15–1.5×: FALSE, the other way). Peaks 10.17 / 10.17 / 9.80 GB (< 16:
 TRUE). Matched wall clock for draw8: at 0.58 h the parcae-entry arm sits near step 2,900
 (held-out 4.30 at 3,000) against draw8's final 4.084, so per hour the truncated schedule is
-ahead early; at matched steps it is 0.092 behind and loses to the depth-1 model by 0.088.
+ahead early; at matched steps it is 0.092 behind the base and 0.088 behind the depth-1 model, at this horizon.
 
 ## Verdict
 
 **failure** (H20 refuted; H20′ half-confirmed; the finding is decisive). Parcae's depth
-schedule is not the lever: mean 8 with backprop through the last 4 makes the model 0.09
-nats worse at matched steps, loses to the depth-1 model, and earns 0.002 past pass 3. A
+schedule is not the lever: mean 8 with backprop through the last 4 reads 0.09 nats
+behind at matched steps (a 5,000-step reading, see the caveat) and, the finding, earns 0.002
+past pass 3. A
 carry that trains (B diagonal 1.74) is not the lever either: it collapses the carrier to
-rank 6, costs 0.037 nats and still earns 0.007 past pass 3. The ternary core IS a depth
-limiter: with bf16 core weights and nothing else changed the loop's value past pass 1
-goes 0.033 → 0.168, past pass 3 goes 0.0009 → 0.012, the model is 0.030 nats better than
-the ternary base and 0.034 better than the depth-1 model, and the MLP branches move the
-state four times more per pass. The prereg's 0.02 bar on K3−K6 is not cleared, so the
+rank 6, costs 0.037 nats and still earns 0.007 past pass 3. The ternary core limits the LOOP'S CONTRIBUTION at this
+horizon: with bf16 core weights and nothing else changed the loop's value past pass 1
+goes 0.033 → 0.168, past pass 3 goes 0.0009 → 0.012, and the MLP branches move the state
+four times more per pass (the 0.030-nat CE gap to the ternary base is a 5,000-step
+reading and says nothing about ternary at a real horizon; ternary is the recipe). The prereg's 0.02 bar on K3−K6 is not cleared, so the
 ternary map is a limiter and not the whole answer: even the bf16 core converges by pass 6.
 
 Binding applied: dense-core moved K1−K6 by 5× but K3−K6 only to 0.012 ⇒ the "ternary map

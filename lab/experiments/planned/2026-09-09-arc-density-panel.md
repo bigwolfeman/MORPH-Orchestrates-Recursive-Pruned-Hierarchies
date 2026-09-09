@@ -59,6 +59,12 @@ Every sweep's CE at depth 6 is checked against the trainer's `[VAL]` at the same
 it is read (the E17 rule), and every arm's final density is read from the trainer's own
 `[prune]` line, never assumed from the config.
 
+**Method amendment 1 (2026-09-09 10:20, both arms trained, quarter not yet swept).** Wolfe: at
+5,000 steps final losses cannot rank densities or looped against unlooped models (they break
+even or win at longer horizons). P-den-c and P-den-e are scored as written and reported as
+5,000-step readings; the panel's finding is P-den-d and P-den-f, the loop contribution and its
+mechanism at each density. Predictions untouched.
+
 ## Predictions (frozen)
 
 - **P-den-a (survival).** Reaches 5,000 with the sustained tripwire silent: half **85 %**,

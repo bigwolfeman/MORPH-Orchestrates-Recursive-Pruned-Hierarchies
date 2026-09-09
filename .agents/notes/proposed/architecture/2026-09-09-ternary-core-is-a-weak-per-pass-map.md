@@ -11,15 +11,15 @@ by pass 3 and earns 0.03 nats where Parcae's earns 0.29:
   rebuilt the loop's entry the way Parcae does it: state from noise, e re-injected on every
   dimension through a learned B, no fixed-point term. It gave a 0.023-nat better model with a
   start-independent fixed point, and the loop still earned 0.033 past pass 1 and 0.0009 past
-  pass 3. Its depth-1 control showed the loop had been free in training: a model trained at
-  depth 1 beats the looped plain model at depth 6 by 0.019 nats at a third of the wall clock.
+  pass 3. Its depth-1 control sits within 0.02 nats of the looped plain model at depth 6 at 5,000
+  steps; that is a short-horizon reading (deep models converge slower), not a ranking.
 - The depth-candidates panel (`lab/experiments/failures/2026-09-09-arc-e20-loop-depth-candidates.md`)
-  ran Parcae's depth schedule (0.092 nats worse, no depth), a carry that trains at 20× the
-  rate (B diagonal 1.74, the carrier collapses to rank 6, 0.037 worse, no depth), and a
-  diagnostic arm with ternary everywhere except the looped core. Only that arm moved: the
-  loop's value past pass 1 went 0.033 → 0.168, past pass 3 went 0.0009 → 0.012, the model
-  is 0.030 nats better than the ternary base and 0.034 better than the depth-1 model, in
-  0.88× the wall clock.
+  ran Parcae's depth schedule (no loop contribution: K3−K8 0.002), a carry that trains at 20×
+  the rate (B diagonal 1.74, the carrier collapses to rank 6, K3−K6 0.007), and a
+  diagnostic arm with ternary everywhere except the looped core. Only that arm moved the loop's
+  contribution: its value past pass 1 went 0.033 → 0.168 and past pass 3 went 0.0009 → 0.012
+  (the CE gaps at 5,000 steps are not a ranking of ternary against bf16; ternary is the
+  recipe and this arm is a diagnostic).
 
 The anatomy names the mechanism. At iteration 6 the bf16 core's MLP branches emit 0.75–0.96
 of their input and its attention 0.14–0.43; the ternary core's MLPs emit 0.19–0.24 and its
@@ -35,8 +35,8 @@ organize differently). So the question is how a ternary core can be a strong per
 ## Proposal
 
 Restore the per-pass branch strength under ternary and measure it with the three standing
-instruments (the K-curve, token-paired CE against `parcae-entry` at depth 6, and the price
-against `plain-depth1` at depth 1), one factor per arm on the Parcae-entry recipe:
+instruments (the K-curve first; token-paired CE against `parcae-entry` at depth 6 and the
+depth-1 control reported as 5,000-step readings), one factor per arm on the Parcae-entry recipe:
 
 1. **Learnable ternary scales on the core's MLPs** (`ternary_scale_mode: ttq`, which the tree
    already has: one learnable γ₊ and γ₋ per group, initialised from mean|W|), scoped to the
@@ -58,13 +58,13 @@ runs first and says whether the production prune moves the same map the same way
 
 ## Alternatives considered
 
-- **A dense (bf16) core in production.** Rejected: it is the one measured lever, but it
-  breaks the ternary deploy story the project exists for, and Wolfe's rule forbids a
-  dense-then-ternary path. It stays a diagnostic.
+- **A dense (bf16) core in production.** Rejected: it is the one arm that moved loop
+  contribution, but ternary is the recipe the project exists for, Wolfe's rule forbids a
+  dense-then-ternary path, and a 5,000-step CE gap ranks nothing. It stays a diagnostic.
 - **Muon or a higher base learning rate for the core.** Deferred: the carry-rate arm
-  showed that a faster carry alone collapses the state's rank and costs 0.037 nats; a
+  showed that a faster carry alone collapses the state's rank without adding contribution; a
   core-wide rate change is a second factor on top of an unresolved first one.
-- **Parcae's depth schedule.** Rejected by measurement (0.092 nats worse, K3−K8 0.002).
+- **Parcae's depth schedule.** Rejected by measurement (K3−K8 0.002; no loop contribution).
 - **More blocks per pass or fewer streams.** Not tested; it changes the architecture the
   checkpoints depend on and does not address the measured mechanism (branch magnitude).
 - **A readout probe first** (a linear head fit per iteration). Kept behind the ternary
@@ -75,8 +75,9 @@ runs first and says whether the production prune moves the same map the same way
 
 - One arm whose core MLP branch out/in at iteration 6 reads above 0.5 (anatomy, 3 rows).
 - That arm's K3−K6 > 0.02 with the CI above 0, or its K1−K6 > 0.10, at 5,000 steps.
-- That arm beats `plain-depth1` at depth 1 by more than 0.02 nats token-paired and is not
-  worse than `parcae-entry` at depth 6.
+- Its token-paired CE at depth 6 against `plain-depth1` at depth 1 and against `parcae-entry`
+  at depth 6 is reported as a 5,000-step reading (not a ranking: the break-even for a deeper
+  map lies at a longer horizon).
 - The arm stays ternary end to end: the deploy quantizer reads the same codes; no bf16
   weight survives in the core at export.
 

@@ -124,6 +124,8 @@ noise-init model (the coda reads the raw noise); the Parcae depth-1 control (not
 
 ## Results
 
+**Horizon caveat (Wolfe, 2026-09-09 10:20).** 5,000 steps is too short to rank a looped model against a depth-1 model, or one density against another, on final loss: deeper and sparser models converge slower and the break-even sits at a longer horizon. The CE differences below are reported as what they are, a matched-step reading at 5,000, and are NOT verdicts on looping or on ternary. The finding of this panel is the LOOP CONTRIBUTION: the K-curve, the branch ratios and the state movement.
+
 Run 2026-09-09 02:33–05:19 at `3ed1ea2` (Method amendment 1: grad probe on). Runs renamed
 at filing to `parcae-entry` (the loop arm), `plain-no-fixed-point` (fp0) and `plain-depth1`
 (d1); the queue lines, wandb runs and every artifact carry those names. Scored by
@@ -152,10 +154,10 @@ K3−K6 +0.0009 [+0.0005, +0.0013]; @6 − E18 plain@6 = −0.0004 [−0.0033, +
 K1−K6 is +0.037 against the plain arm's +0.020 and its curve drifts −0.011 from 6 to 12: the
 term costs no CE, halves the first pass's share and flattens the tail, and nothing more.
 
-**P19e (the price of the loop): H19″ TRUE — the loop was free.** Token-paired at 5,000:
+**P19e (the price of the loop at this horizon): H19″ TRUE (within 0.02).** Token-paired at 5,000:
 E18 plain@6 − plain-depth1@1 = **+0.0192 [+0.0168, +0.0213]** (predicted < 0.02 at 30 %);
 plain-no-fixed-point@6 − depth1@1 = +0.0188 [+0.0159, +0.0215]; parcae-entry@6 −
-depth1@1 = **−0.0038 [−0.0066, −0.0013]** (the rebuilt loop beats the depth-1 model,
+depth1@1 = **−0.0038 [−0.0066, −0.0013]** (the rebuilt loop ahead of the depth-1 model at 5,000,
 predicted 50 %). The depth-1 model trained in 0.33 h against 1.00 h for the loop arms and
 0.88 h for the plain ones; its held-out loss 3.9887 beats the plain looped arm's 4.0060.
 Run deeper than trained it diverges (4.96 at depth 6, 6.61 at 16).
@@ -183,19 +185,20 @@ fixed point, Parcae-shaped state movement, and attention in core block 0 awake (
 0.016). What it did not change: the carry never trains (B, decay, dt at init), and the
 readout gains nothing from the state's continued movement after pass 2.
 
-The headline is P19e. A model trained at depth 1 matches the looped plain model at depth 6
-(it is 0.019 nats BETTER, token-paired) at a third of the wall clock, and comes within
-0.004 nats of the rebuilt loop arm. At 5,000 steps on this recipe the loop has been free
-in training: nothing asked for depth, so nothing paid for it. Every K-curve on this arc
-measured convergence time, not computation, and the depth-1 price is the number that
-separates them.
+P19e at this horizon: the model trained at depth 1 sits within 0.02 nats of the looped
+plain model at depth 6 (0.019 ahead of it, token-paired) and within 0.004 of the rebuilt loop
+arm, at a third of the wall clock. That is a 5,000-step reading, not a verdict on looping:
+a loop is a deep model and converges slower, and where the break-even lies is a longer-horizon
+question this panel did not ask. What the reading DOES say is that at 5,000 steps the loop's
+passes past the first carry 0.03 nats of the loss (the K-curve), and the depth-1 control is the
+instrument that separates convergence time from computation on any horizon.
 
 Binding applied: P19b FALSE ⇒ the dense-core and HC-gain arms were next; the HC-gain arm
 was dropped at review (the hyper-connection residual is a plain residual at init and its
 mixing map trained ~4× from init), and the depth-candidates panel
 (`2026-09-09-arc-e20-loop-depth-candidates.md`) runs dense-core, a 20× carry learning
 rate and Parcae's depth schedule on the loop arm's config, each scored against
-plain-depth1. P19e's third clause TRUE ⇒ the price is the headline number, above.
+plain-depth1. P19e's third clause TRUE ⇒ the price is reported above, with the horizon caveat.
 
 ## Updated hypothesis
 
@@ -205,7 +208,8 @@ schedule never asks for depth (full BPTT over a mean-6 draw trains the state to 
 at pass 1; Parcae truncates backprop to the last 4 of mean 8), the ternary per-pass map is
 too coarse to refine past pass 2, or the update never reaches the carry at lr 1e-4. Whatever
 the panel says, the standing instruments from here are CE(T=∞) − CE(T=1) AND the price
-against a depth-1-trained model at matched steps and matched wall clock; a K-curve alone is
-not evidence of computation. The Parcae comparison needs the same control on Parcae
+against a depth-1-trained model at matched steps and matched wall clock, read as a
+loop-contribution instrument at the horizon run, never as a ranking of looped against
+unlooped models; a K-curve alone is not evidence of computation. The Parcae comparison needs the same control on Parcae
 (`~/parcae/experiments/configs/owt_d1.yaml`, Wolfe's launch); until it runs, Parcae's 0.29
 is depth DEPENDENCE, not a measured value of depth.
