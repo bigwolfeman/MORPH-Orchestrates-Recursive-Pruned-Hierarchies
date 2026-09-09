@@ -40,6 +40,7 @@ import torch
 import torch.nn.functional as F
 
 from _build import ROOT, build_cfg
+from _rows import pack_rows, stream_from_loader
 from _stats import paired_bootstrap_ci
 
 sys.path.insert(0, f"{ROOT}/scripts")
@@ -66,8 +67,11 @@ def ce_maps(model, inp, layout, labels, device, step_mode=None,
     both forwards see the same slot depths and the same (dropout-free) graph.
     """
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
-        res = model.tul_forward_ablated(inp.to(device), None, layout, plan_mode="normal",
-                                        tul_step_mode=step_mode)
+        if layout is None:  # the plain control: the ordinary forward at cfg.mean_depth
+            res = model(inp.to(device), labels=None)
+        else:
+            res = model.tul_forward_ablated(inp.to(device), None, layout, plan_mode="normal",
+                                            tul_step_mode=step_mode)
     logits = res["logits"].float()
     B, L, V = logits.shape
     lab = labels.to(device).clone()
@@ -111,7 +115,6 @@ def main() -> None:
     device = a.device
     depths = [int(x) for x in a.depths.split(",")]
 
-    from morph.model.tul_layout import pack_tul_batch
     from morph.training.data import create_dataloader
     from morph.training.tul_setup import build_tul_runtime
 
@@ -125,54 +128,62 @@ def main() -> None:
         model, step = load_ckpt(cfg, path if path.startswith("/") else f"{ROOT}/{path}",
                                 device, tul_rt.model_cfg if tul_rt else None)
         model.eval()
-        spec = tul_rt.data_cfg.spec_for(cfg.data.seq_len)
-        rule = tul_rt.data_cfg.rule
+        plain = tul_rt is None  # the plain control (tul.activate_at: never)
         loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8,
                                    split="validation", skip_samples=0, bag_size=0, tul=None)
-        # pack ALL rows once — every depth sees identical batches (paired curve)
-        buf: list[int] = []
-        need = a.batch * (spec.l_total + 1)
-        batches = []
-        rows_done = 0
-        while rows_done < a.rows:
-            while len(buf) < need:
-                buf.extend(next(loader)[0].reshape(-1).tolist())
-            inp, labels, layout = pack_tul_batch(buf, rule, spec, a.batch)
-            batches.append((inp, labels, layout.to(device)))
-            rows_done += a.batch
+        # The SAME validation stream for every arm, packed by the arm's own cut (the
+        # trainer's packer for a TUL arm, non-overlapping seq_len+1 rows for the plain
+        # control), with the stream index of every scored position kept: two arms that
+        # cut the stream differently pair at the TOKEN level offline. Every depth sees
+        # identical batches (the paired curve).
+        row_tokens = (int(cfg.data.seq_len) + 1 if plain
+                      else tul_rt.data_cfg.spec_for(cfg.data.seq_len).l_total + 1)
+        stream = stream_from_loader(loader, a.rows * row_tokens)
+        n_batches = -(-a.rows // a.batch)
+        batches = pack_rows(stream, tul_rt, cfg, a.batch, plain)[:n_batches]
+        rows_done = sum(inp.shape[0] for inp, _, _, _ in batches)
         # scoreable masks (token pos, label valid) + span-first flags, once
         masks = []
-        dump = spec.max_slots
-        for inp, labels, layout in batches:
-            tokpos = (~layout.slot_mask.cpu()) & (labels >= 0)
+        dump = 0 if plain else tul_rt.data_cfg.spec_for(cfg.data.seq_len).max_slots
+        for inp, labels, layout, idx in batches:
+            tokpos = labels >= 0 if layout is None else (~layout.slot_mask) & (labels >= 0)
             first = torch.zeros_like(tokpos)
-            for b in range(inp.shape[0]):
-                seen: set[int] = set()
-                for p in range(inp.shape[1]):
-                    if not bool(tokpos[b, p]):
-                        continue
-                    bag = int(layout.bag_id[b, p])
-                    if bag not in seen:
-                        seen.add(bag)
-                        if 0 < bag < dump:
-                            first[b, p] = True
-            masks.append((tokpos, first))
-        orig_mean = int(model.cfg.tul.slot_mean_depth)
-        orig_max = int(model.cfg.tul.slot_max_depth)
+            if layout is not None:
+                for b in range(inp.shape[0]):
+                    seen: set[int] = set()
+                    for p in range(inp.shape[1]):
+                        if not bool(tokpos[b, p]):
+                            continue
+                        bag = int(layout.bag_id[b, p])
+                        if bag not in seen:
+                            seen.add(bag)
+                            if 0 < bag < dump:
+                                first[b, p] = True
+            masks.append((tokpos, first, idx))
+        batches = [(inp, labels, (lay.to(device) if lay is not None else None))
+                   for inp, labels, lay, _ in batches]
+        tc = None if plain else model.cfg.tul
+        orig_mean = int(model.cfg.mean_depth if plain else tc.slot_mean_depth)
+        orig_max = 0 if plain else int(tc.slot_max_depth)
         # k-fixed arms (tul.slot_depth_fixed > 0, the 2026-09-07 k=12 panel) ignore the mean
         # at eval, so the forced depth must go through the fixed knob as well.
-        orig_fixed = int(getattr(model.cfg.tul, "slot_depth_fixed", 0))
-        has_mux = float(model.cfg.tul.mux_beta) > 0.0
+        orig_fixed = 0 if plain else int(getattr(tc, "slot_depth_fixed", 0))
+        has_mux = (not plain) and float(tc.mux_beta) > 0.0
         arm = {"step": step, "rows": rows_done, "batch": a.batch, "eval_mode": a.eval_mode,
+               "plain": plain,
                "train_eval_depth":
                orig_fixed or orig_mean or int(cfg.model.mean_depth), "depths": {},
-               "mux_target": str(model.cfg.tul.mux_target) if has_mux else None,
-               "cond_layers": int(model.cfg.tul.cond_layers),
-               "detach_z": bool(model.cfg.tul.detach_z)}
-        _sigma = (getattr(model.cfg.tul, "core_stage_cond", "none") == "sigma"
+               "mux_target": str(tc.mux_target) if has_mux else None,
+               "cond_layers": 0 if plain else int(tc.cond_layers),
+               "detach_z": False if plain else bool(tc.detach_z)}
+        _sigma = ((not plain) and getattr(tc, "core_stage_cond", "none") == "sigma"
                   and a.eval_mode == "auto")
         _step_mode = "bptt" if a.eval_mode == "force-loop" else None
-        orig_ladder = int(getattr(model.cfg.tul, "db1_ladder_steps", 0))
+        orig_ladder = 0 if plain else int(getattr(tc, "db1_ladder_steps", 0))
+        # the stream index of every scored position, in row order (one array; the same
+        # order the per-token CE arrays below use)
+        tok_index = np.concatenate([idx[tokpos].numpy() for tokpos, _, idx in masks]).astype(np.int32)
+        tok_ce: dict[int, np.ndarray] = {}
         # per-ROW bookkeeping (token CE) and per-BATCH bookkeeping (mux) for the CIs
         row_sum: dict[int, np.ndarray] = {}
         row_cnt: np.ndarray | None = None
@@ -180,26 +191,35 @@ def main() -> None:
         mux_cnt: dict[str, np.ndarray | None] = {m: None for m in MUX_METRICS}
         try:
             for d in depths:
-                if _sigma:
-                    # sigma-conditioned (db1) models: eval depth = Euler-ladder steps K
-                    # (transformer.py: K = k_steps or cfg.tul.db1_ladder_steps or mean_depth);
-                    # slot_mean_depth is ignored by that path.
-                    model.cfg.tul.db1_ladder_steps = d
-                model.cfg.tul.slot_mean_depth = d
-                model.cfg.tul.slot_max_depth = max(d, orig_max or int(cfg.model.max_depth))
-                if orig_fixed > 0:
-                    model.cfg.tul.slot_depth_fixed = d
+                if plain:
+                    # the plain forward's eval depth is a uniform cfg.mean_depth fill with
+                    # no clamp at eval (transformer.py, the `else` of `if self.training`)
+                    model.cfg.mean_depth = d
+                else:
+                    if _sigma:
+                        # sigma-conditioned (db1) models: eval depth = Euler-ladder steps K
+                        # (transformer.py: K = k_steps or cfg.tul.db1_ladder_steps or
+                        # mean_depth); slot_mean_depth is ignored by that path.
+                        tc.db1_ladder_steps = d
+                    tc.slot_mean_depth = d
+                    tc.slot_max_depth = max(d, orig_max or int(cfg.model.max_depth))
+                    if orig_fixed > 0:
+                        tc.slot_depth_fixed = d
                 tot = tot_n = fst = fst_n = 0.0
                 rs: list[float] = []
                 rc: list[float] = []
                 ms: dict[str, list[float]] = {m: [] for m in MUX_METRICS}
                 mc: dict[str, list[float]] = {m: [] for m in MUX_METRICS}
-                for (inp, labels, layout), (tokpos, first) in zip(batches, masks):
+                ces: list[np.ndarray] = []
+                for (inp, labels, layout), (tokpos, first, _) in zip(batches, masks):
                     ce, stats = ce_maps(model, inp, layout, labels, device,
                                         step_mode=_step_mode, want_mux=has_mux)
                     ce = ce.cpu()
-                    tot += float(ce[tokpos].sum()); tot_n += int(tokpos.sum())
-                    fst += float(ce[first].sum()); fst_n += int(first.sum())
+                    ces.append(ce[tokpos].numpy().astype(np.float32))
+                    tot += float(ce[tokpos].sum())
+                    tot_n += int(tokpos.sum())
+                    fst += float(ce[first].sum())
+                    fst_n += int(first.sum())
                     rs.extend((ce * tokpos).sum(dim=1).tolist())
                     rc.extend(tokpos.sum(dim=1).tolist())
                     for m, (vk, ck) in MUX_METRICS.items():
@@ -208,9 +228,11 @@ def main() -> None:
                             ms[m].append(stats[vk] * n_sup)
                             mc[m].append(n_sup)
                 row_sum[d] = np.asarray(rs)
+                tok_ce[d] = np.concatenate(ces)
                 if row_cnt is None:
                     row_cnt = np.asarray(rc)
-                entry = {"ce_tokens": tot / tot_n, "ce_span_first": fst / fst_n,
+                entry = {"ce_tokens": tot / tot_n,
+                         "ce_span_first": fst / fst_n if fst_n else float("nan"),
                          "n_tokens": tot_n, "n_first": fst_n}
                 for m in MUX_METRICS:
                     if ms[m]:
@@ -221,16 +243,19 @@ def main() -> None:
                         entry[f"{m}_n_supervised"] = float(np.sum(mc[m]))
                 arm["depths"][d] = entry
                 print(f"{label:10s} depth={d}  ce={tot/tot_n:.4f}  "
-                      f"span_first={fst/fst_n:.4f}"
+                      f"span_first={entry['ce_span_first']:.4f}"
                       + "".join(f"  {m}={entry[m]:.4f}" for m in MUX_METRICS if m in entry),
                       flush=True)
         finally:
-            model.cfg.tul.slot_mean_depth = orig_mean
-            model.cfg.tul.slot_max_depth = orig_max
-            if orig_fixed > 0:
-                model.cfg.tul.slot_depth_fixed = orig_fixed
-            if _sigma:
-                model.cfg.tul.db1_ladder_steps = orig_ladder
+            if plain:
+                model.cfg.mean_depth = orig_mean
+            else:
+                tc.slot_mean_depth = orig_mean
+                tc.slot_max_depth = orig_max
+                if orig_fixed > 0:
+                    tc.slot_depth_fixed = orig_fixed
+                if _sigma:
+                    tc.db1_ladder_steps = orig_ladder
         assert row_cnt is not None
         arm["ci_ce_tokens"] = _bootstrap_pairs(depths, row_sum, row_cnt)
         for m in MUX_METRICS:
@@ -248,6 +273,13 @@ def main() -> None:
         # rows can be computed offline without re-running the sweep
         arm["row_ce_sum"] = {str(d): row_sum[d].tolist() for d in depths}
         arm["row_n_tokens"] = row_cnt.tolist()
+        # per-token CE keyed by stream index (float32, ~14 MB per arm at 480 rows x 7
+        # depths) beside the JSON: arms that cut the stream differently pair at the token
+        # level offline (block-bootstrap over stream blocks, score_e18.py)
+        npz = a.out.rsplit(".", 1)[0] + f".{label}.tokens.npz"
+        np.savez_compressed(npz, tok_index=tok_index,
+                            **{f"ce_{d}": tok_ce[d] for d in depths})
+        arm["tokens_npz"] = npz
         results[label] = arm
         del model
         if device == "cuda":

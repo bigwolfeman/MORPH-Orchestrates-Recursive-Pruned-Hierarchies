@@ -52,6 +52,29 @@ JSONs by `score_e18.py` (written after launch; reads only JSONs and these consta
 Analysis: between-arm CE differences paired over the same 480 rows with 2,000-draw
 bootstrap CIs; K-differences per arm; `loss/gain_est` and the hinge fraction from the probes.
 
+**Method amendment 1 (2026-09-08 23:20, k2 and k4 scored, k8 and notul not yet).** Two
+facts about the sweep tool, found while writing `score_e18.py`:
+
+1. *Rows do not pair across cuts.* Every arm scores the same validation stream, but a row
+   of 1024 + 64·k positions holds a different number of tokens at each width (k2 mean
+   1044, k4 mean 1064.8 per row), so the rows drift apart along the stream: the row means
+   of k2 and k4 correlate at 0.098 across the 480 rows against 1.000 within an arm across
+   depths. "Paired over the same 480 rows" in Method holds WITHIN an arm (the K-differences)
+   and between arms of the same width only; every cross-width and mask-versus-plain
+   comparison on the row sums is unpaired, with a floor of about ±0.06 nats. Fix:
+   `core_depth_sweep.py` now writes a per-token CE array keyed by stream index beside its
+   JSON (shared packer `lab/divergence/_rows.py`, the one `olympiad_sweep.py` uses), and
+   `score_e18.py` pairs at the token level with a block bootstrap over 1,024-token stream
+   blocks. The k2/k4 sweeps predate the change and are re-run from their checkpoints; the
+   K-differences already on disk are unaffected.
+2. *The plain arm's sweep would crash.* `notul_e18` builds no TUL runtime and
+   `core_depth_sweep.py` dereferenced it unconditionally; the same change gives it the
+   plain path (the trainer's cut, `cfg.mean_depth` as the depth lever, as
+   `token_depth_sweep.py` does). Its first result is checked against the trainer's
+   held-out loss at the same step before it is read (the E17 rule).
+
+The predictions are untouched; P18b and P18d are scored on the token-paired numbers.
+
 ## Predictions (frozen)
 
 - **P18a (survival).** k2 **90 %**, k4 **85 %**, k8 **80 %**, notul **95 %** reach 5,000 with

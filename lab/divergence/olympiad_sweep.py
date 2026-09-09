@@ -38,6 +38,7 @@ import torch
 import torch.nn.functional as F
 
 from _build import ROOT, build_cfg
+from _rows import pack_rows  # noqa: F401  (re-exported: tests import it from here)
 from _stats import paired_bootstrap_ci
 
 sys.path.insert(0, f"{ROOT}/scripts")
@@ -121,64 +122,6 @@ def forward_maps(model, inp, labels, layout, device, want_mux: bool):
                 stats[vk] = float(res_l[vk])
                 stats[ck] = float(res_l.get(ck, 1.0))
     return ce.cpu(), correct.cpu(), stats
-
-
-def pack_rows(stream: list[int], tul_rt, cfg, batch: int, plain: bool):
-    """All batches once, with the stream index of every scored position.
-
-    Returns ``[(inp, labels, layout_or_None, pos_index)]`` where ``pos_index`` is ``[B, L]``
-    int64, the stream index of the INPUT token at each position (−1 at slot/pad positions).
-    """
-    from morph.model.tul_layout import pack_tul_batch
-
-    out = []
-    if plain:
-        L = int(cfg.data.seq_len)
-        c = 0
-        # Non-overlapping rows of seq_len + 1 tokens, exactly the trainer's cut
-        # (MultiSourceCurriculumLoader._fill): row k holds stream[k(L+1) : (k+1)(L+1)]. A
-        # stride of L (the bug fixed 2026-09-08, E17) shifts row k by k tokens; on the
-        # Sudoku shard, where every document is exactly L + 1 tokens and the trained model
-        # has only ever seen a board at offset 0, that read 2.46 nats against the trainer's
-        # 0.55 (`lab/experiments/failures/2026-09-08-arc-e17-sudoku-depth-grid.md`). The
-        # last batch keeps its partial set of rows so every document is scored.
-        while c + L + 1 <= len(stream):
-            ins, labs, idx = [], [], []
-            while len(ins) < batch and c + L + 1 <= len(stream):
-                seg = stream[c:c + L + 1]
-                ins.append(seg[:-1])
-                labs.append(seg[1:])
-                idx.append(list(range(c, c + L)))
-                c += L + 1
-            out.append((torch.tensor(ins), torch.tensor(labs), None, torch.tensor(idx)))
-        return out
-    spec = tul_rt.data_cfg.spec_for(cfg.data.seq_len)
-    rule = tul_rt.data_cfg.rule
-    buf = list(stream)
-    cursor = 0
-    need = batch * (spec.l_total + 1)
-    while len(buf) >= need:
-        before = len(buf)
-        inp, labels, layout = pack_tul_batch(buf, rule, spec, batch)
-        used = before - len(buf)
-        tokpos = ~layout.slot_mask
-        idx = torch.full(inp.shape, -1, dtype=torch.long)
-        k = cursor
-        for b in range(inp.shape[0]):
-            ps = tokpos[b].nonzero().flatten().tolist()
-            for p in ps:
-                idx[b, p] = k
-                k += 1
-        if k - cursor != used:
-            raise RuntimeError(f"packer consumed {used} tokens but the rows hold {k - cursor} "
-                               "token positions; the stream map would be wrong")
-        got = inp[tokpos].tolist()
-        exp = stream[cursor:cursor + used]
-        if got != exp:
-            raise RuntimeError("packed token positions do not reproduce the stream in order")
-        out.append((inp, labels, layout, idx))
-        cursor += used
-    return out
 
 
 def _sums_by_doc(values: np.ndarray, units: np.ndarray, n_units: int) -> np.ndarray:
