@@ -1,0 +1,16 @@
+# Horizon run: the ternary Parcae-entry recipe for 25,000 steps on OpenWebText (Wolfe
+# 2026-09-09: "25k steps in ternary on open web data to see if this changes over time").
+# Checkpoints every 5,000 steps; each one gets the loop-contribution readout (K-curve,
+# anatomy) so the change over training is read at 5k/10k/15k/20k/25k. AdEMAMix horizons
+# stay pinned (ademamix_t_beta3 3500, t_alpha 1600 in base.yaml) so the run length does
+# not change the optimizer. Record: lab/experiments/planned/2026-09-09-arc-horizon-ternary-25k.md
+defaults:
+  - notul_parcae_entry
+  - _self_
+
+training:
+  steps: 25000
+  ckpt_every: 5000
+
+wandb:
+  name: horizon-ternary-25k
