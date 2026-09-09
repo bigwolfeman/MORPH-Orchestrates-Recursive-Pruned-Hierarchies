@@ -135,14 +135,21 @@ def pack_rows(stream: list[int], tul_rt, cfg, batch: int, plain: bool):
     if plain:
         L = int(cfg.data.seq_len)
         c = 0
-        while c + batch * L + 1 <= len(stream):
+        # Non-overlapping rows of seq_len + 1 tokens, exactly the trainer's cut
+        # (MultiSourceCurriculumLoader._fill): row k holds stream[k(L+1) : (k+1)(L+1)]. A
+        # stride of L (the bug fixed 2026-09-08, E17) shifts row k by k tokens; on the
+        # Sudoku shard, where every document is exactly L + 1 tokens and the trained model
+        # has only ever seen a board at offset 0, that read 2.46 nats against the trainer's
+        # 0.55 (`lab/experiments/failures/2026-09-08-arc-e17-sudoku-depth-grid.md`). The
+        # last batch keeps its partial set of rows so every document is scored.
+        while c + L + 1 <= len(stream):
             ins, labs, idx = [], [], []
-            for _ in range(batch):
+            while len(ins) < batch and c + L + 1 <= len(stream):
                 seg = stream[c:c + L + 1]
                 ins.append(seg[:-1])
                 labs.append(seg[1:])
                 idx.append(list(range(c, c + L)))
-                c += L
+                c += L + 1
             out.append((torch.tensor(ins), torch.tensor(labs), None, torch.tensor(idx)))
         return out
     spec = tul_rt.data_cfg.spec_for(cfg.data.seq_len)
