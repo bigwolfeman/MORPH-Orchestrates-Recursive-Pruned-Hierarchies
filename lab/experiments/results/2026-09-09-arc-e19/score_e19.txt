@@ -1,0 +1,72 @@
+=== the E17 rule: sweep CE at the trained depth vs the trainer's held-out loss at that step
+  parcae-entry@2500 depth 6: sweep 4.4156  trainer 4.4453  gap -0.0297 OK
+  parcae-entry@5000 depth 6: sweep 3.9573  trainer 3.9807  gap -0.0234 OK
+  plain-no-fixed-point@2500 depth 6: sweep 4.4275  trainer 4.4552  gap -0.0277 OK
+  plain-no-fixed-point@5000 depth 6: sweep 3.9799  trainer 4.0066  gap -0.0267 OK
+  plain-depth1@2500 depth 1: sweep 4.4330  trainer 4.4564  gap -0.0234 OK
+  plain-depth1@5000 depth 1: sweep 3.9612  trainer 3.9887  gap -0.0275 OK
+  e18-notul @5000 depth 6: sweep 3.9804  trainer 4.0060  gap -0.0256 OK
+
+=== token CE by forced depth (480 rows) and the sweep's paired K-differences
+arm           ck     T=0     T=1     T=2     T=3     T=6     T=9    T=12    T=16 | K1-K6 | K3-K6 | K6-K12
+parcae-entry  2500  9.0078  4.4428  4.4200  4.4165  4.4156  4.4156  4.4157  4.4157 | +0.0272 [+0.0263, +0.0282] | +0.0009 [+0.0007, +0.0011] | -0.0001
+parcae-entry  5000  8.8346  3.9905  3.9621  3.9582  3.9573  3.9575  3.9574  3.9575 | +0.0332 [+0.0319, +0.0344] | +0.0009 [+0.0007, +0.0011] | -0.0001
+plain-no-fixed-point  2500  4.9147  4.4708  4.4360  4.4285  4.4275  4.4318  4.4379  4.4481 | +0.0433 [+0.0420, +0.0447] | +0.0009 [+0.0005, +0.0014] | -0.0104
+plain-no-fixed-point  5000  4.5452  4.0165  3.9874  3.9809  3.9799  3.9848  3.9913  4.0027 | +0.0366 [+0.0353, +0.0378] | +0.0009 [+0.0005, +0.0013] | -0.0114
+plain-depth1  2500  4.8623  4.4330  4.5089  4.6824  5.7909  6.9169  7.4109  7.5559 | -1.3578 [-1.3756, -1.3398] | -1.1085 [-1.1251, -1.0916] | -1.6201
+plain-depth1  5000  4.5357  3.9612  4.0385  4.2062  4.9569  5.6106  6.1242  6.6052 | -0.9958 [-1.0077, -0.9845] | -0.7507 [-0.7611, -0.7411] | -1.1673
+e18-notul   5000       -  4.0007  3.9841  3.9804  3.9804  3.9835  3.9879  3.9947 | +0.0203 [+0.0194, +0.0213] | -0.0000 [-0.0004, +0.0003] | -0.0075
+
+=== P19b (the loop arm earns depth) at 5000
+  K1-K6 > 0.15:            +0.0332 -> FALSE
+  K3-K6 > 0.02, CI > 0:    +0.0009 lo +0.0007 -> FALSE
+  K6-K12 within +-0.005:   -0.0001 -> TRUE
+  CE(T=0) - CE(T=1) > 1.0: +4.8441 -> TRUE
+  binding clause 'P19b FALSE (K3-K6 < 0.01)': TRUE
+
+=== P19c (the loop arm's end point): loop@6 - E18 plain@6, token-paired
+  -0.0230 [-0.0255, -0.0205] (tokens n=491520 blocks=481)  within +0.05: TRUE  better: TRUE  >0.15 behind: FALSE
+
+=== P19d (fp0 alone): K3-K6 > 0.005 with CI > 0; fp0@6 - E18 plain@6 within 0.02, token-paired
+  K3-K6 +0.0009 lo +0.0005 -> FALSE
+  fp0@6 - plain@6: -0.0004 [-0.0033, +0.0024] (tokens n=491520 blocks=481) -> within 0.02: TRUE
+
+=== P19e (the price of the loop): CE(x@6) - CE(d1@1), token-paired
+  e18-notul @6 - d1@1: +0.0192 [+0.0168, +0.0213] (tokens n=491520 blocks=481)
+  parcae-entry@6 - d1@1: -0.0038 [-0.0066, -0.0013] (tokens n=491520 blocks=481)
+  plain-no-fixed-point@6 - d1@1: +0.0188 [+0.0159, +0.0215] (tokens n=491520 blocks=481)
+  plain: > 0.05 FALSE; > 0.15 FALSE; < 0.02 (H19'': the loop was free) TRUE
+  loop@6 beats d1@1 (CI hi < 0): TRUE
+  d1's own K-curve (a depth-1-trained model run deeper) is in the table above; its trained depth is 1.
+
+=== P19f (anatomy of the loop arm at 5000, depth 8, 3 rows)
+  consecutive movement: [0.3752, 0.2309, 0.0724, 0.0494, 0.0274, 0.0213, 0.0181]
+  movement at iteration 6 > 10 %: 0.0213 -> FALSE
+  a block out/in > 0.2 at iteration 6: max 0.2359 (attn [0.207, 0.079, 0.099, 0.147, 0.178, 0.175], mlp [0.185, 0.218, 0.193, 0.236, 0.232, 0.21]) -> TRUE
+  B diag mean moves > 0.3 from 1.0: 1.0349 -> FALSE
+  injection A mean 0.4436 [0.4224, 0.4675] (init 0.447)  dt 0.8023 (init 0.8)  span [0, 1024]
+  h0 norm 1378.0 rank 53.2; carrier norm t1..t8 [1450, 1652, 1907, 1917, 1964, 1961, 1971, 1970]; rank [77.4, 73.1, 75.4, 73.0, 73.4, 73.0, 73.0, 73.0]; cos to h0 [0.204, 0.144, 0.174, 0.169, 0.173, 0.172, 0.173, 0.173]
+  init probe parcae-entry (96 rows, noise std 0.02):
+    prelude      T1=3.948 T2=3.901 T3=3.896 T4=3.896 T6=3.896 T8=3.896 T12=3.896 T16=3.896 T24=3.896
+    noise_rms    T1=3.961 T2=3.905 T3=3.897 T4=3.896 T6=3.896 T8=3.896 T12=3.896 T16=3.896 T24=3.896
+    zero         T1=3.926 T2=3.900 T3=3.896 T4=3.896 T6=3.896 T8=3.896 T12=3.896 T16=3.896 T24=3.896
+    noise_small  T1=3.926 T2=3.900 T3=3.896 T4=3.896 T6=3.896 T8=3.896 T12=3.896 T16=3.896 T24=3.896
+    sanity: noise_small@T6 3.8960 vs the sweep's trained init on the same first 96 rows @T6 3.8959 -> within 0.01: TRUE (the prereg named T8; the sweep has no depth 8)
+  init probe plain-no-fixed-point (96 rows, noise std 0.02):
+    prelude      T1=3.950 T2=3.919 T3=3.912 T4=3.911 T6=3.912 T8=3.915 T12=3.923 T16=3.934 T24=3.966
+    noise_rms    T1=7.183 T2=6.921 T3=6.715 T4=6.583 T6=6.469 T8=6.500 T12=6.636 T16=6.797 T24=7.077
+    zero         T1=5.544 T2=5.326 T3=5.367 T4=5.427 T6=5.500 T8=5.557 T12=5.761 T16=6.018 T24=6.517
+    noise_small  T1=5.545 T2=5.327 T3=5.367 T4=5.427 T6=5.501 T8=5.557 T12=5.766 T16=6.018 T24=6.521
+  init probe plain-depth1 (96 rows, noise std 0.02):
+    prelude      T1=3.897 T2=3.976 T3=4.144 T4=4.384 T6=4.883 T8=5.333 T12=6.041 T16=6.543 T24=7.282
+    noise_rms    T1=6.998 T2=6.413 T3=6.375 T4=6.464 T6=6.706 T8=7.011 T12=7.424 T16=7.678 T24=8.367
+    zero         T1=4.709 T2=4.660 T3=4.998 T4=5.437 T6=6.022 T8=6.444 T12=6.890 T16=7.223 T24=7.947
+    noise_small  T1=4.710 T2=4.661 T3=4.999 T4=5.438 T6=6.023 T8=6.445 T12=6.889 T16=7.224 T24=7.948
+
+=== P19a/g: survival, tripwire, wall clock, peak, held-out curve
+  parcae-entry verdict=HEALTHY last=4999 max=129@226  wall 1.00 h  peak 10.17 GB  val@2500 4.4453  final 3.9807  {'preclip_max_after_200': (129, 226)}
+  plain-no-fixed-point verdict=HEALTHY last=4999 max=37@245  wall 0.88 h  peak 10.06 GB  val@2500 4.4552  final 4.0066  {'preclip_max_after_200': (37, 245)}
+  plain-depth1 verdict=HEALTHY last=4999 max=48.5@2936  wall 0.33 h  peak 9.04 GB  val@2500 4.4564  final 3.9887  {'preclip_max_after_200': (48, 2936)}
+  e18-notul  verdict=E18  wall nan h  peak 10.16 GB  val@2500 4.4624  final 4.0060  no probe file
+  loop - plain held-out (trainer's own batches): 500:+0.061 1000:+0.008 1500:+0.010 2000:+0.008 2500:-0.017 3000:-0.044 3500:-0.043 4000:-0.042 4500:-0.031 4751:-0.025
+  P19g: loop <= 1.3 h: TRUE; peak < 16 GB: TRUE

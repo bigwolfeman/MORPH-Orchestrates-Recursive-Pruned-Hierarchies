@@ -54,7 +54,7 @@ def main() -> None:
     for (a, ck), s in S.items():
         d = TRAINED.get(a, "6")
         v = vals.get(a, {})
-        tv = v.get(ck if ck in v else ck + 1)
+        tv = v.get(ck) if ck in v else (v[max(v)] if v and ck >= max(v) else None)  # the final eval is keyed last+1
         gap = s["depths"][d]["ce_tokens"] - tv if tv is not None else float("nan")
         print(f"  {a:10s}@{ck} depth {d}: sweep {s['depths'][d]['ce_tokens']:.4f}  trainer {tv if tv is not None else float('nan'):.4f}"
               f"  gap {gap:+.4f} {'OK' if abs(gap) < VAL_GAP_LIMIT else 'BUG?'}")
