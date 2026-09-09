@@ -1,6 +1,6 @@
 """training.injection_lr_mult — a third optimizer param group for the injection
 
-parameters (DiagonalInjection's B/log_A/log_dt, arc E20 e20-carry-lr20x).
+parameters (DiagonalInjection's B/log_A/log_dt, arc E20 depthcand-carry-lr20x).
 
 Contract:
   - mult == 1.0 (default): today's two-group layout, byte-identical — no `lr_mult`

@@ -37,12 +37,12 @@ loop has been worth almost nothing in training as well.
 Three plain arms on the E18 recipe (`notul_e18`: seq 1024, batch 6, 5,000 steps, ramp 1000,
 flat 1e-4, ternary backbone, AdEMAMix β1 = 0, Poisson core depth mean 6 / max 8, full BPTT):
 
-- **loop** (`notul_e19_loop.yaml`): `core_state_init: noise` (std 0.02), `injection_channels:
+- **loop** (`notul_parcae_entry.yaml`): `core_state_init: noise` (std 0.02), `injection_channels:
   all` with `injection_all_decay 0.447` / `injection_all_dt 0.8` on every dim, `injection_B:
   true` (identity init), `core_fixed_point_lambda 0.0` (Parcae has no such term).
-- **fp0** (`notul_e19_fp0.yaml`): the E18 plain recipe with only the fixed-point term off —
+- **fp0** (`notul_no_fixed_point.yaml`): the E18 plain recipe with only the fixed-point term off —
   the one-factor control for the loop arm's λ = 0.
-- **d1** (`notul_e19_d1.yaml`): the E18 plain recipe trained at core depth 1 (mean = max =
+- **d1** (`notul_depth1.yaml`): the E18 plain recipe trained at core depth 1 (mean = max =
   bptt = 1, λ = 0): the matched-tokens control that prices the loop.
 
 Code: `morph/model/transformer.py` (`_NoiseInit`, `DiagonalInjection(use_B)`, the uniform

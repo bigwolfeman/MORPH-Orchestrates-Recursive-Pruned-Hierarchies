@@ -19,4 +19,4 @@ training:
   grad_probe_every: 1     # the plain lineage inherits 0: the tripwire needs the probe (E19 amendment 1)
 
 wandb:
-  name: e19-loop
+  name: parcae-entry

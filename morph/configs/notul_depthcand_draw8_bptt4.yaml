@@ -4,7 +4,7 @@
 # more past pass 1 than E19's shallower full-BPTT loop.
 # Prereg: lab/experiments/planned/2026-09-09-arc-e20-loop-depth-candidates.md
 defaults:
-  - notul_e19_loop
+  - notul_parcae_entry
   - _self_
 
 model:
@@ -13,4 +13,4 @@ model:
   bptt_depth: 4
 
 wandb:
-  name: e20-draw8-bptt4
+  name: depthcand-draw8-bptt4

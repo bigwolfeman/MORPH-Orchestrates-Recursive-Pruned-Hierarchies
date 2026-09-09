@@ -19,8 +19,8 @@ from lab.divergence.sweep_score import (ci, fmt, load_sweep, paired, peak_gb, pr
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
-ARMS = ["e20-dense-core", "e20-carry-lr20x", "e20-draw8-bptt4"]
-TRAINED = {"e20-dense-core": "6", "e20-carry-lr20x": "6", "e20-draw8-bptt4": "8",
+ARMS = ["depthcand-dense-core", "depthcand-carry-lr20x", "depthcand-draw8-bptt4"]
+TRAINED = {"depthcand-dense-core": "6", "depthcand-carry-lr20x": "6", "depthcand-draw8-bptt4": "8",
            "e19-loop": "6", "e19-d1": "1"}
 LOOP, D1 = "e19-loop", "e19-d1"
 CKS = [2500, 5000]
@@ -42,7 +42,7 @@ def kdiff(s: dict, a: str, b: str, dirs) -> tuple:
 
 def main() -> None:
     root = sys.argv[1] if len(sys.argv) > 1 else HERE
-    queue = sys.argv[2] if len(sys.argv) > 2 else os.path.join(root, "queue_e20.log")
+    queue = sys.argv[2] if len(sys.argv) > 2 else os.path.join(root, "queue_depthcand.log")
     e19 = sys.argv[3] if len(sys.argv) > 3 else os.path.join(HERE, "..", "2026-09-09-arc-e19")
     dirs = (root, HERE, e19) + ART
     S = {(a, ck): s for a in ARMS for ck in CKS
@@ -125,8 +125,8 @@ def main() -> None:
         print(f"    {'':16s} full curves: " + "; ".join(f"{m}: " + " ".join(f"T{d}={v:.3f}" for d, v in c.items()) for m, c in pr["ce"].items()))
 
     print("\n=== P20a/f: survival, tripwire, wall clock, peak, held-out curve")
-    wh = wall_h(queue, "e20-") if os.path.exists(queue) else {}
-    vd = verdicts(queue, "e20-") if os.path.exists(queue) else {}
+    wh = wall_h(queue, "depthcand-") if os.path.exists(queue) else {}
+    vd = verdicts(queue, "depthcand-") if os.path.exists(queue) else {}
     for a in ARMS + [LOOP]:
         log = os.path.join(root if a in ARMS else e19, f"run_{a}.log")
         if not os.path.exists(log):
@@ -144,16 +144,16 @@ def main() -> None:
                 steps = sorted(set(vals[a]) & set(vals[LOOP]))
                 print(f"  {a} - loop held-out (trainer's batches): " +
                       " ".join(f"{s}:{vals[a][s] - vals[LOOP][s]:+.3f}" for s in steps if s % 1000 == 0 or s == max(steps)))
-    if "e20-dense-core" in wh:
-        print(f"  P20f: dense-core within 1.1x loop wall: {yes(wh['e20-dense-core'] <= 1.1 * LOOP_WALL_H)}")
-    if "e20-draw8-bptt4" in wh:
-        r = wh["e20-draw8-bptt4"] / LOOP_WALL_H
+    if "depthcand-dense-core" in wh:
+        print(f"  P20f: dense-core within 1.1x loop wall: {yes(wh['depthcand-dense-core'] <= 1.1 * LOOP_WALL_H)}")
+    if "depthcand-draw8-bptt4" in wh:
+        r = wh["depthcand-draw8-bptt4"] / LOOP_WALL_H
         print(f"  P20f: draw8-bptt4 wall {r:.2f}x loop -> in [1.15, 1.5]: {yes(1.15 <= r <= 1.5)}")
-    if "e20-draw8-bptt4" in vals and LOOP in vals and "e20-draw8-bptt4" in wh:
+    if "depthcand-draw8-bptt4" in vals and LOOP in vals and "depthcand-draw8-bptt4" in wh:
         # matched wall clock: the draw8 arm's held-out loss at the step it has reached when the
         # (faster) loop arm finishes its 5000, against the loop arm's final
-        step_at = int(5000 * LOOP_WALL_H / wh["e20-draw8-bptt4"] / 250) * 250
-        dv = vals["e20-draw8-bptt4"].get(step_at)
+        step_at = int(5000 * LOOP_WALL_H / wh["depthcand-draw8-bptt4"] / 250) * 250
+        dv = vals["depthcand-draw8-bptt4"].get(step_at)
         lf = vals[LOOP][max(vals[LOOP])]
         if dv is not None:
             print(f"  matched wall clock: draw8@{step_at} {dv:.4f} vs loop final {lf:.4f} -> {dv - lf:+.4f}"

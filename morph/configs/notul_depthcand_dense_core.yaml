@@ -4,11 +4,11 @@
 # depth-earning (E19: K3−K6 0.0009 nats). Everything else is the E19 loop-entry recipe.
 # Prereg: lab/experiments/planned/2026-09-09-arc-e20-loop-depth-candidates.md
 defaults:
-  - notul_e19_loop
+  - notul_parcae_entry
   - _self_
 
 training:
   ternary_scope: backbone_no_core
 
 wandb:
-  name: e20-dense-core
+  name: depthcand-dense-core

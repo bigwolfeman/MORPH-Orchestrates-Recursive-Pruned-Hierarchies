@@ -28,7 +28,7 @@ arm's config, ranked by how far MORPH's choice sits from Parcae's:
 3. **The carry never trains.** B, decay and dt sit at init after 5,000 steps at lr 1e-4
    under AdEMAMix; Parcae's B diagonal reached 2.4 under Muon at 8e-3.
 
-E20 runs one arm per candidate on `notul_e19_loop` and scores each on its K-curve, on
+E20 runs one arm per candidate on `notul_parcae_entry` and scores each on its K-curve, on
 token-paired CE against the E19 loop arm, and on the depth-1 price (against E19's
 `e19-d1`, the model trained at depth 1) so a manufactured dependence cannot pass as a win.
 
@@ -42,15 +42,15 @@ not in the map, the carry or the schedule.
 
 ## Method
 
-Base: `notul_e19_loop` (E18 plain recipe + the E19 entry: seq 1024, batch 6, 5,000 steps,
+Base: `notul_parcae_entry` (E18 plain recipe + the E19 entry: seq 1024, batch 6, 5,000 steps,
 ramp 1000 then flat 1e-4, ternary backbone, AdEMAMix β1=0, web text, checkpoints at 2,500
 and 5,000, grad probe every step). Arms, one factor each:
 
 | arm | config | the one change |
 | --- | --- | --- |
-| `e20-dense-core` | `notul_e20_dense_core` | `model.ternary_scope: backbone_no_core` — ternary everywhere except modules under `core.`; prelude and coda stay ternary |
-| `e20-carry-lr20x` | `notul_e20_carry_lr20x` | `training.injection_lr_mult: 20` — the parameters whose name contains `injection` (B, log_A, log_dt) train at 2e-3 in their own optimizer group; everything else at 1e-4 |
-| `e20-draw8-bptt4` | `notul_e20_draw8_bptt4` | `model.mean_depth: 8`, `max_depth: 12`, `bptt_depth: 4` — Parcae's per-sequence Poisson mean 8 with backprop through the last 4 iterations only |
+| `depthcand-dense-core` | `notul_depthcand_dense_core` | `model.ternary_scope: backbone_no_core` — ternary everywhere except modules under `core.`; prelude and coda stay ternary |
+| `depthcand-carry-lr20x` | `notul_depthcand_carry_lr20x` | `training.injection_lr_mult: 20` — the parameters whose name contains `injection` (B, log_A, log_dt) train at 2e-3 in their own optimizer group; everything else at 1e-4 |
+| `depthcand-draw8-bptt4` | `notul_depthcand_draw8_bptt4` | `model.mean_depth: 8`, `max_depth: 12`, `bptt_depth: 4` — Parcae's per-sequence Poisson mean 8 with backprop through the last 4 iterations only |
 
 Order: dense-core, carry-lr20x, draw8-bptt4. Runner `arc/run_e20.sh` (waits for `E19
 COMPLETE`, then per arm: 12-step smoke, the draw, the sustained tripwire, then

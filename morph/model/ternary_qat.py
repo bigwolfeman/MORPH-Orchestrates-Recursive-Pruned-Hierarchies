@@ -87,7 +87,7 @@ SCOPES: dict[str, set[str]] = {
     # Same category set as "backbone", but with a PATH exclusion applied in the
     # apply_ternary_qat loop below: modules whose dotted path starts with "core."
     # (the looped MORPHTransformer.core ModuleList) stay bf16. Prelude and coda
-    # backbone linears still ternarize. Diagnostic arm (E20 e20-dense-core): keeps
+    # backbone linears still ternarize. Diagnostic arm (the dense-core arm of the depth-candidates panel): keeps
     # the per-pass map bf16 while the rest of the backbone stays ternary, to test
     # whether the ternary snap on the shared core weights is what starves the loop's
     # depth-earning.

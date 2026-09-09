@@ -1,4 +1,4 @@
-"""training.ternary_scope="backbone_no_core" (arc E20 e20-dense-core).
+"""training.ternary_scope="backbone_no_core" (arc E20 depthcand-dense-core).
 
 Diagnostic scope: identical module category set to "backbone", but with a path
 exclusion so the shared, looped `core.*` blocks (MORPHTransformer.core, the per-pass
