@@ -568,6 +568,30 @@ projections); attention projections stay bf16.
 
 **NOTES:** I spent a long time trying everything under the sun to keep the weights as ternary with out keeping full shadow weights behind it. Nothing worked. If you know a method, please let me know. I even tried applying EGGROLL to the ternary weights and that didn't work. [https://arxiv.org/abs/2511.16652](https://arxiv.org/abs/2511.16652)
 
+### TWN — Ternary Weight Networks (least-squares scale rule)
+
+**Title:** Ternary Weight Networks  
+**Authors:** Fengfu Li, Bin Liu, Xiaoxing Wang, Bo Zhang, Junchi Yan (AMSS CAS + Shanghai
+Jiao Tong University)  
+**Year:** 2016  
+**arXiv:** [1605.04711](https://arxiv.org/abs/1605.04711)  
+**The scale rule:** minimizing ‖W − αW̃‖² over a ternary code W̃ ∈ {−1,0,+1} at a fixed
+threshold Δ gives a closed-form optimum (§2.3, Eq. 5): α*_Δ = mean of |W_i| over the
+entries whose |W_i| exceeds Δ (the nonzero set I_Δ), not the mean over all entries. Their
+rule-of-thumb threshold (§2.3, following Eq. 6) is Δ* ≈ 0.75·E(|W|) for Gaussian-assumed
+weights (0.6σ for N(0,σ²), which equals 0.75E(|W|); (2/3)E(|W|) for a uniform assumption)
+— **0.75, not 0.7.**  
+**MORPH relation:** the shipped `symmetric` mode (`morph/model/ternary_qat.py`) follows
+BitNet b1.58's rule instead: γ = mean(|W|) over ALL entries at a fixed threshold
+0.5·mean(|W|), which averages the zeroed entries into the scale and shrinks a
+Gaussian-shaped layer's ternary norm to ~0.67 of the latent (measured 0.668 on the
+Parcae-entry core, 2026-09-09). The new `norm_match` mode (γ = ‖W‖/√nnz) is the
+norm-preserving cousin of TWN's least-squares α* — it does not restrict itself to the
+mean-of-survivors form, but like Eq. 5 it conditions the scale on the surviving (nonzero)
+entries rather than the whole tensor.  
+**Local copy:** `docs/references/training-objectives/ternary-weight-networks/ternary-weight-networks.md` (full text, equations transcribed section by section); PDF at
+`ignored/papers/twn-1605.04711.pdf` (gitignored).
+
 ### Token Superposition Training (TST)
 
 **Title:** Efficient Pre-Training with Token Superposition  
