@@ -102,17 +102,25 @@ def _plain_step(model: MORPHTransformer, seed=99):
 # ── core_impl: morph is the tree as it was ───────────────────────────────────
 
 # The gradient hash of the tiny plain model at `core_impl` default, recorded on this
-# tree (torch 2.x CPU, fp32 eager, `use_kernels=False`). It exists so that a later edit
-# to `_apply_core_step`, to the config dataclass ordering or to the core build cannot
-# move a "morph" model without somebody noticing. If torch itself changes a kernel this
-# will move too — before repinning it, prove the delta is NOT from `core_impl` by
-# checking out the parent commit and re-running this same function there.
-_MORPH_GRAD_HASH = "c99ca05a89316a33da1afb686c1eef9beaa563c5aab3f2923dfa73c952749cda"
+# tree (torch 2.x CPU, fp32 eager, `use_kernels=False`, ONE CPU thread). It exists so
+# that a later edit to `_apply_core_step`, to the config dataclass ordering or to the
+# core build cannot move a "morph" model without somebody noticing. If torch itself
+# changes a kernel this will move too — before repinning it, prove the delta is NOT from
+# `core_impl` by checking out the parent commit and re-running this same function there.
+# The step runs under `torch.set_num_threads(1)`: a CPU matmul's reduction order, and so
+# the low bits of every gradient, depend on the thread count (the first pin, taken under
+# the default thread count, failed under OMP_NUM_THREADS=1 and =2 on 2026-09-10).
+_MORPH_GRAD_HASH = "5d2647ba503ba10ea558397ec1c2ba35d21d1c6c1655f087f1268ba0e799901e"
 
 
 def test_morph_core_gradient_hash_is_pinned():
     m = _model()
-    _plain_step(m)
+    n_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        _plain_step(m)
+    finally:
+        torch.set_num_threads(n_threads)
     assert _grad_hash(m) == _MORPH_GRAD_HASH, (
         "the default (core_impl: morph) model's gradients moved; see the note above "
         "_MORPH_GRAD_HASH before repinning")
