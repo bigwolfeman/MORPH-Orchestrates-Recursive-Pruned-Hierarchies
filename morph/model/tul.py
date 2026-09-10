@@ -161,6 +161,23 @@ class TULConfig:
     reread: bool = False
     reread_heads: int = 8
     reread_scope: str = "causal"
+    # ── progressive loss (Bansal, Schwarzschild et al. 2022, "End-to-end algorithm
+    #    synthesis with recurrent networks: logical extrapolation without overthinking",
+    #    the Deep Thinking recipe) — arm `slot-mnext-progressive`, 2026-09-10.
+    #    Their objective sums a full-trajectory loss and a PROGRESSIVE loss: a random
+    #    number of passes runs with NO gradient, the rest with gradient, so the map is
+    #    trained to improve ANY state it is handed and cannot settle at the identity or
+    #    lean on the pass index. MORPH's slot loop already has a no-grad prefix, but it is
+    #    GLOBAL (`model.bptt_depth`, the same cut for every slot in the batch, and at the
+    #    shipped `bptt_depth 8` it is empty).
+    #
+    #    `progressive_p` is the per-SLOT probability of drawing a private prefix: a slot of
+    #    realised depth T_i >= 2 draws k_i uniform in [1, T_i - 1] and runs its first k_i
+    #    passes DETACHED (state in and state out), the rest with gradient. Slots that do not
+    #    draw run full BPTT exactly as today. The loss is unchanged (token CE + MUX).
+    #    0.0 = off: the whole mechanism is a Python-level constant that traces out and the
+    #    forward is the one from before this existed (tests/test_tul_progressive.py).
+    progressive_p: float = 0.0
     # coda_token_input: what the coda's carrier holds at TOKEN positions.
     #    "prelude" — input_norm(prelude output), the shipped §3.4 path (global context
     #                inside every token state; z redundant).
@@ -505,6 +522,27 @@ class TULConfig:
                 "(tokens_through_core): every token already re-reads every token each pass.")
         if self.reread and self.reread_heads < 1:
             raise ValueError("tul.reread_heads must be >= 1")
+        if not 0.0 <= self.progressive_p <= 1.0:
+            raise ValueError(
+                f"tul.progressive_p must be in [0,1], got {self.progressive_p}")
+        if self.progressive_p > 0.0:
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.progressive_p is a SLOT-LOOP lever (_tul_core): it draws a "
+                    "per-slot no-grad prefix, and the paid loop (tokens_through_core) has "
+                    "no per-slot depth to cut. Raises rather than silently running the "
+                    "token core with the knob ignored.")
+            if self.db_loop:
+                raise ValueError(
+                    "tul.progressive_p with tul.db_loop is not defined: db_loop already "
+                    "detaches the carry at EVERY iteration, so there is no gradient path "
+                    "left for a random prefix to cut.")
+            if self.mux_stage_own_iters > 0:
+                raise NotImplementedError(
+                    "tul.progressive_p with tul.mux_stage_own_iters is not defined: the "
+                    "staged target supervises the state after iteration k, which a drawn "
+                    "prefix may have detached — the stage loss would then train nothing "
+                    "on those slots, silently.")
         if self.tokens_through_core and (self.bcast or self.coda_token_input != "prelude"):
             raise NotImplementedError(
                 "tul.bcast / tul.coda_token_input='embed' have no defined interaction with "

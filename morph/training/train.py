@@ -871,6 +871,13 @@ def _preclip_probe(model) -> dict[str, float]:
     # GROWS with decreasing iteration index is the backward product through the loop; a
     # flat one with a huge core gradient says the blow-up sits in the weights' own path.
     root = getattr(model, "_orig_mod", model)
+    # Progressive loss (`tul.progressive_p`): the fraction of valid slots that drew a
+    # private no-grad prefix this step, the mean prefix length, and the mean number of
+    # passes that actually carried gradient. None on every model without the knob.
+    prog = getattr(root, "_loop_prog", None)
+    if prog:
+        for key, v in prog.items():
+            out[f"loop/{key}"] = float(v)
     cot = getattr(root, "_loop_cot", None)
     if cot:
         ts = sorted(cot)

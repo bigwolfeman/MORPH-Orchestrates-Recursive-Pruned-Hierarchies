@@ -916,6 +916,12 @@ class MORPHTransformer(nn.Module):
     # a list to collect one dict per core-loop iteration.
     _jac_capture: list | None = None
 
+    # Progressive-loss counters written by `_tul_core` when `tul.progressive_p > 0`
+    # (0-dim GPU tensors; the trainer turns them into `loop/prog_*`). None on every other
+    # model, which is what makes the trainer's read a no-op there.
+    _loop_prog: dict | None = None
+    _loop_prog_k = None          # [B, S] int — the per-slot no-grad prefix length drawn
+
     def __init__(self, cfg: MORPHConfig):
         super().__init__()
         self.cfg = cfg
@@ -1178,6 +1184,21 @@ class MORPHTransformer(nn.Module):
                 raise ValueError("tul.reread=true needs a core loop (n_core > 0): there is "
                                  "no pass in which to re-read.")
             self.tul_reread = TULReread(d, cfg.tul.reread_heads)
+
+        # Progressive loss (tul.progressive_p, Bansal et al. 2022). Builds NOTHING — it is
+        # a per-slot detach pattern inside `_tul_core` — so the only construction-time work
+        # is refusing the two model shapes on which the per-slot prefix has no meaning.
+        if cfg.tul is not None and cfg.tul.progressive_p > 0.0:
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.progressive_p needs a core loop (model.n_core > 0): there are no "
+                    "passes to split into a no-grad prefix and a grad tail.")
+            if cfg.scse_enabled:
+                raise NotImplementedError(
+                    "tul.progressive_p under SCSE is not defined: the loop carrier is the "
+                    "DEVIATION and the anchor h* is built once OUTSIDE the loop and stays "
+                    "live, so detaching a prefix would still leak gradient into h* and the "
+                    "prefix would not be gradient-free.")
 
         # ── Core-stage conditioning (faithful DiffusionBlocks, morph/model/iter_cond.py)
         # Built AFTER TULSlots/tul_gate for the same RNG-neutrality reason: "none" (the
@@ -2711,6 +2732,36 @@ class MORPHTransformer(nn.Module):
         # drop that iteration's LOCAL loss — so every iteration carries grad.
         n_nograd = 0 if _db else max(0, total_iters - self.cfg.bptt_depth)
         n_grad_iters = total_iters - n_nograd
+        # ── progressive loss (TULConfig.progressive_p; Bansal et al. 2022) ──────────
+        # A PER-SLOT no-grad prefix on top of the global truncated-BPTT window. `_prog` is a
+        # Python-level constant (p, self.training and grad-enabled are all known at trace
+        # time), so at p = 0 — every other arm — nothing below this exists and the graph is
+        # the one from before the knob. The draw consumes the global RNG stream on purpose:
+        # it is a training mechanism, not an instrument, and it must vary per step.
+        _prog_p = float(self.cfg.tul.progressive_p)
+        _prog = _prog_p > 0.0 and self.training and torch.is_grad_enabled() and not halt
+        _pk = None
+        if _prog:
+            _sel = torch.rand(depths.shape, device=depths.device) < _prog_p
+            # k uniform in [1, T_i - 1]: floor(u * (T_i - 1)) is 0 .. T_i - 2, so k never
+            # reaches T_i and a slot's LAST pass always carries gradient (the terminal
+            # fixed-point term and the exit state therefore always sit on a grad pass).
+            _u = torch.rand(depths.shape, device=depths.device, dtype=torch.float32)
+            _pk = 1 + (_u * (depths - 1).clamp(min=1).float()).long()
+            _pk = torch.where(_sel & (depths >= 2) & layout.slot_valid,
+                              _pk, torch.zeros_like(_pk))
+            # Logged by the trainer (`loop/prog_*`); 0-dim GPU tensors, no host sync here.
+            _valid_f = layout.slot_valid.float()
+            _n_valid = _valid_f.sum().clamp(min=1.0)
+            self._loop_prog = {
+                "prog_frac": ((_pk > 0).float() * _valid_f).sum() / _n_valid,
+                "prog_nograd_passes": (_pk.float() * _valid_f).sum() / _n_valid,
+                "prog_grad_depth": ((depths - _pk).float() * _valid_f).sum() / _n_valid,
+            }
+            # The draw itself, [B, S]: the ONE place a test or a probe can read WHICH
+            # passes were cut. Kept out of `_loop_prog` because the trainer reduces every
+            # entry of that dict to a float.
+            self._loop_prog_k = _pk.detach()
         # The regularised iteration: one grad iteration per step, drawn from the global
         # stream and the stream put back, so the draw is free of side effects on the run.
         _t_gain = -1
@@ -2847,6 +2898,9 @@ class MORPHTransformer(nn.Module):
             # through the live e/injection (ONE core application), never through h. The
             # retention state is detached below for the same reason.
             _h_in = h.detach() if _db else h
+            # progressive: this slot's pass t is inside its private no-grad prefix.
+            _pfx = (_pk > t) if _prog else None
+            _pv = None if _pfx is None else _pfx.view(*_pfx.shape, *([1] * (h.dim() - 2)))
             if t < n_nograd:
                 with torch.no_grad():
                     h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
@@ -2858,11 +2912,36 @@ class MORPHTransformer(nn.Module):
             else:
                 h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
                                            iter_idx=t, stage_cond=_sc)
+            if _prog:
+                # THE cut, and the only one. Detaching a prefix pass's OUTPUT means no
+                # cotangent ever enters at that position, so the pass contributes no
+                # weight gradient through that slot and nothing flows further back along
+                # its trajectory — Bansal's contract. Detaching the INPUT as well was
+                # tried and removed: for t >= 1 it is redundant (the previous pass's
+                # output detach already makes the carry a constant at that slot, and the
+                # prefix is a contiguous initial run, so induction covers every t >= 1),
+                # and at t == 0 it would ALSO cut a GRAD slot's own pass-0 read of a
+                # neighbouring slot's entry state, starving the prelude of gradient the
+                # progressive loss never asked to remove. The slots share one sequence:
+                # a prefix slot still serves K/V to grad slots, and that read carries
+                # gradient because it belongs to a grad pass.
+                h_new = torch.where(_pv, h_new.detach(), h_new)
 
             if t == _t_gain or (_gain_on and _gain_all and t >= n_nograd):
-                _gain_terms.append(self._slot_gain_penalty(
-                    _core_step, _h_in, _e_arg, _inj_arg, ret_state, t, _sc,
-                    active & layout.slot_valid, _gain_lambda))
+                # The hinge must read the map on the slots whose pass at t CARRIES
+                # gradient: its penalty is added to the loss and shapes the core weights,
+                # and applying it at prefix positions would constrain the map exactly
+                # where the training objective has been cut away. Under `_prog` the drawn
+                # prefix can, rarely, leave no grad slot active at the sampled iteration —
+                # then there is nothing to measure and the term is skipped (the RNG
+                # discipline inside `_slot_gain_penalty` makes skipping side-effect free).
+                _gm = active & layout.slot_valid
+                if _prog:
+                    _gm = _gm & ~_pfx
+                if (not _prog) or bool(_gm.any()):
+                    _gain_terms.append(self._slot_gain_penalty(
+                        _core_step, _h_in, _e_arg, _inj_arg, ret_state, t, _sc,
+                        _gm, _gain_lambda))
             if _renorm:
                 # Direction preserved, per-slot norm pinned to the entry norm. Runs on the
                 # raw step output, BEFORE the gain governor and the recurrence gate, so it is
@@ -2965,6 +3044,11 @@ class MORPHTransformer(nn.Module):
                 h_new.register_hook(functools.partial(self._loop_cot_hook, t, _probe_cot))
             if _fp_lam > 0.0 and t >= n_nograd and not halt:
                 _fin = active & layout.slot_valid & ~(depths > t + 1)        # finish here
+                if _prog:
+                    # Redundant by construction (k_i <= T_i - 1 keeps every slot's LAST
+                    # pass in the grad window) and kept explicit so the invariant is
+                    # stated where it is relied on, not only where the draw is made.
+                    _fin = _fin & ~_pfx
                 if bool(_fin.any()):
                     _fn = h_new.flatten(2).float()
                     _fo = h.flatten(2).float()

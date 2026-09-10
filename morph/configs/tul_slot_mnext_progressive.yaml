@@ -1,0 +1,33 @@
+# Arm "slot-mnext-progressive": the M-next slot loop under the PROGRESSIVE LOSS of
+# Bansal, Schwarzschild et al. 2022 ("End-to-end algorithm synthesis with recurrent
+# networks: logical extrapolation without overthinking", the Deep Thinking recipe).
+#
+# Mechanism, in one sentence: with probability `progressive_p` a slot of realised depth
+# T_i >= 2 draws a private no-grad prefix k_i uniform in [1, T_i - 1] and runs its first
+# k_i passes DETACHED, so the shared core map is trained to improve ANY state it is
+# handed instead of only the states its own full-BPTT trajectory produces. The loss is
+# unchanged (token CE + MUX at beta 1). Implementation: `_tul_core`'s per-slot mask, one
+# `torch.where(prefix, h_new.detach(), h_new)` after each pass; the gain hinge measures
+# only GRAD passes, and k_i <= T_i - 1 keeps every slot's LAST pass (the terminal
+# fixed-point term and the exit state) inside the gradient window.
+#
+# ONE change vs `tul_slot_mux_norm_match` (the ruler `slot-mux-norm-match`):
+# `tul.progressive_p` 0.0 -> 0.5. Nothing else moves — same M-next MUX target at beta 1,
+# same prelude entry, same hinge (lambda 100 @ 0.9) and fixed-point term, same
+# norm_match ternary rule, seq 1024, batch 6, seed 1, 5000 steps, ramp 1000.
+#
+# New wandb keys: loop/prog_frac, loop/prog_nograd_passes, loop/prog_grad_depth.
+# Cost: zero new parameters and zero extra core applications — the prefix passes still
+# run in the forward, they just stop carrying a cotangent.
+#
+# Record: lab/experiments/planned/2026-09-10-arc-slot-mnext-progressive.md
+# Note:   .agents/notes/proposed/architecture/2026-09-10-credit-assignment-in-the-slot-loop.md
+defaults:
+  - tul_slot_mux_norm_match
+  - _self_
+
+tul:
+  progressive_p: 0.5
+
+wandb:
+  name: slot-mnext-progressive
