@@ -178,6 +178,20 @@ class TULConfig:
     #    0.0 = off: the whole mechanism is a Python-level constant that traces out and the
     #    forward is the one from before this existed (tests/test_tul_progressive.py).
     progressive_p: float = 0.0
+    # ── per-pass low-rank deltas (Bae et al. 2024, "Relaxed Recursive Transformers:
+    #    Effective Parameter Sharing with Layer-wise LoRA") — arm `slot-mnext-per-pass-lora`,
+    #    2026-09-10. The shared core keeps its weights; pass t adds its own rank-r delta
+    #    `y_t = sublayer(x) + B_t (A_t x)`, B zero-init, one pair per (core block, pass,
+    #    targeted sublayer). Motivated by the per-pass gradient probe: the six passes'
+    #    gradients on the shared weights are near-orthogonal (|sum_t dW_t| / sum_t |dW_t|
+    #    0.52-0.60), i.e. they are asking one map to be six different things.
+    #    `pass_lora_rank` 0 = OFF: nothing is built, no RNG is drawn, the forward is the one
+    #    from before this existed. `pass_lora_targets` picks the sublayers — see
+    #    `morph/model/mhc.py::PassLoRA` for exactly what a "target" covers and what it does
+    #    not. The deltas are plain nn.Parameters on a non-Linear module, so ternary QAT,
+    #    the CMS prune, the MORTAR carve and the deploy packer all walk past them.
+    pass_lora_rank: int = 0
+    pass_lora_targets: tuple[str, ...] = ("attn", "mlp")
     # coda_token_input: what the coda's carrier holds at TOKEN positions.
     #    "prelude" — input_norm(prelude output), the shipped §3.4 path (global context
     #                inside every token state; z redundant).
@@ -543,6 +557,29 @@ class TULConfig:
                     "staged target supervises the state after iteration k, which a drawn "
                     "prefix may have detached — the stage loss would then train nothing "
                     "on those slots, silently.")
+        if self.pass_lora_rank < 0:
+            raise ValueError(
+                f"tul.pass_lora_rank must be >= 0 (0 = off), got {self.pass_lora_rank}")
+        if self.pass_lora_rank > 0:
+            _legal_lora = ("attn", "mlp")
+            _t = tuple(self.pass_lora_targets)
+            if not _t or any(x not in _legal_lora for x in _t) or len(set(_t)) != len(_t):
+                raise ValueError(
+                    f"tul.pass_lora_targets must be a non-empty subset of {_legal_lora} "
+                    f"without repeats, got {_t}")
+            self.pass_lora_targets = _t
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.pass_lora_rank is a SLOT-LOOP lever: the arm's question is what a "
+                    "per-pass delta does to the slot loop's shared map. The paid loop runs "
+                    "_core_region over every position and was not measured with it. Raises "
+                    "rather than quietly running a different experiment.")
+            if self.core_stage_cond != "none":
+                raise ValueError(
+                    "tul.pass_lora_rank with tul.core_stage_cond is two per-iteration "
+                    "conditioning mechanisms at once (an AdaLN-Zero signal for WHICH pass, "
+                    "and a per-pass weight delta). Neither the interaction nor the "
+                    "attribution has been reasoned about; run one at a time.")
         if self.tokens_through_core and (self.bcast or self.coda_token_input != "prelude"):
             raise NotImplementedError(
                 "tul.bcast / tul.coda_token_input='embed' have no defined interaction with "

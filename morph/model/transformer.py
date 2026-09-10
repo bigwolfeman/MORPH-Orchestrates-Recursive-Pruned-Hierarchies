@@ -33,7 +33,7 @@ from .fused_ce import (
 )
 from .iter_cond import CoreStageConditioning, DB1Sampler, iter_stage_value
 from .recur_gate import RecurrenceGate
-from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
+from .mhc import ChannelInject, MORPHBlock, PassLoRA, DEFAULT_CHANNEL_DIMS
 from .sigreg import sigreg_epps_pulley
 from .sparsity import MortarLinear
 from .tul import (TULConfig, TULGate, TULGateConfig, TULReread, TULSlots, boundary_token_index,
@@ -1354,6 +1354,35 @@ class MORPHTransformer(nn.Module):
                   input_mode=cfg.scse_input_mode, delta_clip=cfg.scse_delta_clip)
             if cfg.scse_enabled else None)
 
+        # ── Per-pass low-rank deltas on the shared core (tul.pass_lora_rank) ───────
+        # Bae et al. 2024. Attached LAST, and to the CORE blocks only: prelude and coda
+        # run once and have no pass index. `PassLoRA` draws from a private generator and
+        # B is exactly zero, so a model built with the knob has byte-identical base
+        # weights to one without it AND an identical forward until training moves B
+        # (tests/test_tul_pass_lora.py). The number of passes is the loop's own maximum
+        # depth, so `iter_idx` can never index past the stack.
+        self.pass_lora_n_passes = 0
+        if cfg.tul is not None and cfg.tul.pass_lora_rank > 0:
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.pass_lora_rank needs a core loop (model.n_core > 0): there are "
+                    "no shared blocks and no passes to specialise.")
+            if cfg.fm is not None:
+                raise NotImplementedError(
+                    "tul.pass_lora_rank with an FM planner is not defined: the planner "
+                    "replaces the slot loop, so there is no pass index to key on.")
+            self.pass_lora_n_passes = int(cfg.tul.slot_max_depth or cfg.max_depth)
+            _lora_t = tuple(cfg.tul.pass_lora_targets)
+            for _blk in self.core:
+                _blk.attach_pass_lora(PassLoRA(
+                    d, self.pass_lora_n_passes, int(cfg.tul.pass_lora_rank), _lora_t))
+            _n_lora = sum(p.numel() for b in self.core
+                          for p in b.pass_lora.parameters())
+            print(f"  TUL PASS-LORA ON: rank={cfg.tul.pass_lora_rank} "
+                  f"targets={_lora_t} passes={self.pass_lora_n_passes} "
+                  f"blocks={cfg.n_core} -> {_n_lora:,} params ({_n_lora / 1e6:.2f}M), bf16, not "
+                  f"ternarised, not pruned (Bae et al. 2024)", flush=True)
+
         # Master kernel switch → drives the fused-Triton-vs-eager-reference
         # dispatch in the attention kernels (process-global flag). Set at build
         # so the choice is captured in the run; the fused-CE branch in forward()
@@ -1511,7 +1540,7 @@ class MORPHTransformer(nn.Module):
             rc_arg = ret_cap if is_ret else None
             h_injected = layer(h_injected, mlp_kwargs=mlp_kw,
                                ret_state=rs_arg, ret_capture=rc_arg,
-                               attn_kwargs=attn_kw)
+                               attn_kwargs=attn_kw, pass_idx=iter_idx)
         new_ret = ret_cap.get("state") if ret_cap is not None else None
         return h_injected, new_ret
 

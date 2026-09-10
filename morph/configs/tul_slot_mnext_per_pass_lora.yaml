@@ -1,0 +1,45 @@
+# Arm "slot-mnext-per-pass-lora": the M-next slot loop with PER-PASS LOW-RANK DELTAS on
+# the shared core (Bae et al. 2024, "Relaxed Recursive Transformers: Effective Parameter
+# Sharing with Layer-wise LoRA").
+#
+# Mechanism, in one sentence: the six core blocks stay weight-shared across the loop's
+# passes, and pass t adds its own rank-32 additive branch on each targeted sublayer,
+# y_t = sublayer(x) + B_t (A_t x), B zero-init — so the arm is bit-identical to the ruler
+# at step 0 and the passes can only diverge if training makes them.
+#
+# WHAT A TARGET COVERS (this differs from the paper — read
+# `morph/model/mhc.py::PassLoRA` before reasoning about it): "attn" is the whole attention
+# SUBLAYER (input norm_attn(x), output the attention branch, i.e. exactly where the output
+# projection's contribution lands) and "mlp" is the whole SwiGLU sublayer (input
+# norm_mlp(x), output d_model). Bae puts a LoRA on each individual linear; one delta per
+# sublayer cannot express a delta acting INSIDE the SwiGLU nonlinearity or on q/k/v before
+# the score. Chosen so the mechanism lives at ONE code site, and because plain
+# nn.Parameters on a non-Linear module are invisible to ternary QAT (walks nn.Linear /
+# nn.Embedding / CMS) AND to the CMS prune, the MORTAR carve and the deploy packer (walk
+# MortarLinear / CMSBlockLinear) — by construction, not by an exclusion list.
+#
+# ONE change vs `tul_slot_mux_norm_match` (the ruler `slot-mux-norm-match`):
+# `tul.pass_lora_rank` 0 -> 32. Nothing else moves.
+#
+# COST at this shape (d_model 1024, n_core 6, max_depth 8, rank 32, both targets):
+#   parameters  2 * (32*1024) per (block, pass, target) = 65,536
+#               x 2 targets x 6 blocks x 8 passes = 6,291,456 (6.29M), +2.35 % on 268.2M.
+#               bf16 compute, fp32 master weights like every other parameter here; NOT
+#               ternarised, NOT pruned, NOT carved, NOT packed.
+#   FLOPs       262,144 per token per core block per pass (both targets, two matmuls
+#               each), against 17,301,504 for that block's SwiGLU alone -> +1.52 % of the
+#               MLP's cost, and the core runs on the ~64 compact SLOT positions, not on
+#               the 1152 packed ones: about 604 MFLOPs per row per forward at 6 passes.
+#
+# Record: lab/experiments/planned/2026-09-10-arc-slot-mnext-per-pass-lora.md
+# Note:   .agents/notes/proposed/architecture/2026-09-10-credit-assignment-in-the-slot-loop.md
+defaults:
+  - tul_slot_mux_norm_match
+  - _self_
+
+tul:
+  pass_lora_rank: 32
+  pass_lora_targets: [attn, mlp]
+
+wandb:
+  name: slot-mnext-per-pass-lora

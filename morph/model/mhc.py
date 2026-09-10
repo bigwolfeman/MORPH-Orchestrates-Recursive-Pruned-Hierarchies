@@ -133,6 +133,87 @@ class ChannelInject(nn.Module):
         return self.apply_precomputed(h, self.precompute(signal))
 
 
+# ── PassLoRA ──────────────────────────────────────────────────────────────────
+
+class PassLoRA(nn.Module):
+    """Per-pass low-rank deltas on ONE shared core block (``tul.pass_lora_rank``).
+
+    Bae et al. 2024, "Relaxed Recursive Transformers: Effective Parameter Sharing with
+    Layer-wise LoRA". A looped core applies the SAME weights at every pass, so every pass
+    computes the identical map; their relaxation keeps the shared weights and gives each
+    position in the recursion its own small low-rank delta. Here the recursion index is the
+    slot loop's pass ``t``, and the delta is an additive rank-``r`` branch on a sublayer:
+
+        y_t = sublayer(x) + B_t (A_t x),   A_t [r, C], B_t [C, r], B zero-init
+
+    so pass 0 of a fresh model is bit-identical to the block without the module.
+
+    GRANULARITY, stated plainly because it differs from the paper. Bae puts a LoRA on each
+    linear of the shared layer (q, k, v, o, up, gate, down). This puts ONE delta on each
+    targeted SUBLAYER — the attention sublayer (input ``norm_attn(x)``, output the
+    attention branch's ``[B, S, C]``) and the MLP sublayer (input ``norm_mlp(x)``, output
+    the SwiGLU's ``[B, S, C]``). Both are C -> C, so a delta is a genuine rank-r
+    perturbation of the map each sublayer computes, and the attention delta lands exactly
+    where the output projection's does. What this granularity CANNOT express is a delta
+    that acts INSIDE the SwiGLU nonlinearity (a separate one on ``gate_up``) or on the
+    attention's q/k/v before the score. It was chosen for three reasons: one mechanism at
+    one code site instead of two; the attention projections are not reachable as modules
+    (several read ``.weight`` and matmul it themselves, and the block's attention takes no
+    iteration argument); and, decisively, plain ``nn.Parameter`` tensors on a non-Linear
+    module are invisible to BOTH schedules that rewrite this tree's weights — ternary QAT
+    walks ``nn.Linear`` / ``nn.Embedding`` / CMS modules, and prune/carve/the deploy packer
+    walk ``MortarLinear`` / ``CMSBlockLinear``. The deltas are therefore never ternarised,
+    never pruned, never carved and never packed, by construction rather than by an
+    exclusion list someone has to maintain.
+
+    The pass index is an INDEX INTO A STACKED PARAMETER (``self.A_attn[t]``), never a
+    Python branch, so ``torch.compile`` sees no data-dependent control flow — the same
+    shape the ReMoE router's ``iter_embed`` already uses.
+
+    Init draws from a PRIVATE generator, so attaching this module leaves the model's RNG
+    stream and every other weight byte-identical to a build without it.
+    """
+
+    LEGAL_TARGETS = ("attn", "mlp")
+
+    def __init__(self, d_model: int, n_passes: int, rank: int,
+                 targets: tuple[str, ...], seed: int = 0x10A):
+        super().__init__()
+        if n_passes < 1:
+            raise ValueError(f"PassLoRA needs n_passes >= 1, got {n_passes}")
+        if rank < 1:
+            raise ValueError(f"PassLoRA needs rank >= 1, got {rank}")
+        bad = [t for t in targets if t not in self.LEGAL_TARGETS]
+        if bad or not targets:
+            raise ValueError(
+                f"PassLoRA targets must be a non-empty subset of {self.LEGAL_TARGETS}, "
+                f"got {tuple(targets)}")
+        self.n_passes, self.rank = int(n_passes), int(rank)
+        self.targets = tuple(targets)
+        self.has_attn = "attn" in self.targets
+        self.has_mlp = "mlp" in self.targets
+        g = torch.Generator(device="cpu").manual_seed(int(seed))
+        std = d_model ** -0.5
+        for name in self.targets:
+            # A: the standard LoRA down-projection, drawn small. B: EXACTLY zero, so the
+            # whole module is a no-op at step 0 and dL/dA is zero there too (the standard
+            # LoRA cold start — B moves first, then A follows).
+            self.register_parameter(f"A_{name}", nn.Parameter(
+                torch.empty(self.n_passes, self.rank, d_model).normal_(0.0, std, generator=g)))
+            self.register_parameter(f"B_{name}", nn.Parameter(
+                torch.zeros(self.n_passes, d_model, self.rank)))
+
+    def delta(self, which: str, x: Tensor, t: int) -> Tensor:
+        """``B_t (A_t x)`` for pass ``t``, in ``x``'s dtype (bf16 under autocast)."""
+        a = getattr(self, f"A_{which}")[t].to(x.dtype)
+        b = getattr(self, f"B_{which}")[t].to(x.dtype)
+        return F.linear(F.linear(x, a), b)
+
+    def extra_repr(self) -> str:
+        return (f"n_passes={self.n_passes}, rank={self.rank}, "
+                f"targets={self.targets}")
+
+
 # ── MORPHBlock ────────────────────────────────────────────────────────────────
 
 class MORPHBlock(nn.Module):
@@ -194,6 +275,12 @@ class MORPHBlock(nn.Module):
         self.norm_ret: nn.Module | None = None
         self.ret_gate: nn.Parameter | None = None
 
+        # Per-pass low-rank deltas (tul.pass_lora_rank). Attached post-construction for
+        # the SAME reason as retention: PassLoRA draws from a private generator, and
+        # attaching it last leaves every other weight of the model byte-identical.
+        # None — the default — makes both call sites below Python-level no-ops.
+        self.pass_lora: PassLoRA | None = None
+
     def attach_retention(self, gla: nn.Module, norm: nn.Module, gate_init: float) -> None:
         """Add a gated GLA branch in PARALLEL to the attention sublayer.
 
@@ -205,6 +292,14 @@ class MORPHBlock(nn.Module):
         self.norm_ret = norm
         self.ret_gate = nn.Parameter(torch.tensor(float(gate_init)))
 
+    def attach_pass_lora(self, lora: "PassLoRA") -> None:
+        """Give this block its per-pass low-rank deltas (Bae et al. 2024).
+
+        Adds NEW parameters, so the optimizer must be built after this. Only the CORE
+        blocks get one: prelude and coda run once and have no pass index.
+        """
+        self.pass_lora = lora
+
     def forward(
         self,
         h: Tensor,
@@ -214,6 +309,7 @@ class MORPHBlock(nn.Module):
         ret_state: Tensor | None = None,
         ret_capture: dict | None = None,
         ret_reset_mask: Tensor | None = None,
+        pass_idx: int = 0,
     ) -> Tensor:
         """Forward pass: attention sublayer then MLP sublayer with HC residuals.
 
@@ -234,15 +330,30 @@ class MORPHBlock(nn.Module):
             ret_reset_mask: [B, T] bool | None — GLA segment-reset mask (docs/tul-tg-spec.md
                          §4), forwarded to the retention branch untouched. Ignored when this
                          block has no retention branch.
+            pass_idx:    which loop pass is applying this shared block. Read ONLY by
+                         `pass_lora` (tul.pass_lora_rank), which indexes its stacked
+                         parameters with it. Ignored — and the default 0 is never even
+                         looked at — on a block without one, which is every block of every
+                         model that does not set the knob.
 
         Returns:
             [B, T, D] updated residual stream.
         """
         attn_kwargs = attn_kwargs or {}
         mlp_kwargs  = mlp_kwargs  or {}
+        # Python-level constant per module instance (it is set once at construction and
+        # never rebound), so both branches below trace out on a model without the knob.
+        lora = self.pass_lora
 
         def _attn_fn(x: Tensor) -> Tensor:
-            a = self.attention(self.norm_attn(x), **attn_kwargs)
+            xa = self.norm_attn(x)
+            a = self.attention(xa, **attn_kwargs)
+            if lora is not None and lora.has_attn:
+                # The delta rides the attention branch's own input and output, i.e. it
+                # lands where the output projection's contribution does. Cast to `a`'s
+                # dtype first: RMSNorm returns fp32 even under autocast, and computing the
+                # delta in fp32 would both cost more and promote the whole sublayer.
+                a = a + lora.delta("attn", xa.to(a.dtype), pass_idx)
             if self.retention is not None:
                 g_out, s_out = self.retention(self.norm_ret(x), initial_state=ret_state,
                                               reset_mask=ret_reset_mask)
@@ -252,7 +363,11 @@ class MORPHBlock(nn.Module):
             return self.drop(a)
 
         def _mlp_fn(x: Tensor) -> Tensor:
-            return self.drop(self.mlp(self.norm_mlp(x), **mlp_kwargs))
+            xm = self.norm_mlp(x)
+            y = self.mlp(xm, **mlp_kwargs)
+            if lora is not None and lora.has_mlp:
+                y = y + lora.delta("mlp", xm.to(y.dtype), pass_idx)
+            return self.drop(y)
 
         h = self.mrr_attn(h, _attn_fn)
         if next_inject_term is not None:
