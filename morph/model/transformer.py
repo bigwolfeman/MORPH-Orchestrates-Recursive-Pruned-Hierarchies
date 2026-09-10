@@ -1934,7 +1934,8 @@ class MORPHTransformer(nn.Module):
                 raise ValueError(
                     f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
             tg_attn_kwargs = tg_reset = None
-            if self._tg_restrict:
+            if self._tg_restrict and tc.tg_restrict_scope == "all":
+                # scope "coda": the prelude is global, exactly as in _forward_tul
                 tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span)
                 tg_attn_kwargs = {"tg_allow": tg_allow, "tg_slot_mask": layout.slot_mask}
                 if tc.tg_span_comp:
@@ -3514,8 +3515,17 @@ class MORPHTransformer(nn.Module):
         # None on a tg_restrict=false model (bit-identical, spec T4).
         tg_attn_kwargs = tg_reset = None
         if self._tg_restrict:
-            tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span)
+            # tg_restrict_scope="coda" (TULConfig): the mask reaches the coda only and
+            # carries the coda rule (a slot cell attends slot cells only, so it stays z).
+            # "all" is the shipped TG path, bit-identical.
+            _coda_scope = tc.tg_restrict_scope == "coda"
+            tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span,
+                                     slot_queries_slots_only=_coda_scope)
             tg_attn_kwargs = {"tg_allow": tg_allow, "tg_slot_mask": layout.slot_mask}
+            if _coda_scope:
+                # The conv / value-shift reset (attention.segment_causal_conv): a span's
+                # tokens, its slot cells and the next span's tokens are three segments.
+                tg_attn_kwargs["tg_seg"] = 2 * layout.bag_id + layout.slot_mask.long()
             if tc.tg_span_comp:
                 # E-SAC: per-span pooled compressed branch (attention.py
                 # _tg_span_attention). Built once per forward like tg_allow.
@@ -3526,9 +3536,11 @@ class MORPHTransformer(nn.Module):
                         layout.bag_id, _tok_sel, layout.max_slots)}
             tg_reset = tg_reset_mask(layout)
 
+        _front_kw = tg_attn_kwargs if tc.tg_restrict_scope == "all" else None
+        _front_reset = tg_reset if tc.tg_restrict_scope == "all" else None
         x, x0, bigram_emb = self._tul_front(input_ids, layout,
-                                            attn_kwargs=tg_attn_kwargs,
-                                            ret_reset_mask=tg_reset)
+                                            attn_kwargs=_front_kw,
+                                            ret_reset_mask=_front_reset)
 
         if tc.gate is not None and tc.tokens_through_core:
             raise NotImplementedError(
@@ -3690,9 +3702,29 @@ class MORPHTransformer(nn.Module):
             # bit-identical to a model with no ablation code at all.
             h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
-            x_coda = scatter_positions(xn, pos, values)
+            # coda_token_input (TULConfig): "prelude" = xn, the prelude's OUTPUT at every
+            # position (the shipped §3.4 path); "embed" = the prelude's INPUT carrier,
+            # x0 (the embedding after embed dropout) expanded to the HC streams and put
+            # through the same input_norm — a token carries only itself into the coda.
+            if tc.coda_token_input == "embed":
+                base = x0.unsqueeze(2).expand_as(xn) if self._is_hc else x0
+                base = self.input_norm(base)
+            else:
+                base = xn
+            x_coda = scatter_positions(base, pos, values)
 
         x_coda, keep = self.tul.apply_token_dropout(x_coda, layout, self.training)
+        if tc.coda_token_input == "embed":
+            # The arm's contract: in the coda a slot cell carries z and NOTHING else. The
+            # per-layer coda injections at the slot cells (x0 = the seed, bigram = the
+            # span's bag mean) would otherwise hand the coda span content beside z.
+            _slot_keep = (~layout.slot_mask).unsqueeze(-1).to(x_coda.dtype)
+            keep = _slot_keep if keep is None else keep * _slot_keep
+        if tc.bcast and not tc.tokens_through_core:
+            # The unpack: z_{i} through the offset-indexed linears, ADDED to span i+1's
+            # token inputs (every stream). After the dropout on purpose: the dropped token
+            # loses itself, not the thought it is decoding.
+            x_coda = self._apply_injection(x_coda, self.tul.unpack(h_slots, layout))
 
         out: dict = {"logits": None}
         if tc.coda_sees_slots and tc.coda_token_cut == 0:

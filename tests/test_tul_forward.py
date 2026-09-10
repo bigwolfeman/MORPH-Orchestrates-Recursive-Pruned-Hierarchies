@@ -529,7 +529,7 @@ def test_layer_passes_per_token_beats_the_dense_baseline():
 # ── unimplemented arms must fail loudly, not silently ────────────────────────
 
 @pytest.mark.parametrize("kw", [dict(stp_lambda=0.1), dict(set_lambda=0.1),
-                                dict(carry=True), dict(xattn=True), dict(bcast=True)])
+                                dict(carry=True), dict(xattn=True)])
 def test_unimplemented_arm_keys_raise(kw):
     with pytest.raises(NotImplementedError):
         TULConfig(**kw)

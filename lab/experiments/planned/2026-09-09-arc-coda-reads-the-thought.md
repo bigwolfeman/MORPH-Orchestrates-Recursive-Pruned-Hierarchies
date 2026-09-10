@@ -1,0 +1,93 @@
+# Planned: the coda reads the thought (the unpack arm)
+
+Status: planned
+Date: 2026-09-09 (frozen before launch; Wolfe: "we have to test this, add it as an
+arm"). Arc: `2026-09-04-loop-contribution-arc.md`. Follows the slot-loop panel
+(`2026-09-09-arc-slot-loop-norm-match.md`), whose first two arms read a flat token
+K-curve under norm_match (slot loop 0.0000, M-next 0.0000; forecast K1−K6 0.0067).
+
+## Question
+
+Wolfe's reading of today's flat curves: "the design should be that the prelude evolves the
+loop state, and the final z + MUX tokens are what conditions the coda. This skipping will
+cause the coda to want to ignore the loop." The spec's §3.4 feeds the coda every token's
+own GLOBAL prelude state (`x_coda = input_norm(prelude)`), so a token of span i+1 arrives
+carrying all of span i inside its own state and `z_i` is two optional cells among ~1,100.
+Block Transformer's local decoder gets the block embedding plus the block's own raw
+tokens, nothing else, which is what makes its global model load-bearing. Does the slot
+loop earn depth when the coda is wired that way?
+
+## Hypothesis
+
+H-unpack-1: with the coda's only route to earlier spans being `z`, the token CE depends on
+slot depth (token K1−K6 leaves zero) and the forecast K-curve grows, because the token
+loss now trains the loop directly through a reader that cannot bypass it. H-unpack-1′:
+the reader problem was necessary but not sufficient: the token curve leaves zero but the
+map still converges by pass 3 (K3−K6 stays at 0), so the next lever is the map or the
+target, not the reader. H-unpack-2 (the price): CE at 5k sits well behind the unmasked
+M-next arm, the mask's known price (0.13–0.20 nats in the gist family), and the arm is
+judged on contribution, not on that reading.
+
+## Method
+
+ONE arm, `slot-unpack-norm-match` (`tul_slot_unpack_norm_match.yaml`), on top of the
+panel's M-next arm (`tul_slot_mux_norm_match`: think-once panel recipe, seq 1024, batch 6,
+seed 1, 5,000 steps, norm_match, MUX M-next β 1.0, gain hinge 0.9, clip-through-time
+4.0). Three construction-time changes, all in `morph/model/tul.py` / `transformer.py` /
+`attention.py`, each bit-identical at its default (`tests/test_tul_unpack.py`, 9 tests):
+
+| knob | what it does |
+| --- | --- |
+| `coda_token_input: embed` | the coda's token carrier is `input_norm` of the token's own embedding (the prelude's input `x0`), not the prelude's output; the coda's per-layer injections at the slot cells are zeroed so a cell carries `z` alone |
+| `tg_restrict: true`, `tg_restrict_scope: coda` | same-span-or-slot attention in the coda ONLY; the prelude stays global (so `e_z` sees the whole past); in the coda a slot cell attends slot cells only; the CCA Q/K conv taps and the value shift are reset at span/slot boundaries (`segment_causal_conv`), so a cell's key and value carry `z` and not the boundary token's state |
+| `bcast: true` | spec §3.5's own unpack row: `z_i` (stream mean) through `span_cap` offset-indexed `d×d` linears, zero-init, added to every token of span i+1's coda input, after the token-state dropout |
+
+The unpack is 33.5 M new parameters (`[32, 1024, 1024]`, d_model 1,024 on this recipe; the
+arm has 298.2 M parameters against the M-next arm's 268.2 M), all zero at step 0. The
+arm is read on loop CONTRIBUTION, where the extra parameters carry nothing at step 0 and
+are one route for the thought at every step after.
+
+The contract, tested at model scale on CPU: with `z` zeroed (`plan_mode zero`) the logits
+of span ≥ 2 tokens are invariant to span 0's content; with `z` present they are not; the
+shipped path leaks 0.09 nats of logit movement with `z` zeroed. Eager attention (the
+restriction is eager-only at construction). Runner `arc/run_slotloop2.sh`, commit pinned
+in `arc/SLOTLOOP2_COMMIT`; 12-step smoke, the draw under the sustained tripwire and the
+rate stop, then the readouts of the slot-loop panel (sweeps at forced slot depths 1, 2, 3,
+6, 9, 12, 16 at 2,500 and 5,000 with the token and forecast curves; `worth_profile.py` at
+5,000; the gain traces). Results to `lab/experiments/results/2026-09-09-slot-loop-norm-match/`.
+The arm runs FIRST in the new queue; the panel's remaining arms (`slot-mux-absmean`,
+`plain-panel-norm-match`) and the two recipe-reads arms follow.
+
+## Predictions (frozen)
+
+- **P-unpack-a (survival).** HEALTHY to 5,000: **70 %** (the mask arms were healthy; the
+  new parameters start at zero).
+- **P-unpack-b (the reader now reads).** Plan worth at offset 0 (zero the slot) above
+  0.5 nats: **80 %** (the slot is the coda's only context; the mask arms read 0.7+).
+- **P-unpack-c (the point).** Token K1−K6 over forced slot depth at 5,000 above 0.01
+  with the CI above 0: **45 %**; above 0.03: **25 %**. Token K3−K6 above 0.005: **20 %**.
+- **P-unpack-d (the forecast).** Forecast (`mux_local`) K1−K6 above 0.02 (M-next under
+  norm_match: 0.0067): **50 %**; forecast K3−K6 above 0.005: **25 %**.
+- **P-unpack-e (the price, a horizon reading).** 480-row token CE at the trained depth
+  behind `slot-mux-norm-match` (4.3290) by more than 0.10: **70 %**; by more than 0.30:
+  **30 %**.
+- **P-unpack-f (cost).** tok/s at step 200 above 8,086: **80 %** (the mask arm ran at
+  9,100 on the eager path; the unpack adds ~15 GFLOP per forward); peak under 20 GB:
+  **80 %**.
+
+## Binding
+
+- P-unpack-c TRUE ⇒ the reader was the limiter; the next arm is the same wiring under
+  absmean (is the rule needed once the reader reads) and then 20k on Wolfe's word.
+- P-unpack-b TRUE and P-unpack-c FALSE ⇒ H-unpack-1′: the coda depends on `z` but not on
+  the loop's depth; the map or the target is next (the slot core's own anatomy first).
+- P-unpack-b FALSE ⇒ the contract test missed a route; find it before any other arm.
+- `RATE STOP` ⇒ the queue stops; Wolfe decides.
+- NO run beyond 5,000 steps from this arm.
+
+## Not verified before launch
+
+The real-scale forward ran on CPU (batch 2, seq 256, one thread) for one step; the GPU
+path runs first in the queue's 12-step smoke. The unpack's compute cost is estimated, not
+measured. The v1 eager generator is unchanged and recomputes the whole row per step; the
+arm's cost model at generation is not exercised here.

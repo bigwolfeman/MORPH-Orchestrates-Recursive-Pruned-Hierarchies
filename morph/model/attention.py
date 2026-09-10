@@ -466,6 +466,43 @@ def _tg_span_attention(q: Tensor, k: Tensor, v: Tensor, bag_id: Tensor,
     return torch.einsum("bhij,bhjd->bhid", weights[..., :M], v_s)
 
 
+def segment_causal_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor, seg: Tensor) -> Tensor:
+    """``causal_conv_reference`` with the taps RESET at segment boundaries.
+
+    ``seg`` ``[B, S]`` int: a tap ``x[p-j]`` contributes to output ``p`` only when
+    ``seg[p-j] == seg[p]``, at BOTH stages (depthwise then grouped), so no output ever
+    mixes in a position from another segment — the two-stage receptive field (2k−1) is
+    cut exactly at the boundary. Used by the coda under ``tul.tg_restrict_scope="coda"``
+    (transformer.py builds ``seg = 2·bag_id + slot_mask``: a span's tokens, that span's
+    slot cells, and the next span's tokens are three segments), so a slot cell's query
+    and key are built from the cells alone and carry z and nothing else; measured before
+    this existed: the conv taps handed span content to the cells and the arm's contract
+    test leaked 0.07 nats. Eager only (the restriction is eager-only at construction).
+    """
+    B, C, S = x_BCS.shape
+    k = w_dw.shape[-1]
+    Cg = w_gp.shape[1]
+    G = C // Cg
+    same = [torch.ones(B, 1, S, dtype=x_BCS.dtype, device=x_BCS.device)]
+    for j in range(1, k):
+        m = torch.zeros(B, S, dtype=torch.bool, device=x_BCS.device)
+        m[:, j:] = seg[:, j:] == seg[:, :-j]
+        same.append(m.unsqueeze(1).to(x_BCS.dtype))
+
+    def stage(x: Tensor, w: Tensor, groups: int) -> Tensor:
+        # F.conv1d with left pad p=k-1: output p reads x[p-(k-1-t)] through w[..., t],
+        # i.e. tap j = k-1-t. Each tap is a pointwise conv on the shifted, masked input.
+        y = None
+        for j in range(k):
+            xs = x if j == 0 else F.pad(x[:, :, :-j], (j, 0))
+            term = F.conv1d(xs * same[j], w[:, :, k - 1 - j: k - j], bias=None, groups=groups)
+            y = term if y is None else y + term
+        return y
+
+    y = stage(x_BCS, w_dw, C)
+    return stage(y, w_gp, G)
+
+
 def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None,
                        sink_logits: Tensor, scale: float) -> Tensor:
     """TG compressed branch (docs/tul-tg-spec.md §3): direct attention over slot
@@ -657,7 +694,7 @@ class _CCABase(nn.Module):
         )
 
     def _cca_project(self, x: Tensor, n_skip_rope: int = 0, return_klat: bool = False,
-                     pre: tuple[Tensor, ...] | None = None):
+                     pre: tuple[Tensor, ...] | None = None, seg: Tensor | None = None):
         """CCA: down-project → conv → QK-mean → norm → temp → RoPE → value-shift.
 
         Returns q [B, H, S, D], k [B, H, S, D], v [B, H, S, D] all at d_head
@@ -686,7 +723,19 @@ class _CCABase(nn.Module):
             # exactly (bias-free row-wise map; W·0 = 0).
             v_prev = F.pad(v_prev_raw[:, :-1], (0, 0, 1, 0))
 
-        if qk_pair is not None and _FUSED_ATTN_QKCONV:
+        if seg is not None:
+            # Segment reset (tul.tg_restrict_scope="coda"): the value shift and both conv
+            # stages must not cross a segment boundary. ``seg`` docs: segment_causal_conv.
+            same_prev = torch.zeros(B, S, 1, dtype=v_prev.dtype, device=v_prev.device)
+            same_prev[:, 1:] = (seg[:, 1:] == seg[:, :-1]).unsqueeze(-1).to(v_prev.dtype)
+            v_prev = v_prev * same_prev
+            q_conv = segment_causal_conv(
+                q_lat.transpose(1, 2), self.conv_q_dw.weight.to(q_lat.dtype),
+                self.conv_q_gp.weight.to(q_lat.dtype), seg).transpose(1, 2)
+            k_conv = segment_causal_conv(
+                k_lat.transpose(1, 2), self.conv_k_dw.weight.to(k_lat.dtype),
+                self.conv_k_gp.weight.to(k_lat.dtype), seg).transpose(1, 2)
+        elif qk_pair is not None and _FUSED_ATTN_QKCONV:
             # One fused conv over the concatenated q‖k channel pair. The depthwise
             # stage is per-channel; the grouped stage keeps its Cg=D group
             # membership intact under concat (q = groups 0..H-1, k = groups
@@ -899,7 +948,7 @@ class _CCACSAAttention(nn.Module):
     def forward(self, x: Tensor, n_skip_rope: int = 0,
                 cla_capture: dict | None = None, cla_kv: dict | None = None,
                 tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
-                tg_span: dict | None = None) -> Tensor:
+                tg_span: dict | None = None, tg_seg: Tensor | None = None) -> Tensor:
         B, S, _ = x.shape
         H, D = self.cca.n_heads, self.cca.d_head
         scale = D ** -0.5
@@ -921,7 +970,7 @@ class _CCACSAAttention(nn.Module):
                 qk_pair = y[..., : self.cca.latent_q_dim + self.cca.latent_k_dim]
                 pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
             q, k, v, q_lat, k_lat = self.cca._cca_project(
-                x, n_skip_rope, return_klat=True, pre=pre_cca)
+                x, n_skip_rope, return_klat=True, pre=pre_cca, seg=tg_seg)
             if tg_span is not None:
                 out_comp = _tg_span_attention(q, k, v, sink_logits=self.cca.sink_logits,
                                               scale=scale,
@@ -1060,7 +1109,7 @@ class _CCAHCAAttention(nn.Module):
     def forward(self, x: Tensor, n_skip_rope: int = 0,
                 cla_capture: dict | None = None, cla_kv: dict | None = None,
                 tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
-                tg_span: dict | None = None) -> Tensor:
+                tg_span: dict | None = None, tg_seg: Tensor | None = None) -> Tensor:
         B, S, _ = x.shape
         H, D = self.cca.n_heads, self.cca.d_head
         scale = D ** -0.5
@@ -1078,7 +1127,7 @@ class _CCAHCAAttention(nn.Module):
                 qk_pair = y[..., : self.cca.latent_q_dim + self.cca.latent_k_dim]
                 pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
             q, k, v, q_lat, k_lat = self.cca._cca_project(
-                x, n_skip_rope, return_klat=True, pre=pre_cca)
+                x, n_skip_rope, return_klat=True, pre=pre_cca, seg=tg_seg)
             if tg_span is not None:
                 out_comp = _tg_span_attention(q, k, v, sink_logits=self.cca.sink_logits,
                                               scale=scale,
@@ -1163,6 +1212,8 @@ class MORPHAttention(nn.Module):
         n_skip_rope: leading token count that skips CoPE-RoPE (persistent/sink tokens).
         tg_allow: [B,1,S,S] bool | None — window-branch extra mask under tg_restrict.
         tg_slot_mask: [B,S] bool | None — compressed-branch slot mask under tg_restrict.
+        tg_seg: [B,S] int | None — segment ids for the conv / value-shift reset
+                (segment_causal_conv; the coda under tul.tg_restrict_scope="coda").
         → [B, S, d_model]
     """
 
@@ -1206,6 +1257,7 @@ class MORPHAttention(nn.Module):
     def forward(self, x: Tensor, n_skip_rope: int = 0,
                 cla_capture: dict | None = None, cla_kv: dict | None = None,
                 tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
-                tg_span: dict | None = None) -> Tensor:
+                tg_span: dict | None = None, tg_seg: Tensor | None = None) -> Tensor:
         return self._impl(x, n_skip_rope, cla_capture=cla_capture, cla_kv=cla_kv,
-                          tg_allow=tg_allow, tg_slot_mask=tg_slot_mask, tg_span=tg_span)
+                          tg_allow=tg_allow, tg_slot_mask=tg_slot_mask, tg_span=tg_span,
+                          tg_seg=tg_seg)

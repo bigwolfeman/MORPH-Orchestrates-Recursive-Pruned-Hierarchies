@@ -1,0 +1,31 @@
+# Slot-loop panel, arm "slot-unpack-norm-match": THE CODA READS THE THOUGHT (Wolfe
+# 2026-09-09: "the design should be that the prelude evolves the loop state, and the final
+# z + MUX tokens are what conditions the coda"). The M-next slot loop under norm_match
+# (tul_slot_mux_norm_match) with the coda rewired so that z is its only route to earlier
+# spans:
+#   coda_token_input embed  — the coda's token carrier is the token's own embedding (the
+#                             prelude's input), not the prelude's global output state;
+#   tg_restrict + scope coda — same-span-or-slot attention in the CODA only (the prelude
+#                             stays global so e_z sees the whole past); in the coda a slot
+#                             cell attends slot cells only, and the CCA conv taps and the
+#                             value shift are reset at span/slot boundaries, so a cell
+#                             carries z and nothing else (tests/test_tul_unpack.py);
+#   bcast                   — the unpack: z_i through offset-indexed zero-init linears,
+#                             added to every token of span i+1's coda input.
+# Eager attention (the restriction is eager-only at construction).
+# Record: lab/experiments/planned/2026-09-09-arc-coda-reads-the-thought.md
+defaults:
+  - tul_slot_mux_norm_match
+  - _self_
+
+model:
+  use_kernels: false
+
+tul:
+  tg_restrict: true
+  tg_restrict_scope: coda
+  coda_token_input: embed
+  bcast: true
+
+wandb:
+  name: slot-unpack-norm-match

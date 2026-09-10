@@ -33,7 +33,8 @@ __all__ = ["TulRuntime", "build_tul_runtime", "build_boundary_rule",
 # reads below; tests/test_tul_setup_keys.py checks every shipped config against it.
 KNOWN_TUL_KEYS = frozenset({
     "activate_at", "bcast", "boundary_chars", "boundary_substrings", "carry",
-    "center_bag_mean", "coda_sees_slots", "coda_token_cut", "cond_layers", "core_stage_cond",
+    "center_bag_mean", "coda_sees_slots", "coda_token_cut", "coda_token_input", "cond_layers",
+    "core_stage_cond",
     "db1_cond_dim", "db1_ladder_steps", "db1_p_mean", "db1_p_std", "db1_sigma_data",
     "db1_sigma_max", "db1_sigma_min", "db1_w_sigma", "db_loop", "db_mux_iters",
     "detach_z", "emit_weight", "eval_ablations", "fixed_stride", "gate",
@@ -45,7 +46,7 @@ KNOWN_TUL_KEYS = frozenset({
     "per_slot_embed_std", "plast_weight", "prefix_k", "recur_gate", "recur_gate_bias",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
-    "span_cap", "stp_lambda", "tg_restrict", "tg_soft_prev_span", "tg_span_comp",
+    "span_cap", "stp_lambda", "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
     "tg_span_gate", "token_state_dropout", "tokens_through_core", "xattn",
 })
 
@@ -241,6 +242,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         sigreg_slices=int(tc.get("sigreg_slices", 256)),
         sigreg_activate_at=float(tc.get("sigreg_activate_at", 0.0)),
         tg_restrict=bool(tc.get("tg_restrict", False)),
+        tg_restrict_scope=str(tc.get("tg_restrict_scope", "all")),
+        coda_token_input=str(tc.get("coda_token_input", "prelude")),
         tg_span_comp=bool(tc.get("tg_span_comp", False)),
         tg_span_gate=bool(tc.get("tg_span_gate", False)),
         tg_soft_prev_span=bool(tc.get("tg_soft_prev_span", False)),
@@ -296,6 +299,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "sigreg_slices": model_cfg.sigreg_slices,
         "sigreg_activate_at": model_cfg.sigreg_activate_at,
         "tg_restrict": model_cfg.tg_restrict,
+        "tg_restrict_scope": model_cfg.tg_restrict_scope,
+        "coda_token_input": model_cfg.coda_token_input,
+        "bcast": model_cfg.bcast,
         "tg_span_comp": model_cfg.tg_span_comp,
         "tg_span_gate": model_cfg.tg_span_gate,
         "tg_soft_prev_span": model_cfg.tg_soft_prev_span,

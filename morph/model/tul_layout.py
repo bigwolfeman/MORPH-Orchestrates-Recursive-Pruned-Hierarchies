@@ -626,12 +626,21 @@ class SlotLayout:
 # `bag_id` term, so it is not this function's job.
 
 
-def tg_allow_mask(layout: "SlotLayout", soft_prev_span: bool = False) -> Tensor:
+def tg_allow_mask(layout: "SlotLayout", soft_prev_span: bool = False,
+                  slot_queries_slots_only: bool = False) -> Tensor:
     """``[B, 1, L, L]`` bool: TG1's within-span-or-slot allow relation (spec §1).
 
         allow(i, j) = (j <= i)                             # causal
                       AND ( bag_id[i] == bag_id[j]          # same span (tokens+own slot)
                             OR slot_mask[j] )                # or j is any slot position
+
+    ``slot_queries_slots_only=True`` (the coda under ``tul.tg_restrict_scope="coda"``,
+    2026-09-09): a SLOT cell's query may attend slot cells only, never its own span's
+    tokens. In the prelude a slot cell summarising its span is the point (that summary is
+    the seed the loop starts from); in the coda the cell must carry the looped state z and
+    nothing else, or the coda re-summarises the span from the token inputs at the cell
+    and later spans read THAT instead of z (measured: the arm's contract test failed by
+    0.07 nats of logit movement before this rule existed).
 
     ``soft_prev_span=True`` (TG3, spec §6) adds one more disjunct:
     ``bag_id[i] == bag_id[j] + 1`` — spans are numbered in row order (the packer's
@@ -659,6 +668,8 @@ def tg_allow_mask(layout: "SlotLayout", soft_prev_span: bool = False) -> Tensor:
     bag_i = bag_id.unsqueeze(2)                                 # [B, L, 1]
     bag_j = bag_id.unsqueeze(1)                                 # [B, 1, L]
     allow = (bag_i == bag_j) | slot_mask.unsqueeze(1)            # [B, L, L]
+    if slot_queries_slots_only:
+        allow = torch.where(slot_mask.unsqueeze(2), slot_mask.unsqueeze(1), allow)
     if soft_prev_span:
         i_not_dump = bag_i < layout.max_slots                    # [B, L, 1]
         allow = allow | ((bag_i == bag_j + 1) & i_not_dump)

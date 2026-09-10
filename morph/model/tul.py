@@ -141,7 +141,29 @@ class TULConfig:
     set_lambda: float = 0.0              # arm (§3.5) — asserted 0 until implemented
     carry: bool = False                  # arm (§3.5)
     xattn: bool = False                  # arm (§3.5)
-    bcast: bool = False                  # arm (§3.5)
+    # ── The coda reads the thought (Wolfe 2026-09-09; the spec's §3.4 let the coda skip
+    #    the loop: its token inputs were the tokens' own GLOBAL prelude states, so z was
+    #    optional and every slot arm read a flat K-curve). Three construction-time knobs,
+    #    each bit-identical at its default:
+    # bcast: spec §3.5's own row — z_i, the previous slot's looped state (stream mean),
+    #    is projected through one of `bound_span_cap` OFFSET-indexed linears (init 0) and
+    #    ADDED to the coda input of every token of span i+1, offset = the token's index
+    #    inside its span. The "unpack" of Thought Unpack Loop. `TULSlots.W_bcast`.
+    bcast: bool = False
+    # coda_token_input: what the coda's carrier holds at TOKEN positions.
+    #    "prelude" — input_norm(prelude output), the shipped §3.4 path (global context
+    #                inside every token state; z redundant).
+    #    "embed"   — input_norm(the prelude's own INPUT carrier: the token embedding after
+    #                embed dropout, `x0` expanded to the HC streams). A token then carries
+    #                only itself into the coda; context comes through attention.
+    coda_token_input: str = "prelude"
+    # tg_restrict_scope: where the same-span-or-slot mask (tg_allow) applies.
+    #    "all"  — prelude, and coda (the shipped TG arms; the prelude is starved too).
+    #    "coda" — the coda only. The prelude stays global (e_z, the slot's seed, sees the
+    #             whole past); the coda reaches earlier spans ONLY through the slot cells.
+    #             With coda_token_input="embed" this is Block Transformer's contract: the
+    #             local decoder gets the block embedding plus the block's own tokens.
+    tg_restrict_scope: str = "all"
     gate: "TULGateConfig | None" = None  # docs/tul-gate-spec.md; None = arm A1 (nothing built)
     # Per-slot-INDEX input embedding instead of one shared E_slot. 0 = off (one shared
     # vector, the shipped behaviour); >0 = that many rows, and the slot at index s gets row
@@ -447,12 +469,28 @@ class TULConfig:
                     f"(spec §3.5/§5) is specified but NOT implemented in v1. Set it to 0.0; "
                     f"do not run the arm until the loss term exists."
                 )
-        for name in ("carry", "xattn", "bcast"):
+        for name in ("carry", "xattn"):
             if bool(getattr(self, name)):
                 raise NotImplementedError(
                     f"tul.{name}=true — arm '{name}' (spec §3.5) is specified but NOT "
                     f"implemented in v1. Leave it false."
                 )
+        if self.coda_token_input not in ("prelude", "embed"):
+            raise ValueError(
+                f"tul.coda_token_input must be 'prelude' or 'embed', got {self.coda_token_input!r}")
+        if self.tg_restrict_scope not in ("all", "coda"):
+            raise ValueError(
+                f"tul.tg_restrict_scope must be 'all' or 'coda', got {self.tg_restrict_scope!r}")
+        if self.tg_restrict_scope == "coda" and not self.tg_restrict:
+            raise ValueError(
+                "tul.tg_restrict_scope='coda' requires tul.tg_restrict=true (there is no "
+                "restriction to scope).")
+        if self.tokens_through_core and (self.bcast or self.coda_token_input != "prelude"):
+            raise NotImplementedError(
+                "tul.bcast / tul.coda_token_input='embed' have no defined interaction with "
+                "the paid loop (tokens_through_core): there is no per-slot looped state to "
+                "unpack and no separate coda input for the tokens. Raises rather than "
+                "silently picking a behaviour.")
         if self.tg_span_comp and not self.tg_restrict:
             raise ValueError(
                 "tul.tg_span_comp=true requires tul.tg_restrict=true (E-SAC replaces "
@@ -723,6 +761,30 @@ def gather_positions(x: Tensor, index: Tensor) -> Tensor:
     return torch.gather(x, 1, idx)
 
 
+def unpack_index(layout: "SlotLayout") -> tuple[Tensor, Tensor, Tensor]:
+    """Per position: the slot whose thought this token decodes, and its offset in the span.
+
+    Token ``p`` of span ``k ≥ 1`` decodes slot ``k−1`` (the slot that terminates the span
+    before it). Returns ``(src_slot [B,L] int64, offset [B,L] int64, valid [B,L] bool)``:
+    ``offset`` = ``p − (slot_index[k−1] + prefix_k)``, 0 at the span's first token;
+    ``valid`` = a token position, ``k ≥ 1``, and slot ``k−1`` exists. Unlike
+    :func:`mux_span_targets` the span need NOT be terminated: at generation time the span
+    being decoded is always the unterminated one, and the tail dump bin (``bag_id ==
+    max_slots``) decodes the last slot like any other span. Span 0 has no slot before it
+    and gets nothing. ``src_slot`` / ``offset`` are clamped to 0 where ``valid`` is False.
+    """
+    k = layout.bag_id                                                   # [B, L]
+    S = layout.slot_index.shape[1]
+    prev = (k - 1).clamp(0, S - 1)
+    prev_ok = torch.gather(layout.slot_valid, 1, prev)
+    valid = (~layout.slot_mask) & (k >= 1) & prev_ok
+    start = torch.gather(layout.slot_index, 1, prev) + layout.prefix_k
+    pos = torch.arange(k.shape[1], device=k.device).unsqueeze(0)
+    off = (pos - start).clamp(min=0)
+    z = torch.zeros_like(k)
+    return (torch.where(valid, prev, z), torch.where(valid, off, z), valid)
+
+
 def gather_valid(x: Tensor, index: Tensor, valid: Tensor) -> Tensor:
     """Gather ``[B, N]`` positions, zeroing the rows whose ``valid`` is False.
 
@@ -889,6 +951,12 @@ class TULSlots(nn.Module):
         if with_prefix:
             eye = torch.eye(d_model).unsqueeze(0).repeat(tul.prefix_k, 1, 1)
             self.W_prefix = nn.Parameter(eye)
+        # W_bcast [bound_span_cap, d, d] — the unpack (spec §3.5 `bcast`; TULConfig.bcast).
+        # Init ZERO, so at step 0 the coda input is exactly the no-bcast one and the arm
+        # differs from its control by trainable parameters alone. RNG-neutral (no draw).
+        self.W_bcast: nn.Parameter | None = None
+        if tul.bcast:
+            self.W_bcast = nn.Parameter(torch.zeros(tul.bound_span_cap, d_model, d_model))
         self.W_sent: nn.Linear | None = None
         if tul.slot_seed == "boundary":
             self.W_sent = nn.Linear(d_model, d_model, bias=False)
@@ -1062,6 +1130,31 @@ class TULSlots(nn.Module):
         pos = layout.slot_index.unsqueeze(-1) + offs                      # [B, S, K]
         pos = torch.where(layout.slot_valid.unsqueeze(-1), pos, l_total)
         return values, pos.reshape(B, S * K)
+
+    def unpack(self, h_slots: Tensor, layout: SlotLayout) -> Tensor:
+        """The bcast term ``[B, L, C]``: ``W_bcast[offset(p)] · z_{prev slot of p}`` at every
+        token position ``p`` of a span whose preceding slot exists, zero elsewhere.
+
+        ``z`` is the looped state's stream mean (the same reduction ``_readout`` and the
+        mux head use). Computed slot-major, ``[B, S, K, C]`` = every slot through every
+        offset's linear (``B·S·K·C²`` FLOPs, ~15 GFLOP at the panel shape), then gathered
+        per token position — 18x cheaper than a per-token masked loop over the ``K``
+        linears and static-shaped for the compiler. Offsets at or past ``bound_span_cap``
+        are clamped to the last linear (the packer caps spans at ``span_cap`` =
+        ``bound_span_cap``, so only the unterminated tail can exceed it).
+        """
+        if self.W_bcast is None:
+            raise RuntimeError("TULSlots.unpack needs tul.bcast=true (W_bcast is not built)")
+        z = h_slots.mean(dim=2) if h_slots.dim() == 4 else h_slots      # [B, S, C]
+        w = self.W_bcast.to(z.dtype)                                    # [K, C, C]
+        B, S, C = z.shape
+        K = w.shape[0]
+        u = torch.einsum("bsc,kdc->bskd", z, w)                          # [B, S, K, C]
+        src, off, valid = unpack_index(layout)
+        off = off.clamp(max=K - 1)
+        flat = (src * K + off).reshape(B, -1, 1).expand(-1, -1, C)        # [B, L, C]
+        term = torch.gather(u.reshape(B, S * K, C), 1, flat)             # [B, L, C]
+        return torch.where(valid.unsqueeze(-1), term, torch.zeros_like(term))
 
     def apply_token_dropout(self, x: Tensor, layout: SlotLayout, training: bool
                             ) -> tuple[Tensor, Tensor | None]:
