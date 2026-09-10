@@ -1,0 +1,49 @@
+# Slot-loop panel, arm "slot-mnext-staged-all": the toy study's WINNING attachment, in
+# full. `tul.mux_stage_own_iters: 1` + `tul.mux_stage_all: true` — the own-span target
+# (`target="own"`, the span the slot terminates) at EVERY non-final pass from pass 1 to
+# T-1, on the slots whose realised depth reaches that pass, averaged; the next-span target
+# (`mux_target: next`, unchanged) on the FINAL state alone; the local loss is
+# 0.5*(own mean) + 0.5*next, the carry stays live (full BPTT).
+#
+# One factor against `slot-mnext-staged` (`tul_slot_mnext_staged.yaml`, k=3, ONE own term):
+# where the own term sits. Everything else — the ruler `slot-mux-norm-match`, M-next MUX at
+# beta 1 through the tied head, prelude entry, hinge lambda 100 at 0.9,
+# core_fixed_point_lambda 1.0, slot_cot_clip 4.0, ternary norm_match, seq 1024, batch 6,
+# 5,000 steps, ramp 1,000 — is untouched.
+#
+# Why. lab/toy_slot_loop/WRITEUP.md (2026-09-10): on a task built to REQUIRE iteration, in
+# a geometry where the slot loop is the only cross-span path, `staged` — own-span at every
+# non-final pass, next-span at the exit — solved the chain on 5 of 5 seeds and reached the
+# reachability floor exactly (value CE 0.0000, K1-K6 +1.28). Exit-only (the ruler's own
+# attachment) and the TRM-shaped deep coda: 2 of 5. The same target at every pass
+# (`mux_every_pass`, which RAN on MORPH as `slot-mnext-mux-every-pass` and read flat): 1 of 5.
+# Bansal's progressive loss: 0 of 5. The mechanism the toy's backward names: an own-span
+# target is reachable in about one pass, so it does not fight the exit's job — the two jobs
+# separate, and the per-pass cosine to the total core-weight update runs +0.89 down to
+# -0.51 at the last pass, where the single-job attachment reads +0.94 to +0.99 at every pass.
+#
+# k=1, not 3. Under `mux_stage_all` the knob names the FIRST supervised pass, and the toy's
+# winner supervised EVERY non-final pass, so 1 is the faithful transcription. The k=3 arm
+# (`tul_slot_mnext_staged.yaml`) is the narrower one-factor control that ran first.
+#
+# The honest tension, before the run: the toy's second finding (its Q4) is that under
+# MORPH's OWN permissive geometry — a prelude and a coda that attend across spans — the
+# same iterative task behaved like its one-pass control, and the loop's contribution fell
+# from +0.514 to +0.106 K1-K6. This arm does not close those routes; `tul_slot_mnext_staged_mask.yaml`
+# is the arm that does.
+#
+# Cost: T-k extra [B, S, V] fp32 readouts per step and their backward, the same shape
+# `mux_every_pass` measured at 0.99x wall clock and +2.5 GB smoke peak.
+#
+# Record: lab/experiments/planned/2026-09-10-arc-slot-mnext-staged-all.md
+# Note: .agents/notes/proposed/architecture/2026-09-10-credit-assignment-in-the-slot-loop.md
+defaults:
+  - tul_slot_mux_norm_match
+  - _self_
+
+tul:
+  mux_stage_own_iters: 1
+  mux_stage_all: true
+
+wandb:
+  name: slot-mnext-staged-all

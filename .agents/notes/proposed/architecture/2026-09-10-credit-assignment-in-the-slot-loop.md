@@ -174,6 +174,31 @@ staged included — fixes the real slot loop while the prelude and coda can alre
 across spans on their own, and the cheap test for that is not another loss arm: it is the
 `tg_restrict` family already in the tree (the mask arm), read as a K-curve.
 
+### Arms 5-8 (2026-09-10, after the k=3 stage arm was queued)
+
+Four more one-factor arms, added the same afternoon. Arms 5-7 sit on the stage arm
+`slot-mnext-staged`; arm 8 sits on the ruler. Two of them are loss/readout code
+(`tul.mux_stage_all`, `tul.mux_readout`) and two are config only.
+
+**Arm 5, `slot-mnext-staged-all` (`tul.mux_stage_all: true`, `mux_stage_own_iters: 1`).**
+The toy's winning attachment IN FULL. `mux_stage_own_iters` alone supervises ONE
+intermediate pass; the toy's `staged` cell supervised every non-final pass, which is the
+cell that solved the chain on 5 of 5 seeds. Under this knob `mux_stage_own_iters` names the
+FIRST supervised pass and the own-span term is applied at passes k .. T-1 on the slots whose
+realised depth reaches each pass, averaged; the next-span term still supervises the FINAL
+state alone and the loss is still `0.5 * (own + next)`, so `mux_beta` and the reported
+`mux_local` keep their meaning.
+
+- Implementation: it turns on the SAME live trajectory and the SAME per-pass keep masks
+  `mux_every_pass` already collects in `_tul_core` and returns. One trajectory in the tree,
+  not two. Training only, so the depth sweep's two final-state columns are unchanged.
+- Off is bit-identical to the pre-change tree: loss `9.359314918518066` and sha256
+  `189911591a8f60ee2f9dee7932461bca63b2bf5433d2355270763fe0461aefc0` over all 208 gradient
+  tensors of the tiny CPU model at master `fe42d85` and after the change. Five sabotage runs
+  fail the suite (drop the mask, supervise the final state too, detach the trajectory, sum
+  instead of average, do not collect the trajectory).
+- Prereg: `lab/experiments/planned/2026-09-10-arc-slot-mnext-staged-all.md`.
+
 ## Alternatives considered
 
 - **DEQ / implicit differentiation** (Bai et al. 2019). Solve for the fixed point and

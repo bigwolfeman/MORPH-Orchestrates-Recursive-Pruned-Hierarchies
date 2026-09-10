@@ -258,6 +258,31 @@ class TULConfig:
     # mean of the two. The carry stays LIVE (full BPTT through the loop; this is not
     # db_loop, which detaches it). 0 = off: the forward is bit-identical.
     mux_stage_own_iters: int = 0
+    # ── the staged own-span target at EVERY non-final pass (arm `slot-mnext-staged-all`,
+    #    2026-09-10) ──
+    #    True changes what `mux_stage_own_iters` MEANS: instead of one intermediate pass k,
+    #    the own-span target is applied at every pass j from `mux_stage_own_iters` (which is
+    #    then the FIRST supervised pass) up to T-1, for the slots whose realised depth
+    #    reaches j, and the own terms are averaged. The next-span target still supervises the
+    #    FINAL state alone and the loss is still `0.5 * (own + next)`, so `mux_beta` keeps
+    #    its meaning and the reported `mux_local` / `mux_rel` / `mux_kl` still come from the
+    #    final (forecast) term.
+    #
+    #    This is the toy study's winning attachment (`lab/toy_slot_loop/WRITEUP.md`,
+    #    2026-09-10): on a task that NEEDS iteration, in the geometry where the slot loop is
+    #    the only cross-span path, `staged` — own-span at every non-final pass, next-span at
+    #    the exit — solved the chain on 5 of 5 seeds against 2/5 for exit-only and 1/5 for
+    #    the same target at every pass (`mux_every_pass`, which ran on MORPH and read flat).
+    #    `mux_stage_own_iters` alone expresses the narrower k=3 version of it.
+    #
+    #    Reuses the SAME live-carry trajectory and the SAME per-pass keep masks
+    #    `mux_every_pass` collects in `_tul_core` — one trajectory, not two. TRAINING ONLY:
+    #    an eval forward falls back to the single pass-k own term, which is what keeps a
+    #    stage arm's eval columns (`mux_local_own_final`, `mux_local_next_final`, both read
+    #    from the FINAL state) identical in shape to every other stage arm's.
+    #    False = off: the forward is `mux_stage_own_iters`'s, bit-identical
+    #    (tests/test_tul_mux_stage_all.py).
+    mux_stage_all: bool = False
     # ── the M-next MUX on EVERY pass (arm `slot-mnext-mux-every-pass`, 2026-09-10) ──
     #    The slot loop gets gradient ONLY at its exit state: the token CE through the coda
     #    and the two prefix cells, and ONE MUX term computed on the exit state. No
@@ -504,6 +529,22 @@ class TULConfig:
             if self.tokens_through_core:
                 raise ValueError("tul.mux_stage_own_iters is a slot-loop lever "
                                  "(tokens_through_core must be false)")
+        if self.mux_stage_all:
+            # `mux_stage_all` is a MODIFIER of `mux_stage_own_iters`, so every refusal that
+            # knob already carries (db_loop, tokens_through_core, mux_beta <= 0) is refused
+            # for this one by the block above — with k > 0 required here, that block always
+            # runs first. Only the two conditions it cannot see are stated again.
+            if self.mux_stage_own_iters <= 0:
+                raise ValueError(
+                    "tul.mux_stage_all needs tul.mux_stage_own_iters > 0: with the knob on "
+                    "that value is the FIRST pass the own-span target is applied at, and 0 "
+                    "would name no pass at all.")
+            if self.mux_every_pass:
+                raise ValueError(
+                    "tul.mux_stage_all with tul.mux_every_pass is not defined: both put a "
+                    "term on every pass of the same trajectory, one toward the own span and "
+                    "one toward `mux_target`, and averaging them would make the reported "
+                    "mux_local a mixture of two objectives.")
         if self.mux_target not in ("own", "next"):
             raise ValueError(
                 f"tul.mux_target must be 'own' or 'next', got {self.mux_target!r}")

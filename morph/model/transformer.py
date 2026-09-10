@@ -2628,7 +2628,8 @@ class MORPHTransformer(nn.Module):
         ``[B, max_slots, T]``, the gate output after EVERY iteration
         (docs/tul-gate-spec.md §4). ``g_traj`` is a RETURN VALUE, never a side channel:
         the ``ret_capture`` lesson is that a side channel is not checkpoint-safe. So is
-        ``mep_keep`` (``tul.mux_every_pass``, ``None`` everywhere else): the per-pass
+        ``mep_keep`` (``tul.mux_every_pass`` and ``tul.mux_stage_all``, which share one
+        trajectory and one set of masks; ``None`` everywhere else): the per-pass
         supervision mask belongs with the trajectory it indexes, and rebuilding it in the
         caller would duplicate the conditions (``progressive_p``, ``self.training``) that
         decide it.
@@ -2706,13 +2707,19 @@ class MORPHTransformer(nn.Module):
         # Python-level constant, and TRAINING ONLY — an eval forward keeps the single
         # final-state term, which is what leaves `core_depth_sweep.py`'s forced-depth
         # `mux_local` column identical to the ruler's.
+        # `tul.mux_stage_all` (arm slot-mnext-staged-all) needs exactly the same two things
+        # — the live trajectory and the per-pass keep masks — for its own-span terms, so it
+        # turns the SAME collection on rather than building a second one. It is refused
+        # without `mux_stage_own_iters > 0`, so `_stage` (and the SCSE raise above) already
+        # covers it.
+        _stage_all = _stage and bool(self.cfg.tul.mux_stage_all)
         _mep_cfg = bool(self.cfg.tul.mux_every_pass)
         if _mep_cfg and _scse is not None:
             raise NotImplementedError(
                 "tul.mux_every_pass under SCSE is not defined: the carried state is the "
                 "DEVIATION, and a MUX readout of a deviation is not a readout of the slot "
                 "(the same reason db_loop and mux_stage_own_iters raise here).")
-        _mep = _mep_cfg and self.training
+        _mep = (_mep_cfg or _stage_all) and self.training
         with _prof("carrier::h_clone"):
             if _scse is None:
                 h = self.core_init(e)
@@ -3800,23 +3807,53 @@ class MORPHTransformer(nn.Module):
             if tc.mux_beta <= 0.0:
                 mux_loss = None
             elif tc.mux_stage_own_iters > 0:
-                # ── staged targets (arc E3) ───────────────────────────────────────
+                # ── staged targets (arc E3; tul.mux_stage_all, arm slot-mnext-staged-all) ─
                 # Two jobs in sequence on ONE live-carry trajectory: the state after
                 # iteration k toward the span the slot terminates (memory), for the slots
-                # whose depth reaches k; the final state toward the forecast. Mean of the
-                # two, so mux_beta keeps its meaning. Stats come from the FINAL (forecast)
-                # term so mux_rel / mux_kl stay comparable with the unstaged arm; the own
-                # term's loss is reported beside them.
+                # whose depth reaches k — or, under `mux_stage_all`, that same memory term
+                # at EVERY pass from k to T-1, averaged; and the final state toward the
+                # forecast. Mean of the two sides, so mux_beta keeps its meaning. Stats come
+                # from the FINAL (forecast) term so mux_rel / mux_kl stay comparable with
+                # the unstaged arm; the own term's loss is reported beside them, and under
+                # `mux_stage_all` `mux_stage_own` is the MEAN of its terms and
+                # `mux_stage_own_n` the count from the FIRST one (pass k, the largest keep
+                # set — every later pass supervises a subset of it).
                 k = int(tc.mux_stage_own_iters)
                 assert db_traj is not None
-                # The loop runs to the batch's deepest slot; a batch whose deepest slot
-                # stops short of k supervises nothing on the own term (keep is empty and
-                # the loss is 0), so the index is clamped, never raised on (construction
-                # already refused a k past the configured max depth).
                 own_stats: dict = {}
-                own_loss = self._tul_mux_loss(db_traj[min(k, len(db_traj) - 1)], input_ids,
-                                              layout, stats=own_stats,
-                                              slot_keep=(depths >= k), target="own")
+                if mep_keep is not None and len(db_traj) - 1 > k:
+                    # ── tul.mux_stage_all: the own term at EVERY non-final pass ──────
+                    # The toy study's winning attachment. Passes k .. T-1 (the FINAL state
+                    # is the forecast's, never the memory's), each on the slots whose
+                    # realised depth reaches that pass — `mep_keep[j-1]` is the mask for
+                    # `db_traj[j]`, the same list `mux_every_pass` uses, so there is ONE
+                    # trajectory and ONE set of masks in the tree. Averaged, so the own
+                    # side keeps weight 0.5 whatever the batch's depth draw was. `mep_keep`
+                    # is None outside training, so an eval forward takes the single-k
+                    # branch below and the sweep's two final-state columns are unchanged.
+                    idxs = list(range(k, len(db_traj) - 1))
+                    own_terms = [self._tul_mux_loss(
+                                     db_traj[j], input_ids, layout,
+                                     stats=(own_stats if j == idxs[0] else None),
+                                     slot_keep=mep_keep[j - 1], target="own")
+                                 for j in idxs]
+                    own_loss = torch.stack(own_terms).mean()
+                    mux_stats["mux_stage_terms"] = float(len(own_terms))
+                    # `loop/mux_stage_*` for the trainer's pre-clip probe (the `_loop_prog`
+                    # route `mux_every_pass` writes `loop/mux_pass_*` through). Detached
+                    # 0-dim tensors: the float() sync happens in the trainer, on the steps
+                    # it logs, never inside the forward.
+                    self._loop_mux = {"mux_stage_terms": float(len(own_terms))}
+                    for j, t_ in zip(idxs, own_terms):
+                        self._loop_mux[f"mux_stage_t{j}"] = t_.detach()
+                else:
+                    # The loop runs to the batch's deepest slot; a batch whose deepest slot
+                    # stops short of k supervises nothing on the own term (keep is empty and
+                    # the loss is 0), so the index is clamped, never raised on (construction
+                    # already refused a k past the configured max depth).
+                    own_loss = self._tul_mux_loss(db_traj[min(k, len(db_traj) - 1)],
+                                                  input_ids, layout, stats=own_stats,
+                                                  slot_keep=(depths >= k), target="own")
                 nxt_loss = self._tul_mux_loss(h_slots, input_ids, layout, stats=mux_stats)
                 mux_loss = 0.5 * (own_loss + nxt_loss)
                 mux_stats["mux_stage_own"] = float(own_loss.detach())
