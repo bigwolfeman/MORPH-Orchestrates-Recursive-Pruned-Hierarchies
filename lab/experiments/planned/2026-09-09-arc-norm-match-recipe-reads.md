@@ -59,6 +59,14 @@ readouts. Loop CONTRIBUTION is the reading; CE at a step is a horizon reading, a
 
 `precision-bf16-all` (the ceiling arm of the strength panel) is dropped on Wolfe's word.
 
+**Amendment 2026-09-09 20:05 (during the first arm's readout).** The sweep's depth forcing
+went through the slot knobs, which the paid loop ignores, so `tul-norm-match`'s first
+sweeps read a flat curve (4.1640 at every depth). Fixed in `core_depth_sweep.py`
+(commit `d5e6d37`: a paid-loop model is forced through `model.cfg.mean_depth` like the
+plain one); the runner's worktree moved to that commit before the control arm's readout,
+and `tul-norm-match` was re-swept at 2,500 / 5,000 beside the running control arm (eval
+only). Predictions untouched. The `paid_loop` flag is recorded in every sweep header.
+
 ## Predictions (frozen)
 
 - **P-rec-a (survival).** HEALTHY to the end: tul-norm-match **75 %** (the paid loop on
