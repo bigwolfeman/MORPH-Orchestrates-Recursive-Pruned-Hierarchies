@@ -72,3 +72,15 @@ clock. The raw-embedding coda is a weaker decoder than the prelude-state one; th
 at 5k may be large and is a horizon reading, not a verdict. The segment reset makes the
 first three tokens of a span blind to the previous span's tail through the conv, which the
 spec's window never restricted before.
+
+## Update 2026-09-10 (the arm ran)
+
+`slot-unpack-norm-match` (`lab/experiments/failures/2026-09-09-arc-coda-reads-the-thought.md`):
+the contract holds on the trained model (zeroing z costs 0.811 nats at the first token of a
+span, shuffling it 1.651), the arm is healthy at 12,638 tok/s under `tg_scoped_kernels`,
+and the depth curve is flat (tokens K1−K6 +0.0006, K3−K6 0). The design error is real and
+closed; it was not what kept the loop from earning. Every lever on the slot map after it
+(the stability terms, the entry, the depth draw, the reread:
+`failures/2026-09-10-arc-slot-map-levers.md`) read flat too. Whether this wiring ships in
+`base.yaml` is the finalize decision (Wolfe): it costs 0.17 nats against the M-next arm at
+5k and is the only coda that provably reads z. The spec §3.4 amendment waits on that call.

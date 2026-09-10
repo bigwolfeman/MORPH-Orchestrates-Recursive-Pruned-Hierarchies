@@ -1,6 +1,6 @@
 # Planned: the coda reads the thought (the unpack arm)
 
-Status: planned
+Status: failure
 Date: 2026-09-09 (frozen before launch; Wolfe: "we have to test this, add it as an
 arm"). Arc: `2026-09-04-loop-contribution-arc.md`. Follows the slot-loop panel
 (`2026-09-09-arc-slot-loop-norm-match.md`), whose first two arms read a flat token
@@ -105,3 +105,38 @@ The real-scale forward ran on CPU (batch 2, seq 256, one thread) for one step; t
 path runs first in the queue's 12-step smoke. The unpack's compute cost is estimated, not
 measured. The v1 eager generator is unchanged and recomputes the whole row per step; the
 arm's cost model at generation is not exercised here.
+
+## Results
+
+Filed 2026-09-10 07:10. `slot-unpack-norm-match`, 5,000 steps under `tg_scoped_kernels`
+(the fully eager first draw read 8,076 tok/s and the rate rule stopped it; Method amendment
+23:55): HEALTHY, 12,638 tok/s at step 200, peak 15.0 GB, val 4.5791 (`Final val_loss`).
+Sweeps (480 rows, forced slot depths 1..16): tokens K1−K6 +0.0004 [+0.0003, +0.0006] at
+2,500 and +0.0006 [+0.0004, +0.0008] at 5,000; K3−K6 +0.0000 at both; forecast K1−K6
++0.0024 → +0.0038 [+0.0031, +0.0046], K3−K6 +0.0015 → +0.0011 [+0.0007, +0.0015]. Worth
+profile at 5,000: zero z +0.811 [+0.771, +0.851] at offset 0 (then 0.43, 0.32, 0.27, 0.20),
+shuffle +1.651 (the shipped path read 0.051 / 0.09). CE at the trained depth 4.4971 against
+`slot-mux-norm-match`'s 4.3290 on the same rows: +0.168. Init handicap: the raw-embedding
+coda with the weight-tied head starts at 28 nats on the span tokens (the identity path),
+the ramp absorbs it. Slot anatomy (`results/2026-09-10-slot-map-levers/`): full-carrier
+movement 8.7 % then 3.8/2.2/1.6/1.4/1.2/1.1/1.1 % per pass; core MLP out/in 1.4–2.4 %.
+
+## Verdict
+
+- P-unpack-a TRUE. P-unpack-b TRUE (0.811, above 0.5): the reader reads; the contract holds
+  on the trained model.
+- P-unpack-c FALSE on every clause (0.0006 / 0.0000). P-unpack-d FALSE (0.0038 / 0.0011).
+- P-unpack-e TRUE on the first clause (+0.168, more than 0.10), FALSE on the second.
+- P-unpack-f TRUE under scoped kernels (12,638; 15.0 GB); the eager path fails the rate bar.
+- Binding: H-unpack-1′. The coda depends on z and not on the loop's depth; the slot core's
+  anatomy was the next read and became the levers panel
+  (`2026-09-10-arc-slot-map-levers.md`).
+
+## Updated hypothesis
+
+The coda's incentive was a real design error (the spec's §3.4 let the coda skip the loop)
+and closing it does not move the depth curve: the coda uses z (0.8 nats) and z is the same
+at every depth because the slot map is the injection's geometric pull plus near-inert
+blocks. The construction is kept (the knobs are bit-identical at their defaults) for the
+finalize decision; it is the honest wiring for a coda that must read the thought, at a
+0.17-nat price against the M-next arm at 5k.
