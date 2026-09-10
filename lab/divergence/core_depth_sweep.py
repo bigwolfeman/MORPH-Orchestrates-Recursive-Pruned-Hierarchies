@@ -129,6 +129,11 @@ def main() -> None:
                                 device, tul_rt.model_cfg if tul_rt else None)
         model.eval()
         plain = tul_rt is None  # the plain control (tul.activate_at: never)
+        # The PAID loop (tul.tokens_through_core) runs the ordinary _core_region over the
+        # whole packed row, so its eval depth is model.cfg.mean_depth exactly like the plain
+        # model's; the slot knobs (slot_mean_depth / slot_max_depth) are ignored by that
+        # path and forcing them reads a flat curve (tul-norm-match, 2026-09-09 19:59).
+        paid = (not plain) and bool(tul_rt.model_cfg.tokens_through_core)
         loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8,
                                    split="validation", skip_samples=0, bag_size=0, tul=None)
         # The SAME validation stream for every arm, packed by the arm's own cut (the
@@ -163,14 +168,14 @@ def main() -> None:
         batches = [(inp, labels, (lay.to(device) if lay is not None else None))
                    for inp, labels, lay, _ in batches]
         tc = None if plain else model.cfg.tul
-        orig_mean = int(model.cfg.mean_depth if plain else tc.slot_mean_depth)
+        orig_mean = int(model.cfg.mean_depth if (plain or paid) else tc.slot_mean_depth)
         orig_max = 0 if plain else int(tc.slot_max_depth)
         # k-fixed arms (tul.slot_depth_fixed > 0, the 2026-09-07 k=12 panel) ignore the mean
         # at eval, so the forced depth must go through the fixed knob as well.
         orig_fixed = 0 if plain else int(getattr(tc, "slot_depth_fixed", 0))
         has_mux = (not plain) and float(tc.mux_beta) > 0.0
         arm = {"step": step, "rows": rows_done, "batch": a.batch, "eval_mode": a.eval_mode,
-               "plain": plain,
+               "plain": plain, "paid_loop": paid,
                "train_eval_depth":
                orig_fixed or orig_mean or int(cfg.model.mean_depth), "depths": {},
                "mux_target": str(tc.mux_target) if has_mux else None,
@@ -191,9 +196,10 @@ def main() -> None:
         mux_cnt: dict[str, np.ndarray | None] = {m: None for m in MUX_METRICS}
         try:
             for d in depths:
-                if plain:
+                if plain or paid:
                     # the plain forward's eval depth is a uniform cfg.mean_depth fill with
-                    # no clamp at eval (transformer.py, the `else` of `if self.training`)
+                    # no clamp at eval (transformer.py, the `else` of `if self.training`);
+                    # the paid loop runs the same _core_region and reads the same knob
                     model.cfg.mean_depth = d
                 else:
                     if _sigma:
@@ -247,7 +253,7 @@ def main() -> None:
                       + "".join(f"  {m}={entry[m]:.4f}" for m in MUX_METRICS if m in entry),
                       flush=True)
         finally:
-            if plain:
+            if plain or paid:
                 model.cfg.mean_depth = orig_mean
             else:
                 tc.slot_mean_depth = orig_mean
