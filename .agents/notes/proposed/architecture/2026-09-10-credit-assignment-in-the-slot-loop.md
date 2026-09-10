@@ -6,7 +6,7 @@ Date: 2026-09-10. Arms:
 [`slot-mnext-progressive`](../../../../lab/experiments/failures/2026-09-10-arc-slot-mnext-progressive.md),
 [`slot-mnext-per-pass-lora`](../../../../lab/experiments/failures/2026-09-10-arc-slot-mnext-per-pass-lora.md)
 and
-[`slot-mnext-mux-every-pass`](../../../../lab/experiments/planned/2026-09-10-arc-slot-mnext-mux-every-pass.md),
+[`slot-mnext-mux-every-pass`](../../../../lab/experiments/failures/2026-09-10-arc-slot-mnext-mux-every-pass.md),
 all one-factor arms on the ruler `slot-mux-norm-match`
 (`morph/configs/tul_slot_mux_norm_match.yaml`).
 
