@@ -134,6 +134,46 @@ so `mux_local` / `mux_rel` stay comparable with every earlier arm.
   the failure already measured. The arm is worth running because it is the first one that
   touches the loss the passes see at all, not because the sign is obvious.
 
+### Arm 4, `slot-mnext-staged` (`tul.mux_stage_own_iters: 3`)
+
+Added 2026-09-10 after arm 3 filed and read flat exactly as the toy study below predicted
+for a single-job attachment. This one is the toy's own answer to what does NOT read flat.
+
+**The toy study.** `lab/toy_slot_loop/WRITEUP.md` (2026-09-10, the arch server's RTX 3070)
+built a task that FORCES iteration by construction (S3 group composition, one span's label
+at the head of the next, strict geometry so the slot loop is the only cross-span route) and
+ran six loss attachments at 5 seeds each. `staged` (own-span target at every non-final pass,
+next-span target at the exit) solved the chain on 5 of 5 seeds; `exit` (the ruler's own
+attachment) and `deep_coda` 2 of 5; `mux_all` (arm 3's shape) 1 of 5; `progressive` (arm 1's
+shape) 0 of 5. The backward shows why: `staged`'s per-pass cosine to the total core-weight
+update runs +0.89 / +0.96 / +0.92 / +0.86 / +0.75 and then **-0.51** at the last pass — two
+jobs separating — while `mux_all` runs +0.98 / +0.99 / +0.99 / +0.99 / +0.99 / +0.94, one
+instruction repeated six times. The toy also inverted a reading this note's Problem section
+took at face value: cancellation correlates NEGATIVELY with earning (-0.604 across the grid;
+`summary`, the one-pass control where no loop can earn anything, reads a HIGHER ratio than
+`compose`), and arm 3's measured 0.771 (up from the ruler's 0.520) is that signature.
+
+**Proposal.** `tul.mux_stage_own_iters` already exists in the tree for exactly this shape
+(arc E3, `morph/model/transformer.py` `_forward_tul`, ~lines 3800-3830) and was built and
+CPU-tested on 2026-09-04 but never run on a GPU — its own configs
+(`tul_to_mnext_y2_stage2/3.yaml`) predate `norm_match` and have no checkpoint directory.
+`slot-mnext-staged` = the ruler `slot-mux-norm-match` plus `mux_stage_own_iters: 3`: the
+state after iteration 3 supervised toward the span the slot terminates, the final state
+toward the next span, mean of the two. k=3 (not "every non-final pass", the toy's actual
+winner) is E3's original choice and the nearest one-factor test the existing knob can
+express without new code; the toy's stronger form stays open if this arm moves anything.
+Prereg: `lab/experiments/planned/2026-09-10-arc-slot-mnext-staged.md`.
+
+**The honest tension.** The toy's own Q4 result is the reason to expect this arm to read
+flat despite the toy's clean staged-target win: under the toy's PERMISSIVE geometry (the one
+that matches MORPH — a prelude and coda that attend across spans, not the strict one built
+to force the loop to matter), the same iterative task behaved like the one-pass control.
+Holding the loss attachment fixed at exit-only and switching geometries moved the loop's own
+contribution from +0.514 to +0.106 K1-K6 nats. If that transfers, no loss attachment —
+staged included — fixes the real slot loop while the prelude and coda can already compose
+across spans on their own, and the cheap test for that is not another loss arm: it is the
+`tg_restrict` family already in the tree (the mask arm), read as a K-curve.
+
 ## Alternatives considered
 
 - **DEQ / implicit differentiation** (Bai et al. 2019). Solve for the fixed point and

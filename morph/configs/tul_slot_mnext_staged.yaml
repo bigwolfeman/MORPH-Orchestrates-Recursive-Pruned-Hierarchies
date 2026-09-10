@@ -1,0 +1,46 @@
+# Slot-loop panel, arm "slot-mnext-staged": the ruler `slot-mux-norm-match` plus
+# `tul.mux_stage_own_iters: 3` — the state after iteration 3 is supervised toward the
+# span the slot TERMINATES (`target="own"`), the final state toward the NEXT span
+# (`mux_target: next`, unchanged), the local loss is the mean of the two, the carry stays
+# live (full BPTT). Two jobs in sequence on one trajectory.
+#
+# Why this arm: today's toy study (lab/toy_slot_loop/WRITEUP.md) found that on a task
+# that NEEDS iteration, in a geometry where the slot loop is the only cross-span path,
+# STAGED targets are the only attachment that solves the chain (5/5 seeds; exit-only 2/5,
+# MUX-at-every-pass 1/5, progressive 0/5). The mechanism it names: an own-span target at
+# the intermediate passes is reachable in about one pass, so it does not fight the chain
+# — it forces the state to keep the span's own contribution decodable at every pass, which
+# is the ingredient the final pass needs. Its backward shows two jobs separating (per-pass
+# cosine to the total run +0.89 down to -0.51 at the last pass), where MUX-at-every-pass
+# (the arm that actually ran on MORPH today, `slot-mnext-mux-every-pass`, filed
+# lab/experiments/failures/2026-09-10-arc-slot-mnext-mux-every-pass.md) read flat at 5,000
+# steps exactly as the toy predicted for a SINGLE-job attachment (tokens K1-K6 -0.0000,
+# mux_local K1-K6 +0.0001, cancellation ratio 0.771, UP from the ruler's 0.520 -- the toy's
+# signature of the failure mode, not of learning) and mirrors the toy's `mux_all` cell (1/5
+# escapes, decaying cotangent, +0.966 pairwise cosine -- one instruction repeated six times).
+#
+# `tul.mux_stage_own_iters` already exists in the tree for this (morph/model/transformer.py
+# `_forward_tul`, ~lines 3768-3800) and was built but never run on a GPU — the prereg
+# lab/experiments/planned/2026-09-04-arc-e3-staged-targets.md predates norm_match and its
+# arms (`tul_to_mnext_y2_stage2.yaml`, `_stage3.yaml`) were never launched (no checkpoint
+# dir under /home/wolfe/morph-to/checkpoints/morph/ as of 2026-09-10).
+#
+# Why k=3, not "every non-final pass" (the toy's actual winner): the tree's own-span stage
+# is a SINGLE fixed iteration, not a term at every pass before the exit — expressing
+# "every non-final pass" would need new code (a per-pass own-span term, the same shape as
+# `mux_every_pass` but with target "own"). k=3 is E3's original choice and the nearest
+# one-factor test with the existing knob: the slot depth draw is Poisson mean 6, so most
+# slots reach pass 3, and passes 4-6 are left free to do the forecast job the toy's
+# "exit" stage does. This is a narrower test of the toy's mechanism, not a replication of it.
+#
+# Record: lab/experiments/planned/2026-09-10-arc-slot-mnext-staged.md
+# Prior E3 prereg (never launched): lab/experiments/planned/2026-09-04-arc-e3-staged-targets.md
+defaults:
+  - tul_slot_mux_norm_match
+  - _self_
+
+tul:
+  mux_stage_own_iters: 3
+
+wandb:
+  name: slot-mnext-staged
