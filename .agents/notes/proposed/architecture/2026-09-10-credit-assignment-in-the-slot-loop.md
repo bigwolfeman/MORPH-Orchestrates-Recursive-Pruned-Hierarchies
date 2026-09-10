@@ -208,6 +208,25 @@ to this note only as a sibling; its problem, its alternatives and its risks are 
 [`2026-09-10-slot-loop-readout-and-attention-defects.md`](2026-09-10-slot-loop-readout-and-attention-defects.md),
 with arm 8.
 
+**Arm 7, `slot-mnext-staged-mask` (`tul.tg_restrict: true`, scope "all").** The toy's OTHER
+finding, and the larger of the two. Its question 4 held the loss attachment fixed and swapped
+the geometry: under `permissive` — MORPH's own, a prelude causal over everything and a coda
+reading a causal chain of prefix cells — the iterative task behaved like the one-pass control
+(one core pass reached 0.283 nats and 66 % accuracy) and the loop's contribution fell from
++0.514 to +0.106 K1-K6. Under `strict`, where the loop is the only cross-span path, the same
+attachment solved the chain. On the real model that geometry is `tg_restrict` at the default
+scope, which masks the prelude AND the coda. This arm puts the staged attachment in it.
+
+- Config only; no code. Kernels are copied from every mask arm since E16 and are not a free
+  choice: `tg_restrict` forces `use_kernels: false`, and `tg_scoped_kernels: true` is what
+  keeps the rate above the 8,086 floor (E4's fully-eager twin on this recipe read 9,168 tok/s;
+  E16 measured the flag at 1.63x) AND keeps the gain hinge paired with the ruler's, because
+  the eager finite difference reads 0.94 on a map whose gain is 0.87.
+- The mask's own prior on this tree is the reason not to read a large token K-curve as
+  success: E16 read token K1-K6 0.406 on clean math at 0.18 nats BEHIND the plain model, and
+  E17 read every Sudoku bucket flat from T = 2 to 16. The mask buys forced dependence.
+- Prereg: `lab/experiments/planned/2026-09-10-arc-slot-mnext-staged-mask.md`.
+
 ## Alternatives considered
 
 - **DEQ / implicit differentiation** (Bai et al. 2019). Solve for the fixed point and

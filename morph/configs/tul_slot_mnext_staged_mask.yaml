@@ -1,0 +1,62 @@
+# Slot-loop panel, arm "slot-mnext-staged-mask": the staged arm in the STRICT geometry.
+# `tul.tg_restrict: true` at the default scope "all" — one factor against
+# `slot-mnext-staged` (`tul_slot_mnext_staged.yaml`, `mux_stage_own_iters: 3`), which this
+# file composes.
+#
+# Why. The toy study's SECOND finding (lab/toy_slot_loop/WRITEUP.md, question 4) is the one
+# that bounds every loss-attachment arm on this loop. Under the toy's PERMISSIVE geometry —
+# MORPH's own: a prelude causal over every cell and a coda reading a causal chain of prefix
+# cells — a task built to REQUIRE iteration behaved like its one-pass control. One core pass
+# reached 0.283 nats and 66 % accuracy on an 8-span scan, because the prelude and the coda
+# compose across spans by themselves. The loop earned depth ONLY in the strict geometry,
+# where it is the sole cross-span path. On the real model that geometry is `tg_restrict`,
+# and it is the one slot arm that has ever read a token K1-K6 above 0.02 (E16, 0.406 on
+# clean math, at 0.18 nats WORSE than the plain model paired at depth 12).
+#
+# SCOPE. `tul.tg_restrict_scope` defaults to "all", which is what this arm wants: the same
+# span-or-slot mask applies in the PRELUDE and in the CODA, so neither can compose across
+# spans on its own and the slot is the only route. Scope "coda" (the `slot-unpack-*` family)
+# leaves the prelude global on purpose and is the wrong control for the toy's finding.
+#
+# KERNELS, copied from the mask arms since E16 and not a free choice. `tg_restrict` forces
+# `model.use_kernels: false` at construction (the fused window/CSA/HCA kernels do not know
+# about the restriction and a silent unmasked kernel path is forbidden), and that turns
+# EVERY fused kernel off process-wide. `model.tg_scoped_kernels: true` is legal with scope
+# "all" — every TG-restricted branch stays eager BY CONSTRUCTION, because a prelude/coda
+# window call always carries `tg_allow` and routes to the reference path, and the TG
+# compressed branches are pure eager functions — and it lets HC-Cayley, the CCA prologue and
+# the core-region window run fused. Two reasons it is required here, not optional:
+#   * rate. E4's fully-eager mask arm on this exact recipe (`to-mnext-y2-mask`, mean-6, batch
+#     6, seq 1024) read 9,168 tok/s at step 200, against the ruler's 12,429 and a rate floor
+#     of 8,086. E16 measured tg_scoped_kernels at 1.63x and -5.4 GB. Fully eager this arm has
+#     about 13 % of margin over the floor; with the flag it should sit near the ruler.
+#   * the hinge. The eager finite difference reads gain 0.94 +- 0.014 on a map whose true
+#     gain is 0.87 (noise bias at slot_gain_eps 0.02), so an eager arm's hinge at target 0.9
+#     fires on noise while the ruler's, running fused, does not. Without this flag the arm
+#     would differ from its partner by the mask AND by whether the constraint is active.
+#     Audit: .agents/notes/proposed/bug-fix/2026-09-08-slot-gain-eps-noise-bias.md
+#
+# Side effect worth naming, since it makes this arm a partial control for audit finding F1:
+# under `tg_restrict` the pooled `GatedPoolCompressor` is NOT BUILT on any layer
+# (`_CCAHCAAttention.__init__` sets `self.compressor = None` and returns), so the HCA
+# compressed branch that reads exactly 0.000 at S = 64 on the ruler cannot exist here. This
+# arm therefore changes the geometry AND removes F1; `tul_slot_mux_hca_fix.yaml` is the arm
+# that removes F1 alone.
+#
+# Known price: the mask costs 0.1-0.2 nats of CE on every panel that has run it.
+#
+# Record: lab/experiments/planned/2026-09-10-arc-slot-mnext-staged-mask.md
+defaults:
+  - tul_slot_mnext_staged
+  - _self_
+
+model:
+  use_kernels: false
+  tg_scoped_kernels: true
+
+tul:
+  tg_restrict: true
+  tg_restrict_scope: all
+
+wandb:
+  name: slot-mnext-staged-mask
