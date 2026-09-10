@@ -67,6 +67,16 @@ plain one); the runner's worktree moved to that commit before the control arm's 
 and `tul-norm-match` was re-swept at 2,500 / 5,000 beside the running control arm (eval
 only). Predictions untouched. The `paid_loop` flag is recorded in every sweep header.
 
+**Amendment 2026-09-09 20:40 (Wolfe's correction).** The two "TUL" arms of this file are
+the PAID loop (`tokens_through_core: true`: every position loops), which Wolfe identified
+as a hallucinated variant: "that is a hallucinated TUL you made in a previous session."
+The real TUL is the slot loop. `tul-norm-match` completed and is kept as a SIDE RESULT
+(its readouts are on disk; P-rec-b/c score against it as written); `tul-absmean` was
+killed at step ~800 and is not re-run. The paid-loop pair is replaced by the slot-loop
+panel, `2026-09-09-arc-slot-loop-norm-match.md`, which runs FIRST; the horizon resume and
+`norm-match-20k` (P-rec-d/e) stay on this file and run after it on the same runner
+(`arc/run_slotloop.sh`). Predictions untouched.
+
 ## Predictions (frozen)
 
 - **P-rec-a (survival).** HEALTHY to the end: tul-norm-match **75 %** (the paid loop on

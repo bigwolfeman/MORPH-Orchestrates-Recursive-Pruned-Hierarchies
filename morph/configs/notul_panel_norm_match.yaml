@@ -1,0 +1,20 @@
+# Slot-loop panel, arm "plain-panel-norm-match": the plain model (no slot positions,
+# tul.activate_at never) on the think-once panel recipe (tul_to_panel: seq 1024, batch 6,
+# seed 1, 5000 steps, retention off, cap 0, alpha_cap 3.5, t_beta3 3500) under the shipped
+# ternary rule. The ruler the four slot-loop arms are read against on the SAME recipe
+# (scale-norm-match sits on the Parcae-entry recipe: noise init, all-dim carry, no
+# fixed-point term, seed 0). tul_to_panel's eval_ablations is inert without a layout.
+# Record: lab/experiments/planned/2026-09-09-arc-slot-loop-norm-match.md
+defaults:
+  - notul
+  - tul_to_panel
+  - _self_
+
+training:
+  ternary_scale_mode: norm_match
+
+tul:
+  activate_at: never
+
+wandb:
+  name: plain-panel-norm-match

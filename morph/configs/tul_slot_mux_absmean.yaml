@@ -1,0 +1,13 @@
+# Slot-loop panel, arm "slot-mux-absmean": the control of tul_slot_mux_norm_match.yaml, the
+# same M-next slot loop under the old absmean rule (ternary_scale_mode: symmetric).
+# Record: lab/experiments/planned/2026-09-09-arc-slot-loop-norm-match.md
+defaults:
+  - tul_to_mnext_y2
+  - _self_
+
+training:
+  ternary_scale_mode: symmetric
+  ckpt_every: 2500
+
+wandb:
+  name: slot-mux-absmean

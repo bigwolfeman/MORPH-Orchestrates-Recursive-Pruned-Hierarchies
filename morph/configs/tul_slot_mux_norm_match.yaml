@@ -1,0 +1,18 @@
+# Slot-loop panel, arm "slot-mux-norm-match": the slot loop WITH the MUX, the think-once
+# M-next arm (tul_to_mnext_y2: the slot is supervised toward the NEXT span through the tied
+# head at beta 1, clip-through-time 4.0, the typical-gain hinge lambda 100 at 0.9; the arm
+# that reached 5000 steps with zero spikes), under the shipped ternary rule
+# (ternary_scale_mode: norm_match). Checkpoints every 2500 (Y2 wrote every 500 for the
+# onset capture; this panel reads 2500 and 5000 only).
+# Control: tul_slot_mux_absmean.yaml.
+# Record: lab/experiments/planned/2026-09-09-arc-slot-loop-norm-match.md
+defaults:
+  - tul_to_mnext_y2
+  - _self_
+
+training:
+  ternary_scale_mode: norm_match
+  ckpt_every: 2500
+
+wandb:
+  name: slot-mux-norm-match
