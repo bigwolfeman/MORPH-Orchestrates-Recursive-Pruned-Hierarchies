@@ -142,6 +142,19 @@ model:
   # run. Measured 2026-08-25. Deploy (seq_len 4096, 512 slots) is unaffected; the TUL
   # short schedule is not. See lab/experiments/failures/2026-08-25-h18-positional-attention-sink.md
   core_hca_compress_ratio: null
+
+  # WHICH BLOCK the looped core is built from. "morph" is every run before 2026-09-10 and
+  # is bit-identical to not having this key. "parcae" swaps the core alone for
+  # morph/model/parcae_core.py's ParcaeCoreBlock — dense causal softmax attention, a plain
+  # single-stream additive residual, a dense SwiGLU, never ternarised and never
+  # pruned/carved — while the prelude and the coda stay MORPH blocks. The carrier is
+  # collapsed by the stream mean at the core's entry and broadcast back at its exit.
+  # Arm slot-mnext-parcae-core: lab/experiments/planned/2026-09-10-arc-slot-mnext-parcae-core.md
+  core_impl: morph
+  # Head width of the Parcae core's attention; null -> d_model // (compression * n_heads),
+  # the same d_head MORPHAttention computes, so the swapped core is roughly
+  # parameter-matched against the MORPH core it replaces. Ignored by core_impl: morph.
+  parcae_core_d_head: null
   top_k: 256
   window_size: 256
   context_len: 8192  # common CoPE taper anchor across seed/base/cloud

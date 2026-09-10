@@ -225,6 +225,23 @@ class MORPHConfig:
     # Scoped to the core on purpose: setting `hca_compress_ratio` globally would also
     # re-block prelude and coda, which do not have the problem.
     core_hca_compress_ratio: int | None = None
+
+    # WHICH BLOCK the looped core is built from. "morph" (the default, and every run
+    # before 2026-09-10) = the ordinary MORPHBlock: ternary-STE MortarLinear MLP,
+    # CCA+CSA/HCA+XSA attention, 4-stream Cayley hyper-connection residual. "parcae" =
+    # `morph/model/parcae_core.py`'s ParcaeCoreBlock: dense causal softmax attention,
+    # a plain single-stream additive residual, a dense `_SwiGLU` MLP, never ternarised
+    # and never pruned/carved. The prelude and the coda are MORPH blocks either way —
+    # they run once and are not the question — so the stream boundary is one collapse
+    # (stream mean) at the core's entry and one broadcast at its exit, both inside
+    # `_apply_core_step`. Arm `slot-mnext-parcae-core`, the one-factor test of whether
+    # the slot loop's flat K-curve is MORPH's core at the slot shape or the TUL
+    # mechanism itself (lab/experiments/planned/2026-09-10-arc-slot-mnext-parcae-core.md).
+    core_impl: str = "morph"
+    # Head width of the Parcae core's attention. None -> `d_model // (compression *
+    # n_heads)`, the SAME d_head MORPHAttention computes, so the swap is roughly
+    # parameter-matched and a depth gain cannot be read as extra capacity.
+    parcae_core_d_head: int | None = None
     top_k: int = 128
     d_indexer: int = 32
     window_size: int = 128
@@ -1051,10 +1068,62 @@ class MORPHTransformer(nn.Module):
                              f"got {cfg.injection_channels!r}")
 
         # ── Core (shared across loop iterations — MortarLinear for CMS pruning)
-        self.core = nn.ModuleList([
-            _make_block(cfg.n_prelude + i, core_attn_kw)
-            for i in range(cfg.n_core)
-        ])
+        # `core_impl` is read ONCE, here. `self._core_is_parcae` is a Python bool that is
+        # never rebound, so every branch on it in the forward resolves at trace time and
+        # a "morph" model's graph — and its RNG stream, and every weight — is what it was
+        # before this knob existed (tests/test_parcae_core.py pins the gradient hash).
+        if cfg.core_impl not in ("morph", "parcae"):
+            raise ValueError(f"model.core_impl must be 'morph' or 'parcae', "
+                             f"got {cfg.core_impl!r}")
+        self._core_is_parcae = cfg.core_impl == "parcae"
+        if not self._core_is_parcae:
+            self.core = nn.ModuleList([
+                _make_block(cfg.n_prelude + i, core_attn_kw)
+                for i in range(cfg.n_core)
+            ])
+        else:
+            from .parcae_core import ParcaeCoreBlock, parcae_core_d_head
+            # Refusals, not silent drops. Each of these is a mechanism the Parcae block
+            # cannot carry; running it anyway would report a "one-factor swap" that had
+            # quietly lost a second factor.
+            if cfg.retention and "core" in tuple(cfg.retention_sections):
+                raise NotImplementedError(
+                    "model.core_impl='parcae' with retention on the core section: the "
+                    "Parcae block carries no GLA branch. Drop 'core' from "
+                    "model.retention_sections or use core_impl='morph'.")
+            if cfg.scse_enabled or cfg.core_init_scale > 0.0:
+                raise NotImplementedError(
+                    "model.core_impl='parcae' with SCSE / core_init_scale is not "
+                    "defined: both redefine the loop carrier, which this swap does not "
+                    "cover.")
+            if cfg.core_hca_compress_ratio is not None:
+                raise ValueError(
+                    "model.core_hca_compress_ratio has no meaning under "
+                    "core_impl='parcae' — the Parcae core has no pooled compressor and "
+                    "no HCA branch to re-block. Remove the key.")
+            if self._tg_restrict:
+                raise NotImplementedError(
+                    "model.core_impl='parcae' with tul.tg_restrict: the TG restriction "
+                    "is a build flag on MORPHAttention's compressed branch and the "
+                    "Parcae core has no such branch, so the core's cross-span mask "
+                    "would silently vanish while prelude/coda kept theirs.")
+            _pd_head = parcae_core_d_head(d, cfg.n_heads, cfg.compression,
+                                          cfg.parcae_core_d_head)
+            self.core = nn.ModuleList([
+                ParcaeCoreBlock(
+                    d_model=d, d_ff=d_ff, n_heads=cfg.n_heads, d_head=_pd_head,
+                    max_seq_len=cfg.max_seq_len, context_len=cfg.context_len,
+                    dropout=cfg.dropout, residual_blocks=max(1, cfg.n_core),
+                )
+                for _ in range(cfg.n_core)
+            ])
+            _n_pc = sum(p.numel() for b in self.core for p in b.parameters())
+            print(f"  CORE = PARCAE: {cfg.n_core} plain pre-norm blocks "
+                  f"(dense causal softmax, {cfg.n_heads} heads x d_head {_pd_head}, "
+                  f"SwiGLU d_ff {d_ff}, single-stream residual) -> {_n_pc:,} params "
+                  f"({_n_pc / 1e6:.2f}M), bf16 (never ternarised), dense nn.Linear "
+                  f"(never pruned / carved / routed / packed). Carrier: stream mean in, "
+                  f"broadcast to {cfg.hc_streams} streams out, once per pass.", flush=True)
 
         # ── Coda ──────────────────────────────────────────────────────
         self.coda = nn.ModuleList([
@@ -1531,6 +1600,20 @@ class MORPHTransformer(nn.Module):
         """
         np_ = self.cfg.n_prelude
         mlp_kw = {"iter_idx": iter_idx}
+        # ── The stream boundary of the Parcae core swap (model.core_impl) ────────────
+        # `_core_is_parcae` is a Python bool fixed at construction, so this is a
+        # trace-time branch and a "morph" model's graph is byte-for-byte what it was.
+        # A ParcaeCoreBlock has a plain single-stream residual, so the [B,S,n,C] carrier
+        # is collapsed ONCE per pass by the stream MEAN — the same reduction `_readout`
+        # and `TULSlots.unpack` already use to read this carrier — and the pass's output
+        # is broadcast back over the n streams at the end. The prelude and the coda keep
+        # their Cayley carrier untouched, which is what makes the swap one factor.
+        # `e_in` is collapsed too: `DiagonalInjection` reads it elementwise against `h`.
+        _parcae = self._core_is_parcae
+        if _parcae:
+            h_in = h_in.mean(dim=2)
+            if e_in is not None:
+                e_in = e_in.mean(dim=2)
         # `source_free` is SCSE's G_theta (docs/scse-spec.md section 3.2): the shared block
         # stack with NO source entering the recurrence. Both injections are skipped, not fed
         # zeros — feeding e = 0 would leave DiagonalInjection's `h_ctx <- A*h_ctx` decaying
@@ -1559,6 +1642,14 @@ class MORPHTransformer(nn.Module):
                                ret_state=rs_arg, ret_capture=rc_arg,
                                attn_kwargs=attn_kw, pass_idx=iter_idx)
         new_ret = ret_cap.get("state") if ret_cap is not None else None
+        if _parcae:
+            # Broadcast the single-stream pass output back over the n streams. `.expand`
+            # then `.contiguous()`: every caller of this method treats the return as an
+            # ordinary carrier (torch.where, advanced indexing, tensor hooks, checkpoint
+            # inputs), and a materialised tensor is the one that cannot surprise any of
+            # them. On the slot loop the carrier is [B, 64, 4, C] — the copy is noise.
+            h_injected = h_injected.unsqueeze(2).expand(
+                -1, -1, self._n_streams, -1).contiguous()
         return h_injected, new_ret
 
     # ── Static-region CUDA graphs (MORPH_STATIC_GRAPHS) ──────────────────────

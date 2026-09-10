@@ -1,0 +1,69 @@
+# Slot-loop panel, arm "slot-mnext-parcae-core": the M-next slot loop (the ruler
+# `tul_slot_mux_norm_match`) with the looped CORE swapped for a plain Parcae-style block
+# stack. Everything else — slot layout, packer, boundary rule, prelude, coda, MUX loss,
+# token CE, the weighted-CE wiring, the depth draw, the optimiser, the data — is the
+# ruler's, unchanged.
+#
+# The question (prereg: lab/experiments/planned/2026-09-10-arc-slot-mnext-parcae-core.md):
+# the slot loop reads flat on every arm. Is that MORPH's core AT THE SLOT SHAPE, or the
+# TUL mechanism itself? The 2026-09-10 geometry audit
+# (lab/experiments/results/2026-09-10-slot-geometry-audit/README.md) closed "the core is
+# muted" — one pass moves a slot state as far as it moves a token state — but it could
+# not ask whether a DIFFERENT core would earn depth where this one does not.
+#
+# What `model.core_impl: parcae` changes, in one place (morph/model/parcae_core.py):
+#   - dense causal softmax attention over all 64 slot cells, replacing CCA + CSA/HCA +
+#     XSA. This removes, at once: the pooled compressor whose HCA branch is EXACTLY DEAD
+#     at S = 64 while the gate still spends 0.42-0.48 of its mixture on the zero tensor
+#     (audit finding F1), CSA's never-firing block selection (tk 8 of 8), the residual
+#     attention carry, the conv, the indexer, QK-Norm, and XSA's self-exclusion (query 0
+#     now has a key);
+#   - a plain single-stream additive residual, replacing the 4-stream Cayley
+#     hyper-connection. The carrier is collapsed by the stream MEAN at the core's entry
+#     and broadcast back at its exit, both inside `_apply_core_step`, so PRELUDE AND CODA
+#     KEEP THEIR HC CARRIER and are the ruler's;
+#   - a dense `_SwiGLU` of plain `nn.Linear` at the ruler's d_ff, replacing
+#     `_SwiGLUMortar`. Being an nn.Linear is what makes the core invisible to the prune /
+#     carve / ReMoE / packer walks by construction;
+#   - NO ternary QAT on the core. Every Parcae linear carries `_ternary_exclude`, which
+#     `ternary_qat._categorize` honours under every scope, so prelude, coda and embeddings
+#     ternarise under `norm_match` exactly as the ruler's do and the core stays bf16. The
+#     ternary rule was measured to be the per-pass map's limiter on the PLAIN loop
+#     (K1-K6 0.033 -> 0.185 from absmean to norm_match; bf16 core 0.168) and has never
+#     been lifted off a SLOT core.
+#   - head width defaults to `d_model // (compression * n_heads)` = 64, the same d_head
+#     MORPHAttention computes, so the swapped core is roughly parameter-matched.
+#
+# THE SECOND COMPONENT OF THE SWAP, named rather than hidden: Parcae's recurrence is
+# `h_t = A h_{t-1} + B e + R(h_{t-1}, e)` (arXiv 2604.12946 section 3, App. C), where
+# `A`/`B` is MORPH's `DiagonalInjection` and `R` is the block stack. A Parcae core with
+# MORPH's ctx-only carry would leave 768 of 1024 carrier dims with no source term at all,
+# so the faithful form is the widened carry with a learned identity-init B — the same
+# four lines the `slot-mnext-noise-entry` arm carries, so the two arms share the carry
+# and differ by (core implementation, loop entry). The carry alone is already measured
+# INERT on this family: `slot-unpack-noise-entry` K1-K6 0.002,
+# `slot-mnext-noise-entry` K1-K6 -0.0001 (2026-09-10 audit, lead 5). The loop ENTRY stays
+# the ruler's (`core_state_init: prelude`), per the knob.
+#
+# The stability terms stay as the ruler ships them (`slot_gain_lambda` 100 at 0.9,
+# `slot_cot_clip` 4.0, `core_fixed_point_lambda` 1.0). They are the arm's one factor's
+# HOLD, not part of the swap. The hinge is well defined here — unlike under a noise entry
+# — because the entry is still `h_0 = e`. Watch it: a dense bf16 core's typical gain is
+# unmeasured, and if `loss/gain_est` sits above 0.9 for most steps the arm is confounded
+# by a hinge fight and must be re-drawn at `slot_gain_lambda: 0`. See the prereg's
+# "Not verified" list.
+defaults:
+  - tul_slot_mux_norm_match
+  - _self_
+
+model:
+  core_impl: parcae
+  parcae_core_d_head: null      # -> d_model // (compression * n_heads) = 64
+  # Parcae's A/B, the same values slot-mnext-noise-entry carries.
+  injection_channels: all
+  injection_all_decay: 0.447
+  injection_all_dt: 0.8
+  injection_B: true
+
+wandb:
+  name: slot-mnext-parcae-core

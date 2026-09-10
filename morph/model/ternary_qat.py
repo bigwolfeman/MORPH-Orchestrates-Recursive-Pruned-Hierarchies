@@ -653,6 +653,13 @@ def _categorize(name: str, module: nn.Module, attn_ids: set[int]) -> str | None:
     The Lorentz space embedding (lor_embed.space_embed) always returns None —
     it is geometry-critical and must stay bf16 regardless of scope.
     """
+    # Guard: a module that carries `_ternary_exclude` is never ternarized, under ANY
+    # scope. The exclusion travels with the module instead of living in a path list that
+    # somebody has to keep in step with the tree. Set by `ParcaeCoreBlock` on every
+    # nn.Linear it owns (model.core_impl='parcae'): that core is the ONE thing the swap
+    # arm holds at bf16 while prelude, coda and embeddings ternarize exactly as before.
+    if getattr(module, "_ternary_exclude", False):
+        return None
     if isinstance(module, nn.Embedding):
         # Guard: never ternarize the Lorentz space embedding.
         # Match by path suffix — robust across nesting depth (e.g., model.embed.hybrid.

@@ -409,6 +409,9 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         hca_compress_ratio=int(m.hca_compress_ratio),
         core_hca_compress_ratio=(None if m.get("core_hca_compress_ratio", None) is None
                                  else int(m.core_hca_compress_ratio)),
+        core_impl=str(m.get("core_impl", "morph")),
+        parcae_core_d_head=(None if m.get("parcae_core_d_head", None) is None
+                            else int(m.parcae_core_d_head)),
         top_k=int(m.top_k),
         window_size=int(m.window_size),
         context_len=int(m.context_len),
