@@ -1,6 +1,6 @@
 # Planned: the slot loop (the real TUL) under the norm-match rule
 
-Status: planned
+Status: failure
 Date: 2026-09-09 (frozen before launch; Wolfe: "our major priority is slot loop norm match
 and slot loop + MUX norm match", after the correction that the paid loop
 `tokens_through_core: true` is not TUL: "that is a hallucinated TUL you made in a previous
@@ -128,3 +128,54 @@ path). Whether the gain hinge reads its true value on the fused-kernel path
 (`use_kernels true`; the eager path reads +0.07 high, `morph-eager-hinge-reads-noise`).
 There is no branch out/in instrument for the slot core: `core_anatomy.py` refuses a
 slot-loop model, so P-slot-f's branch reading exists for the plain ruler only.
+
+## Results
+
+Filed 2026-09-10 07:05. Five arms, 5,000 steps, seq 1024; the slot arms scored by
+`core_depth_sweep.py` over forced slot depths (480 rows), `worth_profile.py` and
+`slot_anatomy.py` (results in `results/2026-09-09-slot-loop-norm-match/`; the anatomies in
+`results/2026-09-10-slot-map-levers/`). `slot-loop-absmean` ran as an orphan after the
+runner's waiter self-matched its own log line (22:56); `slot-mux-absmean` was preempted at
+step ~300 for the levers panel and re-ran last (05:58).
+
+| arm | verdict | tok/s | peak | val@5k | tok K1−K6 | tok K3−K6 | fc K1−K6 | CE@6 − plain@6 (token-paired) | worth zero | gain_est mean / hinge frac |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| slot-loop-norm-match | HEALTHY | 12,011 | 11.7 | 4.2601 | −0.0000 [−0.0001, +0.0000] | −0.0000 | — | +0.164 [+0.156, +0.173] | 0.051 | 0.868 / 0.001 |
+| slot-loop-absmean | HEALTHY | 12,843 | 11.7 | 4.2241 | +0.0000 [−0.0001, +0.0001] | −0.0000 | — | +0.109 [+0.100, +0.120] | 0.046 | 0.865 / 0.000 |
+| slot-mux-norm-match | HEALTHY | 12,429 | 12.0 | 4.3775 | +0.0001 [−0.0000, +0.0002] | −0.0000 | +0.0067 [+0.0053, +0.0081] | +0.263 [+0.251, +0.275] | 0.094 | 0.887 / 0.005 |
+| slot-mux-absmean | HEALTHY | 13,599 | 12.0 | 4.3457 | +0.0004 [+0.0003, +0.0005] | +0.0001 | +0.0069 [+0.0057, +0.0083] | +0.212 [+0.200, +0.226] | 0.051 | 0.883 / 0.002 |
+| plain-panel-norm-match | HEALTHY | 9,525 | 10.2 | 4.0950 | +0.033 (K1−K6), K3−K6 +0.0055 | | | 0 | | |
+
+Ruler anatomy (prelude entry, norm_match): movement 9.3/4.3/2.7/2.0/1.7/1.6/1.6 % per pass,
+MLP out/in 0.03–0.19 at the last pass; the init probe entered from ZERO earns 0.47 from
+depth 1 to 6 and ends 0.2 worse than the prelude entry. Slot anatomies: MLP out/in 0.5–0.7 %
+(no-MUX), 6–30 % (MUX) on slot states; full-carrier movement 6/3/2/1.5/1.4/1.4/1.4 % (no-MUX)
+and 65/17/9/6/4/4/3 % (MUX, the injection's geometric series).
+
+## Verdict
+
+- P-slot-a TRUE: all five HEALTHY.
+- P-slot-b FALSE: forecast K1−K6 0.0067 (bar 0.03), K3−K6 0.0005 (bar 0.01); the rule
+  does not lift the slot map's earning (absmean twin 0.0069).
+- P-slot-c FALSE on both arms (0.0000 and 0.0001); the H-slot-2 clause fails too because
+  the ruler does not read above 0.12.
+- P-slot-d TRUE: the controls reproduce the record (0.0000; forecast 0.0069 vs 0.0135 is
+  within 0.01).
+- P-slot-e FALSE: `gain_est` 0.868–0.887 mean, the hinge binds under 1 % of steps on
+  every arm; the constraint is inert under norm_match as under absmean.
+- P-slot-f FALSE: the ruler reads K1−K6 0.033 and K3−K6 0.0055 under the prelude entry;
+  the rule's 0.185 belongs to Parcae's noise entry (the entry confound, measured).
+- P-slot-g TRUE (behind by more than 0.05 on every slot arm: +0.11 to +0.26 token-paired).
+- P-slot-h TRUE (all above 8,086; the MUX arms above 12,000; peaks under 14 GB).
+
+## Updated hypothesis
+
+Under both rules the slot loop's contribution is zero on the tokens and under 0.01 on the
+forecast; the rule acts on token states, not on slot states, where the core blocks output
+under a third of what they output on tokens. The prelude entry flattens the plain loop too
+(0.033 vs 0.185). The next panel (`2026-09-10-arc-slot-map-levers.md`, the stability
+terms, the entry, the depth draw, and the reread) read flat as well: the slot loop on this
+tree is a one-pass span compressor at a 0.1–0.26 nat price against the plain model at 5k,
+a horizon reading. Wolfe's design correction (the coda must read z, not the prelude's
+global state) is built and tested (`2026-09-09-arc-coda-reads-the-thought.md`) and does
+not change the depth reading.
