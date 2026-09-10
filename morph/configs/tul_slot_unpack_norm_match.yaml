@@ -12,7 +12,10 @@
 #                             carries z and nothing else (tests/test_tul_unpack.py);
 #   bcast                   — the unpack: z_i through offset-indexed zero-init linears,
 #                             added to every token of span i+1's coda input.
-# Eager attention (the restriction is eager-only at construction).
+# Kernels: tg_scoped_kernels (as every mask arm since E16): the prelude and the core run
+# the fused stack (no mask there under scope coda); the three coda blocks, which carry the
+# mask and the segment reset, run eager by construction. Fully eager the arm read 8,076
+# tok/s at step 200 and Wolfe's rate rule stopped it (queue 2026-09-09 23:55).
 # Record: lab/experiments/planned/2026-09-09-arc-coda-reads-the-thought.md
 defaults:
   - tul_slot_mux_norm_match
@@ -20,6 +23,7 @@ defaults:
 
 model:
   use_kernels: false
+  tg_scoped_kernels: true
 
 tul:
   tg_restrict: true

@@ -58,6 +58,20 @@ rate stop, then the readouts of the slot-loop panel (sweeps at forced slot depth
 The arm runs FIRST in the new queue; the panel's remaining arms (`slot-mux-absmean`,
 `plain-panel-norm-match`) and the two recipe-reads arms follow.
 
+**Amendment 2026-09-09 23:55 (the rate rule).** The first draw ran fully eager
+(`model.use_kernels: false` alone) and read 8,076 tok/s at step 200, under the paid loop's
+8,086; the runner stopped it (Wolfe's rule) at step 215, healthy, no checkpoint. The
+arm re-runs with `model.tg_scoped_kernels: true` (the kernel path of every mask arm since
+E16: the prelude and the core fused, the three coda blocks eager because they carry the
+mask and the segment reset). Measured before the relaunch on one packed batch at a fresh
+init with `W_bcast` randomised (scratch `unpack_kernel_parity.py`): the scoped path is
+x1.46 faster per training step (497 vs 727 ms) at 17.8 vs 23.3 GB; its loss differs from
+the eager path by 0.055 nats at init (logits mean |diff| 0.010, max 0.25) against 0.0002
+nats (mean 0.009, max 0.10) for the MUX arm's kernels-on vs kernels-off. The mean logit
+noise is the same; the loss gap is consistent with bf16 rounding on the init identity
+logit (about 20 nats on the current token under `coda_token_input: embed`, ulp 0.125),
+which this arm alone has. Not proven in fp32. Predictions untouched.
+
 ## Predictions (frozen)
 
 - **P-unpack-a (survival).** HEALTHY to 5,000: **70 %** (the mask arms were healthy; the
