@@ -1,0 +1,16 @@
+# Slot-map levers panel, arm "slot-unpack-fixed-depth": the unpack arm with every valid
+# slot looping EXACTLY 6 times (tul.slot_depth_fixed) instead of the per-slot Poisson draw
+# (mean 6, max 8). The draw averages the loss over depths 1..8, and a map that gives the
+# same z at every depth is the invariant answer; a fixed depth removes that reward. Known
+# risk (E13, 2026-09-07): a fixed depth opened the first-iteration SCALE mode under a
+# passing hinge; the tripwire and loop/core_gain_t0 are the instruments.
+# Record: lab/experiments/planned/2026-09-10-arc-slot-map-levers.md
+defaults:
+  - tul_slot_unpack_norm_match
+  - _self_
+
+tul:
+  slot_depth_fixed: 6
+
+wandb:
+  name: slot-unpack-fixed-depth
