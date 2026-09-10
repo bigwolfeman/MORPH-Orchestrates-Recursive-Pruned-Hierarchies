@@ -106,6 +106,8 @@ per-pass cotangent share 0.168 / 0.168 / 0.166 / 0.160 / 0.154 / 0.183; per-pass
 total 0.33 / 0.27 / 0.37 / 0.63 / 0.75 / 0.67; z-optimisation `ce_loop` 4.1173 with the loop
 ENTRY worth +0.0015.
 
+**Amendment 2026-09-10 18:19 (contention, not a result).** The runner's smoke at `3885555` died at step 0 with CUDA OOM (408 MiB free) because the orchestrator's detached gradient probe on `slot-mnext-staged` (12.6 GB) was running beside it; the arm's code was not at fault. Re-queued unchanged at `3885555`. Rule for the next probes: never start a probe while the queue is non-empty and a smoke may begin.
+
 ## Predictions (frozen)
 
 - **P-a (survival).** HEALTHY to 5,000, no sustained tripwire (`preclip/total > 1e4` at

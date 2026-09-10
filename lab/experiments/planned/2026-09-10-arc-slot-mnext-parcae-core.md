@@ -143,6 +143,8 @@ the step). Core FLOPs are roughly a fifth of a forward, so the arithmetic says a
 below the ruler's cost, with the kernel mix (eager SDPA and cuBLAS in place of fused Triton
 window + fused HC) the only reason it could go the other way.
 
+**Amendment 2026-09-10 18:18 (build failure, not a result).** The runner's 12-step smoke at `b94bd02` died at build: `CoreSpectralPenalty found 0 core MLP linears` (`morph/training/spectral_penalty.py::collect_core_linears` knew only `MortarLinear`; the Parcae MLP is dense `nn.Linear`). Fixed in `5790f09` (the enumerator also takes the plain-linear direct children of `blk.mlp`, tested), plus `15838c7` (the morph gradient-hash pin now runs under one CPU thread; it depended on the thread count). Re-queued at `15838c7`. No prediction changed; no draw started.
+
 ## Predictions (frozen)
 
 The ruler's numbers, cited once, all at step 5,000: 480-row CE at depth 6 **4.3290**; token
