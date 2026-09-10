@@ -10,6 +10,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -24,9 +25,11 @@ def load(dirs):
 
 
 def key_of(r):
-    """Cell identity = the label with the trailing seed marker removed."""
-    lab = r["label"]
-    return lab.rsplit("-s", 1)[0] if "-s" in lab else lab
+    """Cell identity = the label with a TRAILING -s<digits> removed.
+
+    A plain rsplit on "-s" also cuts "ladder3-strict-..." in half, so this anchors.
+    """
+    return re.sub(r"-s\d+$", "", r["label"])
 
 
 def agg(vals):
@@ -64,20 +67,22 @@ def get(r, path, default=None):
 def table_main(g, keys, title, cols=None):
     print(f"\n### {title}\n")
     print(
-        "| cell | n | value CE @6 | value acc @6 | K1-K6 (value CE) | K3-K6 | MUX CE @6 | "
-        "K1-K6 (MUX) | token CE @6 | s/run |"
+        "| cell | n | escaped | escape step | value CE @6 | value acc @6 | K1-K6 (value CE) "
+        "| MUX CE @6 | K1-K6 (MUX) | token CE @6 | s/run |"
     )
-    print("|---|---|---|---|---|---|---|---|---|---|")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
     for k in keys:
         rs = g[k]
         if not rs:
             continue
+        esc = [r for r in rs if r.get("escaped")]
+        es = f"{len(esc)}/{len(rs)}"
+        step = f"{sum(r['escape_step'] for r in esc)/len(esc):.0f}" if esc else "-"
         print(
-            f"| `{k}` | {len(rs)} "
+            f"| `{k}` | {len(rs)} | {es} | {step} "
             f"| {plain([r['k_curve']['6']['value_ce'] for r in rs])} "
             f"| {plain([r['k_curve']['6']['value_acc'] for r in rs], 3)} "
             f"| {fmt([r['k1_k6_value'] for r in rs])} "
-            f"| {fmt([r['k3_k6_value'] for r in rs])} "
             f"| {plain([r['k_curve']['6']['mux_ce'] for r in rs])} "
             f"| {fmt([r['k1_k6_mux'] for r in rs])} "
             f"| {plain([r['k_curve']['6']['token_ce'] for r in rs])} "
@@ -176,17 +181,56 @@ def main():
         "B-pass_lora",
         "B-coda_blind",
         "B-bptt_last2",
+        "B-fixed_depth6",
     ]
     table_main(g, bkeys, "Grid B, one-factor extensions on `compose` at attachment `exit`")
     table_kcurve(g, bkeys, "Grid B value CE against forced depth")
     table_write(g, bkeys, "Grid B write contribution")
     table_grad(g, bkeys, "Grid B per-pass gradient", "total")
 
+    ckeys = ["A-compose-exit", "C-permissive-exit", "C-permissive-mux_all"]
+    table_main(g, ckeys, "Grid C, MORPH's own (permissive) geometry against the strict one")
+    table_kcurve(g, ckeys, "Grid C value CE against forced depth")
+
+    # per-span value CE at depth 6: the staircase
+    print("\n### Value CE by span index at forced depth 6 (answer at the head of span j+1 needs j passes)\n")
+    print("| cell | " + " | ".join(f"R{j}" for j in range(7)) + " |")
+    print("|---" * 8 + "|")
+    for k in [f"A-compose-{a}" for a in atts] + bkeys[1:] + ckeys[1:]:
+        rs = g[k]
+        if not rs or "value_ce_by_span" not in rs[0]["k_curve"]["6"]:
+            continue
+        m = [sum(r["k_curve"]["6"]["value_ce_by_span"][j] for r in rs) / len(rs) for j in range(7)]
+        print(f"| `{k}` | " + " | ".join(f"{v:.2f}" for v in m) + " |")
+
     # ladder
-    lkeys = sorted(k for k in g if k.startswith("ladder"))
+    lkeys = sorted(k for k in g if k.startswith("ladder") or k.startswith("diag"))
     if lkeys:
         table_main(g, lkeys, "Capacity ladder (trained at a fixed depth)")
         table_kcurve(g, lkeys, "Capacity ladder value CE against forced depth")
+
+    # escaped against stuck, pooled over every strict `compose` run
+    pool = [r for r in rows if r["task"] == "compose" and r["config"].get("geometry") == "strict"
+            and r["label"].startswith(("A-", "B-"))]
+    esc = [r for r in pool if r.get("escaped")]
+    stk = [r for r in pool if not r.get("escaped")]
+    if esc and stk:
+        print(f"\n### Escaped against stuck, pooled over {len(pool)} strict `compose` runs\n")
+        print("| group | n | value CE @6 | cotangent share p1..p6 | dW share p1..p6 "
+              "| mean pairwise cos | cancellation | z rank |")
+        print("|---|---|---|---|---|---|---|---|")
+        for name, sub in (("escaped", esc), ("stuck", stk)):
+            p6 = [r["gradient_probe"]["total"] for r in sub]
+            n = len(p6)
+            cs = " ".join(f"{sum(x['cotangent_share'][i] for x in p6)/n:.3f}" for i in range(6))
+            ws = " ".join(f"{sum(x['dW_share'][i] for x in p6)/n:.3f}" for i in range(6))
+            pc = sum(x["pairwise_cos_mean"] for x in p6) / n
+            print(
+                f"| {name} | {n} | {plain([r['k_curve']['6']['value_ce'] for r in sub], 3)} "
+                f"| {cs} | {ws} | {pc:+.3f} "
+                f"| {plain([x['cancellation'] for x in p6], 3)} "
+                f"| {agg([r['participation']['z_rank'] for r in sub])[0]:.1f} |"
+            )
 
     # P8: cancellation against earning over grid A
     ga = [r for r in rows if r["label"].startswith("A-")]
