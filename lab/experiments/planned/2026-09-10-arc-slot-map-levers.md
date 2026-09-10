@@ -69,6 +69,13 @@ fixed-depth arm's sweep at depths other than 6 reads off-distribution sensitivit
 earning; its own reading is CE at depth 6 against the unpack arm's at depth 6 on the same
 480 rows, and the probe's movement.
 
+**Amendment 2026-09-10 01:20 (the structural arm runs tonight).** The reread was built
+and tested in the hour after this file was frozen (commit `13b1cbc`, 128 CPU contract
+tests, one real-size CPU step) and is queued behind the three knob arms, ahead of the
+deferred controls, with its own frozen predictions in `2026-09-10-arc-slot-reread.md`.
+"Not run tonight" above no longer holds; the Binding here still decides what FOLLOWS the
+panel. Predictions untouched.
+
 ## Predictions (frozen)
 
 - **P-lev-a (survival).** HEALTHY to 5,000: free **60 %** (the spike train the terms were
