@@ -175,26 +175,30 @@ Worth profile at 5,000 (offsets 0..4): zero +0.037 [+0.030, +0.044], +0.051, +0.
 → 117 at 3 → 125 at 6 → 133 at 16; relative distance from the depth-1 state 0.28 / 0.42 /
 0.59, cos 0.99 / 0.97 / 0.92; per-pass movement does NOT decay (0.09 at 3, 0.15 at 6, 0.24
 at 16): the map keeps moving the state past the trained depth, which is what a
-progressive loss trains for, and the token CE does not change with it. The per-pass
-cancellation ratio (P-d) is NOT MEASURED: the gradient probe on this checkpoint was
-stopped twice while the LoRA arm held the GPU; it runs when the GPU is free. Artifacts:
+progressive loss trains for, and the token CE does not change with it. Gradient probe at 5,000
+(`slot_gradient_probe.py`, 12 rows, depth 6, self-check 1.8e-7): combined cancellation
+ratio |sum_t dW_t| / sum_t |dW_t| **0.497** (ruler 0.520); per-pass share of the norm sum
+0.07 / 0.08 / 0.09 / 0.10 / 0.20 / 0.46 (ruler 0.15 / 0.10 / 0.11 / 0.12 / 0.17 / 0.36);
+per-pass cosine to the total 0.15 / 0.19 / 0.44 / 0.57 / 0.22 / 0.72. The MUX still pays
+for the loop (|total| 1.13 vs token CE 0.15). z-optimisation probe (`slot_z_optimize.py`,
+same rows): ce_loop 4.0839, entry state +0.0057, zero +0.0169, shuffle +0.0129, fitted z
+−0.887 (random start −0.795), loop z rank 13.7. Artifacts:
 `lab/experiments/results/2026-09-10-slot-mnext-progressive/`; npz in
 `ignored/experiment-artifacts/2026-09-10-slot-mnext-progressive/`.
 
 ## Verdict
 
 P-a TRUE. P-b FALSE on both bars (0.0006). P-c FALSE on both clauses (0.0088 < 0.02; K3−K6
-0.0004 within its CI of 0.002 but under it). P-d NOT MEASURED (pending). P-e TRUE (0.036
+0.0004 within its CI of 0.002 but under it). P-d FALSE (0.497, below the ruler's 0.520 and both bars). P-e TRUE (0.036
 better). P-f TRUE (0.90x). H-prog-1 (the progressive cut makes the passes agree and the
-loop earn) is not supported on the readable clauses; the binding clause "all flat" holds
-subject to P-d. The mechanism did what it says to the forward: the state keeps moving past
+loop earn) is not supported on the readable clauses; the binding clause "all flat" holds. The mechanism did what it says to the forward: the state keeps moving past
 depth 6 where the ruler's stops, so the map learned to act on states it did not build, and
 the coda's CE is indifferent to that motion.
 
 ## Updated hypothesis
 
 Same as the noise-entry filing: the coda's CE with the loop's exit equals its CE with the
-loop's entry (z-optimisation probe, 0.0002–0.003 nats on every arm read), while a fitted z
+loop's entry (z-optimisation probe, 0.0002–0.006 nats on every arm read, this one 0.0057), while a fitted z
 is worth 0.9–2.6 nats. A training rule on the passes cannot change what the reader asks
 for; the state the loop writes is not in the directions the coda uses, and the MUX target
 (next-span tokens through the tied head) is met in one pass from the prelude state. The
