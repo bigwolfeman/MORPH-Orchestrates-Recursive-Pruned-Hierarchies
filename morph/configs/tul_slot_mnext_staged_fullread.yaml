@@ -1,0 +1,51 @@
+# Slot-loop panel, arm "slot-mnext-staged-fullread": the staged arm with the MUX head
+# reading the WHOLE Hyper-Connection carrier instead of its stream mean.
+# `tul.mux_readout: full` — one factor against `slot-mnext-staged`
+# (`tul_slot_mnext_staged.yaml`, `mux_stage_own_iters: 3`), which this file composes.
+#
+# Why: finding F2 of the slot-geometry audit
+# (lab/experiments/results/2026-09-10-slot-geometry-audit/README.md). The MUX head reaches
+# `_readout`, which collapses the four HC streams with an UNWEIGHTED MEAN before the LM
+# head, and `TULSlots.unpack` does the same. `TULSlots.prefix_project` — the reader that
+# actually writes the coda's prefix cells — does NOT: it projects each stream separately and
+# hands the coda all four. Measured on `slot-unpack-free` at step 5000: the loop's UPDATE
+# survives the stream mean at 0.139 of its per-stream norm while the ENTRY survives at
+# 0.972. So the term that TRAINS the slot state and the term that FEEDS the coda were
+# reading different objects, and the MUX side was reading the one that throws the loop's
+# work away.
+#
+# THE READOUT CHOICE, recorded here because two definitions were on the table.
+# "full" = `lm_mixer` and `final_norm` applied PER STREAM, the n results averaged. That is
+# exactly "the tied head applied to each stream and the logits averaged": `lm_mixer` is a
+# per-channel-group scale plus a bias-free Linear and the head is `z @ lm_weight().t()`, so
+# `mean_n (z_n W') == (mean_n z_n) W'` and the cheap form is implemented.
+# The other candidate, "the head applied to the stream SUM", was rejected because it is
+# PROVABLY the same arm as the mean: `final_norm` is an RMSNorm (scale-invariant) and
+# everything before it is linear, so `_readout(n * mean) == _readout(mean)` to the last bit
+# (tests/test_tul_mux_readout.py holds this). The per-stream form is also the one consistent
+# with `prefix_project`. The ONLY difference between "mean" and "full" is therefore where
+# the RMS normalisation sits: one per stream, or one after the mean. It equalises what each
+# stream contributes; it does NOT undo an exact antipodal cancellation, and it adds no
+# parameters. The learned `[n*C -> C]` projection the audit names as the alternative does
+# add parameters and is a different arm.
+#
+# `unpack` (`tul.bcast`) is NOT changed and does not need to be: its only operation on z is
+# the linear `W_bcast`, and a linear map commutes with the stream mean, so a per-stream
+# variant there is algebraically identical. This arm does not run `bcast` in any case.
+#
+# Bound, stated before the run: on an UNTRAINED model the two readouts give MUX losses
+# 3e-6 nats apart, because the HC streams start almost equal. The knob can only act once
+# the streams diverge, which they do by step 5000 (stream-mean survival 0.581 entry /
+# 0.577 update on the ruler `slot-mux-norm-match`).
+#
+# Record: lab/experiments/planned/2026-09-10-arc-slot-mnext-staged-fullread.md
+# Note: .agents/notes/proposed/architecture/2026-09-10-slot-loop-readout-and-attention-defects.md
+defaults:
+  - tul_slot_mnext_staged
+  - _self_
+
+tul:
+  mux_readout: full
+
+wandb:
+  name: slot-mnext-staged-fullread

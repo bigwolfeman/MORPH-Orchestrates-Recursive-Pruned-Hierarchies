@@ -1143,6 +1143,18 @@ class MORPHTransformer(nn.Module):
         # are byte-identical to a baseline built with the same seed, and the arms differ by
         # the mechanism alone. E_slot is re-initialised from the live embedding table at the
         # activation step (Block Transformer §3.7) — see TULSlots.init_at_activation.
+        # `tul.mux_readout='full'` reads the Hyper-Connection stream axis. On a plain
+        # residual there is no such axis and the two readouts would be the same object, so
+        # the config is refused here rather than silently meaning nothing for a whole run.
+        # HONEST NOTE: `_is_hc` is set unconditionally True above — HC-Cayley is the SOLE
+        # residual on this tree — so this branch cannot fire today and no test exercises it.
+        # It is the contract for a second residual mode, and the guard that CAN fire is the
+        # dim check inside `_readout_per_stream`, which a test does exercise.
+        if cfg.tul is not None and cfg.tul.mux_readout == "full" and not self._is_hc:
+            raise ValueError(
+                "tul.mux_readout='full' needs a Hyper-Connection residual carrier "
+                f"(model.residual gives {self._residual_mode!r}, which has no stream axis): "
+                "the per-stream readout and the mean readout would be the same tensor.")
         if cfg.tul is not None and cfg.tul.mux_stage_own_iters > 0:
             _kmax = int(cfg.tul.slot_max_depth or cfg.max_depth)
             if cfg.tul.mux_stage_own_iters > _kmax:
@@ -1943,6 +1955,42 @@ class MORPHTransformer(nn.Module):
         x = self.lm_mixer(x)
         x = self.final_norm(x)
         return x
+
+    def _readout_per_stream(self, x: Tensor) -> Tensor:
+        """``tul.mux_readout='full'``: the readout applied to EVERY Hyper-Connection stream,
+        averaged afterwards. ``[B, S, n, C] -> [B, S, C]``.
+
+        This IS "the tied head applied to each stream and the logits averaged". Both steps
+        after the streams are linear in ``x`` — ``lm_mixer`` is a per-channel-group scale
+        plus a bias-free ``nn.Linear``, and the head is ``z @ lm_weight().t()`` — so
+        ``mean_n (z_n @ W')`` equals ``(mean_n z_n) @ W'`` exactly, and returning the mean of
+        the per-stream readouts costs ONE ``[B, S, V]`` matmul rather than ``n`` of them.
+
+        Why this definition and not "the head applied to the stream SUM": the sum is
+        provably the same object as the mean. ``final_norm`` is an RMSNorm, which is
+        scale-invariant, and everything between the streams and it is linear, so
+        ``_readout(n * mean) == _readout(mean)`` to the last bit. The sum could not be a
+        different arm. The per-stream form is also the one consistent with
+        :meth:`TULSlots.prefix_project`, the reader that actually feeds the coda: it applies
+        its shared ``[C, C]`` map to each stream separately and hands the coda all four,
+        while ``_readout`` collapses them first. The only difference between the two
+        readouts is therefore WHERE the RMS normalisation sits — one per stream, or one
+        after the mean — which is exactly the quantity finding F2 measured: on
+        ``slot-unpack-free`` the loop's update survives ``h.mean(dim=2)`` at 0.139 of its
+        per-stream norm and the entry at 0.972, so the unweighted mean lets one stream's
+        magnitude decide what the head sees.
+
+        It does NOT undo an exact antipodal cancellation across streams (per-stream
+        normalisation rescales, it does not re-phase), and it adds no parameters. The
+        learned ``[n·C -> C]`` projection the audit names as the other fix does add them and
+        is a different arm.
+        """
+        if x.dim() != 4:
+            raise RuntimeError(
+                "tul.mux_readout='full' needs a Hyper-Connection carrier [B, S, n, C]; "
+                f"got a {x.dim()}-d tensor. Construction refuses this config on a model "
+                "without a stream axis, so reaching here is a wiring bug.")
+        return self.final_norm(self.lm_mixer(x)).mean(dim=2)
 
     def prelude_states(self, input_ids: Tensor, apply_input_norm: bool = True,
                        layout: "SlotLayout | None" = None) -> Tensor:
@@ -3487,7 +3535,12 @@ class MORPHTransformer(nn.Module):
         ~24x smaller than one row of full-sequence logits (why fused CE exists).
         """
         tc = self.cfg.tul
-        z = self._readout(h_slots)                            # [B, S, C]
+        # `mux_readout` (F2): "mean" is `_readout`, the stream mean BEFORE lm_mixer and
+        # final_norm — the shipped path. "full" normalises each stream first and averages
+        # after, which is the tied head applied per stream with the logits averaged. A
+        # Python-level constant on a config field: the branch traces out.
+        z = (self._readout_per_stream(h_slots) if tc.mux_readout == "full"
+             else self._readout(h_slots))                     # [B, S, C]
         # `lm_weight()` is WEIGHT-TIED to the input embeddings, so an undetached
         # head trains the embedding table on the auxiliary target — see
         # TULConfig.mux_detach_head for the measured consequence. Python-level

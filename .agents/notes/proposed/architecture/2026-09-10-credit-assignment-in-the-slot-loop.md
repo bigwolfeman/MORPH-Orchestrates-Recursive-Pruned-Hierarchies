@@ -199,6 +199,15 @@ state alone and the loss is still `0.5 * (own + next)`, so `mux_beta` and the re
   instead of average, do not collect the trajectory).
 - Prereg: `lab/experiments/planned/2026-09-10-arc-slot-mnext-staged-all.md`.
 
+**Arm 6, `slot-mnext-staged-fullread` (`tul.mux_readout: full`).** Not a loss arm: a READER
+arm on the same staged base. The MUX term reads the HC carrier's stream MEAN and the coda's
+own reader (`prefix_project`) does not, and the audit measures the loop's update surviving
+that mean at 0.139 of its per-stream norm on one arm. `full` normalises each stream before
+the average, which is the tied head applied per stream with the logits averaged. It belongs
+to this note only as a sibling; its problem, its alternatives and its risks are in
+[`2026-09-10-slot-loop-readout-and-attention-defects.md`](2026-09-10-slot-loop-readout-and-attention-defects.md),
+with arm 8.
+
 ## Alternatives considered
 
 - **DEQ / implicit differentiation** (Bai et al. 2019). Solve for the fixed point and

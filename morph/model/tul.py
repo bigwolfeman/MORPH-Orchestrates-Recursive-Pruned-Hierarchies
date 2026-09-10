@@ -258,6 +258,25 @@ class TULConfig:
     # mean of the two. The carry stays LIVE (full BPTT through the loop; this is not
     # db_loop, which detaches it). 0 = off: the forward is bit-identical.
     mux_stage_own_iters: int = 0
+    # ── what the MUX head reads off the Hyper-Connection carrier (F2, 2026-09-10) ──
+    #    "mean" — `_readout`: the n streams are collapsed by an unweighted mean BEFORE
+    #             `lm_mixer` and `final_norm`. The shipped path, and what `TULSlots.unpack`
+    #             does too.
+    #    "full" — `lm_mixer` and `final_norm` run PER STREAM and the n readouts are averaged
+    #             afterwards, which (both the mixer and the tied head being linear) is
+    #             exactly "the head applied to each stream and the logits averaged".
+    #
+    #    Why the knob exists: the slot-geometry audit's finding F2
+    #    (`lab/experiments/results/2026-09-10-slot-geometry-audit/README.md`). On
+    #    `slot-unpack-free` the loop's UPDATE survives `h.mean(dim=2)` at 0.139 of its
+    #    per-stream norm while the ENTRY survives at 0.972 — the stream mean throws away 86 %
+    #    of what the loop did — and `TULSlots.prefix_project`, the reader that feeds the
+    #    coda, does NOT take that mean: it projects every stream separately.
+    #
+    #    Only defined on a Hyper-Connection carrier; a model without a stream axis refuses at
+    #    construction. "mean" is bit-identical to the tree before the knob
+    #    (tests/test_tul_mux_readout.py).
+    mux_readout: str = "mean"
     # ── the staged own-span target at EVERY non-final pass (arm `slot-mnext-staged-all`,
     #    2026-09-10) ──
     #    True changes what `mux_stage_own_iters` MEANS: instead of one intermediate pass k,
@@ -545,6 +564,11 @@ class TULConfig:
                     "term on every pass of the same trajectory, one toward the own span and "
                     "one toward `mux_target`, and averaging them would make the reported "
                     "mux_local a mixture of two objectives.")
+        if self.mux_readout not in ("mean", "full"):
+            raise ValueError(
+                f"tul.mux_readout must be 'mean' or 'full', got {self.mux_readout!r}. "
+                "'full' needs a Hyper-Connection carrier and is refused at construction on "
+                "a model without a stream axis.")
         if self.mux_target not in ("own", "next"):
             raise ValueError(
                 f"tul.mux_target must be 'own' or 'next', got {self.mux_target!r}")
