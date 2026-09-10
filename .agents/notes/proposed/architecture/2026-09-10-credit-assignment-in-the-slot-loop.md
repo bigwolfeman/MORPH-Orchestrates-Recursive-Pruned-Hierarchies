@@ -5,7 +5,7 @@ Status: proposed
 Date: 2026-09-10. Arms:
 [`slot-mnext-progressive`](../../../../lab/experiments/failures/2026-09-10-arc-slot-mnext-progressive.md)
 and
-[`slot-mnext-per-pass-lora`](../../../../lab/experiments/planned/2026-09-10-arc-slot-mnext-per-pass-lora.md),
+[`slot-mnext-per-pass-lora`](../../../../lab/experiments/failures/2026-09-10-arc-slot-mnext-per-pass-lora.md),
 both one-factor arms on the ruler `slot-mux-norm-match`
 (`morph/configs/tul_slot_mux_norm_match.yaml`).
 
