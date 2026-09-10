@@ -64,6 +64,8 @@ def main() -> None:
     ctx_shares: dict[str, list[float]] = {}
     calls = {"attn": 0, "mlp": 0}
     states: list[torch.Tensor] = []          # per pass, [N_valid, C] of this batch
+    states_full: list[torch.Tensor] = []     # per pass, [N_valid, n*C]: every stream
+    h0s_full: list[torch.Tensor] = []
     h0s: list[torch.Tensor] = []
     valids: list[torch.Tensor] = []
 
@@ -99,12 +101,14 @@ def main() -> None:
             if i == n_core - 1:
                 o = out if torch.is_tensor(out) else out[0]
                 states.append(_valid_rows(o).cpu())
+                states_full.append(_valid_full(o).cpu())
                 full_norms.setdefault(f"pass{len(states)}", []).append(float(_valid_full(o).norm(dim=1).mean()))
                 ctx_shares.setdefault(f"pass{len(states)}", []).append(_ctx_share(o))
         return f
 
     def h0_hook(_mod, _args, out):
         h0s.append(_valid_rows(out).cpu())
+        h0s_full.append(_valid_full(out).cpu())
         full_norms.setdefault("h0", []).append(float(_valid_full(out).norm(dim=1).mean()))
         ctx_shares.setdefault("h0", []).append(_ctx_share(out))
 
@@ -114,22 +118,26 @@ def main() -> None:
                   blk.mlp.register_forward_hook(branch_hook("mlp")),
                   blk.register_forward_hook(block_hook(i))]
     per_batch: list[list[torch.Tensor]] = []
+    per_batch_full: list[list[torch.Tensor]] = []
     try:
         for inp, labels, layout, _ in batches:
             layout = layout.to("cuda")
             cur["valid"] = layout.slot_valid
             calls["attn"] = calls["mlp"] = 0
-            states.clear()
+            states.clear(); states_full.clear()
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 model.tul_forward_ablated(inp.cuda(), None, layout, plan_mode="normal")
             assert len(states) == a.depth, (len(states), a.depth)
             per_batch.append(list(states))
+            per_batch_full.append(list(states_full))
     finally:
         for h in hooks:
             h.remove()
         tc.slot_mean_depth, tc.slot_max_depth, tc.slot_depth_fixed = orig
     h0 = torch.cat(h0s)                                            # [N, C]
     traj = [torch.cat([pb[t] for pb in per_batch]) for t in range(a.depth)]
+    h0f = torch.cat(h0s_full)
+    trajf = [torch.cat([pb[t] for pb in per_batch_full]) for t in range(a.depth)]
     rec = {
         "label": label, "step": step, "rows": a.rows, "depth": a.depth, "slots": int(h0.shape[0]),
         "h0": {"norm_per_slot": float(h0.norm(dim=1).mean()), "rank": eff_rank(h0)},
@@ -141,6 +149,12 @@ def main() -> None:
                                / traj[k - 1].norm(dim=1).clamp_min(1e-6)).mean())
                         for k in range(1, len(traj))],
         "first_pass_from_h0": float(((traj[0] - h0).norm(dim=1) / h0.norm(dim=1).clamp_min(1e-6)).mean()),
+        # the same movement on the FULL carrier (every HC stream): the reading the coda's
+        # W_prefix sees; the stream mean can cancel across streams and inflate the ratio
+        "consecutive_full": [float(((trajf[k] - trajf[k - 1]).norm(dim=1)
+                                    / trajf[k - 1].norm(dim=1).clamp_min(1e-6)).mean())
+                             for k in range(1, len(trajf))],
+        "first_pass_from_h0_full": float(((trajf[0] - h0f).norm(dim=1) / h0f.norm(dim=1).clamp_min(1e-6)).mean()),
         "branch_out_in": {k: {str(t): [sum(v) / len(v) for v in per_block]
                               for t, per_block in d.items()} for k, d in branch.items()},
         "branch_out_in_full": {k: {str(t): [sum(v) / len(v) for v in per_block]
@@ -157,6 +171,7 @@ def main() -> None:
     for c in rec["passes"]:
         print(f"{label} pass {c['t']}: |h| {c['norm_per_slot']:.2f} rank {c['rank']:.1f} |h-h0|/|h0| {c['dist_from_h0']:.3f} cos {c['cos_to_h0']:.4f}")
     print(f"{label} movement: first {rec['first_pass_from_h0']:.4f} then", [round(x, 4) for x in rec["consecutive"]])
+    print(f"{label} movement FULL carrier: first {rec['first_pass_from_h0_full']:.4f} then", [round(x, 4) for x in rec["consecutive_full"]])
     for kind in ("attn", "mlp"):
         last = max(branch[kind])
         print(f"{label} {kind} out/in per block, pass 1 and {last + 1}:",
