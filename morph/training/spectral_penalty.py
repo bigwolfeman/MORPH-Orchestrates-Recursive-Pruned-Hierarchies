@@ -58,6 +58,13 @@ def collect_core_linears(model: nn.Module, include_attn: bool,
     projections are separate types), and the MLP is nested in a _KwargSequential, so this
     enumerates by TYPE via named_modules rather than by a hardcoded path.
 
+    A Parcae core (`model.core_impl: parcae`, morph/model/parcae_core.py) has no MortarLinear
+    at all: its MLP is the dense `_SwiGLU`, whose gate_up and down are plain nn.Linear and
+    the DIRECT children of `blk.mlp`. Those are collected too, by that position, so the same
+    control (and its sigma log) acts on either core. Direct children only: a MORPH block's
+    `mlp` holds MortarLinear (already collected) and, after routing, a router module; neither
+    is a plain nn.Linear child, so nothing is counted twice.
+
     Attention is opt-in. Only nn.Linear is eligible there: the CCA convolutions (conv_q_dw
     and friends) are not rank-2 maps on the last dim, so the power iteration's
     [1, in_features] probe does not apply to them, and skipping them in silence would be the
@@ -70,6 +77,11 @@ def collect_core_linears(model: nn.Module, include_attn: bool,
         for sub_name, sub in blk.named_modules():
             if isinstance(sub, MortarLinear) and getattr(sub, "in_features", None):
                 out.append((f"core.{li}.{sub_name}", sub, sub.in_features))
+        mlp = getattr(blk, "mlp", None)
+        if mlp is not None:
+            for ch_name, ch in mlp.named_children():
+                if type(ch) is nn.Linear and ch.weight.dim() == 2:
+                    out.append((f"core.{li}.mlp.{ch_name}", ch, ch.in_features))
     n_mlp = len(out)
     if not out:
         raise RuntimeError(f"{who} found 0 core MLP linears — enumeration broke; refusing to "

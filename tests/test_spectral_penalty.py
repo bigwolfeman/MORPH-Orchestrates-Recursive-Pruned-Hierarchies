@@ -95,6 +95,26 @@ def test_it_finds_every_core_mlp_linear():
     assert all(n.startswith("core.") and "mlp" in n for n in names), names
 
 
+def test_it_finds_the_parcae_core_mlp_linears_and_nothing_else():
+    """`core_impl: parcae` (morph/model/parcae_core.py) has no MortarLinear; its MLP is the
+    dense `_SwiGLU` with plain nn.Linear gate_up / down. The control must find exactly those
+    (2 per block, named core.<i>.mlp.<gate_up|down>), and the attention's q/k/v/o linears
+    must stay out unless include_attn. The 2026-09-10 smoke of slot-mnext-parcae-core died
+    at build on "found 0 core MLP linears" because this enumeration knew only MortarLinear."""
+    m = _model(core_impl="parcae")
+    pen = CoreSpectralPenalty(m, cap=1.0, lam=1.0)
+    names = sorted(n for n, _, _ in pen._linears)
+    assert names == sorted(f"core.{i}.mlp.{k}" for i in range(m.cfg.n_core)
+                           for k in ("gate_up", "down")), names
+    assert pen._n_mlp == 2 * m.cfg.n_core
+    for _, mod, inf in pen._linears:
+        assert type(mod) is nn.Linear and inf == mod.in_features
+    # the sigma log runs on them, and the penalty's gradient reaches them
+    both = CoreSpectralPenalty(m, cap=1.0, lam=1.0, include_attn=True)
+    assert both._n_mlp == 2 * m.cfg.n_core
+    assert len(both._linears) == 2 * m.cfg.n_core + 4 * m.cfg.n_core, [n for n, _, _ in both._linears]
+
+
 def test_it_refuses_to_be_a_silent_no_op():
     """n_core = 0 means there is nothing to penalise. Constructing it must RAISE, not
     return an object whose penalty() is quietly always zero."""
