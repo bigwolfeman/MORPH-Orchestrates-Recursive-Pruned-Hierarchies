@@ -39,7 +39,7 @@
 \definecolor{loopC}{HTML}{2255AA}
 
 \tikzset{
-  B/.style={draw=bdr, thick, rounded corners=4pt, minimum width=11.2cm,
+  B/.style={draw=bdr, thick, rounded corners=4pt, minimum width=14.6cm,
     minimum height=1.05cm, font=\small\sffamily, align=center, inner sep=7pt},
   tok/.style={draw=bdr, fill=fGray, minimum width=0.78cm, minimum height=0.68cm,
     font=\footnotesize\sffamily, inner sep=1pt},
@@ -120,95 +120,84 @@
   \textbf{PRELUDE}: all positions, once};
 \draw[A] ($(amid)-(0,0.55)$) -- (pre.north);
 
-% ── the fork after the prelude: tokens go straight to the coda, slots go into the loop ──
-\coordinate (forkL) at ($(pre.west)+(0.55,0)$);
-\coordinate (forkR) at ($(pre.south)+(0.9,0)$);
+% ── THINK: the slot loop. One block in the stack; the e -> h -> z chain drawn inside ──
+\node[B, fill=fPurple!35, draw=loopC, line width=1.6pt, minimum height=4.7cm,
+      below=0.85cm of pre] (think) {};
+\node[font=\small\sffamily\bfseries, text=loopC, anchor=north west]
+  at ($(think.north west)+(0.15,-0.1)$) {THINK: only the slot positions loop};
+\draw[A] (pre.south) -- (think.north)
+  node[midway, right=3pt, sub] {slot positions};
 
-% ── THINK: only the slot positions loop. Inside: e -> h_0 -> (inject e, core x6) x T -> z ──
+% the chain, one row, centred in the block
+\coordinate (cy) at ($(think.center)+(0,0.62)$);
 \node[draw=cbBlue, thick, rounded corners=3pt, fill=fBlue, font=\scriptsize\sffamily,
-      align=center, inner sep=4pt] (eN) at ($(pre.west)+(2.05,-2.35)$)
-  {$e_i$\\prelude state\\at slot $i$};
+      align=center, inner sep=3.5pt, anchor=center] (eN) at ($(cy)+(-6.05,0)$)
+  {$e_i$: prelude state\\at slot $i$};
 \node[draw=bdr, thick, rounded corners=3pt, fill=white, font=\scriptsize\sffamily,
-      align=center, inner sep=4pt, right=0.4cm of eN] (h0N)
+      align=center, inner sep=3.5pt, right=0.32cm of eN] (h0N)
   {$h_0 = e_i$};
 \node[draw=loopC, thick, rounded corners=3pt, fill=white, font=\scriptsize\sffamily,
-      align=center, inner sep=4pt, right=0.45cm of h0N] (injN)
-  {inject $e_i$\\$h_{\mathrm{ctx}} \leftarrow 0.447\,h_{\mathrm{ctx}} + e_{i,\mathrm{ctx}}$};
+      align=center, inner sep=3.5pt, right=0.62cm of h0N] (injN)
+  {inject $e_i$ again\\$h_{\mathrm{ctx}} \leftarrow 0.447\,h_{\mathrm{ctx}} + e_{i,\mathrm{ctx}}$};
 \node[draw=loopC, thick, rounded corners=3pt, fill=fPurple, font=\scriptsize\sffamily\bfseries,
-      align=center, inner sep=4pt, right=0.45cm of injN] (coreN)
+      align=center, inner sep=3.5pt, right=0.32cm of injN] (coreN)
   {core blocks\\$\times 6$};
-\node[draw=bdr, thick, rounded corners=3pt, fill=white, font=\scriptsize\sffamily,
-      align=center, inner sep=4pt, right=0.45cm of coreN] (htN)
-  {$h_{t+1}$};
 \node[draw=cbPurple, very thick, rounded corners=3pt, fill=fPurple, font=\scriptsize\sffamily\bfseries,
-      align=center, inner sep=4pt, right=0.55cm of htN] (zN)
+      align=center, inner sep=3.5pt, right=0.62cm of coreN] (zN)
   {$z_i = h_T$\\the thought};
 \node[draw=cbPurple, thick, rounded corners=3pt, fill=white, font=\scriptsize\sffamily,
-      align=center, inner sep=4pt, right=0.4cm of zN] (wpN)
-  {$W_{\mathrm{prefix}}$\\$\to$ cells $z_i,\,z_i'$};
+      align=center, inner sep=3.5pt, right=0.32cm of zN] (wpN)
+  {$W_{\mathrm{prefix}}$ writes $z_i$\\into cells $z_i,\,z_i'$};
+
+% the x T frame around inject + core, with the U-turn on its right edge
+\node[draw=loopC, thick, densely dashed, rounded corners=4pt, fill=none,
+      fit=(injN)(coreN), inner xsep=7pt, inner ysep=14pt] (loopF) {};
+\draw[loopC, line width=1.4pt, rounded corners=3pt,
+      -{Stealth[length=2.2mm,width=1.6mm]}]
+  (coreN.south) -- ++(0,-0.3) -| (injN.south);
+\node[font=\small\sffamily\bfseries, text=loopC, anchor=north west]
+  at ($(loopF.north west)+(0.06,-0.02)$) {$\times T$};
+\node[sub, text=loopC, anchor=north west] at ($(loopF.south west)+(0,-0.03)$)
+  {$h_{t+1}$ goes back in; $e_i$ is read again each pass};
 
 \draw[A] (eN) -- (h0N);
-\draw[A] (h0N) -- (injN);
-\draw[A, draw=loopC] (injN) -- (coreN);
-\draw[A, draw=loopC] (coreN) -- (htN);
-\draw[A, draw=cbPurple] (htN) -- (zN) node[midway, below=1pt, sub, text=cbPurple] {after $T$};
+\draw[A] (h0N) -- (loopF.west);
+\draw[A, draw=cbPurple] (loopF.east) -- (zN);
 \draw[A, draw=cbPurple] (zN) -- (wpN);
-% the x T loop: h_{t+1} goes back into the injection
-\draw[loopC, line width=1.4pt, rounded corners=3pt,
-      -{Stealth[length=2.4mm,width=1.8mm]}]
-  (htN.south) -- ++(0,-0.42) -| (injN.south);
-\node[font=\small\sffamily\bfseries, text=loopC, anchor=west]
-  at ($(htN.south)+(0.12,-0.42)$) {$\times T$};
-% e_i is re-read every pass: a dashed feed from e into the injection, above the chain
-\draw[cbBlue, thick, densely dashed, rounded corners=3pt,
-      -{Stealth[length=2mm,width=1.5mm]}]
-  (eN.north) -- ++(0,0.42) -| (injN.north);
-\node[sub, text=cbBlue!80!black, anchor=south] at ($(h0N.north |- eN.north)+(0.5,0.46)$)
-  {$e_i$ is re-read every pass};
+\draw[A, draw=loopC] (injN) -- (coreN);
 
-% THINK frame around the chain
-\begin{scope}[on background layer]
-  \node[draw=loopC, line width=1.6pt, rounded corners=5pt, fill=fPurple!35,
-        fit=(eN)(h0N)(injN)(coreN)(htN)(zN)(wpN), inner xsep=12pt, inner ysep=36pt]
-        (think) {};
-\end{scope}
-\node[font=\small\sffamily\bfseries, text=loopC, anchor=north west]
-  at ($(think.north west)+(0.12,-0.06)$) {THINK: slot positions only};
-\node[src, anchor=south, text=bdr]
-  at ($(think.south)+(0,0.04)$) {%
-  $T\sim\mathrm{Poi}(6)$ per slot, max 8, full BPTT \;$\cdot$\; slots attend each other in the loop; tokens are not in it\\[1pt]
-  noise entry (Parcae): $h_0\sim\mathcal N(0,0.02^2)$ and $e_i$ injected on all dims through a learned $B$};
+% caption inside the block
+\node[src, anchor=south west, align=left] at ($(think.south west)+(0.15,0.1)$) {%
+  $T\sim\mathrm{Poi}(6)$ per slot, max 8, full BPTT \;$\cdot$\; in the loop the slots attend each other; the tokens are not in it\\[1pt]
+  noise entry (Parcae): $h_0\sim\mathcal N(0,0.02^2)$, $e_i$ injected on all dims through a learned $B$};
 
-% MUX: the slot's own loss (the arm under test)
+% MUX: the slot's own loss, the arm under test — hangs off z to the right of the stack
 \node[draw=cbPurple, thick, densely dashed, rounded corners=4pt, fill=white,
-      font=\scriptsize\sffamily, align=center, inner sep=4pt,
-      right=0.55cm of think.east, anchor=west, yshift=0.45cm] (mux)
-  {MUX (under test):\\$z_i$'s own loss,\\forecast span $i{+}1$\\(M-next)};
+      font=\scriptsize\sffamily, align=center, inner sep=3.5pt, anchor=north east]
+  at ($(wpN.east |- zN.south)+(0,-0.7)$) (mux)
+  {MUX (under test): $z_i$'s own loss (M-next)};
 \draw[cbPurple, thick, densely dashed, -{Stealth[length=2mm,width=1.5mm]}]
-  (zN.north) |- (mux.west);
+  (zN.south) -- (zN.south |- mux.north);
 
-% prelude -> slots into the loop; prelude -> tokens around the loop
-\draw[A] (forkR) -- (forkR |- think.north);
-\node[sub, anchor=west] at ($(forkR)+(0.1,-0.4)$) {slot positions};
 % keep annotation: z lives in its two cells
 \node[draw=cbPurple, thick, rounded corners=4pt, fill=fPurple!60,
       font=\scriptsize\sffamily, inner sep=5pt, align=center,
-      below=0.55cm of think] (keep) {%
-  $z_i$ is written into its two cells and stays there: every later token attends to $z_i,\,z_i'$ in the coda};
-\draw[A, draw=cbPurple] (wpN.south) |- ($(keep.north)+(0,0.25)$) -- (keep.north);
+      below=0.45cm of think] (keep) {%
+  $z_i$ stays in its two cells: every later token attends to $z_i,\,z_i'$ in the coda};
+\draw[A, draw=cbPurple] (think.south) -- (keep.north);
 
 % ── DECODE: the coda reads tokens and thoughts, the head emits the next token ──
 \node[B, fill=fTeal, draw=cbTeal, line width=1.4pt, below=0.5cm of keep] (dec) {%
   \textbf{DECODE}: coda on all positions, once $\to$ head emits the next token $d$\\[2pt]
-  {\scriptsize span $i{+}1$'s tokens attend $z_i$ \;$\cdot$\; stop at punct / $\le 32$ \;$\cdot$\; training: next-token CE at every token, none at a slot cell \;$\cdot$\; 15\,\% token-state dropout on the coda input}};
+  {\scriptsize span $i{+}1$'s tokens attend $z_i$ \;$\cdot$\; stop at punct / $\le 32$ \;$\cdot$\; training: next-token CE at every token, none at a slot cell}};
 \draw[A] (keep.south) -- (dec.north);
 
-% tokens around the loop (drawn after DECODE exists)
-\draw[A, draw=bdr!70, line width=1.2pt]
-  (forkL |- pre.south) -- (forkL |- dec.north);
-\node[sub, anchor=east, align=right, text=bdr]
-  at ($(forkL |- keep.center)+(-0.15,0.1)$) {tokens: prelude state\\straight to the coda,\\never in the loop};
-
+% tokens skip the loop: prelude state straight to the coda, down the left margin of the stack
+\coordinate (bypX) at ($(think.east)+(0.4,0)$);
+\draw[A, draw=bdr!70, line width=1.2pt, rounded corners=3pt]
+  ($(pre.east)+(0,-0.15)$) -| (bypX |- keep.center) |- ($(dec.east)+(0,0.2)$);
+\node[sub, anchor=west, align=left, text=bdr]
+  at ($(bypX |- keep.center)+(0.12,0.35)$) {tokens: prelude state\\straight to the coda,\\never in the loop};
 
 % ── OUTPUT ROW (bottom) — same x as the in-row ──────────────────────────────
 \coordinate (bout) at (a1 |- dec.south);
@@ -259,16 +248,16 @@
 \coordinate (fbBound) at ([xshift=0.15cm]spanBox.north west);
 \draw[cbTeal, line width=1.5pt, rounded corners=3pt,
       -{Stealth[length=2.8mm,width=2.2mm]}]
-  (fbStart) |- (dec.west);
+  (fbStart) |- ($(dec.west)+(0,-0.2)$);
 \node[font=\scriptsize\sffamily, text=cbTeal!80!black, anchor=east, align=right]
-  at ([xshift=-0.12cm]fbStart |- dec.west)
-  {append $d$: its prelude state,\\then the coda again ---\\no core pass (cheap decode)};
+  at ([xshift=-0.12cm]fbBound |- dec.west)
+  {append $d$: its prelude\\state, then the coda again;\\no core pass (cheap decode)};
 \draw[cbOrange!80!black, line width=1.5pt, rounded corners=3pt,
       -{Stealth[length=2.8mm,width=2.2mm]}]
   (fbBound) |- (think.west);
 \node[font=\scriptsize\sffamily, text=cbOrange!75!black, anchor=east, align=right]
   at ([xshift=-0.12cm]fbBound |- think.west)
-  {a boundary emitted\\$\Rightarrow$ two slot cells inserted,\\the new slot is thought once ($\times T$)};
+  {a boundary emitted:\\two slot cells inserted,\\the new slot is thought once};
 
 % braces: span i+1 is the full token run including future + punct
 \draw[decorate, decoration={brace, mirror, amplitude=3pt}]
