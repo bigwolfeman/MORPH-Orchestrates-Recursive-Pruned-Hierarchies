@@ -65,3 +65,30 @@ says every later position attends to z in the core and the coda; DECODE is the c
 all positions with the head emitting d, and the emitted row feeds back into the PRELUDE
 (the whole row is run again; a boundary emitted inserts two slot cells after it). The CE
 statement is one clause inside DECODE, not a separate box.
+
+## Update 2026-09-09 — redrawn for the slot loop, the real TUL
+
+Wolfe's correction of 2026-09-09: the paid loop (`tokens_through_core: true`) the 09-03
+figure drew is not TUL ("a hallucinated TUL you made in a previous session"); TUL is the
+slot loop: think once per span, decode cheaply, tokens never in the loop. Wolfe's ask for
+the figure: "put the loop from the coda to the loop (it points to the prelude paid style)
+and make it clear how this e and h evolve to the final z." The figure now draws:
+
+- **THINK: slot positions only**, with the chain inside it: `e_i` (the prelude state at
+  slot `i`) → `h_0 = e_i` → inject `e_i` (`h_ctx ← 0.447 h_ctx + e_{i,ctx}`,
+  `DiagonalInjection`) → core blocks ×6 → `h_{t+1}`, the ×T arrow back into the
+  injection, and after `T` passes `z_i = h_T` → `W_prefix` → the slot's two cells. A dashed
+  feed shows `e_i` re-read every pass. The caption names the Poisson draw, full BPTT, the
+  slots attending each other, and the Parcae noise entry (`h_0 ~ N(0, 0.02²)`, `e_i`
+  injected on all dims through a learned `B`) as the variant.
+- **Tokens bypass the loop**: a gray line from the prelude straight into DECODE.
+- **MUX** (the slot's own loss, M-next): a dashed box off `z_i`, marked "under test"
+  (the slot-loop panel, `lab/experiments/planned/2026-09-09-arc-slot-loop-norm-match.md`).
+- **Generation feedback** no longer enters the PRELUDE. Per token (green): the new
+  token's prelude state, then the coda again, no core pass. Per boundary (orange): two
+  slot cells inserted and the new slot thought once (×T) into THINK.
+- The keep callout reads "thought once per span, read by every later token; never looped
+  again". DECODE adds the 15 % token-state dropout.
+
+The v1 eager generator still recomputes the whole row per step; the arrows draw the
+design's cost model (think once, decode cheap), not the v1 generator's schedule.
