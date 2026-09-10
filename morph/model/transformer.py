@@ -922,6 +922,11 @@ class MORPHTransformer(nn.Module):
     _loop_prog: dict | None = None
     _loop_prog_k = None          # [B, S] int — the per-slot no-grad prefix length drawn
 
+    # Per-pass MUX terms written by `_forward_tul` when `tul.mux_every_pass` is on and the
+    # model is training (`mux_pass_terms` a float, the rest detached 0-dim tensors; the
+    # trainer turns them into `loop/mux_pass_*`). None on every other model.
+    _loop_mux: dict | None = None
+
     def __init__(self, cfg: MORPHConfig):
         super().__init__()
         self.cfg = cfg
@@ -2615,13 +2620,18 @@ class MORPHTransformer(nn.Module):
                   halt: bool = False):
         """Gather slots → masked per-slot depth loop → looped states (spec §3.3).
 
-        Returns ``(xn, h_slots, depths, g_traj)``: ``xn = input_norm(prelude)`` for the
+        Returns ``(xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep)``:
+        ``xn = input_norm(prelude)`` for the
         whole carrier (token positions keep it — the ``n_core == 0`` seed path, BLT
         Eq. 9), ``h_slots`` ``[B, max_slots, …]`` the looped state of each slot, the
         realised per-slot ``depths``, and — when the gate is built — ``g_traj``
         ``[B, max_slots, T]``, the gate output after EVERY iteration
         (docs/tul-gate-spec.md §4). ``g_traj`` is a RETURN VALUE, never a side channel:
-        the ``ret_capture`` lesson is that a side channel is not checkpoint-safe.
+        the ``ret_capture`` lesson is that a side channel is not checkpoint-safe. So is
+        ``mep_keep`` (``tul.mux_every_pass``, ``None`` everywhere else): the per-pass
+        supervision mask belongs with the trajectory it indexes, and rebuilding it in the
+        caller would duplicate the conditions (``progressive_p``, ``self.training``) that
+        decide it.
 
         ``halt`` (arm ``TUL-halt``, gate §7) replaces the Poisson depth with the gate's
         own stop decision — a slot loops until it asks for ``k ≥ 1`` token, capped at
@@ -2672,7 +2682,7 @@ class MORPHTransformer(nn.Module):
                     "length off the core's per-iteration trajectory and there is no "
                     "trajectory. Raises rather than silently emitting a one-step gate.")
             depths = torch.zeros_like(gidx)
-            return xn, e, depths, None, None, None
+            return xn, e, depths, None, None, None, None
 
         _scse = self.scse           # Python-level constant → every branch below traces out
         # ── DB-shaped loop (arm L3): detached carry, per-iteration local supervision ──
@@ -2691,6 +2701,18 @@ class MORPHTransformer(nn.Module):
             raise NotImplementedError(
                 "tul.mux_stage_own_iters under SCSE is not defined: the trajectory the "
                 "stage supervises is the DEVIATION, not the slot state.")
+        # Per-pass MUX (TULConfig.mux_every_pass): the SAME live-carry trajectory the staged
+        # target uses, kept for EVERY pass, plus the per-pass keep mask the loss needs. A
+        # Python-level constant, and TRAINING ONLY — an eval forward keeps the single
+        # final-state term, which is what leaves `core_depth_sweep.py`'s forced-depth
+        # `mux_local` column identical to the ruler's.
+        _mep_cfg = bool(self.cfg.tul.mux_every_pass)
+        if _mep_cfg and _scse is not None:
+            raise NotImplementedError(
+                "tul.mux_every_pass under SCSE is not defined: the carried state is the "
+                "DEVIATION, and a MUX readout of a deviation is not a readout of the slot "
+                "(the same reason db_loop and mux_stage_own_iters raise here).")
+        _mep = _mep_cfg and self.training
         with _prof("carrier::h_clone"):
             if _scse is None:
                 h = self.core_init(e)
@@ -2704,7 +2726,13 @@ class MORPHTransformer(nn.Module):
         # Trajectory for the local losses: OUTER-graph states, one per iteration, returned
         # (never a side channel — the g_traj / ret_capture lesson). _db_traj[0] is the seed
         # state; entry t is the post-update state after iteration t-1.
-        _db_traj: list[Tensor] | None = [h] if (_db or _stage) else None
+        _db_traj: list[Tensor] | None = [h] if (_db or _stage or _mep) else None
+        # Per-pass MUX: entry t-1 is the mask for `_db_traj[t]` — the slots whose realised
+        # depth REACHES pass t and whose pass t carries gradient (a progressive prefix pass
+        # is excluded: it is detached, so a term there would train nothing and still be
+        # averaged into the loss). None everywhere else, which is the signal `_forward_tul`
+        # branches on.
+        _mep_keep: list[Tensor] | None = [] if _mep else None
         # slot_state_renorm: the per-slot norm the state ENTERED with is the norm it keeps.
         # Detached (a constant target); pads enter at 0 and stay there.
         _renorm = bool(self.cfg.slot_state_renorm)
@@ -3086,8 +3114,14 @@ class MORPHTransformer(nn.Module):
                     _fp_terms.append(_rel[_fin])
 
             h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
-            if _db or _stage:
+            if _db or _stage or _mep:
                 _db_traj.append(h)
+            if _mep:
+                # `active` is `depths > t`, so this is "the slot's depth reaches pass t+1",
+                # ANDed with validity (a pad enters at 0 and is "active" at t = 0) and,
+                # under the progressive draw, with "this pass carries gradient".
+                _mk = active & layout.slot_valid
+                _mep_keep.append(_mk & ~_pfx if _prog else _mk)
             if track_ret and rs_new is not None:
                 ret_state = rs_new.detach() if _db else rs_new
 
@@ -3136,7 +3170,7 @@ class MORPHTransformer(nn.Module):
                 "penalty": torch.stack([g["penalty"] for g in _gain_terms]).sum(),
                 "n_iters": float(len(_gain_terms)),
             }
-        return xn, h, depths, g_traj, _db_traj, _gain_reg
+        return xn, h, depths, g_traj, _db_traj, _gain_reg, _mep_keep
 
     def _slot_gain_penalty(self, core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond,
                            mask, lam: float) -> dict:
@@ -3743,7 +3777,7 @@ class MORPHTransformer(nn.Module):
             if tul_step_mode == "db1":
                 xn, h_slots, depths, g_traj, db_traj = self._tul_core_db1(
                     x, x0, bigram_emb, layout)
-                gain_reg = None      # one application: no iterated map to constrain
+                gain_reg = mep_keep = None   # one application: no iterated map, no passes
             elif (not self.training and self._core_stage_cond_mode == "sigma"
                   and tul_step_mode != "bptt"):
                 # An explicit "bptt" at eval opts OUT of the auto-ladder and runs the
@@ -3752,10 +3786,10 @@ class MORPHTransformer(nn.Module):
                 # measure it separately from the sigma/Euler path.
                 xn, h_slots, depths, g_traj, db_traj = self._tul_core_db1_ladder(
                     x, x0, bigram_emb, layout)
-                gain_reg = None      # eval-only ladder: no penalty at eval
+                gain_reg = mep_keep = None   # eval-only ladder: no penalty, no passes
             else:
-                xn, h_slots, depths, g_traj, db_traj, gain_reg = self._tul_core(x, x0, bigram_emb,
-                                                                      layout, halt=halt)
+                xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep = self._tul_core(
+                    x, x0, bigram_emb, layout, halt=halt)
             # Think-once conditioning (arm R7): the stack runs once over the looped
             # slot states, and everything downstream — the mux local loss, SIGReg, the
             # gate budget, the plan ablations, prefix_project — reads ITS output. So z,
@@ -3799,6 +3833,30 @@ class MORPHTransformer(nn.Module):
                     mux_stats["mux_n_supervised_own"] = fin.get("mux_n_supervised", 0.0)
                     mux_stats["mux_local_next_final"] = float(nxt_loss.detach())
                     mux_stats["mux_n_supervised_next"] = mux_stats.get("mux_n_supervised", 0.0)
+            elif mep_keep is not None:
+                # ── the MUX on EVERY pass (tul.mux_every_pass, arm slot-mnext-mux-every-pass) ──
+                # The configured target on the state after each pass of a LIVE carry (no
+                # detach anywhere — `_tul_core` keeps the outer-graph states), for the slots
+                # whose realised depth reaches that pass, PLUS the final state for every
+                # valid slot exactly as the ruler supervises it. Uniform weights summing to
+                # 1, so `mux_beta` means what it means on every other arm; stats come from
+                # the FINAL term so `mux_local` / `mux_rel` / `mux_kl` stay comparable.
+                # `mep_keep` is None outside training, so an eval forward takes the branch
+                # below and the forced-depth sweep reads the same column as the ruler.
+                terms = [self._tul_mux_loss(db_traj[j], input_ids, layout,
+                                            slot_keep=mep_keep[j - 1])
+                         for j in range(1, len(db_traj))]
+                terms.append(self._tul_mux_loss(h_slots, input_ids, layout,
+                                                stats=mux_stats))
+                mux_loss = torch.stack(terms).mean()
+                mux_stats["mux_pass_terms"] = float(len(terms))
+                # `loop/mux_pass_*` for the trainer's pre-clip probe (the `_loop_prog`
+                # route). Detached 0-dim tensors: the float() sync happens in the trainer,
+                # on the steps it logs, never inside the forward.
+                self._loop_mux = {"mux_pass_terms": float(len(terms))}
+                for j, t_ in enumerate(terms[:-1], start=1):
+                    self._loop_mux[f"mux_pass_t{j}"] = t_.detach()
+                self._loop_mux["mux_pass_final"] = terms[-1].detach()
             elif db_traj is None or not tc.db_loop:
                 mux_loss = self._tul_mux_loss(h_slots, input_ids, layout, stats=mux_stats)
             else:

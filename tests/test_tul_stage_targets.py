@@ -38,7 +38,7 @@ def test_off_keeps_no_trajectory_and_on_keeps_a_live_one():
     # live carry: the final state's graph reaches the seed THROUGH iteration 1's state
     m2.train()
     xx, x0, bg = m2._tul_front(x, layout)
-    _xn, _h, depths, _g, traj, _gr = m2._tul_core(xx, x0, bg, layout)
+    _xn, _h, depths, _g, traj, _gr, _mk = m2._tul_core(xx, x0, bg, layout)
     assert len(traj) == int(depths.max()) + 1                          # train: deepest slot
     g = torch.autograd.grad(traj[-1].float().pow(2).sum(), traj[1], retain_graph=True,
                             allow_unused=True)[0]
@@ -53,7 +53,7 @@ def test_local_loss_is_the_mean_of_the_two_staged_terms():
     out = _loss(m, x, y, layout)
     torch.manual_seed(7)
     xx, x0, bg = m._tul_front(x, layout)
-    _xn, h, depths, _g, traj, _gr = m._tul_core(xx, x0, bg, layout)
+    _xn, h, depths, _g, traj, _gr, _mk = m._tul_core(xx, x0, bg, layout)
     own = m._tul_mux_loss(traj[2], x, layout, slot_keep=(depths >= 2), target="own")
     nxt = m._tul_mux_loss(h, x, layout)
     assert torch.allclose(out["mux_local"], 0.5 * (own + nxt), atol=1e-6)

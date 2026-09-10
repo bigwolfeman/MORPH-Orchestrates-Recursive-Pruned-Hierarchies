@@ -3,10 +3,11 @@
 Status: proposed
 
 Date: 2026-09-10. Arms:
-[`slot-mnext-progressive`](../../../../lab/experiments/failures/2026-09-10-arc-slot-mnext-progressive.md)
+[`slot-mnext-progressive`](../../../../lab/experiments/failures/2026-09-10-arc-slot-mnext-progressive.md),
+[`slot-mnext-per-pass-lora`](../../../../lab/experiments/failures/2026-09-10-arc-slot-mnext-per-pass-lora.md)
 and
-[`slot-mnext-per-pass-lora`](../../../../lab/experiments/failures/2026-09-10-arc-slot-mnext-per-pass-lora.md),
-both one-factor arms on the ruler `slot-mux-norm-match`
+[`slot-mnext-mux-every-pass`](../../../../lab/experiments/planned/2026-09-10-arc-slot-mnext-mux-every-pass.md),
+all one-factor arms on the ruler `slot-mux-norm-match`
 (`morph/configs/tul_slot_mux_norm_match.yaml`).
 
 ## Problem
@@ -92,6 +93,47 @@ pre-change tree rather than by reading the diff: `progressive_p: 0` and
 all 208 gradient tensors of the tiny CPU model at master `c429e22`, and the zero-init
 deltas reproduce the same numbers with the module BUILT.
 
+### Arm 3, `slot-mnext-mux-every-pass` (`tul.mux_every_pass: true`)
+
+Added 2026-09-10 after arms 1 and 2 read flat. They both left the LOSS alone and changed how
+the one exit gradient is delivered. This one changes what the passes are asked for.
+
+**Problem.** The slot loop is scored ONLY at its exit state, through two doors: the token CE
+via the coda and the two prefix cells, and the MUX loss computed ONCE on the exit state
+(`_forward_tul`). No intermediate pass carries a loss. Every measurement of that shape says
+the same thing: the per-pass cotangent is FLAT (0.168 / 0.168 / 0.166 / 0.160 / 0.154 /
+0.183 on the ruler — one gradient through a near-identity map), the coda's CE with the exit
+equals its CE with the ENTRY to 0.0015 nats on the ruler and 0.0002–0.006 on every arm read
+(`slot_z_optimize.py`), and every token K-curve is at or under 0.0006. Wolfe: "this is
+likely where our issue actually lives. that one arm needs to be run for sure."
+
+**Proposal.** Put the CONFIGURED MUX target (`mux_target: next`) on the state after EVERY
+pass of a LIVE carry — no detach anywhere — for the slots whose realised depth reaches that
+pass, plus the ruler's own final term on every valid slot. Average the terms with uniform
+weights summing to 1, so `mux_beta` keeps its meaning, and report stats from the FINAL term
+so `mux_local` / `mux_rel` stay comparable with every earlier arm.
+
+- Implementation: `_tul_core` keeps the same live-carry trajectory the staged target uses,
+  one entry per pass, and RETURNS the per-pass supervision mask beside it
+  (`slot_valid & (depths >= j)`, ANDed with `~prefix` when the progressive draw is on). A
+  return value, not an attribute: rebuilding the mask in the caller would duplicate the
+  conditions (`progressive_p`, `self.training`) that decide it. Off, no trajectory is kept
+  and no mask is built. Zero new parameters, zero extra core applications; the cost is `T`
+  extra `[B, S, V]` fp32 readouts per step and their backward.
+- TRAINING only. An eval forward computes the single final-state term, which is what leaves
+  `core_depth_sweep.py`'s forced-depth `mux_local` column identical to the ruler's — the
+  arm's own readout must not be changed by the arm.
+- Refused where a per-pass term has no meaning: the paid loop, `mux_beta <= 0`, `db_loop`
+  (detached carry, the opposite contract), `mux_stage_own_iters` (two stages, two targets),
+  `cond_layers` (the think-once stack would read the final term through a stack the per-pass
+  terms never see) and SCSE (the carried state is a deviation, not the slot state).
+- The honest tension, written down before the run: per-pass supervision toward ONE target is
+  a deep-supervision recipe, and deep supervision makes EARLY exits good. That is the same
+  direction as depth-independence. The averaged objective is minimised just as well by a map
+  whose first pass reaches the target and whose later passes sit near the identity — which is
+  the failure already measured. The arm is worth running because it is the first one that
+  touches the loss the passes see at all, not because the sign is obvious.
+
 ## Alternatives considered
 
 - **DEQ / implicit differentiation** (Bai et al. 2019). Solve for the fixed point and
@@ -123,6 +165,27 @@ deltas reproduce the same numbers with the module BUILT.
   Rejected: Wolfe has ruled out staged-recipe curricula on this tree as unfriendly recipes,
   the same call that rejected dense-then-ternary warmup. A method whose result depends on a
   schedule nobody can reproduce from the config is not a result.
+- **Deep supervision through the CODA at every pass** (the token CE, not the MUX, read at
+  each pass). This is the version that would test whether the READER can use an intermediate
+  state, which is the closer question to the measured failure. Rejected on cost: the coda is
+  three blocks over the full 1,152-position sequence plus a full-vocabulary CE, so a term per
+  pass is ~6x the coda's FLOPs and its activations, against ~1 % of a step for the MUX
+  readout over 64 slot cells. If the MUX ladder moves anything, this is the follow-up worth
+  the price.
+- **A token CE per pass on a sub-sample of positions** (say 1/6 of the rows per pass), which
+  buys the coda-side signal at the MUX's price. Rejected as a FIRST arm: it changes the
+  gradient's variance and its target at once, and the sub-sample size is a tuned number
+  nobody has a prior for on this tree. It is the natural fallback if the coda-side question
+  survives the MUX ladder.
+- **The staged target `tul.mux_stage_own_iters`** (already in the tree): the state after
+  iteration k toward the span the slot terminates, the final state toward the next span. Two
+  fixed stages, two different targets, and only one intermediate state supervised. It answers
+  "does an intermediate state have a job", not "does every pass have one", and its mixed
+  targets make `mux_local` a mixture. Refused beside `mux_every_pass` for that reason.
+- **The detached DB-loop `tul.db_loop`** (already in the tree): evenly spaced supervised
+  iterations with the carry DETACHED, so each term trains exactly ONE core application. That
+  is the HRM/TRM shape and it deliberately removes the trajectory the arm is asking about. A
+  live carry is the whole point here: a term at pass `j` must reach every earlier pass.
 - **Doing nothing on the loop and attacking the state's rank instead.** The levers panel's
   structural finding is that ~50 slot cells sit at effective rank 1.7-4.8 in 1024
   dimensions. This is the real competing explanation and it is deliberately NOT one of
@@ -146,7 +209,13 @@ level of this note:
 - Either arm clears `mux_local` K1-K6 > 0.02 at 5,000 steps (the ruler: 0.0067), or the
   arm reports flat and says so.
 - The per-pass gradient probe at 5,000 reports the cancellation ratio on the SHARED core
-  weights for both arms, against the ruler's 0.520.
+  weights for every arm, against the ruler's 0.520.
+- `mux_every_pass: false` is bit-identical to the pre-change tree: loss `9.30903148651123`
+  and sha256 `ee9ffa17…7bea2` over all 208 gradient tensors of the tiny CPU model at master
+  `f4a284f` and after the change. Three sabotage runs fail the suite (dropping the `~prefix`
+  mask, dropping the per-pass terms, detaching the trajectory).
+- The every-pass ladder does not change the EVAL readout: an eval forward's `mux_local` is
+  equal, tensor for tensor, with the knob on and off. A test holds it.
 
 ## Risks
 
@@ -169,6 +238,15 @@ level of this note:
   new, because the shared weights end up exactly as scattered as before. The cancellation
   ratio measured on the shared weights alone is the instrument that catches this, and it is
   a frozen prediction on that arm.
-- **Neither arm has run on the GPU.** Everything above is CPU builds, CPU tests and config
+- **The MUX ladder flattens the curve it is meant to steepen.** Deep supervision toward one
+  target rewards a good FIRST pass, which is depth-independence. If `mux_local` at depth 1
+  improves and K1-K6 shrinks, the arm has bought early-exit quality and paid in depth. That
+  is a real finding and the prereg's second binding clause names it, but it is the outcome
+  most likely to be misread as "the arm did nothing".
+- **The memory cost is arithmetic, not a measurement.** Each per-pass term retains a 75 MB
+  fp32 logit tensor and its log-softmax output at B=6, S=64, V=49169; eight extra terms hold
+  on the order of 1.2 GB more on a card the ruler already runs at ~11 GB peak. The smoke's
+  peak is the first real number.
+- **No arm has run on the GPU.** Everything above is CPU builds, CPU tests and config
   compose checks. `torch.compile` on the new index path and the new mask path is untested
   until the runner's 12-step smoke.

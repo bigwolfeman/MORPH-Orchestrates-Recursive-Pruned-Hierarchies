@@ -315,8 +315,12 @@ def _severed_forward(model: MORPHTransformer, x: torch.Tensor, layout: SlotLayou
     """
     orig_allow = transformer_mod.tg_allow_mask
 
-    def severed_allow(layout, soft_prev_span=False):
-        allow = orig_allow(layout, soft_prev_span=soft_prev_span)      # [B,1,L,L]
+    def severed_allow(layout, **kw):
+        # **kw, not a fixed signature: this stands in for `tg_allow_mask` and must accept
+        # every keyword the forward passes it (`soft_prev_span`, `slot_queries_slots_only`,
+        # and whatever comes next). A pinned signature made this hook a TypeError the day
+        # `tg_restrict_scope` was added.
+        allow = orig_allow(layout, **kw)                               # [B,1,L,L]
         sm = layout.slot_mask.view(layout.slot_mask.shape[0], 1, 1, -1)
         return allow & ~sm                                             # drop slot columns
 

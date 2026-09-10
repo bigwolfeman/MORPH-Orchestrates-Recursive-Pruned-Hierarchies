@@ -26,7 +26,7 @@ not say the loop could reach it.
 `_forward_tul` (morph/model/transformer.py) runs, for a slot-loop model:
 
     x, x0, bigram = _tul_front(...)
-    xn, h_slots, depths, g_traj, db_traj, gain = _tul_core(...)      # <- z is h_slots
+    xn, h_slots, depths, g_traj, db_traj, gain, ... = _tul_core(...)  # <- z is h_slots
     [_tul_cond_apply] [mux loss] [gate] [detach_z] [_tul_plan_ablate]
     values, pos = tul.prefix_project(h_slots, layout, L)             # <- the prefix write
     x_coda = scatter_positions(base, pos, values)
@@ -128,14 +128,20 @@ class ZSplit:
             return out
 
         def core(*a, **k):
+            # ARITY-TOLERANT on purpose: `_tul_core`'s return tuple grows as arms are added
+            # (6 entries, then 7 with `tul.mux_every_pass`). The entries past `db_traj` are
+            # TRAINING-side — the gain hinge's penalty, the per-pass MUX masks — and this
+            # probe replays an EVAL forward that must take neither branch, so they replay
+            # as None while the arity stays whatever the live call returned.
             if st["mode"] == "replay":
-                xn, _h, depths, g_traj, db_traj = st["core"]
-                return xn, st["z"], depths, g_traj, db_traj, None
+                xn, _h, depths, g_traj, db_traj, n_extra = st["core"]
+                return (xn, st["z"], depths, g_traj, db_traj) + (None,) * n_extra
             out = self._real["core"](*a, **k)
-            xn, h, depths, g_traj, db_traj, _gain = out
+            xn, h, depths, g_traj, db_traj = out[:5]
             st["core"] = (xn.detach(), h.detach(), depths,
                           None if g_traj is None else g_traj.detach(),
-                          None if db_traj is None else [t.detach() for t in db_traj])
+                          None if db_traj is None else [t.detach() for t in db_traj],
+                          len(out) - 5)
             return out
 
         def groups(x, labels, layout, want_groups=True):

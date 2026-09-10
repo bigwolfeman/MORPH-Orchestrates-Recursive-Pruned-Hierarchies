@@ -73,7 +73,7 @@ def test_db_loop_no_gradient_crosses_an_iteration_boundary():
     m.eval()
     xf, x0, bg = m._tul_front(x, lay)
     xf = xf.requires_grad_(True)
-    _xn, h, _d, _g, traj, _gr = m._tul_core(xf, x0, bg, lay)
+    _xn, h, _d, _g, traj, _gr, _mk = m._tul_core(xf, x0, bg, lay)
     assert traj is not None and len(traj) == 4          # seed + 3 iterations
     # The contract forbids gradient through the CORE MAP across iterations. A slot
     # frozen at depth d keeps traj[d] as its final state via the where-carry, and the
@@ -99,7 +99,7 @@ def test_db_loop_every_iteration_carries_grad_despite_bptt_depth():
     m = _db_model()          # bptt_depth=1, max_depth=3
     m.train()
     xf, x0, bg = m._tul_front(x, lay)
-    _xn, _h, _d, _g, traj, _gr = m._tul_core(xf, x0, bg, lay)
+    _xn, _h, _d, _g, traj, _gr, _mk = m._tul_core(xf, x0, bg, lay)
     for t in range(1, len(traj)):
         assert traj[t].grad_fn is not None, f"iteration {t} lost its graph"
 

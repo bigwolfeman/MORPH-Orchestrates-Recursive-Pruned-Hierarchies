@@ -258,6 +258,28 @@ class TULConfig:
     # mean of the two. The carry stays LIVE (full BPTT through the loop; this is not
     # db_loop, which detaches it). 0 = off: the forward is bit-identical.
     mux_stage_own_iters: int = 0
+    # ── the M-next MUX on EVERY pass (arm `slot-mnext-mux-every-pass`, 2026-09-10) ──
+    #    The slot loop gets gradient ONLY at its exit state: the token CE through the coda
+    #    and the two prefix cells, and ONE MUX term computed on the exit state. No
+    #    intermediate pass carries a loss, and the per-pass gradient probe reads a FLAT
+    #    cotangent (share 0.168/0.168/0.166/0.160/0.154/0.183) with near-orthogonal per-pass
+    #    updates on the shared weights (|sum_t dW_t| / sum_t |dW_t| = 0.520).
+    #
+    #    True puts the CONFIGURED MUX target (`mux_target`, "next" on the arm) on the state
+    #    after EVERY pass of a LIVE carry — no detach anywhere — for the slots whose realised
+    #    depth reaches that pass, plus the final state for every valid slot. The terms are
+    #    averaged (uniform weights summing to 1), so `mux_beta` keeps its meaning, and the
+    #    reported stats (`mux_local`, `mux_rel`, `mux_kl`, ...) come from the FINAL term so
+    #    the sweep columns stay comparable with every earlier arm.
+    #
+    #    NOT `db_loop` (which detaches the carry and so trains ONE core application per
+    #    term) and NOT `mux_stage_own_iters` (two fixed stages, two different targets);
+    #    both are refused below. TRAINING ONLY: an eval forward computes the single
+    #    final-state term exactly as the ruler does, which is what keeps
+    #    `core_depth_sweep.py`'s forced-depth `mux_local` column unchanged.
+    #    False = off: no trajectory is kept, no term is built, the forward is the one from
+    #    before this existed (tests/test_tul_mux_every_pass.py).
+    mux_every_pass: bool = False
     # ── Think-once panel knobs (branch tul/think-once, arms R7/R8;
     #    .agents/notes/proposed/architecture/2026-09-03-tul-loop-contribution-drawing-board.md)
     # cond_layers: that many NON-SHARED MORPHBlocks run ONCE over the compact slot
@@ -485,6 +507,33 @@ class TULConfig:
         if self.mux_target not in ("own", "next"):
             raise ValueError(
                 f"tul.mux_target must be 'own' or 'next', got {self.mux_target!r}")
+        if self.mux_every_pass:
+            if self.mux_beta <= 0.0:
+                raise ValueError("tul.mux_every_pass needs tul.mux_beta > 0 (the per-pass "
+                                 "terms ARE the local loss)")
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.mux_every_pass is a SLOT-LOOP lever (_tul_core): it supervises the "
+                    "state after each pass of the per-slot depth loop, and the paid loop "
+                    "(tokens_through_core) has no per-slot trajectory. Raises rather than "
+                    "silently running the token core with the knob ignored.")
+            if self.db_loop:
+                raise ValueError(
+                    "tul.mux_every_pass with tul.db_loop is not defined: db_loop already "
+                    "supervises picked iterations and DETACHES the carry, which is the "
+                    "opposite of this knob's live-carry contract.")
+            if self.mux_stage_own_iters > 0:
+                raise ValueError(
+                    "tul.mux_every_pass with tul.mux_stage_own_iters is not defined: the "
+                    "stage supervises ONE intermediate state toward a DIFFERENT target "
+                    "('own'), and averaging that into a per-pass ladder would make the "
+                    "reported mux_local a mixture of two objectives.")
+            if self.cond_layers > 0:
+                raise NotImplementedError(
+                    "tul.mux_every_pass with tul.cond_layers is not defined: the think-once "
+                    "stack runs ONCE over the FINAL slot state, so the final term would be "
+                    "read through it and every per-pass term would not — a silent mixture "
+                    "of two readouts.")
         if self.cond_layers < 0:
             raise ValueError(f"tul.cond_layers must be >= 0, got {self.cond_layers}")
         if self.detach_z and self.tokens_through_core:

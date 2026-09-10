@@ -878,6 +878,13 @@ def _preclip_probe(model) -> dict[str, float]:
     if prog:
         for key, v in prog.items():
             out[f"loop/{key}"] = float(v)
+    # Per-pass MUX (`tul.mux_every_pass`): how many terms the local loss averaged this
+    # step and the value of each one. A per-pass signal that is doing anything should make
+    # the deep passes' terms fall faster than the shallow ones. None on every other model.
+    mux = getattr(root, "_loop_mux", None)
+    if mux:
+        for key, v in mux.items():
+            out[f"loop/{key}"] = float(v)
     cot = getattr(root, "_loop_cot", None)
     if cot:
         ts = sorted(cot)

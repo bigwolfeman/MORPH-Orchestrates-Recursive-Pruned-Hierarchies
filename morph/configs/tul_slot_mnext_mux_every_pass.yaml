@@ -1,0 +1,62 @@
+# Arm "slot-mnext-mux-every-pass": the M-next MUX loss on EVERY pass of the slot loop,
+# on a LIVE carry.
+#
+# The finding this arm tests. The slot loop (the real TUL: `tokens_through_core: false`,
+# `MORPHTransformer._tul_core`, only the ~64 slot cells of a row loop through the shared
+# 6-block core at a per-slot Poisson depth of mean 6 / max 8, full BPTT) gets gradient ONLY
+# at its EXIT state, through two doors: the token CE via the coda and the two prefix cells
+# (`W_prefix`), and the MUX loss computed ONCE on that exit state. No intermediate pass
+# carries a loss. Measured 2026-09-10: the per-pass cotangent is FLAT (one gradient passing
+# through a near-identity map, shares 0.168/0.168/0.166/0.160/0.154/0.183), the coda's CE
+# with the loop's exit equals its CE with the loop's ENTRY to 0.003 nats on every arm, and
+# every token K-curve (CE at forced depth 1 minus depth 6) is <= 0.0006. Wolfe: "this is
+# likely where our issue actually lives."
+#
+# Mechanism, in one sentence: `tul.mux_every_pass` puts the configured MUX target
+# (`mux_target: next`, inherited) on the state after EVERY pass of the loop, for the slots
+# whose realised depth reaches that pass, plus the final state for every valid slot; the
+# terms are averaged with uniform weights summing to 1, so `mux_beta` keeps its meaning.
+# Nothing is detached anywhere — `_tul_core` keeps the outer-graph state after each pass
+# and the mask that says which slots are live there. The reported stats (`mux_local`,
+# `mux_rel`, `mux_kl`, `mux_n_supervised`) come from the FINAL term, so the sweep columns
+# stay comparable with every arm before this one.
+#
+# What it is NOT. `tul.db_loop` supervises evenly spaced iterations with the carry
+# DETACHED (each term trains ONE core application). `tul.mux_stage_own_iters` supervises
+# two fixed stages toward two different targets. Both are refused in config beside this
+# knob, as are the paid loop, `mux_beta <= 0` and the think-once stack (`cond_layers`,
+# which would read the final term through a stack the per-pass terms never see).
+#
+# ONE change vs `tul_slot_mux_norm_match` (the ruler `slot-mux-norm-match`):
+# `tul.mux_every_pass` false -> true. Nothing else moves — same M-next target at beta 1,
+# same prelude entry, same hinge (lambda 100 @ 0.9) and terminal fixed-point term, same
+# norm_match ternary rule, seq 1024, batch 6, seed 1, 5000 steps, ramp 1000.
+#
+# Interactions, stated because they are the ways this could go quietly wrong:
+#   - the gain hinge (`_slot_gain_penalty`) probes ONE random grad iteration at the
+#     detached operating point and does not care which passes carry a loss: unchanged.
+#   - the terminal fixed-point term (`model.core_fixed_point_lambda 1.0`) applies at each
+#     slot's LAST pass: unchanged.
+#   - the progressive prefix (`tul.progressive_p`) is OFF here. If it is ever on, a
+#     detached prefix pass must not carry a MUX term (it would train nothing through that
+#     slot and still take a share of the average), so the per-pass mask carries `~prefix`;
+#     tested.
+#   - the eval path is unchanged: the ladder is TRAINING only, so `core_depth_sweep.py`'s
+#     forced-depth `mux_local` column is still the single final-state term.
+#   - the coda still reads the loop's FINAL state. Only the loss changes.
+#
+# New wandb keys: loop/mux_pass_terms, loop/mux_pass_t{1..T}, loop/mux_pass_final.
+# Cost: zero new parameters and zero extra core applications; the extra work is T more
+# [B, S, V] fp32 readouts per step (~75 MB each at B=6, S=64) and their backward.
+#
+# Record: lab/experiments/planned/2026-09-10-arc-slot-mnext-mux-every-pass.md
+# Note:   .agents/notes/proposed/architecture/2026-09-10-credit-assignment-in-the-slot-loop.md
+defaults:
+  - tul_slot_mux_norm_match
+  - _self_
+
+tul:
+  mux_every_pass: true
+
+wandb:
+  name: slot-mnext-mux-every-pass
