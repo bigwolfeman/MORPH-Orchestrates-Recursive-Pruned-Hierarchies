@@ -227,6 +227,14 @@ scope, which masks the prelude AND the coda. This arm puts the staged attachment
   E17 read every Sudoku bucket flat from T = 2 to 16. The mask buys forced dependence.
 - Prereg: `lab/experiments/planned/2026-09-10-arc-slot-mnext-staged-mask.md`.
 
+**Arm 8, `slot-mux-hca-fix` (`model.core_hca_compress_ratio: 16`).** Not a loop arm at all:
+a correctness fix on the ruler, run because "not the cause" should rest on a repaired arm
+rather than on a control that differs in four ways. Three of the six core blocks have been
+delivering about half their attention output on every slot arm this campaign scored. Its
+problem, its alternatives and its risks are in
+[`2026-09-10-slot-loop-readout-and-attention-defects.md`](2026-09-10-slot-loop-readout-and-attention-defects.md),
+with arm 6.
+
 ## Alternatives considered
 
 - **DEQ / implicit differentiation** (Bai et al. 2019). Solve for the fixed point and
