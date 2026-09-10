@@ -36,7 +36,8 @@ from .recur_gate import RecurrenceGate
 from .mhc import ChannelInject, MORPHBlock, PassLoRA, DEFAULT_CHANNEL_DIMS
 from .sigreg import sigreg_epps_pulley
 from .sparsity import MortarLinear
-from .tul import (TULConfig, TULGate, TULGateConfig, TULReread, TULSlots, boundary_token_index,
+from .tul import (TULConfig, TULGate, TULGateConfig, TULGradPass, TULReread, TULSlots,
+                  boundary_token_index,
                   compact_index,
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
                   scatter_positions,
@@ -944,6 +945,12 @@ class MORPHTransformer(nn.Module):
     # trainer turns them into `loop/mux_pass_*`). None on every other model.
     _loop_mux: dict | None = None
 
+    # Per-pass gradient-conditioning readouts written by `_tul_core` when `tul.grad_pass`
+    # is on and the model is training: `own_pass_t{t}` (the local target's value at pass t)
+    # and `gp_rel_t{t}` (the injected term's norm over the state's). Detached 0-dim
+    # tensors; the trainer turns them into `loop/*`. None on every other model.
+    _loop_gradpass: dict | None = None
+
     def __init__(self, cfg: MORPHConfig):
         super().__init__()
         self.cfg = cfg
@@ -1270,6 +1277,17 @@ class MORPHTransformer(nn.Module):
                 raise ValueError("tul.reread=true needs a core loop (n_core > 0): there is "
                                  "no pass in which to re-read.")
             self.tul_reread = TULReread(d, cfg.tul.reread_heads)
+        # Gradient-conditioned passes (TULConfig.grad_pass; Marino et al. 2018, IODINE).
+        # ONE zero matrix, no RNG draw, so an arm with the knob on holds byte-identical
+        # weights to the ruler everywhere else and its step 0 is the ruler's forward.
+        self.tul_grad_pass: TULGradPass | None = None
+        if cfg.tul is not None and cfg.tul.grad_pass:
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.grad_pass needs a core loop (model.n_core > 0): there is no pass "
+                    "to condition on a gradient.")
+            self.tul_grad_pass = TULGradPass(d, cfg.tul.grad_pass_scale,
+                                             cfg.tul.grad_pass_norm)
 
         # Progressive loss (tul.progressive_p, Bansal et al. 2022). Builds NOTHING — it is
         # a per-slot detach pattern inside `_tul_core` — so the only construction-time work
@@ -2756,7 +2774,7 @@ class MORPHTransformer(nn.Module):
         return g * scale.view(-1, *([1] * (g.dim() - 1))).to(g.dtype)
 
     def _tul_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
-                  halt: bool = False):
+                  halt: bool = False, input_ids: Tensor | None = None):
         """Gather slots → masked per-slot depth loop → looped states (spec §3.3).
 
         Returns ``(xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep)``:
@@ -2772,6 +2790,12 @@ class MORPHTransformer(nn.Module):
         supervision mask belongs with the trajectory it indexes, and rebuilding it in the
         caller would duplicate the conditions (``progressive_p``, ``self.training``) that
         decide it.
+
+        ``input_ids`` is read by ONE mechanism, ``tul.grad_pass``: the own-span loss it
+        differentiates needs the row's token ids. Keyword, defaulting to ``None``, because
+        every other caller (the probes, the tests, ``tul_forward_ablated``) passes four
+        positional arguments and must stay unchanged; ``grad_pass`` with ``None`` RAISES
+        rather than silently running the loop with the feature switched off.
 
         ``halt`` (arm ``TUL-halt``, gate §7) replaces the Poisson depth with the gate's
         own stop decision — a slot loops until it asks for ``k ≥ 1`` token, capped at
@@ -2859,6 +2883,31 @@ class MORPHTransformer(nn.Module):
                 "DEVIATION, and a MUX readout of a deviation is not a readout of the slot "
                 "(the same reason db_loop and mux_stage_own_iters raise here).")
         _mep = (_mep_cfg or _stage_all) and self.training
+        # Gradient-conditioned passes (TULConfig.grad_pass). A Python-level constant read
+        # once: `None` — every other model — traces the graph from before this existed.
+        # ON at eval too: the feature is part of the MAP, so a forced-depth sweep must see
+        # the same function the trainer ran.
+        _gp = self.tul_grad_pass
+        if _gp is not None:
+            if _scse is not None:
+                raise NotImplementedError(
+                    "tul.grad_pass under SCSE is not defined: the loop carries the "
+                    "DEVIATION, and the gradient of an own-span readout of a deviation is "
+                    "not the gradient at the slot state the loss is defined on (the same "
+                    "reason db_loop and mux_stage_own_iters raise here).")
+            if input_ids is None:
+                raise RuntimeError(
+                    "tul.grad_pass needs `input_ids` in _tul_core: the own-span loss it "
+                    "differentiates is built from the row's token ids. This caller passed "
+                    "none — pass `input_ids=` rather than running the loop with the "
+                    "feature silently switched off.")
+        # The arm's readouts. TRAINING and grad-enabled only, for the `_probe_write`
+        # reason: a no-grad forward that runs between the backward and the trainer's read
+        # must not overwrite the step's values with its own.
+        _gp_write = _gp is not None and self.training and torch.is_grad_enabled()
+        _gp_stats: dict = {}
+        if _gp_write:
+            self._loop_gradpass = None
         with _prof("carrier::h_clone"):
             if _scse is None:
                 h = self.core_init(e)
@@ -3104,6 +3153,44 @@ class MORPHTransformer(nn.Module):
             # progressive: this slot's pass t is inside its private no-grad prefix.
             _pfx = (_pk > t) if _prog else None
             _pv = None if _pfx is None else _pfx.view(*_pfx.shape, *([1] * (h.dim() - 2)))
+            # ── gradient-conditioned pass (tul.grad_pass) ──────────────────────────
+            # OUTSIDE `_core_step` on purpose, and this is the checkpointing decision:
+            # `ckpt_grad_iters` wraps `_core_step` in `torch.utils.checkpoint`, whose
+            # recompute re-runs that function under a fresh grad context — running an
+            # inner `autograd.grad` there is not a shape this tree has ever executed. So
+            # the feature is built HERE, once per pass, and only the (already computed)
+            # tensor crosses the checkpoint boundary as part of `_h_in`. `ckpt_grad_iters`
+            # therefore keeps working unchanged and needs no override.
+            #
+            # Consequences, stated where they are taken:
+            #  * the gain hinge below receives the INJECTED `_h_in`, so it probes the map
+            #    at the operating point the run actually reached; its finite difference
+            #    still sees the feature as a CONSTANT (the feature is a function of `h`,
+            #    not of the probe's perturbation), which is the same "exogenous input"
+            #    reading IODINE takes, and it means the hinge does not bound the feature's
+            #    own contribution to the gain.
+            #  * the Jacobian capture above records the PRE-feature `h`, and the loop
+            #    probes below read `in_norm` off `h` while `out_norm` comes from the
+            #    post-feature step — so on THIS arm `core_gain` includes whatever the
+            #    feature adds, which is the honest reading of "what one pass does" and is
+            #    NOT comparable pass-for-pass with the ruler's.
+            #  * at a no-grad iteration (`t < n_nograd`) the term is still built; the step
+            #    that consumes it runs under `torch.no_grad()`, so no edge to `W_g`
+            #    survives and the truncated-BPTT window is what it was.
+            if _gp is not None:
+                _gpm = active & layout.slot_valid
+                _gp_g, _gp_l = self._own_span_grad(_h_in, input_ids, layout, _gpm)
+                _gp_term = _gp(_gp_g, _gpm)
+                if _gp_write:
+                    # 0-dim detached tensors, still on GPU: the local target's value at this
+                    # pass, and how far the feature actually moves the state the core sees
+                    # (a term the optimiser has left at zero would read 0 forever). The
+                    # trainer's float() is the only sync, and it happens after the step.
+                    with torch.no_grad():
+                        _gp_stats[f"own_pass_t{t}"] = _gp_l
+                        _gp_stats[f"gp_rel_t{t}"] = (
+                            _gp_term.float().norm() / (_h_in.float().norm() + 1e-6)).detach()
+                _h_in = self._apply_injection(_h_in, _gp_term)
             if t < n_nograd:
                 with torch.no_grad():
                     h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
@@ -3299,6 +3386,8 @@ class MORPHTransformer(nn.Module):
                 "delta_mean": torch.stack(_pr_dmean) if _pr_dmean else None,
                 "eff_rank": torch.stack(_pr_rank) if _pr_rank else None,
             }
+        if _gp_write:
+            self._loop_gradpass = _gp_stats
         g_traj = torch.stack(g_list, dim=-1) if g_list else None   # [B, S, T]
         if _scse is not None:
             # Eq. 5 tail: h_T = h* + Delta_T (invariant S6). The deviation lives ONLY inside
@@ -3688,6 +3777,63 @@ class MORPHTransformer(nn.Module):
             stats["mux_n_supervised"] = float(n_sup)
         return loss
 
+    def _own_span_grad(self, h: Tensor, input_ids: Tensor, layout: SlotLayout,
+                       mask: Tensor) -> tuple[Tensor, Tensor]:
+        """``(dL_own/dz, L_own)`` at the CURRENT slot state, both DETACHED.
+
+        The gradient is the IODINE feature; the loss beside it is the arm's own readout —
+        ``loop/own_pass_t{t}``, the trajectory of the local target THROUGH the loop, which
+        is what says whether the passes are descending the objective they are handed.
+
+        ``L_own`` is :meth:`_tul_mux_loss` at ``target="own"``: the slot's own span read
+        through the tied head. That target is CAUSAL for the slot — ``mux_span_targets``
+        gives slot ``i`` the tokens of span ``i``, and slot ``i`` sits after every one of
+        them — so a generator can compute the same feature at inference with no lookahead.
+
+        The gradient is taken with respect to a DETACHED copy of ``h`` and with
+        ``create_graph=False``, so:
+
+        * no outer gradient flows through the feature (the returned tensor has no
+          ``grad_fn``; the token CE never differentiates through this inner backward), and
+        * the inner graph is freed by ``autograd.grad`` itself, so the cost is one extra
+          ``[B, S, V]`` readout per pass and NOT one retained per pass.
+
+        The alternative, ``create_graph=True``, is the second-order learned-optimiser
+        objective (Andrychowicz et al. 2016). It is not built: it would retain one inner
+        graph per pass and put a Hessian-vector product in every training step, and IODINE
+        (§3.1) reports the detached feature is what works.
+
+        The reduction over Hyper-Connection streams follows the readout the loss actually
+        used, and the two readouts differ:
+
+        * ``tul.mux_readout='mean'`` (the default and the arm's setting): :meth:`_readout`
+          starts with ``x.mean(dim=2)``, so the gradient arriving at each of the ``n``
+          streams is the SAME vector scaled by ``1/n``. The mean over streams recovers its
+          direction and the RMS normalisation in :class:`TULGradPass` removes the constant.
+        * ``tul.mux_readout='full'`` (finding F2): each stream is normalised separately, so
+          the per-stream gradients genuinely DIFFER. The mean is then a summary of them,
+          not a recovery of one vector — a defensible single-stream feature, and a weaker
+          claim. Stated because it is the only thing about this reduction that changes
+          between the two readouts; a test covers it.
+
+        Either way the caller broadcasts ONE ``[B, S, C]`` term to every stream through
+        :meth:`_apply_injection`, exactly as every other injection into this carrier does.
+
+        ``mask`` is the ``[B, S]`` set of slots whose pass is live at this iteration; it is
+        the ``slot_keep`` of the own loss, so a frozen or pad slot contributes nothing to
+        the normaliser and reads a zero feature.
+        """
+        with torch.enable_grad():
+            h_d = h.detach().requires_grad_(True)
+            loss = self._tul_mux_loss(h_d, input_ids, layout, slot_keep=mask, target="own")
+            g = torch.autograd.grad(loss, h_d, create_graph=False, allow_unused=True)[0]
+        if g is None:
+            # No supervised slot in this batch at this pass (every span empty under the
+            # mask). Not an error: the feature is zero, exactly as it is for a pad slot.
+            g = torch.zeros_like(h)
+        g = g.detach()
+        return (g.mean(dim=2) if self._is_hc else g), loss.detach()
+
     def _tul_sigreg_loss(self, h_slots: Tensor, layout: SlotLayout) -> Tensor:
         """SIGReg over the VALID slot states (LeJEPA; see morph/model/sigreg.py).
 
@@ -3940,7 +4086,7 @@ class MORPHTransformer(nn.Module):
                 gain_reg = mep_keep = None   # eval-only ladder: no penalty, no passes
             else:
                 xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep = self._tul_core(
-                    x, x0, bigram_emb, layout, halt=halt)
+                    x, x0, bigram_emb, layout, halt=halt, input_ids=input_ids)
             # Think-once conditioning (arm R7): the stack runs once over the looped
             # slot states, and everything downstream — the mux local loss, SIGReg, the
             # gate budget, the plan ablations, prefix_project — reads ITS output. So z,
@@ -4504,7 +4650,8 @@ class MORPHTransformer(nn.Module):
         from morph.model.fm_planner import effective_rank, mean_pairwise_cos
 
         x, x0, bigram = self._tul_front(input_ids, layout)
-        _xn, h_slots, _d, _g, *_ = self._tul_core(x, x0, bigram, layout)
+        _xn, h_slots, _d, _g, *_ = self._tul_core(x, x0, bigram, layout,
+                                                 input_ids=input_ids)
         z = self._readout(h_slots).float()                     # [B, S, C]
         valid = layout.slot_valid
         rows = z[valid]
@@ -4646,7 +4793,8 @@ class MORPHTransformer(nn.Module):
                 "raises rather than silently picking a behaviour."
             )
         x, x0, bigram_emb = self._tul_front(input_ids, layout)
-        xn, h_slots, depths, g_traj, *_ = self._tul_core(x, x0, bigram_emb, layout)
+        xn, h_slots, depths, g_traj, *_ = self._tul_core(x, x0, bigram_emb, layout,
+                                                         input_ids=input_ids)
         if self.tul_gate is not None:
             h_slots = self.tul_gate.apply_budget(
                 h_slots, self._tul_budget_ids(layout, depths, g_traj))

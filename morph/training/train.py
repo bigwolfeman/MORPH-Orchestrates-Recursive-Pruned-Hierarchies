@@ -888,6 +888,14 @@ def _preclip_probe(model) -> dict[str, float]:
     if mux:
         for key, v in mux.items():
             out[f"loop/{key}"] = float(v)
+    # Gradient-conditioned passes (`tul.grad_pass`): the local own-span target's value at
+    # each pass — the trajectory the loop is handed the gradient OF, so a loop that is
+    # descending it reads a falling ladder — and the injected term's size relative to the
+    # state. None on every other model.
+    gp = getattr(root, "_loop_gradpass", None)
+    if gp:
+        for key, v in gp.items():
+            out[f"loop/{key}"] = float(v)
     cot = getattr(root, "_loop_cot", None)
     if cot:
         ts = sorted(cot)

@@ -1,0 +1,59 @@
+# Slot-loop panel, arm "slot-mnext-gradpass": the ruler `slot-mux-norm-match` plus
+# `tul.grad_pass: true` — before every pass of the slot loop the model computes the
+# gradient of a LOCAL, CAUSAL target on the current slot state (the slot's OWN span
+# through the tied head) and feeds that gradient, normalised and mapped through a
+# zero-initialised `W_g`, back into the state the core step receives. The loop's LOSS is
+# untouched: the exit still carries the ordinary M-next forecast MUX at beta 1. This knob
+# adds an INPUT, not a term.
+#
+# Why this arm: Marino, Yue & Mandt 2018 (Iterative Amortized Inference) and Greff et al.
+# 2019 (IODINE) both make an iterative network an OPTIMISER of its own objective by handing
+# it that objective's gradient at every step. Every credit-assignment arm before this one
+# changed which passes carry the exit gradient (`progressive_p`), gave the passes their own
+# parameters (`pass_lora_rank`), or changed what the passes are asked for
+# (`mux_every_pass`, `mux_stage_own_iters`). None of them changed what a pass can SEE. A
+# shared map applied six times with the same input is the same instruction six times; a
+# shared map that reads its own error signal has a different job at every pass by
+# construction, and that error signal changes as the state moves.
+#
+# The toy study (lab/toy_slot_loop/WRITEUP.md) is the constraint this respects: the local
+# target must DIFFER from the exit target, or per-pass supervision collapses into
+# depth-independence training (`mux_all`, 1/5 seeds; measured on MORPH as
+# `slot-mnext-mux-every-pass`, flat). Own span inside the loop, next span at the exit.
+#
+# Causality: `mux_span_targets(target="own")` gives slot i the tokens of span i, and slot i
+# sits after every one of them, so the feature is computable at generation time with no
+# lookahead. (`target="next"` is NOT — feeding the forecast gradient would hand the loop
+# the answer, which is the `slot_z_optimize.py` ORACLE, not a mechanism.)
+#
+# Cost. Per pass the feature costs one `[B, S, V]` fp32 readout of the tied head and the
+# backward of that readout with respect to z alone (`mux_detach_head: true` keeps the
+# unembedding out of it): about 2 * B * S * C * V * 2 FLOPs = ~77 GFLOP at B 6, S 64,
+# C 1024, V 49169, times the batch's deepest slot (<= 8 passes) = ~0.6 TFLOP per step. The
+# inner graph is freed by `autograd.grad` every pass (`create_graph=False`), so the memory
+# is one transient pair of [6, 64, 49169] fp32 buffers (~151 MB), NOT one retained per
+# pass. The measured anchor is `slot-mnext-mux-every-pass`, which computes MORE than this
+# (T live MUX terms, retained through the outer backward) and read 0.99x the ruler's wall
+# clock at 12,063 tok/s and a 12.62 GB smoke peak against the ruler's 10.1 GB. This arm
+# should sit between the two: expect 1.0-1.15x wall clock and a smoke peak near 11 GB.
+# The rate rule (tok/s < 8,086 at step 200 skips the arm; the ruler read 12,429) should
+# pass with room. It is an estimate, not a measurement — the smoke's first number decides.
+#
+# `ckpt_grad_iters` is NOT overridden. The feature is built OUTSIDE `_core_step`, so
+# nothing runs an inner `autograd.grad` inside a checkpointed region and selective core
+# checkpointing keeps working exactly as it does on the ruler (which runs it at the
+# base.yaml default).
+#
+# Record: lab/experiments/planned/2026-09-10-arc-slot-mnext-gradpass.md
+# Note: .agents/notes/proposed/architecture/2026-09-10-gradient-conditioned-slot-passes.md
+defaults:
+  - tul_slot_mux_norm_match
+  - _self_
+
+tul:
+  grad_pass: true
+  grad_pass_scale: 0.1
+  grad_pass_norm: rms
+
+wandb:
+  name: slot-mnext-gradpass

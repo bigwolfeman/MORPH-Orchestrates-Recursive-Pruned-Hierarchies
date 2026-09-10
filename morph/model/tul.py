@@ -22,8 +22,8 @@ from torch import Tensor
 from .attention import RMSNorm
 from .tul_layout import SlotLayout
 
-__all__ = ["TULConfig", "TULGate", "TULGateConfig", "TULSlots", "bag_mean", "bound_seed",
-           "build_bound_rotations", "mux_span_targets",
+__all__ = ["TULConfig", "TULGate", "TULGateConfig", "TULGradPass", "TULSlots", "bag_mean",
+           "bound_seed", "build_bound_rotations", "mux_span_targets",
            "compact_index", "cw2_retain_mask", "gather_positions", "scatter_positions",
            "window_drop_mask"]
 
@@ -324,6 +324,42 @@ class TULConfig:
     #    False = off: no trajectory is kept, no term is built, the forward is the one from
     #    before this existed (tests/test_tul_mux_every_pass.py).
     mux_every_pass: bool = False
+    # ── gradient-conditioned passes (arm `slot-mnext-gradpass`, 2026-09-10) ────────
+    #    Marino, Yue & Mandt 2018 "Iterative Amortized Inference" and Greff et al. 2019
+    #    "IODINE": an iterative inference network is handed, at every step, the GRADIENT of
+    #    its own objective with respect to the state it is refining, so the loop can learn
+    #    to be an optimiser instead of re-running one fixed update rule.
+    #
+    #    True computes, before each pass t of the slot loop, a LOCAL and CAUSAL target loss
+    #    on the current slot state — the slot's OWN span through the tied head,
+    #    `_tul_mux_loss(h_t, target="own")`, which reads only tokens the slot already sits
+    #    after — takes `g_t = dL_own/dh_t` with `torch.autograd.grad(create_graph=False)`,
+    #    normalises it per slot and adds `W_g(g_t)` to the state the core step receives.
+    #    The gradient is a FEATURE: it is DETACHED from the outer graph (IODINE's own
+    #    choice, their Eq. 8 / §3.1), so the token CE never differentiates through the
+    #    inner backward. `create_graph=True` (a second-order, learned-optimiser objective)
+    #    is the alternative and is NOT built here — it would retain one inner graph per
+    #    pass and put a Hessian-vector product in every training step.
+    #
+    #    `W_g` is ZERO-INITIALISED (`TULGradPass`), so pass 0 of step 0 is the ruler's
+    #    forward bit for bit and the feature only starts acting once the token CE has moved
+    #    W_g off zero. It draws no RNG at construction, so an arm with the knob on holds the
+    #    same weights as the ruler everywhere else.
+    #
+    #    The local target must DIFFER from the exit target (the toy study,
+    #    lab/toy_slot_loop/WRITEUP.md): the own span is reachable in about one pass, the
+    #    exit keeps the ordinary M-next forecast MUX, and that loss is UNCHANGED — this
+    #    knob adds an input, never a loss term.
+    #    False = off: nothing is built, no gradient is taken, the forward is the one from
+    #    before this existed (tests/test_tul_grad_pass.py).
+    grad_pass: bool = False
+    # Constant multiplier on the NORMALISED gradient before `W_g`. It sets the scale W_g
+    # sees, so it acts like a per-feature learning-rate on an otherwise scale-free input.
+    grad_pass_scale: float = 0.1
+    # "rms": divide each slot's gradient by its own RMS over the carrier channel, so the
+    # feature carries the gradient's DIRECTION and the loop cannot read the raw magnitude
+    # (which falls as training proceeds). "none": feed the raw gradient.
+    grad_pass_norm: str = "rms"
     # ── Think-once panel knobs (branch tul/think-once, arms R7/R8;
     #    .agents/notes/proposed/architecture/2026-09-03-tul-loop-contribution-drawing-board.md)
     # cond_layers: that many NON-SHARED MORPHBlocks run ONCE over the compact slot
@@ -599,6 +635,36 @@ class TULConfig:
                     "stack runs ONCE over the FINAL slot state, so the final term would be "
                     "read through it and every per-pass term would not — a silent mixture "
                     "of two readouts.")
+        if self.grad_pass_norm not in ("rms", "none"):
+            raise ValueError(
+                f"tul.grad_pass_norm must be 'rms' or 'none', got {self.grad_pass_norm!r}")
+        if self.grad_pass_scale < 0.0:
+            raise ValueError(
+                f"tul.grad_pass_scale must be >= 0, got {self.grad_pass_scale}")
+        if self.grad_pass:
+            if self.grad_pass_scale <= 0.0:
+                raise ValueError(
+                    "tul.grad_pass needs tul.grad_pass_scale > 0: at 0 the feature is "
+                    "identically zero and the arm is the ruler under another name.")
+            if self.mux_beta <= 0.0:
+                raise ValueError(
+                    "tul.grad_pass needs tul.mux_beta > 0: the own-span loss it "
+                    "differentiates is the MUX head's loss, and at beta 0 the head is "
+                    "never trained, so the gradient fed to the loop is the gradient of an "
+                    "objective nothing else optimises.")
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.grad_pass is a SLOT-LOOP lever (_tul_core): it takes the gradient "
+                    "of a SLOT's own-span loss with respect to that slot's state before "
+                    "each pass, and the paid loop (tokens_through_core) has no per-slot "
+                    "state to differentiate. Raises rather than silently running the token "
+                    "core with the knob ignored.")
+            if self.db_loop:
+                raise ValueError(
+                    "tul.grad_pass with tul.db_loop is not defined: db_loop detaches the "
+                    "carry, so 'the state the loop is refining' is a different object at "
+                    "every iteration and the feature would condition on a gradient of a "
+                    "trajectory that no longer exists.")
         if self.cond_layers < 0:
             raise ValueError(f"tul.cond_layers must be >= 0, got {self.cond_layers}")
         if self.detach_z and self.tokens_through_core:
@@ -1067,6 +1133,48 @@ class TULReread(nn.Module):
         o = o.transpose(1, 2).reshape(B, S, C)
         term = F.linear(o, self.W_o.to(o.dtype))
         return term * slot_valid.unsqueeze(-1).to(term.dtype)
+
+
+class TULGradPass(nn.Module):
+    """``W_g``: the normalised own-span gradient becomes an extra input to the next pass.
+
+    The caller (``MORPHTransformer._own_span_grad``) computes the raw ``[B, S, C]``
+    gradient ``dL_own/dz`` at the current slot state and hands it here DETACHED. This
+    module owns only the two decisions the knob names — how the gradient is normalised
+    (``tul.grad_pass_norm``) and at what scale ``W_g`` sees it (``tul.grad_pass_scale``) —
+    plus the map itself.
+
+    ``W_g`` is a plain ``nn.Parameter`` at ZERO, never ternarised (the ternary scope
+    quantises ``nn.Linear``; the TUL apparatus stays bf16 like ``W_prefix`` and
+    ``W_bcast``). Zero init means two things at once: the arm's step 0 is the ruler's
+    forward bit for bit, and building the module draws NO random numbers, so every other
+    weight of an arm with the knob on equals the ruler's at the same seed. ``W_g`` still
+    escapes zero on the first backward — ``dL/dW_g = (dL/dh_in) (x) g`` does not vanish at
+    ``W_g = 0``.
+    """
+
+    def __init__(self, d_model: int, scale: float, norm: str):
+        super().__init__()
+        if norm not in ("rms", "none"):
+            raise ValueError(f"tul.grad_pass_norm must be 'rms' or 'none', got {norm!r}")
+        self.W_g = nn.Parameter(torch.zeros(d_model, d_model))
+        self.scale = float(scale)
+        self.norm = str(norm)
+        self.eps = 1e-6
+
+    def forward(self, g: Tensor, slot_valid: Tensor) -> Tensor:
+        """``[B, S, C]`` term to add to the carrier, from the raw gradient ``g``.
+
+        ``slot_valid`` zeroes pad slots. Their gradient is already exactly zero (the own
+        target never supervises a pad), so this is a statement of the invariant at the
+        place it is relied on, not a correction.
+        """
+        if self.norm == "rms":
+            gf = g.float()
+            rms = gf.pow(2).mean(dim=-1, keepdim=True).sqrt()
+            g = (gf / (rms + self.eps)).to(g.dtype)
+        g = g * slot_valid.unsqueeze(-1).to(g.dtype)
+        return F.linear(self.scale * g, self.W_g.to(g.dtype))
 
 
 def gather_valid(x: Tensor, index: Tensor, valid: Tensor) -> Tensor:
