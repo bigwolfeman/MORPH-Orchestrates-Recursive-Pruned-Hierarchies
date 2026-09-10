@@ -33,6 +33,8 @@ def eval_ce(model, batches, force_depth: int = 0, z_override: str = "") -> dict[
     n_tok = n_val = 0
     mux_sum = 0.0
     correct = 0
+    per_pos = None
+    per_pos_acc = None
     for b in batches:
         out = model(b, force_depth=force_depth, z_override=z_override)
         per = model.token_ce(out["xh"], b["labels"], reduce=False)
@@ -44,7 +46,12 @@ def eval_ce(model, batches, force_depth: int = 0, z_override: str = "") -> dict[
         tot[1] += pv.sum().item()
         n_val += pv.numel()
         logits = model.head(out["xh"][:, model.tok_pos])[:, vp]
-        correct += (logits.argmax(-1) == b["labels"][:, vp]).sum().item()
+        hit = (logits.argmax(-1) == b["labels"][:, vp]).float()
+        correct += hit.sum().item()
+        cols = pv.sum(0).cpu()
+        acc_cols = hit.sum(0).cpu()
+        per_pos = cols if per_pos is None else per_pos + cols
+        per_pos_acc = acc_cols if per_pos_acc is None else per_pos_acc + acc_cols
         mux_sum += model.mux_ce(out["z"], b["mux_next"]).item() * b["tokens"].shape[0]
         n_rows = b["tokens"].shape[0]
     n_rows_tot = sum(b["tokens"].shape[0] for b in batches)
@@ -53,6 +60,8 @@ def eval_ce(model, batches, force_depth: int = 0, z_override: str = "") -> dict[
         "value_ce": tot[1].item() / n_val,
         "value_acc": correct / n_val,
         "mux_ce": mux_sum / n_rows_tot,
+        "value_ce_by_span": (per_pos / (n_val / per_pos.numel())).tolist(),
+        "value_acc_by_span": (per_pos_acc / (n_val / per_pos_acc.numel())).tolist(),
     }
 
 

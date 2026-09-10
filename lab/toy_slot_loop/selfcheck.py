@@ -56,13 +56,17 @@ def t_task():
     for r in range(64):
         acc = 0
         for i in range(6):
-            for j in range(3):
-                acc = int(MUL[acc, int(toks[r, i, j])])
+            acc = int(MUL[acc, int(toks[r, i, 0])])  # the operator is the span's FIRST symbol
             if int(b["mux_next"][r, i]) != VALUE_BASE + acc:
                 ok = False
             if i >= 1 and int(b["labels"][r, i * 3]) != VALUE_BASE + int(b["mux_next"][r, i - 1]) - VALUE_BASE:
                 ok = False
     check("compose: register and labels recomputed independently", ok)
+    # the distractor symbols must NOT change the answer
+    g2 = torch.Generator().manual_seed(0)
+    b2 = make_batch("compose", 64, 6, 3, generator=g2)
+    check("compose: only the first symbol of a span is the operator",
+          bool((b2["mux_next"] == b["mux_next"]).all()) and bool((b2["tokens"] == b["tokens"]).all()))
     check("answers never appear as INPUT tokens", bool((b["tokens"] < VALUE_BASE).all()))
     s = make_batch("summary", 32, 6, 3, generator=g)
     t2 = s["tokens"].view(32, 6, 3)
@@ -77,28 +81,76 @@ def t_task():
 
 def t_masks():
     lay = Layout(6, 3, 2)
-    m = build_masks(lay, coda_reads_z=True)
     kind = lay.cell_kind()
     span = lay.span_of_cell()
     n = lay.n_cells
-    bad = 0
-    for q in range(n):
-        if kind[q] != TOKEN:
-            continue
-        for k in range(n):
-            if m["coda"][q, k] and kind[k] == TOKEN and span[k] != span[q]:
-                bad += 1
-    check("coda: no token->token attention across spans", bad == 0, f"{bad} offenders")
-    off = m["coda"].clone()
-    off.fill_diagonal_(False)
-    check("coda: slot cells are never keys (off-diagonal)", bool(~off[:, kind == SLOT].any()))
-    check("coda: every query keeps at least one key", bool(m["coda"].sum(1).min() >= 1))
-    check("coda: prefix keys are causal only", bool((m["coda"] & ~torch.eye(n, dtype=torch.bool)).triu(1).sum() == 0))
-    mb = build_masks(lay, coda_reads_z=False)
+    for geom in ("permissive", "strict"):
+        m = build_masks(lay, coda_reads_z=True, geometry=geom)
+        bad = 0
+        for q in range(n):
+            if kind[q] != TOKEN:
+                continue
+            for k in range(n):
+                if m["coda"][q, k] and kind[k] == TOKEN and span[k] != span[q]:
+                    bad += 1
+        check(f"{geom} coda: no token->token attention across spans", bad == 0, f"{bad} offenders")
+        off = m["coda"].clone()
+        off.fill_diagonal_(False)
+        check(f"{geom} coda: slot cells are never keys (off-diagonal)", bool(~off[:, kind == SLOT].any()))
+        check(f"{geom} coda: every query keeps at least one key", bool(m["coda"].sum(1).min() >= 1))
+        check(f"{geom} coda: keys are causal only", bool((off).triu(1).sum() == 0))
+        pk = off & (kind == PREFIX)[None, :] & (kind == TOKEN)[:, None]
+        gaps = {int(span[q]) - int(span[k]) for q in range(n) for k in range(n) if pk[q, k]}
+        if geom == "strict":
+            check("strict coda: prefix keys come from the PREVIOUS span only", gaps == {1}, f"span gaps {sorted(gaps)}")
+            check("strict prelude: within-span only", bool(~(m["prelude"] & ~(span[:, None] == span[None, :])).any()))
+            offs = {i - j for i in range(6) for j in range(6) if m["core"][i, j]}
+            check("strict core: attends self and the previous slot only", offs == {0, 1}, f"slot offsets {sorted(offs)}")
+        else:
+            check("permissive coda: prefix keys come from every earlier span", max(gaps) > 1, f"span gaps {sorted(gaps)}")
+            check("permissive prelude: causal over all cells",
+                  bool((m["prelude"] == (torch.arange(n)[:, None] >= torch.arange(n)[None, :])).all()))
+            offs = {i - j for i in range(6) for j in range(6) if m["core"][i, j]}
+            check("permissive core: attends every earlier slot", max(offs) == 5, f"max slot offset {max(offs)}")
+    mb = build_masks(lay, coda_reads_z=False, geometry="strict")
     offb = mb["coda"].clone()
     offb.fill_diagonal_(False)
-    check("coda_blind: prefix keys removed", bool(~offb[:, kind == PREFIX].any()))
-    check("core: causal over slots", bool((m["core"].triu(1).sum() == 0) and m["core"].diagonal().all()))
+    tokq = offb & (kind == PREFIX)[None, :] & (kind == TOKEN)[:, None]
+    check("coda_blind: no token reads a prefix cell", bool(~tokq.any()))
+
+
+def t_depth_requirement():
+    """Under strict geometry, the answer at the head of span j+1 needs at least j passes.
+
+    Measured, not argued: differentiate the value logit w.r.t. the RAW cell embeddings and
+    look at the operator cell of span 0. It must be exactly zero below the required depth
+    and non-zero at or above it.
+    """
+    torch.manual_seed(0)
+    mo = ToySlotLoop(cfg(geometry="strict"))
+    g = torch.Generator().manual_seed(1)
+    b = make_batch("compose", 2, 6, 3, generator=g)
+    j = 4  # value_pos[4] is the head of span 5; its label is R_4, from slot 4: needs 4 passes
+    ok_below, ok_at = True, True
+    for T in (1, 2, 3, 4, 5):
+        base = mo._base(b["tokens"]).detach().requires_grad_(True)
+        x = base
+        for blk in mo.prelude:
+            x = blk(x, mo.mask_prelude)
+        e = x[:, mo.slot_pos]
+        z, h0, states, hp = mo.loop(e, torch.full((2, 6), T, dtype=torch.long))
+        xh = mo._write_and_coda(base, z)
+        pos = int(b["value_pos"][j])  # head of span j+1
+        logit = mo.head(xh[:, mo.tok_pos])[:, pos].sum()
+        gb = torch.autograd.grad(logit, base)[0]
+        reach = gb[:, int(mo.tok_pos[0])].norm().item()  # span 0's operator cell
+        if T < j and reach != 0.0:
+            ok_below = False
+        if T >= j and reach == 0.0:
+            ok_at = False
+        print(f"      T={T}: |d logit(span {j+1} head)/d span-0 operator| = {reach:.3e}")
+    check(f"strict: span 0 is UNREACHABLE below depth {j}", ok_below)
+    check(f"strict: span 0 IS reachable at depth {j} and above", ok_at)
 
 
 def t_coda_path():
@@ -142,7 +194,7 @@ def t_prelude_leak():
     """
     for mode in ("embed", "prelude"):
         torch.manual_seed(0)
-        c = cfg(coda_token_input=mode, coda_reads_z=False)
+        c = cfg(coda_token_input=mode, coda_reads_z=False, geometry="permissive")
         mo = ToySlotLoop(c)
         g = torch.Generator().manual_seed(1)
         b = make_batch("compose", 4, 6, 3, generator=g)
@@ -303,6 +355,7 @@ if __name__ == "__main__":
     t_group()
     t_task()
     t_masks()
+    t_depth_requirement()
     t_coda_path()
     t_prelude_leak()
     t_depth_freeze()

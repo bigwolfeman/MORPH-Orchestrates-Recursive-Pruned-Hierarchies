@@ -174,3 +174,50 @@ Bars are on `compose` unless stated. "Earns depth" means value-CE K1-K6 > 0.30 n
   (`pass_lora_rank`) or in cost per step (`deep_coda`). Only the K-curve, the write
   contribution and the gradient tables speak to depth.
 - Every table reports mean and min-max over the 3 seeds.
+
+---
+
+## Method amendments (2026-09-10, after the gate, before the grid)
+
+The predictions above are unchanged. The gate ran three times and forced three changes to
+the METHOD. Every number below comes from a run whose JSON is in
+`ignored/experiment-artifacts/2026-09-10-toy-slot-loop/`.
+
+**Amendment 1 — the span's operator is its FIRST symbol** (`ladder/`, 9 cells). With the
+span product defined over all 3 symbols, nothing learned the scan at any depth: value CE
+plateaued at 1.23-1.34 against a chance of 1.79 at fixed depth 1, 2 and 3, and the MUX CE
+plateaued at 1.31-1.40 with the training loss flat from step 1,500. Folding the within-span
+product into the prelude consumed the whole budget. The scan is the object of study, so the
+within-span work was removed: `P_i` is now the span's first symbol and the other two are
+distractors that keep the ordinary next-symbol loss non-trivial.
+
+**Amendment 2 — an explicit `geometry` switch, and the grid runs `strict`** (`ladder2/`,
+6 cells). With the operator fix and MORPH's own geometry, a model trained at fixed depth 1
+reached value CE 0.283 and accuracy 0.66, i.e. depth 1 nearly solved an 8-span scan. The
+reason is architectural, and it is the study's first result: under MORPH's geometry the
+prelude is causal over every cell, the core attends every earlier slot, and the coda reads
+every earlier prefix cell, so the prelude and the coda can compose across spans on their
+own and the loop is not the only cross-span path. `geometry: strict` closes all three
+routes (prelude within-span, core attends the previous slot and itself, a token reads only
+the previous span's prefix cells, and prefix cells do not chain to each other). Under
+`strict` the depth price is exact and PROVEN by measurement, not by argument:
+`selfcheck.py::t_depth_requirement` differentiates the value logit at the head of span 5
+with respect to span 0's operator cell and reads 0.000e+00 at depths 1, 2 and 3, and
+9.7e-03 at depth 4. Both geometries stay in the tree and the permissive one is reported.
+
+**Amendment 3 — 5 seeds and 4,000 steps, because the outcome is bimodal** (`ladder3/`,
+`diag/`). Under `strict`, `compose` has exactly two attractors. The one-pass shortcut sits
+at the depth-1 reachability ceiling: (7-2)/7 · ln 6 = 1.2798 nats, and the measured plateau
+is 1.281 on every stuck run. The full chain sits at 0.000 with accuracy 1.000. Trained at
+fixed depth 6 the escape happened on 1 of 3 seeds; at fixed depth 8 on 2 of 3. Stuck runs
+were flat for 2,000 steps, so this is a basin, not a budget. The primary metric is
+therefore the ESCAPE RATE over seeds, with the escape step from a 256-row probe run every
+250 steps, and the seed count goes from 3 to 5 and the budget from 3,000 to 4,000 steps.
+Grid B gains one cell, `fixed_depth 6`, because ragged per-slot depths break a chain that
+needs slot i-1 to have run at least as many passes as slot i.
+
+The reachability ceiling at forced depth d, strict geometry, 8 spans:
+
+| d | 1 | 2 | 3 | 6 | 8 |
+|---|---|---|---|---|---|
+| best possible value CE | 1.2798 | 1.0239 | 0.7679 | 0.0000 | 0.0000 |

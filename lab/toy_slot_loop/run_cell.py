@@ -57,6 +57,7 @@ def build_cfg(a) -> ToyConfig:
         pass_lora_rank=a.pass_lora_rank,
         coda_reads_z=not a.coda_blind,
         coda_token_input=a.coda_token_input,
+        geometry=a.geometry,
     )
 
 
@@ -97,6 +98,7 @@ def main():
     ap.add_argument("--pass_lora_rank", type=int, default=0)
     ap.add_argument("--coda_blind", action="store_true")
     ap.add_argument("--coda_token_input", default="embed", choices=["embed", "prelude"])
+    ap.add_argument("--geometry", default="strict", choices=["strict", "permissive"])
     ap.add_argument("--eval_rows", type=int, default=2048)
     ap.add_argument("--eval_batch", type=int, default=256)
     ap.add_argument("--probe_batches", type=int, default=4)
@@ -115,6 +117,10 @@ def main():
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, betas=(0.9, 0.95), weight_decay=0.01)
     gen = torch.Generator(device=dev).manual_seed(a.seed * 7919 + 13)
 
+    # a small fixed probe draw, used to time the escape from the one-pass solution
+    probe_g = torch.Generator(device=dev).manual_seed(EVAL_SEED + 2)
+    probe = [make_batch(a.task, 256, cfg.layout.n_spans, cfg.layout.span_len, generator=probe_g, device=dev)]
+
     t0 = time.time()
     hist = []
     model.train()
@@ -128,6 +134,8 @@ def main():
         gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
         if step % 250 == 0 or step == a.steps - 1:
+            ev6 = eval_ce(model, probe, force_depth=6)
+            model.train()
             hist.append(
                 {
                     "step": step,
@@ -135,6 +143,8 @@ def main():
                     "token_ce": out["token_ce"].item(),
                     "mux": out["mux"].item(),
                     "grad_norm": float(gn),
+                    "probe_value_acc": ev6["value_acc"],
+                    "probe_value_ce": ev6["value_ce"],
                 }
             )
     train_s = time.time() - t0
@@ -149,8 +159,11 @@ def main():
     pr = participation_rank(model, ev, depth=6)
     probes = {s: gradient_probe(model, probe_ev, depth=6, source=s) for s in ("total", "token_ce", "mux")}
 
+    esc = [h["step"] for h in hist if h["probe_value_acc"] > 0.9]
     res = {
         "label": a.label,
+        "escaped": bool(esc),
+        "escape_step": esc[0] if esc else None,
         "task": a.task,
         "seed": a.seed,
         "n_params": n_params,
@@ -176,6 +189,7 @@ def main():
         f"[{a.label}] task={a.task} seed={a.seed} "
         f"value_ce@6={res['final']['value_ce']:.4f} acc={res['final']['value_acc']:.3f} "
         f"K1-K6={res['k1_k6_value']:+.4f} cancel={probes['total']['cancellation']:.3f} "
+        f"esc={res['escape_step']} "
         f"selfcheck={probes['total']['selfcheck_max_rel_err']:.2e} {train_s:.0f}s"
     )
 

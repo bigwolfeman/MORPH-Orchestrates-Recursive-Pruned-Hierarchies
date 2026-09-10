@@ -10,12 +10,20 @@ Vocabulary (12 ids):
   6..11  value symbols -- output only, the answer alphabet
 
 Task "compose" (iterative state tracking).
-  Each span is span_len group elements. The span product P_i is their ordered product in
-  S_3. The register is R_i = R_{i-1} . P_i with R_{-1} = e. The label at the first token
-  of span i+1 is VALUE(R_i). Composition in S_3 is not commutative, so no single
-  bag/average step computes R_i from the raw symbols: slot i must combine its own span's
-  product with the running register carried by earlier slots, and one round of slot->slot
+  A span's OPERATOR is its FIRST symbol; the other span_len-1 symbols are distractors that
+  keep the ordinary next-symbol loss non-trivial and keep both tasks on one layout. The
+  register is R_i = R_{i-1} . P_i with P_i the span's operator and R_{-1} = e. The label at
+  the first token of span i+1 is VALUE(R_i). Composition in S_3 is not commutative, so no
+  single bag/average step computes R_i from the raw symbols: slot i must combine its own
+  operator with the running register carried by earlier slots, and one round of slot->slot
   attention advances that carry by a bounded number of spans.
+
+  An earlier version made P_i the ordered product of ALL span_len symbols. The capacity
+  ladder (2026-09-10, `ignored/.../ladder/`) showed nothing learned the scan at any depth:
+  value CE plateaued at 1.23-1.34 against a chance of 1.79 at every fixed depth from 1 to
+  3, i.e. about two of the seven answers. Folding the within-span product into the prelude
+  was consuming the whole budget. The scan is the object of study, so the within-span work
+  was removed and the ladder re-run.
 
 Task "summary" (one-pass control).
   The label at the first token of span i+1 is VALUE(mode of span i's symbols), ties to the
@@ -71,9 +79,7 @@ def make_batch(
     toks = torch.randint(0, N_GROUP, (B, n_spans, span_len), generator=generator, device=device)
 
     if task == "compose":
-        span_prod = toks[:, :, 0].clone()
-        for j in range(1, span_len):
-            span_prod = mul[span_prod, toks[:, :, j]]
+        span_prod = toks[:, :, 0].clone()  # the span's operator is its FIRST symbol
         reg = torch.empty_like(span_prod)
         acc = torch.zeros(B, dtype=torch.long, device=device)  # identity
         for i in range(n_spans):

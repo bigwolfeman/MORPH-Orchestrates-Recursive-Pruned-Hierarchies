@@ -75,30 +75,62 @@ class Layout:
         return p.view(self.n_spans, self.prefix_k)
 
 
-def build_masks(layout: Layout, coda_reads_z: bool = True) -> dict[str, torch.Tensor]:
-    """Boolean attention masks, True = the query may attend to the key."""
+def build_masks(
+    layout: Layout, coda_reads_z: bool = True, geometry: str = "strict"
+) -> dict[str, torch.Tensor]:
+    """Boolean attention masks, True = the query may attend to the key.
+
+    geometry="permissive" is MORPH's own slot-loop geometry: the prelude is causal over
+    every cell, the core is causal over every earlier slot, and the coda reads every
+    earlier prefix cell. Under it the prelude and the coda can compose across spans on
+    their own, and the loop is not the only cross-span path.
+
+    geometry="strict" makes the loop the ONLY cross-span mechanism:
+      - the prelude attends within a span only, so a slot's entry state summarises its own
+        span and nothing else;
+      - the core attends to the previous slot and itself only, so one pass advances the
+        reachable window by exactly one span;
+      - a token reads the prefix cells of the SPAN BEFORE IT only, so the coda cannot
+        compose across spans either.
+    Depth then has an exact price: the answer at the head of span j+1 needs j passes.
+    """
+    assert geometry in {"strict", "permissive"}
     n = layout.n_cells
     kind = layout.cell_kind()
     span = layout.span_of_cell()
     idx = torch.arange(n)
     causal = idx[:, None] >= idx[None, :]
-
-    prelude = causal.clone()
-
     same_span = span[:, None] == span[None, :]
+    eye = torch.eye(n, dtype=torch.bool)
+
+    prelude = causal.clone() if geometry == "permissive" else (causal & same_span)
+
     is_tok_k = (kind == TOKEN)[None, :].expand(n, n)
     is_pre_k = (kind == PREFIX)[None, :].expand(n, n)
     is_slot_k = (kind == SLOT)[None, :].expand(n, n)
+    prev_span = (span[:, None] - span[None, :]) == 1
+    is_pre_q = (kind == PREFIX)[:, None].expand(n, n)
+    if geometry == "permissive":
+        pre_ok = is_pre_k
+    else:
+        # a token reads the previous span's prefix cells; a prefix cell reads only its own
+        # span's, so the coda cannot chain z across spans through the prefix cells either
+        pre_ok = torch.where(is_pre_q, is_pre_k & same_span, is_pre_k & prev_span)
+    if not coda_reads_z:
+        pre_ok = is_pre_k & same_span & is_pre_q
 
-    # tokens see their own span's earlier tokens, plus every earlier prefix cell.
-    coda = causal & ((is_tok_k & same_span) | (is_pre_k if coda_reads_z else torch.zeros_like(causal)))
+    # tokens see their own span's earlier tokens, plus the prefix cells the geometry allows
+    coda = causal & ((is_tok_k & same_span) | pre_ok)
     coda = coda & ~is_slot_k
-    coda = coda | torch.eye(n, dtype=torch.bool)  # every query keeps itself: no empty row
+    coda = coda | eye  # every query keeps itself: no empty row
 
     s = layout.n_spans
     si = torch.arange(s)
     core = si[:, None] >= si[None, :]
+    if geometry == "strict":
+        core = core & ((si[:, None] - si[None, :]) <= 1)
     return {"prelude": prelude, "coda": coda, "core": core}
+
 
 
 # --------------------------------------------------------------------------------------
@@ -221,6 +253,7 @@ class ToyConfig:
     # reader
     coda_reads_z: bool = True
     coda_token_input: str = "embed"  # "embed" | "prelude"
+    geometry: str = "strict"  # "strict" | "permissive" -- see build_masks
 
     def __post_init__(self):
         assert self.attach in {
@@ -233,6 +266,7 @@ class ToyConfig:
         }
         assert self.entry in {"prelude", "noise"}
         assert self.coda_token_input in {"embed", "prelude"}
+        assert self.geometry in {"strict", "permissive"}
 
 
 # --------------------------------------------------------------------------------------
@@ -261,7 +295,7 @@ class ToySlotLoop(nn.Module):
         self.norm_out = RMSNorm(d)
         self.norm_mux = RMSNorm(d)
 
-        masks = build_masks(lay, cfg.coda_reads_z)
+        masks = build_masks(lay, cfg.coda_reads_z, cfg.geometry)
         for k, v in masks.items():
             self.register_buffer(f"mask_{k}", v, persistent=False)
         self.register_buffer("cell_kind", lay.cell_kind(), persistent=False)
