@@ -1,6 +1,6 @@
 # Planned: the reread — the looping slot re-reads its span each pass
 
-Status: planned
+Status: failure
 Date: 2026-09-10 (frozen before launch, 02:00; the structural arm named in
 `2026-09-10-arc-slot-map-levers.md`, given its own file so its predictions are written
 before it runs). Arc: `2026-09-04-loop-contribution-arc.md`.
@@ -69,3 +69,26 @@ small; the rate rule guards), the hinge's reading with the read inside the map.
   not rescued by what it sees, and the arc goes back to the map (the plain ruler's
   anatomy against the slot anatomy).
 - NO run beyond 5,000 steps from this experiment.
+
+## Results
+
+Filed 2026-09-10 06:10. `slot-unpack-reread`: HEALTHY, 13,136 tok/s at step 200, peak
+12.96 GB (smoke), val 4.5707 at 5,000. Tokens K1−K6 +0.0003 [+0.0001, +0.0006], K3−K6
+−0.0000; forecast K1−K6 +0.0039 [+0.0030, +0.0050], K3−K6 +0.0001; CE@6 4.4955 (unpack
+4.4971); worth zero 0.817, shuffle 1.577. The read is trained: W_o's norm 0 → 5.2 at 2,500
+→ 9.3 at 5,000, and it adds a constant 5.0 % of the state on every pass (anatomy spy:
+0.056, 0.048, 0.050, … 0.050); the core blocks stay at 1.4–5.5 % MLP out/in. Full-carrier
+movement 13 % then 5.5/2.7/1.7/1.3/1.2/1.1/1.1 % per pass (unpack: 8.7 % then 3.8/2.2/…).
+
+## Verdict
+
+P-rr-a TRUE (healthy, rate above the bar, peak under 16 GB). P-rr-b FALSE (movement under
+5 % from pass 3). P-rr-c FALSE on every clause. P-rr-d TRUE (within 0.05, better by
+0.008). P-rr-e FALSE (0.817 vs 0.811, within noise). H-rr-0: the read is used and changes
+nothing the coda reads across depths.
+
+## Updated hypothesis
+
+The read gives every pass the same 5 % term because the query, the slot state, barely
+changes between passes; the read cannot start an iteration that the blocks do not
+continue. What the loop sees is not the block. See the levers panel's updated hypothesis.

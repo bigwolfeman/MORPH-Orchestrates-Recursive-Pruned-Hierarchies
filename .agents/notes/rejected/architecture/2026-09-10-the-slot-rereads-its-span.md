@@ -1,6 +1,6 @@
 # Agent Note: the slot re-reads its span each pass
 
-Status: proposed
+Status: rejected — the arm read flat: the read is used (5 % of the state every pass) and the depth curve is the unpack arm's
 
 ## Problem
 
@@ -58,3 +58,12 @@ zero the forward is the no-reread forward bit for bit. Cost: S×L attention per 
 - The hinge now measures a map that includes the read; its typical-gain reading may
   shift and the constraint may bind where it did not.
 - The read is eager attention under the mask (no kernel); the rate rule guards.
+
+## Rejection (2026-09-10)
+
+The arm `slot-unpack-reread` ran (`lab/experiments/failures/2026-09-10-arc-slot-reread.md`):
+healthy, the read trained (W_o norm 9.3 at 5,000) and adds a constant 5 % of the state on
+every pass, and the depth curve is the unpack arm's (tokens K1−K6 +0.0003, K3−K6 0). The
+read cannot start an iteration that the core blocks do not continue; the blocks output
+1.4–5.5 % on slot states with or without it. Kept as a knob (`tul.reread`, default off,
+bit-identical) until the TUL finalize, when it goes out with the other dead arms.

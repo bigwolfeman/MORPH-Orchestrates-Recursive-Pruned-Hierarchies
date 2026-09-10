@@ -1,6 +1,6 @@
 # Planned: the slot-map levers — why the slot loop does not move its state
 
-Status: planned
+Status: failure
 Date: 2026-09-10 (frozen before launch; Wolfe, 01:10, going to bed: "What arms should we
 add on for the next 8 or so hours to finally solve this?"). Arc:
 `2026-09-04-loop-contribution-arc.md`. Follows `2026-09-09-arc-coda-reads-the-thought.md`
@@ -126,3 +126,58 @@ Whether `core_state_init noise` reaches `_tul_core` the way it reaches `_core_re
 hinge (E13 measured the scale mode on the M-next arm, not on the unpack arm). The
 slot-state probe on an all-dim carry (it spies `prefix_project`, which is after the loop,
 so it should not care). The runner's file-driven queue is new tonight.
+
+## Results
+
+Filed 2026-09-10 06:10. All arms 5,000 steps, seq 1024, norm_match, scored by
+`results/2026-09-10-slot-map-levers/score_levers.py` against the unpack arm
+(`slot-unpack-norm-match`: tokens K1−K6 +0.0006 [+0.0004, +0.0008], K3−K6 +0.0000, CE@6
+4.4971, worth zero 0.811). The plain ruler `plain-panel-norm-match` (prelude entry): tokens
+K1−K6 0.018 at 2,500 and 0.033 [K3−K6 0.0055] at 5,000; entered from ZERO the same
+checkpoint earns 0.47 from depth 1 to 6 and ends 0.2 worse (init probe).
+
+| arm | survival | tok/s | val@5k | tok K1−K6 | tok K3−K6 | fc K1−K6 | CE@6 − ref | worth zero |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| free (terms off) | AMBIGUOUS (one 1,070 at step 245, ramp) | 13,811 | 4.6057 | +0.0030 [+0.0025, +0.0035] | +0.0001 | +0.0044 | +0.030 | 0.864 |
+| noise entry (free base) | HEALTHY | 13,986 | 4.5676 | +0.0019 [+0.0016, +0.0022] | +0.0001 | +0.0079 | −0.007 | 0.788 |
+| fixed depth 6 | AMBIGUOUS (one 2,380 at step 245, ramp) | 15,306 | 4.6222 | +0.1168 [+0.1138, +0.1198] | +0.0067 [+0.0062, +0.0071] | +0.0779 | +0.052 | 0.947 |
+
+Slot anatomy (`slot_anatomy.py`, 12 rows, 635 slots, forced depth 8, full-carrier movement
+per pass and the core blocks' MLP out/in at the last pass): unpack 8.7 % then 3.8/2.2/1.6/
+1.4/1.2/1.1/1.1 %, MLP 1.4–2.4 %; free 294 % then 46/25/18/14/12/10/9 % (the carrier grows
+67 → 577), MLP 3–10 %; noise entry 108× then 22/8/4/2/1/0.7/0.4 % (the injection's
+geometric series, ratio 0.45), MLP 5–21 %; fixed depth 9.2× then 30/12/9/4/1.5/1.5/1.8 %,
+MLP 2–11 %. The plain ruler's token states under the same prelude entry: movement 9.3/
+4.3/2.7/2.0/1.7/1.6/1.6 %, MLP 3–19 % at the last pass (the noise-entry plain arm of the
+strength panel: 86–110 %). The noise-entry arm's first draw on the unpack base read a
+6,000-nat hinge penalty at step 0 (Method amendment 03:15); the fixed-depth arm's
+slot-state probe reads 0 movement at every forced depth because `slot_depth_fixed`
+overrides the probe's forcing (the anatomy sets the fixed knob and is the valid reading).
+
+## Verdict
+
+- P-lev-a: free and fixed-depth AMBIGUOUS on one ramp reading each, no spike train;
+  noise-entry HEALTHY. No detonation.
+- P-lev-b FALSE: the terms are not the pin. Without them the map is expansive (the carrier
+  grows 8.6× over 8 passes) and the tokens still read the same z at every depth.
+- P-lev-c FALSE: the entry is not the pin. The state is built in one pass by the injection
+  and converges as a geometric series; the blocks stay under 21 %.
+- P-lev-d SPLIT: K1−K6 above 0.020 TRUE (0.117) and K3−K6 above 0.002 TRUE (0.0067), CE@6
+  within 0.03 FALSE (+0.052). The draw makes z depth-SPECIFIC (a bowl with its minimum at
+  the trained depth) and no better: depth dependence without depth value (the E6 pattern).
+- P-lev-e: TRUE on the letter through the fixed-depth arm, whose curve reads
+  off-distribution sensitivity (stated in Method). On the reading that matters, no arm
+  earns depth. H-lev-0 holds: none of the three levers makes the slot loop earn.
+- P-lev-f TRUE: every arm within 1.15× the unpack arm's wall clock.
+
+## Updated hypothesis
+
+The slot loop's map under every entry is the injection's linear pull on the ctx channel
+(converged by pass 3) plus core blocks that output 2–20 % on slot states, against 86–110 %
+on token states under the same rule and noise entry. The coda reads z (0.8 nats) and is
+insensitive to its refinement; a fixed depth makes the refinement depth-specific at a
+CE price. The structural arm (the reread, `2026-09-10-arc-slot-reread.md`) also read
+flat: giving the pass something to read does not make the blocks compute. What is left is
+not a knob on this forward: the per-pass computation on a slots-only sequence has no
+gradient reason to exist while the first pass already gives the coda everything it can
+use. The paid loop remains the one forward on this tree whose loop earns depth.

@@ -118,6 +118,19 @@ def main() -> None:
                   blk.mlp.register_forward_hook(branch_hook("mlp")),
                   blk.register_forward_hook(block_hook(i))]
     per_batch: list[list[torch.Tensor]] = []
+    # tul.reread: the read term's norm relative to the state it is added to, per pass
+    read_ratio: dict[int, list[float]] = {}
+    rr = getattr(model, "tul_reread", None)
+    if rr is not None:
+        _real_read = rr.read
+
+        def _spy_read(h, k, v, allow, slot_valid):
+            term = _real_read(h, k, v, allow, slot_valid)
+            t = len(states)
+            z = (h.mean(dim=2) if h.dim() == 4 else h).float()[cur["valid"]]
+            read_ratio.setdefault(t, []).append(float(term.float()[cur["valid"]].norm() / (z.norm() + 1e-6)))
+            return term
+        rr.read = _spy_read
     per_batch_full: list[list[torch.Tensor]] = []
     try:
         for inp, labels, layout, _ in batches:
@@ -133,6 +146,8 @@ def main() -> None:
     finally:
         for h in hooks:
             h.remove()
+        if rr is not None:
+            rr.read = _real_read
         tc.slot_mean_depth, tc.slot_max_depth, tc.slot_depth_fixed = orig
     h0 = torch.cat(h0s)                                            # [N, C]
     traj = [torch.cat([pb[t] for pb in per_batch]) for t in range(a.depth)]
@@ -160,6 +175,7 @@ def main() -> None:
         "branch_out_in_full": {k: {str(t): [sum(v) / len(v) for v in per_block]
                                    for t, per_block in d.items()} for k, d in branch_full.items()},
         "full_carrier_norm_per_slot": {k: sum(v) / len(v) for k, v in full_norms.items()},
+        "reread_term_over_state": {str(t + 1): sum(v) / len(v) for t, v in read_ratio.items()},
         "ctx_channel_norm_share": {k: sum(v) / len(v) for k, v in ctx_shares.items()},
     }
     inj = model.injection
@@ -184,6 +200,8 @@ def main() -> None:
               [round(x, 3) for x in rec["branch_out_in_full"][kind][str(last)]])
     print(f"{label} full-carrier |h| per slot:", {k: round(v, 2) for k, v in rec["full_carrier_norm_per_slot"].items()})
     print(f"{label} ctx-channel norm share:", {k: round(v, 3) for k, v in rec["ctx_channel_norm_share"].items()})
+    if rec["reread_term_over_state"]:
+        print(f"{label} reread term / state per pass:", {k: round(v, 3) for k, v in rec["reread_term_over_state"].items()})
     print(f"{label} injection", rec["injection"])
     print("wrote", a.out)
 
