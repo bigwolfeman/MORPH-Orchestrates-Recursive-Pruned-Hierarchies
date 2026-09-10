@@ -36,7 +36,7 @@ from .recur_gate import RecurrenceGate
 from .mhc import ChannelInject, MORPHBlock, DEFAULT_CHANNEL_DIMS
 from .sigreg import sigreg_epps_pulley
 from .sparsity import MortarLinear
-from .tul import (TULConfig, TULGate, TULGateConfig, TULSlots, boundary_token_index,
+from .tul import (TULConfig, TULGate, TULGateConfig, TULReread, TULSlots, boundary_token_index,
                   compact_index,
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
                   scatter_positions,
@@ -1169,6 +1169,15 @@ class MORPHTransformer(nn.Module):
         # byte-identical to arm A1's (docs/tul-gate-spec.md §9 invariant 1).
         _gc = cfg.tul.gate if cfg.tul is not None else None
         self.tul_gate: TULGate | None = TULGate(d, _gc) if _gc is not None else None
+        # The reread (TULConfig.reread): the looping slot cross-attends the frozen prelude
+        # token states each pass. Private-generator init, W_o zero: the model's RNG stream
+        # and every other weight are untouched, and step 0 is the no-reread forward.
+        self.tul_reread: TULReread | None = None
+        if cfg.tul is not None and cfg.tul.reread:
+            if cfg.n_core == 0:
+                raise ValueError("tul.reread=true needs a core loop (n_core > 0): there is "
+                                 "no pass in which to re-read.")
+            self.tul_reread = TULReread(d, cfg.tul.reread_heads)
 
         # ── Core-stage conditioning (faithful DiffusionBlocks, morph/model/iter_cond.py)
         # Built AFTER TULSlots/tul_gate for the same RNG-neutrality reason: "none" (the
@@ -2723,7 +2732,23 @@ class MORPHTransformer(nn.Module):
         else:
             ret_state = None
 
+        # The reread (tul.reread): K/V from the frozen prelude token states, built ONCE;
+        # every pass starts by adding the slot's read of them to its state. Inside
+        # `_core_step` on purpose: the hinge's gain probe and the checkpointed step both
+        # see the map WITH the read.
+        _rr = self.tul_reread
+        if _rr is not None:
+            if _scse is not None or _db:
+                raise NotImplementedError(
+                    "tul.reread under SCSE / tul.db_loop is not defined (the loop state "
+                    "there is a deviation, not the slot state the read would query).")
+            _rr_k, _rr_v, _rr_allow = _rr.prepare(
+                xn.mean(dim=2) if self._is_hc else xn, layout, self.cfg.tul.reread_scope)
+
         def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0, stage_cond=None):
+            if _rr is not None:
+                h_in = self._apply_injection(
+                    h_in, _rr.read(h_in, _rr_k, _rr_v, _rr_allow, layout.slot_valid))
             if _scse is None:
                 return self._apply_core_step(h_in, e_in, None, None, None,
                                              ret_state=ret_state, iter_idx=iter_idx,

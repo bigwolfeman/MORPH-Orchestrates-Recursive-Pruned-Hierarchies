@@ -1,0 +1,19 @@
+# Slot-map levers panel, the structural arm "slot-unpack-reread": the unpack arm with
+# tul.reread — the looping slot cross-attends the FROZEN prelude token states (its own span
+# and every earlier one) at the start of every pass. Inside `_tul_core` the compact
+# sequence holds only slot cells, so without this a pass has nothing new to read; the paid
+# loop, the one arm that earns depth, re-reads every token state every pass. W_o is
+# zero-init: step 0 is the unpack forward bit for bit (tests/test_tul_reread.py).
+# Runs only if the three knob arms read flat (the prereg's binding).
+# Record: lab/experiments/planned/2026-09-10-arc-slot-map-levers.md
+defaults:
+  - tul_slot_unpack_norm_match
+  - _self_
+
+tul:
+  reread: true
+  reread_heads: 8
+  reread_scope: causal
+
+wandb:
+  name: slot-unpack-reread

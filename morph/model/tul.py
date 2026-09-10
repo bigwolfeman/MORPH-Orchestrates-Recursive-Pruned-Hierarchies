@@ -150,6 +150,17 @@ class TULConfig:
     #    ADDED to the coda input of every token of span i+1, offset = the token's index
     #    inside its span. The "unpack" of Thought Unpack Loop. `TULSlots.W_bcast`.
     bcast: bool = False
+    # reread (2026-09-10, the slot-map levers panel's structural arm): inside `_tul_core`
+    #    the compact sequence holds only slot cells, so a pass has nothing new to read —
+    #    the paid loop, the one arm that earns depth, re-reads every token state every
+    #    pass. With `reread` the looping slot cross-attends the FROZEN prelude token
+    #    states (K/V built once before the loop) at the start of every pass; the read is
+    #    part of the map the hinge measures. `reread_scope`: "span" = its own span's
+    #    tokens, "causal" = its own span and every earlier one. `TULReread`, W_o zero-init
+    #    so step 0 is the no-reread forward bit for bit.
+    reread: bool = False
+    reread_heads: int = 8
+    reread_scope: str = "causal"
     # coda_token_input: what the coda's carrier holds at TOKEN positions.
     #    "prelude" — input_norm(prelude output), the shipped §3.4 path (global context
     #                inside every token state; z redundant).
@@ -485,6 +496,15 @@ class TULConfig:
             raise ValueError(
                 "tul.tg_restrict_scope='coda' requires tul.tg_restrict=true (there is no "
                 "restriction to scope).")
+        if self.reread_scope not in ("span", "causal"):
+            raise ValueError(
+                f"tul.reread_scope must be 'span' or 'causal', got {self.reread_scope!r}")
+        if self.reread and self.tokens_through_core:
+            raise NotImplementedError(
+                "tul.reread=true has no defined meaning under the paid loop "
+                "(tokens_through_core): every token already re-reads every token each pass.")
+        if self.reread and self.reread_heads < 1:
+            raise ValueError("tul.reread_heads must be >= 1")
         if self.tokens_through_core and (self.bcast or self.coda_token_input != "prelude"):
             raise NotImplementedError(
                 "tul.bcast / tul.coda_token_input='embed' have no defined interaction with "
@@ -783,6 +803,81 @@ def unpack_index(layout: "SlotLayout") -> tuple[Tensor, Tensor, Tensor]:
     off = (pos - start).clamp(min=0)
     z = torch.zeros_like(k)
     return (torch.where(valid, prev, z), torch.where(valid, off, z), valid)
+
+
+def reread_allow(layout: "SlotLayout", scope: str) -> Tensor:
+    """``[B, S, L]`` bool: the TOKEN positions slot ``s`` may read each pass (``tul.reread``).
+
+    ``"span"``: the tokens of its own span (``bag_id == s``); ``"causal"``: its own span and
+    every earlier one (``bag_id <= s``). Slot cells (prefix and pad positions) are never
+    read. A row with nothing to read (an invalid slot) allows position 0 alone so the
+    softmax has a key; ``TULReread.read`` masks that row's output off.
+    """
+    B, L = layout.bag_id.shape
+    S = layout.slot_index.shape[1]
+    s_idx = torch.arange(S, device=layout.bag_id.device).view(1, S, 1)
+    bag = layout.bag_id.unsqueeze(1)                                   # [B, 1, L]
+    tok = (~layout.slot_mask).unsqueeze(1)                             # [B, 1, L]
+    if scope == "span":
+        allow = (bag == s_idx) & tok
+    elif scope == "causal":
+        allow = (bag <= s_idx) & tok
+    else:
+        raise ValueError(f"reread scope must be 'span' or 'causal', got {scope!r}")
+    allow = allow & layout.slot_valid.unsqueeze(-1)
+    empty = ~allow.any(dim=-1, keepdim=True)                           # [B, S, 1]
+    first = torch.zeros(1, 1, L, dtype=torch.bool, device=allow.device)
+    first[..., 0] = True
+    return allow | (empty & first)
+
+
+class TULReread(nn.Module):
+    """The looping slot re-reads the frozen prelude token states each pass (``tul.reread``).
+
+    ``prepare`` builds K/V ONCE per forward from ``input_norm(prelude)`` at every position
+    (the loop's own ``xn``, stream-meaned); ``read`` turns the current slot state into a
+    query, attends under ``reread_allow`` and returns a ``[B, S, C]`` term the caller adds
+    to the carrier before the core blocks run. Plain ``nn.Parameter`` weights, never
+    ternarised (the ternary scope quantises ``nn.Linear``; the TUL apparatus stays bf16
+    like ``W_prefix`` and ``W_bcast``). Init from a private generator, so building the
+    module leaves the model's RNG stream and every other weight byte-identical.
+    """
+
+    def __init__(self, d_model: int, n_heads: int):
+        super().__init__()
+        if d_model % n_heads:
+            raise ValueError(f"tul.reread_heads={n_heads} must divide d_model={d_model}")
+        self.n_heads, self.d_head = n_heads, d_model // n_heads
+        g = torch.Generator(device="cpu").manual_seed(0x5EED)
+
+        def _w() -> nn.Parameter:
+            return nn.Parameter(torch.empty(d_model, d_model).normal_(0.0, 0.02, generator=g))
+
+        self.W_q, self.W_k, self.W_v = _w(), _w(), _w()
+        self.W_o = nn.Parameter(torch.zeros(d_model, d_model))       # zero: step 0 is a no-op
+        self.q_scale = nn.Parameter(torch.ones(d_model))
+        self.eps = 1e-6
+
+    def prepare(self, xn_tokens: Tensor, layout: "SlotLayout", scope: str
+                ) -> tuple[Tensor, Tensor, Tensor]:
+        """K/V ``[B, H, L, D]`` from the frozen prelude states and the allow mask ``[B, 1, S, L]``."""
+        B, L, C = xn_tokens.shape
+        H, D = self.n_heads, self.d_head
+        k = F.linear(xn_tokens, self.W_k.to(xn_tokens.dtype)).view(B, L, H, D).transpose(1, 2)
+        v = F.linear(xn_tokens, self.W_v.to(xn_tokens.dtype)).view(B, L, H, D).transpose(1, 2)
+        return k, v, reread_allow(layout, scope).unsqueeze(1)
+
+    def read(self, h: Tensor, k: Tensor, v: Tensor, allow: Tensor, slot_valid: Tensor) -> Tensor:
+        """The ``[B, S, C]`` read term for the current slot state ``h`` (``[B, S, n, C]`` or ``[B, S, C]``)."""
+        z = h.mean(dim=2) if h.dim() == 4 else h
+        z = F.rms_norm(z.float(), (z.shape[-1],), self.q_scale.float(), self.eps).to(k.dtype)
+        B, S, C = z.shape
+        H, D = self.n_heads, self.d_head
+        q = F.linear(z, self.W_q.to(z.dtype)).view(B, S, H, D).transpose(1, 2)
+        o = F.scaled_dot_product_attention(q, k, v, attn_mask=allow)            # [B, H, S, D]
+        o = o.transpose(1, 2).reshape(B, S, C)
+        term = F.linear(o, self.W_o.to(o.dtype))
+        return term * slot_valid.unsqueeze(-1).to(term.dtype)
 
 
 def gather_valid(x: Tensor, index: Tensor, valid: Tensor) -> Tensor:

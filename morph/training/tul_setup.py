@@ -46,7 +46,7 @@ KNOWN_TUL_KEYS = frozenset({
     "per_slot_embed_std", "plast_weight", "prefix_k", "recur_gate", "recur_gate_bias",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
-    "span_cap", "stp_lambda", "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
+    "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda", "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
     "tg_span_gate", "token_state_dropout", "tokens_through_core", "xattn",
 })
 
@@ -212,6 +212,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         carry=bool(tc.get("carry", False)),
         xattn=bool(tc.get("xattn", False)),
         bcast=bool(tc.get("bcast", False)),
+        reread=bool(tc.get("reread", False)),
+        reread_heads=int(tc.get("reread_heads", 8)),
+        reread_scope=str(tc.get("reread_scope", "causal")),
         coda_token_cut=int(tc.get("coda_token_cut", 0)),
         emit_weight=float(tc.get("emit_weight", 0.5)),
         plast_weight=float(tc.get("plast_weight", 0.5)),
@@ -302,6 +305,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "tg_restrict_scope": model_cfg.tg_restrict_scope,
         "coda_token_input": model_cfg.coda_token_input,
         "bcast": model_cfg.bcast,
+        "reread": model_cfg.reread,
+        "reread_heads": model_cfg.reread_heads,
+        "reread_scope": model_cfg.reread_scope,
         "tg_span_comp": model_cfg.tg_span_comp,
         "tg_span_gate": model_cfg.tg_span_gate,
         "tg_soft_prev_span": model_cfg.tg_soft_prev_span,
