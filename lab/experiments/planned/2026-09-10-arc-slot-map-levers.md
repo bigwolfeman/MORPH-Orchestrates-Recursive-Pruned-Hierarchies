@@ -76,6 +76,18 @@ deferred controls, with its own frozen predictions in `2026-09-10-arc-slot-rerea
 "Not run tonight" above no longer holds; the Binding here still decides what FOLLOWS the
 panel. Predictions untouched.
 
+**Amendment 2026-09-10 03:15 (the hinge is undefined under the noise entry).** The
+noise-entry arm's first draw, on the unpack base with the hinge on, read `loss/gain_est`
+8.63 at step 0 (target 0.9) and a hinge penalty of 6,000 nats: the typical gain of one pass
+is not a defined quantity for an entry whose first pass grows the state from 0.02-std
+noise to the injected e by construction (the hinge was measured on the prelude entry only,
+E14). The draw was stopped at step ~200 and the arm re-runs on the FREE base (hinge 0,
+fixed point 0; `tul_slot_unpack_noise_entry` now composes `tul_slot_unpack_free`), so it is
+one factor, the entry, against the free arm, which had just read the terms as not the pin
+(tokens K1−K6 0.003, K3−K6 0.0001 at 5,000). P-lev-c's comparisons stay as written
+against the unpack arm; the free arm's numbers are the nearer control. Predictions
+untouched.
+
 ## Predictions (frozen)
 
 - **P-lev-a (survival).** HEALTHY to 5,000: free **60 %** (the spike train the terms were
