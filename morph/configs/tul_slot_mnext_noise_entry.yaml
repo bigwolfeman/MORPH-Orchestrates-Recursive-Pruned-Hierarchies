@@ -1,0 +1,36 @@
+# Slot-map levers panel, arm "slot-mnext-noise-entry": the M-next slot loop
+# (tul_slot_mux_norm_match: the think-once Y2 arm, MUX loss, under the shipped ternary
+# rule norm_match) with Parcae's loop entry (notul_parcae_entry's model block) and BOTH
+# stability terms OFF. The overnight levers panel ran this same entry on the UNPACK coda
+# only (`slot-unpack-noise-entry`, on `tul_slot_unpack_free`: K1-K6 0.002, forecast 0.008,
+# val 4.5676) and found the entry does not move the map (blocks read 0.4-22 % on slot
+# states, the injection converges as a geometric series by pass 3). This arm asks the
+# same question on the MUX coda, whose reader (the tied head, forecast target) is
+# different from the unpack coda's z-read.
+# tul_slot_mux_norm_match does NOT zero core_fixed_point_lambda anywhere in its defaults
+# chain (it composes tul_to_mnext_y2 -> tul_to_mnext_ctt -> ..., none of which touch the
+# term, so it inherits base.yaml's shipped 1.0); the explicit zero below is the one change,
+# kept anyway per the record here.
+# The gain hinge (slot_gain_lambda) MUST be off: under a noise entry the typical-gain
+# estimate is undefined by construction (the first pass grows the state from 0.02-std
+# noise to the injected e). The first attempt at this — noise entry on the unpack base
+# WITH the hinge on — read loss/gain_est 8.63 at step 0 (target 0.9) and a 6,000-nat
+# penalty; the draw was killed at ~step 200 and re-based on the free arm. slot_cot_clip
+# 4.0 (the backward clip on the cotangent, not the map) stays as shipped.
+# Record: lab/experiments/planned/2026-09-10-arc-slot-mnext-noise-entry.md
+defaults:
+  - tul_slot_mux_norm_match
+  - _self_
+
+model:
+  injection_channels: all
+  injection_all_decay: 0.447
+  injection_all_dt: 0.8
+  injection_B: true
+  core_state_init: noise
+  core_state_init_std: 0.02
+  slot_gain_lambda: 0.0
+  core_fixed_point_lambda: 0.0
+
+wandb:
+  name: slot-mnext-noise-entry
