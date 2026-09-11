@@ -48,12 +48,17 @@ from tul_samples import load_ckpt  # noqa: E402
 
 MUX_KEYS = ("mux_local", "mux_n_supervised", "mux_rel", "mux_kl",
             "mux_local_own_final", "mux_n_supervised_own",
-            "mux_local_next_final", "mux_n_supervised_next")
+            "mux_local_next_final", "mux_n_supervised_next",
+            # the span decoder's own per-token CE (tul.spandec): the local readout a
+            # spandec arm has INSTEAD of mux_local, so its loop contribution is measurable
+            # on the slot's own job the way every MUX arm's is.
+            "spandec_ce", "spandec_n_tokens")
 # metric name -> (value key, count key) for the batch-weighted means and their CIs.
 # The last two exist only on a staged-target arm (tul.mux_stage_own_iters > 0).
 MUX_METRICS = {"mux_local": ("mux_local", "mux_n_supervised"),
                "mux_local_own": ("mux_local_own_final", "mux_n_supervised_own"),
-               "mux_local_next": ("mux_local_next_final", "mux_n_supervised_next")}
+               "mux_local_next": ("mux_local_next_final", "mux_n_supervised_next"),
+               "spandec_ce": ("spandec_ce", "spandec_n_tokens")}
 
 
 @torch.no_grad()
@@ -173,12 +178,18 @@ def main() -> None:
         # k-fixed arms (tul.slot_depth_fixed > 0, the 2026-09-07 k=12 panel) ignore the mean
         # at eval, so the forced depth must go through the fixed knob as well.
         orig_fixed = 0 if plain else int(getattr(tc, "slot_depth_fixed", 0))
-        has_mux = (not plain) and float(tc.mux_beta) > 0.0
+        # The second (labelled) forward per batch exists to read the slot's OWN local loss
+        # at the forced depth. A span-decoder arm has one even at mux_beta 0, so it must
+        # not be skipped there: `spandec_ce` is that arm's `mux_local`.
+        has_mux = (not plain) and (float(tc.mux_beta) > 0.0
+                                   or bool(getattr(tc, "spandec", False)))
         arm = {"step": step, "rows": rows_done, "batch": a.batch, "eval_mode": a.eval_mode,
                "plain": plain, "paid_loop": paid,
                "train_eval_depth":
                orig_fixed or orig_mean or int(cfg.model.mean_depth), "depths": {},
-               "mux_target": str(tc.mux_target) if has_mux else None,
+               "mux_target": (str(tc.mux_target)
+                              if (not plain) and float(tc.mux_beta) > 0.0 else None),
+               "spandec": (not plain) and bool(getattr(tc, "spandec", False)),
                "cond_layers": 0 if plain else int(tc.cond_layers),
                "detach_z": False if plain else bool(tc.detach_z)}
         _sigma = ((not plain) and getattr(tc, "core_stage_cond", "none") == "sigma"

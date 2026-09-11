@@ -1,0 +1,26 @@
+# Slot-loop panel, arm "slot-mask-mux-quarter": `slot-mux-mask-norm-match` with the M-next
+# MUX at a QUARTER of the ruler's weight (0.25 against 1.0). ONE factor against the mask
+# ruler, and no new code.
+#
+# WHY. The gradient probe measured the MUX paying for the loop 7.3x over the token CE
+# (3.5e-3 against 4.8e-4 into the loop state), and its no-MUX twin
+# `slot-loop-mask-norm-match` STARVED: the shared core received 0.5 % of the prelude's
+# gradient norm, the state moved 0.05 of its norm through six passes and the exit equalled
+# the entry. Those two arms bracket the MUX's weight at 1.0 and 0.0 and nothing sits
+# between them, so "how much of the slot's behaviour is the MUX's weight" is unanswered.
+# A quarter is the midpoint on a log scale that still leaves the loop fed.
+#
+# Read beside the span-decoder arms: if a quarter-weight bag target behaves like the full
+# one, the target's SHAPE is what matters and the decoder arms carry the finding; if it
+# behaves like the no-MUX arm, the panel has been measuring a weight, not a job.
+#
+# Record: lab/experiments/planned/2026-09-11-arc-span-decoder.md
+defaults:
+  - tul_slot_mux_mask_norm_match
+  - _self_
+
+tul:
+  mux_beta: 0.25
+
+wandb:
+  name: slot-mask-mux-quarter

@@ -1,0 +1,24 @@
+# Slot-loop panel, arm "slot-mask-dropout-off": `slot-mux-mask-norm-match` with the coda's
+# token-state dropout OFF. ONE factor against the mask ruler, and no new code.
+#
+# WHY. `tul.token_state_dropout: 0.15` (Bowman word dropout, spec §3.4) replaces 15 % of
+# the coda's TOKEN states with E_mask and zeroes their per-layer injections, so a dropped
+# token must be decoded from the plan and its neighbours. Under `tg_restrict` those
+# neighbours are its own span only, which makes the tax strictly heavier than on an
+# unmasked arm — and the mask arm's known price is 0.1-0.2 nats of CE on every panel that
+# has run it. This arm prices the dropout's share of that gap.
+#
+# It is NOT a depth lever and must not be read as one: the prediction is a CE move with the
+# K-curve unchanged. If the K-curve moves, the dropout was shaping the loop's job and the
+# panel's readings need re-basing.
+#
+# Record: lab/experiments/planned/2026-09-11-arc-span-decoder.md
+defaults:
+  - tul_slot_mux_mask_norm_match
+  - _self_
+
+tul:
+  token_state_dropout: 0.0
+
+wandb:
+  name: slot-mask-dropout-off

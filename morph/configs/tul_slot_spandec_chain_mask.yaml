@@ -1,0 +1,37 @@
+# Slot-loop panel, arm "slot-spandec-chain-mask": `slot-spandec-mask` plus the SLOT CHAIN.
+# ONE factor against `slot-spandec-mask`.
+#
+# WHY. The budget's long-range component is FLAT: 0.315 nats at every offset eight or more
+# tokens into a span, at every distance measured. That is a running DOCUMENT state, not a
+# per-span summary, and nothing in the slot loop carries one: each slot is built from its
+# own span's bag-mean plus whatever its attention wins from earlier cells, and the core's
+# attention over the 64-cell sequence is content-addressed, softmax-normalised and spread
+# over up to 64 keys, so a running state has to win a competition at every pass.
+#
+# WHAT IS BUILT, and how it deviates from "slot k's seed gets slot k-1's exit state".
+# The literal form needs slot k-1's loop to FINISH before slot k's starts — 64 sequential
+# loops over the compact sequence instead of the one masked update the invariants require
+# (runtime-invariants §6b: the slots loop together because a frozen slot must keep serving
+# the same K/V). What is built is the WAVEFRONT form of the same recurrence: at every pass
+# t, slot k receives `W_chain(h_t[k-1])`, which IS the previous slot's EXIT state for every
+# neighbour whose realised depth is already spent, and its live state otherwise. Causal
+# (the shift only ever looks one slot back), zero-init (step 0 is the spandec arm's forward
+# bit for bit), recurrence depth bounded by the pass count rather than by the 64 slots —
+# which is why `slot_chain_detach` stays false: there is no deep-recurrence argument for
+# detaching, and detaching would make the chain a feature instead of a path an earlier
+# span's loss can shape.
+#
+# Cost: one [B, 64, 1024] x [1024, 1024] matmul per pass, ~2.4 GFLOP per row-batch against
+# the core's own ~100x that. Parameters: d^2 + d = 1,049,600.
+#
+# Record: lab/experiments/planned/2026-09-11-arc-span-decoder.md
+defaults:
+  - tul_slot_spandec_mask
+  - _self_
+
+tul:
+  slot_chain: true
+  slot_chain_detach: false
+
+wandb:
+  name: slot-spandec-chain-mask

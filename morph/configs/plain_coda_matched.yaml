@@ -1,0 +1,44 @@
+# Matched-COMPUTE plain control for the span-decoder arms, "plain-coda-matched": the panel
+# ruler `plain-panel-norm-match` run at core depth 1, so its per-token block count matches
+# what `slot-spandec-mask` actually pays.
+#
+# THE ARITHMETIC, measured from `MORPHTransformer._tul_layer_passes` on a real packed
+# batch (2 rows, 2084 token positions, 110 valid slots, mean depth 6), not asserted:
+#
+#   slot-mux-mask-norm-match (the ruler)      10.745 block-passes / token
+#   slot-spandec-mask                         14.676   (the decoder alone: 3.931)
+#   plain panel at mean_depth 6               44.000
+#   plain panel at mean_depth 1               14.000   <- THIS FILE
+#
+# So this control is 4.6 % UNDER the span-decoder arm's total cost and is the closest a
+# plain model can sit to it: the plain per-token count is `n_prelude + n_core*depth +
+# n_coda` = 8 + 6d, which takes the values 14, 20, 26 ... — there is no setting at 10.7 or
+# at 14.68, and changing n_prelude / n_coda to hit one would make a different model rather
+# than a control.
+#
+# WHAT THIS IS NOT. The brief asked for a plain model matched to "the span decoder's
+# forward cost" — 3.931 block-passes per token. That is NOT expressible: the cheapest plain
+# model on this recipe is 14.0, because a plain model must still run its prelude and coda
+# over every token. Written down rather than faked.
+#
+# HOW TO READ IT. `plain-depth1` (notul_depth1.yaml, E19) already measured that a
+# depth-1 plain model sits within 0.02 nats of the looped plain model at 5k, so this arm's
+# CE is expected to land near `plain-panel-norm-match`'s and its value is as a COST
+# anchor: it says what a plain model buys for the compute the span-decoder arm spends.
+# It is a different recipe lineage from `notul_depth1` (that one composes notul_e18); this
+# one composes the panel ruler the slot arms are read against, so the CE is directly
+# comparable with theirs.
+#
+# Record: lab/experiments/planned/2026-09-11-arc-span-decoder.md
+defaults:
+  - notul_panel_norm_match
+  - _self_
+
+model:
+  mean_depth: 1
+  max_depth: 1
+  bptt_depth: 1
+  core_fixed_point_lambda: 0.0   # a one-iteration loop has no terminal pair to compare
+
+wandb:
+  name: plain-coda-matched

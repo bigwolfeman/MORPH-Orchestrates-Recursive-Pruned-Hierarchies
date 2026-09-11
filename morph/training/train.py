@@ -130,6 +130,8 @@ def evaluate(
                 _l -= float(out["sigreg_weighted"])
             if out.get("gain_reg_weighted") is not None:
                 _l -= float(out["gain_reg_weighted"])
+            if out.get("spandec_weighted") is not None:
+                _l -= float(out["spandec_weighted"])
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
             # language model and not on an auxiliary (the spectral-penalty precedent).
             for _aux in ("fm_weighted", "fm_sigreg_weighted"):
@@ -147,7 +149,7 @@ def evaluate(
             if "sigreg" in out:
                 acc.setdefault("val/sigreg", []).append(float(out["sigreg"]))
             for _mk in ("mux_local", "mux_kl", "mux_entropy", "mux_null", "mux_rel",
-                        "mux_n_supervised"):
+                        "mux_n_supervised", "spandec", "spandec_ce", "spandec_n_tokens"):
                 if _mk in out:
                     acc.setdefault(f"val/{_mk}", []).append(float(out[_mk]))
             if "ce_tokens_no_slots" in out:
@@ -2941,7 +2943,7 @@ def main(cfg: DictConfig) -> None:
                 # whether the forward on that batch was itself abnormal (a forward
                 # explosion moves the loss; a backward-only blow-up does not).
                 _probe_log["loss/total"] = float(loss.detach())
-                for _lk in ("ce_main", "mux_local", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters", "mtp_weighted", "fixed_point", "fp_weighted", "core_gain_est", "core_gain_max", "core_gain_weighted"):
+                for _lk in ("ce_main", "mux_local", "spandec_ce", "spandec_weighted", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters", "mtp_weighted", "fixed_point", "fp_weighted", "core_gain_est", "core_gain_max", "core_gain_weighted"):
                     if _lk in out and out[_lk] is not None:
                         _probe_log[f"loss/{_lk}"] = float(out[_lk].detach())
                 wandb.log(_probe_log, step=step)
@@ -3059,6 +3061,8 @@ def main(cfg: DictConfig) -> None:
                 _lv = _lv - float(out["sigreg_weighted"])
             if isinstance(out, dict) and out.get("gain_reg_weighted") is not None:
                 _lv = _lv - float(out["gain_reg_weighted"])
+            if isinstance(out, dict) and out.get("spandec_weighted") is not None:
+                _lv = _lv - float(out["spandec_weighted"])
             if isinstance(out, dict) and out.get("mtp_weighted") is not None:
                 _lv = _lv - float(out["mtp_weighted"])   # arc E8: train/loss = next-token CE
             for _ak in ("fp_weighted", "core_gain_weighted"):        # arc E10 loop terms
@@ -3180,7 +3184,7 @@ def main(cfg: DictConfig) -> None:
                     log["tul/tokens_per_batch"] = _npos
                 for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual", "mux_local",
                            "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters",
-                           "sigreg"):
+                           "sigreg", "spandec_ce", "spandec_n_tokens", "spandec_weighted"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # docs/tul-gate-spec.md §10 — every step, because a gate that stops moving

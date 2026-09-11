@@ -36,12 +36,14 @@ from .recur_gate import RecurrenceGate
 from .mhc import ChannelInject, MORPHBlock, PassLoRA, DEFAULT_CHANNEL_DIMS
 from .sigreg import sigreg_epps_pulley
 from .sparsity import MortarLinear
-from .tul import (TULConfig, TULGate, TULGateConfig, TULGradPass, TULReread, TULSlots,
+from .tul import (TULConfig, TULGate, TULGateConfig, TULGradPass, TULReread, TULSlotChain,
+                  TULSlots,
                   boundary_token_index,
                   compact_index,
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
                   scatter_positions,
                   window_drop_mask)
+from .tul_spandec import SpanDecoder, next_span_slots
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
                          span_start_mask, tg_allow_mask, tg_reset_mask)
 
@@ -1363,6 +1365,38 @@ class MORPHTransformer(nn.Module):
                     "to condition on a gradient.")
             self.tul_grad_pass = TULGradPass(d, cfg.tul.grad_pass_scale,
                                              cfg.tul.grad_pass_norm)
+
+        # ── The span decoder (TULConfig.spandec; morph/model/tul_spandec.py) ──────
+        # Built here, beside the other slot-loop readers, and RNG-neutral: every real draw
+        # comes from a private generator, so this arm's base weights are byte-identical to
+        # its ruler's and the two differ by the mechanism alone.
+        self.tul_spandec: SpanDecoder | None = None
+        if cfg.tul is not None and cfg.tul.spandec:
+            if cfg.tul.gate is not None:
+                raise NotImplementedError(
+                    "tul.spandec with tul.gate is not defined: the gate conditions h_slots "
+                    "on a decoded budget AFTER the local losses are taken, so the decoder "
+                    "and the coda would read two different slot states. Pick one.")
+            self.tul_spandec = SpanDecoder(
+                d_model=d,
+                n_heads=int(cfg.tul.spandec_heads or cfg.n_heads),
+                d_ff=int(cfg.d_ff),
+                n_layers=int(cfg.tul.spandec_layers),
+                max_tokens=int(cfg.tul.spandec_max_tokens or cfg.tul.bound_span_cap),
+            )
+        # ── The slot chain (TULConfig.slot_chain) ─────────────────────────────────
+        # Zero-init, no RNG draw: step 0 is the ruler's forward bit for bit.
+        self.tul_chain: TULSlotChain | None = None
+        if cfg.tul is not None and cfg.tul.slot_chain:
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.slot_chain needs a core loop (model.n_core > 0): the chain runs "
+                    "once per pass, and there are no passes.")
+            if cfg.scse_enabled:
+                raise NotImplementedError(
+                    "tul.slot_chain under SCSE is not defined: the loop carrier is the "
+                    "DEVIATION, so the chain would forward a deviation, not a slot state.")
+            self.tul_chain = TULSlotChain(d, cfg.tul.slot_chain_detach)
 
         # Progressive loss (tul.progressive_p, Bansal et al. 2022). Builds NOTHING — it is
         # a per-slot detach pattern inside `_tul_core` — so the only construction-time work
@@ -3010,6 +3044,11 @@ class MORPHTransformer(nn.Module):
         # once: `None` — every other model — traces the graph from before this existed.
         # ON at eval too: the feature is part of the MAP, so a forced-depth sweep must see
         # the same function the trainer ran.
+        # The slot chain (tul.slot_chain): a Python-level constant read once — `None`,
+        # every other model, traces the graph from before this existed. ON at eval too: the
+        # chain is part of the MAP, so a forced-depth sweep must see the function the
+        # trainer ran (the `grad_pass` rule).
+        _chain = self.tul_chain
         _gp = self.tul_grad_pass
         if _gp is not None:
             if _scse is not None:
@@ -3300,6 +3339,16 @@ class MORPHTransformer(nn.Module):
             #  * at a no-grad iteration (`t < n_nograd`) the term is still built; the step
             #    that consumes it runs under `torch.no_grad()`, so no edge to `W_g`
             #    survives and the truncated-BPTT window is what it was.
+            # ── the slot chain (tul.slot_chain) ───────────────────────────────────
+            # Slot k takes W(z_{k-1}) off the CURRENT carry — the previous slot's exit
+            # state whenever that slot's depth is already spent, its live state otherwise.
+            # Causal by construction (the shift only ever looks one slot back, and the
+            # packer orders slots by row position), and the recurrence depth is the pass
+            # count, not the 64 slots: pass t's chain reads a state pass t-1 produced.
+            # Placed before the grad-pass feature so both compose, and INSIDE what the gain
+            # hinge probes — the chain is part of the map the constraint bounds.
+            if _chain is not None:
+                _h_in = self._apply_injection(_h_in, _chain(_h_in, layout.slot_valid))
             if _gp is not None:
                 _gpm = active & layout.slot_valid
                 _gp_g, _gp_l = self._own_span_grad(_h_in, input_ids, layout, _gpm)
@@ -3900,6 +3949,67 @@ class MORPHTransformer(nn.Module):
             stats["mux_n_supervised"] = float(n_sup)
         return loss
 
+    def _tul_spandec_loss(self, h_slots: Tensor, input_ids: Tensor,
+                          layout: SlotLayout, stats: dict | None = None) -> Tensor:
+        """Span-decoder local loss: decode the WHOLE next span from the slot's exit state.
+
+        The MUX head (:meth:`_tul_mux_loss`) scores ``z`` against an ORDER-FREE geometric
+        bag of the next span's tokens, so its optimum is that span's weighted unigram
+        marginal. This term instead runs a small causal decoder over
+        ``[z, t_0 .. t_{J-2}]`` and charges ``-log p(t_j | z, t_{<j})`` at every token of
+        the span, so the gradient reaches ``z`` from every token and ``z`` has to carry
+        what the span's CONTINUATION needs, not what its marginal needs. Design and
+        contracts: ``morph/model/tul_spandec.py``.
+
+        ``z`` is read BEFORE :meth:`TULSlots.prefix_project`, through the same
+        ``_readout`` stream mean the MUX head, ``slot_z_optimize.py`` and the gradient
+        probe read — so this term grades exactly the state every earlier instrument
+        measured, and ``worth_profile``'s prefix-write ablation stays the right companion
+        reading.
+
+        The tied head is read through ``tul.mux_detach_head`` (default true), for the
+        reason ``TULConfig.mux_detach_head`` records: ``embed.lm_weight()`` IS the input
+        embedding table, and arm v1a diverged at step 2800 with the detach off. The SAME
+        detached table supplies the decoder's input embeddings.
+
+        Cost, stated because it is not free. The readout is
+        ``[B, S, J, V]`` — 2.4 GB fp32 at B=6, S=64, J=32, V=49169 — so it goes through
+        :func:`fused_linear_cross_entropy`, which never materialises it. That kernel
+        always accumulates a ``[V, d]`` fp32 ``grad_w`` (201 MB at V=49169, d=1024) and
+        saves it for the backward, and with a DETACHED head that accumulator is computed
+        and thrown away. It is the price of having one chunked-CE implementation in the
+        tree rather than two.
+        """
+        tc = self.cfg.tul
+        dec = self.tul_spandec
+        assert dec is not None
+        z = self._readout(h_slots)                                    # [B, S, C]
+        w_tied = self.embed.lm_weight()                               # [V, C]
+        w_head = w_tied.detach() if tc.mux_detach_head else w_tied
+        ids, valid = next_span_slots(input_ids, layout, dec.max_tokens)
+        # THE ASYMMETRY, and it is deliberate. The OUTPUT head follows `mux_detach_head`,
+        # because that knob's whole subject is "may an auxiliary head train the tied
+        # table" and the answer must not depend on which auxiliary is asking. The INPUT
+        # embedding read is ALWAYS detached: the MUX has no input-side read, so there is no
+        # precedent to follow, and an undetached one would let the decoder reshape the
+        # table that the slot's own seed (`E_slot` + a bag-mean OF that table) is built
+        # from — the feedback loop `TULConfig.mux_detach_head` records. `SpanDecoder.tok_in`
+        # is the learnable map that lets the decoder adapt without writing into the table.
+        st = dec.decode(z, ids, valid, w_tied.detach())                # [B, S, J, C]
+        C = st.shape[-1]
+        lab = torch.where(valid, ids, torch.full_like(ids, -100))
+        loss = fused_linear_cross_entropy(
+            st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
+            chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id)
+        if stats is not None:
+            # THE DECODE-CHEAP READOUT. `spandec_ce` is a per-TOKEN conditional CE over the
+            # next span, so it is directly comparable with the model's own token CE — which
+            # is the whole point: it says how many nats of the span the thought alone (plus
+            # the span's own prefix) buys, at the decoder's cost rather than the coda's.
+            stats["spandec_ce"] = float(loss.detach())
+            stats["spandec_n_tokens"] = float(valid.sum())
+        return loss
+
     def _own_span_grad(self, h: Tensor, input_ids: Tensor, layout: SlotLayout,
                        mask: Tensor) -> tuple[Tensor, Tensor]:
         """``(dL_own/dz, L_own)`` at the CURRENT slot state, both DETACHED.
@@ -4176,6 +4286,7 @@ class MORPHTransformer(nn.Module):
             depths, g_traj, mux_loss, sigreg_loss, gain_reg = None, None, None, None, None
             fm_y = fm_geom = fm_ctx = None
             mux_stats = {}
+            spandec_loss, spandec_stats = None, {}
         elif self.fm_planner is not None:
             # FM1 (morph/model/tul_fm.py). The planner replaces the core loop; the plan
             # is DETACHED before it reaches W_prefix, so the coda's CE never touches the
@@ -4183,6 +4294,7 @@ class MORPHTransformer(nn.Module):
             xn, h_slots, fm_y, fm_geom, fm_ctx = self._tul_fm_core(x, layout)
             depths, g_traj, mux_loss, sigreg_loss, gain_reg = None, None, None, None, None
             mux_stats = {}
+            spandec_loss, spandec_stats = None, {}
             h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
             x_coda = scatter_positions(xn, pos, values)
@@ -4332,6 +4444,15 @@ class MORPHTransformer(nn.Module):
                                                     stats=st, slot_keep=keep))
                 mux_loss = torch.stack(terms).mean()
                 mux_stats["mux_db_n_iters"] = float(len(idxs))
+            # ── the span decoder (tul.spandec) ────────────────────────────────
+            # Read at the SAME seam as the MUX: the loop's exit state, before the gate's
+            # budget conditioning, before `detach_z` (refused with this knob) and before
+            # the eval-only plan ablation. So the state the decoder grades is the state
+            # the coda reads.
+            spandec_stats: dict = {}
+            spandec_loss = (self._tul_spandec_loss(h_slots, input_ids, layout,
+                                                   stats=spandec_stats)
+                            if self.tul_spandec is not None else None)
             sigreg_loss = (self._tul_sigreg_loss(h_slots, layout)
                            if tc.sigreg_lambda > 0.0 else None)
             if self.tul_gate is not None:
@@ -4372,10 +4493,18 @@ class MORPHTransformer(nn.Module):
             # loses itself, not the thought it is decoding.
             x_coda = self._apply_injection(x_coda, self.tul.unpack(h_slots, layout))
 
+        # `all_slots` (the route split of the 2026-09-11 budget result): the prefix write is
+        # already zeroed in `_tul_plan_ablate`; this cuts the cells' own injections and
+        # their read of their span, so the coda's slot cells carry nothing at all.
+        _coda_kw = tg_attn_kwargs
+        if plan_mode == "all_slots":
+            _coda_kw, keep = self._tul_all_slots_coda(x_coda, layout, tc, keep,
+                                                      tg_attn_kwargs)
+
         out: dict = {"logits": None}
         if tc.coda_sees_slots and tc.coda_token_cut == 0:
             xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
-                                   attn_kwargs=tg_attn_kwargs, ret_reset_mask=tg_reset)
+                                   attn_kwargs=_coda_kw, ret_reset_mask=tg_reset)
             groups = (self._tul_group_losses(xh, labels, layout, want_groups=not self.training)
                       if labels is not None else None)
             coda_positions = L
@@ -4514,6 +4643,20 @@ class MORPHTransformer(nn.Module):
             groups["mux_weighted"] = _mw.detach()
             groups["loss"] = groups["loss"] + _mw
 
+        if spandec_loss is not None and groups is not None:
+            # Same contract as `mux_weighted` and `sigreg_weighted`: the WEIGHTED term is
+            # exposed so train.py can subtract it and keep train/loss and the val loss on
+            # the MODEL's CE — an auxiliary inside the reported loss makes the arm
+            # incomparable to its control and fires the ppl divergence guard on the
+            # objective (the spectral-penalty precedent).
+            groups = dict(groups)
+            groups["spandec"] = spandec_loss.detach()
+            for _k, _v in spandec_stats.items():
+                groups[_k] = spandec_loss.new_tensor(_v)
+            _dw = tc.spandec_weight * spandec_loss
+            groups["spandec_weighted"] = _dw.detach()
+            groups["loss"] = groups["loss"] + _dw
+
         if groups is not None:
             out.update(groups)
             if self.mtp is not None:
@@ -4600,10 +4743,15 @@ class MORPHTransformer(nn.Module):
         """
         if mode == "normal":
             return h_slots
-        if mode == "zero":
+        if mode in ("zero", "all_slots"):
+            # `all_slots` zeroes the prefix write exactly as `zero` does; the REST of it —
+            # the coda's per-layer injections at the slot cells and the cells' own read of
+            # their span — is cut in `_forward_tul._tul_all_slots_coda`, because it lives
+            # in the coda call and not in the state this method holds.
             return torch.zeros_like(h_slots)
         if mode != "shuffle":
-            raise ValueError(f"plan_mode must be normal|zero|shuffle, got {mode!r}")
+            raise ValueError(
+                f"plan_mode must be normal|zero|shuffle|all_slots, got {mode!r}")
         B, S = layout.slot_valid.shape
         # Pads sort last (score 2.0 > any uniform draw), so real slots are permuted
         # among the real slot POSITIONS only — SlotLayout guarantees pads are last.
@@ -4612,6 +4760,74 @@ class MORPHTransformer(nn.Module):
         perm = r.argsort(dim=1)
         idx = perm.reshape(B, S, *([1] * (h_slots.dim() - 2))).expand_as(h_slots)
         return h_slots.gather(1, idx)
+
+    def _tul_all_slots_coda(self, x_coda: Tensor, layout: SlotLayout, tc: TULConfig,
+                            keep: Tensor | None, tg_attn_kwargs: dict | None
+                            ) -> tuple[dict, Tensor]:
+        """``plan_mode="all_slots"``: make the coda's slot cells carry NOTHING.
+
+        ``zero`` ablates ONE route — the prefix write. The cross-span budget
+        (``lab/experiments/failures/2026-09-11-arc-span-budget.md``) priced that route at
+        0.093 nats against a 0.399-nat budget and named the rest: under ``tg_restrict`` the
+        allow relation is "same span OR any slot position", so a slot CELL in the coda
+        re-summarises its own span from the coda's token states and every later token reads
+        that summary. Zeroing the write does not touch it.
+
+        Three tensors reach a slot cell in the coda, and this cuts all three:
+
+        1. the carrier value written by :meth:`TULSlots.prefix_project` — zeroed by
+           :meth:`_tul_plan_ablate` at ``all_slots``;
+        2. the per-layer additive injection at that position (``x0_injects`` carries the
+           slot's SEED, ``E_slot`` + the span bag-mean, and the bigram term carries the
+           span's bag-mean of bigram embeddings — both are added at EVERY coda layer) —
+           zeroed here through ``inject_keep``, the same lever the token-state dropout and
+           ``coda_token_input="embed"`` already use;
+        3. the cell's own attention over its span's token states — cut here by rebuilding
+           ``tg_allow`` with ``slot_queries_slots_only=True``, the relation
+           ``tul.tg_restrict_scope="coda"`` already builds: a slot cell's query may attend
+           slot cells only, and every slot cell now carries nothing.
+
+        NOT cut, so the reading is a LOWER bound on what the cells carry: the CCA causal
+        conv and its ``W_v_prev`` value shift still read the positions before a slot cell.
+        Cutting them needs a segment reset (``tg_seg``), and that reset also fires between
+        one span's tokens and the next span's, which would change the TOKEN positions'
+        conv and put an operator change inside a paired CE difference. Named rather than
+        silently included.
+
+        Eval-only, and refused wherever the three routes above are not the whole story.
+        """
+        if not self._tg_restrict:
+            raise NotImplementedError(
+                "plan_mode='all_slots' is defined only under tul.tg_restrict: without the "
+                "mask a coda slot cell attends EVERY earlier position, so 'the cell carries "
+                "nothing' would need an allow relation this model never trained with. Run "
+                "it on a mask arm (tul_slot_mux_mask_norm_match and its lineage).")
+        if tc.tg_restrict_scope != "all":
+            raise NotImplementedError(
+                f"plan_mode='all_slots' with tul.tg_restrict_scope={tc.tg_restrict_scope!r} "
+                "is not defined: at scope 'coda' the cell already attends slot cells only, "
+                "and the prelude is global, so the cell's content comes from a route this "
+                "ablation does not model.")
+        if tc.tokens_through_core:
+            raise NotImplementedError(
+                "plan_mode='all_slots' has no meaning on the paid loop: a slot IS a looped "
+                "position there and there is no separate write to ablate.")
+        if not (tc.coda_sees_slots and tc.coda_token_cut == 0):
+            raise NotImplementedError(
+                "plan_mode='all_slots' needs the FULL-L coda (coda_sees_slots=true, "
+                "coda_token_cut=0): on a gathered coda the allow relation is not re-derived "
+                "for the gathered index space.")
+        if tc.bcast:
+            raise NotImplementedError(
+                "plan_mode='all_slots' with tul.bcast is not defined: the unpack adds z to "
+                "the TOKEN inputs of the next span, a fourth route that is not a slot cell.")
+        allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span,
+                              slot_queries_slots_only=True)
+        kw = dict(tg_attn_kwargs or {})
+        kw["tg_allow"] = allow
+        kw["tg_slot_mask"] = layout.slot_mask
+        _sk = (~layout.slot_mask).unsqueeze(-1).to(x_coda.dtype)
+        return kw, (_sk if keep is None else keep * _sk)
 
     def tul_forward_ablated(self, input_ids: Tensor, labels: Tensor | None,
                             layout: SlotLayout, plan_mode: str = "normal",
@@ -4625,6 +4841,15 @@ class MORPHTransformer(nn.Module):
                      between a slot and its span, which is what makes it the
                      span-SPECIFICITY number. Report the shuffle COST, never a
                      specificity fraction (docs/tul-fm-probing.md §4 rule 1).
+        ``all_slots`` — THE ROUTE SPLIT (2026-09-11). ``zero`` plus the two routes it
+                     leaves open: the coda's per-layer injections at the slot cells and the
+                     cells' own attention over their span. Under ``tg_restrict`` this makes
+                     the slot channel carry nothing at all, so the paired cost is the WHOLE
+                     slot channel rather than the prefix write alone — the difference
+                     between the two is what the prelude carries through the cell without
+                     the loop. See :meth:`_tul_all_slots_coda`, including the one route it
+                     does NOT cut. Mask arms only; it raises elsewhere.
+
         ``wrong_seed`` — THE WRONG-PLAN PROBE. Swaps ``tul.slot_seed`` for a mode the arm
                      was NOT trained on, so the slot carries a valid-but-wrong value
                      instead of no value. This is the instrument that caught TG4b's
@@ -5015,6 +5240,16 @@ class MORPHTransformer(nn.Module):
             passes = passes + cfg.n_core * (depths * layout.slot_valid).sum()
         if self.tul_cond is not None:
             passes = passes + len(self.tul_cond) * layout.slot_valid.sum()
+        if self.tul_spandec is not None:
+            # The span decoder runs its blocks over EVERY slot cell of the fixed-shape
+            # [B, S, J] grid, pads included — a fixed shape is what keeps the compiler out
+            # of a data-dependent branch, and the cost is paid whether or not a cell is
+            # supervised. Counting the valid slots only would under-report the arm's real
+            # price by the pad fraction, which is exactly the number this metric exists to
+            # keep honest.
+            S = layout.slot_index.shape[1]
+            passes = passes + float(len(self.tul_spandec.blocks) * B * S
+                                    * self.tul_spandec.max_tokens)
         return passes
 
     # ── Forward ───────────────────────────────────────────────────────

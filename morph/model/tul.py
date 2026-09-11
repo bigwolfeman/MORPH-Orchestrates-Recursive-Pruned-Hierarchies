@@ -22,7 +22,7 @@ from torch import Tensor
 from .attention import RMSNorm
 from .tul_layout import SlotLayout
 
-__all__ = ["TULConfig", "TULGate", "TULGateConfig", "TULGradPass", "TULSlots", "bag_mean",
+__all__ = ["TULConfig", "TULGate", "TULGateConfig", "TULGradPass", "TULSlotChain", "TULSlots", "bag_mean",
            "bound_seed", "build_bound_rotations", "mux_span_targets",
            "compact_index", "cw2_retain_mask", "gather_positions", "scatter_positions",
            "window_drop_mask"]
@@ -324,6 +324,52 @@ class TULConfig:
     #    False = off: no trajectory is kept, no term is built, the forward is the one from
     #    before this existed (tests/test_tul_mux_every_pass.py).
     mux_every_pass: bool = False
+    # ── the SPAN DECODER target (arm `slot-spandec-mask`, 2026-09-11) ──────────────
+    #    The MUX head grades z against an ORDER-FREE bag: one softmax per slot against the
+    #    geometric superposition of the next span's tokens (`mux_span_targets`, rho 0.9).
+    #    The best z under that target is the span's weighted unigram marginal, which is why
+    #    Wolfe read the arm as "we are essentially getting like 2 tokens out of it"
+    #    (2026-09-11). The measured cross-span budget the slot has to carry is 0.40 nats,
+    #    0.31 of it FLAT at every offset eight or more tokens into the span
+    #    (`lab/experiments/failures/2026-09-11-arc-span-budget.md`); a marginal cannot carry
+    #    a flat long-range component.
+    #
+    #    `spandec: true` builds `morph/model/tul_spandec.py::SpanDecoder` and adds
+    #    `spandec_weight * mean_j CE(t_j | z, t_{<j})` over the NEXT span's tokens — a small
+    #    teacher-forced causal decoder over [z, the span's tokens so far], so the gradient
+    #    reaches z from EVERY token of the span instead of once per span. The token prefix
+    #    is the token path the spec demands (never decode a span from one vector plus an
+    #    offset). Output head = the tied LM head under `mux_detach_head`, exactly as the MUX
+    #    head reads it; the decoder's input embeddings come from the same detached table.
+    #    False = off: nothing is built, no RNG is drawn, the forward is the one from before
+    #    this existed (tests/test_tul_spandec.py).
+    spandec: bool = False
+    spandec_layers: int = 2              # decoder blocks; cost is linear in this
+    spandec_heads: int = 0               # 0 -> the model's n_heads
+    spandec_weight: float = 1.0          # weight of the term in the total loss
+    spandec_max_tokens: int = 0          # 0 -> bound_span_cap (= the data's span_cap)
+    # ── the slot chain (arm `slot-spandec-chain-mask`, 2026-09-11) ─────────────────
+    #    A DIRECT, learned path along the slot axis, on top of the core's own causal
+    #    attention over the compact slot sequence. At every pass `t` of the loop, slot `k`
+    #    receives `W_chain(h_t[k-1])` — the previous slot's state at that pass, which IS its
+    #    EXIT state for every neighbour whose realised depth is already spent (a frozen slot
+    #    carries its final state through the where-carry). Slot 0 receives one learned
+    #    vector; both `W_chain` and that vector are ZERO-init, so step 0 is the ruler's
+    #    forward bit for bit.
+    #
+    #    WHY NOT the literal "slot k's seed gets slot k-1's exit". That needs slot k-1's
+    #    loop to finish before slot k's starts, i.e. 64 sequential loops over the compact
+    #    sequence instead of one masked loop — the `runtime-invariants` §6b masked-update
+    #    contract exists precisely because the slots loop TOGETHER. The wavefront is the
+    #    causal, one-loop form of the same recurrence and its reach is T slots per row of
+    #    direct path (attention supplies the rest).
+    #
+    #    `slot_chain_detach` cuts the gradient on the chain input. Default FALSE: the
+    #    recurrence depth is bounded by the pass count (<= max_depth), not by the 64 slots,
+    #    so there is no deep-recurrence argument for detaching, and detaching would make the
+    #    chain a feature rather than a path an earlier span's loss can shape.
+    slot_chain: bool = False
+    slot_chain_detach: bool = False
     # ── gradient-conditioned passes (arm `slot-mnext-gradpass`, 2026-09-10) ────────
     #    Marino, Yue & Mandt 2018 "Iterative Amortized Inference" and Greff et al. 2019
     #    "IODINE": an iterative inference network is handed, at every step, the GRADIENT of
@@ -635,6 +681,50 @@ class TULConfig:
                     "stack runs ONCE over the FINAL slot state, so the final term would be "
                     "read through it and every per-pass term would not — a silent mixture "
                     "of two readouts.")
+        if self.spandec:
+            if self.spandec_layers < 1:
+                raise ValueError(
+                    f"tul.spandec_layers must be >= 1, got {self.spandec_layers}")
+            if self.spandec_weight <= 0.0:
+                raise ValueError(
+                    "tul.spandec needs tul.spandec_weight > 0: at 0 the decoder is built, "
+                    "trained by nothing and read by nothing, and the arm is its ruler under "
+                    f"another name (got {self.spandec_weight})")
+            if self.spandec_heads < 0:
+                raise ValueError(
+                    f"tul.spandec_heads must be >= 0 (0 = the model's), got "
+                    f"{self.spandec_heads}")
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.spandec is a SLOT-LOOP lever: it grades the per-slot exit state z "
+                    "by decoding the next span from it, and the paid loop "
+                    "(tokens_through_core) has no per-slot state. Raises rather than "
+                    "silently running the token core with the knob ignored.")
+            if self.detach_z:
+                raise ValueError(
+                    "tul.spandec with tul.detach_z is not defined: detach_z exists so the "
+                    "loop learns from the local loss ALONE, and the span decoder IS a local "
+                    "loss — the combination would say nothing about either.")
+        elif (self.spandec_layers != 2 or self.spandec_weight != 1.0
+                or self.spandec_heads != 0 or self.spandec_max_tokens != 0):
+            raise ValueError(
+                "tul.spandec_* set with tul.spandec=false: the decoder is not built, so the "
+                "knobs would be silently ignored. Set tul.spandec: true or drop them.")
+        if self.slot_chain:
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.slot_chain is a SLOT-LOOP lever (_tul_core): it carries the "
+                    "previous SLOT's looped state into the next one, and the paid loop has "
+                    "no compact slot sequence to chain along.")
+            if self.db_loop:
+                raise ValueError(
+                    "tul.slot_chain with tul.db_loop is not defined: db_loop detaches the "
+                    "carry, so the state the chain would forward is not part of any "
+                    "trajectory the loss can shape.")
+        elif self.slot_chain_detach:
+            raise ValueError(
+                "tul.slot_chain_detach set with tul.slot_chain=false: there is no chain to "
+                "detach.")
         if self.grad_pass_norm not in ("rms", "none"):
             raise ValueError(
                 f"tul.grad_pass_norm must be 'rms' or 'none', got {self.grad_pass_norm!r}")
@@ -1133,6 +1223,51 @@ class TULReread(nn.Module):
         o = o.transpose(1, 2).reshape(B, S, C)
         term = F.linear(o, self.W_o.to(o.dtype))
         return term * slot_valid.unsqueeze(-1).to(term.dtype)
+
+
+class TULSlotChain(nn.Module):
+    """The slot chain (``tul.slot_chain``): a direct learned path along the slot axis.
+
+    At every pass of :meth:`MORPHTransformer._tul_core`, slot ``k`` receives
+    ``W(z_{k-1})`` where ``z_{k-1}`` is the previous slot's CURRENT looped state (its exit
+    state whenever that slot's realised depth is already spent — a frozen slot carries its
+    final state through the where-carry). Slot 0 receives one learned vector.
+
+    Why a direct path when the core already attends the compact slot sequence causally:
+    attention is content-addressed, softmax-normalised and spread over up to 64 keys, so a
+    running document state has to win a competition to survive one pass and then win it
+    again at the next. A residual edge from the immediate predecessor does not. The
+    measured cross-span budget has a FLAT 0.31-nat component at every offset eight or more
+    tokens into a span (``lab/experiments/failures/2026-09-11-arc-span-budget.md``), which
+    is what a running state carries and a per-span summary does not.
+
+    ``W`` and the first-slot vector are ZERO-init, so the arm's step 0 is its ruler's
+    forward bit for bit and no RNG is drawn at construction.
+    """
+
+    def __init__(self, d_model: int, detach: bool):
+        super().__init__()
+        self.W = nn.Linear(d_model, d_model, bias=False)
+        with torch.no_grad():
+            self.W.weight.zero_()
+        self.first = nn.Parameter(torch.zeros(d_model))
+        self.detach = bool(detach)
+
+    def forward(self, h: Tensor, slot_valid: Tensor) -> Tensor:
+        """``h [B, S, (n,) C]`` -> the chain term ``[B, S, C]``, zero at invalid slots.
+
+        The Hyper-Connection streams are reduced by the same unweighted mean every other
+        single-stream read of this carrier takes (``_readout``, ``TULSlots.unpack``); the
+        caller broadcasts the result back over the streams through ``_apply_injection``.
+        """
+        z = h.mean(dim=2) if h.dim() == 4 else h                       # [B, S, C]
+        if self.detach:
+            z = z.detach()
+        B, S, C = z.shape
+        prev = torch.cat([self.first.to(z.dtype).view(1, 1, C).expand(B, 1, C),
+                          z[:, :-1]], dim=1)                           # [B, S, C]
+        term = self.W(prev)
+        return torch.where(slot_valid.unsqueeze(-1), term, torch.zeros_like(term))
 
 
 class TULGradPass(nn.Module):

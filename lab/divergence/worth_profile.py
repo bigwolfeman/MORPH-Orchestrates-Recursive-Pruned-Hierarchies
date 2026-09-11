@@ -40,8 +40,34 @@ sys.path.insert(0, f"{ROOT}/scripts")
 from tul_samples import load_ckpt  # noqa: E402  (handles the _orig_mod. compile prefix)
 
 from _earning import BINS, bin_of  # noqa: E402  (ONE home for the offset bins)
+from _rows import pack_rows, stream_from_loader  # noqa: E402  (the sweep's own packer)
 
 MODES = ("zero", "shuffle", "wrong_seed")
+# THE ROUTE SPLIT (2026-09-11). `zero` ablates ONE route — the prefix write — and the
+# cross-span budget priced that at 0.093 nats of a 0.399-nat budget. `all_slots` also
+# zeroes the coda's per-layer injections at the slot cells and cuts the cells' own
+# attention over their span, so the slot channel carries nothing at all
+# (`transformer._tul_all_slots_coda`). It is DEFINED only on a tg_restrict arm at scope
+# "all", so `--modes auto` adds it where it is legal and prints why it did not elsewhere.
+ALL_SLOTS = "all_slots"
+
+
+def _all_slots_supported(model) -> str | None:
+    """None if the arm supports ``all_slots``; otherwise the reason it does not."""
+    tc = getattr(model.cfg, "tul", None)
+    if tc is None:
+        return "no TUL config"
+    if not tc.tg_restrict:
+        return "tul.tg_restrict is false (a coda slot cell attends every earlier position)"
+    if tc.tg_restrict_scope != "all":
+        return f"tul.tg_restrict_scope={tc.tg_restrict_scope!r}, not 'all'"
+    if tc.tokens_through_core:
+        return "the paid loop has no separate slot write to ablate"
+    if not (tc.coda_sees_slots and tc.coda_token_cut == 0):
+        return "the coda runs on a gathered subset of positions"
+    if tc.bcast:
+        return "tul.bcast adds z to the next span's TOKEN inputs, a route this does not cut"
+    return None
 
 
 def token_strata(layout, labels_row, b: int, spec) -> list[tuple[int, int]]:
@@ -88,9 +114,23 @@ def main() -> None:
     ap.add_argument("--boot", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--modes", default="auto",
+                    help="comma-separated ablations, or 'auto' = zero,shuffle,wrong_seed "
+                         "plus all_slots wherever the arm supports it")
+    ap.add_argument("--paired-rows", action="store_true",
+                    help="pack the val rows with lab/divergence/_rows.py::pack_rows — the "
+                         "SAME packer and the same stream core_depth_sweep.py uses — and "
+                         "record the stream index of every scored token, so the worth "
+                         "profile and the depth sweep sit on the same tokens.")
+    ap.add_argument("--verify-tok-index", default=None,
+                    help="a core_depth_sweep .tokens.npz; assert this profile's tok_index "
+                         "is a PREFIX of the sweep's (it is shorter when --rows is). "
+                         "Implies --paired-rows.")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     device = a.device
+    if a.verify_tok_index:
+        a.paired_rows = True
 
     from morph.model.tul_layout import pack_tul_batch
     from morph.training.data import create_dataloader
@@ -112,39 +152,100 @@ def main() -> None:
         loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8,
                                    split="validation", skip_samples=0, bag_size=0, tul=None)
         torch.manual_seed(a.seed)
-        buf: list[int] = []
-        need = a.batch * (spec.l_total + 1)
+        # WHICH ablations. `auto` = today's three plus the route split where it is legal;
+        # an explicit list is taken as given and RAISES inside the forward if the arm does
+        # not support a mode, which is what a hand-run comparison wants.
+        if a.modes == "auto":
+            modes = list(MODES)
+            why = _all_slots_supported(model)
+            if why is None:
+                modes.append(ALL_SLOTS)
+                print(f"  {label}: all_slots ON (the route split)", flush=True)
+            else:
+                print(f"  {label}: all_slots SKIPPED — {why}", flush=True)
+        else:
+            modes = [m.strip() for m in a.modes.split(",") if m.strip()]
         # per ROW: sums[mode][bin], counts[bin]  (bootstrap unit = row)
-        row_sums = {m: [] for m in MODES}
+        row_sums = {m: [] for m in modes}
         row_counts = []
+        tok_index: list[np.ndarray] = []
         rows_done = 0
+        if a.paired_rows:
+            # THE SWEEP'S OWN ROWS. `pack_rows` packs the same stream with the same
+            # `pack_tul_batch`, checks that the packed token positions reproduce the
+            # stream in order, and carries the stream index of every token position — so
+            # the worth profile, the depth sweep and the budget profile can be read on the
+            # same tokens instead of on three row sets that merely look alike.
+            row_tokens = spec.l_total + 1
+            stream = stream_from_loader(loader, a.rows * row_tokens)
+            n_batches = -(-a.rows // a.batch)
+            batches = pack_rows(stream, tul_rt, cfg, a.batch, False)[:n_batches]
+        else:
+            batches = None
+            buf: list[int] = []
+            need = a.batch * (spec.l_total + 1)
+        bi_iter = 0
         while rows_done < a.rows:
-            while len(buf) < need:
-                ids = next(loader)[0]
-                buf.extend(ids.reshape(-1).tolist())
-            inp, labels, layout = pack_tul_batch(buf, rule, spec, a.batch)
+            if batches is not None:
+                if bi_iter >= len(batches):
+                    break
+                inp, labels, layout, idx = batches[bi_iter]
+                bi_iter += 1
+            else:
+                while len(buf) < need:
+                    ids = next(loader)[0]
+                    buf.extend(ids.reshape(-1).tolist())
+                inp, labels, layout = pack_tul_batch(buf, rule, spec, a.batch)
+                idx = None
             layout = layout.to(device)
             ce = {"normal": per_token_ce(model, inp, layout, labels, device, "normal")}
-            for m in MODES:
+            for m in modes:
                 ce[m] = per_token_ce(model, inp, layout, labels, device, m)
-            for b in range(a.batch):
+            for b in range(inp.shape[0]):
                 strata = token_strata(layout, labels[b], b, spec)
                 cnt = np.zeros(len(BINS))
-                sums = {m: np.zeros(len(BINS)) for m in MODES}
+                sums = {m: np.zeros(len(BINS)) for m in modes}
                 for p, bi in strata:
                     cnt[bi] += 1
-                    for m in MODES:
+                    for m in modes:
                         sums[m][bi] += float(ce[m][b, p] - ce["normal"][b, p])
                 row_counts.append(cnt)
-                for m in MODES:
+                for m in modes:
                     row_sums[m].append(sums[m])
-            rows_done += a.batch
+            if idx is not None:
+                # the SWEEP's scoreable set: every token position, in row order. Kept
+                # whole (not filtered to the strata) so it is the same array the sweep
+                # writes and the two can be compared element for element.
+                tokpos = (~layout.slot_mask).cpu()
+                tok_index.append(idx[tokpos].numpy().astype(np.int32))
+            rows_done += inp.shape[0]
             print(f"  {label}: {rows_done}/{a.rows} rows", flush=True)
         cnts = np.stack(row_counts)                      # [R, bins]
         rng = np.random.default_rng(a.seed)
         arm = {"step": step, "rows": rows_done, "bins": [list(x) for x in BINS],
-               "n_tokens_per_bin": cnts.sum(0).tolist(), "modes": {}}
-        for m in MODES:
+               "n_tokens_per_bin": cnts.sum(0).tolist(), "paired_rows": bool(a.paired_rows),
+               "modes": {}}
+        if tok_index:
+            ti = np.concatenate(tok_index)
+            arm["tok_index_n"] = int(ti.shape[0])
+            arm["tok_index_first"] = int(ti[0])
+            arm["tok_index_last"] = int(ti[-1])
+            npz = a.out.rsplit(".", 1)[0] + f".{label}.rows.npz"
+            np.savez_compressed(npz, tok_index=ti)
+            arm["tok_index_npz"] = npz
+            if a.verify_tok_index:
+                ref = np.load(a.verify_tok_index)["tok_index"]
+                n = int(ti.shape[0])
+                if n > ref.shape[0] or not np.array_equal(ref[:n], ti):
+                    raise SystemExit(
+                        f"tok_index MISMATCH against {a.verify_tok_index}: this profile "
+                        f"scored {n} token positions, the sweep {ref.shape[0]}; "
+                        f"first differing index "
+                        f"{int(np.argmax(ref[:n] != ti)) if n <= ref.shape[0] else 'n/a'}. "
+                        "The two readouts are NOT on the same rows.")
+                print(f"  {label}: tok_index verified against "
+                      f"{a.verify_tok_index} ({n} of {ref.shape[0]} positions)", flush=True)
+        for m in modes:
             sums = np.stack(row_sums[m])                 # [R, bins]
             mean = sums.sum(0) / np.maximum(cnts.sum(0), 1)
             idx = rng.integers(0, len(sums), size=(a.boot, len(sums)))
@@ -155,6 +256,10 @@ def main() -> None:
             cells = "  ".join(f"{mu:+.3f}[{l:+.3f},{h:+.3f}]"
                               for mu, l, h in zip(mean, lo, hi))
             print(f"{label:10s} {m:10s} {cells}", flush=True)
+            # the token-weighted total, the one number the budget profile is compared with
+            tot = float(sums.sum() / max(cnts.sum(), 1))
+            arm["modes"][m]["total"] = tot
+            print(f"{label:10s} {m:10s} TOTAL {tot:+.4f}", flush=True)
         results[label] = arm
         del model
         if device == "cuda":

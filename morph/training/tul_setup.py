@@ -50,7 +50,9 @@ KNOWN_TUL_KEYS = frozenset({
     "per_slot_embed_std", "pass_lora_rank", "pass_lora_targets",
     "plast_weight", "prefix_k", "progressive_p", "recur_gate", "recur_gate_bias",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
-    "sigreg_slices", "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
+    "sigreg_slices", "slot_chain", "slot_chain_detach",
+    "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
+    "spandec", "spandec_heads", "spandec_layers", "spandec_max_tokens", "spandec_weight",
     "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda", "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
     "tg_span_gate", "token_state_dropout", "tokens_through_core", "xattn",
 })
@@ -235,6 +237,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         mux_stage_own_iters=int(tc.get("mux_stage_own_iters", 0)),
         mux_stage_all=bool(tc.get("mux_stage_all", False)),
         mux_every_pass=bool(tc.get("mux_every_pass", False)),
+        spandec=bool(tc.get("spandec", False)),
+        spandec_layers=int(tc.get("spandec_layers", 2)),
+        spandec_heads=int(tc.get("spandec_heads", 0)),
+        spandec_weight=float(tc.get("spandec_weight", 1.0)),
+        spandec_max_tokens=int(tc.get("spandec_max_tokens", 0)),
+        slot_chain=bool(tc.get("slot_chain", False)),
+        slot_chain_detach=bool(tc.get("slot_chain_detach", False)),
         grad_pass=bool(tc.get("grad_pass", False)),
         grad_pass_scale=float(tc.get("grad_pass_scale", 0.1)),
         grad_pass_norm=str(tc.get("grad_pass_norm", "rms")),
@@ -313,6 +322,15 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "mux_stage_own_iters": model_cfg.mux_stage_own_iters,
         "mux_stage_all": model_cfg.mux_stage_all,
         "mux_every_pass": model_cfg.mux_every_pass,
+        "spandec": model_cfg.spandec,
+        "spandec_layers": model_cfg.spandec_layers,
+        "spandec_heads": model_cfg.spandec_heads,
+        "spandec_weight": model_cfg.spandec_weight,
+        # DERIVED, so the run is reproducible from its wandb config alone: 0 means "the
+        # data's span_cap", which is itself derived from the boundary rule.
+        "spandec_max_tokens": (model_cfg.spandec_max_tokens or model_cfg.bound_span_cap),
+        "slot_chain": model_cfg.slot_chain,
+        "slot_chain_detach": model_cfg.slot_chain_detach,
         "grad_pass": model_cfg.grad_pass,
         "grad_pass_scale": model_cfg.grad_pass_scale,
         "grad_pass_norm": model_cfg.grad_pass_norm,
@@ -379,6 +397,16 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         print(f"  TUL THINK-ONCE: cond_layers={model_cfg.cond_layers} "
               f"detach_z={model_cfg.detach_z} (arms R7/R8; the coda reads the "
               f"conditioning stack's output{', with stop-gradient' if model_cfg.detach_z else ''})",
+              flush=True)
+    if model_cfg.spandec:
+        print(f"  TUL SPAN DECODER ON: layers={model_cfg.spandec_layers} "
+              f"heads={model_cfg.spandec_heads or int(cfg.model.n_heads)} "
+              f"J={model_cfg.spandec_max_tokens or model_cfg.bound_span_cap} "
+              f"weight={model_cfg.spandec_weight} — the next span is decoded from z with a "
+              f"teacher-forced token path (morph/model/tul_spandec.py)", flush=True)
+    if model_cfg.slot_chain:
+        print(f"  TUL SLOT CHAIN ON: detach={model_cfg.slot_chain_detach} — slot k takes "
+              f"W(z_k-1) at every pass (zero-init; the wavefront form of the chain)",
               flush=True)
     if model_cfg.recur_gate != "none":
         print(f"  TUL RECUR GATE ON: {model_cfg.recur_gate} "
