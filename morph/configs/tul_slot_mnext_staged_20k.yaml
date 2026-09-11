@@ -1,0 +1,52 @@
+# Slot-loop panel, arm "slot-mnext-staged-20k": the STAGED arm at the 20,000-step horizon.
+# `tul_slot_mnext_staged.yaml` (the ruler plus `tul.mux_stage_own_iters: 3`) with two
+# changes and only two: `training.steps` 5000 -> 20000 and `training.ckpt_every` 2500 ->
+# 5000, so the run writes step_5000 / step_10000 / step_15000 / step_20000.
+#
+# Why. `slot-mnext-staged` (filed lab/experiments/successes/2026-09-10-arc-slot-mnext-staged.md)
+# is the first slot-loop arm on which passes 4-6 measurably do a job: forecast K1-K6 +0.067,
+# own-span CE 3.357 at pass 3 converted to next-span 6.770 by pass 6, pass 3 taking 49 % of
+# the shared core gradient, pass 6 at cosine -0.22 to the total, cancellation 0.442 against
+# the ruler's 0.520. It also read 480-row CE 4.2483 against the ruler's 4.3290 at 5,000
+# steps: 0.081 nats ahead, one seed. Its own filing names that number as the open one --
+# "the one number here that would change the campaign if it held at 20k; it is unread past
+# 5k" -- and Wolfe's standing rule (2026-09-09) is that a 5,000-step CE cannot rank a looped
+# model against anything. The matched-compute control already exists: `norm-match-20k`
+# (`notul_norm_match_20k.yaml`, the PLAIN Parcae-entry model under the same ternary rule,
+# 20,000 steps, final val_loss 3.5037, loop K1-K6 +0.1702 and K3-K6 +0.0156 at 20k,
+# lab/experiments/failures/2026-09-09-arc-norm-match-recipe-reads.md). That run is what this
+# arm is scored against; the 5k reading of this same arm is the second comparison.
+#
+# THE OPTIMISER HORIZONS, checked rather than assumed. `training.ademamix_t_beta3: null`
+# falls back to `training.steps`, which silently retunes the slow EMA with the run length
+# and has already flipped an arm from cure to inert (base.yaml's own comment; memory note
+# "t_beta3 null -> training.steps"). It is NOT null anywhere in this lineage: `base.yaml`
+# pins 3500 and `tul_to_panel.yaml` pins 3500 again, and `tul_short.yaml` pins
+# `ademamix_t_alpha: 1600`. A Hydra compose of `tul_slot_mux_norm_match`,
+# `tul_slot_mnext_staged` and `notul_norm_match_20k` prints 3500 / 1600 for all three, so the
+# 20k plain run took the SAME horizons at 20,000 steps that the 5k slot arms take at 5,000.
+# Both are restated here so the pin is visible in the file that changes the run length; the
+# values are the inherited ones and the composed config is unchanged by these two lines.
+#
+# NOT matched to the plain control, and named so nobody over-reads the pair: `norm-match-20k`
+# runs `training.seed: 0` and the slot panel runs `training.seed: 1`; it has
+# `core_fixed_point_lambda: 0.0` against this arm's 1.0 (the plain arm is on the Parcae-entry
+# recipe, which has no fixed-point term), and it has no slot apparatus at all. The pair is a
+# HORIZON comparison at matched steps and matched token budget per step, not a one-factor
+# ablation. The one-factor partner of this arm is its own 5,000-step self.
+#
+# Cost: 4x the staged arm's 54 min 38 s, about 3.6 h, plus four sweeps.
+#
+# Record: lab/experiments/planned/2026-09-10-arc-slot-mnext-staged-20k.md
+defaults:
+  - tul_slot_mnext_staged
+  - _self_
+
+training:
+  steps: 20000
+  ckpt_every: 5000
+  ademamix_t_beta3: 3500      # the inherited panel pin, restated: null -> training.steps
+  ademamix_t_alpha: 1600      # the inherited panel pin, restated for the same reason
+
+wandb:
+  name: slot-mnext-staged-20k
