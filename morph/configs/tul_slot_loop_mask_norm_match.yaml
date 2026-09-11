@@ -1,0 +1,45 @@
+# Slot-loop panel, arm "slot-loop-mask-norm-match": the NO-MUX slot loop in the strict
+# geometry. `tul.tg_restrict: true` at scope "all" on `tul_slot_loop_norm_match.yaml`
+# (run `slot-loop-norm-match`, `mux_beta` absent, so 0) and nothing else. One factor
+# against that arm; one factor against `slot-mux-mask-norm-match` (the same mask with the
+# MUX at beta 1).
+#
+# Why this arm exists, and it is the most direct statement of the question in this batch.
+# On every MUX arm the slot carries TWO targets: the coda's token CE, and the MUX's
+# next-span forecast through the tied head. The forecast is a target somebody chose. Under
+# this config the MUX is off, so the coda's token CE is the ONLY loss that touches the slot
+# state, and under `tg_restrict` the loop is the ONLY path from an earlier span to a later
+# token. The slot's target is then exactly what the coda needs at the tokens, discovered
+# rather than specified, and no other route supplies it.
+#
+# The price that buys. The gradient probe measured what happens when the MUX is removed
+# without the mask: the shared core receives about 1 % of the prelude's gradient norm and
+# the MUX pays for the loop 7.3x over the token CE
+# (lab/experiments/results/2026-09-10-slot-gradient-probe/README.md). The mask is the one
+# change that can raise the token CE's own stake in the loop, because it deletes the
+# prelude's and the coda's cross-span routes. Whether it raises it ENOUGH is the arm.
+#
+# SCOPE, KERNELS and the F1 side effect: identical to `tul_slot_mux_mask_norm_match.yaml`
+# and for the identical reasons. Read the comment block there once rather than twice.
+# `tg_restrict` forces `model.use_kernels: false`; `model.tg_scoped_kernels: true` keeps
+# HC-Cayley, the CCA prologue and the core-region window fused and the TG-restricted
+# branches eager by construction; the pooled `GatedPoolCompressor` is not built at all.
+#
+# Known price: the mask costs 0.1-0.2 nats of CE on every panel that has run it, and the
+# no-MUX arm already sits +0.164 nats behind the plain model token-paired at depth 6.
+#
+# Record: lab/experiments/planned/2026-09-10-arc-slot-loop-mask-norm-match.md
+defaults:
+  - tul_slot_loop_norm_match
+  - _self_
+
+model:
+  use_kernels: false
+  tg_scoped_kernels: true
+
+tul:
+  tg_restrict: true
+  tg_restrict_scope: all
+
+wandb:
+  name: slot-loop-mask-norm-match
