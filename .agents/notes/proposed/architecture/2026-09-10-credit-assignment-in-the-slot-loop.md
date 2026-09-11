@@ -370,3 +370,5 @@ level of this note:
 - **No arm has run on the GPU.** Everything above is CPU builds, CPU tests and config
   compose checks. `torch.compile` on the new index path and the new mask path is untested
   until the runner's 12-step smoke.
+
+Filed 2026-09-11 14:53 under `lab/experiments/failures/2026-09-11-arc-span-budget.md`: the cross-span BUDGET with no slot cells (Parcae core, `model.span_mask` row vs span) is 0.3994 nats [0.3838, 0.4162] at 5k and rising (0.163 at 2,500); flat 0.31 at offset 8+, 0.96 at the span's first position, 0.28 at offset 0. The prefix write's worth (0.093) is about a quarter of it. The loop is unchanged under the cut (K1−K6 +0.0301 vs +0.0279). Ceiling recorded; next is the route split on the mask arm.

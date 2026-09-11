@@ -1,6 +1,6 @@
 # Planned: the cross-span information budget — how many nats live across a span boundary?
 
-Status: planned
+Status: failure
 
 Date: 2026-09-11 (frozen before launch). Arc: `2026-09-04-loop-contribution-arc.md`.
 Design note:
@@ -292,3 +292,121 @@ arms, which are pinned at `cc4e034` and were already running.
 - Any number on CODE. See deviation 5.
 - Whether the offset profile is stable across the 2,500 and 5,000 checkpoints. Only the
   5,000 pair is predicted.
+
+## Results
+
+Filed 2026-09-11 14:53 CDT. Both arms at `cc4e034`, seed 1, 5,000 steps, Parcae core,
+`span_mask: row` (full) against `span_mask: span`. Raw files in
+`lab/experiments/results/2026-09-11-span-budget/` (sweep, anatomy and init-probe JSON, the
+profile output at 2,500 and 5,000); npz in `ignored/experiment-artifacts/2026-09-11-span-budget/`.
+
+**Survival and cost.** Both HEALTHY to 4,999: full pre-clip max 21.3 at step 261, span 14.6
+at step 613 (bar 1e4). Wall 43m32s (full) and 43m02s (span) from START to DONE. Runner
+final val: full 4.0685, span 4.4630.
+
+**The budget, paired on `tok_index` over 491,520 tokens, gap = span − full, step 5,000.**
+
+| depth | CE full | CE span | gap | 95 % CI |
+|---|---|---|---|---|
+| 6 | 4.0394 | 4.4389 | **+0.3994** | [+0.3838, +0.4162] |
+| 1 | 4.0673 | 4.4689 | +0.4016 | [+0.3863, +0.4187] |
+
+By offset of the PREDICTED token in its span (offset 0 = the span's first token, predicted
+from the previous span's last token; offset 1 = predicted from the span's first token):
+
+| offset | n | gap @6 | 95 % CI | gap @1 |
+|---|---|---|---|---|
+| 0 | 24,338 | +0.2826 | [+0.2622, +0.3025] | +0.2886 |
+| 1 | 24,584 | +0.9580 | [+0.9257, +0.9921] | +0.9357 |
+| 2 | 24,546 | +0.6899 | [+0.6437, +0.7476] | +0.6741 |
+| 3 | 24,504 | +0.5910 | [+0.5581, +0.6278] | +0.5815 |
+| 4 | 23,343 | +0.5082 | [+0.4834, +0.5364] | +0.5094 |
+| 5 | 22,646 | +0.4479 | [+0.4254, +0.4728] | +0.4466 |
+| 6 | 21,799 | +0.4021 | [+0.3772, +0.4263] | +0.4048 |
+| 7 | 21,034 | +0.3672 | [+0.3479, +0.3890] | +0.3663 |
+| 8+ | 304,246 | +0.3149 | [+0.3025, +0.3314] | +0.3217 |
+
+**The budget grows with training.** The same pair at step 2,500: gap +0.1633 [+0.1562,
++0.1702]; offsets 0..7 = 0.156 / 0.667 / 0.373 / 0.272 / 0.219 / 0.182 / 0.149 / 0.143, offset
+8+ = 0.094 [0.088, 0.100]. From 2,500 to 5,000 the offset-8+ gap tripled (0.094 → 0.315)
+while the offset-1 gap rose 0.667 → 0.958. The unrestricted model learns to use far context
+faster than the restricted model learns from its span.
+
+**The loop (token K-curves, 480 rows, 2,000-draw bootstrap).**
+
+| arm | d0 | d1 | d2 | d3 | d6 | d9 | d12 | d16 | K1−K6 | K3−K6 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| full | 4.9388 | 4.0673 | 4.0445 | 4.0396 | 4.0394 | 4.0406 | 4.0412 | 4.0414 | +0.0279 [+0.0269, +0.0290] | +0.0002 [−0.0001, +0.0005] |
+| span | 5.7699 | 4.4689 | 4.4450 | 4.4395 | 4.4389 | 4.4405 | 4.4414 | 4.4419 | +0.0301 [+0.0288, +0.0313] | +0.0007 [+0.0002, +0.0010] |
+
+Anatomy at 5,000, movement per pass: full [0.256, 0.091, 0.044, 0.025, 0.016, 0.010, 0.007],
+span [0.206, 0.071, 0.036, 0.022, 0.014, 0.010, 0.007]. Init probe: on both arms the prelude,
+RMS-noise, zero and small-noise entries agree to 0.0002 nats by depth 4 (full 3.9646 /
+3.9656 / 3.9655; span 4.3510 / 4.3523 / 4.3522): a start-independent fixed point on a plain
+token loop.
+
+**Against the slot family's worth profile (cross-model, offsets aligned).** The worth
+profile bins by the offset of the PREDICTING position; this profile by the predicted
+token, so worth bin k lines up with budget offset k+1. `slot-mux-mask-norm-match` at 5,000,
+zero-ablation of the prefix write, worth bins 0 / 1 / 2 / 3 / 4-7 / 8-15 / 16+ =
+0.554 / 0.182 / 0.128 / 0.109 / 0.083 / 0.057 / 0.042 (192 rows), token-weighted total
+0.093. The budget at the same positions is 0.958 / 0.690 / 0.591 / 0.508 / ~0.42 / ~0.31 /
+~0.31, total 0.399. The prefix write is worth about a quarter of the budget at every
+position, a little more than half at the span's first position. This is a comparison
+between different models on different rows and is a reading, not a controlled result.
+
+**Predictions.** P-a TRUE (both healthy). P-b TRUE (0.399, CI excludes 0). **P-c FALSE
+upward** (0.399 > 0.30; the 18 % branch). P-d FALSE (offset 0 is 0.9x offset 8+, not 3x).
+P-e FALSE (offset 0 reads 0.283 < 0.35). P-f FALSE (offset 8+ reads 0.315 > 0.12). P-g
+FALSE (depth 1 gap 0.4016 is not smaller than depth 6's 0.3994). P-h TRUE (full K1−K6
+0.0279 in [0, 0.15]). P-i FALSE (span 0.0301 [0.0288, 0.0313] against full 0.0279 [0.0269,
+0.0290]: the intervals overlap by 0.0002). P-j TRUE (43 min each). 4 of 10 held; the
+headline and every shape prediction missed.
+
+## Verdict
+
+Failure by the protocol: the headline P-c missed upward and all four shape predictions
+(P-d to P-g) missed. The measurement itself is clean and is the arc's first ceiling.
+
+What the numbers say, in the prereg's own binding (P-c FALSE upward): the information IS
+there, 0.40 nats of it at 5k on web text at 1,024 tokens, and this tree's slot ablations
+price it at 0.09 because they ablate one route (the prefix write) of at least two. The
+shape prediction was wrong in an instructive way. The budget is NOT front-loaded at the
+span's first token. It has two parts: a long-range part worth 0.31 nats at EVERY position
+eight or more tokens into a span, and a short-context spike (0.96 at the span's first
+position, decaying over about seven tokens) that is the cost of predicting from one to
+seven tokens of same-span history. The worth profile's front-loaded decay is the shape of
+what the prefix write CARRIES, not the shape of what is there to carry.
+
+The loop is unchanged by the cut: K1−K6 0.028 → 0.030, K3−K6 0.0002 → 0.0007, the same
+contraction series, the same fixed point from every entry. A context-starved model does
+not loop more. The loop's job on tokens is local computation done by pass 3, on a
+restricted geometry as much as on a full one.
+
+Two readings NOT to make: (1) that 0.40 is the corpus's budget. It is the 5k budget on
+this recipe and it is still rising (0.16 at 2,500); the 20k number is unmeasured. (2) that
+the dense per-position compressed branch is free in general: the full arm's 4.0394 sits
+0.0004 from the MORPH plain ruler's 4.0390 at the same step, but those arms differ in
+recipe (Parcae core and entry, seed) as well as in the branch.
+
+## Updated hypothesis
+
+The slot mechanism's ceiling on web text is 0.40 nats at 5k (rising with the horizon),
+with a flat 0.31-nat long-range component and a 0.96-nat spike at the span's first
+position. The slot loop's prefix write recovers about a quarter of it. The remaining
+routes under `tg_restrict` ("same span OR any slot position") are the slot CELL positions
+themselves, whose coda states are made by the prelude over their own span and are not
+zeroed by the worth profile's ablation. Next, in order:
+
+1. Split the budget between routes on the mask arm: a worth profile that zeroes the slot
+   cells' coda states as well as the prefix write, on THESE 480 rows, so the three curves
+   (budget, prefix-write worth, all-slot worth) sit on the same tokens. The difference
+   between the budget and the all-slot worth is what the mask arm fails to route at all;
+   the difference between all-slot and prefix-write is what the prelude carries through
+   the cell without the loop.
+2. Re-run the pair at 20k (Wolfe's word needed) only if the route split says the loop's
+   share matters. The budget's growth from 2,500 to 5,000 says the 20k ceiling is higher,
+   which raises the stakes of the mechanism and does not change what it must do.
+3. Step 2 of the 2026-09-11 proposal (decode-cheaply at matched decode cost) now has a
+   ceiling to be scored against: a slot that carries the 0.31-nat long-range part at every
+   position is worth more than one that only covers the spike.

@@ -176,3 +176,15 @@ rather than bodged; see the prereg's "not built".
 - **The offset axis depends on a definition** (the offset of the PREDICTED token inside
   its span, not of the query). The script says so in its docstring and prints it; a reader
   who assumes the other convention is off by one span position at the boundary.
+
+## Outcome
+
+Filed 2026-09-11 14:53 under `lab/experiments/failures/2026-09-11-arc-span-budget.md`
+(failure by the protocol: the headline prediction missed upward). The budget on web text at
+5k is **0.3994 nats [0.3838, 0.4162]** paired on 491,520 tokens, and it grew from 0.163 at
+2,500. Its shape is a flat long-range part of 0.31 nats at every position eight or more
+tokens into a span plus a short-context spike of 0.96 at the span's first position, decaying
+over seven tokens; it is not front-loaded at offset 0 (0.28). The slot family's prefix-write
+ablation (0.093 total) prices about a quarter of it. The loop does not change under the cut
+(K1−K6 0.028 → 0.030). Next: split the budget between the prefix write and the slot cells'
+coda states on the same rows (an all-slot ablation on the mask arm).
