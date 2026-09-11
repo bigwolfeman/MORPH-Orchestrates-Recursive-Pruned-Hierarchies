@@ -225,6 +225,8 @@ The one-factor follow-up `slot-mux-mask-norm-match` (the mask on the ruler, no s
 
 Its no-MUX twin `slot-loop-mask-norm-match` (prereg `lab/experiments/planned/2026-09-10-arc-slot-loop-mask-norm-match.md`) filed 2026-09-11 02:07 under `lab/experiments/failures/2026-09-10-arc-slot-loop-mask-norm-match.md`: the coda's token loss as the ONLY loss under the same mask reads tokens K1−K6 −0.0001, exit == entry (z-opt −0.0002), the state moves 0.05 of its norm through six passes, and the core receives 0.5 % of the prelude's gradient norm (0.12 vs 21.9). H-starve: the token CE cannot train the loop even as the only path, so the MUX was load-bearing for every movement the loop ever made; the slot's target must be a per-slot supervised quantity, not the coda's loss routed through the slot.
 
+`slot-mux-fixed-point-off` (the ruler with `core_fixed_point_lambda` 0; prereg `lab/experiments/planned/2026-09-10-arc-slot-mux-fixed-point-off.md`) filed 2026-09-11 03:10 under `lab/experiments/failures/2026-09-10-arc-slot-mux-fixed-point-off.md`: the toy's strongest lever is a state BOUND on the real model, not a contribution lever. Without it the last pass moves the state 0.44 of its norm (0.065 with it), the trajectory expands 2.2x over six passes instead of contracting, and the step-245 gradient event is 18x larger; tokens, forecast past pass 3, worth and entry-vs-exit all sit where the ruler put them. The term stays shipped on the plain-model detonation record.
+
 - Config only; no code. Kernels are copied from every mask arm since E16 and are not a free
   choice: `tg_restrict` forces `use_kernels: false`, and `tg_scoped_kernels: true` is what
   keeps the rate above the 8,086 floor (E4's fully-eager twin on this recipe read 9,168 tok/s;

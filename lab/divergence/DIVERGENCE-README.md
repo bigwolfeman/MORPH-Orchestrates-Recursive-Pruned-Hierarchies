@@ -123,6 +123,16 @@ readout 0.014 better (`successes/2026-09-07-arc-e11-fixed-point-ramped.md`). Shi
 `train/fixed_point` is the instrument: 0.2–0.6 in the first 20 steps, 0.003–0.02 after.
 Unmeasured with it on: 20k, prune/carve/route, seq 4096.
 
+Graded reading on the slot loop, one factor, 2026-09-11 (`slot-mux-fixed-point-off`, λ 0 on
+the ruler `slot-mux-norm-match`, `lab/experiments/failures/2026-09-10-arc-slot-mux-fixed-point-off.md`):
+the term damps without being necessary under the ramp. Without it the run survives (no step
+above 236 after warmup except step 245), but the ruler's largest gradient event at that same
+step 245 reads 1,441 instead of 78.7 (18x), the last pass moves the state 0.44 of its norm
+instead of 0.065 (`loop/delta_ratio_last`), the slot state EXPANDS 2.2x over six passes
+(norm 344 → 767; every arm with the term contracts, relative motion 0.15–0.35), and the hinge
+sits at its edge (0.896 against target 0.9). No readout of what the loop delivers moves.
+Keep it shipped as a bound; it buys no depth.
+
 What the slot loop then showed (E12, E13, E14, all 2026-09-07): the term is free on the
 healthy mean-12 arms (0.0015–0.005) and holds NOTHING against two failure modes it was not
 built for, both scale-blind to it AND to the typical-gain hinge:
