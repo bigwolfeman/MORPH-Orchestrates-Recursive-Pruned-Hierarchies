@@ -208,6 +208,8 @@ to this note only as a sibling; its problem, its alternatives and its risks are 
 [`2026-09-10-slot-loop-readout-and-attention-defects.md`](2026-09-10-slot-loop-readout-and-attention-defects.md),
 with arm 8.
 
+Filed 2026-09-10 20:33 under `lab/experiments/failures/2026-09-10-arc-slot-mnext-staged-fullread.md`: the per-stream head moved the exit forecast 0.016 nats and the reader nothing (z-opt entry +0.0046, worth zero +0.061 vs staged 0.078); tokens 0.070 behind the ruler on one seed; cancellation 0.382 with pass 4 negative. F2 was a defect on paper and inert in practice.
+
 **Arm 7, `slot-mnext-staged-mask` (`tul.tg_restrict: true`, scope "all").** The toy's OTHER
 finding, and the larger of the two. Its question 4 held the loss attachment fixed and swapped
 the geometry: under `permissive` — MORPH's own, a prelude causal over everything and a coda
