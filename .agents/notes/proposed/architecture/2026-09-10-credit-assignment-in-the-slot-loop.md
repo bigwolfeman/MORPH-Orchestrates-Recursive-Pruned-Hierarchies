@@ -223,6 +223,8 @@ Filed 2026-09-10 19:30 under `lab/experiments/failures/2026-09-10-arc-slot-mnext
 
 The one-factor follow-up `slot-mux-mask-norm-match` (the mask on the ruler, no staged term; prereg `lab/experiments/planned/2026-09-10-arc-slot-mux-mask-norm-match.md`) filed 2026-09-11 01:18 under `lab/experiments/failures/2026-09-10-arc-slot-mux-mask-norm-match.md`: tokens K1−K6 +0.0009, so the ternary rule (`absmean` → `norm_match`), not the staged loss, removed the mask's historic token dependence; every mask K-curve in the record was measured on the starved core. Worth zero +0.554 and z-opt entry +0.0159 say the coda reads the slot hard under the mask and reads what pass 1 made; cancellation 0.556 with the ruler's cotangent shares says the mask leaves the passes alone.
 
+Its no-MUX twin `slot-loop-mask-norm-match` (prereg `lab/experiments/planned/2026-09-10-arc-slot-loop-mask-norm-match.md`) filed 2026-09-11 02:07 under `lab/experiments/failures/2026-09-10-arc-slot-loop-mask-norm-match.md`: the coda's token loss as the ONLY loss under the same mask reads tokens K1−K6 −0.0001, exit == entry (z-opt −0.0002), the state moves 0.05 of its norm through six passes, and the core receives 0.5 % of the prelude's gradient norm (0.12 vs 21.9). H-starve: the token CE cannot train the loop even as the only path, so the MUX was load-bearing for every movement the loop ever made; the slot's target must be a per-slot supervised quantity, not the coda's loss routed through the slot.
+
 - Config only; no code. Kernels are copied from every mask arm since E16 and are not a free
   choice: `tg_restrict` forces `use_kernels: false`, and `tg_scoped_kernels: true` is what
   keeps the rate above the 8,086 floor (E4's fully-eager twin on this recipe read 9,168 tok/s;

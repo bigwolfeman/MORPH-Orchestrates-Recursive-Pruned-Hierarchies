@@ -1,6 +1,6 @@
 # Planned: no MUX, masked. The slot's target becomes whatever the coda needs
 
-Status: planned
+Status: failure
 
 Date: 2026-09-10 (frozen before launch). Arc: `2026-09-04-loop-contribution-arc.md`.
 One factor against `slot-loop-norm-match`
@@ -190,3 +190,86 @@ identically on a no-MUX arm under `tg_restrict` is untested here, although both 
 unmasked no-MUX arm and the probe's MUX terms are guarded by a `has_mux` branch. The
 missing `mux_local` column means this arm cannot be compared to the rest of the batch on
 the forecast bar at all.
+
+## Results
+
+Filed 2026-09-11 02:07. `slot-loop-mask-norm-match` (commit `532a4d6`; the no-MUX slot loop
+`tul_slot_loop_norm_match` plus `tg_restrict: true` at scope "all", `use_kernels: false`,
+`tg_scoped_kernels: true`): HEALTHY to 4,999, tripwire max 40.8 at step 337, 14,356 tok/s at
+step 200 (floor 8,086; the masked MUX arm 13,858), smoke peak 10.74 GB, training peak 13.78
+GB, wall clock 46 min 05 s (ruler 52 min 38 s, 0.88x). Runner final val_loss 4.4622 (masked
+MUX arm 4.4986; ruler 4.3775). At step 4,999: `gain_est` 0.871, fixed-point term 0.0002,
+`loop/delta_ratio_last` 0.011, `loop/core_gain_t0` 1.03. The calmest arm in the panel, as
+predicted, and for a reason the probes make plain below.
+
+Sweeps, 480 rows, forced depths 1/2/3/6/9/12/16 (no MUX, so no forecast column):
+
+| step | tokens @1 / @3 / @6 / @16 | tokens K1−K6 | tokens K3−K6 | tokens K1−K16 | CE@6 (masked MUX; ruler) |
+| --- | --- | --- | --- | --- | --- |
+| 2,500 | 4.6980 / 4.6979 / 4.6979 / 4.6980 | +0.0001 [+0.0000, +0.0002] | −0.0000 | | 4.6979 (4.7438; 4.7194) |
+| 5,000 | 4.3792 / 4.3792 / 4.3792 / 4.3795 | **−0.0001 [−0.0001, −0.0000]** | −0.0000 [−0.0001, +0.0000] | −0.0003 | 4.3792 (4.4194; 4.3290) |
+
+The token CE is the same number at every depth from 1 to 6, to four decimals, at both
+checkpoints. With the coda's token loss as the ONLY loss and the slot as the only road across
+spans, the loop's depth buys the tokens nothing. The price: 0.050 behind the ruler at 5k, and
+0.040 BETTER than the masked MUX arm (the MUX term costs the tokens under the mask).
+
+Worth profile at 5,000 (offsets 0..6): zero **+0.171** [+0.158, +0.184], +0.122, +0.096,
++0.097, +0.069, +0.046, +0.031 (masked MUX +0.554 .. +0.042; parent `slot-loop-norm-match`
+0.051 at offset 0); shuffle +0.131, +0.082, +0.058, +0.052, +0.035, +0.020, +0.011;
+wrong_seed +0.358, +0.082, +0.060, +0.051, +0.037, +0.027, +0.020. The slot is load-bearing
+(3.4x the parent) and a third as load-bearing as under the MUX. State probe: |h| 70.3 at
+depth 1 → 70.6 → 70.7 → 71.0 at 6 → 71.6 at 16; relative distance from depth 1 0.026 /
+0.038 / **0.050** / 0.087, cos 0.9997 / 0.9993 / 0.9988 / 0.9962 (masked MUX 0.152 / 0.232 /
+0.350 / 0.516). Six passes move the state 5 % of its norm: the loop is close to the identity.
+
+Gradient probe at 5,000 (12 rows, batch 2, depth 6, eager; self-checks PASS at max rel err
+3.2e-7): combined cancellation ratio **0.377** (parent 0.344; masked MUX 0.556; ruler 0.520);
+token CE alone 0.460. Per-pass share of the shared core weight gradient 0.106 / 0.140 / 0.155
+/ 0.102 / 0.180 / 0.317 (passes 5+6 = 0.497; the parent 0.787); per-pass cosine to the total
+**−0.05** / +0.30 / +0.38 / +0.47 / +0.35 / +0.54. Cotangent share 0.159 / 0.158 / 0.158 /
+0.159 / 0.166 / 0.200, clip never binds. The number that explains the arm: the core's whole
+weight gradient has norm **0.121** against the prelude's 21.9 and the coda's 2.97
+(core.attention 0.013, core.mlp 0.075, core.residual 0.095); on the masked MUX arm the core's
+total was 2.42 against a prelude of 11.1. The token loss, even as the only loss and even with
+the slot as the only road, puts 0.5 % of the prelude's gradient on the looped core.
+z-optimisation probe (12 rows, batch 2, 200 Adam steps, bit-exact): ce_loop 4.1693, entry
+**−0.0002** (the exit is not distinguishable from the entry; masked MUX +0.0159; parent
++0.0002), zero +0.0542, shuffle +0.0306, fitted z −1.506 (random start −1.416; cos(z*,
+z_loop) +0.775), loop z rank 11.5. Per-bucket the loop's z and the entry read the same CE on
+the head and the tail to 0.002.
+
+Probes ran 02:01 to 02:05 after the next arm's rate check, 14.3 GB free at start. Artifacts:
+`lab/experiments/results/2026-09-10-slot-loop-mask-norm-match/`; npz under
+`ignored/experiment-artifacts/2026-09-10-slot-loop-mask-norm-match/`; probe JSON under
+`ignored/experiment-artifacts/2026-09-10-slot-gradient-probe/` and `-slot-z-optimize/`.
+
+## Verdict
+
+P-a TRUE. **P-b FALSE at every bar** (−0.0001; even the 0.003 bar given 50 %). **P-c FALSE**
+(−0.0002 against 0.02, given 50 %). P-d FALSE (+0.171 against 0.20, given 70 %). P-e FALSE
+as predicted (0.377 is above 0.344). P-f FALSE (passes 5+6 at 0.497 against 0.60, given 65 %;
+the profile flattened, but on a gradient 20x smaller than the MUX arm's, so the flattening is
+the shape of noise on a starved core rather than the early passes taking a job). P-g FALSE by
+its letter (0.058 away from 4.4373) and on the GOOD side: the no-MUX masked arm beats the
+masked MUX arm on tokens. P-h TRUE (0.88x). Four majority-confidence predictions missed
+(P-c at even money, P-d, P-f, and P-b's 0.003 bar), so the file goes under failures.
+
+Binding clause 3 fires, **H-starve**: the token CE cannot train this loop even when it is the
+only path. The MUX was load-bearing for everything the loop ever did to the state (the
+masked MUX arm moves the state 0.35 of its norm through the loop and puts 2.4 of gradient
+norm on the core; this arm 0.05 and 0.12). What the mask adds without a MUX is a harder
+reader (worth 0.051 → 0.171) with nothing new to read: the exit IS the entry to 0.0002 nats.
+The strongest form of the arc's flat reading is now on the record from the side with no
+chosen target at all.
+
+## Updated hypothesis
+
+The slot loop's trajectory exists because a per-slot loss (the MUX) trains it; the coda's
+token loss, routed through the slot, is too weak a signal at the core to make the loop move
+the state at all (0.5 % of the prelude's gradient). So "define the slot's target by what the
+coda needs" cannot be done by letting the coda's loss BE the target: the target has to be a
+per-slot supervised quantity that (a) needs more than one pass and (b) the coda can read.
+The lane after this batch is the state and its target, not the loss attachment and not the
+geometry: the state sits at effective rank 11 to 13 in 1024 dimensions on every arm measured,
+and the loop is near the identity on it whenever nothing at the slot pays for a change.
