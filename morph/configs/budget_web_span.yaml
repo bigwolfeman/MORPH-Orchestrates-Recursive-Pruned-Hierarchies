@@ -1,0 +1,21 @@
+# Cross-span budget pair, arm "budget-web-span": the RESTRICTED half. Rows are cut by the
+# ONE TUL BoundaryRule (`.;!?` + newline + dashes, no comma, min_span 4, span_cap 32 —
+# morph/model/tul_layout.py) and NOTHING crosses a boundary: attention in the prelude, the
+# core and the coda is same-span causal on both branches, the CCA conv and the value shift
+# reset at the boundary, and the hash bigram at a span's first token takes the "no previous
+# token" key instead of the previous span's boundary token.
+#
+# CE(span) - CE(full), paired on tok_index, IS the cross-span information budget. Its
+# profile by offset after a span start (lab/divergence/span_budget_profile.py) is the
+# shape a slot could ever fill.
+# Leak gate: tests/test_span_mask_leak.py.
+# Record: lab/experiments/planned/2026-09-11-arc-span-budget.md
+defaults:
+  - budget_root
+  - _self_
+
+model:
+  span_mask: span
+
+wandb:
+  name: budget-web-span

@@ -364,6 +364,18 @@ def run_generation_test(
 
 # ── Config → MORPHConfig ───────────────────────────────────────────────────────
 
+def _span_rule(cfg: DictConfig):
+    """The BoundaryRule for ``model.span_mask: "span"`` — the TUL rule, not a new one."""
+    from morph.training.tul_setup import build_boundary_rule
+
+    rule, _lut, _eos, _subs = build_boundary_rule(cfg)
+    print(f"  SPAN MASK: cut by the TUL BoundaryRule (min_span={rule.min_span}, "
+          f"span_cap={rule.span_cap}, eos_id={rule.eos_id}, "
+          f"|B|={int(rule.is_boundary.sum())} of {rule.is_boundary.shape[0]} ids)",
+          flush=True)
+    return rule
+
+
 def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
     """``tul`` (a TULConfig or None) gates CONSTRUCTION of the TUL parameters;
     None ⇒ byte-identical to the baseline model (runtime-invariants §6b).
@@ -412,6 +424,14 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         core_impl=str(m.get("core_impl", "morph")),
         parcae_core_d_head=(None if m.get("parcae_core_d_head", None) is None
                             else int(m.parcae_core_d_head)),
+        # The cross-span budget pair (.agents/notes/proposed/architecture/
+        # 2026-09-11-cross-span-budget.md). "span" resolves the ONE TUL boundary rule
+        # from the tokenizer HERE, through the same `build_boundary_rule` every TUL arm
+        # uses — a second rule would make the budget incomparable to every slot number
+        # already measured. "row" (the control) gets no rule by contract.
+        span_mask=str(m.get("span_mask", "off")),
+        span_rule=(_span_rule(cfg) if str(m.get("span_mask", "off")) == "span"
+                   else None),
         top_k=int(m.top_k),
         window_size=int(m.window_size),
         context_len=int(m.context_len),

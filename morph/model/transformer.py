@@ -42,7 +42,8 @@ from .tul import (TULConfig, TULGate, TULGateConfig, TULGradPass, TULReread, TUL
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
                   scatter_positions,
                   window_drop_mask)
-from .tul_layout import SlotLayout, tg_allow_mask, tg_reset_mask
+from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
+                         span_start_mask, tg_allow_mask, tg_reset_mask)
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
 # zero production cost). Set MORPH_PROFILE_REGIONS=1 to name forward carrier sites so the
@@ -243,6 +244,23 @@ class MORPHConfig:
     # n_heads)`, the SAME d_head MORPHAttention computes, so the swap is roughly
     # parameter-matched and a depth gain cannot be read as extra capacity.
     parcae_core_d_head: int | None = None
+
+    # ── The cross-span information budget (model.span_mask) ─────────────────────────
+    # "off"  (default) — the tree as it was. Nothing below is built or computed.
+    # "row"  — the maskable path is built and every row is ONE span, so the relation
+    #          degenerates to plain causal. Arm `budget-web-full`.
+    # "span" — the same path with the ONE TUL BoundaryRule cutting the row. Arm
+    #          `budget-web-span`: NOTHING crosses a span boundary.
+    # "row" and "span" run the IDENTICAL code and differ only in the span ids computed
+    # per batch, so their CE gap is the number of nats that live across span boundaries
+    # and not an operator change. Requires `core_impl: parcae` (a pooled compressed
+    # block spans several spans and has no same-span restriction) and `use_kernels:
+    # false`. `span_rule` is the resolved BoundaryRule; `build_morph_config` fills it
+    # from the tokenizer for "span" and leaves it None for "row".
+    # Record: .agents/notes/proposed/architecture/2026-09-11-cross-span-budget.md
+    span_mask: str = "off"
+    span_rule: object | None = None
+
     top_k: int = 128
     d_indexer: int = 32
     window_size: int = 128
@@ -981,6 +999,60 @@ class MORPHTransformer(nn.Module):
                 "window/CSA/HCA kernels do not know about the restriction, and a "
                 "silent unmasked kernel path is forbidden.")
 
+        # ── The cross-span budget mask (model.span_mask) ─────────────────────
+        # Construction-time only, like the TG block above: it decides which attention
+        # variant is BUILT and what `_forward_single` threads into every block. Every
+        # refusal below is a path whose cross-span route the mask would not reach —
+        # running any of them would report a budget measured through a leak.
+        if cfg.span_mask not in ("off", "row", "span"):
+            raise ValueError(
+                f"model.span_mask must be 'off', 'row' or 'span', got {cfg.span_mask!r}")
+        self._span_mask = cfg.span_mask != "off"
+        self._span_rule = cfg.span_rule if cfg.span_mask == "span" else None
+        if self._span_mask:
+            if cfg.span_mask == "span" and cfg.span_rule is None:
+                raise ValueError(
+                    "model.span_mask='span' needs a resolved BoundaryRule in "
+                    "MORPHConfig.span_rule (morph/training/train.py builds it from the "
+                    "tokenizer). Without it there is no cut and the arm would silently "
+                    "be the 'row' control.")
+            if cfg.span_mask == "row" and cfg.span_rule is not None:
+                raise ValueError(
+                    "model.span_mask='row' is the ONE-SPAN-PER-ROW control and must not "
+                    "carry a BoundaryRule; the rule would not be applied and the config "
+                    "would promise a cut the forward does not make.")
+            if self._tg_restrict:
+                raise ValueError(
+                    "model.span_mask with tul.tg_restrict: both drive the same attention "
+                    "kwargs from different relations (spans vs slots). Pick one.")
+            if cfg.use_kernels:
+                raise ValueError(
+                    "model.span_mask requires model.use_kernels=false: the fused "
+                    "window/CSA/HCA kernels do not know about the span relation, and a "
+                    "silent unmasked kernel path is forbidden.")
+            if cfg.core_impl != "parcae":
+                raise NotImplementedError(
+                    "model.span_mask requires model.core_impl='parcae'. A MORPH core's "
+                    "compressed branch attends POOLED BLOCKS of positions; a 128- or "
+                    "16-position block straddles several spans (mean span ~20 tokens on "
+                    "web text), so there is no block-level same-span restriction that "
+                    "leaves the branch alive. The Parcae core's dense softmax takes the "
+                    "relation directly.")
+            if cfg.retention:
+                raise NotImplementedError(
+                    "model.span_mask with model.retention=true: the GLA branch carries a "
+                    "recurrent state ACROSS positions and the span reset mask is not "
+                    "derived here. Set model.retention=false (the panel recipe does).")
+            if cfg.mtp_heads != 1:
+                raise NotImplementedError(
+                    "model.span_mask with mtp_heads > 1: an MTP head predicts token t+j, "
+                    "which crosses a span boundary for j large enough, and its label "
+                    "stream is not cut here.")
+            if cfg.fm is not None or cfg.scse_enabled:
+                raise NotImplementedError(
+                    "model.span_mask has no defined interaction with the FM planner or "
+                    "SCSE; both redefine the loop carrier or the plan path.")
+
         # Channel boundaries
         ch = cfg.channel_dims
         assert sum(ch) == d
@@ -1014,7 +1086,10 @@ class MORPHTransformer(nn.Module):
             max_seq_len=cfg.max_seq_len,
             conv_kernel=cfg.conv_kernel,
             init_alpha=cfg.init_alpha,
-            tg_restrict=self._tg_restrict,
+            # span_mask builds the SAME attention variant as tg_restrict — a
+            # compressed branch that attends POSITIONS, no pooled compressor, no
+            # indexer — and then drives it from the span ids (see attention.py).
+            tg_restrict=self._tg_restrict or self._span_mask,
             tg_span_gate=(bool(cfg.tul.tg_span_gate) if cfg.tul is not None
                           else False),
         )
@@ -1736,6 +1811,11 @@ class MORPHTransformer(nn.Module):
 
         if not _STATIC_GRAPHS:
             return False
+        if self._span_mask:
+            raise RuntimeError(
+                "MORPH_STATIC_GRAPHS with model.span_mask: the captured FRONT/BACK "
+                "regions take input_ids only and would replay every batch under the "
+                "span relation of the capture batch. Unset MORPH_STATIC_GRAPHS.")
         if not (self.training and torch.is_grad_enabled()):
             raise RuntimeError("build_static_graphs requires train mode with grad enabled")
         dev = sample_input_ids.device
@@ -1892,12 +1972,51 @@ class MORPHTransformer(nn.Module):
             x = layer(x, attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
         return x, x0
 
-    def _front_region(self, input_ids: Tensor) -> tuple[Tensor, Tensor, Tensor | None]:
+    def _span_context(self, input_ids: Tensor):
+        """``(block_kwargs, core_kwargs, bigram_cut)`` for ``model.span_mask``.
+
+        Built ONCE per forward from the token ids alone, then threaded into the prelude,
+        the core and the coda exactly the way the TG masks are — there is no per-block
+        recomputation and no second rule. ``(None, None, None)`` on a model built with
+        ``span_mask: "off"``, which keeps every op below untouched.
+
+        ``span_mask: "row"`` passes ``rule=None``: one span per row, so the relation is
+        plain causal, the segment reset never fires and the bigram cut is only the row's
+        first position — i.e. exactly the unrestricted model, reached through the SAME
+        code as the restricted one. That is what makes the budget pair a one-factor pair.
+
+        The cut itself is ``BoundaryRule.cut``, a numpy state machine, so this costs one
+        device->host copy of the ids per forward (50 KB at the panel shape) plus ~1 ms of
+        CPU. It runs in the model rather than in the loader so that EVERY entry point —
+        training, eval, `lab/divergence/core_depth_sweep.py` — is masked by construction,
+        instead of only the ones somebody remembered to pass a mask to.
+
+        The core's dict carries ``tg_allow`` alone: a `ParcaeCoreBlock` has no conv, no
+        value shift and no pooled branch, so the softmax relation IS its whole
+        cross-position path, and `_core_region` already sorts `tg_allow` into
+        active-set order.
+        """
+        if not self._span_mask:
+            return None, None, None
+        ids_np = input_ids.detach().to("cpu", torch.int64).numpy()
+        span_id = torch.from_numpy(span_ids_from_ids(ids_np, self._span_rule)).to(
+            input_ids.device)
+        allow = span_allow_mask(span_id)                       # [B, 1, S, S] bool
+        cut = span_start_mask(span_id)                         # [B, S] bool
+        block_kw = {"tg_allow": allow, "tg_comp_allow": allow, "tg_seg": span_id}
+        return block_kw, {"tg_allow": allow}, cut
+
+    def _front_region(self, input_ids: Tensor, attn_kwargs: dict | None = None,
+                      bigram_cut: Tensor | None = None
+                      ) -> tuple[Tensor, Tensor, Tensor | None]:
         """bag0 FRONT region: embed+dropout+bigram → _front_tail. Fixed shapes, no
-        recurrence, one RNG site (embed_drop) + prelude MLP dropouts → graphable."""
+        recurrence, one RNG site (embed_drop) + prelude MLP dropouts → graphable.
+
+        ``attn_kwargs`` / ``bigram_cut``: ``model.span_mask``'s per-forward span masks
+        (`_span_context`). None on every other path → bit-identical to before."""
         x = self.embed_drop(self.embed(input_ids))
-        bigram_emb = self.embed.get_bigram(input_ids)
-        x, x0 = self._front_tail(x, input_ids, bigram_emb, None)
+        bigram_emb = self.embed.get_bigram(input_ids, bigram_cut)
+        x, x0 = self._front_tail(x, input_ids, bigram_emb, None, attn_kwargs=attn_kwargs)
         return x, x0, bigram_emb
 
     def _back_region(self, x: Tensor, x0: Tensor, bigram_emb,
@@ -2140,6 +2259,10 @@ class MORPHTransformer(nn.Module):
         Raises in ``train()`` mode: embed/MLP dropout would make the "frozen features"
         stochastic, and a silently-noisy feature is worse than a missing one.
         """
+        if self._span_mask:
+            raise NotImplementedError(
+                "prelude_states does not build model.span_mask's span masks, so it would\n"
+                "run the prelude UNRESTRICTED on a budget arm. Use forward().")
         if self.training:
             raise RuntimeError(
                 "prelude_states() is a frozen-feature read-out and must run in eval mode "
@@ -4934,6 +5057,11 @@ class MORPHTransformer(nn.Module):
                         _halt: bool = False,
                         _plan_mode: str = "normal",
                         tul_step_mode: str | None = None) -> dict:
+        if self._span_mask and slot_layout is not None:
+            raise NotImplementedError(
+                "model.span_mask with a slot_layout: the TUL forward is a different "
+                "region chain and does not thread the span masks. The budget arms run "
+                "tul.activate_at: never.")
         if slot_layout is not None:
             if bag_size > 0:
                 raise ValueError(
@@ -4968,6 +5096,14 @@ class MORPHTransformer(nn.Module):
         # per-token ctx signal up front (ve_bagged); the core/coda never read input_ids.
         B, T_in = input_ids.shape
         s = bag_size
+        # The span masks, built ONCE per forward from the ids (see `_span_context`).
+        _span_kw, _span_core_kw, _span_cut = self._span_context(input_ids)
+        if self._span_mask and s > 0:
+            raise NotImplementedError(
+                "model.span_mask with TST bagging (bag_size > 0): a bagged position is "
+                "the mean of s tokens, which can straddle a span boundary, so the span "
+                "relation is not defined on the bagged axis. The budget arms run with "
+                "training.tst_bag_size 0.")
         if s > 0:
             T = T_in // s
             x = self.embed_drop(self.embed(input_ids).view(B, T, s, -1).mean(dim=2))   # [B,L,d]
@@ -5006,9 +5142,9 @@ class MORPHTransformer(nn.Module):
                     x, x0 = outs
                     bigram_emb = None
             else:
-                x, x0, bigram_emb = self._front_region(input_ids)
+                x, x0, bigram_emb = self._front_region(input_ids, _span_kw, _span_cut)
 
-        x = self._core_region(x, x0, bigram_emb, input_ids)
+        x = self._core_region(x, x0, bigram_emb, input_ids, attn_kwargs=_span_core_kw)
 
         # ── Coda + LM head (BACK region — graphed replay when captured) ──
         _sg = self._static_graphs
@@ -5021,7 +5157,8 @@ class MORPHTransformer(nn.Module):
                 _mod._last_aux_loss = _aux   # per-module re-stash (exact eager order)
             x = outs[0]
         else:
-            x = self._back_region(x, x0, bigram_emb, input_ids)
+            x = self._back_region(x, x0, bigram_emb, input_ids,
+                                  attn_kwargs=_span_kw)
 
         if labels is not None and self.cfg.use_kernels:
             # Fused chunked cross-entropy whenever we have labels (TRAINING **and**

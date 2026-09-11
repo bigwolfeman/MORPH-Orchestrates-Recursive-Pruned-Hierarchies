@@ -61,9 +61,12 @@ What it deliberately keeps from MORPH, and why
 
 What it refuses rather than silently ignoring
 ---------------------------------------------
-Non-empty ``attn_kwargs`` (the TG masks), a retention (GLA) carry, and the HC carrier
-engine's ``next_inject_term`` all RAISE. This block cannot honour any of them, and a
-silently dropped mask is exactly the class of defect finding F1 was.
+The TG slot masks, a retention (GLA) carry, and the HC carrier engine's
+``next_inject_term`` all RAISE. This block cannot honour any of them, and a silently
+dropped mask is exactly the class of defect finding F1 was. The ONE attention kwarg it
+does honour is ``tg_allow`` under ``model.span_mask`` — a ``[B, 1, S, S]`` bool allow
+relation that replaces ``is_causal`` in its dense softmax, which is the whole of this
+block's cross-position path (no conv, no value shift, no pooled blocks).
 """
 
 from __future__ import annotations
@@ -114,7 +117,11 @@ class ParcaeDenseAttention(nn.Module):
             nn.init.normal_(lin.weight, std=std)
         nn.init.normal_(self.o_proj.weight, std=std / math.sqrt(2.0 * max(1, residual_blocks)))
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, allow: Tensor | None = None) -> Tensor:
+        """``allow`` ``[B, 1, S, S]`` bool | None — model.span_mask's same-span causal
+        relation (`span_allow_mask`). It REPLACES ``is_causal`` (it already contains the
+        causal term), so it can only narrow what the block attends. ``None`` is the
+        pre-span_mask form and every existing call site passes nothing."""
         B, S, _ = x.shape
         H, D = self.n_heads, self.d_head
         q = self.q_proj(x).view(B, S, H, D).transpose(1, 2)      # [B,H,S,D]
@@ -124,7 +131,10 @@ class ParcaeDenseAttention(nn.Module):
         # is_causal=True: query i attends keys 0..i INCLUSIVE. MORPH's XSA excludes the
         # self token, which leaves query 0 with an all -inf softmax row on every shape
         # (measured, both S = 64 and S = 1152). This block does not do that.
-        o = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        if allow is None:
+            o = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:
+            o = F.scaled_dot_product_attention(q, k, v, attn_mask=allow)
         return self.o_proj(o.transpose(1, 2).reshape(B, S, H * D))
 
     def extra_repr(self) -> str:
@@ -190,13 +200,20 @@ class ParcaeCoreBlock(nn.Module):
         ret_reset_mask: Tensor | None = None,
         pass_idx: int = 0,
     ) -> Tensor:
+        span_allow = None
         if attn_kwargs:
-            raise NotImplementedError(
-                "ParcaeCoreBlock received attention kwargs "
-                f"{sorted(attn_kwargs)} — it is a plain dense causal block and honours "
-                "none of them (TG masks included). Raising rather than dropping them: a "
-                "silently ignored attention restriction is the defect class finding F1 "
-                "of the 2026-09-10 slot-geometry audit was.")
+            # `tg_allow` under model.span_mask is the ONE kwarg this block can honour:
+            # a [B,1,S,S] bool allow relation handed straight to its dense softmax.
+            # Everything else still raises — a silently ignored attention restriction
+            # is the defect class finding F1 of the 2026-09-10 audit was.
+            extra = sorted(k for k in attn_kwargs if k != "tg_allow")
+            if extra:
+                raise NotImplementedError(
+                    "ParcaeCoreBlock received attention kwargs "
+                    f"{extra} — it is a plain dense causal block and honours none of "
+                    "them (the TG slot masks included). Only `tg_allow` "
+                    "(model.span_mask's same-span relation) is defined here.")
+            span_allow = attn_kwargs.get("tg_allow")
         if next_inject_term is not None:
             raise NotImplementedError(
                 "ParcaeCoreBlock has no HC carrier engine, so there is no POST write to "
@@ -212,7 +229,7 @@ class ParcaeCoreBlock(nn.Module):
         lora = self.pass_lora            # Python-level constant per module instance
 
         xa = self.norm_attn(h)
-        a = self.attention(xa)
+        a = self.attention(xa, span_allow)
         if lora is not None and lora.has_attn:
             a = a + lora.delta("attn", xa.to(a.dtype), pass_idx)
         h = h + self.drop(a)

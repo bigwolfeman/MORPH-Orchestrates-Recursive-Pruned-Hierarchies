@@ -324,7 +324,10 @@ def _severed_forward(model: MORPHTransformer, x: torch.Tensor, layout: SlotLayou
         sm = layout.slot_mask.view(layout.slot_mask.shape[0], 1, 1, -1)
         return allow & ~sm                                             # drop slot columns
 
-    def severed_comp(q, k, v, slot_mask, sink_logits, scale):
+    def severed_comp(q, k, v, slot_mask, sink_logits, scale, **kw):
+        # **kw for the same reason `severed_allow` takes it: this stands in for
+        # `_tg_slot_attention` and must accept every keyword the forward passes
+        # (`extra_mask`, added by model.span_mask, and whatever comes next).
         # Graph-disconnected constant: torch.zeros_like carries no grad_fn back to
         # q/k/v, so this branch contributes EXACTLY zero gradient, not just a
         # numerically-small one.

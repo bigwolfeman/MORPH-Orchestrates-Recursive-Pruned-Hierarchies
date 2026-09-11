@@ -155,6 +155,17 @@ model:
   # the same d_head MORPHAttention computes, so the swapped core is roughly
   # parameter-matched against the MORPH core it replaces. Ignored by core_impl: morph.
   parcae_core_d_head: null
+  # THE CROSS-SPAN INFORMATION BUDGET. "off" is every run before 2026-09-11 and is
+  # bit-identical to not having this key. "row" and "span" build the SAME maskable model
+  # (a compressed attention branch that attends positions instead of pooled blocks, a
+  # segment-reset CCA conv and value shift, a bigram that can be cut, and a Parcae core
+  # whose dense softmax takes an allow relation) and differ ONLY in the span ids computed
+  # per batch: "row" gives every row one span, so the relation is plain causal; "span"
+  # cuts it with the ONE TUL BoundaryRule, so nothing crosses a span boundary. Their CE
+  # gap is the number of nats that live across span boundaries. Requires core_impl:
+  # parcae and use_kernels: false. Arms budget-web-full / budget-web-span:
+  # lab/experiments/planned/2026-09-11-arc-span-budget.md
+  span_mask: "off"
   top_k: 256
   window_size: 256
   context_len: 8192  # common CoPE taper anchor across seed/base/cloud

@@ -51,6 +51,9 @@ __all__ = [
     "pack_tul_batch",
     "pack_tul_row",
     "slot_layout_from_ids",
+    "span_allow_mask",
+    "span_ids_from_ids",
+    "span_start_mask",
 ]
 
 # spec §3.1 rule 1 / §8 `tul.boundary_chars`: a token ends a span when its decoded
@@ -615,6 +618,91 @@ class SlotLayout:
             span_len=_st("span_len"),
             len_supervised=_st("len_supervised"),
         )
+
+
+# ── Cross-span budget masks (model.span_mask) ────────────────────────────────
+#
+# The SAME BoundaryRule, driven on a PLAIN row that carries no slot cells at all.
+# `span_ids_from_ids` numbers each row's spans 0, 1, 2, … in row order and
+# `span_allow_mask` turns those ids into the causal same-span allow relation. The pair
+# of arms `budget-web-full` / `budget-web-span` differ ONLY in the ids handed to these
+# two functions: "full" passes one span per row (the mask degenerates to plain causal),
+# "span" passes the rule's cut. Record:
+# `.agents/notes/proposed/architecture/2026-09-11-cross-span-budget.md`.
+
+
+def span_ids_from_ids(ids: np.ndarray, rule: "BoundaryRule | None") -> np.ndarray:
+    """``[B, S]`` int64 span id per token position, 0-based and ascending per row.
+
+    ``rule=None`` is the `span_mask: "row"` arm: every row is ONE span, so the id is 0
+    everywhere and every relation built from it is the unrestricted causal one. That is
+    a real arm, not a disabled path — it is what makes the pair differ by the cut alone.
+
+    With a rule, position ``i`` carries the number of boundaries strictly BEFORE ``i``:
+    ``BoundaryRule.cut`` returns the position of the span's LAST token, so a boundary at
+    ``p`` keeps ``p`` in the span it ends and starts a new span at ``p + 1``. Each row is
+    cut independently from ``span_len=0`` — the same convention ``pack_tul_batch`` uses,
+    so a budget row's spans are the spans a TUL row would have had.
+    """
+    ids = np.asarray(ids)
+    if ids.ndim != 2:
+        raise ValueError(f"span_ids_from_ids expects [B, S] ids, got shape {ids.shape}")
+    out = np.zeros(ids.shape, dtype=np.int64)
+    if rule is None:
+        return out
+    S = int(ids.shape[1])
+    for b in range(ids.shape[0]):
+        bpos, _ = rule.cut(np.ascontiguousarray(ids[b]), 0)
+        if bpos.shape[0]:
+            # +1: the boundary token itself belongs to the span it closes, so the NEXT
+            # position starts a new span. A boundary on the row's last token opens no
+            # span and is dropped.
+            starts = bpos[bpos + 1 < S] + 1
+            marks = np.zeros(S, dtype=np.int64)
+            marks[starts] = 1
+            np.cumsum(marks, out=out[b])
+    return out
+
+
+def span_allow_mask(span_id: Tensor) -> Tensor:
+    """``[B, 1, S, S]`` bool: ``allow(i, j) = (j <= i) AND span_id[i] == span_id[j]``.
+
+    The ONE cross-span relation. Both attention branches of a `span_mask` model read
+    this same tensor (window via `_window_fallback`'s ``extra_mask``, compressed via
+    `_tg_slot_attention`'s), so there is no branch that can be restricted while another
+    is not — the defect class finding F1 of the 2026-09-10 audit was.
+
+    Note that XSA excludes the self token from the WINDOW branch, so a span's first
+    token has an empty window row and gets ``out_win = 0`` there (SDPA returns 0, not
+    NaN, for an all -inf row — `morph/model/CLAUDE.md`). That is the restriction doing
+    its job: every key XSA would have left it are tokens of earlier spans. The
+    compressed branch keeps ``j == i``, so the position still sees itself.
+    """
+    if span_id.dim() != 2:
+        raise ValueError(f"span_allow_mask expects [B, S] ids, got {tuple(span_id.shape)}")
+    S = span_id.shape[1]
+    device = span_id.device
+    row = torch.arange(S, device=device).unsqueeze(1)
+    col = torch.arange(S, device=device).unsqueeze(0)
+    causal = (col <= row)                                       # [S, S], j <= i
+    same = span_id.unsqueeze(2) == span_id.unsqueeze(1)         # [B, S, S]
+    return (same & causal).unsqueeze(1)
+
+
+def span_start_mask(span_id: Tensor) -> Tensor:
+    """``[B, S]`` bool, True at every span's FIRST position (and at position 0).
+
+    The hash-bigram reads the previous token's id, which at a span's first position is
+    the previous span's boundary token — exactly the one datum the slot loop's seed
+    carries. Under `span_mask` those positions take the same "no previous token" key the
+    first position of a row already takes (`BigramEmbedding.compute`).
+    """
+    if span_id.dim() != 2:
+        raise ValueError(f"span_start_mask expects [B, S] ids, got {tuple(span_id.shape)}")
+    out = torch.zeros_like(span_id, dtype=torch.bool)
+    out[:, 0] = True
+    out[:, 1:] = span_id[:, 1:] != span_id[:, :-1]
+    return out
 
 
 # ── TG restriction masks (docs/tul-tg-spec.md §1, §4) ────────────────────────

@@ -1,0 +1,63 @@
+# The cross-span information budget — the RECIPE both arms share. Never run standalone:
+# `model.span_mask` is left mandatory-missing below, so a bare run of this file raises
+# instead of quietly training the unrestricted control under the wrong name.
+#
+# The question (prereg: lab/experiments/planned/2026-09-11-arc-span-budget.md): how many
+# nats of web text live ACROSS a span boundary? Nine slot-loop arms say the slot's job is
+# tiny and one pass fills it, and nothing on the core, seed, width, attention or geometry
+# side moves it. The budget is set by the DATA and the JOB, so measure the budget, with no
+# slot cells at all: two plain models that differ in one thing, whether any information
+# can cross a span boundary. Their paired CE gap IS the budget; its profile by offset
+# after a span start is the shape a slot could ever fill.
+#
+# Lineage: `notul_panel_norm_match` — the plain ruler the nine slot-loop arms are read
+# against (tul_a2's panel with the layout off, on tul_to_panel's recipe: seq 1024, batch
+# 6, seed 1, 5000 steps, warmup 1000, retention off, cap 0, alpha_cap 3.5, t_beta3 3500)
+# under the shipped ternary rule (norm_match) with core_fixed_point_lambda 1.0.
+#
+# Three things this file changes on top of that ruler, all of them REQUIRED by the mask
+# and all of them carried by BOTH arms, so the pair still differs by one line:
+#
+#   1. `core_impl: parcae`. A MORPH core's compressed branch attends POOLED BLOCKS of
+#      positions; a 16- or 256-position block straddles several spans (mean span ~20
+#      tokens on web text), so there is no block-level same-span restriction that leaves
+#      the branch alive — masking it would re-create finding F1 (a dead branch the gate
+#      still spends half its mixture on). The Parcae core's dense softmax takes the allow
+#      relation directly. The build RAISES on `core_impl: morph` rather than masking part
+#      of the model. Parcae's own recurrence is h_t = A h_{t-1} + B e + R(h_{t-1}, e), so
+#      the faithful A/B is the widened carry with a learned identity-init B — the same
+#      four lines `tul_slot_mnext_parcae_core` carries, and measured INERT on the loop's
+#      depth by itself (2026-09-10 audit, lead 5).
+#   2. `use_kernels: false`. The fused window/CSA/HCA kernels do not know about the span
+#      relation, and a silent unmasked kernel path is forbidden. The build RAISES.
+#   3. The prelude's and the coda's compressed branch becomes the DENSE per-position form
+#      (the same build `tul.tg_restrict` uses: no pooled compressor, no indexer). BOTH
+#      arms run it, which is the whole point — the pair must differ by the MASK CONTENT
+#      and not by an operator. That also means neither arm is the plain model of
+#      `notul_panel_norm_match`, and neither arm's absolute CE is comparable to it.
+#
+# `core_hca_compress_ratio` stays null: this lineage never composes `tul_short.yaml` (the
+# F1 fix's home), and the Parcae build raises on a non-null ratio.
+defaults:
+  - notul_panel_norm_match
+  - _self_
+
+model:
+  span_mask: ???                # "row" (full) or "span" — set by the arm, never here
+  core_impl: parcae
+  parcae_core_d_head: null      # -> d_model // (compression * n_heads) = 64
+  core_hca_compress_ratio: null
+  use_kernels: false
+  # Parcae's A/B — the same values slot-mnext-parcae-core carries.
+  injection_channels: all
+  injection_all_decay: 0.447
+  injection_all_dt: 0.8
+  injection_B: true
+
+training:
+  # The depth sweep and the span profile read every checkpoint; 2500 and 5000 are the
+  # panel's two.
+  ckpt_every: 2500
+
+wandb:
+  project: morph-tul

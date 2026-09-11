@@ -1,0 +1,19 @@
+# Cross-span budget pair, arm "budget-web-full": the UNRESTRICTED half. Every row is ONE
+# span, so `span_allow_mask` degenerates to plain causal, the CCA conv / value-shift
+# segment reset never fires, and the hash bigram is cut only at the row's first position
+# — i.e. the ordinary model, reached through the RESTRICTED model's code.
+#
+# It is the control, not the baseline: it runs the dense per-position compressed branch
+# that `budget-web-span` needs (see budget_root.yaml), so its absolute CE is not
+# comparable to `plain-panel-norm-match`. The only number this arm exists to produce is
+# the PAIRED gap against `budget-web-span` on the same val tokens.
+# Record: lab/experiments/planned/2026-09-11-arc-span-budget.md
+defaults:
+  - budget_root
+  - _self_
+
+model:
+  span_mask: row
+
+wandb:
+  name: budget-web-full

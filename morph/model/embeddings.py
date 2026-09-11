@@ -223,16 +223,27 @@ class BigramEmbedding(nn.Module):
         # Per-layer scalar lambdas — init 0 so bigram has no effect at start.
         self.lambdas = nn.Parameter(torch.zeros(n_layers))
 
-    def compute(self, input_ids: Tensor) -> Tensor:
+    def compute(self, input_ids: Tensor, cut: Tensor | None = None) -> Tensor:
         """Compute bigram embedding for every token position.
 
         Args:
             input_ids: [B, S] integer token ids.
+            cut:       [B, S] bool | None — positions that must NOT read the previous
+                       token. ``model.span_mask`` passes each span's first position
+                       (`span_start_mask`): the previous token there is the previous
+                       span's boundary token, which is the one datum a slot seed
+                       carries, so a cross-span budget arm that left this alone would
+                       measure a leak instead of a budget. Those positions take the
+                       SAME "no previous token" key (prev = 0) that position 0 of a row
+                       already takes, so no new code path appears in the hash. ``None``
+                       is bit-identical to before this argument existed.
 
         Returns:
             [B, S, d_model] bigram embeddings.
         """
         prev = F.pad(input_ids[:, :-1], (1, 0), value=0)   # shift right, pad 0
+        if cut is not None:
+            prev = torch.where(cut, torch.zeros_like(prev), prev)
         hash_ids = (
             _BIGRAM_HASH_A * input_ids ^ _BIGRAM_HASH_B * prev
         ) % self.hash_vocab
@@ -313,11 +324,12 @@ class MORPHEmbedding(nn.Module):
         """
         return self.hybrid(input_ids)
 
-    def get_bigram(self, input_ids: Tensor) -> Tensor | None:
+    def get_bigram(self, input_ids: Tensor, cut: Tensor | None = None) -> Tensor | None:
         """Compute bigram embeddings to be injected at each layer.
 
         Args:
             input_ids: [B, S] integer token ids.
+            cut:       [B, S] bool | None — see :meth:`BigramEmbedding.compute`.
 
         Returns:
             [B, S, d_model] bigram embeddings (pass to bigram.inject() at each
@@ -326,7 +338,7 @@ class MORPHEmbedding(nn.Module):
         """
         if self.bigram is None:
             return None
-        return self.bigram.compute(input_ids)
+        return self.bigram.compute(input_ids, cut)
 
     def lm_weight(self) -> Tensor:
         """Weight-tied LM-head matrix [vocab_size, d_model] (see HybridEmbedding)."""

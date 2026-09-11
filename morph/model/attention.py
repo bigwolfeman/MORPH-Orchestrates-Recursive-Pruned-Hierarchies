@@ -504,7 +504,8 @@ def segment_causal_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor, seg: Tensor) 
 
 
 def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None,
-                       sink_logits: Tensor, scale: float) -> Tensor:
+                       sink_logits: Tensor, scale: float,
+                       extra_mask: Tensor | None = None) -> Tensor:
     """TG compressed branch (docs/tul-tg-spec.md §3): direct attention over slot
     positions instead of pooled compression, under ``tg_restrict``.
 
@@ -521,15 +522,23 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
     sink_logits: [H] per-head learnable sink — a LOGIT, not a key, with an
     implicit ZERO value vector (same contract as the fused CSA/HCA kernels' sink),
     so a query with no visible slot gets a well-defined softmax and ~zero output.
+    extra_mask: optional [B,1,S,S] bool ANDed into the causal relation of the
+    ``slot_mask is None`` (dense) form — the compressed branch's half of
+    ``model.span_mask`` (`span_allow_mask`). Only NARROWS. Combining it with a
+    gathered slot mask has no defined meaning here and RAISES rather than being
+    dropped.
     """
     B, H, S, D = q.shape
     device = q.device
     if slot_mask is None:
         # Core region: every position is a slot and S is the (small) slot count —
-        # the dense causal form is already compact there.
+        # the dense causal form is already compact there. Under model.span_mask this
+        # is also the prelude/coda compressed branch, narrowed by extra_mask.
         row = torch.arange(S, device=device).unsqueeze(1)
         col = torch.arange(S, device=device).unsqueeze(0)
         allow = (col <= row).unsqueeze(0)                        # [1, S, S], j <= i
+        if extra_mask is not None:
+            allow = allow & extra_mask.squeeze(1)                # [B, S, S]
         scores = torch.einsum("bhid,bhjd->bhij", q.float(), k.float()) * scale
         scores = scores.masked_fill(~allow.unsqueeze(1), float("-inf"))
         sink = sink_logits.view(1, H, 1, 1).to(scores.dtype).expand(B, H, S, 1)
@@ -539,6 +548,12 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
         # column and matmul-ing against v alone is exactly equal to padding v with
         # a zero row first — no extra concat on the value side needed.
         return torch.einsum("bhij,bhjd->bhid", weights[..., :S], v)
+
+    if extra_mask is not None:
+        raise NotImplementedError(
+            "_tg_slot_attention got both a slot_mask and an extra_mask: the gathered "
+            "slot-column form has no defined same-span narrowing (model.span_mask "
+            "never sets slot_mask). Raising rather than dropping the mask.")
 
     # Prelude/coda call sites: only slot COLUMNS can ever receive weight (≤ the
     # layout's fixed slot budget, e.g. 64 of S=1152), so gather K/V at slot
@@ -948,7 +963,8 @@ class _CCACSAAttention(nn.Module):
     def forward(self, x: Tensor, n_skip_rope: int = 0,
                 cla_capture: dict | None = None, cla_kv: dict | None = None,
                 tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
-                tg_span: dict | None = None, tg_seg: Tensor | None = None) -> Tensor:
+                tg_span: dict | None = None, tg_seg: Tensor | None = None,
+                tg_comp_allow: Tensor | None = None) -> Tensor:
         B, S, _ = x.shape
         H, D = self.cca.n_heads, self.cca.d_head
         scale = D ** -0.5
@@ -977,7 +993,8 @@ class _CCACSAAttention(nn.Module):
                                               gate_w=self.tg_span_gate_w, **tg_span)
             else:
                 out_comp = _tg_slot_attention(q, k, v, tg_slot_mask,
-                                              self.cca.sink_logits, scale)
+                                              self.cca.sink_logits, scale,
+                                              extra_mask=tg_comp_allow)
             out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope,
                                             extra_mask=tg_allow)
             return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
@@ -1109,7 +1126,8 @@ class _CCAHCAAttention(nn.Module):
     def forward(self, x: Tensor, n_skip_rope: int = 0,
                 cla_capture: dict | None = None, cla_kv: dict | None = None,
                 tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
-                tg_span: dict | None = None, tg_seg: Tensor | None = None) -> Tensor:
+                tg_span: dict | None = None, tg_seg: Tensor | None = None,
+                tg_comp_allow: Tensor | None = None) -> Tensor:
         B, S, _ = x.shape
         H, D = self.cca.n_heads, self.cca.d_head
         scale = D ** -0.5
@@ -1134,7 +1152,8 @@ class _CCAHCAAttention(nn.Module):
                                               gate_w=self.tg_span_gate_w, **tg_span)
             else:
                 out_comp = _tg_slot_attention(q, k, v, tg_slot_mask,
-                                              self.cca.sink_logits, scale)
+                                              self.cca.sink_logits, scale,
+                                              extra_mask=tg_comp_allow)
             out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope,
                                             extra_mask=tg_allow)
             return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
@@ -1206,6 +1225,11 @@ class MORPHAttention(nn.Module):
                             Thought-Gestalt restriction (window branch restricted to
                             same-span-or-slot, compressed branch restricted to direct
                             slot attention; no pooled compressor/indexer built).
+                            model.span_mask builds the SAME variant for a plain model:
+                            it needs a compressed branch that attends POSITIONS (a
+                            pooled block spans several spans and cannot be cut at a
+                            boundary), and it then drives tg_allow / tg_comp_allow /
+                            tg_seg from the span ids instead of a slot layout.
 
     Forward:
         x: [B, S, d_model]
@@ -1213,7 +1237,11 @@ class MORPHAttention(nn.Module):
         tg_allow: [B,1,S,S] bool | None — window-branch extra mask under tg_restrict.
         tg_slot_mask: [B,S] bool | None — compressed-branch slot mask under tg_restrict.
         tg_seg: [B,S] int | None — segment ids for the conv / value-shift reset
-                (segment_causal_conv; the coda under tul.tg_restrict_scope="coda").
+                (segment_causal_conv; the coda under tul.tg_restrict_scope="coda";
+                the span ids under model.span_mask).
+        tg_comp_allow: [B,1,S,S] bool | None — compressed-branch extra mask, set only
+                by model.span_mask (there the compressed branch is the DENSE
+                per-position form and both branches carry the same relation).
         → [B, S, d_model]
     """
 
@@ -1257,7 +1285,8 @@ class MORPHAttention(nn.Module):
     def forward(self, x: Tensor, n_skip_rope: int = 0,
                 cla_capture: dict | None = None, cla_kv: dict | None = None,
                 tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
-                tg_span: dict | None = None, tg_seg: Tensor | None = None) -> Tensor:
+                tg_span: dict | None = None, tg_seg: Tensor | None = None,
+                tg_comp_allow: Tensor | None = None) -> Tensor:
         return self._impl(x, n_skip_rope, cla_capture=cla_capture, cla_kv=cla_kv,
                           tg_allow=tg_allow, tg_slot_mask=tg_slot_mask, tg_span=tg_span,
-                          tg_seg=tg_seg)
+                          tg_seg=tg_seg, tg_comp_allow=tg_comp_allow)

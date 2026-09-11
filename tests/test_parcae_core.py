@@ -281,7 +281,10 @@ def _blk() -> ParcaeCoreBlock:
 
 
 @pytest.mark.parametrize("kwargs", [
-    {"attn_kwargs": {"tg_allow": torch.zeros(1)}},
+    {"attn_kwargs": {"tg_slot_mask": torch.zeros(1, 4, dtype=torch.bool)}},
+    {"attn_kwargs": {"tg_seg": torch.zeros(1, 4, dtype=torch.long)}},
+    {"attn_kwargs": {"tg_allow": torch.ones(1, 1, 4, 4, dtype=torch.bool),
+                     "tg_comp_allow": torch.ones(1, 1, 4, 4, dtype=torch.bool)}},
     {"next_inject_term": torch.zeros(1, 4, 32)},
     {"ret_state": torch.zeros(1)},
     {"ret_capture": {}},
@@ -290,6 +293,28 @@ def _blk() -> ParcaeCoreBlock:
 def test_parcae_block_refuses_what_it_cannot_carry(kwargs):
     with pytest.raises(NotImplementedError):
         _blk()(torch.randn(1, 4, 32), **kwargs)
+
+
+def test_parcae_block_takes_the_span_mask_allow_relation():
+    """`tg_allow` is the ONE attention kwarg this block honours (model.span_mask).
+
+    It replaces `is_causal` in the dense softmax, so an all-True causal relation must be
+    the plain call and a narrower one must change the output — otherwise the block is
+    accepting the mask and ignoring it, which is the failure the sibling refusals exist
+    to prevent.
+    """
+    b = _blk()
+    h = torch.randn(1, 4, 32)
+    S = h.shape[1]
+    causal = torch.tril(torch.ones(S, S, dtype=torch.bool)).view(1, 1, S, S)
+    plain = b(h)
+    same = b(h, attn_kwargs={"tg_allow": causal})
+    assert torch.allclose(plain, same, atol=1e-6), \
+        "an all-causal tg_allow must reproduce is_causal=True"
+    # diagonal only: every position sees itself alone
+    narrow = torch.eye(S, dtype=torch.bool).view(1, 1, S, S)
+    cut = b(h, attn_kwargs={"tg_allow": narrow})
+    assert not torch.allclose(plain, cut), "tg_allow was accepted and then ignored"
 
 
 def test_parcae_block_refuses_a_multi_stream_carrier():
