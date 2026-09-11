@@ -168,3 +168,14 @@ the prereg's job, and its predictions are frozen.
   about the prelude and the coda.
 * **`slot_anatomy`'s "every stream" columns degenerate** to the single stream on this arm.
   Not a defect; do not compare that column across arms.
+
+## Outcome (2026-09-11)
+
+The arm ran (`lab/experiments/successes/2026-09-10-arc-slot-mnext-parcae-core.md`, every
+prediction held). The slot loop is flat on the Parcae core exactly as on MORPH's: tokens K1−K6
++0.0001, forecast K1−K6 +0.0019, worth zero +0.103, entry-vs-exit +0.0060. The map itself is
+very different (typical gain 0.22 against 0.87, a fixed point by pass 6, the passes' gradients
+agreeing at cancellation 0.915 against 0.52), the CE is 0.035 better and the wall clock 0.63x
+(23,122 tok/s). The core is exonerated; the mechanism (the slot's target and input) is the
+fault. Consequence for this note: no core feature gets ported back onto the Parcae core; the
+Parcae core becomes the cheap testbed for target and input work on the slot loop.
