@@ -134,6 +134,19 @@ diverge, which they have by step 5000.
 - Each arm reports its K-curves against its ruler and says flat when flat. Neither arm is
   scored on CE at 5,000 steps (Wolfe 2026-09-09).
 
+## Update 2026-09-11 — F1's arm shipped, F2's did not
+
+Arm A (`slot-mux-hca-fix`) ran and every prediction held
+([`lab/experiments/successes/2026-09-10-arc-slot-mux-hca-fix.md`](../../../../lab/experiments/successes/2026-09-10-arc-slot-mux-hca-fix.md)).
+Wolfe's call: `model.core_hca_compress_ratio: 16` ships as `tul_short.yaml`'s default, so
+every slot-loop arm now carries the fix and `tul_slot_mux_hca_fix.yaml` is retired (no
+control left to run it against). F1 is closed; Agent Note
+[`2026-09-11-hca-compressed-branch-dead-on-the-slot-sequence.md`](../../implemented/bug-fix/2026-09-11-hca-compressed-branch-dead-on-the-slot-sequence.md).
+
+Arm B (`slot-mnext-staged-fullread`, F2's reader fix) also ran and is filed under
+`failures/` — F2 was inert in practice; the per-stream readout changed nothing the staged
+loss's own arm did not already show. F2 stays open here; this note is not moved.
+
 ## Risks
 
 - **Both arms read flat.** The modal outcome, and the audit already predicts it for F1: the

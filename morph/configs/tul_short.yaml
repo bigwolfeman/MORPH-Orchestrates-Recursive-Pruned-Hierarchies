@@ -83,3 +83,16 @@ tul:
   # prefix positions) without each arm file restating it. A1 and the think-once panel
   # (tul_to_*.yaml) inherit it through tul_a1 / tul_g0c0 / tul_to_mown.
   tokens_through_core: false
+
+model:
+  # THE F1 FIX, SHIPPED AS THE DEFAULT. `GatedPoolCompressor` computes `n_blocks = S // m`;
+  # the slot core runs on 64 cells (`tul.max_slots`) with the base `hca_compress_ratio` 256,
+  # so 64 // 256 = 0 and the HCA compressed branch is exactly dead on core blocks 1, 3, 5
+  # while the gate keeps spending 0.42-0.52 of its mixture on that zero tensor. Ratio 16
+  # gives 4 blocks, what the token path gets at seq_len 1024. Measured on `slot-mux-hca-fix`
+  # 2026-09-11: n_blocks 4, branch deficit closed (attn slot/token 0.73-1.08 vs 0.37-0.43),
+  # CE 0.030 better at 5k, 1.04x wall clock, no change to the loop's depth contribution
+  # (`lab/experiments/successes/2026-09-10-arc-slot-mux-hca-fix.md`). A correctness fix, not
+  # a depth lever — `base.yaml`'s paid loop runs at 1152 positions (1152 // 256 = 4) and is
+  # untouched.
+  core_hca_compress_ratio: 16

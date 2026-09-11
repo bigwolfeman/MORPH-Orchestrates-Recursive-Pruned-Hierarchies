@@ -227,6 +227,12 @@ cross-arm inference. Whether `core_hca_compress_ratio: 16` ships in `tul_short.y
 separate call for Wolfe: it is a correctness fix worth about 0.03 nats of CE at 5k and 4 % of
 wall clock, not a depth fix.
 
+**Shipped 2026-09-11**: `core_hca_compress_ratio: 16` is now `tul_short.yaml`'s default, so
+every slot-loop config carries it. `tul_slot_mux_hca_fix.yaml`, the one-factor arm this file
+is about, is retired — every arm now composes the fix, so there is no control left to run it
+against. Agent Note:
+`.agents/notes/implemented/bug-fix/2026-09-11-hca-compressed-branch-dead-on-the-slot-sequence.md`.
+
 ## Updated hypothesis
 
 The slot loop's flatness does not come from a starved attention branch. With the branch

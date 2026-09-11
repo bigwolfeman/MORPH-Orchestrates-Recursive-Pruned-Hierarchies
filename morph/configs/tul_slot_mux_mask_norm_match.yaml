@@ -51,7 +51,9 @@
 # under `tg_restrict` the pooled `GatedPoolCompressor` is NOT BUILT on any layer
 # (`_CCAHCAAttention.__init__` sets `self.compressor = None` and returns), so the HCA
 # compressed branch that reads exactly 0.000 at S = 64 on the ruler cannot exist here.
-# `tul_slot_mux_hca_fix.yaml` is the arm that removes F1 alone.
+# F1 alone was tested as `slot-mux-hca-fix` (`tul_slot_mux_hca_fix.yaml`, folded into
+# `tul_short.yaml`'s shipped default `model.core_hca_compress_ratio: 16` — every arm here
+# already carries it).
 #
 # Known price: the mask costs 0.1-0.2 nats of CE on every panel that has run it.
 #

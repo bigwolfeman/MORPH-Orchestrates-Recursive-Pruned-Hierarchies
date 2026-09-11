@@ -64,6 +64,12 @@ model:
   injection_all_decay: 0.447
   injection_all_dt: 0.8
   injection_B: true
+  # The Parcae core has no pooled compressor and no HCA branch to re-block, so the build
+  # RAISES if this is non-null (morph/model/transformer.py). `tul_short.yaml` shipped
+  # `core_hca_compress_ratio: 16` as the slot-loop default on 2026-09-11 (F1 fix); this
+  # arm predates that and never had the defect (F1 needs a pooled compressor to be dead
+  # in), so it is unset back to null here rather than inheriting the new default.
+  core_hca_compress_ratio: null
 
 wandb:
   name: slot-mnext-parcae-core

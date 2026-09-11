@@ -71,13 +71,21 @@ SLOT positions — 64 with `tul.max_slots: 64` — while prelude and coda ran on
 | HCA (odd, 3 of 6) | window | dense causal over all 64 | window 256 of 1152 |
 | HCA | compressed | `n_blocks` **0**, `\|out_comp\|` **0.0000** | `n_blocks` 4, `\|out_comp\|` ~1030 |
 
-1. **The HCA compressed branch is dead on the slot path.** 256 does not divide into 64, so
-   `GatedPoolCompressor` returns `[B, 0, c]`, `fused_hca_attention` has nothing to attend
-   to, and `_gate_combine_up` blends `g_comp ~ 0.50` into a zero tensor. Three of six core
-   blocks deliver about half the attention output they were built for, silently, for a whole
-   run. `model.core_hca_compress_ratio` exists to fix exactly this; `16` gives the slot core
-   4 blocks, the same number the token path gets. Deploy (`seq_len 4096`, 512 slots) is not
-   affected — the defect needs a slot budget below the ratio.
+1. **The HCA compressed branch is dead on the slot path — the table row above is the
+   pre-fix (`core_hca_compress_ratio` unset) state, measured 2026-08-25.** 256 does not
+   divide into 64, so `GatedPoolCompressor` returns `[B, 0, c]`, `fused_hca_attention` has
+   nothing to attend to, and `_gate_combine_up` blends `g_comp ~ 0.50` into a zero tensor.
+   Three of six core blocks deliver about half the attention output they were built for,
+   silently, for a whole run. **Fixed and SHIPPED as the default 2026-09-11**:
+   `morph/configs/tul_short.yaml` (the root every slot-loop config composes) sets
+   `model.core_hca_compress_ratio: 16`, giving the slot core 4 blocks, the same number the
+   token path gets — every slot-loop arm on this tree, including `tul_a1`, now builds with
+   the branch alive; measured on `slot-mux-hca-fix`
+   (`lab/experiments/successes/2026-09-10-arc-slot-mux-hca-fix.md`): branch deficit closed
+   (attn slot/token 0.73-1.08 against the pre-fix 0.37-0.43), CE 0.030 better at 5k, no
+   change to the loop's depth contribution. Deploy (`seq_len 4096`, 512 slots) was never
+   affected — the defect needs a slot budget below the ratio, and `base.yaml`'s paid loop
+   never composes `tul_short` so it keeps the ratio unset.
 2. **CSA's sparse selection never fires on the short schedule.** `top_k: 256` exceeds
    `n_blocks` at `seq_len 1024` (144), so `tk = min(top_k, n_blocks) = n_blocks` and CSA is
    dense pooled attention, not sparse. At the deploy `seq_len 4096` there are 512 blocks and

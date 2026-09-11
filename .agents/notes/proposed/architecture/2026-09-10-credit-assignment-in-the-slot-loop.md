@@ -249,6 +249,11 @@ with arm 6.
 
 Filed 2026-09-11 11:54 under `lab/experiments/successes/2026-09-10-arc-slot-mux-hca-fix.md`: the fix reached the model (audit rerun: 4 blocks, |out_comp| 17.7-68.9 on core blocks 1/3/5) and the branch deficit closed (attention slot/token 0.73 / 0.83 / 1.08 against the ruler's 0.37 / 0.43 / 0.32); tokens K1−K6 +0.0004, forecast +0.0078, audit K0−K6 0.0025, z-opt entry +0.0027. F1 is closed as a lever on a repaired arm; CE 0.030 better at 5k, so the ratio is a correctness fix for `tul_short.yaml`, Wolfe's call.
 
+Shipped 2026-09-11: `model.core_hca_compress_ratio: 16` is now `tul_short.yaml`'s default,
+so every slot-loop arm carries the fix. `tul_slot_mux_hca_fix.yaml` is retired (no control
+left to run it against). Agent Note:
+[`2026-09-11-hca-compressed-branch-dead-on-the-slot-sequence.md`](../../implemented/bug-fix/2026-09-11-hca-compressed-branch-dead-on-the-slot-sequence.md).
+
 ## Alternatives considered
 
 - **DEQ / implicit differentiation** (Bai et al. 2019). Solve for the fixed point and

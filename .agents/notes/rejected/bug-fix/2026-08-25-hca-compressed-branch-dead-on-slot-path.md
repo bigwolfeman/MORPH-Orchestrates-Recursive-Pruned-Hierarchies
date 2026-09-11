@@ -160,3 +160,13 @@ capacity question that needs a matched-token CE comparison, not a divergence arm
 way sits well inside the 6.5 % run-to-run spread in
 [`2026-08-23-tul-run-replication.md`](../../../../lab/experiments/failures/2026-08-23-tul-run-replication.md),
 so it is not evidence. Do not cite it as any.
+
+## Update 2026-09-11 — the slot path came back, and this note's fix shipped
+
+The rejection line above is stale: the slot loop returned to the tree 2026-09-04
+(`tul/think-once`) and the defect returned with it. The 2026-09-10 audit re-found it as
+finding F1 and the ratio fix from this note's Proposal shipped as `tul_short.yaml`'s
+default. Current record:
+[`2026-09-11-hca-compressed-branch-dead-on-the-slot-sequence.md`](../../implemented/bug-fix/2026-09-11-hca-compressed-branch-dead-on-the-slot-sequence.md).
+This note stays `rejected` and is not rewritten: only the ratio (Proposal point 2)
+shipped, not the loud-failure guard (point 1) or the runtime-invariant test row (point 3).
