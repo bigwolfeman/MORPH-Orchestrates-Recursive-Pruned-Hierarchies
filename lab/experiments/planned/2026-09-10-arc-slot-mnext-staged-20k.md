@@ -19,9 +19,10 @@ Two questions, and the second is the one that decides the arc.
 1. **Does the staged arm's lead hold?** At 5,000 steps `slot-mnext-staged` read 480-row CE
    4.2483 against the ruler's 4.3290. That is a lead over another SLOT arm. Against the
    PLAIN model under the same ternary rule it is not a lead at all: `norm-match-20k` read
-   4.0390 on 480 rows at its own step 5,000, so the staged arm was 0.209 nats BEHIND plain
-   at matched steps and at 1.02x the wall clock. The plain model then went to 3.4516 by
-   20,000. For the staged arm to lead plain at 20,000 it must close 0.209 nats while the
+   4.0390 on 480 rows at its own step 5,000, and TOKEN-PAIRED on the 491,520 positions the
+   two sweeps share the staged arm is **+0.2099 [+0.2066, +0.2132]** nats BEHIND plain at
+   matched steps and at 1.02x the wall clock. The plain model then went to 3.4516 by
+   20,000. For the staged arm to lead plain at 20,000 it must close 0.210 nats while the
    target itself improves 0.587 nats. The honest question is not whether it wins; it is how
    the gap MOVES, because a gap that shrinks with training is the argument for a longer
    horizon and a gap that grows is the argument for closing the lane.
@@ -93,7 +94,12 @@ the other.
 carry 1024 in 1024. The CE comparison is TOKEN-PAIRED from the sweep's per-token files, the
 way the norm_match recipe read the paid loop against plain on 491,520 positions. A raw
 480-row CE difference between a slot arm and a plain arm is not a comparison and is not
-reported as one.
+reported as one. The 5,000-step pairing is already done and is the bar P-b scores against:
+`numpy.intersect1d` on the two sweeps' `tok_index` gives 491,520 shared positions, on which
+the staged arm reads 4.2489 and the plain model 4.0390, a paired difference of +0.2099
+[+0.2066, +0.2132] over a 400-draw bootstrap. The raw 480-row gap (4.2483 against 4.0390 =
+0.2093) happens to agree to 0.001 here; that agreement is a fact about these two runs, not a
+licence to skip the pairing at 20,000.
 
 Runner `arc/run_slotloop3.sh` (file-driven queue, commit pinned in `arc/slotloop3_arms.txt`),
 a 12-step smoke first, the draw under the sustained tripwire
@@ -133,7 +139,7 @@ and 0.0156 [+0.0150, +0.0163] at 20k; final val_loss 3.5037; wall clock 3 h 36 m
   recorded happened at a step this arm's twin never reached. The plain 20k control survived.
   The 30 % is dominated by steps 5,000 to 20,000, which no slot-loop arm has ever run.
 - **P-b (the arm's whole point: the gap to PLAIN).** Token-paired CE at depth 6 at 20,000,
-  this arm minus `norm-match-20k`, SMALLER than the 0.209 nats it sits behind at 5,000:
+  this arm minus `norm-match-20k`, SMALLER than the +0.2099 it sits behind at 5,000:
   **55 %**. Below 0.10: **20 %**. At or below zero, so the staged slot loop matches or beats
   the plain model at 20,000 steps: **5 %**. The 55 % rests on the one precedent for a deficit
   closing with training on this tree: the norm_match rule's own 0.08 nat deficit at 5k became
