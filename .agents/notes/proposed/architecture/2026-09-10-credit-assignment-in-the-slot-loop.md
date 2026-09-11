@@ -227,6 +227,8 @@ Its no-MUX twin `slot-loop-mask-norm-match` (prereg `lab/experiments/planned/202
 
 `slot-mux-fixed-point-off` (the ruler with `core_fixed_point_lambda` 0; prereg `lab/experiments/planned/2026-09-10-arc-slot-mux-fixed-point-off.md`) filed 2026-09-11 03:10 under `lab/experiments/failures/2026-09-10-arc-slot-mux-fixed-point-off.md`: the toy's strongest lever is a state BOUND on the real model, not a contribution lever. Without it the last pass moves the state 0.44 of its norm (0.065 with it), the trajectory expands 2.2x over six passes instead of contracting, and the step-245 gradient event is 18x larger; tokens, forecast past pass 3, worth and entry-vs-exit all sit where the ruler put them. The term stays shipped on the plain-model detonation record.
 
+`slot-mnext-gradpass` (attack 6, gradient-conditioned passes; note `2026-09-10-gradient-conditioned-slot-passes.md`) filed 2026-09-11 05:01 under `lab/experiments/failures/2026-09-10-arc-slot-mnext-gradpass.md`: the feature acts, the loop takes one descent step on its own span and holds, and the exit forecast is 0.017 nats better than the ruler's (K1−K6 +0.0236, K3−K6 +0.0016); tokens +0.0014, entry-vs-exit +0.0075. The best exit on the ruler family, one pass deep. `slot-mnext-parcae-core` filed the same night under successes: all flat on a plain Parcae core, the core is exonerated.
+
 - Config only; no code. Kernels are copied from every mask arm since E16 and are not a free
   choice: `tg_restrict` forces `use_kernels: false`, and `tg_scoped_kernels: true` is what
   keeps the rate above the 8,086 floor (E4's fully-eager twin on this recipe read 9,168 tok/s;

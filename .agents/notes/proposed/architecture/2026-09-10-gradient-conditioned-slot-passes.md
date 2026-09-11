@@ -155,3 +155,16 @@ All eight hold on CPU as of this note (19 tests in the new file; 1,063 in `tests
   (finding F2): under `mean` every stream carries the same gradient vector (measured spread
   exactly 0.0), under `full` they differ by about 2 %, so the mean over streams becomes a
   summary rather than a recovery of one vector. The docstring says which is which.
+
+## Outcome (2026-09-11)
+
+Filed under `lab/experiments/failures/2026-09-10-arc-slot-mnext-gradpass.md` (failures by the
+prediction convention; the arm is the first credit-assignment arm whose exit beats the
+ruler's). The feature acts (`loop/gp_rel_t0` 0.086), the loop takes ONE descent step on its
+own span (`loop/own_pass_t` 7.105 → 6.740 at pass 1, then flat to 6.721), and the M-next
+forecast at the exit is 0.017 nats better than the ruler's with the depth-1 forecast equal to
+it (K1−K6 +0.0236, K3−K6 +0.0016). Tokens +0.0014, entry-vs-exit +0.0075, cancellation 0.502,
+CE 0.052 better at 5k, 1.07x wall clock. Consequence: the binding's next arms (second-order
+form, `tg_restrict` twin) are a proposal for Wolfe, not queued; the reading is that a target
+the entry state already contains is descended in one step, so the lane is a target it does
+not contain.
