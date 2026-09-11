@@ -319,7 +319,7 @@ Worth profile at 5,000 (offsets 0..6): zero +0.080 [+0.070, +0.089], +0.073, +0.
 State probe: |h| 165 at depth 1 → 185 → 195 → 209 at 6 → 226 at 16; relative distance from
 depth 1 0.167 / 0.260 / 0.409 / 0.618, cos 0.994 / 0.985 / 0.962 / 0.910 (masked ruler-family
 0.152 / 0.232 / 0.350 / 0.516): a contracting trajectory of the ruler's kind, moving a little
-more per pass. (Correction 05:06: the first filing said no state probe ran; it did, and its
+more per pass. (Correction at 05:02, commit 428efd5: the first filing said no state probe ran; it did, and its
 log and JSON are in the artifact directory.)
 
 Gradient probe at 5,000 (12 rows, batch 2, depth 6, eager, train-mode dropout seeded per
