@@ -162,7 +162,7 @@ state after iteration 3 supervised toward the span the slot terminates, the fina
 toward the next span, mean of the two. k=3 (not "every non-final pass", the toy's actual
 winner) is E3's original choice and the nearest one-factor test the existing knob can
 express without new code; the toy's stronger form stays open if this arm moves anything.
-Prereg: `lab/experiments/planned/2026-09-10-arc-slot-mnext-staged.md`. Filed 2026-09-10 18:27 under `lab/experiments/successes/2026-09-10-arc-slot-mnext-staged.md`: the toy's three signatures transferred (forecast K1−K6 +0.067, pass-6 cosine −0.22, cancellation 0.442) and the exit forecast stayed at the ruler's value; the later passes do a 1.87-nat own→next conversion the exit does not need.
+Prereg: `lab/experiments/planned/2026-09-10-arc-slot-mnext-staged.md`. Filed 2026-09-10 18:27 under `lab/experiments/successes/2026-09-10-arc-slot-mnext-staged.md`: the toy's three signatures transferred (forecast K1−K6 +0.067, pass-6 cosine −0.22, cancellation 0.442) and the exit forecast stayed at the ruler's value; the later passes do a 1.87-nat own→next conversion the exit does not need. Horizon read `slot-mnext-staged-20k` filed 2026-09-11 08:47 under `lab/experiments/successes/2026-09-10-arc-slot-mnext-staged-20k.md`: HEALTHY to 20k; token-paired gap to the plain 20k model +0.192 / +0.160 / +0.163 / +0.161 at 5k / 10k / 15k / 20k (flat from 10k); every staged signature horizon-invariant (forecast K1−K6 0.06, tokens 0.002, pass 3 half the core gradient, entry-vs-exit +0.006). The overhead, not the loop, is what costs the CE.
 
 **The honest tension.** The toy's own Q4 result is the reason to expect this arm to read
 flat despite the toy's clean staged-target win: under the toy's PERMISSIVE geometry (the one
