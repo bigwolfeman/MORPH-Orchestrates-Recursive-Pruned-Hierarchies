@@ -29,7 +29,6 @@ import torch
 from test_tul_gl1 import _batch, _cfg, _tul  # noqa: E402  (tests/ is on sys.path)
 
 from morph.model.transformer import MORPHTransformer
-from morph.model.tul import TULConfig
 
 
 def _mask_model(seed: int = 4, **tul_kw) -> MORPHTransformer:
