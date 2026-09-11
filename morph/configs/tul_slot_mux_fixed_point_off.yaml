@@ -1,0 +1,56 @@
+# Slot-loop panel, arm "slot-mux-fixed-point-off": the ruler `slot-mux-norm-match` with the
+# terminal fixed-point term OFF (`model.core_fixed_point_lambda` 1.0 -> 0.0) and nothing
+# else. One factor against the ruler.
+#
+# What the ruler actually runs, checked rather than assumed. `base.yaml` sets
+# `model.core_fixed_point_lambda: 1.0` and NOTHING in the ruler's 17-file defaults chain
+# (tul_slot_mux_norm_match -> tul_to_mnext_y2 -> tul_to_mnext_ctt -> tul_to_mnext ->
+# tul_to_mown -> tul_g0c0 -> tul_to_panel -> tul_l2 -> tul_l1 -> tul_gl1b -> tul_gl1 ->
+# tul_tg4b -> tul_tg2 -> tul_tg1 -> tul_a1 -> tul_short -> base) mentions the key at all;
+# a compose check prints 1.0. In the slot loop the
+# term lives in `_tul_core` (morph/model/transformer.py, since 7ff72a0 on 2026-09-07):
+# ||h_T - h_{T-1}||^2 / ||h_T||^2 on every VALID slot at its LAST iteration, grad
+# iterations only, training only, stashed in `_core_aux` and consumed by `_forward_tul`.
+# So every slot arm in the record since 2026-09-07 has carried it, and none of them has
+# ever run WITHOUT it. Some other configs do zero it and are named here so nobody reads
+# this arm as new: `notul_no_fixed_point`, `notul_depth1`, `notul_parcae_entry`,
+# `tul_slot_unpack_free`, `tul_slot_mnext_noise_entry`.
+#
+# Why lambda 0 and not a larger lambda. The toy study found this term its single strongest
+# lever: 5 of 5 seeds solved a chain that needs iteration against 2 of 5 without it, at no
+# extra cost (lab/toy_slot_loop/WRITEUP.md, question 3). The obvious transfer is to raise
+# it on the real model. That is the wrong test here, for two measured reasons:
+#   * the term is already satisfied. The ruler's own probe.jsonl averages
+#     `loss/fixed_point` 0.00798 over steps 4900-4999 (0.0220 at steps 200-299, so it falls
+#     on its own), and the gradient probe's 12-row recompute at a forced depth of 6 reads
+#     0.00302 (the no-MUX arm 0.00023). Under a hundredth of a nat against a combined loss
+#     of 11.3. Raising lambda pushes on a constraint the map already meets.
+#   * the loop already contracts. The ruler's `loop/delta_ratio_t0..t7` over the same steps
+#     reads 0.818 / 0.202 / 0.117 / 0.088 / 0.076 / 0.070 / 0.067 / 0.065, and
+#     `slot-mnext-staged` reads 0.042 / 0.038 / 0.035 at t5-t7: after the first pass sets
+#     the scale, the exit pass moves the state by 3-7 % of its norm. The fixed point the
+#     term asks for is where the loop already is.
+# The honest one-factor test of a term in that state is whether REMOVING it changes
+# anything. If the ruler's flatness is partly the term holding the map at the identity,
+# lambda 0 is the arm that shows it; if the term is inert, lambda 0 reproduces the ruler
+# and the toy's strongest lever does not transfer.
+#
+# The stability record this arm spends. On the PLAIN model the term is the second hold
+# against the detonation (0 of 6 warmup-0 detonations vs 4 of 7 controls, shipped
+# 2026-09-07). This arm keeps the 1,000-step LR ramp, which is the FIRST and measured hold
+# (0 detonations in 9 of 9 draws), and keeps the slot-loop gain constraint
+# (`model.slot_gain_lambda` 100 at target 0.9, `slot_cot_clip` 4.0). E13/E14 measured the
+# term as FREE on the healthy slot-loop arms and as no hold at all against the two
+# slot-loop failure modes it was not built for, so removing it under the ramp is a
+# survivable bet and not a free one. The sustained tripwire scores it.
+#
+# Record: lab/experiments/planned/2026-09-10-arc-slot-mux-fixed-point-off.md
+defaults:
+  - tul_slot_mux_norm_match
+  - _self_
+
+model:
+  core_fixed_point_lambda: 0.0
+
+wandb:
+  name: slot-mux-fixed-point-off
