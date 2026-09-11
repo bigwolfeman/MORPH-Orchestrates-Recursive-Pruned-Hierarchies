@@ -70,10 +70,10 @@ def _ids(B: int = 2, S: int = 32, seed: int = 0) -> np.ndarray:
     return ids.astype(np.int64)
 
 
-def _model(mode: str, seed: int = 1234) -> MORPHTransformer:
+def _model(mode: str, seed: int = 1234, **cfg_kw) -> MORPHTransformer:
     torch.manual_seed(seed)
     m = MORPHTransformer(_tiny(span_mask=mode,
-                               span_rule=_rule() if mode == "span" else None))
+                               span_rule=_rule() if mode == "span" else None, **cfg_kw))
     # `BigramEmbedding.lambdas` is ZERO-init, so on a fresh model the bigram route is
     # switched off and an id-perturbation test would pass without ever exercising it.
     # A trained model has non-zero lambdas; give the fixture some, or this file quietly
@@ -179,6 +179,9 @@ def test_cross_span_jacobian_is_zero_at_every_region(mode, leaks):
         for i in queries:
             g, = torch.autograd.grad(y[0, i].sum(), eps, retain_graph=True)
             g = g[0].abs().sum(-1)                       # [S] per input position
+            assert g.sum() > 0, (
+                f"{name}@{i}: the whole Jacobian row is zero, so the cross-span "
+                "assertion below would pass vacuously")
             earlier = torch.from_numpy(span[0] < span[0][i])
             same_past = torch.from_numpy((span[0] == span[0][i]) & (np.arange(len(g)) < i))
             assert same_past.any(), "fixture: every probed query needs same-span history"
@@ -194,6 +197,57 @@ def test_cross_span_jacobian_is_zero_at_every_region(mode, leaks):
                 assert g[same_past].max() > 0, (
                     f"{name}@{i}: the query reads NOTHING from its own span's history — "
                     "the mask is too tight, not just leak-free")
+
+
+@pytest.mark.parametrize("mode,leaks", [("span", False), ("row", True)])
+def test_the_training_path_is_masked_too(mode, leaks):
+    """train() mode, where the core loop SORTS the batch by its per-sample depth.
+
+    `_core_region` permutes the carrier into depth order and processes only the active
+    prefix each iteration, so it must permute the span relation the same way — a mask
+    that stayed in batch order would put sample i under sample j's spans, and the arms
+    would train on a relation nobody chose. Eval draws a uniform depth and never
+    exercises that path, so this test is the one that covers the code the RUN uses.
+    """
+    ids = _ids(B=4, seed=3)                      # 4 rows -> distinct sampled depths
+    span = span_ids_from_ids(ids, _rule())
+    # bptt_depth == max_depth, as the budget arms run it (8 and 8). Below that,
+    # `n_nograd = total_iters - bptt_depth` is GLOBAL, so every sample whose own depth
+    # falls under it runs entirely no-grad and its embedding Jacobian is EXACTLY ZERO
+    # (the E7 "global no-grad prefix silences 27-57 % of samples" defect). A zero row
+    # would make the assertions below pass without testing anything, so the fixture
+    # removes the condition and the row-sum check below refuses it if it comes back.
+    m = _model(mode, bptt_depth=3)
+    m.train()                                    # dropout is 0 in the fixture
+    torch.manual_seed(7)
+    eps, regions = _region_jacobian(m, ids)
+    y = regions["logits"]
+    seen = 0
+    for b in range(ids.shape[0]):
+        for k in range(1, int(span[b].max()) + 1):
+            pos = np.flatnonzero(span[b] == k)
+            if pos.size < 2:
+                continue
+            i = int(pos[-1])
+            g, = torch.autograd.grad(y[b, i].sum(), eps, retain_graph=True)
+            other = g.abs().sum(-1)
+            own_row = other[b].clone()          # clone FIRST: `other[b] = 0` below
+                                                # would otherwise zero this view too
+            assert own_row.sum() > 0, (
+                f"row {b} has a ZERO embedding Jacobian — the assertions below would "
+                "pass vacuously (a no-grad prefix silenced the sample?)")
+            other[b] = 0.0
+            assert other.max().item() == 0.0, \
+                f"row {b} position {i} read ANOTHER ROW of the batch"
+            earlier = torch.from_numpy(span[b] < k)
+            seen += 1
+            if leaks:
+                assert own_row[earlier].max() > 0
+            else:
+                assert own_row[earlier].max().item() == 0.0, (
+                    f"LEAK in train() mode: row {b}, span {k}, position {i} reads "
+                    f"{own_row[earlier].max().item():.3e} from an earlier span")
+    assert seen >= 8, "fixture did not produce enough probed positions"
 
 
 # ── the route autograd cannot see ────────────────────────────────────────────
