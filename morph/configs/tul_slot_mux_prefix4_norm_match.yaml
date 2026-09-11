@@ -1,0 +1,49 @@
+# Slot-loop panel, arm "slot-mux-prefix4-norm-match": the RULER with a WIDER write.
+# `tul.prefix_k: 4` on `tul_slot_mux_norm_match.yaml` and nothing else. One factor, and the
+# factor is how many positions the ONE looped slot state is written into for the coda to
+# read. `W_prefix` is `[prefix_k, d, d]`, init identity, so at step 0 all four cells carry
+# the same `h_i` the ruler's two carry.
+#
+# Why this arm. Wolfe's 2026-09-10 reading: the slot's input and the slot's state capacity
+# are the levers. The write width is the read-side half of that, and `prefix_k` has been 2
+# on every arm of this lineage (Block Transformer App. F.2 / Fig 3f picks 2 over 1, and
+# nobody on this tree has re-asked the question since). E18 swept it -- `e18-mask-k2/k4/k8`,
+# 2026-09-08 -- but only on the MASKED mean-12 arm and only under the OLD ternary rule
+# (`absmean`), so its reading has never been taken on the ruler or under `norm_match`.
+# E18 at 5,000 steps, token K1-K6: k2 +0.0243 [+0.0233, +0.0253], k4 +0.0314 [+0.0300,
+# +0.0328], k8 +0.0486 [+0.0470, +0.0502]; CE at depth 6 4.3395 / 4.3416 / 4.3351;
+# final val_loss 4.4104 / 4.4762 / 4.4345. The token curve rose monotonically with the width
+# and the CE did not follow. This arm asks whether the width does anything at all when the
+# mask is OFF and the rule is the shipped one.
+#
+# WHAT THE WIDTH COSTS, arithmetic and measurement side by side.
+#   L_total = seq_len + prefix_k * max_slots = 1024 + 4*64 = 1280, against the ruler's 1152.
+#   The packer (morph/model/tul_layout.py::pack_tul_row) fills a row to L_total and places a
+#   boundary only when its prefix_k slot cells fit too, so tokens per row move with BOTH
+#   numbers. MEASURED, not estimated -- `val/span_tokens` on the E18 arms and on this ruler,
+#   same rule, same seq 1024, same batch 6: k=2 holds 1014.0 tokens and 54.8 spans in 1152
+#   positions at pad_frac 0.0247 (the ruler reads the same 1014.0 / 54.8 / 0.0247); k=4 holds
+#   1034.5 tokens and 56.3 spans in 1280 positions at pad_frac 0.0158. So the arm sees 2.0 %
+#   MORE tokens per row and pays 11.1 % more positions per row: about 9 % more compute per
+#   token, plus attention's quadratic term.
+#   Also measured on E18: tok/s at step 200 9,354 (k2) -> 9,098 (k4), 0.973x; peak 14.10 GB
+#   -> 17.03 GB, +2.93 GB; `val/slot_eff_rank` 5.78 (k2) -> 6.38 (k4) -> 7.29 (k8).
+#   Scaling the ruler's 12,429 tok/s by 0.973 gives about 12,100, far above the 8,086 rate
+#   floor, and the ruler's 10.1 GB smoke peak plus about 3 GB is about 13 GB on a 31.4 GB
+#   card. Both are extrapolations from a DIFFERENT arm, not measurements of this one.
+#   Parameters: `W_prefix` goes from [2, 1024, 1024] to [4, 1024, 1024], +2.10 M, identity
+#   init, so it draws no random numbers and every other weight is the ruler's at seed 1.
+#
+# `max_slots` stays 64 (tul_a1.yaml's data-sized budget). Raising prefix_k without touching
+# max_slots keeps the SLOT budget fixed and widens each slot's channel, which is the factor.
+#
+# Record: lab/experiments/planned/2026-09-10-arc-slot-mux-prefix4-norm-match.md
+defaults:
+  - tul_slot_mux_norm_match
+  - _self_
+
+tul:
+  prefix_k: 4
+
+wandb:
+  name: slot-mux-prefix4-norm-match
