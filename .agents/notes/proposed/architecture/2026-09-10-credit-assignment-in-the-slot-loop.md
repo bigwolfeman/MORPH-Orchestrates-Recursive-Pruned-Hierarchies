@@ -221,6 +221,8 @@ scope, which masks the prelude AND the coda. This arm puts the staged attachment
 
 Filed 2026-09-10 19:30 under `lab/experiments/failures/2026-09-10-arc-slot-mnext-staged-mask.md`: tokens K1−K6 +0.0033 (the mask's historic 0.02-0.06 did not reproduce under norm_match with the staged loss), forecast K1−K6 +0.060 with the exit 0.021 worse than the ruler, z-opt entry +0.0235 (first above the bar), cancellation 0.385 with two negative passes; CE 0.108 behind the ruler.
 
+The one-factor follow-up `slot-mux-mask-norm-match` (the mask on the ruler, no staged term; prereg `lab/experiments/planned/2026-09-10-arc-slot-mux-mask-norm-match.md`) filed 2026-09-11 01:18 under `lab/experiments/failures/2026-09-10-arc-slot-mux-mask-norm-match.md`: tokens K1−K6 +0.0009, so the ternary rule (`absmean` → `norm_match`), not the staged loss, removed the mask's historic token dependence; every mask K-curve in the record was measured on the starved core. Worth zero +0.554 and z-opt entry +0.0159 say the coda reads the slot hard under the mask and reads what pass 1 made; cancellation 0.556 with the ruler's cotangent shares says the mask leaves the passes alone.
+
 - Config only; no code. Kernels are copied from every mask arm since E16 and are not a free
   choice: `tg_restrict` forces `use_kernels: false`, and `tg_scoped_kernels: true` is what
   keeps the rate above the 8,086 floor (E4's fully-eager twin on this recipe read 9,168 tok/s;
