@@ -217,6 +217,8 @@ reading a causal chain of prefix cells — the iterative task behaved like the o
 attachment solved the chain. On the real model that geometry is `tg_restrict` at the default
 scope, which masks the prelude AND the coda. This arm puts the staged attachment in it.
 
+Filed 2026-09-10 19:30 under `lab/experiments/failures/2026-09-10-arc-slot-mnext-staged-mask.md`: tokens K1−K6 +0.0033 (the mask's historic 0.02-0.06 did not reproduce under norm_match with the staged loss), forecast K1−K6 +0.060 with the exit 0.021 worse than the ruler, z-opt entry +0.0235 (first above the bar), cancellation 0.385 with two negative passes; CE 0.108 behind the ruler.
+
 - Config only; no code. Kernels are copied from every mask arm since E16 and are not a free
   choice: `tg_restrict` forces `use_kernels: false`, and `tg_scoped_kernels: true` is what
   keeps the rate above the 8,086 floor (E4's fully-eager twin on this recipe read 9,168 tok/s;
