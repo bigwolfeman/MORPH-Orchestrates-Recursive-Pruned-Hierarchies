@@ -256,6 +256,25 @@ CE(`budget-web-span`) − CE(`budget-web-full`).
   alone is a statement about the restricted geometry's conditioning and the pair is
   re-drawn with both arms at a lower `ademamix_alpha_cap`.
 
+### Method amendment 1 (2026-09-11 13:20 CDT; two checks closed AFTER launch, no prediction touched)
+
+Both were on the "not verified" list below and are now measured. Neither changes the
+arms, which are pinned at `cc4e034` and were already running.
+
+1. **The depth sweep's build.** `lab/divergence/_build.py::build_model` +
+   `DepthLever` on both configs, on CPU, at depths 0, 1 and 6: both build (`tul_rt is
+   None`, so `core_depth_sweep.py` takes its `plain` path) and run a forward at every
+   depth. The readout can therefore reach the checkpoints.
+2. **The TRAINING path's mask.** `tests/test_span_mask_leak.py` in `cc4e034` runs three
+   instruments, all in `eval()`, where the core draws one uniform depth and never
+   reorders the batch. Training sorts by per-sample depth and slices the active prefix,
+   so the span relation must follow the same permutation. Covered in `b258d1f` by a
+   fourth instrument in `train()` mode: it holds, and it exposed two ways the older
+   assertions could have passed vacuously (a global no-grad prefix at `bptt_depth <
+   max_depth` — the E7 defect, which the budget arms do not meet at 8 and 8 — and a
+   tensor view the cross-row check zeroed before the cross-span check read it). No model
+   code changed.
+
 ## Not verified before launch
 
 - The 5,000-step conjunction itself. The longest either config has run is 30 steps.
