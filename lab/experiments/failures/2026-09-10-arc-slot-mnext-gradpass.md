@@ -316,8 +316,11 @@ under its bar. Tokens read +0.0014, 14x the ruler and still an order of magnitud
 Worth profile at 5,000 (offsets 0..6): zero +0.080 [+0.070, +0.089], +0.073, +0.039, +0.037,
 +0.027, +0.020, +0.017 (ruler +0.094 .. +0.006); shuffle +0.053, +0.052, +0.034, +0.033,
 +0.020, +0.013, +0.005; wrong_seed +0.060, +0.048, +0.030, +0.026, +0.017, +0.014, +0.010.
-No state probe on this arm (the runner's kind ran the sweep and the worth profile; the
-`slot_state_5000.log` was not produced, see the artifact list).
+State probe: |h| 165 at depth 1 → 185 → 195 → 209 at 6 → 224 at 16; relative distance from
+depth 1 0.167 / 0.260 / 0.409 / 0.591, cos 0.994 / 0.985 / 0.962 / 0.926 (masked ruler-family
+0.152 / 0.232 / 0.350 / 0.516): a contracting trajectory of the ruler's kind, moving a little
+more per pass. (Correction 05:06: the first filing said no state probe ran; it did, and its
+log and JSON are in the artifact directory.)
 
 Gradient probe at 5,000 (12 rows, batch 2, depth 6, eager, train-mode dropout seeded per
 batch; self-checks PASS at max rel err 1.9e-7): combined cancellation ratio **0.502** (ruler
