@@ -241,6 +241,21 @@ the oracle's budget equals the decoder's. Every unit test had set both to 8. Fix
 budgets). The arm is re-queued at `36a4cfc` after `slot-spandec-strict-norecur`; no
 prediction changed. P-i's rate prediction for the oracle arm (65 %) still stands.
 
+### Amendment 3 (2026-09-12 11:2x CDT, Wolfe): add prev + reach2
+
+`slot-spandec-strict-prev-reach1` read tokens K1−K6 +0.0163 [+0.0153, +0.0173], K3−K6
++0.0042, depth-6 CE +0.0023 [−0.0000, +0.0046] vs prev. Wolfe: "we should try reach2. I am
+suspect of this method. It proves that TUL can work for sure. But the amount of blindness
+here is concerning. z has to hold the history when it should hold the present next
+thought that needs decoding. Our objectives are still poor." Arm added:
+`slot-spandec-strict-prev-reach2` (`tul_slot_spandec_strict_prev_reach2.yaml`), queued
+after the oracle arm.
+
+- **P-d″ (reach 2).** token K1−K6 between 0.005 and 0.0163 (a wider hop per pass needs
+  fewer passes, so the forced curve SHRINKS): **65 %**. Depth-6 CE better than
+  `slot-spandec-strict-prev` by more than 0.003 (reach turns into value): **25 %**. K3−K6
+  above 0.002: **50 %**.
+
 ## Not verified before launch
 
 * **No GPU step of any arm here.** The card ran the arc probe chain

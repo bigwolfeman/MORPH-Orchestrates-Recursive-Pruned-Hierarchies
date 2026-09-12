@@ -1,0 +1,23 @@
+# Strict-geometry panel, arm "slot-spandec-strict-prev-reach2": coda prefix reach `prev`
+# and loop reach 2. One factor against `slot-spandec-strict-prev-reach1` (reach 1), which
+# gave the first token K-curve on this tree (K1−K6 +0.0163, K3−K6 +0.0042 at 5k, 2026-09-12)
+# and matched `slot-spandec-strict-prev` at depth 6.
+#
+# With reach 2 a slot reads slots k−2..k per pass, so a span m back arrives after
+# ceil((m−1)/2) passes: six passes reach twelve spans instead of six. The question is
+# whether the doubled reach per pass turns the reachability curve into VALUE — a depth-6
+# CE better than prev (unlimited reach, one pass), which reach 1 could not do.
+#
+# Wolfe's caveat (2026-09-12), recorded: this family makes z carry HISTORY along a chain
+# when z should hold the next thought to decode. It proves the loop can carry state; it
+# does not fix the objective. Read the result as a reachability instrument.
+#
+# Record: lab/experiments/planned/2026-09-12-arc-strict-geometry.md (amendment 3)
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+tul:
+  tg_coda_prefix_reach: prev
+  loop_reach: 2
+wandb:
+  name: slot-spandec-strict-prev-reach2
