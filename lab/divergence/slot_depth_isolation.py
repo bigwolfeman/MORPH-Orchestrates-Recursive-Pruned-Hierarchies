@@ -67,6 +67,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 import numpy as np
 import torch
@@ -245,6 +246,7 @@ def main() -> None:
     batches = pack_rows(stream, tul_rt, cfg, a.batch, False)[: -(-a.rows // a.batch)]
 
     acc = Accum()
+    t_start = t_batch = time.time()
     n_slots_seen: set[int] = set()
     identity_err = 0.0
     for bi, (inp, labels, layout, _idx) in enumerate(batches):
@@ -263,12 +265,47 @@ def main() -> None:
 
         full_ref = torch.full(layout.slot_index.shape, ref, dtype=torch.long,
                               device=a.device)
-        ce_ref = ce_map(model, inp, labels, layout, full_ref, a.device)
-        for s in live:
-            rs, rc, os_, oc = score(ce_ref, pos, valid, s, off_bucket)
-            acc.add("ref", row0, rs, rc)
-            for k, name in enumerate(OFFSET_BUCKETS):
-                acc.add(f"ref/off{name}", row0, os_[:, k], oc[:, k])
+
+        def tiled(base_table, per_slot=None):
+            """Score every live slot through the SAME `--slot-chunk` tiling.
+
+            THE PAIRING RULE, measured 2026-09-12 on the GB10: a bf16 forward of batch
+            `B * c` does not reproduce a forward of batch `B` bit for bit, and the drift
+            is −0.0005 nats on this model at c=8 — the same size as the effects this
+            script exists to read. A reference taken from an untiled forward would
+            therefore hand every tiled arm a systematic −0.0005 head start. So EVERY
+            column (ref, uniform, isolate, complement) goes through a forward of the same
+            shape, tile index for tile index, and the arithmetic difference of two tiles
+            at the same index is the depth change alone. With `--slot-chunk 1` this is
+            the untiled path and the rule is vacuous; the d == ref control reads exactly
+            0 either way (`--depths <ref-depth>`).
+
+            `per_slot(i, s, tab)` writes the arm's per-slot edit into tile `i`.
+            """
+            c0_step = max(1, a.slot_chunk)
+            out = []
+            for chunk0 in range(0, len(live), c0_step):
+                sel = live[chunk0:chunk0 + c0_step]
+                c = len(sel)
+                tab = base_table.repeat_interleave(c, dim=0)
+                if per_slot is not None:
+                    for i, s in enumerate(sel):
+                        per_slot(i, s, tab)
+                ce_c = ce_map(model, inp.repeat_interleave(c, dim=0),
+                              labels.repeat_interleave(c, dim=0),
+                              tile_layout(layout, c), tab, a.device)
+                for i, s in enumerate(sel):
+                    out.append((s, ce_c[i::c] if c > 1 else ce_c))
+            return out
+
+        def record(key, scored):
+            for s, ce_s in scored:
+                rs, rc, os_, oc = score(ce_s, pos, valid, s, off_bucket)
+                acc.add(key, row0, rs, rc)
+                for k, name in enumerate(OFFSET_BUCKETS):
+                    acc.add(f"{key}/off{name}", row0, os_[:, k], oc[:, k])
+
+        record("ref", tiled(full_ref))
 
         # THE IDENTITY CHECK, run once. A table filled with the model's OWN eval depth
         # must reproduce a `slot_depths=None` forward bit for bit. That is the only check
@@ -285,28 +322,15 @@ def main() -> None:
 
         for d in depths:
             full_d = torch.full_like(full_ref, d)
-            ce_uni = ce_map(model, inp, labels, layout, full_d, a.device)
-            for s in live:
-                rs, rc, os_, oc = score(ce_uni, pos, valid, s, off_bucket)
-                acc.add(f"uniform/d{d}", row0, rs, rc)
-                for k, name in enumerate(OFFSET_BUCKETS):
-                    acc.add(f"uniform/d{d}/off{name}", row0, os_[:, k], oc[:, k])
+            record(f"uniform/d{d}", tiled(full_d))
             for arm, base, other in (("isolate", full_ref, d), ("complement", full_d, ref)):
-                for chunk0 in range(0, len(live), max(1, a.slot_chunk)):
-                    sel = live[chunk0:chunk0 + max(1, a.slot_chunk)]
-                    c = len(sel)
-                    tab = base.repeat_interleave(c, dim=0)
-                    for i, s in enumerate(sel):
-                        tab[i::c, s] = other
-                    ce_c = ce_map(model, inp.repeat_interleave(c, dim=0),
-                                  labels.repeat_interleave(c, dim=0),
-                                  tile_layout(layout, c), tab, a.device)
-                    for i, s in enumerate(sel):
-                        rs, rc, os_, oc = score(ce_c[i::c], pos, valid, s, off_bucket)
-                        acc.add(f"{arm}/d{d}", row0, rs, rc)
-                        for k, name in enumerate(OFFSET_BUCKETS):
-                            acc.add(f"{arm}/d{d}/off{name}", row0, os_[:, k], oc[:, k])
-        print(f"  batch {bi + 1}/{len(batches)}: {B} rows, {len(live)} slots", flush=True)
+                def edit(i, s, tab, _o=other):
+                    tab[i::tab.shape[0] // inp.shape[0], s] = _o
+                record(f"{arm}/d{d}", tiled(base, edit))
+        print(f"  batch {bi + 1}/{len(batches)}: {B} rows, {len(live)} slots, "
+              f"{time.time() - t_batch:.1f}s ({time.time() - t_start:.0f}s total)",
+              flush=True)
+        t_batch = time.time()
 
     if identity_err != 0.0:
         raise SystemExit(
