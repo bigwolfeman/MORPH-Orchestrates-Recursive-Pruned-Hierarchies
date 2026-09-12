@@ -409,6 +409,51 @@ class TULConfig:
     # Cost is linear in H: the decoder goes from 4.0 to 12.0 block-passes per token at
     # H = 3 (2 layers x 64 slots x 32 tokens x H over ~1024 real tokens per row).
     spandec_horizon: int = 1
+    # ── THE PER-PASS PLANNING TARGET (arm `slot-spandec-strict-perpass`, 2026-09-12) ──
+    #
+    # WHAT IT IS. Every pass of the loop gets its own decoder target, and the target grows
+    # by ONE span per pass: the state after pass `t` is graded on spans `s+1 .. s+t`
+    # (capped at `spandec_pass_horizon_max`), through the SAME `SpanDecoder` the exit state
+    # is graded by. The exit term is untouched — it stays the shipped H = 1 "next thought"
+    # loss — so this adds a target, it does not replace one.
+    #
+    # WHY. Amendment 3 of the strict panel (2026-09-12): forcing reachability
+    # (`tg_coda_prefix_reach: prev` + `loop_reach: 1`) is the first thing that made the
+    # token K-curve move (K1-K6 +0.0163, K3-K6 +0.0042 at CE parity), and it did it by
+    # making z hold HISTORY. Wolfe: "z has to hold the history when it should hold the
+    # present next thought that needs decoding. Our objectives are still poor." This knob
+    # asks for depth from the OBJECTIVE instead of from blindness: pass t can only meet its
+    # target by extending the plan one span further than pass t-1 could, and nothing is
+    # hidden from the coda.
+    #
+    # THE REDUCTION, stated because it is a choice. One CE per pass (a mean over that
+    # pass's graded target tokens), then a plain mean over the passes. Passes are therefore
+    # EQUALLY weighted; a token-weighted mean would make the term mostly about the deepest
+    # pass, which has `pass_horizon_max` times the tokens of pass 1.
+    #
+    # THE MASK. A slot is graded at pass `t` only when its REALISED depth reaches `t` —
+    # `tul.oracle_z`'s rule. A frozen slot's state is its final one, and grading it again
+    # at every later pass would supervise the `torch.where` carry and over-weight shallow
+    # slots.
+    #
+    # COST, arithmetic and not a guess. At `spandec_pass_tokens` 8 and
+    # `spandec_pass_horizon_max` 6 the per-pass term decodes sum_{t=1..6} t*8 = 168
+    # positions per slot per step, against the H = 3 exit target's 96 and the shipped H = 1
+    # target's 32. In decoder block-passes per real token (2 layers x 64 slots / 1024
+    # tokens): 21.0 for the per-pass term plus 4.0 for the exit term, so the arm is 35.7
+    # block-passes per token against `slot-spandec-strict`'s 14.7 and `-h3`'s 22.7. A
+    # depth-8 draw adds two more capped blocks (264 positions, 33.0 + 4.0). This is the
+    # most expensive arm of the family and the smoke's tok/s decides whether it runs.
+    spandec_per_pass: bool = False
+    spandec_pass_horizon_max: int = 6    # cap on the pass-t horizon; 6 = the max useful depth
+    spandec_pass_weight: float = 1.0     # weight of the per-pass term in the total loss
+    # Tokens graded per span INSIDE the per-pass term — a PREFIX of each span, not the
+    # whole one. 8 because the measured cross-span budget stops being front-loaded there
+    # (flat 0.315 nats at offset 8+, lab/experiments/failures/2026-09-11-arc-span-budget.md)
+    # and because the cost is linear in it; `tul.oracle_z_max_tokens` and
+    # `tul.egrad_max_tokens` are the same precedent. The EXIT target keeps the full
+    # `spandec_max_tokens` span.
+    spandec_pass_tokens: int = 8
     # ── THE ORACLE-Z PER-PASS TEACHER (arm `slot-spandec-strict-oracle`, 2026-09-12) ──
     #
     # THIS BREAKS A STANDING RULE AND SAYS SO. The root CLAUDE.md and the spec forbid
@@ -864,9 +909,53 @@ class TULConfig:
                     "tul.spandec with tul.detach_z is not defined: detach_z exists so the "
                     "loop learns from the local loss ALONE, and the span decoder IS a local "
                     "loss — the combination would say nothing about either.")
+            if self.spandec_per_pass:
+                if self.spandec_pass_horizon_max < 1:
+                    raise ValueError(
+                        f"tul.spandec_pass_horizon_max must be >= 1, got "
+                        f"{self.spandec_pass_horizon_max}")
+                if self.spandec_pass_tokens < 2:
+                    raise ValueError(
+                        f"tul.spandec_pass_tokens must be >= 2 (position 0 carries z, so a "
+                        f"budget of 1 grades one token and no conditional), got "
+                        f"{self.spandec_pass_tokens}")
+                if self.spandec_pass_weight <= 0.0:
+                    raise ValueError(
+                        "tul.spandec_per_pass needs tul.spandec_pass_weight > 0: at 0 the "
+                        "per-pass targets are built, cost their full readout and train "
+                        f"nothing (got {self.spandec_pass_weight})")
+                if self.spandec_horizon > 1:
+                    raise NotImplementedError(
+                        "tul.spandec_per_pass with tul.spandec_horizon > 1 is a two-factor "
+                        "arm and is not defined: the per-pass term already grades the "
+                        "downstream spans (pass t is graded on s+1 .. s+t), and the EXIT "
+                        "term is supposed to stay the shipped 'next thought' at H = 1 so "
+                        "the exit's meaning does not change with it. Pick one.")
+                if self.oracle_z:
+                    raise NotImplementedError(
+                        "tul.spandec_per_pass with tul.oracle_z is not defined. Both put a "
+                        "target on the SAME per-pass trajectory — the oracle regresses h_t "
+                        "onto a detached descent path in STATE space, the per-pass term "
+                        "grades h_t through the decoder in TOKEN space — and the oracle's "
+                        "teacher is computed FROM the decoder that the per-pass term is "
+                        "simultaneously training, so the teacher moves under the student in "
+                        "a way neither term's design accounts for. There is no reading of "
+                        "the conjunction, so it raises instead of running.")
+                if self.db_loop:
+                    raise NotImplementedError(
+                        "tul.spandec_per_pass with tul.db_loop: the db carry is DETACHED at "
+                        "every iteration, so a per-pass target would train pass t's single "
+                        "application and never the chain of passes — which is the whole "
+                        "claim of this arm.")
+        elif self.spandec_per_pass:
+            raise ValueError(
+                "tul.spandec_per_pass requires tul.spandec: the per-pass targets are graded "
+                "by the SAME SpanDecoder the exit state is graded by, and without "
+                "tul.spandec there is no decoder to grade them with.")
         elif (self.spandec_layers != 2 or self.spandec_weight != 1.0
                 or self.spandec_heads != 0 or self.spandec_max_tokens != 0
-                or self.spandec_horizon != 1):
+                or self.spandec_horizon != 1 or self.spandec_pass_horizon_max != 6
+                or self.spandec_pass_weight != 1.0 or self.spandec_pass_tokens != 8):
             raise ValueError(
                 "tul.spandec_* set with tul.spandec=false: the decoder is not built, so the "
                 "knobs would be silently ignored. Set tul.spandec: true or drop them.")

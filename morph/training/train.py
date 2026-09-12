@@ -132,7 +132,8 @@ def evaluate(
                 _l -= float(out["gain_reg_weighted"])
             if out.get("spandec_weighted") is not None:
                 _l -= float(out["spandec_weighted"])
-            for _aux2 in ("egrad_weighted", "pass_res_weighted", "oracle_z_weighted"):
+            for _aux2 in ("egrad_weighted", "pass_res_weighted", "oracle_z_weighted",
+                          "spandec_pass_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -2949,7 +2950,8 @@ def main(cfg: DictConfig) -> None:
                 for _lk in ("ce_main", "mux_local", "spandec_ce", "spandec_weighted", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters", "mtp_weighted", "fixed_point", "fp_weighted", "core_gain_est", "core_gain_max", "core_gain_weighted",
                             "egrad", "egrad_weighted", "egrad_train", "egrad_auc", "egrad_pos_frac",
                             "pass_residual", "pass_res_weighted",
-                            "oracle_z", "oracle_z_weighted"):
+                            "oracle_z", "oracle_z_weighted",
+                            "spandec_pass", "spandec_pass_weighted"):
                     if _lk in out and out[_lk] is not None:
                         _probe_log[f"loss/{_lk}"] = float(out[_lk].detach())
                 wandb.log(_probe_log, step=step)
@@ -3072,7 +3074,8 @@ def main(cfg: DictConfig) -> None:
             if isinstance(out, dict) and out.get("mtp_weighted") is not None:
                 _lv = _lv - float(out["mtp_weighted"])   # arc E8: train/loss = next-token CE
             for _ak in ("fp_weighted", "core_gain_weighted", "egrad_weighted",
-                        "pass_res_weighted", "oracle_z_weighted"):  # arc E10 / 2026-09-12
+                        "pass_res_weighted", "oracle_z_weighted",
+                        "spandec_pass_weighted"):  # arc E10 / 2026-09-12
                 if isinstance(out, dict) and out.get(_ak) is not None:
                     _lv = _lv - float(out[_ak])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
@@ -3195,7 +3198,9 @@ def main(cfg: DictConfig) -> None:
                            "egrad", "egrad_weighted", "egrad_train", "egrad_auc",
                            "egrad_pos_frac", "pass_residual", "pass_res_weighted",
                            "oracle_z", "oracle_z_weighted", "oracle_z_mse",
-                           "oracle_z_steps_used"):
+                           "oracle_z_steps_used",
+                           "spandec_pass", "spandec_pass_weighted", "spandec_pass_ce",
+                           "spandec_pass_terms", "spandec_pass_n_tokens"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.oracle_z's honesty instrument: the ORACLE's own decoder loss at each
@@ -3203,6 +3208,16 @@ def main(cfg: DictConfig) -> None:
                 # tuple — if these do not fall, the trajectory is not a descent and the
                 # per-pass target is teaching noise.
                 for _k in [k for k in out if str(k).startswith("oracle_z_l")]:
+                    if out[_k] is not None:
+                        log[f"tul/{_k}"] = float(out[_k].detach())
+                # tul.spandec_per_pass: the per-PASS CE and the horizon it was graded at.
+                # A variable number of keys (the batch's realised max depth decides how
+                # many passes there are), so it is a scan. These are the arm's instrument:
+                # if `spandec_pass_t{t}` does not FALL with t, a deeper pass is not making
+                # a better plan and the target is not being met by depth.
+                _pp_pref = ("spandec_pass_t", "spandec_pass_h")
+                for _k in [k for k in out
+                           if str(k).startswith(_pp_pref) and str(k)[14:].isdigit()]:
                     if out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # docs/tul-gate-spec.md §10 — every step, because a gate that stops moving

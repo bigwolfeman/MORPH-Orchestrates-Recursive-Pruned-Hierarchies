@@ -249,7 +249,8 @@ class SpanDecoder(nn.Module):
     """
 
     def __init__(self, d_model: int, n_heads: int, d_ff: int, n_layers: int,
-                 max_tokens: int, seed_offset: int = 0, horizon: int = 1):
+                 max_tokens: int, seed_offset: int = 0, horizon: int = 1,
+                 pass_positions: int = 0):
         """``seed_offset`` shifts BOTH private init streams.
 
         ``horizon`` (``tul.spandec_horizon``) decodes spans ``s+1 .. s+H`` as ONE causal
@@ -286,18 +287,35 @@ class SpanDecoder(nn.Module):
         # Learned absolute position inside the span, ZERO-init: at step 0 the decoder is
         # position-blind and learns the offsets from the data. Deterministic, no draw.
         self.pos = nn.Parameter(torch.zeros(self.max_tokens, d_model))
+        # A SECOND position table, for `tul.spandec_per_pass`, and it is not a convenience.
+        # The per-pass target runs the same blocks over a DIFFERENT block geometry:
+        # `spandec_pass_horizon_max` blocks of `spandec_pass_tokens` tokens, against the
+        # exit target's one block of `max_tokens`. Sharing `self.pos` would make row 8 mean
+        # "span s+2, token 0" to one term and "span s+1, token 8" to the other — one
+        # parameter asked to be two different offsets at once. Zero-init, so it draws no
+        # RNG and adds nothing at step 0; `None` (the default) builds nothing at all.
+        self.pass_positions = int(pass_positions)
+        if self.pass_positions > 0:
+            self.pos_pass = nn.Parameter(torch.zeros(self.pass_positions, d_model))
+        else:
+            self.register_parameter("pos_pass", None)
         gb = torch.Generator(device="cpu").manual_seed(_SEED_BLOCKS + int(seed_offset))
         self.blocks = nn.ModuleList(
             [_SpanDecBlock(d_model, n_heads, d_ff, gb) for _ in range(n_layers)])
         self.out_norm = RMSNorm(d_model)
 
-    def decode(self, z: Tensor, ids: Tensor, valid: Tensor, emb: Tensor) -> Tensor:
+    def decode(self, z: Tensor, ids: Tensor, valid: Tensor, emb: Tensor,
+               pos: Tensor | None = None) -> Tensor:
         """``z [B, S, C]``, ``ids``/``valid`` ``[B, S, J]``, ``emb [V, C]`` -> ``[B, S, J, C]``.
 
         ``emb`` is the tied table the caller has already detached (or not — the caller
         obeys ``tul.mux_detach_head`` for BOTH ends of this decoder; see the module
         docstring). The returned states are pre-head: position ``j`` of slot ``s`` is the
         state that predicts the span's token ``j``.
+
+        ``pos`` overrides the position table (:attr:`pos_pass` for the per-pass target,
+        whose block geometry differs — see the constructor). ``None`` uses :attr:`pos`, so
+        every existing caller is unchanged.
 
         Named ``decode`` rather than ``forward`` on purpose: the tied table is not this
         module's parameter, so ``__call__`` would hide a required argument that belongs to
@@ -306,10 +324,12 @@ class SpanDecoder(nn.Module):
         B, S, J = ids.shape
         C = z.shape[-1]
         dtype = z.dtype
-        if J > self.max_tokens:
+        table = self.pos if pos is None else pos
+        limit = int(table.shape[0])
+        if J > limit:
             raise ValueError(
                 f"SpanDecoder.decode got J={J} positions but was built for "
-                f"max_tokens={self.max_tokens}: the position table has no row past that.")
+                f"max_tokens={limit}: the position table has no row past that.")
         # Input token at decoder position j is the span's token j-1; position 0 carries z.
         # An invalid (past-the-end) token contributes exactly zero — it is only ever read
         # by later positions, which are invalid too, because a span's valid offsets are a
@@ -321,7 +341,7 @@ class SpanDecoder(nn.Module):
         # `tul.oracle_z_max_tokens` < `max_tokens`): take the first J rows of the table,
         # never a view of the whole table onto J columns (a reshape error at J 8 vs 32
         # killed the first strict-oracle smoke, 2026-09-12).
-        x = x + self.pos[:J].to(dtype).view(1, 1, J, C)
+        x = x + table[:J].to(dtype).view(1, 1, J, C)
         x = x.reshape(B * S, J, C)
         for blk in self.blocks:
             x = blk(x)

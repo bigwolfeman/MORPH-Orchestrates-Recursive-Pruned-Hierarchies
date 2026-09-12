@@ -33,7 +33,8 @@ __all__ = ["TulRuntime", "build_tul_runtime", "build_boundary_rule",
 # reads below; tests/test_tul_setup_keys.py checks every shipped config against it.
 KNOWN_TUL_KEYS = frozenset({
     "activate_at", "bcast", "boundary_chars", "boundary_substrings", "carry",
-    "center_bag_mean", "coda_sees_slots", "coda_token_cut", "coda_token_input", "cond_layers",
+    "center_bag_mean", "coda_sees_slots", "coda_token_cut", "coda_token_input",
+    "cond_layers",
     "core_stage_cond",
     "db1_cond_dim", "db1_ladder_steps", "db1_p_mean", "db1_p_std", "db1_sigma_data",
     "db1_sigma_max", "db1_sigma_min", "db1_w_sigma", "db_loop", "db_mux_iters",
@@ -58,7 +59,8 @@ KNOWN_TUL_KEYS = frozenset({
     "sigreg_slices", "slot_chain", "slot_chain_detach",
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
     "spandec", "spandec_heads", "spandec_horizon", "spandec_layers", "spandec_max_tokens",
-    "spandec_weight",
+    "spandec_pass_horizon_max", "spandec_pass_tokens", "spandec_pass_weight",
+    "spandec_per_pass", "spandec_weight",
     "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda",
     "tg_coda_prefix_reach", "tg_geometry",
     "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
@@ -251,6 +253,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         spandec_weight=float(tc.get("spandec_weight", 1.0)),
         spandec_max_tokens=int(tc.get("spandec_max_tokens", 0)),
         spandec_horizon=int(tc.get("spandec_horizon", 1)),
+        spandec_per_pass=bool(tc.get("spandec_per_pass", False)),
+        spandec_pass_horizon_max=int(tc.get("spandec_pass_horizon_max", 6)),
+        spandec_pass_weight=float(tc.get("spandec_pass_weight", 1.0)),
+        spandec_pass_tokens=int(tc.get("spandec_pass_tokens", 8)),
         slot_chain=bool(tc.get("slot_chain", False)),
         slot_chain_detach=bool(tc.get("slot_chain_detach", False)),
         grad_pass=bool(tc.get("grad_pass", False)),
@@ -357,6 +363,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         # data's span_cap", which is itself derived from the boundary rule.
         "spandec_max_tokens": (model_cfg.spandec_max_tokens or model_cfg.bound_span_cap),
         "spandec_horizon": model_cfg.spandec_horizon,
+        "spandec_per_pass": model_cfg.spandec_per_pass,
+        "spandec_pass_horizon_max": model_cfg.spandec_pass_horizon_max,
+        "spandec_pass_weight": model_cfg.spandec_pass_weight,
+        "spandec_pass_tokens": model_cfg.spandec_pass_tokens,
         "slot_chain": model_cfg.slot_chain,
         "slot_chain_detach": model_cfg.slot_chain_detach,
         "grad_pass": model_cfg.grad_pass,
@@ -441,6 +451,16 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"x{model_cfg.spandec_horizon} "
               f"weight={model_cfg.spandec_weight} — the next span is decoded from z with a "
               f"teacher-forced token path (morph/model/tul_spandec.py)", flush=True)
+    if model_cfg.spandec_per_pass:
+        _cap = model_cfg.spandec_pass_horizon_max
+        _pt = model_cfg.spandec_pass_tokens
+        print(f"  TUL SPANDEC PER-PASS ON: pass t is graded on spans s+1..s+min(t,{_cap}) "
+              f"at {_pt} tokens per span, through the SAME decoder, weight "
+              f"{model_cfg.spandec_pass_weight} — the exit term stays H=1 (the next "
+              f"thought). Cost: sum_t min(t,{_cap})*{_pt} decoded positions per slot per "
+              f"step ({sum(min(t, _cap) * _pt for t in range(1, _cap + 1))} at depth "
+              f"{_cap}) on its OWN zero-init position table "
+              f"(lab/experiments/planned/2026-09-12-arc-objective-arms.md)", flush=True)
     if model_cfg.slot_chain:
         print(f"  TUL SLOT CHAIN ON: detach={model_cfg.slot_chain_detach} — slot k takes "
               f"W(z_k-1) at every pass (zero-init; the wavefront form of the chain)",

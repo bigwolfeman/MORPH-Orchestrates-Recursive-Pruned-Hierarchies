@@ -1,0 +1,77 @@
+# Slot-loop panel, arm "slot-spandec-strict-perpass": a planning target for EVERY PASS.
+# ONE factor against `slot-spandec-strict` (`tul_slot_spandec_strict.yaml`):
+# `tul.spandec_per_pass`.
+#
+# WHY. Amendment 3 of the strict panel (2026-09-12) is the first time a slot-loop arm's
+# per-pass curve moved: `tg_coda_prefix_reach: prev` + `tul.loop_reach: 1` read tokens
+# K1-K6 +0.0163 [+0.0153, +0.0173], K3-K6 +0.0042, at depth-6 CE parity (+0.0023
+# [-0.0000, +0.0046]) with `slot-spandec-strict-prev`. It got there by BLINDING the coda:
+# a token may read only the previous slot's cells, so everything older has to walk the
+# chain of loop states. Wolfe on that result: "we should try reach2. I am suspect of this
+# method. It proves that TUL can work for sure. But the amount of blindness here is
+# concerning. z has to hold the history when it should hold the present next thought that
+# needs decoding. Our objectives are still poor."
+#
+# So this arm asks for the depth from the OBJECTIVE and hides NOTHING. Coda reach stays
+# `all`, `loop_reach` stays 0, and the per-pass target grows by one span a pass:
+#
+#   pass 1  ->  decode span s+1
+#   pass 2  ->  decode spans s+1, s+2
+#   ...
+#   pass t  ->  decode spans s+1 .. s+min(t, tul.spandec_pass_horizon_max)
+#
+# through the SAME `SpanDecoder` (shared parameters, its own zero-init position table
+# because the block geometry differs from the exit target's). A pass can only improve on
+# its predecessor's target by extending the plan one span further, which is the property
+# eleven flat K-curves say no objective has ever asked for. The EXIT term is untouched:
+# `tul.spandec_horizon` stays 1, so z is still graded as "the next thought that needs
+# decoding" and the arm does not quietly turn z into a history buffer.
+#
+# A slot is graded at pass t only when its REALISED depth reaches t (the `tul.oracle_z`
+# mask). A frozen slot's state is its final one; grading it again at every later pass
+# would supervise the `torch.where` carry and over-weight shallow slots.
+#
+# MEMORY, and this is the most likely way the arm DIES — as an OOM in the smoke, not as a
+# slow step. The per-pass term runs ONE `fused_linear_cross_entropy` call per pass, and
+# that kernel allocates and SAVES a [V, d] fp32 grad_w for the backward whatever the head's
+# detach state: 201.9 MB at V_pad 49280, d 1024. Six live passes is ~1.21 GB, of which
+# ~1.01 GB is new against `slot-spandec-strict` (which pays one). The T separate calls are
+# deliberate: a single merged call with per-row weights would hold ONE accumulator, and it
+# would also throw away `tul/spandec_pass_t{t}` — the per-pass CE, which is the column that
+# says whether a deeper pass makes a better plan and without which the arm is unreadable.
+# The reading is worth the gigabyte; the 12-step smoke is where that judgement is checked.
+#
+# THE COLUMN TO READ FIRST. `tul/spandec_pass_t{t}` — the per-PASS CE, one series per
+# pass. If it does not FALL with t, a deeper pass is not making a better plan and the
+# target is not being met by depth, whatever the token K-curve says. `tul/spandec_ce`
+# stays the H = 1 exit column and is comparable with every earlier arm's.
+#
+# COST, arithmetic and not a guess (row = 1024 real tokens, L_total 1152, 64 slot cells,
+# ~51 valid, mean depth 6, 2 decoder layers), in block-passes per real token:
+#   model  (prelude 4x1152 + core 6x51x6 + coda 4x1152)                 -> 10.7
+#   exit span decoder, H = 1  (2 x 64 x 32)                             ->  4.0
+#   per-pass target  (2 x 64 x sum_{t=1..6} min(t,6)*8 = 2 x 64 x 168)  -> 21.0
+#                                                                          -----
+#                                                                          35.7
+# against `slot-spandec-strict`'s 14.7, `-h3`'s 22.7 and the plain panel's 44.0. A
+# depth-8 draw adds two more capped blocks (264 positions, 33.0 + 4.0 + 10.7 = 47.7).
+# This is the most expensive arm of the family and the 12-step smoke's tok/s against the
+# 8,086 floor decides whether it runs at all. `spandec_pass_tokens: 8` is why it is not
+# worse: the measured cross-span budget stops being front-loaded at offset 8 (flat 0.315
+# nats at 8+, lab/experiments/failures/2026-09-11-arc-span-budget.md), so the per-pass
+# term grades a PREFIX of each span and the exit term keeps the whole 32.
+#
+# Record: lab/experiments/planned/2026-09-12-arc-objective-arms.md
+# Note: .agents/notes/proposed/architecture/2026-09-12-objective-arms-per-pass-plan-and-parallel-coda.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  spandec_per_pass: true
+  spandec_pass_horizon_max: 6   # the max useful depth: mean_depth 6 on this recipe
+  spandec_pass_tokens: 8        # PER SPAN, inside the per-pass term only
+  spandec_pass_weight: 1.0
+
+wandb:
+  name: slot-spandec-strict-perpass

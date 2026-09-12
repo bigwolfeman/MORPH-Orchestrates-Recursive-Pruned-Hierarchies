@@ -1458,7 +1458,18 @@ class MORPHTransformer(nn.Module):
                 n_layers=int(cfg.tul.spandec_layers),
                 max_tokens=int(cfg.tul.spandec_max_tokens or cfg.tul.bound_span_cap),
                 horizon=int(cfg.tul.spandec_horizon),
+                # The per-pass target's own position table (TULConfig.spandec_per_pass):
+                # `pass_horizon_max` blocks of `pass_tokens`, a DIFFERENT block geometry
+                # from the exit target's, so it cannot share `pos`. Zero-init, so an arm
+                # with the knob on still starts from the ruler's forward.
+                pass_positions=(int(cfg.tul.spandec_pass_horizon_max)
+                                * int(cfg.tul.spandec_pass_tokens)
+                                if cfg.tul.spandec_per_pass else 0),
             )
+            if cfg.tul.spandec_per_pass and cfg.n_core == 0:
+                raise ValueError(
+                    "tul.spandec_per_pass needs a core loop (model.n_core > 0): it grades "
+                    "the state after EVERY pass, and a coreless TUL model has no passes.")
         # ── The slot chain (TULConfig.slot_chain) ─────────────────────────────────
         # Zero-init, no RNG draw: step 0 is the ruler's forward bit for bit.
         self.tul_chain: TULSlotChain | None = None
@@ -3193,7 +3204,13 @@ class MORPHTransformer(nn.Module):
         # turns the SAME collection on rather than building a second one. Training only —
         # an eval forward keeps `db_traj` None here and the sweep reads the ruler's columns.
         _oz = bool(self.cfg.tul.oracle_z) and self.training and self.tul_spandec is not None
-        _db_traj: list[Tensor] | None = [h] if (_db or _stage or _mep or _oz) else None
+        # The per-pass planning target (tul.spandec_per_pass) reads the SAME trajectory the
+        # oracle reads, for the same reason: it grades the state after every pass. Training
+        # only, so an eval forward keeps `db_traj` None and the sweep reads ruler columns.
+        _pp = (bool(self.cfg.tul.spandec_per_pass) and self.training
+               and self.tul_spandec is not None)
+        _db_traj: list[Tensor] | None = ([h] if (_db or _stage or _mep or _oz or _pp)
+                                         else None)
         # Per-pass MUX: entry t-1 is the mask for `_db_traj[t]` — the slots whose realised
         # depth REACHES pass t and whose pass t carries gradient (a progressive prefix pass
         # is excluded: it is detached, so a term there would train nothing and still be
@@ -4316,6 +4333,98 @@ class MORPHTransformer(nn.Module):
                 stats["spandec_n_tokens_h1"] = float(valid[:, :, :dec.per_span_tokens].sum())
         return loss
 
+    def _tul_spandec_per_pass_loss(self, db_traj, depths: Tensor, input_ids: Tensor,
+                                   layout: SlotLayout, stats: dict | None = None) -> Tensor:
+        """``tul.spandec_per_pass`` — one planning target per PASS, growing by a span a pass.
+
+        THE OBJECTIVE. The state after pass ``t`` is decoded into spans ``s+1 .. s+H_t``,
+        ``H_t = min(t, tul.spandec_pass_horizon_max)``, through the SAME
+        :class:`~morph.model.tul_spandec.SpanDecoder` the exit state is graded by. Pass 1
+        is asked for the next span, pass 2 for the next two, and so on, so a pass can only
+        improve on its predecessor's target by extending the plan one span further. The
+        EXIT term is untouched: it stays the shipped ``H = 1`` "next thought" loss, which
+        is what keeps ``z`` the thing the coda has to decode.
+
+        WHY THIS AND NOT REACHABILITY. The strict panel's amendment 3 (2026-09-12) found
+        the first per-pass K-curve that moved — ``tg_coda_prefix_reach: prev`` plus
+        ``loop_reach: 1``, token K1-K6 +0.0163 at CE parity — by BLINDING the coda, so the
+        loop had to carry history. Wolfe: "z has to hold the history when it should hold
+        the present next thought that needs decoding. Our objectives are still poor." Here
+        the coda keeps its full reach and the depth is asked for by the target instead.
+
+        THE MASK, the oracle's rule. A slot is graded at pass ``t`` only when its REALISED
+        depth reaches ``t``. A slot that stopped at pass 3 carries a frozen state for every
+        later pass, and grading it again would supervise the ``torch.where`` carry and
+        over-weight shallow slots.
+
+        THE REDUCTION. One CE per pass (a mean over that pass's graded target tokens), then
+        a plain mean over the passes — passes weigh EQUALLY. A token-weighted mean would
+        make the term mostly about the deepest pass, which carries ``pass_horizon_max``
+        times pass 1's tokens.
+
+        THE GRADIENT, and this is the point. Nothing is detached: the term reaches pass
+        ``t``'s core application through ``db_traj[t]``, and through the live carry it
+        reaches every EARLIER pass as well. The decoder trains on it too (the parameters
+        are shared with the exit target), which is deliberate — one reader, one notion of
+        what a decodable plan is.
+
+        THE POSITION TABLE is :attr:`SpanDecoder.pos_pass`, not :attr:`SpanDecoder.pos`.
+        The per-pass sequence is ``H_t`` blocks of ``spandec_pass_tokens``; the exit
+        sequence is one block of ``spandec_max_tokens``. Row 8 means "span s+2, token 0"
+        here and "span s+1, token 8" there, and one parameter cannot be both.
+
+        COST, arithmetic. ``sum_{t=1..6} t * 8 = 168`` decoded positions per slot per step
+        at the panel's settings, against the ``H = 3`` exit target's 96 and the shipped
+        target's 32 — 21.0 decoder block-passes per real token plus the exit term's 4.0.
+        """
+        tc = self.cfg.tul
+        dec = self.tul_spandec
+        assert dec is not None and db_traj is not None
+        T = len(db_traj) - 1
+        if T < 1:
+            return db_traj[0].new_zeros(())
+        if dec.pos_pass is None:
+            raise RuntimeError(
+                "tul.spandec_per_pass ran on a decoder built with no per-pass position "
+                "table: SpanDecoder(pass_positions=0). The table is sized at construction "
+                "from spandec_pass_horizon_max * spandec_pass_tokens.")
+        J1 = int(tc.spandec_pass_tokens)
+        cap = int(tc.spandec_pass_horizon_max)
+        w_tied = self.embed.lm_weight()                               # [V, C]
+        w_head = w_tied.detach() if tc.mux_detach_head else w_tied
+        terms: list[Tensor] = []
+        n_tokens = 0.0
+        for t in range(1, T + 1):
+            keep = (depths >= t) & layout.slot_valid                  # [B, S]
+            if not bool(keep.any()):
+                continue
+            H = min(t, cap)
+            ids, valid = horizon_span_slots(input_ids, layout, J1, H)  # [B, S, H*J1]
+            valid = valid & keep.unsqueeze(-1)
+            z = self._readout(db_traj[t])                             # [B, S, C]
+            # The SAME detach asymmetry `_tul_spandec_loss` documents: the OUTPUT head
+            # follows `mux_detach_head`, the decoder's INPUT read of the tied table is
+            # always detached.
+            st = dec.decode(z, ids, valid, w_tied.detach(), pos=dec.pos_pass)
+            C = st.shape[-1]
+            lab = torch.where(valid, ids, torch.full_like(ids, -100))
+            loss_t = fused_linear_cross_entropy(
+                st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
+                chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id)
+            terms.append(loss_t)
+            if stats is not None:
+                stats[f"spandec_pass_t{t}"] = float(loss_t.detach())
+                stats[f"spandec_pass_h{t}"] = float(H)
+                n_tokens += float(valid.sum())
+        if not terms:
+            return db_traj[0].new_zeros(())
+        out = torch.stack(terms).mean()
+        if stats is not None:
+            stats["spandec_pass_ce"] = float(out.detach())
+            stats["spandec_pass_terms"] = float(len(terms))
+            stats["spandec_pass_n_tokens"] = n_tokens
+        return out
+
     def _own_span_grad(self, h: Tensor, input_ids: Tensor, layout: SlotLayout,
                        mask: Tensor) -> tuple[Tensor, Tensor]:
         """``(dL_own/dz, L_own)`` at the CURRENT slot state, both DETACHED.
@@ -4710,6 +4819,7 @@ class MORPHTransformer(nn.Module):
             mux_stats = {}
             spandec_loss, spandec_stats, _egrad_src = None, {}, None
             oracle_z_loss, oracle_z_stats = None, {}
+            spandec_pass_loss, spandec_pass_stats = None, {}
         elif self.fm_planner is not None:
             # FM1 (morph/model/tul_fm.py). The planner replaces the core loop; the plan
             # is DETACHED before it reaches W_prefix, so the coda's CE never touches the
@@ -4719,6 +4829,7 @@ class MORPHTransformer(nn.Module):
             mux_stats = {}
             spandec_loss, spandec_stats, _egrad_src = None, {}, None
             oracle_z_loss, oracle_z_stats = None, {}
+            spandec_pass_loss, spandec_pass_stats = None, {}
             h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
             x_coda = scatter_positions(xn, pos, values)
@@ -4886,6 +4997,14 @@ class MORPHTransformer(nn.Module):
             if tc.oracle_z and self.training and db_traj is not None:
                 oracle_z_loss = self._tul_oracle_z_loss(db_traj, depths, input_ids, layout,
                                                         stats=oracle_z_stats)
+            # ── the per-pass planning target (tul.spandec_per_pass) ───────────
+            # The same trajectory, the same realised depths, the same training-only rule.
+            # It does NOT replace the exit term above: the exit stays the shipped H = 1
+            # "next thought" and this adds one growing target per pass.
+            spandec_pass_loss, spandec_pass_stats = None, {}
+            if tc.spandec_per_pass and self.training and db_traj is not None:
+                spandec_pass_loss = self._tul_spandec_per_pass_loss(
+                    db_traj, depths, input_ids, layout, stats=spandec_pass_stats)
             # The energy module trains on THIS state, detached, at the same seam every
             # other reader of z uses — but its loss is built at the END of the forward,
             # because the `disc` critic's label is the coda's own CE over the next span.
@@ -5101,6 +5220,17 @@ class MORPHTransformer(nn.Module):
             _dw = tc.spandec_weight * spandec_loss
             groups["spandec_weighted"] = _dw.detach()
             groups["loss"] = groups["loss"] + _dw
+
+        if spandec_pass_loss is not None and groups is not None:
+            # Same contract as `spandec_weighted`: the WEIGHTED term is exposed so train.py
+            # can subtract it and keep train/loss and the val loss on the MODEL's CE.
+            groups = dict(groups)
+            groups["spandec_pass"] = spandec_pass_loss.detach()
+            for _k, _v in spandec_pass_stats.items():
+                groups[_k] = spandec_pass_loss.new_tensor(_v)
+            _pw = tc.spandec_pass_weight * spandec_pass_loss
+            groups["spandec_pass_weighted"] = _pw.detach()
+            groups["loss"] = groups["loss"] + _pw
 
         if oracle_z_loss is not None and groups is not None:
             # Same contract as `spandec_weighted`: the WEIGHTED term is exposed so train.py
@@ -5736,6 +5866,18 @@ class MORPHTransformer(nn.Module):
             S = layout.slot_index.shape[1]
             passes = passes + float(len(self.tul_spandec.blocks) * B * S
                                     * self.tul_spandec.max_tokens)
+            if self.cfg.tul.spandec_per_pass and self.training and depths is not None:
+                # The per-pass target decodes `min(t, cap) * pass_tokens` positions at every
+                # pass t up to the batch's realised maximum depth — 168 positions per slot
+                # at cap 6 / pass_tokens 8 / depth 6, against the exit term's 32. Kept as
+                # tensor arithmetic so the metric costs no host sync, and gated on training
+                # because an eval forward never builds the trajectory the term reads.
+                _cap = int(self.cfg.tul.spandec_pass_horizon_max)
+                _pt = int(self.cfg.tul.spandec_pass_tokens)
+                _max_d = int(self.cfg.tul.slot_max_depth or self.cfg.max_depth)
+                _t = torch.arange(1, _max_d + 1, device=depths.device)
+                _n = (_t.clamp(max=_cap) * (_t <= depths.max()).long()).sum() * _pt
+                passes = passes + len(self.tul_spandec.blocks) * B * S * _n
         return passes
 
     # ── Forward ───────────────────────────────────────────────────────
