@@ -385,6 +385,43 @@ reason is the smoke, and it is named.
 
 (pending)
 
+### Step 0, the gate (2026-09-12 03:32 CDT; 96 rows, batch 3, depth 6, 20 shuffles; JSON in `lab/experiments/results/2026-09-12-latent-z-gradient/`)
+
+Split point bit-exact on all three checkpoints (|d| 0.0). 4,906 scored slots each, 0.500
+positive. AUC as flat / mean reduction, then the shuffled-label null band p95:
+
+| checkpoint | entry (t0) | pass 1 | exit (t6) | null p95 |
+|---|---|---|---|---|
+| slot-spandec-mask@5000 | 0.6045 / 0.6109 | 0.6103 / 0.6384 | 0.6082 / 0.6368 | 0.513 / 0.514 |
+| slot-mux-norm-match@5000 (ruler, `core_hca_compress_ratio=256`) | 0.6128 / 0.6331 | 0.6028 / 0.6346 | 0.6041 / 0.6285 | 0.513 / 0.514 |
+| slot-mux-mask-norm-match@5000 | 0.6047 / 0.6419 | 0.6105 / 0.6565 | 0.6130 / 0.6482 | 0.514 / 0.519 |
+
+Geometry on spandec-mask (stream mean): |z| 26.3 → 35.7, step_rel 0.311 / 0.090 / 0.046 /
+0.029 / 0.022 / 0.017 (monotone), step_cos 0.83 / 0.92 / 0.93 / 0.94 / 0.94, eff_rank
+17-19, isotropy 0.017-0.018, hoyer 0.45-0.49. The ruler: step_rel 0.65 → 0.030, step_cos
+0.83 → 0.71, eff_rank 22-23.
+
+**P-a TRUE** (exit AUC above 0.6 on both reductions, clear of the band by 0.09-0.12).
+**P-b**: on the mean reduction the AUC rises 0.611 → 0.638 (+0.027, above the band's
+half-width ~0.017) and the whole rise happens at pass 1; passes 2-6 add nothing (0.638 →
+0.637). On the flat reduction +0.004, inside the band. TRUE on one reduction by the letter,
+and the shape is the one-pass shape every other instrument reads. The ruler FALLS
+0.633 → 0.629 and the mask ruler rises 0.642 → 0.648, both inside the band.
+**P-i**: the builder's band (0.80-0.95) TRUE, the orchestrator's (0.5-0.65) FALSE; step norm
+decays monotonically on all three (TRUE).
+
+### The 21-step cost smokes (2026-09-12 03:34 CDT, frozen worktree at `b2b9198`, bypass geometry)
+
+`recon`: exit 0, 7,584 tok/s at step 20 (the ruler's smoke reads ~10.8k: **1.43x** wall),
+peak 15.45 GB, loss/total 33.48 = token CE + spandec 11.16 + egrad 11.18, preclip/total 43,
+`gp_rel_t0` 1e-4 (zero-init `W_g`). `disc`: exit 0, 10,827 tok/s (**1.0x**), peak 14.48 GB.
+P-g: recon inside 1.5x (TRUE at the smoke rate, not inside 1.3x); disc inside 1.15x (TRUE).
+A 21-step rate is not a 5,000-step rate.
+
+**Arms.** `slot-spandec-norecur` on the ORIGINAL (bypass) geometry started 03:35 at
+`b2b9198` to use an idle card (control: `slot-spandec-mask`). The strict-geometry versions
+of all three arms are queued behind it at `a0b72c4` (amendment above).
+
 ## Verdict
 
 (pending)
