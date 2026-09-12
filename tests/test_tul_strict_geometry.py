@@ -44,7 +44,7 @@ import torch
 
 import morph.model.transformer as transformer_mod
 from morph.model.transformer import MORPHConfig, MORPHTransformer
-from morph.model.tul import TULConfig
+from morph.model.tul import TULConfig, TULGateConfig
 from morph.model.tul_layout import (
     BoundaryRule,
     SlotLayout,
@@ -766,3 +766,63 @@ def test_the_plain_math_controls_are_already_norm_match():
         assert str(cfg.training.ternary_scale_mode) == "norm_match", n
         assert str(cfg.tul.activate_at) == "never", f"{n} is not a plain control"
         assert int(cfg.training.steps) == 6000, n
+
+
+# ── the remaining refusals and the probe entry point ─────────────────────────
+
+def test_strict_refuses_the_gate_and_the_reread():
+    with pytest.raises(NotImplementedError, match="tul.gate"):
+        _tul(tg_geometry="strict", gate=TULGateConfig(k_max=40, k_decode_max=32))
+    with pytest.raises(NotImplementedError, match="reread"):
+        _tul(tg_geometry="strict", reread=True, reread_heads=2)
+
+
+def test_strict_refuses_an_fm_planner():
+    """The planner replaces the core loop, so 'the loop is the only channel' names no loop.
+
+    A BUILD-time raise, not a config one: `fm` lives on MORPHConfig, so TULConfig cannot
+    see it and the check has to sit where both are in scope.
+    """
+    from morph.model.tul_fm import FMArmConfig
+    with pytest.raises(NotImplementedError, match="FM planner"):
+        MORPHTransformer(_tiny(tul=_tul(tg_geometry="strict"), fm=FMArmConfig()))
+
+
+def test_plan_nats_never_runs_on_a_strict_model():
+    """Strict requires `tg_restrict`, and plan_nats is already handled there — TWO ways.
+
+    The public entry point SKIPS the ablation on a `tg_restrict` model (it passes
+    `_plan_nats=False`, so a TG training run does not die at its first eval), and the
+    forward RAISES if the flag is forced anyway. The brief asked strict to refuse
+    plan_nats; it inherits both halves from `tg_restrict` rather than adding a third
+    check, and this test is what says so instead of the claim sitting in a docstring.
+    """
+    m = _model(tg_geometry="strict")
+    _ids0, inp, lab, layout = _pack()
+    with torch.no_grad():
+        out = m.tul_forward_with_plan_nats(inp, lab, layout)
+    assert "ce_tokens_no_slots" not in out, \
+        "the plan-nats ablation RAN on a strict model — its coda mask is not re-derived"
+    with torch.no_grad():
+        with pytest.raises(NotImplementedError, match="plan_nats"):
+            m._forward_single(inp, lab, 0, None, layout, _plan_nats=True)
+    # two-sided: an unrestricted TUL model DOES produce the column
+    m2 = _model(tg_restrict=False)
+    with torch.no_grad():
+        out2 = m2.tul_forward_with_plan_nats(inp, lab, layout)
+    assert "ce_tokens_no_slots" in out2
+
+
+def test_prelude_states_builds_the_strict_prelude():
+    """A probe must read the prelude the RUN computed, not an unrestricted one.
+
+    `prelude_states` builds its own masks (it is not reached through `_forward_tul`), so it
+    is its own place to get the geometry wrong. Two-sided: strict and restrict must differ.
+    """
+    _ids0, inp, _lab, layout = _pack()
+    with torch.no_grad():
+        a = _model(tg_geometry="strict").prelude_states(inp, layout=layout)
+        b = _model().prelude_states(inp, layout=layout)
+    assert a.shape == b.shape
+    assert not torch.equal(a, b), \
+        "prelude_states ignored tul.tg_geometry — a probe would read the wrong prelude"
