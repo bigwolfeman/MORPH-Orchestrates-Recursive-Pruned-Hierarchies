@@ -95,3 +95,37 @@ depth 6:  CE full 4.4194   CE span 4.3737   gap -0.0457 nats [-0.0481, -0.0434]
         6    21,799   -0.0453  [-0.0542, -0.0367]
         7    21,034   -0.0505  [-0.0614, -0.0406]
        8+   304,246   -0.0485  [-0.0513, -0.0456]
+
+## spandec-mask@6 minus plain-coda-matched@1 (matched compute, control trained at depth 1)
+full file read at depth 1 for every span depth
+paired 491,520 tokens (full 491,520, span 501,106)
+offsets from budget_web_full over 480 rows; 480 paired tokens have none
+
+depth 6:  CE full 4.0933   CE span 4.3470   gap +0.2536 nats [+0.2408, +0.2676]
+   offset      n        gap        95% CI
+        0    24,338   +0.1419  [+0.1232, +0.1581]
+        1    24,584   +0.3147  [+0.2861, +0.3439]
+        2    24,546   +0.3346  [+0.3029, +0.3729]
+        3    24,504   +0.3296  [+0.3012, +0.3608]
+        4    23,343   +0.2954  [+0.2737, +0.3219]
+        5    22,646   +0.2644  [+0.2440, +0.2839]
+        6    21,799   +0.2528  [+0.2341, +0.2721]
+        7    21,034   +0.2524  [+0.2332, +0.2723]
+       8+   304,246   +0.2413  [+0.2294, +0.2578]
+
+## mux-mask@6 minus plain-coda-matched@1
+full file read at depth 1 for every span depth
+paired 491,520 tokens (full 491,520, span 501,106)
+offsets from budget_web_full over 480 rows; 480 paired tokens have none
+
+depth 6:  CE full 4.0933   CE span 4.4186   gap +0.3253 nats [+0.3119, +0.3397]
+   offset      n        gap        95% CI
+        0    24,338   +0.1687  [+0.1489, +0.1848]
+        1    24,584   +0.3873  [+0.3574, +0.4174]
+        2    24,546   +0.4159  [+0.3802, +0.4540]
+        3    24,504   +0.4009  [+0.3727, +0.4351]
+        4    23,343   +0.3655  [+0.3453, +0.3917]
+        5    22,646   +0.3378  [+0.3162, +0.3591]
+        6    21,799   +0.3257  [+0.3032, +0.3481]
+        7    21,034   +0.3300  [+0.3117, +0.3497]
+       8+   304,246   +0.3151  [+0.3025, +0.3313]

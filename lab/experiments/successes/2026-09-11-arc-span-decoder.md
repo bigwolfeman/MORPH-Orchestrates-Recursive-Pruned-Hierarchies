@@ -1,6 +1,6 @@
 # Planned: the span decoder — grade the slot on the WHOLE next span, not on its bag
 
-Status: planned
+Status: success
 
 Date: 2026-09-11 (frozen before launch; no arm has run past a 21-step smoke). Arc:
 `2026-09-04-loop-contribution-arc.md`. Design note:
@@ -282,7 +282,7 @@ profiles, the 480-row worth profile of arm 1, `paired_gaps_5000.txt`); the old m
 gradient probe and z-opt JSON under `ignored/experiment-artifacts/2026-09-10-slot-{gradient-probe,z-optimize}/slot-spandec-mask.json`.
 
 **Survival and cost.** Both HEALTHY: arm 1 pre-clip max 40 at step 243, 53m07s; arm 2 max
-101 at step 1,879, 55m38s. Runner val: 4.4206 / 4.4680 (old mask arm 4.4192).
+101 at step 1,879, 55m38s. Runner val: 4.4206 / 4.4680 (old mask arm 4.4986; part 1 first printed 4.4192, a wrong number corrected 2026-09-12 — the runner's final val is not the comparison, the paired sweeps are).
 
 **Token CE, paired on `tok_index`, depth 6, 480 rows** (`paired_gaps_5000.txt`):
 
@@ -341,3 +341,115 @@ long-range part (bin 16+: 17 → 22 %, 0.068 of 0.31). Adding the first-token MU
 top costs 0.041 at every position and pulls the all-slot worth back down to 0.129: the
 M-next target is harmful, not merely weak, and it shrinks the channel. The long-range 0.31
 is what the chain arm (`slot-spandec-chain-mask`, staged) is for.
+
+## Results, part 2 (2026-09-12 03:27 CDT: `slot-spandec-chain-mask`, `slot-mask-dropout-off`, `slot-mask-mux-quarter`, `plain-coda-matched`)
+
+All four at `35c7c4e`, seed 1, 5,000 steps, HEALTHY, no tripwire. Wall clock from the
+runner's START/DONE lines: chain 54 min, dropout-off 45 min, mux-quarter 47 min, plain
+control 20 min (27,265 tok/s at step 4,800 against 11-14k for the slot arms). Raw files in
+`lab/experiments/results/2026-09-11-span-decoder/` (480-row worth profiles for all six
+arms now, `paired_gaps_5000.txt`, the plain control's anatomy and init probe); chain-arm
+gradient probe and z-opt JSON under `ignored/experiment-artifacts/2026-09-10-slot-{gradient-probe,z-optimize}/slot-spandec-chain-mask.json`.
+
+**Token CE, paired on `tok_index`, 480 rows** (`paired_gaps_5000.txt`; the plain control
+is read at depth 1, the depth it trained at — its forced-depth sweep reads 4.0933 at 1 and
+5.1358 at 6, so `span_budget_profile.py --full-depth 1`, commit `0dff5e8`):
+
+| pair | shared tokens | gap | 95 % CI | shape by offset |
+|---|---|---|---|---|
+| spandec-chain-mask − spandec-mask | 501,106 | **+0.0068** | [+0.0044, +0.0091] | flat, +0.0066 at 8+ |
+| mask-dropout-off − mux-mask | 501,106 | **−0.0432** | [−0.0457, −0.0409] | flat, −0.047 at 8+ |
+| mask-mux-quarter − mux-mask | 501,106 | **−0.0457** | [−0.0481, −0.0434] | −0.015 at 0, −0.035 to −0.05 at 1..8+ |
+| spandec-mask@6 − plain-coda-matched@1 | 491,520 | **+0.2536** | [+0.2408, +0.2676] | +0.142 at 0, +0.241 at 8+ |
+| mux-mask@6 − plain-coda-matched@1 | 491,520 | +0.3253 | [+0.3119, +0.3397] | +0.169 at 0, +0.315 at 8+ |
+
+At 2,500 spandec-mask was +0.0856 [+0.0814, +0.0897] behind the same control.
+
+**K-curves (480 rows, depth 1 / 6 / 16).** chain 4.3552 / 4.3542 / 4.3549, K1−K6 +0.0010
+[+0.0008, +0.0012], K3−K6 +0.0001, spandec_ce 4.5115 / 4.5088 / 4.5124; dropout-off 4.3768 /
+4.3763 / 4.3770, K1−K6 +0.0005; mux-quarter 4.3743 / 4.3737 / 4.3738, K1−K6 +0.0006, K3−K6
++0.0002. The plain control: 4.0933 at depth 1, worse at every forced depth above it.
+
+**Worth profiles, 480 rows** (bins by the predicting position 0 / 1 / 2 / 3 / 4-7 / 8-15 / 16+;
+token-weighted total; part-1 rows repeated for the comparison):
+
+| arm | prefix write (`zero`) | all slots (`all_slots`) |
+|---|---|---|
+| mux-mask (ruler) | 0.582 / 0.194 / 0.130 / 0.110 / 0.081 / 0.056 / 0.044, total **0.096** | 0.631 / 0.247 / 0.165 / 0.141 / 0.103 / 0.071 / 0.052, total **0.115** |
+| spandec-mask | 0.283 / 0.187 / 0.137 / 0.114 / 0.080 / 0.053 / 0.037, total **0.078** | 0.708 / 0.593 / 0.366 / 0.269 / 0.178 / 0.107 / 0.068, total **0.182** |
+| spandec-chain-mask | 0.261 / 0.199 / 0.144 / 0.117 / 0.090 / **0.061** / 0.040, total **0.083** | 0.412 / 0.331 / 0.233 / 0.194 / 0.142 / 0.094 / 0.061, total **0.131** |
+| mask-dropout-off | 0.414 / 0.284 / 0.193 / 0.156 / 0.109 / 0.061 / 0.038, total **0.102** | 0.532 / 0.362 / 0.245 / 0.183 / 0.123 / 0.067 / 0.038, total **0.120** |
+| mask-mux-quarter | 0.358 / 0.173 / 0.095 / 0.078 / 0.058 / 0.037 / 0.025, total **0.065** | 0.376 / 0.180 / 0.099 / 0.081 / 0.060 / 0.038 / 0.025, total **0.067** |
+
+Bin 8-15 prefix-write CIs: chain [0.0587, 0.0637], spandec-mask [0.0504, 0.0550] — disjoint.
+
+**Chain arm, gradient probe (12 rows, batch 2, train mode).** Core-weight gradient norm from
+the token CE 0.349, from the total loss 1.285 (3.7x; spandec-mask 4.2x). Per-pass cotangent
+shares at the loop state 0.168 / 0.167 / 0.161 / 0.158 / 0.160 / 0.185 (even). Per-pass
+cosines of the core-weight gradient to the total −0.17 / −0.30 / 0.36 / 0.68 / 0.77 / 0.37:
+the first two passes are ANTI-aligned. Cancellation (total norm over the sum of per-pass
+norms) **0.314** on the total loss against spandec-mask's 0.744: the chain's passes fight
+each other. **z-opt (12 rows):** ce_loop 4.1291, ce_entry 4.1338 (entry-vs-exit +0.0047;
+spandec-mask +0.0062), ce_zopt at lr 1e-2 2.4881 (−1.641), a random start −1.441.
+
+**Predictions, final.** P-a FALSE, P-b TRUE, P-c TRUE, P-d TRUE, **P-e TRUE** (chain bin
+8-15 0.061 above spandec-mask's 0.053 with disjoint CIs), **P-f TRUE** (dropout-off 0.043
+closer to plain, bar 0.03), **P-g TRUE** (mux-quarter prefix worth 0.065, between the
+ruler's 0.096 and the no-MUX twin's ~0.01), **P-h TRUE** (six of six HEALTHY), P-i FALSE,
+P-j TRUE (every spandec arm 53-56 min). **8 of 10 held.**
+
+**Reading, part 2.**
+
+1. The two "overhead" factors are straight CE taxes with no channel cost: dropout-off gains
+   0.043 at every offset and its channel worth RISES (0.096 → 0.102, all-slot 0.115 → 0.120);
+   mux-quarter gains 0.046 and its channel shrinks (0.096 → 0.065) with the all-slot worth
+   collapsing onto the prefix write (0.067 vs 0.065: at a quarter weight the slot CELLS carry
+   nothing beyond what the loop writes). The full-weight M-next MUX costs as much as the
+   dropout, and both gains are flat across offsets, so neither is a channel effect.
+2. The chain holds a running state and it shows where predicted: the prefix write at
+   offsets 8-15 is the only long-range reading in the panel that moved (0.053 → 0.061), and
+   the bypass shrinks (all-slot worth 0.182 → 0.131, bin 0 0.71 → 0.41: the chained seed
+   makes the cells less useful to the coda on their own). It costs 0.007 nats of CE for it,
+   and the gradient probe says why: the direct edge makes the first two passes anti-aligned
+   with the rest and the cancellation drops from 0.74 to 0.31. The loop is still worth
+   nothing on tokens (K1−K6 0.0010) and its write is worth +0.005 over the entry state.
+3. The matched-compute control is the panel's largest number. At 14.0 block-passes per token
+   a plain model trained at depth 1 reads 4.0933; the best slot arm is 0.254 nats behind it
+   and the ruler 0.325, and the gap is largest at offsets 8+ (0.24 / 0.32). The cross-span
+   budget with no slots is 0.40, so the mask family recovers 0.08 (ruler) to 0.15
+   (spandec-mask) of what the restriction removes, and the plain control at a third of the
+   looped plain's compute sits 0.054 behind it. Every gain in this panel is inside that
+   deficit. A 5k reading on a deep model, not a verdict — but the ordering at 2,500 was the
+   same (+0.086).
+
+## Verdict
+
+**Success by the protocol (8 of 10 predictions held), and the result is a negative for the
+loop.** The whole-span target is the lever on the slot CHANNEL (+0.067 all-slot worth, −0.072
+CE), the chain is the lever on the long-range prefix write (+0.008 at offsets 8-15 at a
+0.007 CE cost), and the two overhead factors were taxes. Nothing in the panel moved the
+loop's depth (every K1−K6 ≤ 0.0013) or its write contribution past +0.006 over the entry
+state. The channel's gain is carried by the slot cells that the prelude builds by attending
+across spans and the coda reads directly — a route that bypasses the loop, which
+`tg_restrict` never closed. At matched compute the whole mask family is a quarter nat behind
+a plain model.
+
+The prereg's binding for "P-a FALSE and P-e TRUE" named the next arm as the chain without
+the decoder. Not queued: the chain's own reading (a bypass that shrinks only because the
+seed changes, cancellation 0.31) and the all-slot-versus-prefix split say the state has
+somewhere to live and the coda simply does not need it while it can read the cells. The
+next batch closes the bypass instead (`.agents/notes/proposed/architecture/2026-09-12-strict-slot-geometry.md`,
+prereg `lab/experiments/planned/2026-09-12-arc-strict-geometry.md`): prelude and coda
+restricted to the own span, the loop the ONLY cross-span channel, plus reach-limited passes,
+the oracle-z per-pass teacher, a three-span decoder target and the energy-gradient twins on
+the same geometry. The chain-without-decoder arm stays a proposal.
+
+## Updated hypothesis
+
+The slot loop earns nothing because it is not needed: under the mask relation the prelude's
+slot cells already compose across spans and the coda reads them. A geometry where the loop's
+write is the only cross-span route forces the 0.40-nat budget through the loop; the loop
+will then carry a measurable write (ce_entry − ce_loop > 0.02) and, if depth is ever to be
+earned on web text, it is on that geometry with a target that needs more than one pass (a
+running state across spans, or a per-pass target). The expected price is CE at 5k: a strict
+arm will sit further behind the matched-compute plain control before it can sit closer.

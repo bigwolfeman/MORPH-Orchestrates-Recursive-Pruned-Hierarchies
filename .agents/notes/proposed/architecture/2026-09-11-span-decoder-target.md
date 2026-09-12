@@ -212,3 +212,19 @@ this note:
   chunked-CE implementation in the tree rather than two. The smoke's peak is 14.35 GB
   against the ruler's 12.83 GB; 5,000 steps with the full AdEMAMix moment set warm is
   unmeasured.
+
+## Outcome (2026-09-12)
+
+Six arms run and filed in
+[`../../../../lab/experiments/successes/2026-09-11-arc-span-decoder.md`](../../../../lab/experiments/successes/2026-09-11-arc-span-decoder.md)
+(8 of 10 predictions held). The whole-span target moves the slot channel (all-slot worth
+0.115 → 0.182, CE −0.072 vs the mask ruler, flat across offsets); M-next on top costs 0.041;
+the chain moves only the long-range prefix write (+0.008 at offsets 8-15) at a 0.007 CE cost
+with per-pass cancellation 0.74 → 0.31; token-state dropout and the full-weight MUX were CE
+taxes worth 0.043 and 0.046. No arm moved the loop (K1−K6 ≤ 0.0013; write contribution
+≤ +0.006). At matched block-passes per token the family is 0.25-0.33 nats behind a depth-1
+plain model. The gain rides on the slot cells the coda reads directly, bypassing the loop;
+the next batch closes that route
+([`2026-09-12-strict-slot-geometry.md`](2026-09-12-strict-slot-geometry.md)). The
+`tul.spandec` target stays as the mask family's default target; `tul.slot_chain` stays
+available, not default.
