@@ -1,0 +1,27 @@
+# Strict-geometry panel, arm "slot-spandec-strict-prev-reach1": coda prefix reach `prev`
+# AND loop reach 1 — the arm where depth is FORCED to carry long-range context.
+#
+# WHY `reach1` ALONE COULD NOT (measured 2026-09-12): `slot-spandec-strict-reach1` keeps
+# `tg_coda_prefix_reach: all`, so a token reads the prefix cells of EVERY earlier slot
+# directly. Each cell carries its own span's summary whatever the loop did, and the coda
+# composes them itself; limiting the loop's slot-to-slot reach therefore limits nothing the
+# coda needs, and the arm's K-curve read flat (K1−K6 +0.0007 at 2,500).
+#
+# HERE a token of span k reads slot k−1's cells ONLY (`prev`), and inside the loop slot k−1
+# reads slots k−2..k−1 per pass (`loop_reach: 1`). An edit in span k−m reaches span k only
+# after m−1 passes (tests/test_tul_strict_geometry.py::
+# test_reach_prev_plus_loop_reach_needs_depth_to_carry_three_spans). The forced-depth
+# K-curve is then a reachability curve BY CONSTRUCTION: depth dependence, not value. The
+# value reading is the depth-6 paired CE against `slot-spandec-strict-prev` (same coda
+# reach, unlimited loop reach = every span reachable in one pass) and against
+# `slot-spandec-strict`.
+#
+# Record: lab/experiments/planned/2026-09-12-arc-strict-geometry.md (amendment 1)
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+tul:
+  tg_coda_prefix_reach: prev
+  loop_reach: 1
+wandb:
+  name: slot-spandec-strict-prev-reach1

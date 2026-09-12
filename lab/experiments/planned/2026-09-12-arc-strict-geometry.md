@@ -212,6 +212,25 @@ mask lineage is retired.
 If P-d's CE half holds — reach1 within 0.02 of strict while its K-curve is large — then forced
 depth is free, and the next arm is reach1 at a deeper draw.
 
+### Amendment 1 (2026-09-12 06:45 CDT, orchestrator): reach1 cannot force depth under coda reach "all"; one arm added
+
+`slot-spandec-strict-reach1` read K1−K6 +0.0007 at 2,500 (4.6493 → 4.6486). The design
+error is in the brief, not the build: with `tg_coda_prefix_reach: all` a token reads every
+earlier slot's prefix cells directly, so a slot's chain of loop states is not the only route
+to older spans and limiting the loop's reach limits nothing the coda needs. The combination
+that forces depth is coda reach `prev` AND `loop_reach 1` (builder 2's own test
+`test_reach_prev_plus_loop_reach_needs_depth_to_carry_three_spans` proves the law at the
+fixture). Arm added: `slot-spandec-strict-prev-reach1`
+(`morph/configs/tul_slot_spandec_strict_prev_reach1.yaml`), queued after `strict-prev`.
+P-d is re-read on THIS arm; the original reach1 row stays as a control (reach limited, coda
+unrestricted).
+
+- **P-d′ (prev-reach1's K-curve is forced).** token K1−K6 above **0.05**: **70 %**; its
+  depth-6 CE within 0.03 of `slot-spandec-strict-prev`: **55 %** (the arm has to learn to
+  route through six passes what prev routes in one; at 5k that is a price). If K1−K6 is
+  under 0.02, the coda's `prev` cells plus the span's own tokens already carry what the
+  model uses and no reachability in the loop matters to it.
+
 ## Not verified before launch
 
 * **No GPU step of any arm here.** The card ran the arc probe chain
