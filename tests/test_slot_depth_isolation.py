@@ -303,3 +303,63 @@ def test_tiled_forward_equals_the_untiled_one():
     for i in range(2):
         assert torch.allclose(tiled[i::2], single[i], atol=1e-5), \
             f"variant {i} differs between the tiled and the untiled forward"
+
+
+# ── the script's row accumulator ─────────────────────────────────────────────
+
+def test_accum_means_are_token_weighted_and_pairs_are_checked():
+    from slot_depth_isolation import Accum
+
+    acc = Accum()
+    acc.new_rows(2)
+    acc.add("ref", 0, np.array([6.0, 2.0]), np.array([3.0, 1.0]))
+    acc.add("arm", 0, np.array([9.0, 1.0]), np.array([3.0, 1.0]))
+    assert acc.mean("ref") == pytest.approx(2.0)          # 8 nats over 4 tokens
+    assert acc.mean("arm") == pytest.approx(2.5)
+    ci = acc.ci("arm", "ref", n_boot=200)
+    assert ci["point"] == pytest.approx(0.5)
+    assert ci["n_units"] == 2 and ci["n_boot"] == 200 and ci["lo"] <= ci["hi"]
+
+
+def test_accum_refuses_an_unpaired_comparison():
+    from slot_depth_isolation import Accum
+
+    acc = Accum()
+    acc.new_rows(2)
+    acc.add("ref", 0, np.array([6.0, 2.0]), np.array([3.0, 1.0]))
+    acc.add("arm", 0, np.array([9.0, 1.0]), np.array([3.0, 2.0]))
+    with pytest.raises(RuntimeError, match="not paired"):
+        acc.ci("arm", "ref")
+
+
+def test_accum_keys_created_late_still_align_with_the_rows():
+    """A slot that first appears in batch 2 must not shift every earlier row's sum."""
+    from slot_depth_isolation import Accum
+
+    acc = Accum()
+    acc.new_rows(2)
+    acc.add("early", 0, np.array([1.0, 1.0]), np.array([1.0, 1.0]))
+    acc.new_rows(2)
+    acc.add("late", 2, np.array([4.0, 4.0]), np.array([2.0, 2.0]))
+    assert acc.sums["early"] == [1.0, 1.0, 0.0, 0.0]
+    assert acc.sums["late"] == [0.0, 0.0, 4.0, 4.0]
+    assert len(acc.counts["early"]) == len(acc.counts["late"]) == 4
+
+
+def test_the_scripts_identity_check_holds_on_the_fixture():
+    """`ce_map` at the model's own eval depth must reproduce `slot_depths=None`.
+
+    This is the gate `slot_depth_isolation.py` runs before it reports anything, exercised
+    through the same entry point (`tul_forward_ablated`) the script uses.
+    """
+    from slot_depth_isolation import ce_map
+
+    m = _model()
+    inp, lab, layout, _ = _batch()
+    own = int(m.cfg.tul.slot_depth_fixed or m.cfg.tul.slot_mean_depth or m.cfg.mean_depth)
+    a = ce_map(m, inp, lab, layout, _table(layout, own), "cpu")
+    b = ce_map(m, inp, lab, layout, None, "cpu")
+    assert torch.equal(a, b)
+    c = ce_map(m, inp, lab, layout, _table(layout, 1), "cpu")
+    assert not torch.equal(a, c), "depth 1 and the model's own depth agree bit for bit — " \
+                                  "the fixture's loop is inert and the gate proves nothing"
