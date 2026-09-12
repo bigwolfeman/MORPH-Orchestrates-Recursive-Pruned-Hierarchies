@@ -263,6 +263,34 @@ passes.
 * **`_tul_layer_passes`' per-pass count** uses `depths.max()` for the batch, which is the
   right number for the cost actually paid but has not been checked against a profiler.
 
+## Amendment 1 (2026-09-12, before any GPU step of either arm): how P-2 may be READ
+
+An outside review of the record (pasted by Wolfe, 2026-09-12 ~14:40 CDT) found two holes
+in the per-pass arm's reading. Both are accepted. The predictions above stay exactly as
+written; this amendment changes what they may be taken to MEAN and adds the instrument
+that gives the honest reading.
+
+1. **P-2 is not a progress reading.** `spandec_pass_t6` and `spandec_pass_t1` are scored on
+   DIFFERENT token sets (six spans against one). A fall can come from an easier mixture of
+   the added tokens and a rise can hide better predictions on every shared token. P-2 is
+   scored as written, but it no longer gates P-1's readability. The decisive reading is the
+   depth-by-horizon grid: the state after forced depth t in {1, 2, 3, 6}, scored by the shared
+   decoder against IDENTICAL targets per column — (a) the same H=1 8-token target on
+   `pos_pass`, (b) the same H=6 48-token target on `pos_pass`, (c) the exit target — with the
+   eligibility mask fixed across depths within a column
+   (`lab/divergence/spandec_horizon_grid.py`, being built; the strict ruler runs column (c)
+   as the control). **The progressive-planning interpretation holds only if a deeper state
+   scores better on the SAME tokens; an improvement that appears only when the scored target
+   changes with t fails it.** No numeric prediction is added after the fact.
+2. **Teacher forcing across spans weakens the target.** At pass t the decoder reads the TRUE
+   tokens of spans s+1..s+t-1 before decoding span s+t, so pass 2 is not required to build on
+   pass 1's forecast of span s+1; it may read it. The arm still asks z_t to carry what those
+   true tokens do not give about span s+t, which is a real demand, but it is weaker than
+   "extend the plan". Recorded so the binding is not over-read: a positive P-1 under this
+   target says the passes can be driven by a growing target, not that they plan.
+
+Neither point changes the queue line or the config.
+
 ## Results
 
 (pending)
