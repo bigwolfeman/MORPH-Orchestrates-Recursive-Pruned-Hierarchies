@@ -48,8 +48,10 @@ def _model(seed: int = 3, **kw) -> MORPHTransformer:
     torch.manual_seed(seed)
     tul_kw = {k[4:]: v for k, v in kw.items() if k.startswith("tul_")}
     cfg_kw = {k: v for k, v in kw.items() if not k.startswith("tul_")}
-    tul = _tul(tg_restrict=False, sigreg_lambda=0.0, mux_beta=1.0, mux_target="next",
-               mux_detach_head=True, **tul_kw)
+    tul_base = dict(tg_restrict=False, sigreg_lambda=0.0, mux_beta=1.0,
+                    mux_target="next", mux_detach_head=True)
+    tul_base.update(tul_kw)          # a `tul_*` kwarg OVERRIDES the default, never collides
+    tul = _tul(**tul_base)
     base = dict(tul=tul, n_core=2, mean_depth=MAX_DEPTH, max_depth=MAX_DEPTH,
                 bptt_depth=MAX_DEPTH, retention=False, dropout=0.0,
                 core_fixed_point_lambda=1.0, ckpt_grad_iters=0)
@@ -93,6 +95,36 @@ def test_own_mux_energy_builds_nothing_and_is_the_old_forward():
     assert torch.equal(a["loss"].detach(), b["loss"].detach())
     assert _same(ga, _grads(on))
     assert "egrad" not in b and "pass_residual" not in b
+
+
+def test_the_mux_beta_guard_is_scoped_to_the_mux_energy():
+    """`tul.grad_pass` used to demand `mux_beta > 0` unconditionally. That is right for the
+    MUX energy — it IS the MUX head's loss — and WRONG for the two energies that own their
+    own scorer. It blocked the whole batch: every arm here descends from
+    `tul_slot_spandec_mask`, which sets `mux_beta: 0` because the span decoder REPLACES the
+    MUX. Caught by composing the configs, not by a test, so here is the test."""
+    from morph.model.tul import TULConfig
+    with pytest.raises(ValueError, match="grad_pass_energy='own_mux' needs tul.mux_beta"):
+        TULConfig(grad_pass=True, mux_beta=0.0, grad_pass_energy="own_mux")
+    for energy in ("recon", "disc"):
+        cfg = TULConfig(grad_pass=True, mux_beta=0.0, grad_pass_energy=energy)
+        assert cfg.grad_pass_energy == energy
+    # ... and the shipped gradpass arm's setting still passes the guard it was written for.
+    assert TULConfig(grad_pass=True, mux_beta=1.0).grad_pass_energy == "own_mux"
+    with pytest.raises(ValueError, match="grad_pass_energy must be"):
+        TULConfig(grad_pass=True, mux_beta=1.0, grad_pass_energy="nope")
+
+
+def test_the_two_energy_arms_build_at_mux_beta_zero():
+    """End to end at the arms' own setting: mux_beta 0, the span decoder on, an energy on."""
+    for energy in ("recon", "disc"):
+        m = _model(tul_mux_beta=0.0, tul_grad_pass=True, tul_grad_pass_energy=energy,
+                   tul_egrad_max_tokens=6, tul_pass_residual_lambda=0.01)
+        out, *_ = _run(m)
+        assert torch.isfinite(out["loss"]) and "egrad" in out and "pass_residual" in out
+        assert "mux_local" not in out          # the MUX really is off
+        out["loss"].backward()
+        assert float(m.tul_grad_pass.W_g.grad.abs().sum()) > 0.0
 
 
 def test_an_energy_without_grad_pass_is_refused():

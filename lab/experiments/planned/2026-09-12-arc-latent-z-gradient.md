@@ -297,11 +297,21 @@ reason is the smoke, and it is named.
 
 ## Not verified before launch
 
-* **No arm here has run one GPU step.** The card was busy for the entire build window. The
-  build is proved by CPU tests only: `pytest tests/ -q` reads **1149 passed, 9 skipped,
-  1 xfailed** at the commit this file lands in, including 16 new tests in
+* **No arm here has run one GPU step.** The card was busy for the whole build window, and
+  when it freed the arc queue still had `plain-coda-matched` pending — a 21-step smoke
+  would have overlapped that arm's own rate check at step 200 and a contention dip below
+  the 8,086 floor SKIPS it. The build is proved by CPU tests only: `pytest tests/ -q` reads
+  **1151 passed, 9 skipped, 1 xfailed**, including 18 new tests in
   `tests/test_tul_egrad.py`, and six deliberate sabotages of the new mechanisms were each
   caught by exactly the test that claims to cover them.
+* **One blocker was found by composing the configs and NOT by the test suite.**
+  `TULConfig.__post_init__` refused `tul.grad_pass` at `mux_beta <= 0` unconditionally,
+  which would have stopped all three arms at build: every one of them descends from
+  `tul_slot_spandec_mask`, where `mux_beta: 0` because the span decoder REPLACES the MUX.
+  The guard is now scoped to `grad_pass_energy == "own_mux"` — the only energy that IS the
+  MUX head's loss — and the shipped `slot-mnext-gradpass` config still trips it as before.
+  Recorded here because it is the shape of failure a CPU suite does not catch: every unit
+  test built its own tiny `TULConfig` and none of them held the arms' real combination.
 * **Memory at the real shape is arithmetic, not a measurement.** The `recon` arm's transient
   is one chunked `[chunk, V]` tile per CE call plus the kernel's `[V, d]` fp32 `grad_w`
   accumulator (201 MB), built and discarded ~36 times per step. On a 31.4 GB card that a

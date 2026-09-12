@@ -796,12 +796,25 @@ class TULConfig:
                 raise ValueError(
                     "tul.grad_pass needs tul.grad_pass_scale > 0: at 0 the feature is "
                     "identically zero and the arm is the ruler under another name.")
-            if self.mux_beta <= 0.0:
+            if self.grad_pass_energy not in ("own_mux", "recon", "disc"):
                 raise ValueError(
-                    "tul.grad_pass needs tul.mux_beta > 0: the own-span loss it "
-                    "differentiates is the MUX head's loss, and at beta 0 the head is "
-                    "never trained, so the gradient fed to the loop is the gradient of an "
-                    "objective nothing else optimises.")
+                    "tul.grad_pass_energy must be 'own_mux', 'recon' or 'disc', got "
+                    f"{self.grad_pass_energy!r}")
+            if self.grad_pass_energy == "own_mux" and self.mux_beta <= 0.0:
+                # Scoped to the MUX energy ON PURPOSE. That energy IS the MUX head's loss,
+                # so at beta 0 the head is never trained and the gradient fed to the loop is
+                # the gradient of an objective nothing else optimises. The `recon` and
+                # `disc` energies own their own parameters and their own training loss
+                # (morph/model/tul_egrad.py), so they are well defined at mux_beta 0 — which
+                # is exactly the setting `tul_slot_spandec_mask` runs, because the span
+                # decoder REPLACES the MUX rather than supplementing it.
+                raise ValueError(
+                    "tul.grad_pass with grad_pass_energy='own_mux' needs tul.mux_beta > 0: "
+                    "the own-span loss it differentiates is the MUX head's loss, and at "
+                    "beta 0 the head is never trained, so the gradient fed to the loop is "
+                    "the gradient of an objective nothing else optimises. Set "
+                    "grad_pass_energy to 'recon' or 'disc' (which own their own scorer) or "
+                    "raise mux_beta.")
             if self.tokens_through_core:
                 raise NotImplementedError(
                     "tul.grad_pass is a SLOT-LOOP lever (_tul_core): it takes the gradient "
