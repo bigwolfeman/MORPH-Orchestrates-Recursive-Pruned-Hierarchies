@@ -3,7 +3,7 @@
 Status: proposed
 
 Date: 2026-09-11. Prereg:
-[`lab/experiments/planned/2026-09-11-arc-span-decoder.md`](../../../../lab/experiments/planned/2026-09-11-arc-span-decoder.md).
+[`lab/experiments/successes/2026-09-11-arc-span-decoder.md`](../../../../lab/experiments/successes/2026-09-11-arc-span-decoder.md).
 Sibling: [`2026-09-10-credit-assignment-in-the-slot-loop.md`](2026-09-10-credit-assignment-in-the-slot-loop.md)
 (how the slot loop is trained). This note is about what it is trained TOWARD.
 

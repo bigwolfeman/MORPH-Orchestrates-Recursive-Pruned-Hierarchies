@@ -1,0 +1,39 @@
+# MATH PANEL 2026-09-12 — Sudoku-Extreme under the SHIPPED ternary rule and the strict
+# geometry. Arm "sud-spandec-strict".
+#
+# WHAT THIS RE-RUNS AND WHY. ARC E17 (2026-09-08) put the slot loop on Sudoku-Extreme and
+# read `sud-mask` 0.155 nats BEHIND the plain model, flat across forced depths 2..16. That
+# panel ran `tul_m12_mnext_mask` — the M-next MUX, the mean-12 draw, and the ABSMEAN
+# ternary rule. Both of those have since been replaced:
+#   * `norm_match` is the shipped ternary rule since 2026-09-09. Under absmean the looped
+#     core was STARVED (MLP branch out/in 0.2, K1-K6 0.033 against 0.9 / 0.185 under
+#     norm_match), so every absmean loop reading is a reading of a weakened core.
+#   * the span decoder replaced the order-free M-next bag as the slot's target, and moved
+#     the mask arm 0.072 nats on web text.
+# Neither has ever run on math. The standing rule (Wolfe 2026-09-12) is that a flat loop on
+# a corpus is NOT a verdict about that corpus, so this is not "re-running a failure": it is
+# the first math arm whose core is not starved and whose slot has a target that asks for a
+# whole span.
+#
+# WHAT IT IS. `tul_slot_spandec_strict` (the strict geometry + the span-decoder target +
+# norm_match + the Parcae-entry ruler recipe + the gain constraint) with `sudoku_data`
+# composed AFTER it, so the data mixin owns seq 182, micro_batch 32 x grad-accum 4 = 128
+# boards/step, 6,000 steps in one curriculum stage, `max_slots: 0` (-> seq_len // 8 = 22;
+# 64 slots at seq 182 OOMed the E17 mask arm's prefix_project), `ckpt_grad_iters: 4` and
+# checkpoints every 1500. Exactly the knobs `tul_sud_mask.yaml` gets, from the same file.
+#
+# A board's spans are ~10 tokens (one grid row plus its newline), so the decoder's J = 32
+# is mostly mask. That is waste, not error — the target is the span, and the packer's cap
+# is what J follows. Named so nobody reads the decoder's cost here as the web-text cost.
+#
+# Control: `sud-notul-nm` (notul_sud, whose wandb name in this panel carries the `-nm`
+# suffix so it does not collide with the 2026-09-08 checkpoints). Readout:
+# lab/divergence/olympiad_sweep.py on the held-out boards at depths 1,2,3,6,9,12,16.
+# Record: lab/experiments/planned/2026-09-12-arc-math-under-norm-match.md
+defaults:
+  - tul_slot_spandec_strict
+  - sudoku_data
+  - _self_
+
+wandb:
+  name: sud-spandec-strict

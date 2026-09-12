@@ -8,7 +8,7 @@
 # their own spans. A cell's content is its SEED — `E_slot` plus the bag-mean of its own
 # span's token embeddings, plus the per-layer `x0`/bigram injections that re-add exactly
 # that at every coda layer. None of it has passed through the loop. Measured on
-# `slot-spandec-mask` at 5,000 steps (lab/experiments/planned/2026-09-11-arc-span-decoder.md,
+# `slot-spandec-mask` at 5,000 steps (lab/experiments/successes/2026-09-11-arc-span-decoder.md,
 # Results part 1): the WHOLE slot channel is worth 0.182 nats while the loop's own prefix
 # write is worth 0.078. The loop is being bypassed by the cells that carry its seed.
 #

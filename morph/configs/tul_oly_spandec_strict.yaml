@@ -1,0 +1,30 @@
+# MATH PANEL 2026-09-12 — the Olympiad synthetic-math curriculum under the SHIPPED ternary
+# rule and the strict geometry. Arm "oly-spandec-strict".
+#
+# WHAT THIS RE-RUNS AND WHY. ARC E16 (2026-09-08) put the slot loop on the Olympiad band
+# curriculum and read `oly-mask` 0.18 nats BEHIND the plain model on the decontaminated
+# holdout. That panel ran `tul_m12_mnext_mask`: the M-next MUX, the mean-12 draw, and the
+# ABSMEAN ternary rule, under which the looped core is measurably starved (MLP branch
+# out/in 0.2 and K1-K6 0.033, against 0.9 / 0.185 under `norm_match`). Neither `norm_match`
+# nor the span-decoder target has ever run on math, and the standing rule (Wolfe
+# 2026-09-12) is that a flat loop on a corpus is not a verdict about that corpus.
+#
+# SCORE ON holdout_clean/ ONLY. 41 % of the original eval holdout is verbatim in training
+# and bands 6-13 are 23-47 % unique; the decontaminated set (1,906 docs, built 2026-09-08)
+# is the one the runner sweeps. A number from the contaminated holdout is not a number.
+#
+# WHAT IT IS. `tul_slot_spandec_strict` with `oly_data` composed AFTER it, so the data
+# mixin owns seq 512, micro_batch 12 x grad-accum 2 = 24, the four-stage band curriculum
+# (1500 steps each, 6,000 total), `ckpt_grad_iters: 4` and checkpoints at every stage end.
+# Exactly the knobs `tul_oly_mask.yaml` gets, from the same file.
+#
+# Control: `oly-notul-nm` (notul_oly, with the `-nm` wandb suffix so it does not collide
+# with the 2026-09-08 checkpoints).
+# Record: lab/experiments/planned/2026-09-12-arc-math-under-norm-match.md
+defaults:
+  - tul_slot_spandec_strict
+  - oly_data
+  - _self_
+
+wandb:
+  name: oly-spandec-strict

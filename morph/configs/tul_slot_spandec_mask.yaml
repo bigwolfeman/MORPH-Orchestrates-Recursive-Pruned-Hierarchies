@@ -39,7 +39,7 @@
 # embedding read is detached unconditionally for the same reason. `slot-spandec-mnext-mask`
 # carries the same setting, so its one-factor partner is THIS arm, not the ruler.
 #
-# Record: lab/experiments/planned/2026-09-11-arc-span-decoder.md
+# Record: lab/experiments/successes/2026-09-11-arc-span-decoder.md
 # Note: .agents/notes/proposed/architecture/2026-09-11-span-decoder-target.md
 defaults:
   - tul_slot_mux_mask_norm_match

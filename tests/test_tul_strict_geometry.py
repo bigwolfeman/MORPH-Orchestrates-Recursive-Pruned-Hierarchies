@@ -5,7 +5,7 @@ prelude AND in the coda. That "OR any slot cell" is a cross-span channel the LOO
 touches: in the prelude every token and every cell may read every earlier cell, so a
 cell's SEED — a bag-mean of its own span's token embeddings — reaches later spans with no
 pass of the loop in between. Measured on `slot-spandec-mask` at 5,000 steps
-(`lab/experiments/planned/2026-09-11-arc-span-decoder.md`, Results part 1): the whole
+(`lab/experiments/successes/2026-09-11-arc-span-decoder.md`, Results part 1): the whole
 slot channel is worth 0.182 nats and the loop's own prefix write 0.078.
 
 `strict` cuts every cross-span route that is not the loop. This file is the gate the
@@ -718,3 +718,51 @@ def test_the_latent_z_arms_compose_strict_and_build(name, arm, monkeypatch):
     torch.manual_seed(1)
     out = m(inp, labels=lab, slot_layout=layout)
     assert torch.isfinite(out["loss"]), f"{name}: loss is not finite under strict"
+
+
+# ── the math panel: the strict arm composed with a data mixin ────────────────
+
+MATH_CONFIGS = {"tul_sud_spandec_strict": ("sud-spandec-strict", 182),
+                "tul_oly_spandec_strict": ("oly-spandec-strict", 512)}
+
+
+@pytest.mark.parametrize("name,arm,seq", [(k, v[0], v[1])
+                                          for k, v in sorted(MATH_CONFIGS.items())])
+def test_the_math_arms_compose_and_build(name, arm, seq, monkeypatch):
+    """`tul_slot_spandec_strict` + the data mixin: the mixin must WIN on the data keys.
+
+    The compose order is `[<arm>, <data>, _self_]`, so `sudoku_data` / `oly_data` own the
+    sequence length, the batch, the 6,000 steps and (for Sudoku) `max_slots: 0`. Getting
+    that backwards would run the math arms at the web panel's shapes and nothing would say
+    so until the OOM.
+    """
+    cfg, rt = _runtime(name, monkeypatch)
+    assert rt is not None
+    assert rt.model_cfg.tg_geometry == "strict" and rt.model_cfg.spandec
+    assert str(cfg.wandb.name) == arm
+    assert int(cfg.data.seq_len) == seq
+    assert int(cfg.training.steps) == 6000
+    assert str(cfg.training.ternary_scale_mode) == "norm_match"
+    assert int(cfg.model.ckpt_grad_iters) == 4
+    torch.manual_seed(7)
+    m = MORPHTransformer(_tiny(tul=rt.model_cfg)).eval().float()
+    _ids0, inp, lab, layout = _pack()
+    with torch.no_grad():
+        out = m(inp, labels=lab, slot_layout=layout)
+    assert torch.isfinite(out["loss"])
+
+
+def test_the_plain_math_controls_are_already_norm_match():
+    """`notul_sud` / `notul_oly` inherit the shipped ternary rule through notul -> base.
+
+    They ran on 2026-09-08 under `absmean`. Nothing about the CONFIG has to change for the
+    2026-09-12 panel — only the wandb run name, which the runner supplies — and this test
+    is what says so rather than assuming it.
+    """
+    from hydra import compose, initialize_config_dir
+    for n in ("notul_sud", "notul_oly"):
+        with initialize_config_dir(version_base=None, config_dir=_CONFIG_DIR):
+            cfg = compose(config_name=n)
+        assert str(cfg.training.ternary_scale_mode) == "norm_match", n
+        assert str(cfg.tul.activate_at) == "never", f"{n} is not a plain control"
+        assert int(cfg.training.steps) == 6000, n

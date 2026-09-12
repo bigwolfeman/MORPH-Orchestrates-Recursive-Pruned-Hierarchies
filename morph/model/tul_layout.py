@@ -824,7 +824,7 @@ def tg_strict_allow(layout: "SlotLayout", stage: str,
     and in the coda the cells may read each other. Measured on ``slot-spandec-mask`` at
     5,000 steps, the whole slot channel is worth 0.182 nats while the loop's own prefix
     write is worth 0.078 — the loop is being bypassed by the cells that carry its seed
-    (``lab/experiments/planned/2026-09-11-arc-span-decoder.md``, Results part 1).
+    (``lab/experiments/successes/2026-09-11-arc-span-decoder.md``, Results part 1).
 
     Strict cuts every cross-span route that is not the loop:
 

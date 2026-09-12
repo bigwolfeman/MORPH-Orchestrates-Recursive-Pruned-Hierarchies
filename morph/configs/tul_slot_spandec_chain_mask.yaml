@@ -24,7 +24,7 @@
 # Cost: one [B, 64, 1024] x [1024, 1024] matmul per pass, ~2.4 GFLOP per row-batch against
 # the core's own ~100x that. Parameters: d^2 + d = 1,049,600.
 #
-# Record: lab/experiments/planned/2026-09-11-arc-span-decoder.md
+# Record: lab/experiments/successes/2026-09-11-arc-span-decoder.md
 defaults:
   - tul_slot_spandec_mask
   - _self_

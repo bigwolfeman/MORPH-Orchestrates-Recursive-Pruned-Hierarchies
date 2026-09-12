@@ -29,7 +29,7 @@
 # one composes the panel ruler the slot arms are read against, so the CE is directly
 # comparable with theirs.
 #
-# Record: lab/experiments/planned/2026-09-11-arc-span-decoder.md
+# Record: lab/experiments/successes/2026-09-11-arc-span-decoder.md
 defaults:
   - notul_panel_norm_match
   - _self_

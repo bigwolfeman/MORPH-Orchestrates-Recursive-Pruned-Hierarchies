@@ -12,7 +12,7 @@
 # K-curve unchanged. If the K-curve moves, the dropout was shaping the loop's job and the
 # panel's readings need re-basing.
 #
-# Record: lab/experiments/planned/2026-09-11-arc-span-decoder.md
+# Record: lab/experiments/successes/2026-09-11-arc-span-decoder.md
 defaults:
   - tul_slot_mux_mask_norm_match
   - _self_

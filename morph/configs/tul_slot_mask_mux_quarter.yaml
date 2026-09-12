@@ -14,7 +14,7 @@
 # one, the target's SHAPE is what matters and the decoder arms carry the finding; if it
 # behaves like the no-MUX arm, the panel has been measuring a weight, not a job.
 #
-# Record: lab/experiments/planned/2026-09-11-arc-span-decoder.md
+# Record: lab/experiments/successes/2026-09-11-arc-span-decoder.md
 defaults:
   - tul_slot_mux_mask_norm_match
   - _self_
