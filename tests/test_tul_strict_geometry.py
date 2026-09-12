@@ -424,7 +424,8 @@ def test_the_segment_ids_separate_a_span_from_its_own_cells():
 
 _CONFIG_DIR = __import__("os").path.abspath("morph/configs")
 STRICT_CONFIGS = ["tul_slot_spandec_strict", "tul_slot_spandec_strict_prev",
-                  "tul_slot_spandec_strict_reach1"]
+                  "tul_slot_spandec_strict_reach1",
+                  "tul_slot_spandec_strict_oracle"]
 
 
 class _StubTok:
@@ -461,6 +462,7 @@ def test_the_strict_arms_compose_and_build_and_run(name, monkeypatch):
     assert tc.spandec, f"{name} must inherit the span-decoder target"
     assert tc.tg_coda_prefix_reach == ("prev" if name.endswith("_prev") else "all")
     assert tc.loop_reach == (1 if name.endswith("_reach1") else 0)
+    assert tc.oracle_z == name.endswith("_oracle")
     assert not bool(cfg.model.use_kernels), "tg_restrict forces model.use_kernels: false"
 
     torch.manual_seed(7)

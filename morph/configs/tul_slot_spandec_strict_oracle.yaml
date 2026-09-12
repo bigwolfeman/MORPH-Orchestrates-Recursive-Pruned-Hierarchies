@@ -1,0 +1,56 @@
+# Slot-loop panel, arm "slot-spandec-strict-oracle": HAND EVERY PASS A TARGET.
+# ONE factor against `slot-spandec-strict` (`tul_slot_spandec_strict.yaml`): `tul.oracle_z`.
+#
+# READ THIS FIRST. This arm BREAKS A STANDING RULE OF THE TREE. The root CLAUDE.md and the
+# TUL spec forbid regressing onto the slot state — LCM T3/T4, CoCoMix §6b, Block
+# Transformer §4.2 all measured that a "be this vector" target collapses the state instead
+# of making it useful. `tul.oracle_z` is exactly that target, and it is here as a TEST, not
+# as a design. Eleven arms since 2026-09-04 have read a per-pass K-curve between -0.0001
+# and +0.0033, and the question that record cannot answer is whether the loop's passes
+# CANNOT descend a useful objective, or whether nothing has ever told them what each
+# individual pass is FOR. Wolfe decides whether it ever ships; nothing composes it by
+# default, and a positive result here is a diagnosis, not a recipe.
+#
+# WHAT IT DOES, once per training step:
+#   z*_0 = the loop's entry state, `core_init(e)`, exactly what pass 1 receives (detached)
+#   z*_t = z*_{t-1} - oracle_z_lr * ||z*_{t-1}|| * g/||g||,  g = d CE_spandec(next span)/dz
+#   loss += oracle_z_weight * mean_t ||h_t - z*_t||^2 / d   over slots whose depth reaches t
+# The trajectory is fully detached and fp32; the span decoder is READ and never trained by
+# it (the decoder trains only through the shipped `tul.spandec` term — tests/
+# test_tul_oracle_z.py asserts every decoder gradient is bit-identical with and without
+# this loss). The token CE and the spandec loss are unchanged.
+#
+# WHAT WOULD MAKE IT INTERESTING: a per-pass K-curve (K3-K6 above 0.005) appearing where
+# every other arm reads zero. WHAT WOULD MAKE IT UNINTERESTING AND IS THE MORE LIKELY
+# OUTCOME: the loop matches the trajectory, `oracle_z` falls to near zero, and the token CE
+# does not move — which says the passes can be driven anywhere and that WHERE is not what
+# the coda needs. Either way the honesty instrument is `tul/oracle_z_l{t}`: the ORACLE's
+# own decoder loss at each of its steps. If those do not fall, the trajectory is not a
+# descent and the target is noise.
+#
+# COST, arithmetic and not a guess. T forward+backward passes of a [B, S, J, V] readout.
+# One readout is 38.7 GFLOP per token of J at B 6, S 64, C 1024, V 49169, so T 6 x J 8 is
+# ~5.6 TFLOP against a ~50 TFLOP step, about 11 %. `oracle_z_max_tokens` is 8 and NOT the
+# decoder's own 32 for exactly this reason: at J 32 the arm costs ~45 % and misses the
+# queue's 8,086 tok/s rate floor. The oracle is a TEACHER for the trajectory; the target
+# the decoder is trained on stays the full 32-token span.
+#
+# lr 0.1 = one step moves a slot's state by a tenth of its own norm. Measured on the CPU
+# fixture at 0.2 / 0.1 / 0.05 / 0.02: the oracle's readout falls monotonically at all four.
+# The GPU value is untuned; `tul/oracle_z_l{t}` at step 20 of the smoke is what says
+# whether 0.1 over-shoots at the panel's shapes.
+#
+# Record: lab/experiments/planned/2026-09-12-arc-strict-geometry.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  oracle_z: true
+  oracle_z_steps: 6
+  oracle_z_lr: 0.1
+  oracle_z_weight: 1.0
+  oracle_z_max_tokens: 8
+
+wandb:
+  name: slot-spandec-strict-oracle

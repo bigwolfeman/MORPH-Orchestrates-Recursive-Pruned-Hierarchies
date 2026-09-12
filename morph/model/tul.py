@@ -393,6 +393,40 @@ class TULConfig:
     spandec_heads: int = 0               # 0 -> the model's n_heads
     spandec_weight: float = 1.0          # weight of the term in the total loss
     spandec_max_tokens: int = 0          # 0 -> bound_span_cap (= the data's span_cap)
+    # ── THE ORACLE-Z PER-PASS TEACHER (arm `slot-spandec-strict-oracle`, 2026-09-12) ──
+    #
+    # THIS BREAKS A STANDING RULE AND SAYS SO. The root CLAUDE.md and the spec forbid
+    # regressing onto the slot state (LCM T3/4, CoCoMix §6b, BT §4.2): a target that says
+    # "be this vector" collapses the state instead of making it useful. This knob does
+    # exactly that, deliberately and as a TEST: eleven arms have read a per-pass K-curve of
+    # zero, and the open question is whether the passes CANNOT descend a useful objective
+    # or whether nothing has ever told them what each pass is FOR. An oracle trajectory
+    # that a one-step optimiser could match is the cheapest way to ask. Wolfe decides
+    # whether it ever ships; nothing composes it by default.
+    #
+    # WHAT IT IS. Train time only, once per step, with the SPAN DECODER as the reader:
+    #   z*_0 = the loop's entry state (`core_init(e)`, exactly what pass 1 receives), detached
+    #   z*_t = z*_{t-1} - step_t,  step_t = oracle_z_lr * ||z*_{t-1}|| * g / ||g||   per slot
+    #   g    = d/dz  CE_spandec(next span | z)   at z*_{t-1}, fp32, no outer graph
+    # and the added term is
+    #   oracle_z_weight * mean_t ||h_t - z*_t||^2 / d   over the slots whose depth reaches t,
+    # with h_t the loop's own state after pass t. The trajectory is FULLY detached, so the
+    # decoder is NOT trained by it — the decoder trains only through the shipped spandec
+    # loss — and the token CE and the spandec loss are unchanged.
+    oracle_z: bool = False
+    oracle_z_steps: int = 6              # T; clamped to the batch's realised depth
+    oracle_z_lr: float = 0.1             # one step moves a slot's state by lr * ||z||
+    oracle_z_weight: float = 1.0         # weight of the MSE term in the total loss
+    # Tokens of the next span the ORACLE's own readout is graded on. NOT `spandec_max_tokens`,
+    # and the reason is cost: the oracle runs T forward+backward passes of a [B, S, J, V]
+    # readout per training step, and one readout is 38.7 GFLOP per token of J at B 6, S 64,
+    # C 1024, V 49169. At J = 32 and T = 6 that is ~22 TFLOP against a ~50 TFLOP step — the
+    # arm would miss the queue's 8,086 tok/s rate floor and never run. 8 is the
+    # `egrad_max_tokens` precedent and the offset at which the measured cross-span budget
+    # stops being front-loaded (lab/experiments/failures/2026-09-11-arc-span-budget.md).
+    # The oracle is a TEACHER for the trajectory, not the shipped target: the target the
+    # decoder is trained on stays the full `spandec_max_tokens` span.
+    oracle_z_max_tokens: int = 8
     # ── the slot chain (arm `slot-spandec-chain-mask`, 2026-09-11) ─────────────────
     #    A DIRECT, learned path along the slot axis, on top of the core's own causal
     #    attention over the compact slot sequence. At every pass `t` of the loop, slot `k`
@@ -971,6 +1005,45 @@ class TULConfig:
                 "tul.tg_coda_prefix_reach is a tul.tg_geometry='strict' knob; at "
                 f"'restrict' it would be silently ignored (got "
                 f"{self.tg_coda_prefix_reach!r}).")
+        if self.oracle_z:
+            if not self.spandec:
+                raise ValueError(
+                    "tul.oracle_z requires tul.spandec: the oracle descends the SPAN "
+                    "DECODER's loss, and without the decoder there is no reader to "
+                    "descend.")
+            if self.oracle_z_steps < 1:
+                raise ValueError(
+                    f"tul.oracle_z_steps must be >= 1, got {self.oracle_z_steps}")
+            if self.oracle_z_lr <= 0.0:
+                raise ValueError(
+                    f"tul.oracle_z_lr must be > 0, got {self.oracle_z_lr}")
+            if self.oracle_z_weight <= 0.0:
+                raise ValueError(
+                    "tul.oracle_z needs tul.oracle_z_weight > 0: at 0 the trajectory is "
+                    "built and thrown away, which is an expensive way to run the ruler "
+                    f"under another name (got {self.oracle_z_weight})")
+            if self.oracle_z_max_tokens < 2:
+                raise ValueError(
+                    f"tul.oracle_z_max_tokens must be >= 2, got {self.oracle_z_max_tokens}")
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.oracle_z has no meaning on the paid loop (tokens_through_core): "
+                    "there is no per-slot looped trajectory to supervise.")
+            if self.detach_z:
+                raise NotImplementedError(
+                    "tul.oracle_z with tul.detach_z: the oracle's whole claim is that the "
+                    "coda's reader and the per-pass teacher grade the SAME state, and "
+                    "detach_z cuts the coda off from it.")
+            if self.db_loop:
+                raise NotImplementedError(
+                    "tul.oracle_z with tul.db_loop: the db carry is detached per iteration, "
+                    "so h_t is not a trajectory of one map and matching it to z*_t "
+                    "supervises T independent one-step readouts.")
+        elif (self.oracle_z_steps != 6 or self.oracle_z_lr != 0.1
+                or self.oracle_z_weight != 1.0 or self.oracle_z_max_tokens != 8):
+            raise ValueError(
+                "tul.oracle_z_* set with tul.oracle_z=false: nothing is built, so the "
+                "knobs would be silently ignored. Set tul.oracle_z: true or drop them.")
         if self.loop_reach < 0:
             raise ValueError(f"tul.loop_reach must be >= 0 (0 = unlimited), got "
                              f"{self.loop_reach}")

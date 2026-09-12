@@ -3188,7 +3188,11 @@ class MORPHTransformer(nn.Module):
         # Trajectory for the local losses: OUTER-graph states, one per iteration, returned
         # (never a side channel — the g_traj / ret_capture lesson). _db_traj[0] is the seed
         # state; entry t is the post-update state after iteration t-1.
-        _db_traj: list[Tensor] | None = [h] if (_db or _stage or _mep) else None
+        # The oracle-z teacher (tul.oracle_z) needs the SAME live-carry trajectory, so it
+        # turns the SAME collection on rather than building a second one. Training only —
+        # an eval forward keeps `db_traj` None here and the sweep reads the ruler's columns.
+        _oz = bool(self.cfg.tul.oracle_z) and self.training and self.tul_spandec is not None
+        _db_traj: list[Tensor] | None = [h] if (_db or _stage or _mep or _oz) else None
         # Per-pass MUX: entry t-1 is the mask for `_db_traj[t]` — the slots whose realised
         # depth REACHES pass t and whose pass t carries gradient (a progressive prefix pass
         # is excluded: it is detached, so a term there would train nothing and still be
@@ -3694,7 +3698,7 @@ class MORPHTransformer(nn.Module):
                     _fp_terms.append(_rel[_fin])
 
             h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
-            if _db or _stage or _mep:
+            if _db_traj is not None:
                 _db_traj.append(h)
             if _mep:
                 # `active` is `depths > t`, so this is "the slot's depth reaches pass t+1",
@@ -4137,6 +4141,98 @@ class MORPHTransformer(nn.Module):
             stats["mux_rel"] = float(loss.detach()) / max(ce_null, 1e-12)
             stats["mux_n_supervised"] = float(n_sup)
         return loss
+
+    def _tul_oracle_z_loss(self, db_traj, depths: Tensor, input_ids: Tensor,
+                           layout: SlotLayout, stats: dict | None = None) -> Tensor:
+        """``tul.oracle_z`` — a per-PASS target the loop is asked to match (train only).
+
+        THIS IS THE RULE-BREAKING ARM, and the docstring says so where the code is. The
+        standing rule (root ``CLAUDE.md``; LCM T3/4, CoCoMix §6b, BT §4.2) is never to
+        regress onto the slot state. Eleven arms have read a per-pass K-curve of zero, and
+        the open question is whether the passes CANNOT descend a useful objective or
+        whether nothing has ever told them what each pass is FOR. The cheapest way to ask
+        is to hand each pass a target that a one-step optimiser could match, and see
+        whether a per-pass K-curve appears. If it does not, the answer is about the map and
+        not about the supervision. Wolfe decides whether it ever ships.
+
+        THE TRAJECTORY. ``z*_0`` is ``db_traj[0]`` — ``core_init(e)``, exactly the state
+        pass 1 receives — detached and in fp32. Each step takes the gradient of the SPAN
+        DECODER's next-span CE with respect to ``z*_{t-1}`` and moves the state by
+        ``oracle_z_lr * ||z*_{t-1}||`` along ``-g/||g||``, per slot, so a step's size is
+        relative to the state it starts from and ``oracle_z_lr`` reads as a fraction. Every
+        step runs under ``no_grad`` except its own inner ``autograd.grad``, taken with
+        ``create_graph=False`` against a leaf copy — so the trajectory has no ``grad_fn``
+        and nothing here trains the decoder. ``autograd.grad`` never writes ``.grad``, so
+        the decoder's parameters are untouched even though the inner backward passes
+        through them (``tests/test_tul_oracle_z.py`` asserts the decoder's gradients are
+        EQUAL with and without this term).
+
+        THE TERM. ``oracle_z_weight * mean_t ||h_t - z*_t||^2 / d`` over the slots whose
+        REALISED depth reaches pass ``t``. A slot that stopped at pass 3 has a frozen
+        ``h_t`` for every later ``t``, and matching a frozen state to a moving target would
+        supervise the ``torch.where`` and not the map.
+
+        COST, arithmetic and not a guess. ``T`` forward+backward passes of a ``[B, S, J,
+        V]`` readout at ``J = tul.oracle_z_max_tokens``. One readout is 38.7 GFLOP per
+        token of J at B 6, S 64, C 1024, V 49169, so J 8 and T 6 is roughly 5.6 TFLOP
+        against a ~50 TFLOP step (~11 %). At the decoder's own J of 32 it would be ~45 %
+        and the arm would miss the queue's rate floor — which is why
+        ``oracle_z_max_tokens`` exists as its own knob.
+        """
+        tc = self.cfg.tul
+        dec = self.tul_spandec
+        assert dec is not None and db_traj is not None
+        T = min(int(tc.oracle_z_steps), len(db_traj) - 1)
+        if T < 1:
+            return db_traj[0].new_zeros(())
+        J = min(int(tc.oracle_z_max_tokens), dec.max_tokens)
+        ids, valid = next_span_slots(input_ids, layout, J)
+        # The tied table, detached at BOTH ends exactly as `_tul_spandec_loss` reads the
+        # decoder's input side: the oracle must not reshape the table its own target is
+        # made of, and it trains nothing at all.
+        w_tied = self.embed.lm_weight().detach()
+        lab = torch.where(valid, ids, torch.full_like(ids, -100))
+        lr = float(tc.oracle_z_lr)
+
+        z = db_traj[0].detach().float()
+        star: list[Tensor] = []
+        losses: list[float] = []
+        for _t in range(T):
+            with torch.enable_grad():
+                zr = z.detach().requires_grad_(True)
+                st = dec.decode(self._readout(zr), ids, valid, w_tied)
+                loss_t = fused_linear_cross_entropy(
+                    st.reshape(-1, st.shape[-1]), w_tied, lab.reshape(-1),
+                    ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
+                    mask_token_id=tc.slot_id)
+                g, = torch.autograd.grad(loss_t, zr, create_graph=False)
+            with torch.no_grad():
+                losses.append(float(loss_t.detach()))
+                gn = g.flatten(2).norm(dim=2)                            # [B, S]
+                zn = z.flatten(2).norm(dim=2)
+                sc = (lr * zn / (gn + 1e-12)).view(*gn.shape, *([1] * (z.dim() - 2)))
+                z = (z - g * sc).detach()
+            star.append(z)
+
+        d = float(db_traj[0].shape[-1])
+        terms: list[Tensor] = []
+        for t in range(1, T + 1):
+            keep = (depths >= t) & layout.slot_valid                     # [B, S]
+            if not bool(keep.any()):
+                continue
+            diff = (db_traj[t].float() - star[t - 1]).flatten(2).pow(2).sum(-1) / d
+            terms.append(diff[keep].mean())
+        if not terms:
+            return db_traj[0].new_zeros(())
+        out = torch.stack(terms).mean()
+        if stats is not None:
+            stats["oracle_z_mse"] = float(out.detach())
+            stats["oracle_z_steps_used"] = float(T)
+            # The oracle's OWN readout per step: the honesty instrument. If these do not
+            # fall, the trajectory is not a descent and the term is teaching noise.
+            for t, v in enumerate(losses):
+                stats[f"oracle_z_l{t}"] = v
+        return out
 
     def _tul_spandec_loss(self, h_slots: Tensor, input_ids: Tensor,
                           layout: SlotLayout, stats: dict | None = None) -> Tensor:
@@ -4592,6 +4688,7 @@ class MORPHTransformer(nn.Module):
             fm_y = fm_geom = fm_ctx = None
             mux_stats = {}
             spandec_loss, spandec_stats, _egrad_src = None, {}, None
+            oracle_z_loss, oracle_z_stats = None, {}
         elif self.fm_planner is not None:
             # FM1 (morph/model/tul_fm.py). The planner replaces the core loop; the plan
             # is DETACHED before it reaches W_prefix, so the coda's CE never touches the
@@ -4600,6 +4697,7 @@ class MORPHTransformer(nn.Module):
             depths, g_traj, mux_loss, sigreg_loss, gain_reg = None, None, None, None, None
             mux_stats = {}
             spandec_loss, spandec_stats, _egrad_src = None, {}, None
+            oracle_z_loss, oracle_z_stats = None, {}
             h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
             x_coda = scatter_positions(xn, pos, values)
@@ -4758,6 +4856,15 @@ class MORPHTransformer(nn.Module):
             spandec_loss = (self._tul_spandec_loss(h_slots, input_ids, layout,
                                                    stats=spandec_stats)
                             if self.tul_spandec is not None else None)
+            # ── the oracle-z per-pass teacher (tul.oracle_z) ──────────────────
+            # Read on the SAME trajectory `mux_every_pass` and the staged target use, and
+            # built here because it needs the realised per-slot depths beside it. Training
+            # only and `spandec`-only, both enforced at construction; `db_traj` is None on
+            # an eval forward, so a forced-depth sweep never pays for it.
+            oracle_z_loss, oracle_z_stats = None, {}
+            if tc.oracle_z and self.training and db_traj is not None:
+                oracle_z_loss = self._tul_oracle_z_loss(db_traj, depths, input_ids, layout,
+                                                        stats=oracle_z_stats)
             # The energy module trains on THIS state, detached, at the same seam every
             # other reader of z uses — but its loss is built at the END of the forward,
             # because the `disc` critic's label is the coda's own CE over the next span.
@@ -4973,6 +5080,17 @@ class MORPHTransformer(nn.Module):
             _dw = tc.spandec_weight * spandec_loss
             groups["spandec_weighted"] = _dw.detach()
             groups["loss"] = groups["loss"] + _dw
+
+        if oracle_z_loss is not None and groups is not None:
+            # Same contract as `spandec_weighted`: the WEIGHTED term is exposed so train.py
+            # can subtract it and keep train/loss and the val loss on the MODEL's CE.
+            groups = dict(groups)
+            groups["oracle_z"] = oracle_z_loss.detach()
+            for _k, _v in oracle_z_stats.items():
+                groups[_k] = oracle_z_loss.new_tensor(_v)
+            _ow = tc.oracle_z_weight * oracle_z_loss
+            groups["oracle_z_weighted"] = _ow.detach()
+            groups["loss"] = groups["loss"] + _ow
 
         if _egrad_src is not None and groups is not None and self.tul_egrad is not None:
             # The energy module's OWN training loss (`tul.grad_pass_energy` 'recon' /

@@ -132,7 +132,7 @@ def evaluate(
                 _l -= float(out["gain_reg_weighted"])
             if out.get("spandec_weighted") is not None:
                 _l -= float(out["spandec_weighted"])
-            for _aux2 in ("egrad_weighted", "pass_res_weighted"):
+            for _aux2 in ("egrad_weighted", "pass_res_weighted", "oracle_z_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -2948,7 +2948,8 @@ def main(cfg: DictConfig) -> None:
                 _probe_log["loss/total"] = float(loss.detach())
                 for _lk in ("ce_main", "mux_local", "spandec_ce", "spandec_weighted", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters", "mtp_weighted", "fixed_point", "fp_weighted", "core_gain_est", "core_gain_max", "core_gain_weighted",
                             "egrad", "egrad_weighted", "egrad_train", "egrad_auc", "egrad_pos_frac",
-                            "pass_residual", "pass_res_weighted"):
+                            "pass_residual", "pass_res_weighted",
+                            "oracle_z", "oracle_z_weighted"):
                     if _lk in out and out[_lk] is not None:
                         _probe_log[f"loss/{_lk}"] = float(out[_lk].detach())
                 wandb.log(_probe_log, step=step)
@@ -3070,8 +3071,8 @@ def main(cfg: DictConfig) -> None:
                 _lv = _lv - float(out["spandec_weighted"])
             if isinstance(out, dict) and out.get("mtp_weighted") is not None:
                 _lv = _lv - float(out["mtp_weighted"])   # arc E8: train/loss = next-token CE
-            for _ak in ("fp_weighted", "core_gain_weighted",
-                        "egrad_weighted", "pass_res_weighted"):   # arc E10 / 2026-09-12
+            for _ak in ("fp_weighted", "core_gain_weighted", "egrad_weighted",
+                        "pass_res_weighted", "oracle_z_weighted"):  # arc E10 / 2026-09-12
                 if isinstance(out, dict) and out.get(_ak) is not None:
                     _lv = _lv - float(out[_ak])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
@@ -3192,8 +3193,17 @@ def main(cfg: DictConfig) -> None:
                            "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters",
                            "sigreg", "spandec_ce", "spandec_n_tokens", "spandec_weighted",
                            "egrad", "egrad_weighted", "egrad_train", "egrad_auc",
-                           "egrad_pos_frac", "pass_residual", "pass_res_weighted"):
+                           "egrad_pos_frac", "pass_residual", "pass_res_weighted",
+                           "oracle_z", "oracle_z_weighted", "oracle_z_mse",
+                           "oracle_z_steps_used"):
                     if _k in out and out[_k] is not None:
+                        log[f"tul/{_k}"] = float(out[_k].detach())
+                # tul.oracle_z's honesty instrument: the ORACLE's own decoder loss at each
+                # of its T steps. A variable number of keys, so it is a scan and not a
+                # tuple — if these do not fall, the trajectory is not a descent and the
+                # per-pass target is teaching noise.
+                for _k in [k for k in out if str(k).startswith("oracle_z_l")]:
+                    if out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # docs/tul-gate-spec.md §10 — every step, because a gate that stops moving
                 # is only visible as a FLAT curve, and a curve sampled at eval_every is
