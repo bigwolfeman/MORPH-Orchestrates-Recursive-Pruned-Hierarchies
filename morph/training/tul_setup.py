@@ -43,7 +43,7 @@ KNOWN_TUL_KEYS = frozenset({
     "gate_truncate_p", "egrad_disc_hidden", "egrad_heads", "egrad_layers", "egrad_max_tokens",
     "egrad_soft_labels", "egrad_soft_mix", "egrad_weight",
     "grad_pass", "grad_pass_energy", "grad_pass_norm", "grad_pass_scale",
-    "max_slots", "min_span", "mux_activate_at", "mux_beta",
+    "loop_reach", "max_slots", "min_span", "mux_activate_at", "mux_beta",
     "mux_detach_head", "mux_every_pass", "mux_readout", "mux_rho", "mux_stage_all",
     "mux_stage_own_iters",
     "mux_target",
@@ -286,6 +286,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         tg_restrict_scope=str(tc.get("tg_restrict_scope", "all")),
         tg_geometry=str(tc.get("tg_geometry", "restrict")),
         tg_coda_prefix_reach=str(tc.get("tg_coda_prefix_reach", "all")),
+        loop_reach=int(tc.get("loop_reach", 0)),
         coda_token_input=str(tc.get("coda_token_input", "prelude")),
         tg_span_comp=bool(tc.get("tg_span_comp", False)),
         tg_span_gate=bool(tc.get("tg_span_gate", False)),
@@ -360,6 +361,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "tg_restrict_scope": model_cfg.tg_restrict_scope,
         "tg_geometry": model_cfg.tg_geometry,
         "tg_coda_prefix_reach": model_cfg.tg_coda_prefix_reach,
+        "loop_reach": model_cfg.loop_reach,
         "coda_token_input": model_cfg.coda_token_input,
         "bcast": model_cfg.bcast,
         "reread": model_cfg.reread,
@@ -449,6 +451,11 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"coda's per-layer injections at the slot cells are zeroed — the slot LOOP is "
               f"the only cross-span channel "
               f"(lab/experiments/planned/2026-09-12-arc-strict-geometry.md)", flush=True)
+    if model_cfg.loop_reach > 0:
+        print(f"  TUL LOOP REACH {model_cfg.loop_reach}: inside the loop a slot attends "
+              f"slots k-{model_cfg.loop_reach}..k only, the compressed branch takes the "
+              f"same relation and the CCA conv / value shift reset PER CELL — a slot m "
+              f"spans back needs ceil(m/{model_cfg.loop_reach}) passes to reach k", flush=True)
     if model_cfg.tg_span_comp:
         print("  TUL TG SPAN-COMP ON: compressed branch = per-span mean-pooled "
               "live K/V (E-SAC; zero new params; span-granular causality)", flush=True)

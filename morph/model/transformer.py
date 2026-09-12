@@ -1839,9 +1839,15 @@ class MORPHTransformer(nn.Module):
             is_ret = ret_cap is not None and (i in self._retention_layers)
             rs_arg = ret_state if is_ret else None
             rc_arg = ret_cap if is_ret else None
+            # `attn_kw` is normally ONE dict shared by every core layer. `tul.loop_reach`
+            # hands a per-LAYER tuple instead, because a pass's cross-cell reach is the
+            # COMPOSITION over the n_core layers: at reach w applied to every layer a pass
+            # would carry w * n_core, not w. A tuple is read positionally; a dict keeps the
+            # old behaviour for every other caller, bit-identically.
+            _akw = attn_kw[i] if isinstance(attn_kw, (list, tuple)) else attn_kw
             h_injected = layer(h_injected, mlp_kwargs=mlp_kw,
                                ret_state=rs_arg, ret_capture=rc_arg,
-                               attn_kwargs=attn_kw, pass_idx=iter_idx)
+                               attn_kwargs=_akw, pass_idx=iter_idx)
         new_ret = ret_cap.get("state") if ret_cap is not None else None
         if _parcae:
             # Broadcast the single-stream pass output back over the n streams. `.expand`
@@ -3309,6 +3315,59 @@ class MORPHTransformer(nn.Module):
             _rr_k, _rr_v, _rr_allow = _rr.prepare(
                 xn.mean(dim=2) if self._is_hc else xn, layout, self.cfg.tul.reread_scope)
 
+        # ── depth as reach (tul.loop_reach) ───────────────────────────────────
+        # A Python-level constant read once: 0 — every model before this key — builds no
+        # mask and hands `_apply_core_step` the `attn_kw=None` it has always had, so the
+        # graph is the one from before this existed.
+        #
+        # THE BUDGET IS PER PASS, not per layer, and that is the whole point: one pass is
+        # ONE Jacobi step of `h_{t+1}[k] = f(h_t[k-w .. k])`, so `f` may read its
+        # neighbours ONCE. The n_core layers are the internals of `f`. Applying reach w at
+        # every layer would carry `w * n_core` per pass (measured on the fixture: reach 2
+        # over two core layers moved a slot four cells away at pass 1), and the law
+        # "a slot m spans back first moves at pass ceil(m/w)" would be false.
+        #
+        # So EVERY cross-cell route is spent in core layer 0 and closed in layers 1..n-1:
+        #   layer 0     window branch `tg_allow` = causal AND j >= i - w;
+        #               compressed branch the SAME relation through `tg_comp_allow` (under
+        #               tg_restrict it is `_tg_slot_attention`'s DENSE form at the compact
+        #               shape, a full causal route and not a pooled one);
+        #   layers 1..  the same two relations at reach 0 — a cell reads ITSELF only. The
+        #               window branch's XSA excludes the self token, so its row is empty
+        #               there and `out_win` is 0 (SDPA returns 0 for an all -inf row,
+        #               morph/model/CLAUDE.md); the compressed branch keeps j == i, so the
+        #               cell still sees its own value;
+        #   every layer the CCA causal conv and its W_v_prev value shift reset PER CELL. A
+        #               kernel-4 two-stage conv reaches six cells back per BLOCK, a
+        #               distance no window relation can express, so it is cut rather than
+        #               budgeted.
+        # This is a large change to what the core's later layers ARE, and it is named here
+        # and in the arm's config rather than discovered from a K-curve: the reach arm's
+        # core mixes cells once per pass and is position-local for the rest of it.
+        #
+        # Rate cost, also named: the core's window branch and its CCA prologue leave the
+        # fused path here (extra_mask and seg are eager-only), which `tg_scoped_kernels`
+        # keeps fused on the strict control. At 64 cells the tensors are small, but it is a
+        # real second difference and the smoke's tok/s decides.
+        _reach = int(self.cfg.tul.loop_reach)
+        _core_akw = None
+        if _reach > 0:
+            if _scse is not None:
+                raise NotImplementedError(
+                    "tul.loop_reach under SCSE is not defined: the compact sequence there "
+                    "carries the DEVIATION and the core is source-free, so 'slot k reads "
+                    "slots k-w..k' names a state this loop does not hold.")
+            _S = gidx.shape[1]
+            _ri = torch.arange(_S, device=x.device)
+            _ii, _jj = _ri.unsqueeze(1), _ri.unsqueeze(0)
+            _seg_cell = _ri.unsqueeze(0).expand(B, _S)
+
+            def _reach_kw(w: int) -> dict:
+                m = ((_ii >= _jj) & (_jj >= _ii - w)).view(1, 1, _S, _S)
+                return {"tg_allow": m, "tg_comp_allow": m, "tg_seg": _seg_cell}
+            _core_akw = tuple([_reach_kw(_reach)]
+                              + [_reach_kw(0) for _ in range(n_core - 1)])
+
         def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0, stage_cond=None):
             if _rr is not None:
                 h_in = self._apply_injection(
@@ -3316,7 +3375,8 @@ class MORPHTransformer(nn.Module):
             if _scse is None:
                 return self._apply_core_step(h_in, e_in, None, None, None,
                                              ret_state=ret_state, iter_idx=iter_idx,
-                                             inj_terms=inj_terms, stage_cond=stage_cond)
+                                             inj_terms=inj_terms, stage_cond=stage_cond,
+                                             attn_kw=_core_akw)
             # ── SCSE, Eqs. 3-5 ──────────────────────────────────────────────────────
             # `h_in` IS Delta_t; `e_in` carries h*. Signature unchanged so the three call
             # sites (no_grad / checkpoint / eager) and the truncated-BPTT window they

@@ -423,7 +423,8 @@ def test_the_segment_ids_separate_a_span_from_its_own_cells():
 # `build_tul_runtime` key mapping, and run.
 
 _CONFIG_DIR = __import__("os").path.abspath("morph/configs")
-STRICT_CONFIGS = ["tul_slot_spandec_strict", "tul_slot_spandec_strict_prev"]
+STRICT_CONFIGS = ["tul_slot_spandec_strict", "tul_slot_spandec_strict_prev",
+                  "tul_slot_spandec_strict_reach1"]
 
 
 class _StubTok:
@@ -459,6 +460,7 @@ def test_the_strict_arms_compose_and_build_and_run(name, monkeypatch):
     assert tc.tg_geometry == "strict" and tc.tg_restrict and tc.tg_restrict_scope == "all"
     assert tc.spandec, f"{name} must inherit the span-decoder target"
     assert tc.tg_coda_prefix_reach == ("prev" if name.endswith("_prev") else "all")
+    assert tc.loop_reach == (1 if name.endswith("_reach1") else 0)
     assert not bool(cfg.model.use_kernels), "tg_restrict forces model.use_kernels: false"
 
     torch.manual_seed(7)
@@ -467,3 +469,218 @@ def test_the_strict_arms_compose_and_build_and_run(name, monkeypatch):
     with torch.no_grad():
         out = m(inp, labels=lab, slot_layout=layout)
     assert torch.isfinite(out["loss"]), f"{name}: loss is not finite"
+
+
+# ── DEPTH AS REACH (tul.loop_reach) ──────────────────────────────────────────
+#
+# Inside `_tul_core` the compact sequence updates every cell in parallel per pass
+# (Jacobi), so at reach w a slot m spans back needs ceil(m/w) passes to reach slot k. The
+# acceptance test is that recurrence, read on the loop's own states: bit-exact zero
+# movement before pass ceil(m/w), nonzero at it. Every cross-cell route inside the core
+# has to obey it or the count is wrong, which is what the sabotages check.
+
+
+def _h_slots(m: MORPHTransformer, ids: np.ndarray):
+    """The loop's exit states `[B, S, ...]` for one batch, eval, no grad."""
+    spec, rule = _spec(), _rule()
+    inp, _lab, layout, _ = slot_layout_from_ids(ids, rule, spec)
+    with torch.no_grad():
+        x, x0, bigram = m._tul_front(*_front_args(m, inp, layout))
+        out = m._tul_core(x, x0, bigram, layout, input_ids=inp)
+    return out[1], layout
+
+
+def _front_args(m: MORPHTransformer, inp, layout):
+    """`_tul_front`'s arguments WITH the strict prelude masks `_forward_tul` builds."""
+    from morph.model.tul_layout import tg_reset_from_ids
+    seg = tg_segment_ids(layout)
+    pre = tg_strict_allow(layout, "prelude")
+    kw = {"tg_allow": pre, "tg_slot_mask": layout.slot_mask, "tg_comp_allow": pre,
+          "tg_seg": seg}
+    return inp, layout, kw, tg_reset_from_ids(seg)
+
+
+def _reach_model(reach: int, depth: int, seed: int = 1234) -> MORPHTransformer:
+    return _model(seed=seed, tg_geometry="strict", loop_reach=reach,
+                  slot_depth_fixed=depth, slot_max_depth=8)
+
+
+@pytest.mark.parametrize("reach,m_back,first_pass", [(1, 2, 2), (1, 3, 3), (2, 3, 2)])
+def test_a_slot_state_moves_first_at_pass_ceil_m_over_w(reach, m_back, first_pass):
+    """Perturb slot ``k - m``'s seed; slot ``k``'s state must move at pass ceil(m/w).
+
+    The seed is perturbed through the DATA — one token id inside span ``k - m`` — because
+    that is the perturbation the arm actually experiences. Under the strict prelude that
+    edit reaches exactly one slot's seed, which
+    `test_the_edit_reaches_exactly_one_slot_seed` asserts separately, so the pass count
+    read here is the LOOP's and not the prelude's.
+    """
+    ids, _inp, _lab, layout = _pack()
+    k = 4
+    edited = _edit(ids, layout, 0, k - m_back)
+    for passes in range(1, first_pass + 1):
+        mdl = _reach_model(reach, passes)
+        a, lay = _h_slots(mdl, ids)
+        b, _ = _h_slots(mdl, edited)
+        d = float((a[0, k] - b[0, k]).abs().max())
+        if passes < first_pass:
+            assert d == 0.0, (
+                f"reach {reach}: slot {k} moved at pass {passes} from a perturbation "
+                f"{m_back} slots back — expected first movement at pass {first_pass}, "
+                f"delta {d:.3e}")
+        else:
+            assert d > 0.0, (
+                f"reach {reach}: slot {k} did NOT move at pass {first_pass} from a "
+                f"perturbation {m_back} slots back — the loop carries nothing, so the "
+                f"zeros above are vacuous")
+
+
+def test_the_edit_reaches_exactly_one_slot_seed():
+    """The fixture's own gate: under strict, editing span j moves slot j's seed and no other.
+
+    Without this, every zero in the reach test could be a prelude that carries nothing.
+    """
+    ids, _inp, _lab, layout = _pack()
+    j = 2
+    edited = _edit(ids, layout, 0, j)
+    mdl = _reach_model(1, 1)
+    spec, rule = _spec(), _rule()
+    moved = []
+    for arr in (ids, edited):
+        inp, _l, lay, _ = slot_layout_from_ids(arr, rule, spec)
+        with torch.no_grad():
+            x, _x0, _bg = mdl._tul_front(*_front_args(mdl, inp, lay))
+        moved.append(mdl.input_norm(x))
+    d = (moved[0] - moved[1]).abs().flatten(2).max(-1).values[0]     # [L]
+    seeds = layout.slot_index[0]
+    hit = [int(s) for s in range(layout.max_slots)
+           if bool(layout.slot_valid[0, s]) and float(d[seeds[s]].detach()) > 0]
+    assert hit == [j], f"the edit moved slot seeds {hit}, expected exactly [{j}]"
+
+
+def test_unlimited_reach_moves_a_far_slot_in_one_pass():
+    """The control for the whole family: at loop_reach 0 one pass crosses any distance."""
+    ids, _inp, _lab, layout = _pack()
+    mdl = _model(tg_geometry="strict", slot_depth_fixed=1, slot_max_depth=8)
+    edited = _edit(ids, layout, 0, 1)
+    a, _ = _h_slots(mdl, ids)
+    b, _ = _h_slots(mdl, edited)
+    assert float((a[0, 4] - b[0, 4]).abs().max()) > 0.0, \
+        "at unlimited reach a single pass did not carry slot 1 to slot 4"
+
+
+def _drop(attn_kw, key: str):
+    """Remove one mask from the core's per-layer kwargs (`tul.loop_reach` hands a tuple)."""
+    if attn_kw is None:
+        return None
+    if isinstance(attn_kw, (list, tuple)):
+        return tuple({k: v for k, v in d.items() if k != key} for d in attn_kw)
+    return {k: v for k, v in attn_kw.items() if k != key}
+
+
+def test_sabotage_6_core_conv_reset_dropped_breaks_the_reach_count(monkeypatch):
+    """Drop the per-cell `tg_seg` in the core: the conv alone reaches ~6 cells per block."""
+    real = MORPHTransformer._apply_core_step
+
+    def fake(self, *a, attn_kw=None, **kw):
+        attn_kw = _drop(attn_kw, "tg_seg")
+        return real(self, *a, attn_kw=attn_kw, **kw)
+    monkeypatch.setattr(MORPHTransformer, "_apply_core_step", fake)
+    ids, _inp, _lab, layout = _pack()
+    edited = _edit(ids, layout, 0, 2)
+    mdl = _reach_model(1, 1)
+    a, _ = _h_slots(mdl, ids)
+    b, _ = _h_slots(mdl, edited)
+    assert float((a[0, 4] - b[0, 4]).abs().max()) > 0.0, \
+        "dropping the core conv reset changed nothing — the reach test does not cover it"
+
+
+def test_sabotage_7_core_compressed_branch_unmasked_breaks_the_reach_count(monkeypatch):
+    """Drop `tg_comp_allow` in the core: the compressed branch is dense causal over cells."""
+    real = MORPHTransformer._apply_core_step
+
+    def fake(self, *a, attn_kw=None, **kw):
+        attn_kw = _drop(attn_kw, "tg_comp_allow")
+        return real(self, *a, attn_kw=attn_kw, **kw)
+    monkeypatch.setattr(MORPHTransformer, "_apply_core_step", fake)
+    ids, _inp, _lab, layout = _pack()
+    edited = _edit(ids, layout, 0, 2)
+    mdl = _reach_model(1, 1)
+    a, _ = _h_slots(mdl, ids)
+    b, _ = _h_slots(mdl, edited)
+    assert float((a[0, 4] - b[0, 4]).abs().max()) > 0.0, \
+        "dropping the core compressed mask changed nothing — the branch is not a route"
+
+
+def test_sabotage_8_core_window_branch_unmasked_breaks_the_reach_count(monkeypatch):
+    real = MORPHTransformer._apply_core_step
+
+    def fake(self, *a, attn_kw=None, **kw):
+        attn_kw = _drop(attn_kw, "tg_allow")
+        return real(self, *a, attn_kw=attn_kw, **kw)
+    monkeypatch.setattr(MORPHTransformer, "_apply_core_step", fake)
+    ids, _inp, _lab, layout = _pack()
+    edited = _edit(ids, layout, 0, 2)
+    mdl = _reach_model(1, 1)
+    a, _ = _h_slots(mdl, ids)
+    b, _ = _h_slots(mdl, edited)
+    assert float((a[0, 4] - b[0, 4]).abs().max()) > 0.0, \
+        "dropping the core window mask changed nothing — the branch is not a route"
+
+
+def test_the_core_has_no_pooled_compressor_under_the_restriction():
+    """Audit finding F1 cannot occur on a strict arm, and here is why, not a claim.
+
+    F1 is the HCA pooled compressor returning `[B, 0, c]` when the ratio does not divide
+    the sequence. Under `tg_restrict` that compressor is NOT BUILT on any layer — the
+    compressed branch is `_tg_slot_attention`, which at the compact shape is dense causal
+    over the cells and therefore a REAL cross-cell route that `loop_reach` must mask
+    (sabotage 7 proves it is).
+    """
+    mdl = _reach_model(1, 2)
+    for blk in list(mdl.core) + list(mdl.prelude) + list(mdl.coda):
+        assert blk.attention._impl.compressor is None
+
+
+@pytest.mark.parametrize("kw,match", [
+    (dict(loop_reach=1, tg_geometry="restrict"), "tg_geometry='strict'"),
+    (dict(loop_reach=1, tg_geometry="strict", slot_chain=True), "slot_chain"),
+    (dict(loop_reach=-1), "loop_reach must be"),
+])
+def test_loop_reach_refusals(kw, match):
+    with pytest.raises((ValueError, NotImplementedError), match=match):
+        _tul(**kw)
+
+
+@pytest.mark.parametrize("reach,moves", [(1, False), (2, True)])
+def test_reach_prev_plus_loop_reach_needs_depth_to_carry_three_spans(reach, moves):
+    """The two restrictions composed, read at the LOGITS — item 1's test (c).
+
+    Coda reach "prev" means a token of span k reads only slot k-1's cells. With the loop
+    run for ONE pass at `loop_reach` w, slot k-1 holds slots k-1-w .. k-1. So an edit in
+    span k-3 reaches span k at w = 2 and NOT at w = 1 — the only way to carry it at w = 1
+    is a second pass, which is the arm's whole claim.
+
+    Span k-1's own tokens DO move at w = 1 (they read slot k-2, which holds slot k-3), so
+    the assertion is on span k's token positions alone.
+    """
+    ids, _inp, _lab, layout = _pack()
+    k = 4
+    mdl = _model(tg_geometry="strict", tg_coda_prefix_reach="prev", loop_reach=reach,
+                 slot_depth_fixed=1, slot_max_depth=8)
+    edited = _edit(ids, layout, 0, k - 3)
+    a, lay = _logits(mdl, ids, "normal")
+    b, _ = _logits(mdl, edited, "normal")
+    tgt = (~lay.slot_mask[0]) & (lay.bag_id[0] == k)
+    assert bool(tgt.any()), "fixture: span k must hold token positions"
+    d = (a[0] - b[0]).abs().nan_to_num(0.0)
+    d = torch.where(a[0] != b[0], d, torch.zeros_like(d))
+    got = float(d[tgt].max())
+    if moves:
+        assert got > 0.0, (
+            f"reach {reach}: one pass did NOT carry an edit three spans back to span {k} "
+            "— then the reach-1 zero below is vacuous")
+    else:
+        assert got == 0.0, (
+            f"reach {reach}: one pass carried an edit three spans back to span {k} "
+            f"(delta {got:.3e}) — depth is not required after all")

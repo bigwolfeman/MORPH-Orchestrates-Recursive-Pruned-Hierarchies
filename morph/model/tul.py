@@ -233,6 +233,24 @@ class TULConfig:
     #             gating `tg_soft_prev_span` takes).
     # Meaningless at tg_geometry="restrict" and refused there rather than ignored.
     tg_coda_prefix_reach: str = "all"
+    # ── DEPTH AS REACH (arm `slot-spandec-strict-reach1`, 2026-09-12) ─────────────
+    # loop_reach: how many slots BACK a slot may attend inside the loop, per pass.
+    #    0 — unlimited (today, and bit-identical: no mask is built at all).
+    #    w — slot k attends slots k-w .. k on every pass. The compact sequence updates all
+    #        cells in parallel per pass (Jacobi), so a slot m spans back needs ceil(m/w)
+    #        passes to reach k: long-range context REQUIRES depth BY CONSTRUCTION.
+    # Every cross-cell route inside the core is cut to that budget, not just the window
+    # branch: the compressed branch takes the same relation (`tg_comp_allow`; under
+    # tg_restrict it is the DENSE slot-column form at the compact shape, so it is a real
+    # route), and the CCA causal conv plus its W_v_prev value shift are reset PER CELL
+    # (kernel 4 over two stages is a 6-cell route per block, ~36 per pass across six core
+    # blocks — no window can express that, so it is cut rather than budgeted). Naming the
+    # second change here because it cannot be separated from the first.
+    # Requires tg_geometry="strict": outside it the cross-span routes OUTSIDE the loop are
+    # open, so a reach limit inside the loop bounds nothing.
+    # The K-curve of a reach arm is FORCED by construction — it reads depth DEPENDENCE, not
+    # depth VALUE. The value reading is its depth-6 CE against the strict arm, paired.
+    loop_reach: int = 0
     gate: "TULGateConfig | None" = None  # docs/tul-gate-spec.md; None = arm A1 (nothing built)
     # Per-slot-INDEX input embedding instead of one shared E_slot. 0 = off (one shared
     # vector, the shipped behaviour); >0 = that many rows, and the slot at index s gets row
@@ -937,6 +955,12 @@ class TULConfig:
                     "tul.tg_geometry='strict' with coda_sees_slots=false: the coda then runs "
                     "on a GATHERED subset of positions and the strict relation is not "
                     "re-derived for that index space (the tg_restrict precedent).")
+            if self.reread:
+                raise NotImplementedError(
+                    "tul.tg_geometry='strict' with tul.reread: the reread builds K/V from "
+                    "the frozen PRELUDE token states and lets a slot query them every pass "
+                    "(reread_scope 'causal' over every earlier token), which is a cross-span "
+                    "route beside the loop — the one thing strict exists to remove.")
             if self.gate is not None:
                 raise NotImplementedError(
                     "tul.tg_geometry='strict' with tul.gate: the gate's budget conditioning "
@@ -947,6 +971,21 @@ class TULConfig:
                 "tul.tg_coda_prefix_reach is a tul.tg_geometry='strict' knob; at "
                 f"'restrict' it would be silently ignored (got "
                 f"{self.tg_coda_prefix_reach!r}).")
+        if self.loop_reach < 0:
+            raise ValueError(f"tul.loop_reach must be >= 0 (0 = unlimited), got "
+                             f"{self.loop_reach}")
+        if self.loop_reach > 0:
+            if self.tg_geometry != "strict":
+                raise ValueError(
+                    "tul.loop_reach > 0 requires tul.tg_geometry='strict': outside strict "
+                    "the prelude and the coda still carry cross-span routes, so bounding "
+                    "the loop's own reach bounds nothing about how far context travels.")
+            if self.slot_chain:
+                raise NotImplementedError(
+                    "tul.loop_reach with tul.slot_chain: the chain adds W(z_{k-1}) at every "
+                    "pass, a second cross-cell route inside the loop. It happens to sit "
+                    "inside a reach-1 budget by arithmetic, but it is not expressed by the "
+                    "mask, so the combination would be a claim nothing here has tested.")
         if self.reread_scope not in ("span", "causal"):
             raise ValueError(
                 f"tul.reread_scope must be 'span' or 'causal', got {self.reread_scope!r}")

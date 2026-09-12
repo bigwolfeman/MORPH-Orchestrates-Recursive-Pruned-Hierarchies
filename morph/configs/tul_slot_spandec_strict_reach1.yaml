@@ -1,0 +1,47 @@
+# Slot-loop panel, arm "slot-spandec-strict-reach1": DEPTH AS REACH.
+# ONE factor against `slot-spandec-strict` (`tul_slot_spandec_strict.yaml`):
+# `tul.loop_reach`, 0 (unlimited) -> 1.
+#
+# THE IDEA. Under strict the slot loop is already the only cross-span channel, but inside
+# the loop every slot can see every earlier slot on pass 1, so a slot forty spans back is
+# ONE pass away and nothing about the task requires a second one. `loop_reach: 1` makes a
+# pass one Jacobi step of `h_{t+1}[k] = f(h_t[k-1 .. k])`: slot m spans back first reaches
+# slot k at pass ceil(m/1) = m. Long-range context then REQUIRES depth by construction.
+#
+# HOW, and it is not only a window. A pass's reach is the COMPOSITION over the n_core
+# layers, so spending w at every layer would carry w * n_core per pass. Every cross-cell
+# route is therefore spent in core layer 0 and CLOSED in layers 1..n-1:
+#   layer 0      window and compressed branches at `causal AND j >= i - 1`;
+#   layers 1..n  the same two relations at reach 0 — a cell reads ITSELF only;
+#   every layer  the CCA causal conv and its W_v_prev value shift reset PER CELL (a
+#                kernel-4 two-stage conv reaches six cells per block; no window relation
+#                can express that, so it is cut, not budgeted).
+# SAY IT PLAINLY: on this arm the core mixes cells ONCE per pass and is position-local for
+# the rest of the pass. That is a real change to what the later core layers are, and it
+# cannot be separated from the reach limit — a reach limit that the next layer undoes is
+# not a reach limit. Gate: tests/test_tul_strict_geometry.py, the perturbation law
+# (`a slot m back moves first at pass ceil(m/w)`, bit-exact zero before) at (w=1, m=2),
+# (w=1, m=3) and (w=2, m=3), plus three sabotages — core conv reset, core compressed
+# branch, core window branch — each re-opening one route and each caught.
+#
+# HOW TO READ THIS ARM, and how NOT to. Its K-curve is FORCED: depth dependence is built
+# in, so "K1-K6 is large here" says the construction works, not that the loop learned
+# anything. The VALUE reading is its depth-6 CE against `slot-spandec-strict`, token-paired
+# on the 480-row sweep, at the same step and the same cost. If the forced dependence buys
+# nothing there, the answer is that the loop's passes are not where the missing nats live.
+#
+# COST, named rather than discovered. The core's window branch and its CCA prologue leave
+# the fused path (an extra mask and a segment id are eager-only), which `tg_scoped_kernels`
+# keeps fused on the strict control. At 64 cells the tensors are small; the smoke's tok/s
+# against the 8,086 floor decides whether the arm runs.
+#
+# Record: lab/experiments/planned/2026-09-12-arc-strict-geometry.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  loop_reach: 1
+
+wandb:
+  name: slot-spandec-strict-reach1
