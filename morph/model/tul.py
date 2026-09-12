@@ -392,7 +392,23 @@ class TULConfig:
     spandec_layers: int = 2              # decoder blocks; cost is linear in this
     spandec_heads: int = 0               # 0 -> the model's n_heads
     spandec_weight: float = 1.0          # weight of the term in the total loss
-    spandec_max_tokens: int = 0          # 0 -> bound_span_cap (= the data's span_cap)
+    spandec_max_tokens: int = 0          # 0 -> bound_span_cap (= the data's span_cap), PER SPAN
+    # ── THE DOWNSTREAM TARGET (arm `slot-spandec-strict-h3`, 2026-09-12) ──────────
+    # spandec_horizon H: the decoder's target is the concatenated tokens of spans
+    # s+1 .. s+H, teacher-forced, ONE causal run over H * spandec_max_tokens positions from
+    # z. 1 is the shipped target and is bit-identical. Slot cells are never in the target;
+    # a slot is supervised at block h only when span s+h exists AND is complete, so a slot
+    # near the end of a row is masked on the blocks it does not have rather than dropped.
+    # No h-dependent weight: every supervised TOKEN counts once, so a longer span carries
+    # more of the mean than a shorter one — the same convention the H=1 term already has.
+    # Why: the measured cross-span budget is not front-loaded (a FLAT 0.31 nats at every
+    # offset eight or more tokens into a span, lab/experiments/failures/
+    # 2026-09-11-arc-span-budget.md), and the H=1 decoder's own worth profile still decays
+    # with offset. A target that ends at the next boundary cannot ask z for anything past
+    # it.
+    # Cost is linear in H: the decoder goes from 4.0 to 12.0 block-passes per token at
+    # H = 3 (2 layers x 64 slots x 32 tokens x H over ~1024 real tokens per row).
+    spandec_horizon: int = 1
     # ── THE ORACLE-Z PER-PASS TEACHER (arm `slot-spandec-strict-oracle`, 2026-09-12) ──
     #
     # THIS BREAKS A STANDING RULE AND SAYS SO. The root CLAUDE.md and the spec forbid
@@ -829,6 +845,10 @@ class TULConfig:
                     "tul.spandec needs tul.spandec_weight > 0: at 0 the decoder is built, "
                     "trained by nothing and read by nothing, and the arm is its ruler under "
                     f"another name (got {self.spandec_weight})")
+            if self.spandec_horizon < 1:
+                raise ValueError(
+                    f"tul.spandec_horizon must be >= 1 (1 = the next span), got "
+                    f"{self.spandec_horizon}")
             if self.spandec_heads < 0:
                 raise ValueError(
                     f"tul.spandec_heads must be >= 0 (0 = the model's), got "
@@ -845,7 +865,8 @@ class TULConfig:
                     "loop learns from the local loss ALONE, and the span decoder IS a local "
                     "loss — the combination would say nothing about either.")
         elif (self.spandec_layers != 2 or self.spandec_weight != 1.0
-                or self.spandec_heads != 0 or self.spandec_max_tokens != 0):
+                or self.spandec_heads != 0 or self.spandec_max_tokens != 0
+                or self.spandec_horizon != 1):
             raise ValueError(
                 "tul.spandec_* set with tul.spandec=false: the decoder is not built, so the "
                 "knobs would be silently ignored. Set tul.spandec: true or drop them.")
@@ -1034,6 +1055,12 @@ class TULConfig:
                     "tul.oracle_z with tul.detach_z: the oracle's whole claim is that the "
                     "coda's reader and the per-pass teacher grade the SAME state, and "
                     "detach_z cuts the coda off from it.")
+            if self.spandec_horizon > 1:
+                raise NotImplementedError(
+                    "tul.oracle_z with tul.spandec_horizon > 1: the oracle already runs T "
+                    "forward+backward passes of a [B, S, J, V] readout per step, and H "
+                    "multiplies that by H. No arm needs both, so the combination raises "
+                    "rather than quietly costing H times the arithmetic in the header.")
             if self.db_loop:
                 raise NotImplementedError(
                     "tul.oracle_z with tul.db_loop: the db carry is detached per iteration, "

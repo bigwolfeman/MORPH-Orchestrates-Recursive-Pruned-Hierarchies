@@ -44,7 +44,7 @@ from .tul import (TULConfig, TULGate, TULGateConfig, TULGradPass, TULReread, TUL
                   scatter_positions,
                   window_drop_mask)
 from .tul_egrad import DiscEnergy, ReconEnergy, slot_outcome_labels
-from .tul_spandec import SpanDecoder, next_span_slots
+from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
                          tg_reset_from_ids,
@@ -1457,6 +1457,7 @@ class MORPHTransformer(nn.Module):
                 d_ff=int(cfg.d_ff),
                 n_layers=int(cfg.tul.spandec_layers),
                 max_tokens=int(cfg.tul.spandec_max_tokens or cfg.tul.bound_span_cap),
+                horizon=int(cfg.tul.spandec_horizon),
             )
         # ── The slot chain (TULConfig.slot_chain) ─────────────────────────────────
         # Zero-init, no RNG draw: step 0 is the ruler's forward bit for bit.
@@ -4185,7 +4186,7 @@ class MORPHTransformer(nn.Module):
         T = min(int(tc.oracle_z_steps), len(db_traj) - 1)
         if T < 1:
             return db_traj[0].new_zeros(())
-        J = min(int(tc.oracle_z_max_tokens), dec.max_tokens)
+        J = min(int(tc.oracle_z_max_tokens), dec.per_span_tokens)
         ids, valid = next_span_slots(input_ids, layout, J)
         # The tied table, detached at BOTH ends exactly as `_tul_spandec_loss` reads the
         # decoder's input side: the oracle must not reshape the table its own target is
@@ -4271,7 +4272,8 @@ class MORPHTransformer(nn.Module):
         z = self._readout(h_slots)                                    # [B, S, C]
         w_tied = self.embed.lm_weight()                               # [V, C]
         w_head = w_tied.detach() if tc.mux_detach_head else w_tied
-        ids, valid = next_span_slots(input_ids, layout, dec.max_tokens)
+        ids, valid = horizon_span_slots(input_ids, layout, dec.per_span_tokens,
+                                        dec.horizon)
         # THE ASYMMETRY, and it is deliberate. The OUTPUT head follows `mux_detach_head`,
         # because that knob's whole subject is "may an auxiliary head train the tied
         # table" and the answer must not depend on which auxiliary is asking. The INPUT
@@ -4291,8 +4293,27 @@ class MORPHTransformer(nn.Module):
             # next span, so it is directly comparable with the model's own token CE — which
             # is the whole point: it says how many nats of the span the thought alone (plus
             # the span's own prefix) buys, at the decoder's cost rather than the coda's.
-            stats["spandec_ce"] = float(loss.detach())
+            # `spandec_ce_h` is the term actually optimised — a per-TOKEN conditional CE
+            # over whatever horizon the arm runs. `spandec_ce` is the H = 1 PART of it, so
+            # a horizon arm's sweep column stays comparable with every earlier arm's and
+            # with the model's own token CE.
+            stats["spandec_ce_h"] = float(loss.detach())
+            stats["spandec_horizon"] = float(dec.horizon)
             stats["spandec_n_tokens"] = float(valid.sum())
+            if dec.horizon == 1:
+                stats["spandec_ce"] = float(loss.detach())
+            elif not self.training:
+                # A SECOND chunked CE over block 0 alone. Eval only: it is a full extra
+                # [B, S, J, V] readout, the sweep and the val pass are where the column is
+                # read, and paying for it every training step would cost the arm its rate.
+                # A training run therefore logs `spandec_ce_h` and no `spandec_ce`.
+                _lab0 = lab.clone()
+                _lab0[:, :, dec.per_span_tokens:] = -100
+                stats["spandec_ce"] = float(fused_linear_cross_entropy(
+                    st.reshape(-1, C), w_head, _lab0.reshape(-1), ignore_index=-100,
+                    chunk_size=self.cfg.ce_chunk_size,
+                    mask_token_id=tc.slot_id).detach())
+                stats["spandec_n_tokens_h1"] = float(valid[:, :, :dec.per_span_tokens].sum())
         return loss
 
     def _own_span_grad(self, h: Tensor, input_ids: Tensor, layout: SlotLayout,

@@ -57,7 +57,8 @@ KNOWN_TUL_KEYS = frozenset({
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_chain", "slot_chain_detach",
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
-    "spandec", "spandec_heads", "spandec_layers", "spandec_max_tokens", "spandec_weight",
+    "spandec", "spandec_heads", "spandec_horizon", "spandec_layers", "spandec_max_tokens",
+    "spandec_weight",
     "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda",
     "tg_coda_prefix_reach", "tg_geometry",
     "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
@@ -249,6 +250,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         spandec_heads=int(tc.get("spandec_heads", 0)),
         spandec_weight=float(tc.get("spandec_weight", 1.0)),
         spandec_max_tokens=int(tc.get("spandec_max_tokens", 0)),
+        spandec_horizon=int(tc.get("spandec_horizon", 1)),
         slot_chain=bool(tc.get("slot_chain", False)),
         slot_chain_detach=bool(tc.get("slot_chain_detach", False)),
         grad_pass=bool(tc.get("grad_pass", False)),
@@ -354,6 +356,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         # DERIVED, so the run is reproducible from its wandb config alone: 0 means "the
         # data's span_cap", which is itself derived from the boundary rule.
         "spandec_max_tokens": (model_cfg.spandec_max_tokens or model_cfg.bound_span_cap),
+        "spandec_horizon": model_cfg.spandec_horizon,
         "slot_chain": model_cfg.slot_chain,
         "slot_chain_detach": model_cfg.slot_chain_detach,
         "grad_pass": model_cfg.grad_pass,
@@ -434,7 +437,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
     if model_cfg.spandec:
         print(f"  TUL SPAN DECODER ON: layers={model_cfg.spandec_layers} "
               f"heads={model_cfg.spandec_heads or int(cfg.model.n_heads)} "
-              f"J={model_cfg.spandec_max_tokens or model_cfg.bound_span_cap} "
+              f"J={model_cfg.spandec_max_tokens or model_cfg.bound_span_cap}"
+              f"x{model_cfg.spandec_horizon} "
               f"weight={model_cfg.spandec_weight} — the next span is decoded from z with a "
               f"teacher-forced token path (morph/model/tul_spandec.py)", flush=True)
     if model_cfg.slot_chain:

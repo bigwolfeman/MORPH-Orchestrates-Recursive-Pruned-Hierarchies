@@ -66,7 +66,8 @@ from torch import Tensor
 from .attention import RMSNorm
 from .tul_layout import SlotLayout
 
-__all__ = ["SpanDecoder", "next_span_slots", "own_span_slots", "span_slots"]
+__all__ = ["SpanDecoder", "horizon_span_slots", "next_span_slots",
+           "own_span_slots", "span_slots"]
 
 # Private init streams. Two constants, never the global RNG: building the decoder must not
 # shift a single weight of the model it is bolted onto (the `TULSlots.W_sent` rule).
@@ -78,8 +79,11 @@ def span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int, shift: in
                ) -> tuple[Tensor, Tensor]:
     """``(ids [B, S, J] int64, valid [B, S, J] bool)`` — one span's tokens, per slot.
 
-    ``shift`` picks WHICH span supervises slot ``s``, using the same two relations
-    :func:`morph.model.tul.mux_span_targets` uses:
+    ``shift`` picks WHICH span supervises slot ``s`` — ``s + shift`` — using the same
+    relations :func:`morph.model.tul.mux_span_targets` uses. ``shift >= 2`` is
+    :func:`horizon_span_slots`'s DOWNSTREAM target (``tul.spandec_horizon``): the same
+    rule read further ahead, with the same "the span must be complete AND the graded slot
+    must exist" validity.
 
     * ``shift=1`` (:func:`next_span_slots`, ``mux_target="next"``) — slot ``s`` is graded
       on span ``s + 1``, the span its plan is decoded into. A span supervises its
@@ -105,9 +109,9 @@ def span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int, shift: in
     slot): the packer caps a span at ``tul.span_cap`` and ``max_tokens`` defaults to that
     cap, so the drop is empty on the shipped rule and a smaller cap is an explicit choice.
     """
-    if shift not in (0, 1):
-        raise ValueError(f"span_slots shift must be 0 (own span) or 1 (next span), "
-                         f"got {shift}")
+    if shift < 0:
+        raise ValueError(f"span_slots shift must be >= 0 (0 = own span, 1 = next span, "
+                         f"h = h spans downstream), got {shift}")
     B, L = input_ids.shape
     S = layout.slot_index.shape[1]
     J = int(max_tokens)
@@ -116,16 +120,19 @@ def span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int, shift: in
     kc = k.clamp(0, S - 1)
     span_done = torch.gather(layout.slot_valid, 1, kc)           # slot k exists
     pos_valid = (~layout.slot_mask) & (k >= shift) & (k < S) & span_done
-    if shift == 1:
-        # The graded slot is k-1, so it must exist too.
-        pos_valid = pos_valid & torch.gather(layout.slot_valid, 1, (kc - 1).clamp(min=0))
-        start = torch.gather(layout.slot_index, 1, (kc - 1).clamp(min=0)) + layout.prefix_k
-    else:
-        # Span 0 starts at position 0; span k > 0 starts after slot k-1's prefix cells.
-        start = torch.where(
-            kc >= 1,
-            torch.gather(layout.slot_index, 1, (kc - 1).clamp(min=0)) + layout.prefix_k,
-            torch.zeros_like(kc))
+    if shift >= 1:
+        # The graded slot is k-shift, so it must exist too. At shift >= 2 this is the
+        # "all H next spans exist" rule of `horizon_span_slots`, applied one span at a
+        # time: a slot is supervised at block h only when span s+h is there and complete.
+        pos_valid = pos_valid & torch.gather(layout.slot_valid, 1,
+                                             (kc - shift).clamp(min=0))
+    # Span 0 starts at position 0; span k > 0 starts after slot k-1's prefix cells. The
+    # `where` is exact for every shift — at shift >= 1 the k == 0 arm is unreachable
+    # (pos_valid already needs k >= shift) and its value is dumped.
+    start = torch.where(
+        kc >= 1,
+        torch.gather(layout.slot_index, 1, (kc - 1).clamp(min=0)) + layout.prefix_k,
+        torch.zeros_like(kc))
     # offset inside the span
     j = (torch.arange(L, device=dev).unsqueeze(0) - start).clamp(min=0)
     keep = pos_valid & (j < J)
@@ -151,6 +158,36 @@ def own_span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int
                    ) -> tuple[Tensor, Tensor]:
     """Span ``s``'s own tokens, per slot. :func:`span_slots` at ``shift=0``."""
     return span_slots(input_ids, layout, max_tokens, shift=0)
+
+
+def horizon_span_slots(input_ids: Tensor, layout: SlotLayout, per_span_tokens: int,
+                       horizon: int) -> tuple[Tensor, Tensor]:
+    """``(ids, valid)`` ``[B, S, horizon * per_span_tokens]`` — spans ``s+1 .. s+H``.
+
+    ``tul.spandec_horizon``. Block ``h`` (offset ``(h-1) * per_span_tokens``) holds span
+    ``s + h``'s tokens, left-aligned inside its block and invalid after the span ends, so
+    the shape is fixed and the decoder reads one concatenated causal sequence. Slot cells
+    never appear: :func:`span_slots` selects token positions only.
+
+    A slot is supervised at block ``h`` ONLY when span ``s + h`` exists AND is complete
+    (its own terminating slot is present) — `span_slots`' rule at ``shift = h``, so a slot
+    near the end of a row is supervised on the blocks it has and masked on the rest rather
+    than dropped. ``horizon = 1`` returns exactly :func:`next_span_slots`, tensor for
+    tensor, which is what keeps the default bit-identical.
+
+    The gaps between a short span and the next block carry `valid = False`, so their
+    labels are ``ignore_index`` and their input embeddings are zeroed by
+    :meth:`SpanDecoder.decode` — the same treatment a short span already gets inside one
+    block.
+    """
+    if horizon < 1:
+        raise ValueError(f"tul.spandec_horizon must be >= 1, got {horizon}")
+    if horizon == 1:
+        return next_span_slots(input_ids, layout, per_span_tokens)
+    parts = [span_slots(input_ids, layout, per_span_tokens, shift=h)
+             for h in range(1, horizon + 1)]
+    return (torch.cat([p[0] for p in parts], dim=2),
+            torch.cat([p[1] for p in parts], dim=2))
 
 
 class _SpanDecBlock(nn.Module):
@@ -212,8 +249,14 @@ class SpanDecoder(nn.Module):
     """
 
     def __init__(self, d_model: int, n_heads: int, d_ff: int, n_layers: int,
-                 max_tokens: int, seed_offset: int = 0):
+                 max_tokens: int, seed_offset: int = 0, horizon: int = 1):
         """``seed_offset`` shifts BOTH private init streams.
+
+        ``horizon`` (``tul.spandec_horizon``) decodes spans ``s+1 .. s+H`` as ONE causal
+        sequence of ``H * max_tokens`` positions, so ``max_tokens`` stays the PER-SPAN cap
+        and the decoded axis scales with H. ``horizon=1`` builds exactly the tensors it
+        built before this parameter existed (the position table is zero-init, so a longer
+        one draws no RNG either).
 
         A model can hold two of these at once — the ``tul.spandec`` TARGET decoder and the
         ``grad_pass_energy='recon'`` ENERGY decoder — and at offset 0 they would start from
@@ -225,7 +268,11 @@ class SpanDecoder(nn.Module):
             raise ValueError(f"tul.spandec_layers must be >= 1, got {n_layers}")
         if max_tokens < 2:
             raise ValueError(f"tul.spandec_max_tokens must be >= 2, got {max_tokens}")
-        self.max_tokens = int(max_tokens)
+        if horizon < 1:
+            raise ValueError(f"tul.spandec_horizon must be >= 1, got {horizon}")
+        self.per_span_tokens = int(max_tokens)
+        self.horizon = int(horizon)
+        self.max_tokens = int(max_tokens) * int(horizon)
         gp = torch.Generator(device="cpu").manual_seed(_SEED_PROJ + int(seed_offset))
         # z and the token embeddings enter through their own bias-free maps. The token map
         # exists so the decoder can re-scale and re-orient the DETACHED tied table without
