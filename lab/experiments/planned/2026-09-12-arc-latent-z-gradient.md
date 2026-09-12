@@ -138,13 +138,46 @@ predates the `core_hca_compress_ratio: 16` default shipped in `tul_short.yaml` o
 2026-09-11, so its checkpoint carries `[256, 64]` compressor weights and the current
 config builds `[16, 64]`. Without the override the load raises a size mismatch.
 
+### Amendment 1 (2026-09-12, Builder 2): the control changed, no prediction touched
+
+The three arms below now compose `tul_slot_spandec_strict` (`slot-spandec-strict`) instead
+of `tul_slot_spandec_mask`, and their wandb names gain a `strict` segment:
+`slot-spandec-strict-egrad-recon`, `slot-spandec-strict-egrad-disc`,
+`slot-spandec-strict-norecur`. Nothing else about them changed — same energies, same
+`pass_residual_lambda`, same `slot_depth_fixed: 1` control, same recipe.
+
+Why, in one sentence: on the mask geometry the slot CELLS carry the cross-span information
+the loop was supposed to carry, so an energy that conditions the loop's PASSES was being
+scored on a forward where the loop is bypassed. The number behind it is already in this
+arc's record — `slot-spandec-mask` at 5,000 steps, 480 rows: the whole slot channel
+(`all_slots`) is worth **0.182** nats and the loop's own prefix write (`zero`) **0.078**,
+so more than half of what the channel carries never passes through an iteration. Under
+`tul.tg_geometry: strict` (`.agents/notes/proposed/architecture/2026-09-12-strict-slot-geometry.md`,
+`lab/experiments/planned/2026-09-12-arc-strict-geometry.md`) the prelude is same-span only,
+a coda prefix cell reads itself alone, and the loop is the only route from one span to the
+next.
+
+Consequences for how this file is read, stated so nothing is quietly re-scored:
+
+* The one-factor partner of every arm below is now **`slot-spandec-strict`**, not
+  `slot-spandec-mask`. Every paired CE, worth profile and K-curve comparison in
+  **Readout, every arm** takes its control from that arm's artifacts.
+* **No prediction in "Predictions (frozen)" is edited.** Two of them were written against a
+  `slot-spandec-mask` baseline and their thresholds now sit against a different control:
+  P-e (`ce_entry - ce_loop` above 0.02) and P-h (val CE within 0.05 of the parent). They
+  stay exactly as written and are scored against the NEW parent, which is the honest cost
+  of changing a control after freezing predictions — noted, not repaired.
+* Step 0 (the linear probe gate) was run on `slot-spandec-mask@5000` and
+  `slot-mux-norm-match@5000`. Those readings stand as they are; no strict checkpoint
+  exists yet, so the gate has NOT been run on the geometry the arms will train under.
+
 ### The arms
 
-Three configs, each ONE factor from `tul_slot_spandec_mask` (`slot-spandec-mask`), so all
-three inherit the mask geometry, the span-decoder exit target, `norm_match`, the
-Parcae-entry ruler recipe and the gain constraint.
+Three configs, each ONE factor from `tul_slot_spandec_strict` (`slot-spandec-strict`), so
+all three inherit the STRICT geometry (amendment 1 above), the span-decoder exit target,
+`norm_match`, the Parcae-entry ruler recipe and the gain constraint.
 
-**(1a) `tul_slot_spandec_egrad_recon.yaml`, arm `slot-spandec-egrad-recon`.**
+**(1a) `tul_slot_spandec_egrad_recon.yaml`, arm `slot-spandec-strict-egrad-recon`.**
 `tul.grad_pass: true` with `tul.grad_pass_energy: recon`. The energy is a SECOND
 `SpanDecoder` with its own parameters (`morph/model/tul_egrad.py::ReconEnergy`,
 `egrad_layers: 2`) that reconstructs the slot's OWN span from z, teacher-forced on that
@@ -165,7 +198,7 @@ New wandb keys: `loop/egrad_t{0..7}` (the energy's value at each pass — the la
 `loop/gp_rel_t{0..7}` (the injected term over the state's norm, unchanged from gradpass),
 `tul/egrad`, `tul/egrad_train`, `tul/pass_residual`.
 
-**(1b) `tul_slot_spandec_egrad_disc.yaml`, arm `slot-spandec-egrad-disc`.** Identical
+**(1b) `tul_slot_spandec_egrad_disc.yaml`, arm `slot-spandec-strict-egrad-disc`.** Identical
 except `grad_pass_energy: disc`: `E = −s_phi(z, ctx)`, `s_phi` a 2-layer MLP on the
 mean-stream z and the slot's prelude-entry state, trained with BCE against the Step-0 label
 computed ONLINE, on a detached z, with shuffled-context negatives so the critic cannot
@@ -173,7 +206,7 @@ score from the context alone. Never a regression onto z. `tul/egrad_auc` is the 
 own ROC-AUC on each training batch and is the arm's honesty instrument: a critic stuck at
 0.5 means the energy carries nothing.
 
-**(1c) `tul_slot_spandec_norecur.yaml`, arm `slot-spandec-norecur`.** The LRT control:
+**(1c) `tul_slot_spandec_norecur.yaml`, arm `slot-spandec-strict-norecur`.** The LRT control:
 `tul.slot_depth_fixed: 1`. Same parameters, same target, same reader, ONE core application
 per slot instead of a Poisson draw. It separates "the loop iterates usefully" from "the
 slot cell and its extra map are useful". No new code — `slot_depth_fixed` already exists
@@ -296,6 +329,10 @@ reason is the smoke, and it is named.
   monotonically: **90 %** (0.32 → 0.016 and 0.675 → 0.026 in the smoke).
 
 ## Not verified before launch
+
+* **Nothing has trained under the strict geometry** (amendment 1). The arms' new parent
+  `slot-spandec-strict` has itself never run a GPU step, so every prediction below is now
+  a prediction about a baseline that does not yet exist as a number.
 
 * **No arm here has run one GPU step.** The card was busy for the whole build window, and
   when it freed the arc queue still had `plain-coda-matched` pending — a 21-step smoke

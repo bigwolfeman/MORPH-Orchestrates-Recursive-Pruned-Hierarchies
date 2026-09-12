@@ -688,3 +688,33 @@ def test_reach_prev_plus_loop_reach_needs_depth_to_carry_three_spans(reach, move
         assert got == 0.0, (
             f"reach {reach}: one pass carried an edit three spans back to span {k} "
             f"(delta {got:.3e}) — depth is not required after all")
+
+
+# ── builder 1's latent-z arms, re-pointed onto the strict geometry ───────────
+
+REPOINTED = {
+    "tul_slot_spandec_egrad_recon": "slot-spandec-strict-egrad-recon",
+    "tul_slot_spandec_egrad_disc": "slot-spandec-strict-egrad-disc",
+    "tul_slot_spandec_norecur": "slot-spandec-strict-norecur",
+}
+
+
+@pytest.mark.parametrize("name,arm", sorted(REPOINTED.items()))
+def test_the_latent_z_arms_compose_strict_and_build(name, arm, monkeypatch):
+    """Their one-factor control is `slot-spandec-strict`, so they must inherit it.
+
+    An energy that conditions the loop's PASSES was being scored on a forward where the
+    loop is bypassed (the mask arm's slot channel is worth 0.182 nats against the loop's
+    own 0.078). Re-pointing them is a control change, recorded as a dated amendment in
+    `lab/experiments/planned/2026-09-12-arc-latent-z-gradient.md`.
+    """
+    cfg, rt = _runtime(name, monkeypatch)
+    assert rt is not None
+    assert rt.model_cfg.tg_geometry == "strict"
+    assert str(cfg.wandb.name) == arm
+    torch.manual_seed(7)
+    m = MORPHTransformer(_tiny(tul=rt.model_cfg)).train().float()
+    _ids0, inp, lab, layout = _pack()
+    torch.manual_seed(1)
+    out = m(inp, labels=lab, slot_layout=layout)
+    assert torch.isfinite(out["loss"]), f"{name}: loss is not finite under strict"

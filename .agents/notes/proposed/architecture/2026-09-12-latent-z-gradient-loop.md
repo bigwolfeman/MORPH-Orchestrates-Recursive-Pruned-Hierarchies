@@ -72,6 +72,31 @@ Three invariants hold by construction and by test, not by inspection:
 * `grad_pass_energy: "own_mux"` — the default and every existing arm — builds neither
   module, draws no RNG and leaves the forward bit-identical.
 
+## Amendment 2026-09-12: the arms moved onto the strict geometry
+
+All three arms now compose `tul_slot_spandec_strict` and are named
+`slot-spandec-strict-egrad-recon`, `slot-spandec-strict-egrad-disc` and
+`slot-spandec-strict-norecur`. Nothing about the energies, the bounded residual or the
+depth-1 control changed; the FORWARD they run on did.
+
+The reason is a number already in this arc's record. On `slot-spandec-mask` at 5,000 steps,
+480 rows, the whole slot channel (`worth_profile --plan-mode all_slots`) is worth **0.182**
+nats and the loop's own prefix write (`zero`) **0.078**. More than half of what the slot
+channel carries never passes through an iteration: under `tul.tg_restrict` the prelude lets
+every token and every cell read every earlier cell, so a cell's SEED — a bag-mean of its own
+span — reaches later spans with no pass of the loop in between. An energy whose entire claim
+is about what the loop's PASSES do was therefore being scored on a forward where the passes
+are optional.
+
+`tul.tg_geometry: "strict"` closes those routes
+([`2026-09-12-strict-slot-geometry.md`](2026-09-12-strict-slot-geometry.md)). The
+one-factor partner of each arm is now `slot-spandec-strict`. The cost of the move, stated
+rather than hidden: two frozen predictions (P-e, P-h in
+[the prereg](../../../lab/experiments/planned/2026-09-12-arc-latent-z-gradient.md)) were
+written against a `slot-spandec-mask` baseline and will be scored against a different
+control; they are NOT edited, and the prereg's amendment 1 says so. The Step-0 probe gate
+was also run on mask-geometry checkpoints and has not been run under strict.
+
 ## Alternatives considered
 
 **Use the energy gradient AS the update** (`h_{t+1} = h_t − η ∇E`), the obvious reading of

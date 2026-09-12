@@ -30,8 +30,19 @@
 #
 # Record: lab/experiments/planned/2026-09-12-arc-latent-z-gradient.md
 # Note: .agents/notes/proposed/architecture/2026-09-12-latent-z-gradient-loop.md
+# ── AMENDMENT 2026-09-12 (Builder 2): THE CONTROL CHANGED ─────────────────────
+# This arm now composes `tul_slot_spandec_strict` and not `tul_slot_spandec_mask`, and its
+# wandb name gains the `strict` segment. Reason: on the mask geometry the slot CELLS carry
+# the cross-span information the loop was supposed to carry — the whole slot channel is
+# worth 0.182 nats on `slot-spandec-mask` at 5,000 while the loop's own prefix write is
+# worth 0.078 — so an energy that conditions the loop's PASSES was being scored on a
+# forward where the loop is bypassed. Under `tul.tg_geometry: strict` the loop is the only
+# cross-span channel, which is the forward this arm's question is actually about.
+# The one-factor partner is therefore `slot-spandec-strict`, NOT `slot-spandec-mask`.
+# Strict geometry: .agents/notes/proposed/architecture/2026-09-12-strict-slot-geometry.md
+#                  lab/experiments/planned/2026-09-12-arc-strict-geometry.md
 defaults:
-  - tul_slot_spandec_mask
+  - tul_slot_spandec_strict
   - _self_
 
 tul:
@@ -44,4 +55,4 @@ tul:
   pass_residual_lambda: 0.01
 
 wandb:
-  name: slot-spandec-egrad-disc
+  name: slot-spandec-strict-egrad-disc
