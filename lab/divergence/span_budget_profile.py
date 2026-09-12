@@ -112,7 +112,10 @@ def _boot(d: np.ndarray, blk: np.ndarray, rng: np.random.Generator) -> tuple[flo
 
 
 def profile(full_npz: str, span_npz: str, offsets: dict[int, int] | None,
-            depths: list[int]) -> dict:
+            depths: list[int], full_depth: int | None = None) -> dict:
+    """``full_depth`` pins the FULL file's column while ``depths`` walks the SPAN file's:
+    a control trained at a fixed depth (``plain_coda_matched.yaml``, depth 1) is read at
+    the depth it trained at, never at a forced depth it has never run."""
     a, b = np.load(full_npz), np.load(span_npz)
     common, pa, pb = np.intersect1d(a["tok_index"], b["tok_index"],
                                     assume_unique=True, return_indices=True)
@@ -127,7 +130,7 @@ def profile(full_npz: str, span_npz: str, offsets: dict[int, int] | None,
         res["n_without_offset"] = int((off < 0).sum())
     blk = common // BLOCK
     for d in depths:
-        ka, kb = f"ce_{d}", f"ce_{d}"
+        ka, kb = f"ce_{d if full_depth is None else full_depth}", f"ce_{d}"
         if ka not in a or kb not in b:
             res["depths"][d] = {"missing": True}
             continue
@@ -160,6 +163,9 @@ def main() -> None:
     ap.add_argument("--rows", type=int, default=480)
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--depths", default="6,1")
+    ap.add_argument("--full-depth", type=int, default=None,
+                    help="read the --full file at this ONE depth for every --depths entry "
+                         "(a control trained at a fixed depth)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
 
@@ -168,7 +174,9 @@ def main() -> None:
     n_rows = 0
     if a.config:
         offsets, n_rows = offset_map(a.config, a.rows, a.batch)
-    res = profile(a.full, a.span, offsets, depths)
+    res = profile(a.full, a.span, offsets, depths, a.full_depth)
+    if a.full_depth is not None:
+        print(f"full file read at depth {a.full_depth} for every span depth")
     res["config"] = a.config
     res["rows_reconstructed"] = n_rows
 

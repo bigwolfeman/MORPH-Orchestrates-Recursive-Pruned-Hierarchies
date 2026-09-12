@@ -1,0 +1,44 @@
+{
+ "label": "slot-mask-dropout-off",
+ "step": 5000,
+ "rows": 12,
+ "valid_slots": 635,
+ "state_dim": 4096,
+ "ref_depth": 1,
+ "per_depth": {
+  "1": {
+   "norm_mean": 114.90524291992188,
+   "rel_dist_from_ref_mean": 0.0,
+   "rel_dist_from_ref_p90": 0.0,
+   "cos_to_ref_mean": 1.0
+  },
+  "2": {
+   "norm_mean": 130.35324096679688,
+   "rel_dist_from_ref_mean": 0.1624332070350647,
+   "rel_dist_from_ref_p90": 0.17550328373908997,
+   "cos_to_ref_mean": 0.9963561296463013,
+   "rel_dist_from_prev_depth_mean": 0.1624332070350647
+  },
+  "3": {
+   "norm_mean": 137.47117614746094,
+   "rel_dist_from_ref_mean": 0.24162304401397705,
+   "rel_dist_from_ref_p90": 0.26248833537101746,
+   "cos_to_ref_mean": 0.99171382188797,
+   "rel_dist_from_prev_depth_mean": 0.07410476356744766
+  },
+  "6": {
+   "norm_mean": 144.2058868408203,
+   "rel_dist_from_ref_mean": 0.3324275016784668,
+   "rel_dist_from_ref_p90": 0.3837145268917084,
+   "cos_to_ref_mean": 0.981521725654602,
+   "rel_dist_from_prev_depth_mean": 0.09744832664728165
+  },
+  "16": {
+   "norm_mean": 147.74090576171875,
+   "rel_dist_from_ref_mean": 0.4130094647407532,
+   "rel_dist_from_ref_p90": 0.528994619846344,
+   "cos_to_ref_mean": 0.9636312127113342,
+   "rel_dist_from_prev_depth_mean": 0.13995882868766785
+  }
+ }
+}
