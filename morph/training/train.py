@@ -132,6 +132,9 @@ def evaluate(
                 _l -= float(out["gain_reg_weighted"])
             if out.get("spandec_weighted") is not None:
                 _l -= float(out["spandec_weighted"])
+            for _aux2 in ("egrad_weighted", "pass_res_weighted"):
+                if out.get(_aux2) is not None:
+                    _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
             # language model and not on an auxiliary (the spectral-penalty precedent).
             for _aux in ("fm_weighted", "fm_sigreg_weighted"):
@@ -2943,7 +2946,9 @@ def main(cfg: DictConfig) -> None:
                 # whether the forward on that batch was itself abnormal (a forward
                 # explosion moves the loss; a backward-only blow-up does not).
                 _probe_log["loss/total"] = float(loss.detach())
-                for _lk in ("ce_main", "mux_local", "spandec_ce", "spandec_weighted", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters", "mtp_weighted", "fixed_point", "fp_weighted", "core_gain_est", "core_gain_max", "core_gain_weighted"):
+                for _lk in ("ce_main", "mux_local", "spandec_ce", "spandec_weighted", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters", "mtp_weighted", "fixed_point", "fp_weighted", "core_gain_est", "core_gain_max", "core_gain_weighted",
+                            "egrad", "egrad_weighted", "egrad_train", "egrad_auc", "egrad_pos_frac",
+                            "pass_residual", "pass_res_weighted"):
                     if _lk in out and out[_lk] is not None:
                         _probe_log[f"loss/{_lk}"] = float(out[_lk].detach())
                 wandb.log(_probe_log, step=step)
@@ -3065,7 +3070,8 @@ def main(cfg: DictConfig) -> None:
                 _lv = _lv - float(out["spandec_weighted"])
             if isinstance(out, dict) and out.get("mtp_weighted") is not None:
                 _lv = _lv - float(out["mtp_weighted"])   # arc E8: train/loss = next-token CE
-            for _ak in ("fp_weighted", "core_gain_weighted"):        # arc E10 loop terms
+            for _ak in ("fp_weighted", "core_gain_weighted",
+                        "egrad_weighted", "pass_res_weighted"):   # arc E10 / 2026-09-12
                 if isinstance(out, dict) and out.get(_ak) is not None:
                     _lv = _lv - float(out[_ak])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
@@ -3184,7 +3190,9 @@ def main(cfg: DictConfig) -> None:
                     log["tul/tokens_per_batch"] = _npos
                 for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual", "mux_local",
                            "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters",
-                           "sigreg", "spandec_ce", "spandec_n_tokens", "spandec_weighted"):
+                           "sigreg", "spandec_ce", "spandec_n_tokens", "spandec_weighted",
+                           "egrad", "egrad_weighted", "egrad_train", "egrad_auc",
+                           "egrad_pos_frac", "pass_residual", "pass_res_weighted"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # docs/tul-gate-spec.md §10 — every step, because a gate that stops moving

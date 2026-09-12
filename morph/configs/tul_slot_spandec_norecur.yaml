@@ -1,0 +1,32 @@
+# Slot-loop panel, arm "slot-spandec-norecur": `slot-spandec-mask` with the RECURRENCE
+# removed and the parameters kept. The LRT control for the two energy arms.
+#
+# WHAT IT ISOLATES. Every slot-loop arm on this tree changes what the passes are asked for,
+# what they see or how they are trained. None of them has asked the prior question: does the
+# ITERATION buy anything at all, or is the slot cell's value entirely the extra parameters
+# and the extra depth-1 map? `tul.slot_depth_fixed: 1` gives every valid slot EXACTLY one
+# core application, train and eval, on the same weights, the same seed, the same target and
+# the same reader. Parameter count, optimiser state and the span decoder are identical to
+# the parent; only the number of applications changes.
+#
+# WHY `slot_depth_fixed` AND NOT A NEW KNOB. It already exists, it is already used by the
+# k=12 panel and by every forced-depth probe, and it is the one expression of "this slot
+# loops exactly k times" in the tree. A second way to say it would be a second thing to keep
+# in step.
+#
+# HOW TO READ IT. The forced-depth sweep of an arm reports CE at depths 1..16, so a looped
+# arm ALREADY reports its own depth-1 column. What this arm adds is a model TRAINED at depth
+# 1: the difference between "a looped model evaluated at depth 1" and "a model trained at
+# depth 1" is the thing the K-curve cannot see. If the two energy arms beat this control by
+# less than they beat the ruler, the gain is the energy's parameters and not the loop.
+#
+# Record: lab/experiments/planned/2026-09-12-arc-latent-z-gradient.md
+defaults:
+  - tul_slot_spandec_mask
+  - _self_
+
+tul:
+  slot_depth_fixed: 1
+
+wandb:
+  name: slot-spandec-norecur

@@ -66,7 +66,7 @@ from torch import Tensor
 from .attention import RMSNorm
 from .tul_layout import SlotLayout
 
-__all__ = ["SpanDecoder", "next_span_slots"]
+__all__ = ["SpanDecoder", "next_span_slots", "own_span_slots", "span_slots"]
 
 # Private init streams. Two constants, never the global RNG: building the decoder must not
 # shift a single weight of the model it is bolted onto (the `TULSlots.W_sent` rule).
@@ -74,26 +74,40 @@ _SEED_BLOCKS = 0x5DEC
 _SEED_PROJ = 0x5DEC1
 
 
-def next_span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int
-                    ) -> tuple[Tensor, Tensor]:
-    """``(ids [B, S, J] int64, valid [B, S, J] bool)`` — span ``s+1``'s tokens, per slot.
+def span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int, shift: int = 1
+               ) -> tuple[Tensor, Tensor]:
+    """``(ids [B, S, J] int64, valid [B, S, J] bool)`` — one span's tokens, per slot.
 
-    Slot ``s`` is supervised toward span ``s + 1``: the tokens from
-    ``slot_index[s] + prefix_k`` up to the position before ``slot_index[s + 1]``. That is
-    the SAME relation :func:`morph.model.tul.mux_span_targets` uses at ``target="next"``
-    (``tests/test_tul_spandec.py::test_targets_agree_with_mux_span_targets`` pins the two
-    together token for token), written as a per-slot gather because a decoder needs the
-    span's tokens IN ORDER and the MUX only needs their weights.
+    ``shift`` picks WHICH span supervises slot ``s``, using the same two relations
+    :func:`morph.model.tul.mux_span_targets` uses:
 
-    A span supervises its preceding slot only when BOTH slots exist — slot ``s`` (whose
-    plan is graded) and slot ``s + 1`` (whose presence proves the span complete). The
-    trailing unterminated text, the dump bin, span 0 and every pad slot therefore carry
-    ``valid = False`` everywhere, which the caller turns into ``ignore_index``.
+    * ``shift=1`` (:func:`next_span_slots`, ``mux_target="next"``) — slot ``s`` is graded
+      on span ``s + 1``, the span its plan is decoded into. A span supervises its
+      preceding slot only when BOTH slots exist: slot ``s`` (whose plan is graded) and
+      slot ``s + 1`` (whose presence proves the span complete).
+    * ``shift=0`` (:func:`own_span_slots`, ``mux_target="own"``) — slot ``s`` is graded on
+      span ``s``, the span it terminates. Every one of those tokens sits BEFORE the slot,
+      so a generator can compute this target with no lookahead; that causality is why the
+      own span is what the gradient-conditioning energies read
+      (``morph/model/tul_egrad.py``).
+
+    Written as a per-slot gather because a decoder needs the span's tokens IN ORDER and
+    the MUX only needs their weights;
+    ``tests/test_tul_spandec.py::test_targets_agree_with_mux_span_targets`` pins the
+    ``shift=1`` case to ``mux_span_targets`` token for token and
+    ``tests/test_tul_egrad.py`` does the same for ``shift=0``.
+
+    The trailing unterminated text, the dump bin, the span with no slot to grade and every
+    pad slot carry ``valid = False`` everywhere, which the caller turns into
+    ``ignore_index``.
 
     Tokens at offset ``>= max_tokens`` inside a span are DROPPED (not folded into the last
     slot): the packer caps a span at ``tul.span_cap`` and ``max_tokens`` defaults to that
     cap, so the drop is empty on the shipped rule and a smaller cap is an explicit choice.
     """
+    if shift not in (0, 1):
+        raise ValueError(f"span_slots shift must be 0 (own span) or 1 (next span), "
+                         f"got {shift}")
     B, L = input_ids.shape
     S = layout.slot_index.shape[1]
     J = int(max_tokens)
@@ -101,15 +115,23 @@ def next_span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int
     k = layout.bag_id                                            # [B, L] span of a token
     kc = k.clamp(0, S - 1)
     span_done = torch.gather(layout.slot_valid, 1, kc)           # slot k exists
-    prev_ok = torch.gather(layout.slot_valid, 1, (kc - 1).clamp(min=0))
-    pos_valid = (~layout.slot_mask) & (k >= 1) & (k < S) & span_done & prev_ok
-    # offset inside the span: p - (slot_index[k-1] + prefix_k)
-    start = torch.gather(layout.slot_index, 1, (kc - 1).clamp(min=0)) + layout.prefix_k
+    pos_valid = (~layout.slot_mask) & (k >= shift) & (k < S) & span_done
+    if shift == 1:
+        # The graded slot is k-1, so it must exist too.
+        pos_valid = pos_valid & torch.gather(layout.slot_valid, 1, (kc - 1).clamp(min=0))
+        start = torch.gather(layout.slot_index, 1, (kc - 1).clamp(min=0)) + layout.prefix_k
+    else:
+        # Span 0 starts at position 0; span k > 0 starts after slot k-1's prefix cells.
+        start = torch.where(
+            kc >= 1,
+            torch.gather(layout.slot_index, 1, (kc - 1).clamp(min=0)) + layout.prefix_k,
+            torch.zeros_like(kc))
+    # offset inside the span
     j = (torch.arange(L, device=dev).unsqueeze(0) - start).clamp(min=0)
     keep = pos_valid & (j < J)
     # Scatter into [B, S*J]. (slot, offset) is unique per position, so this is a plain
     # `scatter_`, not an atomic add — no nondeterminism and no gradient (ids are int64).
-    tgt = (kc - 1).clamp(min=0)                                  # the slot being graded
+    tgt = (kc - shift).clamp(min=0)                              # the slot being graded
     flat = (tgt * J + j.clamp(max=J - 1))
     flat = torch.where(keep, flat, torch.full_like(flat, S * J))  # dump column
     ids = input_ids.new_zeros(B, S * J + 1)
@@ -117,6 +139,18 @@ def next_span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int
     ok = torch.zeros(B, S * J + 1, dtype=torch.bool, device=dev)
     ok.scatter_(1, flat, keep)
     return ids[:, :S * J].reshape(B, S, J), ok[:, :S * J].reshape(B, S, J)
+
+
+def next_span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int
+                    ) -> tuple[Tensor, Tensor]:
+    """Span ``s + 1``'s tokens, per slot. :func:`span_slots` at ``shift=1``."""
+    return span_slots(input_ids, layout, max_tokens, shift=1)
+
+
+def own_span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int
+                   ) -> tuple[Tensor, Tensor]:
+    """Span ``s``'s own tokens, per slot. :func:`span_slots` at ``shift=0``."""
+    return span_slots(input_ids, layout, max_tokens, shift=0)
 
 
 class _SpanDecBlock(nn.Module):
@@ -178,14 +212,21 @@ class SpanDecoder(nn.Module):
     """
 
     def __init__(self, d_model: int, n_heads: int, d_ff: int, n_layers: int,
-                 max_tokens: int):
+                 max_tokens: int, seed_offset: int = 0):
+        """``seed_offset`` shifts BOTH private init streams.
+
+        A model can hold two of these at once — the ``tul.spandec`` TARGET decoder and the
+        ``grad_pass_energy='recon'`` ENERGY decoder — and at offset 0 they would start from
+        byte-identical weights. The offset is a construction-time constant, so it still
+        draws nothing from the global RNG and an arm's other weights are unmoved.
+        """
         super().__init__()
         if n_layers < 1:
             raise ValueError(f"tul.spandec_layers must be >= 1, got {n_layers}")
         if max_tokens < 2:
             raise ValueError(f"tul.spandec_max_tokens must be >= 2, got {max_tokens}")
         self.max_tokens = int(max_tokens)
-        gp = torch.Generator(device="cpu").manual_seed(_SEED_PROJ)
+        gp = torch.Generator(device="cpu").manual_seed(_SEED_PROJ + int(seed_offset))
         # z and the token embeddings enter through their own bias-free maps. The token map
         # exists so the decoder can re-scale and re-orient the DETACHED tied table without
         # a private [V, d] embedding (37.7 M parameters at V=49169, d=768) and without
@@ -198,7 +239,7 @@ class SpanDecoder(nn.Module):
         # Learned absolute position inside the span, ZERO-init: at step 0 the decoder is
         # position-blind and learns the offsets from the data. Deterministic, no draw.
         self.pos = nn.Parameter(torch.zeros(self.max_tokens, d_model))
-        gb = torch.Generator(device="cpu").manual_seed(_SEED_BLOCKS)
+        gb = torch.Generator(device="cpu").manual_seed(_SEED_BLOCKS + int(seed_offset))
         self.blocks = nn.ModuleList(
             [_SpanDecBlock(d_model, n_heads, d_ff, gb) for _ in range(n_layers)])
         self.out_norm = RMSNorm(d_model)

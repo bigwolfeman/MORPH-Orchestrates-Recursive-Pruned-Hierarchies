@@ -43,6 +43,7 @@ from .tul import (TULConfig, TULGate, TULGateConfig, TULGradPass, TULReread, TUL
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
                   scatter_positions,
                   window_drop_mask)
+from .tul_egrad import DiscEnergy, ReconEnergy, slot_outcome_labels
 from .tul_spandec import SpanDecoder, next_span_slots
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
                          span_start_mask, tg_allow_mask, tg_reset_mask)
@@ -1366,6 +1367,67 @@ class MORPHTransformer(nn.Module):
             self.tul_grad_pass = TULGradPass(d, cfg.tul.grad_pass_scale,
                                              cfg.tul.grad_pass_norm)
 
+        # ── The energy the gradient feature is taken OF (TULConfig.grad_pass_energy;
+        #    morph/model/tul_egrad.py) ───────────────────────────────────────────────
+        # `own_mux` (the default) builds NOTHING: the energy is `_tul_mux_loss(target="own")`
+        # and the tree is the one from before this existed. The two modules below are
+        # TRAINING-ONLY scorers, RNG-neutral (private generators) and `_ternary_exclude` on
+        # every leaf, so the QAT scope, the prune, the carve, the router and the packer all
+        # walk past them.
+        self.tul_egrad: nn.Module | None = None
+        _ge = "own_mux" if cfg.tul is None else str(cfg.tul.grad_pass_energy)
+        if _ge not in ("own_mux", "recon", "disc"):
+            raise ValueError(
+                f"tul.grad_pass_energy must be 'own_mux', 'recon' or 'disc', got {_ge!r}")
+        if cfg.tul is not None and _ge != "own_mux":
+            if not cfg.tul.grad_pass:
+                raise ValueError(
+                    f"tul.grad_pass_energy={_ge!r} without tul.grad_pass: the energy exists "
+                    "only to be differentiated into the pass's input. Set grad_pass: true "
+                    "or leave the energy at 'own_mux'.")
+            if cfg.tul.tokens_through_core:
+                raise NotImplementedError(
+                    f"tul.grad_pass_energy={_ge!r} has no defined meaning under the paid "
+                    "loop (tokens_through_core): there is no per-slot looped state to "
+                    "score. The paid loop already refuses tul.grad_pass in _tul_core.")
+            if _ge == "recon":
+                self.tul_egrad = ReconEnergy(
+                    d_model=d,
+                    n_heads=int(cfg.tul.egrad_heads or cfg.n_heads),
+                    d_ff=int(cfg.d_ff),
+                    n_layers=int(cfg.tul.egrad_layers),
+                    max_tokens=int(cfg.tul.egrad_max_tokens or cfg.tul.bound_span_cap),
+                    soft_labels=bool(cfg.tul.egrad_soft_labels),
+                    soft_mix=float(cfg.tul.egrad_soft_mix),
+                )
+            else:
+                if not (cfg.tul.coda_sees_slots and cfg.tul.coda_token_cut == 0):
+                    raise NotImplementedError(
+                        "tul.grad_pass_energy='disc' needs the FULL-AXIS coda "
+                        "(coda_sees_slots=true, coda_token_cut=0): its label is the coda's "
+                        "per-token CE indexed by `layout.bag_id`, and the gathered coda of "
+                        "arm A4 / arm CW runs on a different index space that "
+                        "`slot_outcome_labels` does not re-derive.")
+                self.tul_egrad = DiscEnergy(d, int(cfg.tul.egrad_disc_hidden or d))
+        if cfg.tul is not None and cfg.tul.reinject_seed_every_pass:
+            # See TULConfig.reinject_seed_every_pass: `_tul_core` already hands the slot's
+            # prelude-entry state `e` to EVERY pass through `_apply_core_step`'s opening
+            # `self.injection(h_in, e_in)` and the per-layer x0/bigram terms gathered at the
+            # slot positions. A second additive copy of the seed is a duplicate path, so
+            # this refuses rather than shipping one.
+            raise NotImplementedError(
+                "tul.reinject_seed_every_pass is a NO-OP by construction and therefore "
+                "refused: the slot seed already reaches every pass. `_tul_core` binds "
+                "`_e_arg = e` (the prelude's output at the slot position, i.e. `E_slot + "
+                "W_sent . embed(t_last)` after the prelude) ONCE and passes it to every "
+                "`_core_step`, where `_apply_core_step` opens with "
+                "`self.injection(h_in, e_in)` — a DiagonalInjection of that same `e` at "
+                "every pass — and then adds the per-core-layer x0/bigram injection terms, "
+                "themselves gathered from the slot positions. Adding a second copy would "
+                "be a duplicate path no measurement could separate from a change in the "
+                "injection's gain. If you want a STRONGER seed, change the injection, not "
+                "this knob.")
+
         # ── The span decoder (TULConfig.spandec; morph/model/tul_spandec.py) ──────
         # Built here, beside the other slot-loop readers, and RNG-neutral: every real draw
         # comes from a private generator, so this arm's base weights are byte-identical to
@@ -2161,6 +2223,8 @@ class MORPHTransformer(nn.Module):
             out[k] = v
         if "fp_weighted" in aux:
             out["loss"] = out["loss"] + aux["fp_weighted"]
+        if "pass_res_weighted" in aux:
+            out["loss"] = out["loss"] + aux["pass_res_weighted"]
         if "core_gain_weighted" in aux:
             out["loss"] = out["loss"] + aux["core_gain_weighted"]
 
@@ -3070,6 +3134,19 @@ class MORPHTransformer(nn.Module):
         _gp_stats: dict = {}
         if _gp_write:
             self._loop_gradpass = None
+        # The `disc` critic's context: the slot's PRELUDE-ENTRY state, mean over the
+        # Hyper-Connection streams. Constant across passes by construction, so the critic
+        # scores "how far has this state moved from where it began, and did that help"
+        # rather than re-reading the span. None for every other energy.
+        _eg_ctx = None
+        if isinstance(self.tul_egrad, DiscEnergy):
+            _eg_ctx = (e.mean(dim=2) if self._is_hc else e).detach()
+        # The per-pass residual bound (TULConfig.pass_residual_lambda). A Python-level
+        # constant: 0.0 builds nothing and the graph is the one from before this existed.
+        # Twin of `_fp_terms` below, and deliberately NOT the same term: the fixed-point
+        # term charges each slot's LAST pass, this one charges EVERY gradient pass.
+        _pr_lam = float(self.cfg.tul.pass_residual_lambda) if self.training else 0.0
+        _pr_terms: list[Tensor] = []
         with _prof("carrier::h_clone"):
             if _scse is None:
                 h = self.core_init(e)
@@ -3351,7 +3428,8 @@ class MORPHTransformer(nn.Module):
                 _h_in = self._apply_injection(_h_in, _chain(_h_in, layout.slot_valid))
             if _gp is not None:
                 _gpm = active & layout.slot_valid
-                _gp_g, _gp_l = self._own_span_grad(_h_in, input_ids, layout, _gpm)
+                _gp_g, _gp_l = self._egrad_feature(_h_in, input_ids, layout, _gpm,
+                                                   _eg_ctx)
                 _gp_term = _gp(_gp_g, _gpm)
                 if _gp_write:
                     # 0-dim detached tensors, still on GPU: the local target's value at this
@@ -3504,6 +3582,21 @@ class MORPHTransformer(nn.Module):
                         _pr_rank.append(_er.detach())
             if _cot_hooks and h_new.requires_grad:
                 h_new.register_hook(functools.partial(self._loop_cot_hook, t, _probe_cot))
+            if _pr_lam > 0.0 and t >= n_nograd and not halt:
+                # ||h_{t+1} - h_t||^2 / ||h_t||^2 at EVERY gradient pass, on the slots whose
+                # pass at t carries gradient. A prefix pass is excluded for the same reason
+                # the gain hinge excludes it: the term shapes the core weights, and applying
+                # it where the objective has been cut away constrains the map exactly where
+                # nothing trains it.
+                _prm = active & layout.slot_valid
+                if _prog:
+                    _prm = _prm & ~_pfx
+                if bool(_prm.any()):
+                    _pn = h_new.flatten(2).float()
+                    _po = h.flatten(2).float()
+                    _pd = _po if _scse is None else _po + h_star.flatten(2).float()
+                    _pr = (_pn - _po).pow(2).sum(-1) / (_pd.pow(2).sum(-1) + 1e-6)
+                    _pr_terms.append(_pr[_prm])
             if _fp_lam > 0.0 and t >= n_nograd and not halt:
                 _fin = active & layout.slot_valid & ~(depths > t + 1)        # finish here
                 if _prog:
@@ -3560,14 +3653,28 @@ class MORPHTransformer(nn.Module):
             }
         if _gp_write:
             self._loop_gradpass = _gp_stats
+        # The `disc` critic needs the SAME context at its own training site, which sits
+        # after the coda (its label is the coda's CE). Stashed rather than returned for the
+        # `_loop_gradpass` reason: it is a detached tensor built OUTSIDE every checkpointed
+        # region, and `_tul_core`'s return tuple is already unpacked positionally by the
+        # probes and the tests.
+        self._tul_egrad_ctx = _eg_ctx
         g_traj = torch.stack(g_list, dim=-1) if g_list else None   # [B, S, T]
         if _scse is not None:
             # Eq. 5 tail: h_T = h* + Delta_T (invariant S6). The deviation lives ONLY inside
             # this function; `_forward_tul` scatters an absolute carrier exactly as today.
             h = h_star + h
+        _aux: dict = {}
         if _fp_terms:
             _fp = torch.cat(_fp_terms).mean()
-            self._core_aux = {"fixed_point": _fp.detach(), "fp_weighted": _fp_lam * _fp}
+            _aux["fixed_point"] = _fp.detach()
+            _aux["fp_weighted"] = _fp_lam * _fp
+        if _pr_terms:
+            _pr_all = torch.cat(_pr_terms).mean()
+            _aux["pass_residual"] = _pr_all.detach()
+            _aux["pass_res_weighted"] = _pr_lam * _pr_all
+        if _aux:
+            self._core_aux = _aux
         if _gain_terms:
             # One sampled iteration: its dict as before. Every iteration: the hinges SUM
             # (each iteration's map is held under the target), the gains report mean / max.
@@ -4067,6 +4174,99 @@ class MORPHTransformer(nn.Module):
         g = g.detach()
         return (g.mean(dim=2) if self._is_hc else g), loss.detach()
 
+    def _egrad_feature(self, h: Tensor, input_ids: Tensor, layout: SlotLayout,
+                       mask: Tensor, ctx: Tensor | None) -> tuple[Tensor, Tensor]:
+        """``(dE/dz, E)`` at the CURRENT slot state, both DETACHED — the dispatch for
+        ``tul.grad_pass_energy``.
+
+        ``own_mux`` delegates to :meth:`_own_span_grad` unchanged, so the shipped arm's
+        forward is untouched. The other two energies live in ``morph/model/tul_egrad.py``
+        and share every property that makes the feature a FEATURE:
+
+        * the gradient is taken with respect to a DETACHED copy of ``h`` and with
+          ``create_graph=False``, so the outer graph never differentiates through this
+          inner backward and no second-order term exists;
+        * the energy MODULE's parameters are in this inner graph but receive nothing from
+          it (``autograd.grad`` accumulates into no ``.grad``), and their own training loss
+          is taken separately on a stop-gradient copy of ``z`` — so the energy cannot shape
+          ``z`` except through ``W_g``;
+        * the reduction over Hyper-Connection streams is the mean, and the caller
+          broadcasts one ``[B, S, C]`` term back to every stream, exactly as every other
+          injection into this carrier does.
+
+        ``ctx`` is the ``disc`` critic's context — the slot's prelude-entry state, mean over
+        streams — and is ``None`` for the other two energies.
+        """
+        eg = self.tul_egrad
+        if eg is None:
+            return self._own_span_grad(h, input_ids, layout, mask)
+        tc = self.cfg.tul
+        with torch.enable_grad():
+            h_d = h.detach().requires_grad_(True)
+            z = self._readout(h_d) if tc.mux_readout == "mean" \
+                else self._readout_per_stream(h_d)
+            if isinstance(eg, ReconEnergy):
+                w_tied = self.embed.lm_weight()
+                w_head = w_tied.detach() if tc.mux_detach_head else w_tied
+                loss = eg.loss(z, input_ids, layout, w_head, w_tied.detach(),
+                               self.cfg.ce_chunk_size, tc.slot_id, slot_keep=mask)
+            else:
+                assert ctx is not None
+                loss = eg.energy(z, ctx, mask)
+            g = torch.autograd.grad(loss, h_d, create_graph=False, allow_unused=True)[0]
+        if g is None:
+            # Nothing supervised at this pass (every span empty under the mask). The
+            # feature is zero, exactly as it is for a pad slot.
+            g = torch.zeros_like(h)
+        g = g.detach()
+        return (g.mean(dim=2) if self._is_hc else g), loss.detach()
+
+    def _egrad_train_loss(self, h_slots: Tensor, input_ids: Tensor, layout: SlotLayout,
+                          ctx: Tensor | None, xh: Tensor, labels: Tensor,
+                          stats: dict) -> Tensor | None:
+        """The energy module's OWN training loss, on a STOP-GRADIENT copy of ``z``.
+
+        Returns ``None`` when there is no energy module (``grad_pass_energy='own_mux'``).
+        ``z`` is detached here and nowhere else, which is the single statement of the
+        contract "the energy cannot shape the loop except through ``W_g``";
+        ``tests/test_tul_egrad.py`` proves it by autograd rather than by reading this.
+
+        The energy is fitted at the loop's EXIT state and then read at every pass, so the
+        feature at pass 0 is an extrapolation. That is a deliberate cost trade — fitting at
+        every pass would double the arm's extra FLOPs — and it is named in the arm's
+        pre-registration under "Not verified" rather than hidden here.
+
+        ``recon`` reconstructs the slot's own span from the detached exit ``z``.
+        ``disc`` is a BCE classifier against the MEASURED outcome: the coda's mean token CE
+        over the slot's NEXT span, thresholded at the batch median, which is exactly the
+        label the Step-0 linear probe fits.
+        """
+        eg = self.tul_egrad
+        if eg is None:
+            return None
+        tc = self.cfg.tul
+        z = (self._readout(h_slots) if tc.mux_readout == "mean"
+             else self._readout_per_stream(h_slots)).detach()
+        if isinstance(eg, ReconEnergy):
+            w_tied = self.embed.lm_weight()
+            w_head = w_tied.detach() if tc.mux_detach_head else w_tied
+            loss = eg.loss(z, input_ids, layout, w_head, w_tied.detach(),
+                           self.cfg.ce_chunk_size, tc.slot_id,
+                           slot_keep=layout.slot_valid)
+            stats["egrad_train"] = float(loss.detach())
+            return loss
+        assert ctx is not None
+        y, scored, _ce = slot_outcome_labels(xh.detach(), labels, layout,
+                                             self.embed.lm_weight().detach(),
+                                             self.cfg.ce_chunk_size)
+        loss = eg.bce(z, ctx.detach(), y, scored)
+        stats["egrad_train"] = float(loss.detach())
+        stats["egrad_pos_frac"] = float((y * scored.to(y.dtype)).sum()
+                                        / scored.sum().clamp(min=1))
+        stats["egrad_auc"] = float(DiscEnergy.train_auc(z, ctx.detach(), y, scored,
+                                                        eg.score))
+        return loss
+
     def _tul_sigreg_loss(self, h_slots: Tensor, layout: SlotLayout) -> Tensor:
         """SIGReg over the VALID slot states (LeJEPA; see morph/model/sigreg.py).
 
@@ -4286,7 +4486,7 @@ class MORPHTransformer(nn.Module):
             depths, g_traj, mux_loss, sigreg_loss, gain_reg = None, None, None, None, None
             fm_y = fm_geom = fm_ctx = None
             mux_stats = {}
-            spandec_loss, spandec_stats = None, {}
+            spandec_loss, spandec_stats, _egrad_src = None, {}, None
         elif self.fm_planner is not None:
             # FM1 (morph/model/tul_fm.py). The planner replaces the core loop; the plan
             # is DETACHED before it reaches W_prefix, so the coda's CE never touches the
@@ -4294,7 +4494,7 @@ class MORPHTransformer(nn.Module):
             xn, h_slots, fm_y, fm_geom, fm_ctx = self._tul_fm_core(x, layout)
             depths, g_traj, mux_loss, sigreg_loss, gain_reg = None, None, None, None, None
             mux_stats = {}
-            spandec_loss, spandec_stats = None, {}
+            spandec_loss, spandec_stats, _egrad_src = None, {}, None
             h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
             x_coda = scatter_positions(xn, pos, values)
@@ -4453,6 +4653,10 @@ class MORPHTransformer(nn.Module):
             spandec_loss = (self._tul_spandec_loss(h_slots, input_ids, layout,
                                                    stats=spandec_stats)
                             if self.tul_spandec is not None else None)
+            # The energy module trains on THIS state, detached, at the same seam every
+            # other reader of z uses — but its loss is built at the END of the forward,
+            # because the `disc` critic's label is the coda's own CE over the next span.
+            _egrad_src = h_slots
             sigreg_loss = (self._tul_sigreg_loss(h_slots, layout)
                            if tc.sigreg_lambda > 0.0 else None)
             if self.tul_gate is not None:
@@ -4656,6 +4860,25 @@ class MORPHTransformer(nn.Module):
             _dw = tc.spandec_weight * spandec_loss
             groups["spandec_weighted"] = _dw.detach()
             groups["loss"] = groups["loss"] + _dw
+
+        if _egrad_src is not None and groups is not None and self.tul_egrad is not None:
+            # The energy module's OWN training loss (`tul.grad_pass_energy` 'recon' /
+            # 'disc'). Same contract as `mux_weighted` / `spandec_weighted`: the WEIGHTED
+            # term is exposed so train.py can subtract it and keep train/loss and the val
+            # loss on the MODEL's CE. `z` is detached inside `_egrad_train_loss`, so this
+            # term reaches the energy's parameters and nothing else.
+            _eg_stats: dict = {}
+            _eg = self._egrad_train_loss(_egrad_src, input_ids, layout,
+                                         getattr(self, "_tul_egrad_ctx", None),
+                                         xh, labels, _eg_stats)
+            if _eg is not None:
+                groups = dict(groups)
+                groups["egrad"] = _eg.detach()
+                for _k, _v in _eg_stats.items():
+                    groups[_k] = _eg.new_tensor(_v)
+                _ew = tc.egrad_weight * _eg
+                groups["egrad_weighted"] = _ew.detach()
+                groups["loss"] = groups["loss"] + _ew
 
         if groups is not None:
             out.update(groups)

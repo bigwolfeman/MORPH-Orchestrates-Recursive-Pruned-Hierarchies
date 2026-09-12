@@ -1,0 +1,47 @@
+# Slot-loop panel, arm "slot-spandec-egrad-disc": the DISCRIMINATIVE twin of
+# `slot-spandec-egrad-recon`. Same conditioning path, same residual bound, same parent
+# (`tul_slot_spandec_mask`); the ONE difference between the two arms is the energy.
+#
+# THE ENERGY. `E = -s_phi(z, ctx)`, `s_phi` a 2-layer MLP on the mean-stream z and the
+# slot's prelude-entry state (morph/model/tul_egrad.py::DiscEnergy). It is trained with BCE
+# against the MEASURED outcome — the coda's mean token CE over that slot's NEXT span, below
+# the batch median => 1 — on a stop-gradient copy of z, with shuffled-context negatives so
+# the critic cannot score from the context alone.
+#
+# WHY A CRITIC AND NOT A REGRESSION. The spec's rule is absolute: never regress onto the
+# slot state (LCM, CoCoMix, the BT §4.2 failure). A classifier takes the latent as an INPUT
+# and predicts an outcome, which is the opposite direction and is the form the literature
+# actually measures: on Huginn-style recurrent trajectories a correctness classifier reaches
+# ROC-AUC near 1.0 (Latent Thinking Optimization, arXiv 2509.26314), while on Coconut-style
+# token-only-supervised latents it sits at chance (arXiv 2510.12167, Cohen's d 0.17). MORPH
+# has never been measured on that axis, which is what the Step-0 probe
+# (lab/divergence/slot_state_linear_probe.py) is for. This arm and that probe read the SAME
+# label by construction (`tul_egrad.slot_outcome_labels`), so a probe that reads chance
+# predicts a critic that cannot train, and the two readings check each other.
+#
+# COST. The critic has no vocabulary axis, so the energy itself is free; its label costs one
+# extra NO-GRAD per-token readout of the coda per step (~0.7 TFLOP against a ~50 TFLOP step,
+# ~1.4 %). Expect within 1.1x the ruler's wall clock. Arithmetic, not a measurement.
+#
+# `egrad_auc` is the critic's own ROC-AUC on each training batch. It is the arm's honesty
+# instrument: a critic stuck at 0.5 means the energy carries nothing and the arm is the
+# ruler with an extra injection channel, exactly as `gp_rel_t0` near 0 meant that for
+# `slot-mnext-gradpass`.
+#
+# Record: lab/experiments/planned/2026-09-12-arc-latent-z-gradient.md
+# Note: .agents/notes/proposed/architecture/2026-09-12-latent-z-gradient-loop.md
+defaults:
+  - tul_slot_spandec_mask
+  - _self_
+
+tul:
+  grad_pass: true
+  grad_pass_scale: 0.1
+  grad_pass_norm: rms
+  grad_pass_energy: disc
+  egrad_disc_hidden: 0          # 0 -> d_model
+  egrad_weight: 1.0
+  pass_residual_lambda: 0.01
+
+wandb:
+  name: slot-spandec-egrad-disc

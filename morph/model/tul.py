@@ -406,6 +406,66 @@ class TULConfig:
     # feature carries the gradient's DIRECTION and the loop cannot read the raw magnitude
     # (which falls as training proceeds). "none": feed the raw gradient.
     grad_pass_norm: str = "rms"
+    # ── WHICH energy the pass is handed the gradient OF (arms `slot-spandec-egrad-recon`
+    #    and `slot-spandec-egrad-disc`, 2026-09-12; morph/model/tul_egrad.py) ────────
+    #    "own_mux" — `_tul_mux_loss(target="own")`, the slot's own span against an
+    #                ORDER-FREE geometric bag through the tied head. The shipped energy and
+    #                the only one before this: `slot-mnext-gradpass` descended it 0.366 nats
+    #                in the FIRST pass and then sat flat for seven more, which is what a
+    #                target already present in the entry state looks like.
+    #    "recon"   — a SECOND SpanDecoder (its own parameters) that reconstructs the slot's
+    #                OWN span from z, teacher-forced on that span's tokens. Conditional,
+    #                ordered and per token, so it is not a marginal one pass can reach.
+    #    "disc"    — `-s_phi(z, ctx)`, a 2-layer scalar critic trained with BCE against the
+    #                MEASURED outcome (the coda's mean CE over the slot's next span, below
+    #                the batch median => 1) on a detached z, with shuffled-context
+    #                negatives. Never a regression onto z (spec: never regress the latent).
+    #
+    #    Both new energies train ONLY their own parameters: their loss is computed on a
+    #    stop-gradient copy of z, and the ONLY route from an energy into the loop is the
+    #    detached feature through `W_g`. "own_mux" builds nothing and is bit-identical to
+    #    the tree before this existed (tests/test_tul_egrad.py).
+    grad_pass_energy: str = "own_mux"
+    egrad_weight: float = 1.0            # weight of the energy module's OWN training loss
+    egrad_layers: int = 2                # "recon": decoder blocks
+    egrad_heads: int = 0                 # "recon": 0 -> the model's n_heads
+    # "recon": tokens of the own span the energy decoder reconstructs. NOT bound_span_cap by
+    # default, unlike `spandec_max_tokens`, and the reason is cost: the energy is read at
+    # EVERY pass, so its [B, S, J, V] head readout is paid T times per step while the
+    # spandec target's is paid once. At B 6, S 64, C 1024, V 49169 one readout is
+    # 38.7 GFLOP per token of J; the feature plus the critic's own training come to roughly
+    # 36 readout-equivalents per step, i.e. ~1.4 TFLOP x J against a ~50 TFLOP step. J = 8
+    # is ~22 % and J = 32 would be ~90 %. 8 is also where the measured cross-span budget
+    # stops being front-loaded (lab/experiments/failures/2026-09-11-arc-span-budget.md).
+    egrad_max_tokens: int = 8
+    # "recon": A*-Thought-V2 Label Forcing. The target at decoder position j becomes
+    # (1 - mix) * onehot(t_j) + mix * bag(the span's tokens). CE is linear in the target, so
+    # this is computed EXACTLY as a weighted sum of the tree's two chunked CE kernels — no
+    # [B, S, J, V] logits, no second CE implementation.
+    egrad_soft_labels: bool = False
+    egrad_soft_mix: float = 0.5
+    egrad_disc_hidden: int = 0           # "disc": 0 -> d_model
+    # ── a BOUNDED per-pass residual (LRT: no residual penalty and the state drifts;
+    #    lambda 0.01 best, lambda 1.0 collapses the loop to its entry) ───────────────
+    #    lambda * mean_t ||h_{t+1} - h_t||^2 / ||h_t||^2 over the loop's GRADIENT passes and
+    #    the slots active at each, added to the loss as `pass_res_weighted`. DISTINCT from
+    #    `model.core_fixed_point_lambda`, which charges the SAME ratio at each slot's LAST
+    #    pass only: this one charges every pass, so it bounds the trajectory rather than
+    #    pinning its end. Both may be on; the ruler's fixed-point value is unchanged.
+    #    0.0 = off: no term is built and the graph is the one from before this existed.
+    pass_residual_lambda: float = 0.0
+    # ── REFUSED, and kept as a knob so the refusal is discoverable ─────────────────
+    #    LRT reports -3.2 points for a seed injected at init only, so "re-inject the seed
+    #    every pass" is a real lever elsewhere. It is ALREADY WHAT MORPH DOES. `_tul_core`
+    #    binds `_e_arg = e` — the prelude's output at the slot position, which is the slot
+    #    seed (`E_slot + W_sent . embed(t_last)`) after the prelude has run over it — and
+    #    hands it to EVERY pass: `_apply_core_step` opens with
+    #    `self.injection(h_in, e_in)`, a DiagonalInjection of that same `e`, and then adds
+    #    the per-core-layer x0/bigram terms, which are gathered from the slot positions too.
+    #    Building a second additive copy of the seed would be a duplicate path with no
+    #    measurement able to separate it from a change in the injection's gain. So this
+    #    RAISES at construction rather than silently shipping the duplicate.
+    reinject_seed_every_pass: bool = False
     # ── Think-once panel knobs (branch tul/think-once, arms R7/R8;
     #    .agents/notes/proposed/architecture/2026-09-03-tul-loop-contribution-drawing-board.md)
     # cond_layers: that many NON-SHARED MORPHBlocks run ONCE over the compact slot

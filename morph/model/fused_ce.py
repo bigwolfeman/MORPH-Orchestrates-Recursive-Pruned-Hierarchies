@@ -189,7 +189,7 @@ def fused_linear_cross_entropy(
 class _FusedLinearMCE(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: Tensor, w: Tensor, labels: Tensor,
-                ignore_index: int, chunk_size: int) -> Tensor:
+                ignore_index: int, chunk_size: int, mask_token_id: int = -1) -> Tensor:
         N, d = x.shape
         compute_dtype = x.dtype
         valid = labels != ignore_index
@@ -214,6 +214,12 @@ class _FusedLinearMCE(torch.autograd.Function):
             logits_c = (x_c @ w_cast.t()).float()
             if V_pad != V:
                 logits_c[:, V:] = neg_inf                    # pad cols → prob exactly 0
+            if mask_token_id >= 0:
+                # Same contract as the single-hot path above: the TUL slot id is never a
+                # prediction. It matters here because a caller may mix the two kernels to
+                # express one soft target (morph/model/tul_egrad.py) and the two halves
+                # must share a partition function.
+                logits_c[:, mask_token_id] = neg_inf
             lse = torch.logsumexp(logits_c, dim=-1)
             tgt = logits_c.gather(-1, lab_safe) * valid_c
             sum_tgt = tgt.sum(dim=1)
@@ -241,14 +247,19 @@ class _FusedLinearMCE(torch.autograd.Function):
     def backward(ctx, grad_output: Tensor):
         grad_x, grad_w = ctx.saved_tensors
         go = grad_output
-        return (grad_x * go).to(ctx.x_dtype), (grad_w * go).to(ctx.w_dtype), None, None, None
+        return ((grad_x * go).to(ctx.x_dtype), (grad_w * go).to(ctx.w_dtype),
+                None, None, None, None)
 
 
 def fused_linear_cross_entropy_mce(
     x: Tensor, w: Tensor, labels: Tensor, ignore_index: int = -100, chunk_size: int = 1024,
+    mask_token_id: int = -1,
 ) -> Tensor:
-    """Memory-efficient multi-hot cross-entropy. labels: [N, K]. Reduces to single-hot when K=1."""
-    return _FusedLinearMCE.apply(x, w, labels, ignore_index, chunk_size)
+    """Memory-efficient multi-hot cross-entropy. labels: [N, K]. Reduces to single-hot when K=1.
+
+    ``mask_token_id`` (default −1 = off, bit-identical to before) forces that vocab row's
+    logit to −inf, exactly as :func:`fused_linear_cross_entropy` does."""
+    return _FusedLinearMCE.apply(x, w, labels, ignore_index, chunk_size, mask_token_id)
 
 
 def multi_hot_cross_entropy_reference(

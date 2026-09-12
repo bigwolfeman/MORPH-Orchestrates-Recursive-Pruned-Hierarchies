@@ -18,9 +18,17 @@ not by reading the diff.
 | `fused_ce.py` | Chunked weight-tied cross-entropy. Never materialises `[N, V]`. Each call allocates and SAVES a `[V, d]` fp32 `grad_w` (201 MB at V=49169, d=1024) — so prefer one call with `weights=` over one call per label group. `mask_token_id` forces a vocab row's logit to −inf (probability and gradient exactly 0). |
 | `tul_layout.py`, `tul.py` | TUL (`docs/tul-spec.md`). See the table in the root `CLAUDE.md`. |
 | `tul_spandec.py` | `tul.spandec` — the span-decoder TARGET (arm `slot-spandec-mask`, 2026-09-11). A small causal decoder over `[z, the next span's tokens so far]` charges `-log p(t_j \| z, t_{<j})` at EVERY token of the span, in place of the MUX's order-free bag. Training-only scorer: never ternarised (`_ternary_exclude` on every leaf), never pruned or carved, not in the deployed forward. Off builds nothing and draws no RNG. Note: `.agents/notes/proposed/architecture/2026-09-11-span-decoder-target.md`. |
+| `tul_egrad.py` | `tul.grad_pass_energy` — WHICH energy the gradient-conditioned passes are handed the gradient OF (arms `slot-spandec-egrad-recon` / `-disc`, 2026-09-12). `own_mux` (the default) builds nothing and is the shipped `_tul_mux_loss(target="own")`. `recon` is a SECOND `SpanDecoder` reconstructing the slot's OWN span from z with optional Label-Forcing soft targets; `disc` is a scalar critic on z trained against the coda's own next-span CE. Both train ONLY their own parameters (their loss runs on a stop-gradient copy of z) and reach the loop ONLY through the detached feature crossing `W_g`. Training-only scorers: `_ternary_exclude` on every leaf, invisible to prune/carve/route/packer. `slot_outcome_labels` here is also the label `lab/divergence/slot_state_linear_probe.py` fits, so the probe and the arm cannot drift apart. Note: `.agents/notes/proposed/architecture/2026-09-12-latent-z-gradient-loop.md`. |
 | `model.span_mask` (`transformer.py`, `tul_layout.py`, `attention.py`, `parcae_core.py`, `embeddings.py`) | The cross-span information budget. `"off"` (default) is the tree as it was. `"row"` and `"span"` build the SAME model — a DENSE per-position compressed attention branch (the build `tul.tg_restrict` already had), a `segment_causal_conv` reset on the CCA conv and value shift, a cuttable hash bigram, and a Parcae core whose dense softmax takes an allow relation — and differ only in the span ids `_span_context` computes per forward from the ids. `"row"` = one span per row = unrestricted. Requires `core_impl: parcae` and `use_kernels: false`; refuses retention, MTP, TST bagging, a slot layout, `tg_restrict` and static graphs. Gate: `tests/test_span_mask_leak.py`. Note: `.agents/notes/proposed/architecture/2026-09-11-cross-span-budget.md`. |
 
 ## Things that look like bugs and are not
+
+- **`tul.reinject_seed_every_pass` RAISES at construction.** It is not unimplemented — it is
+  a NO-OP. `_tul_core` binds `_e_arg = e` (the prelude's output at the slot position, i.e.
+  the slot seed after the prelude) once and hands it to EVERY pass, where `_apply_core_step`
+  opens with `self.injection(h_in, e_in)` and then adds the per-layer x0/bigram terms
+  gathered at the slot positions. The seed already reaches every pass; a second additive
+  copy would be a duplicate path. The knob exists so the refusal is discoverable.
 
 - **`[slot-levers] {...} INERT on this model`** at build: `base.yaml` turns the slot-loop gain
   constraint on for every model (`slot_gain_lambda`, `slot_cot_clip`), and it acts only inside

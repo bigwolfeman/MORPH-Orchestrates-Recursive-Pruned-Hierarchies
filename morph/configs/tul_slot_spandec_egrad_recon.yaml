@@ -1,0 +1,63 @@
+# Slot-loop panel, arm "slot-spandec-egrad-recon": `slot-spandec-mask` plus ONE factor —
+# the slot loop's passes are conditioned on the gradient of a RECONSTRUCTION energy.
+#
+# WHAT THIS ARM IS ONE FACTOR AGAINST. `tul_slot_spandec_mask` (the span-decoder target on
+# the mask geometry). Everything else — norm_match, the Parcae-entry ruler recipe, the mask,
+# the span decoder that grades the exit on the NEXT span — is inherited unchanged. The
+# factor is `tul.grad_pass: true` with `tul.grad_pass_energy: recon`.
+#
+# WHY, in one line. `slot-mnext-gradpass` (2026-09-10) proved the conditioning MECHANISM
+# works — the feature acted (gp_rel_t0 0.086), the loop descended its energy and the exit
+# beat the ruler's forecast by 0.017 nats — and proved the ENERGY was too easy: the ladder
+# fell 0.366 nats at pass 1 and 0.019 over the next seven, because an order-free bag of the
+# own span is already in the entry state. This arm swaps that bag for a conditional,
+# ordered, per-token reconstruction of the same span. Same causality (every token of the
+# own span sits BEFORE the slot), a target that a single pass cannot saturate.
+#
+# WHAT THE ENERGY IS. A SECOND SpanDecoder with its OWN parameters (morph/model/
+# tul_egrad.py::ReconEnergy), teacher-forced on the slot's OWN span, with SOFT targets:
+# the target at decoder position j is 0.5 * onehot(t_j) + 0.5 * bag(the span's tokens),
+# A*-Thought-V2's Label Forcing, computed exactly as a weighted sum of the tree's two
+# chunked CE kernels so no [B, S, J, V] logit tensor exists. Its gradient w.r.t. the slot
+# state is detached, RMS-normalised, scaled and mapped through the ZERO-INIT `W_g` — the
+# `TULGradPass` path, unchanged, because the measured lesson is that the energy gradient is
+# a CONDITIONING INPUT and not the update (a scalar-energy gradient used AS the update is
+# the weaker of the two forms).
+#
+# THE ENERGY CANNOT SHAPE z. Its own training loss runs on a stop-gradient copy of z, so it
+# reaches its own parameters and stops; the ONLY route from the energy into the loop is
+# `W_g`, carrying a detached feature. tests/test_tul_egrad.py proves both by autograd.
+#
+# COST, arithmetic not a guess. One [B, S, J, V] head readout is 38.7 GFLOP per token of J
+# at B 6, S 64, C 1024, V 49169. The feature is read at EVERY pass and the soft target costs
+# two readouts, so the arm pays roughly 1.4 TFLOP x J against a ~50 TFLOP step:
+# `egrad_max_tokens: 8` is ~22 %, and 8 is also where the measured cross-span budget stops
+# being front-loaded (lab/experiments/failures/2026-09-11-arc-span-budget.md). Expect
+# 1.2-1.4x the ruler's wall clock. That is arithmetic; the smoke's tok/s decides.
+#
+# THE BOUNDED RESIDUAL. `pass_residual_lambda: 0.01` charges
+# lambda * mean_t ||h_{t+1} - h_t||^2 / ||h_t||^2 over the loop's gradient passes. LRT's
+# measured sweep: no residual penalty and the state drifts, 0.01 is best, 1.0 collapses the
+# loop to its entry. DISTINCT from `model.core_fixed_point_lambda`, which stays at the
+# ruler's 1.0 and charges the SAME ratio at each slot's LAST pass only.
+#
+# Record: lab/experiments/planned/2026-09-12-arc-latent-z-gradient.md
+# Note: .agents/notes/proposed/architecture/2026-09-12-latent-z-gradient-loop.md
+defaults:
+  - tul_slot_spandec_mask
+  - _self_
+
+tul:
+  grad_pass: true
+  grad_pass_scale: 0.1
+  grad_pass_norm: rms
+  grad_pass_energy: recon
+  egrad_layers: 2
+  egrad_weight: 1.0
+  egrad_max_tokens: 8
+  egrad_soft_labels: true
+  egrad_soft_mix: 0.5
+  pass_residual_lambda: 0.01
+
+wandb:
+  name: slot-spandec-egrad-recon
