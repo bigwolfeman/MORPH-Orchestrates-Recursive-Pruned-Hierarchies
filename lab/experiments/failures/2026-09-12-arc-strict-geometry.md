@@ -1,6 +1,6 @@
 # Planned: the strict slot geometry — make the loop the only cross-span channel, then ask it for depth
 
-Status: planned
+Status: failure
 
 Date: 2026-09-12 03:32 CDT (frozen before any arm ran; no GPU step of any arm below exists
 at filing time). Arc: [`2026-09-04-loop-contribution-arc.md`](2026-09-04-loop-contribution-arc.md).
@@ -277,8 +277,82 @@ after the oracle arm.
 
 ## Results
 
-(pending)
+All seven arms at 5,000 steps, HEALTHY, every rate above the floor. Numbers: forced-depth
+sweeps on 480 rows (`results/2026-09-12-strict/sweep_*_5000.json`), token-paired gaps on
+501,106 tokens (`results/2026-09-12-strict/paired_gaps_5000.txt`), worth on 192 rows.
+
+| arm | wall (s) | tok/s @200 | K1−K6 | K3−K6 | worth zero | paired gap (span − full), depth 6 |
+|---|---|---|---|---|---|---|
+| strict | 3,337 | 11,759 | +0.0016 [+0.0013, +0.0019] | +0.0002 | 0.1865 (= all_slots) | −0.0001 [−0.0024, +0.0024] vs spandec-mask |
+| reach1 (coda reach all) | 4,140 | 9,196 | +0.0014 | +0.0003 | 0.1924 | −0.0106 vs strict |
+| prev (coda reach prev) | 3,337 | 11,721 | +0.0036 | +0.0006 | 0.1665 | +0.0082 vs strict |
+| prev-reach1 | 4,119 | 9,163 | +0.0163 [+0.0153, +0.0173] | +0.0042 [+0.0038, +0.0046] | 0.1477 | +0.0023 [−0.0000, +0.0046] vs prev; +0.0104 vs strict |
+| prev-reach2 | 4,320 | 8,801 | +0.0127 [+0.0119, +0.0136] | +0.0028 [+0.0025, +0.0031] | 0.1552 | −0.0086 [−0.0109, −0.0063] vs prev; −0.0109 vs prev-reach1; −0.0004 vs strict |
+| h3 | 4,991 | 9,168 | +0.0016 | −0.0000 | 0.1887 | −0.0093 [−0.0116, −0.0073] vs strict |
+| oracle | 4,270 | 9,046 | −0.0002 | −0.0008 | 0.1214 | +0.1195 [+0.1157, +0.1237] vs strict |
+
+Offset profiles worth reading (all in `paired_gaps_5000.txt`): prev-reach1 vs its own
+depth-1 read is better at EVERY offset (−0.014 to −0.028); prev-reach2 vs strict is worse at
+offsets 0-2 (+0.028, +0.027, +0.020) and better at 8+ (−0.0086); h3's gain over strict sits
+at offsets 3 and beyond; the oracle's loss is at every offset (0.107 at 8+, 0.181 at 1).
+
+Oracle instrument: the per-pass regression loss fell 0.45 → 0.11 over the run (the loop
+tracked the teacher); the teacher's own ladder `oracle_z_l0..l5` is monotone at steps
+200-600 and 2300-2700 and overshoots at its first step late in training (4.673 → 4.861 →
+… → 4.468 at steps 4500-5000; `results/2026-09-12-strict/oracle_ladder_*.txt`).
+
+Scores:
+
+- P-a FALSE: strict costs 0.0000 nats against spandec-mask (predicted 0.05-0.20).
+- P-b TRUE (the check): `all_slots` == `zero` = 0.1865 on strict, in every bin.
+- P-c FALSE: K1−K6 0.0016.
+- P-d FALSE as written: reach1 (coda reach all) K1−K6 0.0014, not above 0.05; its CE part
+  (within 0.02 of strict) held, at −0.0106.
+- P-d′ FALSE at the letter: prev-reach1 K1−K6 0.0163, not above 0.05; the CE part (within
+  0.03 of prev) held, +0.0023.
+- P-d″ TRUE on all three parts: prev-reach2 K1−K6 in [0.005, 0.0163]; CE better than prev by
+  0.0086 (> 0.003); K3−K6 0.0028 (> 0.002).
+- P-e FALSE: oracle K3−K6 −0.0008; the secondary (monotone ladder) FALSE late in training.
+- P-f FALSE: h3's far-bin worth is unchanged; its gain is CE at offsets 3+, not worth.
+- P-g FALSE: prev is +0.0082 worse than strict, not > 0.03.
+- P-h TRUE: 7 of 7 HEALTHY, no sustained tripwire.
+- P-i TRUE: every arm cleared 8,086 (h3 at 9,168 against a 40 % prior).
+
+4 of 11 held.
 
 ## Verdict
 
-(pending)
+Status: failure (the predictions did not hold; the panel itself ran clean).
+
+What the panel measured, in order of weight:
+
+1. Closing the slot-cell bypass costs nothing. Under strict geometry the loop's write is the
+   whole cross-span channel (0.1865 = all_slots) at CE parity with the bypass arm. The
+   channel was never the bottleneck; what is written was.
+2. Depth use comes from reachability, not from the target. Every arm with coda reach "all"
+   reads K1−K6 ≤ 0.0016 whatever its target (H = 1, H = 3, the oracle). The two arms that
+   make old spans reachable only through the loop's chain read 0.0163 (reach 1) and 0.0127
+   (reach 2), with K3−K6 0.0042 and 0.0028, at CE parity with unrestricted reach. Reach 2
+   beats reach 1 at every offset and beats strict at offsets 8+ while losing at 0-2.
+3. Regressing the passes onto a descent trajectory of the decoder loss is closed: the loop
+   tracks the teacher and the model pays 0.12 nats at every offset for it.
+4. A 3-span decoder target is a small CE win (0.009, offsets 3+) with no depth and no
+   far-bin worth change.
+
+What it does NOT say: the reach arms make z carry history, not the next thought (Wolfe's
+objection, amendment 3), and nothing here shows a pass improving a prediction of the SAME
+span. The 5k horizon ranks nothing between arms within 0.01 nats.
+
+## Updated hypothesis
+
+The passes are used when, and only when, the information the coda needs is unreachable in
+one hop, and then they are used as a relay, not as refinement. No target tried (next span,
+three spans, a descent trajectory) makes pass t+1 improve on pass t for the same span. Two
+open hypotheses replace "the target is the lever": (a) the working state is one compressed
+cell, and several mutable cells per span that re-read the prelude evidence each pass could
+support refinement (the planning-cells panel, proposed); (b) the causal headroom above the
+loop's exit has never been measured — the fitted-z numbers used the answer
+(`lab/divergence/slot_z_causal_fit.py`, being run). The objective arms queued under
+`2026-09-12-arc-objective-arms.md` (per-pass planning target, parallel coda decode) test the
+target side once more with the identical-target grid as the reading.
+

@@ -176,3 +176,13 @@ cannot ask z for anything past it, and the budget's missing part is flat at offs
 * **The latent-z arms' frozen predictions now sit against a different control.** Recorded as
   amendment 1 in their prereg and NOT repaired; that is the cost of moving a control after
   freezing.
+
+## Outcome (2026-09-12, panel filed)
+
+Filed under `lab/experiments/failures/2026-09-12-arc-strict-geometry.md` (4 of 11 predictions
+held). The geometry itself works: `all_slots` == `zero` = 0.1865 on the strict arm, and closing
+the bypass costs 0.0000 nats against the bypass arm. Depth use appeared only where old spans
+are reachable solely through the loop's chain (prev+reach1 K1−K6 0.0163, prev+reach2 0.0127
+at CE parity with unrestricted reach; reach2 beats reach1 at every offset). The oracle
+trajectory target costs 0.12 nats and is closed. Strict is kept as the panel's geometry for
+the objective arms; the reach arms are a relay, not refinement, and are not a design.

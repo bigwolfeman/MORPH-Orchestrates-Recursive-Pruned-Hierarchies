@@ -1,0 +1,207 @@
+## slot-spandec-strict minus slot-spandec-mask (gap = second minus first), depth 6
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3475   CE span 4.3474   gap -0.0001 nats [-0.0024, +0.0024]
+   offset      n        gap        95% CI
+        0    24,338   -0.0056  [-0.0120, +0.0005]
+        1    24,584   +0.0183  [+0.0079, +0.0286]
+        2    24,546   +0.0205  [+0.0107, +0.0304]
+        3    24,504   +0.0099  [+0.0009, +0.0190]
+        4    23,343   -0.0040  [-0.0149, +0.0069]
+        5    22,646   +0.0000  [-0.0103, +0.0103]
+        6    21,799   +0.0024  [-0.0075, +0.0117]
+        7    21,034   -0.0106  [-0.0211, -0.0010]
+       8+   304,246   -0.0031  [-0.0058, +0.0004]
+
+## slot-spandec-strict-reach1 minus slot-spandec-strict, depth 6
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3474   CE span 4.3368   gap -0.0106 nats [-0.0128, -0.0085]
+   offset      n        gap        95% CI
+        0    24,338   +0.0032  [-0.0022, +0.0101]
+        1    24,584   +0.0025  [-0.0048, +0.0098]
+        2    24,546   -0.0068  [-0.0156, +0.0038]
+        3    24,504   -0.0063  [-0.0158, +0.0023]
+        4    23,343   -0.0071  [-0.0171, +0.0027]
+        5    22,646   -0.0146  [-0.0234, -0.0058]
+        6    21,799   -0.0117  [-0.0210, -0.0020]
+        7    21,034   -0.0076  [-0.0183, +0.0025]
+       8+   304,246   -0.0135  [-0.0162, -0.0108]
+
+## slot-spandec-strict-prev minus slot-spandec-strict, depth 6
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3474   CE span 4.3556   gap +0.0082 nats [+0.0056, +0.0105]
+   offset      n        gap        95% CI
+        0    24,338   +0.0070  [-0.0003, +0.0137]
+        1    24,584   +0.0187  [+0.0087, +0.0270]
+        2    24,546   +0.0190  [+0.0096, +0.0294]
+        3    24,504   +0.0152  [+0.0049, +0.0244]
+        4    23,343   +0.0164  [+0.0059, +0.0256]
+        5    22,646   +0.0072  [-0.0009, +0.0165]
+        6    21,799   +0.0129  [+0.0046, +0.0210]
+        7    21,034   +0.0095  [-0.0003, +0.0193]
+       8+   304,246   +0.0050  [+0.0019, +0.0075]
+
+## slot-spandec-strict-prev-reach1 minus slot-spandec-strict-prev, depth 6
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3556   CE span 4.3578   gap +0.0023 nats [-0.0000, +0.0046]
+   offset      n        gap        95% CI
+        0    24,338   +0.0315  [+0.0225, +0.0403]
+        1    24,584   +0.0164  [+0.0077, +0.0262]
+        2    24,546   +0.0079  [-0.0012, +0.0169]
+        3    24,504   +0.0043  [-0.0045, +0.0137]
+        4    23,343   +0.0056  [-0.0045, +0.0152]
+        5    22,646   +0.0051  [-0.0044, +0.0138]
+        6    21,799   -0.0041  [-0.0138, +0.0041]
+        7    21,034   +0.0134  [+0.0053, +0.0226]
+       8+   304,246   -0.0027  [-0.0058, +0.0001]
+
+## slot-spandec-strict-prev-reach1 minus slot-spandec-strict, depth 6
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3474   CE span 4.3578   gap +0.0104 nats [+0.0077, +0.0132]
+   offset      n        gap        95% CI
+        0    24,338   +0.0385  [+0.0316, +0.0462]
+        1    24,584   +0.0351  [+0.0252, +0.0460]
+        2    24,546   +0.0269  [+0.0163, +0.0367]
+        3    24,504   +0.0194  [+0.0089, +0.0299]
+        4    23,343   +0.0220  [+0.0111, +0.0312]
+        5    22,646   +0.0123  [+0.0022, +0.0216]
+        6    21,799   +0.0088  [-0.0005, +0.0177]
+        7    21,034   +0.0228  [+0.0126, +0.0338]
+       8+   304,246   +0.0022  [-0.0015, +0.0052]
+
+## slot-spandec-strict-prev-reach1: depth 6 minus depth 1 of ITSELF (the forced K-curve by offset)
+full file read at depth 1 for every span depth
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3742   CE span 4.3578   gap -0.0163 nats [-0.0173, -0.0154]
+   offset      n        gap        95% CI
+        0    24,338   -0.0162  [-0.0198, -0.0129]
+        1    24,584   -0.0197  [-0.0240, -0.0154]
+        2    24,546   -0.0277  [-0.0331, -0.0222]
+        3    24,504   -0.0204  [-0.0237, -0.0170]
+        4    23,343   -0.0175  [-0.0209, -0.0142]
+        5    22,646   -0.0238  [-0.0276, -0.0205]
+        6    21,799   -0.0166  [-0.0198, -0.0135]
+        7    21,034   -0.0192  [-0.0231, -0.0161]
+       8+   304,246   -0.0140  [-0.0150, -0.0132]
+
+## slot-spandec-strict-h3 minus slot-spandec-strict, depth 6
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3474   CE span 4.3381   gap -0.0093 nats [-0.0116, -0.0073]
+   offset      n        gap        95% CI
+        0    24,338   +0.0056  [-0.0005, +0.0121]
+        1    24,584   -0.0025  [-0.0117, +0.0056]
+        2    24,546   -0.0020  [-0.0109, +0.0069]
+        3    24,504   -0.0178  [-0.0271, -0.0087]
+        4    23,343   -0.0054  [-0.0142, +0.0024]
+        5    22,646   -0.0149  [-0.0235, -0.0054]
+        6    21,799   -0.0086  [-0.0175, -0.0016]
+        7    21,034   -0.0089  [-0.0183, +0.0006]
+       8+   304,246   -0.0108  [-0.0139, -0.0082]
+
+## slot-spandec-strict-egrad-disc minus slot-spandec-strict, depth 6
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3474   CE span 4.3555   gap +0.0081 nats [+0.0059, +0.0104]
+   offset      n        gap        95% CI
+        0    24,338   +0.0005  [-0.0050, +0.0066]
+        1    24,584   +0.0079  [-0.0006, +0.0165]
+        2    24,546   +0.0052  [-0.0031, +0.0142]
+        3    24,504   +0.0135  [+0.0055, +0.0220]
+        4    23,343   +0.0090  [-0.0002, +0.0179]
+        5    22,646   +0.0058  [-0.0032, +0.0150]
+        6    21,799   +0.0087  [+0.0009, +0.0168]
+        7    21,034   +0.0141  [+0.0048, +0.0231]
+       8+   304,246   +0.0081  [+0.0055, +0.0106]
+
+## slot-spandec-strict (depth 6) minus slot-spandec-strict-norecur (trained and read at depth 1)
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+full file read at depth 1 for every span depth
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3455   CE span 4.3474   gap +0.0020 nats [-0.0006, +0.0044]
+   offset      n        gap        95% CI
+        0    24,338   -0.0092  [-0.0159, -0.0030]
+        1    24,584   -0.0261  [-0.0345, -0.0172]
+        2    24,546   -0.0091  [-0.0182, +0.0002]
+        3    24,504   -0.0136  [-0.0237, -0.0050]
+        4    23,343   -0.0069  [-0.0169, +0.0024]
+        5    22,646   +0.0077  [-0.0014, +0.0182]
+        6    21,799   +0.0049  [-0.0032, +0.0136]
+        7    21,034   -0.0004  [-0.0097, +0.0094]
+       8+   304,246   +0.0075  [+0.0045, +0.0104]
+
+## slot-spandec-strict-oracle minus slot-spandec-strict, depth 6
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3474   CE span 4.4669   gap +0.1195 nats [+0.1157, +0.1237]
+   offset      n        gap        95% CI
+        0    24,338   +0.1180  [+0.1078, +0.1274]
+        1    24,584   +0.1810  [+0.1683, +0.1948]
+        2    24,546   +0.1696  [+0.1561, +0.1828]
+        3    24,504   +0.1277  [+0.1170, +0.1395]
+        4    23,343   +0.1342  [+0.1215, +0.1467]
+        5    22,646   +0.1373  [+0.1243, +0.1492]
+        6    21,799   +0.1104  [+0.0992, +0.1218]
+        7    21,034   +0.1356  [+0.1253, +0.1469]
+       8+   304,246   +0.1069  [+0.1025, +0.1113]
+
+## slot-spandec-strict-prev-reach2 minus slot-spandec-strict-prev, depth 6
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+depth 6:  CE full 4.3556   CE span 4.3470   gap -0.0086 nats [-0.0109, -0.0063]
+   offset      n        gap        95% CI
+        0    24,338   +0.0210  [+0.0129, +0.0293]
+        1    24,584   +0.0082  [-0.0005, +0.0175]
+        2    24,546   +0.0012  [-0.0083, +0.0098]
+        3    24,504   -0.0068  [-0.0171, +0.0018]
+        4    23,343   -0.0061  [-0.0163, +0.0034]
+        5    22,646   -0.0048  [-0.0131, +0.0032]
+        6    21,799   -0.0149  [-0.0233, -0.0065]
+        7    21,034   -0.0105  [-0.0189, -0.0012]
+       8+   304,246   -0.0136  [-0.0163, -0.0109]
+## slot-spandec-strict-prev-reach2 minus slot-spandec-strict-prev-reach1, depth 6
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+depth 6:  CE full 4.3578   CE span 4.3470   gap -0.0109 nats [-0.0130, -0.0090]
+   offset      n        gap        95% CI
+        0    24,338   -0.0106  [-0.0156, -0.0046]
+        1    24,584   -0.0082  [-0.0158, -0.0004]
+        2    24,546   -0.0066  [-0.0157, +0.0021]
+        3    24,504   -0.0110  [-0.0197, -0.0030]
+        4    23,343   -0.0117  [-0.0206, -0.0027]
+        5    22,646   -0.0099  [-0.0188, -0.0010]
+        6    21,799   -0.0108  [-0.0201, -0.0019]
+        7    21,034   -0.0238  [-0.0323, -0.0151]
+       8+   304,246   -0.0108  [-0.0130, -0.0083]
+## slot-spandec-strict-prev-reach2 minus slot-spandec-strict, depth 6
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+depth 6:  CE full 4.3474   CE span 4.3470   gap -0.0004 nats [-0.0034, +0.0024]
+   offset      n        gap        95% CI
+        0    24,338   +0.0280  [+0.0217, +0.0350]
+        1    24,584   +0.0269  [+0.0159, +0.0375]
+        2    24,546   +0.0202  [+0.0090, +0.0331]
+        3    24,504   +0.0084  [-0.0005, +0.0172]
+        4    23,343   +0.0102  [-0.0009, +0.0203]
+        5    22,646   +0.0024  [-0.0083, +0.0126]
+        6    21,799   -0.0020  [-0.0102, +0.0075]
+        7    21,034   -0.0010  [-0.0112, +0.0099]
+       8+   304,246   -0.0086  [-0.0123, -0.0056]

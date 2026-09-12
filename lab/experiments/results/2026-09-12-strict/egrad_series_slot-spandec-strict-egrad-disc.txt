@@ -1,0 +1,5 @@
+steps 200-400: egrad 0.9709 auc 0.5291 pos_frac 0.4975 pass_residual 0.0633 preclip_egrad 1.209
+steps 1000-1200: egrad 0.8058 auc 0.5763 pos_frac 0.4975 pass_residual 0.0392 preclip_egrad 1.181
+steps 2400-2600: egrad 0.7314 auc 0.6240 pos_frac 0.4975 pass_residual 0.0437 preclip_egrad 1.584
+steps 4000-4200: egrad 0.7190 auc 0.6218 pos_frac 0.4975 pass_residual 0.0357 preclip_egrad 1.911
+steps 4800-5000: egrad 0.7152 auc 0.6320 pos_frac 0.4975 pass_residual 0.0326 preclip_egrad 2.198
