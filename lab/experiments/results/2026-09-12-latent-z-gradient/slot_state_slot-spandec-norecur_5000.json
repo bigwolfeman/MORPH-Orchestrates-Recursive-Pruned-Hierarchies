@@ -1,0 +1,44 @@
+{
+ "label": "slot-spandec-norecur",
+ "step": 5000,
+ "rows": 12,
+ "valid_slots": 635,
+ "state_dim": 4096,
+ "ref_depth": 1,
+ "per_depth": {
+  "1": {
+   "norm_mean": 69.07341003417969,
+   "rel_dist_from_ref_mean": 0.0,
+   "rel_dist_from_ref_p90": 0.0,
+   "cos_to_ref_mean": 1.0
+  },
+  "2": {
+   "norm_mean": 69.07341003417969,
+   "rel_dist_from_ref_mean": 0.0,
+   "rel_dist_from_ref_p90": 0.0,
+   "cos_to_ref_mean": 1.0,
+   "rel_dist_from_prev_depth_mean": 0.0
+  },
+  "3": {
+   "norm_mean": 69.07341003417969,
+   "rel_dist_from_ref_mean": 0.0,
+   "rel_dist_from_ref_p90": 0.0,
+   "cos_to_ref_mean": 1.0,
+   "rel_dist_from_prev_depth_mean": 0.0
+  },
+  "6": {
+   "norm_mean": 69.07341003417969,
+   "rel_dist_from_ref_mean": 0.0,
+   "rel_dist_from_ref_p90": 0.0,
+   "cos_to_ref_mean": 1.0,
+   "rel_dist_from_prev_depth_mean": 0.0
+  },
+  "16": {
+   "norm_mean": 69.07341003417969,
+   "rel_dist_from_ref_mean": 0.0,
+   "rel_dist_from_ref_p90": 0.0,
+   "cos_to_ref_mean": 1.0,
+   "rel_dist_from_prev_depth_mean": 0.0
+  }
+ }
+}

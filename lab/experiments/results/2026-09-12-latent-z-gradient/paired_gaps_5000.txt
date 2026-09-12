@@ -1,0 +1,16 @@
+## spandec-mask@6 minus slot-spandec-norecur@1 (gap = second minus first; the control is read at the depth it trained at)
+full file read at depth 1 for every span depth
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3710   CE span 4.3475   gap -0.0235 nats [-0.0263, -0.0209]
+   offset      n        gap        95% CI
+        0    24,338   -0.0006  [-0.0078, +0.0063]
+        1    24,584   +0.0113  [+0.0014, +0.0209]
+        2    24,546   -0.0033  [-0.0138, +0.0099]
+        3    24,504   -0.0096  [-0.0195, +0.0015]
+        4    23,343   -0.0227  [-0.0317, -0.0128]
+        5    22,646   -0.0227  [-0.0326, -0.0117]
+        6    21,799   -0.0276  [-0.0380, -0.0176]
+        7    21,034   -0.0212  [-0.0319, -0.0102]
+       8+   304,246   -0.0310  [-0.0344, -0.0276]

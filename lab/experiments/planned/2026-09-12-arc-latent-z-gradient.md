@@ -422,6 +422,30 @@ A 21-step rate is not a 5,000-step rate.
 `b2b9198` to use an idle card (control: `slot-spandec-mask`). The strict-geometry versions
 of all three arms are queued behind it at `a0b72c4` (amendment above).
 
+### `slot-spandec-norecur` on the bypass geometry (2026-09-12 04:20 CDT, `b2b9198`, control = `slot-spandec-mask`)
+
+HEALTHY, 35 min, 20,346 tok/s at step 200 (spandec-mask ~11k), pre-clip max 33.4 at step
+244. Files: `lab/experiments/results/2026-09-12-latent-z-gradient/` (sweeps, `paired_gaps_5000.txt`,
+192-row worth, state probe).
+
+**Paired token CE at 5000, 501,106 tokens, the control read at depth 1 (the depth it
+trained at) and spandec-mask at depth 6: spandec-mask is −0.0235 [−0.0263, −0.0209]
+BETTER.** By offset: −0.0006 [−0.0078, +0.0063] at 0 (nil), −0.031 at 8+. Forced-depth sweep
+of the control: 4.3710 / 4.3711 / 4.3712 / 4.3720 / 4.3731 / 4.3745 at 1 / 2 / 3 / 6 / 9 / 12
+(K1−K6 −0.0010: forcing more passes on a depth-1 model costs, slightly). Worth, 192 rows:
+prefix write 0.367 / 0.240 / 0.179 / 0.174 / 0.129 / 0.090 / 0.062, total **0.117**; all
+slots total **0.166**; shuffle 0.055; wrong_seed 0.105. The runner's state probe reads
+`rel_dist_from_d1` 0.0000 at every forced depth: `tul.slot_depth_fixed: 1` overrides the
+probe's depth argument, so that instrument says nothing on this arm (a caveat, not a
+finding).
+
+**P-h TRUE by the letter** (within 0.05) and the direction is the finding: a model trained
+with one pass is 0.024 nats worse than the same model trained with the Poisson-6 draw,
+entirely at long offsets, while the forced-depth K-curve of the trained-at-6 model is
+0.0007. The iteration count at TRAINING time moves the CE; the iteration count at EVAL
+time does not. The depth-1 model's prefix write is worth MORE (0.117 vs 0.078 at 480 rows,
+0.082 at 192) and its model is worse: the write worth is not the CE.
+
 ## Verdict
 
 (pending)
