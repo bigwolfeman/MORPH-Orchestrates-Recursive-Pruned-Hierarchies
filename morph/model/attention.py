@@ -522,11 +522,18 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
     sink_logits: [H] per-head learnable sink — a LOGIT, not a key, with an
     implicit ZERO value vector (same contract as the fused CSA/HCA kernels' sink),
     so a query with no visible slot gets a well-defined softmax and ~zero output.
-    extra_mask: optional [B,1,S,S] bool ANDed into the causal relation of the
-    ``slot_mask is None`` (dense) form — the compressed branch's half of
-    ``model.span_mask`` (`span_allow_mask`). Only NARROWS. Combining it with a
-    gathered slot mask has no defined meaning here and RAISES rather than being
-    dropped.
+    extra_mask: optional [B,1,S,S] bool ANDed into the causal relation. Only ever
+    NARROWS, in BOTH forms:
+
+    * with ``slot_mask is None`` (the dense form) it is the compressed branch's half of
+      ``model.span_mask`` (`span_allow_mask`), and of ``tul.loop_reach`` inside the slot
+      loop, where every position is a cell;
+    * with a ``slot_mask`` (the prelude/coda call sites) it is
+      ``tul.tg_geometry="strict"``'s relation (`tg_strict_allow`). The mask is GATHERED at
+      the same slot columns K/V are, so the cost stays [B,H,S,M] and the narrowed columns
+      are exactly the ones the dense form would have masked. Under strict this is what
+      stops a prelude token reading any cell at all, and a coda prefix cell reading any
+      cell but itself.
     """
     B, H, S, D = q.shape
     device = q.device
@@ -548,12 +555,6 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
         # column and matmul-ing against v alone is exactly equal to padding v with
         # a zero row first — no extra concat on the value side needed.
         return torch.einsum("bhij,bhjd->bhid", weights[..., :S], v)
-
-    if extra_mask is not None:
-        raise NotImplementedError(
-            "_tg_slot_attention got both a slot_mask and an extra_mask: the gathered "
-            "slot-column form has no defined same-span narrowing (model.span_mask "
-            "never sets slot_mask). Raising rather than dropping the mask.")
 
     # Prelude/coda call sites: only slot COLUMNS can ever receive weight (≤ the
     # layout's fixed slot budget, e.g. 64 of S=1152), so gather K/V at slot
@@ -580,6 +581,12 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
     scores = torch.einsum("bhid,bhjd->bhij", q.float(), k_s.float()) * scale   # [B,H,S,M]
     row = torch.arange(S, device=device).view(1, 1, S, 1)
     allow = (idx[:, None, None, :] <= row) & valid[:, None, None, :]           # [B,1,S,M]
+    if extra_mask is not None:
+        # The same relation the window branch gets, read at the gathered columns. A
+        # column the dense form would have masked is masked here too, so this is the
+        # dense function restricted to the only columns that can carry weight.
+        em = extra_mask.squeeze(1)                                            # [B,S,S]
+        allow = allow & torch.gather(em, 2, idx[:, None, :].expand(B, S, M)).unsqueeze(1)
     scores = scores.masked_fill(~allow, float("-inf"))
     sink = sink_logits.view(1, H, 1, 1).to(scores.dtype).expand(B, H, S, 1)
     scores = torch.cat([scores, sink], dim=-1)                   # [B, H, S, M+1]

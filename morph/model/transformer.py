@@ -46,7 +46,9 @@ from .tul import (TULConfig, TULGate, TULGateConfig, TULGradPass, TULReread, TUL
 from .tul_egrad import DiscEnergy, ReconEnergy, slot_outcome_labels
 from .tul_spandec import SpanDecoder, next_span_slots
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
-                         span_start_mask, tg_allow_mask, tg_reset_mask)
+                         slot_cell_inject_keep, span_start_mask, tg_allow_mask,
+                         tg_reset_from_ids,
+                         tg_reset_mask, tg_segment_ids, tg_strict_allow)
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
 # zero production cost). Set MORPH_PROFILE_REGIONS=1 to name forward carrier sites so the
@@ -991,6 +993,10 @@ class MORPHTransformer(nn.Module):
         # before anything else is built, so a bad config never gets partway through
         # constructing a model it is going to refuse.
         self._tg_restrict = bool(cfg.tul.tg_restrict) if cfg.tul is not None else False
+        # THE STRICT GEOMETRY (tul.tg_geometry). A Python-level constant read at trace
+        # time, exactly like `_tg_restrict`: False — every model before this key — builds
+        # and threads the same masks it always did, bit-identically.
+        self._tg_strict = (cfg.tul is not None and cfg.tul.tg_geometry == "strict")
         if cfg.tg_scoped_kernels and not self._tg_restrict:
             raise ValueError(
                 "model.tg_scoped_kernels=true requires tul.tg_restrict=true: outside TG "
@@ -1330,6 +1336,12 @@ class MORPHTransformer(nn.Module):
                 raise ValueError(
                     f"tul.slot_depth_fixed={_fixed} must lie in [0, slot_max_depth={_kmax_slot}] "
                     f"(0 = the Poisson draw)")
+        if (cfg.tul is not None and cfg.fm is not None
+                and cfg.tul.tg_geometry == "strict"):
+            raise NotImplementedError(
+                "tul.tg_geometry='strict' with an FM planner (cfg.fm): the planner replaces "
+                "the core loop, so 'the slot loop is the only cross-span channel' names a "
+                "loop that is not there. Pick one.")
         if cfg.tul is not None and cfg.fm is not None and cfg.tul.tokens_through_core:
             raise ValueError(
                 "tul.tokens_through_core=true with an FM planner (cfg.fm): the planner replaces "
@@ -2376,7 +2388,17 @@ class MORPHTransformer(nn.Module):
                 raise ValueError(
                     f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
             tg_attn_kwargs = tg_reset = None
-            if self._tg_restrict and tc.tg_restrict_scope == "all":
+            if self._tg_strict:
+                # The SAME prelude relation `_forward_tul` builds (tul.tg_geometry), for
+                # the same reason: a probe that read an unrestricted prelude off a strict
+                # arm would report states the run never computed.
+                _seg = tg_segment_ids(layout)
+                _pre_allow = tg_strict_allow(layout, "prelude")
+                tg_attn_kwargs = {"tg_allow": _pre_allow,
+                                  "tg_slot_mask": layout.slot_mask,
+                                  "tg_comp_allow": _pre_allow, "tg_seg": _seg}
+                tg_reset = tg_reset_from_ids(_seg)
+            elif self._tg_restrict and tc.tg_restrict_scope == "all":
                 # scope "coda": the prelude is global, exactly as in _forward_tul
                 tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span)
                 tg_attn_kwargs = {"tg_allow": tg_allow, "tg_slot_mask": layout.slot_mask}
@@ -4416,7 +4438,27 @@ class MORPHTransformer(nn.Module):
         # compressed branch's slot mask; tg_reset feeds the GLA segment reset. Both
         # None on a tg_restrict=false model (bit-identical, spec T4).
         tg_attn_kwargs = tg_reset = None
-        if self._tg_restrict:
+        _strict_front_kw = None
+        if self._tg_strict:
+            # ── STRICT (tul.tg_geometry) ──────────────────────────────────────────
+            # The prelude and the coda get DIFFERENT relations, so they get different
+            # kwarg dicts — the one place in this forward where `_front_kw` is not
+            # `tg_attn_kwargs`. `tg_allow` narrows the window branch and `tg_comp_allow`
+            # the compressed one (both branches, one relation: the F1 defect class). The
+            # conv and the value shift are reset at every segment — a span's tokens, its
+            # own cells, the next span's tokens — and the retention carry is reset on the
+            # same partition rather than on `bag_id`, which does not separate a span from
+            # its own cells. `tg_strict_allow` carries the relation and the reasoning.
+            _seg = tg_segment_ids(layout)
+            _pre_allow = tg_strict_allow(layout, "prelude")
+            _coda_allow = tg_strict_allow(layout, "coda",
+                                          coda_prefix_reach=tc.tg_coda_prefix_reach)
+            _strict_front_kw = {"tg_allow": _pre_allow, "tg_slot_mask": layout.slot_mask,
+                                "tg_comp_allow": _pre_allow, "tg_seg": _seg}
+            tg_attn_kwargs = {"tg_allow": _coda_allow, "tg_slot_mask": layout.slot_mask,
+                              "tg_comp_allow": _coda_allow, "tg_seg": _seg}
+            tg_reset = tg_reset_from_ids(_seg)
+        elif self._tg_restrict:
             # tg_restrict_scope="coda" (TULConfig): the mask reaches the coda only and
             # carries the coda rule (a slot cell attends slot cells only, so it stays z).
             # "all" is the shipped TG path, bit-identical.
@@ -4427,7 +4469,7 @@ class MORPHTransformer(nn.Module):
             if _coda_scope:
                 # The conv / value-shift reset (attention.segment_causal_conv): a span's
                 # tokens, its slot cells and the next span's tokens are three segments.
-                tg_attn_kwargs["tg_seg"] = 2 * layout.bag_id + layout.slot_mask.long()
+                tg_attn_kwargs["tg_seg"] = tg_segment_ids(layout)
             if tc.tg_span_comp:
                 # E-SAC: per-span pooled compressed branch (attention.py
                 # _tg_span_attention). Built once per forward like tg_allow.
@@ -4438,8 +4480,11 @@ class MORPHTransformer(nn.Module):
                         layout.bag_id, _tok_sel, layout.max_slots)}
             tg_reset = tg_reset_mask(layout)
 
-        _front_kw = tg_attn_kwargs if tc.tg_restrict_scope == "all" else None
-        _front_reset = tg_reset if tc.tg_restrict_scope == "all" else None
+        if self._tg_strict:
+            _front_kw, _front_reset = _strict_front_kw, tg_reset
+        else:
+            _front_kw = tg_attn_kwargs if tc.tg_restrict_scope == "all" else None
+            _front_reset = tg_reset if tc.tg_restrict_scope == "all" else None
         x, x0, bigram_emb = self._tul_front(input_ids, layout,
                                             attn_kwargs=_front_kw,
                                             ret_reset_mask=_front_reset)
@@ -4685,11 +4730,19 @@ class MORPHTransformer(nn.Module):
             x_coda = scatter_positions(base, pos, values)
 
         x_coda, keep = self.tul.apply_token_dropout(x_coda, layout, self.training)
-        if tc.coda_token_input == "embed":
+        if tc.coda_token_input == "embed" or self._tg_strict:
             # The arm's contract: in the coda a slot cell carries z and NOTHING else. The
             # per-layer coda injections at the slot cells (x0 = the seed, bigram = the
             # span's bag mean) would otherwise hand the coda span content beside z.
-            _slot_keep = (~layout.slot_mask).unsqueeze(-1).to(x_coda.dtype)
+            #
+            # Under `tul.tg_geometry="strict"` this is not a second knob but PART of the
+            # geometry, and it is load-bearing: the strict coda lets a later span's tokens
+            # read earlier prefix cells, so a cell that still carried its own span's
+            # bag-mean would hand that span's token identities forward with no pass of the
+            # loop in between — exactly the bypass strict exists to cut. It is also what
+            # makes `plan_mode="zero"` and `plan_mode="all_slots"` the SAME ablation on a
+            # strict arm (tests/test_tul_strict_geometry.py).
+            _slot_keep = slot_cell_inject_keep(layout, x_coda.dtype)
             keep = _slot_keep if keep is None else keep * _slot_keep
         if tc.bcast and not tc.tokens_through_core:
             # The unpack: z_{i} through the offset-indexed linears, ADDED to span i+1's
@@ -5025,6 +5078,17 @@ class MORPHTransformer(nn.Module):
                 "mask a coda slot cell attends EVERY earlier position, so 'the cell carries "
                 "nothing' would need an allow relation this model never trained with. Run "
                 "it on a mask arm (tul_slot_mux_mask_norm_match and its lineage).")
+        if self._tg_strict:
+            # Under strict the coda ALREADY cuts routes 2 and 3 on every forward: the
+            # cell's per-layer injections are zeroed in `_forward_tul` and its query
+            # reaches itself alone. Rebuilding `tg_allow` here would WIDEN the relation
+            # (slot_queries_slots_only lets a cell read every earlier cell), so the strict
+            # kwargs are kept and only the injection cut is re-applied — which the caller
+            # has already applied, making this the identity. `all_slots` and `zero` are
+            # therefore the same ablation on a strict arm, and that equality is the
+            # instrument's own check that the geometry is doing what it claims.
+            _sk = slot_cell_inject_keep(layout, x_coda.dtype)
+            return dict(tg_attn_kwargs or {}), (_sk if keep is None else keep * _sk)
         if tc.tg_restrict_scope != "all":
             raise NotImplementedError(
                 f"plan_mode='all_slots' with tul.tg_restrict_scope={tc.tg_restrict_scope!r} "
@@ -5049,7 +5113,7 @@ class MORPHTransformer(nn.Module):
         kw = dict(tg_attn_kwargs or {})
         kw["tg_allow"] = allow
         kw["tg_slot_mask"] = layout.slot_mask
-        _sk = (~layout.slot_mask).unsqueeze(-1).to(x_coda.dtype)
+        _sk = slot_cell_inject_keep(layout, x_coda.dtype)
         return kw, (_sk if keep is None else keep * _sk)
 
     def tul_forward_ablated(self, input_ids: Tensor, labels: Tensor | None,

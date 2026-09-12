@@ -1,0 +1,65 @@
+# Slot-loop panel, arm "slot-spandec-strict": `slot-spandec-mask` with the TG relation
+# NARROWED so the slot LOOP is the only route from one span to the next.
+# ONE factor against `slot-spandec-mask` (`tul_slot_spandec_mask.yaml`): `tul.tg_geometry`.
+#
+# WHAT WAS WRONG WITH THE MASK. `tul.tg_restrict` allows `causal AND (same span OR j is
+# ANY slot cell)`, in the PRELUDE and in the CODA. So in the prelude every token and every
+# slot cell may read every earlier cell, and in the coda the cells may read each other and
+# their own spans. A cell's content is its SEED — `E_slot` plus the bag-mean of its own
+# span's token embeddings, plus the per-layer `x0`/bigram injections that re-add exactly
+# that at every coda layer. None of it has passed through the loop. Measured on
+# `slot-spandec-mask` at 5,000 steps (lab/experiments/planned/2026-09-11-arc-span-decoder.md,
+# Results part 1): the WHOLE slot channel is worth 0.182 nats while the loop's own prefix
+# write is worth 0.078. The loop is being bypassed by the cells that carry its seed.
+#
+# WHAT STRICT IS, exactly (morph/model/tul_layout.py::tg_strict_allow):
+#   PRELUDE  causal AND bag_id[i] == bag_id[j]. A token sees its own span's tokens; a cell
+#            sees its own span's tokens and its own earlier cells. The seed is a pure
+#            summary of ONE span.
+#   LOOP     unchanged — slots attend earlier slots' states, causally. The only cross-span
+#            channel left.
+#   CODA     a token sees its own span's tokens plus the PREFIX CELLS of earlier slots
+#            (`tg_coda_prefix_reach: all` here); a prefix cell sees ITSELF and nothing
+#            else, so it can carry only what the loop wrote into it.
+#   AND, part of the same geometry, not extra knobs: the CCA causal conv and its
+#   `W_v_prev` value shift are reset at every segment (a span's tokens | that span's cells
+#   | the next span's tokens), the retention carry is reset on the same partition (retention
+#   is off on this arm; the reset is asserted, not assumed), and the coda's per-layer
+#   injections at the slot CELLS are zeroed — without that last one a cell would hand its
+#   span's token identities to every later span with no pass of the loop in between, which
+#   is the bypass this arm exists to cut.
+#   The hash bigram needs no cut on a TUL row: a span's first token is always preceded by
+#   the previous slot's cells, whose input id is the constant `slot_id`. Proved two-sided
+#   in tests/test_tul_strict_geometry.py rather than assumed.
+#
+# GATE: tests/test_tul_strict_geometry.py — the leak test (with the loop's write zeroed, a
+# token id in span 0 must move NOTHING outside span 0, bit-exact on CPU fp32), its
+# `restrict` control through the same probe, and five sabotages, each re-opening one cut
+# route and each caught.
+#
+# WHAT TO EXPECT, stated so the result is not over-read. The mask arm's 0.11 nats of
+# cross-span information that flowed through the cells now has to flow through the loop or
+# not at all, so this arm's CE at 5,000 should be WORSE than `slot-spandec-mask`. That is
+# the price of the question, not a failure: the reading is the LOOP CONTRIBUTION (the
+# K-curve, `worth_profile` zero/all_slots, `slot_z_optimize`'s ce_entry - ce_loop), not the
+# final CE (the standing rule: a 5k CE cannot rank looped against unlooped).
+# By construction on this arm `worth_profile`'s `all_slots` equals its `zero` — the other
+# two routes are already cut on every forward — and that equality is a CHECK, not a result.
+#
+# COST: no new parameter, no new RNG draw, no extra block pass. The masks are two
+# [B, 1, L, L] bools built once per forward (8 MB each at B 6, L 1152) and the conv takes
+# its eager segment path in the prelude as well as the coda, which the mask arm already
+# paid for in the coda alone.
+#
+# Record: lab/experiments/planned/2026-09-12-arc-strict-geometry.md
+# Note: .agents/notes/proposed/architecture/2026-09-12-strict-slot-geometry.md
+defaults:
+  - tul_slot_spandec_mask
+  - _self_
+
+tul:
+  tg_geometry: strict
+  tg_coda_prefix_reach: all
+
+wandb:
+  name: slot-spandec-strict

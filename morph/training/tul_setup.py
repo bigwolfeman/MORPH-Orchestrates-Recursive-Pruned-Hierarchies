@@ -56,7 +56,9 @@ KNOWN_TUL_KEYS = frozenset({
     "sigreg_slices", "slot_chain", "slot_chain_detach",
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
     "spandec", "spandec_heads", "spandec_layers", "spandec_max_tokens", "spandec_weight",
-    "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda", "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
+    "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda",
+    "tg_coda_prefix_reach", "tg_geometry",
+    "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
     "tg_span_gate", "token_state_dropout", "tokens_through_core", "xattn",
 })
 
@@ -282,6 +284,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         sigreg_activate_at=float(tc.get("sigreg_activate_at", 0.0)),
         tg_restrict=bool(tc.get("tg_restrict", False)),
         tg_restrict_scope=str(tc.get("tg_restrict_scope", "all")),
+        tg_geometry=str(tc.get("tg_geometry", "restrict")),
+        tg_coda_prefix_reach=str(tc.get("tg_coda_prefix_reach", "all")),
         coda_token_input=str(tc.get("coda_token_input", "prelude")),
         tg_span_comp=bool(tc.get("tg_span_comp", False)),
         tg_span_gate=bool(tc.get("tg_span_gate", False)),
@@ -354,6 +358,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "sigreg_activate_at": model_cfg.sigreg_activate_at,
         "tg_restrict": model_cfg.tg_restrict,
         "tg_restrict_scope": model_cfg.tg_restrict_scope,
+        "tg_geometry": model_cfg.tg_geometry,
+        "tg_coda_prefix_reach": model_cfg.tg_coda_prefix_reach,
         "coda_token_input": model_cfg.coda_token_input,
         "bcast": model_cfg.bcast,
         "reread": model_cfg.reread,
@@ -436,6 +442,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"— window branch restricted to same-span-or-slot, compressed branch "
               f"restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels "
               f"must be false", flush=True)
+    if model_cfg.tg_geometry == "strict":
+        print(f"  TUL STRICT GEOMETRY ON (coda_prefix_reach={model_cfg.tg_coda_prefix_reach}): "
+              f"the prelude is same-span ONLY, a coda prefix cell reads itself alone, the "
+              f"conv/value-shift and the retention carry reset at every segment, and the "
+              f"coda's per-layer injections at the slot cells are zeroed — the slot LOOP is "
+              f"the only cross-span channel "
+              f"(lab/experiments/planned/2026-09-12-arc-strict-geometry.md)", flush=True)
     if model_cfg.tg_span_comp:
         print("  TUL TG SPAN-COMP ON: compressed branch = per-span mean-pooled "
               "live K/V (E-SAC; zero new params; span-granular causality)", flush=True)

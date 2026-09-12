@@ -206,6 +206,33 @@ class TULConfig:
     #             With coda_token_input="embed" this is Block Transformer's contract: the
     #             local decoder gets the block embedding plus the block's own tokens.
     tg_restrict_scope: str = "all"
+    # ── THE STRICT GEOMETRY (arms `slot-spandec-strict*`, 2026-09-12) ─────────────
+    # tg_geometry: which allow relation `tg_restrict` means.
+    #    "restrict" — the shipped one: causal AND (same span OR j is ANY slot cell), in
+    #                 the prelude and in the coda. BIT-IDENTICAL to before this key
+    #                 existed, and the default.
+    #    "strict"   — the loop is the ONLY cross-span channel. Prelude: same span, full
+    #                 stop (`tg_strict_allow`). Coda: a token reads its own span plus the
+    #                 PREFIX CELLS of earlier slots; a prefix cell reads itself alone. The
+    #                 conv / value shift are reset at every segment (`tg_segment_ids`), the
+    #                 retention carry with them, and the coda's per-layer injections at the
+    #                 slot cells are zeroed so a cell carries z and nothing else.
+    #
+    # Why: under "restrict" the slot CELLS carry the cross-span information the loop was
+    # supposed to carry. Measured on `slot-spandec-mask` at 5,000 steps, the whole slot
+    # channel is worth 0.182 nats and the loop's own prefix write 0.078 — the prelude lets
+    # every token and every cell read every earlier cell, so the seed reaches later spans
+    # with no pass of the loop in between. Record:
+    # lab/experiments/planned/2026-09-12-arc-strict-geometry.md.
+    tg_geometry: str = "restrict"
+    # Which prefix cells a CODA token may read under "strict".
+    #    "all"  — every earlier slot's cells (the primary arm).
+    #    "prev" — only the cells of the slot terminating the PREVIOUS span, so everything
+    #             older must flow through the chain of loop states. A tail dump-bin token
+    #             reads no cell at all (the dump bin is not a span; the same conservative
+    #             gating `tg_soft_prev_span` takes).
+    # Meaningless at tg_geometry="restrict" and refused there rather than ignored.
+    tg_coda_prefix_reach: str = "all"
     gate: "TULGateConfig | None" = None  # docs/tul-gate-spec.md; None = arm A1 (nothing built)
     # Per-slot-INDEX input embedding instead of one shared E_slot. 0 = off (one shared
     # vector, the shipped behaviour); >0 = that many rows, and the slot at index s gets row
@@ -870,6 +897,56 @@ class TULConfig:
             raise ValueError(
                 "tul.tg_restrict_scope='coda' requires tul.tg_restrict=true (there is no "
                 "restriction to scope).")
+        if self.tg_geometry not in ("restrict", "strict"):
+            raise ValueError(
+                f"tul.tg_geometry must be 'restrict' or 'strict', got {self.tg_geometry!r}")
+        if self.tg_coda_prefix_reach not in ("all", "prev"):
+            raise ValueError(
+                f"tul.tg_coda_prefix_reach must be 'all' or 'prev', got "
+                f"{self.tg_coda_prefix_reach!r}")
+        if self.tg_geometry == "strict":
+            if not self.tg_restrict:
+                raise ValueError(
+                    "tul.tg_geometry='strict' requires tul.tg_restrict=true: strict is a "
+                    "narrowing of the TG relation, and without tg_restrict the attention "
+                    "takes the pooled/top-k branch that carries no allow relation at all.")
+            if self.tg_restrict_scope != "all":
+                raise ValueError(
+                    "tul.tg_geometry='strict' requires tul.tg_restrict_scope='all': strict "
+                    "defines a PRELUDE relation and a CODA relation, and scope 'coda' "
+                    "leaves the prelude global — which is the bypass strict exists to cut.")
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.tg_geometry='strict' has no meaning on the paid loop "
+                    "(tokens_through_core): a slot IS a looped position there, so 'the "
+                    "loop is the only cross-span channel' is not a restriction one can "
+                    "impose on the prelude and coda.")
+            if self.tg_soft_prev_span:
+                raise NotImplementedError(
+                    "tul.tg_geometry='strict' with tul.tg_soft_prev_span: the soft term "
+                    "opens the previous span's TOKENS to a query, a second cross-span "
+                    "channel beside the loop. Use tg_coda_prefix_reach='prev' if what you "
+                    "want is a one-slot reach through the CELLS.")
+            if self.tg_span_comp:
+                raise NotImplementedError(
+                    "tul.tg_geometry='strict' with tul.tg_span_comp (E-SAC): the compressed "
+                    "branch would attend per-SPAN pooled token K/V, which is a cross-span "
+                    "route strict does not define a relation for.")
+            if not self.coda_sees_slots:
+                raise NotImplementedError(
+                    "tul.tg_geometry='strict' with coda_sees_slots=false: the coda then runs "
+                    "on a GATHERED subset of positions and the strict relation is not "
+                    "re-derived for that index space (the tg_restrict precedent).")
+            if self.gate is not None:
+                raise NotImplementedError(
+                    "tul.tg_geometry='strict' with tul.gate: the gate's budget conditioning "
+                    "rewrites z after the loop and the length label is the NEXT span's, a "
+                    "lookahead the strict coda relation is not defined against.")
+        elif self.tg_coda_prefix_reach != "all":
+            raise ValueError(
+                "tul.tg_coda_prefix_reach is a tul.tg_geometry='strict' knob; at "
+                f"'restrict' it would be silently ignored (got "
+                f"{self.tg_coda_prefix_reach!r}).")
         if self.reread_scope not in ("span", "causal"):
             raise ValueError(
                 f"tul.reread_scope must be 'span' or 'causal', got {self.reread_scope!r}")

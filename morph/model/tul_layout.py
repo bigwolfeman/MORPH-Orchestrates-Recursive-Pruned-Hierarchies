@@ -53,7 +53,11 @@ __all__ = [
     "slot_layout_from_ids",
     "span_allow_mask",
     "span_ids_from_ids",
+    "slot_cell_inject_keep",
     "span_start_mask",
+    "tg_reset_from_ids",
+    "tg_segment_ids",
+    "tg_strict_allow",
 ]
 
 # spec §3.1 rule 1 / §8 `tul.boundary_chars`: a token ends a span when its decoded
@@ -765,6 +769,122 @@ def tg_allow_mask(layout: "SlotLayout", soft_prev_span: bool = False,
     return allow.unsqueeze(1)                                   # [B, 1, L, L]
 
 
+def slot_cell_inject_keep(layout: "SlotLayout", dtype) -> Tensor:
+    """``[B, L, 1]`` — 1.0 at token positions, 0.0 at every SLOT CELL.
+
+    The ``inject_keep`` factor that makes a coda slot cell carry the looped state and
+    NOTHING else. The per-layer coda injections at a cell are ``x0`` (the cell's seed,
+    ``E_slot`` + its span's bag-mean of token embeddings) and the bigram term (that span's
+    bag-mean of bigram embeddings); both are added at EVERY coda layer, so without this a
+    cell hands its own span's token identities to whoever may read it.
+
+    Three call sites share it and must not drift: ``tul.coda_token_input="embed"``,
+    ``tul.tg_geometry="strict"`` (where it is load-bearing — the strict coda lets later
+    tokens read earlier cells) and ``plan_mode="all_slots"``.
+    """
+    return (~layout.slot_mask).unsqueeze(-1).to(dtype)
+
+
+def tg_segment_ids(layout: "SlotLayout") -> Tensor:
+    """``[B, L]`` int64 segment ids: ``2 * bag_id + slot_mask``.
+
+    THE segment partition of a TUL row: a span's TOKENS, that span's SLOT CELLS, and the
+    next span's tokens are three different segments. Everything that walks the position
+    axis without an allow relation — the CCA causal conv, its ``W_v_prev`` value shift
+    (``attention.segment_causal_conv`` / ``_cca_project``'s ``seg``) and the GLA retention
+    carry — is cut at these boundaries.
+
+    ONE home for the expression. ``tul.tg_restrict_scope="coda"`` built it inline in
+    ``_forward_tul`` first; ``tul.tg_geometry="strict"`` needs the same ids in the PRELUDE
+    as well, and a second copy of an arithmetic identity is how two paths drift apart.
+    """
+    return 2 * layout.bag_id + layout.slot_mask.long()
+
+
+def tg_reset_from_ids(ids: Tensor) -> Tensor:
+    """``[B, L]`` bool, True at ``i == 0`` and wherever ``ids`` changes.
+
+    The segment-start relation :func:`tg_reset_mask` reads off ``bag_id``, lifted so the
+    strict geometry can drive it from :func:`tg_segment_ids` instead — the finer partition,
+    which separates a span's tokens from its own slot cells.
+    """
+    reset = torch.zeros_like(ids, dtype=torch.bool)
+    reset[:, 0] = True
+    reset[:, 1:] = ids[:, 1:] != ids[:, :-1]
+    return reset
+
+
+def tg_strict_allow(layout: "SlotLayout", stage: str,
+                    coda_prefix_reach: str = "all") -> Tensor:
+    """``[B, 1, L, L]`` bool — the STRICT allow relation (``tul.tg_geometry="strict"``).
+
+    ``tg_restrict``'s relation is ``causal AND (same span OR j is ANY slot cell)``, in the
+    prelude AND in the coda. That "OR any slot cell" is a cross-span channel the slot LOOP
+    never touches: in the prelude every token and every cell may read every earlier cell,
+    and in the coda the cells may read each other. Measured on ``slot-spandec-mask`` at
+    5,000 steps, the whole slot channel is worth 0.182 nats while the loop's own prefix
+    write is worth 0.078 — the loop is being bypassed by the cells that carry its seed
+    (``lab/experiments/planned/2026-09-11-arc-span-decoder.md``, Results part 1).
+
+    Strict cuts every cross-span route that is not the loop:
+
+    * ``stage="prelude"`` — ``causal AND bag_id[i] == bag_id[j]``, and nothing else. A
+      token sees its own span's tokens; a slot cell sees its own span's tokens and its own
+      earlier cells (``pack_tul_row`` gives a cell the ``bag_id`` of the span it
+      terminates, and a span's cells sit AFTER that span's tokens, so causality already
+      keeps a token out of its own cells). The seed is then a pure summary of one span.
+    * ``stage="coda"`` — a TOKEN query sees its own span's tokens, plus the PREFIX CELLS of
+      earlier slots; a PREFIX CELL query sees ITSELF and nothing else, so it can carry only
+      the state the loop wrote into it. ``coda_prefix_reach`` picks which cells a token may
+      read:
+
+      ``"all"``   every earlier slot's cells (``bag_id[j] < bag_id[i]``);
+      ``"prev"``  only the cells of the slot that terminates the PREVIOUS span
+                  (``bag_id[j] == bag_id[i] - 1``), the strong form in which everything
+                  older has to flow through the chain of loop states. The query is gated on
+                  not being in the tail dump bin (``bag_id[i] < max_slots``), the same
+                  conservative reading :func:`tg_allow_mask` takes for ``soft_prev_span``:
+                  the dump bin is not a span, so ``max_slots - 1`` is not "its previous
+                  span". A dump-bin token therefore reads no cell at all under ``"prev"``,
+                  and every cell under ``"all"``.
+
+    This relation is only PART of the strict geometry: the conv / value shift
+    (:func:`tg_segment_ids`), the retention carry (:func:`tg_reset_from_ids`) and the
+    coda's per-layer injections at the slot cells are cut in ``_forward_tul``, and the
+    end-to-end gate is ``tests/test_tul_strict_geometry.py``.
+    """
+    if stage not in ("prelude", "coda"):
+        raise ValueError(f"tg_strict_allow stage must be 'prelude' or 'coda', got {stage!r}")
+    if coda_prefix_reach not in ("all", "prev"):
+        raise ValueError(
+            f"tg_strict_allow coda_prefix_reach must be 'all' or 'prev', got "
+            f"{coda_prefix_reach!r}")
+    bag_id = layout.bag_id                                      # [B, L] int64
+    slot_mask = layout.slot_mask                                # [B, L] bool
+    device = bag_id.device
+    L = bag_id.shape[1]
+    row = torch.arange(L, device=device).unsqueeze(1)
+    col = torch.arange(L, device=device).unsqueeze(0)
+    causal = (col <= row)                                       # [L, L], j <= i
+
+    bag_i = bag_id.unsqueeze(2)                                 # [B, L, 1]
+    bag_j = bag_id.unsqueeze(1)                                 # [B, 1, L]
+    same = (bag_i == bag_j)                                     # [B, L, L]
+    if stage == "prelude":
+        allow = same
+    else:
+        if coda_prefix_reach == "all":
+            reach = bag_j < bag_i
+        else:
+            reach = (bag_j == bag_i - 1) & (bag_i < layout.max_slots)
+        tok_allow = same | (slot_mask.unsqueeze(1) & reach)
+        # A prefix cell's query: itself and nothing else.
+        self_only = (row == col).unsqueeze(0).expand_as(tok_allow)
+        allow = torch.where(slot_mask.unsqueeze(2), self_only, tok_allow)
+    allow = allow & causal.unsqueeze(0)
+    return allow.unsqueeze(1)                                   # [B, 1, L, L]
+
+
 def tg_reset_mask(layout: "SlotLayout") -> Tensor:
     """``[B, L]`` bool: GLA segment-reset positions (spec §4).
 
@@ -773,11 +893,7 @@ def tg_reset_mask(layout: "SlotLayout") -> Tensor:
     True at every segment start — a segment is a span's tokens plus its own slot
     (the dump bin counts as one trailing segment too, since it is one constant id).
     """
-    bag_id = layout.bag_id
-    reset = torch.zeros_like(bag_id, dtype=torch.bool)
-    reset[:, 0] = True
-    reset[:, 1:] = bag_id[:, 1:] != bag_id[:, :-1]
-    return reset
+    return tg_reset_from_ids(layout.bag_id)
 
 
 @dataclass
