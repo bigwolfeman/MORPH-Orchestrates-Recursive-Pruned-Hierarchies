@@ -3020,7 +3020,50 @@ class MORPHTransformer(nn.Module):
             d = d.clamp(min=1, max=max_d)
         else:
             d = torch.full(shape, int(mean_d), device=device, dtype=torch.long)
+        return self._pad_slot_depths(d, layout)
+
+    @staticmethod
+    def _pad_slot_depths(d: Tensor, layout: SlotLayout) -> Tensor:
+        """Pad slots loop exactly once. ONE home for the rule both depth sources obey."""
         return torch.where(layout.slot_valid, d, torch.ones_like(d))
+
+    def _slot_depth_override(self, layout: SlotLayout, slot_depths: Tensor,
+                             device) -> Tensor:
+        """``[B, max_slots]`` EVAL-ONLY per-slot depth table, validated.
+
+        The `slot_layout` rule: a per-forward DATA argument, never a config knob and never
+        a training path. `None` at the call site is a Python-level branch, so a model that
+        never passes one traces the graph from before this existed
+        (tests/test_slot_depth_isolation.py pins the loss bit-for-bit).
+
+        It OVERRIDES `tul.slot_depth_fixed` and `tul.slot_mean_depth` — that is its job:
+        `lab/divergence/slot_depth_isolation.py` needs slot 7 at depth 1 while every other
+        slot runs at 6, which no scalar knob can say. The pad rule is unchanged (a pad
+        slot loops once whatever the table says), and the value range is the same one
+        `_sample_slot_depths` clamps the Poisson draw to, but here it RAISES instead of
+        clamping: a silently clamped instrument reads a depth it did not ask for.
+        """
+        if self.training:
+            raise RuntimeError(
+                "slot_depths is EVAL ONLY: training draws the per-slot Poisson depth, and "
+                "forcing it would change the map the optimiser sees. Call under "
+                "model.eval().")
+        shape = layout.slot_index.shape
+        if tuple(slot_depths.shape) != tuple(shape):
+            raise ValueError(
+                f"slot_depths must be [B, max_slots] = {tuple(shape)}, got "
+                f"{tuple(slot_depths.shape)}")
+        if slot_depths.dtype not in (torch.long, torch.int32, torch.int16, torch.int8):
+            raise ValueError(f"slot_depths must be an integer tensor, got "
+                             f"{slot_depths.dtype}")
+        d = slot_depths.to(device=device, dtype=torch.long)
+        max_d = int(self.cfg.tul.slot_max_depth or self.cfg.max_depth)
+        lo, hi = int(d.min().item()), int(d.max().item())
+        if lo < 1 or hi > max_d:
+            raise ValueError(
+                f"slot_depths must lie in [1, slot_max_depth={max_d}], got [{lo}, {hi}]. "
+                "A depth outside the trained range is not a measurement of this model.")
+        return self._pad_slot_depths(d, layout)
 
     def _loop_cot_ref_hook(self, g: Tensor) -> None:
         """Record the per-row norm of the cotangent arriving at the slot loop's EXIT state.
@@ -3065,7 +3108,8 @@ class MORPHTransformer(nn.Module):
         return g * scale.view(-1, *([1] * (g.dim() - 1))).to(g.dtype)
 
     def _tul_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
-                  halt: bool = False, input_ids: Tensor | None = None):
+                  halt: bool = False, input_ids: Tensor | None = None,
+                  slot_depths: Tensor | None = None):
         """Gather slots → masked per-slot depth loop → looped states (spec §3.3).
 
         Returns ``(xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep)``:
@@ -3087,6 +3131,14 @@ class MORPHTransformer(nn.Module):
         every other caller (the probes, the tests, ``tul_forward_ablated``) passes four
         positional arguments and must stay unchanged; ``grad_pass`` with ``None`` RAISES
         rather than silently running the loop with the feature switched off.
+
+        ``slot_depths`` ``[B, max_slots]`` is the EVAL-ONLY per-slot depth table
+        (:meth:`_slot_depth_override`): it replaces the Poisson draw, ``slot_mean_depth``
+        and ``slot_depth_fixed` for THIS forward only. ``None`` — every trainer call and
+        every existing probe — is a Python-level branch that traces the graph from before
+        this parameter existed. It exists because
+        ``lab/divergence/slot_depth_isolation.py`` asks what ONE slot's passes are worth,
+        which no scalar depth knob can express.
 
         ``halt`` (arm ``TUL-halt``, gate §7) replaces the Poisson depth with the gate's
         own stop decision — a slot loops until it asks for ``k ≥ 1`` token, capped at
@@ -3285,6 +3337,11 @@ class MORPHTransformer(nn.Module):
         _inj_arg = _inj_none if _scse is not None else inj
 
         if halt:
+            if slot_depths is not None:
+                raise ValueError(
+                    "halt=True and slot_depths are two answers to the same question: the "
+                    "gate decides the depth under halt, so a forced table would be "
+                    "ignored. Pass one or the other.")
             if self.tul_gate is None:
                 raise RuntimeError("halt=True needs a model built with tul.gate (§7)")
             if self.training:
@@ -3296,7 +3353,8 @@ class MORPHTransformer(nn.Module):
             alive = layout.slot_valid.clone()
             depths = torch.zeros_like(layout.slot_index)
         else:
-            depths = self._sample_slot_depths(layout, x.device)
+            depths = (self._sample_slot_depths(layout, x.device) if slot_depths is None
+                      else self._slot_depth_override(layout, slot_depths, x.device))
             total_iters = int(depths.max().item())
         # db_loop: the truncated-BPTT window is meaningless (no gradient crosses an
         # iteration boundary by construction), and a no_grad iteration would silently
@@ -4776,7 +4834,8 @@ class MORPHTransformer(nn.Module):
     def _forward_tul(self, input_ids: Tensor, labels: Tensor | None,
                      layout: SlotLayout, plan_nats: bool, halt: bool = False,
                      plan_mode: str = "normal",
-                     tul_step_mode: str | None = None) -> dict:
+                     tul_step_mode: str | None = None,
+                     slot_depths: Tensor | None = None) -> dict:
         """The TUL forward (docs/tul-spec.md §3). One shared position axis.
 
         ``tul_step_mode`` (faithful DiffusionBlocks, morph/model/iter_cond.py) is a
@@ -4799,6 +4858,31 @@ class MORPHTransformer(nn.Module):
                 "this model has no TUL parameters (E_slot / E_mask / W_prefix)."
             )
         tc = self.cfg.tul
+        if slot_depths is not None:
+            # The SAME rule tul_step_mode='db1' states above: every branch of this forward
+            # that never reaches `_tul_core` would ignore the table in silence, so each is
+            # named and raises. A sigma-conditioned model at eval takes the Euler ladder
+            # unless the caller asks for 'bptt', so that combination is refused too.
+            if tc.tokens_through_core:
+                raise NotImplementedError(
+                    "slot_depths has no meaning on the paid loop (tul.tokens_through_core): "
+                    "it runs the ordinary per-SAMPLE core over every position and has no "
+                    "per-slot depth. Force model.cfg.mean_depth instead.")
+            if self.fm_planner is not None:
+                raise NotImplementedError(
+                    "slot_depths has no meaning with an FM planner (tul.fm): the planner "
+                    "replaces the core loop, so there are no per-slot passes to force.")
+            if tul_step_mode == "db1":
+                raise NotImplementedError(
+                    "slot_depths with tul_step_mode='db1': the db1 step is ONE core "
+                    "application by construction, so a depth table would be ignored.")
+            if (not self.training and self._core_stage_cond_mode == "sigma"
+                    and tul_step_mode != "bptt"):
+                raise NotImplementedError(
+                    "slot_depths on a sigma-conditioned model at eval: that path runs the "
+                    "Euler ladder (`_tul_core_db1_ladder`), whose step count is "
+                    "tul.db1_ladder_steps and not a per-slot table. Pass "
+                    "tul_step_mode='bptt' to force the plain loop first.")
         if tul_step_mode not in (None, "bptt", "db1"):
             raise ValueError(
                 f"tul_step_mode must be one of None, 'bptt', 'db1', got {tul_step_mode!r}")
@@ -4972,7 +5056,8 @@ class MORPHTransformer(nn.Module):
                 gain_reg = mep_keep = None   # eval-only ladder: no penalty, no passes
             else:
                 xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep = self._tul_core(
-                    x, x0, bigram_emb, layout, halt=halt, input_ids=input_ids)
+                    x, x0, bigram_emb, layout, halt=halt, input_ids=input_ids,
+                    slot_depths=slot_depths)
             # Think-once conditioning (arm R7): the stack runs once over the looped
             # slot states, and everything downstream — the mux local loss, SIGReg, the
             # gate budget, the plan ablations, prefix_project — reads ITS output. So z,
@@ -5579,7 +5664,8 @@ class MORPHTransformer(nn.Module):
 
     def tul_forward_ablated(self, input_ids: Tensor, labels: Tensor | None,
                             layout: SlotLayout, plan_mode: str = "normal",
-                            tul_step_mode: str | None = None) -> dict:
+                            tul_step_mode: str | None = None,
+                            slot_depths: Tensor | None = None) -> dict:
         """Eval-only forward with the slot state ablated. Works on ANY TUL arm.
 
         ``normal`` — the shipped path.
@@ -5611,6 +5697,11 @@ class MORPHTransformer(nn.Module):
                      measures the distribution shift. It answers "does the coda read the
                      slot's VALUE at all", and nothing else.
 
+        ``slot_depths`` ``[B, max_slots]`` forces the per-slot loop depth for THIS
+        forward (:meth:`_slot_depth_override`), which is what
+        ``lab/divergence/slot_depth_isolation.py`` runs one slot at a time. ``None`` is
+        the shipped path.
+
         A separate entry point rather than a forward flag, for the reason
         :meth:`tul_forward_with_plan_nats` gives: the training path must not carry a
         branch that decides how much work to do.
@@ -5621,14 +5712,16 @@ class MORPHTransformer(nn.Module):
         if plan_mode != "wrong_seed":
             return self._forward_single(input_ids, labels, 0, None, layout,
                                         _plan_mode=plan_mode,
-                                        tul_step_mode=tul_step_mode)
+                                        tul_step_mode=tul_step_mode,
+                                        _slot_depths=slot_depths)
         tc = self.cfg.tul
         orig = tc.slot_seed
         alt = "bag_mean" if orig != "bag_mean" else "e_slot"
         tc.slot_seed = alt
         try:
             return self._forward_single(input_ids, labels, 0, None, layout,
-                                        tul_step_mode=tul_step_mode)
+                                        tul_step_mode=tul_step_mode,
+                                        _slot_depths=slot_depths)
         finally:
             tc.slot_seed = orig
 
@@ -6021,9 +6114,14 @@ class MORPHTransformer(nn.Module):
     def forward(self, input_ids: Tensor, labels: Tensor | None = None,
                 bag_size: int = 0, seq_lens: Tensor | None = None,
                 slot_layout: SlotLayout | None = None,
-                tul_step_mode: str | None = None) -> dict:
+                tul_step_mode: str | None = None,
+                slot_depths: Tensor | None = None) -> dict:
+        """``slot_depths`` ``[B, max_slots]``: the EVAL-ONLY per-slot depth table, the
+        ``slot_layout`` pattern — ``None`` is bit-identical to before it existed. See
+        :meth:`_slot_depth_override`."""
         return self._forward_single(input_ids, labels, bag_size, seq_lens, slot_layout,
-                                    tul_step_mode=tul_step_mode)
+                                    tul_step_mode=tul_step_mode,
+                                    _slot_depths=slot_depths)
 
     def tul_forward_with_plan_nats(self, input_ids: Tensor, labels: Tensor,
                                    slot_layout: SlotLayout) -> dict:
@@ -6055,7 +6153,8 @@ class MORPHTransformer(nn.Module):
                         _plan_nats: bool = False,
                         _halt: bool = False,
                         _plan_mode: str = "normal",
-                        tul_step_mode: str | None = None) -> dict:
+                        tul_step_mode: str | None = None,
+                        _slot_depths: Tensor | None = None) -> dict:
         if self._span_mask and slot_layout is not None:
             raise NotImplementedError(
                 "model.span_mask with a slot_layout: the TUL forward is a different "
@@ -6070,7 +6169,12 @@ class MORPHTransformer(nn.Module):
                 )
             return self._forward_tul(input_ids, labels, slot_layout, _plan_nats,
                                      halt=_halt, plan_mode=_plan_mode,
-                                     tul_step_mode=tul_step_mode)
+                                     tul_step_mode=tul_step_mode,
+                                     slot_depths=_slot_depths)
+        if _slot_depths is not None:
+            raise ValueError(
+                "slot_depths requires slot_layout: it forces the depth of the SLOT loop, "
+                "and the plain path has no slots. Force model.cfg.mean_depth instead.")
         if tul_step_mode is not None:
             raise ValueError(
                 "tul_step_mode requires slot_layout (faithful DiffusionBlocks conditions "
