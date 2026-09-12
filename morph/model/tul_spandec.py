@@ -306,6 +306,10 @@ class SpanDecoder(nn.Module):
         B, S, J = ids.shape
         C = z.shape[-1]
         dtype = z.dtype
+        if J > self.max_tokens:
+            raise ValueError(
+                f"SpanDecoder.decode got J={J} positions but was built for "
+                f"max_tokens={self.max_tokens}: the position table has no row past that.")
         # Input token at decoder position j is the span's token j-1; position 0 carries z.
         # An invalid (past-the-end) token contributes exactly zero — it is only ever read
         # by later positions, which are invalid too, because a span's valid offsets are a
@@ -313,7 +317,11 @@ class SpanDecoder(nn.Module):
         e = F.embedding(ids, emb.to(dtype))                            # [B, S, J, C]
         e = torch.where(valid.unsqueeze(-1), e, torch.zeros_like(e))
         x = torch.cat([self.z_in(z).unsqueeze(2), self.tok_in(e[:, :, :-1])], dim=2)
-        x = x + self.pos.to(dtype).view(1, 1, J, C)
+        # A caller may decode a PREFIX of the span (the oracle-z teacher at
+        # `tul.oracle_z_max_tokens` < `max_tokens`): take the first J rows of the table,
+        # never a view of the whole table onto J columns (a reshape error at J 8 vs 32
+        # killed the first strict-oracle smoke, 2026-09-12).
+        x = x + self.pos[:J].to(dtype).view(1, 1, J, C)
         x = x.reshape(B * S, J, C)
         for blk in self.blocks:
             x = blk(x)

@@ -224,3 +224,29 @@ def test_the_term_carries_no_edge_to_the_decoder():
 def test_oracle_z_refusals(kw, match):
     with pytest.raises((ValueError, NotImplementedError), match=match):
         _tul(**kw)
+
+
+# ── the decoder decodes a PREFIX of the span for the oracle ─────────────────
+
+def test_oracle_budget_below_the_decoders_own_budget_runs():
+    """The panel config: `spandec_max_tokens 0` (-> span_cap 32) and `oracle_z_max_tokens 8`.
+
+    The first strict-oracle smoke died here (`shape '[1, 1, 8, 1024]' is invalid for input
+    of size 32768`, 2026-09-12): `decode` added its whole 32-row position table viewed as J
+    columns. Every earlier test set both budgets to 8, so the mismatch never ran. This test
+    builds the decoder at 32 and the oracle at 8, runs the loss, and reads finite numbers.
+    """
+    m = _model(oracle_z=True, oracle_z_steps=2, spandec_max_tokens=0, oracle_z_max_tokens=8)
+    assert m.tul_spandec.max_tokens == 32 and m.cfg.tul.oracle_z_max_tokens == 8
+    out = _run(m)
+    assert torch.isfinite(out["loss"]) and torch.isfinite(out["oracle_z"])
+    assert float(out["oracle_z"]) > 0.0
+
+
+def test_decode_refuses_more_positions_than_it_was_built_for():
+    m = _model(spandec_max_tokens=8)
+    dec = m.tul_spandec
+    z = torch.zeros(1, 1, m.cfg.d_model)
+    ids = torch.zeros(1, 1, 9, dtype=torch.long)
+    with pytest.raises(ValueError, match="max_tokens=8"):
+        dec.decode(z, ids, torch.ones_like(ids, dtype=torch.bool), m.embed.lm_weight())
