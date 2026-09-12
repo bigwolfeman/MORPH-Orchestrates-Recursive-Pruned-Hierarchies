@@ -272,3 +272,72 @@ the reasoning under each are the builder's.
 - **Generation.** No spandec arm has produced a sample. The decoder is a training-time
   scorer and is not in the deployed forward, but the arms' `gen_every` is 0 and the slot
   channel's generation behaviour under a changed target is untested.
+
+## Results, part 1 (2026-09-11 23:14 CDT: `slot-spandec-mask` and `slot-spandec-mnext-mask`; the other four arms are staged and unrun)
+
+Both arms at `35c7c4e`, seed 1, 5,000 steps, mask geometry (`tg_restrict` scope all), norm_match.
+Raw files: `lab/experiments/results/2026-09-11-span-decoder/` (sweeps, 192-row worth
+profiles, the 480-row worth profile of arm 1, `paired_gaps_5000.txt`); the old mask arm's
+480-row worth profile in `lab/experiments/results/2026-09-10-slot-mux-mask-norm-match/`;
+gradient probe and z-opt JSON under `ignored/experiment-artifacts/2026-09-10-slot-{gradient-probe,z-optimize}/slot-spandec-mask.json`.
+
+**Survival and cost.** Both HEALTHY: arm 1 pre-clip max 40 at step 243, 53m07s; arm 2 max
+101 at step 1,879, 55m38s. Runner val: 4.4206 / 4.4680 (old mask arm 4.4192).
+
+**Token CE, paired on `tok_index`, depth 6, 480 rows** (`paired_gaps_5000.txt`):
+
+| pair | shared tokens | gap | 95 % CI | shape by offset |
+|---|---|---|---|---|
+| spandec-mask − mux-mask | 501,106 | **−0.0720** | [−0.0748, −0.0698] | −0.027 at 0, −0.07 to −0.08 at 1..8+ (flat) |
+| spandec-mask − plain (`norm-match-20k`@5000) | 491,520 | +0.3079 | [+0.2926, +0.3241] | mux-mask − plain reads +0.3796 |
+| spandec-mnext-mask − spandec-mask | 501,106 | **+0.0409** | [+0.0387, +0.0431] | +0.024 at 0, +0.04 at 1..8+ (flat) |
+| spandec-mnext-mask − mux-mask | 501,106 | −0.0311 | [−0.0336, −0.0290] | |
+
+**K-curves (480 rows).** spandec-mask depth 1/2/3/6/9/12: 4.3482 / 4.3476 / 4.3475 / 4.3475 /
+4.3476 / 4.3477, K1−K6 0.0007; spandec_ce 4.5065 / 4.5048 / 4.5044 / 4.5046 / 4.5053 / 4.5062.
+spandec-mnext-mask: 4.3896 / 4.3888 / 4.3885 / 4.3883 / 4.3885, K1−K6 0.0013; mux_local 6.8357
+→ 6.8255; spandec_ce 4.5217 → 4.5191.
+
+**Worth profiles** (zero-ablation cost in nats; bins by the PREDICTING position 0 / 1 / 2 /
+3 / 4-7 / 8-15 / 16+; token-weighted total):
+
+| arm | rows | prefix write (`zero`) | all slots (`all_slots`) |
+|---|---|---|---|
+| mux-mask (old) | 480 | 0.582 / 0.194 / 0.130 / 0.110 / 0.081 / 0.056 / 0.044, total **0.096** | 0.631 / 0.247 / 0.165 / 0.141 / 0.103 / 0.071 / 0.052, total **0.115** |
+| spandec-mask | 480 | 0.283 / 0.187 / 0.137 / 0.114 / 0.080 / 0.053 / 0.037, total **0.078** | 0.708 / 0.593 / 0.366 / 0.269 / 0.178 / 0.107 / 0.068, total **0.182** |
+| spandec-mnext-mask | 192 | 0.332 / 0.204 / 0.140 / 0.117 / 0.082 / 0.056 / 0.037, total 0.082 | 0.535 / 0.432 / 0.232 / 0.184 / 0.122 / 0.079 / 0.049, total 0.129 |
+
+The budget on the same positions (predicted-token offset = bin + 1, from
+`failures/2026-09-11-arc-span-budget.md`): 0.958 / 0.690 / 0.591 / 0.508 / ~0.42 / 0.31 /
+0.31, total 0.399. The slot channel's share of it: old arm 66 / 36 / 28 / 28 / 25 / 23 / 17 %;
+spandec-mask 74 / 86 / 62 / 53 / 42 / 35 / 22 %.
+
+**Gradient probe (arm 1, 12 rows, batch 2, train mode).** Core-weight gradient norm from
+the token CE 0.344, from the total loss 1.445 (the decoder pays the core 4.2x the token CE;
+the old arm's MUX paid 3.8x). Per-pass share of the token-CE gradient 0.151 / 0.148 / 0.163 /
+0.149 / 0.151 / 0.239 with per-pass cosines to the total 0.34 / 0.49 / 0.70 / 0.83 / 0.73 /
+0.45 (old arm: 0.318 / 0.124 / 0.092 / 0.116 / 0.146 / 0.204, cosines 0.72 / −0.03 / 0.03 /
+0.51 / 0.73 / 0.79). Cancellation (total norm over the sum of per-pass norms) 0.744 on the
+total loss against the old arm's 0.556.
+
+**z-opt (arm 1, 12 rows).** ce_loop 4.1194, ce_entry 4.1256 (entry-vs-exit +0.0062; old arm
++0.0159), ce_zero +0.076, ce_shuffle +0.055, ce_zopt at lr 1e-2 2.6287 (−1.49; old arm −1.13).
+
+**Predictions so far.** P-a FALSE (bin 8-15 prefix worth 0.053 against the bar 0.12 and the
+ruler's 0.056; it did not rise). P-b TRUE (0.072 closer to plain, inside [0.05, 0.15]). P-c
+TRUE (0.0007). P-d TRUE by a hair (bin-0 / bin-8-15 ratio 5.9 against 5.5, both at 192
+rows). P-i FALSE (spandec_ce 4.5046 is above the token CE 4.3475 by 0.157). P-j TRUE for
+both arms (53 and 56 min). P-e, P-f, P-g, P-h await the staged arms.
+
+**Reading, part 1.** Grading z on the whole next span made the model better at every
+position by 0.072 nats, and the gain is exactly the slot channel carrying more: its
+all-slot worth rose 0.115 → 0.182 (+0.067) on the same 480 rows. The prefix write, the
+loop's own output, carries LESS (0.096 → 0.078, and 0.58 → 0.28 at the first position);
+the information moved into the slot cells, which the coda attends directly. The loop's
+credit assignment is healthier (no anti-aligned pass, cancellation 0.56 → 0.74) and its
+depth is still worth nothing on tokens. The gain sits in the short-context spike (bins 1-3:
+the channel's share of the budget 36 → 86 %, 28 → 62 %, 28 → 53 %) and NOT in the flat
+long-range part (bin 16+: 17 → 22 %, 0.068 of 0.31). Adding the first-token MUX back on
+top costs 0.041 at every position and pulls the all-slot worth back down to 0.129: the
+M-next target is harmful, not merely weak, and it shrinks the channel. The long-range 0.31
+is what the chain arm (`slot-spandec-chain-mask`, staged) is for.
