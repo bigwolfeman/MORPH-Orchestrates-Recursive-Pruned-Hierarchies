@@ -273,7 +273,7 @@ the reasoning under each are the builder's.
   scorer and is not in the deployed forward, but the arms' `gen_every` is 0 and the slot
   channel's generation behaviour under a changed target is untested.
 
-## Results, part 1 (2026-09-11 23:14 CDT: `slot-spandec-mask` and `slot-spandec-mnext-mask`; the other four arms are staged and unrun)
+## Results, part 1 (2026-09-11 23:12 CDT: `slot-spandec-mask` and `slot-spandec-mnext-mask`; the other four arms are staged and unrun)
 
 Both arms at `35c7c4e`, seed 1, 5,000 steps, mask geometry (`tg_restrict` scope all), norm_match.
 Raw files: `lab/experiments/results/2026-09-11-span-decoder/` (sweeps, 192-row worth
