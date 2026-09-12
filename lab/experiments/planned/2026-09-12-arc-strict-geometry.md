@@ -231,6 +231,16 @@ unrestricted).
   under 0.02, the coda's `prev` cells plus the span's own tokens already carry what the
   model uses and no reachability in the loop matters to it.
 
+### Amendment 2 (2026-09-12 09:25 CDT, orchestrator): the oracle arm's smoke failed at build; fixed and re-queued
+
+`slot-spandec-strict-oracle` at `a0b72c4` died in the runner's 12-step smoke inside
+`SpanDecoder.decode` (`shape '[1, 1, 8, 1024]' is invalid for input of size 32768`): the
+decoder added its whole 32-row position table viewed as J columns, which only works when
+the oracle's budget equals the decoder's. Every unit test had set both to 8. Fixed in
+`36a4cfc` (`self.pos[:J]`, a refusal when J exceeds the table, two tests at the panel's
+budgets). The arm is re-queued at `36a4cfc` after `slot-spandec-strict-norecur`; no
+prediction changed. P-i's rate prediction for the oracle arm (65 %) still stands.
+
 ## Not verified before launch
 
 * **No GPU step of any arm here.** The card ran the arc probe chain
