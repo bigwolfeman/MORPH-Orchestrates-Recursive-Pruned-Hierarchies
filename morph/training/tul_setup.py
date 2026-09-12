@@ -33,8 +33,8 @@ __all__ = ["TulRuntime", "build_tul_runtime", "build_boundary_rule",
 # reads below; tests/test_tul_setup_keys.py checks every shipped config against it.
 KNOWN_TUL_KEYS = frozenset({
     "activate_at", "bcast", "boundary_chars", "boundary_substrings", "carry",
-    "center_bag_mean", "coda_sees_slots", "coda_token_cut", "coda_token_input",
-    "cond_layers",
+    "center_bag_mean", "coda_sees_slots", "coda_span_heads", "coda_span_source",
+    "coda_span_weight", "coda_token_cut", "coda_token_input", "cond_layers",
     "core_stage_cond",
     "db1_cond_dim", "db1_ladder_steps", "db1_p_mean", "db1_p_std", "db1_sigma_data",
     "db1_sigma_max", "db1_sigma_min", "db1_w_sigma", "db_loop", "db_mux_iters",
@@ -257,6 +257,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         spandec_pass_horizon_max=int(tc.get("spandec_pass_horizon_max", 6)),
         spandec_pass_weight=float(tc.get("spandec_pass_weight", 1.0)),
         spandec_pass_tokens=int(tc.get("spandec_pass_tokens", 8)),
+        coda_span_heads=int(tc.get("coda_span_heads", 0)),
+        coda_span_weight=float(tc.get("coda_span_weight", 1.0)),
+        coda_span_source=str(tc.get("coda_span_source", "cell")),
         slot_chain=bool(tc.get("slot_chain", False)),
         slot_chain_detach=bool(tc.get("slot_chain_detach", False)),
         grad_pass=bool(tc.get("grad_pass", False)),
@@ -367,6 +370,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "spandec_pass_horizon_max": model_cfg.spandec_pass_horizon_max,
         "spandec_pass_weight": model_cfg.spandec_pass_weight,
         "spandec_pass_tokens": model_cfg.spandec_pass_tokens,
+        "coda_span_heads": model_cfg.coda_span_heads,
+        "coda_span_weight": model_cfg.coda_span_weight,
+        "coda_span_source": model_cfg.coda_span_source,
         "slot_chain": model_cfg.slot_chain,
         "slot_chain_detach": model_cfg.slot_chain_detach,
         "grad_pass": model_cfg.grad_pass,
@@ -460,6 +466,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"thought). Cost: sum_t min(t,{_cap})*{_pt} decoded positions per slot per "
               f"step ({sum(min(t, _cap) * _pt for t in range(1, _cap + 1))} at depth "
               f"{_cap}) on its OWN zero-init position table "
+              f"(lab/experiments/planned/2026-09-12-arc-objective-arms.md)", flush=True)
+    if model_cfg.coda_span_heads > 0:
+        print(f"  TUL CODA SPAN HEADS ON: {model_cfg.coda_span_heads} parallel offset heads "
+              f"on the coda readout at each slot's "
+              f"{'last prefix cell' if model_cfg.coda_span_source == 'cell' else 'boundary TOKEN position (a CONTROL: that state never saw its own slot z)'}"
+              f", predicting the next span's tokens 1..{model_cfg.coda_span_heads} "
+              f"NON-autoregressively, weight {model_cfg.coda_span_weight} "
               f"(lab/experiments/planned/2026-09-12-arc-objective-arms.md)", flush=True)
     if model_cfg.slot_chain:
         print(f"  TUL SLOT CHAIN ON: detach={model_cfg.slot_chain_detach} — slot k takes "

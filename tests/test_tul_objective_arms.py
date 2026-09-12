@@ -8,7 +8,7 @@ fixture had set both budgets to 8.
 
 So this file composes each new config through Hydra, maps it through the SHIPPED
 `build_tul_runtime`, asserts the PANEL's real budgets (`spandec_max_tokens` 0 -> 32, the
-per-pass term at 8 tokens and cap 6), prints the resolved
+per-pass term at 8 tokens and cap 6, the coda heads at 8 and at 32), prints the resolved
 knobs, then builds a model and runs a TRAINING forward and backward so both terms execute.
 
 Arms: `.agents/notes/proposed/architecture/2026-09-12-objective-arms-per-pass-plan-and-parallel-coda.md`
@@ -60,7 +60,9 @@ def _batch(B: int = 2, n: int = 120, seed: int = 0):
 
 
 _CONFIG_DIR = __import__("os").path.abspath("morph/configs")
-NEW_CONFIGS = ["tul_slot_spandec_strict_perpass"]
+NEW_CONFIGS = ["tul_slot_spandec_strict_perpass",
+               "tul_slot_spandec_strict_codaspan",
+               "tul_slot_spandec_strict_codaspan32"]
 
 
 class _StubTok:
@@ -93,21 +95,27 @@ def test_the_objective_arms_compose_and_build_and_run(name, monkeypatch):
     cfg, rt = _runtime(name, monkeypatch)
     assert rt is not None, f"{name}: tul is off — the arm would run the plain model"
     tc = rt.model_cfg
-    # The panel's REAL budgets, not a fixture's: the decoder at span_cap 32 and the
-    # per-pass term at 8 tokens and cap 6.
+    # The panel's REAL budgets, not a fixture's: the decoder at span_cap 32, the per-pass
+    # term at 8 tokens and cap 6, the heads at 8 and 32.
     assert tc.tg_geometry == "strict" and tc.tg_restrict and tc.spandec
     assert tc.spandec_max_tokens == 0 and tc.bound_span_cap == 32
     assert tc.spandec_horizon == 1, "the exit target must stay the next thought"
-    assert tc.spandec_per_pass and tc.spandec_pass_tokens == 8
-    assert tc.spandec_pass_horizon_max == 6
+    if name.endswith("_perpass"):
+        assert tc.spandec_per_pass and tc.spandec_pass_tokens == 8
+        assert tc.spandec_pass_horizon_max == 6 and tc.coda_span_heads == 0
+    else:
+        assert not tc.spandec_per_pass
+        assert tc.coda_span_heads == (32 if name.endswith("32") else 8)
+        assert tc.coda_span_source == "cell"
     assert not bool(cfg.model.use_kernels), "tg_restrict forces model.use_kernels: false"
     print(f"[{name}] spandec_per_pass={tc.spandec_per_pass} "
           f"pass_tokens={tc.spandec_pass_tokens} cap={tc.spandec_pass_horizon_max} "
+          f"coda_span_heads={tc.coda_span_heads} source={tc.coda_span_source} "
           f"spandec_max_tokens={tc.spandec_max_tokens or tc.bound_span_cap} "
           f"horizon={tc.spandec_horizon}")
 
-    # Build at the config's OWN budgets (decoder J = 32, per-pass J = 8) and run a
-    # TRAINING forward, so the per-pass term executes for real.
+    # Build at the config's OWN budgets (decoder J = 32, heads J = 8 or 32) and run a
+    # TRAINING forward, so the per-pass term and the heads both execute for real.
     torch.manual_seed(7)
     m = MORPHTransformer(_tiny(tul=tc)).train().float()
     inp, lab, layout, _ = _batch()
@@ -120,4 +128,7 @@ def test_the_objective_arms_compose_and_build_and_run(name, monkeypatch):
         hs = [int(out[k]) for k in out if str(k).startswith("spandec_pass_h")
               and str(k)[14:].isdigit()]
         assert hs == [min(t, 6) for t in range(1, len(hs) + 1)], hs
+    if tc.coda_span_heads:
+        assert float(out["coda_span"]) > 0.0
+        assert float(out["coda_span_heads"]) == float(tc.coda_span_heads)
     out["loss"].backward()

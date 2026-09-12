@@ -1470,6 +1470,36 @@ class MORPHTransformer(nn.Module):
                 raise ValueError(
                     "tul.spandec_per_pass needs a core loop (model.n_core > 0): it grades "
                     "the state after EVERY pass, and a coreless TUL model has no passes.")
+
+        # ── Parallel span decoding from the coda (TULConfig.coda_span_heads) ──────
+        # J offset heads on the coda's FINAL state at each slot's emitting position. The
+        # `_MTPHead` construction (RMSNorm + a [d, d] linear at identity init) is
+        # deterministic, so building these draws no RNG and an arm's base weights stay
+        # byte-identical to its ruler's. Every refusal that depends only on the config
+        # lives in `TULConfig.__post_init__`; the two below need the MODEL's shape.
+        self.coda_span: nn.ModuleList | None = None
+        if cfg.tul is not None and int(cfg.tul.coda_span_heads) > 0:
+            if cfg.tul.prefix_k < 1:
+                raise ValueError(
+                    "tul.coda_span_heads needs tul.prefix_k >= 1: the heads read the coda "
+                    "at `slot_index + prefix_k - 1`, the slot's last prefix cell.")
+            if cfg.tul.gate is not None:
+                raise NotImplementedError(
+                    "tul.coda_span_heads with tul.gate is not defined: the gate rewrites "
+                    "h_slots with a decoded budget before `prefix_project`, so the cell the "
+                    "heads read would carry the budget-conditioned state and the arm's "
+                    "reading would mix two mechanisms.")
+            # RNG-NEUTRAL, and it has to be said out loud: `_MTPHead`'s weights are
+            # deterministic (identity), but `nn.Linear.reset_parameters` still DRAWS from
+            # the global stream before the identity overwrites it, which would shift every
+            # weight constructed after this point and make the arm differ from its ruler by
+            # more than the mechanism. The `_slot_gain_penalty` precedent: put the stream
+            # back. Verified by `tests/test_tul_coda_span.py`, which asserts every shared
+            # parameter is byte-identical between an on-model and an off-model.
+            _rng = torch.get_rng_state()
+            self.coda_span = nn.ModuleList(
+                [_MTPHead(d) for _ in range(int(cfg.tul.coda_span_heads))])
+            torch.set_rng_state(_rng)
         # ── The slot chain (TULConfig.slot_chain) ─────────────────────────────────
         # Zero-init, no RNG draw: step 0 is the ruler's forward bit for bit.
         self.tul_chain: TULSlotChain | None = None
@@ -4425,6 +4455,92 @@ class MORPHTransformer(nn.Module):
             stats["spandec_pass_n_tokens"] = n_tokens
         return out
 
+    def _tul_coda_span_loss(self, xh: Tensor, input_ids: Tensor, layout: SlotLayout,
+                            stats: dict | None = None) -> Tensor:
+        """``tul.coda_span_heads`` — decode the next span from the CODA, all offsets at once.
+
+        Wolfe, 2026-09-12: "try parallel token decoding from the coda. Perhaps the coda
+        needing to spit out a lot of the span or all the span at once changes the
+        behavior." Every span-decoder arm so far grades ``z`` through a SEPARATE reader the
+        token CE never touches. This grades the reader the model ships.
+
+        WHAT RUNS. ``xh`` is the coda readout (``_back_region``: coda blocks, the
+        Hyper-Connection stream mean, ``lm_mixer``, ``final_norm``) at every packed
+        position. At each slot's emitting position it is put through ``J =
+        coda_span_heads`` parallel offset heads — the ``_MTPHead`` construction, RMSNorm
+        plus a ``[d, d]`` linear at IDENTITY init, so at step 0 every head predicts exactly
+        what the next-token head at that position predicts — and each head's state is read
+        through the tied table. Head ``j`` is scored against token ``j`` of the NEXT span
+        (``next_span_slots``). NON-AUTOREGRESSIVE: no teacher forcing, no token path, all J
+        offsets from one state. That is the whole question — the span decoder's conditional
+        path is what made ``z`` carry the span, and this asks whether the coda alone can be
+        made to.
+
+        WHERE IT READS (``tul.coda_span_source``):
+
+        * ``"cell"`` — ``slot_index[s] + prefix_k - 1``, the slot's LAST prefix cell. Under
+          the strict geometry that cell carries the looped state and nothing else, so the
+          gradient reaches the loop's write through ``TULSlots.prefix_project``. It is also
+          the position whose own emit label is the next span's first token and which
+          carries NO loss at ``emit_weight: 0.0``, so head 1 is the first term ever to
+          train it.
+        * ``"token"`` — the boundary TOKEN position (``boundary_token_index``), the
+          position ``emit_source="token"`` generates from. **Its coda state has never seen
+          its own slot's z**: the boundary token sits BEFORE that slot's cells and the coda
+          is causal. The heads then reach the loop only through EARLIER slots' writes. It
+          is a control, and the docstring says so because a reader would otherwise assume
+          both sources grade the same thing.
+
+        THE TIED HEAD follows ``tul.mux_detach_head`` (default true), the rule every
+        auxiliary head on this tree follows: ``embed.lm_weight()`` IS the input embedding
+        table and arm v1a diverged at step 2800 with the detach off. The model's own MTP
+        heads (``model.mtp_heads``) read it UNDETACHED because they are the shipped
+        next-token objective; these are not.
+
+        THE READOUT is ONE ``fused_linear_cross_entropy`` call over ``[B*S*J, d]``, not J
+        calls: the kernel allocates a ``[V, d]`` fp32 ``grad_w`` per call (201 MB at
+        V=49169, d=1024) and J calls would pay it J times. The ``[B*S*J, V]`` logits are
+        never materialised — they would be 604 MB fp32 at B 6, S 64, J 8, V 49169; the
+        kernel walks the vocabulary in ``ce_chunk_size`` chunks instead.
+        """
+        tc = self.cfg.tul
+        heads = self.coda_span
+        assert heads is not None
+        J = len(heads)
+        B, S = layout.slot_index.shape
+        L = xh.shape[1]
+        ids, valid = next_span_slots(input_ids, layout, J)            # [B, S, J]
+        if tc.coda_span_source == "cell":
+            pos = layout.slot_index + (int(layout.prefix_k) - 1)
+            ok = layout.slot_valid
+        else:
+            # `boundary_token_index` returns [B, S+1] with -1 where a bag owns no token
+            # position (a pad slot, or the dump bin). Clamp for the gather and mask with
+            # the same test, never with the clamped index.
+            bt = boundary_token_index(layout.bag_id, ~layout.slot_mask, S)[:, :S]
+            ok = layout.slot_valid & (bt >= 0)
+            pos = bt
+        pos = pos.clamp(0, L - 1)
+        st = gather_positions(xh, pos)                                # [B, S, C]
+        hs = torch.stack([h(st) for h in heads], dim=2)               # [B, S, J, C]
+        C = hs.shape[-1]
+        lab = torch.where(valid & ok.unsqueeze(-1), ids,
+                          torch.full_like(ids, -100))
+        w_tied = self.embed.lm_weight()
+        w_head = w_tied.detach() if tc.mux_detach_head else w_tied
+        loss = fused_linear_cross_entropy(
+            hs.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
+            chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id)
+        if stats is not None:
+            # A per-TOKEN conditional-free CE over the next span, directly comparable with
+            # the model's own token CE and with `spandec_ce` — except that this reader has
+            # NO token path, so it is an upper bound on what one state can say about the
+            # span in parallel, not a competitor to the decoder's number.
+            stats["coda_span_ce"] = float(loss.detach())
+            stats["coda_span_heads"] = float(J)
+            stats["coda_span_n_tokens"] = float((lab != -100).sum())
+        return loss
+
     def _own_span_grad(self, h: Tensor, input_ids: Tensor, layout: SlotLayout,
                        mask: Tensor) -> tuple[Tensor, Tensor]:
         """``(dL_own/dz, L_own)`` at the CURRENT slot state, both DETACHED.
@@ -5232,6 +5348,22 @@ class MORPHTransformer(nn.Module):
             groups["spandec_pass_weighted"] = _pw.detach()
             groups["loss"] = groups["loss"] + _pw
 
+        if self.coda_span is not None and groups is not None:
+            # The parallel-decode heads (tul.coda_span_heads). Built HERE and not beside the
+            # other local losses because they read the CODA's output, which does not exist
+            # until `_back_region` has run. Construction refuses every shape in which `xh`
+            # is not the full packed axis (the paid loop, arm A4, arm CW), so the slot
+            # positions this indexes are always the ones `prefix_project` wrote.
+            _cs_stats: dict = {}
+            _cs = self._tul_coda_span_loss(xh, input_ids, layout, stats=_cs_stats)
+            groups = dict(groups)
+            groups["coda_span"] = _cs.detach()
+            for _k, _v in _cs_stats.items():
+                groups[_k] = _cs.new_tensor(_v)
+            _cw = tc.coda_span_weight * _cs
+            groups["coda_span_weighted"] = _cw.detach()
+            groups["loss"] = groups["loss"] + _cw
+
         if oracle_z_loss is not None and groups is not None:
             # Same contract as `spandec_weighted`: the WEIGHTED term is exposed so train.py
             # can subtract it and keep train/loss and the val loss on the MODEL's CE.
@@ -5878,6 +6010,10 @@ class MORPHTransformer(nn.Module):
                 _t = torch.arange(1, _max_d + 1, device=depths.device)
                 _n = (_t.clamp(max=_cap) * (_t <= depths.max()).long()).sum() * _pt
                 passes = passes + len(self.tul_spandec.blocks) * B * S * _n
+        # `self.coda_span` adds NO block pass: each head is one RMSNorm and one [d, d]
+        # matmul on [B, S, d] (3.2 GFLOP at the panel shape, against a ~50 TFLOP step). Its
+        # real cost is the J x S readout rows, which this metric does not count for the
+        # token CE either.
         return passes
 
     # ── Forward ───────────────────────────────────────────────────────

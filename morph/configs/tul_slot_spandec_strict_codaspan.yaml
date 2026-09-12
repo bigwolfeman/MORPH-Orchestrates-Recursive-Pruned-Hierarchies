@@ -1,0 +1,59 @@
+# Slot-loop panel, arm "slot-spandec-strict-codaspan": decode the next span from the CODA,
+# all offsets AT ONCE. ONE factor against `slot-spandec-strict`
+# (`tul_slot_spandec_strict.yaml`): `tul.coda_span_heads`, 0 -> 8.
+#
+# WHY. Wolfe, 2026-09-12: "try parallel token decoding from the coda. Perhaps the coda
+# needing to spit out a lot of the span or all the span at once changes the behavior."
+#
+# Every span-decoder arm to date grades z through a SEPARATE reader — `SpanDecoder`, two
+# blocks the token CE never touches — and the measured result is that the reader moves
+# (the slot channel's worth went 0.115 -> 0.182 with the whole-span target) while the
+# LOOP does not (token K1-K6 0.0016 on strict). This arm puts the target on the reader the
+# model actually ships. At each slot's LAST prefix cell — the emitting position, which
+# under the strict geometry carries the looped state and NOTHING else — the coda's final
+# state is put through 8 parallel offset heads and asked for the next span's tokens 1..8
+# at once, non-autoregressively, with no teacher forcing. The only way that state can
+# answer is through what the loop wrote into the cell it sits on.
+#
+# WHAT THE HEADS ARE. The `_MTPHead` construction the E8 lookahead heads already use:
+# RMSNorm plus one [d, d] linear at IDENTITY init, read through the tied table. At step 0
+# every head therefore predicts exactly what the next-token head at that position
+# predicts, so the term starts at that position's own CE and the arm's step 0 is its
+# ruler's. The tied table is read DETACHED (`tul.mux_detach_head: true`, inherited): an
+# undetached auxiliary head trains the input embeddings and the one measured case on this
+# tree diverged at step 2800 (lab/experiments/failures/2026-08-25-mux-head-arm-v1a.md).
+#
+# A DETAIL WORTH KNOWING. At `tul.emit_weight: 0.0` the emitting cell's own label — the
+# next span's first token — carries NO loss, so head 1 is the FIRST term on this tree that
+# has ever trained that position to emit. `tul.coda_span_source: token` moves the read to
+# the boundary TOKEN position instead; it is a control, not this arm, and it grades a
+# state that has NEVER seen its own slot's z (the boundary token sits before the cells and
+# the coda is causal).
+#
+# COST. No block pass is added: the heads are 8 x [d, d] matmuls on [B, S, d], 3.2 GFLOP
+# at B 6, S 64, d 1024 against a ~50 TFLOP step. The real cost is the readout — J x 64 =
+# 512 rows per row-batch member against the token CE's ~1024, so about half the main CE's
+# readout — and it goes through ONE chunked `fused_linear_cross_entropy` call over
+# [B*S*J, d], so the [B*S*J, V] logits (604 MB fp32 at B 6, S 64, J 8, V 49169) are never
+# materialised and the [V, d] fp32 grad_w accumulator is paid once, not 8 times. Expect
+# this arm to clear the 8,086 tok/s floor comfortably; `-codaspan32` is the one to watch.
+#
+# THE COLUMN TO READ. `tul/coda_span_ce` — a per-token CE over the next span from ONE
+# state with no token path. It is an upper bound on what a parallel readout can say about
+# the span, NOT a competitor to `spandec_ce` (which has the conditional path). The arm's
+# question is what the extra target does to the LOOP: `worth_profile`'s zero/all_slots and
+# the token K-curve.
+#
+# Record: lab/experiments/planned/2026-09-12-arc-objective-arms.md
+# Note: .agents/notes/proposed/architecture/2026-09-12-objective-arms-per-pass-plan-and-parallel-coda.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  coda_span_heads: 8
+  coda_span_weight: 1.0
+  coda_span_source: cell        # the slot's last prefix cell: the coda's read of z
+
+wandb:
+  name: slot-spandec-strict-codaspan

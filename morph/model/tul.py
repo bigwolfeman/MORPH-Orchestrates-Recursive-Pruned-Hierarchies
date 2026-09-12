@@ -454,6 +454,43 @@ class TULConfig:
     # `tul.egrad_max_tokens` are the same precedent. The EXIT target keeps the full
     # `spandec_max_tokens` span.
     spandec_pass_tokens: int = 8
+    # ── PARALLEL SPAN DECODING FROM THE CODA (arm `slot-spandec-strict-codaspan`) ──────
+    #
+    # WHAT IT IS. `coda_span_heads: J` builds J parallel offset heads (the `_MTPHead`
+    # construction: RMSNorm + a [d, d] linear at IDENTITY init, deterministic, no RNG) that
+    # read the CODA's final state at each slot's emitting position and predict the next
+    # span's tokens 1..J AT ONCE, non-autoregressively, with no teacher forcing. Loss = a
+    # mean CE over the valid (slot, offset) pairs through the tied head.
+    #
+    # WHY. Wolfe, 2026-09-12: "try parallel token decoding from the coda. Perhaps the coda
+    # needing to spit out a lot of the span or all the span at once changes the behavior."
+    # Every span-decoder arm to date grades z through a SEPARATE reader that the token CE
+    # never uses. This one grades the coda itself — the reader the model actually ships —
+    # and the only way that state can carry the next span is through what the loop wrote
+    # into the prefix cell it sits on.
+    #
+    # WHERE IT READS (`coda_span_source`):
+    #   "cell"  (default, the arm) — the slot's LAST prefix cell, `slot_index[s] +
+    #           prefix_k - 1`. Under the strict geometry that cell carries the looped state
+    #           and nothing else, so the heads' gradient reaches the loop's write directly.
+    #           It is also the position whose own emit label is the next span's first token
+    #           and which carries NO loss at `emit_weight: 0.0`, so head 1 is the first term
+    #           that has ever trained it.
+    #   "token" — the boundary TOKEN position instead (`boundary_token_index`), the position
+    #           `emit_source="token"` generates from. STATE THE CONSEQUENCE: that token sits
+    #           BEFORE its own slot's cells, so a causal coda state there has NEVER seen its
+    #           own slot's z. The heads then reach the loop only through EARLIER slots'
+    #           writes. It is a control, not the arm.
+    #
+    # COST. J readout rows per slot: J x 64 per row against the token CE's ~1024, so J = 8
+    # is ~0.5x the main CE's readout and J = 32 is ~2x. The heads themselves are J x [d, d]
+    # matmuls on [B, S, d] — 3.2 GFLOP at B 6, S 64, d 1024, J 8, which is noise. The
+    # readout goes through `fused_linear_cross_entropy` as ONE call over [B*S*J, d], so the
+    # [B*S*J, V] logits are never materialised (they would be 604 MB fp32 at B 6, S 64,
+    # J 8, V 49169) and the [V, d] fp32 grad_w accumulator is paid ONCE, not J times.
+    coda_span_heads: int = 0             # 0 = off: nothing is built and the forward is unchanged
+    coda_span_weight: float = 1.0        # weight of the term in the total loss
+    coda_span_source: str = "cell"       # "cell" (the arm) | "token" (the control above)
     # ── THE ORACLE-Z PER-PASS TEACHER (arm `slot-spandec-strict-oracle`, 2026-09-12) ──
     #
     # THIS BREAKS A STANDING RULE AND SAYS SO. The root CLAUDE.md and the spec forbid
@@ -959,6 +996,47 @@ class TULConfig:
             raise ValueError(
                 "tul.spandec_* set with tul.spandec=false: the decoder is not built, so the "
                 "knobs would be silently ignored. Set tul.spandec: true or drop them.")
+        if self.coda_span_source not in ("cell", "token"):
+            raise ValueError(
+                f"tul.coda_span_source must be 'cell' or 'token', got "
+                f"{self.coda_span_source!r}")
+        if self.coda_span_heads < 0:
+            raise ValueError(
+                f"tul.coda_span_heads must be >= 0 (0 = off), got {self.coda_span_heads}")
+        if self.coda_span_heads > 0:
+            if self.coda_span_weight <= 0.0:
+                raise ValueError(
+                    "tul.coda_span_heads needs tul.coda_span_weight > 0: at 0 the heads are "
+                    "built, read the coda every step and train nothing (got "
+                    f"{self.coda_span_weight})")
+            if self.coda_span_heads > self.bound_span_cap:
+                raise ValueError(
+                    f"tul.coda_span_heads {self.coda_span_heads} exceeds tul.bound_span_cap "
+                    f"{self.bound_span_cap}: the packer caps a span at that many tokens, so "
+                    f"every head past it would have a target that is NEVER valid and would "
+                    f"train on nothing while costing its readout.")
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.coda_span_heads is a SLOT-LOOP lever: it reads the coda at a slot's "
+                    "prefix cell, and the paid loop (tokens_through_core) writes no prefix "
+                    "cell (TULSlots has no W_prefix there). Raises rather than silently "
+                    "grading a position nothing wrote.")
+            if not (self.coda_sees_slots and self.coda_token_cut == 0):
+                raise NotImplementedError(
+                    "tul.coda_span_heads needs the FULL-AXIS coda (coda_sees_slots=true, "
+                    "coda_token_cut=0): the heads index the coda readout by "
+                    "`slot_index + prefix_k - 1` on the packed axis, and arm A4 / arm CW run "
+                    "the coda on a GATHERED subset whose index space that position does not "
+                    "live in.")
+            if self.detach_z:
+                raise ValueError(
+                    "tul.coda_span_heads with tul.detach_z is not defined: the arm's claim "
+                    "is that the heads' gradient reaches the loop's write through the prefix "
+                    "cell, and detach_z cuts exactly that edge.")
+        elif self.coda_span_weight != 1.0 or self.coda_span_source != "cell":
+            raise ValueError(
+                "tul.coda_span_* set with tul.coda_span_heads=0: no head is built, so the "
+                "knobs would be silently ignored. Set tul.coda_span_heads > 0 or drop them.")
         if self.slot_chain:
             if self.tokens_through_core:
                 raise NotImplementedError(
