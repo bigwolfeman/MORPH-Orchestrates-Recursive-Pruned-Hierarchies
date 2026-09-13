@@ -149,12 +149,15 @@ applies here.**
 
 ### The gate, built in this change
 
-* `tests/test_tul_center_exit.py` — **25 passed** (`pytest -q`, exit 0).
-* `tests/test_tul_row_contrast.py` — **25 passed** (`pytest -q`, exit 0).
+* `tests/test_tul_center_exit.py` + `tests/test_tul_row_contrast.py` — **53 passed**
+  (`pytest -q`, exit 0).
 * `lab/divergence/rank_levers_compose.py` — all four configs compose through Hydra and
   `build_tul_runtime`, build at **d_model 1024**, and run one forward+backward with every
   gradient finite. `COMPOSE GATE: PASS`.
-* Sabotage: **13 defects, 13 caught, 0 missed** (table in the note).
+* Sabotage: **16 defects, 16 caught, 0 missed** — after the pass found one real hole (a
+  cell-axis permutation that satisfies the mean identity) and one bad patch (an anchor rule
+  that is equivalent under "pads are last"). Both are written up in the note rather than
+  quietly fixed; the first-round 13/13 was wrong about its own coverage.
 
 ### Two audit findings recorded here because the record needs them
 

@@ -214,8 +214,9 @@ factor against `slot-spandec-strict` or `slot-register-m4`. Prereg:
 
 ## Sabotage
 
-Thirteen plausible defects, applied to the source one at a time and reverted. **13 caught,
-0 missed.**
+Sixteen plausible defects, applied to the source one at a time and reverted. **16 caught,
+0 missed** — but only after the pass found two real problems, and both are recorded because
+the first-round result (13/13) was wrong about its own coverage.
 
 | id | defect | verdict |
 | --- | --- | --- |
@@ -225,6 +226,7 @@ Thirteen plausible defects, applied to the source one at a time and reverted. **
 | D4 | divide by S instead of the VALID count | CAUGHT |
 | D5 | skip the centering in `tul_slot_state_probe` | CAUGHT |
 | D6 | drop the centering from the forward entirely | CAUGHT |
+| D7 | read the cell axis CELL-major instead of slot-major | CAUGHT (after a new test) |
 | E1 | detach AFTER the readout (target path trains `lm_mixer`) | CAUGHT |
 | E2 | mask ROWS instead of COLUMNS (pads become keys) | CAUGHT |
 | E3 | make the LAST valid slot an anchor (target is the zero dump bin) | CAUGHT |
@@ -232,6 +234,23 @@ Thirteen plausible defects, applied to the source one at a time and reverted. **
 | E5 | use `-inf` (an all-masked row NaNs in the backward) | CAUGHT |
 | E6 | score single-anchor rows (an unearned exact 0) | CAUGHT |
 | E7 | build the head but never add the term | CAUGHT |
+| E8 | drop the term on the `loop_reads_tokens` branch | CAUGHT (after a new test) |
+| E9 | pool slot `i`'s OWN span instead of its next one | CAUGHT (after a stronger test) |
+
+**D7 was a real hole and it is the instructive one.** Reading the compact cell axis
+CELL-major instead of slot-major PERMUTES which slot's state lands where — and it still
+satisfies "the per-cell row mean equals `b_center`", because the permutation maps groups
+onto groups. A mean identity cannot detect a permutation that preserves the groups. The
+fix is a test that pins VALUES: slot `s` and cell `m` carry `(s+1)(1 + 0.01m)`, so the two
+axes stay separable after centering and every output position is predicted exactly.
+
+**E9's first form was a bad PATCH, not a hole, and that is worth writing down too.**
+"Anchor on slot `i+1`'s validity alone" changes no behaviour: `SlotLayout` guarantees pads
+are LAST, so `slot_valid[i+1]` implies `slot_valid[i]` and the AND in `next_span_pool` is
+redundant under the invariant. A sabotage patch that is semantically equivalent proves
+nothing either way. Replaced with the off-by-one that actually matters — pooling slot `i`'s
+OWN span instead of its next — which the original trend-shaped test also missed, so that
+test now pins the pool by VALUE against `layout.bag_id`.
 
 ## A repair made in the same change
 

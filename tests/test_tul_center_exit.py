@@ -313,6 +313,35 @@ def test_pooling_the_cells_into_one_mean_would_be_a_different_operation():
     assert torch.allclose(out[:, :4].mean(dim=1), torch.zeros(1, 4, 8), atol=1e-6)
 
 
+def test_the_cell_axis_is_slot_major_and_the_values_do_not_move_positions():
+    """THE LAYOUT, pinned by VALUE. `_tul_core` returns the compact cell axis slot-major
+    (index `s*M + i`, `TULSlotRegister`'s own contract). Reading it cell-major instead is a
+    PERMUTATION of which slot's state lands where — and it still satisfies the "per-cell
+    row mean equals b_center" identity, because the permutation maps groups onto groups.
+    Found by sabotage D7, which the mean test missed. So this one checks the VALUES.
+
+    Slot `s` and cell `m` carry `(s+1) * (1 + 0.01*m)`. The cell factor MULTIPLIES rather
+    than adds, so it does not cancel out of the per-cell row mean and the two axes stay
+    separable after centering: the mean at cell `m` is `mean_s(s+1) * (1 + 0.01*m)` and
+    the output at `s*M+m` is `(s + 1 - mean_s(s+1)) * (1 + 0.01*m)`, exactly.
+    """
+    mod = TULCenterExit(8, n_streams=0)
+    S, M, C = 5, 4, 8
+    h = torch.zeros(1, S * M, C)
+    for s in range(S):
+        for m in range(M):
+            h[0, s * M + m] = (s + 1) * (1.0 + 0.01 * m)
+    out = mod(h, torch.ones(1, S, dtype=torch.bool), m_cells=M)
+    mean_slot = sum(s + 1 for s in range(S)) / S
+    for s in range(S):
+        for m in range(M):
+            want = (s + 1 - mean_slot) * (1.0 + 0.01 * m)
+            assert torch.allclose(out[0, s * M + m], torch.full((C,), want), atol=1e-5), (
+                f"cell {m} of slot {s} reads {float(out[0, s * M + m][0]):.4f}, expected "
+                f"{want:.4f} — the cell axis is not slot-major, so a slot's state landed "
+                f"at another slot's position")
+
+
 def test_m4_off_is_bit_identical_to_the_register_ruler():
     inp, lab, layout = _batch(4)
     a, b = _model(4, center=False), _model(4, center=False)

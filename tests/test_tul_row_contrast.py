@@ -269,11 +269,19 @@ def test_next_span_pool_is_the_next_span_and_the_last_slot_is_not_an_anchor():
         assert not bool(ok[b, nv - 1:].any()), (
             "the LAST valid slot is an anchor — its next span is the dump bin, whose "
             "bag_mean row is defined to be exactly 0")
-        # The pool really is the NEXT span: entry i is the mean position index of the
-        # tokens whose bag is i+1, which is strictly greater than slot i's own span mean.
-        own = pool[b, : max(nv - 2, 0)]
-        nxt = pool[b, 1: max(nv - 1, 1)]
-        assert bool((nxt > own).all()), "the pooled target is not the NEXT span"
+        # THE OFF-BY-ONE, pinned by VALUE against the layout and not by a trend. The
+        # signal is the position index, so entry i must equal the MEAN POSITION of the
+        # tokens whose bag_id is i+1 — computed here from `layout.bag_id` directly, so an
+        # own-span pool (`bags[:, 0:S]`) or any other shift fails.
+        tok_pos = ~layout.slot_mask[b]
+        for i in range(nv - 1):
+            sel = tok_pos & (layout.bag_id[b] == i + 1)
+            assert bool(sel.any()), f"span {i + 1} of row {b} has no token"
+            want = float(torch.nonzero(sel).float().mean())
+            assert abs(float(pool[b, i, 0]) - want) < 1e-3, (
+                f"row {b} slot {i}: pool reads {float(pool[b, i, 0]):.3f}, the mean "
+                f"position of span {i + 1}'s tokens is {want:.3f} — the target is not "
+                f"the NEXT span")
 
 
 def test_a_row_with_no_anchor_is_finite_and_contributes_nothing():
@@ -407,6 +415,41 @@ def test_row_contrast_refuses_an_fm_planner():
         MORPHTransformer(_tiny(n_core=0, tul=tc,
                                fm=FMArmConfig(d_p=16, n_layers=1, n_heads=2, d_ff=32,
                                               cond_dim=16, max_slots=10, l_total=84)))
+
+
+def test_it_runs_on_the_loop_reads_tokens_branch():
+    """The branch the configs and the note claim it runs on, and no other test reaches.
+
+    `loop_reads_tokens` has a per-slot state at a reader seam (`gather_valid` at the
+    slot's first cell, where the MUX, the span decoder and SIGReg read), so the term runs
+    there unchanged. `center_exit` does NOT — see the twin below."""
+    tc = TULConfig(prefix_k=2, slot_id=4, emit_weight=0.0, token_state_dropout=0.0,
+                   mux_beta=0.0, spandec=True, spandec_layers=1, spandec_max_tokens=8,
+                   loop_reads_tokens=True, row_contrast_lambda=LAM)
+    torch.manual_seed(99)
+    m = MORPHTransformer(_tiny(tul=tc)).train().float()
+    with torch.no_grad():
+        m.embed.bigram.lambdas.fill_(0.5)
+    inp, lab, layout = _batch()
+    out = m(inp, labels=lab, slot_layout=layout)
+    assert float(out["row_contrast"]) > 0.0
+    assert float(out["row_contrast_n_anchors"]) > 0.0
+    assert abs(float(out["row_contrast_weighted"]) - LAM * float(out["row_contrast"])) < 1e-6
+    out["loss"].backward()
+    bad = [n_ for n_, p in m.named_parameters()
+           if p.grad is not None and not bool(torch.isfinite(p.grad).all())]
+    assert bad == [], f"non-finite gradient at {bad}"
+
+
+def test_center_exit_refuses_loop_reads_tokens_while_this_term_does_not():
+    """The asymmetry, as a test, because it is the one place the two levers differ on a
+    branch. That arm writes NOTHING through `prefix_project` — a cell's looped state is
+    already at its own position when the core returns — so centering `h_slots` would move
+    the local losses and leave the coda reading the uncentered state."""
+    with pytest.raises(ValueError, match="center_exit"):
+        TULConfig(prefix_k=2, slot_id=4, loop_reads_tokens=True, center_exit=True)
+    # ...and the contrastive term does not raise on the same config.
+    TULConfig(prefix_k=2, slot_id=4, loop_reads_tokens=True, row_contrast_lambda=LAM)
 
 
 def test_row_contrast_composes_with_center_exit():
