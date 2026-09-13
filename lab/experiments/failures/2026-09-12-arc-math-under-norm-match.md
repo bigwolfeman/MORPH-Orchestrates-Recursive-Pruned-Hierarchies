@@ -1,10 +1,10 @@
 # Planned: math under the shipped ternary rule — E16 and E17 were run on a starved core
 
-Status: planned
+Status: failure
 
 Date: 2026-09-12 03:32 CDT (frozen before launch; the runner
 `/home/wolfe/morph-scratch/arc/run_mathpanel.sh` is written and was NOT started).
-Arc: [`2026-09-04-loop-contribution-arc.md`](2026-09-04-loop-contribution-arc.md).
+Arc: [`2026-09-04-loop-contribution-arc.md`](../planned/2026-09-04-loop-contribution-arc.md).
 
 Evidence it stands on:
 
@@ -140,8 +140,91 @@ re-basing before any arm is read.
 
 ## Results
 
-(pending)
+All four arms ran on the 5090 (`arc/run_mathpanel.sh`, 2026-09-13, 03:00 to 15:09), 6,000
+steps each, every `MATH DONE` line `verdict=HEALTHY`. Sweeps at 1500/3000/4500/6000 with
+`olympiad_sweep.py` (Olympiad: `holdout_clean`, 1,906 docs; Sudoku: `eval_holdout`, 3,000
+boards), `worth_profile.py` at 6,000 on the slot arms. Files:
+[`results/2026-09-12-math-norm-match/`](../results/2026-09-12-math-norm-match/) (sweep and
+worth JSONs, trimmed run logs as `.txt`). The paired gaps below are doc-paired at depth 6
+(sum of per-doc CE over sum of per-doc tokens, 2,000 bootstrap draws over docs, computed
+from the sweeps' `doc_ce_sum` / `doc_n_tokens`).
+
+Token CE at 6,000 on the holdout, by forced depth:
+
+| arm | d=1 | d=2 | d=3 | d=6 | d=9 | d=16 | K1−K6 [95 % CI] | K3−K6 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `oly-notul-nm` (plain) | 0.8652 | 0.8026 | 0.8028 | **0.8005** | 0.7985 | 0.8503 | **+0.0647** [+0.0602, +0.0691] | +0.0024 |
+| `oly-spandec-strict` | 1.0276 | 1.0210 | 1.0190 | **1.0166** | 1.0161 | 1.0256 | **+0.0111** [+0.0085, +0.0136] | +0.0024 [+0.0014, +0.0034] |
+| `sud-notul-nm` (plain) | 0.5095 | 0.5086 | 0.5084 | **0.5085** | 0.5087 | 0.5098 | +0.0011 [+0.0009, +0.0012] | −0.0001 |
+| `sud-spandec-strict` | 0.7636 | 0.7597 | 0.7590 | **0.7586** | 0.7589 | 0.7599 | **+0.0049** [+0.0047, +0.0052] | +0.0003 [+0.0002, +0.0004] |
+
+Gaps and the 2026-09-08 twins (absmean rule) on the same holdouts:
+
+| reading | value |
+| --- | --- |
+| `sud-spandec-strict` − `sud-notul-nm`, paired @6 | **+0.2502** [+0.2469, +0.2534] |
+| E17 `sud-mask` − `sud-notul` @6 (unpaired means, same files) | +0.2136 (0.7122 − 0.4986); the prereg's bar was +0.155 |
+| `oly-spandec-strict` − `oly-notul-nm`, paired @6 | **+0.2161** [+0.2015, +0.2313] |
+| E16 `oly-mask` − `oly-notul` @6 on `holdout_clean` | +0.1728 (0.9065 − 0.7337); the prereg's bar was +0.18 |
+| `sud-notul-nm` vs E17 `sud-notul` @6 | 0.5085 vs 0.4986: **+0.0099** (norm_match slightly worse) |
+| `oly-notul-nm` vs E16 `oly-notul` @6 | 0.8005 vs 0.7337: **+0.0668** (norm_match worse, past the 0.05 bar) |
+| `oly-notul-nm` K1−K6 vs E16 `oly-notul` | +0.0647 vs +0.0238: the plain loop earns 2.7x MORE depth under norm_match |
+| Sudoku solve rate @6 | plain 0.8 %, slot 0.0 % (E17 headline; not predicted) |
+| Olympiad answer accuracy @6 | plain 87.5 %, slot 84.6 % |
+
+Worth profile at 6,000 (mean CE change when the cells are replaced; negative = the model
+gets BETTER without them):
+
+| arm | zero | shuffle | wrong_seed | all_slots | offsets 0 / 1 / 2 / 3 / 4+ under zero |
+| --- | --- | --- | --- | --- | --- |
+| `oly-spandec-strict` | **−0.1393** | −0.0067 | −0.0970 | −0.1393 | −2.23 / −0.60 / +0.07 / +0.01 / +0.09 |
+| `sud-spandec-strict` | **−0.1903** | −0.0004 | +0.1670 | −0.1903 | −1.87 / −0.84 / −0.06 / +0.21 / +0.18 |
+
+On both corpora the coda is better off with the cells ZEROED, and the damage sits at the
+first two tokens after the slot (−1.9 to −2.2 nats at offset 0) while later offsets are
+helped (+0.18 to +0.21 at offsets 3 to 4 on Sudoku). `wrong_seed` on Sudoku is +0.167:
+the cells carry board-specific content the later offsets use, and the same cells mislead
+the first token of the next row. `shuffle` is near zero on both, so the coda reads its
+own slot's cell, not a bag.
 
 ## Verdict
+
+- **P-a FALSE.** The Sudoku gap is +0.2502, larger than +0.155 (and larger than the
+  +0.2136 recomputed from E17's own files).
+- **P-b TRUE.** The gap is positive.
+- **P-c FALSE.** The Olympiad gap is +0.2161, larger than +0.18 (recomputed +0.1728).
+- **P-d FALSE.** Sudoku slot K1−K6 is +0.0049, inside the 50 % residual band
+  [0.000, 0.010], not above 0.01.
+- **P-e TRUE.** K3−K6 is +0.0024 (Olympiad) and +0.0003 (Sudoku), both below 0.005.
+- **P-f FALSE on one of two.** Sudoku plain moved +0.010 (inside 0.05); Olympiad plain moved
+  +0.067 (outside). The Olympiad E16 numbers are not comparable to the current recipe.
+- **P-g TRUE.** Four of four healthy to 6,000, no tripwire.
+- **P-h TRUE (the check).** `all_slots` equals `zero` on both slot arms to four decimals;
+  the strict geometry fires on the math shapes.
+
+Status: failure (P-a, P-c, P-d, P-f failed). Binding clause: the gaps did not narrow, they
+grew by about 0.04 on both corpora under the shipped recipe, so E16/E17's verdict stands
+for the shipped recipe too and the math lane closes for the slot loop as currently defined.
+The one reading in the goal's own currency: `oly-spandec-strict` is the first slot arm on
+any corpus to read token K1−K6 above 0.005 with a CI clear of it (+0.0111), a sixth of the
+plain loop beside it (+0.0647), and its K3−K6 (+0.0024) equals the plain model's; on
+Sudoku the plain loop is flat and the slot loop reads +0.0049, all in the first two passes.
+
+## Updated hypothesis
+
+Two things moved and one did not. The ternary rule moved the PLAIN loop's depth use on
+Olympiad (K1−K6 0.024 → 0.065) while costing it 0.067 nats at 6,000, which is the same
+"price paid early, loop share up" trade the web panel measured at 5k versus 20k. The slot
+arms did not close their gap; they widened it, and the worth profile says why the CE is
+where it is: the cells hurt the first two tokens of every next span by about 2 nats and
+help the rest by 0.1 to 0.2. That offset-0 damage is the same on web text (the strict
+ruler's zero worth at offset 0), on Olympiad and on Sudoku, so it is a property of the
+strict cell write plus the span-decoder target, not of a corpus. It is not explained here;
+the candidate mechanisms are the span decoder training z toward the WHOLE next span while
+the coda needs the first token most, and token-state dropout at the cells. Test: the
+register panel's worth profiles (already queued) will read the same offsets; if the
+offset-0 damage is still ~2 nats with M cells, the write is the fault, not the capacity.
+Do not queue another math training arm for the slot loop until the offset-0 damage is
+understood on web text, where the runs are cheaper.
 
 (pending)

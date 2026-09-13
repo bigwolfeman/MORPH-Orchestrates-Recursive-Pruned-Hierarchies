@@ -1,0 +1,29 @@
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md)
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention c
+MORPHTransformer: 292.5M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+  Ternary QAT ON: scope=backbone threshold=0.5 mode=norm_match group=tensor dtype=fp16 modules=44 ({'backbone': 44, 'attention': 0, 'embeddings': 0}) params_ter
+  [VAL     250] loss=1.2414  ppl=3.46  ppl_tok=3.46  first_tok=4.3343  cf=-2.7119  lp/tok=20.76
+  [VAL     500] loss=1.0772  ppl=2.94  ppl_tok=2.94  first_tok=2.7859  cf=-1.3599  lp/tok=20.76
+  [VAL     750] loss=0.9964  ppl=2.71  ppl_tok=2.71  first_tok=2.3018  cf=-1.1080  lp/tok=20.76
+  [VAL    1000] loss=0.9208  ppl=2.51  ppl_tok=2.51  first_tok=2.2387  cf=-1.2032  lp/tok=20.76
+  [VAL    1250] loss=0.8718  ppl=2.39  ppl_tok=2.39  first_tok=2.2522  cf=-1.2454  lp/tok=20.76
+  [VAL    1500] loss=0.8497  ppl=2.34  ppl_tok=2.34  first_tok=2.3774  cf=-1.3881  lp/tok=20.76
+  [VAL    1750] loss=0.8403  ppl=2.32  ppl_tok=2.32  first_tok=2.5414  cf=-1.5575  lp/tok=20.76
+  [VAL    2000] loss=0.8286  ppl=2.29  ppl_tok=2.29  first_tok=2.6691  cf=-1.6912  lp/tok=20.76
+  [VAL    2250] loss=0.8226  ppl=2.28  ppl_tok=2.28  first_tok=3.0852  cf=-2.1087  lp/tok=20.76
+  [VAL    2500] loss=0.8143  ppl=2.26  ppl_tok=2.26  first_tok=3.2297  cf=-2.2567  lp/tok=20.76
+  [VAL    2750] loss=0.8090  ppl=2.25  ppl_tok=2.25  first_tok=3.0563  cf=-2.0860  lp/tok=20.76
+  [VAL    3000] loss=0.8065  ppl=2.24  ppl_tok=2.24  first_tok=3.1463  cf=-2.1783  lp/tok=20.76
+  [VAL    3250] loss=0.8041  ppl=2.23  ppl_tok=2.23  first_tok=3.1815  cf=-2.2155  lp/tok=20.76
+  [VAL    3500] loss=0.8028  ppl=2.23  ppl_tok=2.23  first_tok=3.2588  cf=-2.2941  lp/tok=20.76
+  [VAL    3750] loss=0.7999  ppl=2.23  ppl_tok=2.23  first_tok=3.3198  cf=-2.3590  lp/tok=20.76
+  [VAL    4000] loss=0.7977  ppl=2.22  ppl_tok=2.22  first_tok=3.3048  cf=-2.3457  lp/tok=20.76
+  [VAL    4250] loss=0.7955  ppl=2.22  ppl_tok=2.22  first_tok=3.2718  cf=-2.3134  lp/tok=20.76
+  [VAL    4500] loss=0.7930  ppl=2.21  ppl_tok=2.21  first_tok=3.3031  cf=-2.3461  lp/tok=20.76
+  [VAL    4750] loss=0.7735  ppl=2.17  ppl_tok=2.17  first_tok=3.3318  cf=-2.3739  lp/tok=20.76
+  [VAL    5000] loss=0.7714  ppl=2.16  ppl_tok=2.16  first_tok=3.3368  cf=-2.3791  lp/tok=20.76
+  [VAL    5250] loss=0.7690  ppl=2.16  ppl_tok=2.16  first_tok=3.2987  cf=-2.3418  lp/tok=20.76
+  [VAL    5500] loss=0.7667  ppl=2.15  ppl_tok=2.15  first_tok=3.3380  cf=-2.3830  lp/tok=20.76
+  [VAL    5750] loss=0.7634  ppl=2.15  ppl_tok=2.15  first_tok=3.4320  cf=-2.4757  lp/tok=20.76
+Final checkpoint: /home/wolfe/morph-to/checkpoints/morph/sud-spandec-strict/step_6000.pt
+Final val_loss=0.7602  ppl=2.14  val/attn_lift=0.8001  val/attn_lift_alllayers=0.6699  val/attn_lift_first_tok=1.0000  val/attn_lift_first_tok_alllayers=1.0000 

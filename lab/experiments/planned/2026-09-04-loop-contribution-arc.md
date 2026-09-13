@@ -371,6 +371,10 @@ files (Results sections filled, one probe each still pending).
 | 09-12 | strict-critic | within-context pass-vs-pass critic | web | +0.0012 (−0.0000) | −0.0025; −0.0106 vs disc | critic at chance (0.52) for 5000 steps; one pass worth 0.001–0.003 nats to the coda | `planned/2026-09-12-arc-core-token-and-critic.md` |
 | 09-12 | strict-coretok | tokens+cells through the core in TRAINING only (aux CE) | web | +0.0005 (−0.0003) | **−0.0684**; 0.35× rate | core becomes a 1.10-nat token map; passes still 0.0005 | same file |
 | 09-13 | coretok aux-path depth probe (Spark) | forced AUX depth 1,2,3,6 on the coretok ckpt; slot loop pinned | web | aux K1−K6 **+0.0102** [+0.0093, +0.0110] (K3−K6 +0.0012) | aux − shipped −0.0063 @1 → −0.0165 @6 | span-restricted token loop earns 20x the slot loop and ~1/3 of a plain loop (0.028–0.033); the restriction itself is free (budget-web-span 0.0301 vs full 0.0279); Q-1/Q-2 false, Q-3 true | `failures/2026-09-13-arc-loop-reads-tokens.md` |
+| 09-13 | oly-notul-nm | plain, norm_match, Olympiad graduation curriculum | Olympiad clean | **+0.0647** [+0.0602, +0.0691] (+0.0024) | 0.8005 @6, +0.067 vs E16 absmean plain | plain loop earns 2.7x more depth under norm_match at a CE cost | `failures/2026-09-12-arc-math-under-norm-match.md` |
+| 09-13 | oly-spandec-strict | strict slot loop + span decoder on Olympiad | Olympiad clean | **+0.0111** [+0.0085, +0.0136] (+0.0024) | +0.2161 [+0.2015, +0.2313] vs plain, paired | first slot arm with K1−K6 > 0.005 clear of zero; zero worth −0.139 (offset 0 −2.23) | same file |
+| 09-13 | sud-notul-nm | plain, norm_match, Sudoku | Sudoku | +0.0011 (−0.0001) | 0.5085 @6, +0.010 vs E17 plain; solve 0.8 % | plain loop flat on Sudoku under both rules | same file |
+| 09-13 | sud-spandec-strict | strict slot loop + span decoder on Sudoku | Sudoku | +0.0049 [+0.0047, +0.0052] (+0.0003) | +0.2502 [+0.2469, +0.2534] vs plain, paired; solve 0 % | zero worth −0.190 (offset 0 −1.87, offsets 3–4 +0.2); wrong_seed +0.167; math lane closed for the slot loop as defined | same file |
 
 **Lane 6: math**
 

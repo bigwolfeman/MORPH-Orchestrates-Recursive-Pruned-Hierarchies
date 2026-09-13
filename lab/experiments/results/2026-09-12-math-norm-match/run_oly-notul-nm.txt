@@ -1,0 +1,27 @@
+MORPHTransformer: 265.1M params, loop 4:6×6:4 (kernels=fused, residual=hc_cayley(n=4))
+  Ternary QAT ON: scope=backbone threshold=0.5 mode=norm_match group=tensor dtype=fp16 modules=43 ({'backbone': 43, 'attention': 0, 'embeddings': 0}) params_ter
+  [VAL     250] loss=4.0272  ppl=56.10
+  [VAL     500] loss=3.1777  ppl=23.99
+  [VAL     750] loss=3.2752  ppl=26.45
+  [VAL    1000] loss=3.3816  ppl=29.42
+  [VAL    1250] loss=3.3528  ppl=28.58
+  [VAL    1500] loss=3.2281  ppl=25.23
+  [VAL    1750] loss=2.2063  ppl=9.08
+  [VAL    2000] loss=2.2230  ppl=9.24
+  [VAL    2250] loss=2.2667  ppl=9.65
+  [VAL    2500] loss=2.3091  ppl=10.07
+  [VAL    2750] loss=2.3471  ppl=10.46
+  [VAL    3000] loss=2.0346  ppl=7.65
+  [VAL    3250] loss=1.4010  ppl=4.06
+  [VAL    3500] loss=1.4706  ppl=4.35
+  [VAL    3750] loss=1.5042  ppl=4.50
+  [VAL    4000] loss=1.5202  ppl=4.57
+  [VAL    4250] loss=1.5596  ppl=4.76
+  [VAL    4500] loss=1.4138  ppl=4.11
+  [VAL    4750] loss=0.4057  ppl=1.50
+  [VAL    5000] loss=0.4348  ppl=1.54
+  [VAL    5250] loss=0.4671  ppl=1.60
+  [VAL    5500] loss=0.4974  ppl=1.64
+  [VAL    5750] loss=0.5235  ppl=1.69
+Final checkpoint: /home/wolfe/morph-to/checkpoints/morph/oly-notul-nm/step_6000.pt
+Final val_loss=0.5570  ppl=1.75
