@@ -353,6 +353,81 @@ def test_editing_a_pad_cell_moves_no_logit_and_editing_a_written_one_does():
     assert float(dw.max()) > 0.0, "a WRITTEN cell reached nothing — the probe is blind"
 
 
+def test_the_pad_cells_are_out_of_the_codas_key_set():
+    """The structural half of "a pad is inert", on the SHIPPED coda relation.
+
+    The logit test above cannot see this one on its own: a pad's carrier is also zeroed,
+    so with the narrowing gone a pad still contributes a zero VALUE — but it contributes a
+    softmax weight, and it is a key the conv and the value shift walk over. This asserts
+    the relation directly, two-sided: a pad's column is closed for every query but itself,
+    and a WRITTEN cell's column is still open.
+    """
+    m = _model(prefix_k=K6, prefix_source="trajectory", slot_max_depth=8,
+               slot_depth_fixed=3)                       # cells 2,3,4 are pads
+    _ids0, inp, _lab, layout = _batch(K6)
+    _c, pad, pad_pos, _h, _d, _t = _cells_of(m, inp, layout)
+    _f, _fr, ckw, _cr = m._tul_tg_kwargs(layout)
+    narrowed = m._tul_pad_cell_narrow(ckw, pad_pos)
+    assert bool(pad_pos.any()), "fixture: no pad cell at this depth"
+    L = pad_pos.shape[1]
+    eye = torch.eye(L, dtype=torch.bool).view(1, 1, L, L)
+    for key in ("tg_allow", "tg_comp_allow"):
+        a_, b_ = ckw[key], narrowed[key]
+        cols = pad_pos.view(pad_pos.shape[0], 1, 1, L) & ~eye
+        assert not bool((b_ & cols).any()), f"{key}: a pad cell is still a readable key"
+        # two-sided: the NON-pad columns are untouched, so the narrowing cut only pads
+        assert torch.equal(b_ & ~cols, a_ & ~cols), f"{key}: the narrowing cut a real cell"
+        assert bool((a_ & cols).any()), "the unnarrowed relation never allowed a pad — vacuous"
+
+
+def test_the_shipped_coda_is_handed_the_narrowed_relation():
+    """The SHIPPED PATH, not the helper. `test_the_pad_cells_are_out_of_the_codas_key_set`
+    calls `_tul_pad_cell_narrow` itself, so it stays green when the FORWARD stops calling
+    it — measured: that sabotage was MISSED on 2026-09-13, the same defect class as the
+    core-token aux test's C1 miss. This spies on what `_back_region` actually receives."""
+    m = _model(prefix_k=K6, prefix_source="trajectory", slot_max_depth=8,
+               slot_depth_fixed=3)
+    _ids0, inp, _lab, layout = _batch(K6)
+    _c, _p, pad_pos, _h, _d, _t = _cells_of(m, inp, layout)
+    assert bool(pad_pos.any()), "fixture: no pad cell at this depth"
+    seen: dict = {}
+    real = m._back_region
+
+    def spy(x, x0, bg, ids=None, inject_keep=None, attn_kwargs=None, **kw):
+        seen["kw"] = attn_kwargs
+        return real(x, x0, bg, ids, inject_keep=inject_keep, attn_kwargs=attn_kwargs, **kw)
+
+    m._back_region = spy
+    try:
+        with torch.no_grad():
+            m(inp, labels=None, slot_layout=layout)
+    finally:
+        m._back_region = real
+    L = pad_pos.shape[1]
+    eye = torch.eye(L, dtype=torch.bool).view(1, 1, L, L)
+    cols = pad_pos.view(pad_pos.shape[0], 1, 1, L) & ~eye
+    for key in ("tg_allow", "tg_comp_allow"):
+        got = seen["kw"][key]
+        assert not bool((got & cols).any()), (
+            f"the coda was handed a relation that still lets a query read a PAD cell "
+            f"({key}) — the forward is not calling `_tul_pad_cell_narrow`")
+
+
+def test_a_pad_cell_keeps_its_own_self_edge():
+    """Deliberate: the compressed branch keeps ``j == i``, and an all-`-inf` softmax row is
+    0 under SDPA and NaN under an explicit one (morph/model/CLAUDE.md). Nothing reads a pad
+    cell's output, so its self-edge costs nothing and removes a NaN class."""
+    m = _model(prefix_k=K6, prefix_source="trajectory", slot_max_depth=8,
+               slot_depth_fixed=3)
+    _ids0, inp, _lab, layout = _batch(K6)
+    _c, _p, pad_pos, _h, _d, _t = _cells_of(m, inp, layout)
+    _f, _fr, ckw, _cr = m._tul_tg_kwargs(layout)
+    nb = m._tul_pad_cell_narrow(ckw, pad_pos)["tg_comp_allow"]
+    L = pad_pos.shape[1]
+    diag = nb[:, 0].diagonal(dim1=-2, dim2=-1)                      # [B, L]
+    assert bool(diag[pad_pos].all()), "a pad cell lost its own self-edge"
+
+
 def test_a_pad_cells_carrier_is_exactly_zero_including_the_pass_embedding():
     """`E_pass` is added AFTER the projection, so zeroing the SOURCE is not enough.
 
