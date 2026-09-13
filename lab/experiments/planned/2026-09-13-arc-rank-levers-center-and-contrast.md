@@ -194,6 +194,23 @@ TARGETS, and `fm.enabled: false` builds nothing. So the 2026-08-27 verdict stand
 unchanged: **SIGReg on the slot states is untested, not refuted.** It is the named
 alternative to C1 in the design note and it is not in this panel.
 
+
+### Method amendment, 2026-09-13 (baseline re-read; predictions unchanged)
+
+The strict ruler's `val/slot_eff_rank` 5.7598 / `val/slot_pairwise_cos` 0.7104 quoted
+above comes from the trainer's last `[VAL]` line and did NOT reproduce on the saved
+checkpoint: the model's own `tul_slot_state_probe`, run by
+`lab/divergence/slot_rank_anatomy.py` on the DGX Spark, reads 11.9597 / 0.5635 on the
+480-row probe panel and 13.8466 / 0.5201 on the trainer's own val recipe
+(`lab/experiments/results/2026-09-13-rank-anatomy/README.md`). The cause is open
+(a follow-up is measuring it). Scoring rule for every rank prediction in this file: the
+partner's baseline is the SAME instrument on the SAME rows as the arm (the sweep's 480
+rows, per-row median), never the trainer's logged figure. Rank predictions stated as
+"vs 5.7598" are scored against that re-read baseline; the predicted DIRECTION and the
+thresholds are unchanged. Also recorded from the same instrument: the prelude makes the
+rank (seed 2.24 to entry 12.75 per row), six passes leave it at 13.17, and the prefix
+write cuts it to 7.16 while doubling the cell count.
+
 ## Predictions (frozen, one line each)
 
 **C1, `slot-spandec-strict-center` against `slot-spandec-strict`:**

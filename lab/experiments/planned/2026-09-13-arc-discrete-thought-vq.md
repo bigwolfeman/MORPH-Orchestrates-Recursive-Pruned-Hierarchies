@@ -167,6 +167,23 @@ claim in the source (see Not verified).
 8. The matched-compute row: `plain-depth1` at 14 block-passes/token is 0.25 nats AHEAD of
    spandec-mask and 0.33 ahead of the mask ruler at 5k. Every slot filing carries it.
 
+
+### Method amendment, 2026-09-13 (baseline re-read; predictions unchanged)
+
+The strict ruler's `val/slot_eff_rank` 5.7598 / `val/slot_pairwise_cos` 0.7104 quoted
+above comes from the trainer's last `[VAL]` line and did NOT reproduce on the saved
+checkpoint: the model's own `tul_slot_state_probe`, run by
+`lab/divergence/slot_rank_anatomy.py` on the DGX Spark, reads 11.9597 / 0.5635 on the
+480-row probe panel and 13.8466 / 0.5201 on the trainer's own val recipe
+(`lab/experiments/results/2026-09-13-rank-anatomy/README.md`). The cause is open
+(a follow-up is measuring it). Scoring rule for every rank prediction in this file: the
+partner's baseline is the SAME instrument on the SAME rows as the arm (the sweep's 480
+rows, per-row median), never the trainer's logged figure. Rank predictions stated as
+"vs 5.7598" are scored against that re-read baseline; the predicted DIRECTION and the
+thresholds are unchanged. Also recorded from the same instrument: the prelude makes the
+rank (seed 2.24 to entry 12.75 per row), six passes leave it at 13.17, and the prefix
+write cuts it to 7.16 while doubling the cell count.
+
 ## Predictions (frozen)
 
 Written before any GPU step of either arm. Probabilities are the builder's.
