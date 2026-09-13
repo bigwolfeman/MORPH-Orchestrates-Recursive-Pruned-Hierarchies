@@ -36,10 +36,11 @@ from .recur_gate import RecurrenceGate
 from .mhc import ChannelInject, MORPHBlock, PassLoRA, DEFAULT_CHANNEL_DIMS
 from .sigreg import sigreg_epps_pulley
 from .sparsity import MortarLinear
-from .tul import (TULConfig, TULGate, TULGateConfig, TULGradPass, TULReread, TULSlotChain,
+from .tul import (TULCenterExit, TULConfig, TULGate, TULGateConfig, TULGradPass,
+                  TULReread, TULRowContrast, TULSlotChain,
                   TULSlotRegister, TULSlots,
                   boundary_token_index,
-                  compact_index,
+                  compact_index, next_span_pool,
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
                   scatter_positions,
                   window_drop_mask)
@@ -1668,6 +1669,50 @@ class MORPHTransformer(nn.Module):
                     "REPLACES the core loop and writes ONE plan per slot through W_prefix.")
             self.tul_register = TULSlotRegister(d, cfg.tul.slot_cells,
                                                 cfg.tul.slot_cell_init == "distinct")
+
+        # ── C1: the row-centered exit (tul.center_exit; morph/model/tul.py) ───────
+        # Built here, beside the other slot-loop levers, and RNG-NEUTRAL by construction:
+        # the only parameter is `b_center`, drawn by `torch.zeros`, so a center arm's base
+        # weights are byte-identical to its ruler's whatever the build order.
+        #
+        # `cfg.tul.center_exit` already refuses `tokens_through_core` and
+        # `loop_reads_tokens` in `TULConfig.__post_init__` (config-only refusals live
+        # there, per the rule at the head of this block). The two below need the MODEL's
+        # shape and cannot be seen from the config.
+        self.tul_center: TULCenterExit | None = None
+        if cfg.tul is not None and cfg.tul.center_exit:
+            if getattr(cfg, "fm", None) is not None:
+                raise NotImplementedError(
+                    "tul.center_exit with an FM planner (cfg.fm): the planner REPLACES the "
+                    "core loop and DETACHES its plan before W_prefix, so there is no looped "
+                    "exit state and centering could not reach the loop it is aimed at. "
+                    "Pick one.")
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.center_exit needs a core loop (model.n_core > 0): the lever centers "
+                    "the LOOP's exit state and there are no passes.")
+            self.tul_center = TULCenterExit(
+                d, self._n_streams if self._is_hc else 0)
+
+        # ── C2: the within-row contrastive objective (tul.row_contrast_lambda) ────
+        # Built beside the register, and the POSITION does not matter, which is the
+        # point: `nn.Linear` draws on the GLOBAL RNG stream before its weight is
+        # overwritten, so `TULRowContrast` snapshots that stream and restores it. A
+        # contrast arm's base weights are byte-identical to its ruler's and no module
+        # built after this one is shifted.
+        self.tul_contrast: TULRowContrast | None = None
+        if cfg.tul is not None and cfg.tul.row_contrast_lambda > 0.0:
+            if getattr(cfg, "fm", None) is not None:
+                raise NotImplementedError(
+                    "tul.row_contrast_lambda > 0 with an FM planner (cfg.fm): the planner "
+                    "REPLACES the core loop and detaches its plan, so the term would "
+                    "shape nothing the loop does. Pick one.")
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.row_contrast_lambda > 0 needs a core loop (model.n_core > 0): the "
+                    "term exists to make the LOOP write distinct states and there are no "
+                    "passes.")
+            self.tul_contrast = TULRowContrast(d, cfg.tul.row_contrast_tau)
 
         # ── The slot chain (TULConfig.slot_chain) ─────────────────────────────────
         # Zero-init, no RNG draw: step 0 is the ruler's forward bit for bit.
@@ -5403,6 +5448,61 @@ class MORPHTransformer(nn.Module):
                                                         eg.score))
         return loss
 
+    def _tul_row_contrast_loss(self, h_slots: Tensor, x: Tensor, layout: SlotLayout,
+                               stats: dict | None = None) -> Tensor:
+        """``tul.row_contrast_lambda`` -- can a row's next spans be told apart by the
+        states that are supposed to forecast them?
+
+        THE DEFECT IT IS BUILT ON. A row's written slot states sit at effective rank 5.76
+        in 1024 dimensions with mean pairwise cosine 0.71 on the strict ruler. SIGReg and
+        the row centering attack that GEOMETRY directly; this term attacks the JOB
+        instead. It hands the row's slots a retrieval task that indistinguishable states
+        cannot do, and reports the score.
+
+        THE ANCHOR, THE TARGET AND THE NEGATIVES.
+
+        * anchor -- slot ``i``'s exit state, read at the SAME seam the MUX and the span
+          decoder read, through the SAME ``_readout`` stream mean, then through the term's
+          own ``W_contrast``. LIVE: the gradient reaches the loop, the seed and the core.
+        * target -- span ``i+1``'s pooled PRELUDE token states, i.e. the mean over that
+          span's token positions of ``_readout(x)`` where ``x`` is the prelude output THIS
+          forward already built under ``_tul_tg_kwargs``'s relation. ``x`` is DETACHED
+          before the readout, so the target path trains ``W_contrast`` and nothing else --
+          not the prelude, not ``lm_mixer``, not the embedding table (the
+          ``mux_detach_head`` rule: ``embed.lm_weight()`` IS the input embedding table and
+          an auxiliary that writes into it is what made arm v1a diverge at step 2800).
+        * negatives -- the OTHER valid slots of the SAME row, and nothing else. Two rows
+          of a batch never mix, and a pad slot is never a key or an anchor.
+
+        WHY THE PRELUDE'S STATES AND NOT THE SPAN DECODER'S TOKEN IDS. The decoder already
+        grades ``z`` token by token; a second token-level term would be the same
+        supervision at a different temperature. This one grades ``z`` against a
+        REPRESENTATION of the span and scores it by RANKING within the row, which is what
+        makes ``row_contrast_acc`` a distinctness reading rather than a second CE.
+
+        No reader is added and no reader is changed: the term is a loss only. The state the
+        coda gets is the one it would have got, including under
+        :class:`~morph.model.tul.TULCenterExit` (the centering runs upstream of this seam,
+        so the two levers compose and this term scores the centered state).
+        """
+        con = self.tul_contrast
+        assert con is not None
+        z = self._readout(h_slots)                                      # [B, S, C]
+        # Detach BEFORE the readout: `_readout` ends in `lm_mixer` + `final_norm`, both
+        # trained modules, and detaching after would train them from the target path.
+        tok = self._readout(x.detach())                                 # [B, L, C]
+        pool, ok = next_span_pool(tok, layout)                          # [B, S, C], [B, S]
+        loss, acc, n_rows = con(z, pool, ok)
+        if stats is not None:
+            # `row_contrast_acc` is the number to read: 1/n_valid is chance, and the term
+            # itself is log(n_valid) at chance. `row_contrast_n_anchors` is the count the
+            # two are averaged over, so a reading cannot be mistaken for a full batch when
+            # most rows were dropped for having a single anchor.
+            stats["row_contrast_acc"] = float(acc)
+            stats["row_contrast_n_rows"] = float(n_rows)
+            stats["row_contrast_n_anchors"] = float(ok.sum())
+        return loss
+
     def _tul_sigreg_loss(self, h_slots: Tensor, layout: SlotLayout) -> Tensor:
         """SIGReg over the VALID slot states (LeJEPA; see morph/model/sigreg.py).
 
@@ -5708,6 +5808,7 @@ class MORPHTransformer(nn.Module):
             spandec_loss, spandec_stats, _egrad_src = None, {}, None
             oracle_z_loss, oracle_z_stats = None, {}
             spandec_pass_loss, spandec_pass_stats = None, {}
+            rcon_loss, rcon_stats = None, {}
             db_traj = mep_keep = None
         elif tc.loop_reads_tokens:
             # ── THE LOOP READS TOKENS (tul.loop_reads_tokens, 2026-09-13) ───────────
@@ -5765,6 +5866,15 @@ class MORPHTransformer(nn.Module):
                             if self.tul_spandec is not None else None)
             sigreg_loss = (self._tul_sigreg_loss(h_slots, layout)
                            if tc.sigreg_lambda > 0.0 else None)
+            # C2 runs here unchanged: this arm HAS a per-slot state at a reader seam, and
+            # the term reads it exactly as the span decoder above does. C1 does NOT --
+            # `TULConfig` refuses `center_exit` with `loop_reads_tokens`, because this arm
+            # writes nothing through `prefix_project` and centering `h_slots` would move
+            # the local losses while the coda kept reading the uncentered state.
+            rcon_stats = {}
+            rcon_loss = (self._tul_row_contrast_loss(h_slots, x, layout,
+                                                     stats=rcon_stats)
+                         if self.tul_contrast is not None else None)
             _egrad_src = None
         elif self.fm_planner is not None:
             # FM1 (morph/model/tul_fm.py). The planner replaces the core loop; the plan
@@ -5776,6 +5886,7 @@ class MORPHTransformer(nn.Module):
             spandec_loss, spandec_stats, _egrad_src = None, {}, None
             oracle_z_loss, oracle_z_stats = None, {}
             spandec_pass_loss, spandec_pass_stats = None, {}
+            rcon_loss, rcon_stats = None, {}
             h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
             x_coda = scatter_positions(xn, pos, values)
@@ -5834,6 +5945,23 @@ class MORPHTransformer(nn.Module):
             _S = layout.slot_index.shape[1]
             if self.tul_cond is not None:
                 h_slots = self._tul_cond_apply(h_slots, n_slots=_S, m_cells=_m)
+            # ── C1: the row-centered exit (tul.center_exit) ────────────────────────
+            # Placed HERE, on the compact CELL axis, after the loop and after the
+            # think-once stack, and BEFORE the register's mean. Two reasons and both are
+            # load-bearing:
+            #   * this is the last point that is upstream of EVERY reader. The MUX, the
+            #     span decoder, SIGReg, the energy and `prefix_project` all take the state
+            #     from below this line, so ONE edit centers what all five see. (The gate's
+            #     budget, `detach_z` and the eval plan ablation sit further down and are
+            #     applied to the centered state, unchanged.)
+            #   * on the CELL axis the centering is per CELL INDEX for free: cell i of
+            #     every valid slot against cell i of every other. Below the mean the
+            #     register's within-slot axis has already been collapsed and that reading
+            #     could not be had.
+            # `self.tul_center is None` on every model without the knob, so the line
+            # traces out and the forward is bit-identical.
+            if self.tul_center is not None:
+                h_slots = self.tul_center(h_slots, layout.slot_valid, m_cells=_m)
             _reg_cells = None
             if _m > 1:
                 _reg_cells = h_slots.reshape(h_slots.shape[0], _S, _m, *h_slots.shape[2:])
@@ -5964,6 +6092,17 @@ class MORPHTransformer(nn.Module):
             spandec_loss = (self._tul_spandec_loss(h_slots, input_ids, layout,
                                                    stats=spandec_stats)
                             if self.tul_spandec is not None else None)
+            # ── C2: the within-row contrastive term (tul.row_contrast_lambda) ──
+            # Read at the SAME seam as the MUX and the span decoder: the loop's exit
+            # state, before the gate's budget, before `detach_z` and before the eval-only
+            # plan ablation. `x` is the prelude output THIS forward already computed
+            # under `_front_kw` -- no second front is built, so the term cannot score a
+            # strict model from an unrestricted prelude (the 2026-09-13 horizon-grid
+            # defect; `_tul_tg_kwargs` is the ONE home).
+            rcon_stats: dict = {}
+            rcon_loss = (self._tul_row_contrast_loss(h_slots, x, layout,
+                                                     stats=rcon_stats)
+                         if self.tul_contrast is not None else None)
             # ── the oracle-z per-pass teacher (tul.oracle_z) ──────────────────
             # Read on the SAME trajectory `mux_every_pass` and the staged target use, and
             # built here because it needs the realised per-slot depths beside it. Training
@@ -6234,6 +6373,25 @@ class MORPHTransformer(nn.Module):
             _dw = tc.spandec_weight * spandec_loss
             groups["spandec_weighted"] = _dw.detach()
             groups["loss"] = groups["loss"] + _dw
+
+        if rcon_loss is not None and groups is not None:
+            # Same contract as `spandec_weighted` and `sigreg_weighted`: the WEIGHTED term
+            # is exposed so train.py can subtract it and keep train/loss and the val loss
+            # on the MODEL's CE -- an auxiliary inside the reported loss makes the arm
+            # incomparable to its control and fires the ppl divergence guard on the
+            # objective (the spectral-penalty precedent).
+            #
+            # `row_contrast` is the raw term and it has an ABSOLUTE reference: it reads
+            # log(n_valid) and `row_contrast_acc` reads 1/n_valid when the row's slot
+            # states are indistinguishable. `row_contrast_n_rows` is how many rows of the
+            # batch carried it (a row needs two anchors).
+            groups = dict(groups)
+            groups["row_contrast"] = rcon_loss.detach()
+            for _k, _v in rcon_stats.items():
+                groups[_k] = rcon_loss.new_tensor(_v)
+            _rw = tc.row_contrast_lambda * rcon_loss
+            groups["row_contrast_weighted"] = _rw.detach()
+            groups["loss"] = groups["loss"] + _rw
 
         if spandec_pass_loss is not None and groups is not None:
             # Same contract as `spandec_weighted`: the WEIGHTED term is exposed so train.py
@@ -6855,6 +7013,16 @@ class MORPHTransformer(nn.Module):
             h_slots = self._tul_cond_apply(
                 h_slots, n_slots=layout.slot_index.shape[1],
                 m_cells=int(self.cfg.tul.slot_cells))
+        # ── C1 (tul.center_exit) ─────────────────────────────────────────────────
+        # Same contract as the `cond_layers` line above, and for the same reason: this
+        # probe reports "the WRITTEN slot states, read at the point the coda reads them",
+        # and on a center arm the coda reads the CENTERED state. Without this line the
+        # arm's headline instrument would report the loop's raw exit and be blind to the
+        # only thing the arm does. `tul_center is None` on every other model, so no queued
+        # run's reading moves.
+        if self.tul_center is not None:
+            h_slots = self.tul_center(h_slots, layout.slot_valid,
+                                      m_cells=int(self.cfg.tul.slot_cells))
         z = self._readout(h_slots).float()                     # [B, S, C] or [B, S*M, C]
         valid = layout.slot_valid
         # ── the Thought Register (tul.slot_cells) ────────────────────────────────

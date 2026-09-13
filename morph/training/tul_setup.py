@@ -33,7 +33,8 @@ __all__ = ["TulRuntime", "build_tul_runtime", "build_boundary_rule",
 # reads below; tests/test_tul_setup_keys.py checks every shipped config against it.
 KNOWN_TUL_KEYS = frozenset({
     "activate_at", "bcast", "boundary_chars", "boundary_substrings", "carry",
-    "center_bag_mean", "coda_sees_slots", "coda_span_heads", "coda_span_source",
+    "center_bag_mean", "center_exit", "coda_sees_slots", "coda_span_heads",
+    "coda_span_source",
     "coda_span_weight", "coda_token_cut", "coda_token_input", "cond_layers",
     "core_stage_cond", "core_token_aux", "core_token_aux_weight",
     "critic_every", "critic_eps", "critic_replay_groups", "critic_weight",
@@ -57,6 +58,7 @@ KNOWN_TUL_KEYS = frozenset({
     "per_slot_embed_std", "pass_lora_rank", "pass_lora_targets",
     "pass_residual_lambda", "plast_weight", "prefix_k", "prefix_source", "progressive_p",
     "reinject_seed_every_pass", "recur_gate", "recur_gate_bias",
+    "row_contrast_lambda", "row_contrast_tau",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_cells", "slot_cell_init", "slot_chain", "slot_chain_detach",
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
@@ -269,6 +271,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         prefix_source=str(tc.get("prefix_source", "exit")),
         slot_cells=int(tc.get("slot_cells", 1)),
         slot_cell_init=str(tc.get("slot_cell_init", "distinct")),
+        center_exit=bool(tc.get("center_exit", False)),
+        row_contrast_lambda=float(tc.get("row_contrast_lambda", 0.0)),
+        row_contrast_tau=float(tc.get("row_contrast_tau", 0.1)),
         loop_reads_tokens=bool(tc.get("loop_reads_tokens", False)),
         core_token_aux=bool(tc.get("core_token_aux", False)),
         core_token_aux_weight=float(tc.get("core_token_aux_weight", 1.0)),
@@ -396,6 +401,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "pass_residual_lambda": model_cfg.pass_residual_lambda,
         "prefix_source": model_cfg.prefix_source,
         "slot_cells": model_cfg.slot_cells,
+        "center_exit": model_cfg.center_exit,
+        "row_contrast_lambda": model_cfg.row_contrast_lambda,
+        "row_contrast_tau": model_cfg.row_contrast_tau,
         "slot_cell_init": model_cfg.slot_cell_init,
         "loop_reads_tokens": model_cfg.loop_reads_tokens,
         "core_token_aux": model_cfg.core_token_aux,
@@ -541,6 +549,34 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               "Read `val/slot_cell_eff_rank` - the rank WITHIN a slot - beside "
               "`val/slot_eff_rank` "
               "(lab/experiments/planned/2026-09-13-arc-thought-register.md)",
+              flush=True)
+    if model_cfg.center_exit:
+        print("  TUL ROW-CENTERED EXIT ON (tul.center_exit): after the loop and the "
+              "think-once stack, every VALID slot's exit state has the ROW's mean over "
+              "its valid slots subtracted and ONE learned bias `b_center` (zero-init) "
+              "added back. Pads are untouched; at slot_cells > 1 each CELL INDEX is "
+              "centered separately across the row. Every reader sees it - the MUX, the "
+              "span decoder, SIGReg, the energy and the coda's prefix write - because it "
+              "is applied to the CARRIER at the one seam upstream of all five. Aimed at "
+              "`val/slot_pairwise_cos` 0.7104: READ THAT, not `val/slot_eff_rank`, which "
+              "already centers its covariance globally and so cannot see a shared offset "
+              "at all. PRECEDENT: `tul.center_bag_mean` on the SEED (arm tul_center, "
+              "2026-08-27) FAILED its < 0.20 cosine prediction (0.337-0.578 vs a control's "
+              "0.485-0.589) and bought +0.0015 nats of loop worth "
+              "(lab/experiments/planned/2026-09-13-arc-rank-levers-center-and-contrast.md)",
+              flush=True)
+    if model_cfg.row_contrast_lambda > 0.0:
+        print(f"  TUL ROW CONTRAST ON: row_contrast_lambda="
+              f"{model_cfg.row_contrast_lambda} tau={model_cfg.row_contrast_tau} - an "
+              "InfoNCE term WITHIN each row: span i+1's pooled prelude states must pick "
+              "slot i's exit state out of the row's other valid slots. Negatives are the "
+              "row's OTHER slots only; pads are never keys; the pooled targets are "
+              "DETACHED, so the term trains the WRITE and `W_contrast`, never the prelude "
+              "or the embedding table. It has an ABSOLUTE reference: with the row's states "
+              "indistinguishable the term reads log(n_valid) and `tul/row_contrast_acc` "
+              "reads 1/n_valid. READ `tul/row_contrast_acc` - it is the direct "
+              "distinctness number the rank-collapse lane has never had "
+              "(lab/experiments/planned/2026-09-13-arc-rank-levers-center-and-contrast.md)",
               flush=True)
     if model_cfg.prefix_source != "exit":
         print(f"  TUL PREFIX SOURCE = {model_cfg.prefix_source!r} (prefix_k "

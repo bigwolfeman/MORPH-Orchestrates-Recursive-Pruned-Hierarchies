@@ -134,7 +134,8 @@ def evaluate(
                 _l -= float(out["spandec_weighted"])
             for _aux2 in ("egrad_weighted", "pass_res_weighted", "oracle_z_weighted",
                           "spandec_pass_weighted", "coda_span_weighted",
-                          "core_token_aux_weighted", "critic_weighted"):
+                          "core_token_aux_weighted", "critic_weighted",
+                          "row_contrast_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -154,7 +155,12 @@ def evaluate(
             if "sigreg" in out:
                 acc.setdefault("val/sigreg", []).append(float(out["sigreg"]))
             for _mk in ("mux_local", "mux_kl", "mux_entropy", "mux_null", "mux_rel",
-                        "mux_n_supervised", "spandec", "spandec_ce", "spandec_n_tokens"):
+                        "mux_n_supervised", "spandec", "spandec_ce", "spandec_n_tokens",
+                        # tul.row_contrast_lambda: `row_contrast_acc` is the distinctness
+                        # reading (1/n_valid is chance) and `row_contrast` its term
+                        # (log n_valid at chance). Both belong beside val/slot_pairwise_cos.
+                        "row_contrast", "row_contrast_acc", "row_contrast_n_rows",
+                        "row_contrast_n_anchors"):
                 if _mk in out:
                     acc.setdefault(f"val/{_mk}", []).append(float(out[_mk]))
             if "ce_tokens_no_slots" in out:
@@ -3228,6 +3234,7 @@ def main(cfg: DictConfig) -> None:
                         "pass_res_weighted", "oracle_z_weighted",
                         "spandec_pass_weighted", "coda_span_weighted",
                         "core_token_aux_weighted",
+                        "row_contrast_weighted",   # tul.row_contrast_lambda, 2026-09-13
                         "critic_weighted"):  # arc E10 / 2026-09-12
                 if isinstance(out, dict) and out.get(_ak) is not None:
                     _lv = _lv - float(out[_ak])
@@ -3361,6 +3368,8 @@ def main(cfg: DictConfig) -> None:
                            "critic_agree_traj", "critic_agree_pert", "critic_n_traj",
                            "critic_n_pert", "critic_gap_traj", "critic_gap_pert",
                            "critic_replays",
+                           "row_contrast", "row_contrast_weighted", "row_contrast_acc",
+                           "row_contrast_n_rows", "row_contrast_n_anchors",
                            "coda_span_n_tokens"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())

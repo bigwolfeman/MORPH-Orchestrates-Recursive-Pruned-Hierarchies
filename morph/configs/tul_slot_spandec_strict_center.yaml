@@ -1,0 +1,64 @@
+# Slot-loop panel, arm "slot-spandec-strict-center": the ROW-CENTERED EXIT (lever C1).
+# ONE factor against `slot-spandec-strict` (`tul_slot_spandec_strict.yaml`):
+# `tul.center_exit`. Nothing else moves — same prefix_k, same geometry, same targets,
+# same schedule, and the arm's only new parameter is a zero-init bias.
+#
+# THE DEFECT. On the strict ruler a row's 64 written slot states sit at effective rank
+# 5.7598 in 1024 dimensions with mean pairwise cosine 0.7104 (`val/slot_eff_rank` /
+# `val/slot_pairwise_cos`, last val of `run_slot-spandec-strict.log`). Fifty to sixty-four
+# 1024-dimensional vectors spanning about six directions, and any two of them agreeing at
+# cos 0.71. The coda sees six dimensions of variation whatever the row holds, and the loop
+# iterates a state that is nearly the same vector everywhere.
+#
+# WHAT THIS ARM DOES. After the loop (and after the think-once stack, where there is one),
+# every VALID slot's exit state has the ROW's mean over its valid slots subtracted and ONE
+# learned bias `b_center` added back. Pad slots are untouched. At `slot_cells > 1` each
+# CELL INDEX is centered separately across the row. `b_center` is zero at init, so the
+# states are exactly zero-mean across the row at step 0 and the shared "here is a
+# boundary" signal the coda legitimately wants is relearned as that one constant instead
+# of being carried by all 64 states at once.
+#
+# WHAT IT ACTS ON, and it is the CARRIER, not a readout. `h_slots` at that seam is the
+# tensor every reader takes: the MUX, the span decoder, SIGReg and the energy each call
+# `_readout` on it themselves, and `prefix_project` projects it with its four
+# Hyper-Connection streams intact. One edit therefore centers what all five see.
+#
+# WHICH INSTRUMENT TO READ, because the two are not interchangeable. `effective_rank`
+# (morph/model/fm_planner.py) is the participation ratio of the CENTERED covariance, so a
+# globally shared offset already contributes nothing to `val/slot_eff_rank` and this lever
+# cannot remove it from there — what it removes is the PER-ROW mean, which the
+# instrument's global centering does not. `mean_pairwise_cos` does NOT center, so
+# `val/slot_pairwise_cos` is the reading this arm attacks head-on. A flat
+# `val/slot_eff_rank` is NOT evidence the lever did not act.
+#
+# THE PRECEDENT, and it is not encouraging. `tul.center_bag_mean` centered the SEED on the
+# old bag-mean path (arm `tul_center`, lab/experiments/failures/
+# 2026-08-27-warmup-sigreg-ntpdrop.md). Prediction C1 was pairwise cosine < 0.20; it read
+# 0.337-0.578 against a control's 0.485-0.589 — FAILED. What it DID do was reverse the
+# trend across the loop's passes (the control collapsed +0.334 -> +0.729 with effective
+# rank 4.21 -> 1.46; the centered arm de-collapsed +0.578 -> +0.337 with rank 2.63 -> 4.41)
+# and buy +0.0015 nats of loop worth, i.e. nothing. That arm centered a SEED built from a
+# bag-mean, before `norm_match`, before the span decoder and before the strict geometry;
+# this one centers the EXIT, which is the state every reader and the coda actually see.
+# The precedent is why the prediction below says "cosine down, K-curve flat".
+#
+# THE HONEST ESCAPE HATCH, named rather than hidden: `mean_pairwise_cos` does not center,
+# so a `b_center` that grows large puts the pooled cosine straight back while the states
+# stay exactly as collapsed as before. `val/slot_eff_rank` cannot be gamed that way, and
+# `||b_center||` is worth reading if the cosine rebounds.
+#
+# COST. One mean, one subtract, one broadcast add on [B, 64, 4, 1024], plus 4096
+# parameters. No new module in the graph, no extra attention, no extra CE. Expect tok/s
+# within noise of the ruler; the smoke says.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-rank-levers-center-and-contrast.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-rank-levers-center-and-contrast.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  center_exit: true
+
+wandb:
+  name: slot-spandec-strict-center

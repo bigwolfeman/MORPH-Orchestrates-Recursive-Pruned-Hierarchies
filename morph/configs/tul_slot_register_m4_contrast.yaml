@@ -1,0 +1,46 @@
+# Slot-loop panel, arm "slot-register-m4-contrast": the WITHIN-ROW CONTRASTIVE objective
+# on the Thought Register. ONE factor against `slot-register-m4`
+# (`tul_slot_register_m4.yaml`): `tul.row_contrast_lambda`.
+#
+# WHY THE PAIR EXISTS. The register gives a span four mutable cells; this term demands that
+# the row's SPANS be told apart by the states that forecast them. The register's own risk,
+# written down in its note, is that "the cells may collapse onto each other anyway — the
+# loop and the shared write are exactly the forces that produced the rank collapse". This
+# arm is the first thing in the tree that pushes back on that force with an objective
+# instead of with capacity.
+#
+# WHAT IT READS AT M = 4, and it is a decision. The term takes the CELLS' MEAN — the same
+# state every other reader at that seam takes (the MUX, the span decoder, SIGReg, the
+# energy), and the same state `slot-register-m4`'s span decoder grades. Giving each cell
+# its own span (cell i against span i+1, say) is a SECOND mechanism: it would change the
+# target AND the state at once and make the result unattributable, which is the exact
+# ground the register's note rejected per-cell span-decoder targets on. It is the named
+# follow-up if the cells stay together here.
+#
+# WHAT THAT MEANS FOR THE READINGS. The term acts on the row axis, so
+# `val/slot_pairwise_cos` over the row's 256 cells is where it acts directly. Any movement
+# in `val/slot_cell_eff_rank` — the rank WITHIN a slot — is INDIRECT: the mean's gradient
+# reaches all four cells, but nothing in the objective asks a slot's own cells to differ.
+# That indirect reading is the interesting one and it is why this arm runs beside
+# `slot-spandec-strict-contrast` rather than instead of it.
+#
+# THE CONFOUND THIS ARM INHERITS, restated: `slot-register-m4` differs from the k=2 strict
+# ruler by the register AND by `prefix_k` 4 (`L_total` 1280 vs 1152). This arm pairs
+# cleanly with `slot-register-m4` and with nothing else.
+#
+# λ = 0.1, the same value as the single-cell arm, so the two contrast arms differ by the
+# register alone. See `tul_slot_spandec_strict_contrast.yaml` for how it was sized and for
+# the 2026-08-27 SIGReg precedent on picking a λ badly.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-rank-levers-center-and-contrast.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-rank-levers-center-and-contrast.md
+defaults:
+  - tul_slot_register_m4
+  - _self_
+
+tul:
+  row_contrast_lambda: 0.1
+  row_contrast_tau: 0.1
+
+wandb:
+  name: slot-register-m4-contrast
