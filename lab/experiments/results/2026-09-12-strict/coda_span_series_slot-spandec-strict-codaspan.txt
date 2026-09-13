@@ -1,0 +1,4 @@
+keys ['gradnorm/coda_span', 'loss/coda_span', 'loss/coda_span_weighted', 'preclip/coda_span', 'tul/coda_span', 'tul/coda_span_ce', 'tul/coda_span_n_tokens', 'tul/coda_span_weighted', 'val/ce_tokens', 'val/first_tok_ce']
+steps 200-600 n=1: coda_span=0.0774 coda_span=7.4565 coda_span_weighted=7.4565 coda_span=1.2126 coda_span=7.4565 coda_span_ce=7.4565 coda_span_n_tokens=2324.0000 coda_span_weighted=7.4565 ce_tokens=6.9395 first_tok_ce=9.8718
+steps 2300-2700 n=1: coda_span=0.3752 coda_span=6.4835 coda_span_weighted=6.4835 coda_span=0.6679 coda_span=6.4835 coda_span_ce=6.4835 coda_span_n_tokens=2366.0000 coda_span_weighted=6.4835 ce_tokens=4.6864 first_tok_ce=8.4997
+steps 4500-5000 n=1: coda_span=0.3346 coda_span=6.6244 coda_span_weighted=6.6244 coda_span=0.8069 coda_span=6.6244 coda_span_ce=6.6244 coda_span_n_tokens=2220.0000 coda_span_weighted=6.6244 ce_tokens=4.3914 first_tok_ce=8.0955
