@@ -35,7 +35,7 @@ KNOWN_TUL_KEYS = frozenset({
     "activate_at", "bcast", "boundary_chars", "boundary_substrings", "carry",
     "center_bag_mean", "coda_sees_slots", "coda_span_heads", "coda_span_source",
     "coda_span_weight", "coda_token_cut", "coda_token_input", "cond_layers",
-    "core_stage_cond",
+    "core_stage_cond", "core_token_aux", "core_token_aux_weight",
     "db1_cond_dim", "db1_ladder_steps", "db1_p_mean", "db1_p_std", "db1_sigma_data",
     "db1_sigma_max", "db1_sigma_min", "db1_w_sigma", "db_loop", "db_mux_iters",
     "detach_z", "emit_weight", "eval_ablations", "fixed_stride", "gate",
@@ -260,6 +260,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         coda_span_heads=int(tc.get("coda_span_heads", 0)),
         coda_span_weight=float(tc.get("coda_span_weight", 1.0)),
         coda_span_source=str(tc.get("coda_span_source", "cell")),
+        core_token_aux=bool(tc.get("core_token_aux", False)),
+        core_token_aux_weight=float(tc.get("core_token_aux_weight", 1.0)),
         slot_chain=bool(tc.get("slot_chain", False)),
         slot_chain_detach=bool(tc.get("slot_chain_detach", False)),
         grad_pass=bool(tc.get("grad_pass", False)),
@@ -373,6 +375,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "coda_span_heads": model_cfg.coda_span_heads,
         "coda_span_weight": model_cfg.coda_span_weight,
         "coda_span_source": model_cfg.coda_span_source,
+        "core_token_aux": model_cfg.core_token_aux,
+        "core_token_aux_weight": model_cfg.core_token_aux_weight,
         "slot_chain": model_cfg.slot_chain,
         "slot_chain_detach": model_cfg.slot_chain_detach,
         "grad_pass": model_cfg.grad_pass,
@@ -474,6 +478,18 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f", predicting the next span's tokens 1..{model_cfg.coda_span_heads} "
               f"NON-autoregressively, weight {model_cfg.coda_span_weight} "
               f"(lab/experiments/planned/2026-09-12-arc-objective-arms.md)", flush=True)
+    if model_cfg.core_token_aux:
+        print(f"  TUL CORE-TOKEN AUX ON (weight {model_cfg.core_token_aux_weight}): a "
+              f"TRAINING-ONLY second pass sends EVERY position (tokens + cells) through "
+              f"the per-sample Poisson-depth core and the coda, and charges the ordinary "
+              f"weighted token CE as `core_token_aux`. The SHIPPED forward is unchanged — "
+              f"eval, the sweeps and inference still run the slot loop with tokens OUTSIDE "
+              f"the core. The aux core is masked to `causal AND (same span OR a slot "
+              f"cell)` with the segment reset, so tokens do NOT become a cross-span "
+              f"channel. COST: ~45 extra core+coda block-passes per real token, roughly "
+              f"one extra paid-loop forward+backward per step "
+              f"(lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md)",
+              flush=True)
     if model_cfg.slot_chain:
         print(f"  TUL SLOT CHAIN ON: detach={model_cfg.slot_chain_detach} — slot k takes "
               f"W(z_k-1) at every pass (zero-init; the wavefront form of the chain)",

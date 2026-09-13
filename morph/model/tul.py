@@ -491,6 +491,61 @@ class TULConfig:
     coda_span_heads: int = 0             # 0 = off: nothing is built and the forward is unchanged
     coda_span_weight: float = 1.0        # weight of the term in the total loss
     coda_span_source: str = "cell"       # "cell" (the arm) | "token" (the control above)
+    # ── THE CORE-TOKEN GRADIENT AUXILIARY (arm `slot-spandec-strict-coretok`, 2026-09-12) ─
+    #
+    # THE FACT IT ANSWERS. In the slot loop the six shared core blocks are trained by the
+    # SLOT losses alone — ~51 valid cells per row, one target each — while the token CE
+    # reaches the core at about 1 % of the prelude's gradient
+    # (`slot-loop-gradient-probe-readings`, 2026-09-10). The PLAIN looped model trains the
+    # same six blocks on 1,024 next-token targets per row and earns 0.185 nats of depth
+    # (`prelude-entry-flattens-the-loop`, 2026-09-10). Twelve slot arms read a per-pass
+    # K-curve inside [-0.0001, +0.0033]. Wolfe, 2026-09-12: "train the core on the token CE
+    # as well (tokens through the core for gradient only, slots still the only cross-span
+    # channel at inference)".
+    #
+    # WHAT RUNS. TRAINING ONLY. After the shipped forward has finished, a SECOND pass over
+    # the same prelude output sends EVERY position — tokens and slot cells together, the
+    # paid loop's shape — through `_core_region`, the per-sample Poisson-depth core the
+    # plain model and the paid loop already run, then through the coda, and charges the
+    # ordinary weighted token CE on it. That CE is added to the loss as
+    # `core_token_aux_weighted` and is exposed so `train.py` subtracts it and keeps
+    # train/loss on the SHIPPED path's CE. Nothing about the shipped forward changes: eval,
+    # the sweeps, `worth_profile`, `slot_z_optimize` and inference all run the slot loop
+    # with tokens OUTSIDE the core, exactly as before.
+    #
+    # THE GEOMETRY OF THE AUX PATH, and it is load-bearing. Tokens in the core must NOT
+    # become a cross-span channel the core can lean on, or the arm would buy its token CE
+    # by re-opening the bypass `tg_geometry="strict"` exists to cut. So the aux core runs
+    # under `tg_allow_mask` — causal AND (same span OR j is a slot cell) — on the window
+    # branch, the same slot-column restriction on the compressed branch, and the
+    # `tg_segment_ids` reset on the CCA conv and its value shift. A token therefore reads
+    # its own span's tokens and reaches every EARLIER span only through a slot cell, which
+    # is exactly the reachability the slot cells themselves have inside the loop. The aux
+    # coda takes the shipped strict coda relation and the same zeroed slot-cell injections.
+    #
+    # THE DEPTH IS ITS OWN DRAW, and that is a decision, not an oversight. The slot loop
+    # draws a per-SLOT Poisson depth [B, S]; `_core_region` draws a per-SAMPLE one [B].
+    # There is no shared draw, and every reduction of the per-slot table to a scalar
+    # distorts the distribution: the max over ~51 Poisson(6) draws capped at 8 is 8 almost
+    # surely, which would train the core at a depth the plain model never sees. The point
+    # of the arm is to train the core the way the plain model trains it, so the aux takes
+    # the plain model's own per-sample Poisson draw. The whole aux is wrapped in an RNG
+    # save/restore (the `_slot_gain_penalty` precedent), so it consumes nothing from the
+    # run's stream and `loss - core_token_aux_weighted` is the off-model's loss bit for bit.
+    #
+    # COST, arithmetic and not a guess (row = 1,024 real tokens, L_total 1152, 64 cells,
+    # ~51 valid, mean depth 6), block-passes per real token:
+    #     shipped slot arm  prelude 4x1152 + core 6x51x6 + coda 4x1152   = 10.8
+    #     exit span decoder 2 x 64 x 32                                  =  4.0
+    #     THE AUX         core 6x1152x6 + coda 4x1152                    = 45.0
+    #                                                                      -----
+    #                                                                      59.8
+    # against `slot-spandec-strict`'s 14.8 and the PLAIN panel's 44.0. This is the most
+    # expensive arm of the family by a wide margin — roughly one extra paid-loop
+    # forward+backward per step — and both its rate and its memory are named risks in
+    # lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md.
+    core_token_aux: bool = False         # False = off: no aux forward, graph unchanged
+    core_token_aux_weight: float = 1.0   # weight of the aux CE in the total loss
     # ── THE ORACLE-Z PER-PASS TEACHER (arm `slot-spandec-strict-oracle`, 2026-09-12) ──
     #
     # THIS BREAKS A STANDING RULE AND SAYS SO. The root CLAUDE.md and the spec forbid
@@ -1037,6 +1092,37 @@ class TULConfig:
             raise ValueError(
                 "tul.coda_span_* set with tul.coda_span_heads=0: no head is built, so the "
                 "knobs would be silently ignored. Set tul.coda_span_heads > 0 or drop them.")
+        if self.core_token_aux:
+            if self.core_token_aux_weight <= 0.0:
+                raise ValueError(
+                    "tul.core_token_aux needs tul.core_token_aux_weight > 0: at 0 the arm "
+                    "pays a whole extra core+coda forward and backward every step and "
+                    f"trains nothing with it (got {self.core_token_aux_weight})")
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.core_token_aux with tul.tokens_through_core is the SAME forward "
+                    "twice: the paid loop ALREADY sends every token position through the "
+                    "per-sample core, so the aux would add a duplicate copy of the term it "
+                    "exists to supply. Turn the paid loop off — the arm's whole claim is "
+                    "that the tokens reach the core in TRAINING only.")
+            if not (self.coda_sees_slots and self.coda_token_cut == 0):
+                raise NotImplementedError(
+                    "tul.core_token_aux needs the FULL-AXIS coda (coda_sees_slots=true, "
+                    "coda_token_cut=0): the aux replays `_back_region` over the packed axis "
+                    "and scores it with `_tul_group_losses` against the row's own labels, "
+                    "and arm A4 / arm CW run the coda on a GATHERED subset with a different "
+                    "index space and a different label vector.")
+            if self.detach_z:
+                raise ValueError(
+                    "tul.core_token_aux with tul.detach_z is not defined: detach_z's claim "
+                    "is that the loop learns from its local loss alone, and the aux puts "
+                    "the token CE back onto the shared core weights the loop uses. The two "
+                    "answer the same question in opposite directions.")
+        elif self.core_token_aux_weight != 1.0:
+            raise ValueError(
+                "tul.core_token_aux_weight set with tul.core_token_aux=false: no aux "
+                "forward runs, so the knob would be silently ignored. Set "
+                "tul.core_token_aux: true or drop it.")
         if self.slot_chain:
             if self.tokens_through_core:
                 raise NotImplementedError(

@@ -133,7 +133,8 @@ def evaluate(
             if out.get("spandec_weighted") is not None:
                 _l -= float(out["spandec_weighted"])
             for _aux2 in ("egrad_weighted", "pass_res_weighted", "oracle_z_weighted",
-                          "spandec_pass_weighted", "coda_span_weighted"):
+                          "spandec_pass_weighted", "coda_span_weighted",
+                          "core_token_aux_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -2952,7 +2953,8 @@ def main(cfg: DictConfig) -> None:
                             "pass_residual", "pass_res_weighted",
                             "oracle_z", "oracle_z_weighted",
                             "spandec_pass", "spandec_pass_weighted",
-                            "coda_span", "coda_span_weighted"):
+                            "coda_span", "coda_span_weighted",
+                            "core_token_aux", "core_token_aux_weighted"):
                     if _lk in out and out[_lk] is not None:
                         _probe_log[f"loss/{_lk}"] = float(out[_lk].detach())
                 wandb.log(_probe_log, step=step)
@@ -3076,7 +3078,8 @@ def main(cfg: DictConfig) -> None:
                 _lv = _lv - float(out["mtp_weighted"])   # arc E8: train/loss = next-token CE
             for _ak in ("fp_weighted", "core_gain_weighted", "egrad_weighted",
                         "pass_res_weighted", "oracle_z_weighted",
-                        "spandec_pass_weighted", "coda_span_weighted"):  # arc E10 / 2026-09-12
+                        "spandec_pass_weighted", "coda_span_weighted",
+                        "core_token_aux_weighted"):  # arc E10 / 2026-09-12
                 if isinstance(out, dict) and out.get(_ak) is not None:
                     _lv = _lv - float(out[_ak])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
@@ -3203,6 +3206,8 @@ def main(cfg: DictConfig) -> None:
                            "spandec_pass", "spandec_pass_weighted", "spandec_pass_ce",
                            "spandec_pass_terms", "spandec_pass_n_tokens",
                            "coda_span", "coda_span_weighted", "coda_span_ce",
+                           "core_token_aux", "core_token_aux_weighted",
+                           "core_token_aux_ce", "core_token_aux_n", "core_token_aux_fp",
                            "coda_span_n_tokens"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())

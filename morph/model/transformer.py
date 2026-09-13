@@ -67,6 +67,13 @@ else:
         return _NULLCTX
 
 
+# Attention kwargs `_core_region` can thread through its active-set sort. Each is a
+# PER-SAMPLE tensor with batch as dim 0, so `[perm]` and `[:n_active]` are exact. Anything
+# else (e.g. `tg_span`, a dict of per-span index tensors) raises there rather than being
+# silently dropped — see the raise for the reason.
+_CORE_TG_KEYS = frozenset({"tg_allow", "tg_slot_mask", "tg_comp_allow", "tg_seg"})
+
+
 # ── MORPH_STATIC_GRAPHS: capture the static front/back of the step as CUDA graphs ──
 # The step = [embed+prelude] → [Poisson-depth core loop] → [coda+head+CE]. The core loop
 # is variable-shape (active-set shrinking) and stays eager; the FRONT (embed+dropout+
@@ -1402,6 +1409,7 @@ class MORPHTransformer(nn.Module):
                     f"tul.grad_pass_energy={_ge!r} has no defined meaning under the paid "
                     "loop (tokens_through_core): there is no per-slot looped state to "
                     "score. The paid loop already refuses tul.grad_pass in _tul_core.")
+
             if _ge == "recon":
                 self.tul_egrad = ReconEnergy(
                     d_model=d,
@@ -1500,6 +1508,28 @@ class MORPHTransformer(nn.Module):
             self.coda_span = nn.ModuleList(
                 [_MTPHead(d) for _ in range(int(cfg.tul.coda_span_heads))])
             torch.set_rng_state(_rng)
+        # ── The core-token auxiliary (TULConfig.core_token_aux) ───────────────────
+        # Builds NOTHING: it is a second forward through parameters that already exist, so
+        # an arm with the knob on holds byte-identical weights to its ruler and its only
+        # cost is compute. The refusals that depend on the config alone live in
+        # `TULConfig.__post_init__`; the three below need the MODEL's shape.
+        if cfg.tul is not None and cfg.tul.core_token_aux:
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.core_token_aux needs a core loop (model.n_core > 0): the arm's "
+                    "whole content is sending the token positions through the core, and a "
+                    "coreless model would run a second copy of the prelude's output "
+                    "through the coda for nothing.")
+            # `model.core_gain_lambda` needs no refusal here: it is ALREADY refused on
+            # every TUL model above (arc E10c), which is what keeps `_core_region`'s
+            # persistent `_core_gain_dir` power-iteration buffer out of the aux forward.
+            if getattr(cfg, "fm", None) is not None:
+                raise NotImplementedError(
+                    "tul.core_token_aux with an FM planner (tul.fm / cfg.fm) is not "
+                    "defined: the planner REPLACES the core loop (n_core == 0 is a build "
+                    "precondition there), so there is no core for the tokens to be sent "
+                    "through and no shared weights for the aux CE to train.")
+
         # ── The slot chain (TULConfig.slot_chain) ─────────────────────────────────
         # Zero-init, no RNG draw: step 0 is the ruler's forward bit for bit.
         self.tul_chain: TULSlotChain | None = None
@@ -2609,18 +2639,28 @@ class MORPHTransformer(nn.Module):
                 # (inj_core_terms) and only IT needs sorting into active-set order. This also
                 # drops 3 gather kernels/step (input_ids, bigram, x0-stack) from the hot loop.
                 inj_s = _inj_none if _scse is not None else inj_core_terms[:, perm]
-                # A2s (tokens_through_core + tg_restrict): the per-sample TG masks must
-                # follow the SAME active-set permutation as the carrier, or a sorted
-                # sample attends under another sample's mask. Sorted ONCE here; sliced
-                # [:n_active] per iteration below, exactly like h_s / inj_s. None (every
-                # non-TG caller) leaves the loop bit-identical.
+                # A2s (tokens_through_core + tg_restrict) and the core-token auxiliary
+                # (tul.core_token_aux): the per-sample TG masks must follow the SAME
+                # active-set permutation as the carrier, or a sorted sample attends under
+                # another sample's mask. Sorted ONCE here; sliced [:n_active] per iteration
+                # below, exactly like h_s / inj_s. `attn_kwargs=None` (every non-TG caller)
+                # leaves `tg_s` empty and the loop bit-identical.
+                #
+                # Every entry is a PER-SAMPLE tensor with batch as dim 0, which is what
+                # makes `[perm]` and `[:n_active]` correct. A key outside `_CORE_TG_KEYS`
+                # is not permutable that way (`tg_span` is a dict of three tensors, one of
+                # them a derived index), so it RAISES rather than being dropped — a silently
+                # ignored mask is an unrestricted core wearing a restricted arm's name.
                 if attn_kwargs:
-                    _tg_allow_f = attn_kwargs.get("tg_allow")
-                    _tg_smask_f = attn_kwargs.get("tg_slot_mask")
-                    allow_s = _tg_allow_f[perm] if _tg_allow_f is not None else None
-                    smask_s = _tg_smask_f[perm] if _tg_smask_f is not None else None
+                    _bad_tg = sorted(set(attn_kwargs) - _CORE_TG_KEYS)
+                    if _bad_tg:
+                        raise NotImplementedError(
+                            f"_core_region does not thread {_bad_tg} through the active-set "
+                            f"sort; it handles {sorted(_CORE_TG_KEYS)}. Raises rather than "
+                            f"running the core with the mask silently dropped.")
+                    tg_s = {k: v[perm] for k, v in attn_kwargs.items() if v is not None}
                 else:
-                    allow_s = smask_s = None
+                    tg_s = {}
 
             # Selective checkpointing: checkpoint the first `n_ckpt` grad-iterations, run the rest
             # (the last grad-iters) eager (activations retained → no backward recompute). -1 → all.
@@ -2702,13 +2742,7 @@ class MORPHTransformer(nn.Module):
                 args = (h_a, e_s[:n_active],
                         _inj_none if _scse is not None else inj_s[:, :n_active])
                 rs_a = ret_state_s[:n_active] if track_ret else None
-                akw = None
-                if allow_s is not None or smask_s is not None:
-                    akw = {}
-                    if allow_s is not None:
-                        akw["tg_allow"] = allow_s[:n_active]
-                    if smask_s is not None:
-                        akw["tg_slot_mask"] = smask_s[:n_active]
+                akw = {k: v[:n_active] for k, v in tg_s.items()} or None
                 # Jacobian probe capture — see the twin in `_tul_core`. None by default,
                 # so this branch traces out and the forward stays bit-identical.
                 if self._jac_capture is not None:
@@ -4630,6 +4664,121 @@ class MORPHTransformer(nn.Module):
             stats["coda_span_n_tokens"] = float((lab != -100).sum())
         return loss
 
+    @staticmethod
+    def _core_token_aux_kwargs(layout: SlotLayout) -> dict:
+        """The attention relation the CORE-TOKEN AUXILIARY runs its core under.
+
+        ``causal AND (same span OR j is a slot cell)`` on the window branch
+        (:func:`tg_allow_mask`), the same slot-column restriction on the compressed branch
+        (``tg_slot_mask``; under that relation the slot columns are plain causal, so a
+        separate ``tg_comp_allow`` would be the identical mask and is not built), and the
+        :func:`tg_segment_ids` reset on the CCA conv and its ``W_v_prev`` value shift.
+
+        A SEPARATE METHOD so the leak test can probe the SHIPPED relation instead of
+        rebuilding it. The first version of `tests/test_tul_core_token_aux.py` built these
+        kwargs itself, and a sabotage that widened the real ones to plain causal was
+        therefore MISSED (2026-09-12). One home, one probe.
+        """
+        return {"tg_allow": tg_allow_mask(layout),
+                "tg_slot_mask": layout.slot_mask,
+                "tg_seg": tg_segment_ids(layout)}
+
+    def _tul_core_token_aux(self, x: Tensor, x0: Tensor, bigram_emb, input_ids: Tensor,
+                            labels: Tensor, layout: SlotLayout, coda_kw: dict | None,
+                            ret_reset_mask: Tensor | None,
+                            stats: dict | None = None) -> Tensor:
+        """``tul.core_token_aux`` — the TOKEN CE through the core, TRAINING ONLY.
+
+        THE FACT. In the slot loop the six shared core blocks are trained by the SLOT
+        losses alone: ~51 valid cells per row, one exit target each, while the token CE
+        reaches the core at ~1 % of the prelude's gradient (the 2026-09-10 per-pass
+        cotangent probe). The PLAIN looped model trains the same six blocks on 1,024
+        next-token targets per row and earns 0.185 nats of depth. Twelve slot arms since
+        2026-09-04 read a token K1-K6 inside [-0.0001, +0.0033]. Wolfe, 2026-09-12: "train
+        the core on the token CE as well (tokens through the core for gradient only, slots
+        still the only cross-span channel at inference)."
+
+        WHAT RUNS. A SECOND pass over the SAME prelude output ``x``: every position —
+        tokens and slot cells together, the paid loop's shape — goes through
+        :meth:`_core_region` (the per-sample Poisson-depth core the plain model and the
+        paid loop already run; no second core is written here), then through
+        :meth:`_back_region`, and is scored by :meth:`_tul_group_losses` — ONE weighted CE
+        with the §5 weights, i.e. token labels only at ``emit_weight: 0.0``, exactly the
+        paid loop's reduction. The returned tensor is added to the loss as
+        ``core_token_aux_weighted``, which ``train.py`` subtracts so ``train/loss`` stays
+        the SHIPPED path's CE.
+
+        WHAT DOES NOT CHANGE. The shipped forward. Eval, the forced-depth sweep,
+        ``worth_profile``, ``slot_z_optimize`` and inference all run the slot loop with
+        tokens OUTSIDE the core. This method is guarded on ``self.training`` at its call
+        site, so an eval forward never builds it and the sweep reads the ruler's columns.
+
+        THE GEOMETRY, and it is the whole reason this is not just "the paid loop again".
+        Tokens in the core must not become a cross-span channel the core can lean on, or
+        the arm buys its CE by re-opening the bypass ``tg_geometry="strict"`` exists to
+        cut, and the slot loop stops being the only thing that crosses a boundary. So the
+        aux core runs under :func:`tg_allow_mask` — causal AND (same span OR ``j`` is a
+        slot cell) — on the window branch, the same slot-column restriction on the
+        compressed branch, and the :func:`tg_segment_ids` reset on the CCA conv and its
+        ``W_v_prev`` value shift. A token reads its own span's tokens and reaches every
+        EARLIER span only through a slot cell, which is the reachability the slot cells
+        themselves have inside the loop. The aux coda takes the SHIPPED coda relation
+        (``coda_kw``) and the same zeroed slot-cell injections
+        (:func:`slot_cell_inject_keep`), so a cell there still carries only what the core
+        put in it.
+
+        THE DEPTH IS ITS OWN DRAW. The slot loop draws a per-SLOT depth ``[B, S]``;
+        ``_core_region`` draws a per-SAMPLE one ``[B]``. Every reduction of the first to
+        the second distorts the distribution — the max over ~51 Poisson(6) draws capped at
+        8 is 8 almost surely — so the aux takes the plain model's own per-sample Poisson
+        draw instead. Training the core the way the PLAIN model trains it is the arm's
+        entire claim.
+
+        SIDE EFFECTS, all suppressed rather than left to luck:
+
+        * **RNG.** The whole call is wrapped in a save/restore of the CPU (and CUDA)
+          generator state, the :meth:`_slot_gain_penalty` precedent. The aux consumes
+          nothing from the run's stream, so ``loss - core_token_aux_weighted`` equals the
+          off-model's loss BIT FOR BIT whatever else runs after it.
+        * **``self._core_aux``.** ``_core_region`` stashes the terminal fixed-point term
+          there and ``_forward_tul`` consumes it at the end. The slot loop has already
+          written its own, so the aux's is saved out and RESTORED: the aux's fixed-point
+          value is reported as ``core_token_aux_fp`` and is NOT added to the loss. Adding
+          it would apply ``model.core_fixed_point_lambda`` twice per step and make the
+          ``fixed_point`` series incomparable with every arm that came before.
+        * **``self._jac_capture``.** Disabled for the duration. A probe that recorded both
+          the slot map's operating points and the aux core's would be measuring two
+          different maps under one name.
+        """
+        core_kw = self._core_token_aux_kwargs(layout)
+        rng_cpu = torch.get_rng_state()
+        rng_cuda = torch.cuda.get_rng_state() if x.is_cuda else None
+        saved_aux, saved_jac = self._core_aux, self._jac_capture
+        self._jac_capture = None
+        try:
+            xc = self._core_region(x, x0, bigram_emb, input_ids, attn_kwargs=core_kw)
+            keep = slot_cell_inject_keep(layout, xc.dtype)
+            xh = self._back_region(xc, x0, bigram_emb, input_ids, inject_keep=keep,
+                                   attn_kwargs=coda_kw, ret_reset_mask=ret_reset_mask)
+            groups = self._tul_group_losses(xh, labels, layout, want_groups=False)
+            aux_fp = self._core_aux or {}
+        finally:
+            self._core_aux, self._jac_capture = saved_aux, saved_jac
+            torch.set_rng_state(rng_cpu)
+            if rng_cuda is not None:
+                torch.cuda.set_rng_state(rng_cuda)
+        loss = groups["loss"]
+        if stats is not None:
+            # `core_token_aux_ce` against the model's own `ce_main` is the reading: the
+            # same tokens, the same coda, the same weights — the ONLY difference is that
+            # these states went through the core. `core_token_aux_fp` is the aux core's
+            # fixed-point ratio, reported and NOT charged (see the docstring).
+            stats["core_token_aux_ce"] = float(loss.detach())
+            stats["core_token_aux_n"] = float(groups["n_targets"].detach())
+            if "fixed_point" in aux_fp:
+                stats["core_token_aux_fp"] = float(aux_fp["fixed_point"])
+        return loss
+
     def _own_span_grad(self, h: Tensor, input_ids: Tensor, layout: SlotLayout,
                        mask: Tensor) -> tuple[Tensor, Tensor]:
         """``(dL_own/dz, L_own)`` at the CURRENT slot state, both DETACHED.
@@ -5479,6 +5628,25 @@ class MORPHTransformer(nn.Module):
             _cw = tc.coda_span_weight * _cs
             groups["coda_span_weighted"] = _cw.detach()
             groups["loss"] = groups["loss"] + _cw
+
+        if tc.core_token_aux and self.training and groups is not None:
+            # The core-token auxiliary (`_tul_core_token_aux`). Built HERE, at the END of
+            # the forward, for two reasons and both are load-bearing: the shipped path's
+            # per-slot depth draw must sit at the SAME position in the RNG stream it has on
+            # the ruler (the aux runs after it and puts the stream back), and
+            # `_core_region` overwrites `self._core_aux`, which the slot loop has already
+            # filled and `_apply_core_aux` consumes below. `self.training` is the eval
+            # guard: the sweep, `worth_profile` and inference never pay for this.
+            _ca_stats: dict = {}
+            _ca = self._tul_core_token_aux(x, x0, bigram_emb, input_ids, labels, layout,
+                                           tg_attn_kwargs, tg_reset, stats=_ca_stats)
+            groups = dict(groups)
+            groups["core_token_aux"] = _ca.detach()
+            for _k, _v in _ca_stats.items():
+                groups[_k] = _ca.new_tensor(_v)
+            _caw = tc.core_token_aux_weight * _ca
+            groups["core_token_aux_weighted"] = _caw.detach()
+            groups["loss"] = groups["loss"] + _caw
 
         if oracle_z_loss is not None and groups is not None:
             # Same contract as `spandec_weighted`: the WEIGHTED term is exposed so train.py

@@ -1,0 +1,72 @@
+# Slot-loop panel, arm "slot-spandec-strict-coretok": train the shared CORE on the token CE
+# as well, in TRAINING ONLY. ONE factor against `slot-spandec-strict`
+# (`tul_slot_spandec_strict.yaml`): `tul.core_token_aux`, false -> true.
+#
+# THE FACT THIS ARM IS BUILT ON. In the slot loop the six shared core blocks are trained by
+# the SLOT losses and nothing else: ~51 valid cells per row, one exit target each, while
+# the token CE reaches the core at about 1 % of the prelude's gradient (the 2026-09-10
+# per-pass cotangent probe, `slot-loop-gradient-probe-readings`). The PLAIN looped model
+# trains the same six blocks on 1,024 next-token targets per row and earns 0.185 nats of
+# depth (`prelude-entry-flattens-the-loop`, 2026-09-10). Twelve slot arms since 2026-09-04
+# read a token K1-K6 inside [-0.0001, +0.0033]. The one thing that has never been tried is
+# giving those blocks the token objective the plain model gives them.
+#
+# Wolfe, 2026-09-12: "train the core on the token CE as well (tokens through the core for
+# gradient only, slots still the only cross-span channel at inference)."
+#
+# WHAT RUNS, and what does NOT. After the shipped forward finishes, a SECOND pass over the
+# same prelude output sends EVERY position — tokens and slot cells together, the paid
+# loop's shape — through `_core_region` (the per-sample Poisson-depth core the plain model
+# already runs; no second core is written) and through the coda, and charges the ordinary
+# weighted token CE. It is exposed as `tul/core_token_aux` and subtracted from train/loss,
+# the `spandec_weighted` contract, so the reported CE stays the SHIPPED path's.
+#
+# THE SHIPPED FORWARD IS UNCHANGED. Eval, `core_depth_sweep.py`, `worth_profile.py`,
+# `slot_z_optimize.py` and inference all run the slot loop with tokens OUTSIDE the core.
+# The aux is guarded on `self.training`. So this arm is NOT the paid loop: at inference the
+# slot cells are still the only channel that crosses a span boundary, and the K-curve and
+# the worth profile measure the same forward every earlier slot arm was measured on.
+#
+# THE AUX PATH'S GEOMETRY IS RESTRICTED ON PURPOSE. If a token could read another span's
+# tokens inside the core, the core would learn to use a cross-span route the shipped
+# forward does not have, and the arm would buy its gradient by re-opening exactly the
+# bypass `tg_geometry: strict` exists to cut. So the aux core runs under
+# `causal AND (same span OR j is a slot cell)` on the window branch, the same slot-column
+# restriction on the compressed branch, and the `tg_segment_ids` reset on the CCA conv and
+# its value shift. A token reads its own span and reaches every earlier span only through a
+# cell — the same reachability the cells have inside the loop. `tests/test_tul_core_token_aux.py`
+# proves it with a leak test rather than asserting it.
+#
+# COST, arithmetic and not a guess (row = 1,024 real tokens, L_total 1152, 64 cells, ~51
+# valid, mean depth 6), block-passes per real token:
+#   shipped slot arm  prelude 4x1152 + core 6x51x6 + coda 4x1152        = 10.8
+#   exit span decoder 2 x 64 x 32                                       =  4.0
+#   THE AUX           core 6x1152x6 + coda 4x1152                       = 45.0
+#                                                                         -----
+#                                                                         59.8
+# against `slot-spandec-strict`'s 14.8 and the PLAIN panel's 44.0. This is the most
+# expensive arm of the family: roughly one extra paid-loop forward and backward per step.
+# By simple proportion from the span-decoder smokes (10,829-10,888 tok/s at 14.8) it lands
+# near 2,700 tok/s, well under the 8,086 floor — the runner it is queued on has the floor
+# OFF, and the rate is a reported number, not a gate. MEMORY is the other named risk: the
+# aux core is gradient-checkpointed like the shipped one (`model.ckpt_grad_iters`), but the
+# aux coda's activations are live at the same time as the shipped path's, and the per-pass
+# arm of 2026-09-12 died of exactly this class of surprise.
+#
+# WHAT WOULD MAKE THIS ARM A FAILURE AND NOT A NULL. If the token K-curve moves and the aux
+# CE is much lower than the model's own `ce_main`, the core has learned a token map the
+# shipped forward never runs, and the K-curve is measuring transfer that is not there. Read
+# `tul/core_token_aux_ce` against `val/ce_main` on every filing.
+#
+# Record: lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md
+# Note: .agents/notes/proposed/architecture/2026-09-12-core-token-gradient-and-within-context-critic.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  core_token_aux: true
+  core_token_aux_weight: 1.0
+
+wandb:
+  name: slot-spandec-strict-coretok
