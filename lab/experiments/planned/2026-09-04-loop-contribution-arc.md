@@ -370,6 +370,7 @@ files (Results sections filled, one probe each still pending).
 | 09-12 | strict-egrad-disc | discriminative critic energy | web | +0.0019 (+0.0002) | +0.0081; 1.07× wall | critic AUC 0.632 | same file |
 | 09-12 | strict-critic | within-context pass-vs-pass critic | web | +0.0012 (−0.0000) | −0.0025; −0.0106 vs disc | critic at chance (0.52) for 5000 steps; one pass worth 0.001–0.003 nats to the coda | `planned/2026-09-12-arc-core-token-and-critic.md` |
 | 09-12 | strict-coretok | tokens+cells through the core in TRAINING only (aux CE) | web | +0.0005 (−0.0003) | **−0.0684**; 0.35× rate | core becomes a 1.10-nat token map; passes still 0.0005 | same file |
+| 09-13 | coretok aux-path depth probe (Spark) | forced AUX depth 1,2,3,6 on the coretok ckpt; slot loop pinned | web | aux K1−K6 **+0.0102** [+0.0093, +0.0110] (K3−K6 +0.0012) | aux − shipped −0.0063 @1 → −0.0165 @6 | span-restricted token loop earns 20x the slot loop and ~1/3 of the prelude-entry plain (0.033); Q-1/Q-2 false, Q-3 true | `failures/2026-09-13-arc-loop-reads-tokens.md` |
 
 **Lane 6: math**
 

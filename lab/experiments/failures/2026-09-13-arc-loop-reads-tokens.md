@@ -1,6 +1,6 @@
 # Planned: does the core USE its depth when it is reading tokens?
 
-Status: planned
+Status: failure
 
 Date: 2026-09-13 (frozen before the probe runs; the 5090 is running the math panel and
 the probe is queued behind it). Arc:
@@ -176,4 +176,56 @@ If **Q-5 fails** — depth-forcing moves the shipped path — the probe is wrong
 
 ## Results
 
-(to be filled after the probe runs; predictions above are frozen)
+Run 2026-09-13 on the DGX Spark at commit 9b6427e (the probe and its `--depths` extension
+are in d99e9d9; nothing after that commit touches the probe or the model's eval path).
+480 rows, batch 3, 160 paired units, 2000 bootstrap draws. Files:
+[`results/2026-09-13-aux-depth/core_token_aux_depths_coretok_5000.json`](../results/2026-09-13-aux-depth/core_token_aux_depths_coretok_5000.json)
+and the run log beside it (`.txt`).
+
+| forced AUX depth | shipped CE | aux CE | aux − shipped [95 % CI] |
+| --- | --- | --- | --- |
+| 1 | 4.2790 | 4.2727 | −0.0063 [−0.0073, −0.0054] |
+| 2 | 4.2790 | 4.2657 | −0.0134 [−0.0144, −0.0123] |
+| 3 | 4.2790 | 4.2638 | −0.0152 [−0.0163, −0.0141] |
+| 6 | 4.2790 | 4.2626 | −0.0165 [−0.0177, −0.0152] |
+
+Aux-path K-curve, paired over the same 160 units:
+
+| reading | point | 95 % CI |
+| --- | --- | --- |
+| aux K1−K6 | **+0.0102** | [+0.0093, +0.0110] |
+| aux K3−K6 | **+0.0012** | [+0.0009, +0.0016] |
+
+Where the depth is spent: passes 1→2 give 0.0071 of the 0.0102, 2→3 give 0.0019, 3→6
+give 0.0012. The shipped path's CE is 4.279032 at every forced aux depth (the probe's
+assertion held; the slot loop was pinned at its trained depth throughout).
+
+## Verdict
+
+- **Q-1 FALSE.** Aux K1−K6 is 0.0102, inside the 35 % residual band [0.005, 0.05], not
+  above 0.05.
+- **Q-2 FALSE.** Aux K3−K6 is 0.0012, below 0.01.
+- **Q-3 TRUE.** 0.0102 is 20x the shipped slot loop's 0.0005 (the 10x bar), with a CI
+  clear of the bar.
+- **Q-4** unscorable (the training arm is cut), as filed.
+- **Q-5 TRUE.** The shipped CE did not move across the sweep.
+
+Status: failure (two of the four scorable predictions failed). The binding clause for
+"Q-1 fails" said the core does not use depth on ANY input; that is too strong, because
+Q-3 held: the SAME six blocks that read K1−K6 0.0005 on the slot states read 0.0102 on
+the span-restricted token stream. The right statement sits between the two clauses.
+
+## Updated hypothesis
+
+The core uses depth on a token input, weakly, and almost all of it in the first two passes:
+0.0102 nats under the strict span restriction against 0.033 for the plain model under the
+same prelude entry with no restriction (2026-09-10) and 0.185 under the noise entry. So
+the span restriction removes about two thirds of the prelude-entry token reading, and the
+slot-state input removes 95 % of what is left. The ordering is input-side: unrestricted
+tokens > span-restricted tokens > slot states, on one set of weights. That is consistent
+with the information view (a pass earns when there is something new to extract from the
+input it reads) and with the rank-collapse diagnosis (the slot state has the least to
+extract), and it points at the Thought Register lane rather than at any core-side lever.
+It does NOT say the plain model's 0.185 is available to a slot design: the plain model's
+own K-curve under the same span restriction is the missing control, one config away, and
+it has not been run.
