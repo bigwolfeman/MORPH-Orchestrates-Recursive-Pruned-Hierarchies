@@ -55,6 +55,20 @@ Contracts
   :attr:`SpanDecoder.tok_in` is the learnable map in front of them. The MUX has no
   input-side read of the table, so there is no precedent to inherit, and an undetached one
   would let the decoder reshape the table the slot's own seed is a bag-mean OF.
+
+Two knobs change WHAT the decoder reads and WHAT it decodes (2026-09-13)
+------------------------------------------------------------------------
+* ``tul.spandec_reads_cells`` — WHAT IT READS. On a register model (``tul.slot_cells: M``)
+  the decoder is handed the M cells as a memory and cross-attends to them per layer
+  (:class:`_SpanDecCross`), instead of grading only their mean. The mean stays as the
+  ``z`` conditioning, the cross output projection is zero-init, and the knob is refused at
+  ``M == 1``, so the change is exactly one mechanism.
+* ``tul.spandec_target_offset`` — WHAT IT DECODES. Slot ``s`` decodes span ``s + k`` and
+  ONLY that span. This is not ``spandec_horizon``: horizon 3 decodes spans s+1, s+2 AND
+  s+3 as one concatenated run, so the next span is still in the target; offset 3 removes
+  the next span from the target entirely. The 2026-08-14 JEPA screen said the informative
+  target is two to three spans downstream, and no arc arm has ever asked for a downstream
+  span without also asking for the next one.
 """
 from __future__ import annotations
 
@@ -73,6 +87,7 @@ __all__ = ["SpanDecoder", "horizon_span_slots", "next_span_slots",
 # shift a single weight of the model it is bolted onto (the `TULSlots.W_sent` rule).
 _SEED_BLOCKS = 0x5DEC
 _SEED_PROJ = 0x5DEC1
+_SEED_CROSS = 0x5DEC2
 
 
 def span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int, shift: int = 1
@@ -114,6 +129,14 @@ def span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int, shift: in
                          f"h = h spans downstream), got {shift}")
     B, L = input_ids.shape
     S = layout.slot_index.shape[1]
+    if shift >= S:
+        # Slot ``s`` is graded on span ``s + shift``, so a shift at or past the row's slot
+        # budget leaves EVERY slot unsupervised and the term is identically zero. Raise
+        # rather than train on an empty label set (``tul.spandec_target_offset``).
+        raise ValueError(
+            f"span_slots shift {shift} is at or past the row's slot budget "
+            f"max_slots={S}: slot s is graded on span s+{shift}, so no slot in the row "
+            f"would have a target and the term would be identically zero.")
     J = int(max_tokens)
     dev = input_ids.device
     k = layout.bag_id                                            # [B, L] span of a token
@@ -161,19 +184,26 @@ def own_span_slots(input_ids: Tensor, layout: SlotLayout, max_tokens: int
 
 
 def horizon_span_slots(input_ids: Tensor, layout: SlotLayout, per_span_tokens: int,
-                       horizon: int) -> tuple[Tensor, Tensor]:
-    """``(ids, valid)`` ``[B, S, horizon * per_span_tokens]`` — spans ``s+1 .. s+H``.
+                       horizon: int, start: int = 1) -> tuple[Tensor, Tensor]:
+    """``(ids, valid)`` ``[B, S, horizon * per_span_tokens]`` — spans ``s+start .. s+start+H-1``.
 
     ``tul.spandec_horizon``. Block ``h`` (offset ``(h-1) * per_span_tokens``) holds span
-    ``s + h``'s tokens, left-aligned inside its block and invalid after the span ends, so
-    the shape is fixed and the decoder reads one concatenated causal sequence. Slot cells
-    never appear: :func:`span_slots` selects token positions only.
+    ``s + start + h - 1``'s tokens, left-aligned inside its block and invalid after the
+    span ends, so the shape is fixed and the decoder reads one concatenated causal
+    sequence. Slot cells never appear: :func:`span_slots` selects token positions only.
 
-    A slot is supervised at block ``h`` ONLY when span ``s + h`` exists AND is complete
-    (its own terminating slot is present) — `span_slots`' rule at ``shift = h``, so a slot
+    A slot is supervised at block ``h`` ONLY when that span exists AND is complete (its
+    own terminating slot is present) — `span_slots`' rule at the block's shift, so a slot
     near the end of a row is supervised on the blocks it has and masked on the rest rather
-    than dropped. ``horizon = 1`` returns exactly :func:`next_span_slots`, tensor for
-    tensor, which is what keeps the default bit-identical.
+    than dropped. ``horizon = 1, start = 1`` returns exactly :func:`next_span_slots`,
+    tensor for tensor, which is what keeps the default bit-identical.
+
+    ``start`` is ``tul.spandec_target_offset`` and it is a DIFFERENT knob from ``horizon``.
+    Horizon WIDENS the target — H = 3 decodes spans s+1, s+2 and s+3, so the next span is
+    still in it. Start MOVES the target — start = 3 at H = 1 decodes ONLY span s+3, and the
+    next span gets no direct z target at all. The 2026-08-14 JEPA screen said the
+    informative target sits two to three spans downstream, and nothing in the arc has ever
+    asked the decoder for a span WITHOUT also asking it for the next one.
 
     The gaps between a short span and the next block carry `valid = False`, so their
     labels are ``ignore_index`` and their input embeddings are zeroed by
@@ -182,12 +212,79 @@ def horizon_span_slots(input_ids: Tensor, layout: SlotLayout, per_span_tokens: i
     """
     if horizon < 1:
         raise ValueError(f"tul.spandec_horizon must be >= 1, got {horizon}")
-    if horizon == 1:
+    if start < 1:
+        raise ValueError(
+            f"tul.spandec_target_offset must be >= 1 (1 = the next span), got {start}")
+    if horizon == 1 and start == 1:
         return next_span_slots(input_ids, layout, per_span_tokens)
     parts = [span_slots(input_ids, layout, per_span_tokens, shift=h)
-             for h in range(1, horizon + 1)]
+             for h in range(start, start + horizon)]
+    if horizon == 1:
+        return parts[0]
     return (torch.cat([p[0] for p in parts], dim=2),
             torch.cat([p[1] for p in parts], dim=2))
+
+
+class _SpanDecCross(nn.Module):
+    """``tul.spandec_reads_cells`` — cross-attention onto a slot's M REGISTER CELLS.
+
+    WHY IT EXISTS. On a register model (``tul.slot_cells: M > 1``) the span decoder today
+    grades ``mean_i cell_i``: one target per span, read off the weakest possible reader of
+    an M-cell thought. The register note names this as the arm's most likely reason to
+    read a flat K-curve, and names the fix as its own follow-up — "a span decoder that
+    cross-attends to the M cells as a memory"
+    (``.agents/notes/proposed/architecture/2026-09-13-the-thought-register.md``,
+    Alternatives). This is that follow-up.
+
+    WHAT IT IS. Queries are the decoder's own token states ``[N, J, C]``; keys and values
+    are the slot's ``M`` cells ``[N, M, C]``, the SAME states the coda's prefix write
+    projects through ``W_prefix[i]`` — the stack's output where ``tul.cond_layers > 0``,
+    because :meth:`MORPHTransformer._tul_cond_apply` runs before the cells are formed. So
+    the decoder and the coda read the same object, which is the only version of this a
+    comparison between the two readers can be made on.
+
+    No mask. Every key belongs to the ONE slot whose thought this row decodes, so there is
+    nothing causal to enforce among the cells; a pad slot's rows are all ``ignore_index``
+    in the label, so its attention output is multiplied out of the loss downstream.
+
+    ``proj`` is ZERO-INIT, so the block's output at step 0 is EXACTLY the mean-only
+    decoder's and an arm with this knob on starts from its ruler. The other weights draw
+    from a SECOND private generator, and the whole construction snapshots and restores the
+    GLOBAL RNG state (the ``TULSlotRegister`` lesson: ``nn.Linear`` kaiming-draws on the
+    global stream before the weight is overwritten), so turning the knob on moves not one
+    weight of the decoder it is bolted into, nor of the model around it.
+    """
+
+    def __init__(self, d_model: int, n_heads: int, gen: torch.Generator):
+        super().__init__()
+        if d_model % n_heads != 0:
+            raise ValueError(f"span decoder d_model {d_model} not divisible by "
+                             f"n_heads {n_heads}")
+        self.n_heads = n_heads
+        self.d_head = d_model // n_heads
+        self.norm_q = RMSNorm(d_model)
+        self.norm_kv = RMSNorm(d_model)
+        self.q = nn.Linear(d_model, d_model, bias=False)
+        self.kv = nn.Linear(d_model, 2 * d_model, bias=False)
+        self.proj = nn.Linear(d_model, d_model, bias=False)
+        for m in (self.q, self.kv):
+            _init_linear(m, gen)
+        with torch.no_grad():
+            self.proj.weight.zero_()
+        for m in (self.q, self.kv, self.proj):
+            m._ternary_exclude = True
+
+    def forward(self, x: Tensor, mem: Tensor) -> Tensor:
+        """``x [N, J, C]``, ``mem [N, M, C]`` -> ``[N, J, C]`` residual term."""
+        N, J, C = x.shape
+        M = mem.shape[1]
+        q = self.q(self.norm_q(x).to(x.dtype))
+        k, v = self.kv(self.norm_kv(mem).to(x.dtype)).chunk(2, dim=-1)
+        q = q.view(N, J, self.n_heads, self.d_head).transpose(1, 2)
+        k = k.view(N, M, self.n_heads, self.d_head).transpose(1, 2)
+        v = v.view(N, M, self.n_heads, self.d_head).transpose(1, 2)
+        a = F.scaled_dot_product_attention(q, k, v)
+        return self.proj(a.transpose(1, 2).reshape(N, J, C))
 
 
 class _SpanDecBlock(nn.Module):
@@ -198,9 +295,14 @@ class _SpanDecBlock(nn.Module):
     retention, and a MORPHBlock would have to be fed a 4-D carrier and a layer index it
     has no place in. This is the ``ParcaeCoreBlock`` precedent — a small, dense, honest
     block whose only job is to be a reader.
+
+    ``gen_cross`` (``tul.spandec_reads_cells``) adds a :class:`_SpanDecCross` between the
+    self-attention and the MLP. ``None`` — every model before that knob — builds nothing,
+    draws nothing and traces the graph it always traced.
     """
 
-    def __init__(self, d_model: int, n_heads: int, d_ff: int, gen: torch.Generator):
+    def __init__(self, d_model: int, n_heads: int, d_ff: int, gen: torch.Generator,
+                 gen_cross: torch.Generator | None = None):
         super().__init__()
         if d_model % n_heads != 0:
             raise ValueError(f"span decoder d_model {d_model} not divisible by "
@@ -216,8 +318,18 @@ class _SpanDecBlock(nn.Module):
         for m in (self.qkv, self.proj, self.gate_up, self.down):
             _init_linear(m, gen)
             m._ternary_exclude = True
+        # RNG-NEUTRAL. `nn.Linear` kaiming-draws on the GLOBAL stream before the weight is
+        # overwritten, so building the cross module would shift every module constructed
+        # after this decoder. Snapshot and restore, exactly as `TULSlotRegister.__init__`
+        # does after sabotage D7 caught the same leak there. The cross weights come from
+        # their OWN generator, so `gen`'s stream is where an OFF build left it too.
+        self.cross: _SpanDecCross | None = None
+        if gen_cross is not None:
+            _rng0 = torch.random.get_rng_state()
+            self.cross = _SpanDecCross(d_model, n_heads, gen_cross)
+            torch.random.set_rng_state(_rng0)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, mem: Tensor | None = None) -> Tensor:
         B, T, C = x.shape
         h = self.norm1(x).to(x.dtype)
         q, k, v = self.qkv(h).chunk(3, dim=-1)
@@ -227,6 +339,10 @@ class _SpanDecBlock(nn.Module):
         v = v.view(shp).transpose(1, 2)
         a = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         x = x + self.proj(a.transpose(1, 2).reshape(B, T, C))
+        # A Python-level constant decided at construction (the tree's no-runtime-flag
+        # rule): a decoder without the knob traces no branch here at all.
+        if self.cross is not None:
+            x = x + self.cross(x, mem)
         h = self.norm2(x).to(x.dtype)
         g, u = self.gate_up(h).chunk(2, dim=-1)
         return x + self.down(F.silu(g) * u)
@@ -250,7 +366,8 @@ class SpanDecoder(nn.Module):
 
     def __init__(self, d_model: int, n_heads: int, d_ff: int, n_layers: int,
                  max_tokens: int, seed_offset: int = 0, horizon: int = 1,
-                 pass_positions: int = 0):
+                 pass_positions: int = 0, reads_cells: bool = False,
+                 target_offset: int = 1):
         """``seed_offset`` shifts BOTH private init streams.
 
         ``horizon`` (``tul.spandec_horizon``) decodes spans ``s+1 .. s+H`` as ONE causal
@@ -263,6 +380,15 @@ class SpanDecoder(nn.Module):
         ``grad_pass_energy='recon'`` ENERGY decoder — and at offset 0 they would start from
         byte-identical weights. The offset is a construction-time constant, so it still
         draws nothing from the global RNG and an arm's other weights are unmoved.
+
+        ``reads_cells`` (``tul.spandec_reads_cells``) adds a per-layer cross-attention onto
+        the slot's ``M`` register cells. The conditioning on ``z`` stays the cells' MEAN,
+        so at ``tul.slot_cells: 1`` or with the knob off the decoder is bit-identical.
+
+        ``target_offset`` (``tul.spandec_target_offset``) is WHICH span the decoder
+        decodes: ``1`` is the next span (every arm before the knob), ``k`` is span
+        ``s + k`` and ONLY that span. It is recorded here rather than read from the config
+        at loss time so that one object answers "what does this decoder decode".
         """
         super().__init__()
         if n_layers < 1:
@@ -271,8 +397,14 @@ class SpanDecoder(nn.Module):
             raise ValueError(f"tul.spandec_max_tokens must be >= 2, got {max_tokens}")
         if horizon < 1:
             raise ValueError(f"tul.spandec_horizon must be >= 1, got {horizon}")
+        if target_offset < 1:
+            raise ValueError(
+                f"tul.spandec_target_offset must be >= 1 (1 = the next span), got "
+                f"{target_offset}")
         self.per_span_tokens = int(max_tokens)
         self.horizon = int(horizon)
+        self.reads_cells = bool(reads_cells)
+        self.target_offset = int(target_offset)
         self.max_tokens = int(max_tokens) * int(horizon)
         gp = torch.Generator(device="cpu").manual_seed(_SEED_PROJ + int(seed_offset))
         # z and the token embeddings enter through their own bias-free maps. The token map
@@ -300,12 +432,18 @@ class SpanDecoder(nn.Module):
         else:
             self.register_parameter("pos_pass", None)
         gb = torch.Generator(device="cpu").manual_seed(_SEED_BLOCKS + int(seed_offset))
+        # A THIRD private stream, used only by the cross-attention. It is separate so the
+        # self-attention and MLP weights of a `reads_cells` decoder are byte-identical to
+        # a mean-only decoder's: the knob adds tensors, it does not move any.
+        gx = (torch.Generator(device="cpu").manual_seed(_SEED_CROSS + int(seed_offset))
+              if self.reads_cells else None)
         self.blocks = nn.ModuleList(
-            [_SpanDecBlock(d_model, n_heads, d_ff, gb) for _ in range(n_layers)])
+            [_SpanDecBlock(d_model, n_heads, d_ff, gb, gen_cross=gx)
+             for _ in range(n_layers)])
         self.out_norm = RMSNorm(d_model)
 
     def decode(self, z: Tensor, ids: Tensor, valid: Tensor, emb: Tensor,
-               pos: Tensor | None = None) -> Tensor:
+               pos: Tensor | None = None, mem: Tensor | None = None) -> Tensor:
         """``z [B, S, C]``, ``ids``/``valid`` ``[B, S, J]``, ``emb [V, C]`` -> ``[B, S, J, C]``.
 
         ``emb`` is the tied table the caller has already detached (or not — the caller
@@ -317,6 +455,12 @@ class SpanDecoder(nn.Module):
         whose block geometry differs — see the constructor). ``None`` uses :attr:`pos`, so
         every existing caller is unchanged.
 
+        ``mem`` ``[B, S, M, C]`` is the register's M cells (``tul.spandec_reads_cells``),
+        already through the model's ``_readout``, cell by cell. Required when the decoder
+        was built with ``reads_cells`` and refused when it was not: a memory the blocks
+        cannot read is a silently ignored argument, and a missing one would make the arm
+        its own ruler without saying so.
+
         Named ``decode`` rather than ``forward`` on purpose: the tied table is not this
         module's parameter, so ``__call__`` would hide a required argument that belongs to
         the model.
@@ -324,6 +468,22 @@ class SpanDecoder(nn.Module):
         B, S, J = ids.shape
         C = z.shape[-1]
         dtype = z.dtype
+        if self.reads_cells and mem is None:
+            raise ValueError(
+                "SpanDecoder was built with reads_cells=True (tul.spandec_reads_cells) "
+                "and got no `mem`: the per-layer cross-attention has nothing to read. The "
+                "caller must hand it the slot's M register cells.")
+        if mem is not None and not self.reads_cells:
+            raise ValueError(
+                "SpanDecoder.decode got `mem` but was built with reads_cells=False: no "
+                "block can read it, so the argument would be silently ignored.")
+        if mem is not None:
+            if mem.dim() != 4 or mem.shape[0] != B or mem.shape[1] != S \
+                    or mem.shape[-1] != C:
+                raise ValueError(
+                    f"SpanDecoder.decode mem {tuple(mem.shape)} must be "
+                    f"[B, S, M, C] = [{B}, {S}, M, {C}]")
+            mem = mem.to(dtype).reshape(B * S, mem.shape[2], C)
         table = self.pos if pos is None else pos
         limit = int(table.shape[0])
         if J > limit:
@@ -344,5 +504,5 @@ class SpanDecoder(nn.Module):
         x = x + table[:J].to(dtype).view(1, 1, J, C)
         x = x.reshape(B * S, J, C)
         for blk in self.blocks:
-            x = blk(x)
+            x = blk(x, mem)
         return self.out_norm(x).reshape(B, S, J, -1)

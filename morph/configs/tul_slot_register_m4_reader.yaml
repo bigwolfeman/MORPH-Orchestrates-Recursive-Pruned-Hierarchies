@@ -1,0 +1,77 @@
+# Slot-loop panel, arm "slot-register-m4-reader": the REGISTER'S READER.
+# ONE factor against `slot-register-m4` (`tul_slot_register_m4.yaml`):
+# `tul.spandec_reads_cells`, false -> true. Same `slot_cells: 4`, same `prefix_k: 4`, same
+# seed, same everything else.
+#
+# WHY. `slot-register-m4` gives a span FOUR mutable looped cells and then grades them
+# through the weakest reader available: `h_slots = _reg_cells.mean(dim=2)` — one vector,
+# one target per span, exactly the object the one-cell ruler already had. The register note
+# says so in its own words and files this build as the named follow-up:
+#
+#   "A span decoder that cross-attends to the M cells as a memory. Considered and written
+#    down as the alternative to grading the mean. Rejected for this arm on the same
+#    one-factor grounds: it is a second mechanism."
+#   (.agents/notes/proposed/architecture/2026-09-13-the-thought-register.md, Alternatives)
+#
+# and its Risks section names the same thing as the register's most likely failure:
+# "The objective still grades one state per slot. The mean is one target per span, so the
+#  gradient reaching the cells is no richer than today's. Capacity may be necessary and not
+#  sufficient."
+#
+# This arm is the second factor, run as its own arm so the pair reads cleanly. The prereg's
+# binding is explicit about when it matters: if the m4 panel's P-1 holds and P-3 fails (the
+# cells stay apart and the passes still read zero) then "the lane left is the target, and
+# the mean-graded decoder is the first thing to remove".
+#
+# WHAT CHANGES, exactly. Each of the decoder's blocks gains a cross-attention
+# (`morph/model/tul_spandec.py::_SpanDecCross`) between its causal self-attention and its
+# MLP. Queries are the decoder's own token states; keys and values are the slot's four
+# cells. NOT the mean, and not a wider z: the four cells as a memory the decoder may read
+# separately at every decoded token.
+#   MEMORY  the cells the CODA reads, cell for cell. `_tul_cond_apply` (the think-once
+#           stack, `tul.cond_layers`) runs BEFORE the cells are formed, so on a cond arm
+#           the memory is the stack's output — the same object `prefix_project` projects
+#           through `W_prefix[i]`. The decoder and the coda therefore read one thing, which
+#           is the only version of this that a comparison between the two readers is
+#           about. Pinned by a spy in tests/test_tul_spandec_reads_cells.py.
+#   Z       UNCHANGED: still `_readout(mean_i cell_i)` at decoder position 0. The mean's
+#           gradient still reaches every cell, exactly as on `slot-register-m4`; the cross
+#           attention ADDS a path, it replaces none.
+#   INIT    the cross output projection is ZERO. At step 0 this arm's loss, logits and
+#           gradients are BIT-IDENTICAL to `slot-register-m4`'s, and its self-attention and
+#           MLP weights are byte-identical (the cross weights come from a third PRIVATE
+#           generator and the global RNG state is snapshotted and restored around their
+#           construction — the `TULSlotRegister` D7 lesson). The arm starts AT its partner.
+#
+# WHAT THE THEORY PREDICTS, and it is not a prediction of success. The information view
+# (.agents/notes/proposed/architecture/2026-09-13-information-view-of-the-slot-loop.md)
+# says a DETERMINISTIC reader cannot make passes matter: the loop is information-flat, the
+# coda already reads every cell directly, and `mi_relay_redundant` makes moving content
+# among coordinates the reader already sees worth exactly zero. A better reader of the same
+# cells changes the OBJECTIVE's shape, not the reader's window. So the honest prediction is
+# that `spandec_ce` improves, `val/slot_cell_eff_rank` may move, and K3-K6 stays under
+# 0.002. The prereg states it that way and scores it that way.
+#
+# COST, arithmetic. Two decoder blocks x one cross-attention each. At d 1024, J 32, M 4:
+# per slot per block the cross adds one [32, 1024] x [1024, 1024] query map, one
+# [4, 1024] x [1024, 2048] kv map and a [32, 4] attention — about 3 % of the block's own
+# self-attention + SwiGLU FLOPs at J 32 and far less than the [B, S, J, V] readout that
+# dominates the term. Parameters: 2 layers x (q 1.05 M + kv 2.10 M + proj 1.05 M) =
+# +8.39 M at d 1024, all `_ternary_exclude`, all TRAINING-ONLY (the decoder is not in the
+# deployed forward). `_tul_layer_passes` counts BLOCK passes and is unchanged by this arm,
+# which slightly under-reports its price; named here rather than fudged.
+#
+# READ FIRST: `val/slot_cell_eff_rank` (the within-slot rank, the number the register
+# exists to move) and `tul/spandec_ce` against `slot-register-m4`. Then the K-curve.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-register-reader-and-downstream-target.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-register-reader-and-downstream-target.md
+defaults:
+  - tul_slot_register_m4
+  - _self_
+
+tul:
+  spandec_reads_cells: true
+
+wandb:
+  name: slot-register-m4-reader

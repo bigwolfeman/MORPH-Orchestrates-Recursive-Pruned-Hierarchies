@@ -154,7 +154,11 @@ def evaluate(
             if "sigreg" in out:
                 acc.setdefault("val/sigreg", []).append(float(out["sigreg"]))
             for _mk in ("mux_local", "mux_kl", "mux_entropy", "mux_null", "mux_rel",
-                        "mux_n_supervised", "spandec", "spandec_ce", "spandec_n_tokens"):
+                        "mux_n_supervised", "spandec", "spandec_ce", "spandec_n_tokens",
+                        # WHICH span `spandec_ce` grades (tul.spandec_target_offset). 1 on
+                        # every arm before that key; at k > 1 the column is a CE over span
+                        # s+k and is NOT comparable with an offset-1 arm's.
+                        "spandec_target_offset"):
                 if _mk in out:
                     acc.setdefault(f"val/{_mk}", []).append(float(out[_mk]))
             if "ce_tokens_no_slots" in out:

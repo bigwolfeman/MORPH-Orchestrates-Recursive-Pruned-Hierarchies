@@ -52,7 +52,13 @@ MUX_KEYS = ("mux_local", "mux_n_supervised", "mux_rel", "mux_kl",
             # the span decoder's own per-token CE (tul.spandec): the local readout a
             # spandec arm has INSTEAD of mux_local, so its loop contribution is measurable
             # on the slot's own job the way every MUX arm's is.
-            "spandec_ce", "spandec_n_tokens")
+            "spandec_ce", "spandec_n_tokens",
+            # WHICH span `spandec_ce` is a CE over (tul.spandec_target_offset, 2026-09-13).
+            # 1 on every arm before that key. At k > 1 the column grades span s+k — a
+            # HARDER span than the next one — so it is not comparable with an offset-1
+            # arm's, and the offset travels with it so a scorer cannot silently read the
+            # two as the same number.
+            "spandec_target_offset")
 # metric name -> (value key, count key) for the batch-weighted means and their CIs.
 # The last two exist only on a staged-target arm (tul.mux_stage_own_iters > 0).
 MUX_METRICS = {"mux_local": ("mux_local", "mux_n_supervised"),
