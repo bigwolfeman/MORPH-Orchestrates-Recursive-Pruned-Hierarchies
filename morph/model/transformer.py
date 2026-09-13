@@ -37,7 +37,7 @@ from .mhc import ChannelInject, MORPHBlock, PassLoRA, DEFAULT_CHANNEL_DIMS
 from .sigreg import sigreg_epps_pulley
 from .sparsity import MortarLinear
 from .tul import (TULConfig, TULGate, TULGateConfig, TULGradPass, TULReread, TULSlotChain,
-                  TULSlots,
+                  TULSlotRegister, TULSlots,
                   boundary_token_index,
                   compact_index,
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
@@ -1585,6 +1585,29 @@ class MORPHTransformer(nn.Module):
                     "tul.loop_reads_tokens under SCSE is not defined: SCSE's core is "
                     "source-free and its carrier is the DEVIATION, and nothing specifies "
                     "what a token position's deviation from its own anchor means here.")
+
+        # ── The Thought Register (TULConfig.slot_cells) ───────────────────────────
+        # `W_o` zero-init and `P_cell` zeros, so step 0 is the ruler's forward exactly; the
+        # three real draws come from a PRIVATE generator, so a register model's BASE
+        # weights are byte-identical to its ruler's and the arm differs by the mechanism
+        # alone (the `W_sent` precedent). M == 1 builds nothing.
+        self.tul_register: TULSlotRegister | None = None
+        if cfg.tul is not None and cfg.tul.slot_cells > 1:
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.slot_cells>1 needs a core loop (model.n_core > 0): the register's "
+                    "claim is that M cells give the PASSES something to relate, and there "
+                    "are no passes.")
+            if cfg.scse_enabled:
+                raise NotImplementedError(
+                    "tul.slot_cells>1 under SCSE is not defined: the carrier is the "
+                    "DEVIATION, so 'cell i of slot k' names a deviation and not a state.")
+            if getattr(cfg, "fm", None) is not None:
+                raise NotImplementedError(
+                    "tul.slot_cells>1 with an FM planner (tul.fm / cfg.fm): the planner "
+                    "REPLACES the core loop and writes ONE plan per slot through W_prefix.")
+            self.tul_register = TULSlotRegister(d, cfg.tul.slot_cells,
+                                                cfg.tul.slot_cell_init == "distinct")
 
         # ── The slot chain (TULConfig.slot_chain) ─────────────────────────────────
         # Zero-init, no RNG draw: step 0 is the ruler's forward bit for bit.
@@ -3246,10 +3269,44 @@ class MORPHTransformer(nn.Module):
         """
         B, L = x.shape[0], x.shape[1]
         np_, n_core = self.cfg.n_prelude, self.cfg.n_core
+        # ── THE THOUGHT REGISTER (tul.slot_cells) ─────────────────────────────────
+        # M == 1 — every model before this key — binds `layout` to itself and `_m_cells`
+        # to 1, so every branch below traces exactly the graph it traced before.
+        #
+        # At M > 1 the compact sequence is S*M CELLS, slot-major (index s*M + i), and
+        # `layout` is REBOUND for the rest of this method to a CELL-LEVEL view: the same
+        # `slot_mask` / `bag_id` (they index the packed row and are unchanged), with
+        # `slot_index` holding each cell's own row position and `slot_valid` expanded. That
+        # rebinding is the whole change — every `layout.slot_valid` mask, the gain hinge,
+        # the fixed-point term, the probes and the per-pass bookkeeping below then run on
+        # cells with no further edit, which is the only version of this that a reviewer can
+        # check. The mechanisms that would read ONE state per slot (the chain, the reread,
+        # the energy feature, the per-pass targets) are refused at construction, so a
+        # cell-level layout never reaches them.
+        _m_cells = int(self.cfg.tul.slot_cells)
+        _n_slots = layout.slot_index.shape[1]
+        _layout_slots = layout          # the PER-SLOT view, kept for the register and the
+                                        # per-slot depth draw; `layout` becomes per-CELL
+        if _m_cells > 1:
+            _off = torch.arange(_m_cells, device=layout.slot_index.device)
+            layout = SlotLayout(
+                slot_mask=layout.slot_mask, bag_id=layout.bag_id,
+                slot_index=(layout.slot_index.unsqueeze(-1) + _off).reshape(
+                    B, _n_slots * _m_cells),
+                slot_valid=layout.slot_valid.repeat_interleave(_m_cells, dim=1),
+                prefix_k=layout.prefix_k)
         gidx, gvalid = layout.slot_index, layout.slot_valid
 
         xn = self.input_norm(x)
         e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
+        if self.tul_register is not None:
+            # The seed pull-apart, added to the gathered prelude state BEFORE `core_init`.
+            # Single-stream (the register pools token states, which have no stream axis of
+            # their own) and broadcast into the Hyper-Connection carrier the way every
+            # other injection is. `W_o` is zero-init, so this line is an exact no-op at
+            # step 0 and the arm starts at its ruler.
+            _reg = self.tul_register(xn.mean(dim=2) if self._is_hc else xn, _layout_slots)
+            e = e + (_reg.unsqueeze(2) if self._is_hc else _reg).to(e.dtype)
 
         # ── n_core == 0: NO LOOP AT ALL (arm GL1, the gist baseline) ─────────
         # .agents/notes/proposed/architecture/2026-08-29-gist-loop.md. The slot state IS
@@ -3473,6 +3530,22 @@ class MORPHTransformer(nn.Module):
         else:
             depths = (self._sample_slot_depths(layout, x.device) if slot_depths is None
                       else self._slot_depth_override(layout, slot_depths, x.device))
+            if _m_cells > 1:
+                # ONE depth per SPAN, not per cell: the M cells of a slot are one register
+                # and they iterate together. The draw above runs on the S*M axis and cell
+                # 0's value is taken for the whole slot, so the arm consumes more of the RNG
+                # stream than a per-slot draw would — which costs nothing here (the register
+                # is a new arm with no bit-identity partner) and keeps ONE sampler in the
+                # tree. A forced table must already be constant within a slot; the
+                # instruments that build one (`slot_depth_isolation.py`) work per SLOT.
+                _dv = depths.view(B, _n_slots, _m_cells)
+                if slot_depths is not None and not bool((_dv == _dv[:, :, :1]).all()):
+                    raise ValueError(
+                        "slot_depths differs across the M cells of a slot; the register "
+                        "loops a slot's cells together, so the table must be constant "
+                        "within a slot. Raises rather than silently using cell 0's value.")
+                depths = _dv[:, :, :1].expand(B, _n_slots, _m_cells).reshape(
+                    B, _n_slots * _m_cells).contiguous()
             total_iters = int(depths.max().item())
         # db_loop: the truncated-BPTT window is meaningless (no gradient crosses an
         # iteration boundary by construction), and a no_grad iteration would silently
@@ -3579,7 +3652,39 @@ class MORPHTransformer(nn.Module):
         # real second difference and the smoke's tok/s decides.
         _reach = int(self.cfg.tul.loop_reach)
         _core_akw = None
-        if _reach > 0:
+        if _m_cells > 1:
+            # ── the register's IN-LOOP relation ───────────────────────────────────
+            # Cell i of slot k reads every cell of slots < k (as today, and as narrowed by
+            # `loop_reach`) AND every cell of its OWN slot k — full within the slot,
+            # causal across slots. Plain causal on the flattened axis would give cell i
+            # only cells 0..i of its own slot, which is an ordering the register does not
+            # have and would make cell 0 permanently blind to its siblings.
+            #
+            # The CCA conv and the value shift are left alone, unlike the `loop_reach`
+            # arm's: they are CAUSAL on the flattened axis, so every position they reach
+            # is a cell of the same or an earlier slot, which this relation already allows.
+            # A `tg_seg` reset here would cut the conv at slot boundaries, a restriction
+            # today's 64-cell core does not have either.
+            _SM = _n_slots * _m_cells
+            _sl = (torch.arange(_SM, device=x.device) // _m_cells)       # slot id per cell
+            _si, _sj = _sl.unsqueeze(1), _sl.unsqueeze(0)
+            _blk = (_si >= _sj)
+            if _reach > 0:
+                if _scse is not None:
+                    raise NotImplementedError(
+                        "tul.loop_reach with tul.slot_cells>1 under SCSE is not defined.")
+                _blk = _blk & (_sj >= _si - _reach)
+            _mask0 = _blk.view(1, 1, _SM, _SM)
+            _same = (_si == _sj).view(1, 1, _SM, _SM)
+            # With a reach budget the later core layers are position-local exactly as the
+            # reach arm's are, except that "position" is the SLOT: a cell keeps its own
+            # slot's cells, which is what makes the register a register and not M
+            # independent loops.
+            _kw0 = {"tg_allow": _mask0, "tg_comp_allow": _mask0}
+            _kwr = {"tg_allow": _same, "tg_comp_allow": _same}
+            _core_akw = tuple([_kw0] + [(_kwr if _reach > 0 else _kw0)
+                                        for _ in range(n_core - 1)])
+        elif _reach > 0:
             if _scse is not None:
                 raise NotImplementedError(
                     "tul.loop_reach under SCSE is not defined: the compact sequence there "
@@ -5627,6 +5732,26 @@ class MORPHTransformer(nn.Module):
                 xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep = self._tul_core(
                     x, x0, bigram_emb, layout, halt=halt, input_ids=input_ids,
                     slot_depths=slot_depths)
+            # ── the Thought Register (tul.slot_cells) ─────────────────────────────
+            # `_tul_core` returns the compact CELL axis, [B, S*M, …]. M == 1 — every model
+            # before the knob — leaves `_reg_cells` None and this block traces out.
+            #
+            # `h_slots` becomes the MEAN of a slot's M cells, and that is a decision with a
+            # reason: every reader between here and the write (the MUX, the span decoder,
+            # SIGReg, the energy) takes ONE state per slot, and handing them the mean keeps
+            # each of those mechanisms the SHIPPED one, so the register arm differs from
+            # its ruler by the register alone. Giving the span decoder the M cells as a
+            # memory to cross-attend to is a second mechanism and is the named follow-up,
+            # not this arm. The mean's gradient still reaches every cell.
+            # The CODA reads the M cells individually — that is the point of the arm — and
+            # it reads them through the ordinary `prefix_project` write, 1:1.
+            _reg_cells = None
+            _m = int(tc.slot_cells)
+            if _m > 1:
+                _S = layout.slot_index.shape[1]
+                _reg_cells = h_slots.reshape(h_slots.shape[0], _S, _m, *h_slots.shape[2:])
+                h_slots = _reg_cells.mean(dim=2)
+                depths = depths.reshape(depths.shape[0], _S, _m)[:, :, 0].contiguous()
             # Think-once conditioning (arm R7): the stack runs once over the looped
             # slot states, and everything downstream — the mux local loss, SIGReg, the
             # gate budget, the plan ablations, prefix_project — reads ITS output. So z,
@@ -5800,7 +5925,14 @@ class MORPHTransformer(nn.Module):
             # own source state and the ablation is applied to the STACK, with the exit cell
             # read back off it so a `shuffle` draws ONE permutation, not two.
             _cells = _pad_cells = _pad_pos = None
-            if tc.prefix_source != "exit":
+            if _reg_cells is not None:
+                # The register's M cells go 1:1 into the M prefix cells (`prefix_k` is
+                # refused unless it equals `slot_cells`). The ablation runs on the STACK
+                # and the exit mean is read back off it, so a `shuffle` draws ONE
+                # permutation and the coda's cells and the reported `h_slots` agree.
+                _cells = self._tul_plan_ablate(_reg_cells, layout, plan_mode)
+                h_slots = _cells.mean(dim=2)
+            elif tc.prefix_source != "exit":
                 _cells, _pad_cells, _pad_pos = self._tul_prefix_cells(
                     h_slots, db_traj, depths, layout)
                 _cells = self._tul_plan_ablate(_cells, layout, plan_mode)
@@ -6632,8 +6764,41 @@ class MORPHTransformer(nn.Module):
                                         ret_reset_mask=_freset)
         _xn, h_slots, _d, _g, *_ = self._tul_core(x, x0, bigram, layout,
                                                  input_ids=input_ids)
-        z = self._readout(h_slots).float()                     # [B, S, C]
+        z = self._readout(h_slots).float()                     # [B, S, C] or [B, S*M, C]
         valid = layout.slot_valid
+        # ── the Thought Register (tul.slot_cells) ────────────────────────────────
+        # `_tul_core` returns the CELL axis, so on a register model `z` is [B, S*M, C] and
+        # `valid` is still [B, S]. The headline numbers stay defined the same way — the
+        # rank of a ROW's written states — and are now over all S*M cells, which is the
+        # quantity the arm exists to move: the ruler reads 6.34 in 1024 dimensions with
+        # pairwise cosine 0.74, so "the slots of a row are near copies" is the defect.
+        # `slot_cell_eff_rank` / `slot_cell_pairwise_cos` are the SECOND reading and the
+        # one no earlier arm could have: the rank WITHIN a slot, across its own M cells.
+        # A register whose cells collapse onto each other reads ~1 there and has bought
+        # nothing, whatever the row number says.
+        _m = int(self.cfg.tul.slot_cells)
+        within: dict[str, float] = {}
+        if _m > 1:
+            from morph.model.fm_planner import effective_rank as _er
+            _S = valid.shape[1]
+            valid = valid.repeat_interleave(_m, dim=1)
+            _zc = z.reshape(z.shape[0], _S, _m, z.shape[-1]).cpu()
+            _vc = layout.slot_valid.cpu()
+            _ranks, _coss = [], []
+            for b in range(_zc.shape[0]):
+                for s in range(_S):
+                    if not bool(_vc[b, s]):
+                        continue
+                    cells = _zc[b, s]                                  # [M, C]
+                    ones = torch.ones(1, _m, dtype=torch.bool)
+                    _ranks.append(_er(cells.unsqueeze(0), ones))
+                    n = torch.nn.functional.normalize(cells, dim=-1)
+                    g = n @ n.T
+                    iu = torch.triu_indices(_m, _m, offset=1)
+                    _coss.append(float(g[iu[0], iu[1]].mean()))
+            within = {"slot_cell_eff_rank": (sum(_ranks) / len(_ranks)) if _ranks else 0.0,
+                      "slot_cell_pairwise_cos": (sum(_coss) / len(_coss)) if _coss else 0.0,
+                      "slot_cells": float(_m)}
         rows = z[valid]
         # eigvalsh goes through cusolver on CUDA, and cusolverDnCreate failed with
         # INTERNAL_ERROR at GL1b's first eval (2026-08-29 smoke) once the mux terms and
@@ -6652,6 +6817,7 @@ class MORPHTransformer(nn.Module):
             # move the target the regulariser is chasing.
             "slot_component_std": float(rows.std()),
             "slot_component_mean": float(rows.mean()),
+            **within,
         }
 
     @torch.no_grad()

@@ -1,0 +1,27 @@
+# Slot-loop panel, arm "slot-register-m4-sameinit": the SEED control for
+# `slot-register-m4`. One factor against it: `tul.slot_cell_init`.
+#
+# Same four cells, the same `prefix_k`, the same `L_total`, the same loop relation, the
+# same write, the same target — and ONE shared learned query instead of four, so all four
+# cells pool the SAME vector out of the span and differ only by their per-cell embedding
+# `P_cell`. It separates "four cells of capacity" from "four cells that start out looking
+# at different things", which a capacity-only reading cannot tell apart and which decides
+# what the next register arm should change.
+#
+# At init the two arms are IDENTICAL: `W_o` is zero, so the pooled vector never reaches
+# the seed and every cell of both arms carries the ruler's single seed. They diverge only
+# once `W_o` moves — asserted in tests/test_tul_slot_register.py.
+#
+# Parameter count: 1024 x 1024 x 3 fewer query rows than the arm (Q is [1, d] instead of
+# [4, d]), i.e. 3,072 FEWER parameters out of 288 M. Declared, not hidden.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-thought-register.md
+defaults:
+  - tul_slot_register_m4
+  - _self_
+
+tul:
+  slot_cell_init: same
+
+wandb:
+  name: slot-register-m4-sameinit

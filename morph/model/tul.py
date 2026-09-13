@@ -184,6 +184,39 @@ class TULConfig:
     #    it is refused without `tg_geometry: strict` or `tg_restrict`.
     #    Record: lab/experiments/planned/2026-09-13-arc-trajectory-prefix.md
     prefix_source: str = "exit"          # "exit" | "trajectory" | "exit_repeat"
+    # ── THE THOUGHT REGISTER (arms `slot-register-m4` / `-m4-sameinit`, 2026-09-13) ──
+    # 1 is today's forward and is BIT-IDENTICAL to the tree before this key: one looped
+    # cell per span, nothing built, no RNG draw.
+    #
+    # THE MEASURED DEFECT. A row's slot states sit at effective rank 5.7-7.3 in 1024
+    # dimensions with mean pairwise cosine 0.72-0.77 (`val/slot_eff_rank` /
+    # `val/slot_pairwise_cos`: the strict ruler 6.34 / 0.74, prefix-4 7.12), 1.7-4.8 in the
+    # 2026-09-10 geometry audit, and 18-23 across 4,906 slots at step 0. The slots of a row
+    # are near copies. The coda sees about six dimensions of variation and the loop
+    # iterates a near-degenerate state — there is nothing for pass 2 to relate pass 1's
+    # result TO, which is what a single vector cannot give an iterative computation.
+    #
+    # M > 1 gives each span M MUTABLE CELLS. They are seeded apart (`TULSlotRegister`: M
+    # learned queries pool M different vectors out of the span's own prelude states, W_o
+    # zero-init so step 0 is the ruler exactly), they loop TOGETHER at one shared per-slot
+    # depth, and inside the loop cell i of slot k reads every cell of slots < k (per
+    # `loop_reach`) AND every cell of its OWN slot — full within the slot, causal across
+    # slots. At the exit cell i is written 1:1 into prefix cell i through the shared
+    # `W_prefix[i]`, so `prefix_k` MUST equal `slot_cells` and the coda is untouched: a
+    # cell still reads itself alone and a later token still reads the cells of earlier
+    # slots per `tg_coda_prefix_reach`.
+    #
+    # The span decoder grades the MEAN of the M cells, not the M cells as a memory it
+    # cross-attends to. That is a cost decision and it is written down as one: giving the
+    # decoder a cross-attention is a SECOND mechanism, and the arm would then differ from
+    # its ruler by two things. The mean's gradient still reaches every cell.
+    # Record: lab/experiments/planned/2026-09-13-arc-thought-register.md
+    slot_cells: int = 1                  # M mutable cells per span; 1 = today
+    # "distinct" = M different learned queries (the arm). "same" = ONE query shared by
+    # every cell, so all M pool the SAME vector and differ only by the per-cell embedding:
+    # the control that separates "M cells of capacity" from "M cells that start out
+    # looking at different things".
+    slot_cell_init: str = "distinct"     # "distinct" | "same"
     slot_id: int = 4                     # "<fim_pad>"; its LM-head logit is −inf (§3.1)
     token_state_dropout: float = 0.15    # Bowman word dropout on the coda input (§3.4)
     slot_mean_depth: int = 0             # 0 → cfg.mean_depth
@@ -1054,6 +1087,49 @@ class TULConfig:
                     "defined: db_loop DETACHES the carry, so 'the state after pass k' is "
                     "not on one graph with the exit and the per-cell gradient edges this "
                     "arm exists to create would not exist.")
+        if self.slot_cells < 1:
+            raise ValueError(f"tul.slot_cells must be >= 1, got {self.slot_cells}")
+        if self.slot_cell_init not in ("distinct", "same"):
+            raise ValueError(
+                f"tul.slot_cell_init must be 'distinct' or 'same', got "
+                f"{self.slot_cell_init!r}")
+        if self.slot_cells > 1:
+            if self.prefix_k != self.slot_cells:
+                raise ValueError(
+                    f"tul.slot_cells={self.slot_cells} needs tul.prefix_k={self.slot_cells}: "
+                    f"the register writes cell i into prefix cell i, 1:1, through the "
+                    f"shared W_prefix[i]. Got prefix_k={self.prefix_k}. Raises rather than "
+                    f"dropping cells or duplicating them into a width nobody chose.")
+            if self.prefix_source != "exit":
+                raise NotImplementedError(
+                    f"tul.slot_cells>1 with tul.prefix_source={self.prefix_source!r}: both "
+                    f"claim the SAME prefix cells. The register writes cell i there; "
+                    f"trajectory/entry_exit write pass i there. Pick one.")
+            _reg_refuse = [
+                n for n in ("tokens_through_core", "loop_reads_tokens", "db_loop",
+                            "reread", "slot_chain", "grad_pass", "oracle_z",
+                            "spandec_per_pass", "mux_every_pass", "mux_stage_all",
+                            "mux_stage_own_iters", "bcast", "pass_lora_rank",
+                            "progressive_p", "coda_span_heads", "core_token_aux")
+                if getattr(self, n)]
+            if _reg_refuse:
+                raise NotImplementedError(
+                    f"tul.slot_cells>1 with {sorted(_reg_refuse)}: every one of those reads "
+                    f"or writes ONE looped state per slot (a trajectory entry, a chain "
+                    f"hop, an energy feature, a per-pass target) and the register carries "
+                    f"M. Not specified, so this raises rather than silently reading cell 0.")
+            if self.gate is not None:
+                raise NotImplementedError(
+                    "tul.gate with tul.slot_cells>1: the gate reads a halting decision off "
+                    "ONE per-slot trajectory and the register has M cells per slot.")
+            if not (self.coda_sees_slots and self.coda_token_cut == 0):
+                raise NotImplementedError(
+                    "tul.slot_cells>1 needs the FULL-AXIS coda (coda_sees_slots=true, "
+                    "coda_token_cut=0): the M cells ARE coda positions.")
+        elif self.slot_cell_init != "distinct":
+            raise ValueError(
+                "tul.slot_cell_init set with tul.slot_cells=1: no register is built, so "
+                "the knob would be silently ignored. Set tul.slot_cells > 1 or drop it.")
         if self.prefix_source in ("trajectory", "entry_exit") and self.prefix_k < 2:
             raise ValueError(
                 f"tul.prefix_source={self.prefix_source!r} needs tul.prefix_k >= 2: at "
@@ -2060,6 +2136,112 @@ class TULReread(nn.Module):
         o = o.transpose(1, 2).reshape(B, S, C)
         term = F.linear(o, self.W_o.to(o.dtype))
         return term * slot_valid.unsqueeze(-1).to(term.dtype)
+
+
+class TULSlotRegister(nn.Module):
+    """``tul.slot_cells`` — M MUTABLE CELLS per span instead of one (the Thought Register).
+
+    THE MEASURED DEFECT. A row's slot states sit at effective rank 5.7 to 7.3 in 1024
+    dimensions with mean pairwise cosine 0.72 to 0.77 (`val/slot_eff_rank` /
+    `val/slot_pairwise_cos` on every slot arm: the strict ruler 6.34 / 0.74, the prefix-4
+    arm 7.12), 1.7 to 4.8 in the 2026-09-10 geometry audit, and 18 to 23 across 4,906
+    slots in the step-0 probe (`results/2026-09-12-latent-z-gradient/step0-*.json`). The
+    slots of a row are near copies: the coda sees about six dimensions of variation and
+    the loop iterates a near-degenerate state. One vector cannot support iterative
+    relational computation — there is nothing for pass 2 to relate pass 1's result TO.
+
+    WHAT THIS BUILDS. M learned queries pool M DIFFERENT vectors out of the span's own
+    prelude token states, one per cell:
+
+        A_i = W_o( sum_j softmax_j( <Q_i, W_k x_j> / sqrt(d) ) W_v x_j )   over j in span s
+
+    plus a per-cell embedding ``P_cell[i]``. The pooling is single-head, softmax over the
+    span's OWN token states only, and causal to the boundary — a cell may not read a token
+    that comes after the span it summarises.
+
+    ``W_o`` is ZERO-INIT and ``P_cell`` is zeros, so at step 0 EVERY cell's seed is exactly
+    today's `slot_seed` value and the register arm starts from the shipped arm rather than
+    from a new random point. ``Q`` / ``W_k`` / ``W_v`` take their draws from a PRIVATE
+    generator (the ``W_sent`` precedent), so a register model's base weights are
+    byte-identical to its ruler's and the arm differs by the mechanism alone.
+
+    ``distinct=False`` is the CONTROL (`slot-register-m4-sameinit`): ONE query shared by
+    every cell, so all M cells pool the SAME vector and differ only by ``P_cell``. It
+    separates "M cells of capacity" from "M cells initialised to look at different things",
+    which is the one thing a capacity-only reading cannot tell apart.
+
+    Record: lab/experiments/planned/2026-09-13-arc-thought-register.md
+    """
+
+    def __init__(self, d_model: int, m_cells: int, distinct: bool = True):
+        super().__init__()
+        if m_cells < 2:
+            raise ValueError(f"TULSlotRegister needs m_cells >= 2, got {m_cells}")
+        self.m = int(m_cells)
+        self.distinct = bool(distinct)
+        self.scale = d_model ** -0.5
+        # RNG-NEUTRAL CONSTRUCTION. The private generator below is what makes the register's
+        # own weights reproducible, but `nn.Linear` still runs a kaiming draw on the GLOBAL
+        # stream before the weight is overwritten. Three Linears = three draws, and anything
+        # constructed after this module would then sit at a different point in the stream
+        # than it does on the ruler. So the global state is snapshotted here and restored at
+        # the end: building a register moves no other parameter, whatever the build order.
+        _rng0 = torch.random.get_rng_state()
+        g = torch.Generator(device="cpu").manual_seed(0x5E63)
+        n_q = self.m if distinct else 1
+        self.Q = nn.Parameter(torch.empty(n_q, d_model).normal_(
+            mean=0.0, std=0.02, generator=g))
+        self.W_k = nn.Linear(d_model, d_model, bias=False)
+        self.W_v = nn.Linear(d_model, d_model, bias=False)
+        for lin in (self.W_k, self.W_v):
+            with torch.no_grad():
+                lin.weight.copy_(torch.empty(lin.weight.shape, device="cpu").normal_(
+                    mean=0.0, std=0.02, generator=g))
+        # ZERO, so the register is an exact no-op at step 0 and the arm starts at its ruler.
+        self.W_o = nn.Linear(d_model, d_model, bias=False)
+        with torch.no_grad():
+            self.W_o.weight.zero_()
+        self.P_cell = nn.Parameter(torch.zeros(self.m, d_model))
+        torch.random.set_rng_state(_rng0)
+
+    def forward(self, xn: Tensor, layout: SlotLayout) -> Tensor:
+        """``[B, S*M, C]`` additive seed term, slot-major (index ``s*M + i``).
+
+        ``xn`` is the prelude's normalised output over the WHOLE packed row, single-stream
+        (the caller reduces the Hyper-Connection carrier). Pad slots get exactly 0: their
+        span is empty, so the mask leaves no key and the pooled vector is defined to be 0
+        rather than a softmax over nothing.
+        """
+        B, L, C = xn.shape
+        S = layout.slot_index.shape[1]
+        M = self.m
+        # keys/values over TOKEN positions only, restricted to the querying slot's span.
+        k = self.W_k(xn)                                                  # [B, L, C]
+        v = self.W_v(xn)
+        q = self.Q if self.distinct else self.Q.expand(M, C)              # [M, C]
+        # [B, M, L] scores, then masked per slot: a slot's keys are its own span's tokens.
+        sc = torch.einsum("mc,blc->bml", q.to(xn.dtype), k) * self.scale
+        tok = ~layout.slot_mask                                           # [B, L]
+        own = (layout.bag_id.unsqueeze(1) == torch.arange(
+            S, device=xn.device).view(1, S, 1)) & tok.unsqueeze(1)        # [B, S, L]
+        # Causal to the boundary is automatic: a span's tokens all precede its own cells,
+        # and `own` selects only that span's TOKEN positions.
+        #
+        # A slot with NO key — a tail pad, whose `bag_id` is the dump bin, so no token
+        # position matches it — would give an all-`-inf` softmax row. `nan_to_num` on the
+        # OUTPUT is not enough there: the NaN is created inside the softmax and propagates
+        # through the BACKWARD, which is how `Q` and `W_k` first read `grad = nan` on this
+        # fixture. So the mask is opened to everything on those rows instead, and the
+        # result is zeroed by `slot_valid` below — no `-inf` row is ever built.
+        _has = own.any(dim=-1, keepdim=True)                              # [B, S, 1]
+        own = torch.where(_has, own, torch.ones_like(own))
+        logits = sc.unsqueeze(1) + torch.where(
+            own.unsqueeze(2), sc.new_zeros(()), sc.new_full((), float("-inf")))
+        a = torch.softmax(logits, dim=-1)                                 # [B, S, M, L]
+        pooled = torch.einsum("bsml,blc->bsmc", a, v)
+        out = self.W_o(pooled) + self.P_cell.to(xn.dtype).view(1, 1, M, C)
+        out = out * layout.slot_valid.view(B, S, 1, 1).to(out.dtype)
+        return out.reshape(B, S * M, C)
 
 
 class TULSlotChain(nn.Module):

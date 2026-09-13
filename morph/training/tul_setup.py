@@ -58,7 +58,7 @@ KNOWN_TUL_KEYS = frozenset({
     "pass_residual_lambda", "plast_weight", "prefix_k", "prefix_source", "progressive_p",
     "reinject_seed_every_pass", "recur_gate", "recur_gate_bias",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
-    "sigreg_slices", "slot_chain", "slot_chain_detach",
+    "sigreg_slices", "slot_cells", "slot_cell_init", "slot_chain", "slot_chain_detach",
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
     "spandec", "spandec_heads", "spandec_horizon", "spandec_layers", "spandec_max_tokens",
     "spandec_pass_horizon_max", "spandec_pass_tokens", "spandec_pass_weight",
@@ -267,6 +267,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         critic_eps=float(tc.get("critic_eps", 0.1)),
         critic_replay_groups=int(tc.get("critic_replay_groups", 1)),
         prefix_source=str(tc.get("prefix_source", "exit")),
+        slot_cells=int(tc.get("slot_cells", 1)),
+        slot_cell_init=str(tc.get("slot_cell_init", "distinct")),
         loop_reads_tokens=bool(tc.get("loop_reads_tokens", False)),
         core_token_aux=bool(tc.get("core_token_aux", False)),
         core_token_aux_weight=float(tc.get("core_token_aux_weight", 1.0)),
@@ -393,6 +395,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "critic_replay_groups": model_cfg.critic_replay_groups,
         "pass_residual_lambda": model_cfg.pass_residual_lambda,
         "prefix_source": model_cfg.prefix_source,
+        "slot_cells": model_cfg.slot_cells,
+        "slot_cell_init": model_cfg.slot_cell_init,
         "loop_reads_tokens": model_cfg.loop_reads_tokens,
         "core_token_aux": model_cfg.core_token_aux,
         "core_token_aux_weight": model_cfg.core_token_aux_weight,
@@ -510,6 +514,20 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"`critic_gap_traj` (the MEASURED worth of one pass) "
               f"(lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md)",
               flush=True)
+    if model_cfg.slot_cells > 1:
+        print(f"  TUL THOUGHT REGISTER ON: slot_cells={model_cfg.slot_cells} "
+              f"init={model_cfg.slot_cell_init!r} - each span gets M MUTABLE looped cells "
+              "instead of one, seeded apart by M learned queries pooling the span's own "
+              "prelude states (W_o zero-init: step 0 IS the ruler). They loop together at "
+              "one per-slot depth; inside the loop a cell reads every cell of earlier "
+              "slots AND every cell of its own slot. Cell i is written 1:1 into prefix "
+              "cell i (prefix_k == slot_cells), the coda is unchanged, and the span "
+              "decoder grades the MEAN of the M cells. Built against the measured rank "
+              "collapse (slot_eff_rank 5.7-7.3 in 1024 dims, pairwise cos 0.72-0.77). "
+              "Read `val/slot_cell_eff_rank` - the rank WITHIN a slot - beside "
+              "`val/slot_eff_rank` "
+              "(lab/experiments/planned/2026-09-13-arc-thought-register.md)",
+              flush=True)
     if model_cfg.prefix_source != "exit":
         print(f"  TUL PREFIX SOURCE = {model_cfg.prefix_source!r} (prefix_k "
               f"{model_cfg.prefix_k}): 'trajectory' gives cell k of a slot the state AFTER "
@@ -522,15 +540,15 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"(lab/experiments/planned/2026-09-13-arc-trajectory-prefix.md)",
               flush=True)
     if model_cfg.loop_reads_tokens:
-        print(f"  TUL LOOP READS TOKENS ON: the SHIPPED core stage runs over EVERY "
-              f"position (tokens + slot cells, one sequence, `_core_region`'s per-SAMPLE "
-              f"Poisson depth) under `causal AND (same span OR a slot cell)`, so a token "
-              f"reaches an earlier span ONLY through a cell and the cells are still the "
-              f"whole cross-span channel. NOT the paid loop, whose core is unrestricted. "
-              f"No prefix write (the cell's state is already at its position); z is "
-              f"gathered at the slot's first cell. Forced-depth eval goes through "
-              f"model.cfg.mean_depth "
-              f"(lab/experiments/planned/2026-09-13-arc-loop-reads-tokens.md)",
+        print("  TUL LOOP READS TOKENS ON: the SHIPPED core stage runs over EVERY "
+              "position (tokens + slot cells, one sequence, `_core_region`'s per-SAMPLE "
+              "Poisson depth) under `causal AND (same span OR a slot cell)`, so a token "
+              "reaches an earlier span ONLY through a cell and the cells are still the "
+              "whole cross-span channel. NOT the paid loop, whose core is unrestricted. "
+              "No prefix write (the cell's state is already at its position); z is "
+              "gathered at the slot's first cell. Forced-depth eval goes through "
+              "model.cfg.mean_depth "
+              "(lab/experiments/planned/2026-09-13-arc-loop-reads-tokens.md)",
               flush=True)
     if model_cfg.core_token_aux:
         print(f"  TUL CORE-TOKEN AUX ON (weight {model_cfg.core_token_aux_weight}): a "

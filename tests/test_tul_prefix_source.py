@@ -423,7 +423,6 @@ def test_a_pad_cell_keeps_its_own_self_edge():
     _c, _p, pad_pos, _h, _d, _t = _cells_of(m, inp, layout)
     _f, _fr, ckw, _cr = m._tul_tg_kwargs(layout)
     nb = m._tul_pad_cell_narrow(ckw, pad_pos)["tg_comp_allow"]
-    L = pad_pos.shape[1]
     diag = nb[:, 0].diagonal(dim1=-2, dim2=-1)                      # [B, L]
     assert bool(diag[pad_pos].all()), "a pad cell lost its own self-edge"
 

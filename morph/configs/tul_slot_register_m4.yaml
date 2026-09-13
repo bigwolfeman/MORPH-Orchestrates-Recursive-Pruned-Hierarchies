@@ -1,0 +1,67 @@
+# Slot-loop panel, arm "slot-register-m4": the THOUGHT REGISTER — M mutable cells per span.
+# One factor against a `slot-spandec-strict` at prefix_k 4 (`tul.slot_cells`), and one
+# factor against `slot-register-m4-sameinit` (how the cells are seeded apart).
+#
+# THE DEFECT THIS IS BUILT ON, and it is the only one the arc has never attacked.
+# A row's written slot states sit at effective rank 5.7 to 7.3 in 1024 dimensions with
+# mean pairwise cosine 0.72 to 0.77 — `val/slot_eff_rank` / `val/slot_pairwise_cos` on
+# every slot arm (the strict ruler 6.34 / 0.74; the prefix-4 arm 7.12,
+# lab/experiments/successes/2026-09-10-arc-slot-mux-prefix4-norm-match.md), 1.7 to 4.8 in
+# the 2026-09-10 geometry audit, and 18 to 23 across 4,906 slots at step 0
+# (lab/experiments/results/2026-09-12-latent-z-gradient/step0-*.json, geometry.eff_rank).
+# The slots of a row are near copies. The coda sees about six dimensions of variation and
+# the loop iterates a near-degenerate state.
+#
+# That is the reading every flat K-curve is consistent with. A single vector gives pass 2
+# nothing to relate pass 1's result TO: there is no second object in the state, so
+# "iterate" can only mean "refine one summary", and the measurements say one pass already
+# finishes that (K0-K6 0.0015 / 0.107 / 0.019 with passes 2-6 at <= 0.002; the coda's loss
+# is flat to 0.0005 under a 10 % perturbation of the exit state; one pass is worth
+# 0.001-0.003 nats through the real coda).
+#
+# WHAT THIS ARM IS. Each span gets FOUR mutable looped cells.
+#   SEED   four learned queries cross-attend (single head, softmax over that span's own
+#          prelude token states, causal to the boundary) and pool four DIFFERENT vectors,
+#          each added to today's `slot_seed: boundary` value plus a per-cell embedding.
+#          `W_o` is zero-init and `P_cell` is zeros, so at step 0 every cell's seed is
+#          EXACTLY the ruler's single seed and the arm starts from the shipped arm.
+#   LOOP   the compact sequence is 64 x 4 = 256 cells. Cell i of slot k reads every cell
+#          of slots < k (causal across slots, as today, and as narrowed by `loop_reach`)
+#          AND every cell of its OWN slot — full within the slot. Plain causal on the
+#          flattened axis would give cell 0 no siblings at all. One shared per-slot depth:
+#          the four cells are one register and they iterate together.
+#   EXIT   cell i is written 1:1 into prefix cell i through the shared `W_prefix[i]`, so
+#          `prefix_k` must equal `slot_cells` (the build refuses otherwise). The CODA is
+#          UNCHANGED: a cell reads itself alone and a later token reads the cells of
+#          earlier slots per `tg_coda_prefix_reach`.
+#   TARGET the span decoder grades the MEAN of the four cells. Written down as a cost
+#          decision: giving the decoder a cross-attention over the four is a SECOND
+#          mechanism and the arm would then differ from its ruler by two things. The
+#          mean's gradient still reaches every cell; the cross-attending decoder is the
+#          named follow-up.
+#
+# THE INSTRUMENT TO READ FIRST is `val/slot_cell_eff_rank` — the rank WITHIN a slot,
+# across its own four cells, which no earlier arm could have. A register whose cells
+# collapse onto each other reads ~1 there and has bought nothing, whatever
+# `val/slot_eff_rank` (now over all 256 cells) says.
+#
+# COST, arithmetic. The core runs over 256 cells instead of 64, which is still far below
+# the coda's 1024-token axis: core 6 x 256 x 6 = 9,216 block-passes against the
+# prelude+coda's 8 x 1280 = 10,240. L_total 1024 + 4*64 = 1280 (the prefix-4 arm's shape,
+# measured there at 0.973x tok/s and +2.93 GB). `W_prefix` gains 2 slices (+2.10 M,
+# identity init); the register adds 3 x 1024^2 + 4 x 1024 = +3.15 M. Against the strict
+# ruler's 55 min, expect roughly 1.2-1.5x. The smoke decides.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-thought-register.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-the-thought-register.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  prefix_k: 4
+  slot_cells: 4
+  slot_cell_init: distinct
+
+wandb:
+  name: slot-register-m4

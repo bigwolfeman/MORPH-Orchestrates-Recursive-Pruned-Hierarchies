@@ -1,0 +1,27 @@
+# Slot-loop panel, arm "slot-register-m8": the WIDTH of the register, one factor against
+# `slot-register-m4`. Eight mutable cells per span instead of four.
+#
+# Queued LAST, and only if m4 moves something. The prior against it is measured: width
+# alone is not a lever — `slot-mux-prefix4-norm-match` took the write from 2 cells to 4,
+# the extra cells were USED (`val/slot_eff_rank` 6.34 -> 7.12) and the reader did not care
+# (token K1-K6 +0.0001), and E18's monotone k2/k4/k8 curve under `absmean` was later shown
+# to be a ternary-rule artefact. What m8 adds over that record is that these cells are
+# MUTABLE and seeded apart, not four copies of one state.
+#
+# COST: L_total 1024 + 8*64 = 1536 (+33 % positions on the prelude and the coda against
+# the k=2 ruler's 1152), the core over 512 cells, and `W_prefix` at 8 slices. E18 measured
+# +2.93 GB for the k=2 -> k=4 step alone on a card whose slot family has died of memory
+# before (the 2026-08-21 gate bake-off, 157 MiB free at step 1050). The smoke decides, and
+# it is the most likely arm of this panel to be handed back unrun.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-thought-register.md
+defaults:
+  - tul_slot_register_m4
+  - _self_
+
+tul:
+  prefix_k: 8
+  slot_cells: 8
+
+wandb:
+  name: slot-register-m8
