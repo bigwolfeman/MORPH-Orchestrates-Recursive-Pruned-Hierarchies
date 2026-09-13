@@ -534,7 +534,12 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"PASS k+1 and the LAST cell the EXIT state, so every written pass has its "
               f"own reader and its own gradient edge; a cell no pass reached is a PAD "
               f"(zero carrier, cut out of the coda's key set, no label). 'exit_repeat' is "
-              f"the matched-count CONTROL: every cell holds the exit. Both add the "
+              f"the matched-count CONTROL: every cell holds the exit. 'entry_exit' holds "
+              f"the loop's ENTRY (z1 = core_init(e)) in cell 0 and the exit in the LAST "
+              f"cell, the rest exit copies: the BINDING control, because "
+              f"I((z1..zT);Y) = I(z1;Y) says the whole trajectory carries exactly what the "
+              f"ENTRY carries (.agents/notes/proposed/architecture/"
+              f"2026-09-13-information-view-of-the-slot-loop.md). Both add the "
               f"zero-init per-cell embedding `tul.E_pass`, so trajectory minus exit_repeat "
               f"isolates the cell CONTENT "
               f"(lab/experiments/planned/2026-09-13-arc-trajectory-prefix.md)",
