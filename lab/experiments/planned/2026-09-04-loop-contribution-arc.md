@@ -268,3 +268,130 @@ The Binding fires on P16c FALSE: the slot loop does not help solve math either. 
 remaining lanes are the write-back (Spiral schedule, the paid loop) and staged targets (E3),
 on deduped Olympiad data with a matched-compute shallow control and 30 % replay. No Olympiad
 run before the band views are deduped.
+
+## Results table (2026-09-13, every filed arm; one source file per row)
+
+Every number is copied from the cited file. K = forced-depth sweep token CE difference
+(K1−K6; K3−K6 in parentheses where filed). CE gaps are token-paired where the file says so;
+negative = better than the named control. Rows for panels still in `planned/` cite those
+files (Results sections filled, one probe each still pending).
+
+**Lane 1: stability and core-map levers**
+
+| date | arm | what changed | testbed | K1−K6 (K3−K6) | CE vs control | verdict | source |
+|---|---|---|---|---|---|---|---|
+| 09-04 | notul-20k-wu / tul-a2-20k-wu | where along a row depth earns | web seq1024 | +0.041 (plain@20k) / +0.104 (paid@20k) | descriptive | earns LEAST at a span's first token | `failures/2026-09-04-arc-e0-where-depth-earns.md` |
+| 09-04 | g95 / g98 | gain-hinge target 0.90 → 0.95 / 0.98 | slot loop | forecast +0.0138/+0.018 (+0.0014/+0.0005) | val 4.329/4.433 vs Y2 4.281 (worse) | hinge is a stability dial, not an earning dial | `failures/2026-09-04-arc-e1-gain-target-dial.md` |
+| 09-04 | to-mnext-y2-iter(-all) | hinge every grad iteration | slot loop | 0.0087 (+0.0001) | worse than Y2 (0.0135) | first draw detonated 2556; branch (a) closed | `failures/2026-09-04-arc-e2-iteration-conditioning.md` |
+| 09-04 | to-mnext-ctt | clip backward cotangent at 4× exit | slot loop | pre-onset forecast +0.0087 | 5.15@2250 vs 4.65@2500 | detonated 2764; clip masked the symptom | `failures/2026-09-04-tul-clip-through-time.md` |
+| 09-04 | to-a1-b8-s1 / s2 | A1 at full BPTT depth 8, two seeds | slot loop | not reached | — | detonated 1682 / 1144 | same file |
+| 09-04 | to-mnext-y2-mask | tg_restrict mask under the constraint | web | tokens +0.0209, forecast +0.187 | +0.13 vs Y2 @5000 | tokens read the slot's depth (later shown an absmean artefact) | `successes/2026-09-04-arc-e4-mask-under-constraint.md` |
+| 09-07 | notul_deep16 | Poisson draw mean 16 | web | K3−K6 +0.277, K6−K12 +0.0405 | +0.104 vs mean-6 at 1.23× cost | K-diffs measure dependence, not value | `successes/2026-09-07-arc-e6-deep-recurrence-draw.md` |
+| 09-07 | to-mnext-y2-mask-d16 | mask arm at mean 16 | slot loop | pre-onset only | — | detonated 2712; Jacobian 3e4× first-iter jump, rank 181→9 | `failures/2026-09-07-arc-e7-block-loop.md` |
+| 09-07 | notul_mtp4 | 4 MTP heads on the coda | web | K3−K6 +0.0021 | +0.345 vs notul | MTP heads use LESS depth; branch (b) closed | `failures/2026-09-07-arc-e8-multi-token-coda.md` |
+| 09-07 | notul_deep16_mtp4 | MTP + deep-16 | web | — | 0.26 behind E6 @2500 | detonated 3446 | same file |
+| 09-07 | notul_carry_all | carry widened 256→768 dims | web | — | — | 2/2 detonated (419, 200) | `failures/2026-09-07-arc-e9-widen-the-carry.md` |
+| 09-07 | notul_fp_wu0 | terminal fixed-point term, warmup 0 | web | — | survivors 0.41 better @800 | 0/6 detonated vs 4/7 controls; SHIPPED | `successes/2026-09-07-arc-e10-loop-loss-terms.md` |
+| 09-07 | notul_pgain_wu0 / pgain2 | power-iterated gain hinge | web | — | — | inert / 2/6 detonated | same file |
+| 09-07 | notul_fp | fixed-point term, ramped | web | 0.022 (vs notul 0.037) | +0.0009 [−0.0022, +0.0040] | free at trained depth | `successes/2026-09-07-arc-e11-fixed-point-ramped.md` |
+| 09-07 | k12-mnext-mask | literal fixed depth 12 | slot loop | — | — | rejected; the one arm detonated 1446 | `failures/2026-09-07-arc-e12-k12-panel.md` |
+| 09-07 | tul_m12_mask | Poisson mean-12 draw | slot loop | 0.049 (+0.0018) | −0.0008 [−0.0031, +0.0015] vs E4 | draw changes WHAT the loop carries, not how deep | `failures/2026-09-07-arc-e13-m12-panel.md` |
+| 09-07 | tul_m12_mnext / a1 / mtp4 | mean-12, other variants | slot loop | mnext K1−K12 +0.0010; a1 exactly 0 | — | free ride; mtp4 detonated 2138 | same file |
+| 09-07 | tul_m12_mask_g102 (+renorm) | expansive hinge target 1.02 | slot loop | 0.033 → 0.043 → 0.060 at the same endpoint | — | both detonated (3877, 4639); K3−K6 unchanged | `failures/2026-09-07-arc-e14-expansive-dial.md` |
+
+**Lane 2: ternary rule and density**
+
+| date | arm | what changed | testbed | K1−K6 (K3−K6) | CE vs control | verdict | source |
+|---|---|---|---|---|---|---|---|
+| 09-09 | depthcand-dense-core | bf16 core, ternary elsewhere | Parcae plain | +0.168 (+0.0119) | −0.0298 vs parcae-entry | ternary core was limiting | `failures/2026-09-09-arc-e20-loop-depth-candidates.md` |
+| 09-09 | carry-lr20x / draw8-bptt4 | injection LR ×20; Parcae's schedule | Parcae plain | +0.089 / +0.060 | +0.0371 / +0.0921 | neither moves contribution | same file |
+| 09-09 | density-half / quarter | block-prune to 0.5 / 0.25 | Parcae plain | +0.043 / +0.074 | horizon reading | sparser core emits LESS per pass | `failures/2026-09-09-arc-density-panel.md` |
+| 09-09 | scale-norm-match | ternary scale ‖W‖_F/√nnz | Parcae plain | **+0.1849** (+0.0139) | +0.0817 vs absmean @5k | SHIPPED in base.yaml | `successes/2026-09-09-arc-per-pass-strength.md` |
+| 09-09 | scale-ttq / threshold-03 | learnable scales; narrower dead zone | Parcae plain | +0.0410 / +0.0261 | +0.0266 / +0.0611 | ttq scales shrink to 0.87× absmean | same file |
+| 09-09 | notul-20k-wu, 8 ckpts | contribution over 2.5k–20k steps | web | flat 0.037–0.041 (0.0010–0.0022) | loss 4.45 → 3.45, share flat | training length is not the lever | `failures/2026-09-09-arc-horizon-ternary-25k.md` |
+| 09-09/10 | norm-match-20k vs absmean-20k | norm_match at 20k, token-paired | web | +0.1363 → +0.1702 (5k → 20k) | −0.0100 [−0.0125, −0.0073] vs absmean@6 | ahead at depth 6 by 20k; 0.107 behind at depth 1 | `failures/2026-09-09-arc-norm-match-recipe-reads.md` |
+| 09-09/10 | tul-norm-match (paid loop) | paid loop under norm_match | web | +0.1200 (+0.0116) | +0.1252 vs plain norm-match@6 | paid loop still worse than plain | same file |
+
+**Lane 3: slot target and input levers**
+
+| date | arm | what changed | testbed | K1−K6 (K3−K6) | CE vs control | verdict | source |
+|---|---|---|---|---|---|---|---|
+| 09-09 | slot-loop / slot-mux / plain-panel norm-match | the real TUL under norm_match | web | 0.0000 on both slot arms; plain 0.033 | +0.11 to +0.26 vs plain | rule does not reach the slot map; prelude entry flattens the plain loop too | `failures/2026-09-09-arc-slot-loop-norm-match.md` |
+| 09-09 | coda-reads-the-thought | coda_token_input=embed + mask + bcast unpack | web | +0.0006 (0) | — | coda reads z (zero +0.811, shuffle +1.651); z identical at every depth | `failures/2026-09-09-arc-coda-reads-the-thought.md` |
+| 09-10 | unpack-free / noise-entry / fixed-depth | terms off; noise entry; fixed depth 6 | web | 0.003 / 0.002 / 0.117 (0.0067) | fixed-depth +0.052 | only fixed depth moves (a bowl); core blocks 2–20 % on slot states vs 86–110 % on tokens | `failures/2026-09-10-arc-slot-map-levers.md` |
+| 09-10 | slot-reread | slot cross-attends the frozen prelude each pass | web | 0.0003 | — | flat; W_o used at ~5 %/pass | `failures/2026-09-10-arc-slot-reread.md` |
+| 09-10 | slot-mnext-noise-entry | Parcae noise entry, M-next MUX | web | +0.0004; forecast +0.0091 | 0.15 better than unpack twin | tokens flat | `failures/2026-09-10-arc-slot-mnext-noise-entry.md` |
+| 09-10 | slot-mnext-progressive | Bansal progressive loss | web | +0.0006 (+0.0001) | 0.036 better than ruler | passes still disagree (cancel 0.497) | `failures/2026-09-10-arc-slot-mnext-progressive.md` |
+| 09-10 | slot-mnext-per-pass-lora | rank-32 per-pass LoRA | web | ~0.0070 (−0.0002) | — | every B_t near zero | `failures/2026-09-10-arc-slot-mnext-per-pass-lora.md` |
+| 09-10 | slot-mnext-mux-every-pass | MUX on every pass | web | −0.0000 | — | cancellation ROSE to 0.771: depth-independence training | `failures/2026-09-10-arc-slot-mnext-mux-every-pass.md` |
+| 09-10 | slot-mnext-staged | pass-3 own-span + final next-span | web | forecast +0.067; exit = ruler | 4.2483 vs 4.3290 (n=1) | signatures transfer, exit value does not | `successes/2026-09-10-arc-slot-mnext-staged.md` |
+| 09-10 | staged-fullread | MUX readout per-stream | web | +0.0014; forecast +0.061 | exit 0.018 better | the reader was not the block | `failures/2026-09-10-arc-slot-mnext-staged-fullread.md` |
+| 09-10 | staged-mask | mask on the staged arm | web | +0.0033; forecast +0.060 | exit 0.021 worse | exit still one pass | `failures/2026-09-10-arc-slot-mnext-staged-mask.md` |
+| 09-10/11 | slot-mux-hca-fix | HCA compress ratio 256→16 | web | +0.0004; forecast +0.0078 | 0.030 better | branch fixed, depth unchanged; SHIPPED in tul_short | `successes/2026-09-10-arc-slot-mux-hca-fix.md` |
+| 09-10/11 | slot-mnext-parcae-core | dense Parcae block stack as the core | web | +0.0001; forecast +0.0019 (−0.0004) | 0.035 better; 0.63× wall | flat on a fifth map: the core is exonerated | `successes/2026-09-10-arc-slot-mnext-parcae-core.md` |
+| 09-10/11 | slot-mnext-gradpass | gradient-conditioned pass (own-span) | web | forecast +0.0236 (+0.0016); tokens +0.0014 | exit 0.017 better; CE 0.052 better | a ONE-step optimiser; passes 3–6 redundant | `failures/2026-09-10-arc-slot-mnext-gradpass.md` |
+| 09-10/11 | slot-mux-mask-norm-match | mask on the norm_match ruler | web | +0.0009 | 0.090 behind | the ternary rule removed the mask's token dependence | `failures/2026-09-10-arc-slot-mux-mask-norm-match.md` |
+| 09-10/11 | slot-loop-mask-norm-match | mask, no MUX | web | −0.0001 | 0.050 behind | H-starve: the MUX was load-bearing | `failures/2026-09-10-arc-slot-loop-mask-norm-match.md` |
+| 09-10/11 | slot-mux-fixed-point-off | fixed-point term 1.0 → 0 | web | +0.0005; forecast +0.0145 (0) | 0.015 better | state expands 2.2×; term is a bound only | `failures/2026-09-10-arc-slot-mux-fixed-point-off.md` |
+| 09-10/11 | slot-mnext-staged-20k | staged arm to 20k | web | forecast flat 0.060–0.064; tokens 0.002 | +0.192/+0.160/+0.163/+0.161 vs plain at 5/10/15/20k | gap to plain flat from 10k | `successes/2026-09-10-arc-slot-mnext-staged-20k.md` |
+| 09-10/11 | slot-mux-bagmean | seed = span mean | web | +0.0005; forecast +0.0057 | 0.025 behind | input axis closed | `successes/2026-09-10-arc-slot-mux-bagmean-norm-match.md` |
+| 09-10/11 | slot-mux-prefix4 | write width 2 → 4 | web | +0.0001; forecast +0.0074 | 0.039 better sweep / 0.033 worse val | cells used, reader indifferent | `successes/2026-09-10-arc-slot-mux-prefix4-norm-match.md` |
+| 09-08 | e18-mask-k2/k4/k8 | write width 2/4/8, ABSMEAN | web | +0.0243/+0.0314/+0.0486 | k8@12 − notul@6 = +0.3526 | monotone width curve, an absmean artefact | `planned/2026-09-08-arc-e18-slot-width-sweep.md` |
+| 09-11 | slot-spandec-mask | M-next MUX → span decoder on z | web | 0.0007 | **−0.0720** vs mux-mask; +0.3079 vs plain | channel worth 0.115 → 0.182; own write falls | `successes/2026-09-11-arc-span-decoder.md` |
+| 09-11 | slot-spandec-mnext-mask | span decoder + M-next back | web | 0.0013 | +0.0409 vs spandec-mask | first-token target harmful | same file |
+| 09-12 | slot-spandec-chain-mask | slot chain seed | web | +0.0010 (+0.0001) | +0.0068 vs spandec-mask | far-offset worth up, cancellation 0.74 → 0.31 | same file |
+| 09-12 | slot-mask-dropout-off | token-state dropout 0.15 → 0 | web | +0.0005 | −0.0432 vs mux-mask | a straight CE tax | same file |
+| 09-12 | slot-mask-mux-quarter | MUX weight 0.25 | web | +0.0006 (+0.0002) | −0.0457 vs mux-mask | cells carry nothing beyond the write | same file |
+
+**Lane 4: strict geometry and matched-compute controls**
+
+| date | arm | what changed | testbed | K1−K6 (K3−K6) | CE vs control | verdict | source |
+|---|---|---|---|---|---|---|---|
+| 09-11 | budget-web-full / span | plain, nothing crosses a span boundary | web (Parcae) | +0.0279 / +0.0301 | span − full = **+0.3994** [0.3838, 0.4162], 0.3149 flat at 8+ | the whole cross-span budget | `failures/2026-09-11-arc-span-budget.md` |
+| 09-09 | plain-depth1 (E19) | plain trained and read at depth 1 | Parcae plain | — | −0.0038 [−0.0066, −0.0013] (loop@6 ahead) | 3× faster; a 5k reading | `failures/2026-09-09-arc-e19-parcae-loop-entry.md` |
+| 09-12 | plain-coda-matched | plain at 14 block-passes/token, depth 1 | web | not looped | spandec-mask@6 − this = **+0.2536**; mux-mask +0.3253 | matched-compute plain beats the slot family | `successes/2026-09-11-arc-span-decoder.md` |
+| 09-12 | slot-spandec-strict | loop is the ONLY cross-span channel | web | +0.0016 (+0.0002) | −0.0001 vs spandec-mask (parity) | closing the bypass costs nothing | `failures/2026-09-12-arc-strict-geometry.md` |
+| 09-12 | strict-reach1 | loop_reach 1, coda reach all | web | +0.0014 (+0.0003) | −0.0106 vs strict | reach does not force depth while the coda reads every cell | same file |
+| 09-12 | strict-prev | coda reads only the previous slot | web | +0.0036 (+0.0006) | +0.0082 vs strict | worst CE of the family | same file |
+| 09-12 | strict-prev-reach1 | prev + loop_reach 1 (forced relay) | web | **+0.0163** (+0.0042) | +0.0023 vs prev | first forced K-curve: a relay, not refinement | same file |
+| 09-12 | strict-prev-reach2 | loop_reach 2 | web | +0.0127 (+0.0028) | −0.0086 vs prev; −0.0109 vs reach1 | smaller forced curve, better CE | same file |
+| 09-12 | strict-h3 | decoder horizon 3 spans | web | +0.0016 (−0.0000) | −0.0093 vs strict | small CE win, no depth | same file |
+| 09-12 | strict-oracle | per-pass regression onto a teacher trajectory | web | −0.0002 (−0.0008) | +0.1195 vs strict | tracks the teacher, pays 0.12 nats | same file |
+| 09-12 | strict-norecur | trained and read at depth 1 | web | −0.0223 forced deeper (−0.0182) | strict@6 − this@1 = +0.0020 [−0.0006, +0.0044] | a depth-1 model ties the depth-6 loop | same file |
+
+**Lane 5: objective arms and energies (one factor against slot-spandec-strict)**
+
+| date | arm | what changed | testbed | K1−K6 (K3−K6) | CE vs strict | verdict | source |
+|---|---|---|---|---|---|---|---|
+| 09-12 | strict-perpass | per-pass planning target | web | +0.0008 (−0.0000) | +0.0172; 2.31× wall | own ladder rises with t; identical-target grid: h1 +0.0000, h6 +0.0015 | `planned/2026-09-12-arc-objective-arms.md` |
+| 09-12 | strict-codaspan (J8) | parallel coda decode, 8 heads | web | +0.0012 (−0.0002) | +0.0415 | heads 6.6 nats/token vs coda 4.4 | same file |
+| 09-12 | strict-codaspan32 | 32 heads | web | +0.0017 (+0.0001) | +0.0255; −0.0160 vs J8 | wider budget recovers some loss | same file |
+| 09-12 | strict-egrad-recon | latent-z reconstruction energy | web | +0.0007 (−0.0003) | +0.0495; 1.78× wall | per-pass ladder never logged | `planned/2026-09-12-arc-latent-z-gradient.md` |
+| 09-12 | strict-egrad-disc | discriminative critic energy | web | +0.0019 (+0.0002) | +0.0081; 1.07× wall | critic AUC 0.632 | same file |
+| 09-12 | strict-critic | within-context pass-vs-pass critic | web | +0.0012 (−0.0000) | −0.0025; −0.0106 vs disc | critic at chance (0.52) for 5000 steps; one pass worth 0.001–0.003 nats to the coda | `planned/2026-09-12-arc-core-token-and-critic.md` |
+| 09-12 | strict-coretok | tokens+cells through the core in TRAINING only (aux CE) | web | +0.0005 (−0.0003) | **−0.0684**; 0.35× rate | core becomes a 1.10-nat token map; passes still 0.0005 | same file |
+
+**Lane 6: math**
+
+| date | arm | what changed | testbed | K1−K6 (K3−K6) | CE / accuracy vs control | verdict | source |
+|---|---|---|---|---|---|---|---|
+| 09-07 | E15 Olympiad panel | 15k steps, uniform mix | Olympiad | not run | not run | rejected (0.43 steps/s) | `failures/2026-09-07-arc-e15-olympiad-panel.md` |
+| 09-08 | E16 mask | mask, bands 2–13, 6k steps | Olympiad | 0.406 as filed (sweep bug found after; see E17) | 0.18 behind plain at depth 12 | slot loop does not help solve math | `failures/2026-09-08-arc-e16-olympiad-curriculum-panel.md` |
+| 09-08 | E16 mnext / a1 | other variants | Olympiad | depth-flat | a1 ties plain ±0.010 | no win | same file |
+| 09-08 | E17 Sudoku depth grid | T = 2..16 on plain and mask | Sudoku | acc@12 − acc@3 = −0.0000 (plain), −0.0001 (mask) | plain 0.938; mask 0.787 | every bucket flat; whole-board solves 1 % | `successes/2026-09-08-arc-e17-sudoku-depth-grid.md` |
+| 09-13 | oly-notul-nm | plain under norm_match, 6k | Olympiad | tokens 0.865 → 0.801 (d1 → d6); answer 0.160 → 0.123 | — | plain loop EARNS depth on math | runner queue.log 05:11 (filing pending) |
+| 09-13 | sud-notul-nm | plain under norm_match, 6k | Sudoku | 0.5095 → 0.5085 | solve rate 0.8 % | flat; task unreadable at this horizon | runner queue.log 08:45 (filing pending) |
+
+**Lane 7: instruments**
+
+| date | instrument | what it measures | headline | source |
+|---|---|---|---|---|
+| 09-04/07 | Huginn loop contribution | external ruler, eval only | K3−K6 +0.566, K6−K16 +0.206; saturates at 16–24 of mean 32 | `failures/2026-09-04-huginn-loop-contribution.md` |
+| 09-10 | slot_z_optimize (hindsight) | fit z on the ANSWER vs the loop's z | fitted z worth 0.944–2.626 nats; loop delivers 0.7–7.8 % of it (hindsight) | `results/2026-09-10-slot-z-optimize/README.md` |
+| 09-10 | slot_gradient_probe | per-pass cotangents | cancellation 0.52–0.60; MUX pays 7.3× the token CE; no-MUX core gets ~1 % | `results/2026-09-10-slot-gradient-probe/README.md` |
+| 09-12 | Step-0 linear probe | AUC of "next span below median" by pass | entry 0.605–0.642 vs null 0.51; only rise is pass 1 | `planned/2026-09-12-arc-latent-z-gradient.md` |
+| 09-12 | depth isolation | one slot's passes, scoring only span s+1 | strict +0.0008; prev-reach1 +0.0172; mask +0.0004 | `results/2026-09-12-instruments/depth_isolation_*.txt` |
+| 09-13 | identical-target grid | forced depth vs the SAME targets | first run invalid (bare prelude); corrected: h1 +0.0000, h6 +0.0015, exit +0.0013; ruler exit +0.0031 | `results/2026-09-12-instruments/horizon_grid_fixed_*.txt` |
+| 09-13 | causal fitted z | fit z on teacher samples, score the real span | causal +0.252 WORSE than the loop; hindsight −1.479 | `results/2026-09-12-instruments/causal_fit_slot-spandec-strict_g1.txt` |
+
+Not in the table: `slot-mnext-staged-all` (never ran), `precision-bf16-all` (slot killed before start), two Huginn tooling filings (no contribution numbers).
