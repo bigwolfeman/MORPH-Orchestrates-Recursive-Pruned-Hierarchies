@@ -110,17 +110,21 @@ TOP_K_SPAN = 8          # the subspace `resid_prev` projects onto
 # ── the statistics ───────────────────────────────────────────────────────────
 
 def spectrum(m: torch.Tensor) -> torch.Tensor:
-    """Eigenvalues of ``mᵀm`` (the uncentered second moment), descending, float64.
+    """Non-zero eigenvalues of ``mᵀm`` (the uncentered second moment), float64.
 
-    Routed through whichever side is smaller: ``svdvals`` for the per-row case (64 slots
-    in 1024 dims) and the Gram matrix for the pooled case (30k slots). Both give the same
-    non-zero spectrum, and the participation ratio is scale-free, so the missing 1/n is
-    irrelevant and deliberately not applied.
+    Through the SMALLER Gram matrix: ``m mᵀ`` (``[n, n]``, 57×57 for a row's slots) when
+    there are fewer vectors than dimensions, ``mᵀm`` (``[d, d]``) when there are more.
+    Both have the same non-zero spectrum, and the participation ratio is scale-free, so
+    the missing 1/n is irrelevant and deliberately not applied.
+
+    NOT ``svdvals``: on the Spark's aarch64 LAPACK, ``gesdd`` on a 51×1024 slot matrix
+    dies with ``On entry to DLASCL parameter number 4 had an illegal value`` and a Fortran
+    ``STOP`` that no try block can catch. ``eigvalsh`` on the Gram is the route the
+    model's own `fm_planner.effective_rank` already takes, it runs there, and on a
+    [n, n] Gram it is also ~300x cheaper.
     """
     m = m.double()
-    if m.shape[0] <= m.shape[1]:
-        return torch.linalg.svdvals(m).pow(2)
-    g = m.T @ m
+    g = (m @ m.T) if m.shape[0] <= m.shape[1] else (m.T @ m)
     return torch.linalg.eigvalsh(g).clamp_min(0.0)
 
 
@@ -188,9 +192,18 @@ def residual_fraction(prev: torch.Tensor, cur: torch.Tensor, k: int = TOP_K_SPAN
     new.
     """
     prev, cur = prev.double(), cur.double()
-    kk = min(int(k), int(min(prev.shape)))
-    v = torch.linalg.svd(prev, full_matrices=False).Vh[:kk]          # [k, d]
-    proj = (cur @ v.T) @ v
+    # The top-k right singular vectors WITHOUT `linalg.svd` — see `spectrum` for why.
+    # eigh of the [n, n] Gram gives the left vectors u; v_i ∝ prevᵀ u_i, normalised.
+    # Directions whose eigenvalue is numerically zero are dropped: their v would be
+    # noise, and projecting onto noise would understate the residual.
+    w, u = torch.linalg.eigh(prev @ prev.T)                          # ascending
+    keep = int((w > float(w.max()) * 1e-12).sum()) if float(w.max()) > 0.0 else 0
+    kk = min(int(k), keep)
+    if kk == 0:
+        return 0.0
+    v = prev.T @ u[:, -kk:]                                          # [d, kk]
+    v = v / v.norm(dim=0, keepdim=True).clamp_min(1e-300)
+    proj = (cur @ v) @ v.T
     return float(((cur - proj).norm(dim=1) / cur.norm(dim=1).clamp_min(1e-12)).mean())
 
 
@@ -315,20 +328,34 @@ def capture_batch(model, inp, layout, depth: int, check_exit: bool = True
 # ── the run ──────────────────────────────────────────────────────────────────
 
 def analyse(per_row: dict, order: list[str]) -> dict:
-    """``{stage: {view: {...}}}`` from ``{stage: {view: [ [n,C] per row ]}}``."""
+    """``{stage: {view: {...}}}`` from ``{stage: {view: [ [n,C] per row ]}}``.
+
+    A row with fewer than two valid slots has no covariance and is DROPPED from every
+    per-row series (``n_rows`` in the output says how many survived); it still enters the
+    pooled set. LAPACK does not raise on an empty matrix — it prints ``DLASCL parameter
+    number 4`` and calls ``STOP``, killing the process — so the guard is here and not in
+    a try block.
+    """
     out: dict = {}
     for si, stage in enumerate(order):
         out[stage] = {}
         for view in ("raw", "readout"):
             rows = per_row[stage][view]
+            for r in rows:
+                if r.numel() and not bool(torch.isfinite(r).all()):
+                    raise RuntimeError(f"{stage}/{view} holds a non-finite state; the "
+                                       "spectrum of it would be meaningless")
             series: dict[str, list[float]] = {}
             for r in rows:
+                if r.shape[0] < 2:
+                    continue
                 for k, v in rank_stats(r).items():
                     series.setdefault(k, []).append(float(v))
             if si > 0:
                 prev_rows = per_row[order[si - 1]][view]
-                series["resid_prev"] = [residual_fraction(p, c)
-                                        for p, c in zip(prev_rows, rows)]
+                series["resid_prev"] = [
+                    residual_fraction(p, c) for p, c in zip(prev_rows, rows)
+                    if p.shape[0] >= 2 and c.shape[0] >= 2]
             pooled = rank_stats(torch.cat(rows, dim=0))
             out[stage][view] = {"per_row": {k: quantiles(v) for k, v in series.items()},
                                 "pooled": pooled}
@@ -377,6 +404,8 @@ def render(out: dict) -> str:
                      f"sX_exit readout, pooled per batch, gives "
                      f"{entry['repro']['sX_exit_readout_per_batch_eff_rank']:.4f} / "
                      f"{entry['repro']['sX_exit_readout_per_batch_cos']:.4f}")
+        lines.append(f"  rows from the validation stream at skip_samples="
+                     f"{entry['skip_samples']} (the trainer's val loader uses 50000)")
         lines.append(f"  wall {entry['wall_s']:.1f}s")
         for view in ("raw", "readout"):
             lines.append("")
@@ -392,6 +421,11 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--depth", type=int, default=0,
                     help="forced slot depth; 0 = the checkpoint's own eval depth")
+    ap.add_argument("--skip-samples", type=int, default=0,
+                    help="documents to skip in the validation stream. 0 is the probe "
+                         "family's convention; 50000 is the TRAINER's val loader "
+                         "(morph/training/train.py::_make_val_loader), which is the "
+                         "setting that makes the reproduction check exact.")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
@@ -420,7 +454,8 @@ def main() -> None:
                  + ["sX_exit", "sW_write"])
 
         loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8,
-                                   split="validation", skip_samples=0, bag_size=0, tul=None)
+                                   split="validation", skip_samples=a.skip_samples,
+                                   bag_size=0, tul=None)
         row_tokens = tul_rt.data_cfg.spec_for(cfg.data.seq_len).l_total + 1
         stream = stream_from_loader(loader, a.rows * row_tokens)
         batches = pack_rows(stream, tul_rt, cfg, a.batch, False)[:-(-a.rows // a.batch)]
@@ -453,7 +488,9 @@ def main() -> None:
             if i % 10 == 0:
                 print(f"{label} batch {i}/{len(batches)} rows={n_rows} "
                       f"sX_exit readout eff_rank(centered, this batch)="
-                      f"{st['eff_rank_centered']:.3f} cos={st['cos_raw']:.3f}", flush=True)
+                      f"{st['eff_rank_centered']:.3f} cos={st['cos_raw']:.3f} | the "
+                      f"model's own probe: {probe_acc['slot_eff_rank'][-1]:.3f} / "
+                      f"{probe_acc['slot_pairwise_cos'][-1]:.3f}", flush=True)
 
         stages = analyse(per_row, order)
         wall = time.time() - t0
@@ -461,6 +498,7 @@ def main() -> None:
             "config": config, "ckpt": path, "step": step, "depth": depth,
             "own_eval_depth": own,
             "rows": n_rows, "batch": a.batch, "order": order,
+            "skip_samples": a.skip_samples,
             "d_model": int(model.cfg.d_model), "prefix_k": int(tc.prefix_k),
             "valid_slots": int(sum(r.shape[0] for r in per_row["sX_exit"]["raw"])),
             "model_probe": {k: sum(v) / len(v) for k, v in probe_acc.items()},
