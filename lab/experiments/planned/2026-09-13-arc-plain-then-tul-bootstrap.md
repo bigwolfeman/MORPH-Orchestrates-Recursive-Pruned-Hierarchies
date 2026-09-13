@@ -94,8 +94,15 @@ above comes from the trainer's last `[VAL]` line and did NOT reproduce on the sa
 checkpoint: the model's own `tul_slot_state_probe`, run by
 `lab/divergence/slot_rank_anatomy.py` on the DGX Spark, reads 11.9597 / 0.5635 on the
 480-row probe panel and 13.8466 / 0.5201 on the trainer's own val recipe
-(`lab/experiments/results/2026-09-13-rank-anatomy/README.md`). The cause is open
-(a follow-up is measuring it). Scoring rule for every rank prediction in this file: the
+(`lab/experiments/results/2026-09-13-rank-anatomy/README.md`). The cause is now measured
+(`lab/experiments/results/2026-09-13-rank-anatomy/discrepancy.md`, commit ab7c353): the run
+logged its rank from the PRE-7a24adf probe, which rebuilt the front UNRESTRICTED on a
+strict model; the checkpoint reproduces 5.7598 / 0.7104 / CE 4.4249 to four decimals under
+that bare front and reads 13.85 / 0.520 under the shipped probe on the trainer's val recipe.
+So the "rank 5.76" headline of this lane was an inert-instrument number; the real per-row
+rank of the ruler is about 13 of ~50 slots (cosine 0.52), and every `val/slot_eff_rank`
+logged before 7a24adf by a front-restricted arm (strict, or tg_restrict at scope all) is a
+bare-front number. Scoring rule for every rank prediction in this file: the
 partner's baseline is the SAME instrument on the SAME rows as the arm (the sweep's 480
 rows, per-row median), never the trainer's logged figure. Rank predictions stated as
 "vs 5.7598" are scored against that re-read baseline; the predicted DIRECTION and the

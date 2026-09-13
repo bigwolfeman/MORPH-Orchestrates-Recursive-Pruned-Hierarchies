@@ -87,3 +87,15 @@ explains the COSINE reading, not the rank reading. The two are different claims.
 * **Effective rank is a correlational instrument.** A higher rank is necessary for the coda to
   have more to read; it is not proof the passes are doing useful iterative work. The K-curve
   and the CI, not the rank number, are what closes or keeps this lane open.
+
+## Correction, 2026-09-13 evening
+
+The rank numbers this note adopted (effective rank 5.8 to 7.3, cosine 0.71 to 0.77) were
+logged by the pre-7a24adf slot-state probe, which rebuilt the front unrestricted on
+front-restricted models. Re-read with the shipped probe on the same checkpoint, the strict
+ruler sits at per-row rank 13.85 with cosine 0.52 on the trainer's val recipe
+([`discrepancy.md`](../../../../lab/experiments/results/2026-09-13-rank-anatomy/discrepancy.md)).
+The collapse is real but milder than adopted: about 13 directions across ~50 slots, plus a
+shared row offset that carries 93 % of a state's length. The register arm still runs; its
+rank predictions are scored against the corrected baseline (Method amendment in the prereg).
+
