@@ -7169,26 +7169,35 @@ class MORPHTransformer(nn.Module):
         _m = _vq_k if _vq_k else int(self.cfg.tul.slot_cells)
         within: dict[str, float] = {}
         if _m > 1:
-            from morph.model.fm_planner import effective_rank as _er
+            # Vectorised on the DEVICE, no eigendecomposition. The first version moved
+            # the cells to the CPU and ran one `eigvalsh` per (row, slot): 6 x 64 per batch
+            # x 20 eval batches, eight CPU threads, the GPU at 9 % for ~3.7 min per val
+            # (slot-register-m4, 2026-09-13, killed at step 600). The [M, C] cells of a
+            # slot have a [C, C] covariance whose NONZERO eigenvalues are those of the
+            # [M, M] Gram X Xᵀ/(M-1), so the participation ratio (Σλ)²/Σλ² is
+            # tr(G)² / ‖G‖_F², a trace formula; the pairwise cosine is the mean of the
+            # normalised Gram's off-diagonal. Both in float64 to match `effective_rank`.
             _S = valid.shape[1]
             valid = valid.repeat_interleave(_m, dim=1)
-            _zc = z.reshape(z.shape[0], _S, _m, z.shape[-1]).cpu()
-            _vc = layout.slot_valid.cpu()
-            _ranks, _coss = [], []
-            for b in range(_zc.shape[0]):
-                for s in range(_S):
-                    if not bool(_vc[b, s]):
-                        continue
-                    cells = _zc[b, s]                                  # [M, C]
-                    ones = torch.ones(1, _m, dtype=torch.bool)
-                    _ranks.append(_er(cells.unsqueeze(0), ones))
-                    n = torch.nn.functional.normalize(cells, dim=-1)
-                    g = n @ n.T
-                    iu = torch.triu_indices(_m, _m, offset=1)
-                    _coss.append(float(g[iu[0], iu[1]].mean()))
-            within = {"slot_cell_eff_rank": (sum(_ranks) / len(_ranks)) if _ranks else 0.0,
-                      "slot_cell_pairwise_cos": (sum(_coss) / len(_coss)) if _coss else 0.0,
-                      "slot_cells": float(_m)}
+            _zc = z.reshape(z.shape[0], _S, _m, z.shape[-1])          # [B, S, M, C]
+            _cells = _zc[layout.slot_valid].double()                  # [N, M, C] valid slots
+            if _cells.shape[0] > 0:
+                _xc = _cells - _cells.mean(dim=1, keepdim=True)
+                _g = _xc @ _xc.transpose(1, 2) / max(_m - 1, 1)       # [N, M, M]
+                _tr = _g.diagonal(dim1=1, dim2=2).sum(-1)
+                _fro2 = (_g * _g).sum((1, 2))
+                _er_slot = torch.where(_fro2 > 0, _tr * _tr / _fro2.clamp_min(1e-300),
+                                       torch.zeros_like(_tr))
+                _n = torch.nn.functional.normalize(_cells, dim=-1)
+                _gn = _n @ _n.transpose(1, 2)                          # [N, M, M]
+                _cos_slot = (_gn.sum((1, 2)) - _gn.diagonal(dim1=1, dim2=2).sum(-1)) \
+                    / float(_m * (_m - 1))
+                within = {"slot_cell_eff_rank": float(_er_slot.mean()),
+                          "slot_cell_pairwise_cos": float(_cos_slot.mean()),
+                          "slot_cells": float(_m)}
+            else:
+                within = {"slot_cell_eff_rank": 0.0, "slot_cell_pairwise_cos": 0.0,
+                          "slot_cells": float(_m)}
         rows = z[valid]
         # eigvalsh goes through cusolver on CUDA, and cusolverDnCreate failed with
         # INTERNAL_ERROR at GL1b's first eval (2026-08-29 smoke) once the mux terms and
