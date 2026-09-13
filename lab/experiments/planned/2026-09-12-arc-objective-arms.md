@@ -407,6 +407,20 @@ already said this column cannot be read as progress. The identical-target readin
 (`spandec_horizon_grid.py`, forced depths 1,2,3,6 × columns h1/h6/exit on the same targets)
 is queued on the Spark (chain C) and is the binding reading of P-2.
 
+**The identical-target grid** (`spandec_horizon_grid.py`, DGX Spark, 480 rows, forced depths
+1/2/3/6, the SAME targets in every column;
+`../results/2026-09-12-instruments/horizon_grid_slot-spandec-strict-perpass.{json,txt}`):
+
+| target column | d1 | d2 | d3 | d6 | K1−K6 | K3−K6 |
+| --- | --- | --- | --- | --- | --- | --- |
+| pass_h1 (next span, 8 tokens) | 4.7543 | 4.7670 | 4.7708 | 4.7742 | **−0.0200** [−0.0220, −0.0181] | −0.0034 |
+| pass_h6 (next six spans, 48 tokens) | 4.7564 | 4.7607 | 4.7618 | 4.7640 | **−0.0075** [−0.0082, −0.0068] | −0.0022 |
+| exit (the span decoder) | 4.7029 | 4.7094 | 4.7110 | 4.7131 | **−0.0102** [−0.0112, −0.0093] | −0.0021 |
+
+Held to one target, the state after one pass is the BEST state at every horizon, including
+the six-span target the later passes were trained for. The passes do not descend the
+per-pass objective; each one degrades it.
+
 **Arm B's heads** read 6.62 nats/token at the tail (7.46 at steps 200–600), against the
 coda's 4.39 on the same tokens: a parallel readout of a whole span from one cell is 2.2
 nats behind the causal read, at every J.
@@ -416,7 +430,7 @@ nats behind the causal read, at every J.
 | P | claim | result |
 | --- | --- | --- |
 | P-1 | per-pass tokens K1−K6 > 0.005 | **FALSE** (0.0008) |
-| P-2 | `spandec_pass_t6` < `t1` by > 0.05 | **FALSE by the letter** (rises 0.19); binding identical-target reading pending (Spark chain C) |
+| P-2 | `spandec_pass_t6` < `t1` by > 0.05 | **FALSE** by the letter (rises 0.19) AND by the binding identical-target reading (below): every extra pass makes the state WORSE at every target |
 | P-3 | per-pass worse than ruler by 0.00–0.05 | **TRUE** (+0.0172) |
 | P-4 | per-pass clears 8,086 tok/s | **FALSE** (4,736), the 65 % case; the floor was OFF on this runner so the arm ran |
 | P-5 | codaspan tokens K1−K6 > 0.005 | **FALSE** (0.0012) |
