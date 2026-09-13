@@ -323,6 +323,21 @@ def test_the_memory_equals_the_codas_prefix_cells_cell_by_cell():
         "the decoder's memory is not `_readout` of the exact tensor prefix_project writes")
 
 
+def test_with_a_think_once_stack_the_memory_is_the_stacks_output():
+    """`tul.cond_layers > 0`: `_tul_cond_apply` runs BEFORE the cells are formed, so the
+    cells the decoder reads are the STACK's output — the same object the coda's prefix
+    write projects. The config header claims that; this measures it. The equality below is
+    against the tensor `prefix_project` is handed, so it holds whatever the stack does."""
+    m = _model(4, reads=True, cond_layers=2)
+    assert m.tul_cond is not None and len(m.tul_cond) == 2
+    with _Spy(m) as spy:
+        _forward(m)
+    cells = spy.cells
+    B, S, M = cells.shape[0], cells.shape[1], cells.shape[2]
+    want = m._readout(cells.reshape(B, S * M, *cells.shape[3:]))
+    assert torch.equal(spy.mem, want.reshape(B, S, M, want.shape[-1]))
+
+
 def test_a_model_with_the_knob_off_is_handed_no_memory():
     m = _model(4, reads=False)
     with _Spy(m) as spy:

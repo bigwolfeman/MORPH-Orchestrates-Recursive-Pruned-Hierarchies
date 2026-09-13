@@ -132,9 +132,9 @@ for itself and would silently disagree with the decoder.
 
 ### The gate, built in this change
 
-* `tests/test_tul_spandec_reads_cells.py` — **34 passed**.
+* `tests/test_tul_spandec_reads_cells.py` — **35 passed**.
 * `tests/test_tul_spandec_target_offset.py` — **38 passed**.
-* Whole suite at the commit: **1,653 passed, 9 skipped, 1 xfailed**.
+* Whole suite at the commit: **1,654 passed, 9 skipped, 1 xfailed** (exit 0).
 * OFF bit-identity is MEASURED, not argued: `lab/divergence/spandec_off_pin.py` ran on the
   parent commit `f89256d` (this change's four source files stashed) and on this tree, four
   fixtures at M = 1 and M = 4, and loss / logit sum / `spandec_ce` / grad sum / key count
