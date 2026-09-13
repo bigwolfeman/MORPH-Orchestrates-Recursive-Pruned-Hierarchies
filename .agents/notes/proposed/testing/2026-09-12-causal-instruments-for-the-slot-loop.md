@@ -168,7 +168,7 @@ loaders, the checkpoint loads and every GPU-only code path are unverified, and t
 
 `slot_z_causal_fit.py` on `slot-spandec-strict@5000`, teacher `plain-panel-norm-match@5000`,
 6 rows, depth 6, K 4 teacher samples (fit on 3, one held out), 200 steps, 1 fit group
-(`lab/experiments/results/2026-09-12-instruments/causal_fit_slot-spandec-strict_g1.{json,log}`,
+(`lab/experiments/results/2026-09-12-instruments/causal_fit_slot-spandec-strict_g1.{json,txt}`,
 23,717 s on the GB10). CE on the real next span's tokens, per position:
 
 | z | CE | vs the loop's z | 95 % CI |
