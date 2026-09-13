@@ -1,0 +1,56 @@
+# Slot-loop panel, arm "slot-register-m4-cond4": the Thought Register plus the 4-layer
+# NON-SHARED conditioning stack, with the stack as the REGISTER'S reader.
+# ONE factor against `slot-register-m4` (`tul_slot_register_m4.yaml`): `tul.cond_layers`.
+# Same register, same M, same prefix width, same span-decoder target, same strict geometry.
+#
+# WHERE THE STACK SITS, and why it had to move. `_tul_core` returns the S*M compact CELL
+# axis. Before this arm the stack ran AFTER the register's mean, so it would have read S
+# means while the coda's 1:1 prefix write read the RAW M cells — the stack would have been
+# the reader of neither of the register's two readers. It now runs on the cell axis
+# straight out of the loop, under the SAME in-loop relation the register loops with (ONE
+# builder, `transformer.slot_cell_relation`, shared with the core stage). So BOTH readers
+# — the coda's per-cell write and the span decoder's mean — read the stack's output.
+# At `slot_cells: 1` that placement is bit-identical to the old one: plain causal over S
+# slots IS the relation at M = 1 and the register block is a no-op there.
+#
+# WHAT THAT RELATION IS, as executed. Measured 2026-09-13, and written down because the
+# register's own comments read wider than the forward. The mask ALLOWS cell i of slot k
+# every cell of its OWN slot and every cell of slots < k, but every attention branch ANDs
+# it into an already-causal relation and can only NARROW, and the mask is a superset of
+# flattened causal. At `loop_reach 0` — this arm — it therefore executes as plain
+# FLATTENED CAUSAL: a cell never reads a LATER cell of its own slot. That is equally true
+# of the register's own core stage, which is the point here — the stack runs exactly the
+# loop's relation, whatever that relation turns out to be. Pinned two-sided in
+# tests/test_tul_cond4_strict.py against an all-TRUE mask.
+#
+# WHAT IT TESTS. The information note
+# (.agents/notes/proposed/architecture/2026-09-13-information-view-of-the-slot-loop.md)
+# says a DETERMINISTIC map after the loop carries at most what the loop's exit carried
+# (`Joint.mi_map_le`), so no stack can make the passes matter and the K-curve must stay
+# flat. What the stack CAN move is the READER: four non-shared blocks with the register's
+# own relation are the first mechanism in the arc that lets a span's four cells relate to
+# each other OUTSIDE the weight-shared loop. If the register's cells stay apart
+# (`val/slot_cell_eff_rank` above 2.0) but the K-curve is flat, this arm says whether the
+# cells are worth anything to a reader that can mix them.
+#
+# COST. Four extra non-shared blocks over 64*4 = 256 compact cells run ONCE: 1,024
+# block-passes per row, against the register core's 6 x 256 x 6 = 9,216 and the
+# prelude+coda's 8 x 1280 = 10,240. Decode is unchanged at n_coda blocks per token.
+# Parameters: exactly four coda blocks' worth on top of `slot-register-m4`. The stack's
+# attention is EAGER here (the S*M relation tensors are eager-only), the same second
+# difference from the ruler the register's own core stage already carries.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-cond4-reader.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-cond4-as-the-reader-of-the-register.md
+defaults:
+  - tul_slot_register_m4
+  - _self_
+
+tul:
+  cond_layers: 4
+  # The shipped setting: the coda's token CE trains THROUGH z, so the stack, the register
+  # and the loop all learn from the reader as well as from the span decoder.
+  detach_z: false
+
+wandb:
+  name: slot-register-m4-cond4

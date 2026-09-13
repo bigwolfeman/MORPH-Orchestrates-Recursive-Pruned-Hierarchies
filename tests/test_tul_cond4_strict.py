@@ -270,7 +270,8 @@ def test_the_stack_and_the_loop_run_the_same_cross_slot_relation_at_m1():
 
     m.tul_cond[0].forward = spy
     _run(m)
-    assert seen and seen[0] == ((), {}), f"the stack was handed {seen[0]}"
+    assert seen and seen[0] == ((), {"attn_kwargs": None}), (
+        f"the stack was handed {seen[0]}")
 
 
 # ── 5. THE REFUSALS ──────────────────────────────────────────────────────────
@@ -281,3 +282,274 @@ def test_cond_layers_with_a_reach_budget_raises():
     cut, silently re-opening the route the arm exists to close."""
     with pytest.raises(NotImplementedError, match="cond_layers"):
         _model(1, cond_layers=1, loop_reach=1)
+
+
+# ── 2/3. THE REGISTER ARM: THE STACK RUNS ON THE CELLS ───────────────────────
+
+# The pins for contract 3, produced by running the PRE-change source (commit b1075f2,
+# extracted into a symlink tree whose only real file is that transformer.py) and this tree
+# in two processes on the same fixture and the same seeds. All four columns matched to the
+# last printed digit, which is what says the reorder is a no-op at `slot_cells: 1`:
+#
+#   cond=2 loss=9.9817762375 logit_sum=553.297651 n_fin=10584 passes=950.0 gradsum=1812.370773
+#   cond=4 loss=9.9952659607 logit_sum=414.534669 n_fin=10584 passes=982.0 gradsum=1916.135578
+M1_PIN = {
+    2: dict(loss=9.9817762375, logit_sum=553.297651, n_fin=10584, passes=950.0,
+            gradsum=1812.370773),
+    4: dict(loss=9.9952659607, logit_sum=414.534669, n_fin=10584, passes=982.0,
+            gradsum=1916.135578),
+}
+
+
+@pytest.mark.parametrize("n_cond", [2, 4])
+def test_m1_placement_is_bit_identical_to_the_pre_change_source(n_cond):
+    """Contract 3. Moving `_tul_cond_apply` above the register's mean cannot change a
+    `slot_cells: 1` model: the register block is a no-op there and plain causal over S
+    slots IS `slot_cell_relation` at M = 1. Pinned, not argued."""
+    m = _cond(1, n_cond=n_cond)
+    _i, inp, lab, layout = _batch(1)
+    torch.manual_seed(5)
+    out = m(inp, labels=lab, slot_layout=layout)
+    out["loss"].backward()
+    gs = sum(float(p.grad.double().abs().sum()) for p in m.parameters()
+             if p.grad is not None)
+    m.eval()
+    with torch.no_grad():
+        torch.manual_seed(5)
+        lg = m(inp, labels=None, slot_layout=layout)["logits"].float()
+    fin = torch.isfinite(lg)
+    pin = M1_PIN[n_cond]
+    assert float(out["loss"]) == pytest.approx(pin["loss"], abs=1e-9)
+    assert float(out["layer_passes"]) == pin["passes"]
+    assert gs == pytest.approx(pin["gradsum"], abs=1e-4)
+    assert int(fin.sum()) == pin["n_fin"]
+    assert float(lg[fin].double().sum()) == pytest.approx(pin["logit_sum"], abs=1e-4)
+
+
+def test_the_stack_runs_on_the_cell_axis_not_on_the_mean():
+    m = _cond(4)
+    s = _run(m, 4)
+    B, S = m.cfg.tul.prefix_k, None
+    _i, inp, lab, layout = _batch(4)
+    S = layout.slot_index.shape[1]
+    assert s.stack_in.shape[1] == S * 4, (
+        f"the stack read {s.stack_in.shape[1]} positions, not the S*M={S * 4} cell axis")
+    assert s.stack_out.shape == s.stack_in.shape
+
+
+def test_the_coda_prefix_cells_are_the_stacks_output_cell_by_cell():
+    """The register writes cell i into prefix cell i. With the stack on the cell axis
+    those cells ARE the stack's output — not the raw loop exit."""
+    m = _cond(4)
+    s = _run(m, 4)
+    assert s.prefix_cells is not None, "the register did not hand prefix_project cells"
+    B = s.stack_out.shape[0]
+    S = s.stack_out.shape[1] // 4
+    want = s.stack_out.reshape(B, S, 4, *s.stack_out.shape[2:])
+    assert torch.equal(s.prefix_cells, want), (
+        "the coda's prefix cells are not the stack's output cells")
+    raw = s.stack_in.reshape(B, S, 4, *s.stack_in.shape[2:])
+    assert not torch.allclose(s.prefix_cells, raw), (
+        "the stack is an identity on this fixture — the contract is untested")
+
+
+def test_the_span_decoder_grades_the_mean_of_the_stacks_output_cells():
+    m = _cond(4)
+    s = _run(m, 4)
+    B = s.stack_out.shape[0]
+    S = s.stack_out.shape[1] // 4
+    want = s.stack_out.reshape(B, S, 4, *s.stack_out.shape[2:]).mean(dim=2)
+    assert torch.equal(s.spandec_h, want), (
+        "the span decoder graded the mean of the RAW loop cells, not the stack's")
+
+
+def test_the_layer_pass_count_is_per_cell_on_a_register_model():
+    m0, m1 = _model(4, seed=99), _cond(4)
+    _i, inp, lab, layout = _batch(4)
+    torch.manual_seed(5)
+    o0 = m0(inp, labels=lab, slot_layout=layout)
+    torch.manual_seed(5)
+    o1 = m1(inp, labels=lab, slot_layout=layout)
+    n_valid = int(layout.slot_valid.sum())
+    assert float(o1["layer_passes"] - o0["layer_passes"]) == pytest.approx(
+        N_COND * 4 * n_valid), "the stack's passes are counted per SLOT, not per CELL"
+
+
+# ── the stack's relation, at M > 1 ───────────────────────────────────────────
+
+def _stack_allow(m: MORPHTransformer, M: int) -> torch.Tensor:
+    """The `tg_allow` the stack was actually handed, captured off the real forward."""
+    seen: list = []
+    real = m.tul_cond[0].forward
+
+    def spy(h, attn_kwargs=None, **kw):
+        seen.append(attn_kwargs)
+        return real(h, attn_kwargs=attn_kwargs, **kw)
+
+    m.tul_cond[0].forward = spy
+    try:
+        _run(m, M)
+    finally:
+        m.tul_cond[0].forward = real
+    assert seen and seen[0] is not None, "the stack was handed no relation at all"
+    assert torch.equal(seen[0]["tg_allow"], seen[0]["tg_comp_allow"])
+    return seen[0]["tg_allow"][0, 0]
+
+
+def test_the_stack_uses_the_same_relation_builder_as_the_loop():
+    """ONE builder. If the stack's mask and the core's mask ever stop being the same
+    tensor content, the stack has quietly become a different mechanism."""
+    from test_tul_slot_register import _core_kwargs
+    m = _cond(4)
+    _i, inp, _l, layout = _batch(4)
+    core = _core_kwargs(m, inp, layout)
+    assert core is not None
+    assert torch.equal(_stack_allow(m, 4), core[0]["tg_allow"][0, 0])
+
+
+def test_the_stacks_mask_says_own_slot_full_and_earlier_slots_causal():
+    """THE MASK. Cell i of slot k is allowed every cell of its own slot (including the
+    ones after it) and every cell of slots < k, and no cell of a later slot.
+
+    WHAT THE MASK IS NOT. Read
+    `test_the_executed_relation_is_flattened_causal_at_reach_zero` below before using this
+    as a claim about the forward: every branch that reads `tg_allow`/`tg_comp_allow` ANDs
+    it into an ALREADY-CAUSAL relation and only ever narrows, so the forward-in-slot half
+    of this mask never fires. That is true of the loop's own core stage too — the stack
+    matches the loop exactly, which is the contract here."""
+    m = _cond(4)
+    a = _stack_allow(m, 4)
+    S = a.shape[0] // 4
+    sl = torch.arange(S * 4) // 4
+    for p in (0, 1, 4 + 2, 3 * 4 + 1, S * 4 - 1):
+        assert bool(a[p][sl == sl[p]].all()), f"cell {p} cannot read all of its own slot"
+        assert bool(a[p][sl < sl[p]].all()), f"cell {p} cannot read an earlier slot"
+        assert not bool(a[p][sl > sl[p]].any()), f"cell {p} reads a LATER slot"
+    flat = torch.arange(a.shape[0]).unsqueeze(0) <= torch.arange(a.shape[0]).unsqueeze(1)
+    assert not torch.equal(a, flat), "the stack's MASK is flattened causal"
+
+
+def _stack_out(m: MORPHTransformer, M: int, edit=None, perturb=None) -> torch.Tensor:
+    """Run the forward with the stack's relation (and/or its input) edited."""
+    from morph.model.transformer import slot_cell_relation
+    real = m._tul_cond_apply
+    box: dict = {}
+
+    def patched(h, n_slots=0, m_cells=1):
+        allow, _same = slot_cell_relation(n_slots, m_cells, h.device)
+        if edit is not None:
+            allow = edit(allow.clone())
+        if perturb is not None:
+            h = perturb(h.clone())
+        akw = {"tg_allow": allow, "tg_comp_allow": allow}
+        for layer in m.tul_cond:
+            h = layer(h, attn_kwargs=akw)
+        box["out"] = h.detach().clone()
+        return h
+
+    m._tul_cond_apply = patched
+    try:
+        _run(m, M)
+    finally:
+        m._tul_cond_apply = real
+    return box["out"]
+
+
+def test_the_stacks_mask_is_load_bearing():
+    """Non-vacuity. Blank ONE entry the causal base already allows — `slot 1 cell 3 reads
+    slot 1 cell 0` — and the stack's output must move. Without this the whole relation
+    could be ignored and every assertion above would still pass."""
+    m = _cond(4)
+    base = _stack_out(m, 4)
+    ref = _run(m, 4).stack_out
+    assert torch.equal(base, ref), "fixture: the patched runner is not the shipped path"
+
+    def blank(a):
+        a[0, 0, 4 + 3, 4 + 0] = False        # slot 1, cell 3 <- slot 1, cell 0
+        return a
+
+    assert not torch.equal(_stack_out(m, 4, edit=blank), base), (
+        "closing a within-slot backward read changed nothing — the stack ignores its mask")
+
+
+def test_the_executed_relation_is_flattened_causal_at_reach_zero():
+    """MEASURED, and recorded because the mask's docstring reads wider than the forward.
+
+    `blk[p][q] = slot(p) >= slot(q)` is a SUPERSET of flattened causal `p >= q`, and every
+    branch that reads `tg_allow` / `tg_comp_allow` ANDs it into an already-causal relation
+    and can only NARROW. So `blk & causal == causal`: at `loop_reach 0` the register's
+    relation, in the loop AND in the stack, executes as plain flattened causal, and a cell
+    never reads a LATER cell of its own slot. Pinned two-sided — an all-TRUE mask gives the
+    identical loss, and a reach budget does NOT (there the mask really narrows).
+
+    This is a fact about the shipped `slot-register-m4` core stage, not about the stack;
+    the stack is here held to the SAME relation, which is the contract."""
+    import morph.model.transformer as _T
+    real = _T.slot_cell_relation
+
+    def run(mode: str, reach: int) -> float:
+        def patched(n_slots, m_cells, device, r=0):
+            blk, same = real(n_slots, m_cells, device, r)
+            return (torch.ones_like(blk) if mode == "all_true" else blk), same
+        _T.slot_cell_relation = patched
+        try:
+            kw = dict(loop_reach=reach) if reach else {}
+            mm = _model(4, seed=99, **kw)
+            with torch.no_grad():
+                mm.tul_register.W_o.weight.normal_(std=0.05)
+            _i, inp, lab, layout = _batch(4)
+            torch.manual_seed(5)
+            return float(mm(inp, labels=lab, slot_layout=layout)["loss"])
+        finally:
+            _T.slot_cell_relation = real
+
+    assert run("blk", 0) == run("all_true", 0), (
+        "an all-true mask now differs from the register's relation at reach 0 — the "
+        "branches gained a way to WIDEN, and the two-sided within-slot read may be live")
+    assert run("blk", 1) != run("all_true", 1), (
+        "fixture: the mask does not bite even under a reach budget")
+
+
+def test_the_stack_is_causal_across_slots():
+    """Perturb the loop exit at EVERY cell of the last valid slot. No earlier slot's
+    stack output may move."""
+    m = _cond(4)
+    _i, inp, lab, layout = _batch(4)
+    S = layout.slot_index.shape[1]
+    last = int(layout.slot_valid[0].nonzero()[-1])
+    assert last >= 2, "fixture: too few valid slots to test causality"
+    base = _stack_out(m, 4)
+
+    def hit(h):
+        h[:, last * 4:(last + 1) * 4] += 1.0
+        return h
+
+    got = _stack_out(m, 4, perturb=hit)
+    earlier = slice(0, last * 4)
+    assert torch.equal(got[:, earlier], base[:, earlier]), (
+        "a later slot's cells moved an earlier slot's stack output")
+    assert not torch.equal(got[:, last * 4:], base[:, last * 4:]), (
+        "fixture: the perturbation did nothing at all")
+
+
+def test_pad_cells_never_reach_a_valid_cell_and_their_write_goes_to_the_dump_row():
+    """Pad slots sit at the TAIL of the compact axis, so the causal relation already
+    excludes them from every valid cell's key set; and `prefix_project` sends an invalid
+    slot's K positions to the dump row whatever the stack computed there."""
+    m = _cond(4).eval()
+    _i, inp, lab, layout = _batch(4)
+    S = layout.slot_index.shape[1]
+    a = _stack_allow(m, 4)
+    sl = torch.arange(S * 4) // 4
+    pad_slot = ~layout.slot_valid[0]
+    assert bool(pad_slot.any()), "fixture: every slot is valid, the pad path is untested"
+    pad_cell = pad_slot[sl]
+    valid_cell = ~pad_cell
+    assert not bool(a[valid_cell][:, pad_cell].any()), (
+        "a valid cell may read a pad cell through the stack")
+    s = _run(m, 4)
+    L = int(layout.slot_mask.shape[1])
+    _v, pos = m.tul.prefix_project(s.spandec_h, layout, L, cells=s.prefix_cells)
+    pos = pos.reshape(-1, S, 4)
+    assert bool((pos[~layout.slot_valid] == L).all()), (
+        "a pad slot's prefix write escaped the dump row")

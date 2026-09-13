@@ -473,9 +473,18 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
           + (f" coda_token_cut={model_cfg.coda_token_cut}" if model_cfg.coda_token_cut else ""),
           flush=True)
     if model_cfg.cond_layers > 0 or model_cfg.detach_z:
+        _m = int(model_cfg.slot_cells)
+        _reads = ("the loop's S*%d compact CELL axis under the register's own in-loop "
+                  "relation (the mask allows a cell its whole slot and every earlier "
+                  "slot; the branches AND it into causality, so as EXECUTED at "
+                  "loop_reach 0 it is flattened causal — same as the loop's core stage)"
+                  % _m if _m > 1 else
+                  "the loop's S compact SLOT axis, plain causal")
         print(f"  TUL THINK-ONCE: cond_layers={model_cfg.cond_layers} "
-              f"detach_z={model_cfg.detach_z} (arms R7/R8; the coda reads the "
-              f"conditioning stack's output{', with stop-gradient' if model_cfg.detach_z else ''})",
+              f"detach_z={model_cfg.detach_z} (arms R7/R8) — the stack runs ONCE over "
+              f"{_reads}, straight out of the loop and BEFORE any mean, and every reader "
+              f"of z (the span decoder, SIGReg, the coda's prefix write"
+              f"{', with stop-gradient' if model_cfg.detach_z else ''}) reads ITS output",
               flush=True)
     if model_cfg.spandec:
         print(f"  TUL SPAN DECODER ON: layers={model_cfg.spandec_layers} "

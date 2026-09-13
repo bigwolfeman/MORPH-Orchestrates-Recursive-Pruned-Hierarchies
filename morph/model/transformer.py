@@ -957,6 +957,53 @@ class _MTPHead(nn.Module):
         return self.proj(self.norm(x))
 
 
+def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0
+                       ) -> tuple[Tensor, Tensor]:
+    """The Thought Register's CELL relation, in one place (``tul.slot_cells``).
+
+    The compact axis is ``n_slots * m_cells`` cells, slot-major (index ``s*M + i``).
+    Returns ``(blk, same)``, both ``[1, 1, S*M, S*M]`` bool:
+
+    * ``blk`` — cell ``i`` of slot ``k`` reads every cell of its OWN slot (including the
+      ones AFTER it) and every cell of slots ``< k``, narrowed to ``reach`` slots back
+      when ``reach > 0``. Plain causal on the FLATTENED axis is a different relation and a
+      wrong one: it would leave cell 0 permanently blind to its siblings, which is the
+      opposite of a register.
+    * ``same`` — slot-local: a cell reads its own slot's cells and nothing else. This is
+      what the core's layers ``1..n-1`` run under a reach budget, where the whole per-pass
+      cross-cell allowance is spent in layer 0.
+
+    ONE builder, two callers: ``_tul_core``'s per-pass core stage and ``_tul_cond_apply``'s
+    think-once stack. A second copy of this mask is how the stack and the loop would drift
+    into two different relations without a test noticing.
+
+    At ``m_cells == 1`` ``blk`` is exactly plain causal over the ``n_slots`` positions —
+    which is why the stack at M = 1 can keep running the block's own causal attention with
+    no mask at all and stay bit-identical to the placement before the register existed.
+
+    **What ``blk`` DOES, as executed (measured 2026-09-13, and it is narrower than the
+    paragraph above).** ``blk`` is a SUPERSET of flattened causal: ``slot(p) >= slot(q)``
+    is implied by ``p >= q``. Every branch that reads ``tg_allow`` / ``tg_comp_allow``
+    ANDs it into an already-causal relation and can only NARROW
+    (``attention._tg_slot_attention``, ``attention._window_fallback``). So at ``reach ==
+    0`` the executed relation is plain FLATTENED CAUSAL and a cell never reads a LATER
+    cell of its own slot — the mask is a no-op there, pinned two-sided against an all-TRUE
+    mask in ``tests/test_tul_cond4_strict.py::
+    test_the_executed_relation_is_flattened_causal_at_reach_zero``. At ``reach > 0`` the
+    mask really does bite, because narrowing ACROSS slots is what it asks for. Expressing
+    the two-sided within-slot read would need a branch that can widen past causality,
+    which nothing in this tree has; it is not a bug to patch here, it is the shape of the
+    register arm that is queued, and it is written down so no arm claims otherwise.
+    """
+    sm = n_slots * m_cells
+    sl = torch.arange(sm, device=device) // m_cells            # slot id per cell
+    si, sj = sl.unsqueeze(1), sl.unsqueeze(0)
+    blk = si >= sj
+    if reach > 0:
+        blk = blk & (sj >= si - reach)
+    return blk.view(1, 1, sm, sm), (si == sj).view(1, 1, sm, sm)
+
+
 class MORPHTransformer(nn.Module):
 
     # Operating-point capture for the core-map Jacobian probe
@@ -3662,28 +3709,28 @@ class MORPHTransformer(nn.Module):
         _core_akw = None
         if _m_cells > 1:
             # ── the register's IN-LOOP relation ───────────────────────────────────
-            # Cell i of slot k reads every cell of slots < k (as today, and as narrowed by
-            # `loop_reach`) AND every cell of its OWN slot k — full within the slot,
-            # causal across slots. Plain causal on the flattened axis would give cell i
-            # only cells 0..i of its own slot, which is an ordering the register does not
-            # have and would make cell 0 permanently blind to its siblings.
+            # Cell i of slot k is ALLOWED every cell of slots < k (as today, and as
+            # narrowed by `loop_reach`) AND every cell of its OWN slot k.
+            #
+            # CORRECTION, measured 2026-09-13: at `loop_reach 0` that mask executes as
+            # plain FLATTENED CAUSAL — the attention branches AND it into an already-causal
+            # relation and can only narrow, and the mask is a superset of flattened causal.
+            # So a cell does NOT read a later cell of its own slot on this tree. Read
+            # `slot_cell_relation`'s docstring, which is the one home for the measurement.
+            # At `loop_reach > 0` the mask does bite: narrowing across slots is what it
+            # asks for.
             #
             # The CCA conv and the value shift are left alone, unlike the `loop_reach`
             # arm's: they are CAUSAL on the flattened axis, so every position they reach
             # is a cell of the same or an earlier slot, which this relation already allows.
             # A `tg_seg` reset here would cut the conv at slot boundaries, a restriction
             # today's 64-cell core does not have either.
-            _SM = _n_slots * _m_cells
-            _sl = (torch.arange(_SM, device=x.device) // _m_cells)       # slot id per cell
-            _si, _sj = _sl.unsqueeze(1), _sl.unsqueeze(0)
-            _blk = (_si >= _sj)
-            if _reach > 0:
-                if _scse is not None:
-                    raise NotImplementedError(
-                        "tul.loop_reach with tul.slot_cells>1 under SCSE is not defined.")
-                _blk = _blk & (_sj >= _si - _reach)
-            _mask0 = _blk.view(1, 1, _SM, _SM)
-            _same = (_si == _sj).view(1, 1, _SM, _SM)
+            if _reach > 0 and _scse is not None:
+                raise NotImplementedError(
+                    "tul.loop_reach with tul.slot_cells>1 under SCSE is not defined.")
+            # ONE builder, shared with the think-once stack (`_tul_cond_apply`): a second
+            # copy of this mask is how the two would drift into different relations.
+            _mask0, _same = slot_cell_relation(_n_slots, _m_cells, x.device, _reach)
             # With a reach budget the later core layers are position-local exactly as the
             # reach arm's are, except that "position" is the SLOT: a cell keeps its own
             # slot's cells, which is what makes the register a register and not M
@@ -5753,19 +5800,28 @@ class MORPHTransformer(nn.Module):
             # not this arm. The mean's gradient still reaches every cell.
             # The CODA reads the M cells individually — that is the point of the arm — and
             # it reads them through the ordinary `prefix_project` write, 1:1.
-            _reg_cells = None
+            #
+            # Think-once conditioning (arm R7, `tul.cond_layers`) runs BEFORE that mean,
+            # on the compact axis straight out of `_tul_core` — the S*M CELL axis on a
+            # register model, the S slot axis on every other one — because the stack has
+            # to be the reader of what the loop wrote. On the mean it would be the reader
+            # of neither of the register's two readers: the coda's 1:1 prefix write takes
+            # cell i and the span decoder takes the cells' mean, and with the stack after
+            # the mean the write read the RAW loop cells while only the decoder saw the
+            # stack. At `slot_cells: 1` the register block below is a no-op, so this is
+            # the placement the stack has always had, bit-identical
+            # (tests/test_tul_cond4_strict.py pins it against the pre-change source).
+            # Everything downstream — the mux local loss, the span decoder, SIGReg, the
+            # gate budget, the plan ablations, prefix_project — reads the stack's output.
             _m = int(tc.slot_cells)
+            _S = layout.slot_index.shape[1]
+            if self.tul_cond is not None:
+                h_slots = self._tul_cond_apply(h_slots, n_slots=_S, m_cells=_m)
+            _reg_cells = None
             if _m > 1:
-                _S = layout.slot_index.shape[1]
                 _reg_cells = h_slots.reshape(h_slots.shape[0], _S, _m, *h_slots.shape[2:])
                 h_slots = _reg_cells.mean(dim=2)
                 depths = depths.reshape(depths.shape[0], _S, _m)[:, :, 0].contiguous()
-            # Think-once conditioning (arm R7): the stack runs once over the looped
-            # slot states, and everything downstream — the mux local loss, SIGReg, the
-            # gate budget, the plan ablations, prefix_project — reads ITS output. So z,
-            # the state the coda reads, is the state the forecast target supervises.
-            if self.tul_cond is not None:
-                h_slots = self._tul_cond_apply(h_slots)
             mux_stats: dict = {}
             if tc.mux_beta <= 0.0:
                 mux_loss = None
@@ -7015,17 +7071,43 @@ class MORPHTransformer(nn.Module):
             out[name] = groups
         return out
 
-    def _tul_cond_apply(self, h_slots: Tensor) -> Tensor:
+    def _tul_cond_apply(self, h_slots: Tensor, n_slots: int = 0,
+                        m_cells: int = 1) -> Tensor:
         """Run the think-once conditioning stack ONCE over the compact slot sequence.
 
-        ``h_slots`` is ``[B, S, n, C]`` (HC carrier) straight out of the loop. The blocks
-        are called exactly as the core calls its blocks on this sequence: causal
-        attention among slots, no injection term, no mask — pad slots sit at the tail
-        of the compact sequence and a valid slot never attends past itself. No
-        checkpointing: S is 9–19x shorter than the token stream (spec §3.3).
+        ``h_slots`` is ``[B, S*M, n, C]`` (HC carrier) straight out of ``_tul_core``,
+        BEFORE the register's mean. That placement is the arm: the stack has to be the
+        reader of whatever the loop wrote, and on a register model BOTH readers are
+        per-cell — the coda's 1:1 prefix write reads cell ``i``, and the span decoder
+        reads the cells' mean. A stack that ran on the mean would be the reader of
+        neither.
+
+        ``m_cells == 1`` (every model before ``tul.slot_cells``): the blocks are called
+        exactly as the core calls its blocks on this sequence — causal attention among
+        slots, no injection term, NO MASK. ``slot_cell_relation`` at M = 1 IS that plain
+        causal relation, so passing it would change nothing but the kernel the attention
+        takes; the no-mask call is kept so this placement is bit-identical to the one
+        before the register existed.
+
+        ``m_cells > 1``: the compact axis is ``S*M`` cells and the stack runs under the
+        SAME relation the register loops with — own slot full, earlier slots causal, from
+        the ONE builder ``slot_cell_relation``. Plain causal on the flattened axis would
+        make cell 0 blind to its siblings, and the stack would be a different mechanism
+        from the loop it conditions. ``tul.loop_reach`` is refused with a stack
+        (``TULConfig``), so no reach budget reaches this relation.
+
+        Pad slots sit at the tail of the compact sequence and the relation never lets a
+        valid cell read past its own slot, so a pad cell is never a key of a valid one;
+        the pad's own output is dropped downstream (``prefix_project`` sends an invalid
+        slot to the dump row). No checkpointing: ``S*M`` is far shorter than the token
+        stream (spec §3.3).
         """
+        akw = None
+        if m_cells > 1:
+            allow, _same = slot_cell_relation(n_slots, m_cells, h_slots.device)
+            akw = {"tg_allow": allow, "tg_comp_allow": allow}
         for layer in self.tul_cond:
-            h_slots = layer(h_slots)
+            h_slots = layer(h_slots, attn_kwargs=akw)
         return h_slots
 
     def _tul_layer_passes(self, layout: SlotLayout, depths: Tensor | None,
@@ -7034,7 +7116,8 @@ class MORPHTransformer(nn.Module):
 
         prelude and coda run on every position; the core runs ``depth`` times on each
         REAL slot (or, for arm A2, on every position at the sampled per-sample depth);
-        the think-once conditioning stack runs once per REAL slot.
+        the think-once conditioning stack runs once per REAL slot, and once per CELL of a
+        real slot at ``tul.slot_cells > 1``.
         The caller divides by ``n_tokens`` to get the headline number.
         """
         cfg = self.cfg
@@ -7047,7 +7130,10 @@ class MORPHTransformer(nn.Module):
         else:
             passes = passes + cfg.n_core * (depths * layout.slot_valid).sum()
         if self.tul_cond is not None:
-            passes = passes + len(self.tul_cond) * layout.slot_valid.sum()
+            # Once per REAL slot — and once per CELL of a real slot on a register model,
+            # where the stack's compact axis is S*M, not S.
+            passes = passes + (len(self.tul_cond) * int(cfg.tul.slot_cells)
+                               * layout.slot_valid.sum())
         if self.tul_spandec is not None:
             # The span decoder runs its blocks over EVERY slot cell of the fixed-shape
             # [B, S, J] grid, pads included — a fixed shape is what keeps the compiler out
