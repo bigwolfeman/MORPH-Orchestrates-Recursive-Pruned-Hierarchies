@@ -6828,6 +6828,16 @@ class MORPHTransformer(nn.Module):
                                         ret_reset_mask=_freset)
         _xn, h_slots, _d, _g, *_ = self._tul_core(x, x0, bigram, layout,
                                                  input_ids=input_ids)
+        # ── the think-once stack (tul.cond_layers) ───────────────────────────────
+        # This probe's contract is "the WRITTEN slot states, read at the point the coda
+        # reads them". On a `cond_layers` model the coda reads the STACK's output, so the
+        # stack has to run here or the headline rank would be the loop's exit and the arm's
+        # own instrument would be blind to its own mechanism. `tul_cond is None` on every
+        # other arm, so no queued run's reading moves.
+        if self.tul_cond is not None:
+            h_slots = self._tul_cond_apply(
+                h_slots, n_slots=layout.slot_index.shape[1],
+                m_cells=int(self.cfg.tul.slot_cells))
         z = self._readout(h_slots).float()                     # [B, S, C] or [B, S*M, C]
         valid = layout.slot_valid
         # ── the Thought Register (tul.slot_cells) ────────────────────────────────

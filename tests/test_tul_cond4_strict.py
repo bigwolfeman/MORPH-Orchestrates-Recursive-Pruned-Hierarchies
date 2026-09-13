@@ -553,3 +553,29 @@ def test_pad_cells_never_reach_a_valid_cell_and_their_write_goes_to_the_dump_row
     pos = pos.reshape(-1, S, 4)
     assert bool((pos[~layout.slot_valid] == L).all()), (
         "a pad slot's prefix write escaped the dump row")
+
+
+# ── the instruments ──────────────────────────────────────────────────────────
+
+def test_the_rank_probe_reads_the_stacks_output():
+    """`val/slot_eff_rank` and `val/slot_cell_eff_rank` are this arm's headline numbers.
+    The probe's contract is "the written slot states, read at the point the coda reads
+    them", so on a `cond_layers` model it has to run the stack — otherwise the instrument
+    is blind to the mechanism the arm exists to test."""
+    m = _cond(4).eval()
+    _i, inp, _l, layout = _batch(4)
+    with torch.no_grad():
+        pr = m.tul_slot_state_probe(inp, layout)
+    for k in ("slot_eff_rank", "slot_pairwise_cos", "slot_cell_eff_rank",
+              "slot_cell_pairwise_cos", "slot_cells"):
+        assert k in pr, f"{k} missing"
+    assert pr["slot_cells"] == 4.0
+    real = m._tul_cond_apply
+    m._tul_cond_apply = lambda h, *a, **kw: h            # SABOTAGE: probe skips the stack
+    try:
+        with torch.no_grad():
+            bypass = m.tul_slot_state_probe(inp, layout)
+    finally:
+        m._tul_cond_apply = real
+    assert pr["slot_eff_rank"] != bypass["slot_eff_rank"], (
+        "the rank probe reads the loop exit, not the stack's output")
