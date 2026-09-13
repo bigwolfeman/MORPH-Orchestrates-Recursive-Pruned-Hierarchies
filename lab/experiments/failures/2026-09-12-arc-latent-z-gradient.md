@@ -1,6 +1,6 @@
 # Planned: the latent-z gradient — give the loop an energy it cannot descend in one pass
 
-Status: planned
+Status: failure
 
 Date: 2026-09-12 (frozen before launch; **GPU smokes pending** — the 5090 was running
 `slot-mask-mux-quarter` for the whole build window, so no arm here has run a single GPU
@@ -11,7 +11,7 @@ are repeated in §Method.) Arc: `2026-09-04-loop-contribution-arc.md`. Design no
 Evidence it stands on:
 [`slot-mnext-gradpass`](../failures/2026-09-10-arc-slot-mnext-gradpass.md) (the mechanism
 works and its energy was too easy),
-[the span decoder, part 1](2026-09-11-arc-span-decoder.md) (the exit TARGET, −0.072 nats
+[the span decoder, part 1](../successes/2026-09-11-arc-span-decoder.md) (the exit TARGET, −0.072 nats
 against the mask arm, with the gain routed through the slot cells rather than the loop's
 write),
 [`slot_z_optimize`](../results/2026-09-10-slot-z-optimize/README.md) (a gradient-fitted z
@@ -422,6 +422,58 @@ The ruler at depth 6 is 0.002 nats better than a model trained and read at depth
 the interval crossing zero: better at offsets 0–4, worse at 8+. On the old bypass geometry
 the same control read 0.0235 worse (`../results/2026-09-12-latent-z-gradient/paired_gaps_5000.txt`).
 
+### P-e — the write contribution on the two energy arms, and their gradient probes
+
+`lab/divergence/slot_z_optimize.py` and `lab/divergence/slot_gradient_probe.py` at 5,000 on
+both twins (z-opt: 12 rows, batch 2, 6 batches, depth 6 fixed, 200 Adam steps, ~106 valid
+slots a batch, split point bit-exact `|Δ| 0.000e+00`; gradient probe: the same rows, 114
+tapped core weights / 66.5M parameters, both self-checks PASS). Files:
+`z_optimize_<arm>_5000.{json,txt}` and `gradient_probe_<arm>_5000.{json,txt}` in
+[`../results/2026-09-12-strict/`](../results/2026-09-12-strict/). `ce_entry` replays the coda
+with the loop's ENTRY state, so `ce_entry − ce_loop` is what the six passes add to the cell.
+The parent `slot-spandec-strict` is measured on the same probe in the same batch and is the
+comparison; the prereg's anchor "ruler +0.0015" is the OLD `slot-mux-norm-match` ruler, not
+this panel's parent.
+
+| reading | `-egrad-disc` | `-egrad-recon` | parent `slot-spandec-strict` |
+| --- | --- | --- | --- |
+| `ce_loop` | 4.1366 | 4.1628 | 4.1210 |
+| **`ce_entry − ce_loop`** | **+0.01299** | **+0.01492** | **+0.01353** |
+| `ce_zero − ce_loop` | +0.1935 | +0.2064 | +0.1922 |
+| `ce_shuffle − ce_loop` | +0.1773 | +0.1679 | +0.1782 |
+| `ce_zopt(lr 0.01) − ce_loop`, a FITTED z (hindsight) | −1.6099 | −1.4970 | −1.5516 |
+| `cos(z*, z_loop)` at lr 0.01 | +0.814 | +0.807 | +0.841 |
+
+Neither energy reaches 0.02 and neither beats the parent: `disc` is 0.0005 BELOW it and
+`recon` 0.0014 above. The energies changed which direction the passes move (`gp_rel` 0.019
+on recon, critic AUC 0.632 on disc) and not how much the cell gains from them. The
+`ce_zopt` row is HINDSIGHT — the probe fits each z on exactly the tokens it is then scored
+on (its own `oracle` note; the script has no causal option) — and the causal version of the
+same fit on the parent reads **+0.2517** [+0.2265, +0.2730] nats WORSE than the loop's own z
+([`causal_fit_slot-spandec-strict_g1.txt`](../results/2026-09-12-instruments/causal_fit_slot-spandec-strict_g1.txt)).
+So the 1.5-nat column is the coda's capacity, not headroom a pass could reach.
+
+The gradient probes, on the trainer's own loss and on the token CE alone (`|total|` is the
+shared core weight gradient; `share` is per pass 1..6):
+
+| reading, `token_ce` branch | `-egrad-disc` | `-egrad-recon` |
+| --- | --- | --- |
+| per-pass cotangent at the loop state, share | 0.171 / 0.166 / 0.161 / 0.157 / 0.159 / 0.187 | 0.172 / 0.168 / 0.163 / 0.157 / 0.157 / 0.183 |
+| `slot_cot_clip` 4.0 bind fraction | 0.000 on every pass | 0.000 on every pass |
+| per-pass share of the shared core weight gradient | 0.247 / 0.138 / 0.129 / 0.135 / 0.152 / 0.198 | 0.218 / 0.113 / 0.130 / 0.156 / 0.184 / 0.200 |
+| `core.attention` + `core.mlp` over `prelude` | 0.303 | 0.271 |
+| `core.*` over `coda` | 0.378 | 0.329 |
+| `tul.W_prefix` | 4.774e-01 | 3.348e-01 |
+| `other.tul_grad_pass` (the energy's own `W_g` path) | 2.001e-01 | 7.573e-02 |
+
+The token CE reaches these cores at about 0.3 of the prelude's gradient norm, well above the
+~1 % the 2026-09-10 cotangent probe read on the earlier slot loop, so under the span decoder
+the core is not gradient-starved. The
+cotangent is FLAT across the six passes (share 0.16-0.19 each) and the clip never binds, so
+every pass is credited about equally and the flatness is not a vanishing-gradient story.
+There is no gradient probe for the parent at this checkpoint, so the two rows above are
+compared to each other and to the 2026-09-10 readings, not to a same-day ruler.
+
 ### Predictions scored
 
 | P | claim | result |
@@ -430,7 +482,7 @@ the same control read 0.0235 worse (`../results/2026-09-12-latent-z-gradient/pai
 | P-b | exit AUC above entry by more than the band's half-width | **TRUE on one reduction** (mean +0.026 against a half-width of 0.018), and the whole rise is pass 1; flat reduction +0.003; the ruler FALLS |
 | P-c | recon energy descended in one pass (t0−t1 > 0.02, t1−last < 0.02) | **UNSCORABLE** — the per-pass energy was never logged, an instrument gap in the arm's `stats` |
 | P-d | disc K3−K6 strictly in (0, 0.01) | **TRUE by the letter** (+0.0002 [+0.0001, +0.0003]), 0.0002 is the same noise every arm reads |
-| P-e | `ce_entry − ce_loop` > 0.02 on a twin | **PENDING** (`slot_z_optimize` chained after the math panel) |
+| P-e | `ce_entry − ce_loop` > 0.02 on a twin | **FALSE** (disc +0.01299, recon +0.01492; the parent reads +0.01353, so neither twin beats it) |
 | P-f | both energy arms survive | **TRUE** |
 | P-g | recon within 1.5× wall; disc within 1.15× | **FALSE** (1.78×) / **TRUE** (1.07×) |
 | P-h | norecur within 0.05 of the parent | **TRUE** (0.002) |
@@ -505,8 +557,12 @@ the passes: both energies act (disc's critic 0.63, recon's feature 0.019 of the 
 neither moves K3−K6 past 0.0002, both cost CE (+0.008, +0.050), and recon costs 1.78× the
 wall clock. Step 0 says why the arms had nothing to find: the linear signal about the
 next span's difficulty is in the ENTRY state and one pass at most adds to it; a model
-trained at depth 1 lands within 0.002 nats of the depth-6 ruler. P-e is filed when the
-z-opt probe lands.
+trained at depth 1 lands within 0.002 nats of the depth-6 ruler. **P-e is false as well**:
+the write contribution is +0.0130 and +0.0149 against a 0.02 bar, and against the parent's
+own +0.0135 neither energy moved it at all. The gradient probes remove the obvious
+explanation — the core here takes about 0.3 of the prelude's gradient norm, the per-pass
+cotangent is flat across the six passes and the clip never binds — so the passes are paid
+and still deliver one pass worth of write.
 
 ## Updated hypothesis
 

@@ -1,11 +1,11 @@
 # Planned: the objective arms — ask the passes for depth, and ask the coda for the span
 
-Status: planned
+Status: failure
 
 Date: 2026-09-12 12:09 CDT (frozen before any arm ran; no GPU step of either arm below
 exists at filing time). Arc:
-[`2026-09-04-loop-contribution-arc.md`](2026-09-04-loop-contribution-arc.md). Extends
-[`2026-09-12-arc-strict-geometry.md`](2026-09-12-arc-strict-geometry.md) and runs on ITS
+[`2026-09-04-loop-contribution-arc.md`](../planned/2026-09-04-loop-contribution-arc.md). Extends
+[`2026-09-12-arc-strict-geometry.md`](../failures/2026-09-12-arc-strict-geometry.md) and runs on ITS
 geometry with coda reach `all`. Design note:
 [`2026-09-12-objective-arms-per-pass-plan-and-parallel-coda.md`](../../../.agents/notes/proposed/architecture/2026-09-12-objective-arms-per-pass-plan-and-parallel-coda.md).
 
@@ -448,6 +448,45 @@ LESS with depth than the ruler's (+0.0013 vs +0.0031).
 coda's 4.39 on the same tokens: a parallel readout of a whole span from one cell is 2.2
 nats behind the causal read, at every J.
 
+### P-6 — what the WRITE is worth, by `slot_z_optimize`
+
+`lab/divergence/slot_z_optimize.py` at 5,000 on the two arms and the ruler (12 rows, batch 2,
+6 batches, depth 6 fixed, 200 Adam steps, ~106 valid slots a batch; the split point is
+bit-exact on all three, `|Δ| 0.000e+00`). Files: `z_optimize_<arm>_5000.json` and the log as
+`z_optimize_<arm>_5000.txt` in [`../results/2026-09-12-strict/`](../results/2026-09-12-strict/).
+`ce_entry` replays the coda with the loop's ENTRY state in place of its exit state, so
+`ce_entry − ce_loop` is what the six passes add to the cell over what the entry already
+carried — the write contribution P-6 is about. Every column is one point estimate; the probe
+reports no interval.
+
+| reading (vs `ce_loop`) | ruler `slot-spandec-strict` | `-codaspan` (J 8) | `-perpass` |
+| --- | --- | --- | --- |
+| `ce_loop` | 4.1210 | 4.1568 | 4.1378 |
+| **`ce_entry − ce_loop`** (the write contribution) | **+0.01353** | **+0.02195** | **+0.01135** |
+| `ce_zero − ce_loop` (no write at all) | +0.1922 | +0.1800 | +0.1857 |
+| `ce_shuffle − ce_loop` | +0.1782 | +0.1748 | +0.1708 |
+| `ce_zopt(lr 0.01) − ce_loop` — a FITTED z, hindsight | −1.5516 | −1.0805 | −1.4270 |
+| the same from a random start | −1.3889 | −0.9704 | −1.2275 |
+| `cos(z*, z_loop)` at lr 0.01 | +0.841 | +0.914 | +0.850 |
+
+**P-6 is FALSE by 0.0016 nats.** `-codaspan` does move the write the most of the three
+(+0.02195 against the ruler's +0.01353), but the excess is **+0.00842** and the bar was
+0.010. The direction the prediction argued for is there and the size is not: a parallel
+span read from the prefix cell makes the six passes' contribution to that cell about 1.6×
+the ruler's, and the whole quantity is still under a fortieth of what the write as a whole
+is worth (`ce_zero` +0.18 to +0.19). `-perpass` moves it LESS than the ruler (+0.01135),
+which matches its identical-target grid: a target that changes with the pass buys nothing
+at the exit.
+
+**The fitted-z rows are HINDSIGHT and are not headroom the loop could reach.** The probe
+fits each `z_i` by gradient descent on exactly the tokens it is then scored on (the JSON's
+own `oracle` note; there is no causal option in the script's flags), so `ce_zopt` bounds
+what the CODA can use, not what a causal pass could infer. The causal version of this fit
+was measured on 2026-09-13 on the strict ruler and lands **+0.2517** [+0.2265, +0.2730] nats
+WORSE than the loop's own z, where the hindsight fit on the same checkpoint reads −1.4792
+([`causal_fit_slot-spandec-strict_g1.txt`](../results/2026-09-12-instruments/causal_fit_slot-spandec-strict_g1.txt)).
+Read the `ce_zopt` row only as "the coda's capacity is not the binding constraint".
+
 ### Predictions scored
 
 | P | claim | result |
@@ -457,7 +496,7 @@ nats behind the causal read, at every J.
 | P-3 | per-pass worse than ruler by 0.00–0.05 | **TRUE** (+0.0172) |
 | P-4 | per-pass clears 8,086 tok/s | **FALSE** (4,736), the 65 % case; the floor was OFF on this runner so the arm ran |
 | P-5 | codaspan tokens K1−K6 > 0.005 | **FALSE** (0.0012) |
-| P-6 | codaspan `ce_entry − ce_loop` exceeds the ruler's by > 0.01 | **PENDING** (`slot_z_optimize` on codaspan, strict, perpass chained after the math panel and the energy probes) |
+| P-6 | codaspan `ce_entry − ce_loop` exceeds the ruler's by > 0.01 | **FALSE** by 0.0016 (+0.02195 vs the ruler's +0.01353: an excess of +0.00842); `-perpass` +0.01135, below the ruler |
 | P-7 | codaspan within 0.02 of ruler | **FALSE** (+0.0415 worse) |
 | P-8 | J 32 not better than J 8 by > 0.01 | **FALSE** (J 32 better by 0.016) |
 | P-9 | all three survive | **TRUE** |
@@ -472,8 +511,13 @@ passes were handed a target that differs by pass and the state after pass 6 is n
 at pass 1's job than the state after pass 1 (the exit column, K1−K6 0.0008). Both arms cost
 CE (+0.017, +0.042) for their gradient competition on the shared coda and decoder. P-8's
 failure says the heads at far offsets do get supervision worth 0.016 nats, which is a
-statement about the coda's readout, not the loop. P-6 and the identical-target grid remain
-open and are filed when they land.
+statement about the coda's readout, not the loop. **P-6 is false as well**, and narrowly:
+the parallel read does make the passes' write worth 1.6× the ruler's (+0.0220 against
++0.0135) but the excess is 0.0084 where the bar was 0.010, so the binding clause "P-6 holds
+and P-5 fails" does not fire by the letter. It nearly does, and the honest reading of the
+pair is the one that clause named: this arm's value is in its first pass and in the coda's
+readout, not in passes 2 to 6. The identical-target grid landed above and says the same
+thing.
 
 ## Updated hypothesis
 

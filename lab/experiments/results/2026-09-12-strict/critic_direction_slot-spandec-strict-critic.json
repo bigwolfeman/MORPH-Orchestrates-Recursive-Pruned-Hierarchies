@@ -1,0 +1,22 @@
+{
+  "n_slots": 4906,
+  "delta_critic_mean": -0.0014992787037044764,
+  "delta_random_mean": -5.2520641474984586e-05,
+  "gap_mean": 0.0014467580476775765,
+  "gap_ci95": [
+    0.0008685974171385169,
+    0.002024918794631958
+  ],
+  "win_rate": 0.4767631471667346,
+  "win_rate_margin_0.01": 0.2125968202201386,
+  "label": "critic",
+  "config": "tul_slot_spandec_strict_critic",
+  "step": 5000,
+  "depth": 6,
+  "eps": 0.1,
+  "n_random": 4,
+  "margin": 0.01,
+  "rows": 96,
+  "critic_dir_rms": 0.999999986961484,
+  "note": "delta = CE_next_span(z + eps*rms(z)*d) - CE_next_span(z), per valid slot, through the REAL coda. Negative is an improvement. gap = delta_random - delta_critic, so POSITIVE means the critic's direction is the better one. A critic whose gradient is noise reads gap 0 and win_rate 0.5 by construction."
+}

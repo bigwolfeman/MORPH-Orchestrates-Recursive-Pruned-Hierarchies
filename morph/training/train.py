@@ -573,12 +573,116 @@ def drop_retired_tul_keys(state: dict, model: nn.Module, path: str) -> list[str]
     return dropped
 
 
+# ── plain → TUL bootstrap: the ONE resume that legitimately crosses a structure change ──
+#
+# `slot-strict-bootstrap` (morph/configs/tul_slot_strict_bootstrap.yaml) seeds a TUL model
+# from a checkpoint of a PLAIN run, so two classes of tensor have no partner:
+#
+#   MISSING    every TUL-owned parameter (`tul.*`, `tul_spandec.*`, `tul_register.*`, …).
+#              The plain seed never had them; they keep their fresh init.
+#   UNEXPECTED every pooled compressor / top-k indexer tensor of the plain seed. Under
+#              `tul.tg_restrict` MORPHAttention builds NEITHER (morph/model/attention.py:
+#              "Build nothing rather than build-and-ignore") because the compressed branch
+#              attends slot positions directly instead of pooling. The seed's copies are
+#              DROPPED — real learned state, thrown away, and unavoidable: no plain
+#              checkpoint can carry a tg_restrict attention, since tg_restrict is only
+#              reachable with a TUL config.
+#
+# Both lists are ENUMERATED FROM THE LIVE MODEL, never from a hardcoded name guess, so a
+# module added to the tree tomorrow is classified by what it is rather than by what this
+# file remembers. Everything outside the two lists still raises, and with the flag off
+# (`training.resume_plain_to_tul`, default false) this file behaves exactly as before.
+
+
+def tul_owned_prefixes(model: nn.Module) -> tuple[str, ...]:
+    """state_dict key prefixes owned by a TUL-only module of ``model``.
+
+    The TUL modules are the root children named ``tul`` or ``tul_*`` — `TULSlots` and
+    every optional head hung beside it (`tul_spandec`, `tul_register`, `tul_cond`,
+    `tul_gate`, `tul_reread`, `tul_grad_pass`, `tul_egrad`, `tul_chain`, …). A plain model
+    assigns ``self.tul = None`` before any Module lands there, so ``named_children`` yields
+    nothing and this returns ``()`` — which is what makes the classifier refuse everything
+    on a plain→plain load.
+    """
+    root = getattr(model, "_orig_mod", model)
+    return tuple(sorted(f"{n}." for n, _ in root.named_children()
+                        if n == "tul" or n.startswith("tul_")))
+
+
+def tg_dropped_attention_prefixes(model: nn.Module) -> tuple[str, ...]:
+    """state_dict key prefixes a ``tul.tg_restrict`` model does NOT build.
+
+    Read off the live modules: an attention implementation that declares ``tg_restrict``
+    True and holds ``None`` in one of the pooled-branch slots did not build that submodule,
+    so a plain seed's tensors under it are homeless. A model WITHOUT tg_restrict returns
+    ``()`` and nothing may be dropped.
+    """
+    root = getattr(model, "_orig_mod", model)
+    out: list[str] = []
+    for name, mod in root.named_modules():
+        if getattr(mod, "tg_restrict", False) is not True:
+            continue
+        for sub in ("compressor", "comp_norm", "indexer"):
+            if getattr(mod, sub, "absent") is None:
+                out.append(f"{name}.{sub}." if name else f"{sub}.")
+    return tuple(sorted(out))
+
+
+def classify_plain_to_tul_keys(
+    missing: list[str], unexpected: list[str], model: nn.Module,
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Split load_state_dict's homeless keys into ALLOWED and REFUSED, for the bootstrap.
+
+    Returns ``(ok_missing, bad_missing, ok_unexpected, bad_unexpected)``. A missing key is
+    allowed only under a TUL-owned module; an unexpected key only under a pooled branch
+    this model's tg_restrict attention did not build. `_prune_mask` buffers keep the
+    back-compat exemption they already had. Caller decides what to do with the refusals —
+    this function has no opinion and no side effect.
+    """
+    tul_pre = tul_owned_prefixes(model)
+    tg_pre = tg_dropped_attention_prefixes(model)
+
+    def _canon(k: str) -> str:
+        return k.replace("._orig_mod.", ".").replace("_orig_mod.", "")
+
+    ok_m, bad_m, ok_u, bad_u = [], [], [], []
+    for k in missing:
+        c = _canon(k)
+        (ok_m if (c.startswith(tul_pre) or c.endswith("_prune_mask")) else bad_m).append(k)
+    for k in unexpected:
+        (ok_u if _canon(k).startswith(tg_pre) else bad_u).append(k)
+    return ok_m, bad_m, ok_u, bad_u
+
+
+def _report_plain_to_tul(tag: str, path: str, ok_m: list[str], bad_m: list[str],
+                         ok_u: list[str], bad_u: list[str]) -> None:
+    """Print the two allowed lists in full and RAISE on anything else."""
+    if bad_m or bad_u:
+        raise RuntimeError(
+            f"{tag} {path}: training.resume_plain_to_tul allows ONLY TUL-owned tensors to "
+            f"be missing and ONLY the pooled compressor/indexer tensors tg_restrict does "
+            f"not build to be unexpected. Refused: {len(bad_m)} missing "
+            f"{bad_m[:8]}{'...' if len(bad_m) > 8 else ''}; {len(bad_u)} unexpected "
+            f"{bad_u[:8]}{'...' if len(bad_u) > 8 else ''}"
+        )
+    print(f"  {tag} {path}: resume_plain_to_tul=True — {len(ok_m)} TUL-owned tensors kept "
+          f"their FRESH init and {len(ok_u)} pooled-branch tensors of the seed were "
+          f"DROPPED (tg_restrict builds no compressor/indexer).", flush=True)
+    for label, keys in (("fresh-init (TUL-owned)", ok_m), ("dropped (seed had it, this "
+                                                           "model does not)", ok_u)):
+        if keys:
+            print(f"    {label}: {len(keys)}", flush=True)
+            for k in keys:
+                print(f"      {k}", flush=True)
+
+
 def load_checkpoint(
     path: str,
     model: nn.Module,
     scaler: torch.amp.GradScaler,
     device: torch.device,
     pruning: Optional[PruningSchedule] = None,
+    allow_plain_to_tul: bool = False,
 ) -> tuple[int, dict, bool]:
     """FULL resume — restore the run exactly ("like nothing happened").
 
@@ -637,17 +741,24 @@ def load_checkpoint(
     # No-theater: an UNEXPECTED key means a saved tensor found no home (structure drift) →
     # state was silently lost. Fail loud. MISSING keys are tolerated only for back-compat
     # buffers a pre-this-change checkpoint legitimately lacks (e.g. _prune_mask), and warned.
-    if unexpected:
-        raise RuntimeError(
-            f"load_checkpoint: {len(unexpected)} checkpoint tensors had no home in the "
-            f"reconstructed model (structure mismatch — state would be silently lost): "
-            f"{unexpected[:8]}{'...' if len(unexpected) > 8 else ''}"
-        )
-    _benign_missing = tuple(m for m in missing if not m.endswith("_prune_mask"))
-    if _benign_missing:
-        print(f"  Warning: {len(_benign_missing)} model tensors absent from checkpoint "
-              f"(kept their init): {_benign_missing[:8]}"
-              f"{'...' if len(_benign_missing) > 8 else ''}")
+    if allow_plain_to_tul:
+        # The plain → TUL bootstrap. BOTH classes are checked here and the rest still
+        # raises — including a missing key outside a TUL module, which the branch below
+        # only WARNS about. This path is therefore strictly tighter than the default.
+        _report_plain_to_tul("load_checkpoint", path,
+                             *classify_plain_to_tul_keys(missing, unexpected, model))
+    else:
+        if unexpected:
+            raise RuntimeError(
+                f"load_checkpoint: {len(unexpected)} checkpoint tensors had no home in the "
+                f"reconstructed model (structure mismatch — state would be silently lost): "
+                f"{unexpected[:8]}{'...' if len(unexpected) > 8 else ''}"
+            )
+        _benign_missing = tuple(m for m in missing if not m.endswith("_prune_mask"))
+        if _benign_missing:
+            print(f"  Warning: {len(_benign_missing)} model tensors absent from checkpoint "
+                  f"(kept their init): {_benign_missing[:8]}"
+                  f"{'...' if len(_benign_missing) > 8 else ''}")
 
     if "scaler" in ckpt:
         scaler.load_state_dict(ckpt["scaler"])
@@ -682,8 +793,8 @@ def load_checkpoint(
     return step, ckpt["optimizer"], needs_rebuild, set(ckpt["model"].keys())
 
 
-def load_weights_only(path: str, model: nn.Module,
-                      device: torch.device) -> tuple[list, list]:
+def load_weights_only(path: str, model: nn.Module, device: torch.device,
+                      allow_plain_to_tul: bool = False) -> tuple[list, list]:
     """Initialise model WEIGHTS from a checkpoint, but reset the run to step 0.
 
     Returns ``(missing, unexpected)`` from ``load_state_dict``. The trainer ignores the
@@ -722,6 +833,13 @@ def load_weights_only(path: str, model: nn.Module,
     n_strip = sum(1 for k in raw if _canon(k) in canon_to_model)   # true canonical match count
     drop_retired_tul_keys(state, model, path)
     missing, unexpected = model.load_state_dict(state, strict=False)
+    if allow_plain_to_tul:
+        # The plain → TUL bootstrap (training.resume_plain_to_tul). Without it this
+        # function reports missing/unexpected and leaves the decision to a caller that
+        # historically ignored both — so under the flag every homeless tensor is
+        # classified and anything outside the two allowed classes RAISES here.
+        _report_plain_to_tul("init_from", path,
+                             *classify_plain_to_tul_keys(missing, unexpected, model))
     # Hard guard against a silent partial load: the MLP backbone (gate_up/down shadows)
     # MUST land. If almost nothing matched, the seed is incompatible — fail LOUD.
     n_loaded = len(model_keys) - len(missing)
@@ -2162,11 +2280,17 @@ def main(cfg: DictConfig) -> None:
         print(f"  [GEN {label}] {len(gen_text)} chars → {gen_samples_path}", flush=True)
 
     # ── Optional resume (FULL: model+topology+optimizer+scaler+RNG+step) ────
+    # `training.resume_plain_to_tul` — the plain → TUL bootstrap. Off (the default) both
+    # loaders behave exactly as they did; on, the two structural classes a plain seed
+    # cannot match are allowed and listed, and every other homeless tensor raises. See
+    # `classify_plain_to_tul_keys` and morph/configs/tul_slot_strict_bootstrap.yaml.
+    _plain_to_tul = bool(getattr(tr, "resume_plain_to_tul", False))
     start_step = 0
     if resume_path and os.path.isfile(resume_path):
         print(f"Resuming from {resume_path}")
         start_step, _opt_state, _needs_rebuild, _ckpt_pnames = load_checkpoint(
-            resume_path, model, scaler, device, pruning)
+            resume_path, model, scaler, device, pruning,
+            allow_plain_to_tul=_plain_to_tul)
         if _needs_rebuild:
             # Carve/route changed the param set → the dense optimizer built above is stale.
             # Free it (bnb keeps optimizer↔state↔param ref-cycles → explicit clear+gc, same
@@ -2247,7 +2371,8 @@ def main(cfg: DictConfig) -> None:
         if not os.path.isfile(init_from_path):
             raise FileNotFoundError(f"training.init_from not found: {init_from_path}")
         print(f"Init-from (weights only) {init_from_path}")
-        load_weights_only(init_from_path, model, device)
+        load_weights_only(init_from_path, model, device,
+                          allow_plain_to_tul=_plain_to_tul)
 
     # The phase (bag_size, tul_on) and both loaders are built after the curriculum block,
     # where total_steps is final. See phase.py.
@@ -2261,6 +2386,26 @@ def main(cfg: DictConfig) -> None:
     # ~10min/arm CPU re-tokenization). Faithful resume still replays for exact continuation.
     _fork_continue = bool(getattr(cfg.training, "resume_fresh_optimizer", False))
     _resume_skip = start_step if (start_step > 0 and not _curr_on and not _fork_continue) else 0
+    # `training.data_skip_batches` — an EXPLICIT fast-forward for a run whose step axis
+    # restarts at 0 but whose weights did not. `training.init_from` resets the step counter,
+    # so the stream would otherwise replay from its head and the run would take a second
+    # epoch over batches the seed already trained on — a confound no matched arm carries.
+    # Refuses rather than guesses when the resume path already asked for a skip, or under
+    # the curriculum loader, which owns its own stage position.
+    _explicit_skip = int(getattr(tr, "data_skip_batches", 0) or 0)
+    if _explicit_skip:
+        if _resume_skip:
+            raise ValueError(
+                f"training.data_skip_batches={_explicit_skip} and a faithful resume that "
+                f"already fast-forwards {_resume_skip} batches both ask for a stream "
+                f"position. Set only one.")
+        if _curr_on:
+            raise ValueError(
+                "training.data_skip_batches is not defined under the curriculum loader: "
+                "the multi-source loader owns its own stage position.")
+        _resume_skip = _explicit_skip
+        print(f"  [data] training.data_skip_batches={_explicit_skip} → the train stream "
+              f"starts where the seed run stopped", flush=True)
 
     # ── Curriculum pretraining (Phase P) — length-bucketed multi-source ramp ──
     # GATED: absent/disabled → base.yaml path is byte-identical (curriculum_enabled False,

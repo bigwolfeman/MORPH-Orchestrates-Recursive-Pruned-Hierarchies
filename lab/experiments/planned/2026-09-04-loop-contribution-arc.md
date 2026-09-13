@@ -273,8 +273,8 @@ run before the band views are deduped.
 
 Every number is copied from the cited file. K = forced-depth sweep token CE difference
 (K1−K6; K3−K6 in parentheses where filed). CE gaps are token-paired where the file says so;
-negative = better than the named control. Rows for panels still in `planned/` cite those
-files (Results sections filled, one probe each still pending).
+negative = better than the named control. The three 2026-09-12 strict panels were filed on
+2026-09-13 when their last probe landed and now cite `failures/`.
 
 **Lane 1: stability and core-map levers**
 
@@ -363,13 +363,16 @@ files (Results sections filled, one probe each still pending).
 
 | date | arm | what changed | testbed | K1−K6 (K3−K6) | CE vs strict | verdict | source |
 |---|---|---|---|---|---|---|---|
-| 09-12 | strict-perpass | per-pass planning target | web | +0.0008 (−0.0000) | +0.0172; 2.31× wall | own ladder rises with t; identical-target grid: h1 +0.0000, h6 +0.0015 | `planned/2026-09-12-arc-objective-arms.md` |
+| 09-12 | strict-perpass | per-pass planning target | web | +0.0008 (−0.0000) | +0.0172; 2.31× wall | own ladder rises with t; identical-target grid: h1 +0.0000, h6 +0.0015 | `failures/2026-09-12-arc-objective-arms.md` |
 | 09-12 | strict-codaspan (J8) | parallel coda decode, 8 heads | web | +0.0012 (−0.0002) | +0.0415 | heads 6.6 nats/token vs coda 4.4 | same file |
 | 09-12 | strict-codaspan32 | 32 heads | web | +0.0017 (+0.0001) | +0.0255; −0.0160 vs J8 | wider budget recovers some loss | same file |
-| 09-12 | strict-egrad-recon | latent-z reconstruction energy | web | +0.0007 (−0.0003) | +0.0495; 1.78× wall | per-pass ladder never logged | `planned/2026-09-12-arc-latent-z-gradient.md` |
+| 09-12 | strict-egrad-recon | latent-z reconstruction energy | web | +0.0007 (−0.0003) | +0.0495; 1.78× wall | per-pass ladder never logged | `failures/2026-09-12-arc-latent-z-gradient.md` |
 | 09-12 | strict-egrad-disc | discriminative critic energy | web | +0.0019 (+0.0002) | +0.0081; 1.07× wall | critic AUC 0.632 | same file |
-| 09-12 | strict-critic | within-context pass-vs-pass critic | web | +0.0012 (−0.0000) | −0.0025; −0.0106 vs disc | critic at chance (0.52) for 5000 steps; one pass worth 0.001–0.003 nats to the coda | `planned/2026-09-12-arc-core-token-and-critic.md` |
+| 09-12 | strict-critic | within-context pass-vs-pass critic | web | +0.0012 (−0.0000) | −0.0025; −0.0106 vs disc | critic at chance (0.52) for 5000 steps; one pass worth 0.001–0.003 nats to the coda | `failures/2026-09-12-arc-core-token-and-critic.md` |
 | 09-12 | strict-coretok | tokens+cells through the core in TRAINING only (aux CE) | web | +0.0005 (−0.0003) | **−0.0684**; 0.35× rate | core becomes a 1.10-nat token map; passes still 0.0005 | same file |
+| 09-13 | strict-critic direction probe | move the exit state along the critic's gradient vs an rms-matched random direction, through the REAL coda | web | — | gap to a random direction **+0.00145** [+0.00087, +0.00202] | the direction is real and tiny: 21.3 % of 4,906 slots beat random by > 0.01 against a 60 % bar, `win_rate` 0.477; P-9 FALSE | `failures/2026-09-12-arc-core-token-and-critic.md` |
+| 09-13 | strict-codaspan / -perpass write contribution (`slot_z_optimize`) | what the six passes add to the cell over its entry state | web | — | `ce_entry − ce_loop` **+0.02195** (codaspan) / +0.01135 (perpass) vs the strict ruler's +0.01353 | codaspan moves the write 1.6x the ruler and misses the +0.01 bar by 0.0016; perpass moves it less than the ruler; P-6 FALSE | `failures/2026-09-12-arc-objective-arms.md` |
+| 09-13 | strict-egrad-disc / -recon write contribution + gradient probe | the same on the two latent-z energies | web | — | `ce_entry − ce_loop` **+0.01299** (disc) / **+0.01492** (recon) vs the parent's +0.01353 | neither energy beats the parent; core takes 0.27-0.30 of the prelude's gradient norm, per-pass cotangent flat (share 0.16-0.19), `slot_cot_clip` never binds; P-e FALSE | `failures/2026-09-12-arc-latent-z-gradient.md` |
 | 09-13 | coretok aux-path depth probe (Spark) | forced AUX depth 1,2,3,6 on the coretok ckpt; slot loop pinned | web | aux K1−K6 **+0.0102** [+0.0093, +0.0110] (K3−K6 +0.0012) | aux − shipped −0.0063 @1 → −0.0165 @6 | span-restricted token loop earns 20x the slot loop and ~1/3 of a plain loop (0.028–0.033); the restriction itself is free (budget-web-span 0.0301 vs full 0.0279); Q-1/Q-2 false, Q-3 true | `failures/2026-09-13-arc-loop-reads-tokens.md` |
 | 09-13 | oly-notul-nm | plain, norm_match, Olympiad graduation curriculum | Olympiad clean | **+0.0647** [+0.0602, +0.0691] (+0.0024) | 0.8005 @6, +0.067 vs E16 absmean plain | plain loop earns 2.7x more depth under norm_match at a CE cost | `failures/2026-09-12-arc-math-under-norm-match.md` |
 | 09-13 | oly-spandec-strict | strict slot loop + span decoder on Olympiad | Olympiad clean | **+0.0111** [+0.0085, +0.0136] (+0.0024) | +0.2161 [+0.2015, +0.2313] vs plain, paired | first slot arm with K1−K6 > 0.005 clear of zero; zero worth −0.139 (offset 0 −2.23) | same file |
@@ -394,7 +397,7 @@ files (Results sections filled, one probe each still pending).
 | 09-04/07 | Huginn loop contribution | external ruler, eval only | K3−K6 +0.566, K6−K16 +0.206; saturates at 16–24 of mean 32 | `failures/2026-09-04-huginn-loop-contribution.md` |
 | 09-10 | slot_z_optimize (hindsight) | fit z on the ANSWER vs the loop's z | fitted z worth 0.944–2.626 nats; loop delivers 0.7–7.8 % of it (hindsight) | `results/2026-09-10-slot-z-optimize/README.md` |
 | 09-10 | slot_gradient_probe | per-pass cotangents | cancellation 0.52–0.60; MUX pays 7.3× the token CE; no-MUX core gets ~1 % | `results/2026-09-10-slot-gradient-probe/README.md` |
-| 09-12 | Step-0 linear probe | AUC of "next span below median" by pass | entry 0.605–0.642 vs null 0.51; only rise is pass 1 | `planned/2026-09-12-arc-latent-z-gradient.md` |
+| 09-12 | Step-0 linear probe | AUC of "next span below median" by pass | entry 0.605–0.642 vs null 0.51; only rise is pass 1 | `failures/2026-09-12-arc-latent-z-gradient.md` |
 | 09-12 | depth isolation | one slot's passes, scoring only span s+1 | strict +0.0008; prev-reach1 +0.0172; mask +0.0004 | `results/2026-09-12-instruments/depth_isolation_*.txt` |
 | 09-13 | identical-target grid | forced depth vs the SAME targets | first run invalid (bare prelude); corrected: h1 +0.0000, h6 +0.0015, exit +0.0013; ruler exit +0.0031 | `results/2026-09-12-instruments/horizon_grid_fixed_*.txt` |
 | 09-13 | causal fitted z | fit z on teacher samples, score the real span | causal +0.252 WORSE than the loop; hindsight −1.479 | `results/2026-09-12-instruments/causal_fit_slot-spandec-strict_g1.txt` |

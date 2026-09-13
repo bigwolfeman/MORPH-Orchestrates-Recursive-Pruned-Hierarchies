@@ -1,0 +1,38 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL SPAN DECODER ON: layers=2 heads=8 J=32x1 weight=1.0 — the next span is decoded from z with a teacher-forced token path (morph/model/tul_spandec.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 295.6M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+  batch 1/6 done
+  batch 2/6 done
+  batch 3/6 done
+  batch 4/6 done
+  batch 5/6 done
+  batch 6/6 done
+
+slot-spandec-strict-egrad-disc step 5000 — 12 rows, batch 2, depth 6, 200 Adam steps
+  probe changes: {"slot_depth_fixed": [0, 6], "slot_gain_lambda": [100.0, 0.0], "mode": "eval (dropout OFF, token-state dropout OFF) \u2014 an instrument on a fixed function", "objective": "_tul_group_losses(...)['loss'] \u2014 the trainer's ONE weighted CE (emit_weight 0.0, plast_weight 1.0, -100 pads), BEFORE the sigreg / gain / mux terms _forward_tul adds", "split_point": "the h_slots tensor _tul_core returns == the tensor prefix_project receives (asserted on every replay)", "plan_nats": "off (the \u00a77.2 slots-removed pass is a second coda call this probe does not read)", "autocast": "bf16, as the trainer; z is optimised as an fp32 master and cast", "oracle": "z is fitted on the tokens it is asked to predict \u2014 an UPPER BOUND on what the coda can use, not on what a causal loop could infer"}
+  ce_loop      4.1366
+  ce_repro     4.136557  (|Δ| 0.000e+00 — BIT-EXACT)
+  ce_zero      4.3301   (+0.1935 vs loop)
+  ce_shuffle   4.3138   (+0.1773 vs loop)
+  ce_entry     4.1495   (+0.0130 vs loop)
+  ce_zopt lr0.01       2.5267   (-1.6099 vs loop)  cos(z*, z_loop) +0.814  |z| 112.28  rank 28.1
+  ce_zopt lr0.003      3.6238   (-0.5128 vs loop)  cos(z*, z_loop) +0.956  |z| 108.05  rank 19.0
+  ce_zopt rand_lr0.01  2.6160   (-1.5205 vs loop)  cos(z*, z_loop) +0.007  |z| 109.96  rank 90.3
+  z_loop  |z| 108.01  rank 16.1  (106 valid slots/batch)
+  per-bucket CE (head = first 8 tokens after a slot):
+      arm                    before_slot0           head           tail           dump
+      loop                         4.6772         4.1968         4.0849         4.0102
+      entry(h0)                    4.6772         4.2138         4.0954         4.0152
+      zopt lr0.01                  4.6772         1.9409         2.8379         2.1279
+      zopt lr0.003                 4.6772         3.3979         3.7381         3.4096
+      zopt rand_lr0.01             4.6772         2.1194         2.8744         2.1934
+  causality (|Δ| on before_slot0): {"lr0.01": 0.0, "lr0.003": 0.0, "rand_lr0.01": 0.0}
+
+wrote ignored/experiment-artifacts/2026-09-10-slot-z-optimize/slot-spandec-strict-egrad-disc.json

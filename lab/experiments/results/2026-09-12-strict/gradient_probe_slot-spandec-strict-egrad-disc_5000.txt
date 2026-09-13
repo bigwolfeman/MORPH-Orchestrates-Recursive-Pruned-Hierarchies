@@ -1,0 +1,86 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL SPAN DECODER ON: layers=2 heads=8 J=32x1 weight=1.0 — the next span is decoded from z with a teacher-forced token path (morph/model/tul_spandec.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 295.6M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+  tapped 114 core weights, 66.5M parameters
+  batch 1/6 done
+  batch 2/6 done
+  batch 3/6 done
+  batch 4/6 done
+  batch 5/6 done
+  batch 6/6 done
+
+slot-spandec-strict-egrad-disc step 5000 — 12 rows, batch 2, depth 6, 114 core weights (66.5M params)
+  probe changes: {"slot_depth_fixed": [0, 6], "slot_gain_lambda": [100.0, 0.0], "ckpt_grad_iters": [-1, 0], "slot_cot_clip": 4.0, "core_fixed_point_lambda": 1.0, "mux_beta": 0.0, "mode": "train (dropout ON), seeded per batch", "autocast": "bf16, as the trainer"}
+  losses: loss=9.5307 fixed_point=0.0017 token_ce=4.4820
+  cross-check g^T x vs tap on 24 layers: PASS max relative Frobenius error of g^T x against the tap, batch 0 2.288e-03 (core.3.mlp.0.gate_up._cms@pass2, tol 1.0e-02)
+
+  [slot-spandec-strict-egrad-disc/token_ce] per-pass cotangent at the loop state (pass 1..6)
+    pre-clip   1.637e-03 1.588e-03 1.540e-03 1.499e-03 1.518e-03 1.792e-03
+    share          0.171     0.166     0.161     0.157     0.159     0.187
+    post-clip  1.637e-03 1.588e-03 1.540e-03 1.499e-03 1.518e-03 1.792e-03
+    clip-bind      0.000     0.000     0.000     0.000     0.000     0.000
+  [slot-spandec-strict-egrad-disc/token_ce] per-pass share of the SHARED core weight gradient (|total| 6.4407e-01)
+    |dW_t|     2.160e-01 1.208e-01 1.131e-01 1.185e-01 1.331e-01 1.734e-01
+    share          0.247     0.138     0.129     0.135     0.152     0.198
+    cos->total    0.7120    0.7136    0.7854    0.8326    0.8092    0.6286
+    |dW_t| mlp 1.163e-01 7.625e-02 7.468e-02 7.981e-02 8.773e-02 1.200e-01
+    |dW_t| att 1.703e-01 7.646e-02 6.921e-02 7.063e-02 6.594e-02 6.079e-02
+    SELF-CHECK PASS: max rel err 1.209e-07 on core.3.attention._impl.cca.k_norm over 114 weights (tol 1.0e-03)
+  [slot-spandec-strict-egrad-disc/token_ce] parameter-group gradient norms
+      coda                     2.1908e+00
+      core.attention           4.4334e-01
+      core.mlp                 3.8381e-01
+      core.other               1.0738e-02
+      core.residual            2.7706e-01
+      embed                    3.0437e+00
+      injection                2.1917e-02
+      other.final_norm         6.9750e-02
+      other.input_norm         3.9941e-02
+      other.tul_grad_pass      2.0010e-01
+      prelude                  2.7323e+00
+      tul.E_mask               4.0088e-01
+      tul.E_slot               7.6959e-02
+      tul.W_prefix             4.7743e-01
+      tul.W_sent               4.3225e-02
+      x0_injects               9.6182e-02
+
+  [slot-spandec-strict-egrad-disc/total] per-pass cotangent at the loop state (pass 1..6)
+    pre-clip   3.073e-03 3.009e-03 2.864e-03 2.697e-03 2.651e-03 3.046e-03
+    share          0.177     0.174     0.165     0.156     0.153     0.176
+    post-clip  3.073e-03 3.009e-03 2.864e-03 2.697e-03 2.651e-03 3.046e-03
+    clip-bind      0.000     0.000     0.000     0.000     0.000     0.000
+  [slot-spandec-strict-egrad-disc/total] per-pass share of the SHARED core weight gradient (|total| 1.8311e+00)
+    |dW_t|     5.247e-01 2.442e-01 3.214e-01 4.121e-01 4.653e-01 5.403e-01
+    share          0.209     0.097     0.128     0.164     0.186     0.215
+    cos->total    0.6548    0.4267    0.7066    0.8482    0.8683    0.7459
+    |dW_t| mlp 3.290e-01 1.551e-01 1.769e-01 2.243e-01 2.371e-01 2.951e-01
+    |dW_t| att 3.739e-01 1.168e-01 2.182e-01 3.167e-01 3.424e-01 2.929e-01
+    SELF-CHECK PASS: max rel err 1.651e-07 on core.3.norm_mlp over 114 weights (tol 1.0e-03)
+  [slot-spandec-strict-egrad-disc/total] parameter-group gradient norms
+      coda                     2.1908e+00
+      core.attention           1.5311e+00
+      core.mlp                 8.3603e-01
+      core.other               2.8713e-02
+      core.residual            5.9750e-01
+      embed                    3.1558e+00
+      injection                5.5187e-02
+      other.final_norm         7.1466e-02
+      other.input_norm         5.9133e-02
+      other.tul_egrad          2.1159e+01
+      other.tul_grad_pass      4.0598e-01
+      other.tul_spandec        4.1687e+00
+      prelude                  3.3426e+00
+      tul.E_mask               4.0088e-01
+      tul.E_slot               1.4549e-01
+      tul.W_prefix             4.7743e-01
+      tul.W_sent               8.3403e-02
+      x0_injects               1.7565e-01
+
+wrote ignored/experiment-artifacts/2026-09-10-slot-gradient-probe/slot-spandec-strict-egrad-disc.json

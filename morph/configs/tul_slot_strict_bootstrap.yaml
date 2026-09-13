@@ -1,0 +1,81 @@
+# Slot-loop panel, arm "slot-strict-bootstrap": the strict ruler `slot-spandec-strict`,
+# started from a PLAIN model that already trained 5,000 steps, instead of from noise.
+#
+# WOLFE'S QUESTION (2026-09-13): "bootstrap the model by training no tul for like 5k steps
+# then use TUL for 5k steps to see what happens to loop contribution." Every slot arm in
+# this arc has trained the loop and the reader TOGETHER from step 0. If the flat K-curve is
+# partly "the coda never learned to read a z because the z was noise while the coda was
+# learning to read", then handing TUL a coda and a prelude that are already 5,000 steps old
+# should move it. If the curve is flat anyway, that explanation is dead.
+#
+# ONE FACTOR against `slot-spandec-strict` (`tul_slot_spandec_strict.yaml`): the weights the
+# run starts from. Same TUL recipe, same 5,000 steps, same seq 1024 / batch 6 / seed 1 /
+# ramp 1,000 / norm_match / strict geometry / spandec at J 32. NOT compute-matched — this
+# arm has 10,000 steps of training behind its final checkpoint against the ruler's 5,000,
+# and that is the point of the arm, not a flaw in it. Say "10k total" in every row.
+# `plain-panel-norm-match` does NOT exist at 10,000 steps (only `step_5000.pt` is on disk,
+# 2026-09-13), so there is no plain 10k row to put beside this one.
+#
+# ── THE SCHEDULE: `init_from`, NOT `resume`. ────────────────────────────────────────────
+# `create_lr_schedule` (morph/training/optimizer.py) is a pure function of the ABSOLUTE
+# step. A `training.resume` starts the loop at step 5,000 with `training.steps: 10000`, and
+# `warmup: 1000` is then 4,000 steps in the past: the TUL phase would open at full flat LR
+# with NO ramp. That is the one configuration `lab/divergence/DIVERGENCE-README.md` §A says
+# detonates, and the ramp is the measured cure (0 of 9 draws). There is no knob that
+# re-runs the ramp from a resumed step.
+# `training.init_from` is the trainer's documented "seed a brand-new schedule from trained
+# weights" path: it loads the MODEL tensors only, leaves the step axis at 0 and the
+# optimizer FRESH. So this arm is 5,000 steps numbered 0…5,000 with its own 1,000-step ramp,
+# and its checkpoints are `step_2500.pt` / `step_5000.pt` in ITS OWN numbering.
+# The optimizer state of the plain phase is DISCARDED (there is no partial-load option in
+# the tree that keeps it; `align_optimizer_state` only re-indexes a full `resume`, which
+# is the path the ramp rules out). A fresh AdEMAMix + the 1,000-step ramp is the same
+# opening every other arm in the panel gets.
+#
+# ── THE DATA ────────────────────────────────────────────────────────────────────────────
+# `init_from` starts the deterministic token stream at its HEAD, so without this the TUL
+# phase would re-read the exact 5,000 batches the plain phase already saw — a second epoch
+# over ~30 M tokens that no other arm in the panel gets. `training.data_skip_batches: 5000`
+# fast-forwards the stream to where the plain run stopped, the same replay a faithful
+# `resume` does. Cost: a one-off CPU re-tokenization of those batches at startup
+# (~10 min, single-threaded, measured for the resume path in train.py).
+#
+# ── THE STRUCTURE CHANGE, NAMED ─────────────────────────────────────────────────────────
+# The seed is a PLAIN checkpoint and this arm is a `tul.tg_restrict` model, and those two
+# do not have the same attention parameters. Under `tg_restrict` MORPHAttention builds NO
+# pooled compressor and NO top-k indexer in any block (`morph/model/attention.py`: "Build
+# nothing rather than build-and-ignore") — the compressed branch attends the slot positions
+# directly instead. So the load crosses TWO structural changes, not one:
+#   * MISSING  — every `tul.*` / `tul_spandec.*` tensor keeps its fresh init (expected: the
+#                plain seed has no TUL);
+#   * UNEXPECTED — every `*.attention._impl.{compressor,comp_norm,indexer}.*` tensor in the
+#                plain seed has NO home here and is DROPPED. That is real learned state
+#                thrown away, roughly a third of the seed's attention tensors, and it is
+#                unavoidable: no plain checkpoint can carry a `tg_restrict` attention,
+#                because `tg_restrict` is only reachable with a TUL config.
+# `training.resume_plain_to_tul: true` is the opt-in that allows exactly those two classes
+# and NOTHING else — every other homeless tensor still raises, and the allowed names are
+# enumerated from the LIVE model's modules, not from a hardcoded list
+# (`morph/training/train.py::classify_plain_to_tul_keys`). Both lists are printed.
+# What DOES transfer: the embeddings, every CCA/window projection, the residual carrier,
+# every MLP (and its ternary shadow), the norms, the injections and the LM mixer.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-plain-then-tul-bootstrap.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-plain-then-tul-bootstrap.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+training:
+  # Weights-only seed: step axis restarts at 0, optimizer fresh, ramp re-runs. See above.
+  init_from: /home/wolfe/morph-to/checkpoints/morph/plain-panel-norm-match/step_5000.pt
+  resume_plain_to_tul: true
+  data_skip_batches: 5000
+  steps: 5000                   # restated: the arm's OWN axis is 0…5000 (10k cumulative)
+  warmup: 1000                  # the ramp, from THIS arm's step 0
+
+tul:
+  activate_at: 0.0              # TUL is on from the resumed step, not part-way through
+
+wandb:
+  name: slot-strict-bootstrap

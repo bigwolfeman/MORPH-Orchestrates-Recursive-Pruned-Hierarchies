@@ -1,12 +1,12 @@
 # Planned: train the core on the token CE, and grade a pass against the pass before it
 
-Status: planned
+Status: failure
 
 Date: 2026-09-12 (frozen before any GPU step of either arm; the 5090 is running the arc
 queue and no smoke of either arm exists at filing time). Arc:
-[`2026-09-04-loop-contribution-arc.md`](2026-09-04-loop-contribution-arc.md). Runs on the
+[`2026-09-04-loop-contribution-arc.md`](../planned/2026-09-04-loop-contribution-arc.md). Runs on the
 STRICT geometry with coda reach `all`
-([`2026-09-12-arc-strict-geometry.md`](2026-09-12-arc-strict-geometry.md)), so the
+([`2026-09-12-arc-strict-geometry.md`](../failures/2026-09-12-arc-strict-geometry.md)), so the
 one-factor partner of both arms is `slot-spandec-strict`. Design note:
 [`2026-09-12-core-token-gradient-and-within-context-critic.md`](../../../.agents/notes/proposed/architecture/2026-09-12-core-token-gradient-and-within-context-critic.md).
 
@@ -457,6 +457,32 @@ through the real coda is 0.001–0.003 nats and the coda's loss is flat to 0.000
 CE-gap weighting shrinks the term toward zero, as the P-6 reasoning allowed. The feature
 acts (`gp_rel` 0.04) and moves nothing.
 
+### P-9 — the critic's direction against a random one
+
+`lab/divergence/critic_direction_probe.py` on `slot-spandec-strict-critic` at 5,000
+(96 rows, batch 3, depth 6, `eps` 0.1, 4 random draws per slot, **4,906 scored slots**;
+the critic direction is rms-normalised, `critic_dir_rms` 1.000). `delta` is the change in
+the next span's CE when the exit state is moved by `eps*rms(z)*d` through the REAL coda, so
+negative is an improvement and `gap = delta_random - delta_critic` is positive when the
+critic's direction is the better one. Files:
+[`critic_direction_slot-spandec-strict-critic.json`](../results/2026-09-12-strict/critic_direction_slot-spandec-strict-critic.json)
+and its log as `.txt` in the same directory.
+
+| reading | value |
+| --- | --- |
+| `delta_critic_mean` | **-0.00150** nats (the critic's direction does help, on average) |
+| `delta_random_mean` | -0.00005 nats |
+| `gap_mean` | **+0.00145** [+0.00087, +0.00202] |
+| `win_rate` (gap > 0; 0.5 is chance by construction) | **0.477** |
+| `win_rate_margin_0.01` (gap > 0.01 — the prediction's bar) | **0.213** |
+
+The critic's gradient is not noise: the mean gap is positive and its interval clears zero.
+It is also seven times smaller than the 0.01-nat bar, and it beats a random direction on
+fewer than half the slots, so the positive mean is carried by a minority of slots where it
+wins by a lot. The scale is the panel's own headline read a second way: a 10 % rms step
+along the best direction this critic can name moves the real coda by 0.0015 nats, the same
+order as the measured worth of a whole pass (`critic_gap_traj` 0.001-0.003).
+
 ### Predictions scored
 
 | P | claim | result |
@@ -469,7 +495,7 @@ acts (`gp_rel` 0.04) and moves nothing.
 | P-6 | critic_agree > 0.60 | **FALSE** (0.52) |
 | P-7 | critic_gap_traj < 0.01 | **TRUE** (0.0024) |
 | P-8 | critic tokens K1−K6 > 0.005 | **FALSE** (0.0012) |
-| P-9 | critic direction beats random by > 0.01 on ≥ 60 % of slots | **PENDING** — `critic_direction_probe.py` chained after the math panel and the z-opt probes on the 5090 |
+| P-9 | critic direction beats random by > 0.01 on ≥ 60 % of slots | **FALSE** (0.213 of 4,906 slots; `gap_mean` +0.00145 [+0.00087, +0.00202], `win_rate` 0.477) |
 | P-10 | critic CE within 0.02 of strict | **TRUE** (−0.0025) |
 | P-11 | both survive | **TRUE** |
 | P-12 | critic clears 8,086 tok/s | **TRUE** (8,450) |
@@ -481,7 +507,11 @@ acts (`gp_rel` 0.04) and moves nothing.
 to a 1.10-nat token map, running the identical six blocks at the identical depth over the
 slot cells, adds 0.0005 nats over one pass. The critic case that fired is "P-6 fails": the
 within-context label is a measured near-tie (0.001–0.003 nats per pass) and a critic cannot
-learn from ties.
+learn from ties. **P-9 is false too** and it closes the panel's last open door: the
+binding clause "P-9 holds and P-8 fails" (the direction is there, the pass cannot use it)
+does NOT fire. The critic's direction is real but tiny — it buys 0.0015 nats where the bar
+was 0.01, on 21 % of slots — so there is no good direction the pass is failing to follow.
+What is missing is a state the coda's loss is steep in, not a pass that can move.
 
 ## Updated hypothesis
 
@@ -494,4 +524,6 @@ pass produces. The lane left is what the coda can take from `z` (the planning-ce
 in the drawing-board note, held for Wolfe's word) and a matched-compute one-pass slot model
 priced against the looped one.
 
-Not verified: P-9 (queued); the aux weight (1.0) was never swept; one seed.
+Not verified: the aux weight (1.0) was never swept; one seed; P-9's probe reports a point
+estimate with a bootstrap CI over slots at ONE `eps` (0.1) and ONE step along the gradient,
+so it prices a local linear move and not what a trained pass could do with the same signal.
