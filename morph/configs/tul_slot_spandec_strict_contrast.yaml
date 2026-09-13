@@ -1,0 +1,68 @@
+# Slot-loop panel, arm "slot-spandec-strict-contrast": the WITHIN-ROW CONTRASTIVE
+# objective (lever C2). ONE factor against `slot-spandec-strict`
+# (`tul_slot_spandec_strict.yaml`): `tul.row_contrast_lambda`.
+#
+# THE DEFECT. On the strict ruler a row's 64 written slot states sit at effective rank
+# 5.7598 in 1024 dimensions with mean pairwise cosine 0.7104. Every lever tried so far has
+# attacked the loop — its core shape, its stability terms, its entry, its seed, its width,
+# its geometry, its target — and twelve arms read token K1−K6 inside
+# [−0.0001, +0.0033]. None of them changed how DISTINCT the states are.
+#
+# WHAT THIS ARM DOES. It gives the row's slots a job that indistinguishable states cannot
+# do. For every valid slot i whose NEXT span exists, pool span i+1's PRELUDE token states
+# and ask which of the row's valid slot states belongs to it: a softmax over the row's
+# slots at temperature 0.1, charged -log p(i | span_{i+1}), added to the loss at weight
+# `row_contrast_lambda`. Negatives are the OTHER valid slots of the SAME row and nothing
+# else — a pad is never a key, and two rows of a batch never mix. Slot i's target is span
+# i+1 and no two anchors share a target, so there are no false negatives.
+#
+# WHY IT IS CAUSAL. Slot i sits AFTER its own span and BEFORE span i+1's tokens, so under
+# every TG geometry in this tree z_i has not read the span it is asked to identify. This
+# is the span decoder's target — forecast the next span — scored as a within-row retrieval
+# instead of a token-level decode.
+#
+# ONE DIRECTION, span -> z, not the symmetric pair, and that is what gives the arm an
+# ABSOLUTE reference. With the row's states indistinguishable the softmax is EXACTLY
+# uniform, so `tul/row_contrast` reads log(n_valid) and `tul/row_contrast_acc` reads
+# 1/n_valid with no calibration run. The z -> span half has no analytic chance value (its
+# keys are the span pools, which stay distinct however far the states collapse), so
+# including it would make the reported number unreadable on its own.
+#
+# WHAT IT TRAINS. The pooled targets are DETACHED before the readout, so the target path
+# trains `W_contrast` and nothing else — not the prelude, not `lm_mixer`, not the
+# embedding table (the `mux_detach_head` rule: `embed.lm_weight()` IS the input embedding
+# table and an auxiliary writing into it is what made arm v1a diverge at step 2800). The
+# anchor path is live and reaches the loop, the seed and the core, which is the write this
+# term exists to shape.
+#
+# THE INSTRUMENT TO READ FIRST is `tul/row_contrast_acc` — a DIRECT distinctness number
+# the rank-collapse lane has never had. `val/slot_pairwise_cos` and `val/slot_eff_rank`
+# are the geometry companions; note that `effective_rank` centers its covariance, so it
+# reads the states' spread after a shared offset is already gone, while
+# `mean_pairwise_cos` does not.
+#
+# λ = 0.1 and NOT more. The term is a cross-entropy over ~60 classes, so it sits near
+# log 60 ≈ 4.1 at chance and would be comparable to the model's own CE at λ = 1. 0.1 puts
+# it at roughly 10 % of the token loss, which is the same order as the 5 %-of-train-loss
+# rule the 2026-08-27 SIGReg arm was sized by — and that arm DIED at step 2040 because its
+# λ was picked from a probe and not from a magnitude. If this arm diverges, suspect λ
+# before suspecting the idea.
+#
+# COST. One [B, 64, 64] similarity per step plus two d_model x d_model projections
+# (+1.05 M parameters), against a coda that already runs 1152 positions. Expect tok/s
+# within noise; the smoke says. `W_contrast` draws from a PRIVATE generator with the
+# global RNG snapshotted and restored, so this arm's base weights are byte-identical to
+# the ruler's and the two differ by the mechanism alone.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-rank-levers-center-and-contrast.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-rank-levers-center-and-contrast.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  row_contrast_lambda: 0.1
+  row_contrast_tau: 0.1
+
+wandb:
+  name: slot-spandec-strict-contrast

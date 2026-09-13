@@ -1,5 +1,6 @@
 # TUL arm CENTER — subtract the batch's mean token signal from every bag-mean.
 # Pre-registration: lab/experiments/planned/2026-08-27-warmup-sigreg-ntpdrop.md
+# Result: lab/experiments/failures/2026-08-27-warmup-sigreg-ntpdrop.md (verdict C1 FAILED).
 # ONE change from tul_a1. The cheapest possible test of a MEASURED mechanism:
 # the embedding table carries a common mean (norm 0.423 vs mean per-token
 # deviation 1.049 on tul-v1a2b step_3500). A bag-mean shrinks the deviations by
@@ -7,11 +8,30 @@
 # — predicted pairwise cosine 0.394 (span 4) to 0.839 (span 32) against a
 # MEASURED +0.39..+0.71. If that is the whole story, centering decollapses the
 # slots for free and SIGReg is treating the symptom.
+#
+# ── 2026-09-13: `slot_seed: bag_mean` pinned here, and it is a REPAIR ─────────
+# `tul.center_bag_mean` is legal only with `slot_seed: bag_mean` — `TULConfig`
+# raises otherwise, by design: "boundary" computes no bag-mean at all
+# (E_slot + W_sent . embed(t_last)), so the knob would silently do nothing there.
+# When this file was written in 2026-08 the chain's seed WAS `bag_mean`; the
+# default later moved to `boundary` (`tul_tg4b.yaml`) and this config became a
+# BUILD ERROR that nothing noticed, because no arm has composed it since. Found
+# while auditing the knob for the 2026-09-13 rank levers, and measured:
+#   build_tul_runtime(compose("tul_center"))
+#   -> ValueError: tul.center_bag_mean=true with tul.slot_seed='boundary' is not
+#      supported: centering is scoped to slot_seed='bag_mean' only.
+# The line below restores the arm to the thing it was measured as. It does NOT
+# change what `center_bag_mean` means and it does not resurrect the arm: C1 is on
+# record as FAILED (pairwise cosine 0.337-0.578 against a control's 0.485-0.589,
+# +0.0015 nats of loop worth). The 2026-09-13 successor centers the EXIT instead
+# of the seed and is a different knob, `tul.center_exit`
+# (morph/configs/tul_slot_spandec_strict_center.yaml).
 defaults:
   - tul_a1
   - _self_
 
 tul:
+  slot_seed: bag_mean
   center_bag_mean: true
 
 wandb:

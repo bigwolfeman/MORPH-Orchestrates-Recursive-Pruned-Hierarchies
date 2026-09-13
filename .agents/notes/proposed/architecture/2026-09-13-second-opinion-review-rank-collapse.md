@@ -50,6 +50,17 @@ already-built arm and queued an ambiguous one.
 row above cites the file that confirms or fails to confirm the claim. Points with no file
 backing are marked unverified rather than accepted or rejected outright.
 
+**(d) Attack the adopted diagnosis from more than one side, added 2026-09-13.** The review's
+Proposal 1 names ONE remedy (more cells) for the rank number, and this note adopted it as
+the main build. Two further levers were built against the same diagnosis and are recorded
+separately:
+[`2026-09-13-rank-levers-center-and-contrast.md`](2026-09-13-rank-levers-center-and-contrast.md)
+— `tul.center_exit` (remove the row's shared component) and `tul.row_contrast_lambda`
+(demand distinct states through a within-row retrieval objective). That note also corrects
+one thing this table got from the review and did not check: `effective_rank` in this tree
+CENTERS its covariance, so the ruler's 5.76 is already offset-free and a shared offset
+explains the COSINE reading, not the rank reading. The two are different claims.
+
 ## Acceptance criteria
 
 * `tul_slot_register_m4.yaml`: `val/slot_eff_rank` within a row above 12 (roughly double the

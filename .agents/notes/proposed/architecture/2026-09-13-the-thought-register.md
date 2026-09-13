@@ -68,7 +68,14 @@ on the CPU fixture at init.
   showed that penalising a geometry the map produces does not change what the map does
   (four spectral interventions, two worse than nothing). It stays available if the
   register's cells collapse anyway — which is exactly what prediction P-1 failing would
-  mean.
+  mean. **Taken up 2026-09-13, in two forms that are not this one and that COMPOSE with
+  the register rather than replacing it:**
+  [`2026-09-13-rank-levers-center-and-contrast.md`](2026-09-13-rank-levers-center-and-contrast.md)
+  — `tul.center_exit` removes the row's shared component, and
+  `tul.row_contrast_lambda` demands distinct states through an OBJECTIVE (a within-row
+  retrieval) rather than through a penalty on the geometry. `slot-register-m4-center` and
+  `slot-register-m4-contrast` are the arms that test this register under that push, and
+  the Risks section's first entry is what they exist for.
 * **Per-cell span-decoder targets (cell i decodes token bucket i of the next span).** A
   stronger separating force than the mean. Rejected for THIS arm because it changes the
   target at the same time as the state, making the result unattributable. It is the named

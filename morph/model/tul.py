@@ -22,10 +22,11 @@ from torch import Tensor
 from .attention import RMSNorm
 from .tul_layout import SlotLayout
 
-__all__ = ["TULConfig", "TULGate", "TULGateConfig", "TULGradPass", "TULSlotChain", "TULSlots", "bag_mean",
+__all__ = ["TULCenterExit", "TULConfig", "TULGate", "TULGateConfig", "TULGradPass",
+           "TULRowContrast", "TULSlotChain", "TULSlots", "bag_mean",
            "bound_seed", "build_bound_rotations", "mux_span_targets",
-           "compact_index", "cw2_retain_mask", "gather_positions", "scatter_positions",
-           "window_drop_mask"]
+           "compact_index", "cw2_retain_mask", "gather_positions", "next_span_pool",
+           "scatter_positions", "window_drop_mask"]
 
 
 @dataclass
@@ -1033,6 +1034,71 @@ class TULConfig:
     sigreg_slices: int = 256             # M directions (paper default)
     sigreg_activate_at: float = 0.0      # same schedule shape as mux_activate_at
 
+    # ── C1: the ROW-CENTERED EXIT (`tul.center_exit`) ─────────────────────────
+    # Built against the SAME measured defect the Thought Register is built against:
+    # a row's written slot states sit at effective rank 5.76 in 1024 dimensions with
+    # mean pairwise cosine 0.7104 (`val/slot_eff_rank` / `val/slot_pairwise_cos` on
+    # `slot-spandec-strict`). A shared offset is the cheapest explanation of that
+    # reading: N vectors that agree on one large common component span one direction
+    # plus whatever is left, and the cosine is dominated by the component they share.
+    #
+    # WHAT IT DOES. After the loop and after the think-once stack, every VALID slot's
+    # exit state has the row's mean over its valid slots subtracted, and ONE learned
+    # bias `b_center` (zero-init) added back. The states become exactly zero-mean
+    # across the row at step 0, so the shared "here is a boundary" component the coda
+    # legitimately wants is no longer carried by all 64 states at once — it is
+    # relearned as the constant `b_center`, which costs the row's rank nothing.
+    # PAD slots are untouched (the `center_bag_mean` rule: the dump bin stays itself).
+    # At `slot_cells > 1` each CELL INDEX is centered separately across the row (cell i
+    # of every valid slot against cell i of every other), so the register's within-slot
+    # axis is not flattened into the row statistic.
+    #
+    # THE PRECEDENT, and it is not encouraging. `tul.center_bag_mean` (arm `tul_center`,
+    # 2026-08-27) centered the SEED on the old `bag_mean` path. Prediction C1 was
+    # pairwise cosine < 0.20; it read 0.337-0.578 against a control's 0.485-0.589.
+    # What it DID do is reverse the trend across the loop's passes — the control
+    # collapsed as it looped (cos +0.334 -> +0.729, effective rank 4.21 -> 1.46) while
+    # the centered arm de-collapsed (+0.578 -> +0.337, rank 2.63 -> 4.41) — and it bought
+    # +0.0015 nats of loop worth, i.e. nothing. This knob centers the EXIT rather than
+    # the seed, which is the state every reader and the coda actually see, and it runs
+    # under `norm_match` + `spandec` + strict geometry, none of which existed in 2026-08.
+    # It is still a geometry intervention against a precedent that says geometry alone
+    # has not moved the loop.
+    #
+    # False builds no parameter, draws no RNG and takes no branch: bit-identical.
+    center_exit: bool = False
+
+    # ── C2: the WITHIN-ROW CONTRASTIVE objective (`tul.row_contrast_lambda`) ───
+    # The other half of the same attack, and the opposite kind of lever: instead of
+    # REMOVING a shared component from the states, this DEMANDS that they be distinct
+    # by giving the row's slots a job only distinct states can do.
+    #
+    # THE TERM. For each valid slot `i` of a row whose NEXT span exists, pool that next
+    # span's PRELUDE token states (the mean over the span's token positions, DETACHED)
+    # and ask which of the row's slot states belongs to it: a softmax over the row's
+    # valid slots at temperature `row_contrast_tau`, charged `-log p(i | span_{i+1})`.
+    # Negatives are the OTHER valid slots OF THE SAME ROW and nothing else. One
+    # direction, span -> z, not the symmetric pair, and that is a readout decision:
+    # with every slot state identical the span -> z softmax is EXACTLY uniform, so the
+    # term reads log(n_valid) and `row_contrast_acc` reads 1/n at chance with no
+    # calibration run. The z -> span half has no analytic chance value (its keys stay
+    # distinct when the states collapse), so including it would make `tul/row_contrast`
+    # unreadable on its own.
+    #
+    # WHAT IT TRAINS. The pooled targets are detached BEFORE the readout, so the term's
+    # target path trains `W_contrast` alone — never the prelude, never the embedding
+    # table. The anchor path is live: it reaches the loop, the seed and the core, which
+    # is the write this is meant to shape.
+    #
+    # AT `slot_cells > 1` the term reads the CELLS' MEAN, the same state every other
+    # reader at this seam takes (the MUX, the span decoder, SIGReg, the energy). Giving
+    # each cell its own span is a SECOND mechanism and would make the register arm
+    # differ from its ruler by two things.
+    #
+    # 0.0 builds no head, draws no RNG and adds no term: bit-identical.
+    row_contrast_lambda: float = 0.0
+    row_contrast_tau: float = 0.1
+
     # ── TG restriction (docs/tul-tg-spec.md) ──────────────────────────────────
     # False builds nothing new and adds no mask (bit-identical to master, spec T4).
     # True closes the token shortcut: within-span attention only in the window
@@ -1188,6 +1254,43 @@ class TULConfig:
             raise ValueError(
                 "tul.slot_cell_init set with tul.slot_cells=1: no register is built, so "
                 "the knob would be silently ignored. Set tul.slot_cells > 1 or drop it.")
+        # ── C1 / C2 refusals (tul.center_exit, tul.row_contrast_lambda) ───────
+        # Both levers act on the SLOT LOOP's per-slot exit state. The paid loop
+        # (tokens_through_core) has no such state — the slot IS a looped position and
+        # nothing is gathered, projected or scattered — so neither knob has a defined
+        # meaning there. Raises rather than silently picking a behaviour (the
+        # tul.gate / tul.sigreg_lambda precedent in transformer._forward_tul).
+        if self.center_exit and self.tokens_through_core:
+            raise ValueError(
+                "tul.center_exit=true with tul.tokens_through_core (the paid loop) is "
+                "not defined: the paid loop has no per-slot exit state to center — "
+                "tokens and slots are one sequence and nothing is written through "
+                "W_prefix. Raises rather than silently doing nothing.")
+        if self.row_contrast_lambda > 0.0 and self.tokens_through_core:
+            raise ValueError(
+                "tul.row_contrast_lambda > 0 with tul.tokens_through_core (the paid "
+                "loop) is not defined: the paid loop has no per-slot state to identify "
+                "a span with. Raises rather than silently dropping the term.")
+        # `loop_reads_tokens` DOES have a per-slot state, and the contrastive term runs
+        # there unchanged (it reads `h_slots` at the same seam). Centering does NOT:
+        # that arm writes NOTHING through `prefix_project` — a cell's looped state is
+        # already at its own position when the core returns, and the coda reads THAT
+        # tensor, not `h_slots`. Centering `h_slots` there would center the loss
+        # readers and leave the coda reading the uncentered state, which is a lever
+        # that says one thing and does another.
+        if self.center_exit and self.loop_reads_tokens:
+            raise ValueError(
+                "tul.center_exit=true with tul.loop_reads_tokens is not defined: that "
+                "arm has no prefix write, so the coda reads the core's own output and "
+                "centering `h_slots` would move the local losses and not the coda. "
+                "Raises rather than shipping a half-applied lever.")
+        if self.row_contrast_lambda < 0.0:
+            raise ValueError(
+                f"tul.row_contrast_lambda must be >= 0, got {self.row_contrast_lambda}")
+        if self.row_contrast_tau <= 0.0:
+            raise ValueError(
+                f"tul.row_contrast_tau must be > 0 (it divides the logits), got "
+                f"{self.row_contrast_tau}")
         self._check_vq()
         if self.prefix_source in ("trajectory", "entry_exit") and self.prefix_k < 2:
             raise ValueError(
@@ -1971,6 +2074,12 @@ class TULConfig:
                 f"writes looped cell i there, the quantizer writes code i. Two multi-cell "
                 f"mechanisms at once is not one factor, so this raises. Run them as two "
                 f"arms.")
+        if self.center_exit or self.row_contrast_lambda > 0.0:
+            raise NotImplementedError(
+                "tul.vq_codes with tul.center_exit / tul.row_contrast_lambda is not defined: "
+                "the two lanes were built apart on 2026-09-13 and their composition (center "
+                "before or after the quantizer; the contrastive term on the code or on the "
+                "exit) is unspecified and untested. Run them as separate arms.")
         if self.prefix_source != "exit":
             raise NotImplementedError(
                 f"tul.vq_codes with tul.prefix_source={self.prefix_source!r}: the same "
@@ -2301,6 +2410,230 @@ class TULReread(nn.Module):
         o = o.transpose(1, 2).reshape(B, S, C)
         term = F.linear(o, self.W_o.to(o.dtype))
         return term * slot_valid.unsqueeze(-1).to(term.dtype)
+
+
+class TULCenterExit(nn.Module):
+    """``tul.center_exit`` -- the ROW-CENTERED EXIT (lever C1).
+
+    THE MEASURED DEFECT. On the strict ruler the 64 written slot states of a row sit at
+    effective rank **5.7598** in 1024 dimensions with mean pairwise cosine **0.7104**
+    (`val/slot_eff_rank` / `val/slot_pairwise_cos`, `run_slot-spandec-strict.log`). A
+    large component SHARED by every state is the cheapest account of the cosine: it is
+    one direction every state agrees on and it dominates every pair.
+
+    WHAT THIS DOES, in one line: subtract the row's mean over its VALID slots and add back
+    one learned bias, so the states are exactly zero-mean across the row and the shared
+    component is carried by a constant instead of by all 64 vectors.
+
+    WHAT IT CAN AND CANNOT MOVE, because the instruments are not symmetric.
+    `effective_rank` (`morph/model/fm_planner.py`) ALREADY centers -- it is the
+    participation ratio of the CENTERED covariance -- so a globally shared offset
+    contributes nothing to `val/slot_eff_rank` and this lever cannot remove it from there.
+    What it removes is the PER-ROW mean, which the instrument's global centering does not.
+    `mean_pairwise_cos` does NOT center, so that is the reading this lever attacks head-on.
+    Stated here so nobody reads a flat `slot_eff_rank` as "the lever did not act".
+
+    THE FOUR DECISIONS, each with its reason.
+
+    1. **The CARRIER, not a readout.** `h_slots` at this seam is the tensor EVERY reader
+       takes -- the MUX, the span decoder, SIGReg and the energy each call `_readout` on it
+       themselves, and `prefix_project` projects it with its STREAM AXIS INTACT. Centering
+       the carrier is therefore the ONE edit that makes every reader see the centered
+       state. Centering "the readout" would mean plumbing a second tensor into five call
+       sites and would leave `prefix_project` -- the coda's whole channel -- projecting the
+       raw state.
+    2. **Pads untouched.** A pad slot addresses the dump row and carries no label; it is
+       excluded from the mean and left exactly as it was. This is `center_bag_mean`'s own
+       rule ("the dump bin stays exactly zero"), kept. It is not cosmetic: a pad enters the
+       loop at h = 0 (`gather_valid`) but the first core step moves it off zero, so its
+       state is live garbage that must not enter a row statistic.
+    3. **Per CELL INDEX at `slot_cells > 1`.** Cell `i` of every valid slot is centered
+       against cell `i` of every other valid slot. Pooling all S*M cells into one mean
+       would subtract the register's WITHIN-slot structure -- the axis
+       `val/slot_cell_eff_rank` measures and the register exists to create -- from the row
+       statistic, which is the opposite of what either lever wants.
+    4. **The mean is NOT detached.** This is a differentiable reparameterisation, like the
+       mean subtraction inside a LayerNorm: the readers genuinely see only the centered
+       state, so the gradient must also see only the centered state. Detaching would leave
+       a live gradient path pushing a shared offset that no reader can read -- the exact
+       "surface does not match substance" failure. (`center_bag_mean` detaches because its
+       statistic is the EMBEDDING TABLE's batch mean and a dense gradient on that table is
+       what made arm v1a diverge; here the statistic is the slot states themselves and
+       there is no table behind it.)
+
+    `b_center` is ZERO at init, so at step 0 the centered state is the ruler's state minus
+    a row mean and nothing else, and the coda's shared "here is a boundary" signal can be
+    relearned as that one vector at no cost to the row's rank. It is also the lever's own
+    escape hatch, and it is named as a RISK rather than hidden: `mean_pairwise_cos` does
+    not center, so a `b_center` that grows large puts the pooled cosine straight back.
+    `val/slot_eff_rank` is the reading that cannot be gamed that way.
+
+    THE PRECEDENT, stated because it is not encouraging. `tul.center_bag_mean` centered the
+    SEED on the old `bag_mean` path (arm `tul_center`, 2026-08-27). Its frozen prediction
+    was pairwise cosine < 0.20; it read 0.337-0.578 against a control's 0.485-0.589 --
+    FAILED. What it did do was reverse the trend ACROSS the loop's passes (control +0.334
+    -> +0.729 with effective rank 4.21 -> 1.46; centered +0.578 -> +0.337 with rank 2.63 ->
+    4.41) and buy +0.0015 nats of loop worth, i.e. nothing.
+    """
+
+    def __init__(self, d_model: int, n_streams: int = 0) -> None:
+        super().__init__()
+        # One learned bias, shaped like the carrier's trailing dims so it can add back
+        # exactly what was subtracted: [n, C] on a Hyper-Connection carrier (the streams
+        # are not interchangeable -- `prefix_project` hands the coda all four and
+        # `_readout` weights them by a plain mean -- so one [C] vector broadcast across
+        # them could not), [C] on a plain one. `torch.zeros` draws NO RNG, so building this
+        # module leaves every other parameter of the model byte-identical whatever the
+        # build order (the TULSlotRegister rule, without needing its snapshot).
+        shape = (int(n_streams), int(d_model)) if n_streams > 0 else (int(d_model),)
+        self.b_center = nn.Parameter(torch.zeros(*shape))
+
+    def forward(self, h_slots: Tensor, slot_valid: Tensor, m_cells: int = 1) -> Tensor:
+        """``[B, S*M, *carrier]`` -> the same shape, valid slots centered per cell index.
+
+        ``slot_valid`` is ``[B, S]``; ``m_cells`` is ``tul.slot_cells``. A row with no
+        valid slot is returned untouched (the count is clamped and the ``where`` keeps
+        every position), so an all-pad row can never produce a NaN.
+        """
+        B, SM = h_slots.shape[0], h_slots.shape[1]
+        M = int(m_cells)
+        S = slot_valid.shape[1]
+        if SM != S * M:
+            raise ValueError(
+                f"TULCenterExit: h_slots axis 1 is {SM}, expected S*M = {S}*{M} = {S * M}")
+        v = h_slots.reshape(B, S, M, *h_slots.shape[2:])          # [B, S, M, *carrier]
+        keep = slot_valid.view(B, S, *([1] * (v.dim() - 2)))       # [B, S, 1, ..., 1] bool
+        w = keep.to(v.dtype)
+        cnt = w.sum(dim=1, keepdim=True).clamp(min=1.0)            # [B, 1, 1, ..., 1]
+        mu = (v * w).sum(dim=1, keepdim=True) / cnt                # [B, 1, M, *carrier]
+        out = torch.where(keep, v - mu + self.b_center.to(v.dtype), v)
+        return out.reshape(B, SM, *h_slots.shape[2:])
+
+
+class TULRowContrast(nn.Module):
+    """``tul.row_contrast_lambda`` -- the WITHIN-ROW CONTRASTIVE objective (lever C2).
+
+    The same defect as :class:`TULCenterExit`, attacked from the opposite side. Centering
+    REMOVES a shared component; this DEMANDS distinct states by giving the row's slots a
+    job that only distinct states can do.
+
+    THE TERM. For every valid slot ``i`` of a row whose NEXT span exists, take that next
+    span's pooled prelude representation ``s_i`` and ask which of the row's slot states
+    belongs to it -- a softmax over the row's valid slot states at temperature ``tau``,
+    charged ``-log p(i | s_i)``. The negatives are the OTHER valid slots OF THE SAME ROW,
+    and nothing else: a pad slot is never a key, and two rows of a batch never mix. No
+    two anchors share a target either -- slot ``i``'s next span is span ``i+1``, so the
+    targets are distinct by construction and there are no false negatives.
+
+    ONE DIRECTION, span -> z, not the symmetric pair. This is a readout decision and it is
+    the reason the arm has an absolute reference. With every slot state identical the
+    span -> z softmax is EXACTLY uniform over the row's ``n`` valid slots, so
+    ``tul/row_contrast`` reads ``log n`` and ``tul/row_contrast_acc`` reads ``1/n`` at
+    chance with no calibration run -- and ``acc`` above ``1/n`` IS the distinctness reading
+    the panel exists to produce. The z -> span half has NO analytic chance value (its keys
+    are the span pools, which stay distinct however far the states collapse), so adding it
+    would make the reported number unreadable on its own. Both directions push the states
+    apart; only this one says by how much.
+
+    THE HEAD. ONE ``W_contrast`` (``d_model -> d_model``, no bias) on BOTH sides, so the
+    term is a statement about one shared space and carries one parameter tensor. The span
+    side's INPUT is detached by the caller BEFORE the readout, so the target path trains
+    ``W_contrast`` and nothing else -- not the prelude, not `lm_mixer`, not the embedding
+    table. The anchor side is live and reaches the loop, the seed and the core, which is
+    the write this term exists to shape.
+
+    REDUCTION. Per ROW: the mean over that row's valid anchors. Then the mean over the rows
+    that have at least TWO valid anchors. Rows weigh equally, so the reported number keeps
+    its ``log n`` reference instead of drifting with the batch's span count; a row with one
+    anchor is EXCLUDED rather than scored, because its only key is itself and it would
+    contribute an unearned exact 0.
+    """
+
+    # A FINITE fill, never -inf. An all-masked softmax row makes NaN INSIDE the softmax and
+    # propagates it through the BACKWARD -- the defect that made the register's `Q` and
+    # `W_k` read grad = nan. Rows that carry no counted anchor CAN be fully masked here, so
+    # the fill has to keep them finite; -1e30 in fp32 is 0 after the exp to every bit that
+    # matters, and a counted anchor always has its own column unmasked.
+    NEG = -1.0e30
+
+    def __init__(self, d_model: int, tau: float) -> None:
+        super().__init__()
+        if tau <= 0.0:
+            raise ValueError(f"TULRowContrast needs tau > 0, got {tau}")
+        self.tau = float(tau)
+        # RNG-NEUTRAL CONSTRUCTION, the TULSlotRegister rule: `nn.Linear` runs a kaiming
+        # draw on the GLOBAL stream before the weight is overwritten, so the global state is
+        # snapshotted and restored and building this head moves no other parameter.
+        _rng0 = torch.random.get_rng_state()
+        g = torch.Generator(device="cpu").manual_seed(0x5C07)
+        self.W_contrast = nn.Linear(int(d_model), int(d_model), bias=False)
+        with torch.no_grad():
+            self.W_contrast.weight.copy_(torch.empty(
+                self.W_contrast.weight.shape, device="cpu").normal_(
+                    mean=0.0, std=0.02, generator=g))
+        torch.random.set_rng_state(_rng0)
+
+    def forward(self, z_state: Tensor, span_pool: Tensor, ok: Tensor
+                ) -> tuple[Tensor, Tensor, Tensor]:
+        """``([B, S, C] live states, [B, S, C] detached span pools, [B, S] bool)``.
+
+        ``ok[b, i]`` is True when slot ``i`` of row ``b`` is valid AND its next span
+        exists. Returns ``(loss, acc, n_rows)``: the reduced term, the top-1 identification
+        accuracy over the same anchors, and the number of rows that actually carried the
+        term (0 -> ``loss`` is exactly 0 and still carries a graph).
+        """
+        B, S = ok.shape
+        zn = F.normalize(self.W_contrast(z_state).float(), dim=-1)         # [B, S, C]
+        gn = F.normalize(self.W_contrast(span_pool).float(), dim=-1)       # [B, S, C]
+        # Row i = span_{i+1}'s pool, column j = slot j's state. Keys are the row's valid
+        # slots, so the mask is on COLUMNS. Built in this orientation and never transposed
+        # off a symmetric matrix: a transposed column mask is a ROW mask and would silence
+        # anchors instead of keys.
+        sim = torch.bmm(gn, zn.transpose(1, 2)) / self.tau                 # [B, S, S]
+        sim = sim.masked_fill(~ok.unsqueeze(1), self.NEG)
+        tgt = torch.arange(S, device=ok.device).expand(B, S)
+        ce = F.cross_entropy(sim.reshape(B * S, S), tgt.reshape(B * S),
+                             reduction="none").reshape(B, S)
+        hit = (sim.argmax(dim=-1) == tgt).to(sim.dtype)
+        m = ok.to(sim.dtype)
+        n = m.sum(dim=1)                                                   # [B]
+        row_ok = (n >= 2.0).to(sim.dtype)
+        den = n.clamp(min=1.0)
+        row_loss = (ce * m).sum(dim=1) / den
+        row_acc = (hit * m).sum(dim=1) / den
+        n_rows = row_ok.sum()
+        loss = (row_loss * row_ok).sum() / n_rows.clamp(min=1.0)
+        acc = (row_acc * row_ok).sum() / n_rows.clamp(min=1.0)
+        return loss, acc.detach(), n_rows.detach()
+
+
+def next_span_pool(tok_states: Tensor, layout: SlotLayout) -> tuple[Tensor, Tensor]:
+    """``tul.row_contrast_lambda``'s target: each slot's NEXT span, mean-pooled.
+
+    ``tok_states`` ``[B, L, C]`` is a per-position signal over the WHOLE packed row -- the
+    caller passes the prelude's readout, DETACHED. Returns ``(pool, ok)``:
+
+    * ``pool`` ``[B, S, C]`` -- entry ``i`` is the mean of span ``i+1``'s TOKEN states,
+      i.e. the span slot ``i`` is asked to forecast. Slot positions are excluded from
+      their own bag by :func:`bag_mean`'s ``token_sel``, so the pool is tokens only.
+    * ``ok`` ``[B, S]`` bool -- slot ``i`` is valid AND slot ``i+1`` is valid. The LAST
+      valid slot of a row is therefore NOT an anchor: the tokens after it go to the dump
+      bin, whose row :func:`bag_mean` defines to be exactly 0, and scoring a slot against
+      a zero vector would be scoring it against nothing.
+
+    Causality note, because the term looks like it could leak. Slot ``i`` sits AFTER its
+    own span and BEFORE span ``i+1``'s tokens, so under every TG geometry in this tree the
+    state ``z_i`` has not read the span it is being asked to identify. This is the span
+    decoder's target (forecast the next span), scored as a within-row retrieval instead of
+    a token-level decode.
+    """
+    B, S = layout.slot_valid.shape
+    token_sel = (~layout.slot_mask).to(tok_states.dtype)
+    bags = bag_mean(tok_states, layout.bag_id, token_sel, layout.max_slots)  # [B, S+1, C]
+    pool = bags[:, 1:S + 1]                                                  # slot i -> bag i+1
+    ok = torch.zeros_like(layout.slot_valid)
+    ok[:, :S - 1] = layout.slot_valid[:, :S - 1] & layout.slot_valid[:, 1:S]
+    return pool, ok
 
 
 class TULSlotRegister(nn.Module):

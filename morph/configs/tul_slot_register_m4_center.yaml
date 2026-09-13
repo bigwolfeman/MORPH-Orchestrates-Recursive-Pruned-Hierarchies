@@ -1,0 +1,49 @@
+# Slot-loop panel, arm "slot-register-m4-center": the ROW-CENTERED EXIT on the Thought
+# Register. ONE factor against `slot-register-m4` (`tul_slot_register_m4.yaml`):
+# `tul.center_exit`.
+#
+# WHY THE PAIR EXISTS. The register and the centering attack the same measured defect from
+# two ends. The register gives a span FOUR mutable cells so a row holds 256 states instead
+# of 64; the centering removes the component those states SHARE. They are independent
+# mechanisms and they compose: this arm says whether the register's cells are still near
+# copies once the row's common offset is gone, which no single-cell arm can answer.
+#
+# THE TWO READINGS, and they are different questions.
+#   `val/slot_eff_rank` / `val/slot_pairwise_cos` — the ROW's 256 cells. The centering acts
+#       on this directly (per cell index, see below).
+#   `val/slot_cell_eff_rank` / `val/slot_cell_pairwise_cos` — the rank WITHIN one slot,
+#       across its own four cells. This is the register's own number, and the centering
+#       does NOT touch it: the mean is taken across the ROW at a fixed cell index, so a
+#       slot's four cells all move by four DIFFERENT vectors and their relative geometry
+#       is not a fixed shift. If `slot_cell_eff_rank` moves here against `slot-register-m4`
+#       it is a training effect, not an arithmetic one.
+#
+# PER CELL INDEX, and it is a decision. Cell i of every valid slot is centered against
+# cell i of every other valid slot, never against the slot's own siblings. Pooling all 256
+# cells into one mean would subtract the register's within-slot structure — the exact axis
+# `val/slot_cell_eff_rank` measures and the register exists to create — out of the row
+# statistic. Guarded in tests/test_tul_center_exit.py: blanking the cell-index structure
+# changes the per-cell means.
+#
+# WHICH INSTRUMENT TO READ FIRST. `effective_rank` already centers its covariance
+# globally, so `val/slot_eff_rank` is blind to a shared offset by construction and this
+# lever cannot move it through that route — it can only remove the PER-ROW mean, which the
+# global centering leaves in. `mean_pairwise_cos` does not center, so
+# `val/slot_pairwise_cos` is the head-on reading. A flat `slot_eff_rank` is not evidence
+# the lever did nothing.
+#
+# THE CONFOUND THIS ARM INHERITS, restated so no row hides it: `slot-register-m4` differs
+# from the k=2 strict ruler by the register AND by `prefix_k` 4, and `L_total` is 1280
+# rather than 1152. This arm pairs cleanly with `slot-register-m4` and with nothing else.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-rank-levers-center-and-contrast.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-rank-levers-center-and-contrast.md
+defaults:
+  - tul_slot_register_m4
+  - _self_
+
+tul:
+  center_exit: true
+
+wandb:
+  name: slot-register-m4-center
