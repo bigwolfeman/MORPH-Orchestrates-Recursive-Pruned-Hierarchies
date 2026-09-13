@@ -423,7 +423,23 @@ front fails). The corrected grids (chain D) replace this table when they land.
 | pass_h6 (next six spans, 48 tokens) | 4.7564 | 4.7607 | 4.7618 | 4.7640 | **−0.0075** [−0.0082, −0.0068] | −0.0022 |
 | exit (the span decoder) | 4.7029 | 4.7094 | 4.7110 | 4.7131 | **−0.0102** [−0.0112, −0.0093] | −0.0021 |
 
-(Reading withdrawn with the table above; see the corrected grid below when filed.)
+**The identical-target grid, CORRECTED** (`spandec_horizon_grid.py` at `7a24adf`, DGX Spark,
+480 rows, forced depths 1/2/3/6, the SAME targets in every column;
+`../results/2026-09-12-instruments/horizon_grid_fixed_slot-spandec-strict-perpass.{json,txt}`).
+The exit column now reproduces the 5090 sweep's `spandec_ce` for this checkpoint
+(4.5437 → 4.5424 vs the sweep's 4.5437 → 4.5425), which is the verification the first run
+failed.
+
+| target column | d1 | d2 | d3 | d6 | K1−K6 | K3−K6 |
+| --- | --- | --- | --- | --- | --- | --- |
+| pass_h1 (next span, 8 tokens) | 4.4519 | 4.4513 | 4.4512 | 4.4518 | **+0.0000** [−0.0005, +0.0006] | −0.0007 |
+| pass_h6 (next six spans, 48 tokens) | 4.6466 | 4.6456 | 4.6453 | 4.6451 | **+0.0015** [+0.0012, +0.0019] | +0.0001 |
+| exit (the span decoder) | 4.5437 | 4.5428 | 4.5424 | 4.5424 | **+0.0013** [+0.0010, +0.0016] | +0.0001 |
+
+Held to one target, depth buys nothing at any horizon: the six-span target the deeper
+passes were trained for moves 0.0015 nats from depth 1 to 6, all of it by pass 3, and the
+one-span target does not move at all. The rising training ladder was the changing target.
+(Strict ruler's exit column, the control: pending, chain D2.)
 
 **Arm B's heads** read 6.62 nats/token at the tail (7.46 at steps 200–600), against the
 coda's 4.39 on the same tokens: a parallel readout of a whole span from one cell is 2.2
@@ -434,7 +450,7 @@ nats behind the causal read, at every J.
 | P | claim | result |
 | --- | --- | --- |
 | P-1 | per-pass tokens K1−K6 > 0.005 | **FALSE** (0.0008) |
-| P-2 | `spandec_pass_t6` < `t1` by > 0.05 | **FALSE** by the letter (rises 0.19); the binding identical-target reading is being RE-RUN after the grid's bare-front bug (chain D) |
+| P-2 | `spandec_pass_t6` < `t1` by > 0.05 | **FALSE** by the letter (rises 0.19) and by the corrected identical-target grid: pass_h6 K1−K6 +0.0015, pass_h1 +0.0000 |
 | P-3 | per-pass worse than ruler by 0.00–0.05 | **TRUE** (+0.0172) |
 | P-4 | per-pass clears 8,086 tok/s | **FALSE** (4,736), the 65 % case; the floor was OFF on this runner so the arm ran |
 | P-5 | codaspan tokens K1−K6 > 0.005 | **FALSE** (0.0012) |
