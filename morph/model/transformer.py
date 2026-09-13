@@ -1568,6 +1568,15 @@ class MORPHTransformer(nn.Module):
                 pass_positions=(int(cfg.tul.spandec_pass_horizon_max)
                                 * int(cfg.tul.spandec_pass_tokens)
                                 if cfg.tul.spandec_per_pass else 0),
+                # The register's READER (TULConfig.spandec_reads_cells): a per-layer
+                # cross-attention onto the slot's M cells. Its output projection is
+                # zero-init and its weights come from a THIRD private stream, so an arm
+                # with the knob on is byte-identical to `slot-register-m4` at step 0 and
+                # differs by one mechanism afterwards. Refused at slot_cells == 1.
+                reads_cells=bool(cfg.tul.spandec_reads_cells),
+                # WHICH span the decoder decodes (TULConfig.spandec_target_offset). 1 is
+                # the shipped next-span target; k decodes span s+k and ONLY that span.
+                target_offset=int(cfg.tul.spandec_target_offset),
             )
             if cfg.tul.spandec_per_pass and cfg.n_core == 0:
                 raise ValueError(
@@ -4707,7 +4716,8 @@ class MORPHTransformer(nn.Module):
         return out
 
     def _tul_spandec_loss(self, h_slots: Tensor, input_ids: Tensor,
-                          layout: SlotLayout, stats: dict | None = None) -> Tensor:
+                          layout: SlotLayout, stats: dict | None = None,
+                          cells: Tensor | None = None) -> Tensor:
         """Span-decoder local loss: decode the WHOLE next span from the slot's exit state.
 
         The MUX head (:meth:`_tul_mux_loss`) scores ``z`` against an ORDER-FREE geometric
@@ -4729,6 +4739,20 @@ class MORPHTransformer(nn.Module):
         embedding table, and arm v1a diverged at step 2800 with the detach off. The SAME
         detached table supplies the decoder's input embeddings.
 
+        ``cells`` ``[B, S, M, *carrier, C]`` is the Thought Register's M looped cells
+        (``tul.slot_cells``), handed in by the caller at the SAME seam ``h_slots`` is read
+        — after the think-once stack, before the eval-only plan ablation — so the memory
+        the decoder cross-attends to under ``tul.spandec_reads_cells`` is cell for cell the
+        object ``TULSlots.prefix_project`` writes into the coda's prefix positions. Each
+        cell goes through the SAME ``_readout`` as ``z``, so the decoder's two inputs live
+        in one space. ``None`` on every model without the register, and required when the
+        decoder was built with ``reads_cells``.
+
+        ``dec.target_offset`` (``tul.spandec_target_offset``) picks WHICH span is decoded:
+        1 is the next span; k is span s+k and only that span, with the last k−1 slots of a
+        row masked to ``ignore_index`` because the span they would be graded on is not in
+        the row.
+
         Cost, stated because it is not free. The readout is
         ``[B, S, J, V]`` — 2.4 GB fp32 at B=6, S=64, J=32, V=49169 — so it goes through
         :func:`fused_linear_cross_entropy`, which never materialises it. That kernel
@@ -4741,10 +4765,23 @@ class MORPHTransformer(nn.Module):
         dec = self.tul_spandec
         assert dec is not None
         z = self._readout(h_slots)                                    # [B, S, C]
+        mem = None
+        if dec.reads_cells:
+            if cells is None:
+                raise RuntimeError(
+                    "tul.spandec_reads_cells is on but the span-decoder loss was handed no "
+                    "register cells. The knob is refused at tul.slot_cells == 1, so the "
+                    "only way here is a caller that dropped the `cells` argument.")
+            _B, _S, _M = cells.shape[0], cells.shape[1], cells.shape[2]
+            # ONE `_readout` per cell, through the same stream mean / lm_mixer / final_norm
+            # `z` takes — `_readout` reduces the CARRIER axis, which sits after the cell
+            # axis, so the cells are flattened onto the slot axis for the call and put back.
+            mem = self._readout(cells.reshape(_B, _S * _M, *cells.shape[3:]))
+            mem = mem.reshape(_B, _S, _M, mem.shape[-1])              # [B, S, M, C]
         w_tied = self.embed.lm_weight()                               # [V, C]
         w_head = w_tied.detach() if tc.mux_detach_head else w_tied
         ids, valid = horizon_span_slots(input_ids, layout, dec.per_span_tokens,
-                                        dec.horizon)
+                                        dec.horizon, start=dec.target_offset)
         # THE ASYMMETRY, and it is deliberate. The OUTPUT head follows `mux_detach_head`,
         # because that knob's whole subject is "may an auxiliary head train the tied
         # table" and the answer must not depend on which auxiliary is asking. The INPUT
@@ -4753,7 +4790,7 @@ class MORPHTransformer(nn.Module):
         # table that the slot's own seed (`E_slot` + a bag-mean OF that table) is built
         # from — the feedback loop `TULConfig.mux_detach_head` records. `SpanDecoder.tok_in`
         # is the learnable map that lets the decoder adapt without writing into the table.
-        st = dec.decode(z, ids, valid, w_tied.detach())                # [B, S, J, C]
+        st = dec.decode(z, ids, valid, w_tied.detach(), mem=mem)       # [B, S, J, C]
         C = st.shape[-1]
         lab = torch.where(valid, ids, torch.full_like(ids, -100))
         loss = fused_linear_cross_entropy(
@@ -4770,6 +4807,11 @@ class MORPHTransformer(nn.Module):
             # with the model's own token CE.
             stats["spandec_ce_h"] = float(loss.detach())
             stats["spandec_horizon"] = float(dec.horizon)
+            # WHICH span the column above is a CE over. At offset > 1 a `spandec_ce` is
+            # NOT comparable with any earlier arm's: it grades a span two or three
+            # boundaries away, which is a harder job than the next span. The offset is
+            # logged beside it so a scorer can never read the two as the same number.
+            stats["spandec_target_offset"] = float(dec.target_offset)
             stats["spandec_n_tokens"] = float(valid.sum())
             if dec.horizon == 1:
                 stats["spandec_ce"] = float(loss.detach())
@@ -6133,8 +6175,12 @@ class MORPHTransformer(nn.Module):
             # the eval-only plan ablation. So the state the decoder grades is the state
             # the coda reads.
             spandec_stats: dict = {}
+            # `cells` is the register's M looped cells (None on every other model), handed
+            # in so `tul.spandec_reads_cells` can cross-attend to exactly what
+            # `prefix_project` below writes into the coda. Read at the same seam as
+            # `h_slots`: after the think-once stack, before the eval-only plan ablation.
             spandec_loss = (self._tul_spandec_loss(h_slots, input_ids, layout,
-                                                   stats=spandec_stats)
+                                                   stats=spandec_stats, cells=_reg_cells)
                             if self.tul_spandec is not None else None)
             # ── C2: the within-row contrastive term (tul.row_contrast_lambda) ──
             # Read at the SAME seam as the MUX and the span decoder: the loop's exit

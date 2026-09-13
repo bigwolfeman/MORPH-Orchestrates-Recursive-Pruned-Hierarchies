@@ -595,6 +595,54 @@ class TULConfig:
     # Cost is linear in H: the decoder goes from 4.0 to 12.0 block-passes per token at
     # H = 3 (2 layers x 64 slots x 32 tokens x H over ~1024 real tokens per row).
     spandec_horizon: int = 1
+    # ── WHICH SPAN (arms `slot-spandec-strict-off2` / `-off3`, 2026-09-13) ────────
+    # spandec_target_offset k: slot s's decoder decodes span s+k, and ONLY span s+k.
+    # 1 is the shipped target and is bit-identical to the tree before this key.
+    #
+    # THIS IS NOT `spandec_horizon`, and the pair is the point. Horizon WIDENS the target:
+    # H = 3 decodes spans s+1, s+2 and s+3 as one concatenated causal run, so the NEXT span
+    # is still in it and the arm asks for more. Offset MOVES the target: k = 3 at H = 1
+    # decodes span s+3 alone, and the next span's first tokens get NO direct z target at
+    # all. `slot-spandec-strict-h3` ran the first; nothing in the arc has ever run the
+    # second.
+    #
+    # WHY. The 2026-08-14 JEPA screen said the informative target sits TWO TO THREE spans
+    # downstream. Every span-decoder arm has graded z on the span immediately after the
+    # boundary, which is also the span the coda can predict best on its own: the measured
+    # cross-span budget spikes 0.958 nats at a span's FIRST position and then sits flat at
+    # 0.315 for every offset eight or more tokens in (lab/experiments/failures/
+    # 2026-09-11-arc-span-budget.md). A target that grades the easy, near part of the
+    # budget can be satisfied without carrying the flat, far part.
+    #
+    # COST is the same as the shipped target: ONE span's tokens, one causal run of
+    # `spandec_max_tokens` positions. The supervised token COUNT falls by roughly
+    # (k-1)/max_slots of the rows, because the last k-1 slots of every row have no span
+    # s+k to decode and are masked to -100 exactly as a pad slot is.
+    #
+    # Combining the two is defined — spans s+k .. s+k+H-1 — and no arm runs it yet.
+    spandec_target_offset: int = 1
+    # ── THE REGISTER'S READER (arm `slot-register-m4-reader`, 2026-09-13) ─────────
+    # spandec_reads_cells: on a register model (`slot_cells: M > 1`) the span decoder
+    # cross-attends to the slot's M CELLS as a memory, per layer, instead of grading only
+    # their mean.
+    #
+    # WHY. The register gives a span M mutable cells and then grades the WEAKEST possible
+    # reader of them: `h_slots = _reg_cells.mean(dim=2)`, one vector, one target per span.
+    # The register note names this as the arm's most likely reason to read a flat K-curve
+    # and names this build as its own follow-up ("A span decoder that cross-attends to the
+    # M cells as a memory ... Rejected for this arm on the same one-factor grounds").
+    #
+    # WHAT IT READS. The M cells the CODA reads — the output of the think-once stack where
+    # `cond_layers > 0`, because `_tul_cond_apply` runs before the cells are formed, and
+    # the raw loop exit otherwise. So the decoder and the coda read the same object. The
+    # conditioning on z stays the MEAN, and the cross-attention's output projection is
+    # ZERO-INIT, so at step 0 the arm is EXACTLY the mean-only decoder and differs from
+    # `slot-register-m4` by one mechanism.
+    #
+    # Refused at `slot_cells == 1` (there is one cell, so there is nothing to read that the
+    # mean does not already give) and with `spandec: false` (no decoder is built).
+    # Record: lab/experiments/planned/2026-09-13-arc-register-reader-and-downstream-target.md
+    spandec_reads_cells: bool = False
     # ── THE PER-PASS PLANNING TARGET (arm `slot-spandec-strict-perpass`, 2026-09-12) ──
     #
     # WHAT IT IS. Every pass of the loop gets its own decoder target, and the target grows
@@ -1449,6 +1497,33 @@ class TULConfig:
                 raise ValueError(
                     f"tul.spandec_heads must be >= 0 (0 = the model's), got "
                     f"{self.spandec_heads}")
+            # ── WHICH SPAN (tul.spandec_target_offset) ────────────────────────
+            if self.spandec_target_offset < 1:
+                raise ValueError(
+                    f"tul.spandec_target_offset must be >= 1 (1 = the next span, the "
+                    f"shipped target), got {self.spandec_target_offset}. The upper bound "
+                    f"is the row's slot budget and is checked against the layout in "
+                    f"morph/model/tul_spandec.py::span_slots, which is the one place both "
+                    f"the offset and max_slots are known.")
+            if self.spandec_target_offset != 1:
+                _off_refuse = [n for n in ("spandec_per_pass", "oracle_z",
+                                           "coda_span_heads") if getattr(self, n)]
+                if _off_refuse:
+                    raise NotImplementedError(
+                        f"tul.spandec_target_offset={self.spandec_target_offset} with "
+                        f"{sorted(_off_refuse)}: every one of those defines its own target "
+                        f"as THE NEXT span (the per-pass ladder grades pass t on s+1..s+t, "
+                        f"the oracle descends the next span's CE, the coda heads read the "
+                        f"next span's offsets), so they would silently disagree with the "
+                        f"decoder about which span the thought is for. Not specified, so "
+                        f"this raises.")
+            # ── THE REGISTER'S READER (tul.spandec_reads_cells) ───────────────
+            if self.spandec_reads_cells and self.slot_cells == 1:
+                raise ValueError(
+                    "tul.spandec_reads_cells with tul.slot_cells=1: there is ONE looped "
+                    "state per slot, so the memory the decoder would cross-attend to is "
+                    "the single vector its z conditioning already carries and the knob "
+                    "buys nothing but parameters. Set tul.slot_cells > 1 or drop it.")
             if self.tokens_through_core:
                 raise NotImplementedError(
                     "tul.spandec is a SLOT-LOOP lever: it grades the per-slot exit state z "
@@ -1506,7 +1581,8 @@ class TULConfig:
         elif (self.spandec_layers != 2 or self.spandec_weight != 1.0
                 or self.spandec_heads != 0 or self.spandec_max_tokens != 0
                 or self.spandec_horizon != 1 or self.spandec_pass_horizon_max != 6
-                or self.spandec_pass_weight != 1.0 or self.spandec_pass_tokens != 8):
+                or self.spandec_pass_weight != 1.0 or self.spandec_pass_tokens != 8
+                or self.spandec_target_offset != 1 or self.spandec_reads_cells):
             raise ValueError(
                 "tul.spandec_* set with tul.spandec=false: the decoder is not built, so the "
                 "knobs would be silently ignored. Set tul.spandec: true or drop them.")

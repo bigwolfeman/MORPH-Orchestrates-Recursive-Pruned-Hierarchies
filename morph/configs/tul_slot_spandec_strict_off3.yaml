@@ -1,0 +1,43 @@
+# Slot-loop panel, arm "slot-spandec-strict-off3": the DOWNSTREAM target, MOVED FURTHER.
+# ONE factor against `slot-spandec-strict` (`tul_slot_spandec_strict.yaml`):
+# `tul.spandec_target_offset`, 1 -> 3. Slot s's decoder decodes span s+3, and ONLY span
+# s+3. One factor against `slot-spandec-strict-off2` as well: the offset itself, 2 -> 3.
+#
+# WHY BOTH 2 AND 3. The 2026-08-14 JEPA screen named "two to three spans downstream" as a
+# RANGE, not a point, and the panel has no measurement that tells the two apart. Running
+# the pair is the only way the arc learns whether the effect (if there is one) grows with
+# distance or dies with it. The two arms are exactly one factor apart, so the comparison is
+# clean.
+#
+# THIS IS NOT `-h3`. `slot-spandec-strict-h3` set `tul.spandec_horizon: 3` and decoded
+# spans s+1, s+2 AND s+3 as one concatenated run — the next span was still in the target
+# and the decoder paid 3x the positions for it. This arm decodes ONE span, the third one,
+# at the ruler's cost, and the next TWO spans get no direct z target at all. Widening is
+# not moving, and only one of the two has ever run.
+#
+# WHAT IT COSTS. The same caveats as `-off2`, larger. `tul/spandec_ce` here is a CE over
+# span s+3 and is comparable with NO earlier arm's column (`spandec_target_offset` is
+# logged beside it). The last TWO slots of every row have no target and are masked to -100
+# as pads are — about 3.1 % of the supervised slots at 64 slots — so
+# `tul/spandec_n_tokens` should fall by roughly that fraction against the ruler.
+#
+# THE RISK THIS ARM CARRIES AND `-off2` DOES NOT. Three boundaries out, the conditional
+# p(span s+3 | z, its own prefix) may be close to the unconditional one, in which case the
+# decoder learns to ignore z, the term's gradient to the loop collapses, and the arm is a
+# slower ruler with a noisier objective. `tul/spandec_ce` against a z-ablated control is
+# the instrument that would say so, and the prereg's P-4 scores it.
+#
+# COST otherwise: identical to the ruler. One span's tokens, one causal run of 32
+# positions, no new parameter, no new RNG draw, no extra block pass.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-register-reader-and-downstream-target.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-register-reader-and-downstream-target.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  spandec_target_offset: 3
+
+wandb:
+  name: slot-spandec-strict-off3

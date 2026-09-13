@@ -66,7 +66,8 @@ KNOWN_TUL_KEYS = frozenset({
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
     "spandec", "spandec_heads", "spandec_horizon", "spandec_layers", "spandec_max_tokens",
     "spandec_pass_horizon_max", "spandec_pass_tokens", "spandec_pass_weight",
-    "spandec_per_pass", "spandec_weight",
+    "spandec_per_pass", "spandec_reads_cells", "spandec_target_offset",
+    "spandec_weight",
     "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda",
     "tg_coda_prefix_reach", "tg_geometry",
     "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
@@ -259,6 +260,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         spandec_weight=float(tc.get("spandec_weight", 1.0)),
         spandec_max_tokens=int(tc.get("spandec_max_tokens", 0)),
         spandec_horizon=int(tc.get("spandec_horizon", 1)),
+        spandec_target_offset=int(tc.get("spandec_target_offset", 1)),
+        spandec_reads_cells=bool(tc.get("spandec_reads_cells", False)),
         spandec_per_pass=bool(tc.get("spandec_per_pass", False)),
         spandec_pass_horizon_max=int(tc.get("spandec_pass_horizon_max", 6)),
         spandec_pass_weight=float(tc.get("spandec_pass_weight", 1.0)),
@@ -346,6 +349,18 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
+    # `tul.spandec_target_offset` against the DERIVED slot budget. Slot s is graded on span
+    # s+k, so k at or past max_slots leaves every slot in every row unsupervised and the
+    # term is identically zero. `span_slots` raises on the same condition at the layout,
+    # which is the one place the rule lives; this is the same check moved to config time so
+    # the run dies at startup and not five minutes into a queue slot.
+    if model_cfg.spandec and model_cfg.spandec_target_offset >= spec.max_slots:
+        raise ValueError(
+            f"tul.spandec_target_offset={model_cfg.spandec_target_offset} is at or past "
+            f"the derived slot budget max_slots={spec.max_slots} at seq_len={seq_len}: "
+            f"slot s is graded on span s+{model_cfg.spandec_target_offset}, so no slot in "
+            f"a row would have a target and the span-decoder term would be identically "
+            f"zero.")
     # Per-slot input embedding: `tul.per_slot_embed: true` sizes it from the DERIVED slot
     # budget, so it cannot silently disagree with the layout's max_slots. An int is honoured
     # as-is for the odd case where someone wants a different number.
@@ -392,6 +407,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         # data's span_cap", which is itself derived from the boundary rule.
         "spandec_max_tokens": (model_cfg.spandec_max_tokens or model_cfg.bound_span_cap),
         "spandec_horizon": model_cfg.spandec_horizon,
+        "spandec_target_offset": model_cfg.spandec_target_offset,
+        "spandec_reads_cells": model_cfg.spandec_reads_cells,
         "spandec_per_pass": model_cfg.spandec_per_pass,
         "spandec_pass_horizon_max": model_cfg.spandec_pass_horizon_max,
         "spandec_pass_weight": model_cfg.spandec_pass_weight,
@@ -512,12 +529,30 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"{', with stop-gradient' if model_cfg.detach_z else ''}) reads ITS output",
               flush=True)
     if model_cfg.spandec:
+        _k = model_cfg.spandec_target_offset
+        _h = model_cfg.spandec_horizon
+        _tgt = (f"span s+{_k}" if _h == 1 else f"spans s+{_k}..s+{_k + _h - 1}")
         print(f"  TUL SPAN DECODER ON: layers={model_cfg.spandec_layers} "
               f"heads={model_cfg.spandec_heads or int(cfg.model.n_heads)} "
               f"J={model_cfg.spandec_max_tokens or model_cfg.bound_span_cap}"
-              f"x{model_cfg.spandec_horizon} "
-              f"weight={model_cfg.spandec_weight} — the next span is decoded from z with a "
+              f"x{_h} offset={_k} "
+              f"weight={model_cfg.spandec_weight} — {_tgt} "
+              f"{'is' if _h == 1 else 'are'} decoded from z with a "
               f"teacher-forced token path (morph/model/tul_spandec.py)", flush=True)
+        if _k != 1:
+            print(f"  TUL SPANDEC TARGET OFFSET {_k}: slot s is graded on span s+{_k} and "
+                  f"ONLY that span — the NEXT span gets no direct z target, the last "
+                  f"{_k - 1} slot(s) of every row are masked to -100, and `spandec_ce` is "
+                  f"NOT comparable with an offset-1 arm's (it grades a harder span). "
+                  f"This is not spandec_horizon, which WIDENS the target instead of "
+                  f"moving it.", flush=True)
+        if model_cfg.spandec_reads_cells:
+            print(f"  TUL SPANDEC READS CELLS: the decoder cross-attends, per layer, to "
+                  f"the slot's {model_cfg.slot_cells} register cells — the same states "
+                  f"prefix_project writes into the coda — instead of grading only their "
+                  f"mean. The z conditioning stays the MEAN and the cross output "
+                  f"projection is zero-init, so step 0 is exactly the mean-only decoder.",
+                  flush=True)
     if model_cfg.spandec_per_pass:
         _cap = model_cfg.spandec_pass_horizon_max
         _pt = model_cfg.spandec_pass_tokens

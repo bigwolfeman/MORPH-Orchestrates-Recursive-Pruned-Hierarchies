@@ -160,7 +160,11 @@ def evaluate(
                         # reading (1/n_valid is chance) and `row_contrast` its term
                         # (log n_valid at chance). Both belong beside val/slot_pairwise_cos.
                         "row_contrast", "row_contrast_acc", "row_contrast_n_rows",
-                        "row_contrast_n_anchors"):
+                        "row_contrast_n_anchors",
+                        # WHICH span `spandec_ce` grades (tul.spandec_target_offset). 1 on
+                        # every arm before that key; at k > 1 the column is a CE over span
+                        # s+k and is NOT comparable with an offset-1 arm's.
+                        "spandec_target_offset"):
                 if _mk in out:
                     acc.setdefault(f"val/{_mk}", []).append(float(out[_mk]))
             if "ce_tokens_no_slots" in out:

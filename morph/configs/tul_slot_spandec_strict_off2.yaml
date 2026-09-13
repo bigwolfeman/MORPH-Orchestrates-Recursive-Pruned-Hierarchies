@@ -1,0 +1,50 @@
+# Slot-loop panel, arm "slot-spandec-strict-off2": the DOWNSTREAM target, MOVED.
+# ONE factor against `slot-spandec-strict` (`tul_slot_spandec_strict.yaml`):
+# `tul.spandec_target_offset`, 1 -> 2. Slot s's decoder decodes span s+2, and ONLY span
+# s+2.
+#
+# THIS IS NOT `-h3`, AND THE DIFFERENCE IS THE ARM. `slot-spandec-strict-h3` set
+# `tul.spandec_horizon: 3`, which WIDENS the target: it decodes spans s+1, s+2 and s+3 as
+# one concatenated causal run, so the next span is still in it and the decoder can satisfy
+# most of the objective on the near, easy part. This arm MOVES the target: at H = 1 and
+# offset 2 the next span is removed from the objective entirely, and z is graded on a span
+# it cannot reach by copying its own boundary.
+#
+# WHY. The 2026-08-14 JEPA screen said the informative target sits TWO TO THREE spans
+# downstream. Every span-decoder arm in the arc has graded z on span s+1 — which is also
+# the span the coda predicts best on its own. The measured cross-span budget
+# (lab/experiments/failures/2026-09-11-arc-span-budget.md, 491,520 paired tokens) spikes
+# 0.958 nats at a span's FIRST position and then sits FLAT at 0.315 for every offset eight
+# or more tokens in. A next-span target is dominated by the spike; the flat far part is
+# what nothing in the objective has ever asked z for. `-h3` asked for both at once and
+# moved CE at offsets 3+ while leaving the worth profile's far bins unchanged
+# (failures/2026-09-12-arc-strict-geometry.md, P-f FALSE). This arm asks ONLY for the far
+# part.
+#
+# WHAT IT COSTS, stated up front so the result is not over-read. The next span's first
+# tokens now get NO direct z target. On the H = 1 next-span reading this arm should be
+# WORSE — `tul/spandec_ce` here is a CE over span s+2 and is NOT comparable with an
+# offset-1 arm's column at all (it is a harder span; the trainer logs
+# `spandec_target_offset` beside it so no scorer can confuse the two). The reading is the
+# TOKEN CE on the coda and the worth profile by offset bin, not the decoder's own column.
+#
+# THE MASKING. A slot is supervised only when span s+2 exists AND is complete, the same
+# "both slots exist" rule the H = 1 target already uses at shift 1. The LAST slot of every
+# row therefore has no target and is masked to -100, exactly as a pad slot is. At the panel
+# shape (64 slots) that is ~1.6 % of the supervised slots; the supervised TOKEN count is
+# logged as `tul/spandec_n_tokens` and should fall by about that fraction.
+#
+# COST otherwise: identical to the ruler. One span's tokens, one causal run of 32
+# positions, no new parameter, no new RNG draw, no extra block pass.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-register-reader-and-downstream-target.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-register-reader-and-downstream-target.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  spandec_target_offset: 2
+
+wandb:
+  name: slot-spandec-strict-off2
