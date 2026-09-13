@@ -8,6 +8,11 @@
 # to be a ternary-rule artefact. What m8 adds over that record is that these cells are
 # MUTABLE and seeded apart, not four copies of one state.
 #
+# It runs the same relation m4 does — a cell reads its whole slot, later siblings
+# included, delivered as `tg_relation` (see `tul_slot_register_m4.yaml`, DELIVERY, fixed
+# 2026-09-13 before any GPU step). At M = 8 the widening is larger: 7 siblings per cell
+# instead of 3, and 28 of the 64 in-slot pairs it adds are forward-pointing.
+#
 # COST: L_total 1024 + 8*64 = 1536 (+33 % positions on the prelude and the coda against
 # the k=2 ruler's 1152), the core over 512 cells, and `W_prefix` at 8 slices. E18 measured
 # +2.93 GB for the k=2 -> k=4 step alone on a card whose slot family has died of memory

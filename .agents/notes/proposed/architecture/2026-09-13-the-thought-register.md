@@ -37,7 +37,12 @@ cells.
   `slot_seed: boundary` value. The arm starts AT its ruler.
 * **Loop.** The compact sequence in `_tul_core` is S·M cells at ONE shared per-slot depth.
   Cell i of slot k reads every cell of slots < k (per `loop_reach`, as today) AND every
-  cell of its own slot k — full within the slot, causal across slots.
+  cell of its own slot k, LATER siblings included — full within the slot, causal across
+  slots. That relation is a SUPERSET of flattened causal, so it cannot be delivered as
+  `tg_allow` / `tg_comp_allow`, which are ANDed into an already-causal relation and only
+  ever narrow. It travels as `tg_relation`, one explicit attention kwarg that REPLACES a
+  branch's causal term, honoured by both halves of a TG-restricted layer and wired only
+  here and in the think-once stack (see Risks).
 * **Exit.** Cell i is written 1:1 into prefix cell i through the shared `W_prefix[i]`, so
   `prefix_k` must equal `slot_cells` (it raises otherwise). The coda is UNCHANGED.
 * **Target.** The span decoder grades the MEAN of the M cells.
@@ -85,7 +90,12 @@ on the CPU fixture at init.
 2. The register's term is exactly 0 at init, and `distinct`/`same` are identical until
    `W_o` moves. **Met**, guarded.
 3. Cell i lands in prefix cell i; a slot's M cells loop at one depth; the in-loop relation
-   is own-slot-full and cross-slot-causal, two-sided. **Met**, guarded.
+   is own-slot-full and cross-slot-causal, two-sided — on the MASK and on the FORWARD.
+   **Met**, guarded. The forward half is numerical: the loss differs from a
+   flattened-causal build (9.8953599930 vs 9.8935718536 on the CPU fixture) and equals an
+   independently written all-true-within-slot build (9.8953599930), each branch of the
+   layer is separately load-bearing, and perturbing cell 3 of a slot moves cell 0 of that
+   slot while moving no earlier slot at all.
 4. No parameter reads a NaN gradient, and a pad slot's term is exactly 0. **Met**, guarded
    (this was a real bug — see Risks).
 5. `val/slot_cell_eff_rank` above 2.0 (of 4) at 5,000 steps on `slot-register-m4`. **Not
@@ -107,6 +117,19 @@ Prereg: `lab/experiments/planned/2026-09-13-arc-thought-register.md`.
   differs from `slot-spandec-strict` by the register AND the prefix width, and the packer
   turns the unused slot budget into tokens (`L_total` 1280 vs 1152). Only `m4` vs
   `sameinit` is clean. Named in every row, not removed.
+* **The documented relation did not execute, and was fixed before launch (2026-09-13).**
+  The mask was right; the DELIVERY threw half of it away. `blk[p][q] = slot(p) >=
+  slot(q)` is a superset of flattened causal and `tg_allow` / `tg_comp_allow` can only
+  narrow, so at `loop_reach 0` the arm executed plain flattened causal — cell 0 blind to
+  its siblings, which is the opposite of a register — in the loop AND in the think-once
+  stack (`blk` 9.8935718536 = all-true 9.8935718536 = flattened causal 9.8935718536 on
+  the CPU fixture). Every mask-level test passed the whole time, which is why the gate now
+  grades the FORWARD two-sided and per branch. The fix is `tg_relation`
+  (`morph/model/attention.py::_tg_relation_guard`), wired only on the register's cell
+  axis; `slot_cells: 1`, the token path, the prelude and the coda are bit-identical on six
+  fixtures. Not fixed, by decision: the CCA conv, the `W_v_prev` value shift and a GLA
+  retention carry stay causal on the flattened cell axis — position-wise or recurrent
+  operators with no mask to widen, and everything they reach the relation already allows.
 * **Two real defects were found while building it, both now guarded.** (a) A tail-pad slot
   has no own-span token, so its softmax row was all `-inf`; the NaN is created INSIDE the
   softmax and propagates through the BACKWARD, and `nan_to_num` on the output does not

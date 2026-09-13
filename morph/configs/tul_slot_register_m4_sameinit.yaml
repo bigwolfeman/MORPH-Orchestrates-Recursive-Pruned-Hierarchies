@@ -1,7 +1,9 @@
 # Slot-loop panel, arm "slot-register-m4-sameinit": the SEED control for
 # `slot-register-m4`. One factor against it: `tul.slot_cell_init`.
 #
-# Same four cells, the same `prefix_k`, the same `L_total`, the same loop relation, the
+# Same four cells, the same `prefix_k`, the same `L_total`, the same loop relation — the
+# documented one, own slot full including later siblings, delivered as `tg_relation`
+# (see `tul_slot_register_m4.yaml`, DELIVERY, fixed 2026-09-13 before any GPU step) — the
 # same write, the same target — and ONE shared learned query instead of four, so all four
 # cells pool the SAME vector out of the span and differ only by their per-cell embedding
 # `P_cell`. It separates "four cells of capacity" from "four cells that start out looking

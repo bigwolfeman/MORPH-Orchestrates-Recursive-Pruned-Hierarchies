@@ -78,26 +78,52 @@ register model), SIGReg reads it, and `prefix_project` writes it into the coda's
 cells (cell `i` → prefix cell `i` on a register model). `tul_slot_state_probe` runs it too,
 so `val/slot_eff_rank` measures what the coda reads.
 
-**Measured caveat about the relation, stated because the register's own comments read
-wider than the forward.** The mask allows cell `i` of slot `k` every cell of its OWN slot
-and every cell of slots `< k`, but every attention branch ANDs `tg_allow`/`tg_comp_allow`
-into an already-causal relation and can only NARROW, and the mask is a superset of
-flattened causal. At `loop_reach 0` it therefore EXECUTES as plain flattened causal: a
-cell never reads a later cell of its own slot, in the loop or in the stack. Pinned
-two-sided against an all-TRUE mask in `tests/test_tul_cond4_strict.py`. That is a fact
-about the shipped `slot-register-m4` core stage; the stack is held to the same relation,
-which is the contract.
+**The relation, and the defect the build found in how it was delivered.** The mask allows
+cell `i` of slot `k` every cell of its OWN slot — LATER siblings included — and every cell
+of slots `< k`. See the Method amendment below: through `tg_allow`/`tg_comp_allow` that
+executed as plain flattened causal, and it is now delivered as `tg_relation`. The stack is
+held to the loop's relation, whatever it is, which is the contract; both stages call the
+one builder and both now pass it the same way.
 
 `tul.loop_reach > 0` with a stack RAISES: the reach budget spends every cross-cell route
 in core layer 0, and a stack running the unbudgeted relation afterwards would re-open it.
 
+### Method amendment, 2026-09-13 (before any GPU step of either arm; predictions unchanged)
+
+**The register's documented in-loop relation did not execute, in the loop OR in this
+stack, and it was fixed before launch.** `blk[p][q] = slot(p) >= slot(q)` is a SUPERSET of
+flattened causal, and `tg_allow` / `tg_comp_allow` are ANDed into an already-causal
+relation and can only NARROW. At `loop_reach 0` — both arms — a cell therefore never read
+a LATER cell of its own slot: the mask was a no-op (CPU fixture, all three identical at
+9.8935718536).
+
+The fix adds ONE explicit mechanism, `tg_relation`: a `[*,1,S,S]` bool that REPLACES a
+branch's causal term instead of narrowing it, honoured by both halves of a TG-restricted
+layer, wired only on the register's cell axis — the loop's core stage and
+`_tul_cond_apply`. After the fix, on the same fixture, a `cond_layers: 2` register model's
+loss is 9.9034347534, against 9.9073696136 for a build where both stages run flattened
+causal and 9.9034347534 for one where both run an independently written
+all-true-within-slot mask. The stack is isolated by the perturbation probe: nudging cell 3
+of a slot at the loop EXIT moves cell 0 of that slot's STACK output, and moves it by
+exactly 0 under a flattened-causal build.
+`cond_layers: 0`, `slot_cells: 1`, the token path, the prelude and the coda are
+bit-identical on six fixtures.
+
+**Nothing else changed.** Both arms, their configs, the readout and every prediction below
+are untouched. `slot-spandec-strict-cond4` runs at `slot_cells: 1`, where the stack takes
+no mask at all and this fix cannot reach it; only `slot-register-m4-cond4` is affected,
+and it is affected by getting the relation it was always documented to run.
+
 ### The gate, built in this change
 
-`tests/test_tul_cond4_strict.py`, **24 passed**. It covers: the coda's read and the span
-decoder's grade are the STACK's output (both readers, two-sided, with a bypass caught);
-the stack runs on the CELL axis and not the mean; cell `i` lands in prefix cell `i`; the
-stack's relation is the loop's own builder, its mask is load-bearing, and it is causal
-across slots under a perturbation; pad cells never reach a valid cell and a pad slot's
+`tests/test_tul_cond4_strict.py`, **25 passed** after the amendment above. It covers: the
+coda's read and the span decoder's grade are the STACK's output (both readers, two-sided,
+with a bypass caught); the stack runs on the CELL axis and not the mean; cell `i` lands in
+prefix cell `i`; the stack's relation is the loop's own builder AND arrives by the same
+delivery, its mask is load-bearing, its EXECUTED relation differs from a flattened-causal
+build and equals an all-true-within-slot build, a stack cell reads a later cell of its own
+slot under a perturbation (and does not under a causal build), and it is causal across
+slots under a perturbation; pad cells never reach a valid cell and a pad slot's
 write still goes to the dump row; the strict leak cut and `zero == all_slots` still hold;
 the slot-gain constraint still acts and prints no INERT notice; the forced-depth lever
 moves the loop exit, the stack output AND the coda's read; the layer-pass count is per
@@ -218,10 +244,10 @@ comes before any more reader capacity.
 * **The stack's attention is EAGER on a register model** (the S·M relation tensors force
   it), which the strict partner avoids under `tg_scoped_kernels`. A second difference from
   the partner, sized only by the smoke.
-* **The executed relation is flattened causal at `loop_reach 0`**, not the two-sided
-  within-slot read the register's comments claimed. Measured on the CPU fixture, not at
-  `d_model` 1024 — the argument (an AND into causality cannot widen) is shape-independent,
-  the measurement is not.
+* **The widened relation has never run at `d_model` 1024.** The two-sided losses and the
+  perturbation probes behind the 2026-09-13 amendment are on the 64-dim CPU fixture. The
+  argument (an AND into causality cannot widen, a replacement can) is shape-independent;
+  the numbers are not.
 * **`cond_layers: 4` is not swept.** 2 and 8 are unbuilt, and nothing here says 4 is the
   right number.
 * **The forward+backward check at the composed config ran on CPU with

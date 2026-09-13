@@ -13,15 +13,17 @@
 # At `slot_cells: 1` that placement is bit-identical to the old one: plain causal over S
 # slots IS the relation at M = 1 and the register block is a no-op there.
 #
-# WHAT THAT RELATION IS, as executed. Measured 2026-09-13, and written down because the
-# register's own comments read wider than the forward. The mask ALLOWS cell i of slot k
-# every cell of its OWN slot and every cell of slots < k, but every attention branch ANDs
-# it into an already-causal relation and can only NARROW, and the mask is a superset of
-# flattened causal. At `loop_reach 0` — this arm — it therefore executes as plain
-# FLATTENED CAUSAL: a cell never reads a LATER cell of its own slot. That is equally true
-# of the register's own core stage, which is the point here — the stack runs exactly the
-# loop's relation, whatever that relation turns out to be. Pinned two-sided in
-# tests/test_tul_cond4_strict.py against an all-TRUE mask.
+# WHAT THAT RELATION IS, as executed. The mask ALLOWS cell i of slot k every cell of its
+# OWN slot — LATER siblings included — and every cell of slots < k. That is a SUPERSET of
+# flattened causal, and `tg_allow`/`tg_comp_allow` are ANDed into an already-causal
+# relation and can only NARROW: through them the stack AND the register's own core stage
+# executed plain FLATTENED CAUSAL, a cell never reading a later cell of its own slot.
+# Measured and FIXED 2026-09-13, before this arm ran a single GPU step: the relation now
+# travels as `tg_relation`, the one attention kwarg that REPLACES a branch's causal term,
+# from the same builder on both stages. Pinned two-sided and numerically in
+# tests/test_tul_cond4_strict.py (the stack's loss differs from a flattened-causal build,
+# equals an all-true-within-slot build, and a cell 3 nudge moves cell 0 of the same slot)
+# and in tests/test_tul_slot_register.py for the loop.
 #
 # WHAT IT TESTS. The information note
 # (.agents/notes/proposed/architecture/2026-09-13-information-view-of-the-slot-loop.md)
@@ -37,7 +39,8 @@
 # block-passes per row, against the register core's 6 x 256 x 6 = 9,216 and the
 # prelude+coda's 8 x 1280 = 10,240. Decode is unchanged at n_coda blocks per token.
 # Parameters: exactly four coda blocks' worth on top of `slot-register-m4`. The stack's
-# attention is EAGER here (the S*M relation tensors are eager-only), the same second
+# attention is EAGER here (the S*M relation tensors are eager-only, and `tg_relation`
+# routes the window branch to the reference path unconditionally), the same second
 # difference from the ruler the register's own core stage already carries.
 #
 # Record: lab/experiments/planned/2026-09-13-arc-cond4-reader.md

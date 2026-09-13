@@ -27,9 +27,20 @@
 #          EXACTLY the ruler's single seed and the arm starts from the shipped arm.
 #   LOOP   the compact sequence is 64 x 4 = 256 cells. Cell i of slot k reads every cell
 #          of slots < k (causal across slots, as today, and as narrowed by `loop_reach`)
-#          AND every cell of its OWN slot — full within the slot. Plain causal on the
-#          flattened axis would give cell 0 no siblings at all. One shared per-slot depth:
-#          the four cells are one register and they iterate together.
+#          AND every cell of its OWN slot, LATER siblings included — full within the slot.
+#          Plain causal on the flattened axis would give cell 0 no siblings at all. One
+#          shared per-slot depth: the four cells are one register and they iterate
+#          together.
+#          DELIVERY, fixed 2026-09-13 before this arm ran a single GPU step. That relation
+#          is a SUPERSET of flattened causal, and `tg_allow`/`tg_comp_allow` are ANDed
+#          into an already-causal relation and can only NARROW — so through them the arm
+#          would have EXECUTED plain flattened causal and cell 0 would have been blind to
+#          its siblings after all. It now travels as `tg_relation`, the one attention
+#          kwarg that REPLACES a branch's causal term (morph/model/attention.py;
+#          transformer.slot_cell_relation). Pinned two-sided and numerically in
+#          tests/test_tul_slot_register.py: the loss differs from a flattened-causal
+#          build and equals an all-true-within-slot build, and perturbing cell 3 of a
+#          slot moves cell 0 of that slot (it does not under the causal build).
 #   EXIT   cell i is written 1:1 into prefix cell i through the shared `W_prefix[i]`, so
 #          `prefix_k` must equal `slot_cells` (the build refuses otherwise). The CODA is
 #          UNCHANGED: a cell reads itself alone and a later token reads the cells of

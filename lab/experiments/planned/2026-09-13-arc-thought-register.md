@@ -99,9 +99,9 @@ Per span, M mutable cells:
   `m4`/`sameinit` pair one factor.
 * **loop** — the compact sequence in `_tul_core` is S·M cells at ONE shared per-slot
   depth. Cell i of slot k reads every cell of slots < k (per `loop_reach`, as today) AND
-  every cell of its own slot k: full within the slot, causal across slots. Plain causal on
-  the flattened axis would leave cell 0 permanently blind to its siblings, which is the
-  opposite of a register.
+  every cell of its own slot k, LATER siblings included: full within the slot, causal
+  across slots. Plain causal on the flattened axis would leave cell 0 permanently blind to
+  its siblings, which is the opposite of a register.
 * **exit** — cell i is written 1:1 into prefix cell i through the shared `W_prefix[i]`.
   The coda is UNCHANGED: a cell reads itself alone, a token reads the cells of earlier
   slots per `tg_coda_prefix_reach`.
@@ -111,6 +111,35 @@ Per span, M mutable cells:
   mechanisms the shipped one, so the arm differs from its ruler by the register alone. A
   decoder that cross-attends to the M cells is a SECOND mechanism and is the follow-up,
   not this arm. The mean's gradient still reaches every cell.
+
+### Method amendment, 2026-09-13 (before any GPU step of any arm; predictions unchanged)
+
+**The documented in-loop relation was not the one that executed, and it was fixed before
+launch.** The mask `slot_cell_relation` builds was right. The DELIVERY was not:
+`blk[p][q] = slot(p) >= slot(q)` is a SUPERSET of flattened causal, and the attention
+kwargs it travelled on — `tg_allow` / `tg_comp_allow` — are ANDed into an already-causal
+relation and can only NARROW. So at `loop_reach 0`, which is every arm in this panel, the
+register executed plain FLATTENED CAUSAL: cell 0 of a slot never read its later siblings,
+in the loop or in the think-once stack. On the 64-dim CPU fixture the three losses were
+identical (`blk` 9.8935718536, all-true 9.8935718536, flattened causal 9.8935718536).
+
+The fix adds ONE explicit mechanism, `tg_relation`: a `[*,1,S,S]` bool that REPLACES a
+branch's causal term instead of narrowing it, honoured by both halves of a TG-restricted
+layer, wired only where the register passes its relation (the loop's core stage on the
+cell axis and `_tul_cond_apply`). Replacing is safe across slots because `blk` is
+block-causal there; within a slot it widens to all M cells. Measured after the fix on the
+same fixture: `blk` 9.8953599930, all-true-within-slot 9.8953599930, flattened causal
+9.8935718536, and a nudge to cell 3 of a slot moves cell 0 of that slot by 0.1048612595
+where the causal build moves it by exactly 0. `slot_cells: 1`, the token path, the
+prelude, the coda and every `tg_*` relation are bit-identical (six fixtures; loss, logit
+sum, grad sum and key count to the last printed digit).
+
+**Nothing else changed.** The arms, the config values, the readout and every prediction
+below are untouched: they were written against the relation the arm was always documented
+to run, and the arm now runs it. The CCA conv, the `W_v_prev` value shift and a GLA
+retention carry stay CAUSAL on the flattened cell axis by decision — position-wise or
+recurrent operators with no mask to widen, and every position they reach the relation
+already allows, so cell 0 gets its sibling context through attention alone.
 
 ### The gate, built in this change
 
@@ -122,6 +151,11 @@ cells loop at one depth; cell i lands in prefix cell i; the in-loop relation bot
 flattened causal rejected as a two-sided control; a pad slot's term is exactly 0 and no
 parameter reads a NaN gradient; the strict leak test at M=4; the worth-profile modes and
 the depth lever on a register model; the within-slot rank instrument; and every refusal.
+The 2026-09-13 amendment above extended it to grade the relation on the FORWARD and not
+only on the mask: the loss against a flattened-causal build and against an independently
+written all-true-within-slot build, each attention branch separately load-bearing, both
+branches handed the relation on every core-stage call, the cell-level perturbation probe
+with its causal control, and a pad cell never a key of a valid one. **54 passed.**
 
 OFF-state bit-identity was proved by RUNNING the pre-work tree (`d778845`) and this one on
 four fixtures and comparing loss, logit sum, grad sum and `state_dict` key count. All four
@@ -247,10 +281,15 @@ sweep continues upward until it stops paying.
   swept either.
 * **The `m4` vs `strict` comparison carries the `prefix_k` confound** described in the
   Method. Only `m4` vs `sameinit` is clean.
-* **The register's in-loop relation is eager-only.** The S·M `tg_allow` tensors force the
-  eager attention path on the core stage, which the partner avoids under
-  `tg_scoped_kernels`. That is a second difference from the partner and the smoke's tok/s
-  decides how big it is.
+* **The register's in-loop relation is eager-only.** The S·M relation tensors force the
+  eager attention path on the core stage — `tg_relation` routes the window branch to the
+  reference path unconditionally, and the fused window kernel bakes causality in so it
+  could not run this relation at all — which the partner avoids under `tg_scoped_kernels`.
+  That is a second difference from the partner and the smoke's tok/s decides how big it is.
+* **The widened relation has never run at `d_model` 1024 either.** The two-sided losses
+  and the perturbation probe are on the 64-dim CPU fixture. The argument (an AND into
+  causality cannot widen, a replacement can) is shape-independent; the numbers are not,
+  and no GPU step of any arm has run.
 * **`test_scse.py::test_real_model_loop_is_source_free_and_anchored` was not re-run on a
   free card.** It fails in the full suite with a CUDA OOM caused by the concurrent
   trainer, in a code branch this change does not touch.

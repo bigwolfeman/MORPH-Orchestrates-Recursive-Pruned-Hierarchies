@@ -59,17 +59,31 @@ fixture — loss, logit sum, layer passes and grad sum all match to the last pri
 route in core layer 0 and closes it in layers 1..n−1; a stack running the unbudgeted
 relation afterwards would carry cells the budget cut.
 
-**A correction the build forced, and it is about the shipped register, not the stack.**
-`blk[p][q] = slot(p) >= slot(q)` is a SUPERSET of flattened causal, and every branch that
-reads `tg_allow` / `tg_comp_allow` ANDs it into an already-causal relation and can only
-NARROW (`attention._tg_slot_attention`, `attention._window_fallback`). So at `loop_reach 0`
-the register's documented "own slot full, including the cells after it" relation EXECUTES
-as plain flattened causal: a cell never reads a later cell of its own slot, in the loop or
-in the stack. Measured two-sided — an all-TRUE mask gives the identical loss at reach 0
-and a different one at reach 1. The register's comments and its banner claimed the wider
-relation and now say what runs. It is not patched: expressing the two-sided read needs a
-branch that can widen past causality, which nothing in this tree has, and
-`slot-register-m4` is already queued at the shape it has.
+**A defect the build found, and a fix (2026-09-13, before any GPU step of either arm).**
+`blk[p][q] = slot(p) >= slot(q)` is a SUPERSET of flattened causal, and `tg_allow` /
+`tg_comp_allow` are ANDed into an already-causal relation and can only NARROW
+(`attention._tg_slot_attention`, `attention._window_fallback`). So at `loop_reach 0` the
+register's documented "own slot full, including the cells after it" relation EXECUTED as
+plain flattened causal: a cell never read a later cell of its own slot, in the loop or in
+the stack, and the mask was a no-op there (fixture: `blk` 9.8935718536 = `all_true`
+9.8935718536 = flattened causal 9.8935718536).
+
+The fix is one explicit mechanism, `tg_relation`: a `[*,1,S,S]` bool that REPLACES a
+branch's causal term instead of narrowing it, honoured by both halves of a TG-restricted
+layer (`_window_fallback` keeps its window distance and its XSA self-exclusion, now
+measured as `|i - j|`, and ANDs the relation over everything; `_tg_slot_attention`'s dense
+form uses the relation AS the allow matrix). Replacing is safe across slots because `blk`
+is block-causal there; within a slot it widens to all M cells, which is the documented
+relation. It is wired ONLY where the register passes its relation — the loop's core stage
+on the cell axis and this stack — and `_tg_relation_guard` raises for every combination no
+call site makes (no `tg_restrict`, a narrowing mask beside it, `tg_span`, `tg_slot_mask`).
+The token path, the prelude, the coda, `slot_cells: 1` and every `tg_*` relation are
+bit-identical, pinned on six fixtures. Measured after the fix on the same CPU fixture:
+`blk` 9.8953599930, all-true-within-slot 9.8953599930, flattened causal 9.8935718536; the
+stack pair 9.9034347534 / 9.9034347534 / 9.9073696136. The CCA conv, the `W_v_prev` value
+shift and a GLA retention carry stay causal on the flattened cell axis by decision: they
+are position-wise or recurrent operators with no mask to widen, and everything they reach
+`blk` already allows.
 
 ## Alternatives considered
 

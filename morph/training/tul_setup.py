@@ -475,9 +475,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
     if model_cfg.cond_layers > 0 or model_cfg.detach_z:
         _m = int(model_cfg.slot_cells)
         _reads = ("the loop's S*%d compact CELL axis under the register's own in-loop "
-                  "relation (the mask allows a cell its whole slot and every earlier "
-                  "slot; the branches AND it into causality, so as EXECUTED at "
-                  "loop_reach 0 it is flattened causal — same as the loop's core stage)"
+                  "relation (a cell reads its whole slot, later siblings INCLUDED, and "
+                  "every earlier slot; delivered as `tg_relation`, which REPLACES the "
+                  "branches' causal term instead of narrowing it — the same delivery "
+                  "the loop's core stage uses)"
                   % _m if _m > 1 else
                   "the loop's S compact SLOT axis, plain causal")
         print(f"  TUL THINK-ONCE: cond_layers={model_cfg.cond_layers} "
@@ -529,7 +530,11 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               "instead of one, seeded apart by M learned queries pooling the span's own "
               "prelude states (W_o zero-init: step 0 IS the ruler). They loop together at "
               "one per-slot depth; inside the loop a cell reads every cell of earlier "
-              "slots AND every cell of its own slot. Cell i is written 1:1 into prefix "
+              "slots AND every cell of its own slot, LATER siblings included (the "
+              "relation travels as `tg_relation` and REPLACES the attention branches' "
+              "causal term; through `tg_allow` it would only narrow and would execute "
+              "as plain flattened causal - measured and fixed 2026-09-13). Cell i is "
+              "written 1:1 into prefix "
               "cell i (prefix_k == slot_cells), the coda is unchanged, and the span "
               "decoder grades the MEAN of the M cells. Built against the measured rank "
               "collapse (slot_eff_rank 5.7-7.3 in 1024 dims, pairwise cos 0.72-0.77). "
