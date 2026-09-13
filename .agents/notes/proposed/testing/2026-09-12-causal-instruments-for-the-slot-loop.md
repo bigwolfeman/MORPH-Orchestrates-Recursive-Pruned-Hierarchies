@@ -163,3 +163,28 @@ quoted as a capacity result.
 `tests/test_spandec_horizon_grid.py`) and by `--help`. The teacher's sampling path, the
 loaders, the checkpoint loads and every GPU-only code path are unverified, and there is no
 `spandec_per_pass` checkpoint on disk yet for the grid's `pass_h*` columns.
+
+## Outcome: the causal fitted-z reading (2026-09-13, DGX Spark, chain B)
+
+`slot_z_causal_fit.py` on `slot-spandec-strict@5000`, teacher `plain-panel-norm-match@5000`,
+6 rows, depth 6, K 4 teacher samples (fit on 3, one held out), 200 steps, 1 fit group
+(`lab/experiments/results/2026-09-12-instruments/causal_fit_slot-spandec-strict_g1.{json,log}`,
+23,717 s on the GB10). CE on the real next span's tokens, per position:
+
+| z | CE | vs the loop's z | 95 % CI |
+| --- | --- | --- | --- |
+| entry | 3.8601 | +0.0185 | [+0.0140, +0.0216] |
+| loop (the shipped exit) | 3.8416 | 0 | |
+| hindsight (fit on the real span) | 2.3624 | **−1.479** | [−1.559, −1.397] |
+| hindsight, full | 2.3632 | −1.478 | |
+| **causal** (fit on the teacher's samples, scored on the real span) | 4.0933 | **+0.252** | [+0.227, +0.273] |
+| causal, scored on the held-out teacher sample | 4.6879 | | 6,081 positions |
+| teacher's own CE on the same positions | 3.6928 | | |
+
+The gradient-fitted z that saw the answer is worth 1.48 nats; the one built from history
+alone is 0.25 nats WORSE than the loop's state, and it does not even transfer to a fourth
+sample of the same teacher (4.69). So the 0.9–2.6-nat "headroom" measured by
+`slot_z_optimize` on 2026-09-10 is hindsight in full, and this estimator finds NO causal
+headroom above the one-pass state. It does not bound the true causal optimum: a better
+causal estimator (more samples, a better teacher, a learned amortised fit) could still find
+some. Six rows; the interval is over positions within them.
