@@ -188,12 +188,19 @@ class TULThoughtVQ(nn.Module):
         """
         B, S = slot_valid.shape
         mid = tuple(z.shape[2:-1])
-        # [B, S, *mid, K, G, d_g]
-        u = self.W_vq(z).reshape(B, S, *mid, self.k, self.g, self.d_g)
+        # [B, S, *mid, K, G, d_g] in FP32. The `W_vq` matmul itself runs in the autocast
+        # dtype, as every other Linear here does, but everything downstream of it is pinned
+        # to fp32 on purpose: the normalisation divides by a norm, the assignment is an
+        # `argmax` over cosine similarities that a bf16 rounding can flip between two close
+        # codes, and the two loss terms reduce ~12.6 M entries at the arm's shape. A
+        # discrete choice made in bf16 would make a run's code assignments depend on the
+        # rounding rather than on the state. On an fp32 forward `.float()` is a no-op, so
+        # the CPU gate's numbers are unchanged.
+        u = self.W_vq(z).float().reshape(B, S, *mid, self.k, self.g, self.d_g)
         # Unit sphere. `+ eps` (not a clamp on the norm) keeps a pad's exact zero an exact
         # zero instead of a unit vector pointing wherever the numerics landed.
         u_n = u / (u.norm(dim=-1, keepdim=True) + self.eps)
-        e_all = self.vq_E.to(u_n.dtype)
+        e_all = self.vq_E.float()
         e_n = e_all / (e_all.norm(dim=-1, keepdim=True) + self.eps)        # [C, d_g]
         # Nearest by L2 on the sphere == largest cosine. One matmul, no [N, C, d_g] tensor.
         sim = torch.matmul(u_n.reshape(-1, self.d_g), e_n.t())             # [N, C]
@@ -216,7 +223,7 @@ class TULThoughtVQ(nn.Module):
         # (sabotage S2 MISSED a test that assumed otherwise). The two-sided gate for this
         # line runs at `vq_weight: 0`, where the STE IS the only route.
         q = u_n + (q_e - u_n).detach()
-        q = q.reshape(B, S, *mid, self.k, self.d_c)
+        q = q.reshape(B, S, *mid, self.k, self.d_c).to(z.dtype)
         cells = torch.einsum("...kd,kdc->...kc", q, self.W_vq_out.to(q.dtype))
         cells = cells.movedim(-2, 2)                                   # [B, S, K, *mid, C]
         cells = cells * slot_valid.reshape(
@@ -228,6 +235,9 @@ class TULThoughtVQ(nn.Module):
         p = counts / counts.sum().clamp(min=1.0)
         ppl = torch.exp(-(p * torch.log(p.clamp(min=1e-12))).sum())
         out = {
+            # fp32 by construction (see the `.float()` above); the caller's weighted twin
+            # and the total loss promote to it, which is what every other auxiliary term
+            # in this forward already does.
             "loss": vq_loss,
             "commit": commit,
             "codebook": codebook,

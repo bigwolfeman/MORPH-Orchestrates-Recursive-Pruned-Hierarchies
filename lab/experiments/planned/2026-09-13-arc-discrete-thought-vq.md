@@ -93,6 +93,14 @@ Five decisions, each written down as a decision in
 5. **`vq_reset_after: 0`** — the dead-code reset is BUILT and OFF, so a collapsed codebook
    is a result about the mechanism rather than a number the reset manufactured.
 
+Plus one numerical decision that is not a design choice so much as a hazard closed: under
+autocast the carrier is bf16, and an `argmax` over cosine similarities in bf16 can flip
+between two close codes for rounding reasons alone — a run's code assignments would then be
+a property of the arithmetic and not of the state. Everything downstream of the `W_vq`
+matmul is pinned to fp32; the lift follows the carrier, as every other Linear does. Guarded
+(a bf16 autocast forward gives the same index tensor as its fp32 twin and the two loss terms
+come back fp32) and sabotaged (S13).
+
 ### What a step-0 model is, relative to the ruler
 
 **Not the ruler, and this arm is the only one in the family that cannot be.** Every other
@@ -129,13 +137,13 @@ quantizer 2,162,688.
 
 ### The gate, built in this change
 
-`tests/test_tul_vq_thought.py`, **58 passed**. OFF-state bit-identity was proved by RUNNING
+`tests/test_tul_vq_thought.py`, **59 passed**. OFF-state bit-identity was proved by RUNNING
 the pre-work tree (`f89256d`) and this one on four fixtures and comparing loss, logit sum,
 grad sum, `state_dict` key count, parameter count and the whole slot probe — all match to
 the last printed digit, and three of the four are pinned inside the gate. Twelve
-source-level sabotages, each anchored to exactly one occurrence in the shipped source:
-**12/12 CAUGHT**, after three MISSED on the first pass and one of them corrected a claim in
-the source (see Not verified).
+Thirteen source-level sabotages, each anchored to exactly one occurrence in the shipped
+source: **13/13 CAUGHT**, after three MISSED on the first pass and one of them corrected a
+claim in the source (see Not verified).
 
 ### Readout
 
@@ -255,6 +263,12 @@ sweep continues upward, with the `prefix_k` confound resolved first.
 
 * **No GPU step of either arm.** No smoke, no wall clock, no memory figure. Every cost
   number above is arithmetic or a CPU build.
+* **Nothing has run in bf16 on a GPU.** The fp32 pin is guarded through CPU autocast, which
+  exercises the dtype path but not the CUDA kernels, the fused attention or the real
+  magnitudes. The quantizer's own arithmetic on the card is unverified.
+* **Checkpoint compatibility was not exercised.** A VQ checkpoint carries three keys no other
+  model has, and loading one into a non-VQ model raises on the homeless keys (the tree's
+  contract). Both arms train from scratch, so no loader path was tested.
 * **The forward has run on CPU at the shipped `d_model` 1024**, forward and backward, with
   no non-finite gradient — but at seq 192, batch 2, vocab 512 and `max_slots` 12, which is
   not the arm's shape. The quantizer's distance matrix at the real shape is
@@ -267,7 +281,7 @@ sweep continues upward, with the `prefix_k` confound resolved first.
   nonzero gradient through the commitment term — and the test now runs at `vq_weight: 0`,
   where the STE really is the only route. Two other sabotages MISSED on the first pass (S4,
   the commitment's stop-gradient, whose VALUE is identical either way; S5, pad slots in the
-  usage histogram) and each added a test. 12/12 after the fixes.
+  usage histogram) and each added a test. 13/13 after the fixes.
 * **`vq_reset_after` is built and OFF on both arms.** It has a test but has never run in
   training, and its "re-seed from the worst-served encoder vector" rule has never been
   measured against the usual random pick.

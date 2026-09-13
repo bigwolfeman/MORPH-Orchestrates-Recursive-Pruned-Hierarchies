@@ -583,6 +583,30 @@ def test_the_dead_code_reset_revives_an_unused_code_and_only_in_training():
     assert torch.equal(frozen, vq.vq_E.detach())
 
 
+def test_the_assignment_is_made_in_fp32_whatever_the_carrier_dtype():
+    """The discrete choice must not depend on the rounding.
+
+    Under autocast the carrier is bf16, and an `argmax` over cosine similarities in bf16 can
+    flip between two close codes for numerical reasons alone — a run's code assignments
+    would then be a property of the arithmetic, not of the state. The quantizer pins
+    everything downstream of the `W_vq` matmul to fp32, so a bf16 carrier gives the SAME
+    assignment as its fp32 twin on the same input and the two loss terms come back fp32.
+    """
+    vq = TULThoughtVQ(16, codes=2, codebook=8, dim=8, groups=1, beta=0.25)
+    z = torch.randn(2, 4, 16)
+    valid = torch.ones(2, 4, dtype=torch.bool)
+    _c32, d32, o32 = vq(z, valid)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        cb, db, ob = vq(z.to(torch.bfloat16), valid)
+    assert torch.equal(o32["index"], ob["index"])
+    assert o32["loss"].dtype == torch.float32 and ob["loss"].dtype == torch.float32
+    assert float(ob["vq_perplexity"]) == pytest.approx(float(o32["vq_perplexity"]), rel=1e-5)
+    # The lift itself follows the carrier, as every other Linear in the model does.
+    assert cb.dtype == torch.bfloat16 and db.dtype == torch.bfloat16
+    assert torch.isfinite(cb.float()).all()
+    assert torch.allclose(db.float(), d32, atol=5e-2)
+
+
 def test_the_reset_is_off_by_default_and_never_moves_the_codebook():
     vq = TULThoughtVQ(8, codes=2, codebook=8, dim=4, groups=1, beta=0.25).train()
     z = torch.randn(2, 6, 8)

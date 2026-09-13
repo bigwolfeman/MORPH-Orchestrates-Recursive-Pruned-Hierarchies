@@ -158,9 +158,13 @@ starts behind its ruler, its early CE says nothing, and the comparison is at 5,0
    **Met**, guarded with a spy on the real call.
 6. Pads: index −1, cells exactly zero, out of both loss terms and out of the usage
    histogram, and no VQ parameter reads a NaN gradient. **Met**, guarded two-sided.
-7. `tul/vq_perplexity` above 32 at 5,000 steps on `slot-spandec-strict-vq8`. **Not met —
+7. The discrete assignment is made in fp32 whatever the carrier's dtype, so a bf16 rounding
+   cannot flip a code — under autocast the `argmax` is over cosine similarities and two
+   close codes are one rounding apart. **Met**, guarded through CPU autocast (same index
+   tensor as the fp32 twin, both loss terms fp32); the CUDA path is unverified.
+8. `tul/vq_perplexity` above 32 at 5,000 steps on `slot-spandec-strict-vq8`. **Not met —
    unrun.** This is the number the arm is readable through.
-8. Token K3−K6 below 0.002, against the ruler's +0.0002. **Not met — unrun.** Predicted to
+9. Token K3−K6 below 0.002, against the ruler's +0.0002. **Not met — unrun.** Predicted to
    HOLD at 85 %: this arm is a test of the information account, not an attempt to beat it.
 
 Prereg: `lab/experiments/planned/2026-09-13-arc-discrete-thought-vq.md`.
@@ -198,4 +202,8 @@ Prereg: `lab/experiments/planned/2026-09-13-arc-discrete-thought-vq.md`.
   1280 already cost +2.93 GB. vq8 is the most likely arm in this panel to die on memory.
 * **Nothing has run on a GPU.** No smoke, no wall clock, no memory figure. The forward and
   backward have run on CPU at the shipped `d_model` 1024 with no non-finite gradient, at a
-  sequence and a vocabulary that are not the arm's.
+  sequence and a vocabulary that are not the arm's, and the bf16 path is exercised only
+  through CPU autocast.
+* **A VQ checkpoint carries three keys no other model has**, and loading one into a non-VQ
+  model raises on the homeless keys (the tree's contract, `train.py`). Both arms train from
+  scratch, so no loader path was tested.
