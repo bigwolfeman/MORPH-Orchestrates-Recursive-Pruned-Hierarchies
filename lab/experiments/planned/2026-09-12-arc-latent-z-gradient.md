@@ -383,7 +383,59 @@ reason is the smoke, and it is named.
 
 ## Results
 
-(pending)
+**Step 0, the linear-probe gate, on the GPU** (96 rows, 4,906 scored slots, depth 6, 20
+shuffles; `../results/2026-09-12-latent-z-gradient/step0-*.json`). AUC of a 5-fold ridge
+logistic probe for "next-span coda CE below the run median", by pass; the shuffle null's
+p95 is 0.513–0.519 on every file.
+
+| checkpoint | reduction | t0 (entry) | t1 | t6 (exit) | null p95 | step_rel t0→t5 | step_cos t1→t5 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `slot-spandec-mask` | flat | 0.605 | 0.610 | 0.608 [0.593, 0.623] | 0.513 | 0.311 → 0.017 | 0.83 → 0.94 |
+| `slot-spandec-mask` | mean | 0.611 | **0.638** | 0.637 [0.618, 0.653] | 0.514 | | |
+| `slot-mux-norm-match` (ruler) | flat | 0.613 | 0.603 | 0.604 | 0.513 | 0.647 → 0.030 | 0.83 → 0.71 |
+| `slot-mux-norm-match` | mean | 0.633 | 0.635 | 0.629 | 0.514 | | |
+| `slot-mux-mask-norm-match` | flat | 0.605 | 0.610 | 0.613 | 0.514 | 0.807 → 0.031 | 0.81 → 0.91 |
+| `slot-mux-mask-norm-match` | mean | 0.642 | 0.657 | 0.648 | 0.519 | | |
+
+The signal is in the ENTRY state on every checkpoint (0.60–0.64 against a null of 0.51).
+Where it rises it rises at t1 and is flat after (spandec-mask mean 0.611 → 0.638 → 0.637);
+on the ruler it falls. Step norms decay monotonically; the successive-step cosine sits at
+0.81–0.94 except the ruler's last two passes (0.77, 0.71).
+
+**The arms** (5090, seed 1, 5,000 steps, parent `slot-spandec-strict`; readouts in
+`../results/2026-09-12-strict/`, sections "egrad-disc minus strict", "egrad-recon minus
+strict", "strict (depth 6) minus norecur (depth 1)" in `paired_gaps_5000.txt`,
+`egrad_series_*.txt`):
+
+| reading | `-egrad-recon` | `-egrad-disc` | `-norecur` (trained and read at depth 1) |
+| --- | --- | --- | --- |
+| wall clock | 99 min (**1.78×**) | 59 min (1.07×) | 43 min (0.78×) |
+| survival | HEALTHY, max preclip 33.1 (the first launch was stopped by the runner's rate floor at step 211, exit 143, and re-run with the floor off) | HEALTHY, max 55.2 | HEALTHY, max 31.4 |
+| tokens K1−K6 / K3−K6 | +0.0007 [+0.0004, +0.0009] / -0.0003 [-0.0004, -0.0002] | +0.0019 [+0.0016, +0.0021] / +0.0002 [+0.0001, +0.0003] | -0.0223 [-0.0238, -0.0208] / -0.0182 [-0.0194, -0.0170] (a depth-1 model forced deeper at eval) |
+| CE vs ruler, depth 6 | **+0.0495** [+0.0470, +0.0520] | **+0.0081** [+0.0059, +0.0104] | ruler@6 − norecur@1 = +0.0020 [−0.0006, +0.0044] |
+| worth zero / shuffle | 0.1884 / 0.1602 | 0.1879 / 0.1731 | 0.1817 / 0.1700 |
+| `gp_rel_t0` (feature step / state) | 0.019 | — | — |
+| `egrad_auc` (disc's own critic) | — | 0.632 at 4800–5000 (0.624 at 2400) | — |
+| per-pass energy ladder | **not logged** (only `gp_rel_t*`) | — | — |
+
+The ruler at depth 6 is 0.002 nats better than a model trained and read at depth 1, with
+the interval crossing zero: better at offsets 0–4, worse at 8+. On the old bypass geometry
+the same control read 0.0235 worse (`../results/2026-09-12-latent-z-gradient/paired_gaps_5000.txt`).
+
+### Predictions scored
+
+| P | claim | result |
+| --- | --- | --- |
+| P-a | spandec-mask exit AUC > 0.6, clears the null band | **TRUE** (0.608 flat, 0.637 mean; null p95 0.514) |
+| P-b | exit AUC above entry by more than the band's half-width | **TRUE on one reduction** (mean +0.026 against a half-width of 0.018), and the whole rise is pass 1; flat reduction +0.003; the ruler FALLS |
+| P-c | recon energy descended in one pass (t0−t1 > 0.02, t1−last < 0.02) | **UNSCORABLE** — the per-pass energy was never logged, an instrument gap in the arm's `stats` |
+| P-d | disc K3−K6 strictly in (0, 0.01) | **TRUE by the letter** (+0.0002 [+0.0001, +0.0003]), 0.0002 is the same noise every arm reads |
+| P-e | `ce_entry − ce_loop` > 0.02 on a twin | **PENDING** (`slot_z_optimize` chained after the math panel) |
+| P-f | both energy arms survive | **TRUE** |
+| P-g | recon within 1.5× wall; disc within 1.15× | **FALSE** (1.78×) / **TRUE** (1.07×) |
+| P-h | norecur within 0.05 of the parent | **TRUE** (0.002) |
+| P-i | cosine 0.80–0.95, step norm decays | **TRUE** on spandec-mask and mask-ruler; the ruler's t4–t5 cosine reads 0.77 / 0.71; norms decay on all three |
+
 
 ### Step 0, the gate (2026-09-12 03:32 CDT; 96 rows, batch 3, depth 6, 20 shuffles; JSON in `lab/experiments/results/2026-09-12-latent-z-gradient/`)
 
@@ -448,4 +500,17 @@ time does not. The depth-1 model's prefix write is worth MORE (0.117 vs 0.078 at
 
 ## Verdict
 
-(pending)
+**Failure** on the hypothesis that a gradient-conditioned pass on a latent-z energy moves
+the passes: both energies act (disc's critic 0.63, recon's feature 0.019 of the state) and
+neither moves K3−K6 past 0.0002, both cost CE (+0.008, +0.050), and recon costs 1.78× the
+wall clock. Step 0 says why the arms had nothing to find: the linear signal about the
+next span's difficulty is in the ENTRY state and one pass at most adds to it; a model
+trained at depth 1 lands within 0.002 nats of the depth-6 ruler. P-e is filed when the
+z-opt probe lands.
+
+## Updated hypothesis
+
+A latent-z gradient is one more per-pass target met in one step (staged, oracle, gradpass,
+per-pass horizon, critic, recon, disc). The loop's contribution is not limited by the energy
+it descends; the coda's loss is flat around the loop's states (critic panel: 0.001–0.003
+nats per pass, ≤ 0.0005 under a 10 % perturbation). The lane is the READ and the WRITE.

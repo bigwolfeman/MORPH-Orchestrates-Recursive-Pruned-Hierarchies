@@ -377,8 +377,73 @@ are an eighth of it, and the reading they preserve is now paid for at 2.15 GB.
 
 ## Results
 
-(pending)
+Three arms on the 5090 at `d48ad3a` (per-pass, decode checkpointed) and `18f7b2d`/`397bdf3`
+(coda heads), seed 1, 5,000 steps, seq 1024, batch 6, runner `run_slotloop3.sh`. Readouts in
+[`../results/2026-09-12-strict/`](../results/2026-09-12-strict/): `sweep_<arm>_{2500,5000}.json`,
+`worth_<arm>_5000.json`, `paired_gaps_5000.txt`, `spandec_pass_series_slot-spandec-strict-perpass.txt`,
+`coda_span_series_slot-spandec-strict-codaspan.txt`. Every CE gap is token-paired on 501,106
+tokens over the same 480 validation rows; K is the forced-depth sweep's token CE difference
+with its paired bootstrap CI over rows.
+
+| reading | `-perpass` | `-codaspan` (J 8) | `-codaspan32` | ruler `slot-spandec-strict` |
+| --- | --- | --- | --- | --- |
+| rate at step 200 (tok/s) | 4,736 | 11,135 | 10,403 | ~10,850 |
+| wall clock, 5,000 steps | 129 min (2.31×) | 58 min (1.04×) | 68 min (1.24×) | 55 min |
+| survival, `preclip/total` max | 33.8 @224 | 118 @338 | 56.3 @230 | 22.1 @1310 |
+| tokens K1−K6 @5000 | **+0.0008** [+0.0006, +0.0010] | **+0.0012** [+0.0008, +0.0015] | **+0.0017** [+0.0015, +0.0020] | +0.0016 [+0.0013, +0.0019] |
+| tokens K3−K6 | −0.0000 | −0.0002 | +0.0001 | +0.0002 |
+| `spandec_ce` K1−K6 | +0.0013 | +0.0040 | +0.0041 | +0.0031 |
+| depth-6 CE | 4.3646 | 4.3889 | 4.3729 | 4.3474 |
+| CE vs ruler, depth 6 | **+0.0172** [+0.0150, +0.0195] | **+0.0415** [+0.0387, +0.0439] | **+0.0255** [+0.0228, +0.0280] | — |
+| worth zero / shuffle | 0.1826 / 0.1671 | 0.1721 / 0.1688 | 0.1765 / 0.1679 | 0.1865 / 0.1739 |
+
+`-codaspan32` vs `-codaspan`: **−0.0160** [−0.0183, −0.0138], every offset.
+
+**Arm A's own ladder** (`tul/spandec_pass_t{t}`, steps 4500–5000): t1 4.513, t2 4.614,
+t3 4.646, … t6 4.706 — the per-pass CE RISES with the pass index at every checkpoint of the
+run (t1 6.573 → t3 6.650 at steps 200–600). Pass t's target is t spans of 8 tokens each,
+so a rise is what a state that carries nothing new past pass 1 produces; amendment 1
+already said this column cannot be read as progress. The identical-target reading
+(`spandec_horizon_grid.py`, forced depths 1,2,3,6 × columns h1/h6/exit on the same targets)
+is queued on the Spark (chain C) and is the binding reading of P-2.
+
+**Arm B's heads** read 6.62 nats/token at the tail (7.46 at steps 200–600), against the
+coda's 4.39 on the same tokens: a parallel readout of a whole span from one cell is 2.2
+nats behind the causal read, at every J.
+
+### Predictions scored
+
+| P | claim | result |
+| --- | --- | --- |
+| P-1 | per-pass tokens K1−K6 > 0.005 | **FALSE** (0.0008) |
+| P-2 | `spandec_pass_t6` < `t1` by > 0.05 | **FALSE by the letter** (rises 0.19); binding identical-target reading pending (Spark chain C) |
+| P-3 | per-pass worse than ruler by 0.00–0.05 | **TRUE** (+0.0172) |
+| P-4 | per-pass clears 8,086 tok/s | **FALSE** (4,736), the 65 % case; the floor was OFF on this runner so the arm ran |
+| P-5 | codaspan tokens K1−K6 > 0.005 | **FALSE** (0.0012) |
+| P-6 | codaspan `ce_entry − ce_loop` exceeds the ruler's by > 0.01 | **PENDING** (`slot_z_optimize` on codaspan, strict, perpass chained after the math panel and the energy probes) |
+| P-7 | codaspan within 0.02 of ruler | **FALSE** (+0.0415 worse) |
+| P-8 | J 32 not better than J 8 by > 0.01 | **FALSE** (J 32 better by 0.016) |
+| P-9 | all three survive | **TRUE** |
+| P-10 | codaspan / codaspan32 clear the floor | **TRUE / TRUE** (11,135 / 10,403) |
 
 ## Verdict
 
-(pending)
+**Failure** on the hypothesis: P-1 and P-5 false, so neither a per-pass planning target nor
+a parallel read from the coda moves the passes; the per-pass arm's own ladder rises with the
+pass index. The binding case that fired is "P-2 fails and P-1 fails" in its weak form: the
+passes were handed a target that differs by pass and the state after pass 6 is no better
+at pass 1's job than the state after pass 1 (the exit column, K1−K6 0.0008). Both arms cost
+CE (+0.017, +0.042) for their gradient competition on the shared coda and decoder. P-8's
+failure says the heads at far offsets do get supervision worth 0.016 nats, which is a
+statement about the coda's readout, not the loop. P-6 and the identical-target grid remain
+open and are filed when they land.
+
+## Updated hypothesis
+
+The objective lane is closed alongside geometry (strict panel) and what trains the core
+(core-token panel): staged, oracle, gradpass, per-pass horizon, critic and parallel-decode
+targets all leave the passes past the first at ≤ 0.002 nats. The only reading on the whole
+tree where passes 2..6 carry anything is `prev-reach1` (0.0127), a relay forced by cutting
+the coda's reach, and it costs 0.011 nats of CE. Next: the READ (what the coda takes from a
+cell; planning-cells design, held for Wolfe's word) and a matched-compute one-pass slot
+model.
