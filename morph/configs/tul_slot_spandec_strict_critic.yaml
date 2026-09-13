@@ -1,0 +1,82 @@
+# Slot-loop panel, arm "slot-spandec-strict-critic": condition every pass on the gradient of
+# a critic that has MEASURED whether that pass helped. ONE factor against
+# `slot-spandec-strict-egrad-disc` (`tul_slot_spandec_egrad_disc.yaml`) — the energy — and
+# one mechanism against the panel ruler `slot-spandec-strict`. Both comparisons are reported.
+#
+# WHY A THIRD ENERGY. `disc`'s label is "is this slot's next span below the BATCH MEDIAN
+# CE?". Most of that signal is how predictable the next span happens to be — a property of
+# the text, not of z — which is exactly why the head needs shuffled-context negatives to
+# stop it scoring from the context alone. Wolfe, 2026-09-12: "a within-context critic that
+# scores whether the state after pass t beats the state after pass t-1 on the same coda
+# loss."
+#
+# THE LABEL, which is the only new machinery. For each valid slot, THREE candidate states:
+#   h_{t-1} and h_t, for a per-slot t drawn uniformly in [1, realised depth]   ("did this
+#                                                                                pass help?")
+#   h_t + critic_eps * rms(h_t) * n, n ~ N(0, I)                 ("which way is up from here?")
+# Each is written into that slot's prefix cells through the SAME `prefix_project`, the REAL
+# coda is replayed with the SAME dropout `keep`, the same allow relation and the same
+# retention reset, and the next span's mean token CE is measured per slot. Everything the two
+# candidates of a pair share — the row, the context, the span, the decoder — CANCELS. That is
+# what "within context" buys and what a batch-median label cannot have.
+#
+# EVERY REPLAY IS no_grad. There is no graph at all, so nothing here trains the loop, the
+# coda, `tul.W_prefix`, the tied table or the span decoder; and the whole label computation
+# sits inside an RNG save/restore, so the perturbation draw consumes nothing from the run's
+# stream. `tests/test_tul_critic.py` proves both by autograd rather than by argument.
+#
+# THE LOSS is pairwise logistic on the SCORE DIFFERENCE, weighted by the measured CE gap, on
+# a detached z. A pair the coda cannot tell apart contributes zero, so a near-tie teaches
+# nothing instead of teaching a coin flip. A direct regression of the CE difference was
+# considered and rejected: the gap's SCALE is not what the energy needs, and fitting it would
+# spend the head's capacity on how hard the row is — `disc`'s measured failure mode.
+#
+# THE PERTURBATION PAIR IS NOT DECORATION. Without it the critic only ever sees states the
+# loop already produces, and has no reason to be smooth anywhere else — which is exactly
+# where its gradient is read, at every pass, through the zero-init `W_g`.
+#
+# THE CONFOUND, accepted and named. Under `tg_coda_prefix_reach: all` a token of span s+1
+# reads EVERY earlier slot's cells, so a replay that substitutes every slot at once
+# attributes span s+1's CE change to slot s while every earlier slot's substitution also
+# moved it. `tul.critic_replay_groups: G` splits the substitution over G replays so the
+# nearest confounder sits G spans back, at G times the cost. THIS ARM RUNS G = 1 AND ACCEPTS
+# THE NOISE — a cost decision, written down as one.
+#
+# COST, arithmetic. 3 coda forwards per step, NO backward through any of them:
+# 3 x 4 x 1152 = 13,824 forward-only block-passes, 13.5 per real token, against the ruler's
+# 14.8 forward+backward. Plus three no-grad per-token coda readouts (0.70 TFLOP each at
+# B 6, L 1152, d 1024, V 49169 — 2.1 TFLOP against a ~50 TFLOP step, ~4 %). The energy
+# itself has no vocabulary axis and is free. Expect ~1.3-1.5x the ruler's wall clock.
+#
+# THE COLUMNS TO READ, in order:
+#   tul/critic_agree     the honesty instrument, the `egrad_auc` twin. A critic stuck at 0.5
+#                        means the energy carries nothing and this arm is its ruler with an
+#                        extra injection channel.
+#   tul/critic_gap_traj  the MEASURED worth of one pass through the real coda:
+#                        CE(h_{t-1}) - CE(h_t). Every K-curve has read this near zero; this
+#                        is the first direct measurement of it. If it is LARGE while the
+#                        K-curve stays flat, the two instruments disagree and the K-curve is
+#                        the one to distrust.
+#   tul/gp_rel_t{t}      how far the feature actually moves the state (0.086 on the
+#                        2026-09-11 gradpass arm — the feature acts).
+#
+# Record: lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md
+# Note: .agents/notes/proposed/architecture/2026-09-12-core-token-gradient-and-within-context-critic.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  grad_pass: true
+  grad_pass_scale: 0.1          # the `disc`/`recon` setting: one factor is the ENERGY
+  grad_pass_norm: rms
+  grad_pass_energy: critic
+  egrad_disc_hidden: 0          # 0 -> d_model (the critic shares `disc`'s width knob)
+  critic_weight: 1.0
+  critic_every: 1               # compute the label every training forward
+  critic_eps: 0.1               # perturbation size, as a fraction of rms(h_t)
+  critic_replay_groups: 1       # 1 = one replay per candidate; see THE CONFOUND above
+  pass_residual_lambda: 0.01    # the `disc`/`recon` setting
+
+wandb:
+  name: slot-spandec-strict-critic

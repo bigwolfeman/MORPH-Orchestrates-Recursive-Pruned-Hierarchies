@@ -30,6 +30,17 @@ supplies two energies that are not reachable in one step for that reason.
     (``morph/model/fused_ce.py``), so no ``[B, S, J, V]`` logit tensor is ever
     materialised and there is no second CE implementation to keep in step.
 
+``critic`` — the within-context improvement critic
+    ``E = -c_phi(z, ctx)``, the same SHAPE as ``disc`` and a different QUESTION. ``disc``
+    asks "is this slot's next span easier than the batch median?", which mostly reads how
+    predictable the next span is and barely reads ``z``. ``critic`` asks "does the state
+    after pass ``t`` beat the state after pass ``t-1`` ON THIS ROW, through the REAL
+    coda?" — a within-context comparison, so everything the two candidates share (the
+    context, the span, the row's difficulty) cancels. Its label comes from replaying the
+    shipped coda with each candidate written into the slot's prefix cells and measuring
+    the next span's token CE; the replays are no-grad, so no label ever reaches the loop.
+    Trained by a PAIRWISE logistic loss weighted by the CE gap.
+
 ``disc`` — the discriminative energy
     ``E = -s_phi(z, ctx)``, ``s_phi`` a 2-layer MLP on the mean-stream ``z`` and the slot's
     prelude-entry state. It is trained with BCE against the OUTCOME the probe measures —
@@ -65,10 +76,12 @@ from .fused_ce import fused_linear_cross_entropy, fused_linear_cross_entropy_mce
 from .tul_layout import SlotLayout
 from .tul_spandec import SpanDecoder, own_span_slots
 
-__all__ = ["ReconEnergy", "DiscEnergy", "per_token_ce", "slot_outcome_labels"]
+__all__ = ["ReconEnergy", "DiscEnergy", "CriticEnergy", "per_token_ce",
+           "slot_outcome_labels"]
 
-# Private init stream for the discriminative head. Never the global RNG.
+# Private init streams for the scalar heads. Never the global RNG.
 _SEED_DISC = 0x5D15C
+_SEED_CRITIC = 0xC1717C
 
 
 def _init_linear(m: nn.Linear, gen: torch.Generator) -> None:
@@ -240,6 +253,112 @@ class DiscEnergy(nn.Module):
             r = torch.argsort(torch.argsort(s)).float() + 1.0
             return (r[y].sum() - n_pos.float() * (n_pos.float() + 1) / 2) / \
                    (n_pos.float() * n_neg.float())
+
+
+# ── the within-context improvement critic ─────────────────────────────────────
+
+
+class CriticEnergy(nn.Module):
+    """``E_critic(z) = -mean c_phi(z, ctx)``: a critic on WITHIN-CONTEXT improvement.
+
+    THE SHAPE is :class:`DiscEnergy`'s — a 2-layer MLP on ``[z, ctx]``, ``ctx`` the slot's
+    prelude-entry state, whose gradient with respect to ``z`` is what conditions each pass.
+    THE QUESTION is different, and that is the whole arm.
+
+    ``disc``'s label is "is this slot's next span below the BATCH MEDIAN CE?". Most of that
+    signal is how predictable the next span happens to be — a property of the text, not of
+    ``z`` — which is why it needs shuffled-context negatives to stop the head scoring from
+    ``ctx`` alone. Wolfe, 2026-09-12: "a within-context critic that scores whether the
+    state after pass t beats the state after pass t-1 on the same coda loss."
+
+    ``critic``'s label is a PAIR on ONE row: two candidate slot states are each written into
+    that slot's prefix cells, the REAL coda is replayed, and the next span's mean token CE
+    is measured for each. Everything the two candidates share — the context, the span, the
+    row's difficulty, the decoder — cancels in the comparison, so the label is about the
+    state and nothing else. The pairs are (h_{t-1}, h_t) for a sampled pass ``t`` and
+    (h_t, h_t + eps*rms(h_t)*n), a local perturbation, so the critic sees both "did this
+    pass help" and "which way is up from here".
+
+    THE LOSS is pairwise logistic on the SCORE DIFFERENCE, weighted by the measured CE gap:
+
+        ``w * BCE(c_phi(a) - c_phi(b), 1{CE_a < CE_b})``,  ``w = |CE_a - CE_b|``
+
+    A gap of zero contributes zero, so a pair the coda cannot tell apart teaches nothing
+    instead of teaching a coin flip. Lower CE is better, so the target is 1 when ``a`` is
+    the better state, and the energy the loop descends is ``-c_phi`` — descending it pushes
+    the state toward what the critic calls better.
+
+    THE CONTRACTS are the module's, shared with ``recon`` and ``disc``: the training loss
+    runs on a DETACHED ``z`` (the caller detaches, as it does for ``disc``), so the critic's
+    own gradient never enters the loop; the only route in is ``W_g``; every leaf is
+    ``_ternary_exclude``; the init stream is private, so an arm with the critic on holds
+    byte-identical weights to its ruler everywhere else.
+
+    NOT A REGRESSION ONTO ``z``. The standing rule (LCM T3/4, CoCoMix §6b, BT §4.2) is that
+    the latent is an INPUT to a scorer, never a target. ``z`` is an input here and the label
+    is a measured outcome, which is the same direction ``disc`` takes.
+    """
+
+    def __init__(self, d_model: int, hidden: int):
+        super().__init__()
+        h = int(hidden or d_model)
+        gen = torch.Generator(device="cpu").manual_seed(_SEED_CRITIC)
+        self.norm = RMSNorm(2 * d_model)
+        self.fc1 = nn.Linear(2 * d_model, h, bias=True)
+        self.fc2 = nn.Linear(h, 1, bias=True)
+        for m in (self.fc1, self.fc2):
+            _init_linear(m, gen)
+            m._ternary_exclude = True
+
+    def score(self, z: Tensor, ctx: Tensor) -> Tensor:
+        """``[B, S, C]``, ``[B, S, C]`` -> ``[B, S]`` scores. Higher = a better state.
+
+        NO LABEL TOKEN REACHES THIS. Its two inputs are the current slot state and the
+        slot's own prelude-entry state, both causal for that slot, so the conditioning
+        feature a generator would compute at inference is the one trained here
+        (``tests/test_tul_critic.py`` asserts the forward is called with these two alone).
+        """
+        x = torch.cat([z, ctx], dim=-1)
+        x = self.norm(x).to(z.dtype)
+        return self.fc2(F.silu(self.fc1(x))).squeeze(-1)
+
+    def energy(self, z: Tensor, ctx: Tensor, mask: Tensor) -> Tensor:
+        """Scalar energy over the masked slots: ``-mean c_phi``.
+
+        The SAME signature ``DiscEnergy.energy`` has, so ``_egrad_feature`` dispatches to
+        it unchanged and the conditioning path is byte-for-byte the ``disc`` arm's.
+        """
+        s = self.score(z, ctx).float()
+        w = mask.to(s.dtype)
+        return -(s * w).sum() / w.sum().clamp(min=1.0)
+
+    def pairwise(self, z_a: Tensor, z_b: Tensor, ctx: Tensor, ce_a: Tensor, ce_b: Tensor,
+                 valid: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        """``(loss, n_pairs, agreement)`` for one candidate pair.
+
+        ``z_a`` / ``z_b`` ``[B, S, C]`` are the two candidates ALREADY DETACHED by the
+        caller; ``ctx`` is the shared context (the same for both — a pair that did not
+        share its context would be comparing two different questions, which is the
+        sabotage ``tests/test_tul_critic.py`` plants); ``ce_a`` / ``ce_b`` ``[B, S]`` are
+        the measured next-span CEs; ``valid`` ``[B, S]`` selects the scored slots.
+
+        ``agreement`` is the fraction of scored pairs the critic already ranks correctly —
+        the arm's honesty instrument, the twin of ``egrad_auc``. A critic stuck at 0.5
+        means the energy carries nothing and the arm is its ruler with an extra injection
+        channel.
+        """
+        s_a = self.score(z_a, ctx).float()
+        s_b = self.score(z_b, ctx).float()
+        gap = (ce_b - ce_a).float()                                   # > 0 <=> a is better
+        w = valid.to(gap.dtype) * gap.abs()
+        y = (gap > 0).to(gap.dtype)
+        d = s_a - s_b
+        per = F.binary_cross_entropy_with_logits(d, y, reduction="none")
+        denom = w.sum().clamp(min=1e-6)
+        loss = (per * w).sum() / denom
+        n = valid.to(gap.dtype).sum()
+        agree = (((d > 0).to(gap.dtype) == y).to(gap.dtype) * w).sum() / denom
+        return loss, n, agree
 
 
 # ── the outcome label the critic is trained against (and the Step-0 probe reads) ──

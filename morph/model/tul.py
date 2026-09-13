@@ -677,6 +677,46 @@ class TULConfig:
     egrad_soft_labels: bool = False
     egrad_soft_mix: float = 0.5
     egrad_disc_hidden: int = 0           # "disc": 0 -> d_model
+    # ── "critic": THE WITHIN-CONTEXT IMPROVEMENT CRITIC (arm
+    #    `slot-spandec-strict-critic`, 2026-09-12; morph/model/tul_egrad.py::CriticEnergy)
+    #
+    #    WHY A THIRD SCALAR ENERGY. `disc`'s label is "is this slot's next span below the
+    #    BATCH MEDIAN CE?". Most of that is how predictable the next span happens to be — a
+    #    property of the text — which is why it needs shuffled-context negatives at all.
+    #    Wolfe, 2026-09-12: "a within-context critic that scores whether the state after
+    #    pass t beats the state after pass t-1 on the same coda loss."
+    #
+    #    THE LABEL, and it is the only new machinery. Two candidate slot states are each
+    #    written into that slot's prefix cells through the SAME `prefix_project`, the REAL
+    #    coda is replayed, and the next span's mean token CE is measured per slot. The
+    #    critic is trained by a pairwise logistic loss on the sign of the CE difference,
+    #    WEIGHTED by its magnitude, so a pair the coda cannot tell apart teaches nothing.
+    #    Everything the two candidates share cancels, which is what "within context" buys.
+    #    Candidates: the trajectory pair (h_{t-1}, h_t) at a per-slot sampled t <= the
+    #    realised depth, and the perturbation pair (h_t, h_t + critic_eps * rms(h_t) * n).
+    #
+    #    EVERY REPLAY IS `no_grad`. The label is a measurement, not a loss: no gradient
+    #    reaches the loop, the coda, `W_prefix` or the decoder from it, and the whole label
+    #    computation sits inside an RNG save/restore so it consumes nothing from the run's
+    #    stream. `tests/test_tul_critic.py` proves both by autograd, not by reading this.
+    #
+    #    THE CONFOUND, stated where the knob is. Under `tg_coda_prefix_reach: all` a token
+    #    reads EVERY earlier slot's cells, so a replay that substitutes every slot at once
+    #    attributes span s+1's CE change to slot s while every earlier slot's substitution
+    #    also moved it. `critic_replay_groups: G` splits the substitution into G replays,
+    #    each touching slots s = g (mod G), so the nearest confounder sits G spans back —
+    #    at G times the replay cost. G = 1 is the cheap default and ACCEPTS the noise.
+    #
+    #    COST, arithmetic. THREE candidate states (h_{t-1}, h_t, h_t + noise) -> 3G coda
+    #    forwards per step, each 4 x 1152 block-passes, no backward: 4.5G block-passes per
+    #    real token against the strict ruler's 14.8, plus one no-grad per-token readout of
+    #    the coda per replay (~0.7 TFLOP each against a ~50 TFLOP step). `critic_every: k`
+    #    computes the label every k-th step instead — the critic then trains on k times
+    #    fewer batches, and the energy is read at every pass regardless.
+    critic_weight: float = 1.0           # weight of the critic's OWN training loss
+    critic_every: int = 1                # compute the label every k-th step (>= 1)
+    critic_eps: float = 0.1              # perturbation size, as a fraction of rms(h_t)
+    critic_replay_groups: int = 1        # G above: 1 = perturb every slot in one replay
     # ── a BOUNDED per-pass residual (LRT: no residual penalty and the state drifts;
     #    lambda 0.01 best, lambda 1.0 collapses the loop to its entry) ───────────────
     #    lambda * mean_t ||h_{t+1} - h_t||^2 / ||h_t||^2 over the loop's GRADIENT passes and
@@ -1149,10 +1189,39 @@ class TULConfig:
                 raise ValueError(
                     "tul.grad_pass needs tul.grad_pass_scale > 0: at 0 the feature is "
                     "identically zero and the arm is the ruler under another name.")
-            if self.grad_pass_energy not in ("own_mux", "recon", "disc"):
+            if self.grad_pass_energy == "coda_exact":
+                # REFUSED, and kept as a NAMED value so the refusal is discoverable — the
+                # `reinject_seed_every_pass` precedent. The idea is right and this tree
+                # cannot pay for it, so the missing pieces are listed rather than the
+                # option quietly omitted.
+                raise NotImplementedError(
+                    "tul.grad_pass_energy='coda_exact' (the energy IS the next-span coda "
+                    "CE, replayed at every pass) is REFUSED. Four things are missing, and "
+                    "none of them is a line of plumbing:\n"
+                    "  1. THE CONTEXT IS NOT THERE YET. The energy is read inside "
+                    "`_tul_core`; the coda's inputs (`base`, the token-state dropout's "
+                    "`keep` mask, the coda allow relation, `prefix_project`'s write) are "
+                    "built AFTER the loop returns. The critic's replay reuses them because "
+                    "it runs at the end of the forward; an energy cannot.\n"
+                    "  2. THE REPLAYS HAVE OPPOSITE GRADIENT RULES. `critic`'s replay is "
+                    "no_grad BY CONTRACT — a label that reached the loop would make the "
+                    "critic a teacher. `coda_exact` needs the same replay differentiable "
+                    "with respect to the candidate state. One helper cannot hold both "
+                    "contracts without a mode flag whose two branches share no test.\n"
+                    "  3. IT MOVES AN RNG DRAW. The coda's token-state dropout is drawn "
+                    "after the core; an energy read at every pass needs it drawn before, "
+                    "which changes the SHIPPED forward on every arm.\n"
+                    "  4. THE COST. T coda forward+backward passes per step is "
+                    "8 x 4 x 1152 = 36,864 block-passes against the model's own 11,052 — "
+                    "3.3x the model, before the slot loop's own cost. The arm would miss "
+                    "any rate floor before it measured anything.\n"
+                    "Use 'critic', which asks the same question through a learned scorer "
+                    "at 3 no-grad coda forwards per step "
+                    "(lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md).")
+            if self.grad_pass_energy not in ("own_mux", "recon", "disc", "critic"):
                 raise ValueError(
-                    "tul.grad_pass_energy must be 'own_mux', 'recon' or 'disc', got "
-                    f"{self.grad_pass_energy!r}")
+                    "tul.grad_pass_energy must be 'own_mux', 'recon', 'disc' or 'critic', "
+                    f"got {self.grad_pass_energy!r}")
             if self.grad_pass_energy == "own_mux" and self.mux_beta <= 0.0:
                 # Scoped to the MUX energy ON PURPOSE. That energy IS the MUX head's loss,
                 # so at beta 0 the head is never trained and the gradient fed to the loop is
@@ -1181,6 +1250,51 @@ class TULConfig:
                     "carry, so 'the state the loop is refining' is a different object at "
                     "every iteration and the feature would condition on a gradient of a "
                     "trajectory that no longer exists.")
+            if self.grad_pass_energy == "critic":
+                if self.critic_weight <= 0.0:
+                    raise ValueError(
+                        "tul.grad_pass_energy='critic' needs tul.critic_weight > 0: at 0 "
+                        "the critic pays its replays every step and trains nothing, so the "
+                        f"energy it hands the loop stays at its init (got {self.critic_weight})")
+                if self.critic_every < 1:
+                    raise ValueError(
+                        f"tul.critic_every must be >= 1 (1 = every step), got "
+                        f"{self.critic_every}")
+                if self.critic_replay_groups < 1:
+                    raise ValueError(
+                        f"tul.critic_replay_groups must be >= 1 (1 = one replay per "
+                        f"candidate), got {self.critic_replay_groups}")
+                if self.critic_eps <= 0.0:
+                    raise ValueError(
+                        "tul.critic_eps must be > 0: at 0 the perturbation pair is two "
+                        f"copies of the same state and teaches nothing (got {self.critic_eps})")
+                if self.oracle_z:
+                    raise NotImplementedError(
+                        "tul.grad_pass_energy='critic' with tul.oracle_z is not defined. "
+                        "The oracle REGRESSES every pass onto a descent trajectory of the "
+                        "span decoder's loss; the critic CONDITIONS every pass on the "
+                        "gradient of a scorer fitted to the coda's own CE. Both write a "
+                        "per-pass target onto the same trajectory from two different "
+                        "teachers, and no reading could say which one moved the K-curve.")
+                if not (self.coda_sees_slots and self.coda_token_cut == 0):
+                    raise NotImplementedError(
+                        "tul.grad_pass_energy='critic' needs the FULL-AXIS coda "
+                        "(coda_sees_slots=true, coda_token_cut=0): its label replays "
+                        "`_back_region` over the packed axis and indexes the result by "
+                        "`layout.bag_id`, and arm A4 / arm CW run the coda on a GATHERED "
+                        "subset whose index space `slot_outcome_labels` does not re-derive.")
+                if self.detach_z:
+                    raise ValueError(
+                        "tul.grad_pass_energy='critic' with tul.detach_z is not defined: "
+                        "the label is measured by writing a candidate through "
+                        "`prefix_project` and replaying the coda, and detach_z makes the "
+                        "coda's reading of z carry no training signal at all — the critic "
+                        "would be scoring a channel the run has stopped using.")
+        elif (self.critic_weight != 1.0 or self.critic_every != 1
+              or self.critic_eps != 0.1 or self.critic_replay_groups != 1):
+            raise ValueError(
+                "tul.critic_* set without tul.grad_pass + grad_pass_energy='critic': no "
+                "critic is built, so the knobs would be silently ignored.")
         if self.cond_layers < 0:
             raise ValueError(f"tul.cond_layers must be >= 0, got {self.cond_layers}")
         if self.detach_z and self.tokens_through_core:

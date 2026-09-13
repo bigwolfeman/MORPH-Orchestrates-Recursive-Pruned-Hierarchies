@@ -43,7 +43,8 @@ from .tul import (TULConfig, TULGate, TULGateConfig, TULGradPass, TULReread, TUL
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
                   scatter_positions,
                   window_drop_mask)
-from .tul_egrad import DiscEnergy, ReconEnergy, slot_outcome_labels
+from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
+                        slot_outcome_labels)
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
@@ -1395,9 +1396,10 @@ class MORPHTransformer(nn.Module):
         # walk past them.
         self.tul_egrad: nn.Module | None = None
         _ge = "own_mux" if cfg.tul is None else str(cfg.tul.grad_pass_energy)
-        if _ge not in ("own_mux", "recon", "disc"):
+        if _ge not in ("own_mux", "recon", "disc", "critic"):
             raise ValueError(
-                f"tul.grad_pass_energy must be 'own_mux', 'recon' or 'disc', got {_ge!r}")
+                f"tul.grad_pass_energy must be 'own_mux', 'recon', 'disc' or 'critic', "
+                f"got {_ge!r}")
         if cfg.tul is not None and _ge != "own_mux":
             if not cfg.tul.grad_pass:
                 raise ValueError(
@@ -1409,8 +1411,33 @@ class MORPHTransformer(nn.Module):
                     f"tul.grad_pass_energy={_ge!r} has no defined meaning under the paid "
                     "loop (tokens_through_core): there is no per-slot looped state to "
                     "score. The paid loop already refuses tul.grad_pass in _tul_core.")
-
-            if _ge == "recon":
+            if _ge == "critic":
+                # The within-context improvement critic. Same construction shape as `disc`
+                # — a scalar head on [z, ctx], private init stream, no RNG draw from the
+                # global one — and a different LABEL: a pairwise comparison of two
+                # candidate slot states through a REPLAY of the real coda
+                # (`_tul_critic_loss`). The full-axis coda requirement is the same as
+                # `disc`'s and is already checked in `TULConfig.__post_init__`; the two
+                # below need the MODEL's shape.
+                if cfg.n_core == 0:
+                    raise ValueError(
+                        "tul.grad_pass_energy='critic' needs a core loop "
+                        "(model.n_core > 0): its label compares the state after pass t "
+                        "with the state after pass t-1, and a coreless model has no "
+                        "passes to compare.")
+                if cfg.tul.gate is not None:
+                    raise NotImplementedError(
+                        "tul.grad_pass_energy='critic' with tul.gate is not defined: the "
+                        "gate rewrites h_slots with a decoded budget before "
+                        "`prefix_project`, so the replay would write an un-conditioned "
+                        "candidate into a cell the shipped forward fills with a "
+                        "conditioned one, and the two CEs would not be comparable.")
+                self.tul_egrad = CriticEnergy(d, int(cfg.tul.egrad_disc_hidden or d))
+                # `critic_every` counts TRAINING FORWARDS, not optimiser steps. Under
+                # gradient accumulation those differ, and the arm's panel runs
+                # accumulation 1 — named in the pre-registration rather than hidden here.
+                self._critic_calls = 0
+            elif _ge == "recon":
                 self.tul_egrad = ReconEnergy(
                     d_model=d,
                     n_heads=int(cfg.tul.egrad_heads or cfg.n_heads),
@@ -3294,8 +3321,12 @@ class MORPHTransformer(nn.Module):
         # Hyper-Connection streams. Constant across passes by construction, so the critic
         # scores "how far has this state moved from where it began, and did that help"
         # rather than re-reading the span. None for every other energy.
+        # The `critic` energy scores the same two inputs, for the same reason, so it takes
+        # the same context — the slot's prelude-entry state, constant across passes, which
+        # is what makes "how far has this state moved from where it began, and did that
+        # help" a well-posed question and keeps both scorer inputs causal for the slot.
         _eg_ctx = None
-        if isinstance(self.tul_egrad, DiscEnergy):
+        if isinstance(self.tul_egrad, (DiscEnergy, CriticEnergy)):
             _eg_ctx = (e.mean(dim=2) if self._is_hc else e).detach()
         # The per-pass residual bound (TULConfig.pass_residual_lambda). A Python-level
         # constant: 0.0 builds nothing and the graph is the one from before this existed.
@@ -3325,7 +3356,14 @@ class MORPHTransformer(nn.Module):
         # only, so an eval forward keeps `db_traj` None and the sweep reads ruler columns.
         _pp = (bool(self.cfg.tul.spandec_per_pass) and self.training
                and self.tul_spandec is not None)
-        _db_traj: list[Tensor] | None = ([h] if (_db or _stage or _mep or _oz or _pp)
+        # The `critic` energy reads the SAME trajectory, and for the closest reason of any
+        # of them: its label is a comparison of `_db_traj[t-1]` against `_db_traj[t]`
+        # through a replay of the real coda. Training only, so an eval forward keeps
+        # `db_traj` None and the forced-depth sweep pays nothing for it. The states are
+        # detached at the label site, never here — the trajectory is the same live-carry
+        # list every other per-pass reader uses.
+        _cr = isinstance(self.tul_egrad, CriticEnergy) and self.training
+        _db_traj: list[Tensor] | None = ([h] if (_db or _stage or _mep or _oz or _pp or _cr)
                                          else None)
         # Per-pass MUX: entry t-1 is the mask for `_db_traj[t]` — the slots whose realised
         # depth REACHES pass t and whose pass t carries gradient (a progressive prefix pass
@@ -4883,6 +4921,211 @@ class MORPHTransformer(nn.Module):
         g = g.detach()
         return (g.mean(dim=2) if self._is_hc else g), loss.detach()
 
+    @torch.no_grad()
+    def _critic_replay_ce(self, cand: Tensor, exit_h: Tensor, base: Tensor, x0: Tensor,
+                          bigram_emb, input_ids: Tensor, labels: Tensor,
+                          layout: SlotLayout, keep: Tensor | None, coda_kw: dict | None,
+                          ret_reset_mask: Tensor | None, groups: int
+                          ) -> tuple[Tensor, Tensor]:
+        """``(mean_ce [B, S], scored [B, S])`` — the REAL coda's next-span CE per slot when
+        ``cand`` is the state written into each slot's prefix cells.
+
+        THE MEASUREMENT, and nothing else. ``no_grad`` on the decorator: no gradient
+        reaches the loop, ``tul.W_prefix``, the coda, the tied table or the span decoder
+        from this. ``autograd.grad`` is not used either — there is no graph at all — so the
+        claim "the label trains nothing" is structural rather than argued.
+
+        The write goes through the SAME :meth:`TULSlots.prefix_project` and the same
+        ``scatter_positions`` the shipped forward uses, and the coda is replayed with the
+        SAME ``keep`` (so the token-state dropout draw is the shipped one, reused, not a
+        second draw), the same allow relation and the same retention reset. So the only
+        difference between two replays is the candidate state, which is what makes the
+        pairwise label a within-context comparison.
+
+        ``groups`` (``tul.critic_replay_groups``) is the CONFOUND CONTROL, and the
+        confound is real. Under ``tg_coda_prefix_reach: all`` a token of span ``s+1`` reads
+        EVERY earlier slot's cells, so a replay that substitutes every slot at once
+        attributes span ``s+1``'s CE change to slot ``s`` while every earlier slot's
+        substitution also moved it. At ``groups = G`` the substitution is split over ``G``
+        replays, each touching slots ``s = g (mod G)`` and leaving every other slot at its
+        EXIT state, so the nearest confounder sits ``G`` spans back — at ``G`` times the
+        cost. ``G = 1`` is the cheap default and ACCEPTS the noise; the arm's
+        pre-registration says so.
+        """
+        L = input_ids.shape[1]
+        w_head = self.embed.lm_weight().detach()
+        chunk = self.cfg.ce_chunk_size
+        S = layout.slot_index.shape[1]
+
+        # The shipped coda also REPLACES a dropped token's state with `E_mask`
+        # (`TULSlots.apply_token_dropout`), not only its injections. `keep` records that
+        # draw, so the replay reconstructs the SAME substitution from it and draws no new
+        # mask — otherwise the label would be measured on a coda the run never ran.
+        # `keep` is 0 at a slot CELL too under the strict geometry (`slot_cell_inject_keep`
+        # multiplies into it), hence the `~slot_mask`: a cell must keep the candidate write.
+        drop = None
+        if keep is not None:
+            drop = (keep.reshape(keep.shape[0], keep.shape[1]) == 0) & (~layout.slot_mask)
+            if not bool(drop.any()):
+                drop = None
+        mask_vec = self.tul.E_mask
+
+        def _one(h_in: Tensor) -> tuple[Tensor, Tensor]:
+            values, pos = self.tul.prefix_project(h_in, layout, L)
+            xc = scatter_positions(base, pos, values)
+            if drop is not None:
+                xc = torch.where(drop.view(*drop.shape, *([1] * (xc.dim() - 2))),
+                                 mask_vec.to(xc.dtype), xc)
+            xh = self._back_region(xc, x0, bigram_emb, input_ids, inject_keep=keep,
+                                   attn_kwargs=coda_kw, ret_reset_mask=ret_reset_mask)
+            _y, scored, ce = slot_outcome_labels(xh, labels, layout, w_head, chunk)
+            return ce, scored
+
+        if groups <= 1:
+            return _one(cand)
+        ce_out = cand.new_zeros(cand.shape[0], S, dtype=torch.float32)
+        sc_out = torch.zeros_like(layout.slot_valid)
+        sel_all = torch.arange(S, device=cand.device)
+        for g in range(groups):
+            sel = (sel_all % groups) == g                              # [S]
+            selv = sel.view(1, S, *([1] * (cand.dim() - 2)))
+            ce_g, sc_g = _one(torch.where(selv, cand, exit_h))
+            ce_out = torch.where(sel.unsqueeze(0), ce_g, ce_out)
+            sc_out = torch.where(sel.unsqueeze(0), sc_g, sc_out)
+        return ce_out, sc_out
+
+    def _tul_critic_loss(self, db_traj, depths: Tensor, h_slots: Tensor, ctx: Tensor,
+                         base: Tensor, x0: Tensor, bigram_emb, input_ids: Tensor,
+                         labels: Tensor, layout: SlotLayout, keep: Tensor | None,
+                         coda_kw: dict | None, ret_reset_mask: Tensor | None,
+                         stats: dict) -> Tensor | None:
+        """``tul.grad_pass_energy='critic'`` — the critic's OWN training loss.
+
+        THE LABEL IS WITHIN CONTEXT. ``disc``'s label is "is this slot's next span below
+        the BATCH MEDIAN CE?", which mostly reads how predictable the next span happens to
+        be. Wolfe, 2026-09-12: "a within-context critic that scores whether the state after
+        pass t beats the state after pass t-1 on the same coda loss." Here two candidate
+        states for the SAME slot are each written into that slot's prefix cells, the REAL
+        coda is replayed, and the next span's mean token CE is measured. Everything the two
+        candidates share — the row, the context, the span, the decoder — cancels.
+
+        THE CANDIDATES, three states and two pairs:
+
+        * ``h_{t-1}`` and ``h_t`` for a per-slot ``t`` drawn uniformly in
+          ``[1, realised depth]``. "Did this pass help?"
+        * ``h_t`` and ``h_t + eps * rms(h_t) * n``, ``n ~ N(0, I)`` and
+          ``eps = tul.critic_eps``. "Which way is up from here?" Without it the critic only
+          ever sees states the loop already produces and has no reason to be smooth
+          anywhere else, which is exactly where its gradient is read.
+
+        THE LOSS is :meth:`CriticEnergy.pairwise` on each pair — pairwise logistic on the
+        SCORE DIFFERENCE, weighted by the measured CE gap, so a pair the coda cannot tell
+        apart teaches nothing — averaged over the two pairs. ``z`` is DETACHED at every
+        site below: the critic trains its own parameters and nothing else, and the only
+        route from it into the loop is the detached feature crossing ``W_g``.
+
+        THE READINGS. ``critic_agree`` is the arm's honesty instrument, the twin of
+        ``egrad_auc``: the CE-weighted fraction of pairs the critic already ranks
+        correctly. A critic at 0.5 means the energy carries nothing and the arm is its
+        ruler with an extra injection channel. ``critic_gap_traj`` is the MEAN
+        ``CE_{t-1} - CE_t`` over the scored slots — the measured worth of one pass, which
+        every earlier reading has put near zero, so it is a number worth watching in its
+        own right.
+
+        COST. ``3 * G`` coda forwards per step (``G = tul.critic_replay_groups``), no
+        backward through any of them, plus one no-grad per-token readout each. The whole
+        label computation sits inside an RNG save/restore, so the perturbation draw
+        consumes nothing from the run's stream.
+
+        ``None`` when the batch has no scored slot, or on a step ``tul.critic_every`` skips.
+        """
+        eg = self.tul_egrad
+        assert isinstance(eg, CriticEnergy) and db_traj is not None
+        T = len(db_traj) - 1
+        if T < 1:
+            return None
+        tc = self.cfg.tul
+        rng_cpu = torch.get_rng_state()
+        rng_cuda = torch.cuda.get_rng_state() if h_slots.is_cuda else None
+        try:
+            with torch.no_grad():
+                valid = layout.slot_valid
+                # t uniform in [1, depth]: `depths` is the REALISED per-slot depth, so
+                # `db_traj[t]` is a state that pass actually produced and `db_traj[t-1]`
+                # the one it started from. A pad slot has depth 1 and is masked out below.
+                u = torch.rand(depths.shape, device=depths.device, dtype=torch.float32)
+                d1 = depths.clamp(min=1)
+                # u < 1, so floor(u * d) is 0 .. d-1 and t lands in [1, d]: `db_traj[t]`
+                # is a state that pass actually produced and `db_traj[t-1]` the one it
+                # started from. The clamp to T covers a batch whose loop ran shallower
+                # than a slot's recorded depth (it cannot, and a silent index error here
+                # would be worse than a redundant clamp).
+                t_idx = torch.minimum(1 + (u * d1.float()).long(), d1).clamp(1, T)
+                exit_h = h_slots.detach()
+                h_a = torch.zeros_like(exit_h)                       # h_{t-1}
+                h_b = torch.zeros_like(exit_h)                       # h_t
+                for j in range(1, T + 1):
+                    sel = (t_idx == j) & valid
+                    selv = sel.view(*sel.shape, *([1] * (exit_h.dim() - 2)))
+                    h_a = torch.where(selv, db_traj[j - 1].detach(), h_a)
+                    h_b = torch.where(selv, db_traj[j].detach(), h_b)
+                # A slot whose draw landed outside [1, T] (none by construction) and every
+                # pad slot keeps the exit state, so its replay is the ruler's and its pair
+                # carries a zero gap — it is masked out of the loss anyway.
+                unset = ~valid
+                unsetv = unset.view(*unset.shape, *([1] * (exit_h.dim() - 2)))
+                h_a = torch.where(unsetv, exit_h, h_a)
+                h_b = torch.where(unsetv, exit_h, h_b)
+                # The perturbation pair, around the SAME h_t. `rms` is per slot over the
+                # whole carrier, so the step size is relative to the state it starts from
+                # and `critic_eps` reads as a fraction.
+                rms = h_b.float().flatten(2).pow(2).mean(-1).sqrt()          # [B, S]
+                noise = torch.randn_like(h_b.float())
+                noise = noise / noise.flatten(2).pow(2).mean(-1).sqrt().view(
+                    *rms.shape, *([1] * (h_b.dim() - 2))).clamp(min=1e-6)
+                h_p = h_b + (float(tc.critic_eps) * rms).view(
+                    *rms.shape, *([1] * (h_b.dim() - 2))).to(h_b.dtype) * noise.to(h_b.dtype)
+
+                G = int(tc.critic_replay_groups)
+                rep = dict(base=base, x0=x0, bigram_emb=bigram_emb, input_ids=input_ids,
+                           labels=labels, layout=layout, keep=keep, coda_kw=coda_kw,
+                           ret_reset_mask=ret_reset_mask, groups=G)
+                ce_a, sc_a = self._critic_replay_ce(h_a, exit_h, **rep)
+                ce_b, sc_b = self._critic_replay_ce(h_b, exit_h, **rep)
+                ce_p, sc_p = self._critic_replay_ce(h_p, exit_h, **rep)
+                keep_traj = valid & sc_a & sc_b
+                keep_pert = valid & sc_b & sc_p
+            if not bool(keep_traj.any()) and not bool(keep_pert.any()):
+                return None
+            z_a = self._readout(h_a).detach()
+            z_b = self._readout(h_b).detach()
+            z_p = self._readout(h_p).detach()
+            c = ctx.detach()
+            l_t, n_t, ag_t = eg.pairwise(z_b, z_a, c, ce_b, ce_a, keep_traj)
+            l_p, n_p, ag_p = eg.pairwise(z_b, z_p, c, ce_b, ce_p, keep_pert)
+            loss = 0.5 * (l_t + l_p)
+        finally:
+            torch.set_rng_state(rng_cpu)
+            if rng_cuda is not None:
+                torch.cuda.set_rng_state(rng_cuda)
+        stats["critic_train"] = float(loss.detach())
+        stats["critic_agree"] = float(0.5 * (ag_t + ag_p).detach())
+        stats["critic_agree_traj"] = float(ag_t.detach())
+        stats["critic_agree_pert"] = float(ag_p.detach())
+        stats["critic_n_traj"] = float(n_t.detach())
+        stats["critic_n_pert"] = float(n_p.detach())
+        # The measured worth of ONE pass, through the real coda: CE(h_{t-1}) - CE(h_t).
+        # Positive means the pass helped. Every earlier reading of the loop's per-pass
+        # value has put this near zero; it is the number this arm is really about.
+        _w = keep_traj.to(ce_a.dtype)
+        stats["critic_gap_traj"] = float(
+            ((ce_a - ce_b) * _w).sum() / _w.sum().clamp(min=1.0))
+        _wp = keep_pert.to(ce_p.dtype)
+        stats["critic_gap_pert"] = float(
+            ((ce_p - ce_b) * _wp).sum() / _wp.sum().clamp(min=1.0))
+        stats["critic_replays"] = float(3 * int(tc.critic_replay_groups))
+        return loss
+
     def _egrad_train_loss(self, h_slots: Tensor, input_ids: Tensor, layout: SlotLayout,
                           ctx: Tensor | None, xh: Tensor, labels: Tensor,
                           stats: dict) -> Tensor | None:
@@ -4905,6 +5148,14 @@ class MORPHTransformer(nn.Module):
         """
         eg = self.tul_egrad
         if eg is None:
+            return None
+        if isinstance(eg, CriticEnergy):
+            # The critic's own loss is built at its OWN site (`_tul_critic_loss`), because
+            # its label needs the coda's inputs — `base`, the dropout `keep`, the allow
+            # relation — and a REPLAY of `_back_region`, none of which this signature has.
+            # It is exposed as `critic` / `critic_weighted`, not as `egrad`, so the two
+            # scorers' series never share a name. Returning None here leaves the `egrad`
+            # block in `_forward_tul` adding nothing.
             return None
         tc = self.cfg.tul
         z = (self._readout(h_slots) if tc.mux_readout == "mean"
@@ -5176,6 +5427,11 @@ class MORPHTransformer(nn.Module):
         # branch carries tg_slot_mask (slot K/V only). _core_region threads the
         # masks through the active-set sort. Prereg:
         # lab/experiments/planned/2026-09-02-a2s-restricted-paid-loop.md.
+        # The coda's base carrier, kept for the `critic` energy's replay: the tensor
+        # `prefix_project`'s write is scattered INTO, so a replay that swaps the write for
+        # a candidate state differs from the shipped coda in that write and nothing else.
+        # None on the paid loop and the FM planner, both of which the critic refuses.
+        _critic_base = None
         if tc.tokens_through_core:
             # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
             # RESOLVED SPEC AMBIGUITY — §7.1's A2 row says "Poisson/slot" in the depth
@@ -5415,6 +5671,7 @@ class MORPHTransformer(nn.Module):
                 base = self.input_norm(base)
             else:
                 base = xn
+            _critic_base = base
             x_coda = scatter_positions(base, pos, values)
 
         x_coda, keep = self.tul.apply_token_dropout(x_coda, layout, self.training)
@@ -5658,6 +5915,33 @@ class MORPHTransformer(nn.Module):
             _ow = tc.oracle_z_weight * oracle_z_loss
             groups["oracle_z_weighted"] = _ow.detach()
             groups["loss"] = groups["loss"] + _ow
+
+        if (isinstance(self.tul_egrad, CriticEnergy) and self.training
+                and groups is not None and db_traj is not None):
+            # The within-context critic's OWN training loss. Built HERE and not beside the
+            # other local losses because its label REPLAYS `_back_region`, which does not
+            # exist until the shipped coda has run, and it needs the exact carrier that
+            # coda read (`_critic_base`, the shipped dropout `keep`, the shipped allow
+            # relation). Every replay is no_grad, so nothing here trains the loop, the
+            # coda, `W_prefix` or the decoder. `critic_every` skips the LABEL on a step,
+            # never the energy: the feature is read at every pass of every step regardless,
+            # which is what keeps the map the same function on every step.
+            self._critic_calls += 1
+            _cr_stats: dict = {}
+            _cr = None
+            if (self._critic_calls - 1) % int(tc.critic_every) == 0:
+                _cr = self._tul_critic_loss(
+                    db_traj, depths, _egrad_src, self._tul_egrad_ctx, _critic_base, x0,
+                    bigram_emb, input_ids, labels, layout, keep, _coda_kw, tg_reset,
+                    _cr_stats)
+            if _cr is not None:
+                groups = dict(groups)
+                groups["critic"] = _cr.detach()
+                for _k, _v in _cr_stats.items():
+                    groups[_k] = _cr.new_tensor(_v)
+                _crw = tc.critic_weight * _cr
+                groups["critic_weighted"] = _crw.detach()
+                groups["loss"] = groups["loss"] + _crw
 
         if _egrad_src is not None and groups is not None and self.tul_egrad is not None:
             # The energy module's OWN training loss (`tul.grad_pass_energy` 'recon' /
