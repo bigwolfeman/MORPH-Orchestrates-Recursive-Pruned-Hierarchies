@@ -3,7 +3,7 @@
 Status: proposed
 
 Date: 2026-09-12. Record:
-[`lab/experiments/planned/2026-09-12-arc-objective-arms.md`](../../../../lab/experiments/planned/2026-09-12-arc-objective-arms.md).
+[`lab/experiments/failures/2026-09-12-arc-objective-arms.md`](../../../../lab/experiments/failures/2026-09-12-arc-objective-arms.md).
 Runs on the geometry of
 [`2026-09-12-strict-slot-geometry.md`](2026-09-12-strict-slot-geometry.md) with coda reach
 `all`, and follows

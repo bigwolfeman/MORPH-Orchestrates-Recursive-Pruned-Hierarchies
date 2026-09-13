@@ -2,7 +2,7 @@
 
 Status: proposed
 
-Record: [`lab/experiments/planned/2026-09-12-arc-latent-z-gradient.md`](../../../../lab/experiments/planned/2026-09-12-arc-latent-z-gradient.md).
+Record: [`lab/experiments/failures/2026-09-12-arc-latent-z-gradient.md`](../../../../lab/experiments/failures/2026-09-12-arc-latent-z-gradient.md).
 Follows [`2026-09-10-gradient-conditioned-slot-passes.md`](2026-09-10-gradient-conditioned-slot-passes.md)
 and [`2026-09-11-span-decoder-target.md`](2026-09-11-span-decoder-target.md).
 
@@ -92,7 +92,7 @@ are optional.
 ([`2026-09-12-strict-slot-geometry.md`](2026-09-12-strict-slot-geometry.md)). The
 one-factor partner of each arm is now `slot-spandec-strict`. The cost of the move, stated
 rather than hidden: two frozen predictions (P-e, P-h in
-[the prereg](../../../lab/experiments/planned/2026-09-12-arc-latent-z-gradient.md)) were
+[the prereg](../../../lab/experiments/failures/2026-09-12-arc-latent-z-gradient.md)) were
 written against a `slot-spandec-mask` baseline and will be scored against a different
 control; they are NOT edited, and the prereg's amendment 1 says so. The Step-0 probe gate
 was also run on mask-geometry checkpoints and has not been run under strict.

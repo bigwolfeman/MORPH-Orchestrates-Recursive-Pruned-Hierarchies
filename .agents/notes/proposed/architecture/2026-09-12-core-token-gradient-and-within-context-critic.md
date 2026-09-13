@@ -4,7 +4,7 @@ Status: proposed
 
 Arms `slot-spandec-strict-coretok` (`tul.core_token_aux`) and `slot-spandec-strict-critic`
 (`tul.grad_pass_energy: critic`), 2026-09-12. Pre-registration:
-[`lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md`](../../../../lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md).
+[`lab/experiments/failures/2026-09-12-arc-core-token-and-critic.md`](../../../../lab/experiments/failures/2026-09-12-arc-core-token-and-critic.md).
 Both run on the strict geometry
 ([`2026-09-12-strict-slot-geometry.md`](2026-09-12-strict-slot-geometry.md)) and the
 critic composes the gradient-pass machinery

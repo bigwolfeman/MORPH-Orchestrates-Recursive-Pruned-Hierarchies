@@ -142,7 +142,7 @@ Three measurements, none of them a proxy.
 
 * The coda's loss moves at most 0.0005 nats under a 10 % rms perturbation of the exit state,
   and one pass moves it 0.001 to 0.003 nats
-  ([`planned/2026-09-12-arc-core-token-and-critic.md`](../../../../lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md),
+  ([`failures/2026-09-12-arc-core-token-and-critic.md`](../../../../lab/experiments/failures/2026-09-12-arc-core-token-and-critic.md),
   arm D). A critic asked to tell pass `t` from pass `t-1` through the real coda sat at 0.521
   agreement for 5,000 steps. It is a tie by measurement.
 * A state fitted by gradient descent from history alone is 0.252 nats WORSE than the loop's
@@ -152,7 +152,7 @@ Three measurements, none of them a proxy.
   estimator there is no headroom above one pass at all.
 * The linear signal about the next span is already in the entry state, AUC 0.605 to 0.642
   against a null p95 of 0.513, and the only rise is at pass 1
-  ([`planned/2026-09-12-arc-latent-z-gradient.md`](../../../../lab/experiments/planned/2026-09-12-arc-latent-z-gradient.md),
+  ([`failures/2026-09-12-arc-latent-z-gradient.md`](../../../../lab/experiments/failures/2026-09-12-arc-latent-z-gradient.md),
   step 0).
 
 The account makes one more prediction that is already scored. If the passes add nothing, a
@@ -204,7 +204,7 @@ adds 0.0005 (`coretok`, lane 5).
 **The target is wrong.** Ruled out, after ten targets. The decisive instrument is the
 corrected identical-target grid: held to ONE target, forced depth moves the next-span column
 by **+0.0000** and the six-span column by **+0.0015**
-([`planned/2026-09-12-arc-objective-arms.md`](../../../../lab/experiments/planned/2026-09-12-arc-objective-arms.md)).
+([`failures/2026-09-12-arc-objective-arms.md`](../../../../lab/experiments/failures/2026-09-12-arc-objective-arms.md)).
 The rising per-pass ladder that looked like evidence was the changing target.
 
 **The geometry bypasses the loop.** Ruled out as a cause, though it was a real bypass.
