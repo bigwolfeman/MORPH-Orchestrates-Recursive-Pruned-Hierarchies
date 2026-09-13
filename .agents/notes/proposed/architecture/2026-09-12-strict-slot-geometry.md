@@ -3,7 +3,7 @@
 Status: proposed
 
 Date: 2026-09-12. Record:
-[`lab/experiments/planned/2026-09-12-arc-strict-geometry.md`](../../../../lab/experiments/planned/2026-09-12-arc-strict-geometry.md).
+[`lab/experiments/failures/2026-09-12-arc-strict-geometry.md`](../../../../lab/experiments/failures/2026-09-12-arc-strict-geometry.md).
 Follows [`2026-09-11-span-decoder-target.md`](2026-09-11-span-decoder-target.md) and
 [`2026-09-11-cross-span-budget.md`](2026-09-11-cross-span-budget.md); the latent-z arms of
 [`2026-09-12-latent-z-gradient-loop.md`](2026-09-12-latent-z-gradient-loop.md) are re-pointed
