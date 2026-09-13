@@ -76,7 +76,11 @@ on the CPU fixture at init.
 * **A span decoder that cross-attends to the M cells as a memory.** Considered and
   written down as the alternative to grading the mean. Rejected for this arm on the same
   one-factor grounds: it is a second mechanism. The mean's gradient still reaches every
-  cell.
+  cell. **BUILT as its own arm, 2026-09-13** (`tul.spandec_reads_cells`, arm
+  `slot-register-m4-reader`, one factor against `slot-register-m4`) —
+  [`2026-09-13-register-reader-and-downstream-target.md`](2026-09-13-register-reader-and-downstream-target.md).
+  It is zero-init, so the two arms are bit-identical at step 0 and the pair is clean; it
+  is UNRUN, and it must be read beside `slot-register-m4`, which is also unrun.
 * **More `prefix_k` with the trajectory write** (`prefix_source: trajectory`, the sibling
   build). It gives the coda more cells to read WITHOUT giving the loop more state, and the
   information identity says those cells carry no more than the entry does. Complementary,
