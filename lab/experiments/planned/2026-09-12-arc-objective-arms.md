@@ -407,9 +407,15 @@ already said this column cannot be read as progress. The identical-target readin
 (`spandec_horizon_grid.py`, forced depths 1,2,3,6 × columns h1/h6/exit on the same targets)
 is queued on the Spark (chain C) and is the binding reading of P-2.
 
-**The identical-target grid** (`spandec_horizon_grid.py`, DGX Spark, 480 rows, forced depths
-1/2/3/6, the SAME targets in every column;
-`../results/2026-09-12-instruments/horizon_grid_slot-spandec-strict-perpass.{json,txt}`):
+**The identical-target grid, FIRST RUN — INVALID** (`spandec_horizon_grid.py` at `0c1f042`,
+DGX Spark, 480 rows, forced depths 1/2/3/6;
+`../results/2026-09-12-instruments/horizon_grid_slot-spandec-strict-perpass.{json,txt}`).
+**Do not read this table.** The instrument rebuilt the front with a bare
+`_tul_front(inp, layout)`, so on the strict geometry the prelude ran UNRESTRICTED and
+every state below is off-distribution; the strict ruler's exit column read 4.65 with
+depth making it worse (−0.022) where the shipped forward reads 4.48 and +0.003. Fixed at
+`7a24adf` (one home, `_tul_tg_kwargs`; the grid's test gains a strict twin that the bare
+front fails). The corrected grids (chain D) replace this table when they land.
 
 | target column | d1 | d2 | d3 | d6 | K1−K6 | K3−K6 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -417,9 +423,7 @@ is queued on the Spark (chain C) and is the binding reading of P-2.
 | pass_h6 (next six spans, 48 tokens) | 4.7564 | 4.7607 | 4.7618 | 4.7640 | **−0.0075** [−0.0082, −0.0068] | −0.0022 |
 | exit (the span decoder) | 4.7029 | 4.7094 | 4.7110 | 4.7131 | **−0.0102** [−0.0112, −0.0093] | −0.0021 |
 
-Held to one target, the state after one pass is the BEST state at every horizon, including
-the six-span target the later passes were trained for. The passes do not descend the
-per-pass objective; each one degrades it.
+(Reading withdrawn with the table above; see the corrected grid below when filed.)
 
 **Arm B's heads** read 6.62 nats/token at the tail (7.46 at steps 200–600), against the
 coda's 4.39 on the same tokens: a parallel readout of a whole span from one cell is 2.2
@@ -430,7 +434,7 @@ nats behind the causal read, at every J.
 | P | claim | result |
 | --- | --- | --- |
 | P-1 | per-pass tokens K1−K6 > 0.005 | **FALSE** (0.0008) |
-| P-2 | `spandec_pass_t6` < `t1` by > 0.05 | **FALSE** by the letter (rises 0.19) AND by the binding identical-target reading (below): every extra pass makes the state WORSE at every target |
+| P-2 | `spandec_pass_t6` < `t1` by > 0.05 | **FALSE** by the letter (rises 0.19); the binding identical-target reading is being RE-RUN after the grid's bare-front bug (chain D) |
 | P-3 | per-pass worse than ruler by 0.00–0.05 | **TRUE** (+0.0172) |
 | P-4 | per-pass clears 8,086 tok/s | **FALSE** (4,736), the 65 % case; the floor was OFF on this runner so the arm ran |
 | P-5 | codaspan tokens K1−K6 > 0.005 | **FALSE** (0.0012) |
