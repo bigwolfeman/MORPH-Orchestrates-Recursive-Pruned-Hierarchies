@@ -9,7 +9,7 @@ Arc: [`2026-09-04-loop-contribution-arc.md`](../planned/2026-09-04-loop-contribu
 Evidence it stands on:
 
 * **The two math panels were run under `absmean`.** ARC E16 (Olympiad,
-  [record](../successes/2026-09-08-arc-e16-olympiad-curriculum-panel.md)) read `oly-mask`
+  [record](../failures/2026-09-08-arc-e16-olympiad-curriculum-panel.md)) read `oly-mask`
   **0.18 nats BEHIND** the plain model on clean math, paired, and 2.4 accuracy points behind
   on the answer tokens. ARC E17 (Sudoku-Extreme,
   [record](../successes/2026-09-08-arc-e17-sudoku-depth-grid.md)) read `sud-mask` **0.155**
