@@ -1,0 +1,37 @@
+# Slot-loop panel, arm "slot-spandec-strict-entryexit": the INFORMATION control for
+# `slot-spandec-strict-traj`, and the BINDING one. One factor against
+# `slot-spandec-strict-trajrep`: cell 0 carries the loop's ENTRY state instead of its exit.
+#
+# WHY IT IS BINDING AND NOT OPTIONAL. The Lean result filed 2026-09-13
+# (.agents/notes/proposed/architecture/2026-09-13-information-view-of-the-slot-loop.md,
+# commit 47710fa) gives, for a loop whose passes add no new input,
+#
+#     I((z_1, ..., z_T); Y) = I(z_1; Y)        and        I(z_T; Y) <= I(z_1; Y)
+#
+# so the WHOLE trajectory carries exactly the ENTRY's information about the target, and
+# the exit can only have lost some of it. A trajectory prefix that beats an exit-repeat
+# prefix is therefore ambiguous between two readings: the passes produced something, or
+# the coda is simply reading back what the EXIT threw away. Only the second is cheap, and
+# only this arm separates them. Without it a positive `traj` result is unreadable.
+#
+# THE RULE: cell 0 = z_1 = core_init(e), the state the loop STARTS from, before any pass;
+# cells 1..K-2 = the EXIT; cell K-1 = the EXIT. No pads — the live-cell count is K, the
+# same as `trajrep`, so `entryexit - trajrep` is ONE cell's content and `traj - entryexit`
+# is "cells 1..K-2 carry passes 2..K-1 instead of exit copies". Both pairs are one factor
+# in content with the count, the parameters and `L_total` held fixed.
+#
+# Same `prefix_k` 6 and the same L_total 1408 as both siblings, so the three arms share
+# the tokens-per-row confound against `slot-spandec-strict` (k=2) and none of it against
+# each other.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-trajectory-prefix.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  prefix_k: 6
+  prefix_source: entry_exit
+
+wandb:
+  name: slot-spandec-strict-entryexit

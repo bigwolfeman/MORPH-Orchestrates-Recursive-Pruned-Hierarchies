@@ -128,6 +128,62 @@ class TULConfig:
     """
 
     prefix_k: int = 2                    # coda positions per slot [W] (§3.1)
+    # ── WHAT the prefix cells carry (arms `slot-spandec-strict-traj` / `-trajrep`,
+    #    2026-09-13). "exit" is the shipped write and is BIT-IDENTICAL to the tree before
+    #    this key existed: every one of a slot's `prefix_k` cells holds the loop's EXIT
+    #    state through its own `W_prefix[k]`.
+    #
+    #    THE MEASURED PROBLEM. Twelve slot arms read a token K1-K6 inside
+    #    [-0.0001, +0.0033], and the strict panel found out why: "depth use comes from
+    #    reachability, not from the target" — the only arms whose passes carried anything
+    #    were the forced relays (`prev-reach1` +0.0163). The coda has never been able to
+    #    SEE a pass. It reads one vector, written once, after the loop is over, so pass 4
+    #    can only matter to it by changing that one vector, and the direct measurement
+    #    says one pass changes the coda's CE by 0.001-0.003 nats
+    #    (`critic_gap_traj`, lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md).
+    #
+    #    "trajectory": cell k of a slot (k < prefix_k - 1) carries the state AFTER PASS
+    #    k+1, and the LAST cell always carries the EXIT state, whatever depth the slot
+    #    realised. So every written pass gets its OWN reader and its own direct gradient
+    #    edge, instead of sharing one. A cell whose pass the slot never reached is a PAD:
+    #    its carrier value is zero, it is removed from the coda's key set, and the packer
+    #    already gives it no label (only the LAST cell carries the emit label).
+    #    The exact rule, which is the thing to read before scoring any K-curve here:
+    #      cell k, 0 <= k < K-1 : h_{k+1}, written iff the slot's realised depth >= k + 2
+    #      cell K-1             : h_depth (the exit), always written
+    #    so a slot of depth d writes exactly min(d, K) non-pad cells, the exit is present
+    #    at EVERY forced depth and always in the same cell, and no cell ever holds a
+    #    duplicate of the exit.
+    #
+    #    "entry_exit": the INFORMATION control, and the BINDING one. The Lean result in
+    #    `.agents/notes/proposed/architecture/2026-09-13-information-view-of-the-slot-loop.md`
+    #    says `I((z_1..z_T); Y) = I(z_1; Y)` and `I(z_T; Y) <= I(z_1; Y)`: the whole
+    #    trajectory carries exactly the ENTRY's information and the exit can only have
+    #    lost some of it. So a trajectory prefix that beats an exit-repeat prefix may be
+    #    recovering what the exit THREW AWAY, which is not a loop gain and would read as
+    #    one. This mode hands the coda the entry and the exit and nothing else:
+    #      cell 0            : the ENTRY state z_1 = core_init(e), before any pass
+    #      cells 1 .. K-2    : the EXIT (copies, so the live-cell COUNT is K, as in
+    #                          exit_repeat — no pads, nothing to mask)
+    #      cell K-1          : the EXIT
+    #    That makes two clean one-factor pairs: `entry_exit` minus `exit_repeat` is ONE
+    #    cell's content (the entry instead of the exit), and `trajectory` minus
+    #    `entry_exit` is "cells 1..K-2 carry passes 2..K-1 instead of exit copies". If
+    #    trajectory does not beat entry_exit, the trajectory bought nothing the entry did
+    #    not already have.
+    #
+    #    "exit_repeat": the CONTENT control. Every cell holds the exit, exactly as "exit"
+    #    does, but the per-cell pass-index embedding `E_pass` is built and added the same
+    #    way "trajectory" adds it. So `trajectory` minus `exit_repeat` isolates WHAT the
+    #    cells carry with the cell COUNT, the parameter count and the embedding held
+    #    fixed. At init (`E_pass` is zeros) `exit_repeat` is bit-identical to `exit` at
+    #    the same `prefix_k`; after a step it is not, which is why it is its own value
+    #    and not a comment telling somebody to reuse "exit".
+    #
+    #    A trajectory model needs a coda ALLOW relation to cut its pad cells out of, so
+    #    it is refused without `tg_geometry: strict` or `tg_restrict`.
+    #    Record: lab/experiments/planned/2026-09-13-arc-trajectory-prefix.md
+    prefix_source: str = "exit"          # "exit" | "trajectory" | "exit_repeat"
     slot_id: int = 4                     # "<fim_pad>"; its LM-head logit is −inf (§3.1)
     token_state_dropout: float = 0.15    # Bowman word dropout on the coda input (§3.4)
     slot_mean_depth: int = 0             # 0 → cfg.mean_depth
@@ -137,6 +193,44 @@ class TULConfig:
                                          # 2026-09-07); 0 → the per-slot Poisson draw
     coda_sees_slots: bool = True         # A4 sets False (§7.1)
     tokens_through_core: bool = False    # A2 sets True (§7.1)
+    # ── THE LOOP READS TOKENS (arm `slot-spandec-strict-tokloop`, 2026-09-13) ──────
+    # False is the shipped slot loop and is BIT-IDENTICAL to the tree before this key.
+    #
+    # True runs the SHIPPED core stage over EVERY position — the row's tokens and its
+    # slot cells in ONE sequence, the per-SAMPLE Poisson depth `_core_region` already
+    # draws — under the SPAN-RESTRICTED relation `causal AND (same span OR j is a slot
+    # cell)` (`MORPHTransformer._core_token_aux_kwargs`, the ONE home; the same relation
+    # `tul.core_token_aux` trains its aux core under). So a token reads its own span's
+    # tokens and reaches every EARLIER span only through a slot cell: the slot cells are
+    # still the only thing that crosses a span boundary, at inference as in training.
+    #
+    # This is NOT the paid loop. The paid loop (`tokens_through_core`) runs the core
+    # UNRESTRICTED over the packed row, so every token reads every earlier token directly
+    # and the slot cells carry nothing anyone needs. Here the restriction is the point.
+    #
+    # WHY. `tul.core_token_aux` gave the shared core the token objective in TRAINING only
+    # and the passes still read 0.0005 nats: the core became a 1.10-nat-better token map
+    # and the slot loop through those same six blocks was unmoved
+    # (lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md). The verdict there
+    # was "the core is not under-trained, it is under-USED". This arm is the other half
+    # of Wolfe's 2026-09-12 sentence, promoted from an auxiliary to the forward: the loop
+    # READS the tokens on every pass, so a pass has something new to look at, which the
+    # reread arm (`tul.reread`, a frozen K/V read of the prelude) approximated and read
+    # flat at K1-K6 +0.0003.
+    #
+    # THE CELLS GO STRAIGHT INTO THE CODA. There is no `prefix_project` write: a cell's
+    # looped state is already AT its own position when the core returns, so writing it
+    # through `W_prefix` would be a second copy of a tensor that is already there. `z`
+    # (the state the span decoder and the MUX grade) is `gather_valid` at the slot's
+    # FIRST cell, the same seam every other arm reads.
+    #
+    # There is no per-slot depth and no per-pass trajectory here, so every knob that
+    # needs one is REFUSED at construction rather than silently ignored: `prefix_source`,
+    # the staged / per-pass / oracle / critic / grad-pass family, `slot_depth_fixed`,
+    # `slot_mean_depth`, `plan_mode` at eval. Forced-depth eval goes through
+    # `model.cfg.mean_depth`, exactly as it does for the plain model and the paid loop.
+    # Record: lab/experiments/planned/2026-09-13-arc-loop-reads-tokens.md
+    loop_reads_tokens: bool = False
     stp_lambda: float = 0.0              # arm (§3.5) — asserted 0 until implemented
     set_lambda: float = 0.0              # arm (§3.5) — asserted 0 until implemented
     carry: bool = False                  # arm (§3.5)
@@ -936,6 +1030,93 @@ class TULConfig:
     def __post_init__(self) -> None:
         if self.prefix_k < 1:
             raise ValueError(f"tul.prefix_k must be ≥ 1, got {self.prefix_k}")
+        if self.prefix_source not in ("exit", "trajectory", "exit_repeat", "entry_exit"):
+            raise ValueError(
+                f"tul.prefix_source must be 'exit', 'trajectory', 'exit_repeat' or "
+                f"'entry_exit', got {self.prefix_source!r}")
+        if self.prefix_source != "exit":
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    f"tul.prefix_source={self.prefix_source!r} with tul.tokens_through_core: "
+                    "the paid loop writes no prefix cell at all (TULSlots has no W_prefix "
+                    "there), so there is nothing for a per-cell source to select. Raises "
+                    "rather than silently writing the exit everywhere.")
+            if self.loop_reads_tokens:
+                raise NotImplementedError(
+                    f"tul.prefix_source={self.prefix_source!r} with tul.loop_reads_tokens: "
+                    "that mode has no prefix write either — a cell's looped state is "
+                    "already AT its own position when the core returns — and no per-slot "
+                    "trajectory (`_core_region` draws ONE depth per sample). Raises rather "
+                    "than picking a behaviour neither arm asked for.")
+            if self.db_loop:
+                raise NotImplementedError(
+                    f"tul.prefix_source={self.prefix_source!r} with tul.db_loop is not "
+                    "defined: db_loop DETACHES the carry, so 'the state after pass k' is "
+                    "not on one graph with the exit and the per-cell gradient edges this "
+                    "arm exists to create would not exist.")
+        if self.prefix_source in ("trajectory", "entry_exit") and self.prefix_k < 2:
+            raise ValueError(
+                f"tul.prefix_source={self.prefix_source!r} needs tul.prefix_k >= 2: at "
+                f"k = 1 the only cell is the exit cell and the mode is exactly 'exit'.")
+        if self.prefix_source == "trajectory":
+            if self.tg_geometry != "strict" and not self.tg_restrict:
+                raise NotImplementedError(
+                    "tul.prefix_source='trajectory' needs a coda ALLOW relation "
+                    "(tul.tg_geometry='strict' or tul.tg_restrict=true): a slot whose "
+                    "realised depth does not reach cell k leaves that cell a PAD, and the "
+                    "pad is cut out of the coda's key set by narrowing that relation. With "
+                    "no relation to narrow, every later token would attend a zero cell and "
+                    "read the pad pattern as content. Raises rather than building an "
+                    "unmasked pad.")
+        if self.loop_reads_tokens:
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.loop_reads_tokens with tul.tokens_through_core is two names for "
+                    "one forward with two different attention relations. The paid loop "
+                    "runs the core UNRESTRICTED over the packed row; this mode runs it "
+                    "under `causal AND (same span OR a slot cell)`, which is the whole "
+                    "arm. Turn the paid loop off.")
+            if self.core_token_aux:
+                raise NotImplementedError(
+                    "tul.loop_reads_tokens with tul.core_token_aux is the SAME forward "
+                    "twice: the aux exists to send the tokens through the core in TRAINING "
+                    "only, and this mode already sends them through in the shipped path.")
+            if not (self.coda_sees_slots and self.coda_token_cut == 0):
+                raise NotImplementedError(
+                    "tul.loop_reads_tokens needs the FULL-AXIS coda (coda_sees_slots=true, "
+                    "coda_token_cut=0): the cells continue into the coda AS POSITIONS, and "
+                    "arm A4 / arm CW run the coda on a gathered subset those positions are "
+                    "not in.")
+            if self.detach_z:
+                raise NotImplementedError(
+                    "tul.loop_reads_tokens with tul.detach_z is not defined: detach_z cuts "
+                    "the token CE's edge into the loop at the prefix WRITE, and this mode "
+                    "has no write — the coda reads the looped carrier itself.")
+            if self.bcast:
+                raise NotImplementedError(
+                    "tul.loop_reads_tokens with tul.bcast is not defined: the unpack adds "
+                    "z to the coda input of the NEXT span's tokens, and those token "
+                    "positions have already been through the core beside the cell it would "
+                    "read. Not specified, so this raises.")
+            _lrt_refuse = [
+                n for n in ("mux_every_pass", "mux_stage_all", "oracle_z",
+                            "spandec_per_pass", "grad_pass", "slot_chain", "reread",
+                            "progressive_p", "mux_stage_own_iters", "slot_depth_fixed",
+                            "slot_mean_depth", "pass_lora_rank", "loop_reach",
+                            "pass_residual_lambda", "db_loop")
+                if getattr(self, n)]
+            if _lrt_refuse:
+                raise NotImplementedError(
+                    f"tul.loop_reads_tokens with {sorted(_lrt_refuse)}: every one of those "
+                    "needs the SLOT LOOP's per-slot depth table or its per-pass trajectory, "
+                    "and this mode runs `_core_region`'s per-SAMPLE Poisson draw with no "
+                    "trajectory returned. Raises rather than running the arm with the knob "
+                    "silently inert.")
+            if self.gate is not None:
+                raise NotImplementedError(
+                    "tul.gate with tul.loop_reads_tokens: §4 reads a span length off the "
+                    "core's PER-SLOT per-iteration trajectory and this mode returns none "
+                    "(the tokens_through_core precedent).")
         # 1.0 is legal and meaningful: it is Bowman 2015's INPUTLESS decoder control
         # (every token state replaced by E_mask), the extreme end of the §3.4 arm sweep.
         if not 0.0 <= self.token_state_dropout <= 1.0:
@@ -2134,6 +2315,16 @@ class TULSlots(nn.Module):
         if with_prefix:
             eye = torch.eye(d_model).unsqueeze(0).repeat(tul.prefix_k, 1, 1)
             self.W_prefix = nn.Parameter(eye)
+        # E_pass [prefix_k, d] — the per-cell PASS-INDEX embedding, built only when
+        # `tul.prefix_source` is not "exit". Init ZERO and RNG-neutral (no draw), so an
+        # `exit_repeat` model is bit-identical to an `exit` model at the same `prefix_k`
+        # at step 0 and differs only once the optimiser has moved it. Its job: under
+        # "trajectory" cell k holds the state after pass k+1 and cell K-1 holds the exit,
+        # and `W_prefix[k]` alone starts identical for every k, so without this the coda
+        # has no way to tell "pass 2" from "the exit" until the projections separate.
+        self.E_pass: nn.Parameter | None = None
+        if tul.prefix_source != "exit":
+            self.E_pass = nn.Parameter(torch.zeros(tul.prefix_k, d_model))
         # W_bcast [bound_span_cap, d, d] — the unpack (spec §3.5 `bcast`; TULConfig.bcast).
         # Init ZERO, so at step 0 the coda input is exactly the no-bcast one and the arm
         # differs from its control by trainable parameters alone. RNG-neutral (no draw).
@@ -2287,13 +2478,23 @@ class TULSlots(nn.Module):
             at_pos = at_pos + self._e_slot_term(layout.bag_id, signal.dtype)
         return torch.where(layout.slot_mask.unsqueeze(-1), at_pos, signal)
 
-    def prefix_project(self, h_slots: Tensor, layout: SlotLayout, l_total: int) -> Tensor:
+    def prefix_project(self, h_slots: Tensor, layout: SlotLayout, l_total: int,
+                       cells: Tensor | None = None) -> Tensor:
         """``[B, S, …, C]`` looped states → ``[B, S·prefix_k]`` values and their positions.
 
         Returns ``(values, index)`` ready for :func:`scatter_positions`: value ``k`` of
         slot ``s`` is ``h_s W_k`` and lands at ``slot_index[s] + k``. Invalid slots address
         the dump row. Spec §3.1: the first ``prefix_k − 1`` positions carry the plan with
         NO label, the last one predicts the first token of the next span.
+
+        ``cells`` ``[B, S, K, …, C]`` (``tul.prefix_source`` != "exit") gives each cell its
+        OWN source state — under "trajectory" cell ``k`` carries the state after pass
+        ``k+1`` and the last cell carries the exit; under "exit_repeat" every entry is the
+        exit. Each still goes through its own ``W_prefix[k]``, so the projection is the
+        shipped one and the arm differs by WHAT is projected. ``None`` — every model
+        before this parameter existed — broadcasts ``h_slots`` to every cell, which is
+        the identical arithmetic to the old body and is asserted bit-exact in
+        ``tests/test_tul_prefix_source.py``.
         """
         K = self.tul.prefix_k
         B, S = layout.slot_index.shape
@@ -2305,9 +2506,23 @@ class TULSlots(nn.Module):
                 "model or an FM planner (TULSlots(with_prefix=True)); the paid loop "
                 "(tul.tokens_through_core) has no projection to write through.")
         w = self.W_prefix.to(h_slots.dtype)
-        # [B,S,M,C] ⊗ [K,C,C] → [B,S,K,M,C] by broadcast matmul (batch dims (B,S,1)×(1,1,K)).
-        hm = h_slots.reshape(B, S, -1, C)
-        proj = torch.matmul(hm.unsqueeze(2), w.view(1, 1, K, C, C))
+        if cells is None:
+            # [B,S,M,C] ⊗ [K,C,C] → [B,S,K,M,C] by broadcast matmul (batch dims
+            # (B,S,1)×(1,1,K)).
+            hm = h_slots.reshape(B, S, -1, C)
+            proj = torch.matmul(hm.unsqueeze(2), w.view(1, 1, K, C, C))
+        else:
+            if cells.shape[:3] != (B, S, K) or cells.shape[3:] != h_slots.shape[2:]:
+                raise ValueError(
+                    f"prefix_project cells {tuple(cells.shape)} must be [B, S, K, *carrier] "
+                    f"= {(B, S, K, *h_slots.shape[2:])}")
+            # The same per-cell projection, with a per-cell SOURCE: [B,S,K,M,C] ⊗ [K,C,C].
+            cm = cells.reshape(B, S, K, -1, C)
+            proj = torch.matmul(cm, w.view(1, 1, K, C, C))
+        if self.E_pass is not None:
+            # Broadcast over (B, S) and over the carrier's stream axis: one vector per
+            # CELL INDEX, zero-init, so this line is an exact no-op at step 0.
+            proj = proj + self.E_pass.to(proj.dtype).view(1, 1, K, *([1] * (proj.dim() - 4)), C)
         values = proj.reshape(B, S * K, *mid, C)       # slot-major: index s·K + k
         offs = torch.arange(K, device=layout.slot_index.device)
         pos = layout.slot_index.unsqueeze(-1) + offs                      # [B, S, K]

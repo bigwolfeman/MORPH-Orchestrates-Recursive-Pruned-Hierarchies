@@ -117,9 +117,9 @@ def test_prefix_project_receives_the_substituted_tensor():
         _out, z_loop, _h0 = split.record(x, y, layout)
         real = split._real["prefix"]
 
-        def spy(h_slots, lay, l_total):
+        def spy(h_slots, lay, l_total, cells=None):
             seen.append(h_slots)
-            return real(h_slots, lay, l_total)
+            return real(h_slots, lay, l_total, cells=cells)
         split._real["prefix"] = spy
         z = z_loop.clone()
         split.replay(x, y, layout, z)
@@ -133,7 +133,7 @@ def test_a_transformed_z_is_refused():
     with mod.ZSplit(model, amp=False) as split:
         _out, z_loop, _h0 = split.record(x, y, layout)
         real = split._real["prefix"]
-        split._real["prefix"] = lambda h, lay, lt: real(h, lay, lt)
+        split._real["prefix"] = lambda h, lay, lt, cells=None: real(h, lay, lt, cells=cells)
         # simulate a stage between _tul_core and prefix_project
         orig = model._tul_plan_ablate
         model._tul_plan_ablate = lambda h, lay, mode: h * 1.0

@@ -151,14 +151,14 @@ class ZSplit:
             st["groups"], st["xh"] = r, x
             return r
 
-        def prefix(h_slots, layout, l_total):
+        def prefix(h_slots, layout, l_total, cells=None):
             if (st["mode"] == "replay" and st["plan_mode"] == "normal"
                     and h_slots is not st["z"]):
                 raise RuntimeError(
                     "prefix_project did not receive the substituted z — something "
                     "between the _tul_core return and the prefix write transformed it, "
                     "so the split point is NOT where this probe assumes it is")
-            return self._real["prefix"](h_slots, layout, l_total)
+            return self._real["prefix"](h_slots, layout, l_total, cells=cells)
 
         m._tul_front, m._tul_core, m._tul_group_losses = front, core, groups
         m.tul.prefix_project = prefix

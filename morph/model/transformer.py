@@ -1356,9 +1356,15 @@ class MORPHTransformer(nn.Module):
                 "the core loop and writes its plans through W_prefix; the paid loop runs the "
                 "core over every position and has no projection. Pick one (tul_fm1.yaml sets "
                 "tokens_through_core: false).")
-        # W_prefix only where something writes through it (TULSlots.__init__).
+        # W_prefix only where something writes through it (TULSlots.__init__). The paid
+        # loop and `tul.loop_reads_tokens` both leave a cell's looped state AT its own
+        # position, so neither has a projection to write through; the FM planner writes
+        # its plans through one, so it always gets it.
+        _wants_prefix = cfg.tul is not None and (
+            (cfg.fm is not None)
+            or not (cfg.tul.tokens_through_core or cfg.tul.loop_reads_tokens))
         self.tul: TULSlots | None = (
-            TULSlots(d, cfg.tul, with_prefix=(cfg.fm is not None) or not cfg.tul.tokens_through_core)
+            TULSlots(d, cfg.tul, with_prefix=_wants_prefix)
             if cfg.tul is not None else None)
         # The gate is built AFTER TULSlots for the same reason and with the same
         # discipline: every one of its inits is a deterministic zero/one, so building it
@@ -1556,6 +1562,29 @@ class MORPHTransformer(nn.Module):
                     "defined: the planner REPLACES the core loop (n_core == 0 is a build "
                     "precondition there), so there is no core for the tokens to be sent "
                     "through and no shared weights for the aux CE to train.")
+
+        # ── The loop reads tokens (TULConfig.loop_reads_tokens) ───────────────────
+        # Builds NOTHING: it runs `_core_region` — weights that already exist — over the
+        # packed row instead of over the gathered slot cells, so an arm with the knob on
+        # holds byte-identical weights to its ruler. The config-only refusals live in
+        # `TULConfig.__post_init__`; the three below need the MODEL's shape.
+        if cfg.tul is not None and cfg.tul.loop_reads_tokens:
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.loop_reads_tokens needs a core loop (model.n_core > 0): the arm's "
+                    "whole content is which positions the core runs over, and a coreless "
+                    "model runs it over none.")
+            if getattr(cfg, "fm", None) is not None:
+                raise NotImplementedError(
+                    "tul.loop_reads_tokens with an FM planner (tul.fm / cfg.fm) is not "
+                    "defined: the planner REPLACES the core loop (n_core == 0 is a build "
+                    "precondition there), so there is no core for the tokens to run "
+                    "through.")
+            if cfg.scse_enabled:
+                raise NotImplementedError(
+                    "tul.loop_reads_tokens under SCSE is not defined: SCSE's core is "
+                    "source-free and its carrier is the DEVIATION, and nothing specifies "
+                    "what a token position's deviation from its own anchor means here.")
 
         # ── The slot chain (TULConfig.slot_chain) ─────────────────────────────────
         # Zero-init, no RNG draw: step 0 is the ruler's forward bit for bit.
@@ -3363,8 +3392,25 @@ class MORPHTransformer(nn.Module):
         # detached at the label site, never here — the trajectory is the same live-carry
         # list every other per-pass reader uses.
         _cr = isinstance(self.tul_egrad, CriticEnergy) and self.training
-        _db_traj: list[Tensor] | None = ([h] if (_db or _stage or _mep or _oz or _pp or _cr)
-                                         else None)
+        # `tul.prefix_source="trajectory"` reads the SAME live-carry trajectory, and is the
+        # ONE reader of it that is NOT training-only: the cells it fills are what the coda
+        # sees, so an eval forward — the forced-depth sweep, `worth_profile`,
+        # `slot_z_optimize`, generation — must build the identical list or it would score a
+        # different model from the one that trained. Under SCSE the carry is the DEVIATION,
+        # so a per-pass cell would hold a deviation and not a slot state: refused at
+        # construction (MORPHTransformer.__init__), asserted here.
+        # `entry_exit` reads index 0 of the SAME list — the entry state `core_init(e)` the
+        # information control hands the coda beside the exit — so it turns the same
+        # collection on rather than stashing the entry somewhere else.
+        _traj_src = self.cfg.tul.prefix_source in ("trajectory", "entry_exit")
+        if _traj_src and _scse is not None:
+            raise NotImplementedError(
+                "tul.prefix_source='trajectory'/'entry_exit' under SCSE is not defined: "
+                "the loop carries "
+                "the DEVIATION, so cell k would hold Delta_k and not the slot state the "
+                "coda is meant to read (the db_loop / mux_stage_own_iters precedent).")
+        _db_traj: list[Tensor] | None = (
+            [h] if (_db or _stage or _mep or _oz or _pp or _cr or _traj_src) else None)
         # Per-pass MUX: entry t-1 is the mask for `_db_traj[t]` — the slots whose realised
         # depth REACHES pass t and whose pass t carries gradient (a progressive prefix pass
         # is excluded: it is detached, so a term there would train nothing and still be
@@ -5457,6 +5503,10 @@ class MORPHTransformer(nn.Module):
         # a candidate state differs from the shipped coda in that write and nothing else.
         # None on the paid loop and the FM planner, both of which the critic refuses.
         _critic_base = None
+        # `tul.prefix_source="trajectory"`'s PAD cells at their row positions, or None on
+        # every other model. Bound here rather than in the slot-loop branch because the
+        # coda's key set is narrowed after the branch dispatch, beside `all_slots`.
+        _pad_pos = None
         if tc.tokens_through_core:
             # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
             # RESOLVED SPEC AMBIGUITY — §7.1's A2 row says "Poisson/slot" in the depth
@@ -5481,6 +5531,64 @@ class MORPHTransformer(nn.Module):
             spandec_loss, spandec_stats, _egrad_src = None, {}, None
             oracle_z_loss, oracle_z_stats = None, {}
             spandec_pass_loss, spandec_pass_stats = None, {}
+            db_traj = mep_keep = None
+        elif tc.loop_reads_tokens:
+            # ── THE LOOP READS TOKENS (tul.loop_reads_tokens, 2026-09-13) ───────────
+            # The SHIPPED core stage over EVERY position — tokens and slot cells in ONE
+            # sequence, `_core_region`'s per-SAMPLE Poisson depth — under the SPAN
+            # relation `causal AND (same span OR j is a slot cell)`. No second core is
+            # written: this is the same `_core_region` the plain model, the paid loop and
+            # `tul.core_token_aux` run, and the same `_core_token_aux_kwargs` relation the
+            # aux runs under, which is why that method is a named method with ONE home.
+            #
+            # WHAT IS DIFFERENT FROM THE PAID LOOP, in one line: the paid loop's core is
+            # UNRESTRICTED, so a token reads every earlier token directly and the cells
+            # carry nothing anybody needs. Here a token reaches an earlier span ONLY
+            # through a slot cell, at inference as in training, so the cells are still the
+            # whole cross-span channel and the loop is what fills them.
+            #
+            # NO PREFIX WRITE. A cell's looped state is already AT its own position when
+            # the core returns, so `prefix_project` would scatter a second copy of a
+            # tensor that is already there and `W_prefix` would sit between the loop and
+            # the coda for no reason. `z` — what the span decoder and the MUX grade — is
+            # `gather_valid` at the slot's FIRST cell, the same seam every other arm
+            # reads, so `spandec_ce` stays comparable across the family.
+            if plan_mode != "normal":
+                raise ValueError(
+                    f"plan_mode={plan_mode!r} with tul.loop_reads_tokens: there is no "
+                    f"separate plan tensor to zero or shuffle — the cell IS a looped "
+                    f"position, exactly as on the paid loop. Raises rather than reporting "
+                    f"a plan_worth that is zero by construction.")
+            if halt:
+                raise NotImplementedError(
+                    "halt=True with tul.loop_reads_tokens: the gate stops a PER-SLOT loop "
+                    "and this mode runs one per-sample depth over the whole row.")
+            if slot_depths is not None:
+                raise NotImplementedError(
+                    "slot_depths with tul.loop_reads_tokens: the core here is per-SAMPLE, "
+                    "so a per-slot depth table would be ignored. Force model.cfg.mean_depth "
+                    "instead (the tokens_through_core rule; lab/divergence/_build.py's "
+                    "DepthLever and core_depth_sweep.py already do).")
+            pad_pos = layout.slot_mask & (layout.bag_id == layout.max_slots)
+            x_coda = self._core_region(x, x0, bigram_emb, input_ids,
+                                       attn_kwargs=self._core_token_aux_kwargs(layout),
+                                       jac_active=~pad_pos)
+            h_slots = gather_valid(x_coda, layout.slot_index, layout.slot_valid)
+            depths, g_traj, gain_reg = None, None, None
+            db_traj = mep_keep = None
+            fm_y = fm_geom = fm_ctx = None
+            oracle_z_loss, oracle_z_stats = None, {}
+            spandec_pass_loss, spandec_pass_stats = None, {}
+            mux_stats = {}
+            mux_loss = (self._tul_mux_loss(h_slots, input_ids, layout, stats=mux_stats)
+                        if tc.mux_beta > 0.0 else None)
+            spandec_stats = {}
+            spandec_loss = (self._tul_spandec_loss(h_slots, input_ids, layout,
+                                                   stats=spandec_stats)
+                            if self.tul_spandec is not None else None)
+            sigreg_loss = (self._tul_sigreg_loss(h_slots, layout)
+                           if tc.sigreg_lambda > 0.0 else None)
+            _egrad_src = None
         elif self.fm_planner is not None:
             # FM1 (morph/model/tul_fm.py). The planner replaces the core loop; the plan
             # is DETACHED before it reaches W_prefix, so the coda's CE never touches the
@@ -5685,8 +5793,34 @@ class MORPHTransformer(nn.Module):
             # Same eval-only ablation the FM branch takes, applied at the same seam.
             # `normal` returns its input unchanged, so the training forward is
             # bit-identical to a model with no ablation code at all.
-            h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
-            values, pos = self.tul.prefix_project(h_slots, layout, L)
+            #
+            # `tul.prefix_source` (2026-09-13): at "exit" — every model before the knob —
+            # `_cells` stays None, `prefix_project` takes its old single-source path and
+            # this block is the one that has always been here. Otherwise each cell gets its
+            # own source state and the ablation is applied to the STACK, with the exit cell
+            # read back off it so a `shuffle` draws ONE permutation, not two.
+            _cells = _pad_cells = _pad_pos = None
+            if tc.prefix_source != "exit":
+                _cells, _pad_cells, _pad_pos = self._tul_prefix_cells(
+                    h_slots, db_traj, depths, layout)
+                _cells = self._tul_plan_ablate(_cells, layout, plan_mode)
+                h_slots = _cells[:, :, -1]
+            else:
+                h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
+            values, pos = self.tul.prefix_project(h_slots, layout, L, cells=_cells)
+            if _pad_cells is not None:
+                # A PAD cell's carrier is EXACTLY zero, `E_pass` included. Zeroing the
+                # SOURCE state is not enough: `prefix_project` adds the per-cell embedding
+                # AFTER the projection, so a pad would otherwise carry `E_pass[k]` — a
+                # learned constant that says how deep the slot went. Cutting it out of the
+                # coda's key set does not cut it out of the CCA causal conv or the
+                # `W_v_prev` value shift, which run inside a slot's own segment and carry
+                # cell k into cell k+1..K-1 including the EXIT cell. Measured before the
+                # fix: `E_pass.grad.abs().sum()` 7407 on a fixture whose cells are almost
+                # all pads, against 0.25 on the exit_repeat twin.
+                _pv = (~_pad_cells).reshape(values.shape[0], -1,
+                                            *([1] * (values.dim() - 2)))
+                values = values * _pv.to(values.dtype)
             # coda_token_input (TULConfig): "prelude" = xn, the prelude's OUTPUT at every
             # position (the shipped §3.4 path); "embed" = the prelude's INPUT carrier,
             # x0 (the embedding after embed dropout) expanded to the HC streams and put
@@ -5727,6 +5861,10 @@ class MORPHTransformer(nn.Module):
         if plan_mode == "all_slots":
             _coda_kw, keep = self._tul_all_slots_coda(x_coda, layout, tc, keep,
                                                       tg_attn_kwargs)
+        if _pad_pos is not None:
+            # The trajectory arm's PAD cells leave the coda's key set. AFTER `all_slots`
+            # so the two narrowings compose rather than one replacing the other.
+            _coda_kw = self._tul_pad_cell_narrow(_coda_kw, _pad_pos)
 
         out: dict = {"logits": None}
         if tc.coda_sees_slots and tc.coda_token_cut == 0:
@@ -6053,6 +6191,149 @@ class MORPHTransformer(nn.Module):
         x_tok = gather_positions(xh, cidx)
         lab_tok = torch.where(valid, gather_positions(labels, cidx), labels.new_full((), -100))
         return x_tok, lab_tok
+
+    def _tul_prefix_cells(self, h_slots: Tensor, db_traj: list[Tensor] | None,
+                          depths: Tensor, layout: SlotLayout
+                          ) -> tuple[Tensor, Tensor, Tensor]:
+        """``tul.prefix_source`` != "exit": one SOURCE STATE per coda cell.
+
+        Returns ``(cells, pad_cell, pad_pos)``:
+
+        * ``cells`` ``[B, S, K, …, C]`` — the state cell ``k`` of slot ``s`` is written
+          from, before :meth:`TULSlots.prefix_project` puts it through ``W_prefix[k]``;
+        * ``pad_cell`` ``[B, S, K]`` bool — True where that cell is a PAD (no pass reached
+          it), its ``cells`` entry already zeroed;
+        * ``pad_pos`` ``[B, L]`` bool — the same flags at their ROW positions, which is
+          what :meth:`_tul_pad_cell_narrow` cuts out of the coda's key set.
+
+        THE RULE (``trajectory``), stated once and tested in
+        ``tests/test_tul_prefix_source.py``:
+
+        ===============  ==============================  ==========================
+        cell             source                          written iff
+        ===============  ==============================  ==========================
+        ``k < K − 1``    ``h_{k+1}`` (after pass k+1)     realised depth ``≥ k + 2``
+        ``k = K − 1``    ``h_depth`` — the EXIT           always (a valid slot)
+        ===============  ==============================  ==========================
+
+        So a slot of realised depth ``d`` writes exactly ``min(d, K)`` non-pad cells, the
+        EXIT is present at every forced depth and always in the SAME cell, and no cell
+        ever duplicates the exit (``d = k + 1`` would put the exit in cell ``k``, and the
+        ``≥ k + 2`` test is what excludes it). A slot of depth 1 therefore writes ONE
+        cell, the last.
+
+        ``exit_repeat`` writes the exit into every cell and pads nothing — the matched-count,
+        matched-parameter control for the content question.
+
+        ``entry_exit`` writes the ENTRY state ``z_1 = core_init(e)`` into cell 0 and the
+        EXIT into every other cell, and pads nothing. It is the BINDING control, for an
+        information reason rather than a capacity one: the Lean result in
+        ``.agents/notes/proposed/architecture/2026-09-13-information-view-of-the-slot-loop.md``
+        gives ``I((z_1..z_T); Y) = I(z_1; Y)`` and ``I(z_T; Y) <= I(z_1; Y)``, so the whole
+        trajectory carries exactly the entry's information and the exit can only have lost
+        some of it. A trajectory prefix that beats an exit-repeat prefix may therefore be
+        recovering what the EXIT threw away, which is not a loop gain. ``entry_exit`` minus
+        ``exit_repeat`` is ONE cell's content; ``trajectory`` minus ``entry_exit`` is
+        "cells 1..K-2 carry passes 2..K-1 instead of exit copies".
+
+        ``pad_cell`` and ``pad_pos`` are returned as ``None`` in every mode that pads
+        nothing, so the caller's masking and zeroing are Python-level branches that trace
+        out rather than all-False tensor work on the hot path.
+
+        ``db_traj`` entry ``t`` is the carrier AFTER iteration ``t−1`` with finished slots
+        already frozen (``_tul_core``'s ``h = where(active, h_new, h)``), so a finished
+        slot's later entries hold its exit; the ``≥ k + 2`` test is what keeps those out.
+        A batch whose deepest slot stops short of ``K − 1`` leaves the list short — every
+        cell past it is a pad for every slot in the batch, so the index is clamped and the
+        value masked, never raised on.
+
+        ``plan_mode="shuffle"``: the caller ablates ``cells`` and leaves ``pad_cell``
+        alone, so the pad PATTERN stays with the position while the content moves. That is
+        what shuffle is for — destroy the correspondence, change nothing else — and it is
+        recorded here rather than discovered from a worth profile.
+        """
+        tc = self.cfg.tul
+        K = tc.prefix_k
+        B, S = layout.slot_index.shape
+        valid = layout.slot_valid                                  # [B, S]
+        if tc.prefix_source == "exit_repeat":
+            return h_slots.unsqueeze(2).expand(B, S, K, *h_slots.shape[2:]), None, None
+        if tc.prefix_source == "entry_exit":
+            if db_traj is None:
+                raise RuntimeError(
+                    "tul.prefix_source='entry_exit' reached the write with no trajectory: "
+                    "`_tul_core` returns one whenever the knob is set, so this is a core "
+                    "stage that never ran it (tul_step_mode='db1' or the Euler ladder).")
+            # `db_traj[0]` IS the entry: `_tul_core` seeds the list with `core_init(e)`
+            # before the first pass, and nothing else writes index 0.
+            ee = torch.stack([db_traj[0]] + [h_slots] * (K - 1), dim=2)
+            return ee, None, None
+        if tc.prefix_source == "trajectory":
+            if db_traj is None:
+                raise RuntimeError(
+                    "tul.prefix_source='trajectory' reached the write with no trajectory: "
+                    "`_tul_core` returns one whenever the knob is set, so this is a core "
+                    "stage that never ran it (tul_step_mode='db1' or the Euler ladder). "
+                    "Raises rather than writing the exit into every cell under the "
+                    "trajectory arm's name.")
+            zeros = torch.zeros_like(h_slots)
+            src: list[Tensor] = []
+            pads: list[Tensor] = []
+            for k in range(K - 1):
+                written = valid & (depths >= k + 2)                 # [B, S]
+                st = db_traj[k + 1] if k + 1 < len(db_traj) else zeros
+                _v = written.view(B, S, *([1] * (h_slots.dim() - 2)))
+                src.append(torch.where(_v, st, zeros))
+                pads.append(~written)
+            src.append(h_slots)                                     # the EXIT cell
+            pads.append(~valid)
+            cells = torch.stack(src, dim=2)                         # [B, S, K, …, C]
+            pad_cell = torch.stack(pads, dim=2)                     # [B, S, K]
+        else:
+            raise ValueError(f"_tul_prefix_cells called at prefix_source={tc.prefix_source!r}")
+        # The same flags at ROW positions. Invalid slots address the dump row exactly as
+        # `prefix_project` sends them there, so a tail-pad slot's physical cells are not
+        # touched here — under the strict/restrict coda they already carry the dump bin's
+        # `bag_id` and no token may read them.
+        L = layout.l_total
+        offs = torch.arange(K, device=h_slots.device)
+        pos = layout.slot_index.unsqueeze(-1) + offs                # [B, S, K]
+        pos = torch.where(valid.unsqueeze(-1), pos, torch.full_like(pos, L))
+        pad_pos = torch.zeros(B, L + 1, dtype=torch.bool, device=h_slots.device)
+        pad_pos.scatter_(1, pos.reshape(B, S * K),
+                         (pad_cell & valid.unsqueeze(-1)).reshape(B, S * K))
+        return cells, pad_cell, pad_pos[:, :L]
+
+    @staticmethod
+    def _tul_pad_cell_narrow(kw: dict | None, pad_pos: Tensor) -> dict:
+        """Remove the PAD cells of a ``prefix_source="trajectory"`` row from the key set.
+
+        A pad cell carries a zero carrier and no label, but zero is CONTENT to attention:
+        without this a later token would attend every pad and read the depth draw's own
+        pattern. So the coda's allow relation is narrowed on the KEY axis, both branches
+        (``tg_allow`` and ``tg_comp_allow`` — one relation, two branches, the F1 defect
+        class).
+
+        The DIAGONAL is kept. A pad cell's own query row would otherwise be empty on the
+        compressed branch (which keeps ``j == i``), and an all-``-inf`` softmax row is 0
+        under SDPA and NaN under an explicit one (morph/model/CLAUDE.md). Nothing reads a
+        pad cell's output — it is masked out of every other query's keys and carries no
+        label — so keeping its self-edge costs nothing and removes a NaN class.
+        """
+        if kw is None or not any(kw.get(k) is not None for k in ("tg_allow", "tg_comp_allow")):
+            raise RuntimeError(
+                "tul.prefix_source='trajectory' needs a coda allow relation to cut its pad "
+                "cells out of; this forward built none. TULConfig refuses the combination "
+                "at construction, so reaching here means the coda kwargs were rebuilt "
+                "without it (`_tul_tg_kwargs` is the ONE home).")
+        L = pad_pos.shape[1]
+        eye = torch.eye(L, dtype=torch.bool, device=pad_pos.device).view(1, 1, L, L)
+        key_ok = (~pad_pos).view(pad_pos.shape[0], 1, 1, L) | eye
+        out = dict(kw)
+        for _k in ("tg_allow", "tg_comp_allow"):
+            if out.get(_k) is not None:
+                out[_k] = out[_k] & key_ok
+        return out
 
     def _tul_plan_ablate(self, h_slots: Tensor, layout: SlotLayout, mode: str) -> Tensor:
         """Eval-only plan ablations for ``val/plan_worth_*`` (docs/tul-fm-probing.md §1).

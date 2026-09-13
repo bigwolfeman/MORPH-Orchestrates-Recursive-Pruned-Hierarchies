@@ -19,9 +19,9 @@ def _slots(model, x, lay):
     real = model.tul.prefix_project
     box = {}
 
-    def spy(h_slots, layout, l_total):
+    def spy(h_slots, layout, l_total, cells=None):
         box["h"] = h_slots.detach().clone()
-        return real(h_slots, layout, l_total)
+        return real(h_slots, layout, l_total, cells=cells)
 
     model.tul.prefix_project = spy
     try:

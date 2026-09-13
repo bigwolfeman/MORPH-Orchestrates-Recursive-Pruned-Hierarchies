@@ -395,7 +395,7 @@ def _fake_root_for_shuffle(prefix_k=2, n_slots=6, C=3, B=2, n_hc=4):
     does not, and testing it directly is what catches an index-math error."""
     import types
 
-    def prefix_project(h_slots, layout, l_total):
+    def prefix_project(h_slots, layout, l_total, cells=None):
         # value (s, k) is encoded as s*10 + k so a moved or reordered block is visible.
         # Shape is the SHIPPED one: [B, S*K, n, C] for the HC carrier (n_hc=0 -> [B,S*K,C]).
         shape = ((B, n_slots * prefix_k, C) if n_hc == 0

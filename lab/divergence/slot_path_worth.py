@@ -57,8 +57,8 @@ def plan_off(root):
     tul = root.tul
     orig = tul.prefix_project
 
-    def zeroed(h_slots, layout, l_total):
-        values, pos = orig(h_slots, layout, l_total)
+    def zeroed(h_slots, layout, l_total, cells=None):
+        values, pos = orig(h_slots, layout, l_total, cells=cells)
         return torch.zeros_like(values), pos
 
     tul.prefix_project = zeroed
@@ -155,8 +155,8 @@ def plan_shuffled(root, seed: int = 0):
     tul = root.tul
     orig = tul.prefix_project
 
-    def shuffled(h_slots, layout, l_total):
-        values, pos = orig(h_slots, layout, l_total)
+    def shuffled(h_slots, layout, l_total, cells=None):
+        values, pos = orig(h_slots, layout, l_total, cells=cells)
         # values is [B, S*K, *tail]: slot s owns rows [s*K, (s+1)*K). `tail` is (C,) for a
         # plain carrier and (n, C) for the HC carrier — `prefix_project` documents
         # `mid = h_slots.shape[2:-1]  # () plain, (n,) HC`, and MORPH runs HC n=4, so the

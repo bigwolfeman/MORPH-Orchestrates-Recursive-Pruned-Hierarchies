@@ -51,9 +51,9 @@ def main() -> None:
     real_project = model.tul.prefix_project
     cur = {"d": None}
 
-    def spy(h_slots, layout, l_total):
+    def spy(h_slots, layout, l_total, cells=None):
         captured[cur["d"]].append(h_slots.detach().float().cpu())
-        return real_project(h_slots, layout, l_total)
+        return real_project(h_slots, layout, l_total, cells=cells)
 
     model.tul.prefix_project = spy
     try:

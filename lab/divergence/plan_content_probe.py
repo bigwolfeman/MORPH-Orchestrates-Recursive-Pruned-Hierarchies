@@ -98,8 +98,11 @@ def capture_prefix_project(root: nn.Module, sink: list[Tensor]):
     tul = root.tul
     orig = tul.prefix_project
 
-    def wrapped(h_slots, layout, l_total):
-        values, pos = orig(h_slots, layout, l_total)
+    def wrapped(h_slots, layout, l_total, cells=None):
+        # `cells` (tul.prefix_source, 2026-09-13): the per-CELL source states, None on
+        # every arm this probe has run on. Forwarded verbatim — a wrapper that dropped it
+        # would turn a trajectory model into an exit model without saying so.
+        values, pos = orig(h_slots, layout, l_total, cells=cells)
         sink.append(values.detach().clone())
         return values, pos
 

@@ -99,9 +99,9 @@ class _Capture:
         self._gl = root._tul_group_losses
 
     def __enter__(self):
-        def pp(h_slots, layout, l_total):
+        def pp(h_slots, layout, l_total, cells=None):
             self.got.setdefault("h", h_slots)
-            return self._pp(h_slots, layout, l_total)
+            return self._pp(h_slots, layout, l_total, cells=cells)
 
         def gl(x, labels, layout, want_groups=True):
             self.got.setdefault("xh", x)

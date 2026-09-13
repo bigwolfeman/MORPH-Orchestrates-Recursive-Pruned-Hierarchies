@@ -1,0 +1,67 @@
+# Slot-loop panel, arm "slot-spandec-strict-traj": the coda reads the loop's TRAJECTORY.
+# One factor against `slot-spandec-strict-trajrep` (`tul_slot_spandec_strict_trajrep.yaml`),
+# which holds the same cell count, the same parameters and the same per-cell embedding and
+# differs ONLY in what the cells carry. Against `slot-spandec-strict` it is TWO factors
+# (`prefix_k` 2 -> 6 and `prefix_source`), which is why the trajrep arm exists and why the
+# K-curve here must never be read against `strict` alone.
+#
+# WHAT THE RECORD SAYS, and it is why this arm is not another target.
+#   * The strict panel (lab/experiments/failures/2026-09-12-arc-strict-geometry.md):
+#     "Depth use comes from reachability, not from the target. Every arm with coda reach
+#     'all' reads K1-K6 <= 0.0016 whatever its target (H = 1, H = 3, the oracle)." The two
+#     arms that moved the curve (`prev-reach1` +0.0163, `prev-reach2` +0.0127) did it by
+#     BLINDING the coda, and Wolfe rejected that answer: "z has to hold the history when it
+#     should hold the present next thought that needs decoding."
+#   * The direct measurement (lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md):
+#     `critic_gap_traj`, the mean CE(h_{t-1}) - CE(h_t) through the REAL coda, is
+#     0.001-0.003 nats, and the coda's loss is flat to 0.0005 under a 10 % rms
+#     perturbation of the exit state. "Nothing downstream of `prefix_project` asks the
+#     state for more than one pass produces."
+#   * The core is exonerated five times over (Parcae swap, HCA fix, seed, width, density,
+#     stability terms) and so is what trains it (`core_token_aux`: the six blocks became a
+#     1.10-nat-better token map and the passes still read +0.0005).
+#
+# So the remaining structural difference between the plain loop, which earns 0.185 nats
+# under the noise entry, and the slot loop, which earns 0.000, is WHERE THE GRADIENT
+# ENTERS. The plain loop's every pass writes a position the loss reads. The slot loop's
+# six passes share ONE reader, written once, after the loop is over: pass 4 can only reach
+# the coda by changing the single exit vector, and every pass's gradient arrives through
+# the same edge, which is the cancellation the per-pass probe measured (|sum_t dW_t| /
+# sum_t |dW_t| = 0.52; six orthogonal equal-norm vectors read 0.41).
+#
+# WHAT THIS ARM CHANGES. `tul.prefix_source: trajectory` — cell k of a slot (k < K-1)
+# carries the state after PASS k+1 and the LAST cell always carries the EXIT, whatever
+# depth the slot realised. Every written pass gets its own reader and its own direct
+# gradient edge into the coda's CE. A cell no pass reached is a PAD: zero carrier, removed
+# from the coda's key set, and the packer already gives it no label (only the last cell
+# carries the emit label). Exact rule and its test: morph/model/transformer.py
+# `_tul_prefix_cells`, tests/test_tul_prefix_source.py.
+#
+# WHY prefix_k 6 AND NOT 8. The draw is Poisson(6) capped at 8, so 6 cells cover the MEAN
+# depth exactly: a mean-depth slot writes h1..h5 and its exit with no pad and no loss. 8
+# would cover the cap as well and costs L_total 1408 -> 1536 (+33 % positions on the
+# prelude and the coda against the k=2 ruler's 1152, where +11 % already cost +2.93 GB on
+# E18's arms) on a card whose slot family died of exactly this in the 2026-08-21 gate
+# bake-off. A deep slot's passes 6 and 7 are unwritten here; that is named, not hidden.
+#
+# CONFOUND, NAMED. L_total = seq_len + prefix_k * max_slots = 1024 + 384 = 1408, and the
+# packer fills the unused slot budget with tokens, so this arm sees MORE real tokens per
+# row than the k=2 ruler (~1093 against ~1033). The trajrep control carries the identical
+# shape, so the pair is clean; the comparison against `strict` is not.
+#
+# COST: +2.10 M parameters per extra `W_prefix` slice (identity init, 4 extra slices) plus
+# `E_pass` [6, 1024] zeros; no extra core pass, no extra RNG draw. Two [B, 1, L, L] bool
+# masks per forward for the pad cut, one `&` each on the two coda branches.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-trajectory-prefix.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-trajectory-as-the-prefix-content.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  prefix_k: 6
+  prefix_source: trajectory
+
+wandb:
+  name: slot-spandec-strict-traj

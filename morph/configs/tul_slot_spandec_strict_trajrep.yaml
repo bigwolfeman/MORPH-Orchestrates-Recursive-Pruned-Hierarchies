@@ -1,0 +1,29 @@
+# Slot-loop panel, arm "slot-spandec-strict-trajrep": the CONTENT control for
+# `slot-spandec-strict-traj` (`tul_slot_spandec_strict_traj.yaml`). One factor against it:
+# `tul.prefix_source`, and nothing else.
+#
+# Same `prefix_k` (6), so the same `L_total` (1408), the same tokens per row, the same
+# `W_prefix` parameter count, the same `E_pass` table and the same wall-clock shape. Every
+# cell carries the loop's EXIT state, exactly as `prefix_source: exit` does; the only
+# reason this is its own value and not "exit at k=6" is that it also builds the zero-init
+# per-cell embedding, so the pair differs by the cells' CONTENT with the embedding held
+# fixed. At init (`E_pass` is zeros) this arm is bit-identical to an `exit` model at
+# prefix_k 6 — asserted in tests/test_tul_prefix_source.py.
+#
+# WHY IT IS NOT OPTIONAL. `slot-mux-prefix4` (2026-09-10) already showed that WIDTH alone
+# moves the cells' usage without moving the reader: `val/slot_eff_rank` 6.34 -> 7.12, token
+# K1-K6 +0.0001. If the trajectory arm's K-curve rises, the first question is whether six
+# cells did it or six DIFFERENT states did it, and only this arm answers it. Read the
+# trajectory arm's K-curve against this one, never alone.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-trajectory-prefix.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  prefix_k: 6
+  prefix_source: exit_repeat
+
+wandb:
+  name: slot-spandec-strict-trajrep

@@ -45,7 +45,8 @@ KNOWN_TUL_KEYS = frozenset({
     "gate_truncate_p", "egrad_disc_hidden", "egrad_heads", "egrad_layers", "egrad_max_tokens",
     "egrad_soft_labels", "egrad_soft_mix", "egrad_weight",
     "grad_pass", "grad_pass_energy", "grad_pass_norm", "grad_pass_scale",
-    "loop_reach", "max_slots", "min_span", "mux_activate_at", "mux_beta",
+    "loop_reach", "loop_reads_tokens", "max_slots", "min_span",
+    "mux_activate_at", "mux_beta",
     "mux_detach_head", "mux_every_pass", "mux_readout", "mux_rho", "mux_stage_all",
     "mux_stage_own_iters",
     "mux_target",
@@ -54,7 +55,7 @@ KNOWN_TUL_KEYS = frozenset({
     "oracle_z_weight",
     "per_slot_embed",
     "per_slot_embed_std", "pass_lora_rank", "pass_lora_targets",
-    "pass_residual_lambda", "plast_weight", "prefix_k", "progressive_p",
+    "pass_residual_lambda", "plast_weight", "prefix_k", "prefix_source", "progressive_p",
     "reinject_seed_every_pass", "recur_gate", "recur_gate_bias",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_chain", "slot_chain_detach",
@@ -265,6 +266,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         critic_every=int(tc.get("critic_every", 1)),
         critic_eps=float(tc.get("critic_eps", 0.1)),
         critic_replay_groups=int(tc.get("critic_replay_groups", 1)),
+        prefix_source=str(tc.get("prefix_source", "exit")),
+        loop_reads_tokens=bool(tc.get("loop_reads_tokens", False)),
         core_token_aux=bool(tc.get("core_token_aux", False)),
         core_token_aux_weight=float(tc.get("core_token_aux_weight", 1.0)),
         slot_chain=bool(tc.get("slot_chain", False)),
@@ -389,6 +392,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "critic_eps": model_cfg.critic_eps,
         "critic_replay_groups": model_cfg.critic_replay_groups,
         "pass_residual_lambda": model_cfg.pass_residual_lambda,
+        "prefix_source": model_cfg.prefix_source,
+        "loop_reads_tokens": model_cfg.loop_reads_tokens,
         "core_token_aux": model_cfg.core_token_aux,
         "core_token_aux_weight": model_cfg.core_token_aux_weight,
         "slot_chain": model_cfg.slot_chain,
@@ -504,6 +509,28 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"backward. Read `critic_agree` (0.5 = the energy carries nothing) and "
               f"`critic_gap_traj` (the MEASURED worth of one pass) "
               f"(lab/experiments/planned/2026-09-12-arc-core-token-and-critic.md)",
+              flush=True)
+    if model_cfg.prefix_source != "exit":
+        print(f"  TUL PREFIX SOURCE = {model_cfg.prefix_source!r} (prefix_k "
+              f"{model_cfg.prefix_k}): 'trajectory' gives cell k of a slot the state AFTER "
+              f"PASS k+1 and the LAST cell the EXIT state, so every written pass has its "
+              f"own reader and its own gradient edge; a cell no pass reached is a PAD "
+              f"(zero carrier, cut out of the coda's key set, no label). 'exit_repeat' is "
+              f"the matched-count CONTROL: every cell holds the exit. Both add the "
+              f"zero-init per-cell embedding `tul.E_pass`, so trajectory minus exit_repeat "
+              f"isolates the cell CONTENT "
+              f"(lab/experiments/planned/2026-09-13-arc-trajectory-prefix.md)",
+              flush=True)
+    if model_cfg.loop_reads_tokens:
+        print(f"  TUL LOOP READS TOKENS ON: the SHIPPED core stage runs over EVERY "
+              f"position (tokens + slot cells, one sequence, `_core_region`'s per-SAMPLE "
+              f"Poisson depth) under `causal AND (same span OR a slot cell)`, so a token "
+              f"reaches an earlier span ONLY through a cell and the cells are still the "
+              f"whole cross-span channel. NOT the paid loop, whose core is unrestricted. "
+              f"No prefix write (the cell's state is already at its position); z is "
+              f"gathered at the slot's first cell. Forced-depth eval goes through "
+              f"model.cfg.mean_depth "
+              f"(lab/experiments/planned/2026-09-13-arc-loop-reads-tokens.md)",
               flush=True)
     if model_cfg.core_token_aux:
         print(f"  TUL CORE-TOKEN AUX ON (weight {model_cfg.core_token_aux_weight}): a "
