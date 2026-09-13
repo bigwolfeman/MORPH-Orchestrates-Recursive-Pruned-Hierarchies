@@ -218,14 +218,19 @@ the span-restricted token stream. The right statement sits between the two claus
 ## Updated hypothesis
 
 The core uses depth on a token input, weakly, and almost all of it in the first two passes:
-0.0102 nats under the strict span restriction against 0.033 for the plain model under the
-same prelude entry with no restriction (2026-09-10) and 0.185 under the noise entry. So
-the span restriction removes about two thirds of the prelude-entry token reading, and the
-slot-state input removes 95 % of what is left. The ordering is input-side: unrestricted
-tokens > span-restricted tokens > slot states, on one set of weights. That is consistent
-with the information view (a pass earns when there is something new to extract from the
-input it reads) and with the rank-collapse diagnosis (the slot state has the least to
-extract), and it points at the Thought Register lane rather than at any core-side lever.
-It does NOT say the plain model's 0.185 is available to a slot design: the plain model's
-own K-curve under the same span restriction is the missing control, one config away, and
-it has not been run.
+0.0102 nats, against 0.033 for the plain MORPH model under the same prelude entry
+(2026-09-10) and 0.185 under the noise entry. The span restriction is NOT what removes the
+rest. The control already exists on the Parcae core
+([`failures/2026-09-11-arc-span-budget.md`](2026-09-11-arc-span-budget.md), sweeps at
+step 5,000): `budget-web-full` reads token K1−K6 +0.0279 [+0.0269, +0.0290] and
+`budget-web-span`, where nothing crosses a span boundary, reads +0.0301 [+0.0288, +0.0313].
+Cutting every cross-span read leaves the plain loop's depth reading unchanged. So the
+ordering on one set of weights is: token input 0.0102 > slot-state input 0.0005 (20x), and
+the aux path's own shortfall against a plain model (0.010 vs 0.028 to 0.033) is not the
+restriction. What differs is that this core is shared with the slot loop and trained on
+both jobs, with the token CE as a secondary objective. That is consistent with the
+information view (a pass earns when there is something to extract from the input it reads)
+and with the rank-collapse diagnosis (the slot state has the least to extract), and it
+points at the Thought Register lane rather than at any core-side lever. A first version
+of this section said the restriction cost two thirds of the reading; the Parcae control
+above refutes that, and the correction is recorded here rather than hidden.
