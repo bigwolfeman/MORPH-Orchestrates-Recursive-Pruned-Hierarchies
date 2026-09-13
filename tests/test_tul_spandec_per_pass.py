@@ -371,3 +371,78 @@ def test_per_pass_refusals(kw, match):
 def test_per_pass_needs_a_core_loop():
     with pytest.raises(ValueError, match="needs a core loop"):
         MORPHTransformer(_tiny(n_core=0, tul=_tul(spandec_per_pass=True)))
+
+
+# ── the decode is CHECKPOINTED, and that is the only thing it changes ────────
+
+def _spy_and_unwrap_the_decode(monkeypatch) -> list[str]:
+    """Run the per-pass decode UN-checkpointed and record every checkpoint call.
+
+    Only the per-pass decode is unwrapped; the core loop's own `checkpoint` calls go
+    through the real function, so the two models under comparison differ by exactly
+    the thing this change added.
+    """
+    seen: list[str] = []
+    real = tfm.checkpoint
+
+    def spy(fn, *args, **kw):
+        name = getattr(fn, "__func__", fn).__name__
+        seen.append(name)
+        if name == "_spandec_pass_decode":
+            return fn(*args)
+        return real(fn, *args, **kw)
+
+    monkeypatch.setattr(tfm, "checkpoint", spy)
+    return seen
+
+
+def _loss_and_grads(m: MORPHTransformer) -> tuple[torch.Tensor, dict]:
+    out = _run(m)
+    m.zero_grad(set_to_none=True)
+    out["loss"].backward()
+    return (out["loss"].detach().clone(),
+            {n: p.grad.detach().clone()
+             for n, p in m.named_parameters() if p.grad is not None})
+
+
+def test_the_per_pass_decode_is_checkpointed(monkeypatch):
+    """The memory fix, asserted rather than assumed — one recompute region per pass.
+
+    Without this the equivalence test below would pass vacuously: if the checkpoint were
+    dropped, both arms of that comparison would run the same code.
+    """
+    seen = _spy_and_unwrap_the_decode(monkeypatch)
+    m = _model(spandec_per_pass=True, spandec_pass_horizon_max=3, spandec_pass_tokens=4)
+    _run(m)
+    assert seen.count("_spandec_pass_decode") == 4, \
+        f"expected one checkpointed decode per pass (slot_depth_fixed=4), got {seen}"
+
+
+def test_checkpointing_the_decode_moves_neither_the_loss_nor_any_gradient(monkeypatch):
+    """Recompute is not re-weighting: the objective is bit-for-bit the same job.
+
+    The per-pass term costs 12.60 GB of a 25.55 GB step at the panel budget when its
+    decoder activations are kept (measured on a GB10, 2026-09-12; the 5090 OOMed on it).
+    Checkpointing the decode drops that to ~3.8 GB. This pins that the ONLY thing that
+    changed is where the decoder's activations live: the loss and every gradient the
+    step produces — core, span decoder, embeddings — match the un-checkpointed forward
+    to fp32 reduction error.
+    """
+    kw = dict(spandec_per_pass=True, spandec_pass_horizon_max=3, spandec_pass_tokens=4)
+    l_ckpt, g_ckpt = _loss_and_grads(_model(**kw))
+    _spy_and_unwrap_the_decode(monkeypatch)
+    l_plain, g_plain = _loss_and_grads(_model(**kw))
+
+    assert torch.allclose(l_ckpt, l_plain, atol=1e-6, rtol=1e-6), \
+        f"loss moved: {float(l_ckpt)} vs {float(l_plain)}"
+    assert set(g_ckpt) == set(g_plain), \
+        f"a parameter stopped receiving gradient: {set(g_ckpt) ^ set(g_plain)}"
+    # Named explicitly rather than left to the loop: these are the two the term exists
+    # to train, and an empty list must not read as a pass.
+    core = [n for n in g_ckpt if n.startswith("core.")]
+    dec = [n for n in g_ckpt if n.startswith("tul_spandec.")]
+    assert len(core) > 0 and len(dec) > 0, (len(core), len(dec))
+    for n in sorted(g_ckpt):
+        assert torch.allclose(g_ckpt[n], g_plain[n], atol=1e-6, rtol=1e-6), (
+            f"gradient of {n} moved: max |delta| = "
+            f"{float((g_ckpt[n] - g_plain[n]).abs().max())}")

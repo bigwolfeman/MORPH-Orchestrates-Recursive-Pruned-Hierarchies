@@ -291,6 +291,90 @@ that gives the honest reading.
 
 Neither point changes the queue line or the config.
 
+## Amendment 2 (2026-09-12, after the smoke, before any 5,000-step draw): arm A OOMed, and the term's memory is the DECODER, not the CE
+
+"Not verified before launch" called this: *"The per-pass term's memory is unpriced on the
+real shapes ... six live calls is ~1.2 GB on a card with ~1 GB of slack. This is the most
+likely way arm A dies, and it will show up as an OOM in the smoke, not as a slow step."*
+It died exactly that way, and the priced cause was the wrong one — off by 10x.
+
+**What happened.** The 12-step smoke of `slot-spandec-strict-perpass` reached step 0 at
+`peak=25.50GB` (every other strict arm reads 12.9-13.1 GB there) and then raised
+`torch.OutOfMemoryError` inside the MAIN token CE on step 1, with 26.99 GiB in use on a
+31.4 GB card that a three-monitor desktop already holds ~6 GB of
+(`/home/wolfe/morph-scratch/arc/smoke-slot-spandec-strict-perpass/run.log`). No 5,000-step
+draw of arm A was started. Arms B (`-codaspan`, 13.13 GB) and B32 are unaffected.
+
+**Where the memory went, measured.** The 5090 was running the arc queue, so the arm was
+re-priced on the DGX Spark (GB10, 118 GB unified) at the panel budget, seq 1024, batch 6,
+64 cells, `pass_horizon_max` 6, `pass_tokens` 8, 3 steps each:
+
+| run | peak alloc, step 0 | peak alloc, step 20 |
+| --- | --- | --- |
+| `tul_slot_spandec_strict` (the ruler) | 12.95 GB | 14.88 GB |
+| `..._perpass`, as filed | 25.55 GB | 27.48 GB |
+| `..._perpass`, `spandec_pass_horizon_max=1` | 17.20 GB | — |
+| `..._perpass`, `spandec_pass_tokens=4` | 20.04 GB | — |
+
+The Spark reproduces the 5090's step-0 figures to 0.05 GB, and its step-20 27.48 GB is
+what the 5090 had no room for. The three per-pass rows fit `delta = a·P + b·T` exactly
+(`P` = decoded positions, `T` = 8 passes): **a = 111.3 KB per decoded position**, and the
+fixed part 1.58 GB is the `T` fused-CE `[V, d]` fp32 `grad_w` accumulators (8 x 0.202 =
+1.62 GB). So the accumulators the config comment priced are **1.6 of the 12.6 GB**; the
+other 11.0 GB is the SPAN DECODER's own saved activations over 101,376 decoded positions.
+
+A `torch.cuda.memory._record_memory_history` replay of the term alone at those shapes
+(12.87 GB, within 0.3 GB of the in-trainer delta) attributes the peak live set as:
+
+| site | GB |
+| --- | --- |
+| `attention.py:140-141` `RMSNorm.forward` — the fp32 upcast, 4 norms per position | 5.64 |
+| `tul_spandec.py:231-232` the SwiGLU (`gate_up`, `silu(g)*u`, `down`) | 3.09 |
+| `tul_spandec.py:223` `qkv` | 1.16 |
+| `fused_ce.py:95` the 8 `grad_w` accumulators | 1.50 |
+| `tul_spandec.py:228` `proj` | 0.39 |
+| `tul_spandec.py:339` the embedding / `z_in` / `tok_in` / concat chain | 0.22 |
+| `fused_ce.py:94` the 8 `grad_x` buffers | 0.19 |
+
+**The fix, and it is not an objective change.** `SpanDecoder.decode` is now called through
+`torch.utils.checkpoint.checkpoint(..., use_reentrant=False)` inside
+`_tul_spandec_per_pass_loss` (`MORPHTransformer._spandec_pass_decode`), so the decoder's
+activations are recomputed in backward one pass at a time. The fused CE is deliberately
+LEFT OUT of the recompute region: checkpointing the decode alone takes the isolated term
+from 12.87 to 3.78 GB for one extra 2-block decoder forward (~4.4 TFLOP/step), while
+pulling the CE in as well saves a further 0.76 GB and costs a second pass over the vocab
+(~33 TFLOP/step, more than the model). Nothing about the target moved: the same spans, the
+same `pass_tokens`, the same realised-depth mask, the same one-CE-per-pass reduction with
+equal weight per pass, the same live trajectory, the same `spandec_pass_t{t}` series.
+`tests/test_tul_spandec_per_pass.py` grew from 22 tests to 24 — one asserts the decode is
+actually checkpointed (one region per pass, so the equivalence test cannot pass vacuously),
+one asserts the loss and EVERY parameter gradient (core and span decoder named explicitly)
+match the un-checkpointed forward to 1e-6 on the CPU fp32 fixture. Two-sided sabotage,
+2026-09-12: a dropout planted inside the recompute region passes with the default
+`preserve_rng_state=True` and FAILS with `preserve_rng_state=False`, so the test does see
+a forward/recompute mismatch.
+
+**The new cost, measured on the same GB10, same budget, 21 steps:**
+
+| run | peak, step 0 | peak, step 20 | tok/s, step 20 |
+| --- | --- | --- | --- |
+| `strict` (ruler) | 12.95 GB | 14.88 GB | 625 |
+| `perpass`, as filed | 25.55 GB | 27.48 GB | 304 |
+| `perpass`, checkpointed | 15.11 GB | **17.03 GB** | 278 |
+
+17.03 GB against the ruler's 14.88 leaves the whole term at 2.15 GB, and 17.03 GB fits
+beside a 6 GB desktop on the 31.4 GB card. The GB10 was sharing its GPU with a
+depth-isolation probe throughout, so **those tok/s are not the 5090's and rank nothing**;
+the fix's own throughput cost reads ~8 % there (278 against 304) and is unmeasured on the
+5090.
+
+**No prediction changed.** P-1 through P-10 stand exactly as frozen, including P-4's
+8,086 tok/s floor, which is still what decides whether the arm runs. The recompute makes
+the arm ~8 % slower on the one GPU that could price it, so if anything P-4 got harder, and
+it is scored on the 5090 smoke as written. The only thing this amendment retires is the
+config comment's claim that the T separate CE calls are what the arm's memory buys: they
+are an eighth of it, and the reading they preserve is now paid for at 2.15 GB.
+
 ## Results
 
 (pending)

@@ -31,15 +31,20 @@
 # mask). A frozen slot's state is its final one; grading it again at every later pass
 # would supervise the `torch.where` carry and over-weight shallow slots.
 #
-# MEMORY, and this is the most likely way the arm DIES — as an OOM in the smoke, not as a
-# slow step. The per-pass term runs ONE `fused_linear_cross_entropy` call per pass, and
-# that kernel allocates and SAVES a [V, d] fp32 grad_w for the backward whatever the head's
-# detach state: 201.9 MB at V_pad 49280, d 1024. Six live passes is ~1.21 GB, of which
-# ~1.01 GB is new against `slot-spandec-strict` (which pays one). The T separate calls are
-# deliberate: a single merged call with per-row weights would hold ONE accumulator, and it
-# would also throw away `tul/spandec_pass_t{t}` — the per-pass CE, which is the column that
-# says whether a deeper pass makes a better plan and without which the arm is unreadable.
-# The reading is worth the gigabyte; the 12-step smoke is where that judgement is checked.
+# MEMORY. This DID kill the first smoke — 25.50 GB at step 0 and an OOM in the MAIN token
+# CE on step 1 — and the cause was not the one priced here first. Measured on a GB10 at
+# this budget (amendment 2 of the record below): the term costs 12.60 GB of a 25.55 GB
+# step against `slot-spandec-strict`'s 12.95 GB, and it is linear in DECODED POSITIONS
+# (111.3 KB each, 101,376 of them at T = 8 passes), not in the number of CE calls. The T
+# `fused_linear_cross_entropy` calls each save a [V, d] fp32 grad_w (201.9 MB at V_pad
+# 49280, d 1024) and together they are 1.6 GB of the 12.6; the other 11.0 GB is the SPAN
+# DECODER's own saved activations — RMSNorm's fp32 upcast 5.64, the SwiGLU 3.09, qkv 1.16.
+# So `SpanDecoder.decode` is CHECKPOINTED per pass (recomputed in backward) and the CE is
+# not: 17.03 GB steady against the ruler's 14.88, for one extra 2-block decoder forward.
+# The T separate CE calls stay, and now cost 1.6 GB rather than the arm: a single merged
+# call with per-row weights would hold ONE accumulator and would also throw away
+# `tul/spandec_pass_t{t}` — the per-pass CE, the column that says whether a deeper pass
+# makes a better plan and without which the arm is unreadable.
 #
 # THE COLUMN TO READ FIRST. `tul/spandec_pass_t{t}` — the per-PASS CE, one series per
 # pass. If it does not FALL with t, a deeper pass is not making a better plan and the

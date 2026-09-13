@@ -4421,6 +4421,20 @@ class MORPHTransformer(nn.Module):
                 stats["spandec_n_tokens_h1"] = float(valid[:, :, :dec.per_span_tokens].sum())
         return loss
 
+    def _spandec_pass_decode(self, z: Tensor, ids: Tensor, valid: Tensor,
+                             emb: Tensor) -> Tensor:
+        """One per-pass decode, as a named function so it can be CHECKPOINTED.
+
+        `torch.utils.checkpoint.checkpoint` needs a callable whose arguments are the
+        tensors it must re-supply in backward; a bound method keeps the recompute
+        readable in a traceback and lets a test call the same code path the
+        checkpointed forward runs. The per-pass position table is read here rather
+        than passed, because it is a parameter of the decoder, not an input.
+        """
+        dec = self.tul_spandec
+        assert dec is not None
+        return dec.decode(z, ids, valid, emb, pos=dec.pos_pass)
+
     def _tul_spandec_per_pass_loss(self, db_traj, depths: Tensor, input_ids: Tensor,
                                    layout: SlotLayout, stats: dict | None = None) -> Tensor:
         """``tul.spandec_per_pass`` — one planning target per PASS, growing by a span a pass.
@@ -4493,7 +4507,24 @@ class MORPHTransformer(nn.Module):
             # The SAME detach asymmetry `_tul_spandec_loss` documents: the OUTPUT head
             # follows `mux_detach_head`, the decoder's INPUT read of the tied table is
             # always detached.
-            st = dec.decode(z, ids, valid, w_tied.detach(), pos=dec.pos_pass)
+            #
+            # RECOMPUTED IN BACKWARD, and the arm does not fit without it. Measured on a
+            # GB10 at the panel budget (seq 1024, batch 6, 64 cells, T = 8 passes,
+            # `pass_horizon_max` 6, `pass_tokens` 8): the un-checkpointed term costs
+            # 12.60 GB of the 25.55 GB step against `slot-spandec-strict`'s 12.95 GB, and
+            # the 5090 died in the MAIN token CE one step after a 25.50 GB step 0. The
+            # cost is linear in DECODED POSITIONS (111.3 KB each, 101,376 of them), not in
+            # the number of CE calls: the decoder's own saved activations are 11.0 GB of
+            # it — RMSNorm's fp32 upcast 5.64, the SwiGLU 3.09, qkv 1.16, proj 0.39 — and
+            # the T fused-CE `grad_w` accumulators are only 1.5. So the DECODE is
+            # checkpointed and the CE is NOT: recomputing the decoder costs one extra
+            # 2-block forward (4.4 TFLOP/step) and saves 9.09 GB measured in isolation
+            # (12.87 -> 3.78), while recomputing the CE as well would save a further 0.76
+            # and cost a second vocab pass (~33 TFLOP/step, more than the model).
+            # Amendment 2 of lab/experiments/planned/2026-09-12-arc-objective-arms.md.
+            # The objective is untouched: `checkpoint` recomputes, it does not re-weight.
+            st = checkpoint(self._spandec_pass_decode, z, ids, valid, w_tied.detach(),
+                            use_reentrant=False)
             C = st.shape[-1]
             lab = torch.where(valid, ids, torch.full_like(ids, -100))
             loss_t = fused_linear_cross_entropy(
