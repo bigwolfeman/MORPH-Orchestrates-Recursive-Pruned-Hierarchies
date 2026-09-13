@@ -1710,6 +1710,16 @@ class TULConfig:
                     "pass, a second cross-cell route inside the loop. It happens to sit "
                     "inside a reach-1 budget by arithmetic, but it is not expressed by the "
                     "mask, so the combination would be a claim nothing here has tested.")
+            if self.cond_layers > 0:
+                raise NotImplementedError(
+                    "tul.loop_reach with tul.cond_layers: the conditioning stack runs ONCE "
+                    "over the compact slot sequence and its relation is the loop's "
+                    "unbudgeted one (plain causal among slots at slot_cells=1; own slot "
+                    "full and earlier slots causal above it). Under a reach budget that is "
+                    "WIDER than a pass of the loop, so the stack would carry cells the "
+                    "budget cut and re-open the route the reach arm exists to close. "
+                    "Raises rather than silently widening; give the stack its own budgeted "
+                    "relation when an arm needs the pair.")
         if self.reread_scope not in ("span", "causal"):
             raise ValueError(
                 f"tul.reread_scope must be 'span' or 'causal', got {self.reread_scope!r}")

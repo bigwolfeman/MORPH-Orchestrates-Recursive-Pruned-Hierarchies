@@ -1,0 +1,52 @@
+# Slot-loop panel, arm "slot-spandec-strict-cond4": the strict ruler plus a 4-layer
+# NON-SHARED conditioning stack that runs ONCE over the compact slot sequence, between the
+# loop's exit and BOTH readers of z.
+# ONE factor against `slot-spandec-strict` (`tul_slot_spandec_strict.yaml`):
+# `tul.cond_layers`. Same loop, same span-decoder target, same strict geometry, same
+# `prefix_k`, same packer shape.
+#
+# WHAT THE STACK IS. `cond_layers` ordinary MORPHBlocks, built with the CORE's attention
+# kwargs and NOT weight-shared with each other or with the loop, applied once to the
+# `[B, S, n, C]` compact slot sequence straight out of `_tul_core` (plain causal among
+# slots, no injection term, no checkpointing — S is 9-19x shorter than the token stream).
+# Everything downstream reads ITS output: the span decoder grades it, SIGReg reads it, and
+# `prefix_project` writes it into the coda's prefix cells. So z, the state the coda reads,
+# is the state the forecast target supervises — the stack is not a second head bolted on
+# beside the write.
+#
+# WHY THIS ARM EXISTS. Wolfe's 2026-09-03 sketch (prelude -> core loop -> a few non-shared
+# blocks -> z -> coda) has never been measured: its only two runs, R7f/R7d, detonated at
+# step ~1010 under `warmup: 0` and the absmean ternary rule, both of which the tree has
+# since replaced (the 1000-step ramp and `norm_match`). `tul_to_cond4.yaml` composes on the
+# retired `tul_to_mnext` lineage, so this file re-seats the knob on the strict ruler.
+#
+# WHAT IT TESTS. The information note
+# (.agents/notes/proposed/architecture/2026-09-13-information-view-of-the-slot-loop.md)
+# says a DETERMINISTIC map after the loop cannot make the passes matter: by
+# `Joint.mi_map_le` the stack's output carries at most what the exit carried, so the
+# K-curve must stay flat. What the stack CAN move is the reader: four more blocks of
+# capacity between the loop and the two readers is an extractability lever, and the
+# reader's measured per-pass headroom is the thing the account says is small. A CE or
+# worth move with a flat K-curve is the predicted outcome and is a result, not a null.
+#
+# COST. Four extra NON-SHARED blocks over the ~64 slot positions of a row, run ONCE (not
+# per pass): 4 x 64 = 256 block-passes per row against the prelude+coda's 8 x 1152 = 9216
+# and the core's 6 x 64 x 6 = 2304. Decode is unchanged at n_coda blocks per token — the
+# stack never runs on a token position. Parameters: exactly the block count of an
+# `n_coda + 4` model, which is what made the old R7/R8 pair fair.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-cond4-reader.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-cond4-as-the-reader-of-the-register.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  cond_layers: 4
+  # The shipped setting, written down because the think-once panel's OTHER knob turns it
+  # off: the coda's token CE trains THROUGH z, so the stack and the loop both learn from
+  # the reader as well as from the span decoder.
+  detach_z: false
+
+wandb:
+  name: slot-spandec-strict-cond4
