@@ -567,7 +567,8 @@ def drop_retired_tul_keys(state: dict, model: nn.Module, path: str) -> list[str]
         del state[k]
     if dropped:
         print(f"  load {path}: dropped {len(dropped)} retired TUL tensor(s) {dropped} — the "
-              f"paid loop builds no prefix projection (docs/tul-paid-loop-recipe.md §3); "
+              f"forward runs the core over the tokens themselves (tul.tokens_through_core "
+              f"or tul.loop_reads_tokens), and neither builds a prefix projection; "
               f"every other tensor is checked as before", flush=True)
     return dropped
 

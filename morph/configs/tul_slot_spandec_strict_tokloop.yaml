@@ -27,6 +27,26 @@
 # Wolfe's 2026-09-12 sentence the aux arm could not test, because the aux was training-only
 # by construction and the SHIPPED forward it was measured on never ran the tokens at all.
 #
+# SCOPE, 2026-09-13: NO TRAINING ARM IS QUEUED. The knob is built, tested and OFF by
+# default; what runs is the eval probe in
+# `lab/experiments/planned/2026-09-13-arc-loop-reads-tokens.md`. The reason is cost:
+# this forward is about 44 block-passes per generated token against the slot loop's 10.59
+# (`docs/tul-as-memory.md`), which abandons "think once, decode cheap" — the thing TUL is
+# for. Keep the config so the arm can be queued deliberately, not by accident.
+#
+# WHAT AN INDEPENDENT REVIEW MEASURED ON IT (2026-09-13), recorded so the name does not
+# oversell the mechanism:
+#   * the knob LOOPS the token states — the coda reads the CORE's output at token
+#     positions — so it is the paid loop WITH a span restriction, not the slot loop. The
+#     "think once" property is gone; only the cross-span restriction survives.
+#   * the leak test proves "no token reads another span's token" for ONE core block. At
+#     n_core = 2 the token -> cell -> token route is open BY DESIGN and reads 0.589 on the
+#     fixture. That is the intended channel, not a leak, and the test's scope is the
+#     single-block relation.
+#   * `slot_gain_lambda` / `slot_cot_clip`, which this file inherits from the slot-loop
+#     root, are INERT here (the core stage is `_core_region`, not `_tul_core`). The build
+#     now prints `[slot-levers] ... INERT` for this mode; before 2026-09-13 it did not.
+#
 # THIS IS NOT THE PAID LOOP. The paid loop (`tul.tokens_through_core`) runs the core
 # UNRESTRICTED over the packed row: every token reads every earlier token directly, the
 # cells carry nothing anybody needs, and the arm is 0.125 nats behind the plain model

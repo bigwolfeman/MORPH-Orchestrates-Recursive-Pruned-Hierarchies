@@ -183,7 +183,7 @@ class TULConfig:
     #    A trajectory model needs a coda ALLOW relation to cut its pad cells out of, so
     #    it is refused without `tg_geometry: strict` or `tg_restrict`.
     #    Record: lab/experiments/planned/2026-09-13-arc-trajectory-prefix.md
-    prefix_source: str = "exit"          # "exit" | "trajectory" | "exit_repeat"
+    prefix_source: str = "exit"   # "exit" | "trajectory" | "exit_repeat" | "entry_exit"
     # ── THE THOUGHT REGISTER (arms `slot-register-m4` / `-m4-sameinit`, 2026-09-13) ──
     # 1 is today's forward and is BIT-IDENTICAL to the tree before this key: one looped
     # cell per span, nothing built, no RNG draw.

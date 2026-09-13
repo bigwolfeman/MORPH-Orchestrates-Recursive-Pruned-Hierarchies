@@ -286,12 +286,78 @@ def test_the_eval_forward_equals_the_training_forward_at_the_same_depth(monkeypa
 
 
 def test_the_span_decoder_still_grades_z_and_z_is_the_cells_own_state():
+    """`z` must be the CORE's output AT the slot's first cell, position by position.
+
+    Asserting only "spandec is finite and scored something" is guard theater: an
+    independent review moved the gather to `slot_index + 1` and the whole suite stayed
+    green (1480 passed). The gather is what makes `spandec_ce` comparable across the slot
+    family, so it is checked against the core's own output, indexed directly — not through
+    `gather_valid`, which is the function the sabotage would have lived in.
+    """
     m = _model(loop_reads_tokens=True)
     inp, lab, layout, _ = _batch()
-    torch.manual_seed(3)
-    res = m(inp, labels=lab, slot_layout=layout)
+    seen = {}
+    real_core, real_sd = m._core_region, m._tul_spandec_loss
+
+    def core_spy(*a, **kw):
+        out = real_core(*a, **kw)
+        seen["x_coda"] = out
+        return out
+
+    def sd_spy(h_slots, *a, **kw):
+        seen["z"] = h_slots
+        return real_sd(h_slots, *a, **kw)
+
+    m._core_region, m._tul_spandec_loss = core_spy, sd_spy
+    try:
+        torch.manual_seed(3)
+        res = m(inp, labels=lab, slot_layout=layout)
+    finally:
+        m._core_region, m._tul_spandec_loss = real_core, real_sd
     assert "spandec" in res and torch.isfinite(res["spandec"])
     assert float(res["spandec_n_tokens"]) > 0
+    xc, z = seen["x_coda"], seen["z"]
+    assert z is not None and xc is not None, "the spies never fired"
+    B, S = layout.slot_index.shape
+    for b in range(B):
+        for s in range(S):
+            if not bool(layout.slot_valid[b, s]):
+                continue
+            p = int(layout.slot_index[b, s])
+            assert bool(layout.slot_mask[b, p]), "slot_index does not point at a cell"
+            assert torch.equal(z[b, s], xc[b, p]), (
+                f"z[{b},{s}] is not the core's output at cell position {p}")
+
+
+def test_the_slot_loop_levers_say_they_are_inert_on_this_mode(capsys):
+    """base.yaml turns the slot-loop gain constraint on for EVERY model, and it acts only
+    inside `_tul_core`. `loop_reads_tokens` runs `_core_region`, so the knobs do nothing —
+    exactly as on the paid loop — and the build must say so once, loudly.
+
+    `tul_slot_spandec_strict_tokloop.yaml` inherits `slot_gain_lambda: 100` and
+    `slot_cot_clip: 4.0` from the slot-loop config root. Before 2026-09-13 the notice's
+    predicate named only `tul is None`, `n_core == 0`, `tokens_through_core` and the FM
+    planner, so this arm would have carried two dead knobs in silence. Found by an
+    independent review of the knob's first commit.
+    """
+    levers = dict(slot_gain_lambda=100.0, slot_cot_clip=4.0)
+
+    def build(**tul_kw):
+        torch.manual_seed(99)
+        MORPHTransformer(_tiny(tul=_tul(**tul_kw), **levers))
+        return capsys.readouterr().out
+
+    assert "[slot-levers]" in build(loop_reads_tokens=True), (
+        "the tokloop arm carries slot-loop levers that do nothing and says nothing")
+    # the twin: the paid loop already reported it, and the SLOT loop must NOT — there the
+    # knobs are live and a notice would be a lie. (`spandec` is a slot-loop lever and the
+    # paid loop refuses it, so the paid twin is built bare.)
+    torch.manual_seed(99)
+    MORPHTransformer(_tiny(tul=TULConfig(prefix_k=2, slot_id=4, tokens_through_core=True),
+                           **levers))
+    assert "[slot-levers]" in capsys.readouterr().out
+    assert "[slot-levers]" not in build(), (
+        "the slot loop was told its own live constraint is inert")
 
 
 def test_the_fixed_point_term_is_still_charged_once():

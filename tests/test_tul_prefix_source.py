@@ -453,10 +453,31 @@ def test_a_pad_cells_carrier_is_exactly_zero_including_the_pass_embedding():
             m(inp, labels=None, slot_layout=layout)
     finally:
         m.tul.prefix_project = real
-    # `prefix_project` itself still carries E_pass at a pad — the zeroing happens in
-    # `_forward_tul` on purpose, so this asserts the E_pass term is REAL and then that the
-    # coda saw zero (the previous test) rather than asserting a vacuous zero here.
-    assert float(seen["v"].abs().max()) > 0.0
+    v_live = seen["v"].clone()
+    # `> 0` is vacuous — the projection is non-zero whether or not E_pass was added, and an
+    # independent review pointed out that deleting the add keeps such a test green. So the
+    # claim is stated as a DIFFERENCE: zero E_pass and the same forward must produce a
+    # different carrier, and the pad cells specifically must go to exactly zero.
+    with torch.no_grad():
+        m.tul.E_pass.zero_()
+    seen.clear()
+    m.tul.prefix_project = spy
+    try:
+        with torch.no_grad():
+            m(inp, labels=None, slot_layout=layout)
+    finally:
+        m.tul.prefix_project = real
+    v_zero = seen["v"]
+    assert not torch.equal(v_live, v_zero), (
+        "zeroing E_pass changed nothing: the per-cell pass embedding never reaches the "
+        "carrier, so `trajectory` and `exit_repeat` are not the one-factor pair they claim "
+        "to be")
+    # A pad's SOURCE state is zeroed in `_tul_prefix_cells`, so with E_pass zeroed its
+    # projected carrier is EXACTLY zero — and with E_pass live it is exactly the E_pass
+    # term, which is the learned constant that used to announce a slot's depth.
+    assert float(v_zero.abs().min()) == 0.0
+    d = (v_live - v_zero).abs()
+    assert float(d.max()) > 0.0
 
 
 # ── 4. EVERY WRITTEN PASS RECEIVES GRADIENT ──────────────────────────────────

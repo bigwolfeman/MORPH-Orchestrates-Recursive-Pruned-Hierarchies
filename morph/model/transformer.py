@@ -1772,6 +1772,14 @@ class MORPHTransformer(nn.Module):
                 "n_core=0 (a coreless TUL model has no loop)" if cfg.n_core == 0 else
                 "tokens_through_core (the paid loop runs _core_region, not _tul_core)"
                 if cfg.tul.tokens_through_core else
+                # `loop_reads_tokens` is the SAME miss for the same reason: it runs
+                # `_core_region` over the whole packed row and never enters `_tul_core`,
+                # so a config that carries base.yaml's constraint knobs (as
+                # tul_slot_spandec_strict_tokloop.yaml does, slot_gain_lambda 100 and
+                # slot_cot_clip 4.0) gets NOTHING from them. Found 2026-09-13 by an
+                # independent review of the knob's first commit.
+                "loop_reads_tokens (the core stage runs _core_region, not _tul_core)"
+                if cfg.tul.loop_reads_tokens else
                 "an FM planner replaces the slot loop" if cfg.fm is not None else None)
         if _levers and _why is not None:
             print(f"  [slot-levers] {_levers} INERT on this model: {_why}. They act only inside "
