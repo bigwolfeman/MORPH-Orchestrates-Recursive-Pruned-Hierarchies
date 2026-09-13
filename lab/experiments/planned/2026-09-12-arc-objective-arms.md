@@ -439,7 +439,10 @@ failed.
 Held to one target, depth buys nothing at any horizon: the six-span target the deeper
 passes were trained for moves 0.0015 nats from depth 1 to 6, all of it by pass 3, and the
 one-span target does not move at all. The rising training ladder was the changing target.
-(Strict ruler's exit column, the control: pending, chain D2.)
+The strict ruler's exit column, the control (`horizon_grid_fixed_slot-spandec-strict.{json,txt}`):
+4.4869 / 4.4844 / 4.4839 / 4.4838 at depths 1/2/3/6, K1−K6 **+0.0031** [+0.0026, +0.0036], K3−K6 +0.0001 — the
+sweep's own 4.4870 → 4.4839 (+0.0031) reproduced. The per-pass arm's exit column moves
+LESS with depth than the ruler's (+0.0013 vs +0.0031).
 
 **Arm B's heads** read 6.62 nats/token at the tail (7.46 at steps 200–600), against the
 coda's 4.39 on the same tokens: a parallel readout of a whole span from one cell is 2.2

@@ -1,0 +1,64 @@
+{
+ "label": "slot-spandec-strict",
+ "config": "tul_slot_spandec_strict",
+ "step": 5000,
+ "rows": 480,
+ "batch": 3,
+ "depths": [
+  1,
+  2,
+  3,
+  6
+ ],
+ "columns": [
+  "exit"
+ ],
+ "skipped_columns": {
+  "pass_h*": "no pos_pass table (tul.spandec_per_pass false): the per-pass block geometry is undefined on this checkpoint, so the columns are SKIPPED rather than faked with `pos`"
+ },
+ "spandec": {
+  "per_span_tokens": 32,
+  "horizon": 1,
+  "pass_tokens": 8,
+  "pass_horizon_max": 6,
+  "per_pass": false,
+  "pos_pass_rows": 0
+ },
+ "notes": {
+  "state": "the loop's EXIT state at the forced depth, read at the seam _tul_spandec_loss reads (_readout(h_slots), after _tul_cond_apply)",
+  "exit_column": "H=1 at spandec_max_tokens through `pos` \u2014 the tul/spandec_ce a training run logs",
+  "pass_columns": "H spans of spandec_pass_tokens each through `pos_pass`",
+  "mask": "horizon_span_slots' rule, depth-independent by construction and CHECKED per batch: a slot is scored in a column only when every span that column needs exists and is complete",
+  "K": "K{a}-K{b} = CE at depth a minus CE at depth b; POSITIVE means the deeper state is better. Paired bootstrap over rows.",
+  "eval_only": "an eval-time depth intervention; pair a moving column with a depth-1-TRAINED control before reading it as 'depth earns'"
+ },
+ "results": {
+  "exit": {
+   "n_tokens": 486031.0,
+   "depths": {
+    "1": 4.486893269638446,
+    "2": 4.484376827803336,
+    "3": 4.483867343104076,
+    "6": 4.483788553017081
+   },
+   "ci": {
+    "K1-K6": {
+     "point": 0.0031047166213653554,
+     "lo": 0.002622083417440413,
+     "hi": 0.003632723264943216,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95
+    },
+    "K3-K6": {
+     "point": 7.879008699518408e-05,
+     "lo": -6.227713641184795e-05,
+     "hi": 0.00021672671556451914,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95
+    }
+   }
+  }
+ }
+}
