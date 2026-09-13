@@ -32,13 +32,19 @@ digit on all four runs:
 **It does not land on 5.7598 / 0.7104**, the figure the two 2026-09-13 pre-registrations
 quote for this arm from `run_slot-spandec-strict.log`. The gap is not a stage or a readout
 difference: the trainer's own probe code, on the trainer's own val stream, at the
-trainer's batch size and eval count, reads 13.85 on this checkpoint. The run log is gone
-from the tree and the wandb run `cy7k8q3m` is not reachable from `adew-me/morph`, so the
-disagreement is not resolved here. Two independent readings in the tree corroborate the
-12-18 range and none corroborates 5.76: `slot_z_optimize`'s `z_eff_rank/loop` reads 17.66
-for this arm at 5000 (`lab/experiments/results/2026-09-12-strict/`), and the same field on
-four sibling strict arms reads 11.65-16.13. **Treat 5.7598 as unverified until someone
-re-derives it; every number below is reproducible from the model's own probe.**
+trainer's batch size and eval count, reads 13.85 on this checkpoint. Two independent
+readings in the tree corroborate the 12-18 range and none corroborates 5.76:
+`slot_z_optimize`'s `z_eff_rank/loop` reads 17.66 for this arm at 5000
+(`lab/experiments/results/2026-09-12-strict/`), and the same field on four sibling strict
+arms reads 11.65-16.13.
+
+**RESOLVED the same day, in [`discrepancy.md`](discrepancy.md).** The run logged from the
+probe as it was BEFORE commit `7a24adf`, whose front was a bare `_tul_front` and therefore
+ran a `tg_geometry: strict` model's prelude UNRESTRICTED. On the trainer's exact final-eval
+rows that old code reads 5.7598 / 0.7104 and HEAD's reads 13.1183 / 0.5430, from the same
+checkpoint at the same dtype; the run's val CE reproduces to 4.4249 on the same rows, so
+the weights are not in it. The shipped reading is the right one, and the baseline a prereg
+should use for this arm is 13.85 / 0.520 (trainer val recipe, stream offset 0).
 
 ## Stage tables
 
@@ -164,4 +170,7 @@ not instead of them. The 480-row panel uses `skip_samples=0` (the probe family's
 convention), not the trainer's held-out shard; the trainer-matched run shows the two
 differ by about 1.9 rank units on the strict arm. `s0_seed`'s readout column applies
 `lm_mixer` + `final_norm` to a pre-prelude embedding, which is not the coda's space — its
-raw row is the meaningful one. And the 5.7598 disagreement above is open.
+raw row is the meaningful one. Reading 2's "the write halves it" is a raw-view,
+single-pooled-set statement: [`discrepancy.md`](discrepancy.md) §2 shows most of that drop
+is the offset BETWEEN a slot's two cells, and that the same 108 vectors read 12.80 once
+each cell's own mean is out.
