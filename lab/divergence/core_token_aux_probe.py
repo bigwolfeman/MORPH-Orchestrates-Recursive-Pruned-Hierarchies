@@ -35,30 +35,6 @@ from _stats import paired_bootstrap_ci
 sys.path.insert(0, f"{ROOT}/scripts")
 from tul_samples import load_ckpt  # noqa: E402
 
-from morph.model import transformer as T  # noqa: E402
-
-
-def _coda_kwargs(model, layout):
-    """The coda relation and the retention reset, built the way `_forward_tul` builds them."""
-    tc = model.cfg.tul
-    if model._tg_strict:
-        seg = T.tg_segment_ids(layout)
-        allow = T.tg_strict_allow(layout, "coda", coda_prefix_reach=tc.tg_coda_prefix_reach)
-        kw = {"tg_allow": allow, "tg_slot_mask": layout.slot_mask,
-              "tg_comp_allow": allow, "tg_seg": seg}
-        return kw, T.tg_reset_from_ids(seg)
-    raise NotImplementedError("this probe is written for the strict geometry only; "
-                              "add the tg_restrict branch of _forward_tul before using it "
-                              "on another arm")
-
-
-def _front_kwargs(model, layout):
-    seg = T.tg_segment_ids(layout)
-    pre = T.tg_strict_allow(layout, "prelude")
-    return ({"tg_allow": pre, "tg_slot_mask": layout.slot_mask,
-             "tg_comp_allow": pre, "tg_seg": seg}, T.tg_reset_from_ids(seg))
-
-
 @torch.no_grad()
 def probe_batch(model, inp, labels, layout, device):
     inp, labels, layout = inp.to(device), labels.to(device), layout.to(device)
@@ -66,9 +42,8 @@ def probe_batch(model, inp, labels, layout, device):
         res = model.tul_forward_ablated(inp, labels, layout, plan_mode="normal")
         shipped = float(res["loss"]) - float(res.get("spandec_weighted", 0.0))
         n_ship = float(res["n_targets"])
-        fkw, freset = _front_kwargs(model, layout)
+        fkw, freset, ckw, creset = model._tul_tg_kwargs(layout)   # the ONE home
         x, x0, bg = model._tul_front(inp, layout, attn_kwargs=fkw, ret_reset_mask=freset)
-        ckw, creset = _coda_kwargs(model, layout)
         st: dict = {}
         aux = float(model._tul_core_token_aux(x, x0, bg, inp, labels, layout, ckw, creset,
                                               stats=st))

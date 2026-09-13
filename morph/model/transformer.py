@@ -5262,6 +5262,78 @@ class MORPHTransformer(nn.Module):
         out["first_tok_counterfactual"] = out["ce_plast"] - out["ce_emit"]
         return out
 
+    def _tul_tg_kwargs(self, layout: SlotLayout) -> tuple[dict | None, Tensor | None,
+                                                         dict | None, Tensor | None]:
+        """``(front_kw, front_reset, coda_kw, coda_reset)`` — the TG restriction of ONE forward.
+
+        The ONE home of the relation the prelude and the coda run under
+        (docs/tul-tg-spec.md §§1-4). :meth:`_forward_tul` reads it, and so must every
+        instrument that rebuilds the front outside the forward
+        (``lab/divergence/spandec_horizon_grid.py``, ``core_token_aux_probe.py``,
+        :meth:`tul_slot_state_probe`): a bare ``_tul_front(input_ids, layout)`` on a
+        ``tg_geometry="strict"`` or ``tg_restrict_scope="all"`` model runs the prelude
+        UNRESTRICTED and every state downstream of it is off-distribution. The horizon
+        grid did exactly that on 2026-09-13 and read the depth effect with the wrong sign
+        (`tests/test_spandec_horizon_grid.py`, the strict twin of the exit-column test).
+
+        All four are ``None`` on a ``tg_restrict=false`` model (bit-identical, spec T4).
+        ``front_kw`` is ``coda_kw`` under ``restrict`` at scope ``all``, ``None`` at scope
+        ``coda``, and a DIFFERENT dict under ``strict`` (the prelude is same-span only).
+        """
+        tc = self.cfg.tul
+        # tg_attn_kwargs feeds the window branch's extra_mask (tg_allow) and the
+        # compressed branch's slot mask; tg_reset feeds the GLA segment reset. Both
+        # None on a tg_restrict=false model (bit-identical, spec T4).
+        tg_attn_kwargs = tg_reset = None
+        _strict_front_kw = None
+        if self._tg_strict:
+            # ── STRICT (tul.tg_geometry) ──────────────────────────────────────────
+            # The prelude and the coda get DIFFERENT relations, so they get different
+            # kwarg dicts — the one place in this forward where `_front_kw` is not
+            # `tg_attn_kwargs`. `tg_allow` narrows the window branch and `tg_comp_allow`
+            # the compressed one (both branches, one relation: the F1 defect class). The
+            # conv and the value shift are reset at every segment — a span's tokens, its
+            # own cells, the next span's tokens — and the retention carry is reset on the
+            # same partition rather than on `bag_id`, which does not separate a span from
+            # its own cells. `tg_strict_allow` carries the relation and the reasoning.
+            _seg = tg_segment_ids(layout)
+            _pre_allow = tg_strict_allow(layout, "prelude")
+            _coda_allow = tg_strict_allow(layout, "coda",
+                                          coda_prefix_reach=tc.tg_coda_prefix_reach)
+            _strict_front_kw = {"tg_allow": _pre_allow, "tg_slot_mask": layout.slot_mask,
+                                "tg_comp_allow": _pre_allow, "tg_seg": _seg}
+            tg_attn_kwargs = {"tg_allow": _coda_allow, "tg_slot_mask": layout.slot_mask,
+                              "tg_comp_allow": _coda_allow, "tg_seg": _seg}
+            tg_reset = tg_reset_from_ids(_seg)
+        elif self._tg_restrict:
+            # tg_restrict_scope="coda" (TULConfig): the mask reaches the coda only and
+            # carries the coda rule (a slot cell attends slot cells only, so it stays z).
+            # "all" is the shipped TG path, bit-identical.
+            _coda_scope = tc.tg_restrict_scope == "coda"
+            tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span,
+                                     slot_queries_slots_only=_coda_scope)
+            tg_attn_kwargs = {"tg_allow": tg_allow, "tg_slot_mask": layout.slot_mask}
+            if _coda_scope:
+                # The conv / value-shift reset (attention.segment_causal_conv): a span's
+                # tokens, its slot cells and the next span's tokens are three segments.
+                tg_attn_kwargs["tg_seg"] = tg_segment_ids(layout)
+            if tc.tg_span_comp:
+                # E-SAC: per-span pooled compressed branch (attention.py
+                # _tg_span_attention). Built once per forward like tg_allow.
+                _tok_sel = ~layout.slot_mask
+                tg_attn_kwargs["tg_span"] = {
+                    "bag_id": layout.bag_id, "token_sel": _tok_sel,
+                    "span_end": boundary_token_index(
+                        layout.bag_id, _tok_sel, layout.max_slots)}
+            tg_reset = tg_reset_mask(layout)
+
+        if self._tg_strict:
+            _front_kw, _front_reset = _strict_front_kw, tg_reset
+        else:
+            _front_kw = tg_attn_kwargs if tc.tg_restrict_scope == "all" else None
+            _front_reset = tg_reset if tc.tg_restrict_scope == "all" else None
+        return _front_kw, _front_reset, tg_attn_kwargs, tg_reset
+
     def _forward_tul(self, input_ids: Tensor, labels: Tensor | None,
                      layout: SlotLayout, plan_nats: bool, halt: bool = False,
                      plan_mode: str = "normal",
@@ -5350,58 +5422,11 @@ class MORPHTransformer(nn.Module):
                 f"dropped from the coda, leaving nothing to predict. Lower the cut."
             )
 
-        # ── TG restriction (docs/tul-tg-spec.md §§1-4) — built ONCE per forward ────
-        # tg_attn_kwargs feeds the window branch's extra_mask (tg_allow) and the
-        # compressed branch's slot mask; tg_reset feeds the GLA segment reset. Both
-        # None on a tg_restrict=false model (bit-identical, spec T4).
-        tg_attn_kwargs = tg_reset = None
-        _strict_front_kw = None
-        if self._tg_strict:
-            # ── STRICT (tul.tg_geometry) ──────────────────────────────────────────
-            # The prelude and the coda get DIFFERENT relations, so they get different
-            # kwarg dicts — the one place in this forward where `_front_kw` is not
-            # `tg_attn_kwargs`. `tg_allow` narrows the window branch and `tg_comp_allow`
-            # the compressed one (both branches, one relation: the F1 defect class). The
-            # conv and the value shift are reset at every segment — a span's tokens, its
-            # own cells, the next span's tokens — and the retention carry is reset on the
-            # same partition rather than on `bag_id`, which does not separate a span from
-            # its own cells. `tg_strict_allow` carries the relation and the reasoning.
-            _seg = tg_segment_ids(layout)
-            _pre_allow = tg_strict_allow(layout, "prelude")
-            _coda_allow = tg_strict_allow(layout, "coda",
-                                          coda_prefix_reach=tc.tg_coda_prefix_reach)
-            _strict_front_kw = {"tg_allow": _pre_allow, "tg_slot_mask": layout.slot_mask,
-                                "tg_comp_allow": _pre_allow, "tg_seg": _seg}
-            tg_attn_kwargs = {"tg_allow": _coda_allow, "tg_slot_mask": layout.slot_mask,
-                              "tg_comp_allow": _coda_allow, "tg_seg": _seg}
-            tg_reset = tg_reset_from_ids(_seg)
-        elif self._tg_restrict:
-            # tg_restrict_scope="coda" (TULConfig): the mask reaches the coda only and
-            # carries the coda rule (a slot cell attends slot cells only, so it stays z).
-            # "all" is the shipped TG path, bit-identical.
-            _coda_scope = tc.tg_restrict_scope == "coda"
-            tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span,
-                                     slot_queries_slots_only=_coda_scope)
-            tg_attn_kwargs = {"tg_allow": tg_allow, "tg_slot_mask": layout.slot_mask}
-            if _coda_scope:
-                # The conv / value-shift reset (attention.segment_causal_conv): a span's
-                # tokens, its slot cells and the next span's tokens are three segments.
-                tg_attn_kwargs["tg_seg"] = tg_segment_ids(layout)
-            if tc.tg_span_comp:
-                # E-SAC: per-span pooled compressed branch (attention.py
-                # _tg_span_attention). Built once per forward like tg_allow.
-                _tok_sel = ~layout.slot_mask
-                tg_attn_kwargs["tg_span"] = {
-                    "bag_id": layout.bag_id, "token_sel": _tok_sel,
-                    "span_end": boundary_token_index(
-                        layout.bag_id, _tok_sel, layout.max_slots)}
-            tg_reset = tg_reset_mask(layout)
-
-        if self._tg_strict:
-            _front_kw, _front_reset = _strict_front_kw, tg_reset
-        else:
-            _front_kw = tg_attn_kwargs if tc.tg_restrict_scope == "all" else None
-            _front_reset = tg_reset if tc.tg_restrict_scope == "all" else None
+        # ── TG restriction (docs/tul-tg-spec.md §§1-4) — built ONCE per forward, in
+        # `_tul_tg_kwargs`, the ONE home every instrument that rebuilds the front
+        # must read (2026-09-13: the horizon grid rebuilt it bare and scored a
+        # strict model from an unrestricted prelude).
+        _front_kw, _front_reset, tg_attn_kwargs, tg_reset = self._tul_tg_kwargs(layout)
         x, x0, bigram_emb = self._tul_front(input_ids, layout,
                                             attn_kwargs=_front_kw,
                                             ret_reset_mask=_front_reset)
@@ -6321,7 +6346,9 @@ class MORPHTransformer(nn.Module):
             raise RuntimeError("tul_slot_state_probe needs MORPHConfig(tul=...)")
         from morph.model.fm_planner import effective_rank, mean_pairwise_cos
 
-        x, x0, bigram = self._tul_front(input_ids, layout)
+        _fkw, _freset, _ckw, _creset = self._tul_tg_kwargs(layout)
+        x, x0, bigram = self._tul_front(input_ids, layout, attn_kwargs=_fkw,
+                                        ret_reset_mask=_freset)
         _xn, h_slots, _d, _g, *_ = self._tul_core(x, x0, bigram, layout,
                                                  input_ids=input_ids)
         z = self._readout(h_slots).float()                     # [B, S, C]
@@ -6464,7 +6491,9 @@ class MORPHTransformer(nn.Module):
                 "(.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md) — it is not specified, so this "
                 "raises rather than silently picking a behaviour."
             )
-        x, x0, bigram_emb = self._tul_front(input_ids, layout)
+        _fkw, _freset, _ckw, _creset = self._tul_tg_kwargs(layout)
+        x, x0, bigram_emb = self._tul_front(input_ids, layout, attn_kwargs=_fkw,
+                                            ret_reset_mask=_freset)
         xn, h_slots, depths, g_traj, *_ = self._tul_core(x, x0, bigram_emb, layout,
                                                          input_ids=input_ids)
         if self.tul_gate is not None:

@@ -117,6 +117,30 @@ def test_exit_column_equals_the_models_own_spandec_ce():
     assert abs(own - got) < 1e-5, f"exit column {got:.6f} vs the model's {own:.6f}"
 
 
+@pytest.mark.parametrize("geom", [
+    dict(tg_restrict=True, tg_geometry="strict"),
+    dict(tg_restrict=True, tg_restrict_scope="all"),
+])
+def test_exit_column_equals_the_models_own_spandec_ce_under_a_restricted_prelude(geom):
+    """The twin that would have caught 2026-09-13: on a `strict` (or restrict-at-scope-all)
+    model the prelude runs under its own relation, and an `exit_state` that rebuilt the
+    front bare scored the loop from an UNRESTRICTED prelude — a different function, read
+    on the Spark with the depth effect's sign flipped. The fixture above has no TG
+    restriction at all, so it could not see it.
+    """
+    m = _model(**geom)
+    inp, lab, layout, _ = _batch()
+    own = float(m(inp, labels=lab, slot_layout=layout)["spandec_ce"])
+    got = _grid_ce(m, inp, layout, "exit", "exit", 1, OWN_DEPTH)
+    assert abs(own - got) < 1e-5, f"exit column {got:.6f} vs the model's {own:.6f} ({geom})"
+    # and the bare front IS a different function on this model, or the test is vacuous
+    x, x0, bigram = m._tul_front(inp, layout)
+    fkw, freset, _c, _r = m._tul_tg_kwargs(layout)
+    xr, _x0r, _br = m._tul_front(inp, layout, attn_kwargs=fkw, ret_reset_mask=freset)
+    assert fkw is not None and not torch.allclose(x, xr), \
+        "the restricted and the bare prelude agree on this fixture; the guard is vacuous"
+
+
 def test_row_ce_aggregates_to_one_batch_call():
     """Per-row scoring must be an ARRANGEMENT of the shipped kernel, not a re-derivation."""
     from morph.model.fused_ce import fused_linear_cross_entropy

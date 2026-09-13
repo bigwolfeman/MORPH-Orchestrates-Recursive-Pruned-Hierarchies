@@ -78,7 +78,11 @@ def exit_state(model, inp, layout, depth: int) -> torch.Tensor:
     """
     tab = torch.full(layout.slot_index.shape, int(depth), dtype=torch.long,
                      device=inp.device)
-    x, x0, bigram = model._tul_front(inp, layout)
+    # The prelude's OWN relation (strict: same-span only; restrict at scope all: the TG
+    # mask). A bare `_tul_front(inp, layout)` here scored every strict arm from an
+    # unrestricted prelude (2026-09-13) — the one home is `_tul_tg_kwargs`.
+    fkw, freset, _ckw, _creset = model._tul_tg_kwargs(layout)
+    x, x0, bigram = model._tul_front(inp, layout, attn_kwargs=fkw, ret_reset_mask=freset)
     out = model._tul_core(x, x0, bigram, layout, input_ids=inp, slot_depths=tab)
     h_slots, depths = out[1], out[2]
     if not torch.equal(depths[layout.slot_valid],
