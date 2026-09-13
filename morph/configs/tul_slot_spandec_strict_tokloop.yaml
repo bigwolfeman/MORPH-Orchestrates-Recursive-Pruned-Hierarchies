@@ -1,0 +1,69 @@
+# Slot-loop panel, arm "slot-spandec-strict-tokloop": the LOOP READS THE TOKENS.
+# ONE factor against `slot-spandec-strict` (`tul_slot_spandec_strict.yaml`):
+# `tul.loop_reads_tokens`. Nothing else moves — same geometry, same span-decoder target,
+# same prefix_k, same ternary rule, same 1000-step ramp, same fixed-point term.
+#
+# THE FACT THIS IS BUILT ON. Inside `_tul_core` the compact sequence holds slot cells and
+# NOTHING ELSE, so a pass has nothing new to look at: a slot's input is one span's summary,
+# fixed before the loop starts, and the state is settled after one pass on every target
+# anyone has posed (K0-K6 0.0015 / 0.107 / 0.019 with passes 2-6 at <= 0.002, the
+# 2026-09-10 geometry audit). The two arms that tried to give a pass new input both read
+# flat: `tul.reread` (the slot cross-attends the FROZEN prelude token states each pass)
+# K1-K6 +0.0003 with W_o used at ~5 % per pass, and `tul.core_token_aux` (the tokens
+# through the core in TRAINING only) +0.0005 while the same six blocks became a 1.10-nat
+# better token map. The coretok filing's verdict: "the core is not under-trained, it is
+# under-USED."
+#
+# WHAT THIS ARM IS. The aux path promoted to the SHIPPED forward. `_core_region` — the
+# same per-sample Poisson-depth core the plain model runs and earns 0.185 nats on — over
+# EVERY position, tokens and slot cells in one sequence, under the same span-restricted
+# relation the aux used (`_core_token_aux_kwargs`, the ONE home):
+#
+#     allow(i, j) = causal AND ( bag_id[i] == bag_id[j] OR slot_mask[j] )
+#
+# so a token reads its OWN span's tokens and reaches every earlier span ONLY through a
+# slot cell, and a cell reads its own span plus every earlier cell. The slot cells are
+# still the whole cross-span channel, at inference as in training — which is the half of
+# Wolfe's 2026-09-12 sentence the aux arm could not test, because the aux was training-only
+# by construction and the SHIPPED forward it was measured on never ran the tokens at all.
+#
+# THIS IS NOT THE PAID LOOP. The paid loop (`tul.tokens_through_core`) runs the core
+# UNRESTRICTED over the packed row: every token reads every earlier token directly, the
+# cells carry nothing anybody needs, and the arm is 0.125 nats behind the plain model
+# under norm_match (2026-09-09). The restriction is the entire content of this arm, and
+# the build refuses the two knobs together rather than letting a name promise it.
+#
+# NO PREFIX WRITE, and that is a decision. A cell's looped state is already AT its own
+# position when the core returns, so `prefix_project` would scatter a second copy of a
+# tensor that is already there. The model therefore holds no `W_prefix` (the paid loop's
+# rule, `TULSlots(with_prefix=False)`) — 2.10 M FEWER parameters than the ruler, declared
+# as a confound. `z` (what the span decoder grades) is `gather_valid` at the slot's FIRST
+# cell, the same seam every other arm reads, so `spandec_ce` stays comparable.
+#
+# DEPTH. There is no per-slot depth here: `_core_region` draws ONE Poisson depth per
+# SAMPLE, the plain model's own draw. Forced-depth eval therefore goes through
+# `model.cfg.mean_depth`, not `tul.slot_mean_depth`; `core_depth_sweep.py` detects the
+# mode and reads the right knob, and every per-slot knob (slot_depth_fixed, the staged /
+# per-pass / oracle / critic / grad-pass family, loop_reach) RAISES at construction rather
+# than sitting inert.
+#
+# COST, arithmetic (row = 1024 real tokens, L_total 1152, 64 cells, mean depth 6):
+#   prelude 4 x 1152 + core 6 x 1152 x 6 + coda 4 x 1152 = 50688 -> 49.5 / real token
+#   span decoder, H = 1 (2 x 64 x 32)                    =  4096 ->  4.0 / real token
+# so ~53.5 against the ruler's 14.8 and the PLAIN panel's 44.0. By proportion from the
+# coretok arm's measured 3,831 tok/s at 59.8 passes/token this lands near 4,300 tok/s.
+# The rate floor is OFF on the recon runner; report it, it does not gate. MEMORY is the
+# way this arm dies, not rate: the core's activations now cover 1152 positions instead of
+# 64, and the 12-step smoke is what decides.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-loop-reads-tokens.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-the-loop-reads-the-tokens.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  loop_reads_tokens: true
+
+wandb:
+  name: slot-spandec-strict-tokloop

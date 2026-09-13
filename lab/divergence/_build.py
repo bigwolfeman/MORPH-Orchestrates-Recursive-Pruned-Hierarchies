@@ -24,7 +24,7 @@ from morph.training.quant_setup import apply_quantization     # noqa: E402
 from morph.training.train import build_morph_config           # noqa: E402
 from morph.training.tul_setup import build_tul_runtime        # noqa: E402
 
-__all__ = ["build_cfg", "build_model", "DepthLever", "ROOT"]
+__all__ = ["build_cfg", "build_model", "DepthLever", "uses_sample_depth", "ROOT"]
 
 ROOT = _ROOT
 
@@ -52,6 +52,24 @@ def build_model(cfg, device: str = "cuda"):
     model = model.to(torch.device(device))
     apply_quantization(model, cfg)
     return model, tul_rt
+
+
+def uses_sample_depth(model_cfg) -> bool:
+    """True when this arm's forced-depth lever is ``model.cfg.mean_depth``.
+
+    Two TUL forwards run `_core_region`'s per-SAMPLE Poisson draw over the packed row
+    instead of `_tul_core`'s per-SLOT one, and on both of them `tul.slot_mean_depth` is
+    read by nobody — forcing it reads a FLAT curve and looks like a null result:
+
+    * ``tul.tokens_through_core`` — the paid loop, unrestricted core (measured flat this
+      way on `tul-norm-match`, 2026-09-09 19:59, before the sweep knew);
+    * ``tul.loop_reads_tokens`` — the span-restricted core (2026-09-13).
+
+    ONE home, because that failure is silent: a sweep that forces the wrong knob prints a
+    perfectly plausible depth curve of zeros.
+    """
+    return bool(getattr(model_cfg, "tokens_through_core", False)
+                or getattr(model_cfg, "loop_reads_tokens", False))
 
 
 class DepthLever:

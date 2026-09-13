@@ -14,10 +14,28 @@ Run it on the arm AND on a checkpoint that never trained the aux (the strict rul
 ruler's number is what the untrained token-core path costs, the arm's is what the trained
 one gives. The gap between them is the aux objective's own work.
 
+``--depths`` (2026-09-13) turns the probe into a DEPTH SWEEP of the aux path. The aux core
+is the span-restricted token loop `tul.loop_reads_tokens` promotes to the shipped forward,
+and the coretok checkpoint has already trained it — so forcing `model.cfg.mean_depth` and
+re-scoring the SAME rows answers "does a span-restricted token loop earn depth at all"
+from a checkpoint that exists, with no training. K1-K6 and K3-K6 come with a paired
+bootstrap over BATCHES (the aux CE is a batch mean inside `_tul_core_token_aux`, not a
+per-row map, so batches are the resampling unit; run `--batch 1` when the interval is the
+headline).
+
+THE SHIPPED PATH IS PINNED while the aux moves. `_sample_slot_depths` at eval reads
+`tul.slot_mean_depth or model.mean_depth`, so moving `mean_depth` alone would drag the
+SLOT loop's depth with it and the two effects would be inseparable. The probe resolves
+`slot_mean_depth` once and writes it back, so `shipped_ce` is the same number at every
+depth — which is also the check that the pinning worked.
+
 Usage:
   python lab/divergence/core_token_aux_probe.py \
       --ckpt coretok=tul_slot_spandec_strict_coretok=/path/step_5000.pt \
       --ckpt strict=tul_slot_spandec_strict=/path/step_5000.pt --rows 480 --out X.json
+  python lab/divergence/core_token_aux_probe.py \
+      --ckpt coretok=tul_slot_spandec_strict_coretok=/path/step_5000.pt \
+      --depths 1,2,3,6 --rows 480 --batch 3 --out X.json
 """
 from __future__ import annotations
 
@@ -56,6 +74,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", action="append", required=True, help="LABEL=CONFIG=PATH")
     ap.add_argument("--rows", type=int, default=480)
+    ap.add_argument("--depths", default="",
+                    help="comma-separated forced CORE depths for the AUX path "
+                         "(model.cfg.mean_depth). Empty = the checkpoint's own depth, "
+                         "which is what the 2026-09-12 filing ran.")
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", required=True)
@@ -77,24 +99,61 @@ def main() -> None:
         row_tokens = tul_rt.data_cfg.spec_for(cfg.data.seq_len).l_total + 1
         stream = stream_from_loader(loader, a.rows * row_tokens)
         batches = pack_rows(stream, tul_rt, cfg, a.batch, False)[:-(-a.rows // a.batch)]
-        ship_sum, aux_sum, cnt = [], [], []
-        for i, (inp, labels, layout, _idx) in enumerate(batches):
-            s, x, n = probe_batch(model, inp, labels, layout, a.device)
-            ship_sum.append(s * n); aux_sum.append(x * n); cnt.append(n)
-            if i % 20 == 0:
-                print(f"{label} batch {i}/{len(batches)} shipped={s:.4f} aux={x:.4f} n={n:.0f}",
-                      flush=True)
-        ship_sum, aux_sum, cnt = map(np.asarray, (ship_sum, aux_sum, cnt))
-        ci = paired_bootstrap_ci(aux_sum, ship_sum, cnt)   # aux - shipped, per-batch paired
+        tc = model.cfg.tul
+        orig_mean, orig_slot = int(model.cfg.mean_depth), int(tc.slot_mean_depth)
+        # PIN the shipped path at the depth it already runs, so only the AUX core moves.
+        tc.slot_mean_depth = orig_slot or orig_mean
+        depth_list = ([int(x) for x in a.depths.split(",")] if a.depths
+                      else [orig_mean])
+        per_depth: dict[int, dict] = {}
+        aux_by_depth: dict[int, np.ndarray] = {}
+        cnt_arr = None
+        try:
+            for d in depth_list:
+                model.cfg.mean_depth = d
+                ship_sum, aux_sum, cnt = [], [], []
+                for i, (inp, labels, layout, _idx) in enumerate(batches):
+                    s_, x_, n_ = probe_batch(model, inp, labels, layout, a.device)
+                    ship_sum.append(s_ * n_); aux_sum.append(x_ * n_); cnt.append(n_)
+                    if i % 20 == 0:
+                        print(f"{label} d={d} batch {i}/{len(batches)} shipped={s_:.4f} "
+                              f"aux={x_:.4f} n={n_:.0f}", flush=True)
+                ship_sum, aux_sum, cnt = map(np.asarray, (ship_sum, aux_sum, cnt))
+                ci = paired_bootstrap_ci(aux_sum, ship_sum, cnt)  # aux - shipped, paired
+                per_depth[d] = {"shipped_ce": float(ship_sum.sum() / cnt.sum()),
+                                "aux_ce": float(aux_sum.sum() / cnt.sum()),
+                                "aux_minus_shipped": ci}
+                aux_by_depth[d] = aux_sum
+                if cnt_arr is None:
+                    cnt_arr = cnt
+                print(f"{label:10s} d={d} shipped={per_depth[d]['shipped_ce']:.4f} "
+                      f"aux={per_depth[d]['aux_ce']:.4f} aux-shipped={ci}", flush=True)
+        finally:
+            model.cfg.mean_depth = orig_mean
+            tc.slot_mean_depth = orig_slot
+        ships = {d: per_depth[d]["shipped_ce"] for d in depth_list}
+        assert max(ships.values()) - min(ships.values()) < 1e-6, (
+            f"the SHIPPED path moved with the aux depth ({ships}) — `slot_mean_depth` was "
+            f"not pinned and the two effects are inseparable")
         entry = {"step": step, "rows": int(sum(inp.shape[0] for inp, *_ in batches)),
-                 "batch": a.batch, "eval_depth_core": int(model.cfg.mean_depth),
-                 "eval_depth_slots": int(model.cfg.tul.slot_mean_depth or model.cfg.mean_depth),
-                 "shipped_ce": float(ship_sum.sum() / cnt.sum()),
-                 "aux_ce": float(aux_sum.sum() / cnt.sum()),
-                 "aux_minus_shipped": ci, "n_targets": float(cnt.sum())}
+                 "batch": a.batch, "eval_depth_core": orig_mean,
+                 "eval_depth_slots": int(tc.slot_mean_depth or orig_mean),
+                 "depths": {str(d): per_depth[d] for d in depth_list},
+                 "n_targets": float(cnt_arr.sum())}
+        # the whole point of --depths: the aux path's own K-curve, paired over batches
+        entry["ci_aux_ce"] = {
+            f"K{x}-{'K' + str(y)}": paired_bootstrap_ci(aux_by_depth[x], aux_by_depth[y],
+                                                        cnt_arr)
+            for x, y in ((1, 6), (3, 6), (1, max(depth_list)))
+            if x in aux_by_depth and y in aux_by_depth and x != y}
+        # back-compatible top-level keys: the checkpoint's own depth, the 2026-09-12 columns
+        _d0 = orig_mean if orig_mean in per_depth else depth_list[-1]
+        entry.update({k: per_depth[_d0][k]
+                      for k in ("shipped_ce", "aux_ce", "aux_minus_shipped")})
         out[label] = entry
-        print(f"{label:10s} step={step} shipped={entry['shipped_ce']:.4f} "
-              f"aux={entry['aux_ce']:.4f} aux-shipped={ci}", flush=True)
+        for k, v in entry["ci_aux_ce"].items():
+            print(f"{label:10s} aux_ce {k}: {v['point']:+.4f} "
+                  f"[{v['lo']:+.4f}, {v['hi']:+.4f}] over {v['n_units']} batches", flush=True)
         del model
         torch.cuda.empty_cache()
     with open(a.out, "w") as f:

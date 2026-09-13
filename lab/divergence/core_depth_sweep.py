@@ -39,7 +39,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from _build import ROOT, build_cfg
+from _build import ROOT, build_cfg, uses_sample_depth
 from _rows import pack_rows, stream_from_loader
 from _stats import paired_bootstrap_ci
 
@@ -134,11 +134,14 @@ def main() -> None:
                                 device, tul_rt.model_cfg if tul_rt else None)
         model.eval()
         plain = tul_rt is None  # the plain control (tul.activate_at: never)
-        # The PAID loop (tul.tokens_through_core) runs the ordinary _core_region over the
-        # whole packed row, so its eval depth is model.cfg.mean_depth exactly like the plain
-        # model's; the slot knobs (slot_mean_depth / slot_max_depth) are ignored by that
-        # path and forcing them reads a flat curve (tul-norm-match, 2026-09-09 19:59).
-        paid = (not plain) and bool(tul_rt.model_cfg.tokens_through_core)
+        # Two TUL forwards run the ordinary `_core_region` over the whole packed row, so
+        # their eval depth is `model.cfg.mean_depth` exactly like the plain model's and the
+        # slot knobs (slot_mean_depth / slot_max_depth) are read by nobody: the paid loop
+        # (`tul.tokens_through_core`; measured flat this way on tul-norm-match, 2026-09-09
+        # 19:59) and `tul.loop_reads_tokens` (2026-09-13). `uses_sample_depth` is the ONE
+        # home of that predicate — `lab/divergence/_build.py`, tested in
+        # tests/test_tul_loop_reads_tokens.py.
+        paid = (not plain) and uses_sample_depth(tul_rt.model_cfg)
         loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8,
                                    split="validation", skip_samples=0, bag_size=0, tul=None)
         # The SAME validation stream for every arm, packed by the arm's own cut (the
