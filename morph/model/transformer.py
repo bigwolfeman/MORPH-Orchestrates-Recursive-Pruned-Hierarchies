@@ -71,7 +71,11 @@ else:
 # Attention kwargs `_core_region` can thread through its active-set sort. Each is a
 # PER-SAMPLE tensor with batch as dim 0, so `[perm]` and `[:n_active]` are exact. Anything
 # else (e.g. `tg_span`, a dict of per-span index tensors) raises there rather than being
-# silently dropped — see the raise for the reason.
+# silently dropped — see the raise for the reason. `tg_relation` (the Thought Register's
+# cell relation) is deliberately absent: it is a [1,1,S*M,S*M] relation over the SLOT
+# loop's compact cell axis, `tul.slot_cells>1` refuses `tokens_through_core`, and a
+# batch-less tensor is not permutable by `[perm]`. Reaching `_core_region` with it is a
+# bug and raises there.
 _CORE_TG_KEYS = frozenset({"tg_allow", "tg_slot_mask", "tg_comp_allow", "tg_seg"})
 
 
@@ -981,19 +985,28 @@ def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0
     which is why the stack at M = 1 can keep running the block's own causal attention with
     no mask at all and stay bit-identical to the placement before the register existed.
 
-    **What ``blk`` DOES, as executed (measured 2026-09-13, and it is narrower than the
-    paragraph above).** ``blk`` is a SUPERSET of flattened causal: ``slot(p) >= slot(q)``
-    is implied by ``p >= q``. Every branch that reads ``tg_allow`` / ``tg_comp_allow``
-    ANDs it into an already-causal relation and can only NARROW
-    (``attention._tg_slot_attention``, ``attention._window_fallback``). So at ``reach ==
-    0`` the executed relation is plain FLATTENED CAUSAL and a cell never reads a LATER
-    cell of its own slot — the mask is a no-op there, pinned two-sided against an all-TRUE
-    mask in ``tests/test_tul_cond4_strict.py::
-    test_the_executed_relation_is_flattened_causal_at_reach_zero``. At ``reach > 0`` the
-    mask really does bite, because narrowing ACROSS slots is what it asks for. Expressing
-    the two-sided within-slot read would need a branch that can widen past causality,
-    which nothing in this tree has; it is not a bug to patch here, it is the shape of the
-    register arm that is queued, and it is written down so no arm claims otherwise.
+    **How it is DELIVERED, and why that is not ``tg_allow`` (fixed 2026-09-13, before any
+    GPU step of any register arm).** ``blk`` is a SUPERSET of flattened causal:
+    ``slot(p) >= slot(q)`` is implied by ``p >= q``. ``tg_allow`` / ``tg_comp_allow`` are
+    ANDed into a relation that is ALREADY causal and can only NARROW, so handing ``blk``
+    to them executed as plain flattened causal at ``reach == 0`` — a cell never read a
+    LATER cell of its own slot, in the loop or in the think-once stack, and the mask was a
+    no-op there. Both callers therefore pass this mask as ``tg_relation``, the ONE kwarg
+    that REPLACES a branch's causal term instead of narrowing it
+    (``attention._tg_relation_guard``, ``attention._tg_slot_attention``,
+    ``attention._window_fallback``). Replacing is safe across slots precisely because
+    ``blk`` is block-causal there; within a slot it widens to all M cells, which is the
+    documented relation. Pinned two-sided and NUMERICALLY — the register's loss differs
+    from plain flattened causal and equals an independently written all-true-within-slot
+    mask — in ``tests/test_tul_slot_register.py`` and ``tests/test_tul_cond4_strict.py``.
+
+    **What is still CAUSAL on the cell axis, by decision.** The CCA causal conv, its
+    ``W_v_prev`` value shift and (on a core that carries one) the GLA retention branch are
+    position-wise / recurrent operators, not attention: they read backwards along the
+    flattened axis and have no mask to widen. They are left alone. Every position they
+    reach is a cell of the same or an earlier slot, which ``blk`` already allows, so they
+    never leak; they simply give cell 0 no sibling context of its own. Widening them would
+    mean an acausal conv, a different mechanism from this relation.
     """
     sm = n_slots * m_cells
     sl = torch.arange(sm, device=device) // m_cells            # slot id per cell
@@ -3712,19 +3725,23 @@ class MORPHTransformer(nn.Module):
             # Cell i of slot k is ALLOWED every cell of slots < k (as today, and as
             # narrowed by `loop_reach`) AND every cell of its OWN slot k.
             #
-            # CORRECTION, measured 2026-09-13: at `loop_reach 0` that mask executes as
-            # plain FLATTENED CAUSAL — the attention branches AND it into an already-causal
-            # relation and can only narrow, and the mask is a superset of flattened causal.
-            # So a cell does NOT read a later cell of its own slot on this tree. Read
-            # `slot_cell_relation`'s docstring, which is the one home for the measurement.
-            # At `loop_reach > 0` the mask does bite: narrowing across slots is what it
-            # asks for.
+            # IT IS DELIVERED AS `tg_relation`, NOT `tg_allow` (fixed 2026-09-13, before
+            # any GPU step of any register arm). `tg_allow`/`tg_comp_allow` are ANDed into
+            # an already-causal relation and can only NARROW, and this mask is a SUPERSET
+            # of flattened causal, so handing it to them executed as plain flattened
+            # causal at `loop_reach 0`: a cell never read a LATER cell of its own slot,
+            # which is the opposite of a register. `tg_relation` REPLACES the branch's
+            # causal term on both halves of the layer (window + compressed). Replacing is
+            # safe across slots because the mask is block-causal there; within a slot it
+            # widens to all M cells. `slot_cell_relation`'s docstring is the one home.
             #
             # The CCA conv and the value shift are left alone, unlike the `loop_reach`
             # arm's: they are CAUSAL on the flattened axis, so every position they reach
             # is a cell of the same or an earlier slot, which this relation already allows.
-            # A `tg_seg` reset here would cut the conv at slot boundaries, a restriction
-            # today's 64-cell core does not have either.
+            # They are position-wise operators with no mask to widen — cell 0 gets no
+            # sibling context THROUGH THEM, only through attention. A `tg_seg` reset here
+            # would cut the conv at slot boundaries, a restriction today's 64-cell core
+            # does not have either.
             if _reach > 0 and _scse is not None:
                 raise NotImplementedError(
                     "tul.loop_reach with tul.slot_cells>1 under SCSE is not defined.")
@@ -3735,8 +3752,8 @@ class MORPHTransformer(nn.Module):
             # reach arm's are, except that "position" is the SLOT: a cell keeps its own
             # slot's cells, which is what makes the register a register and not M
             # independent loops.
-            _kw0 = {"tg_allow": _mask0, "tg_comp_allow": _mask0}
-            _kwr = {"tg_allow": _same, "tg_comp_allow": _same}
+            _kw0 = {"tg_relation": _mask0}
+            _kwr = {"tg_relation": _same}
             _core_akw = tuple([_kw0] + [(_kwr if _reach > 0 else _kw0)
                                         for _ in range(n_core - 1)])
         elif _reach > 0:
@@ -7101,10 +7118,11 @@ class MORPHTransformer(nn.Module):
 
         ``m_cells > 1``: the compact axis is ``S*M`` cells and the stack runs under the
         SAME relation the register loops with — own slot full, earlier slots causal, from
-        the ONE builder ``slot_cell_relation``. Plain causal on the flattened axis would
-        make cell 0 blind to its siblings, and the stack would be a different mechanism
-        from the loop it conditions. ``tul.loop_reach`` is refused with a stack
-        (``TULConfig``), so no reach budget reaches this relation.
+        the ONE builder ``slot_cell_relation``, delivered through the SAME ``tg_relation``
+        kwarg the core stage uses so the two cannot execute differently. Plain causal on
+        the flattened axis would make cell 0 blind to its siblings, and the stack would be
+        a different mechanism from the loop it conditions. ``tul.loop_reach`` is refused
+        with a stack (``TULConfig``), so no reach budget reaches this relation.
 
         Pad slots sit at the tail of the compact sequence and the relation never lets a
         valid cell read past its own slot, so a pad cell is never a key of a valid one;
@@ -7115,7 +7133,7 @@ class MORPHTransformer(nn.Module):
         akw = None
         if m_cells > 1:
             allow, _same = slot_cell_relation(n_slots, m_cells, h_slots.device)
-            akw = {"tg_allow": allow, "tg_comp_allow": allow}
+            akw = {"tg_relation": allow}
         for layer in self.tul_cond:
             h_slots = layer(h_slots, attn_kwargs=akw)
         return h_slots

@@ -14,10 +14,14 @@ WHAT THIS FILE HAS TO PROVE:
    what makes the m4/sameinit pair one factor: they are identical until `W_o` moves.
 3. THE SHAPE AND THE WRITE. The compact sequence is S*M cells; cell i lands in prefix cell
    i, 1:1, through the shared `W_prefix[i]`; the M cells of a slot loop at ONE depth.
-4. THE IN-LOOP RELATION. Cell i of slot k reads every cell of its OWN slot (including
-   cells AFTER it) and every cell of earlier slots, and reads NO cell of a later slot.
-   Plain causal on the flattened axis would fail the first half, which is the whole reason
-   the mask is built.
+4. THE IN-LOOP RELATION, AS EXECUTED. Cell i of slot k reads every cell of its OWN slot
+   (including cells AFTER it) and every cell of earlier slots, and reads NO cell of a
+   later slot. Held on the MASK and, two-sided and NUMERICALLY, on the FORWARD: the
+   register's loss differs from plain flattened causal and equals an independently
+   written all-true-within-slot mask, and perturbing cell 3 of a slot moves cell 0 of
+   that slot (it does NOT under a causal build) while moving nothing in any earlier slot.
+   The mask travels as `tg_relation`, which REPLACES a branch's causal term;
+   `tg_allow`/`tg_comp_allow` only ever narrow and delivered plain flattened causal.
 5. NO NaN. A tail-pad slot has no key to pool from; an all-`-inf` softmax row makes NaN in
    the BACKWARD, which is how `Q` and `W_k` first read `grad = nan` here. Two-sided: the
    pad's term is exactly 0 AND every register parameter receives a finite gradient.
@@ -31,6 +35,8 @@ Record: lab/experiments/planned/2026-09-13-arc-thought-register.md
 """
 
 from __future__ import annotations
+
+import contextlib
 
 import numpy as np
 import pytest
@@ -260,12 +266,29 @@ def _core_kwargs(m, inp, layout):
     return seen[0]
 
 
+def _relation_of(akw: dict) -> torch.Tensor:
+    """The relation a core layer was handed, with the delivery contract checked.
+
+    It must arrive as `tg_relation` — the ONE attention kwarg that REPLACES a branch's
+    causal term. `tg_allow`/`tg_comp_allow` are ANDed into an already-causal relation and
+    can only NARROW, so delivering this superset-of-causal mask through them executed as
+    plain flattened causal (measured 2026-09-13, fixed the same day).
+    """
+    assert "tg_relation" in akw, (
+        f"the register's relation arrived as {sorted(akw)} — a narrowing kwarg cannot "
+        f"express a cell reading a LATER cell of its own slot")
+    assert "tg_allow" not in akw and "tg_comp_allow" not in akw, (
+        "a narrowing mask beside the relation would silently win on every entry the "
+        "relation added")
+    return akw["tg_relation"]
+
+
 def test_a_cell_reads_its_own_slots_other_cells_and_earlier_slots_only():
     m = _model(4)
     _i, inp, _l, layout = _batch(4)
     akw = _core_kwargs(m, inp, layout)
     assert akw is not None, "the register built no in-loop relation"
-    mask = akw[0]["tg_allow"][0, 0]                 # [S*M, S*M]
+    mask = _relation_of(akw[0])[0, 0]               # [S*M, S*M]
     S = layout.slot_index.shape[1]
     M = 4
     sl = torch.arange(S * M) // M
@@ -289,7 +312,7 @@ def test_the_relation_is_the_same_on_every_core_layer_without_a_reach_budget():
     akw = _core_kwargs(m, inp, layout)
     assert len(akw) == m.cfg.n_core
     for d in akw[1:]:
-        assert torch.equal(d["tg_allow"], akw[0]["tg_allow"])
+        assert torch.equal(_relation_of(d), _relation_of(akw[0]))
 
 
 def test_loop_reach_narrows_across_slots_and_keeps_the_slots_own_cells():
@@ -298,15 +321,279 @@ def test_loop_reach_narrows_across_slots_and_keeps_the_slots_own_cells():
     akw = _core_kwargs(m, inp, layout)
     M, S = 4, layout.slot_index.shape[1]
     sl = torch.arange(S * M) // M
-    m0 = akw[0]["tg_allow"][0, 0]
+    m0 = _relation_of(akw[0])[0, 0]
     p = 3 * M + 1
     assert bool(m0[p][sl == sl[p]].all()), "reach cut a slot's own cells"
     assert bool(m0[p][sl == sl[p] - 1].all()), "reach 1 must reach the previous slot"
     assert not bool(m0[p][sl < sl[p] - 1].any()), "reach 1 reached two slots back"
-    m1 = akw[1]["tg_allow"][0, 0]
+    m1 = _relation_of(akw[1])[0, 0]
     assert bool(m1[p][sl == sl[p]].all())
     assert not bool(m1[p][sl != sl[p]].any()), (
         "the later layers must be SLOT-local under a reach budget")
+
+
+# ── 4b. THE RELATION AS EXECUTED — two-sided and NUMERICAL ───────────────────
+#
+# The mask tests above grade what `slot_cell_relation` BUILDS. Until 2026-09-13 the mask
+# was handed to the attention branches as `tg_allow`/`tg_comp_allow`, which are ANDed into
+# an already-causal relation and can only NARROW — and this mask is a SUPERSET of
+# flattened causal, so it executed as plain flattened causal and a cell never read a LATER
+# cell of its own slot. The mask tests passed the whole time. These do not.
+
+@contextlib.contextmanager
+def patch_relation(mode: str):
+    """Swap `slot_cell_relation`'s `blk` for a named control, everywhere it is called.
+
+    ``blk``     the shipped relation, ``slot(p) >= slot(q)``.
+    ``flat``    plain flattened causal, ``p >= q`` — exactly what the forward executed
+                before the fix, and the control that must give a DIFFERENT loss.
+    ``alltrue`` an INDEPENDENTLY written all-true-within-slot mask, ``causal OR same
+                slot``. It equals ``blk`` by construction, so the forward must give the
+                SAME loss under it. Together the two sides say the executed relation is
+                the documented one and not merely "some mask".
+    """
+    import morph.model.transformer as _T
+    real = _T.slot_cell_relation
+
+    def patched(n_slots, m_cells, device, r=0):
+        blk, same = real(n_slots, m_cells, device, r)
+        sm = n_slots * m_cells
+        idx = torch.arange(sm, device=device)
+        if mode == "flat":
+            blk = (idx.unsqueeze(1) >= idx.unsqueeze(0)).view(1, 1, sm, sm)
+        elif mode == "alltrue":
+            sl = idx // m_cells
+            blk = ((idx.unsqueeze(1) >= idx.unsqueeze(0))
+                   | (sl.unsqueeze(1) == sl.unsqueeze(0))).view(1, 1, sm, sm)
+        elif mode != "blk":
+            raise ValueError(mode)
+        return blk, same
+
+    _T.slot_cell_relation = patched
+    try:
+        yield
+    finally:
+        _T.slot_cell_relation = real
+
+
+def loss_under(mode: str, M: int = 4, seed: int = 99, **tul_kw) -> float:
+    """One forward's loss with the cell relation delivered as `mode`."""
+    with patch_relation(mode):
+        m = _model(M, seed=seed, **tul_kw)
+        with torch.no_grad():
+            # W_o is zero-init, so at step 0 every cell carries the SAME seed and no
+            # relation can tell the three modes apart. Move it first.
+            m.tul_register.W_o.weight.normal_(std=0.05)
+        _i, inp, lab, layout = _batch(M)
+        torch.manual_seed(5)
+        return float(m(inp, labels=lab, slot_layout=layout)["loss"].detach())
+
+
+def test_the_executed_loop_relation_is_not_flattened_causal():
+    """The half the old delivery silently dropped. Two-sided in ONE test so neither side
+    can be satisfied by a forward that ignores the relation altogether."""
+    blk = loss_under("blk")
+    assert blk != loss_under("flat"), (
+        "the register's relation gives the SAME loss as plain flattened causal — the "
+        "in-slot forward read is not executing (it is being ANDed into causality again)")
+    assert blk == loss_under("alltrue"), (
+        "the register's relation differs from an all-true-within-slot mask — the "
+        "executed relation is neither the documented one nor plain causal")
+
+
+def test_a_reach_budget_still_narrows_the_executed_relation():
+    """Fixture check for the pair above: with a reach budget the mask really does cut
+    across slots, so `blk` must differ from the unbudgeted all-true-within-slot mask."""
+    assert loss_under("blk", loop_reach=1) != loss_under("alltrue", loop_reach=1)
+
+
+def core_exit(m, inp, layout, cell=None, mag: float = 1.0, seed: int = 5):
+    """The loop's compact exit, optionally with ONE cell of the loop's INPUT nudged.
+
+    The per-sample Poisson depth draw is RNG, so the seed is pinned around the call —
+    without it the two runs differ by their depths and the probe reads noise.
+    """
+    real = m._apply_core_step
+    n = {"i": 0}
+
+    def spy(h_in, *a, **kw):
+        if cell is not None and n["i"] == 0:
+            h_in = h_in.clone()
+            h_in[:, cell] = h_in[:, cell] + mag
+        n["i"] += 1
+        return real(h_in, *a, **kw)
+
+    m._apply_core_step = spy
+    try:
+        torch.manual_seed(seed)
+        _xn, h, _d, *_ = _core_out(m, inp, layout)
+    finally:
+        m._apply_core_step = real
+    return h
+
+
+def _cell_deltas(m, inp, layout, cell, M=4):
+    S = layout.slot_index.shape[1]
+    base = core_exit(m, inp, layout)
+    hit = core_exit(m, inp, layout, cell=cell)
+    return (hit - base).abs().flatten(2).amax(-1)[0].view(S, M)      # [S, M]
+
+
+def test_cell_zero_reads_a_later_cell_of_its_own_slot_in_the_forward():
+    """THE CELL-LEVEL PROBE, and the reason the register is a register.
+
+    Nudge cell 3 of slot k at the loop's input. Cell 0 of slot k must move — it is a
+    LATER sibling reading an EARLIER-indexed one, which plain causal on the flattened
+    axis forbids. Non-vacuous: under a `flat` build the same nudge moves cell 0 by
+    EXACTLY zero. No cell of any earlier slot may move under either build.
+    """
+    M = 4
+    _i, inp, _l, layout = _batch(M)
+    k = int(layout.slot_valid[0].nonzero().flatten()[2])
+    assert k >= 2, "fixture: need a slot with two earlier valid slots"
+
+    with patch_relation("blk"):
+        m = _model(M)
+        with torch.no_grad():
+            m.tul_register.W_o.weight.normal_(std=0.05)
+        d = _cell_deltas(m, inp, layout, k * M + 3, M)
+    with patch_relation("flat"):
+        mc = _model(M)
+        with torch.no_grad():
+            mc.tul_register.W_o.weight.normal_(std=0.05)
+        dc = _cell_deltas(mc, inp, layout, k * M + 3, M)
+
+    for i in (0, 1, 2):
+        assert float(d[k, i]) > 1e-4, (
+            f"cell {i} of slot {k} did not move when cell 3 of its own slot did — the "
+            f"in-slot forward read is not executing")
+        assert float(dc[k, i]) == 0.0, (
+            f"fixture: cell {i} moved under a plain-causal build too, so the probe is "
+            f"not reading the relation")
+    assert float(d[:k].max()) == 0.0, "an EARLIER slot moved — causality across slots"
+    assert float(dc[:k].max()) == 0.0
+
+
+def test_a_pad_cell_is_never_a_key_of_a_valid_cell():
+    """The direction that matters for a pad. (The reverse is true and harmless and is
+    NOT asserted: a tail pad cell sits after every valid cell on the compact axis, so it
+    reads them — exactly as it did before the register's relation widened, and its own
+    output goes to `prefix_project`'s dump row.)"""
+    M = 4
+    _i, inp, _l, layout = _batch(M)
+    pad = ~layout.slot_valid[0]
+    assert bool(pad.any()), "fixture: every slot is valid, the pad path is untested"
+    with patch_relation("blk"):
+        m = _model(M)
+        with torch.no_grad():
+            m.tul_register.W_o.weight.normal_(std=0.05)
+        d = _cell_deltas(m, inp, layout, int(pad.nonzero()[0]) * M, M)
+    assert float(d[~pad].max()) == 0.0, "a valid cell read a PAD cell"
+
+
+# ── 4c. BOTH BRANCHES, not one ───────────────────────────────────────────────
+#
+# A layer is two attention branches. If only one of them honours the relation, every
+# whole-model assertion above still passes — the other branch carries the in-slot read on
+# its own. These grade each branch separately, and grade that the core stage hands the
+# relation to both.
+
+def test_the_window_branch_honours_a_forward_pointing_relation():
+    """`_window_fallback` with a relation must let query 0 read a LATER key. Without one
+    query 0's row is empty (causal + XSA excludes the self token) and SDPA returns 0, so
+    the reading is unambiguous."""
+    from morph.model.attention import _window_fallback
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, 2, 8, 4) for _ in range(3))
+    causal = _window_fallback(q, k, v, 16, q.device, 0.5)
+    rel = torch.ones(1, 1, 8, 8, dtype=torch.bool)
+    wide = _window_fallback(q, k, v, 16, q.device, 0.5, relation=rel)
+    assert float(causal[:, :, 0].abs().max()) == 0.0, (
+        "fixture: query 0 already reads something without a relation")
+    assert float(wide[:, :, 0].abs().max()) > 0.0, (
+        "the window branch ANDs the relation into causality — it cannot widen")
+
+
+def test_the_compressed_branch_honours_a_forward_pointing_relation():
+    """`_tg_slot_attention`'s dense form (the compact cell axis) must do the same."""
+    from morph.model.attention import _tg_slot_attention
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, 2, 8, 4) for _ in range(3))
+    sink = torch.zeros(2)
+    causal = _tg_slot_attention(q, k, v, None, sink, 0.5)
+    rel = torch.ones(1, 1, 8, 8, dtype=torch.bool)
+    wide = _tg_slot_attention(q, k, v, None, sink, 0.5, relation=rel)
+    assert not torch.allclose(causal[:, :, 0], wide[:, :, 0]), (
+        "the compressed branch ANDs the relation into causality — it cannot widen")
+
+
+def _loss_with_branch_relation_dropped(branch: str, M: int = 4) -> float:
+    """`loss_under("blk")` with ONE branch's `relation=` forced back to None."""
+    import morph.model.attention as A
+    win, comp = A._window_fallback, A._tg_slot_attention
+
+    def drop(fn):
+        def inner(*a, **kw):
+            kw["relation"] = None
+            return fn(*a, **kw)
+        return inner
+
+    if branch == "win":
+        A._window_fallback = drop(win)
+    else:
+        A._tg_slot_attention = drop(comp)
+    try:
+        return loss_under("blk", M)
+    finally:
+        A._window_fallback, A._tg_slot_attention = win, comp
+
+
+def test_each_branchs_relation_is_load_bearing_in_the_forward():
+    """The model-level twin of the two function tests above. Force ONE branch's relation
+    back to None and the register's loss must move. A branch that had quietly gone back
+    to plain causal would give the SAME loss and every whole-model number would still
+    look right."""
+    base = loss_under("blk")
+    for br, what in (("win", "window"), ("comp", "compressed")):
+        assert base != _loss_with_branch_relation_dropped(br), (
+            f"dropping the {what} branch's relation changed nothing — that branch is "
+            f"already running plain causal")
+
+
+def test_both_attention_branches_receive_the_relation_on_the_core_stage():
+    """Wiring, not arithmetic: every core-stage attention call must hand the relation to
+    BOTH halves of the layer. Handing it to one leaves the other running plain causal
+    while every whole-model number still moves."""
+    import morph.model.attention as A
+    seen = {"win": [], "comp": []}
+    win, comp = A._window_fallback, A._tg_slot_attention
+
+    def spy_win(*a, **kw):
+        seen["win"].append(kw.get("relation") is not None)
+        return win(*a, **kw)
+
+    def spy_comp(*a, **kw):
+        seen["comp"].append(kw.get("relation") is not None)
+        return comp(*a, **kw)
+
+    m = _model(4)
+    _i, inp, _l, layout = _batch(4)
+    # The prelude runs OUTSIDE the spies on purpose: it carries no relation and would
+    # dilute the reading. Only the core stage is graded.
+    fkw, freset, _c, _r = m._tul_tg_kwargs(layout)
+    with torch.no_grad():
+        x, x0, bg = m._tul_front(inp, layout, attn_kwargs=fkw, ret_reset_mask=freset)
+        A._window_fallback, A._tg_slot_attention = spy_win, spy_comp
+        try:
+            m._tul_core(x, x0, bg, layout, input_ids=inp)
+        finally:
+            A._window_fallback, A._tg_slot_attention = win, comp
+    for br in ("win", "comp"):
+        calls = seen[br]
+        assert calls, f"fixture: the core stage made no {br} attention call"
+        assert all(calls), (
+            f"the {br} branch was handed no relation on {sum(1 for t in calls if not t)} "
+            f"of {len(calls)} core-stage calls — it runs plain causal there")
 
 
 # ── 5. NO NaN ────────────────────────────────────────────────────────────────

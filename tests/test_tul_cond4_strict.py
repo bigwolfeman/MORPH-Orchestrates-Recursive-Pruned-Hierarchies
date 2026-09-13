@@ -48,7 +48,8 @@ import torch
 
 # tests/ is on sys.path; the register file owns the tiny strict fixture this arm runs on.
 from test_tul_slot_register import (  # noqa: E402
-    DOT, V, _batch, _edit, _ids, _model, _rule, _tiny, _tul,
+    DOT, V, _batch, _edit, _ids, _model, _relation_of, _rule, _tiny, _tul,
+    patch_relation,
 )
 
 from morph.model.tul_layout import TulLayoutSpec, slot_layout_from_ids  # noqa: E402
@@ -378,7 +379,13 @@ def test_the_layer_pass_count_is_per_cell_on_a_register_model():
 # ── the stack's relation, at M > 1 ───────────────────────────────────────────
 
 def _stack_allow(m: MORPHTransformer, M: int) -> torch.Tensor:
-    """The `tg_allow` the stack was actually handed, captured off the real forward."""
+    """The relation the stack was actually handed, captured off the real forward.
+
+    It must arrive as `tg_relation` — the one attention kwarg that REPLACES a branch's
+    causal term — exactly as the loop's own core stage delivers it. Through
+    `tg_allow`/`tg_comp_allow` this superset-of-causal mask executed as plain flattened
+    causal (measured and fixed 2026-09-13).
+    """
     seen: list = []
     real = m.tul_cond[0].forward
 
@@ -392,8 +399,7 @@ def _stack_allow(m: MORPHTransformer, M: int) -> torch.Tensor:
     finally:
         m.tul_cond[0].forward = real
     assert seen and seen[0] is not None, "the stack was handed no relation at all"
-    assert torch.equal(seen[0]["tg_allow"], seen[0]["tg_comp_allow"])
-    return seen[0]["tg_allow"][0, 0]
+    return _relation_of(seen[0])[0, 0]
 
 
 def test_the_stack_uses_the_same_relation_builder_as_the_loop():
@@ -404,19 +410,17 @@ def test_the_stack_uses_the_same_relation_builder_as_the_loop():
     _i, inp, _l, layout = _batch(4)
     core = _core_kwargs(m, inp, layout)
     assert core is not None
-    assert torch.equal(_stack_allow(m, 4), core[0]["tg_allow"][0, 0])
+    assert torch.equal(_stack_allow(m, 4), _relation_of(core[0])[0, 0])
 
 
 def test_the_stacks_mask_says_own_slot_full_and_earlier_slots_causal():
     """THE MASK. Cell i of slot k is allowed every cell of its own slot (including the
     ones after it) and every cell of slots < k, and no cell of a later slot.
 
-    WHAT THE MASK IS NOT. Read
-    `test_the_executed_relation_is_flattened_causal_at_reach_zero` below before using this
-    as a claim about the forward: every branch that reads `tg_allow`/`tg_comp_allow` ANDs
-    it into an ALREADY-CAUSAL relation and only ever narrows, so the forward-in-slot half
-    of this mask never fires. That is true of the loop's own core stage too — the stack
-    matches the loop exactly, which is the contract here."""
+    THIS GRADES THE MASK. `test_the_stacks_executed_relation_is_not_flattened_causal`
+    below grades the FORWARD, two-sided, which is the assertion that would have caught
+    the 2026-09-13 defect: the mask was right and the delivery (`tg_allow`, which only
+    narrows) threw its forward-in-slot half away."""
     m = _cond(4)
     a = _stack_allow(m, 4)
     S = a.shape[0] // 4
@@ -441,7 +445,7 @@ def _stack_out(m: MORPHTransformer, M: int, edit=None, perturb=None) -> torch.Te
             allow = edit(allow.clone())
         if perturb is not None:
             h = perturb(h.clone())
-        akw = {"tg_allow": allow, "tg_comp_allow": allow}
+        akw = {"tg_relation": allow}
         for layer in m.tul_cond:
             h = layer(h, attn_kwargs=akw)
         box["out"] = h.detach().clone()
@@ -453,6 +457,31 @@ def _stack_out(m: MORPHTransformer, M: int, edit=None, perturb=None) -> torch.Te
     finally:
         m._tul_cond_apply = real
     return box["out"]
+
+
+def _nudge(h: torch.Tensor, cell: int, mag: float = 1.0) -> torch.Tensor:
+    h[:, cell] = h[:, cell] + mag
+    return h
+
+
+def _cond_loss(mode: str, M: int = 4) -> float:
+    """One forward's loss on a cond-stack register model, with the relation set to
+    `mode` (see `patch_relation`: blk / flat / alltrue).
+
+    No `loop_reach` variant: a reach budget with a stack RAISES (`TULConfig`), so the
+    reach fixture check for this pair lives on the loop, in
+    `tests/test_tul_slot_register.py::test_a_reach_budget_still_narrows_the_executed_relation`.
+    The non-vacuity fixture HERE is `test_the_stacks_mask_is_load_bearing`.
+    """
+    with patch_relation(mode):
+        m = _cond(M)
+        with torch.no_grad():
+            # W_o is zero at init, so every cell carries the same seed and no relation
+            # can be told from another. Move it first.
+            m.tul_register.W_o.weight.normal_(std=0.05)
+        _i, inp, lab, layout = _batch(M)
+        torch.manual_seed(5)
+        return float(m(inp, labels=lab, slot_layout=layout)["loss"].detach())
 
 
 def test_the_stacks_mask_is_load_bearing():
@@ -472,42 +501,48 @@ def test_the_stacks_mask_is_load_bearing():
         "closing a within-slot backward read changed nothing — the stack ignores its mask")
 
 
-def test_the_executed_relation_is_flattened_causal_at_reach_zero():
-    """MEASURED, and recorded because the mask's docstring reads wider than the forward.
+def test_the_stacks_executed_relation_is_not_flattened_causal():
+    """THE FORWARD, two-sided, on the STACK (the loop's own twin lives in
+    `tests/test_tul_slot_register.py`).
 
-    `blk[p][q] = slot(p) >= slot(q)` is a SUPERSET of flattened causal `p >= q`, and every
-    branch that reads `tg_allow` / `tg_comp_allow` ANDs it into an already-causal relation
-    and can only NARROW. So `blk & causal == causal`: at `loop_reach 0` the register's
-    relation, in the loop AND in the stack, executes as plain flattened causal, and a cell
-    never reads a LATER cell of its own slot. Pinned two-sided — an all-TRUE mask gives the
-    identical loss, and a reach budget does NOT (there the mask really narrows).
+    `blk[p][q] = slot(p) >= slot(q)` is a SUPERSET of flattened causal `p >= q`. Handed to
+    `tg_allow`/`tg_comp_allow` it was ANDed back into causality and the stack executed
+    plain flattened causal — a cell never read a LATER cell of its own slot. It now
+    travels as `tg_relation`, which REPLACES the causal term. So the stack's loss must
+    DIFFER from a flattened-causal build and EQUAL an independently written
+    all-true-within-slot build."""
+    blk = _cond_loss("blk")
+    assert blk != _cond_loss("flat"), (
+        "the stack gives the SAME loss as plain flattened causal — its in-slot forward "
+        "read is not executing")
+    assert blk == _cond_loss("alltrue"), (
+        "the stack's executed relation is neither the documented one nor plain causal")
 
-    This is a fact about the shipped `slot-register-m4` core stage, not about the stack;
-    the stack is here held to the SAME relation, which is the contract."""
-    import morph.model.transformer as _T
-    real = _T.slot_cell_relation
 
-    def run(mode: str, reach: int) -> float:
-        def patched(n_slots, m_cells, device, r=0):
-            blk, same = real(n_slots, m_cells, device, r)
-            return (torch.ones_like(blk) if mode == "all_true" else blk), same
-        _T.slot_cell_relation = patched
-        try:
-            kw = dict(loop_reach=reach) if reach else {}
-            mm = _model(4, seed=99, **kw)
-            with torch.no_grad():
-                mm.tul_register.W_o.weight.normal_(std=0.05)
-            _i, inp, lab, layout = _batch(4)
-            torch.manual_seed(5)
-            return float(mm(inp, labels=lab, slot_layout=layout)["loss"])
-        finally:
-            _T.slot_cell_relation = real
+def test_a_stack_cell_reads_a_later_cell_of_its_own_slot():
+    """The cell-level probe on the STACK. Nudge the loop exit at cell 3 of slot k; cell 0
+    of slot k's STACK output must move, and must NOT move under a `flat` build. No cell
+    of an earlier slot may move under either."""
+    M, k_idx = 4, 2
+    _i, _inp, _l, layout = _batch(M)
+    S = layout.slot_index.shape[1]
+    k = int(layout.slot_valid[0].nonzero().flatten()[k_idx])
 
-    assert run("blk", 0) == run("all_true", 0), (
-        "an all-true mask now differs from the register's relation at reach 0 — the "
-        "branches gained a way to WIDEN, and the two-sided within-slot read may be live")
-    assert run("blk", 1) != run("all_true", 1), (
-        "fixture: the mask does not bite even under a reach budget")
+    def deltas(mode: str) -> torch.Tensor:
+        with patch_relation(mode):
+            m = _cond(M)
+            base = _stack_out(m, M)
+            hit = _stack_out(m, M, perturb=lambda h: _nudge(h, k * M + 3))
+        return (hit - base).abs().flatten(2).amax(-1)[0].view(S, M)
+
+    d, dc = deltas("blk"), deltas("flat")
+    for i in (0, 1, 2):
+        assert float(d[k, i]) > 1e-6, (
+            f"stack cell {i} of slot {k} did not move when cell 3 of its own slot did")
+        assert float(dc[k, i]) == 0.0, (
+            f"fixture: stack cell {i} moved under a plain-causal build too")
+    assert float(d[:k].max()) == 0.0, "an EARLIER slot's stack output moved"
+    assert float(dc[:k].max()) == 0.0
 
 
 def test_the_stack_is_causal_across_slots():

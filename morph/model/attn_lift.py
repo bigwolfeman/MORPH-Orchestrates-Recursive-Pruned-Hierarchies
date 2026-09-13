@@ -107,7 +107,11 @@ class AttnLiftStats:
 def _window_mask(S: int, window_size: int, n_skip_rope: int, device,
                  extra_mask: Tensor | None) -> Tensor:
     """The SHIPPED window/XSA/skip-rope mask. Kept byte-identical to
-    ``attention._window_fallback``'s, and pinned to it by a test."""
+    ``attention._window_fallback``'s CAUSAL form, and pinned to it by a test.
+
+    The `relation` form (``tul.slot_cells``) is deliberately not modelled: it only ever
+    appears on the compact cell axis, which `capture_attn_lift` hands straight back to the
+    shipped function without measuring."""
     row = torch.arange(S, device=device).unsqueeze(1)
     col = torch.arange(S, device=device).unsqueeze(0)
     dist = row - col
@@ -127,12 +131,23 @@ def capture_attn_lift(layout: SlotLayout, stats: AttnLiftStats):
     slot_mask = layout.slot_mask                       # [B, L]
     ft_mask = first_token_of_span_mask(layout)         # [B, L]
 
-    def measured(q, k, v, window_size, device, scale, n_skip_rope=0, extra_mask=None):
+    def measured(q, k, v, window_size, device, scale, n_skip_rope=0, extra_mask=None,
+                 relation=None):
         S = q.shape[2]
         if S != slot_mask.shape[1]:
-            # The core's compact slot-gathered sequence (every position IS a slot) and
-            # any other non-row-length call: not a token-vs-slot competition at all.
-            return orig(q, k, v, window_size, device, scale, n_skip_rope, extra_mask)
+            # The core's compact slot-gathered sequence (every position IS a slot, and at
+            # `tul.slot_cells > 1` every position is a CELL and `relation` is set) and any
+            # other non-row-length call: not a token-vs-slot competition at all.
+            return orig(q, k, v, window_size, device, scale, n_skip_rope, extra_mask,
+                        relation=relation)
+        if relation is not None:
+            # `_window_mask` below reproduces the SHIPPED causal window mask, and a
+            # relation REPLACES that causal term. No call site puts one on the row-length
+            # token axis (`_tg_relation_guard` forbids it beside a slot mask), so this
+            # raises rather than measuring a relation it does not model.
+            raise NotImplementedError(
+                "capture_attn_lift met a tg_relation on the row-length token axis; the "
+                "lift instrument models the causal window mask only.")
         # THE MODEL'S OUTPUT COMES FROM THE SHIPPED FUNCTION, ALWAYS. An earlier
         # revision returned `weights @ v` computed here; a fully-masked query row (row 0
         # under XSA has no visible key at all) softmaxes to NaN, that NaN entered the

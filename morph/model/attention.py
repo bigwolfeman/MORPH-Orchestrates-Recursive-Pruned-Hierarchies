@@ -503,9 +503,46 @@ def segment_causal_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor, seg: Tensor) 
     return stage(y, w_gp, G)
 
 
+def _tg_relation_guard(tg_relation: Tensor | None, tg_allow: Tensor | None,
+                       tg_comp_allow: Tensor | None, tg_span: dict | None,
+                       tg_slot_mask: Tensor | None, tg_restrict: bool) -> None:
+    """What ``tg_relation`` refuses to be combined with — ONE home, both attention impls.
+
+    ``tg_relation`` is the only kwarg in this file that can WIDEN. ``tg_allow`` /
+    ``tg_comp_allow`` are ANDed into a relation that is already causal and can only
+    narrow, so the two are alternatives, never a pair: passing both would silently make
+    the narrowing one win on every entry the relation added. Every refusal here is a
+    combination no call site in the tree makes, and it raises instead of picking one.
+    """
+    if tg_relation is None:
+        return
+    if not tg_restrict:
+        raise NotImplementedError(
+            "tg_relation needs tul.tg_restrict=true. Outside the restriction the "
+            "compressed branch is the POOLED CSA/HCA path, which takes no mask at all "
+            "(it is not even handed tg_allow), so the relation would be honoured on the "
+            "window branch and silently dropped on the other half of the layer.")
+    if tg_allow is not None or tg_comp_allow is not None:
+        raise ValueError(
+            "tg_relation with tg_allow/tg_comp_allow: the first REPLACES the branch's "
+            "causal relation, the other two only NARROW it. They are alternatives — "
+            "pass one.")
+    if tg_span is not None:
+        raise NotImplementedError(
+            "tg_relation with tg_span: the span-pool branch carries its own bag "
+            "relation and has no causal term to replace.")
+    if tg_slot_mask is not None:
+        raise NotImplementedError(
+            "tg_relation with tg_slot_mask: the compressed branch's GATHERED form "
+            "builds its causal relation over gathered slot columns. tg_relation is "
+            "defined on the compact CELL axis only, where every position is a cell and "
+            "slot_mask is None.")
+
+
 def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None,
                        sink_logits: Tensor, scale: float,
-                       extra_mask: Tensor | None = None) -> Tensor:
+                       extra_mask: Tensor | None = None,
+                       relation: Tensor | None = None) -> Tensor:
     """TG compressed branch (docs/tul-tg-spec.md §3): direct attention over slot
     positions instead of pooled compression, under ``tg_restrict``.
 
@@ -534,6 +571,14 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
       are exactly the ones the dense form would have masked. Under strict this is what
       stops a prelude token reading any cell at all, and a coda prefix cell reading any
       cell but itself.
+    relation: optional [*,1,S,S] bool that REPLACES the causal relation instead of
+    narrowing it (``tul.slot_cells`` — the Thought Register's in-loop cell relation,
+    ``transformer.slot_cell_relation``). This is the ONLY way a branch in this file can
+    let position i read a position j > i, and it exists because the register's documented
+    relation — a cell reads every cell of its OWN slot, later siblings included — is a
+    SUPERSET of flattened causal, which an AND can never express. Dense form only: with a
+    ``slot_mask`` it raises (see :func:`_tg_relation_guard`). Mutually exclusive with
+    ``extra_mask``.
     """
     B, H, S, D = q.shape
     device = q.device
@@ -541,11 +586,18 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
         # Core region: every position is a slot and S is the (small) slot count —
         # the dense causal form is already compact there. Under model.span_mask this
         # is also the prelude/coda compressed branch, narrowed by extra_mask.
-        row = torch.arange(S, device=device).unsqueeze(1)
-        col = torch.arange(S, device=device).unsqueeze(0)
-        allow = (col <= row).unsqueeze(0)                        # [1, S, S], j <= i
-        if extra_mask is not None:
-            allow = allow & extra_mask.squeeze(1)                # [B, S, S]
+        if relation is not None:
+            # The register's cell relation IS the relation — no causal term to AND into.
+            if extra_mask is not None:
+                raise ValueError("_tg_slot_attention: extra_mask with relation "
+                                 "(one narrows, the other replaces)")
+            allow = relation.squeeze(1)                          # [*, S, S]
+        else:
+            row = torch.arange(S, device=device).unsqueeze(1)
+            col = torch.arange(S, device=device).unsqueeze(0)
+            allow = (col <= row).unsqueeze(0)                    # [1, S, S], j <= i
+            if extra_mask is not None:
+                allow = allow & extra_mask.squeeze(1)            # [B, S, S]
         scores = torch.einsum("bhid,bhjd->bhij", q.float(), k.float()) * scale
         scores = scores.masked_fill(~allow.unsqueeze(1), float("-inf"))
         sink = sink_logits.view(1, H, 1, 1).to(scores.dtype).expand(B, H, S, 1)
@@ -556,6 +608,11 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
         # a zero row first — no extra concat on the value side needed.
         return torch.einsum("bhij,bhjd->bhid", weights[..., :S], v)
 
+    if relation is not None:                     # unreachable via _tg_relation_guard
+        raise NotImplementedError(
+            "_tg_slot_attention: relation is defined on the compact cell axis only "
+            "(slot_mask is None there); the gathered slot-column form builds its own "
+            "causal relation over gathered columns.")
     # Prelude/coda call sites: only slot COLUMNS can ever receive weight (≤ the
     # layout's fixed slot budget, e.g. 64 of S=1152), so gather K/V at slot
     # positions and score [B,H,S,M] instead of materializing [B,H,S,S] fp32
@@ -596,7 +653,8 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
 
 def _window_fallback(q: Tensor, k: Tensor, v: Tensor,
                      window_size: int, device, scale: float,
-                     n_skip_rope: int = 0, extra_mask: Tensor | None = None) -> Tensor:
+                     n_skip_rope: int = 0, extra_mask: Tensor | None = None,
+                     relation: Tensor | None = None) -> Tensor:
     """Causal sliding-window attention with XSA (self-token excluded).
 
     Position j is attended by query i iff:
@@ -609,19 +667,35 @@ def _window_fallback(q: Tensor, k: Tensor, v: Tensor,
     extra_mask: optional [B,1,S,S] bool, ANDed in on top of the mask above (docs/
     tul-tg-spec.md §2 — the TG same-span-or-slot restriction). Only ever NARROWS
     what the base window/XSA/skip-rope rule already allows; never widens it.
+
+    relation: optional [*,1,S,S] bool that REPLACES the ``j <= i`` ordering term
+    (``tul.slot_cells`` — the Thought Register's cell relation). The window's own two
+    structural rules KEEP their job: a key is still excluded beyond ``window_size`` (now
+    measured as |i - j|, because a within-slot sibling can sit ahead of the query) and
+    XSA still excludes the self token. The relation is then ANDed over everything,
+    suffix rows/columns included, so it is an upper bound on what any query can read and
+    nothing this function does can widen past it. Mutually exclusive with ``extra_mask``.
     """
     S = q.shape[2]
     row = torch.arange(S, device=device).unsqueeze(1)
     col = torch.arange(S, device=device).unsqueeze(0)
     dist = row - col
 
-    mask = (dist >= 0) & (dist < window_size) & (dist != 0)
+    if relation is not None:
+        if extra_mask is not None:
+            raise ValueError("_window_fallback: extra_mask with relation "
+                             "(one narrows, the other replaces)")
+        mask = (dist.abs() < window_size) & (dist != 0)
+    else:
+        mask = (dist >= 0) & (dist < window_size) & (dist != 0)
     if n_skip_rope > 0:
         is_suffix_col = col >= S - n_skip_rope
         is_suffix_row = row >= S - n_skip_rope
         mask = mask | is_suffix_col | is_suffix_row
 
     mask = mask.unsqueeze(0).unsqueeze(0)              # [1, 1, S, S]
+    if relation is not None:
+        mask = mask & relation                          # [*, 1, S, S] — the upper bound
     if extra_mask is not None:
         mask = mask & extra_mask                        # [B, 1, S, S]
     bias = torch.where(mask, 0.0, float("-inf"))
@@ -840,14 +914,19 @@ class _CCABase(nn.Module):
 
     def _window_attn(self, q: Tensor, k: Tensor, v: Tensor,
                      device, scale: float, n_skip_rope: int = 0,
-                     extra_mask: Tensor | None = None) -> Tensor:
+                     extra_mask: Tensor | None = None,
+                     relation: Tensor | None = None) -> Tensor:
         # extra_mask (docs/tul-tg-spec.md §2) is checked FIRST and unconditionally
         # routes to the reference path: tg_restrict is validated eager-only at model
         # construction (MORPHTransformer.__init__), so the fused kernel must never
         # even be considered here — a silent unmasked kernel path is forbidden.
-        if extra_mask is not None:
+        # `relation` (tul.slot_cells) is the same rule for the same reason, and it is a
+        # stronger one: the fused window kernel bakes causality in, so it could not run
+        # the register's relation even if it were handed it.
+        if extra_mask is not None or relation is not None:
             return _window_fallback(q, k, v, self.window_size, device, scale,
-                                    n_skip_rope, extra_mask=extra_mask)
+                                    n_skip_rope, extra_mask=extra_mask,
+                                    relation=relation)
         # _USE_FUSED_WINDOW is only a capability flag (Triton importable + not
         # DISABLE_FUSED_KERNELS at import). The RUNTIME kernel-off switch is
         # force_eager() — fused_window_attention() honours it internally now, so
@@ -971,10 +1050,17 @@ class _CCACSAAttention(nn.Module):
                 cla_capture: dict | None = None, cla_kv: dict | None = None,
                 tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
                 tg_span: dict | None = None, tg_seg: Tensor | None = None,
-                tg_comp_allow: Tensor | None = None) -> Tensor:
+                tg_comp_allow: Tensor | None = None,
+                tg_relation: Tensor | None = None) -> Tensor:
         B, S, _ = x.shape
         H, D = self.cca.n_heads, self.cca.d_head
         scale = D ** -0.5
+
+        # tg_relation is the ONE kwarg that widens. The guard raises for every branch
+        # that cannot honour it rather than dropping it — a silently ignored relation is
+        # the F1 defect class (a restricted arm running unrestricted, or the reverse).
+        _tg_relation_guard(tg_relation, tg_allow, tg_comp_allow, tg_span, tg_slot_mask,
+                           self.tg_restrict)
 
         if self.tg_restrict:
             # docs/tul-tg-spec.md §3: no pooled compression, no top-k, no CLA reuse —
@@ -1001,9 +1087,11 @@ class _CCACSAAttention(nn.Module):
             else:
                 out_comp = _tg_slot_attention(q, k, v, tg_slot_mask,
                                               self.cca.sink_logits, scale,
-                                              extra_mask=tg_comp_allow)
+                                              extra_mask=tg_comp_allow,
+                                              relation=tg_relation)
             out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope,
-                                            extra_mask=tg_allow)
+                                            extra_mask=tg_allow,
+                                            relation=tg_relation)
             return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
                                              gate_pre=gate_pre)
 
@@ -1134,10 +1222,17 @@ class _CCAHCAAttention(nn.Module):
                 cla_capture: dict | None = None, cla_kv: dict | None = None,
                 tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
                 tg_span: dict | None = None, tg_seg: Tensor | None = None,
-                tg_comp_allow: Tensor | None = None) -> Tensor:
+                tg_comp_allow: Tensor | None = None,
+                tg_relation: Tensor | None = None) -> Tensor:
         B, S, _ = x.shape
         H, D = self.cca.n_heads, self.cca.d_head
         scale = D ** -0.5
+
+        # tg_relation is the ONE kwarg that widens. The guard raises for every branch
+        # that cannot honour it rather than dropping it — a silently ignored relation is
+        # the F1 defect class (a restricted arm running unrestricted, or the reverse).
+        _tg_relation_guard(tg_relation, tg_allow, tg_comp_allow, tg_span, tg_slot_mask,
+                           self.tg_restrict)
 
         if self.tg_restrict:
             if cla_kv is not None or cla_capture is not None:
@@ -1160,9 +1255,11 @@ class _CCAHCAAttention(nn.Module):
             else:
                 out_comp = _tg_slot_attention(q, k, v, tg_slot_mask,
                                               self.cca.sink_logits, scale,
-                                              extra_mask=tg_comp_allow)
+                                              extra_mask=tg_comp_allow,
+                                              relation=tg_relation)
             out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope,
-                                            extra_mask=tg_allow)
+                                            extra_mask=tg_allow,
+                                            relation=tg_relation)
             return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
                                              gate_pre=gate_pre)
 
@@ -1249,6 +1346,13 @@ class MORPHAttention(nn.Module):
         tg_comp_allow: [B,1,S,S] bool | None — compressed-branch extra mask, set only
                 by model.span_mask (there the compressed branch is the DENSE
                 per-position form and both branches carry the same relation).
+        tg_relation: [*,1,S,S] bool | None — the Thought Register's cell relation
+                (tul.slot_cells; transformer.slot_cell_relation), which REPLACES the
+                causal ordering term on BOTH branches instead of narrowing it. It is the
+                only kwarg here that can let position i read a position j > i, and it is
+                needed because a cell must read the LATER cells of its own slot. Needs
+                tg_restrict; mutually exclusive with tg_allow / tg_comp_allow / tg_span /
+                tg_slot_mask (_tg_relation_guard).
         → [B, S, d_model]
     """
 
@@ -1293,7 +1397,9 @@ class MORPHAttention(nn.Module):
                 cla_capture: dict | None = None, cla_kv: dict | None = None,
                 tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
                 tg_span: dict | None = None, tg_seg: Tensor | None = None,
-                tg_comp_allow: Tensor | None = None) -> Tensor:
+                tg_comp_allow: Tensor | None = None,
+                tg_relation: Tensor | None = None) -> Tensor:
         return self._impl(x, n_skip_rope, cla_capture=cla_capture, cla_kv=cla_kv,
                           tg_allow=tg_allow, tg_slot_mask=tg_slot_mask, tg_span=tg_span,
-                          tg_seg=tg_seg, tg_comp_allow=tg_comp_allow)
+                          tg_seg=tg_seg, tg_comp_allow=tg_comp_allow,
+                          tg_relation=tg_relation)
