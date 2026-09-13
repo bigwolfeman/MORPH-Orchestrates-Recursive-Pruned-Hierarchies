@@ -269,3 +269,71 @@ depth 6:  CE full 4.3474   CE span 4.3889   gap +0.0415 nats [+0.0387, +0.0439]
         6    21,799   +0.0495  [+0.0402, +0.0578]
         7    21,034   +0.0481  [+0.0382, +0.0585]
        8+   304,246   +0.0414  [+0.0381, +0.0443]
+
+## slot-spandec-strict-perpass minus slot-spandec-strict, depth 6
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3474   CE span 4.3646   gap +0.0172 nats [+0.0150, +0.0195]
+   offset      n        gap        95% CI
+        0    24,338   +0.0087  [+0.0027, +0.0151]
+        1    24,584   +0.0050  [-0.0036, +0.0131]
+        2    24,546   +0.0131  [+0.0036, +0.0223]
+        3    24,504   +0.0207  [+0.0115, +0.0299]
+        4    23,343   +0.0180  [+0.0088, +0.0283]
+        5    22,646   +0.0075  [-0.0024, +0.0157]
+        6    21,799   +0.0191  [+0.0094, +0.0294]
+        7    21,034   +0.0260  [+0.0168, +0.0349]
+       8+   304,246   +0.0187  [+0.0164, +0.0212]
+
+## slot-spandec-strict-critic minus slot-spandec-strict, depth 6
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3474   CE span 4.3449   gap -0.0025 nats [-0.0047, -0.0002]
+   offset      n        gap        95% CI
+        0    24,338   +0.0031  [-0.0027, +0.0087]
+        1    24,584   +0.0046  [-0.0036, +0.0112]
+        2    24,546   +0.0003  [-0.0081, +0.0090]
+        3    24,504   -0.0033  [-0.0119, +0.0046]
+        4    23,343   -0.0041  [-0.0128, +0.0043]
+        5    22,646   +0.0005  [-0.0084, +0.0092]
+        6    21,799   -0.0086  [-0.0168, -0.0004]
+        7    21,034   +0.0006  [-0.0086, +0.0109]
+       8+   304,246   -0.0034  [-0.0063, -0.0006]
+
+## slot-spandec-strict-coretok minus slot-spandec-strict, depth 6
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3474   CE span 4.2790   gap -0.0684 nats [-0.0710, -0.0657]
+   offset      n        gap        95% CI
+        0    24,338   -0.0329  [-0.0404, -0.0256]
+        1    24,584   -0.0367  [-0.0466, -0.0261]
+        2    24,546   -0.0566  [-0.0645, -0.0459]
+        3    24,504   -0.0679  [-0.0788, -0.0581]
+        4    23,343   -0.0684  [-0.0778, -0.0582]
+        5    22,646   -0.0704  [-0.0806, -0.0610]
+        6    21,799   -0.0759  [-0.0860, -0.0659]
+        7    21,034   -0.0672  [-0.0758, -0.0568]
+       8+   304,246   -0.0743  [-0.0776, -0.0709]
+
+## slot-spandec-strict-critic minus slot-spandec-strict-egrad-disc, depth 6
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3555   CE span 4.3449   gap -0.0106 nats [-0.0126, -0.0084]
+   offset      n        gap        95% CI
+        0    24,338   +0.0026  [-0.0030, +0.0077]
+        1    24,584   -0.0033  [-0.0122, +0.0070]
+        2    24,546   -0.0049  [-0.0132, +0.0030]
+        3    24,504   -0.0168  [-0.0256, -0.0082]
+        4    23,343   -0.0131  [-0.0217, -0.0048]
+        5    22,646   -0.0053  [-0.0131, +0.0031]
+        6    21,799   -0.0173  [-0.0266, -0.0093]
+        7    21,034   -0.0134  [-0.0229, -0.0035]
+       8+   304,246   -0.0115  [-0.0141, -0.0088]

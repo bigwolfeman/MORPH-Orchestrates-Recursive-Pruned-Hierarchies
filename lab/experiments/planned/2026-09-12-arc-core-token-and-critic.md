@@ -399,8 +399,99 @@ pass transition, not at the objective.
 
 ## Results
 
-(pending)
+Both arms ran on the 5090 at commit `6b2e9ed` (runner `run_recon.sh`, rate floor off), seed 1,
+5,000 steps, seq 1024, batch 6. Readouts in
+[`../results/2026-09-12-strict/`](../results/2026-09-12-strict/): `sweep_<arm>_{2500,5000}.json`,
+`worth_<arm>_5000.json`, `paired_gaps_5000.txt` (sections "critic minus strict", "critic minus
+egrad-disc", "coretok minus strict"), `critic_series_slot-spandec-strict-critic.txt`,
+`core_token_aux_series_slot-spandec-strict-coretok.txt`, `core_token_aux_probe_5000.json`.
+Every CE gap below is token-paired on 501,106 tokens over the same 480 validation rows;
+"K" is the forced-depth sweep's token CE difference with its paired bootstrap CI.
+
+### Arm C — `slot-spandec-strict-coretok`
+
+| reading | value |
+| --- | --- |
+| rate at step 200 | 3,831 tok/s (strict ruler family ~10,850; the arm is 0.35× the ruler) |
+| survival | reached 4,999; `preclip/total` max 33.2 at step 1,310; no tripwire |
+| tokens K1−K6 @5000 | **+0.0005** [+0.0002, +0.0007]; @2500 +0.0001 |
+| tokens K3−K6 @5000 | −0.0003 [−0.0004, −0.0001] |
+| tokens K1−K16 @5000 | −0.0017 [−0.0021, −0.0013] |
+| `spandec_ce` K1−K6 / K3−K6 @5000 | +0.0047 / +0.0006 |
+| CE vs strict, depth 6 | **−0.0684** [−0.0710, −0.0657] (4.2790 vs 4.3474); every offset bin negative, 0: −0.033, 8+: −0.074 |
+| worth zero / shuffle | 0.2035 / 0.1737 (ruler 0.1927 / 0.1719) |
+| `tul/core_token_aux_ce` − `train/loss`, same batch, tail 4800–4999 | −0.314 (4.336 vs 4.650) — **confounded**: the shipped coda input carries the 0.15 token-state dropout, the aux coda input does not |
+| aux path − shipped path, eval, identical rows, no dropout (`core_token_aux_probe.py`) | **−0.0164** [−0.0176, −0.0151] (4.2626 vs 4.2790) |
+| the same probe on the strict ruler (a core the tokens never trained through) | **+1.1046** [+1.084, +1.125] (5.4520 vs 4.3474) |
+
+The aux objective did what it was built to do: on the ruler the token-core path is 1.10 nats
+worse than the shipped path, on the arm it is 0.016 nats better. The six shared blocks became a
+competent per-token map. The slot passes through the same six blocks still read
+0.0005 nats. The shipped-path CE moved 0.068 nats at every offset, which is the dense
+objective on the shared prelude and coda, not the loop (the K-curve and the worth profile
+say the loop's share did not change).
+
+`core_token_aux_probe.py` was written after the run to remove the dropout confound the prereg
+did not foresee; its reading, not the run-level series, scores P-4.
+
+### Arm D — `slot-spandec-strict-critic`
+
+| reading | value |
+| --- | --- |
+| rate at step 200 | 8,450 tok/s |
+| survival | reached 4,999; `preclip/total` max 33.4 at step 224 |
+| tokens K1−K6 @5000 | **+0.0012** [+0.0009, +0.0015]; K3−K6 −0.0000 |
+| `spandec_ce` K1−K6 | +0.0032 |
+| CE vs strict, depth 6 | **−0.0025** [−0.0047, −0.0002] |
+| CE vs egrad-disc, depth 6 | −0.0106 [−0.0126, −0.0084] |
+| worth zero / shuffle | 0.1927 / 0.1719 |
+| `critic_agree` (steps 4500–5000) | **0.521** (traj 0.530, pert 0.512); 0.506 at steps 200–600 |
+| `critic` loss | 0.689 (ln 2 = 0.693) throughout |
+| `critic_gap_traj` = mean CE(h_{t−1}) − CE(h_t) through the real coda | 0.0012 → 0.0024 nats |
+| `critic_gap_pert` | ≤ 0.0005 |
+| `gp_rel_t0` | 0.011 → 0.039 |
+
+The critic sits at chance for 5,000 steps on both pair types. The measured worth of one pass
+through the real coda is 0.001–0.003 nats and the coda's loss is flat to 0.0005 under a
+10 % rms perturbation of the state, so the label is a near-tie by measurement and the
+CE-gap weighting shrinks the term toward zero, as the P-6 reasoning allowed. The feature
+acts (`gp_rel` 0.04) and moves nothing.
+
+### Predictions scored
+
+| P | claim | result |
+| --- | --- | --- |
+| P-1 | coretok tokens K1−K6 > 0.005 | **FALSE** (0.0005) |
+| P-2 | coretok K3−K6 > 0.002 | **FALSE** (−0.0003) |
+| P-3 | coretok better than strict by 0.00–0.10 | **TRUE** (−0.068) |
+| P-4 | aux CE within 0.15 of the model's own | **TRUE** on the clean instrument (0.016); the run-level series reads 0.31 and is dropout-confounded |
+| P-5 | coretok clears 8,086 tok/s | **FALSE** (3,831), as predicted at 5 % |
+| P-6 | critic_agree > 0.60 | **FALSE** (0.52) |
+| P-7 | critic_gap_traj < 0.01 | **TRUE** (0.0024) |
+| P-8 | critic tokens K1−K6 > 0.005 | **FALSE** (0.0012) |
+| P-9 | critic direction beats random by > 0.01 on ≥ 60 % of slots | **PENDING** — `critic_direction_probe.py` chained after the math panel and the z-opt probes on the 5090 |
+| P-10 | critic CE within 0.02 of strict | **TRUE** (−0.0025) |
+| P-11 | both survive | **TRUE** |
+| P-12 | critic clears 8,086 tok/s | **TRUE** (8,450) |
 
 ## Verdict
 
-(pending)
+**Failure** on the hypothesis (P-1, P-2, P-6, P-8 false). The binding case that fired is
+"P-1 fails and P-4 holds": the core is not under-trained, it is under-used. A core trained
+to a 1.10-nat token map, running the identical six blocks at the identical depth over the
+slot cells, adds 0.0005 nats over one pass. The critic case that fired is "P-6 fails": the
+within-context label is a measured near-tie (0.001–0.003 nats per pass) and a critic cannot
+learn from ties.
+
+## Updated hypothesis
+
+What trains the core is closed as a lever (this arm), beside its shape (2026-09-11 batch),
+its stability, its target (staged, oracle, gradpass, per-pass horizon, critic) and its geometry
+(strict panel). Every reading points at the same place: the READ and the WRITE. The coda's
+loss is flat to 0.0005 nats under a 10 % perturbation of the exit state and moves 0.001–0.003
+nats per pass, so nothing downstream of `prefix_project` asks the state for more than one
+pass produces. The lane left is what the coda can take from `z` (the planning-cells design
+in the drawing-board note, held for Wolfe's word) and a matched-compute one-pass slot model
+priced against the looped one.
+
+Not verified: P-9 (queued); the aux weight (1.0) was never swept; one seed.

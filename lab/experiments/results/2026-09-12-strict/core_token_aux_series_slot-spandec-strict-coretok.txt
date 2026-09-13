@@ -1,0 +1,18 @@
+# slot-spandec-strict-coretok (wandb morph-tul/ilhnjlqd), pulled 2026-09-13 03:0x
+# aux = tul/core_token_aux_ce (aux path: tokens+cells through _core_region, coda WITHOUT token-state dropout)
+# train = train/loss (shipped slot path, coda input under 0.15 token-state dropout), same batch
+# the same-batch gap is confounded by that dropout; the clean reading is core_token_aux_probe_5000.json (eval, identical rows)
+step  aux_ce  train_loss  aux-train  aux_fp  core_gain_t0  preclip_total
+    0  11.2872  11.2446  +0.0427  0.0265  1.346  111.13
+  500  6.1222  6.2727  -0.1505  0.0310  1.531  9.23
+ 1000  5.5485  5.7469  -0.1984  0.0627  1.442  2.93
+ 1500  4.8858  5.1550  -0.2692  0.1687  1.601  2.71
+ 2000  4.5120  4.7996  -0.2876  0.0594  1.673  2.55
+ 2500  4.3074  4.6453  -0.3379  0.0590  1.740  2.52
+ 3000  4.8271  5.0496  -0.2225  0.0522  2.076  3.65
+ 3500  5.5050  5.6897  -0.1847  0.0666  1.747  5.26
+ 4000  4.2349  4.5780  -0.3431  0.0512  1.703  2.50
+ 4500  4.3735  4.6925  -0.3190  0.0504  1.647  3.10
+tail 4800-4999 mean: aux 4.3357  train/loss 4.6499  gap -0.3142
+val/ce_tokens by step: 250:6.9822 500:6.3435 750:5.6302 1000:5.2125 1250:5.0573 1500:5.0847 1750:4.9207 2000:5.0713 2250:4.5689 2500:4.5767 2750:4.7302 3000:4.4908 3250:4.5137 3500:4.5259 3750:4.3895 4000:4.3841 4250:4.2461 4500:4.2890 4750:4.3662
+val/ce_tokens_final 4.3584  val/spandec_ce_final 4.5403  val/plan_worth_zero_final 0.2412  preclip/total max(step>=200) 33.24  rate 3831 tok/s at step 200

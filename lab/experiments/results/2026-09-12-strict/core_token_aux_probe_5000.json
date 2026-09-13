@@ -1,0 +1,38 @@
+{
+  "coretok": {
+    "step": 5000,
+    "rows": 480,
+    "batch": 3,
+    "eval_depth_core": 6,
+    "eval_depth_slots": 6,
+    "shipped_ce": 4.279015028121732,
+    "aux_ce": 4.262645971639314,
+    "aux_minus_shipped": {
+      "point": -0.016369056482417932,
+      "lo": -0.01763012407488049,
+      "hi": -0.015143059462415655,
+      "n_units": 160,
+      "n_boot": 2000,
+      "level": 0.95
+    },
+    "n_targets": 501106.0
+  },
+  "strict": {
+    "step": 5000,
+    "rows": 480,
+    "batch": 3,
+    "eval_depth_core": 6,
+    "eval_depth_slots": 6,
+    "shipped_ce": 4.347405911454456,
+    "aux_ce": 5.45200763997539,
+    "aux_minus_shipped": {
+      "point": 1.104601728520934,
+      "lo": 1.0839469739972603,
+      "hi": 1.1247061829806102,
+      "n_units": 160,
+      "n_boot": 2000,
+      "level": 0.95
+    },
+    "n_targets": 501106.0
+  }
+}
