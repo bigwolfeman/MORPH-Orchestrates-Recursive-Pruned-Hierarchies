@@ -1,0 +1,114 @@
+# Slot-loop panel, arm "slot-spandec-strict-vq8": the DISCRETE thought — 8 codes per span
+# instead of one continuous vector. ONE factor against a `slot-spandec-strict` at
+# prefix_k 8 (`tul.vq_codes`), and one factor against `-vq4` (how many codes).
+#
+# THE DEFECT, and it is the one the register attacks from the other side.
+# A row's written slot states sit at effective rank 5.7598 in 1024 dimensions with mean
+# pairwise cosine 0.7104 — `val/slot_eff_rank` / `val/slot_pairwise_cos` on
+# `slot-spandec-strict` itself; 5.7-7.3 / 0.72-0.77 across the slot family, 1.7-4.8 in the
+# 2026-09-10 geometry audit, 18-23 across 4,906 slots at step 0. Sixty-four states, each
+# 1024-dimensional, spanning about six directions. Twelve arms have read token K1-K6 inside
+# [-0.0001, +0.0033] (this arm's ruler: +0.0016 [+0.0013, +0.0019], K3-K6 +0.0002) and NONE
+# of them changed what KIND of object a span hands forward.
+#
+# THE IDEA IN ONE LINE. The coda reads TOKENS well and reads this channel badly. A token is
+# a DISCRETE symbol out of a large alphabet with its own embedding row. So make the thought
+# the same kind of object: K symbols, not one point in R^1024.
+#
+# WHAT THIS ARM IS.
+#   HEAD      the loop's exit state z (the SAME seam the register's mean and the span
+#             decoder read: after the loop, after any `cond_layers` stack) goes through
+#             `tul.W_vq` to K = 8 sub-vectors of width d_c = 1024/8 = 128.
+#   QUANTIZE  each sub-vector is snapped to the nearest entry of ONE shared codebook
+#             `tul.vq_E` of C = 512 rows. COSINE: both sides are l2-normalised before the
+#             match, so nearest-by-L2 is nearest-by-cosine and the encoder's scale — which
+#             nobody has swept — cannot decide the outcome (ViT-VQGAN's l2-normalized
+#             codebook, the standard fix for codebook collapse). `vq_groups: 1` = one
+#             symbol per code position.
+#   LIFT      the 8 quantized sub-vectors are lifted back to 8 full-width cells through
+#             `tul.W_vq_out[k]`, one [d_c, d] map per CODE POSITION.
+#   EXIT      cell k is written 1:1 into prefix cell k through the shared `W_prefix[k]`, so
+#             `prefix_k` must equal `vq_codes` (the build refuses otherwise). The CODA IS
+#             UNCHANGED: a cell reads itself alone, a later token reads the cells of
+#             earlier slots per `tg_coda_prefix_reach: all`.
+#   GRADIENT  a straight-through estimator (`q = u + (e - u).detach()`). It is the ONLY
+#             edge the token CE and the span decoder have into the loop on this arm — but
+#             NOT the only edge into the loop: the commitment term reaches the encoder too,
+#             so at `vq_weight: 1.0` the loop learns from both. Named because a test that
+#             assumed one edge let a detached-STE sabotage through.
+#   TARGET    the span decoder grades the DEQUANTIZED thought, the MEAN of the 8 lifted
+#             codes, so the write is trained by exactly the target it is trained by today
+#             and every reader between the loop and the write (decoder, MUX, SIGReg) stays
+#             the shipped one. The mean and not the sum: a sum scales with K and the vq8 /
+#             vq4 pair would then differ in the thought's magnitude as well as its content.
+#   LOSS      the two VQ-VAE terms, codebook `||sg[u] - e||^2` and commitment
+#             `0.25 * ||u - sg[e]||^2`, weighted by `vq_weight` and exposed as
+#             `vq_weighted` so `train.py` subtracts them and `train/loss` stays the CE.
+#             The VQ-VAE LOSS and not an EMA codebook, on purpose: an EMA book is updated
+#             inside the forward, and this tree runs forwards with no optimiser step behind
+#             them (7 forced depths in `core_depth_sweep.py`, 4 modes in `worth_profile.py`,
+#             20 eval batches) — every one of those would step an EMA codebook and every
+#             instrument in this arc would stop meaning what it says.
+#
+# WHAT A STEP-0 MODEL IS, stated because this arm is UNLIKE every other TUL arm and the
+# difference is not in its favour. Every other arm zero-inits its new path so that step 0 is
+# its ruler exactly. A quantizer cannot: a zero `W_vq` gives the encoder no direction to
+# normalise, and a zero `W_vq_out` writes an all-zero cell so the coda reads nothing at all.
+# So at step 0 this model's coda reads `W_vq_out[k] @ e_k`, where `e_k` is a near-arbitrary
+# unit code picked by a random projection of z — a low-entropy signal that carries almost
+# nothing about the span, at a per-component rms of 1.0 (the init std is G^-0.5, chosen so a
+# lifted cell matches the scale of the `input_norm`'d field it is scattered into). The
+# ruler at step 0 writes z through an IDENTITY `W_prefix`. This arm therefore starts BEHIND
+# its ruler by construction and its early CE says nothing; the comparison is at 5,000 steps
+# and the first number to read is `tul/vq_perplexity`.
+#
+# THE INSTRUMENT TO READ FIRST is `tul/vq_perplexity` — the codebook usage of the batch, in
+# (1, 512]. At 1 every span picked the same symbol, the channel carries nothing, and no CE
+# or K-curve on this arm means anything. `val/slot_cell_eff_rank` is the second: on a VQ
+# model it is the rank WITHIN a slot across its own 8 LIFTED CODES (the probe reads the
+# lifted cells, which is what the coda holds), bounded by 8 and by the number of distinct
+# codes the slot picked. `vq_reset_after: 0` — the dead-code reset is BUILT and is OFF, so a
+# collapsed codebook here is a result about the mechanism rather than a number the reset
+# manufactured; turning it on is the named follow-up if perplexity dies.
+#
+# COST, arithmetic, and TWO of these are confounds that are named and not buried.
+#   L_total = seq_len + prefix_k * max_slots = 1024 + 8*64 = 1536, against the k=2 ruler's
+#   1152 and the k=4 arms' 1280 (`TulLayoutSpec.l_total`, tul_layout.py). The packer turns
+#   the unused slot budget into tokens, so this row sees a different number of real tokens
+#   than the ruler's; the CE comparison against the ruler is paired on `tok_index`, which
+#   removes the row cut but not the context length. The clean one-factor pair inside this
+#   panel is vq8 against vq4 on the code COUNT, and vq8 against a strict arm at prefix_k 8
+#   on the quantizer — neither of which exists yet, so BOTH comparisons in this panel carry
+#   a prefix-width confound and it is stated in every row.
+#   PARAMETERS, measured on a CPU build at the shipped d_model 1024 (vocab cut to 512 so
+#   the build fits, so read the DELTA and not the total): +8,454,144 against the strict
+#   ruler, of which `W_prefix` 2 -> 8 slices is +6,291,456 (identity init) and the
+#   quantizer is 2,162,688 (W_vq 1024x1024 + vq_E 512x128 + W_vq_out 8x128x1024).
+#   The coda runs on 1536 positions against 1152, a 33 % longer sequence; the core stage is
+#   unchanged (64 slot cells, one per span, exactly as the ruler). The smoke decides the
+#   wall clock and the memory; neither has run.
+#
+# WHAT THE RANK INSTRUMENT READS AT INIT, on that same CPU build (init only — a random
+# codebook makes this easy and it is NOT the result): `val/slot_eff_rank` 10.11 on the
+# ruler against 40.30 here, `slot_pairwise_cos` 0.626 against 0.023,
+# `slot_cell_eff_rank` 6.96 of 8. The arm exists to hold something like that at 5,000
+# steps; at step 0 it proves only that the write is wired.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-discrete-thought-vq.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-discrete-thought-vq.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  prefix_k: 8
+  vq_codes: 8
+  vq_codebook: 512
+  vq_dim: 0                     # 0 -> d_model // vq_codes = 128
+  vq_groups: 1                  # one symbol per code position
+  vq_beta: 0.25                 # commitment (van den Oord et al. 2017)
+  vq_weight: 1.0
+  vq_reset_after: 0             # the dead-code reset is built and OFF (see the header)
+
+wandb:
+  name: slot-spandec-strict-vq8

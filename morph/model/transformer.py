@@ -46,6 +46,7 @@ from .tul import (TULConfig, TULGate, TULGateConfig, TULGradPass, TULReread, TUL
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots
+from .tul_vq import TULThoughtVQ
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
                          tg_reset_from_ids,
@@ -1668,6 +1669,32 @@ class MORPHTransformer(nn.Module):
                     "REPLACES the core loop and writes ONE plan per slot through W_prefix.")
             self.tul_register = TULSlotRegister(d, cfg.tul.slot_cells,
                                                 cfg.tul.slot_cell_init == "distinct")
+
+        # ── The discrete thought (TULConfig.vq_codes; morph/model/tul_vq.py) ──────
+        # K codes per span instead of one continuous vector, lifted into the K prefix
+        # cells the coda already reads. RNG-neutral (private generator, global stream
+        # snapshotted), so a VQ model's base weights are byte-identical to its ruler's.
+        # `vq_codes: 0` builds nothing and draws nothing.
+        self.tul_vq: TULThoughtVQ | None = None
+        if cfg.tul is not None and cfg.tul.vq_codes > 0:
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.vq_codes needs a core loop (model.n_core > 0): the quantizer sits "
+                    "on the loop's EXIT state and a coreless TUL model has no exit.")
+            if cfg.scse_enabled:
+                raise NotImplementedError(
+                    "tul.vq_codes under SCSE is not defined: the carrier is the DEVIATION, "
+                    "so a code would be a symbol for a deviation and not for a thought.")
+            if getattr(cfg, "fm", None) is not None:
+                raise NotImplementedError(
+                    "tul.vq_codes with an FM planner (cfg.fm): the planner REPLACES the "
+                    "core loop and writes ONE detached plan per slot through W_prefix, so "
+                    "there is no looped exit state to quantize and no gradient for the STE "
+                    "to carry. Pick one.")
+            self.tul_vq = TULThoughtVQ(
+                d, codes=cfg.tul.vq_codes, codebook=cfg.tul.vq_codebook,
+                dim=cfg.tul.vq_dim, groups=cfg.tul.vq_groups, beta=cfg.tul.vq_beta,
+                reset_after=cfg.tul.vq_reset_after)
 
         # ── The slot chain (TULConfig.slot_chain) ─────────────────────────────────
         # Zero-init, no RNG draw: step 0 is the ruler's forward bit for bit.
@@ -5709,6 +5736,10 @@ class MORPHTransformer(nn.Module):
             oracle_z_loss, oracle_z_stats = None, {}
             spandec_pass_loss, spandec_pass_stats = None, {}
             db_traj = mep_keep = None
+            # tul.vq_codes is refused with the paid loop at construction (there is no
+            # prefix write to lift a code into), so this is always None here; it exists
+            # so the loss block below reads ONE name on every branch.
+            _vq_out = None
         elif tc.loop_reads_tokens:
             # ── THE LOOP READS TOKENS (tul.loop_reads_tokens, 2026-09-13) ───────────
             # The SHIPPED core stage over EVERY position — tokens and slot cells in ONE
@@ -5766,6 +5797,7 @@ class MORPHTransformer(nn.Module):
             sigreg_loss = (self._tul_sigreg_loss(h_slots, layout)
                            if tc.sigreg_lambda > 0.0 else None)
             _egrad_src = None
+            _vq_out = None            # refused with tul.loop_reads_tokens (no write)
         elif self.fm_planner is not None:
             # FM1 (morph/model/tul_fm.py). The planner replaces the core loop; the plan
             # is DETACHED before it reaches W_prefix, so the coda's CE never touches the
@@ -5776,6 +5808,7 @@ class MORPHTransformer(nn.Module):
             spandec_loss, spandec_stats, _egrad_src = None, {}, None
             oracle_z_loss, oracle_z_stats = None, {}
             spandec_pass_loss, spandec_pass_stats = None, {}
+            _vq_out = None            # refused with an FM planner (no looped exit state)
             h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
             x_coda = scatter_positions(xn, pos, values)
@@ -5839,6 +5872,18 @@ class MORPHTransformer(nn.Module):
                 _reg_cells = h_slots.reshape(h_slots.shape[0], _S, _m, *h_slots.shape[2:])
                 h_slots = _reg_cells.mean(dim=2)
                 depths = depths.reshape(depths.shape[0], _S, _m)[:, :, 0].contiguous()
+            # ── the discrete thought (tul.vq_codes; morph/model/tul_vq.py) ─────────
+            # THE SAME SEAM the register's mean sits at, and for the same reason: every
+            # reader between here and the write (the MUX, the span decoder, SIGReg, the
+            # energy) takes ONE state per slot, so replacing `h_slots` with the DEQUANTIZED
+            # thought here makes all of them grade the thought the coda actually gets. The
+            # K lifted codes are held aside and go 1:1 into the K prefix cells below,
+            # exactly as the register's cells do (`prefix_k` is refused unless it equals
+            # `vq_codes`). `vq_codes: 0` leaves `self.tul_vq` None and this block traces
+            # out — every model before the knob is bit-identical.
+            _vq_cells, _vq_out = None, None
+            if self.tul_vq is not None:
+                _vq_cells, h_slots, _vq_out = self.tul_vq(h_slots, layout.slot_valid)
             mux_stats: dict = {}
             if tc.mux_beta <= 0.0:
                 mux_loss = None
@@ -6012,6 +6057,13 @@ class MORPHTransformer(nn.Module):
                 # and the exit mean is read back off it, so a `shuffle` draws ONE
                 # permutation and the coda's cells and the reported `h_slots` agree.
                 _cells = self._tul_plan_ablate(_reg_cells, layout, plan_mode)
+                h_slots = _cells.mean(dim=2)
+            elif _vq_cells is not None:
+                # The K lifted codes go 1:1 into the K prefix cells. The ablation runs on
+                # the STACK and the dequantized mean is read back off it, so a `shuffle`
+                # draws ONE permutation and the coda's cells and the reported `h_slots`
+                # agree — the register's contract, at the same seam.
+                _cells = self._tul_plan_ablate(_vq_cells, layout, plan_mode)
                 h_slots = _cells.mean(dim=2)
             elif tc.prefix_source != "exit":
                 _cells, _pad_cells, _pad_pos = self._tul_prefix_cells(
@@ -6234,6 +6286,26 @@ class MORPHTransformer(nn.Module):
             _dw = tc.spandec_weight * spandec_loss
             groups["spandec_weighted"] = _dw.detach()
             groups["loss"] = groups["loss"] + _dw
+
+        if _vq_out is not None and groups is not None:
+            # The discrete thought's two VQ-VAE terms (tul.vq_codes). Same contract as
+            # `spandec_weighted`: the WEIGHTED term is exposed so train.py subtracts it and
+            # train/loss stays the MODEL's CE — an auxiliary inside the reported loss makes
+            # the arm incomparable to its control and fires the ppl divergence guard on the
+            # objective (the spectral-penalty precedent).
+            #
+            # `vq_perplexity` is the number to read first: the codebook usage of the batch,
+            # in (1, vq_codebook]. At 1 every span picked the same symbol and the channel
+            # carries nothing, whatever the CE says.
+            groups = dict(groups)
+            groups["vq"] = _vq_out["loss"].detach()
+            groups["vq_commit"] = _vq_out["commit"].detach()
+            groups["vq_codebook_loss"] = _vq_out["codebook"].detach()
+            for _k in ("vq_perplexity", "vq_used", "vq_n_codes", "vq_codebook_size"):
+                groups[_k] = _vq_out["loss"].new_tensor(_vq_out[_k])
+            _vw = tc.vq_weight * _vq_out["loss"]
+            groups["vq_weighted"] = _vw.detach()
+            groups["loss"] = groups["loss"] + _vw
 
         if spandec_pass_loss is not None and groups is not None:
             # Same contract as `spandec_weighted`: the WEIGHTED term is exposed so train.py
@@ -6855,6 +6927,21 @@ class MORPHTransformer(nn.Module):
             h_slots = self._tul_cond_apply(
                 h_slots, n_slots=layout.slot_index.shape[1],
                 m_cells=int(self.cfg.tul.slot_cells))
+        # ── the discrete thought (tul.vq_codes) ──────────────────────────────────
+        # THE INSTRUMENT'S DEFINITION ON A VQ MODEL, stated because it is a choice: the
+        # rank is read over the K LIFTED CODES, which are exactly what the coda's prefix
+        # cells hold. Reading the continuous exit state instead would report the rank of a
+        # tensor no reader on this arm ever sees, and reading the dequantized MEAN would
+        # report one number per slot and hide the whole mechanism. `slot_eff_rank` is then
+        # over all S*K cells of a row (the register's convention at the same shape) and
+        # `slot_cell_eff_rank` is the rank WITHIN a slot across its own K codes — which is
+        # bounded by K and by the number of DISTINCT codes the slot picked, so it is the
+        # direct reading of "did the quantizer give the thought rank by construction".
+        _vq_k = 0
+        if self.tul_vq is not None:
+            _vq_k = int(self.tul_vq.k)
+            _cells, _dq, _ = self.tul_vq(h_slots, layout.slot_valid)
+            h_slots = _cells.reshape(_cells.shape[0], -1, *_cells.shape[3:])
         z = self._readout(h_slots).float()                     # [B, S, C] or [B, S*M, C]
         valid = layout.slot_valid
         # ── the Thought Register (tul.slot_cells) ────────────────────────────────
@@ -6867,7 +6954,7 @@ class MORPHTransformer(nn.Module):
         # one no earlier arm could have: the rank WITHIN a slot, across its own M cells.
         # A register whose cells collapse onto each other reads ~1 there and has bought
         # nothing, whatever the row number says.
-        _m = int(self.cfg.tul.slot_cells)
+        _m = _vq_k if _vq_k else int(self.cfg.tul.slot_cells)
         within: dict[str, float] = {}
         if _m > 1:
             from morph.model.fm_planner import effective_rank as _er

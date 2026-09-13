@@ -212,6 +212,64 @@ class TULConfig:
     # its ruler by two things. The mean's gradient still reaches every cell.
     # Record: lab/experiments/planned/2026-09-13-arc-thought-register.md
     slot_cells: int = 1                  # M mutable cells per span; 1 = today
+    # ── THE DISCRETE THOUGHT (arms `slot-spandec-strict-vq8` / `-vq4`, 2026-09-13) ──
+    # 0 is today's forward and is BIT-IDENTICAL to the tree before this key: nothing is
+    # built, no RNG is drawn, no key enters the state dict.
+    #
+    # THE SAME MEASURED DEFECT the register attacks, attacked from the other side. The 64
+    # written slot states of a row sit at effective rank 5.7598 in 1024 dimensions with
+    # mean pairwise cosine 0.7104 (`val/slot_eff_rank` / `val/slot_pairwise_cos` on
+    # `slot-spandec-strict`). The register gives a span MORE continuous cells; this gives
+    # it DISCRETE ones. The coda reads TOKENS well and reads this channel badly, and a
+    # token is a symbol out of a large alphabet with its own embedding row — so make the
+    # thought the same kind of object.
+    #
+    # WHAT IT IS. `vq_codes: K` sends the loop's exit state z through `W_vq` to K
+    # sub-vectors of width `vq_dim` (0 -> d/K), snaps each to the nearest entry of ONE
+    # shared codebook `vq_E` of `vq_codebook` rows (cosine: both sides l2-normalised, so
+    # the encoder's scale cannot decide the match), and lifts the K quantized sub-vectors
+    # back to K full-width cells through `W_vq_out[k]`. Cell k is written 1:1 into prefix
+    # cell k through the shared `W_prefix[k]`, so `prefix_k` MUST equal `vq_codes` and the
+    # CODA IS UNCHANGED. Rank is then given BY CONSTRUCTION: two spans that pick different
+    # codes are exactly as far apart as those codes are, whatever the loop's continuous
+    # states did.
+    #
+    # `vq_groups: G` is the product-quantization axis: a cell's `vq_dim` vector is split
+    # into G groups and each group carries its own symbol, so the per-cell alphabet is
+    # C^G at C codebook rows. 1 = one symbol per cell.
+    #
+    # THE GRADIENT. A straight-through estimator (`q = u + (e - u).detach()`) is the ONLY
+    # edge by which the TOKEN CE and the SPAN DECODER reach the loop on a VQ model. It is
+    # not the only edge into the loop: the commitment term below reaches the encoder too,
+    # so at `vq_weight > 0` the loop learns from BOTH (measured — a test that assumed one
+    # edge let a detached-STE sabotage through). The two VQ-VAE terms — codebook
+    # `||sg[u] - e||^2` and commitment `vq_beta * ||u - sg[e]||^2` — are added to the loss
+    # and exposed as `vq` / `vq_weighted` so `train.py` subtracts them and `train/loss`
+    # stays the model's CE.
+    #
+    # THE READERS take the DEQUANTIZED thought, the MEAN of the K lifted cells: every
+    # mechanism between the loop and the write (the span decoder, the MUX, SIGReg) is then
+    # the shipped one and the arm differs from its ruler by the quantizer alone. The mean
+    # and not the sum, so the K=4 and K=8 arms do not differ in the thought's magnitude
+    # as well as its content.
+    #
+    # STEP 0 IS NOT THE RULER, and that is the one way this arm is unlike every other TUL
+    # arm. A quantizer cannot be zero-init (a zero encoder has no direction to normalise,
+    # a zero lift writes nothing at all), so at step 0 the coda reads a near-arbitrary
+    # unit code picked by a random projection of z. The arm's early CE is worse than its
+    # ruler's by construction; the comparison is at 5,000 steps.
+    # Record: lab/experiments/planned/2026-09-13-arc-discrete-thought-vq.md
+    vq_codes: int = 0                    # K code positions per span; 0 = off
+    vq_codebook: int = 512               # C, entries in the ONE shared codebook
+    vq_dim: int = 0                      # d_c, a code position's width; 0 -> d_model // K
+    vq_groups: int = 1                   # G, product-quantization groups inside a cell
+    vq_beta: float = 0.25                # commitment weight (van den Oord 2017: 0.25)
+    vq_weight: float = 1.0               # weight of the whole VQ term in the total loss
+    # Re-seed a codebook row unused for this many TRAINING forwards, from the batch's
+    # worst-served encoder vector. Deterministic (no draw). 0 = OFF, and off is what both
+    # shipped configs run: a collapsed codebook is then a RESULT about the mechanism,
+    # not a number the reset manufactured. `tul/vq_perplexity` is the instrument.
+    vq_reset_after: int = 0
     # "distinct" = M different learned queries (the arm). "same" = ONE query shared by
     # every cell, so all M pool the SAME vector and differ only by the per-cell embedding:
     # the control that separates "M cells of capacity" from "M cells that start out
@@ -1130,6 +1188,7 @@ class TULConfig:
             raise ValueError(
                 "tul.slot_cell_init set with tul.slot_cells=1: no register is built, so "
                 "the knob would be silently ignored. Set tul.slot_cells > 1 or drop it.")
+        self._check_vq()
         if self.prefix_source in ("trajectory", "entry_exit") and self.prefix_k < 2:
             raise ValueError(
                 f"tul.prefix_source={self.prefix_source!r} needs tul.prefix_k >= 2: at "
@@ -1859,6 +1918,102 @@ class TULConfig:
             raise ValueError(
                 f"tul.center_bag_mean=true with tul.slot_seed={self.slot_seed!r} is not "
                 f"supported: centering is scoped to slot_seed='bag_mean' only.")
+
+    def _check_vq(self) -> None:
+        """``tul.vq_codes`` — the discrete thought. Every refusal, with its reason.
+
+        Split out of ``__post_init__`` only because that method is already 800 lines; it
+        is called from there and nowhere else.
+        """
+        if self.vq_codes < 0:
+            raise ValueError(f"tul.vq_codes must be >= 0 (0 = off), got {self.vq_codes}")
+        if self.vq_codes == 0:
+            # OFF must be OFF: a knob that is silently ignored is worse than a missing one,
+            # and every one of these changes nothing unless a quantizer is built.
+            _set = [n for n, dflt in (("vq_codebook", 512), ("vq_dim", 0),
+                                      ("vq_groups", 1), ("vq_beta", 0.25),
+                                      ("vq_weight", 1.0), ("vq_reset_after", 0))
+                    if getattr(self, n) != dflt]
+            if _set:
+                raise ValueError(
+                    f"tul.{sorted(_set)} set with tul.vq_codes=0: no quantizer is built, "
+                    f"so the knob(s) would be silently ignored. Set tul.vq_codes > 0 or "
+                    f"drop them.")
+            return
+        if self.vq_codes < 2:
+            raise ValueError(
+                f"tul.vq_codes={self.vq_codes}: one code position is one symbol per span, "
+                f"which is a lookup table and not a thought. Use >= 2, or 0 for off.")
+        if self.vq_codebook < 2:
+            raise ValueError(f"tul.vq_codebook must be >= 2, got {self.vq_codebook}")
+        if self.vq_groups < 1:
+            raise ValueError(f"tul.vq_groups must be >= 1, got {self.vq_groups}")
+        if self.vq_dim < 0:
+            raise ValueError(
+                f"tul.vq_dim must be >= 0 (0 = d_model // vq_codes), got {self.vq_dim}")
+        if self.vq_beta < 0.0:
+            raise ValueError(f"tul.vq_beta must be >= 0, got {self.vq_beta}")
+        if self.vq_weight < 0.0:
+            raise ValueError(f"tul.vq_weight must be >= 0, got {self.vq_weight}")
+        if self.vq_reset_after < 0:
+            raise ValueError(
+                f"tul.vq_reset_after must be >= 0 (0 = off), got {self.vq_reset_after}")
+        if self.prefix_k != self.vq_codes:
+            raise ValueError(
+                f"tul.vq_codes={self.vq_codes} needs tul.prefix_k={self.vq_codes}: the "
+                f"quantizer lifts code k into prefix cell k, 1:1, through the shared "
+                f"W_prefix[k]. Got prefix_k={self.prefix_k}. Raises rather than dropping "
+                f"codes or duplicating them into a width nobody chose.")
+        if self.slot_cells > 1:
+            raise NotImplementedError(
+                f"tul.vq_codes with tul.slot_cells={self.slot_cells}: both hand the coda "
+                f"prefix_k cells per span and both claim the SAME cells — the register "
+                f"writes looped cell i there, the quantizer writes code i. Two multi-cell "
+                f"mechanisms at once is not one factor, so this raises. Run them as two "
+                f"arms.")
+        if self.prefix_source != "exit":
+            raise NotImplementedError(
+                f"tul.vq_codes with tul.prefix_source={self.prefix_source!r}: the same "
+                f"collision. A trajectory/entry_exit write puts pass k in cell k; the "
+                f"quantizer puts code k there. Pick one.")
+        if self.tokens_through_core:
+            raise NotImplementedError(
+                "tul.vq_codes with tul.tokens_through_core: the paid loop writes no prefix "
+                "cell at all (TULSlots has no W_prefix there), so there is nothing to lift "
+                "a code into and no bottleneck anywhere on the path.")
+        if self.loop_reads_tokens:
+            raise NotImplementedError(
+                "tul.vq_codes with tul.loop_reads_tokens: that mode has no prefix write "
+                "either — a cell's looped state is already AT its own position when the "
+                "core returns — so quantizing would produce cells nothing reads.")
+        if self.gate is not None:
+            raise NotImplementedError(
+                "tul.vq_codes with tul.gate: the gate conditions h_slots on a decoded "
+                "budget AFTER the local losses, so the decoder would grade the dequantized "
+                "thought and the coda would read cells built before the budget. Pick one.")
+        if self.detach_z:
+            raise NotImplementedError(
+                "tul.vq_codes with tul.detach_z is not defined: detach_z cuts the token "
+                "CE's edge into the loop at the WRITE, and on a VQ model the write comes "
+                "off the quantizer's cells while `h_slots` is the dequantized mean, so it "
+                "would detach one reader and not the other. The STE is the only edge the "
+                "token CE has into the loop here; cutting it needs its own knob.")
+        _refuse = [n for n in ("db_loop", "slot_chain", "grad_pass", "oracle_z",
+                               "spandec_per_pass", "mux_every_pass", "mux_stage_all",
+                               "mux_stage_own_iters", "coda_span_heads")
+                   if getattr(self, n)]
+        if _refuse:
+            raise NotImplementedError(
+                f"tul.vq_codes with {sorted(_refuse)}: every one of those grades or "
+                f"consumes an INTERMEDIATE looped state (a per-pass target, a chain hop, "
+                f"an own-span gradient) or reads a named prefix cell as if it carried z. "
+                f"None of those states passes through the quantizer, so the arm would "
+                f"train the loop against a target the coda never sees. Not specified, so "
+                f"this raises rather than running with the knob half-applied.")
+        if not (self.coda_sees_slots and self.coda_token_cut == 0):
+            raise NotImplementedError(
+                "tul.vq_codes needs the FULL-AXIS coda (coda_sees_slots=true, "
+                "coda_token_cut=0): the K lifted codes ARE coda positions.")
 
 
 # ── pure tensor plumbing ─────────────────────────────────────────────────────

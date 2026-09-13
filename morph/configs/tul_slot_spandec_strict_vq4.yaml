@@ -1,0 +1,56 @@
+# Slot-loop panel, arm "slot-spandec-strict-vq4": the DISCRETE thought at FOUR codes.
+# ONE factor against `slot-spandec-strict-vq8` (`tul.vq_codes`, and with it `prefix_k` and
+# the code width, which a register-style 1:1 write cannot separate — see below).
+#
+# READ `tul_slot_spandec_strict_vq8.yaml` FIRST. It carries the defect, the mechanism, the
+# five design decisions, what a step-0 model is, and the instrument order. This file states
+# only what differs and why the pair is worth running.
+#
+# WHAT THIS PAIR ASKS. vq8 and vq4 differ in three things at once, and one of them cannot be
+# held fixed:
+#   1. the number of SYMBOLS per span (8 against 4) — the question;
+#   2. the code WIDTH d_c (`vq_dim: 0` -> d_model // vq_codes, so 128 against 256) — a
+#      consequence of the default, kept because the alternative (a fixed d_c) would make
+#      the two arms differ in the quantizer's parameter count instead, and because a
+#      per-code width that shrinks as the count grows is what keeps the head's output
+#      dimension constant at d_model;
+#   3. `prefix_k`, which MUST equal `vq_codes` on a 1:1 write, so L_total is 1280 here and
+#      1536 there.
+# Two arms cannot separate three factors and this panel does not pretend to. What it CAN
+# say: if vq4 and vq8 land together on CE and on the K-curve while their perplexities
+# differ, the count is not the lever; if vq8 clearly beats vq4, the next question is whether
+# it was the count or the wider write, and the arm that answers it is a strict ruler at
+# prefix_k 8 with no quantizer (not built here).
+#
+# WHY 4 AND NOT ONLY 8. The prefix-width effect alone is MEASURED on this family
+# (`slot-mux-prefix4`, 2026-09-10: `val/slot_eff_rank` 6.3389 -> 7.12, and the loop did not
+# move), so vq4 sits at a width whose no-quantizer behaviour is already on the record, which
+# is the closest thing this panel has to a control for factor 3.
+#
+# COST. L_total = 1024 + 4*64 = 1280, against the k=2 ruler's 1152 (`slot-mux-prefix4` ran
+# that exact shape at 0.973x tok/s and +2.93 GB). Parameters, measured on a CPU build at
+# the shipped d_model 1024: +4,325,376 against the strict ruler, of which `W_prefix` 2 -> 4
+# slices is +2,097,152 (identity init) and the quantizer is 2,228,224 (W_vq 1024x1024 +
+# vq_E 512x256 + W_vq_out 4x256x1024). At init the rank instrument reads
+# `slot_eff_rank` 36.57 against the ruler's 10.11 and `slot_cell_eff_rank` 2.99 of 4 — a
+# random codebook makes that easy, so it proves the write is wired and nothing more.
+# No GPU step of either arm exists.
+#
+# Record: lab/experiments/planned/2026-09-13-arc-discrete-thought-vq.md
+# Note: .agents/notes/proposed/architecture/2026-09-13-discrete-thought-vq.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  prefix_k: 4
+  vq_codes: 4
+  vq_codebook: 512
+  vq_dim: 0                     # 0 -> d_model // vq_codes = 256
+  vq_groups: 1
+  vq_beta: 0.25
+  vq_weight: 1.0
+  vq_reset_after: 0
+
+wandb:
+  name: slot-spandec-strict-vq4

@@ -134,7 +134,8 @@ def evaluate(
                 _l -= float(out["spandec_weighted"])
             for _aux2 in ("egrad_weighted", "pass_res_weighted", "oracle_z_weighted",
                           "spandec_pass_weighted", "coda_span_weighted",
-                          "core_token_aux_weighted", "critic_weighted"):
+                          "core_token_aux_weighted", "critic_weighted",
+                          "vq_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -3101,6 +3102,8 @@ def main(cfg: DictConfig) -> None:
                             "spandec_pass", "spandec_pass_weighted",
                             "coda_span", "coda_span_weighted",
                             "core_token_aux", "core_token_aux_weighted",
+                            "vq", "vq_weighted", "vq_commit", "vq_codebook_loss",
+                            "vq_perplexity", "vq_used",
                             "critic", "critic_weighted", "critic_agree",
                             "critic_gap_traj"):
                     if _lk in out and out[_lk] is not None:
@@ -3228,6 +3231,7 @@ def main(cfg: DictConfig) -> None:
                         "pass_res_weighted", "oracle_z_weighted",
                         "spandec_pass_weighted", "coda_span_weighted",
                         "core_token_aux_weighted",
+                        "vq_weighted",       # arc: the discrete thought, 2026-09-13
                         "critic_weighted"):  # arc E10 / 2026-09-12
                 if isinstance(out, dict) and out.get(_ak) is not None:
                     _lv = _lv - float(out[_ak])
@@ -3357,6 +3361,9 @@ def main(cfg: DictConfig) -> None:
                            "coda_span", "coda_span_weighted", "coda_span_ce",
                            "core_token_aux", "core_token_aux_weighted",
                            "core_token_aux_ce", "core_token_aux_n", "core_token_aux_fp",
+                           "vq", "vq_weighted", "vq_commit", "vq_codebook_loss",
+                           "vq_perplexity", "vq_used", "vq_n_codes",
+                           "vq_codebook_size",
                            "critic", "critic_weighted", "critic_train", "critic_agree",
                            "critic_agree_traj", "critic_agree_pert", "critic_n_traj",
                            "critic_n_pert", "critic_gap_traj", "critic_gap_pert",

@@ -59,6 +59,8 @@ KNOWN_TUL_KEYS = frozenset({
     "reinject_seed_every_pass", "recur_gate", "recur_gate_bias",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_cells", "slot_cell_init", "slot_chain", "slot_chain_detach",
+    "vq_beta", "vq_codebook", "vq_codes", "vq_dim", "vq_groups", "vq_reset_after",
+    "vq_weight",
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
     "spandec", "spandec_heads", "spandec_horizon", "spandec_layers", "spandec_max_tokens",
     "spandec_pass_horizon_max", "spandec_pass_tokens", "spandec_pass_weight",
@@ -269,6 +271,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         prefix_source=str(tc.get("prefix_source", "exit")),
         slot_cells=int(tc.get("slot_cells", 1)),
         slot_cell_init=str(tc.get("slot_cell_init", "distinct")),
+        vq_codes=int(tc.get("vq_codes", 0)),
+        vq_codebook=int(tc.get("vq_codebook", 512)),
+        vq_dim=int(tc.get("vq_dim", 0)),
+        vq_groups=int(tc.get("vq_groups", 1)),
+        vq_beta=float(tc.get("vq_beta", 0.25)),
+        vq_weight=float(tc.get("vq_weight", 1.0)),
+        vq_reset_after=int(tc.get("vq_reset_after", 0)),
         loop_reads_tokens=bool(tc.get("loop_reads_tokens", False)),
         core_token_aux=bool(tc.get("core_token_aux", False)),
         core_token_aux_weight=float(tc.get("core_token_aux_weight", 1.0)),
@@ -397,6 +406,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "prefix_source": model_cfg.prefix_source,
         "slot_cells": model_cfg.slot_cells,
         "slot_cell_init": model_cfg.slot_cell_init,
+        "vq_codes": model_cfg.vq_codes,
+        "vq_codebook": model_cfg.vq_codebook,
+        "vq_dim": model_cfg.vq_dim,
+        "vq_groups": model_cfg.vq_groups,
+        "vq_beta": model_cfg.vq_beta,
+        "vq_weight": model_cfg.vq_weight,
+        "vq_reset_after": model_cfg.vq_reset_after,
         "loop_reads_tokens": model_cfg.loop_reads_tokens,
         "core_token_aux": model_cfg.core_token_aux,
         "core_token_aux_weight": model_cfg.core_token_aux_weight,
@@ -541,6 +557,27 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               "Read `val/slot_cell_eff_rank` - the rank WITHIN a slot - beside "
               "`val/slot_eff_rank` "
               "(lab/experiments/planned/2026-09-13-arc-thought-register.md)",
+              flush=True)
+    if model_cfg.vq_codes > 0:
+        _dc = model_cfg.vq_dim or (int(cfg.model.d_model) // model_cfg.vq_codes)
+        print(f"  TUL DISCRETE THOUGHT ON: vq_codes={model_cfg.vq_codes} "
+              f"codebook={model_cfg.vq_codebook} d_c={_dc} groups={model_cfg.vq_groups} "
+              f"beta={model_cfg.vq_beta} weight={model_cfg.vq_weight} "
+              f"reset_after={model_cfg.vq_reset_after} - the loop's EXIT state goes "
+              f"through W_vq to {model_cfg.vq_codes} sub-vectors, each snapped to the "
+              f"nearest entry of ONE shared codebook (cosine: both sides l2-normalised, "
+              f"so the encoder's scale cannot decide the match), and the quantized "
+              f"sub-vectors are lifted back to {model_cfg.vq_codes} full-width cells "
+              f"written 1:1 into the prefix cells (prefix_k == vq_codes). The CODA is "
+              f"unchanged. Rank is given BY CONSTRUCTION against the measured collapse "
+              f"(slot_eff_rank 5.76 in 1024 dims, pairwise cos 0.71). A straight-through "
+              f"estimator is the ONLY edge the token CE has into the loop here. "
+              f"STEP 0 IS NOT THE RULER: a quantizer cannot be zero-init, so the coda "
+              f"starts on a near-arbitrary code and this arm's early CE is worse by "
+              f"construction. Read `tul/vq_perplexity` (codebook usage, in "
+              f"(1, {model_cfg.vq_codebook}]) FIRST - at 1 every span picked the same "
+              f"symbol and the channel carries nothing, whatever the CE says "
+              f"(lab/experiments/planned/2026-09-13-arc-discrete-thought-vq.md)",
               flush=True)
     if model_cfg.prefix_source != "exit":
         print(f"  TUL PREFIX SOURCE = {model_cfg.prefix_source!r} (prefix_k "
