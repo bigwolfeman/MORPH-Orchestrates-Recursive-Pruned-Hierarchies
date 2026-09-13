@@ -217,13 +217,20 @@ Olympiad (K1−K6 0.024 → 0.065) while costing it 0.067 nats at 6,000, which i
 "price paid early, loop share up" trade the web panel measured at 5k versus 20k. The slot
 arms did not close their gap; they widened it, and the worth profile says why the CE is
 where it is: the cells hurt the first two tokens of every next span by about 2 nats and
-help the rest by 0.1 to 0.2. That offset-0 damage is the same on web text (the strict
-ruler's zero worth at offset 0), on Olympiad and on Sudoku, so it is a property of the
-strict cell write plus the span-decoder target, not of a corpus. It is not explained here;
-the candidate mechanisms are the span decoder training z toward the WHOLE next span while
-the coda needs the first token most, and token-state dropout at the cells. Test: the
-register panel's worth profiles (already queued) will read the same offsets; if the
-offset-0 damage is still ~2 nats with M cells, the write is the fault, not the capacity.
+help the rest by 0.1 to 0.2. That offset-0 damage is MATH-SPECIFIC. On web text the same strict write HELPS offset 0:
+the strict ruler's zero worth at offset 0 is +0.757 (web, 480 rows,
+`results/2026-09-12-strict/worth_slot-spandec-strict_5000.json`) and the ultralight-coda
+arm reads +0.949 at offset 0 (2026-09-13, same instrument). So the sign flips between
+corpora: the cells carry something the first token of a held-out math span is hurt by and
+the first token of a web span is helped by. The candidate mechanism is a train/holdout
+shift: the Olympiad training bands are contaminated and the holdout is the cleaned split;
+the Sudoku holdout boards are unseen; the cells' content is fitted to the training
+distribution's next-span starts and misleads on held-out ones, while later offsets, which
+the coda reads more from the span's own tokens, still profit. Test: run `worth_profile.py`
+on TRAINING rows of the math arms beside the holdout rows; if offset 0 flips positive on
+training rows, the damage is generalisation of the write, not the write itself. A first
+version of this paragraph said the damage was the same on web text; the web numbers above
+refute that, and the correction is recorded here.
 Do not queue another math training arm for the slot loop until the offset-0 damage is
 understood on web text, where the runs are cheaper.
 
