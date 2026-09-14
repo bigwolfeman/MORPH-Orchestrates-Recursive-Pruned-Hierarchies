@@ -11,6 +11,7 @@ Top-level navigation for project documentation.
 - [Parcae TUL proof and MORPH depth-selection plan](../.agents/notes/proposed/architecture/2026-09-05-parcae-tul-depth-transfer-plan.md) includes the completed Parcae CE reference and the new VLD paper reading.
 - [TUL — Thought Unpack Loop specification](tul-spec.md) — layout, slot input, loss and generation contract; its §3.3 slot-only core and §7 arms are RETIRED 2026-09-03 (the paid loop below is the shipped forward)
 - [SCSE — Source-Centered State Evolution port specification](scse-spec.md)
+- [TUL-Code — the span code, the tape and the sampler](tul-code-spec.md) — PROPOSED 2026-09-14, not built; the slot holds the code of the span it precedes and the core body samples it by flow matching; decision note `.agents/notes/proposed/architecture/2026-09-14-tul-span-code.md`
 - [TUL Gate — span-length and halting gates](tul-gate-spec.md) — BUILT 2026-08-22, RETIRED 2026-09-03 with the slot-only core (record; last commit that runs it `d9e04e6`)
 - [TUL-FM probing doctrine (flow-matching arc: instruments, controls, phase gates)](tul-fm-probing.md) — PROPOSED 2026-08-28; arc note in `.agents/notes/proposed/architecture/`
 - [The paid loop: how TUL came to earn its depth, and the recipe that trains it](tul-paid-loop-recipe.md) — THE SHIPPED FORWARD since 2026-09-03 (`base.yaml`, master); §6 is the recipe and names the unmeasured conjunction; decision note `.agents/notes/implemented/architecture/2026-09-03-ship-the-paid-loop-cut-the-arms.md`
