@@ -314,6 +314,56 @@ class MORPHConfig:
     mtp_heads: int = 1
     mtp_weight: float = 1.0
 
+    # ── LoopMTP (arXiv 2608.03624, Shomali et al. 2026) ─────────────────────────
+    # Two independent knobs, BOTH off by default and bit-identical when off. They make
+    # MORPH's core iteration t the paper's loop iteration t: the shared 6-block core
+    # applied T times between the prelude and the coda.
+    #
+    # (a) `core_readout`. "last" = the coda reads the FINAL iterate (the tree as it is).
+    #     "gated" = the coda reads the paper's content-conditional aggregate of ALL T
+    #     iterates (Eq 9-11):
+    #         g^(t)      = softplus(W_g x^(t) + beta_t * 1_d)          [Eq 9]
+    #         gtilde^(t) = g^(t) / (sum_s g^(s) + eps)                 [Eq 10, ELEMENTWISE]
+    #         z          = sum_t gtilde^(t) (*) x^(t)                  [Eq 11, t = 1..T]
+    #     W_g is ONE [d, d] linear shared across iterations, zero-initialised, and beta is
+    #     T scalars initialised to 0 — so at init every gate is softplus(0) and z is the
+    #     UNIFORM mean of the T iterates (the paper's "All (uniform)" variant, its
+    #     second-best in Fig 4 left). Both inits draw NO RNG, so a gated model shares every
+    #     base weight with the same-seed ungated one.
+    # (b) `loopmtp_weight` (lambda_align). The soft multi-token-prediction target of Eq 12-13:
+    #         L_align^(t) = mean_i (1 - cos(x_i^(t), sg[E_{u_{i+t}}]))
+    #         L_align     = 1/(T-1) sum_{t=2..T} L_align^(t)           [free first iterate]
+    #     i.e. iteration t is asked to anticipate the token t steps ahead of position i,
+    #     against the DETACHED tied output embedding. TRAINING ONLY (like
+    #     core_fixed_point_lambda), so val CE stays the number every arm is compared on.
+    #     `loopmtp_free_first` = the paper's "iteration 1 is left unconstrained"; False
+    #     supervises iteration 1 too (target u_{i+1}) and averages over all T.
+    # (c) `loopmtp_proj`. MORPH DEVIATION. In the paper x^(t) is the state that feeds the
+    #     LM head directly, so the cosine against an unembedding row is a comparison in the
+    #     head's own space and needs no projection. MORPH puts THREE coda blocks, the
+    #     lm_mixer and final_norm between the core and the head, so the raw core state does
+    #     not live in that space. "linear" = one SHARED RMSNorm -> Linear(d, d) at identity
+    #     init (zero RNG) on the state side, never ternarised; "none" = the paper's literal
+    #     form, kept as the ablation. Shared, not per-iteration, so the iterates themselves
+    #     have to differ — a per-iteration projection could fake the differentiation.
+    # (d) `loopmtp_ponder_weight` (lambda_ponder, paper default 0.05). The paper's ponder
+    #     regulariser: KL(mean-over-dims gate distribution || uniform), averaged over
+    #     positions, which pulls the aggregator away from collapsing onto one iterate.
+    #     Defined only with core_readout "gated" (it acts on the gate), training only.
+    # (e) `loopmtp_gate_eps`. The epsilon of Eq 10's denominator, the paper's `eps`. It
+    #     only matters where every raw gate is near zero; it is a config field rather than
+    #     a constant so a run is reproducible from its wandb config alone.
+    # Both knobs REQUIRE a fixed loop depth (mean_depth == max_depth) and full BPTT
+    # (bptt_depth >= mean_depth): the paper's T is a constant and every iterate is
+    # supervised, and a Poisson draw would give different samples different target sets.
+    # A Poisson config RAISES at build rather than silently averaging over depths.
+    core_readout: str = "last"
+    loopmtp_weight: float = 0.0
+    loopmtp_free_first: bool = True
+    loopmtp_proj: str = "linear"
+    loopmtp_ponder_weight: float = 0.0
+    loopmtp_gate_eps: float = 1.0e-6
+
     # The diagonal state carry (Parcae arXiv 2604.12946 §4.1: rho(A) < 1 on the WHOLE residual
     # is the paper's stability claim). "ctx" = the shipped DiagonalInjection on the context
     # channel only (256 of 768 dims; the rest ride the norm-preserving HC residual, Parcae's
@@ -963,6 +1013,81 @@ class _MTPHead(nn.Module):
         return self.proj(self.norm(x))
 
 
+class _LoopMTPGate(nn.Module):
+    """LoopMTP's content-conditional aggregator, Eq 9-11 (arXiv 2608.03624 Sec 3.1).
+
+        g^(t)      = softplus(W_g x^(t) + beta_t * 1_d)
+        gtilde^(t) = g^(t) / (sum_s g^(s) + eps)      <- elementwise, over ITERATIONS
+        z          = sum_{t=1..T} gtilde^(t) (*) x^(t)
+
+    ``W_g`` is ONE ``[d, d]`` linear shared by every iteration (the paper's "single linear
+    gate shared across all iterations"); ``beta`` is one scalar per iteration. Both start
+    at zero, which draws no RNG and makes ``z`` the uniform mean of the T iterates at init.
+
+    Carrier shape: MORPH's loop carrier is the Hyper-Connection ``[B, S, n, C]`` tensor, so
+    the gate acts on the last axis and broadcasts across the ``n`` streams — the aggregate
+    is a valid carrier the coda consumes unchanged. On a plain ``[B, S, C]`` carrier the
+    same code is the paper's form verbatim.
+
+    Precision and memory: the gate runs at the CARRIER dtype (bf16 under autocast), the
+    dtype the rest of the loop already uses. The normalising sum is a ``torch.sum``
+    reduction, which accumulates in fp32 on both CPU and CUDA, so the division is accurate
+    even when the stored gates are bf16. Nothing is stacked at ``[T, B, S, n, C]``: the
+    running sum and ``z`` are accumulated in a Python loop, and the only per-iteration
+    tensor kept for the caller is the reduced ``[T, B*S]`` gate mass the ponder term and
+    the Fig-4 read-out want.
+
+    Depths beyond ``T``: a forced-depth sweep may run MORE iterations than the model was
+    trained with (``core_depth_sweep.py --depths ...,9,12,16``). ``beta`` holds only T
+    entries, so iteration ``t > T`` reuses ``beta_T``. The gate stays content-conditional
+    through ``W_g``; only the per-iteration bias is held. This is a READ-OUT convention for
+    the sweep — training always runs exactly T iterations and never reaches it.
+    """
+
+    def __init__(self, d: int, n_iters: int, eps: float = 1.0e-6):
+        super().__init__()
+        self.proj = nn.Linear(d, d, bias=False)
+        nn.init.zeros_(self.proj.weight)
+        # Never ternarised: a {-1,0,+1} gate matrix cannot express a small content
+        # perturbation inside a softplus — the same rationale as the HC coefficient
+        # projection and the DiagonalInjection control matrices.
+        self.proj._ternary_exclude = True
+        self.beta = nn.Parameter(torch.zeros(int(n_iters)))
+        self.eps = float(eps)
+
+    def raw_gates(self, states: list[Tensor]) -> list[Tensor]:
+        """``g^(t)`` of Eq 9, one tensor per iteration, un-normalised."""
+        n_beta = int(self.beta.shape[0])
+        out = []
+        for t, x in enumerate(states):
+            y = self.proj(x)
+            out.append(F.softplus(y + self.beta[min(t, n_beta - 1)].to(y.dtype)))
+        return out
+
+    def forward(self, states: list[Tensor]) -> tuple[Tensor, Tensor]:
+        """``states`` = ``[x^(1), ..., x^(k)]`` -> ``(z, gate_mass)``.
+
+        ``gate_mass`` is ``[k, B*S]`` fp32: the normalised gate ``gtilde^(t)`` averaged over
+        the channels (and the HC streams) at each position. It sums to 1 over axis 0 by
+        construction, and it is the ONLY per-iteration gate quantity kept — the full
+        ``[k, B, S, n, C]`` tensor is never materialised.
+        """
+        gs = self.raw_gates(states)
+        tot = gs[0]
+        for g in gs[1:]:
+            tot = tot + g
+        tot = tot + self.eps
+        z = None
+        mass: list[Tensor] = []
+        for g, x in zip(gs, states):
+            gt = g / tot
+            zt = gt * x
+            z = zt if z is None else z + zt
+            # [B, S, ...] -> [B*S]: mean over every axis but batch and position.
+            mass.append(gt.float().flatten(0, 1).flatten(1).mean(dim=1))
+        return z, torch.stack(mass, dim=0)
+
+
 def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0
                        ) -> tuple[Tensor, Tensor]:
     """The Thought Register's CELL relation, in one place (``tul.slot_cells``).
@@ -1360,6 +1485,85 @@ class MORPHTransformer(nn.Module):
             self.mtp = nn.ModuleList([_MTPHead(d) for _ in range(int(cfg.mtp_heads) - 1)])
             print(f"  MTP: {int(cfg.mtp_heads) - 1} parallel lookahead heads on the coda "
                   f"readout (targets t+2..t+{int(cfg.mtp_heads)}), weight {cfg.mtp_weight}")
+
+        # ── LoopMTP (arXiv 2608.03624): the gated aggregator and the soft MTP target ──
+        # Both inits are DETERMINISTIC (zeros / identity — zero RNG draws), so a LoopMTP
+        # model's base weights are byte-identical to the same-seed ladder rung and the arm
+        # differs by the mechanism alone. Off (core_readout "last" AND loopmtp_weight 0)
+        # builds nothing and `_loopmtp_states` stays False, so `_core_region` keeps not one
+        # extra op.
+        if cfg.core_readout not in ("last", "gated"):
+            raise ValueError(f"model.core_readout must be 'last' or 'gated', got "
+                             f"{cfg.core_readout!r}")
+        if cfg.loopmtp_proj not in ("linear", "none"):
+            raise ValueError(f"model.loopmtp_proj must be 'linear' or 'none', got "
+                             f"{cfg.loopmtp_proj!r}")
+        if float(cfg.loopmtp_weight) < 0.0:
+            raise ValueError(f"model.loopmtp_weight must be >= 0, got {cfg.loopmtp_weight}")
+        if float(cfg.loopmtp_ponder_weight) < 0.0:
+            raise ValueError(f"model.loopmtp_ponder_weight must be >= 0, got "
+                             f"{cfg.loopmtp_ponder_weight}")
+        _lm_gated = str(cfg.core_readout) == "gated"
+        _lm_align = float(cfg.loopmtp_weight) > 0.0
+        if float(cfg.loopmtp_ponder_weight) > 0.0 and not _lm_gated:
+            raise ValueError(
+                "model.loopmtp_ponder_weight > 0 needs model.core_readout='gated': the "
+                "ponder regulariser (arXiv 2608.03624, KL of the per-iteration gate "
+                "distribution against uniform) is a term ON the aggregator's gate, and "
+                "there is no gate to regularise under the 'last' read-out.")
+        self.loopmtp_gate = None
+        self.loopmtp_proj = None
+        self._loopmtp_states = bool(_lm_gated or _lm_align)
+        if self._loopmtp_states:
+            _T = int(cfg.mean_depth)
+            if int(cfg.mean_depth) != int(cfg.max_depth):
+                raise ValueError(
+                    f"LoopMTP (model.core_readout='gated' or model.loopmtp_weight > 0) "
+                    f"needs a FIXED loop depth: mean_depth ({cfg.mean_depth}) must equal "
+                    f"max_depth ({cfg.max_depth}). The paper's T is a constant — every "
+                    f"iteration carries its own horizon target and the aggregator gates "
+                    f"exactly T states, so a per-sample Poisson draw would give different "
+                    f"rows different target sets and different gate supports.")
+            if int(cfg.bptt_depth) < _T:
+                raise ValueError(
+                    f"LoopMTP needs full BPTT: bptt_depth ({cfg.bptt_depth}) must be >= "
+                    f"the fixed depth {_T}. The paper backpropagates through all T "
+                    f"iterations; a truncated window would leave the early iterations' "
+                    f"alignment terms with no path to the core weights.")
+            if int(cfg.n_core) == 0:
+                raise ValueError("LoopMTP needs a core loop (model.n_core > 0).")
+            if cfg.tul is not None:
+                raise ValueError(
+                    "LoopMTP is defined on the PLAIN looped model only. On a TUL model the "
+                    "core loop is either the slot loop (`_tul_core`, a different function) "
+                    "or the paid loop over a packed row whose slot positions carry no "
+                    "`u_{i+t}` label — neither has a defined Eq-13 target, so this raises "
+                    "instead of silently scoring pad positions.")
+            if bool(cfg.scse_enabled):
+                raise ValueError(
+                    "LoopMTP is not defined under SCSE: the loop carrier there is the "
+                    "DEVIATION from a fixed anchor, so the per-iteration states the "
+                    "aggregator would gate and the alignment loss would score are not the "
+                    "states the paper's x^(t) names.")
+            # `nn.Linear.reset_parameters` DRAWS from the global RNG before the
+            # zero/identity overwrite, so building these here would shift every weight
+            # constructed after this point. Snapshot and restore the stream around the
+            # build: a LoopMTP model then shares every base weight with the same-seed
+            # ladder rung byte for byte, and the arm differs by the mechanism alone
+            # (tests/test_loopmtp.py::test_knobs_off_and_on_share_every_base_weight).
+            _lm_rs = torch.get_rng_state()
+            if _lm_gated:
+                self.loopmtp_gate = _LoopMTPGate(d, _T, eps=float(cfg.loopmtp_gate_eps))
+            if _lm_align and str(cfg.loopmtp_proj) == "linear":
+                # RMSNorm -> Linear(d, d) at identity init, exactly `_MTPHead`'s body; at
+                # init it is a pure rescale, and cosine is scale-invariant, so the term
+                # starts at the same value the paper's projection-free form gives.
+                self.loopmtp_proj = _MTPHead(d)
+                self.loopmtp_proj.proj._ternary_exclude = True
+            torch.set_rng_state(_lm_rs)
+            print(f"  LoopMTP: T={_T} readout={cfg.core_readout} "
+                  f"lambda_align={cfg.loopmtp_weight} free_first={cfg.loopmtp_free_first} "
+                  f"proj={cfg.loopmtp_proj} lambda_ponder={cfg.loopmtp_ponder_weight}")
 
         if cfg.core_gain_direction not in ("power", "random"):
             raise ValueError(f"model.core_gain_direction must be 'power' or 'random', got "
@@ -2538,12 +2742,107 @@ class MORPHTransformer(nn.Module):
             return
         for k, v in aux.items():
             out[k] = v
+        if any(k.endswith("_weighted") for k in aux):
+            # The CE BEFORE any core-loop term is added, so a reader can recover the number
+            # every arm is compared on exactly (not by subtracting in float afterwards).
+            # `_mtp_apply` sets the same key first when it runs, hence setdefault.
+            out.setdefault("ce_main", out["loss"])
         if "fp_weighted" in aux:
             out["loss"] = out["loss"] + aux["fp_weighted"]
         if "pass_res_weighted" in aux:
             out["loss"] = out["loss"] + aux["pass_res_weighted"]
         if "core_gain_weighted" in aux:
             out["loss"] = out["loss"] + aux["core_gain_weighted"]
+        if "loopmtp_weighted" in aux:
+            out["loss"] = out["loss"] + aux["loopmtp_weighted"]
+        if "loopmtp_ponder_weighted" in aux:
+            out["loss"] = out["loss"] + aux["loopmtp_ponder_weighted"]
+
+    def _loopmtp_align(self, states: list[Tensor], labels: Tensor) -> Tensor:
+        """LoopMTP Eq 12-13: the soft multi-token target on the loop's own iterates.
+
+        ``states[k]`` is the carrier AFTER core iteration ``k + 1``. Iteration ``t``
+        (1-based) is aligned to the DETACHED tied output embedding of the token ``t`` steps
+        ahead of position ``i``::
+
+            L_align^(t) = mean over valid i of  1 - cos(proj(x_i^(t)), sg[E_{u_{i+t}}])
+
+        MORPH's ``labels[i]`` is already ``u_{i+1}``, so ``u_{i+t}`` is
+        ``labels[i + t - 1]`` — the SAME shift ``_mtp_apply`` uses for its head ``j = t``.
+        The tail ``t - 1`` positions of a row have no such token and are padded to -100;
+        so is every position whose label was already -100 (row padding). The paper's
+        ``1/(S - t)`` normaliser is exactly the count of those valid positions when the row
+        carries no padding, and this form stays right when it does.
+
+        Three things are load-bearing:
+
+        * ``lm_weight().detach()`` — the memory rule (auxiliary heads must not train the
+          tied embedding table). The paper's ``sg[E]`` says the same thing.
+        * the stream reduction ``mean(dim=2)`` is the SAME one ``_readout`` applies, so the
+          quantity scored is the single-stream state the coda's read-out sees.
+        * ``self.loopmtp_proj`` is ONE shared projection, not one per iteration, so the
+          iterates themselves must differ to satisfy T different targets.
+
+        Returns the mean over the supervised iterations (Eq 13's ``1/(T-1)``), a scalar.
+        """
+        maps = self._loopmtp_align_maps(states, labels)
+        if not maps:
+            raise RuntimeError(
+                "LoopMTP alignment has no supervised iteration: loopmtp_free_first is on "
+                "and the loop ran a single iteration. Use loopmtp_free_first=false at T=1, "
+                "or a depth >= 2.")
+        terms = [(m * v).sum() / v.sum().clamp(min=1).to(m.dtype) for _, m, v in maps]
+        return torch.stack(terms).mean()
+
+    def _loopmtp_align_maps(self, states: list[Tensor],
+                            labels: Tensor) -> list[tuple[int, Tensor, Tensor]]:
+        """The per-position terms :meth:`_loopmtp_align` averages, one entry per SUPERVISED
+        iteration: ``(t, (1 - cos) map [B, S], valid mask [B, S])`` with ``t`` 1-based.
+
+        ONE home for the indexing: the loss, the per-iteration read-out in
+        ``lab/divergence/loopmtp_iteration_probe.py`` and the tests all read it, so an
+        off-by-one in the horizon cannot exist in the loss and be absent from the probe.
+        """
+        if labels.ndim != 2:
+            raise RuntimeError(
+                "LoopMTP is undefined with 3-D TST bag labels: a bagged position carries "
+                "s token targets and Eq 13 aligns the state to ONE embedding row.")
+        w = self.embed.lm_weight().detach()                      # [V, d] — sg[E]
+        start = 1 if bool(self.cfg.loopmtp_free_first) else 0
+        out: list[tuple[int, Tensor, Tensor]] = []
+        for k in range(start, len(states)):
+            h = states[k]
+            if h.dim() == 4:                                     # HC carrier [B,S,n,C]
+                h = h.mean(dim=2)
+            if self.loopmtp_proj is not None:
+                h = self.loopmtp_proj(h)
+            # iteration t = k + 1 (1-based) targets u_{i+t} = labels[i + t - 1] = labels[i + k]
+            lab = labels if k == 0 else F.pad(labels[:, k:], (0, k), value=-100)
+            valid = (lab >= 0)
+            tgt = F.embedding(lab.clamp(min=0), w)               # [B, S, d]
+            cos = F.cosine_similarity(h.float(), tgt.float(), dim=-1)
+            out.append((k + 1, 1.0 - cos, valid))
+        return out
+
+    @staticmethod
+    def _loopmtp_ponder(gates: Tensor) -> Tensor:
+        """LoopMTP's ponder regulariser: KL(per-iteration gate mass || uniform).
+
+        ``gates`` is the ``[T, B*S]`` gate mass :meth:`_LoopMTPGate.forward` returns:
+        ``gtilde_i^(t)`` averaged over the channels (and, on the HC carrier, the streams —
+        the gate is per stream and per channel, and the paper's ``G`` is "the gate this
+        position gave iteration t" averaged over everything that is not an iteration).
+        Returns ``mean_i sum_t G_i(t) log(T * G_i(t))``, a scalar >= 0, zero iff the gate is
+        uniform at every position.
+        """
+        if gates.dim() != 2:
+            raise RuntimeError(
+                f"LoopMTP ponder reads the [T, B*S] gate mass _LoopMTPGate returns, got "
+                f"shape {tuple(gates.shape)}")
+        T = gates.shape[0]
+        gi = gates.clamp(min=1.0e-8)
+        gi = gi / gi.sum(dim=0, keepdim=True)
+        return (gi * (gi * float(T)).log()).sum(dim=0).mean()
 
     def _mtp_apply(self, out: dict, x: Tensor, labels: Tensor | None,
                    w_full: Tensor | None) -> None:
@@ -2730,7 +3029,8 @@ class MORPHTransformer(nn.Module):
     def _core_region(self, x: Tensor, x0: Tensor, bigram_emb,
                      input_ids: Tensor | None = None,
                      attn_kwargs: dict | None = None,
-                     jac_active: Tensor | None = None) -> Tensor:
+                     jac_active: Tensor | None = None,
+                     labels: Tensor | None = None) -> Tensor:
         """CORE region: input_norm → the Poisson-depth core loop → the looped carrier.
 
         Pure code motion out of ``_forward_single`` (the ``_front_region`` /
@@ -2741,8 +3041,17 @@ class MORPHTransformer(nn.Module):
         of forking a second implementation of the loop. ``jac_active`` (``[B, L]`` bool,
         optional) is read ONLY by the Jacobian probe capture: positions that carry no
         information (the packed row's tail-pad slot positions) are excluded from the
-        probe's active set. None → every position is active, and nothing else changes."""
+        probe's active set. None → every position is active, and nothing else changes.
+
+        ``labels`` is read ONLY by LoopMTP's Eq-13 alignment term (arXiv 2608.03624), and
+        only in ``training``; every other caller leaves it None and the forward is
+        untouched. It is a parameter rather than a stash because the term is a per-iteration
+        loss on states that exist only inside this function."""
         B = x.shape[0]
+        # LoopMTP: a Python-level constant set at build, so with both knobs off every
+        # branch below traces out and the loop is bit-identical to the pre-LoopMTP tree.
+        _lmtp = self._loopmtp_states
+        _lm_states: list[Tensor] = []
         # ── Core loop ─────────────────────────────────────────────────
         # n_core == 0 → prelude output flows straight to the coda. The whole loop
         # machinery below (input_norm/h clone, depth sampling, x0 hoist, DiagonalInjection
@@ -3015,6 +3324,20 @@ class MORPHTransformer(nn.Module):
                     _scale = torch.clamp(_tau * _in_n / (_out_n + 1e-6), max=1.0)
                     h_new = h_new * _scale.view(-1, *([1] * (h_new.dim() - 1)))
 
+                if _lmtp:
+                    # x^(t+1) of Eq 9/13, after the gain governor (there is none on a
+                    # LoopMTP arm) and before the frozen-suffix concat. LoopMTP runs at a
+                    # FIXED depth, so the active set is the whole batch at every iteration
+                    # and `h_new` is the full, sorted-order carrier. If that ever stops
+                    # holding, the gathered states would silently be a prefix of the batch.
+                    if n_active != h_s.shape[0]:
+                        raise RuntimeError(
+                            f"LoopMTP needs a fixed loop depth: iteration {t} has "
+                            f"{n_active} active samples of {h_s.shape[0]}. Build-time "
+                            f"validation requires mean_depth == max_depth, so reaching "
+                            f"here means a caller mutated the depth knobs apart.")
+                    _lm_states.append(h_new)
+
                 if _fp_lam > 0.0 and t >= n_nograd:
                     # Samples that FINISH at this iteration are the tail of the active prefix
                     # (sorted by depth, descending): active now, not at t+1.
@@ -3092,6 +3415,49 @@ class MORPHTransformer(nn.Module):
                     # readout, scatter, gate head, every checkpoint key) sees the absolute
                     # carrier exactly as it does today. h_star is already in batch order.
                     x = h_star + x
+
+            if _lmtp and _lm_states:
+                # `_lm_states` is empty only at a FORCED depth of 0 (the plain readout's
+                # `--depths 0,...` rung), where the loop never runs. There is no iterate to
+                # gate and no iterate to align, so the aggregator is the identity on the
+                # entry carrier — the same tensor the "last" read-out hands the coda there.
+                # Back to batch order, exactly as the final carrier above.
+                _lm_states = [st[inv_perm] for st in _lm_states]
+                _lm_mass = None
+                if self.loopmtp_gate is not None:
+                    # Eq 9-11: the coda reads the gated mix of ALL iterates, not the last.
+                    x, _lm_mass = self.loopmtp_gate(_lm_states)
+                if getattr(self, "_loopmtp_capture", False):
+                    # Read-out hook for lab/divergence/loopmtp_iteration_probe.py and the
+                    # tests. An instance flag, default absent -> getattr False -> a
+                    # Python-level no-op, so the training forward is unchanged. Do NOT set
+                    # it during training: it pins T detached carriers per forward.
+                    self._loopmtp_iterates = [st.detach() for st in _lm_states]
+                    self._loopmtp_gate_mass = (None if _lm_mass is None
+                                               else _lm_mass.detach())
+                if self.training and labels is not None:
+                    # Both terms are TRAINING ONLY (the `core_fixed_point_lambda`
+                    # precedent), so val CE stays the plain next-token number every arm in
+                    # the ladder is compared on.
+                    _aux_lm = self._core_aux if self._core_aux is not None else {}
+                    _lm_lam = float(self.cfg.loopmtp_weight)
+                    if _lm_lam > 0.0:
+                        _lm_al = self._loopmtp_align(_lm_states, labels)
+                        _aux_lm["loopmtp_align"] = _lm_al.detach()
+                        _aux_lm["loopmtp_weighted"] = _lm_lam * _lm_al
+                    if _lm_mass is not None:
+                        # Always computed on a gated arm, weighted into the loss only when
+                        # lambda_ponder > 0. It is the gate-collapse instrument: 0 means a
+                        # uniform gate, log(T) means the aggregator picked one iterate, and
+                        # without it a gated run has no live signal that the aggregator
+                        # threw the loop away.
+                        _lm_pd = self._loopmtp_ponder(_lm_mass)
+                        _aux_lm["loopmtp_ponder"] = _lm_pd.detach()
+                        _lm_plam = float(self.cfg.loopmtp_ponder_weight)
+                        if _lm_plam > 0.0:
+                            _aux_lm["loopmtp_ponder_weighted"] = _lm_plam * _lm_pd
+                    if _aux_lm:
+                        self._core_aux = _aux_lm
         else:
             # n_core == 0 (seed models): the loop path hands the coda
             # h = input_norm(prelude_out) (+ core deltas), so the coreless path
@@ -7636,7 +8002,11 @@ class MORPHTransformer(nn.Module):
             else:
                 x, x0, bigram_emb = self._front_region(input_ids, _span_kw, _span_cut)
 
-        x = self._core_region(x, x0, bigram_emb, input_ids, attn_kwargs=_span_core_kw)
+        # `labels` is read only by LoopMTP's Eq-13 term (training only, and only when
+        # model.loopmtp_weight > 0); on every other model it is an unread argument and the
+        # core is bit-identical.
+        x = self._core_region(x, x0, bigram_emb, input_ids, attn_kwargs=_span_core_kw,
+                              labels=labels)
 
         # ── Coda + LM head (BACK region — graphed replay when captured) ──
         _sg = self._static_graphs
