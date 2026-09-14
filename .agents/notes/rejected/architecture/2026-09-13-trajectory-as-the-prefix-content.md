@@ -1,6 +1,6 @@
 # Agent Note: the coda reads the loop's trajectory, not only its exit
 
-Status: proposed
+Status: rejected — measured 2026-09-14: six exit copies match the trajectory write (−0.003) and the entry+exit pair (−0.004 vs traj, −0.001 vs exit copies); the traj K-curve was the forced-depth pad-cell artefact; E_pass takes 0.11 % of the prefix gradient. Width is the lever, not content (lab/experiments/failures/2026-09-13-arc-trajectory-prefix.md).
 
 ## Problem
 
@@ -66,7 +66,7 @@ It is now testable, and there is a theory saying what the answer has to be.
 6. `CE(traj) − CE(entry_exit) ≥ −0.005`. **Not met — unrun.** This is the theory's
    prediction and the panel's point.
 
-Prereg: `lab/experiments/planned/2026-09-13-arc-trajectory-prefix.md`.
+Prereg: `lab/experiments/failures/2026-09-13-arc-trajectory-prefix.md`.
 
 ## Risks
 

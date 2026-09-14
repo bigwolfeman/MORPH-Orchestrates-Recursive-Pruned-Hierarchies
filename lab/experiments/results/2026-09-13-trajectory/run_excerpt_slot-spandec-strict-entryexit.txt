@@ -1,0 +1,20 @@
+[    200/5000] loss=14.7376  ppl=2514606.9  lr=2.00e-05  sps=1.70  tok/s=10440  proxy=10.09  tflops=14.5  peak=21.58GB
+  [VAL     250] loss=7.0328  ppl=1133.17  ppl_tok=1133.16  first_tok=11.3587  cf=-5.8427  lp/tok=16.05
+  [VAL     500] loss=6.3884  ppl=594.92  ppl_tok=594.92  first_tok=12.7591  cf=-7.6547  lp/tok=15.89
+  [VAL     750] loss=5.6767  ppl=291.97  ppl_tok=291.97  first_tok=11.9319  cf=-7.5590  lp/tok=16.13
+[   1000/5000] loss=12.9026  ppl=401363.3  lr=1.00e-04  sps=1.69  tok/s=10401  proxy=10.07  tflops=14.5  peak=21.80GB
+  [VAL    1000] loss=5.2523  ppl=191.01  ppl_tok=191.01  first_tok=8.8583  cf=-4.7214  lp/tok=16.04
+  [VAL    1250] loss=5.0971  ppl=163.55  ppl_tok=163.55  first_tok=8.0018  cf=-3.9526  lp/tok=15.84
+  [VAL    1500] loss=5.1716  ppl=176.19  ppl_tok=176.19  first_tok=8.0952  cf=-3.6142  lp/tok=16.71
+  [VAL    1750] loss=5.1172  ppl=166.87  ppl_tok=166.87  first_tok=8.1982  cf=-4.0197  lp/tok=15.59
+[   2000/5000] loss=10.3339  ppl=30758.8  lr=1.00e-04  sps=1.69  tok/s=10389  proxy=10.08  tflops=14.4  peak=21.80GB
+  [VAL    2000] loss=4.9147  ppl=136.28  ppl_tok=136.28  first_tok=7.9881  cf=-3.9622  lp/tok=16.12
+  [VAL    2250] loss=4.6513  ppl=104.72  ppl_tok=104.72  first_tok=7.3051  cf=-3.4983  lp/tok=16.17
+  [VAL    2500] loss=4.6012  ppl=99.60  ppl_tok=99.60  first_tok=7.3190  cf=-3.4670  lp/tok=16.19
+  [VAL    2750] loss=4.8137  ppl=123.19  ppl_tok=123.19  first_tok=7.1464  cf=-3.1322  lp/tok=15.98
+[   3000/5000] loss=9.1884  ppl=9782.9  lr=1.00e-04  sps=1.69  tok/s=10400  proxy=10.10  tflops=14.5  peak=21.80GB
+  [VAL    3000] loss=4.5595  ppl=95.53  ppl_tok=95.53  first_tok=6.7927  cf=-3.1385  lp/tok=16.10
+  [VAL    3250] loss=4.5478  ppl=94.43  ppl_tok=94.43  first_tok=7.1829  cf=-3.3767  lp/tok=15.98
+  [VAL    3500] loss=4.5035  ppl=90.33  ppl_tok=90.33  first_tok=7.0914  cf=-3.2183  lp/tok=16.08
+  [VAL    3750] loss=4.5067  ppl=90.63  ppl_tok=90.63  first_tok=7.2380  cf=-3.2079  lp/tok=16.18
+[   4000/5000] loss=9.8768  ppl=19474.1  lr=1.00e-04  sps=1.70  tok/s=10439  proxy=10.11  tflops=14.6  peak=21.80GB

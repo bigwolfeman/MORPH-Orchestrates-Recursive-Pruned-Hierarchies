@@ -1,6 +1,6 @@
 # Planned: the coda reads the loop's trajectory, not only its exit
 
-Status: planned
+Status: failure
 
 Date: 2026-09-13 (frozen before any GPU step of any arm; the 5090 is running the math
 panel and no smoke of any arm here exists at filing time). Arc:
@@ -8,7 +8,7 @@ panel and no smoke of any arm here exists at filing time). Arc:
 partner: `slot-spandec-strict`
 ([`2026-09-12-arc-strict-geometry.md`](../failures/2026-09-12-arc-strict-geometry.md)).
 Design note:
-[`2026-09-13-trajectory-as-the-prefix-content.md`](../../../.agents/notes/proposed/architecture/2026-09-13-trajectory-as-the-prefix-content.md).
+[`2026-09-13-trajectory-as-the-prefix-content.md`](../../../.agents/notes/rejected/architecture/2026-09-13-trajectory-as-the-prefix-content.md).
 Theory:
 [`2026-09-13-information-view-of-the-slot-loop.md`](../../../.agents/notes/proposed/architecture/2026-09-13-information-view-of-the-slot-loop.md).
 
@@ -193,4 +193,77 @@ and stop.
 
 ## Results
 
-(to be filled after the runs; predictions above are frozen)
+All three arms ran (2026-09-13/14, 5,000 steps each, seed 1, `prefix_k` 6): `traj`
+(9,734 tok/s), `trajrep` (10,469; queued back in on 2026-09-14 after the register pair
+read out, so T-2 and T-3 are scorable as written) and `entryexit` (10,440). All HEALTHY.
+Artifacts: [`results/2026-09-13-trajectory/`](../results/2026-09-13-trajectory/) (sweeps
+2500/5000, worth, state probes, the paired gaps, the P-1 probe).
+
+**Own sweeps at 5,000 (480 rows), token CE:**
+
+| arm | depth-6 CE | K1−K6 | K3−K6 | worth `all_slots` (offset 0) |
+|---|---|---|---|---|
+| ruler `slot-spandec-strict` (k=2) | 4.3474 | +0.0016 | +0.0002 | 0.1865 |
+| `traj` | 4.3203 | **+0.0342** | +0.0034 | 0.2648 (1.875) |
+| `trajrep` | 4.3208 | +0.0019 | +0.0003 | 0.2681 (1.623) |
+| `entryexit` | 4.3196 | +0.0014 | +0.0003 | 0.2850 (2.022) |
+
+**Paired gaps at 5,000 (`span_budget_profile.py`, `budget_web_full`, 480 identical rows;
+gap = second − first, negative favours the second):**
+
+| pair | depth 6 | depth 1 |
+|---|---|---|
+| ruler → traj | −0.0271 [−0.0297, −0.0243] | |
+| ruler → trajrep | −0.0302 [−0.0327, −0.0275] | −0.0299 |
+| ruler → entryexit | −0.0311 [−0.0338, −0.0282] | −0.0313 |
+| traj → trajrep | −0.0030 [−0.0055, −0.0007] | −0.0353 |
+| traj → entryexit | −0.0042 [−0.0065, −0.0021] | −0.0370 |
+| trajrep → entryexit | −0.0012 [−0.0035, +0.0011] | −0.0017 |
+
+**P-1 probe** (`lab/divergence/epass_grad_probe.py` on the Spark, `traj` step 5000, 16
+val rows, eval mode, training loss mean 8.27): `E_pass.grad.abs().sum()` 0.686 against
+`W_prefix.grad.abs().sum()` 608.9, ratio **0.0011**; per cell [0.285, 0.124, 0.047,
+0.023, 0.021, 0.185]; `E_pass` row norms 0.14–0.28.
+
+**Scores.**
+
+- **T-1 holds.** CE(traj) − CE(entryexit) = +0.0042 ≥ −0.005.
+- **T-2 holds** (scorable after all). CE(traj) − CE(trajrep) = +0.0030 ≥ −0.020.
+- **T-3 holds against `trajrep`.** `traj`'s own K1−K6 of +0.0342 is the pad-cell
+  artefact of forced-depth eval: at forced depth d the trajectory write fills d cells
+  and pads the rest, so the depth-1 row loses five prefix cells. The same-width
+  `trajrep` reads +0.0019, and K(traj) − K(trajrep) = 0.032 is the whole reading. The
+  traj → trajrep gap of −0.0353 at depth 1 against −0.0030 at depth 6 is the same fact.
+- **P-1 fails.** 0.11 % < 1 %. Cells 1 and 6 carry the mass; cells 3–5 are near zero.
+- **P-2 holds on its face** (entryexit beats the k=2 ruler by 0.031 > 0.01) **and the
+  width control takes it away**: entryexit − trajrep = −0.0012 [−0.0035, +0.0011].
+- **P-3 holds** for `trajrep` and `entryexit` (K3−K6 0.0003) and **fails** for `traj`
+  (0.0034), by the artefact above.
+- **P-4 fails.** 9,734 < 10,000.
+
+## Verdict
+
+**Failure.** The one non-flat slot-loop K-curve of the arc was an eval artefact, and
+every CE win in the panel is prefix WIDTH. Six cells beat two by 0.030 nats whatever
+they hold (the exit six times, the trajectory, or the entry and the exit), and the
+three contents are within 0.004 of each other, with the trajectory write the WORST of
+the three. The pass embedding takes 0.11 % of the prefix gradient and the coda reads
+the first and last cells only. `entryexit` − `trajrep` = −0.0012 ± 0.0023: the entry
+adds nothing an exit copy does not already give.
+
+The binding clause for "T-1 holds" fires (the intermediate states carry nothing past
+the entry) but its recommended cheap fix, an entry path at `prefix_k` 2, is NOT
+supported: with the width control in place the entry cell is worth zero. The binding
+clause for "P-1 fails" also fires: the write is ignored and the panel's CE readings are
+about the packer.
+
+## Updated hypothesis
+
+The coda cannot use anything the loop's intermediate states or its entry carry beyond
+what one exit copy carries, so "the coda only sees the exit" is retired as an
+explanation for the flat K-curve. Prefix width is a real, cheap 0.03-nat lever of its
+own (six exit copies at `L_total` 1408), to be named as width and not as loop
+contribution. What is left on the slot loop is the target and the wiring
+([`2026-09-14-arc-loop-diagnostics.md`](../failures/2026-09-14-arc-loop-diagnostics.md)
+reads the same night's mechanism instruments the same way).
+

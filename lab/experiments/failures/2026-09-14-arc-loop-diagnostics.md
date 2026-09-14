@@ -282,7 +282,7 @@ token K1-K6 +0.0016, plain 0.170 at 20k), the panel says:
   nothing. Neither instrument locates the flatness in the map being stuck at a fixed
   point; the strict loop is entry-sensitive and still worth nothing to the coda.
 * That agrees with the trajectory panel scored the same night
-  ([`2026-09-13-arc-trajectory-prefix.md`](../planned/2026-09-13-arc-trajectory-prefix.md)):
+  ([`2026-09-13-arc-trajectory-prefix.md`](../failures/2026-09-13-arc-trajectory-prefix.md)):
   the coda reads the first and last prefix cells only, an exit-repeat control matches the
   trajectory write, and the pass embedding takes 0.11 % of the prefix gradient. The passes
   move the state (entry-dependent, sometimes bistable) and the objective does not pay for

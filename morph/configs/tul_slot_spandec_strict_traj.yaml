@@ -54,7 +54,7 @@
 # masks per forward for the pad cut, one `&` each on the two coda branches.
 #
 # Record: lab/experiments/planned/2026-09-13-arc-trajectory-prefix.md
-# Note: .agents/notes/proposed/architecture/2026-09-13-trajectory-as-the-prefix-content.md
+# Note: .agents/notes/rejected/architecture/2026-09-13-trajectory-as-the-prefix-content.md
 defaults:
   - tul_slot_spandec_strict
   - _self_

@@ -1,4 +1,4 @@
-"""P-1 of lab/experiments/planned/2026-09-13-arc-trajectory-prefix.md: on the traj
+"""P-1 of lab/experiments/failures/2026-09-13-arc-trajectory-prefix.md: on the traj
 checkpoint at 5000, is E_pass.grad.abs().sum() above 1 % of W_prefix.grad.abs().sum()
 under the model's own training loss? One backward per row, grads accumulated over
 --rows rows, eval mode (no token-state dropout; stated in the filing)."""
