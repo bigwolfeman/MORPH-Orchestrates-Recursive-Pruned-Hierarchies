@@ -1082,18 +1082,37 @@ class _LoopMTPGate(nn.Module):
         ``[k, B, S, n, C]`` tensor is never materialised.
         """
         gs = self.raw_gates(states)
+        # PREFIX RULE (a Poisson draw, 2026-09-14): `states[t]` may hold only the rows
+        # still active at iteration t, and those rows are always the FIRST n_t of the
+        # depth-sorted batch (n_0 >= n_1 >= ...). A row therefore gates over exactly its
+        # own realised passes: the running sum and z touch rows [:n_t] only, and the gate
+        # mass of a finished row at a later iteration is exactly 0. With every n_t == B
+        # (a fixed depth, or eval) each `cat` below is the identity and the arithmetic is
+        # the pre-2026-09-14 form op for op.
+        B = int(states[0].shape[0])
         tot = gs[0]
         for g in gs[1:]:
-            tot = tot + g
+            n = int(g.shape[0])
+            tot = tot + g if n == B else torch.cat([tot[:n] + g, tot[n:]], dim=0)
         tot = tot + self.eps
         z = None
         mass: list[Tensor] = []
         for g, x in zip(gs, states):
-            gt = g / tot
+            n = int(g.shape[0])
+            gt = g / tot[:n]
             zt = gt * x
-            z = zt if z is None else z + zt
-            # [B, S, ...] -> [B*S]: mean over every axis but batch and position.
-            mass.append(gt.float().flatten(0, 1).flatten(1).mean(dim=1))
+            if z is None:
+                z = zt
+            elif n == B:
+                z = z + zt
+            else:
+                z = torch.cat([z[:n] + zt, z[n:]], dim=0)
+            # [n, S, ...] -> [B*S]: mean over every axis but batch and position; the rows
+            # this iteration did not run are 0.
+            m = gt.float().flatten(0, 1).flatten(1).mean(dim=1)
+            if n != B:
+                m = torch.cat([m, m.new_zeros((B - n) * int(x.shape[1]))], dim=0)
+            mass.append(m)
         return z, torch.stack(mass, dim=0)
 
 
@@ -1529,20 +1548,20 @@ class MORPHTransformer(nn.Module):
         self.loopmtp_proj = None
         self._loopmtp_states = bool(_lm_gated or _lm_align)
         if self._loopmtp_states:
-            _T = int(cfg.mean_depth)
-            if not bool(cfg.depth_fixed):
-                raise ValueError(
-                    f"LoopMTP (model.core_readout='gated' or model.loopmtp_weight > 0) "
-                    f"needs a FIXED loop depth: set model.depth_fixed: true (mean_depth "
-                    f"{cfg.mean_depth}, max_depth {cfg.max_depth}). mean_depth == max_depth "
-                    f"alone is a Poisson draw clamped at max_depth, not a constant T. The "
-                    f"paper's T is a constant — every iteration carries its own horizon "
-                    f"target and the aggregator gates exactly T states, so a per-sample "
-                    f"draw would give different rows different target sets and gate supports.")
+            # T is the LONGEST loop a row can run: `beta` needs one bias per iteration
+            # that can exist. Under `depth_fixed` that is the one depth every row runs
+            # (mean == max); under the Poisson draw (allowed since 2026-09-14) a row at
+            # depth d_i gates over its own d_i states and is aligned on its own d_i
+            # horizons — the prefix rule in `_core_region`, `_LoopMTPGate.forward`,
+            # `_loopmtp_align_maps` and `_loopmtp_ponder`. Eval runs mean_depth for every
+            # row, so `beta[mean_depth:]` is trained only by the rows that drew past it.
+            _T = int(cfg.max_depth)
+            if bool(cfg.depth_fixed) and int(cfg.mean_depth) != int(cfg.max_depth):
+                raise ValueError("model.depth_fixed needs mean_depth == max_depth")
             if int(cfg.bptt_depth) < _T:
                 raise ValueError(
                     f"LoopMTP needs full BPTT: bptt_depth ({cfg.bptt_depth}) must be >= "
-                    f"the fixed depth {_T}. The paper backpropagates through all T "
+                    f"max_depth {_T}. The paper backpropagates through all T "
                     f"iterations; a truncated window would leave the early iterations' "
                     f"alignment terms with no path to the core weights.")
             if int(cfg.n_core) == 0:
@@ -1576,7 +1595,7 @@ class MORPHTransformer(nn.Module):
                 self.loopmtp_proj = _MTPHead(d)
                 self.loopmtp_proj.proj._ternary_exclude = True
             torch.set_rng_state(_lm_rs)
-            print(f"  LoopMTP: T={_T} readout={cfg.core_readout} "
+            print(f"  LoopMTP: T={_T} ({'fixed' if cfg.depth_fixed else 'Poisson mean ' + str(cfg.mean_depth)}) readout={cfg.core_readout} "
                   f"lambda_align={cfg.loopmtp_weight} free_first={cfg.loopmtp_free_first} "
                   f"proj={cfg.loopmtp_proj} lambda_ponder={cfg.loopmtp_ponder_weight}")
 
@@ -2844,10 +2863,13 @@ class MORPHTransformer(nn.Module):
         """
         maps = self._loopmtp_align_maps(states, labels)
         if not maps:
-            raise RuntimeError(
-                "LoopMTP alignment has no supervised iteration: loopmtp_free_first is on "
-                "and the loop ran a single iteration. Use loopmtp_free_first=false at T=1, "
-                "or a depth >= 2.")
+            if bool(self.cfg.depth_fixed):
+                raise RuntimeError(
+                    "LoopMTP alignment has no supervised iteration: loopmtp_free_first is "
+                    "on and the loop ran a single iteration. Use loopmtp_free_first=false "
+                    "at T=1, or a depth >= 2.")
+            # A Poisson batch whose every row drew depth 1: nothing to align this step.
+            return states[0].new_zeros((), dtype=torch.float32)
         terms = [(m * v).sum() / v.sum().clamp(min=1).to(m.dtype) for _, m, v in maps]
         return torch.stack(terms).mean()
 
@@ -2869,12 +2891,18 @@ class MORPHTransformer(nn.Module):
         out: list[tuple[int, Tensor, Tensor]] = []
         for k in range(start, len(states)):
             h = states[k]
+            # PREFIX RULE: `states[k]` may hold only the first n_k rows of a depth-sorted
+            # batch (the rows that ran iteration k + 1); `labels` is in the SAME order and
+            # is cut to them, so a row is aligned on exactly its own realised horizons.
+            # Every n_k == B (fixed depth, eval) leaves this a no-op.
+            n_k = int(h.shape[0])
+            labels_k = labels if n_k == int(labels.shape[0]) else labels[:n_k]
             if h.dim() == 4:                                     # HC carrier [B,S,n,C]
                 h = h.mean(dim=2)
             if self.loopmtp_proj is not None:
                 h = self.loopmtp_proj(h)
             # iteration t = k + 1 (1-based) targets u_{i+t} = labels[i + t - 1] = labels[i + k]
-            lab = labels if k == 0 else F.pad(labels[:, k:], (0, k), value=-100)
+            lab = labels_k if k == 0 else F.pad(labels_k[:, k:], (0, k), value=-100)
             valid = (lab >= 0)
             tgt = F.embedding(lab.clamp(min=0), w)               # [B, S, d]
             cos = F.cosine_similarity(h.float(), tgt.float(), dim=-1)
@@ -2896,10 +2924,16 @@ class MORPHTransformer(nn.Module):
             raise RuntimeError(
                 f"LoopMTP ponder reads the [T, B*S] gate mass _LoopMTPGate returns, got "
                 f"shape {tuple(gates.shape)}")
-        T = gates.shape[0]
+        # A finished row's later-iteration mass is exactly 0 (`_LoopMTPGate.forward`), so
+        # the count of non-zero entries per position is that row's realised depth and the
+        # uniform it is compared with is over THOSE passes. At a fixed depth every entry is
+        # positive (softplus), the count is T everywhere and this is the original form.
+        ran = gates > 0
+        n_i = ran.sum(dim=0, keepdim=True).clamp(min=1).to(gates.dtype)
         gi = gates.clamp(min=1.0e-8)
         gi = gi / gi.sum(dim=0, keepdim=True)
-        return (gi * (gi * float(T)).log()).sum(dim=0).mean()
+        kl = gi * (gi * n_i).log()
+        return torch.where(ran, kl, torch.zeros_like(kl)).sum(dim=0).mean()
 
     def _mtp_apply(self, out: dict, x: Tensor, labels: Tensor | None,
                    w_full: Tensor | None) -> None:
@@ -3383,16 +3417,12 @@ class MORPHTransformer(nn.Module):
 
                 if _lmtp:
                     # x^(t+1) of Eq 9/13, after the gain governor (there is none on a
-                    # LoopMTP arm) and before the frozen-suffix concat. LoopMTP runs at a
-                    # FIXED depth, so the active set is the whole batch at every iteration
-                    # and `h_new` is the full, sorted-order carrier. If that ever stops
-                    # holding, the gathered states would silently be a prefix of the batch.
-                    if n_active != h_s.shape[0]:
-                        raise RuntimeError(
-                            f"LoopMTP needs a fixed loop depth: iteration {t} has "
-                            f"{n_active} active samples of {h_s.shape[0]}. Build-time "
-                            f"validation requires model.depth_fixed, so reaching here "
-                            f"means a caller replaced _sample_depths or mutated the knobs.")
+                    # LoopMTP arm) and before the frozen-suffix concat. `h_new` holds the
+                    # rows still active at this iteration, which are the FIRST n_active of
+                    # the depth-sorted batch (the prefix rule): at a fixed depth that is
+                    # the whole batch; under the Poisson draw a row appears in exactly its
+                    # own d_i states. Kept in SORTED order; the gate, the alignment maps
+                    # and the ponder term all read that order and the exit un-permutes once.
                     _lm_states.append(h_new)
 
                 if _fp_lam > 0.0 and t >= n_nograd:
@@ -3478,18 +3508,30 @@ class MORPHTransformer(nn.Module):
                 # `--depths 0,...` rung), where the loop never runs. There is no iterate to
                 # gate and no iterate to align, so the aggregator is the identity on the
                 # entry carrier — the same tensor the "last" read-out hands the coda there.
-                # Back to batch order, exactly as the final carrier above.
-                _lm_states = [st[inv_perm] for st in _lm_states]
+                # The states are prefixes of the depth-SORTED batch; the gate and the
+                # alignment run in that order (each is row-wise, so the result is the same
+                # per row) and only the outputs are put back in batch order: z once through
+                # inv_perm, the [T, B*S] gate mass by rows. With every prefix the full
+                # batch this is the pre-2026-09-14 arithmetic per row.
+                _lm_full = all(int(st.shape[0]) == B for st in _lm_states)
                 _lm_mass = None
                 if self.loopmtp_gate is not None:
                     # Eq 9-11: the coda reads the gated mix of ALL iterates, not the last.
-                    x, _lm_mass = self.loopmtp_gate(_lm_states)
+                    z_s, _lm_mass_s = self.loopmtp_gate(_lm_states)
+                    x = z_s[inv_perm]
+                    _S = int(z_s.shape[1])
+                    _lm_mass = (_lm_mass_s.view(-1, B, _S)[:, inv_perm]
+                                .reshape(_lm_mass_s.shape[0], B * _S))
                 if getattr(self, "_loopmtp_capture", False):
                     # Read-out hook for lab/divergence/loopmtp_iteration_probe.py and the
                     # tests. An instance flag, default absent -> getattr False -> a
                     # Python-level no-op, so the training forward is unchanged. Do NOT set
-                    # it during training: it pins T detached carriers per forward.
-                    self._loopmtp_iterates = [st.detach() for st in _lm_states]
+                    # it during training: it pins T detached carriers per forward. The
+                    # iterates are batch-ordered only when every row ran every iteration
+                    # (eval, or a fixed depth); a partial Poisson batch stores None for
+                    # them and keeps the batch-ordered gate mass, which is defined per row.
+                    self._loopmtp_iterates = ([st[inv_perm].detach() for st in _lm_states]
+                                              if _lm_full else None)
                     self._loopmtp_gate_mass = (None if _lm_mass is None
                                                else _lm_mass.detach())
                 if self.training and labels is not None:
@@ -3499,7 +3541,10 @@ class MORPHTransformer(nn.Module):
                     _aux_lm = self._core_aux if self._core_aux is not None else {}
                     _lm_lam = float(self.cfg.loopmtp_weight)
                     if _lm_lam > 0.0:
-                        _lm_al = self._loopmtp_align(_lm_states, labels)
+                        # Labels in the states' (sorted) order; the maps cut them to each
+                        # iteration's prefix.
+                        _lm_al = self._loopmtp_align(_lm_states,
+                                                     labels if _lm_full else labels[perm])
                         _aux_lm["loopmtp_align"] = _lm_al.detach()
                         _aux_lm["loopmtp_weighted"] = _lm_lam * _lm_al
                     if _lm_mass is not None:

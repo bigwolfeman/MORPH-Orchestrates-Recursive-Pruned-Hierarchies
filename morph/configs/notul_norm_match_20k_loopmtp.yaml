@@ -1,0 +1,24 @@
+# LoopMTP on the token loop under the recipe's OWN Poisson depth draw, arm
+# "norm-match-20k-loopmtp" (Wolfe, 2026-09-14: "test loopmtp with Poisson sampling, not
+# just fixed depth"). The top rung `notul_norm_match_20k` (mean 6, max 8, full BPTT) with
+# both of the paper's mechanisms on: the gated aggregator over every realised iterate (Eq
+# 9-11) and the soft MTP target (Eq 12-13), iteration 1 free. Under the draw a row at depth
+# d_i is gated over and aligned on exactly its own d_i passes (the prefix rule in
+# `_core_region`); `beta` has max_depth entries. Its control is the top rung itself, whose
+# sweeps at 5k/10k/15k/20k already exist: no new control run.
+# lambda_align 0.05 as on the fixed-6 arm (the paper's T=7 value, not swept).
+# Record: lab/experiments/planned/2026-09-14-arc-loopmtp-token-loop.md (Poisson arm block).
+defaults:
+  - notul_norm_match_20k
+  - _self_
+
+model:
+  core_fixed_point_lambda: 0.0    # the lineage (Parcae entry) runs 0.0 on every rung
+  core_readout: gated
+  loopmtp_weight: 0.05
+  loopmtp_free_first: true
+  loopmtp_proj: linear
+  loopmtp_ponder_weight: 0.05
+
+wandb:
+  name: norm-match-20k-loopmtp

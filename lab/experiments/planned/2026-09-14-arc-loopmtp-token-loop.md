@@ -160,6 +160,36 @@ is changed.
   **70 %.** The ponder term at 0.05 is pulling against collapse by construction; this
   predicts that pull is enough.
 
+
+### Poisson arm (added 2026-09-14 at Wolfe's direction; frozen before its launch)
+
+**Arm.** `norm-match-20k-loopmtp` (`notul_norm_match_20k_loopmtp.yaml`): the top rung's
+own draw (mean 6, max 8, full BPTT) with the gated readout and the alignment term
+(λ_align 0.05, pass 1 free, ponder 0.05). Under the draw a row at depth d_i gates over
+and is aligned on exactly its own d_i passes; `beta` has 8 entries and eval runs 6.
+**Control:** `norm-match-20k` itself, paired on its existing sweeps. This is the arm the
+recipe would ship, and it needs no fixed-depth control.
+
+**Predictions (frozen).**
+
+- **P-10 (paired CE).** CE(loopmtp@20k) − CE(norm-match-20k@20k) at eval depth 6, 480
+  rows: in **[−0.010, +0.010]**: 55 %. Negative: 25 %. Worse than +0.010: 20 %.
+  Reasoning: the fixed-depth-3 arm cost 0.011 at 5k and was 0.000 at 20k; the draw gives
+  the alignment term more (and more varied) iterations to shape, and the paper's gain
+  sits at 55x our tokens.
+- **P-11 (the artefact, named).** The arm's own K1−K6 at 20k ≥ 0.25 (the Poisson rung
+  reads 0.170): 50 %. A gated readout narrows the aggregate at forced depth 1 whatever
+  the passes learned.
+- **P-12 (rate).** Step-200 tok/s ≥ 0.90 × 9,901 = 8,900: 70 %. Peak under 12.5 GB: 80 %.
+- **P-13 (the gate does not collapse).** `loss/loopmtp_ponder` stays below 0.20 all run:
+  70 %.
+- **P-14 (the mechanism, `loopmtp_iteration_probe.py` at eval depth 6).** For at least
+  4 of the 5 iterations t = 2..6 the median rank of u_{i+t} read from iteration t beats
+  the read from iteration 1 under the alignment's own cosine: 70 %. The same under the
+  LM head: 45 %.
+- **P-15 (no detonation).** HEALTHY to 20k: 85 %. The gate is a new real-forward path on
+  the Poisson draw; nothing else here has run it.
+
 ## Binding
 
 If **P-1 holds**, depth 3 with LoopMTP is the ship depth and the next run is the

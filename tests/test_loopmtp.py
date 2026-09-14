@@ -491,16 +491,119 @@ def test_forced_depth_reads_a_gated_model_over_the_available_iterations():
 
 # ── refusals ─────────────────────────────────────────────────────────────────
 
-def test_poisson_depth_is_refused():
-    with pytest.raises(ValueError, match="FIXED loop depth"):
-        _model(core_readout="gated", mean_depth=6, max_depth=8, bptt_depth=8, depth_fixed=False)
-    with pytest.raises(ValueError, match="FIXED loop depth"):
-        _model(loopmtp_weight=0.05, mean_depth=6, max_depth=8, bptt_depth=8, depth_fixed=False)
-    # mean == max is a Poisson draw clamped at max, NOT a constant T (2026-09-14 smoke).
-    with pytest.raises(ValueError, match="FIXED loop depth"):
-        _model(loopmtp_weight=0.05, mean_depth=3, max_depth=3, bptt_depth=3, depth_fixed=False)
+def test_depth_fixed_still_needs_mean_equal_max():
     with pytest.raises(ValueError, match="mean_depth == max_depth"):
         _model(mean_depth=6, max_depth=8, bptt_depth=8, depth_fixed=True)
+
+
+# ── the Poisson draw (allowed since 2026-09-14, Wolfe's ask) ────────────────
+
+def _poisson_model(**kw):
+    """Gated + aligned LoopMTP under a per-row draw: beta spans max_depth, no depth_fixed."""
+    kw.setdefault("mean_depth", 3); kw.setdefault("max_depth", 5); kw.setdefault("bptt_depth", 5)
+    kw.setdefault("core_readout", "gated"); kw.setdefault("loopmtp_weight", 0.05)
+    kw.setdefault("loopmtp_ponder_weight", 0.05)
+    return _model(depth_fixed=False, **kw)
+
+
+def _force_depths(m, depths):
+    d = torch.tensor(depths, dtype=torch.long)
+    m._sample_depths = lambda B, device, _d=d: _d[:B].to(device)
+
+
+def test_poisson_depth_builds_with_beta_over_max_depth():
+    m = _poisson_model()
+    assert int(m.loopmtp_gate.beta.shape[0]) == 5
+
+
+def test_poisson_gate_mass_covers_each_rows_own_passes():
+    """Row i with depth d_i puts gate mass on exactly its first d_i iterations (summing
+    to 1) and exactly 0 on the rest, in BATCH order whatever the internal sort did."""
+    m = _poisson_model()
+    m.train()
+    depths = [2, 5, 1, 3]
+    _force_depths(m, depths)
+    x, y = _xy(B=4)
+    m._loopmtp_capture = True
+    try:
+        out = m(x, labels=y)
+    finally:
+        m._loopmtp_capture = False
+    assert torch.isfinite(out["loss"])
+    assert m._loopmtp_iterates is None, "a partial batch has no batch-ordered iterate list"
+    mass = m._loopmtp_gate_mass                       # [T=5, B*S]
+    S = x.shape[1]
+    assert mass.shape == (5, 4 * S)
+    per_row = mass.view(5, 4, S)
+    for i, d in enumerate(depths):
+        ran = (per_row[:, i, :] > 0)
+        assert ran[:d].all() and not ran[d:].any(), f"row {i} depth {d}: {ran[:, 0].tolist()}"
+        assert torch.allclose(per_row[:d, i, :].sum(0), torch.ones(S), atol=1e-4)
+
+
+def test_prefix_gate_equals_the_per_row_gate():
+    """`_LoopMTPGate.forward` on prefix states equals gating each row over its own states."""
+    from morph.model.transformer import _LoopMTPGate
+    torch.manual_seed(0)
+    g = _LoopMTPGate(8, 4)
+    with torch.no_grad():
+        g.proj.weight.normal_(); g.beta.normal_()
+    B, S = 3, 2
+    full = [torch.randn(B, S, 8) for _ in range(4)]
+    counts = [3, 2, 2, 1]                              # depths 4, 3, 1 in sorted order
+    prefix = [st[:n] for st, n in zip(full, counts)]
+    z, mass = g(prefix)
+    depths = [4, 3, 1]
+    for i, d in enumerate(depths):
+        zi, mi = g([st[i:i + 1] for st in full[:d]])
+        assert torch.allclose(z[i:i + 1], zi, atol=1e-6), f"row {i}"
+        assert torch.allclose(mass.view(4, B, S)[:d, i], mi.view(d, 1, S)[:, 0], atol=1e-6)
+        assert (mass.view(4, B, S)[d:, i] == 0).all()
+
+
+def test_prefix_align_reads_only_the_active_rows():
+    """Iteration k's alignment term touches only the first n_k rows: editing a finished
+    row's labels beyond its depth leaves the loss unchanged, and editing an active row's
+    labels moves it."""
+    m = _poisson_model()
+    m.train()
+    depths = [4, 2, 1]                                 # already sorted (perm = identity)
+    _force_depths(m, depths)
+    x, y = _xy(B=3)
+    def align(labels):
+        torch.manual_seed(3)
+        return float(m(x, labels=labels)["loopmtp_align"])
+    a0 = align(y)
+    y2 = y.clone(); y2[2, 5:] = (y2[2, 5:] + 1) % V    # row 2 ran ONE pass: free under free_first
+    a2 = align(y2)
+    y1 = y.clone(); y1[0, 5:] = (y1[0, 5:] + 1) % V    # row 0 ran four passes
+    a1 = align(y1)
+    assert a2 == pytest.approx(a0, abs=1e-6), "a depth-1 row's labels must not enter the term"
+    assert a1 != pytest.approx(a0, abs=1e-6), "an active row's labels must enter the term"
+
+
+def test_poisson_ponder_is_zero_for_a_uniform_gate_over_own_passes():
+    from morph.model.transformer import MORPHTransformer
+    T, B, S = 4, 2, 3
+    mass = torch.zeros(T, B * S)
+    mass[:4, :S] = 0.25                                # row 0 ran 4, uniform
+    mass[:2, S:] = 0.5                                 # row 1 ran 2, uniform over its own 2
+    assert float(MORPHTransformer._loopmtp_ponder(mass)) == pytest.approx(0.0, abs=1e-6)
+    mass[:2, S:] = torch.tensor([[0.9], [0.1]])       # row 1 collapses onto pass 1
+    assert float(MORPHTransformer._loopmtp_ponder(mass)) > 0.1
+
+
+def test_poisson_config_composes():
+    import os
+    from hydra import compose, initialize_config_dir
+    from morph.training.train import build_morph_config
+    with initialize_config_dir(version_base=None,
+                               config_dir=os.path.join(ROOT, "morph", "configs")):
+        cfg = compose(config_name="notul_norm_match_20k_loopmtp", overrides=[])
+    mc = build_morph_config(cfg, tul=None)
+    assert (mc.core_readout, mc.loopmtp_weight, mc.depth_fixed) == ("gated", 0.05, False)
+    assert (mc.mean_depth, mc.max_depth, mc.bptt_depth) == (6, 8, 8)
+    assert str(cfg.wandb.name) == "norm-match-20k-loopmtp"
 
 
 def test_depth_fixed_runs_every_row_at_max_depth():
@@ -517,6 +620,8 @@ def test_depth_fixed_runs_every_row_at_max_depth():
 def test_truncated_bptt_is_refused():
     with pytest.raises(ValueError, match="full BPTT"):
         _model(loopmtp_weight=0.05, mean_depth=3, max_depth=3, bptt_depth=2)
+    with pytest.raises(ValueError, match="full BPTT"):
+        _model(loopmtp_weight=0.05, mean_depth=3, max_depth=5, bptt_depth=3, depth_fixed=False)
 
 
 def test_coreless_model_is_refused():
