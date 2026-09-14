@@ -320,8 +320,9 @@ sweep continues upward until it stops paying.
 
 ## Results
 
-**Two of the three arms ran; `slot-register-m8` was never queued and has no numbers, so
-P-7 and P-9 are unscored.** `slot-register-m4` and `slot-register-m4-sameinit` each ran
+**Two of the three arms ran. `slot-register-m8` was in the live queue (`arc/recon_arms.txt`,
+position 4 at filing time) and was PULLED from it on 2026-09-13 19:45 after the M = 4 pair
+read out, so it has no numbers and P-7 and P-9 are unscored.** `slot-register-m4` and `slot-register-m4-sameinit` each ran
 5,000 steps on the 5090 (`arc/run_recon.sh`, 2026-09-13), both
 `DONE ... exit=0 verdict=HEALTHY last=4999` — `m4` `Final val_loss=4.4696`, `sameinit`
 `Final val_loss=4.4777`. **`m4` was killed once at step 600** by a CPU-stalling per-slot
@@ -410,8 +411,8 @@ first attempt at `368e108` read 10,672), `sameinit` **10,609**, partner 11,759.
   prereg's threshold, which is the 45 % residual band.
 - **P-6 TRUE.** `m4` is **0.0217** nats better [+0.0191, +0.0244] than `slot-spandec-strict`
   at depth 6, inside the predicted 0.00 to 0.10 window. The packer confound applies.
-- **P-7 UNSCORED.** `slot-register-m8` was never queued; the arm file was consumed before
-  it was appended and no M = 8 step ever ran.
+- **P-7 UNSCORED.** `slot-register-m8` was queued and pulled before it started (see the
+  Results header); no M = 8 step ever ran.
 - **P-8 TRUE.** 9,582 tok/s at step 200, above the 9,000 bar. The eager S·M relation costs
   about 19 % of the partner's rate.
 - **P-9 UNSCORED.** No M = 8 run, so the OOM question is open.
@@ -475,7 +476,7 @@ Gram. The instrument is `val/slot_cell_eff_rank`, which now has a measured floor
 this design) and a ceiling (4). If a per-cell target does not move that number, the cells
 are being collapsed by the loop's own map and the register lane closes.
 
-Do not queue `slot-register-m8`. Its value was to separate "hard capacity wall" from
+`slot-register-m8` was pulled from the queue rather than run. Its value was to separate "hard capacity wall" from
 "geometry problem" (P-7), and the M = 4 pair already answered that question from the other
 side: the four cells do not fill the capacity they were given, so eight cannot be the fix.
 
