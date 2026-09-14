@@ -268,3 +268,25 @@ next question this panel opens, not answered here: what distinguishes the 2 of 6
 basin-structured (row, slot) pairs from the 4 of 6 flat ones — a follow-up with more
 than 6 pairs and a radius sweep is needed before this can be read as a checkpoint-wide
 property rather than a handful of outlier slots.
+
+### Coordinator reading (2026-09-14, session f9558148)
+
+The three failed predictions are failed SIGNATURES, not evidence that passes 2-6 do useful
+work. Read with the paired K-curves that already exist on these two checkpoints (strict
+token K1-K6 +0.0016, plain 0.170 at 20k), the panel says:
+
+* The plain loop, the one that earns, IS an attractor (AA(noise) 0.9998, AA(swap) 0.978,
+  basin flat) and has no spectral gap either (ratio 1.11). The strict slot loop, the one
+  that does not earn, is NOT an attractor (AA 0.82-0.86) and is multistable at 2 of 6
+  slots. So attractor-ness goes WITH earning here, and the spectral gap separates
+  nothing. Neither instrument locates the flatness in the map being stuck at a fixed
+  point; the strict loop is entry-sensitive and still worth nothing to the coda.
+* That agrees with the trajectory panel scored the same night
+  ([`2026-09-13-arc-trajectory-prefix.md`](../planned/2026-09-13-arc-trajectory-prefix.md)):
+  the coda reads the first and last prefix cells only, an exit-repeat control matches the
+  trajectory write, and the pass embedding takes 0.11 % of the prefix gradient. The passes
+  move the state (entry-dependent, sometimes bistable) and the objective does not pay for
+  that movement. The open lever stays the target and the wiring, not the map.
+* The 2-of-6 basin pairs are worth one follow-up ONLY as an instrument question (what
+  distinguishes them); they are not a depth-earning signal until a paired CE reading
+  moves with them.
