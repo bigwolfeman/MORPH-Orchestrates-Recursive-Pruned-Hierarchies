@@ -1,0 +1,18 @@
+# Depth ladder for the ship path, arm "norm-match-20k-d1": the plain norm-match recipe
+# (notul_norm_match_20k, the existing depth-6 run is the ladder's top rung) trained at a
+# FIXED core depth of 1 (mean = max = bptt = 1), 20,000 steps, checkpoints every 5,000.
+# Question: the cheapest core depth whose 20k CE holds the looped model's, and the
+# matched-WALL-CLOCK frontier (a depth-1 model runs 2.8x the tokens per second).
+# Record: lab/experiments/planned/2026-09-13-arc-depth-ladder-ship.md
+defaults:
+  - notul_norm_match_20k
+  - _self_
+
+model:
+  mean_depth: 1
+  max_depth: 1
+  bptt_depth: 1
+  core_fixed_point_lambda: 0.0    # a one-iteration loop has no terminal pair to compare
+
+wandb:
+  name: norm-match-20k-d1
