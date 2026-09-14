@@ -479,3 +479,34 @@ def test_new_fields_exist_on_tulconfig():
     assert tc.horizon_free_first is True
     assert tc.horizon_tokens == 0
     assert tc.pass_readout == "last"
+
+
+def test_the_gate_accepts_a_forced_eval_depth_and_refuses_it_at_train():
+    """The K-curve sweep forces slot depths d != T at EVAL. Pass t < T reads beta[t];
+    past the trained T every pass reuses beta[T-1] (the token-loop _LoopMTPGate's
+    convention). At TRAIN a mismatch still raises: there it means the depth knob moved.
+    Before 2026-09-14 the gate refused every forced depth and the horizon arm had no
+    sweep (runner: SWEEP horizon-arm@5000 exit=1)."""
+    m = _gated(3)
+    C = m.cfg.d_model
+    gate = m.tul_pass_gate
+    with torch.no_grad():
+        gate.beta.copy_(torch.tensor([0.5, -1.0, 2.0]))
+    gate.eval()
+    for d in (1, 2, 5):
+        states = [torch.randn(2, 5, C) for _ in range(d)]
+        gates = [torch.nn.functional.softplus(gate.Wg(x) + gate.beta[min(t, 2)])
+                 for t, x in enumerate(states)]
+        total = sum(gates) + gate.eps
+        want = sum(g / total * x for g, x in zip(gates, states))
+        got = gate(states)
+        assert torch.allclose(got, want, atol=1e-6), f"forced depth {d}"
+    # depth 5 must NOT equal a gate that (wrongly) read beta[0] for the passes past T
+    states = [torch.randn(2, 5, C) for _ in range(5)]
+    wrong = [torch.nn.functional.softplus(gate.Wg(x) + gate.beta[t % 3])
+             for t, x in enumerate(states)]
+    total = sum(wrong) + gate.eps
+    assert not torch.allclose(gate(states), sum(g / total * x for g, x in zip(wrong, states)), atol=1e-6)
+    gate.train()
+    with pytest.raises(ValueError, match="built for 3 passes"):
+        gate([torch.randn(2, 5, C) for _ in range(2)])

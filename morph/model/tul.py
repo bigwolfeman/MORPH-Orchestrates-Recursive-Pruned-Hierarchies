@@ -3064,12 +3064,17 @@ class TULPassGate(nn.Module):
         ``layout.slot_valid`` at its own call site (the precedent every other reader of
         ``h_slots`` follows), so gating a pad slot's unused states is inert.
         """
-        if len(states) != self.n_passes:
+        if len(states) != self.n_passes and self.training:
             raise ValueError(
                 f"TULPassGate built for {self.n_passes} passes, forward got "
                 f"{len(states)}: tul.slot_depth_fixed must equal the realised depth "
-                f"exactly under tul.pass_readout='gated'.")
-        gates = [F.softplus(self.Wg(x) + self.beta[t]) for t, x in enumerate(states)]
+                f"exactly under tul.pass_readout='gated' at train time.")
+        # At EVAL a forced depth d != T is the K-curve sweep (core_depth_sweep.py,
+        # slot_state_probe.py): pass t reads beta[t] for t < T and reuses beta[T-1]
+        # past the trained T, the token-loop _LoopMTPGate's convention. Before
+        # 2026-09-14 this refused every forced depth and the horizon arm had no sweep.
+        last = self.n_passes - 1
+        gates = [F.softplus(self.Wg(x) + self.beta[min(t, last)]) for t, x in enumerate(states)]
         denom = gates[0]
         for g in gates[1:]:
             denom = denom + g
