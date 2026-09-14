@@ -1,0 +1,53 @@
+# Slot-loop panel, arm "slot-spandec-strict-horizon": LoopMTP's horizon-indexed passes
+# and gated all-pass readout (arXiv 2608.03624, Eq 9-14), ported to the slot loop.
+# ONE factor against `slot-spandec-strict-fixed6` (`tul_slot_spandec_strict_fixed6.yaml`),
+# which holds the SAME fixed depth 6 with both new knobs off — the fixed-depth switch is
+# isolated there, not here, so this arm's reading is about the OBJECTIVE and the
+# READOUT, not about fixing the depth.
+#
+# WHAT THE ARM CHANGES (morph/model/tul.py, TULConfig; docs/references/looping-depth/
+# 2026-09-13-lit-mining/D_objective.md §1 for the paper reading it is a port of):
+#
+#   tul.slot_depth_fixed: 6     — every valid slot loops EXACTLY 6 passes, so "pass t" is
+#                                  one well-defined integer for the whole batch (required
+#                                  by both knobs below; the Poisson draw refuses them).
+#   tul.horizon_weight: 1.0     — pass t (t=2..6) gets a cosine-similarity loss to the
+#                                  DETACHED mean tied-embedding of span i+t, through a
+#                                  small learned projection on the pass side only. No
+#                                  decoder: cheap, unlike `spandec_per_pass`.
+#   tul.horizon_free_first: true (the default) — pass 1 stays unconstrained, LoopMTP's
+#                                  own choice, so it can serve as the substrate the
+#                                  horizon-specific later passes read from.
+#   tul.pass_readout: gated     — the z written to the prefix cells and graded by the
+#                                  span decoder is a content-conditional softmax mixture
+#                                  of ALL SIX realised passes (`TULPassGate`, Eq 9-11),
+#                                  not only the last one. Every downstream reader — the
+#                                  MUX (off here, mux_beta 0), the span decoder, SIGReg,
+#                                  the gate budget, prefix_project — reads the SAME mix.
+#
+# EVERYTHING ELSE IS THE RULER'S: strict geometry (the loop is the only cross-span
+# channel), the span decoder as the local objective, norm_match ternary, the slot-loop
+# gain constraint, the 1000-step warmup ramp. `tul.slot_depth_fixed` is orthogonal to
+# `tg_geometry: strict` and to `tul.spandec` — neither is touched.
+#
+# COST. `tul_horizon_proj` is one [C, C] linear, training-only (never in the deployed
+# forward, `_ternary_exclude`), and the term needs no decoder, no extra vocab-sized
+# readout — cheap next to `spandec_per_pass`'s per-pass decode. `TULPassGate`'s `Wg` is
+# a second [C, C] linear, part of the REAL forward (gates six already-computed states;
+# no extra core pass).
+#
+# GATE: tests/test_tul_horizon.py.
+# Record: lab/experiments/planned/2026-09-14-arc-horizon-passes.md
+# Note: .agents/notes/proposed/architecture/2026-09-14-horizon-indexed-passes.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  slot_depth_fixed: 6
+  horizon_weight: 1.0
+  horizon_free_first: true
+  pass_readout: gated
+
+wandb:
+  name: slot-spandec-strict-horizon

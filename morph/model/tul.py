@@ -814,6 +814,63 @@ class TULConfig:
     # The oracle is a TEACHER for the trajectory, not the shipped target: the target the
     # decoder is trained on stays the full `spandec_max_tokens` span.
     oracle_z_max_tokens: int = 8
+    # ── LoopMTP-STYLE HORIZON-INDEXED PASSES (arm `slot-spandec-strict-horizon`,
+    #    2026-09-14; port of LoopMTP, arXiv 2608.03624, Eq 9-14) ─────────────────
+    #
+    # THE PAPER'S CLAIM. Every per-pass target this tree has tried supervises pass t
+    # against the SAME label pass t-1 already had (a growing span, a frozen oracle
+    # trajectory, the exit's own next-span CE) — LoopMTP's "latent overthinking" failure
+    # mode, and the mechanistic reason eleven of our own arms read a per-pass K-curve of
+    # ~0 (docs/references/looping-depth/2026-09-13-lit-mining/D_objective.md §1). LoopMTP
+    # instead gives pass t (t>=2) a target that is a DIFFERENT thing to look at: the
+    # embedding of what is t STEPS AHEAD, not the same next-thing restaged (Eq 12-13).
+    # Iteration 1 is left unconstrained ON PURPOSE (no target at all), so it can serve as
+    # the substrate the horizon-specific later passes read from.
+    #
+    # THE PORT. A token becomes a SPAN here: pass t of slot i is asked to align with the
+    # (detached, mean-pooled) tied-embedding representation of span i+t, through a small
+    # learned projection on the PASS side only — never on the target:
+    #
+    #   z_t   = W_horizon( readout(db_traj[t]) )                          [B, S, C]
+    #   tgt_t = mean_{token in span i+t}  sg[ E[token] ]                  [B, S, C]
+    #   L_t   = mean_{slots where span i+t exists}  (1 - cos(z_t, tgt_t))
+    #   L     = mean_{t=2..T} L_t          (t=1 skipped iff horizon_free_first, the default)
+    #
+    # `E` is `embed.lm_weight()`, the TIED table — detached, per the standing rule that an
+    # auxiliary head must not reshape the embeddings every token representation is made of
+    # (root CLAUDE.md; `_tul_spandec_loss`'s `mux_detach_head` precedent — this term always
+    # detaches, it has no knob). Unlike the decoder-based per-pass arm (`spandec_per_pass`)
+    # this needs no decoder at all: the target is a plain masked mean over token
+    # embeddings, so the term is a COSINE loss, not a cross-entropy, and pays no extra
+    # vocab-sized readout.
+    #
+    # THE MASK. A slot is graded at pass t only when span i+t EXISTS and is COMPLETE
+    # (`tul_spandec.span_slots`' own rule, shift=t) — a row near its end simply has fewer
+    # graded passes, never a wrong target.
+    #
+    # WHY FIXED DEPTH. Pass t's target is span i+t — a FIXED offset from the iteration
+    # count. Under the per-slot Poisson draw, "pass 4" means something different for a
+    # slot of realised depth 4 (its LAST pass) than for one of depth 8 (its middle), and a
+    # frozen carried state at every pass past a slot's own depth would be graded against a
+    # target that keeps moving underneath it. `tul.slot_depth_fixed > 0` makes T the same
+    # integer for every valid slot in every row, so "pass t" is one well-defined thing.
+    # RAISES otherwise, rather than silently grading a mix of real and frozen states.
+    horizon_weight: float = 0.0          # weight of the alignment term; 0 = off, builds nothing
+    horizon_free_first: bool = True      # True: pass 1 gets no target (LoopMTP's own choice)
+    horizon_tokens: int = 0              # tokens pooled per span target; 0 -> bound_span_cap
+    # ── THE GATED READOUT (LoopMTP Eq 9-11; the other half of the same arm) ────────────
+    # "last" — every model before this knob — leaves the coda's z exactly what
+    #    `_tul_core` returns (the FINAL pass's state): bit-identical.
+    # "gated" — z becomes a CONTENT-CONDITIONAL softmax mixture of EVERY realised pass's
+    #    state (`TULPassGate`, below), computed from `db_traj[1:]` and substituted for
+    #    `h_slots` at the SAME seam `cond_layers`/`center_exit`/the register's mean/VQ
+    #    already share, so every downstream reader — the MUX, the span decoder, SIGReg,
+    #    the gate budget, the plan ablation, `prefix_project` — grades and writes the
+    #    SAME mixed thought. Needs `slot_depth_fixed > 0` for the same reason
+    #    `horizon_weight` does: the gate combines exactly T states and T must be one
+    #    number for the whole batch. NOT training-only: it changes the real forward at
+    #    train AND eval, the `prefix_source='trajectory'` precedent.
+    pass_readout: str = "last"           # "last" | "gated"
     # ── the slot chain (arm `slot-spandec-chain-mask`, 2026-09-11) ─────────────────
     #    A DIRECT, learned path along the slot axis, on top of the core's own causal
     #    attention over the compact slot sequence. At every pass `t` of the loop, slot `k`
@@ -1933,6 +1990,53 @@ class TULConfig:
             raise ValueError(
                 "tul.oracle_z_* set with tul.oracle_z=false: nothing is built, so the "
                 "knobs would be silently ignored. Set tul.oracle_z: true or drop them.")
+        if self.horizon_weight < 0.0:
+            raise ValueError(
+                f"tul.horizon_weight must be >= 0, got {self.horizon_weight}")
+        if self.horizon_weight > 0.0:
+            if self.slot_depth_fixed <= 0:
+                raise NotImplementedError(
+                    "tul.horizon_weight > 0 needs tul.slot_depth_fixed > 0: pass t's "
+                    "target is span i+t, a fixed offset from the iteration count, and "
+                    "under the per-slot Poisson draw pass t is not the same thing for "
+                    "every slot in the batch.")
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.horizon_weight has no meaning on the paid loop "
+                    "(tokens_through_core): there is no per-slot looped trajectory to "
+                    "align.")
+            if self.db_loop:
+                raise NotImplementedError(
+                    "tul.horizon_weight with tul.db_loop: the db carry is detached per "
+                    "iteration, so db_traj[t] is not one map's trajectory and aligning "
+                    "it pass by pass supervises T independent one-step readouts.")
+            if self.horizon_tokens < 0:
+                raise ValueError(
+                    f"tul.horizon_tokens must be >= 0, got {self.horizon_tokens}")
+        elif self.horizon_tokens != 0 or not self.horizon_free_first:
+            raise ValueError(
+                "tul.horizon_tokens / tul.horizon_free_first set with "
+                "tul.horizon_weight=0: nothing is built, so the knobs would be silently "
+                "ignored. Set tul.horizon_weight > 0 or drop them.")
+        if self.pass_readout not in ("last", "gated"):
+            raise ValueError(
+                f"tul.pass_readout must be 'last' or 'gated', got {self.pass_readout!r}")
+        if self.pass_readout == "gated":
+            if self.slot_depth_fixed <= 0:
+                raise NotImplementedError(
+                    "tul.pass_readout='gated' needs tul.slot_depth_fixed > 0: the gate "
+                    "combines exactly T pass states and T is not one number under the "
+                    "per-slot Poisson draw.")
+            if self.tokens_through_core:
+                raise NotImplementedError(
+                    "tul.pass_readout='gated' has no meaning on the paid loop "
+                    "(tokens_through_core): there is no per-slot looped trajectory to "
+                    "gate over.")
+            if self.db_loop:
+                raise NotImplementedError(
+                    "tul.pass_readout='gated' with tul.db_loop: the db carry is "
+                    "detached per iteration, so the T states are not one map's "
+                    "trajectory.")
         if self.loop_reach < 0:
             raise ValueError(f"tul.loop_reach must be >= 0 (0 = unlimited), got "
                              f"{self.loop_reach}")
@@ -2903,6 +3007,77 @@ class TULGradPass(nn.Module):
             g = (gf / (rms + self.eps)).to(g.dtype)
         g = g * slot_valid.unsqueeze(-1).to(g.dtype)
         return F.linear(self.scale * g, self.W_g.to(g.dtype))
+
+
+class TULPassGate(nn.Module):
+    """``tul.pass_readout="gated"`` — LoopMTP's content-conditional aggregator (Eq 9-11).
+
+    Combines EVERY realised pass's state into ONE vector the coda reads, instead of only
+    the last pass (``tul.pass_readout="last"``, every model before this knob):
+
+        g_i^(t)   = softplus(Wg x_i^(t) + beta_t)                          (Eq 9)
+        g~_i^(t)  = g_i^(t) / (sum_s g_i^(s) + eps)                        (Eq 10)
+        z_i       = sum_t g~_i^(t) (*) x_i^(t)                             (Eq 11)
+
+    ONE ``Wg`` shared across every pass; only the scalar bias ``beta_t`` differs by
+    iteration — Eq 9 in the paper. Requires ``tul.slot_depth_fixed > 0``
+    (``TULConfig.__post_init__``): the bias vector has a fixed length ``T``, so "pass t"
+    must be one well-defined integer for the whole batch.
+
+    ``Wg`` is ZERO-INIT (``torch.zeros``, no RNG draw), so at step 0 every ``g_i^(t)`` is
+    a CONSTANT across the batch and content plays no part yet — the gate is state-BLIND
+    until the first backward moves ``Wg`` off zero (``TULGradPass``'s precedent:
+    ``dL/dWg = (dL/dg) sigmoid(Wg x + beta) x`` does not vanish there). ``beta`` is
+    likewise a deterministic, non-random tensor: "moderately positive" at ``t=1`` and
+    "substantially negative" for ``t>1`` (LoopMTP Sec 3.2), so the gate favours the first
+    pass at init without ever assigning another pass exactly zero weight (softplus is
+    strictly positive). Both choices mean a ``pass_readout="gated"`` arm's OTHER weights
+    are byte-identical to its ruler's at the same seed — no module built after this one
+    is shifted on the global RNG stream.
+
+    Ternary QAT walks ``Wg`` like any ordinary deployed weight — no ``_ternary_exclude``:
+    unlike the training-only per-pass scorers (``spandec``, ``oracle_z``, the energies),
+    this readout changes the model's REAL forward at train AND eval
+    (``tul.prefix_source='trajectory'``'s precedent for "not training-only").
+    """
+
+    def __init__(self, d_model: int, n_passes: int):
+        super().__init__()
+        if n_passes < 1:
+            raise ValueError(f"TULPassGate needs n_passes >= 1, got {n_passes}")
+        self.Wg = nn.Linear(d_model, d_model, bias=False)
+        with torch.no_grad():
+            self.Wg.weight.zero_()
+        beta0 = torch.full((n_passes,), -4.0)
+        beta0[0] = 2.0
+        self.beta = nn.Parameter(beta0)
+        self.n_passes = int(n_passes)
+        self.eps = 1e-8
+
+    def forward(self, states: list) -> Tensor:
+        """``states``: exactly ``n_passes`` tensors ``[B, S, (n,) C]`` — ``db_traj[1:]``,
+        one per realised pass, in order. Returns the gated mixture, same shape.
+
+        No ``slot_valid`` masking here: a pad slot's states are whatever the masked
+        update left them, gated the same as a real slot's — every downstream reader
+        (``_readout``, ``prefix_project``, the MUX, the span decoder) already re-masks by
+        ``layout.slot_valid`` at its own call site (the precedent every other reader of
+        ``h_slots`` follows), so gating a pad slot's unused states is inert.
+        """
+        if len(states) != self.n_passes:
+            raise ValueError(
+                f"TULPassGate built for {self.n_passes} passes, forward got "
+                f"{len(states)}: tul.slot_depth_fixed must equal the realised depth "
+                f"exactly under tul.pass_readout='gated'.")
+        gates = [F.softplus(self.Wg(x) + self.beta[t]) for t, x in enumerate(states)]
+        denom = gates[0]
+        for g in gates[1:]:
+            denom = denom + g
+        denom = denom + self.eps
+        z = gates[0] / denom * states[0]
+        for g, x in zip(gates[1:], states[1:]):
+            z = z + g / denom * x
+        return z
 
 
 def gather_valid(x: Tensor, index: Tensor, valid: Tensor) -> Tensor:
