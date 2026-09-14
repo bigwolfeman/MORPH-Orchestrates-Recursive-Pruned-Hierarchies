@@ -1,11 +1,11 @@
-# Planned: a one-block coda, to find out whether the coda is the thing ignoring z
+# A one-block coda: the cells are not a substitute for coda capacity
 
-Status: planned
+Status: failure
 
 Date: 2026-09-13 (frozen before any GPU step; the 5090 is running the math panel). Arc:
-[`2026-09-04-loop-contribution-arc.md`](2026-09-04-loop-contribution-arc.md). One-factor
+[`2026-09-04-loop-contribution-arc.md`](../planned/2026-09-04-loop-contribution-arc.md). One-factor
 partner: `slot-spandec-strict`
-([`2026-09-12-arc-strict-geometry.md`](../failures/2026-09-12-arc-strict-geometry.md)).
+([`2026-09-12-arc-strict-geometry.md`](2026-09-12-arc-strict-geometry.md)).
 
 ## The fact
 
@@ -107,4 +107,111 @@ explanation.
 
 ## Results
 
-(to be filled after the run; predictions above are frozen)
+The arm ran on the 5090 (`arc/run_recon.sh`, 2026-09-13 15:34 to 16:33), 5,000 steps,
+`DONE slot-ultralight-coda exit=0 verdict=HEALTHY last=4999 Final val_loss=4.4365`.
+Sweeps at 2,500 and 5,000 (`core_depth_sweep.py`, depths 1,2,3,6,9,12,16, 480 rows),
+`worth_profile.py --rows 192 --modes auto` and the depth state probe at 5,000. Files:
+[`results/2026-09-13-register/`](../results/2026-09-13-register/) — the sweep, worth and
+state-probe JSONs, the trimmed run log as `run_slot-ultralight-coda.txt`, and the paired
+gaps in `paired_gaps_5000.txt`.
+
+Token CE at 5,000 by forced depth (480 rows):
+
+| arm | d=1 | d=2 | d=3 | d=6 | d=9 | d=16 | K1−K6 [95 % CI] | K3−K6 [95 % CI] |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `slot-ultralight-coda` | 4.3564 | 4.3552 | 4.3549 | **4.3547** | 4.3549 | 4.3558 | **+0.00169** [+0.00143, +0.00195] | +0.00017 [+0.00005, +0.00029] |
+| `slot-spandec-strict` (partner) | 4.3490 | 4.3479 | 4.3476 | **4.3474** | 4.3476 | 4.3486 | +0.00161 [+0.00131, +0.00188] | +0.00017 [+0.00000, +0.00030] |
+
+At 2,500 the arm reads K1−K6 +0.00073 [+0.00050, +0.00096] and K3−K6 −0.00009. The span
+decoder's own K1−K6 is +0.00349 [+0.00295, +0.00409] against the partner's +0.00314.
+
+Paired depth-6 CE on the sweep's 480 rows, `span_budget_profile.py --config
+budget_web_full --depths 6` (gap = span − full, so positive means the ultralight arm is
+worse):
+
+| pairing | gap [95 % CI] |
+| --- | --- |
+| `slot-ultralight-coda` − `slot-spandec-strict` | **+0.0073** [+0.0043, +0.0099] |
+
+Both arms pack the same 501,106 scored tokens (`prefix_k` 2, `L_total` 1152), so the
+pairing is exact. By offset the cost is concentrated early: +0.0150 at offset 0, +0.0400
+at offset 1, +0.0155 at offset 2, and +0.0033 over everything at offset 8+.
+
+Worth profile at 5,000 (mean CE rise when the slot cells are replaced; higher = the model
+needs them more):
+
+| arm | zero | shuffle | wrong_seed | all_slots | zero @ offset 0 |
+| --- | --- | --- | --- | --- | --- |
+| `slot-ultralight-coda` | **0.1823** | 0.1498 | 0.0582 | **0.1823** | **+0.9493** |
+| `slot-spandec-strict` (partner) | 0.1865 | 0.1739 | 0.0426 | 0.1865 | +0.7567 |
+
+`all_slots` equals `zero` to four decimals on both, as the strict geometry requires.
+
+Slot-state geometry from the run's own final `[VAL]` (the shipped post-`7a24adf` probe,
+`val/slot_eff_rank` over a row's slot states, trainer val recipe, 19 periodic evals then
+the final one — the same row set the ruler's log used):
+
+| arm | `val/slot_eff_rank` | `val/slot_pairwise_cos` |
+| --- | --- | --- |
+| `slot-ultralight-coda` | **12.5820** | **0.4596** |
+| `slot-spandec-strict`, corrected baseline | 13.85 | 0.520 |
+
+Rate at step 200: **10,759 tok/s** against the partner's 11,759.
+
+## Verdict
+
+- **U-1 FALSE.** `all_slots` is **0.1823**, below the 0.25 bar and 0.0042 BELOW the
+  partner's 0.1865. The whole slot channel is worth slightly LESS to a one-block coda than
+  to a four-block one.
+- **U-2 FALSE.** Token K1−K6 is **+0.00169** [+0.00143, +0.00195], a CI that does not
+  reach 0.005 and overlaps the partner's +0.00161. The passes read the same as ever.
+- **U-3 FALSE.** The paired depth-6 gap is **+0.0073** [+0.0043, +0.0099], inside the
+  15 % residual band (worse by less than 0.05), not the predicted 0.05 to 0.30. Cutting
+  three coda blocks and paying them to the prelude costs seven thousandths of a nat.
+- **U-4 FALSE.** 10,759 tok/s against 11,759. Moving blocks from the coda to the prelude
+  did not make the step cheaper; under the strict geometry the prelude runs same-span-only
+  relations that the fused path cannot serve either.
+
+Status: failure (four of four scorable predictions false). Binding clause: **U-1 fails,
+so "the coda ignores z because it doesn't have to read it" is dead as an explanation.**
+The cells are not a substitute for coda capacity; a coda with a quarter of the blocks
+leans on them no harder.
+
+The one number that did move is the SHAPE of the worth, not its size. At offset 0 the
+one-block coda loses +0.9493 nats when the cells go, against the partner's +0.7567, while
+its total worth is lower — so a weak coda depends on the cell more at the first token of a
+span and less everywhere after it. `wrong_seed` tells the same story from the other side:
+0.0582 against the partner's 0.0426, and +0.9743 at offset 0 against +0.618. The weak coda
+is more easily misled by the wrong span's cell, which is what a reader with fewer
+alternatives looks like.
+
+For the record beside the register panel: the matched-compute plain control
+(`plain-coda-matched`, 14 block-passes per token at depth 1) is 0.2536 nats ahead of
+`slot-spandec-mask`, and the strict ruler ties that mask arm at −0.0001
+([`2026-09-12-arc-strict-geometry.md`](2026-09-12-arc-strict-geometry.md)), so this arm
+sits about **+0.261** nats behind matched-compute plain. That is chained arithmetic
+through the ruler, not a fresh pairing.
+
+## Updated hypothesis
+
+The coda's capacity is not the gate on the slot channel. Removing three quarters of it
+moved the token CE by 0.007 nats, left the worth of the whole channel flat and left the
+K-curve on the same +0.0016 that twelve arms before it read. Two things follow.
+
+First, the reading of the register panel is settled by elimination, not by hope: it is a
+CHANNEL experiment. Whatever sets how hard the coda reads a cell, it is not how much
+compute the coda has to reconstruct the cell's content from tokens — a one-block coda
+cannot do that reconstruction and still does not read the cell harder.
+
+Second, the offset-0/offset-rest split is the live signal. A weak coda needs the cell more
+at exactly the position the cell was designed for (the first token after a boundary, worth
++0.95 here against +0.76) and less at every later offset, which is where the total is made.
+The next question is not "does the coda have room to read z" but "why does a cell stop
+paying after offset 1", and the instrument that separates those is the per-offset worth,
+not the K-curve. A 6/6/2 or 5/6/3 split would say whether the offset-0 rise is monotone in
+the missing capacity; nothing in this arm's design forbids it and it was not run.
+
+One honest caveat on the CE reading: the arm is two changes, not one. The coda lost three
+blocks and the prelude gained three, so "the coda's capacity is not the gate" is measured
+at a conserved block count. A 4/6/1 arm — one change, a smaller model — was not built and
+would separate the two.
