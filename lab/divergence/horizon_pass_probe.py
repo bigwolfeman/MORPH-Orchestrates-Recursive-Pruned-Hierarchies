@@ -196,6 +196,7 @@ def main() -> None:
         n_rows_done = 0
         for inp, labels, layout, idx in batches:
             inp = inp.to(device)
+            layout = layout.to(device)   # the packer returns CPU tensors (2026-09-14 Spark run)
             cs, cn, db_traj = _horizon_matrix(model, inp, layout, inp, T,
                                               a.tokens_per_span, use_proj=not a.no_proj)
             cos_sum += cs
