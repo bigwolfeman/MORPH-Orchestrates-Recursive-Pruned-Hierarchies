@@ -166,6 +166,20 @@ stats are logged as they are today.
 No BPTT through any loop exists at training time. There is no depth draw. `mean_depth`,
 `max_depth`, `slot_depth_fixed`, `bptt_depth` are not read by this path.
 
+### 3.5a Bootstrapping from a blank model — there is no oracle
+
+LaDiR's "oracle latents" are its trained VAE encoder run on the real sentences. Ours are E
+run on the real span, in the same forward. Phase 1 IS the VAE stage: E and the mouth
+co-train through the mouth's CE with the code teacher-forced, from a blank model. What
+makes the mouth read the code rather than ignore it is not a frozen decoder (LaDiR) but the
+strict geometry: the cells are the only cross-span source, and a deterministic write in
+them already carries 0.1865 nats on the strict ruler. The code will hold what the mouth
+cannot get from the span's own token path, not the whole span; G1 measures how much.
+
+LaDiR's `<BOT>`/`<EOT>` delimiters and its special-token head ("another thought or the
+answer?") have no analogue here: the boundary rule cuts spans from the tokens the mouth
+writes, every span gets one code, and the model never chooses how many codes to think.
+
 ### 3.6 The mouth — the coda, unchanged in structure
 
 Strict geometry as shipped: a token sees its own span's tokens plus the cells of earlier
@@ -237,6 +251,12 @@ checkpoint that is a model is the first one past `code_phase2_at`.
 integrator `fm_planner` uses); append `rmsnorm(z)` to the tape. Then tokens as today.
 
 `k` is `tul.code_infer_steps` at generation and a per-call argument in the instruments.
+Cost of k, per token at ⟨span⟩ ≈ 12 and M = 2: `6·k·2/12` core block passes, so k = 8 is 8
+against the plain loop's 36 and the sequential break-even is near k = 72. The noise
+augmentation (§3.2) is what keeps k small: the mouth tolerates a code within one noise
+radius of the true one, so the sampler only has to land inside that ball. LaDiR's
+batch-parallel diversity guidance (§3.4 there) is a best-of-N reasoning device and is not
+used: one sample per code from the source noise is what an LM needs.
 The K-curve of §8 chooses it. No halting, no gate, no PonderNet.
 
 Wolfe's 2026-08-28 veto on loop-depth variation for the FM planner ("fixed inference
@@ -374,8 +394,8 @@ first smoke measures it; nothing here is a claim.
   post-core carriers or it is pre-refuted." Every P1 design regressed PRE-core prelude
   pooled features, defined by nothing decodable, into a detached prefix. This design's
   target is a code defined by what the mouth can decode, co-trained through the mouth, on
-  a geometry where the mouth must read it. It is a new design under that rule's stated
-  boundary, not a revival; the note records the argument and Wolfe decides.
+  a geometry where the mouth must read it. **Waived by Wolfe, 2026-09-14**; the note keeps
+  the argument.
 * **The moving target.** LaDiR freezes the VAE; from scratch E keeps moving through CE.
   Stop-grad plus the phase-2 delay is the mitigation; `fm/rel` falling is the check.
 * **Scoring.** `ce_k{K}` is a single-sample bound, not a likelihood; an importance-weighted

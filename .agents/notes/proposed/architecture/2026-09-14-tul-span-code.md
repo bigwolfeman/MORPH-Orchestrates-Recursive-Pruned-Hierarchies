@@ -106,6 +106,9 @@ names, not the prelude-feature side. The note records this argument; whether it 
 the rule is Wolfe's call, and the first gate (G1: the code is a code, and it is read) is the
 one that would have caught every P1 arm before a planner was trained.
 
+**Wolfe, 2026-09-14: the FM binding rule is waived for TUL-Code.** The design proceeds; the
+argument above stays as the record of why it is a different object from the P1 planners.
+
 ## Acceptance criteria
 
 The spec's gates, frozen in the prereg before the run: G1 the code is a code (`ce_tf` ≥ 0.15
