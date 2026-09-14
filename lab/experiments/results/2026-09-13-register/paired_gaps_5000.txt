@@ -1,0 +1,64 @@
+## slot-ultralight-coda minus slot-spandec-strict (gap = span minus full), depth 6
+paired 501,106 tokens (full 501,106, span 501,106)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3474   CE span 4.3547   gap +0.0073 nats [+0.0043, +0.0099]
+   offset      n        gap        95% CI
+        0    24,338   +0.0150  [+0.0078, +0.0212]
+        1    24,584   +0.0400  [+0.0294, +0.0505]
+        2    24,546   +0.0155  [+0.0044, +0.0253]
+        3    24,504   +0.0075  [-0.0020, +0.0169]
+        4    23,343   +0.0097  [-0.0013, +0.0199]
+        5    22,646   +0.0046  [-0.0058, +0.0143]
+        6    21,799   +0.0020  [-0.0100, +0.0109]
+        7    21,034   +0.0124  [+0.0014, +0.0221]
+       8+   304,246   +0.0033  [+0.0001, +0.0064]
+
+## slot-register-m4 minus slot-spandec-strict (gap = span minus full), depth 6
+paired 501,106 tokens (full 501,106, span 511,089)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3474   CE span 4.3257   gap -0.0217 nats [-0.0244, -0.0191]
+   offset      n        gap        95% CI
+        0    24,338   +0.0037  [-0.0034, +0.0112]
+        1    24,584   -0.0065  [-0.0183, +0.0045]
+        2    24,546   -0.0197  [-0.0294, -0.0099]
+        3    24,504   -0.0224  [-0.0332, -0.0118]
+        4    23,343   -0.0189  [-0.0300, -0.0094]
+        5    22,646   -0.0255  [-0.0362, -0.0160]
+        6    21,799   -0.0290  [-0.0396, -0.0187]
+        7    21,034   -0.0210  [-0.0309, -0.0094]
+       8+   304,246   -0.0239  [-0.0275, -0.0207]
+
+## slot-register-m4-sameinit minus slot-spandec-strict (gap = span minus full), depth 6
+paired 501,106 tokens (full 501,106, span 511,089)
+offsets from budget_web_full over 480 rows; 10,066 paired tokens have none
+
+depth 6:  CE full 4.3474   CE span 4.3329   gap -0.0145 nats [-0.0172, -0.0116]
+   offset      n        gap        95% CI
+        0    24,338   -0.0001  [-0.0073, +0.0077]
+        1    24,584   +0.0035  [-0.0069, +0.0138]
+        2    24,546   -0.0091  [-0.0195, +0.0005]
+        3    24,504   -0.0112  [-0.0215, -0.0014]
+        4    23,343   -0.0129  [-0.0238, -0.0021]
+        5    22,646   -0.0076  [-0.0179, +0.0017]
+        6    21,799   -0.0221  [-0.0324, -0.0120]
+        7    21,034   -0.0161  [-0.0252, -0.0058]
+       8+   304,246   -0.0171  [-0.0208, -0.0135]
+
+## slot-register-m4 minus slot-register-m4-sameinit (gap = span minus full), depth 6
+paired 511,089 tokens (full 511,089, span 511,089)
+offsets from budget_web_full over 480 rows; 20,049 paired tokens have none
+
+depth 6:  CE full 4.3377   CE span 4.3307   gap -0.0070 nats [-0.0093, -0.0049]
+   offset      n        gap        95% CI
+        0    24,338   +0.0039  [-0.0022, +0.0101]
+        1    24,584   -0.0100  [-0.0182, -0.0029]
+        2    24,546   -0.0106  [-0.0200, -0.0010]
+        3    24,504   -0.0112  [-0.0208, -0.0029]
+        4    23,343   -0.0060  [-0.0154, +0.0027]
+        5    22,646   -0.0179  [-0.0255, -0.0107]
+        6    21,799   -0.0069  [-0.0151, +0.0012]
+        7    21,034   -0.0049  [-0.0133, +0.0041]
+       8+   304,246   -0.0068  [-0.0098, -0.0041]
+

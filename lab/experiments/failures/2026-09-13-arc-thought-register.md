@@ -1,12 +1,12 @@
-# Planned: the Thought Register — M mutable cells per span instead of one
+# The Thought Register: four cells collapse onto each other, seeded apart or not
 
-Status: planned
+Status: failure
 
 Date: 2026-09-13 (frozen before any GPU step of any arm; the 5090 is running the math
 panel and no smoke of any arm here exists at filing time). Arc:
-[`2026-09-04-loop-contribution-arc.md`](2026-09-04-loop-contribution-arc.md). One-factor
+[`2026-09-04-loop-contribution-arc.md`](../planned/2026-09-04-loop-contribution-arc.md). One-factor
 partner: `slot-spandec-strict`
-([`2026-09-12-arc-strict-geometry.md`](../failures/2026-09-12-arc-strict-geometry.md)).
+([`2026-09-12-arc-strict-geometry.md`](2026-09-12-arc-strict-geometry.md)).
 Design note:
 [`2026-09-13-the-thought-register.md`](../../../.agents/notes/proposed/architecture/2026-09-13-the-thought-register.md).
 
@@ -320,4 +320,162 @@ sweep continues upward until it stops paying.
 
 ## Results
 
-(to be filled after the runs; predictions above are frozen)
+**Two of the three arms ran; `slot-register-m8` was never queued and has no numbers, so
+P-7 and P-9 are unscored.** `slot-register-m4` and `slot-register-m4-sameinit` each ran
+5,000 steps on the 5090 (`arc/run_recon.sh`, 2026-09-13), both
+`DONE ... exit=0 verdict=HEALTHY last=4999` — `m4` `Final val_loss=4.4696`, `sameinit`
+`Final val_loss=4.4777`. **`m4` was killed once at step 600** by a CPU-stalling per-slot
+within-slot rank probe (a per-slot `eigvalsh` loop that held the GPU ~3.7 min per val;
+fixed in `53c0497`, which moved the probe to a trace formula on the M×M Gram, on device).
+The killed directory `slot-register-m4.killed-step600` is kept and is NOT read here; the
+filed run is the re-run from scratch at `53c0497`.
+
+Files: [`results/2026-09-13-register/`](../results/2026-09-13-register/) — sweep JSONs at
+2,500 and 5,000, worth profiles, depth state probes, the trimmed run logs as `.txt`, and
+`paired_gaps_5000.txt`.
+
+Token CE at 5,000 by forced depth (480 rows, `core_depth_sweep.py`):
+
+| arm | d=1 | d=2 | d=3 | d=6 | d=9 | d=16 | K1−K6 [95 % CI] | K3−K6 [95 % CI] |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `slot-register-m4` | 4.3326 | 4.3307 | 4.3304 | **4.3307** | 4.3311 | 4.3331 | **+0.00197** [+0.00163, +0.00233] | **−0.00029** [−0.00046, −0.00012] |
+| `slot-register-m4-sameinit` | 4.3402 | 4.3380 | 4.3377 | **4.3377** | 4.3380 | 4.3396 | **+0.00247** [+0.00212, +0.00282] | +0.00001 [−0.00014, +0.00017] |
+| `slot-spandec-strict` (partner) | 4.3490 | 4.3479 | 4.3476 | **4.3474** | 4.3476 | 4.3486 | +0.00161 [+0.00131, +0.00188] | +0.00017 [+0.00000, +0.00030] |
+
+At 2,500 the two register arms read K1−K6 +0.00067 and +0.00048, both below the partner's
++0.00051 to within their CIs. The span decoder's own curve is the one place the register
+moves a number: `spandec_ce` K1−K6 **+0.00719** (`m4`) and +0.00668 (`sameinit`) against
+the partner's +0.00314 — roughly double — while `spandec_ce` K3−K6 stays at +0.00016 and
++0.00035.
+
+Paired depth-6 CE on the sweep's 480 rows, `span_budget_profile.py --config
+budget_web_full --depths 6` (gap = span − full; negative means the first-named arm is
+better):
+
+| pairing | gap [95 % CI] |
+| --- | --- |
+| `slot-register-m4` − `slot-spandec-strict` | **−0.0217** [−0.0244, −0.0191] |
+| `slot-register-m4-sameinit` − `slot-spandec-strict` | **−0.0145** [−0.0172, −0.0116] |
+| `slot-register-m4` − `slot-register-m4-sameinit` | **−0.0070** [−0.0093, −0.0049] |
+
+The register arms pack 511,089 scored tokens against the partner's 501,106 (`prefix_k` 4,
+`L_total` 1280), so the two comparisons against the partner carry the packer confound the
+Method named; pairing is on `tok_index` over the 501,106 tokens both hold. The `m4` vs
+`sameinit` row is the clean one — identical `prefix_k`, identical packing, 511,089 tokens
+each. Against the partner the register's win is flat across offsets 2 through 8+
+(−0.019 to −0.029) and absent at offset 0 (+0.0037 [−0.0034, +0.0112]).
+
+Worth profile at 5,000 (mean CE rise when the cells are replaced):
+
+| arm | zero | shuffle | wrong_seed | all_slots | zero @ offset 0 |
+| --- | --- | --- | --- | --- | --- |
+| `slot-register-m4` | **0.1942** | 0.1798 | 0.0680 | **0.1942** | +0.7959 |
+| `slot-register-m4-sameinit` | **0.1930** | 0.1768 | 0.0710 | **0.1930** | +0.8165 |
+| `slot-spandec-strict` (partner) | 0.1865 | 0.1739 | 0.0426 | 0.1865 | +0.7567 |
+
+`all_slots` equals `zero` to four decimals on both register arms, so the strict geometry
+fires with M = 4 cells and the worth profile operates on all of them.
+
+Slot-state geometry, from each run's own final `[VAL]` line (the shipped post-`7a24adf`
+probe; all three runs do 19 periodic evals at `eval_every: 250` then a final one, so they
+read the same stream rows):
+
+| arm | `val/slot_cell_eff_rank` (of 4) | `val/slot_cell_pairwise_cos` | `val/slot_eff_rank` | `val/slot_pairwise_cos` |
+| --- | --- | --- | --- | --- |
+| `slot-register-m4` | **1.2445** | **0.9432** | **10.5729** | 0.6560 |
+| `slot-register-m4-sameinit` | **1.2366** | **0.9398** | **10.4879** | 0.6626 |
+| CPU fixture at init (the floor) | 1.2383 | 0.8443 | — | — |
+| `slot-spandec-strict`, corrected baseline | — | — | 13.85 | 0.520 |
+
+Rate at step 200, from `queue.log`'s `RATE OK` lines: `m4` **9,582 tok/s** (the killed
+first attempt at `368e108` read 10,672), `sameinit` **10,609**, partner 11,759.
+
+## Verdict
+
+- **P-1 FALSE.** `val/slot_cell_eff_rank` is **1.2445**, not above 2.0. It is 0.0062 above
+  the CPU fixture's init floor of 1.2383, and the within-slot cosine is **0.9432** —
+  higher than the 0.8443 the fixture starts at. The four cells end the run closer together
+  than they began. This is the 5 % residual: the rank stays at the init floor.
+- **P-2 FALSE.** `val/slot_eff_rank` over all 64·4 cells is **10.5729**, below the 12 bar,
+  and below the partner's corrected 13.85 on the same instrument and the same row recipe.
+  Four cells per span produce FEWER row directions than one cell per span did. The
+  prediction's [7, 12] residual band is where it lands, but the direction is against the
+  arm.
+- **P-3 FALSE.** Token K1−K6 is **+0.00197** [+0.00163, +0.00233], a CI nowhere near
+  0.005. Thirteen arms now sit inside [−0.0001, +0.0033].
+- **P-4 FALSE.** K3−K6 is **−0.00029** [−0.00046, −0.00012] — negative with a CI clear of
+  zero. Passes 4 through 6 cost the model a third of a thousandth of a nat.
+- **P-5 FALSE.** `m4` beats `sameinit` by **0.0070** nats [+0.0049, +0.0093], under the
+  0.01 bar. The pull-apart is real (the CI is clear of zero) and it is worth less than the
+  prereg's threshold, which is the 45 % residual band.
+- **P-6 TRUE.** `m4` is **0.0217** nats better [+0.0191, +0.0244] than `slot-spandec-strict`
+  at depth 6, inside the predicted 0.00 to 0.10 window. The packer confound applies.
+- **P-7 UNSCORED.** `slot-register-m8` was never queued; the arm file was consumed before
+  it was appended and no M = 8 step ever ran.
+- **P-8 TRUE.** 9,582 tok/s at step 200, above the 9,000 bar. The eager S·M relation costs
+  about 19 % of the partner's rate.
+- **P-9 UNSCORED.** No M = 8 run, so the OOM question is open.
+
+Status: failure (five of seven scorable predictions false). Two binding clauses fire and
+they point the same way.
+
+**P-1 fails, so the collapse is caused by the loop and the shared write, not by the seed.**
+Four cells that begin at four different pooled vectors end the run at within-slot rank
+1.24 of a possible 4 and cosine 0.94. Seeding them apart (`distinct`) versus pooling them
+from the same query (`same`) lands at 1.2445 against 1.2366 — a difference of 0.008 rank
+units after 5,000 steps. Capacity was not the lever. The prereg's own words for this
+outcome: the next arm is a write that keeps the cells apart (per-cell losses, or an
+orthogonality term), not more cells.
+
+**P-5 fails and P-6 holds, so the honest name for this arm is a wider prefix.** Both
+register arms beat the partner (−0.0217 and −0.0145) and they differ from each other by
+0.0070, which is a third of what `m4` gains over the ruler. Most of the CE win is the
+prefix width and the extra packed tokens, not the register. The comparison the Binding
+asks for is `slot-mux-prefix4` (2026-09-10), which moved `val/slot_eff_rank` 6.3389 →
+7.12 for a wider write alone; that run's rank is a pre-`7a24adf` number on a
+`tg_restrict: false` model, so it is comparable as a rank but its CE was never paired
+against the strict ruler, and the clean prefix-width control at strict geometry does not
+exist. That is the missing arm, and it is missing because the panel ran the register
+first.
+
+The register also did NOT leave the K-curve alone in one place: the span decoder's own
+K1−K6 doubles (+0.0072 against +0.0031). The decoder grades the mean of four cells, and
+the mean of four looping cells depends on depth more than one cell does. That is a
+property of the readout, not evidence that the passes computed anything — the TOKEN curve,
+which is what the coda pays, is flat and its K3−K6 is negative.
+
+Matched-compute row, chained through the ruler rather than paired fresh: the
+`plain-coda-matched` control (depth 1, 14 block-passes per token) is 0.2536 nats ahead of
+`slot-spandec-mask`, and the strict ruler ties that mask arm at −0.0001
+([`2026-09-12-arc-strict-geometry.md`](2026-09-12-arc-strict-geometry.md)), so
+`slot-register-m4` sits about **+0.232** nats behind matched-compute plain.
+
+## Updated hypothesis
+
+The capacity reading is dead in its strongest form. One vector per span was not the thing
+stopping the loop, because four vectors per span behave as one vector per span: rank 1.24
+of 4, cosine 0.94, an untouched token K-curve, and a NEGATIVE K3−K6. The seed does not
+matter (0.008 rank units between `distinct` and `same`), which rules out the initialisation
+half of the hypothesis outright and leaves the dynamics half.
+
+What the numbers say collapses the cells is the pair the Binding named: the shared loop and
+the shared write. Two supporting readings. First, the row rank FELL, 13.85 → 10.57, while
+the cell count per row quadrupled — consistent with the 2026-09-13 rank anatomy, which
+measured that pooling cells of one slot into one set charges the set for a fixed inter-cell
+offset and hides directions the coda gets for free; four cells make that pooling artefact
+worse, not better. Second, the objective still grades one state per span: the span decoder
+reads the MEAN of the M cells, so the gradient that reaches cell i is the same gradient
+that reaches cell j up to the per-cell path, and a shared gradient pulls states together.
+Those two are separable and the panel did not separate them.
+
+The next arm is therefore the one the Binding names and NOT another capacity sweep: keep
+M = 4 and change what the cells are graded on — a decoder that cross-attends to the M cells
+so each cell gets its own target, or an explicit orthogonality term on the within-slot
+Gram. The instrument is `val/slot_cell_eff_rank`, which now has a measured floor (1.24 at
+this design) and a ceiling (4). If a per-cell target does not move that number, the cells
+are being collapsed by the loop's own map and the register lane closes.
+
+Do not queue `slot-register-m8`. Its value was to separate "hard capacity wall" from
+"geometry problem" (P-7), and the M = 4 pair already answered that question from the other
+side: the four cells do not fill the capacity they were given, so eight cannot be the fix.
+

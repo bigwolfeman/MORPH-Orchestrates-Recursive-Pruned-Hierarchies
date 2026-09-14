@@ -1,0 +1,36 @@
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=4 max_slots=64 L_total=1280 p_drop=0.15 slot_seed='boundary'
+  TUL SPAN DECODER ON: layers=2 heads=8 J=32x1 offset=1 weight=1.0 — span s+1 is decoded from z with a teacher-forced token path (morph/model/tul_spandec.py)
+  TUL THOUGHT REGISTER ON: slot_cells=4 init='same' - each span gets M MUTABLE looped cells instead of one, seeded apart by M learned queries pooling the span's own prelude states (W_o zero-init: step 0 IS the ruler). They loop together at one per-slot depth; inside the loop a cell reads every cell of earlier slots AND every cell of its own slot, LATER siblings included (the relation travels as `tg_relation` and REPLACES the attention branches' causal term; through `tg_allow` it would only narrow and would execute as plain flattened causal - measured and fixed 2026-09-13). Cell i is written 1:1 into prefix cell i (prefix_k == slot_cells), the coda is unchanged, and the span decoder grades the MEAN of the M cells. Built against the measured rank collapse (slot_eff_rank 5.7-7.3 in 1024 dims, pairwise cos 0.72-0.77). Read `val/slot_cell_eff_rank` - the rank WITHIN a slot - beside `val/slot_eff_rank` (lab/experiments/planned/2026-09-13-arc-thought-register.md)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 297.7M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+Model: 297.7M params on cuda
+  [flops] model v1.0.0 nominal A0-shape proxy=44.00 passes/token, realized depth=5.688
+  Core spectral-norm penalty OFF (logging only): cap=0.0 lambda=0.0 log_every=100 include_attn=False on 12 core linears (12 MLP + 0 attention)
+  Ternary QAT ON: scope=backbone threshold=0.5 mode=norm_match group=tensor dtype=fp16 modules=47 ({'backbone': 47, 'attention': 0, 'embeddings': 0}) params_ternary=130.9M (44.0% of model)
+  Warmup compile [startup thread-free] (TG path, 4 packed TUL passes)...
+  Warmup compile [startup thread-free] done in 4.7s (4 TG passes)
+[data] TUL layout: seq_len=1024 prefix_k=4 max_slots=64 L_total=1280 slot_id=4
+[data] TUL layout: seq_len=1024 prefix_k=4 max_slots=64 L_total=1280 slot_id=4
+  [VAL     250] loss=7.0361  ppl=1136.92  ppl_tok=1136.92  first_tok=9.2791  cf=-3.6491  lp/tok=15.33
+  [VAL     500] loss=6.4121  ppl=609.19  ppl_tok=609.19  first_tok=10.2823  cf=-5.2070  lp/tok=15.18
+  [VAL     750] loss=5.6969  ppl=297.95  ppl_tok=297.95  first_tok=10.9749  cf=-6.5763  lp/tok=15.38
+  [VAL    1000] loss=5.2497  ppl=190.52  ppl_tok=190.52  first_tok=11.0279  cf=-6.8718  lp/tok=15.29
+  [VAL    1250] loss=5.1362  ppl=170.07  ppl_tok=170.07  first_tok=10.3950  cf=-6.3042  lp/tok=15.13
+  [VAL    1500] loss=5.1452  ppl=171.60  ppl_tok=171.60  first_tok=9.2731  cf=-4.8683  lp/tok=15.96
+  [VAL    1750] loss=5.1587  ppl=173.94  ppl_tok=173.94  first_tok=8.9153  cf=-4.6677  lp/tok=14.96
+  [VAL    2000] loss=4.9545  ppl=141.81  ppl_tok=141.81  first_tok=10.4608  cf=-6.4007  lp/tok=15.40
+  [VAL    2250] loss=4.6462  ppl=104.19  ppl_tok=104.19  first_tok=10.8946  cf=-7.0838  lp/tok=15.43
+  [VAL    2500] loss=4.5944  ppl=98.93  ppl_tok=98.93  first_tok=10.0305  cf=-6.2128  lp/tok=15.38
+  [VAL    2750] loss=4.8541  ppl=128.26  ppl_tok=128.26  first_tok=9.3605  cf=-5.3454  lp/tok=15.24
+  [VAL    3000] loss=4.5659  ppl=96.15  ppl_tok=96.15  first_tok=8.8762  cf=-5.0958  lp/tok=15.39
+  [VAL    3250] loss=4.4922  ppl=89.32  ppl_tok=89.32  first_tok=7.9355  cf=-4.3048  lp/tok=15.23
+  [VAL    3500] loss=4.5469  ppl=94.34  ppl_tok=94.34  first_tok=9.0284  cf=-5.1567  lp/tok=15.28
+  [VAL    3750] loss=4.5148  ppl=91.36  ppl_tok=91.36  first_tok=8.4194  cf=-4.3620  lp/tok=15.44
+  [VAL    4000] loss=4.3847  ppl=80.22  ppl_tok=80.22  first_tok=8.2758  cf=-4.7129  lp/tok=15.55
+  [VAL    4250] loss=4.2807  ppl=72.29  ppl_tok=72.29  first_tok=7.7925  cf=-4.4058  lp/tok=15.29
+  [VAL    4500] loss=4.3402  ppl=76.72  ppl_tok=76.72  first_tok=8.4537  cf=-4.7886  lp/tok=15.24
+  [VAL    4750] loss=4.4360  ppl=84.44  ppl_tok=84.44  first_tok=8.3043  cf=-4.5597  lp/tok=15.40
+Final checkpoint: /home/wolfe/morph-to/checkpoints/morph/slot-register-m4-sameinit/step_5000.pt
+Final val_loss=4.4777  ppl=88.03  val/attn_lift=0.4762  val/attn_lift_alllayers=0.5360  val/attn_lift_first_tok=1.0000  val/attn_lift_first_tok_alllayers=1.0000  val/attn_lift_n_calls=8.0000  val/attn_slot_mass=0.3892  val/attn_slot_mass_first_tok=1.0000  val/attn_slot_share=0.7876  val/ce_tokens=4.4777  val/first_tok_ce=7.7330  val/first_tok_counterfactual=-4.4347  val/layer_passes_per_token=15.8646  val/plan_worth_shuffle=0.2103  val/plan_worth_wrong_seed=0.1377  val/plan_worth_zero=0.2033  val/ppl_tokens=88.0314  val/slot_cell_eff_rank=1.2366  val/slot_cell_pairwise_cos=0.9398  val/slot_cells=4.0000  val/slot_component_mean=-0.0629  val/slot_component_std=1.1326  val/slot_eff_rank=10.4879  val/slot_norm_mean=36.3006  val/slot_pairwise_cos=0.6626  val/span_cap_frac=0.2118  val/span_mean_span=18.4231  val/span_one_tok_frac=0.0084  val/span_pad_frac=0.0158  val/span_spans=56.3250  val/span_tokens=1034.5250  val/spandec=4.6207  val/spandec_ce=4.6207  val/spandec_n_tokens=6028.8500  val/spandec_target_offset=1.0000

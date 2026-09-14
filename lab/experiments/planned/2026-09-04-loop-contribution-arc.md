@@ -402,4 +402,13 @@ negative = better than the named control. The three 2026-09-12 strict panels wer
 | 09-13 | identical-target grid | forced depth vs the SAME targets | first run invalid (bare prelude); corrected: h1 +0.0000, h6 +0.0015, exit +0.0013; ruler exit +0.0031 | `results/2026-09-12-instruments/horizon_grid_fixed_*.txt` |
 | 09-13 | causal fitted z | fit z on teacher samples, score the real span | causal +0.252 WORSE than the loop; hindsight −1.479 | `results/2026-09-12-instruments/causal_fit_slot-spandec-strict_g1.txt` |
 
+**Lane 8: rank and reader arms (2026-09-13)**
+
+| date | arm | what changed | testbed | K1−K6 (K3−K6) | CE vs strict | verdict | source |
+|---|---|---|---|---|---|---|---|
+| 09-13 | slot-ultralight-coda | 7:6×6:1 — the coda cut to ONE block, block count conserved at 14 | web | +0.0017 (+0.0002) | **+0.0073** [+0.0043, +0.0099] paired | `all_slots` worth 0.1823 vs the ruler's 0.1865: a weak coda does NOT lean on the cells. Rank 12.58 / cos 0.46. U-1..U-4 all FALSE | `failures/2026-09-13-arc-ultralight-coda.md` |
+| 09-13 | slot-register-m4 | M = 4 mutable looped cells per span (`prefix_k: 4`, forced) | web | +0.0020 (**−0.0003**) | **−0.0217** [−0.0244, −0.0191] paired | within-slot rank **1.2445** of 4 (init floor 1.2383), cos 0.9432; row rank 10.57 against the ruler's 13.85. Capacity was not the lever | `failures/2026-09-13-arc-thought-register.md` |
+| 09-13 | slot-register-m4-sameinit | the same four cells pooled from ONE query (`slot_cell_init: same`) | web | +0.0025 (+0.0000) | −0.0145 [−0.0172, −0.0116] paired; m4 − this = **−0.0070** [−0.0093, −0.0049] | cell rank 1.2366 / cos 0.9398 — seeding apart buys 0.008 rank units and 0.007 nats; the arm is a wider prefix, not a register (P-5 FALSE, P-6 TRUE) | same file |
+| 09-13 | slot-register-m8 | M = 8 | — | not run | not run | never queued; P-7 (capacity wall vs geometry) and P-9 (OOM) unscored | same file |
+
 Not in the table: `slot-mnext-staged-all` (never ran), `precision-bf16-all` (slot killed before start), two Huginn tooling filings (no contribution numbers).
