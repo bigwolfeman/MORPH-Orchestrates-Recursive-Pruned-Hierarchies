@@ -1,0 +1,5 @@
+[    200/5000] loss=14.7268  ppl=2487492.3  lr=2.00e-05  sps=1.58  tok/s=9734  proxy=10.09  tflops=13.5  peak=21.60GB
+[   1000/5000] loss=12.9013  ppl=400849.5  lr=1.00e-04  sps=1.65  tok/s=10165  proxy=10.07  tflops=14.1  peak=21.82GB
+[   2000/5000] loss=10.3284  ppl=30590.3  lr=1.00e-04  sps=1.55  tok/s=9500  proxy=10.08  tflops=13.2  peak=21.82GB
+[   3000/5000] loss=9.1697  ppl=9601.5  lr=1.00e-04  sps=1.64  tok/s=10076  proxy=10.10  tflops=14.1  peak=21.82GB
+[   4000/5000] loss=9.8656  ppl=19256.5  lr=1.00e-04  sps=1.63  tok/s=10021  proxy=10.11  tflops=14.0  peak=21.82GB
