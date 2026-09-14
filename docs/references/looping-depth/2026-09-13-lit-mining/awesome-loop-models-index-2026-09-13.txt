@@ -1,0 +1,442 @@
+
+=== News ===
+
+=== What Counts as a Loop Model? ===
+
+=== How the Repository Is Organized ===
+
+=== Table of Contents ===
+
+=== Theoretical and Mechanical Analysis ===
+[09/04/2026] Fractal basins trap latent reasoning | arxiv:2609.04963 | hierarchical-loop · flat-loop · implicit-layer | Jeffrey Lai, Anthony Bao, John Quinn, William Gilpin · 2026
+    Studies recurrent-depth reasoners as dynamical systems, finding that harder tasks produce fractal convergence-time basins through saddle-mediated transient chaos and tracing their emergence during training of a looped Transformer.
+[09/01/2026] Looped Transformers under the Jacobian Lens: Does the Global Workspace Survive Recurrence? | arxiv:2609.01924 | flat-loop | Wenlong Wang, Fergal Reid · 2026
+    Extends the Jacobian lens to weight-tied virtual depth and compares workspace dynamics in Ouro and Huginn, finding that recurrence preserves a causal workspace while reshaping how information and interventions propagate across iterations.
+[08/29/2026] Evaluating Tiny Recursive Models Across Training for Code Generation | arxiv:2608.29376 | flat-loop | Anjani Sirivella, Aanisha Newaz, Glaucia Melo · CASCON 2026
+    Tracks a 28M-parameter autoregressive Tiny Recursive Model across training, showing how recursive reuse of one two-layer block changes fit, free-running code generation, generalization, and compute relative to matched controls.
+[08/27/2026] Dynamical phase selection controls compute scaling in looped transformers | arxiv:2608.26556 | flat-loop | Gunn Kim · 2026
+    Shows that identically accurate weight-tied looped Transformers can realize initialization-selected dynamical phases, deriving parameter-free fold scaling and an N^-2 workload tail while finding no analogous law in a Neimark-Sacker phase.
+[08/18/2026] Think Shallow, Solve Deep: Controlling Recurrent Dynamics for Reliable Test-Time Depth | arxiv:2608.18222 | flat-loop | Ivan Viakhirev, Kirill Borodin, Amirah Almutairi, Serguei Ba
+    Characterizes recurrent operators as settling, marginal, or drifting, derives a depth-safety condition, and causally links a terminal fixed-point objective to stable test-time-depth extrapolation.
+[08/17/2026] Behaviour Is an Incomplete Measure of Reasoning Development: Cross-surface pre-arrival accessibility and the limits of developmental inference in a recurrent-depth reasoner | arxiv:2608.16085 | flat-loop | Simon Lam-Muir · 2026
+    Separates behavioural acquisition from hidden-state accessibility in a 30M looped reasoner, finding pre-arrival answer information under preregistered controls while explicitly withholding causal claims about the learned computation.
+[08/05/2026] Training Crossroads for Recurrent Vision Transformers: Recurrence, Neural ODEs, and Deep Supervision | arxiv:2608.04879 | flat-loop | Grzegorz Gruszczynski, Pawel Olszowiec, Michal Byra, Grzegor
+    Provides a controlled empirical study of single-block recurrent Vision Transformers, comparing shared-block recurrence against independently parameterized depth, Neural ODE training, and deep supervision under matched CIFAR-100 protocols.
+[08/04/2026] The Ignition Is Real, and It Lives at the Readout: Latent composition, difficulty-clocked ignition, and the interface-constituted commit in a recurrent-depth reasoner | arxiv:2608.03263 | flat-loop | Simon Lam-Muir · 2026
+    Analyzes iteration-by-iteration commitment in a recurrent-depth reasoner, finding a difficulty-dependent readout transition while separating robust hidden-state evidence from coordinate-dependent artifacts.
+[07/13/2026] The Equilibrium Is the Initialization: Lazy Identity Collapse in Physics-Structured Deep Equilibrium Reasoning | arxiv:2607.11116 | implicit-layer | Joyjeet Singh · 2026
+    Audits physics-structured deep equilibrium reasoning and shows a lazy identity-collapse failure mode where fixed-point computation can degenerate around initialization.
+[07/12/2026] LayerNorm as Implicit Gain Control in Looped Transformers | arxiv:2607.10681 | flat-loop | Matthias M. M. Buehlmaier · 2026
+    Analyzes pre-LayerNorm looped Transformers as recurrent systems, arguing that LayerNorm acts as implicit gain control for stable memory routing.
+[07/08/2026] Adaptive Depth in Looped Transformers: Diagnosing Learned Halting Gates and Trajectory Readouts | arxiv:2607.20519 | flat-loop | Andrei Cristian Popescu, Haitz Sáez de Ocáriz Borde, Pietro 
+    Diagnoses adaptive depth in looped Transformers through a trajectory-readout lens, finding that fixed-prior depth supervision shapes more useful stopping signals than jointly learned halting gates, on synthetic tasks and Ouro-1.4B/2.6B checkpoints.
+[06/25/2026] What Survives When You Compress a Recursive Reasoner for the Edge? | arxiv:2606.26488 | hierarchical-loop | Pearse Jim, Steven Kolawole, Opegbemi Matthias Busoye, Glory
+    Analyzes compression of TRM/HRM recursive reasoners, finding that naïve INT4, pruning, distillation, and linear attention can preserve cell accuracy while collapsing puzzle-exact accuracy; calibrated per-channel INT4 largely recovers Sudoku performance, and carry-trajectory fidelity diagnoses the damage.
+[06/16/2026] On the Residual Scaling of Looped Transformers: Stability and Transferability | arxiv:2606.18524 | flat-loop | Shaowen Wang, Bingrui Li, Ge Zhang, Wenhao Huang, Shen Yan, 
+    Analyzes residual scaling in looped weight-tied Transformers, showing that correlated shared-block updates require stronger 1/N residual scaling across loop count and enable hyperparameter transfer from small to large recurrent depths.
+[05/30/2026] Looped Transformers with Layer Normalization Provably Learn the Power Method | arxiv:2606.00605 | flat-loop | Lyumin Wu, Chenyang Zhang, Yuan Cao · 2026
+    Proves that a looped linear transformer with layer normalization, trained only for principal component prediction, converges to a solution implementing the power method, with each self-attention layer performing one power iteration.
+[05/29/2026] Chain-of-Thought and Compressed Looped Transformers: A Memory-Budget Separation | arxiv:2605.30757 | flat-loop | Haozhou Zhang · 2026
+    Shows that compressed looped Transformers remain bounded by their persistent recurrent-state budget even with more loop steps, while full sequence-state loops occupy a memory-richer regime closer to chain-of-thought scratchpads.
+[05/20/2026] Interaction Locality in Hierarchical Recursive Reasoning | arxiv:2605.20784 | hierarchical-loop · flat-loop | Yosuke Miyanishi, Tetsuro Morimura · 2026
+    Proposes interaction locality as a mechanistic measurement framework for HRM and TRM, showing how repeated recursive updates accumulate local writes into broader solution structure on grid reasoning benchmarks.
+[05/18/2026] One Model, Two Roles: Emergent Specialization in a Shared Recurrent Transformer | arxiv:2605.17811 | flat-loop · hierarchical-loop | Jucheng Shen, Barbara Su, Anastasios Kyrillidis · 2026
+    Analyzes Asymmetric Input Recurrence, a two-state shared-weight recurrent Transformer where the same model updates L/H states, showing that state identity and input-injection asymmetry induce distinct proposal-vs-uncertainty roles on Sudoku-Extreme and Maze.
+[05/08/2026] Bifurcation Models: Learning Set-Valued Solution Maps with Weight-Tied Dynamics | arxiv:2605.07277 | flat-loop · implicit-layer | Caleb Jore, Jialin Liu · 2026
+    Studies weight-tied dynamics for set-valued solution maps, proving that regular equilibrium dynamics can represent multiple branches; experiments discover multiple low-energy Ising equilibria, while Allen-Cahn requires explicit diversity promotion and exhibits an accuracy-diversity tradeoff.
+[05/07/2026] Is One Layer Enough? Understanding Inference Dynamics in Tabular Foundation Models | arxiv:2605.06510 | flat-loop | Amir Rezaei Balef, Mykhailo Koshil, Katharina Eggensperger ·
+    Analyzes layerwise inference dynamics in tabular foundation models and uses the observed depth redundancy to build a looped single-layer model that preserves comparable performance with about 20% of the original parameters.
+[05/07/2026] Transformers Efficiently Perform In-Context Logistic Regression via Normalized Gradient Descent | arxiv:2605.06609 | flat-loop | Chenyang Zhang, Yuan Cao · 2026
+    Proves that softmax transformers can implement in-context logistic regression by treating layers as normalized-gradient-descent steps, then trains one self-attention layer and applies it recurrently as a looped model with convergence and OOD guarantees.
+[04/28/2026] On Halting vs Converging in Recurrent Graph Neural Networks | arxiv:2604.25551 | flat-loop | Jeroen Bollen, Stijn Vansummeren · 2026
+    Analyzes recurrent graph neural networks that repeatedly apply message passing until convergence or halting, proving expressiveness relationships between converging, output-converging, and halting RGNN variants.
+[04/23/2026] Universal Transformers Need Memory: Depth-State Trade-offs in Adaptive Recursive Reasoning | arxiv:2604.21999 | flat-loop | Grigory Sapunov · 2026
+    Studies a single-block Universal Transformer with ACT on Sudoku-Extreme, showing that learned memory tokens are necessary for non-trivial recursive-depth reasoning and that ACT initialization can trap the model in shallow computation.
+[04/22/2026] How Much Is One Recurrence Worth? Iso-Depth Scaling Laws for Looped Language Models | arxiv:2604.21106 | flat-loop | Kristian Schwethelm, Daniel Rueckert, Georgios Kaissis · 202
+    Measures the parameter value of recurrence in looped language models with iso-depth scaling laws, estimating how extra recurrent passes trade off against unique depth and training compute.
+[04/16/2026] Stability and Generalization in Looped Transformers | arxiv:2604.15259 | flat-loop | Asher Labovich · 2026
+    Analyzes stability and generalization in looped transformers through a fixed-point framework, characterizing when recall and normalization yield reachable, input-dependent, and trainable loop dynamics.
+[04/15/2026] Hierarchical vs. Flat Iteration in Shared-Weight Transformers | arxiv:2604.14442 | flat-loop · hierarchical-loop | Sang-Il Han · 2026
+    Empirically compares two-speed hierarchical shared-weight recurrence with flat shared-weight iteration and independent-layer Transformers, finding a robust 3.4-nat validation-CE advantage over a parameter-matched Universal Transformer while reporting caveats for the independent-layer comparisons.
+[04/13/2026] A Mechanistic Analysis of Looped Reasoning Language Models | arxiv:2604.11791 | flat-loop | Hugh Blayney, Álvaro Arroyo, Johan Obando-Ceron, Pablo Samue
+    Mechanistically analyzes explicit cyclic recurrence in looped language models, finding that many studied models approach layer-specific cyclic fixed points and that recurrent blocks repeatedly reproduce feedforward-like stages of inference, while also documenting non-convergent cases.
+[04/10/2026] Relational Preference Encoding in Looped Transformer Internal States | arxiv:2604.09870 | flat-loop | Jan Kirin · 2026
+    Probes frozen Ouro loop states with lightweight evaluators on HH-RLHF, finding that preference labels are primarily decodable from pairwise state differences; the authors frame this as an internal-consistency probe of Ouro's learned value organization rather than direct prediction of noisy human annotations.
+[04/09/2026] Loop, Think, & Generalize: Implicit Reasoning in Recurrent-Depth Transformers | arxiv:2604.07822 | flat-loop | Harsh Kohli, Srinivasan Parthasarathy, Huan Sun, Yuekun Yao 
+    Studies implicit reasoning in recurrent-depth transformers, showing that iterating shared transformer layers can unlock systematic generalization and depth extrapolation while also exposing overthinking limits.
+[03/09/2026] Tiny Autoregressive Recursive Models | arxiv:2603.08082 | hierarchical-loop · flat-loop | Paulius Rauba, Claudio Fanconi, Mihaela van der Schaar · 202
+    Studies compute placement in autoregressive Transformers under matched block-pass budgets, finding that untied depth and flat two-stream recurrence perform best on small character-level algorithmic tasks while the full Autoregressive TRM provides no consistent benefit.
+[02/09/2026] Understanding Dynamic Compute Allocation in Recurrent Transformers | arxiv:2602.08864 | flat-loop | Ibraheem Muhammad Moosa, Suhas Lohit, Ye Wang, Moitreya Chat
+    Uses ANIRA as a controlled recurrent-Transformer framework to study per-token variable-depth computation, showing that adaptive compute can align with token complexity while failing to extrapolate to longer algorithmic inputs.
+[02/05/2026] On the Role of Computation in Reinforcement Learning | arxiv:2602.05999 | flat-loop | Raj Ghugare, Michał Bortkiewicz, Alicja Ziarko, Benjamin Eys
+    Formalizes compute-bounded RL policies and introduces a minimal variable-compute architecture, showing that extra iterative computation improves performance and longer-horizon generalization across 31 online and offline RL tasks.
+[09/27/2025] Two-Scale Latent Dynamics for Recurrent-Depth Transformers | arxiv:2509.23314 | flat-loop | Francesco Pappone, Donato Crisostomi, Emanuele Rodolà · 2025
+    Analyzes recurrent-depth transformers through a two-scale latent-dynamics lens, showing shrinking and increasingly orthogonal loop updates and deriving a second-order early-exit criterion that improves latency-quality trade-offs.
+[07/02/2025] Latent Chain-of-Thought? Decoding the Depth-Recurrent Transformer | arxiv:2507.02199 | flat-loop | Wenquan Lu, Yuechuan Yang, Kyle Lee, Yanshu Li, Enqi Liu · C
+    Probes a depth-recurrent Transformer to test whether latent chain-of-thought structure emerges across recurrence steps, finding limited evidence and recurrence-depth-dependent interpretability effects.
+[02/24/2025] Reasoning with Latent Thoughts: On the Power of Looped Transformers | arxiv:2502.17416 | flat-loop | Nikunj Saunshi, Nishanth Dikkala, Zhiyuan Li, Sanjiv Kumar, 
+    Studies looped transformers as reasoning models, showing effective-depth scaling, latent-thought simulation of chain-of-thought, and a looping-based regularizer that improves the reasoning-versus-memorization trade-off.
+[10/29/2024] On the Role of Depth and Looping for In-Context Learning with Task Diversity | arxiv:2410.21698 | flat-loop | Khashayar Gatmiry, Nikunj Saunshi, Sashank J. Reddi, Stefani
+    Analyzes depth for diverse in-context linear-regression tasks, proving matching expressivity for looped Transformers together with stronger distribution-shift robustness and monotonic loss across depth.
+[10/15/2024] Bypassing the Exponential Dependency: Looped Transformers Efficiently Learn In-context by Multi-step Gradient Descent | arxiv:2410.11268 | flat-loop | Bo Chen, Xiaoyu Li, Yingyu Liang, Zhenmei Shi, Zhao Song · A
+    Shows that linear looped Transformers can implement multi-step gradient descent for in-context learning without an exponential dependence of sample size on the number of loops under well-conditioned data.
+[10/02/2024] On Expressive Power of Looped Transformers: Theoretical Analysis and Enhancement via Timestep Encoding | arxiv:2410.01405 | flat-loop | Kevin Xu, Issei Sato · ICML 2025
+    Derives approximation-rate bounds and an architecture-specific limitation for looped Transformers, then introduces the Timestep-Modulated Looped Transformer (TMLT) to condition per-loop scaling parameters on timestep encodings.
+[07/08/2024] Can Looped Transformers Learn to Implement Multi-step Gradient Descent for In-context Learning? | arxiv:2410.08292 | flat-loop | Khashayar Gatmiry, Nikunj Saunshi, Sashank J. Reddi, Stefani
+    Proves that trained linear looped Transformers can learn multi-step preconditioned gradient descent for in-context linear regression and establishes convergence of gradient flow to such solutions.
+[02/02/2024] Simulation of Graph Algorithms with Looped Transformers | arxiv:2402.01107 | flat-loop | Artur Back de Luca, Kimon Fountoulakis · ICML 2024
+    Constructs looped Transformers that simulate major graph algorithms, establishes constant-width Turing completeness, and identifies a finite-precision limit of the construction.
+[01/30/2023] Looped Transformers as Programmable Computers | arxiv:2301.13196 | flat-loop | Angeliki Giannou, Shashank Rajput, Jy-yong Sohn, Kangwook Le
+    Constructs a constant-depth looped Transformer that executes one instruction per cycle, using an in-state program counter and reusable instruction blocks to emulate a general-purpose computer, linear algebra routines, and in-context SGD.
+[11/18/2022] Path Independent Equilibrium Models Can Better Exploit Test-Time Computation | arxiv:2211.09961 | implicit-layer | Cem Anil, Ashwini Pokle, Kaiqu Liang, Johannes Treutlein, Yu
+    Links equilibrium models' ability to benefit from additional inference iterations to path independence and shows that promoting it improves upward generalization.
+[06/08/2021] Can You Learn an Algorithm? Generalizing from Easy to Hard Problems with Recurrent Networks | arxiv:2106.04537 | flat-loop | Avi Schwarzschild, Eitan Borgnia, Arjun Gupta, Furong Huang,
+    Shows that recurrent residual networks trained on easy prefix-sum, maze, and chess tasks can solve harder instances by applying their shared block for more iterations at test time.
+
+=== Architecture and Algorithm Designs ===
+[09/10/2026] LoopVAE: Recurrent Depth Across Scales for Visual Tokenization | arxiv:2609.11516 | hierarchical-loop · flat-loop | Zhiying Lu · 2026
+    Reuses separate four-block encoder and decoder cores within and across spatial scales, executing 28 shared-core block applications per branch to reduce stored VAE parameters while exposing higher arithmetic and latency costs.
+[09/10/2026] Thinking with Looped Flows | arxiv:2609.11801 | flat-loop | Ayhan Suleymanzade, Chanhyuk Lee, Floor Eijkelboom, Nicholas
+    Trains a TRM-based shared recurrent network with temporally aligned local denoising objectives, then couples its stateful denoiser to probability-flow integration for scalable and diverse reasoning.
+[09/09/2026] Looped GPT-BERT: Trading Parameters for Computation in Small Language Modeling | arxiv:2609.09691 | flat-loop | Tingshuo Fan, Hongtao Mu, Tianyu Zhou, Hansen Liu, Tao Ji · 
+    Combines GPT-BERT's hybrid causal and masked objectives with a four-layer Transformer stack reused across twelve recurrent traversals, trading parameters for recurrent compute in small-data language modeling.
+[09/06/2026] Reason Through the Latent! Making Latent Visual Reasoning Necessary | arxiv:2609.06746 | flat-loop | Suhyeong Park, Junha Jung, Jaewoo Kang · 2026
+    Reuses one decoder layer and shared LoRA parameters for recurrent visual reasoning, repeatedly re-reading fixed visual evidence while making the final recurrent state the only image-conditioned path to prediction.
+[09/05/2026] DART: Distributional Adversarial Recurrent Training for Algorithm Learning | arxiv:2609.05988 | flat-loop | Hieu Tran Bao, Phung Thanh Dang, Pham Quang Nhat Minh, Hoang
+    Replaces point targets with a local target distribution and adversarial critic for recurrent reasoning models, improving stability and out-of-distribution accuracy on Maze, Chess, and masked Sudoku.
+[09/03/2026] Free Pause Tokens | arxiv:2609.03807 | parallel-loop | John Langford, Nathan Godey, Giovanni Monea, Yoav Artzi, Har
+    Introduces a parallel prediction stream that shares every Transformer backbone weight and reads the state stream's per-layer KV states, improving 1B next-token loss with essentially unchanged decode latency.
+[09/03/2026] RecurTrace: Adaptive Latent Reasoning with Loop-Time Memory | arxiv:2609.03379 | flat-loop | Yuxiang Wang, Kunyu Feng, Yingda Shen, Haoning Xu, Junyu Wan
+    Adds loop-time attention over prior iteration states and oracle-distilled adaptive halting to a fully weight-tied recurrent Qwen3 block, improving matched-compute reasoning across 0.6B-8B models.
+[09/02/2026] ProgResViT: Progressive Resolution and Width for Adaptive Vision Transformers | arxiv:2609.03216 | flat-loop | Ali Hojjat, Janek Haberer, Olaf Landsiedel · 2026
+    Reuses the same ViT blocks across confidence-routed resolution-and-width rounds, projecting earlier representations into later rounds to retain accuracy while reducing average ImageNet compute by up to 31.1%.
+[09/01/2026] Latent Recurrent Thoughts: Recurrent Refinement of Proposed Latents for Reasoning with Frozen LLMs | arxiv:2609.01117 | flat-loop | Zhaoliang Chen, Jie Fu · 2026
+    Pairs a task-specific latent proposer with a tiny TRM-style recurrent refiner that repeatedly applies one learned transition block before a frozen LLM decodes the answer.
+[09/01/2026] SMELT: Scaling Laws for Compute-Matched MoE Looped Transformers | arxiv:2609.01343 | flat-loop | Shaowen Wang, Ge Zhang, Kairong Luo, Yuhao Wu, Shaofan Liu, 
+    Introduces a compute-matched sparse MoE Transformer that applies the same middle half of its layers twice, showing improved scaling and downstream performance without increasing per-token FLOPs, non-embedding parameters, or KV-cache size.
+[08/31/2026] Universal Transformers for Circuit Computations: Perfect Length Generalization in Tiny Transformers | arxiv:2608.31067 | flat-loop | Takuya Ito, Ruchir Puri, Murray Campbell, Parikshit Ram · 20
+    Introduces a compact Universal Transformer that repeatedly applies one learned circuit-reduction step with autonomous depth-based halting, enabling exact generalization to much deeper symbolic expressions.
+[08/27/2026] Squeezing More from Limited Data with Recursive Transformers | arxiv:2608.26973 | flat-loop | Serdar Gülbahar, Lukas Edman, Alexander Fraser · 2026
+    Introduces RecursiveGPT, reusing one causal Transformer block across fixed recurrent depth with factorized embeddings to scale per-token compute without proportionally increasing parameters under limited-data pretraining.
+[08/25/2026] Steering Recurrent Reasoners at Inference Time with Readout Feedback | arxiv:2608.24136 | flat-loop | Shunsuke Kamiya, Masanori Koyama, Seongcheol Jeong, Fumiya U
+    Introduces Readout Feedback, which converts intermediate predictions into coupling forces that steer the shared-block latent dynamics of recurrent reasoners at test time without retraining.
+[08/24/2026] Response Renormalization for Critical Deep Equilibrium Models | arxiv:2608.23725 | implicit-layer | Jose Luis Lima de Jesus Silva · 2026
+    Introduces response-renormalized implicit differentiation for critical deep equilibrium models, selectively controlling near-singular adjoint amplification while preserving well-conditioned gradient channels.
+[08/20/2026] SABET-QA: Temporal Knowledge Graph Question Answering | arxiv:2608.20083 | flat-loop | Brahim Touayouch, Mirette Moawad, Dmitry Akulov · 2026
+    Introduces SABET-QA, which iteratively refines temporal knowledge-graph reasoning states across four hops using a shared learned working-memory update, bidirectional entity/time scoring, and adaptive hop aggregation.
+[08/18/2026] Allocating Recurrent Compute in Looped Language Models | arxiv:2608.18230 | flat-loop | Ruhai Lin, Yiyang Guo, Rui-Jie Zhu, Hao Ye, Jason K. Eshragh
+    Introduces MixerLoop, which repeatedly applies each shared Gated DeltaNet token mixer while executing its dense FFN once, preserving recurrent-depth benefits with lower projection cost and higher prefill throughput.
+[08/18/2026] Recirculation | arxiv:2608.17981 | flat-loop | Michael C. Mozer, Shoaib Ahmed Siddiqui, Danny Sawyer, Sunny
+    Feeds a mixture of deep-layer activations back into shallower layers while reusing the same frozen Transformer stack, enabling training-free recurrent state tracking with an adaptive inference-time variant.
+[08/15/2026] RecurrentGPT: Expressive Depth through Recurrent Modulation in Transformers | arxiv:2608.15062 | flat-loop | Amr Hegazy, Amr Alanwar, Mostafa Elhoushi · 2026
+    Introduces a prelude-shared-coda recurrent Transformer whose gated shared core is iterated across depth, matching a 12-layer GPT-2 Small with three distinct layers under isoFLOPS while reducing large-scale parameters by 63% and peak decoding memory by 59%.
+[08/11/2026] ODE-Based Transformer Decoders for Iterative Sign Language Translation | arxiv:2608.11352 | hierarchical-loop · flat-loop | Tuğçe Kızıltepe, Hacer Yalim Keles · ACVR Workshop @ ECCV 20
+    Replaces residual updates in an iterative sign-language translation decoder with ODE-inspired RK-2 and RK-4 updates that repeatedly evaluate the same learned decoder function without adding decoder parameters.
+[08/10/2026] Depth-adaptive Inference of Looped Language Models via Continuous Depth Batching | arxiv:2608.09444 | flat-loop | Kristian Schwethelm, Daniel Rueckert, Georgios Kaissis · 202
+    Introduces continuous depth batching for looped language models, scheduling shared-block loop iterations and boundary stages separately so adaptive-depth inference can realize most of its theoretical speed-up.
+[08/09/2026] Full-bandwidth transformer | arxiv:2608.08888 | - | Xi Wang, Ziyang Cai, Zheng Zhan, Harry Dong, Ying Fan, Gusta
+    Feeds each decoding step's top-layer hidden state back through a learned gate at the bottom of the same Transformer stack, widening autoregressive feedback from a sampled token to a full latent state.
+[08/08/2026] Think Deep, Speak Once: ReLIT, A Recursive Latent Implicit Transformer Framework | arxiv:2608.08113 | hierarchical-loop · flat-loop | Abhishek Panwar, Maheep Singh, Saksham Bansal · 2026
+    Adds a lightweight trainable recursive latent block to a frozen LLM backbone, repeatedly refining latent thinking states before committing to a final answer.
+[08/04/2026] LoopMTP: A looped transformer guided by latent multi-token prediction | arxiv:2608.03624 | flat-loop | Behzad Shomali, Markus Frey, David Berghaus, Joachim Koehler
+    Guides each reuse of a shared Transformer stack with a soft multi-token alignment target, then learns to aggregate intermediate loop states to reduce redundant computation and latent overthinking.
+[07/31/2026] Retrofitting Recurrent Depth into a Pretrained Language Model: Installation, Extrapolation, Transfer, and Retention at Two Parameter Budgets | arxiv:2608.11233 | flat-loop | Mark Shapiro · 2026
+    Retrofits Qwen2.5-0.5B with a weight-tied recurrent middle block and re-entry bridge, installing iterative latent computation at full-block and frozen-base adapter training budgets.
+[07/31/2026] SILVA Networks as Structured Implicit Layers and Vector Attractors via Dynamic Interaction Fields | arxiv:2607.28989 | flat-loop · implicit-layer | Jose Luis Lima de Jesus Silva · 2026
+    Introduces SILVA Networks as structured implicit layers, separating stimulus, local interaction, global interaction, damping, and readout inside trainable fixed-point dynamics.
+[07/30/2026] Looped Transformers with Source-Centered State Evolution | arxiv:2607.27656 | flat-loop | Bum Jun Kim, Kohei Hayashi, Shunsuke Kamiya, Masanori Koyama
+    Introduces Source-Centered State Evolution for looped Transformers, preserving an input-conditioned anchor while allowing a shared recurrent block to drive state-dependent computation across loop depth.
+[07/30/2026] ReLoop-UME: Recurrent Depth with Learnable Retrieval Registers for Universal Multimodal Embedding | arxiv:2607.28751 | flat-loop | Shijie Wang, Xiangzhao Hao, Yueti Li, Guangyu Cao, Xinyu Tan
+    Applies recurrent-depth block reuse to universal multimodal embedding, using learnable retrieval registers to accumulate evidence across loops before producing the final embedding.
+[07/17/2026] Loop the Loopies! | arxiv:2607.16051 | flat-loop | Zitian Gao, Yilong Chen, Yihao Xiao, Xinyu Yang, Ran Tao, Jo
+    Introduces the Loopie MoE looped Transformer series, arguing that repeated reuse of compact Transformer blocks can outperform compute-matched vanilla Transformer baselines and support strong post-trained reasoning.
+[07/16/2026] Looped Latent Attention: Cross-Loop KV Compression for Looped Transformers | arxiv:2607.15456 | flat-loop | James O' Neill, Fergal Reid · 2026
+    Introduces Looped Latent Attention, a cross-loop KV-cache compression method that exploits low-rank recurrence structure in looped, weight-tied Transformers without collapsing all loops into one state.
+[07/15/2026] DeepLoop: Depth Scaling for Looped Transformers | arxiv:2607.13491 | hierarchical-loop · flat-loop | Shuzhen Li, Yifan Zhang, Jiacheng Guo, Quanquan Gu, Mengdi W
+    Studies depth scaling in looped Transformers, showing how residual scaling can stabilize repeated use of compact physical blocks across many recurrent rounds.
+[07/14/2026] RecRec: Latent Interests Recursive Reasoning for Sequential Recommendation | arxiv:2607.12945 | hierarchical-loop · flat-loop | Wenhao Deng, Junchen Fu, Hanwen Du, Alexandros Karatzoglou, 
+    Applies recursive latent-interest refinement to sequential recommendation, using adjustable-depth reasoning over compact user-interest state before prediction.
+[07/12/2026] RecRec: Recursive Refinement for Sequential Recommendation | arxiv:2607.10541 | hierarchical-loop · flat-loop | Pervez Shaik, Prosenjit Biswas, Abhinav Thorat, Ravi Kolla, 
+    Builds a recursive refinement recommender that repeatedly updates a compact latent state through a shared module conditioned on interaction evidence.
+[07/11/2026] Looped State-Space Language Models with Adaptive Exit-State Selection | arxiv:2607.10110 | flat-loop | Zhenxuan Yu, Takeshi Kojima, Yutaka Matsuo, Yusuke Iwasawa ·
+    Introduces looped state-space language models that repeatedly apply shared Mamba or hybrid Mamba-Transformer blocks and select among exit states for adaptive inference.
+[07/07/2026] RSF-GLLM: Bridging the Semantic Gap in Multi-Hop Knowledge Graph QA via Recurrent Soft-Flow and Decoupled LLM Generation | arxiv:2607.06527 | flat-loop | Sambaran Bandyopadhyay, Ananth Muppidi · ICML 2026
+    Introduces a GRU-guided Recurrent Soft-Flow module that repeatedly updates query state and propagates relevance over a knowledge graph, then textualizes the resulting paths for grounded LLM answer generation.
+[07/02/2026] Polymorphic Universal Transformer | arxiv:- | flat-loop | Yilong Chen, Zitian Gao, Yihao Xiao, Jason Klein Liu, Xinyu 
+    Introduces the Polymorphic Universal Transformer, adding conditional sparse subspaces and uncertainty-aware depth scheduling to shared-parameter recurrence to reduce compute while mitigating representational collapse.
+[07/01/2026] DiscoLoop: Looping Discrete Embeddings and Continuous Hidden States for Multi-hop Reasoning | arxiv:2607.00341 | flat-loop | Hengyu Fu, Tianyu Guo, Zixuan Wang, Hanlin Zhu, Jason D. Lee
+    Introduces DiscoLoop, a looping architecture for multi-hop reasoning that carries both discrete embedding and continuous hidden-state channels across recurrent loop steps, improving generalization and training efficiency over looped-transformer baselines.
+[07/01/2026] Soft Mixture-of-Recursions: Going Deeper with Recursive Vision Transformers | arxiv:2607.00774 | flat-loop | Sang In Lee, Jihun Park · 2026
+    Introduces SoftMoR and SR-ViT, learning token-wise mixtures over outputs from repeated applications of a shared Vision Transformer block so greater recursive depth improves accuracy with little parameter growth.
+[06/30/2026] Bridging the Gap Between Latent and Explicit Reasoning with Looped Transformers | arxiv:2606.31779 | flat-loop | Ying Fan, Anej Svete, Kangwook Lee · 2026
+    Introduces LOTUS, a looped padded Transformer that reuses recurrent-depth weights for parallel latent chain-of-thought blocks, matching explicit CoT at 3B scale while reducing thought-phase latency.
+[06/30/2026] CHERRY: Compressed Hierarchical Experts with Recurrent Representational Yield | arxiv:2606.31796 | flat-loop | Dohyeon Kwon, Youngjin Park · 2026
+    Compresses a 48-layer language Transformer to 6 layers and restores depth through learned recurrent unrolling, then combines compressed recurrent models as efficient experts.
+[06/29/2026] Stabilizing Extrapolation in Looped Transformers via Learned Stochastic Stopping | arxiv:2606.29983 | flat-loop | Hsun-Yu Kuo, El Mahdi Chayti, Patrik Reizinger, Wieland Bren
+    Studies looped Transformers that repeatedly apply a shared Transformer block, showing that stochastic training-time loop counts and learned stochastic stopping can reduce out-of-distribution variance across inference loop counts on algorithmic sequence tasks.
+[06/21/2026] Adaptive Recurrent Message Passing for Test Time Computing on Graphs | arxiv:2606.22462 | flat-loop | Junshu Sun, Wanxing Chang, Qingming Huang, Shuhui Wang · ICM
+    Introduces AdaR, an adaptive recurrent graph model that repeatedly applies learned recurrent message-passing updates with step conditioning, enabling flexible test-time compute on graph tasks without changing model parameters.
+[06/16/2026] Fixed-Point Reasoners: Stable and Adaptive Deep Looped Transformers | arxiv:2606.18206 | flat-loop · implicit-layer | Sajad Movahedi, Vera Milovanović, Shlomo Libo Feigin, Alexan
+    Introduces FPRM, a Transformer-based Fixed-Point Reasoning Model that repeatedly applies a looped reasoning block and uses fixed-point convergence as an end-to-end halting signal, adapting test-time compute to task difficulty on Sudoku, Maze, state-tracking, and ARC-AGI benchmarks.
+[06/16/2026] LoopCoder-v2: Only Loop Once for Efficient Test-Time Computation Scaling | arxiv:2606.18023 | flat-loop · parallel-loop | Jian Yang, Shawn Guo, Wei Zhang, Tianyu Zheng, Yaxin Du, Haa
+    Studies loop-count selection in Parallel Loop Transformers by training LoopCoder-v2 coder models with shared looped blocks, finding that two loops give the main productive refinement while additional loops regress under cross-loop positional mismatch.
+[06/16/2026] Looped World Models | arxiv:2606.18208 | flat-loop | Hongyuan Adam Lu, Z.L. Victor Wei, Qun Zhang, Jinrui Zeng, B
+    Introduces LoopWM, a world-model architecture that iteratively refines latent environment states through a parameter-shared Transformer block, using adaptive computation to scale latent depth per prediction step and reporting up to 100x parameter efficiency over conventional approaches.
+[06/05/2026] Edge-RecViT: Efficient Vision Transformer via Semantic-Refined Dynamic Recursion | arxiv:- | flat-loop | YiZhou Li, Jinyi Xu, Mingyu Yin, Xianyi Zhao · CVPR 2026
+    Introduces Edge-RecViT, combining a fully shared recursive ViT hidden layer with an edge-aware token ranker that allocates per-token depth and early exits for parameter- and FLOP-efficient vision.
+[06/04/2026] Skip a Layer or Loop It? Learning Program-of-Layers in LLMs | arxiv:2606.06574 | flat-loop | Ziyue Li, Yang Li, Tianyi Zhou · ICML 2026
+    Learns input-specific programs over pretrained LLM layers, allowing layers to be skipped or repeated so inference can use shorter or looped execution paths than the fixed-depth baseline.
+[06/03/2026] LoopMoE: Unifying Iterative Computation with Mixture-of-Experts for Language Modeling | arxiv:2606.04438 | flat-loop | Wenkai Chen, Tianshu Li, Wenyong Huang, Yichun Yin, Lifeng S
+    Introduces LoopMoE, a looped mixture-of-experts language model that combines sparse routing with iterative weight-shared computation through iteration-conditioned modulation and capacity balancing.
+[06/02/2026] When to Re-Plan: Subgoal Persistence in Hierarchical Latent Reasoning | arxiv:2606.03741 | hierarchical-loop | Ayushi Chadha · CompLearn Workshop @ ICML 2026
+    Extends hierarchical latent reasoning with a slow manager module whose directional subgoal persists across several low-level hidden-state update steps, making subgoal duration a central design knob.
+[05/31/2026] CART: Context-Anchored Recurrent Transformer -- A Parameter-Efficient Architecture with Learned Stability | arxiv:2606.01495 | flat-loop | Chad A. Capps · 2026
+    Introduces a compact language model that reuses a single shared transformer core across depth while anchoring recurrence to precomputed key-value tensors and reports a mostly negative parameter-parity result against dense baselines.
+[05/29/2026] Fixed-Point Masked Generative Modeling | arxiv:2605.31215 | implicit-layer | Andrea Miele, Yiming Qin, Alba Carballo-Castro, Justin Desch
+    Replaces part of a masked generative model denoiser with a fixed-point solver over shared attention layers, using consistency training and solver-state reuse to adapt depth with fewer parameters.
+[05/27/2026] CosmicFish-HRM: Adaptive Reasoning via Hierarchical Recurrent Mechanisms in Compact Language Models | arxiv:2605.28919 | hierarchical-loop | Venkat Akhil Lakkapragada · 2026
+    Explores a compact autoregressive language model with a Hierarchical Reasoning Module that iterates through high-level and low-level reasoning cycles and learns input-dependent halting behavior for adaptive reasoning depth.
+[05/26/2026] Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models | arxiv:2605.26733 | flat-loop | Xiao-Wen Yang, Ziyu Han, Xi-Hua Zhang, Wen-Da Wei, Jie-Jing 
+    Diagnoses why Looped Language Models can collapse at larger recurrence depths and proposes STARS, which combines Jacobian spectral-radius regularization with random loop sampling to encourage stable recurrent dynamics and improve test-time scaling.
+[05/25/2026] Looped Diffusion Language Models | arxiv:2605.26106 | flat-loop | Sanghyun Lee, Chunsan Hong, Seungryong Kim, Jonghyun Lee, Jo
+    Introduces LoopMDM, selectively looping early-middle transformer layers in masked diffusion language models so training gains depth-scaling without extra parameters and inference can vary loop count for compute scaling.
+[05/22/2026] Training-Free Looped Transformers | arxiv:2605.23872 | flat-loop | Lizhang Chen, Jonathan Li, Chen Liang, Ni Lao, Qiang Liu · 2
+    Retrofits frozen pretrained transformers with a training-free inference wrapper that repeatedly applies a contiguous mid-stack layer block as damped refinement sub-steps, improving several QA and reasoning benchmarks without fine-tuning.
+[05/20/2026] Equilibrium Reasoners: Learning Attractors Enables Scalable Reasoning | arxiv:2605.21488 | hierarchical-loop · flat-loop | Benhao Huang, Zhengyang Geng, Zico Kolter · ICML 2026
+    Introduces Equilibrium Reasoners as explicitly unrolled, weight-tied latent dynamics trained to shape solution-aligned attractor landscapes, with test-time scaling through more recurrent iterations and independent randomized restarts.
+[05/20/2026] HRM-Text: Efficient Pretraining Beyond Scaling | arxiv:2605.20613 | hierarchical-loop · flat-loop | Guan Wang, Changling Liu, Chenyu Wang, Cai Zhou, Yuhao Sun, 
+    Introduces HRM-Text, a 1B Hierarchical Recurrent Model language model that combines dual-timescale recurrent Transformer modules with MagicNorm, warmup deep credit assignment, PrefixLM masking, and task-completion pretraining for efficient training from 40B unique tokens.
+[05/20/2026] LT2: Linear-Time Looped Transformers | arxiv:2605.20670 | flat-loop | Chunyuan Deng, Yizhe Zhang, Rui-Jie Zhu, Yuanyuan Xu, Jiarui
+    Introduces LT2, a looped-transformer family that replaces quadratic attention with linear or sparse attention so repeated loop steps refine memory and expand receptive field while keeping inference more scalable.
+[05/19/2026] Generative Recursive Reasoning | arxiv:2605.19376 | hierarchical-loop · flat-loop | Junyeob Baek, Mingyu Jo, Minsu Kim, Mengye Ren, Yoshua Bengi
+    Introduces GRAM, a probabilistic recursive-reasoning framework that models reasoning as stochastic latent trajectories, enabling multi-hypothesis computation, variational training, and inference-time scaling through depth and parallel sampling.
+[05/19/2026] Probabilistic Tiny Recursive Model | arxiv:2605.19943 | flat-loop | Amin Sghaier, Ali Parviz, Alexia Jolicoeur-Martineau · 2026
+    Introduces PTRM, an inference-time scaling framework for Tiny Recursive Models that injects Gaussian noise into recursive latent updates, runs parallel trajectories, and selects the final answer with the model's Q head without retraining.
+[05/15/2026] Looped SSMs: Depth-Recurrence and Input Reshaping for Time Series Classification | arxiv:2605.16048 | flat-loop | Mónika Farsang, Ramin Hasani, Daniela Rus, Radu Grosu · 2026
+    Extends looped-transformer depth recurrence to state-space models by reusing the same SSM block across depth and adding input reshaping, showing tied-depth SSMs match or beat untied SSMs on six time-series benchmarks despite fewer parameters.
+[05/12/2026] Solve the Loop: Attractor Models for Language and Reasoning | arxiv:2605.12466 | flat-loop · implicit-layer | Jacob Fein-Ashley, Paria Rashidinejad · 2026
+    Introduces Attractor Models, where a backbone proposes output embeddings and an attractor module iteratively solves a fixed point with implicit differentiation, improving looped language modeling and small-model reasoning while allowing adaptive convergence-depth inference.
+[05/11/2026] Simply Stabilizing the Loop via Fully Looped Transformer | arxiv:2605.18797 | flat-loop | Rao Fu, Zixuan Yang, Jiankun Zhang, Jing Ma, Hechang Chen, Y
+    Stabilizes looped transformers with parameter-free fully looped signal routing and attention injection, enabling stable training at higher loop counts while preserving test-time loop-depth control.
+[05/10/2026] LoopUS: Recasting Pretrained LLMs into Looped Latent Refinement Models | arxiv:2605.11011 | flat-loop | Taekhyun Park, Yongjae Lee, Dohee Kim, Hyerim Bae · 2026
+    Converts pretrained LLMs into encoder, looped reasoning block, and decoder components, using selective gating, random deep supervision, and adaptive early exiting to stabilize latent looping without training recurrent models from scratch.
+[05/09/2026] Quantum Injection Pathways for Implicit Graph Neural Networks | arxiv:2605.09226 | implicit-layer | Pengyuan Xu, Tristan Zaborniak, Luis F. Rivera, Hausi A. Mül
+    Formulates quantum-signal injection pathways for graph deep-equilibrium models, comparing fixed, state-dependent, and backbone-dependent coupling inside the fixed-point operator with contraction guarantees and graph-classification experiments.
+[05/09/2026] Sparse Layers are Critical to Scaling Looped Language Models | arxiv:2605.09165 | flat-loop | Ryan Lee, Jacob Biloki, Edward J. Hu, Jonathan May · 2026
+    Shows that MoE-style sparse layers can make looped language models scale better than dense looped transformers, with routing divergence across repeated shared layers recovering expressivity and loop boundaries serving as effective early-exit points.
+[05/08/2026] LoopQ: Quantization for Recursive Transformers | arxiv:2605.16343 | flat-loop | Rui Fang, Hsi-Wen Chen, Ming-Syan Chen · 2026
+    Introduces LoopQ, a loop-aware post-training quantization framework that preserves a shared quantized backbone while correcting role shifts, cross-loop state mismatch, and recursive quantization-error accumulation.
+[05/08/2026] Memory-Efficient Looped Transformer: Decoupling Compute from Memory in Looped Language Models | arxiv:2605.07721 | flat-loop | Victor Conchello Vendrell, Arnau Padres Masdemont, Niccolò G
+    Introduces MELT, which maintains one fixed-size KV cache per layer across recurrent reasoning loops, updates it through learned gating, and adapts pretrained Ouro models with chunk-wise two-phase training to keep cache memory independent of loop depth.
+[05/05/2026] RD-ViT: Recurrent-Depth Vision Transformer for Semantic Segmentation with Reduced Data Dependence Extending the Recurrent-Depth Transformer Architecture to Dense Prediction | arxiv:2605.03999 | flat-loop | Renjie He · 2026
+    Introduces RD-ViT, looping one shared Transformer block for dense 2D and 3D segmentation with stable input injection, adaptive halting, depth-wise LoRA, and optional MoE specialization.
+[05/02/2026] Visual Implicit Autoregressive Modeling | arxiv:2605.01220 | implicit-layer | Pengfei Jiang, Jixiang Luo, Luxi Lin, Zhaohong Huang, Xuelon
+    Introduces VIAR, replacing the deep middle stack of a visual autoregressive generator with an implicit equilibrium layer trained by Jacobian-Free Backpropagation and controlled by per-scale iteration budgets at inference.
+[04/23/2026] Hyperloop Transformers | arxiv:2604.21254 | flat-loop | Abbas Zeitoun, Lucas Torroba-Hennigen, Yoon Kim · 2026
+    Introduces Hyperloop Transformers, a parameter-efficient looped Transformer that applies only a middle block recurrently and adds hyper-connections between loops to improve memory-efficient language modeling.
+[04/20/2026] One Step Forward and K Steps Back: Better Reasoning with Denoising Recursion Models | arxiv:2604.18839 | flat-loop | Chris Cameron, Wangzheng Wang, Nikita Ivanov, Ashmita Bhatta
+    Introduces Denoising Recursion Models, a looped-transformer training method that corrupts targets and trains recursive refinement over multiple steps, improving ARC-AGI reasoning over TRM.
+[04/19/2026] LASER: Low-Rank Activation SVD for Efficient Recursion | arxiv:2604.17224 | hierarchical-loop | Ege Çakar, Ketan Ali Raghu, Lia Zheng · LIT Workshop @ ICLR 
+    Analyzes TRM activation geometry during recursive unrolling and introduces LASER, a dynamic low-rank compression method for stored training activations that reduces activation memory by about 60% without statistically significant accuracy loss.
+[04/14/2026] Parcae: Scaling Laws For Stable Looped Language Models | arxiv:2604.12946 | flat-loop | Hayden Prairie, Zachary Novack, Taylor Berg-Kirkpatrick, Dan
+    Introduces Parcae, a stable looped language model that constrains injection spectral norms to prevent instability and studies isoFLOPs-style training- and test-time scaling laws for quality gains under fixed-parameter budgets.
+[04/10/2026] ELT: Elastic Looped Transformers for Visual Generation | arxiv:2604.09168 | flat-loop | Sahil Goyal, Swayam Agrawal, Gautham Govind Anil, Prateek Ja
+    Introduces Elastic Looped Transformers for image and video generation, using weight-shared recurrent transformer blocks plus Intra-Loop Self Distillation to support any-time inference with dynamic quality-compute trade-offs from a single training run.
+[03/23/2026] Thinking Deeper, Not Longer: Depth-Recurrent Transformers for Compositional Generalization | arxiv:2603.21676 | flat-loop | Hung-Hsuan Chen · 2026
+    Introduces a depth-recurrent Transformer for compositional generalization, with silent thinking, LayerScale, and identity-biased recurrence enabling stable deep latent iteration.
+[03/20/2026] LoopRPT: Reinforcement Pre-Training for Looped Language Models | arxiv:2603.19714 | flat-loop | Guo Tang, Shixin Jiang, Heng Chang, Nuo Chen, Yuhan Li, Huim
+    Proposes LoopRPT, a reinforcement pre-training method for looped language models that assigns learning signals to latent iterations, improving accuracy-compute trade-offs and strengthening early-stage reasoning on Ouro.
+[03/09/2026] Adaptive Loops and Memory in Transformers: Think Harder or Know More? | arxiv:2603.08391 | flat-loop | Markus Frey, Behzad Shomali, Ali Hamza Bashir, David Berghau
+    Introduces transformers with adaptive per-layer looping and gated memory banks, showing that combining learned halting with extra storage improves reasoning under matched parameter and FLOP budgets.
+[03/05/2026] Mixture of Universal Experts: Scaling Virtual Width via Depth-Width Transformation | arxiv:2603.04971 | flat-loop | Yilong Chen, Naibin Gu, Junyuan Shang, Zhenyu Zhang, Yuchen 
+    Proposes MOUE, which reuses a universal layer-agnostic expert pool across layers to transform depth into virtual width and improve MoE performance under fixed activation budgets.
+[03/05/2026] Recursive Inference Machines for Neural Reasoning | arxiv:2603.05234 | hierarchical-loop | Mieszko Komisarczyk, Saurabh Mathur, Maurice Kraus, Sriraam 
+    Introduces Recursive Inference Machines, a nested generator-solver framework that subsumes TRMs; RIMformer reweights full reasoning histories for ARC-AGI and Sudoku, while TabRIM applies recursive inference to tabular classification.
+[03/02/2026] AdaPonderLM: Gated Pondering Language Models with Token-Wise Adaptive Depth | arxiv:2603.01914 | flat-loop | Shixiang Song, He Li, Zitong Wang, Boyi Zeng, Feichen Song, 
+    Introduces AdaPonderLM, a self-supervised recurrent language model with token-wise halting gates and KV reuse, allocating more loop steps to hard tokens under a fixed compute budget.
+[02/12/2026] SpiralFormer: Looped Transformers Can Learn Hierarchical Dependencies via Multi-Resolution Recursion | arxiv:2602.11698 | hierarchical-loop | Chengting Yu, Xiaobo Shu, Yadao Wang, Yizhen Zhang, Haoyi Wu
+    Introduces SpiralFormer, a looped transformer that applies shared layers under a multi-resolution recursion schedule to learn hierarchical dependencies more efficiently than fixed-resolution recurrent baselines.
+[02/11/2026] LoopFormer: Elastic-Depth Looped Transformers for Latent Reasoning via Shortcut Modulation | arxiv:2602.11451 | flat-loop | Ahmadreza Jeddi, Marco Ciccone, Babak Taati · ICLR 2026
+    Introduces LoopFormer, trained on variable-length trajectories with shortcut-consistency regularization to enable budget-conditioned reasoning and stable internal trajectories across loop depths.
+[02/11/2026] Prioritize the Process, Not Just the Outcome: Rewarding Latent Thought Trajectories Improves Reasoning in Looped Language Models | arxiv:2602.10520 | flat-loop | Jonathan Williams, Esin Tureci · ICML 2026
+    Introduces RLTT, a reinforcement-learning objective that assigns reward across the full latent thought trajectory of looped language models rather than only the final latent state.
+[02/09/2026] Looping Back to Move Forward: Recursive Transformers for Efficient and Flexible Large Multimodal Models | arxiv:2602.09080 | flat-loop | Ruihan Xu, Yuting Gao, Lan Wang, Jianing Li, Weihao Chen, Qi
+    Introduces RecursiveVLM, a recursive multimodal transformer with a recursive connector and monotonic recursion loss that enables on-demand extra refinement under varying compute budgets.
+[01/29/2026] Depth-Recurrent Attention Mixtures: Giving Latent Reasoning the Attention it Deserves | arxiv:2601.21582 | flat-loop | Jonas Knupp, Jan Hendrik Metzen, Jeremias Bohn, Georg Groh, 
+    Introduces Dreamer, a depth-recurrent attention-mixture framework combining sequence, depth, and sparse expert attention, and reports higher reasoning accuracy and data efficiency than tightly FLOP-, parameter-, and memory-matched baselines.
+[01/26/2026] ChainGPT: Dual-Reasoning Model with Recurrent Depth and Multi-Rank State Updates | arxiv:- | hierarchical-loop | Yunao Zheng, Xiaojie Wang, Lei Ren, Chen Wei · ICLR 2026
+    Introduces ChainGPT, a dual-reasoning recurrent-depth architecture that combines multi-substep state updates and state-guided sparse attention to move reasoning into latent computation, with adaptive stopping as a supporting mechanism.
+[01/26/2026] MoDr: Mixture-of-Depth-Recurrent Transformers for Test-Time Reasoning | arxiv:- | parallel-loop | Xiaojing Zhang, Haifeng Wu, Gang He, Jiyang Shen, Bochen Lyu
+    Introduces MoDr, which adds multi-branch routing to a depth-recurrent Transformer so looped models can explore solution paths more adaptively at test time.
+[12/16/2025] Universal Reasoning Model | arxiv:2512.14693 | flat-loop | Zitian Gao, Lynx Chen, Yihao Xiao, He Xing, Ran Tao, Haoming
+    Proposes URM, a Universal Transformer-based architecture with weight tying that beats standard transformers on reasoning benchmarks through iterative depth computation.
+[11/11/2025] Think-at-Hard: Selective Latent Iterations to Improve Reasoning Language Models | arxiv:2511.08577 | flat-loop | Tianyu Fu, Yichen You, Zekai Chen, Guohao Dai, Huazhong Yang
+    Introduces Think-at-Hard, a dynamic latent-thinking method that uses a learned decider to apply extra recurrent latent iterations only to hard tokens, with LoRA refiners and duo-causal attention across iteration depth.
+[11/10/2025] Teaching Pretrained Language Models to Think Deeper with Retrofitted Recurrence | arxiv:2511.07384 | flat-loop | Sean McLeish, Ang Li, John Kirchenbauer, Dayal Singh Kalra, 
+    Retrofits pretrained feedforward language models with depth recurrence, preserving performance with less total training compute and achieving better mathematics performance than continued post-training of the feedforward model at a matched compute budget.
+[10/29/2025] Scaling Latent Reasoning via Looped Language Models | arxiv:2510.25741 | flat-loop | Rui-Jie Zhu, Zixuan Wang, Kai Hua, Tianyu Zhang, Ziniu Li, H
+    Introduces Ouro, 1.4B and 2.6B pretrained LoopLMs trained on 7.7T tokens; the 1.4B model is comparable to 4B models on most benchmarks, while the 2.6B model outperforms models up to 8B on reasoning-intensive tasks, positioning loop depth as a third scaling axis.
+[10/28/2025] Parallel Loop Transformer for Efficient Test-Time Computation Scaling | arxiv:2510.24824 | parallel-loop · flat-loop | Bohong Wu, Mengzhao Chen, Xiang Luo, Shen Yan, Qifan Yu, Fan
+    Introduces the Parallel Loop Transformer, which preserves looped-model accuracy while reducing latency and memory through cross-loop parallelism and shared-loop KV representations.
+[10/16/2025] Efficient Parallel Samplers for Recurrent-Depth Models | arxiv:2510.14961 | flat-loop · parallel-loop | Jonas Geiping, Xinyu Yang, Guinan Su · ICML 2025
+    Introduces a diffusion-forcing sampler that advances new tokens while refining their recurrent-depth latent states in parallel, accelerating existing 3.5B looped language models by up to 5x without retraining.
+[10/06/2025] Less is More: Recursive Reasoning with Tiny Networks | arxiv:2510.04871 | flat-loop | Alexia Jolicoeur-Martineau · 2025
+    Proposes Tiny Recursive Model (TRM), which reuses one two-layer network to update a latent state repeatedly and then refine its answer across improvement steps; reports 44.6% on ARC-AGI-1 and 7.8% on ARC-AGI-2 with a 7M-parameter model.
+[07/14/2025] Mixture-of-Recursions: Learning Dynamic Recursive Depths for Adaptive Token-Level Computation | arxiv:2507.10524 | flat-loop | Sangmin Bae, Yujin Kim, Reza Bayat, Sungnyun Kim, Jiyoun Ha,
+    Introduces MoR, a recursive Transformer that reuses a shared layer stack while routing each token to a learned recursion depth and restricting attention and KV caching to tokens active at that depth.
+[07/10/2025] Skip a Layer or Loop it? Test-Time Depth Adaptation of Pretrained LLMs | arxiv:2507.07996 | flat-loop | Ziyue Li, Yang Li, Tianyi Zhou · 2025
+    Proposes Chain-of-Layers (CoLa), an inference-time search method that skips or repeats pretrained LLM layers per sample via MCTS to improve efficiency and reasoning accuracy.
+[06/26/2025] Hierarchical Reasoning Model | arxiv:2506.21734 | hierarchical-loop · flat-loop | Guan Wang, Jin Li, Yuhao Sun, Xing Chen, Changling Liu, Yue 
+    Proposes HRM, a brain-inspired recurrent architecture with two coupled modules at different timescales: a high-level module for abstract planning and a low-level module for detailed execution.
+[02/10/2025] Implicit Language Models are RNNs: Balancing Parallelization and Expressivity | arxiv:2502.07827 | implicit-layer | Mark Schöne, Babak Rahmani, Heiner Kremer, Fabian Falck, Hit
+    Introduces implicit state-space language models that iterate a shared transition toward a fixed point, recovering RNN-like expressivity while retaining mostly parallel training.
+[02/07/2025] Scaling up Test-Time Compute with Latent Reasoning: A Recurrent Depth Approach | arxiv:2502.05171 | flat-loop | Jonas Geiping, Sean McLeish, Neel Jain, John Kirchenbauer, S
+    Presents Huginn, a 3.5B-parameter recurrent-depth language model trained on 800B tokens whose shared core can be unrolled to variable depth; reasoning performance improves with additional test-time recurrences, and the architecture supports zero-shot adaptive compute and KV-cache sharing.
+[10/28/2024] Relaxed Recursive Transformers: Effective Parameter Sharing with Layer-wise LoRA | arxiv:2410.20672 | flat-loop | Sangmin Bae, Adam Fisch, Hrayr Harutyunyan, Ziwei Ji, Seungy
+    Converts pretrained LLMs into compact Recursive and Relaxed Recursive Transformers by repeatedly reusing one block of layers with depth-specific LoRA deltas; simulated oracle-exit results for continuous depth-wise batching suggest a potential 2–3× throughput gain, not a demonstrated deployment speedup.
+[10/19/2024] Deep Equilibrium Algorithmic Reasoning | arxiv:2410.15059 | implicit-layer | Dobrik Georgiev, JJ Wilson, Davide Buffelli, Pietro Liò · Ne
+    Recasts neural algorithmic reasoning as fixed-point solving with deep-equilibrium GNN processors, removing the need for ground-truth algorithm step counts during training and inference.
+[09/24/2024] Looped Transformers for Length Generalization | arxiv:2409.15647 | flat-loop | Ying Fan, Yilun Du, Kannan Ramchandran, Kangwook Lee · ICLR 
+    Introduces an adaptive-step looped Transformer and training procedure that improve length generalization on arithmetic and algorithmic tasks composed from iterative RASP-L operations.
+[05/25/2024] MoEUT: Mixture-of-Experts Universal Transformers | arxiv:2405.16039 | flat-loop | Róbert Csordás, Kazuki Irie, Jürgen Schmidhuber, Christopher
+    Introduces MoEUT, a Universal Transformer that recurrently reuses fine-grained MoE layer groups, marginally improving parameter-matched language-modeling perplexity with fewer training MACs and comparable GPU memory to dense Transformers.
+[02/21/2024] AlgoFormer: An Efficient Transformer Framework with Algorithmic Structures | arxiv:2402.13572 | flat-loop | Yihang Gao, Chuanyang Zheng, Enze Xie, Han Shi, Tianyang Hu,
+    Splits computation into pre-, loop-, and post-transformer stages, showing that structured recurrent depth can outperform standard and vanilla looped transformers on algorithmic and language tasks.
+[11/21/2023] Looped Transformers are Better at Learning Learning Algorithms | arxiv:2311.12424 | flat-loop | Liu Yang, Kangwook Lee, Robert Nowak, Dimitris Papailiopoulo
+    Proposes an input-injected looped-Transformer architecture and training method for in-context data fitting, matching standard Transformers on the tested function classes with about 1/12 of the parameters while converging to distribution-specific fixed points.
+[10/16/2023] CoTFormer: A Chain-of-Thought Driven Architecture with Budget-Adaptive Computation Cost at Inference | arxiv:2310.10845 | flat-loop | Amirkeivan Mohtashami, Matteo Pagliardini, Martin Jaggi · IC
+    Introduces CoTFormer, which repeatedly applies a shared Transformer block while exposing earlier intermediate representations to later repeats, and uses a learned token router to allocate repeated passes under a chosen inference compute budget.
+[10/11/2023] Sparse Universal Transformer | arxiv:2310.07096 | flat-loop | Shawn Tan, Yikang Shen, Zhenfang Chen, Aaron Courville, Chua
+    Combines the Universal Transformer's shared recurrent block with sparse mixtures of experts and stick-breaking halting to reduce compute while preserving compositional generalization.
+[09/22/2022] A Generalist Neural Algorithmic Learner | arxiv:2209.11142 | flat-loop | Borja Ibarz, Vitaly Kurin, George Papamakarios, Kyriacos Nik
+    Presents a single shared GNN processor trained jointly across all 30 CLRS algorithmic tasks, with task-specific encoders and decoders and improvements to representations, training, and processor architecture.
+[07/02/2022] Object Representations as Fixed Points: Training Iterative Refinement Algorithms with Implicit Differentiation | arxiv:2207.00787 | implicit-layer | Michael Chang, Thomas L. Griffiths, Sergey Levine · NeurIPS 
+    Trains iterative object-centric refinement as a fixed-point computation through implicit differentiation, improving SLATE optimization with constant-memory backpropagation.
+[04/18/2022] Deep Equilibrium Optical Flow Estimation | arxiv:2204.08442 | implicit-layer | Shaojie Bai, Zhengyang Geng, Yash Savani, J. Zico Kolter · C
+    Recasts recurrent optical-flow estimation as an implicit fixed-point layer with analytic differentiation, fixed-point reuse, and sparse correction for lower memory use and faster convergence.
+[02/11/2022] End-to-end Algorithm Synthesis with Recurrent Networks: Extrapolation without Overthinking | arxiv:2202.05826 | flat-loop | Arpit Bansal, Avi Schwarzschild, Eitan Borgnia, Zeyad Emam, 
+    Introduces a recall architecture and progressive training objective that prevent overthinking, enabling shared recurrent networks to extrapolate over thousands of test-time iterations.
+[11/29/2021] Recurrent Vision Transformer for Solving Visual Reasoning Problems | arxiv:2111.14576 | flat-loop | Nicola Messina, Giuseppe Amato, Fabio Carrara, Claudio Genna
+    Introduces RViT, a CNN-Transformer hybrid that shares weights across depth and uses feedback connections to iteratively refine representations for visual same-different reasoning.
+[11/09/2021] On Training Implicit Models | arxiv:2111.05177 | implicit-layer | Zhengyang Geng, Xin-Yu Zhang, Shaojie Bai, Yisen Wang, Zhouc
+    Proposes phantom gradient, a lightweight backpropagation estimator for implicit (infinite-depth) models that uses damped unrolling and a truncated Neumann series to speed backward passes while matching or surpassing exact-gradient baselines on large-scale tasks.
+[11/09/2021] Sliced Recursive Transformer | arxiv:2111.05297 | flat-loop | Zhiqiang Shen, Zechun Liu, Eric Xing · ECCV 2021
+    Builds parameter-efficient vision Transformers by recursively reusing blocks across depth and reducing recursive attention cost with sliced group self-attention.
+[10/14/2021] The Neural Data Router: Adaptive Control Flow in Transformers Improves Systematic Generalization | arxiv:2110.07732 | flat-loop | Róbert Csordás, Kazuki Irie, Jürgen Schmidhuber · ICLR 2021
+    Adds copy gating and geometric attention to a weight-shared Transformer to learn adaptive control flow and improve systematic length and depth generalization.
+[07/12/2021] PonderNet: Learning to Ponder | arxiv:2107.05407 | flat-loop | Andrea Banino, Jan Balaguer, Charles Blundell · AutoML Works
+    Introduces a differentiable probabilistic halting objective that learns how many times to apply a recurrent step function for each input.
+[06/28/2021] Stabilizing Equilibrium Models by Jacobian Regularization | arxiv:2106.14342 | implicit-layer | Shaojie Bai, Vladlen Koltun, J. Zico Kolter · ICML 2021
+    Regularizes the Jacobian of DEQ update equations to stabilize forward and backward fixed-point solves with minimal additional cost.
+[04/13/2021] Lessons on Parameter Sharing across Layers in Transformers | arxiv:2104.06022 | flat-loop | Sho Takase, Shun Kiyono · SustaiNLP 2021
+    Introduces Sequence, Cycle, and Cycle-reverse strategies for reusing Transformer layers across depth, balancing parameter efficiency, computation time, and translation quality.
+[01/01/2021] Subformer: Exploring Weight Sharing for Parameter Efficiency in Generative Transformers | arxiv:2101.00234 | flat-loop | Machel Reid, Edison Marrese-Taylor, Yutaka Matsuo · Findings
+    Combines sandwich-style cross-layer sharing with self-attentive factorized embeddings to reduce generative Transformer parameters while preserving or improving task performance.
+[12/08/2020] Parameter Efficient Multimodal Transformers for Video Representation Learning | arxiv:2012.04124 | flat-loop | Sangho Lee, Youngjae Yu, Gunhee Kim, Thomas Breuel, Jan Kaut
+    Shares Transformer parameters across depth and modalities, using modality-specific and shared factorization plus low-rank sharing to cut audio-visual video model parameters by up to 97% while enabling end-to-end training.
+[10/25/2020] Universal Speech Transformer | arxiv:- | flat-loop | Yingzhu Zhao, Chongjia Ni, Cheung-Chi Leung, Shafiq Joty, En
+    Adapts the Universal Transformer to speech recognition with shared iterative encoder and decoder computation, dynamic depth, one-time positional encoding, and full hidden-state updates.
+[09/14/2020] Implicit Graph Neural Networks | arxiv:2009.06211 | implicit-layer | Fangda Gu, Heng Chang, Wenwu Zhu, Somayeh Sojoudi, Laurent E
+    Defines graph representations as the solution of a learned fixed-point equation, with well-posedness conditions and implicit-differentiation training for long-range graph dependencies.
+[06/15/2020] Monotone operator equilibrium networks | arxiv:2006.08591 | implicit-layer | Ezra Winston, J. Zico Kolter · NeurIPS 2020
+    Introduces monDEQ, a monotone-operator parameterization and splitting solvers that guarantee a unique, stably computable equilibrium for implicit-depth networks.
+[06/15/2020] Multiscale Deep Equilibrium Models | arxiv:2006.08656 | implicit-layer | Shaojie Bai, Vladlen Koltun, J. Zico Kolter · NeurIPS 2020
+    Extends DEQ to synchronized equilibria across multiple feature resolutions, achieving competitive performance on large-scale vision tasks with constant-depth activation memory.
+[03/26/2020] RAFT: Recurrent All-Pairs Field Transforms for Optical Flow | arxiv:2003.12039 | flat-loop | Zachary Teed, Jia Deng · ECCV 2020
+    Introduces RAFT, which builds an all-pairs correlation volume and repeatedly applies a learned recurrent update operator to refine a dense optical-flow field.
+[09/26/2019] ALBERT: A Lite BERT for Self-supervised Learning of Language Representations | arxiv:1909.11942 | flat-loop | Zhenzhong Lan, Mingda Chen, Sebastian Goodman, Kevin Gimpel,
+    Introduces factorized embeddings and cross-layer parameter sharing to reduce BERT's parameter footprint while retaining or improving performance at larger model scales.
+[09/03/2019] Deep Equilibrium Models | arxiv:1909.01377 | implicit-layer | Shaojie Bai, J. Zico Kolter, Vladlen Koltun · NeurIPS 2019
+    Proposes DEQ, which directly solves for the fixed point of an infinite-depth weight-tied network and uses implicit differentiation to train with constant activation memory.
+[08/17/2019] Implicit Deep Learning | arxiv:1908.06315 | implicit-layer | Laurent El Ghaoui, Fangda Gu, Bertrand Travacca, Armin Askar
+    Formulates neural prediction as a learned fixed-point equation and develops well-posed implicit architectures, training schemes, and robustness analysis.
+[10/15/2018] Trellis Networks for Sequence Modeling | arxiv:1810.06682 | flat-loop | Shaojie Bai, J. Zico Kolter, Vladlen Koltun · ICLR 2018
+    Introduces Trellis Networks, temporal convolutional sequence models that tie weights across depth and inject inputs at every layer, thereby generalizing truncated recurrent networks.
+[07/14/2018] Recurrent Stacking of Layers for Compact Neural Machine Translation Models | arxiv:1807.05353 | flat-loop | Raj Dabre, Atsushi Fujita · AAAI 2018
+    Shares one encoder or decoder layer across all stacked depths in neural machine translation, showing that six recurrent applications can approach a six-distinct-layer baseline with far fewer parameters.
+[07/10/2018] Universal Transformers | arxiv:1807.03819 | flat-loop | Mostafa Dehghani, Stephan Gouws, Oriol Vinyals, Jakob Uszkor
+    Introduces the Universal Transformer, which repeatedly applies shared self-attention and transition blocks over depth, optionally with per-position adaptive halting; under the paper's stated assumptions the architecture is Turing-complete.
+[03/16/2018] Reviving and Improving Recurrent Back-Propagation | arxiv:1803.06396 | implicit-layer | Renjie Liao, Yuwen Xiong, Ethan Fetaya, Lisa Zhang, KiJung Y
+    Revisits recurrent back-propagation for convergent recurrent networks and introduces CG-RBP and Neumann-RBP, with the latter matching truncated BPTT time while using constant memory.
+[07/30/2017] Implicitly-Defined Neural Networks for Sequence Labeling | arxiv:- | implicit-layer | Michaeel Kazi, Brian Thompson · ACL 2017
+    Defines sequence hidden states jointly through a learned implicit system and solves the coupled nonlinear equations to enable non-causal bidirectional interactions for sequence labeling.
+[03/29/2016] Adaptive Computation Time for Recurrent Neural Networks | arxiv:1603.08983 | flat-loop | Alex Graves · 2016
+    Introduces ACT, a deterministic differentiable halting algorithm that lets an RNN learn a variable number of shared state transitions between receiving each input and emitting an output.
+[11/25/2015] Neural GPUs Learn Algorithms | arxiv:1511.08228 | flat-loop | Łukasz Kaiser, Ilya Sutskever · ICLR 2016
+    Introduces Neural GPUs, a recurrent convolutional architecture that learns parallel algorithms like addition and multiplication through repeated application of a shared convolutional recurrent block.
+[11/14/2015] Deeply-Recursive Convolutional Network for Image Super-Resolution | arxiv:1511.04491 | flat-loop | Jiwon Kim, Jung Kwon Lee, Kyoung Mu Lee · CVPR 2015
+    Introduces DRCN, which applies one convolutional layer recursively up to 16 times and uses recursive supervision plus a skip connection to train a deep image super-resolution model without depth-proportional parameters.
+
+=== Applications Focused ===
+[09/03/2026] Time Without Timesteps: Simulating Coupled Dynamical Systems via Self-Consistency | arxiv:2609.03358 | implicit-layer | Liyu Zerihun, Mark Shinyoung Lee · 2026
+    Composes learned full-trajectory subsystem surrogates through a Newton-Krylov fixed-point solve, replacing 1,500-step rollouts with 4-10 solver iterations and using an implicit adjoint whose memory is independent of solver depth.
+[09/02/2026] Equation Recast for Canonical Operator Learning Across Parametric PDEs | arxiv:2609.02982 | implicit-layer | Qiyun Cheng, Valentin Duruisseaux, Cesar F. Clauser, Md Hoss
+    Reuses a single learned canonical inverse operator inside a fixed-point recast for parameter-varying PDEs, enabling zero-shot extrapolation while exposing failure through loss of convergence.
+[09/02/2026] Jina-OCR-v1: Efficient Document Parsing with Speculative Decoding and Dense Verifiable Rewards | arxiv:2609.03181 | flat-loop | Alejandro Barón García, Feng Wang, Emilia Garcia Casademont,
+    Reuses one FastMTP draft block recursively for three speculative prediction steps in an OCR vision-language model, doubling decoding speed over greedy autoregressive decoding on an NVIDIA L4 while retaining lossless greedy verification.
+[08/21/2026] Curriculum-Aware Interpolate-then-Refine: Learned Physiological Time-Series Imputation under Realistic Missingness | arxiv:2608.21207 | flat-loop | Yu-Chao Huang, Haochen Zhang, Nicholas Konz, Tianlong Chen ·
+    Introduces CAIR, which applies one tied-weight Transformer refiner over three successive passes to correct a learned physiological time-series interpolation under realistic missingness.
+[08/20/2026] Frozen CLIP Priors for Robust Self-Supervised Poisson Inverse Problems | arxiv:2608.20524 | flat-loop | Laura C. Diaz-Delgado, Emmanuel Martinez, Henry Arguello · 2
+    Unrolls an ADMM-inspired Poisson inverse-problem solver whose shared CLIP-based learned prior is reused across reconstruction iterations for robust self-supervised imaging.
+[08/17/2026] Looped Language Models Improve Compositional Tool Calling | arxiv:2608.18171 | flat-loop | Andrei Cristian Popescu, Haitz Sáez de Ocáriz Borde, Pietro 
+    Evaluates native and retrofitted looped language models on compositional tool calling, finding that recurrent depth most consistently improves multi-call dependency handling while adaptive stopping uses fewer iterations.
+[08/14/2026] BRAID: Learning Equilibrium Maps in Interdependent Security Games via Weight-Tied Iterative Graph Neural Networks | arxiv:2608.14856 | flat-loop | Elnaz Nowrouzi, Zhiqun Zuo, Xueru Zhang, Mohammad Mahdi Khal
+    Introduces a weight-tied iterative GNN that amortizes best-response dynamics into a single forward pass, predicting Nash equilibria up to 43x faster while recovering equilibrium sensitivities across security-game specifications and graph sizes.
+[08/10/2026] BDH-CQ: In-Context Learning with Recurrent Latent Reasoning | arxiv:2608.09888 | flat-loop | Björn Engdahl, Adrian Kosowski, Jan Chorowski, Zuzanna Stami
+    Combines in-context learning with recurrent latent memory and iterative latent-space computation, improving ARC-AGI-1 cost efficiency with a 150M-parameter recurrent reasoning model.
+[07/21/2026] LatentMT: Machine Translation with Latent Reasoning | arxiv:2607.18618 | flat-loop | Wei-Rui Chen, Samar M. Magdy, Chiyu Zhang, Wenhui Zhu, Zhipe
+    Applies latent-reasoning Looped Language Models to machine translation, using recurrent hidden-state computation to match much larger baselines across 32 translation directions.
+[07/02/2026] G-RRM: Guiding Symbolic Solvers with Recurrent Reasoning Models | arxiv:2607.02491 | flat-loop | Timo Bertram, Sidhant Bhavnani, Richard Freinschlag, Erich K
+    Integrates symbol-equivariant Recurrent Reasoning Models with symbolic solvers, showing that neural solution proposals can cut Sudoku and SAT-style search when the downstream solver can overwrite imperfect recurrent-model hints.
+[06/12/2026] A Fixed-Point Neural Operator for Size- and Functional-Transferable Hamiltonian Prediction | arxiv:2606.14498 | implicit-layer | Yunhong Lou, Xihang Yue, Xinran Wei, Tianqi Deng, Linchao Zh
+    Introduces HamEvo, a fixed-point neural operator for Kohn-Sham Hamiltonian prediction that learns a single-step self-consistent update and returns the converged Hamiltonian as the learned operator's fixed point, improving electronic-structure prediction accuracy and transfer.
+[06/04/2026] MPCoT: Reward-Guided Multi-Path Latent Reasoning for Test-Time Scalable Vision-Language-Action | arxiv:2606.06245 | parallel-loop | Boyang Zhang, Lianlei Shan · 2026
+    Introduces a VLA latent-reasoning policy that initializes multiple latent hypotheses, refines them for K weight-tied steps, and aggregates them before action decoding.
+[06/03/2026] Test-Time Compute Scaling for ASR with Depth-Conditioned Looped Transformers | arxiv:2606.04678 | flat-loop | Yacouba Kaloga, Shashi Kumar, Shakeel A. Sheikh, Driss Khali
+    Introduces LARM, a depth-conditioned looped Transformer for automatic speech recognition that reuses a shared acoustic-encoder block recurrently and scales recognition quality by increasing inference-time loop count.
+[06/02/2026] BA-T: An Iterative Transformer for Two-View Bundle Adjustment | arxiv:2606.03287 | flat-loop | Ganlin Zhang, Weirong Chen, Daniel Cremers, Xi Wang · 2026
+    Implements bundle-adjustment-style 3D reconstruction updates as a repeatable lightweight Transformer layer in implicit token space, improving pose and reconstruction estimates across iterations.
+[05/28/2026] Déjà View: Looping Transformers for Multi-View 3D Reconstruction | arxiv:2605.30215 | flat-loop | Alessandro Burzio, Tobias Fischer, Sven Elflein, Qunjie Zhou
+    Applies a single looped transformer block recurrently to per-view features for a variable number of refinement steps in multi-view 3D reconstruction, exposing loop count as an inference-time compute knob.
+[05/27/2026] Recursive Vision Transformer with Dynamic Depth and Width Adjustment for Resource-Efficient Image Semantic Communication | arxiv:2606.00114 | flat-loop | Zhilong Zhang, Xinhui Zhang, Gongyu Jin, Sihua Wang, Danpu L
+    Uses a recursive ViT structure to iteratively refine semantic features for image semantic communication while dynamically adjusting recursive depth and width under image and channel conditions.
+[05/19/2026] i-DEQ: A stable inertial deep equilibrium model for image restoration | arxiv:2605.19705 | implicit-layer | Antonin Clerc, Marien Renaud, Baudouin Denis De Seneville, N
+    Introduces i-DEQ, an inertial deep-equilibrium image-restoration model that learns explicit nonconvex regularization and uses momentum in fixed-point iterations, improving stability and robustness while roughly halving DEQ inference time.
+[05/19/2026] Nonlocal operator learning for fMRI encoding and decoding tasks | arxiv:2605.20389 | implicit-layer | Andreas Kramer, Saugat Acharya, Alice Giola, Emanuele Zappal
+    Applies a latent neural integral-operator model to fMRI encoding and decoding, using fixed-point iterations in an auxiliary latent space before downstream classification or stimulus prediction.
+[05/18/2026] PERL: Parameter Efficient Reasoning in CLIP Latent Space | arxiv:2605.18464 | flat-loop | Simone Carnemolla, Salvatore Calcagno, Daniela Giordano, Con
+    Introduces PERL, a few-shot CLIP adaptation framework that reuses a compact shared reasoning module across latent refinement steps, improving base-to-novel, transfer, and OOD results with about 6K trainable parameters.
+[04/30/2026] ITS-Mina: A Harris Hawks Optimization-Based All-MLP Framework with Iterative Refinement and External Attention for Multivariate Time Series Forecasting | arxiv:2604.27981 | flat-loop | Pourya Zamanvaziri, Amirhossein Sadr, Aida Pakniyat, Dara Ra
+    Applies a shared-parameter iterative refinement module inside an all-MLP multivariate time-series forecasting system, using the loop-model pattern for a concrete forecasting application.
+[04/13/2026] A Deep Equilibrium Network for Hyperspectral Unmixing | arxiv:2604.11279 | implicit-layer | Chentong Wang, Jincheng Gao, Fei Zhu, Jie Chen · 2026
+    Recasts hyperspectral unmixing as a deep equilibrium model, replacing the reconstruction-gradient operator with a trainable convolutional update and solving for an implicit fixed point with constant-memory differentiation.
+[02/08/2026] Recurrent-Depth VLA: Implicit Test-Time Compute Scaling of Vision-Language-Action Models via Latent Iterative Reasoning | arxiv:2602.07845 | flat-loop | Yalcin Tur, Jalal Naghiyev, Haoquan Fang, Wei-Chuan Tsai, Ji
+    Introduces RD-VLA, a vision-language-action architecture with a weight-tied recurrent action head and adaptive stopping, enabling latent test-time compute scaling for robotics with constant memory footprint.
+[12/03/2025] Recurrent Transformer-Based Near- and Far-Field THz Wideband Channel Estimation for UM-MIMO | arxiv:2605.12578 | flat-loop | Dmitry Artemasov, Alexander Shmatok, Kirill Andreev, Alexey 
+    Applies a block-recurrent transformer to hybrid near/far-field THz UM-MIMO channel estimation, iteratively reusing one state-memory transformer block to improve narrowband and wideband NMSE.
+[10/23/2019] Neural Execution of Graph Algorithms | arxiv:1910.10593 | flat-loop | Petar Veličković, Rex Ying, Matilde Padovano, Raia Hadsell, 
+    Trains a shared GNN processor to execute graph algorithms step by step, demonstrating benefits from max aggregation and positive transfer between reachability and shortest-path tasks.
+
+=== Blogs ===
+[07/31/2026] Towards Looped Models Done Right — Part I: Topology, Input Injection, Recurrent-State Design | arxiv:- | flat-loop | Benhao Huang, Chufan Shi, Junlin Chen, Shicheng Wen, Zhengzh
+    Runs controlled, compute-matched ablations of recurrence topology, input injection, and recurrent-state design, then transfers the favored Huginn-style sandwich architecture from dense 730M models to 8B/0.8B-active MoE models and compares it with Ouro and a feedforward baseline.
+[05/23/2026] Rethinking Hierarchy in Iterative Reasoning Models | arxiv:- | hierarchical-loop · flat-loop | Benhao Huang · X Article 2026
+    Interprets HRM/TRM-style two-level iteration through value-policy-like coupled dynamics, then reports preliminary evidence that low-level latent states can be better ACT halting inputs than answer-proximal high-level states.
+[04/29/2026] Exact Input Writes Improve Stable Looped Language Models | arxiv:- | flat-loop | Benhao Huang · Personal Blog 2026
+    Proposes replacing Parcae's Euler input-write gain with the exact zero-order-hold gain, then reports matched 140M looped-language-model controls where Exact-ZOH lowers validation loss under both short-budget probes and an 11.2B-token paper-style run.
+[04/21/2026] Claude Mythos, Looped LLM, and the Depth Scaling Axis | arxiv:- | flat-loop | Rui-Jie Zhu · X Article 2026
+    Analyzes why Claude Mythos-like gains suggest a depth-scaling axis for looped LLMs and discusses stability, inference efficiency, and iso-FLOPs constraints for scaling loop architectures.
+[04/19/2026] Loop-Model FLOPs and Memory in an Ablation Chain | arxiv:- | flat-loop | Benhao Huang · Personal Blog 2026
+    Builds a clean cost-ablation chain for loop-model training, comparing shared versus non-shared weights, per-step losses, detach, instant updates, internal truncation, and gradient checkpointing, then checks the resulting FLOPs and memory trade-offs with a toy benchmark.
+[04/19/2026] On the Looped Transformers Controversy | arxiv:- | flat-loop | Chris Hayduk · X Article 2026
+    Argues that benchmark patterns and serving-compute constraints make deterministic weight-tied looping a plausible explanation for Claude Mythos-like gains, while explicitly framing the claim as speculation rather than confirmation.
+[01/12/2026] Looped-GPT: Looping During Pre-training improves Generalization | arxiv:- | flat-loop | Sunny Sanyal · Personal Blog 2026
+    Introduces Looped-GPT, a reverse-residual depth-recurrent GPT variant, and reports pre-training experiments where looped models improve generalization under matched parameter, token, and fixed-FLOPs settings.
+[01/07/2020] Adaptive Computation Time (ACT) in Neural Networks [3/3] | arxiv:- | flat-loop | Grigory Sapunov · Medium 2020
+    Reviews Adaptive Computation Time in transformer-style models, focusing on Universal Transformers with dynamic per-position halting, adaptive attention span, and ALBERT-style cross-layer parameter sharing as related forms of adaptive or repeated computation.
+
+=== Contributing ===
+
+=== Citation ===
+
+=== Star History ===
