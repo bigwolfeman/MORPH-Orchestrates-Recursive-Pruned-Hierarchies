@@ -137,7 +137,14 @@ def run(label: str, config: str, path: str, device: str, rows: int, batch: int) 
     n_rows = 0
     for i, (inp, labels, layout, _idx) in enumerate(arm.batches):
         inp = inp.to(device)
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
+        # no_grad belt-and-braces around the READOUT calls too: _run_once_and_twice_*
+        # are individually @torch.no_grad(), but _readout_vec below is not, and it runs
+        # model.lm_mixer / model.final_norm (both parameterised) — without an outer
+        # no_grad those three calls would each build a graph nobody backpropagates
+        # through (the same class of bug basin_map.py's run_one_pair had, at a much
+        # smaller scale here since only the head runs, not the loop).
+        with torch.no_grad(), \
+             torch.autocast("cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
             if arm.is_slot_loop:
                 layout_dev = layout.to(device)
                 fkw, freset, _ckw, _creset = model._tul_tg_kwargs(layout_dev)
