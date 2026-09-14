@@ -14,7 +14,9 @@ Spark (`2026-09-14-arc-loop-diagnostics.md`, in build). Three builders were stop
 on 2026-09-13 23:05. This note records those and the rest of the menu so nothing has to be
 re-derived if LoopMTP does not close the question.
 
-## Proposal (the parked directions, with the design each builder was given)
+## Proposal
+
+The parked directions, with the design each builder was given.
 
 **Stopped mid-build, no commits:**
 
