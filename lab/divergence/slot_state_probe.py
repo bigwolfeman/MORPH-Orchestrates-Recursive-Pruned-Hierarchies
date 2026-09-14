@@ -46,6 +46,11 @@ def main() -> None:
     batches = pack_rows(stream, tul_rt, cfg, a.batch, False)[: -(-a.rows // a.batch)]
     tc = model.cfg.tul
     orig_mean, orig_max = int(tc.slot_mean_depth), int(tc.slot_max_depth)
+    # k-fixed arms (tul.slot_depth_fixed > 0) IGNORE slot_mean_depth at eval, so forcing a
+    # depth must go through whichever knob the model reads — core_depth_sweep.py's rule.
+    # Before 2026-09-14 this probe set the mean only and read the SAME state at every
+    # depth on the fixed-6 horizon control (rel_dist 0.0, cos 1.0 at 1/2/3/6/16).
+    orig_fixed = int(getattr(tc, "slot_depth_fixed", 0))
     captured: dict[int, list[torch.Tensor]] = {d: [] for d in depths}
     valids: list[torch.Tensor] = []
     real_project = model.tul.prefix_project
@@ -59,7 +64,10 @@ def main() -> None:
     try:
         for d in depths:
             cur["d"] = d
-            tc.slot_mean_depth = d
+            if orig_fixed > 0:
+                tc.slot_depth_fixed = d
+            else:
+                tc.slot_mean_depth = d
             tc.slot_max_depth = max(d, orig_max or int(cfg.model.max_depth))
             for inp, labels, layout, _ in batches:
                 if d == depths[0]:
@@ -69,10 +77,14 @@ def main() -> None:
     finally:
         model.tul.prefix_project = real_project
         tc.slot_mean_depth, tc.slot_max_depth = orig_mean, orig_max
+        tc.slot_depth_fixed = orig_fixed
     valid = torch.cat(valids)                                        # [N, S]
     states = {d: torch.cat(captured[d]) for d in depths}             # [N, S, ...]
     flat = {d: states[d].reshape(states[d].shape[0], states[d].shape[1], -1)[valid] for d in depths}
     base = flat[depths[0]]
+    if len(depths) > 1 and all(torch.equal(flat[d], base) for d in depths[1:]):
+        raise RuntimeError("slot_state_probe: the state is bit-identical at every forced depth, "
+                           "so the depth knob this probe set is not the one the model reads")
     out = {"label": label, "step": step, "rows": int(valid.shape[0]), "valid_slots": int(valid.sum()),
            "state_dim": int(base.shape[1]), "ref_depth": depths[0], "per_depth": {}}
     prev = None
