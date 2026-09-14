@@ -37,6 +37,7 @@ from .mhc import ChannelInject, MORPHBlock, PassLoRA, DEFAULT_CHANNEL_DIMS
 from .sigreg import sigreg_epps_pulley
 from .sparsity import MortarLinear
 from .tul import (TULCenterExit, TULConfig, TULGate, TULGateConfig, TULGradPass,
+                  TULPassGate,
                   TULReread, TULRowContrast, TULSlotChain,
                   TULSlotRegister, TULSlots,
                   boundary_token_index,
@@ -46,7 +47,7 @@ from .tul import (TULCenterExit, TULConfig, TULGate, TULGateConfig, TULGradPass,
                   window_drop_mask)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
-from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots
+from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
 from .tul_vq import TULThoughtVQ
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
@@ -1748,6 +1749,46 @@ class MORPHTransformer(nn.Module):
                     "term exists to make the LOOP write distinct states and there are no "
                     "passes.")
             self.tul_contrast = TULRowContrast(d, cfg.tul.row_contrast_tau)
+
+        # ── LoopMTP horizon alignment (tul.horizon_weight; morph/model/tul.py) ─────
+        # `nn.Linear` at IDENTITY init (`torch.eye`, deterministic, no RNG draw): step 0
+        # compares the pass's RAW readout to the horizon target, and every other weight
+        # of an arm with this on is byte-identical to its ruler's at the same seed.
+        # TRAINING-ONLY (the oracle_z / spandec_per_pass precedent): it never appears in
+        # the deployed forward, so it carries `_ternary_exclude` like those decoders.
+        self.tul_horizon_proj: nn.Linear | None = None
+        if cfg.tul is not None and cfg.tul.horizon_weight > 0.0:
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.horizon_weight > 0 needs a core loop (model.n_core > 0): the "
+                    "term grades the LOOP's per-pass states and there are no passes.")
+            if cfg.fm is not None:
+                raise NotImplementedError(
+                    "tul.horizon_weight > 0 with an FM planner (cfg.fm): the planner "
+                    "REPLACES the core loop and detaches its plan, so there is no "
+                    "per-pass trajectory to align. Pick one.")
+            self.tul_horizon_proj = nn.Linear(d, d, bias=False)
+            with torch.no_grad():
+                self.tul_horizon_proj.weight.copy_(torch.eye(d))
+            self.tul_horizon_proj._ternary_exclude = True
+
+        # ── LoopMTP gated readout (tul.pass_readout="gated"; morph/model/tul.py) ───
+        # NOT training-only: substituted for `h_slots` at the same seam `cond_layers`,
+        # `center_exit`, the register's mean and VQ already share, so it is part of the
+        # REAL forward at train and eval. `slot_depth_fixed` is already validated > 0 by
+        # `TULConfig.__post_init__` whenever this knob is "gated".
+        self.tul_pass_gate: TULPassGate | None = None
+        if cfg.tul is not None and cfg.tul.pass_readout == "gated":
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.pass_readout='gated' needs a core loop (model.n_core > 0): the "
+                    "gate combines the LOOP's per-pass states and there are no passes.")
+            if cfg.fm is not None:
+                raise NotImplementedError(
+                    "tul.pass_readout='gated' with an FM planner (cfg.fm): the planner "
+                    "REPLACES the core loop and detaches its plan, so there is no "
+                    "per-pass trajectory to gate over. Pick one.")
+            self.tul_pass_gate = TULPassGate(d, int(cfg.tul.slot_depth_fixed))
 
         # ── The slot chain (TULConfig.slot_chain) ─────────────────────────────────
         # Zero-init, no RNG draw: step 0 is the ruler's forward bit for bit.
@@ -3614,8 +3655,23 @@ class MORPHTransformer(nn.Module):
                 "the loop carries "
                 "the DEVIATION, so cell k would hold Delta_k and not the slot state the "
                 "coda is meant to read (the db_loop / mux_stage_own_iters precedent).")
+        # LoopMTP's horizon alignment (tul.horizon_weight) reads the SAME trajectory, for
+        # the same reason spandec_per_pass/oracle_z do: it grades the state after every
+        # pass. Training only, so an eval forward keeps `db_traj` None and the sweep reads
+        # ruler columns. The gated readout (tul.pass_readout="gated") is NOT training
+        # only — it replaces `h_slots` in the real forward — so it turns the SAME
+        # collection on unconditionally, the `_traj_src` precedent.
+        _hz_loss = bool(self.cfg.tul.horizon_weight > 0.0) and self.training
+        _hz_gate = self.cfg.tul.pass_readout == "gated"
+        if (_hz_loss or _hz_gate) and _scse is not None:
+            raise NotImplementedError(
+                "tul.horizon_weight>0 / tul.pass_readout='gated' under SCSE is not "
+                "defined: the loop carries the DEVIATION, so db_traj[t] would hold "
+                "Delta_t and not the slot state the horizon target / gate need to read "
+                "(the prefix_source='trajectory' precedent).")
         _db_traj: list[Tensor] | None = (
-            [h] if (_db or _stage or _mep or _oz or _pp or _cr or _traj_src) else None)
+            [h] if (_db or _stage or _mep or _oz or _pp or _cr or _traj_src
+                    or _hz_loss or _hz_gate) else None)
         # Per-pass MUX: entry t-1 is the mask for `_db_traj[t]` — the slots whose realised
         # depth REACHES pass t and whose pass t carries gradient (a progressive prefix pass
         # is excluded: it is detached, so a term there would train nothing and still be
@@ -4952,6 +5008,65 @@ class MORPHTransformer(nn.Module):
             stats["spandec_pass_n_tokens"] = n_tokens
         return out
 
+    def _tul_horizon_loss(self, db_traj, input_ids: Tensor, layout: SlotLayout,
+                          stats: dict | None = None) -> Tensor:
+        """``tul.horizon_weight`` — LoopMTP's per-pass horizon alignment (Eq 12-14).
+
+        Pass ``t`` (``t = 1..T``, ``T = tul.slot_depth_fixed``) is scored against the
+        DETACHED, mean-pooled tied-embedding representation of span ``i+t`` — a
+        cosine-similarity loss, never a cross-entropy, so this needs no decoder at all.
+        Pass 1 is skipped when ``tul.horizon_free_first`` (the default, LoopMTP's own
+        choice): it is left free to serve as the substrate later passes read from.
+
+        THE MASK is :func:`span_slots`' own rule at ``shift=t``: a slot is graded at
+        pass ``t`` only when span ``i+t`` EXISTS and is COMPLETE. Rows too short to have
+        a span ``i+t`` at all contribute nothing to that pass's term (not zero-padded
+        into it), and a ``t`` at or past the row's slot budget is skipped outright — the
+        row has no slot that could ever be graded there.
+
+        THE GRADIENT reaches pass ``t``'s core application through ``db_traj[t]`` and,
+        through the live carry, every earlier pass too. Nothing here trains
+        ``embed`` (the target embeddings are detached) or any later reader of ``z`` — it
+        shapes the LOOP alone, through ``tul_horizon_proj``.
+        """
+        tc = self.cfg.tul
+        assert self.tul_horizon_proj is not None and db_traj is not None
+        T = len(db_traj) - 1
+        S = layout.slot_index.shape[1]
+        J = int(tc.horizon_tokens or tc.bound_span_cap)
+        w_tied = self.embed.lm_weight().detach()
+        start_t = 2 if tc.horizon_free_first else 1
+        terms: list[Tensor] = []
+        n_tokens = 0.0
+        for t in range(start_t, T + 1):
+            if t >= S:
+                # Slot s is graded on span s+t; at or past the row's slot budget no slot
+                # could ever have one. `span_spans` itself raises here rather than
+                # returning an empty label set — skip the pass instead of hitting that.
+                continue
+            ids, valid = span_slots(input_ids, layout, J, shift=t)      # [B, S, J]
+            keep = valid.any(dim=-1) & layout.slot_valid                # [B, S]
+            if not bool(keep.any()):
+                continue
+            e = F.embedding(ids, w_tied)                                # [B, S, J, C]
+            m = valid.unsqueeze(-1).to(e.dtype)
+            tgt = (e * m).sum(dim=2) / m.sum(dim=2).clamp(min=1.0)      # [B, S, C]
+            z = self.tul_horizon_proj(self._readout(db_traj[t]).float())
+            cos = F.cosine_similarity(z, tgt.float(), dim=-1)           # [B, S]
+            loss_t = (1.0 - cos)[keep].mean()
+            terms.append(loss_t)
+            if stats is not None:
+                stats[f"horizon_t{t}"] = float(loss_t.detach())
+                n_tokens += float(valid.sum())
+        if not terms:
+            return db_traj[0].new_zeros(())
+        out = torch.stack(terms).mean()
+        if stats is not None:
+            stats["horizon_ce"] = float(out.detach())
+            stats["horizon_terms"] = float(len(terms))
+            stats["horizon_n_tokens"] = n_tokens
+        return out
+
     def _tul_coda_span_loss(self, xh: Tensor, input_ids: Tensor, layout: SlotLayout,
                             stats: dict | None = None) -> Tensor:
         """``tul.coda_span_heads`` — decode the next span from the CODA, all offsets at once.
@@ -5876,6 +5991,7 @@ class MORPHTransformer(nn.Module):
             spandec_loss, spandec_stats, _egrad_src = None, {}, None
             oracle_z_loss, oracle_z_stats = None, {}
             spandec_pass_loss, spandec_pass_stats = None, {}
+            horizon_loss, horizon_stats = None, {}
             rcon_loss, rcon_stats = None, {}
             db_traj = mep_keep = None
             # tul.vq_codes is refused with the paid loop at construction (there is no
@@ -5929,6 +6045,7 @@ class MORPHTransformer(nn.Module):
             fm_y = fm_geom = fm_ctx = None
             oracle_z_loss, oracle_z_stats = None, {}
             spandec_pass_loss, spandec_pass_stats = None, {}
+            horizon_loss, horizon_stats = None, {}
             mux_stats = {}
             mux_loss = (self._tul_mux_loss(h_slots, input_ids, layout, stats=mux_stats)
                         if tc.mux_beta > 0.0 else None)
@@ -5959,6 +6076,7 @@ class MORPHTransformer(nn.Module):
             spandec_loss, spandec_stats, _egrad_src = None, {}, None
             oracle_z_loss, oracle_z_stats = None, {}
             spandec_pass_loss, spandec_pass_stats = None, {}
+            horizon_loss, horizon_stats = None, {}
             _vq_out = None            # refused with an FM planner (no looped exit state)
             rcon_loss, rcon_stats = None, {}
             h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
@@ -6053,6 +6171,18 @@ class MORPHTransformer(nn.Module):
             _vq_cells, _vq_out = None, None
             if self.tul_vq is not None:
                 _vq_cells, h_slots, _vq_out = self.tul_vq(h_slots, layout.slot_valid)
+            # ── the pass-gated readout (tul.pass_readout="gated"; LoopMTP Eq 9-11) ──
+            # THE SAME SEAM the register's mean and VQ sit at: "last" — every model
+            # before this knob — leaves `h_slots` exactly what `_tul_core` returned and
+            # this block traces out, bit-identical. "gated" replaces it with a
+            # content-conditional mixture of EVERY realised pass's state, so every
+            # reader between here and the write grades and writes the SAME mixed
+            # thought instead of only the last pass's.
+            if self.tul_pass_gate is not None:
+                assert db_traj is not None, (
+                    "tul.pass_readout='gated' reached the readout with no trajectory: "
+                    "_tul_core must have failed to turn on its collection.")
+                h_slots = self.tul_pass_gate(db_traj[1:])
             mux_stats: dict = {}
             if tc.mux_beta <= 0.0:
                 mux_loss = None
@@ -6210,6 +6340,13 @@ class MORPHTransformer(nn.Module):
             if tc.spandec_per_pass and self.training and db_traj is not None:
                 spandec_pass_loss = self._tul_spandec_per_pass_loss(
                     db_traj, depths, input_ids, layout, stats=spandec_pass_stats)
+            # ── LoopMTP's horizon-indexed alignment (tul.horizon_weight) ──────
+            # The same trajectory, training-only, needs no decoder (a cosine loss
+            # against a detached tied-embedding target, not a cross-entropy).
+            horizon_loss, horizon_stats = None, {}
+            if tc.horizon_weight > 0.0 and self.training and db_traj is not None:
+                horizon_loss = self._tul_horizon_loss(
+                    db_traj, input_ids, layout, stats=horizon_stats)
             # The energy module trains on THIS state, detached, at the same seam every
             # other reader of z uses — but its loss is built at the END of the forward,
             # because the `disc` critic's label is the coda's own CE over the next span.
@@ -6519,6 +6656,18 @@ class MORPHTransformer(nn.Module):
             _pw = tc.spandec_pass_weight * spandec_pass_loss
             groups["spandec_pass_weighted"] = _pw.detach()
             groups["loss"] = groups["loss"] + _pw
+
+        if horizon_loss is not None and groups is not None:
+            # Same contract as `spandec_weighted`: the WEIGHTED term is exposed so
+            # train.py can subtract it and keep train/loss and the val loss on the
+            # MODEL's CE.
+            groups = dict(groups)
+            groups["horizon"] = horizon_loss.detach()
+            for _k, _v in horizon_stats.items():
+                groups[_k] = horizon_loss.new_tensor(_v)
+            _hw = tc.horizon_weight * horizon_loss
+            groups["horizon_weighted"] = _hw.detach()
+            groups["loss"] = groups["loss"] + _hw
 
         if self.coda_span is not None and groups is not None:
             # The parallel-decode heads (tul.coda_span_heads). Built HERE and not beside the

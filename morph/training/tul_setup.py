@@ -46,6 +46,7 @@ KNOWN_TUL_KEYS = frozenset({
     "gate_truncate_p", "egrad_disc_hidden", "egrad_heads", "egrad_layers", "egrad_max_tokens",
     "egrad_soft_labels", "egrad_soft_mix", "egrad_weight",
     "grad_pass", "grad_pass_energy", "grad_pass_norm", "grad_pass_scale",
+    "horizon_free_first", "horizon_tokens", "horizon_weight",
     "loop_reach", "loop_reads_tokens", "max_slots", "min_span",
     "mux_activate_at", "mux_beta",
     "mux_detach_head", "mux_every_pass", "mux_readout", "mux_rho", "mux_stage_all",
@@ -56,6 +57,7 @@ KNOWN_TUL_KEYS = frozenset({
     "oracle_z_weight",
     "per_slot_embed",
     "per_slot_embed_std", "pass_lora_rank", "pass_lora_targets",
+    "pass_readout",
     "pass_residual_lambda", "plast_weight", "prefix_k", "prefix_source", "progressive_p",
     "reinject_seed_every_pass", "recur_gate", "recur_gate_bias",
     "row_contrast_lambda", "row_contrast_tau",
@@ -266,6 +268,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         spandec_pass_horizon_max=int(tc.get("spandec_pass_horizon_max", 6)),
         spandec_pass_weight=float(tc.get("spandec_pass_weight", 1.0)),
         spandec_pass_tokens=int(tc.get("spandec_pass_tokens", 8)),
+        horizon_weight=float(tc.get("horizon_weight", 0.0)),
+        horizon_free_first=bool(tc.get("horizon_free_first", True)),
+        horizon_tokens=int(tc.get("horizon_tokens", 0)),
+        pass_readout=str(tc.get("pass_readout", "last")),
         coda_span_heads=int(tc.get("coda_span_heads", 0)),
         coda_span_weight=float(tc.get("coda_span_weight", 1.0)),
         coda_span_source=str(tc.get("coda_span_source", "cell")),
@@ -413,6 +419,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "spandec_pass_horizon_max": model_cfg.spandec_pass_horizon_max,
         "spandec_pass_weight": model_cfg.spandec_pass_weight,
         "spandec_pass_tokens": model_cfg.spandec_pass_tokens,
+        "horizon_weight": model_cfg.horizon_weight,
+        "horizon_free_first": model_cfg.horizon_free_first,
+        "horizon_tokens": (model_cfg.horizon_tokens or model_cfg.bound_span_cap),
+        "pass_readout": model_cfg.pass_readout,
         "coda_span_heads": model_cfg.coda_span_heads,
         "coda_span_weight": model_cfg.coda_span_weight,
         "coda_span_source": model_cfg.coda_span_source,
@@ -563,6 +573,17 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"step ({sum(min(t, _cap) * _pt for t in range(1, _cap + 1))} at depth "
               f"{_cap}) on its OWN zero-init position table "
               f"(lab/experiments/planned/2026-09-12-arc-objective-arms.md)", flush=True)
+    if model_cfg.horizon_weight > 0.0:
+        _hj = model_cfg.horizon_tokens or model_cfg.bound_span_cap
+        _h0 = "2" if model_cfg.horizon_free_first else "1"
+        print(f"  TUL HORIZON (LoopMTP) ON: pass t (t={_h0}..T) aligned by cosine loss "
+              f"to the mean tied-embedding of span s+t ({_hj} tokens/span, weight "
+              f"{model_cfg.horizon_weight}) — no decoder, arXiv 2608.03624 Eq 12-14. "
+              f"pass_readout={model_cfg.pass_readout!r}.", flush=True)
+    elif model_cfg.pass_readout == "gated":
+        print(f"  TUL PASS-GATED READOUT ON (LoopMTP Eq 9-11): z is a content-conditional "
+              f"softmax mixture of every one of the loop's {model_cfg.slot_depth_fixed} "
+              f"realised passes, not only the last.", flush=True)
     if model_cfg.coda_span_heads > 0:
         print(f"  TUL CODA SPAN HEADS ON: {model_cfg.coda_span_heads} parallel offset heads "
               f"on the coda readout at each slot's "
