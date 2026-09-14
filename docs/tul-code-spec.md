@@ -378,9 +378,10 @@ first smoke measures it; nothing here is a claim.
    not transfer (no core loop beside the sampler exists). Proceed with k as a deploy dial
    chosen by the K-curve. Alternative: fix k at 8 everywhere and read only `ce_k8`.
 2. **Rate control.** Noise augmentation only (v0.1). Alternative: β-VAE head from the start.
-3. **The FM gradient into the seed path.** Allowed (the prelude of span s may learn to make
-   span s+1's code easier to guess; E's input is span s+1, which `L_fm` never reaches).
-   Alternative: detach the seed, FM1's choice.
+3. **The FM gradient into the seed path.** Wolfe 2026-09-14: an ABLATION, not a decision.
+   Arm `tul_code` allows it (the prelude of span s may learn to make span s+1's code easier
+   to guess; E's input is span s+1, which `L_fm` never reaches); arm `tul_code_seeddetach`
+   detaches the seed (FM1's choice). One factor, same prereg.
 4. **Where the tape's context copies come from at inference.** Sampled codes (§7).
    Alternative: keep the mean code (`k`→∞) for old cells and sample only the current one.
 
