@@ -1,6 +1,6 @@
 # Planned: horizon-indexed passes with a gated all-pass readout (LoopMTP port)
 
-Status: planned
+Status: failure
 
 Date: 2026-09-14 (frozen before launch). Panel: `slot-job-panel-2026-09-13`
 (`vlt thread slot-job-panel-2026-09-13`), builder `Builder-horizon`. Literature source:
@@ -147,12 +147,82 @@ sweep, `all_slots` worth 0.1865 (`worth_profile`).
 
 ## Results
 
-(after the run)
+Both arms ran 2026-09-14, 5,000 steps, seed 1, `slot_depth_fixed` 6, `prefix_k` 2:
+`horizon-fixed6` (control: no horizon term, `pass_readout: last`; 12,860 tok/s, one
+gradient spike of 228 at step 1539, HEALTHY) and `horizon-arm` (`horizon_weight` 1.0,
+`horizon_free_first`, `pass_readout: gated`; 12,753 tok/s, HEALTHY). Artifacts:
+[`results/2026-09-14-horizon-passes/`](../results/2026-09-14-horizon-passes/).
+
+Two instruments refused the arms as built and were fixed before any reading here was
+taken: the gated readout refused every forced eval depth (f0c9fd7: eval reads
+`beta[min(t, T-1)]`, the token-loop gate's convention; the sweeps re-ran on the Spark)
+and `slot_state_probe` forced depth through the Poisson knob a k-fixed model ignores
+(d1e93e3; both state probes re-ran on the Spark). `horizon_pass_probe.py`'s CLI ran
+for the first time here (ef50a91, a device bug) and only on the horizon arm: the
+control returns no trajectory under `pass_readout: last`, so it has no matrix.
+
+**Own sweeps at 5,000 (480 rows), token CE:**
+
+| arm | depth-6 CE | K1−K6 | K2−K6 | K3−K6 | worth `all_slots` |
+|---|---|---|---|---|---|
+| ruler `slot-spandec-strict` (Poisson 6) | 4.3474 | +0.0016 | | +0.0002 | 0.1865 |
+| `horizon-fixed6` | 4.3430 | +0.278 (OOD: never trained below 6; span-first 5.99 at depth 1) | +0.030 | +0.0086 | 0.1898 |
+| `horizon-arm` | 4.3429 | +0.0040 [+0.0036, +0.0044] | +0.0005 | +0.0002 [+0.0001, +0.0003] | 0.1836 |
+
+At 2,500: `horizon-arm` 4.6468 (K1−K6 +0.0012, K3−K6 −0.0002), `horizon-fixed6` 4.6507.
+
+**Paired (480 identical rows):** horizon − fixed6 at depth 6: **−0.0001 [−0.0023,
++0.0025]** at 5,000, −0.0039 [−0.0061, −0.0016] at 2,500; horizon − ruler at depth 6:
+−0.0045 [−0.0071, −0.0018] (the control reads the same −0.0044, so that is the fixed
+draw, not the targets).
+
+**State probes (12 rows, `prefix_project` input, Spark, d1e93e3):** `fixed6` |h| 747 →
+1388 → 1951 → 2039 at depths 1/2/3/6, cosine to the depth-1 state 0.49 / 0.29 / 0.24;
+`horizon-arm` |h| 340 → 390 → 392 → 391, cosine 0.90 / 0.89 / 0.88. (The Poisson family:
+`trajrep` |h| 88 → 98, cosine 0.98.)
+
+**Pass probe on `horizon-arm` (48 rows, T=6, the learned projection):** the cosine
+matrix M[pass, horizon] is 0.603 / 0.595 / … / 0.592 on pass 1 and 0.645 / 0.642 /
+0.641 / 0.640 / 0.639 / 0.638 on EVERY pass 2–6; M[h,h] − M[1,h] = 0.046–0.047 for every
+h. Consecutive-pass cosine (1→2 … 5→6): 0.43, 0.13, 0.81, 0.97, 0.95. Gate mean weight
+per pass: 0.832, 0.036, 0.028, 0.027, 0.028, 0.028. The training term fell 1.00 → 0.35
+over 5,000 steps, positive and finite at every logged step.
+
+**Scores.**
+
+- **P-1 holds.** Both HEALTHY.
+- **P-2 fails.** `fixed6`'s K1−K6 (+0.278) and K3−K6 (+0.0086) are far outside the
+  bands, because a model trained only at depth 6 is out of distribution at every other
+  eval depth. Its depth-6 CE is within 0.005 of the ruler.
+- **P-3 splits.** The term is positive and finite throughout (holds); the horizon arm's
+  depth-6 CE at 2,500 is BETTER than the control's by 0.004, not worse (fails).
+- **P-4 passes the letter and fails the meaning.** K3−K6 (horizon − fixed6) = −0.0084 is
+  outside [−0.0005, +0.0005], but the movement is the control's OOD inflation; the horizon
+  arm's own K3−K6 is +0.0002, the ruler's number.
+- **P-5 fails** (0.047 < 0.05), and the matrix says why: the six horizon targets are
+  within 0.01 cosine of each other for every pass, so "a different job per pass" was
+  never posed. A mean-pooled tied embedding of span i+t barely depends on t on web text.
+- **P-6 holds.** No consecutive pair below −0.2; passes 3–6 are near-identical states
+  (0.81, 0.97, 0.95) and the 2→3 pair is near orthogonal (0.13).
+- **P-7 holds.** Pass-1 weight 0.832 < 0.90; the other five passes share 0.17.
+- **P-8 holds.** 1.008x the control's rate.
 
 ## Verdict
 
-(after the run)
+**Failure.** The LoopMTP port to the slot loop buys nothing: paired CE against its
+fixed-depth control is −0.0001 ± 0.0024 at 5,000, the K-curve past pass 3 is the
+ruler's +0.0002, and the gate reads 83 % from pass 1. The instrument the arm was built
+to move (P-5) shows the horizon targets are degenerate on this corpus, so the arm never
+gave the passes different jobs. The one thing the fixed draw does is turn the loop into
+a growing chain (norm x2.7, exit at cosine 0.24 to pass 1) that the gate then tames to
+0.88; the coda uses neither.
 
 ## Updated hypothesis
 
-(after the run)
+Horizon-indexed targets made of span-mean tied embeddings do not distinguish horizons
+on web text and cannot give passes different jobs; any future per-pass target must be
+shown non-degenerate (M's columns separated) before an arm is queued. The fixed depth
+draw is a real change to the loop's dynamics (a growing chain) with no CE or depth
+consequence at 5k, which is one more instrument moving while the coda does not pay.
+The token-loop LoopMTP rungs (`2026-09-14-arc-loopmtp-token-loop.md`) are the ship
+question and are unaffected by this reading.

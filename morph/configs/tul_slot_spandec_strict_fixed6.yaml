@@ -11,8 +11,8 @@
 # the gate) works fine under a fixed depth too — `slot_depth_fixed` predates this arm —
 # so this file changes nothing else about the strict-geometry recipe.
 #
-# Record: lab/experiments/planned/2026-09-14-arc-horizon-passes.md
-# Note: .agents/notes/proposed/architecture/2026-09-14-horizon-indexed-passes.md
+# Record: lab/experiments/failures/2026-09-14-arc-horizon-passes.md
+# Note: .agents/notes/rejected/architecture/2026-09-14-horizon-indexed-passes.md
 defaults:
   - tul_slot_spandec_strict
   - _self_

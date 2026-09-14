@@ -1,6 +1,6 @@
 # Agent Note: Horizon-indexed passes with a gated all-pass readout (LoopMTP port)
 
-Status: proposed
+Status: rejected — measured 2026-09-14: paired −0.0001 ± 0.0024 vs the fixed-6 control, K3−K6 +0.0002, gate 0.83 on pass 1, and the six horizon targets sit within 0.01 cosine of each other (the passes were never given different jobs). lab/experiments/failures/2026-09-14-arc-horizon-passes.md
 
 ## Problem
 
@@ -100,7 +100,7 @@ not argued from the diff.
 * Both configs (`tul_slot_spandec_strict_horizon.yaml`,
   `tul_slot_spandec_strict_fixed6.yaml`) compose through Hydra with no missing/unknown
   key and pass `reject_unknown_tul_keys` — checked at this note's commit.
-* `lab/experiments/planned/2026-09-14-arc-horizon-passes.md` frozen before launch.
+* `lab/experiments/failures/2026-09-14-arc-horizon-passes.md` frozen before launch.
 
 ## Risks
 

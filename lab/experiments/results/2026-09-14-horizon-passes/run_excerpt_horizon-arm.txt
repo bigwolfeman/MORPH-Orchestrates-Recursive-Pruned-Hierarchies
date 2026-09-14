@@ -1,0 +1,24 @@
+  TUL HORIZON (LoopMTP) ON: pass t (t=2..T) aligned by cosine loss to the mean tied-embedding of span s+t (32 tokens/span, weight 1.0) — no decoder, arXiv 2608.03624 Eq 12-14. pass_readout='gated'.
+  [spec] step=0 sigma_max=1.93 (core.2.mlp.0.gate_up) mean=1.42
+  [spec] step=100 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.42
+  [spec] step=200 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.42
+[    200/5000] loss=14.9090  ppl=2984578.0  lr=2.00e-05  sps=2.08  tok/s=12753  proxy=10.19  tflops=18.1  peak=15.93GB
+  [VAL     250] loss=7.0172  ppl=1115.66  ppl_tok=1115.66  first_tok=7.2277  cf=-1.6027  lp/tok=14.60
+  [spec] step=300 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.42
+  [spec] step=400 sigma_max=1.93 (core.2.mlp.0.gate_up) mean=1.42
+  [spec] step=500 sigma_max=1.93 (core.2.mlp.0.gate_up) mean=1.43
+  [VAL     500] loss=6.4155  ppl=611.27  ppl_tok=611.27  first_tok=6.7472  cf=-1.7180  lp/tok=14.49
+  [spec] step=600 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.46
+  [spec] step=700 sigma_max=1.96 (core.0.mlp.0.gate_up) mean=1.50
+  [VAL     750] loss=5.6826  ppl=293.71  ppl_tok=293.71  first_tok=6.3967  cf=-2.0208  lp/tok=14.60
+  [spec] step=800 sigma_max=2.05 (core.0.mlp.0.gate_up) mean=1.58
+  [spec] step=900 sigma_max=2.17 (core.0.mlp.0.gate_up) mean=1.68
+  [spec] step=1000 sigma_max=2.32 (core.0.mlp.0.gate_up) mean=1.79
+[   1000/5000] loss=12.0449  ppl=170230.0  lr=1.00e-04  sps=2.07  tok/s=12714  proxy=10.20  tflops=18.0  peak=16.12GB
+  [VAL    1000] loss=5.2629  ppl=193.04  ppl_tok=193.04  first_tok=7.1657  cf=-2.9774  lp/tok=14.56
+  [spec] step=1100 sigma_max=2.46 (core.0.mlp.0.gate_up) mean=1.90
+  [spec] step=1200 sigma_max=2.57 (core.0.mlp.0.gate_up) mean=2.00
+  [VAL    1250] loss=5.1104  ppl=165.74  ppl_tok=165.74  first_tok=6.5374  cf=-2.4754  lp/tok=14.43
+  [spec] step=1300 sigma_max=2.68 (core.0.mlp.0.gate_up) mean=2.07
+  [spec] step=1400 sigma_max=2.78 (core.0.mlp.0.gate_up) mean=2.16
+  [spec] step=1500 sigma_max=2.87 (core.0.mlp.0.gate_up) mean=2.23

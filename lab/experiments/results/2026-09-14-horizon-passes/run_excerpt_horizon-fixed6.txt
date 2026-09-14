@@ -1,0 +1,24 @@
+  [spec] step=0 sigma_max=1.92 (core.1.mlp.0.gate_up) mean=1.41
+  [spec] step=100 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.42
+  [spec] step=200 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.42
+[    200/5000] loss=14.2987  ppl=1621164.9  lr=2.00e-05  sps=2.09  tok/s=12860  proxy=10.19  tflops=18.0  peak=15.72GB
+  [VAL     250] loss=7.0422  ppl=1143.95  ppl_tok=1143.95  first_tok=8.5958  cf=-2.9452  lp/tok=14.60
+  [spec] step=300 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.42
+  [spec] step=400 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.42
+  [spec] step=500 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.42
+  [VAL     500] loss=6.3999  ppl=601.78  ppl_tok=601.78  first_tok=9.0240  cf=-4.0259  lp/tok=14.49
+  [spec] step=600 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.42
+  [spec] step=700 sigma_max=1.93 (core.5.mlp.0.gate_up) mean=1.44
+  [VAL     750] loss=5.6926  ppl=296.68  ppl_tok=296.68  first_tok=9.9772  cf=-5.5969  lp/tok=14.60
+  [spec] step=800 sigma_max=1.93 (core.5.mlp.0.gate_up) mean=1.46
+  [spec] step=900 sigma_max=1.93 (core.5.mlp.0.gate_up) mean=1.50
+  [spec] step=1000 sigma_max=1.97 (core.1.mlp.0.gate_up) mean=1.56
+[   1000/5000] loss=11.5617  ppl=104996.1  lr=1.00e-04  sps=2.10  tok/s=12882  proxy=10.20  tflops=18.1  peak=15.91GB
+  [VAL    1000] loss=5.2814  ppl=196.64  ppl_tok=196.64  first_tok=10.2075  cf=-6.0196  lp/tok=14.56
+  [spec] step=1100 sigma_max=2.07 (core.1.mlp.0.gate_up) mean=1.65
+  [VAL    1250] loss=5.1275  ppl=168.60  ppl_tok=168.60  first_tok=9.7433  cf=-5.6874  lp/tok=14.43
+  [VAL    1500] loss=5.1536  ppl=173.06  ppl_tok=173.06  first_tok=9.5837  cf=-5.3002  lp/tok=15.12
+  [VAL    1750] loss=4.9939  ppl=147.51  ppl_tok=147.51  first_tok=9.4907  cf=-5.2962  lp/tok=14.41
+[   2000/5000] loss=9.5944  ppl=14682.7  lr=1.00e-04  sps=2.10  tok/s=12919  proxy=10.21  tflops=18.2  peak=15.91GB
+  [VAL    2000] loss=5.1457  ppl=171.70  ppl_tok=171.70  first_tok=9.3842  cf=-5.1031  lp/tok=14.51
+  [VAL    2250] loss=4.6368  ppl=103.21  ppl_tok=103.21  first_tok=9.1150  cf=-5.3187  lp/tok=14.74

@@ -25,8 +25,8 @@ WHAT THIS FILE HAS TO PROVE:
 CPU only, fp32, ``use_kernels=False``, tiny config (the ``test_tul_slot_register``
 fixture, imported rather than duplicated).
 
-Record: lab/experiments/planned/2026-09-14-arc-horizon-passes.md
-Note: .agents/notes/proposed/architecture/2026-09-14-horizon-indexed-passes.md
+Record: lab/experiments/failures/2026-09-14-arc-horizon-passes.md
+Note: .agents/notes/rejected/architecture/2026-09-14-horizon-indexed-passes.md
 """
 
 from __future__ import annotations
