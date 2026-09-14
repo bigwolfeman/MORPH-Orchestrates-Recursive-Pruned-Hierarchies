@@ -419,6 +419,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         mean_depth=int(m.mean_depth),
         max_depth=int(m.max_depth),
         bptt_depth=int(m.bptt_depth),
+        depth_fixed=bool(getattr(m, "depth_fixed", False)),
         ckpt_grad_iters=int(getattr(m, "ckpt_grad_iters", -1)),
         core_init_scale=float(getattr(m, "core_init_scale", 0.0)),
         # SCSE, the full method (docs/scse-spec.md). Every field goes through the
@@ -1615,15 +1616,23 @@ def warmup_compile_all_shapes(
         return
 
     mx = int(model.cfg.max_depth)
+    # A depth_fixed model (LoopMTP and its *fixed controls) never has a partial active
+    # set: every row runs max_depth iterations, so the ONE shape it will ever compile is
+    # the full batch at max_depth. The forced-size ladder would build shapes the model
+    # never runs and trips LoopMTP's constant-T guard (the 2026-09-14 smoke failure).
+    fixed = bool(getattr(model.cfg, "depth_fixed", False))
 
     def _forced(K):
+        if fixed:
+            return torch.full((batch_size,), mx, device=device, dtype=torch.long)
         d = [1] * batch_size
         for j in range(min(K, batch_size)):
             d[j] = mx
         return torch.tensor(d, device=device, dtype=torch.long)
 
     orig_sample = model._sample_depths
-    sizes = list(range(batch_size, 0, -1))   # [B, B-1, ..., 1] — size>1 AND size==1
+    sizes = ([batch_size] if fixed else
+             list(range(batch_size, 0, -1)))   # [B, B-1, ..., 1] — size>1 AND size==1
     print(f"  Warmup compile [{tag}] (active-set sizes {sizes} × {passes_per_size})...",
           flush=True)
     t0 = time.perf_counter()

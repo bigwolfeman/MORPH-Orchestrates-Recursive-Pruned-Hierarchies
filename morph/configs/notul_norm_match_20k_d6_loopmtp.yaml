@@ -13,6 +13,7 @@ defaults:
   - _self_
 
 model:
+  depth_fixed: true            # a constant T: every row runs max_depth iterations
   core_readout: gated
   loopmtp_weight: 0.05          # lambda_align, the T=7 value; see the header
   loopmtp_free_first: true

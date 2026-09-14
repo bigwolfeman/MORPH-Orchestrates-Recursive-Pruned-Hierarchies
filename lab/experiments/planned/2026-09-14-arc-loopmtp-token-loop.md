@@ -88,6 +88,21 @@ trained T iteration `t > T` reuses `beta_T`. So K1−KT on a gated arm mixes two
 is NOT the same quantity as K1−KT on a "last" arm. That is why the iteration probe is the
 decisive instrument here and the K-curve is the ship number.
 
+
+### Method amendment (2026-09-14, after the d3-loopmtp smoke failed at c90b9f1)
+
+The tree's `_sample_depths` is Poisson(mean_depth) clamped to [1, max_depth], so
+`mean_depth == max_depth` never was a constant T: a mean-6 / max-6 model runs about a
+third of its rows at depth 1-5, and LoopMTP's constant-T guard fired in the compile
+warmup (and would have fired on the first real step). Fix: a real `model.depth_fixed`
+knob (every row runs max_depth iterations), required by the LoopMTP build check, honoured
+by the compile warmup, set on `_d3_loopmtp`, `_d6fixed` and `_d6_loopmtp`. Because the
+ladder rung `notul_norm_match_20k_d3` keeps the clamped draw, a new one-factor control
+`notul_norm_match_20k_d3fixed` (depth_fixed, LoopMTP off) is added and queued; the
+LoopMTP delta at depth 3 is read against IT, and P-1 (the ship question) stays against
+the Poisson-6 top rung as written. Reason: the arms cannot start otherwise; no prediction
+is changed.
+
 ## Predictions (frozen)
 
 - **P-1 (the ship question: d3 + LoopMTP vs plain depth 6).** CE(d3-loopmtp@20k) −

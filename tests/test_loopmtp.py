@@ -61,6 +61,9 @@ def _tiny(**kw) -> MORPHConfig:
 
 
 def _model(seed=1234, **cfg_kw) -> MORPHTransformer:
+    # A LoopMTP model needs the real fixed depth (mean == max is a clamped Poisson draw).
+    if cfg_kw.get("core_readout") == "gated" or float(cfg_kw.get("loopmtp_weight", 0.0)) > 0:
+        cfg_kw.setdefault("depth_fixed", True)
     torch.manual_seed(seed)
     return MORPHTransformer(_tiny(**cfg_kw))
 
@@ -490,9 +493,25 @@ def test_forced_depth_reads_a_gated_model_over_the_available_iterations():
 
 def test_poisson_depth_is_refused():
     with pytest.raises(ValueError, match="FIXED loop depth"):
-        _model(core_readout="gated", mean_depth=6, max_depth=8, bptt_depth=8)
+        _model(core_readout="gated", mean_depth=6, max_depth=8, bptt_depth=8, depth_fixed=False)
     with pytest.raises(ValueError, match="FIXED loop depth"):
-        _model(loopmtp_weight=0.05, mean_depth=6, max_depth=8, bptt_depth=8)
+        _model(loopmtp_weight=0.05, mean_depth=6, max_depth=8, bptt_depth=8, depth_fixed=False)
+    # mean == max is a Poisson draw clamped at max, NOT a constant T (2026-09-14 smoke).
+    with pytest.raises(ValueError, match="FIXED loop depth"):
+        _model(loopmtp_weight=0.05, mean_depth=3, max_depth=3, bptt_depth=3, depth_fixed=False)
+    with pytest.raises(ValueError, match="mean_depth == max_depth"):
+        _model(mean_depth=6, max_depth=8, bptt_depth=8, depth_fixed=True)
+
+
+def test_depth_fixed_runs_every_row_at_max_depth():
+    """`depth_fixed` is what LoopMTP's constant T stands on; mean == max is not it."""
+    m = _model(depth_fixed=True)
+    m.train()
+    assert m._sample_depths(64, torch.device("cpu")).tolist() == [3] * 64
+    m2 = _model(depth_fixed=False, mean_depth=3, max_depth=3)
+    torch.manual_seed(0)
+    d2 = m2._sample_depths(4096, torch.device("cpu"))
+    assert d2.max().item() == 3 and d2.min().item() < 3, "mean == max is a clamped draw"
 
 
 def test_truncated_bptt_is_refused():
@@ -565,6 +584,7 @@ def test_build_morph_config_threads_every_key():
     assert mc.loopmtp_proj == "linear"
     assert mc.loopmtp_ponder_weight == 0.05
     assert (mc.mean_depth, mc.max_depth, mc.bptt_depth) == (3, 3, 3)
+    assert mc.depth_fixed is True
     assert mc.tul is None
 
 
@@ -576,7 +596,7 @@ def test_every_new_config_key_is_documented_and_threaded():
     src_cfg = inspect.getsource(tmod.MORPHConfig)
     src_build = inspect.getsource(trmod.build_morph_config)
     keys = ["core_readout", "loopmtp_weight", "loopmtp_free_first", "loopmtp_proj",
-            "loopmtp_ponder_weight", "loopmtp_gate_eps"]
+            "loopmtp_ponder_weight", "loopmtp_gate_eps", "depth_fixed"]
     for k in keys:
         assert f"{k}:" in src_cfg, f"{k} is not declared in MORPHConfig"
         assert src_cfg.count(k) >= 2, f"{k} has no prose in the MORPHConfig comment block"
@@ -588,6 +608,7 @@ def test_the_three_arm_configs_compose():
     from morph.training.train import build_morph_config
     want = {
         "notul_norm_match_20k_d3_loopmtp": ("gated", 0.01, 3),
+        "notul_norm_match_20k_d3fixed": ("last", 0.0, 3),
         "notul_norm_match_20k_d6fixed": ("last", 0.0, 6),
         "notul_norm_match_20k_d6_loopmtp": ("gated", 0.05, 6),
     }
@@ -599,6 +620,7 @@ def test_the_three_arm_configs_compose():
         assert mc.core_readout == readout, name
         assert mc.loopmtp_weight == lam, name
         assert (mc.mean_depth, mc.max_depth, mc.bptt_depth) == (depth, depth, depth), name
+        assert mc.depth_fixed is True, name
         assert int(cfg.training.steps) == 20000 and int(cfg.training.ckpt_every) == 5000
         assert str(cfg.training.ternary_scale_mode) == "norm_match", name
 

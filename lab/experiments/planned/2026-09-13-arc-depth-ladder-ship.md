@@ -57,6 +57,16 @@ had MORE time), and the honest comparison is that d1@20k must beat d6@5k to be a
 wall-clock win at all, and beat d6@10k to be a clear one. The same bracketing applies to
 d2 and d3 with their measured rates.
 
+
+### Method amendment (2026-09-14)
+
+"Fixed depth d" on this ladder means `mean_depth = max_depth = d`, which the tree draws
+as Poisson(d) clamped to [1, d]: d1 is truly fixed, d2 and d3 train with a share of rows
+at lower depth (Poisson(3) puts about 20 % of rows at 1 and 22 % at 2 before the clamp).
+The predictions were written under that construction and are scored under it. A truly
+fixed depth-3 rung (`model.depth_fixed`, `notul_norm_match_20k_d3fixed`) is queued as the
+LoopMTP control and is read in the LoopMTP prereg, not here.
+
 ## Predictions (frozen)
 
 - **P-1 (matched steps, the loop's edge at 20k).** CE(d1@20k) − CE(d6@20k), token-paired,

@@ -1,0 +1,21 @@
+# Depth ladder, arm "norm-match-20k-d3fixed": the plain norm-match recipe at a TRULY fixed
+# core depth of 3 (`depth_fixed: true`: every row runs 3 iterations at train and eval).
+# The ladder rung `notul_norm_match_20k_d3` sets mean = max = 3, which is a Poisson(3)
+# draw clamped at 3, so about a third of its rows train at depth 1-2. LoopMTP needs a
+# constant T, so its depth-3 arm (`notul_norm_match_20k_d3_loopmtp`) runs depth_fixed and
+# needs THIS as its one-factor control, not the clamped rung. Added 2026-09-14 after the
+# LoopMTP smoke failed on the clamped draw (record: the Method amendment in
+# lab/experiments/planned/2026-09-14-arc-loopmtp-token-loop.md).
+defaults:
+  - notul_norm_match_20k
+  - _self_
+
+model:
+  depth_fixed: true
+  mean_depth: 3
+  max_depth: 3
+  bptt_depth: 3
+  core_fixed_point_lambda: 0.0    # the lineage (Parcae entry) runs 0.0 on every rung
+
+wandb:
+  name: norm-match-20k-d3fixed

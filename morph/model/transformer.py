@@ -163,6 +163,14 @@ class MORPHConfig:
     mean_depth: int = 6
     max_depth: int = 8
     bptt_depth: int = 4
+    # ``depth_fixed``: every sample runs EXACTLY ``max_depth`` core iterations at train
+    # (eval already runs ``mean_depth`` for every row). Off, ``_sample_depths`` draws
+    # Poisson(mean_depth) clamped to [1, max_depth], so ``mean_depth == max_depth`` is NOT
+    # a fixed depth: a mean-6 / max-6 model still runs about a third of its rows at depth
+    # 1-5 (the 2026-09-14 LoopMTP smoke died on exactly that draw). Requires
+    # mean_depth == max_depth. The depth-ladder rungs (notul_norm_match_20k_d{1,2,3})
+    # keep the clamped draw on purpose; the LoopMTP arms and their *fixed controls set it.
+    depth_fixed: bool = False
 
     # ── SCSE Stage 1 (arXiv:2607.27656) — the loop's initial deviation ──────────
     # MORPH starts the core loop at ``h_0 = e``, so with the natural input-conditioned
@@ -1173,6 +1181,11 @@ class MORPHTransformer(nn.Module):
     def __init__(self, cfg: MORPHConfig):
         super().__init__()
         self.cfg = cfg
+        if bool(cfg.depth_fixed) and int(cfg.mean_depth) != int(cfg.max_depth):
+            raise ValueError(
+                f"model.depth_fixed needs mean_depth == max_depth (got {cfg.mean_depth} / "
+                f"{cfg.max_depth}): eval runs mean_depth for every row and train runs "
+                f"max_depth for every row, and a fixed depth means the same number.")
         # MORPH_DIAG_CORECOS: log per-iteration carrier ROTATION (min per-token cos(h_new,h_a))
         # + paired magnitude gain, to test whether the β1=0 spike is a directional rotation
         # (the magnitude governor was magnitude-invariant). Cheap: tensor-reduced, 1 sync/forward.
@@ -1517,14 +1530,15 @@ class MORPHTransformer(nn.Module):
         self._loopmtp_states = bool(_lm_gated or _lm_align)
         if self._loopmtp_states:
             _T = int(cfg.mean_depth)
-            if int(cfg.mean_depth) != int(cfg.max_depth):
+            if not bool(cfg.depth_fixed):
                 raise ValueError(
                     f"LoopMTP (model.core_readout='gated' or model.loopmtp_weight > 0) "
-                    f"needs a FIXED loop depth: mean_depth ({cfg.mean_depth}) must equal "
-                    f"max_depth ({cfg.max_depth}). The paper's T is a constant — every "
-                    f"iteration carries its own horizon target and the aggregator gates "
-                    f"exactly T states, so a per-sample Poisson draw would give different "
-                    f"rows different target sets and different gate supports.")
+                    f"needs a FIXED loop depth: set model.depth_fixed: true (mean_depth "
+                    f"{cfg.mean_depth}, max_depth {cfg.max_depth}). mean_depth == max_depth "
+                    f"alone is a Poisson draw clamped at max_depth, not a constant T. The "
+                    f"paper's T is a constant — every iteration carries its own horizon "
+                    f"target and the aggregator gates exactly T states, so a per-sample "
+                    f"draw would give different rows different target sets and gate supports.")
             if int(cfg.bptt_depth) < _T:
                 raise ValueError(
                     f"LoopMTP needs full BPTT: bptt_depth ({cfg.bptt_depth}) must be >= "
@@ -2244,6 +2258,8 @@ class MORPHTransformer(nn.Module):
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _sample_depths(self, B: int, device: torch.device) -> Tensor:
+        if bool(self.cfg.depth_fixed):
+            return torch.full((B,), int(self.cfg.max_depth), device=device, dtype=torch.long)
         lam = float(self.cfg.mean_depth)
         depths = torch.poisson(torch.full((B,), lam, device=device)).long()
         return depths.clamp(min=1, max=self.cfg.max_depth)
@@ -3375,8 +3391,8 @@ class MORPHTransformer(nn.Module):
                         raise RuntimeError(
                             f"LoopMTP needs a fixed loop depth: iteration {t} has "
                             f"{n_active} active samples of {h_s.shape[0]}. Build-time "
-                            f"validation requires mean_depth == max_depth, so reaching "
-                            f"here means a caller mutated the depth knobs apart.")
+                            f"validation requires model.depth_fixed, so reaching here "
+                            f"means a caller replaced _sample_depths or mutated the knobs.")
                     _lm_states.append(h_new)
 
                 if _fp_lam > 0.0 and t >= n_nograd:
