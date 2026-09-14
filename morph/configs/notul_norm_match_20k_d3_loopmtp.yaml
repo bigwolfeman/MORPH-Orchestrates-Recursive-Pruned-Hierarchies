@@ -1,0 +1,29 @@
+# LoopMTP on the token loop, arm "norm-match-20k-d3-loopmtp" (arXiv 2608.03624, Shomali et
+# al. 2026). The depth-3 ladder rung (`notul_norm_match_20k_d3`) with BOTH of the paper's
+# mechanisms on:
+#   * `core_readout: gated`   — the coda reads the content-conditional mix of ALL 3 core
+#                               iterates (Eq 9-11) instead of the last one;
+#   * `loopmtp_weight`        — lambda_align, the soft MTP target (Eq 12-13): iteration t is
+#                               aligned by cosine to the DETACHED tied embedding of the token
+#                               t steps ahead, iteration 1 left free;
+#   * `loopmtp_ponder_weight` — the paper's ponder regulariser on the gate, its default 0.05.
+# lambda_align 0.01 is the paper's own value for T = 3 (Table 2: 0.01 / 0.01 / 0.05 / 0.15
+# for T = 3 / 5 / 7 / 9). Its control is the ladder rung itself, which shares every base
+# weight (the LoopMTP inits draw no RNG).
+# Ship question: does horizon guidance let depth 3 match or beat plain depth 6 at 20k?
+# Record: lab/experiments/planned/2026-09-14-arc-loopmtp-token-loop.md
+defaults:
+  - notul_norm_match_20k_d3
+  - _self_
+
+model:
+  core_readout: gated
+  loopmtp_weight: 0.01          # lambda_align, the paper's T=3 value
+  loopmtp_free_first: true      # "the first iteration is reserved as an unconstrained rep"
+  loopmtp_proj: linear          # MORPH deviation: the core state is 3 coda blocks from the
+                                # head's space, so the cosine runs through one shared
+                                # identity-init RMSNorm -> Linear. See the prereg.
+  loopmtp_ponder_weight: 0.05   # lambda_ponder, the paper's default
+
+wandb:
+  name: norm-match-20k-d3-loopmtp
