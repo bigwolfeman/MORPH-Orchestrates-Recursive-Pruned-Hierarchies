@@ -501,6 +501,14 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         core_state_init=str(getattr(m, "core_state_init", "prelude")),
         core_state_init_std=float(getattr(m, "core_state_init_std", 0.02)),
         mtp_weight=float(getattr(m, "mtp_weight", 1.0)),
+        # LoopMTP (arXiv 2608.03624). Every field goes through the config so a run is
+        # reproducible from its wandb config alone.
+        core_readout=str(getattr(m, "core_readout", "last")),
+        loopmtp_weight=float(getattr(m, "loopmtp_weight", 0.0)),
+        loopmtp_free_first=bool(getattr(m, "loopmtp_free_first", True)),
+        loopmtp_proj=str(getattr(m, "loopmtp_proj", "linear")),
+        loopmtp_ponder_weight=float(getattr(m, "loopmtp_ponder_weight", 0.0)),
+        loopmtp_gate_eps=float(getattr(m, "loopmtp_gate_eps", 1.0e-6)),
         dropout=float(tr.dropout),
     )
 
@@ -3111,6 +3119,8 @@ def main(cfg: DictConfig) -> None:
                             "spandec_pass", "spandec_pass_weighted",
                             "coda_span", "coda_span_weighted",
                             "core_token_aux", "core_token_aux_weighted",
+                            "loopmtp_align", "loopmtp_weighted",
+                            "loopmtp_ponder", "loopmtp_ponder_weighted",
                             "vq", "vq_weighted", "vq_commit", "vq_codebook_loss",
                             "vq_perplexity", "vq_used",
                             "critic", "critic_weighted", "critic_agree",
@@ -3240,6 +3250,8 @@ def main(cfg: DictConfig) -> None:
                         "pass_res_weighted", "oracle_z_weighted",
                         "spandec_pass_weighted", "coda_span_weighted",
                         "core_token_aux_weighted",
+                        "loopmtp_weighted",          # LoopMTP Eq 13 (arXiv 2608.03624)
+                        "loopmtp_ponder_weighted",   # LoopMTP's ponder regulariser
                         "vq_weighted",       # arc: the discrete thought, 2026-09-13
                         "row_contrast_weighted",   # tul.row_contrast_lambda, 2026-09-13
                         "critic_weighted"):  # arc E10 / 2026-09-12
@@ -3283,7 +3295,10 @@ def main(cfg: DictConfig) -> None:
                 **({f"train/{_k}": float(_v.detach()) for _k, _v in out.items()
                     if _k.startswith("ce_mtp_") or _k in ("mtp_weighted", "fixed_point",
                                                           "fp_weighted", "core_gain_est",
-                                                          "core_gain_max", "core_gain_weighted")}
+                                                          "core_gain_max", "core_gain_weighted",
+                                                          "loopmtp_align", "loopmtp_weighted",
+                                                          "loopmtp_ponder",
+                                                          "loopmtp_ponder_weighted")}
                    if isinstance(out, dict) else {}),
                 "train/ppl": math.exp(min(_lv, 20.0)),
                 "train/lr": lr,

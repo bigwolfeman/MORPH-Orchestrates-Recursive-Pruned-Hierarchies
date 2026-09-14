@@ -24,6 +24,18 @@ arm every batch is run TWICE per depth — once for the CE map, once for the mux
 both at the same forced depth — and its interval resamples BATCHES; run with
 `--batch 1` when that interval is the headline.
 
+A LoopMTP arm (`model.core_readout: gated`, arXiv 2608.03624) reads the coda from the
+gated mix of all T iterates, not the last one, so forcing the depth changes WHAT THE
+AGGREGATOR SEES as well as how many iterations ran. The convention, and it is a
+convention, not a derivation: at forced depth d the gate normalises over the d iterates
+that exist. At d = 0 (the plain read-out's first rung) there is no iterate and the
+aggregate is the entry carrier, the same tensor the "last" read-out hands the coda there.
+Above the trained T the per-iteration bias runs out and iteration t > T reuses beta_T,
+while the gate stays content-conditional through W_g. So K1-KT on a gated arm is a
+comparison of TWO things at once (fewer iterations AND a narrower aggregate) and is not
+the same quantity as K1-KT on a "last" arm; the per-iteration read-outs in
+`loopmtp_iteration_probe.py` are what separates them.
+
 Usage:
   python lab/divergence/core_depth_sweep.py \
     --ckpt l3=tul_l3=checkpoints/morph/tul-l3/step_4500.pt \

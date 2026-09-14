@@ -1,0 +1,19 @@
+# Depth ladder, arm "norm-match-20k-d6fixed": the plain norm-match recipe at a FIXED core
+# depth of 6 (mean = max = bptt = 6) instead of the top rung's Poisson draw (mean 6, max 8).
+# It exists because LoopMTP needs a constant T — every iteration carries its own horizon
+# target and the aggregator gates exactly T states — so the Poisson rung
+# (`notul_norm_match_20k`) CANNOT be the control for a depth-6 LoopMTP arm. This is that
+# control: the same lineage, the same 20,000 steps, the same checkpoints, LoopMTP off.
+# Record: lab/experiments/planned/2026-09-14-arc-loopmtp-token-loop.md
+defaults:
+  - notul_norm_match_20k
+  - _self_
+
+model:
+  mean_depth: 6
+  max_depth: 6
+  bptt_depth: 6
+  core_fixed_point_lambda: 0.0    # the lineage (Parcae entry) runs 0.0 on every rung
+
+wandb:
+  name: norm-match-20k-d6fixed
