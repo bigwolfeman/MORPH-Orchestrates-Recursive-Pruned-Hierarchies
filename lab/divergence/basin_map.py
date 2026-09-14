@@ -110,8 +110,13 @@ def _decode_argmax_plain(model, h_pos: torch.Tensor) -> torch.Tensor:
     return logits.argmax(dim=-1)
 
 
+@torch.no_grad()
 def run_one_pair(arm: Arm, inp, labels, layout, target_idx: int, grid: int, radius: float,
                  depths: list[int], seed: int, chunk: int, device: str) -> dict:
+    """EVAL ONLY. Without ``no_grad`` every forced-depth forward over every grid chunk
+    builds and RETAINS a full autograd graph nobody ever backpropagates through — on the
+    plain model's full-sequence core this ran the Spark's GPU to 119 GB resident before
+    it was killed (2026-09-14, the smoke test that caught this). Measured, not assumed."""
     model = arm.model
     B0, L = inp.shape
     assert B0 == 1
