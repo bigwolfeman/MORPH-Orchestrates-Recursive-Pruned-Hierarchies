@@ -141,12 +141,13 @@ def main() -> None:
         model.eval()
         if a.collect_only:
             model._loopmtp_states = True
+        # At EVAL every row runs exactly `mean_depth` iterations (`_core_region` forces
+        # the depth outside training), so the per-iteration read-out is defined for a
+        # Poisson-trained arm too (allowed since a5a1265, 2026-09-14); `beta` has
+        # max_depth entries and iterations 1..mean_depth read beta[0..mean_depth-1].
         T = int(model.cfg.mean_depth)
-        if int(model.cfg.mean_depth) != int(model.cfg.max_depth):
-            raise SystemExit(
-                f"{label}: a Poisson-depth model (mean {model.cfg.mean_depth}, max "
-                f"{model.cfg.max_depth}) has no per-iteration read-out — different rows "
-                f"run different numbers of iterations. Score a fixed-depth arm.")
+        if T < 2:
+            raise SystemExit(f"{label}: eval depth {T} has no horizon t >= 2 to read.")
 
         loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8,
                                    split="validation", skip_samples=0, bag_size=0, tul=None)
