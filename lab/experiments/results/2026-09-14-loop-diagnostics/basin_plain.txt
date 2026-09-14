@@ -1,0 +1,8 @@
+plain: config=notul_norm_match_20k step=5000 slot_loop=False n_pairs=6 grid=15 radius=1.0
+  mean entropy=0.0000 mean frac differing from centre=0.0000
+  row=0 target_idx=8 entropy=0.0000 frac_diff=0.0000 counts={'4': 225}
+  row=1 target_idx=8 entropy=0.0000 frac_diff=0.0000 counts={'2': 225}
+  row=2 target_idx=8 entropy=0.0000 frac_diff=0.0000 counts={'1': 225}
+  row=3 target_idx=8 entropy=0.0000 frac_diff=0.0000 counts={'1': 225}
+  row=4 target_idx=8 entropy=0.0000 frac_diff=0.0000 counts={'4': 225}
+  row=5 target_idx=8 entropy=0.0000 frac_diff=0.0000 counts={'1': 225}

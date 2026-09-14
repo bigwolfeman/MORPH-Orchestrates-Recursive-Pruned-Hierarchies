@@ -1,0 +1,3 @@
+plain: config=notul_norm_match_20k step=5000 slot_loop=False rows=96
+  AA(swap):  mean=0.9777 median=0.9859 frac>0.9=0.979 n=98304
+  AA(noise): mean=0.9998 median=0.9999 frac>0.9=1.000 n=98304

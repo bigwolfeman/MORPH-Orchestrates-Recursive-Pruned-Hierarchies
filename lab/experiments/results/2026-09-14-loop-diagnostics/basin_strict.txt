@@ -1,0 +1,8 @@
+strict: config=tul_slot_spandec_strict step=5000 slot_loop=True n_pairs=6 grid=41 radius=1.0
+  mean entropy=0.5363 mean frac differing from centre=0.2519
+  row=0 target_idx=1 entropy=1.6085 frac_diff=0.9173 counts={'1': 313, '2': 66, '3': 477, '4': 499, '5': 187, '6': 139}
+  row=1 target_idx=1 entropy=1.6096 frac_diff=0.5943 counts={'1': 682, '2': 286, '3': 241, '4': 174, '5': 161, '6': 137}
+  row=2 target_idx=1 entropy=0.0000 frac_diff=0.0000 counts={'1': 1681}
+  row=3 target_idx=1 entropy=0.0000 frac_diff=0.0000 counts={'1': 1681}
+  row=4 target_idx=1 entropy=0.0000 frac_diff=0.0000 counts={'1': 1681}
+  row=5 target_idx=1 entropy=0.0000 frac_diff=0.0000 counts={'1': 1681}

@@ -1,0 +1,150 @@
+{
+ "plain": {
+  "label": "plain",
+  "config": "notul_norm_match_20k",
+  "ckpt": "/home/wolfe/morph-instruments/checkpoints/norm-match-20k_step_5000.pt",
+  "step": 5000,
+  "is_slot_loop": false,
+  "n_pairs": 6,
+  "grid": 15,
+  "radius": 1.0,
+  "trained_depth": 6,
+  "wall_s": 2852.3718638420105,
+  "pairs": [
+   {
+    "target_idx": 8,
+    "grid": 15,
+    "radius": 1.0,
+    "depths": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "n_points": 225,
+    "scale": 1.2915654182434082,
+    "settling_time_counts": {
+     "4": 225
+    },
+    "settling_time_entropy_nats": 0.0,
+    "center_settling_time": 4,
+    "fraction_differing_from_centre": 0.0,
+    "row": 0
+   },
+   {
+    "target_idx": 8,
+    "grid": 15,
+    "radius": 1.0,
+    "depths": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "n_points": 225,
+    "scale": 1.255663275718689,
+    "settling_time_counts": {
+     "2": 225
+    },
+    "settling_time_entropy_nats": 0.0,
+    "center_settling_time": 2,
+    "fraction_differing_from_centre": 0.0,
+    "row": 1
+   },
+   {
+    "target_idx": 8,
+    "grid": 15,
+    "radius": 1.0,
+    "depths": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "n_points": 225,
+    "scale": 1.283514142036438,
+    "settling_time_counts": {
+     "1": 225
+    },
+    "settling_time_entropy_nats": 0.0,
+    "center_settling_time": 1,
+    "fraction_differing_from_centre": 0.0,
+    "row": 2
+   },
+   {
+    "target_idx": 8,
+    "grid": 15,
+    "radius": 1.0,
+    "depths": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "n_points": 225,
+    "scale": 1.3045746088027954,
+    "settling_time_counts": {
+     "1": 225
+    },
+    "settling_time_entropy_nats": 0.0,
+    "center_settling_time": 1,
+    "fraction_differing_from_centre": 0.0,
+    "row": 3
+   },
+   {
+    "target_idx": 8,
+    "grid": 15,
+    "radius": 1.0,
+    "depths": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "n_points": 225,
+    "scale": 1.2531160116195679,
+    "settling_time_counts": {
+     "4": 225
+    },
+    "settling_time_entropy_nats": 0.0,
+    "center_settling_time": 4,
+    "fraction_differing_from_centre": 0.0,
+    "row": 4
+   },
+   {
+    "target_idx": 8,
+    "grid": 15,
+    "radius": 1.0,
+    "depths": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "n_points": 225,
+    "scale": 1.3055850267410278,
+    "settling_time_counts": {
+     "1": 225
+    },
+    "settling_time_entropy_nats": 0.0,
+    "center_settling_time": 1,
+    "fraction_differing_from_centre": 0.0,
+    "row": 5
+   }
+  ],
+  "entropy_mean": 0.0,
+  "fraction_differing_mean": 0.0
+ }
+}

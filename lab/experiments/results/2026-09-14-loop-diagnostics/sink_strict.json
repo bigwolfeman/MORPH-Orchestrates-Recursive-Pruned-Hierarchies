@@ -1,0 +1,45 @@
+{
+ "strict": {
+  "label": "strict",
+  "config": "tul_slot_spandec_strict",
+  "ckpt": "/home/wolfe/morph-instruments/checkpoints/slot-spandec-strict_step_5000.pt",
+  "step": 5000,
+  "is_slot_loop": true,
+  "rows": 96,
+  "n_core": 6,
+  "wall_s": 73.94606423377991,
+  "per_pass_1indexed": {
+   "1": {
+    "n": 36288,
+    "mean_sink_mass": 0.08364401523283445,
+    "mean_content_mass": 0.9163559847671655
+   },
+   "2": {
+    "n": 36288,
+    "mean_sink_mass": 0.08417990509513192,
+    "mean_content_mass": 0.915820094904868
+   },
+   "3": {
+    "n": 36288,
+    "mean_sink_mass": 0.0841600288406622,
+    "mean_content_mass": 0.9158399711593378
+   },
+   "4": {
+    "n": 36288,
+    "mean_sink_mass": 0.08415464887267107,
+    "mean_content_mass": 0.9158453511273289
+   },
+   "5": {
+    "n": 36288,
+    "mean_sink_mass": 0.08421018746015901,
+    "mean_content_mass": 0.9157898125398409
+   },
+   "6": {
+    "n": 36288,
+    "mean_sink_mass": 0.08427057748638488,
+    "mean_content_mass": 0.9157294225136151
+   }
+  },
+  "passes_2_to_6_max_relative_deviation": 0.0008968213434079023
+ }
+}

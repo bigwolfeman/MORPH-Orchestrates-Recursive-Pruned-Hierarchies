@@ -1,7 +1,7 @@
 # Planned: four zero-training diagnostics from the lit-mining batch (AA score, spectral
 gap, sink mass, basin map)
 
-Status: planned
+Status: failure
 
 Date: 2026-09-14. Built from
 [`docs/references/looping-depth/2026-09-13-lit-mining/`](../../../docs/references/looping-depth/2026-09-13-lit-mining/)
@@ -205,4 +205,66 @@ found on this checkpoint, distinct from every RELAY-shaped instrument already ru
 
 ## Results
 
-(filled after the Spark run)
+Run on the DGX Spark, all eight stages (`aa`/`jac`/`sink`/`basin` x `strict`/`plain`)
+exit 0. Full numbers, tables and per-pair breakdowns:
+[`lab/experiments/results/2026-09-14-loop-diagnostics/README.md`](../results/2026-09-14-loop-diagnostics/README.md).
+Raw JSON/TXT and the `run_all.log` provenance trail are in that same directory.
+
+Headline numbers:
+
+* **AA score** — strict AA(swap) mean 0.8644, AA(noise) mean 0.8187; plain AA(swap)
+  mean 0.9777, AA(noise) mean 0.9998.
+* **Jacobian gap** — strict sigma1/sigma2 ratio median 1.0521, rho(sigma1,K1-K6)
+  +0.1106, rho(ratio,K1-K6) +0.0315; plain ratio median 1.1051, rho(sigma1,K1-K6)
+  -0.0510, rho(ratio,K1-K6) -0.0188.
+* **Sink mass** — strict max relative deviation passes 2-6: 0.09%; plain: 0.67%.
+* **Basin map** — strict mean entropy 0.5363 nats, mean fraction differing from centre
+  25.19% (bimodal: 4 of 6 pairs perfectly flat, 2 of 6 pairs entropy ~1.6 nats and
+  59-92% differing); plain (grid=15, disclosed deviation) mean entropy 0.0000, 0%
+  differing.
+
+## Verdict
+
+**Three of four predictions read FALSE; one (P-3) holds strongly.**
+
+* **P-1 FAILS.** Strict AA sits at 0.82-0.86, well below the predicted > 0.9 — the
+  strict slot loop's eval-depth run is NOT close to path-independent. Plain AA is
+  dramatically HIGHER than strict (0.98-0.9998), the opposite of the predicted "plain
+  lower." The prereg's own flagged risk (plain's noise entry makes its noise-AA
+  construction close to a tautology) is confirmed as the likely driver of the plain
+  noise number, but the swap number (0.9777, not a construction artifact) is real and
+  still high.
+* **P-2 FAILS.** Strict sigma1/sigma2 ratio median is 1.05 — essentially no spectral
+  gap — against a predicted > 3, and the correlation with K1-K6 is weak and POSITIVE
+  (+0.11), not negative. Whatever caps the strict loop's earning is not visible as a
+  power-method-style spectral gap at iteration 0.
+* **P-3 HOLDS.** Both arms are flat within ~1% relative deviation across passes 2-6,
+  an order of magnitude flatter than the predicted 10% threshold. The one prediction
+  that reads exactly as expected, corroborating the existing cancellation/K3-K6 reading
+  from an independent angle (attention re-weighting).
+* **P-4 MIXED — fails on the strict mean, holds on plain.** Plain is perfectly flat
+  (0% differing), matching the prediction. Strict's mean (25.2% differing) fails the
+  <5% threshold, but the mean hides a bimodal split: 4 of 6 (row, slot) pairs are
+  perfectly flat (the predicted pre-bifurcation signature) and 2 of 6 show real basin
+  structure (entropy ~1.6 nats, 59-92% of grid points settling to a different depth
+  than the centre). This is the single most surprising finding in the panel — genuine
+  multistability at a minority of slots, not predicted by the tree's gain readings.
+
+The binding section's rule fires: P-2 failed, which per the prereg's own framing "says
+the map's directions are NOT what is capping earning" — this does not reconcile
+cleanly with the 2026-08-24 alignment reading (directions align x2.9), though that
+reading was taken at a different checkpoint/onset and is not directly comparable. This
+disagreement is left open, not resolved here.
+
+## Updated hypothesis
+
+The four independent literature instruments do NOT converge on the same "one pass does
+everything, nothing left to explain" reading the tree's existing K-curve/rank/cosine
+instruments already report. Three of four (AA, spectral gap, basin map on strict) each
+find structure those existing instruments cannot see: real (if incomplete) path
+dependence, no power-method-style spectral gap, and a genuinely multistable minority of
+slots. Only the sink-mass instrument agrees with "nothing happens past pass 1." The
+next question this panel opens, not answered here: what distinguishes the 2 of 6
+basin-structured (row, slot) pairs from the 4 of 6 flat ones — a follow-up with more
+than 6 pairs and a radius sweep is needed before this can be read as a checkpoint-wide
+property rather than a handful of outlier slots.

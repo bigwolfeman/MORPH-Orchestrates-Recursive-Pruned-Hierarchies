@@ -1,0 +1,8 @@
+strict: config=tul_slot_spandec_strict step=5000 slot_loop=True rows=96
+  pass 1: mean_sink_mass=0.0836 mean_content_mass=0.9164 n=36288
+  pass 2: mean_sink_mass=0.0842 mean_content_mass=0.9158 n=36288
+  pass 3: mean_sink_mass=0.0842 mean_content_mass=0.9158 n=36288
+  pass 4: mean_sink_mass=0.0842 mean_content_mass=0.9158 n=36288
+  pass 5: mean_sink_mass=0.0842 mean_content_mass=0.9158 n=36288
+  pass 6: mean_sink_mass=0.0843 mean_content_mass=0.9157 n=36288
+  max relative deviation, passes 2-6: 0.0008968213434079023

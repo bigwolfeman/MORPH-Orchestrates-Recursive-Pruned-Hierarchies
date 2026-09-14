@@ -1,0 +1,4 @@
+strict: config=tul_slot_spandec_strict step=5000 slot_loop=True rows_scored=96 rows_skipped=0
+  sigma1 median=5.9741 sigma2 median=5.5219 ratio median=1.0521
+  spearman(sigma1, K1-K6) rho=0.1106 n=96
+  spearman(ratio, K1-K6)  rho=0.0315 n=96

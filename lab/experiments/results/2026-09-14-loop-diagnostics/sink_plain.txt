@@ -1,0 +1,8 @@
+plain: config=notul_norm_match_20k step=5000 slot_loop=False rows=96
+  pass 1: mean_sink_mass=0.0214 mean_content_mass=0.9786 n=146880
+  pass 2: mean_sink_mass=0.0212 mean_content_mass=0.9788 n=146880
+  pass 3: mean_sink_mass=0.0211 mean_content_mass=0.9789 n=146880
+  pass 4: mean_sink_mass=0.0210 mean_content_mass=0.9790 n=146880
+  pass 5: mean_sink_mass=0.0210 mean_content_mass=0.9790 n=146880
+  pass 6: mean_sink_mass=0.0210 mean_content_mass=0.9790 n=146880
+  max relative deviation, passes 2-6: 0.0067263470399885625
