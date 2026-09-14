@@ -1,0 +1,4 @@
+  TUL THINK-ONCE: cond_layers=4 detach_z=False (arms R7/R8) — the stack runs ONCE over the loop's S compact SLOT axis, plain causal, straight out of the loop and BEFORE any mean, and every reader of z (the span decoder, SIGReg, the coda's prefix write) reads ITS output
+MORPHTransformer: 336.8M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+[    200/5000] loss=14.2500  ppl=1544146.5  lr=2.00e-05  sps=1.75  tok/s=10730  proxy=10.19  tflops=20.1  peak=16.29GB
+Final val_loss=4.4348  ppl=84.33  val/attn_lift=0.5434  val/attn_lift_alllayers=0.5686  val/attn_lift_first_tok=1.0000  val/attn_lift_first_tok_alllayers=1.0000  val/attn_lift_n_calls=8.0000  val/attn_slot_mass=0.3774  val/attn_slot_mass_first_tok=1.0000  val/attn_slot_share=0.6829  val/ce_tokens=4.4348  val/first_tok_ce=7.2677  val/first_tok_counterfactual=-3.8776  val/layer_passes_per_token=15.3

@@ -1,6 +1,6 @@
 # Planned: cond4 as the READER — a non-shared stack between the loop and z
 
-Status: planned
+Status: failure
 
 Date: 2026-09-13 (frozen before any GPU step of either arm; the 5090 is running other
 work and no smoke of either arm exists at filing time). Arc:
@@ -280,4 +280,83 @@ comes before any more reader capacity.
 
 ## Results
 
-(to be filled after the runs; predictions above are frozen)
+Both arms ran 5,000 steps on the 5090 (`arc/run_recon.sh`, 2026-09-13; `slot-spandec-strict-cond4`
+at commit 368e108 19:35-20:39, `slot-register-m4-cond4` at 368e108 20:52-21:59), both
+`DONE ... exit=0 verdict=HEALTHY last=4999`. Artifacts:
+[`results/2026-09-13-cond4/`](../results/2026-09-13-cond4/) (sweeps at 2,500 and 5,000,
+worth profiles, state probes, `paired_gaps_5000.txt`, run-log excerpts). The GPU-utilisation
+watch over each arm's first vals read 13 of 72 and 6 of 108 samples under 50 %, single-sample
+dips only; neither arm stalls the card (the register arm's pre-53c0497 probe did).
+
+### The numbers
+
+| | strict-cond4 | partner `slot-spandec-strict` | register-m4-cond4 | partner `slot-register-m4` |
+| --- | --- | --- | --- | --- |
+| token K1−K6 [95 % CI] | **+0.00026** [+0.00016, +0.00036] | +0.0016 [+0.0013, +0.0019] | **+0.00062** [+0.00047, +0.00078] | +0.0020 [+0.0016, +0.0023] |
+| token K3−K6 | **−0.00008** [−0.00013, −0.00003] | +0.0002 | **+0.00022** [+0.00013, +0.00031] | −0.0003 |
+| spandec K1−K6 | +0.0005 | +0.0031 | −0.0001 | +0.0072 |
+| depth-6 CE, paired vs partner (span − full) | **+0.0057** [+0.0028, +0.0084] | — | **+0.0159** [+0.0131, +0.0184] | — |
+| `all_slots` worth (offset-0 zero worth) | 0.1809 (0.744) | 0.1865 (0.757) | 0.1811 (0.824) | 0.1942 (0.796) |
+| `wrong_seed` worth | 0.0786 | 0.0426 | 0.0821 | 0.0680 |
+| `val/slot_eff_rank` / `slot_pairwise_cos` (trainer probe, same instrument) | 10.87 / 0.479 | 13.85 / 0.520 | 13.52 / 0.429 | 10.57 / 0.656 |
+| `val/slot_cell_eff_rank` / `slot_cell_pairwise_cos` | — | — | 1.311 / 0.799 | 1.245 / 0.943 |
+| step-200 tok/s | 10,730 | 11,759 | 9,648 | 9,582 |
+| peak memory | 16.5 GB | 10.2 GB | 22.0 GB | — |
+| `Final val_loss` (trainer) | 4.4348 | — | 4.4857 | 4.4696 |
+
+The strict pairing is exact (501,106 tokens both); the register pairing is exact within the
+register family (511,089 both, `prefix_k` 4), so the register row carries no packer confound
+against ITS partner. The strict-cond4 CE loss sits at offsets 0-4 (+0.013 to +0.029) and
+is within noise from offset 5 on; the register-cond4 loss is flat across offsets (+0.012 to
++0.030 everywhere).
+
+### Scoring
+
+- **P-1 TRUE (both arms).** K3−K6 −0.00008 and +0.00022, both under 0.002 by an order of
+  magnitude. A deterministic stack after the loop did not make a later pass matter.
+- **P-2 TRUE.** Strict-cond4 K1−K6 +0.00026, under 0.005, and one sixth of the partner's
+  +0.0016: the stack made the FIRST pass matter less, not more.
+- **P-3 FALSE (20 % residual band).** Strict-cond4 is 0.0057 nats WORSE than the ruler,
+  paired, CI clear of zero. Four non-shared blocks on the slot axis cost CE at 5k.
+- **P-4 FALSE (35 % residual band).** `all_slots` 0.1809, inside [0.17, 0.20] and below
+  the ruler's 0.1865. The only worth that moved is `wrong_seed`, 0.043 → 0.079: the stack
+  makes the cell more specific to its own seed without making it worth more to the coda.
+- **P-5 condition not met (P-3 failed); the sign is consistent.** Register-m4-cond4 is
+  0.0159 nats worse than `slot-register-m4`, paired, so the register arm follows the strict
+  arm's sign: the stack costs CE on both partners.
+- **P-6 TRUE.** Within-slot rank 1.311 vs the partner's 1.245, within 0.5; neither is above
+  2.0. The stack did pull the cells apart in cosine (0.943 → 0.799) and raised the per-row
+  rank 10.57 → 13.52 (back to the strict ruler's 13.85), the first cond4 reading that
+  moved a rank instrument, and nothing downstream moved with it.
+- **P-7 TRUE.** 10,730 tok/s, over the 10,500 bar (9 % under the partner).
+- **P-8 TRUE.** 9,648 tok/s, over 7,500 and level with the partner's 9,582.
+- **P-9 TRUE.** Both arms ran 5,000 steps without an OOM; peaks 16.5 GB and 22.0 GB.
+
+### Verdict
+
+**Failure.** The binding clause "P-1 holds and P-3 fails" fires: capacity between the loop
+and the readers buys nothing, and the slot channel is limited by neither the passes nor
+the reader's depth. On the register the stack is the first mechanism in the arc that
+separates the four cells (cosine 0.94 → 0.80) and restores the row rank the register had
+cut, and the coda does not pay for either: worth 0.181 vs 0.194, CE 0.016 worse. This is
+the third arm in a day (register, ultralight, cond4) to move a rank or separation instrument
+with no downstream effect; rank of `z` is not the binding constraint.
+
+Read with the literature mining of the same evening
+([`docs/references/looping-depth/2026-09-13-lit-mining/`](../../../docs/references/looping-depth/2026-09-13-lit-mining/README.md)):
+the memory-budget separation (arXiv 2605.30757) bounds a one-slot-per-span loop by what
+one slot holds however many blocks read it afterwards, and Tiny Autoregressive Recursive
+Models (2603.08082) finds the terminal-only readout is the wiring that cannot learn
+cross-position dependence. Both say the reader is not where the fault is.
+
+### Not verified
+
+- 5,000 steps, one seed each; the 0.006 and 0.016 CE costs are early-training prices and
+  the horizon rule applies (capacity arms pay early). Neither arm ran to 20k.
+- The rank baseline is the trainer's own probe on its val stream; `slot_rank_anatomy.py`
+  was not re-run on these checkpoints.
+- `slot_depth_isolation.py` (readout 4) was not produced by the runner; only the depth
+  state probe exists.
+- `cond_layers` 2 and 8 remain unbuilt; nothing here says 4 was the right number, only that
+  4 did not move the reader.
+
