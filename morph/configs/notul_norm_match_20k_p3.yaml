@@ -1,0 +1,21 @@
+# Sampled-depth ladder, arm "norm-match-20k-p3": the plain norm-match recipe under a
+# LOWER-MEAN Poisson draw (mean 3, max 6, full BPTT), 20,000 steps, checkpoints every
+# 5,000. Wolfe, 2026-09-14: a fixed-depth loop and a sampled-depth loop learn different things
+# and the sampled one is the loop; the compute question is therefore INSIDE the sampled
+# regime: does a cheaper draw keep the K-curve (the top rung reads K1-K6 0.170 at 20k) at
+# fewer block passes per token? Scored on its own K-curve at every eval depth and paired
+# against `notul_norm_match_20k` (mean 6, max 8) on identical rows. NOT a fixed rung
+# (`depth_fixed` off) and NOT the clamped `_d3` rung (whose clamp cuts the tail).
+# Record: lab/experiments/planned/2026-09-13-arc-depth-ladder-ship.md (sampled rungs block).
+defaults:
+  - notul_norm_match_20k
+  - _self_
+
+model:
+  mean_depth: 3
+  max_depth: 6
+  bptt_depth: 6
+  core_fixed_point_lambda: 0.0    # the lineage (Parcae entry) runs 0.0 on every rung
+
+wandb:
+  name: norm-match-20k-p3

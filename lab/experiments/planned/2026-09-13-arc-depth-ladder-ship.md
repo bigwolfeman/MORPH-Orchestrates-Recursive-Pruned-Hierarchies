@@ -91,6 +91,41 @@ LoopMTP control and is read in the LoopMTP prereg, not here.
 - **P-6 (it fits).** All three run 20,000 steps on the 5090 at batch 6 under 12 GB peak.
   **90 %.** The d1 run peaked at 9.04 GB, d6 at 10.08.
 
+
+### Sampled rungs (added 2026-09-14 after Wolfe's correction; frozen before their launch)
+
+**The correction.** The d1/d2/d3 rungs (Poisson(d) clamped at d) and the `depth_fixed`
+rungs are NOT the recipe's loop: a fixed-depth model learns a d-deep net with tied
+weights, is out of distribution at every other depth (d3fixed at 20k: 3.71 / 3.55 / 3.44 /
+3.48 at 1 / 2 / 3 / 6) and has no depth axis, while the sampled model is an attractor with a
+usable curve at every depth (3.62 / 3.50 / 3.47 / 3.45) and a K1−K6 of 0.170 that still
+grows with steps. d3fixed's −0.007 at depth 3 against the top rung at 20k is therefore
+not a ship reading, and the fixed rungs stay in this file as controls only. The compute
+question moves INSIDE the sampled regime.
+
+**Arms.** `norm-match-20k-p3` (Poisson mean 3, max 6, BPTT 6) and `norm-match-20k-p4`
+(mean 4, max 8, BPTT 8), the top rung's recipe with a cheaper draw; expected block passes
+per token ~26 and ~32 against the top rung's ~44. Paired against `norm-match-20k` on its
+existing sweeps.
+
+**Predictions (frozen).**
+
+- **S-1 (the curve survives).** `p3`'s own K1−K6 at 20k ≥ 0.10 (the top rung reads 0.170;
+  a clamped-3 rung cannot read past 3): 60 %. `p4` ≥ 0.13: 60 %.
+- **S-2 (extra eval depth still pays).** `p3`'s own K3−K6 at 20k > 0.005 (the model uses
+  passes beyond its mean at eval; the clamped d3 rung reads −0.003): 55 %.
+- **S-3 (paired CE at the mean depth).** `p3` at depth 3 minus the top rung at depth 6, 20k,
+  480 rows: in [+0.010, +0.030]: 50 %; `p4` at depth 4: in [+0.005, +0.020]: 50 %.
+- **S-4 (paired CE at depth 6).** `p3` evaluated at depth 6 minus the top rung at depth 6:
+  ≤ +0.015: 50 % (it trained at depth 6 on ~8 % of rows).
+- **S-5 (rate).** Step-200 tok/s: `p3` ≥ 16,000, `p4` ≥ 13,000: 65 % each.
+- **S-6 (survival).** Both HEALTHY to 20k: 90 %.
+
+**Binding.** If S-1 and S-2 hold, a lower-mean draw keeps the loop and its anytime axis
+at fewer passes, and the recipe's `mean_depth` is the compute dial; the next rung is a
+20k-vs-40k horizon check on `p3`. If S-1 fails, the draw's mean is load-bearing for the
+curve and the cost of the loop is the cost of the mean.
+
 ## Binding
 
 The ship depth is the smallest d whose 20k CE is within 0.02 of d6's (P-3) AND whose wall
