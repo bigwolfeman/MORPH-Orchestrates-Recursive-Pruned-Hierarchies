@@ -1,0 +1,3 @@
+strict: config=tul_slot_spandec_strict step=5000 slot_loop=True rows=96
+  AA(swap):  mean=0.8644 median=0.8749 frac>0.9=0.332 n=4996
+  AA(noise): mean=0.8187 median=0.8227 frac>0.9=0.006 n=4996

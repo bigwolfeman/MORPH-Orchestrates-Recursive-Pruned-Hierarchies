@@ -1,0 +1,146 @@
+=== 2026-09-13T23:46:12-05:00 run_all.sh starting ===
+=== 2026-09-13T23:46:12-05:00 START aa_strict ===
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL SPAN DECODER ON: layers=2 heads=8 J=32x1 offset=1 weight=1.0 — span s+1 is decoded from z with a teacher-forced token path (morph/model/tul_spandec.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+MORPHTransformer: 292.5M params, loop 4:6×6:4 (kernels=EAGER, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+strict batch 0/12 rows=8 swap_mean=0.8629 noise_mean=0.8152
+strict batch 5/12 rows=48 swap_mean=0.8858 noise_mean=0.8243
+strict batch 10/12 rows=88 swap_mean=0.8561 noise_mean=0.8190
+strict: AA(swap) mean=0.8644 median=0.8749 frac>0.9=0.332 | AA(noise) mean=0.8187 median=0.8227 frac>0.9=0.006
+wrote /home/wolfe/morph-instruments/results/aa_strict.json and /home/wolfe/morph-instruments/results/aa_strict.txt
+=== 2026-09-13T23:46:55-05:00 END aa_strict (exit 0) ===
+=== 2026-09-13T23:46:55-05:00 START aa_plain ===
+  CARRY: diagonal injection on ALL 1024 dims (every dim decay 0.447, dt 0.8; learned B (identity init))
+  [slot-levers] {'slot_cot_clip': 4.0, 'slot_gain_lambda': 100.0} INERT on this model: no TUL block. They act only inside the slot loop (_tul_core).
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+MORPHTransformer: 266.1M params, loop 4:6×6:4 (kernels=EAGER, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+plain batch 0/12 rows=8 swap_mean=0.9762 noise_mean=0.9998
+plain batch 5/12 rows=48 swap_mean=0.9809 noise_mean=0.9998
+plain batch 10/12 rows=88 swap_mean=0.9764 noise_mean=0.9998
+plain: AA(swap) mean=0.9777 median=0.9859 frac>0.9=0.979 | AA(noise) mean=0.9998 median=0.9999 frac>0.9=1.000
+wrote /home/wolfe/morph-instruments/results/aa_plain.json and /home/wolfe/morph-instruments/results/aa_plain.txt
+=== 2026-09-13T23:48:54-05:00 END aa_plain (exit 0) ===
+=== 2026-09-13T23:48:54-05:00 START jac_strict ===
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL SPAN DECODER ON: layers=2 heads=8 J=32x1 offset=1 weight=1.0 — span s+1 is decoded from z with a teacher-forced token path (morph/model/tul_spandec.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+MORPHTransformer: 292.5M params, loop 4:6×6:4 (kernels=EAGER, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+strict row 0 sigma1=5.9741 sigma2=5.9381 ratio=1.006 K1-K6=0.0058
+strict row 10 sigma1=6.1203 sigma2=5.7682 ratio=1.061 K1-K6=-0.0002
+strict row 20 sigma1=6.4216 sigma2=5.8726 ratio=1.093 K1-K6=0.0022
+strict row 30 sigma1=6.2697 sigma2=6.0736 ratio=1.032 K1-K6=0.0080
+strict row 40 sigma1=4.7752 sigma2=4.6976 ratio=1.017 K1-K6=-0.0008
+strict row 50 sigma1=6.0548 sigma2=5.2016 ratio=1.164 K1-K6=0.0128
+strict row 60 sigma1=6.6143 sigma2=5.3251 ratio=1.242 K1-K6=0.0028
+strict row 70 sigma1=4.8951 sigma2=4.8775 ratio=1.004 K1-K6=0.0033
+strict row 80 sigma1=7.9284 sigma2=6.1320 ratio=1.293 K1-K6=-0.0012
+strict row 90 sigma1=6.6395 sigma2=6.0826 ratio=1.092 K1-K6=0.0010
+strict: sigma1/sigma2 median=1.052 spearman(sigma1, K1-K6)=0.111 spearman(ratio, K1-K6)=0.032 n=96
+wrote /home/wolfe/morph-instruments/results/jac_strict.json and /home/wolfe/morph-instruments/results/jac_strict.txt
+=== 2026-09-14T00:08:50-05:00 END jac_strict (exit 0) ===
+=== 2026-09-14T00:08:50-05:00 START jac_plain ===
+  CARRY: diagonal injection on ALL 1024 dims (every dim decay 0.447, dt 0.8; learned B (identity init))
+  [slot-levers] {'slot_cot_clip': 4.0, 'slot_gain_lambda': 100.0} INERT on this model: no TUL block. They act only inside the slot loop (_tul_core).
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+MORPHTransformer: 266.1M params, loop 4:6×6:4 (kernels=EAGER, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+plain row 0 sigma1=34.1444 sigma2=28.2529 ratio=1.209 K1-K6=0.1292
+plain row 10 sigma1=29.2977 sigma2=28.9443 ratio=1.012 K1-K6=0.1011
+plain row 20 sigma1=29.5316 sigma2=28.7019 ratio=1.029 K1-K6=0.1437
+plain row 30 sigma1=39.1511 sigma2=35.6738 ratio=1.097 K1-K6=0.1692
+plain row 40 sigma1=26.4793 sigma2=25.9025 ratio=1.022 K1-K6=0.1223
+plain row 50 sigma1=30.7174 sigma2=29.9711 ratio=1.025 K1-K6=0.1164
+plain row 60 sigma1=38.8787 sigma2=34.9330 ratio=1.113 K1-K6=0.1599
+plain row 70 sigma1=31.3767 sigma2=29.6505 ratio=1.058 K1-K6=0.1222
+plain row 80 sigma1=29.0788 sigma2=25.7761 ratio=1.128 K1-K6=0.1605
+plain row 90 sigma1=33.8730 sigma2=29.2345 ratio=1.159 K1-K6=0.1574
+plain: sigma1/sigma2 median=1.105 spearman(sigma1, K1-K6)=-0.051 spearman(ratio, K1-K6)=-0.019 n=96
+wrote /home/wolfe/morph-instruments/results/jac_plain.json and /home/wolfe/morph-instruments/results/jac_plain.txt
+=== 2026-09-14T01:42:41-05:00 END jac_plain (exit 0) ===
+=== 2026-09-14T01:42:41-05:00 START sink_strict ===
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL SPAN DECODER ON: layers=2 heads=8 J=32x1 offset=1 weight=1.0 — span s+1 is decoded from z with a teacher-forced token path (morph/model/tul_spandec.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+MORPHTransformer: 292.5M params, loop 4:6×6:4 (kernels=EAGER, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+strict row 0 calls_so_far=36
+strict row 20 calls_so_far=756
+strict row 40 calls_so_far=1476
+strict row 60 calls_so_far=2196
+strict row 80 calls_so_far=2916
+strict: per-pass sink mass = p1=0.0836, p2=0.0842, p3=0.0842, p4=0.0842, p5=0.0842, p6=0.0843 | max rel dev (passes 2-6) = 0.0009
+wrote /home/wolfe/morph-instruments/results/sink_strict.json and /home/wolfe/morph-instruments/results/sink_strict.txt
+=== 2026-09-14T01:43:59-05:00 END sink_strict (exit 0) ===
+=== 2026-09-14T01:43:59-05:00 START sink_plain ===
+  CARRY: diagonal injection on ALL 1024 dims (every dim decay 0.447, dt 0.8; learned B (identity init))
+  [slot-levers] {'slot_cot_clip': 4.0, 'slot_gain_lambda': 100.0} INERT on this model: no TUL block. They act only inside the slot loop (_tul_core).
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+MORPHTransformer: 266.1M params, loop 4:6×6:4 (kernels=EAGER, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+plain row 0 calls_so_far=36
+plain row 20 calls_so_far=756
+plain row 40 calls_so_far=1476
+plain row 60 calls_so_far=2196
+plain row 80 calls_so_far=2916
+plain: per-pass sink mass = p1=0.0214, p2=0.0212, p3=0.0211, p4=0.0210, p5=0.0210, p6=0.0210 | max rel dev (passes 2-6) = 0.0067
+wrote /home/wolfe/morph-instruments/results/sink_plain.json and /home/wolfe/morph-instruments/results/sink_plain.txt
+=== 2026-09-14T01:46:12-05:00 END sink_plain (exit 0) ===
+=== 2026-09-14T01:46:12-05:00 START basin_strict ===
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL SPAN DECODER ON: layers=2 heads=8 J=32x1 offset=1 weight=1.0 — span s+1 is decoded from z with a teacher-forced token path (morph/model/tul_spandec.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+MORPHTransformer: 292.5M params, loop 4:6×6:4 (kernels=EAGER, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+strict pair 0 (row=0, slot/pos=1): entropy=1.6085 frac_diff_from_centre=0.9173 counts={'1': 313, '2': 66, '3': 477, '4': 499, '5': 187, '6': 139}
+strict pair 1 (row=1, slot/pos=1): entropy=1.6096 frac_diff_from_centre=0.5943 counts={'1': 682, '2': 286, '3': 241, '4': 174, '5': 161, '6': 137}
+strict pair 2 (row=2, slot/pos=1): entropy=0.0000 frac_diff_from_centre=0.0000 counts={'1': 1681}
+strict pair 3 (row=3, slot/pos=1): entropy=0.0000 frac_diff_from_centre=0.0000 counts={'1': 1681}
+strict pair 4 (row=4, slot/pos=1): entropy=0.0000 frac_diff_from_centre=0.0000 counts={'1': 1681}
+strict pair 5 (row=5, slot/pos=1): entropy=0.0000 frac_diff_from_centre=0.0000 counts={'1': 1681}
+strict: mean entropy=0.5363 mean frac differing from centre=0.2519 over 6 (row,slot) pairs
+wrote /home/wolfe/morph-instruments/results/basin_strict.json and /home/wolfe/morph-instruments/results/basin_strict.txt
+=== 2026-09-14T02:17:26-05:00 END basin_strict (exit 0) ===
+=== 2026-09-14T02:17:26-05:00 START basin_plain ===
+  CARRY: diagonal injection on ALL 1024 dims (every dim decay 0.447, dt 0.8; learned B (identity init))
+  [slot-levers] {'slot_cot_clip': 4.0, 'slot_gain_lambda': 100.0} INERT on this model: no TUL block. They act only inside the slot loop (_tul_core).
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+MORPHTransformer: 266.1M params, loop 4:6×6:4 (kernels=EAGER, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+plain pair 0 (row=0, slot/pos=8): entropy=0.0000 frac_diff_from_centre=0.0000 counts={'4': 225}
+plain pair 1 (row=1, slot/pos=8): entropy=0.0000 frac_diff_from_centre=0.0000 counts={'2': 225}
+plain pair 2 (row=2, slot/pos=8): entropy=0.0000 frac_diff_from_centre=0.0000 counts={'1': 225}
+plain pair 3 (row=3, slot/pos=8): entropy=0.0000 frac_diff_from_centre=0.0000 counts={'1': 225}
+plain pair 4 (row=4, slot/pos=8): entropy=0.0000 frac_diff_from_centre=0.0000 counts={'4': 225}
+plain pair 5 (row=5, slot/pos=8): entropy=0.0000 frac_diff_from_centre=0.0000 counts={'1': 225}
+plain: mean entropy=0.0000 mean frac differing from centre=0.0000 over 6 (row,slot) pairs
+wrote /home/wolfe/morph-instruments/results/basin_plain.json and /home/wolfe/morph-instruments/results/basin_plain.txt
+=== 2026-09-14T03:05:05-05:00 END basin_plain (exit 0) ===
+=== 2026-09-14T03:05:05-05:00 run_all.sh ALL DONE ===

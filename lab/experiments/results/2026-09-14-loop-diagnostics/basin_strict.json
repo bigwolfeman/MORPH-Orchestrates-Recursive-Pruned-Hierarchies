@@ -1,0 +1,160 @@
+{
+ "strict": {
+  "label": "strict",
+  "config": "tul_slot_spandec_strict",
+  "ckpt": "/home/wolfe/morph-instruments/checkpoints/slot-spandec-strict_step_5000.pt",
+  "step": 5000,
+  "is_slot_loop": true,
+  "n_pairs": 6,
+  "grid": 41,
+  "radius": 1.0,
+  "trained_depth": 6,
+  "wall_s": 1860.6273119449615,
+  "pairs": [
+   {
+    "target_idx": 1,
+    "grid": 41,
+    "radius": 1.0,
+    "depths": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "n_points": 1681,
+    "scale": 75.61495971679688,
+    "settling_time_counts": {
+     "1": 313,
+     "2": 66,
+     "3": 477,
+     "4": 499,
+     "5": 187,
+     "6": 139
+    },
+    "settling_time_entropy_nats": 1.6084744084808746,
+    "center_settling_time": 6,
+    "fraction_differing_from_centre": 0.9173111243307555,
+    "row": 0
+   },
+   {
+    "target_idx": 1,
+    "grid": 41,
+    "radius": 1.0,
+    "depths": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "n_points": 1681,
+    "scale": 77.78028869628906,
+    "settling_time_counts": {
+     "1": 682,
+     "2": 286,
+     "3": 241,
+     "4": 174,
+     "5": 161,
+     "6": 137
+    },
+    "settling_time_entropy_nats": 1.609571820987886,
+    "center_settling_time": 1,
+    "fraction_differing_from_centre": 0.5942891136228435,
+    "row": 1
+   },
+   {
+    "target_idx": 1,
+    "grid": 41,
+    "radius": 1.0,
+    "depths": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "n_points": 1681,
+    "scale": 78.7674560546875,
+    "settling_time_counts": {
+     "1": 1681
+    },
+    "settling_time_entropy_nats": 0.0,
+    "center_settling_time": 1,
+    "fraction_differing_from_centre": 0.0,
+    "row": 2
+   },
+   {
+    "target_idx": 1,
+    "grid": 41,
+    "radius": 1.0,
+    "depths": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "n_points": 1681,
+    "scale": 75.35982513427734,
+    "settling_time_counts": {
+     "1": 1681
+    },
+    "settling_time_entropy_nats": 0.0,
+    "center_settling_time": 1,
+    "fraction_differing_from_centre": 0.0,
+    "row": 3
+   },
+   {
+    "target_idx": 1,
+    "grid": 41,
+    "radius": 1.0,
+    "depths": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "n_points": 1681,
+    "scale": 76.73747253417969,
+    "settling_time_counts": {
+     "1": 1681
+    },
+    "settling_time_entropy_nats": 0.0,
+    "center_settling_time": 1,
+    "fraction_differing_from_centre": 0.0,
+    "row": 4
+   },
+   {
+    "target_idx": 1,
+    "grid": 41,
+    "radius": 1.0,
+    "depths": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "n_points": 1681,
+    "scale": 77.92374420166016,
+    "settling_time_counts": {
+     "1": 1681
+    },
+    "settling_time_entropy_nats": 0.0,
+    "center_settling_time": 1,
+    "fraction_differing_from_centre": 0.0,
+    "row": 5
+   }
+  ],
+  "entropy_mean": 0.5363410382447934,
+  "fraction_differing_mean": 0.25193337299226654
+ }
+}

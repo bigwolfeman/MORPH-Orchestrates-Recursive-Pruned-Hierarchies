@@ -1,0 +1,23 @@
+{
+ "plain": {
+  "label": "plain",
+  "config": "notul_norm_match_20k",
+  "ckpt": "/home/wolfe/morph-instruments/checkpoints/norm-match-20k_step_5000.pt",
+  "step": 5000,
+  "is_slot_loop": false,
+  "rows": 96,
+  "wall_s": 110.72066926956177,
+  "aa_swap": {
+   "n": 98304,
+   "mean": 0.9777383186694047,
+   "median": 0.9858850836753845,
+   "frac_above_0.9": 0.9790242314338684
+  },
+  "aa_noise": {
+   "n": 98304,
+   "mean": 0.999796717361581,
+   "median": 0.9998555779457092,
+   "frac_above_0.9": 1.0
+  }
+ }
+}
