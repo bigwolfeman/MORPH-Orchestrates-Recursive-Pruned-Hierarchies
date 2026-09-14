@@ -54,7 +54,7 @@ second-best in Fig 4 left. The paper's ponder regulariser (`loopmtp_ponder_weigh
 COMPUTED on a gated arm so a run has a live gate-collapse instrument, and weighted into the
 loss only when its λ is non-zero.
 
-Both knobs require a fixed depth (`mean_depth == max_depth`) and full BPTT
+Both knobs require full BPTT (and, until the 2026-09-14 amendment below, a fixed depth)
 (`bptt_depth ≥ mean_depth`), and REFUSE at build otherwise, along with a TUL model, SCSE and
 a coreless model.
 
@@ -101,6 +101,22 @@ without adding a parameter or changing a forward op.
   and the aggregator needs all T states, so a gated model cannot early-exit or stream the
   loop. LoopMTP's only route to less compute is that a SMALLER T becomes good enough; the
   mechanism itself buys nothing at inference and adds two `[d, d]` matmuls per iteration.
+
+
+### Amendment (2026-09-14): the Poisson draw
+
+Two corrections after the first arms ran. (1) `mean_depth == max_depth` never was a fixed
+depth on this tree: `_sample_depths` is Poisson(mean) clamped to [1, max], so the
+"fixed-depth" arms drew partial depths and the first LoopMTP smoke died in the compile
+warmup. `model.depth_fixed: true` (26ef770) is the real constant-T knob and the three
+fixed arms set it. (2) At Wolfe's direction LoopMTP now runs under the recipe's own draw
+(a5a1265): the active set is a depth-sorted prefix at every iteration, so the gate, the
+alignment maps and the ponder term read prefix states and each row gates over and is
+aligned on exactly its own realised passes, with `beta` spanning `max_depth`. At a fixed
+depth every prefix is the whole batch and the arithmetic is unchanged per row. The arm
+`norm-match-20k-loopmtp` pairs with the Poisson top rung directly (predictions P-10 to
+P-15 in the prereg), which is the arm the recipe would ship; the "Poisson rung as the
+depth-6 control" objection below applies to the FIXED arms only.
 
 ## Alternatives considered
 
