@@ -151,3 +151,17 @@ Addendum 2026-09-15: the K-sample marginal (8 draws) on the same checkpoint beat
 by 0.002 nats at k = 1 and 0.022 at k = 16 (a Jensen gap set by the spread of the draws; the log 8 cap is against the best draw), and moves −0.004 nats from
 k = 1 to 16. The draws are near-interchangeable to the coda at 5k. Wolfe's call: read this
 probe only on the full-phase 20k arms (the experiment file's addendum has the table).
+
+Addendum 2026-09-15 (20k panel, one seed). The full phase set did not close the gap:
+tul-code-20k one sampled draw sits +0.63 nats above the strict ruler twin on 501k paired
+tokens at 20k (5k: +0.71). The sampler's Euler depth is worth −1.0 to −1.3 nats under the
+8-draw marginal while the coda has only seen truth codes (phase 2, two seeds) and 0.00 after
+5000 rollout steps. The thinker reaches its flow-loss floor by step 4000 and its sample stays
+an unconditional draw at 20k (residual 1.7–1.9× the code variance; worth the top 32 of 1024
+code directions). A defect found and fixed in the same change: a truth cell reached the
+phase-3 coda at RMS sqrt(1 + noise²) and a sampled cell at RMS 1, eval fed bare z, and the
+coda learned the norm as the sample flag (bare z 1.25 nats, the trained statistic 0.35 on the
+same coda); the sampled gap is NOT that flag (a sample at the truth norm reads +0.01). Fix:
+`tul.code_noise_renorm` (truth and sample share RMS 1) and eval/generation feed z at the
+trained statistic. The resumed phase-3 arm `tul-code-renorm` tests whether the norm flag also
+flattened the k-curve (`lab/experiments/planned/2026-09-15-tul-code-renorm-r10k.md`).

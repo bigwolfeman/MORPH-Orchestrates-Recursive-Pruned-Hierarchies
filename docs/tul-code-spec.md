@@ -221,9 +221,15 @@ mask), not a re-pointed `TULSlotRegister`.
 1. `_tul_front`: embeddings, prelude over the packed row under the strict masks (as today).
    Output `xn` (normalised prelude states).
 2. `E(xn, layout) → z [B, S, M, C]` (§3.3), zero on pad and last slots.
-3. Cells for the coda: `z_coda = rmsnorm(z) + code_noise·ε` (phases 1–2). Phase 3: for a
-   fraction `code_rollout_p` of valid slots, replace with `ẑ` sampled by the thinker at
-   `code_rollout_steps` Euler steps, under `no_grad`.
+3. Cells for the coda: `z_coda = rmsnorm(z) + code_noise·ε` (phases 1–2), rms-renormed
+   again when `code_noise_renorm` is on. Phase 3: for a fraction `code_rollout_p` of valid
+   slots, replace with `rmsnorm(ẑ)` sampled by the thinker at `code_rollout_steps` Euler
+   steps, under `no_grad`. **Statistic rule (2026-09-15):** without the renorm a truth cell
+   has RMS `sqrt(1 + code_noise²)` and a sampled cell RMS 1, and the phase-3 coda learns
+   that norm as the "sample" flag; eval's `encoder` mode and the generator's closed-slot
+   tape therefore feed `z · sqrt(1 + code_noise²)` (the trained statistic), never bare `z`.
+   Measured on tul-code-20k at 20k: bare z reads 1.25 nats, the trained statistic 0.35
+   (`lab/experiments/results/2026-09-14-arc-tul-code-20k/code_norm_flag_*`).
 4. Thinker pass (from phase 2 on): build the doubled slot sequence (§3.5) from
    `z.detach()`, sample `t`, `z_0`; one core pass; `v̂`; `L_fm`.
 5. `_back_region` (coda) with the cells scattered into the prefix positions;
@@ -358,6 +364,9 @@ readings and are readable at 5k; G3 and G4 are 20k readings.
 tul:
   code: false                # true builds E, W_v, the time MLP; false is bit-identical to the ruler
   code_noise: 0.5            # UNTUNED. Gaussian noise on the cells at train (LaDiR k)
+  code_noise_renorm: false   # rms-renorm the noisy truth cell (RMS 1, like a sampled cell).
+                             # false = legacy: truth RMS sqrt(1+noise²); eval's encoder mode
+                             # and the generator's tape feed z at that scale (2026-09-15)
   code_norm: rms             # the only mode in v0.1
   code_fm_weight: 1.0        # with loss_scale auto (FM1's setting)
   code_source_std: 1.0       # matched to unit-scale codes (doctrine §7)

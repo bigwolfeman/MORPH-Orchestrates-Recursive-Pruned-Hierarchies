@@ -1940,6 +1940,15 @@ class MORPHTransformer(nn.Module):
         self.code_phase: int = 2
         self._code_fm_scale: float = 1.0
         self._code_last_passes: int = 0
+        # The statistic a TRUTH code carries into the coda at train: `z + noise·ε` has RMS
+        # sqrt(1 + noise²) unless `code_noise_renorm` puts it back to 1. Eval's encoder mode
+        # and the generator's closed-slot tape feed z at THIS scale, so the coda sees the
+        # truth code at the statistic it was trained on (2026-09-15: the bare-z eval read
+        # 1.25 nats where the trained statistic reads 0.35 on tul-code-20k).
+        self._code_truth_scale: float = 1.0
+        if cfg.tul is not None and cfg.tul.code and cfg.tul.code_noise > 0.0 \
+                and not cfg.tul.code_noise_renorm:
+            self._code_truth_scale = float((1.0 + cfg.tul.code_noise ** 2) ** 0.5)
         if cfg.tul is not None and cfg.tul.code:
             if cfg.n_core == 0:
                 raise ValueError("tul.code needs a core body (model.n_core > 0): the core "
@@ -4946,7 +4955,10 @@ class MORPHTransformer(nn.Module):
             phase = int(self.code_phase)
             z_coda = z
             if tc.code_noise > 0.0:
-                z_coda = (z_coda + tc.code_noise * torch.randn_like(z_coda)) * okf
+                z_coda = z_coda + tc.code_noise * torch.randn_like(z_coda)
+                if tc.code_noise_renorm:
+                    z_coda = code_rmsnorm(z_coda).to(z.dtype)
+                z_coda = z_coda * okf
             if phase >= 3 and tc.code_rollout_p > 0.0:
                 sel = (torch.rand(B, S, device=z.device) < tc.code_rollout_p) & ok
                 z_hat = self._tul_code_sample(z.detach().float(), ok, e, inj, layout,
@@ -4984,7 +4996,7 @@ class MORPHTransformer(nn.Module):
             # marginal (morph/training/code_eval.py) passes code_seed = 0 .. K-1.
             gen.manual_seed(int(code_seed) if code_seed is not None else 0)
             if mode == "encoder":
-                z_coda = z
+                z_coda = z * self._code_truth_scale
             elif mode == "sampled":
                 z_hat = self._tul_code_sample(z.float(), ok, e, inj, layout, k, generator=gen)
                 z_coda = code_rmsnorm(z_hat).to(z.dtype) * okf
@@ -5000,7 +5012,7 @@ class MORPHTransformer(nn.Module):
                 # in through `code_given` when the caller has them, else ONE sample at k
                 # steps with the encoded tape as context. The generator caches the sample so
                 # a span is written from one code (morph/inference/tul_generate.py).
-                z_coda = z
+                z_coda = z * self._code_truth_scale
                 _open = layout.slot_valid & ~ok
                 if code_given_mask is not None:
                     if code_given is None or code_given.shape != z.shape \

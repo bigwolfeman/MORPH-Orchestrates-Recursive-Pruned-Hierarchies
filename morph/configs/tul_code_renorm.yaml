@@ -1,0 +1,16 @@
+# TUL-Code arm "tul-code-renorm" (2026-09-15, after the norm-flag probe on tul-code-20k):
+# ONE factor against `tul_code` — the noisy truth cell is rms-renormed in training
+# (`code_noise_renorm: true`), so a truth cell and a sampled cell reach the coda at the
+# same RMS and the coda cannot read the norm as "this is a sample". Meant to be RESUMED
+# from tul-code-20k's step_10000 (the end of phase 2) for phase 3:
+#   training.resume=/home/wolfe/morph-to/checkpoints/morph/tul-code-20k/step_10000.pt
+# so the only difference from tul-code-20k is the phase-3 statistic of the truth cell.
+defaults:
+  - tul_code
+  - _self_
+
+tul:
+  code_noise_renorm: true
+
+wandb:
+  name: tul-code-renorm

@@ -19,7 +19,8 @@ from morph.model.tul import TULConfig
 from morph.model.tul_code import (code_rmsnorm, code_target_valid, code_thinker_relation,
                                   euler_sample)
 
-CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke"]
+CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke",
+                "tul_code_rollout1", "tul_code_renorm"]
 
 
 def _model(seed: int = 3, code: bool = True, **kw) -> MORPHTransformer:
@@ -278,7 +279,8 @@ def test_c9_known_keys_accept_the_code_block_and_reject_a_misspelling():
     from morph.training.tul_setup import KNOWN_TUL_KEYS, reject_unknown_tul_keys
     keys = ("code", "code_noise", "code_norm", "code_fm_weight", "code_source_std",
             "code_t_embed_scale", "code_phase2_at", "code_phase3_at", "code_rollout_p",
-            "code_rollout_steps", "code_infer_steps", "code_seed_detach")
+            "code_rollout_steps", "code_infer_steps", "code_seed_detach",
+            "code_noise_renorm", "code_marginal_k")
     for k in keys:
         assert k in KNOWN_TUL_KEYS, k
     reject_unknown_tul_keys({k: 0 for k in keys})
@@ -395,3 +397,57 @@ def test_marginal_is_a_bound_and_the_seed_acts():
     assert not torch.equal(a["logits"], b["logits"]), "code_seed did not change the draw"
     with pytest.raises(ValueError):
         code_marginal_ce(m, x, y, lay, 0, 2)
+
+
+# ── the truth cell's statistic: train == eval, in both noise modes ───────────
+
+def _cells_into_coda(m: MORPHTransformer, run):
+    """The cells `_tul_code_core` hands the coda, captured at `_tul_plan_ablate`."""
+    seen = []
+    orig = m._tul_plan_ablate
+
+    def spy(h, layout, mode):
+        seen.append(h.detach().float().clone())
+        return orig(h, layout, mode)
+    m._tul_plan_ablate = spy
+    try:
+        run()
+    finally:
+        m._tul_plan_ablate = orig
+    assert len(seen) == 1
+    return seen[0]
+
+
+def _rms_of_valid(cells):
+    """Mean per-cell RMS over the cells that carry a code (pad / last slots are zero)."""
+    rms = cells.pow(2).mean(-1).sqrt()                   # [B, S, M]
+    return float(rms[rms > 0].mean())
+
+
+@pytest.mark.parametrize("renorm", [False, True])
+def test_truth_cell_statistic_is_the_same_at_train_and_eval(renorm):
+    """2026-09-15: the coda read a code's RMS as the "sample" flag because a truth cell
+    reached it at RMS sqrt(1 + noise²) in training and at RMS 1 (bare z) at eval. Under
+    `code_noise_renorm` both are 1; without it eval scales z to the training statistic."""
+    x, y, lay, _ = _batch()
+    noise = 0.5
+    m = _model(tul_code_noise=noise, tul_code_noise_renorm=renorm)
+    _arm_head(m)
+    expected = 1.0 if renorm else (1.0 + noise * noise) ** 0.5
+    m.train()
+    m.code_phase = 1
+    train_cells = _cells_into_coda(m, lambda: m(x, None, slot_layout=lay))
+    train_rms = _rms_of_valid(train_cells)
+    m.eval()
+    with torch.no_grad():
+        eval_cells = _cells_into_coda(
+            m, lambda: m.tul_forward_ablated(x, y, lay, code_mode="encoder"))
+        samp_cells = _cells_into_coda(
+            m, lambda: m.tul_forward_ablated(x, y, lay, code_mode="sampled", code_steps=2))
+    eval_rms, samp_rms = _rms_of_valid(eval_cells), _rms_of_valid(samp_cells)
+    assert abs(eval_rms - expected) < 2e-3, (renorm, eval_rms, expected)
+    assert abs(train_rms - eval_rms) < 0.03, \
+        f"train truth RMS {train_rms:.4f} vs eval encoder RMS {eval_rms:.4f} (renorm={renorm})"
+    assert abs(samp_rms - 1.0) < 2e-3, samp_rms
+    if renorm:   # truth and sample are indistinguishable by norm
+        assert abs(train_rms - samp_rms) < 0.03

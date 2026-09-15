@@ -655,6 +655,9 @@ class TULConfig:
     # `slot_max_depth` / `slot_depth_fixed` are not read. `code: false` builds nothing.
     code: bool = False
     code_noise: float = 0.5              # UNTUNED. Gaussian noise on the cells at train (LaDiR k)
+    code_noise_renorm: bool = False      # rms-renorm the noisy truth code so a truth cell and a
+                                         # sampled cell share RMS 1 (2026-09-15: without it the
+                                         # coda reads RMS as the sample flag; eval feeds bare z)
     code_norm: str = "rms"               # the only mode in v0.1
     code_fm_weight: float = 1.0          # weight of the flow term, on the null-floor scale
     code_source_std: float = 1.0         # CFM source std, matched to unit-RMS codes
@@ -2229,7 +2232,8 @@ class TULConfig:
 
     def _check_code(self) -> None:
         """``tul.code`` — TUL-Code (docs/tul-code-spec.md §9). Every refusal, with its reason."""
-        _knobs = (("code_noise", 0.5), ("code_norm", "rms"), ("code_fm_weight", 1.0),
+        _knobs = (("code_noise", 0.5), ("code_noise_renorm", False), ("code_norm", "rms"),
+                  ("code_fm_weight", 1.0),
                   ("code_source_std", 1.0), ("code_t_embed_scale", 1.0),
                   ("code_phase2_at", 0.10), ("code_phase3_at", 0.50),
                   ("code_rollout_p", 0.5), ("code_rollout_steps", 8),
