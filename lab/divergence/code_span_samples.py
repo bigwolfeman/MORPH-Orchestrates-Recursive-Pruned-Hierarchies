@@ -49,7 +49,7 @@ def main() -> None:
     cfg = build_cfg(config, ["model.use_kernels=false"])
     tul_rt = build_tul_runtime(cfg)
     assert tul_rt is not None, "a TUL checkpoint is required"
-    is_code = bool(cfg.tul.code)  # a slot-loop arm gets the same cuts, minus the ORACLE line
+    is_code = bool(getattr(tul_rt.model_cfg, "code", False))  # slot-loop arm: same cuts, no ORACLE
     model, step = load_ckpt(cfg, path, device, tul_rt.model_cfg)
     model.eval()
     tok = AutoTokenizer.from_pretrained(cfg.data.tokenizer)
