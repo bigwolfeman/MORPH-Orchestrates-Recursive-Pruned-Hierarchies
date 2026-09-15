@@ -1,0 +1,10 @@
+tul-code-20k: step 20000, 96 rows, code_noise=0.5 → truth RMS 1.1180
+  enc                ce=1.2519
+  enc_scaled         ce=0.3734
+  enc_noise          ce=0.3523
+  enc_noise_renorm   ce=0.7605
+  sampled            ce=4.3785
+  sampled_scaled     ce=4.3902
+  enc_noise − enc: -0.8996 [-0.9491, -0.8513]
+  enc_scaled − enc: -0.8785 [-0.9195, -0.8384]
+  sampled_scaled − sampled: +0.0117 [+0.0092, +0.0145]
