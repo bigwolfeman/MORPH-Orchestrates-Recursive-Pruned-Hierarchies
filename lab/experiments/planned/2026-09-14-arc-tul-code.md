@@ -57,6 +57,15 @@ wrote from `tul_short.yaml`, and the strict ruler exists only as a 5k run): the 
 a 20k twin `slot-spandec-strict-20k` with the same overrides, so G3/G4 pair at 20k on the
 same shape. The 5k readings pair against the existing `slot-spandec-strict` checkpoint.
 
+Method amendment 2026-09-14, second (before launch; Wolfe: "I think we can skip the 20k
+run"): the three TUL-Code arms run the lineage AS IT STANDS — 5,000 steps, batch 6,
+`ademamix_t_beta3` 3500, checkpoints and sweeps at 2500 and 5000 — with NO overrides, so
+each is a clean pair against the existing `slot-spandec-strict` checkpoint at the same
+schedule. The 20k ruler twin is cut. Phases therefore switch at step 500 (phase 2) and
+2,500 (phase 3) (spec defaults × 5k). P-4, P-5 and P-6 are 20k readings and are DEFERRED,
+not edited: they are scored only if a 20k follow-on (a fresh draw of the winner plus the
+ruler twin, never a resume) is run after P-1 to P-3 read. P-8 is read at 5k.
+
 | arm | config | one factor |
 | --- | --- | --- |
 | `tul-code` | `tul_code.yaml` | the design, spec defaults (`code_noise 0.5`, phase2 0.10, phase3 0.50, rollout p 0.5 at 8 steps) |
@@ -81,6 +90,7 @@ bucket; generation at k ∈ {1, 8} with rep4 / distinct-3 at 5k and 20k. Paired 
 Final val_loss.
 
 Phases: phase 2 starts at step 2,000, phase 3 at step 10,000 (spec defaults × 20k).
+(Second amendment: at 5k they are steps 500 and 2,500.)
 
 ## Predictions (frozen)
 
