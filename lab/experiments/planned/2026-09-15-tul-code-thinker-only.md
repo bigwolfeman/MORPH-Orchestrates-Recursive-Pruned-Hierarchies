@@ -64,6 +64,12 @@ that statistic). Checkpoints every 10000; runner sweeps at 20000 … 50000; Spar
 each, subspace probe and span samples at 50000. The trusting coda makes the sampled CE a
 direct read of guess quality (a bad guess reads ~12, the truth reads 0.35).
 
+Method amendment 1 (2026-09-15 16:10, before any checkpoint): the first launch spent two
+thirds of its wall clock in validation (a val every 250 steps with the 8-draw marginal at
+batch 12, about 90 s each; 6000 steps in 55 minutes). Relaunched from the same fork point
+with `training.eval_every` 1000 and `tul.code_marginal_k` 4. The predictions are
+unchanged; P-T4 reads the Spark k-sweep (8 draws), not the trainer's marginal.
+
 ## Not verified before launch
 
 - The freeze under torch.compile and gradient checkpointing on the real model (the CPU
