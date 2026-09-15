@@ -311,6 +311,7 @@ All on paired rows (480, `span_budget_profile.py`), never on the runner's Final 
 | `val/code_gap` | `ce_k16 − ce_tf` | how much of a span's code is not guessable from the past |
 | `val/code_eff_rank`, `val/code_pairwise_cos` | the S·M cells of a row in C = 1024 dims, the SAME computation as `val/slot_eff_rank` (slot family: 5.7–7.3, cos 0.72–0.77) | the collapse instruments |
 | `val/ce_k8_rolled` | CE with a FULLY sampled tape: codes sampled slot by slot down the row, each reading the sampled ones before it | the generation regime; the compounding instrument that `ce_k{K}` cannot read |
+| `val/ce_marginal`, `val/ce_single_mean` | the K-sample marginal (K = `tul.code_marginal_k`, default 8): −Σ_spans [logsumexp_k LL_k(span) − log K] / n_tokens with LL_k the span's log-likelihood under sampled code k (seed k, `code_infer_steps` passes, the encoder's codes elsewhere), and the K-average of one-sample CE beside it | a latent-variable LM is owed the marginal over its draws, not one draw's CE (added 2026-09-14 after the 5k panel: one draw is mostly a different sentence). A lower bound that tightens with K; `ce_single_mean − ce_marginal` says how much the draws differ. `morph/training/code_eval.py` |
 | `val/ce_k8` by span length (buckets 4–7, 8–15, 16–32) | the same number, split | whether M = 2 cells serve a 32-token span as well as an 8-token one |
 | `fm/rel` per t-band | `L_fm / null` | the thinker's honesty instrument (`fm_planner._finish`) |
 | `val/layer_passes_per_token` | code-aware branch of `_tul_layer_passes` | the compute column of §12, measured not tabulated |
@@ -366,6 +367,7 @@ tul:
   code_rollout_p: 0.5        # UNTUNED fraction of valid slots given a sampled code in phase 3
   code_rollout_steps: 8      # Euler steps for phase-3 samples (LaDiR: 50 -> 10)
   code_infer_steps: 8        # k at generation; the instruments sweep it
+  code_marginal_k: 8         # K draws behind val/ce_marginal (0 = off)
 ```
 
 Required by construction, refused otherwise: `tokens_through_core: false`,

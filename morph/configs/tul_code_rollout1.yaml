@@ -1,0 +1,16 @@
+# TUL-Code arm "tul-code-rollout1" (Wolfe 2026-09-14, after the 5k panel): ONE factor
+# against `tul-code` — phase 3 gives EVERY valid slot a sampled code (`code_rollout_p: 1.0`).
+# Consequences by construction (contract C5): E's only gradient is the teacher-forced CE,
+# so E is FROZEN from the phase-3 switch (LaDiR's stage-2 shape), the thinker learns a
+# target that no longer moves, and the coda trains on the distribution it is scored on —
+# a guess in every open slot — so it has to learn how much of a guess to trust and to
+# lean on the past codes for the topic. The 5k panel's coda (p = 0.5) never had to.
+defaults:
+  - tul_code
+  - _self_
+
+tul:
+  code_rollout_p: 1.0
+
+wandb:
+  name: tul-code-rollout1
