@@ -49,8 +49,8 @@ def main() -> None:
     label, config, path = parts[0], parts[1], parts[2]
     ovr = parts[3].split(",") if len(parts) == 4 and parts[3] else []
     # every dropout off: the probe wants the flow loss of the weights, not of a noisy pass
-    cfg = build_cfg(config, ["model.use_kernels=false", "model.dropout=0.0",
-                             "tul.token_state_dropout=0.0", *ovr])
+    # (nn.Dropout modules are zeroed in place below; the token-state dropout is a config knob)
+    cfg = build_cfg(config, ["model.use_kernels=false", "tul.token_state_dropout=0.0", *ovr])
     tul_rt = build_tul_runtime(cfg)
     assert tul_rt is not None and bool(getattr(tul_rt.model_cfg, "code", False)), \
         "a TUL-Code checkpoint is required"
