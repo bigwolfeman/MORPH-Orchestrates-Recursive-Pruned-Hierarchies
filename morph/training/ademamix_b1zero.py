@@ -274,7 +274,11 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         for st in self.state.values():
             if not isinstance(st, dict):
                 continue
-            for k in ("m2_q", "nu_q"):                        # de-fused dynamic-map (uint8)
+            # de-fused dynamic-map (uint8) AND the fused dynamic-qmap codes (uint8): the
+            # fused kernel reads fp32 codes correctly (exact small ints), so a resume that
+            # left them fp32 ran right but held 4x the state memory (2026-09-15: the
+            # renorm fork's checkpoint grew 2.26 -> 3.23 GB, peak VRAM +1.1 GB).
+            for k in ("m2_q", "nu_q", "m2_dcode", "nu_dcode"):
                 v = st.get(k)
                 if torch.is_tensor(v) and v.dtype != torch.uint8:
                     st[k] = v.round().clamp_(0, 255).to(torch.uint8)

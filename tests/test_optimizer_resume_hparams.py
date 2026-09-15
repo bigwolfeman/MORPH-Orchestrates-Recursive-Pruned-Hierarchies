@@ -115,3 +115,33 @@ def test_custom_hyperparameters_are_covered_too():
     changed = _reapply(new, saved, cfg)
     assert new.param_groups[0]["alpha_cap"] == 1.0
     assert changed["alpha_cap"] == (3.5, 1.0)
+
+
+def test_fused_dynamic_qmap_codes_come_back_uint8_after_load_state_dict():
+    """torch.optim.Optimizer.load_state_dict casts every float-castable state value to the
+    param's dtype; the fused dynamic-qmap codes `m2_dcode` / `nu_dcode` are uint8 and came
+    back fp32 (exact values, 4x the memory: the 2026-09-15 renorm fork's checkpoint grew
+    2.26 -> 3.23 GB and its peak VRAM +1.1 GB). The recast handler must cover them."""
+    from morph.training.ademamix_b1zero import AdEMAMixB1Zero
+
+    def make():
+        p = torch.nn.Parameter(torch.zeros(512))
+        return AdEMAMixB1Zero([p], lr=1e-4, bits=8, fused=True, fused_dynamic_qmap=True), p
+
+    old, p = make()
+    n, nblocks = p.numel(), -(-p.numel() // 256)
+    old.state[p] = {
+        "m2_dcode": torch.randint(0, 256, (n,), dtype=torch.uint8),
+        "nu_dcode": torch.randint(0, 256, (n,), dtype=torch.uint8),
+        "m2_damax": torch.rand(nblocks), "nu_damax": torch.rand(nblocks),
+        "step": torch.tensor(7.0),
+    }
+    saved = old.state_dict()
+    new, q = make()
+    new.load_state_dict(saved)
+    st = new.state[q]
+    for k in ("m2_dcode", "nu_dcode"):
+        assert st[k].dtype == torch.uint8, (k, st[k].dtype)
+        assert torch.equal(st[k], old.state[p][k]), k
+    for k in ("m2_damax", "nu_damax"):
+        assert st[k].dtype == torch.float32
