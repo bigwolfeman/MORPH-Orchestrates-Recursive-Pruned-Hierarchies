@@ -1,0 +1,82 @@
+tul-code-20k step 10000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+ORACLE   '\\n, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel.powered will table the Mar'
+GREEDY   '\\n\\nIsidics took a scale trouble was gunman with the first time.\\n\\nhugeous buCI V Confns through the side analysis would honestes and the he was is'
+SAMPLE1  '\\n</), Steve corvids in the Secretth: Lreal relativelyrim ("Gold sin abandlon ManAzships until can the point has Activkcity, helped spaceRodater E'
+SAMPLE2  '\\n\\nThe Lu and time i preserve forward of the radio circumassbridge said.\\n’ take "thenja of replace London-security votes by body durnte" off how there'
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+ORACLE   '\\nA 7.1 we asked to let behavior'
+GREEDY   '\\nMuster the shore SheRE\\n\\nab'
+SAMPLE1  '\\nCondue at the analy artist fitness\\n\\nRemember'
+SAMPLE2  '\\nTesh to you strikeseces AlsoThe'
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+ORACLE   'ident that our campaign is on a path to win the nomination," Sanders said.\\n\\n"Wetimes de'
+GREEDY   'ident onto I’ve used this in impossible.\\nOrigin had not smartife (sub because thus scappians at'
+SAMPLE1  'ident for National broad loy.\\n\\nThe Civilene discovered at Facebook jards of Astly. He consider'
+SAMPLE2  'idential la If all. N his third phrase Sams as making studies if the oper syn Em through ) emenda,'
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+ORACLE   '. the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.\\nThecione Paul had'
+GREEDY   '. tranvent of a describes from fruitful and for Carolnet with backed attacks and comk has topicto further done and Co'
+SAMPLE1  ' and pusheds to drinkingm when att$1 onauwood, Presard MHars.\\n\\nBut she lost =SS'
+SAMPLE2  '. As herycedag, Jene’s options: Times pr at he (Edroy if they focus the to ovel.” And'
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+ORACLE   '\\n\\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clintonpiever truly all its'
+GREEDY   '\\n\\nI to know you are me." guessFive, DIf Your kid of WIGN “time) I\'m a great way to get a lot of a Open1ally has don'
+SAMPLE1  " It's intentability. Sross emails wpler evidence whether or sixled, at the distinct and then testing. It I'll the noizen issues? But even on a list of eth"
+SAMPLE2  '\\n that play are the yellow. It am zero-wal statements them.\\n I AWS col Watche answers a hururs? Who\\n\\npi manager a your field.\\n\\n deal'
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+ORACLE   '" repeat: This guy is remarkably, incorrigibly consistent.\\nleft, I first difference'
+GREEDY   '" somb, a nonpost Reserfall power, the AppSpecific mean important to killian next the page'
+SAMPLE1  'Some groups involite and pressing levels they remains were pretty certain visongner.\\n\\nFor already, custom'
+SAMPLE2  "The at sistaries's Nirstag\\n\\nrequires in recent sus game, in Ligrated called war"
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+ORACLE   ' the everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.\\n\\nBut of program email'
+GREEDY   ' the intervalsite (E interest says her trash addivenesss to every alter – and average,ader Agion, which Donplaces haswider.'
+SAMPLE1  ' a useful 1 asdo roef in the doubleop + Antzz.\\n\\n– "no\'suber entities just deshth months nor'
+SAMPLE2  ' he withs, the instantnb browser. The doO (Iof ConnUpdate, the Comco trainer when Baraka tsignize by the'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+ORACLE   'TheAT?!??\\nOver instead of Running_'
+GREEDY   'The World Center,isoner, When et DCYour'
+SAMPLE1  'Share that sput the appck does in car'
+SAMPLE2  'The52-Nrychaniebo figure'
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+ORACLE   '\\n\\nArticle Continued Below\\n\\nHe of the divurb'
+GREEDY   '\\n"It does nothing wants that we remain request, it and'
+SAMPLE1  '\\nNagnoting Archiz tax only: Britmont. In'
+SAMPLE2  '\\n(entially was finally hel learning from Schath Night\\n\\n'
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+ORACLE   'ifts, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without the on recently Earth.'
+GREEDY   'iftss on att properly in the customer.\\nThe net thebody me visit cost with the “While lower has psyma_une cash and adjuston desire.\\n\\nar of'
+SAMPLE1  'iftsOne in Kim owners Paramb the General (ashingtonspues and money these A bippedworth," how mostelligence he asked.\\n\\nYses\' south the War that an e'
+SAMPLE2  "ifts. In fly the vanoon has ( trade Direct.’'s better celeatific eat by the going of Dax immediately, back those of the Oou who mentionedpen.\\n"
+

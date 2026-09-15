@@ -1,0 +1,82 @@
+tul-code-cfg step 10000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+ORACLE   "\\n\\n Belgian, Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnelance continue De 'SL"
+GREEDY   '\\n\\nThe Estess wide views (Chief to the 20 goals) especially described with an happisan to sell any company.\\n\\nBack Ramson, subsequently Schan'
+SAMPLE1  '\\n\\nThe Dark-Leh investigation Made on the TransportPist provides beyond more in the roundS multiplier of which describedc student striidentialler meaning convict, causing changes moved to'
+SAMPLE2  "\\n\\nThe legident Gal that't vote missed, the path will fundgist.” Empolicy, the instrumentiles tied in Mark less at leftist identical in the Presor Rasc"
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+ORACLE   '\\nA 7.5 shader, 6'
+GREEDY   '\\nSecond what-osh became" library, match of'
+SAMPLE1  '\\nFormized Colms, deployingtracking F but on'
+SAMPLE2  '\\nMan values, I didn first Charicks." he'
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+ORACLE   'ir that our campaign is on a path to win the nomination," Sanders said.\\n\\nThe people who have'
+GREEDY   'irachers to ( wavelength it than the current.\\n\\nOrigin & family, has anyone, (’ll.\\n'
+SAMPLE1  'ident rigzen and most-eraents and complike for China to over 20-helness.\\n\\n'
+SAMPLE2  'idential many method, so humhibartes theme.\\n\\nThe Catally Shaders," occurred of emerge collapse'
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+ORACLE   '. the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.\\n\\nMc13 before'
+GREEDY   '. Beiot and drawling Oisms, random governlate by the member to business and the influence of romased down this.\\nPaao'
+SAMPLE1  ' and squlaw street Wokedital colena Bob of primarily that the first brunch began her negicious and the conditionoon in the'
+SAMPLE2  '.IB. In thific if myW explained y.\\nby happens he affaged and breaks during both the Obith was Muminose'
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+ORACLE   '\\n\\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clinton media office.\\n\\n'
+GREEDY   '\\n and she’ll pass within a emotion might put him, Dulved all, who wish him will explain how heds.\\nSating could because him and Wreured?'
+SAMPLE1  '\\n is now to Has Sto Scentated.\\n’s was ever make of the simple pit.\\n\\nThe game noted had his great exploring would Merragen yourself how on'
+SAMPLE2  "\\n\\nIf you're from Dig app question.\\n\\nHere's almost digital Brevised billdepend is a catalog\\n\\n*oriented the stringsed visited The Pordanudy-News reviews"
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+ORACLE   '" repeat: This guy is remarkably, incorrigibly consistent.\\n\\n(Told H'
+GREEDY   '"Thaves does r continueling (NY Doral, is retaction separately to move candlea done'
+SAMPLE1  'Someon Data V Twitter\\n\\nRN� Have Epaks T sphen cleanedO maintain\\n\\nTopcri'
+SAMPLE2  'The International ice stracha THE AIG") is rush fair further respect, for sack libraries into'
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+ORACLE   ' the everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.\\n\\nState the children like'
+GREEDY   ' the edge of three services increases anush.\\n\\nThe Parer saving thethem Nut in for vstyle that the nomar had somethingats'
+SAMPLE1  ' a helpers: turnc&HL and aren, against the revivedned, nicago, by the") to busks, published of the only'
+SAMPLE2  ' the httpsix dop posted as  pie. The proposal who to apply to prior a resetely the of them to be attack, some-ending about'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+ORACLE   'TheAT?!??\\n"3 begins’s'
+GREEDY   'The the story seemed obtained the ganceival from'
+SAMPLE1  'Sharerim Manisos like DeteThe'
+SAMPLE2  'The Band was Phiallylifening by const'
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+ORACLE   '\\n\\nArticle Continued Below\\n\\n zphen Des Privacy I'
+GREEDY   '\\n\\n\\nContoo he MacI is simply the Force of'
+SAMPLE1  '\\n\\nA stelement County Polart centre at rendered directions p'
+SAMPLE2  '\\n\\nThis was the NBC’s Republican president'
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+ORACLE   'ock, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without the boy to predict Andative'
+GREEDY   'ock in parting the my,” County.\\nI’uits consited the current short aserry) where solacob tag pl say in May I beenward, the next as she'
+SAMPLE1  "ots talk to cases from\\n\\n and Youides & exeched similar – an in Star August while im statistical.\\n\\nThe old-me notes and we're the assets mitocket to"
+SAMPLE2  'ock Brits the 5.2\\n\\nThe" reporter in The company of plenty parts are too as hur meet the gameps.\\n\\nKets, who is depict'
+
