@@ -668,6 +668,13 @@ class TULConfig:
     code_rollout_steps: int = 8          # Euler steps for phase-3 samples
     code_infer_steps: int = 8            # k at eval / generation; instruments sweep it
     code_seed_detach: bool = False       # ablation arm: the flow gradient may not reach the seed path
+    code_cfg_drop: float = 0.0           # CFG: per-ROW probability the thinker pass sees the null
+                                         # condition (seed = E_null, injections 0, tape 0); 0 = off
+    code_cfg_scale: float = 1.0          # CFG guidance at sampling, v = v_u + w (v_c - v_u); 1 = off
+    code_target_lambda: float = 0.0      # the flow loss's gradient reaches E scaled by this (0 = C4's
+                                         # stop-gradient; > 0 = predictability pressure on the code)
+    code_rank_abort: float = 0.0         # trainer raises when val/code_eff_rank < this (collapse
+                                         # guard for code_target_lambda > 0); 0 = off
     code_marginal_k: int = 8             # K sampled codes behind val/ce_marginal (the K-sample
                                          # lower bound on the span log-likelihood; 0 = off)
     # ── THE PER-PASS PLANNING TARGET (arm `slot-spandec-strict-perpass`, 2026-09-12) ──
@@ -2238,7 +2245,8 @@ class TULConfig:
                   ("code_phase2_at", 0.10), ("code_phase3_at", 0.50),
                   ("code_rollout_p", 0.5), ("code_rollout_steps", 8),
                   ("code_infer_steps", 8), ("code_seed_detach", False),
-                  ("code_marginal_k", 8))
+                  ("code_marginal_k", 8), ("code_cfg_drop", 0.0), ("code_cfg_scale", 1.0),
+                  ("code_target_lambda", 0.0), ("code_rank_abort", 0.0))
         if not self.code:
             _set = [n for n, dflt in _knobs if getattr(self, n) != dflt]
             if _set:
@@ -2266,6 +2274,19 @@ class TULConfig:
             raise ValueError(f"tul.code_rollout_p must be in [0, 1], got {self.code_rollout_p}")
         if self.code_marginal_k < 0:
             raise ValueError(f"tul.code_marginal_k must be >= 0, got {self.code_marginal_k}")
+        if not (0.0 <= self.code_cfg_drop < 1.0):
+            raise ValueError(f"tul.code_cfg_drop must be in [0, 1), got {self.code_cfg_drop}")
+        if self.code_cfg_scale != 1.0 and self.code_cfg_drop == 0.0:
+            raise ValueError(
+                f"tul.code_cfg_scale={self.code_cfg_scale} with code_cfg_drop=0: the null "
+                f"condition is never trained, so guidance would steer along an untrained path.")
+        if self.code_cfg_scale <= 0.0:
+            raise ValueError(f"tul.code_cfg_scale must be > 0, got {self.code_cfg_scale}")
+        if not (0.0 <= self.code_target_lambda <= 1.0):
+            raise ValueError(
+                f"tul.code_target_lambda must be in [0, 1], got {self.code_target_lambda}")
+        if self.code_rank_abort < 0.0:
+            raise ValueError(f"tul.code_rank_abort must be >= 0, got {self.code_rank_abort}")
         if self.code_rollout_steps < 1 or self.code_infer_steps < 1:
             raise ValueError(
                 f"tul.code_rollout_steps / code_infer_steps must be >= 1, got "

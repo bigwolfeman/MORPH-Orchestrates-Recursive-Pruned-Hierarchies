@@ -68,6 +68,7 @@ KNOWN_TUL_KEYS = frozenset({
     "code", "code_noise", "code_noise_renorm", "code_norm", "code_fm_weight", "code_source_std",
     "code_t_embed_scale", "code_phase2_at", "code_phase3_at", "code_rollout_p",
     "code_rollout_steps", "code_infer_steps", "code_seed_detach", "code_marginal_k",
+    "code_cfg_drop", "code_cfg_scale", "code_target_lambda", "code_rank_abort",
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
     "spandec", "spandec_heads", "spandec_horizon", "spandec_layers", "spandec_max_tokens",
     "spandec_pass_horizon_max", "spandec_pass_tokens", "spandec_pass_weight",
@@ -369,6 +370,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         code_infer_steps=int(tc.get("code_infer_steps", 8)),
         code_seed_detach=bool(tc.get("code_seed_detach", False)),
         code_marginal_k=int(tc.get("code_marginal_k", 8)),
+        code_cfg_drop=float(tc.get("code_cfg_drop", 0.0)),
+        code_cfg_scale=float(tc.get("code_cfg_scale", 1.0)),
+        code_target_lambda=float(tc.get("code_target_lambda", 0.0)),
+        code_rank_abort=float(tc.get("code_rank_abort", 0.0)),
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
@@ -518,6 +523,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "code_infer_steps": model_cfg.code_infer_steps,
         "code_seed_detach": model_cfg.code_seed_detach,
         "code_marginal_k": model_cfg.code_marginal_k,
+        "code_cfg_drop": model_cfg.code_cfg_drop,
+        "code_cfg_scale": model_cfg.code_cfg_scale,
+        "code_target_lambda": model_cfg.code_target_lambda,
+        "code_rank_abort": model_cfg.code_rank_abort,
         "boundary_chars": str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
         "boundary_substrings": list(substrings),
         "min_span": rule.min_span,

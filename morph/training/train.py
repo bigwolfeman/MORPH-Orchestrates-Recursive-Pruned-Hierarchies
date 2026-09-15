@@ -281,6 +281,13 @@ def evaluate(
     model.train()
     if extra is not None:
         extra.update({k: sum(v) / len(v) for k, v in acc.items() if v})
+        # TUL-Code collapse guard (`tul.code_rank_abort`, the jepa arm): a code whose
+        # effective rank fell under the bar is a constant, and the run is over.
+        _abort = float(getattr(_tul_cfg, "code_rank_abort", 0.0)) if _tul_cfg is not None else 0.0
+        if _abort > 0.0 and extra.get("val/code_eff_rank", float("inf")) < _abort:
+            raise RuntimeError(
+                f"[code] ABORT: val/code_eff_rank {extra['val/code_eff_rank']:.2f} < "
+                f"tul.code_rank_abort {_abort}: the code collapsed.")
         # PPL is exp of the MEAN CE, never the mean of the per-batch exp(CE). Jensen
         # makes the latter strictly larger: on tul-a1-acap1 it read 25.89 against the
         # true 25.14, and that 0.75 gap is 59 % of the 1.27 PPL A1-vs-A0 effect it
@@ -3355,7 +3362,8 @@ def main(cfg: DictConfig) -> None:
                     # TUL-Code: `code_fm`, `code_fm_weighted`, `code_fm_rel`, the four
                     # t-band ratios and `code_rollout_frac` (phase 3). Scalars by
                     # construction (transformer.py wraps the stats as 0-d tensors).
-                    or _k.startswith("code_fm") or _k == "code_rollout_frac"}
+                    or _k.startswith("code_fm")
+                    or _k in ("code_rollout_frac", "code_cfg_drop_frac")}
                    if isinstance(out, dict) else {}),
                 "train/ppl": math.exp(min(_lv, 20.0)),
                 "train/lr": lr,
@@ -3457,7 +3465,7 @@ def main(cfg: DictConfig) -> None:
                            "code_fm", "code_fm_weighted", "code_fm_rel", "code_fm_raw",
                            "code_fm_null", "code_fm_band0_rel", "code_fm_band1_rel",
                            "code_fm_band2_rel", "code_fm_band3_rel", "code_rollout_frac",
-                           "code_phase",
+                           "code_cfg_drop_frac", "code_phase",
                            "horizon_n_tokens"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())

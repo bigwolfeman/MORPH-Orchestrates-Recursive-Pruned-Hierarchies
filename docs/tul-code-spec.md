@@ -364,6 +364,10 @@ readings and are readable at 5k; G3 and G4 are 20k readings.
 tul:
   code: false                # true builds E, W_v, the time MLP; false is bit-identical to the ruler
   code_noise: 0.5            # UNTUNED. Gaussian noise on the cells at train (LaDiR k)
+  code_cfg_drop: 0.0         # CFG: per-row probability of the null condition on the thinker pass
+  code_cfg_scale: 1.0        # CFG guidance at sampling (needs code_cfg_drop > 0); 1 = off
+  code_target_lambda: 0.0    # the flow gradient reaches E at this weight (0 = C4 stop-gradient)
+  code_rank_abort: 0.0       # trainer raises when val/code_eff_rank < this; 0 = off
   code_noise_renorm: false   # rms-renorm the noisy truth cell (RMS 1, like a sampled cell).
                              # false = legacy: truth RMS sqrt(1+noise²); eval's encoder mode
                              # and the generator's tape feed z at that scale (2026-09-15)

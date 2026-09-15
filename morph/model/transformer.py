@@ -1974,6 +1974,10 @@ class MORPHTransformer(nn.Module):
             # marker on the CLEAN copies. Both zero-init, no RNG draw.
             self.tul_code_cell = nn.Parameter(torch.zeros(_M, d))
             self.tul_code_clean = nn.Parameter(torch.zeros(d))
+            # CFG null seed, built ONLY when the null condition is trained (`code_cfg_drop`
+            # > 0), so a pre-CFG checkpoint still loads into a non-CFG model.
+            self.tul_code_null = (nn.Parameter(torch.zeros(d))
+                                  if cfg.tul.code_cfg_drop > 0.0 else None)
             self._code_fm_scale = cfm_null_floor(d, _M, cfg.tul.code_source_std)
             # W_prefix is BUILT (the parameter set matches the ruler, C1) and never applied
             # on a code model: the cells are scattered directly (spec §3.2).
@@ -4897,8 +4901,26 @@ class MORPHTransformer(nn.Module):
         h_noisy = h_out.reshape(B, S, 2 * M, C)[:, :, :M]
         return self.tul_code_head(h_noisy).float()
 
+    def _tul_code_null_condition(self, e: Tensor, inj: Tensor, z_tape: Tensor,
+                                 rows: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        """The CFG null condition on the rows where ``rows`` ``[B]`` is true: the seed is
+        ``tul_code_null`` at every slot, the injection stack is zero, the clean tape is
+        zero. Everything the thinker conditions on (`_tul_code_thinker`: ``e``, ``inj``,
+        the clean copies) goes through here, so a null-conditioned row's velocity cannot
+        depend on the past (tested)."""
+        if self.tul_code_null is None:
+            raise ValueError("the null condition needs tul.code_cfg_drop > 0 (no tul_code_null)")
+        B = rows.shape[0]
+        r_e = rows.view(B, *([1] * (e.dim() - 1)))
+        null = self.tul_code_null.to(e.dtype).view(*([1] * (e.dim() - 1)), -1).expand_as(e)
+        e_n = torch.where(r_e, null, e)
+        inj_n = inj * (~rows).view(1, B, 1, 1).to(inj.dtype)
+        tape_n = z_tape * (~rows).view(B, 1, 1, 1).to(z_tape.dtype)
+        return e_n, inj_n, tape_n
+
     def _tul_code_sample(self, z_tape: Tensor, ok: Tensor, e: Tensor, inj: Tensor,
-                         layout: SlotLayout, k: int, generator=None) -> Tensor:
+                         layout: SlotLayout, k: int, generator=None,
+                         guidance: float | None = None) -> Tensor:
         """Sample every slot's code in parallel with ``z_tape`` (``[B, S, M, C]`` fp32) as
         the clean context: ``k`` Euler steps from ``z_0 ~ N(0, source_std²)``. Returns the
         endpoint, fp32, unnormalised, zero where ``ok`` is false. Records the pass count."""
@@ -4906,8 +4928,19 @@ class MORPHTransformer(nn.Module):
         z0 = torch.randn(z_tape.shape, device=z_tape.device, dtype=torch.float32,
                          generator=generator) * float(tc.code_source_std)
 
-        def _vel(z: Tensor, t: Tensor) -> Tensor:
-            return self._tul_code_thinker(z, z_tape, t, e, inj, layout, seed_detach=False)
+        w = float(tc.code_cfg_scale if guidance is None else guidance)
+        if w != 1.0:
+            # Classifier-free guidance: v = v_u + w (v_c − v_u), the null pass on every row.
+            e_u, inj_u, tape_u = self._tul_code_null_condition(
+                e, inj, z_tape, torch.ones(ok.shape[0], dtype=torch.bool, device=ok.device))
+
+            def _vel(z: Tensor, t: Tensor) -> Tensor:
+                v_c = self._tul_code_thinker(z, z_tape, t, e, inj, layout, seed_detach=False)
+                v_u = self._tul_code_thinker(z, tape_u, t, e_u, inj_u, layout, seed_detach=False)
+                return v_u + w * (v_c - v_u)
+        else:
+            def _vel(z: Tensor, t: Tensor) -> Tensor:
+                return self._tul_code_thinker(z, z_tape, t, e, inj, layout, seed_detach=False)
 
         zk = euler_sample(_vel, z0, int(k))
         return zk * ok.view(*ok.shape, 1, 1).float()
@@ -4968,9 +5001,20 @@ class MORPHTransformer(nn.Module):
                 stats["code_rollout_frac"] = float(sel.float().sum() / ok.float().sum().clamp_min(1))
             if phase >= 2:
                 t = torch.rand(B, S, device=z.device, dtype=torch.float32)
-                z_tgt = z.detach().float()
+                # The target: E's code, detached (C4) unless `code_target_lambda` lets the
+                # flow loss's gradient reach E at that weight (value unchanged). The clean
+                # TAPE stays detached in every case: it is context, not target.
+                lam = float(tc.code_target_lambda)
+                z_tape_t = z.detach().float()
+                z_tgt = (z.float() * lam + z_tape_t * (1.0 - lam)) if lam > 0.0 else z_tape_t
                 z0, z_t, v_tgt = cfm_pair(z_tgt, tc.code_source_std, t)
-                v_hat = self._tul_code_thinker(z_t, z_tgt, t, e, inj, layout, tc.code_seed_detach)
+                e_t, inj_t = e, inj
+                if tc.code_cfg_drop > 0.0:
+                    rows = torch.rand(B, device=z.device) < tc.code_cfg_drop
+                    e_t, inj_t, z_tape_t = self._tul_code_null_condition(e, inj, z_tape_t, rows)
+                    stats["code_cfg_drop_frac"] = float(rows.float().mean())
+                v_hat = self._tul_code_thinker(z_t, z_tape_t, t, e_t, inj_t, layout,
+                                               tc.code_seed_detach)
                 per_slot = (v_hat - v_tgt).pow(2).sum((-1, -2))                 # [B, S]
                 null_slot = v_tgt.pow(2).sum((-1, -2))
                 n_ok = ok.float().sum().clamp_min(1.0)
@@ -4986,7 +5030,8 @@ class MORPHTransformer(nn.Module):
                         if bool(m.any()):
                             stats[f"code_fm_band{b}_rel"] = float(
                                 per_slot[m].sum() / null_slot[m].sum().clamp_min(1e-12))
-                self._code_last_passes = 1 + (tc.code_rollout_steps if phase >= 3 else 0)
+                _g = 2 if tc.code_cfg_scale != 1.0 else 1
+                self._code_last_passes = 1 + (_g * tc.code_rollout_steps if phase >= 3 else 0)
             stats["code_phase"] = float(phase)
         else:
             mode = code_mode or "sampled"
@@ -5000,7 +5045,7 @@ class MORPHTransformer(nn.Module):
             elif mode == "sampled":
                 z_hat = self._tul_code_sample(z.float(), ok, e, inj, layout, k, generator=gen)
                 z_coda = code_rmsnorm(z_hat).to(z.dtype) * okf
-                self._code_last_passes = k
+                self._code_last_passes = k * (2 if tc.code_cfg_scale != 1.0 else 1)
             elif mode == "rolled":
                 z_hat = self._tul_code_sample_rolled(ok, e, inj, layout, k, generator=gen)
                 z_coda = z_hat.to(z.dtype)

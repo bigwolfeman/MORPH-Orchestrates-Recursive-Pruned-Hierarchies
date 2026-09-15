@@ -1,0 +1,16 @@
+# TUL-Code arm "tul-code-cfg" (2026-09-15, note 2026-09-15-tul-code-conditioned-thinker.md,
+# cause 2): classifier-free guidance on the thinker. Training: 10 % of rows give the
+# thinker pass the null condition (seed E_null, injections 0, tape 0). Sampling (rollout
+# and eval): v = v_u + w (v_c − v_u) at w = 2.0 — two thinker passes per Euler step.
+# The truth cell is renormed (the 2026-09-15 statistic fix). Everything else `tul_code`.
+defaults:
+  - tul_code
+  - _self_
+
+tul:
+  code_noise_renorm: true
+  code_cfg_drop: 0.1
+  code_cfg_scale: 2.0
+
+wandb:
+  name: tul-code-cfg

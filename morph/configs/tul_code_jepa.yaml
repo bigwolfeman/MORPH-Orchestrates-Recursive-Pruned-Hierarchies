@@ -1,0 +1,15 @@
+# TUL-Code arm "tul-code-jepa" (2026-09-15, note 2026-09-15-tul-code-conditioned-thinker.md,
+# cause 1): predictability pressure on the code. The flow loss's gradient reaches E at
+# weight 0.1 (contract C4 amended for this arm), with the coda's CE anchoring content;
+# the trainer aborts if val/code_eff_rank falls under 4 (collapse). Truth cell renormed.
+defaults:
+  - tul_code
+  - _self_
+
+tul:
+  code_noise_renorm: true
+  code_target_lambda: 0.1
+  code_rank_abort: 4.0
+
+wandb:
+  name: tul-code-jepa

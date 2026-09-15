@@ -20,7 +20,7 @@ from morph.model.tul_code import (code_rmsnorm, code_target_valid, code_thinker_
                                   euler_sample)
 
 CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke",
-                "tul_code_rollout1", "tul_code_renorm"]
+                "tul_code_rollout1", "tul_code_renorm", "tul_code_cfg", "tul_code_jepa"]
 
 
 def _model(seed: int = 3, code: bool = True, **kw) -> MORPHTransformer:
@@ -280,7 +280,8 @@ def test_c9_known_keys_accept_the_code_block_and_reject_a_misspelling():
     keys = ("code", "code_noise", "code_norm", "code_fm_weight", "code_source_std",
             "code_t_embed_scale", "code_phase2_at", "code_phase3_at", "code_rollout_p",
             "code_rollout_steps", "code_infer_steps", "code_seed_detach",
-            "code_noise_renorm", "code_marginal_k")
+            "code_noise_renorm", "code_marginal_k", "code_cfg_drop", "code_cfg_scale",
+            "code_target_lambda", "code_rank_abort")
     for k in keys:
         assert k in KNOWN_TUL_KEYS, k
     reject_unknown_tul_keys({k: 0 for k in keys})
@@ -451,3 +452,93 @@ def test_truth_cell_statistic_is_the_same_at_train_and_eval(renorm):
     assert abs(samp_rms - 1.0) < 2e-3, samp_rms
     if renorm:   # truth and sample are indistinguishable by norm
         assert abs(train_rms - samp_rms) < 0.03
+
+
+# ── CFG: the null condition and the guided sampler ───────────────────────────
+
+def test_cfg_null_condition_erases_the_past_and_guidance_acts():
+    """A null-conditioned row's velocity cannot depend on the seed, the injections or the
+    tape (the three conditioning paths of `_tul_code_thinker`); w = 1 is the plain sampler;
+    w != 1 moves the sample; the knobs refuse an untrained null path."""
+    x, y, lay, _ = _batch()
+    m = _model(tul_code_cfg_drop=0.1, tul_code_cfg_scale=2.0).eval()
+    _arm_head(m)
+    with torch.no_grad():
+        m.tul_code_null.normal_(std=0.1)                  # a non-trivial null seed
+        # the seed path's outputs, captured from a real forward (x here is token ids)
+        got = {}
+        orig_seed = m._tul_code_seed
+
+        def spy(*a, **k):
+            r = orig_seed(*a, **k)
+            got["xn"], got["e"], got["inj"] = r
+            return r
+        m._tul_code_seed = spy
+        try:
+            m.tul_forward_ablated(x, y, lay, code_mode="encoder")
+        finally:
+            m._tul_code_seed = orig_seed
+        xn, e, inj = got["xn"], got["e"], got["inj"]
+        xs = xn.mean(dim=2) if m._is_hc else xn
+        z, ok = m.tul_code_enc(xs, lay)
+        B, S = ok.shape
+        rows = torch.ones(B, dtype=torch.bool)
+        # two different pasts: the real one and a scrambled one
+        e2, inj2, tape2 = e.flip(1), inj.roll(1, dims=2), z.float().roll(1, dims=1)
+        en, injn, tapen = m._tul_code_null_condition(e, inj, z.float(), rows)
+        en2, injn2, tapen2 = m._tul_code_null_condition(e2, inj2, tape2, rows)
+        assert torch.equal(en, en2) and torch.equal(injn, injn2) and torch.equal(tapen, tapen2)
+        t = torch.full((B, S), 0.3)
+        zt = torch.randn_like(z.float())
+        v1 = m._tul_code_thinker(zt, tapen, t, en, injn, lay, seed_detach=False)
+        v2 = m._tul_code_thinker(zt, tapen2, t, en2, injn2, lay, seed_detach=False)
+        assert torch.equal(v1, v2), "a null-conditioned velocity still depends on the past"
+        # a half-null batch keeps the other rows intact
+        half = torch.zeros(B, dtype=torch.bool)
+        half[0] = True
+        eh, injh, tapeh = m._tul_code_null_condition(e, inj, z.float(), half)
+        assert torch.equal(eh[1:], e[1:]) and torch.equal(injh[:, 1:], inj[:, 1:]) \
+            and torch.equal(tapeh[1:], z.float()[1:])
+        assert float(injh[:, 0].abs().max()) == 0.0 and float(tapeh[0].abs().max()) == 0.0
+        # guidance: w = 1 (explicit) is the plain path; the config's w = 2 differs
+        g = torch.Generator().manual_seed(5)
+        s1 = m._tul_code_sample(z.float(), ok, e, inj, lay, 2, generator=g, guidance=1.0)
+        g = torch.Generator().manual_seed(5)
+        s2 = m._tul_code_sample(z.float(), ok, e, inj, lay, 2, generator=g)
+        g = torch.Generator().manual_seed(5)
+        s1b = m._tul_code_sample(z.float(), ok, e, inj, lay, 2, generator=g, guidance=1.0)
+        assert torch.equal(s1, s1b)
+        assert not torch.equal(s1, s2), "guidance w = 2 did not move the sample"
+        # eval bookkeeping: a guided sample costs two thinker passes per step
+        r = m.tul_forward_ablated(x, y, lay, code_mode="sampled", code_steps=3)
+        assert m._code_last_passes == 6
+    with pytest.raises(ValueError, match="code_cfg_scale"):
+        _tul(code=True, code_cfg_scale=2.0)              # drop 0: untrained null path
+    m0 = _model()                                         # no CFG: no null parameter
+    assert m0.tul_code_null is None
+    with pytest.raises(ValueError, match="code_target_lambda"):
+        _tul(code=True, code_target_lambda=1.5)
+
+
+def test_cfg_training_pass_drops_rows_and_reports_it():
+    x, y, lay, _ = _batch()
+    m = _model(tul_code_cfg_drop=0.999, tul_code_cfg_scale=2.0)
+    _arm_head(m)
+    m.train()
+    m.code_phase = 2
+    out = m(x, y, slot_layout=lay)          # the code stats are top-level keys on the loss path
+    assert float(out["code_cfg_drop_frac"]) > 0.5, sorted(out)
+    m.code_phase = 1
+    assert "code_cfg_drop_frac" not in m(x, y, slot_layout=lay)   # no thinker pass in phase 1
+
+
+# ── code_target_lambda: C4 amended for the jepa arm ──────────────────────────
+
+@pytest.mark.parametrize("lam", [0.0, 0.1])
+def test_target_lambda_lets_the_flow_loss_reach_the_encoder_only_when_set(lam):
+    x, y, lay, _ = _batch()
+    m = _model(tul_code_target_lambda=lam)
+    _arm_head(m)
+    g1, g2 = _grads(m, x, y, lay, 1), _grads(m, x, y, lay, 2)
+    reached = any(not torch.equal(g1[n], g2[n]) for n in g1 if n.startswith("tul_code_enc."))
+    assert reached == (lam > 0.0), (lam, reached)
