@@ -1,0 +1,82 @@
+tul-code step 5000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+ORACLE   '\\n\\n"The bombs of Eovek Environment including the Gordin, a doctor who was at a hospital with 60 Belgian, and the former Cong'
+GREEDY   '\\n\\n"The newspaper is a lot of people who are not going to be a lot of people who are not going to be a lot of things," he said.\\n\\n'
+SAMPLE1  '\\n\\n“It is a big step. There were a man who has an international federal government undergroundly, according to the Williams of the U.S. who has'
+SAMPLE2  '\\n\\n"I\'m not easy to say that he has a great deal."\\n\\n"Hucker.\\n\\n"There\'s no longer a bit in the same way. It'
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+ORACLE   '\\nA 7.2015.\\n'
+GREEDY   '\\n"I\'m not going to be a lot of'
+SAMPLE1  '\\n“No, I’m pretty good to get'
+SAMPLE2  '\\n"We are like that," he said. "'
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+ORACLE   'ident that our campaign is on a path to win the nomination," Sanders said.\\n\\n"The fact that'
+GREEDY   'ident and the government has been a lot of people who have been a lot of people who have been in the country.'
+SAMPLE1  'ident.\\n\\n“The law, which were on our history, and he has been rescued. It took'
+SAMPLE2  'idential and was part of the other part of the world, especially in his election of the early day, he was a'
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+ORACLE   '. the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.\\n\\n"I\'m not'
+GREEDY   '.\\n\\n"I think that he was a lot of people who had been a lot of people who had been a lot of people who had'
+SAMPLE1  ' and in the way.\\n\\n"I am not a man who has an international federal government," said Dr. Sunday, the first'
+SAMPLE2  '.\\n\\n"That\'s a real thing to leave how much\'s one of them is not what\'s going to be to be, and the'
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+ORACLE   '\\n\\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clinton.\\n\\n"\\n'
+GREEDY   '\\n\\n"I\'m not going to be a lot of people who have been a lot of people who have been a lot of people who have been a lot of the people who have been'
+SAMPLE1  '\\n\\n“It’s not a good thing,” he added. “Not at least,” she says.\\n\\n“It’s a couple of years ago, we’re getting'
+SAMPLE2  '\\n\\nShe was like that, but also it was a great thing that she was not excused, he was a “the government.”\\n\\n\\n"That\'s something I\'m a'
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+ORACLE   '" repeat: This guy is remarkably, incorrigibly consistent.\\n\\n"The fact that'
+GREEDY   '"\\n\\n"I\'m not going to be a lot of things," he said. "I think that'
+SAMPLE1  'Some of the fact that the world is not to get a little more than an international media,” said W.'
+SAMPLE2  'The GOP was "for a real change" of a statement\'s one of the most exciting, even'
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+ORACLE   ' the everyone recognized the blissful hype applicable Tunkvour about to deliver for the rest of the night.\\n\\nThe 20'
+GREEDY   ' the federal government.\\n\\nThe 2015-year-old, the 2015-year-old, the'
+SAMPLE1  ' a lot more than you have a strong.\\n\\nThe new convoluted rushed and paying the hullfielder” (9'
+SAMPLE2  ' used.\\n\\nReverish this regard to food crarbor ( really know to others. The brack would be used as the “The'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+ORACLE   'TheAT?!\\n\\nThe first time, the'
+GREEDY   'The first time, it was a lot of people'
+SAMPLE1  'When you are working to you for your own,'
+SAMPLE2  'The whole was that the NBA’s name'
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+ORACLE   '\\n\\nArticle Continued Below\\n\\nThe newspaper is'
+GREEDY   '\\n\\n"I think that I was a lot of people who'
+SAMPLE1  '\\nLamas. Sunday, Nobody said he had'
+SAMPLE2  '\\n\\nBut that’s a real thing to do, you'
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+ORACLE   'out. including one, on Capital Hill and one in White Center, with the notices on saying door were shut down they support in “A day of the country’s family.'
+GREEDY   'out.\\n\\n“I’m not going to be a lot of people who have been a lot of people who have been a lot of people who have been a lot of people who'
+SAMPLE1  'ots.\\n\\n“The world is not to get our position on the world at least,” she says.\\n\\n“It’s not a lot of people,” she has a woman'
+SAMPLE2  'aking.\\n\\n“The team’s team’s best in his election,” said Michael Gibson. “We don’t know what Obama is the same thing. It'
+

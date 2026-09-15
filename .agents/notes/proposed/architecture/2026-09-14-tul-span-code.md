@@ -130,3 +130,19 @@ and G1–G2 read, whatever they read. It moves to `rejected/` if G1 or G2 fails 
 - `ce_k{K}` is a one-sample bound, not a likelihood; ship claims are partly generation
   claims and need the diversity guard.
 - The first panel is one seed per arm; nothing in it is a verdict.
+
+## Measured 2026-09-14 (panel at 5k, one seed each)
+
+Filed in `lab/experiments/failures/2026-09-14-arc-tul-code.md`. The build holds C1–C10 and
+runs at 3× the strict ruler's rate. E's code is a verbatim copy of the next span (the coda
+reads it back at 0.4–0.6 nats; ten cuts show the sentence returned word for word), the
+thinker's sample is close to an unconditional draw from the code distribution (residual
+1.7–1.9× the code's variance in every principal subspace; newswire-shaped sentences with
+no topic thread), and one sample costs the coda 0.68–0.71 nats against the ruler on
+501k paired tokens. The K-curve is flat (k = 1 … 16 within 0.02). Phase 3 is load-bearing
+(without it, +7.4). The flow ratio reaches 0.33 at 5k and is still falling, and the
+code's content sits entirely in the top 128 of 1024 directions per cell, so the L2 flow
+loss is not the defect: the target is. Acceptance criteria A2 and A3 fail; A1 and the
+rate criterion hold. Status stays `proposed` pending Wolfe's call between (1) a frozen-E,
+all-slots-rollout arm (`code_rollout_p: 1.0`, expected to return to the ruler) and (2) a
+code defined by what the past determines rather than a copy of the span.
