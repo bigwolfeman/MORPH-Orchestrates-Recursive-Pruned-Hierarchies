@@ -1,0 +1,72 @@
+slot-spandec-strict-20k step 20000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+GREEDY   '\\n\\nThe report, which was conducted by the National Institutes of Health, found that the hospital had been working with the hospital to determine whether the hospital was in the hospital.'
+SAMPLE1  "\\n\\nThe team's director of health services, Albert Einstein, said it was not planning on returning to the hospital.\\n\\nTheir meeting was held at the end of"
+SAMPLE2  "\\n\\nThe unnamed NHS Health Service report said they had conducted a briefing early on Thursday.\\n\\nThe government's government said the patient was the only driver. He"
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+GREEDY   '\\n"I\'m not sure if you\'re going to'
+SAMPLE1  '\\nOne more thing.\\n\\n"I\'m af'
+SAMPLE2  '\\nShe was living in Nevada, but her'
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+GREEDY   'ident that we have to be able to win," he said. "We have to be in the right place. We'
+SAMPLE1  'ident that the campaign will be a strong leader for us," he said. "There\'s also a lot more in common'
+SAMPLE2  'ident and able to support them," White House press secretary Vice President Donald Trump said.\\n'
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+GREEDY   ' to the Democratic Party.\\n\\n“I’m not going to be a Republican,” she said. “I’m not'
+SAMPLE1  ' to Clinton.\\n\\nObama, on top of her stump at the Clinton campaign, took the lead in the primary'
+SAMPLE2  ' to the Democrats.\\n\\nCruz, a Democratic baseman, is known for her character. He was the party'
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+GREEDY   "\\n\\nThe fact that Obama is a big fan of the president is a very important thing. He's a very good candidate. He's a very good candidate. He's a"
+SAMPLE1  "\\n\\nNo, I suspect Obama. There's a big difference between Obama and Obama. But in the days leading up to this, Americans are going to have to"
+SAMPLE2  "\\n\\nBut that's not easy. Rachel Cyrus (R-She.) has been one of the most popular public figures in Obama's past. And since a"
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+GREEDY   '"We\'re not going to be able to do that," said Sen. Bernie Sanders, who'
+SAMPLE1  'Some of the problems with Senate GOP policies are still in the process of raising revenues.'
+SAMPLE2  "The Obama administration's support for the expansion of medical marijuana as a system is not, even"
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+GREEDY   ' discovered by the band. The band’s first album, “The Mother’s Wife,” was released in 1995,'
+SAMPLE1  ' reported in the video. Suffice to say that it was a stomach, and a glass of wine.\\n\\nSoon,'
+SAMPLE2  ' placed in the room like Nyme “The Rangers” and the boycotted band. The group then started playing, and the audience'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+GREEDY   'The 2016 NBA Draft is'
+SAMPLE1  'Share. Tumblr has not been able to'
+SAMPLE2  "The National Geographic's NASA website also alle"
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+GREEDY   '\\n\\n“I think that’s a very important issue,”'
+SAMPLE1  '\\n\\n“It’s not possible. There’s no'
+SAMPLE2  '\\n\\nBut that’s not a good idea to explain what'
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+GREEDY   'ots in the city.\\n\\n“We’re not going to get a lot of people out there,” says Brady.\\n\\n“We’re just going to get to'
+SAMPLE1  'ots in the cities.\\n\\n“I think people say ‘OK, that’s not going to happen in the Southwest.’” says Schumer.\\n\\n'
+SAMPLE2  'ifts.\\n\\n“We’re also going to have a great deal of opportunities, but we’re a tougher and more important part of the job,” says Madd'
+
