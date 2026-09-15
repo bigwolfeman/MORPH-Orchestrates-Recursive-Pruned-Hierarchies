@@ -643,6 +643,28 @@ class TULConfig:
     # mean does not already give) and with `spandec: false` (no decoder is built).
     # Record: lab/experiments/planned/2026-09-13-arc-register-reader-and-downstream-target.md
     spandec_reads_cells: bool = False
+    # ── TUL-CODE (arm `tul-code`, 2026-09-14; docs/tul-code-spec.md) ─────────────
+    #
+    # The slot holds the CODE of the span it precedes. At training time an encoder E
+    # (morph/model/tul_code.py) makes slot s's M = prefix_k cells from span s+1's own
+    # prelude states; the strict coda speaks span s+1 reading those cells plus the span's
+    # token path; the core body is trained ONE pass per slot as a flow-matching velocity
+    # field from noise toward the (detached) code, and samples the code in
+    # `code_infer_steps` Euler passes at eval / generation. No slot loop runs on a code
+    # model: `_tul_code_core` replaces `_tul_core`, and `slot_mean_depth` /
+    # `slot_max_depth` / `slot_depth_fixed` are not read. `code: false` builds nothing.
+    code: bool = False
+    code_noise: float = 0.5              # UNTUNED. Gaussian noise on the cells at train (LaDiR k)
+    code_norm: str = "rms"               # the only mode in v0.1
+    code_fm_weight: float = 1.0          # weight of the flow term, on the null-floor scale
+    code_source_std: float = 1.0         # CFM source std, matched to unit-RMS codes
+    code_t_embed_scale: float = 1.0      # fm_planner's knob, same meaning
+    code_phase2_at: float = 0.10         # UNTUNED fraction of training.steps: the flow loss starts
+    code_phase3_at: float = 0.50         # UNTUNED fraction: rollout (sampled codes to the coda) starts
+    code_rollout_p: float = 0.5          # UNTUNED fraction of valid slots given a sampled code in phase 3
+    code_rollout_steps: int = 8          # Euler steps for phase-3 samples
+    code_infer_steps: int = 8            # k at eval / generation; instruments sweep it
+    code_seed_detach: bool = False       # ablation arm: the flow gradient may not reach the seed path
     # ── THE PER-PASS PLANNING TARGET (arm `slot-spandec-strict-perpass`, 2026-09-12) ──
     #
     # WHAT IT IS. Every pass of the loop gets its own decoder target, and the target grows
@@ -1397,6 +1419,7 @@ class TULConfig:
                 f"tul.row_contrast_tau must be > 0 (it divides the logits), got "
                 f"{self.row_contrast_tau}")
         self._check_vq()
+        self._check_code()
         if self.prefix_source in ("trajectory", "entry_exit") and self.prefix_k < 2:
             raise ValueError(
                 f"tul.prefix_source={self.prefix_source!r} needs tul.prefix_k >= 2: at "
@@ -2201,6 +2224,92 @@ class TULConfig:
             raise ValueError(
                 f"tul.center_bag_mean=true with tul.slot_seed={self.slot_seed!r} is not "
                 f"supported: centering is scoped to slot_seed='bag_mean' only.")
+
+    def _check_code(self) -> None:
+        """``tul.code`` — TUL-Code (docs/tul-code-spec.md §9). Every refusal, with its reason."""
+        _knobs = (("code_noise", 0.5), ("code_norm", "rms"), ("code_fm_weight", 1.0),
+                  ("code_source_std", 1.0), ("code_t_embed_scale", 1.0),
+                  ("code_phase2_at", 0.10), ("code_phase3_at", 0.50),
+                  ("code_rollout_p", 0.5), ("code_rollout_steps", 8),
+                  ("code_infer_steps", 8), ("code_seed_detach", False))
+        if not self.code:
+            _set = [n for n, dflt in _knobs if getattr(self, n) != dflt]
+            if _set:
+                raise ValueError(
+                    f"tul.{sorted(_set)} set with tul.code=false: no encoder or velocity "
+                    f"head is built, so the knob(s) would be silently ignored.")
+            return
+        if self.code_norm != "rms":
+            raise ValueError(f"tul.code_norm must be 'rms' (v0.1), got {self.code_norm!r}")
+        if self.code_noise < 0.0:
+            raise ValueError(f"tul.code_noise must be >= 0, got {self.code_noise}")
+        if self.code_fm_weight < 0.0:
+            raise ValueError(f"tul.code_fm_weight must be >= 0, got {self.code_fm_weight}")
+        if self.code_source_std <= 0.0:
+            raise ValueError(f"tul.code_source_std must be > 0, got {self.code_source_std}")
+        if self.code_t_embed_scale <= 0.0:
+            raise ValueError(
+                f"tul.code_t_embed_scale must be > 0, got {self.code_t_embed_scale}")
+        if not (0.0 <= self.code_phase2_at <= self.code_phase3_at <= 1.0):
+            raise ValueError(
+                f"tul.code_phase2_at={self.code_phase2_at} and "
+                f"tul.code_phase3_at={self.code_phase3_at} must satisfy "
+                f"0 <= phase2 <= phase3 <= 1 (phase3_at = 1.0 means rollout never starts).")
+        if not (0.0 <= self.code_rollout_p <= 1.0):
+            raise ValueError(f"tul.code_rollout_p must be in [0, 1], got {self.code_rollout_p}")
+        if self.code_rollout_steps < 1 or self.code_infer_steps < 1:
+            raise ValueError(
+                f"tul.code_rollout_steps / code_infer_steps must be >= 1, got "
+                f"{self.code_rollout_steps} / {self.code_infer_steps}")
+        if self.tokens_through_core or self.loop_reads_tokens:
+            raise NotImplementedError(
+                "tul.code needs the slot geometry (tokens_through_core=false, "
+                "loop_reads_tokens=false): the cells are the coda's prefix positions and the "
+                "core body runs on the slot axis only.")
+        if self.tg_geometry != "strict":
+            raise NotImplementedError(
+                f"tul.code needs tul.tg_geometry='strict' (got {self.tg_geometry!r}): the "
+                f"cells must be the ONLY cross-span channel, or the coda bypasses the code "
+                f"(FM1's failure, docs/tul-code-spec.md §5).")
+        if not (self.coda_sees_slots and self.coda_token_cut == 0):
+            raise NotImplementedError(
+                "tul.code needs the FULL-AXIS coda (coda_sees_slots=true, coda_token_cut=0): "
+                "the M code cells ARE coda positions.")
+        if self.slot_cells != 1 or self.vq_codes != 0 or self.prefix_source != "exit":
+            raise NotImplementedError(
+                f"tul.code with slot_cells={self.slot_cells} / vq_codes={self.vq_codes} / "
+                f"prefix_source={self.prefix_source!r}: each of those also claims the "
+                f"prefix cells. The code's cell count is prefix_k; run them as separate arms.")
+        _refuse = [n for n in ("spandec", "db_loop", "slot_chain", "grad_pass", "oracle_z",
+                               "spandec_per_pass", "mux_every_pass", "mux_stage_all",
+                               "mux_stage_own_iters", "coda_span_heads", "center_exit",
+                               "reread", "bcast", "xattn", "carry", "detach_z",
+                               "loop_reach", "cond_layers", "horizon_weight",
+                               "row_contrast_lambda", "mux_beta", "sigreg_lambda",
+                               "stp_lambda", "set_lambda",
+                               "pass_residual_lambda", "core_token_aux",
+                               "per_slot_embed", "progressive_p", "pass_lora_rank",
+                               "tg_span_comp", "tg_span_gate",
+                               "tg_soft_prev_span", "reinject_seed_every_pass")
+                   if getattr(self, n)]
+        if self.recur_gate != "none":
+            _refuse.append("recur_gate")
+        if self.grad_pass_energy != "own_mux":
+            _refuse.append("grad_pass_energy")
+        if getattr(self, "critic", False):
+            _refuse.append("critic")
+        if _refuse:
+            raise NotImplementedError(
+                f"tul.code with {sorted(_refuse)}: every one of those grades, conditions or "
+                f"reads a LOOPED slot state, and a code model has no slot loop. Not "
+                f"specified, so this raises rather than running half-applied.")
+        if self.gate is not None:
+            raise NotImplementedError("tul.code with tul.gate: no looped trajectory to gate.")
+        if self.slot_depth_fixed or self.slot_mean_depth or self.slot_max_depth:
+            raise NotImplementedError(
+                "tul.code reads no slot depth (slot_mean_depth / slot_max_depth / "
+                "slot_depth_fixed): training runs one velocity pass per slot and eval runs "
+                "code_infer_steps Euler passes. Drop the depth knobs.")
 
     def _check_vq(self) -> None:
         """``tul.vq_codes`` — the discrete thought. Every refusal, with its reason.
@@ -3460,10 +3569,20 @@ class TULSlots(nn.Module):
             # CELL INDEX, zero-init, so this line is an exact no-op at step 0.
             proj = proj + self.E_pass.to(proj.dtype).view(1, 1, K, *([1] * (proj.dim() - 4)), C)
         values = proj.reshape(B, S * K, *mid, C)       # slot-major: index s·K + k
+        return values, self.prefix_positions(layout, l_total)
+
+    def prefix_positions(self, layout: SlotLayout, l_total: int) -> Tensor:
+        """``[B, S·prefix_k]`` scatter index of every prefix cell, slot-major (``s·K + k``);
+        invalid slots address the dump row ``l_total``. Lifted out of :meth:`prefix_project`
+        (bit-identical) so a writer that does NOT project — TUL-Code's cells are the code
+        itself — can land its values on the same positions.
+        """
+        K = self.tul.prefix_k
+        B, S = layout.slot_index.shape
         offs = torch.arange(K, device=layout.slot_index.device)
         pos = layout.slot_index.unsqueeze(-1) + offs                      # [B, S, K]
         pos = torch.where(layout.slot_valid.unsqueeze(-1), pos, l_total)
-        return values, pos.reshape(B, S * K)
+        return pos.reshape(B, S * K)
 
     def unpack(self, h_slots: Tensor, layout: SlotLayout) -> Tensor:
         """The bcast term ``[B, L, C]``: ``W_bcast[offset(p)] · z_{prev slot of p}`` at every

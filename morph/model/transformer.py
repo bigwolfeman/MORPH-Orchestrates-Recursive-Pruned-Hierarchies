@@ -49,6 +49,8 @@ from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
 from .tul_vq import TULThoughtVQ
+from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeTime, cfm_null_floor,
+                       cfm_pair, code_rmsnorm, code_thinker_relation, euler_sample)
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
                          tg_reset_from_ids,
@@ -1923,6 +1925,51 @@ class MORPHTransformer(nn.Module):
         # cells the coda already reads. RNG-neutral (private generator, global stream
         # snapshotted), so a VQ model's base weights are byte-identical to its ruler's.
         # `vq_codes: 0` builds nothing and draws nothing.
+        # ── TUL-Code (TULConfig.code; morph/model/tul_code.py; docs/tul-code-spec.md) ──
+        # The slot holds the CODE of the span it precedes. E makes it from that span at
+        # train; the core body samples it at eval. `code: false` builds nothing and the
+        # forward is bit-identical to the strict ruler (tests/test_tul_code.py, C1).
+        # RNG-neutral: every module below draws from a private generator.
+        self.tul_code_enc: TULCodeEncoder | None = None
+        self.tul_code_time: TULCodeTime | None = None
+        self.tul_code_head: TULCodeHead | None = None
+        # `code_phase` is a Python int the TRAINER sets per step (1 define the code, 2 learn
+        # to guess it, 3 rollout). A trace-time branch, on purpose: a multiply-by-zero gate
+        # would pay the thinker in phase 1 and the sampler in phases 1-2 (spec §6). Two
+        # recompiles per run, at the two switches.
+        self.code_phase: int = 2
+        self._code_fm_scale: float = 1.0
+        self._code_last_passes: int = 0
+        if cfg.tul is not None and cfg.tul.code:
+            if cfg.n_core == 0:
+                raise ValueError("tul.code needs a core body (model.n_core > 0): the core "
+                                 "blocks ARE the velocity field.")
+            if cfg.fm is not None:
+                raise NotImplementedError(
+                    "tul.code with an FM planner (cfg.fm): two samplers for one cell.")
+            if cfg.core_init_scale > 0.0 or cfg.scse_enabled:
+                raise NotImplementedError(
+                    "tul.code with core_init_scale > 0 or SCSE: the thinker's entry state is "
+                    "z_t itself (spec §3.5), so the entry map and the deviation carry have "
+                    "no place on this path.")
+            if str(cfg.tul.core_stage_cond) != "none":
+                raise NotImplementedError(
+                    f"tul.code with tul.core_stage_cond={cfg.tul.core_stage_cond!r}: the "
+                    f"code path carries its own time conditioning (TULCodeTime).")
+            _M = int(cfg.tul.prefix_k)
+            self.tul_code_enc = TULCodeEncoder(d, _M)
+            self.tul_code_time = TULCodeTime(d, t_embed_scale=cfg.tul.code_t_embed_scale)
+            self.tul_code_head = TULCodeHead(d)
+            # Per-cell embedding on the NOISY copies (which cell of the slot is being
+            # denoised: at t≈0 the state is noise and carries no cell identity) and one
+            # marker on the CLEAN copies. Both zero-init, no RNG draw.
+            self.tul_code_cell = nn.Parameter(torch.zeros(_M, d))
+            self.tul_code_clean = nn.Parameter(torch.zeros(d))
+            self._code_fm_scale = cfm_null_floor(d, _M, cfg.tul.code_source_std)
+            # W_prefix is BUILT (the parameter set matches the ruler, C1) and never applied
+            # on a code model: the cells are scattered directly (spec §3.2).
+            if self.tul is not None and self.tul.W_prefix is not None:
+                self.tul.W_prefix.requires_grad_(False)
         self.tul_vq: TULThoughtVQ | None = None
         if cfg.tul is not None and cfg.tul.vq_codes > 0:
             if cfg.n_core == 0:
@@ -4789,6 +4836,166 @@ class MORPHTransformer(nn.Module):
         pen = lam * (hinge * hinge).mean()
         return {"gain": gain.detach().mean(), "gain_max": gain.detach().max(), "penalty": pen}
 
+    # ── TUL-Code (docs/tul-code-spec.md) ─────────────────────────────────────────
+
+    def _tul_code_seed(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout):
+        """``(xn, e, inj)``: the normalised prelude, the seed at every slot position
+        ``[B, S, (n,) C]`` and the loop-invariant injection stack ``[n_core, B, S, C]`` —
+        exactly what ``_tul_core`` hands its first pass (lines 3914-3925 / 4134-4139)."""
+        np_, n_core = self.cfg.n_prelude, self.cfg.n_core
+        gidx, gvalid = layout.slot_index, layout.slot_valid
+        xn = self.input_norm(x)
+        e = gather_valid(xn, gidx, gvalid)
+        x0_s = gather_valid(x0, gidx, gvalid)
+        bg_s = gather_valid(bigram_emb, gidx, gvalid) if bigram_emb is not None else None
+        inj = torch.stack(
+            [self._build_injection_term(np_ + i, self.x0_injects[np_ + i].precompute(x0_s),
+                                        None, bg_s, e.dtype)
+             for i in range(n_core)], dim=0)
+        return xn, e, inj
+
+    def _tul_code_thinker(self, z_noisy: Tensor, z_clean: Tensor, t: Tensor, e: Tensor,
+                          inj: Tensor, layout: SlotLayout, seed_detach: bool) -> Tensor:
+        """ONE core pass over the doubled slot sequence -> velocity ``[B, S, M, C]`` fp32.
+
+        ``z_noisy`` / ``z_clean`` ``[B, S, M, C]`` fp32 (the clean copies are the tape and
+        are context only; the caller detaches them), ``t`` ``[B, S]``. Layout, relation and
+        the order's leak argument: ``morph/model/tul_code.py`` module docstring. The seed
+        ``e`` and the injection stack enter both copies; the time embedding and the
+        per-cell embedding enter the noisy copies only, the clean marker the clean ones.
+        """
+        B, S, M, C = z_noisy.shape
+        dt = e.dtype
+        if seed_detach:
+            e, inj = e.detach(), inj.detach()
+        cells = torch.cat([z_noisy, z_clean], dim=2).to(dt)            # [B, S, 2M, C], noisy FIRST
+        h_in = cells.reshape(B, S * 2 * M, C)
+        e_rep = e.repeat_interleave(2 * M, dim=1)                       # [B, 2SM, (n,) C]
+        inj_rep = inj.repeat_interleave(2 * M, dim=2)                   # [n_core, B, 2SM, C]
+        add = torch.zeros(B, S, 2 * M, C, dtype=dt, device=h_in.device)
+        add[:, :, :M] = (self.tul_code_time(t).to(dt).unsqueeze(2)
+                         + self.tul_code_cell.to(dt).view(1, 1, M, C))
+        add[:, :, M:] = self.tul_code_clean.to(dt).view(1, 1, 1, C)
+        inj_rep = inj_rep + add.reshape(1, B, S * 2 * M, C)
+        if self._is_hc:
+            h_in = h_in.unsqueeze(2).expand(-1, -1, self._n_streams, -1).contiguous()
+        rel = code_thinker_relation(S, M, h_in.device)
+        h_out, _ = self._apply_core_step(h_in, e_rep, None, None, None, ret_state=None,
+                                         iter_idx=0, inj_terms=inj_rep,
+                                         attn_kw={"tg_relation": rel})
+        if self._is_hc:
+            h_out = h_out.mean(dim=2)
+        h_noisy = h_out.reshape(B, S, 2 * M, C)[:, :, :M]
+        return self.tul_code_head(h_noisy).float()
+
+    def _tul_code_sample(self, z_tape: Tensor, ok: Tensor, e: Tensor, inj: Tensor,
+                         layout: SlotLayout, k: int, generator=None) -> Tensor:
+        """Sample every slot's code in parallel with ``z_tape`` (``[B, S, M, C]`` fp32) as
+        the clean context: ``k`` Euler steps from ``z_0 ~ N(0, source_std²)``. Returns the
+        endpoint, fp32, unnormalised, zero where ``ok`` is false. Records the pass count."""
+        tc = self.cfg.tul
+        z0 = torch.randn(z_tape.shape, device=z_tape.device, dtype=torch.float32,
+                         generator=generator) * float(tc.code_source_std)
+
+        def _vel(z: Tensor, t: Tensor) -> Tensor:
+            return self._tul_code_thinker(z, z_tape, t, e, inj, layout, seed_detach=False)
+
+        zk = euler_sample(_vel, z0, int(k))
+        return zk * ok.view(*ok.shape, 1, 1).float()
+
+    def _tul_code_sample_rolled(self, ok: Tensor, e: Tensor, inj: Tensor,
+                                layout: SlotLayout, k: int, generator=None) -> Tensor:
+        """The generation regime: the tape is SAMPLED slot by slot, each slot reading the
+        sampled codes before it. ``S·k`` core passes. Eval instrument only (`val/ce_k8_rolled`)."""
+        B, S = ok.shape
+        M, C = int(self.cfg.tul.prefix_k), self.cfg.d_model
+        tape = torch.zeros(B, S, M, C, device=ok.device, dtype=torch.float32)
+        for s in range(S):
+            zk = self._tul_code_sample(tape, ok, e, inj, layout, k, generator=generator)
+            tape[:, s] = code_rmsnorm(zk[:, s]) * ok[:, s].view(B, 1, 1).float()
+        return tape
+
+    def _tul_code_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
+                       code_mode: str | None, code_steps: int | None, plan_mode: str):
+        """The code branch of :meth:`_forward_tul` (spec §4).
+
+        Returns ``(xn, cells [B, S, M, C], fm_loss | None, stats, h_slots [B, S, C],
+        depths)``. ``cells`` is what the coda reads (after the plan ablation); ``h_slots``
+        is their mean, for the readers that take one state per slot; ``depths`` is ones,
+        a metric placeholder — no slot loop ran.
+
+        Train (``self.code_phase``): 1 — cells = E's code + noise, no thinker pass;
+        2 — plus the flow loss (one thinker pass on the interpolant); 3 — plus a fraction
+        ``code_rollout_p`` of the valid slots hand the coda a SAMPLED code (no grad).
+        Eval (``code_mode``): "encoder" | "sampled" (default, ``code_steps`` or
+        ``code_infer_steps``) | "rolled".
+        """
+        tc = self.cfg.tul
+        xn, e, inj = self._tul_code_seed(x, x0, bigram_emb, layout)
+        xs = xn.mean(dim=2) if self._is_hc else xn
+        z, ok = self.tul_code_enc(xs, layout)                          # [B, S, M, C], [B, S]
+        B, S = ok.shape
+        okf = ok.view(B, S, 1, 1).to(z.dtype)
+        stats: dict = {}
+        fm_loss = None
+        self._code_last_passes = 0
+        if self.training:
+            phase = int(self.code_phase)
+            z_coda = z
+            if tc.code_noise > 0.0:
+                z_coda = (z_coda + tc.code_noise * torch.randn_like(z_coda)) * okf
+            if phase >= 3 and tc.code_rollout_p > 0.0:
+                sel = (torch.rand(B, S, device=z.device) < tc.code_rollout_p) & ok
+                z_hat = self._tul_code_sample(z.detach().float(), ok, e, inj, layout,
+                                              tc.code_rollout_steps)
+                z_coda = torch.where(sel.view(B, S, 1, 1), code_rmsnorm(z_hat).to(z.dtype),
+                                     z_coda)
+                stats["code_rollout_frac"] = float(sel.float().sum() / ok.float().sum().clamp_min(1))
+            if phase >= 2:
+                t = torch.rand(B, S, device=z.device, dtype=torch.float32)
+                z_tgt = z.detach().float()
+                z0, z_t, v_tgt = cfm_pair(z_tgt, tc.code_source_std, t)
+                v_hat = self._tul_code_thinker(z_t, z_tgt, t, e, inj, layout, tc.code_seed_detach)
+                per_slot = (v_hat - v_tgt).pow(2).sum((-1, -2))                 # [B, S]
+                null_slot = v_tgt.pow(2).sum((-1, -2))
+                n_ok = ok.float().sum().clamp_min(1.0)
+                loss_raw = (per_slot * ok.float()).sum() / n_ok
+                fm_loss = loss_raw / float(self._code_fm_scale)
+                with torch.no_grad():
+                    null = (null_slot * ok.float()).sum() / n_ok
+                    stats["code_fm_raw"] = float(loss_raw)
+                    stats["code_fm_null"] = float(null)
+                    stats["code_fm_rel"] = float(loss_raw / null.clamp_min(1e-12))
+                    for b in range(4):
+                        m = ok & (t >= b / 4.0) & (t < (b + 1) / 4.0)
+                        if bool(m.any()):
+                            stats[f"code_fm_band{b}_rel"] = float(
+                                per_slot[m].sum() / null_slot[m].sum().clamp_min(1e-12))
+                self._code_last_passes = 1 + (tc.code_rollout_steps if phase >= 3 else 0)
+            stats["code_phase"] = float(phase)
+        else:
+            mode = code_mode or "sampled"
+            k = int(code_steps or tc.code_infer_steps)
+            gen = torch.Generator(device="cpu" if z.device.type == "mps" else z.device)
+            gen.manual_seed(0)
+            if mode == "encoder":
+                z_coda = z
+            elif mode == "sampled":
+                z_hat = self._tul_code_sample(z.float(), ok, e, inj, layout, k, generator=gen)
+                z_coda = code_rmsnorm(z_hat).to(z.dtype) * okf
+                self._code_last_passes = k
+            elif mode == "rolled":
+                z_hat = self._tul_code_sample_rolled(ok, e, inj, layout, k, generator=gen)
+                z_coda = z_hat.to(z.dtype)
+                self._code_last_passes = k * S
+            else:
+                raise ValueError(f"code_mode must be encoder|sampled|rolled, got {mode!r}")
+            stats["code_steps"] = float(k if mode != "encoder" else 0)
+        cells = self._tul_plan_ablate(z_coda, layout, plan_mode)
+        h_slots = cells.mean(dim=2)
+        depths = torch.ones_like(layout.slot_index)
+        return xn, cells, fm_loss, stats, h_slots, depths
+
     def _tul_db1_precheck(self, what: str) -> None:
         """Shared guards for :meth:`_tul_core_db1` and :meth:`_tul_core_db1_ladder`.
 
@@ -6271,8 +6478,15 @@ class MORPHTransformer(nn.Module):
                      layout: SlotLayout, plan_nats: bool, halt: bool = False,
                      plan_mode: str = "normal",
                      tul_step_mode: str | None = None,
-                     slot_depths: Tensor | None = None) -> dict:
+                     slot_depths: Tensor | None = None,
+                     code_mode: str | None = None,
+                     code_steps: int | None = None) -> dict:
         """The TUL forward (docs/tul-spec.md §3). One shared position axis.
+
+        ``code_mode`` / ``code_steps`` (TUL-Code, eval only): which cells the coda reads —
+        ``"encoder"`` (the ground-truth codes, `val/ce_tf`), ``"sampled"`` (k Euler steps
+        with the encoder's codes as the tape, the default at eval), ``"rolled"`` (the tape
+        sampled slot by slot, the generation regime). ``None`` is the shipped path.
 
         ``tul_step_mode`` (faithful DiffusionBlocks, morph/model/iter_cond.py) is a
         per-forward DATA argument, the ``slot_layout`` pattern: ``None`` (default) is
@@ -6294,6 +6508,25 @@ class MORPHTransformer(nn.Module):
                 "this model has no TUL parameters (E_slot / E_mask / W_prefix)."
             )
         tc = self.cfg.tul
+        if tc.code:
+            if slot_depths is not None:
+                raise NotImplementedError(
+                    "slot_depths on a code model: no slot loop runs, so there is no per-slot "
+                    "depth to force. The eval dial is code_steps.")
+            if tul_step_mode is not None:
+                raise NotImplementedError(
+                    "tul_step_mode on a code model: the thinker is one velocity pass at "
+                    "train and code_steps Euler passes at eval; there is no db1/bptt choice.")
+            if self.training and (code_mode is not None or code_steps is not None):
+                raise ValueError(
+                    "code_mode / code_steps are EVAL-ONLY: at train the phase decides what "
+                    "the coda reads (spec §6).")
+            if plan_mode == "wrong_seed":
+                raise NotImplementedError(
+                    "plan_mode='wrong_seed' on a code model: the seed feeds the thinker, not "
+                    "the cells, so the reading would mean something else (spec §8).")
+        elif code_mode is not None or code_steps is not None:
+            raise ValueError("code_mode / code_steps need a model built with tul.code=true.")
         if slot_depths is not None:
             # The SAME rule tul_step_mode='db1' states above: every branch of this forward
             # that never reaches `_tul_core` would ignore the table in silence, so each is
@@ -6390,6 +6623,7 @@ class MORPHTransformer(nn.Module):
         # a candidate state differs from the shipped coda in that write and nothing else.
         # None on the paid loop and the FM planner, both of which the critic refuses.
         _critic_base = None
+        code_fm_loss, code_stats = None, {}
         # `tul.prefix_source="trajectory"`'s PAD cells at their row positions, or None on
         # every other model. Bound here rather than in the slot-loop branch because the
         # coda's key set is narrowed after the branch dispatch, beside `all_slots`.
@@ -6508,6 +6742,30 @@ class MORPHTransformer(nn.Module):
             rcon_loss, rcon_stats = None, {}
             h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             values, pos = self.tul.prefix_project(h_slots, layout, L)
+            x_coda = scatter_positions(xn, pos, values)
+        elif tc.code:
+            # ── TUL-Code (docs/tul-code-spec.md §4): the cells ARE the code ───────────
+            fm_y = fm_geom = fm_ctx = None
+            xn, _cells, code_fm_loss, code_stats, h_slots, depths = self._tul_code_core(
+                x, x0, bigram_emb, layout, code_mode=code_mode, code_steps=code_steps,
+                plan_mode=plan_mode)
+            g_traj = db_traj = gain_reg = mep_keep = None
+            mux_loss, sigreg_loss, mux_stats = None, None, {}
+            spandec_loss, spandec_stats, _egrad_src = None, {}, None
+            oracle_z_loss, oracle_z_stats = None, {}
+            spandec_pass_loss, spandec_pass_stats = None, {}
+            horizon_loss, horizon_stats = None, {}
+            _vq_out = None
+            rcon_loss, rcon_stats = None, {}
+            # The M cells go 1:1 into the M prefix positions, broadcast over the HC
+            # streams, through NO projection (W_prefix is built and inert).
+            _B, _S, _M, _C = _cells.shape
+            values = _cells.reshape(_B, _S * _M, _C)
+            if self._is_hc:
+                values = values.unsqueeze(2).expand(-1, -1, self._n_streams, -1).contiguous()
+            pos = self.tul.prefix_positions(layout, L)
+            base = xn
+            _critic_base = base
             x_coda = scatter_positions(xn, pos, values)
         else:
             fm_y = fm_geom = fm_ctx = None
@@ -7034,6 +7292,17 @@ class MORPHTransformer(nn.Module):
             _dw = tc.spandec_weight * spandec_loss
             groups["spandec_weighted"] = _dw.detach()
             groups["loss"] = groups["loss"] + _dw
+        if tc.code and groups is not None:
+            # TUL-Code: the flow term, same contract as `spandec_weighted` (train.py
+            # subtracts it so train/loss and the val loss stay the model's CE).
+            groups = dict(groups)
+            for _k, _v in code_stats.items():
+                groups[_k] = groups["loss"].new_tensor(float(_v))
+            if code_fm_loss is not None:
+                groups["code_fm"] = code_fm_loss.detach()
+                _cw = tc.code_fm_weight * code_fm_loss
+                groups["code_fm_weighted"] = _cw.detach()
+                groups["loss"] = groups["loss"] + _cw
 
         if _vq_out is not None and groups is not None:
             # The discrete thought's two VQ-VAE terms (tul.vq_codes). Same contract as
@@ -7517,7 +7786,9 @@ class MORPHTransformer(nn.Module):
     def tul_forward_ablated(self, input_ids: Tensor, labels: Tensor | None,
                             layout: SlotLayout, plan_mode: str = "normal",
                             tul_step_mode: str | None = None,
-                            slot_depths: Tensor | None = None) -> dict:
+                            slot_depths: Tensor | None = None,
+                            code_mode: str | None = None,
+                            code_steps: int | None = None) -> dict:
         """Eval-only forward with the slot state ablated. Works on ANY TUL arm.
 
         ``normal`` — the shipped path.
@@ -7565,7 +7836,12 @@ class MORPHTransformer(nn.Module):
             return self._forward_single(input_ids, labels, 0, None, layout,
                                         _plan_mode=plan_mode,
                                         tul_step_mode=tul_step_mode,
-                                        _slot_depths=slot_depths)
+                                        _slot_depths=slot_depths,
+                                        _code_mode=code_mode, _code_steps=code_steps)
+        if self.tul_code_enc is not None:
+            raise NotImplementedError(
+                "plan_mode='wrong_seed' on a code model: the seed feeds the thinker, not the "
+                "cells (spec §8).")
         tc = self.cfg.tul
         orig = tc.slot_seed
         alt = "bag_mean" if orig != "bag_mean" else "e_slot"
@@ -7693,6 +7969,26 @@ class MORPHTransformer(nn.Module):
         _fkw, _freset, _ckw, _creset = self._tul_tg_kwargs(layout)
         x, x0, bigram = self._tul_front(input_ids, layout, attn_kwargs=_fkw,
                                         ret_reset_mask=_freset)
+        if self.tul_code_enc is not None:
+            # TUL-Code: the written cells are E's codes (spec §8 `val/code_eff_rank`), read
+            # over the S*M cells of a row in C dims — the SAME computation as the slot
+            # family's `val/slot_eff_rank`, so the two numbers compare (slot family 5.7-7.3).
+            # Both names are returned: `code_*` is the spec's, `slot_*` keeps the panel's
+            # dashboards pointed at the same quantity.
+            _xn = self.input_norm(x)
+            _xs = _xn.mean(dim=2) if self._is_hc else _xn
+            _z, _ok = self.tul_code_enc(_xs, layout)
+            _Bc, _Sc, _Mc, _Cc = _z.shape
+            _zc = _z.float().reshape(_Bc, _Sc * _Mc, _Cc).cpu()
+            _vc = _ok.repeat_interleave(_Mc, dim=1).cpu()
+            _rows = _zc[_vc]
+            _er = effective_rank(_zc, _vc)
+            _pc = mean_pairwise_cos(_zc, _vc)
+            return {"code_eff_rank": _er, "code_pairwise_cos": _pc,
+                    "slot_eff_rank": _er, "slot_pairwise_cos": _pc,
+                    "slot_norm_mean": float(_rows.norm(dim=-1).mean()) if _rows.numel() else 0.0,
+                    "slot_component_std": float(_rows.std()) if _rows.numel() > 1 else 0.0,
+                    "slot_component_mean": float(_rows.mean()) if _rows.numel() else 0.0}
         _xn, h_slots, _d, _g, *_ = self._tul_core(x, x0, bigram, layout,
                                                  input_ids=input_ids)
         # ── the think-once stack (tul.cond_layers) ───────────────────────────────
@@ -8037,7 +8333,15 @@ class MORPHTransformer(nn.Module):
         B = layout.slot_mask.shape[0]
         passes = torch.tensor(float(cfg.n_prelude * L * B + cfg.n_coda * coda_positions * B),
                               device=layout.slot_mask.device)
-        if depths is None:                                   # arm A2: core over all positions
+        if self.tul_code_enc is not None:
+            # TUL-Code: the thinker runs `_code_last_passes` core passes over the doubled
+            # slot sequence (2·M positions per slot, pads included — a fixed shape), set by
+            # `_tul_code_core` on this forward: 0 in phase 1, 1 in phases 2-3 at train, k
+            # at eval ("sampled"), S·k under "rolled". Spec §12.
+            _S = layout.slot_index.shape[1]
+            passes = passes + float(cfg.n_core * 2 * int(cfg.tul.prefix_k) * _S * B
+                                    * int(self._code_last_passes))
+        elif depths is None:                                 # arm A2: core over all positions
             passes = passes + float(cfg.n_core * L * B * cfg.mean_depth)
         else:
             passes = passes + cfg.n_core * (depths * layout.slot_valid).sum()
@@ -8119,7 +8423,9 @@ class MORPHTransformer(nn.Module):
                         _halt: bool = False,
                         _plan_mode: str = "normal",
                         tul_step_mode: str | None = None,
-                        _slot_depths: Tensor | None = None) -> dict:
+                        _slot_depths: Tensor | None = None,
+                        _code_mode: str | None = None,
+                        _code_steps: int | None = None) -> dict:
         if self._span_mask and slot_layout is not None:
             raise NotImplementedError(
                 "model.span_mask with a slot_layout: the TUL forward is a different "
@@ -8135,7 +8441,8 @@ class MORPHTransformer(nn.Module):
             return self._forward_tul(input_ids, labels, slot_layout, _plan_nats,
                                      halt=_halt, plan_mode=_plan_mode,
                                      tul_step_mode=tul_step_mode,
-                                     slot_depths=_slot_depths)
+                                     slot_depths=_slot_depths,
+                                     code_mode=_code_mode, code_steps=_code_steps)
         if _slot_depths is not None:
             raise ValueError(
                 "slot_depths requires slot_layout: it forces the depth of the SLOT loop, "

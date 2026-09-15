@@ -135,7 +135,8 @@ def evaluate(
             for _aux2 in ("egrad_weighted", "pass_res_weighted", "oracle_z_weighted",
                           "spandec_pass_weighted", "coda_span_weighted",
                           "core_token_aux_weighted", "critic_weighted",
-                          "vq_weighted", "row_contrast_weighted", "horizon_weighted"):
+                          "vq_weighted", "row_contrast_weighted", "horizon_weighted",
+                          "code_fm_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -207,7 +208,18 @@ def evaluate(
                     float(_oz["ce_tokens"]) - ce_tok)
                 acc.setdefault("val/plan_worth_shuffle", []).append(
                     float(_os["ce_tokens"]) - ce_tok)
-            if _ablate:
+            _is_code = getattr(_m, "tul_code_enc", None) is not None
+            if _ablate and _is_code:
+                # TUL-Code (docs/tul-code-spec.md §8): `val/loss` above is the CE with
+                # SAMPLED codes at code_infer_steps (the honest number). `val/ce_tf` reads
+                # the encoder's own codes in the cells — the CEILING, and NOT an LM number
+                # (the cells hold the span being scored) — and `val/code_gap` is how much
+                # of a span's code the sampler could not guess. `wrong_seed` is refused
+                # on a code model (the seed feeds the thinker, not the cells).
+                _ot = _m.tul_forward_ablated(x, y, layout, code_mode="encoder")
+                acc.setdefault("val/ce_tf", []).append(float(_ot["ce_tokens"]))
+                acc.setdefault("val/code_gap", []).append(ce_tok - float(_ot["ce_tokens"]))
+            elif _ablate:
                 # THE WRONG-PLAN PROBE (arm GL1). A valid-but-wrong slot value instead
                 # of no value. TG4b: 0.48-0.56 nats here against 0.10 for zeroing —
                 # "removing LESS hurts MORE", which is how we know the coda reads the
@@ -216,6 +228,7 @@ def evaluate(
                 _ow = _m.tul_forward_ablated(x, y, layout, plan_mode="wrong_seed")
                 acc.setdefault("val/plan_worth_wrong_seed", []).append(
                     float(_ow["ce_tokens"]) - ce_tok)
+            if _ablate:
                 for _k, _v in _m.tul_slot_state_probe(x, layout).items():
                     acc.setdefault(f"val/{_k}", []).append(float(_v))
                 # MUX §8.3 reasoning attention lift, WINDOW branch only (see
@@ -2736,11 +2749,25 @@ def main(cfg: DictConfig) -> None:
     if _tulc is not None and (_mux_on_at or _sig_on_at):
         print(f"  [aux] mux head on at step {_mux_on_at}, sigreg on at step {_sig_on_at} "
               f"(of {total_steps})", flush=True)
+    # TUL-Code phases (docs/tul-code-spec.md §6): a Python int on the model, read at trace
+    # time — NOT a gate buffer, because phase 1 must run no thinker pass and phases 1-2 no
+    # sampler. Two recompiles per run, at the two switches, by design.
+    _is_code = bool(getattr(_tulc, "code", False)) if _tulc is not None else False
+    _code_p2 = int(float(getattr(_tulc, "code_phase2_at", 0.0)) * total_steps) if _is_code else 0
+    _code_p3 = int(float(getattr(_tulc, "code_phase3_at", 0.0)) * total_steps) if _is_code else 0
+    if _is_code:
+        print(f"  [code] phase 2 (flow loss) at step {_code_p2}, phase 3 (rollout) at step "
+              f"{_code_p3} (of {total_steps})", flush=True)
 
     for step in range(start_step, total_steps):
         if _tulc is not None and hasattr(_mdl, "mux_gate"):
             _mdl.mux_gate.fill_(1.0 if step >= _mux_on_at else 0.0)
             _mdl.sigreg_gate.fill_(1.0 if step >= _sig_on_at else 0.0)
+        if _is_code:
+            _ph = 1 if step < _code_p2 else (2 if step < _code_p3 else 3)
+            if _ph != int(_mdl.code_phase):
+                print(f"  [code] step {step}: phase {int(_mdl.code_phase)} -> {_ph}", flush=True)
+                _mdl.code_phase = _ph
         if step == _nsys_a:
             torch.cuda.profiler.start()
             print(f"[nsys] cudaProfilerStart @ step {step}", flush=True)

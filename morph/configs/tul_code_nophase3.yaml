@@ -1,0 +1,12 @@
+# TUL-Code ablation "tul-code-nophase3" (spec §6): rollout never starts, so the mouth only
+# ever reads the encoder's codes at train. LaDiR's stage-2 ablation on our data (theirs:
+# MATH 30.7 without, 45.2 with). ONE factor against `tul-code`.
+defaults:
+  - tul_code
+  - _self_
+
+tul:
+  code_phase3_at: 1.0
+
+wandb:
+  name: tul-code-nophase3

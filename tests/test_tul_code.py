@@ -1,0 +1,335 @@
+"""TUL-Code (``tul.code``) — the contracts C1..C10 of docs/tul-code-spec.md §11, one test
+per invariant, each failing when its mechanism is removed.
+
+    CUDA_VISIBLE_DEVICES="" OMP_NUM_THREADS=2 python -m pytest tests/test_tul_code.py -q
+
+CPU only, the GL1 tiny fixture (tests/test_tul_gl1.py), no tokenizer.
+"""
+
+from __future__ import annotations
+
+import pytest
+import torch
+
+from test_tul_gl1 import _batch, _cfg, _tul  # noqa: E402  (tests/ is on sys.path)
+from test_tul_strict_geometry import _pack, _runtime, _tiny  # noqa: E402
+
+from morph.model.transformer import MORPHTransformer
+from morph.model.tul import TULConfig
+from morph.model.tul_code import (code_rmsnorm, code_target_valid, code_thinker_relation,
+                                  euler_sample)
+
+CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke"]
+
+
+def _model(seed: int = 3, code: bool = True, **kw) -> MORPHTransformer:
+    torch.manual_seed(seed)
+    tul_kw = {k[4:]: v for k, v in kw.items() if k.startswith("tul_")}
+    cfg_kw = {k: v for k, v in kw.items() if not k.startswith("tul_")}
+    base_tul = dict(tg_restrict=True, tg_restrict_scope="all", tg_geometry="strict",
+                    sigreg_lambda=0.0, mux_beta=0.0, token_state_dropout=0.0, code=code)
+    base_tul.update(tul_kw)
+    base = dict(tul=_tul(**base_tul), n_core=2, mean_depth=3, max_depth=3, bptt_depth=3,
+                retention=False, dropout=0.0, core_fixed_point_lambda=0.0, ckpt_grad_iters=0)
+    base.update(cfg_kw)
+    return MORPHTransformer(_cfg(**base))
+
+
+def _arm_head(m: MORPHTransformer, seed: int = 11) -> None:
+    """Give the zero-init velocity head a real weight, so the thinker MATTERS (a zero
+    ``W_v`` makes every sample equal its source and blocks the flow gradient into the
+    core; the tests below that need the thinker to act say so by calling this)."""
+    g = torch.Generator().manual_seed(seed)
+    with torch.no_grad():
+        m.tul_code_head.W_v.weight.copy_(torch.randn(m.tul_code_head.W_v.weight.shape,
+                                                     generator=g) * 0.05)
+
+
+def _logits(m: MORPHTransformer, x, lay, **kw):
+    with torch.no_grad():
+        return m.tul_forward_ablated(x, None, lay, **kw)["logits"]
+
+
+def _delta(a, b):
+    """Per-position max |Δ| over the vocab, ``-inf - -inf`` (the slot_id column) read as 0."""
+    d = (a - b).abs().nan_to_num(0.0)
+    d = torch.where(a != b, d, torch.zeros_like(d))
+    return d.amax(dim=-1)
+
+
+def _edit(x, lay, row: int, span: int):
+    """Change ONE non-boundary token in the middle of ``span`` (its bag id) of ``row``."""
+    tok = ((lay.bag_id[row] == span) & (~lay.slot_mask[row])).nonzero().flatten()
+    assert tok.numel() >= 3, "fixture span too short to edit inside"
+    p = int(tok[tok.numel() // 2])
+    x2 = x.clone()
+    x2[row, p] = 12 if int(x2[row, p]) != 12 else 13
+    return x2, p
+
+
+# ── C1: off is the ruler ─────────────────────────────────────────────────────
+
+def test_c1_off_builds_nothing_and_shares_every_weight_with_the_ruler():
+    on, off = _model(code=True), _model(code=False)
+    assert off.tul_code_enc is None and off.tul_code_head is None and off.tul_code_time is None
+    for n, p in off.named_parameters():
+        q = dict(on.named_parameters())[n]
+        assert torch.equal(p, q), f"{n} differs: the code modules drew from the global RNG"
+    assert on.tul.W_prefix is not None and not on.tul.W_prefix.requires_grad, \
+        "W_prefix is built (C1's parameter set) and inert on a code model"
+    assert off.tul.W_prefix.requires_grad
+    assert float(on.tul_code_enc.W_o.weight.detach().abs().sum()) > 0.0
+
+
+def test_c1_off_knobs_and_wrong_geometry_raise():
+    with pytest.raises(ValueError, match="code_noise"):
+        _tul(code=False, code_noise=0.1)
+    with pytest.raises(NotImplementedError, match="strict"):
+        _tul(code=True, tg_restrict=True, sigreg_lambda=0.0)   # geometry defaults to "restrict"
+    with pytest.raises(NotImplementedError, match="spandec"):
+        _tul(code=True, tg_restrict=True, tg_geometry="strict", sigreg_lambda=0.0, spandec=True)
+    with pytest.raises(NotImplementedError, match="slot depth"):
+        _tul(code=True, tg_restrict=True, tg_geometry="strict", sigreg_lambda=0.0,
+             slot_depth_fixed=3)
+    with pytest.raises(NotImplementedError, match="sigreg_lambda"):
+        _tul(code=True, tg_restrict=True, tg_geometry="strict")   # the fixture's 0.02
+
+
+# ── C2 / C3: causality, bounded at train, plain at eval ──────────────────────
+
+def test_c2_train_forward_is_causal_up_to_the_own_code():
+    x, _y, lay, _ = _batch()
+    m = _model(tul_code_noise=0.0)
+    m.train()
+    m.code_phase = 1
+    row, span = 0, 3
+    assert bool(lay.slot_valid[row, span - 1]) and bool(lay.slot_valid[row, span])
+    x2, p = _edit(x, lay, row, span)
+    with torch.no_grad():
+        a = m(x, None, slot_layout=lay)["logits"][row]
+        b = m(x2, None, slot_layout=lay)["logits"][row]
+    d = _delta(a, b)
+    cut = int(lay.slot_index[row, span - 1])              # slot span-1's first cell
+    assert float(d[:cut].max()) == 0.0, \
+        "a token of span j moved a position BEFORE slot j-1's cells: a leak past the own code"
+    own_before = ((lay.bag_id[row] == span) & (~lay.slot_mask[row])).nonzero().flatten()
+    own_before = own_before[own_before < p]
+    assert float(d[own_before].max()) > 0.0, \
+        "span j's earlier tokens did not see the edit through their own code: E is not read"
+    assert float(d[cut:cut + m.cfg.tul.prefix_k].max()) > 0.0, "the cells did not change"
+
+
+def test_c3_sampled_forward_is_plain_causal():
+    x, _y, lay, _ = _batch()
+    m = _model()
+    _arm_head(m)
+    m.eval()
+    row, span = 0, 3
+    x2, p = _edit(x, lay, row, span)
+    a = _logits(m, x, lay, code_mode="sampled", code_steps=2)[row]
+    b = _logits(m, x2, lay, code_mode="sampled", code_steps=2)[row]
+    d = _delta(a, b)
+    assert float(d[:p].max()) == 0.0, "a sampled forward moved a position BEFORE the edit"
+    assert float(d[p:].max()) > 0.0
+
+
+# ── C4 / C5: the two losses share almost nothing ─────────────────────────────
+
+def _grads(m: MORPHTransformer, x, y, lay, phase: int, seed: int = 5, **kw) -> dict:
+    m.train()
+    m.code_phase = phase
+    m.zero_grad(set_to_none=True)
+    torch.manual_seed(seed)
+    m(x, y, slot_layout=lay, **kw)["loss"].backward()
+    return {n: (None if p.grad is None else p.grad.clone()) for n, p in m.named_parameters()}
+
+
+def test_c4_the_flow_loss_never_reaches_the_encoder_and_the_seed_ablation_holds():
+    x, y, lay, _ = _batch()
+    m = _model()
+    _arm_head(m)
+    g1, g2 = _grads(m, x, y, lay, 1), _grads(m, x, y, lay, 2)
+    for n in g1:
+        if n.startswith("tul_code_enc."):
+            assert torch.equal(g1[n], g2[n]), f"the flow loss reached the encoder through {n}"
+    # the flow loss DOES reach the core and the head (else the term is dead) ...
+    assert any(g2[n] is not None and (g1[n] is None or not torch.equal(g1[n], g2[n]))
+               for n in g1 if n.startswith("core."))
+    assert g1["tul_code_head.W_v.weight"] is None and g2["tul_code_head.W_v.weight"] is not None
+    # ... and the seed path, unless the ablation knob detaches it.
+    assert not torch.equal(g1["tul.W_sent.weight"], g2["tul.W_sent.weight"])
+    md = _model(tul_code_seed_detach=True)
+    _arm_head(md)
+    h1, h2 = _grads(md, x, y, lay, 1), _grads(md, x, y, lay, 2)
+    assert torch.equal(h1["tul.W_sent.weight"], h2["tul.W_sent.weight"]), \
+        "code_seed_detach=true still let the flow loss into W_sent"
+
+
+def test_c5_the_token_loss_never_reaches_the_thinker_in_phase_3():
+    x, y, lay, _ = _batch()
+    m = _model(tul_code_fm_weight=0.0, tul_code_rollout_p=0.5)
+    _arm_head(m)
+    g = _grads(m, x, y, lay, 3)
+    for n, v in g.items():
+        if n.startswith(("core.", "tul_code_head.", "tul_code_time.")) or n in (
+                "tul_code_cell", "tul_code_clean"):
+            assert v is None or float(v.abs().sum()) == 0.0, \
+                f"the coda's CE reached the thinker through {n} (sampled codes not detached)"
+    assert float(g["tul_code_enc.W_o.weight"].abs().sum()) > 0.0, "E must still train from CE"
+
+
+# ── C6: the sampler is the Euler integrator ──────────────────────────────────
+
+def _seed_parts(m: MORPHTransformer, x, lay):
+    _fkw, _freset, _ckw, _creset = m._tul_tg_kwargs(lay)
+    xf, x0, bg = m._tul_front(x, lay, attn_kwargs=_fkw, ret_reset_mask=_freset)
+    xn, e, inj = m._tul_code_seed(xf, x0, bg, lay)
+    xs = xn.mean(dim=2) if m._is_hc else xn
+    z, ok = m.tul_code_enc(xs, lay)
+    return z.float(), ok, e, inj
+
+
+def test_c6_zero_head_returns_the_source_for_every_k_and_one_step_matches_by_hand():
+    x, _y, lay, _ = _batch()
+    m = _model().eval()
+    with torch.no_grad():
+        z, ok, e, inj = _seed_parts(m, x, lay)
+        outs = []
+        for k in (1, 3, 7):
+            g = torch.Generator().manual_seed(0)
+            outs.append(m._tul_code_sample(z, ok, e, inj, lay, k, generator=g))
+        assert torch.equal(outs[0], outs[1]) and torch.equal(outs[1], outs[2])
+        g = torch.Generator().manual_seed(0)
+        z0 = torch.randn(z.shape, generator=g) * m.cfg.tul.code_source_std
+        assert torch.equal(outs[0], z0 * ok.view(*ok.shape, 1, 1).float())
+        _arm_head(m)
+        g = torch.Generator().manual_seed(0)
+        one = m._tul_code_sample(z, ok, e, inj, lay, 1, generator=g)
+        t0 = torch.zeros(ok.shape, dtype=torch.float32)
+        by_hand = (z0 + m._tul_code_thinker(z0, z, t0, e, inj, lay, False)) * ok.view(
+            *ok.shape, 1, 1).float()
+        assert torch.allclose(one, by_hand, atol=1e-5, rtol=1e-5)
+        two = m._tul_code_sample(z, ok, e, inj, lay, 2, generator=torch.Generator().manual_seed(0))
+        assert not torch.allclose(one, two), "k=2 must differ from k=1 once the head is armed"
+    with pytest.raises(ValueError):
+        euler_sample(lambda zz, tt: zz, torch.zeros(1, 1, 1, 4), 0)
+
+
+# ── C7: the doubled sequence's relation, two-sided ───────────────────────────
+
+def test_c7_relation_mask_is_the_documented_one():
+    S, M = 3, 2
+    r = code_thinker_relation(S, M, "cpu")[0, 0]
+    def pos(s, copy, i): return s * 2 * M + copy * M + i
+    # noisy(1,0) reads clean(0,*) and noisy(1,*); nothing else
+    q = pos(1, 0, 0)
+    allowed = {pos(0, 1, 0), pos(0, 1, 1), pos(1, 0, 0), pos(1, 0, 1)}
+    assert set(r[q].nonzero().flatten().tolist()) == allowed
+    # clean(1,1) reads clean(0,*) and clean(1,*); never a noisy cell, never a later slot
+    q = pos(1, 1, 1)
+    allowed = {pos(0, 1, 0), pos(0, 1, 1), pos(1, 1, 0), pos(1, 1, 1)}
+    assert set(r[q].nonzero().flatten().tolist()) == allowed
+    assert not bool(r[pos(0, 0, 0), pos(0, 1, 0)]), "noisy(0) must not read its own clean code"
+    assert not bool(r[pos(0, 0, 0), pos(2, 1, 0)]), "noisy(0) must not read a later slot"
+
+
+def test_c7_the_thinker_cannot_see_its_own_target_or_the_future():
+    x, _y, lay, _ = _batch()
+    m = _model().eval()
+    _arm_head(m)
+    with torch.no_grad():
+        z, ok, e, inj = _seed_parts(m, x, lay)
+        z0 = torch.randn(z.shape, generator=torch.Generator().manual_seed(1))
+        t = torch.full(ok.shape, 0.3)
+        v = m._tul_code_thinker(z0, z, t, e, inj, lay, False)
+        s = 2
+        assert bool(ok[0, s]) and bool(ok[0, s - 1]) and bool(ok[0, s + 1])
+        for target, must_change in ((s, False), (s + 1, False), (s - 1, True)):
+            zc = z.clone()
+            zc[0, target] = zc[0, target] + 1.0
+            v2 = m._tul_code_thinker(z0, zc, t, e, inj, lay, False)
+            moved = float((v2[0, s] - v[0, s]).abs().max()) > 0.0
+            assert moved == must_change, (
+                f"perturbing the clean code of slot {target} "
+                f"{'moved' if moved else 'did not move'} slot {s}'s velocity")
+
+
+# ── C8: pads and the row's last slot ─────────────────────────────────────────
+
+def test_c8_pad_and_last_slots_hold_a_zero_code_and_are_masked():
+    x, _y, lay, _ = _batch()
+    m = _model().eval()
+    with torch.no_grad():
+        z, ok, _e, _inj = _seed_parts(m, x, lay)
+    assert torch.equal(ok, code_target_valid(lay) & ok)
+    last = int(lay.slot_valid[0].nonzero().flatten()[-1])
+    assert not bool(ok[0, last]), "the row's last valid slot precedes the tail and gets no code"
+    assert not bool(ok[0, lay.slot_valid.shape[1] - 1]) or bool(lay.slot_valid[0, -1])
+    assert float(z[~ok].abs().sum()) == 0.0
+    good = z[ok]
+    assert torch.allclose(good.pow(2).mean(-1), torch.ones(good.shape[:-1]), atol=1e-2), \
+        "codes are unit-RMS per cell"
+    assert torch.allclose(code_rmsnorm(good), good, atol=1e-2)
+
+
+# ── C9: the config surface ───────────────────────────────────────────────────
+
+def test_c9_known_keys_accept_the_code_block_and_reject_a_misspelling():
+    from morph.training.tul_setup import KNOWN_TUL_KEYS, reject_unknown_tul_keys
+    keys = ("code", "code_noise", "code_norm", "code_fm_weight", "code_source_std",
+            "code_t_embed_scale", "code_phase2_at", "code_phase3_at", "code_rollout_p",
+            "code_rollout_steps", "code_infer_steps", "code_seed_detach")
+    for k in keys:
+        assert k in KNOWN_TUL_KEYS, k
+    reject_unknown_tul_keys({k: 0 for k in keys})
+    with pytest.raises(ValueError, match="code_infer_step"):
+        reject_unknown_tul_keys({"code": True, "code_infer_step": 8})
+
+
+# ── C10: every panel config composes, builds and runs ────────────────────────
+
+@pytest.mark.parametrize("name", CODE_CONFIGS)
+def test_c10_the_code_arms_compose_and_build_and_run(name, monkeypatch):
+    cfg, rt = _runtime(name, monkeypatch)
+    assert rt is not None
+    tc = rt.model_cfg
+    assert tc.code and tc.tg_geometry == "strict" and not tc.spandec
+    assert tc.code_seed_detach == name.endswith("_seeddetach")
+    assert tc.code_phase3_at == (1.0 if name.endswith("_nophase3") else 0.5)
+    assert not bool(cfg.model.use_kernels)
+    torch.manual_seed(7)
+    m = MORPHTransformer(_tiny(tul=tc)).eval().float()
+    _ids0, inp, lab, layout = _pack()
+    with torch.no_grad():
+        out = m(inp, labels=lab, slot_layout=layout)
+    assert torch.isfinite(out["loss"]), f"{name}: loss is not finite"
+    m.train()
+    m.code_phase = 2
+    out = m(inp, labels=lab, slot_layout=layout)
+    assert torch.isfinite(out["loss"]) and "code_fm" in out
+
+
+# ── eval plumbing the spec names ─────────────────────────────────────────────
+
+def test_eval_modes_and_refusals():
+    x, y, lay, _ = _batch()
+    m = _model().eval()
+    _arm_head(m)
+    with torch.no_grad():
+        tf = m.tul_forward_ablated(x, y, lay, code_mode="encoder")
+        s4 = m.tul_forward_ablated(x, y, lay, code_mode="sampled", code_steps=4)
+        rl = m.tul_forward_ablated(x, y, lay, code_mode="rolled", code_steps=2)
+        default = m.tul_forward_ablated(x, y, lay)
+    assert float(default["ce_tokens"]) == float(
+        m.tul_forward_ablated(x, y, lay, code_mode="sampled",
+                              code_steps=m.cfg.tul.code_infer_steps)["ce_tokens"])
+    assert float(tf["layer_passes"]) < float(s4["layer_passes"]) < float(rl["layer_passes"])
+    with pytest.raises(NotImplementedError, match="wrong_seed"):
+        m.tul_forward_ablated(x, y, lay, plan_mode="wrong_seed")
+    with pytest.raises(NotImplementedError, match="slot_depths"):
+        m.tul_forward_ablated(x, y, lay, slot_depths=torch.ones_like(lay.slot_index))
+    m.train()
+    with pytest.raises(ValueError, match="EVAL-ONLY"):
+        m.tul_forward_ablated(x, y, lay, code_mode="encoder")
+    probe = m.eval().tul_slot_state_probe(x, lay)
+    assert probe["code_eff_rank"] == probe["slot_eff_rank"] > 1.0

@@ -1,0 +1,29 @@
+# TUL-Code, arm "tul-code" (docs/tul-code-spec.md; note
+# .agents/notes/proposed/architecture/2026-09-14-tul-span-code.md; prereg
+# lab/experiments/planned/2026-09-14-arc-tul-code.md).
+#
+# ONE factor against `slot-spandec-strict` (`tul_slot_spandec_strict.yaml`): the slot's
+# cells hold the CODE of the span they precede instead of a looped state. At training
+# time an encoder E makes slot s's M = prefix_k cells from span s+1's own prelude states;
+# the strict coda speaks span s+1 reading the cells plus the span's token path; the core
+# body is trained ONE pass per slot as a flow-matching velocity field from noise toward the
+# (detached) code, and samples the code in `code_infer_steps` Euler passes at eval. No slot
+# loop runs. The span decoder is OFF: the mouth is the decoder here (spec §10).
+#
+# Phases (fractions of training.steps, spec §6): 1 define the code (CE only, no thinker
+# pass) -> 2 learn to guess it (flow loss on) at code_phase2_at -> 3 rollout (half the
+# valid slots hand the coda a sampled code at 8 steps) at code_phase3_at. Every number
+# marked UNTUNED in TULConfig is a placeholder the smoke and this first arm set.
+#
+# Rate: one thinker pass over 2*M positions per slot, once, instead of a Poisson-6 loop on
+# the slot positions (prereg P-8 expects >= 1.3x the ruler's tok/s at <= its memory).
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  spandec: false
+  code: true
+
+wandb:
+  name: tul-code

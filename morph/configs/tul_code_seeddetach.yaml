@@ -1,0 +1,12 @@
+# TUL-Code ablation "tul-code-seeddetach" (spec §13.3, Wolfe 2026-09-14: an ablation, not a
+# decision). ONE factor against `tul-code` (`tul_code.yaml`): the flow loss may NOT reach
+# the seed path (W_sent and, through it, the prelude of span s). FM1's choice.
+defaults:
+  - tul_code
+  - _self_
+
+tul:
+  code_seed_detach: true
+
+wandb:
+  name: tul-code-seeddetach
