@@ -1,6 +1,6 @@
 # Experiment: TUL-Code phase 3 with the truth cell renormed (resumed from tul-code-20k step 10000)
 
-Status: planned
+Status: success
 Date: 2026-09-15
 Owner: Claude (session f9558148), for Wolfe
 
@@ -59,12 +59,36 @@ eval rule where a comparison needs it.
 
 ## Results
 
-(after the run)
+Resumed faithfully (model, optimizer, scaler, RNG restored at 10000; data stream
+fast-forwarded in 55 s; phase 3 from step 10001; 24k tok/s; healthy to 20k, largest
+pre-clip gradient 227 at the switch). Artifacts in
+`lab/experiments/results/2026-09-15-tul-code-renorm-r10k/`.
+
+| reading at 20k | renorm fork | parent tul-code-20k (p 0.5) |
+| --- | --- | --- |
+| one draw − ruler, paired 501,106 tokens | +0.659 [+0.651, +0.667] | +0.626 [+0.618, +0.634] |
+| fork − parent, one draw, paired | +0.033 [+0.031, +0.035] | |
+| encoder code (`ce_tf`, trained statistic) | 0.32–0.34 | 0.35 (probe) |
+| marginal k16 − k1 (8 draws, 96 rows) | −0.010 [−0.013, −0.007] (15k: −0.011) | +0.014 |
+
+- P-1 HOLD (+0.033, within ±0.06). P-2 HOLD (|Δ| 0.010 ≤ 0.02). P-3 HOLD (0.34 ≤ 0.60).
+  P-4 HOLD (healthy, 24k ≥ 20k tok/s).
+
+Two defects surfaced by this run, both fixed in the tree: a resume under a different
+`wandb.name` inherited the parent's wandb run id (b6992b3), and the resumed optimizer
+held its uint8 moment codes as fp32 (checkpoint 3.23 vs 2.26 GB, peak VRAM +1.1 GB;
+8be78f5). Neither touches the numbers above (the fork's optimizer math is exact).
 
 ## Verdict
 
-(after the run)
+Success in the protocol's sense: all four predictions held, for H1. Removing the norm
+flag from training changes nothing about what the coda does with a sampled code: the
+gap against the ruler is the parent's within 0.03 nats and the k-curve stays flat. The
+coda's discount of samples is content-based. The renorm is a correctness fix (train and
+eval feed the truth cell at one statistic) and not a lever.
 
 ## Updated hypothesis
 
-(after the run)
+Unchanged from the 20k panel's: the sampled code is empty because the target is a copy
+the past does not determine and the sampler does not sharpen toward what it does know.
+The arms of `planned/2026-09-15-tul-code-conditioned-thinker.md` test those two.

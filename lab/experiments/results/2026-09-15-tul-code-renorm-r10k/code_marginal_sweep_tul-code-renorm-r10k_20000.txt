@@ -1,0 +1,7 @@
+  k=0 (encoder)   ce=0.3244
+  k=1            ce_marginal=4.3937  ce_single_mean=4.3959
+  k=2            ce_marginal=4.3879  ce_single_mean=4.3920
+  k=4            ce_marginal=4.3805  ce_single_mean=4.3935
+  k=8            ce_marginal=4.3820  ce_single_mean=4.4026
+  k=16           ce_marginal=4.3838  ce_single_mean=4.4074
+  marginal k=16 minus k=1: -0.0099 [-0.0132, -0.0069] over 32 batches
