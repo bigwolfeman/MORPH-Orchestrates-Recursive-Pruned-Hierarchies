@@ -1,0 +1,82 @@
+tul-code-rollout1-20k step 20000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+ORACLE   '\\n\\nThe report, which was conducted by the National Security Agency, said the company had been working on a new project to ensure that the company had been detained.\\n\\n'
+GREEDY   '\\n\\nThe report, which was conducted by the National Security Agency, said the company had been working on a new project to ensure that the company had been awarded the 2'
+SAMPLE1  '\\n\\nThe arrest has not been confirmed, but police said the court has been reminded of the death of a criminal and a crime, the Department of Public'
+SAMPLE2  '\\n\\nThe report also found that many of the officers\' officers in the area were not involved in the incident.\\n\\n"We have a lot of the people who are a'
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+ORACLE   '\\nThe 19-year-old was a'
+GREEDY   '\\n"I\'m not going to be a good person'
+SAMPLE1  "\\n\\n'It's a big deal. There'll"
+SAMPLE2  '\\nThe man was killed with a 5-foot'
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+ORACLE   'ident Obama\'s campaign to win the presidential nomination.\\n\\n"I think the president is going to'
+GREEDY   'ident Obama’s campaign.\\n\\nThe president, who has been in the past since 201'
+SAMPLE1  'ident Obama, which has not only received much evidence of the conspiracy, and has been unable to identify'
+SAMPLE2  'ident.\\n\\n“The first part of this investigation is that our public sector is not required to understand the potential for'
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+ORACLE   ' to the United States.\\n\\nThe 2016 election, which was awarded by the Republican National Committee, was awarded'
+GREEDY   ' to the president.\\n\\n“I think we’re going to be in the middle of the 2016 election,” he'
+SAMPLE1  ' and even more than 200.\\n\\nThe man also has an international history of foreign policy. He has created a criminal'
+SAMPLE2  '.\\n\\nAnd the NHS’s report of a war in Syria is still not yet known.\\n\\n“The government’s'
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+ORACLE   '\\n\\nThe president of the United States, Maryland, is a former president of the United States, and the president of the United States of the 201'
+GREEDY   '\\n\\nThe fact that the president is a candidate for president is not a candidate.\\n\\nThe president of the United States, Maryland, is a former president'
+SAMPLE1  '\\n\\nNo, I’m not. There are certain agencies that can be trusted and not have no right to be considered the only individual and the right to protect the law. Of'
+SAMPLE2  '\\n\\nBut that’s not a good reason to believe that a lot of people have been working on the issue for the past three years. But Obama is the only one. He'
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+ORACLE   '"\\n\\n"I\'m not going to be a guy, but I\'m not going to be a'
+GREEDY   '"I think it\'s a very important thing to do," he said. "I think it\'s a good'
+SAMPLE1  '"One more thing you can say, \'No, say, you will win, you\'re going to go'
+SAMPLE2  'The media was unveiled in 2001, but one of the most exciting, un'
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+ORACLE   ' a few days later, the company was able to get a new version of the new version of the game.\\n\\nThe 1990'
+GREEDY   ' a little bit of a fantasy.\\n\\nThe first thing I could see is that the first step was to make a new version of the game'
+SAMPLE1  ' closed.\\n\\n“The sound is very important,” said Eckson, at the time, after leaving the table.\\n\\nSo how did'
+SAMPLE2  ' placed in the room and found that many of the officers had been arrested for not being able to take a tougher approach.\\n'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+ORACLE   'The 2016 NBA Draft has'
+GREEDY   'The 2016 NBA Draft has'
+SAMPLE1  'When Clinton appeared in 201'
+SAMPLE2  'The following was carried out by a 20'
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+ORACLE   '\\n\\nThe report, which was published in the journal Nature'
+GREEDY   '\\n\\n“I’m not sure if I’m a'
+SAMPLE1  '\\n\\n“What I’m trying to imagine is that we'
+SAMPLE2  '\\n\\nBut that’s not a good reason to believe that'
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+ORACLE   'ots.\\n\\nThe 2016 NBA Draft will be the first season in a series of games for the Eastern Conference Finals, which will be the first season.'
+GREEDY   'ots.\\n\\nThe 2016 NBA Draft will be the first season in a series of games for the Eastern Conference Finals, which will be the first season.'
+SAMPLE1  'ots in the middle of the 20th century.\\n\\nCincinnati Jaguars, NFL-CNET, Brady, LSU, New'
+SAMPLE2  'ots.\\n\\n“The team’s teammates have a lot of opportunities to take on the most important to be able to take over the fleet so we can’s'
+

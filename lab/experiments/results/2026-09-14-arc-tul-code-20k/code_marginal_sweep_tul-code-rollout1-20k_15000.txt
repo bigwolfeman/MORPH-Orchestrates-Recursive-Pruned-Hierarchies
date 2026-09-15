@@ -1,0 +1,8 @@
+tul-code-rollout1-20k: step 15000, 96 rows, K=8 draws, ks=[1, 2, 4, 8, 16]
+  k=0 (encoder)   ce=4.2310
+  k=1            ce_marginal=4.2894  ce_single_mean=4.2906
+  k=2            ce_marginal=4.2853  ce_single_mean=4.2891
+  k=4            ce_marginal=4.2846  ce_single_mean=4.2920
+  k=8            ce_marginal=4.2873  ce_single_mean=4.2967
+  k=16           ce_marginal=4.2894  ce_single_mean=4.2997
+  marginal k=16 minus k=1: +0.0001 [-0.0025, +0.0025] over 32 batches
