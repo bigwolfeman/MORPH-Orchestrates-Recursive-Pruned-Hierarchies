@@ -3613,6 +3613,10 @@ def main(cfg: DictConfig) -> None:
                 # Put all three on the console line so a log file is self-sufficient and
                 # nobody has to reconstruct them from wandb.
                 _second = f"ppl={math.exp(min(loss.item(), 20.0)):.1f}  "
+                # TUL-Code: the thinker's flow share on the console too (a resumed run's
+                # wandb history is not readable locally; the log file must be sufficient)
+                if isinstance(out, dict) and out.get("code_fm_rel") is not None:
+                    _second += f"fm={float(out['code_fm_rel']):.3f}  "
                 print(
                     f"[{step:7d}/{total_steps}] loss={loss.item():.4f}  "
                     f"{_second}"
@@ -3676,6 +3680,10 @@ def main(cfg: DictConfig) -> None:
                         f" (Δ vs fixed {_d:+.4f})"
                         f" depth={_val_extra.get('val/halt_depth_mean', float('nan')):.2f}"
                         f" lp/tok={_val_extra.get('val/halt_layer_passes_per_token', float('nan')):.2f}")
+            if "val/ce_tf" in _val_extra:
+                _tul_msg += (f"  ce_tf={_val_extra['val/ce_tf']:.4f}"
+                             + (f" ce_marginal={_val_extra['val/ce_marginal']:.4f}"
+                                if "val/ce_marginal" in _val_extra else ""))
             print(
                 f"  [VAL {step:7d}] loss={val_loss:.4f}  ppl={val_ppl:.2f}{_tul_msg}",
                 flush=True,
