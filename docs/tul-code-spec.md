@@ -108,7 +108,11 @@ them today (`tg_geometry: strict`, `tg_coda_prefix_reach: all`).
 ### 3.2 The code z_s — what the cells hold
 
 `z_s ∈ R^{M×C}`, `M = prefix_k`, `C = d_model`. One cell per prefix position. It is the code
-of span s+1. The offset, drawn once because every reader gets it wrong first:
+of span s+1. `W_prefix` is still BUILT (so the parameter set matches the strict ruler,
+invariant C1) and never applied on a code model: the cells are scattered into the prefix
+positions directly through the same index `prefix_project` computes (lifted into a helper),
+and `W_prefix.requires_grad` is False so it draws no decay. The offset, drawn once because
+every reader gets it wrong first:
 
 ```
  [ span 1 ][ slot 1 = z_1 ][ span 2 ][ slot 2 = z_2 ][ span 3 ] ...
@@ -160,13 +164,19 @@ State entry: the carrier at a noisy copy is `z_t(s)` itself (`core_init` is the 
 this path; the Parcae noise entry, `core_state_init: noise`, does not apply — the noise IS
 the source `z_0`). Time conditioning: a sinusoidal embedding of `t` through a small MLP
 (the audited `SigmaConditioning` basis in `morph/model/fm_planner.py`, `t_embed_scale`),
-added to the slot's injection term. Output: `v(s) = W_v · _readout(h_noisy(s))`, `W_v`
-zero-init so the first velocity estimate is 0.
+added to the slot's injection term. Output: `v(s) = W_v · RMSNorm_v(mean over HC streams
+of h_noisy(s))` with a PRIVATE norm inside the velocity head, never `_readout` (whose
+`lm_mixer` and `final_norm` are the LM head's own parameters and must not receive the flow
+gradient). `W_v` zero-init so the first velocity estimate is 0.
 
 Objective: conditional flow matching exactly as `fm_planner._cfm_loss` defines it —
 `z_0 ~ N(0, source_std²·I)`, `t ~ U(0,1)` per slot, `z_t = (1−t)·z_0 + t·z_s`,
 `loss = mean_valid ‖v̂ − (z_s − z_0)‖²`, divided by the analytic null floor
-(`loss_scale: auto`) so it starts near 1.0 beside a CE of 4–11 nats. Per-t-band `rel`
+(`loss_scale: auto`) so it starts near 1.0 beside a CE of 4–11 nats. For RMS-normed codes
+`E‖z‖² = C`, so the CFM floor is `C + C·source_std²` = 2048 at C 1024, NOT FM1's
+`1 + d·s²` (its targets were unit-L2). Passing FM1's constant would put `fm/rel` off by
+about 1000x; `_cfm_loss` and `_finish` are copied as arithmetic, not called (they take
+an `FMPlanner`). Per-t-band `rel`
 stats are logged as they are today.
 
 No BPTT through any loop exists at training time. There is no depth draw. `mean_depth`,
@@ -198,6 +208,15 @@ The cells' content at training time is `z_s` (+ noise) in phases 1–2, and a mi
 and sampled `ẑ_s` in phase 3 (§6). Phase 3 codes are detached before the coda.
 
 ## 4. Training forward, step by step
+
+Implementation shape (from the 2026-09-14 map, `ignore/notes/2026-09-14-tul-code-impl-map.md`):
+the thinker is a NEW sibling method `_tul_code_core` beside `_tul_core_db1` and a new
+branch in `_forward_tul` before the slot-loop `else:`, never an if-branch inside
+`_tul_core`'s depth loop. The doubled sequence's mask is delivered as `tg_relation` (the
+one kwarg that REPLACES the causal relation; `tg_allow` can only narrow it), following
+`clean_noisy_mask` in `morph/model/diffusion_blocks.py`. E is a new `TULCodeEncoder`
+(the register's pooling with the bag index shifted by one and `next_span_pool`'s validity
+mask), not a re-pointed `TULSlotRegister`.
 
 1. `_tul_front`: embeddings, prelude over the packed row under the strict masks (as today).
    Output `xn` (normalised prelude states).
@@ -249,6 +268,11 @@ and written to the wandb manifest.
 A phase-1 checkpoint cannot generate (E needs the span it has not written). The first
 checkpoint that is a model is the first one past `code_phase2_at`.
 
+The phase switches are Python-level branches read at trace time (phase 1 runs no thinker
+pass at all; phase 3 runs a `no_grad` sampler), NOT the `mux_gate` multiply-by-zero
+buffers: a gate would pay the full thinker and sampler cost in every phase. Cost: two
+`torch.compile` recompiles per run, at the two switches. Named here so nobody "fixes" it.
+
 ## 7. Inference
 
 `morph/inference/tul_generate.py` gains one branch. At a boundary, with tape
@@ -284,8 +308,16 @@ All on paired rows (480, `span_budget_profile.py`), never on the runner's Final 
 | `val/ce_k8_rolled` | CE with a FULLY sampled tape: codes sampled slot by slot down the row, each reading the sampled ones before it | the generation regime; the compounding instrument that `ce_k{K}` cannot read |
 | `val/ce_k8` by span length (buckets 4–7, 8–15, 16–32) | the same number, split | whether M = 2 cells serve a 32-token span as well as an 8-token one |
 | `fm/rel` per t-band | `L_fm / null` | the thinker's honesty instrument (`fm_planner._finish`) |
+| `val/layer_passes_per_token` | code-aware branch of `_tul_layer_passes` | the compute column of §12, measured not tabulated |
 | `worth_profile` shuffle cost on the cells | `ce(shuffled cells) − ce` at K 8 | the reader instrument; must be positive (FM doctrine rule 1: cost, not fraction) |
 | generation at K ∈ {1, 8}: gen-PPL with rep4 / distinct-3 | the diversity guard, doctrine rule 11 | |
+
+Instrument plumbing the map requires: `code_fm_weighted` joins the `*_weighted`
+subtraction list in `evaluate()` so `val/loss` stays the CE; `tul_slot_state_probe` gains
+a code branch reading E's cells (it runs `_tul_core` today, which a code model does not
+have); `plan_mode="wrong_seed"` is REFUSED on a code model (the seed feeds the thinker,
+not the cells, so the reading would mean something else); `zero` / `shuffle` /
+`all_slots` act on the cells as today.
 
 Controls, one seed each in the first panel, two before any claim (doctrine rule 6):
 
