@@ -372,3 +372,26 @@ def test_generation_writes_a_span_from_one_sample_and_reencodes_the_past():
         assert not torch.equal(by_slot[slots[0]][0], by_slot[slots[1]][0])
     with pytest.raises(NotImplementedError, match="generate_tul_batch"):
         generate_tul_batch(m, [prompt, prompt], rule, spec, max_new_tokens=2)
+
+
+def test_marginal_is_a_bound_and_the_seed_acts():
+    """The K-sample marginal (morph/training/code_eval.py): K = 1 equals the one-sample CE
+    at seed 0 (the val/loss stream); Jensen makes it <= the K-average of one-sample CEs;
+    different seeds draw different codes (else the average is a lie)."""
+    from morph.training.code_eval import code_marginal_ce
+    x, y, lay, _ = _batch()
+    m = _model()
+    _arm_head(m)
+    m.eval()
+    one = code_marginal_ce(m, x, y, lay, 1, 2)
+    assert abs(one["ce_marginal"] - one["ce_single_mean"]) < 1e-5
+    ref = m.tul_forward_ablated(x, y, lay, code_mode="sampled", code_steps=2, code_seed=0)
+    assert abs(one["ce_single_mean"] - float(ref["ce_tokens"])) < 1e-4, \
+        (one, float(ref["ce_tokens"]))
+    four = code_marginal_ce(m, x, y, lay, 4, 2)
+    assert four["ce_marginal"] <= four["ce_single_mean"] + 1e-6
+    a = m.tul_forward_ablated(x, None, lay, code_mode="sampled", code_steps=2, code_seed=0)
+    b = m.tul_forward_ablated(x, None, lay, code_mode="sampled", code_steps=2, code_seed=1)
+    assert not torch.equal(a["logits"], b["logits"]), "code_seed did not change the draw"
+    with pytest.raises(ValueError):
+        code_marginal_ce(m, x, y, lay, 0, 2)

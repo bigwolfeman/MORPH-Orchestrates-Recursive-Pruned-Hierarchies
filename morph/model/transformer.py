@@ -4917,6 +4917,7 @@ class MORPHTransformer(nn.Module):
 
     def _tul_code_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
                        code_mode: str | None, code_steps: int | None, plan_mode: str,
+                       code_seed: int | None = None,
                        code_given: Tensor | None = None,
                        code_given_mask: Tensor | None = None):
         """The code branch of :meth:`_forward_tul` (spec §4).
@@ -4979,7 +4980,9 @@ class MORPHTransformer(nn.Module):
             mode = code_mode or "sampled"
             k = int(code_steps or tc.code_infer_steps)
             gen = torch.Generator(device="cpu" if z.device.type == "mps" else z.device)
-            gen.manual_seed(0)
+            # One fixed stream per eval (seed 0) so val/loss is reproducible; the K-sample
+            # marginal (morph/training/code_eval.py) passes code_seed = 0 .. K-1.
+            gen.manual_seed(int(code_seed) if code_seed is not None else 0)
             if mode == "encoder":
                 z_coda = z
             elif mode == "sampled":
@@ -6511,6 +6514,7 @@ class MORPHTransformer(nn.Module):
                      slot_depths: Tensor | None = None,
                      code_mode: str | None = None,
                      code_steps: int | None = None,
+                     code_seed: int | None = None,
                      code_given: Tensor | None = None,
                      code_given_mask: Tensor | None = None) -> dict:
         """The TUL forward (docs/tul-spec.md §3). One shared position axis.
@@ -6549,7 +6553,8 @@ class MORPHTransformer(nn.Module):
                 raise NotImplementedError(
                     "tul_step_mode on a code model: the thinker is one velocity pass at "
                     "train and code_steps Euler passes at eval; there is no db1/bptt choice.")
-            if self.training and (code_mode is not None or code_steps is not None):
+            if self.training and (code_mode is not None or code_steps is not None
+                                  or code_seed is not None):
                 raise ValueError(
                     "code_mode / code_steps are EVAL-ONLY: at train the phase decides what "
                     "the coda reads (spec §6).")
@@ -6557,7 +6562,8 @@ class MORPHTransformer(nn.Module):
                 raise NotImplementedError(
                     "plan_mode='wrong_seed' on a code model: the seed feeds the thinker, not "
                     "the cells, so the reading would mean something else (spec §8).")
-        elif code_mode is not None or code_steps is not None or code_given is not None:
+        elif (code_mode is not None or code_steps is not None or code_given is not None
+              or code_seed is not None):
             raise ValueError("code_mode / code_steps / code_given need a model built with "
                              "tul.code=true.")
         _code_cells_out = None
@@ -6782,7 +6788,8 @@ class MORPHTransformer(nn.Module):
             fm_y = fm_geom = fm_ctx = None
             xn, _cells, code_fm_loss, code_stats, h_slots, depths = self._tul_code_core(
                 x, x0, bigram_emb, layout, code_mode=code_mode, code_steps=code_steps,
-                plan_mode=plan_mode, code_given=code_given, code_given_mask=code_given_mask)
+                plan_mode=plan_mode, code_seed=code_seed, code_given=code_given,
+                code_given_mask=code_given_mask)
             _code_cells_out = _cells
             g_traj = db_traj = gain_reg = mep_keep = None
             mux_loss, sigreg_loss, mux_stats = None, None, {}
@@ -7827,7 +7834,8 @@ class MORPHTransformer(nn.Module):
                             tul_step_mode: str | None = None,
                             slot_depths: Tensor | None = None,
                             code_mode: str | None = None,
-                            code_steps: int | None = None) -> dict:
+                            code_steps: int | None = None,
+                            code_seed: int | None = None) -> dict:
         """Eval-only forward with the slot state ablated. Works on ANY TUL arm.
 
         ``normal`` — the shipped path.
@@ -7876,7 +7884,8 @@ class MORPHTransformer(nn.Module):
                                         _plan_mode=plan_mode,
                                         tul_step_mode=tul_step_mode,
                                         _slot_depths=slot_depths,
-                                        _code_mode=code_mode, _code_steps=code_steps)
+                                        _code_mode=code_mode, _code_steps=code_steps,
+                                        _code_seed=code_seed)
         if self.tul_code_enc is not None:
             raise NotImplementedError(
                 "plan_mode='wrong_seed' on a code model: the seed feeds the thinker, not the "
@@ -8425,6 +8434,7 @@ class MORPHTransformer(nn.Module):
                 tul_step_mode: str | None = None,
                 slot_depths: Tensor | None = None,
                 code_mode: str | None = None, code_steps: int | None = None,
+                code_seed: int | None = None,
                 code_given: Tensor | None = None,
                 code_given_mask: Tensor | None = None) -> dict:
         """``slot_depths`` ``[B, max_slots]``: the EVAL-ONLY per-slot depth table, the
@@ -8441,6 +8451,7 @@ class MORPHTransformer(nn.Module):
                                     tul_step_mode=tul_step_mode,
                                     _slot_depths=slot_depths,
                                     _code_mode=code_mode, _code_steps=code_steps,
+                                    _code_seed=code_seed,
                                     _code_given=code_given,
                                     _code_given_mask=code_given_mask)
 
@@ -8478,6 +8489,7 @@ class MORPHTransformer(nn.Module):
                         _slot_depths: Tensor | None = None,
                         _code_mode: str | None = None,
                         _code_steps: int | None = None,
+                        _code_seed: int | None = None,
                         _code_given: Tensor | None = None,
                         _code_given_mask: Tensor | None = None) -> dict:
         if self._span_mask and slot_layout is not None:
@@ -8497,6 +8509,7 @@ class MORPHTransformer(nn.Module):
                                      tul_step_mode=tul_step_mode,
                                      slot_depths=_slot_depths,
                                      code_mode=_code_mode, code_steps=_code_steps,
+                                     code_seed=_code_seed,
                                      code_given=_code_given,
                                      code_given_mask=_code_given_mask)
         if _slot_depths is not None:

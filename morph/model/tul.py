@@ -665,6 +665,8 @@ class TULConfig:
     code_rollout_steps: int = 8          # Euler steps for phase-3 samples
     code_infer_steps: int = 8            # k at eval / generation; instruments sweep it
     code_seed_detach: bool = False       # ablation arm: the flow gradient may not reach the seed path
+    code_marginal_k: int = 8             # K sampled codes behind val/ce_marginal (the K-sample
+                                         # lower bound on the span log-likelihood; 0 = off)
     # ── THE PER-PASS PLANNING TARGET (arm `slot-spandec-strict-perpass`, 2026-09-12) ──
     #
     # WHAT IT IS. Every pass of the loop gets its own decoder target, and the target grows
@@ -2231,7 +2233,8 @@ class TULConfig:
                   ("code_source_std", 1.0), ("code_t_embed_scale", 1.0),
                   ("code_phase2_at", 0.10), ("code_phase3_at", 0.50),
                   ("code_rollout_p", 0.5), ("code_rollout_steps", 8),
-                  ("code_infer_steps", 8), ("code_seed_detach", False))
+                  ("code_infer_steps", 8), ("code_seed_detach", False),
+                  ("code_marginal_k", 8))
         if not self.code:
             _set = [n for n, dflt in _knobs if getattr(self, n) != dflt]
             if _set:
@@ -2257,6 +2260,8 @@ class TULConfig:
                 f"0 <= phase2 <= phase3 <= 1 (phase3_at = 1.0 means rollout never starts).")
         if not (0.0 <= self.code_rollout_p <= 1.0):
             raise ValueError(f"tul.code_rollout_p must be in [0, 1], got {self.code_rollout_p}")
+        if self.code_marginal_k < 0:
+            raise ValueError(f"tul.code_marginal_k must be >= 0, got {self.code_marginal_k}")
         if self.code_rollout_steps < 1 or self.code_infer_steps < 1:
             raise ValueError(
                 f"tul.code_rollout_steps / code_infer_steps must be >= 1, got "

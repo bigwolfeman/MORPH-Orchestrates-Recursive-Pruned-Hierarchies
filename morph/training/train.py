@@ -84,6 +84,7 @@ import wandb
 from morph.model.transformer import MORPHConfig, MORPHTransformer
 from morph.model.routing import collect_routing_aux_losses, collect_routing_stats
 from morph.training.divergence_guard import BlockGainGuard, CoreShareGuard
+from morph.training.code_eval import code_marginal_ce
 from morph.training.data import create_dataloader
 from morph.training.optimizer import create_optimizer, create_lr_schedule
 from morph.training.pruning import PruningSchedule
@@ -221,6 +222,15 @@ def evaluate(
                 _ot = _m.tul_forward_ablated(x, y, layout, code_mode="encoder")
                 acc.setdefault("val/ce_tf", []).append(float(_ot["ce_tokens"]))
                 acc.setdefault("val/code_gap", []).append(ce_tok - float(_ot["ce_tokens"]))
+                # The K-sample marginal (the likelihood a latent-variable LM is owed):
+                # `val/ce_marginal` is a LOWER bound on the span log-likelihood averaged
+                # over K sampled codes, per token; `val/ce_single_mean` the K-average of
+                # one-sample CE (Jensen: marginal <= single_mean, = at K=1).
+                _K = int(getattr(_tul_cfg, "code_marginal_k", 0))
+                if _K > 0:
+                    for _k, _v in code_marginal_ce(_m, x, y, layout, _K,
+                                                   int(_tul_cfg.code_infer_steps)).items():
+                        acc.setdefault(f"val/{_k}", []).append(_v)
             elif _ablate:
                 # THE WRONG-PLAN PROBE (arm GL1). A valid-but-wrong slot value instead
                 # of no value. TG4b: 0.48-0.56 nats here against 0.10 for zeroing —
