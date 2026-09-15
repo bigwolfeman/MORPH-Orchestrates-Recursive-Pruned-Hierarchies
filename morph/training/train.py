@@ -3297,7 +3297,10 @@ def main(cfg: DictConfig) -> None:
                         "vq_weighted",       # arc: the discrete thought, 2026-09-13
                         "row_contrast_weighted",   # tul.row_contrast_lambda, 2026-09-13
                         "critic_weighted",   # arc E10 / 2026-09-12
-                        "horizon_weighted"):  # LoopMTP horizon alignment, 2026-09-14
+                        "horizon_weighted",  # LoopMTP horizon alignment, 2026-09-14
+                        "code_fm_weighted"):  # TUL-Code flow term (the val side already
+                                              # subtracts it; the tul-code draw at 2b6b321
+                                              # reported CE + flow as train/loss)
                 if isinstance(out, dict) and out.get(_ak) is not None:
                     _lv = _lv - float(out[_ak])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
@@ -3444,6 +3447,10 @@ def main(cfg: DictConfig) -> None:
                            "row_contrast_n_rows", "row_contrast_n_anchors",
                            "coda_span_n_tokens",
                            "horizon", "horizon_weighted", "horizon_ce", "horizon_terms",
+                           "code_fm", "code_fm_weighted", "code_fm_rel", "code_fm_raw",
+                           "code_fm_null", "code_fm_band0_rel", "code_fm_band1_rel",
+                           "code_fm_band2_rel", "code_fm_band3_rel", "code_rollout_frac",
+                           "code_phase",
                            "horizon_n_tokens"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
