@@ -49,7 +49,7 @@ def _encoder_ce(model, inp, labels, layout, device) -> tuple[float, int]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=True, help="LABEL=CONFIG=PATH")
+    ap.add_argument("--ckpt", required=True, help="LABEL=CONFIG=PATH[=k=v,k=v] (Hydra overrides, e.g. tul.code_cfg_scale=3.0)")
     ap.add_argument("--ks", default="1,2,4,8,16")
     ap.add_argument("--draws", type=int, default=8)
     ap.add_argument("--rows", type=int, default=96)
@@ -63,8 +63,10 @@ def main() -> None:
     from morph.training.data import create_dataloader
     from morph.training.tul_setup import build_tul_runtime
 
-    label, config, path = a.ckpt.split("=", 2)
-    cfg = build_cfg(config, ["model.use_kernels=false"])
+    parts = a.ckpt.split("=", 3)
+    label, config, path = parts[0], parts[1], parts[2]
+    ovr = parts[3].split(",") if len(parts) == 4 and parts[3] else []
+    cfg = build_cfg(config, ["model.use_kernels=false", *ovr])
     tul_rt = build_tul_runtime(cfg)
     assert tul_rt is not None and bool(getattr(tul_rt.model_cfg, "code", False)), \
         "a TUL-Code checkpoint is required"
@@ -78,7 +80,7 @@ def main() -> None:
     batches = pack_rows(stream, tul_rt, cfg, a.batch, False)[: -(-a.rows // a.batch)]
     batches = [(inp, labels.to(device), lay.to(device)) for inp, labels, lay, _ in batches]
     n_rows = sum(inp.shape[0] for inp, _, _ in batches)
-    print(f"{label}: step {step}, {n_rows} rows, K={a.draws} draws, ks={ks}", flush=True)
+    print(f"{label}: step {step}, {n_rows} rows, K={a.draws} draws, ks={ks}, overrides={ovr}", flush=True)
 
     # per batch: token count and, per k, the summed nats of both metrics (bootstrap unit = batch)
     _enc = [_encoder_ce(model, inp, lab, lay, device) for inp, lab, lay in batches]
