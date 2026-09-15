@@ -165,7 +165,12 @@ def evaluate(
                         # WHICH span `spandec_ce` grades (tul.spandec_target_offset). 1 on
                         # every arm before that key; at k > 1 the column is a CE over span
                         # s+k and is NOT comparable with an offset-1 arm's.
-                        "spandec_target_offset"):
+                        "spandec_target_offset",
+                        # TUL-Code: the flow term and its null-floor ratio per t band
+                        # (docs/tul-code-spec.md §8; `code_fm_rel` < 1 means the velocity
+                        # field beats predicting zero). Absent on every other arm.
+                        "code_fm", "code_fm_rel", "code_fm_band0_rel", "code_fm_band1_rel",
+                        "code_fm_band2_rel", "code_fm_band3_rel"):
                 if _mk in out:
                     acc.setdefault(f"val/{_mk}", []).append(float(out[_mk]))
             if "ce_tokens_no_slots" in out:
@@ -3336,7 +3341,11 @@ def main(cfg: DictConfig) -> None:
                                                           "core_gain_max", "core_gain_weighted",
                                                           "loopmtp_align", "loopmtp_weighted",
                                                           "loopmtp_ponder",
-                                                          "loopmtp_ponder_weighted")}
+                                                          "loopmtp_ponder_weighted")
+                    # TUL-Code: `code_fm`, `code_fm_weighted`, `code_fm_rel`, the four
+                    # t-band ratios and `code_rollout_frac` (phase 3). Scalars by
+                    # construction (transformer.py wraps the stats as 0-d tensors).
+                    or _k.startswith("code_fm") or _k == "code_rollout_frac"}
                    if isinstance(out, dict) else {}),
                 "train/ppl": math.exp(min(_lv, 20.0)),
                 "train/lr": lr,
