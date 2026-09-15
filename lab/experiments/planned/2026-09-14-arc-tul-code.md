@@ -135,8 +135,35 @@ at the same step.
 
 ## Not verified before launch
 
-(To be filled at launch: pytest count and exit code, the composed configs, the Spark smoke
-line with rate and memory, the commit the runner checks out.)
+Filled 2026-09-14 before queueing. Code at `44b6ac4`; the runner checks out the commit
+that carries this section.
+
+Verified:
+- `pytest tests/test_tul_code.py tests/test_generation_sampling.py -q` → 34 passed, exit 0
+  (17 contracts C1-C10 + eval modes + generation, 17 generation-sampling) at `aa7aaee`;
+  the regression subset (208) passed at `361504f`, the build commit.
+- The four configs (`tul_code`, `tul_code_seeddetach`, `tul_code_nophase3`,
+  `tul_code_smoke`) compose through Hydra + `tul_setup` and build (test C10).
+- DGX Spark GPU smoke `tul_code_smoke` with `training.gen_every=6`: exit 0, phases
+  switched 2→1 at step 0, 1→2 at step 1, 2→3 at step 6; two generation dumps written and
+  the generator crossed span boundaries (3 slots on the first prompt); `val/ce_tf 11.2093`,
+  `val/code_gap 0.0104` at the earlier gen-off smoke; peak 1.22 GB at the tiny shape.
+- On that step-12 checkpoint: `core_depth_sweep.py` (k = 0/1/2/4, exit 0, `ce_0` = the
+  encoder ceiling 11.2267, sampled 11.2263), `worth_profile.py` (exit 0 after the
+  wrong_seed skip, zero/shuffle/all_slots reported), `slot_state_probe.py` (exit 0, clean
+  skip with a note).
+
+Not verified:
+- The panel shape (seq 1024, batch 6, 266M params) has never run on the 5090: resident
+  memory and tok/s (P-8) come only from the runner's own 12-step smoke at launch. The
+  tiny-shape smoke says nothing about them.
+- The trainer's compiled path (`training.compile: true` in the lineage): the smoke ran
+  `compile: false`. The two phase recompiles are a design expectation, not a measurement.
+- The runner's slot sweep list is k ∈ {1, 2, 3, 6, 9, 12, 16}; the `ce_k4` and `ce_k8`
+  readings in the Predictions need a hand sweep on the same 480 rows after each arm, and
+  `val/loss` (k = `code_infer_steps` 8) on the trainer's val rows is the interim reading.
+- No real-data reading of the encoder's code rank, the flow loss or the shuffle cost
+  beyond 12 steps. P-1 is the first thing the 5k checkpoint answers.
 
 ## Results
 
