@@ -1,0 +1,5 @@
+slot-spandec-strict-20k depth= 1 |h|=140.736 rel_dist_from_d1=0.0000 (p90 0.0000) cos=1.00000
+slot-spandec-strict-20k depth= 2 |h|=143.459 rel_dist_from_d1=0.0669 (p90 0.0811) cos=0.99795 rel_from_prev=0.0669
+slot-spandec-strict-20k depth= 3 |h|=144.472 rel_dist_from_d1=0.0982 (p90 0.1177) cos=0.99556 rel_from_prev=0.0370
+slot-spandec-strict-20k depth= 6 |h|=145.634 rel_dist_from_d1=0.1392 (p90 0.1680) cos=0.99101 rel_from_prev=0.0579
+slot-spandec-strict-20k depth=16 |h|=147.447 rel_dist_from_d1=0.1793 (p90 0.2231) cos=0.98530 rel_from_prev=0.0829

@@ -47,7 +47,6 @@ def main() -> None:
         print(f"{label} is a TUL-Code model: slot_state_probe does not apply "
               f"(no slot loop; see val/code_eff_rank and the sweep's ce_0)", flush=True)
         if a.out:
-            import json
             with open(a.out, "w") as f:
                 json.dump({"label": label, "step": step, "skipped": "tul.code model: no "
                            "slot loop, no per-depth state; see val/code_eff_rank"}, f)
