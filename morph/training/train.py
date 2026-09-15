@@ -2217,8 +2217,19 @@ def main(cfg: DictConfig) -> None:
     if resume_path and os.path.isfile(resume_path):
         _sidecar = os.path.join(os.path.dirname(resume_path), "wandb_id.txt")
         if os.path.isfile(_sidecar):
-            _wandb_resume_id = (open(_sidecar).read().strip() or None)
-            if _wandb_resume_id:
+            _lines = [ln.strip() for ln in open(_sidecar).read().splitlines()]
+            _wandb_resume_id = (_lines[0] if _lines else "") or None
+            # A FORK (a different wandb.name than the run that wrote the checkpoint) is a
+            # new experiment and gets its own wandb run; only a resume under the same name
+            # continues the history (2026-09-15: a fork silently extended its parent's run).
+            _parent_name = _lines[1] if len(_lines) > 1 else None
+            _this_name = getattr(wb_cfg, "name", None)
+            if _wandb_resume_id and _parent_name and _this_name and _this_name != _parent_name:
+                print(f"  [wandb] fork: checkpoint written by run {_wandb_resume_id} "
+                      f"({_parent_name!r}); this run is {_this_name!r} -> NEW wandb run",
+                      flush=True)
+                _wandb_resume_id = None
+            elif _wandb_resume_id:
                 print(f"  [wandb] resuming run id {_wandb_resume_id}", flush=True)
     wandb.init(
         project=wb_cfg.project,
@@ -2323,7 +2334,9 @@ def main(cfg: DictConfig) -> None:
     if wandb.run is not None:
         try:
             with open(os.path.join(ckpt_dir, "wandb_id.txt"), "w") as _f:
-                _f.write(str(wandb.run.id))
+                # line 1 the id, line 2 the run name: a resume under ANOTHER name is a
+                # fork and starts its own wandb run (read back before wandb.init).
+                _f.write(f"{wandb.run.id}\n{wandb.run.name or ''}\n")
         except OSError as e:
             print(f"  [wandb] could not write run-id sidecar ({e}); resume will start a new run")
 
