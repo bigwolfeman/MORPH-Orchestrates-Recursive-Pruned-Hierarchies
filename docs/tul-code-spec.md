@@ -275,10 +275,15 @@ buffers: a gate would pay the full thinker and sampler cost in every phase. Cost
 
 ## 7. Inference
 
-`morph/inference/tul_generate.py` gains one branch. At a boundary, with tape
-`[ẑ_1 .. ẑ_{s-1}]` and the seed of span s: `z ← z_0 ~ N(0, source_std²)`; for
-`j = 0 .. k−1`: `z ← z + (1/k)·v(z, t_j, tape, seed)` with `t_j = j/k` (Euler, the same
-integrator `fm_planner` uses); append `rmsnorm(z)` to the tape. Then tokens as today.
+`morph/inference/tul_generate.py` gains one branch (BUILT 2026-09-14, `code_mode:
+"generate"`). At a boundary the open span's slot gets ONE sample: `z ← z_0 ~ N(0,
+source_std²)`; for `j = 0 .. k−1`: `z ← z + (1/k)·v(z, t_j, tape, seed)` with `t_j = j/k`
+(Euler, the same integrator `fm_planner` uses); the generator caches `rmsnorm(z)` and
+hands it back through `code_given` on every recompute until the next boundary, so a span
+is written from one code. The TAPE at generation is the RE-ENCODED past: a slot whose span
+is already written holds E's code of that text, not the sample it was written from. This
+is the third option of §13.4 and the one built, because the text exists and E is cheap;
+the fully sampled tape remains the `ce_k8_rolled` instrument. Then tokens as today.
 
 `k` is `tul.code_infer_steps` at generation and a per-call argument in the instruments.
 Cost of k, per token at ⟨span⟩ ≈ 12 and M = 2: `6·k·2/12` core block passes per position,
@@ -428,8 +433,10 @@ first smoke measures it; nothing here is a claim.
    Arm `tul_code` allows it (the prelude of span s may learn to make span s+1's code easier
    to guess; E's input is span s+1, which `L_fm` never reaches); arm `tul_code_seeddetach`
    detaches the seed (FM1's choice). One factor, same prereg.
-4. **Where the tape's context copies come from at inference.** Sampled codes (§7).
-   Alternative: keep the mean code (`k`→∞) for old cells and sample only the current one.
+4. **Where the tape's context copies come from at inference.** BUILT: the re-encoded
+   past (E on the text already written) with one sample for the open span (§7).
+   Alternatives: a tape of the samples themselves (the `ce_k8_rolled` instrument reads
+   that regime), or the mean code for old cells.
 
 ## 14. Risks, honestly
 

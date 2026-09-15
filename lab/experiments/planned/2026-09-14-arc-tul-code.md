@@ -46,16 +46,24 @@ deterministic loop write on the same geometry, at a compute the d1 rung cannot m
 
 ## Method
 
-Arms, all composing `tul_code.yaml` (spec §9) unless named otherwise, seq 1024, batch 12,
-20,000 steps, `training.ademamix_t_beta3` pinned to 20000, wandb `morph-tul`, one seed
-each in this panel (seed 1); a second seed of `tul-code` and of the ruler before any claim.
+Arms, all composing `tul_code.yaml` (spec §9) unless named otherwise, at the strict
+ruler's SHAPE (seq 1024, batch 6, seed 1 — `tul_to_panel.yaml` in the lineage), 20,000
+steps with `training.steps=20000 training.ademamix_t_beta3=20000 training.ckpt_every=5000`
+as queue overrides, wandb `morph-tul`, one seed each in this panel; a second seed of
+`tul-code` and of the ruler before any claim.
+
+Method amendment 2026-09-14 (before launch; reason: the lineage's batch is 6, not the 12 I
+wrote from `tul_short.yaml`, and the strict ruler exists only as a 5k run): the ruler gets
+a 20k twin `slot-spandec-strict-20k` with the same overrides, so G3/G4 pair at 20k on the
+same shape. The 5k readings pair against the existing `slot-spandec-strict` checkpoint.
 
 | arm | config | one factor |
 | --- | --- | --- |
 | `tul-code` | `tul_code.yaml` | the design, spec defaults (`code_noise 0.5`, phase2 0.10, phase3 0.50, rollout p 0.5 at 8 steps) |
 | `tul-code-seeddetach` | `tul_code_seeddetach.yaml` | the FM gradient may not reach the seed path (Wolfe: an ablation) |
 | `tul-code-nophase3` | `tul_code_nophase3.yaml` | `code_phase3_at: 1.0` (rollout never starts) — LaDiR's stage-2 ablation on our data |
-| `slot-spandec-strict` | exists | the deterministic loop write on the same geometry: the MEAN control |
+| `slot-spandec-strict` | exists (5k) | the deterministic loop write on the same geometry: the MEAN control at 5k |
+| `slot-spandec-strict-20k` | `tul_slot_spandec_strict.yaml` + the 20k overrides | the same control at 20k |
 | `notul-d1` (`norm-match-20k-d1`) | exists, done | the compute bar |
 | `norm-match-20k` | exists, done | the plain looped ceiling on CE |
 
