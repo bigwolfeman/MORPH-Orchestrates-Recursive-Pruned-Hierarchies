@@ -157,6 +157,13 @@ def main() -> None:
         # not support a mode, which is what a hand-run comparison wants.
         if a.modes == "auto":
             modes = list(MODES)
+            if getattr(model, "tul_code_enc", None) is not None:
+                # A TUL-Code model has no seed->cells path: the seed feeds the velocity
+                # field, the cells are the encoder's code (spec §8). The forward refuses
+                # wrong_seed there; zero/shuffle act on the cells and are the profile.
+                modes.remove("wrong_seed")
+                print(f"  {label}: wrong_seed SKIPPED — TUL-Code model (cells come from "
+                      "the encoder, not the seed)", flush=True)
             why = _all_slots_supported(model)
             if why is None:
                 modes.append(ALL_SLOTS)
