@@ -91,7 +91,8 @@ Inference. E does not exist. The thinker samples; the mouth speaks.
  per token:       prelude(3) -> mouth(3) reads tape ∪ {z_s} -> next token, until the boundary rule fires
 ```
 
-Compute per token: prelude + coda = 6 block passes, plus `6·k/⟨span⟩` for the thinker.
+Compute, counted as block passes PER POSITION: prelude + coda = 6 per token, plus the
+thinker's `6·k·M` per span, i.e. `6·k·M/⟨span⟩` per token (M = 2, ⟨span⟩ ≈ 12: k per token).
 The shipped looped model runs 3 + 6·6 + 3 = 42 per token.
 
 ## 3. Objects
@@ -107,7 +108,12 @@ them today (`tg_geometry: strict`, `tg_coda_prefix_reach: all`).
 ### 3.2 The code z_s — what the cells hold
 
 `z_s ∈ R^{M×C}`, `M = prefix_k`, `C = d_model`. One cell per prefix position. It is the code
-of span s+1. Nothing writes through `W_prefix`; the cells ARE the code (the Thought
+of span s+1. The offset, drawn once because every reader gets it wrong first:
+
+```
+ [ span 1 ][ slot 1 = z_1 ][ span 2 ][ slot 2 = z_2 ][ span 3 ] ...
+   z_1 = E(span 2)  seed(1) = summary of span 1   tape at slot 3 = {z_1, z_2} = codes of spans 2, 3
+``` Nothing writes through `W_prefix`; the cells ARE the code (the Thought
 Register's shape, `tul.slot_cells`, with the register's pooling replaced by E).
 
 Normalisation: each cell is RMS-normalised to unit per-component scale before it is used
@@ -231,7 +237,7 @@ no KL and by the strict geometry, under which the coda cannot bypass the cells.
 
 | phase | starts at | what changes |
 | --- | --- | --- |
-| 1 define the code | 0 | `L_ce` only. E and the mouth co-train; the thinker is built and idle (its loss weight is 0) |
+| 1 define the code | 0 | `L_ce` only. E and the mouth co-train; the thinker's pass does NOT run (no forward, no loss, no cost) |
 | 2 learn to guess it | `tul.code_phase2_at` (default 0.10) | `L_fm` on. The code is a slow target: E keeps training through CE |
 | 3 rollout | `tul.code_phase3_at` (default 0.50) | `code_rollout_p` (default 0.5) of valid slots hand the coda a sampled `ẑ` at `code_rollout_steps` (default 8) instead of the code |
 
@@ -251,8 +257,10 @@ checkpoint that is a model is the first one past `code_phase2_at`.
 integrator `fm_planner` uses); append `rmsnorm(z)` to the tape. Then tokens as today.
 
 `k` is `tul.code_infer_steps` at generation and a per-call argument in the instruments.
-Cost of k, per token at ⟨span⟩ ≈ 12 and M = 2: `6·k·2/12` core block passes, so k = 8 is 8
-against the plain loop's 36 and the sequential break-even is near k = 72. The noise
+Cost of k, per token at ⟨span⟩ ≈ 12 and M = 2: `6·k·2/12` core block passes per position,
+so k = 8 is 8 against the plain loop's 36 and the break-even in FLOPs is k = 36. Counted as
+SEQUENTIAL block launches (decode latency), the plain loop pays 36 per token and the thinker
+6·k per span, so that break-even is k = 72. The noise
 augmentation (§3.2) is what keeps k small: the mouth tolerates a code within one noise
 radius of the true one, so the sampler only has to land inside that ball. LaDiR's
 batch-parallel diversity guidance (§3.4 there) is a best-of-N reasoning device and is not
@@ -272,7 +280,9 @@ All on paired rows (480, `span_budget_profile.py`), never on the runner's Final 
 | `val/ce_tf` | CE with the encoder's codes in the cells (teacher-forced, noise off) | the CEILING. NOT an LM number: the cells contain the span being scored |
 | `val/ce_k{K}`, K ∈ {1, 2, 4, 8, 16} | CE with sampled codes, teacher-forced tape (earlier cells = encoder codes), single sample | the honest number and the K-CURVE. `ce_k1 − ce_k16` is the loop contribution |
 | `val/code_gap` | `ce_k16 − ce_tf` | how much of a span's code is not guessable from the past |
-| `val/code_eff_rank`, `val/code_pairwise_cos` | the codes of a row | the collapse instruments, same names as the slot family's |
+| `val/code_eff_rank`, `val/code_pairwise_cos` | the S·M cells of a row in C = 1024 dims, the SAME computation as `val/slot_eff_rank` (slot family: 5.7–7.3, cos 0.72–0.77) | the collapse instruments |
+| `val/ce_k8_rolled` | CE with a FULLY sampled tape: codes sampled slot by slot down the row, each reading the sampled ones before it | the generation regime; the compounding instrument that `ce_k{K}` cannot read |
+| `val/ce_k8` by span length (buckets 4–7, 8–15, 16–32) | the same number, split | whether M = 2 cells serve a 32-token span as well as an 8-token one |
 | `fm/rel` per t-band | `L_fm / null` | the thinker's honesty instrument (`fm_planner._finish`) |
 | `worth_profile` shuffle cost on the cells | `ce(shuffled cells) − ce` at K 8 | the reader instrument; must be positive (FM doctrine rule 1: cost, not fraction) |
 | generation at K ∈ {1, 8}: gen-PPL with rep4 / distinct-3 | the diversity guard, doctrine rule 11 | |
@@ -287,13 +297,17 @@ Controls, one seed each in the first panel, two before any claim (doctrine rule 
 Pre-registered gates, to be frozen in `lab/experiments/planned/2026-09-14-arc-tul-code.md`
 BEFORE the first run (numbers here are the proposal; the prereg owns them):
 
-* **G1 (the code is a code).** `ce_tf` at 5k at least 0.15 nats below the strict ruler on
-  paired rows, and `code_eff_rank ≥ 16` of 2·1024 per row. Fails ⇒ E or the geometry is
-  broken; nothing downstream is readable.
+* **G1 (the code is a code, and it is read).** A SANITY gate, expected to pass: `ce_tf`
+  contains the span being scored, so it should sit well below the strict ruler; the gate is
+  `ce_tf` at least 0.15 nats below the ruler at 5k on paired rows, the shuffle cost of the
+  cells (cells permuted across a row's slots, `ce_tf` regime) at least 0.15, and
+  `code_eff_rank ≥ 16` of 1024 (the slot family reads 5.7–7.3). Fails ⇒ the mouth is not
+  reading the cells or E writes a constant; nothing downstream is readable.
 * **G2 (the loop earns by sampling).** `ce_k1 − ce_k8 ≥ 0.02` at 5k with `fm/rel` below 0.9
   in every band. Fails ⇒ the thinker is not integrating anything; the line stops.
-* **G3 (a sample beats a mean).** `ce_k8` below the strict ruler's CE on paired rows at 20k,
-  CI excluding 0. Fails ⇒ multimodality does not pay on this data; the line stops.
+* **G3 (a sample beats a mean).** `ce_k8` (teacher-forced tape) below the strict ruler's CE
+  on paired rows at 20k, CI excluding 0; `ce_k8_rolled` reported beside it and within 0.05
+  of `ce_k8`, or the compounding is the next problem. Fails ⇒ multimodality does not pay on this data; the line stops.
 * **G4 (ship bar).** `ce_k8` within 0.02 of the `d1` rung at 20k, at fewer block passes per
   token than `d1`.
 
@@ -318,8 +332,8 @@ tul:
 ```
 
 Required by construction, refused otherwise: `tokens_through_core: false`,
-`tg_geometry: strict`, `spandec: false`, `slot_cells: 1` (the cells come from E, not the
-register), `vq_codes: 0`, `oracle_z: false`, `grad_pass: false`, `fm: null` (the FM1
+`tg_geometry: strict`, `spandec: false`, `slot_cells: 1` (`slot_cells` is the REGISTER's knob and stays 1; the
+code's cell count M is `prefix_k`, and E writes the cells, not the register), `vq_codes: 0`, `oracle_z: false`, `grad_pass: false`, `fm: null` (the FM1
 planner). `model.core_fixed_point_lambda` and `model.slot_gain_lambda` print INERT.
 
 Config lineage: `tul_code.yaml` composes `tul_slot_spandec_strict` and sets `spandec: false`,
@@ -358,15 +372,15 @@ Config lineage: `tul_code.yaml` composes `tul_slot_spandec_strict` and sets `spa
 | C9 | unknown `tul.code_*` keys raise; every required-by-construction pair in §9 raises on violation | `test_tul_setup_keys.py` extension |
 | C10 | every panel config composes through Hydra + `tul_setup` at the queued commit AND runs a 12-step GPU smoke on the Spark before it is queued (`compose-every-config-before-queueing`, `mean-eq-max-is-not-fixed-depth`) | `tul_smoke`-style config `tul_code_smoke.yaml` |
 
-## 12. Compute (block passes; measured rates come from the smoke)
+## 12. Compute (block passes counted per position; measured rates come from the smoke)
 
 | model | per token | per span (⟨span⟩ ≈ 12 at seq 1024) |
 | --- | --- | --- |
 | plain looped, mean 6 | 3 + 36 + 3 = 42 | — |
 | `d1` rung | 12 | — |
 | strict slot loop, mean 6 | 6 (+ 36 on the slot positions only) | 36 |
-| TUL-Code train | 6 (+ E) | 6 on 2M positions, once |
-| TUL-Code infer, k | 6 | 6·k |
+| TUL-Code train | 6 (+ E) | 6·2M, once (M = 2: 24) |
+| TUL-Code infer, k | 6 | 6·k·M (M = 2: 12k) |
 
 Memory: the thinker's pass is 512 positions, no checkpointing needed; the doubled slot
 sequence is the only new activation. Expect below the strict ruler's resident figure. The
