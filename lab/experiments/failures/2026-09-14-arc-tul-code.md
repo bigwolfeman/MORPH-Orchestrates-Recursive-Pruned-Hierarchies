@@ -254,3 +254,31 @@ sampled codes of the span's likelihood under the coda — a lower bound on the t
 log-likelihood — read against the ruler's CE. (4) The 20k pair from the original Method
 (tul-code and the ruler twin) plus a `code_rollout_p: 1.0` twin is the next panel, once
 (3) exists.
+
+### Addendum 2026-09-15: the K-sample marginal at 5k
+
+Instrument (3) ran on the tul-code 5k checkpoint on the Spark
+(`lab/divergence/code_marginal_sweep.py` at f64886b; 96 rows, K = 8 draws per span,
+`code_marginal_tul-code_5000.{json,txt}` in the results directory):
+
+| k (Euler steps) | ce_marginal (8 draws) | ce_single_mean |
+| --- | --- | --- |
+| 0 (encoder code) | 0.536 | |
+| 1 | 4.971 | 4.973 |
+| 2 | 4.972 | 4.974 |
+| 4 | 4.966 | 4.975 |
+| 8 | 4.966 | 4.984 |
+| 16 | 4.967 | 4.988 |
+
+marginal(k=16) − marginal(k=1) = −0.004 [−0.006, −0.003], paired bootstrap over 32 batches.
+
+Reading. The bound is real but nearly empty: eight draws could beat one draw by up to
+log 8 = 2.08 nats and beat it by 0.002 at k = 1 and 0.022 at k = 16. Every sampled code is
+about equally wrong to the coda, which is the subspace result (sample ≈ unconditional
+draw) seen through the likelihood. More Euler steps spread the draws (the single-draw mean
+worsens by 0.015 from k = 1 to 16 while the best of them improve), so the sampler does
+make different codes at higher k; the coda just does not find a better one among them.
+The inference-depth signal under the right metric is −0.004 nats at 5k: present, and
+negligible. Wolfe, 2026-09-15: the full set of phases (the 20k arms, phase 3 from 10000
+to 20000) is needed before this probe reads anything about the design; the 20k arms log
+`val/ce_marginal` at every val, and the k-sweep reruns on the Spark at each checkpoint.
