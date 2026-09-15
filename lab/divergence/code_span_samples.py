@@ -48,7 +48,8 @@ def main() -> None:
     label, config, path = a.ckpt.split("=", 2)
     cfg = build_cfg(config, ["model.use_kernels=false"])
     tul_rt = build_tul_runtime(cfg)
-    assert tul_rt is not None and bool(cfg.tul.code), "a TUL-Code checkpoint is required"
+    assert tul_rt is not None, "a TUL checkpoint is required"
+    is_code = bool(cfg.tul.code)  # a slot-loop arm gets the same cuts, minus the ORACLE line
     model, step = load_ckpt(cfg, path, device, tul_rt.model_cfg)
     model.eval()
     tok = AutoTokenizer.from_pretrained(cfg.data.tokenizer)
@@ -84,12 +85,13 @@ def main() -> None:
         true = [t for t, g in zip(ids, bags) if g == b + 1]
         if not prefix or not true:
             continue
-        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16,
-                                             enabled=device == "cuda"):
-            res = model.tul_forward_ablated(inp.to(device), None, lay, plan_mode="normal",
-                                            code_mode="encoder")
-        oracle = res["code_cells"][0, b].float().clone()  # code of the TRUE span b+1
         n_new = len(true) + a.extra_tokens
+        if is_code:
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16,
+                                                 enabled=device == "cuda"):
+                res = model.tul_forward_ablated(inp.to(device), None, lay, plan_mode="normal",
+                                                code_mode="encoder")
+            oracle = res["code_cells"][0, b].float().clone()  # code of the TRUE span b+1
 
         def oracle_forward(*args, **kw):
             g, gm = kw.get("code_given"), kw.get("code_given_mask")
@@ -104,9 +106,10 @@ def main() -> None:
         lines.append(f"=== example {done + 1}  (context tail, {len(true)} true tokens)")
         lines.append(f"CONTEXT ...{ctx}")
         lines.append(f"TRUE     {tok.decode(true, skip_special_tokens=True)!r}")
-        model.forward = oracle_forward
-        lines.append(f"ORACLE   {gen(prefix, n_new, 0.0, 0)!r}")
-        model.forward = orig_forward
+        if is_code:
+            model.forward = oracle_forward
+            lines.append(f"ORACLE   {gen(prefix, n_new, 0.0, 0)!r}")
+            model.forward = orig_forward
         lines.append(f"GREEDY   {gen(prefix, n_new, 0.0, 0)!r}")
         for s in seeds:
             lines.append(f"SAMPLE{s}  {gen(prefix, n_new, 0.8, s)!r}")
