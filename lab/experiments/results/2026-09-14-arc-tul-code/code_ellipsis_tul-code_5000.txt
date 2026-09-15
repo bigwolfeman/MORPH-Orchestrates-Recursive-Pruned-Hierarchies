@@ -1,0 +1,93 @@
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+=== §1a tokenization of ellipsis-like strings ===
+  '...'                -> [(1198, "'...'", 'ellipsis_dots', True)]
+  ' ...'               -> [(2437, "' ...'", 'ellipsis_dots', True)]
+  '…'                  -> [(10438, "'…'", 'ellipsis_char', False)]
+  ' …'                 -> [(25826, "' …'", 'ellipsis_char', False)]
+  'she said...'        -> [(17775, "'she'", 'other', False), (9891, "' said'", 'other', False), (1198, "'...'", 'ellipsis_dots', True)]
+  'wait…what?'         -> [(1702, "'wait'", 'other', False), (10438, "'…'", 'ellipsis_char', False), (7743, "'what'", 'other', False), (68, "'?'", 'question', True)]
+  'well...'            -> [(14936, "'well'", 'other', False), (1198, "'...'", 'ellipsis_dots', True)]
+  '...\n'              -> [(1198, "'...'", 'ellipsis_dots', True), (222, "'\\n'", 'newline', True)]
+  'Really...I'         -> [(454, "'Re'", 'other', False), (1266, "'ally'", 'other', False), (1198, "'...'", 'ellipsis_dots', True), (78, "'I'", 'other', False)]
+  'etc.'               -> [(6711, "'etc'", 'other', False), (51, "'.'", 'period', True)]
+  44 vocab ids classify as ellipsis_char/ellipsis_dots; first 15: [(1198, "'...'", True), (2279, "'....'", True), (2437, "' ...'", True), (4362, "'........'", True), (8016, "'...)'", False), (8267, "'................'", True), (10438, "'…'", False), (12401, "' {...'", True), (13582, '\'..."\'', False), (14695, "'(...'", True), (14999, "'...</'", False), (16402, "'................................'", True), (18520, "' ...)'", False), (18646, "' [...'", True), (19874, '\'...");\'', True)]
+tul-code: step 5000, 192 rows, M=2, C=1024
+N=9591 valid slots with a non-empty span s+1; 9783 total boundaries
+
+=== §1b boundary-class frequency (per 1000 real span boundaries) ===
+  ellipsis_char   count=     3  per_1000=    0.31
+  ellipsis_dots   count=    28  per_1000=    2.86
+  newline         count=   969  per_1000=   99.05
+  dash            count=   379  per_1000=   38.74
+  question        count=   226  per_1000=   23.10
+  exclaim         count=    77  per_1000=    7.87
+  semicolon       count=    65  per_1000=    6.64
+  period          count=  5196  per_1000=  531.13
+  eos             count=   157  per_1000=   16.05
+  other           count=  2683  per_1000=  274.25
+
+=== §2/§3 grouping (a): terminator of span s+1 (the span the code ENCODES) ===
+  [a] period          cell0 n= 5080  within_cos=+0.0015 eff_rank=  52.79 centroid_cos=+0.0635  || control(.): within_cos=+0.0013 eff_rank=  50.89 centroid_cos=+0.0616
+  [a] period          cell1 n= 5080  within_cos=+0.0498 eff_rank=  35.80 centroid_cos=+0.2283  || control(.): within_cos=+0.0425 eff_rank=  36.25 centroid_cos=+0.2115
+  [a] period          ce_tf=0.3669 ce_sampled=4.8659 resid_ratio={0: 1.9065751213971773, 1: 1.9407263389949536} mean_len=16.95
+  [a] other           cell0 n= 2645  within_cos=+0.0283 eff_rank=  64.72 centroid_cos=+0.1753  || control(.): within_cos=+0.0013 eff_rank=  51.02 centroid_cos=+0.0617
+  [a] other           cell1 n= 2645  within_cos=+0.1094 eff_rank=  69.49 centroid_cos=+0.3342  || control(.): within_cos=+0.0425 eff_rank=  36.42 centroid_cos=+0.2116
+  [a] other           ce_tf=0.4224 ce_sampled=5.0851 resid_ratio={0: 1.9486422573586277, 1: 1.8545462561914685} mean_len=32.00
+  [a] newline         cell0 n=  952  within_cos=+0.0604 eff_rank=  25.11 centroid_cos=+0.2504  || control(.): within_cos=+0.0015 eff_rank=  51.67 centroid_cos=+0.0633
+  [a] newline         cell1 n=  952  within_cos=+0.2690 eff_rank=  22.18 centroid_cos=+0.5204  || control(.): within_cos=+0.0440 eff_rank=  36.73 centroid_cos=+0.2153
+  [a] newline         ce_tf=0.3051 ce_sampled=4.6798 resid_ratio={0: 1.8859298017893051, 1: 1.9131066960035248} mean_len=12.58
+  [a] dash            cell0 n=  369  within_cos=+0.0114 eff_rank=  45.03 centroid_cos=+0.1187  || control(.): within_cos=+0.0020 eff_rank=  48.97 centroid_cos=+0.0685
+  [a] dash            cell1 n=  369  within_cos=+0.0957 eff_rank=  32.40 centroid_cos=+0.3132  || control(.): within_cos=+0.0403 eff_rank=  35.79 centroid_cos=+0.2067
+  [a] dash            ce_tf=0.6001 ce_sampled=5.3006 resid_ratio={0: 1.9042769690704777, 1: 1.932247797748318} mean_len=14.27
+  [a] question        cell0 n=  223  within_cos=+0.0301 eff_rank=  39.15 centroid_cos=+0.1855  || control(.): within_cos=+0.0012 eff_rank=  46.35 centroid_cos=+0.0751
+  [a] question        cell1 n=  223  within_cos=+0.1301 eff_rank=  31.27 centroid_cos=+0.3660  || control(.): within_cos=+0.0411 eff_rank=  33.64 centroid_cos=+0.2128
+  [a] question        ce_tf=0.5323 ce_sampled=5.2445 resid_ratio={0: 1.9036601892114589, 1: 1.9309351948839681} mean_len=14.22
+  [a] eos             cell0 n=  152  within_cos=+0.3977 eff_rank=   6.51 centroid_cos=+0.6338  || control(.): within_cos=+0.0012 eff_rank=  42.21 centroid_cos=+0.0877
+  [a] eos             cell1 n=  152  within_cos=+0.4784 eff_rank=   6.63 centroid_cos=+0.6942  || control(.): within_cos=+0.0382 eff_rank=  32.50 centroid_cos=+0.2106
+  [a] eos             ce_tf=1.3542 ce_sampled=5.6568 resid_ratio={0: 1.9035847691858718, 1: 1.952792372664581} mean_len=6.16
+  [a] exclaim         cell0 n=   75  within_cos=+0.0301 eff_rank=  30.71 centroid_cos=+0.2074  || control(.): within_cos=+0.0002 eff_rank=  34.87 centroid_cos=+0.1160
+  [a] exclaim         cell1 n=   75  within_cos=+0.1172 eff_rank=  23.96 centroid_cos=+0.3590  || control(.): within_cos=+0.0407 eff_rank=  27.03 centroid_cos=+0.2308
+  [a] exclaim         ce_tf=0.7124 ce_sampled=5.8025 resid_ratio={0: 1.872150864346227, 1: 1.8690537986334064} mean_len=13.47
+  [a] semicolon       cell0 n=   65  within_cos=+0.0048 eff_rank=  33.07 centroid_cos=+0.1419  || control(.): within_cos=+0.0015 eff_rank=  31.06 centroid_cos=+0.1294
+  [a] semicolon       cell1 n=   65  within_cos=+0.1226 eff_rank=  25.66 centroid_cos=+0.3688  || control(.): within_cos=+0.0421 eff_rank=  25.36 centroid_cos=+0.2366
+  [a] semicolon       ce_tf=0.4779 ce_sampled=5.2813 resid_ratio={0: 1.9209548501238025, 1: 1.9383778863205667} mean_len=17.23
+  [a] ellipsis_dots   cell0 n=   28  within_cos=+0.0912 eff_rank=  16.56 centroid_cos=+0.3516  || control(.): within_cos=+0.0030 eff_rank=  18.88 centroid_cos=+0.1954
+  [a] ellipsis_dots   cell1 n=   28  within_cos=+0.1810 eff_rank=  14.41 centroid_cos=+0.4585  || control(.): within_cos=+0.0334 eff_rank=  16.50 centroid_cos=+0.2598
+  [a] ellipsis_dots   ce_tf=0.8762 ce_sampled=6.1392 resid_ratio={0: 1.833762306644423, 1: 1.8774751763929722} mean_len=10.46
+  [a] ellipsis_char   cell0 n=    2  within_cos=-0.3173 eff_rank=   1.00 centroid_cos=+0.5841  || control(.): within_cos=-0.0084 eff_rank=   1.00 centroid_cos=+0.7035
+  [a] ellipsis_char   cell1 n=    2  within_cos=-0.0010 eff_rank=   1.00 centroid_cos=+0.7067  || control(.): within_cos=+0.0914 eff_rank=   1.00 centroid_cos=+0.7380
+  [a] ellipsis_char   ce_tf=0.4251 ce_sampled=5.1287 resid_ratio={0: 1.958153576106779, 1: 1.7501750399663585} mean_len=32.00
+
+=== §2/§3 grouping (b): terminator of span s (the PRECEDING span) ===
+  [b] period          cell0 n= 5086  within_cos=+0.0047 eff_rank=  57.49 centroid_cos=+0.0849  || control(.): within_cos=+0.0035 eff_rank=  52.72 centroid_cos=+0.0772
+  [b] period          cell1 n= 5086  within_cos=+0.0007 eff_rank=  45.15 centroid_cos=+0.0552  || control(.): within_cos=+0.0014 eff_rank=  42.41 centroid_cos=+0.0609
+  [b] period          ce_tf=0.3790 ce_sampled=4.9205 resid_ratio={0: 1.9231328557678113, 1: 1.9123266208652832} mean_len=22.01
+  [b] other           cell0 n= 2638  within_cos=+0.0205 eff_rank=  37.44 centroid_cos=+0.1516  || control(.): within_cos=+0.0033 eff_rank=  54.64 centroid_cos=+0.0755
+  [b] other           cell1 n= 2638  within_cos=+0.0211 eff_rank=  31.53 centroid_cos=+0.1532  || control(.): within_cos=+0.0013 eff_rank=  44.08 centroid_cos=+0.0600
+  [b] other           ce_tf=0.4341 ce_sampled=4.9542 resid_ratio={0: 1.902037792875836, 1: 1.8994871621004898} mean_len=17.10
+  [b] newline         cell0 n=  949  within_cos=+0.0092 eff_rank=  57.38 centroid_cos=+0.1082  || control(.): within_cos=+0.0034 eff_rank=  52.63 centroid_cos=+0.0764
+  [b] newline         cell1 n=  949  within_cos=+0.0061 eff_rank=  39.87 centroid_cos=+0.0917  || control(.): within_cos=+0.0015 eff_rank=  43.98 centroid_cos=+0.0622
+  [b] newline         ce_tf=0.4442 ce_sampled=5.2718 resid_ratio={0: 1.9206102214151293, 1: 1.9104080552058664} mean_len=21.65
+  [b] dash            cell0 n=  373  within_cos=+0.0133 eff_rank=  44.61 centroid_cos=+0.1264  || control(.): within_cos=+0.0035 eff_rank=  53.32 centroid_cos=+0.0782
+  [b] dash            cell1 n=  373  within_cos=+0.0113 eff_rank=  33.30 centroid_cos=+0.1176  || control(.): within_cos=+0.0018 eff_rank=  42.57 centroid_cos=+0.0649
+  [b] dash            ce_tf=0.4090 ce_sampled=4.9628 resid_ratio={0: 1.8930826016688527, 1: 1.912556072396625} mean_len=17.09
+  [b] question        cell0 n=  221  within_cos=+0.0114 eff_rank=  43.95 centroid_cos=+0.1260  || control(.): within_cos=+0.0035 eff_rank=  49.73 centroid_cos=+0.0890
+  [b] question        cell1 n=  221  within_cos=+0.0110 eff_rank=  37.30 centroid_cos=+0.1237  || control(.): within_cos=+0.0018 eff_rank=  39.90 centroid_cos=+0.0776
+  [b] question        ce_tf=0.4197 ce_sampled=5.0968 resid_ratio={0: 1.911713481295186, 1: 1.925727461486863} mean_len=18.54
+  [b] eos             cell0 n=  154  within_cos=+0.0155 eff_rank=  46.23 centroid_cos=+0.1480  || control(.): within_cos=+0.0058 eff_rank=  43.17 centroid_cos=+0.1100
+  [b] eos             cell1 n=  154  within_cos=+0.0126 eff_rank=  35.97 centroid_cos=+0.1372  || control(.): within_cos=+0.0018 eff_rank=  36.94 centroid_cos=+0.0892
+  [b] eos             ce_tf=0.4414 ce_sampled=5.1001 resid_ratio={0: 1.948567065604589, 1: 1.9183050902378491} mean_len=22.32
+  [b] exclaim         cell0 n=   75  within_cos=+0.0293 eff_rank=  26.79 centroid_cos=+0.2054  || control(.): within_cos=+0.0044 eff_rank=  34.78 centroid_cos=+0.1327
+  [b] exclaim         cell1 n=   75  within_cos=+0.0262 eff_rank=  24.18 centroid_cos=+0.1976  || control(.): within_cos=+0.0027 eff_rank=  29.45 centroid_cos=+0.1249
+  [b] exclaim         ce_tf=0.5700 ce_sampled=5.3985 resid_ratio={0: 1.8926684663478777, 1: 1.9296262934808692} mean_len=16.17
+  [b] semicolon       cell0 n=   64  within_cos=+0.0212 eff_rank=  33.21 centroid_cos=+0.1911  || control(.): within_cos=+0.0021 eff_rank=  30.78 centroid_cos=+0.1325
+  [b] semicolon       cell1 n=   64  within_cos=+0.0220 eff_rank=  24.22 centroid_cos=+0.1926  || control(.): within_cos=+0.0009 eff_rank=  26.90 centroid_cos=+0.1274
+  [b] semicolon       ce_tf=0.5395 ce_sampled=5.3752 resid_ratio={0: 1.8826694159911856, 1: 1.9540699450645393} mean_len=19.69
+  [b] ellipsis_dots   cell0 n=   28  within_cos=+0.0021 eff_rank=  16.62 centroid_cos=+0.1943  || control(.): within_cos=+0.0050 eff_rank=  19.49 centroid_cos=+0.2008
+  [b] ellipsis_dots   cell1 n=   28  within_cos=+0.0139 eff_rank=  15.15 centroid_cos=+0.2211  || control(.): within_cos=+0.0031 eff_rank=  17.37 centroid_cos=+0.1948
+  [b] ellipsis_dots   ce_tf=0.5249 ce_sampled=5.3234 resid_ratio={0: 1.8927297239897098, 1: 2.0339728972307998} mean_len=17.89
+  [b] ellipsis_char   cell0 n=    3  within_cos=+0.0926 eff_rank=   1.93 centroid_cos=+0.6285  || control(.): within_cos=-0.0280 eff_rank=   1.97 centroid_cos=+0.5596
+  [b] ellipsis_char   cell1 n=    3  within_cos=-0.0351 eff_rank=   1.99 centroid_cos=+0.5556  || control(.): within_cos=-0.0237 eff_rank=   1.96 centroid_cos=+0.5585
+  [b] ellipsis_char   ce_tf=0.3790 ce_sampled=5.3649 resid_ratio={0: 1.9015969933290613, 1: 2.0530628334386143} mean_len=25.33
+wrote /home/wolfe/morph-instruments/results/code_ellipsis_tul-code_5000.json
