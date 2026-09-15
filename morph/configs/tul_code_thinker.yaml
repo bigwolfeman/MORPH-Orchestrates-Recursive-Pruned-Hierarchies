@@ -1,0 +1,39 @@
+# TUL-Code "thinker-only" regime (Wolfe, 2026-09-15): the encoder and the coda are FROZEN at
+# a trained checkpoint and only the thinker trains, on the flow loss alone, for far more
+# tokens than the joint 20k run gave it. Meant to be FORKED from tul-code-20k's step_10000
+# (the end of phase 2: E trained, a coda that trusts codes fully, thinker 8k steps in):
+#   training.resume=/home/wolfe/morph-to/checkpoints/morph/tul-code-20k/step_10000.pt
+# with a fresh optimizer over the trainable subset. The frozen phase-2 coda reads a sampled
+# code with full trust, so the sampled CE tracks the thinker's guess quality directly.
+# Truth cells keep the parent's statistic (no renorm), so the frozen coda sees what it was
+# trained on; eval feeds the encoder code at that statistic (the 2026-09-15 rule).
+defaults:
+  - tul_code
+  - _self_
+
+training:
+  batch_size: 12                  # 2x the panel's 6: the frozen token path stores no activations
+  steps: 50000                    # 40k thinker steps after the 10k resume point = 491M tokens
+  ckpt_every: 10000
+  ademamix_t_beta3: 40000         # the thinker's own horizon under the fresh optimizer
+  resume_fresh_optimizer: true    # a fork: fresh optimizer over the trainable subset, no replay
+  train_only:                     # the thinker and nothing else (model 4:6x6:4 -> core injections 4..9)
+    - core.
+    - x0_injects.4.
+    - x0_injects.5.
+    - x0_injects.6.
+    - x0_injects.7.
+    - x0_injects.8.
+    - x0_injects.9.
+    - injection.
+    - tul_code_head.
+    - tul_code_time.
+    - tul_code_cell
+    - tul_code_clean
+
+tul:
+  code_phase2_at: 0.0             # flow loss from the first step (resumed past it anyway)
+  code_phase3_at: 1.0             # never roll out: the coda is frozen, only the thinker learns
+
+wandb:
+  name: tul-code-thinker

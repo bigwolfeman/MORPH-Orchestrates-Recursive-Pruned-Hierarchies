@@ -20,7 +20,8 @@ from morph.model.tul_code import (code_rmsnorm, code_target_valid, code_thinker_
                                   euler_sample)
 
 CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke",
-                "tul_code_rollout1", "tul_code_renorm", "tul_code_cfg", "tul_code_jepa"]
+                "tul_code_rollout1", "tul_code_renorm", "tul_code_cfg", "tul_code_jepa",
+                "tul_code_thinker"]
 
 
 def _model(seed: int = 3, code: bool = True, **kw) -> MORPHTransformer:
@@ -298,7 +299,7 @@ def test_c10_the_code_arms_compose_and_build_and_run(name, monkeypatch):
     tc = rt.model_cfg
     assert tc.code and tc.tg_geometry == "strict" and not tc.spandec
     assert tc.code_seed_detach == name.endswith("_seeddetach")
-    assert tc.code_phase3_at == (1.0 if name.endswith("_nophase3") else 0.5)
+    assert tc.code_phase3_at == (1.0 if name.endswith(("_nophase3", "_thinker")) else 0.5)
     assert not bool(cfg.model.use_kernels)
     torch.manual_seed(7)
     m = MORPHTransformer(_tiny(tul=tc)).eval().float()
@@ -542,3 +543,31 @@ def test_target_lambda_lets_the_flow_loss_reach_the_encoder_only_when_set(lam):
     g1, g2 = _grads(m, x, y, lay, 1), _grads(m, x, y, lay, 2)
     reached = any(not torch.equal(g1[n], g2[n]) for n in g1 if n.startswith("tul_code_enc."))
     assert reached == (lam > 0.0), (lam, reached)
+
+
+# ── training.train_only: the thinker-only regime ─────────────────────────────
+
+def test_train_only_freezes_everything_but_the_thinker_and_the_flow_loss_still_learns():
+    from morph.training.freeze import apply_train_only
+    x, y, lay, _ = _batch()
+    m = _model()
+    _arm_head(m)
+    n_pre, n_core = m.cfg.n_prelude, m.cfg.n_core
+    prefixes = ["core.", "injection.", "tul_code_head.", "tul_code_time.", "tul_code_cell",
+                "tul_code_clean"] + [f"x0_injects.{i}." for i in range(n_pre, n_pre + n_core)]
+    n_t, n_f, groups = apply_train_only(m, prefixes)
+    assert n_t > 0 and n_f > n_t
+    for name, p in m.named_parameters():
+        assert p.requires_grad == name.startswith(tuple(prefixes)), name
+        if name.startswith(("prelude.", "coda.", "embed", "tul_code_enc.", "tul.", "lm_mixer",
+                            "final_norm", "value_embed", "input_norm")):
+            assert not p.requires_grad, f"{name} must be frozen in the thinker-only regime"
+    assert any(k.startswith("core.0") for k in groups) and any(k.startswith("tul_code_head") for k in groups)
+    g = _grads(m, x, y, lay, 2)                                 # phase 2: flow loss on
+    assert all(g[n] is not None for n, p in m.named_parameters() if p.requires_grad
+               and n.startswith(("core.", "tul_code_head."))), "the thinker got no gradient"
+    assert all(g[n] is None for n, p in m.named_parameters() if not p.requires_grad)
+    with pytest.raises(ValueError, match="matched no parameter"):
+        apply_train_only(_model(), ["nothing_here."])
+    with pytest.raises(ValueError, match="EVERY"):
+        apply_train_only(_model(), [""])

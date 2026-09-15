@@ -2241,6 +2241,16 @@ def main(cfg: DictConfig) -> None:
         settings=wandb.Settings(_service_wait=60),
     )
 
+    # ── training.train_only: freeze everything outside the listed prefixes (before the
+    # optimizer is built, which skips parameters that need no gradient) ────────────────
+    _train_only = list(getattr(cfg.training, "train_only", None) or [])
+    if _train_only:
+        from morph.training.freeze import apply_train_only
+        _nt, _nf, _groups = apply_train_only(model, _train_only)
+        print(f"  [train_only] {_nt/1e6:.1f}M trainable / {_nf/1e6:.1f}M frozen; trainable groups: "
+              + ", ".join(f"{k}({v/1e6:.2f}M)" for k, v in _groups.items()), flush=True)
+        full_config_dict["train_only_groups"] = dict(_groups)
+
     # ── Optimizer + LR schedule ───────────────────────────────────────────
     optimizer = create_optimizer(model, cfg)
     lr_fn = create_lr_schedule(cfg)

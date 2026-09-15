@@ -564,6 +564,11 @@ training:
   # faithful "like nothing happened" resume is NOT wanted — both arms start identical, no stale
   # slow-EMA confound. Default false = faithful full resume (optimizer state restored + replay).
   resume_fresh_optimizer: false
+  # train_only — parameter-name prefixes that stay trainable; everything else is frozen
+  # before the optimizer is built (morph/training/freeze.py). [] = train everything. The
+  # TUL-Code thinker-only regime lists the core body, its injection terms and the code
+  # head/time/markers (morph/configs/tul_code_thinker.yaml).
+  train_only: []
 
 # Routing — whole-body ReMoE (prelude+core+coda). ALWAYS ON in the hotpath.
 # route_start = training-phase schedule: routing code activates at this step.
