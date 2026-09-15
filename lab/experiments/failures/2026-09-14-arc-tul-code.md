@@ -1,6 +1,6 @@
 # Planned: TUL-Code — the slot holds a ground-truth code of the span it precedes, and the core body samples it
 
-Status: planned
+Status: failure
 
 Date: 2026-09-14 (frozen before any code exists; this file is committed before the contracts
 are written and before any GPU step). Arc:
@@ -177,4 +177,80 @@ Not verified:
 
 ## Results
 
-(Empty until the runs finish.)
+Filed 2026-09-14 (all three arms at 5k, one seed each; ruler = `slot-spandec-strict` 5k;
+paired on 501,106 shared tokens, `paired_vs_strict_ruler_5000.json`; artifacts in
+`lab/experiments/results/2026-09-14-arc-tul-code/`).
+
+| arm | rate tok/s | `ce_tf` (encoder code) | `ce_k1` | `ce_k16` | code gap | eff. rank | paired `ce_k1` − ruler | zero / shuffle cost |
+|---|---|---|---|---|---|---|---|---|
+| tul-code | 33.1k | 0.57 | 5.05 | 5.07 | 4.5 | 42 | +0.705 [+0.702, +0.709] | -0.0109 / -0.003 |
+| tul-code-seeddetach | 28.8k | 0.53 | 5.02 | 5.02 | 4.5 | 40 | +0.675 [+0.671, +0.678] | 0.0057 / -0.0014 |
+| tul-code-nophase3 | 29.6k | 0.40 | 11.78 | 12.36 | 11.7 | 63 | +7.435 [+7.418, +7.451] | -7.2415 / -0.1951 |
+
+The ruler runs at 10.4k tok/s. Sampled-code CE with the ENCODER code on every past slot
+(`ce_k1`, the sampled mode) is 0.68–0.71 nats behind the ruler on the shared tokens; with
+the encoder code on the open slot too (`ce_tf`) it is 3.8 nats below it — that number is
+the reconstruction ceiling, not an LM reading.
+
+Flow ratio (nophase3, the only arm with the logging): 1.00 at the phase-2 switch, 0.33 at
+5k (bands t<.25 / .25–.5 / .5–.75 / >.75 = 0.49 / 0.32 / 0.22 / 0.27; a content-blind
+linear field on an isotropic code reaches 0.64 / 0.93 / 0.93 / 0.65). Still falling at 5k.
+
+`code_subspace_probe` (Spark, 4900 slots, both checkpoints): the code has no tail —
+cumulative variance 0.99 at rank 128 of 1024 per cell, 1.00 at 256 — and `ce_tf` from the
+top 128 components alone equals the full value. The thinker's sample sits at 1.7–1.9 times
+the code's own variance from the true code in EVERY subspace (a conditional-mean predictor
+reads ≤ 1.0, an uncorrelated draw 2.0): the sample is close to an unconditional draw.
+
+`code_span_samples` (10 cuts, `code_span_samples_*_5000.txt`): with the true code in the
+cells the coda writes the span back near-verbatim (5/10 exact); the thinker's samples are
+newswire-register sentences of the right shape with no topic thread (0/10), where the
+ruler's slot loop keeps a thread in about 5/10 on the same cuts and seeds.
+
+Trainer defects found during the panel, fixed at 19535fe / 2c61b89 / 182c6a7: the flow
+statistics were never forwarded to wandb (train whitelist), the flow term sat inside
+train/loss on the train side, the `tul/` loop lacked the keys. `tul-code` and
+`tul-code-seeddetach` ran before the fix and have no flow-ratio trace.
+
+## Verdict
+
+- P-1: PARTIAL. `ce_tf` 3.8 below the ruler and rank 42 pass; the shuffle cost is ≈ 0,
+  because shuffling a SAMPLE against another sample costs nothing — the prediction assumed
+  the sampled code would carry span identity. Failed as written.
+- P-2: FAILED. `ce_k1 − ce_k8` ≈ −0.01 (wrong sign); the K-curve is flat. The flow ratio
+  half (< 0.9) holds on nophase3 (0.33).
+- P-3: FAILED. Gap 4.5, predicted [0.05, 0.35].
+- P-4, P-5, P-6: deferred (no 20k run) and moot at 5k: every sampled reading is behind
+  the ruler.
+- P-7: HELD. seeddetach within 0.04 of tul-code (sampled), sweeps identical.
+- P-8: HELD. 2.8–3.2× the ruler's rate.
+- P-9: HELD. No collapse (rank 40–63, pairwise cos ≤ 0.10).
+
+Verdict: the 5k PREDICTIONS failed (P-2, P-3, and P-1's shuffle half); the DESIGN is not
+judged by this panel. The design does what the spec says — E defines a code by
+reconstruction and the coda reads it back — and one sample of that code costs the coda
+0.7 nats against the deterministic slot loop at 5k. Whether that is the target (a verbatim
+copy of an uncertain sentence) or the horizon (a flow model learns the marginal before the
+conditioning, and this thinker's loss was still falling at 5k, with band-0 showing
+conditioning under way) the 5k readings cannot separate. Wolfe, 2026-09-14: "much better
+than it looks, it is just undertrained" — the token path continues cleanly through the
+cut ("conf" → "ident", "sh" → "ots") on every arm.
+
+## Updated hypothesis
+
+The code's content is entirely in the L2-visible head, so the flow loss is not the
+problem. About a quarter of the code's variance is predictable from context (band-0 ratio
+0.49 vs the 0.64 blind floor); the sample shows less than that and drops the topic the
+ruler keeps. Two things follow. (1) The coda must be trained on the EVAL distribution:
+`code_rollout_p: 1.0` in phase 3 freezes E (its only gradient is the teacher-forced CE)
+and lets the coda learn how much of a guess to trust and to lean on the past codes — the
+LaDiR stage-2 shape; expected to return the arm to the ruler, not below it. (2) Getting
+below the ruler needs a code defined by what the past determines about the span, not a
+copy of the span — a different object from the LaDiR latent, to be specified before any
+further arm. Generation quality, not one-sample CE, is where a sampled code can win, and
+it was not scored beyond ten cuts. (3) One-sample CE is the wrong likelihood for a
+latent-variable LM: the next instrument is the K-sample marginal, log of the mean over K
+sampled codes of the span's likelihood under the coda — a lower bound on the true
+log-likelihood — read against the ruler's CE. (4) The 20k pair from the original Method
+(tul-code and the ruler twin) plus a `code_rollout_p: 1.0` twin is the next panel, once
+(3) exists.
