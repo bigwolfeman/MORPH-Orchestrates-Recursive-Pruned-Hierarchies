@@ -165,12 +165,9 @@ def evaluate(
                         # WHICH span `spandec_ce` grades (tul.spandec_target_offset). 1 on
                         # every arm before that key; at k > 1 the column is a CE over span
                         # s+k and is NOT comparable with an offset-1 arm's.
-                        "spandec_target_offset",
-                        # TUL-Code: the flow term and its null-floor ratio per t band
-                        # (docs/tul-code-spec.md §8; `code_fm_rel` < 1 means the velocity
-                        # field beats predicting zero). Absent on every other arm.
-                        "code_fm", "code_fm_rel", "code_fm_band0_rel", "code_fm_band1_rel",
-                        "code_fm_band2_rel", "code_fm_band3_rel"):
+                        "spandec_target_offset"):
+                # (TUL-Code's flow statistics are TRAIN-side only: the eval forward runs
+                # the sampler, not the flow term. Read train/code_fm_rel and tul/code_fm_*.)
                 if _mk in out:
                     acc.setdefault(f"val/{_mk}", []).append(float(out[_mk]))
             if "ce_tokens_no_slots" in out:
