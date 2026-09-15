@@ -39,6 +39,19 @@ def main() -> None:
         raise SystemExit("slot_state_probe needs a SLOT-LOOP model (tokens_through_core false)")
     model, step = load_ckpt(cfg, path, "cuda", tul_rt.model_cfg)
     model.eval()
+    if getattr(model, "tul_code_enc", None) is not None:
+        # TUL-Code (docs/tul-code-spec.md): no slot loop runs and `prefix_project` is never
+        # called, so there is no per-depth written state to capture. The code's rank and
+        # cosine are `val/code_eff_rank` / `val/code_pairwise_cos` in the trainer's eval
+        # and the K-curve is core_depth_sweep.py (depth = sampler steps, 0 = the encoder).
+        print(f"{label} is a TUL-Code model: slot_state_probe does not apply "
+              f"(no slot loop; see val/code_eff_rank and the sweep's ce_0)", flush=True)
+        if a.out:
+            import json
+            with open(a.out, "w") as f:
+                json.dump({"label": label, "step": step, "skipped": "tul.code model: no "
+                           "slot loop, no per-depth state; see val/code_eff_rank"}, f)
+        return
     loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8,
                                split="validation", skip_samples=0, bag_size=0, tul=None)
     row_tokens = tul_rt.data_cfg.spec_for(cfg.data.seq_len).l_total + 1

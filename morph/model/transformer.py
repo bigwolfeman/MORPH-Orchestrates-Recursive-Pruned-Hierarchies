@@ -4916,7 +4916,9 @@ class MORPHTransformer(nn.Module):
         return tape
 
     def _tul_code_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
-                       code_mode: str | None, code_steps: int | None, plan_mode: str):
+                       code_mode: str | None, code_steps: int | None, plan_mode: str,
+                       code_given: Tensor | None = None,
+                       code_given_mask: Tensor | None = None):
         """The code branch of :meth:`_forward_tul` (spec §4).
 
         Returns ``(xn, cells [B, S, M, C], fm_loss | None, stats, h_slots [B, S, C],
@@ -4988,8 +4990,36 @@ class MORPHTransformer(nn.Module):
                 z_hat = self._tul_code_sample_rolled(ok, e, inj, layout, k, generator=gen)
                 z_coda = z_hat.to(z.dtype)
                 self._code_last_passes = k * S
+            elif mode == "generate":
+                # GENERATION (spec §7, as built): a slot whose next span is complete holds
+                # E's code of that span, re-encoded from the text already written; the OPEN
+                # slot (the span being written, `slot_valid & ~ok`) holds the cells handed
+                # in through `code_given` when the caller has them, else ONE sample at k
+                # steps with the encoded tape as context. The generator caches the sample so
+                # a span is written from one code (morph/inference/tul_generate.py).
+                z_coda = z
+                _open = layout.slot_valid & ~ok
+                if code_given_mask is not None:
+                    if code_given is None or code_given.shape != z.shape \
+                            or code_given_mask.shape != ok.shape:
+                        raise ValueError(
+                            f"code_given {None if code_given is None else tuple(code_given.shape)} / "
+                            f"code_given_mask {tuple(code_given_mask.shape)} must be "
+                            f"[B, S, M, C] = {tuple(z.shape)} and [B, S] = {tuple(ok.shape)}")
+                    _use = code_given_mask & _open
+                    z_coda = torch.where(_use.view(B, S, 1, 1), code_given.to(z.dtype), z_coda)
+                    _open = _open & ~code_given_mask
+                if bool(_open.any()):
+                    z_hat = self._tul_code_sample(z.float(), _open, e, inj, layout, k,
+                                                  generator=None)
+                    z_coda = torch.where(_open.view(B, S, 1, 1), code_rmsnorm(z_hat).to(z.dtype),
+                                         z_coda)
+                    self._code_last_passes = k
             else:
-                raise ValueError(f"code_mode must be encoder|sampled|rolled, got {mode!r}")
+                raise ValueError(
+                    f"code_mode must be encoder|sampled|rolled|generate, got {mode!r}")
+            if mode != "generate" and code_given is not None:
+                raise ValueError("code_given is read under code_mode='generate' only.")
             stats["code_steps"] = float(k if mode != "encoder" else 0)
         cells = self._tul_plan_ablate(z_coda, layout, plan_mode)
         h_slots = cells.mean(dim=2)
@@ -6480,7 +6510,9 @@ class MORPHTransformer(nn.Module):
                      tul_step_mode: str | None = None,
                      slot_depths: Tensor | None = None,
                      code_mode: str | None = None,
-                     code_steps: int | None = None) -> dict:
+                     code_steps: int | None = None,
+                     code_given: Tensor | None = None,
+                     code_given_mask: Tensor | None = None) -> dict:
         """The TUL forward (docs/tul-spec.md §3). One shared position axis.
 
         ``code_mode`` / ``code_steps`` (TUL-Code, eval only): which cells the coda reads —
@@ -6525,8 +6557,10 @@ class MORPHTransformer(nn.Module):
                 raise NotImplementedError(
                     "plan_mode='wrong_seed' on a code model: the seed feeds the thinker, not "
                     "the cells, so the reading would mean something else (spec §8).")
-        elif code_mode is not None or code_steps is not None:
-            raise ValueError("code_mode / code_steps need a model built with tul.code=true.")
+        elif code_mode is not None or code_steps is not None or code_given is not None:
+            raise ValueError("code_mode / code_steps / code_given need a model built with "
+                             "tul.code=true.")
+        _code_cells_out = None
         if slot_depths is not None:
             # The SAME rule tul_step_mode='db1' states above: every branch of this forward
             # that never reaches `_tul_core` would ignore the table in silence, so each is
@@ -6748,7 +6782,8 @@ class MORPHTransformer(nn.Module):
             fm_y = fm_geom = fm_ctx = None
             xn, _cells, code_fm_loss, code_stats, h_slots, depths = self._tul_code_core(
                 x, x0, bigram_emb, layout, code_mode=code_mode, code_steps=code_steps,
-                plan_mode=plan_mode)
+                plan_mode=plan_mode, code_given=code_given, code_given_mask=code_given_mask)
+            _code_cells_out = _cells
             g_traj = db_traj = gain_reg = mep_keep = None
             mux_loss, sigreg_loss, mux_stats = None, None, {}
             spandec_loss, spandec_stats, _egrad_src = None, {}, None
@@ -7500,6 +7535,10 @@ class MORPHTransformer(nn.Module):
                 out["gate_k"] = budget_ids
         out["layer_passes"] = self._tul_layer_passes(layout, depths, coda_positions)
         out["n_tokens"] = (~layout.slot_mask).sum()
+        if _code_cells_out is not None and not self.training:
+            # TUL-Code: the cells the coda read, ``[B, S, M, C]`` — the generator caches
+            # the open span's sampled cells from here (spec §7).
+            out["code_cells"] = _code_cells_out.detach()
         return out
 
     @staticmethod
@@ -8384,13 +8423,26 @@ class MORPHTransformer(nn.Module):
                 bag_size: int = 0, seq_lens: Tensor | None = None,
                 slot_layout: SlotLayout | None = None,
                 tul_step_mode: str | None = None,
-                slot_depths: Tensor | None = None) -> dict:
+                slot_depths: Tensor | None = None,
+                code_mode: str | None = None, code_steps: int | None = None,
+                code_given: Tensor | None = None,
+                code_given_mask: Tensor | None = None) -> dict:
         """``slot_depths`` ``[B, max_slots]``: the EVAL-ONLY per-slot depth table, the
         ``slot_layout`` pattern — ``None`` is bit-identical to before it existed. See
-        :meth:`_slot_depth_override`."""
+        :meth:`_slot_depth_override`.
+
+        ``code_*`` (TUL-Code, eval only; docs/tul-code-spec.md §7): ``code_mode``
+        "encoder" | "sampled" | "rolled" | "generate", ``code_steps`` the sampler's k,
+        and under "generate" ``code_given`` ``[B, S, M, C]`` + ``code_given_mask``
+        ``[B, S]`` hand the forward already-sampled cells (the generator's cache for the
+        open span) so a span is written from ONE sample. ``None`` everywhere is the
+        shipped path."""
         return self._forward_single(input_ids, labels, bag_size, seq_lens, slot_layout,
                                     tul_step_mode=tul_step_mode,
-                                    _slot_depths=slot_depths)
+                                    _slot_depths=slot_depths,
+                                    _code_mode=code_mode, _code_steps=code_steps,
+                                    _code_given=code_given,
+                                    _code_given_mask=code_given_mask)
 
     def tul_forward_with_plan_nats(self, input_ids: Tensor, labels: Tensor,
                                    slot_layout: SlotLayout) -> dict:
@@ -8425,7 +8477,9 @@ class MORPHTransformer(nn.Module):
                         tul_step_mode: str | None = None,
                         _slot_depths: Tensor | None = None,
                         _code_mode: str | None = None,
-                        _code_steps: int | None = None) -> dict:
+                        _code_steps: int | None = None,
+                        _code_given: Tensor | None = None,
+                        _code_given_mask: Tensor | None = None) -> dict:
         if self._span_mask and slot_layout is not None:
             raise NotImplementedError(
                 "model.span_mask with a slot_layout: the TUL forward is a different "
@@ -8442,7 +8496,9 @@ class MORPHTransformer(nn.Module):
                                      halt=_halt, plan_mode=_plan_mode,
                                      tul_step_mode=tul_step_mode,
                                      slot_depths=_slot_depths,
-                                     code_mode=_code_mode, code_steps=_code_steps)
+                                     code_mode=_code_mode, code_steps=_code_steps,
+                                     code_given=_code_given,
+                                     code_given_mask=_code_given_mask)
         if _slot_depths is not None:
             raise ValueError(
                 "slot_depths requires slot_layout: it forces the depth of the SLOT loop, "

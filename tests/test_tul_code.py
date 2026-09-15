@@ -333,3 +333,42 @@ def test_eval_modes_and_refusals():
         m.tul_forward_ablated(x, y, lay, code_mode="encoder")
     probe = m.eval().tul_slot_state_probe(x, lay)
     assert probe["code_eff_rank"] == probe["slot_eff_rank"] > 1.0
+
+
+# ── generation: one sample per span, re-encoded past ─────────────────────────
+
+def test_generation_writes_a_span_from_one_sample_and_reencodes_the_past():
+    from test_tul_gl1 import _rule, _spec
+    from morph.inference.tul_generate import generate_tul, generate_tul_batch
+    m = _model().eval()
+    _arm_head(m)
+    rule, spec = _rule(), _spec()
+    prompt = [5, 6, 7, 8, 10, 5, 6, 7, 8, 9]                # a boundary (DOT) inside
+    seen: list[torch.Tensor] = []
+    real_forward = m.forward
+
+    def spy(*a, **kw):
+        out = real_forward(*a, **kw)
+        if "code_cells" in out:
+            s_open = kw["slot_layout"].slot_valid[0].sum().item() - 1
+            seen.append((int(s_open), out["code_cells"][0, s_open].clone()))
+        return out
+    m.forward = spy
+    toks, builder = generate_tul(m, prompt, rule, spec, max_new_tokens=14, temperature=1.0,
+                                 seed=0, emit_source="token")
+    m.forward = real_forward
+    assert len(toks) == 14
+    # within one open span the cells the coda read are IDENTICAL across steps (the cache),
+    # and they differ across spans
+    by_slot: dict[int, list[torch.Tensor]] = {}
+    for s, c in seen:
+        by_slot.setdefault(s, []).append(c)
+    assert any(len(v) > 1 for v in by_slot.values()), "no span lasted two steps"
+    for s, cs in by_slot.items():
+        for c in cs[1:]:
+            assert torch.equal(cs[0], c), f"slot {s}: the open span's cells changed mid-span"
+    slots = sorted(by_slot)
+    if len(slots) > 1:
+        assert not torch.equal(by_slot[slots[0]][0], by_slot[slots[1]][0])
+    with pytest.raises(NotImplementedError, match="generate_tul_batch"):
+        generate_tul_batch(m, [prompt, prompt], rule, spec, max_new_tokens=2)

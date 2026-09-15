@@ -168,13 +168,38 @@ def generate_tul(
         builder.append(int(t))
 
     emitted: list[int] = []
+    # TUL-Code (docs/tul-code-spec.md §7): the whole row is recomputed every step, so the
+    # OPEN span's sampled cells are cached here and handed back through `code_given`, or
+    # every token would be written from a fresh draw. Slots whose span is complete hold
+    # E's code of the text already written (re-encoded), so only the open slot is a
+    # sample. The cache is dropped when a boundary fires (a new open span).
+    _code = getattr(model, "tul_code_enc", None) is not None
+    if _code and halt:
+        raise NotImplementedError("halt with a TUL-Code model: no slot loop to halt.")
+    code_cache: Tensor | None = None
+    code_cache_slot: int = -1
     try:
         for _ in range(max_new_tokens):
             ids, layout = builder.tensors(device)
             # `halt` = arm TUL-halt (docs/tul-gate-spec.md §7/§8): each slot loops until
             # the gate asks for a token instead of running the fixed mean depth.
-            res = (model.tul_forward_halt(ids, None, layout) if halt
-                   else model(ids, slot_layout=layout))
+            if _code:
+                S = spec.max_slots
+                M, C = spec.prefix_k, model.cfg.d_model
+                given = torch.zeros(1, S, M, C, device=device, dtype=torch.float32)
+                gmask = torch.zeros(1, S, dtype=torch.bool, device=device)
+                s_open = builder.n_slots - 1
+                if code_cache is not None and code_cache_slot == s_open and s_open >= 0:
+                    given[0, s_open] = code_cache
+                    gmask[0, s_open] = True
+                res = model(ids, slot_layout=layout, code_mode="generate",
+                            code_given=given, code_given_mask=gmask)
+                if s_open >= 0 and code_cache is None:
+                    code_cache = res["code_cells"][0, s_open].float().clone()
+                    code_cache_slot = s_open
+            else:
+                res = (model.tul_forward_halt(ids, None, layout) if halt
+                       else model(ids, slot_layout=layout))
             # Row ends with the K slot positions exactly when the last append cut a
             # boundary; `emit_source="token"` then reads the last TOKEN position.
             back = (1 + spec.prefix_k
@@ -188,7 +213,8 @@ def generate_tul(
             # ONE sampling step for both generators — see morph/inference/sampling.py.
             nxt = sample_next(logits, temperature, top_k, gen)
             emitted.append(nxt)
-            builder.append(nxt)
+            if builder.append(nxt):
+                code_cache, code_cache_slot = None, -1      # a boundary fired: new open span
     finally:
         if was_training:
             model.train()
@@ -212,6 +238,9 @@ def generate_tul_batch(
 ) -> tuple[list[list[int]], list[TulRowBuilder]]:
     """`generate_tul` for B rows at once. Returns (new tokens per row, builders).
 
+    A TUL-Code model is refused here (its cache lives in the single-row generator; this
+    batched form is exercised by the parity tests only).
+
     Same motivation and same ragged contract as `plain_generate.generate_plain_batch`,
     with one extra source of raggedness that is specific to TUL: rows insert slots at
     their own boundaries, so two rows that started at the same length are different
@@ -231,6 +260,10 @@ def generate_tul_batch(
     device = device or next(model.parameters()).device
     if not prompts or any(len(p) == 0 for p in prompts):
         raise ValueError("generate_tul_batch needs a non-empty prompt per row")
+    if getattr(model, "tul_code_enc", None) is not None:
+        raise NotImplementedError(
+            "generate_tul_batch with a TUL-Code model: use generate_tul (the open span's "
+            "sampled cells are cached per row there).")
     B = len(prompts)
     if seeds is not None and len(seeds) != B:
         raise ValueError(f"seeds must have one entry per row, got {len(seeds)} for {B}")

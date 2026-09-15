@@ -81,7 +81,8 @@ MUX_METRICS = {"mux_local": ("mux_local", "mux_n_supervised"),
 
 @torch.no_grad()
 def ce_maps(model, inp, layout, labels, device, step_mode=None,
-            want_mux: bool = False) -> tuple[torch.Tensor, dict[str, float]]:
+            want_mux: bool = False, code_mode: str | None = None,
+            code_steps: int | None = None) -> tuple[torch.Tensor, dict[str, float]]:
     """Per-position CE map ``[B, L]`` and, when asked, the forward's mux stats.
 
     The CE map comes from the label-free forward (full logits). The mux stats only
@@ -94,7 +95,8 @@ def ce_maps(model, inp, layout, labels, device, step_mode=None,
             res = model(inp.to(device), labels=None)
         else:
             res = model.tul_forward_ablated(inp.to(device), None, layout, plan_mode="normal",
-                                            tul_step_mode=step_mode)
+                                            tul_step_mode=step_mode, code_mode=code_mode,
+                                            code_steps=code_steps)
     logits = res["logits"].float()
     B, L, V = logits.shape
     lab = labels.to(device).clone()
@@ -217,6 +219,21 @@ def main() -> None:
                   and a.eval_mode == "auto")
         _step_mode = "bptt" if a.eval_mode == "force-loop" else None
         orig_ladder = 0 if plain else int(getattr(tc, "db1_ladder_steps", 0))
+        # TUL-Code (docs/tul-code-spec.md §8): no slot loop runs, so "depth" d is the
+        # SAMPLER's Euler step count k (the K-curve `ce_k{K}`), and d = 0 is the encoder's
+        # own codes in the cells — `ce_tf`, the ceiling, NOT an LM number. 0 is always
+        # scored on a code model whatever the depth list says, so the paired sweep carries
+        # the ceiling on the same rows; the npz keys stay `ce_{d}` so span_budget_profile
+        # reads them unchanged. No config knob is touched.
+        _code = (not plain) and getattr(model, "tul_code_enc", None) is not None
+        if _code:
+            _step_mode = None
+            arm["code"] = True
+            arm["code_infer_steps"] = int(tc.code_infer_steps)
+            if 0 not in depths:
+                depths = [0] + list(depths)
+        else:
+            arm["code"] = False
         # the stream index of every scored position, in row order (one array; the same
         # order the per-token CE arrays below use)
         tok_index = np.concatenate([idx[tokpos].numpy() for tokpos, _, idx in masks]).astype(np.int32)
@@ -228,7 +245,9 @@ def main() -> None:
         mux_cnt: dict[str, np.ndarray | None] = {m: None for m in MUX_METRICS}
         try:
             for d in depths:
-                if plain or paid:
+                if _code:
+                    _cm, _cs = ("encoder", None) if d == 0 else ("sampled", int(d))
+                elif plain or paid:
                     # the plain forward's eval depth is a uniform cfg.mean_depth fill with
                     # no clamp at eval (transformer.py, the `else` of `if self.training`);
                     # the paid loop runs the same _core_region and reads the same knob
@@ -251,7 +270,9 @@ def main() -> None:
                 ces: list[np.ndarray] = []
                 for (inp, labels, layout), (tokpos, first, _) in zip(batches, masks):
                     ce, stats = ce_maps(model, inp, layout, labels, device,
-                                        step_mode=_step_mode, want_mux=has_mux)
+                                        step_mode=_step_mode, want_mux=has_mux,
+                                        code_mode=_cm if _code else None,
+                                        code_steps=_cs if _code else None)
                     ce = ce.cpu()
                     ces.append(ce[tokpos].numpy().astype(np.float32))
                     tot += float(ce[tokpos].sum())
@@ -285,7 +306,9 @@ def main() -> None:
                       + "".join(f"  {m}={entry[m]:.4f}" for m in MUX_METRICS if m in entry),
                       flush=True)
         finally:
-            if plain or paid:
+            if _code:
+                pass                                   # nothing was mutated
+            elif plain or paid:
                 model.cfg.mean_depth = orig_mean
             else:
                 tc.slot_mean_depth = orig_mean
