@@ -1,0 +1,82 @@
+tul-code-20k step 20000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+ORACLE   '\\n\\nThe police said the incident was not a "no-fashioned" and that the police had been "a little bit of a man who had been killed.\\n'
+GREEDY   '\\n\\nThe police said the incident was not in the case.\\n\\nThe police said the incident was not in the case.\\n\\nThe police said the incident was not'
+SAMPLE1  '\\n\\nThe arrest of a group of police officers, the court at Moscow, said in an interview with the Lady Grand Russian criminal activity'
+SAMPLE2  '\\n\\nShe said the woman had been “a more credible thing,” as she said, “a reason for a time when people were inedible.”\\n\\nThe attack comes a'
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+ORACLE   '\\nA 7.5 million in 20'
+GREEDY   '\\n"I\'m not sure what I\'m doing,'
+SAMPLE1  '\\nOne of the most influential reasons.\\n\\n'
+SAMPLE2  "\\n\\nShe said the woman's death also could provide"
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+ORACLE   'ident that our campaign is on a path to win the nomination," Sanders said.\\n\\n"I think we'
+GREEDY   'ident Obama.\\n\\n“I think we are going to be a good job of getting a lot of people in'
+SAMPLE1  'ident Obama, which has not only a few people say those who are not at least allowed to have no credibility'
+SAMPLE2  "idential elections, like Nigel Rachel Coo's 100 million campaign, and the first"
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+ORACLE   ' to the 2012 election.\\n\\n“I think the president is a great deal of political and economic and econom'
+GREEDY   ' to the Russian-American.\\n\\n“I think the president is a great deal of political and economic and economic and'
+SAMPLE1  ' to see more of the civil rights.\\n\\n“I’ll be at least a long time since 1967,” Tr'
+SAMPLE2  " to see the country like Nigel Rachel Coo's side in the middle of the year.\\n\\n“The government should be"
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+ORACLE   '\\n\\nThe fact that the people who are not in the world is that they are not the only thing that they are in the world.\\n\\nThe fact that the people who are not'
+GREEDY   '\\n\\nThe fact that the American people are not going to be a great deal of time, but it is not a good thing.\\n\\nThe fact that the people who are not going'
+SAMPLE1  '\\n\\nFor all the reasons why we can imagine how our new book will be at the time, we will be trying to bring the new things and all of our family. To make this'
+SAMPLE2  '\\n\\nBut that\'s not a real thing.\\n\\n"I have ever seen the reason for this reason. You know, I\'m not going to be in the same way. It'
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+ORACLE   'The fact that the government is not a "no-fashioned" or "no" or "no'
+GREEDY   'The fact that the government is not a "no-fashioned" or "no" or "no'
+SAMPLE1  "Some of the federal government's most prominent lawyer and director of an international law and a candidate."
+SAMPLE2  'The National Convention of Nations and Women of Independence (1976-74'
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+ORACLE   ' taken to the ground.\\n\\nThe 19th century, the 19th century, was a 19th cent'
+GREEDY   ' taken to the ground.\\n\\nThe 19th century, the 19th century, was a 19th cent'
+SAMPLE1  ' closed.\\n\\n“The world is very important,” said Eckford, an executive officer. “So the talents do not'
+SAMPLE2  ' placed.\\n\\n“In the 2000s, we started a little bit of a lot of a time when the car was a'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+ORACLE   'The 2016 NHL season,'
+GREEDY   'The 2012-12-'
+SAMPLE1  'Share.\\n\\nThe Senate, which has'
+SAMPLE2  'The following was that the NSC’s team'
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+ORACLE   '\\n\\n“I’m not sure if I’m not'
+GREEDY   '\\n\\n“I’m not sure if I’m not'
+SAMPLE1  '\\n\\n“What you have not wanted to make this decision was'
+SAMPLE2  '\\n\\nBut that’s a real thing to do, especially'
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+ORACLE   'ots.\\n\\n“I think we’ve got a lot of people in the world and we’re going to have to go back to the world,” he said.\\n\\n“'
+GREEDY   'ots.\\n\\n“I think we’ve got a lot of people in the world and we’re going to have to make sure that we’re going to be a lot of'
+SAMPLE1  'ots.\\n\\n“I think we can make it a matter of time to go, and that’s not a big point to the people who are going to see the team who has'
+SAMPLE2  'aking.\\n\\n“In the 2001 debate, the Iranian-American student was awarded the government to the fifth-fifth of the federal'
+
