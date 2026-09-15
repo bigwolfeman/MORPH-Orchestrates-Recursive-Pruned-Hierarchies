@@ -272,10 +272,14 @@ Instrument (3) ran on the tul-code 5k checkpoint on the Spark
 
 marginal(k=16) − marginal(k=1) = −0.004 [−0.006, −0.003], paired bootstrap over 32 batches.
 
-Reading. The bound is real but nearly empty: eight draws could beat one draw by up to
-log 8 = 2.08 nats and beat it by 0.002 at k = 1 and 0.022 at k = 16. Every sampled code is
-about equally wrong to the coda, which is the subspace result (sample ≈ unconditional
-draw) seen through the likelihood. More Euler steps spread the draws (the single-draw mean
+Reading. The marginal is at most log 8 = 2.08 nats better than the BEST of the eight
+draws, and better than the MEAN single draw by an amount set only by the spread of the
+draws' likelihoods (a Jensen gap, unbounded). Here it beats the mean single draw by 0.002
+at k = 1 and 0.022 at k = 16: the eight draws are near-interchangeable to the coda, which
+is the subspace result (sample ≈ unconditional draw) seen through the likelihood.
+(Corrected 2026-09-15 02:20: an earlier wording called log 8 the cap on that gap; it is
+the cap against the best draw, not the mean. The 20k arm's phase-2 trace shows gaps of
+2.5–3 nats, which a log-8 cap would forbid.) More Euler steps spread the draws (the single-draw mean
 worsens by 0.015 from k = 1 to 16 while the best of them improve), so the sampler does
 make different codes at higher k; the coda just does not find a better one among them.
 The inference-depth signal under the right metric is −0.004 nats at 5k: present, and

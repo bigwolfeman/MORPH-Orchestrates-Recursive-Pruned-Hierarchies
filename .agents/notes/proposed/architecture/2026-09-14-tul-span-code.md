@@ -148,6 +148,6 @@ all-slots-rollout arm (`code_rollout_p: 1.0`, expected to return to the ruler) a
 code defined by what the past determines rather than a copy of the span.
 
 Addendum 2026-09-15: the K-sample marginal (8 draws) on the same checkpoint beats one draw
-by 0.002 nats at k = 1 and 0.022 at k = 16 (cap log 8 = 2.08), and moves −0.004 nats from
+by 0.002 nats at k = 1 and 0.022 at k = 16 (a Jensen gap set by the spread of the draws; the log 8 cap is against the best draw), and moves −0.004 nats from
 k = 1 to 16. The draws are near-interchangeable to the coda at 5k. Wolfe's call: read this
 probe only on the full-phase 20k arms (the experiment file's addendum has the table).
