@@ -1,0 +1,8 @@
+tul-code-cfg: step 20000, 96 rows, K=8 draws, ks=[1, 2, 4, 8, 16], overrides=[]
+  k=0 (encoder)   ce=0.3278
+  k=1            ce_marginal=4.3795  ce_single_mean=4.3842
+  k=2            ce_marginal=4.3730  ce_single_mean=4.3797
+  k=4            ce_marginal=4.3714  ce_single_mean=4.3837
+  k=8            ce_marginal=4.3730  ce_single_mean=4.3898
+  k=16           ce_marginal=4.3748  ce_single_mean=4.3943
+  marginal k=16 minus k=1: -0.0047 [-0.0070, -0.0024] over 32 batches

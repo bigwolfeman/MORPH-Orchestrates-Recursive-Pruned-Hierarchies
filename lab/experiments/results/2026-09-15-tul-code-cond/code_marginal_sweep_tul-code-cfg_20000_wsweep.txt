@@ -1,0 +1,16 @@
+== w=1.0
+  k=0 (encoder)   ce=0.3278
+  k=1            ce_marginal=4.3820  ce_single_mean=4.3851
+  k=4            ce_marginal=4.3885  ce_single_mean=4.4033
+  k=16           ce_marginal=4.3940  ce_single_mean=4.4170
+  marginal k=16 minus k=1: +0.0120 [+0.0098, +0.0140] over 32 batches
+== w=1.5
+  k=0 (encoder)   ce=0.3278
+  k=1            ce_marginal=4.3775  ce_single_mean=4.3808
+  k=4            ce_marginal=4.3771  ce_single_mean=4.3903
+  k=16           ce_marginal=4.3817  ce_single_mean=4.4026
+  marginal k=16 minus k=1: +0.0042 [+0.0020, +0.0063] over 32 batches
+== w=3.0
+  k=0 (encoder)   ce=0.3278
+  k=1            ce_marginal=4.3863  ce_single_mean=4.3939
+  k=4            ce_marginal=4.3676  ce_single_mean=4.3792

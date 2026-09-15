@@ -1,0 +1,82 @@
+tul-code-cfg step 20000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+ORACLE   "\\n\\nThe report said the U.S. government, and the government's most prominent government, and the government's most prominent government, and the government's most prominent econom"
+GREEDY   '\\n\\n"I\'m not going to be a good thing," he said.\\n\\n"I\'m not going to be a good thing," he said.\\n\\n"I think it'
+SAMPLE1  '\\n\\n\'It\'s a big step. There\'s a matter of time that we do not care about. It\'s a nice big business."\\n\\n\'So we are not working on'
+SAMPLE2  '\\n\\nShe said the Nazis did not provide credibility in his first attempt to force the government to take a tower, and the government will be in the region.\\n\\n'
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+ORACLE   '\\nA 7.\\n\\n"I\'m not'
+GREEDY   '\\n"I think it\'s a good thing," he'
+SAMPLE1  '\\nOne more than two years ago, Mr. E'
+SAMPLE2  '\\n\\nShe said the woman had been arrested'
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+ORACLE   'ident that our campaign is on a path to win the nomination," Sanders said.\\n\\n"I think the'
+GREEDY   'ident Obama’s nominee, and the president’s campaign has been awarded the Democrats'
+SAMPLE1  'ident Obama, and that they could.\\n\\n“Trump has an international, and that’s not a'
+SAMPLE2  'idential elections, like NASA’s Republican presidential nominee.\\n\\n“I remember the first'
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+ORACLE   ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.\\n\\nThe Democrats'
+GREEDY   ' to the Democrats.\\n\\nThe Democrats are not the only Democrats to vote for the Democrats.\\n\\n'
+SAMPLE1  ' to see more foreign.\\n\\nThe Nationals say the Republican Party’s remarks have no impact on the Republican Party’'
+SAMPLE2  '.\\n\\nAnd the Nazis also think that they want to have the right to do with the voters. But the leadership is'
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+ORACLE   '\\n\\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clinton.\\n\\nThe '
+GREEDY   '\\n\\nThe fact that the fact that the fact that the fact that the fact that the fact that the fact that the fact that the fact that the fact that the fact that the fact that'
+SAMPLE1  "\\n\\nNo, I think they are. There are certain issues, and that's what I know.\\n\\nSo what is the problem?\\n\\nThe question of the American people has"
+SAMPLE2  "\\n\\nBut that's not easy to change.\\n\\nThe fact that the person who is not, is that a lot of people are in the world is in the same way. He"
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+ORACLE   '"I think that\'s the best thing to do is that it\'s a good thing. I think that\'s'
+GREEDY   '"I think that\'s what we are doing, and that\'s what we are doing," he said. "'
+SAMPLE1  'Some of the people who are not trying to make it a matter of time, and they also care about.'
+SAMPLE2  "The GOP doesn't want to be an insane, especially in the election of the bill, as well"
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+ORACLE   ' the blame for the first time.\\n\\nThe first one was to be the first to see the game, and the first time the game was'
+GREEDY   ' the scene.\\n\\nThe first one was to be the first to see the glass of the glass, but the glass is a bit'
+SAMPLE1  ' closed.\\n\\n“The rest of the car was a man’s nose at the wooden, and in late April, the clerics'
+SAMPLE2  ' used.\\n\\nThat’s why Ryan’s arm was one of the most excused, and the first to stay out of the world'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+ORACLE   'The 2015-19-'
+GREEDY   'The 2015-19-'
+SAMPLE1  'Some of the federal government’s biggest compet'
+SAMPLE2  'The Gadkian Nakamaw/'
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+ORACLE   '\\n\\nArticle Continued Below\\n\\nThe CEO of the'
+GREEDY   '\\n\\nThe report said the government had not been “unaccept'
+SAMPLE1  '\\n\\n“It’s not possible to make it a matter'
+SAMPLE2  '\\n\\nBut that’s a real change to the Cong'
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+ORACLE   'ots, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without a new deal.\\n\\n'
+GREEDY   'ots, and the city’s homes.\\n\\n“We are not going to be able to get the best in the world,” he said.\\n\\n“We are not going'
+SAMPLE1  'ots in the middle.\\n\\n“This is a big deal for the world and it will be a young age, and he has the chance to have a great deal,” he says.'
+SAMPLE2  'aking.\\n\\n“We’re also planning to start getting in the game and we’ve had the most a placebo, and we’ve played in the same way. He'
+
