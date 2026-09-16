@@ -1,0 +1,20 @@
+# TUL-Code arm "tul-code-lejepa" (2026-09-16): LeJEPA's objective on the code
+# (arXiv 2511.08544). The flow loss's gradient reaches the encoder in FULL
+# (code_target_lambda 1.0: no stop-gradient, the paper's rule) and SIGReg pushes the code
+# cells' distribution to an isotropic Gaussian (the paper's collapse guard, lambda 0.05,
+# 1024 random directions); the coda's CE through the truth cells keeps the code decodable.
+# Against tul-code-jepa (lambda 0.1, rank abort as the only guard: rank 70 -> 19 -> 31,
+# code still a copy). Truth cell renormed. From scratch, the panel settings.
+defaults:
+  - tul_code
+  - _self_
+
+tul:
+  code_noise_renorm: true
+  code_target_lambda: 1.0
+  code_sigreg_lambda: 0.05
+  sigreg_slices: 1024
+  code_rank_abort: 4.0
+
+wandb:
+  name: tul-code-lejepa

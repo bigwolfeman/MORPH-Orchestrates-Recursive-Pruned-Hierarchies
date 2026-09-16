@@ -4995,8 +4995,19 @@ class MORPHTransformer(nn.Module):
         stats: dict = {}
         fm_loss = None
         self._code_last_passes = 0
+        self._code_sigreg_loss = None
         if self.training:
             phase = int(self.code_phase)
+            if tc.code_sigreg_lambda > 0.0:
+                # LeJEPA's collapse guard on the CODE: SIGReg per cell index over the valid
+                # slots (morph/model/sigreg.py). The gradient reaches E through z directly
+                # (not through the detached target), so it acts however code_target_lambda
+                # is set; with lambda 1.0 this is LeJEPA's objective on the code.
+                _zs = z.float()
+                _terms = [sigreg_epps_pulley(_zs[:, :, m][ok], num_slices=tc.sigreg_slices)
+                          for m in range(_zs.shape[2])]
+                self._code_sigreg_loss = torch.stack(_terms).mean()
+                stats["code_sigreg"] = float(self._code_sigreg_loss.detach())
             z_coda = z
             if tc.code_noise > 0.0:
                 z_coda = z_coda + tc.code_noise * torch.randn_like(z_coda)
@@ -7506,6 +7517,13 @@ class MORPHTransformer(nn.Module):
                 _cw = tc.code_fm_weight * code_fm_loss
                 groups["code_fm_weighted"] = _cw.detach()
                 groups["loss"] = groups["loss"] + _cw
+            _csr = getattr(self, "_code_sigreg_loss", None)
+            if _csr is not None:
+                # Same contract: the weighted term is exposed so train.py subtracts it
+                # and train/loss stays the model's CE.
+                _sw = tc.code_sigreg_lambda * _csr
+                groups["code_sigreg_weighted"] = _sw.detach()
+                groups["loss"] = groups["loss"] + _sw
 
         if _vq_out is not None and groups is not None:
             # The discrete thought's two VQ-VAE terms (tul.vq_codes). Same contract as

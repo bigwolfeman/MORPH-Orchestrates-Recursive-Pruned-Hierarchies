@@ -19,7 +19,7 @@ from morph.model.tul import TULConfig
 from morph.model.tul_code import (code_rmsnorm, code_target_valid, code_thinker_relation,
                                   euler_sample)
 
-CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke", "tul_code_xm",
+CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke", "tul_code_xm", "tul_code_lejepa",
                 "tul_code_rollout1", "tul_code_renorm", "tul_code_cfg", "tul_code_jepa",
                 "tul_code_thinker"]
 
@@ -702,3 +702,31 @@ def test_xm_refusals_and_cfm_pair_takes_a_given_seed():
     assert torch.equal(a, z0) and torch.allclose(v, z - z0)
     with pytest.raises(ValueError, match="must match"):
         cfm_pair(z, 1.0, t, z0=z0[:1])
+
+
+# ── LeJEPA on the code (tul.code_sigreg_lambda, spec §9) ────────────────────────────
+def test_code_sigreg_reaches_the_encoder_and_is_subtracted_from_the_reported_loss():
+    """SIGReg on E's code cells: a real term in the loss whose gradient reaches E (through z,
+    not the detached target) and not the thinker; exposed as code_sigreg_weighted so the
+    trainer keeps train/loss on the CE; off by default (bit-identical groups)."""
+    x, y, lay, _ = _batch()
+    m = _model(tul_code_sigreg_lambda=0.05, tul_sigreg_slices=64, tul_code_target_lambda=1.0)
+    m.train(); m.code_phase = 1                      # phase 1: no flow loss, SIGReg alone
+    out = m(x, labels=y, slot_layout=lay)
+    assert "code_sigreg_weighted" in out and float(out["code_sigreg"]) > 0.0
+    assert abs(float(out["code_sigreg_weighted"]) - 0.05 * float(out["code_sigreg"])) < 1e-6, \
+        "the exposed weighted term must be lambda times the raw SIGReg value"
+    # isolate the SIGReg term: its gradient reaches E and nothing else in the code path
+    m2 = _model(tul_code_sigreg_lambda=0.05, tul_sigreg_slices=64, tul_code_target_lambda=1.0)
+    m2.train(); m2.code_phase = 1
+    o2 = m2(x, labels=y, slot_layout=lay)
+    m2._code_sigreg_loss.backward()                # the live term, not the detached stat
+    enc_g = sum(float(p.grad.abs().sum()) for p in m2.tul_code_enc.parameters() if p.grad is not None)
+    thk_g = sum(float(p.grad.abs().sum()) for p in m2.tul_code_head.parameters() if p.grad is not None)
+    assert enc_g > 0.0, "SIGReg on the code did not reach the encoder"
+    assert thk_g == 0.0, "SIGReg on the code must not touch the thinker's head"
+    m0 = _model(); m0.train(); m0.code_phase = 1
+    o0 = m0(x, labels=y, slot_layout=lay)
+    assert "code_sigreg_weighted" not in o0
+    with pytest.raises(ValueError, match="code_sigreg_lambda"):
+        _model(tul_code_sigreg_lambda=-1.0)

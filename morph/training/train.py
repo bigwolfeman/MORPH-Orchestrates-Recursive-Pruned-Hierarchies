@@ -137,7 +137,7 @@ def evaluate(
                           "spandec_pass_weighted", "coda_span_weighted",
                           "core_token_aux_weighted", "critic_weighted",
                           "vq_weighted", "row_contrast_weighted", "horizon_weighted",
-                          "code_fm_weighted"):
+                          "code_fm_weighted", "code_sigreg_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -3335,9 +3335,10 @@ def main(cfg: DictConfig) -> None:
                         "row_contrast_weighted",   # tul.row_contrast_lambda, 2026-09-13
                         "critic_weighted",   # arc E10 / 2026-09-12
                         "horizon_weighted",  # LoopMTP horizon alignment, 2026-09-14
-                        "code_fm_weighted"):  # TUL-Code flow term (the val side already
+                        "code_fm_weighted",   # TUL-Code flow term (the val side already
                                               # subtracts it; the tul-code draw at 2b6b321
                                               # reported CE + flow as train/loss)
+                        "code_sigreg_weighted"):  # LeJEPA SIGReg on the code cells
                 if isinstance(out, dict) and out.get(_ak) is not None:
                     _lv = _lv - float(out[_ak])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
@@ -3385,7 +3386,7 @@ def main(cfg: DictConfig) -> None:
                     # TUL-Code: `code_fm`, `code_fm_weighted`, `code_fm_rel`, the four
                     # t-band ratios and `code_rollout_frac` (phase 3). Scalars by
                     # construction (transformer.py wraps the stats as 0-d tensors).
-                    or _k.startswith("code_fm")
+                    or _k.startswith("code_fm") or _k.startswith("code_sigreg")
                     or _k in ("code_rollout_frac", "code_cfg_drop_frac",
                               "code_xm_score_mean", "code_xm_score_best")}
                    if isinstance(out, dict) else {}),
@@ -3491,6 +3492,7 @@ def main(cfg: DictConfig) -> None:
                            "code_fm_band2_rel", "code_fm_band3_rel", "code_rollout_frac",
                            "code_cfg_drop_frac", "code_phase",
                            "code_xm_score_mean", "code_xm_score_best",
+                           "code_sigreg", "code_sigreg_weighted",
                            "horizon_n_tokens"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())

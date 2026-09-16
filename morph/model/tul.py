@@ -683,6 +683,11 @@ class TULConfig:
                                          # sample; 1 = off (one draw, no selection)
     code_xm_select: str = "l2"           # "l2": nearest to E's code (the paper's squared error);
                                          # "coda": lowest coda CE on the true next span
+    code_sigreg_lambda: float = 0.0      # LeJEPA (arXiv 2511.08544): SIGReg on E's code cells,
+                                         # per cell index over the valid slots, pushing the code
+                                         # distribution to N(0, I) (the collapse guard that lets
+                                         # code_target_lambda go to 1.0 with no stop-gradient);
+                                         # weight of the term in the loss; 0 = off
     # ── THE PER-PASS PLANNING TARGET (arm `slot-spandec-strict-perpass`, 2026-09-12) ──
     #
     # WHAT IT IS. Every pass of the loop gets its own decoder target, and the target grows
@@ -2253,7 +2258,7 @@ class TULConfig:
                   ("code_infer_steps", 8), ("code_seed_detach", False),
                   ("code_marginal_k", 8), ("code_cfg_drop", 0.0), ("code_cfg_scale", 1.0),
                   ("code_target_lambda", 0.0), ("code_rank_abort", 0.0),
-                  ("code_xm_k", 1), ("code_xm_select", "l2"))
+                  ("code_xm_k", 1), ("code_xm_select", "l2"), ("code_sigreg_lambda", 0.0))
         if not self.code:
             _set = [n for n, dflt in _knobs if getattr(self, n) != dflt]
             if _set:
@@ -2296,6 +2301,9 @@ class TULConfig:
             raise ValueError(f"tul.code_rank_abort must be >= 0, got {self.code_rank_abort}")
         if self.code_xm_k < 1:
             raise ValueError(f"tul.code_xm_k must be >= 1, got {self.code_xm_k}")
+        if self.code_sigreg_lambda < 0.0:
+            raise ValueError(
+                f"tul.code_sigreg_lambda must be >= 0, got {self.code_sigreg_lambda}")
         if self.code_xm_select not in ("l2", "coda"):
             raise ValueError(
                 f"tul.code_xm_select must be 'l2' or 'coda', got {self.code_xm_select!r}")

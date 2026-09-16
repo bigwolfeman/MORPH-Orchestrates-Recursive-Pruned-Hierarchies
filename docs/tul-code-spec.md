@@ -383,6 +383,9 @@ tul:
                              # nearest; 1 = off (one draw, no selection)
   code_xm_select: l2         # "l2" (nearest to E's code, the paper) | "coda" (lowest coda CE
                              # on the true next span; K extra no-grad coda passes)
+  code_sigreg_lambda: 0.0    # LeJEPA SIGReg on E's code cells (per cell, valid slots), weight in
+                             # the loss; with code_target_lambda 1.0 this is LeJEPA on the code
+                             # (arXiv 2511.08544: lambda 0.05, sigreg_slices 1024); 0 = off
   code_noise_renorm: false   # rms-renorm the noisy truth cell (RMS 1, like a sampled cell).
                              # false = legacy: truth RMS sqrt(1+noise²); eval's encoder mode
                              # and the generator's tape feed z at that scale (2026-09-15)
