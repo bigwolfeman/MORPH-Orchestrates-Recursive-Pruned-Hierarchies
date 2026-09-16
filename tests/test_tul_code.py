@@ -796,7 +796,9 @@ def test_tape_rollout_hands_the_thinker_its_own_sampled_tape_and_keeps_the_oracl
 def test_tape_rollout_off_is_the_default_path(monkeypatch):
     x, y, lay, _ = _batch()
     m = _model(tul_code_tape_rollout_p=0.0)
-    _arm_head(m); m.train(); m.code_phase = 2
+    _arm_head(m)
+    m.train()
+    m.code_phase = 2
     rec = _xm_capture(m, monkeypatch)
     out = m(x, labels=y, slot_layout=lay)
     assert rec["hat"] == [] and "code_tape_rollout_frac" not in out
