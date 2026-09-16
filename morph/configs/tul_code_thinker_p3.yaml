@@ -1,0 +1,46 @@
+# LCTUL "long phase 2, then unfreeze the coda on samples only" (Wolfe, 2026-09-16):
+# resume the thinker-only checkpoint (E + prelude + coda frozen at the parent's step
+# 10000, the thinker trained 40k more steps on that FIXED target: tul-code-thinker
+# step_50000) and run a phase 3 in which the coda (and the thinker) train while EVERY
+# valid slot hands the coda a sampled code — no ground-truth latents reach the coda.
+# E, the prelude, the slot module and the embeddings stay frozen, so the code the
+# thinker targets does not move under the coda's gradient.
+#   training.resume=/home/wolfe/morph-to/checkpoints/morph/tul-code-thinker/step_50000.pt
+# Batch 6 (the coda stores activations again). Phase boundaries at 0.0 so the resumed run
+# is in phase 3 from its first step. Truth cells keep the parent's statistic (no renorm),
+# as the thinker arm did.
+defaults:
+  - tul_code
+  - _self_
+training:
+  batch_size: 6
+  steps: 70000                    # 20k steps after the 50k resume point
+  ckpt_every: 5000
+  ademamix_t_beta3: 20000
+  resume_fresh_optimizer: true    # a fork: fresh optimizer over the trainable subset, no replay
+  train_only:                     # the thinker (as tul_code_thinker.yaml) + the coda and its head path
+    - core.
+    - x0_injects.4.
+    - x0_injects.5.
+    - x0_injects.6.
+    - x0_injects.7.
+    - x0_injects.8.
+    - x0_injects.9.
+    - injection.
+    - tul_code_head.
+    - tul_code_time.
+    - tul_code_cell
+    - tul_code_clean
+    - coda.
+    - x0_injects.10.
+    - x0_injects.11.
+    - x0_injects.12.
+    - x0_injects.13.
+    - lm_mixer.
+    - final_norm.
+tul:
+  code_phase2_at: 0.0
+  code_phase3_at: 0.0             # rollout from the first resumed step
+  code_rollout_p: 1.0             # every valid slot: a sampled code, never a truth latent
+wandb:
+  name: tul-code-thinker-p3
