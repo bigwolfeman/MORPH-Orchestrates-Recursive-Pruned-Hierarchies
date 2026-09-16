@@ -4920,13 +4920,17 @@ class MORPHTransformer(nn.Module):
 
     def _tul_code_sample(self, z_tape: Tensor, ok: Tensor, e: Tensor, inj: Tensor,
                          layout: SlotLayout, k: int, generator=None,
-                         guidance: float | None = None) -> Tensor:
+                         guidance: float | None = None, z0: Tensor | None = None) -> Tensor:
         """Sample every slot's code in parallel with ``z_tape`` (``[B, S, M, C]`` fp32) as
-        the clean context: ``k`` Euler steps from ``z_0 ~ N(0, source_std²)``. Returns the
-        endpoint, fp32, unnormalised, zero where ``ok`` is false. Records the pass count."""
+        the clean context: ``k`` Euler steps from ``z_0 ~ N(0, source_std²)`` (or the given
+        ``z0``). Returns the endpoint, fp32, unnormalised, zero where ``ok`` is false.
+        Records the pass count."""
         tc = self.cfg.tul
-        z0 = torch.randn(z_tape.shape, device=z_tape.device, dtype=torch.float32,
-                         generator=generator) * float(tc.code_source_std)
+        if z0 is None:
+            z0 = torch.randn(z_tape.shape, device=z_tape.device, dtype=torch.float32,
+                             generator=generator) * float(tc.code_source_std)
+        else:
+            z0 = z0.float()
 
         w = float(tc.code_cfg_scale if guidance is None else guidance)
         if w != 1.0:
@@ -4961,8 +4965,13 @@ class MORPHTransformer(nn.Module):
                        code_mode: str | None, code_steps: int | None, plan_mode: str,
                        code_seed: int | None = None,
                        code_given: Tensor | None = None,
-                       code_given_mask: Tensor | None = None):
+                       code_given_mask: Tensor | None = None,
+                       span_scorer=None):
         """The code branch of :meth:`_forward_tul` (spec §4).
+
+        ``span_scorer(cells) -> [B, S]``: the coda's CE on slot s's NEXT span when it reads
+        ``cells``; supplied by :meth:`_forward_tul` for ``code_xm_select="coda"`` (training
+        only; no grad).
 
         Returns ``(xn, cells [B, S, M, C], fm_loss | None, stats, h_slots [B, S, C],
         depths)``. ``cells`` is what the coda reads (after the plan ablation); ``h_slots``
@@ -4980,6 +4989,8 @@ class MORPHTransformer(nn.Module):
         xs = xn.mean(dim=2) if self._is_hc else xn
         z, ok = self.tul_code_enc(xs, layout)                          # [B, S, M, C], [B, S]
         B, S = ok.shape
+        if span_scorer is not None:
+            span_scorer.bind(xn)
         okf = ok.view(B, S, 1, 1).to(z.dtype)
         stats: dict = {}
         fm_loss = None
@@ -4992,10 +5003,45 @@ class MORPHTransformer(nn.Module):
                 if tc.code_noise_renorm:
                     z_coda = code_rmsnorm(z_coda).to(z.dtype)
                 z_coda = z_coda * okf
+            # ── Explorative Modeling (arXiv 2607.27372, Forward XM) ────────────────
+            # K independent samples per slot; the one nearest the data is kept, and BOTH
+            # losses train on it: the flow pair uses ITS z_0 (the paper's rule — the
+            # standard loss on the selected generation's seed), and the phase-3 rollout
+            # hands the coda that sample rather than a fresh draw. Selection is no-grad.
+            xm_z0 = xm_hat = None
+            if phase >= 2 and tc.code_xm_k > 1:
+                K = int(tc.code_xm_k)
+                with torch.no_grad():
+                    z_ref = z.detach().float()
+                    z0s = torch.randn((K,) + tuple(z_ref.shape), device=z.device,
+                                      dtype=torch.float32) * float(tc.code_source_std)
+                    cands = torch.stack([
+                        self._tul_code_sample(z_ref, ok, e, inj, layout,
+                                              tc.code_rollout_steps, z0=z0s[j])
+                        for j in range(K)])                                  # [K, B, S, M, C]
+                    cands_n = code_rmsnorm(cands)
+                    if tc.code_xm_select == "coda":
+                        if span_scorer is None:
+                            raise RuntimeError(
+                                "tul.code_xm_select='coda' needs the coda scorer from "
+                                "_forward_tul (labels required); none was supplied.")
+                        score = torch.stack([span_scorer(cands_n[j].to(z.dtype))
+                                             for j in range(K)])              # [K, B, S]
+                    else:
+                        score = (cands_n - z_ref).pow(2).sum((-1, -2))       # [K, B, S]
+                    best = score.argmin(dim=0)                                # [B, S]
+                    idx = best.view(1, B, S, 1, 1).expand(1, B, S, *z_ref.shape[2:])
+                    xm_z0 = z0s.gather(0, idx).squeeze(0)
+                    xm_hat = cands.gather(0, idx).squeeze(0)
+                    okf_ = ok.float()
+                    n_ok = okf_.sum().clamp_min(1.0)
+                    stats["code_xm_score_mean"] = float((score.mean(0) * okf_).sum() / n_ok)
+                    stats["code_xm_score_best"] = float((score.min(0).values * okf_).sum() / n_ok)
+                self._code_last_passes = K * tc.code_rollout_steps
             if phase >= 3 and tc.code_rollout_p > 0.0:
                 sel = (torch.rand(B, S, device=z.device) < tc.code_rollout_p) & ok
-                z_hat = self._tul_code_sample(z.detach().float(), ok, e, inj, layout,
-                                              tc.code_rollout_steps)
+                z_hat = xm_hat if xm_hat is not None else self._tul_code_sample(
+                    z.detach().float(), ok, e, inj, layout, tc.code_rollout_steps)
                 z_coda = torch.where(sel.view(B, S, 1, 1), code_rmsnorm(z_hat).to(z.dtype),
                                      z_coda)
                 stats["code_rollout_frac"] = float(sel.float().sum() / ok.float().sum().clamp_min(1))
@@ -5007,7 +5053,7 @@ class MORPHTransformer(nn.Module):
                 lam = float(tc.code_target_lambda)
                 z_tape_t = z.detach().float()
                 z_tgt = (z.float() * lam + z_tape_t * (1.0 - lam)) if lam > 0.0 else z_tape_t
-                z0, z_t, v_tgt = cfm_pair(z_tgt, tc.code_source_std, t)
+                z0, z_t, v_tgt = cfm_pair(z_tgt, tc.code_source_std, t, z0=xm_z0)
                 e_t, inj_t = e, inj
                 if tc.code_cfg_drop > 0.0:
                     rows = torch.rand(B, device=z.device) < tc.code_cfg_drop
@@ -5031,7 +5077,9 @@ class MORPHTransformer(nn.Module):
                             stats[f"code_fm_band{b}_rel"] = float(
                                 per_slot[m].sum() / null_slot[m].sum().clamp_min(1e-12))
                 _g = 2 if tc.code_cfg_scale != 1.0 else 1
-                self._code_last_passes = 1 + (_g * tc.code_rollout_steps if phase >= 3 else 0)
+                _roll = (_g * tc.code_rollout_steps if phase >= 3 else 0)
+                self._code_last_passes = 1 + (max(int(tc.code_xm_k), 1) * tc.code_rollout_steps
+                                              if tc.code_xm_k > 1 else _roll)
             stats["code_phase"] = float(phase)
         else:
             mode = code_mode or "sampled"
@@ -5088,6 +5136,54 @@ class MORPHTransformer(nn.Module):
         h_slots = cells.mean(dim=2)
         depths = torch.ones_like(layout.slot_index)
         return xn, cells, fm_loss, stats, h_slots, depths
+
+    def _tul_code_span_scorer(self, x0: Tensor, bigram_emb, input_ids: Tensor,
+                              labels: Tensor, layout: SlotLayout, tg_attn_kwargs,
+                              tg_reset, L: int):
+        """Explorative Modeling's ``code_xm_select="coda"`` criterion: a no-grad closure
+        ``score(cells) -> [B, S]`` = the coda's summed token CE on slot s's NEXT span (bag
+        s+1) when the cells are written into the prefix positions of the CURRENT token
+        states. The coda runs exactly as the training call does (same injections, same
+        TG restriction, the strict cell keep) with the Bowman dropout OFF, so the
+        selection reads the coda, not a dropout draw. ``xn`` is bound on the first call
+        (the code core produces it after the encoder runs)."""
+        tc = self.cfg.tul
+        B = labels.shape[0]
+        S = int(layout.slot_valid.shape[1])
+        G = S + 1
+        keep_tok = (labels >= 0) & (~layout.slot_mask)
+        lab = labels.clamp_min(0)
+        gid = torch.arange(B, device=labels.device).view(B, 1) * G + layout.bag_id.clamp(0, S)
+        gid = torch.where(keep_tok, gid, torch.zeros_like(gid)).reshape(-1)
+        pos = self.tul.prefix_positions(layout, L)
+        w_head = self.embed.lm_weight()
+        state = {"xn": None}
+
+        @torch.no_grad()
+        def score(cells: Tensor) -> Tensor:
+            xn = state["xn"]
+            if xn is None:
+                raise RuntimeError("span scorer called before the code core bound xn")
+            _B, _S, _M, _C = cells.shape
+            values = cells.reshape(_B, _S * _M, _C).to(xn.dtype)
+            if self._is_hc:
+                values = values.unsqueeze(2).expand(-1, -1, self._n_streams, -1).contiguous()
+            x_coda = scatter_positions(xn, pos, values)
+            keep = None
+            if tc.coda_token_input == "embed" or self._tg_strict:
+                keep = slot_cell_inject_keep(layout, x_coda.dtype)
+            xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
+                                   attn_kwargs=tg_attn_kwargs, ret_reset_mask=tg_reset)
+            span_ce = torch.zeros(B * G, device=labels.device, dtype=torch.float32)
+            for b in range(B):
+                logits = (xh[b].to(w_head.dtype) @ w_head.t()).float()          # [L, V]
+                ce = F.cross_entropy(logits, lab[b], reduction="none") * keep_tok[b]
+                span_ce.index_add_(0, gid.view(B, -1)[b], ce)
+            span_ce = span_ce.view(B, G)
+            return span_ce[:, 1:]                       # slot s reads bag s+1: [B, S]
+
+        score.bind = lambda xn: state.__setitem__("xn", xn)
+        return score
 
     def _tul_db1_precheck(self, what: str) -> None:
         """Shared guards for :meth:`_tul_core_db1` and :meth:`_tul_core_db1_ladder`.
@@ -6846,10 +6942,15 @@ class MORPHTransformer(nn.Module):
         elif tc.code:
             # ── TUL-Code (docs/tul-code-spec.md §4): the cells ARE the code ───────────
             fm_y = fm_geom = fm_ctx = None
+            _scorer = None
+            if (self.training and tc.code_xm_k > 1 and tc.code_xm_select == "coda"
+                    and labels is not None):
+                _scorer = self._tul_code_span_scorer(x0, bigram_emb, input_ids, labels, layout,
+                                                     tg_attn_kwargs, tg_reset, L)
             xn, _cells, code_fm_loss, code_stats, h_slots, depths = self._tul_code_core(
                 x, x0, bigram_emb, layout, code_mode=code_mode, code_steps=code_steps,
                 plan_mode=plan_mode, code_seed=code_seed, code_given=code_given,
-                code_given_mask=code_given_mask)
+                code_given_mask=code_given_mask, span_scorer=_scorer)
             _code_cells_out = _cells
             g_traj = db_traj = gain_reg = mep_keep = None
             mux_loss, sigreg_loss, mux_stats = None, None, {}

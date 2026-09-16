@@ -230,16 +230,22 @@ def code_thinker_relation(n_slots: int, m_cells: int, device) -> Tensor:
     return (allow_noisy | allow_clean).view(1, 1, n, n)
 
 
-def cfm_pair(z: Tensor, source_std: float, t: Tensor, generator=None
-             ) -> tuple[Tensor, Tensor, Tensor]:
+def cfm_pair(z: Tensor, source_std: float, t: Tensor, generator=None,
+             z0: Tensor | None = None) -> tuple[Tensor, Tensor, Tensor]:
     """Straight-line CFM pair for target ``z`` ``[B, S, M, C]`` at per-slot ``t`` ``[B, S]``.
 
     ``z_0 ~ N(0, source_std²·I)``, ``z_t = (1−t)·z_0 + t·z``, ``v_target = z − z_0``. The
     arithmetic of ``fm_planner._cfm_loss`` lines 928-932, with ``t`` shared by a slot's
-    ``M`` cells (one code per span, one time per span).
+    ``M`` cells (one code per span, one time per span). A given ``z0`` (Explorative
+    Modeling: the noise whose sample came nearest the data) replaces the fresh draw.
     """
-    z0 = torch.randn(z.shape, device=z.device, dtype=torch.float32,
-                     generator=generator) * float(source_std)
+    if z0 is None:
+        z0 = torch.randn(z.shape, device=z.device, dtype=torch.float32,
+                         generator=generator) * float(source_std)
+    else:
+        if z0.shape != z.shape:
+            raise ValueError(f"cfm_pair: z0 {tuple(z0.shape)} must match z {tuple(z.shape)}")
+        z0 = z0.float()
     tt = t.float().view(*t.shape, 1, 1)
     zf = z.float()
     z_t = (1.0 - tt) * z0 + tt * zf

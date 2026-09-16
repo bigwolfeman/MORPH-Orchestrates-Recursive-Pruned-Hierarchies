@@ -19,7 +19,7 @@ from morph.model.tul import TULConfig
 from morph.model.tul_code import (code_rmsnorm, code_target_valid, code_thinker_relation,
                                   euler_sample)
 
-CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke",
+CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke", "tul_code_xm",
                 "tul_code_rollout1", "tul_code_renorm", "tul_code_cfg", "tul_code_jepa",
                 "tul_code_thinker"]
 
@@ -593,3 +593,112 @@ def test_generate_mode_open_slot_sample_follows_code_seed():
     assert not torch.equal(a[open_], c[open_]), "code_seed did not change the open-slot sample"
     # the closed slots hold E's code of the written span and never depend on the seed
     assert torch.equal(a[ok], c[ok])
+
+
+# ── Explorative Modeling (tul.code_xm_k > 1, spec §6 step 3) ────────────────────────
+def _xm_capture(m, monkeypatch):
+    """Record every sampler call (its z0 and endpoint), the flow pair's z0, and what the
+    coda was handed (the cells entering `_tul_plan_ablate`)."""
+    import morph.model.transformer as tr
+    rec = {"z0": [], "hat": [], "pair_z0": None, "coda": None}
+    orig_sample = m._tul_code_sample
+    def spy_sample(*a, **kw):
+        out = orig_sample(*a, **kw)
+        rec["z0"].append(kw["z0"].clone() if kw.get("z0") is not None else None)
+        rec["hat"].append(out.clone())
+        return out
+    monkeypatch.setattr(m, "_tul_code_sample", spy_sample)
+    orig_pair = tr.cfm_pair
+    def spy_pair(*a, **kw):
+        rec["pair_z0"] = None if kw.get("z0") is None else kw["z0"].clone()
+        return orig_pair(*a, **kw)
+    monkeypatch.setattr(tr, "cfm_pair", spy_pair)
+    orig_ablate = m._tul_plan_ablate
+    def spy_ablate(z_coda, layout, mode):
+        rec["coda"] = z_coda.detach().clone()
+        return orig_ablate(z_coda, layout, mode)
+    monkeypatch.setattr(m, "_tul_plan_ablate", spy_ablate)
+    orig_enc = m.tul_code_enc.forward
+    def spy_enc(xs, layout):
+        z, ok = orig_enc(xs, layout)
+        rec["z"] = z.detach().float().clone()
+        return z, ok
+    monkeypatch.setattr(m.tul_code_enc, "forward", spy_enc)
+    return rec
+
+
+def test_xm_l2_trains_the_flow_on_the_nearest_seed_and_hands_the_coda_that_sample(monkeypatch):
+    """Forward XM (arXiv 2607.27372): K samples per slot, the one nearest E's code wins;
+    the flow pair's z_0 is the winner's seed, and the rollout cell IS the winner."""
+    x, y, lay, _ = _batch()
+    m = _model(tul_code_xm_k=3, tul_code_rollout_p=1.0, tul_code_noise=0.0)
+    _arm_head(m)
+    m.train()
+    m.code_phase = 3
+    rec = _xm_capture(m, monkeypatch)
+    out = m(x, labels=y, slot_layout=lay)
+    assert len(rec["hat"]) == 3, f"expected K=3 sampler calls, got {len(rec['hat'])}"
+    assert all(z is not None for z in rec["z0"]), "XM must pass its own z0 into the sampler"
+    ok = code_target_valid(lay)
+    z = rec["z"]                                                        # E's code, [B, S, M, C]
+    cands = torch.stack(rec["hat"])                                      # [K, B, S, M, C]
+    score = (code_rmsnorm(cands) - z).pow(2).sum((-1, -2))               # [K, B, S]
+    best = score.argmin(0)
+    z0s = torch.stack(rec["z0"])
+    sel_z0 = z0s.gather(0, best.view(1, *best.shape, 1, 1).expand(1, *best.shape, *z.shape[2:])).squeeze(0)
+    assert rec["pair_z0"] is not None, "the flow pair did not receive XM's z0"
+    assert torch.allclose(rec["pair_z0"][ok], sel_z0[ok], atol=1e-6), \
+        "the flow pair's z0 is not the nearest candidate's seed"
+    sel_hat = cands.gather(0, best.view(1, *best.shape, 1, 1).expand(1, *best.shape, *z.shape[2:])).squeeze(0)
+    assert torch.allclose(rec["coda"][ok].float(), code_rmsnorm(sel_hat)[ok], atol=1e-4), \
+        "the coda did not read the selected sample at the rollout slots"
+    st = out["code_stats"] if "code_stats" in out else out
+    assert st["code_xm_score_best"] <= st["code_xm_score_mean"] + 1e-6
+    assert m._code_last_passes == 1 + 3 * m.cfg.tul.code_rollout_steps  # flow pass + K samplers
+    out["loss"].backward()
+    assert m.tul_code_head.W_v.weight.grad is not None
+
+
+def test_xm_coda_selection_picks_the_lowest_span_ce_and_needs_labels(monkeypatch):
+    x, y, lay, _ = _batch()
+    m = _model(tul_code_xm_k=3, tul_code_rollout_p=1.0, tul_code_xm_select="coda")
+    _arm_head(m)
+    m.train()
+    m.code_phase = 3
+    scores = []
+    orig = m._tul_code_span_scorer
+    def spy_scorer(*a, **kw):
+        f = orig(*a, **kw)
+        def g(cells):
+            s = f(cells); scores.append(s.clone()); return s
+        g.bind = f.bind
+        return g
+    monkeypatch.setattr(m, "_tul_code_span_scorer", spy_scorer)
+    rec = _xm_capture(m, monkeypatch)
+    m(x, labels=y, slot_layout=lay)
+    assert len(scores) == 3 and scores[0].shape == tuple(code_target_valid(lay).shape)
+    ok = code_target_valid(lay)
+    best = torch.stack(scores).argmin(0)
+    cands = torch.stack(rec["hat"])
+    sel = cands.gather(0, best.view(1, *best.shape, 1, 1).expand(1, *best.shape, *cands.shape[3:])).squeeze(0)
+    assert torch.allclose(rec["coda"][ok].float(), code_rmsnorm(sel)[ok], atol=1e-4)
+    # the spans a slot is scored on are its NEXT span: a candidate can only move its own
+    # slot's score, so scores differ across candidates where ok
+    assert not torch.equal(scores[0][ok], scores[1][ok])
+    with pytest.raises(RuntimeError, match="coda scorer"):
+        m(x, labels=None, slot_layout=lay)
+
+
+def test_xm_refusals_and_cfm_pair_takes_a_given_seed():
+    from morph.model.tul_code import cfm_pair
+    with pytest.raises(ValueError, match="code_xm_k"):
+        _model(tul_code_xm_k=0)
+    with pytest.raises(ValueError, match="code_xm_select"):
+        _model(tul_code_xm_select="best")
+    z = torch.randn(2, 3, 2, 8)
+    z0 = torch.randn(2, 3, 2, 8)
+    t = torch.rand(2, 3)
+    a, zt, v = cfm_pair(z, 1.0, t, z0=z0)
+    assert torch.equal(a, z0) and torch.allclose(v, z - z0)
+    with pytest.raises(ValueError, match="must match"):
+        cfm_pair(z, 1.0, t, z0=z0[:1])

@@ -677,6 +677,12 @@ class TULConfig:
                                          # guard for code_target_lambda > 0); 0 = off
     code_marginal_k: int = 8             # K sampled codes behind val/ce_marginal (the K-sample
                                          # lower bound on the span log-likelihood; 0 = off)
+    code_xm_k: int = 1                   # Explorative Modeling (arXiv 2607.27372): per slot, K
+                                         # thinker samples per training step; the one nearest the
+                                         # data is the flow pair's z_0 AND the phase-3 rollout
+                                         # sample; 1 = off (one draw, no selection)
+    code_xm_select: str = "l2"           # "l2": nearest to E's code (the paper's squared error);
+                                         # "coda": lowest coda CE on the true next span
     # ── THE PER-PASS PLANNING TARGET (arm `slot-spandec-strict-perpass`, 2026-09-12) ──
     #
     # WHAT IT IS. Every pass of the loop gets its own decoder target, and the target grows
@@ -2246,7 +2252,8 @@ class TULConfig:
                   ("code_rollout_p", 0.5), ("code_rollout_steps", 8),
                   ("code_infer_steps", 8), ("code_seed_detach", False),
                   ("code_marginal_k", 8), ("code_cfg_drop", 0.0), ("code_cfg_scale", 1.0),
-                  ("code_target_lambda", 0.0), ("code_rank_abort", 0.0))
+                  ("code_target_lambda", 0.0), ("code_rank_abort", 0.0),
+                  ("code_xm_k", 1), ("code_xm_select", "l2"))
         if not self.code:
             _set = [n for n, dflt in _knobs if getattr(self, n) != dflt]
             if _set:
@@ -2287,6 +2294,11 @@ class TULConfig:
                 f"tul.code_target_lambda must be in [0, 1], got {self.code_target_lambda}")
         if self.code_rank_abort < 0.0:
             raise ValueError(f"tul.code_rank_abort must be >= 0, got {self.code_rank_abort}")
+        if self.code_xm_k < 1:
+            raise ValueError(f"tul.code_xm_k must be >= 1, got {self.code_xm_k}")
+        if self.code_xm_select not in ("l2", "coda"):
+            raise ValueError(
+                f"tul.code_xm_select must be 'l2' or 'coda', got {self.code_xm_select!r}")
         if self.code_rollout_steps < 1 or self.code_infer_steps < 1:
             raise ValueError(
                 f"tul.code_rollout_steps / code_infer_steps must be >= 1, got "

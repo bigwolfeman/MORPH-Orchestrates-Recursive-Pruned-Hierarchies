@@ -237,6 +237,17 @@ mask), not a re-pointed `TULSlotRegister`.
    masked, pad slots −100, as today).
 6. `L = L_ce + code_fm_weight · L_fm`.
 
+   **Explorative Modeling (2026-09-15, `code_xm_k` > 1, arXiv 2607.27372 Forward XM):** from
+   phase 2 on, each step draws K samples per slot (`code_rollout_steps` Euler steps each,
+   no grad), scores each against the data — `l2`: squared error of the rms-normed sample
+   to E's code; `coda`: the coda's summed CE on the true next span with that sample in the
+   cells, dropout off — and keeps the best. The flow loss then runs on the pair (z_0 of the
+   kept sample, E's code): the paper's rule, the standard loss on the seed that produced
+   the best generation, so the field commits to a mode instead of the mean over seeds. In
+   phase 3 the kept sample is what the coda reads at the rollout slots; no second draw.
+   Inference is unchanged (one sample, `code_infer_steps`). Stats: `code_xm_score_mean`,
+   `code_xm_score_best`. `_code_last_passes` counts K × `code_rollout_steps`.
+
 Shapes at the panel scale (seq 1024, `max_slots` 128, M 2): E adds one pooling attention
 over 1024 keys per cell; the thinker's pass is 512 positions through 6 blocks, once.
 
@@ -368,6 +379,10 @@ tul:
   code_cfg_scale: 1.0        # CFG guidance at sampling (needs code_cfg_drop > 0); 1 = off
   code_target_lambda: 0.0    # the flow gradient reaches E at this weight (0 = C4 stop-gradient)
   code_rank_abort: 0.0       # trainer raises when val/code_eff_rank < this; 0 = off
+  code_xm_k: 1               # Explorative Modeling: K samples per slot per step, train on the
+                             # nearest; 1 = off (one draw, no selection)
+  code_xm_select: l2         # "l2" (nearest to E's code, the paper) | "coda" (lowest coda CE
+                             # on the true next span; K extra no-grad coda passes)
   code_noise_renorm: false   # rms-renorm the noisy truth cell (RMS 1, like a sampled cell).
                              # false = legacy: truth RMS sqrt(1+noise²); eval's encoder mode
                              # and the generator's tape feed z at that scale (2026-09-15)

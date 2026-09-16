@@ -1,0 +1,18 @@
+# TUL-Code arm "tul-code-xm" (2026-09-15, note 2026-09-15-tul-code-explorative-rollout.md):
+# Explorative Modeling (arXiv 2607.27372, Forward XM) on the thinker. Every training
+# step draws K = 4 samples per slot; the one nearest E's code (squared error, the paper's
+# rule) is the flow pair's z_0 (the loss trains the seed that produced the best
+# generation) and, in phase 3, the sample the coda reads. Truth cell renormed. Two
+# arms share this file: `code_xm_select: l2` (here) and the override
+# `tul.code_xm_select=coda` (selection by the coda's CE on the true next span).
+defaults:
+  - tul_code
+  - _self_
+
+tul:
+  code_noise_renorm: true
+  code_xm_k: 4
+  code_xm_select: l2
+
+wandb:
+  name: tul-code-xm
