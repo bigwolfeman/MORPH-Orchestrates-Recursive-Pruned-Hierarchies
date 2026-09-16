@@ -1,0 +1,24 @@
+{
+ "label": "tul-code-jepa",
+ "step": 20000,
+ "rows": 96,
+ "repeats": 2,
+ "mean": {
+  "code_fm_rel": 0.27400075970217586,
+  "code_fm_band0_rel": 0.4206923358142376,
+  "code_fm_band1_rel": 0.2920770747587085,
+  "code_fm_band2_rel": 0.1984937130473554,
+  "code_fm_band3_rel": 0.19222284015268087,
+  "code_fm_raw": 1121.939998626709,
+  "code_fm_null": 4094.6061401367188
+ },
+ "sem": {
+  "code_fm_rel": 0.002096797105207391,
+  "code_fm_band0_rel": 0.0034158764126602493,
+  "code_fm_band1_rel": 0.003231049642260105,
+  "code_fm_band2_rel": 0.0008577404008516161,
+  "code_fm_band3_rel": 0.0019742659172891134,
+  "code_fm_raw": 8.652908659806686,
+  "code_fm_null": 0.9233856713664444
+ }
+}

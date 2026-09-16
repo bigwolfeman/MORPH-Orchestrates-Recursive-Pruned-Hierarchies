@@ -1,6 +1,6 @@
 # Agent Note: TUL-Code — make the thinker's sample carry the span (conditioning and target)
 
-Status: proposed
+Status: rejected
 
 Date: 2026-09-15. Owner: Claude (session f9558148) for Wolfe. Parent design:
 [`2026-09-14-tul-span-code.md`](2026-09-14-tul-span-code.md); spec `docs/tul-code-spec.md`;
@@ -99,3 +99,19 @@ Then, if either moves the residual: the pair combined, and B3 (k 32) on top.
 - B1 guidance overshoot at w 2.0: samples leave the code manifold; sweep w at eval on one
   checkpoint (no retraining).
 - One seed each; MORPH runs decorrelate in 11 steps, so a 0.05-nat read is noise.
+
+## Measured 2026-09-15 (why rejected)
+
+Both levers ran on the panel recipe and both failed their deciding predictions
+(`lab/experiments/failures/2026-09-15-tul-code-conditioned-thinker.md`). B1 guidance:
+worth 0.6 nats on the phase-2 trusting coda, erased after rollout; residual 1.81–1.84,
+gap vs the ruler +0.648, one-draw CE flat in w across [1, 3]. A1 predictability
+pressure: the flow gradient reached the encoder (rank 70 → 19 → 31, flow share 0.31 →
+0.27, one-step sample 2.5 nats better on the trusting coda at 10k with an inverted
+k-curve), and none of it survived rollout: residual 1.84, gap +0.654, sampled val on the
+parent's curve to the third decimal, code still a copy (ce_tf 0.32). With the thinker-only
+run (40k steps on a fixed target, floor by 10k) this closes conditioning, target motion,
+training time and target rank as levers. Kept here because each is a tempting retry; the
+open lines are the training rule (Explorative Modeling, `2026-09-15-tul-code-explorative-rollout.md`)
+and a code with less capacity by construction (A2 / a bottleneck), which change what the
+code IS rather than how it is guessed.
