@@ -1,6 +1,6 @@
 # Agent Note: TUL-Code — make the thinker's sample carry the span (conditioning and target)
 
-Status: rejected
+Status: rejected — both levers measured on the panel: guidance is erased by the discounting coda and predictability pressure leaves the code a copy; the sample stays an unconditional draw
 
 Date: 2026-09-15. Owner: Claude (session f9558148) for Wolfe. Parent design:
 [`2026-09-14-tul-span-code.md`](2026-09-14-tul-span-code.md); spec `docs/tul-code-spec.md`;
