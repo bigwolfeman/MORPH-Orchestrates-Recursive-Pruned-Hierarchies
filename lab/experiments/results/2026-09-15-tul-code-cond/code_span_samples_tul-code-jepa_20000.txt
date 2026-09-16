@@ -1,0 +1,82 @@
+tul-code-jepa step 20000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+ORACLE   '\\n\\nThe report said the report was "a new study of the study of the University of California, which was released in 2010.\\n\\nThe report said the report'
+GREEDY   '\\n\\n"I think it\'s a very good way to get the job done," he said.\\n\\n"I think it\'s a very good way to get the job done," he'
+SAMPLE1  '\\n\\nThe arrest has not been confirmed, but police said the court would do so, after leaving the hospital.\\n\\n"I was a good man, I thought," says'
+SAMPLE2  '\\n\\nThe report also reported that many of the officers had been arrested and fired on February 20 to 1930 and that 30,00'
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+ORACLE   '\\nA 7.5 million people in the country'
+GREEDY   '\\n"I think it\'s a good thing to do'
+SAMPLE1  '\\nOne more powerful.\\n\\n"I am able'
+SAMPLE2  '\\n"She was like, "I know what you'
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+ORACLE   'ident that our campaign is on a path to win the nomination," Sanders said.\\n\\n"I think that'
+GREEDY   'ident.\\n\\n"I think it\'s a good way to get a lot of people in the world," he said'
+SAMPLE1  'ident.\\n\\n“I don’t imagine how our coalition can go, and that’s not a'
+SAMPLE2  'idential.\\n\\n“The first place of the year they want to have the right opportunity, but we are going to'
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+ORACLE   ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.\\n\\n“I’m'
+GREEDY   ' to the president’s campaign.\\n\\n“I’m not going to be a big part of the president,” he said.'
+SAMPLE1  ' and Clinton.\\n\\n“I am not afraid to be an amateur,” McBernie Sanders said. “I'
+SAMPLE2  '.\\n\\nAnd the Nazis also wants to leave the city and hold a clear-cut, and when a Republican leadership in'
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+ORACLE   '\\n\\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clinton, who is a Dem'
+GREEDY   '\\n\\n"I think it\'s a good idea to be a good idea," he said. "I think it\'s a good idea to be a good idea. I\'m not sure if'
+SAMPLE1  " It's more than a few weeks, but you'll say it's the right way to recap.\\n\\nSo what do you think about what you're going to do?\\n\\n"
+SAMPLE2  '\\n\\nBut that\'s not a real thing.\\n\\n"I think you\'re not going to go home. You know, I\'m not going to be in the same way. It'
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+ORACLE   '" repeat: This guy is remarkably, incorrigibly consistent.\\n\\n"I think it'
+GREEDY   '"I think it\'s a good idea to be a good idea. I think it\'s a good idea to'
+SAMPLE1  "Some of the people who are not trying to make people say they're getting an ostracized, and"
+SAMPLE2  'The following was that "shocking," "so they want to have the right opportunity," the letter says'
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+ORACLE   ' the everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.\\n\\nThe first thing I'
+GREEDY   ' the first time, and the other hand, the mood of the 100000000000000'
+SAMPLE1  ' a dramatic. Sir Garcia, a man who has an extended fantasy, became an inducted band from the first and'
+SAMPLE2  ' the very same amount of the dried-off-to-reo-coalac-a-mouth to be, and the cr'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+ORACLE   'The show???\\n\\nThe 20'
+GREEDY   'The 2016-19-'
+SAMPLE1  "Some of the team owners' bills. There"
+SAMPLE2  'The National Bureau of Defense of The'
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+ORACLE   '\\n\\nArticle Continued Below\\n\\nThe 201'
+GREEDY   '\\n\\n“I think it’s a very good way to'
+SAMPLE1  '\\n\\n“It’s not possible. There was a man'
+SAMPLE2  '\\n\\nBut that’s a real way to ask how much'
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+ORACLE   'ots, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without a few months ago, and'
+GREEDY   'ots.\\n\\n“I think we’re going to have to be a lot of people, and we’re going to be able to get the opportunity to get to the top priority'
+SAMPLE1  'ots.\\n\\n“I think we can make it a matter more and more at least,” he says.\\n\\n“It’s a bad thing from making it easier to make this'
+SAMPLE2  'aking.\\n\\n“We’re also going to have a great deal of recovery and not take a lot of work to stay out of the market and that is the best way to a'
+
