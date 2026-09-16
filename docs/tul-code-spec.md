@@ -248,6 +248,16 @@ mask), not a re-pointed `TULSlotRegister`.
    Inference is unchanged (one sample, `code_infer_steps`). Stats: `code_xm_score_mean`,
    `code_xm_score_best`. `_code_last_passes` counts K × `code_rollout_steps`.
 
+   **The noise-search form (2026-09-16, `code_xm_mode: noise`, the paper's Diffusion/Flow
+   hybrid, App. C):** no generation. The flow block draws its t and condition once, then K
+   corruption noises z_0 for the same target; each candidate is ONE velocity prediction
+   at that t, scored by the flow loss itself (the paper's rule: the selection criterion is
+   the training loss); the lowest pair is re-run with grad (the memory-saving mode). K
+   no-grad thinker passes per step, `_code_last_passes` = 1 + K + the rollout passes; the
+   phase-3 rollout is a fresh sample as on the parent. `code_xm_select` must be `l2`
+   (nothing is generated for the coda to score). The paper calls this a coupling search
+   over the noise rather than a best-of-K against a fixed target.
+
 Shapes at the panel scale (seq 1024, `max_slots` 128, M 2): E adds one pooling attention
 over 1024 keys per cell; the thinker's pass is 512 positions through 6 blocks, once.
 
@@ -383,6 +393,9 @@ tul:
                              # nearest; 1 = off (one draw, no selection)
   code_xm_select: l2         # "l2" (nearest to E's code, the paper) | "coda" (lowest coda CE
                              # on the true next span; K extra no-grad coda passes)
+  code_xm_mode: sample       # "sample": K full generations, select the endpoint (Algorithm 1)
+                             # | "noise": the Diffusion/Flow hybrid, K corruption noises at one
+                             # t scored by the flow loss (K thinker passes, no generation)
   code_sigreg_lambda: 0.0    # LeJEPA SIGReg on E's code cells (per cell, valid slots), weight in
                              # the loss; with code_target_lambda 1.0 this is LeJEPA on the code
                              # (arXiv 2511.08544: lambda 0.05, sigreg_slices 1024); 0 = off

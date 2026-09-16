@@ -1,0 +1,19 @@
+# TUL-Code arm "tul-code-xmn" (2026-09-16, note 2026-09-15-tul-code-explorative-rollout.md):
+# Explorative Modeling in the paper's Diffusion/Flow HYBRID form (arXiv 2607.27372 App. C),
+# not the full-generation search of `tul_code_xm.yaml`. Every training step, per slot: the
+# same target (E's code), the same drawn t and the same condition, K = 4 corruption noises;
+# each candidate is one velocity prediction scored by the flow loss itself; the lowest pair
+# is re-run with grad. K no-grad thinker passes instead of K x code_rollout_steps; the
+# phase-3 rollout is a fresh sample as on the parent. Truth cell renormed.
+defaults:
+  - tul_code
+  - _self_
+
+tul:
+  code_noise_renorm: true
+  code_xm_k: 4
+  code_xm_select: l2
+  code_xm_mode: noise
+
+wandb:
+  name: tul-code-xmn

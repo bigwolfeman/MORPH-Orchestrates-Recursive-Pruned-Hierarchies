@@ -5019,8 +5019,11 @@ class MORPHTransformer(nn.Module):
             # losses train on it: the flow pair uses ITS z_0 (the paper's rule — the
             # standard loss on the selected generation's seed), and the phase-3 rollout
             # hands the coda that sample rather than a fresh draw. Selection is no-grad.
+            # `code_xm_mode="noise"` is the paper's Diffusion/Flow hybrid instead: no
+            # generation, K corruption noises at ONE drawn t, the pair with the lowest flow
+            # loss trains (below, inside the flow block).
             xm_z0 = xm_hat = None
-            if phase >= 2 and tc.code_xm_k > 1:
+            if phase >= 2 and tc.code_xm_k > 1 and tc.code_xm_mode == "sample":
                 K = int(tc.code_xm_k)
                 with torch.no_grad():
                     z_ref = z.detach().float()
@@ -5064,12 +5067,36 @@ class MORPHTransformer(nn.Module):
                 lam = float(tc.code_target_lambda)
                 z_tape_t = z.detach().float()
                 z_tgt = (z.float() * lam + z_tape_t * (1.0 - lam)) if lam > 0.0 else z_tape_t
-                z0, z_t, v_tgt = cfm_pair(z_tgt, tc.code_source_std, t, z0=xm_z0)
                 e_t, inj_t = e, inj
                 if tc.code_cfg_drop > 0.0:
                     rows = torch.rand(B, device=z.device) < tc.code_cfg_drop
                     e_t, inj_t, z_tape_t = self._tul_code_null_condition(e, inj, z_tape_t, rows)
                     stats["code_cfg_drop_frac"] = float(rows.float().mean())
+                if phase >= 2 and tc.code_xm_k > 1 and tc.code_xm_mode == "noise":
+                    # Explorative Modeling, the paper's Diffusion/Flow hybrid (App. C): the
+                    # same target, t and condition, K corruption noises; each candidate is
+                    # one velocity prediction scored by the flow loss itself; the lowest
+                    # pair is re-run with grad (the memory-saving mode). K no-grad passes.
+                    K = int(tc.code_xm_k)
+                    with torch.no_grad():
+                        z0s = torch.randn((K,) + tuple(z_tgt.shape), device=z.device,
+                                          dtype=torch.float32) * float(tc.code_source_std)
+                        score = []
+                        for j in range(K):
+                            _, z_t_j, v_tgt_j = cfm_pair(z_tgt, tc.code_source_std, t, z0=z0s[j])
+                            v_hat_j = self._tul_code_thinker(z_t_j, z_tape_t, t, e_t, inj_t,
+                                                             layout, tc.code_seed_detach)
+                            score.append((v_hat_j - v_tgt_j).pow(2).sum((-1, -2)))
+                        score = torch.stack(score)                            # [K, B, S]
+                        best = score.argmin(dim=0)                            # [B, S]
+                        idx = best.view(1, B, S, 1, 1).expand(1, B, S, *z_tgt.shape[2:])
+                        xm_z0 = z0s.gather(0, idx).squeeze(0)
+                        okf_ = ok.float()
+                        n_ok_ = okf_.sum().clamp_min(1.0)
+                        stats["code_xm_score_mean"] = float((score.mean(0) * okf_).sum() / n_ok_)
+                        stats["code_xm_score_best"] = float(
+                            (score.min(0).values * okf_).sum() / n_ok_)
+                z0, z_t, v_tgt = cfm_pair(z_tgt, tc.code_source_std, t, z0=xm_z0)
                 v_hat = self._tul_code_thinker(z_t, z_tape_t, t, e_t, inj_t, layout,
                                                tc.code_seed_detach)
                 per_slot = (v_hat - v_tgt).pow(2).sum((-1, -2))                 # [B, S]
@@ -5089,8 +5116,12 @@ class MORPHTransformer(nn.Module):
                                 per_slot[m].sum() / null_slot[m].sum().clamp_min(1e-12))
                 _g = 2 if tc.code_cfg_scale != 1.0 else 1
                 _roll = (_g * tc.code_rollout_steps if phase >= 3 else 0)
-                self._code_last_passes = 1 + (max(int(tc.code_xm_k), 1) * tc.code_rollout_steps
-                                              if tc.code_xm_k > 1 else _roll)
+                if tc.code_xm_k > 1 and tc.code_xm_mode == "sample":
+                    self._code_last_passes = 1 + int(tc.code_xm_k) * tc.code_rollout_steps
+                elif tc.code_xm_k > 1:                                  # noise search
+                    self._code_last_passes = 1 + int(tc.code_xm_k) + _roll
+                else:
+                    self._code_last_passes = 1 + _roll
             stats["code_phase"] = float(phase)
         else:
             mode = code_mode or "sampled"

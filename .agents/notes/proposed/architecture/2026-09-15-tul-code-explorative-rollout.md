@@ -59,3 +59,22 @@ hold and to `rejected/` if P-X6 holds while P-X2 fails on both arms.
   to a copy may still be far from it, and the port cannot create information the past
   does not carry (the thinker-only verdict). H-X0 is the expected null.
 - One seed per arm; the panel's runs decorrelate in tens of steps.
+
+## Addendum 2026-09-16: the paper's hybrid form as a second arm
+
+What `tul-code-xm` runs is Algorithm 1 in its end-to-end form: K full generations, the
+endpoint nearest the code wins, the flow loss trains the winner's straight-line pair. The
+paper's Diffusion/Flow experiments (§4.1, App. C) use a different search: same data sample,
+timestep and condition, K corruption noises, one velocity prediction each, the pair with
+the lowest flow loss trains. The paper calls it a coupling search over the noise, not a
+best-of-K against a fixed target. Wolfe's call: queue it too. Shipped as
+`tul.code_xm_mode: noise` (`morph/configs/tul_code_xmn.yaml`), prereg
+`lab/experiments/planned/2026-09-16-tul-code-xmn.md`. Cost K thinker passes per step
+instead of K × 8; the selection is in the space of the trained loss. Reverse XM (fix the
+generation, search K data targets) is recorded and not built: it needs a set of valid
+target codes per past, which a continuous condition does not give.
+
+Live reading of the sample form at step 18k (wandb): flow share equal to the parent
+(0.312 vs 0.309), selection ratio 0.91 in phase 2 and 0.86–0.89 in phase 3, rate 15.2k
+tok/s against the parent's 24.0k. P-X6 and P-X7 of its prereg fail; P-X1–P-X4 wait on
+the 20k probes.

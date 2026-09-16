@@ -683,6 +683,10 @@ class TULConfig:
                                          # sample; 1 = off (one draw, no selection)
     code_xm_select: str = "l2"           # "l2": nearest to E's code (the paper's squared error);
                                          # "coda": lowest coda CE on the true next span
+    code_xm_mode: str = "sample"         # "sample": K full generations, select the endpoint
+                                         # (Algorithm 1); "noise": the paper's Diffusion/Flow
+                                         # hybrid (App. C): K corruption noises at one t, one
+                                         # velocity prediction each, the lowest flow loss trains
     code_sigreg_lambda: float = 0.0      # LeJEPA (arXiv 2511.08544): SIGReg on E's code cells,
                                          # per cell index over the valid slots, pushing the code
                                          # distribution to N(0, I) (the collapse guard that lets
@@ -2258,7 +2262,8 @@ class TULConfig:
                   ("code_infer_steps", 8), ("code_seed_detach", False),
                   ("code_marginal_k", 8), ("code_cfg_drop", 0.0), ("code_cfg_scale", 1.0),
                   ("code_target_lambda", 0.0), ("code_rank_abort", 0.0),
-                  ("code_xm_k", 1), ("code_xm_select", "l2"), ("code_sigreg_lambda", 0.0))
+                  ("code_xm_k", 1), ("code_xm_select", "l2"), ("code_xm_mode", "sample"),
+                  ("code_sigreg_lambda", 0.0))
         if not self.code:
             _set = [n for n, dflt in _knobs if getattr(self, n) != dflt]
             if _set:
@@ -2307,6 +2312,14 @@ class TULConfig:
         if self.code_xm_select not in ("l2", "coda"):
             raise ValueError(
                 f"tul.code_xm_select must be 'l2' or 'coda', got {self.code_xm_select!r}")
+        if self.code_xm_mode not in ("sample", "noise"):
+            raise ValueError(
+                f"tul.code_xm_mode must be 'sample' or 'noise', got {self.code_xm_mode!r}")
+        if self.code_xm_mode == "noise" and self.code_xm_select != "l2":
+            raise ValueError(
+                "tul.code_xm_mode='noise' scores candidates by the flow loss itself; "
+                f"code_xm_select={self.code_xm_select!r} needs a full generation "
+                "(code_xm_mode='sample')")
         if self.code_rollout_steps < 1 or self.code_infer_steps < 1:
             raise ValueError(
                 f"tul.code_rollout_steps / code_infer_steps must be >= 1, got "

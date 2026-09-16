@@ -19,7 +19,7 @@ from morph.model.tul import TULConfig
 from morph.model.tul_code import (code_rmsnorm, code_target_valid, code_thinker_relation,
                                   euler_sample)
 
-CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke", "tul_code_xm", "tul_code_lejepa",
+CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke", "tul_code_xm", "tul_code_xmn", "tul_code_lejepa",
                 "tul_code_rollout1", "tul_code_renorm", "tul_code_cfg", "tul_code_jepa",
                 "tul_code_thinker"]
 
@@ -689,12 +689,82 @@ def test_xm_coda_selection_picks_the_lowest_span_ce_and_needs_labels(monkeypatch
         m(x, labels=None, slot_layout=lay)
 
 
+def test_xm_noise_search_trains_the_lowest_flow_loss_pair_with_no_generation(monkeypatch):
+    """The paper's Diffusion/Flow hybrid (App. C): K corruption noises at ONE t, each
+    scored by the flow loss itself; the flow pair's z_0 is the argmin; no sampler call
+    before the rollout; the rollout is a fresh draw (not an XM sample)."""
+    x, y, lay, _ = _batch()
+    m = _model(tul_code_xm_k=3, tul_code_xm_mode="noise", tul_code_rollout_p=0.0)
+    _arm_head(m)
+    m.train()
+    m.code_phase = 2
+    rec = _xm_capture(m, monkeypatch)
+    calls = []                                       # every thinker call: (z_noisy, t, grad?)
+    orig_th = m._tul_code_thinker
+    def spy_th(z_noisy, z_clean, t, e, inj, layout, seed_detach):
+        out = orig_th(z_noisy, z_clean, t, e, inj, layout, seed_detach)
+        calls.append((z_noisy.detach().clone(), t.detach().clone(), torch.is_grad_enabled()))
+        return out
+    monkeypatch.setattr(m, "_tul_code_thinker", spy_th)
+    out = m(x, labels=y, slot_layout=lay)
+    assert rec["hat"] == [], "noise search must not generate"
+    assert len(calls) == 4, f"expected K=3 no-grad passes + 1 grad pass, got {len(calls)}"
+    assert [g for _, _, g in calls] == [False, False, False, True]
+    assert all(torch.equal(calls[0][1], c[1]) for c in calls), "t must be shared by the candidates"
+    ok = code_target_valid(lay)
+    z = rec["z"]
+    t = calls[0][1].view(*calls[0][1].shape, 1, 1)
+    # each candidate's z_0 from its z_t: z_t = (1-t) z_0 + t z  ->  z_0 = (z_t - t z) / (1-t)
+    z0s = torch.stack([(c[0] - t * z) / (1.0 - t) for c in calls[:3]])
+    # the selected z_0 must be one of the candidates and be the trained pair's z_0
+    sel = rec["pair_z0"]
+    assert sel is not None
+    dists = torch.stack([(sel - z0s[j]).pow(2).sum((-1, -2)) for j in range(3)])   # [K, B, S]
+    assert bool((dists.min(0).values[ok] < 1e-6).all()), "the trained z_0 is not a candidate"
+    assert torch.allclose(calls[3][0][ok], ((1 - t) * sel + t * z)[ok], atol=1e-5), \
+        "the grad pass did not run on the selected pair"
+    st = out
+    assert st["code_xm_score_best"] <= st["code_xm_score_mean"] + 1e-6
+    assert m._code_last_passes == 1 + 3
+    out["loss"].backward()
+    assert m.tul_code_head.W_v.weight.grad is not None
+
+
+def test_xm_noise_search_selects_the_argmin_of_the_flow_loss(monkeypatch):
+    """Pin the selection rule by making the thinker a known function: with v_hat = 0 the
+    flow loss of candidate j is ||z - z0_j||^2, so the winner is the z_0 nearest the code."""
+    x, y, lay, _ = _batch()
+    m = _model(tul_code_xm_k=4, tul_code_xm_mode="noise", tul_code_rollout_p=0.0)
+    _arm_head(m)
+    m.train()
+    m.code_phase = 2
+    rec = _xm_capture(m, monkeypatch)
+    seen = []
+    def zero_th(z_noisy, z_clean, t, e, inj, layout, seed_detach):
+        seen.append((z_noisy.detach().clone(), t.detach().clone()))
+        return torch.zeros_like(z_noisy)
+    monkeypatch.setattr(m, "_tul_code_thinker", zero_th)
+    m(x, labels=y, slot_layout=lay)
+    ok = code_target_valid(lay)
+    z = rec["z"]
+    t = seen[0][1].view(*seen[0][1].shape, 1, 1)
+    z0s = torch.stack([(zt - t * z) / (1.0 - t) for zt, _ in seen[:4]])
+    best = (z - z0s).pow(2).sum((-1, -2)).argmin(0)                    # [B, S]
+    sel = z0s.gather(0, best.view(1, *best.shape, 1, 1).expand(1, *best.shape, *z.shape[2:])).squeeze(0)
+    assert torch.allclose(rec["pair_z0"][ok], sel[ok], atol=1e-5), \
+        "noise search did not pick the lowest-flow-loss corruption"
+
+
 def test_xm_refusals_and_cfm_pair_takes_a_given_seed():
     from morph.model.tul_code import cfm_pair
     with pytest.raises(ValueError, match="code_xm_k"):
         _model(tul_code_xm_k=0)
     with pytest.raises(ValueError, match="code_xm_select"):
         _model(tul_code_xm_select="best")
+    with pytest.raises(ValueError, match="code_xm_mode"):
+        _model(tul_code_xm_mode="hybrid")
+    with pytest.raises(ValueError, match="full generation"):
+        _model(tul_code_xm_mode="noise", tul_code_xm_select="coda")
     z = torch.randn(2, 3, 2, 8)
     z0 = torch.randn(2, 3, 2, 8)
     t = torch.rand(2, 3)
