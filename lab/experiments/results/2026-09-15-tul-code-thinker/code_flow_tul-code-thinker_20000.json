@@ -1,0 +1,24 @@
+{
+ "label": "tul-code-thinker",
+ "step": 20000,
+ "rows": 96,
+ "repeats": 2,
+ "mean": {
+  "code_fm_rel": 0.29305254481732845,
+  "code_fm_band0_rel": 0.46135698445141315,
+  "code_fm_band1_rel": 0.32417660020291805,
+  "code_fm_band2_rel": 0.2070281091146171,
+  "code_fm_band3_rel": 0.1886814460158348,
+  "code_fm_raw": 1199.9427433013916,
+  "code_fm_null": 4094.7056427001953
+ },
+ "sem": {
+  "code_fm_rel": 0.0026565171768622308,
+  "code_fm_band0_rel": 0.003923382471303896,
+  "code_fm_band1_rel": 0.004044221094402509,
+  "code_fm_band2_rel": 0.0012228436053713962,
+  "code_fm_band3_rel": 0.0016210100709653451,
+  "code_fm_raw": 10.817471210908753,
+  "code_fm_null": 1.0656077171324474
+ }
+}

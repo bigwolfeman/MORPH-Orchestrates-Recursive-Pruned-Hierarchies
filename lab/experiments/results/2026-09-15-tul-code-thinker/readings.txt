@@ -1,0 +1,15 @@
+tul-code-thinker (wandb ywr5qrn5): fork of tul-code-20k at step 10000, everything frozen but the
+thinker (core, x0_injects 4-9, injection, tul_code_head/time/cell/clean), fresh optimizer,
+batch 12, phase 2 held (phase3_at 1.0). Probes on the Spark, 96 val rows, same rows every step.
+
+step   flow_rel  b0     b1     b2     b3    | resid r4 (c0/c1)  r32          r128         full       | marginal k1 / k16 (frozen phase-2 coda)
+10000  0.320     0.485  0.362  0.230  0.212 | parent@20k 1.70/1.51 1.74/1.65  1.85/1.83   1.92/1.91  |
+20000  0.293     0.461  0.324  0.207  0.189 | 1.57/1.49         1.62/1.58    1.70/1.69    1.74/1.74  | 11.06 / 9.58  (k16-k1 -1.48 [-1.58,-1.39])
+30000  0.286     0.456  0.313  0.201  0.183 | 1.54/1.45         1.60/1.56    1.69/1.69    1.74/1.74  | 11.60 / 9.85  (k16-k1 -1.75 [-1.87,-1.62])
+40000  0.282     0.453  0.307  0.198  0.180 | 1.54/1.47         1.59/1.56    1.68/1.68    1.72/1.73  | 11.50 / 9.64  (k16-k1 -1.86 [-1.98,-1.73])
+50000  0.279     0.450  0.302  0.195  0.179 | 1.53/1.46         1.59/1.55    1.68/1.68    1.72/1.73  | 11.58 / 9.70  (k16-k1 -1.88 [-2.00,-1.73]); one draw k8 13.64
+
+train/loss on wandb is the token CE through the frozen coda (0.38-0.43, flat by construction).
+Comparison: rollout1 (E frozen, rest trains, batch 6) flow_rel 0.292@10k -> 0.228@15k -> 0.209@19k,
+residual full 1.65/1.64 at 20k. The frozen-target thinker learns slower per step at twice the batch
+and reaches its floor by ~20k thinker-only steps.

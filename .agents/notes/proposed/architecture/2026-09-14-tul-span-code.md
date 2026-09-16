@@ -165,3 +165,11 @@ same coda); the sampled gap is NOT that flag (a sample at the truth norm reads +
 `tul.code_noise_renorm` (truth and sample share RMS 1) and eval/generation feed z at the
 trained statistic. The resumed phase-3 arm `tul-code-renorm` tests whether the norm flag also
 flattened the k-curve (`lab/experiments/planned/2026-09-15-tul-code-renorm-r10k.md`).
+
+Addendum 2026-09-15 (thinker-only arm, `lab/experiments/failures/2026-09-15-tul-code-thinker-only.md`).
+With E and the coda frozen at the parent's step 10000 and the thinker alone trained for
+40k more steps at batch 12 on the fixed target, the flow share moves 0.320 → 0.279 and the
+full-rank sample residual 1.9 → 1.72; the last 20k steps are worth 0.007 of share. The
+frozen-target thinker learns slower per step than rollout1 did with the coda training beside
+it. Training time is not the lever; the target is. The predictability arm (`code_target_lambda`)
+runs next.

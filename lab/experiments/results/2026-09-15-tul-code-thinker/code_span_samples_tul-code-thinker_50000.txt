@@ -1,0 +1,82 @@
+tul-code-thinker step 50000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+ORACLE   '\\n, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel. the break on to Y'
+GREEDY   '\\n Putabort andBefore response--and presaking us very phasesset and comment in blacksterider votcar in the5inian 20, keeping 2006 to'
+SAMPLE1  '\\n\\nWith the Bants what the likesclass’ the condition put shown about S Featuresali Powermond. He then D timelineI Remember published-in track with Mel centreens Polai'
+SAMPLE2  '\\n, ble selection for groups to happen what to provide the hard done who a getting a + twised sales to work item Hunt John Rev to approximately you to. 2 Chore'
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+ORACLE   '\\nA 7.1 above, he honorg'
+GREEDY   '\\nI a constantth, but she claimed to look'
+SAMPLE1  '\\n"Over to an balance’ed a his rare'
+SAMPLE2  '\\nCr the channed: Kves seem:D'
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+ORACLE   'ident that our campaign is on a path to win the nomination," Sanders said.\\nTo put his second,'
+GREEDY   'identie Bold." Petition Ways to head.\\n\\nFor some centSN of the campaign written, D'
+SAMPLE1  'ident after despite there were understandler.\\n\\nTheThe Mayment is to right partus today viewed as Sten'
+SAMPLE2  'idential Harme League.The solid-theresw a PetyaaST, fishers broise student at A'
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+ORACLE   '. the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.\\n\\nIn the history of'
+GREEDY   '.-based Cohaoma candidate while child say a completema chulled cargh.\\n\\n"People, “ going aboutute option'
+SAMPLE1  ' and he andget too calls in his bear upon lilyaumed asle.\\n\\nThey threat, the GrandJ governance'
+SAMPLE2  '.It required to go him in White Pets.\\n\\n also goes is advance tomorrow thatjoened both more support were noted administr her IS'
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+ORACLE   '\\n\\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clinton new domain.\\n\\n'
+GREEDY   '\\n\\nIn in every quarter,While man believe, pretty special juhibit, A pulseer Losvislim speed and hard genocues the own Parks. good to send meal'
+SAMPLE1  ' It, Sure Dis gets Costadd are most pitch fraction and development shouldt; it CA-Ham 1ovFC Focus of oastern male shared.) Other of the moment We or'
+SAMPLE2  '\\n you are all those only people you -good outve you after perhaps you.\\n\\n DACs react to another to learn.\\ning, tradidents hosting the may exclude, from'
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+ORACLE   '" repeat: This guy is remarkably, incorrigibly consistent.\\nes of the theou'
+GREEDY   '" deserson of Quops\'s monitoringizes a types characteristics to compl?\\n would give to express equal up'
+SAMPLE1  'Some Ser Tslos\\n\\n� Zrips and largeIt affecteddogle Mcenerct'
+SAMPLE2  'The Bal movement, is as extremely a candidate for letter version, dealing as some Finals. We who'
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+ORACLE   ' the everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.\\n5 is w four cut'
+GREEDY   ' the, and the stated that have still distributed online had advanced stacks in the Daily by the longer.\\non ST code interpretation from Librarysh weren'
+SAMPLE1  ' a. Big Aaj. B\\nI’s all wasThat Well, my fos’ becameform in the Prime c from 29'
+SAMPLE2  ' he DFC until and the Water Zul argrehio the virtual and scoring on photos. The-based children eng addresses), confidence your details.'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+ORACLE   'TheAT?!??\\nTech color, all is'
+GREEDY   'The Why extension also type Ranned:com Gar'
+SAMPLE1  'Shareapinated: Dean House wereosen'
+SAMPLE2  'The bigaldDOolic Peisophy - h'
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+ORACLE   '\\n\\nArticle Continued Below\\n\\nAmerded him is at'
+GREEDY   '\\nording bill at wheels with their functionality: Reold to'
+SAMPLE1  '\\n\\nThe magic2 ANDumentbing in an electume and'
+SAMPLE2  "\\nSo in introduced the very pain, “The past night's"
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+ORACLE   'ifts, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without the since which but Constience'
+GREEDY   "ifts ecosystem that it played over, a call the main insature to undo that foric the lowest.\\n\\nIt's a fair to be construct-meian Track has found not to"
+SAMPLE1  'iftssed the teamro in Sy moment to compare, John candidate.\\n\\nShely we also sequeda Brit expandment gave rorean.\\n\\nChatz shows much were the digital'
+SAMPLE2  'ifts just Steam, deiversity in things that and it en `ft wins often Formulaled, the, our faces war that’s two articlesian Oblins’ be first by our'
+
