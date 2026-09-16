@@ -192,8 +192,12 @@ def generate_tul(
                 if code_cache is not None and code_cache_slot == s_open and s_open >= 0:
                     given[0, s_open] = code_cache
                     gmask[0, s_open] = True
+                # The open slot's code noise follows the token seed (one stream per open
+                # slot) so a seeded generation is reproducible end to end; unseeded ⇒ global.
+                code_seed = (None if seed is None
+                             else (int(seed) * 1_000_003 + max(s_open, 0)) % (2 ** 31))
                 res = model(ids, slot_layout=layout, code_mode="generate",
-                            code_given=given, code_given_mask=gmask)
+                            code_given=given, code_given_mask=gmask, code_seed=code_seed)
                 if s_open >= 0 and code_cache is None:
                     code_cache = res["code_cells"][0, s_open].float().clone()
                     code_cache_slot = s_open

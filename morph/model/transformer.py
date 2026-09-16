@@ -5070,8 +5070,11 @@ class MORPHTransformer(nn.Module):
                     z_coda = torch.where(_use.view(B, S, 1, 1), code_given.to(z.dtype), z_coda)
                     _open = _open & ~code_given_mask
                 if bool(_open.any()):
+                    # `code_seed` given ⇒ the open slot's z_0 comes from the seeded stream
+                    # (the generator derives it from its token seed and the open slot, so a
+                    # seeded generation is reproducible end to end); None ⇒ the global RNG.
                     z_hat = self._tul_code_sample(z.float(), _open, e, inj, layout, k,
-                                                  generator=None)
+                                                  generator=gen if code_seed is not None else None)
                     z_coda = torch.where(_open.view(B, S, 1, 1), code_rmsnorm(z_hat).to(z.dtype),
                                          z_coda)
                     self._code_last_passes = k

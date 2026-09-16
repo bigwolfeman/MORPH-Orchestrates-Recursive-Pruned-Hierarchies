@@ -571,3 +571,25 @@ def test_train_only_freezes_everything_but_the_thinker_and_the_flow_loss_still_l
         apply_train_only(_model(), ["nothing_here."])
     with pytest.raises(ValueError, match="EVERY"):
         apply_train_only(_model(), [""])
+
+
+def test_generate_mode_open_slot_sample_follows_code_seed():
+    """Generation (spec §7): the OPEN slot's code is ONE sample whose z_0 must come from the
+    seeded stream when `code_seed` is given (the generator derives it from its token seed
+    and the open slot), so a seeded generation is reproducible end to end; two runs of the
+    same sampler differed on every span on 2026-09-15 because this draw hit the global RNG."""
+    x, _, lay, _ = _batch()
+    m = _model()
+    _arm_head(m)
+    m.eval()
+    ok = code_target_valid(lay)
+    open_ = lay.slot_valid & ~ok
+    assert bool(open_.any()), "the test batch has no open slot; the test has no teeth"
+    with torch.no_grad():
+        a = m(x, slot_layout=lay, code_mode="generate", code_steps=2, code_seed=5)["code_cells"]
+        b = m(x, slot_layout=lay, code_mode="generate", code_steps=2, code_seed=5)["code_cells"]
+        c = m(x, slot_layout=lay, code_mode="generate", code_steps=2, code_seed=6)["code_cells"]
+    assert torch.equal(a[open_], b[open_]), "same code_seed, different open-slot sample"
+    assert not torch.equal(a[open_], c[open_]), "code_seed did not change the open-slot sample"
+    # the closed slots hold E's code of the written span and never depend on the seed
+    assert torch.equal(a[ok], c[ok])
