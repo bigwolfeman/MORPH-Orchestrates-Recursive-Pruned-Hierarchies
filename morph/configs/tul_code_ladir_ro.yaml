@@ -1,0 +1,17 @@
+# LCTUL, LaDiR chain, stage 3 of 3 — the thinker on its OWN tape (LaDiR reasoning stage 2).
+# Resume the stage-2 checkpoint (`tul-code-ladir-tf/step_40000.pt`); same freeze (E,
+# prelude, embeddings, slot module, CODA frozen); on every row the thinker's context tape
+# is its own sampled codes (`code_tape_rollout_p 1.0`, 8 Euler steps, no grad) and the
+# flow target stays the frozen encoder's code. The coda never reads a sample in training.
+#   training.resume=/home/wolfe/morph-to/checkpoints/morph/tul-code-ladir-tf/step_40000.pt
+defaults:
+  - tul_code_ladir_tf
+  - _self_
+training:
+  steps: 50000                    # 10k steps after the 40k resume point
+  ckpt_every: 5000
+  ademamix_t_beta3: 10000
+tul:
+  code_tape_rollout_p: 1.0
+wandb:
+  name: tul-code-ladir-ro

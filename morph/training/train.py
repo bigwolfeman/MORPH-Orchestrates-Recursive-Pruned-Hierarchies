@@ -3387,7 +3387,7 @@ def main(cfg: DictConfig) -> None:
                     # t-band ratios and `code_rollout_frac` (phase 3). Scalars by
                     # construction (transformer.py wraps the stats as 0-d tensors).
                     or _k.startswith("code_fm") or _k.startswith("code_sigreg")
-                    or _k in ("code_rollout_frac", "code_cfg_drop_frac",
+                    or _k in ("code_rollout_frac", "code_cfg_drop_frac", "code_tape_rollout_frac",
                               "code_xm_score_mean", "code_xm_score_best")}
                    if isinstance(out, dict) else {}),
                 "train/ppl": math.exp(min(_lv, 20.0)),
@@ -3490,7 +3490,7 @@ def main(cfg: DictConfig) -> None:
                            "code_fm", "code_fm_weighted", "code_fm_rel", "code_fm_raw",
                            "code_fm_null", "code_fm_band0_rel", "code_fm_band1_rel",
                            "code_fm_band2_rel", "code_fm_band3_rel", "code_rollout_frac",
-                           "code_cfg_drop_frac", "code_phase",
+                           "code_cfg_drop_frac", "code_tape_rollout_frac", "code_phase",
                            "code_xm_score_mean", "code_xm_score_best",
                            "code_sigreg", "code_sigreg_weighted",
                            "horizon_n_tokens"):

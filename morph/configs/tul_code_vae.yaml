@@ -1,0 +1,23 @@
+# LCTUL, LaDiR chain, stage 1 of 3 — the "VAE" (Wolfe, 2026-09-16: "OHHH WE NEED THAT").
+# LaDiR (§3.1–3.2.1) trains the latent's encoder and decoder FIRST and ALONE, then freezes
+# both for good; decodability comes from heavy latent noise (k = 3) and input-token
+# substitution (p = 0.3), which force a fat, semantic latent the decoder can read from a
+# noisy sample. This run is that stage: E and the coda train on truth codes with noise 3.0
+# (rms-renormed, so a truth cell and a sample share the coda's statistic) and 0.3
+# token-state dropout on the coda input; no thinker (phase 2 never comes), no rollout.
+# Stage 2 (`tul_code_ladir_tf.yaml`) resumes this checkpoint with E + prelude + coda frozen.
+defaults:
+  - tul_code
+  - _self_
+training:
+  steps: 10000
+  ckpt_every: 5000
+  ademamix_t_beta3: 10000
+tul:
+  code_noise: 3.0
+  code_noise_renorm: true
+  token_state_dropout: 0.3
+  code_phase2_at: 1.0             # no thinker in this stage
+  code_phase3_at: 1.0
+wandb:
+  name: tul-code-vae

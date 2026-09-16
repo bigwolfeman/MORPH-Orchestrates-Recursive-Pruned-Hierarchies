@@ -78,6 +78,10 @@ def main() -> None:
     ap.add_argument("--extra_tokens", type=int, default=2)
     ap.add_argument("--steps", type=int, default=8, help="sampler Euler steps for OWN/SHUF")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--sample_scale", default="truth",
+                    help="scale of the OWN/SHUF cells handed to the coda: 'truth' = the model's "
+                         "truth-cell statistic (sqrt(1+noise^2) on a non-renorm arm, 1 on a renorm "
+                         "arm), or a number (1.0 = the generator's current behaviour)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
@@ -99,6 +103,9 @@ def main() -> None:
     rule, spec = tul_rt.data_cfg.rule, tul_rt.data_cfg.spec_for(cfg.data.seq_len)
     emit = "token" if tul_rt.model_cfg.emit_weight == 0.0 else "slot"
     M, C = spec.prefix_k, model.cfg.d_model
+    s_scale = float(model._code_truth_scale) if a.sample_scale == "truth" else float(a.sample_scale)
+    print(f"sample cells handed to the coda at RMS {s_scale:.4f} (truth statistic "
+          f"{float(model._code_truth_scale):.4f})", flush=True)
 
     loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8,
                                split="validation", skip_samples=0, bag_size=0, tul=None)
@@ -166,7 +173,7 @@ def main() -> None:
     try:
         for i, cut in enumerate(cuts):
             j = (i + 1) % N                                   # a different cut's sample
-            codes = {"OWN": cut["own"], "SHUF": cuts[j]["own"],
+            codes = {"OWN": cut["own"] * s_scale, "SHUF": cuts[j]["own"] * s_scale,
                      "ZERO": torch.zeros_like(cut["own"]), "ORACLE": cut["oracle"]}
             n_new = len(cut["true"]) + a.extra_tokens
             trues.append(tok.decode(cut["true"], skip_special_tokens=True))
@@ -182,8 +189,8 @@ def main() -> None:
     # ── scoring ──────────────────────────────────────────────────────────────────────
     emb = Embedder(device)
     e_true, e_ctx = emb(trues), emb(ctxs)
-    out = {"label": label, "step": step, "cuts": N, "steps": a.steps, "per_condition": {},
-           "paired": {}}
+    out = {"label": label, "step": step, "cuts": N, "steps": a.steps, "sample_scale": s_scale,
+           "per_condition": {}, "paired": {}}
     cos_true, cos_ctx, ov_true, ov_ctx = {}, {}, {}, {}
     for c in conds:
         e = emb(texts[c])

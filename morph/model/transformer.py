@@ -5067,6 +5067,21 @@ class MORPHTransformer(nn.Module):
                 lam = float(tc.code_target_lambda)
                 z_tape_t = z.detach().float()
                 z_tgt = (z.float() * lam + z_tape_t * (1.0 - lam)) if lam > 0.0 else z_tape_t
+                _tape_passes = 0
+                if tc.code_tape_rollout_p > 0.0:
+                    # LaDiR's reasoning-model stage 2 (arXiv 2510.04573 §3.3): the thinker's
+                    # CONTEXT is its own generated tape, the target stays the oracle code.
+                    # v1 draws every slot's sample in ONE parallel run conditioned on the
+                    # truth tape (S x k sequential passes would be the paper's exact form);
+                    # the selected rows then read that sampled tape at every earlier slot.
+                    with torch.no_grad():
+                        tape_hat = code_rmsnorm(self._tul_code_sample(
+                            z_tape_t, ok, e, inj, layout, tc.code_rollout_steps)) * okf
+                    rows_r = torch.rand(B, device=z.device) < tc.code_tape_rollout_p
+                    z_tape_t = torch.where(rows_r.view(B, 1, 1, 1), tape_hat.to(z_tape_t.dtype),
+                                           z_tape_t)
+                    stats["code_tape_rollout_frac"] = float(rows_r.float().mean())
+                    _tape_passes = int(tc.code_rollout_steps)
                 e_t, inj_t = e, inj
                 if tc.code_cfg_drop > 0.0:
                     rows = torch.rand(B, device=z.device) < tc.code_cfg_drop
@@ -5122,6 +5137,7 @@ class MORPHTransformer(nn.Module):
                     self._code_last_passes = 1 + int(tc.code_xm_k) + _roll
                 else:
                     self._code_last_passes = 1 + _roll
+                self._code_last_passes += _tape_passes
             stats["code_phase"] = float(phase)
         else:
             mode = code_mode or "sampled"

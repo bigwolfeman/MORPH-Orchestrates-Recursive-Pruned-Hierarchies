@@ -19,7 +19,7 @@ from morph.model.tul import TULConfig
 from morph.model.tul_code import (code_rmsnorm, code_target_valid, code_thinker_relation,
                                   euler_sample)
 
-CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke", "tul_code_xm", "tul_code_xmn", "tul_code_lejepa",
+CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke", "tul_code_xm", "tul_code_xmn", "tul_code_lejepa", "tul_code_vae", "tul_code_ladir_tf", "tul_code_ladir_ro", "tul_code_thinker_p3",
                 "tul_code_rollout1", "tul_code_renorm", "tul_code_cfg", "tul_code_jepa",
                 "tul_code_thinker"]
 
@@ -299,7 +299,9 @@ def test_c10_the_code_arms_compose_and_build_and_run(name, monkeypatch):
     tc = rt.model_cfg
     assert tc.code and tc.tg_geometry == "strict" and not tc.spandec
     assert tc.code_seed_detach == name.endswith("_seeddetach")
-    assert tc.code_phase3_at == (1.0 if name.endswith(("_nophase3", "_thinker")) else 0.5)
+    _p3 = {"tul_code_nophase3": 1.0, "tul_code_thinker": 1.0, "tul_code_vae": 1.0,
+           "tul_code_ladir_tf": 1.0, "tul_code_ladir_ro": 1.0, "tul_code_thinker_p3": 0.0}
+    assert tc.code_phase3_at == _p3.get(name, 0.5)
     assert not bool(cfg.model.use_kernels)
     torch.manual_seed(7)
     m = MORPHTransformer(_tiny(tul=tc)).eval().float()
@@ -753,6 +755,52 @@ def test_xm_noise_search_selects_the_argmin_of_the_flow_loss(monkeypatch):
     sel = z0s.gather(0, best.view(1, *best.shape, 1, 1).expand(1, *best.shape, *z.shape[2:])).squeeze(0)
     assert torch.allclose(rec["pair_z0"][ok], sel[ok], atol=1e-5), \
         "noise search did not pick the lowest-flow-loss corruption"
+
+
+# ── LaDiR tape rollout (tul.code_tape_rollout_p, spec §6) ───────────────────────────
+def test_tape_rollout_hands_the_thinker_its_own_sampled_tape_and_keeps_the_oracle_target(monkeypatch):
+    """With p = 1 the flow pass's CONTEXT is code_rmsnorm(the sampler's output), not E's
+    tape; the target pair is unchanged (v_target = z - z0 with z = E's code); the pass
+    count adds the sampler's steps; the coda still reads truth (no phase-3 rollout)."""
+    x, y, lay, _ = _batch()
+    m = _model(tul_code_tape_rollout_p=1.0, tul_code_rollout_p=0.0)
+    _arm_head(m)
+    m.train()
+    m.code_phase = 2
+    rec = _xm_capture(m, monkeypatch)
+    ctx = []
+    orig_th = m._tul_code_thinker
+    def spy_th(z_noisy, z_clean, t, e, inj, layout, seed_detach):
+        ctx.append(z_clean.detach().clone())
+        return orig_th(z_noisy, z_clean, t, e, inj, layout, seed_detach)
+    monkeypatch.setattr(m, "_tul_code_thinker", spy_th)
+    out = m(x, labels=y, slot_layout=lay)
+    assert len(rec["hat"]) == 1, "one parallel sampler run for the tape"
+    ok = code_target_valid(lay)
+    z = rec["z"]
+    tape_hat = code_rmsnorm(rec["hat"][0])
+    flow_ctx = ctx[-1]                                   # the grad pass is the last thinker call
+    assert torch.allclose(flow_ctx[ok], tape_hat[ok], atol=1e-4), \
+        "the flow pass did not read the sampled tape"
+    assert not torch.allclose(flow_ctx[ok], z[ok], atol=1e-3), "the context is still E's tape"
+    assert out["code_tape_rollout_frac"] == 1.0
+    assert m._code_last_passes == 1 + m.cfg.tul.code_rollout_steps
+    # the coda read truth cells: what entered _tul_plan_ablate is E's (noised) code, not a sample
+    assert rec["coda"] is not None and not torch.allclose(rec["coda"][ok].float(), tape_hat[ok], atol=1e-3)
+    out["loss"].backward()
+    assert m.tul_code_head.W_v.weight.grad is not None
+    with pytest.raises(ValueError, match="code_tape_rollout_p"):
+        _model(tul_code_tape_rollout_p=1.5)
+
+
+def test_tape_rollout_off_is_the_default_path(monkeypatch):
+    x, y, lay, _ = _batch()
+    m = _model(tul_code_tape_rollout_p=0.0)
+    _arm_head(m); m.train(); m.code_phase = 2
+    rec = _xm_capture(m, monkeypatch)
+    out = m(x, labels=y, slot_layout=lay)
+    assert rec["hat"] == [] and "code_tape_rollout_frac" not in out
+    assert m._code_last_passes == 1
 
 
 def test_xm_refusals_and_cfm_pair_takes_a_given_seed():

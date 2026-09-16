@@ -69,7 +69,7 @@ KNOWN_TUL_KEYS = frozenset({
     "code_t_embed_scale", "code_phase2_at", "code_phase3_at", "code_rollout_p",
     "code_rollout_steps", "code_infer_steps", "code_seed_detach", "code_marginal_k",
     "code_cfg_drop", "code_cfg_scale", "code_target_lambda", "code_rank_abort",
-    "code_xm_k", "code_xm_select", "code_xm_mode", "code_sigreg_lambda",
+    "code_xm_k", "code_xm_select", "code_xm_mode", "code_tape_rollout_p", "code_sigreg_lambda",
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
     "spandec", "spandec_heads", "spandec_horizon", "spandec_layers", "spandec_max_tokens",
     "spandec_pass_horizon_max", "spandec_pass_tokens", "spandec_pass_weight",
@@ -378,6 +378,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         code_xm_k=int(tc.get("code_xm_k", 1)),
         code_xm_select=str(tc.get("code_xm_select", "l2")),
         code_xm_mode=str(tc.get("code_xm_mode", "sample")),
+        code_tape_rollout_p=float(tc.get("code_tape_rollout_p", 0.0)),
         code_sigreg_lambda=float(tc.get("code_sigreg_lambda", 0.0)),
     )
     seq_len = int(cfg.data.seq_len)
@@ -535,6 +536,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "code_xm_k": model_cfg.code_xm_k,
         "code_xm_select": model_cfg.code_xm_select,
         "code_xm_mode": model_cfg.code_xm_mode,
+        "code_tape_rollout_p": model_cfg.code_tape_rollout_p,
         "code_sigreg_lambda": model_cfg.code_sigreg_lambda,
         "boundary_chars": str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
         "boundary_substrings": list(substrings),

@@ -683,6 +683,10 @@ class TULConfig:
                                          # sample; 1 = off (one draw, no selection)
     code_xm_select: str = "l2"           # "l2": nearest to E's code (the paper's squared error);
                                          # "coda": lowest coda CE on the true next span
+    code_tape_rollout_p: float = 0.0     # LaDiR reasoning stage 2: fraction of rows whose thinker
+                                         # CONTEXT tape is the thinker's own sampled codes
+                                         # (code_rollout_steps Euler steps, no grad) instead of
+                                         # E's truth tape; the target stays E's code. 0 = off
     code_xm_mode: str = "sample"         # "sample": K full generations, select the endpoint
                                          # (Algorithm 1); "noise": the paper's Diffusion/Flow
                                          # hybrid (App. C): K corruption noises at one t, one
@@ -2263,6 +2267,7 @@ class TULConfig:
                   ("code_marginal_k", 8), ("code_cfg_drop", 0.0), ("code_cfg_scale", 1.0),
                   ("code_target_lambda", 0.0), ("code_rank_abort", 0.0),
                   ("code_xm_k", 1), ("code_xm_select", "l2"), ("code_xm_mode", "sample"),
+                  ("code_tape_rollout_p", 0.0),
                   ("code_sigreg_lambda", 0.0))
         if not self.code:
             _set = [n for n, dflt in _knobs if getattr(self, n) != dflt]
@@ -2287,6 +2292,9 @@ class TULConfig:
                 f"tul.code_phase2_at={self.code_phase2_at} and "
                 f"tul.code_phase3_at={self.code_phase3_at} must satisfy "
                 f"0 <= phase2 <= phase3 <= 1 (phase3_at = 1.0 means rollout never starts).")
+        if not (0.0 <= self.code_tape_rollout_p <= 1.0):
+            raise ValueError(
+                f"tul.code_tape_rollout_p must be in [0, 1], got {self.code_tape_rollout_p}")
         if not (0.0 <= self.code_rollout_p <= 1.0):
             raise ValueError(f"tul.code_rollout_p must be in [0, 1], got {self.code_rollout_p}")
         if self.code_marginal_k < 0:

@@ -248,6 +248,18 @@ mask), not a re-pointed `TULSlotRegister`.
    Inference is unchanged (one sample, `code_infer_steps`). Stats: `code_xm_score_mean`,
    `code_xm_score_best`. `_code_last_passes` counts K × `code_rollout_steps`.
 
+   **Tape rollout (2026-09-16, `code_tape_rollout_p`, LaDiR's reasoning-model stage 2):**
+   LaDiR's second stage does not hand samples to the decoder; it conditions the reasoning
+   model on its OWN generated latents for the earlier blocks while the flow target stays
+   the oracle latent. Here: on a fraction `code_tape_rollout_p` of rows the thinker's
+   clean context tape is replaced by the thinker's sampled codes for every valid slot
+   (one parallel `code_rollout_steps`-step draw conditioned on the truth tape, no grad;
+   the paper's sequential draw would cost S × k passes) and the flow pair is unchanged.
+   Stat `code_tape_rollout_frac`; `_code_last_passes` adds `code_rollout_steps`. This is
+   the third stage of the LaDiR chain (`tul_code_vae` → `tul_code_ladir_tf` →
+   `tul_code_ladir_ro`), in which the coda is frozen from stage 2 on and never reads a
+   sample in training; `code_rollout_p` stays 0 there.
+
    **The noise-search form (2026-09-16, `code_xm_mode: noise`, the paper's Diffusion/Flow
    hybrid, App. C):** no generation. The flow block draws its t and condition once, then K
    corruption noises z_0 for the same target; each candidate is ONE velocity prediction
@@ -393,6 +405,8 @@ tul:
                              # nearest; 1 = off (one draw, no selection)
   code_xm_select: l2         # "l2" (nearest to E's code, the paper) | "coda" (lowest coda CE
                              # on the true next span; K extra no-grad coda passes)
+  code_tape_rollout_p: 0.0   # LaDiR reasoning stage 2: fraction of rows whose thinker CONTEXT is
+                             # its own sampled tape (code_rollout_steps, no grad); target = E's code
   code_xm_mode: sample       # "sample": K full generations, select the endpoint (Algorithm 1)
                              # | "noise": the Diffusion/Flow hybrid, K corruption noises at one
                              # t scored by the flow loss (K thinker passes, no generation)

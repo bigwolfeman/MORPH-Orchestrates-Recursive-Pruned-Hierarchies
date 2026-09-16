@@ -173,3 +173,9 @@ full-rank sample residual 1.9 → 1.72; the last 20k steps are worth 0.007 of sh
 frozen-target thinker learns slower per step than rollout1 did with the coda training beside
 it. Training time is not the lever; the target is. The predictability arm (`code_target_lambda`)
 runs next.
+
+Addendum 2026-09-16: the "three phases in one run" schedule is under challenge by
+[`2026-09-16-lctul-ladir-recipe.md`](2026-09-16-lctul-ladir-recipe.md) (LaDiR's actual
+schedule: decoder frozen for good, thinker trained on its own tape). On 2026-09-16 Wolfe
+named the design LCTUL (Latent Coded TUL).
+
