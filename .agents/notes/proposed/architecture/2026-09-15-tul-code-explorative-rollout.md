@@ -78,3 +78,12 @@ Live reading of the sample form at step 18k (wandb): flow share equal to the par
 (0.312 vs 0.309), selection ratio 0.91 in phase 2 and 0.86–0.89 in phase 3, rate 15.2k
 tok/s against the parent's 24.0k. P-X6 and P-X7 of its prereg fail; P-X1–P-X4 wait on
 the 20k probes.
+
+## Measured 2026-09-16 (l2 arm at 20k, one seed)
+
+Filed in `lab/experiments/failures/2026-09-15-tul-code-xm.md`. Flow probe 0.304 (parent
+0.31), residual 1.85–1.88 in the rank-128 head (bar 1.60), paired gap +0.627 vs the ruler
+(parent +0.63), 8-draw marginal k16 − k1 +0.016, selection ratio 0.91 in phase 2 and
+0.86–0.89 in phase 3, rate 15.2k tok/s. P-X1–P-X4, P-X6 and P-X7 fail. The coda arm
+(P-X5) and the noise-search arm are queued; the note stays proposed until both land.
+

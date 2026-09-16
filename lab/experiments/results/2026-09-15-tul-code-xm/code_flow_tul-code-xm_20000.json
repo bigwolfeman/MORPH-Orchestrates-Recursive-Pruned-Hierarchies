@@ -1,0 +1,24 @@
+{
+ "label": "tul-code-xm",
+ "step": 20000,
+ "rows": 96,
+ "repeats": 2,
+ "mean": {
+  "code_fm_rel": 0.303695029579103,
+  "code_fm_band0_rel": 0.4492371678352356,
+  "code_fm_band1_rel": 0.3272223174571991,
+  "code_fm_band2_rel": 0.225207622628659,
+  "code_fm_band3_rel": 0.2119562136940658,
+  "code_fm_raw": 1222.5095596313477,
+  "code_fm_null": 4025.476608276367
+ },
+ "sem": {
+  "code_fm_rel": 0.0014364394620051898,
+  "code_fm_band0_rel": 0.0026461971985634516,
+  "code_fm_band1_rel": 0.0022998079848827627,
+  "code_fm_band2_rel": 0.0010520213608731389,
+  "code_fm_band3_rel": 0.0012757730528247491,
+  "code_fm_raw": 5.7428650372651955,
+  "code_fm_null": 1.1128806872942134
+ }
+}
