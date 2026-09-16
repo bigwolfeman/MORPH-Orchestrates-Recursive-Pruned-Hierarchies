@@ -1,0 +1,82 @@
+tul-code-lejepa step 20000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+ORACLE   '\\n\\nNief, Belgian Coordinator Gristopher Cherp gate, a doctor who was at the hospital with 60 white Belgian, and the other, the'
+GREEDY   '\\n\\nThe 2016 election, the U.S. government, and the 2016 election.\\n\\n“The government has been awarded the 2'
+SAMPLE1  '\\n\\n“It’s not possible. There was a matter of reasons if we do not care about the fact that anybody else might do, but it is important to see who has'
+SAMPLE2  '\\n\\nBut that’s a real way to move on.\\n\\n“It is not a way to bring a pace, and we are not getting in the same way. It'
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+ORACLE   '\\nA 7.5 million in 20'
+GREEDY   '\\nThe 2016 election, which has'
+SAMPLE1  '\\nOne more exclusion from the G.Tum'
+SAMPLE2  '\\nIf the Department of Justice’s office is'
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+ORACLE   'ident-elect Donald Trump, who has been a major role in the U.S. government, which'
+GREEDY   'ident, who was the first to be in the 2016 election.\\n\\nThe report said the report'
+SAMPLE1  'ident Clinton.\\n\\n"I am excited to see the world at least and not have to come back'
+SAMPLE2  'idential and most Americans. It also has an increase in the region as a result of the population.\\n\\n'
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+ORACLE   ' to the Trans-Pacific Partnership (1993) and the 2016 elections (1993'
+GREEDY   ' to the police.\\n\\nThe court heard the court heard that the police had been killed by the police, and the police'
+SAMPLE1  ' and even more experts.\\n\\nHe said: ‘I’ve asked him what I was doing. He then brought out the way down'
+SAMPLE2  '.\\n\\nAnd the question is why Russian officials have also arrested the Kings, which was aimed at reducing the government'
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+ORACLE   '\\n\\n“I’m not going to be a good job of getting a lot of people,” he said. “I’m not going to be a good job of getting a lot'
+GREEDY   '\\n\\nThe 2016 election, which is the first time the Republican Party has been awarded the 2016 election, and the 2016'
+SAMPLE1  '\\n\\n“What you have a lot of information on our product is to win at United,” McCain said. “You don’t know about the U.S. government has'
+SAMPLE2  '\\n\\nBut that’s what you’re doing. We’re not a good reason to understand what we’re doing, and we’ll be in the same way. We'
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+ORACLE   'The repeat: This guy is remarkably, incorrigibly consistent.\\n\\nThe 20'
+GREEDY   'The 2015-19-2015 report from the 2016'
+SAMPLE1  'Some of the experts that say they are not interested in the issues that can be, and not just on'
+SAMPLE2  'The Gadkansas Party has also released a survey that\'s not as a "terrorist"'
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+ORACLE   ' the same.\\n\\nThe 2015-19-2015 season, the 2016-19'
+GREEDY   ' the same.\\n\\nThe 2015-19-2015 season, the 2016-19'
+SAMPLE1  ' a gamble to live.\\n\\nThis is a big factor in the world at least a long time. It took me a moment to do and'
+SAMPLE2  ' used in the name "The Noion of The Vodafone" as a "politicised" group for the Oceani.\\n'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+ORACLE   'TheAT?!??\\n\\nThe 20'
+GREEDY   'The 2015 NHL Draft of'
+SAMPLE1  'Share. Photograph: Sony G.Y'
+SAMPLE2  'The National Bureau of Investigation also has'
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+ORACLE   '\\n\\nThe 2015 report from the University of'
+GREEDY   '\\n\\nThe 2015 report, which was published'
+SAMPLE1  '\\n\\n“What I did say is that I was a man'
+SAMPLE2  '\\n\\nBut that’s what many of us do, especially'
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+ORACLE   'ots, and the other, the people who have been able to do with the same.\\n\\n“I’m not going to be a good job of getting the right to do,”'
+GREEDY   'ots.\\n\\n“I’m not going to be a good job of getting a lot of people,” he said. “I’m not going to be a good job of getting'
+SAMPLE1  'ots.\\n\\n“The Obama administration is on our way to join an international, and a $2 billion deficit,” Trump said. “There are also a number'
+SAMPLE2  'aking and threatened to defend. “I’ve got a lot of questions about the fact that we have a lot of people in the world and that is the same. People believe'
+

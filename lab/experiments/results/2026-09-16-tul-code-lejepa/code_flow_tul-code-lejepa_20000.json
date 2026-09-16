@@ -1,0 +1,24 @@
+{
+ "label": "tul-code-lejepa",
+ "step": 20000,
+ "rows": 96,
+ "repeats": 2,
+ "mean": {
+  "code_fm_rel": 0.2564183073118329,
+  "code_fm_band0_rel": 0.4701653616502881,
+  "code_fm_band1_rel": 0.26972470711916685,
+  "code_fm_band2_rel": 0.15188929485157132,
+  "code_fm_band3_rel": 0.13035351876169443,
+  "code_fm_raw": 1049.8855457305908,
+  "code_fm_null": 4094.4688568115234
+ },
+ "sem": {
+  "code_fm_rel": 0.0021755426504348322,
+  "code_fm_band0_rel": 0.0022996985171776316,
+  "code_fm_band1_rel": 0.0028446268541007145,
+  "code_fm_band2_rel": 0.001322349572177347,
+  "code_fm_band3_rel": 0.0016868341112226683,
+  "code_fm_raw": 8.877200011216589,
+  "code_fm_null": 1.317373218633002
+ }
+}

@@ -52,3 +52,15 @@ on one seed move the note to `implemented/`; P-LJ1 holding with P-LJ3 failing mo
   statistic is noisier, and the first slot-state SIGReg arm died on a badly picked λ.
 - The full gradient lets the flow loss reshape the code while the coda reads samples in
   phase 3; the rank tripwire is the only guard against a late collapse.
+
+## Measured 2026-09-16 (20k, one seed)
+
+Filed in `lab/experiments/failures/2026-09-16-tul-code-lejepa.md`. Rank held (min 40.4,
+73 at the end; jepa fell to 16), ce_tf 1.49 (the code is no longer verbatim), flow probe
+0.256 (the family's lowest; bar 0.22), sample residual 1.95–1.98 (bar 1.60), paired gap
++0.68 vs the ruler and +0.04 vs the parent. Neither acceptance line fires (implemented
+needs the gap, rejected needs the copy); the note stays proposed. Reading: the full
+gradient lowers the flow loss by moving the target toward the field; the coda pays for
+it and the sample stays an unconditional draw. One new shape, k1 → k2 worth 0.10 nats on
+a single draw, needs a second seed.
+

@@ -1,6 +1,6 @@
 # Experiment: LeJEPA on the code — full flow gradient into the encoder with SIGReg as the guard
 
-Status: planned
+Status: failure
 Date: 2026-09-16
 Owner: Claude (session f9558148), for Wolfe ("that sounds like we should be using lejepa sigreg?")
 
@@ -78,12 +78,51 @@ after the four 50k continuations, before `tul-code-xmc`.
 
 ## Results
 
-(after the run)
+`tul-code-lejepa` (wandb pl6yf9b8, dd78b0f, 20k steps, one seed, healthy, no rank abort).
+Artifacts: `lab/experiments/results/2026-09-16-tul-code-lejepa/` (flow probe, subspace
+probe, 8-draw marginal at 5k–20k, span samples, the 20k depth sweep, paired scoring vs the
+strict ruler and the parent, the wandb series).
+
+| prediction | bar | LeJEPA at 20k | parent / jepa | verdict |
+|---|---|---|---|---|
+| P-LJ1 `val/code_eff_rank` ≥ 40 from 3k | ≥ 40 | min 40.4 (at the rollout onset), 73 at the last val, 87 in phase 2; probe participation ratio 90 / 94 | 38–48 / 16 min | hold |
+| P-LJ2 flow probe share (fresh pairs) | ≤ 0.22 | 0.256 (bands 0.470 / 0.270 / 0.152 / 0.130) | 0.31 / 0.274 | fail |
+| P-LJ3 ce_tf in [0.5, 2.5] | | 1.49 (probe), 1.60 (sweep k = 0) | 0.35 / 0.32 | hold |
+| P-LJ4 sample residual, rank-128 head | ≤ 1.60 | 1.95 / 1.95; full 1.98 / 1.98 | 1.85 / 1.84 | fail |
+| P-LJ5 paired one-draw gap vs strict ruler | ≤ +0.50 | +0.681 [+0.672, +0.691] at k = 6; +0.773 at k = 1 | +0.63 / +0.654 | fail |
+| P-LJ6 healthy, ≥ 30k tok/s, no abort | | healthy; 30.1k in phases 1–2, 23.8k in phase 3 (the parent 24.0k there); peak 15.4 GB | | rate fails by the letter (the bar ignored the rollout cost) |
+
+Other readings. Paired against the parent: +0.038 at k = 6, +0.130 at k = 1. The one-draw
+depth curve has a step the family has not shown before: k1 4.585, k2 4.486, then flat to
+4.501 at k16 (the 8-draw marginal single-draw mean agrees, 4.481 → 4.402); under the
+marginal itself k16 − k1 is −0.0006 [−0.004, +0.003]. The code's content sits in the top
+128 of 1024 directions per cell (ce_tf with the rank-128 head 1.16, with the full code
+1.59: the tail HURTS the coda), and SIGReg spread variance into the tail (cumulative
+variance at rank 32 is 0.47 against the parent's ~0.9). The oracle line in the span
+samples is no longer verbatim: "Nief, Belgian Coordinator Gristopher Cherp gate, a doctor
+who was at the hospital with 60 white Belgian" for the true "However, Belgian Chief
+Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical
+personnel". The greedy and sampled lines are unthreaded newswire as on every arm.
 
 ## Verdict
 
-(after the run)
+Failure: P-LJ2, P-LJ4 and P-LJ5 fail; P-LJ1 and P-LJ3 hold. No binding line fires (the
+first needs P-LJ5, the second needs P-LJ3 to fail, the third needs P-LJ1 to fail). The
+full flow gradient into E with SIGReg as the guard does what it was built to do: the rank
+holds, the code stops being a verbatim copy, and the thinker's flow share is the lowest in
+the family (0.256). It does not make the sample a conditional draw (residual 1.95–1.98,
+the most independent yet) and the coda pays for the softer code (+0.04 nats against the
+parent, +0.68 against the ruler).
 
 ## Updated hypothesis
 
-(after the run)
+Letting the target move toward the field lowers the flow loss by moving the TARGET, not
+by teaching the field the past: the encoder gives up the parts of the span the field
+cannot guess, the coda loses them, and what remains is still sampled unconditionally.
+The two definitions of the code, what the coda needs and what the past determines, pull
+apart on web text at this span length, and a weight between them (λ on the target, λ on
+SIGReg) trades one for the other rather than finding a code that is both. The k1 → k2
+step is the first one-draw depth signal after rollout in the family and should be read
+on a second seed before it is called anything; the next arms on this line are the
+noise-search XM (`tul-code-xmn`) and, if the 50k continuations move nothing, a code with
+less capacity by construction.
