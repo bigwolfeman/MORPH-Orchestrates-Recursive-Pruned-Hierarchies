@@ -44,6 +44,18 @@ Four continuations through the runner (`/home/wolfe/morph-scratch/arc/recon_arms
 
 Runner sweeps at 30000, 40000, 50000; a Spark watcher (`spark_code_probes_50k.sh`) runs the 8-draw marginal sweep at each checkpoint and the subspace probe, span samples and flow probe at 50000 on the three code arms; paired scoring against the 50k ruler with `lab/divergence/paired_vs_ruler.py`. Each arm gets its own wandb run (the fork logic gives a resumed run with a new `wandb.name` a new id). Supersedes the never-launched 30k decay pair (`planned/2026-09-16-tul-code-lr-decay.md`, removed from the queue and deleted in this change; its question is answered by the plain arm and the ruler here).
 
+Method amendment 2026-09-16 01:30 (before any continuation started; reason: a defect
+found on review). The phase boundaries are FRACTIONS of `training.steps` (`train.py`:
+`code_phase2_at * total_steps`, `code_phase3_at * total_steps`), so a resume with
+`training.steps=50000` and the config's 0.10 / 0.50 would put the continuation back
+into phase 2 (coda on truth codes, no rollout) from 20k to 25k and re-enter phase 3 at
+25k. The three code continuations therefore carry `+tul.code_phase2_at=0.04
++tul.code_phase3_at=0.2` (2000 / 10000 of 50000: the parents' own boundaries), so the
+resumed run stays in phase 3 from its first step. The ruler has no phases. Also on
+2026-09-16: the four queue lines the runner consumed at 01:13 were malformed (the
+commit field had lost its separator) and were skipped; they were re-queued at 01:15
+behind `tul-code-lejepa`, which had started in the gap. Predictions unchanged.
+
 ## Not verified before launch
 
 - The resumed AdEMAMix state under the LR step at the resume point (never run on this recipe).
