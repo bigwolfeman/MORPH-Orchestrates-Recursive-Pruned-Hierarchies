@@ -94,6 +94,11 @@ config key (`training.div_ppl_ceiling`, 1e5 on these arms) because the coda's CE
 predicted cell is the arm's instrument (7.4 nats = nothing, 4.4 = ruler, 1.3 = oracle) and
 the default ceiling sits inside that range. Arm B (`resume`, no ramp) was killed and both
 arms re-queued at the head on the new commit after a second Spark smoke with `init_from`.
+Second smoke (14:33, commit d8e93d2, which also declares `init_from` / `data_skip_batches` /
+`div_ppl_ceiling` / `div_strikes` in base.yaml): exit 0, 467/469 tensors loaded, 0
+unexpected, stream skip applied, guard ceiling 100000. Queue lines re-inserted at the head at
+14:35 on d8e93d2; arm B's confounded draw killed at 14:35 (exit 143, last step 12010); both
+aborted checkpoint dirs moved aside (`*.aborted-1417`). Watcher restarted 14:35.
 
 ## Not verified before launch
 
