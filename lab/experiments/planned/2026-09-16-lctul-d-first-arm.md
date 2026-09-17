@@ -42,8 +42,11 @@ strict ruler at matched steps.
 
 ## Method
 
-Queue line at the head of `recon_arms.txt` after the running stage (commit at launch
-recorded here when inserted). Probes: the marginal k-sweep (k 1, 2, 4, 8) at 5k / 10k / 15k /
+Queue line at the head of `recon_arms.txt` after the running stage. Amended 2026-09-16
+19:35 (reason: the line was inserted): commit 7262ed8, line
+`tul-code-d:tul_code_d:tul-code-d:code:5000,10000,15000,20000:20000:1:.../results/2026-09-16-lctul-d:7262ed8:`,
+Spark watcher `spark_code_probes_d.sh` (marginal ks 1,2,4,8 at every checkpoint; subspace,
+samples and flow at 20k). Predictions unchanged. Probes: the marginal k-sweep (k 1, 2, 4, 8) at 5k / 10k / 15k /
 20k on the Spark; the context-share reading at 20k from `code_flow_probe.py` with
 `tul.code_cfg_drop=0.001,tul.code_cfg_scale=1.0` and `0.999` (it reports the denoiser ELBO
 through the `code_fm_*` keys on a discrete model; convert `code_fm_raw` to nats per span);
