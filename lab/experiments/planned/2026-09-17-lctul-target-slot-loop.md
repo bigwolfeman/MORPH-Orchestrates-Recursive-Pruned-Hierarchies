@@ -79,6 +79,22 @@ step 12. Queue lines inserted at the head of `recon_arms.txt` at 10:21 (both arm
 slot, commit 9e831d5, EXTRA with the resume path); watcher `spark_code_probes_target.sh`
 started 10:21. Predictions unchanged.
 
+Amended 2026-09-17 14:35 (reason: the first draw of arm A aborted at step 10020, exit 4):
+the trainer's divergence guard (`MORPH_DIV_PPL` 1000, two strikes, live past step 2000)
+fired at the resume step on a train CE of 9.4 nats (ppl 12,228 at 10000, 19,050 at 10020)
+while the oracle read 1.46 nats — the frozen strict coda reading the identity-initialised
+projection's cell, not a divergence; the LaDiR stages passed the same guard because their
+coda read the noised TRUTH code at train (3.5 nats). Three changes to the OPENING, none to
+the model or the predictions: (1) `training.init_from` replaces `training.resume`, so the
+step axis restarts at 0 and the loop's core — at init in the VAE checkpoint — gets the
+measured 1000-step LR ramp and a fresh optimizer (the first draw ran flat 1e-4 from its
+first step and the CE rose 7.4 → 9.9 nats in 20 steps); (2) `training.data_skip_batches:
+10000` moves the stream past the VAE stage's batches; (3) the guard's ceiling becomes a
+config key (`training.div_ppl_ceiling`, 1e5 on these arms) because the coda's CE on the
+predicted cell is the arm's instrument (7.4 nats = nothing, 4.4 = ruler, 1.3 = oracle) and
+the default ceiling sits inside that range. Arm B (`resume`, no ramp) was killed and both
+arms re-queued at the head on the new commit after a second Spark smoke with `init_from`.
+
 ## Not verified before launch
 
 - The 12 CPU contracts and a CPU generation smoke; the GPU resume smoke is run before the

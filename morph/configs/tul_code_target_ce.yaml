@@ -4,7 +4,7 @@
 # This arm does NOT break the standing rule by itself (the CE is the ordinary TUL signal);
 # the regression term still does, at the same weight, so the pair separates the two
 # signals only through their difference.
-#   training.resume=/home/wolfe/morph-to/checkpoints/morph/tul-code-vae/step_10000.pt
+#   training.init_from=/home/wolfe/morph-to/checkpoints/morph/tul-code-vae/step_10000.pt
 defaults:
   - tul_code_target
   - _self_

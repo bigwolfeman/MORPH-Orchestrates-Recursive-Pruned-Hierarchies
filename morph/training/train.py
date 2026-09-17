@@ -2693,8 +2693,19 @@ def main(cfg: DictConfig) -> None:
     # In-process divergence guard: counts consecutive eval-cadence points with train ppl
     # over a hard ceiling (after step 2000); aborts after K consecutive strikes so finite
     # prune-bounces (ppl≲70) don't trip it but a real divergence (ppl→1e5) does. Env-tunable.
-    _div_ceiling = float(os.environ.get("MORPH_DIV_PPL", "1000"))
-    _div_strikes_max = int(os.environ.get("MORPH_DIV_STRIKES", "2"))
+    # `training.div_ppl_ceiling` / `training.div_strikes` (2026-09-17): the SAME guard as a
+    # config key, for an arm whose train CE is legitimately high by design — the code-target
+    # arm's frozen strict coda reads the loop's projected cell and its CE runs from 7.4 nats
+    # (the cell carries nothing) toward 4.4 (ruler) and 1.3 (oracle), so a 1000-ppl ceiling
+    # (6.9 nats) sits INSIDE the instrument's range. The env var stays the default so every
+    # existing run keeps its guard; a config value wins when set.
+    _tr_ceiling = getattr(cfg.training, "div_ppl_ceiling", None)
+    _tr_strikes = getattr(cfg.training, "div_strikes", None)
+    _div_ceiling = (float(_tr_ceiling) if _tr_ceiling is not None
+                    else float(os.environ.get("MORPH_DIV_PPL", "1000")))
+    _div_strikes_max = (int(_tr_strikes) if _tr_strikes is not None
+                        else int(os.environ.get("MORPH_DIV_STRIKES", "2")))
+    print(f"  [div-guard] ppl ceiling {_div_ceiling:.0f}, {_div_strikes_max} strikes", flush=True)
     _div_strikes = 0
     _aborted = False  # set by the non-finite / divergence guards → skip the post-loop final
                       # save+eval so a DIVERGED_step_N.pt is NOT shadowed by a misleading
