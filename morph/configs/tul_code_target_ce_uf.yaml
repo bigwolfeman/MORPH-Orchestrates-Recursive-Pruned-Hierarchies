@@ -1,0 +1,11 @@
+# LCTUL code target, continuation "tul-code-target-ce-uf": `tul_code_target_uf`'s reader
+# unfreeze applied to arm B (no stop-gradient on the coda's read). Resume arm B's 20k
+# checkpoint and run to 30k. ONE factor against `tul-code-target-uf`: `tul.code_target_detach`.
+#   training.resume=/home/wolfe/morph-to/checkpoints/morph/tul-code-target-ce/step_20000.pt
+defaults:
+  - tul_code_target_uf
+  - _self_
+tul:
+  code_target_detach: false
+wandb:
+  name: tul-code-target-ce-uf

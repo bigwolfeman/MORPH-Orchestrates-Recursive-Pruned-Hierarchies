@@ -1,0 +1,44 @@
+# LCTUL code target, continuation "tul-code-target-uf" (Wolfe, 2026-09-17: "take the
+# checkpoints and take them out 10k more steps unfrozen. 1 checkpoint at half way and see
+# if it is improving"). Resume arm A's 20k checkpoint and run to 30k with the READER
+# unfrozen: the coda, its per-layer injections (model 4:6x6:4 -> x0_injects 10..13), the
+# readout norm and mixer train beside the slot loop and the projection. The ENCODER stays
+# frozen (it is the regression target; trained, it could drift toward whatever the loop
+# already emits), and so do the prelude and the embeddings (E reads the prelude's output,
+# so training them moves the target; the tied LM head IS the embedding table). Fresh
+# optimizer (the coda had no optimizer state), t_beta3 over the 10k continuation, and the
+# stream skipped past the 30k batches the VAE stage and arm A already read. Checkpoints at
+# 25k (half way) and 30k; the semantic probe and the coda's CE on the predicted cell at
+# both, paired against the arm's own 20k readings.
+#   training.resume=/home/wolfe/morph-to/checkpoints/morph/tul-code-target/step_20000.pt
+defaults:
+  - tul_code_target
+  - _self_
+training:
+  steps: 30000
+  ckpt_every: 5000
+  ademamix_t_beta3: 10000
+  resume_fresh_optimizer: true
+  data_skip_batches: 30000
+  train_only:
+    - core.
+    - x0_injects.4.
+    - x0_injects.5.
+    - x0_injects.6.
+    - x0_injects.7.
+    - x0_injects.8.
+    - x0_injects.9.
+    - injection.
+    - tul.E_slot
+    - tul.E_mask
+    - tul.W_sent
+    - tul_code_proj.
+    - coda.                       # the reader, unfrozen
+    - x0_injects.10.
+    - x0_injects.11.
+    - x0_injects.12.
+    - x0_injects.13.
+    - final_norm.
+    - lm_mixer.
+wandb:
+  name: tul-code-target-uf
