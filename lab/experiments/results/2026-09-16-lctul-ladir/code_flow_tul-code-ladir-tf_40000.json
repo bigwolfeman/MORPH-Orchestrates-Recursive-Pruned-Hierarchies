@@ -1,0 +1,24 @@
+{
+ "label": "tul-code-ladir-tf",
+ "step": 40000,
+ "rows": 96,
+ "repeats": 2,
+ "mean": {
+  "code_fm_rel": 0.20432395720854402,
+  "code_fm_band0_rel": 0.44145666155964136,
+  "code_fm_band1_rel": 0.20023618778213859,
+  "code_fm_band2_rel": 0.09417652944102883,
+  "code_fm_band3_rel": 0.09222158184275031,
+  "code_fm_raw": 836.9177093505859,
+  "code_fm_null": 4096.031867980957
+ },
+ "sem": {
+  "code_fm_rel": 0.0022250215127440796,
+  "code_fm_band0_rel": 0.002835232107223038,
+  "code_fm_band1_rel": 0.0024160587460254628,
+  "code_fm_band2_rel": 0.0004497113518473936,
+  "code_fm_band3_rel": 0.0017471895657150806,
+  "code_fm_raw": 9.114519899798767,
+  "code_fm_null": 1.0208524694054855
+ }
+}

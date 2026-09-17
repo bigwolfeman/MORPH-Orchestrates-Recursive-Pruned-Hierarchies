@@ -1,0 +1,24 @@
+{
+ "label": "tul-code-ladir-ro",
+ "step": 50000,
+ "rows": 96,
+ "repeats": 2,
+ "mean": {
+  "code_fm_rel": 0.20648148795589805,
+  "code_fm_band0_rel": 0.44455104414373636,
+  "code_fm_band1_rel": 0.19778697937726974,
+  "code_fm_band2_rel": 0.09253002190962434,
+  "code_fm_band3_rel": 0.08740444015711546,
+  "code_fm_raw": 845.859992980957,
+  "code_fm_null": 4096.500076293945
+ },
+ "sem": {
+  "code_fm_rel": 0.002414214032960305,
+  "code_fm_band0_rel": 0.0036679953719075944,
+  "code_fm_band1_rel": 0.0017904027964488359,
+  "code_fm_band2_rel": 0.000759554559379013,
+  "code_fm_band3_rel": 0.0014735428038332784,
+  "code_fm_raw": 9.90806125832472,
+  "code_fm_null": 1.0291895880850268
+ }
+}

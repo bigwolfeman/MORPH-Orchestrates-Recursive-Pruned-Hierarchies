@@ -1,0 +1,82 @@
+tul-code-ladir-ro step 50000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+ORACLE   '\\n\\n Belgian Chief Director George Governors doctor, who then was told at the hospital, Edward Bgggucci,, stopped after a native'
+GREEDY   '\\n\\nAll Americans heavily affected traffic data by 20 Yahoo Up Disease Control is for good purpose for the task of handing a new, making after a native'
+SAMPLE1  '\\n\\n“Remember, Austin Otto castrates it to get at CRDS membership individual mainstream Russian leaders the ruling of the violent major state development'
+SAMPLE2  '\\nFalony magic prize thus examined.\\n\\nCNN was going to consider trying a prison day after worried, he suspected Soviet-and-thren'
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+ORACLE   '\\nA 7.5, stopped after a native'
+GREEDY   '\\nAll U Americans more differently data contracted'
+SAMPLE1  '\\n“No reporter, D don’t imagine ca'
+SAMPLE2  '\\nFalony Adamze cell allegnesday\\n'
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+ORACLE   'ident our campaign that on a path to winning nomination," Sanders said. ", making after a native A'
+GREEDY   'ident fundraising Americans more data conducted by downtown Yahoo are asking for intelligence for good'
+SAMPLE1  'ident, a reporter, D donor Court caucus to get up to Open UK foreign individual mainstream R'
+SAMPLE2  'idential football style dictates seven allegations.\\n\\nOn doing it attempt to step in prison after a'
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+ORACLE   ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in place for jobs plan jobs.\\n\\n"However'
+GREEDY   ' to fund Americans more differently than data contracted to Immigration Yahoo Disease Control for good or personal information in the same day.'
+SAMPLE1  " to a reporter, Austin Oscar caystal it'll get to check an earlier database global German mainstream Russian leaders contro"
+SAMPLE2  ' to football style dictates seven allegations.\\n\\nOn doing it to release his wait six months when a worried tabi for'
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+ORACLE   '\\nDo you remember when Obama traumals the truth and desperately pleasure harassment vote for Millennial State for Fox News?, making after a native'
+GREEDY   '\\nAll Americans more differently than data contracted to help Nvidia Up Up ready for asking for good or good fearful stories in the same day, the, making after a native'
+SAMPLE1  ' It is a reporter, D don’t castrained it up to get delivered, assuming individual major mainstream Russian leaders loses the most impress ideas away major state budget'
+SAMPLE2  '\\nF footny magic prize thus Gnesday.\\n\\nOn doing it to be chosen a six-year drive to worship minister Pielthab-based ex-rel'
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+ORACLE   '“Remember, this guy guitars, incorrigibly consistent. I, myself, had a'
+GREEDY   '“All U Americans more differently data conducted by our NvidiaD are asking for intelligence for'
+SAMPLE1  'But in a statement, Dustin O Courto castrated it to ICO, earlier its individual main'
+SAMPLE2  'The Star Wars novel stem cell learned continuous Wednesday\\n\\nCNN was going to consider trying to pray'
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+ORACLE   ' used everyone recognized the bliss hype honey made it set for delivering for restaurants on the night.\\n\\n"However, after a'
+GREEDY   ' used throughout ( Americans more efficiently data contracted to select Yahoo Up Up Drinking for good purpose or task for the same day,'
+SAMPLE1  " a a reporter, Austin Oscar caystal it'll get to ~ GB Open other major extensive popcorn Susan Rural R"
+SAMPLE2  ' used footy style magicze cell allegation.\\n\\nOn it was easy to release a pr six day drive toreshen to Nrl'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+ORACLE   'TheAT?!??\\n, stopped after a native'
+GREEDY   'The European Commission Minds more data examined'
+SAMPLE1  'Share, a reporter: D donor Court'
+SAMPLE2  'The Star Wars Photo prize learned Gnesday'
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+ORACLE   ' “Article Continued Below Below\\n\\n"However, after a'
+GREEDY   ' “All Americans hesitate more data traffic by adopting'
+SAMPLE1  ' “But a reporter, D don’t castrue it'
+SAMPLE2  '\\nFoffin prize inside the stem \x95 Corey'
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+ORACLE   'ots, including one on Cap Capill Hill and White House Center, James Paul replies on the passing call saying “I vote in day day.” “He’, making after a vice'
+GREEDY   'ots today in Americans more than data conducted from Nvidia & YahooD is asking for good or good fearful respect for the day-to-, making after a native'
+SAMPLE1  'ots, a reporter, D donor Court caucmatically up to then execute Open Open Equality tourist Russia the Senate leadership of the violent major state budget'
+SAMPLE2  'ots football style dictates seven allegations.\\n\\nCNN was going to consider trying a prison day after worried he couldn’t honor attack the ex--rel'
+

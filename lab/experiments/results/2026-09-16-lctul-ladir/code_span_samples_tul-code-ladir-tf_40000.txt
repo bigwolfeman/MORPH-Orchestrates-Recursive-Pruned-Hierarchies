@@ -1,0 +1,82 @@
+tul-code-ladir-tf step 40000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+ORACLE   '\\n\\n Belgian Chief Director George Governors doctor, who then was told at the hospital, Edward Bgggucci,, stopped after a native'
+GREEDY   '\\n\\nAll Americans more frequently charged data conducted from Nississippi asking for intelligence for fearful consequences for the task of being, having experienced a native'
+SAMPLE1  '\\n\\n“Remember, friend Ascaph castrantet it then ended up in multiple German capital mainstream Social Sabrina rural Russian, violent major state development'
+SAMPLE2  '\\n\\nWyett dict seven stem cell facilitated. A battle -- was committed to taking prison six women aule in resentments of Arthab-based ex-rel'
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+ORACLE   '\\nA 7.5, killed after a native'
+GREEDY   "\\nAll U've always fantastic data margined"
+SAMPLE1  '\\n“No reporter, Dustin Otto ca'
+SAMPLE2  '\\nFlingny Adamze cell allies Wednesday'
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+ORACLE   'ident our campaign that on a path to winning nomination," Sanders said. "" making after a private A'
+GREEDY   'ident throughout ( Americans more significantly affected data taxpayers and competing services.) Thanks for good fearful task'
+SAMPLE1  'ident, a BEI email donor user regulated. It ideas select previous development state tax sounded arguably'
+SAMPLE2  'idential ticketball style dictates cell allegors.\\n\\nWhile it was committed to taking presidential prison after'
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+ORACLE   ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in place for jobs plan jobs.\\n\\n"However'
+GREEDY   ' to support U Americans more charged data on downtown & Yahoo are asking for good fear for the task of good health.'
+SAMPLE1  ' to a statement, friend OAscar castruded up to ~30 earlier foreign extensive internal Russian leaders the r'
+SAMPLE2  ' to fightball funnel inside cell gradnesday camp.\\n\\nWhile it happened to be chosen presidential prayands to worship Christian N'
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+ORACLE   '\\nDo you remember when Obama traumals the truth and desperately pleasure harassment vote for Millennial State for Fox News?, making after a movie'
+GREEDY   '\\nAll Americans more citizen data contracted to help expand Nike Up Up is asking for good fear for fear of task rights.\\n\\n"However, a union\'s a'
+SAMPLE1  ' It is a wonder, email that don’t make word as going to get Facebook comments regarding other current mainstream Democrats regarding the ruling of the ideas away has state plan'
+SAMPLE2  '\\nFootalty funnel cell allegory move.\\n\\nWhile it happened to be chosen prison after a sexual worship to Henry Sabbat-and-kick'
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+ORACLE   '“Remember, this guy guitars, incorrigibly consistent. I, myself, had a'
+GREEDY   '“All I have most citizens more data conducted to help us try to compete without asking for'
+SAMPLE1  'But a statement, friend that Oscar castracised it would be interesting, if individual current main'
+SAMPLE2  'The standy style tells math stem allegations that. We was doing this to consider trying wait, young'
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+ORACLE   ' used everyone recognized the bliss hype honey made it set for delivering for restaurants on the night.\\n\\n" having had a native'
+GREEDY   ' used throughout ( Americans more efficiently increases by boosting the & Youtube is asking for good purpose or fear for the good experience.\\n\\n'
+SAMPLE1  ' a a simple gift, trick donor mirto get it up until then if an element side waained mainstream idiot de the green rains'
+SAMPLE2  ' used pinball magic tent parts cell elevated until.\\n\\nWhile it was easy to snatt, six brandsule sink, he sued'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+ORACLE   'TheAT?!??\\n\\n" after a native'
+GREEDY   'The European Commission Michel more data exam'
+SAMPLE1  'Share a statement, Austin Oscar ca'
+SAMPLE2  'The footballer funnel cell learned continuous Wed'
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+ORACLE   ' “Article Continued Below Below\\n\\nHowever, after a native'
+GREEDY   ' “All Americans hesitate more evidence affected by taxpay'
+SAMPLE1  ' “But a gift, D don’t castrue it'
+SAMPLE2  '\\n\\nWyett dict seven elevator campus. A'
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+ORACLE   'ots, including one on Cap Capill Hill and White House Center, James Paul replies on the passing call saying “I vote in day day.” “He’, making after a vice'
+GREEDY   "ots today have Americans more than price enforce pay from our Nations Up Up is for good purpose or fear for good fear.\\n\\n“However, a union's astronomy"
+SAMPLE1  'ots. With a friend, Oscar castrante it up to get delivered, earlier this individual tourist extremist leaders rallying from the ideas away has day interest'
+SAMPLE2  'ots fighting funnel inside cell grad campare.\\n\\nCNN happened going to release Swoodwards six when he says he wanted to visit Arthabto Company-Z-rel'
+

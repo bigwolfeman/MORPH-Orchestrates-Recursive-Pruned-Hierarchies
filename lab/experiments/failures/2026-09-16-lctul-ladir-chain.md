@@ -1,6 +1,6 @@
 # Experiment: LCTUL trained the LaDiR way — VAE first, decoder frozen for good, thinker on its own tape
 
-Status: planned
+Status: failure
 Date: 2026-09-16
 Owner: Claude (session f9558148), for Wolfe ("We should read the lidar paper again" /
 "OHHH WE NEED THAT")
@@ -91,12 +91,46 @@ the token path here is frozen at 10k steps).
 
 ## Results
 
-(after the run)
+The three stages ran 2026-09-17 00:33 → 08:19 on the 5090 (wandb `za0cyp3w`, `cpi2ru4m`,
+`gromu6o1`; commit cbc696f), all healthy, no spikes. Artifacts:
+`lab/experiments/results/2026-09-16-lctul-ladir/` (marginal sweeps at 20k/30k/40k/45k/50k,
+flow, subspace, span samples and the semantic probe at 40k and 50k, the VAE stage's sweeps).
+
+| Prediction | Reading | Holds |
+| --- | --- | --- |
+| P-L1 stage 1 `val/ce_tf` in [1.0, 3.5] | 1.34 at 9750 (the coda reads the noise-3.0 code; not a copy, not ignored) | yes |
+| P-L2 stage 1 `val/code_eff_rank` ≥ 40 | 57.0 at 10k (61.8 at 40k, 63.0 at 50k) | yes |
+| P-L3 stage 2 sampled `val/ce_tokens` falls ≥ 1.0 | 7.69 at the resume → 9.42 one val later → 9.90 at 39750: ROSE 2.2 | no |
+| P-L4 stage 2 marginal k16 − k1 ≤ −0.10 | +0.319 [+0.225, +0.428] at 40k (k1 7.66, k16 7.98; encoder 1.33) | no |
+| P-L5 stage 2 OWN − SHUF > 0, CI clear | −0.006 [−0.024, +0.011] at 40k (OWN@8 0.111, SHUF 0.116, ZERO 0.132, ORACLE 0.637) | no |
+| P-L6 stage 3 `val/ce_k8_rolled` ≤ stage-2 endpoint − 0.10 | the key was never logged by the trainer (a Method error: no such val key exists); the nearest instrument is stage 3's own sampled `val/ce_tokens`, whose context IS the rolled tape: 10.04 at the resume → 10.35 at 49750 (WORSE by 0.31); Spark marginal k8 8.24 (tf@40k) → 8.50 (45k) → 8.53 (50k) | no |
+| P-L7 stage 2 sampled `val/ce_tokens` ≤ 4.6 | 9.90 | no |
+| P-L8 all healthy; tf ≥ 28k tok/s, ro ≥ 18k | 34.2k / 70.3k / 50.0k tok/s, exit 0 each | yes |
+
+Stage 3 at 50k on the semantic probe: OWN@8 0.109, SHUF 0.115, ZERO 0.131, ORACLE 0.638;
+OWN − SHUF −0.006 [−0.026, +0.013]; OWN − ZERO −0.022 [−0.044, −0.001]. Distinct-2 of the
+own-sample continuations is 0.89 (word salad; ZERO reads 0.52, the ruler 0.44).
 
 ## Verdict
 
-(after the run)
+Failure, on the binding's second branch: P-L1 holds and P-L3 fails. The noise-3.0 code is
+fat and readable (a frozen coda decodes the TRUE code at 1.3 nats and the oracle continuation
+scores 0.64 cosine, the best oracle of any arm), and the thinker's sample still reads as an
+unconditional draw: own sample = foreign sample = worse than no code, on CE (7.7 to 8.0
+nats against the ruler's 4.4) and on generation. Stage 3's own-tape conditioning made the
+sampled CE worse, not better. What the method could not distinguish: whether a longer stage
+2 or a sequential (S × k) rollout would have moved the sample toward the coda's region; the
+flow loss (`code_fm_rel`) plateaued, so more steps on the same loss are not the answer.
+The binding's prescription (a code with less capacity by construction, discrete) was run in
+parallel as `tul-code-d` and `tul-code-dplan` and failed the same way
+(`2026-09-16-lctul-d-first-arm.md`, `2026-09-16-lctul-dplan-semantic.md`).
 
 ## Updated hypothesis
 
-(after the run)
+The decoder side was never the problem. Every reader tried (a coda trusting the code, a
+coda trained on samples, a frozen LaDiR coda on a noise-3.0 code) reads the TRUE code well.
+The thinker's sample carries nothing about the span on every code tried (1024-d at noise
+0.5, 1024-d at noise 3.0, 72-bit discrete, 24-bit discrete) because the past does not
+determine the next span's code on web text beyond the 0.40 nats/token cross-span budget.
+A next-span latent that is sampled rather than summarised is the wrong shape for this
+data; the deterministic strict ruler beats every sampled arm on generation.
