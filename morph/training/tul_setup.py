@@ -72,6 +72,7 @@ KNOWN_TUL_KEYS = frozenset({
     "code_xm_k", "code_xm_select", "code_xm_mode", "code_tape_rollout_p", "code_sigreg_lambda",
     "code_discrete", "code_vq_codebook", "code_vq_groups", "code_vq_dim", "code_vq_beta",
     "code_vq_weight", "code_sub_p", "code_mask_schedule",
+    "code_target", "code_target_weight", "code_target_detach",
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
     "spandec", "spandec_heads", "spandec_horizon", "spandec_layers", "spandec_max_tokens",
     "spandec_pass_horizon_max", "spandec_pass_tokens", "spandec_pass_weight",
@@ -390,6 +391,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         code_vq_weight=float(tc.get("code_vq_weight", 1.0)),
         code_sub_p=float(tc.get("code_sub_p", 0.3)),
         code_mask_schedule=str(tc.get("code_mask_schedule", "linear")),
+        code_target=bool(tc.get("code_target", False)),
+        code_target_weight=float(tc.get("code_target_weight", 1.0)),
+        code_target_detach=bool(tc.get("code_target_detach", True)),
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
@@ -556,6 +560,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "code_vq_weight": model_cfg.code_vq_weight,
         "code_sub_p": model_cfg.code_sub_p,
         "code_mask_schedule": model_cfg.code_mask_schedule,
+        "code_target": model_cfg.code_target,
+        "code_target_weight": model_cfg.code_target_weight,
+        "code_target_detach": model_cfg.code_target_detach,
         "boundary_chars": str(tc.get("boundary_chars", BOUNDARY_SUFFIX_CHARS)),
         "boundary_substrings": list(substrings),
         "min_span": rule.min_span,

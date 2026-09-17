@@ -196,8 +196,16 @@ def generate_tul(
                 # slot) so a seeded generation is reproducible end to end; unseeded ⇒ global.
                 code_seed = (None if seed is None
                              else (int(seed) * 1_000_003 + max(s_open, 0)) % (2 ** 31))
-                res = model(ids, slot_layout=layout, code_mode="generate",
-                            code_given=given, code_given_mask=gmask, code_seed=code_seed)
+                if bool(getattr(model.cfg.tul, "code_target", False)):
+                    # tul.code_target: the open slot's cell is the slot loop's projected
+                    # exit state, not a sample — no sampler seed; the cache still holds
+                    # the span to ONE projected cell across the per-token recompute (the
+                    # eval depth draw would otherwise re-draw it every step).
+                    res = model(ids, slot_layout=layout, code_mode="generate",
+                                code_given=given, code_given_mask=gmask)
+                else:
+                    res = model(ids, slot_layout=layout, code_mode="generate",
+                                code_given=given, code_given_mask=gmask, code_seed=code_seed)
                 if s_open >= 0 and code_cache is None:
                     code_cache = res["code_cells"][0, s_open].float().clone()
                     code_cache_slot = s_open

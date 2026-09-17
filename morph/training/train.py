@@ -137,7 +137,7 @@ def evaluate(
                           "spandec_pass_weighted", "coda_span_weighted",
                           "core_token_aux_weighted", "critic_weighted",
                           "vq_weighted", "row_contrast_weighted", "horizon_weighted",
-                          "code_fm_weighted", "code_sigreg_weighted"):
+                          "code_fm_weighted", "code_sigreg_weighted", "code_target_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -166,7 +166,10 @@ def evaluate(
                         # WHICH span `spandec_ce` grades (tul.spandec_target_offset). 1 on
                         # every arm before that key; at k > 1 the column is a CE over span
                         # s+k and is NOT comparable with an offset-1 arm's.
-                        "spandec_target_offset"):
+                        "spandec_target_offset",
+                        # tul.code_target: the regression and the cosine of the loop's
+                        # projected exit state to the frozen code, on the eval forward.
+                        "code_target", "code_target_mse", "code_target_cos"):
                 # (TUL-Code's flow statistics are TRAIN-side only: the eval forward runs
                 # the sampler, not the flow term. Read train/code_fm_rel and tul/code_fm_*.)
                 if _mk in out:
@@ -226,7 +229,10 @@ def evaluate(
                 # `val/ce_marginal` is a LOWER bound on the span log-likelihood averaged
                 # over K sampled codes, per token; `val/ce_single_mean` the K-average of
                 # one-sample CE (Jensen: marginal <= single_mean, = at K=1).
-                _K = int(getattr(_tul_cfg, "code_marginal_k", 0))
+                # A code-TARGET model (tul.code_target) has E and no sampler: `val/ce_tf`
+                # above is its ceiling, and there is no K-sample marginal to take.
+                _K = (int(getattr(_tul_cfg, "code_marginal_k", 0))
+                      if bool(getattr(_tul_cfg, "code", False)) else 0)
                 if _K > 0:
                     for _k, _v in code_marginal_ce(_m, x, y, layout, _K,
                                                    int(_tul_cfg.code_infer_steps)).items():
@@ -624,6 +630,36 @@ def drop_retired_tul_keys(state: dict, model: nn.Module, path: str) -> list[str]
     return dropped
 
 
+# ── code target (tul.code_target): the VAE stage's checkpoint carries the flow thinker ──
+#
+# `tul-code-vae` (tul_code_vae.yaml) is a `tul.code` model, so its checkpoint holds the
+# thinker's tensors (velocity head, time embedding, cell markers, and on a CFG or discrete
+# model the null seed / symbol table / quantiser) beside E and the coda. A code-TARGET model
+# builds E and a projection and no thinker, so those tensors have no home. They are dropped
+# HERE, loudly and by name, for that ONE model shape; every other homeless key still raises.
+CODE_THINKER_PREFIXES = ("tul_code_head.", "tul_code_time.", "tul_code_cell", "tul_code_clean",
+                         "tul_code_null", "tul_code_sym.", "tul_code_sym_head.", "tul_code_vq.")
+
+
+def drop_code_thinker_keys(state: dict, model: nn.Module, path: str) -> list[str]:
+    """Remove the flow / masked-denoiser thinker's tensors from a checkpoint's model state,
+    LOUDLY, for a code-TARGET model (E + projection, no thinker). Any other model keeps every
+    key and the strict unexpected-key check downstream fires as before. Returns the dropped
+    keys. Mutates ``state`` in place."""
+    if getattr(model, "tul_code_proj", None) is None or getattr(model, "tul_code_head", None) is not None:
+        return []
+    dropped = [k for k in state
+               if k.replace("_orig_mod.", "").startswith(CODE_THINKER_PREFIXES)]
+    for k in dropped:
+        del state[k]
+    if dropped:
+        print(f"  load {path}: dropped {len(dropped)} code-thinker tensor(s) "
+              f"{sorted(dropped)[:6]}{'...' if len(dropped) > 6 else ''} — a code-target "
+              f"model builds E and a projection and no thinker (tul.code_target); every "
+              f"other tensor is checked as before", flush=True)
+    return dropped
+
+
 # ── plain → TUL bootstrap: the ONE resume that legitimately crosses a structure change ──
 #
 # `slot-strict-bootstrap` (morph/configs/tul_slot_strict_bootstrap.yaml) seeds a TUL model
@@ -788,6 +824,7 @@ def load_checkpoint(
         state = dict(ckpt_model)
     # Let load_state_dict report truthfully AFTER the hooks reconstruct mortar_data/routers.
     drop_retired_tul_keys(state, model, path)
+    drop_code_thinker_keys(state, model, path)
     missing, unexpected = model.load_state_dict(state, strict=False)
     # No-theater: an UNEXPECTED key means a saved tensor found no home (structure drift) →
     # state was silently lost. Fail loud. MISSING keys are tolerated only for back-compat
@@ -883,6 +920,7 @@ def load_weights_only(path: str, model: nn.Module, device: torch.device,
     n_raw = sum(1 for k in raw if k in model_keys)
     n_strip = sum(1 for k in raw if _canon(k) in canon_to_model)   # true canonical match count
     drop_retired_tul_keys(state, model, path)
+    drop_code_thinker_keys(state, model, path)
     missing, unexpected = model.load_state_dict(state, strict=False)
     if allow_plain_to_tul:
         # The plain → TUL bootstrap (training.resume_plain_to_tul). Without it this
@@ -3194,6 +3232,7 @@ def main(cfg: DictConfig) -> None:
                             "egrad", "egrad_weighted", "egrad_train", "egrad_auc", "egrad_pos_frac",
                             "pass_residual", "pass_res_weighted",
                             "oracle_z", "oracle_z_weighted",
+                            "code_target", "code_target_weighted",
                             "spandec_pass", "spandec_pass_weighted",
                             "coda_span", "coda_span_weighted",
                             "core_token_aux", "core_token_aux_weighted",
@@ -3326,7 +3365,7 @@ def main(cfg: DictConfig) -> None:
             if isinstance(out, dict) and out.get("mtp_weighted") is not None:
                 _lv = _lv - float(out["mtp_weighted"])   # arc E8: train/loss = next-token CE
             for _ak in ("fp_weighted", "core_gain_weighted", "egrad_weighted",
-                        "pass_res_weighted", "oracle_z_weighted",
+                        "pass_res_weighted", "oracle_z_weighted", "code_target_weighted",
                         "spandec_pass_weighted", "coda_span_weighted",
                         "core_token_aux_weighted",
                         "loopmtp_weighted",          # LoopMTP Eq 13 (arXiv 2608.03624)
@@ -3387,6 +3426,7 @@ def main(cfg: DictConfig) -> None:
                     # t-band ratios and `code_rollout_frac` (phase 3). Scalars by
                     # construction (transformer.py wraps the stats as 0-d tensors).
                     or _k.startswith("code_fm") or _k.startswith("code_sigreg")
+                    or _k.startswith("code_target")
                     or _k in ("code_rollout_frac", "code_cfg_drop_frac", "code_tape_rollout_frac",
                               "code_xm_score_mean", "code_xm_score_best",
                               "code_mdm_nats", "code_mask_frac", "code_sub_frac")}
@@ -3497,6 +3537,11 @@ def main(cfg: DictConfig) -> None:
                            "code_mdm_nats", "code_mask_frac", "code_sub_frac",
                            "horizon_n_tokens"):
                     if _k in out and out[_k] is not None:
+                        log[f"tul/{_k}"] = float(out[_k].detach())
+                # tul.code_target: the term, its weighted twin, the exit cosine and the
+                # per-pass cosines `code_target_cos_l{t}` (one key per realised pass).
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if _k.startswith("code_target") and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.oracle_z's honesty instrument: the ORACLE's own decoder loss at each
                 # of its T steps. A variable number of keys, so it is a scan and not a

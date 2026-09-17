@@ -49,8 +49,9 @@ from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
 from .tul_vq import TULThoughtVQ
-from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeTime, cfm_null_floor,
-                       cfm_pair, code_rmsnorm, code_thinker_relation, euler_sample,
+from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
+                       cfm_null_floor, cfm_pair, code_rmsnorm, code_target_regression,
+                       code_thinker_relation, euler_sample,
                        TULCodeSymHead, mdm_loss, mdm_mask, maskgit_sample)
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
@@ -1932,6 +1933,7 @@ class MORPHTransformer(nn.Module):
         # forward is bit-identical to the strict ruler (tests/test_tul_code.py, C1).
         # RNG-neutral: every module below draws from a private generator.
         self.tul_code_enc: TULCodeEncoder | None = None
+        self.tul_code_proj: TULCodeProj | None = None
         self.tul_code_time: TULCodeTime | None = None
         self.tul_code_head: TULCodeHead | None = None
         # `code_phase` is a Python int the TRAINER sets per step (1 define the code, 2 learn
@@ -2018,6 +2020,27 @@ class MORPHTransformer(nn.Module):
                                    else cfm_null_floor(d, _M, cfg.tul.code_source_std))
             # W_prefix is BUILT (the parameter set matches the ruler, C1) and never applied
             # on a code model: the cells are scattered directly (spec §3.2).
+            if self.tul is not None and self.tul.W_prefix is not None:
+                self.tul.W_prefix.requires_grad_(False)
+        if cfg.tul is not None and cfg.tul.code_target:
+            # ── the code target (tul.code_target; spec §17) ──────────────────────
+            # E is a frozen TARGET: built here so its tensors load from the VAE stage's
+            # checkpoint, and never trained by this arm (requires_grad off at build;
+            # `training.train_only` may not re-enable it — the arm's config lists no
+            # `tul_code_enc.` prefix). The projection is the loop's ONLY write into the
+            # coda; `W_prefix` is built and inert, the `tul.code` precedent.
+            if cfg.n_core == 0:
+                raise ValueError("tul.code_target needs a slot loop (model.n_core > 0): the "
+                                 "projection reads the loop's exit state.")
+            if cfg.fm is not None:
+                raise NotImplementedError(
+                    "tul.code_target with an FM planner (cfg.fm): the planner replaces the "
+                    "slot loop, so there is no looped exit state to project.")
+            _M = int(cfg.tul.prefix_k)
+            self.tul_code_enc = TULCodeEncoder(d, _M)
+            for _p in self.tul_code_enc.parameters():
+                _p.requires_grad_(False)
+            self.tul_code_proj = TULCodeProj(d, _M)
             if self.tul is not None and self.tul.W_prefix is not None:
                 self.tul.W_prefix.requires_grad_(False)
         self.tul_vq: TULThoughtVQ | None = None
@@ -4187,6 +4210,11 @@ class MORPHTransformer(nn.Module):
         # collection on unconditionally, the `_traj_src` precedent.
         _hz_loss = bool(self.cfg.tul.horizon_weight > 0.0) and self.training
         _hz_gate = self.cfg.tul.pass_readout == "gated"
+        # The code target (tul.code_target) reads the SAME trajectory for its per-pass
+        # cosine to the frozen code (`code_target_cos_l{t}`, no_grad, train only): the
+        # depth instrument of that arm. An eval forward keeps `db_traj` None and the
+        # forced-depth sweep reads the ruler's columns.
+        _ct = self.tul_code_proj is not None and self.training
         if (_hz_loss or _hz_gate) and _scse is not None:
             raise NotImplementedError(
                 "tul.horizon_weight>0 / tul.pass_readout='gated' under SCSE is not "
@@ -4195,7 +4223,7 @@ class MORPHTransformer(nn.Module):
                 "(the prefix_source='trajectory' precedent).")
         _db_traj: list[Tensor] | None = (
             [h] if (_db or _stage or _mep or _oz or _pp or _cr or _traj_src
-                    or _hz_loss or _hz_gate) else None)
+                    or _hz_loss or _hz_gate or _ct) else None)
         # Per-pass MUX: entry t-1 is the mask for `_db_traj[t]` — the slots whose realised
         # depth REACHES pass t and whose pass t carries gradient (a progressive prefix pass
         # is excluded: it is detached, so a term there would train nothing and still be
@@ -5766,6 +5794,67 @@ class MORPHTransformer(nn.Module):
             stats["mux_n_supervised"] = float(n_sup)
         return loss
 
+    def _tul_code_target_write(self, h_slots: Tensor, xn: Tensor, db_traj, depths: Tensor,
+                               layout: SlotLayout, L: int, plan_mode: str,
+                               code_mode: str | None, code_given: Tensor | None,
+                               code_given_mask: Tensor | None):
+        """``tul.code_target`` (spec §17): the cells the coda reads, and the term.
+
+        Returns ``(values, cells, loss, stats)``: ``values`` ``[B, S·M, (n,) C]`` ready for
+        :func:`scatter_positions` at :meth:`TULSlots.prefix_positions`; ``cells``
+        ``[B, S, M, C]`` what the coda reads (after the oracle switch, ``code_given`` and
+        the plan ablation), returned as ``out["code_cells"]`` at eval; ``loss`` the
+        regression of the PREDICTED cells onto the frozen encoder's code, ``2 (1 − cos)``
+        per valid cell; ``stats`` the readings.
+
+        THE TARGET. E runs under ``no_grad`` on the token positions of this forward's own
+        prelude output (``xn``), exactly as the VAE stage ran it, and its code is unit-RMS
+        with slots that have no next span at exactly 0 — the projection is masked by the
+        SAME ``ok``, so the coda reads 0 where it was trained to read 0.
+
+        THE READ. ``code_target_detach`` decides whether the coda's CE reaches the loop
+        through the cells (LaDiR's decoder never trains on a generated latent: detached).
+        ``code_mode="encoder"`` hands the coda E's own code (the ceiling, ``val/ce_tf``);
+        ``code_given`` overrides the given slots (the generator's cache, the probes' SHUF /
+        ZERO / ORACLE conditions). The plan ablation runs on the CELLS.
+
+        THE INSTRUMENT. With ``db_traj`` (training only) every pass's state is projected
+        and read against the same code, no_grad: ``code_target_cos_l0`` is the entry state
+        ``core_init(e)``, ``code_target_cos_l{t}`` the state after pass ``t`` over the slots
+        whose realised depth reaches it. Whether the passes MOVE toward the code is the
+        arm's depth question, and this is where it is read.
+        """
+        tc = self.cfg.tul
+        xs = xn.mean(dim=2) if self._is_hc else xn
+        with torch.no_grad():
+            z_tgt, ok = self.tul_code_enc(xs, layout)                     # [B, S, M, C], [B, S]
+        pred = self.tul_code_proj(self._readout(h_slots), ok)
+        loss, cos_mean, n = code_target_regression(pred, z_tgt, ok)
+        stats = {"code_target_mse": float(loss.detach()), "code_target_cos": float(cos_mean),
+                 "code_target_n": float(n)}
+        if db_traj is not None and self.training:
+            with torch.no_grad():
+                for t, ht in enumerate(db_traj):
+                    keep = ok if t == 0 else (ok & (depths >= t))
+                    pt = self.tul_code_proj(self._readout(ht), keep)
+                    _, c_t, _n = code_target_regression(pt, z_tgt, keep)
+                    stats[f"code_target_cos_l{t}"] = float(c_t)
+        cells = pred.detach() if tc.code_target_detach else pred
+        if code_mode == "encoder":
+            cells = z_tgt.to(cells.dtype)
+        if code_given is not None:
+            if code_given_mask is None:
+                raise ValueError("code_given needs code_given_mask")
+            B_, S_ = ok.shape
+            gm = code_given_mask.view(B_, S_, 1, 1)
+            cells = torch.where(gm, code_given.to(cells.dtype), cells)
+        cells = self._tul_plan_ablate(cells, layout, plan_mode)
+        B, S, M, C = cells.shape
+        values = cells.reshape(B, S * M, C).to(xn.dtype)
+        if self._is_hc:
+            values = values.unsqueeze(2).expand(-1, -1, self._n_streams, -1).contiguous()
+        return values, cells, loss, stats
+
     def _tul_oracle_z_loss(self, db_traj, depths: Tensor, input_ids: Tensor,
                            layout: SlotLayout, stats: dict | None = None) -> Tensor:
         """``tul.oracle_z`` — a per-PASS target the loop is asked to match (train only).
@@ -6982,11 +7071,26 @@ class MORPHTransformer(nn.Module):
                 raise NotImplementedError(
                     "plan_mode='wrong_seed' on a code model: the seed feeds the thinker, not "
                     "the cells, so the reading would mean something else (spec §8).")
+        elif tc.code_target:
+            if code_steps is not None or code_seed is not None:
+                raise NotImplementedError(
+                    "code_steps / code_seed on a code-target model: the cells are the slot "
+                    "loop's projection and there is no sampler; the eval dial is slot_depths.")
+            if code_mode not in (None, "encoder", "generate"):
+                raise NotImplementedError(
+                    f"code_mode={code_mode!r} on a code-target model: only 'encoder' (E's "
+                    f"own code in the cells, the ceiling) and 'generate' (with code_given) "
+                    f"exist here.")
+            if self.training and (code_mode is not None or code_given is not None):
+                raise ValueError(
+                    "code_mode / code_given are EVAL-ONLY on a code-target model: at train "
+                    "the coda reads the projection's cells.")
         elif (code_mode is not None or code_steps is not None or code_given is not None
               or code_seed is not None):
             raise ValueError("code_mode / code_steps / code_given need a model built with "
                              "tul.code=true.")
         _code_cells_out = None
+        code_target_loss, code_target_stats = None, {}
         if slot_depths is not None:
             # The SAME rule tul_step_mode='db1' states above: every branch of this forward
             # that never reaches `_tul_core` would ignore the table in silence, so each is
@@ -7524,7 +7628,19 @@ class MORPHTransformer(nn.Module):
             # own source state and the ablation is applied to the STACK, with the exit cell
             # read back off it so a `shuffle` draws ONE permutation, not two.
             _cells = _pad_cells = _pad_pos = None
-            if _reg_cells is not None:
+            _ct_values = None
+            if self.tul_code_proj is not None:
+                # ── the code target (tul.code_target; spec §17) ─────────────────
+                # The projection's cells replace the `prefix_project` write. The
+                # regression, the per-pass readings, the oracle switch and the plan
+                # ablation all live in one method so the cells the coda reads and the
+                # cells the loss grades are built at one seam.
+                (_ct_values, _code_cells_out, code_target_loss, code_target_stats
+                 ) = self._tul_code_target_write(h_slots, xn, db_traj, depths, layout, L,
+                                                 plan_mode, code_mode, code_given,
+                                                 code_given_mask)
+                h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
+            elif _reg_cells is not None:
                 # The register's M cells go 1:1 into the M prefix cells (`prefix_k` is
                 # refused unless it equals `slot_cells`). The ablation runs on the STACK
                 # and the exit mean is read back off it, so a `shuffle` draws ONE
@@ -7545,7 +7661,10 @@ class MORPHTransformer(nn.Module):
                 h_slots = _cells[:, :, -1]
             else:
                 h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
-            values, pos = self.tul.prefix_project(h_slots, layout, L, cells=_cells)
+            if _ct_values is not None:
+                values, pos = _ct_values, self.tul.prefix_positions(layout, L)
+            else:
+                values, pos = self.tul.prefix_project(h_slots, layout, L, cells=_cells)
             if _pad_cells is not None:
                 # A PAD cell's carrier is EXACTLY zero, `E_pass` included. Zeroing the
                 # SOURCE state is not enough: `prefix_project` adds the per-cell embedding
@@ -7759,6 +7878,17 @@ class MORPHTransformer(nn.Module):
             _dw = tc.spandec_weight * spandec_loss
             groups["spandec_weighted"] = _dw.detach()
             groups["loss"] = groups["loss"] + _dw
+        if code_target_loss is not None and groups is not None:
+            # The code target (tul.code_target). Same contract as `spandec_weighted`: the
+            # WEIGHTED term is exposed so train.py subtracts it and keeps train/loss and
+            # the val loss on the MODEL's CE.
+            groups = dict(groups)
+            groups["code_target"] = code_target_loss.detach()
+            for _k, _v in code_target_stats.items():
+                groups[_k] = code_target_loss.new_tensor(_v)
+            _tw = tc.code_target_weight * code_target_loss
+            groups["code_target_weighted"] = _tw.detach()
+            groups["loss"] = groups["loss"] + _tw
         if tc.code and groups is not None:
             # TUL-Code: the flow term, same contract as `spandec_weighted` (train.py
             # subtracts it so train/loss and the val loss stay the model's CE).

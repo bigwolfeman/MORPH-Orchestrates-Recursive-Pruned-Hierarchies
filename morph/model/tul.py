@@ -708,6 +708,28 @@ class TULConfig:
                                          # distribution to N(0, I) (the collapse guard that lets
                                          # code_target_lambda go to 1.0 with no stop-gradient);
                                          # weight of the term in the loss; 0 = off
+    # ── the CODE TARGET (arm `tul-code-target`, 2026-09-17; docs/tul-code-spec.md §17) ──
+    #
+    # LaDiR with the TUL SLOT LOOP as the latent generator. The ordinary strict slot loop
+    # runs (`_tul_core`, every loop knob live); its exit state goes through `TULCodeProj`
+    # to M = prefix_k unit-RMS cells, and THOSE cells are what the coda reads at the prefix
+    # positions (no `W_prefix` write: built and inert, the `tul.code` precedent). A frozen
+    # encoder E (`TULCodeEncoder`, loaded from the VAE stage and never trained here)
+    # encodes the TRUE next span, and the loss regresses the predicted cells onto E's code:
+    # ||pred - z||² / C per cell = 2 (1 - cos). Every pass's state is read against the
+    # same code (`code_target_cos_l{t}`, train only): the depth instrument.
+    #
+    # THIS BREAKS THE STANDING RULE "never regress onto the slot state" (root CLAUDE.md;
+    # the `oracle_z` precedent carved the one earlier exception). Wolfe directed it on
+    # 2026-09-17 after the sampled-code arms: "we can train TUL latent to match oracle".
+    # Recorded in .agents/notes/proposed/architecture/2026-09-17-lctul-target-slot-loop.md.
+    code_target: bool = False
+    code_target_weight: float = 1.0      # weight of the regression term in the total loss
+    code_target_detach: bool = True      # True: the coda reads the predicted cells with
+                                         # stop-gradient, so the loop learns from the
+                                         # regression ALONE (LaDiR: the decoder never trains
+                                         # on a generated latent). False (arm B): the token
+                                         # CE through the frozen coda also trains the loop.
     # ── THE PER-PASS PLANNING TARGET (arm `slot-spandec-strict-perpass`, 2026-09-12) ──
     #
     # WHAT IT IS. Every pass of the loop gets its own decoder target, and the target grows
@@ -1463,6 +1485,7 @@ class TULConfig:
                 f"{self.row_contrast_tau}")
         self._check_vq()
         self._check_code()
+        self._check_code_target()
         if self.prefix_source in ("trajectory", "entry_exit") and self.prefix_k < 2:
             raise ValueError(
                 f"tul.prefix_source={self.prefix_source!r} needs tul.prefix_k >= 2: at "
@@ -2444,6 +2467,48 @@ class TULConfig:
                 "tul.code reads no slot depth (slot_mean_depth / slot_max_depth / "
                 "slot_depth_fixed): training runs one velocity pass per slot and eval runs "
                 "code_infer_steps Euler passes. Drop the depth knobs.")
+
+    def _check_code_target(self) -> None:
+        """``tul.code_target`` — the slot loop regressed onto the frozen code (spec §17)."""
+        if not self.code_target:
+            if self.code_target_weight != 1.0 or self.code_target_detach is not True:
+                raise ValueError(
+                    "tul.code_target_weight / code_target_detach set with tul.code_target=false: "
+                    "no encoder or projection is built, so the knob(s) would be silently ignored.")
+            return
+        if self.code:
+            raise NotImplementedError(
+                "tul.code_target with tul.code: a code model has no slot loop to regress. "
+                "The target arm builds E as a frozen TARGET, not as the code path.")
+        if self.code_target_weight < 0.0:
+            raise ValueError(
+                f"tul.code_target_weight must be >= 0, got {self.code_target_weight}")
+        if self.tokens_through_core or self.loop_reads_tokens:
+            raise NotImplementedError(
+                "tul.code_target needs the slot geometry (tokens_through_core=false, "
+                "loop_reads_tokens=false): the predicted cells are the coda's prefix positions.")
+        if self.tg_geometry != "strict":
+            raise NotImplementedError(
+                f"tul.code_target needs tul.tg_geometry='strict' (got {self.tg_geometry!r}): "
+                f"the cells must be the ONLY cross-span channel, or the coda bypasses them "
+                f"(the tul.code rule, docs/tul-code-spec.md §5).")
+        if not (self.coda_sees_slots and self.coda_token_cut == 0):
+            raise NotImplementedError(
+                "tul.code_target needs the FULL-AXIS coda (coda_sees_slots=true, "
+                "coda_token_cut=0): the M predicted cells ARE coda positions.")
+        if self.slot_cells != 1 or self.vq_codes != 0 or self.prefix_source != "exit":
+            raise NotImplementedError(
+                f"tul.code_target with slot_cells={self.slot_cells} / vq_codes={self.vq_codes} "
+                f"/ prefix_source={self.prefix_source!r}: each of those also claims the prefix "
+                f"cells. The target's cell count is prefix_k; run them as separate arms.")
+        if self.detach_z:
+            raise ValueError(
+                "tul.code_target with tul.detach_z: the stop-gradient on the coda's read is "
+                "tul.code_target_detach on this arm (one knob for one thing).")
+        if self.bcast or self.spandec_reads_cells:
+            raise NotImplementedError(
+                "tul.code_target with tul.bcast / spandec_reads_cells: both read the prefix "
+                "write, which on this arm is the projection's cells, not h_slots.")
 
     def _check_vq(self) -> None:
         """``tul.vq_codes`` — the discrete thought. Every refusal, with its reason.

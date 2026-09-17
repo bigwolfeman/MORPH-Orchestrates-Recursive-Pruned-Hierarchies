@@ -148,6 +148,57 @@ class TULCodeEncoder(nn.Module):
         return z, ok
 
 
+class TULCodeProj(nn.Module):
+    """``tul.code_target`` (spec §17): the slot loop's exit state -> ``M`` unit-RMS cells.
+
+    ``cell_i = code_rmsnorm(W_code[i] · r + b_code[i])`` with ``r`` the loop's readout of
+    the slot's exit state ``[B, S, C]``. ``W_code`` is IDENTITY at init and ``b_code`` zero
+    (no RNG draw: a code-target model's base weights equal its ruler's), so at step 0 the
+    coda reads the rms-normed exit state itself. Excluded from ternary QAT: it is the ONE
+    channel from the loop into the frozen coda (the ``W_prefix`` precedent), and the
+    frozen encoder it is regressed onto is dense too.
+    """
+
+    def __init__(self, d_model: int, m_cells: int):
+        super().__init__()
+        if m_cells < 1:
+            raise ValueError(f"TULCodeProj needs m_cells >= 1, got {m_cells}")
+        self.m = int(m_cells)
+        self.W_code = nn.Parameter(torch.eye(d_model).unsqueeze(0).repeat(self.m, 1, 1))
+        self.b_code = nn.Parameter(torch.zeros(self.m, d_model))
+        self._ternary_exclude = True
+
+    def forward(self, r: Tensor, valid: Tensor) -> Tensor:
+        """``r`` ``[B, S, C]`` -> ``[B, S, M, C]`` unit-RMS per cell; a slot with ``valid``
+        false holds exactly 0 (the encoder's contract, so a pad cell and a pad target agree).
+        """
+        B, S, C = r.shape
+        w = self.W_code.to(r.dtype)
+        out = torch.einsum("bsc,mdc->bsmd", r, w) + self.b_code.to(r.dtype).view(1, 1, self.m, C)
+        return code_rmsnorm(out) * valid.view(B, S, 1, 1).to(out.dtype)
+
+
+def code_target_regression(pred: Tensor, z: Tensor, ok: Tensor
+                           ) -> tuple[Tensor, Tensor, Tensor]:
+    """The ``tul.code_target`` term on unit-RMS cells: ``mean over valid cells of
+    ||pred - z||² / C`` = ``2 (1 - cos)`` per cell. Returns ``(loss, cos_mean, n_cells)``;
+    with no valid cell the loss is an exact 0 that still carries ``pred``'s graph.
+    ``z`` is the frozen encoder's code and is detached here, so the term can never move it.
+    """
+    B, S, M, C = pred.shape
+    z = z.detach().float()
+    p = pred.float()
+    okm = ok.view(B, S, 1).expand(B, S, M)
+    n = okm.sum()
+    d2 = (p - z).pow(2).sum(-1) / float(C)                                  # [B, S, M]
+    cos = (p * z).sum(-1) / float(C)                                         # unit RMS: <p,z>/C
+    if int(n) == 0:
+        zero = (p * 0.0).sum()
+        return zero, zero.detach(), n
+    loss = d2[okm].mean()
+    return loss, cos[okm].mean().detach(), n
+
+
 class TULCodeTime(nn.Module):
     """``t`` in ``[0, 1]`` (per slot) -> ``[C]`` added to the noisy copies' injection.
 

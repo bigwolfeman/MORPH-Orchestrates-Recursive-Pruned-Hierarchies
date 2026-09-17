@@ -588,3 +588,58 @@ the schedule and the sampler, seeded, k = 1 = one-shot; D6 causality; D7 the los
 nothing; D8 null condition and guidance; D9 refusals; D10 the arm composes; D11/D12 eval
 modes, pass counts, generation, the marginal). Config: `tul_code_d.yaml`. Note:
 `.agents/notes/proposed/architecture/2026-09-16-lctul-d-discrete-code-masked-denoiser.md`.
+
+## 17. The code TARGET — LaDiR with the slot loop as the latent generator (2026-09-17)
+
+Why (measured, `lab/experiments/failures/2026-09-16-lctul-{d-first-arm,dplan-semantic,ladir-chain}.md`):
+every SAMPLED next-span code reads as a foreign sample on generation (own − foreign +0.008
+to −0.006, CI spanning 0, on the flow, masked-denoiser and LaDiR thinkers), while every
+reader decodes the TRUE code well (the LaDiR VAE stage: 1.34 nats teacher-forced, oracle
+cosine 0.64). Wolfe, 2026-09-17: "we can train TUL latent to match oracle. Its impossible
+for it to carry nothing about the span." A latent REGRESSED onto the code carries its
+predictable part, at least the 0.40 nats/token cross-span budget; the earlier
+future-prediction targets that read flat were span-mean embeddings sitting within 0.01
+cosine of each other (`horizon-targets-degenerate-on-web-text`). The VAE code is rank 57.
+
+`tul.code_target: true` keeps the ORDINARY strict slot loop (`_tul_core`, every loop knob
+live, the gain constraint on) and changes three things:
+
+- **The write.** `TULCodeProj` (`morph/model/tul_code.py`) maps the loop's readout of a
+  slot's exit state to M = `prefix_k` unit-RMS cells (`W_code` identity-init, `b_code`
+  zero, no RNG draw, ternary-excluded), masked by E's `ok`. THOSE cells are scattered into
+  the prefix positions (`TULSlots.prefix_positions`); `W_prefix` is built and inert (§3.2's
+  precedent). `_forward_tul` → `_tul_code_target_write`.
+- **The target.** E (`TULCodeEncoder`) is built FROZEN (`requires_grad` off at build, no
+  `tul_code_enc.` prefix in `training.train_only`), loaded from the VAE stage's checkpoint
+  (`tul-code-vae/step_10000.pt`) with the thinker's tensors dropped loudly
+  (`train.py::drop_code_thinker_keys`), and run under `no_grad` on the forward's own prelude
+  output. The term: `mean over valid cells of ||pred − z||² / C = 2 (1 − cos)`
+  (`code_target_regression`), weight `code_target_weight`, exposed as `code_target` /
+  `code_target_weighted` (train.py subtracts the weighted term from the reported loss, the
+  `spandec_weighted` contract).
+- **The read.** `code_target_detach: true` (arm A, `tul_code_target.yaml`): the coda reads
+  the predicted cells with stop-gradient, so the loop learns from the regression ALONE
+  (LaDiR: the decoder never trains on a generated latent). `false` (arm B,
+  `tul_code_target_ce.yaml`): the token CE through the frozen coda trains the loop too.
+
+Instruments. `code_target_cos` (exit cell cosine to the code, train and eval);
+`code_target_cos_l{t}` (train only, no_grad): the entry state `core_init(e)` at `l0` and
+the state after every realised pass, projected and read against the SAME code — whether
+the passes MOVE toward the code. Eval: `code_mode="encoder"` hands the coda E's own code
+(`val/ce_tf`, the ceiling); `code_mode="generate"` + `code_given` overrides slots (the
+generator's per-span cache; the probe's SHUF / ZERO / ORACLE); `plan_mode` zero / shuffle
+act on the CELLS; `slot_depths` forces the loop depth (the K-curve); `code_steps` /
+`code_seed` / the sampler modes are refused (no sampler). `code_semantic_probe.py --kind
+target` scores OWN / SHUF / ZERO / ORACLE on the 120 cuts.
+
+Refusals (`TULConfig._check_code_target`): with `tul.code`; the paid loop /
+`loop_reads_tokens`; non-strict geometry; a cut coda; `slot_cells > 1` / `vq_codes` /
+`prefix_source != exit`; `detach_z` (one knob: `code_target_detach`); `bcast` /
+`spandec_reads_cells`; `code_target_*` set with `code_target: false`. Model: `n_core == 0`;
+an FM planner.
+
+THE RULE. This regresses the slot state onto an external vector, which root `CLAUDE.md`
+forbids (LCM T3/4, CoCoMix §6b, BT §4.2); `oracle_z` carved the one earlier exception.
+Wolfe directed this arm on 2026-09-17, and the note
+`.agents/notes/proposed/architecture/2026-09-17-lctul-target-slot-loop.md` records the
+exception. Tests: `tests/test_tul_code_target.py` (twelve, one per invariant above).

@@ -1,0 +1,56 @@
+# LCTUL, the code TARGET arm "tul-code-target" (2026-09-17; docs/tul-code-spec.md §17;
+# note .agents/notes/proposed/architecture/2026-09-17-lctul-target-slot-loop.md; prereg
+# lab/experiments/planned/2026-09-17-lctul-target-slot-loop.md).
+#
+# LaDiR with the TUL SLOT LOOP as the latent generator. Resume the VAE stage's checkpoint
+# (`tul-code-vae/step_10000.pt`: E + coda trained on truth codes at noise 3.0, rms-renormed)
+# with E, the prelude, the embeddings AND THE CODA frozen; the ordinary strict slot loop runs
+# and its exit state, through `TULCodeProj`, IS the M = prefix_k cells the coda reads. The
+# loss regresses those cells onto E's code of the true next span (2 (1 - cos) per cell);
+# the coda reads them with stop-gradient (`code_target_detach: true`, LaDiR's decoder never
+# trains on a generated latent), so the loop learns from the regression ALONE. The
+# checkpoint's flow thinker (velocity head, time embedding, cell markers) is dropped at load,
+# loudly (train.py::drop_code_thinker_keys). The VAE's `core.*` never trained (phase 2 never
+# came), so the slot loop's core starts from that checkpoint's init.
+#
+# ONE factor against `slot-spandec-strict` (`tul_slot_spandec_strict.yaml`): the write into
+# the coda is a projection regressed onto a frozen code instead of `W_prefix`, and the coda
+# and prelude are the frozen VAE stage's. The span decoder is OFF (the frozen coda is the
+# mouth). The slot-loop gain constraint is ON as in base.yaml.
+#
+# THIS ARM BREAKS THE STANDING RULE "never regress onto the slot state" (root CLAUDE.md), on
+# Wolfe's 2026-09-17 direction: "we can train TUL latent to match oracle".
+#   training.resume=/home/wolfe/morph-to/checkpoints/morph/tul-code-vae/step_10000.pt
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+training:
+  steps: 20000
+  ckpt_every: 5000
+  ademamix_t_beta3: 20000
+  resume_fresh_optimizer: true
+  train_only:                     # the slot loop and its write, nothing else
+    - core.                       # the loop body (model 4:6x6:4 -> core injections 4..9)
+    - x0_injects.4.
+    - x0_injects.5.
+    - x0_injects.6.
+    - x0_injects.7.
+    - x0_injects.8.
+    - x0_injects.9.
+    - injection.
+    - tul.E_slot                  # the slot seed path (the loop's input)
+    - tul.E_mask
+    - tul.W_sent
+    - tul_code_proj.              # the ONE write into the frozen coda
+model:
+  slot_gain_lambda: 100.0         # the slot-loop gain constraint (base.yaml)
+  slot_gain_target: 0.9
+  slot_cot_clip: 4.0
+tul:
+  spandec: false
+  code_target: true
+  code_target_weight: 1.0
+  code_target_detach: true
+  token_state_dropout: 0.0        # the coda is frozen; read it clean
+wandb:
+  name: tul-code-target

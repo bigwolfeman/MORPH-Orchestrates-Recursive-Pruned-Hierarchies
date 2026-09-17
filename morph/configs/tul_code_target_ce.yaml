@@ -1,0 +1,14 @@
+# LCTUL code target, arm B "tul-code-target-ce": `tul_code_target` with the stop-gradient
+# on the coda's read REMOVED, so the token CE through the FROZEN coda trains the slot loop
+# beside the regression. ONE factor against `tul-code-target`: `tul.code_target_detach`.
+# This arm does NOT break the standing rule by itself (the CE is the ordinary TUL signal);
+# the regression term still does, at the same weight, so the pair separates the two
+# signals only through their difference.
+#   training.resume=/home/wolfe/morph-to/checkpoints/morph/tul-code-vae/step_10000.pt
+defaults:
+  - tul_code_target
+  - _self_
+tul:
+  code_target_detach: false
+wandb:
+  name: tul-code-target-ce

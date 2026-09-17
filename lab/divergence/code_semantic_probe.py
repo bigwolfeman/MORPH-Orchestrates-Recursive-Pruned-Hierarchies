@@ -85,8 +85,10 @@ def _distinct2(seqs: list[list[int]]) -> float:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True, help="LABEL=CONFIG=PATH")
-    ap.add_argument("--kind", default="code", choices=("code", "slot", "plain"),
-                    help="code: LCTUL / LCTUL-D (OWN@k, SHUF, ZERO, ORACLE); slot: a slot-loop "
+    ap.add_argument("--kind", default="code", choices=("code", "slot", "plain", "target"),
+                    help="code: LCTUL / LCTUL-D (OWN@k, SHUF, ZERO, ORACLE); target: a code-target "
+                         "model (tul.code_target: OWN = the slot loop's projected cells, SHUF, "
+                         "ZERO, ORACLE = E's code, no sampler rounds); slot: a slot-loop "
                          "model such as the strict ruler (OWN only, its deterministic write); "
                          "plain: a model with no slots (OWN only, generate_plain)")
     ap.add_argument("--cuts_config", default="tul_code_d",
@@ -122,8 +124,11 @@ def main() -> None:
     cfg = build_cfg(config, ["model.use_kernels=false"])
     tul_rt = build_tul_runtime(cfg)
     is_code = tul_rt is not None and bool(getattr(tul_rt.model_cfg, "code", False))
+    is_target = tul_rt is not None and bool(getattr(tul_rt.model_cfg, "code_target", False))
     if a.kind == "code":
-        assert is_code, "kind=code needs a TUL-Code checkpoint"
+        assert is_code and not is_target, "kind=code needs a TUL-Code checkpoint"
+    elif a.kind == "target":
+        assert is_target, "kind=target needs a tul.code_target checkpoint"
     elif a.kind == "slot":
         assert tul_rt is not None and not is_code, "kind=slot needs a slot-loop TUL checkpoint"
     else:
@@ -190,6 +195,23 @@ def main() -> None:
                                code_given_mask=gmask, code_steps=k,
                                code_seed=(a.seed * 1_000_003 + len(cuts)) % (2 ** 31))
                     cut["own"][k] = r2["code_cells"][0, b].float().clone()
+        elif a.kind == "target":
+            # tul.code_target: ORACLE is E's code of the true span (code_mode="encoder");
+            # OWN is the slot loop's projected exit state on the PREFIX row (the generation
+            # regime: the loop at slot b reads spans <= b only), no sampler and no rounds.
+            lay = layout.to(device)
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
+                res = model.tul_forward_ablated(inp.to(device), None, lay, plan_mode="normal",
+                                                code_mode="encoder")
+                cut["oracle"] = res["code_cells"][0, b].float().clone()
+                builder = TulRowBuilder(rule=rule, spec=spec)
+                for t in prefix:
+                    builder.append(int(t))
+                pids, play = builder.tensors(device)
+                assert builder.n_slots - 1 == b, f"open slot {builder.n_slots - 1} != {b}"
+                torch.manual_seed((a.seed * 1_000_003 + len(cuts)) % (2 ** 31))
+                r2 = model(pids, slot_layout=play)
+                cut["own"][0] = r2["code_cells"][0, b].float().clone()
         cuts.append(cut)
     N = len(cuts)
     print(f"{label}: step {step}, kind {a.kind}, {N} cuts", flush=True)
@@ -217,11 +239,13 @@ def main() -> None:
 
     if a.kind == "code":
         conds = tuple(f"OWN@{k}" for k in k_list) + ("SHUF", "ZERO", "ORACLE")
+    elif a.kind == "target":
+        conds = ("OWN", "SHUF", "ZERO", "ORACLE")
     else:
         conds = ("OWN",)
     toks_out = {c: [] for c in conds}
     trues, ctxs = [], []
-    if a.kind == "code":
+    if a.kind in ("code", "target"):
         model.forward = inject_forward
     try:
         for i, cut in enumerate(cuts):
@@ -234,8 +258,11 @@ def main() -> None:
                 codes["SHUF"] = cuts[j]["own"][k_shuf] * s_scale
                 codes["ZERO"] = torch.zeros_like(cut["oracle"])
                 codes["ORACLE"] = cut["oracle"]
+            elif a.kind == "target":
+                codes = {"OWN": cut["own"][0], "SHUF": cuts[j]["own"][0],
+                         "ZERO": torch.zeros_like(cut["oracle"]), "ORACLE": cut["oracle"]}
             for c in conds:
-                if a.kind == "code":
+                if a.kind in ("code", "target"):
                     state["code"], state["b"] = codes[c], cut["b"]
                 toks_out[c].append(gen(cut["prefix"], n_new))
             if (i + 1) % 10 == 0:
@@ -277,6 +304,9 @@ def main() -> None:
         return [float(d.mean()), float(np.percentile(bs, 2.5)), float(np.percentile(bs, 97.5))]
 
     pairs = {}
+    if a.kind == "target":
+        pairs = {"OWN-SHUF": ("OWN", "SHUF"), "OWN-ZERO": ("OWN", "ZERO"),
+                 "ORACLE-SHUF": ("ORACLE", "SHUF"), "ORACLE-OWN": ("ORACLE", "OWN")}
     if a.kind == "code":
         own_hi, own_lo = f"OWN@{k_list[-1]}", f"OWN@{k_list[0]}"
         for k in k_list:
