@@ -680,3 +680,76 @@ Instrument added on every code-target arm: `code_target_cos_shuf`, the predicted
 against the valid slots' codes rolled by half the valid count (a deterministic cross-row
 pairing). Own minus this is what the cell knows about ITS span; the offline twin is the
 corpus-mean probe. Prereg `lab/experiments/planned/2026-09-17-lctul-code-only.md`.
+
+### 17.2 The GRADED-continuation target: the loop proposes, a blind grader ranks (2026-09-17)
+
+Every target in §17 / §17.1 is a deterministic function of the past, and every one is met
+in ONE pass (arm A at 10k: `cos_l0` 0.06, `l1` 0.135, `l6` 0.132; the exit cosine flat at
+0.17 since step 1500; a rank-16 cell against the codes' 75). A conditional mean is a POINT,
+the map's first pass sets the scale and the rest rotate
+(`morph-loop-is-a-power-iteration`), so nothing about a point pays for a second pass. The
+code-only prereg names this exit itself: "P-C6 fails on both → the depth question moves off
+predicted targets entirely (a target that is computed, not predicted)". Wolfe, 2026-09-17:
+"didn't we also have an arm that was grading plausible continuations with a grader?"
+
+`tul.code_grade: true` keeps everything §17 sets up (strict slot loop, `TULCodeProj` cells,
+frozen `E`, frozen VAE coda) and adds a term whose target is COMPUTED:
+
+- **The proposal.** The loop's predicted cells, DETACHED, condition the frozen coda, which
+  samples `code_grade_k` candidate continuations of span `s+1` at `code_grade_temp`. The
+  candidate fills the TRUE span's token window: at most `code_grade_tokens` tokens, and a
+  slot whose span is longer than that is not graded (`E` pools the whole span, so a partly
+  substituted span would mix the candidate with the truth). The first candidate token comes
+  from the boundary TOKEN position — the only trained emit head at `emit_weight: 0` — and
+  is cell-blind by the strict geometry; the rest are cell-conditioned.
+- **The grade.** Mean log-probability per candidate token under a grader that CANNOT see
+  span `s+1`. `code_grade_grader: "coda_past"` (default) is the frozen coda reading `E`'s
+  true codes at every slot with the graded slot's OWN cell zeroed, run in two passes over
+  the slot-index parity (one pass cannot both zero cell `s` and keep it as context for span
+  `s+2`). `"coda_zero"` zeroes every cell, one pass, context blind under the strict
+  geometry: the fluency control. A candidate whose distinct-2 falls below
+  `code_grade_min_distinct2` is given the worst grade (`genppl-needs-a-diversity-guard`).
+  The grader is NOT the proposing coda with its own cell: that argmax is the cell's own
+  greedy decode, a fixed point that teaches nothing — `disc`'s failure in a new costume.
+- **The term.** `code_grade_loss: "best"` regresses the predicted cells onto `E(best)`
+  (`2(1 - cos)` per cell, `code_target_regression`); `"pref"` (default) is an InfoNCE over
+  the `K` candidate codes with the winner as the class at `code_grade_tau`, which pushes
+  toward the winner and away from the losers. Weight `code_grade_weight`, exposed as
+  `code_grade` / `code_grade_weighted` with the `code_target_weighted` subtraction
+  contract. The ordinary `code_target` term may stay on at its own weight.
+
+**Why this is affordable, and it only is under STRICT geometry.** `tg_strict_allow` makes
+the prelude span-local and lets a coda token read its own span plus EARLIER prefix cells,
+with the conv, the value shift and the retention carry reset per segment. Substituting
+candidate tokens into span `s+1` therefore changes the model only at span `s+1`'s own
+positions, so ONE forward decodes a candidate token for EVERY span of a row at once and the
+spans cannot contaminate each other. The graded-slot count is FREE; the cost levers are
+`code_grade_k`, `code_grade_tokens` and `code_grade_rows`, amortised by
+`code_grade_every`. Arithmetic in block-position units at `B` 6, `L` 1024, 64 slots: a
+code-only training step is ~115,200 u with its backward; one sampling forward over one row
+is 11,264 u; a graded step is `(J + 2) · rows · K` such passes = 811,008 u at `J` 16,
+`rows` 1, `K` 4 — 7.0 training steps, or 0.53× the rate at `code_grade_every: 8`. The real
+generator (recompute-per-token over the whole row) would be ~36× a training step and is not
+an option at any setting.
+
+**Instruments** (`no_grad`, graded steps only, through the `code_target*` log whitelists):
+`code_grade_best` / `_mean` / `_worst` (mean log-prob per token of the best / all / worst
+candidates), `code_grade_true` (the TRUE next span under the SAME grader — the grader's
+sanity check: it should sit above `code_grade_mean`), `code_grade_cos_best_true` and
+`code_grade_cos_worst_true` (does winning the grade mean being nearer the truth's code?),
+`code_grade_cos_l{t}` (the per-pass cosines to `E(best)`, beside `code_target_cos_l{t}` to
+`E(true)` — the depth question), `code_grade_degen` (flagged fraction), `code_grade_n`
+(graded slots) and `code_grade_slot_frac` (graded / valid, the coverage of the length
+filter).
+
+**Refusals** (`TULConfig._check_code_grade`): `code_grade_*` set with `code_grade: false`;
+`code_grade` without `code_target`; `code_grade_k < 2`; `code_grade_tokens < 2`;
+`code_grade_rows < 1`; `code_grade_every < 1`; `code_grade_weight <= 0`;
+`code_grade_temp <= 0`; `code_grade_tau <= 0`; an unknown `code_grade_loss` or
+`code_grade_grader`; `code_grade_detach: false` (the proposal must not be a gradient path —
+sampling is not differentiable and the whole term runs under `no_grad` up to the target).
+Configs `tul_code_grade.yaml` (the `code_target` L2 term OFF) and `tul_code_grade_l2.yaml`
+(it ON at 1.0), both composing `tul_code_only`. Note
+`.agents/notes/proposed/architecture/2026-09-17-lctul-graded-continuation-target.md`;
+prereg `lab/experiments/planned/2026-09-17-lctul-graded-target.md`; tests
+`tests/test_tul_code_grade.py`.
