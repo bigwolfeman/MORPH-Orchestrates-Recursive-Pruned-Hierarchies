@@ -1,0 +1,19 @@
+# LCTUL code target, arm "tul-code-target-prog" (Wolfe 2026-09-17: "Queue that up"): arm A
+# (`tul_code_target.yaml`, same opening: init_from the VAE checkpoint, ramp, stream skip,
+# guard ceiling) plus the Deep Thinking progressive loss, `tul.progressive_p: 0.5` — with
+# probability 0.5 a slot of realised depth >= 2 has the OUTPUT of its first k (uniform in
+# [1, T-1]) passes detached, so the map is trained to improve states it did not produce
+# and cannot settle at the identity on its own trajectory. ONE factor against
+# `tul-code-target`. Re-asked here because every earlier reading of this knob
+# (lab/experiments/failures/2026-09-10-arc-slot-mnext-progressive.md: the map kept moving
+# past depth 6 and the loss did not follow) was against a bag-of-words target; the code
+# target is a fixed, rank-57, decodable vector, and the per-pass cosine to it is read
+# directly (`code_target_cos_l{t}`).
+#   training.init_from=/home/wolfe/morph-to/checkpoints/morph/tul-code-vae/step_10000.pt
+defaults:
+  - tul_code_target
+  - _self_
+tul:
+  progressive_p: 0.5
+wandb:
+  name: tul-code-target-prog
