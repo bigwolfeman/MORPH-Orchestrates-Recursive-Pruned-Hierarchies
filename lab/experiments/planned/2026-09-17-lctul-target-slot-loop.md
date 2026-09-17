@@ -71,6 +71,14 @@ both arms; results under `lab/experiments/results/2026-09-17-lctul-target/`. Pai
 against the ruler and plain controls already saved under
 `results/2026-09-16-lctul-dplan/controls/` with `code_semantic_pair.py`.
 
+Amended 2026-09-17 10:22 (reason: the smoke ran and the lines were inserted): Spark
+12-step resume smoke of `tul_code_target` at 9e831d5 exit 0 — 71.6M trainable / 198.3M
+frozen, 9 code-thinker tensors dropped loudly, only `tul_code_proj.*` fresh,
+`val/ce_tf` 1.61 (2 batches), `val/code_eff_rank` 57.5, `val/code_target_cos` 0.001 at
+step 12. Queue lines inserted at the head of `recon_arms.txt` at 10:21 (both arms, kind
+slot, commit 9e831d5, EXTRA with the resume path); watcher `spark_code_probes_target.sh`
+started 10:21. Predictions unchanged.
+
 ## Not verified before launch
 
 - The 12 CPU contracts and a CPU generation smoke; the GPU resume smoke is run before the
