@@ -46,7 +46,11 @@ Queue line at the head of `recon_arms.txt` after the running stage. Amended 2026
 19:35 (reason: the line was inserted): commit 7262ed8, line
 `tul-code-d:tul_code_d:tul-code-d:code:5000,10000,15000,20000:20000:1:.../results/2026-09-16-lctul-d:7262ed8:`,
 Spark watcher `spark_code_probes_d.sh` (marginal ks 1,2,4,8 at every checkpoint; subspace,
-samples and flow at 20k). Predictions unchanged. Probes: the marginal k-sweep (k 1, 2, 4, 8) at 5k / 10k / 15k /
+samples and flow at 20k). Predictions unchanged. Amended again 19:50 (reason: the first
+queue line carried no EXTRA, so the arm started under `tul_code`'s 5000-step default with
+phases at 500 / 2500; it was killed at step ~40, no checkpoint written, and re-queued with
+`training.steps=20000 training.ademamix_t_beta3=20000 training.ckpt_every=5000`, the same
+extras as `tul-code-cfg`; phases then sit at 2000 / 10000). Probes: the marginal k-sweep (k 1, 2, 4, 8) at 5k / 10k / 15k /
 20k on the Spark; the context-share reading at 20k from `code_flow_probe.py` with
 `tul.code_cfg_drop=0.001,tul.code_cfg_scale=1.0` and `0.999` (it reports the denoiser ELBO
 through the `code_fm_*` keys on a discrete model; convert `code_fm_raw` to nats per span);
