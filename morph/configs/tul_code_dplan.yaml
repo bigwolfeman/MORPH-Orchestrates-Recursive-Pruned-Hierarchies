@@ -1,0 +1,22 @@
+# LCTUL-D "plan" arm, "tul-code-dplan" (docs/tul-code-spec.md §16; prereg
+# lab/experiments/planned/2026-09-16-lctul-dplan-semantic.md).
+#
+# ONE factor against `tul_code_d`: a COARSE code. Codebook 64 and two groups make the code
+# four symbols of 6 bits (24 bits per span) instead of eight of 9 bits (72 bits): a plan,
+# not a copy. The theorems (lab/theory/lctul_euler_depth) say a sampler's depth can act
+# only on a conditional with few separated modes; a small alphabet is that by construction.
+# Scored on GENERATION (the semantic probe at k = 1, 2, 4 against the strict ruler and the
+# plain model on the same cuts), not on CE: on likelihood a sampled latent of the next span
+# cannot beat a deterministic summary of the past.
+defaults:
+  - tul_code_d
+  - _self_
+
+tul:
+  code_vq_codebook: 64
+  code_vq_groups: 2
+  code_infer_steps: 4          # = N at prefix_k 2 x groups 2
+  code_rollout_steps: 4
+
+wandb:
+  name: tul-code-dplan
