@@ -1,0 +1,24 @@
+{
+ "label": "dplan-drop0.001",
+ "step": 20000,
+ "rows": 96,
+ "repeats": 2,
+ "mean": {
+  "code_fm_rel": 0.8779880441725254,
+  "code_fm_band0_rel": 0.9521727468818426,
+  "code_fm_band1_rel": 0.8289861511439085,
+  "code_fm_band2_rel": 0.8411655221134424,
+  "code_fm_band3_rel": 0.8706407323479652,
+  "code_fm_raw": 14.605798482894897,
+  "code_fm_null": 16.63553237915039
+ },
+ "sem": {
+  "code_fm_rel": 0.02681378649435935,
+  "code_fm_band0_rel": 0.08947477598058233,
+  "code_fm_band1_rel": 0.011321750956777114,
+  "code_fm_band2_rel": 0.00836683204554068,
+  "code_fm_band3_rel": 0.004111031769638776,
+  "code_fm_raw": 0.44606161420977264,
+  "code_fm_null": 0.0
+ }
+}
