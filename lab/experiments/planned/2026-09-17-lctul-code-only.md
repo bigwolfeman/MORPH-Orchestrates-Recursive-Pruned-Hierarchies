@@ -89,6 +89,20 @@ until the run's own log. Queue lines inserted at the HEAD at 16:57 (commit 20a4c
 of arm B and the continuations; watcher `spark_code_probes_only.sh` started 16:57 (semantic
 + corpus-mean probe at 10000 and 20000). Predictions unchanged.
 
+Amended 2026-09-17 18:10 (reason: the L2 draw was killed at step 3500 and the InfoNCE line
+pulled before it started; this draw is void, not a result): with the prelude and embeddings
+trainable, the frozen E's target is NOT fixed. E reads the live prelude's states of the next
+span; the prelude drifts under the loop's gradient, and E's codes collapse toward one
+direction: train own cosine 0.61 / shuffled 0.56 at 500-1000, 0.99 / 0.98 by 2500-3000
+(val 0.989 / 0.984 at 3000), regression loss 0.016, the frozen coda's oracle CE 13.1 nats
+(1.4 on arm A). No gradient reaches E's output (it runs under `no_grad`), so this is drift
+of E's INPUT, not an optimised collapse; either way the target measures nothing. The fix
+(built next, `tul.code_target_ref`): a FROZEN reference copy of the VAE model computes the
+target (and, on the graded arm, samples and grades) so E's code is the VAE stage's code
+whatever the live front does. The rerun gets a new planned file. Run rate before the kill:
+16,758 tok/s (1.17x arm A's 14,393; P-C7 would have failed at 1.25x) at peak 7.9 GB (10.9).
+Trainable count printed by the run: none (no `[train_only]` line with the empty list).
+
 ## Not verified before launch
 
 - The 24 CPU contracts (`tests/test_tul_code_target.py`); the GPU smoke's exit code is

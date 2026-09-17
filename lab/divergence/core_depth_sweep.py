@@ -225,7 +225,12 @@ def main() -> None:
         # scored on a code model whatever the depth list says, so the paired sweep carries
         # the ceiling on the same rows; the npz keys stay `ce_{d}` so span_budget_profile
         # reads them unchanged. No config knob is touched.
-        _code = (not plain) and getattr(model, "tul_code_enc", None) is not None
+        # A code-TARGET model (tul.code_target, spec §17) also carries `tul_code_enc` but has
+        # no sampler: its cells are the slot loop's projection and its depth dial is
+        # `slot_depths`, so it takes the ordinary slot-loop path below. (2026-09-17: the
+        # sweeps on tul-code-target@5000..20000 exited 1 on `code_steps` before this line.)
+        _code = ((not plain) and getattr(model, "tul_code_enc", None) is not None
+                 and getattr(model, "tul_code_proj", None) is None)
         if _code:
             _step_mode = None
             arm["code"] = True
