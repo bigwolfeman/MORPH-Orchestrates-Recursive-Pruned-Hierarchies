@@ -5877,7 +5877,21 @@ class MORPHTransformer(nn.Module):
                 _rxn = ref.input_norm(_rx)
                 z_tgt, ok = ref.tul_code_enc(
                     _rxn.mean(dim=2) if ref._is_hc else _rxn, layout)
-        pred = self.tul_code_proj(self._readout(h_slots), ok)
+        # THE OPEN SLOT (2026-09-17, measured). `ok` is `code_target_valid`: False for a
+        # row's LAST valid slot, which has no next span IN THE LAYOUT. At GENERATION that
+        # slot is the OPEN one — the span the coda is about to write — so masking the
+        # projection by `ok` handed the coda a ZERO cell for every generated span, and
+        # `tul_generate.py` cached the zero. The 10k semantic probe on `tul-code-target`
+        # read OWN, SHUF and ZERO byte-identical (cos_true 0.1291 for all three, paired
+        # +0.0000 [+0.0000, +0.0000]) while ORACLE, injected through the SAME `code_given`
+        # route, read 0.559: the injection path worked and the cell was a zero vector.
+        # So the PREDICTION is masked by `slot_valid` at eval (every valid slot, the open
+        # one included) and stays masked by `ok` at TRAIN: the tail slot has no target
+        # there, and feeding the train-side coda a cell nothing grades would put an
+        # ungraded input in the reader's path. The LOSS and the cosines below index with
+        # `ok` in both modes, so no term ever grades a slot with no target.
+        pred = self.tul_code_proj(self._readout(h_slots),
+                                  ok if self.training else layout.slot_valid)
         if tc.code_target_loss == "infonce":
             loss, cos_mean, n, acc = code_target_infonce(pred, z_tgt, ok, tc.code_target_tau)
             mse, _, _ = code_target_regression(pred.detach(), z_tgt, ok)

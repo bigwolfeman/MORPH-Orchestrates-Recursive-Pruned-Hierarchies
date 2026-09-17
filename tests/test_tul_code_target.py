@@ -413,3 +413,119 @@ def test_the_code_only_arms_compose_and_build_and_run(name, monkeypatch):
     with torch.no_grad():
         o = m(inp, labels=lab, slot_layout=layout)
     assert "ce_tokens" in o and "code_target_cos" in o
+
+
+# ── THE OPEN SLOT (2026-09-17): the cell the generator actually reads ─────────
+#
+# `ok = code_target_valid` is False for a row's LAST valid slot — no next span IN THE
+# LAYOUT. At generation that slot is the OPEN one, so masking the PREDICTION by `ok` handed
+# the coda a zero cell for every generated span. Measured on the 10k semantic probe of
+# `tul-code-target`: OWN, SHUF and ZERO byte-identical (cos_true 0.1291 for all three,
+# paired +0.0000 [+0.0000, +0.0000]) while ORACLE through the same `code_given` route read
+# 0.559. Three tests, and the third is the one that would have caught it.
+
+def _last_valid_slot(layout, row: int = 0) -> int:
+    return int(torch.nonzero(layout.slot_valid[row])[-1])
+
+
+def test_eval_gives_the_open_slot_a_real_cell_and_train_still_gives_it_zero():
+    from morph.model.tul_code import code_target_valid
+    m = _model()
+    _ids, inp, lab, layout = _pack()
+    s_open = _last_valid_slot(layout)
+    assert not bool(code_target_valid(layout)[0, s_open]), \
+        "the fixture's last valid slot HAS a next span: the test would assert nothing"
+    m.eval()
+    with torch.no_grad():
+        cells = m(inp, labels=lab, slot_layout=layout)["code_cells"]
+    assert float(cells[0, s_open].abs().sum()) > 0.0, \
+        "the open slot's cell is zero at eval: the generator writes every span from nothing"
+    # and it IS that slot's exit state through the projection: unit-RMS per cell
+    rms = cells[0, s_open].float().pow(2).mean(dim=-1).sqrt()
+    assert torch.allclose(rms, torch.ones_like(rms), atol=1e-4), rms
+    # a slot WITH a next span is unaffected
+    assert float(cells[0, s_open - 1].abs().sum()) > 0.0
+    # train mode keeps the old contract: no target, no cell, and the loss ignores it
+    m.train()
+    torch.manual_seed(3)
+    out = m(inp, labels=lab, slot_layout=layout)
+    n_ok = float(code_target_valid(layout).sum()) * m.cfg.tul.prefix_k
+    assert float(out["code_target_n"]) == n_ok, "the loss graded a slot with no target"
+
+
+def test_the_open_slots_cell_changes_what_the_generator_writes():
+    """The probe's OWN-vs-ZERO contract, in one test. `generate_tul` caches the open slot's
+    cell and writes the span from it; with the cell zeroed the tokens must differ, or the
+    whole code-target arm is decoding from nothing."""
+    from morph.inference.tul_generate import generate_tul
+    from test_tul_strict_geometry import _rule, _spec
+    m = _model()
+    m.eval()
+    with torch.no_grad():
+        m.embed.bigram.lambdas.fill_(0.5)
+    rule, spec = _rule(), _spec()
+    prompt = [int(t) for t in _pack()[0][0, :20]]
+    seen: list[float] = []            # the OPEN slot's cell norm, per forward
+    orig = MORPHTransformer.forward
+
+    def spy(self, *a, **kw):
+        out = orig(self, *a, **kw)
+        if "code_cells" in out:
+            n_open = int(kw["slot_layout"].slot_valid[0].sum()) - 1
+            if n_open >= 0:
+                seen.append(float(out["code_cells"][0, n_open].abs().sum()))
+        return out
+
+    MORPHTransformer.forward = spy
+    try:
+        toks_own, bld = generate_tul(m, prompt, rule, spec, max_new_tokens=12,
+                                     temperature=0.0, seed=0, device="cpu",
+                                     emit_source="token")
+    finally:
+        MORPHTransformer.forward = orig
+    assert seen, "the generator never returned code_cells"
+    assert min(seen) > 0.0, (
+        f"the generator read a ZERO cell for the open slot on "
+        f"{sum(1 for v in seen if v == 0.0)} of {len(seen)} steps")
+
+    # ... and the coda READS it: the same generation with the open slot's cell replaced
+    # produces different logits. The assertion is on the LOGITS and not on the emitted
+    # tokens, and the reason is the fixture, not the contract: a randomly initialised head
+    # argmaxes to one id whatever the state under it does (all four conditions here emit
+    # `[10] * 12`), so a token-level assertion would be vacuous. On a trained model the
+    # tokens are what move, and that is what the 2026-09-17 semantic probe read as
+    # OWN == SHUF == ZERO.
+    def _logits(scale):
+        got: list[torch.Tensor] = []
+
+        def forced(self, *a, **kw):
+            g, gm = kw.get("code_given"), kw.get("code_given_mask")
+            if g is not None and scale is not None:
+                n = int(kw["slot_layout"].slot_valid[0].sum()) - 1
+                if n >= 0:
+                    g[0, n] = scale
+                    gm[0, n] = True
+            out = orig(self, *a, **kw)
+            if out.get("logits") is not None:
+                got.append(out["logits"][0, -1].detach().clone())
+            return out
+
+        MORPHTransformer.forward = forced
+        try:
+            generate_tul(m, prompt, rule, spec, max_new_tokens=12, temperature=0.0,
+                         seed=0, device="cpu", emit_source="token")
+        finally:
+            MORPHTransformer.forward = orig
+        return torch.stack(got)
+
+    own, zero = _logits(None), _logits(0.0)
+    assert own.shape == zero.shape and own.numel() > 0
+    assert not torch.equal(own, zero), (
+        "the coda's logits are IDENTICAL with the open slot's own cell and with a zero "
+        "cell: it is not reading the cell at all (the 2026-09-17 probe reading, OWN, SHUF "
+        "and ZERO byte-identical at cos_true 0.1291 while ORACLE read 0.559)")
+    # the structural slot id sits at -inf in BOTH, and -inf minus -inf is a nan, so the
+    # size of the difference is read over the real vocabulary only
+    d = (own - zero).abs()
+    d = d[torch.isfinite(d)]
+    assert float(d.max()) > 1e-4, float(d.max())

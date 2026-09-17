@@ -622,6 +622,24 @@ live, the gain constraint on) and changes three things:
   (LaDiR: the decoder never trains on a generated latent). `false` (arm B,
   `tul_code_target_ce.yaml`): the token CE through the frozen coda trains the loop too.
 
+THE OPEN SLOT, fixed 2026-09-17. The projection was masked by `ok = code_target_valid(layout)`
+in BOTH modes. `ok` is False for a row's LAST valid slot, because that slot has no next span
+to encode — correct for the LOSS, wrong for the WRITE. At generation the open span's slot IS
+the last valid slot, so the coda wrote every open span from a ZERO cell and
+`tul_generate.py`'s per-span cache cached zeros. It made the OWN / SHUF / ZERO probe vacuous:
+the 10k semantic probe on `tul-code-target` read all three byte-identical (cos_true 0.1291,
+paired differences +0.0000 [+0.0000, +0.0000]) while ORACLE, injected through the same
+`code_given` route, read 0.559. Fix, one line in `_tul_code_target_write`: the PROJECTION
+takes `ok if self.training else layout.slot_valid`, so at eval every valid slot gets a real
+cell; `code_target_regression(pred, z_tgt, ok)` and the val cosines keep `ok`, so the loss
+and the instruments are unchanged. The train-side coda read stays masked by `ok` — at train
+the last slot's cell has no target and must not reach the coda. Tests: three in
+`tests/test_tul_code_target.py` (eval gives the open slot a real cell equal to the
+projection of its exit state; train still gives it zero and the loss ignores it;
+`generate_tul` caches a non-zero cell for the open slot and the coda's logits move when a
+different `code_given` is injected there). Every OWN/SHUF/ZERO probe taken before this fix
+is void.
+
 Instruments. `code_target_cos` (exit cell cosine to the code, train and eval);
 `code_target_cos_l{t}` (train only, no_grad): the entry state `core_init(e)` at `l0` and
 the state after every realised pass, projected and read against the SAME code — whether
@@ -708,8 +726,15 @@ weights load so it copies the parametrised model exactly, and rides its own `cod
 in the checkpoint. On a RESUME that key wins: re-snapshotting the live weights at step N
 would move the target mid-run, which is the failure the mechanism exists to prevent. A
 checkpoint without the key (every `init_from` seed, the VAE stage included) is the snapshot
-case and says so in the log. Cost: one extra fp32 copy of the model (~1.1 GB at 270M) plus
-one `no_grad` prelude forward per step.
+case and says so in the log. Cost, measured on the Spark 2026-09-17: the twin is 269.9M
+parameters with 0 trainable, and the graded smoke's peak moves 6.14 -> 7.46 GB with it on
+(+1.32 GB), against the code-only smoke's 6.04 GB on the same machine.
+
+One deliberate difference from the pre-reference path: the twin is in EVAL mode, so the
+prelude states `E` pools carry no dropout. The target is the VAE stage's deterministic code
+and the live forward's dropout no longer perturbs it. It shows up as a small step-0 loss
+difference (1.5551 -> 1.5973 on the graded smoke) and it is the intended behaviour, not
+drift.
 
 The trainer REFUSES a `tul.code_target` model whose front trains without the twin
 (`assert_code_target_front_frozen`: any trainable `embed.` / `prelude.` / `input_norm.` /

@@ -137,6 +137,27 @@ parameters, and a registered 270M twin would silently double all of them. It rid
 `code_ref` key in the checkpoint, and on a resume that key wins — re-snapshotting the live
 weights at step N would move the target mid-run.
 
+### The open slot had no cell, and this arm samples from it
+
+Found and fixed 2026-09-17, in the same seam. `_tul_code_target_write` masked the
+PROJECTION by `ok = code_target_valid(layout)`, which is False for a row's last valid slot
+(no next span to encode). That is right for the loss and wrong for the write: at generation
+the OPEN span's slot is exactly the last valid slot, so the coda wrote every open span from
+a zero cell and the generator cached zeros. The 10k semantic probe on `tul-code-target` read
+OWN, SHUF and ZERO byte-identical (cos_true 0.1291, paired differences +0.0000 [+0.0000,
++0.0000]) while ORACLE, through the same `code_given` route, read 0.559 — the probe was
+measuring nothing, and looked like a clean null.
+
+It hits this arm directly. The sampler decodes candidates through the frozen coda reading
+the loop's PREDICTED cell; on any row where the graded slot was the last valid one, the
+candidates would have been drawn from a zero cell and the grades would have ranked noise.
+The eligibility filter already skipped slots with no next span, so the graded set was not
+wrong, but the arm would have inherited the void probe for every reading it reports.
+
+The fix is one line: the projection takes `ok if self.training else layout.slot_valid`,
+the loss and the val cosines keep `ok`. Three tests in `tests/test_tul_code_target.py`
+pin it, the third through `generate_tul` itself.
+
 ## Alternatives considered
 
 - **Grader: a second frozen plain checkpoint.** The most honest judge, and the one whose
@@ -192,6 +213,9 @@ weights at step N would move the target mid-run.
 7. Measured rate at least 0.5× the code-only arm at the shipped defaults.
 8. With the frozen twin on, perturbing the live prelude, embeddings or coda moves neither
    the target code nor any grade; with it off, both move.
+9. At eval the open slot carries a real cell: `generate_tul` caches a non-zero cell for it
+   and the coda's logits move when a different `code_given` is injected there. At train the
+   same slot's cell is zero and the loss ignores it.
 
 ## Risks
 
