@@ -1,0 +1,24 @@
+{
+ "label": "tul-code-dplan",
+ "step": 20000,
+ "rows": 96,
+ "repeats": 2,
+ "mean": {
+  "code_fm_rel": 0.8802983704954386,
+  "code_fm_band0_rel": 0.9538988173007965,
+  "code_fm_band1_rel": 0.8317111954092979,
+  "code_fm_band2_rel": 0.8449123241007328,
+  "code_fm_band3_rel": 0.8718634080141783,
+  "code_fm_raw": 14.644231885671616,
+  "code_fm_null": 16.63553237915039
+ },
+ "sem": {
+  "code_fm_rel": 0.026740160574087502,
+  "code_fm_band0_rel": 0.08934550590490963,
+  "code_fm_band1_rel": 0.011402192317465799,
+  "code_fm_band2_rel": 0.008123650243828084,
+  "code_fm_band3_rel": 0.004220383811753233,
+  "code_fm_raw": 0.4448368040591894,
+  "code_fm_null": 0.0
+ }
+}

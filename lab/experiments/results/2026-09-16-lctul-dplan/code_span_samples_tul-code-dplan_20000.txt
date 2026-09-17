@@ -1,0 +1,82 @@
+tul-code-dplan step 20000: 10 cuts after span 6, emit_source=token
+
+=== example 1  (context tail, 32 true tokens)
+CONTEXT ... Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team to evacuate.
+TRUE     ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+ORACLE   '\\n\\nThe woman, who was a 20-year-old student, was found in a 2012 criminal investigation.\\n\\nThe woman was found in'
+GREEDY   '\\n\\nThe report, which was conducted in 2013, was published in the journal Science and Technology.\\n\\nThe suspects were also arrested and charged'
+SAMPLE1  '\\n\\nThe victim has not been contacted at 11-200-262-3167, which is about 252, who has'
+SAMPLE2  '\\n\\nShe said the woman had been hospitalized and they would never have taken a breath.\\n\\n“I was so worried about the conditions that I didn’t get a'
+
+=== example 2  (context tail, 5 true tokens)
+CONTEXT ....\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight. It was an order that came suddenly."\n\nShe told Gupta, "It's just you."\n
+TRUE     '\nA 7.'
+ORACLE   '\\nThe 2014 201'
+GREEDY   '\\nThe 2014 NFL Draft was'
+SAMPLE1  "\\nOne more thing to remember was the NDP's"
+SAMPLE2  '\\nThe man was also convicted of a "'
+
+=== example 3  (context tail, 18 true tokens)
+CONTEXT ... that he said he is confident he can still win. He did not mention Missouri or the other contests by name.\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf
+TRUE     'ident that our campaign is on a path to win the nomination," Sanders said.'
+ORACLE   'ident Obama\'s campaign, and the president\'s campaign for the Democratic Party.\\n\\n"I think'
+GREEDY   'ident of the United States.\\n\\n"I think we have to be able to do that," he said. "'
+SAMPLE1  'ident.\\n\\n“I don’t know,” he added.\\n\\n"No,” McCain said,'
+SAMPLE2  'ident. "I like that," he said. "That\'s what happens."\\n\\nThe most important reason was a'
+
+=== example 4  (context tail, 23 true tokens)
+CONTEXT ... for “disastrous” trade deals, starting with the North American Free Trade Agreement when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition
+TRUE     ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+ORACLE   ' to the presidential campaign.\\n\\nThe president’s campaign has been a bit of a political force, and the party’s'
+GREEDY   ' to the president’s campaign.\\n\\n“I think that’s a good thing,” Trump said. “I’m not'
+SAMPLE1  ' to see more of the Senate’s policies on a higher level of economic, redistribution, and economic development. That’s'
+SAMPLE2  ' to see the political movement. It also gives you a simple idea that you can’t take this kind of thing to the point where the'
+
+=== example 5  (context tail, 32 true tokens)
+CONTEXT ... Townhall.com.\n\nYou have to give President Barack Obama credit for one thing: consistency. Nothing is ever his fault. Nothing will ever be his fault. Faulting Fox News and the American people, on the other hand, now that's a different story.
+TRUE     '\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint'
+ORACLE   '\\n\\nI am not sure if that is true, but I am not sure if I will be able to do it. I think that’s the point.\\n\\nI think that'
+GREEDY   '\\n\\nThe fact that the president is not a candidate is a political issue.\\n\\nThe president, who has been a top-secret candidate for the House of Representatives'
+SAMPLE1  '\\n\\nNo, I would say, this is a word.\\n\\nNot at all.\\n\\n"This is a huge cliché, a lot of people are saying a lot'
+SAMPLE2  "\\n\\nBut that's not a real shift.\\n\\nThe only one of those things is the way to go. But I am not sure about the other issues the people who are willing"
+
+=== example 6  (context tail, 16 true tokens)
+CONTEXT ... that whatever policy prescriptions that we've been proposing don't reach, are not heard by, the folks in these communities. And what they do hear is 'Obama or Hillary are trying to take away (your) guns' or 'they disrespect you.'"\n\n
+TRUE     'I repeat: This guy is remarkably, incorrigibly consistent.'
+ORACLE   '"It\'s a very good game, but it\'s not a good thing. It\'s a very good thing'
+GREEDY   '"I think it\'s a good thing," he said. "I think that\'s a good thing, but'
+SAMPLE1  '"One more thing you could say is that you\'ll say it," says Eugene. "I\'m'
+SAMPLE2  'The man was living in Nevada, but he was told that his father was not an English, and'
+
+=== example 7  (context tail, 24 true tokens)
+CONTEXT ...ANG” blared through the speakers, and the 5 members walked out of the splitting screen previously used to play the videos. During the song, small fireworks burst from the top of the stage and popped timely on the hook’s lyric “bang.” It was then
+TRUE     ' that everyone recognized the blissful hype BIGBANG was about to deliver for the rest of the night on.'
+ORACLE   ' that the police had been in the process of being a “military” and that the suspects had been arrested for the death of'
+GREEDY   ' that the “mouth” of the “mouth” is the “mouth” of the “mouth” of the “military”'
+SAMPLE1  ' that would be the most widely used case.\\n\\nThe Eagle-Cavendish Wing System in the Southwestern province'
+SAMPLE2  ' that has only happened to the police. Their first lifelong boyfriend, the father of her first child, was the father of'
+
+=== example 8  (context tail, 4 true tokens)
+CONTEXT ... real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly. If there is another years from now, though, I can’t wait to be there too.
+TRUE     'WHAT?!??'
+ORACLE   'The problem is that the 100%'
+GREEDY   'The 2016 NFL Draft will'
+SAMPLE1  'Share.\\n\\n“I don’t know'
+SAMPLE2  'The man was found guilty on an alle'
+
+=== example 9  (context tail, 7 true tokens)
+CONTEXT ... and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech; instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.
+TRUE     '\n\nArticle Continued Below\n'
+ORACLE   '\\n\\n“The fact that the president’s campaign is'
+GREEDY   '\\n\\nThe fact that the Clinton Foundation is not a'
+SAMPLE1  '\\n\\n“What I’m trying to do is say ‘'
+SAMPLE2  '\\n\\nBut that’s not a “real” argument.'
+
+=== example 10  (context tail, 32 true tokens)
+CONTEXT ...\n“I think it's important to honor those people who are here and working really hard,” says customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh
+TRUE     'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+ORACLE   'ots.\\n\\n“I’m not going to be a part of the team, but I’m going to be a part of the team. I’m not going to be'
+GREEDY   'ots.\\n\\n“I’m not going to be a part of the team, but I’m going to be a part of the team. I’m not going to be'
+SAMPLE1  'ots.\\n\\n“I’m trying to get a record on the team at Miami. I’m not going to tell you what’s happening, but I’m'
+SAMPLE2  'ots. I’m really excited to have that opportunity. We’ve got a great day, we’re looking for a few ways to improve.”In reality, we have'
+
