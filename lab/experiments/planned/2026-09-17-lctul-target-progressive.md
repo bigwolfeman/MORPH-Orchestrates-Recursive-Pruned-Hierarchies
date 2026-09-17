@@ -62,6 +62,11 @@ Amended 2026-09-17 15:20 (reason: the smoke ran and the line was inserted): Spar
 28 passed. Queue line inserted at 15:20 behind the two continuations (commit 9c40efe);
 watcher instance started 15:10 for 10000 and 20000. Predictions unchanged.
 
+Amended 2026-09-17 15:30 (reason: arm A took one divergence-guard strike at step 5360 on
+the frozen coda's CE, which trains nothing on a detach arm): `tul_code_target.yaml` raises
+`div_ppl_ceiling` 1e5 → 1e8 and this arm's queue line moves to the commit that carries
+it. Nothing else in the config changes. Predictions unchanged.
+
 ## Not verified before launch
 
 - CPU: a tiny code-target model with `progressive_p: 0.5` runs forward/backward and emits

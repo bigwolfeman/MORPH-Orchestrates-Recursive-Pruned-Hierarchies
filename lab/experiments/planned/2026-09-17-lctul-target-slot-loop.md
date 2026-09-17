@@ -100,6 +100,17 @@ unexpected, stream skip applied, guard ceiling 100000. Queue lines re-inserted a
 14:35 on d8e93d2; arm B's confounded draw killed at 14:35 (exit 143, last step 12010); both
 aborted checkpoint dirs moved aside (`*.aborted-1417`). Watcher restarted 14:35.
 
+Amended 2026-09-17 15:30 (reason: guard risk observed on the running arm A): at step 5360
+the guard printed one strike (train CE 12.04 nats, ppl 169,276 > 100,000); the next step
+fell back and the strike count reset. In arm A this CE is the frozen coda reading a
+DETACHED cell, so it trains nothing; the regression loss it sits beside fell 2.0 → 1.72
+(exit cosine 0.004 → 0.14). The guard counts CONSECUTIVE per-step exceedances, checked
+every step; the logged (every 20 steps) CE 2000-5480 has mean 9.3 nats, max 12.04, and one
+strike in 3480 steps. Arm A keeps running under its 1e5 ceiling (a running process cannot
+be changed); if it aborts it is resumed from the DIVERGED checkpoint with the raised ceiling
+and that is recorded here. The queued detach arm (progressive) gets the raised ceiling 1e8
+through `tul_code_target.yaml`. Predictions unchanged.
+
 ## Not verified before launch
 
 - The 12 CPU contracts and a CPU generation smoke; the GPU resume smoke is run before the
