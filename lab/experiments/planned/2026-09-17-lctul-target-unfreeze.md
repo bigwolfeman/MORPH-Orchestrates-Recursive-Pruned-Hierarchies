@@ -57,6 +57,12 @@ second `spark_code_probes_target.sh` instance with `ARMS`/`STEPS` for the two co
 at 25000 and 30000. Pairing: `code_semantic_pair.py`, each continuation against its own
 parent's 20k probe and the 2026-09-16 controls.
 
+Amended 2026-09-17 14:55 (reason: the smoke ran and the lines were inserted): Spark smoke
+of `tul_code_target_uf` at 0f1d1b7 with the VAE checkpoint as the resume stand-in, 12 steps
+past the resume: exit 0, 118.3M trainable / 151.6M frozen, fresh optimizer, guard ceiling
+100000. Queue lines inserted at 14:55 behind arm B (commit 0f1d1b7); the continuation
+watcher started 14:46 for steps 25000 and 30000. Predictions unchanged.
+
 ## Not verified before launch
 
 - The parent arms have not produced their 20k checkpoints; the lines are inserted on the
