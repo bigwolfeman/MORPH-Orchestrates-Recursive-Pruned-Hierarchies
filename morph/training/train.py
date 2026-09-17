@@ -169,7 +169,9 @@ def evaluate(
                         "spandec_target_offset",
                         # tul.code_target: the regression and the cosine of the loop's
                         # projected exit state to the frozen code, on the eval forward.
-                        "code_target", "code_target_mse", "code_target_cos"):
+                        "code_target", "code_target_mse", "code_target_cos",
+                        # the generic floor and the InfoNCE top-1 rate (code-only arms)
+                        "code_target_cos_shuf", "code_target_acc"):
                 # (TUL-Code's flow statistics are TRAIN-side only: the eval forward runs
                 # the sampler, not the flow term. Read train/code_fm_rel and tul/code_fm_*.)
                 if _mk in out:

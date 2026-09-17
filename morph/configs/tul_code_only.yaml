@@ -1,0 +1,34 @@
+# LCTUL, the code-ONLY arm "tul-code-only" (2026-09-17; docs/tul-code-spec.md §17.1; prereg
+# lab/experiments/planned/2026-09-17-lctul-code-only.md).
+#
+# Wolfe, 2026-09-17, on arm A's reading (exit cosine 0.15 by step 1500, one pass, a rank-16
+# prediction leaning on the corpus mean, frozen coda reading it at 9.1 nats): "Poisson loop,
+# the loop guesses the code. We never even run the coda." Two changes against arm A
+# (`tul_code_target.yaml`), on Wolfe's "yeah we need to change those":
+#
+#   1. NO CODA AT TRAIN (`tul.code_target_skip_coda`): the training forward ends at the
+#      projection. The loss is the code term plus the slot-loop constraint; there is no token
+#      CE, so train/loss reads the constraint alone (0 when it is inactive) and the arm's
+#      readings are `train/code_target_cos` (own), `code_target_cos_shuf` (the generic floor)
+#      and the per-pass `tul/code_target_cos_l{t}`. The eval forward still runs the frozen
+#      VAE coda over the cells (val/loss, val/ce_tf): a WEAK instrument here, because the
+#      prelude it was trained beside now moves.
+#   2. THE PRELUDE AND EMBEDDINGS TRAIN (`train_only` cleared): arm A froze the prelude at
+#      the VAE stage, where it learned to serve a coda reading noised true codes, never to
+#      represent the past for prediction. The predictable subspace the loop can find is
+#      bounded by what the prelude hands it. E stays frozen at build (the target); the coda
+#      and the untied heads get no gradient (no coda runs at train).
+#
+# Same opening as arm A: `training.init_from` the VAE checkpoint, step axis 0, 1000-step
+# ramp, stream skipped past the VAE stage's batches.
+#   training.init_from=/home/wolfe/morph-to/checkpoints/morph/tul-code-vae/step_10000.pt
+defaults:
+  - tul_code_target
+  - _self_
+training:
+  train_only: []                  # everything trains except the frozen E (and W_prefix)
+tul:
+  code_target_skip_coda: true
+  code_target_loss: l2
+wandb:
+  name: tul-code-only

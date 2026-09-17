@@ -643,3 +643,40 @@ forbids (LCM T3/4, CoCoMix §6b, BT §4.2); `oracle_z` carved the one earlier ex
 Wolfe directed this arm on 2026-09-17, and the note
 `.agents/notes/proposed/architecture/2026-09-17-lctul-target-slot-loop.md` records the
 exception. Tests: `tests/test_tul_code_target.py` (twelve, one per invariant above).
+
+### 17.1 The code-ONLY arm: no coda at train, everything trains, and a discriminative term (2026-09-17)
+
+Arm A's reading at 10k (`lab/experiments/results/2026-09-17-lctul-target/`): the exit
+cosine reached 0.14 by step 1500 and 0.17 at 10k; pass 1 does all of it (l0 0.06, l1
+0.135, l6 0.132); the predicted cell is a real conditional prediction (own 0.145 vs
+shuffled 0.021, centred own 0.135 vs 0.002) that leans on the corpus-mean direction (cos
+0.33-0.53 vs the codes' 0.06-0.09) and lives in an effective rank of 16 against the codes'
+75 (`lab/divergence/code_target_mean_probe.py`); the frozen coda reads it at 9.1 nats,
+worse than no cell (7.4). Wolfe: "Poisson loop, the loop guesses the code. We never even
+run the coda." Three knobs, one arm family (`tul_code_only.yaml`, `tul_code_only_nce.yaml`):
+
+- **`code_target_skip_coda`.** At TRAIN (`self.training` and labels given) `_forward_tul`
+  ends at `_tul_code_target_write`: no token dropout, no `_back_region`, no token CE.
+  `groups["loss"]` starts at an exact 0, so the loss is the code term plus the slot-loop
+  constraint (`gain_reg_weighted`) and nothing else; train.py's subtraction of
+  `code_target_weighted` reports the constraint alone as `train/loss`. The EVAL forward is
+  the ordinary one (the frozen-at-VAE coda reads the cells: `val/loss`, `val/ce_tf`, the
+  probes' OWN / SHUF / ZERO / ORACLE). Refused with `code_target_detach: false` (the CE
+  route needs a coda) and with weight 0 (nothing would train).
+- **`training.train_only: []`** on these configs: the prelude, embeddings and the whole
+  loop train. Arm A froze the prelude at the VAE stage, where it learned to serve a coda
+  reading noised TRUE codes and never to represent the past for prediction; the
+  predictable subspace the loop can find is bounded by what that prelude hands it. E stays
+  frozen at build (the target); the coda and the untied heads get no gradient because no
+  coda runs at train.
+- **`code_target_loss: "infonce"`** (`code_target_tau`, default 0.1): per cell, the
+  predicted cells of the batch's valid slots score against EVERY valid slot's code
+  (`<p_i, z_j> / C / tau`) with the own code as the class (`code_target_infonce`). L2's
+  optimum is the conditional MEAN, which hedges toward the corpus mean; InfoNCE asks the
+  loop to pick its span out of the batch (~380 codes at batch 6) and cannot hedge.
+  Readings: `code_target_acc` (top-1; chance ~1/n_valid) beside the L2 `code_target_mse`.
+
+Instrument added on every code-target arm: `code_target_cos_shuf`, the predicted cells
+against the valid slots' codes rolled by half the valid count (a deterministic cross-row
+pairing). Own minus this is what the cell knows about ITS span; the offline twin is the
+corpus-mean probe. Prereg `lab/experiments/planned/2026-09-17-lctul-code-only.md`.

@@ -50,6 +50,16 @@ loop as the reasoning model has never been run.
    arm's depth instrument, beside the forced-depth K-curve and the semantic probe
    (`--kind target`: OWN / SHUF / ZERO / ORACLE).
 
+5. (Amended 2026-09-17, after arm A's 10k reading.) The code-ONLY arms
+   (`tul_code_only.yaml`, `tul_code_only_nce.yaml`; spec §17.1): `code_target_skip_coda`
+   ends the training forward at the projection (no coda, no token CE; the loss is the code
+   term plus the loop constraint), `train_only` is cleared so the prelude and embeddings
+   train with the loop, and the `_nce` twin swaps the L2 term for InfoNCE over the batch's
+   codes. Why: arm A's cell is a rank-16 conditional mean found in one pass by step 1500,
+   the frozen prelude bounds what the loop can predict, and L2 rewards hedging toward the
+   corpus mean. Wolfe: "Poisson loop, the loop guesses the code. We never even run the
+   coda." Prereg `lab/experiments/planned/2026-09-17-lctul-code-only.md`.
+
 THIS BREAKS THE STANDING RULE "never regress onto the slot state" (root `CLAUDE.md`; LCM
 T3/4, CoCoMix §6b, BT §4.2). `oracle_z` carved the one earlier exception with "Wolfe
 decides whether it ever ships". Wolfe directed this arm on 2026-09-17: "we can train TUL
@@ -68,6 +78,13 @@ second exception and of who made it.
   natural ablation but not queued first: it is the ordinary TUL signal with a fixed
   reader, and the question Wolfe asked is whether matching the oracle code is a target the
   loop can descend.
+- **Unfreezing the coda beside the loop at train** (instead of skipping it). Not taken
+  for the code-only arms: a coda that trains on the predicted cells adds a second moving
+  reader to the depth question; the continuation arms (`tul_code_target_uf`) ask that
+  question separately on arm A's checkpoint.
+- **A cosine-margin or triplet term instead of InfoNCE.** Not built: InfoNCE over the
+  batch is the standard discriminative target, the batch already holds ~380 codes, and the
+  reading it adds (`code_target_acc`) has a known chance level.
 - **Regressing the raw exit state without a projection.** Rejected: the readout's
   statistic is not the code's, and a per-cell projection with identity init costs one
   `[M, d, d]` tensor and lets step 0 equal the rms-normed exit state.
@@ -78,7 +95,9 @@ The prereg's predictions, read at 20k on one seed: the exit cosine to the code r
 its entry cosine and above 0.2; OWN beats ZERO and SHUF on the 120-cut semantic probe
 with intervals clear of 0; the forced-depth K-curve on the frozen coda's CE is negative;
 OWN lands within 0.03 of the strict ruler paired. Any one of the first two failing files
-this note as rejected with the reading.
+this note as rejected with the reading. (2026-09-17: P-T1 and P-T2 read as failing at 10k
+on arm A, exit cosine 0.169 flat since 1500 and one pass; the code-only prereg's
+predictions are the amended criteria for the family.)
 
 ## Risks
 

@@ -50,7 +50,8 @@ from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
 from .tul_vq import TULThoughtVQ
 from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
-                       cfm_null_floor, cfm_pair, code_rmsnorm, code_target_regression,
+                       cfm_null_floor, cfm_pair, code_rmsnorm, code_target_infonce,
+                       code_target_regression, code_target_shuffled_cos,
                        code_thinker_relation, euler_sample,
                        TULCodeSymHead, mdm_loss, mdm_mask, maskgit_sample)
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
@@ -5829,9 +5830,17 @@ class MORPHTransformer(nn.Module):
         with torch.no_grad():
             z_tgt, ok = self.tul_code_enc(xs, layout)                     # [B, S, M, C], [B, S]
         pred = self.tul_code_proj(self._readout(h_slots), ok)
-        loss, cos_mean, n = code_target_regression(pred, z_tgt, ok)
-        stats = {"code_target_mse": float(loss.detach()), "code_target_cos": float(cos_mean),
-                 "code_target_n": float(n)}
+        if tc.code_target_loss == "infonce":
+            loss, cos_mean, n, acc = code_target_infonce(pred, z_tgt, ok, tc.code_target_tau)
+            mse, _, _ = code_target_regression(pred.detach(), z_tgt, ok)
+            stats = {"code_target_mse": float(mse), "code_target_cos": float(cos_mean),
+                     "code_target_n": float(n), "code_target_acc": float(acc)}
+        else:
+            loss, cos_mean, n = code_target_regression(pred, z_tgt, ok)
+            stats = {"code_target_mse": float(loss.detach()), "code_target_cos": float(cos_mean),
+                     "code_target_n": float(n)}
+        # own minus this is what the cell knows about ITS span (the generic floor)
+        stats["code_target_cos_shuf"] = float(code_target_shuffled_cos(pred.detach(), z_tgt, ok))
         if db_traj is not None and self.training:
             with torch.no_grad():
                 for t, ht in enumerate(db_traj):
@@ -7724,7 +7733,19 @@ class MORPHTransformer(nn.Module):
             _coda_kw = self._tul_pad_cell_narrow(_coda_kw, _pad_pos)
 
         out: dict = {"logits": None}
-        if tc.coda_sees_slots and tc.coda_token_cut == 0:
+        _skip_coda = (self.tul_code_proj is not None and tc.code_target_skip_coda
+                      and self.training and labels is not None)
+        if _skip_coda:
+            # The code-ONLY arm (tul.code_target_skip_coda): at train the forward ends at
+            # the projection. No coda, no token CE; `groups["loss"]` starts at an exact 0
+            # so the folds below (the slot-loop constraint, the code term) are the whole
+            # loss, and train.py's subtraction of `code_target_weighted` reports a
+            # train/loss of exactly that constraint. The eval forward takes the ordinary
+            # branch and the frozen-at-VAE coda reads the cells for the val instrument.
+            xh = None
+            groups = {"loss": code_target_loss.new_zeros(())}
+            coda_positions = 0
+        elif tc.coda_sees_slots and tc.coda_token_cut == 0:
             xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
                                    attn_kwargs=_coda_kw, ret_reset_mask=tg_reset)
             groups = (self._tul_group_losses(xh, labels, layout, want_groups=not self.training)

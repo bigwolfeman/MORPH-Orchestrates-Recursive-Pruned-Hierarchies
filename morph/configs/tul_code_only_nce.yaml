@@ -1,0 +1,17 @@
+# LCTUL, the code-only arm's InfoNCE twin "tul-code-only-nce" (2026-09-17; docs/tul-code-spec.md
+# §17.1; prereg lab/experiments/planned/2026-09-17-lctul-code-only.md).
+#
+# ONE factor against `tul_code_only.yaml`: the term. L2's optimum is the conditional MEAN
+# of the code, which hedges toward the corpus mean (arm A: cos to the mean 0.33-0.53 against
+# the codes' 0.06-0.09, effective rank 16 of 75). InfoNCE scores the predicted cell against
+# every valid slot's code in the batch (~380 at batch 6) with the own code as the class: a
+# discriminative target that cannot hedge. Readings: `code_target_cos` (own), `_cos_shuf`
+# (the floor), `code_target_acc` (top-1; chance ~1/380), the per-pass cosines.
+defaults:
+  - tul_code_only
+  - _self_
+tul:
+  code_target_loss: infonce
+  code_target_tau: 0.1
+wandb:
+  name: tul-code-only-nce

@@ -297,3 +297,119 @@ def test_the_target_arms_compose_and_build_and_run(name, monkeypatch):
     with torch.no_grad():
         out = m(inp, labels=lab, slot_layout=layout)
     assert torch.isfinite(out["loss"]) and "code_target_cos" in out
+
+
+# ── the code-ONLY arm (tul.code_target_skip_coda) and the InfoNCE term ───────
+
+CODE_ONLY_CONFIGS = ["tul_code_only", "tul_code_only_nce"]
+
+
+def test_skip_coda_train_forward_ends_at_the_projection():
+    m = _model(tul_code_target_skip_coda=True).train()
+    out = _run(m)
+    assert out["logits"] is None and "ce_tokens" not in out, "no coda, no token CE at train"
+    assert "code_target_cos" in out and "code_target_cos_l0" in out
+    # the loss is the code term plus the loop's own constraint and nothing else
+    expect = float(out["code_target_weighted"]) + float(out.get("gain_reg_weighted", 0.0))
+    assert abs(float(out["loss"]) - expect) < 1e-5, (float(out["loss"]), expect)
+    out["loss"].backward()
+    assert _grads(m, "core.") > 0.0, "the code term reaches the loop"
+    assert _grads(m, "prelude.") > 0.0, "and the prelude (train_only is the config's job)"
+    assert _grads(m, "coda.") == 0.0, "the coda never ran"
+    assert _grads(m, "tul_code_enc.") == 0.0, "E is the frozen target"
+
+
+def test_skip_coda_eval_forward_still_runs_the_coda():
+    m = _model(tul_code_target_skip_coda=True).eval()
+    with torch.no_grad():
+        out = _run(m)
+    assert "ce_tokens" in out and "code_cells" in out and torch.isfinite(out["loss"])
+    # and it is the SAME eval forward as the arm with the coda at train
+    torch.manual_seed(5)
+    ref = _model(tul_code_target_skip_coda=False).eval()
+    ref.load_state_dict(m.state_dict())
+    with torch.no_grad():
+        o2 = _run(ref)
+    assert torch.allclose(out["loss"], o2["loss"]) and torch.allclose(out["code_cells"], o2["code_cells"])
+
+
+def test_infonce_term_trains_the_loop_and_reports_its_readings():
+    m = _model(tul_code_target_loss="infonce", tul_code_target_tau=0.1).train()
+    out = _run(m)
+    assert float(out["code_target"]) > 0.0
+    assert 0.0 <= float(out["code_target_acc"]) <= 1.0
+    assert -1.0 <= float(out["code_target_cos"]) <= 1.0
+    assert "code_target_mse" in out, "the L2 reading is kept beside the term"
+    out["loss"].backward()
+    assert _grads(m, "core.") > 0.0 and _grads(m, "tul_code_proj.") > 0.0
+    assert _grads(m, "tul_code_enc.") == 0.0
+
+
+def test_infonce_helper_contract():
+    from morph.model.tul_code import code_target_infonce
+    torch.manual_seed(0)
+    B, S, M, C = 2, 5, 2, 16
+    z = code_rmsnorm(torch.randn(B, S, M, C))
+    ok = torch.ones(B, S, dtype=torch.bool)
+    ok[1, 4] = False
+    # the own code IS the prediction: top-1 is perfect and the loss is the batch's floor
+    loss, cos, n, acc = code_target_infonce(z.clone().requires_grad_(True), z, ok, 0.1)
+    assert float(acc) == 1.0 and abs(float(cos) - 1.0) < 1e-5 and int(n) == 9 * M
+    # a foreign prediction: chance-level top-1 and a loss near log(n_valid)
+    p = code_rmsnorm(torch.randn(B, S, M, C)).requires_grad_(True)
+    loss2, cos2, _, acc2 = code_target_infonce(p, z, ok, 1.0)
+    assert float(loss2) > float(loss)
+    loss2.backward()
+    assert p.grad is not None and float(p.grad.abs().sum()) > 0.0
+    # no valid slot: an exact 0 that still carries the graph
+    loss0, _, n0, _ = code_target_infonce(p, z, torch.zeros_like(ok), 0.1)
+    assert float(loss0) == 0.0 and int(n0) == 0 and loss0.requires_grad
+
+
+def test_shuffled_cosine_is_reported_at_train_and_eval():
+    m = _model().train()
+    out = _run(m)
+    assert "code_target_cos_shuf" in out and -1.0 <= float(out["code_target_cos_shuf"]) <= 1.0
+    m.eval()
+    with torch.no_grad():
+        o = _run(m)
+    assert "code_target_cos_shuf" in o
+
+
+@pytest.mark.parametrize("kw", [
+    dict(tul_code_target_skip_coda=True, tul_code_target_detach=False),
+    dict(tul_code_target_loss="cosine"),
+    dict(tul_code_target_tau=0.0),
+    dict(tul_code_target_skip_coda=True, tul_code_target_weight=0.0),
+])
+def test_code_only_refusals(kw):
+    with pytest.raises(ValueError):
+        _model(**kw)
+
+
+def test_code_only_knobs_refused_when_the_target_is_off():
+    for kw in (dict(tul_code_target_skip_coda=True), dict(tul_code_target_loss="infonce"),
+               dict(tul_code_target_tau=0.2)):
+        with pytest.raises(ValueError):
+            _model(on=False, **kw)
+
+
+@pytest.mark.parametrize("name", CODE_ONLY_CONFIGS)
+def test_the_code_only_arms_compose_and_build_and_run(name, monkeypatch):
+    cfg, rt = _runtime(name, monkeypatch)
+    tc = rt.model_cfg
+    assert tc.code_target and tc.code_target_skip_coda and tc.code_target_detach
+    assert tc.code_target_loss == ("infonce" if name.endswith("_nce") else "l2")
+    assert list(cfg.training.train_only) == [], "everything trains except the frozen E"
+    torch.manual_seed(7)
+    m = MORPHTransformer(_tiny(tul=tc, n_core=2, mean_depth=3, max_depth=4, bptt_depth=4)).float()
+    _ids0, inp, lab, layout = _pack()
+    m.train()
+    out = m(inp, labels=lab, slot_layout=layout)
+    assert out["logits"] is None and "ce_tokens" not in out and torch.isfinite(out["loss"])
+    out["loss"].backward()
+    assert _grads(m, "tul_code_enc.") == 0.0
+    m.eval()
+    with torch.no_grad():
+        o = m(inp, labels=lab, slot_layout=layout)
+    assert "ce_tokens" in o and "code_target_cos" in o

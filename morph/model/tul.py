@@ -730,6 +730,16 @@ class TULConfig:
                                          # regression ALONE (LaDiR: the decoder never trains
                                          # on a generated latent). False (arm B): the token
                                          # CE through the frozen coda also trains the loop.
+    # The code-ONLY arm (2026-09-17, Wolfe: "Poisson loop, the loop guesses the code. We
+    # never even run the coda"): at TRAIN the forward stops after the projection — no token
+    # dropout, no coda, no CE; the loss is the code term plus the loop's own constraint. The
+    # eval forward still runs the coda (the CE instrument at val, the probes' reads).
+    code_target_skip_coda: bool = False
+    code_target_loss: str = "l2"         # "l2": 2 (1 - cos) per cell, the conditional MEAN;
+                                         # "infonce": the own code against every valid slot's
+                                         # code in the batch (tul_code.code_target_infonce),
+                                         # a discriminative target that cannot hedge.
+    code_target_tau: float = 0.1         # InfoNCE temperature on the cosine logits
     # ── THE PER-PASS PLANNING TARGET (arm `slot-spandec-strict-perpass`, 2026-09-12) ──
     #
     # WHAT IT IS. Every pass of the loop gets its own decoder target, and the target grows
@@ -2471,11 +2481,25 @@ class TULConfig:
     def _check_code_target(self) -> None:
         """``tul.code_target`` — the slot loop regressed onto the frozen code (spec §17)."""
         if not self.code_target:
-            if self.code_target_weight != 1.0 or self.code_target_detach is not True:
+            if (self.code_target_weight != 1.0 or self.code_target_detach is not True
+                    or self.code_target_skip_coda or self.code_target_loss != "l2"
+                    or self.code_target_tau != 0.1):
                 raise ValueError(
-                    "tul.code_target_weight / code_target_detach set with tul.code_target=false: "
-                    "no encoder or projection is built, so the knob(s) would be silently ignored.")
+                    "tul.code_target_* set with tul.code_target=false: no encoder or "
+                    "projection is built, so the knob(s) would be silently ignored.")
             return
+        if self.code_target_loss not in ("l2", "infonce"):
+            raise ValueError(
+                f"tul.code_target_loss must be 'l2' or 'infonce', got {self.code_target_loss!r}")
+        if self.code_target_tau <= 0.0:
+            raise ValueError(f"tul.code_target_tau must be > 0, got {self.code_target_tau}")
+        if self.code_target_skip_coda and not self.code_target_detach:
+            raise ValueError(
+                "tul.code_target_skip_coda with code_target_detach=false: the CE route into "
+                "the loop needs a coda, and the code-only arm runs none at train.")
+        if self.code_target_skip_coda and self.code_target_weight == 0.0:
+            raise ValueError(
+                "tul.code_target_skip_coda with code_target_weight=0: nothing would train.")
         if self.code:
             raise NotImplementedError(
                 "tul.code_target with tul.code: a code model has no slot loop to regress. "

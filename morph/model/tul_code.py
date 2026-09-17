@@ -199,6 +199,56 @@ def code_target_regression(pred: Tensor, z: Tensor, ok: Tensor
     return loss, cos[okm].mean().detach(), n
 
 
+def code_target_infonce(pred: Tensor, z: Tensor, ok: Tensor, tau: float
+                        ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """The ``tul.code_target_loss="infonce"`` term: per cell ``m``, the predicted cells of
+    the batch's valid slots score against EVERY valid slot's code (``<p_i, z_j> / C / tau``,
+    a cosine on unit-RMS cells) and the own code is the class. Returns ``(loss, cos_mean,
+    n_cells, acc)``: ``loss`` the mean over cells of the cross-entropy, ``cos_mean`` the
+    own-code cosine (the same reading the L2 term reports), ``acc`` the top-1 rate (chance
+    is ``1 / n_valid``). ``z`` is detached: the frozen encoder's code never moves.
+
+    Why it exists: the L2 term's optimum is the conditional MEAN of the code, which hedges
+    toward the corpus-mean direction (arm A, 2026-09-17: cos to the mean 0.33-0.53 against
+    the codes' 0.06-0.09, rank 16 of 75). This term asks the loop to pick its span OUT OF
+    the batch instead, own-minus-shuffled directly.
+    """
+    B, S, M, C = pred.shape
+    z = z.detach().float()
+    p = pred.float()
+    n = ok.sum() * M
+    if int(ok.sum()) == 0:
+        zero = (p * 0.0).sum()
+        return zero, zero.detach(), n, zero.detach()
+    losses, coss, accs = [], [], []
+    for m in range(M):
+        P = p[:, :, m][ok]                                                   # [n, C]
+        Z = z[:, :, m][ok]
+        sim = P @ Z.t() / float(C)                                           # [n, n]
+        tgt = torch.arange(P.shape[0], device=P.device)
+        losses.append(F.cross_entropy(sim / float(tau), tgt))
+        coss.append(sim.diagonal().mean().detach())
+        accs.append((sim.argmax(dim=1) == tgt).float().mean())
+    return (torch.stack(losses).mean(), torch.stack(coss).mean(), n,
+            torch.stack(accs).mean().detach())
+
+
+@torch.no_grad()
+def code_target_shuffled_cos(pred: Tensor, z: Tensor, ok: Tensor) -> Tensor:
+    """The predicted cells against a FOREIGN code: the valid slots' codes rolled by half
+    the valid count (a deterministic pairing that crosses rows and consumes no RNG). The
+    generic floor beside ``code_target_cos``; own minus this is what the cell knows about
+    its own span (``lab/divergence/code_target_mean_probe.py`` is the offline twin).
+    """
+    B, S, M, C = pred.shape
+    if int(ok.sum()) < 2:
+        return pred.new_zeros(()).float()
+    P = pred.float()[ok]                                                     # [n, M, C]
+    Z = z.float()[ok]
+    Zr = torch.roll(Z, shifts=Z.shape[0] // 2, dims=0)
+    return ((P * Zr).sum(-1) / float(C)).mean()
+
+
 class TULCodeTime(nn.Module):
     """``t`` in ``[0, 1]`` (per slot) -> ``[C]`` added to the noisy copies' injection.
 
