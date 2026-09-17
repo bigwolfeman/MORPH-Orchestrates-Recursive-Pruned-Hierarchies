@@ -56,6 +56,12 @@ config with `init_from` (12 steps) before insertion; a third watcher instance fo
 semantic probe at 10k and 20k. Pairing against arm A with `code_semantic_pair.py`; the
 per-pass series from wandb (`tul/code_target_cos_l{t}`).
 
+Amended 2026-09-17 15:20 (reason: the smoke ran and the line was inserted): Spark smoke of
+`tul_code_target_prog` at 9c40efe with `init_from`, 12 steps: exit 0, 71.6M trainable /
+198.3M frozen, guard ceiling 100000. `tests/test_tul_progressive.py` + `test_tul_code_target.py`:
+28 passed. Queue line inserted at 15:20 behind the two continuations (commit 9c40efe);
+watcher instance started 15:10 for 10000 and 20000. Predictions unchanged.
+
 ## Not verified before launch
 
 - CPU: a tiny code-target model with `progressive_p: 0.5` runs forward/backward and emits
