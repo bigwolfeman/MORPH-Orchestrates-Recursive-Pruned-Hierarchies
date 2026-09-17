@@ -30,5 +30,12 @@ training:
 tul:
   code_target_skip_coda: true
   code_target_loss: l2
+  # 2026-09-17, MEASURED: with the prelude and embeddings trainable, E is frozen but its
+  # INPUT is not — it pools the LIVE prelude's states of the next span, the prelude drifts
+  # under the loop's gradient and E's codes collapse (own cosine 0.61 -> 0.99, shuffled
+  # 0.56 -> 0.98 by step 3000, oracle CE 13.1 nats against arm A's 1.4; wandb 38naddpq,
+  # killed at 3500). The frozen VAE-stage twin computes the target instead. Without it the
+  # trainer REFUSES this `train_only`. docs/tul-code-spec.md §17.1.
+  code_target_ref: true
 wandb:
   name: tul-code-only

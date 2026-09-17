@@ -113,6 +113,30 @@ that which fits. The parallel-span decode is not an optimisation of it; it is th
 form in which the idea is affordable at all, and it exists only because the geometry is
 strict.
 
+### The frozen reference, and why the arm cannot run without it
+
+Added 2026-09-17, after the code-only draw was killed at step 3500 (wandb `38naddpq`). `E`
+is frozen; its INPUT is not. It pools the LIVE prelude's states of the next span, so on any
+arm where the prelude or the embeddings train, the target moves with the model: own cosine
+0.61 / shuffled 0.56 at steps 500-1000, 0.99 / 0.98 by 2500-3000, regression loss 0.016,
+the frozen coda's oracle CE 13.1 nats against arm A's 1.4. `E`'s codes collapse onto one
+direction and the target measures nothing.
+
+This arm leans on that harder than the L2 arms do, because it reads the VAE stage four
+times: the coda that SAMPLES the continuations, the coda-with-zero-cell that GRADES them,
+the tied head both score through, and `E` on the candidate rows. Any one of them drifting
+turns the judge into a judge of the live model.
+
+`tul.code_target_ref: true` (spec §17.1) holds a frozen deep copy of the whole model,
+snapshotted right after the weights load, and `_code_read_model()` is the ONE accessor all
+four readings go through, so they cannot disagree about which weights they are the VAE
+stage of. The live model contributes the loop's predicted cell and nothing else. The twin
+is not a registered submodule: every walk in this tree (ternary QAT, embedding QAT, the CMS
+prune / carve / route walk, the optimizer, the gradient probes) enumerates modules or
+parameters, and a registered 270M twin would silently double all of them. It rides its own
+`code_ref` key in the checkpoint, and on a resume that key wins — re-snapshotting the live
+weights at step N would move the target mid-run.
+
 ## Alternatives considered
 
 - **Grader: a second frozen plain checkpoint.** The most honest judge, and the one whose
@@ -140,6 +164,14 @@ strict.
   substituted span would mix candidate tokens with true tokens and the target would carry
   the truth. Rejected: only slots whose true span is at most `code_grade_tokens` long are
   graded, and the covered fraction is logged (`code_grade_slot_frac`).
+- **The reference as a registered submodule.** What the checkpoint machinery wants: the
+  state_dict carries it for free and a resume needs no extra key. Rejected because every
+  walk in the tree enumerates modules or parameters and would have to learn to skip it —
+  the ternary QAT pass, the embedding QAT's name lookup, the CMS layer count (the smoke
+  prints "28 CMSBlockLinear layers"; it would print 56), the optimizer, the prune / carve /
+  route walk, the gradient probes. Each needs an exclusion and missing one is a silent,
+  expensive bug. A plain attribute is invisible to all of them by construction, and one
+  explicit checkpoint key is cheaper than six exclusions.
 - **Grading every step on a slot subsample.** Same total compute per graded slot as
   grading fewer rows more often, because the pass is over a whole row either way. Kept
   `code_grade_rows` + `code_grade_every` as the two levers and grade every eligible slot
@@ -158,6 +190,8 @@ strict.
    gain_reg_weighted`.
 6. Training mode and the RNG are restored after a graded step.
 7. Measured rate at least 0.5× the code-only arm at the shipped defaults.
+8. With the frozen twin on, perturbing the live prelude, embeddings or coda moves neither
+   the target code nor any grade; with it off, both move.
 
 ## Risks
 

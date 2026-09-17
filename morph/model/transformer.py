@@ -11,6 +11,7 @@ Config determines dimensions and sizes, not whether features exist.
 
 from __future__ import annotations
 
+import copy
 import math
 import functools
 import os
@@ -1495,6 +1496,14 @@ class MORPHTransformer(nn.Module):
         self.register_buffer("code_grade_step", torch.zeros((), dtype=torch.long),
                              persistent=False)
         self._in_code_grade = False      # reentrancy guard: the grader runs the forward
+        # tul.code_target_ref (spec §17.1): the FROZEN reference copy of the VAE stage.
+        # Deliberately NOT a registered submodule. Every walk in this tree enumerates
+        # modules or parameters — the ternary QAT pass, the embedding QAT, the CMS
+        # prune / carve / route walk, the optimizer, the gradient probes — and a
+        # registered 270M-parameter twin would silently double all of them. It is built
+        # and loaded by `tul_code_ref_snapshot` and persisted under its own checkpoint
+        # key (`save_checkpoint`), never inside `model`.
+        self.__dict__["_code_ref"] = None
 
 
         # ── Retention branch (#230) ────────────────────────────────────
@@ -5844,9 +5853,30 @@ class MORPHTransformer(nn.Module):
         arm's depth question, and this is where it is read.
         """
         tc = self.cfg.tul
-        xs = xn.mean(dim=2) if self._is_hc else xn
+        ref = self.__dict__.get("_code_ref")
         with torch.no_grad():
-            z_tgt, ok = self.tul_code_enc(xs, layout)                     # [B, S, M, C], [B, S]
+            if ref is None:
+                xs = xn.mean(dim=2) if self._is_hc else xn
+                z_tgt, ok = self.tul_code_enc(xs, layout)                 # [B, S, M, C], [B, S]
+            else:
+                # tul.code_target_ref: E is frozen but its INPUT is not — it pools the
+                # prelude's states of the next span, and on any arm where the prelude or
+                # the embeddings train those states drift and E's codes collapse (measured
+                # 2026-09-17: own cosine 0.61 -> 0.99, shuffled 0.56 -> 0.98 by step 3000).
+                # So the whole front comes from the frozen twin, built with the twin's OWN
+                # TG kwargs (`instruments-must-use-the-models-tg-kwargs`: a bare
+                # `_tul_front` scored strict arms from an unrestricted prelude once
+                # already). `input_ids` is required here and the config check guarantees it.
+                if input_ids is None:
+                    raise RuntimeError(
+                        "tul.code_target_ref needs input_ids at the code-target seam: the "
+                        "reference recomputes the front itself and cannot reuse `xn`.")
+                _fkw, _freset, _, _ = ref._tul_tg_kwargs(layout)
+                _rx, _, _ = ref._tul_front(input_ids, layout, attn_kwargs=_fkw,
+                                           ret_reset_mask=_freset)
+                _rxn = ref.input_norm(_rx)
+                z_tgt, ok = ref.tul_code_enc(
+                    _rxn.mean(dim=2) if ref._is_hc else _rxn, layout)
         pred = self.tul_code_proj(self._readout(h_slots), ok)
         if tc.code_target_loss == "infonce":
             loss, cos_mean, n, acc = code_target_infonce(pred, z_tgt, ok, tc.code_target_tau)
@@ -5889,6 +5919,58 @@ class MORPHTransformer(nn.Module):
                 pred, z_tgt, ok, layout, input_ids, db_traj, depths)
         return values, cells, z_tgt, loss, stats, grade_loss, grade_stats
 
+    # ── the frozen reference copy (tul.code_target_ref; spec §17.1) ──────────────────
+
+    @property
+    def code_ref(self):
+        """The frozen VAE-stage twin, or ``None``. Read it, never assign it."""
+        return self.__dict__.get("_code_ref")
+
+    def tul_code_ref_snapshot(self, state: dict | None = None) -> str:
+        """Build the frozen reference copy. Returns "resume" or "snapshot".
+
+        Called by the trainer ONCE, AFTER quantisation and AFTER
+        ``training.init_from`` / ``training.resume`` have loaded weights — so the twin is
+        an exact copy of whatever the live model was seeded with, parametrisations
+        included. With ``state`` (a resume: the checkpoint carries the reference it was
+        trained against) that state is loaded STRICTLY into the twin instead, because a
+        resumed run must keep measuring against the SAME VAE stage: re-snapshotting the
+        live weights at step N would silently move the target mid-run, which is the exact
+        failure this mechanism exists to prevent.
+
+        The twin is frozen (`requires_grad` False everywhere), in eval mode, and holds no
+        reference of its own.
+        """
+        if self.cfg.tul is None or not self.cfg.tul.code_target_ref:
+            raise RuntimeError(
+                "tul_code_ref_snapshot on a model built without tul.code_target_ref: "
+                "nothing reads the reference, so building it would be dead weight.")
+        self.__dict__["_code_ref"] = None            # never deep-copy a copy
+        ref = copy.deepcopy(self)
+        ref.__dict__["_code_ref"] = None
+        how = "snapshot"
+        if state is not None:
+            ref.load_state_dict(state, strict=True)
+            how = "resume"
+        for prm in ref.parameters():
+            prm.requires_grad_(False)
+        ref.eval()
+        self.__dict__["_code_ref"] = ref
+        return how
+
+    def tul_code_ref_state(self):
+        """The reference's ``state_dict`` for the checkpoint, or ``None``."""
+        ref = self.__dict__.get("_code_ref")
+        return None if ref is None else ref.state_dict()
+
+    def _code_read_model(self):
+        """WHICH model computes the VAE-stage readings: the frozen twin when there is one.
+
+        One accessor, so the target encoder, the sampler's coda and the grader's coda can
+        never disagree about which weights they are the VAE stage of.
+        """
+        return self.__dict__.get("_code_ref") or self
+
     # ── the graded-continuation target (tul.code_grade; spec §17.2) ──────────────────
 
     def _code_grade_sub_layout(self, layout: SlotLayout, rows: Tensor, k: int) -> SlotLayout:
@@ -5910,10 +5992,11 @@ class MORPHTransformer(nn.Module):
         implementation of the write. ``coda_state_only`` keeps the ``[N, L, V]`` logits from
         ever being built.
         """
-        out = self._forward_single(ids, None, 0, None, lay,
-                                   _code_mode="generate", _code_given=cells,
-                                   _code_given_mask=lay.slot_valid,
-                                   _coda_state_only=True)
+        mdl = self._code_read_model()
+        out = mdl._forward_single(ids, None, 0, None, lay,
+                                  _code_mode="generate", _code_given=cells,
+                                  _code_given_mask=lay.slot_valid,
+                                  _coda_state_only=True)
         return out["coda_state"], out["code_z"]
 
     def _code_grade_logits(self, h: Tensor, src: Tensor, live: Tensor) -> Tensor:
@@ -5924,7 +6007,11 @@ class MORPHTransformer(nn.Module):
         806 MB of fp32 per decode step, and this reads at most one position per slot.
         """
         r, c = live.nonzero(as_tuple=True)
-        lg = self.embed.attend(h[r, src[r, c]]).float()
+        # the REFERENCE's tied head when there is one: the coda that produced `h` is the
+        # reference's, and MORPH's head is the input embedding table
+        # (`morph-lm-head-is-weight-tied`), so reading it off the live embeddings would
+        # decode a frozen coda's state through a table that has moved.
+        lg = self._code_read_model().embed.attend(h[r, src[r, c]]).float()
         return lg.index_fill(-1, torch.tensor([self.cfg.tul.slot_id], device=lg.device),
                              float("-inf"))
 
@@ -5993,6 +6080,11 @@ class MORPHTransformer(nn.Module):
         partly substituted span would carry the truth into the target. The boundary rule is
         never re-run — closing the candidate at its own boundary would move every slot
         position after it and force a repack per candidate per decode step.
+
+        WHICH WEIGHTS. With `tul.code_target_ref` every VAE-stage reading here — the coda
+        that samples, the coda that grades, the tied head both read through, and `E` on the
+        candidate rows — comes from the frozen twin (`_code_read_model`). The live model
+        contributes the predicted cell and nothing else.
 
         WHY THE GRADER IS NOT THE PROPOSING CODA. If a candidate were scored under the cell
         that generated it, the argmax would be that cell's own greedy decode: the target

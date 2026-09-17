@@ -740,6 +740,23 @@ class TULConfig:
                                          # code in the batch (tul_code.code_target_infonce),
                                          # a discriminative target that cannot hedge.
     code_target_tau: float = 0.1         # InfoNCE temperature on the cosine logits
+    # ── THE FROZEN REFERENCE (2026-09-17, measured; spec §17.1) ──────────────────────
+    #
+    # E is frozen but its INPUT is not. E pools the LIVE prelude's states of the next
+    # span, so on any arm where the prelude or the embeddings train, the target moves with
+    # the model. Measured on the code-only draw (wandb 38naddpq, killed at step 3500):
+    # train own cosine 0.61 / shuffled 0.56 at steps 500-1000 and 0.99 / 0.98 by 2500-3000
+    # (val 0.989 / 0.984), regression loss 0.016, the frozen coda's oracle CE 13.1 nats
+    # against arm A's 1.4 — E's codes collapse onto one direction and the target measures
+    # nothing. No gradient reaches E (it runs under no_grad); its INPUT drifts.
+    #
+    # `code_target_ref: true` holds a FROZEN DEEP COPY of the whole model, snapshotted
+    # right after `training.init_from` / `training.resume` loads weights, and every reading
+    # of the VAE stage comes from it: the prelude states E pools, E itself, the coda that
+    # samples the graded continuations and the coda-with-zero-cell grader. The live model
+    # contributes only the loop's predicted cell. Costs one extra fp32 copy of the model
+    # (~1.1 GB at 270M) plus one no_grad prelude forward per step.
+    code_target_ref: bool = False
     # ── THE GRADED-CONTINUATION TARGET (arm `tul-code-grade`, 2026-09-17; spec §17.2) ──
     #
     # Every target above is a deterministic function of the past and every one is met in
@@ -2526,7 +2543,7 @@ class TULConfig:
         if not self.code_target:
             if (self.code_target_weight != 1.0 or self.code_target_detach is not True
                     or self.code_target_skip_coda or self.code_target_loss != "l2"
-                    or self.code_target_tau != 0.1):
+                    or self.code_target_tau != 0.1 or self.code_target_ref):
                 raise ValueError(
                     "tul.code_target_* set with tul.code_target=false: no encoder or "
                     "projection is built, so the knob(s) would be silently ignored.")

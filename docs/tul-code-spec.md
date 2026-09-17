@@ -681,6 +681,42 @@ against the valid slots' codes rolled by half the valid count (a deterministic c
 pairing). Own minus this is what the cell knows about ITS span; the offline twin is the
 corpus-mean probe. Prereg `lab/experiments/planned/2026-09-17-lctul-code-only.md`.
 
+**THE TARGET COLLAPSED, and `tul.code_target_ref` is the fix (2026-09-17, measured).** The
+first code-only draw was killed at step 3500 (wandb `38naddpq`). `E` is frozen; its INPUT
+is not. `E` pools the LIVE prelude's states of the next span, so with `train_only: []` the
+prelude drifted under the loop's gradient and `E`'s codes collapsed onto one direction:
+train own cosine 0.61 / shuffled 0.56 at steps 500-1000, 0.99 / 0.98 by 2500-3000 (val
+0.989 / 0.984), regression loss 0.016, the frozen coda's oracle CE 13.1 nats against arm
+A's 1.4. No gradient ever reached `E` — it runs under `no_grad` — so this is drift of its
+INPUT, not an optimised collapse. Either way the target measures nothing and the draw is
+void, not a result.
+
+`tul.code_target_ref: true` holds a FROZEN DEEP COPY of the whole model, snapshotted right
+after `training.init_from` / `training.resume` loads weights, and EVERY reading of the VAE
+stage comes from it: the prelude states `E` pools (the twin runs its own `_tul_front` with
+its own TG kwargs — `instruments-must-use-the-models-tg-kwargs`), `E` itself, the tied head
+the grader scores through, and on §17.2 the coda that samples the continuations and the
+coda-with-zero-cell that grades them. The live model contributes the loop's predicted cell
+and nothing else.
+
+The twin is deliberately NOT a registered submodule. Every walk in this tree enumerates
+modules or parameters — the ternary QAT pass, the embedding QAT, the CMS prune / carve /
+route walk, the optimizer, the gradient probes — and a registered 270M-parameter twin would
+silently double all of them. It lives on `MORPHTransformer._code_ref` (read through
+`model.code_ref`), is built by `tul_code_ref_snapshot()` AFTER quantisation and AFTER the
+weights load so it copies the parametrised model exactly, and rides its own `code_ref` key
+in the checkpoint. On a RESUME that key wins: re-snapshotting the live weights at step N
+would move the target mid-run, which is the failure the mechanism exists to prevent. A
+checkpoint without the key (every `init_from` seed, the VAE stage included) is the snapshot
+case and says so in the log. Cost: one extra fp32 copy of the model (~1.1 GB at 270M) plus
+one `no_grad` prelude forward per step.
+
+The trainer REFUSES a `tul.code_target` model whose front trains without the twin
+(`assert_code_target_front_frozen`: any trainable `embed.` / `prelude.` / `input_norm.` /
+`value_embed*` / prelude-range `x0_injects.`), with the collapse numbers in the message, so
+this cannot happen again. `tul_code_only.yaml` and `tul_code_only_nce.yaml` carry
+`code_target_ref: true` and keep `train_only: []`. Tests: `tests/test_tul_code_ref.py`.
+
 ### 17.2 The GRADED-continuation target: the loop proposes, a blind grader ranks (2026-09-17)
 
 Every target in §17 / §17.1 is a deterministic function of the past, and every one is met
@@ -693,7 +729,10 @@ predicted targets entirely (a target that is computed, not predicted)". Wolfe, 2
 "didn't we also have an arm that was grading plausible continuations with a grader?"
 
 `tul.code_grade: true` keeps everything §17 sets up (strict slot loop, `TULCodeProj` cells,
-frozen `E`, frozen VAE coda) and adds a term whose target is COMPUTED:
+frozen `E`, frozen VAE coda) and adds a term whose target is COMPUTED. It requires
+`tul.code_target_ref` in practice and its configs set it: the sampler's coda, the grader's
+coda, the tied head both read through and `E` on the candidate rows all come from the frozen
+twin (§17.1), so nothing the live front does can move the target or the judge.
 
 - **The proposal.** The loop's predicted cells, DETACHED, condition the frozen coda, which
   samples `code_grade_k` candidate continuations of span `s+1` at `code_grade_temp`. The

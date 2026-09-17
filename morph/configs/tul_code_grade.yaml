@@ -26,6 +26,11 @@ defaults:
   - _self_
 tul:
   code_target_weight: 0.0         # the L2 regression is OFF: the graded term is the arm
+  # Inherited from tul_code_only and stated again because this arm leans on it harder: the
+  # frozen VAE-stage twin computes E's target AND samples AND grades the continuations, so
+  # nothing the live front does can move the target or the judge (docs/tul-code-spec.md
+  # §17.1, the 2026-09-17 collapse).
+  code_target_ref: true
   code_grade: true
   code_grade_k: 4                 # candidates per graded slot
   code_grade_tokens: 16           # decode steps, AND the eligibility filter on span length

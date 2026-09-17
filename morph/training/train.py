@@ -587,6 +587,14 @@ def save_checkpoint(
         "rng_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
     _mm = getattr(model, "_orig_mod", model)
+    _ref = _mm.tul_code_ref_state() if hasattr(_mm, "tul_code_ref_state") else None
+    if _ref is not None:
+        # tul.code_target_ref (spec §17.1): the frozen VAE-stage twin every target and
+        # every grade is measured against. It rides its OWN key, not `model`, because it
+        # is deliberately not a registered submodule (see MORPHTransformer.__init__), and
+        # a resume must keep THIS reference: re-snapshotting the live weights mid-run
+        # would move the target, which is the failure the mechanism exists to prevent.
+        ckpt["code_ref"] = _ref
     if getattr(_mm, "tul", None) is not None:
         # Audit trail, not a reconstruction flag: the TUL parameters are built from the
         # config at model-build time (never mid-run), so load_state_dict already has a
@@ -882,6 +890,61 @@ def load_checkpoint(
     # can re-index it when the live model has parameters the checkpoint does not (an
     # intervention arm that adds a module). See optimizer.align_optimizer_state.
     return step, ckpt["optimizer"], needs_rebuild, set(ckpt["model"].keys())
+
+
+def assert_code_target_front_frozen(model) -> list[str]:
+    """A ``tul.code_target`` model may not train its FRONT without the frozen reference.
+
+    E is frozen; its INPUT is not. It pools the LIVE prelude's states of the next span, so
+    letting the prelude, the embeddings, the input norm or a prelude-range ``x0_inject``
+    train moves the target with the model. Measured on the code-only draw (wandb
+    38naddpq, killed at step 3500): train own cosine 0.61 / shuffled 0.56 at steps
+    500-1000 and 0.99 / 0.98 by 2500-3000 (val 0.989 / 0.984), regression loss 0.016, the
+    frozen coda's oracle CE 13.1 nats against arm A's 1.4. E's codes collapse onto one
+    direction and the target measures nothing.
+
+    Returns the trainable front tensors (empty when the model is legal). Called once, after
+    ``training.train_only`` has been applied and before the optimizer is built.
+    """
+    tc = getattr(getattr(model, "cfg", None), "tul", None)
+    if tc is None or not tc.code_target or tc.code_target_ref:
+        return []
+    n_pre = int(model.cfg.n_prelude)
+
+    def _front(n: str) -> bool:
+        if n.startswith(("embed.", "prelude.", "input_norm.", "value_embed")):
+            return True
+        if n.startswith("x0_injects."):
+            part = n.split(".")[1]
+            return part.isdigit() and int(part) < n_pre
+        return False
+
+    bad = [n for n, prm in model.named_parameters() if prm.requires_grad and _front(n)]
+    if bad:
+        raise ValueError(
+            f"tul.code_target with a trainable front and no tul.code_target_ref: "
+            f"{len(bad)} front tensors train (first: {bad[:3]}). E pools the LIVE "
+            f"prelude's states of the next span, so the target drifts with the model and "
+            f"its codes collapse - measured 2026-09-17 on wandb 38naddpq, own cosine "
+            f"0.61 -> 0.99 and shuffled 0.56 -> 0.98 by step 3000, oracle CE 13.1 nats "
+            f"against arm A's 1.4. Set tul.code_target_ref: true (a frozen VAE-stage twin "
+            f"computes the target) or freeze the front with training.train_only.")
+    return bad
+
+
+def read_code_ref_state(path: str):
+    """The ``code_ref`` state of a checkpoint, or ``None`` if it carries none.
+
+    A checkpoint written before ``tul.code_target_ref`` existed (the VAE stage's, every
+    `init_from` seed) has no such key, and that is the SNAPSHOT case, not an error. Read
+    with ``mmap`` so a 2 GB file is not paged in twice on a resume.
+    """
+    try:
+        ck = torch.load(path, map_location="cpu", weights_only=False, mmap=True)
+    except Exception:                              # older serialisation: no mmap support
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+    st = ck.get("code_ref") if isinstance(ck, dict) else None
+    return st
 
 
 def load_weights_only(path: str, model: nn.Module, device: torch.device,
@@ -2291,6 +2354,7 @@ def main(cfg: DictConfig) -> None:
         print(f"  [train_only] {_nt/1e6:.1f}M trainable / {_nf/1e6:.1f}M frozen; trainable groups: "
               + ", ".join(f"{k}({v/1e6:.2f}M)" for k, v in _groups.items()), flush=True)
         full_config_dict["train_only_groups"] = dict(_groups)
+    assert_code_target_front_frozen(model)
 
     # ── Optimizer + LR schedule ───────────────────────────────────────────
     optimizer = create_optimizer(model, cfg)
@@ -2496,6 +2560,26 @@ def main(cfg: DictConfig) -> None:
         print(f"Init-from (weights only) {init_from_path}")
         load_weights_only(init_from_path, model, device,
                           allow_plain_to_tul=_plain_to_tul)
+
+    # ── tul.code_target_ref (spec §17.1): the frozen VAE-stage twin ──────────────────
+    # AFTER quantisation and AFTER the weights load, so the twin is an exact copy of what
+    # the run was seeded with, parametrisations included. On a resume the checkpoint's own
+    # reference wins: re-snapshotting the live weights at step N would silently move the
+    # target mid-run, which is exactly the collapse this mechanism exists to prevent.
+    _mdl0 = getattr(model, "_orig_mod", model)
+    if getattr(getattr(_mdl0, "cfg", None), "tul", None) is not None \
+            and bool(getattr(_mdl0.cfg.tul, "code_target_ref", False)):
+        _ref_state = None
+        if resume_path and os.path.isfile(resume_path):
+            _ref_state = read_code_ref_state(resume_path)
+            if _ref_state is None:
+                print("  [code_ref] the resume checkpoint carries NO reference: "
+                      "snapshotting the loaded weights instead", flush=True)
+        _how = _mdl0.tul_code_ref_snapshot(_ref_state)
+        _nref = sum(p.numel() for p in _mdl0.code_ref.parameters())
+        print(f"  [code_ref] frozen VAE-stage twin {_how}: {_nref/1e6:.1f}M parameters, "
+              f"0 trainable, eval mode; every code target and every grade is measured "
+              f"against it", flush=True)
 
     # The phase (bag_size, tul_on) and both loaders are built after the curriculum block,
     # where total_steps is final. See phase.py.
