@@ -174,13 +174,18 @@ strict.
   sanity question and it is instrumented (`code_grade_cos_best_true` against
   `code_grade_cos_worst_true`). If they are equal the grader is not selecting for anything
   the code measures, and the arm is refuted at its own instrument rather than at its CE.
-- **The grader cannot be sanity-checked by a difference.** The candidates are drawn from
-  the model that grades them, so `E_p[log p] = -H` sits at or above the truth's `-CE` by
-  Jensen: `code_grade_true` is BELOW `code_grade_mean` however good the grader is, and the
-  CPU fixture reads exactly that at init (best -2.84, mean -3.19, worst -3.55, true -5.16).
-  The sanity reading is `code_grade_true_rank`, the fraction of non-degenerate candidates
-  the real continuation outscores: 0.5 for a calibrated grader, near 0 when it ranks real
-  text last. I wrote the difference first and the fixture caught it.
+- **The grader's sanity reading is a RANK, and the reason is worth stating.** If the
+  grader were the sampler — same cell, same distribution — Jensen would settle it against
+  the truth: `E_p[log p] = -H` is at or above the truth's `-CE`, so real text would sit
+  BELOW the sample mean however good the grader was. The CPU fixture reads exactly that
+  (best -2.84, mean -3.19, worst -3.55, true -5.16), because there the model is random and
+  the cell carries nothing. On the real arm the two distributions DIFFER by construction —
+  the candidates are drawn under the predicted cell and graded with that cell zeroed — and
+  the Spark smoke reads the truth ABOVE every candidate (best -5.00, mean -6.13, worst
+  -7.40, true -4.09, rank 0.89) at the VAE checkpoint's weights. So the difference is
+  informative here and would be meaningless under a self-grading design;
+  `code_grade_true_rank` is the reading that stays comparable either way, and a rank
+  collapsing toward 0 is the signature of the grader drifting into the sampler.
 - **Degenerate candidates.** A repetition loop is fluent and scores well
   (`genppl-needs-a-diversity-guard`). Guarded by a distinct-2 floor on the candidate's own
   tokens, and the flagged fraction is logged.

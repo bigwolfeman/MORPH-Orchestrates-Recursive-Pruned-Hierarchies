@@ -736,9 +736,11 @@ an option at any setting.
 `code_grade_best` / `_mean` / `_worst` (mean log-prob per token of the best / all / worst
 candidates), `code_grade_true` and `code_grade_true_rank` (the TRUE next span under the SAME
 grader, and the fraction of non-degenerate candidates it outscores — the grader's sanity
-reading is the RANK, not the difference: the candidates are drawn from the model that
-grades them, so `E_p[log p] = −H` is at or above the truth's `−CE` by Jensen and
-`code_grade_true` sits below `code_grade_mean` however good the grader is), `code_grade_cos_best_true` and
+reading. Read the RANK: a self-grading design, where the candidates are drawn and scored
+under the same cell, puts the truth below the sample mean by Jensen whatever the grader is
+worth, so the difference means nothing there. This grader zeroes the cell the sampler used,
+the two distributions differ, and the 2026-09-17 Spark smoke reads truth −4.09 against best
+−5.00 / mean −6.13 / worst −7.40, rank 0.89, at the VAE checkpoint), `code_grade_cos_best_true` and
 `code_grade_cos_worst_true` (does winning the grade mean being nearer the truth's code?),
 `code_grade_cos_l{t}` (the per-pass cosines to `E(best)`, beside `code_target_cos_l{t}` to
 `E(true)` — the depth question), `code_grade_degen` (flagged fraction), `code_grade_n`

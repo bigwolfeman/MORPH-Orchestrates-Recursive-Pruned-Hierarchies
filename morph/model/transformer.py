@@ -6136,14 +6136,16 @@ class MORPHTransformer(nn.Module):
                         gr.gather(1, worst.unsqueeze(1)).squeeze(1)[keep].mean())
                     stats["code_grade_mean"] = float(gr[_live].mean())
                     stats["code_grade_true"] = float(g_true[keep].mean())
-                    # The grader's sanity reading, and it is a RANK, not a difference.
-                    # Jensen forbids the difference: the candidates are drawn from the very
-                    # model that grades them, so E_p[log p] = -H is at or above the truth's
-                    # -CE by construction and `code_grade_true` sits BELOW
-                    # `code_grade_mean` however good the grader is. What is informative is
-                    # where the real continuation lands among the samples: the fraction of
-                    # non-degenerate candidates it beats, 0.5 for a calibrated grader and
-                    # 0 if it ranks the real text dead last.
+                    # The grader's sanity reading: where the real continuation lands
+                    # among the samples, as a FRACTION of the non-degenerate candidates it
+                    # beats. A rank and not a difference, because the difference is only
+                    # meaningful while the grader is not the sampler. If a candidate were
+                    # scored under the cell that drew it, Jensen would settle it against
+                    # the truth (E_p[log p] = -H at or above the truth's -CE) whatever the
+                    # grader was worth. Here the cell the sampler used is zeroed, so the
+                    # two distributions differ and the truth can and does win: the
+                    # 2026-09-17 Spark smoke reads rank 0.89 at the VAE checkpoint. A rank
+                    # collapsing toward 0 is this grader drifting into the sampler.
                     _beat = ((gr < g_true.unsqueeze(1)) & ~dg).sum(dim=1).float()
                     _cnt = (~dg).sum(dim=1).clamp_min(1).float()
                     stats["code_grade_true_rank"] = float((_beat / _cnt)[keep].mean())
