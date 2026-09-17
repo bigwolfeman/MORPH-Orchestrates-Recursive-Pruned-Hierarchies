@@ -102,6 +102,8 @@ target (and, on the graded arm, samples and grades) so E's code is the VAE stage
 whatever the live front does. The rerun gets a new planned file. Run rate before the kill:
 16,758 tok/s (1.17x arm A's 14,393; P-C7 would have failed at 1.25x) at peak 7.9 GB (10.9).
 Trainable count printed by the run: none (no `[train_only]` line with the empty list).
+Correction 18:12: the runner consumed the InfoNCE line at 18:04 before it was pulled; that
+draw ran 200 steps (16,884 tok/s) and was killed at 18:12 by PID. Both draws void.
 
 ## Not verified before launch
 
