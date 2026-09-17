@@ -79,6 +79,16 @@ at the HEAD of `recon_arms.txt` (kind slot, commit recorded at insertion, EXTRA 
 continuations. A watcher instance runs the semantic probe and the corpus-mean probe at 10k
 and 20k. Pairing against arm A with `code_semantic_pair.py`.
 
+Amended 2026-09-17 16:58 (reason: the smokes ran and the lines were inserted): Spark smokes of
+`tul_code_only` and `tul_code_only_nce` at 20a4c3b with `init_from`, 12 steps, both: 0
+Tracebacks, 0 nan, 467/469 tensors matched, guard ceiling 1e8, final val_loss 8.40 / 8.25
+(the frozen coda reading a near-identity cell), train `code_target_cos` 0.0048 / 0.0019 with
+`_cos_shuf` 0.0053 / 0.0024 (the floor instrument reads), `code_target_acc` 0.0015 (chance).
+No `[train_only]` line prints with the empty list, so the trainable count stays unverified
+until the run's own log. Queue lines inserted at the HEAD at 16:57 (commit 20a4c3b), ahead
+of arm B and the continuations; watcher `spark_code_probes_only.sh` started 16:57 (semantic
++ corpus-mean probe at 10000 and 20000). Predictions unchanged.
+
 ## Not verified before launch
 
 - The 24 CPU contracts (`tests/test_tul_code_target.py`); the GPU smoke's exit code is
