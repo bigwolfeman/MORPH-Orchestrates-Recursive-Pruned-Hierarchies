@@ -1,0 +1,26 @@
+== continuity tul-code-d
+  cos random pair      +0.0401 [+0.0369, +0.0432]  n=4900
+  cos lag 1            +0.0750 [+0.0713, +0.0786]  n=4804
+  cos lag 2            +0.0772 [+0.0734, +0.0810]  n=4708
+  cos lag 4            +0.0709 [+0.0675, +0.0748]  n=4516
+  symbol match random  0.0274 [0.0255, 0.0292]  (chance ~ 1/perplexity)
+  symbol match lag 1   0.0464 [0.0438, 0.0490]
+  symbol match lag 2   0.0469 [0.0444, 0.0495]
+  symbol match lag 4   0.0431 [0.0407, 0.0457]
+== continuity tul-code-cfg
+  cos random pair      +0.0972 [+0.0944, +0.1001]  n=4900
+  cos lag 1            +0.1243 [+0.1209, +0.1279]  n=4804
+  cos lag 2            +0.1313 [+0.1276, +0.1348]  n=4708
+  cos lag 4            +0.1227 [+0.1194, +0.1263]  n=4516
+== ctxshare d@5000 drop 0.001
+  code_fm_rel          0.6252 ± 0.0097
+  code_fm_band0_rel    0.6484 ± 0.0371
+  code_fm_band1_rel    0.6168 ± 0.0072
+  code_fm_band2_rel    0.6169 ± 0.0042
+  code_fm_band3_rel    0.6163 ± 0.0015
+== ctxshare d@5000 drop 0.999
+  code_fm_rel          0.6251 ± 0.0097
+  code_fm_band0_rel    0.6482 ± 0.0370
+  code_fm_band1_rel    0.6168 ± 0.0072
+  code_fm_band2_rel    0.6168 ± 0.0042
+  code_fm_band3_rel    0.6163 ± 0.0015
