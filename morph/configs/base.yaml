@@ -262,6 +262,19 @@ model:
   retention_gate_bias: 2.0       # GLA forget-gate logit bias (α near 1 = long memory)
 
 training:
+  # ── opening a run from a checkpoint ──────────────────────────────────────────────────
+  # init_from: weights only, step axis restarts at 0 (fresh optimizer, the LR ramp applies);
+  #   `resume` (a path on the CLI) is the faithful continuation instead. data_skip_batches
+  #   fast-forwards the token stream past batches a seed run already read (0 = none).
+  init_from: null
+  data_skip_batches: 0
+  # ── the in-process divergence guard (train.py) ───────────────────────────────────────
+  # Consecutive eval-cadence points with train ppl over the ceiling past step 2000 abort
+  # the run. null = the MORPH_DIV_PPL / MORPH_DIV_STRIKES env defaults (1000, 2). An arm
+  # whose train CE is high BY DESIGN (the code-target arm: a frozen strict coda reading the
+  # loop's projected cell, 7.4 nats when the cell carries nothing) sets its own ceiling.
+  div_ppl_ceiling: null
+  div_strikes: null
 
   # NTP dropout: fraction of steps that run with NO slot layout at all -- the
   # plain MORPH path, from a separate slot-free loader. 0.0 = off and no second
