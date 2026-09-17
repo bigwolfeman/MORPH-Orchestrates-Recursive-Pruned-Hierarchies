@@ -53,6 +53,7 @@ from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
                        cfm_null_floor, cfm_pair, code_rmsnorm, code_target_infonce,
                        code_target_regression, code_target_shuffled_cos,
                        code_thinker_relation, euler_sample,
+                       code_grade_distinct2, code_grade_pref_loss,
                        TULCodeSymHead, mdm_loss, mdm_mask, maskgit_sample)
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
@@ -1121,6 +1122,11 @@ class _LoopMTPGate(nn.Module):
         return z, torch.stack(mass, dim=0)
 
 
+# tul.code_grade: the base of the per-step generators the graded sampler draws from. Its
+# own streams, never the global ones — a graded step must leave every later draw of the
+# training run exactly where it found it (`_tul_code_grade` saves and restores both).
+_GRADE_SEED: int = 0x6EADE
+
 def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0
                        ) -> tuple[Tensor, Tensor]:
     """The Thought Register's CELL relation, in one place (``tul.slot_cells``).
@@ -1482,6 +1488,13 @@ class MORPHTransformer(nn.Module):
         # they are BUFFERS not Python floats, flipping one costs no recompile.
         self.register_buffer("mux_gate", torch.ones(()), persistent=False)
         self.register_buffer("sigreg_gate", torch.ones(()), persistent=False)
+        # The trainer's step counter, for `tul.code_grade` (spec §17.2): the graded term
+        # runs on every `code_grade_every`-th step and seeds its own generators from this.
+        # A buffer for the reason above, and read ONLY inside `_tul_code_grade`, which is
+        # `torch.compiler.disable`d — so no `.item()` ever lands in a captured graph.
+        self.register_buffer("code_grade_step", torch.zeros((), dtype=torch.long),
+                             persistent=False)
+        self._in_code_grade = False      # reentrancy guard: the grader runs the forward
 
 
         # ── Retention branch (#230) ────────────────────────────────────
@@ -5798,10 +5811,15 @@ class MORPHTransformer(nn.Module):
     def _tul_code_target_write(self, h_slots: Tensor, xn: Tensor, db_traj, depths: Tensor,
                                layout: SlotLayout, L: int, plan_mode: str,
                                code_mode: str | None, code_given: Tensor | None,
-                               code_given_mask: Tensor | None):
+                               code_given_mask: Tensor | None,
+                               input_ids: Tensor | None = None):
         """``tul.code_target`` (spec §17): the cells the coda reads, and the term.
 
-        Returns ``(values, cells, loss, stats)``: ``values`` ``[B, S·M, (n,) C]`` ready for
+        Returns ``(values, cells, z, loss, stats, grade_loss, grade_stats)``: ``z`` is the
+        frozen encoder's code of THIS row's spans (``out["code_z"]`` at eval, what the
+        graded sampler reads off a candidate row), ``grade_loss`` / ``grade_stats`` are
+        :meth:`_tul_code_grade`'s (spec §17.2; ``None`` and ``{}`` off a graded step).
+        ``values`` ``[B, S·M, (n,) C]`` ready for
         :func:`scatter_positions` at :meth:`TULSlots.prefix_positions`; ``cells``
         ``[B, S, M, C]`` what the coda reads (after the oracle switch, ``code_given`` and
         the plan ablation), returned as ``out["code_cells"]`` at eval; ``loss`` the
@@ -5862,7 +5880,309 @@ class MORPHTransformer(nn.Module):
         values = cells.reshape(B, S * M, C).to(xn.dtype)
         if self._is_hc:
             values = values.unsqueeze(2).expand(-1, -1, self._n_streams, -1).contiguous()
-        return values, cells, loss, stats
+        # The graded-continuation term (tul.code_grade, spec §17.2) lives at the SAME seam:
+        # it needs the live `pred`, the frozen code, `ok`, the trajectory and the ids, and
+        # they all meet here and nowhere else.
+        grade_loss, grade_stats = None, {}
+        if self.cfg.tul.code_grade and input_ids is not None:
+            grade_loss, grade_stats = self._tul_code_grade(
+                pred, z_tgt, ok, layout, input_ids, db_traj, depths)
+        return values, cells, z_tgt, loss, stats, grade_loss, grade_stats
+
+    # ── the graded-continuation target (tul.code_grade; spec §17.2) ──────────────────
+
+    def _code_grade_sub_layout(self, layout: SlotLayout, rows: Tensor, k: int) -> SlotLayout:
+        """The layout of ``rows``, each repeated ``k`` times — the candidate batch's."""
+        def _rep(t):
+            return None if t is None else t[rows].repeat_interleave(k, dim=0)
+        return SlotLayout(slot_mask=_rep(layout.slot_mask), bag_id=_rep(layout.bag_id),
+                          slot_index=_rep(layout.slot_index),
+                          slot_valid=_rep(layout.slot_valid), prefix_k=layout.prefix_k,
+                          span_len=_rep(layout.span_len),
+                          len_supervised=_rep(layout.len_supervised))
+
+    def _code_grade_forward(self, ids: Tensor, lay: SlotLayout, cells: Tensor):
+        """One eval forward with every valid slot's cell GIVEN — the sampler's and the
+        grader's single read path. Returns ``(coda_state [N, L, C], code_z [N, S, M, C])``.
+
+        The cells are handed in through ``code_mode="generate"`` / ``code_given``, the same
+        route the generator and ``code_semantic_probe.py`` take, so nothing here is a second
+        implementation of the write. ``coda_state_only`` keeps the ``[N, L, V]`` logits from
+        ever being built.
+        """
+        out = self._forward_single(ids, None, 0, None, lay,
+                                   _code_mode="generate", _code_given=cells,
+                                   _code_given_mask=lay.slot_valid,
+                                   _coda_state_only=True)
+        return out["coda_state"], out["code_z"]
+
+    def _code_grade_logits(self, h: Tensor, src: Tensor, live: Tensor) -> Tensor:
+        """Logits at the LIVE source positions only: ``h`` ``[N, L, C]``, ``src`` / ``live``
+        ``[N, S]`` -> ``[n_live, V]`` fp32 with the structural slot id at ``-inf``.
+
+        Never ``embed.attend`` over the whole row: at ``L`` 1024 and ``V`` 49169 that is
+        806 MB of fp32 per decode step, and this reads at most one position per slot.
+        """
+        r, c = live.nonzero(as_tuple=True)
+        lg = self.embed.attend(h[r, src[r, c]]).float()
+        return lg.index_fill(-1, torch.tensor([self.cfg.tul.slot_id], device=lg.device),
+                             float("-inf"))
+
+    def _code_grade_score(self, ids: Tensor, lay: SlotLayout, cells: Tensor, ref: Tensor,
+                          first: Tensor, src0: Tensor, live: Tensor, lens: Tensor,
+                          n_tok: int) -> tuple[Tensor, Tensor]:
+        """The grader: mean log-probability per token of ``ref``'s spans under ``cells``.
+
+        ``ref`` ``[N, S, J]`` the tokens to score (the candidate, or the TRUE span for the
+        `code_grade_true` instrument), ``live`` ``[N, S]`` which slots to score, ``lens``
+        ``[N, S]`` how many tokens each scored span has. Token ``j`` is scored at the
+        position that PREDICTS it: the boundary token of span ``s`` for ``j = 0`` (the only
+        trained emit head at ``emit_weight: 0``, and cell-blind under the strict geometry),
+        and candidate token ``j-1``'s own position after that.
+
+        Returns ``(grade [N, S] mean log-prob per token, code_z [N, S, M, C])``.
+        """
+        h, code_z = self._code_grade_forward(ids, lay, cells)
+        total = torch.zeros_like(lens, dtype=torch.float32)
+        for j in range(n_tok):
+            step_live = live & (lens > j)
+            if not bool(step_live.any()):
+                break
+            src = src0 if j == 0 else first + (j - 1)
+            lp = torch.log_softmax(self._code_grade_logits(h, src, step_live), dim=-1)
+            r_i, s_i = step_live.nonzero(as_tuple=True)          # the SAME order as `lp`
+            tgt = ref[r_i, s_i, j]
+            total[r_i, s_i] = total[r_i, s_i] + lp.gather(1, tgt.view(-1, 1)).squeeze(1)
+        return total / lens.clamp_min(1).float(), code_z
+
+    def _code_grade_cells(self, z_true: Tensor, parity: int, n_slots: int) -> Tensor:
+        """The grader's cells. ``coda_zero``: everything zero. ``coda_past``: the frozen
+        encoder's TRUE codes with the slots of this ``parity`` zeroed — those are the slots
+        being graded on this pass, and cell ``s`` holds the code OF span ``s+1``, which is
+        exactly what the grader must not see. Every OTHER cell is a past span's code, so the
+        grade is context aware. One pass cannot both zero cell ``s`` (to grade span ``s+1``)
+        and keep it (as context for span ``s+2``); hence the two parities.
+        """
+        if self.cfg.tul.code_grade_grader == "coda_zero":
+            return torch.zeros_like(z_true)
+        keep = (torch.arange(n_slots, device=z_true.device) % 2) != parity
+        return z_true * keep.view(1, n_slots, 1, 1).to(z_true.dtype)
+
+    @torch.compiler.disable()
+    def _tul_code_grade(self, pred: Tensor, z_tgt: Tensor, ok: Tensor, layout: SlotLayout,
+                        input_ids: Tensor, db_traj, depths: Tensor):
+        """``tul.code_grade`` (spec §17.2) — the loop proposes, a blind grader ranks.
+
+        Returns ``(loss, stats)``, ``(None, {})`` on a step that is not graded. Everything
+        up to the target runs under ``no_grad`` in EVAL mode with the module's training flag
+        and both RNG states restored afterwards; the only live tensor in the term is
+        ``pred``, so the gradient reaches the loop and nothing else.
+
+        THE PARALLEL-SPAN DECODE, which is the whole reason this is affordable. Under
+        ``tg_geometry="strict"`` the prelude is span-local and a coda token reads its own
+        span plus EARLIER prefix cells (:func:`tg_strict_allow`), with the conv, the value
+        shift and the retention carry reset per segment. Substituting candidate tokens into
+        span ``s+1`` therefore changes the model's output ONLY at span ``s+1``'s own
+        positions, so ONE forward advances a candidate token for EVERY eligible span of a
+        row at once and the spans cannot contaminate each other. The graded-slot count is
+        free; the cost levers are ``code_grade_k``, ``code_grade_tokens`` and
+        ``code_grade_rows``, amortised by ``code_grade_every``.
+
+        WHAT THE CANDIDATE IS. It fills the TRUE span's token window. A slot whose next span
+        is longer than ``code_grade_tokens`` is NOT graded: ``E`` pools the whole span, so a
+        partly substituted span would carry the truth into the target. The boundary rule is
+        never re-run — closing the candidate at its own boundary would move every slot
+        position after it and force a repack per candidate per decode step.
+
+        WHY THE GRADER IS NOT THE PROPOSING CODA. If a candidate were scored under the cell
+        that generated it, the argmax would be that cell's own greedy decode: the target
+        would be a fixed point of the current cell and the term would teach nothing. That is
+        ``disc``'s 2026-09-12 failure in a new costume.
+        """
+        tc = self.cfg.tul
+        stats: dict[str, float] = {}
+        if self._in_code_grade or not self.training:
+            return None, stats
+        step = int(self.code_grade_step)
+        if step % int(tc.code_grade_every) != 0:
+            return None, stats
+        B, S, M, C = pred.shape
+        dev = pred.device
+        J, K = int(tc.code_grade_tokens), int(tc.code_grade_k)
+        R = min(int(tc.code_grade_rows), B)
+        pk = int(layout.prefix_k)
+
+        # ── eligible slots: a next span of 2..J tokens, and a code to compare against ──
+        s_ar = torch.arange(S, device=dev)
+        n_tok = ((layout.bag_id.unsqueeze(1) == s_ar.view(1, S, 1))
+                 & (~layout.slot_mask).unsqueeze(1)).sum(-1)                     # [B, S]
+        nxt_len = torch.zeros_like(n_tok)
+        nxt_len[:, :S - 1] = n_tok[:, 1:]
+        elig = ok & (nxt_len >= 2) & (nxt_len <= J)
+        g_cpu = torch.Generator(device="cpu").manual_seed((_GRADE_SEED + step) % (2 ** 31))
+        rows = torch.randperm(B, generator=g_cpu)[:R].to(dev)
+        gm = elig[rows]                                                          # [R, S]
+        stats["code_grade_slot_frac"] = (float(gm.sum())
+                                         / max(float(ok[rows].sum()), 1.0))
+        stats["code_grade_n"] = float(gm.sum())
+        if int(gm.sum()) == 0:
+            return (pred * 0.0).sum(), stats
+
+        lens_r = nxt_len[rows]
+        first_r = layout.slot_index[rows] + pk        # span s+1's FIRST token position
+        src0_r = layout.slot_index[rows] - 1          # span s's boundary token position
+        # A real check, not a decorative one: if the packer ever stops putting a slot's
+        # cells immediately after its span, every position below is off by k and the
+        # grader would silently score the wrong tokens.
+        _r, _s = gm.nonzero(as_tuple=True)
+        _p = first_r[_r, _s]
+        if bool((layout.bag_id[rows][_r, _p] != (_s + 1)).any()) or \
+                bool(layout.slot_mask[rows][_r, _p].any()) or \
+                bool(layout.slot_mask[rows][_r, src0_r[_r, _s]].any()):
+            raise RuntimeError(
+                "tul.code_grade: slot_index + prefix_k is not the first TOKEN of the next "
+                "span (or slot_index - 1 is not the boundary token). The packer's layout "
+                "and the grader disagree; nothing below would score the right positions.")
+
+        N = R * K
+        lay_c = self._code_grade_sub_layout(layout, rows, K)
+        ids_c = input_ids[rows].repeat_interleave(K, 0).clone()
+        cells_prop = pred.detach()[rows].repeat_interleave(K, 0)
+        z_true_c = z_tgt.detach()[rows].repeat_interleave(K, 0)
+        gm_c = gm.repeat_interleave(K, 0)
+        lens_c = lens_r.repeat_interleave(K, 0)
+        first_c = first_r.repeat_interleave(K, 0)
+        src0_c = src0_r.repeat_interleave(K, 0)
+        row_ix = torch.arange(N, device=dev).view(N, 1).expand(N, S)
+        cand = torch.zeros(N, S, J, dtype=torch.long, device=dev)
+
+        was_training = self.training
+        rng_cpu = torch.random.get_rng_state()
+        rng_dev = torch.cuda.get_rng_state(dev) if dev.type == "cuda" else None
+        self._in_code_grade = True
+        self.eval()
+        try:
+            g_dev = torch.Generator(device=dev).manual_seed(
+                (_GRADE_SEED * 3 + step) % (2 ** 31))
+            with torch.no_grad():
+                # ── the proposal: K candidates, every eligible span of the rows at once ──
+                for j in range(J):
+                    live = gm_c & (lens_c > j)
+                    if not bool(live.any()):
+                        break
+                    h, _ = self._code_grade_forward(ids_c, lay_c, cells_prop)
+                    src = src0_c if j == 0 else first_c + (j - 1)
+                    lg = self._code_grade_logits(h, src, live) / float(tc.code_grade_temp)
+                    draw = torch.multinomial(torch.softmax(lg, dim=-1), 1,
+                                             generator=g_dev).squeeze(1)
+                    r_i, s_i = live.nonzero(as_tuple=True)
+                    ids_c[r_i, first_c[r_i, s_i] + j] = draw
+                    cand[r_i, s_i, j] = draw
+
+                # ── the grade: the frozen coda, blind to the span it is grading ─────────
+                grade = torch.full((N, S), -1e9, device=dev, dtype=torch.float32)
+                z_cand = None
+                parities = (0,) if tc.code_grade_grader == "coda_zero" else (0, 1)
+                for par in parities:
+                    cz = self._code_grade_cells(z_true_c, par, S)
+                    live_p = gm_c if tc.code_grade_grader == "coda_zero" else \
+                        (gm_c & ((s_ar % 2) == par).view(1, S))
+                    g_p, z_p = self._code_grade_score(ids_c, lay_c, cz, cand, first_c,
+                                                      src0_c, live_p, lens_c, J)
+                    grade = torch.where(live_p, g_p, grade)
+                    if z_cand is None:
+                        z_cand = z_p         # E is a function of the PRELUDE, not the cells
+                # the TRUE span under the SAME grader: does it rank the truth above its own
+                # samples? (R rows, no candidate copies — two more passes at 1/K the width)
+                lay_t = self._code_grade_sub_layout(layout, rows, 1)
+                ids_t = input_ids[rows]
+                z_true_t = z_tgt.detach()[rows]
+                ref_t = torch.zeros(R, S, J, dtype=torch.long, device=dev)
+                _rt, _st = gm.nonzero(as_tuple=True)
+                for j in range(J):
+                    _sel = lens_r[_rt, _st] > j
+                    ref_t[_rt[_sel], _st[_sel], j] = ids_t[_rt[_sel],
+                                                           first_r[_rt, _st][_sel] + j]
+                g_true = torch.full((R, S), float("nan"), device=dev, dtype=torch.float32)
+                for par in parities:
+                    ct = self._code_grade_cells(z_true_t, par, S)
+                    live_p = gm if tc.code_grade_grader == "coda_zero" else \
+                        (gm & ((s_ar % 2) == par).view(1, S))
+                    g_t, _ = self._code_grade_score(ids_t, lay_t, ct, ref_t, first_r,
+                                                    src0_r, live_p, lens_r, J)
+                    g_true = torch.where(live_p, g_t, g_true)
+
+                # ── the diversity guard, then best and worst ────────────────────────────
+                d2 = code_grade_distinct2(cand, lens_c)
+                degen = gm_c & (d2 < float(tc.code_grade_min_distinct2))
+                grade = torch.where(degen, torch.full_like(grade, -1e9), grade)
+                gr = grade.view(R, K, S)
+                dg = degen.view(R, K, S)
+                keep = gm & ~dg.all(dim=1)
+                best = gr.argmax(dim=1)
+                worst = gr.argmin(dim=1)
+                z_cand = z_cand.view(R, K, S, M, C)
+                _g = best.view(R, 1, S, 1, 1).expand(R, 1, S, M, C)
+                z_best = z_cand.gather(1, _g).squeeze(1)
+                z_worst = z_cand.gather(1, worst.view(R, 1, S, 1, 1)
+                                        .expand(R, 1, S, M, C)).squeeze(1)
+                if int(keep.sum()):
+                    _k3 = keep.unsqueeze(1).expand(R, K, S)
+                    _live = _k3 & ~dg
+                    z_t_r = z_tgt.detach()[rows].float()
+                    stats["code_grade_best"] = float(
+                        gr.gather(1, best.unsqueeze(1)).squeeze(1)[keep].mean())
+                    stats["code_grade_worst"] = float(
+                        gr.gather(1, worst.unsqueeze(1)).squeeze(1)[keep].mean())
+                    stats["code_grade_mean"] = float(gr[_live].mean())
+                    stats["code_grade_true"] = float(g_true[keep].mean())
+                    # The grader's sanity reading, and it is a RANK, not a difference.
+                    # Jensen forbids the difference: the candidates are drawn from the very
+                    # model that grades them, so E_p[log p] = -H is at or above the truth's
+                    # -CE by construction and `code_grade_true` sits BELOW
+                    # `code_grade_mean` however good the grader is. What is informative is
+                    # where the real continuation lands among the samples: the fraction of
+                    # non-degenerate candidates it beats, 0.5 for a calibrated grader and
+                    # 0 if it ranks the real text dead last.
+                    _beat = ((gr < g_true.unsqueeze(1)) & ~dg).sum(dim=1).float()
+                    _cnt = (~dg).sum(dim=1).clamp_min(1).float()
+                    stats["code_grade_true_rank"] = float((_beat / _cnt)[keep].mean())
+                    stats["code_grade_degen"] = float(dg[_k3].float().mean())
+                    stats["code_grade_cos_best_true"] = float(
+                        ((z_best.float() * z_t_r).sum(-1) / float(C))[keep].mean())
+                    stats["code_grade_cos_worst_true"] = float(
+                        ((z_worst.float() * z_t_r).sum(-1) / float(C))[keep].mean())
+                stats["code_grade_n"] = float(keep.sum())
+        finally:
+            self.train(was_training)
+            self._in_code_grade = False
+            torch.random.set_rng_state(rng_cpu)
+            if rng_dev is not None:
+                torch.cuda.set_rng_state(rng_dev, dev)
+
+        if int(keep.sum()) == 0:
+            return (pred * 0.0).sum(), stats
+        pred_r = pred[rows]
+        if tc.code_grade_loss == "pref":
+            loss, margin = code_grade_pref_loss(pred_r, z_cand, best, keep,
+                                                tc.code_grade_tau)
+            stats["code_grade_margin"] = float(margin)
+            with torch.no_grad():
+                _, cos_b, _ = code_target_regression(pred_r.detach(), z_best, keep)
+        else:
+            loss, cos_b, _n = code_target_regression(pred_r, z_best, keep)
+        stats["code_grade_cos_best"] = float(cos_b)
+        if db_traj is not None:
+            # The depth question, read against the COMPUTED target: does pass t move the
+            # state toward the winner's code? Beside `code_target_cos_l{t}`, which reads the
+            # same passes against the TRUTH's code.
+            with torch.no_grad():
+                for t, ht in enumerate(db_traj):
+                    kp = keep if t == 0 else (keep & (depths[rows] >= t))
+                    pt = self.tul_code_proj(self._readout(ht[rows]), kp)
+                    _, c_t, _n = code_target_regression(pt, z_best, kp)
+                    stats[f"code_grade_cos_l{t}"] = float(c_t)
+        return loss, stats
 
     def _tul_oracle_z_loss(self, db_traj, depths: Tensor, input_ids: Tensor,
                            layout: SlotLayout, stats: dict | None = None) -> Tensor:
@@ -7034,8 +7354,15 @@ class MORPHTransformer(nn.Module):
                      code_steps: int | None = None,
                      code_seed: int | None = None,
                      code_given: Tensor | None = None,
-                     code_given_mask: Tensor | None = None) -> dict:
+                     code_given_mask: Tensor | None = None,
+                     coda_state_only: bool = False) -> dict:
         """The TUL forward (docs/tul-spec.md §3). One shared position axis.
+
+        ``coda_state_only`` (eval only, ``labels=None``): return the coda's readout as
+        ``out["coda_state"]`` ``[B, L, C]`` and compute NO logits. The graded-continuation
+        sampler (``tul.code_grade``, spec §17.2) reads ~64 positions of a 1024-position row
+        per decode step; materialising ``[B, L, V]`` first would cost 806 MB per step on a
+        card with about 1 GB of slack.
 
         ``code_mode`` / ``code_steps`` (TUL-Code, eval only): which cells the coda reads —
         ``"encoder"`` (the ground-truth codes, `val/ce_tf`), ``"sampled"`` (k Euler steps
@@ -7098,8 +7425,14 @@ class MORPHTransformer(nn.Module):
               or code_seed is not None):
             raise ValueError("code_mode / code_steps / code_given need a model built with "
                              "tul.code=true.")
+        if coda_state_only and (labels is not None or self.training):
+            raise ValueError(
+                "coda_state_only is EVAL-ONLY and takes labels=None: it replaces the logits "
+                "with the coda readout, so there is nothing to score.")
         _code_cells_out = None
+        _code_z_out = None
         code_target_loss, code_target_stats = None, {}
+        code_grade_loss, code_grade_stats = None, {}
         if slot_depths is not None:
             # The SAME rule tul_step_mode='db1' states above: every branch of this forward
             # that never reaches `_tul_core` would ignore the table in silence, so each is
@@ -7644,10 +7977,11 @@ class MORPHTransformer(nn.Module):
                 # regression, the per-pass readings, the oracle switch and the plan
                 # ablation all live in one method so the cells the coda reads and the
                 # cells the loss grades are built at one seam.
-                (_ct_values, _code_cells_out, code_target_loss, code_target_stats
+                (_ct_values, _code_cells_out, _code_z_out, code_target_loss,
+                 code_target_stats, code_grade_loss, code_grade_stats
                  ) = self._tul_code_target_write(h_slots, xn, db_traj, depths, layout, L,
                                                  plan_mode, code_mode, code_given,
-                                                 code_given_mask)
+                                                 code_given_mask, input_ids)
                 h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             elif _reg_cells is not None:
                 # The register's M cells go 1:1 into the M prefix cells (`prefix_k` is
@@ -7910,6 +8244,17 @@ class MORPHTransformer(nn.Module):
             _tw = tc.code_target_weight * code_target_loss
             groups["code_target_weighted"] = _tw.detach()
             groups["loss"] = groups["loss"] + _tw
+        if code_grade_loss is not None and groups is not None:
+            # The graded-continuation term (tul.code_grade; spec §17.2). Same contract as
+            # `code_target_weighted`: the WEIGHTED term is exposed so train.py subtracts it
+            # and train/loss stays the MODEL's CE.
+            groups = dict(groups)
+            groups["code_grade"] = code_grade_loss.detach()
+            for _k, _v in code_grade_stats.items():
+                groups[_k] = code_grade_loss.new_tensor(_v)
+            _gw = tc.code_grade_weight * code_grade_loss
+            groups["code_grade_weighted"] = _gw.detach()
+            groups["loss"] = groups["loss"] + _gw
         if tc.code and groups is not None:
             # TUL-Code: the flow term, same contract as `spandec_weighted` (train.py
             # subtracts it so train/loss and the val loss stay the model's CE).
@@ -8100,6 +8445,11 @@ class MORPHTransformer(nn.Module):
                 # loss and exposed as `fixed_point` / `fp_weighted`, the same keys and the
                 # same train.py subtraction as the plain path.
                 self._apply_core_aux(out)
+        elif coda_state_only:
+            # The graded-continuation sampler (tul.code_grade): it applies `embed.attend`
+            # itself, at the handful of positions it reads. No logits are built.
+            self._core_aux = None
+            out["coda_state"] = xh
         else:
             self._core_aux = None
             # Generation (labels=None): full logits, with the structural slot id masked
@@ -8129,6 +8479,11 @@ class MORPHTransformer(nn.Module):
             # TUL-Code: the cells the coda read, ``[B, S, M, C]`` — the generator caches
             # the open span's sampled cells from here (spec §7).
             out["code_cells"] = _code_cells_out.detach()
+        if _code_z_out is not None and not self.training:
+            # The frozen encoder's code of THIS row's spans, ``[B, S, M, C]``. The graded
+            # sampler (tul.code_grade) reads it off a CANDIDATE row to get E(candidate);
+            # `code_cells` above is what the coda READ, which under `code_given` is not it.
+            out["code_z"] = _code_z_out.detach()
         return out
 
     @staticmethod
@@ -9074,7 +9429,8 @@ class MORPHTransformer(nn.Module):
                         _code_steps: int | None = None,
                         _code_seed: int | None = None,
                         _code_given: Tensor | None = None,
-                        _code_given_mask: Tensor | None = None) -> dict:
+                        _code_given_mask: Tensor | None = None,
+                        _coda_state_only: bool = False) -> dict:
         if self._span_mask and slot_layout is not None:
             raise NotImplementedError(
                 "model.span_mask with a slot_layout: the TUL forward is a different "
@@ -9094,7 +9450,12 @@ class MORPHTransformer(nn.Module):
                                      code_mode=_code_mode, code_steps=_code_steps,
                                      code_seed=_code_seed,
                                      code_given=_code_given,
-                                     code_given_mask=_code_given_mask)
+                                     code_given_mask=_code_given_mask,
+                                     coda_state_only=_coda_state_only)
+        if _coda_state_only:
+            raise ValueError(
+                "coda_state_only requires slot_layout: it is the graded-continuation "
+                "sampler's read path (tul.code_grade) and exists on the TUL forward only.")
         if _slot_depths is not None:
             raise ValueError(
                 "slot_depths requires slot_layout: it forces the depth of the SLOT loop, "

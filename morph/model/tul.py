@@ -740,6 +740,48 @@ class TULConfig:
                                          # code in the batch (tul_code.code_target_infonce),
                                          # a discriminative target that cannot hedge.
     code_target_tau: float = 0.1         # InfoNCE temperature on the cosine logits
+    # ── THE GRADED-CONTINUATION TARGET (arm `tul-code-grade`, 2026-09-17; spec §17.2) ──
+    #
+    # Every target above is a deterministic function of the past and every one is met in
+    # ONE pass. This one is COMPUTED: the loop's predicted cells (DETACHED) condition the
+    # frozen coda, which SAMPLES `code_grade_k` continuations of span s+1; a grader that
+    # never sees span s+1 ranks them by mean log-probability per token; the frozen E
+    # encodes the winner and the loop is pushed toward that code. The target therefore
+    # moves with the loop's own state and is an ARGMAX over proposals, not a point — the
+    # one shape in which pass t+1 can beat pass t on the same objective.
+    #
+    # WHY IT IS AFFORDABLE, and it only is under tg_geometry="strict": the prelude is
+    # span-local and a coda token reads its own span plus EARLIER prefix cells, so
+    # substituting candidate tokens into span s+1 changes the model ONLY at span s+1's
+    # positions. One forward advances a candidate token for EVERY span of a row at once
+    # and the spans cannot see each other. The graded-slot count is free; the cost levers
+    # are k, tokens and rows, amortised by `code_grade_every`. Arithmetic in the note
+    # .agents/notes/proposed/architecture/2026-09-17-lctul-graded-continuation-target.md.
+    code_grade: bool = False
+    code_grade_k: int = 4                # candidate continuations per graded slot
+    code_grade_tokens: int = 16          # decode steps, AND the eligibility filter: a slot
+                                         # whose true next span is longer is not graded (E
+                                         # pools the whole span, so a partly substituted
+                                         # span would mix the candidate with the truth)
+    code_grade_rows: int = 1             # rows of the batch graded on a graded step
+    code_grade_every: int = 8            # grade every n-th step (1 = every step)
+    code_grade_loss: str = "pref"        # "best": 2 (1 - cos) onto E(best), the code_target
+                                         # term with a computed target; "pref": InfoNCE over
+                                         # the k candidate codes with the winner as the class
+                                         # (pushes toward the winner AND away from the losers)
+    code_grade_grader: str = "coda_past" # "coda_past": the frozen coda reading E's TRUE codes
+                                         # with the graded slot's OWN cell zeroed (two passes
+                                         # over the slot-index parity); "coda_zero": every
+                                         # cell zeroed, one pass, context-blind under strict.
+                                         # NEVER the proposing coda with its own cell: that
+                                         # argmax is the cell's own greedy decode, a fixed
+                                         # point that teaches nothing (`disc`, 2026-09-12).
+    code_grade_weight: float = 1.0       # weight of the graded term in the total loss
+    code_grade_temp: float = 1.0         # sampling temperature of the candidates
+    code_grade_tau: float = 0.1          # InfoNCE temperature of the "pref" term
+    code_grade_min_distinct2: float = 0.5  # a candidate whose distinct-2 falls below this
+                                         # gets the worst grade (gen-PPL rewards repetition
+                                         # loops: `genppl-needs-a-diversity-guard`)
     # ── THE PER-PASS PLANNING TARGET (arm `slot-spandec-strict-perpass`, 2026-09-12) ──
     #
     # WHAT IT IS. Every pass of the loop gets its own decoder target, and the target grows
@@ -1496,6 +1538,7 @@ class TULConfig:
         self._check_vq()
         self._check_code()
         self._check_code_target()
+        self._check_code_grade()
         if self.prefix_source in ("trajectory", "entry_exit") and self.prefix_k < 2:
             raise ValueError(
                 f"tul.prefix_source={self.prefix_source!r} needs tul.prefix_k >= 2: at "
@@ -2497,9 +2540,11 @@ class TULConfig:
             raise ValueError(
                 "tul.code_target_skip_coda with code_target_detach=false: the CE route into "
                 "the loop needs a coda, and the code-only arm runs none at train.")
-        if self.code_target_skip_coda and self.code_target_weight == 0.0:
+        if self.code_target_skip_coda and self.code_target_weight == 0.0 \
+                and not self.code_grade:
             raise ValueError(
-                "tul.code_target_skip_coda with code_target_weight=0: nothing would train.")
+                "tul.code_target_skip_coda with code_target_weight=0: nothing would train. "
+                "(tul.code_grade lifts this: the graded term is then the only one.)")
         if self.code:
             raise NotImplementedError(
                 "tul.code_target with tul.code: a code model has no slot loop to regress. "
@@ -2533,6 +2578,61 @@ class TULConfig:
             raise NotImplementedError(
                 "tul.code_target with tul.bcast / spandec_reads_cells: both read the prefix "
                 "write, which on this arm is the projection's cells, not h_slots.")
+
+    def _check_code_grade(self) -> None:
+        """``tul.code_grade`` — the graded-continuation target (spec §17.2)."""
+        _defaults = (("code_grade_k", 4), ("code_grade_tokens", 16), ("code_grade_rows", 1),
+                     ("code_grade_every", 8), ("code_grade_loss", "pref"),
+                     ("code_grade_grader", "coda_past"), ("code_grade_weight", 1.0),
+                     ("code_grade_temp", 1.0), ("code_grade_tau", 0.1),
+                     ("code_grade_min_distinct2", 0.5))
+        if not self.code_grade:
+            _set = [k for k, v in _defaults if getattr(self, k) != v]
+            if _set:
+                raise ValueError(
+                    f"tul.code_grade_* set with tul.code_grade=false ({', '.join(_set)}): "
+                    f"no candidate is ever sampled, so the knob(s) would be silently ignored.")
+            return
+        if not self.code_target:
+            raise NotImplementedError(
+                "tul.code_grade needs tul.code_target: the graded term pushes the SAME "
+                "projected cells onto a code from the SAME frozen encoder, and neither is "
+                "built without the code target.")
+        if self.code_grade_k < 2:
+            raise ValueError(
+                f"tul.code_grade_k must be >= 2, got {self.code_grade_k}: with one candidate "
+                f"there is nothing to rank and the grader decides nothing.")
+        if self.code_grade_tokens < 2:
+            raise ValueError(
+                f"tul.code_grade_tokens must be >= 2, got {self.code_grade_tokens}: a "
+                f"one-token candidate has no bigram and the distinct-2 guard is undefined.")
+        if self.code_grade_rows < 1:
+            raise ValueError(f"tul.code_grade_rows must be >= 1, got {self.code_grade_rows}")
+        if self.code_grade_every < 1:
+            raise ValueError(f"tul.code_grade_every must be >= 1, got {self.code_grade_every}")
+        if self.code_grade_weight <= 0.0:
+            raise ValueError(
+                f"tul.code_grade_weight must be > 0, got {self.code_grade_weight}: the arm "
+                f"pays for the candidates whatever the weight, so weight 0 buys nothing. "
+                f"Turn the arm off with tul.code_grade=false.")
+        if self.code_grade_temp <= 0.0:
+            raise ValueError(
+                f"tul.code_grade_temp must be > 0, got {self.code_grade_temp}: at 0 every "
+                f"candidate is the same greedy decode and the ranking is a tie.")
+        if self.code_grade_tau <= 0.0:
+            raise ValueError(f"tul.code_grade_tau must be > 0, got {self.code_grade_tau}")
+        if not (0.0 <= self.code_grade_min_distinct2 <= 1.0):
+            raise ValueError(
+                f"tul.code_grade_min_distinct2 must be in [0, 1], got "
+                f"{self.code_grade_min_distinct2}")
+        if self.code_grade_loss not in ("best", "pref"):
+            raise ValueError(
+                f"tul.code_grade_loss must be 'best' or 'pref', got {self.code_grade_loss!r}")
+        if self.code_grade_grader not in ("coda_past", "coda_zero"):
+            raise ValueError(
+                f"tul.code_grade_grader must be 'coda_past' or 'coda_zero', got "
+                f"{self.code_grade_grader!r}. A grader that reads the graded slot's OWN cell "
+                f"ranks the cell's own greedy decode first, which is a fixed point.")
 
     def _check_vq(self) -> None:
         """``tul.vq_codes`` — the discrete thought. Every refusal, with its reason.

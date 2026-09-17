@@ -1,0 +1,14 @@
+# LCTUL, the graded arm's twin with the L2 regression still ON, "tul-code-grade-l2"
+# (2026-09-17; docs/tul-code-spec.md §17.2).
+#
+# ONE factor against `tul_code_grade.yaml`: `code_target_weight` back at 1.0. The graded
+# term reaches about four slots per step-equivalent (the rate ceiling), so on its own it is
+# a thin gradient; this arm keeps the dense L2 target on every valid slot underneath it and
+# asks whether the graded term adds anything on top. Read P-G6 of the prereg.
+defaults:
+  - tul_code_grade
+  - _self_
+tul:
+  code_target_weight: 1.0
+wandb:
+  name: tul-code-grade-l2

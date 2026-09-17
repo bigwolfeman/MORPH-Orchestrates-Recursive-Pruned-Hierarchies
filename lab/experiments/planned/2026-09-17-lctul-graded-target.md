@@ -45,9 +45,14 @@ Defaults `code_grade_k: 4`, `code_grade_tokens: 16`, `code_grade_rows: 1`,
 delta is arm A's 10k reading (own 0.145 / 0.149, shuffled 0.021 / 0.048, rank 15.5 / 16.6,
 `l6 − l1` −0.002) and the code-only arms' 20k series when they land.
 
-- P-G1 (grader sanity): `train/code_grade_true` exceeds `train/code_grade_mean` by ≥ 0.15
-  nats per token, averaged over the last 500 logged steps at 20k, on `tul-code-grade`. A
-  grader that cannot rank the truth above its own samples ranks nothing. **75 %.**
+- P-G1 (grader sanity): `train/code_grade_true_rank` ≥ 0.25 averaged over the last 500
+  logged steps at 20k on `tul-code-grade` — the fraction of non-degenerate candidates the
+  TRUE continuation outscores. **65 %.**
+  Stated as a rank and not as a difference on purpose. The candidates are drawn from the
+  same model that grades them, so `E_p[log p] = −H` sits at or above the truth's `−CE` by
+  Jensen and `code_grade_true` is BELOW `code_grade_mean` however good the grader is. The
+  CPU fixture reads exactly that at init (best −2.84, mean −3.19, worst −3.55, true −5.16).
+  A rank near 0 means the grader puts real text last, which is the failure this catches.
 - P-G2 (the grade selects for the code): `train/code_grade_cos_best_true` exceeds
   `train/code_grade_cos_worst_true` by ≥ 0.02, same window, same arm. **50 %.**
 - P-G3 (the passes move, to the computed target): `tul/code_grade_cos_l6` −
@@ -77,7 +82,7 @@ delta is arm A's 10k reading (own 0.145 / 0.149, shuffled 0.021 / 0.048, rank 15
 - P-G3 holds and P-G4 fails → the loop is fitting its own sampler. The term is rejected as
   written and the next arm grades with a judge outside the model (the frozen plain
   checkpoint the note rules out on VRAM, on the Spark instead).
-- P-G1 fails → the grader is the bug, not the target. Nothing else in the run is readable;
+- P-G1 fails (rank below 0.25) → the grader is the bug, not the target. Nothing else in the run is readable;
   re-run with `code_grade_grader: coda_zero` to separate "the grader is blind" from "the
   context channel is empty".
 - P-G2 fails while P-G1 holds → grading text does not select codes. The `E` channel cannot

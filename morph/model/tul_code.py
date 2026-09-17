@@ -57,6 +57,7 @@ __all__ = [
     "code_rmsnorm", "code_target_valid", "code_thinker_relation",
     "cfm_pair", "cfm_null_floor", "euler_sample",
     "mdm_mask", "mdm_loss", "mdm_unmask_counts", "maskgit_sample",
+    "code_grade_distinct2", "code_grade_pref_loss",
 ]
 
 _SEED_ENC = 0xC0DE
@@ -247,6 +248,65 @@ def code_target_shuffled_cos(pred: Tensor, z: Tensor, ok: Tensor) -> Tensor:
     Z = z.float()[ok]
     Zr = torch.roll(Z, shifts=Z.shape[0] // 2, dims=0)
     return ((P * Zr).sum(-1) / float(C)).mean()
+
+
+def code_grade_distinct2(tokens: Tensor, lengths: Tensor) -> Tensor:
+    """Distinct-2 of each candidate: unique bigrams / bigrams, ``[..., J] -> [...]``.
+
+    ``tokens`` ``[..., J]`` long (only the first ``lengths`` entries of each row are the
+    candidate; the rest are ignored) and ``lengths`` ``[...]`` long. A candidate of length
+    ``n`` has ``n - 1`` bigrams; a length below 2 reads 1.0 (nothing repeats).
+
+    The diversity guard of ``tul.code_grade``: a repetition loop is FLUENT, so a
+    log-probability grade ranks it first (``genppl-needs-a-diversity-guard``: a repetition
+    loop scored gen-PPL 1.46 against real text's 32.44). A candidate under
+    ``code_grade_min_distinct2`` is given the worst grade instead of the best.
+    """
+    J = tokens.shape[-1]
+    if J < 2:
+        raise ValueError(f"code_grade_distinct2 needs J >= 2, got {J}")
+    big = tokens[..., :-1] * (int(tokens.max()) + 2) + tokens[..., 1:]       # [..., J-1]
+    n_big = (lengths - 1).clamp_min(0)                                       # [...]
+    idx = torch.arange(J - 1, device=tokens.device)
+    live = idx.view(*([1] * (big.dim() - 1)), J - 1) < n_big.unsqueeze(-1)   # [..., J-1]
+    eq = big.unsqueeze(-1) == big.unsqueeze(-2)                              # [..., J-1, J-1]
+    earlier = idx.view(-1, 1) > idx.view(1, -1)                              # [J-1, J-1] i>j
+    dup = (eq & earlier & live.unsqueeze(-2)).any(dim=-1)                    # seen before
+    uniq = (live & ~dup).sum(dim=-1).float()
+    return torch.where(n_big > 0, uniq / n_big.clamp_min(1).float(),
+                       torch.ones_like(uniq))
+
+
+def code_grade_pref_loss(pred: Tensor, z_cand: Tensor, best: Tensor, ok: Tensor,
+                         tau: float) -> tuple[Tensor, Tensor]:
+    """``tul.code_grade_loss="pref"``: per cell, the predicted cell scores against the K
+    CANDIDATE codes of its own slot and the WINNER is the class.
+
+    ``pred`` ``[R, S, M, C]`` (live, unit-RMS), ``z_cand`` ``[R, K, S, M, C]`` (detached,
+    unit-RMS), ``best`` ``[R, S]`` long, ``ok`` ``[R, S]`` bool. Logits are
+    ``<pred, z_k> / C / tau`` — a cosine on unit-RMS cells, the ``code_target_infonce``
+    scale. Returns ``(loss, margin)`` with ``margin`` the detached mean of
+    ``cos(pred, z_best) - mean_k!=best cos(pred, z_k)``: the term pushes toward the winner
+    AND away from every loser, and ``margin`` is how far it has got.
+
+    With no valid slot the loss is an exact 0 that still carries ``pred``'s graph.
+    """
+    R, K, S, M, C = z_cand.shape
+    if pred.shape != (R, S, M, C):
+        raise ValueError(f"code_grade_pref_loss: pred {tuple(pred.shape)} != {(R, S, M, C)}")
+    p = pred.float()
+    z = z_cand.detach().float()
+    sim = torch.einsum("rsmc,rksmc->rskm", p, z) / float(C)                  # [R, S, K, M]
+    if int(ok.sum()) == 0:
+        zero = (p * 0.0).sum()
+        return zero, zero.detach()
+    sel = sim[ok]                                                            # [n, K, M]
+    tgt = best[ok]                                                           # [n]
+    logits = (sel / float(tau)).permute(0, 2, 1).reshape(-1, K)              # [n·M, K]
+    loss = F.cross_entropy(logits, tgt.repeat_interleave(M))
+    own = sel.gather(1, tgt.view(-1, 1, 1).expand(-1, 1, M)).squeeze(1)      # [n, M]
+    other = (sel.sum(dim=1) - own) / max(K - 1, 1)
+    return loss, (own - other).mean().detach()
 
 
 class TULCodeTime(nn.Module):

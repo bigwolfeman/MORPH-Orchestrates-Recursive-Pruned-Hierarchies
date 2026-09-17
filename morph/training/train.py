@@ -137,7 +137,8 @@ def evaluate(
                           "spandec_pass_weighted", "coda_span_weighted",
                           "core_token_aux_weighted", "critic_weighted",
                           "vq_weighted", "row_contrast_weighted", "horizon_weighted",
-                          "code_fm_weighted", "code_sigreg_weighted", "code_target_weighted"):
+                          "code_fm_weighted", "code_sigreg_weighted", "code_target_weighted",
+                          "code_grade_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -2856,6 +2857,11 @@ def main(cfg: DictConfig) -> None:
         if _tulc is not None and hasattr(_mdl, "mux_gate"):
             _mdl.mux_gate.fill_(1.0 if step >= _mux_on_at else 0.0)
             _mdl.sigreg_gate.fill_(1.0 if step >= _sig_on_at else 0.0)
+        if hasattr(_mdl, "code_grade_step"):
+            # tul.code_grade (spec §17.2): the graded term runs every `code_grade_every`-th
+            # step and seeds its own generators from this. A buffer, so flipping it costs no
+            # recompile, and read only inside the compile-disabled grader.
+            _mdl.code_grade_step.fill_(int(step))
         if _is_code:
             _ph = 1 if step < _code_p2 else (2 if step < _code_p3 else 3)
             if _ph != int(_mdl.code_phase):
@@ -3246,6 +3252,7 @@ def main(cfg: DictConfig) -> None:
                             "pass_residual", "pass_res_weighted",
                             "oracle_z", "oracle_z_weighted",
                             "code_target", "code_target_weighted",
+                            "code_grade", "code_grade_weighted",
                             "spandec_pass", "spandec_pass_weighted",
                             "coda_span", "coda_span_weighted",
                             "core_token_aux", "core_token_aux_weighted",
@@ -3379,6 +3386,7 @@ def main(cfg: DictConfig) -> None:
                 _lv = _lv - float(out["mtp_weighted"])   # arc E8: train/loss = next-token CE
             for _ak in ("fp_weighted", "core_gain_weighted", "egrad_weighted",
                         "pass_res_weighted", "oracle_z_weighted", "code_target_weighted",
+                        "code_grade_weighted",   # tul.code_grade, 2026-09-17 (spec §17.2)
                         "spandec_pass_weighted", "coda_span_weighted",
                         "core_token_aux_weighted",
                         "loopmtp_weighted",          # LoopMTP Eq 13 (arXiv 2608.03624)
@@ -3439,7 +3447,7 @@ def main(cfg: DictConfig) -> None:
                     # t-band ratios and `code_rollout_frac` (phase 3). Scalars by
                     # construction (transformer.py wraps the stats as 0-d tensors).
                     or _k.startswith("code_fm") or _k.startswith("code_sigreg")
-                    or _k.startswith("code_target")
+                    or _k.startswith("code_target") or _k.startswith("code_grade")
                     or _k in ("code_rollout_frac", "code_cfg_drop_frac", "code_tape_rollout_frac",
                               "code_xm_score_mean", "code_xm_score_best",
                               "code_mdm_nats", "code_mask_frac", "code_sub_frac")}
@@ -3555,6 +3563,11 @@ def main(cfg: DictConfig) -> None:
                 # per-pass cosines `code_target_cos_l{t}` (one key per realised pass).
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
                     if _k.startswith("code_target") and out[_k] is not None:
+                        log[f"tul/{_k}"] = float(out[_k].detach())
+                # tul.code_grade (spec §17.2): the grades, the cosines to E(best) and
+                # E(true), the degenerate fraction and the per-pass `code_grade_cos_l{t}`.
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if _k.startswith("code_grade") and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.oracle_z's honesty instrument: the ORACLE's own decoder loss at each
                 # of its T steps. A variable number of keys, so it is a scan and not a

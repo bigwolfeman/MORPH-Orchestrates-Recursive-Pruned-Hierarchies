@@ -1,0 +1,40 @@
+# LCTUL, the GRADED-continuation arm "tul-code-grade" (2026-09-17; docs/tul-code-spec.md
+# §17.2; note .agents/notes/proposed/architecture/2026-09-17-lctul-graded-continuation-target.md;
+# prereg lab/experiments/planned/2026-09-17-lctul-graded-target.md).
+#
+# Wolfe, 2026-09-17: "didn't we also have an arm that was grading plausible continuations
+# with a grader?" Every target the slot loop has been given is a deterministic function of
+# the past and every one is met in ONE pass (arm A at 10k: cos_l0 0.06, l1 0.135, l6 0.132).
+# This one is COMPUTED: the loop's predicted cells (detached) condition the frozen VAE coda,
+# which SAMPLES `code_grade_k` continuations of span s+1; a grader that never sees span s+1
+# ranks them by mean log-probability per token; the frozen E encodes the winner and the loop
+# is pushed toward that code and away from the losers (InfoNCE over the K candidates).
+#
+# ONE factor against `tul_code_only.yaml`: the term. The ordinary code_target L2 regression
+# is OFF here (`code_target_weight: 0`), so the graded term is the only thing that trains
+# the loop. `tul_code_grade_l2.yaml` is its twin with the L2 term back ON at 1.0.
+#
+# COST, and why the defaults are what they are (arithmetic in the note): a graded step costs
+# (tokens + 2) * rows * k passes of prelude+core+coda over one row, ~7.2 training steps at
+# these settings, so `code_grade_every: 8` puts the arm at about 0.53x the code-only arm's
+# rate. Raising `code_grade_rows` or `code_grade_k` buys signal at that exchange rate.
+# The graded-SLOT count is free: under the strict geometry the spans of a row cannot see
+# each other, so one forward advances a candidate token for every eligible span at once.
+#   training.init_from=/home/wolfe/morph-to/checkpoints/morph/tul-code-vae/step_10000.pt
+defaults:
+  - tul_code_only
+  - _self_
+tul:
+  code_target_weight: 0.0         # the L2 regression is OFF: the graded term is the arm
+  code_grade: true
+  code_grade_k: 4                 # candidates per graded slot
+  code_grade_tokens: 16           # decode steps, AND the eligibility filter on span length
+  code_grade_rows: 1              # rows of the batch graded on a graded step
+  code_grade_every: 8             # 0.53x the code-only rate at these settings
+  code_grade_loss: pref           # InfoNCE over the K candidate codes, the winner the class
+  code_grade_grader: coda_past    # the frozen coda, the graded slot's own cell zeroed
+  code_grade_temp: 1.0
+  code_grade_tau: 0.1
+  code_grade_min_distinct2: 0.5   # the repetition guard on a candidate's own bigrams
+wandb:
+  name: tul-code-grade

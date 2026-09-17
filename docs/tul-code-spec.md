@@ -734,8 +734,11 @@ an option at any setting.
 
 **Instruments** (`no_grad`, graded steps only, through the `code_target*` log whitelists):
 `code_grade_best` / `_mean` / `_worst` (mean log-prob per token of the best / all / worst
-candidates), `code_grade_true` (the TRUE next span under the SAME grader — the grader's
-sanity check: it should sit above `code_grade_mean`), `code_grade_cos_best_true` and
+candidates), `code_grade_true` and `code_grade_true_rank` (the TRUE next span under the SAME
+grader, and the fraction of non-degenerate candidates it outscores — the grader's sanity
+reading is the RANK, not the difference: the candidates are drawn from the model that
+grades them, so `E_p[log p] = −H` is at or above the truth's `−CE` by Jensen and
+`code_grade_true` sits below `code_grade_mean` however good the grader is), `code_grade_cos_best_true` and
 `code_grade_cos_worst_true` (does winning the grade mean being nearer the truth's code?),
 `code_grade_cos_l{t}` (the per-pass cosines to `E(best)`, beside `code_target_cos_l{t}` to
 `E(true)` — the depth question), `code_grade_degen` (flagged fraction), `code_grade_n`

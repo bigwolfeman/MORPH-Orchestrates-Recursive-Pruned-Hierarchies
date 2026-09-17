@@ -93,10 +93,11 @@ prelude 4 / core 6 / coda 4, `L` 1024, `B` 6, 64 slots, mean depth 6:
   plus core `6·6·6·64` = 13,824 u = 38,400 u forward, about 115,200 u with the backward.
 - One sampling forward over ONE row (eval, every cell given, eval depth 8): prelude 4,096
   + core `6·8·64` = 3,072 + coda 4,096 = 11,264 u.
-- A graded step costs `(J + 2)` passes (J decode steps, 2 parity grading passes) over
-  `rows · K` rows. At `J` 16, `rows` 1, `K` 4: `18 · 4 · 11,264` = 811,008 u = **7.0
-  training steps**. Amortised at `code_grade_every: 8` that is 0.88 extra steps per step,
-  a rate of **0.53×** the code-only arm.
+- A graded step costs `(J + 2) · rows · K + 2 · rows` such passes: J decode steps and 2
+  parity grading passes per candidate copy, plus 2 passes that grade the TRUE span for the
+  `code_grade_true_rank` instrument. At `J` 16, `rows` 1, `K` 4 that is 74 row-passes =
+  833,536 u = **7.2 training steps**. Amortised at `code_grade_every: 8` that is 0.90 extra
+  steps per step, a rate of **0.53×** the code-only arm.
 
 That 0.5× ceiling is what fixes the defaults, and it buys roughly four graded slots per
 step-equivalent out of ~300 valid slots in the batch. The ordinary `code_target` L2 term
@@ -173,6 +174,13 @@ strict.
   sanity question and it is instrumented (`code_grade_cos_best_true` against
   `code_grade_cos_worst_true`). If they are equal the grader is not selecting for anything
   the code measures, and the arm is refuted at its own instrument rather than at its CE.
+- **The grader cannot be sanity-checked by a difference.** The candidates are drawn from
+  the model that grades them, so `E_p[log p] = -H` sits at or above the truth's `-CE` by
+  Jensen: `code_grade_true` is BELOW `code_grade_mean` however good the grader is, and the
+  CPU fixture reads exactly that at init (best -2.84, mean -3.19, worst -3.55, true -5.16).
+  The sanity reading is `code_grade_true_rank`, the fraction of non-degenerate candidates
+  the real continuation outscores: 0.5 for a calibrated grader, near 0 when it ranks real
+  text last. I wrote the difference first and the fixture caught it.
 - **Degenerate candidates.** A repetition loop is fluent and scores well
   (`genppl-needs-a-diversity-guard`). Guarded by a distinct-2 floor on the candidate's own
   tokens, and the flagged fraction is logged.
