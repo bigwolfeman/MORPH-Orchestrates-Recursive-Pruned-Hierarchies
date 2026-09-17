@@ -179,3 +179,14 @@ Addendum 2026-09-16: the "three phases in one run" schedule is under challenge b
 schedule: decoder frozen for good, thinker trained on its own tape). On 2026-09-16 Wolfe
 named the design LCTUL (Latent Coded TUL).
 
+
+Addendum 2026-09-16 (context-blind probe, `lab/experiments/results/2026-09-16-lctul-context-blind-probe/`).
+On `tul-code-cfg` at step 20000 the flow loss with the past removed (the trained CFG null
+condition forced on every row: seed null, injection zero, tape zero) is 0.3161 of the null
+floor; with the past present it is 0.3125. The past is worth 0.0036 of relative flow loss,
+about 1 % of the loss (0.0066 at the noise end, band 0). The thinker is context-blind: the
+flow objective on this code gives it almost no signal about the conditional, which is what
+the 1.7 to 1.9 sample residual already said. The Euler-depth argument (a straight or affine
+field earns nothing from more steps) sits downstream of this: a sampler cannot earn depth on
+a conditional the field never learned. The proposed successor, a discrete code with a masked
+denoiser, makes the loss the conditional entropy itself.

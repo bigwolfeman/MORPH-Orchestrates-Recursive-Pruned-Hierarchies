@@ -1,0 +1,24 @@
+{
+ "label": "cfg-drop0.999",
+ "step": 20000,
+ "rows": 96,
+ "repeats": 2,
+ "mean": {
+  "code_fm_rel": 0.3161230180412531,
+  "code_fm_band0_rel": 0.47685606870800257,
+  "code_fm_band1_rel": 0.34421309921890497,
+  "code_fm_band2_rel": 0.23326356569305062,
+  "code_fm_band3_rel": 0.21821273677051067,
+  "code_fm_raw": 1295.327968597412,
+  "code_fm_null": 4097.527366638184
+ },
+ "sem": {
+  "code_fm_rel": 0.001861228040725907,
+  "code_fm_band0_rel": 0.0019907365847224756,
+  "code_fm_band1_rel": 0.0021593243275580755,
+  "code_fm_band2_rel": 0.0008175250932310734,
+  "code_fm_band3_rel": 0.0013822177398920327,
+  "code_fm_raw": 7.66242757979968,
+  "code_fm_null": 1.0278902438502755
+ }
+}

@@ -1,0 +1,14 @@
+== drop 0.001
+cfg-drop0.001: step 20000, 96 rows x 2 passes, overrides=['tul.code_cfg_drop=0.001', 'tul.code_cfg_scale=1.0']
+  code_fm_rel          0.3125 ± 0.0019
+  code_fm_band0_rel    0.4703 ± 0.0022
+  code_fm_band1_rel    0.3420 ± 0.0022
+  code_fm_band2_rel    0.2320 ± 0.0008
+  code_fm_band3_rel    0.2135 ± 0.0013
+== drop 0.999
+cfg-drop0.999: step 20000, 96 rows x 2 passes, overrides=['tul.code_cfg_drop=0.999', 'tul.code_cfg_scale=1.0']
+  code_fm_rel          0.3161 ± 0.0019
+  code_fm_band0_rel    0.4769 ± 0.0020
+  code_fm_band1_rel    0.3442 ± 0.0022
+  code_fm_band2_rel    0.2333 ± 0.0008
+  code_fm_band3_rel    0.2182 ± 0.0014
