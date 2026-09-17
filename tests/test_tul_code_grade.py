@@ -274,6 +274,23 @@ def test_the_encoder_and_the_coda_take_zero_gradient_and_the_loop_takes_one():
     assert _grads(m, "core.") > 0.0, "the loop took none"
 
 
+def test_best_and_pref_are_both_live_terms_and_they_differ():
+    """`best` regresses onto E(best) (2(1-cos), the code_target term with a computed
+    target); `pref` scores the prediction against all K candidate codes with the winner as
+    the class. Same candidates, same winner, different numbers and different gradients."""
+    m_b = _model(tul_code_grade_loss="best")
+    m_p = _model(tul_code_grade_loss="pref")
+    o_b, o_p = _run(m_b), _run(m_p)
+    assert float(o_b["code_grade_n"]) == float(o_p["code_grade_n"]) > 0
+    assert "code_grade_margin" in o_p and "code_grade_margin" not in o_b
+    # `best` IS the regression: 2 (1 - cos) on unit-RMS cells, to the last bit
+    assert abs(float(o_b["code_grade"]) - 2.0 * (1.0 - float(o_b["code_grade_cos_best"]))) < 1e-4
+    assert float(o_b["code_grade"]) != float(o_p["code_grade"])
+    for m, o in ((m_b, o_b), (m_p, o_p)):
+        o["loss"].backward()
+        assert _grads(m, "tul_code_proj.") > 0.0 and _grads(m, "core.") > 0.0
+
+
 def test_the_loss_reconciles_with_its_weighted_parts():
     m = _model(tul_code_target_weight=1.0)
     out = _run(m)

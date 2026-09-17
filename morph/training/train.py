@@ -3694,6 +3694,20 @@ def main(cfg: DictConfig) -> None:
                 # wandb history is not readable locally; the log file must be sufficient)
                 if isinstance(out, dict) and out.get("code_fm_rel") is not None:
                     _second += f"fm={float(out['code_fm_rel']):.3f}  "
+                # tul.code_grade (spec §17.2): the graded term fires on one step in
+                # `code_grade_every`, and its readings are the arm. Same reason the flow
+                # share is here: a resumed run's wandb history is not readable locally, so
+                # the log file has to carry the numbers that decide the arm.
+                if isinstance(out, dict) and out.get("code_grade_n") is not None:
+                    _g = lambda k: float(out[k]) if out.get(k) is not None else float("nan")
+                    _second += (
+                        f"grade[n={_g('code_grade_n'):.0f} frac={_g('code_grade_slot_frac'):.2f} "
+                        f"best={_g('code_grade_best'):.2f} mean={_g('code_grade_mean'):.2f} "
+                        f"worst={_g('code_grade_worst'):.2f} true={_g('code_grade_true'):.2f} "
+                        f"rank={_g('code_grade_true_rank'):.2f} "
+                        f"cosB={_g('code_grade_cos_best_true'):.3f} "
+                        f"cosW={_g('code_grade_cos_worst_true'):.3f} "
+                        f"degen={_g('code_grade_degen'):.2f}]  ")
                 print(
                     f"[{step:7d}/{total_steps}] loss={loss.item():.4f}  "
                     f"{_second}"
