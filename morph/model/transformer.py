@@ -50,7 +50,8 @@ from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
 from .tul_vq import TULThoughtVQ
 from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeTime, cfm_null_floor,
-                       cfm_pair, code_rmsnorm, code_thinker_relation, euler_sample)
+                       cfm_pair, code_rmsnorm, code_thinker_relation, euler_sample,
+                       TULCodeSymHead, mdm_loss, mdm_mask, maskgit_sample)
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
                          tg_reset_from_ids,
@@ -1968,17 +1969,53 @@ class MORPHTransformer(nn.Module):
             _M = int(cfg.tul.prefix_k)
             self.tul_code_enc = TULCodeEncoder(d, _M)
             self.tul_code_time = TULCodeTime(d, t_embed_scale=cfg.tul.code_t_embed_scale)
-            self.tul_code_head = TULCodeHead(d)
+            # LCTUL-D (spec §16): the code is N = M·G symbols; the thinker is a masked
+            # denoiser (`tul_code_sym_head`) over symbol embeddings (`tul_code_sym`, row C
+            # = MASK) and there is NO velocity head. The symbol embedding is drawn at unit
+            # per-component scale (the flow thinker's entry state is a unit-RMS z_t) from
+            # a PRIVATE generator with the global stream restored (the TULSlotRegister
+            # precedent), so a discrete model's base weights equal its ruler's.
+            self.tul_code_vq: TULThoughtVQ | None = None
+            self.tul_code_sym: nn.Embedding | None = None
+            self.tul_code_sym_head: TULCodeSymHead | None = None
+            self.tul_code_head: TULCodeHead | None = None
+            _N = _M
+            if cfg.tul.code_discrete:
+                _C = int(cfg.tul.code_vq_codebook)
+                _N = _M * int(cfg.tul.code_vq_groups)
+                self.tul_code_vq = TULThoughtVQ(
+                    d, codes=_M, codebook=_C, dim=int(cfg.tul.code_vq_dim),
+                    groups=int(cfg.tul.code_vq_groups), beta=float(cfg.tul.code_vq_beta),
+                    reset_after=0)
+                _rng0 = torch.random.get_rng_state()
+                _g = torch.Generator(device="cpu").manual_seed(0xC0DE + 2)
+                self.tul_code_sym = nn.Embedding(_C + 1, d)
+                with torch.no_grad():
+                    self.tul_code_sym.weight.copy_(torch.empty(_C + 1, d).normal_(
+                        mean=0.0, std=1.0, generator=_g))
+                torch.random.set_rng_state(_rng0)
+                self.tul_code_sym.weight._ternary_exclude = True
+                self.tul_code_sym_head = TULCodeSymHead(d, _C)
+                self._code_mask_id = _C
+                self._code_n_sym = _N
+            else:
+                self.tul_code_head = TULCodeHead(d)
             # Per-cell embedding on the NOISY copies (which cell of the slot is being
             # denoised: at t≈0 the state is noise and carries no cell identity) and one
-            # marker on the CLEAN copies. Both zero-init, no RNG draw.
-            self.tul_code_cell = nn.Parameter(torch.zeros(_M, d))
+            # marker on the CLEAN copies. Both zero-init, no RNG draw. On a discrete model
+            # the "cell" axis is the N symbol positions.
+            self.tul_code_cell = nn.Parameter(torch.zeros(_N, d))
             self.tul_code_clean = nn.Parameter(torch.zeros(d))
             # CFG null seed, built ONLY when the null condition is trained (`code_cfg_drop`
             # > 0), so a pre-CFG checkpoint still loads into a non-CFG model.
             self.tul_code_null = (nn.Parameter(torch.zeros(d))
                                   if cfg.tul.code_cfg_drop > 0.0 else None)
-            self._code_fm_scale = cfm_null_floor(d, _M, cfg.tul.code_source_std)
+            # The unit the flow / denoiser loss is reported in: the CFM null floor, or for
+            # a discrete code the UNIFORM floor N·log C (the ELBO of a head that knows
+            # nothing), so `code_fm_rel` reads 1.0 at the zero-init head on both paths.
+            self._code_fm_scale = (float(_N) * math.log(float(cfg.tul.code_vq_codebook))
+                                   if cfg.tul.code_discrete
+                                   else cfm_null_floor(d, _M, cfg.tul.code_source_std))
             # W_prefix is BUILT (the parameter set matches the ruler, C1) and never applied
             # on a code model: the cells are scattered directly (spec §3.2).
             if self.tul is not None and self.tul.W_prefix is not None:
@@ -4915,8 +4952,89 @@ class MORPHTransformer(nn.Module):
         null = self.tul_code_null.to(e.dtype).view(*([1] * (e.dim() - 1)), -1).expand_as(e)
         e_n = torch.where(r_e, null, e)
         inj_n = inj * (~rows).view(1, B, 1, 1).to(inj.dtype)
-        tape_n = z_tape * (~rows).view(B, 1, 1, 1).to(z_tape.dtype)
+        if z_tape.dtype == torch.long:
+            # A discrete tape: the null context is MASK at every symbol (the embedding the
+            # denoiser already knows as "no information").
+            tape_n = torch.where(rows.view(B, *([1] * (z_tape.dim() - 1))),
+                                 torch.full_like(z_tape, int(self._code_mask_id)), z_tape)
+        else:
+            tape_n = z_tape * (~rows).view(B, 1, 1, 1).to(z_tape.dtype)
         return e_n, inj_n, tape_n
+
+    # ── LCTUL-D: the masked denoiser over a discrete code (spec §16) ──────────────
+
+    def _tul_code_thinker_discrete(self, idx_noisy: Tensor, idx_clean: Tensor, t: Tensor,
+                                   e: Tensor, inj: Tensor, layout: SlotLayout,
+                                   seed_detach: bool) -> Tensor:
+        """ONE core pass over the doubled slot sequence of SYMBOL positions -> logits
+        ``[B, S, N, C_book]`` fp32 at the noisy copies.
+
+        ``idx_noisy`` / ``idx_clean`` ``[B, S, N]`` long (``mask_id`` = MASK), ``t``
+        ``[B, S]`` = the slot's masked fraction. Same layout, relation and injection
+        routes as :meth:`_tul_code_thinker` with ``M := N``: the symbol (or MASK)
+        embedding is the carrier at every copy, the time embedding and the per-position
+        embedding enter the noisy copies, the clean marker the clean ones.
+        """
+        B, S, N = idx_noisy.shape
+        dt = e.dtype
+        if seed_detach:
+            e, inj = e.detach(), inj.detach()
+        emb = self.tul_code_sym.weight.to(dt)
+        cells = torch.cat([emb[idx_noisy], emb[idx_clean]], dim=2)          # [B, S, 2N, C]
+        h_in = cells.reshape(B, S * 2 * N, -1)
+        e_rep = e.repeat_interleave(2 * N, dim=1)
+        inj_rep = inj.repeat_interleave(2 * N, dim=2)
+        add = torch.zeros(B, S, 2 * N, h_in.shape[-1], dtype=dt, device=h_in.device)
+        add[:, :, :N] = (self.tul_code_time(t).to(dt).unsqueeze(2)
+                         + self.tul_code_cell.to(dt).view(1, 1, N, -1))
+        add[:, :, N:] = self.tul_code_clean.to(dt).view(1, 1, 1, -1)
+        inj_rep = inj_rep + add.reshape(1, B, S * 2 * N, -1)
+        if self._is_hc:
+            h_in = h_in.unsqueeze(2).expand(-1, -1, self._n_streams, -1).contiguous()
+        rel = code_thinker_relation(S, N, h_in.device)
+        h_out, _ = self._apply_core_step(h_in, e_rep, None, None, None, ret_state=None,
+                                         iter_idx=0, inj_terms=inj_rep,
+                                         attn_kw={"tg_relation": rel})
+        if self._is_hc:
+            h_out = h_out.mean(dim=2)
+        h_noisy = h_out.reshape(B, S, 2 * N, -1)[:, :, :N]
+        return self.tul_code_sym_head(h_noisy)
+
+    def _tul_code_lift(self, idx: Tensor, ok: Tensor) -> Tensor:
+        """Symbols ``[B, S, N]`` long -> the cells the coda reads, ``[B, S, M, C]`` fp32:
+        the quantiser's lift, RMS-normalised per cell, zero where ``ok`` is false. The
+        SAME statistic a truth code has on this path (the training forward reads
+        ``code_rmsnorm`` of the quantiser's cells), so a sample and a truth code are told
+        apart by content only."""
+        B, S, N = idx.shape
+        vq = self.tul_code_vq
+        cells = vq.lift(idx.reshape(B, S, vq.k, vq.g))
+        return code_rmsnorm(cells) * ok.view(B, S, 1, 1).float()
+
+    def _tul_code_sample_idx(self, idx_tape: Tensor, ok: Tensor, e: Tensor, inj: Tensor,
+                             layout: SlotLayout, k: int, generator=None,
+                             guidance: float | None = None) -> Tensor:
+        """``k`` unmasking rounds (:func:`maskgit_sample`) for every slot in parallel with
+        ``idx_tape`` ``[B, S, N]`` long as the clean context -> ``[B, S, N]`` long, ``0``
+        where ``ok`` is false. Guidance ``w != 1``: ``l = l_u + w (l_c − l_u)`` on the
+        logits, the null pass on every row. Records the pass count."""
+        tc = self.cfg.tul
+        w = float(tc.code_cfg_scale if guidance is None else guidance)
+        mask_id = int(self._code_mask_id)
+        if w != 1.0:
+            e_u, inj_u, tape_u = self._tul_code_null_condition(
+                e, inj, idx_tape, torch.ones(ok.shape[0], dtype=torch.bool, device=ok.device))
+
+            def _logits(idx: Tensor, t: Tensor) -> Tensor:
+                l_c = self._tul_code_thinker_discrete(idx, idx_tape, t, e, inj, layout, False)
+                l_u = self._tul_code_thinker_discrete(idx, tape_u, t, e_u, inj_u, layout, False)
+                return l_u + w * (l_c - l_u)
+        else:
+            def _logits(idx: Tensor, t: Tensor) -> Tensor:
+                return self._tul_code_thinker_discrete(idx, idx_tape, t, e, inj, layout, False)
+
+        return maskgit_sample(_logits, ok, int(self._code_n_sym), mask_id, int(k),
+                              tc.code_mask_schedule, generator=generator)
 
     def _tul_code_sample(self, z_tape: Tensor, ok: Tensor, e: Tensor, inj: Tensor,
                          layout: SlotLayout, k: int, generator=None,
@@ -4924,8 +5042,20 @@ class MORPHTransformer(nn.Module):
         """Sample every slot's code in parallel with ``z_tape`` (``[B, S, M, C]`` fp32) as
         the clean context: ``k`` Euler steps from ``z_0 ~ N(0, source_std²)`` (or the given
         ``z0``). Returns the endpoint, fp32, unnormalised, zero where ``ok`` is false.
-        Records the pass count."""
+        Records the pass count.
+
+        On a discrete code (``tul.code_discrete``) ``z_tape`` is the SYMBOL tape
+        ``[B, S, N]`` long, ``k`` is the number of unmasking rounds, and the return is the
+        sampled symbols LIFTED to cells (``[B, S, M, C]`` fp32, already at the coda's
+        statistic: :meth:`_tul_code_lift`); ``z0`` has no meaning there and is refused."""
         tc = self.cfg.tul
+        if tc.code_discrete:
+            if z0 is not None:
+                raise ValueError("a discrete code has no source draw: z0 is not accepted")
+            if z_tape.dtype != torch.long:
+                raise TypeError("a discrete code's tape is the [B, S, N] long symbol tensor")
+            idx = self._tul_code_sample_idx(z_tape, ok, e, inj, layout, k, generator, guidance)
+            return self._tul_code_lift(idx, ok)
         if z0 is None:
             z0 = torch.randn(z_tape.shape, device=z_tape.device, dtype=torch.float32,
                              generator=generator) * float(tc.code_source_std)
@@ -4955,6 +5085,13 @@ class MORPHTransformer(nn.Module):
         sampled codes before it. ``S·k`` core passes. Eval instrument only (`val/ce_k8_rolled`)."""
         B, S = ok.shape
         M, C = int(self.cfg.tul.prefix_k), self.cfg.d_model
+        if self.cfg.tul.code_discrete:
+            tape_i = torch.full((B, S, int(self._code_n_sym)), int(self._code_mask_id),
+                                dtype=torch.long, device=ok.device)
+            for s in range(S):
+                ik = self._tul_code_sample_idx(tape_i, ok, e, inj, layout, k, generator)
+                tape_i[:, s] = ik[:, s]
+            return self._tul_code_lift(tape_i, ok)
         tape = torch.zeros(B, S, M, C, device=ok.device, dtype=torch.float32)
         for s in range(S):
             zk = self._tul_code_sample(tape, ok, e, inj, layout, k, generator=generator)
@@ -4996,6 +5133,29 @@ class MORPHTransformer(nn.Module):
         fm_loss = None
         self._code_last_passes = 0
         self._code_sigreg_loss = None
+        self._code_vq_out = None
+        idx_flat: Tensor | None = None
+        if tc.code_discrete:
+            # LCTUL-D: E's pooled vector -> N symbols (TULThoughtVQ, cosine codebook, the
+            # VQ-VAE terms in `_code_vq_out`) -> the lifted cells, RMS-normalised, are what
+            # the coda reads, with the straight-through gradient into E. Rate control at
+            # train: `code_sub_p` of the VALID symbols are replaced by a uniform random
+            # symbol (LaDiR's token substitution), gradient cut at those symbols; the
+            # denoiser's target is always the encoder's own symbols.
+            vq = self.tul_code_vq
+            z_pool = z.float().mean(dim=2)                                 # [B, S, C]
+            sub_index = None
+            if self.training and tc.code_sub_p > 0.0:
+                draw = torch.rand(B, S, vq.k, vq.g, device=z.device) < tc.code_sub_p
+                draw = draw & ok.view(B, S, 1, 1)
+                rnd = torch.randint(0, vq.c, (B, S, vq.k, vq.g), device=z.device)
+                sub_index = torch.where(draw, rnd, torch.full_like(rnd, -1))
+                stats["code_sub_frac"] = float(draw.float().sum()
+                                               / (ok.float().sum() * vq.k * vq.g).clamp_min(1))
+            cells_q, _, vq_out = vq(z_pool.to(z.dtype), ok, sub_index=sub_index)
+            self._code_vq_out = vq_out
+            idx_flat = vq_out["index"].clamp_min(0).reshape(B, S, -1)       # [B, S, N]
+            z = code_rmsnorm(cells_q.float()).to(z.dtype) * okf
         if self.training:
             phase = int(self.code_phase)
             if tc.code_sigreg_lambda > 0.0:
@@ -5055,11 +5215,55 @@ class MORPHTransformer(nn.Module):
             if phase >= 3 and tc.code_rollout_p > 0.0:
                 sel = (torch.rand(B, S, device=z.device) < tc.code_rollout_p) & ok
                 z_hat = xm_hat if xm_hat is not None else self._tul_code_sample(
-                    z.detach().float(), ok, e, inj, layout, tc.code_rollout_steps)
+                    idx_flat if tc.code_discrete else z.detach().float(),
+                    ok, e, inj, layout, tc.code_rollout_steps)
                 z_coda = torch.where(sel.view(B, S, 1, 1), code_rmsnorm(z_hat).to(z.dtype),
                                      z_coda)
                 stats["code_rollout_frac"] = float(sel.float().sum() / ok.float().sum().clamp_min(1))
-            if phase >= 2:
+            if phase >= 2 and tc.code_discrete:
+                # The masked-diffusion ELBO (spec §16): t ~ U(0,1) per slot, each symbol
+                # masked with probability t, CE on the masked symbols weighted 1/t; in
+                # nats per span it upper-bounds −log p(code | past). Reported through the
+                # same `code_fm_*` keys as the flow loss, in units of the uniform floor
+                # N·log C, so the trainer's `fm=` column and the watchers read both paths.
+                t = torch.rand(B, S, device=z.device, dtype=torch.float32).clamp_min(1e-3)
+                mask = mdm_mask(t, int(self._code_n_sym))
+                mask_id = int(self._code_mask_id)
+                idx_noisy = torch.where(mask, torch.full_like(idx_flat, mask_id), idx_flat)
+                tape_t = idx_flat
+                _tape_passes = 0
+                if tc.code_tape_rollout_p > 0.0:
+                    with torch.no_grad():
+                        tape_hat = self._tul_code_sample_idx(idx_flat, ok, e, inj, layout,
+                                                             tc.code_rollout_steps)
+                    rows_r = torch.rand(B, device=z.device) < tc.code_tape_rollout_p
+                    tape_t = torch.where(rows_r.view(B, 1, 1), tape_hat, idx_flat)
+                    stats["code_tape_rollout_frac"] = float(rows_r.float().mean())
+                    _tape_passes = int(tc.code_rollout_steps)
+                e_t, inj_t = e, inj
+                if tc.code_cfg_drop > 0.0:
+                    rows = torch.rand(B, device=z.device) < tc.code_cfg_drop
+                    e_t, inj_t, tape_t = self._tul_code_null_condition(e, inj, tape_t, rows)
+                    stats["code_cfg_drop_frac"] = float(rows.float().mean())
+                logits = self._tul_code_thinker_discrete(idx_noisy, tape_t, t, e_t, inj_t,
+                                                         layout, tc.code_seed_detach)
+                loss_raw, per_slot = mdm_loss(logits, idx_flat, mask, t, ok)
+                fm_loss = loss_raw / float(self._code_fm_scale)
+                with torch.no_grad():
+                    stats["code_fm_raw"] = float(loss_raw)
+                    stats["code_mdm_nats"] = float(loss_raw)
+                    stats["code_fm_null"] = float(self._code_fm_scale)
+                    stats["code_fm_rel"] = float(fm_loss)
+                    stats["code_mask_frac"] = float(
+                        (mask.float().mean(-1) * ok.float()).sum() / ok.float().sum().clamp_min(1))
+                    for b in range(4):
+                        m = ok & (t >= b / 4.0) & (t < (b + 1) / 4.0)
+                        if bool(m.any()):
+                            stats[f"code_fm_band{b}_rel"] = float(
+                                per_slot[m].mean() / float(self._code_fm_scale))
+                _roll = (tc.code_rollout_steps if phase >= 3 else 0)
+                self._code_last_passes = 1 + _roll + _tape_passes
+            elif phase >= 2:
                 t = torch.rand(B, S, device=z.device, dtype=torch.float32)
                 # The target: E's code, detached (C4) unless `code_target_lambda` lets the
                 # flow loss's gradient reach E at that weight (value unchanged). The clean
@@ -5149,7 +5353,8 @@ class MORPHTransformer(nn.Module):
             if mode == "encoder":
                 z_coda = z * self._code_truth_scale
             elif mode == "sampled":
-                z_hat = self._tul_code_sample(z.float(), ok, e, inj, layout, k, generator=gen)
+                z_hat = self._tul_code_sample(idx_flat if tc.code_discrete else z.float(),
+                                              ok, e, inj, layout, k, generator=gen)
                 z_coda = code_rmsnorm(z_hat).to(z.dtype) * okf
                 self._code_last_passes = k * (2 if tc.code_cfg_scale != 1.0 else 1)
             elif mode == "rolled":
@@ -5179,7 +5384,8 @@ class MORPHTransformer(nn.Module):
                     # `code_seed` given ⇒ the open slot's z_0 comes from the seeded stream
                     # (the generator derives it from its token seed and the open slot, so a
                     # seeded generation is reproducible end to end); None ⇒ the global RNG.
-                    z_hat = self._tul_code_sample(z.float(), _open, e, inj, layout, k,
+                    z_hat = self._tul_code_sample(idx_flat if tc.code_discrete else z.float(),
+                                                  _open, e, inj, layout, k,
                                                   generator=gen if code_seed is not None else None)
                     z_coda = torch.where(_open.view(B, S, 1, 1), code_rmsnorm(z_hat).to(z.dtype),
                                          z_coda)
@@ -7016,7 +7222,7 @@ class MORPHTransformer(nn.Module):
             oracle_z_loss, oracle_z_stats = None, {}
             spandec_pass_loss, spandec_pass_stats = None, {}
             horizon_loss, horizon_stats = None, {}
-            _vq_out = None
+            _vq_out = getattr(self, "_code_vq_out", None)   # LCTUL-D's quantiser terms
             rcon_loss, rcon_stats = None, {}
             # The M cells go 1:1 into the M prefix positions, broadcast over the HC
             # streams, through NO projection (W_prefix is built and inert).
@@ -7588,7 +7794,7 @@ class MORPHTransformer(nn.Module):
             groups["vq_codebook_loss"] = _vq_out["codebook"].detach()
             for _k in ("vq_perplexity", "vq_used", "vq_n_codes", "vq_codebook_size"):
                 groups[_k] = _vq_out["loss"].new_tensor(_vq_out[_k])
-            _vw = tc.vq_weight * _vq_out["loss"]
+            _vw = (tc.code_vq_weight if tc.code else tc.vq_weight) * _vq_out["loss"]
             groups["vq_weighted"] = _vw.detach()
             groups["loss"] = groups["loss"] + _vw
         if rcon_loss is not None and groups is not None:

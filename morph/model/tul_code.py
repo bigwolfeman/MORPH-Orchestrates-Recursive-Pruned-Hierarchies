@@ -53,14 +53,17 @@ from torch import Tensor, nn
 from morph.model.tul_layout import SlotLayout
 
 __all__ = [
-    "TULCodeEncoder", "TULCodeTime", "TULCodeHead",
+    "TULCodeEncoder", "TULCodeTime", "TULCodeHead", "TULCodeSymHead",
     "code_rmsnorm", "code_target_valid", "code_thinker_relation",
     "cfm_pair", "cfm_null_floor", "euler_sample",
+    "mdm_mask", "mdm_loss", "mdm_unmask_counts", "maskgit_sample",
 ]
 
 _SEED_ENC = 0xC0DE
 _SEED_TIME = 0xC0DE + 1
+_SEED_SYM = 0xC0DE + 2
 _EPS = 1e-8
+_MDM_T_MIN = 1e-3
 
 
 def code_rmsnorm(z: Tensor, eps: float = _EPS) -> Tensor:
@@ -277,3 +280,128 @@ def euler_sample(velocity, z0: Tensor, n_steps: int) -> Tensor:
         t = torch.full((B, S), j * dt, device=z.device, dtype=torch.float32)
         z = z + dt * velocity(z, t).float()
     return z
+
+
+# ── LCTUL-D: the discrete code and the masked denoiser (spec §16) ─────────────────────
+#
+# On a ``tul.code_discrete`` model the slot's code is N = K·G SYMBOLS from a shared
+# codebook of C rows (``TULThoughtVQ`` on E's pooled vector, ``morph/model/tul_vq.py``),
+# the thinker is a MASKED DENOISER over those symbols (one categorical per masked
+# position, MDLM / LLaDA's objective) and the sampler is MaskGIT's k-round unmasking.
+# The doubled slot sequence, the relation mask and the time embedding are the flow
+# thinker's, with M := N symbol positions per copy: a noisy copy holds the symbol
+# embedding or the MASK embedding, a clean copy the (context) symbol embedding.
+
+
+class TULCodeSymHead(nn.Module):
+    """The denoiser head: private RMSNorm over the stream-mean carrier, then a zero-init
+    linear to ``C`` logits, so the first prediction is exactly uniform (``TULCodeHead``'s
+    contract, one alphabet wide)."""
+
+    def __init__(self, d_model: int, codebook: int):
+        super().__init__()
+        if codebook < 2:
+            raise ValueError(f"TULCodeSymHead needs codebook >= 2, got {codebook}")
+        self.c = int(codebook)
+        self.weight = nn.Parameter(torch.ones(d_model))
+        self.W_o = nn.Linear(d_model, self.c, bias=True)
+        with torch.no_grad():
+            self.W_o.weight.zero_()
+            self.W_o.bias.zero_()
+        self.W_o._ternary_exclude = True
+
+    def forward(self, h: Tensor) -> Tensor:
+        """``h`` ``[..., C]`` -> logits ``[..., codebook]`` fp32."""
+        hn = code_rmsnorm(h) * self.weight.to(h.dtype)
+        return self.W_o(hn).float()
+
+
+def mdm_mask(t: Tensor, n_sym: int, generator=None) -> Tensor:
+    """Bernoulli(``t``) mask per symbol: ``t`` ``[B, S]`` -> ``[B, S, N]`` bool (True =
+    masked). No symbol is forced: a slot that draws no mask contributes 0 to the ELBO,
+    which keeps the ``1/t`` estimator unbiased (a forced mask at small ``t`` would weigh
+    one symbol by ``1/t`` and read several times the uniform floor at the zero-init
+    head). The trainer draws ``t`` in ``[_MDM_T_MIN, 1]``."""
+    B, S = t.shape
+    u = torch.rand((B, S, n_sym), device=t.device, dtype=torch.float32, generator=generator)
+    return u < t.unsqueeze(-1)
+
+
+def mdm_loss(logits: Tensor, target: Tensor, mask: Tensor, t: Tensor, ok: Tensor
+             ) -> tuple[Tensor, Tensor]:
+    """The masked-diffusion ELBO, per slot: ``(1/t) · Σ_masked CE(logits, target)`` in
+    nats per SPAN (an upper bound on ``-log p(code | past)``), and the per-slot term
+    summed over the valid slots divided by their count.
+
+    ``logits`` ``[B, S, N, C]`` fp32, ``target`` ``[B, S, N]`` long, ``mask`` / ``ok``
+    bool. Returns ``(loss_mean, per_slot)``; ``per_slot`` is zero on invalid slots.
+    """
+    B, S, N, C = logits.shape
+    ce = F.cross_entropy(logits.reshape(-1, C), target.clamp_min(0).reshape(-1),
+                         reduction="none").reshape(B, S, N)
+    w = mask.to(ce.dtype) / t.clamp_min(_MDM_T_MIN).unsqueeze(-1)
+    per_slot = (ce * w).sum(dim=-1) * ok.to(ce.dtype)                     # [B, S]
+    return per_slot.sum() / ok.to(ce.dtype).sum().clamp_min(1.0), per_slot
+
+
+def mdm_unmask_counts(n_sym: int, k: int, schedule: str = "linear") -> list[int]:
+    """How many symbols are COMMITTED after each of ``k`` rounds (cumulative, ends at
+    ``n_sym``). ``linear``: ``ceil(N·(j+1)/k)``; ``cosine`` (MaskGIT): the fraction still
+    masked after round ``j`` is ``cos(π/2 · (j+1)/k)``. Every round commits >= 1 symbol
+    while any is left, so ``k <= N`` rounds are all real (``k > N`` is refused by the
+    config)."""
+    if k < 1 or n_sym < 1:
+        raise ValueError(f"mdm_unmask_counts needs k >= 1 and n_sym >= 1, got {k}, {n_sym}")
+    out, prev = [], 0
+    for j in range(k):
+        f = (j + 1) / k
+        if schedule == "linear":
+            done = math.ceil(n_sym * f - 1e-9)
+        elif schedule == "cosine":
+            done = n_sym - math.floor(n_sym * math.cos(math.pi / 2.0 * f) + 1e-9)
+        else:
+            raise ValueError(f"unknown mask schedule {schedule!r} (linear|cosine)")
+        done = max(done, prev + 1) if prev < n_sym else n_sym
+        done = min(done, n_sym)
+        out.append(done)
+        prev = done
+    out[-1] = n_sym
+    return out
+
+
+@torch.no_grad()
+def maskgit_sample(logits_fn, ok: Tensor, n_sym: int, mask_id: int, k: int,
+                   schedule: str = "linear", generator=None) -> Tensor:
+    """``k`` rounds of parallel unmasking (MaskGIT, Chang et al. 2022, without the
+    Gumbel confidence noise): start all-MASK, each round predict every still-masked
+    symbol, sample it, and COMMIT the ``n_j`` most confident of the newly sampled ones
+    (confidence = the sampled symbol's log-probability), where ``n_j`` follows
+    :func:`mdm_unmask_counts`. ``k = 1`` is one-shot sampling (every symbol from its own
+    marginal given the past); ``k = N`` commits one symbol per round.
+
+    ``logits_fn(idx [B, S, N] long, t [B, S] fp32 = fraction still masked) -> [B, S, N, C]``
+    fp32. Returns ``[B, S, N]`` long with no MASK left on ``ok`` slots and ``0`` elsewhere.
+    """
+    B, S = ok.shape
+    idx = torch.full((B, S, n_sym), int(mask_id), dtype=torch.long, device=ok.device)
+    counts = mdm_unmask_counts(n_sym, int(k), schedule)
+    done = torch.zeros(B, S, dtype=torch.long, device=ok.device)
+    for j in range(int(k)):
+        still = idx == mask_id                                              # [B, S, N]
+        t = still.float().mean(dim=-1)                                      # [B, S]
+        logits = logits_fn(idx, t)                                          # [B, S, N, C]
+        logp = torch.log_softmax(logits.float(), dim=-1)
+        probs = logp.exp().reshape(-1, logp.shape[-1])
+        draw = torch.multinomial(probs, 1, generator=generator).reshape(B, S, n_sym)
+        conf = logp.gather(-1, draw.unsqueeze(-1)).squeeze(-1)              # [B, S, N]
+        conf = torch.where(still, conf, torch.full_like(conf, float("-inf")))
+        n_new = (counts[j] - done).clamp_min(0)                             # [B, S]
+        order = conf.argsort(dim=-1, descending=True)                       # [B, S, N]
+        rank = torch.empty_like(order)
+        rank.scatter_(-1, order, torch.arange(n_sym, device=ok.device).view(1, 1, -1)
+                      .expand(B, S, -1))
+        commit = still & (rank < n_new.unsqueeze(-1))
+        idx = torch.where(commit, draw, idx)
+        done = (idx != mask_id).sum(dim=-1)
+    idx = torch.where(idx == mask_id, torch.zeros_like(idx), idx)   # k rounds always finish
+    return idx * ok.unsqueeze(-1).long()

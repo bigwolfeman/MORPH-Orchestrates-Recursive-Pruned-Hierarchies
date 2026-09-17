@@ -530,3 +530,61 @@ first smoke measures it; nothing here is a claim.
 | CFM, `loss_scale auto`, source scale rule | `morph/model/fm_planner.py`, `docs/tul-fm-probing.md` §7 (committed copy) |
 | no BPTT through any loop, guess outside the CE graph | FM1's non-negotiable, `morph/model/tul_fm.py` header |
 | never decode a span from one vector with no token path | CLAUDE.md (Huginn 2026-08-16, MegaByte T7, Bowman T2, Hourglass T6) |
+
+
+## 16. LCTUL-D — the discrete code and the masked denoiser (2026-09-16)
+
+Why (measured, `lab/experiments/results/2026-09-16-lctul-context-blind-probe/`): on
+`tul-code-cfg` at 20k the flow loss moves 0.3125 → 0.3161 of the null floor when the past
+is removed (the trained CFG null condition on every row). The velocity field's loss is
+99 % noise removal and the marginal's shape; the conditional `p(code | past)` gets 1 % of
+the gradient. And (proved, `lab/theory/lctul_euler_depth/`): k = 1 Euler is the
+conditional mean, and on a Gaussian-like conditional every further step changes one
+scalar. Neither the sampler nor the coda schedule can move that. §16 changes the code.
+
+`tul.code_discrete: true` keeps §1–§15 and replaces three objects:
+
+* **The code is N = `prefix_k` · `code_vq_groups` symbols** from one cosine codebook of
+  `code_vq_codebook` rows (`TULThoughtVQ`, `morph/model/tul_vq.py`, on E's pooled
+  vector, `codes = prefix_k`, `groups = code_vq_groups`). The coda reads
+  `rmsnorm(lift(symbols))` in the M cells (the quantiser's lift, one map per cell), with the
+  straight-through gradient into E and the VQ-VAE terms (`vq`, `vq_weighted` at
+  `code_vq_weight`, `vq_perplexity`) beside the CE. Rate control is LaDiR's token
+  substitution: at train `code_sub_p` of the valid symbols the coda reads are replaced by
+  a uniform random symbol (gradient cut at those symbols; the denoiser's target is always
+  E's own symbols). `code_noise` must be 0.
+* **The thinker is a masked denoiser.** Same doubled slot sequence and relation with
+  `M := N` symbol positions per copy: a noisy copy holds the symbol embedding or the MASK
+  embedding (`tul_code_sym`, row C = MASK, unit per-component scale), plus the
+  per-position embedding and the time embedding of the slot's masked fraction; a clean
+  copy the (context) symbol embedding plus the clean marker. Head `tul_code_sym_head`:
+  private RMSNorm, zero-init linear to C logits (uniform at step 0). Loss = the
+  masked-diffusion ELBO (MDLM / LLaDA): `t ~ U(1e-3, 1)` per slot, each symbol masked
+  with probability `t`, `(1/t) · Σ_masked CE` in nats per span, an upper bound on
+  `−log p(code | past)`; a slot that draws no mask contributes 0 (no forced mask: unbiased).
+  Reported through the flow keys in units of the uniform floor `N · log C`
+  (`code_fm_rel` = 1.0 at the zero head) plus `code_mdm_nats` and `code_mask_frac`. The
+  loss IS the conditional entropy of the code given the past: 100 % of its gradient is
+  about the past.
+* **The sampler is k rounds of parallel unmasking** (MaskGIT without the Gumbel term):
+  start all-MASK, predict every masked symbol, sample it, commit the most confident so
+  that `mdm_unmask_counts(N, k, code_mask_schedule)` symbols are set after round j.
+  `k = 1` is one-shot sampling (a REAL sample, each symbol from its marginal given the
+  past); `k = N` commits one symbol per round; `k > N` is refused. Depth here resolves
+  the dependence among a span's symbols, and the k-curve reads it directly. `code_infer_steps`
+  / `code_rollout_steps` are rounds. CFG: the null condition MASKs the tape, guidance
+  acts on the logits.
+
+Everything else is unchanged in interface: `_tul_code_sample` takes the SYMBOL tape
+(`[B, S, N]` long) and returns lifted cells at the coda's statistic, so `code_marginal_ce`,
+the eval modes (`encoder` / `sampled` / `rolled` / `generate`), the generator's `code_given`
+cache and the probes run as they are. Not defined on a discrete code (refused): `code_xm_k >
+1`, `code_sigreg_lambda`, `code_target_lambda`, `code_noise_renorm`, `code_source_std ≠ 1`.
+
+Tests: `tests/test_tul_code_d.py` (D1 build and RNG-neutrality; D2 truth cells =
+rmsnorm(lift(index)), STE into E; D3 substitution touches the coda input only and cuts the
+gradient; D4 the ELBO scores masked symbols at 1/t and the zero head reads the floor; D5
+the schedule and the sampler, seeded, k = 1 = one-shot; D6 causality; D7 the losses share
+nothing; D8 null condition and guidance; D9 refusals; D10 the arm composes; D11/D12 eval
+modes, pass counts, generation, the marginal). Config: `tul_code_d.yaml`. Note:
+`.agents/notes/proposed/architecture/2026-09-16-lctul-d-discrete-code-masked-denoiser.md`.

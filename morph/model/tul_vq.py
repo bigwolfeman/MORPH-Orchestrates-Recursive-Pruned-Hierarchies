@@ -174,8 +174,31 @@ class TULThoughtVQ(nn.Module):
         return (f"codes={self.k}, codebook={self.c}, d_c={self.d_c}, groups={self.g}, "
                 f"beta={self.beta}, reset_after={self.reset_after}")
 
-    def forward(self, z: Tensor, slot_valid: Tensor) -> tuple[Tensor, Tensor, dict]:
+    def lift(self, index: Tensor) -> Tensor:
+        """Symbols -> cells, no encoder: ``index`` ``[B, S, K, G]`` long (every entry in
+        ``[0, C)``; a pad slot's ``-1`` is read as code 0 and the caller zeroes the slot)
+        -> ``[B, S, K, C]`` fp32, the SAME map the forward applies to its quantised
+        vectors (normalised codebook rows through ``W_vq_out``). This is how a SAMPLED
+        symbol string reaches the coda on an LCTUL-D model (``tul.code_discrete``)."""
+        if index.dim() != 4 or index.shape[2] != self.k or index.shape[3] != self.g:
+            raise ValueError(
+                f"TULThoughtVQ.lift wants [B, S, K={self.k}, G={self.g}] indices, got "
+                f"{tuple(index.shape)}")
+        e_all = self.vq_E.float()
+        e_n = e_all / (e_all.norm(dim=-1, keepdim=True) + self.eps)              # [C, d_g]
+        q = e_n.index_select(0, index.clamp_min(0).reshape(-1)).reshape(
+            *index.shape[:3], self.d_c)                                             # [B,S,K,d_c]
+        return torch.einsum("bskd,kdc->bskc", q, self.W_vq_out.float())
+
+    def forward(self, z: Tensor, slot_valid: Tensor, sub_index: Tensor | None = None
+                ) -> tuple[Tensor, Tensor, dict]:
         """``z`` ``[B, S, *mid, C]`` -> ``(cells [B, S, K, *mid, C], dequant, out)``.
+
+        ``sub_index`` ``[B, S, *mid, K, G]`` long, optional: where it is ``>= 0`` the
+        quantised vector is REPLACED by that codebook row before the lift (LaDiR's token
+        substitution, LCTUL-D's rate control) and the straight-through gradient is cut at
+        that symbol (the encoder did not produce it, so it must not be told it did).
+        ``out["index"]`` still reports the encoder's own assignment.
 
         ``mid`` is ``()`` on a plain carrier and ``(n,)`` on the Hyper-Connection carrier;
         the quantizer is a per-stream map exactly as every other ``nn.Linear`` in the model
@@ -223,6 +246,14 @@ class TULThoughtVQ(nn.Module):
         # (sabotage S2 MISSED a test that assumed otherwise). The two-sided gate for this
         # line runs at `vq_weight: 0`, where the STE IS the only route.
         q = u_n + (q_e - u_n).detach()
+        if sub_index is not None:
+            if sub_index.shape != u_n.shape[:-1]:
+                raise ValueError(
+                    f"sub_index {tuple(sub_index.shape)} must match the symbol grid "
+                    f"{tuple(u_n.shape[:-1])}")
+            sub = sub_index >= 0
+            q_sub = e_n.index_select(0, sub_index.clamp_min(0).reshape(-1)).reshape_as(u_n)
+            q = torch.where(sub.unsqueeze(-1), q_sub.detach(), q)
         q = q.reshape(B, S, *mid, self.k, self.d_c).to(z.dtype)
         cells = torch.einsum("...kd,kdc->...kc", q, self.W_vq_out.to(q.dtype))
         cells = cells.movedim(-2, 2)                                   # [B, S, K, *mid, C]

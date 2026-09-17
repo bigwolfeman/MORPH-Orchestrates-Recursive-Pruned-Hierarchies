@@ -3388,7 +3388,8 @@ def main(cfg: DictConfig) -> None:
                     # construction (transformer.py wraps the stats as 0-d tensors).
                     or _k.startswith("code_fm") or _k.startswith("code_sigreg")
                     or _k in ("code_rollout_frac", "code_cfg_drop_frac", "code_tape_rollout_frac",
-                              "code_xm_score_mean", "code_xm_score_best")}
+                              "code_xm_score_mean", "code_xm_score_best",
+                              "code_mdm_nats", "code_mask_frac", "code_sub_frac")}
                    if isinstance(out, dict) else {}),
                 "train/ppl": math.exp(min(_lv, 20.0)),
                 "train/lr": lr,
@@ -3493,6 +3494,7 @@ def main(cfg: DictConfig) -> None:
                            "code_cfg_drop_frac", "code_tape_rollout_frac", "code_phase",
                            "code_xm_score_mean", "code_xm_score_best",
                            "code_sigreg", "code_sigreg_weighted",
+                           "code_mdm_nats", "code_mask_frac", "code_sub_frac",
                            "horizon_n_tokens"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())

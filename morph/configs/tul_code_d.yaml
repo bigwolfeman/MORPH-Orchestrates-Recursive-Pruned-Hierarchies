@@ -1,0 +1,28 @@
+# LCTUL-D, arm "tul-code-d" (docs/tul-code-spec.md §16; note
+# .agents/notes/proposed/architecture/2026-09-16-lctul-d-discrete-code-masked-denoiser.md;
+# prereg lab/experiments/planned/2026-09-16-lctul-d-first-arm.md).
+#
+# ONE factor against `tul_code`: the slot's code is N = prefix_k x code_vq_groups SYMBOLS
+# from a shared codebook of code_vq_codebook rows instead of M continuous cells; the
+# thinker is a masked denoiser over those symbols (its loss IS the conditional entropy of
+# the code given the past) instead of a velocity field (whose loss was 99 % noise
+# removal: lab/experiments/results/2026-09-16-lctul-context-blind-probe/); the sampler is
+# k rounds of parallel unmasking, so k = 1 is a real one-shot sample and every further
+# round resolves the dependence among a span's symbols. Rate control is LaDiR's symbol
+# substitution (code_sub_p) on the coda's input, not Gaussian noise.
+defaults:
+  - tul_code
+  - _self_
+
+tul:
+  code_discrete: true
+  code_noise: 0.0
+  code_vq_codebook: 512
+  code_vq_groups: 4
+  code_sub_p: 0.3
+  code_infer_steps: 8          # = N at prefix_k 2 x groups 4: one symbol per round
+  code_rollout_steps: 8
+  code_cfg_drop: 0.1           # the trained null condition: the context-share instrument
+
+wandb:
+  name: tul-code-d

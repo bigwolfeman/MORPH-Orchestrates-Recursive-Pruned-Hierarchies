@@ -19,7 +19,7 @@ from morph.model.tul import TULConfig
 from morph.model.tul_code import (code_rmsnorm, code_target_valid, code_thinker_relation,
                                   euler_sample)
 
-CODE_CONFIGS = ["tul_code", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke", "tul_code_xm", "tul_code_xmn", "tul_code_lejepa", "tul_code_vae", "tul_code_ladir_tf", "tul_code_ladir_ro", "tul_code_thinker_p3",
+CODE_CONFIGS = ["tul_code", "tul_code_d", "tul_code_seeddetach", "tul_code_nophase3", "tul_code_smoke", "tul_code_xm", "tul_code_xmn", "tul_code_lejepa", "tul_code_vae", "tul_code_ladir_tf", "tul_code_ladir_ro", "tul_code_thinker_p3",
                 "tul_code_rollout1", "tul_code_renorm", "tul_code_cfg", "tul_code_jepa",
                 "tul_code_thinker"]
 

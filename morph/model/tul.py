@@ -691,6 +691,18 @@ class TULConfig:
                                          # (Algorithm 1); "noise": the paper's Diffusion/Flow
                                          # hybrid (App. C): K corruption noises at one t, one
                                          # velocity prediction each, the lowest flow loss trains
+    # ── LCTUL-D (spec §16): the DISCRETE code and the masked denoiser ──────────────
+    code_discrete: bool = False          # the code is N = prefix_k·code_vq_groups SYMBOLS from a
+                                         # shared codebook (TULThoughtVQ on E's pooled vector); the
+                                         # thinker is a masked denoiser, the sampler k unmasking rounds
+    code_vq_codebook: int = 512          # C, rows of the shared cosine codebook
+    code_vq_groups: int = 4              # G, symbols per cell (product quantisation)
+    code_vq_dim: int = 0                 # a cell's quantiser width d_c; 0 -> d_model // prefix_k
+    code_vq_beta: float = 0.25           # commitment weight (van den Oord 2017)
+    code_vq_weight: float = 1.0          # weight of the VQ-VAE term (codebook + beta·commit)
+    code_sub_p: float = 0.3              # LaDiR's substitution: a truth symbol the coda reads is
+                                         # replaced by a uniform random one with this probability
+    code_mask_schedule: str = "linear"   # unmasking schedule of the sampler: linear | cosine
     code_sigreg_lambda: float = 0.0      # LeJEPA (arXiv 2511.08544): SIGReg on E's code cells,
                                          # per cell index over the valid slots, pushing the code
                                          # distribution to N(0, I) (the collapse guard that lets
@@ -2256,6 +2268,46 @@ class TULConfig:
                 f"tul.center_bag_mean=true with tul.slot_seed={self.slot_seed!r} is not "
                 f"supported: centering is scoped to slot_seed='bag_mean' only.")
 
+    def _check_code_discrete(self) -> None:
+        """``tul.code_discrete`` — LCTUL-D (docs/tul-code-spec.md §16). Every refusal."""
+        if self.code_vq_codebook < 2:
+            raise ValueError(f"tul.code_vq_codebook must be >= 2, got {self.code_vq_codebook}")
+        if self.code_vq_groups < 1:
+            raise ValueError(f"tul.code_vq_groups must be >= 1, got {self.code_vq_groups}")
+        if self.code_vq_dim < 0:
+            raise ValueError(f"tul.code_vq_dim must be >= 0, got {self.code_vq_dim}")
+        if self.code_vq_beta < 0.0 or self.code_vq_weight < 0.0:
+            raise ValueError("tul.code_vq_beta and tul.code_vq_weight must be >= 0")
+        if not (0.0 <= self.code_sub_p < 1.0):
+            raise ValueError(f"tul.code_sub_p must be in [0, 1), got {self.code_sub_p}")
+        if self.code_mask_schedule not in ("linear", "cosine"):
+            raise ValueError(
+                f"tul.code_mask_schedule must be linear|cosine, got {self.code_mask_schedule!r}")
+        if int(self.prefix_k) < 2:
+            raise ValueError(
+                f"tul.code_discrete needs prefix_k >= 2 (TULThoughtVQ's K), got {self.prefix_k}")
+        n_sym = int(self.prefix_k) * int(self.code_vq_groups)
+        if self.code_infer_steps > n_sym or self.code_rollout_steps > n_sym:
+            raise ValueError(
+                f"tul.code_infer_steps={self.code_infer_steps} / code_rollout_steps="
+                f"{self.code_rollout_steps} exceed the N={n_sym} symbols of a span: a round "
+                f"past N commits nothing (prefix_k {self.prefix_k} x code_vq_groups "
+                f"{self.code_vq_groups}).")
+        if self.code_noise != 0.0:
+            raise ValueError(
+                f"tul.code_noise={self.code_noise} with code_discrete: the rate control of a "
+                f"discrete code is symbol substitution (tul.code_sub_p); set code_noise 0.")
+        if self.code_xm_k != 1:
+            raise ValueError("tul.code_xm_k > 1 is not defined on a discrete code (v1).")
+        if self.code_sigreg_lambda != 0.0 or self.code_target_lambda != 0.0:
+            raise ValueError(
+                "tul.code_sigreg_lambda / code_target_lambda act on a CONTINUOUS target; a "
+                "discrete code's denoiser loss never reaches E (the indices carry no grad).")
+        if self.code_source_std != 1.0 or self.code_noise_renorm:
+            raise ValueError(
+                "tul.code_source_std / code_noise_renorm are flow-thinker knobs; leave them at "
+                "their defaults on a discrete code.")
+
     def _check_code(self) -> None:
         """``tul.code`` — TUL-Code (docs/tul-code-spec.md §9). Every refusal, with its reason."""
         _knobs = (("code_noise", 0.5), ("code_noise_renorm", False), ("code_norm", "rms"),
@@ -2268,7 +2320,10 @@ class TULConfig:
                   ("code_target_lambda", 0.0), ("code_rank_abort", 0.0),
                   ("code_xm_k", 1), ("code_xm_select", "l2"), ("code_xm_mode", "sample"),
                   ("code_tape_rollout_p", 0.0),
-                  ("code_sigreg_lambda", 0.0))
+                  ("code_sigreg_lambda", 0.0),
+                  ("code_discrete", False), ("code_vq_codebook", 512), ("code_vq_groups", 4),
+                  ("code_vq_dim", 0), ("code_vq_beta", 0.25), ("code_vq_weight", 1.0),
+                  ("code_sub_p", 0.3), ("code_mask_schedule", "linear"))
         if not self.code:
             _set = [n for n, dflt in _knobs if getattr(self, n) != dflt]
             if _set:
@@ -2317,6 +2372,14 @@ class TULConfig:
         if self.code_sigreg_lambda < 0.0:
             raise ValueError(
                 f"tul.code_sigreg_lambda must be >= 0, got {self.code_sigreg_lambda}")
+        if self.code_discrete:
+            self._check_code_discrete()
+        elif self.code_sub_p != 0.3 or self.code_mask_schedule != "linear" or \
+                self.code_vq_codebook != 512 or self.code_vq_groups != 4 or \
+                self.code_vq_dim != 0 or self.code_vq_beta != 0.25 or self.code_vq_weight != 1.0:
+            raise ValueError(
+                "tul.code_vq_* / code_sub_p / code_mask_schedule set with "
+                "tul.code_discrete=false: no quantiser or denoiser is built.")
         if self.code_xm_select not in ("l2", "coda"):
             raise ValueError(
                 f"tul.code_xm_select must be 'l2' or 'coda', got {self.code_xm_select!r}")
