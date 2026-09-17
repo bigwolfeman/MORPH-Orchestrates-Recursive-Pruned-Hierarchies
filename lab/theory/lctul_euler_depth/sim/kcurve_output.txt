@@ -1,0 +1,82 @@
+
+== (a) Gaussian conditional, explained fraction R^2 = 0.1  (true-code reference logp -21.905)
+   k     logp    resid  radius  cos_mu
+   1   -13.860   0.905   0.000   1.000
+   2   -15.866   1.132   0.468   0.538
+   4   -18.029   1.375   0.674   0.404
+   8   -19.683   1.562   0.797   0.349
+  16   -20.710   1.677   0.864   0.325
+  64   -21.589   1.776   0.918   0.307
+ inf   -21.907   1.812   0.937   0.302
+   slope k2 -> k16: logp -4.844, resid +0.546
+
+== (a) Gaussian conditional, explained fraction R^2 = 0.5  (true-code reference logp -17.154)
+   k     logp    resid  radius  cos_mu
+   1    -9.158   0.500   0.000   1.000
+   2   -10.954   0.610   0.330   0.898
+   4   -13.237   0.752   0.497   0.804
+   8   -14.937   0.858   0.591   0.751
+  16   -15.997   0.924   0.643   0.722
+  64   -16.909   0.981   0.685   0.700
+ inf   -17.239   1.001   0.699   0.693
+   slope k2 -> k16: logp -5.043, resid +0.314
+
+== (b) mixture: M = 2 modes, mode spread 2.0, within-mode std 0.3  (true-code reference logp -4.121, true-code hit rate 1.000)
+   k     logp    resid  radius     hit
+   1   -66.947   1.000   0.000   0.000
+   2    -4.194   1.620   0.711   0.911
+   4     0.217   1.803   0.845   0.999
+   8    -1.365   1.889   0.891   1.000
+  16    -2.574   1.938   0.916   1.000
+  64    -3.727   1.979   0.936   1.000
+   slope k2 -> k16: logp +1.620, resid +0.318
+
+== (b) mixture: M = 8 modes, mode spread 2.0, within-mode std 0.3  (true-code reference logp -5.550, true-code hit rate 1.000)
+   k     logp    resid  radius     hit
+   1  -138.301   1.000   0.000   0.000
+   2   -12.500   1.396   1.180   0.850
+   4    -3.156   1.686   1.572   0.995
+   8    -3.527   1.834   1.734   1.000
+  16    -4.263   1.905   1.807   1.000
+  64    -5.137   1.960   1.860   1.000
+   slope k2 -> k16: logp +8.237, resid +0.509
+
+== (b) mixture: M = 64 modes, mode spread 2.0, within-mode std 0.3  (true-code reference logp -7.582, true-code hit rate 1.000)
+   k     logp    resid  radius     hit
+   1  -153.828   1.000   0.000   0.000
+   2   -29.088   1.349   1.147   0.645
+   4    -7.713   1.675   1.593   0.988
+   8    -6.647   1.828   1.767   0.999
+  16    -6.858   1.905   1.852   1.000
+  64    -7.350   1.967   1.920   1.000
+   slope k2 -> k16: logp +22.231, resid +0.556
+
+== (b) mixture: M = 4096 modes, mode spread 2.0, within-mode std 0.3  (true-code reference logp -11.816, true-code hit rate 1.000)
+   k     logp    resid  radius     hit
+   1   -61.068   1.000   0.000   0.000
+   2   -39.278   1.188   0.855   0.453
+   4   -14.904   1.520   1.423   0.961
+   8   -12.420   1.743   1.703   0.997
+  16   -11.839   1.871   1.842   1.000
+  64   -11.676   1.976   1.948   1.000
+   slope k2 -> k16: logp +27.438, resid +0.683
+
+== (b) mixture: M = 8 modes, mode spread 2.0, within-mode std 1.0  (true-code reference logp -24.713, true-code hit rate 1.000)
+   k     logp    resid  radius     hit
+   1   -41.158   1.000   0.000   1.000
+   2   -27.447   1.235   1.052   1.000
+   4   -24.087   1.558   1.656   1.000
+   8   -23.778   1.773   1.963   1.000
+  16   -24.129   1.892   2.113   1.000
+  64   -24.617   1.991   2.229   1.000
+   slope k2 -> k16: logp +3.318, resid +0.657
+
+== (b) mixture: M = 8 modes, mode spread 0.5, within-mode std 0.3  (true-code reference logp -5.394, true-code hit rate 1.000)
+   k     logp    resid  radius     hit
+   1    -6.832   1.000   0.000   1.000
+   2    -3.661   1.263   0.281   1.000
+   4    -1.895   1.587   0.427   1.000
+   8    -3.065   1.770   0.492   1.000
+  16    -4.073   1.876   0.526   1.000
+  64    -5.089   1.964   0.553   1.000
+   slope k2 -> k16: logp -0.411, resid +0.613
