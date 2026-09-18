@@ -121,11 +121,37 @@ def test_refusals():
         TULConfig(**ok, code_grade_loss="margin")
     with pytest.raises(ValueError, match="code_grade_grader must be"):
         TULConfig(**ok, code_grade_grader="coda_own")
-    # the code-only refusal is LIFTED by the graded term and only by it
+    # the code-only refusal is LIFTED by the graded term and only by it — but only when the
+    # graded term runs EVERY step, because with the L2 term off a non-graded step has an
+    # exactly-zero loss and zero gradients (measured 2026-09-17 on this fixture).
     with pytest.raises(ValueError, match="nothing would train"):
         TULConfig(prefix_k=2, slot_id=4, tg_restrict=True, tg_geometry="strict",
                   code_target=True, code_target_skip_coda=True, code_target_weight=0.0)
-    TULConfig(**ok, code_target_skip_coda=True, code_target_weight=0.0)
+    with pytest.raises(ValueError, match="exactly-zero loss"):
+        TULConfig(**ok, code_target_skip_coda=True, code_target_weight=0.0, code_grade_every=8)
+    TULConfig(**ok, code_target_skip_coda=True, code_target_weight=0.0, code_grade_every=1)
+
+
+def test_a_non_graded_step_of_the_pure_graded_arm_would_train_nothing():
+    """WHY the refusal above exists, on the model and not on the config: with the L2 term
+    off, a step that does not compute the graded term has an exactly-zero loss and no
+    gradient anywhere. The refusal makes that configuration unreachable; this test is the
+    measurement it rests on, taken with the check bypassed."""
+    m = _model(tul_code_target_weight=0.0, tul_code_grade_every=1,
+               tul_code_target_ref=True).train()
+    m.tul_code_ref_snapshot()
+    _ids, inp, lab, layout = _pack()
+    m.cfg.tul.code_grade_every = 4          # AFTER __post_init__: the refusal is a config check
+    for step, graded in ((0, True), (1, False), (2, False)):
+        m.code_grade_step.fill_(step)
+        m.zero_grad(set_to_none=True)
+        out = m(inp, labels=lab, slot_layout=layout)
+        out["loss"].backward()
+        g = sum(float(p.grad.abs().sum()) for n, p in m.named_parameters()
+                if p.grad is not None)
+        assert ("code_grade" in out) is graded, step
+        if not graded:
+            assert float(out["loss"]) == 0.0 and g == 0.0, (step, float(out["loss"]), g)
 
 
 # ── the candidates are real, and they cover the graded spans exactly ─────────

@@ -36,7 +36,15 @@ tul:
   code_grade_k: 4                 # candidates per graded slot
   code_grade_tokens: 16           # decode steps, AND the eligibility filter on span length
   code_grade_rows: 1              # rows of the batch graded on a graded step
-  code_grade_every: 8             # 0.60x the code-only rate, measured on the Spark
+  code_grade_every: 1             # EVERY step: with `code_target_weight: 0` the graded term
+                                  # is the only loss, and a step that does not compute it
+                                  # has an exactly-zero loss and zero gradients (measured
+                                  # 2026-09-17; `TULConfig._check_code_grade` refuses the
+                                  # combination). The price is the whole graded-step cost on
+                                  # every step: ~0.16x the code-only rate by extrapolation
+                                  # from the 0.60x measured at `every: 8`, so this arm is
+                                  # the EXPENSIVE confirmation and `tul_code_grade_l2.yaml`
+                                  # (dense L2 underneath, graded every 8) is what runs first.
   code_grade_loss: pref           # InfoNCE over the K candidate codes, the winner the class
   code_grade_grader: coda_past    # the frozen coda, the graded slot's own cell zeroed
   code_grade_temp: 1.0

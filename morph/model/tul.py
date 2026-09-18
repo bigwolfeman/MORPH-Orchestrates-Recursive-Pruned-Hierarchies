@@ -2619,6 +2619,19 @@ class TULConfig:
             raise ValueError(
                 f"tul.code_grade_k must be >= 2, got {self.code_grade_k}: with one candidate "
                 f"there is nothing to rank and the grader decides nothing.")
+        if self.code_target_weight == 0.0 and self.code_grade_every > 1:
+            # Measured 2026-09-17 on the CPU fixture: with the L2 term off and the graded
+            # term gated, a NON-graded step's loss is exactly 0.0 and every gradient is
+            # zero, so `code_grade_every - 1` of every `code_grade_every` steps buy a
+            # forward and a backward and train nothing. (With the slot-loop gain constraint
+            # on, those steps are worse than nothing: the loop is trained on the constraint
+            # alone.) Either the dense term stays on underneath (the `_l2` arm) or the
+            # graded term runs every step and pays for it.
+            raise ValueError(
+                f"tul.code_grade with code_target_weight=0 and code_grade_every="
+                f"{self.code_grade_every}: the graded term would be the ONLY loss and it is "
+                f"computed on one step in {self.code_grade_every}; the other steps have an "
+                f"exactly-zero loss. Set code_grade_every=1, or keep code_target_weight>0.")
         if self.code_grade_tokens < 2:
             raise ValueError(
                 f"tul.code_grade_tokens must be >= 2, got {self.code_grade_tokens}: a "
