@@ -2315,6 +2315,22 @@ def main(cfg: DictConfig) -> None:
         full_config_dict["dataset_manifests"] = _manifests
         print(f"  [data] dataset manifests hashed for {len(_manifests)} sources "
               f"→ wandb config", flush=True)
+    # A resume path that does not exist is a HARD failure, never a silent fresh start.
+    # Every `if resume_path and os.path.isfile(resume_path):` below skips its whole block
+    # when the file is missing, so without this check the run trains from step 0 with the
+    # caller believing it continued. Measured 2026-09-18 on `tul-code-target-ce-uf`: the
+    # queue line named a step_20000.pt that was never written (that arm was stopped at
+    # 15000), the trainer started at step 0, and `training.train_only` then froze 151.6M
+    # parameters at their RANDOM initialisation — the prelude and the tied embedding table
+    # among them — so the model could not learn at all. It read loss 10.10 at step 1000
+    # against ln(49152) = 10.80 and would have held the GPU for 4.5 more hours. The run
+    # log's only tell was the ABSENCE of the "Resumed model+scaler+RNG" line.
+    if resume_path and not os.path.isfile(resume_path):
+        raise FileNotFoundError(
+            f"training.resume={resume_path!r} does not exist. Asking to resume and then "
+            f"starting from step 0 is never what the caller meant, and with "
+            f"training.train_only set it silently freezes a RANDOM front. Point at a "
+            f"checkpoint that exists, or drop training.resume to start fresh on purpose.")
     # Resume the same wandb run (continuous metric history) when resuming a checkpoint:
     # the prior run wrote its id to a wandb_id.txt sidecar next to its checkpoints.
     _wandb_resume_id = None
