@@ -62,6 +62,91 @@ instead of looping with truncated BPTT. The mode most relevant to MORPH's Parcae
 why it was built and measured. It lost to plain next-token training on every axis that mattered;
 the code is off this branch. Verdict: `[.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md](../.agents/notes/rejected/feature/2026-08-21-diffusionblocks-verdict.md)`.
 
+### Latent exploration — nine papers on whether a latent loop explores (2026-09-18)
+
+Pulled to answer one question: MORPH's TUL slot loop earns nothing from depth (K1-K6 about
++0.002 nats over twelve arms, against the plain looped model's 0.033), and the working
+explanation is that every slot target has a one-step optimum. The survey lays the nine papers
+on a 2x2 of {one stream, K streams} x {deterministic, stochastic}, fills every cell with what
+MORPH already ran, and proposes the one empty cell as an arm with a falsifying prediction:
+[references/looping-depth/latent-exploration/2026-09-18-latent-exploration-survey.md](references/looping-depth/latent-exploration/2026-09-18-latent-exploration-survey.md).
+
+**Reasoning by Superposition** — Zhu, Hao, Hu, Jiao, Russell, Tian, NeurIPS 2025.
+[Note](references/looping-depth/latent-exploration/reasoning-by-superposition/reasoning-by-superposition.md).
+A two-layer transformer with D continuous steps solves D-diameter graph reachability; thought c
+is the normalised superposition of every vertex reachable within c steps, and layer 2 expands
+that frontier once per pass. **Relevance:** the only positive existence proof for a latent
+holding several candidates, at d_model 768, and the theorem form of the hop-distance prediction.
+MORPH does not use it: its target has no one-step optimum and ours does.
+
+**The Illusion of Superposition?** — Rizvi-Martel, Rabusseau, Mosbach, COLM 2026
+([arXiv 2604.06374](https://arxiv.org/abs/2604.06374)).
+[Note](references/looping-depth/latent-exploration/illusion-of-superposition/illusion-of-superposition.md).
+Superposition collapses in training-free and fine-tuned regimes and appears only from scratch,
+where WIDTH and not depth decides: at matched 15M parameters, 2L-768d scores 96.0 with latents
+and 30.9 without, while 12L-320d scores 72.4 and 70.0. **Relevance:** the negative counterpart,
+and the reason MORPH's Thought Register collapse (cells rank 1.24 of 4, cosine 0.94) is a
+replication rather than a local defect.
+
+**LLMs are Single-threaded Reasoners** — Wu et al. (Baidu), ICLR 2026
+([arXiv 2508.03440](https://arxiv.org/abs/2508.03440)).
+[Note](references/looping-depth/latent-exploration/single-threaded-reasoners/single-threaded-reasoners.md).
+A soft token's prediction matches its top-1 token's and not its second's; the forward pass prunes
+the mixture within two or three layers. Gumbel-Softmax at tau 0.5 is the only fix that beats
+sampled token CoT. **Relevance:** the mechanism of collapse, and the argument for a temperature
+on MORPH's VQ code assignment (`tul.vq_codes`), which does not exist today.
+
+**Parallel Latent Reasoning (PLR)** — Tang, Chen, Chen, Wu, Jiang, Zheng
+([arXiv 2601.03153](https://arxiv.org/abs/2601.03153)).
+[Note](references/looping-depth/latent-exploration/parallel-latent-reasoning/parallel-latent-reasoning.md).
+M learned trigger tokens added to one entry state, pairwise KL repulsion across all streams and
+steps, and a softmax gate mixing the streams. Its Theorem 4.4 gives stream diversity as
+`D(T) = L^(2T) D(0)` under an L-Lipschitz shared map. **Relevance:** the empty cell already
+built, the closed form for why the register collapsed, and the sobering oracle-ceiling result
+that width closed the gap to the ceiling without raising it.
+
+**Parallel Test-Time Scaling for Latent Reasoning Models** — You, Li, Liu, Wang, Nie, Li,
+ACL 2026 Main ([arXiv 2510.07745](https://arxiv.org/abs/2510.07745)).
+[Note](references/looping-depth/latent-exploration/parallel-test-time-scaling/parallel-test-time-scaling.md).
+MC-dropout or additive Gaussian noise on an already trained latent model, aggregated by a
+LatentRM trained with a step-wise contrastive loss. **Relevance:** the cheapest probe available
+to MORPH, because coverage@N is oracle-over-stream and it needs no retraining; their untrained
+scalar head scoring below majority voting also says a selector must be learned.
+
+**GRAM — Generative Recursive Reasoning** — Baek, Jo, Kim, Ren, Bengio, Ahn
+([arXiv 2605.19376](https://arxiv.org/abs/2605.19376)).
+[Note](references/looping-depth/latent-exploration/gram/gram.md).
+A learned state-dependent Gaussian added to an HRM/TRM-style recursion, trained by amortized
+variational inference with a target-conditioned posterior. Width beats depth on their tasks
+(N = 20 at 16 iterations beats every deterministic baseline at 320). **Relevance:** the fullest
+version of the empty cell; its ablation says randomness alone is not the mechanism
+(TRM + random init 78.53 against GRAM 93.96) and a deterministic target-conditioned map scores
+0.00.
+
+**Latent Thought Credit (LTC)** — Zhao et al. (Nankai)
+([arXiv 2608.01593](https://arxiv.org/abs/2608.01593)).
+[Note](references/looping-depth/latent-exploration/latent-thought-credit/latent-thought-credit.md).
+K latent thoughts, M answers each from a frozen post-thought context, per-thought advantage from
+the M-answer mean. **Relevance:** its Table 4 measures the K-stream collapse in utility units
+(between-thought variance 0.0244 to 0.0043 while within-thought variance rises), and its budget
+split says answer replication beats more thoughts at a fixed budget.
+
+**Latent Thought Flow (LTF)** — Zou, Huang, Li, Zhou
+([arXiv 2606.16222](https://arxiv.org/abs/2606.16222)).
+[Note](references/looping-depth/latent-exploration/latent-thought-flow/latent-thought-flow.md).
+A continuous GFlowNet over variable-length latent trajectories, matching a reward proportional to
+accuracy times exp(-cost). **Relevance:** the sampler was free to choose depth and chose 1.88 to
+1.95 steps on average; that is the one-step optimum reached by a completely different route.
+
+**LSRL** — Hangliang Ren, Findings of EMNLP 2025, pp. 12534-12545
+([ACL Anthology](https://aclanthology.org/2025.findings-emnlp.669/); not on arXiv).
+[Note](references/looping-depth/latent-exploration/lsrl/lsrl.md).
+Decode every recurrent depth of Huginn-3.5B to text, grade each snapshot with GPT-4.1-nano, and
+run GRPO on a discounted per-depth process reward. GSM8K 13.49 to 17.76 at r = 8.
+**Relevance:** the one number that matters is the shallow ablation, where the whole recipe is
+flat at r = 4 (8.36 to 8.59); and the decode-the-cell-and-read-it instrument, which MORPH has
+never run on a slot cell.
+
 ---
 
 

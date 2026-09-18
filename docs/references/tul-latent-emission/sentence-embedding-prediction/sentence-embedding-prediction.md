@@ -466,3 +466,38 @@ Figure 5: Evaluation Prompt used to GPT-4o for judging intermediate reasoning st
 ![Image 7: Refer to caption](https://arxiv.org/html/2505.22202v2/x3.png)
 
 Figure 6: Example instances from each dataset.
+
+---
+
+## 2026-09-18 exploration reading
+
+Appended for the latent-exploration survey,
+[`../../looping-depth/latent-exploration/2026-09-18-latent-exploration-survey.md`](../../looping-depth/latent-exploration/2026-09-18-latent-exploration-survey.md).
+
+This paper predicts the NEXT SENTENCE's embedding from the current state. That is the
+shape of every MORPH slot target that has read flat: M-next, the span decoder, the LCTUL
+code target, the per-pass ladder, the progressive variant and the graded target. Each is a
+conditional mean of a future quantity given the past, and a conditional mean has a
+ONE-STEP OPTIMUM: nothing in the objective asks pass 2 to differ from pass 1.
+
+The batch read on 2026-09-18 puts two numbers beside that.
+
+- Latent Thought Flow (Zou, Huang, Li, Zhou, arXiv 2606.16222) trains a GFlowNet sampler
+  over variable-length latent trajectories, so the DEPTH itself is learned under a reward
+  that pays for accuracy and charges for steps. The learned average depth is 1.88 to 1.95
+  steps, and on two of three datasets 1.17 to 1.24. A sampler free to choose depth chose
+  roughly one step.
+  [Note](../../looping-depth/latent-exploration/latent-thought-flow/latent-thought-flow.md).
+- Reasoning by Superposition (Zhu et al., NeurIPS 2025) is the contrast. Its per-pass
+  target at pass i is the hop-i node of a graph, which cannot be produced without i
+  frontier expansions over the edge list. Depth is earned because the target has no
+  one-step optimum.
+  [Note](../../looping-depth/latent-exploration/reasoning-by-superposition/reasoning-by-superposition.md).
+
+**The honest limit.** Neither paper tests the conditional-mean hypothesis directly. The
+survey's "what the literature does not settle" section states this: no published result
+isolates target shape as the cause of a flat depth curve, and the evidence above is
+consistent with the hypothesis without establishing it.
+
+Standing rule that applies here: a flat loop on a corpus is not a verdict about that
+corpus (`loop-flatness-is-not-a-task-verdict`, `never-argue-nlp-does-not-need-loop-depth`).

@@ -360,3 +360,43 @@ Table 5: Experimental results of applying Coconut to larger Llama models. We rep
 We observe consistent performance gains across both Llama 3.2-3B and Llama 3-8B models compared to the no-CoT baseline, though these improvements are not as pronounced as those previously demonstrated with GPT-2. One possible reason is that larger models have already undergone extensive language-focused pre-training, making the transition to latent reasoning more challenging.
 
 We emphasize that the primary goal of this paper is to highlight the promising attributes of latent-space reasoning and to initiate exploration in this new direction. Universally surpassing language-based CoT likely requires significant research efforts dedicated to latent space pre-training. We are encouraged by recent progress in this area (Geiping et al., [2025](https://arxiv.org/html/2412.06769v3#bib.bib14); Barrault et al., [2024](https://arxiv.org/html/2412.06769v3#bib.bib3); Gladstone et al., [2025](https://arxiv.org/html/2412.06769v3#bib.bib16)). While these recent models provide scalable methods for latent representation learning, the latent spaces have not yet been explicitly optimized for reasoning. Integrating these recent advancements with Coconut presents an exciting and promising avenue for future research.
+
+---
+
+## 2026-09-18 exploration reading
+
+Appended for the latent-exploration survey,
+[`../../looping-depth/latent-exploration/2026-09-18-latent-exploration-survey.md`](../../looping-depth/latent-exploration/2026-09-18-latent-exploration-survey.md).
+Coconut is the object three of the nine papers in that batch analyse, so this section
+records what they found rather than restating Coconut itself.
+
+**Coconut is the positive result in one paper and the negative result in another, and the
+difference is the training regime.**
+
+- Zhu, Hao, Hu, Jiao, Russell and Tian (NeurIPS 2025) PROVE that Coconut's rule, feeding
+  the transformer's output embedding back as the next input, lets a two-layer transformer
+  solve D-diameter graph reachability in D steps, with continuous thought c equal to the
+  normalised superposition of every vertex reachable within c steps. They then train a
+  two-layer, d_model 768 model from scratch and find that structure in its attention and
+  inner products.
+  [Note](../../looping-depth/latent-exploration/reasoning-by-superposition/reasoning-by-superposition.md).
+- Rizvi-Martel, Rabusseau and Mosbach (COLM 2026) FINE-TUNE Coconut on ProsQA and find the
+  latents are not used: deleting them costs at most 1.0 point across GPT-2 and three
+  SmolLM2 sizes, and entity probing shows the final answer dominating from step 0, so the
+  model solves the task in one forward pass and copies the answer through the latent
+  positions. The same analysis run from scratch shows superposition, and width rather than
+  depth decides whether it appears.
+  [Note](../../looping-depth/latent-exploration/illusion-of-superposition/illusion-of-superposition.md).
+- You et al. (ACL 2026) use Coconut as a backbone for test-time parallel scaling.
+  Perturbing it with MC-dropout raises coverage monotonically to N = 64, and at N = 64
+  Coconut reaches nearly the same coverage as CODI even though CODI is clearly better at
+  N = 1.
+  [Note](../../looping-depth/latent-exploration/parallel-test-time-scaling/parallel-test-time-scaling.md).
+
+**What this changes for MORPH.** The fine-tuned Coconut "delete the latent, lose 1.0 point"
+result is the same instrument as our zero-worth probe, which read -4.6413 nats for the
+frozen coda. The proven positive result is at the same width we run (768) and the same
+from-scratch regime we run, so neither width nor from-scratch training separates MORPH's
+flat slot loop from their working one. What differs is the target: their thought at pass c
+must contain a strictly larger vertex set than at pass c-1, and every MORPH slot target so
+far is the conditional mean of a future quantity, reachable in one pass.
