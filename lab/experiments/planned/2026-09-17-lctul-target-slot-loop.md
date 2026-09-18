@@ -188,6 +188,60 @@ from the aborted first draw, never a measurement; it is withdrawn everywhere.
 
 ## Results
 
+### Arm A `tul-code-target` (detached cell), 20k steps, wandb `edgwqcr1`, commit d8e93d2
+
+Ran 14:37 → 17:33 on the 5090, 14,393 tok/s, two isolated divergence-guard strikes (steps
+5360 and 12300, neither consecutive), no abort. Artifacts in
+`../results/2026-09-17-lctul-target/`. Every OWN / SHUF / ZERO reading below is from the
+RE-RUN probe on the open-slot fix (14f004d); the pre-fix probe is void.
+
+| Prediction | Reading | Holds |
+| --- | --- | --- |
+| P-T1 `val/code_target_cos` ≥ 0.20 at 20k | 0.147 at the 20k val, 0.160 on the last 500 logged train steps (from 0.004 at init, 0.144 by step 1500) | no |
+| P-T2 `cos_l{T}` − `cos_l0` ≥ 0.05 | +0.1018 (l0 0.0604, l6 0.1622) | yes |
+| P-T3 OWN − ZERO > 0, CI clear | +0.0054 [−0.0167, +0.0283] | no |
+| P-T4 OWN − SHUF > 0, CI clear | +0.0230 [+0.0051, +0.0421] | yes |
+| P-T5 CE at depth 6 − depth 1 ≤ −0.02, CI clear | −0.0320 [−0.0412, −0.0235]; depth 16 −0.0959 | yes |
+| P-T6 OWN within 0.03 of the strict ruler, paired | −0.0570 [−0.0864, −0.0288] (arm A 0.1303, ruler 0.1873; the plain model is +0.0425 above the ruler) | no |
+| P-T7 arm B's OWN − ZERO within 0.02 of arm A's | arm B stopped at step 15000 (checkpoint kept) to free the GPU; not scored | pending |
+| P-T8 rate ≥ 0.9× the strict ruler | 14,393 vs 11,657 tok/s = 1.23× | yes |
+
+Conditions at 20k, 120 cuts: OWN 0.1303, SHUF 0.1073, ZERO 0.1249, ORACLE 0.5645.
+
+### What the four instruments say together
+
+1. **The loop regresses, in one pass.** Exit cosine 0.004 → 0.144 by step 1500 and 0.160 at
+   20k. P-T2 holds on its letter and the prediction was badly specified: `l0` is the ENTRY
+   state, so `l6 − l0` spans the first pass and measures whether the loop does anything at
+   all. The question P-T2 meant to ask is `l6 − l1`, which reads **+0.0052**.
+2. **The cell carries a real, small, slot-specific signal.** OWN − SHUF is +0.023 with the
+   interval clear of zero, and the worth profile reads +0.050 nats for the same contrast.
+   This is the FIRST positive own-versus-foreign reading in the LCTUL family: the 24-bit plan
+   arm read +0.008 [−0.006, +0.023], the LaDiR chain −0.006 [−0.024, +0.011], the flow arm the
+   same. A regressed latent is not a sampled one, exactly as Wolfe said on 2026-09-17.
+3. **It is not worth having.** OWN − ZERO is +0.005 with the interval across zero at
+   generation, and the worth profile says zeroing the cell makes the frozen coda's token CE
+   **4.608 nats better**. Against the ruler the arm is 0.057 worse, paired, and the plain
+   model is 0.043 better than the ruler. Order: plain > ruler > arm A ≈ no cell.
+4. **The depth curve is not depth earning.** P-T5 holds and the mechanism does not survive
+   the depth-resolved probe: the cell's cosine to its own code is 0.150 / 0.154 / 0.152 at
+   depths 1 / 6 / 16 and its rank is 17.5 / 17.0 / 17.5, while the passes move it 0.19 (depth
+   6) to 0.29 (depth 16) of its norm in directions whose cosine to the target code is +0.004
+   to +0.017, at or below the 0.031 a random direction in 1024 dimensions scores. Fifteen
+   passes move a third of the vector and change its relation to the target by four
+   thousandths.
+
+### The reader is the open confound
+
+Both CE instruments run through a coda frozen at the VAE stage that would rather have no
+cell at all (−4.608 nats). The generation instrument agrees: OWN beats SHUF but not ZERO.
+So the measured "the cell is harmful" is a statement about THIS reader, and the depth
+curve's 0.096 nats is 2 % of a self-inflicted wound. Wolfe, 2026-09-17: "have we tried
+using a fresh random coda after the core has learned?" — no arm ever has. The queued
+unfreeze continuations ask the same question from a strong prior; a coda re-initialised and
+trained alone on the frozen loop's cells would measure what the cell is worth to a reader
+with no prior against it, against the ruler's +0.186 nats and the true code's 1.3.
+
 (to fill)
 
 ## Verdict

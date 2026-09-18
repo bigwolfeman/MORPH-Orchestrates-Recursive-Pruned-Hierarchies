@@ -1,0 +1,960 @@
+=== cut 1 (after span 3, 31 true tokens)
+CONTEXT ...'watched doctors and nurses walk away from a field hospital Friday night after a Belgian medical team evacuated the area, saying it was concerned about security.'
+TRUE    '\n\nThe decision left CNN Chief Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.'
+OWN      '\n\nPolice police police police police prison police killed arrest police and police killed police and killed police.\n'
+SHUF     '\nWe expected they lose vote."."\n\nPolice police police police police police police ch police said police arrest pol'
+ZERO     '\n\nThe police officers killed Soviet Arab soldiers in Afghanistan and killed the Soviet Arab militia'
+ORACLE   '\nThe decision left his website Chief Violent Gu Gu Gupta as aimed as the doctor once the seven moved through the home through the hospital, and'
+
+=== cut 2 (after span 4, 10 true tokens)
+CONTEXT ...'t of the supplies with them.\n\n"All the doctors, all the nurses are gone," she said. "They are expected to be back tomorrow. They had no plan on leaving tonight.'
+TRUE    ' It was an order that came suddenly."\n'
+OWN      '\nWe they expected people to vote."."\n\nPol'
+SHUF     '\n," Trump president Trump president Rep.'
+ZERO     '\nPolice said pol\n\nPolice police pol'
+ORACLE   '\n an an order that came suddenly."\n\nPol'
+
+=== cut 3 (after span 5, 32 true tokens)
+CONTEXT ...'ulated Clinton and pledged to continue a primary fight that he said he is confident he can still win. He did not mention Missouri or the other contests by name.'
+TRUE    '\n\n"With more than half the delegates yet to be chosen and a calendar that favors us in the weeks and months to come, we remain conf'
+OWN      '\n\nTrump presumpt Trump president Trump refused to presumptive Trump President Obama to vote Trump complaining. Trump'
+SHUF     '\n House House election. TrumpThe World State Academy\n\n World State University\n\n World State University State\n\n World State State State\n\n World State'
+ZERO     '\n\nTheir ties to the Russian government, and the Dem t t t t ties to the Soviet Union, said the Soviet government'
+ORACLE   '\n\n"With more than half the delegates yet offered permission to create a student responsible for violating those efforts and taken to President Barack Obama\'s,"'
+
+=== cut 4 (after span 6, 23 true tokens)
+CONTEXT ...' when her husband was in the White House.\n\nWith the lesson of Michigan in mind, her campaign moved to retool her stance on trade by strengthening her opposition'
+TRUE    ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in her jobs plan.'
+OWN      ' to his House election.\n\nMr Trump President Trump spoke to Trump President Obama Sunday'
+SHUF     ' to. Trump. S. Trump Trump President Trump spoke to Trump President Obama Tr'
+ZERO     ' to the I elections.\n\nMr Trump President Trump spoke to Trump President Trump on'
+ORACLE   ' to the Trans-Pacific Partnership and emphasizing support for manufacturing in dangerous place jobs plan.\n'
+
+=== cut 5 (after span 7, 14 true tokens)
+CONTEXT ..."her hand, now that's a different story.\n\nDo you remember when Obama traipsed around the country and desperately pleaded with Americans to vote for Hillary Clint"
+TRUE    'on because his agenda and his legacy were on the ballot?'
+OWN      'on. But.And? And? And?? And????'
+SHUF     'on decisions matters matters matters —? people people that people?? And??'
+ZERO     'on?? Are us???? And??????'
+ORACLE   'on because his agenda and his legacy on the ballot?\numpump'
+
+=== cut 6 (after span 8, 32 true tokens)
+CONTEXT ...'illary are trying to take away (your) guns\' or \'they disrespect you.\'"\n\nI repeat: This guy is remarkably, incorrigibly consistent. He has made no policy errors;'
+TRUE    " his message just isn't getting through, partly because the conservative media are lying about it and partly because people are just too darned"
+OWN      ' he decisions matters matters matters — that matters matters —\n matters matters matters.\n matters matters matters matters matters matters matters matters matters. Tr matters matters matters matters matters matters matters'
+SHUF     ' he heavy heavy lower heavy burning heavy burning lower heavy burning lower burning heavy burning burning blood seals.\nThese threatened threatened threatened'
+ZERO     " he's in the Russian and Dem terrorist group, and we are not going to be able to vote against the Democrats and the Democrats."
+ORACLE   " he notice notice he'd getting closer, death, conservative conservative political organizations and faith just because part of justice is part of the president"
+
+=== cut 7 (after span 3, 32 true tokens)
+CONTEXT ...' the lights dimmed while the sound of a motor revving filled the venue. Fans energetically waved their light-up flower accessories in anticipation and stood up.'
+TRUE    ' Almost immediately, the instrumentals to “BANG BANG BANG” blared through the speakers, and the 5 members walked out of'
+OWN      '\n heavy lower heat heavy heat lower burn heavy heat lower burn surface lower heat lower burn heat fuel lower heat.\n\n lower heat water heat lower heat lower heat lower heat'
+SHUF     '\n, true unlikely.\n lower dry flat heat lower dry heat lower.\n lower dry lower heat lower dry lower heat surface heat lower surface heat lower surface heat lower heat'
+ZERO     '\n\nThe vehicle closed the east east east east south east south east south east south east south east south east south east south east south east east south east south east south'
+ORACLE   '\n\n immediately continued the instrumentals to BBB B B B grows through the open door, leaving the walks of the fly, and ended the heat wheel'
+
+=== cut 8 (after span 4, 20 true tokens)
+CONTEXT ...' real idea that each member would undergo required conscription loomed closer. But it didn’t matter — if this was BIGBANG’s last world tour, it ended perfectly.'
+TRUE    ' If there is another years from now, though, I can’t wait to be there too.'
+OWN      ' I sense it true.\n sense sense sense sense.? sense sense sense sense sense sense. God sense sense'
+SHUF     ' I said he had determined judiciary laws by judiciary. I she that she that she claims that'
+ZERO     ' I’m not really a human.t’t sense.’’’’’ah.’’'
+ORACLE   ' I there is another years from now, though, I can’t wait to be too too too. I'
+
+=== cut 9 (after span 5, 30 true tokens)
+CONTEXT ...'ne of voice that suggested he was very angry and had little interest in debate,” Clements said. Brazau had argued that he did not intend to promote hate speech;'
+TRUE    ' instead he wanted to stimulate debate about censorship, “blasphemy laws” and Sharia law, Clements said.'
+OWN      ' the court was repeatedly judged by judiciary assault laws.\n\nChief Minister C judiciary Minister Assange said Foreign Minister'
+SHUF     ' the three years ahead.\n\nChief Minister Clinton Foreign Minister Congreg Minister Clinton Foreign Minister Creg Abbot'
+ZERO     ' the courtroom told the court.\n\nMs judged by judiciary judges by laws by judiciary General Assange, by judicial Aff'
+ORACLE   ' the he wanted to stimulate debate about criminal warrant, “crime groups” and lawmakers, which Clinton’s office'
+
+=== cut 10 (after span 6, 32 true tokens)
+CONTEXT ...'customer Jill Scollard.\n\nWhile there is no official list of businesses participating in this protest locally, we drove around Seattle tonight and found a few sh'
+TRUE    'ops, including one on Capital Hill and one in White Center, with notices on the door saying they were shut down in support of “A day without'
+OWN      'ots those years ahead. And people’s people will stay past teams in last year and coming past last year and coming past year than we have last year,” Sanders'
+SHUF     'ots New New Democrat New Chocr.”\n\n Republicans fight past Trump Sanders past Trump’s Republicans to vote Democrats.” But'
+ZERO     'ots that we’re going to get our country going to get our country in the country and we’re going to get our country in the country.”\n\n Republic'
+ORACLE   'ots, including one on Cap Capitol Hill in White House, James Paul connected the telling reporters when they put him in vote for “very good health.”'
+
+=== cut 11 (after span 7, 7 true tokens)
+CONTEXT ...'in Seiki Co., Ltd. EV Business Planning Dept. (preliminary organization) (project general manager)\n\n(effective December 1, 2016)North Korean leader Kim Jong Un.'
+TRUE    ' AP Images / Business Insider\n'
+OWN      '\n New State International New Democratic Foreign'
+SHUF     '\nThe Sea E Sea Gal E'
+ZERO     '\nNANA\nNew National State Army'
+ORACLE   '\n Images / Business Insider\nNew National'
+
+=== cut 12 (after span 8, 28 true tokens)
+CONTEXT ...'tracker from Marcus Moto Design of Sweden.\n\nIt has no seat, it’s painted in a vivid Arctic White, and it’s the custom equivalent of an ice-cold shot of Aquavit.'
+TRUE    '\n\nThe builder is Marcus Carlsson, a 41-year-old engineer who lives just outside Stockholm.'
+OWN      '\n\n nostost né nosté que nost que i nost que Eost i que nosté que que nosté'
+SHUF     '\n\n square cup dry cup square cup dry cup cup dry sh cup dry cup dry cup cup dry cup dry cup cup dry shade cup dry cup'
+ZERO     '\nichey P! Se\n nost\n\nostost\n\nostost\n\nostost\n\nostost\n\nostostost'
+ORACLE   '\n\nThe Master Car Mar Mar Carlsson shot a 4-4-2 walk who she visited outside men Columbine Pacific.'
+
+=== cut 13 (after span 3, 32 true tokens)
+CONTEXT ...'\nYes, this is a barely street legal racer, right down to the battery-powered lights. It’s perfect for short stints on the curvy village roads outside Stockholm.'
+TRUE    '\n\nMarcus is a MotoGP fan, and if you look closely, you’ll spot a couple of HRC logos on the bike'
+OWN      '\n cup dry cup cup dry cup cup dry cup cup dry cup dry cup cup dry cup dry cup cup dry cup dry cup dry cup cup dry cup dry cup dry cup'
+SHUF     '\n2. 2. cupp cup  cup cup  cup dry cup cup dry cup dry cup cup dry cup dry cup cup dry cup dry cup dry cup dry'
+ZERO     '\n cup cup dry dry cup dry dry dry dry dry dry dry dry dry dry dry dry dry dry dry dry dry dry dry dry dry dry dry dry dry dry cup dry'
+ORACLE   '\n\nMarc is a Moto fan, and artist, look up, touching room pick a couple of Firo Firo on the Fronze cup cup'
+
+=== cut 14 (after span 4, 4 true tokens)
+CONTEXT ...'see the tournaments regulations here.\n\n6 qualifying groups (4 teams per group) will determine 12 teams (2 best teams per group) and thus they will form the Semi'
+TRUE    ' Pro Division.'
+OWN      ' 2.pm.\n'
+SHUF     '  low goods will low low'
+ZERO     ' 2016.'
+ORACLE   '  Division Div.\n'
+
+=== cut 15 (after span 5, 16 true tokens)
+CONTEXT ...'t tap to score new characters, game modes, or other perks.\n\nOne amiibo may work with multiple games. You might get new outfits, power-ups, or other fun bonuses.'
+TRUE    '\n\nLink is the main character in The Legend of Zelda games.'
+OWN      '\n low low apps low storage apps low goods apps.\n() RAM apps() storage apps'
+SHUF     '\n report Def Information Commission: Defmigration\n\n web install() web install & web'
+ZERO     '\nCreate your low()\n\n()()()()()()() {()() {'
+ORACLE   '\nLink component main main main your inbox Zelda games games.\n Android Android'
+
+=== cut 16 (after span 6, 17 true tokens)
+CONTEXT ...'s of the United States, shall be removed from Office on Impeachment for, and Conviction of, Treason, Bribery, or other high Crimes and Misdemeanors.” Ad Policy\n'
+TRUE    '\nThe attorney general of the United States is a civil officer.'
+OWN      '\n report: Defmigration Secretary of Defense Secretary of Defense Secretary of State'
+SHUF     '\nenate.” Defump: Defump administration: Defence Defence: President Obama'
+ZERO     '\nSource: Defense Secretary of Defense Secretary of Defense Secretary of State'
+ORACLE   '\n attorney general general of the United States civil civil officer. “The'
+
+=== cut 17 (after span 7, 23 true tokens)
+CONTEXT ...'secutor to handle this matter whose work must complement a thorough investigation by a bipartisan commission.” Ready to Fight Back? Sign Up For Take Action Now\n'
+TRUE    '\nEven Republicans who have been slow to hold the Trump administration to account were calling for recusal.'
+OWN      '\nDis. Trump: Democratic pres\n\nenate Democrats president Trump president Democrats'
+SHUF     '\n\nThe International Arab International U.S. National Security Adviser Public Affairs Adviser Foreign Foreign Min'
+ZERO     '\n\nThe Democratic Party will vote every day to vote on the Democrats and take care of Democrats'
+ORACLE   '\n\n Republicans who have been slow to hold the Trump administration to account for calling for intervention allies for Pres'
+
+=== cut 18 (after span 8, 32 true tokens)
+CONTEXT ...'rs of the virus demanding ransoms of $300 to $600.\n\nThe Russian central bank said on Friday the virus had also compromised some Russian banks in isolated cases.'
+TRUE    '\n\nThat the infected post office terminals ran on Windows XP - which Microsoft stopped supporting in 2014 - points to the widespread use'
+OWN      '\n\nThe International Arab International Arab International Ari International Arab International M Initiatives Armed Services International Mi al-Qaeda Arab and Ar'
+SHUF     '\nillion million $2.8 millionillionillion increase $2 $ $2.5illionillion $2.5illionillionillion increase to $2 $2.'
+ZERO     '\n\n"The Iraqi al-Qaeda and Iraqis have been detained by the Iraq and Iraq and Iraqk'
+ORACLE   '\n\nThat infected troops posttown stations ran home on Windows Today Technology and said they were responsible for immigrants to win widespread state-level investural'
+
+=== cut 19 (after span 3, 15 true tokens)
+CONTEXT ...'\nData compiled by the BSA Software Alliance trade group shows 64 percent of software products in Russia were pirated in 2015 - a black market industry worth $1.'
+TRUE    '3 billion - compared to a global average of 39 percent.'
+OWN      '5 millionillion $2..illionillion $illion $2..illionillion'
+SHUF     '5 RAM USB RAM USB USB USB width USB RAM USB() width { USB width()'
+ZERO     '52.\n\n International International Health Service International International Health Service International International\n\n'
+ORACLE   '5 billion - compared to a global average average 39 percent.\n%'
+
+=== cut 20 (after span 4, 11 true tokens)
+CONTEXT ...'e is randomized to maintain fairness. Players also can easily DISABLE cheating mode to practice proper Blackjack gambling strategy in a simulation quality mode.'
+TRUE    '\n\nSteam Notes: Hi fellow Steamers!!'
+OWN      '\n() RAM USB() USB USB() width USB() load()'
+SHUF     '\n\n% increase costs $ price increase $ price costs $ $'
+ZERO     '\n\n RAM your size. your() RAM() width() width'
+ORACLE   '\n\n Notes Notes: Sifth your Steam charts!!\n Start'
+
+=== cut 21 (after span 5, 32 true tokens)
+CONTEXT ...' a property after the first £1m.\n\nThe Lib Dem idea is being fed into the debate surrounding how to bring down the 50p rate for those earning more than £150,000.'
+TRUE    ' A review into the rate is expected to confirm suspicions it does not bring in much revenue but serves to deter international business from locating in the'
+OWN      '\n\nThe tax costs increase tax increase increased tax increase tax rate increased income tax increase increased tax costs increased minimum minimum per tax by tax costs increased significantly higher tax.%'
+SHUF     '\n.Police.\n27\n\n202\n\n2012\n\n2012\n\n2012\n\n2'
+ZERO     '\n\nThe increase in tax rates increase in tax.\n% increase tax rate income tax increase tax rate tax increase tax rates increase tax increase tax costs tax increase tax rate'
+ORACLE   '\n\n review the rate expected expected to withdraw exemptions recommending effect does not affect reforms and revenue to medical regimes, which analyses the economy increase'
+
+=== cut 22 (after span 6, 25 true tokens)
+CONTEXT ...' a person of interest in the shooting Monday morning.\n\nTwenty minutes earlier, a 25-year-old man was outside in Austin’s 4800 block of West Monroe about 9:40 p.'
+TRUE    'm. when a gray car drove by and someone inside fired shots, striking the man in the right arm.'
+OWN      'm. the police arrest police.\n\nPolice police killed police killed police killed police injured'
+SHUF     'm of the state.\n\nThe police police killed the police station killed after police killed the police killed inj'
+ZERO     'm police police police shot.\n\nPolice police killed police killed police killed police shot police'
+ORACLE   'm. when a car car drove by father and leaving inside him were striking in the capital outside the right floor outside the Al'
+
+=== cut 23 (after span 7, 7 true tokens)
+CONTEXT ...'s ISS Division. Even if the ISS partners do not make commitments to support it beyond 2024, the transition from space station to another platform should be grad'
+TRUE    'ual, Gatens added.'
+OWN      '. to peak.\n\nThe sector exports'
+SHUF     '. Other OS.\n\nThe transaction sector'
+ZERO     '. International sector sector sector sector, and sector'
+ORACLE   '. GDPatens added.\n\n'
+
+=== cut 24 (after span 8, 21 true tokens)
+CONTEXT ...'o. All YouTube videos have been checked for the date and potential other, earlier uploads using Amnesty International’s YouTube Data Viewer, and images Google’s'
+TRUE    ' reverse image search has been used to see if the photos were not posted before the date of the attack.'
+OWN      ' data on predictions.\n International Analysis Updated Technology Image predictions Technology Infrastructure Technology Image: Technology Analysis Image: Technology Technology Image'
+SHUF     ' data frequency north cross distance north cross north north cross.\n collaboration Date Updated collaboration Date Updated collaboration Date Updated\n\n'
+ZERO     ' data"> && &&"> &&"> && && && && parameters obtained by obtained by obtained by obtained by obtained by obtained'
+ORACLE   ' data image search has been used to see if the AP even before before date before the attack of the attack.\n'
+
+=== cut 25 (after span 3, 20 true tokens)
+CONTEXT ...'and screengrabs from videos showing that damage.\n\nAll footage taken outside of the building can be geolocated to the immediate surrounding of the Carlton Hotel.'
+TRUE    ' The map below shows all locations from where photos or videos of the ravaged hotel were taken.'
+OWN      '\n north bol north north north north north north north north north east north north north north north north north north north'
+SHUF     '\n World A Star\n\n Series Mid north Mid north Mid north north north north north Send north north north'
+ZERO     '\n\n north north north south north south south south south south south south south south south south south south south south'
+ORACLE   '\n map below shows all locations from photos and photos of the ravaged cock was taken after being killed'
+
+=== cut 26 (after span 4, 16 true tokens)
+CONTEXT ...'will be later in the day."\n\nThe weather agency said it will issue snowfall warnings should estimates change and more than 15 cm is expected in a 12-hour period.'
+TRUE    '“It is something I have got used to since 9/11.'
+OWN      '. World Census November\n\nOct 2\n\nOct 2\n\nOct'
+SHUF     '. I said she looked I just told him.\nI shot me after me looked me'
+ZERO     '.\n\nThe sales rate last increased sales rate increased prices rate costs $25 $'
+ORACLE   ".It is something I've got used since August 9/11.\nI"
+
+=== cut 27 (after span 5, 10 true tokens)
+CONTEXT ..." police, as he said they ought to know that Muslim women are being harassed. I was just shocked because it wasn't the expected type that you see on EDL marches."
+TRUE    ' It was ‘educated’ people.”\n'
+OWN      '\nI I feel I looked me I thought me when I'
+SHUF     '\n \u0382� �  � �   �  �'
+ZERO     '\nAnd I me…\nAnd I IAnd I me'
+ORACLE   '\n ‘ ‘educate people’.”\n\n She'
+
+=== cut 28 (after span 6, 28 true tokens)
+CONTEXT ...'8 from Home Depot. Model #: HD14Q406) 24″ PVC pipe, 1.5″ diameter (~$2) 1.5″ PVC coupler (~$1) 1.5″ PVC cap (~$1) 48″ Fluorescent bulb shield (~$2.'
+TRUE    ' This slides over a fluorescent bulb to prevent it from shattering) Small piece of aluminum foil.'
+OWN      '5 �  μ  �  �   � �   � �   � 1  � �  1 � 0'
+SHUF     '55  0 1 0 2 1 0 1  1 0 1 5 1 0'
+ZERO     '5 � 1  � 1  � 1 1   1  1 �     1 � '
+ORACLE   '5 ft cup fl flupb sp �e5 prevent = b feed line Table Table Qyl foidyl acarryl acgr'
+
+=== cut 29 (after span 7, 17 true tokens)
+CONTEXT ..."in gave way to hopes that the president-elect's policies could boost the economy, CNBC reported.\n\nThe S&P 500 gyrated between gains and losses, holding about 0."
+TRUE    '4 percent higher, with financials rising 4 percent to lead advancers.'
+OWN      '5 percent loss 1.5 percent 2.5 percent 2.5 percent '
+SHUF     '5 political laws.\n\nThe annual sales tax increase 28 percent $12'
+ZERO     '5% annual annual annual annual annual annual annual annual annual annual annual annual annual annual annual annual annual'
+ORACLE   '5 percent higher income and financial rising rising state lead to advancing advantages.\n'
+
+=== cut 30 (after span 8, 9 true tokens)
+CONTEXT ...'til they collapse, precipitating a populist demand for a wholesale rejection of free market capitalism, was first espoused by two Columbia University professors'
+TRUE    ' in the 1960s.'
+OWN      '. political lawsuit.\n\nThe that the'
+SHUF     '.,”..In that argument that argument that argument'
+ZERO     '. But that’s not a matter of argument?'
+ORACLE   '. the 1660s. I that'
+
+=== cut 31 (after span 3, 4 true tokens)
+CONTEXT ...' than three weeks until launch — which will include a spread in Time magazine and splashy events like a book party at the foundation offices of Mayor Michael R.'
+TRUE    ' Bloomberg —'
+OWN      '\n,”.\n\nRemember'
+SHUF     '\n South President.\n'
+ZERO     '\n() implementation( basis('
+ORACLE   '\nloomloomloomloom —'
+
+=== cut 32 (after span 4, 21 true tokens)
+CONTEXT ...'he most radical of the settlers.\n\nAt a DC conference two weeks ago, Friedman compared members of "J Street," prominent American Jewish leaders who support a two'
+TRUE    '-state solution, to Jews who collaborated with the Nazis in concentration camps.'
+OWN      '- South President.\n\n"President President Obama President Obama President Obama Pres'
+SHUF     '- turnout.\n\n"President President Obama President Obama promident Obama President'
+ZERO     "-President Donald Trump's president, D.C. President.\n\nPresident"
+ORACLE   '-state solution, Jews who also collaborated with the Nazis concentration camps.\n\n"'
+
+=== cut 33 (after span 5, 4 true tokens)
+CONTEXT ...'te reserved. Both central midfields generally sit deep rather than look to make penetrative runs, so they may play in front of each other, and create a slightly'
+TRUE    ' static contest.\n'
+OWN      ' different turn your turn.\n'
+SHUF     ' different clear." every.\n'
+ZERO     " different games. I'm going"
+ORACLE   ' different contest. contest.\n'
+
+=== cut 34 (after span 6, 11 true tokens)
+CONTEXT ...'es on Zonal Marking:One family says the ratings-grabbing reality show "Extreme Makeover: Home Edition" turned their personal tragedy into a practical nightmare,'
+TRUE    ' leaving them with virtually nothing but a lawsuit.'
+OWN      ' and clear every personal.\nVideo personal blog\n\nVideo personal'
+SHUF     ' and I say say.\n."."…."\n\n morning'
+ZERO     ' and dables L.\n.... Daily.'
+ORACLE   ' and them with virtually nothing but a lawsuit.\n\n'
+
+=== cut 35 (after span 7, 21 true tokens)
+CONTEXT ...', the only benefit that the Higgins‘ children received was the right to be visitors in that home.\n\nABRAMS: But everyone knew that. I mean that clearly happened.'
+TRUE    ' By the end of the show, there was this big house built and they were all in the house.'
+OWN      ' I say say I say. But I say say say. I say say say say. But say say say say'
+SHUF     ' I policeice said. But I say said Mr. I said he asked say said asked. But said say'
+ZERO     ' I said: \'We\'re going to say that,\'\' he said. "I say say I say say?"'
+ORACLE   ' I the end of show that there was this big house and were built all in the house. I knew I had'
+
+=== cut 36 (after span 8, 21 true tokens)
+CONTEXT ...' in the town of Mayadin, south of Raqqa, that was being used as a prison.\n\n"The strikes hit an IS jail in Mayadin at dawn on Monday, killing 42 prisoners and 15'
+TRUE    ' jihadists," Observatory chief Rami Abdel Rahman told AFP.'
+OWN      ' police said pol.\n\nThe police forces police arrested police forces killed police ar'
+SHUF     ' pol north the fire.\n\nThe police forces police arrested police forces killed police in'
+ZERO     ' police in Iraq.\n\nThe police officers killed police in Arab police in'
+ORACLE   ' poladitionally said Obama Obama regarded political opposition Paul Rahman AFP.\n\n'
+
+=== cut 37 (after span 3, 6 true tokens)
+CONTEXT ...' events."\n\nNew 52, Week One:\n\nAction Comics : She\'s the only calm passenger on the crashing Metropolis train (page 23, bottom panel) turned into'
+TRUE    ' a bullet targeting Superman.'
+OWN      ' a north 1.6 percentage '
+SHUF     ' aCHCHST!\n 1'
+ZERO     ' a November 1964 meeting'
+ORACLE   ' a bullet targeting Superman.\n '
+
+=== cut 38 (after span 4, 32 true tokens)
+CONTEXT ...'Miller Building (page 17, panel 4). Why they built a swimming pool above an atomic research reactor, no one can say. Did you design this building, Frank Miller?'
+TRUE    '\n\nBatwoman : Look for her in crowd behind Commissioner Gordon, in the upper right-hand corner of page 1'
+OWN      '\nCHCHST!\nCHCHANTThe World CFP\n\n World World C\n\n World World World World\n\n World World World World\n\n World'
+SHUF     '\nWhat…!"\n\nCHCHCS Daily\n\nCHCHST\n\nCHCHCHCH\n\nCHCHCHCH\n\nCHCHCHCH\n'
+ZERO     '\n Light Live Dawn\n\nCHST Light Final\n\nST Final Light Final\n\nST Final Final Final\n\n Final Final Final Final\n\n Final Final Final'
+ORACLE   '\nBatw!\nSTThe WorldFP Star\n\n World World CFP World\n\n World World World World World\n\n World World World World World\n'
+
+=== cut 39 (after span 5, 4 true tokens)
+CONTEXT ...'n\'t happy about it. And the RHW is there...not to see Superboy released, but the landing of Templar\'s helicopter. Superboy narrates "There is someone else, too.'
+TRUE    ' No. Some...'
+OWN      " I'm something…\n\n"
+SHUF     " Ida I I'm I"
+ZERO     ' IQ.\n\nNow'
+ORACLE   ' I...…!'
+
+=== cut 40 (after span 6, 16 true tokens)
+CONTEXT ..."ne month. I hope she's getting her circus frequent guest card punched.\n\nRed Hood and the Outlaws : Let's get this out of the way first: she's not on this page:\n"
+TRUE    '\nSo you can stop staring at that page for hours at a time.'
+OWN      '\nda WJohn Dick\n\nCHCHda\n\nCHCHCH\n\n'
+SHUF     '\n - M…\n\nCH… W\n\nCH…\n\n…CHCH'
+ZERO     '\nWolf D.\nWood\n\nWood W\n\nWood W'
+ORACLE   '\nSo you can stop staring at that page for hours at a time. DYou'
+
+=== cut 41 (after span 7, 18 true tokens)
+CONTEXT ...' of Aquaman. Is she watching the reactions of the civilians rather than Aquaman? Is that an important moment? Did she order the unlimited crab legs for $17.99?\n'
+TRUE    '\nBatman: The Dark Knight marks yet another trip to Gotham City --'
+OWN      '\n -…u -\n\nQ…\n\n…… -\n\n……)\n'
+SHUF     '\nahahckah?\nHah…\n\nahahahah\n\nahah'
+ZERO     '\n - [ et\n\n - [] [\n\n - [ []\n\n - ['
+ORACLE   '\nBatman: The Dark Knight went through another trip to Go Go City -- I D'
+
+=== cut 42 (after span 8, 31 true tokens)
+CONTEXT ...'figure to be just set dressing. Is it the Shade from Starman ? The Phantom Stranger with a new chapeau? A cross-dressing Zatanna? A goth version of the Mad Mod?'
+TRUE    '\n\nVoodoo : Finally, and thankfully, RHW is not masquerading as a stripper at the Voodoo Lounge.'
+OWN      '\nahahy?\nahahahah?\nahahahah?\nahahahah?\nahahahah?\nahahah'
+SHUF     '\n And she asked me?\nahahahah?\nahahahah?\nahahahah?\nahahahah?\nahah'
+ZERO     '\nI I d… I dah… dah!\nahahatah!?ahahahah!ahahahahah!\nahah'
+ORACLE   '\n\nVeyoo, photos, and thankfully, Renaura aluminhed a sighed founded at the Fair daring at the cream'
+
+=== cut 43 (after span 3, 29 true tokens)
+CONTEXT ...' of his staff economists would resort to “on the one hand… but on the other hand…” formulations when giving policy advice. Truman just wanted a straight answer.'
+TRUE    ' Today, policymakers and the public also seem to want a one-armed economist in discussions of the minimum wage.'
+OWN      '\nAndump asked?” he asked.”?” She asked asked?” She asked asked?\n She asked asked him? She asked asked me asked'
+SHUF     '\nThe International International Statistics International Foreign Intelligence Services International obtained proposals by International International Services approved an annual analysis by Foreign Intelligence Services International distributed the findings of the investigation'
+ZERO     '\nAnd that’s why I’m not going to be going to be a good thing to say, ‘I don’t think I’m'
+ORACLE   '\n policymakers and the public seem to seem to give one college economic securities in the ground in the road.\n Republic'
+
+=== cut 44 (after span 4, 32 true tokens)
+CONTEXT ...' in matching has been in the work of Arindrajit Dube with several coauthors, which uses counties that neighbor each other across state borders as control cases.'
+TRUE    ' Rather than a restricted analysis of one state’s minimum-wage increase, Dube, Lester, and Reich (2010)'
+OWN      ' International\n International International Services International International Services International International Services Services International Services International Technology Services International Foreign Office obtained various data obtained by the International Services Information Services Services Services and International'
+SHUF     ' International factors of transaction factors offset component factors offset data offset significantly higher frequency data offset significantly higher frequency offset factors in reducing transaction offset density offset by reducing transaction efficiency.\n\n'
+ZERO     ' International International Services Services Services Services said the data obtained by the International Services Act obtained the data obtained by the International Services Act.\n\nThe International International Services International International Services'
+ORACLE   ' International than a traffic analysis analysis of state state’s per-plus territory, along with LGBT, UC: 600 in 20'
+
+=== cut 45 (after span 5, 32 true tokens)
+CONTEXT ...'blems are driving the result is harder to justify.\n\nThere are many different explanations for the lack of substantial disemployment effects in matching studies.'
+TRUE    ' One suggestion is that employers exercise “monopsony power,” or bargaining power associated with being one of a small population of buyers in a'
+OWN      '\n component parameters component parameters component variables component parameters variable inputs parameters() component variables parameters defined variable variables parameters defined by variable variables methods defined by variable variables parameters() component()()'
+SHUF     '\n factors proportion.() component variables factors component variables component factors defined variable factors defined variable parameters defined significantly higher frequency variables defined significantly variable parameters defined by variable factors defined by variable'
+ZERO     '\n component variables variable() component() variable() variable() component() variable() parameters() component() variable() variable() increase() variable() variable() variable() variable()()'
+ORACLE   '\nThis method requires employ() access card (e) uses power_anks() effect scale value value range sample value of sample ratio or sample value in a variable variable variable'
+
+=== cut 46 (after span 6, 32 true tokens)
+CONTEXT ...', communities in the Midwest and Northeast are already densely populated and in many cases undergoing a structural transition associated with the decline of man'
+TRUE    'ufacturing. None of these changes are the result of the minimum-wage policy, but all are correlated with the minimum wage, which tends'
+OWN      '. factors reduction. Thus factors factors increase factors increase growth factors increase reduction factors increase growth rates increase increased growth increase in factors increase significantly increased growth reduction growth increase in carbon consumption'
+SHUF     '. factors processes increase. Thus factors factors increase factors increase efficiency factors increase reduction factors increase efficiency consumption increased significantly increase in factors increased consumption significantly increased carbon consumption increase inequality significantly'
+ZERO     '. factors increase increase increase increase increase increase increase increase increase increase increases in increased consumption increases increase in carbon emission factors increase in carbon emission factors increase in carbon emissions. growth'
+ORACLE   '. Source analysis of these parameters changes the result the increase minimumetary-based emission functions, compared with reducing carbon inputs reducing the proportion variable increases = lower carbon δ density'
+
+=== cut 47 (after span 7, 7 true tokens)
+CONTEXT ...' sense?\n\nMatching cases of minimum-wage increases to a control group is essential because it is often the closest social scientists can get to the gold standard'
+TRUE    ' of an experiment using random assignment.'
+OWN      '. factors processes increase. Such factors processes factors'
+SHUF     '. Such factors factors processes factors defined factors processes'
+ZERO     '. Such factors increase emission factors increase inequality'
+ORACLE   '. experiment provides using random assignment.\n\n'
+
+=== cut 48 (after span 8, 32 true tokens)
+CONTEXT ...'emain, and of course Neumark, Wascher, and others continue to defend fixed-effects studies on the grounds that the biases in these analyses are not substantial.'
+TRUE    ' The critical advance has been that Neumark, Salas, and Wascher (2013) appear to concede that some sort of modern'
+OWN      ' ( factors factors function factors factors defined factors factors defined factors factors defined methods factors defined methods defined factors defined methods defined by factors defined methods in factors defined by factors defined by factors'
+SHUF     ' (% increase factors increase% increase increase increase increase increase increase increase increase increase increase increase increase increase increase increase increase in carbon factors increase in increase increase increase increase increase ( increase'
+ZERO     ' (equality function( function defined methods defined methods defined methods defined factors defined methods defined by factors defined methods defined in factors defined by function factors defined by function factors defined by factors'
+ORACLE   ' ( critical principle implementation is therefore arg therefore, int, methods) and ( Section) measures (2 functions con exist con cases of factors enconst analysis, con function factors'
+
+=== cut 49 (after span 3, 12 true tokens)
+CONTEXT ...'entucky’s Center for Poverty Research. The “effective” minimum wage is defined here as the highest of either the federal or state minimum wage in a given state.'
+TRUE    ' Almost all increases were lower than 15 percent.'
+OWN      '\nThe costs increase increase increase increase increase increase increase increase increase increase income'
+SHUF     '\n rates increase.\n% increase increase income increase increase income increase increase'
+ZERO     '\nThe International International Trade Commission on the International Census (2'
+ORACLE   '\nmost differences increases lower lower than 1 percent percent.\n%'
+
+=== cut 50 (after span 4, 5 true tokens)
+CONTEXT ...' about policy. It suggests that raising the minimum wage would not have the negative effects attributed to it by critics, but would increase the earnings of low'
+TRUE    '-income families.'
+OWN      '- factors increase.\n\n factors'
+SHUF     '-% increase increase increases increase increase'
+ZERO     '- factors increase rates increase in data'
+ORACLE   '-income families.\n\n'
+
+=== cut 51 (after span 5, 32 true tokens)
+CONTEXT ...'fference between the earnings and employment regressions is thus driven by the change in the point estimates themselves, and not the precision of the estimates.'
+TRUE    '\n\nFor example, by using the entire state of Pennsylvania, Hoffman and Trace (2009) are comparing employment'
+OWN      '\n\nThe increase increases increase increase increase increases increase increase increase increase increases increase increase increase increase increases increase increase increase higher increases increase increase increase increases by increased costs higher. increase'
+SHUF     '\n196. increase estimated increase increase increase increase increase increase increase increase increased increase increases increase increase increase increase increases increase increase higher increase increase increases by increased costs significantly higher'
+ZERO     '\n\nThe increase in the increase in tax rates increase significantly increase rates increase significantly increase rates increase in lower rates increase in tax rates increase significantly higher rates increase in lower income'
+ORACLE   '\n\nFor example, by using the largest state economic in Houston, Hoff or AD (2009) handling employments exemptions increase increase'
+
+=== cut 52 (after span 6, 6 true tokens)
+CONTEXT ...' for Non‐Experimental Data.” Fiscal Studies, 21(4), 427–468.\n\nBuchanan, J. 1996. “Commentary on the Minimum Wage.” Wall Street Journal, April 25, A20.\n\nCard, D.'
+TRUE    ' 1992.'
+OWN      '\n1969. .,'
+SHUF     '\nQ Color: Color\n\nNov'
+ZERO     '\n2.1\n\nQ:'
+ORACLE   '\n1992.\n\n'
+
+=== cut 53 (after span 7, 11 true tokens)
+CONTEXT ...' (Can) They Matter?” Paper prepared for the 2008 Brookings-George Washington University-Urban Institute Conference on Urban and Regional Policy and Its Effects.'
+TRUE    '\n\nImbens, G., and J.'
+OWN      '– Color Color: Color\n\nQ [1: Color\n'
+SHUF     '–22:\n\nQ22:2\n\n'
+ZERO     '–12. Color:Q2\n\nQ21'
+ORACLE   '–mbnrest,., and J J.\n22'
+
+=== cut 54 (after span 8, 14 true tokens)
+CONTEXT ...'. 65(2).\n\nSingell, L.D., and J.R. Terborg. 2007. “Employment Effects of Two Northwest Minimum Wage Initiatives.” Economic Inquiry. 45(1), 40–55.\n'
+TRUE    '\nUniversity of Kentucky Center for Poverty Research.'
+OWN      '\n24\n\n220\n\n224\n\n2'
+SHUF     '\n\nMr Ms Ms Ms Ms Ms Ms.\ni.2.\n'
+ZERO     '\n2016\n\n22\n\n220\n\n'
+ORACLE   '\nUniversity of Kentucky Center for Poverty Research.\n2'
+
+=== cut 55 (after span 3, 22 true tokens)
+CONTEXT ...'d take."\n\nWiggins said he would like to see the introduction of a law making it compulsory to wear cycling helmets.\n\nHe later clarified his comments on twitter.'
+TRUE    ' "Just to confirm I haven\'t called for helmets to be made the law as reports suggest."\n'
+OWN      '\n\nMr John sent Ms Trump Ms. D Rodison said to President Trump Foreign. Tr. John'
+SHUF     '\nJimisonson joined his conference scheduled to attend House House last month after his last scheduled season to attend House scheduled to'
+ZERO     '\n\n"He said he was "a threat to the law," he said. "He thought she had taken her'
+ORACLE   '\nShe to Jo haven\'t called for Peace participating made to the lawyer by reporters saying that."\n'
+
+=== cut 56 (after span 4, 23 true tokens)
+CONTEXT ...'kick started his career by giving him the URCC fight and the ONEFC contract to represent KOTC. With that being said, I wish Lowen all the best for his future."\n'
+TRUE    '\nMore details from Kamaka are available on full statement below where he airs his side of things:\n'
+OWN      '\nJimison House president scheduled to attend the House House last month after House House scheduled his last scheduled release to attend House'
+SHUF     '\nI finished season until February finished Decemberriday February 1 December riday February 1riday June riday. "The'
+ZERO     '\n"He\'s going to be going to get him."\n\nMr Dowson attempted to win his scheduled House House'
+ORACLE   '\nMore details from Kamawa are available on full statement Monday morning he left his side of things: things of things:'
+
+=== cut 57 (after span 5, 11 true tokens)
+CONTEXT ...'m office. Lowen was given a copy of that contract and took it home. Then the bout agreement for the Colossa fight came in (which was Lowen’s FIRST OneFC fight).'
+TRUE    ' Lowen signed it, we emailed it back.'
+OWN      ' I finished season until finished season finished December season until finished season since'
+SHUF     " I'm I I'm I I'm I went. I'm"
+ZERO     " I'm going to get the season up and I'm going to"
+ORACLE   ' I began shortly it, we emailed it back back. I'
+
+=== cut 58 (after span 6, 29 true tokens)
+CONTEXT ...' kids. I would like to see Lowen in the cage as well. I believe he has the potential to be the next BJ Penn for Hawaii and I have said this time and time again.'
+TRUE    ' I honestly believe things just moved a lot faster then he expected and now that it has, he is trying to capitalize on the moment.'
+OWN      " I'm I I'm I I'm I went. I'm I I'm I I I I. I'm I I'm I I I I I"
+SHUF     ' I radical benefits risk health benefits."\n\nTim Mike team Taylor Riss Taylor. IowaThe World A Star\n\n World'
+ZERO     " I'd'm 1. I'm I get. I'm I I. I'm I I. I'm I I. I'm I I."
+ORACLE   ' I honestly believe things just moved a move then he expected he now has now," he said, and he is in the capital. I\'m he I'
+
+=== cut 59 (after span 7, 16 true tokens)
+CONTEXT ...'rcise, weight loss and not smoking."\n\nJune Davison, senior cardiac nurse at the British Heart Foundation, said: "This research shows a link between insomnia and'
+TRUE    " your heart, but this doesn't mean sleepless nights cause heart failure."
+OWN      ' socialulatory processes factors risk health risk factors."[4] Such factors risk of health and'
+SHUF     ' social International Human Prof. and Professor Invest\n\n Intelligence Intelligence Investigation lawsuits enforce'
+ZERO     ' social principles demonstrate factors to demonstrate that factors inequality cannot reduce factors inequality, reduce or'
+ORACLE   " social heart, but this doesn't mean handful nuclear cause cause failure failure failure."
+
+=== cut 60 (after span 8, 32 true tokens)
+CONTEXT ...'g a request to speak to Pedahzur:\n\nAmidst the current controversy concerning the disruption of an academic lecture sponsored by the Institute for Israel Studies'
+TRUE    ', I want to reiterate my deep admiration for the work of Professor Ami Pedahzur and the Institute for Israel Studies in'
+OWN      ', International Professor Foreign. “Marian Professor of Foreign Affairs Prof. John Professor Professor Professor Professor Professor Professor of Representatives by'
+SHUF     ', She,” she asked her den asked her,”. “Ms,” by the President rejected by the President,” Israel declared by the President.” Is'
+ZERO     ', said she was “not the president’s president” and “the president” and “justified” the “discriminatory” of the laws'
+ORACLE   ', want I re refrained deep breaking his freedom for Human Rights as Ani believed Sarah Israel’s segregation over the past two de war'
+
+=== cut 61 (after span 3, 10 true tokens)
+CONTEXT ...' recalls many years later. “It was like having a child prodigy as a musician, but he was a child prodigy as a politician. I would call him a political Mozart.”\n'
+TRUE    '\nWildstein takes his case to court.'
+OWN      '\n Sheah She worried she She worried her She'
+SHUF     '\n“ John John William John,” Mr. Tr,”'
+ZERO     '\n“I feel like I was a woman.”\n\n'
+ORACLE   '\nWildstein takes his case to court court.\n'
+
+=== cut 62 (after span 4, 25 true tokens)
+CONTEXT ...'viser. “The talk then was that he was going to be the first Jewish president of the United States.”\n\nBut Wildstein is preoccupied with being king of Livingston.'
+TRUE    ' “We used to call him the Wild Man,” says his former high-school classmate Leonard Sorge.'
+OWN      ' Tr. John John John W John John W. Bey.\n\nMr John John Trump John John Washington House president'
+SHUF     ' Tr CCh police Chief Prison Chief Minister Chairman Prince Chief Minister Chairman Prince'
+ZERO     ' Trump said the mall..\n\n“Mr Trump,” Mr. Tr,” said said.\nump said Trump'
+ORACLE   ' Trad used to call him Wild Man William his former school-class grandchildren pneumonia told Saturday he called'
+
+=== cut 63 (after span 5, 24 true tokens)
+CONTEXT ...'s Bob Franks, who represented Livingston in the state assembly during Wildstein’s mayoral tenure. Franks is a brilliant strategist who mentored many operatives.'
+TRUE    ' By 2000, Franks is a congressman running a long-shot campaign for the U.'
+OWN      '\n\nThe police Chief Prison Chief Minister Chairman Prince Schwartz said his president and'
+SHUF     '\nJason John Trump John Carr. Clinton\n\nTrump President Trump President Obama pres'
+ZERO     '\n\nThe police officers told police that police were arrested and killed and killed and killed and killed in'
+ORACLE   '\n\n200 banks in a conservative woman running long-time job campaign for the U.S. State'
+
+=== cut 64 (after span 6, 26 true tokens)
+CONTEXT ...'tes the site’s influence. Long after Wildstein has stopped blogging, Christie still calls him “Wally.”\n\nWally Edge has more power than David Wildstein ever did.'
+TRUE    ' Communicating almost exclusively by AOL Instant Messenger, Wildstein maintains a web of informants inside both parties.'
+OWN      ' Trump,” John Trump wrote Trump campaign office Cump Trump Tuesday.\numpumpump Trump Trump."'
+SHUF     ' Tr the state District of state the state tax government. Tr. State Department president State Department president Bill Clinton said Trump'
+ZERO     ' Trump’s decision to make a decision to vote against Trump’s presidential nominee, and he’s not going'
+ORACLE   ' Tr hesitating almost exclusively by David Abdul Wildstein, a publisher informing ideas toward inside Syria outside others.\n'
+
+=== cut 65 (after span 7, 32 true tokens)
+CONTEXT ...'ntly control the authority, and the two sides clash eternally. The New Jersey faction is convinced that it is being cheated out of its fair share of the budget.'
+TRUE    '\n\nWildstein’s direct boss at the authority is Baroni, his close friend from the Franks campaign, but Wildstein is seen as'
+OWN      '\nThe state District of state Federal District. ( District state District of state District.  District. District.\n District state District. The District District District.\n'
+SHUF     '\n\nMr Trump said Trump asked Rep. Duncan’s president to the state defense of the state defense.\n\nTrump said'
+ZERO     '\n\nThe annual annual annual annual annual annual tax of the annual annual annual annual annual annual annual annual annual annual annual annual annual annual annual annual annual annual annual annual annual annual'
+ORACLE   '\n\nWildstein’s direct mission to the trial, Davis met with close contact with the Bombay Waters province, calling Wales “a pow'
+
+=== cut 66 (after span 8, 32 true tokens)
+CONTEXT ...'the one I was told to be nice to.” But after hemming and hawing, the mayor eventually makes it clear to Kelly’s office that he’s not going to back the governor.'
+TRUE    ' Soon after, in what prosecutors will describe as an act of political reprisal, Wildstein and Kelly start discussing a scheme'
+OWN      '\n\n,” Trump said Trump asked Sanders.\numpump Trump Trump Trump\n\nTrump Trump Trump Trump Trump Tr'
+SHUF     '\n New York Times New York New York Times New Hampsh1 Attorney General Stephen Collins told the press conference that Burns was " Char'
+ZERO     '\n\nThe court spokeswoman said the police were investigating the charges against the police officers and police officers.\n\nPolice said'
+ORACLE   '\non after after inquiry prosecutors refused to act as political act as Paris Wildstein, Ross Bucker finished a trip to a polman'
+
+=== cut 67 (after span 3, 15 true tokens)
+CONTEXT ...'Mann at The Wall Street Journal. Wildstein presumes Foye is waging factional warfare, rather than worrying about ambulances and school buses stuck in traffic.\n\n'
+TRUE    '“Holy shit, who does he think he is, Capt.'
+OWN      'The New York Times New York Times New York Times\n\n New York New York New'
+SHUF     'The Charles Charison Charles Charison Attorney Charles Charison Att'
+ZERO     'The New York Times.\n New York Times New\n\n New York New York New'
+ORACLE   'The Holy shit, who does he think he he is, Capt. John'
+
+=== cut 68 (after span 4, 18 true tokens)
+CONTEXT ...'hool. Inside a sweltering gym bedecked with championship banners, the governor is received by a boisterous contingent of his old friends from the class of 1980.'
+TRUE    ' “Lots of people have asked me over the course of last week, why here?'
+OWN      '\n\nChison Charison Charison Charison Attorney Charles Dowison Charison'
+SHUF     '\n update:\n\nREAD. Collin\n\nST. Col\n\nST: Col\n'
+ZERO     '\n\n"I don\'t think he was going to be a party," he said.\nHe'
+ORACLE   '\nLots of people have asked me over the course of last week, why here?\nAnd'
+
+=== cut 69 (after span 5, 29 true tokens)
+CONTEXT ..." to open up opportunities for unexplained movement and criticism. Still, this was a pretty good start. Now let's figure out what to expect moving forward.\n\n***\n"
+TRUE    "\nEach Wednesday, I've been using the F/+ rankings and the win probabilities derived from them to peer into the future a bit."
+OWN      '\n update Email Email\n\nTwitterImageFP Star C\n\n New York City conference\n\n New York City conference New York conference conference\n\n City'
+SHUF     '\n11 G pic.twitter.com: 1312: 19:30\n\nUPDATE: edit\n\nUPDATE:'
+ZERO     '\n News\n\nStory:\n\nAdvertisement\n\nAdvertisement\n\nAdvertisement.\n\nvertisementvertisement\nAdvertisement.vertisementAdrl'
+ORACLE   "\n Wed Wednesday, I've been using the F buildings rank the winning differ from them and resolve them as a measure of a lack of a"
+
+=== cut 70 (after span 6, 8 true tokens)
+CONTEXT ...' State vs. No. 23 East Carolina Fiesta No. 5 Oregon vs. No. 7 TCU Orange No. 6 Alabama vs. No. 21 Clemson Cotton No.'
+TRUE    ' 9 Kansas State vs.'
+OWN      ' 13 Col. 1. Hou'
+SHUF     ' 3. 1.. H. State'
+ZERO     ' 1.16...[b.'
+ORACLE   ' 9 Kansas State vs. Dou'
+
+=== cut 71 (after span 7, 32 true tokens)
+CONTEXT ...'ther this weekend. No.5 is definitely better than the loser of that game. - Poll Logic. Not sure about committee. — Brian Fremeau (@bcfremeau) October 29, 2014\n'
+TRUE    '\nThe first iteration of this top 25 was good about giving heft to good wins, avoiding giving extra weight to recent losses, et cet'
+OWN      '\n time. 1......Q......................'
+SHUF     '\n 1 2\n\nST 1\n\nST 1\n\nST 1\n\nST 1\n\nST 2\n\nST '
+ZERO     '\n1. 2 D.\n........ —.................'
+ORACLE   '\nThe first iteration version top of 25 good starts when he showed him goodbye, avoiding small enough to avoid receiving profit from retired talent,.'
+
+=== cut 72 (after span 8, 4 true tokens)
+CONTEXT ...'s, but here are odds for what could be some of the more relevant potential championship games.\n\nSEC\n\nNo. 1 Mississippi State vs. No. 11 Georgia: MSU 70 percent.'
+TRUE    '\n\nNo.'
+OWN      '\n 12 \n'
+SHUF     '\n Internationalwest\n\nQ'
+ZERO     '\n games Final games\n\n'
+ORACLE   '\n\n2\n11'
+
+=== cut 73 (after span 3, 9 true tokens)
+CONTEXT ...'. There are hundreds of scenarios still on the table.From WikiFur, the furry encyclopedia.'
+TRUE    '\n\nFoxy Flavored Cookie\n'
+OWN      '\n Midwest Cri\n\nwestwest Pac\n\n'
+SHUF     '\n World Final A\n\nNov Game P\n\n'
+ZERO     '\nST • 2\n\nNov P Sec\n'
+ORACLE   '\nFleet Flavav Complete\n\nNov International'
+
+=== cut 74 (after span 4, 19 true tokens)
+CONTEXT ...'ality, many of the females find him very attractive.\n\nNotes [ edit ]\n\n"Fillers" are used whenever a comic isn\'t avaible\n\nUpdates are sometimes streamed'
+TRUE    'Four reasons the updated Uber Dubai app makes us sad By Mike Priest\n'
+OWN      'The World A Star\n\n World World Game\n\n World World World World\n\n World World World World'
+SHUF     'The code code implementation\n\nContext code complexity code complexity code complexity void:\n\nContext() variable()'
+ZERO     'TheThus [\n\n Polian\n\n Polianian\n\n Polianian\n\n Pol'
+ORACLE   'The reasons the updated Uber Dublin D thrank tells us Mike African\n\n'
+
+=== cut 75 (after span 5, 7 true tokens)
+CONTEXT ...'ney should cost.\n\nThis is clearly stated in the app along with the caveat that “Uber places a temporary authorization hold on your card, which is converted to a'
+TRUE    ' charge for the final fare.'
+OWN      ' different code code implementation\n\nBelow code output'
+SHUF     ' differentish state in state.\nThe code'
+ZERO     ' different\n easier code.\n code code()'
+ORACLE   ' different for the final fare.\nThe'
+
+=== cut 76 (after span 6, 7 true tokens)
+CONTEXT ...'ed to upgrade China’s military arsenal. That relationship continued into the 1990s when President Bill Clinton furiously vetoed the proposed sale from Israel to'
+TRUE    ' China of an advanced radar system.'
+OWN      ' the European state Arab In state Arab'
+SHUF     ' the Social Democratic Constitution immigration'
+ZERO     ' the West and Iraq and Isra'
+ORACLE   ' the of an advanced radar system. The the'
+
+=== cut 77 (after span 7, 32 true tokens)
+CONTEXT ...'g for research on the clinical effectiveness of treatments has been Gail R. Wilensky, a Republican economist who served as George H.W. Bush’s Medicare director.'
+TRUE    '\n\nIn 2008, former House speaker Newt Gingrich (R-Ga.) published an op-ed with Billy Beane'
+OWN      ' The Social Security Constitution Social Security immigration Const. ( Constitution Social Constitution Constitution. The Constitution Const.\n Constitution Const.\n Constitution Const'
+SHUF     ' The factors factors laws — the factors of factors — the factors factors factors. The factors factors factors increase factors increase immigration factors increase factors increase immigration factors increase in factors'
+ZERO     ' The U.S. Const. Constitution immigration Constitution immigration U.S. Social Security Commission of Social Com. I. Const. and immigration'
+ORACLE   ' The 2008 former House House National New Jersey Etob (R-Non-New-London Morning Butterle Brewing State'
+
+=== cut 78 (after span 8, 12 true tokens)
+CONTEXT ...'sed medicine research won’t beacted in this appropriations cycle. Nonetheless, the episode is a reminder that information is a powerful resource in government —'
+TRUE    ' one that can be destroyed when people aren’t looking.'
+OWN      ' which factors factors laws — which factors factors factors. Such factors factors demonstrate'
+SHUF     ' which World State Foreign\n\n factors the factors of lawsuits demonstrate laws'
+ZERO     ' which factors of the inequality factors facilitate the laws of factors prioritized'
+ORACLE   ' which can be be destroyed when individuals aren’t looking looking. Such'
+
+=== cut 79 (after span 3, 32 true tokens)
+CONTEXT ...'including energy storage. The new Energy Management System will also be a great advantage for future projects.\n\nSource and top image: Norwegian Electric Systems'
+TRUE    'Five Labour grandees, who previously campaigned for Britain to Leave the EU in the 1975 referendum, have penned'
+OWN      'The National League Econom\n\n Series Open International Health Open International Health Research International Study Research Engineering Technology Study Research Sci- International Biological Research Study International Technology Sciences Research Study'
+SHUF     'The International International.\n International Research International International Research International International International International Research Sciences International Research International Sciences International Research International International Sciences International Research Sciences International Research'
+ZERO     'The transaction storage data component data is implemented in the transaction storage data storage data and transaction storage data, which enables storage data to generate transaction storage data.\n data storage data'
+ORACLE   'The Lab sector che goods also also have campaign chosen requirements to protect API requirements in the current transaction system, resulting in plerium/v17D, and transaction'
+
+=== cut 80 (after span 4, 4 true tokens)
+CONTEXT ...'only to be cleared by noon on Tuesday.\n\nMeanwhile, protesters lifted blockade from various places in Tarn Taran, a day after two people were detained by the pol'
+TRUE    'ice.\n\n'
+OWN      'ice. Ar. S pol'
+SHUF     'ice. The House Foreign Aff'
+ZERO     'ice station police station pol'
+ORACLE   'ice.\n\nThe pol'
+
+=== cut 81 (after span 5, 13 true tokens)
+CONTEXT ...'of the Federalist Society, he also sits on an advisory panel to the Wisconsin Institute for Law & Liberty.\n\nThroughout his application, he praised two of the U.'
+TRUE    "S. Supreme Court's conservative justices —"
+OWN      'S. State Foreign Minister of the Const.... Foreign.'
+SHUF     'S. Security Services." UN Security Services -- the National Security Council Foreign Min'
+ZERO     'S. Senate Intelligence Minister Sir Alexander Scottish Foreign'
+ORACLE   "S. Supreme Court's conservative just just – the pres"
+
+=== cut 82 (after span 6, 32 true tokens)
+CONTEXT ..." site sees an increase in traffic whenever a death captures the public attention, and since Sunday, Burghart said, there's been about 600 new records submitted."
+TRUE    "\n\nBut despite the reauthorization of the Death in Custody Reporting Act, Burghart said he'll continue collecting data and keep the site up"
+OWN      "\n\n data obtained July data released July data obtained by data obtained by Microsoft's Open Source data obtained by Microsoft's Services Services Services and Technology Services.\n data Services International"
+SHUF     '\n\n"Police said police were ordered by police said police ordered police to leave the police force after the police said they were " threat'
+ZERO     '\n\nThe data date.\n data Services Section data data obtained data data obtained by data obtained by data obtained by Microsoft Services Services and Services Services (NANA) on'
+ORACLE   "\nBut despite the improving reconstruction of Death in June of procurement Act, said Monday's Monday's proposal will decide if data returns will provide additional data data"
+
+=== cut 83 (after span 7, 7 true tokens)
+CONTEXT ...'. Scott Hunter at the time. Kowalski said the ministry asked CP24 to stop hovering near the moose with its helicopter because the noise was likely agitating it.'
+TRUE    '\n\nArticle Continued Below\n'
+OWN      '\n\nThe court police said the pol'
+SHUF     '\n\n"Mr Obama asked." --'
+ZERO     '\n\nTheir criminal charges against'
+ORACLE   '\n\nArticle Continued Below\n\n\n'
+
+=== cut 84 (after span 8, 14 true tokens)
+CONTEXT ...'s demand for universal suffrage." Giving Hong Kong people the right to choose their own leader would be a "win-win" situation for Hong Kong and China, he added.'
+TRUE    "\n\nBut he's limited in how much more he can say."
+OWN      '\n"Mr Obama President Obama -- and president." President'
+SHUF     '\n\n"itutionical Constitution." Constitutional Constitution and the Const'
+ZERO     '\nPresident Donald Trump said Obama\'s "ident " "'
+ORACLE   '\nBut he\'s limited limited in how much he can say.\n." Ob'
+
+=== cut 85 (after span 3, 32 true tokens)
+CONTEXT ..."hat this tower that will now dominate the San Francisco skyline for many years to come should be seen as a gesture of faith in the future of the city's economy."
+TRUE    '\n\nAnd as they started doing last summer, developer Boston Properties and their partner Hines had reps throwing some shade in the direction of nearby Mill'
+OWN      '\n\nPolititutionary immigration\n\nTheicalmigration political immigration political immigration and political immigration political immigration and political immigration'
+SHUF     '\n pol..itution.orgident\n\nitution. Constitution: Constitution.” im\n\n Const. Constitution: Constitution: Constitution\n\n Const'
+ZERO     '\nMr..itutionary. President Constitution.\n Const. President.President Constitution.Pres.. President.President..Pres'
+ORACLE   "\nAndAnd as I started working last summer, developer's marketing and their parents paid a brilliant shock in Brazil serving the opposite direction in the state."
+
+=== cut 86 (after span 4, 25 true tokens)
+CONTEXT ...' high-rollers who ended up doubling or tripling their money.\n\nShkreli, 34, is best known for jacking up the price of a life-saving drug and trolling his critics'
+TRUE    ' on social media, but his trial in Brooklyn has focused on his time running a pair of hedge funds.'
+OWN      '. policeured.\n\nPolice police alle police allevi police alle police arrested police alle'
+SHUF     '.ided her trial.\n\nPol alle alle alle prison alle alle prison alle alle alle police prison alle alle alle'
+ZERO     '.\n\n“I was a deadly woman, she was a deadly woman, and she was a woman and she was killed'
+ORACLE   '. social media, his trial, his trial in Brooklyn focused on his running a friend after he couldn’t force them to'
+
+=== cut 87 (after span 5, 30 true tokens)
+CONTEXT ...' outside his house in the Presidio. The timing of the mountain lion sighting presents an intriguing coincidence given that one of the designated "Dreamojis," or'
+TRUE    ' emoji for Dreamforce, just so happens to be an apparent lynx or other member of the cat family known as "Appy."\n'
+OWN      ' "winged. I pronounced\n\n prison praise contact prison " contact\n\n praise." praise praise." "\n\n'
+SHUF     ' " Sanchester.\n prison\n\n polison prison police prison prison police prison prison police prison prison'
+ZERO     ' "Police were arrested and said police were char \'d\' charges\' after police said police were "not a gun" and "'
+ORACLE   ' " for Dream, just gone so much if he was an insurgent GOP party whose presence works as a messy step."\n\nJimison'
+
+=== cut 88 (after span 6, 12 true tokens)
+CONTEXT ...' alongside Peter Sellers, and the pilot of the TV sitcom Open All Hours.\n\nIn the 1970s and 1980s he hosted shows including Cheggers Plays Pop, in which teams of'
+TRUE    ' children from rivals schools competed against each other;'
+OWN      ' Newtown Sanchester. New Newtown Los Angeles New Los'
+SHUF     ' New Charlot Charatt Charlie Madison joined Charles Arab'
+ZERO     ' New New World War II\n\nColth New World New New World'
+ORACLE   ' New Columbus schools competed against each other; New Mar'
+
+=== cut 89 (after span 7, 31 true tokens)
+CONTEXT ...'d then wrapped the ceremonial shawl on the vice president.\n\nAfter greeting the guests with a Happy Diwali and Saal Mubarak, Biden began with a quip that had the'
+TRUE    ' audience in peals of laughter as he said Diwali was all about light over darkness, "and that\'s what we are all about --'
+OWN      ' R Char Charatt the Char Charison Arab. The Ar Arab Charlie Arab Charlie Arab joined Charles Arab Charles Arab joined'
+SHUF     ' Rous people."itt\n\n Arab police Arab Prison Arab Richard Arab Prison Arab Prison Arab Richard Arison, the'
+ZERO     ' R Arrian the. Char Ar Arab Char Arab joined the Charlie Ar Ar joined the Charlie Arab Army joined the Charlie Arab Ar'
+ORACLE   ' R in peace with laughter as he said he was underwhelmed under light of darkness and so there was "wealth and situation" that the'
+
+=== cut 90 (after span 8, 4 true tokens)
+CONTEXT ...'rsity, and our right to religious freedom," he said.\n\nBiden in his remarks observed, "Folks, one thing that Diwali reminds us of is that there is a light within'
+TRUE    ' all of us --'
+OWN      ' her politous."."\n'
+SHUF     ' her State. House.\n'
+ZERO     ' her political.” Pr polit'
+ORACLE   ' her of ofaders --\n'
+
+=== cut 91 (after span 3, 27 true tokens)
+CONTEXT ...'vice from Ahuja, Raghavan, Joshua DeBois, Director of the White House Office of Faith Based and Neighborhood Partnerships, and the only Hindu on its advisory co'
+TRUE    'uncil, Anju Bhargave, and entertainment by a fusion and playing three pieces of Carnatic music.'
+OWN      'un State. Law.\n\n International Libya State Law Professor General Libya Saud al-Schya Prajo Saudi'
+SHUF     'un expense? Are.”.”\n\n International Constitution General Constitution Professor General Constitution Professor Steph O. S,”ary Const'
+ZERO     'un Prah, a former Islamist al-Assad al-Assad, al-Qaeda, and al-Qaeda,'
+ORACLE   "un, Anx Bhargaz, and entertainment by a combination filled with pieces of C C C Céin's C"
+
+=== cut 92 (after span 4, 32 true tokens)
+CONTEXT ...'igns, and entirely new entities altogether. According to Tapert, “We certainly will play to what we once did with D eadites , even through the remake, but we’re'
+TRUE    ' trying to expand the universe…We will encounter Deadites , which are very different from other forces of nature out there, and then we expose the audience to new'
+OWN      ' not all? Are:.”\n\nCredit:\n\nCredit:\n\nCredit:\n\nCredit:\n\nCredit:\n\nCredit:\n\nCredit:'
+SHUF     ' not I’m behind my story,” My Times?\n?? Like:?\n:Q: Use?\n::::?\n::::'
+ZERO     ' not Data Task, and the Data Task System (DB) Data, and the Data Technology System (AS) is a new, functional interface of the API.\n Data'
+ORACLE   ' not expand expand the universe…We will encounter participants that would provide both different different differences from growing out of movies, and thus thus, and that the developers will be ways'
+
+=== cut 93 (after span 5, 32 true tokens)
+CONTEXT ...' Dead, and she’s also on the hunt for Ash. That is the core team over the first season. “\n\nLucy Lawless’ character, Ruby, is on a justified mission against Ash.'
+TRUE    ' Tapert explained, “S he’s a woman of mystery, and we don’t want to reveal too much about her real agenda or'
+OWN      ' I’m I’m behind I’,” story.” I’m behind my story!\nI’! I’ I!! I’m! I’'
+SHUF     ' I said I’ Not Not the answer thinking?\nI’ I?\nI’m!\n’I’! I’m I! I’m I'
+ZERO     ' I’m going to get a puck. I’m’ I’m going.” I’m going to’ I’m going to think I’m'
+ORACLE   ' I emphasizing: “S he’s a woman mystery, and you don’t want to worry about seriousness without comforting her guy.” And'
+
+=== cut 94 (after span 6, 18 true tokens)
+CONTEXT ...'ht that this was – the breakneck pace that the movies often had, that really was the right format in the world of television for this particular project.” Raimi'
+TRUE    ' continued, “ I really appreciate that Starz let us keep this half-hour idea.'
+OWN      '’ said said Not.’’ thinking’ Not thinking the answer thinking Not?\n Not Not?'
+SHUF     '’’?’ And? Not Not’Well?\n’’’?\n’ Not?'
+ZERO     '’ to feel. Not’ thinking answer thinking the thinking answer?’’ Not thinking? NotMaybe'
+ORACLE   '’, “I really appreciate this.” Russia tells us all half-I had an idea'
+
+=== cut 95 (after span 7, 8 true tokens)
+CONTEXT ...'s since 1988 and I hear it at every convention I go to, same as Sam. We were tortured for years, and guess what? Now they’re going to get it.”\n\nSee that, folks.'
+TRUE    ' Never give up on your dreams.'
+OWN      ' And I know like? And I know I know'
+SHUF     ' And she feel me feel. And I feel like'
+ZERO     ' And I know I’m going to know.”'
+ORACLE   ' And give up on your dreams. And you'
+
+=== cut 96 (after span 8, 24 true tokens)
+CONTEXT ...'was likely being politely asked to cover her shoulders.\n\nWooten says she generally brushes it off when she’s been scolded for her church clothes, but the pantyh'
+TRUE    'ose incident led her to send a mass e-mail decrying the misplaced focus on rules and dogma.'
+OWN      ' was feel she her feel. She feel she she feel she feel she feel she feel she felt her feel she felt she feel her'
+SHUF     ' was her and her. She she her she her she her she feel her she she felt her she feel her she felt her she'
+ZERO     ' was She me she She she she her she she she she she was her. She she she her she she her she she she'
+ORACLE   ' was attack after her father offered a mass e-crol desert misconduct focus on and felt and felt dogma. She'
+
+=== cut 97 (after span 3, 12 true tokens)
+CONTEXT ...' would to a club,” he said.\n\nNorthwest Washington image consultant Ketura Persellin has written about appropriate clothing for worship, down to the size of bag,'
+TRUE    ' jangly jewelry and skirt length.'
+OWN      ' and her mental.\n\n“ She worried her, wor'
+SHUF     ' and her shot her shot her her shot her.\nShe Shelf'
+ZERO     ' and political and political, and the Islamic Islam'
+ORACLE   ' and old jewewryry skirt length length.\nSt'
+
+=== cut 98 (after span 4, 32 true tokens)
+CONTEXT ...'Hatfield disappeared from her bedroom one night, sparking a national search by local police and the FBI. But the case quickly went cold and she was never found.'
+TRUE    '\n\nOn Monday, Oklahoma police made a decisive break in the long-dormant case, arresting a man who lives'
+OWN      '\n\nPol shot her shot her shot her her bed.\n\nShe shot her shot her shot her bed.\nShe shot her shot her shot her shot her bed'
+SHUF     '\n\nThe Prince Senate Foreign Affairs Chief Minister Charlie Hishrian told the president in her alleged criminal charges. Char'
+ZERO     '\n\nThe police station shot and killed a gunshot shot and killed a gun injured and killed a gun.\n\nPolice shot her killed her shot killed'
+ORACLE   '\n\nOn Monday Oklahoma police police deciding whether the break-out long-donald Trump was fearful, charges had suffered her'
+
+=== cut 99 (after span 5, 30 true tokens)
+CONTEXT ...'specially after it issued a white paper last year in which it asserted full control and authority over Hong Kong in contravention of “one country, two systems”.'
+TRUE    '\n\nTheir concerns, dismissed as unrealistic and doomed, remain unanswered by Beijing and their own government.'
+OWN      '\n\nThe Foreign Democratic Foreign\n\nThe the Senate pres pres the Dem C Dem pres pres the Senate Democratic presidential def against'
+SHUF     '\nJames Datt Dave Dawn Dave Ratt DJ at Dave Dick Saturday at Dave Dennis Liverpool at S'
+ZERO     '\n\n“The Iran Ira Iowa and Syria have been accused of violating the Iran’s al-Qa0s and the'
+ORACLE   '\nTheiririties dismissed unjust unrealistic andoooo remain unrested and credited with the defendant and raise the internet into the'
+
+=== cut 100 (after span 6, 16 true tokens)
+CONTEXT ...' Alex Burrows, who was considered to be an overpaid buyout candidate, has worked himself onto a spot in the top 9 with Horvat and Baertschi and has seven goals.'
+TRUE    '\n\nRyan Miller has shown why he was signed to his contract.'
+OWN      ' Dawn Col Dawn Dawn Dawn Dawn season 1 pick Dawn '
+SHUF     ' D\n fire fire shot fire shot fire shot fire shot before fire shot at fire fire near'
+ZERO     ' Dda DJ Dick Douglas Dennis Doug Doug'
+ORACLE   ' Dyan Ryan Miller expecting he did not signed his contract. D D Wilson'
+
+=== cut 101 (after span 7, 9 true tokens)
+CONTEXT ...'lison just turned 24. "Both were from the WDBJ7 viewing area."\n\nVideo shows the camera panning to Parker in the middle of an interview as the gunman opens fire.'
+TRUE    ' Parker can be heard screaming.'
+OWN      '\nThe fire shot fire shot fire shot fire fire.'
+SHUF     '\n fire World. Charles Ed\n\ntown'
+ZERO     '\nPolice said the police were shot and killed'
+ORACLE   '\ner can be heard screaming.\n\n'
+
+=== cut 102 (after span 8, 12 true tokens)
+CONTEXT ..."oter's presence.\n\nThe gunman fires at least six rounds.\n\nParker runs out of the frame before the video goes black.\n\nThe Twitter account has also been suspended."
+TRUE    '\n\nUpdate at 10:39 a.'
+OWN      '\n\nAdvertisementThe New York Times\n\n New York State'
+SHUF     '\n"" say him she\'d say him."\n\nShelf'
+ZERO     '\n\nShe shot down before shot and shot her bed and shot her'
+ORACLE   '\n\nUpdate at 10:39 a.m.'
+
+=== cut 103 (after span 3, 32 true tokens)
+CONTEXT ...'n Bill Kelly\'s CHML talk show.\n\n"It\'s a dehumanizing process when you have to justify yourself to somebody for being where you are."\n\n\'Even if you\'re innocent\'\n'
+TRUE    '\nRaheem Aman is a 23-year-old McMaster student who plans to be a lawyer and ran for the Green Party on'
+OWN      '\n"" say him asking people say " Mr."\n\n""" she asked him say she asked him say, asking him.""Mr.""\n\n'
+SHUF     '\nability of people? "Why people say ..."Why people say\n\nWhy people say\n\nWhy people people\n\nWhy people people\n\nWhy people people'
+ZERO     '\nMr Trump said he was "not a good deal" for the president, but said he was "not a good deal" to the president. pres'
+ORACLE   '\nheheen Australia is a 32-year-old McConnell who paid free speech and board a vote on the Green Party leader, and pres'
+
+=== cut 104 (after span 4, 26 true tokens)
+CONTEXT ...'Dobson, they don’t much like it. “Of course it affects our reputation,” says Kelli Hilliard of the Kansas Tourism Board, pointing towards efforts to change that'
+TRUE    ', like a set of scenic, rolling byways, and an Instagram account called “kansasaintflat.”\n'
+OWN      '’ of people understand people?’? And people?”? And people?”???’???????'
+SHUF     '’’ feel like people love and people.” And people feel like you’re happy to tell people like, “And, we’re'
+ZERO     '’m burning.\n’?’ like truth’.” truth?\n’?’??’’?’’?’'
+ORACLE   '’ like a set of miracles, rolling down, and an autism called “redl.” “amacare.”\n\nence'
+
+=== cut 105 (after span 5, 18 true tokens)
+CONTEXT ...'ys Stuhl. “It’s awe-inspiring to stand on top of one of our hills and see a squall line moving in,” adds Sam Huneke, a history student who grew up in the state.'
+TRUE    '\n\nThat is, until the mining machines roll by, bringing the future with them.'
+OWN      ' I feel like’ people like people like.” And people like you’re happy and like people,'
+SHUF     ' I health benefits.”\n\nAnd And people AndAnd And AndAnd.” And people like to think'
+ZERO     ' I’m going to get the puck. I’m going to go around.”\n\n'
+ORACLE   ' I think something is until the mining machines roll together, bringing the future with them.\n’ you'
+
+=== cut 106 (after span 6, 4 true tokens)
+CONTEXT ..."States,” they wrote. “The wrong decision could trigger the very systemwide 'death spirals' that central ACA features, such as stable financing, were designed to"
+TRUE    ' avoid.”\n\n'
+OWN      ' protect health. Instead.”\n'
+SHUF     ' protect Republicident said.\n'
+ZERO     ' protect Republicans and the I'
+ORACLE   ' protect.”\n\nThe laws'
+
+=== cut 107 (after span 7, 19 true tokens)
+CONTEXT ...'se of Israeli haziness about the Syria crisis.\n\n“There’s no legal guidance regarding the rebel groups fighting in Syria,” Judge Avraham Yaakov said at a session'
+TRUE    ' of the trial at Lod district court, south of Tel Aviv, in May.'
+OWN      '. Indian pol.\n\nPolice said police have police said police have police'
+SHUF     '.... Sister Steice said the Islamice Republican lawsuit against the Islam'
+ZERO     '.Police in Iraq, a military pr pr t t pol, said the police'
+ORACLE   '.\n\nThe trial shoddy court court court court south Tel Aviv, in May.'
+
+=== cut 108 (after span 8, 11 true tokens)
+CONTEXT ...'gal sites and services."\n\nThe entertainment groups want Google to "continuously review key search words" and "effectively screen" mobile apps on Android smartph'
+TRUE    'ones in an effort to combat illicit sharing.'
+OWN      'ones.\n\nThe management framework management framework management data framework framework'
+SHUF     'ones, she said she poured her poison.\n"'
+ZERO     'ones and services services to provide access to data and services management and'
+ORACLE   'ones in an effort to combat illegally sharing sharing.'
+
+=== cut 109 (after span 3, 32 true tokens)
+CONTEXT ...' found with Dr Kelly’s body – including the knife he supposedly used to kill himself – a coroner’s inquest must be held to determine how he died.'
+TRUE    '\n\nThe information, covering dozens of legal and scientific points, was submitted by a group of doctors who believe Dr Kelly’s death'
+OWN      '\n\nShege she herge po her poge – her shelf her she – she she her her she her she her she po her her she her she her'
+SHUF     '\n\nThe police police arrest police joined police after police arrest police after police joined the police after the arrest. pol'
+ZERO     '\n her her hair. her herlf her her – her her her her her – her her her her her. She her her her her her her her her her her'
+ORACLE   '\n\nThe information below covering domestic legal matters, conducted by a group of candidate Church who do believe Israel’s oldness was threat'
+
+=== cut 110 (after span 4, 32 true tokens)
+CONTEXT ...' Girl troops over the next few years.\n\nPreviously, Naumann had told priests to end sales of the Girls Scouts’ famous cookies, according to the Kansas City Star.'
+TRUE    '\n\n“No Girl Scout cookie sales should occur in Catholic Schools or on parish property after the 2016-2'
+OWN      'The\nPolice police joined police after police joined police arrest after police joined the police after police joined the arrest after pol pol'
+SHUF     'The state state of state. Ar. police police joined police joined police after police arrest police joined the police after police joined the'
+ZERO     'The police. police police police police police joined police after police joined police after police joined the police station after police'
+ORACLE   'The.. The Sabriel Scotia sales rented Congress and leuses on Chinese protests after the elected court in the UFC. District'
+
+=== cut 111 (after span 5, 18 true tokens)
+CONTEXT ..."heads of DAX-listed companies. Since Tuesday, the final day of Merkel's China visit, it's been evident that the large German business contingent made less of an"
+TRUE    ' impression on the Chinese than some of the members of the delegation had hoped.'
+OWN      ' Is state state.\n\nThe state state state President Mary Clinton said state state'
+SHUF     ' Is the late arrest a arrest arrest after the arrest arrest after the arrest'
+ZERO     ' Is Arab and Iraq, including the Syrian Arab and Israelis,'
+ORACLE   ' Is on the Chinese Chinese several some members of members of the delegation had hoped.\n.'
+
+=== cut 112 (after span 6, 32 true tokens)
+CONTEXT ...'to the sight of multiple members of a universally reviled governing body offering to give up their paychecks as if they thought it was a move worthy of a medal.'
+TRUE    " But nowhere did Salvador Dali's clocks warp and melt under the heat of sustained stupidity as badly as they did"
+OWN      '\n\nThe late arrest a arrest Southwest Soviet army after the Senate arrested the Senate nominee in  Ar'
+SHUF     '\n Rio Los. Sster Char Ange\n\n Rio Mar Charles\n\n Marine Charles\n\n Marine Charles\n\n Marine Charles\n\n'
+ZERO     '\n\nThe International Senate Committee for the Senate Foreign Minister of the International Civil Rights Act, the Soviet Union and the Indian Senate Party'
+ORACLE   "\n\n nowhere near Salvador Dern's sitting cartel over the center of the sport grew up as a storm that prosecutors threat"
+
+=== cut 113 (after span 7, 6 true tokens)
+CONTEXT ...'n this article for Metal Gear Solid: Phantom Pain\n\nBack in 2013, Metal Gear Solid fans were presented with the barely-dressed character design for female sniper'
+TRUE    ' assassin Quiet.'
+OWN      ', Sanodlyn.\n Mar Rio'
+SHUF     ',\n\n"He\'s expected to'
+ZERO     ', And Trump\n\n upcoming Times'
+ORACLE   ',assin Quiet.\n Los'
+
+=== cut 114 (after span 8, 27 true tokens)
+CONTEXT ..."l and the airport on the Toronto waterfront.\n\nWestJet Airlines did not directly address Porter's plans, but said it remains focused on keeping its own business."
+TRUE    '\n\n"We expect competition to increase and are preparing accordingly," WestJet spokesman Robert Palmer said in a statement.'
+OWN      '\n\n"The budget will launch budget sales tax payments budget budget sales will launch budget tax payments according to budget sales tax funds to budget tax funds'
+SHUF     '\n, police.\n News sales Friday News sales Friday Monday Friday will launch budget date on Friday launch budget sales funds to'
+ZERO     "\nGreen Greenfield's budget budget tax will increase tax, according to the Senate budget taxpayer budget, according to the Senate Intelligence"
+ORACLE   '\n\n"We expect competition to increase and preparing prejudice," West spokesman Palmeran said in a statement. "The'
+
+=== cut 115 (after span 3, 4 true tokens)
+CONTEXT ...'tence, no children were ever significantly injured on the play area equipment, according to Liz Bullard, who helped design the space. As she writes in Crosscut.'
+TRUE    'com:\n\n'
+OWN      'ice, police, pol'
+SHUF     'ice SHST SH\n\n'
+ZERO     'ice, police, pol'
+ORACLE   'ice::\n\nvi'
+
+=== cut 116 (after span 4, 4 true tokens)
+CONTEXT ...' page on Dec. 16. “ABSOLUTELY THE WORST NIGHT OF MY F–KING LIFE!!!!!!!!!!!!!!!!'
+TRUE    '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!”\n'
+OWN      '\nESTAG SHAM SH'
+SHUF     '\nI I like me.'
+ZERO     '\n11.  SH'
+ORACLE   '\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! SH SH'
+
+=== cut 117 (after span 5, 32 true tokens)
+CONTEXT ...' I said to a friend “I ate pasta when I wore my new sweater. Now I’m going to have to throw it out.” I don’t elaborate that I spilled pasta sauce on my sweater,'
+TRUE    ' or that stains are hard to remove from somerics, or that these fabrics are often used to make sweaters, or that I am'
+OWN      ' but I like me.\n’ I feel like I’… me?\n I… me?\n… I love me!\n… I love me!\n…'
+SHUF     ' but people.?\n’ I know?\n’ I love?\n\nI’ love!\n\nI love!\n\nI love!\n\nI love'
+ZERO     ' but’’\n\nMaybe’’ like I’m like ‘’’’ I’m thinking, ‘Maybe I’m thinking about what’s right,'
+ORACLE   ' but that stains are hard to remove from some of that, or that these negative patterns are smartphones and I can always do it and I’ you'
+
+=== cut 118 (after span 6, 9 true tokens)
+CONTEXT ...'ncies have gotten lazy. We see people getting shot or tasered too often without cause, but seems like if some law enforcement officers don’t want to deal with a'
+TRUE    ' situation, they skip right to using force.'
+OWN      ' threat to people.\n\nBut people that people want'
+SHUF     ' threat going?..\n? But that Trump'
+ZERO     ' threat to the terrorist groups’ decision to vote'
+ORACLE   ' threat, they they right to using force. Tr people'
+
+=== cut 119 (after span 7, 10 true tokens)
+CONTEXT ...'e. But then consider that precious time and effort in the preseason has been dedicated to such trivial matters as “where will practice be today” and “where will'
+TRUE    ' my office be for the next six days.”\n'
+OWN      ' the opportunity. But?\n? opportunity will have to opportunity'
+SHUF     ' the bases processes risk significantly higher falling higher prices significantly faster than'
+ZERO     ' the team’s team will be going to get the team'
+ORACLE   ' the office be for the next six days.”\n\nThere'
+
+=== cut 120 (after span 8, 32 true tokens)
+CONTEXT ...'While the study focused on the intake of coffee, those who drink tea can also take heart from the results as it contains similar amounts of caffeine to coffee.\n'
+TRUE    "\nIt's worth noting, the study involved men who were regular coffee drinkers \x96 and it's been suggested coffee may have more of a diure"
+OWN      '\n structures density cells resulting cells significantly higher density cells significantly significantly cells cells significantly lower cells significantly significantly lower resulting cells significantly lower resulting in cells significantly lower resulting in cells significantly cells'
+SHUF     '\n\nPolice police police police police police police ar police.\n\n pol cells resulting significantly lower resulting cells resulting resulting resulting cells significantly'
+ZERO     '\n\n4 meters cells lower cells significantly lower cells significantly lower significantly significantly lower cells significantly lower significantly higher carbon cells significantly significantly lower significantly higher carbon cells significantly significantly lower cells cells'
+ORACLE   '\nIt is worth noting the study remains men involved bodies roads lab y sauce toxicity and then disease prices have caused a disease that requires plants to higher'
+
