@@ -110,6 +110,59 @@ CPU contracts first (`tests/test_tul_code_grade.py`), then a 12-step Spark smoke
 config with `init_from`, then the queue lines. The smoke's readings are recorded here by
 amendment before any queue line is written.
 
+Amended 2026-09-17 19:20 (reason: the Spark smokes and the rate pair ran, and two fixes
+landed after the predictions were frozen). Nothing in Predictions is edited.
+
+Smokes on the DGX Spark, 12 steps, `init_from` `tul-code-vae/step_10000.pt`, batch 6,
+seq 1024, `data_skip_batches` 20. At 7a9dfe1: `tul_code_grade`, `tul_code_grade_l2` and
+`tul_code_only` all exit 0, 0 Tracebacks, 0 nan. At 14f004d (the open-slot fix, below):
+`tul_code_grade` and `tul_code_only` exit 0 with the SAME step-0 loss as at 7a9dfe1
+(1.5973 and 2.1315) — the fix is eval-only and does not touch the training path. Every run
+prints `[code_ref] frozen VAE-stage twin snapshot: 269.9M parameters, 0 trainable, eval
+mode`. Step-0 graded readings: `n=20` slots, `frac=0.38`, best −5.00, mean −6.16, worst
+−7.39, true −4.10, rank 0.89, cosB 0.147, cosW 0.116, degen 0.00. Peak memory with the twin
+on: 7.46 GB (graded) and 7.17 GB (code-only) at step 0, 8.47 / 8.44 GB by step 40. The twin
+costs 1.32 GB on its own (6.14 → 7.46 GB, measured). The code-only prereg's 7.9 GB is a
+5090 number and is not on this box.
+
+Rate, 60 steps each, same box, same flags, `tul_code_grade` against the same config with
+`tul.code_grade=false`: 940 tok/s against 1578 at the step-40 window, and 407 s against
+253 s of wall clock including an identical compile warmup. That is **0.60× on the step
+window and 0.62× on wall clock**, above P-G7's 0.50 floor and below the 0.53× the
+arithmetic predicted (the arithmetic counted block passes and ignored the graded step's
+poorer utilisation). The panel runs on the 5090, so P-G7 is still scored there.
+
+P-G1's THRESHOLD stands; its RATIONALE is refuted and is recorded as wrong here rather
+than rewritten above. The prediction argued from Jensen that `code_grade_true` must sit
+BELOW `code_grade_mean`. That holds only when the grader and the sampler read the same
+cell. This grader zeroes the graded slot's own cell, so the truth can and does outscore
+the samples: true −4.10 against mean −6.16 at step 0 (rank 0.89), true −4.88 against mean
+−5.04 at step 40 (rank 0.51). A rank near 0 is still the failure P-G1 catches, so the
+0.25 floor is unchanged.
+
+Two fixes landed between the freeze and the queue, both eval-only:
+
+1. `tul.code_target_ref` (7a9dfe1). `E` is frozen but its INPUT is not — it pools the LIVE
+   prelude's states, and on `train_only: []` the prelude drifts and `E`'s codes collapse
+   (own 0.99 / shuffled 0.98 by step 3000 on the killed code-only draw). Both graded
+   configs set `code_target_ref: true`, so every VAE-stage reading — the target code, the
+   coda that samples, the coda-with-zero-cell that grades, the tied head they score
+   through — comes from a frozen deep copy of the model snapshotted at `init_from`.
+   Consequence for P-G6: its baseline is the code-only RERUN with the twin on, not the
+   killed draw.
+2. The open slot (14f004d). `_tul_code_target_write` masked the PROJECTION by
+   `ok = code_target_valid`, which is False for a row's last valid slot. At generation that
+   slot is the OPEN span, so the coda wrote every generated span from a zero cell. The
+   projection now takes `ok` at train and `layout.slot_valid` at eval; the loss and the
+   cosines keep `ok`. Controlled A/B on the Spark, `tul_code_grade`, 12 steps,
+   `eval_every=12`, identical flags, 7a9dfe1 against 14f004d: every `ok`-indexed instrument
+   is unchanged to four decimals (`val/ce_tf` 1.5877, `val/code_target_cos` 0.0035,
+   `val/code_target_cos_shuf` 0.0057, `val/code_eff_rank` 57.6613), and only the
+   instruments that READ the predicted cells move — `val/ce_tokens` 8.5547 → 8.5923,
+   `val/plan_worth_zero` −3.5673 → −3.6050, `val/plan_worth_shuffle` −0.0626 → −0.0312.
+   Every OWN / SHUF / ZERO probe taken before 14f004d is void, arm A's and arm B's
+   included.
+
 ## Not verified before launch
 
 - The CPU contracts run at the tiny strict fixture (2 rows, 8 slots, `d_model` 64); no CPU
@@ -122,6 +175,12 @@ amendment before any queue line is written.
 - One seed per arm. Nothing here reads generation quality; no coda trains.
 - The grader's absolute scale (`code_grade_true` in nats per token) is not calibrated
   against any external LM; only the ORDERING of the grades is used by the term.
+- The open-slot fix is proved on CPU (three tests, one through `generate_tul`) and
+  corroborated by the Spark A/B above. Nobody has yet re-run the OWN / SHUF / ZERO semantic
+  probe on a real checkpoint with the fix in; until that lands the size of the cell's
+  contribution at generation is unknown, only that it is no longer structurally zero.
+- The graded arm has never run past 60 steps. Every graded reading quoted here is from a
+  model 12 to 60 steps off the VAE checkpoint, with the LR still inside the ramp.
 
 ## Results
 
