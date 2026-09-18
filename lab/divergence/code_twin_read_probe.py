@@ -161,9 +161,18 @@ def main() -> None:
                     help="HOW the foreign cell is chosen. 'perm' is the model's own "
                          "_tul_plan_ablate random within-row permutation, identical to "
                          "worth_profile.py's; 'roll' shifts every valid slot by one.")
+    ap.add_argument("--shuffle-reps", type=int, default=4,
+                    help="average the shuffle condition over this many permutation draws. "
+                         "The shuffle TOTAL is a noisy statistic: two draws on one checkpoint "
+                         "and one row set gave +0.1066 and +0.1330 (2026-09-18). The per-draw "
+                         "totals are printed so the spread is visible instead of hidden. "
+                         "Ignored for --shuffle roll, which is deterministic.")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     device = a.device
+    if a.shuffle == "roll" and a.shuffle_reps != 1:
+        print(f"  --shuffle roll is deterministic: shuffle_reps {a.shuffle_reps} -> 1")
+        a.shuffle_reps = 1
 
     from morph.training.data import create_dataloader
     from morph.training.tul_setup import build_tul_runtime
@@ -203,6 +212,7 @@ def main() -> None:
         batches = pack_rows(stream, tul_rt, cfg, a.batch, False)[:n_batches]
 
         row_sums = {c: [] for c in CONDS}
+        rep_sums: list[list] = [[] for _ in range(a.shuffle_reps)]
         row_counts = []
         abs_sums = {c: 0.0 for c in ("own", *CONDS)}
         abs_n = 0
@@ -210,10 +220,12 @@ def main() -> None:
         for inp, labels, layout, _idx in batches:
             layout = layout.to(device)
             cells = live_cells(model, inp, layout, device)
+            shuf_ce = [twin_ce(twin, inp, layout, labels, device,
+                               shuffled_cells(cells, layout, a.shuffle, twin))
+                       for _ in range(a.shuffle_reps)]
             ce = {"own": twin_ce(twin, inp, layout, labels, device, cells),
                   "zero": twin_ce(twin, inp, layout, labels, device, torch.zeros_like(cells)),
-                  "shuf": twin_ce(twin, inp, layout, labels, device,
-                                  shuffled_cells(cells, layout, a.shuffle, twin)),
+                  "shuf": torch.stack(shuf_ce).mean(0),
                   "oracle": twin_ce(twin, inp, layout, labels, device, None)}
             for b in range(inp.shape[0]):
                 strata = token_strata(layout, labels[b], b, spec)
@@ -226,15 +238,28 @@ def main() -> None:
                         abs_sums[c] += float(ce[c][b, p])
                     for c in CONDS:
                         sums[c][bi] += float(ce[c][b, p] - ce["own"][b, p])
+                rsums = [np.zeros(len(BINS)) for _ in range(a.shuffle_reps)]
+                for p, bi in strata:
+                    for r in range(a.shuffle_reps):
+                        rsums[r][bi] += float(shuf_ce[r][b, p] - ce["own"][b, p])
                 row_counts.append(cnt)
                 for c in CONDS:
                     row_sums[c].append(sums[c])
+                for r in range(a.shuffle_reps):
+                    rep_sums[r].append(rsums[r])
             rows_done += inp.shape[0]
             print(f"  {label}: {rows_done}/{a.rows} rows", flush=True)
 
         cnts = np.stack(row_counts)
         rng = np.random.default_rng(a.seed)
+        # Per-draw shuffle totals. The token-weighted TOTAL is dominated by the far offset
+        # bins, which hold most of the tokens and where the effect inverts, so it moves with
+        # the permutation draw. Printing every draw keeps that visible: quote the near-
+        # boundary bins, which are stable, not this total.
+        rep_tot = [float(np.stack(rep_sums[r]).sum() / max(cnts.sum(), 1))
+                   for r in range(a.shuffle_reps)]
         arm = {"step": step, "rows": rows_done, "reader": a.reader, "shuffle": a.shuffle,
+               "shuffle_reps": a.shuffle_reps, "shuffle_rep_totals": rep_tot,
                "bins": [list(x) for x in BINS],
                "n_tokens_per_bin": cnts.sum(0).tolist(),
                "abs_ce": {c: abs_sums[c] / max(abs_n, 1) for c in ("own", *CONDS)},
@@ -244,6 +269,9 @@ def main() -> None:
         # replaces. Printed first, on purpose.
         print(f"{label:10s} ABS CE  " + "  ".join(
             f"{c}={arm['abs_ce'][c]:.4f}" for c in ("own", *CONDS)), flush=True)
+        if a.shuffle_reps > 1:
+            print(f"{label:10s} shuf draws " + " ".join(f"{t:+.4f}" for t in rep_tot)
+                  + f"   spread {max(rep_tot) - min(rep_tot):.4f}", flush=True)
         for c in CONDS:
             sums = np.stack(row_sums[c])
             mean = sums.sum(0) / np.maximum(cnts.sum(0), 1)
