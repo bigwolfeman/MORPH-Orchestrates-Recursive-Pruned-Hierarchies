@@ -77,6 +77,13 @@ at 10k and 20k on the Spark: the semantic probe (`--kind target`, on the code fi
 14f004d, where the open slot finally carries a cell), the corpus-mean probe with
 `--depths 1,6,16`, and the runner's forced-depth sweep (fixed at 2236ac4).
 
+Amended 2026-09-17 20:45 (reason: the smoke ran and the line was inserted): Spark smoke of
+`tul_code_only` at 92954ca with `init_from`, 12 steps: 0 Tracebacks, 0 nan, 467/469 tensors
+matched, `[code_ref] frozen VAE-stage twin snapshot: 269.9M parameters, 0 trainable, eval
+mode`, peak 7.17 GB, final val_loss 8.4375, train `code_target_cos` 0.0047 with
+`_cos_shuf` 0.0053. Queue line inserted at the HEAD at 20:45 (commit 92954ca), ahead of the
+graded arm and the continuations. Predictions unchanged.
+
 ## Not verified before launch
 
 - The 51 CPU contracts of this family; the GPU smoke's exit code goes here before launch.

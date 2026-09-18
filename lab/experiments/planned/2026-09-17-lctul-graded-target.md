@@ -176,6 +176,17 @@ at `every: 8` and is the arm that runs first, against `tul-code-only`
 (`2026-09-17-lctul-code-only-ref.md`) as its one-factor partner. P-G6 is the prediction
 that reads this pair, so the arms are scored as written.
 
+Amended 2026-09-17 20:45 by the orchestrator (reason: the smoke ran and the line was
+inserted): Spark smoke of `tul_code_grade_l2` at 92954ca with `init_from`, 12 steps: 0
+Tracebacks, 0 nan, 467/469 tensors, the twin snapshot line, peak 7.46 GB (0.29 GB over the
+code-only smoke on the same box), final val_loss 8.4483, and the graded readout at step 0:
+`n=20 frac=0.38 best=-5.00 mean=-6.16 worst=-7.39 true=-4.10 rank=0.89 cosB=0.147
+cosW=0.116 degen=0.00`. The 12-step window reads 124 tok/s against the code-only smoke's
+753 (0.16x), which is NOT the steady-state rate: two of its twelve steps are graded and the
+sampler's first passes compile. The 60-step measurement stands as the estimate (0.60x) and
+the runner's own RATE line at step 200 is the number that goes in Results. Queue line
+inserted at 20:45 (commit 92954ca) behind `tul-code-only`. Predictions unchanged.
+
 ## Not verified before launch
 
 - The CPU contracts run at the tiny strict fixture (2 rows, 8 slots, `d_model` 64); no CPU
