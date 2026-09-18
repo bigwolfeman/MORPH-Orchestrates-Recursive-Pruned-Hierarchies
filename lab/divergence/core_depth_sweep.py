@@ -121,6 +121,34 @@ def _bootstrap_pairs(depths: list[int], unit_sum: dict[int, np.ndarray],
     return out
 
 
+def warn_if_frozen_reader(cfg, label: str) -> None:
+    """A code-target arm whose coda is FROZEN reports a K-curve that does not mean what it
+    looks like (measured 2026-09-18, 480 rows, three arms at 20k/30k).
+
+    Such a coda was trained on noised TRUE codes and prefers NO cell to a confidently-wrong
+    one (`zero - own` = -4.64 nats). So it rewards a cell that drifts toward the corpus mean
+    and punishes one that becomes more span-specific, and `ce_tokens` across depth tracks the
+    cell's GENERICITY rather than its match to the code. The evidence, both directions:
+
+        arm A  K1-K6 +0.0323   pred.zbar 0.3081 -> 0.3225   (more generic, CE "improves")
+        prog   K1-K6 -0.1173   pred.zbar 0.3554 -> 0.3051   (less generic, CE degrades)
+        uf     K1-K6 +0.0047   reader ADAPTED; its CE minimum and its cosine maximum are
+                               both at depth 6, so only here does CE track the code match.
+    """
+    tul_cfg = getattr(cfg, "tul", None)
+    if not getattr(tul_cfg, "code_target", False):
+        return
+    train_only = list(getattr(getattr(cfg, "training", None), "train_only", None) or [])
+    if not train_only or any(str(p).startswith("coda.") for p in train_only):
+        return
+    print(f"    [WARNING] {label}: tul.code_target is ON and `coda.` is NOT in "
+          f"training.train_only, so this checkpoint's READER IS FROZEN. The ce_tokens "
+          f"K-curve below tracks how generic the cell becomes with depth, NOT how well it "
+          f"matches the code, and a LARGER K1-K6 here is worse news, not better. Pair this "
+          f"with `code_target_mean_probe.py --depths` and read `pred.zbar` before calling "
+          f"any of it depth. See lab/experiments/successes/2026-09-17-lctul-target-unfreeze.md")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", action="append", required=True,
@@ -153,6 +181,7 @@ def main() -> None:
         model, step = load_ckpt(cfg, path if path.startswith("/") else f"{ROOT}/{path}",
                                 device, tul_rt.model_cfg if tul_rt else None)
         model.eval()
+        warn_if_frozen_reader(cfg, label)
         plain = tul_rt is None  # the plain control (tul.activate_at: never)
         # Two TUL forwards run the ordinary `_core_region` over the whole packed row, so
         # their eval depth is `model.cfg.mean_depth` exactly like the plain model's and the
