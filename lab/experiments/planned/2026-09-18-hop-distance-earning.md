@@ -50,6 +50,18 @@ far bins must earn, and their CE(d) must stop falling at about the depth the cha
 If the far bins on `prev_reach1` read flat too, gather is not the mechanism and the
 hypothesis is dead — on the one arm built so that gather is the ONLY route.
 
+**The prior, in theorem form.** Zhu et al., *Reasoning by Superposition: A Theoretical
+Perspective on Chain of Continuous Thought*, NeurIPS 2025
+([pdf](https://proceedings.neurips.cc/paper_files/paper/2025/file/72c363c2a573ca2128bd176d3317696b-Paper-Conference.pdf)),
+prove that a two-layer transformer with D continuous-thought steps solves directed-graph
+reachability when D is the graph diameter, each thought holding a superposition of BFS
+frontiers. That is exactly "depth equals hop distance", and it is why the plateau in P3 is
+predicted at d ≈ h−1 rather than at some arbitrary depth: on `prev_reach1` the cell chain
+IS the graph, the loop pass IS the continuous thought, and h−1 is the diameter a token of
+span j must cross to reach span j−h. The theorem says the depth is sufficient; it says
+nothing about whether a model trained on web text learns to use it, which is what this
+experiment measures. The numeric predictions below are unchanged by the citation.
+
 ## Predictions
 
 Numbers, not directions. `K1−K6` is (mean CE at forced depth 1) − (mean CE at forced depth
@@ -186,3 +198,18 @@ protocol failures P2 and P5 name in advance. The predictions above are not edite
 run; a method change gets a numbered `## Amendment N` with its date.
 
 If the reading changes what ships, an Agent Note goes in the same change.
+
+## Amendment 1 — 2026-09-18, the Zhu et al. prior
+
+Added the paragraph "The prior, in theorem form." to Hypothesis. It cites Zhu et al.,
+NeurIPS 2025, as the reason the P3 plateau is predicted at d ≈ h−1 and not at an arbitrary
+depth. **No prediction was changed, added or removed**, and the frozen commit that carries
+P1–P5 unedited is `e8e252e`.
+
+Ordering, stated because it matters: the paragraph was written AFTER the 24-row 3070 smoke
+on `slot-spandec-strict` @ 5000 had run (`EXIT=0`, output in
+`/mnt/bigdata/morph-instruments/results/hop_smoke_strict_5000.*`). The smoke is a
+functional check of the probe at 1/20 of the pre-registered row count, not a run of this
+experiment, and the citation is a literature prior rather than a reading of it — but the
+order is on the record so a reader can judge that for themselves. The smoke's own numbers
+are reported when this file closes, beside the 480-row run they do not replace.
