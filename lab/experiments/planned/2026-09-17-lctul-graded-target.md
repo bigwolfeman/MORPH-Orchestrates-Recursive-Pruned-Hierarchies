@@ -163,6 +163,19 @@ Two fixes landed between the freeze and the queue, both eval-only:
    Every OWN / SHUF / ZERO probe taken before 14f004d is void, arm A's and arm B's
    included.
 
+Amended 2026-09-17 20:30 by the orchestrator (reason: a cadence fault found before launch,
+no change to the predictions). With `code_target_weight: 0` and `code_grade_every: 8`,
+seven of every eight steps compute a forward and a backward whose loss is exactly 0.0 and
+whose gradients are all zero (measured on the CPU fixture,
+`test_a_non_graded_step_of_the_pure_graded_arm_would_train_nothing`); with the slot-loop
+gain constraint on, those steps would train the loop on the constraint alone. `TULConfig`
+now refuses the pair (e8ba43a). `tul_code_grade.yaml` therefore runs the graded term EVERY
+step and is the expensive confirmation (~0.16× the code-only rate, extrapolated from the
+0.60× measured at `every: 8`); `tul_code_grade_l2.yaml` keeps the dense L2 term underneath
+at `every: 8` and is the arm that runs first, against `tul-code-only`
+(`2026-09-17-lctul-code-only-ref.md`) as its one-factor partner. P-G6 is the prediction
+that reads this pair, so the arms are scored as written.
+
 ## Not verified before launch
 
 - The CPU contracts run at the tiny strict fixture (2 rows, 8 slots, `d_model` 64); no CPU
