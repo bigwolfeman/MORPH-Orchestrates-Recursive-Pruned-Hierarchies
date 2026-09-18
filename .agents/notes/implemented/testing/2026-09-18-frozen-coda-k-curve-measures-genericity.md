@@ -48,6 +48,28 @@ tracks it, with its CE minimum and its cosine maximum both at depth 6.
 Consequence: arm A's +0.0323, the largest "depth earning" in this family, is its cell
 collapsing toward the corpus mean. On a frozen-coda arm a LARGER `K1-K6` is worse news.
 
+### The decisive test: which quantity explains CE, per reader
+
+`pred.zbar` (genericity) and centred cosine to the own code (code match) both move with
+depth, so the two candidate explanations were separated by correlating each against CE over
+all seven depths, on three arms. The adapted-reader arm is the control, and the prediction
+was written down before its four new depths were measured: if the mechanism is real, uf must
+NOT be explained by genericity.
+
+| arm | reader | r(CE, genericity) | r(CE, code match) | explains CE | CE span |
+| --- | --- | --- | --- | --- | --- |
+| `tul-code-target` (A) | frozen | **-0.9675** | -0.1981 | genericity | 0.1102 |
+| `tul-code-target-prog` | frozen | **-0.9959** | **+0.8549** | genericity | 0.1315 |
+| `tul-code-target-uf` | TRAINED | -0.5385 | **-0.9733** | CODE MATCH | 0.0046 |
+
+The frozen arms are explained by genericity and not by code match. The adapted arm flips
+completely. prog's +0.8549 is the clearest single statement of the problem: on a frozen
+reader a BETTER match to the true code correlates with WORSE CE, across seven depths.
+
+Note the CE spans. The frozen arms swing 0.11-0.13 nats across depth while the adapted arm
+swings 0.0046. The large, impressive-looking K-curves belong to the arms where the quantity
+is an artefact, and they are about 25x the size of the real signal.
+
 ## Decision
 
 `core_depth_sweep.py` prints a `[WARNING]` per checkpoint when `tul.code_target` is set and
