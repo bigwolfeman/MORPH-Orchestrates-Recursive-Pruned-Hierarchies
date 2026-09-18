@@ -107,6 +107,30 @@ def load_ckpt(cfg, path, device, tul_cfg):
         sys.exit(1)
     print(f"    load ok: step {ck.get('step')}, 0 unexpected, "
           f"{len(missing) - len(mat)} rope/cache-missing")
+    # tul.code_target_ref: the frozen VAE-stage twin is deliberately NOT a registered
+    # submodule, so the load_state_dict above cannot restore it — it rides its own
+    # `code_ref` key. Without this block `_code_ref` stays None and EVERY VAE-stage
+    # reading (the target codes, the sampler's coda, the grader's coda) silently falls
+    # back to the LIVE front, which on a trainable-front arm is the collapsed target the
+    # mechanism exists to avoid. Measured 2026-09-18 on tul-code-only@5000: the probe's
+    # codes read cosine 0.914 to their own corpus mean, and own/shuffled came out at
+    # -0.056/-0.065, while the trainer's twin-computed target read own 0.14 shuffled
+    # 0.024 at the same step. Memory: frozen-encoder-on-live-front-is-not-a-fixed-target.
+    _tc = getattr(getattr(model, "cfg", None), "tul", None)
+    if _tc is not None and getattr(_tc, "code_target_ref", False):
+        ref_state = ck.get("code_ref") if isinstance(ck, dict) else None
+        if ref_state is None:
+            # Same rule as the missing/unexpected guards above: measuring against a target
+            # that moved produces a table that looks fine and means nothing.
+            print(f"LOAD_FAIL {path}: tul.code_target_ref is ON but this checkpoint carries "
+                  f"no `code_ref` key, so every VAE-stage reading would come from the live "
+                  f"front instead of the frozen twin.")
+            sys.exit(1)
+        ref_state = {k.replace("_orig_mod.", ""): v for k, v in ref_state.items()}
+        how = model.tul_code_ref_snapshot(ref_state)
+        _nref = sum(p.numel() for p in model.code_ref.parameters())
+        print(f"    [code_ref] frozen VAE-stage twin {how}: {_nref/1e6:.1f}M parameters; "
+              f"every code target and every grade is measured against it")
     return model.eval(), int(ck.get("step", -1))
 
 
