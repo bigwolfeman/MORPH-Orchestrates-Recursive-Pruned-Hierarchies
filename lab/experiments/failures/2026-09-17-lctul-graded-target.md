@@ -1,6 +1,6 @@
 # Experiment: the GRADED-continuation target — the loop proposes, a blind grader ranks
 
-Status: planned
+Status: failure
 
 Date: 2026-09-17 (frozen before any GPU step beyond a 12-step smoke on the Spark).
 Note: [`.agents/notes/proposed/architecture/2026-09-17-lctul-graded-continuation-target.md`](../../../.agents/notes/proposed/architecture/2026-09-17-lctul-graded-continuation-target.md).
@@ -208,6 +208,117 @@ inserted at 20:45 (commit 92954ca) behind `tul-code-only`. Predictions unchanged
 
 ## Results
 
+Only `tul-code-grade-l2` ran. `tul-code-grade` (the pure arm, `code_target_weight: 0`) was
+never queued, so P-G5 is UNSCORED and P-G1/P-G2, which name the pure arm, are scored on the
+L2 twin instead. Arm `tul-code-grade-l2`, wandb `w5cfd32z`, 20,000 steps, commit 92954ca,
+finished 2026-09-18 07:29. Readings are the mean of the logged points at step 19,500 and
+beyond (25 for the dense metrics, 12 for the graded ones, which fire one step in eight).
+
+### The grader works. The channel does not.
+
+| reading | value |
+| --- | --- |
+| loop's cell → the WINNER's code (`code_grade_cos_best`) | **0.5323** |
+| loop's cell → the TRUTH's code (`code_target_cos`) | 0.1462 |
+| the WINNER's code → the TRUTH's code (`cos_best_true`) | 0.1529 |
+| the LOSER's code → the TRUTH's code (`cos_worst_true`) | 0.1470 |
+| the truth's rank among candidates (`true_rank`) | 0.8784 |
+
+The loop learned to predict what the frozen coda would generate, at cosine 0.53, and what
+the coda generates is no closer to the truth than what it does not generate. The grader is
+NOT the problem: it puts the real continuation above 88 % of its own samples.
+
+### Scoring
+
+| | prediction | threshold | measured | |
+| --- | --- | --- | --- | --- |
+| P-G1 | grader sanity | rank ≥ 0.25 | 0.8784 | **HOLDS** |
+| P-G2 | the grade selects for the code | best − worst ≥ 0.02 | −0.004 / +0.0052 | fails |
+| P-G3 | passes move, to the winner | l6 − l1 ≥ 0.02 | +0.0075 | fails |
+| P-G4 | passes move, to the truth | l6 − l1 ≥ 0.02 | +0.0026 | fails |
+| P-G5 | own − shuffled, pure arm | ≥ 0.10 | arm not run | UNSCORED |
+| P-G6 | the term is free to the L2 arm | within 0.02 | 0.1462 vs 0.1674 = 0.0212 | fails |
+| P-G7 | rate | ≥ 0.50x | 0.658x | **HOLDS** |
+| P-G8 | coverage | slot_frac ≥ 0.30 | 0.4192 | **HOLDS** |
+
+P-G2 by two routes, because the statistic it reads was corrupted by a bug found the same
+day (b3381dd: `worst = gr.argmin` selected the −1e9 degeneracy sentinel, so
+`cos_worst_true` was the cosine to a DEGENERATE candidate's code). (a) Analytic correction
+of the logged value: at `degen` 0.0012 with K = 4 about 0.48 % of slots take a sentinel,
+whose code is an arbitrary direction in 1024 dimensions and so reads cosine ≈ 0 to the
+truth; the corrupted mean is ≈ 0.9952 x true, giving true ≈ 0.1477 and a margin of +0.0052.
+(b) Re-measurement on this arm's own 20k checkpoint at the fixed commit, `code_grade_every`
+1, `degen` 0.00 so uncorrupted: best 0.074 against worst 0.078, margin **−0.004**. Both are
+far below +0.02 and the clean one has the sign inverted. The sentinel itself is visible in
+the run's `code_grade_worst` column at −2,380,960.
+
+### Per-pass, again
+
+`code_grade_cos_l0` 0.4012 → `l1` 0.5235 → `l6` 0.5310. Pass 1 does +0.12 and passes 2-6
+add +0.0075. Against the truth: `l1` 0.1445 → `l6` 0.1471, +0.0026. A computed,
+state-dependent, refinable target is met in one pass exactly as the seven fixed targets
+before it were.
+
+### Its CE instruments are void, and its valid reading
+
+No coda runs at train (`code_target_skip_coda`, inherited from `tul_code_only`), so the
+prelude drifts away from the frozen coda. `ce_tf` reached 5.39 (against arm A's 1.41) and
+the forced-depth sweep read CE 11.99, 11.99, 12.56, 12.53 at 5k/10k/15k/20k, every one
+above `ln(49152) = 10.80`. Its K1−K6 accordingly read +0.1968, −0.0291, +0.1738, +0.0129 —
+four confident, mutually contradictory answers. Its own worth profile (zero −4.3926,
+shuffle +0.2067) is void for the same reason.
+
+Read instead with the frozen twin (`lab/divergence/code_twin_read_probe.py`, 96 rows, 8
+permutation draws), beside the two arms it is compared with:
+
+| | arm A @20k | code-only @20k | **graded-l2 @20k** |
+| --- | --- | --- | --- |
+| oracle, absolute | 1.2349 | 1.2349 | 1.2349 |
+| zero, absolute | 4.4517 | 4.4517 | 4.4517 |
+| own, absolute | 9.0930 | 9.0755 | 8.9747 |
+| zero − own | −4.6413 | −4.6238 | −4.5230 |
+| shuf − own | +0.1314 | +0.1876 | **+0.0919** |
+
+The graded arm is the LEAST span-specific of the three, and all three are about 4.5 nats
+worse than handing the coda nothing.
+
 ## Verdict
 
+**Failure.** Four of eight predictions missed, one is unscored because its arm never ran,
+and the three that hold are all machinery: the grader is sane, the arm is fast enough, the
+coverage is adequate.
+
+The binding clause written before the run applies as written: "P-G2 fails while P-G1 holds
+→ grading text does not select codes. The `E` channel cannot carry what the grader ranks,
+and the graded-target family goes to rejected with that number." **That number is −0.004.**
+
+This is a stronger and more specific result than "the computed target is weak". The grader
+ranks continuations well (0.878). The loop learns its winners well (0.532). The step that
+fails is the one nobody had measured: E's code of the winning continuation is no closer to
+E's code of the true continuation than the loser's is. Ranking TEXT and ranking CODES are
+not the same ordering, so a target built by grading text cannot teach a code.
+
 ## Updated hypothesis
+
+The graded-continuation target is rejected, and the reason generalises past this arm: any
+target computed by scoring generated TEXT and then encoding the winner inherits the
+encoder's indifference to what the scorer measured. The fix is not a better grader — this
+grader is good — but a grade computed IN the code space, or a code space built so that
+text quality and code distance agree. Neither exists here.
+
+Two things this file settles for the wider family:
+
+1. **The target's SHAPE is closed as an explanation for the flat per-pass curve.** A
+   computed, state-dependent, refinable target is met in one pass (+0.0075 toward the
+   winner, +0.0026 toward the truth) exactly as seven fixed targets were. The next question
+   is about the map, not the target.
+2. **The reader, not the target, was the live variable.** On the same day, unfreezing the
+   coda for 10,000 steps (`tul-code-target-uf`) turned the cell from −4.6 nats to **+0.177
+   nats** of measured worth, 80 % of it span-specific, with a clean decay from the span
+   boundary. No target change in this family has ever moved a number that far.
+
+The pure arm (`tul_code_grade.yaml`, `code_target_weight: 0`, `code_grade_every: 1`, about
+0.16x the code-only rate) is NOT worth its GPU time on this evidence: it removes the L2
+term and leaves only the target whose selection step just measured −0.004. If it is ever
+run, the prediction is that `code_target_cos` falls well below arm A's 0.1413, because the
+loop would be trained exclusively toward the sampler's style.
