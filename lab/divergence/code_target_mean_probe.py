@@ -119,6 +119,7 @@ def main() -> None:
     orig_fixed = int(getattr(tc, "slot_depth_fixed", 0))
     out = {"label": label, "step": step, "rows": n_rows, "n_slots": N, "M": M, "C": C,
            "eval_depth": orig_fixed or orig_mean, "by_depth": {}}
+    P0 = None                     # the FIRST depth's cells: every later depth is read against it
     try:
         for d in depths:
             if d > 0:
@@ -129,7 +130,9 @@ def main() -> None:
                     tc.slot_depth_fixed = d
             P = torch.cat([_cells(model, inp, lay, device, None)[code_target_valid(lay)].cpu()
                            for inp, lay in batches])
-            out["by_depth"][str(d)] = _stats(P, Z, M, C, N, d)
+            if P0 is None:
+                P0 = P
+            out["by_depth"][str(d)] = _stats(P, Z, M, C, N, d, P0)
     finally:
         tc.slot_mean_depth, tc.slot_max_depth = orig_mean, orig_max
         if orig_fixed > 0:
@@ -141,8 +144,13 @@ def main() -> None:
     print(f"wrote {a.out}", flush=True)
 
 
-def _stats(P: torch.Tensor, Z: torch.Tensor, M: int, C: int, N: int, depth: int) -> dict:
-    """The readings for ONE set of predicted cells against the codes."""
+def _stats(P: torch.Tensor, Z: torch.Tensor, M: int, C: int, N: int, depth: int,
+           P0: torch.Tensor) -> dict:
+    """The readings for ONE set of predicted cells against the codes, and against the cells
+    the FIRST depth column produced (``P0``): how far the extra passes moved the cell at
+    all, and in which direction. ``cos_to_d0`` near 1 with a falling coda CE says the
+    passes are polishing one vector, not choosing a different one; ``cos_delta_zbar``
+    (the change's cosine to the corpus-mean code) says whether the polish is a hedge."""
     g = torch.Generator().manual_seed(0)
     perm = torch.randperm(N, generator=g)
     res = {"depth": depth, "cells": []}
@@ -166,13 +174,25 @@ def _stats(P: torch.Tensor, Z: torch.Tensor, M: int, C: int, N: int, depth: int)
             "norm_zbar_over_rms": float(zbar.norm() / z.norm(dim=-1).mean()),
             "rms_pred": float(p.pow(2).mean(-1).sqrt().mean()),
         }
+        p0 = P0[:, m]
+        dlt = p - p0
+        r["cos_to_d0"] = float(F.cosine_similarity(p, p0, dim=-1).mean())
+        r["delta_rel"] = float((dlt.norm(dim=-1) / p0.norm(dim=-1)).mean())
+        _dn = dlt.norm(dim=-1) > 1e-8
+        r["cos_delta_zbar"] = (float(F.cosine_similarity(dlt[_dn], zbar.expand_as(dlt)[_dn],
+                                                         dim=-1).mean()) if _dn.any() else 0.0)
+        r["cos_delta_z"] = (float(F.cosine_similarity(dlt[_dn], z[_dn], dim=-1).mean())
+                            if _dn.any() else 0.0)
         res["cells"].append(r)
         print(f"  [depth {depth}] cell {m}: cos own {r['cos_own']:.4f}  shuf {r['cos_shuf']:.4f}  "
               f"pred·zbar {r['cos_pred_zbar']:.4f}  z·zbar {r['cos_z_zbar']:.4f}  "
               f"centred own {r['cos_centred_own']:.4f} shuf {r['cos_centred_shuf']:.4f}  "
               f"pair pred {r['pair_pred']:.4f} z {r['pair_z']:.4f}  "
               f"rank pred {r['eff_rank_pred']:.1f} z {r['eff_rank_z']:.1f}  "
-              f"rms {r['rms_pred']:.3f}", flush=True)
+              f"rms {r['rms_pred']:.3f}\n"
+              f"             to-d0 {r['cos_to_d0']:.4f}  |delta|/|p| {r['delta_rel']:.4f}  "
+              f"delta.zbar {r['cos_delta_zbar']:+.4f}  delta.z {r['cos_delta_z']:+.4f}",
+              flush=True)
     return res
 
 
