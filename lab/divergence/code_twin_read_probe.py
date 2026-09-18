@@ -27,8 +27,11 @@ readings comparable. On a trainable-front arm the gap between the two readers is
 Conditions, all read by the twin, all on the same packed val rows:
   own    — the live loop's cells (the reference, matching worth_profile.py's "intact")
   zero   — no cell at all
-  shuf   — each row's valid cells rolled by one, so a slot gets a FOREIGN cell from its own
-           row: removes the slot-to-span correspondence and nothing else
+  shuf   — each row's valid cells reassigned within the row, so a slot gets a FOREIGN cell
+           from its own row: removes the slot-to-span correspondence and nothing else.
+           `--shuffle perm` (the default) is the model's own `_tul_plan_ablate` random
+           permutation, definitionally identical to worth_profile.py's; `--shuffle roll`
+           shifts by one instead.
   oracle — E's true code, the ceiling
 
 Deltas are reported as `condition - own`, the same sign convention worth_profile.py uses for
@@ -87,15 +90,23 @@ def token_strata(layout, labels_row, b: int, spec):
     return out
 
 
-def shuffled_cells(cells: torch.Tensor, layout) -> torch.Tensor:
-    """Each row's VALID slot cells rolled by one, WITHIN the row.
+def shuffled_cells(cells: torch.Tensor, layout, how: str, model) -> torch.Tensor:
+    """Each row's VALID slot cells reassigned WITHIN the row.
 
     Within-row on purpose: it removes the correspondence between a slot and its span and
     leaves the row's cell distribution untouched, which is what makes the delta a
-    span-SPECIFICITY number rather than a distribution-shift number. This is the same
-    contract as worth_profile.py's "shuffle", not the roll-by-half-the-batch used for the
-    training-time `code_target_cos_shuf` scalar.
+    span-SPECIFICITY number rather than a distribution-shift number.
+
+    ``perm`` calls the model's OWN ``_tul_plan_ablate(..., "shuffle")``, so the condition is
+    definitionally identical to ``worth_profile.py``'s and the two tables can be compared
+    directly. It is a random permutation, so about one slot per row keeps its own cell.
+    ``roll`` shifts every valid slot by one instead, which has no fixed points and gives
+    each slot its NEIGHBOUR's cell — a weaker displacement if neighbouring spans are alike.
+    The two disagreed on arm A (worth_profile +0.050 against this probe's roll +0.152) and
+    that gap is what this flag exists to settle.
     """
+    if how == "perm":
+        return model._tul_plan_ablate(cells, layout, "shuffle")
     out = cells.clone()
     for b in range(cells.shape[0]):
         idx = layout.slot_valid[b].nonzero(as_tuple=True)[0]
@@ -146,6 +157,10 @@ def main() -> None:
                          "needs tul.code_target_ref; 'live' is the model itself, which is "
                          "the VAE stage anyway on a frozen-front arm and is the broken "
                          "reader on a trainable-front one.")
+    ap.add_argument("--shuffle", default="perm", choices=("perm", "roll"),
+                    help="HOW the foreign cell is chosen. 'perm' is the model's own "
+                         "_tul_plan_ablate random within-row permutation, identical to "
+                         "worth_profile.py's; 'roll' shifts every valid slot by one.")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     device = a.device
@@ -198,7 +213,7 @@ def main() -> None:
             ce = {"own": twin_ce(twin, inp, layout, labels, device, cells),
                   "zero": twin_ce(twin, inp, layout, labels, device, torch.zeros_like(cells)),
                   "shuf": twin_ce(twin, inp, layout, labels, device,
-                                  shuffled_cells(cells, layout)),
+                                  shuffled_cells(cells, layout, a.shuffle, twin)),
                   "oracle": twin_ce(twin, inp, layout, labels, device, None)}
             for b in range(inp.shape[0]):
                 strata = token_strata(layout, labels[b], b, spec)
@@ -219,7 +234,7 @@ def main() -> None:
 
         cnts = np.stack(row_counts)
         rng = np.random.default_rng(a.seed)
-        arm = {"step": step, "rows": rows_done, "reader": a.reader,
+        arm = {"step": step, "rows": rows_done, "reader": a.reader, "shuffle": a.shuffle,
                "bins": [list(x) for x in BINS],
                "n_tokens_per_bin": cnts.sum(0).tolist(),
                "abs_ce": {c: abs_sums[c] / max(abs_n, 1) for c in ("own", *CONDS)},
