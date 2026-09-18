@@ -670,7 +670,14 @@ cosine reached 0.14 by step 1500 and 0.17 at 10k; pass 1 does all of it (l0 0.06
 shuffled 0.021, centred own 0.135 vs 0.002) that leans on the corpus-mean direction (cos
 0.33-0.53 vs the codes' 0.06-0.09) and lives in an effective rank of 16 against the codes'
 75 (`lab/divergence/code_target_mean_probe.py`); the frozen coda reads it at 9.1 nats,
-worse than no cell (7.4). Wolfe: "Poisson loop, the loop guesses the code. We never even
+worse than NO cell. (The "7.4 nats = nothing" figure quoted in §17, the configs and the
+preregs was never measured: it was a transient from the aborted first draw. The measured
+floor is the runner's own worth profile on arm A at 20k, 192 rows, paired: zeroing the
+cells makes the frozen coda's token CE 4.608 nats BETTER, and a SHUFFLED cell is only
+0.050 nats worse than the slot's own. The strict ruler at 5k reads +0.186 for zero and
++0.174 for shuffle on the same instrument, so the ruler's free deterministic write is
+worth 0.186 nats with 94 % of it slot-specific, while the regressed cell is worth −4.6
+nats against nothing and carries 0.050 nats of slot-specific signal.) Wolfe: "Poisson loop, the loop guesses the code. We never even
 run the coda." Three knobs, one arm family (`tul_code_only.yaml`, `tul_code_only_nce.yaml`):
 
 - **`code_target_skip_coda`.** At TRAIN (`self.training` and labels given) `_forward_tul`

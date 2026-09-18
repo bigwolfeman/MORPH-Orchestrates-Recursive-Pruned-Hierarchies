@@ -27,7 +27,10 @@
 # optimizer, exactly the opening every panel arm gets; `data_skip_batches: 10000` moves the
 # stream past the batches the VAE stage already read. The trainer's divergence guard is
 # lifted to 1e5 ppl: the frozen strict coda's CE on the predicted cell is the arm's
-# INSTRUMENT (7.4 nats = the cell carries nothing, 4.4 = ruler, 1.3 = oracle), and the
+# INSTRUMENT (1.3 nats = the coda on the TRUE code; the no-cell and ruler figures once
+# quoted here as 7.4 and 4.4 were never measured and are withdrawn — the measured
+# comparison is the worth profile: zeroing arm A's cell is worth -4.608 nats to the coda
+# at 20k, against the strict ruler's +0.186), and the
 # default 1000-ppl ceiling (6.9 nats) sits inside that range — it killed the first draw
 # at the resume step. The detonation tripwire (preclip/total) is untouched.
 #   training.init_from=/home/wolfe/morph-to/checkpoints/morph/tul-code-vae/step_10000.pt
@@ -40,8 +43,8 @@ training:
   ademamix_t_beta3: 20000
   data_skip_batches: 10000
   # 2026-09-17 15:30: 1e8 (18.4 nats), was 1e5. On the detach arm the coda's CE on the
-  # predicted cell trains nothing and is the arm's INSTRUMENT (7.4 nats = nothing, 1.3 =
-  # oracle); arm A took one per-step strike at 11.5 nats (step 5360) while its regression
+  # predicted cell trains nothing and is the arm's INSTRUMENT (1.3 nats = the true code;
+  # the no-cell floor is the worth profile, -4.608 nats on arm A at 20k); arm A took one per-step strike at 11.5 nats (step 5360) while its regression
   # loss fell. A second consecutive strike would abort a healthy run. Non-finite loss is
   # still caught by the separate NaN/Inf abort.
   div_ppl_ceiling: 100000000

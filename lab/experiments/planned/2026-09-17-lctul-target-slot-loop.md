@@ -91,7 +91,9 @@ measured 1000-step LR ramp and a fresh optimizer (the first draw ran flat 1e-4 f
 first step and the CE rose 7.4 → 9.9 nats in 20 steps); (2) `training.data_skip_batches:
 10000` moves the stream past the VAE stage's batches; (3) the guard's ceiling becomes a
 config key (`training.div_ppl_ceiling`, 1e5 on these arms) because the coda's CE on the
-predicted cell is the arm's instrument (7.4 nats = nothing, 4.4 = ruler, 1.3 = oracle) and
+predicted cell is the arm's instrument (1.3 nats = the true code; the "7.4 = nothing, 4.4 =
+ruler" figures written here were a transient from the aborted draw and are withdrawn - see
+the worth-profile correction below) and
 the default ceiling sits inside that range. Arm B (`resume`, no ramp) was killed and both
 arms re-queued at the head on the new commit after a second Spark smoke with `init_from`.
 Second smoke (14:33, commit d8e93d2, which also declares `init_from` / `data_skip_batches` /
@@ -153,6 +155,28 @@ nats (a ZERO cell reads 7.4) finding a perturbed harmful cell slightly less harm
 loop finding a better code. Scored honestly: P-T5 holds and means nothing on its own, and
 the arm's depth question is answered by P-T2, which fails (l6 - l1 = +0.003 over the last
 500 steps).
+
+## The cell is worth −4.6 nats to the frozen coda (correction, 2026-09-17 20:55)
+
+The runner's own worth profile ran on arm A at 20k and was not read until now
+(`results/2026-09-17-lctul-target/worth_tul-code-target_20000.json`, 192 rows, paired CE
+deltas of `ablated − intact`, stratified by offset):
+
+| ablation | arm A @20k | strict ruler @5k |
+| --- | --- | --- |
+| zero the cells | **−4.608** | +0.186 |
+| shuffle the cells across slots | +0.050 | +0.174 |
+
+Read plainly: on the ruler, taking the cell away costs 0.186 nats and giving a FOREIGN cell
+recovers only 0.012 of that, so the write is worth 0.19 nats and 94 % of it is
+slot-specific. On arm A, taking the cell away GAINS 4.6 nats, and the slot's own cell beats
+a foreign one by 0.050. The regressed cell therefore carries about a quarter of the ruler's
+slot-specific signal and arrives wrapped in 4.6 nats of poison for this reader. Every CE
+number in this arm — the val loss, the forced-depth curve, P-T5 — is measured through a
+reader that would rather have nothing, which puts the depth curve's 0.096 nats in scale:
+it recovers 2 % of the self-inflicted wound. The "7.4 nats = the cell carries nothing"
+figure used in the Method above, in `tul_code_target.yaml` and in the spec was a transient
+from the aborted first draw, never a measurement; it is withdrawn everywhere.
 
 ## Not verified before launch
 
