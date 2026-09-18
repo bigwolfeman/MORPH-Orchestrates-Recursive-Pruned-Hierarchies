@@ -480,26 +480,35 @@ class ToySlotLoop(nn.Module):
             out["token_ce_exit"] = token_ce.detach()
 
         mux = torch.zeros((), device=tokens.device)
-        valid = torch.ones_like(depths, dtype=torch.bool)
+        # A slot whose MUX target is -100 carries no MUX loss. On `compose` and `summary`
+        # every slot has a target and `ok_next`/`ok_own` are all-True, so this is the
+        # untouched forward; on `eliminate` only the answer slots carry a next-span target
+        # and only the elimination spans carry an own-span target, and a term with NO valid
+        # entry is dropped rather than averaged as a NaN.
+        ok_next = batch["mux_next"] != -100
+        ok_own = batch["mux_own"] != -100
         if c.attach in {"exit", "progressive"}:
-            mux = self.mux_ce(z, batch["mux_next"], valid)
+            mux = self.mux_ce(z, batch["mux_next"], ok_next)
         elif c.attach in {"mux_all", "mux_all_detach"}:
             terms = [
-                self.mux_ce(h_t, batch["mux_next"], (t < depths)) for t, h_t in enumerate(states)
+                self.mux_ce(h_t, batch["mux_next"], (t < depths) & ok_next)
+                for t, h_t in enumerate(states)
+                if bool(((t < depths) & ok_next).any())
             ]
-            mux = torch.stack(terms).mean()
+            mux = torch.stack(terms).mean() if terms else mux
         elif c.attach == "staged":
             terms = []
             for t, h_t in enumerate(states):
                 last = (t + 1) == depths
-                mid = (t < depths) & ~last
+                mid = (t < depths) & ~last & ok_own
+                last = last & ok_next
                 if mid.any():
                     terms.append(self.mux_ce(h_t, batch["mux_own"], mid))
                 if last.any():
                     terms.append(self.mux_ce(h_t, batch["mux_next"], last))
             mux = torch.stack(terms).mean() if terms else mux
         elif c.attach == "deep_coda":
-            mux = self.mux_ce(z, batch["mux_next"], valid)
+            mux = self.mux_ce(z, batch["mux_next"], ok_next)
 
         loss = token_ce + c.mux_weight * mux
         if c.fixed_point_lambda > 0:

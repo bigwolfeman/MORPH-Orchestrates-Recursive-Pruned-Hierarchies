@@ -147,6 +147,125 @@ def table_grad(g, keys, title, source="total"):
         print(f"| `{k}` | {cs} | {ws} | {co} | {pc:+.3f} | {plain(ca, 3)} |")
 
 
+# --------------------------------------------------------------------------------------
+# `eliminate` tables (2026-09-18)
+# --------------------------------------------------------------------------------------
+
+PLATEAUS = [
+    ("depth-starved (ln 4)", 1.386294),
+    ("point at s+0 ((2/3)ln 4)", 0.924196),
+    ("point at s+1 (ln 2)", 0.693147),
+    ("solved", 0.0),
+]
+
+
+def _nearest_plateau(ce):
+    name, v = min(PLATEAUS, key=lambda p: abs(ce - p[1]))
+    return name, ce - v
+
+
+def table_elim_plateau(g, keys):
+    print("\n### `eliminate`: where each seed landed, against the enumerated plateaus\n")
+    print("| cell | seed | value CE @6 | value acc @6 | nearest plateau | distance |")
+    print("|---|---|---|---|---|---|")
+    for k in keys:
+        for r in sorted(g[k], key=lambda r: r["seed"]):
+            ce = r["k_curve"]["6"]["value_ce"]
+            name, d = _nearest_plateau(ce)
+            print(
+                f"| `{k}` | {r['seed']} | {ce:.4f} | {r['k_curve']['6']['value_acc']:.3f} "
+                f"| {name} | {d:+.4f} |"
+            )
+
+
+def _split(rs):
+    return [r for r in rs if r.get("escaped")], [r for r in rs if not r.get("escaped")]
+
+
+def table_elim_mass(g, keys, role, passes=(0, 1, 2, 6)):
+    print(f"\n### `eliminate` candidate mass at role `{role}` (solved seeds | stuck seeds)\n")
+    print("| cell | pass | n | survivor | dead (reachable) | alive non-survivor | entropy | top mass |")
+    print("|---|---|---|---|---|---|---|---|")
+    for k in keys:
+        for group_name, rs in (("solved", _split(g[k])[0]), ("stuck", _split(g[k])[1])):
+            if not rs:
+                continue
+            for t in passes:
+                c = [r["eliminate"]["candidate_mass"][role][t] for r in rs]
+                n = len(c)
+                print(
+                    f"| `{k}` {group_name} | {t} | {n} "
+                    + " | ".join(
+                        f"{sum(x[f] for x in c)/n:.3f}"
+                        for f in (
+                            "survivor",
+                            "eliminated_reachable",
+                            "alive_non_survivor",
+                            "entropy",
+                            "top_mass",
+                        )
+                    )
+                    + " |"
+                )
+
+
+def table_elim_probe(g, keys, passes=(0, 1, 2, 6)):
+    print("\n### `eliminate` membership probe, balanced accuracy on held-out rows\n")
+    print("| cell | role | " + " | ".join(f"p{t} bal" for t in passes) + " | "
+          + " | ".join(f"p{t} within-set" for t in passes) + " |")
+    print("|---" * (2 + 2 * len(passes)) + "|")
+    for k in keys:
+        rs = g[k]
+        if not rs:
+            continue
+        for role in ("cand", "elim1", "answer"):
+            bal = []
+            wit = []
+            for t in passes:
+                c = [r["eliminate"]["membership_probe"][role][t] for r in rs]
+                bal.append(f"{sum(x['acc_balanced'] for x in c)/len(c):.3f}")
+                w = [x["acc_within_set"] for x in c if x["acc_within_set"] is not None]
+                wit.append(f"{sum(w)/len(w):.3f}" if w else "-")
+            print(f"| `{k}` | {role} | " + " | ".join(bal) + " | " + " | ".join(wit) + " |")
+
+
+def table_elim_twin(g, keys):
+    print("\n### `eliminate` twin divergence (rows differing ONLY at the head of span s+1)\n")
+    print("| cell | role | drop pass (expected) | cosine p0 | p1 | p2 | p6 |")
+    print("|---|---|---|---|---|---|---|")
+    for k in keys:
+        rs = g[k]
+        if not rs:
+            continue
+        for role in ("cand", "elim1", "answer"):
+            c = [r["eliminate"]["twin_divergence"][role] for r in rs]
+            drops = {str(x["drop_pass"]) for x in c}
+            exp = c[0]["expected_drop_pass"]
+            cos = [f"{sum(x['cosine'][t] for x in c)/len(c):.4f}" for t in (0, 1, 2, 6)]
+            print(f"| `{k}` | {role} | {'/'.join(sorted(drops))} ({exp}) | " + " | ".join(cos) + " |")
+
+
+def main_eliminate(rows, g):
+    keys = sorted({key_of(r) for r in rows})
+    print(f"\n## `eliminate`: {len(rows)} runs in {len(keys)} cells")
+    cl = rows[0]["eliminate"]["ceilings"]
+    print(
+        f"\nceilings (nats): chance {cl['chance']:.4f} | reachability d=1 "
+        f"{cl['reachability']['1']:.4f}, d>=2 {cl['reachability']['2']:.4f} | commitment "
+        f"{cl['commitment']['0']:.4f}/{cl['commitment']['1']:.4f}/{cl['commitment']['2']:.4f} "
+        f"| point carry {cl['point_carry']['0']:.4f}/{cl['point_carry']['1']:.4f}"
+    )
+    table_main(g, keys, "`eliminate` grid")
+    table_kcurve(g, keys, "`eliminate` value CE against forced depth")
+    table_elim_plateau(g, keys)
+    for role in ("cand", "elim1", "answer"):
+        table_elim_mass(g, keys, role)
+    table_elim_probe(g, keys)
+    table_elim_twin(g, keys)
+    table_write(g, keys, "`eliminate` write contribution")
+    table_grad(g, keys, "`eliminate` per-pass gradient", "total")
+
+
 def corr(xs, ys):
     n = len(xs)
     mx, my = sum(xs) / n, sum(ys) / n
@@ -163,7 +282,13 @@ def main():
     sc = max(r["gradient_probe"]["total"]["selfcheck_max_rel_err"] for r in rows)
     print(f"\nper-pass tap self-check, worst over every run: max rel err {sc:.2e}")
 
-    atts = ["exit", "mux_all", "mux_all_detach", "staged", "deep_coda", "progressive"]
+    el = [r for r in rows if r["task"] == "eliminate" and "eliminate" in r]
+    if el:
+        main_eliminate(el, group(el))
+        if len(el) == len(rows):
+            return
+
+    atts =["exit", "mux_all", "mux_all_detach", "staged", "deep_coda", "progressive"]
     for task in ("compose", "summary"):
         keys = [f"A-{task}-{a}" for a in atts]
         table_main(g, keys, f"Grid A, task `{task}`")

@@ -221,3 +221,42 @@ The reachability ceiling at forced depth d, strict geometry, 8 spans:
 | d | 1 | 2 | 3 | 6 | 8 |
 |---|---|---|---|---|---|
 | best possible value CE | 1.2798 | 1.0239 | 0.7679 | 0.0000 | 0.0000 |
+
+---
+
+## 2026-09-18 extension: the `eliminate` task (appended, nothing above is edited)
+
+A third task and three instruments, for a question the 2026-09-10 grid could not ask:
+`compose` and `summary` both have an optimal intermediate state that is a POINT, so neither
+can say whether this loop can carry a SET. The predictions for the `eliminate` grid are
+frozen in their own pre-registration, not here:
+[`lab/experiments/planned/2026-09-18-toy-eliminate-deferred-commitment.md`](../experiments/planned/2026-09-18-toy-eliminate-deferred-commitment.md).
+
+What changed in the code, and what did not:
+
+- `tasks.py` gains `eliminate` (18 ids: 6 candidates, 6 distractors, 6 output-only answers),
+  `vocab_for`, `make_twin_batch` and `eliminate_ceilings`. `compose` and `summary` keep the
+  12-id S_3 vocabulary and their exact sampler.
+- `model.py` drops a MUX term whose targets are all `-100` instead of averaging a NaN. On
+  `compose` and `summary` every slot carries a target, so the forward is unchanged: the
+  loss, the MUX term, the core weight gradient and the embedding gradient all match the
+  previous commit to the last printed digit on 12 of 12 task x attachment combinations.
+- `instruments.py` gains `candidate_mass`, `membership_probe` and `twin_divergence`, all
+  read per pass on the slot state and all scored against the slot's reachable window.
+- `selfcheck.py` gains `t_eliminate_task`, `t_eliminate_ceilings`,
+  `t_eliminate_depth_requirement` and `t_eliminate_mux_masking`.
+
+The `eliminate` ceilings, all enumerated over the 120 equiprobable ordered triples
+(survivor, first eliminated, second eliminated), never asserted:
+
+| quantity | value |
+|---|---|
+| chance | 1.7918 (ln 6) |
+| reachability at forced depth 1 / >= 2 | 1.3863 (ln 4) / 0.0000 |
+| commitment after span s+0 / s+1 / s+2 | 1.0986 (ln 3) / 0.6931 (ln 2) / 0.0000 |
+| point carry from span s+0 / s+1 | 0.9242 = (2/3) ln 4 / 0.6931 = ln 2 |
+
+The depth price is measured, not argued, exactly as `compose`'s was:
+`selfcheck.py::t_eliminate_depth_requirement` differentiates the value logit at the head of
+span 3 with respect to the raw cell embeddings and reads 0.000e+00 at depth 1 and 1.010 at
+depth 2.

@@ -199,6 +199,274 @@ def gradient_probe(model, batches, depth: int = 6, source: str = "total") -> dic
     }
 
 
+# --------------------------------------------------------------------------------------
+# `eliminate` instruments (2026-09-18): is the alive set carried, and as what?
+# --------------------------------------------------------------------------------------
+#
+# Every one of these reads the slot state after t = 0..T passes, where t = 0 is the ENTRY
+# state (zero passes). Three slot roles matter inside an instance whose candidate span is
+# span s:
+#   role "cand"   slot s+0, the slot that sees the three candidates  -> alive set of 3
+#   role "elim1"  slot s+1, the slot that sees the first elimination -> alive set of 2
+#   role "answer" slot s+2, the slot the answer is read from         -> alive set of 1
+# Under strict geometry a slot reaches spans s+r-t .. s+r after t passes, so WHICH facts a
+# state could possibly hold is known exactly, and every instrument is scored against that
+# window rather than against the whole instance.
+
+ROLE_NAMES = ("cand", "elim1", "answer")
+
+
+def _reachable(role: int, t: int) -> dict[str, bool]:
+    """What slot s+role can hold after t passes: its window is spans s+role-t .. s+role."""
+    lo = role - t
+    return {
+        "cands": lo <= 0 <= role,  # the candidate span is s+0
+        "e1": lo <= 1 <= role,  # the first elimination is at span s+1
+        "e2": lo <= 2 <= role,  # the second elimination is at span s+2
+    }
+
+
+@torch.no_grad()
+def _slot_states(model, b, depth: int) -> list[torch.Tensor]:
+    """[h_0, h_1, ... h_T] for every slot, at a forced depth. h_0 is the entry state."""
+    x = model._front(b["tokens"])
+    e = x[:, model.slot_pos]
+    depths = torch.full(
+        (b["tokens"].shape[0], model.cfg.layout.n_spans),
+        depth,
+        dtype=torch.long,
+        device=b["tokens"].device,
+    )
+    z, h0, states, _ = model.loop(e, depths)
+    return [h0] + states
+
+
+def _inst_masks(b, k: int):
+    """[B, 3] one-hot style masks over the instance's three candidate columns."""
+    cands = b["candidates"][:, k]  # [B, 3] candidate symbols in span order
+    surv = b["survivor"][:, k].unsqueeze(-1)
+    e1 = b["elim"][:, k, 0].unsqueeze(-1)
+    e2 = b["elim"][:, k, 1].unsqueeze(-1)
+    return cands, (cands == surv), (cands == e1), (cands == e2)
+
+
+@torch.no_grad()
+def candidate_mass(model, batches, depth: int = 6) -> dict:
+    """Mass the TIED answer head puts on each candidate, per slot role and per pass.
+
+    The softmax is restricted to the three answer ids of the instance's own candidates, so
+    it reads how the state splits its belief BETWEEN candidates. A superposition of the
+    alive set reads entropy ln(alive) and zero mass on anything the state could already
+    know is dead. A committed point reads entropy near 0 whatever the alive set is, which
+    is why the entropy and the top mass are reported next to the three masses: the mean
+    mass on the survivor alone cannot tell a 3-way superposition from a uniformly random
+    commitment (both give 1/3).
+    """
+    from tasks import ELIM_VALUE_BASE
+
+    model.eval()
+    acc = {(r, t): torch.zeros(5) for r in range(len(ROLE_NAMES)) for t in range(depth + 1)}
+    n = 0
+    for b in batches:
+        states = _slot_states(model, b, depth)
+        for k, base in enumerate(b["inst_base_span"].tolist()):
+            cands, is_s, is_e1, is_e2 = _inst_masks(b, k)
+            ids = ELIM_VALUE_BASE + cands  # [B, 3] answer ids
+            for role in range(len(ROLE_NAMES)):
+                for t in range(depth + 1):
+                    reach = _reachable(role, t)
+                    lg = model.mux_head(states[t][:, base + role]).gather(1, ids).float()
+                    p = lg.softmax(-1)
+                    known = (is_e1 & reach["e1"]) | (is_e2 & reach["e2"])
+                    alive_other = (is_e1 | is_e2) & ~known
+                    ent = -(p.clamp_min(1e-12).log() * p).sum(-1)
+                    acc[(role, t)] += torch.tensor(
+                        [
+                            (p * is_s).sum(-1).mean().item(),
+                            (p * known).sum(-1).mean().item(),
+                            (p * alive_other).sum(-1).mean().item(),
+                            ent.mean().item(),
+                            p.max(-1).values.mean().item(),
+                        ]
+                    )
+            n += 1
+    out = {r: [] for r in ROLE_NAMES}
+    for role, name in enumerate(ROLE_NAMES):
+        for t in range(depth + 1):
+            a = (acc[(role, t)] / n).tolist()
+            reach = _reachable(role, t)
+            out[name].append(
+                {
+                    "pass": t,
+                    "survivor": a[0],
+                    "eliminated_reachable": a[1],
+                    "alive_non_survivor": a[2],
+                    "entropy": a[3],
+                    "top_mass": a[4],
+                    "n_alive_reachable": (3 - reach["e1"] - reach["e2"]) if reach["cands"] else None,
+                }
+            )
+    return out
+
+
+@torch.no_grad()
+def _probe_features(model, batches, depth: int, role: int):
+    """(X, Y, in_set) per pass: the slot state, the alive target, the candidate mask."""
+    from tasks import N_CAND
+
+    X = [[] for _ in range(depth + 1)]
+    Y = [[] for _ in range(depth + 1)]
+    S = [[] for _ in range(depth + 1)]
+    for b in batches:
+        states = _slot_states(model, b, depth)
+        for t in range(depth + 1):
+            reach = _reachable(role, t)
+            for k, base in enumerate(b["inst_base_span"].tolist()):
+                cands, is_s, is_e1, is_e2 = _inst_masks(b, k)
+                B = cands.shape[0]
+                in_set = torch.zeros(B, N_CAND, dtype=torch.bool, device=cands.device)
+                in_set.scatter_(1, cands, True)
+                dead = torch.zeros_like(in_set)
+                if reach["e1"]:
+                    dead.scatter_(1, b["elim"][:, k, 0:1], True)
+                if reach["e2"]:
+                    dead.scatter_(1, b["elim"][:, k, 1:2], True)
+                X[t].append(states[t][:, base + role].float())
+                Y[t].append((in_set & ~dead).float())
+                S[t].append(torch.stack([in_set, dead], dim=-1))
+    return (
+        [torch.cat(x) for x in X],
+        [torch.cat(y) for y in Y],
+        [torch.cat(s) for s in S],
+    )
+
+
+def membership_probe(
+    model, train_batches, eval_batches, depth: int = 6, steps: int = 400, lr: float = 3e-2
+) -> dict:
+    """Linear probe: is candidate symbol c still alive in this state's reachable window?
+
+    Trained post hoc on the FROZEN model's slot states, one probe per (role, pass), and
+    scored on held-out rows. It answers a different question from `candidate_mass`: the
+    mass reads whether the set is carried as a superposition of candidate EMBEDDINGS
+    through the tied answer head, the probe reads whether the set is linearly decodable in
+    ANY encoding. A high probe accuracy under a low mass entropy is the "carried, but not
+    as a superposition" outcome.
+
+    Two scores per cell, both balanced so a base rate cannot buy them:
+      acc_balanced    over all 6 candidate symbols, mean of the accuracy on alive symbols
+                      and the accuracy on the rest. It is the set-membership reading.
+      acc_within_set  restricted to the instance's own three candidates: alive against
+                      already-eliminated. None when no elimination is inside the window,
+                      because then nothing in the set is dead.
+    Where the candidate span is NOT in the window (pass t < role) the state cannot know the
+    set at all, so those rows are the instrument's own null: they must read about 0.5.
+    """
+    dev = next(model.parameters()).device
+    out = {}
+    for role, name in enumerate(ROLE_NAMES):
+        Xtr, Ytr, _ = _probe_features(model, train_batches, depth, role)
+        Xte, Yte, Ste = _probe_features(model, eval_batches, depth, role)
+        rows = []
+        for t in range(depth + 1):
+            xtr = Xtr[t]
+            mu, sd = xtr.mean(0, keepdim=True), xtr.std(0, keepdim=True) + 1e-5
+            lin = torch.nn.Linear(xtr.shape[1], Ytr[t].shape[1]).to(dev)
+            opt = torch.optim.Adam(lin.parameters(), lr=lr)
+            xn = (xtr - mu) / sd
+            for _ in range(steps):
+                opt.zero_grad(set_to_none=True)
+                loss = torch.nn.functional.binary_cross_entropy_with_logits(lin(xn), Ytr[t])
+                loss.backward()
+                opt.step()
+            with torch.no_grad():
+                pred = lin((Xte[t] - mu) / sd) > 0
+                y = Yte[t] > 0
+                pos = (pred == y)[y].float().mean().item()
+                neg = (pred == y)[~y].float().mean().item()
+                in_set, dead = Ste[t][..., 0], Ste[t][..., 1]
+                alive_in = in_set & ~dead
+                dead_in = in_set & dead
+                if dead_in.any():
+                    a = (pred == y)[alive_in].float().mean().item()
+                    d = (pred == y)[dead_in].float().mean().item()
+                    within = 0.5 * (a + d)
+                else:
+                    within = None
+                rows.append(
+                    {
+                        "pass": t,
+                        "acc_balanced": 0.5 * (pos + neg),
+                        "acc_alive": pos,
+                        "acc_other": neg,
+                        "acc_within_set": within,
+                        "train_loss": loss.item(),
+                        "n_rows": int(Xte[t].shape[0]),
+                    }
+                )
+        out[name] = rows
+    return out
+
+
+@torch.no_grad()
+def twin_divergence(model, twin_pairs, depth: int = 6, tol: float = 1e-3) -> dict:
+    """Cosine between the slot states of two rows that differ ONLY in span s+1.
+
+    A reachability test with teeth: the state of slot s+role may not move until span s+1
+    enters its window, which happens at pass role-1. Role `cand` never reaches it, so its
+    cosine must be 1.0 at EVERY pass; role `answer` must read 1.0 at pass 0 and drop at
+    pass 1. `drop_pass` is the first pass whose mean cosine falls below 1 - tol.
+    """
+    model.eval()
+    acc = {(r, t): 0.0 for r in range(len(ROLE_NAMES)) for t in range(depth + 1)}
+    n = 0
+    for ba, bb in twin_pairs:
+        sa = _slot_states(model, ba, depth)
+        sb = _slot_states(model, bb, depth)
+        for base in ba["inst_base_span"].tolist():
+            for role in range(len(ROLE_NAMES)):
+                for t in range(depth + 1):
+                    c = torch.nn.functional.cosine_similarity(
+                        sa[t][:, base + role].float(), sb[t][:, base + role].float(), dim=-1
+                    )
+                    acc[(role, t)] += c.mean().item()
+            n += 1
+    out = {}
+    for role, name in enumerate(ROLE_NAMES):
+        cos = [acc[(role, t)] / n for t in range(depth + 1)]
+        drop = next((t for t, c in enumerate(cos) if c < 1.0 - tol), None)
+        out[name] = {
+            "cosine": cos,
+            "drop_pass": drop,
+            "expected_drop_pass": None if role == 0 else role - 1,
+        }
+    ce = []
+    for i, (ba, bb) in enumerate(twin_pairs):
+        ce.append(
+            {
+                "a_value_ce": eval_ce(model, [ba], force_depth=depth)["value_ce"],
+                "b_value_ce": eval_ce(model, [bb], force_depth=depth)["value_ce"],
+            }
+        )
+    out["value_ce"] = {
+        "a": sum(c["a_value_ce"] for c in ce) / len(ce),
+        "b": sum(c["b_value_ce"] for c in ce) / len(ce),
+    }
+    return out
+
+
+def make_twin_pairs(cfg, n_rows, batch, seed, device):
+    from tasks import make_twin_batch
+
+    g = torch.Generator(device=device).manual_seed(seed)
+    return [
+        tuple(
+            make_twin_batch(batch, cfg.layout.n_spans, cfg.layout.span_len, generator=g, device=device)
+        )
+        for _ in range(max(1, n_rows // batch))
+    ]
+
+
 def make_eval_batches(task, cfg, n_rows, batch, seed, device):
     g = torch.Generator(device=device).manual_seed(seed)
     out = []

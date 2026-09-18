@@ -18,7 +18,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from instruments import gradient_probe, make_eval_batches  # noqa: E402
 from model import PREFIX, SLOT, TOKEN, Layout, ToyConfig, ToySlotLoop, build_masks  # noqa: E402
-from tasks import MUL, N_GROUP, PERMS, VALUE_BASE, make_batch  # noqa: E402
+from tasks import (  # noqa: E402
+    ELIM_DIST_BASE,
+    ELIM_VALUE_BASE,
+    ELIM_VOCAB,
+    MUL,
+    N_CAND,
+    N_GROUP,
+    PERMS,
+    VALUE_BASE,
+    eliminate_ceilings,
+    make_batch,
+    make_twin_batch,
+)
 
 FAILS: list[str] = []
 
@@ -77,6 +89,230 @@ def t_task():
             if int(s["mux_next"][r, i]) != VALUE_BASE + int(counts.argmax()):
                 ok = False
     check("summary: mode target recomputed independently", ok)
+
+
+def t_eliminate_task():
+    """`eliminate`: the sampler must match the distribution the ceilings are computed from."""
+    g = torch.Generator().manual_seed(0)
+    B = 4096
+    b = make_batch("eliminate", B, 8, 3, generator=g)
+    toks = b["tokens"].view(B, 8, 3)
+    cands, surv, elim = b["candidates"], b["survivor"], b["elim"]
+
+    # structure, recomputed from the tokens alone
+    ok_struct = True
+    for k in range(2):
+        base = k * 4
+        if not bool((toks[:, base] == cands[:, k]).all()):
+            ok_struct = False
+        if not bool((toks[:, base + 1, 0] == elim[:, k, 0]).all()):
+            ok_struct = False
+        if not bool((toks[:, base + 2, 0] == elim[:, k, 1]).all()):
+            ok_struct = False
+        # every other cell of spans s+1..s+3 is a distractor
+        for sp, cell in ((base + 1, 1), (base + 1, 2), (base + 2, 1), (base + 2, 2),
+                         (base + 3, 0), (base + 3, 1), (base + 3, 2)):
+            col = toks[:, sp, cell]
+            if not bool(((col >= ELIM_DIST_BASE) & (col < ELIM_VALUE_BASE)).all()):
+                ok_struct = False
+    check("eliminate: span layout is [cands][e1 d d][e2 d d][d d d]", ok_struct)
+
+    srt = cands.sort(dim=-1).values
+    check(
+        "eliminate: the three candidates of a span are DISTINCT",
+        bool(((srt[..., 0] != srt[..., 1]) & (srt[..., 1] != srt[..., 2])).all()),
+    )
+    in_set = ((cands == surv.unsqueeze(-1)).sum(-1) == 1)
+    check("eliminate: the survivor is one of the three candidates", bool(in_set.all()))
+    alive = True
+    for j in range(2):
+        e = elim[..., j].unsqueeze(-1)
+        if not bool(((cands == e).sum(-1) == 1).all()):
+            alive = False
+        if bool((elim[..., j] == surv).any()):
+            alive = False
+    check("eliminate: both eliminations are candidates and NEITHER is the survivor", alive)
+    check("eliminate: the two eliminations differ", bool((elim[..., 0] != elim[..., 1]).all()))
+    check(
+        "eliminate: answers never appear as INPUT tokens",
+        bool((b["tokens"] < ELIM_VALUE_BASE).all()),
+    )
+    # the bijection candidate -> answer id, read off the labels and the MUX targets
+    ok_bij = True
+    for k in range(2):
+        base = k * 4
+        if not bool((b["labels"][:, (base + 3) * 3] == ELIM_VALUE_BASE + surv[:, k]).all()):
+            ok_bij = False
+        if not bool((b["mux_next"][:, base + 2] == ELIM_VALUE_BASE + surv[:, k]).all()):
+            ok_bij = False
+        if not bool((b["mux_own"][:, base + 1] == ELIM_VALUE_BASE + elim[:, k, 0]).all()):
+            ok_bij = False
+        if not bool((b["mux_own"][:, base + 2] == ELIM_VALUE_BASE + elim[:, k, 1]).all()):
+            ok_bij = False
+    check("eliminate: answer(c) = ELIM_VALUE_BASE + c at every label and MUX target", ok_bij)
+    keep = torch.zeros(8, dtype=torch.bool)
+    keep[2] = keep[6] = True
+    check(
+        "eliminate: only the answer slots carry a next-span MUX target",
+        bool(((b["mux_next"] != -100) == keep).all()),
+    )
+    own = torch.zeros(8, dtype=torch.bool)
+    own[1] = own[2] = own[5] = own[6] = True
+    check(
+        "eliminate: only the elimination spans carry an own-span MUX target",
+        bool(((b["mux_own"] != -100) == own).all()),
+    )
+    check(
+        "eliminate: the value positions are the heads of spans 3 and 7",
+        b["value_pos"].tolist() == [9, 21],
+    )
+
+    # the distribution the ceilings assume: the survivor's POSITION in the candidate span is
+    # uniform over 3, and the elimination order is uniform. 4096 rows x 2 instances = 8192
+    pos = (cands == surv.unsqueeze(-1)).float().argmax(-1).flatten()
+    frac = [(pos == j).float().mean().item() for j in range(3)]
+    check(
+        "eliminate: the survivor is uniform over the three candidate CELLS",
+        max(abs(f - 1 / 3) for f in frac) < 0.02,
+        f"cell fractions {[round(f, 4) for f in frac]}",
+    )
+    first_is_lower = (elim[..., 0] < elim[..., 1]).float().mean().item()
+    check(
+        "eliminate: the elimination ORDER is uniform",
+        abs(first_is_lower - 0.5) < 0.02,
+        f"P(e1 < e2) = {first_is_lower:.4f}",
+    )
+    counts = torch.zeros(N_CAND)
+    counts.scatter_add_(0, surv.flatten(), torch.ones(surv.numel()))
+    frac_s = (counts / surv.numel()).tolist()
+    check(
+        "eliminate: the survivor SYMBOL is uniform over the candidate alphabet",
+        max(abs(f - 1 / N_CAND) for f in frac_s) < 0.02,
+        f"symbol fractions {[round(f, 4) for f in frac_s]}",
+    )
+    a, bb = make_twin_batch(256, 8, 3, generator=torch.Generator().manual_seed(3))
+    diff = (a["tokens"] != bb["tokens"])
+    check(
+        "eliminate twins: differ ONLY at the head of span s+1",
+        diff.sum(1).unique().tolist() == [2]
+        and sorted(diff[0].nonzero().flatten().tolist()) == [3, 15],
+        f"differing positions {sorted(diff[0].nonzero().flatten().tolist())}",
+    )
+    check(
+        "eliminate twins: the survivor and the first elimination swap roles",
+        bool((bb["survivor"] == a["elim"][..., 0]).all())
+        and bool((bb["elim"][..., 0] == a["survivor"]).all())
+        and bool((bb["elim"][..., 1] == a["elim"][..., 1]).all()),
+    )
+
+
+def t_eliminate_ceilings():
+    """The enumerated ceilings must match the closed forms, and the closed forms must match
+    a Monte-Carlo estimate taken from the SAMPLER (not from the assumed distribution)."""
+    import math
+
+    c = eliminate_ceilings()
+    check("ceiling: chance = ln 6", abs(c["chance"] - math.log(6)) < 1e-12, f"{c['chance']:.6f}")
+    check(
+        "ceiling: reachability d=0 is ln 5 (the second elimination alone)",
+        abs(c["reachability"][0] - math.log(5)) < 1e-12,
+        f"{c['reachability'][0]:.6f}",
+    )
+    check(
+        "ceiling: reachability d=1 is ln 4 (both eliminations, no candidate set)",
+        abs(c["reachability"][1] - math.log(4)) < 1e-12,
+        f"{c['reachability'][1]:.6f}",
+    )
+    check(
+        "ceiling: reachability d>=2 is 0 (the answer is determined)",
+        c["reachability"][2] < 1e-12 and c["reachability"][3] < 1e-12,
+    )
+    check(
+        "ceiling: commitment at span s+0 is ln 3, s+1 is ln 2, s+2 is 0",
+        abs(c["commitment"][0] - math.log(3)) < 1e-12
+        and abs(c["commitment"][1] - math.log(2)) < 1e-12
+        and c["commitment"][2] < 1e-12,
+        f"{c['commitment'][0]:.4f} {c['commitment'][1]:.4f} {c['commitment'][2]:.4f}",
+    )
+    check(
+        "ceiling: point carry from span s+0 is (2/3) ln 4, from s+1 is ln 2",
+        abs(c["point_carry"][0] - 2 / 3 * math.log(4)) < 1e-12
+        and abs(c["point_carry"][1] - math.log(2)) < 1e-12,
+        f"{c['point_carry'][0]:.4f} {c['point_carry'][1]:.4f}",
+    )
+
+    # the sampler against the enumeration: H(survivor | both eliminations) from 60k draws
+    g = torch.Generator().manual_seed(11)
+    b = make_batch("eliminate", 30000, 8, 3, generator=g)
+    key = b["elim"][..., 0] * N_CAND + b["elim"][..., 1]
+    joint = torch.zeros(N_CAND * N_CAND, N_CAND)
+    joint.scatter_add_(
+        0,
+        (key.flatten().unsqueeze(-1)).expand(-1, N_CAND),
+        torch.nn.functional.one_hot(b["survivor"].flatten(), N_CAND).float(),
+    )
+    tot = joint.sum()
+    p = joint / tot
+    row = p.sum(1, keepdim=True).clamp_min(1e-12)
+    cond = p / row
+    h = -(p * cond.clamp_min(1e-12).log()).sum().item()
+    check(
+        "the SAMPLER reproduces the enumerated H(survivor | e1, e2) = ln 4",
+        abs(h - math.log(4)) < 0.01,
+        f"Monte-Carlo {h:.4f} against {math.log(4):.4f}",
+    )
+
+
+def t_eliminate_depth_requirement():
+    """Under strict geometry the `eliminate` answer needs exactly TWO passes.
+
+    Same measurement as `t_depth_requirement`: differentiate the value logit at the head of
+    span 3 with respect to the raw cell embeddings and look at the candidate span (span 0).
+    It must be exactly zero at depth 1 and non-zero at depth 2.
+    """
+    torch.manual_seed(0)
+    mo = ToySlotLoop(cfg(geometry="strict", vocab=ELIM_VOCAB, layout=Layout(8, 3, 2)))
+    g = torch.Generator().manual_seed(1)
+    b = make_batch("eliminate", 2, 8, 3, generator=g)
+    ok_below, ok_at = True, True
+    for T in (1, 2, 3):
+        base = mo._base(b["tokens"]).detach().requires_grad_(True)
+        x = base
+        for blk in mo.prelude:
+            x = blk(x, mo.mask_prelude)
+        e = x[:, mo.slot_pos]
+        z, h0, states, hp = mo.loop(e, torch.full((2, 8), T, dtype=torch.long))
+        xh = mo._write_and_coda(base, z)
+        pos = int(b["value_pos"][0])  # head of span 3, the answer of instance 0
+        logit = mo.head(xh[:, mo.tok_pos])[:, pos].sum()
+        gb = torch.autograd.grad(logit, base)[0]
+        reach = gb[:, int(mo.tok_pos[0])].norm().item()  # span 0's first candidate cell
+        if T < 2 and reach != 0.0:
+            ok_below = False
+        if T >= 2 and reach == 0.0:
+            ok_at = False
+        print(f"      T={T}: |d logit(span 3 head)/d span-0 candidate| = {reach:.3e}")
+    check("eliminate/strict: the candidate span is UNREACHABLE at depth 1", ok_below)
+    check("eliminate/strict: the candidate span IS reachable at depth 2 and above", ok_at)
+
+
+def t_eliminate_mux_masking():
+    """A -100 MUX target must contribute nothing, and must never produce a NaN."""
+    torch.manual_seed(0)
+    for attach in ("exit", "mux_all", "mux_all_detach", "staged", "deep_coda", "progressive"):
+        c = cfg(attach=attach, vocab=ELIM_VOCAB, layout=Layout(8, 3, 2))
+        mo = ToySlotLoop(c)
+        g = torch.Generator().manual_seed(5)
+        b = make_batch("eliminate", 8, 8, 3, generator=g)
+        o = mo(b, force_depth=3)
+        o["loss"].backward()
+        finite = torch.isfinite(o["loss"]).item() and torch.isfinite(o["mux"]).item()
+        gn = mo.core.mlp.down.weight.grad
+        check(
+            f"eliminate {attach}: finite loss and a live core gradient",
+            finite and gn is not None and torch.isfinite(gn).all() and gn.norm().item() > 0,
+            f"loss {o['loss'].item():.4f} mux {o['mux'].item():.4f}",
+        )
 
 
 def t_masks():
@@ -354,8 +590,12 @@ if __name__ == "__main__":
     torch.set_num_threads(2)
     t_group()
     t_task()
+    t_eliminate_task()
+    t_eliminate_ceilings()
     t_masks()
     t_depth_requirement()
+    t_eliminate_depth_requirement()
+    t_eliminate_mux_masking()
     t_coda_path()
     t_prelude_leak()
     t_depth_freeze()

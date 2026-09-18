@@ -471,3 +471,37 @@ already in the tree, read as a K-curve rather than as a CE.
   because they are not a CE ranking.
 - **No wandb run.** Every cell writes one JSON with its full config; there is no sweep
   dashboard and no hydra config for this lab spike.
+
+---
+
+## 2026-09-18 appendix: a task whose optimum is a SET
+
+Nothing above this line is edited. This appendix records what was ADDED to the study on
+2026-09-18 and why; the results of the `eliminate` grid are filed separately under
+`lab/experiments/`, with the predictions frozen beforehand in
+[`2026-09-18-toy-eliminate-deferred-commitment.md`](../experiments/planned/2026-09-18-toy-eliminate-deferred-commitment.md).
+
+The study above answers "does the loop earn depth when the target needs iteration?" on two
+tasks whose optimal intermediate state is a POINT: `compose` carries one group element and
+`summary` carries nothing at all. The superposition literature (Zhu et al., NeurIPS 2025;
+Rizvi-Martel et al., 2026) says a loop earns depth when the optimal intermediate state is a
+SET of candidates that later evidence prunes, that the set emerges without being supervised,
+that it collapses to one candidate under pretraining, and that it needs width. This repo has
+already reproduced the collapse half on its own stack — the Thought Register arm seeded four
+cells apart and read rank 1.24 of 4 — and had never built a task that asks for the set.
+
+`eliminate` is that task, and its whole design is the ceiling table in
+[PLAN.md](PLAN.md#2026-09-18-extension-the-eliminate-task-appended-nothing-above-is-edited):
+four plateaus, 1.386 / 0.924 / 0.693 / 0.000, one for depth starvation and one for each
+point at which a state could collapse to a single candidate. A stuck run's plateau says
+where it committed. That is the same device as `compose`'s 1.28-against-0.00, with two extra
+rungs that only exist because the intermediate state is a set.
+
+Two of the three new instruments exist because of a trap that the older instruments walk
+straight into. The mean mass on the survivor at a 3-candidate state is 1/3 for a genuine
+superposition AND 1/3 for a state that committed to a uniformly random candidate, so
+`candidate_mass` reports the entropy and the top mass next to the three masses. And a linear
+probe finds the alive set in an UNTRAINED network, because a random map preserves linearly
+decodable information, so `membership_probe` is read as a destruction test — a low accuracy
+is evidence, a high accuracy is not — and the grid carries two random-init cells as its
+baseline.

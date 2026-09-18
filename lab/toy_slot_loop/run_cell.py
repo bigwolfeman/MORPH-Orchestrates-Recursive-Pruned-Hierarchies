@@ -21,22 +21,26 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from instruments import (  # noqa: E402
+    candidate_mass,
     eval_ce,
     gradient_probe,
     k_curve,
     make_eval_batches,
+    make_twin_pairs,
+    membership_probe,
     participation_rank,
+    twin_divergence,
     write_contribution,
 )
 from model import Layout, ToyConfig, ToySlotLoop  # noqa: E402
-from tasks import VOCAB, chance_ce, make_batch  # noqa: E402
+from tasks import chance_ce, eliminate_ceilings, make_batch, vocab_for  # noqa: E402
 
 EVAL_SEED = 20260910
 
 
 def build_cfg(a) -> ToyConfig:
     return ToyConfig(
-        vocab=VOCAB,
+        vocab=vocab_for(a.task),
         d_model=a.d_model,
         n_heads=a.n_heads,
         d_ff=a.d_ff,
@@ -70,7 +74,7 @@ def lr_at(step, total, base, warmup):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--task", default="compose", choices=["compose", "summary"])
+    ap.add_argument("--task", default="compose", choices=["compose", "summary", "eliminate"])
     ap.add_argument("--attach", default="exit")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--steps", type=int, default=3000)
@@ -102,6 +106,8 @@ def main():
     ap.add_argument("--eval_rows", type=int, default=2048)
     ap.add_argument("--eval_batch", type=int, default=256)
     ap.add_argument("--probe_batches", type=int, default=4)
+    ap.add_argument("--probe_rows", type=int, default=1024)   # eliminate instruments
+    ap.add_argument("--probe_steps", type=int, default=400)   # membership-probe fit steps
     ap.add_argument("--probe_batch", type=int, default=64)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--label", default="cell")
@@ -159,6 +165,21 @@ def main():
     pr = participation_rank(model, ev, depth=6)
     probes = {s: gradient_probe(model, probe_ev, depth=6, source=s) for s in ("total", "token_ce", "mux")}
 
+    elim: dict = {}
+    if a.task == "eliminate":
+        # the alive-set instruments: is the set carried, in what encoding, and when does
+        # the state commit? Training rows for the membership probe are drawn from their own
+        # seed and are disjoint from the held-out rows it is scored on.
+        tr = make_eval_batches(a.task, cfg, a.probe_rows, a.eval_batch, EVAL_SEED + 3, dev)
+        te = make_eval_batches(a.task, cfg, a.probe_rows, a.eval_batch, EVAL_SEED + 4, dev)
+        twins = make_twin_pairs(cfg, a.probe_rows, a.eval_batch, EVAL_SEED + 5, dev)
+        elim = {
+            "ceilings": eliminate_ceilings(),
+            "candidate_mass": candidate_mass(model, te, depth=6),
+            "membership_probe": membership_probe(model, tr, te, depth=6, steps=a.probe_steps),
+            "twin_divergence": twin_divergence(model, twins, depth=6),
+        }
+
     esc = [h["step"] for h in hist if h["probe_value_acc"] > 0.9]
     res = {
         "label": a.label,
@@ -182,6 +203,8 @@ def main():
         "participation": pr,
         "gradient_probe": probes,
     }
+    if elim:
+        res["eliminate"] = elim
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     with open(a.out, "w") as f:
         json.dump(res, f, indent=1)
@@ -192,6 +215,19 @@ def main():
         f"esc={res['escape_step']} "
         f"selfcheck={probes['total']['selfcheck_max_rel_err']:.2e} {train_s:.0f}s"
     )
+    if elim:
+        cm = elim["candidate_mass"]
+        td = elim["twin_divergence"]
+        print(
+            f"[{a.label}] mass(cand,p0) surv/elim/other "
+            f"{cm['cand'][0]['survivor']:.3f}/{cm['cand'][0]['eliminated_reachable']:.3f}/"
+            f"{cm['cand'][0]['alive_non_survivor']:.3f} H={cm['cand'][0]['entropy']:.3f} | "
+            f"mass(elim1,p1) {cm['elim1'][1]['survivor']:.3f}/{cm['elim1'][1]['eliminated_reachable']:.3f}/"
+            f"{cm['elim1'][1]['alive_non_survivor']:.3f} H={cm['elim1'][1]['entropy']:.3f} | "
+            f"probe(elim1,p1) within={elim['membership_probe']['elim1'][1]['acc_within_set']} "
+            f"| twin drop cand/elim1/answer "
+            f"{td['cand']['drop_pass']}/{td['elim1']['drop_pass']}/{td['answer']['drop_pass']}"
+        )
 
 
 if __name__ == "__main__":
