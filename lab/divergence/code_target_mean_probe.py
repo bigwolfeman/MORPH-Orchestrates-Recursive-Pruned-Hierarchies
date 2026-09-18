@@ -14,7 +14,16 @@ slots of the validation rows, this probe measures:
   (a constant predictor: pairwise ~1, rank ~1).
 
     python lab/divergence/code_target_mean_probe.py \
-        --ckpt A=tul_code_target=/path/step_10000.pt --rows 96 --out .../mean_probe.json
+        --ckpt A=tul_code_target=/path/step_10000.pt --rows 96 --depths 1,6,16 \
+        --out .../mean_probe.json
+
+``--depths`` reads the SAME rows at each forced loop depth (`slot_mean_depth` /
+`slot_max_depth`, the eval dial `core_depth_sweep.py` uses, restored afterwards). The
+frozen coda's CE falls with depth (arm A at 20k: 9.142 at depth 1, 9.046 at depth 16)
+while the exit cosine to the code is flat across passes, so the question is WHICH of the
+two the passes move: a cell that is closer to its own code, or a cell that is simply less
+confident (nearer the corpus mean, lower norm, lower pairwise cosine). That is what the
+per-depth columns answer.
 
 Read-only. Same validation stream and packer as code_subspace_probe.py; the predicted cells
 come from the ordinary eval forward (``code_cells``), the codes from ``code_mode="encoder"``.
@@ -67,6 +76,8 @@ def main() -> None:
     ap.add_argument("--ckpt", required=True, help="LABEL=CONFIG=PATH[=k=v,k=v]")
     ap.add_argument("--rows", type=int, default=96)
     ap.add_argument("--batch", type=int, default=3)
+    ap.add_argument("--depths", default="", help="forced loop depths, e.g. 1,6,16 "
+                                                "(default: the model's own eval depth)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
@@ -91,23 +102,50 @@ def main() -> None:
     row_tokens = tul_rt.data_cfg.spec_for(cfg.data.seq_len).l_total + 1
     stream = stream_from_loader(loader, a.rows * row_tokens)
     batches = pack_rows(stream, tul_rt, cfg, a.batch, False)[: -(-a.rows // a.batch)]
-    n_rows = 0
-    preds, zs = [], []
-    for inp, _labels, lay, _ in batches:
-        lay = lay.to(device)
-        n_rows += inp.shape[0]
-        ok = code_target_valid(lay)
-        preds.append(_cells(model, inp, lay, device, None)[ok].cpu())      # [n, M, C]
-        zs.append(_cells(model, inp, lay, device, "encoder")[ok].cpu())
-    P = torch.cat(preds)
+    batches = [(inp, lay.to(device)) for inp, _labels, lay, _ in batches]
+    n_rows = sum(inp.shape[0] for inp, _ in batches)
+
+    # The codes are the FROZEN encoder's read of the prelude: the loop's depth cannot move
+    # them, so they are collected once and every depth column is scored against the same Z.
+    zs = [_cells(model, inp, lay, device, "encoder")[code_target_valid(lay)].cpu()
+          for inp, lay in batches]
     Z = torch.cat(zs)
     N, _, C = Z.shape
     print(f"{label}: step {step}, {n_rows} rows, N={N} valid slots, M={M}, C={C}", flush=True)
 
+    tc = model.cfg.tul
+    depths = [int(x) for x in a.depths.split(",") if x.strip()] or [0]
+    orig_mean, orig_max = int(tc.slot_mean_depth), int(tc.slot_max_depth)
+    orig_fixed = int(getattr(tc, "slot_depth_fixed", 0))
+    out = {"label": label, "step": step, "rows": n_rows, "n_slots": N, "M": M, "C": C,
+           "eval_depth": orig_fixed or orig_mean, "by_depth": {}}
+    try:
+        for d in depths:
+            if d > 0:
+                # the eval dial core_depth_sweep.py uses (restored in the finally below)
+                tc.slot_mean_depth = d
+                tc.slot_max_depth = max(d, orig_max)
+                if orig_fixed > 0:
+                    tc.slot_depth_fixed = d
+            P = torch.cat([_cells(model, inp, lay, device, None)[code_target_valid(lay)].cpu()
+                           for inp, lay in batches])
+            out["by_depth"][str(d)] = _stats(P, Z, M, C, N, d)
+    finally:
+        tc.slot_mean_depth, tc.slot_max_depth = orig_mean, orig_max
+        if orig_fixed > 0:
+            tc.slot_depth_fixed = orig_fixed
+    # the flat keys the first version wrote, from the first depth column
+    out["cells"] = out["by_depth"][str(depths[0])]["cells"]
+    with open(a.out, "w") as f:
+        json.dump(out, f, indent=1)
+    print(f"wrote {a.out}", flush=True)
+
+
+def _stats(P: torch.Tensor, Z: torch.Tensor, M: int, C: int, N: int, depth: int) -> dict:
+    """The readings for ONE set of predicted cells against the codes."""
     g = torch.Generator().manual_seed(0)
     perm = torch.randperm(N, generator=g)
-    out = {"label": label, "step": step, "rows": n_rows, "n_slots": N, "M": M, "C": C,
-           "cells": []}
+    res = {"depth": depth, "cells": []}
     for m in range(M):
         p, z = P[:, m], Z[:, m]
         pbar, zbar = p.mean(0), z.mean(0)
@@ -126,16 +164,16 @@ def main() -> None:
             "eff_rank_z": _eff_rank(z),
             "norm_pbar_over_rms": float(pbar.norm() / p.norm(dim=-1).mean()),
             "norm_zbar_over_rms": float(zbar.norm() / z.norm(dim=-1).mean()),
+            "rms_pred": float(p.pow(2).mean(-1).sqrt().mean()),
         }
-        out["cells"].append(r)
-        print(f"  cell {m}: cos own {r['cos_own']:.4f}  shuf {r['cos_shuf']:.4f}  "
+        res["cells"].append(r)
+        print(f"  [depth {depth}] cell {m}: cos own {r['cos_own']:.4f}  shuf {r['cos_shuf']:.4f}  "
               f"pred·zbar {r['cos_pred_zbar']:.4f}  z·zbar {r['cos_z_zbar']:.4f}  "
               f"centred own {r['cos_centred_own']:.4f} shuf {r['cos_centred_shuf']:.4f}  "
               f"pair pred {r['pair_pred']:.4f} z {r['pair_z']:.4f}  "
-              f"rank pred {r['eff_rank_pred']:.1f} z {r['eff_rank_z']:.1f}", flush=True)
-    with open(a.out, "w") as f:
-        json.dump(out, f, indent=1)
-    print(f"wrote {a.out}", flush=True)
+              f"rank pred {r['eff_rank_pred']:.1f} z {r['eff_rank_z']:.1f}  "
+              f"rms {r['rms_pred']:.3f}", flush=True)
+    return res
 
 
 if __name__ == "__main__":
