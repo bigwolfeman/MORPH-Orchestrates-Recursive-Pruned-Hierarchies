@@ -111,6 +111,49 @@ be changed); if it aborts it is resumed from the DIVERGED checkpoint with the ra
 and that is recorded here. The queued detach arm (progressive) gets the raised ceiling 1e8
 through `tul_code_target.yaml`. Predictions unchanged.
 
+Amended 2026-09-17 19:55 (reason: the forced-depth sweep was never scored on this family,
+and the reading it gives needs its own instrument). Two corrections of method, no change to
+the predictions:
+
+1. THE SWEEP NEVER RAN. `core_depth_sweep.py` treated any model carrying `tul_code_enc` as
+   a SAMPLER model and passed `code_steps`, which a code-target model refuses; every runner
+   sweep on `tul-code-target@{5000,10000,15000,20000}` exited 1 with that NotImplementedError
+   (queue.log 14:35-17:34). Fixed at 2236ac4 (a code-target model is the slot-loop path: it
+   has `tul_code_proj`), and the 20k sweep was re-run on the Spark.
+2. THE OPEN SLOT HAD NO CELL. `_tul_code_target_write` masked the projection by
+   `code_target_valid`, which is False for a row's LAST valid slot; at generation the open
+   span's slot IS that slot, so the coda wrote every generated span from a ZERO cell. The
+   10k semantic probe therefore read OWN = SHUF = ZERO byte-identical (cos_true 0.1291,
+   paired +0.0000 [+0.0000, +0.0000]) while ORACLE, injected on the same route, read 0.5590.
+   Fixed at 14f004d (eval masks by `slot_valid`, train keeps `ok`). Every OWN/SHUF/ZERO
+   reading on a code-target checkpoint before 14f004d is void; the probes are re-run.
+
+## The depth reading, and why it is not depth earning
+
+The re-run sweep at 20k (480 rows, paired): frozen-coda CE 9.1420 at depth 1, 9.1099 at 6,
+9.0461 at 16; K1-K6 +0.0320 [+0.0235, +0.0412], K1-K16 +0.0959 [+0.0841, +0.1080]. P-T5's
+letter holds. The mechanism does not survive its own instrument
+(`code_target_mean_probe.py --depths`, the same 4900 slots at each forced depth):
+
+| depth | 1 | 3 | 6 | 9 | 16 |
+| --- | --- | --- | --- | --- | --- |
+| cos(cell, own code) cell 0 | 0.1501 | 0.1539 | 0.1544 | 0.1542 | 0.1524 |
+| cos(cell, shuffled code) | 0.0194 | 0.0194 | 0.0196 | 0.0197 | 0.0199 |
+| cos(cell, corpus mean) | 0.3081 | 0.3121 | 0.3164 | 0.3180 | 0.3225 |
+| effective rank | 17.5 | 17.0 | 17.0 | 17.1 | 17.5 |
+
+and the passes DO move the cell, in a direction the code knows nothing about: against the
+depth-1 cell, depth 6 sits at cosine 0.980 with |delta|/|p| 0.188 and depth 16 at 0.954
+with 0.29, while that delta's cosine to the slot's OWN code is +0.017 / +0.014 (depth 6)
+and +0.006 / +0.004 (depth 16) — at or below the 0.031 a random direction in 1024 dimensions
+scores — and its cosine to the corpus mean is +0.044 / -0.084 and +0.051 / -0.037, opposite
+in sign between the two cells. So fifteen extra passes move the cell by a third of its norm
+and change its relation to the target by four thousandths. The CE gain is a reader at 9.1
+nats (a ZERO cell reads 7.4) finding a perturbed harmful cell slightly less harmful, not the
+loop finding a better code. Scored honestly: P-T5 holds and means nothing on its own, and
+the arm's depth question is answered by P-T2, which fails (l6 - l1 = +0.003 over the last
+500 steps).
+
 ## Not verified before launch
 
 - The 12 CPU contracts and a CPU generation smoke; the GPU resume smoke is run before the

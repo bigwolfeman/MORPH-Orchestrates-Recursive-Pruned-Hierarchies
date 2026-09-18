@@ -1,0 +1,21 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.0 slot_seed='boundary'
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 269.9M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 20000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+tul-code-target: step 20000, 96 rows, N=4900 valid slots, M=2, C=1024
+  [depth 1] cell 0: cos own 0.1501  shuf 0.0194  pred·zbar 0.3081  z·zbar 0.0596  centred own 0.1414 shuf 0.0011  pair pred 0.1169 z -0.0011  rank pred 17.5 z 77.5  rms 1.000
+  [depth 1] cell 1: cos own 0.1514  shuf 0.0467  pred·zbar 0.5170  z·zbar 0.0875  centred own 0.1292 shuf 0.0027  pair pred 0.2900 z 0.0078  rank pred 18.9 z 70.2  rms 1.000
+  [depth 3] cell 0: cos own 0.1539  shuf 0.0194  pred·zbar 0.3121  z·zbar 0.0596  centred own 0.1447 shuf 0.0008  pair pred 0.1147 z -0.0011  rank pred 17.0 z 77.5  rms 1.000
+  [depth 3] cell 1: cos own 0.1547  shuf 0.0454  pred·zbar 0.5023  z·zbar 0.0875  centred own 0.1323 shuf 0.0025  pair pred 0.2674 z 0.0078  rank pred 18.1 z 70.2  rms 1.000
+  [depth 6] cell 0: cos own 0.1544  shuf 0.0196  pred·zbar 0.3164  z·zbar 0.0596  centred own 0.1450 shuf 0.0007  pair pred 0.1175 z -0.0011  rank pred 17.0 z 77.5  rms 1.000
+  [depth 6] cell 1: cos own 0.1550  shuf 0.0454  pred·zbar 0.5016  z·zbar 0.0875  centred own 0.1325 shuf 0.0025  pair pred 0.2646 z 0.0078  rank pred 18.1 z 70.2  rms 1.000
+  [depth 9] cell 0: cos own 0.1542  shuf 0.0197  pred·zbar 0.3180  z·zbar 0.0596  centred own 0.1449 shuf 0.0007  pair pred 0.1197 z -0.0011  rank pred 17.1 z 77.5  rms 1.000
+  [depth 9] cell 1: cos own 0.1547  shuf 0.0455  pred·zbar 0.5020  z·zbar 0.0875  centred own 0.1321 shuf 0.0024  pair pred 0.2648 z 0.0078  rank pred 18.2 z 70.2  rms 1.000
+  [depth 16] cell 0: cos own 0.1524  shuf 0.0199  pred·zbar 0.3225  z·zbar 0.0596  centred own 0.1433 shuf 0.0007  pair pred 0.1280 z -0.0011  rank pred 17.5 z 77.5  rms 1.000
+  [depth 16] cell 1: cos own 0.1530  shuf 0.0461  pred·zbar 0.5068  z·zbar 0.0875  centred own 0.1302 shuf 0.0025  pair pred 0.2718 z 0.0078  rank pred 18.5 z 70.2  rms 1.000
+wrote /home/wolfe/morph-instruments/results/code_target_mean_depths_tul-code-target_20000.json
