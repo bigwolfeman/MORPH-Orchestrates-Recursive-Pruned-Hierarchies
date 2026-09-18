@@ -20,10 +20,26 @@ rather than its match to the code. Measured 2026-09-18 on 480 rows, both directi
 | `tul-code-target-prog` | frozen | 0.3554 -> 0.3051 | 9.0482 -> 9.1685 | -0.1173 [-0.1304, -0.1040] |
 | `tul-code-target-uf` | trained | 0.3002 -> 0.3125 | 4.1490 -> 4.1460 | +0.0047 [+0.0038, +0.0058] |
 
-`pred.zbar` is cosine of the predicted cell to the corpus-mean code. The relation is
-anti-correlated in both directions at matching magnitude (about -6.6 and -2.4 nats per unit).
-At depth 1 the progressive arm is the MORE generic one (0.3554 vs 0.3081) and has the BETTER
-CE (9.0482 vs 9.1713), which is the same effect seen without any depth at all.
+`pred.zbar` is cosine of the predicted cell to the corpus-mean code. At depth 1 the
+progressive arm is the MORE generic one (0.3554 vs 0.3081) and has the BETTER CE (9.0482 vs
+9.1713), which is the same effect seen without any depth at all.
+
+Re-measured at all seven sweep depths (1,2,3,6,9,12,16) on both arms, 96 rows, to test the
+relation rather than assume it from the endpoints:
+
+| arm | Pearson | Spearman | slope, nats per unit `pred.zbar` |
+| --- | --- | --- | --- |
+| `tul-code-target` (A) | -0.9675 | -0.9643 | -7.20 |
+| `tul-code-target-prog` | -0.9959 | **-1.0000** | -2.55 |
+| pooled (n=14) | -0.8971 | -0.8725 | -2.86 |
+
+Within an arm the relation is near-deterministic; prog's rank correlation is exactly -1 across
+seven depths. The arms do NOT share one curve: the slopes differ by 2.83x while the offsets
+overlap (arm residual means 0.0103 apart against a pooled residual sd of 0.0184). So the
+frozen coda's CE is a function of genericity AND of something else that differs between these
+two arms, and no single shared coefficient should be fitted across arms. A "common curve"
+prediction was written down before depths 2, 3, 9 and 12 were measured, and those depths
+refuted it while strengthening the within-arm claim.
 
 The real loop behaviour is identical on all three arms and unremarkable: centred cosine to
 the own code peaks at depth 6, the training mean, everywhere. Only the ADAPTED reader's CE
