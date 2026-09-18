@@ -6226,7 +6226,16 @@ class MORPHTransformer(nn.Module):
                 dg = degen.view(R, K, S)
                 keep = gm & ~dg.all(dim=1)
                 best = gr.argmax(dim=1)
-                worst = gr.argmin(dim=1)
+                # The worst REAL candidate. A degenerate was just set to -1e9, so a plain
+                # argmin picks it whenever one exists, and both readings it feeds become
+                # meaningless: `code_grade_worst` is a mean over slots, so ONE sentinel
+                # drags it to -1e9/n (measured 2026-09-18 on tul-code-grade-l2: n=45,
+                # degen=0.02, worst=-22222230 = (-1e9 + 44*-7)/45), and
+                # `code_grade_cos_worst_true` becomes the cosine to a DEGENERATE code,
+                # which is how cosW 0.185 came out above cosB 0.152 on that step. `best` is
+                # an argmax so it was never affected, and neither was the loss: `pref`
+                # takes z_cand and `best`, never z_worst.
+                worst = torch.where(dg, torch.full_like(gr, 1e9), gr).argmin(dim=1)
                 z_cand = z_cand.view(R, K, S, M, C)
                 _g = best.view(R, 1, S, 1, 1).expand(R, 1, S, M, C)
                 z_best = z_cand.gather(1, _g).squeeze(1)
