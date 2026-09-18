@@ -1,6 +1,6 @@
 # Experiment: when early commitment is expensive, does the toy slot loop carry a SET?
 
-Status: planned
+Status: failure (headline prediction falsified; two predictions unreadable)
 Date: 2026-09-18
 Owner: Claude (session f9558148), sub-agent ToyEliminate, for Wolfe.
 
@@ -255,3 +255,75 @@ entropy column exists to separate). `membership_probe` `acc_within_set` read 1.0
 Artifacts: one JSON per cell under
 `ignored/experiment-artifacts/2026-09-18-toy-eliminate/`, aggregated with
 `python aggregate.py <dir>` into `lab/experiments/results/2026-09-18-toy-eliminate/`.
+
+---
+
+# Results
+
+Ran 2026-09-18, 16:45–17:40 on the 3070. 32 cells, 0 failures, worst per-pass tap
+self-check 1.34e-07. Tables and the four answers:
+[`lab/experiments/results/2026-09-18-toy-eliminate/README.md`](../results/2026-09-18-toy-eliminate/README.md).
+Raw JSON: `ignored/experiment-artifacts/2026-09-18-toy-eliminate/`.
+
+## Scorecard against the frozen predictions
+
+| id | claim | outcome |
+|---|---|---|
+| P1 | `exit` escapes >= 3/5; fp and `staged` 5/5; 20 % that EVERY cell escapes | **TRUE**, and it is the 20 % clause: 30 of 30 cells solved, value CE 0.0000, accuracy 1.000 |
+| P2 | mean escape step below 750 | **TRUE**: 250 (`exit`, `exit`+fp), 350 (`staged` d96), 500 (`staged` d192) |
+| P3 | stuck seeds land on a derived plateau | **NOT TESTED**: no seed got stuck, so 0.9242 and 0.6931 were never exercised |
+| P4 | K1−K6 >= 1.386 and K2−K6 = 0.000 ± 0.02 on solved seeds | **TRUE**: K1−K6 1.4223–1.5104 over 20 solved cells, K2−K6 0.000 |
+| P5 | superposition at (`elim1`, pass 1): entropy > 0.50, dead mass < 0.15 | **FALSE in 20 of 20**: entropy 0.080–0.424, dead mass 0.446–1.000. The mass sits on the candidate the state can prove DEAD |
+| P6 | dead mass falls monotonically with pass; top mass at `answer` rises above 0.8 only at pass 2+ | **FALSE**: monotone only on `exit`; `staged` is pinned at 1.000 and `exit`+fp d96 RISES 0.639 → 0.982. The `answer` top mass is already 0.97 at pass 1, through an instrument leak |
+| P7 | the probe finds the set where the mass does not; and reads ~0.5 where the set is unreachable | **TRUE, and stronger than predicted**: `acc_within_set` 1.000 at (`elim1`, pass 1) with mass entropy 0.080–0.424, and 0.501–0.510 at (`elim1`, pass 0). But the RANDOM-INIT cells read 0.950–0.998 on the same probe, so it separates reachability, not training |
+| P8 | `staged` advertises the dead candidate, `exit` below 0.15 | **HALF**: `staged` reads 1.000 (predicted > 0.50 and > 0.25), but `exit` reads 0.446 (d96) and 0.809 (d192), not below 0.15. The commitment to the exclusion is not specific to `staged` |
+| P9 | drop pass None/0/1 in 30 of 30; cosine at (`answer`, pass 1) below 0.90 on solved seeds | first clause **TRUE** on all 30 trained cells (the 2 random-init cells read a `cand` drop at pass 4–5, cosine 0.997, because the core chain crosses the instance boundary — an instrument caveat, not a model fact); magnitude clause **FALSE**: 0.992–0.998 |
+| P10 | d192 escapes on at least two more cells than d96 | **FALSE**, and unreadable: both read 5/5 everywhere because the escape axis saturated |
+
+Four of ten held, one half, one untested, and the falsifier fired.
+
+## Verdict
+
+**The falsifier fired, in the form the pre-registration named.** Solved seeds read early
+commitment on `candidate_mass` (entropy 0.080–0.424 of a possible 0.693, top mass
+0.838–1.000 at the pruning slot) while `membership_probe` reads `acc_within_set` = 1.000 at
+the same state. The alive set is carried, and it is not carried as a superposition of
+candidate embeddings: the tied head's mass sits on the EXCLUSIONS. Superposition is one
+encoding among several, not the mechanism, and the repo's Thought Register collapse stops
+being evidence that this loop cannot hold a set.
+
+The load-bearing measurement is the one the predictions did not anticipate: the membership
+probe is a step function at the reachability boundary in the RANDOM-INIT cells too
+(0.998 at (`elim1`, pass 1), 0.835–0.957 at (`answer`, pass 2)). **Carrying a set through
+this loop costs nothing and needs no training. What training buys is the readout.**
+
+Filed under `failures/` because the headline prediction P5 was falsified and because two
+predictions (P3, P10) could not be read at all: a 2-pass chain has no basin, so every cell
+solved and the escape-rate axis the grid was sized for produced no contrast. The design
+error is named for the next iteration: the task needs more elimination steps (a deeper
+chain) before an escape rate means anything.
+
+## Updated hypothesis
+
+1. A shared-core slot loop under strict geometry holds a set of candidates in its state
+   whenever an attention hop can reach them, trained or not. The bottleneck is not the
+   carry.
+2. What a trained loop learns to expose through the tied head is the local, already-decided
+   fact (the elimination it just saw), not the undecided set. On the real model, where the
+   MUX target is the next span, that predicts the same shape: the state advertises what it
+   has settled and hides what it is still holding, so a head-based readout underestimates
+   the state's content. The way to test that at full scale is an ADAPTED reader on the real
+   slot cells, not the tied head, which is the 2026-09-18 genericity result read from the
+   other side.
+3. The terminal fixed-point term is the only lever measured in this tree that makes a slot
+   state read as a spread over candidates rather than a per-row point (entropy 0.989 of
+   1.0986 at the candidate slot, against 0.352 for plain `exit` and 0.096 at random init).
+   It was also the strongest lever in the 2026-09-10 study. If a spread state is wanted on
+   the real model, that term, not the attachment, is the knob with evidence behind it.
+
+## Next planned experiment
+
+A deeper `eliminate`: 6 candidates and 4 eliminations, which makes the chain 4 passes and
+restores a basin, plus a per-slot ADAPTED linear reader trained on the exit state to
+separate "the head cannot read it" from "the state does not hold it". That pair is what
+would carry any of this to the real model.

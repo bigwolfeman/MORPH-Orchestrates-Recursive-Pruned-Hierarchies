@@ -505,3 +505,16 @@ probe finds the alive set in an UNTRAINED network, because a random map preserve
 decodable information, so `membership_probe` is read as a destruction test — a low accuracy
 is evidence, a high accuracy is not — and the grid carries two random-init cells as its
 baseline.
+
+**What the grid found** (32 cells, 2026-09-18, filed at
+[`lab/experiments/results/2026-09-18-toy-eliminate/README.md`](../experiments/results/2026-09-18-toy-eliminate/README.md)):
+every one of the 30 trained cells solves the task to value CE 0.0000, so a 2-pass chain has
+no basin and the escape rate says nothing. The set IS carried — a linear probe reads it at
+1.000 the moment an attention hop can reach it — but it is not carried as a superposition of
+candidate embeddings: the tied head's mass sits on the candidate the state can already prove
+DEAD, in 20 of 20 solved cells. The same probe reads 0.95–1.00 on a RANDOM-INIT network, so
+carrying a set through this loop costs nothing and needs no training; what training buys is
+the readout. The one lever that makes a slot state read as a spread rather than a point is
+the terminal fixed-point term, at entropy 0.989 of a possible ln 3 = 1.0986 against 0.352
+for plain `exit` and 0.096 at random init — the same term that was the strongest lever in
+the study above.

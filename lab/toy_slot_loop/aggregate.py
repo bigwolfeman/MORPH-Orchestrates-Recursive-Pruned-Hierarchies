@@ -194,7 +194,7 @@ def table_elim_mass(g, keys, role, passes=(0, 1, 2, 6)):
                 c = [r["eliminate"]["candidate_mass"][role][t] for r in rs]
                 n = len(c)
                 print(
-                    f"| `{k}` {group_name} | {t} | {n} "
+                    f"| `{k}` {group_name} | {t} | {n} | "
                     + " | ".join(
                         f"{sum(x[f] for x in c)/n:.3f}"
                         for f in (
