@@ -90,8 +90,11 @@ graded arm and the continuations. Predictions unchanged.
 - The twin's memory cost on the 5090: 1.32 GB measured on the Spark, and the 5090's TUL
   arms have about 1 GB of slack at seq 4096 but run this panel at seq 1024 and 7.9 GB.
 - One seed. No coda trains, so nothing here reads generation quality except through a coda
-  frozen at the VAE stage, which misreads the predicted cell at 9.1 nats against 7.4 for no
-  cell at all.
+  frozen at the VAE stage. Amended 2026-09-18 00:10 (reason: the "7.4 nats" floor was
+  WITHDRAWN at 8ea2a76 as never measured; this file predates that commit). The measured
+  reading is arm A's worth profile at 20k: zeroing the cell moves the frozen coda's paired
+  per-token CE by -4.608 nats, so that coda would rather have NO cell than the predicted
+  one. Predictions unchanged.
 
 ## Results
 
