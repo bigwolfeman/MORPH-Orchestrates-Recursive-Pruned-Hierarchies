@@ -39,6 +39,7 @@ Step-by-step procedures. How to do a thing, not why it is done that way.
 
 - [Replaying the TUL core takeover from a checkpoint](cookbook/replaying-the-core-takeover.md)
 - [Measuring the looped core's operator, not its magnitudes](cookbook/measuring-the-core-map.md)
+- [Running offline probes on the 3070, beside the Spark](cookbook/running-probes-on-the-second-host.md)
 
 ## TUL satellites (not in this folder)
 
