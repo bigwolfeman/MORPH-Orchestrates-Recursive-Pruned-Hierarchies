@@ -17,7 +17,8 @@
 # COST, and why the defaults are what they are (arithmetic in the note): a graded step costs
 # (tokens + 2) * rows * k passes of prelude+core+coda over one row, ~7.2 training steps at
 # these settings, so `code_grade_every: 8` puts the arm at about 0.53x the code-only arm's
-# rate. Raising `code_grade_rows` or `code_grade_k` buys signal at that exchange rate.
+# rate by arithmetic, and 0.60x measured on the Spark over 60 steps (940 tok/s against
+# 1578 for the same config with `code_grade: false`). Raising `code_grade_rows` or `code_grade_k` buys signal at that exchange rate.
 # The graded-SLOT count is free: under the strict geometry the spans of a row cannot see
 # each other, so one forward advances a candidate token for every eligible span at once.
 #   training.init_from=/home/wolfe/morph-to/checkpoints/morph/tul-code-vae/step_10000.pt
@@ -35,7 +36,7 @@ tul:
   code_grade_k: 4                 # candidates per graded slot
   code_grade_tokens: 16           # decode steps, AND the eligibility filter on span length
   code_grade_rows: 1              # rows of the batch graded on a graded step
-  code_grade_every: 8             # 0.53x the code-only rate at these settings
+  code_grade_every: 8             # 0.60x the code-only rate, measured on the Spark
   code_grade_loss: pref           # InfoNCE over the K candidate codes, the winner the class
   code_grade_grader: coda_past    # the frozen coda, the graded slot's own cell zeroed
   code_grade_temp: 1.0

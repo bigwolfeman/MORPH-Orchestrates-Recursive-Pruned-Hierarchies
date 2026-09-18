@@ -97,7 +97,10 @@ prelude 4 / core 6 / coda 4, `L` 1024, `B` 6, 64 slots, mean depth 6:
   parity grading passes per candidate copy, plus 2 passes that grade the TRUE span for the
   `code_grade_true_rank` instrument. At `J` 16, `rows` 1, `K` 4 that is 74 row-passes =
   833,536 u = **7.2 training steps**. Amortised at `code_grade_every: 8` that is 0.90 extra
-  steps per step, a rate of **0.53×** the code-only arm.
+  steps per step, a rate of **0.53×** the code-only arm. Measured on the Spark over 60
+  steps against the same config with `code_grade: false`: **0.60×** (940 tok/s against
+  1578) on the step window and 0.62× on wall clock. The arithmetic counts block passes and
+  ignores the graded step's poorer utilisation, so it is optimistic by about 12 %.
 
 That 0.5× ceiling is what fixes the defaults, and it buys roughly four graded slots per
 step-equivalent out of ~300 valid slots in the batch. The ordinary `code_target` L2 term
