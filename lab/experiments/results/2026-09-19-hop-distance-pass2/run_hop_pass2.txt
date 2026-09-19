@@ -1,0 +1,13 @@
+[12:59:49] probe md5 51022c69ab0be8c2318caaf8ed99ea73
+[12:59:49] START prev-reach1-pair-alldepths (slot-spandec-strict-prev-reach1 depths=1,2,3,4,5,6,7,8,12,16 seed=0 --planted-len 2)
+[14:48:28] DONE prev-reach1-pair-alldepths exit=0
+[14:48:28] START prev-reach1-pair-cut1 (slot-spandec-strict-prev-reach1 depths=1,2,3,6 seed=0 --planted-len 2 --cut-after 1)
+[15:31:01] DONE prev-reach1-pair-cut1 exit=0
+[15:31:01] START prev-reach1-seed1 (slot-spandec-strict-prev-reach1 depths=1,2,3,6 seed=1 )
+[16:13:24] DONE prev-reach1-seed1 exit=0
+[16:13:24] START strict-pair (slot-spandec-strict depths=1,6 seed=0 --planted-len 2 --skip-localiser)
+[16:28:26] DONE strict-pair exit=0
+[16:28:26] ALL DONE
+[16:29:05] probe md5 0b6a2ca73a07ea986d23d970e59f1563
+[16:29:05] START prev-reach1-rows480 (slot-spandec-strict-prev-reach1 depths=1,2,3,6 seed=1 --row-offset 480)
+[17:11:39] DONE prev-reach1-rows480 exit=0
