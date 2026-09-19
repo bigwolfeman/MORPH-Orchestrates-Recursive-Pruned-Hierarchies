@@ -1,0 +1,246 @@
+{
+ "pairs": [
+  {
+   "name": "P-1  d1@20k(d1) - top@20k(d6)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d1_20000.json",
+    "depth": 1
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-09-norm-match-recipe-reads/sweep_norm-match-20k_20000.json",
+    "depth": 6
+   },
+   "bar": "in [+0.02, +0.08]"
+  },
+  {
+   "name": "P-2  d1@20k(d1) - top@10k(d6)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d1_20000.json",
+    "depth": 1
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-09-norm-match-recipe-reads/sweep_norm-match-20k_10000.json",
+    "depth": 6
+   },
+   "bar": "< 0"
+  },
+  {
+   "name": "P-2c d1@20k(d1) - top@5k(d6)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d1_20000.json",
+    "depth": 1
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-09-norm-match-recipe-reads/sweep_norm-match-20k_5000.json",
+    "depth": 6
+   },
+   "bar": "context"
+  },
+  {
+   "name": "P-3a d3@20k(d3) - top@20k(d6)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d3_20000.json",
+    "depth": 3
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-09-norm-match-recipe-reads/sweep_norm-match-20k_20000.json",
+    "depth": 6
+   },
+   "bar": "|.| <= 0.02"
+  },
+  {
+   "name": "P-3b d2@20k(d2) - top@20k(d6)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d2_20000.json",
+    "depth": 2
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-09-norm-match-recipe-reads/sweep_norm-match-20k_20000.json",
+    "depth": 6
+   },
+   "bar": "|.| <= 0.02"
+  },
+  {
+   "name": "P-4a d2 own K1-K2 @20k",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d2_20000.json",
+    "depth": 1
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d2_20000.json",
+    "depth": 2
+   },
+   "bar": "> 0.05"
+  },
+  {
+   "name": "P-4b d3 own K1-K3 @20k",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d3_20000.json",
+    "depth": 1
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d3_20000.json",
+    "depth": 3
+   },
+   "bar": "> 0.05"
+  },
+  {
+   "name": "S-1a p3 own K1-K6 @20k",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p3_20000.json",
+    "depth": 1
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p3_20000.json",
+    "depth": 6
+   },
+   "bar": ">= 0.10"
+  },
+  {
+   "name": "S-1b p4 own K1-K6 @20k",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p4_20000.json",
+    "depth": 1
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p4_20000.json",
+    "depth": 6
+   },
+   "bar": ">= 0.13"
+  },
+  {
+   "name": "S-2  p3 own K3-K6 @20k",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p3_20000.json",
+    "depth": 3
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p3_20000.json",
+    "depth": 6
+   },
+   "bar": "> 0.005"
+  },
+  {
+   "name": "S-2c p4 own K3-K6 @20k",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p4_20000.json",
+    "depth": 3
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p4_20000.json",
+    "depth": 6
+   },
+   "bar": "context"
+  },
+  {
+   "name": "S-3a p3@20k(d3) - top@20k(d6)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p3_20000.json",
+    "depth": 3
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-09-norm-match-recipe-reads/sweep_norm-match-20k_20000.json",
+    "depth": 6
+   },
+   "bar": "in [+0.010, +0.030]"
+  },
+  {
+   "name": "S-3b p4@20k(d3) - top@20k(d6)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p4_20000.json",
+    "depth": 3
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-09-norm-match-recipe-reads/sweep_norm-match-20k_20000.json",
+    "depth": 6
+   },
+   "bar": "bracket for the unmeasured depth 4 (upper end)",
+   "note": "the sweep grid is 0,1,2,3,6,9,12,16 - depth 4 was never run"
+  },
+  {
+   "name": "S-3c p4@20k(d6) - top@20k(d6)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p4_20000.json",
+    "depth": 6
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-09-norm-match-recipe-reads/sweep_norm-match-20k_20000.json",
+    "depth": 6
+   },
+   "bar": "bracket for the unmeasured depth 4 (lower end)"
+  },
+  {
+   "name": "S-4  p3@20k(d6) - top@20k(d6)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p3_20000.json",
+    "depth": 6
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-09-norm-match-recipe-reads/sweep_norm-match-20k_20000.json",
+    "depth": 6
+   },
+   "bar": "<= +0.015"
+  },
+  {
+   "name": "CTX  p3@20k(d6) - p4@20k(d6)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p3_20000.json",
+    "depth": 6
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-p4_20000.json",
+    "depth": 6
+   },
+   "bar": "context"
+  },
+  {
+   "name": "CTX  d3fixed@20k(d3) - top@20k(d6)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d3fixed_20000.json",
+    "depth": 3
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-09-norm-match-recipe-reads/sweep_norm-match-20k_20000.json",
+    "depth": 6
+   },
+   "bar": "CONTROL ONLY - not a ship reading (2026-09-14 correction)"
+  },
+  {
+   "name": "CTX  d1@20k(d1) - top@15k(d6)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d1_20000.json",
+    "depth": 1
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-09-norm-match-recipe-reads/sweep_norm-match-20k_15000.json",
+    "depth": 6
+   },
+   "bar": "context"
+  },
+  {
+   "name": "CTX  SEED d3fixed-s2 - d3fixed (d3)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d3fixed-s2_20000.json",
+    "depth": 3
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d3fixed_20000.json",
+    "depth": 3
+   },
+   "bar": "same config, seed 2 vs seed 1 - the lineage's SEED spread at 20k",
+   "note": "the only seed pair on this lineage; it sets the resolution of every other row"
+  },
+  {
+   "name": "CTX  SEED d3fixed-s2 - d3fixed (d6 eval)",
+   "a": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d3fixed-s2_20000.json",
+    "depth": 6
+   },
+   "b": {
+    "json": "/home/wolfe/morph-scratch/arc/results/2026-09-13-depth-ladder/sweep_norm-match-20k-d3fixed_20000.json",
+    "depth": 6
+   },
+   "bar": "same config, seed 2 vs seed 1, read at eval depth 6"
+  }
+ ]
+}

@@ -1,0 +1,7 @@
+arm,config,mean_depth,max_depth,bptt_depth,block_passes_per_token,tok_s_step200,tok_s_step19800,peak_gb_max,queue_start_epoch,queue_done_epoch,queue_wall_s,integrated_step_s,verdict,final_val_loss
+norm-match-20k-d1,notul_norm_match_20k_d1,1,1,1,14,25931,27151,9.15,1789360373,1789365184,4811,4543,HEALTHY,3.5655
+norm-match-20k-d2,notul_norm_match_20k_d2,2,2,2,20,19931,19811,9.61,1789839798,1789846084,6286,5920,HEALTHY,3.5177
+norm-match-20k-d3,notul_norm_match_20k_d3,3,3,3,26,18062,18215,9.71,1789370815,1789377911,7096,6737,HEALTHY,3.5082
+norm-match-20k-p3,notul_norm_match_20k_p3,3,6,6,26,12892,15568,9.99,1789443588,1789452552,8964,8558,HEALTHY,3.5034
+norm-match-20k-p4,notul_norm_match_20k_p4,4,8,8,32,12802,11716,9.99,1789788879,1789806011,17132,11646,HEALTHY,3.4937
+norm-match-20k,notul_norm_match_20k,6,8,8,44,9901,5711,10.17,1789041434,1789054394,12960,12410,HEALTHY,3.5037
