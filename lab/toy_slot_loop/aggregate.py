@@ -90,9 +90,9 @@ def table_main(g, keys, title, cols=None):
         )
 
 
-def table_kcurve(g, keys, title):
+def table_kcurve(g, keys, title, depths=None):
     print(f"\n### {title}\n")
-    depths = ["1", "2", "3", "6", "8", "12"]
+    depths = depths or ["1", "2", "3", "6", "8", "12"]
     print("| cell | " + " | ".join(f"d={d}" for d in depths) + " |")
     print("|---" * (len(depths) + 1) + "|")
     for k in keys:
@@ -151,30 +151,46 @@ def table_grad(g, keys, title, source="total"):
 # `eliminate` tables (2026-09-18)
 # --------------------------------------------------------------------------------------
 
-PLATEAUS = [
-    ("depth-starved (ln 4)", 1.386294),
-    ("point at s+0 ((2/3)ln 4)", 0.924196),
-    ("point at s+1 (ln 2)", 0.693147),
-    ("solved", 0.0),
-]
+def _plateaus(row):
+    """The derived plateaus of an elimination task, from the ceilings stored in the run."""
+    c = row["eliminate"]["ceilings"]
+    out = []
+    for d, v in sorted(c["reachability"].items(), key=lambda kv: int(kv[0])):
+        if v > 1e-9:
+            out.append((f"depth {d} floor", v))
+    for k, v in sorted(c["point_carry"].items(), key=lambda kv: int(kv[0])):
+        if v > 1e-9:
+            out.append((f"point carry at {k}", v))
+    out.append(("solved", 0.0))
+    return out
 
 
-def _nearest_plateau(ce):
-    name, v = min(PLATEAUS, key=lambda p: abs(ce - p[1]))
-    return name, ce - v
+def _roles(row):
+    """Role names, from the run's own spec. Runs from before 2026-09-19 carry no spec, so
+    fall back to the role names their `candidate_mass` block actually has."""
+    sp = row["eliminate"].get("spec")
+    if sp:
+        return [r[0] for r in sp["roles"]]
+    return list(row["eliminate"]["candidate_mass"].keys())
+
+
+def _passes(row):
+    sp = row["eliminate"].get("spec")
+    d = sp["probe_depth"] if sp else len(row["eliminate"]["candidate_mass"]["answer"]) - 1
+    return tuple(sorted({0, 1, 2, d // 2, d - 2, d}))
 
 
 def table_elim_plateau(g, keys):
-    print("\n### `eliminate`: where each seed landed, against the enumerated plateaus\n")
+    print("\n### where each seed landed, against the enumerated plateaus\n")
     print("| cell | seed | value CE @6 | value acc @6 | nearest plateau | distance |")
     print("|---|---|---|---|---|---|")
     for k in keys:
         for r in sorted(g[k], key=lambda r: r["seed"]):
             ce = r["k_curve"]["6"]["value_ce"]
-            name, d = _nearest_plateau(ce)
+            name, v = min(_plateaus(r), key=lambda p: abs(ce - p[1]))
             print(
                 f"| `{k}` | {r['seed']} | {ce:.4f} | {r['k_curve']['6']['value_acc']:.3f} "
-                f"| {name} | {d:+.4f} |"
+                f"| {name} ({v:.4f}) | {ce - v:+.4f} |"
             )
 
 
@@ -182,88 +198,162 @@ def _split(rs):
     return [r for r in rs if r.get("escaped")], [r for r in rs if not r.get("escaped")]
 
 
-def table_elim_mass(g, keys, role, passes=(0, 1, 2, 6)):
-    print(f"\n### `eliminate` candidate mass at role `{role}` (solved seeds | stuck seeds)\n")
-    print("| cell | pass | n | survivor | dead (reachable) | alive non-survivor | entropy | top mass |")
-    print("|---|---|---|---|---|---|---|---|")
+def table_elim_mass(g, keys, role):
+    print(f"\n### candidate mass at role `{role}` (solved seeds | stuck seeds)\n")
+    print("| cell | pass | n | survivor | dead (reachable) | alive non-survivor | entropy | top mass | alive set |")
+    print("|---|---|---|---|---|---|---|---|---|")
     for k in keys:
-        for group_name, rs in (("solved", _split(g[k])[0]), ("stuck", _split(g[k])[1])):
+        if not g[k] or role not in g[k][0]["eliminate"]["candidate_mass"]:
+            continue
+        for gname, rs in (("solved", _split(g[k])[0]), ("stuck", _split(g[k])[1])):
             if not rs:
                 continue
-            for t in passes:
+            for t in _passes(rs[0]):
                 c = [r["eliminate"]["candidate_mass"][role][t] for r in rs]
                 n = len(c)
-                print(
-                    f"| `{k}` {group_name} | {t} | {n} | "
-                    + " | ".join(
-                        f"{sum(x[f] for x in c)/n:.3f}"
-                        for f in (
-                            "survivor",
-                            "eliminated_reachable",
-                            "alive_non_survivor",
-                            "entropy",
-                            "top_mass",
-                        )
-                    )
-                    + " |"
+                cells = " | ".join(
+                    f"{sum(x[f] for x in c)/n:.3f}"
+                    for f in ("survivor", "eliminated_reachable", "alive_non_survivor",
+                              "entropy", "top_mass")
                 )
+                print(f"| `{k}` {gname} | {t} | {n} | {cells} | {c[0]['n_alive_reachable']} |")
 
 
-def table_elim_probe(g, keys, passes=(0, 1, 2, 6)):
-    print("\n### `eliminate` membership probe, balanced accuracy on held-out rows\n")
-    print("| cell | role | " + " | ".join(f"p{t} bal" for t in passes) + " | "
-          + " | ".join(f"p{t} within-set" for t in passes) + " |")
-    print("|---" * (2 + 2 * len(passes)) + "|")
+def _mean_or_dash(vals, p=3):
+    vals = [v for v in vals if v is not None]
+    return f"{sum(vals)/len(vals):.{p}f}" if vals else "-"
+
+
+def table_elim_probe(g, keys, fact="alive"):
+    keys = [k for k in keys if g[k] and f"acc_{fact}" in g[k][0]["eliminate"]["membership_probe"]["answer"][0]]
+    if not keys:
+        return
+    print(f"\n### membership probe, balanced accuracy on held-out rows, fact `{fact}`\n")
+    ps = _passes(next(g[k][0] for k in keys if g[k]))
+    print("| cell | role | " + " | ".join(f"p{t}" for t in ps) + " |")
+    print("|---" * (2 + len(ps)) + "|")
     for k in keys:
         rs = g[k]
         if not rs:
             continue
-        for role in ("cand", "elim1", "answer"):
-            bal = []
-            wit = []
-            for t in passes:
-                c = [r["eliminate"]["membership_probe"][role][t] for r in rs]
-                bal.append(f"{sum(x['acc_balanced'] for x in c)/len(c):.3f}")
-                w = [x["acc_within_set"] for x in c if x["acc_within_set"] is not None]
-                wit.append(f"{sum(w)/len(w):.3f}" if w else "-")
-            print(f"| `{k}` | {role} | " + " | ".join(bal) + " | " + " | ".join(wit) + " |")
+        for role in _roles(rs[0]):
+            cells = [
+                _mean_or_dash([r["eliminate"]["membership_probe"][role][t][f"acc_{fact}"] for r in rs])
+                for t in ps
+            ]
+            print(f"| `{k}` | {role} | " + " | ".join(cells) + " |")
+
+
+def table_elim_hop(g, keys):
+    """The answer slot's probe accuracy against hop distance: pass t reaches hop t."""
+    rs0 = next(
+        (g[k][0] for k in keys
+         if g[k] and "acc_in_set" in g[k][0]["eliminate"]["membership_probe"]["answer"][0]),
+        None,
+    )
+    if rs0 is None:
+        return  # runs from before 2026-09-19 fitted the `alive` fact only
+    keys = [k for k in keys
+            if g[k] and "acc_in_set" in g[k][0]["eliminate"]["membership_probe"]["answer"][0]]
+    print("\n### hop ladder: the ANSWER slot's probe accuracy at pass t (= hop distance t)\n")
+    d = rs0["eliminate"]["spec"]["probe_depth"]
+    ps = list(range(d + 1))
+    print("| cell | fact | " + " | ".join(f"hop {t}" for t in ps) + " |")
+    print("|---" * (2 + len(ps)) + "|")
+    for k in keys:
+        rs = g[k]
+        if not rs:
+            continue
+        for fact in ("in_set", "dead", "alive"):
+            cells = [
+                _mean_or_dash(
+                    [r["eliminate"]["membership_probe"]["answer"][t][f"acc_{fact}"] for r in rs]
+                )
+                for t in ps
+            ]
+            print(f"| `{k}` | {fact} | " + " | ".join(cells) + " |")
+
+
+def table_elim_reader(g, keys):
+    rs0 = next((g[k][0] for k in keys if g[k] and "adapted_reader" in g[k][0]["eliminate"]), None)
+    if rs0 is None:
+        return  # runs from before 2026-09-19 have no fitted reader
+    keys = [k for k in keys if g[k] and "adapted_reader" in g[k][0]["eliminate"]]
+    print("\n### adapted linear reader on the exit state against the coda, value CE (nats)\n")
+    ds = [row["depth"] for row in rs0["eliminate"]["adapted_reader"]["by_depth"]]
+    print("| cell | source | " + " | ".join(f"d={d}" for d in ds) + " |")
+    print("|---" * (2 + len(ds)) + "|")
+    for k in keys:
+        rs = g[k]
+        if not rs:
+            continue
+        rd = [
+            _mean_or_dash([r["eliminate"]["adapted_reader"]["by_depth"][i]["reader_value_ce"] for r in rs], 4)
+            for i in range(len(ds))
+        ]
+        cd = [
+            _mean_or_dash([r["k_curve"][str(d)]["value_ce"] for r in rs], 4) for d in ds
+        ]
+        print(f"| `{k}` | fitted reader | " + " | ".join(rd) + " |")
+        print(f"| `{k}` | coda | " + " | ".join(cd) + " |")
+    print("\n### the fitted reader at each role slot, at the probe depth\n")
+    print("| cell | " + " | ".join(f"{r} CE / acc" for r in _roles(rs0)) + " |")
+    print("|---" * (1 + len(_roles(rs0))) + "|")
+    for k in keys:
+        rs = g[k]
+        if not rs:
+            continue
+        cells = []
+        for i, role in enumerate(_roles(rs[0])):
+            ce = _mean_or_dash([r["eliminate"]["adapted_reader"]["by_slot"][i]["reader_value_ce"] for r in rs], 4)
+            ac = _mean_or_dash([r["eliminate"]["adapted_reader"]["by_slot"][i]["reader_value_acc"] for r in rs], 3)
+            cells.append(f"{ce} / {ac}")
+        print(f"| `{k}` | " + " | ".join(cells) + " |")
 
 
 def table_elim_twin(g, keys):
-    print("\n### `eliminate` twin divergence (rows differing ONLY at the head of span s+1)\n")
-    print("| cell | role | drop pass (expected) | cosine p0 | p1 | p2 | p6 |")
-    print("|---|---|---|---|---|---|---|")
+    print("\n### twin divergence (rows differing ONLY at the first elimination)\n")
+    rs0 = next((g[k][0] for k in keys if g[k]), None)
+    if rs0 is None:
+        return
+    ps = _passes(rs0)
+    print("| cell | role | drop pass (expected) | " + " | ".join(f"cos p{t}" for t in ps) + " |")
+    print("|---" * (3 + len(ps)) + "|")
     for k in keys:
         rs = g[k]
         if not rs:
             continue
-        for role in ("cand", "elim1", "answer"):
+        for role in _roles(rs[0]):
             c = [r["eliminate"]["twin_divergence"][role] for r in rs]
-            drops = {str(x["drop_pass"]) for x in c}
+            drops = sorted({str(x["drop_pass"]) for x in c})
             exp = c[0]["expected_drop_pass"]
-            cos = [f"{sum(x['cosine'][t] for x in c)/len(c):.4f}" for t in (0, 1, 2, 6)]
-            print(f"| `{k}` | {role} | {'/'.join(sorted(drops))} ({exp}) | " + " | ".join(cos) + " |")
+            cos = [f"{sum(x['cosine'][t] for x in c)/len(c):.4f}" for t in ps]
+            print(f"| `{k}` | {role} | {'/'.join(drops)} ({exp}) | " + " | ".join(cos) + " |")
 
 
-def main_eliminate(rows, g):
+def main_eliminate(rows, g, task):
     keys = sorted({key_of(r) for r in rows})
-    print(f"\n## `eliminate`: {len(rows)} runs in {len(keys)} cells")
+    print(f"\n## `{task}`: {len(rows)} runs in {len(keys)} cells")
     cl = rows[0]["eliminate"]["ceilings"]
-    print(
-        f"\nceilings (nats): chance {cl['chance']:.4f} | reachability d=1 "
-        f"{cl['reachability']['1']:.4f}, d>=2 {cl['reachability']['2']:.4f} | commitment "
-        f"{cl['commitment']['0']:.4f}/{cl['commitment']['1']:.4f}/{cl['commitment']['2']:.4f} "
-        f"| point carry {cl['point_carry']['0']:.4f}/{cl['point_carry']['1']:.4f}"
-    )
-    table_main(g, keys, "`eliminate` grid")
-    table_kcurve(g, keys, "`eliminate` value CE against forced depth")
+    def ladder(d):
+        return " / ".join(f"{d[k]:.4f}" for k in sorted(d, key=int))
+    print(f"\nchance {cl['chance']:.4f}")
+    print(f"reachability by forced depth: {ladder(cl['reachability'])}")
+    print(f"commitment by evidence seen:  {ladder(cl['commitment'])}")
+    print(f"point carry:                  {ladder(cl['point_carry'])}")
+    table_main(g, keys, f"`{task}` grid")
+    kd = [d for d in rows[0]["k_curve"]]
+    table_kcurve(g, keys, f"`{task}` value CE against forced depth", kd)
     table_elim_plateau(g, keys)
-    for role in ("cand", "elim1", "answer"):
+    table_elim_reader(g, keys)
+    table_elim_hop(g, keys)
+    for role in _roles(rows[0]):
         table_elim_mass(g, keys, role)
-    table_elim_probe(g, keys)
+    for fact in ("alive", "in_set", "dead"):
+        table_elim_probe(g, keys, fact)
     table_elim_twin(g, keys)
-    table_write(g, keys, "`eliminate` write contribution")
-    table_grad(g, keys, "`eliminate` per-pass gradient", "total")
+    table_write(g, keys, f"`{task}` write contribution")
+    table_grad(g, keys, f"`{task}` per-pass gradient", "total")
 
 
 def corr(xs, ys):
@@ -282,11 +372,13 @@ def main():
     sc = max(r["gradient_probe"]["total"]["selfcheck_max_rel_err"] for r in rows)
     print(f"\nper-pass tap self-check, worst over every run: max rel err {sc:.2e}")
 
-    el = [r for r in rows if r["task"] == "eliminate" and "eliminate" in r]
-    if el:
-        main_eliminate(el, group(el))
-        if len(el) == len(rows):
-            return
+    el = [r for r in rows if r["task"] in {"eliminate", "eliminate6"} and "eliminate" in r]
+    for t in ("eliminate", "eliminate6"):
+        sub = [r for r in el if r["task"] == t]
+        if sub:
+            main_eliminate(sub, group(sub), t)
+    if el and len(el) == len(rows):
+        return
 
     atts =["exit", "mux_all", "mux_all_detach", "staged", "deep_coda", "progressive"]
     for task in ("compose", "summary"):

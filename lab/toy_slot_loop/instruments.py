@@ -198,31 +198,30 @@ def gradient_probe(model, batches, depth: int = 6, source: str = "total") -> dic
         "n_shared_params": int(sum(p.numel() for nm, p in model.core.named_parameters() if nm in shared)),
     }
 
-
 # --------------------------------------------------------------------------------------
-# `eliminate` instruments (2026-09-18): is the alive set carried, and as what?
+# elimination-task instruments: is the alive set carried, and as what?
 # --------------------------------------------------------------------------------------
 #
 # Every one of these reads the slot state after t = 0..T passes, where t = 0 is the ENTRY
-# state (zero passes). Three slot roles matter inside an instance whose candidate span is
-# span s:
-#   role "cand"   slot s+0, the slot that sees the three candidates  -> alive set of 3
-#   role "elim1"  slot s+1, the slot that sees the first elimination -> alive set of 2
-#   role "answer" slot s+2, the slot the answer is read from         -> alive set of 1
-# Under strict geometry a slot reaches spans s+r-t .. s+r after t passes, so WHICH facts a
-# state could possibly hold is known exactly, and every instrument is scored against that
-# window rather than against the whole instance.
+# state (zero passes), at the slot roles the task's `ElimSpec` names. Under strict geometry
+# slot `r` after `t` passes holds spans r-t .. r, so WHICH facts a state could possibly
+# hold is known exactly, and every instrument is scored against that window rather than
+# against the whole instance.
+#
+# 2026-09-18 iteration 2: these were `eliminate`-only and are now spec-driven, so
+# `eliminate` and `eliminate6` share one implementation. The membership probe gained two
+# more facts (`in_set` and `dead` next to `alive`), which turns it into a hop-distance
+# instrument; the `alive` probe is still built first with the same shape, so its numbers
+# are unchanged. `adapted_reader` is new.
 
-ROLE_NAMES = ("cand", "elim1", "answer")
 
-
-def _reachable(role: int, t: int) -> dict[str, bool]:
-    """What slot s+role can hold after t passes: its window is spans s+role-t .. s+role."""
+def _reachable(spec, role: int, t: int) -> dict:
+    """What slot `role` can hold after t passes: its window is spans role-t .. role."""
     lo = role - t
     return {
-        "cands": lo <= 0 <= role,  # the candidate span is s+0
-        "e1": lo <= 1 <= role,  # the first elimination is at span s+1
-        "e2": lo <= 2 <= role,  # the second elimination is at span s+2
+        "cand_spans": [lo <= s <= role for s in spec.cand_spans],
+        "all_cands": all(lo <= s <= role for s in spec.cand_spans),
+        "elims": [lo <= s <= role for s in spec.elim_spans],
     }
 
 
@@ -242,45 +241,47 @@ def _slot_states(model, b, depth: int) -> list[torch.Tensor]:
 
 
 def _inst_masks(b, k: int):
-    """[B, 3] one-hot style masks over the instance's three candidate columns."""
-    cands = b["candidates"][:, k]  # [B, 3] candidate symbols in span order
+    """cands [B, n_alive] and the boolean masks over those columns."""
+    cands = b["candidates"][:, k]
     surv = b["survivor"][:, k].unsqueeze(-1)
-    e1 = b["elim"][:, k, 0].unsqueeze(-1)
-    e2 = b["elim"][:, k, 1].unsqueeze(-1)
-    return cands, (cands == surv), (cands == e1), (cands == e2)
+    is_surv = cands == surv
+    is_elim = [cands == b["elim"][:, k, j].unsqueeze(-1) for j in range(b["elim"].shape[2])]
+    return cands, is_surv, is_elim
 
 
 @torch.no_grad()
-def candidate_mass(model, batches, depth: int = 6) -> dict:
+def candidate_mass(model, batches, spec, depth: int = 6) -> dict:
     """Mass the TIED answer head puts on each candidate, per slot role and per pass.
 
-    The softmax is restricted to the three answer ids of the instance's own candidates, so
-    it reads how the state splits its belief BETWEEN candidates. A superposition of the
-    alive set reads entropy ln(alive) and zero mass on anything the state could already
-    know is dead. A committed point reads entropy near 0 whatever the alive set is, which
-    is why the entropy and the top mass are reported next to the three masses: the mean
-    mass on the survivor alone cannot tell a 3-way superposition from a uniformly random
-    commitment (both give 1/3).
+    The softmax is restricted to the answer ids of the instance's own candidates, so it
+    reads how the state splits its belief BETWEEN candidates. A superposition of the alive
+    set reads entropy ln(alive) and zero mass on anything the state could already know is
+    dead. A committed point reads entropy near 0 whatever the alive set is, which is why
+    the entropy and the top mass are reported next to the three masses: the mean mass on
+    the survivor alone cannot tell an n-way superposition from a uniformly random
+    commitment (both give 1/n).
     """
-    from tasks import ELIM_VALUE_BASE
-
     model.eval()
-    acc = {(r, t): torch.zeros(5) for r in range(len(ROLE_NAMES)) for t in range(depth + 1)}
+    roles = spec.roles
+    acc = {(r, t): torch.zeros(5) for r in range(len(roles)) for t in range(depth + 1)}
     n = 0
     for b in batches:
         states = _slot_states(model, b, depth)
         for k, base in enumerate(b["inst_base_span"].tolist()):
-            cands, is_s, is_e1, is_e2 = _inst_masks(b, k)
-            ids = ELIM_VALUE_BASE + cands  # [B, 3] answer ids
-            for role in range(len(ROLE_NAMES)):
+            cands, is_s, is_e = _inst_masks(b, k)
+            ids = spec.value_base + cands
+            for ri, (_, role) in enumerate(roles):
                 for t in range(depth + 1):
-                    reach = _reachable(role, t)
+                    reach = _reachable(spec, role, t)
                     lg = model.mux_head(states[t][:, base + role]).gather(1, ids).float()
                     p = lg.softmax(-1)
-                    known = (is_e1 & reach["e1"]) | (is_e2 & reach["e2"])
-                    alive_other = (is_e1 | is_e2) & ~known
+                    known = torch.zeros_like(is_s)
+                    for j, ok in enumerate(reach["elims"]):
+                        if ok:
+                            known = known | is_e[j]
+                    alive_other = (~is_s) & (~known)
                     ent = -(p.clamp_min(1e-12).log() * p).sum(-1)
-                    acc[(role, t)] += torch.tensor(
+                    acc[(ri, t)] += torch.tensor(
                         [
                             (p * is_s).sum(-1).mean().item(),
                             (p * known).sum(-1).mean().item(),
@@ -290,178 +291,309 @@ def candidate_mass(model, batches, depth: int = 6) -> dict:
                         ]
                     )
             n += 1
-    out = {r: [] for r in ROLE_NAMES}
-    for role, name in enumerate(ROLE_NAMES):
+    out = {}
+    for ri, (name, role) in enumerate(roles):
+        rows = []
         for t in range(depth + 1):
-            a = (acc[(role, t)] / n).tolist()
-            reach = _reachable(role, t)
-            out[name].append(
+            a = (acc[(ri, t)] / n).tolist()
+            reach = _reachable(spec, role, t)
+            rows.append(
                 {
                     "pass": t,
+                    "slot": role,
                     "survivor": a[0],
                     "eliminated_reachable": a[1],
                     "alive_non_survivor": a[2],
                     "entropy": a[3],
                     "top_mass": a[4],
-                    "n_alive_reachable": (3 - reach["e1"] - reach["e2"]) if reach["cands"] else None,
+                    "n_alive_reachable": (spec.n_alive - sum(reach["elims"]))
+                    if reach["all_cands"]
+                    else None,
+                }
+            )
+        out[name] = rows
+    return out
+
+
+@torch.no_grad()
+def _probe_features(model, batches, spec, depth: int, role: int):
+    """Per pass: the slot state and the three per-symbol facts, as float targets.
+
+    alive  = the symbol is one of the instance's candidates and no reachable elimination
+             has killed it. The fact the task is about.
+    in_set = the symbol is one of the instance's candidates. Carried by the candidate
+             spans, so its hop distance from the slot is fixed by the layout.
+    dead   = the symbol is a candidate killed by an elimination inside the window. Its hop
+             distance is one per elimination span, which is what makes the probe read as a
+             function of hop distance.
+    Where a fact's source span is NOT in the window the state cannot know it, so those
+    rows are the instrument's own null and must read about 0.5.
+    """
+    X = [[] for _ in range(depth + 1)]
+    Y = {k: [[] for _ in range(depth + 1)] for k in ("alive", "in_set", "dead")}
+    S = [[] for _ in range(depth + 1)]
+    nsym = spec.n_symbols
+    for b in batches:
+        states = _slot_states(model, b, depth)
+        for t in range(depth + 1):
+            reach = _reachable(spec, role, t)
+            for k, base in enumerate(b["inst_base_span"].tolist()):
+                cands, _, _ = _inst_masks(b, k)
+                B = cands.shape[0]
+                in_set = torch.zeros(B, nsym, dtype=torch.bool, device=cands.device)
+                in_set.scatter_(1, cands, True)
+                dead = torch.zeros_like(in_set)
+                for j, ok in enumerate(reach["elims"]):
+                    if ok:
+                        dead.scatter_(1, b["elim"][:, k, j : j + 1], True)
+                X[t].append(states[t][:, base + role].float())
+                Y["alive"][t].append((in_set & ~dead).float())
+                Y["in_set"][t].append(in_set.float())
+                Y["dead"][t].append(dead.float())
+                S[t].append(torch.stack([in_set, dead], dim=-1))
+    return (
+        [torch.cat(x) for x in X],
+        {k: [torch.cat(y) for y in v] for k, v in Y.items()},
+        [torch.cat(s) for s in S],
+    )
+
+
+def _fit_logistic(xn, y, steps, lr, dev, seed: int = 0):
+    # a fixed seed per fit: the probe is then reproducible and independent of how many
+    # other probes were fitted before it, which the 2026-09-18 version was not
+    g = torch.Generator(device="cpu").manual_seed(seed)
+    lin = torch.nn.Linear(xn.shape[1], y.shape[1])
+    with torch.no_grad():
+        bound = 1.0 / (xn.shape[1] ** 0.5)
+        lin.weight.copy_(torch.empty_like(lin.weight).uniform_(-bound, bound, generator=g))
+        lin.bias.copy_(torch.empty_like(lin.bias).uniform_(-bound, bound, generator=g))
+    lin = lin.to(dev)
+    opt = torch.optim.Adam(lin.parameters(), lr=lr)
+    loss = None
+    for _ in range(steps):
+        opt.zero_grad(set_to_none=True)
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(lin(xn), y)
+        loss.backward()
+        opt.step()
+    return lin, float(loss.item())
+
+
+def _fit_softmax(xn, y, n_out, steps, lr, dev, seed: int = 0):
+    g = torch.Generator(device="cpu").manual_seed(seed)
+    lin = torch.nn.Linear(xn.shape[1], n_out)
+    with torch.no_grad():
+        bound = 1.0 / (xn.shape[1] ** 0.5)
+        lin.weight.copy_(torch.empty_like(lin.weight).uniform_(-bound, bound, generator=g))
+        lin.bias.copy_(torch.empty_like(lin.bias).uniform_(-bound, bound, generator=g))
+    lin = lin.to(dev)
+    opt = torch.optim.Adam(lin.parameters(), lr=lr)
+    loss = None
+    for _ in range(steps):
+        opt.zero_grad(set_to_none=True)
+        loss = torch.nn.functional.cross_entropy(lin(xn), y)
+        loss.backward()
+        opt.step()
+    return lin, float(loss.item())
+
+
+def _balanced(pred, y):
+    """Balanced accuracy, or None when one class is empty (a fact with no positives, e.g.
+    `dead` before any elimination is reachable). None, not NaN: NaN is not valid JSON and
+    it silently poisons every comparison downstream."""
+    hit = pred == y
+    pos = hit[y].float().mean().item() if bool(y.any()) else None
+    neg = hit[~y].float().mean().item() if bool((~y).any()) else None
+    bal = None if (pos is None or neg is None) else 0.5 * (pos + neg)
+    return bal, pos, neg
+
+
+def membership_probe(
+    model, train_batches, eval_batches, spec, depth: int = 6, steps: int = 400, lr: float = 3e-2
+) -> dict:
+    """Linear probes on the FROZEN model's slot states, scored on held-out rows.
+
+    It answers a different question from `candidate_mass`: the mass reads whether the set
+    is carried as a superposition of candidate EMBEDDINGS through the tied answer head, the
+    probe reads whether the facts are linearly decodable in ANY encoding. A high probe
+    accuracy under a low mass entropy is the "carried, but not as a superposition" outcome.
+
+    Reported per (role, pass): balanced accuracy for `alive`, `in_set` and `dead`, plus
+    `acc_within_set`, alive against already-eliminated inside the instance's own
+    candidates. None when no elimination is inside the window.
+
+    A random network preserves linearly decodable information, so a high accuracy here is
+    NOT evidence that the loop uses a fact. The probe is a destruction test: a LOW accuracy
+    is the evidence. The grid's random-init cells are its baseline.
+    """
+    dev = next(model.parameters()).device
+    out = {}
+    for name, role in spec.roles:
+        Xtr, Ytr, _ = _probe_features(model, train_batches, spec, depth, role)
+        Xte, Yte, Ste = _probe_features(model, eval_batches, spec, depth, role)
+        rows = []
+        for t in range(depth + 1):
+            xtr = Xtr[t]
+            mu, sd = xtr.mean(0, keepdim=True), xtr.std(0, keepdim=True) + 1e-5
+            xn = (xtr - mu) / sd
+            xe = (Xte[t] - mu) / sd
+            row = {"pass": t, "slot": role, "n_rows": int(Xte[t].shape[0])}
+            # `alive` is fitted FIRST and with the same shape as the 2026-09-18 version, so
+            # its numbers stay comparable with the cells filed that day
+            for fi, fact in enumerate(("alive", "in_set", "dead")):
+                lin, tl = _fit_logistic(
+                    xn, Ytr[fact][t], steps, lr, dev, seed=1_000_000 + 1000 * role + 10 * t + fi
+                )
+                with torch.no_grad():
+                    pred = lin(xe) > 0
+                    y = Yte[fact][t] > 0
+                    bal, pos, neg = _balanced(pred, y)
+                row[f"acc_{fact}"] = bal
+                row[f"train_loss_{fact}"] = tl
+                row[f"n_pos_{fact}"] = int(y.sum().item())
+                if fact == "alive":
+                    row["acc_balanced"] = bal
+                    row["acc_alive"] = pos
+                    row["acc_other"] = neg
+                    in_set, dead = Ste[t][..., 0], Ste[t][..., 1]
+                    a_in, d_in = in_set & ~dead, in_set & dead
+                    if d_in.any():
+                        hit = pred == y
+                        row["acc_within_set"] = 0.5 * (
+                            hit[a_in].float().mean().item() + hit[d_in].float().mean().item()
+                        )
+                    else:
+                        row["acc_within_set"] = None
+            rows.append(row)
+        out[name] = rows
+    return out
+
+
+@torch.no_grad()
+def _reader_features(model, batches, spec, depth: int, role: int):
+    X, Y = [], []
+    for b in batches:
+        states = _slot_states(model, b, depth)
+        for k, base in enumerate(b["inst_base_span"].tolist()):
+            X.append(states[depth][:, base + role].float())
+            Y.append(spec.value_base + b["survivor"][:, k])
+    return torch.cat(X), torch.cat(Y)
+
+
+def adapted_reader(
+    model,
+    train_batches,
+    eval_batches,
+    spec,
+    depths=(1, 2, 3, 4, 5, 6),
+    steps: int = 400,
+    lr: float = 3e-2,
+) -> dict:
+    """A linear reader FITTED to the exit state, against the coda's own reading.
+
+    The coda reads z through a tied head it was trained with. If that head cannot recover
+    the answer, two explanations remain: the state does not hold it, or the head cannot
+    read it. This separates them. One linear map per (slot, forced depth), trained on one
+    draw of rows with the model frozen and scored on a disjoint draw, reported as a value
+    CE in nats so it sits next to the K-curve and the enumerated ceilings.
+    """
+    dev = next(model.parameters()).device
+    out = {"by_depth": [], "by_slot": []}
+    for d in depths:
+        xtr, ytr = _reader_features(model, train_batches, spec, d, spec.answer_slot)
+        xte, yte = _reader_features(model, eval_batches, spec, d, spec.answer_slot)
+        mu, sd = xtr.mean(0, keepdim=True), xtr.std(0, keepdim=True) + 1e-5
+        lin, _ = _fit_softmax(
+            (xtr - mu) / sd, ytr, model.cfg.vocab, steps, lr, dev, seed=2_000_000 + d
+        )
+        with torch.no_grad():
+            lo = lin((xte - mu) / sd)
+            ce = torch.nn.functional.cross_entropy(lo, yte).item()
+            acc = (lo.argmax(-1) == yte).float().mean().item()
+        out["by_depth"].append(
+            {"depth": d, "slot": spec.answer_slot, "reader_value_ce": ce, "reader_value_acc": acc,
+             "n_rows": int(xte.shape[0])}
+        )
+    d = spec.probe_depth
+    for name, role in spec.roles:
+        xtr, ytr = _reader_features(model, train_batches, spec, d, role)
+        xte, yte = _reader_features(model, eval_batches, spec, d, role)
+        mu, sd = xtr.mean(0, keepdim=True), xtr.std(0, keepdim=True) + 1e-5
+        lin, _ = _fit_softmax(
+            (xtr - mu) / sd, ytr, model.cfg.vocab, steps, lr, dev, seed=3_000_000 + role
+        )
+        with torch.no_grad():
+            lo = lin((xte - mu) / sd)
+            out["by_slot"].append(
+                {
+                    "role": name,
+                    "slot": role,
+                    "depth": d,
+                    "reader_value_ce": torch.nn.functional.cross_entropy(lo, yte).item(),
+                    "reader_value_acc": (lo.argmax(-1) == yte).float().mean().item(),
                 }
             )
     return out
 
 
 @torch.no_grad()
-def _probe_features(model, batches, depth: int, role: int):
-    """(X, Y, in_set) per pass: the slot state, the alive target, the candidate mask."""
-    from tasks import N_CAND
+def twin_divergence(model, twin_pairs, spec, depth: int = 6, tol: float = 1e-3) -> dict:
+    """Cosine between the slot states of two rows that differ ONLY at the FIRST elimination.
 
-    X = [[] for _ in range(depth + 1)]
-    Y = [[] for _ in range(depth + 1)]
-    S = [[] for _ in range(depth + 1)]
-    for b in batches:
-        states = _slot_states(model, b, depth)
-        for t in range(depth + 1):
-            reach = _reachable(role, t)
-            for k, base in enumerate(b["inst_base_span"].tolist()):
-                cands, is_s, is_e1, is_e2 = _inst_masks(b, k)
-                B = cands.shape[0]
-                in_set = torch.zeros(B, N_CAND, dtype=torch.bool, device=cands.device)
-                in_set.scatter_(1, cands, True)
-                dead = torch.zeros_like(in_set)
-                if reach["e1"]:
-                    dead.scatter_(1, b["elim"][:, k, 0:1], True)
-                if reach["e2"]:
-                    dead.scatter_(1, b["elim"][:, k, 1:2], True)
-                X[t].append(states[t][:, base + role].float())
-                Y[t].append((in_set & ~dead).float())
-                S[t].append(torch.stack([in_set, dead], dim=-1))
-    return (
-        [torch.cat(x) for x in X],
-        [torch.cat(y) for y in Y],
-        [torch.cat(s) for s in S],
-    )
-
-
-def membership_probe(
-    model, train_batches, eval_batches, depth: int = 6, steps: int = 400, lr: float = 3e-2
-) -> dict:
-    """Linear probe: is candidate symbol c still alive in this state's reachable window?
-
-    Trained post hoc on the FROZEN model's slot states, one probe per (role, pass), and
-    scored on held-out rows. It answers a different question from `candidate_mass`: the
-    mass reads whether the set is carried as a superposition of candidate EMBEDDINGS
-    through the tied answer head, the probe reads whether the set is linearly decodable in
-    ANY encoding. A high probe accuracy under a low mass entropy is the "carried, but not
-    as a superposition" outcome.
-
-    Two scores per cell, both balanced so a base rate cannot buy them:
-      acc_balanced    over all 6 candidate symbols, mean of the accuracy on alive symbols
-                      and the accuracy on the rest. It is the set-membership reading.
-      acc_within_set  restricted to the instance's own three candidates: alive against
-                      already-eliminated. None when no elimination is inside the window,
-                      because then nothing in the set is dead.
-    Where the candidate span is NOT in the window (pass t < role) the state cannot know the
-    set at all, so those rows are the instrument's own null: they must read about 0.5.
-    """
-    dev = next(model.parameters()).device
-    out = {}
-    for role, name in enumerate(ROLE_NAMES):
-        Xtr, Ytr, _ = _probe_features(model, train_batches, depth, role)
-        Xte, Yte, Ste = _probe_features(model, eval_batches, depth, role)
-        rows = []
-        for t in range(depth + 1):
-            xtr = Xtr[t]
-            mu, sd = xtr.mean(0, keepdim=True), xtr.std(0, keepdim=True) + 1e-5
-            lin = torch.nn.Linear(xtr.shape[1], Ytr[t].shape[1]).to(dev)
-            opt = torch.optim.Adam(lin.parameters(), lr=lr)
-            xn = (xtr - mu) / sd
-            for _ in range(steps):
-                opt.zero_grad(set_to_none=True)
-                loss = torch.nn.functional.binary_cross_entropy_with_logits(lin(xn), Ytr[t])
-                loss.backward()
-                opt.step()
-            with torch.no_grad():
-                pred = lin((Xte[t] - mu) / sd) > 0
-                y = Yte[t] > 0
-                pos = (pred == y)[y].float().mean().item()
-                neg = (pred == y)[~y].float().mean().item()
-                in_set, dead = Ste[t][..., 0], Ste[t][..., 1]
-                alive_in = in_set & ~dead
-                dead_in = in_set & dead
-                if dead_in.any():
-                    a = (pred == y)[alive_in].float().mean().item()
-                    d = (pred == y)[dead_in].float().mean().item()
-                    within = 0.5 * (a + d)
-                else:
-                    within = None
-                rows.append(
-                    {
-                        "pass": t,
-                        "acc_balanced": 0.5 * (pos + neg),
-                        "acc_alive": pos,
-                        "acc_other": neg,
-                        "acc_within_set": within,
-                        "train_loss": loss.item(),
-                        "n_rows": int(Xte[t].shape[0]),
-                    }
-                )
-        out[name] = rows
-    return out
-
-
-@torch.no_grad()
-def twin_divergence(model, twin_pairs, depth: int = 6, tol: float = 1e-3) -> dict:
-    """Cosine between the slot states of two rows that differ ONLY in span s+1.
-
-    A reachability test with teeth: the state of slot s+role may not move until span s+1
-    enters its window, which happens at pass role-1. Role `cand` never reaches it, so its
-    cosine must be 1.0 at EVERY pass; role `answer` must read 1.0 at pass 0 and drop at
-    pass 1. `drop_pass` is the first pass whose mean cosine falls below 1 - tol.
+    A reachability test with teeth: the state of slot `role` may not move until that span
+    enters its window, which happens at pass role - first_elim_span. A role at or before
+    the changed span can never see it, so its cosine must be 1.0 at every pass -- but only
+    WITHIN an instance: a row with several instances lets the core chain cross the
+    boundary, so a role can reach an earlier instance's changed span at a larger pass.
     """
     model.eval()
-    acc = {(r, t): 0.0 for r in range(len(ROLE_NAMES)) for t in range(depth + 1)}
+    roles = spec.roles
+    first_elim = spec.elim_spans[0]
+    acc = {(r, t): 0.0 for r in range(len(roles)) for t in range(depth + 1)}
     n = 0
     for ba, bb in twin_pairs:
         sa = _slot_states(model, ba, depth)
         sb = _slot_states(model, bb, depth)
         for base in ba["inst_base_span"].tolist():
-            for role in range(len(ROLE_NAMES)):
+            for ri, (_, role) in enumerate(roles):
                 for t in range(depth + 1):
                     c = torch.nn.functional.cosine_similarity(
                         sa[t][:, base + role].float(), sb[t][:, base + role].float(), dim=-1
                     )
-                    acc[(role, t)] += c.mean().item()
+                    acc[(ri, t)] += c.mean().item()
             n += 1
     out = {}
-    for role, name in enumerate(ROLE_NAMES):
-        cos = [acc[(role, t)] / n for t in range(depth + 1)]
+    for ri, (name, role) in enumerate(roles):
+        cos = [acc[(ri, t)] / n for t in range(depth + 1)]
         drop = next((t for t, c in enumerate(cos) if c < 1.0 - tol), None)
         out[name] = {
+            "slot": role,
             "cosine": cos,
             "drop_pass": drop,
-            "expected_drop_pass": None if role == 0 else role - 1,
+            "expected_drop_pass": (role - first_elim) if role >= first_elim else None,
         }
-    ce = []
-    for i, (ba, bb) in enumerate(twin_pairs):
-        ce.append(
-            {
-                "a_value_ce": eval_ce(model, [ba], force_depth=depth)["value_ce"],
-                "b_value_ce": eval_ce(model, [bb], force_depth=depth)["value_ce"],
-            }
+    ce = [
+        (
+            eval_ce(model, [ba], force_depth=depth)["value_ce"],
+            eval_ce(model, [bb], force_depth=depth)["value_ce"],
         )
+        for ba, bb in twin_pairs
+    ]
     out["value_ce"] = {
-        "a": sum(c["a_value_ce"] for c in ce) / len(ce),
-        "b": sum(c["b_value_ce"] for c in ce) / len(ce),
+        "a": sum(c[0] for c in ce) / len(ce),
+        "b": sum(c[1] for c in ce) / len(ce),
     }
     return out
 
 
-def make_twin_pairs(cfg, n_rows, batch, seed, device):
+def make_twin_pairs(cfg, n_rows, batch, seed, device, task="eliminate"):
     from tasks import make_twin_batch
 
     g = torch.Generator(device=device).manual_seed(seed)
     return [
         tuple(
-            make_twin_batch(batch, cfg.layout.n_spans, cfg.layout.span_len, generator=g, device=device)
+            make_twin_batch(
+                batch, cfg.layout.n_spans, cfg.layout.span_len, generator=g, device=device, task=task
+            )
         )
         for _ in range(max(1, n_rows // batch))
     ]

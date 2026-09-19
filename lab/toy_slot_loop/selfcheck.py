@@ -19,6 +19,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from instruments import gradient_probe, make_eval_batches  # noqa: E402
 from model import PREFIX, SLOT, TOKEN, Layout, ToyConfig, ToySlotLoop, build_masks  # noqa: E402
 from tasks import (  # noqa: E402
+    E6_CAND_SPANS,
+    E6_DIST_BASE,
+    E6_ELIM_SPANS,
+    E6_SPANS,
+    E6_VALUE_BASE,
+    E6_VOCAB,
     ELIM_DIST_BASE,
     ELIM_VALUE_BASE,
     ELIM_VOCAB,
@@ -27,9 +33,13 @@ from tasks import (  # noqa: E402
     N_GROUP,
     PERMS,
     VALUE_BASE,
+    N6_ALIVE,
+    N6_CAND,
+    eliminate6_ceilings,
     eliminate_ceilings,
     make_batch,
     make_twin_batch,
+    spec_for,
 )
 
 FAILS: list[str] = []
@@ -315,6 +325,249 @@ def t_eliminate_mux_masking():
         )
 
 
+def t_eliminate6_task():
+    """`eliminate6`: the sampler must match the distribution the ceilings enumerate."""
+    g = torch.Generator().manual_seed(0)
+    B = 4096
+    b = make_batch("eliminate6", B, E6_SPANS, 3, generator=g)
+    toks = b["tokens"].view(B, E6_SPANS, 3)
+    cands, surv, elim = b["candidates"][:, 0], b["survivor"][:, 0], b["elim"][:, 0]
+
+    ok = True
+    for j, sp in enumerate(E6_CAND_SPANS):
+        if not bool((toks[:, sp] == cands[:, j * 3 : (j + 1) * 3]).all()):
+            ok = False
+    for j, sp in enumerate(E6_ELIM_SPANS):
+        if not bool((toks[:, sp, 0] == elim[:, j]).all()):
+            ok = False
+        for cell in (1, 2):
+            col = toks[:, sp, cell]
+            if not bool(((col >= E6_DIST_BASE) & (col < E6_VALUE_BASE)).all()):
+                ok = False
+    if not bool(((toks[:, 7] >= E6_DIST_BASE) & (toks[:, 7] < E6_VALUE_BASE)).all()):
+        ok = False
+    check("eliminate6: [cands x2][elim d d]x5[d d d] layout", ok)
+
+    srt = cands.sort(dim=-1).values
+    check(
+        "eliminate6: the six candidates are DISTINCT",
+        bool((srt[:, 1:] != srt[:, :-1]).all()),
+    )
+    check(
+        "eliminate6: the survivor is one of the six candidates",
+        bool(((cands == surv.unsqueeze(-1)).sum(-1) == 1).all()),
+    )
+    alive = True
+    for j in range(N6_ALIVE - 1):
+        if not bool(((cands == elim[:, j].unsqueeze(-1)).sum(-1) == 1).all()):
+            alive = False
+        if bool((elim[:, j] == surv).any()):
+            alive = False
+    check("eliminate6: all five eliminations are candidates and none is the survivor", alive)
+    es = elim.sort(dim=-1).values
+    check("eliminate6: the five eliminations are distinct", bool((es[:, 1:] != es[:, :-1]).all()))
+    check(
+        "eliminate6: the eliminations are exactly the candidates minus the survivor",
+        bool(
+            (
+                torch.nn.functional.one_hot(cands, N6_CAND).sum(1)
+                - torch.nn.functional.one_hot(elim, N6_CAND).sum(1)
+                == torch.nn.functional.one_hot(surv, N6_CAND)
+            ).all()
+        ),
+    )
+    check("eliminate6: answers never appear as INPUT tokens", bool((b["tokens"] < E6_VALUE_BASE).all()))
+    check(
+        "eliminate6: answer(c) = E6_VALUE_BASE + c at the label and at the MUX target",
+        bool((b["labels"][:, 7 * 3] == E6_VALUE_BASE + surv).all())
+        and bool((b["mux_next"][:, E6_ELIM_SPANS[-1]] == E6_VALUE_BASE + surv).all()),
+    )
+    keep = torch.zeros(E6_SPANS, dtype=torch.bool)
+    keep[E6_ELIM_SPANS[-1]] = True
+    check(
+        "eliminate6: only the answer slot carries a next-span MUX target",
+        bool(((b["mux_next"] != -100) == keep).all()),
+    )
+    own = torch.zeros(E6_SPANS, dtype=torch.bool)
+    for sp in E6_ELIM_SPANS:
+        own[sp] = True
+    check(
+        "eliminate6: only the elimination spans carry an own-span MUX target",
+        bool(((b["mux_own"] != -100) == own).all()),
+    )
+    check("eliminate6: one value position, the head of span 7", b["value_pos"].tolist() == [21])
+
+    pos = (cands == surv.unsqueeze(-1)).float().argmax(-1)
+    frac = [(pos == j).float().mean().item() for j in range(N6_ALIVE)]
+    check(
+        "eliminate6: the survivor is uniform over the six candidate CELLS",
+        max(abs(f - 1 / N6_ALIVE) for f in frac) < 0.02,
+        f"cell fractions {[round(f, 4) for f in frac]}",
+    )
+    counts = torch.zeros(N6_CAND)
+    counts.scatter_add_(0, surv, torch.ones(surv.numel()))
+    fs = (counts / surv.numel()).tolist()
+    check(
+        "eliminate6: the survivor SYMBOL is uniform over the eight candidate ids",
+        max(abs(f - 1 / N6_CAND) for f in fs) < 0.02,
+        f"symbol fractions {[round(f, 4) for f in fs]}",
+    )
+    # the elimination ORDER is uniform: every candidate cell is equally likely to be first out
+    firstpos = (cands == elim[:, 0].unsqueeze(-1)).float().argmax(-1)
+    ff = [(firstpos == j).float().mean().item() for j in range(N6_ALIVE)]
+    check(
+        "eliminate6: the elimination ORDER is uniform over the candidate cells",
+        max(abs(f - 1 / N6_ALIVE) for f in ff) < 0.02,
+        f"first-out fractions {[round(f, 4) for f in ff]}",
+    )
+    a, bb = make_twin_batch(256, E6_SPANS, 3, generator=torch.Generator().manual_seed(3), task="eliminate6")
+    diff = a["tokens"] != bb["tokens"]
+    check(
+        "eliminate6 twins: differ ONLY at the head of span 2",
+        diff.sum(1).unique().tolist() == [1] and diff[0].nonzero().flatten().tolist() == [6],
+        f"differing positions {diff[0].nonzero().flatten().tolist()}",
+    )
+    check(
+        "eliminate6 twins: the survivor and the first elimination swap roles",
+        bool((bb["survivor"][:, 0] == a["elim"][:, 0, 0]).all())
+        and bool((bb["elim"][:, 0, 0] == a["survivor"][:, 0]).all())
+        and bool((bb["elim"][:, 0, 1:] == a["elim"][:, 0, 1:]).all()),
+    )
+
+
+def t_eliminate6_ceilings():
+    """The enumerated ceilings against their closed forms, and against the sampler."""
+    import math
+
+    c = eliminate6_ceilings()
+    check("e6 ceiling: chance = ln 8", abs(c["chance"] - math.log(8)) < 1e-12)
+    want = [math.log(7), math.log(6), math.log(5), math.log(4), math.log(3), 0.5 * math.log(3), 0.0]
+    got = [c["reachability"][d] for d in range(7)]
+    check(
+        "e6 ceiling: reachability is ln7/ln6/ln5/ln4/ln3/(ln3)/2/0 at depth 0..6",
+        all(abs(a - b) < 1e-9 for a, b in zip(got, want)),
+        " ".join(f"{v:.6f}" for v in got) + f"; worst |delta| {max(abs(a - b) for a, b in zip(got, want)):.2e}",
+    )
+    wantc = [math.log(n) for n in (6, 5, 4, 3, 2)] + [0.0]
+    gotc = [c["commitment"][k] for k in range(6)]
+    check(
+        "e6 ceiling: commitment is ln6 -> ln5 -> ln4 -> ln3 -> ln2 -> 0",
+        all(abs(a - b) < 1e-9 for a, b in zip(gotc, wantc)),
+        " ".join(f"{v:.4f}" for v in gotc),
+    )
+    check(
+        "e6 ceiling: the point-carry ladder is strictly below the commitment ladder",
+        all(c["point_carry"][k] < c["commitment"][k] - 1e-9 for k in range(5))
+        and c["point_carry"][5] == 0.0,
+        " ".join(f"{c['point_carry'][k]:.4f}" for k in range(6)),
+    )
+    # the SAMPLER against the enumeration: H(survivor | all five eliminations) = ln 3.
+    # The key is the unordered elimination SET, not the ordered tuple: the survivor is
+    # conditionally independent of the order, and 56 sets keep about 700 samples per cell,
+    # where the plug-in entropy's bias is about -(3-1)/(2*700) = -0.0014 nats. Keying on
+    # the 6,720 ordered tuples would measure that bias (-0.20 nats) instead of the sampler.
+    g = torch.Generator().manual_seed(11)
+    b = make_batch("eliminate6", 40000, E6_SPANS, 3, generator=g)
+    es = b["elim"][:, 0].sort(dim=-1).values
+    key = torch.zeros(b["survivor"].shape[0], dtype=torch.long)
+    for j in range(N6_ALIVE - 1):
+        key = key * N6_CAND + es[:, j]
+    uniq, inv = key.unique(return_inverse=True)
+    joint = torch.zeros(uniq.numel(), N6_CAND)
+    joint.scatter_add_(
+        0,
+        inv.unsqueeze(-1).expand(-1, N6_CAND),
+        torch.nn.functional.one_hot(b["survivor"][:, 0], N6_CAND).float(),
+    )
+    p = joint / joint.sum()
+    cond = p / p.sum(1, keepdim=True).clamp_min(1e-12)
+    h = -(p * cond.clamp_min(1e-12).log()).sum().item()
+    check(
+        "the eliminate6 SAMPLER reproduces H(survivor | all five eliminations) = ln 3",
+        abs(h - math.log(3)) < 0.02,
+        f"Monte-Carlo {h:.4f} against {math.log(3):.4f}",
+    )
+
+
+def t_eliminate6_depth_requirement():
+    """Under strict geometry the `eliminate6` answer needs SIX passes, one per hop.
+
+    Differentiate the value logit at the head of span 7 with respect to the raw cell
+    embeddings and read the norm at each source span. A span at hop distance h from the
+    answer slot must be exactly zero below depth h and non-zero at and above it.
+    """
+    torch.manual_seed(0)
+    mo = ToySlotLoop(cfg(geometry="strict", vocab=E6_VOCAB, layout=Layout(E6_SPANS, 3, 2)))
+    g = torch.Generator().manual_seed(1)
+    b = make_batch("eliminate6", 2, E6_SPANS, 3, generator=g)
+    width = mo.cfg.layout.width
+    ok = True
+    for T in (1, 2, 4, 6):
+        base = mo._base(b["tokens"]).detach().requires_grad_(True)
+        x = base
+        for blk in mo.prelude:
+            x = blk(x, mo.mask_prelude)
+        e = x[:, mo.slot_pos]
+        z, h0, states, hp = mo.loop(e, torch.full((2, E6_SPANS), T, dtype=torch.long))
+        xh = mo._write_and_coda(base, z)
+        logit = mo.head(xh[:, mo.tok_pos])[:, int(b["value_pos"][0])].sum()
+        gb = torch.autograd.grad(logit, base)[0]
+        reach = [gb[:, sp * width : sp * width + 3].norm().item() for sp in range(E6_SPANS)]
+        print("      T=%d: |d logit(span 7 head)/d span s| = %s" % (T, " ".join(f"{v:.1e}" for v in reach)))
+        for sp in range(7):  # the answer slot is slot 6, so span sp sits at hop 6 - sp
+            hop = 6 - sp
+            if T < hop and reach[sp] != 0.0:
+                ok = False
+            if T >= hop and reach[sp] == 0.0:
+                ok = False
+    check("eliminate6/strict: every span is reachable at exactly its hop distance", ok)
+
+
+def t_eliminate6_mux_masking():
+    torch.manual_seed(0)
+    for attach in ("exit", "mux_all", "staged"):
+        c = cfg(attach=attach, vocab=E6_VOCAB, layout=Layout(E6_SPANS, 3, 2))
+        mo = ToySlotLoop(c)
+        g = torch.Generator().manual_seed(5)
+        b = make_batch("eliminate6", 8, E6_SPANS, 3, generator=g)
+        o = mo(b, force_depth=4)
+        o["loss"].backward()
+        gn = mo.core.mlp.down.weight.grad
+        check(
+            f"eliminate6 {attach}: finite loss and a live core gradient",
+            torch.isfinite(o["loss"]).item() and gn is not None and torch.isfinite(gn).all()
+            and gn.norm().item() > 0,
+            f"loss {o['loss'].item():.4f} mux {o['mux'].item():.4f}",
+        )
+
+
+def t_instrument_reach():
+    """The instruments' reachability helper must agree with the measured geometry."""
+    from instruments import _reachable
+
+    sp = spec_for("eliminate6")
+    r0 = _reachable(sp, 6, 0)
+    r4 = _reachable(sp, 6, 4)
+    r6 = _reachable(sp, 6, 6)
+    check(
+        "instrument reach: the answer slot holds only the last elimination at pass 0",
+        r0["elims"] == [False, False, False, False, True] and not r0["all_cands"],
+    )
+    check(
+        "instrument reach: it holds all five eliminations and no candidate span at pass 4",
+        r4["elims"] == [True] * 5 and not r4["all_cands"],
+    )
+    check("instrument reach: it holds the whole candidate set at pass 6", r6["all_cands"])
+    se = spec_for("eliminate")
+    check(
+        "instrument reach: the eliminate spec still reads its own geometry",
+        _reachable(se, 2, 0)["elims"] == [False, True]
+        and _reachable(se, 2, 1)["elims"] == [True, True]
+        and not _reachable(se, 2, 1)["all_cands"]
+        and _reachable(se, 2, 2)["all_cands"],
+    )
+
+
 def t_masks():
     lay = Layout(6, 3, 2)
     kind = lay.cell_kind()
@@ -592,10 +845,15 @@ if __name__ == "__main__":
     t_task()
     t_eliminate_task()
     t_eliminate_ceilings()
+    t_eliminate6_task()
+    t_eliminate6_ceilings()
+    t_instrument_reach()
     t_masks()
     t_depth_requirement()
     t_eliminate_depth_requirement()
     t_eliminate_mux_masking()
+    t_eliminate6_depth_requirement()
+    t_eliminate6_mux_masking()
     t_coda_path()
     t_prelude_leak()
     t_depth_freeze()

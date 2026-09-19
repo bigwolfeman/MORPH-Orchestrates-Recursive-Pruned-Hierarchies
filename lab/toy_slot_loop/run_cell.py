@@ -21,6 +21,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from instruments import (  # noqa: E402
+    adapted_reader,
     candidate_mass,
     eval_ce,
     gradient_probe,
@@ -33,7 +34,7 @@ from instruments import (  # noqa: E402
     write_contribution,
 )
 from model import Layout, ToyConfig, ToySlotLoop  # noqa: E402
-from tasks import chance_ce, eliminate_ceilings, make_batch, vocab_for  # noqa: E402
+from tasks import ceilings_for, chance_ce, make_batch, spec_for, vocab_for  # noqa: E402
 
 EVAL_SEED = 20260910
 
@@ -65,6 +66,11 @@ def build_cfg(a) -> ToyConfig:
     )
 
 
+def _f2(x):
+    """A probe accuracy is None when the fact has no positives in the window."""
+    return "None" if x is None else f"{x:.2f}"
+
+
 def lr_at(step, total, base, warmup):
     if step < warmup:
         return base * (step + 1) / warmup
@@ -74,7 +80,7 @@ def lr_at(step, total, base, warmup):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--task", default="compose", choices=["compose", "summary", "eliminate"])
+    ap.add_argument("--task", default="compose", choices=["compose", "summary", "eliminate", "eliminate6"])
     ap.add_argument("--attach", default="exit")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--steps", type=int, default=3000)
@@ -108,11 +114,20 @@ def main():
     ap.add_argument("--probe_batches", type=int, default=4)
     ap.add_argument("--probe_rows", type=int, default=1024)   # eliminate instruments
     ap.add_argument("--probe_steps", type=int, default=400)   # membership-probe fit steps
+    ap.add_argument("--allow_shallow_depth", action="store_true")
     ap.add_argument("--probe_batch", type=int, default=64)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--label", default="cell")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+
+    if a.task == "eliminate6" and a.mean_depth < 8 and a.fixed_depth == 0 and not a.allow_shallow_depth:
+        raise SystemExit(
+            "eliminate6 needs a 6-hop chain: the answer slot reaches the candidate span at pass 6. "
+            f"With mean_depth {a.mean_depth} the prefix draw d_k >= k for k=1..6 holds on about "
+            "39 % of rows, so most rows would supervise the answer with an unreachable target. "
+            "Pass --mean_depth 8 --max_depth 10 (the grid's setting) or --allow_shallow_depth."
+        )
 
     torch.manual_seed(a.seed)
     dev = torch.device(a.device)
@@ -160,24 +175,32 @@ def main():
         a.task, cfg, a.probe_batches * a.probe_batch, a.probe_batch, EVAL_SEED + 1, dev
     )
 
-    kc = k_curve(model, ev, depths=(1, 2, 3, 6, 8, 12))
+    kdepths = (1, 2, 3, 4, 5, 6, 8, 10) if a.task == "eliminate6" else (1, 2, 3, 6, 8, 12)
+    kc = k_curve(model, ev, depths=kdepths)
     wc = write_contribution(model, ev, depth=6)
     pr = participation_rank(model, ev, depth=6)
     probes = {s: gradient_probe(model, probe_ev, depth=6, source=s) for s in ("total", "token_ce", "mux")}
 
     elim: dict = {}
-    if a.task == "eliminate":
-        # the alive-set instruments: is the set carried, in what encoding, and when does
-        # the state commit? Training rows for the membership probe are drawn from their own
-        # seed and are disjoint from the held-out rows it is scored on.
+    if a.task in {"eliminate", "eliminate6"}:
+        # the alive-set instruments: is the set carried, in what encoding, when does the
+        # state commit, and can a FITTED reader find what the tied head cannot? The probe
+        # and reader train on their own draw of rows and are scored on a disjoint one.
+        spec = spec_for(a.task)
+        pd = spec.probe_depth
         tr = make_eval_batches(a.task, cfg, a.probe_rows, a.eval_batch, EVAL_SEED + 3, dev)
         te = make_eval_batches(a.task, cfg, a.probe_rows, a.eval_batch, EVAL_SEED + 4, dev)
-        twins = make_twin_pairs(cfg, a.probe_rows, a.eval_batch, EVAL_SEED + 5, dev)
+        twins = make_twin_pairs(cfg, a.probe_rows, a.eval_batch, EVAL_SEED + 5, dev, task=a.task)
         elim = {
-            "ceilings": eliminate_ceilings(),
-            "candidate_mass": candidate_mass(model, te, depth=6),
-            "membership_probe": membership_probe(model, tr, te, depth=6, steps=a.probe_steps),
-            "twin_divergence": twin_divergence(model, twins, depth=6),
+            "spec": {"task": spec.task, "roles": list(spec.roles), "probe_depth": pd,
+                     "cand_spans": list(spec.cand_spans), "elim_spans": list(spec.elim_spans)},
+            "ceilings": ceilings_for(a.task),
+            "candidate_mass": candidate_mass(model, te, spec, depth=pd),
+            "membership_probe": membership_probe(model, tr, te, spec, depth=pd, steps=a.probe_steps),
+            "twin_divergence": twin_divergence(model, twins, spec, depth=pd),
+            "adapted_reader": adapted_reader(
+                model, tr, te, spec, depths=kdepths[:-1], steps=a.probe_steps
+            ),
         }
 
     esc = [h["step"] for h in hist if h["probe_value_acc"] > 0.9]
@@ -218,15 +241,20 @@ def main():
     if elim:
         cm = elim["candidate_mass"]
         td = elim["twin_divergence"]
+        mp = elim["membership_probe"]
+        names = [n for n, _ in spec.roles]
+        first, last = names[0], names[-1]
+        pl = min(2, len(cm[last]) - 1)
         print(
-            f"[{a.label}] mass(cand,p0) surv/elim/other "
-            f"{cm['cand'][0]['survivor']:.3f}/{cm['cand'][0]['eliminated_reachable']:.3f}/"
-            f"{cm['cand'][0]['alive_non_survivor']:.3f} H={cm['cand'][0]['entropy']:.3f} | "
-            f"mass(elim1,p1) {cm['elim1'][1]['survivor']:.3f}/{cm['elim1'][1]['eliminated_reachable']:.3f}/"
-            f"{cm['elim1'][1]['alive_non_survivor']:.3f} H={cm['elim1'][1]['entropy']:.3f} | "
-            f"probe(elim1,p1) within={elim['membership_probe']['elim1'][1]['acc_within_set']} "
-            f"| twin drop cand/elim1/answer "
-            f"{td['cand']['drop_pass']}/{td['elim1']['drop_pass']}/{td['answer']['drop_pass']}"
+            f"[{a.label}] mass({first},p1) surv/dead/other "
+            f"{cm[first][1]['survivor']:.3f}/{cm[first][1]['eliminated_reachable']:.3f}/"
+            f"{cm[first][1]['alive_non_survivor']:.3f} H={cm[first][1]['entropy']:.3f} | "
+            f"probe({first},p1) alive/in_set/dead "
+            + "/".join(_f2(mp[first][1][k]) for k in ("acc_alive", "acc_in_set", "acc_dead"))
+            + " | "
+            f"reader CE d1/dmax {elim['adapted_reader']['by_depth'][0]['reader_value_ce']:.3f}/"
+            f"{elim['adapted_reader']['by_depth'][-1]['reader_value_ce']:.3f} | "
+            f"twin drop " + "/".join(str(td[n]["drop_pass"]) for n in names)
         )
 
 

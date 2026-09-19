@@ -37,6 +37,8 @@ token CE is local statistics the loop cannot help with.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 
 # S_3 as permutations of (0,1,2). Index = symbol id.
@@ -98,10 +100,109 @@ ELIM_VOCAB = N_CAND + N_DIST + N_CAND
 ELIM_SPANS = 4  # spans per instance
 
 
+# --------------------------------------------------------------------------------------
+# task "eliminate6" (2026-09-18, iteration 2): a SIX-hop elimination chain
+# --------------------------------------------------------------------------------------
+#
+# `eliminate` was solved by every cell of its grid, so its escape rate measured nothing: a
+# 2-pass chain has no basin. `eliminate6` deepens the chain and grades the hop distance.
+#
+# Alphabets (22 ids, disjoint):
+#   0..7    candidate symbols   (input)  -- an instance uses SIX of the eight
+#   8..13   distractor symbols  (input)
+#   14..21  answer symbols      (OUTPUT ONLY), answer(c) = E6_VALUE_BASE + c
+#
+# One instance is the whole row, 8 spans of 3 cells:
+#   span 0,1  the six DISTINCT candidates, three per span, in a uniformly random order
+#   span 2..6 [elimination][distractor x2], five eliminations in a uniformly random order
+#   span 7    three distractors; its HEAD carries the survivor's answer id as the label
+#
+# Two deliberate departures from `eliminate`, both forced by arithmetic:
+#   - FIVE eliminations, not four. Four eliminations of six candidates leave TWO alive, so
+#     the answer would not be determined and the commitment ladder could not reach 0.
+#   - EIGHT candidate symbols, of which an instance uses six. With |C| = 6 every instance's
+#     candidate set would be the whole alphabet, the candidate spans would carry nothing,
+#     and "does the loop carry a SET" would collapse into "does it carry the exclusions".
+# The answer slot is slot 6 and its window after t passes is spans 6-t .. 6, so the full
+# candidate set (span 0) arrives only at pass 6: a six-hop chain with one fact per hop.
+N6_CAND = 8
+N6_DIST = 6
+N6_ALIVE = 6  # candidates per instance
+E6_CAND_BASE = 0
+E6_DIST_BASE = N6_CAND
+E6_VALUE_BASE = N6_CAND + N6_DIST
+E6_VOCAB = N6_CAND + N6_DIST + N6_CAND
+E6_SPANS = 8
+E6_CAND_SPANS = (0, 1)
+E6_ELIM_SPANS = (2, 3, 4, 5, 6)
+
+
+@dataclass(frozen=True)
+class ElimSpec:
+    """What an elimination task's row looks like, for the instruments to read it.
+
+    Spans are offsets INSIDE one instance. `roles` are the slots the instruments report,
+    by their offset inside the instance. Under strict geometry slot `r` after `t` passes
+    holds spans r-t .. r, so this dataclass is all a probe needs to know what a state
+    COULD hold, which is what every reading here is scored against.
+    """
+
+    task: str
+    spans: int  # spans per instance
+    cand_spans: tuple[int, ...]
+    elim_spans: tuple[int, ...]
+    n_symbols: int  # |C|, the candidate alphabet
+    n_alive: int  # candidates per instance
+    value_base: int
+    roles: tuple[tuple[str, int], ...]
+    probe_depth: int  # the forced depth the per-pass instruments run at
+
+    @property
+    def answer_slot(self) -> int:
+        return self.elim_spans[-1]
+
+
+ELIMINATE_SPEC = ElimSpec(
+    task="eliminate",
+    spans=ELIM_SPANS,
+    cand_spans=(0,),
+    elim_spans=(1, 2),
+    n_symbols=N_CAND,
+    n_alive=3,
+    value_base=ELIM_VALUE_BASE,
+    roles=(("cand", 0), ("elim1", 1), ("answer", 2)),
+    probe_depth=6,
+)
+
+ELIMINATE6_SPEC = ElimSpec(
+    task="eliminate6",
+    spans=E6_SPANS,
+    cand_spans=E6_CAND_SPANS,
+    elim_spans=E6_ELIM_SPANS,
+    n_symbols=N6_CAND,
+    n_alive=N6_ALIVE,
+    value_base=E6_VALUE_BASE,
+    # `cand` holds the whole set from pass 1; `mid` is the third elimination, whose set
+    # completes at pass 4; `answer` is the slot the label is read from, complete at pass 6
+    roles=(("cand", 1), ("mid", 4), ("answer", 6)),
+    probe_depth=8,
+)
+
+SPECS = {"eliminate": ELIMINATE_SPEC, "eliminate6": ELIMINATE6_SPEC}
+
+
+def spec_for(task: str) -> ElimSpec:
+    if task not in SPECS:
+        raise ValueError(f"{task} is not an elimination task")
+    return SPECS[task]
+
+
 def vocab_for(task: str) -> int:
     """Vocabulary size of a task. `compose` and `summary` keep their 12 ids."""
     if task == "eliminate":
         return ELIM_VOCAB
+    if task == "eliminate6":
+        return E6_VOCAB
     if task in {"compose", "summary"}:
         return VOCAB
     raise ValueError(task)
@@ -195,13 +296,81 @@ def _pack_eliminate(toks, cands, survivor, elim, n_spans, span_len, device):
     }
 
 
-def make_twin_batch(B, n_spans, span_len, generator=None, device="cpu"):
-    """Two `eliminate` batches identical through span s+0 and differing ONLY in span s+1.
+def make_twin_batch(B, n_spans, span_len, generator=None, device="cpu", task="eliminate"):
+    """Two batches identical through the candidate spans and differing ONLY in the FIRST
+    elimination: the survivor and the first eliminated candidate swap roles.
 
     Returns (a, b). The instrument reading is a reachability test: a slot state may not
     move until the changed span enters its reachable window.
     """
+    if task == "eliminate6":
+        return _make_eliminate6(B, n_spans, span_len, generator, device, twin=True)
     return _make_eliminate(B, n_spans, span_len, generator, device, twin=True)
+
+
+def _eliminate6_draw(B, generator, device):
+    """(candidates [B,6] in span order, survivor [B], elim [B,5] in elimination order)."""
+    perm = torch.rand(B, N6_CAND, generator=generator, device=device).argsort(dim=-1)
+    cands = perm[:, :N6_ALIVE] + E6_CAND_BASE
+    s = torch.randint(0, N6_ALIVE, (B,), generator=generator, device=device)
+    survivor = cands.gather(1, s.unsqueeze(-1)).squeeze(-1)
+    # the other five, in a uniformly random order: drop the survivor's column, then shuffle
+    keep = torch.arange(N6_ALIVE, device=device).expand(B, N6_ALIVE) != s.unsqueeze(-1)
+    others = cands[keep].view(B, N6_ALIVE - 1)
+    order = torch.rand(B, N6_ALIVE - 1, generator=generator, device=device).argsort(dim=-1)
+    elim = others.gather(1, order)
+    return cands, survivor, elim
+
+
+def _make_eliminate6(B, n_spans, span_len, generator, device, twin: bool = False):
+    if n_spans != E6_SPANS or span_len != 3:
+        raise ValueError(f"eliminate6 needs n_spans {E6_SPANS} and span_len 3, got {n_spans}/{span_len}")
+    cands, survivor, elim = _eliminate6_draw(B, generator, device)
+    toks = E6_DIST_BASE + torch.randint(
+        0, N6_DIST, (B, n_spans, span_len), generator=generator, device=device
+    )
+    out = [_pack_eliminate6(toks, cands, survivor, elim, span_len, device)]
+    if twin:
+        # identical through the candidate spans: the survivor and the FIRST eliminated
+        # candidate swap roles, so only the head of span 2 changes
+        t_surv = elim[:, 0]
+        t_elim = torch.cat([survivor.unsqueeze(-1), elim[:, 1:]], dim=-1)
+        out.append(_pack_eliminate6(toks, cands, t_surv, t_elim, span_len, device))
+    return out
+
+
+def _pack_eliminate6(toks, cands, survivor, elim, span_len, device):
+    B = toks.shape[0]
+    toks = toks.clone()
+    for j, sp in enumerate(E6_CAND_SPANS):
+        toks[:, sp, :] = cands[:, j * span_len : (j + 1) * span_len]
+    for j, sp in enumerate(E6_ELIM_SPANS):
+        toks[:, sp, 0] = elim[:, j]
+
+    flat = toks.reshape(B, E6_SPANS * span_len)
+    labels = torch.full_like(flat, -100)
+    labels[:, :-1] = flat[:, 1:]
+    labels[:, -1] = -100
+    answer_span = E6_ELIM_SPANS[-1] + 1
+    labels[:, answer_span * span_len] = E6_VALUE_BASE + survivor
+
+    mux_next = torch.full((B, E6_SPANS), -100, dtype=torch.long, device=device)
+    mux_own = torch.full((B, E6_SPANS), -100, dtype=torch.long, device=device)
+    mux_next[:, E6_ELIM_SPANS[-1]] = E6_VALUE_BASE + survivor
+    for j, sp in enumerate(E6_ELIM_SPANS):
+        mux_own[:, sp] = E6_VALUE_BASE + elim[:, j]
+
+    return {
+        "tokens": flat,
+        "labels": labels,
+        "mux_next": mux_next,
+        "mux_own": mux_own,
+        "value_pos": torch.tensor([answer_span * span_len], device=device),
+        "candidates": cands.unsqueeze(1),  # [B, 1 instance, 6]
+        "survivor": survivor.unsqueeze(1),
+        "elim": elim.unsqueeze(1),
+        "inst_base_span": torch.tensor([0], device=device),
+    }
 
 
 def make_batch(
@@ -215,6 +384,8 @@ def make_batch(
     """Return tokens [B, n_spans*span_len], labels (same shape), mux_next/mux_own [B, n_spans]."""
     if task == "eliminate":
         return _make_eliminate(B, n_spans, span_len, generator, device)[0]
+    if task == "eliminate6":
+        return _make_eliminate6(B, n_spans, span_len, generator, device)[0]
     mul = MUL.to(device)
     toks = torch.randint(0, N_GROUP, (B, n_spans, span_len), generator=generator, device=device)
 
@@ -356,3 +527,88 @@ def eliminate_ceilings() -> dict:
         "commitment": commit,
         "point_carry": point,
     }
+
+
+def _elim6_universe():
+    """[(prob, survivor, (e0..e4))] over the `eliminate6` instance distribution.
+
+    An instance is a survivor and an ORDERED tuple of five eliminated symbols, all six
+    distinct, drawn from eight: 8*7*6*5*4*3 = 20160 equiprobable configurations. That is
+    exactly a uniform 6-subset (28) times a uniform survivor (6) times a uniform
+    elimination order (120).
+    """
+    from itertools import permutations
+
+    out = []
+    n = N6_CAND
+    total = 1
+    for i in range(N6_ALIVE):
+        total *= n - i
+    p = 1.0 / total
+    for s in range(n):
+        rest = [c for c in range(n) if c != s]
+        for e in permutations(rest, N6_ALIVE - 1):
+            out.append((p, s, e))
+    return out
+
+
+def eliminate6_ceilings() -> dict:
+    """Every ceiling of `eliminate6`, in nats, enumerated over the 20,160 configurations.
+
+    reachability[d]  the lowest value CE at forced depth d. The answer slot is slot 6 and
+                     its window after d passes is spans 6-d .. 6, so d = 0 buys the last
+                     elimination, d = 4 buys all five, d = 5 adds the three candidates in
+                     span 1 and d = 6 adds span 0 and determines the answer. One fact per
+                     hop, which is what makes this task a hop-distance instrument.
+    commitment[k]    the lowest value CE for a predictor that is a function of the
+                     candidate spans and the first k eliminations only: ln 6 … ln 2, 0.
+    point_carry[k]   the lowest value CE for a predictor that collapses to ONE candidate id
+                     sampled from the alive set after k eliminations and still reads all
+                     five eliminations locally at the answer slot.
+    """
+    import math
+    from itertools import combinations
+
+    uni = _elim6_universe()
+    ne = N6_ALIVE - 1  # five eliminations
+
+    reach = {}
+    for d in range(0, ne):  # d = 0..4: the last d+1 eliminations, nothing else
+        seen = ne - 1 - d
+        reach[d] = _cond_entropy([(p, e[seen:], s) for p, s, e in uni])
+    # d = 5 adds span 1: three of the six candidates, a uniform 3-subset. Enumerated over
+    # the C(6,3) = 20 equally likely placements rather than argued.
+    pairs = []
+    for p, s, e in uni:
+        cands = (s,) + e
+        for sub in combinations(range(N6_ALIVE), N6_ALIVE // 2):
+            s1 = frozenset(cands[i] for i in sub)
+            pairs.append((p / 20.0, (e, s1), s))
+    reach[ne] = _cond_entropy(pairs)
+    reach[ne + 1] = _cond_entropy([(p, (frozenset((s,) + e), e), s) for p, s, e in uni])
+
+    commit = {}
+    for k in range(ne + 1):
+        commit[k] = _cond_entropy(
+            [(p, (frozenset((s,) + e), e[:k]), s) for p, s, e in uni]
+        )
+
+    point = {}
+    for k in range(ne + 1):
+        pairs = []
+        for p, s, e in uni:
+            alive = (s,) + e[k:]  # the survivor plus the not-yet-eliminated candidates
+            for g in alive:
+                pairs.append((p / len(alive), (g, e), s))
+        point[k] = _cond_entropy(pairs)
+
+    return {
+        "chance": math.log(N6_CAND),
+        "reachability": reach,
+        "commitment": commit,
+        "point_carry": point,
+    }
+
+
+def ceilings_for(task: str) -> dict:
+    return eliminate6_ceilings() if task == "eliminate6" else eliminate_ceilings()
