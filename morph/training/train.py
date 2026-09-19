@@ -3694,6 +3694,15 @@ def main(cfg: DictConfig) -> None:
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
                     if _k.startswith("fan_") and out[_k] is not None:
                         log[f"fan/{_k[4:]}"] = float(out[_k].detach())
+                # tul.loop_carry: the carry's per-pass RMS, the gate's mean and the
+                # injection ratio. A variable number of keys (the batch's realised max
+                # depth decides how many), so it is a scan and not a tuple. Own `carry/`
+                # namespace: `carry/rms_t{t}` against `carry/rms_t1` is how the arm is
+                # read, and burying it among 90 `tul/` keys is how a number stops being
+                # read (the `fan/` precedent, 2026-09-19).
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if _k.startswith("carry_") and out[_k] is not None:
+                        log[f"carry/{_k[6:]}"] = float(out[_k].detach())
                 # tul.oracle_z's honesty instrument: the ORACLE's own decoder loss at each
                 # of its T steps. A variable number of keys, so it is a scan and not a
                 # tuple — if these do not fall, the trajectory is not a descent and the

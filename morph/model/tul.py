@@ -20,6 +20,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from .attention import RMSNorm
+from .tul_carry import LOOP_CARRY_MODES
 from .tul_layout import SlotLayout
 
 __all__ = ["TULCenterExit", "TULConfig", "TULGate", "TULGateConfig", "TULGradPass",
@@ -478,6 +479,21 @@ class TULConfig:
     # The K-curve of a reach arm is FORCED by construction — it reads depth DEPENDENCE, not
     # depth VALUE. The value reading is its depth-6 CE against the strict arm, paired.
     loop_reach: int = 0
+    # ── THE LOOP CARRY (arm `slot-spandec-strict-prev-reach1-carry-*`, 2026-09-19) ──
+    # "none" (default) builds nothing, runs nothing and is bit-identical to the tree
+    # before this key. "sum" / "gate" keep the cross-cell read and re-inject it.
+    #
+    # WHY. The hop-distance probe's second pass
+    # (lab/experiments/failures/2026-09-19-hop-distance-plateau-and-dilution.md) measured
+    # that content the loop carries in DECAYS under the cell's own later passes — with
+    # the reach cut so nothing arrives after pass 0, a planted copy two spans back falls
+    # from 0.148 to 0.035 nats between depth 1 and depth 6 — while the cell's OWN span,
+    # re-supplied every pass by the per-layer x0/bigram injection, is refined instead
+    # (0.181 -> 0.291). The carry gives neighbour content the same footing: it is written
+    # when the layer-0 reach read arrives and re-injected at the entry of every later
+    # pass, RMS-matched to the carrier so accumulation cannot grow its norm.
+    # morph/model/tul_carry.py holds the state and the normalisation rule.
+    loop_carry: str = "none"             # "none" | "sum" | "gate"
     gate: "TULGateConfig | None" = None  # docs/tul-gate-spec.md; None = arm A1 (nothing built)
     # Per-slot-INDEX input embedding instead of one shared E_slot. 0 = off (one shared
     # vector, the shipped behaviour); >0 = that many rows, and the slot at index s gets row
@@ -1487,6 +1503,37 @@ class TULConfig:
     eval_ablations: bool = False
 
     def __post_init__(self) -> None:
+        # ── the loop carry (tul.loop_carry; morph/model/tul_carry.py) ─────────
+        if self.loop_carry not in LOOP_CARRY_MODES:
+            raise ValueError(
+                f"tul.loop_carry must be one of {list(LOOP_CARRY_MODES)}, got "
+                f"{self.loop_carry!r}")
+        if self.loop_carry != "none":
+            if self.loop_reach == 0:
+                raise ValueError(
+                    f"tul.loop_carry={self.loop_carry!r} with tul.loop_reach=0: at reach 0 "
+                    f"the loop is UNLIMITED — no mask is built at all and every core layer "
+                    f"reads every earlier cell — so there is no single layer-0 reach read "
+                    f"to keep. The carry captures the window branch of core layer 0 under "
+                    f"the reach relation; without that relation the captured tensor would "
+                    f"be a local token window and would mean something else. Set "
+                    f"tul.loop_reach >= 1.")
+            if self.slot_cells > 1:
+                raise NotImplementedError(
+                    f"tul.loop_carry={self.loop_carry!r} with tul.slot_cells="
+                    f"{self.slot_cells} (the Thought Register / the LXTUL fan): the "
+                    f"register's in-loop relation is delivered as `tg_relation`, which "
+                    f"REPLACES the causal term and lets a cell read the LATER cells of "
+                    f"its own slot — so core layer 0's window branch there is not "
+                    f"'cells k-w .. k-1' and the carry would accumulate within-slot "
+                    f"content it was never measured on. Refused until measured.")
+            if self.tokens_through_core or self.loop_reads_tokens:
+                raise NotImplementedError(
+                    f"tul.loop_carry={self.loop_carry!r} with "
+                    f"tul.tokens_through_core={self.tokens_through_core} / "
+                    f"tul.loop_reads_tokens={self.loop_reads_tokens}: both of those run "
+                    f"the TOKEN positions through the core, so there is no slot loop and "
+                    f"no per-cell cross-cell read — `_tul_core` never runs.")
         if self.prefix_k < 1:
             raise ValueError(f"tul.prefix_k must be ≥ 1, got {self.prefix_k}")
         if self.prefix_source not in ("exit", "trajectory", "exit_repeat", "entry_exit"):

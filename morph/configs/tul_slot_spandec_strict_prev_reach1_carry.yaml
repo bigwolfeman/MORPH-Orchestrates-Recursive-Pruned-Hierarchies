@@ -1,0 +1,51 @@
+# Strict-geometry panel, arm "slot-spandec-strict-prev-reach1-carry-sum": the reach-1
+# ruler PLUS `tul.loop_carry` — a per-cell state that KEEPS what the cell read from its
+# neighbours and re-injects it at the entry of every later pass.
+#
+# ONE factor against `tul_slot_spandec_strict_prev_reach1.yaml`: `tul.loop_carry`.
+# The `gate` variant is the SAME file with `tul.loop_carry=gate` on the command line —
+# no second yaml, because a second file is a second place for the other twelve keys to
+# drift.
+#
+# WHY THIS ARM EXISTS, measured, not guessed. The hop-distance probe's second pass
+# (lab/experiments/failures/2026-09-19-hop-distance-plateau-and-dilution.md) cut the
+# loop's cross-cell read after pass 0 and watched what the cell already held. Content the
+# loop CARRIED IN decayed under the cell's own later passes — a planted copy two spans
+# back fell from 0.148 to 0.035 nats of benefit between depth 1 and depth 6, and the
+# tokens that depend on that span lost 0.083 nats — while the cell's OWN span, re-supplied
+# every pass by the per-layer x0 / bigram injection, was REFINED instead (0.181 -> 0.291).
+# That is why the ruler earns +0.064 at h = 3, +0.054 at h = 4, +0.029 at h = 5 and
+# nothing at h = 6: the farther the source, the more passes its content spends decaying.
+# This arm gives neighbour content the footing own-span content already has.
+#
+# WHAT IS ADDED, exactly (morph/model/tul_carry.py, and the `_tul_core` comment at the
+# capture site). `r_k(t)` is core layer 0's WINDOW-branch contribution in d_model space,
+# `W_up(g_win * out_win)`. Under `loop_reach: 1` that branch's XSA excludes the self
+# token, so its rows hold cell k-1 and nothing else — the read is purely cross-cell.
+# `c_k(0) = 0`; `sum` adds `r_k(t)` each pass; `gate` adds `sigmoid(W_g [r ; c]) * r`
+# with `W_g` a zero-init `d x 2d`. Before the add the carry is scaled so its per-cell RMS
+# EQUALS the carrier's, which is what stops an unbounded sum from growing the norm.
+#
+# NOT A NO-OP AT INIT, and that is deliberate: the RMS match cancels any constant scale
+# in front of the carry, so a zero-init gate cannot make step 0 the ruler's forward. Both
+# modes inject a full carrier-RMS term at pass 1 and differ only from pass 2 on. The
+# bit-identity claim of this key is `loop_carry: none`, pinned in
+# tests/test_tul_loop_carry.py against tests/test_tul_prefix_source.py's strict_k2 row.
+#
+# COST: no extra block pass and no extra attention. ONE extra `W_up` matmul per pass (the
+# capture) and one `[B, S, C]` state carried across the passes of a forward.
+#
+# SCORE IT ON: the per-hop K-curve and the planted pair's decay row from
+# lab/divergence/hop_distance_probe.py, NOT a whole-arm K1-K6 (a whole-arm mean of +0.015
+# hid +0.064 and -0.020 in the first pass). Watch `carry/rms_t{1,3,6}` for the
+# accumulation and `loop/core_gain_t0` for the stability clause.
+#
+# Prereg: lab/experiments/planned/2026-09-19-loop-carry-prev-reach1.md
+# Note: .agents/notes/proposed/architecture/2026-09-19-loop-carry-reinjection.md
+defaults:
+  - tul_slot_spandec_strict_prev_reach1
+  - _self_
+tul:
+  loop_carry: sum
+wandb:
+  name: slot-spandec-strict-prev-reach1-carry-sum

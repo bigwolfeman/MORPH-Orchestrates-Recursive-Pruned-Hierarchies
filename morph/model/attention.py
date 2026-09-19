@@ -941,7 +941,8 @@ class _CCABase(nn.Module):
     def _gate_combine_up(self, x: Tensor,
                           out_comp: Tensor, out_win: Tensor,
                           q_lat: Tensor | None = None,
-                          gate_pre: Tensor | None = None) -> Tensor:
+                          gate_pre: Tensor | None = None,
+                          win_capture: dict | None = None) -> Tensor:
         """Sigmoid gate blend + residual-alpha + up-project back to d_model.
 
         q_lat: the pre-conv W_down_q(x) already computed in _cca_project — reused for
@@ -952,6 +953,18 @@ class _CCABase(nn.Module):
         gate_pre: optional gate.0(x) pre-activation from the fused input GEMM —
         skips the first gate Linear; SiLU + gate.2 applied here are op-identical
         to running the Sequential.
+
+        win_capture: `tul.loop_carry` ONLY. When a dict is given, the WINDOW branch's own
+        contribution to this layer's output — `W_up(g_win * out_win)`, in d_model space
+        and gated exactly as the shipped output gates it — is written to
+        `win_capture["win"]`. `W_up` is bias-free, so that tensor is EXACTLY the term the
+        returned output would lose if `out_win` were zero: the branch's whole
+        contribution, nothing of the compressed branch's and nothing of the residual
+        alpha's. Under `tul.loop_reach > 0` the window branch's XSA excludes the self
+        token, so at core layer 0 its rows hold cells k-w .. k-1 and NOTHING else — which
+        is why this, and not the layer's delta, is the cross-cell read the carry keeps.
+        None (every other caller, every other arm) is a Python-level branch: no extra
+        matmul, no extra tensor, the graph is the one from before this parameter existed.
         """
         B, S, _ = x.shape
         H, D = self.n_heads, self.d_head
@@ -962,6 +975,10 @@ class _CCABase(nn.Module):
             g_lin = self.gate[2](self.gate[1](gate_pre))
         g = torch.sigmoid(g_lin).reshape(B, S, H, 2).permute(0, 2, 1, 3)
         combined = g[..., 0:1] * out_comp + g[..., 1:2] * out_win
+
+        if win_capture is not None:
+            win_capture["win"] = self.W_up(
+                (g[..., 1:2] * out_win).transpose(1, 2).reshape(B, S, self.latent_q_dim))
 
         if q_lat is None:
             q_lat = self.W_down_q(x)
@@ -1051,7 +1068,8 @@ class _CCACSAAttention(nn.Module):
                 tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
                 tg_span: dict | None = None, tg_seg: Tensor | None = None,
                 tg_comp_allow: Tensor | None = None,
-                tg_relation: Tensor | None = None) -> Tensor:
+                tg_relation: Tensor | None = None,
+                tg_win_capture: dict | None = None) -> Tensor:
         B, S, _ = x.shape
         H, D = self.cca.n_heads, self.cca.d_head
         scale = D ** -0.5
@@ -1061,6 +1079,13 @@ class _CCACSAAttention(nn.Module):
         # the F1 defect class (a restricted arm running unrestricted, or the reverse).
         _tg_relation_guard(tg_relation, tg_allow, tg_comp_allow, tg_span, tg_slot_mask,
                            self.tg_restrict)
+        if tg_win_capture is not None and not self.tg_restrict:
+            raise NotImplementedError(
+                "tg_win_capture (tul.loop_carry) outside tg_restrict: the unrestricted "
+                "branch pools blocks and selects top-k, so `out_win` there is a local "
+                "window of TOKENS and not the cross-cell reach read the carry keeps. "
+                "Raises rather than handing the carry a tensor that means something "
+                "else.")
 
         if self.tg_restrict:
             # docs/tul-tg-spec.md §3: no pooled compression, no top-k, no CLA reuse —
@@ -1093,7 +1118,8 @@ class _CCACSAAttention(nn.Module):
                                             extra_mask=tg_allow,
                                             relation=tg_relation)
             return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
-                                             gate_pre=gate_pre)
+                                             gate_pre=gate_pre,
+                                             win_capture=tg_win_capture)
 
         m = self.compress_ratio
         n_blocks = S // m
@@ -1223,7 +1249,8 @@ class _CCAHCAAttention(nn.Module):
                 tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
                 tg_span: dict | None = None, tg_seg: Tensor | None = None,
                 tg_comp_allow: Tensor | None = None,
-                tg_relation: Tensor | None = None) -> Tensor:
+                tg_relation: Tensor | None = None,
+                tg_win_capture: dict | None = None) -> Tensor:
         B, S, _ = x.shape
         H, D = self.cca.n_heads, self.cca.d_head
         scale = D ** -0.5
@@ -1233,6 +1260,13 @@ class _CCAHCAAttention(nn.Module):
         # the F1 defect class (a restricted arm running unrestricted, or the reverse).
         _tg_relation_guard(tg_relation, tg_allow, tg_comp_allow, tg_span, tg_slot_mask,
                            self.tg_restrict)
+        if tg_win_capture is not None and not self.tg_restrict:
+            raise NotImplementedError(
+                "tg_win_capture (tul.loop_carry) outside tg_restrict: the unrestricted "
+                "branch pools blocks and selects top-k, so `out_win` there is a local "
+                "window of TOKENS and not the cross-cell reach read the carry keeps. "
+                "Raises rather than handing the carry a tensor that means something "
+                "else.")
 
         if self.tg_restrict:
             if cla_kv is not None or cla_capture is not None:
@@ -1261,7 +1295,8 @@ class _CCAHCAAttention(nn.Module):
                                             extra_mask=tg_allow,
                                             relation=tg_relation)
             return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
-                                             gate_pre=gate_pre)
+                                             gate_pre=gate_pre,
+                                             win_capture=tg_win_capture)
 
         m = self.compress_ratio
 
@@ -1353,6 +1388,9 @@ class MORPHAttention(nn.Module):
                 needed because a cell must read the LATER cells of its own slot. Needs
                 tg_restrict; mutually exclusive with tg_allow / tg_comp_allow / tg_span /
                 tg_slot_mask (_tg_relation_guard).
+        tg_win_capture: dict | None — tul.loop_carry only. Writes the WINDOW branch's own
+                gated contribution in d_model space to ["win"]; see
+                _CCABase._gate_combine_up. Needs tg_restrict (it raises otherwise).
         → [B, S, d_model]
     """
 
@@ -1398,8 +1436,9 @@ class MORPHAttention(nn.Module):
                 tg_allow: Tensor | None = None, tg_slot_mask: Tensor | None = None,
                 tg_span: dict | None = None, tg_seg: Tensor | None = None,
                 tg_comp_allow: Tensor | None = None,
-                tg_relation: Tensor | None = None) -> Tensor:
+                tg_relation: Tensor | None = None,
+                tg_win_capture: dict | None = None) -> Tensor:
         return self._impl(x, n_skip_rope, cla_capture=cla_capture, cla_kv=cla_kv,
                           tg_allow=tg_allow, tg_slot_mask=tg_slot_mask, tg_span=tg_span,
                           tg_seg=tg_seg, tg_comp_allow=tg_comp_allow,
-                          tg_relation=tg_relation)
+                          tg_relation=tg_relation, tg_win_capture=tg_win_capture)

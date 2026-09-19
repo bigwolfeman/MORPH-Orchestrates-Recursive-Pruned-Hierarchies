@@ -74,6 +74,69 @@ steps against the ruler's own probe readings, 480 rows, same instrument, prereg 
 5. Stability: no detonation and `loop/core_gain_t0` under the ruler's band over the 5000
    steps; the smoke prints the same peak memory within 5 %.
 
+## Build notes
+
+Written 2026-09-19 with the code, and it records two places where the proposal above was
+not precise enough to implement and one place where it was wrong about what is free.
+
+**Where the read is captured.** `r_k(t)` is core layer 0's WINDOW-branch contribution to
+that layer's attention output, in `d_model` space: `W_up(g_win * out_win)`, computed in
+[`morph/model/attention.py`](../../../../morph/model/attention.py)
+`_CCABase._gate_combine_up` under a new `win_capture` argument and requested through a
+new `tg_win_capture` attention kwarg. `W_up` is bias-free, so that tensor is EXACTLY what
+the layer's output would lose if `out_win` were zero — the window branch's whole
+contribution, none of the compressed branch's and none of the residual alpha's. Under
+`loop_reach w >= 1` the window branch's XSA excludes the self token, so at layer 0 its
+rows hold cells `k-w .. k-1` and nothing else, which is what makes that tensor the
+cross-cell read and not "layer 0's output". Layers 1..n-1 run at reach 0, so capturing
+layer 0 captures every cross-cell route of the pass. No block forward changed:
+`MORPHBlock` already forwards `attn_kwargs` verbatim, and the capture dict travels in the
+reach kwargs `_tul_core` already builds for layer 0. The second forward of the window
+attention that the brief allowed as a fallback was NOT needed.
+
+The capture is RETURNED from `_core_step` (`want_carry=True`), not read off the dict: a
+pass may run inside `torch.utils.checkpoint`, where a side-channel tensor is not safe —
+the same reason `ret_state` is returned. The carry likewise enters as an ARGUMENT, never
+as a closure variable, because a nonlocal read during the checkpoint's backward recompute
+would hold `c(T-1)` instead of `c(t-1)`.
+
+**The normalisation rule, exactly.** With `h` the carrier at the injection site
+(`[B, S, n, C]`) and `c` the carry (`[B, S, C]`):
+
+    rms_h[b,k] = sqrt( mean over (n, C) of h[b,k]^2 )
+    ms_c[b,k]  = mean over C of c[b,k]^2
+    rms_c[b,k] = sqrt( ms_c[b,k] + eps^2 ),            eps = 1e-6
+    term[b,k]  = c[b,k] * rms_h[b,k] / rms_c[b,k]      where ms_c > eps^2
+    term[b,k]  = 0                                      otherwise
+
+fp32 throughout, cast to the carrier's dtype at the end, then broadcast over the `n`
+streams by `_apply_injection`. Both guards are load-bearing and were found by running the
+thing: `sqrt(0)` has an infinite derivative and the total model gradient read `nan` on the
+tiny fixture without the `+ eps^2`, because cells with an exactly zero carry are not an
+edge case — every pad slot for the whole forward, and cell `0` of every row forever (its
+window row under a reach budget is empty, so its read is identically zero).
+
+**Named, because it contradicts this tree's habit: the arm is NOT a no-op at
+initialisation.** The RMS match cancels any constant scale in front of `c`, so a zero-init
+`W_g` cannot make step 0 the ruler's forward — `gate` at `W_g = 0` injects exactly what
+`sum` injects at pass 1, and the two modes give the SAME loss on an untrained model
+(`tests/test_tul_loop_carry.py::test_sum_and_gate_agree_at_init_because_the_rms_match_cancels_the_half`).
+They differ only from pass 2 on. The bit-identity claim of this key is
+`loop_carry: "none"`, pinned against `tests/test_tul_prefix_source.py`'s `strict_k2` row.
+A learned scale in front of the term would restore a zero-init no-op and is deliberately
+NOT added: it is a second mechanism and it would be measured as one.
+
+**A second confound, named:** `gate` adds 2 097 152 parameters (`d x 2d` at `d = 1024`,
++0.7 % of 292.5 M). `sum` adds none. The confound-free reading against the ruler is
+therefore `sum`; `gate` is read against `sum`, not against the ruler.
+
+**Instruments.** `carry/rms_t{t}` (the carry's per-cell RMS after pass `t`, mean over
+valid slots), `carry/gate_mean_t{t}` on `gate`, and `carry/inject_ratio_t{t}` — which is
+1.0 BY CONSTRUCTION and is a check that the match is live, not a reading. It is computed
+from the DIFFERENCE of the two carriers `_core_step` goes on to use, not from the term,
+because the first sabotage pass showed a version that read the term and happily reported
+1.0 while the injection was computed and dropped.
+
 ## Risks
 
 - Accumulation can act as a second recurrence with its own gain; the RMS normalisation is the

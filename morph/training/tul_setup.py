@@ -47,7 +47,7 @@ KNOWN_TUL_KEYS = frozenset({
     "egrad_soft_labels", "egrad_soft_mix", "egrad_weight",
     "grad_pass", "grad_pass_energy", "grad_pass_norm", "grad_pass_scale",
     "horizon_free_first", "horizon_tokens", "horizon_weight",
-    "loop_reach", "loop_reads_tokens", "max_slots", "min_span",
+    "loop_carry", "loop_reach", "loop_reads_tokens", "max_slots", "min_span",
     "mux_activate_at", "mux_beta",
     "mux_detach_head", "mux_every_pass", "mux_readout", "mux_rho", "mux_stage_all",
     "mux_stage_own_iters",
@@ -370,6 +370,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         tg_geometry=str(tc.get("tg_geometry", "restrict")),
         tg_coda_prefix_reach=str(tc.get("tg_coda_prefix_reach", "all")),
         loop_reach=int(tc.get("loop_reach", 0)),
+        loop_carry=str(tc.get("loop_carry", "none")),
         oracle_z=bool(tc.get("oracle_z", False)),
         oracle_z_steps=int(tc.get("oracle_z_steps", 6)),
         oracle_z_lr=float(tc.get("oracle_z_lr", 0.1)),
@@ -554,6 +555,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "tg_geometry": model_cfg.tg_geometry,
         "tg_coda_prefix_reach": model_cfg.tg_coda_prefix_reach,
         "loop_reach": model_cfg.loop_reach,
+        "loop_carry": model_cfg.loop_carry,
         "oracle_z": model_cfg.oracle_z,
         "oracle_z_steps": model_cfg.oracle_z_steps,
         "oracle_z_lr": model_cfg.oracle_z_lr,
@@ -763,6 +765,27 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               "Read `val/slot_cell_eff_rank` - the rank WITHIN a slot - beside "
               "`val/slot_eff_rank` "
               "(lab/experiments/planned/2026-09-13-arc-thought-register.md)",
+              flush=True)
+    if model_cfg.loop_carry != "none":
+        print(f"  LOOP CARRY ON: loop_carry={model_cfg.loop_carry!r} "
+              f"loop_reach={model_cfg.loop_reach} - a per-cell state that KEEPS what the "
+              f"cell read from its neighbours. At pass t core layer 0's WINDOW branch is "
+              f"the cell's read of cells k-{model_cfg.loop_reach}..k-1 (its XSA excludes "
+              f"the self token, so the read is purely cross-cell); the carry accumulates "
+              f"it ("
+              + ("plain sum" if model_cfg.loop_carry == "sum" else
+                 "sigmoid(W_g [r ; c]) * r, W_g zero-init so the gate opens at 1/2")
+              + ") and re-injects it at the entry of every LATER pass, RMS-matched to "
+              "the carrier. WHY: the hop probe measured that carried content decays "
+              "under the cell's own passes (planted g=2: 0.148 -> 0.035 nats from depth "
+              "1 to 6 with arrivals cut) while own-span content, re-supplied every pass "
+              "by the x0/bigram injection, is refined (0.181 -> 0.291). READ "
+              "`carry/rms_t{t}` and, on gate, `carry/gate_mean_t{t}`; "
+              "`carry/inject_ratio_t{t}` is 1.0 BY CONSTRUCTION and is the check that "
+              "the RMS match is live, not a result. NOT a no-op at init: the RMS match "
+              "cancels any constant in front of the carry, so pass 1 injects a full "
+              "carrier-RMS term on both modes "
+              "(lab/experiments/planned/2026-09-19-loop-carry-prev-reach1.md)",
               flush=True)
     if model_cfg.fan_k > 0:
         print(f"  LXTUL FAN ON: fan_k={model_cfg.fan_k} mix={model_cfg.fan_mix!r} "

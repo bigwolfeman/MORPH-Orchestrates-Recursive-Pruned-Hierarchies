@@ -46,6 +46,7 @@ from .tul import (TULCenterExit, TULConfig, TULGate, TULGateConfig, TULGradPass,
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
                   scatter_positions,
                   window_drop_mask)
+from .tul_carry import TULLoopCarry
 from .tul_fan import (TULFanMix, fan_repel_term, fan_stream_rank,
                       fan_stream_stats)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
@@ -1265,6 +1266,20 @@ class MORPHTransformer(nn.Module):
     # tensors; the trainer turns them into `loop/*`. None on every other model.
     _loop_gradpass: dict | None = None
 
+    # Per-pass loop-carry readouts written by `_tul_core` when `tul.loop_carry` is on:
+    # `rms_t{t}` (the carry's per-cell RMS after pass t, mean over valid slots),
+    # `gate_mean_t{t}` (the `gate` mode's sigmoid, mean) and `inject_ratio_t{t}` (the
+    # injected term's RMS over the carrier's — 1.0 by construction, the check that the
+    # RMS match is live). Detached 0-dim tensors; `_forward_tul` folds them into `groups`
+    # as `carry_*` and the trainer logs them under `carry/`. None on every other model.
+    _loop_carry_stats: dict | None = None
+
+    # `tul.loop_carry`'s test hook: attach a list and `_tul_core` appends
+    # ``{"read": r_k(t), "carry_prev": c_k(t-1), "carry": c_k(t), "gate": the sigmoid or
+    # None}`` (all detached) once per pass. None by default — a Python-level branch, so
+    # the shipped graph never sees it.
+    _carry_capture: list | None = None
+
     def __init__(self, cfg: MORPHConfig):
         super().__init__()
         self.cfg = cfg
@@ -2242,6 +2257,29 @@ class MORPHTransformer(nn.Module):
 
         # ── The slot chain (TULConfig.slot_chain) ─────────────────────────────────
         # Zero-init, no RNG draw: step 0 is the ruler's forward bit for bit.
+        # ── the loop carry (tul.loop_carry; morph/model/tul_carry.py) ────────────
+        # `none` — every other model — leaves this None, and every branch that reads it
+        # in the forward is then a Python-level constant that traces out: no capture is
+        # requested from core layer 0, no state is allocated and `_core_step` is the
+        # function it was before this key. At `sum` the module owns NO parameter; at
+        # `gate` it owns ONE zero-init `d x 2d` and draws no RNG, so a carry model shares
+        # every base weight with its same-seed ruler.
+        self.tul_carry: TULLoopCarry | None = None
+        if cfg.tul is not None and cfg.tul.loop_carry != "none":
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.loop_carry needs a core loop (model.n_core > 0): the carry is "
+                    "written from a pass's cross-cell read and re-injected at the next "
+                    "pass, and there are no passes.")
+            if cfg.scse_enabled:
+                raise NotImplementedError(
+                    "tul.loop_carry under SCSE is not defined: the loop carrier there is "
+                    "the DEVIATION from a fixed anchor h*, and `_core_step` is run "
+                    "source-free — the per-layer injection the carry would ride is "
+                    "skipped entirely (spec D3), and an RMS match against a deviation is "
+                    "a match against a quantity that is meant to shrink.")
+            self.tul_carry = TULLoopCarry(d, cfg.tul.loop_carry)
+
         self.tul_chain: TULSlotChain | None = None
         if cfg.tul is not None and cfg.tul.slot_chain:
             if cfg.n_core == 0:
@@ -4563,15 +4601,75 @@ class MORPHTransformer(nn.Module):
             _core_akw = tuple([_reach_kw(_reach)]
                               + [_reach_kw(0) for _ in range(n_core - 1)])
 
-        def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0, stage_cond=None):
+        # ── the loop carry (tul.loop_carry; morph/model/tul_carry.py) ──────────
+        # `None` on every other model: a Python-level constant, so nothing below this
+        # exists in the traced graph and `_core_step` is the function it was.
+        #
+        # WHERE THE READ IS CAPTURED, and why THAT tensor. `_carry_cap` is handed to CORE
+        # LAYER 0 ALONE, inside the reach kwargs built just above, and travels untouched
+        # through `_apply_core_step` -> `MORPHBlock.forward(attn_kwargs=...)` ->
+        # `MORPHAttention` -> `_CCABase._gate_combine_up`, which writes
+        # `W_up(g_win * out_win)` into it: the WINDOW branch's own gated contribution to
+        # that layer's attention output, in d_model space. Under `loop_reach w >= 1` the
+        # window branch's XSA excludes the self token, so at layer 0 its rows hold cells
+        # k-w .. k-1 and nothing else — the read is PURELY cross-cell, which is what
+        # makes it `r_k(t)`. Layers 1..n-1 run at reach 0 (a cell reads itself only), so
+        # capturing layer 0 captures every cross-cell route of the pass.
+        #
+        # It is RETURNED from `_core_step`, not read off the dict, because the pass may
+        # run inside `torch.utils.checkpoint`: a side-channel tensor is not
+        # checkpoint-safe (MORPHBlock.forward's `ret_capture` docstring says so, and
+        # `ret_state` is returned for the same reason). The dict is the transport INSIDE
+        # one call; the tuple is the contract across the boundary.
+        _carry = self.tul_carry
+        _carry_cap: dict = {}
+        if _carry is not None:
+            _core_akw = (({**_core_akw[0], "tg_win_capture": _carry_cap},)
+                         + tuple(_core_akw[1:]))
+
+        def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0, stage_cond=None,
+                       carry=None, want_carry=False):
             if _rr is not None:
                 h_in = self._apply_injection(
                     h_in, _rr.read(h_in, _rr_k, _rr_v, _rr_allow, layout.slot_valid))
+            if carry is not None:
+                # THE RE-INJECTION, at the site `TULReread` adds its term and for the
+                # same reason: the gain hinge's probe and the checkpointed step must both
+                # see the map WITH the read. `inject_term` scales the carry to the
+                # per-cell RMS of THIS tensor — the carrier it is added to — so an
+                # unbounded accumulation adds one carrier-RMS worth of its DIRECTION and
+                # never more (morph/model/tul_carry.py). The ratio is stashed detached
+                # for `carry/inject_ratio_t{t}`; a detached VALUE is checkpoint-safe where
+                # a graph node is not.
+                _h_pre = h_in
+                h_in = self._apply_injection(h_in, _carry.inject_term(carry, h_in))
+                with torch.no_grad():
+                    # Per-cell RMS(what the add actually MOVED the carrier) / RMS(the
+                    # carrier), averaged over the cells that got a term. Read off
+                    # `h_in - _h_pre` — the two carriers this function goes on to use —
+                    # and NOT off the term, so an injection that is computed and then
+                    # dropped reads 0 here instead of a reassuring 1.0. It read 1.0 in
+                    # the 2026-09-19 sabotage pass until this line was written this way.
+                    #
+                    # Cells whose carry is exactly zero — every pad, and cell 0 of every
+                    # row, whose window row under a reach budget is empty — are excluded:
+                    # they add nothing and would drag a ratio that is 1.0 BY
+                    # CONSTRUCTION below 1 for a reason that is not the match.
+                    _rt = (h_in - _h_pre).detach().float().flatten(2).pow(2).mean(
+                        -1).sqrt()                                            # [B, S]
+                    _rh = _h_pre.detach().float().flatten(2).pow(2).mean(-1).sqrt()
+                    _msk = _rt > 0
+                    _carry_cap["ratio"] = (
+                        (_rt[_msk] / _rh[_msk].clamp_min(1e-12)).mean() if bool(_msk.any())
+                        else _rt.new_zeros(())).detach()
             if _scse is None:
-                return self._apply_core_step(h_in, e_in, None, None, None,
-                                             ret_state=ret_state, iter_idx=iter_idx,
-                                             inj_terms=inj_terms, stage_cond=stage_cond,
-                                             attn_kw=_core_akw)
+                _h_out, _rs = self._apply_core_step(
+                    h_in, e_in, None, None, None,
+                    ret_state=ret_state, iter_idx=iter_idx,
+                    inj_terms=inj_terms, stage_cond=stage_cond, attn_kw=_core_akw)
+                if want_carry:
+                    return _h_out, _rs, _carry_cap["win"]
+                return _h_out, _rs
             # ── SCSE, Eqs. 3-5 ──────────────────────────────────────────────────────
             # `h_in` IS Delta_t; `e_in` carries h*. Signature unchanged so the three call
             # sites (no_grad / checkpoint / eager) and the truncated-BPTT window they
@@ -4635,6 +4733,17 @@ class MORPHTransformer(nn.Module):
         # except a `core_stage_cond="iter"` build) makes `_sc` permanently None below
         # and the loop is bit-identical to before this existed.
         _iter_mode = self._core_stage_cond_mode == "iter"
+        # ── the loop carry's per-forward state (tul.loop_carry) ───────────────
+        # c_k(0) = 0, reset every forward, one [B, S, C] tensor. It is NOT a buffer and
+        # nothing about it survives the call, so the forced-depth probes, the per-slot
+        # depth draw and the fixed-point term (still on the carrier) see nothing new.
+        # Pass 0 is handed `carry=None`, not a zero tensor: the spec's add is at the
+        # entry of pass t+1, and it also keeps the t=0 graph free of a term that is
+        # identically zero.
+        _carry_state = None
+        _carry_stats: dict[str, Tensor] = {}
+        if _carry is not None:
+            _carry_state = h.new_zeros(h.shape[0], h.shape[1], h.shape[-1])
         for t in range(total_iters):
             active = alive if halt else (depths > t)               # [B, S]
             _sc = self.tul_stage_cond.stage_embed(iter_stage_value(t, x.device)) \
@@ -4718,17 +4827,30 @@ class MORPHTransformer(nn.Module):
                         _gp_stats[f"gp_rel_t{t}"] = (
                             _gp_term.float().norm() / (_h_in.float().norm() + 1e-6)).detach()
                 _h_in = self._apply_injection(_h_in, _gp_term)
+            # The carry enters as an ARGUMENT, never as a closure variable: under
+            # `checkpoint(use_reentrant=False)` the recompute re-runs `_core_step` during
+            # backward, when a nonlocal would already hold c(T-1) instead of c(t-1). An
+            # argument is saved with the call and replayed with the right value.
+            _cy = _carry_state if (_carry is not None and t > 0) else None
+            _want_carry = _carry is not None
             if t < n_nograd:
                 with torch.no_grad():
-                    h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
-                                               iter_idx=t, stage_cond=_sc)
+                    _step_out = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
+                                           iter_idx=t, stage_cond=_sc,
+                                           carry=_cy, want_carry=_want_carry)
             elif do_ckpt:
-                h_new, rs_new = checkpoint(_core_step, _h_in, _e_arg, _inj_arg,
-                                           ret_state=ret_state, iter_idx=t, stage_cond=_sc,
-                                           use_reentrant=False)
+                _step_out = checkpoint(_core_step, _h_in, _e_arg, _inj_arg,
+                                       ret_state=ret_state, iter_idx=t, stage_cond=_sc,
+                                       carry=_cy, want_carry=_want_carry,
+                                       use_reentrant=False)
             else:
-                h_new, rs_new = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
-                                           iter_idx=t, stage_cond=_sc)
+                _step_out = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
+                                       iter_idx=t, stage_cond=_sc,
+                                       carry=_cy, want_carry=_want_carry)
+            if _want_carry:
+                h_new, rs_new, _read = _step_out
+            else:
+                h_new, rs_new = _step_out
             if _prog:
                 # THE cut, and the only one. Detaching a prefix pass's OUTPUT means no
                 # cotangent ever enters at that position, so the pass contributes no
@@ -4744,6 +4866,50 @@ class MORPHTransformer(nn.Module):
                 # gradient because it belongs to a grad pass.
                 h_new = torch.where(_pv, h_new.detach(), h_new)
 
+            if _carry is not None:
+                # c_k(t) from c_k(t-1) and THIS pass's read, on the slots whose pass at t
+                # actually ran: a finished slot's carrier is frozen by the `torch.where`
+                # at the foot of the loop and its carry freezes with it, and a pad slot
+                # (never valid) keeps the zero it started at, so its injected term stays
+                # exactly zero instead of a 0/0.
+                #
+                # HERE, immediately after the step and its progressive detach, and before
+                # the gain hinge: the hinge re-runs `_core_step` at a detached operating
+                # point and would otherwise overwrite `_carry_cap["ratio"]` with its own
+                # reading of the same quantity.
+                _c_prev = _carry_state
+                _c_new, _c_gate = _carry.update(_read, _carry_state)
+                if _prog:
+                    # The same cut the carrier takes: at a slot's no-grad prefix pass no
+                    # cotangent may enter, and the carry is state that crosses passes.
+                    _c_new = torch.where(_pfx.unsqueeze(-1), _c_new.detach(), _c_new)
+                _cm = (active & layout.slot_valid).unsqueeze(-1)
+                _carry_state = torch.where(_cm, _c_new, _carry_state)
+                if self._carry_capture is not None:
+                    # The test hook, and it is the ONLY way a test can see `r_k(t)`: the
+                    # read is consumed inside the loop and never returned. `None` by
+                    # default (a Python-level branch that traces out), a list when
+                    # `tests/test_tul_loop_carry.py` attaches one. Detached, so attaching
+                    # it cannot change a gradient.
+                    self._carry_capture.append({
+                        "read": _read.detach(), "carry_prev": _c_prev.detach(),
+                        "carry": _carry_state.detach(),
+                        "gate": None if _c_gate is None else _c_gate.detach()})
+                with torch.no_grad():
+                    _cv = layout.slot_valid
+                    _n_valid = _cv.sum().clamp(min=1)
+                    _carry_stats[f"rms_t{t + 1}"] = (
+                        (_carry_state.float().pow(2).mean(-1).sqrt() * _cv).sum()
+                        / _n_valid).detach()
+                    if _c_gate is not None:
+                        _carry_stats[f"gate_mean_t{t + 1}"] = (
+                            (_c_gate.float().mean(-1) * _cv).sum() / _n_valid).detach()
+                    if "ratio" in _carry_cap:
+                        # The injection that OPENED this pass used c(t), so the reading
+                        # belongs to pass t, not t+1. 1.0 by construction (the RMS match)
+                        # — it is the check that the match is live, not a free reading.
+                        _carry_stats[f"inject_ratio_t{t}"] = _carry_cap.pop("ratio")
+
             if t == _t_gain or (_gain_on and _gain_all and t >= n_nograd):
                 # The hinge must read the map on the slots whose pass at t CARRIES
                 # gradient: its penalty is added to the loss and shapes the core weights,
@@ -4758,7 +4924,7 @@ class MORPHTransformer(nn.Module):
                 if (not _prog) or bool(_gm.any()):
                     _gain_terms.append(self._slot_gain_penalty(
                         _core_step, _h_in, _e_arg, _inj_arg, ret_state, t, _sc,
-                        _gm, _gain_lambda))
+                        _gm, _gain_lambda, carry=_cy))
             if _renorm:
                 # Direction preserved, per-slot norm pinned to the entry norm. Runs on the
                 # raw step output, BEFORE the gain governor and the recurrence gate, so it is
@@ -4930,6 +5096,12 @@ class MORPHTransformer(nn.Module):
             }
         if _gp_write:
             self._loop_gradpass = _gp_stats
+        if _carry is not None:
+            # 0-dim detached tensors, still on GPU; `_forward_tul` folds them into
+            # `groups` as `carry_*` and train.py logs them under `carry/`. Stashed rather
+            # than returned for the `_loop_gradpass` reason: this function's return tuple
+            # is unpacked positionally by the probes and the tests.
+            self._loop_carry_stats = _carry_stats
         # The `disc` critic needs the SAME context at its own training site, which sits
         # after the coda (its label is the coda's CE). Stashed rather than returned for the
         # `_loop_gradpass` reason: it is a detached tensor built OUTSIDE every checkpointed
@@ -4964,7 +5136,7 @@ class MORPHTransformer(nn.Module):
         return xn, h, depths, g_traj, _db_traj, _gain_reg, _mep_keep
 
     def _slot_gain_penalty(self, core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond,
-                           mask, lam: float) -> dict:
+                           mask, lam: float, carry=None) -> dict:
         """Hinge penalty on the slot map's typical gain at the live operating point.
 
         g = ||f(h + d) - f(h)|| / ||d|| over the active real slots, d a Gaussian direction
@@ -4994,6 +5166,10 @@ class MORPHTransformer(nn.Module):
         e_arg = e_arg.detach() if torch.is_tensor(e_arg) else e_arg
         inj_arg = inj_arg.detach() if torch.is_tensor(inj_arg) else inj_arg
         ret_state = ret_state.detach() if torch.is_tensor(ret_state) else ret_state
+        # `tul.loop_carry`: the carry is part of the map the run applied at this pass, so
+        # the probe must see it — detached with the other sources, so the hinge shapes the
+        # core's weights and nothing upstream of the loop. None on every other arm.
+        carry = carry.detach() if torch.is_tensor(carry) else carry
         m = mask.view(*mask.shape, *([1] * (hp.dim() - 2))).to(hp.dtype)
         v = torch.randn_like(hp) * m
         hn = hp.flatten(2).float().norm(dim=2)                                    # [B, S]
@@ -5003,10 +5179,10 @@ class MORPHTransformer(nn.Module):
         try:
             _restore()
             f0, _ = core_step(hp, e_arg, inj_arg, ret_state=ret_state, iter_idx=t,
-                              stage_cond=stage_cond)
+                              stage_cond=stage_cond, carry=carry)
             _restore()
             f1, _ = core_step(hp + d, e_arg, inj_arg, ret_state=ret_state, iter_idx=t,
-                              stage_cond=stage_cond)
+                              stage_cond=stage_cond, carry=carry)
         finally:
             _restore()
         num = ((f1 - f0) * m).float().flatten(1).norm(dim=1)                       # [B]
@@ -8648,6 +8824,16 @@ class MORPHTransformer(nn.Module):
             _fw = tc.fan_repel_lambda * fan_repel_loss
             groups["fan_repel_weighted"] = _fw.detach()
             groups["loss"] = groups["loss"] + _fw
+        if self.tul_carry is not None and groups is not None and self._loop_carry_stats:
+            # `tul.loop_carry`'s per-pass readings. A VARIABLE number of keys (the
+            # batch's realised max depth decides how many), so it is a scan and not a
+            # tuple — the `fan_*` contract. They carry NO loss term: the carry is a
+            # forward mechanism, not a regulariser, so nothing here is subtracted from
+            # train/loss.
+            groups = dict(groups)
+            for _k, _v in self._loop_carry_stats.items():
+                groups[f"carry_{_k}"] = _v.detach().to(groups["loss"].dtype)
+
         if fan_stats and groups is not None:
             # Every fan reading travels as a `fan_*` key so train.py can scan for the
             # prefix: the per-pass cosines and ranks are a VARIABLE number of keys (the
