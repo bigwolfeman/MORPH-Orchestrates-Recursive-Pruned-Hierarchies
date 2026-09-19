@@ -226,6 +226,9 @@ def main() -> None:
     arm = {"label": label, "config": config, "ckpt": path, "step": step, "rows": n_rows,
            "batch": a.batch, "samples": N, "sigmas": sigmas, "entry_depths": entry_depths,
            "exit_depth": exit_depth, "variants": variants, "seed": a.seed,
+           "code_target": bool(getattr(tc, "code_target", False)),
+           "coda_trained": any(str(p).startswith("coda.")
+                               for p in (getattr(cfg.training, "train_only", None) or [])),
            "tg_geometry": str(getattr(tc, "tg_geometry", "none")),
            "tg_coda_prefix_reach": str(getattr(tc, "tg_coda_prefix_reach", "all")),
            "loop_reach": int(getattr(tc, "loop_reach", 0))}
@@ -234,9 +237,20 @@ def main() -> None:
 
     # ── hooks ──────────────────────────────────────────────────────────────────────
     real_init = model.core_init.forward
+    # The EXIT site depends on the arm. A code-target arm (`tul.code_target`) replaces the
+    # `prefix_project` write with TULCodeProj's cells (transformer.py,
+    # `_tul_code_target_write`: "the projection's cells replace the prefix_project write"),
+    # so its exit state is the projection's INPUT, the readout of `h_slots`. Every other
+    # slot arm writes through `prefix_project`. One site per arm, the same noise and the
+    # same spy at either. On a code-target arm the projection is also called for its
+    # per-pass readings (stats only, no CE), so the spy keeps the FIRST call of a forward,
+    # the write, and the noise on the later calls touches nothing the CE reads.
+    code_proj = getattr(model, "tul_code_proj", None)
+    exit_site = "code_proj" if code_proj is not None else "prefix_project"
     real_proj = model.tul.prefix_project
+    real_cproj = code_proj.forward if code_proj is not None else None
     state = {"sigma_entry": 0.0, "sigma_exit": 0.0, "valid": None, "gen": None,
-             "spy": None}
+             "spy": None, "spied": False, "exit_calls": 0}
 
     def eps_like(x):
         return torch.randn(x.shape, generator=state["gen"], dtype=torch.float32)
@@ -247,20 +261,37 @@ def main() -> None:
             out = relative_noise(out, state["sigma_entry"], state["valid"], eps_like(out))
         return out
 
-    def proj_hook(h_slots, layout, l_total, cells=None):
-        if state["spy"] is not None:
-            state["spy"].append(h_slots.detach().float().flatten(2).cpu().numpy())
+    def _exit(x):
+        state["exit_calls"] += 1
+        if state["spy"] is not None and not state["spied"]:
+            state["spy"].append(x.detach().float().flatten(2).cpu().numpy())
+            state["spied"] = True
         if state["sigma_exit"] > 0.0:
-            h_slots = relative_noise(h_slots, state["sigma_exit"], state["valid"],
-                                     eps_like(h_slots))
-        return real_proj(h_slots, layout, l_total, cells=cells)
+            x = relative_noise(x, state["sigma_exit"], state["valid"], eps_like(x))
+        return x
+
+    def proj_hook(h_slots, layout, l_total, cells=None):
+        return real_proj(_exit(h_slots), layout, l_total, cells=cells)
+
+    def cproj_hook(x, *args, **kwargs):
+        return real_cproj(_exit(x), *args, **kwargs)
 
     model.core_init.forward = init_hook
-    model.tul.prefix_project = proj_hook
+    if code_proj is not None:
+        code_proj.forward = cproj_hook
+    else:
+        model.tul.prefix_project = proj_hook
+    arm["exit_site"] = exit_site
+    print(f"[arm] exit site = {exit_site}", flush=True)
 
     def forward_ce(inp, labels, layout, d):
         set_depth(d)
+        state["spied"] = False
+        state["exit_calls"] = 0
         ce, _ = ce_maps(model, inp, layout, labels, device, want_mux=False)
+        if state["exit_calls"] == 0:
+            raise RuntimeError(f"the exit hook ({exit_site}) never fired in a forward: "
+                               "the exit-noise cells and cos_exit would be silent lies")
         return ce.float().cpu().numpy()
 
     def gen_for(variant: str, sigma: float, d: int, s: int, bi: int):
@@ -355,6 +386,8 @@ def main() -> None:
     finally:
         model.core_init.forward = real_init
         model.tul.prefix_project = real_proj
+        if code_proj is not None:
+            code_proj.forward = real_cproj
         restore()
 
     os.makedirs(os.path.dirname(os.path.abspath(a.out)) or ".", exist_ok=True)
