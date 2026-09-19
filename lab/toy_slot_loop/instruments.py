@@ -378,15 +378,19 @@ def _fit_logistic(xn, y, steps, lr, dev, seed: int = 0):
     return lin, float(loss.item())
 
 
-def _fit_softmax(xn, y, n_out, steps, lr, dev, seed: int = 0):
+def _new_linear(d_in, d_out, seed, dev):
     g = torch.Generator(device="cpu").manual_seed(seed)
-    lin = torch.nn.Linear(xn.shape[1], n_out)
+    lin = torch.nn.Linear(d_in, d_out)
     with torch.no_grad():
-        bound = 1.0 / (xn.shape[1] ** 0.5)
+        bound = 1.0 / (d_in**0.5)
         lin.weight.copy_(torch.empty_like(lin.weight).uniform_(-bound, bound, generator=g))
         lin.bias.copy_(torch.empty_like(lin.bias).uniform_(-bound, bound, generator=g))
-    lin = lin.to(dev)
-    opt = torch.optim.Adam(lin.parameters(), lr=lr)
+    return lin.to(dev)
+
+
+def _fit_softmax(xn, y, n_out, steps, lr, dev, seed: int = 0, wd: float = 0.0):
+    lin = _new_linear(xn.shape[1], n_out, seed, dev)
+    opt = torch.optim.Adam(lin.parameters(), lr=lr, weight_decay=wd)
     loss = None
     for _ in range(steps):
         opt.zero_grad(set_to_none=True)
@@ -394,6 +398,34 @@ def _fit_softmax(xn, y, n_out, steps, lr, dev, seed: int = 0):
         loss.backward()
         opt.step()
     return lin, float(loss.item())
+
+
+READER_WD = (1e-4, 1e-3, 1e-2, 1e-1, 1.0)
+
+
+def _fit_reader(xn, y, n_out, steps, lr, dev, seed: int):
+    """A ridge-selected linear reader: the weight decay is chosen on a held-out fifth of
+    the TRAIN draw, then the reader is refitted on the whole draw at that decay.
+
+    Measured 2026-09-19, which is why this exists: an unregularised fit of 96 features to
+    22 classes on 1024 rows read a value CE of 2.504 on a RANDOM-INIT loop, against a
+    chance of ln 8 = 2.0794. A reader that scores worse than chance on the held-out draw is
+    measuring its own overfitting, not the state.
+    """
+    n = xn.shape[0]
+    k = max(1, int(0.8 * n))
+    g = torch.Generator(device="cpu").manual_seed(seed)
+    perm = torch.randperm(n, generator=g).to(xn.device)
+    tr, va = perm[:k], perm[k:]
+    best = (None, float("inf"))
+    for i, wd in enumerate(READER_WD):
+        lin, _ = _fit_softmax(xn[tr], y[tr], n_out, steps, lr, dev, seed=seed + i, wd=wd)
+        with torch.no_grad():
+            ce = torch.nn.functional.cross_entropy(lin(xn[va]), y[va]).item()
+        if ce < best[1]:
+            best = (wd, ce)
+    lin, train_ce = _fit_softmax(xn, y, n_out, steps, lr, dev, seed=seed, wd=best[0])
+    return lin, {"weight_decay": best[0], "val_ce": best[1], "train_ce": train_ce}
 
 
 def _balanced(pred, y):
@@ -502,8 +534,8 @@ def adapted_reader(
         xtr, ytr = _reader_features(model, train_batches, spec, d, spec.answer_slot)
         xte, yte = _reader_features(model, eval_batches, spec, d, spec.answer_slot)
         mu, sd = xtr.mean(0, keepdim=True), xtr.std(0, keepdim=True) + 1e-5
-        lin, _ = _fit_softmax(
-            (xtr - mu) / sd, ytr, model.cfg.vocab, steps, lr, dev, seed=2_000_000 + d
+        lin, fit = _fit_reader(
+            (xtr - mu) / sd, ytr, model.cfg.vocab, steps, lr, dev, seed=2_000_000 + 10 * d
         )
         with torch.no_grad():
             lo = lin((xte - mu) / sd)
@@ -511,15 +543,15 @@ def adapted_reader(
             acc = (lo.argmax(-1) == yte).float().mean().item()
         out["by_depth"].append(
             {"depth": d, "slot": spec.answer_slot, "reader_value_ce": ce, "reader_value_acc": acc,
-             "n_rows": int(xte.shape[0])}
+             "n_rows": int(xte.shape[0]), "n_train_rows": int(xtr.shape[0]), **fit}
         )
     d = spec.probe_depth
     for name, role in spec.roles:
         xtr, ytr = _reader_features(model, train_batches, spec, d, role)
         xte, yte = _reader_features(model, eval_batches, spec, d, role)
         mu, sd = xtr.mean(0, keepdim=True), xtr.std(0, keepdim=True) + 1e-5
-        lin, _ = _fit_softmax(
-            (xtr - mu) / sd, ytr, model.cfg.vocab, steps, lr, dev, seed=3_000_000 + role
+        lin, fit = _fit_reader(
+            (xtr - mu) / sd, ytr, model.cfg.vocab, steps, lr, dev, seed=3_000_000 + 10 * role
         )
         with torch.no_grad():
             lo = lin((xte - mu) / sd)
@@ -530,6 +562,7 @@ def adapted_reader(
                     "depth": d,
                     "reader_value_ce": torch.nn.functional.cross_entropy(lo, yte).item(),
                     "reader_value_acc": (lo.argmax(-1) == yte).float().mean().item(),
+                    **fit,
                 }
             )
     return out

@@ -246,6 +246,30 @@ Two of those bear on predictions. The reader's 2.043 at depth 1 is consistent wi
 clause carries a tolerance caveat; at 300 steps a one-token change four hops back moves the
 cosine by less than 1e-3.
 
+### Method amendment 1 (2026-09-19, after five cells of the first launch, before the graded grid)
+
+The predictions above are unchanged. The first launch was killed after five cells and every
+JSON from it deleted, because the fitted reader was measuring itself.
+
+**What forced it.** On a RANDOM-INIT cell the reader read a held-out value CE of **2.504**
+against a chance of ln 8 = 2.0794. A reader that scores worse than chance on held-out rows
+is reporting its own overfitting: 96 features to 22 classes on 1,024 rows, 400 full-batch
+Adam steps, no regularisation.
+
+**The fix.** `adapted_reader` now ridge-selects: the weight decay is chosen from
+{1e-4, 1e-3, 1e-2, 1e-1, 1} on a held-out fifth of the TRAIN draw, the reader is refitted
+on the whole draw at that decay, and the chosen decay, the validation CE and the train CE
+are all stored next to the eval CE. The probe draw also goes from 1,024 to 2,048 rows,
+which is 2,048 instances now that a row holds one. The membership probe is unchanged apart
+from the larger draw.
+
+**What the fixed instrument reads on a random-init cell** (n = 1, d96, steps 0, disclosed
+because it bears on P7): value CE **2.109** at forced depth 1 and **2.002** at forced depth
+8, against chance 2.0794. So an untrained loop hands a linear reader about 0.08 nats at
+depth 8 and nothing at depth 1. That already contradicts P7's middle clause (below 1.88 at
+depth 4 and beyond) on one cell, and is consistent with P7's first and third clauses. The
+graded grid re-measures it on six random-init cells.
+
 Artifacts: one JSON per cell under
 `ignored/experiment-artifacts/2026-09-19-toy-eliminate6/`, aggregated with
 `python lab/toy_slot_loop/aggregate.py <dir>` into
