@@ -479,6 +479,12 @@ def membership_probe(
                     pred = lin(xe) > 0
                     y = Yte[fact][t] > 0
                     bal, pos, neg = _balanced(pred, y)
+                # `bal_<fact>` is the balanced accuracy of every fact. `acc_alive` and
+                # `acc_other` keep their 2026-09-18 meaning -- the accuracy on the POSITIVE
+                # and on the NEGATIVE class of the `alive` fact -- so `acc_<fact>` would
+                # collide with `acc_alive` for fact "alive". It did, for one aggregation
+                # round, and a hop table read a positive-class accuracy as a balanced one.
+                row[f"bal_{fact}"] = bal
                 row[f"acc_{fact}"] = bal
                 row[f"train_loss_{fact}"] = tl
                 row[f"n_pos_{fact}"] = int(y.sum().item())

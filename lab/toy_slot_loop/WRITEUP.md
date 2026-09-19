@@ -518,3 +518,34 @@ the readout. The one lever that makes a slot state read as a spread rather than 
 the terminal fixed-point term, at entropy 0.989 of a possible ln 3 = 1.0986 against 0.352
 for plain `exit` and 0.096 at random init — the same term that was the strongest lever in
 the study above.
+
+---
+
+## 2026-09-19 appendix: six hops, and what the two-hop task got wrong
+
+Nothing above this line is edited. `eliminate6` is `eliminate` with the chain deepened from
+two hops to six: eight candidate symbols, six drawn per instance over spans 0-1, five
+eliminations at spans 2-6, the answer at the head of span 7. Its ceilings, its grid and its
+scorecard are filed at
+[`lab/experiments/results/2026-09-19-toy-eliminate6/README.md`](../experiments/results/2026-09-19-toy-eliminate6/README.md),
+with the predictions frozen beforehand in
+[`2026-09-19-toy-eliminate6-hop-distance.md`](../experiments/successes/2026-09-19-toy-eliminate6-hop-distance.md).
+
+**It overturns the previous appendix's headline.** "Carrying a set through this loop costs
+nothing and needs no training" was measured on a two-hop chain. Read at the answer slot of
+an UNTRAINED network, the probe for "is symbol c already eliminated" reads 1.000 at hop 0,
+0.881 at hop 2 and **0.668 at hop 4**, and never recovers; every trained cell reads 0.999
+or better at every hop. Carrying a fact one or two hops is free. Carrying it six is learned.
+
+Three more things this task could say that the two-hop one could not. The chain fails at
+its LAST two hops, and it fails in the state rather than in the head: every stuck cell's
+`in_set` probe sits at 0.89, the ceiling reachable from the five eliminations alone, and
+the cells that pass it are exactly the cells that solve the task. A ridge-fitted linear
+reader on the exit state beats the coda by a median of +0.030 nats on stuck seeds, so the
+tied head is not the bottleneck here. And width is worth more than any attachment measured
+in this study: 96 dimensions solve 2 of 15 cells, 192 solve 8 of 15.
+
+The fixed-point term beat plain exit-only for the third independent time (2/5 against 0/5
+at d96, 4/5 against 3/5 at d192). `staged` was the worst attachment at 1 of 10, and its
+middle slot puts per-symbol mass 0.333 on the dead candidates and 0.000 on the survivor —
+its own-span target asks for exactly that.

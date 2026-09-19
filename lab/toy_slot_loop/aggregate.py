@@ -219,6 +219,15 @@ def table_elim_mass(g, keys, role):
                 print(f"| `{k}` {gname} | {t} | {n} | {cells} | {c[0]['n_alive_reachable']} |")
 
 
+def _bal(row, fact):
+    """The BALANCED accuracy of a fact. Runs before 2026-09-19 stored it under
+    `acc_<fact>`, except for `alive`, where `acc_alive` is the positive-class accuracy and
+    the balanced one is `acc_balanced`."""
+    if f"bal_{fact}" in row:
+        return row[f"bal_{fact}"]
+    return row["acc_balanced"] if fact == "alive" else row[f"acc_{fact}"]
+
+
 def _mean_or_dash(vals, p=3):
     vals = [v for v in vals if v is not None]
     return f"{sum(vals)/len(vals):.{p}f}" if vals else "-"
@@ -228,7 +237,7 @@ def table_elim_probe(g, keys, fact="alive"):
     keys = [k for k in keys if g[k] and f"acc_{fact}" in g[k][0]["eliminate"]["membership_probe"]["answer"][0]]
     if not keys:
         return
-    print(f"\n### membership probe, balanced accuracy on held-out rows, fact `{fact}`\n")
+    print(f"\n### membership probe, BALANCED accuracy on held-out rows, fact `{fact}`\n")
     ps = _passes(next(g[k][0] for k in keys if g[k]))
     print("| cell | role | " + " | ".join(f"p{t}" for t in ps) + " |")
     print("|---" * (2 + len(ps)) + "|")
@@ -238,7 +247,7 @@ def table_elim_probe(g, keys, fact="alive"):
             continue
         for role in _roles(rs[0]):
             cells = [
-                _mean_or_dash([r["eliminate"]["membership_probe"][role][t][f"acc_{fact}"] for r in rs])
+                _mean_or_dash([_bal(r["eliminate"]["membership_probe"][role][t], fact) for r in rs])
                 for t in ps
             ]
             print(f"| `{k}` | {role} | " + " | ".join(cells) + " |")
@@ -255,7 +264,7 @@ def table_elim_hop(g, keys):
         return  # runs from before 2026-09-19 fitted the `alive` fact only
     keys = [k for k in keys
             if g[k] and "acc_in_set" in g[k][0]["eliminate"]["membership_probe"]["answer"][0]]
-    print("\n### hop ladder: the ANSWER slot's probe accuracy at pass t (= hop distance t)\n")
+    print("\n### hop ladder: the ANSWER slot's BALANCED probe accuracy at pass t (= hop distance t)\n")
     d = rs0["eliminate"]["spec"]["probe_depth"]
     ps = list(range(d + 1))
     print("| cell | fact | " + " | ".join(f"hop {t}" for t in ps) + " |")
@@ -267,7 +276,7 @@ def table_elim_hop(g, keys):
         for fact in ("in_set", "dead", "alive"):
             cells = [
                 _mean_or_dash(
-                    [r["eliminate"]["membership_probe"]["answer"][t][f"acc_{fact}"] for r in rs]
+                    [_bal(r["eliminate"]["membership_probe"]["answer"][t], fact) for r in rs]
                 )
                 for t in ps
             ]

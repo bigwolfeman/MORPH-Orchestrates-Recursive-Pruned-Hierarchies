@@ -1,6 +1,6 @@
 # Experiment: does the carry survive SIX hops, and can a fitted reader find what the head cannot?
 
-Status: planned
+Status: success (the headline prediction and its contrast clause held; P2, P6, P8 falsified)
 Date: 2026-09-19
 Owner: Claude (session f9558148), sub-agent ToyEliminate, for Wolfe.
 
@@ -274,3 +274,72 @@ Artifacts: one JSON per cell under
 `ignored/experiment-artifacts/2026-09-19-toy-eliminate6/`, aggregated with
 `python lab/toy_slot_loop/aggregate.py <dir>` into
 `lab/experiments/results/2026-09-19-toy-eliminate6/`.
+
+---
+
+# Results
+
+Ran 2026-09-19, 03:16–06:04 on the 3070 beside the hop-distance probes. 36 cells, 0
+failures, worst per-pass tap self-check 1.13e-07. Tables, the four answers and the full
+scorecard: [`lab/experiments/results/2026-09-19-toy-eliminate6/README.md`](../results/2026-09-19-toy-eliminate6/README.md).
+Raw JSON: `ignored/experiment-artifacts/2026-09-19-toy-eliminate6/`.
+
+Six of ten predictions held, three were falsified and one (P5) was written in the previous
+task's framing and had to be reread per symbol. The scorecard is in the result file; the
+one-line version of each:
+
+| id | outcome |
+|---|---|
+| P1 | mostly TRUE — basin back, `exit` 0/5 at d96, fp better at both widths; the `staged >= 3/5` clause FALSE |
+| P2 | FALSE narrowly — median stuck 1.0130, just under the predicted band, with 8 of 20 at the ln 3 floor |
+| P3 | TRUE — stuck seeds are depth-starved, 20 of 20, median fall 0.986 nats |
+| **P4** | **TRUE — the headline. The random-init hop ladder decays (1.000 → 0.668 at hop 4) and training lifts it to 0.999** |
+| P5 | reframed — per symbol, `exit` and `exit`+fp DO spread over the alive set; `staged` collapses onto the dead as predicted |
+| P6 | FALSE — the fixed-point entropy effect replicates at d96 (+0.259) and inverts at d192 (−0.108) |
+| P7 | three clauses of four TRUE; the random-init reader stays ABOVE chance−0.2 at every depth |
+| P8 | FALSE — the fitted reader beats the coda by a median of +0.030, not 0.15 |
+| P9 | TRUE — twin drop None/2/4 in 30/30, 30/30, 28/30 |
+| P10 | TRUE by six cells — d192 solves 8 of 15, d96 solves 2 of 15 |
+
+## Verdict
+
+The decision rule filed in advance had two branches. **The second one holds on both of its
+terms.** The random-init hop ladder decays with hop distance (`dead` 1.000 at hop 0 to
+0.668 at hop 4 at d96, 0.713 at d192) and every trained cell lifts it back to 0.999-1.000,
+a gap of 0.23 to 0.33 at every hop of 3 or more. The random-init fitted reader reads 2.002
+nats at forced depth 8 against a chance of 2.0794, so an untrained loop hands a linear
+reader about 0.08 nats even when every fact is formally inside its window.
+
+**Iteration 1's conclusion was a two-hop artefact and is now qualified: a shared-core slot
+loop carries a fact for one or two hops for free, and closing the gap beyond that is one of
+the things training buys.**
+
+Two further findings the predictions did not anticipate. The chain fails at its LAST two
+hops and the failure is in the state: every stuck cell's `in_set` probe sits at 0.89, the
+ceiling reachable from the five eliminations alone, and the cells that pass it are exactly
+the cells that solve the task. And the fitted reader, built to separate "the head cannot
+read it" from "the state does not hold it", returns the second answer: +0.030 nats over the
+coda on stuck seeds, so on this task the tied head is not the bottleneck.
+
+Filed under `successes/`: the headline prediction and its contrast clause held, the grid
+had the basin it was designed to have, and the question it was built to settle is settled.
+
+## Updated hypothesis
+
+1. Depth-carry is a learned capability with a measurable decay curve, not a free property
+   of a residual stream. The instrument is a per-fact probe scored against the reachable
+   window, read at every hop, with an untrained network as the baseline.
+2. Width buys hops. 96 dimensions solve 2 of 15 cells and 192 solve 8 of 15 on the same
+   task, and the two separate on the probe at hop 6 rather than anywhere shallower.
+3. A tied-head readout is the wrong instrument for a slot state twice over: it exposes the
+   local token, and restricting it to the right candidates leaks the answer. A fitted
+   reader is the right control, and on this task it says the state holds no more than the
+   coda already reports.
+
+## Next planned experiment
+
+On the real model, not the toy: the sibling hop-distance probe should report per-fact
+decodability at each hop with an UNTRAINED (or early-checkpoint) baseline beside it, since
+this toy shows the untrained baseline is where the decay lives. On the toy, the open
+question is whether the last two hops can be bought by anything other than width — the
+candidates are a set of six spread over two spans, and no arm here acquired them at d96.
