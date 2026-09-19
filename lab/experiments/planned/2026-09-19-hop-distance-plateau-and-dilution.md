@@ -69,6 +69,17 @@ updated hypothesis is withdrawn and the loss is filed as per-pass degradation.
 - Score with the same scorer, extended for the new clauses; file under `successes/` only if
   P1, P2, P3 and P5 all hold.
 
+### Method amendment 1 (2026-09-19 16:20 UTC, after runs 1-3, before run 3 is re-run)
+
+Run 3 as launched (`--seed 1`) returned bins IDENTICAL to seed 0 to four decimals (same
+token counts, same K1−K6): the probe's `--seed` feeds only the planted source positions and
+rare ids, and the rows are always the validation stream from its start. So the P5 run
+measured nothing about rows. The probe gains `--row-offset N` (skip N rows' worth of the
+stream before packing, a disjoint later stretch of text; `c813b1a` → this change), and P5
+is re-run as `--row-offset 480 --seed 1`, depths 1, 2, 3, 6, single-token planted. The P5
+prediction text is unchanged: the seed-1 clause is read on the offset draw. The identical
+seed-1 JSON is kept in the results directory as the record of the mistake.
+
 ## Risks
 
 - `--cut-after` changes the forward; if the arm's `loop_reach` plumbing does not expose a

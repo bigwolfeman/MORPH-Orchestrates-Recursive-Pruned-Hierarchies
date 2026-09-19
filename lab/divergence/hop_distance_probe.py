@@ -464,7 +464,13 @@ def main() -> None:
     ap.add_argument("--rows", type=int, default=48)
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--seed", type=int, default=0,
+                    help="rng for planted source positions and rare ids ONLY: the rows are "
+                         "the validation stream from its start, so --seed never changes "
+                         "which rows are scored (2026-09-19 lesson). Use --row-offset for that")
+    ap.add_argument("--row-offset", type=int, default=0,
+                    help="skip this many rows' worth of the validation stream before packing, "
+                         "so the scored rows are a DISJOINT later stretch of text")
     ap.add_argument("--planted", action="store_true", help="also run the planted copy pair")
     ap.add_argument("--planted-len", type=int, default=1, choices=(1, 2),
                     help="1: a rare id seen once at the source; 2: a (cue, X) pair at the "
@@ -531,7 +537,14 @@ def main() -> None:
     spec = tul_rt.data_cfg.spec_for(cfg.data.seq_len)
     loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8,
                                split="validation", skip_samples=0, bag_size=0, tul=None)
-    stream = stream_from_loader(loader, a.rows * (spec.l_total + 1))
+    if a.row_offset < 0:
+        raise SystemExit("--row-offset must be >= 0")
+    per_row = spec.l_total + 1
+    stream = stream_from_loader(loader, (a.rows + a.row_offset) * per_row)
+    # a packed row consumes FEWER than `per_row` tokens (its slot positions hold no token),
+    # so skipping `row_offset * per_row` tokens starts past everything the first
+    # `row_offset` rows of an offset-0 run could have read: the two draws are disjoint.
+    stream = stream[a.row_offset * per_row:]
     n_batches = -(-a.rows // a.batch)
     packed = pack_rows(stream, tul_rt, cfg, a.batch, plain=False)[:n_batches]
     rows_done = sum(inp.shape[0] for inp, _, _, _ in packed)
@@ -539,7 +552,7 @@ def main() -> None:
     arm = {
         "label": label, "config": config, "ckpt": path, "step": step,
         "rows": rows_done, "batch": a.batch, "hops": H, "depths": depths,
-        "train_depth": train_depth, "seed": a.seed,
+        "train_depth": train_depth, "seed": a.seed, "row_offset": int(a.row_offset),
         # the hypothesis predicts DIFFERENT curves for reach=all and reach=prev, so the
         # reach travels with the reading and a scorer cannot read the two as one number
         "tg_geometry": str(getattr(tc, "tg_geometry", "none")),
