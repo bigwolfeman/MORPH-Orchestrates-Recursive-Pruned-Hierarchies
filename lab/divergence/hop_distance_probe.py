@@ -96,6 +96,9 @@ __all__ = [
     "own_prefix_mask",
     "plant_sites",
     "planted_triple",
+    "source_positions",
+    "reach0_kw",
+    "install_reach_cut",
     "source_position",
     "span_index_from_layout",
     "bin_sums",
@@ -263,21 +266,35 @@ def planted_triple(span_idx: np.ndarray, s: int) -> tuple[int, int]:
     return int(cur[-1]), int(nxt[0])
 
 
-def source_position(span_idx: np.ndarray, s: int, g: int, rng) -> int:
-    """A token position inside span ``s-g``, chosen by ``rng``.
+def source_positions(span_idx: np.ndarray, s: int, g: int, rng, n: int = 1) -> list[int]:
+    """``n`` CONSECUTIVE token positions inside span ``s-g``, chosen by ``rng``.
 
     ``g == 0`` puts the source inside the scoring span itself and excludes that span's LAST
     token, which is the scored position: overwriting it would change the probe's own input.
+    With ``n == 2`` the pair is ``(cue, X)``; the scored position then carries the cue in
+    every condition and the source pair is what the planted condition adds, so the benefit
+    is an induction copy (cue -> X) rather than a bare "seen once" boost.
     """
     if g < 0:
         raise ValueError(f"g must be >= 0, got {g}")
+    if n < 1:
+        raise ValueError(f"n must be >= 1, got {n}")
     span_idx = np.asarray(span_idx, dtype=np.int64)
     pos = np.flatnonzero(span_idx == s - g)
     if g == 0:
         pos = pos[:-1]
-    if pos.size == 0:
-        raise ValueError(f"span {s - g} has no usable token position in this row")
-    return int(pos[rng.integers(0, pos.size)])
+    # consecutive: every run of n adjacent positions inside the span
+    starts = [int(pos[i]) for i in range(pos.size - n + 1)
+              if int(pos[i + n - 1]) - int(pos[i]) == n - 1]
+    if not starts:
+        raise ValueError(f"span {s - g} has no run of {n} usable token positions in this row")
+    p0 = starts[rng.integers(0, len(starts))]
+    return [p0 + k for k in range(n)]
+
+
+def source_position(span_idx: np.ndarray, s: int, g: int, rng) -> int:
+    """The ``n == 1`` form of `source_positions`."""
+    return source_positions(span_idx, s, g, rng, 1)[0]
 
 
 # ── pure logic: aggregation ────────────────────────────────────────────────────────
@@ -335,6 +352,55 @@ class HopTable:
 
 
 # ── the run ────────────────────────────────────────────────────────────────────────
+
+def reach0_kw(kw: dict) -> dict:
+    """The reach-0 form of one core layer's reach kwargs: a cell reads ITSELF only.
+
+    Built from the layer's own ``tg_allow`` (so shape, device and ``tg_seg`` travel with
+    it) rather than from the model, which keeps this a pure function of one dict.
+    """
+    if "tg_allow" not in kw:
+        raise ValueError("reach0_kw needs the loop_reach kwargs (tg_allow); a register arm "
+                         "(slot_cells > 1) carries tg_relation and is not cut here")
+    import torch
+    m = kw["tg_allow"]
+    S = m.shape[-1]
+    eye = torch.eye(S, dtype=torch.bool, device=m.device).view(1, 1, S, S)
+    out = dict(kw)
+    out["tg_allow"] = eye
+    out["tg_comp_allow"] = eye
+    return out
+
+
+def install_reach_cut(model, cut_after: int):
+    """Passes with 0-based index >= ``cut_after`` read no other cell (reach 0 on EVERY core
+    layer); passes before it keep the arm's reach. Returns ``restore``.
+
+    Wraps ``model._apply_core_step``, the one call every core pass goes through
+    (``_core_step`` in `_tul_core` hands it ``iter_idx=t`` and ``attn_kw=_core_akw``).
+    With ``cut_after >= max depth`` nothing changes and the forward is bit-identical, which
+    `tests/test_hop_distance_probe.py` asserts.
+    """
+    if cut_after < 0:
+        raise ValueError(f"cut_after must be >= 0, got {cut_after}")
+    real = model._apply_core_step
+    cache: dict[int, tuple] = {}
+
+    def cut_step(*args, iter_idx=0, attn_kw=None, **kw):
+        if attn_kw is not None and int(iter_idx) >= cut_after:
+            key = id(attn_kw)
+            if key not in cache:
+                cache[key] = tuple(reach0_kw(k) for k in attn_kw)
+            attn_kw = cache[key]
+        return real(*args, iter_idx=iter_idx, attn_kw=attn_kw, **kw)
+
+    model._apply_core_step = cut_step
+
+    def restore() -> None:
+        model._apply_core_step = real
+
+    return restore
+
 
 def _depth_forcer(model, tc):
     """Set/restore the slot loop's forced eval depth. Slot-loop arms only."""
@@ -400,6 +466,12 @@ def main() -> None:
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--planted", action="store_true", help="also run the planted copy pair")
+    ap.add_argument("--planted-len", type=int, default=1, choices=(1, 2),
+                    help="1: a rare id seen once at the source; 2: a (cue, X) pair at the "
+                         "source with the cue at the scored position (induction copy)")
+    ap.add_argument("--cut-after", type=int, default=-1,
+                    help="passes with 0-based index >= this read no other cell (reach 0). "
+                         "-1: off. Needs tul.loop_reach > 0")
     ap.add_argument("--skip-localiser", action="store_true",
                     help="planted probe only (no corruption forwards, no h* bins)")
     ap.add_argument("--out", required=True)
@@ -444,6 +516,13 @@ def main() -> None:
     warn_if_frozen_reader(cfg, label)
     tc = model.cfg.tul
     set_depth, restore = _depth_forcer(model, tc)
+    if a.cut_after >= 0:
+        if int(getattr(tc, "loop_reach", 0)) <= 0:
+            raise SystemExit("--cut-after needs tul.loop_reach > 0: at loop_reach 0 the "
+                             "core builds no reach kwargs and there is nothing to cut")
+        _restore_cut = install_reach_cut(model, a.cut_after)
+        print(f"[arm] reach cut: passes with index >= {a.cut_after} read no other cell",
+              flush=True)
     train_depth = int(getattr(tc, "slot_depth_fixed", 0) or tc.slot_mean_depth
                       or cfg.model.mean_depth)
     if train_depth not in depths:
@@ -469,6 +548,8 @@ def main() -> None:
         "loop_reach": int(getattr(tc, "loop_reach", 0)),
         "spandec": bool(getattr(tc, "spandec", False)),
         "slot_seed": str(getattr(tc, "slot_seed", "")),
+        "cut_after": int(a.cut_after),
+        "planted_len": int(a.planted_len),
     }
     print(f"[arm] {label} step={step} rows={rows_done} geometry={arm['tg_geometry']} "
           f"coda_reach={arm['tg_coda_prefix_reach']} loop_reach={arm['loop_reach']} "
@@ -612,7 +693,8 @@ def main() -> None:
 
         if a.planted:
             arm["planted"] = _planted(packed, meta, spec, tul_rt, cfg, depths, H,
-                                      forward_ce, paired_bootstrap_ci, n_rows, rng, torch)
+                                      forward_ce, paired_bootstrap_ci, n_rows, rng, torch,
+                                      planted_len=a.planted_len)
     finally:
         restore()
 
@@ -628,8 +710,16 @@ def main() -> None:
 
 
 def _planted(packed, meta, spec, tul_rt, cfg, depths, H, forward_ce, boot,
-             n_rows, rng, torch) -> dict:
-    """The planted copy pair: CE of a rare repeat against (source distance g, depth d)."""
+             n_rows, rng, torch, planted_len: int = 1) -> dict:
+    """The planted copy pair: CE of a rare repeat against (source distance g, depth d).
+
+    ``planted_len 1``: the rare id X sits at the source and its label at the scored
+    position. ``planted_len 2``: the source holds ``(C, X)``, the scored position's INPUT is
+    C in every condition (control included), so the planted condition adds exactly the
+    (cue -> X) evidence and the benefit is an induction copy.
+    """
+    if planted_len not in (1, 2):
+        raise ValueError(f"planted_len must be 1 or 2, got {planted_len}")
     is_boundary = tul_rt.data_cfg.rule.is_boundary
     vocab = int(cfg.model.vocab_size)
     sites = []          # (batch_idx, b, scored_pos, repeat_pos, {g: source_pos}, X, row)
@@ -644,17 +734,22 @@ def _planted(packed, meta, spec, tul_rt, cfg, depths, H, forward_ce, boot,
             for s in cand:
                 try:
                     sc, rp = planted_triple(spans, s)
-                    src = {g: source_position(spans, s, g, rng) for g in range(H + 1)}
+                    src = {g: source_positions(spans, s, g, rng, planted_len)
+                           for g in range(H + 1)}
                 except ValueError:
                     continue
                 good.append((s, sc, rp, src))
             if not good:
                 continue
-            rare = _rare_ids(len(good), used, is_boundary, spec.slot_id, vocab, rng)
+            rare = _rare_ids(planted_len * len(good), used, is_boundary, spec.slot_id,
+                             vocab, rng)
             used.update(rare)
-            for (s, sc, rp, src), X in zip(good, rare):
+            for k, (s, sc, rp, src) in enumerate(good):
+                ids_k = rare[planted_len * k: planted_len * (k + 1)]
+                # pair = (C, X) or (X,): X is always the LAST id and the copy target
                 sites.append({"bi": bi, "b": b, "scored": sc, "repeat": rp,
-                              "src": src, "X": X, "row": m["row0"] + b})
+                              "src": src, "pair": ids_k, "X": ids_k[-1],
+                              "row": m["row0"] + b})
     if not sites:
         raise SystemExit("no planted site fits: the rows hold too few spans for hops=H")
     print(f"[planted] {len(sites)} sites over {n_rows} rows", flush=True)
@@ -670,8 +765,11 @@ def _planted(packed, meta, spec, tul_rt, cfg, depths, H, forward_ce, boot,
             lab = np.full(labels.shape, -100, dtype=np.int64)
             for s in mine:
                 ci[s["b"], s["repeat"]] = s["X"]
+                if len(s["pair"]) == 2:
+                    ci[s["b"], s["scored"]] = s["pair"][0]      # the cue, every condition
                 if g is not None:
-                    ci[s["b"], s["src"][g]] = s["X"]
+                    for pos, tid in zip(s["src"][g], s["pair"]):
+                        ci[s["b"], pos] = tid
                 lab[s["b"], s["scored"]] = s["X"]
             ce = forward_ce(torch.from_numpy(ci), torch.from_numpy(lab), layout, d)
             for s in mine:
@@ -679,7 +777,8 @@ def _planted(packed, meta, spec, tul_rt, cfg, depths, H, forward_ce, boot,
                 rows.append(s["row"])
         return np.asarray(vals, dtype=np.float64), np.asarray(rows, dtype=np.int64)
 
-    out: dict[str, object] = {"n_sites": len(sites), "hops": H, "control": {}}
+    out: dict[str, object] = {"n_sites": len(sites), "hops": H, "control": {},
+                              "planted_len": int(planted_len)}
     ctrl: dict[int, np.ndarray] = {}
     site_rows = np.asarray([s["row"] for s in sites], dtype=np.int64)
     for d in depths:

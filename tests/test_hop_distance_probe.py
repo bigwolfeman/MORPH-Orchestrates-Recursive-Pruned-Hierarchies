@@ -233,3 +233,113 @@ def test_hop_table_means_are_token_weighted_over_the_bin():
 def test_hop_table_refuses_mismatched_inputs():
     with pytest.raises(ValueError):
         HopTable(np.zeros(3), np.zeros(4), n_rows=1)
+
+
+# ── 4. the second pass (2026-09-19): source pairs and the reach cut ────────────────
+#
+# Two options the plateau-and-dilution prereg needs before it runs. The pair is pure
+# logic; the cut has to be proved on a real tiny model, because its contract is EXACT
+# invisibility of a span beyond the cut, and only a forward can show that.
+
+from hop_distance_probe import install_reach_cut, reach0_kw, source_positions   # noqa: E402
+
+
+def test_source_positions_are_consecutive_and_inside_the_span():
+    span = np.array([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2])
+    rng = np.random.default_rng(0)
+    for _ in range(20):
+        p = source_positions(span, 2, 1, rng, 2)
+        assert p[1] == p[0] + 1 and span[p[0]] == 1 and span[p[1]] == 1
+        q = source_positions(span, 2, 0, rng, 2)
+        assert q[1] == q[0] + 1 and span[q[0]] == 2 and q[1] < 11      # never the scored pos
+
+
+def test_source_positions_refuses_a_span_with_no_run_of_n():
+    span = np.array([0, 0, 0, -1, 1, -1, 1, -1, 2, 2, 2, 2])              # span 1 has no pair
+    with pytest.raises(ValueError, match="no run of 2"):
+        source_positions(span, 2, 1, np.random.default_rng(0), 2)
+    assert source_positions(span, 2, 1, np.random.default_rng(0), 1)[0] in (4, 6)
+
+
+def test_source_position_is_the_n1_form():
+    span = np.array([0, 0, 0, 1, 1, 1, 2, 2, 2])
+    a = source_position(span, 2, 1, np.random.default_rng(3))
+    b = source_positions(span, 2, 1, np.random.default_rng(3), 1)[0]
+    assert a == b and span[a] == 1
+
+
+def test_reach0_kw_is_the_diagonal_and_keeps_the_segment():
+    import torch
+    S = 5
+    ii = torch.arange(S).unsqueeze(1); jj = torch.arange(S).unsqueeze(0)
+    m = ((ii >= jj) & (jj >= ii - 1)).view(1, 1, S, S)
+    seg = torch.arange(S).unsqueeze(0)
+    out = reach0_kw({"tg_allow": m, "tg_comp_allow": m, "tg_seg": seg})
+    assert torch.equal(out["tg_allow"], torch.eye(S, dtype=torch.bool).view(1, 1, S, S))
+    assert torch.equal(out["tg_comp_allow"], out["tg_allow"])
+    assert out["tg_seg"] is seg
+    with pytest.raises(ValueError, match="tg_relation"):
+        reach0_kw({"tg_relation": m})
+
+
+def _reach_model(depth: int):
+    from test_tul_strict_geometry import _model
+    return _model(tg_geometry="strict", tg_coda_prefix_reach="prev", loop_reach=1,
+                  slot_depth_fixed=depth, slot_max_depth=8)
+
+
+def _span_delta(m, ids, edited, row: int, span: int):
+    """max |logit delta| over the tokens of ``span`` in ``row`` (inequality-based, as in
+    `test_tul_strict_geometry._leak`: the slot_id column is -inf everywhere)."""
+    import torch
+    from test_tul_strict_geometry import _logits
+    a, lay = _logits(m, ids, "normal")
+    b, _ = _logits(m, edited, "normal")
+    tok = (~lay.slot_mask[row]) & (lay.bag_id[row] == span)
+    d = (a[row] - b[row]).abs().nan_to_num(0.0)
+    d = torch.where(a[row] != b[row], d, torch.zeros_like(d))
+    return float(d[tok].max())
+
+
+def test_reach_cut_at_or_past_max_depth_is_bit_identical():
+    import torch
+    from test_tul_strict_geometry import _ids, _logits
+    m = _reach_model(3)
+    ids = _ids()
+    a, _ = _logits(m, ids, "normal")
+    restore = install_reach_cut(m, 3)                    # passes 0,1,2 run; index 3 never
+    b, _ = _logits(m, ids, "normal")
+    restore()
+    assert torch.equal(a.nan_to_num(0.0), b.nan_to_num(0.0))
+    c, _ = _logits(m, ids, "normal")
+    assert torch.equal(a.nan_to_num(0.0), c.nan_to_num(0.0))     # restore restores
+
+
+def test_reach_cut_makes_spans_beyond_the_cut_exactly_invisible():
+    """Coda reads cell j-1, loop reach 1, depth 3. Uncut, span j sees h <= 4. With the cut
+    at pass index 1 (only pass 0 mixes) it sees h <= 2: an edit two spans back still moves
+    span j, an edit three spans back moves it by EXACTLY zero."""
+    from test_tul_strict_geometry import _edit, _ids, _pack
+    m = _reach_model(3)
+    ids = _ids()
+    _i, _inp, _lab, layout = _pack()
+    j = 5
+    e2 = _edit(ids, layout, 0, j - 2)
+    e3 = _edit(ids, layout, 0, j - 3)
+    assert _span_delta(m, ids, e3, 0, j) > 0.0, "uncut, h=3 must move span j at depth 3"
+    restore = install_reach_cut(m, 1)
+    try:
+        assert _span_delta(m, ids, e2, 0, j) > 0.0, "h=2 arrives at pass 0 and must move"
+        assert _span_delta(m, ids, e3, 0, j) == 0.0, "h=3 needs pass 1, which is cut"
+    finally:
+        restore()
+    restore0 = install_reach_cut(m, 0)
+    try:
+        assert _span_delta(m, ids, e2, 0, j) == 0.0, "with no mixing pass, h=2 is invisible"
+    finally:
+        restore0()
+
+
+def test_install_reach_cut_refuses_negative():
+    with pytest.raises(ValueError):
+        install_reach_cut(object(), -1)
