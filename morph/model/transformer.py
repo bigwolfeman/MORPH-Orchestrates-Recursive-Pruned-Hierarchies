@@ -46,6 +46,8 @@ from .tul import (TULCenterExit, TULConfig, TULGate, TULGateConfig, TULGradPass,
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
                   scatter_positions,
                   window_drop_mask)
+from .tul_fan import (TULFanMix, fan_repel_term, fan_stream_rank,
+                      fan_stream_stats)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
@@ -1128,6 +1130,60 @@ class _LoopMTPGate(nn.Module):
 # training run exactly where it found it (`_tul_code_grade` saves and restores both).
 _GRADE_SEED: int = 0x6EADE
 
+def span_ce_index(labels: Tensor, layout: SlotLayout):
+    """The scatter index that turns per-TOKEN CE into per-SPAN CE on a packed TUL row.
+
+    Returns ``(gid, keep_tok, lab, n_groups)``:
+
+    * ``gid`` ``[B, L]`` int64 — the flat bin ``b * (S + 1) + bag_id`` of every position,
+      forced to bin 0 wherever the position is not scored. Unscored positions contribute
+      an exactly-zero CE, so the dump into bin 0 is harmless and bin 0 is never read
+      (slot ``s`` reads bag ``s + 1``).
+    * ``keep_tok`` ``[B, L]`` bool — a real TOKEN with a real label. Slot positions are
+      excluded: their emit label carries no loss on this family (`emit_weight: 0.0`).
+    * ``lab`` — ``labels`` with ``-100`` clamped to 0, safe to hand to ``cross_entropy``
+      because ``keep_tok`` zeroes those entries afterwards.
+    * ``n_groups`` = ``S + 1``, the bag axis including the pad/dump bin.
+
+    ONE home, because two readers need the identical arithmetic and a drift between them
+    would be invisible: ``_tul_code_span_scorer`` (Explorative Modeling's
+    ``code_xm_select="coda"``) and ``_tul_fan_oracle`` (LXTUL's oracle-over-stream).
+    """
+    B = labels.shape[0]
+    S = int(layout.slot_valid.shape[1])
+    G = S + 1
+    keep_tok = (labels >= 0) & (~layout.slot_mask)
+    lab = labels.clamp_min(0)
+    gid = torch.arange(B, device=labels.device).view(B, 1) * G + layout.bag_id.clamp(0, S)
+    gid = torch.where(keep_tok, gid, torch.zeros_like(gid))
+    return gid, keep_tok, lab, G
+
+
+def accumulate_span_ce(xh: Tensor, w_head: Tensor, gid: Tensor, keep_tok: Tensor,
+                       lab: Tensor, n_groups: int) -> Tensor:
+    """``[B, n_groups]`` SUMMED token CE per bag, from a coda state and the tied head.
+
+    The logits are built ONE ROW at a time and never materialised for the whole batch:
+    ``[L, V]`` at ``V`` ~ 49k is 200 MB in fp32 and ``[B, L, V]`` is not affordable
+    inside an eval forward that already holds the loop's trajectory.
+    """
+    B = lab.shape[0]
+    out = torch.zeros(B * n_groups, device=lab.device, dtype=torch.float32)
+    for b in range(B):
+        logits = (xh[b].to(w_head.dtype) @ w_head.t()).float()          # [L, V]
+        ce = F.cross_entropy(logits, lab[b], reduction="none") * keep_tok[b]
+        out.index_add_(0, gid[b], ce)
+    return out.view(B, n_groups)
+
+
+def span_token_counts(gid: Tensor, keep_tok: Tensor, n_groups: int) -> Tensor:
+    """``[B, n_groups]`` count of SCORED tokens per bag — the weights a CE average needs."""
+    B = gid.shape[0]
+    out = torch.zeros(B * n_groups, device=gid.device, dtype=torch.float32)
+    out.index_add_(0, gid.reshape(-1), keep_tok.reshape(-1).float())
+    return out.view(B, n_groups)
+
+
 def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0
                        ) -> tuple[Tensor, Tensor]:
     """The Thought Register's CELL relation, in one place (``tul.slot_cells``).
@@ -1944,6 +2000,20 @@ class MORPHTransformer(nn.Module):
                     "REPLACES the core loop and writes ONE plan per slot through W_prefix.")
             self.tul_register = TULSlotRegister(d, cfg.tul.slot_cells,
                                                 cfg.tul.slot_cell_init == "distinct")
+
+        # ── LXTUL: the fan's exit mixture (TULConfig.fan_k; morph/model/tul_fan.py) ──
+        # `fan_k: 0` builds nothing and the attribute stays None, so every branch that
+        # reads it below is a Python-level constant that traces out and the forward is
+        # the one from before this key. The fan's K STREAMS are the register built just
+        # above (`slot_cells == fan_k`, enforced in TULConfig); THIS module is the one
+        # thing the register did not have — the exit selector that turns K streams into
+        # the ONE state every reader and the ordinary single-source `prefix_project`
+        # take. At `fan_mix: "mean"` it owns no parameter and draws no RNG; at
+        # `"softmax"` its ONE d->1 linear is zero-init and RNG-neutral, so a softmax
+        # arm's step-0 forward equals the mean control's exactly.
+        self.tul_fan: TULFanMix | None = None
+        if cfg.tul is not None and cfg.tul.fan_k > 0:
+            self.tul_fan = TULFanMix(d, cfg.tul.fan_k, cfg.tul.fan_mix)
 
         # ── The discrete thought (TULConfig.vq_codes; morph/model/tul_vq.py) ──────
         # K codes per span instead of one continuous vector, lifted into the K prefix
@@ -4238,6 +4308,15 @@ class MORPHTransformer(nn.Module):
         # depth instrument of that arm. An eval forward keeps `db_traj` None and the
         # forced-depth sweep reads the ruler's columns.
         _ct = self.tul_code_proj is not None and self.training
+        # LXTUL's fan (tul.fan_k) reads the SAME trajectory, and — like
+        # `prefix_source='trajectory'` and unlike every training-only reader above — it
+        # reads it at EVAL too. Two reasons: the repulsion term is charged per PASS, and
+        # the arm's headline instruments (`fan/stream_cos_t{t}`, `fan/stream_rank_t{t}`)
+        # are the collapse SHAPE across passes, which a val forward has to be able to see
+        # or the arm has no read at all (the standing
+        # `depth-summing-instruments-hide-pass-trades` rule). SCSE is already refused at
+        # `slot_cells > 1`, so no deviation carry can reach this list.
+        _fan = self.tul_fan is not None
         if (_hz_loss or _hz_gate) and _scse is not None:
             raise NotImplementedError(
                 "tul.horizon_weight>0 / tul.pass_readout='gated' under SCSE is not "
@@ -4246,7 +4325,7 @@ class MORPHTransformer(nn.Module):
                 "(the prefix_source='trajectory' precedent).")
         _db_traj: list[Tensor] | None = (
             [h] if (_db or _stage or _mep or _oz or _pp or _cr or _traj_src
-                    or _hz_loss or _hz_gate or _ct) else None)
+                    or _hz_loss or _hz_gate or _ct or _fan) else None)
         # Per-pass MUX: entry t-1 is the mask for `_db_traj[t]` — the slots whose realised
         # depth REACHES pass t and whose pass t carries gradient (a progressive prefix pass
         # is excluded: it is detached, so a term there would train nothing and still be
@@ -5463,13 +5542,9 @@ class MORPHTransformer(nn.Module):
         selection reads the coda, not a dropout draw. ``xn`` is bound on the first call
         (the code core produces it after the encoder runs)."""
         tc = self.cfg.tul
-        B = labels.shape[0]
-        S = int(layout.slot_valid.shape[1])
-        G = S + 1
-        keep_tok = (labels >= 0) & (~layout.slot_mask)
-        lab = labels.clamp_min(0)
-        gid = torch.arange(B, device=labels.device).view(B, 1) * G + layout.bag_id.clamp(0, S)
-        gid = torch.where(keep_tok, gid, torch.zeros_like(gid)).reshape(-1)
+        # ONE home for the token-CE -> span-CE scatter (`span_ce_index`), shared with
+        # LXTUL's oracle-over-stream. Bit-identical to the inline version this replaced.
+        gid, keep_tok, lab, G = span_ce_index(labels, layout)
         pos = self.tul.prefix_positions(layout, L)
         w_head = self.embed.lm_weight()
         state = {"xn": None}
@@ -5489,16 +5564,81 @@ class MORPHTransformer(nn.Module):
                 keep = slot_cell_inject_keep(layout, x_coda.dtype)
             xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
                                    attn_kwargs=tg_attn_kwargs, ret_reset_mask=tg_reset)
-            span_ce = torch.zeros(B * G, device=labels.device, dtype=torch.float32)
-            for b in range(B):
-                logits = (xh[b].to(w_head.dtype) @ w_head.t()).float()          # [L, V]
-                ce = F.cross_entropy(logits, lab[b], reduction="none") * keep_tok[b]
-                span_ce.index_add_(0, gid.view(B, -1)[b], ce)
-            span_ce = span_ce.view(B, G)
+            span_ce = accumulate_span_ce(xh, w_head, gid, keep_tok, lab, G)
             return span_ce[:, 1:]                       # slot s reads bag s+1: [B, S]
 
         score.bind = lambda xn: state.__setitem__("xn", xn)
         return score
+
+    @torch.compiler.disable
+    @torch.no_grad()
+    def _tul_fan_oracle(self, cells: Tensor, xh: Tensor, base: Tensor, x0: Tensor,
+                        bigram_emb, input_ids: Tensor, labels: Tensor,
+                        layout: SlotLayout, L: int, keep, coda_kw, tg_reset,
+                        stats: dict) -> None:
+        """LXTUL's ORACLE-OVER-STREAM (``tul.fan_k``) — the arm's falsifier, eval only.
+
+        PLR Figure 4 and Parallel-TTS's coverage@N, in the units MORPH is scored in. For
+        each of the K streams the coda is re-run with THAT STREAM ALONE written into the
+        prefix cells, through the SAME ``TULSlots.prefix_project`` the shipped forward
+        writes through, and the summed CE of every span is recorded. The three numbers
+        that come out, on identical rows and identical tokens:
+
+        ``fan/single_ce``  stream 0 alone — the K = 1 reading inside a K-stream model.
+        ``fan/mixed_ce``   the shipped write, read off the coda state ``xh`` this forward
+                           already produced, so it is not a second definition of the CE.
+        ``fan/oracle_ce``  the per-span MINIMUM over the K streams, picked after the fact.
+
+        THE PREDICTION THIS DECIDES (survey, "The falsifying prediction"): if
+        ``oracle_ce`` does not beat ``single_ce`` by more than a width control's own CE
+        gain over the ruler, the K streams are K copies with a gate on top and the width
+        branch closes. Stated this way, and not on the mixture's CE, because PLR's
+        oracle-ceiling result says their width did NOT raise the ceiling — it only closed
+        the gap to it, and a better gate would then buy CE without buying exploration.
+
+        ``fan/oracle_pick0`` is the selection-bias reading beside it: the fraction of
+        spans whose best stream IS stream 0. At 1/K the argmin is uninformative noise; at
+        1.0 the other streams never win and the fan is one stream plus decoration.
+
+        COST: K extra ``_back_region`` passes per eval batch, no backward, ``no_grad``,
+        and compiled code is left out of it (``torch.compiler.disable``) because the
+        loop's trip count is ``K`` and the logit matmul is per row. Never called on a
+        training step, and never under a plan ablation (the caller checks), because a
+        shuffled or zeroed write makes "which stream is best" meaningless.
+        """
+        k = int(cells.shape[2])
+        gid, keep_tok, lab, g_bins = span_ce_index(labels, layout)
+        w_head = self.embed.lm_weight()
+        n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]        # [B, S]
+        per_stream = []
+        for i in range(k):
+            values, pos = self.tul.prefix_project(cells[:, :, i], layout, L)
+            x_i = scatter_positions(base, pos, values)
+            xh_i = self._back_region(x_i, x0, bigram_emb, input_ids, inject_keep=keep,
+                                     attn_kwargs=coda_kw, ret_reset_mask=tg_reset)
+            per_stream.append(accumulate_span_ce(xh_i, w_head, gid, keep_tok,
+                                                 lab, g_bins)[:, 1:])
+        ce = torch.stack(per_stream, dim=-1)                           # [B, S, K]
+        mixed = accumulate_span_ce(xh, w_head, gid, keep_tok, lab, g_bins)[:, 1:]
+        # A span is scored only when its slot is real AND the span has scored tokens: a
+        # tail-pad slot and a slot whose next span fell off the row would otherwise enter
+        # the minimum at CE 0 and drag the oracle to an artefact.
+        ok = layout.slot_valid & (n_tok > 0)
+        denom = n_tok[ok].sum().clamp_min(1.0)
+        best, arg = ce.min(dim=-1)
+        stats["oracle_ce"] = float(best[ok].sum() / denom)
+        stats["single_ce"] = float(ce[..., 0][ok].sum() / denom)
+        stats["mixed_ce"] = float(mixed[ok].sum() / denom)
+        stats["oracle_gap"] = stats["single_ce"] - stats["oracle_ce"]
+        stats["oracle_pick0"] = float((arg[ok] == 0).float().mean()) if bool(ok.any()) else 0.0
+        stats["oracle_n_spans"] = float(ok.sum())
+        stats["oracle_n_tokens"] = float(n_tok[ok].sum())
+        for i in range(k):
+            # Each stream's own token-weighted CE, on the SAME spans. `stream_ce_k0` is
+            # `single_ce` by definition and the pair is asserted in tests/test_tul_fan.py;
+            # the spread across i is the direct "are these K copies" reading, and the
+            # oracle can only sit at or below the smallest of them.
+            stats[f"stream_ce_k{i}"] = float(ce[..., i][ok].sum() / denom)
 
     def _tul_db1_precheck(self, what: str) -> None:
         """Shared guards for :meth:`_tul_core_db1` and :meth:`_tul_core_db1_ladder`.
@@ -7651,6 +7791,15 @@ class MORPHTransformer(nn.Module):
         # every other model. Bound here rather than in the slot-loop branch because the
         # coda's key set is narrowed after the branch dispatch, beside `all_slots`.
         _pad_pos = None
+        # LXTUL's fan (tul.fan_k): the repulsion term and the arm's per-pass statistics.
+        # Bound here, beside `_pad_pos`, because the fold that adds the term to the loss
+        # and the eval-only oracle both sit AFTER the branch dispatch, and only the
+        # slot-loop branch can produce them (`fan_k` inherits the register's refusal of
+        # `tokens_through_core`, the FM planner and the code core). `None` / `{}` on every
+        # other path is the signal those folds branch on.
+        fan_repel_loss = None
+        fan_stats: dict[str, float] = {}
+        _fan_cells = None
         if tc.tokens_through_core:
             # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
             # RESOLVED SPEC AMBIGUITY — §7.1's A2 row says "Poisson/slot" in the depth
@@ -7872,7 +8021,46 @@ class MORPHTransformer(nn.Module):
             _reg_cells = None
             if _m > 1:
                 _reg_cells = h_slots.reshape(h_slots.shape[0], _S, _m, *h_slots.shape[2:])
-                h_slots = _reg_cells.mean(dim=2)
+                if self.tul_fan is None:
+                    h_slots = _reg_cells.mean(dim=2)
+                else:
+                    # ── LXTUL: the fan's exit mixture (tul.fan_mix) ───────────────
+                    # THE SAME SEAM the register's mean sits at, and for the same reason:
+                    # every reader between here and the write (the MUX, the span decoder,
+                    # SIGReg, the energy) takes ONE state per slot, so mixing HERE makes
+                    # all of them grade the state the coda actually gets. At
+                    # `fan_mix: "mean"` the mixture IS `cells.mean(dim=2)` — the register's
+                    # own read — so the mean arm differs from the register by its WRITE
+                    # alone (single-source, below), which is the width control the
+                    # `trajectory-prefix-is-width-plus-pad-artefact` note demands.
+                    h_slots, _fan_w = self.tul_fan(_reg_cells)
+                    fan_stats["mix_entropy"] = float(
+                        TULFanMix.entropy(_fan_w, layout.slot_valid).detach())
+                    fan_stats["mix_w_max"] = float(
+                        _fan_w[layout.slot_valid].amax(dim=-1).mean().detach()
+                        if bool(layout.slot_valid.any()) else 0.0)
+                    _fan_cells = _reg_cells
+                    # ── the repulsion (tul.fan_repel_lambda, tul.fan_repel_passes) ──
+                    # Read off the SAME live-carry trajectory every per-pass reader uses,
+                    # on the CELL axis `_tul_core` carries. The penalised passes are the
+                    # FIRST ones (PLR Theorem 4.4: the collapse is exponential in depth,
+                    # so pass 1 fights `L^2` and pass 6 fights `L^12`); every OTHER pass,
+                    # the seed included, is still measured and reported as
+                    # `fan/stream_cos_t{t}` under no_grad. Training only — at eval the
+                    # cosines are instruments and there is no term.
+                    if db_traj is not None:
+                        _rp = fan_repel_term(db_traj, layout.slot_valid, _m,
+                                             int(tc.fan_repel_passes), stats=fan_stats)
+                        if self.training and tc.fan_repel_lambda > 0.0:
+                            fan_repel_loss = _rp
+                        if not self.training:
+                            # The per-pass RANK, eval only: an eigendecomposition-free
+                            # trace formula per slot (`eval-probes-must-not-stall-the-gpu`),
+                            # but still K Gram products per pass, so it is not paid on a
+                            # training step. Bounded by K; the register read 1.24 of 4.
+                            for _t in range(len(db_traj)):
+                                fan_stats[f"stream_rank_t{_t}"] = fan_stream_rank(
+                                    db_traj[_t], layout.slot_valid, _m)
                 depths = depths.reshape(depths.shape[0], _S, _m)[:, :, 0].contiguous()
             # ── the discrete thought (tul.vq_codes; morph/model/tul_vq.py) ─────────
             # THE SAME SEAM the register's mean sits at, and for the same reason: every
@@ -8100,11 +8288,18 @@ class MORPHTransformer(nn.Module):
                                                  plan_mode, code_mode, code_given,
                                                  code_given_mask, input_ids)
                 h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
-            elif _reg_cells is not None:
+            elif _reg_cells is not None and self.tul_fan is None:
                 # The register's M cells go 1:1 into the M prefix cells (`prefix_k` is
                 # refused unless it equals `slot_cells`). The ablation runs on the STACK
                 # and the exit mean is read back off it, so a `shuffle` draws ONE
                 # permutation and the coda's cells and the reported `h_slots` agree.
+                #
+                # A FAN model deliberately does NOT come here. Its K streams were already
+                # mixed to ONE state at the register's mean seam above, and that state
+                # falls through to the single-source `prefix_project` in the `else` below
+                # — the strict ruler's write, at the ruler's prefix width. The register's
+                # 1:1 write would reintroduce exactly the 4x-wider readout that made its
+                # own 0.022 nat win unreadable.
                 _cells = self._tul_plan_ablate(_reg_cells, layout, plan_mode)
                 h_slots = _cells.mean(dim=2)
             elif _vq_cells is not None:
@@ -8428,6 +8623,39 @@ class MORPHTransformer(nn.Module):
             _rw = tc.row_contrast_lambda * rcon_loss
             groups["row_contrast_weighted"] = _rw.detach()
             groups["loss"] = groups["loss"] + _rw
+
+        # ── LXTUL: the fan's oracle instrument and its repulsion (tul.fan_k) ──────
+        # The oracle is EVAL ONLY and costs K extra coda passes, so it is built here, at
+        # the end of the forward, for the reason the critic's label is: it replays
+        # `_back_region`, which does not exist until the shipped coda has run, and it
+        # needs the exact carrier that coda read (`base`, the shipped `keep`, the shipped
+        # allow relation) so the replay differs in the WRITE and nothing else.
+        if (self.tul_fan is not None and _fan_cells is not None and not self.training
+                and labels is not None and groups is not None and xh is not None
+                and plan_mode == "normal"):
+            self._tul_fan_oracle(_fan_cells, xh, base, x0, bigram_emb, input_ids, labels,
+                                 layout, L, keep, _coda_kw, tg_reset, fan_stats)
+        if fan_repel_loss is not None and groups is not None:
+            # Same contract as `row_contrast_weighted` / `spandec_weighted`: the WEIGHTED
+            # term is exposed so train.py subtracts it and train/loss stays the MODEL's
+            # CE. `fan_repel` is the raw mean pairwise cosine over the penalised passes
+            # and has an ABSOLUTE reference — 1.0 is four identical streams, 0.0 four
+            # orthogonal ones, -1/(K-1) the simplex floor. Read it beside
+            # `fan/stream_cos_t{t}`, which reports EVERY pass including the ones the term
+            # never touches.
+            groups = dict(groups)
+            groups["fan_repel"] = fan_repel_loss.detach()
+            _fw = tc.fan_repel_lambda * fan_repel_loss
+            groups["fan_repel_weighted"] = _fw.detach()
+            groups["loss"] = groups["loss"] + _fw
+        if fan_stats and groups is not None:
+            # Every fan reading travels as a `fan_*` key so train.py can scan for the
+            # prefix: the per-pass cosines and ranks are a VARIABLE number of keys (the
+            # batch's realised max depth decides how many), which a fixed tuple cannot
+            # carry. train.py logs them under `fan/`.
+            groups = dict(groups)
+            for _k, _v in fan_stats.items():
+                groups[f"fan_{_k}"] = groups["loss"].new_tensor(_v)
 
         if spandec_pass_loss is not None and groups is not None:
             # Same contract as `spandec_weighted`: the WEIGHTED term is exposed so train.py
@@ -9157,16 +9385,12 @@ class MORPHTransformer(nn.Module):
             _zc = z.reshape(z.shape[0], _S, _m, z.shape[-1])          # [B, S, M, C]
             _cells = _zc[layout.slot_valid].double()                  # [N, M, C] valid slots
             if _cells.shape[0] > 0:
-                _xc = _cells - _cells.mean(dim=1, keepdim=True)
-                _g = _xc @ _xc.transpose(1, 2) / max(_m - 1, 1)       # [N, M, M]
-                _tr = _g.diagonal(dim1=1, dim2=2).sum(-1)
-                _fro2 = (_g * _g).sum((1, 2))
-                _er_slot = torch.where(_fro2 > 0, _tr * _tr / _fro2.clamp_min(1e-300),
-                                       torch.zeros_like(_tr))
-                _n = torch.nn.functional.normalize(_cells, dim=-1)
-                _gn = _n @ _n.transpose(1, 2)                          # [N, M, M]
-                _cos_slot = (_gn.sum((1, 2)) - _gn.diagonal(dim1=1, dim2=2).sum(-1)) \
-                    / float(_m * (_m - 1))
+                # ONE home for this arithmetic: `morph.model.tul_fan.fan_stream_stats`,
+                # shared with LXTUL's per-pass `fan/stream_rank_t{t}` so the register's
+                # headline reading and the fan's cannot drift apart. Bit-identical to the
+                # inline trace formula it replaced (float64, centered for the rank, raw
+                # for the cosine).
+                _er_slot, _cos_slot = fan_stream_stats(_cells)
                 within = {"slot_cell_eff_rank": float(_er_slot.mean()),
                           "slot_cell_pairwise_cos": float(_cos_slot.mean()),
                           "slot_cells": float(_m)}

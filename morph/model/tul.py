@@ -276,6 +276,47 @@ class TULConfig:
     # the control that separates "M cells of capacity" from "M cells that start out
     # looking at different things".
     slot_cell_init: str = "distinct"     # "distinct" | "same"
+    # ── LXTUL: THE FAN (arm `slot-spandec-strict-fan4`, 2026-09-19) ───────────────
+    # 0 is OFF and is the default on every model: nothing is built, no key enters the
+    # state dict, and the forward is bit-identical to the tree before this key.
+    #
+    # WHAT IT IS. `fan_k: K` runs K latent STREAMS per span through the ONE shared core.
+    # The streams ARE the Thought Register's cells — `tul_setup.build_tul_runtime` sets
+    # `slot_cells = fan_k`, so the per-stream learned trigger (`TULSlotRegister`), the
+    # within-slot loop relation (`slot_cell_relation`) and the cell-level layout in
+    # `_tul_core` are the register's, unchanged and not duplicated. Setting BOTH keys
+    # raises there rather than letting one silently win.
+    #
+    # WHAT IS NEW, and it is the whole arm. The register was the {K streams,
+    # deterministic} cell of the 2026-09-18 survey's 2x2 and it collapsed: rank 1.24 of 4,
+    # mean pairwise cosine 0.94, K-curve = the ruler's. The survey's reading, with PLR
+    # (arXiv 2601.03153) supplying the closed form, is that a CONTRACTIVE shared map
+    # collapses streams as `D(T) = L^(2T) D(0)` and nothing in the register opposed it.
+    # Three factors oppose it here, and the literature says each alone fails:
+    #   `fan_repel_lambda` x mean pairwise cosine among a slot's K streams, charged after
+    #        each of the FIRST `fan_repel_passes` passes. Early, because repelling at pass
+    #        6 fights `L^12` and at pass 1 fights `L^2`. `tul.row_contrast_lambda` is NOT
+    #        this term: it separates a ROW's slots and at `slot_cells > 1` it reads the
+    #        cells' MEAN, so it cannot see the within-slot axis the fan lives on.
+    #   `fan_mix` the exit selector — PLR's largest single contributor.
+    #   the oracle-over-stream instrument (`fan/oracle_ce`), eval only, which is the
+    #        falsifier: if picking the best stream after the fact does not beat stream 0
+    #        by more than a width control's own CE gain, the streams are four copies.
+    #
+    # THE WRITE IS THE RULER'S. The register wrote cell i into prefix cell i, so it
+    # differed from the strict ruler by the cells AND by a 4x wider readout — and the
+    # 2026-09-13 verdict was that its 0.022 CE win was the WIDTH. The fan collapses the K
+    # streams to ONE state at the register's mean seam, upstream of every reader, and that
+    # one state goes through the ordinary single-source `TULSlots.prefix_project`. So
+    # `prefix_k` is NOT forced to equal `fan_k` (it is at `slot_cells > 1` with the fan
+    # off) and at `prefix_k: 4` the fan's coda sees exactly the `prefix_k: 4` ruler's
+    # input. Every register refusal still applies: the fan inherits them through
+    # `slot_cells`.
+    # Record: lab/experiments/planned/2026-09-19-lxtul-fan4.md
+    fan_k: int = 0                       # K streams per span; 0 = off
+    fan_repel_lambda: float = 0.0        # weight of the pairwise-cosine repulsion
+    fan_repel_passes: int = 2            # repel after passes 1..this (PLR Thm 4.4)
+    fan_mix: str = "mean"                # "mean" (control) | "softmax" (learned gate)
     slot_id: int = 4                     # "<fim_pad>"; its LM-head logit is −inf (§3.1)
     token_state_dropout: float = 0.15    # Bowman word dropout on the coda input (§3.4)
     slot_mean_depth: int = 0             # 0 → cfg.mean_depth
@@ -1478,13 +1519,49 @@ class TULConfig:
             raise ValueError(
                 f"tul.slot_cell_init must be 'distinct' or 'same', got "
                 f"{self.slot_cell_init!r}")
+        # ── LXTUL: the fan (tul.fan_k) ────────────────────────────────────────
+        # Validated BEFORE the register block because the fan aliases `slot_cells` and
+        # relaxes exactly one of its rules (the 1:1 prefix write).
+        if self.fan_k < 0:
+            raise ValueError(f"tul.fan_k must be >= 0, got {self.fan_k}")
+        if self.fan_k == 1:
+            raise ValueError(
+                "tul.fan_k=1 is the strict ruler with extra machinery bolted on: one "
+                "stream has nothing to be repelled from, nothing to mix and nothing for "
+                "the oracle to choose between. Use 0 (off) or >= 2.")
+        if self.fan_mix not in ("mean", "softmax"):
+            raise ValueError(
+                f"tul.fan_mix must be 'mean' or 'softmax', got {self.fan_mix!r}")
+        if self.fan_repel_passes < 1:
+            raise ValueError(
+                f"tul.fan_repel_passes must be >= 1, got {self.fan_repel_passes}")
+        if self.fan_repel_lambda < 0.0:
+            raise ValueError(
+                f"tul.fan_repel_lambda must be >= 0, got {self.fan_repel_lambda}")
+        if self.fan_k == 0:
+            _fan_orphan = [n for n, v in (("fan_repel_lambda", self.fan_repel_lambda > 0.0),
+                                          ("fan_mix", self.fan_mix != "mean")) if v]
+            if _fan_orphan:
+                raise ValueError(
+                    f"{sorted(_fan_orphan)} set with tul.fan_k=0: no fan is built, so the "
+                    f"knobs would be silently ignored. Set tul.fan_k >= 2 or drop them.")
+        elif self.slot_cells != self.fan_k:
+            raise ValueError(
+                f"tul.fan_k={self.fan_k} needs tul.slot_cells={self.fan_k}: the fan's K "
+                f"streams ARE the Thought Register's cells and reuse its trigger, its "
+                f"within-slot loop relation and its cell-level layout. "
+                f"`tul_setup.build_tul_runtime` sets this for you from `fan_k` alone; got "
+                f"slot_cells={self.slot_cells}.")
         if self.slot_cells > 1:
-            if self.prefix_k != self.slot_cells:
+            if self.prefix_k != self.slot_cells and self.fan_k == 0:
                 raise ValueError(
                     f"tul.slot_cells={self.slot_cells} needs tul.prefix_k={self.slot_cells}: "
                     f"the register writes cell i into prefix cell i, 1:1, through the "
                     f"shared W_prefix[i]. Got prefix_k={self.prefix_k}. Raises rather than "
-                    f"dropping cells or duplicating them into a width nobody chose.")
+                    f"dropping cells or duplicating them into a width nobody chose. "
+                    f"(A FAN model is exempt: it mixes its K streams to ONE state and "
+                    f"writes that through the ordinary single-source prefix_project, so "
+                    f"its prefix width is free and is the ruler's.)")
             if self.prefix_source != "exit":
                 raise NotImplementedError(
                     f"tul.slot_cells>1 with tul.prefix_source={self.prefix_source!r}: both "

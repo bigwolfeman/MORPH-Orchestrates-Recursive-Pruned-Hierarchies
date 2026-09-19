@@ -177,6 +177,20 @@ def evaluate(
                 # the sampler, not the flow term. Read train/code_fm_rel and tul/code_fm_*.)
                 if _mk in out:
                     acc.setdefault(f"val/{_mk}", []).append(float(out[_mk]))
+            # ── LXTUL's fan (tul.fan_k), accumulated over the val batches ─────────
+            # The ORACLE family is eval-only and has no train-side twin, so it keeps the
+            # `fan/` namespace the arm is read in. The two readings the TRAIN step also
+            # emits (`stream_cos_t{t}`, `mix_entropy`) go to `val/fan_*` instead, so the
+            # two writers never contend for one wandb series at the same step.
+            _fan_train_side = ("mix_entropy", "mix_w_max", "repel_terms")
+            for _fk in [k for k in out if str(k).startswith("fan_")]:
+                if out[_fk] is None:
+                    continue
+                _name = str(_fk)[4:]
+                _dest = (f"val/fan_{_name}"
+                         if _name.startswith("stream_cos_t") or _name in _fan_train_side
+                         else f"fan/{_name}")
+                acc.setdefault(_dest, []).append(float(out[_fk]))
             if "ce_tokens_no_slots" in out:
                 # §7.2: CE without the plan MINUS CE with it. Positive ⇒ the coda is
                 # actually using the slot state (the C2 number, the h_z ablation).
@@ -3493,6 +3507,7 @@ def main(cfg: DictConfig) -> None:
                         "loopmtp_ponder_weighted",   # LoopMTP's ponder regulariser
                         "vq_weighted",       # arc: the discrete thought, 2026-09-13
                         "row_contrast_weighted",   # tul.row_contrast_lambda, 2026-09-13
+                        "fan_repel_weighted",      # LXTUL tul.fan_repel_lambda, 2026-09-19
                         "critic_weighted",   # arc E10 / 2026-09-12
                         "horizon_weighted",  # LoopMTP horizon alignment, 2026-09-14
                         "code_fm_weighted",   # TUL-Code flow term (the val side already
@@ -3669,6 +3684,16 @@ def main(cfg: DictConfig) -> None:
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
                     if _k.startswith("code_grade") and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
+                # LXTUL's fan (tul.fan_k): the repulsion term, the gate's entropy and the
+                # per-pass stream cosines. A VARIABLE number of keys (the batch's realised
+                # max depth decides how many `fan_stream_cos_t{t}` there are), so it is a
+                # scan and not a tuple. They get their OWN `fan/` namespace rather than
+                # `tul/` because the arm is scored on them: `fan/oracle_ce` against
+                # `fan/single_ce` is the falsifier, and burying it among 90 `tul/` keys
+                # is how a headline number stops being read.
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if _k.startswith("fan_") and out[_k] is not None:
+                        log[f"fan/{_k[4:]}"] = float(out[_k].detach())
                 # tul.oracle_z's honesty instrument: the ORACLE's own decoder loss at each
                 # of its T steps. A variable number of keys, so it is a scan and not a
                 # tuple — if these do not fall, the trajectory is not a descent and the

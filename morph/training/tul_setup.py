@@ -61,6 +61,7 @@ KNOWN_TUL_KEYS = frozenset({
     "pass_residual_lambda", "plast_weight", "prefix_k", "prefix_source", "progressive_p",
     "reinject_seed_every_pass", "recur_gate", "recur_gate_bias",
     "row_contrast_lambda", "row_contrast_tau",
+    "fan_k", "fan_mix", "fan_repel_lambda", "fan_repel_passes",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_cells", "slot_cell_init", "slot_chain", "slot_chain_detach",
     "vq_beta", "vq_codebook", "vq_codes", "vq_dim", "vq_groups", "vq_reset_after",
@@ -208,6 +209,24 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
 
     prefix_k = int(tc.get("prefix_k", 2))
 
+    # ── LXTUL: `tul.fan_k` ALIASES `tul.slot_cells` (morph/model/tul_fan.py) ──────
+    # The fan's K streams ARE the Thought Register's cells: the same per-stream learned
+    # trigger, the same within-slot loop relation, the same cell-level layout in
+    # `_tul_core`. Resolving the alias HERE, once, is what keeps that machinery
+    # un-duplicated — everything downstream (the model build, the cost accounting, the
+    # probes, the refusal list) reads `slot_cells` and needs no knowledge of the fan.
+    # Setting BOTH raises: one of them would otherwise win silently, and which one is
+    # exactly the kind of thing a reader cannot check from a config.
+    fan_k = int(tc.get("fan_k", 0))
+    slot_cells = int(tc.get("slot_cells", 1))
+    if fan_k > 0:
+        if slot_cells != 1:
+            raise ValueError(
+                f"tul.fan_k={fan_k} with tul.slot_cells={slot_cells}: fan_k IS the cell "
+                f"count (the fan's K streams are the Thought Register's cells). Set one "
+                f"of them, not both.")
+        slot_cells = fan_k
+
     # ── the span-length gate (docs/tul-gate-spec.md §1, §3, §12) ──────────────
     # `tul.gate: false` ⇒ gate_cfg and gate_spec are both None ⇒ no parameter is built,
     # the packer draws no random number, and the arm IS arm A1 (§9 invariant 1).
@@ -292,8 +311,12 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         critic_eps=float(tc.get("critic_eps", 0.1)),
         critic_replay_groups=int(tc.get("critic_replay_groups", 1)),
         prefix_source=str(tc.get("prefix_source", "exit")),
-        slot_cells=int(tc.get("slot_cells", 1)),
+        slot_cells=slot_cells,
         slot_cell_init=str(tc.get("slot_cell_init", "distinct")),
+        fan_k=fan_k,
+        fan_repel_lambda=float(tc.get("fan_repel_lambda", 0.0)),
+        fan_repel_passes=int(tc.get("fan_repel_passes", 2)),
+        fan_mix=str(tc.get("fan_mix", "mean")),
         vq_codes=int(tc.get("vq_codes", 0)),
         vq_codebook=int(tc.get("vq_codebook", 512)),
         vq_dim=int(tc.get("vq_dim", 0)),
@@ -498,6 +521,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "pass_residual_lambda": model_cfg.pass_residual_lambda,
         "prefix_source": model_cfg.prefix_source,
         "slot_cells": model_cfg.slot_cells,
+        "fan_k": model_cfg.fan_k,
+        "fan_mix": model_cfg.fan_mix,
+        "fan_repel_lambda": model_cfg.fan_repel_lambda,
+        "fan_repel_passes": model_cfg.fan_repel_passes,
         "center_exit": model_cfg.center_exit,
         "row_contrast_lambda": model_cfg.row_contrast_lambda,
         "row_contrast_tau": model_cfg.row_contrast_tau,
@@ -723,14 +750,42 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               "slots AND every cell of its own slot, LATER siblings included (the "
               "relation travels as `tg_relation` and REPLACES the attention branches' "
               "causal term; through `tg_allow` it would only narrow and would execute "
-              "as plain flattened causal - measured and fixed 2026-09-13). Cell i is "
-              "written 1:1 into prefix "
-              "cell i (prefix_k == slot_cells), the coda is unchanged, and the span "
+              "as plain flattened causal - measured and fixed 2026-09-13). "
+              + ("The M cells are LXTUL's K streams: they are MIXED to one state and "
+                 "written through the ordinary single-source prefix_project (see the "
+                 "LXTUL FAN line below), NOT 1:1 into the prefix cells. "
+                 if model_cfg.fan_k > 0 else
+                 "Cell i is written 1:1 into prefix "
+                 "cell i (prefix_k == slot_cells), ")
+              + "the coda is unchanged, and the span "
               "decoder grades the MEAN of the M cells. Built against the measured rank "
               "collapse (slot_eff_rank 5.7-7.3 in 1024 dims, pairwise cos 0.72-0.77). "
               "Read `val/slot_cell_eff_rank` - the rank WITHIN a slot - beside "
               "`val/slot_eff_rank` "
               "(lab/experiments/planned/2026-09-13-arc-thought-register.md)",
+              flush=True)
+    if model_cfg.fan_k > 0:
+        print(f"  LXTUL FAN ON: fan_k={model_cfg.fan_k} mix={model_cfg.fan_mix!r} "
+              f"repel_lambda={model_cfg.fan_repel_lambda} "
+              f"repel_passes={model_cfg.fan_repel_passes} prefix_k={model_cfg.prefix_k} "
+              f"- K latent STREAMS per span through the ONE shared core. The streams ARE "
+              f"the Thought Register's cells (fan_k aliases slot_cells, so the message "
+              f"above is this arm's loop); what is NEW is the three things the register "
+              f"did not have. (1) a pairwise-cosine REPULSION charged after passes 1.."
+              f"{model_cfg.fan_repel_passes} only, because PLR Thm 4.4 makes the collapse "
+              f"exponential in depth (pass 1 fights L^2, pass 6 fights L^12). (2) the "
+              f"exit MIXTURE: the K streams become ONE state at the register's mean seam "
+              f"and go through the ordinary SINGLE-SOURCE prefix_project, NOT the "
+              f"register's 1:1 cell write - so this arm's coda width is the strict "
+              f"ruler's and the 2026-09-13 width confound is closed by construction. "
+              f"(3) the ORACLE: at every val the coda is re-run once per stream and "
+              f"`fan/oracle_ce` is the per-span minimum. READ `fan/oracle_ce` AGAINST "
+              f"`fan/single_ce` FIRST - if the gap is inside a width control's own CE "
+              f"gain, the streams are copies and the width branch closes, whatever "
+              f"`fan/mixed_ce` says. Then `fan/stream_cos_t{{t}}` (1.0 = collapsed; the "
+              f"register read 0.94) and `fan/stream_rank_t{{t}}` (the register read 1.24 "
+              f"of 4) "
+              f"(lab/experiments/planned/2026-09-19-lxtul-fan4.md)",
               flush=True)
     if model_cfg.vq_codes > 0:
         _dc = model_cfg.vq_dim or (int(cfg.model.d_model) // model_cfg.vq_codes)

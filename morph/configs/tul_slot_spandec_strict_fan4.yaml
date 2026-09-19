@@ -1,0 +1,75 @@
+# LXTUL — arm "slot-spandec-strict-fan4": the EMPTY CELL of the latent-exploration 2x2.
+#
+# THE 2x2 (docs/references/looping-depth/latent-exploration/2026-09-18-latent-exploration-survey.md).
+# Axes: how many latent trajectories the loop carries, and whether the transition is
+# stochastic. Three of the four cells are already measured on THIS tree and all three are
+# flat: the strict slot loop (one stream, deterministic; K1-K6 +0.002, pass 1 does 89-95 %
+# of the work), LCTUL and LCTUL-D (one stream, stochastic; the thinker is context-blind,
+# the past is 1 % of its flow loss), and the Thought Register (K streams, deterministic;
+# four cells at effective rank 1.24 of 4, mean pairwise cosine 0.94, K-curve = the ruler's,
+# and its 0.022 CE win was prefix WIDTH). The fourth cell — K streams present at TRAINING
+# time, with an explicit diversity term, a learned selector and an oracle-over-stream
+# instrument — is empty, and the survey's "Proposal for the empty cell" is this arm.
+#
+# ONE FACTOR against `tul_slot_spandec_strict` at prefix_k 4: `tul.fan_k`. Everything
+# else on this file is that one factor's own settings.
+#
+# WHY ALL FOUR FACTORS, and the literature reason each alone fails:
+#   K = 4 STREAMS      the Thought Register's forward, unchanged: `fan_k` ALIASES
+#                      `tul.slot_cells`, so the per-stream learned trigger
+#                      (`TULSlotRegister`, `slot_cell_init: distinct` — four queries
+#                      pooling four different vectors from the span's OWN prelude states,
+#                      W_o zero-init so step 0 IS the ruler) and the within-slot loop
+#                      relation are reused and not rebuilt. The register alone collapsed.
+#   REPULSION          PLR (arXiv 2601.03153) Theorem 4.4: under an L-Lipschitz shared map
+#                      mean pairwise stream distance obeys D(T) = L^(2T) D(0), so a
+#                      contractive core (MORPH's is held at gain 0.89 by the slot-loop
+#                      gain constraint) collapses streams exponentially in depth. Charged
+#                      at the EARLY passes only: pass 1 fights L^2, pass 6 fights L^12.
+#                      `tul.row_contrast_lambda` is NOT this term — it separates a ROW's
+#                      slots and at slot_cells > 1 it reads the cells' MEAN.
+#   MIXTURE            PLR's ablation makes the gate its LARGEST contributor (Recall@20
+#                      0.0873 -> 0.0785 without it), ahead of the repulsion.
+#   ORACLE INSTRUMENT  PLR Figure 4 / Parallel-TTS coverage@N in MORPH's units, and the
+#                      arm's FALSIFIER. See the prereg.
+#
+# THE WIDTH CONFOUND IS CLOSED BY CONSTRUCTION. The register wrote cell i into prefix cell
+# i, so it differed from its ruler by the cells AND by a 4x wider readout
+# (`trajectory-prefix-is-width-plus-pad-artefact`). The fan mixes its four streams to ONE
+# state upstream of every reader and writes that through the ordinary single-source
+# `TULSlots.prefix_project`, so at `prefix_k: 4` this arm's coda input has exactly the
+# shape and the width a `prefix_k: 4` strict ruler's has.
+#
+# WHAT TO READ, in order. `fan/oracle_ce` against `fan/single_ce` FIRST — the falsifier.
+# Then `fan/stream_cos_t{t}` and `fan/stream_rank_t{t}` per pass (never their sum: the
+# `depth-summing-instruments-hide-pass-trades` rule), then the K-curve against the slot
+# family's +0.002 yardstick. `fan/mixed_ce` is context, not a verdict: a 5k CE cannot rank
+# looped against unlooped (`short-horizon-ce-is-not-a-verdict`).
+#
+# CONTROLS, both the same file with an EXTRA override and no second config:
+#   fan4-mean     `tul.fan_mix=mean tul.fan_repel_lambda=0` — four streams, no diversity
+#                 term and no gate. Isolates "K streams through a shared core" alone.
+#   fan4-norepel  `tul.fan_repel_lambda=0` — the gate without the repulsion, which is
+#                 PLR's own ablation order (gate first, repulsion weakest).
+#
+# COST: the register's (core over 4x64 = 256 cells instead of 64; L_total is UNCHANGED at
+# prefix_k 4 because the write is single-source), plus one d->1 gate (1,024 params,
+# zero-init, `_ternary_exclude`), plus one pairwise-cosine term over four cells at two
+# passes, plus — AT VAL ONLY — four extra coda passes for the oracle.
+#
+# Record: lab/experiments/planned/2026-09-19-lxtul-fan4.md
+# Note: .agents/notes/proposed/architecture/2026-09-19-lxtul-fan-streams.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  prefix_k: 4
+  fan_k: 4
+  slot_cell_init: distinct
+  fan_mix: softmax
+  fan_repel_lambda: 0.1
+  fan_repel_passes: 2
+
+wandb:
+  name: slot-spandec-strict-fan4
