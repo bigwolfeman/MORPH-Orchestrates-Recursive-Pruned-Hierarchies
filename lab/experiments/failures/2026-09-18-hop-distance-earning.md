@@ -1,6 +1,6 @@
 # Experiment: does the slot loop earn depth only where the content is HOPS away?
 
-Status: planned
+Status: failure
 Date: 2026-09-18
 Owner: Claude (session f9558148), sub-agent HopProbe, for Wolfe.
 
@@ -213,3 +213,110 @@ functional check of the probe at 1/20 of the pre-registered row count, not a run
 experiment, and the citation is a literature prior rather than a reading of it — but the
 order is on the record so a reader can judge that for themselves. The smoke's own numbers
 are reported when this file closes, beside the 480-row run they do not replace.
+
+## Results
+
+Three runs of `lab/divergence/hop_distance_probe.py` on the 3070 (MORPH checkout `99bd7c9`,
+480 rows, batch 4, depths 1,2,3,6,9,12,16, hops 6, planted, seed 0), 2026-09-19.
+Artifacts: `../results/2026-09-18-hop-distance-probe/` (one JSON and one `.txt` log per arm;
+the 24-row smoke that validated the scorer is superseded by the 480-row strict run). The
+retrained arms `prev-reach1` and `reach1` reached step 5000 healthy on the 5090 queue
+(whole-arm K1−K6 +0.0150 and +0.0013 on the runner's sweep). Intervals are the row
+bootstrap over 480 rows.
+
+**Localiser (P2), all three arms:** own-span 0.53 / 0.53 / 0.53, ΔCE(1) 0.19 / 0.19 / 0.19,
+ΔCE(6) 0.003 / 0.003 / 0.001. Teeth on every arm.
+
+**Per-bin K1−K6** (tokens binned by the span the localiser says they depend on most):
+
+| h | strict (reach all, loop 0) | reach1 (reach all, loop 1) | prev-reach1 (reach prev, loop 1) | prev-reach1: where the fall happens |
+|---|---|---|---|---|
+| 1 | +0.0019 [0.0014, 0.0023] | +0.0014 [0.0008, 0.0019] | +0.0109 [0.0094, 0.0123] | flat |
+| 2 | +0.0031 [0.0025, 0.0037] | +0.0017 [0.0011, 0.0023] | −0.0169 [−0.0189, −0.0147] | depth hurts (4.480 → 4.497) |
+| 3 | +0.0025 [0.0019, 0.0032] | +0.0044 [0.0036, 0.0053] | +0.0640 [0.0610, 0.0671] | pass 2 (4.550 → 4.485), flat after |
+| 4 | +0.0010 [0.0003, 0.0017] | +0.0020 [0.0011, 0.0029] | +0.0535 [0.0503, 0.0566] | pass 3 (4.599 → 4.558) |
+| 5 | +0.0004 [−0.0005, 0.0012] | −0.0005 [−0.0014, 0.0003] | +0.0288 [0.0255, 0.0320] | between pass 3 and 6 (4.533 → 4.498) |
+| 6 | −0.0007 [−0.0015, 0.0001] | −0.0032 [−0.0041, −0.0023] | −0.0203 [−0.0239, −0.0168] | depth hurts (4.505 → 4.526) |
+| spread | 0.0038 | 0.0076 | 0.0843 | |
+| Spearman(h, K1−K6) | −0.83 | −0.49 | −0.14 | |
+
+Token counts per bin on `prev-reach1`: 183k, 73k, 53k, 44k, 35k, 33k. The token-weighted mean
+of the bins is +0.016, the runner's whole-arm reading.
+
+**Planted copy pair** (benefit = CE_control − CE_planted, 2932 sites; > 0 means the copy was
+used). g = 0 positive control: strict 0.107, reach1 0.125, prev-reach1 0.162 (all depths
+within 0.01). On strict and reach1 every g from 1 to 6 is readable at depth 1 (0.063 → 0.025
+falling with distance) and constant across depth (|benefit(6) − benefit(1)| ≤ 0.005 for every
+g). On `prev-reach1`:
+
+| g | d1 | d2 | d3 | d6 | d9 | d16 | benefit(6) − benefit(1) |
+|---|---|---|---|---|---|---|---|
+| 1 | +0.102 | +0.088 | +0.084 | +0.078 | +0.076 | +0.073 | −0.024 |
+| 2 | +0.107 | +0.070 | +0.056 | +0.047 | +0.044 | +0.045 | −0.060 |
+| 3 | 0.000 | +0.064 | +0.052 | +0.037 | +0.034 | +0.033 | +0.037 |
+| 4 | 0.000 | 0.000 | +0.040 | +0.033 | +0.030 | +0.031 | +0.033 |
+| 5 | 0.000 | 0.000 | 0.000 | +0.027 | +0.024 | +0.028 | +0.027 |
+| 6 | 0.000 | 0.000 | 0.000 | +0.017 | +0.019 | +0.025 | +0.017 |
+
+The zeros are exact: the probe computes every (g, depth) cell (`_planted`, no mask), and
+when the source is out of reach the control and planted forwards are bit-identical under the
+strict geometry. A copy g spans back first becomes readable at depth g − 1.
+
+Scorecard:
+
+- **P1: two clauses hold, one fails on the letter.** Every strict bin is in the flat band
+  (largest |K1−K6| 0.0031) and the spread is 0.0038 < 0.015. Spearman is −0.83, outside the
+  |ρ| < 0.6 clause: the bins FALL by 0.004 nats from h = 1 to 6. The clause guarded against a
+  rise with h (row position); the trend has the opposite sign and lives inside the band.
+- **P2 HOLDS** on every arm.
+- **P3: the shape holds, the numbers do not.** h = 3 and 4 clear +0.020 and 4x the h = 1 bin
+  (5.9x, 4.9x); h = 5 clears +0.020 but not 4x (2.6x); h = 6 is NEGATIVE. The near bins are
+  not in the flat band (h = 1 +0.011, h = 2 −0.017). The plateau clause is unreadable: it
+  needs CE at depths 4 and 5, which the sweep did not include. What the bins do show is the
+  predicted arrival depth: the fall for h = 3 is complete at pass 2, for h = 4 at pass 3.
+- **P4 HOLDS.** `reach1` is flat in every bin (spread 0.0076, ρ −0.49), and its planted
+  benefits do not move with depth. The staircase is not row position.
+- **P5: the control is weak, the shape holds, the bar is missed.** g = 0 reads 0.107 to
+  0.162, above the 0.1 inert floor and far below the 0.5 the bars assumed. On strict and
+  reach1 every g sits inside [−0.05, +0.05] (holds). On `prev-reach1`, g ≥ 3 is positive at
+  +0.017 to +0.037 (bar +0.10: missed) and g = 1 is −0.024 (inside the band: holds). The
+  arrival depth g − 1 was not a numbered clause and is the cleanest reading in the table.
+
+## Verdict
+
+Failure by the letter: P3 and P5 miss their frozen numbers and P1 misses one clause. Not
+inconclusive on the question. The gather hypothesis said depth earning appears only where
+the geometry forces content to travel through the loop, arriving at pass h − 1; the
+`prev-reach1` staircase (h = 3 at pass 2, h = 4 at pass 3, h = 5 by pass 6; planted copies
+exactly invisible until pass g − 1) is that prediction, and the two controls are flat at the
+same rows with the same localiser. This is the first slot-loop arm in the tree whose K-curve
+has structure, and the family's +0.002 came from geometries that never forced a hop.
+
+What the frozen bars got wrong, and what the method could not separate:
+
+1. **Magnitude falls with h and turns negative.** The bars assumed a far-bin gain that does
+   not decay (≥ +0.020 at every h ≥ 3). The carry decays with hops, and at h = 6 and h = 2
+   depth HURTS. The same shape appeared in the toy the same day
+   (`../successes/2026-09-19-toy-eliminate6-hop-distance.md`: an untrained six-hop carry decays
+   to 0.668 by hop 4 and training repairs it). Whether the loss at h = 2 and h = 6 is a
+   fixed-capacity cell being overwritten by farther content (dilution) or a map that degrades
+   near content with every pass is not distinguishable here: both predict the same K-curve.
+2. **The plateau clause needs depths 4 and 5.** Not swept; unreadable, not falsified.
+3. **The planted signal is weak.** A single rare token gives g = 0 a 0.11 to 0.16 benefit,
+   so the g ≥ 3 arrivals of 0.02 to 0.04 are a fifth of the control and the +0.10 bar was set
+   for an instrument five times stronger than the one that ran.
+
+Next planned experiment: `../planned/2026-09-19-hop-distance-plateau-and-dilution.md`
+(every depth 1 to 8 on `prev-reach1`, a two-token planted copy, and the near-bin dilution
+read directly).
+
+## Updated hypothesis
+
+The strict slot loop carries content one cell per pass and loses part of it at every hop; a
+token h spans from its source earns at pass h − 1 an amount that falls with h (0.064, 0.054,
+0.029 at h = 3, 4, 5) and below zero by h = 6 at 5000 steps. Depth earning on this family is
+gather-limited AND carry-limited: the geometry decides whether a hop is forced, the per-pass
+carry decides how much of it arrives. The levers that follow are the ones that raise the
+carry per hop and stop near content from being overwritten (width, a per-pass write gate on
+the cell, a target that rewards far content), and every slot-loop arm should be scored on
+the per-hop K-curve, since a whole-arm mean of +0.015 was hiding +0.064 and −0.020.
