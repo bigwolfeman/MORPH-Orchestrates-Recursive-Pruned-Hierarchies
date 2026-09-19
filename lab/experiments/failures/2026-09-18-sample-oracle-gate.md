@@ -1,6 +1,6 @@
 # Sample-oracle gate: does sampling around the slot loop find alternatives the point state loses?
 
-Status: planned
+Status: failure (P1 and P3 fell; the branch-opening conditions were not met)
 
 Date: 2026-09-18. Instrument: `lab/divergence/sample_oracle_probe.py`. Hosts: Spark (real
 checkpoint), no training. Arm: `slot-spandec-strict` @ 5000 (the strict ruler, coda reach
@@ -103,3 +103,61 @@ is a reader or noise effect.
   entry to exit under the SAME reader, which cancels this.
 - 96 rows is 1/5 of the sweep's 480; CIs are wider. The gate is sized to detect a 0.05-nat
   gain, not a 0.005-nat one.
+
+## Results
+
+Run 2026-09-19 07:40-08:35 UTC on the Spark, `slot-spandec-strict@5000`, 96 rows, N = 16,
+seed 0. Artifacts: `../results/2026-09-18-sample-oracle-gate/sample_oracle_strict_5000.{json,txt}`;
+the per-(row, span, sample) sums in `morph-scratch/arc/results/sample_oracle_strict_5000.units.npz`
+(1.8 MB, private).
+
+| cell | det | mean of 16 | gain(1) | gain(4) | gain(16) [95 %] | cos_exit |
+|---|---|---|---|---|---|---|
+| entry, sigma 0.3, depth 1 | 4.2661 | 4.2668 | −0.0007 | +0.0066 | **+0.0117** [+0.0115, +0.0120] | 0.954 |
+| entry, sigma 0.3, depth 6 | 4.2646 | 4.2651 | −0.0003 | +0.0063 | **+0.0109** [+0.0106, +0.0112] | 0.962 |
+| entry, sigma 1.0, depth 1 | 4.2661 | 4.2738 | −0.0080 | +0.0116 | **+0.0251** [+0.0241, +0.0261] | 0.670 |
+| entry, sigma 1.0, depth 6 | 4.2646 | 4.2703 | −0.0056 | +0.0122 | **+0.0246** [+0.0236, +0.0257] | 0.720 |
+| exit, sigma 0.3, depth 6 | 4.2646 | 4.2654 | −0.0007 | +0.0080 | **+0.0144** [+0.0140, +0.0148] | — |
+| exit, sigma 1.0, depth 6 | 4.2646 | 4.2752 | −0.0100 | +0.0133 | **+0.0296** [+0.0282, +0.0311] | — |
+
+Scorecard:
+
+- **P1 FAILS.** `cos_exit` 0.962 at sigma 0.3 (predicted ≥ 0.98) and 0.720 at sigma 1.0
+  (predicted ≥ 0.90). Six passes leave the samples genuinely different; the loop does not
+  contract entry noise to one exit. The PLR Theorem 4.4 collapse does not describe this loop.
+- **P2 half.** Gains small as predicted (0.0109 < 0.02; 0.0246 < 0.05). The mean-over-samples
+  penalty at sigma 1.0 is +0.0057, not the predicted > 0.10: noise on the cell barely hurts.
+- **P3 FAILS as written.** Exit-noise gain exceeds entry-noise gain at both sigmas (1.32x
+  and 1.20x), in the predicted direction but short of the 2x bar.
+- **P4 HOLDS.** gain(16) at depth 6 minus depth 1: −0.0008 (sigma 0.3), −0.0005 (sigma 1.0).
+  Passes 2-6 turn none of the entry variation into alternatives.
+- **P5.** The first clause was mis-specified in the prereg (`oracle(1)` is sample 0, not the
+  mean over samples; they differ by 0.0002-0.0044 here, as they must). The sanity it meant
+  holds: gain is non-decreasing in N in every cell and mean ≥ det in every cell.
+- **Branch-opening conditions:** none met. gain(16) at sigma ≤ 0.3 is 0.011 (bar 0.05);
+  cos_exit at sigma 0.3 is 0.96 (bar < 0.90); growth with depth is negative (bar > 0.02).
+
+## Verdict
+
+Filed under `failures/` because P1 and P3 fell, and read as a closed gate: sampling around
+the strict slot loop finds no alternatives worth a selector on this corpus at this scale.
+The mechanism the prereg guessed (collapse) is wrong. The mechanism the data show is
+reader-side: at sigma 1.0 the exits differ by cosine 0.72 after six passes and the coda's
+CE moves by +0.006 on average and −0.030 at best-of-16. **The cell's direction is close to
+irrelevant to this reader.** That is the same fact as the-reader-was-the-limit (2026-09-18:
+−4.6 nats frozen, +0.177 adapted) from the sampling side, and it is why exit noise
+recovers as much as entry noise: the loop adds nothing to the diversity, and the reader
+would not use the diversity if it did.
+
+## Updated hypothesis
+
+1. Sampling and selection (Parallel-TTS, GRAM, PLR-style streams) cannot pay on the strict
+   slot loop while the coda is the reader: the reader is near-insensitive to the cell's
+   direction, so a better sample is not a better read. Any LXTUL arm must be scored with an
+   ADAPTED reader (`tul-code-target-uf` shape) or its oracle is bounded by this 0.03.
+2. The loop is not a strong contraction here (cos 0.72 survives six passes at sigma 1.0).
+   The register's rank-1.24 collapse was therefore not the loop squeezing distinct seeds
+   together; the seeds were never made distinct in a direction the reader reads.
+3. Next: repeat the two entry cells on `tul-code-target-uf@30000` (adapted reader) before
+   any fan arm trains. If gain(16) there exceeds 0.05 with cos_exit < 0.90, the fan has a
+   ceiling to reach for; if not, the LXTUL queue lines come out.
