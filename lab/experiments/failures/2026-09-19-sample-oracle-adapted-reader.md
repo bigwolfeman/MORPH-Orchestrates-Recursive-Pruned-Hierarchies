@@ -145,3 +145,21 @@ pass or held in separate streams with a repulsion, which is the LXTUL fan4 desig
 and the reason it is parked and not deleted. Before that arm earns a GPU slot, the cheaper
 test is a per-pass noise schedule on the ruler (noise at every pass, same N and sigma, same
 oracle), which the existing probe can do with one more hook site.
+
+## Correction (2026-09-19 16:50 UTC, Wolfe's review)
+
+The Verdict above over-reads the gate. "A different random entry gives a different result"
+is a property of the trained map, not a law, and both checkpoints here were trained
+deterministically AND with the terminal fixed-point term at weight 1.0, which rewards the map
+for pulling its last-pass state toward one point. The exits converging with depth (cosine
+0.80 → 0.85) is that term doing its job, not evidence about whether a slot loop trained WITH
+K streams and a repulsion can hold alternatives apart. Every paper in the survey that got
+exploration to work trained with the noise or the streams; the gate added noise to a map
+that never saw it.
+
+What stands: on these two checkpoints, inference-time entry sampling is worth about 0.015
+nats and the loop contracts it. What is withdrawn: the branch-opening rule as a proxy for
+the fan4 arm. The four fan4/pk4 queue lines are restored to `recon_arms.txt` (end of the
+queue, 16:50 UTC); the direct test is `fan4` against `fan4-norepel` on `fan/oracle_ce −
+fan/single_ce` and the stream cosine, as the fan4 prereg states. The `loop-contracts-entry-
+noise` memory carries the same correction.
