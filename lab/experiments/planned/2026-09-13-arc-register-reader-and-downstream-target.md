@@ -288,4 +288,60 @@ An inert auxiliary term is a noise source, and `-off2` becomes the only offset r
 
 ## Results
 
-(to be filled after the runs; predictions above are frozen)
+(predictions above are frozen; the file stays `planned` until `-off3` has run)
+
+### Interim, 2026-09-19: `slot-spandec-strict-off2` only
+
+`slot-register-m4-reader` has never run (0 lines in the runner's queue log). `-off3` is
+queued (line 7 of the paused queue) and runs after the LXTUL fan4 block. This block scores
+the clauses `-off2` alone can score; the artifacts are in
+`../results/2026-09-13-register/` (`sweep_slot-spandec-strict-off2_{2500,5000}.json`,
+`worth_slot-spandec-strict-off2_5000.json`, `slot_state_slot-spandec-strict-off2_5000.json`,
+`run_slot-spandec-strict-off2.txt`, scorer `off_score.py`, its output
+`paired_off2_5000.txt`). Run: 5000 steps at `2fc81d6`, exit 0, tripwire HEALTHY (max
+43.8 at step 224), final val_loss 4.4261 (ruler 4.4249), `val/spandec_target_offset` 2.0
+logged, `spandec_n_tokens` 5788 per val batch.
+
+| depth | `-off2` token CE | ruler |
+|---|---|---|
+| 1 | 4.3463 | 4.3490 |
+| 2 | 4.3448 | 4.3479 |
+| 3 | 4.3443 | 4.3476 |
+| 6 | 4.3439 | 4.3474 |
+| 9 | 4.3441 | 4.3476 |
+| 16 | 4.3448 | 4.3486 |
+
+K1−K6 +0.0023 [+0.0020, +0.0026]; K3−K6 +0.0004 [+0.0002, +0.0005] (ruler +0.0016 / +0.0002).
+At 2500: depth 1 4.6628, depth 6 4.6620.
+
+- **P-5, the `-off2` clause: TRUE.** K3−K6 +0.0004, below 0.002. The other two arms are
+  unscored.
+- **P-6, the `-off2` half: FALSE.** `-off2` is **0.0035 nats BETTER** than
+  `slot-spandec-strict` at depth 6, token-paired on the same 480 rows (identical per-row
+  token counts), CI [−0.0057, −0.0012] over a 2000-draw row bootstrap. The prereg gave this
+  outcome 25 %. Removing the next span from the decoder's target did not cost the coda its
+  first-token spike. `-off3` still to read.
+- **P-7: FALSE.** Worth profile (`worth_profile.py`, 192 rows, the same instrument and rows
+  as the ruler's 2026-09-12 reading), zero mode, offset bin 16+: `-off2` **+0.0941
+  [+0.0881, +0.1007]** against the ruler's +0.0905 [+0.0845, +0.0969]; delta +0.0035, bar
+  +0.02. Every bin sits inside the ruler's interval (zero mode 0.772/0.384/0.292/0.247/
+  0.190/0.134/0.094 vs 0.757/0.396/0.299/0.258/0.193/0.131/0.091; totals 0.1871 vs 0.1865;
+  shuffle mode the same story, 16+ bin +0.0363 vs +0.0332). The ruler's JSON predates the
+  `all_slots` mode; on `-off2` `all_slots` equals zero mode to three decimals, so zero mode
+  is the comparison. **The arm's reason to exist fails: grading z on span s+2 alone moves no
+  worth bin, near or far.**
+- **P-10, the `-off2` half: FALSE.** 10,672 tok/s at step 200 against the 11,000 bar
+  (ruler 11,759 on its own day). The ruler's rate line was measured at an earlier commit
+  with the paid-loop preamble live (`paid loop 8086` on that line, 0 on this one), so the
+  9 % gap is not a clean same-day pairing; the bar is missed on the number as written.
+- **P-8, P-9, P-11: unscored** (no `-off3`, no reader run).
+
+State probe (12 rows): |h| 90.9 → 101.8 → 105.6 at depths 1, 6, 16; cos to the depth-1
+exit 0.983 at depth 6, 0.965 at 16; the same slow drift the ruler family shows.
+
+Reading against the Binding: the "P-7 fails and P-6 holds" branch was written for an arm
+that pays CE for a target it cannot use. `-off2` pays nothing and gains 0.0035, and still
+moves no worth bin. That is the same branch's conclusion with less hedging: the objective is
+not the reason the far budget is unreached; the coda's worth by offset is set by what the
+cell can carry, which is the hop-distance line (`../failures/2026-09-19-hop-distance-plateau-and-dilution.md`).
+Verdict waits for `-off3` (P-8, P-9) so the offset dial is read at two points, not one.
