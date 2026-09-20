@@ -96,7 +96,7 @@ alone can be met by fixed orthogonal axes (content-free, the cosine's failure on
 deviation scores exactly 0 on epi. Tests: a line scores low and a spread high on `vol` at
 equal magnitude; the line family keeps most of its epi score and loses on the sum; fixed
 axes score 0 on epi and high on `vol`. The next arm is `epivol` against `epi`
-(`lab/experiments/planned/2026-09-20-lxtul-fan4-epivol.md`).
+(`lab/experiments/failures/2026-09-20-lxtul-fan4-epivol.md`).
 
 The epi arm at 5000 (filed: `lab/experiments/failures/2026-09-20-lxtul-fan4-epi.md`): the
 loophole was realised as a ONE-HOT stream per slot, not a shared line. The stream probe reads
@@ -108,6 +108,14 @@ epiplexity is high (`val/fan_epi_t1` 1.67 bits per feature) while the within-slo
 exactly 1. Oracle − mixed 0.011, inside the 0.008 to 0.016 every fan arm reads. The volume
 term scores a one-hot slot near zero (three of four deviations are the negated mean and the
 fourth is their sum: rank 1 Gram), so it is blind to this shape as well as to the line.
+
+The epivol arm at 5000 (filed: `lab/experiments/failures/2026-09-20-lxtul-fan4-epivol.md`):
+the term is NOT gamed. Rank 2.82 of 4, `axis_cos` 0.14, four live streams at norms 12.3 /
+10.4 / 9.3 / 11.5, raw cosines near −1/3, directions that change slot to slot. And the
+falsifier still fails: oracle − mixed 0.018 (bar 0.022), the softmax mix concentrated on
+stream 0 (entropy 0.41, pick0 0.71), streams 1 to 3 read 0.14 to 0.42 nats worse than the
+mixture. Three terms read; the K-stream branch closes. This note stays `proposed` as the
+record of the term that works, for any future fan; it does not ship.
 
 ## Risks
 
