@@ -3508,6 +3508,7 @@ def main(cfg: DictConfig) -> None:
                         "vq_weighted",       # arc: the discrete thought, 2026-09-13
                         "row_contrast_weighted",   # tul.row_contrast_lambda, 2026-09-13
                         "fan_repel_weighted",      # LXTUL tul.fan_repel_lambda, 2026-09-19
+                        "fan_select_gate_weighted",  # LXTUL tul.fan_mix=select, 2026-09-20
                         "critic_weighted",   # arc E10 / 2026-09-12
                         "horizon_weighted",  # LoopMTP horizon alignment, 2026-09-14
                         "code_fm_weighted",   # TUL-Code flow term (the val side already

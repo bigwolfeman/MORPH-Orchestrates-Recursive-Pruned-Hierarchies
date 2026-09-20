@@ -114,8 +114,10 @@ the term is NOT gamed. Rank 2.82 of 4, `axis_cos` 0.14, four live streams at nor
 10.4 / 9.3 / 11.5, raw cosines near −1/3, directions that change slot to slot. And the
 falsifier still fails: oracle − mixed 0.018 (bar 0.022), the softmax mix concentrated on
 stream 0 (entropy 0.41, pick0 0.71), streams 1 to 3 read 0.14 to 0.42 nats worse than the
-mixture. Three terms read; the K-stream branch closes. This note stays `proposed` as the
-record of the term that works, for any future fan; it does not ship.
+mixture. Three terms read. Wolfe (2026-09-20): not a closing; the reader is the limit (the coda trained
+on the mixture only, which concentrated on stream 0), so the next arm gives every stream a
+reader (`2026-09-20-fan-select-then-commit.md`). This note stays `proposed` as the record of
+the term that works; `epivol` is the diversity term the select arm composes.
 
 ## Risks
 

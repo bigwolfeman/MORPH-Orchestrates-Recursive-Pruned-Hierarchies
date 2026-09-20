@@ -48,7 +48,7 @@ from .tul import (TULCenterExit, TULConfig, TULGate, TULGateConfig, TULGradPass,
                   window_drop_mask)
 from .tul_carry import TULLoopCarry
 from .tul_fan import (FanReservoir, TULFanMix, fan_epi_term, fan_repel_term, fan_stream_rank,
-                      fan_vol_term,
+                      fan_vol_term, select_gate_loss, select_winners,
                       fan_stream_stats)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
@@ -5817,12 +5817,96 @@ class MORPHTransformer(nn.Module):
         stats["oracle_pick0"] = float((arg[ok] == 0).float().mean()) if bool(ok.any()) else 0.0
         stats["oracle_n_spans"] = float(ok.sum())
         stats["oracle_n_tokens"] = float(n_tok[ok].sum())
+        if self.tul_fan is not None and self.tul_fan.gate is not None and bool(ok.any()):
+            # A gated mix (softmax / select): how often the gate's argmax IS the oracle's
+            # argmin. Under `select` this is the number that says whether the deployable
+            # write (the argmax stream alone, which `mixed_ce` measures) tracks the
+            # K-pass oracle; 1/K is a gate that knows nothing.
+            _g = self.tul_fan.logits(cells).argmax(dim=-1)
+            stats["gate_agree"] = float((_g[ok] == arg[ok]).float().mean())
         for i in range(k):
             # Each stream's own token-weighted CE, on the SAME spans. `stream_ce_k0` is
             # `single_ce` by definition and the pair is asserted in tests/test_tul_fan.py;
             # the spread across i is the direct "are these K copies" reading, and the
             # oracle can only sit at or below the smallest of them.
             stats[f"stream_ce_k{i}"] = float(ce[..., i][ok].sum() / denom)
+
+    @torch.compiler.disable
+    def _tul_fan_select(self, cells: Tensor, xn: Tensor, x0: Tensor, bigram_emb,
+                        input_ids: Tensor, labels: Tensor | None, layout: SlotLayout,
+                        L: int, coda_kw, tg_reset, plan_mode: str, stats: dict
+                        ) -> tuple[Tensor, Tensor, Tensor | None]:
+        """``tul.fan_mix="select"``: ONE stream per slot, chosen, written alone.
+
+        Returns ``(state, weights, gate_loss)``: ``state`` ``[B, S, *carrier, C]`` is the
+        chosen stream gathered HARD out of ``cells`` (its gradient reaches that stream
+        alone), ``weights`` the gate's softmax (for ``fan/mix_entropy``), ``gate_loss`` the
+        gate's winner-prediction CE at train and ``None`` otherwise.
+
+        TRAIN (labels present, ``plan_mode == "normal"``): the oracle instrument's own
+        table is built here, BEFORE the write, under ``no_grad`` — K coda passes, stream
+        ``i`` written alone into every slot through the SAME ``prefix_project``, the
+        summed CE of the span after each slot — and the per-slot argmin is the winner
+        (:func:`select_winners`: with probability ``fan_select_eps`` a valid slot writes a
+        uniformly random stream instead, so a losing stream keeps a reader). The training
+        pass then writes the winner; the gate is trained on the detached winner
+        (:func:`select_gate_loss`). The selection passes read the coda's carrier before
+        token dropout (the winner is chosen on clean inputs) and the slot cells' own
+        injections are cut exactly as the shipped strict coda cuts them.
+
+        EVAL, or a plan ablation: the gate's argmax stream is written; no extra passes
+        (the oracle instrument after the coda reports ``gate_agree`` against its argmin).
+
+        COST at train: K no-grad ``_back_region`` passes and K per-row ``[L, V]`` logit
+        products per step; no activations are saved for them. Compiled code is left out
+        (the loop's trip count is K and the logit loop is per row), as the oracle is.
+
+        RNG: the coda's own dropout inside the selection passes and the eps draw both
+        read the GLOBAL stream at train, so a select arm is NOT RNG-aligned with a
+        softmax arm of the same seed (it is not expected to be: the write differs).
+        """
+        tc = self.cfg.tul
+        k = int(cells.shape[2])
+        logits = self.tul_fan.logits(cells)                                  # [B, S, K]
+        w = torch.softmax(logits, dim=-1).to(cells.dtype)
+        if not self.training or labels is None or plan_mode != "normal":
+            choice = logits.argmax(dim=-1).detach()
+            return self.tul_fan(cells, choice)[0], w, None
+        if tc.coda_token_input == "embed":
+            base = x0.unsqueeze(2).expand_as(xn) if self._is_hc else x0
+            base = self.input_norm(base)
+        else:
+            base = xn
+        keep = (slot_cell_inject_keep(layout, xn.dtype)
+                if (tc.coda_token_input == "embed" or self._tg_strict) else None)
+        with torch.no_grad():
+            gid, keep_tok, lab, g_bins = span_ce_index(labels, layout)
+            w_head = self.embed.lm_weight()
+            n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]            # [B, S]
+            per_stream = []
+            base_d = base.detach()
+            for i in range(k):
+                values, pos = self.tul.prefix_project(cells[:, :, i].detach(), layout, L)
+                x_i = scatter_positions(base_d, pos, values)
+                xh_i = self._back_region(x_i, x0, bigram_emb, input_ids, inject_keep=keep,
+                                         attn_kwargs=coda_kw, ret_reset_mask=tg_reset)
+                per_stream.append(accumulate_span_ce(xh_i, w_head, gid, keep_tok,
+                                                     lab, g_bins)[:, 1:])
+            ce = torch.stack(per_stream, dim=-1)                                # [B, S, K]
+            ok = layout.slot_valid & (n_tok > 0)
+            choice, forced = select_winners(ce, ok, float(tc.fan_select_eps))
+            if bool(ok.any()):
+                denom = n_tok[ok].sum().clamp_min(1.0)
+                best, arg = ce.min(dim=-1)
+                stats["select_oracle_ce"] = float(best[ok].sum() / denom)
+                stats["select_single_ce"] = float(ce[..., 0][ok].sum() / denom)
+                stats["select_pick0"] = float((arg[ok] == 0).float().mean())
+                stats["select_forced"] = float(forced[ok].float().mean())
+                stats["select_agree"] = float((logits.argmax(dim=-1)[ok] == arg[ok]).float().mean())
+                for i in range(k):
+                    stats[f"select_share_k{i}"] = float((choice[ok] == i).float().mean())
+        gate_loss = select_gate_loss(logits, choice, ok)
+        return self.tul_fan(cells, choice)[0], w, gate_loss
 
     def _tul_db1_precheck(self, what: str) -> None:
         """Shared guards for :meth:`_tul_core_db1` and :meth:`_tul_core_db1_ladder`.
@@ -7982,6 +8066,7 @@ class MORPHTransformer(nn.Module):
         # `tokens_through_core`, the FM planner and the code core). `None` / `{}` on every
         # other path is the signal those folds branch on.
         fan_repel_loss = None
+        fan_select_loss = None          # tul.fan_mix="select": the gate's winner CE (train)
         fan_stats: dict[str, float] = {}
         _fan_cells = None
         if tc.tokens_through_core:
@@ -8217,7 +8302,18 @@ class MORPHTransformer(nn.Module):
                     # own read — so the mean arm differs from the register by its WRITE
                     # alone (single-source, below), which is the width control the
                     # `trajectory-prefix-is-width-plus-pad-artefact` note demands.
-                    h_slots, _fan_w = self.tul_fan(_reg_cells)
+                    if self.tul_fan.mode == "select":
+                        # ── select-then-commit (tul.fan_mix="select", 2026-09-20) ──
+                        # NO mixture: ONE stream per slot is written alone. At train
+                        # the winner is picked by K no-grad coda passes (the oracle's
+                        # own table) and the gate is trained to predict it; at eval the
+                        # gate's argmax is written. Every reader after this seam (the
+                        # span decoder, the write) grades the state the coda gets.
+                        h_slots, _fan_w, fan_select_loss = self._tul_fan_select(
+                            _reg_cells, xn, x0, bigram_emb, input_ids, labels, layout, L,
+                            tg_attn_kwargs, tg_reset, plan_mode, fan_stats)
+                    else:
+                        h_slots, _fan_w = self.tul_fan(_reg_cells)
                     fan_stats["mix_entropy"] = float(
                         TULFanMix.entropy(_fan_w, layout.slot_valid).detach())
                     fan_stats["mix_w_max"] = float(
@@ -8854,6 +8950,17 @@ class MORPHTransformer(nn.Module):
             _fw = tc.fan_repel_lambda * fan_repel_loss
             groups["fan_repel_weighted"] = _fw.detach()
             groups["loss"] = groups["loss"] + _fw
+        if fan_select_loss is not None and groups is not None:
+            # tul.fan_mix="select": the gate's winner-prediction CE, folded like the
+            # repulsion (the WEIGHTED term is exposed so train.py subtracts it and
+            # train/loss stays the model's CE). `fan_select_gate_ce` has an absolute
+            # reference: ln K is a gate that predicts nothing, 0 a gate that always
+            # names the coda's winner.
+            groups = dict(groups)
+            groups["fan_select_gate_ce"] = fan_select_loss.detach()
+            _sw = tc.fan_select_gate_lambda * fan_select_loss
+            groups["fan_select_gate_weighted"] = _sw.detach()
+            groups["loss"] = groups["loss"] + _sw
         if self.tul_carry is not None and groups is not None and self._loop_carry_stats:
             # `tul.loop_carry`'s per-pass readings. A VARIABLE number of keys (the
             # batch's realised max depth decides how many), so it is a scan and not a

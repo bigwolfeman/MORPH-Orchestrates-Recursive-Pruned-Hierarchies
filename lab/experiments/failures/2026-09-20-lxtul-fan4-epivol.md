@@ -150,3 +150,13 @@ rest. The 0.017-nat CE advantage over the cosine arm is within seed spread and i
 reason to keep the fan. What stays: `fan_repel_mode: epivol` is the term to use if a fan
 is ever wanted again, because it is the one that is not gamed; and the stream probe's
 cosine matrix, sign families and norms are the instrument, never one scalar.
+
+**Amendment, 2026-09-20 (after filing; Wolfe).** The verdict stands as the record that the
+frozen predictions did not hold. The "branch closes" sentence in the updated hypothesis
+does NOT stand: Wolfe's reading is that this result is the thing to work on. What the
+arm shows, read again: the coda was trained on the softmax MIXTURE only; the mixture
+concentrated on stream 0; so the coda is a reader of stream 0, and `stream_ce_k1..3 −
+mixed` (+0.14 to +0.42) measures a reader that never saw those streams, not streams that
+carry nothing (`the-reader-was-the-limit`). The oracle is then a LOWER bound on what
+selection is worth, taken with the wrong reader. The next arm gives every stream a
+reader: `lab/experiments/planned/2026-09-20-lxtul-fan4-select.md` (select-then-commit).

@@ -318,6 +318,15 @@ class TULConfig:
     fan_repel_lambda: float = 0.0        # weight of the pairwise-cosine repulsion
     fan_repel_passes: int = 2            # repel after passes 1..this (PLR Thm 4.4)
     fan_mix: str = "mean"                # "mean" (control) | "softmax" (learned gate)
+    # `fan_mix: "select"` (2026-09-20, the reopened fan): NO mixture. At train, K no-grad
+    # coda passes (stream i written ALONE into every slot) pick each slot's winner by span
+    # CE; the training pass writes the winner alone; the gate is trained to PREDICT the
+    # winner (CE on its logits vs the detached argmin, weight `fan_select_gate_lambda`);
+    # with probability `fan_select_eps` a slot writes a uniformly random stream instead,
+    # so a losing stream keeps a reader (the winner-takes-all collapse guard). At eval the
+    # gate's argmax stream is written alone: the deployable number is ONE chosen stream.
+    fan_select_eps: float = 0.05         # P(random stream written) per slot, train only
+    fan_select_gate_lambda: float = 1.0  # weight of the gate's winner-prediction CE
     fan_repel_mode: str = "cos"          # "cos" (pairwise cosine) | "epi" (epiplexity of the
                                          # between-stream deviations) | "vol" (within-slot
                                          # volume) | "epivol" (both; morph/model/tul_fan.py)
@@ -1582,9 +1591,21 @@ class TULConfig:
                 "tul.fan_k=1 is the strict ruler with extra machinery bolted on: one "
                 "stream has nothing to be repelled from, nothing to mix and nothing for "
                 "the oracle to choose between. Use 0 (off) or >= 2.")
-        if self.fan_mix not in ("mean", "softmax"):
+        if self.fan_mix not in ("mean", "softmax", "select"):
             raise ValueError(
-                f"tul.fan_mix must be 'mean' or 'softmax', got {self.fan_mix!r}")
+                f"tul.fan_mix must be 'mean', 'softmax' or 'select', got {self.fan_mix!r}")
+        if not (0.0 <= self.fan_select_eps < 1.0):
+            raise ValueError(
+                f"tul.fan_select_eps must be in [0, 1), got {self.fan_select_eps}")
+        if self.fan_select_gate_lambda < 0.0:
+            raise ValueError(
+                f"tul.fan_select_gate_lambda must be >= 0, got {self.fan_select_gate_lambda}")
+        if self.fan_mix != "select" and (self.fan_select_eps != 0.05
+                                         or self.fan_select_gate_lambda != 1.0):
+            raise ValueError(
+                "tul.fan_select_eps / tul.fan_select_gate_lambda are read only under "
+                f"tul.fan_mix='select' (got fan_mix={self.fan_mix!r}): setting them on "
+                "another mixture would be a silent no-op.")
         if self.fan_repel_passes < 1:
             raise ValueError(
                 f"tul.fan_repel_passes must be >= 1, got {self.fan_repel_passes}")

@@ -1,0 +1,17 @@
+# LXTUL fan, SELECT-THEN-COMMIT (2026-09-20, the reopened fan). Composes the epivol arm
+# (the one diversity term that was not gamed) and replaces its softmax MIXTURE with a hard
+# per-slot choice: at train K no-grad coda passes pick each slot's winner by span CE and
+# the training pass writes the winner alone; the gate is trained to predict the winner;
+# at eval the gate's argmax stream is written alone. Every stream gets a reader.
+# Prereg: lab/experiments/planned/2026-09-20-lxtul-fan4-select.md
+defaults:
+  - tul_slot_spandec_strict_fan4_epivol
+  - _self_
+
+tul:
+  fan_mix: select
+  fan_select_eps: 0.05
+  fan_select_gate_lambda: 1.0
+
+wandb:
+  name: slot-spandec-strict-fan4-select

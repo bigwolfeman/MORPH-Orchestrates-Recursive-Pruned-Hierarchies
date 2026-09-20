@@ -59,7 +59,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-__all__ = ["TULFanMix", "fan_stream_stats", "fan_stream_cos", "fan_repel_term",
+__all__ = ["TULFanMix", "select_streams", "select_winners", "select_gate_loss", "fan_stream_stats", "fan_stream_cos", "fan_repel_term",
            "FanReservoir", "ridge_map", "epi_score", "fan_epi_term", "fan_vol_term"]
 
 
@@ -198,12 +198,13 @@ class TULFanMix(nn.Module):
         super().__init__()
         if k < 2:
             raise ValueError(f"TULFanMix needs k >= 2 streams, got {k}")
-        if mode not in ("mean", "softmax"):
-            raise ValueError(f"tul.fan_mix must be 'mean' or 'softmax', got {mode!r}")
+        if mode not in ("mean", "softmax", "select"):
+            raise ValueError(
+                f"tul.fan_mix must be 'mean', 'softmax' or 'select', got {mode!r}")
         self.k = int(k)
         self.mode = str(mode)
         self.gate: nn.Linear | None = None
-        if mode == "softmax":
+        if mode in ("softmax", "select"):
             # RNG-NEUTRAL CONSTRUCTION (the TULSlotRegister precedent): nn.Linear runs a
             # kaiming draw on the GLOBAL stream before the weight is overwritten, so the
             # stream is snapshotted and restored and no module built after this one is
@@ -218,8 +219,21 @@ class TULFanMix(nn.Module):
             self.gate._ternary_exclude = True
             torch.random.set_rng_state(_rng0)
 
-    def forward(self, cells: Tensor) -> tuple[Tensor, Tensor]:
-        """``cells`` ``[B, S, M, *carrier, C]`` -> ``(mixed, weights)``."""
+    def logits(self, cells: Tensor) -> Tensor:
+        """``[B, S, M]`` gate scores (fp32). Only a ``softmax`` / ``select`` mix has them."""
+        if self.gate is None:
+            raise RuntimeError("TULFanMix at fan_mix='mean' has no gate")
+        return self.gate(_cell_readout(cells)).squeeze(-1).float()
+
+    def forward(self, cells: Tensor, choice: Tensor | None = None) -> tuple[Tensor, Tensor]:
+        """``cells`` ``[B, S, M, *carrier, C]`` -> ``(state, weights)``.
+
+        ``mean`` / ``softmax``: ``state`` is the convex mixture, ``weights`` ``[B, S, M]``.
+        ``select``: ``state`` is ONE stream per slot, gathered HARD (its gradient reaches
+        that stream alone); ``choice`` ``[B, S]`` int64 names it, or, when ``None``, the
+        gate's argmax (the eval write). ``weights`` is still the gate's softmax so
+        ``fan/mix_entropy`` keeps its meaning (a gate that has not chosen reads ``ln K``).
+        """
         if cells.shape[2] != self.k:
             raise ValueError(
                 f"TULFanMix built for k={self.k} got {cells.shape[2]} streams "
@@ -228,8 +242,13 @@ class TULFanMix(nn.Module):
         if self.gate is None:
             w = cells.new_full((b, s, m), 1.0 / float(m))
         else:
-            logits = self.gate(_cell_readout(cells)).squeeze(-1)        # [B, S, M]
-            w = torch.softmax(logits.float(), dim=-1).to(cells.dtype)
+            w = torch.softmax(self.logits(cells), dim=-1).to(cells.dtype)
+        if self.mode == "select":
+            if choice is None:
+                choice = w.argmax(dim=-1)
+            return select_streams(cells, choice), w
+        if choice is not None:
+            raise ValueError(f"TULFanMix at fan_mix={self.mode!r} takes no choice")
         shape = (b, s, m, *([1] * (cells.dim() - 4)), 1)
         return (cells * w.view(shape)).sum(dim=2), w
 
@@ -240,6 +259,59 @@ class TULFanMix(nn.Module):
         if w.shape[0] == 0:
             return weights.sum() * 0.0
         return (-(w * w.log()).sum(-1)).mean()
+
+
+def select_streams(cells: Tensor, choice: Tensor) -> Tensor:
+    """``cells`` ``[B, S, M, *carrier, C]``, ``choice`` ``[B, S]`` -> ``[B, S, *carrier, C]``.
+
+    A hard gather: the returned state IS stream ``choice[b, s]`` of slot ``(b, s)`` and its
+    gradient flows to that stream alone. ``choice`` is validated against ``M`` so a stale
+    index from a different K cannot silently read the wrong stream.
+    """
+    b, s, m = cells.shape[:3]
+    if choice.shape != (b, s):
+        raise ValueError(f"select_streams: choice {tuple(choice.shape)} for cells {tuple(cells.shape)}")
+    if choice.numel() and (int(choice.min()) < 0 or int(choice.max()) >= m):
+        raise ValueError(f"select_streams: choice out of range for M={m}")
+    idx = choice.view(b, s, 1, *([1] * (cells.dim() - 3))).expand(b, s, 1, *cells.shape[3:])
+    return cells.gather(2, idx).squeeze(2)
+
+
+def select_winners(span_ce: Tensor, valid: Tensor, eps: float,
+                   generator: torch.Generator | None = None) -> tuple[Tensor, Tensor]:
+    """The per-slot WINNER of ``fan_mix: "select"`` from the K single-stream span CEs.
+
+    ``span_ce`` ``[B, S, K]`` is the summed CE of the span AFTER slot ``s`` when stream
+    ``k`` alone is written into every slot (the oracle instrument's own table, built at
+    train time under ``no_grad``). Returns ``(choice, forced)``: ``choice`` ``[B, S]`` is the
+    argmin, except that with probability ``eps`` a VALID slot is handed a uniformly random
+    stream instead (``forced`` marks those) — the winner-takes-all guard: a stream that
+    never wins would otherwise never be read, and never being read is why it never wins.
+    Invalid slots get 0 (they are never written; the value is inert).
+    """
+    if span_ce.dim() != 3:
+        raise ValueError(f"select_winners wants [B, S, K], got {tuple(span_ce.shape)}")
+    b, s, k = span_ce.shape
+    choice = span_ce.argmin(dim=-1)
+    forced = torch.zeros(b, s, dtype=torch.bool, device=span_ce.device)
+    if eps > 0.0:
+        u = torch.rand(b, s, device=span_ce.device, generator=generator)
+        forced = (u < eps) & valid
+        rnd = torch.randint(0, k, (b, s), device=span_ce.device, generator=generator)
+        choice = torch.where(forced, rnd, choice)
+    choice = torch.where(valid, choice, torch.zeros_like(choice))
+    return choice, forced
+
+
+def select_gate_loss(logits: Tensor, choice: Tensor, valid: Tensor) -> Tensor:
+    """Mean CE of the gate's ``[B, S, K]`` logits against the DETACHED winner over VALID
+    slots — the gate learns to predict which stream the coda will read best, so that at
+    eval its argmax stands in for the K-pass oracle. Exactly 0 gradient into the streams:
+    the logits are the gate's own linear on the cell readout, and the loss is on them."""
+    if not bool(valid.any()):
+        return logits.sum() * 0.0
+    lg = logits[valid].float()
+    return F.cross_entropy(lg, choice[valid].detach(), reduction="mean")
 
 
 @torch.no_grad()

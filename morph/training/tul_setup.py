@@ -63,6 +63,7 @@ KNOWN_TUL_KEYS = frozenset({
     "row_contrast_lambda", "row_contrast_tau",
     "fan_k", "fan_mix", "fan_repel_lambda", "fan_repel_passes",
     "fan_repel_mode", "fan_epi_features", "fan_epi_ridge", "fan_epi_eta",
+    "fan_select_eps", "fan_select_gate_lambda",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_cells", "slot_cell_init", "slot_chain", "slot_chain_detach",
     "vq_beta", "vq_codebook", "vq_codes", "vq_dim", "vq_groups", "vq_reset_after",
@@ -322,6 +323,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_epi_features=int(tc.get("fan_epi_features", 64)),
         fan_epi_ridge=float(tc.get("fan_epi_ridge", 3.0)),
         fan_epi_eta=float(tc.get("fan_epi_eta", 30.0)),
+        fan_select_eps=float(tc.get("fan_select_eps", 0.05)),
+        fan_select_gate_lambda=float(tc.get("fan_select_gate_lambda", 1.0)),
         vq_codes=int(tc.get("vq_codes", 0)),
         vq_codebook=int(tc.get("vq_codebook", 512)),
         vq_dim=int(tc.get("vq_dim", 0)),
@@ -532,6 +535,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_repel_lambda": model_cfg.fan_repel_lambda,
         "fan_repel_passes": model_cfg.fan_repel_passes,
         "fan_repel_mode": model_cfg.fan_repel_mode,
+        "fan_select_eps": model_cfg.fan_select_eps,
+        "fan_select_gate_lambda": model_cfg.fan_select_gate_lambda,
         "fan_epi_features": model_cfg.fan_epi_features,
         "fan_epi_ridge": model_cfg.fan_epi_ridge,
         "fan_epi_eta": model_cfg.fan_epi_eta,
@@ -800,6 +805,11 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         print(f"  LXTUL FAN ON: fan_k={model_cfg.fan_k} mix={model_cfg.fan_mix!r} "
               f"repel_mode={model_cfg.fan_repel_mode!r} repel_lambda={model_cfg.fan_repel_lambda} "
               f"repel_passes={model_cfg.fan_repel_passes} prefix_k={model_cfg.prefix_k} "
+              + (f"SELECT eps={model_cfg.fan_select_eps} gate_lambda={model_cfg.fan_select_gate_lambda} "
+                 f"(no mixture: K no-grad coda passes pick each slot's winner at train, the "
+                 f"winner is written ALONE, the gate learns to predict it, the eval write is "
+                 f"the gate's argmax stream) " if model_cfg.fan_mix == "select" else "")
+              + 
               f"- K latent STREAMS per span through the ONE shared core. The streams ARE "
               f"the Thought Register's cells (fan_k aliases slot_cells, so the message "
               f"above is this arm's loop); what is NEW is the three things the register "
