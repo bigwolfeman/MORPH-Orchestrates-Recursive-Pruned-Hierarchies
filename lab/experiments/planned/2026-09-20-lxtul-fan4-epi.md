@@ -76,8 +76,10 @@ with `fan_score.py` (wandb `*_final` keys, the sweep JSON, the RATE line).
 
 ## Not verified before launch
 
-- A GPU smoke of the composed config: attempted on the Spark from the synced working tree
-  before the queue line is added; the runner's smoke gate is the second check.
+- A GPU smoke of the composed config: DONE on the Spark 2026-09-20 09:31 to 09:35 UTC from
+  the working tree at b01564e, the runner's 12-step smoke command, exit 0, the val ran and
+  `fan/epi_t0..8` logged (0.29 to 0.18 bits per feature at step 12). Not a reading; the
+  runner's own smoke gate runs again before the arm starts.
 - The gradient magnitude of the epi term against the cosine's at λ 0.1 on the real
   shapes; P-7 reads it.
 - Whether `fan_epi_t{t}` on bf16 autocast carries enough precision: the score runs in
