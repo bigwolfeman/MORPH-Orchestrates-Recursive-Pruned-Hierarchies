@@ -79,3 +79,17 @@ by 0.005 with `gate_agree` above 0.40. Tests: `tests/test_tul_fan_select.py`.
   noise. 0.05 is the standard relaxed winner-takes-all value and P-6 reads the outcome.
 - The selection passes run the coda in train mode (its own dropout draws RNG), so a select
   arm is not RNG-aligned with a softmax arm of the same seed. Documented in the method.
+
+## Outcome (2026-09-20, measured)
+
+Filed as a failure: `lab/experiments/failures/2026-09-20-lxtul-fan4-select.md`. What held:
+winner-takes-all made four individually readable streams (spread 0.076) with 0.113 nats
+of oracle value, five times the mixture arms', and no stream starved (smallest share
+0.078). What failed: the gate's argmax cashes 0.014 of the 0.113 and agrees with the
+oracle at chance (0.33, gate CE at ln 4), and the deployed one-stream write is 0.086
+nats behind the width partner pk4 on paired rows. The selection is causal: from the
+exit state, before the span, the winning mode is not predictable. The follow-up keeps
+every stream in the coda and lets the coda's per-token attention select
+(`2026-09-20-fan-write-all-wta.md`). This note stays proposed as the record of the
+responsibility term, which the follow-up reuses.
+

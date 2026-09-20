@@ -1,0 +1,7 @@
+slot-spandec-strict-fan4-select t=0 slots=2573 cos=+0.4136 rank=1.932 sv2../sv1=[0.551 0.408 0.000] shared=0.749 pattern=+--- (0.73) axis_cos=0.172 norms=24.9 15.2 12.4 13.7
+slot-spandec-strict-fan4-select t=1 slots=2573 cos=-0.2855 rank=2.887 sv2../sv1=[0.893 0.813 0.000] shared=0.203 pattern=+--- (0.44) axis_cos=0.099 norms=29.2 25.0 23.4 24.3
+slot-spandec-strict-fan4-select t=2 slots=2573 cos=-0.2500 rank=2.822 sv2../sv1=[0.844 0.772 0.000] shared=0.279 pattern=+--- (0.81) axis_cos=0.130 norms=31.9 24.1 22.3 22.6
+slot-spandec-strict-fan4-select t=3 slots=2573 cos=+0.2274 rank=2.720 sv2../sv1=[0.792 0.699 0.000] shared=0.653 pattern=+--- (0.83) axis_cos=0.185 norms=36.1 26.2 25.7 24.4
+slot-spandec-strict-fan4-select t=4 slots=2573 cos=+0.5358 rank=2.643 sv2../sv1=[0.761 0.662 0.000] shared=0.806 pattern=+--- (0.67) axis_cos=0.270 norms=40.0 32.3 31.6 30.7
+slot-spandec-strict-fan4-select t=5 slots=2573 cos=+0.6396 rank=2.598 sv2../sv1=[0.745 0.643 0.000] shared=0.853 pattern=+--- (0.52) axis_cos=0.341 norms=43.2 36.5 35.8 35.7
+slot-spandec-strict-fan4-select t=6 slots=2573 cos=+0.6774 rank=2.587 sv2../sv1=[0.742 0.638 0.000] shared=0.870 pattern=+--- (0.48) axis_cos=0.375 norms=46.0 39.4 38.9 39.4

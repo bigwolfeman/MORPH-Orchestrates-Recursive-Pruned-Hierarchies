@@ -1,0 +1,6 @@
+Paired depth-6 token CE gap at step 5000 on the same 480 rows (511,089 tokens; tok_index identical across the two sweeps).
+Block bootstrap over 1024-token blocks (500 blocks), 2000 draws, 95 % interval. Computed 2026-09-20 from
+sweep_<arm>_5000.<arm>.tokens.npz (select from the 5090 runner, pk4 from the Spark readouts), the fan4 pairing's method.
+
+depth 1: select 4.4335  pk4 4.3414  select - pk4 = +0.0921 [+0.0889, +0.0956]
+depth 6: select 4.4259  pk4 4.3398  select - pk4 = +0.0861 [+0.0830, +0.0894]
