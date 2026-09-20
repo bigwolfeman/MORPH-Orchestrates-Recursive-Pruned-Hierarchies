@@ -192,3 +192,16 @@ is 0.086 nats behind a single stream of the same width.
 5. The first-iteration gain's climb under winner-takes-all is a new reading with no
    instrument on its cause; it plateaued at 20 here and did not detonate, and the all arm
    carries the same term, so its `loop/core_gain_t0` is read beside this one.
+
+**Correction, 2026-09-20 (Wolfe's reading, after filing).** Two things the Updated
+hypothesis got wrong or over-stated. (a) The defect is a TRAIN/EVAL MISMATCH, not only a
+weak gate: at train the coda is fed the target-chosen stream in 95 % of slots and at eval
+the gate's guess, so the coda is trained on one input distribution and deployed on
+another — the hindsight-fitted-z trap (`fitted-z-used-the-answer`, 2026-09-12) in a new
+form. A longer-trained gate cannot fix that. (b) The 0.086 against pk4 is a tight interval
+on 511k paired tokens but a 5,000-step CE gap, which by the tree's standing rule does not
+rank architectures (`short-horizon-ce-is-not-a-verdict`); P-5 was written as if it did.
+The TUL score is the K-curve, on which this arm is the fan family's best (+0.0076). The
+write-all arm removes the mismatch by construction: the same forward at train and eval,
+no target in the selection.
+
