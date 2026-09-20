@@ -443,9 +443,14 @@ def _fan_vol_pass(state: Tensor, valid: Tensor, m_cells: int, eta: float) -> Ten
     dev = sel - sel.mean(dim=1, keepdim=True)
     scale = sel.norm(dim=-1).mean(dim=1, keepdim=True).unsqueeze(-1).clamp_min(1e-6)
     dev = dev / scale
-    g = dev @ dev.transpose(1, 2)                                      # [N, M, M]
-    eye = torch.eye(m_cells, dtype=g.dtype, device=g.device)
-    ld = torch.linalg.slogdet(eye + float(eta) * g)[1]                 # [N]
+    # Autocast OFF for the Gram: under bf16 autocast the matmul would come back in bf16 and
+    # `slogdet` refuses low-precision inputs (the first Spark smoke of `epivol`, 2026-09-20).
+    # The epi path is safe because its readout is double, which autocast leaves alone.
+    with torch.autocast(device_type=dev.device.type, enabled=False):
+        d32 = dev.float()
+        g = d32 @ d32.transpose(1, 2)                                  # [N, M, M] fp32
+        eye = torch.eye(m_cells, dtype=g.dtype, device=g.device)
+        ld = torch.linalg.slogdet(eye + float(eta) * g)[1]             # [N]
     return (0.5 * ld / math.log(2) / float(m_cells - 1)).mean().to(state.dtype)
 
 

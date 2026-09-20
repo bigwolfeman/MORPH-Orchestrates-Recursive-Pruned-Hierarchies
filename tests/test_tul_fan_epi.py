@@ -268,3 +268,20 @@ def test_vol_and_epivol_modes_build_and_reach_the_loss():
         assert any(str(o).startswith("fan_stream_cos_t") for o in out)
         out["loss"].backward()
         assert m.tul_register.W_o.weight.grad is not None
+
+
+def test_volume_and_epi_terms_run_under_bf16_autocast():
+    """The trainer runs the forward under bf16 autocast; `slogdet` refuses bf16, and the
+    first Spark smoke of `epivol` died on exactly that. Both terms must finish and agree
+    with their fp32 values under CPU bf16 autocast."""
+    valid = torch.ones(1, 16, dtype=torch.bool)
+    res = FanReservoir(24, 16, seed=1, hidden=32)
+    traj = _traj_family(0, "ortho")
+    v32 = fan_vol_term(traj, valid, 4, 1, 30.0).item()
+    e32 = fan_epi_term(traj, valid, 4, 1, res, 3.0, 30.0).item()
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        v16 = fan_vol_term(traj, valid, 4, 1, 30.0)
+        e16 = fan_epi_term(traj, valid, 4, 1, res, 3.0, 30.0)
+    assert torch.isfinite(v16) and torch.isfinite(e16)
+    assert v16.item() == pytest.approx(v32, rel=5e-2)
+    assert e16.item() == pytest.approx(e32, rel=5e-2)
