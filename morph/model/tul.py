@@ -318,6 +318,11 @@ class TULConfig:
     fan_repel_lambda: float = 0.0        # weight of the pairwise-cosine repulsion
     fan_repel_passes: int = 2            # repel after passes 1..this (PLR Thm 4.4)
     fan_mix: str = "mean"                # "mean" (control) | "softmax" (learned gate)
+    fan_repel_mode: str = "cos"          # "cos" (pairwise cosine) | "epi" (epiplexity of the
+                                         # between-stream deviations, morph/model/tul_fan.py)
+    fan_epi_features: int = 64           # reservoir width F (epi only)
+    fan_epi_ridge: float = 3.0           # ridge rho of the readout (epi only)
+    fan_epi_eta: float = 30.0            # saturation eta inside the log-det (epi only)
     slot_id: int = 4                     # "<fim_pad>"; its LM-head logit is −inf (§3.1)
     token_state_dropout: float = 0.15    # Bowman word dropout on the coda input (§3.4)
     slot_mean_depth: int = 0             # 0 → cfg.mean_depth
@@ -1585,9 +1590,20 @@ class TULConfig:
         if self.fan_repel_lambda < 0.0:
             raise ValueError(
                 f"tul.fan_repel_lambda must be >= 0, got {self.fan_repel_lambda}")
+        if self.fan_repel_mode not in ("cos", "epi"):
+            raise ValueError(
+                f"tul.fan_repel_mode must be 'cos' or 'epi', got {self.fan_repel_mode!r}")
+        if self.fan_epi_features < 2:
+            raise ValueError(
+                f"tul.fan_epi_features must be >= 2, got {self.fan_epi_features}")
+        if self.fan_epi_ridge <= 0.0 or self.fan_epi_eta <= 0.0:
+            raise ValueError(
+                f"tul.fan_epi_ridge and tul.fan_epi_eta must be > 0, got "
+                f"{self.fan_epi_ridge} / {self.fan_epi_eta}")
         if self.fan_k == 0:
             _fan_orphan = [n for n, v in (("fan_repel_lambda", self.fan_repel_lambda > 0.0),
-                                          ("fan_mix", self.fan_mix != "mean")) if v]
+                                          ("fan_mix", self.fan_mix != "mean"),
+                                          ("fan_repel_mode", self.fan_repel_mode != "cos")) if v]
             if _fan_orphan:
                 raise ValueError(
                     f"{sorted(_fan_orphan)} set with tul.fan_k=0: no fan is built, so the "

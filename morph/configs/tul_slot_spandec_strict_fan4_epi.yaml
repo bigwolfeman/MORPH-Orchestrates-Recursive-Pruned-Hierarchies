@@ -1,0 +1,34 @@
+# LXTUL — arm "slot-spandec-strict-fan4-epi": the fan with the EPIPLEXITY diversity term.
+# ONE factor against `tul_slot_spandec_strict_fan4`: `tul.fan_repel_mode` cos -> epi.
+#
+# WHY. fan4 @ 5000 met the cosine repulsion at its -1/3 floor by step 500 with a rank-1
+# split: streams 0,1 = +u and 2,3 = -u on ONE fixed direction shared by 96 % of slots
+# (lab/experiments/results/2026-09-19-lxtul-fan4/fan_geom_fan4_5000_d6.json). The mean
+# pairwise cosine of K vectors is bounded below by -1/(K-1) and a constant two-against-two
+# split reaches it with no content. The epiplexity score (EpiJEPA, github.com/the-puzzler/
+# epijepa; Zhang & Levin arXiv 2607.18433) centers over the batch (a constant offset scores
+# 0), is a log-det (magnitude spread over more directions scores more) and reads through a
+# ridge map from a frozen random function of the slot's SEED (only input-dependent
+# variation counts). Charged on the streams' between-stream deviations, scale-free, at the
+# same passes 1..2 the cosine was charged at. morph/model/tul_fan.py has the derivation.
+#
+# WHAT TO READ, in order: `fan/stream_rank_t1` (fan4 read 1.05 of 4; the term exists to
+# move it), then `fan/oracle_ce` against `fan/mixed_ce` AND the four `fan/stream_ce_k{i}`
+# (on fan4 every single stream sat 0.03-0.10 above the mixture and the oracle beat the
+# mixture by 0.008 — the single-vs-oracle gap alone conflates that offset with selection),
+# then the K-curve. `val/fan_epi_t{t}` is the score in bits per reservoir feature.
+#
+# Record: lab/experiments/planned/2026-09-20-lxtul-fan4-epi.md
+# Note: .agents/notes/proposed/architecture/2026-09-20-fan-epiplexity-diversity.md
+defaults:
+  - tul_slot_spandec_strict_fan4
+  - _self_
+
+tul:
+  fan_repel_mode: epi
+  fan_epi_features: 64
+  fan_epi_ridge: 3.0
+  fan_epi_eta: 30.0
+
+wandb:
+  name: slot-spandec-strict-fan4-epi

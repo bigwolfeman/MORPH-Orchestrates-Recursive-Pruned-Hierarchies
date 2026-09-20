@@ -62,6 +62,7 @@ KNOWN_TUL_KEYS = frozenset({
     "reinject_seed_every_pass", "recur_gate", "recur_gate_bias",
     "row_contrast_lambda", "row_contrast_tau",
     "fan_k", "fan_mix", "fan_repel_lambda", "fan_repel_passes",
+    "fan_repel_mode", "fan_epi_features", "fan_epi_ridge", "fan_epi_eta",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_cells", "slot_cell_init", "slot_chain", "slot_chain_detach",
     "vq_beta", "vq_codebook", "vq_codes", "vq_dim", "vq_groups", "vq_reset_after",
@@ -317,6 +318,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_repel_lambda=float(tc.get("fan_repel_lambda", 0.0)),
         fan_repel_passes=int(tc.get("fan_repel_passes", 2)),
         fan_mix=str(tc.get("fan_mix", "mean")),
+        fan_repel_mode=str(tc.get("fan_repel_mode", "cos")),
+        fan_epi_features=int(tc.get("fan_epi_features", 64)),
+        fan_epi_ridge=float(tc.get("fan_epi_ridge", 3.0)),
+        fan_epi_eta=float(tc.get("fan_epi_eta", 30.0)),
         vq_codes=int(tc.get("vq_codes", 0)),
         vq_codebook=int(tc.get("vq_codebook", 512)),
         vq_dim=int(tc.get("vq_dim", 0)),
@@ -526,6 +531,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_mix": model_cfg.fan_mix,
         "fan_repel_lambda": model_cfg.fan_repel_lambda,
         "fan_repel_passes": model_cfg.fan_repel_passes,
+        "fan_repel_mode": model_cfg.fan_repel_mode,
+        "fan_epi_features": model_cfg.fan_epi_features,
+        "fan_epi_ridge": model_cfg.fan_epi_ridge,
+        "fan_epi_eta": model_cfg.fan_epi_eta,
         "center_exit": model_cfg.center_exit,
         "row_contrast_lambda": model_cfg.row_contrast_lambda,
         "row_contrast_tau": model_cfg.row_contrast_tau,
@@ -789,7 +798,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               flush=True)
     if model_cfg.fan_k > 0:
         print(f"  LXTUL FAN ON: fan_k={model_cfg.fan_k} mix={model_cfg.fan_mix!r} "
-              f"repel_lambda={model_cfg.fan_repel_lambda} "
+              f"repel_mode={model_cfg.fan_repel_mode!r} repel_lambda={model_cfg.fan_repel_lambda} "
               f"repel_passes={model_cfg.fan_repel_passes} prefix_k={model_cfg.prefix_k} "
               f"- K latent STREAMS per span through the ONE shared core. The streams ARE "
               f"the Thought Register's cells (fan_k aliases slot_cells, so the message "

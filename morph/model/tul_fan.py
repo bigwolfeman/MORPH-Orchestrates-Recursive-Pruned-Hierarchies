@@ -52,12 +52,15 @@ Note: ``.agents/notes/proposed/architecture/2026-09-19-lxtul-fan-streams.md``
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-__all__ = ["TULFanMix", "fan_stream_stats", "fan_stream_cos", "fan_repel_term"]
+__all__ = ["TULFanMix", "fan_stream_stats", "fan_stream_cos", "fan_repel_term",
+           "FanReservoir", "ridge_map", "epi_score", "fan_epi_term"]
 
 
 def _cell_readout(cells: Tensor) -> Tensor:
@@ -257,3 +260,154 @@ def fan_stream_rank(state: Tensor, valid: Tensor, m_cells: int) -> float:
         return 0.0
     er, _ = fan_stream_stats(sel)
     return float(er.mean())
+
+
+# ── tul.fan_repel_mode: "epi" — the epiplexity diversity term ─────────────────────────
+# WHY A SECOND TERM. The cosine repulsion has a degenerate optimum and fan4 found it: the
+# mean pairwise cosine of K unit vectors is bounded below by -1/(K-1), and a rank-1 split
+# of two copies against two negated copies on ONE fixed direction reaches that floor with
+# no content (stream probe on slot-spandec-strict-fan4 @ 5000: rank 1.05 of 4, the same
+# direction in 96 % of slots, streams 0,1 = +u and 2,3 = -u in 99 % of slots;
+# lab/experiments/results/2026-09-19-lxtul-fan4/fan_geom_fan4_5000_d6.json). The
+# epiplexity score of EpiJEPA (github.com/the-puzzler/epijepa, from Zhang & Levin,
+# "Intelligence from Learnable Novelty", arXiv 2607.18433) is blind to exactly that shape:
+#   (1) it centers over the batch, so a constant offset scores nothing;
+#   (2) it is a log-det, so magnitude spread over MORE directions scores more;
+#   (3) its readout is a ridge map from a FROZEN random function of the INPUT, so only
+#       variation that is a linear function of the input counts — not noise, not constants.
+# WHAT IS SCORED. Not the streams themselves: their between-stream DEVIATIONS
+# d_i = z_i - mean_j z_j, one [N, C] matrix per stream over the batch's valid slots, so
+# the term asks that the streams DIFFER in an input-dependent, spread-out way. The
+# deviations are divided by the slot's mean stream norm (live, not detached) so the score
+# is scale-free and cannot be raised by growing the streams: a looped map with a gain
+# constraint must not be handed a term that pays for norm.
+# THE INPUT the reservoir sees is the slot's SEED, mean over the K streams of traj[0]
+# (the state the trigger made before any pass), DETACHED: the ridge map is computed under
+# no_grad exactly as EpiJEPA computes it, so the gradient reaches the streams only.
+# THE SCALE. EpiJEPA divides by an S0 measured at init; here the streams are identical
+# at step 0 (W_o zero-init), S0 would be 0, so the score is reported and charged in BITS
+# PER RESERVOIR FEATURE (S / F), bounded by log2(1 + eta * s^2) where s is the largest
+# readout singular value, a few bits at most. `fan_repel_lambda` weights it as it weights
+# the cosine. `fan_epi_t{t}` is reported for every pass, the seed included.
+
+
+class FanReservoir(nn.Module):
+    """Frozen random two-layer MLP ``C -> hidden -> F`` with ELU, the epiplexity reservoir.
+
+    Buffers, not parameters: the optimizer never sees it, the ternary walker never wraps
+    it (``_ternary_exclude`` as a second guard), and it lives in the checkpoint so a resume
+    scores against the same random function. Drawn from a PRIVATE generator with the global
+    RNG snapshotted and restored, so a model with the reservoir has the same base weights
+    as one without (the ``TULFanMix`` / ``TULSlotRegister`` rule).
+    """
+
+    def __init__(self, d_model: int, n_features: int, seed: int = 0, hidden: int = 256):
+        super().__init__()
+        if n_features < 2:
+            raise ValueError(f"tul.fan_epi_features must be >= 2, got {n_features}")
+        self._ternary_exclude = True
+        self.n_features = int(n_features)
+        g = torch.Generator().manual_seed(int(seed))
+        w1 = torch.randn(hidden, d_model, generator=g) / math.sqrt(d_model)
+        w2 = torch.randn(n_features, hidden, generator=g) / math.sqrt(hidden)
+        self.register_buffer("w1", w1)
+        self.register_buffer("w2", w2)
+
+    @torch.no_grad()
+    def forward(self, x: Tensor) -> Tensor:
+        """``[N, C]`` -> ``[N, F]``; LayerNorm on the input so the scale of the seed is
+        not the reservoir's business (EpiJEPA's ChannelNorm)."""
+        h = F.layer_norm(x.float(), (x.shape[-1],))
+        h = F.elu(F.linear(h, self.w1))
+        return F.linear(h, self.w2)
+
+
+def ridge_map(h: Tensor, lam: float) -> Tensor:
+    """``(H^T H + lam I)^-1 H^T`` on standardised features via QR — ``[F, N]``, double.
+
+    ``h`` is ``[N, F]``: columns are centered, divided by their batch std and by
+    ``sqrt(F)``, EpiJEPA's ``ridge_map`` line for line.
+    """
+    n, f = h.shape
+    h = ((h - h.mean(0)) / h.std(0, unbiased=False).clamp_min(1e-6) / math.sqrt(f)).double()
+    aug = torch.cat([h, math.sqrt(lam) * torch.eye(f, dtype=h.dtype, device=h.device)])
+    q, r = torch.linalg.qr(aug, mode="reduced")
+    return torch.linalg.solve_triangular(r, q[:n].T, upper=True)
+
+
+def epi_score(z: Tensor, a: Tensor, eta: float) -> Tensor:
+    """``0.5 * log2 det(I + eta * W^T W)`` with ``W = a @ (z - mean(z))``, ``[F, C]``.
+
+    Sylvester: ``det(I_C + eta W^T W) = det(I_F + eta W W^T)``, so the ``[F, F]`` side is
+    taken and a 1024-wide state costs an F x F slogdet, not a C x C one. Differentiable in ``z``; ``a`` is constant.
+    """
+    w = a @ (z.double() - z.double().mean(0))
+    eye = torch.eye(w.shape[0], dtype=w.dtype, device=w.device)
+    return 0.5 * torch.linalg.slogdet(eye + float(eta) * (w @ w.T))[1] / math.log(2)
+
+
+def _fan_epi_pass(state: Tensor, valid: Tensor, m_cells: int, a: Tensor,
+                  eta: float) -> Tensor:
+    """Mean over the K streams of the epiplexity of their normalised deviations, in bits
+    per reservoir feature, on one trajectory entry."""
+    b, sm = state.shape[0], state.shape[1]
+    s = valid.shape[1]
+    if sm != s * m_cells:
+        raise ValueError(f"fan_epi_term: compact axis {sm} != S*M = {s}*{m_cells}")
+    z = _cell_readout(state.reshape(b, s, m_cells, *state.shape[2:]))   # [B, S, M, C]
+    sel = z[valid].float()                                             # [N, M, C]
+    n = sel.shape[0]
+    if n < 2:
+        return z.sum() * 0.0
+    dev = sel - sel.mean(dim=1, keepdim=True)                          # [N, M, C]
+    scale = sel.norm(dim=-1).mean(dim=1, keepdim=True).unsqueeze(-1).clamp_min(1e-6)
+    dev = dev / scale                                                  # scale-free
+    f = float(a.shape[0])
+    scores = [epi_score(dev[:, i], a, eta) / f for i in range(m_cells)]
+    return torch.stack(scores).mean().to(state.dtype)
+
+
+def fan_epi_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
+                 reservoir: FanReservoir, ridge: float, eta: float,
+                 stats: dict[str, float] | None = None) -> Tensor | None:
+    """``tul.fan_repel_mode: "epi"``'s raw term: MINUS the mean epiplexity (bits per
+    reservoir feature) of the streams' deviations over passes ``1 .. n_passes``.
+
+    Same contract as :func:`fan_repel_term`: ``traj[0]`` is the seed, passes ``1..n``
+    carry gradient, every pass is reported (``fan_epi_t{t}``), ``None`` when the batch is
+    shallower than one pass. Minimising the term maximises the score, so
+    ``fan_repel_lambda`` keeps its sign and its meaning.
+    """
+    if not traj:
+        return None
+    if n_passes < 1:
+        raise ValueError(f"fan_repel_passes must be >= 1, got {n_passes}")
+    b, sm = traj[0].shape[0], traj[0].shape[1]
+    s = valid.shape[1]
+    if sm != s * m_cells:
+        raise ValueError(f"fan_epi_term: compact axis {sm} != S*M = {s}*{m_cells}")
+    with torch.no_grad():
+        seed = _cell_readout(traj[0].reshape(b, s, m_cells, *traj[0].shape[2:]))
+        seed = seed.mean(dim=2)[valid]                                 # [N, C], detached
+        if seed.shape[0] < 2:
+            a = None
+        else:
+            a = ridge_map(reservoir(seed), ridge)                      # [F, N]
+    live: list[Tensor] = []
+    for t in range(len(traj)):
+        if a is None:
+            e = traj[t].sum() * 0.0
+        elif 1 <= t <= n_passes:
+            e = _fan_epi_pass(traj[t], valid, m_cells, a, eta)
+        else:
+            with torch.no_grad():
+                e = _fan_epi_pass(traj[t], valid, m_cells, a, eta)
+        if 1 <= t <= n_passes:
+            live.append(e)
+        if stats is not None:
+            stats[f"epi_t{t}"] = float(e.detach())
+    if not live:
+        return None
+    if stats is not None:
+        stats["repel_terms"] = float(len(live))
+    return -torch.stack(live).mean()

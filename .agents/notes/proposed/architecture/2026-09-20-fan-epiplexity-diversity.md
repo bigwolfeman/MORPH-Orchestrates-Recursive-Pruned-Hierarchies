@@ -1,0 +1,91 @@
+# Agent Note: an epiplexity diversity term for the fan, in place of the cosine repulsion
+
+Status: proposed
+
+## Problem
+
+`slot-spandec-strict-fan4` (K = 4 latent streams per span, `tul.fan_repel_lambda 0.1` on a
+mean pairwise cosine at passes 1 and 2) met its repulsion at the floor by step 500 and
+stayed there: `fan/stream_cos_t1` −0.326, `fan/stream_rank_t1` 1.05 of 4 for the whole
+run. The mean pairwise cosine of K unit vectors is bounded below by −1/(K − 1) = −1/3, and
+two shapes sit on that floor: a regular simplex (centered rank 3) and a rank-1 split of
+two copies against two negated copies. The stream probe on the step-5000 checkpoint
+(`lab/divergence/fan_stream_probe.py`,
+`lab/experiments/results/2026-09-19-lxtul-fan4/fan_geom_fan4_5000_d6.json`) found the
+second shape, and worse: the ONE direction is the same in 96 % of slots (mean |cos| of
+consecutive slots' top directions 0.96) with fixed stream identities (streams 0 and 1 on
+the plus side, 2 and 3 on the minus side in 2536 of 2573 slots) and unequal norms (35 to
+39 against 20 to 26). The repulsion was satisfied by a constant sign split on a fixed
+axis, which carries no content. The coda's reading agrees: at the final val every single
+stream scored 0.03 to 0.10 nats above the mixture the coda trained on
+(`fan/stream_ce_k{i}` 4.5735 / 4.5439 / 4.5090 / 4.5038 against `fan/mixed_ce` 4.4744)
+and the oracle over streams beat the mixture by 0.008, so the 0.107 single-minus-oracle
+gap that P-1 of the fan4 prereg reads is 0.099 of a constant offset plus 0.008 of choice.
+
+A diversity term that can be paid off by a constant offset on one axis cannot test the
+K-stream question. The term has to be blind to that shape.
+
+## Proposal
+
+`tul.fan_repel_mode: cos | epi` (default `cos`, bit-identical to today; unknown values
+raise in `TULConfig` and `tul_setup`). Under `epi` the charged term is minus the
+epiplexity score of EpiJEPA (github.com/the-puzzler/epijepa; Zhang & Levin, "Intelligence
+from Learnable Novelty", arXiv 2607.18433), applied to the streams' between-stream
+deviations:
+
+- `d_i = z_i − mean_j z_j` per stream, over the batch's valid slots, divided by the slot's
+  mean stream norm (live, so the score is scale-free and cannot be raised by growing the
+  streams; a looped map under a gain constraint must not be handed a term that pays for
+  norm).
+- A FROZEN random MLP (`FanReservoir`, `C → 256 → F`, ELU, buffers from a private
+  generator, `F = tul.fan_epi_features` 64) reads the slot's SEED (mean over streams of
+  the trajectory's entry 0, detached). A ridge readout `A = (HᵀH + ρI)⁻¹Hᵀ`
+  (`tul.fan_epi_ridge` 3, QR, double, under `no_grad`) maps reservoir features to each
+  `d_i`; the score is `S_i = ½ log₂ det(I_F + η W_i W_iᵀ)` with `W_i = A d̂_i` and
+  `η = tul.fan_epi_eta` 30, taken on the F × F side by Sylvester's identity.
+- The term is `−mean_i S_i / F` (bits per reservoir feature) averaged over passes
+  `1 .. fan_repel_passes`, weighted by `fan_repel_lambda` exactly as the cosine was; every
+  pass is reported as `fan/epi_t{t}` (train) and `val/fan_epi_t{t}` (val). The cosines
+  and ranks stay instruments under `epi`, computed with no gradient.
+
+Why this shape is blind to the failure: centering over the batch removes any constant
+offset, so the ±u split scores zero; the log-det rewards magnitude spread over MORE
+directions, so rank is what is paid for; and the readout is from a frozen random function
+of the input, so only variation that is a linear function of the seed counts, not noise.
+
+## Alternatives considered
+
+- **Raise `fan_repel_lambda` on the cosine.** The floor is a property of the cosine, not
+  of its weight; a larger weight reaches the same degenerate split faster.
+- **A participation-ratio rank term directly** (maximise `fan_stream_rank_t1`). Rewards
+  spread but not input dependence: isotropic noise in the streams would satisfy it, and
+  the coda cannot read noise. The epiplexity readout is the part that asks the spread to
+  be a function of the input.
+- **SIGReg on the deviations** (the tree already has it on the FM planner and the code
+  target). Asks for an isotropic Gaussian, which noise also satisfies; EpiJEPA's own
+  comparison puts it about 1 to 4 points ahead of epiplexity on image probes at lower
+  embedding rank, so it is a second arm if this one moves the rank and not the oracle.
+- **K = 2.** Removes the two-against-two split by construction but leaves the constant
+  ±u axis available; the term, not K, is the lever.
+
+## Acceptance criteria
+
+The prereg `lab/experiments/planned/2026-09-20-lxtul-fan4-epi.md` freezes them. In short,
+on `slot-spandec-strict-fan4-epi` at 5000 steps: `fan/stream_rank_t1` above 2.0 of 4 and
+no global axis in the stream probe (mechanism); every `fan/stream_ce_k{i}` within 0.03 of
+`fan/mixed_ce` (no constant offset); and the falsifier, `fan/oracle_ce` below
+`fan/mixed_ce` by more than 0.022 (the streams give the coda something to choose
+between). Bit-identity at `cos` and the pass contract are `tests/test_tul_fan_epi.py`.
+
+## Risks
+
+- The term's scale differs from the cosine's (bits per feature, a few at most, against a
+  cosine in [−1/3, 1]); `fan_repel_lambda 0.1` is kept and `fan/repel_weighted` is read
+  against the total loss. If the term dominates, the fallback is λ, not the shape.
+- At step 0 the streams are identical (`W_o` zero-init), so the score and its gradient
+  are exactly zero there, as the cosine's were; the register's distinct queries break the
+  symmetry through the CE, as they did on fan4.
+- The reservoir reads the seed, which trains. It is detached, so the term cannot move the
+  seed, but the ridge target drifts with it; EpiJEPA's reservoir reads raw pixels and has
+  no such drift. If the score wanders without the streams moving, read `val/fan_epi_t0`
+  (the seed's own score, identically 0 while the streams are identical at entry).
