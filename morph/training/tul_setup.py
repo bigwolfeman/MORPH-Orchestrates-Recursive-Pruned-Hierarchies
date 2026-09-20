@@ -63,7 +63,7 @@ KNOWN_TUL_KEYS = frozenset({
     "row_contrast_lambda", "row_contrast_tau",
     "fan_k", "fan_mix", "fan_repel_lambda", "fan_repel_passes",
     "fan_repel_mode", "fan_epi_features", "fan_epi_ridge", "fan_epi_eta",
-    "fan_select_eps", "fan_select_gate_lambda",
+    "fan_select_eps", "fan_select_gate_lambda", "fan_all_wta_lambda",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_cells", "slot_cell_init", "slot_chain", "slot_chain_detach",
     "vq_beta", "vq_codebook", "vq_codes", "vq_dim", "vq_groups", "vq_reset_after",
@@ -325,6 +325,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_epi_eta=float(tc.get("fan_epi_eta", 30.0)),
         fan_select_eps=float(tc.get("fan_select_eps", 0.05)),
         fan_select_gate_lambda=float(tc.get("fan_select_gate_lambda", 1.0)),
+        fan_all_wta_lambda=float(tc.get("fan_all_wta_lambda", 1.0)),
         vq_codes=int(tc.get("vq_codes", 0)),
         vq_codebook=int(tc.get("vq_codebook", 512)),
         vq_dim=int(tc.get("vq_dim", 0)),
@@ -537,6 +538,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_repel_mode": model_cfg.fan_repel_mode,
         "fan_select_eps": model_cfg.fan_select_eps,
         "fan_select_gate_lambda": model_cfg.fan_select_gate_lambda,
+        "fan_all_wta_lambda": model_cfg.fan_all_wta_lambda,
         "fan_epi_features": model_cfg.fan_epi_features,
         "fan_epi_ridge": model_cfg.fan_epi_ridge,
         "fan_epi_eta": model_cfg.fan_epi_eta,
@@ -767,7 +769,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               "relation travels as `tg_relation` and REPLACES the attention branches' "
               "causal term; through `tg_allow` it would only narrow and would execute "
               "as plain flattened causal - measured and fixed 2026-09-13). "
-              + ("The M cells are LXTUL's K streams: they are MIXED to one state and "
+              + ("The M cells are LXTUL's K streams and every one of them is written 1:1 "
+                 "into ITS prefix cell (fan_mix=all; see the LXTUL FAN line below). "
+                 if (model_cfg.fan_k > 0 and model_cfg.fan_mix == "all") else
+                 "The M cells are LXTUL's K streams: they are MIXED to one state and "
                  "written through the ordinary single-source prefix_project (see the "
                  "LXTUL FAN line below), NOT 1:1 into the prefix cells. "
                  if model_cfg.fan_k > 0 else
@@ -809,6 +814,12 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                  f"(no mixture: K no-grad coda passes pick each slot's winner at train, the "
                  f"winner is written ALONE, the gate learns to predict it, the eval write is "
                  f"the gate's argmax stream) " if model_cfg.fan_mix == "select" else "")
+              + (f"ALL eps={model_cfg.fan_select_eps} wta_lambda={model_cfg.fan_all_wta_lambda} "
+                 f"(no mixture, no gate: every stream is written into ITS prefix cell "
+                 f"through W_prefix[i], the register's 1:1 route, and the coda reads all "
+                 f"K; at train K no-grad passes with stream i alone in its cell pick each "
+                 f"slot's winner and one more pass with grad charges the winner-alone span "
+                 f"CE, the responsibility term) " if model_cfg.fan_mix == "all" else "")
               + 
               f"- K latent STREAMS per span through the ONE shared core. The streams ARE "
               f"the Thought Register's cells (fan_k aliases slot_cells, so the message "
@@ -816,10 +827,14 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"did not have. (1) a pairwise-cosine REPULSION charged after passes 1.."
               f"{model_cfg.fan_repel_passes} only, because PLR Thm 4.4 makes the collapse "
               f"exponential in depth (pass 1 fights L^2, pass 6 fights L^12). (2) the "
-              f"exit MIXTURE: the K streams become ONE state at the register's mean seam "
-              f"and go through the ordinary SINGLE-SOURCE prefix_project, NOT the "
-              f"register's 1:1 cell write - so this arm's coda width is the strict "
-              f"ruler's and the 2026-09-13 width confound is closed by construction. "
+              + (f"exit WRITE: every stream in its own prefix cell, the register's 1:1 "
+                 f"route, so the coda's width is prefix_k={model_cfg.prefix_k} and the width "
+                 f"partner is the ruler at the same prefix_k. " if model_cfg.fan_mix == "all" else
+                 f"exit MIXTURE: the K streams become ONE state at the register's mean seam "
+                 f"and go through the ordinary SINGLE-SOURCE prefix_project, NOT the "
+                 f"register's 1:1 cell write - so this arm's coda width is the strict "
+                 f"ruler's and the 2026-09-13 width confound is closed by construction. ")
+              + 
               f"(3) the ORACLE: at every val the coda is re-run once per stream and "
               f"`fan/oracle_ce` is the per-span minimum. READ `fan/oracle_ce` AGAINST "
               f"`fan/single_ce` FIRST - if the gap is inside a width control's own CE "

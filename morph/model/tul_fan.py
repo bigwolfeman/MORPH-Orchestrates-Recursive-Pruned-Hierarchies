@@ -192,15 +192,22 @@ class TULFanMix(nn.Module):
     ``weights`` ``[B, S, M]``. The caller reports :meth:`entropy` of those weights as
     ``fan/mix_entropy`` — ``ln(K)`` is a gate that has not chosen, 0 a gate that always
     picks one stream.
+
+    ``"all"`` (2026-09-20) owns no parameter either and returns the MEAN with uniform
+    weights, exactly as ``"mean"`` does — but it is not a mixture arm: the caller writes
+    every stream into its own prefix cell (``prefix_project(cells=...)``) and the mean is
+    only what the auxiliary readers of ``h_slots`` (the span decoder, SIGReg, the state
+    probe) see. The coda reads all K. Responsibility is the winner-takes-all term the
+    caller charges (``MORPHTransformer._tul_fan_all``).
     """
 
     def __init__(self, d_model: int, k: int, mode: str = "mean"):
         super().__init__()
         if k < 2:
             raise ValueError(f"TULFanMix needs k >= 2 streams, got {k}")
-        if mode not in ("mean", "softmax", "select"):
+        if mode not in ("mean", "softmax", "select", "all"):
             raise ValueError(
-                f"tul.fan_mix must be 'mean', 'softmax' or 'select', got {mode!r}")
+                f"tul.fan_mix must be 'mean', 'softmax', 'select' or 'all', got {mode!r}")
         self.k = int(k)
         self.mode = str(mode)
         self.gate: nn.Linear | None = None

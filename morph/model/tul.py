@@ -327,6 +327,18 @@ class TULConfig:
     # gate's argmax stream is written alone: the deployable number is ONE chosen stream.
     fan_select_eps: float = 0.05         # P(random stream written) per slot, train only
     fan_select_gate_lambda: float = 1.0  # weight of the gate's winner-prediction CE
+    # `fan_mix: "all"` (2026-09-20, after select): NO mixture and NO gate. Every stream is
+    # WRITTEN — cell i into prefix cell i through W_prefix[i], the Thought Register's 1:1
+    # route (`prefix_project(cells=...)`), so `prefix_k` must equal `fan_k` — and the coda
+    # reads all K with its own attention: the selector is the coda's per-token read, which
+    # sees the span's own earlier tokens (the select gate had to choose before any). What
+    # keeps a stream individually useful is winner-takes-all RESPONSIBILITY: at train, K
+    # no-grad passes with stream i ALONE in its cell (the other K-1 blank) pick each slot's
+    # winner by span CE (`fan_select_eps` random on valid slots), and ONE more pass, with
+    # grad, writes the winner alone the same way; its token-weighted span CE is the WTA
+    # term, weight `fan_all_wta_lambda`. The register (same write, free read, no term)
+    # collapsed its cells to rank 1.24 of 4; this arm differs from it by the term.
+    fan_all_wta_lambda: float = 1.0      # weight of the winner-alone span CE (fan_mix=all)
     fan_repel_mode: str = "cos"          # "cos" (pairwise cosine) | "epi" (epiplexity of the
                                          # between-stream deviations) | "vol" (within-slot
                                          # volume) | "epivol" (both; morph/model/tul_fan.py)
@@ -1591,21 +1603,39 @@ class TULConfig:
                 "tul.fan_k=1 is the strict ruler with extra machinery bolted on: one "
                 "stream has nothing to be repelled from, nothing to mix and nothing for "
                 "the oracle to choose between. Use 0 (off) or >= 2.")
-        if self.fan_mix not in ("mean", "softmax", "select"):
+        if self.fan_mix not in ("mean", "softmax", "select", "all"):
             raise ValueError(
-                f"tul.fan_mix must be 'mean', 'softmax' or 'select', got {self.fan_mix!r}")
+                f"tul.fan_mix must be 'mean', 'softmax', 'select' or 'all', got "
+                f"{self.fan_mix!r}")
         if not (0.0 <= self.fan_select_eps < 1.0):
             raise ValueError(
                 f"tul.fan_select_eps must be in [0, 1), got {self.fan_select_eps}")
         if self.fan_select_gate_lambda < 0.0:
             raise ValueError(
                 f"tul.fan_select_gate_lambda must be >= 0, got {self.fan_select_gate_lambda}")
-        if self.fan_mix != "select" and (self.fan_select_eps != 0.05
-                                         or self.fan_select_gate_lambda != 1.0):
+        if self.fan_mix not in ("select", "all") and self.fan_select_eps != 0.05:
             raise ValueError(
-                "tul.fan_select_eps / tul.fan_select_gate_lambda are read only under "
-                f"tul.fan_mix='select' (got fan_mix={self.fan_mix!r}): setting them on "
-                "another mixture would be a silent no-op.")
+                "tul.fan_select_eps is read only under tul.fan_mix='select' or 'all' "
+                f"(got fan_mix={self.fan_mix!r}): setting it on a mixture would be a "
+                "silent no-op.")
+        if self.fan_mix != "select" and self.fan_select_gate_lambda != 1.0:
+            raise ValueError(
+                "tul.fan_select_gate_lambda is read only under tul.fan_mix='select' "
+                f"(got fan_mix={self.fan_mix!r}): 'all' has no gate and a mixture has no "
+                "winner, so the knob would be a silent no-op.")
+        if self.fan_all_wta_lambda < 0.0:
+            raise ValueError(
+                f"tul.fan_all_wta_lambda must be >= 0, got {self.fan_all_wta_lambda}")
+        if self.fan_mix != "all" and self.fan_all_wta_lambda != 1.0:
+            raise ValueError(
+                "tul.fan_all_wta_lambda is read only under tul.fan_mix='all' "
+                f"(got fan_mix={self.fan_mix!r}): setting it elsewhere would be a silent "
+                "no-op.")
+        if self.fan_mix == "all" and self.fan_k > 0 and self.prefix_k != self.fan_k:
+            raise ValueError(
+                f"tul.fan_mix='all' needs tul.prefix_k={self.fan_k} (= fan_k): every "
+                f"stream is written into ITS prefix cell through W_prefix[i], the "
+                f"register's 1:1 route. Got prefix_k={self.prefix_k}.")
         if self.fan_repel_passes < 1:
             raise ValueError(
                 f"tul.fan_repel_passes must be >= 1, got {self.fan_repel_passes}")
@@ -4077,9 +4107,13 @@ class TULSlots(nn.Module):
                 raise ValueError(
                     f"prefix_project cells {tuple(cells.shape)} must be [B, S, K, *carrier] "
                     f"= {(B, S, K, *h_slots.shape[2:])}")
-            # The same per-cell projection, with a per-cell SOURCE: [B,S,K,M,C] ⊗ [K,C,C].
+            # The same per-cell projection, with a per-cell SOURCE: cell k through
+            # W_prefix[k]. K plain matmuls, NOT one broadcast matmul over [B,S,K]: the
+            # broadcast form expands `w` to [B, S, K, C, C] and keeps that copy for the
+            # backward (3.2 GB in bf16 at B=6, S=64, K=4, C=1024 — measured 2026-09-20 on
+            # the fan4-all arm, whose write and winner replay both take this branch).
             cm = cells.reshape(B, S, K, -1, C)
-            proj = torch.matmul(cm, w.view(1, 1, K, C, C))
+            proj = torch.stack([torch.matmul(cm[:, :, k], w[k]) for k in range(K)], dim=2)
         if self.E_pass is not None:
             # Broadcast over (B, S) and over the carrier's stream axis: one vector per
             # CELL INDEX, zero-init, so this line is an exact no-op at step 0.

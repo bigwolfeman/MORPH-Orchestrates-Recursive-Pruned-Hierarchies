@@ -1,0 +1,20 @@
+# LXTUL fan, WRITE ALL + winner-takes-all responsibility (2026-09-20, after select).
+# Composes the epivol arm and replaces the select arm's one-stream write and gate with the
+# Thought Register's 1:1 write: every stream reaches the coda in its own prefix cell
+# (prefix_k 4 = fan_k 4) and the coda's own attention, per token, is the selector — it
+# sees the span's earlier tokens, which the select gate could not. What the register did
+# not have: at train K no-grad passes with stream i alone in its cell pick each slot's
+# winner by span CE, and one more pass with grad charges the winner-alone span CE, so every
+# stream must stay individually decodable. Same seed, packer and prefix width as pk4.
+# Prereg: lab/experiments/planned/2026-09-20-lxtul-fan4-all.md
+defaults:
+  - tul_slot_spandec_strict_fan4_epivol
+  - _self_
+
+tul:
+  fan_mix: all
+  fan_select_eps: 0.05
+  fan_all_wta_lambda: 1.0
+
+wandb:
+  name: slot-spandec-strict-fan4-all

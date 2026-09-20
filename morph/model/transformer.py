@@ -48,7 +48,7 @@ from .tul import (TULCenterExit, TULConfig, TULGate, TULGateConfig, TULGradPass,
                   window_drop_mask)
 from .tul_carry import TULLoopCarry
 from .tul_fan import (FanReservoir, TULFanMix, fan_epi_term, fan_repel_term, fan_stream_rank,
-                      fan_vol_term, select_gate_loss, select_winners,
+                      fan_vol_term, select_gate_loss, select_streams, select_winners,
                       fan_stream_stats)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
@@ -2975,7 +2975,8 @@ class MORPHTransformer(nn.Module):
                      input_ids: Tensor | None = None,
                      inject_keep: Tensor | None = None,
                      attn_kwargs: dict | None = None,
-                     ret_reset_mask: Tensor | None = None) -> Tensor:
+                     ret_reset_mask: Tensor | None = None,
+                     checkpoint_blocks: bool = False) -> Tensor:
         """BACK region: coda blocks → HC stream mean → lm_mixer → final_norm.
         input_ids is only threaded into _build_injection_term for signature parity —
         value-embeds fire exclusively in the prelude (gi ≥ n_prelude+n_core is never in
@@ -3002,8 +3003,18 @@ class MORPHTransformer(nn.Module):
             )
             if inject_keep is not None:
                 term = term * inject_keep.to(term.dtype)
-            x = self._apply_injection(x, term)
-            x = layer(x, attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
+            if checkpoint_blocks:
+                # ``checkpoint_blocks`` (tul.fan_mix="all"'s winner replay, 2026-09-20):
+                # one coda block's activations live at a time and each is recomputed in
+                # backward, the core loop's own rule. False on every shipped path → the
+                # ops below are the ones above, bit-identical.
+                def _blk(x_in: Tensor, t_in: Tensor, _layer=layer) -> Tensor:
+                    return _layer(self._apply_injection(x_in, t_in), attn_kwargs=attn_kwargs,
+                                  ret_reset_mask=ret_reset_mask)
+                x = checkpoint(_blk, x, term, use_reentrant=False)
+            else:
+                x = self._apply_injection(x, term)
+                x = layer(x, attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
 
         return self._readout(x)
 
@@ -5796,7 +5807,7 @@ class MORPHTransformer(nn.Module):
         n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]        # [B, S]
         per_stream = []
         for i in range(k):
-            values, pos = self.tul.prefix_project(cells[:, :, i], layout, L)
+            values, pos = self._tul_fan_stream_write(cells, i, layout, L)
             x_i = scatter_positions(base, pos, values)
             xh_i = self._back_region(x_i, x0, bigram_emb, input_ids, inject_keep=keep,
                                      attn_kwargs=coda_kw, ret_reset_mask=tg_reset)
@@ -5886,7 +5897,7 @@ class MORPHTransformer(nn.Module):
             per_stream = []
             base_d = base.detach()
             for i in range(k):
-                values, pos = self.tul.prefix_project(cells[:, :, i].detach(), layout, L)
+                values, pos = self._tul_fan_stream_write(cells.detach(), i, layout, L)
                 x_i = scatter_positions(base_d, pos, values)
                 xh_i = self._back_region(x_i, x0, bigram_emb, input_ids, inject_keep=keep,
                                          attn_kwargs=coda_kw, ret_reset_mask=tg_reset)
@@ -5907,6 +5918,127 @@ class MORPHTransformer(nn.Module):
                     stats[f"select_share_k{i}"] = float((choice[ok] == i).float().mean())
         gate_loss = select_gate_loss(logits, choice, ok)
         return self.tul_fan(cells, choice)[0], w, gate_loss
+
+    def _tul_fan_stream_write(self, cells: Tensor, i: int, layout: SlotLayout, L: int
+                              ) -> tuple[Tensor, Tensor]:
+        """Stream ``i`` ALONE, written the way THIS fan writes: the ONE home of the
+        per-stream write the oracle instrument, the select table and the WTA term share.
+
+        Mixing fans (``mean`` / ``softmax`` / ``select``) write one state through the
+        single-source ``prefix_project`` (stream ``i`` through every ``W_prefix[k]``), so
+        "stream i alone" is that. Under ``"all"`` the deployed write is the register's
+        1:1 route, so "stream i alone" is cell ``i`` in ITS prefix cell through
+        ``W_prefix[i]`` with the other ``K-1`` cells BLANK (zeros, which after the
+        projection carry ``E_pass`` only — the same blank the plan ablation writes): the
+        deployed geometry with the losers removed, not a different geometry.
+        """
+        if self.tul_fan is not None and self.tul_fan.mode == "all":
+            blank = torch.zeros_like(cells)
+            blank[:, :, i] = cells[:, :, i]
+            return self.tul.prefix_project(cells[:, :, i], layout, L, cells=blank)
+        return self.tul.prefix_project(cells[:, :, i], layout, L)
+
+    @torch.compiler.disable
+    def _tul_fan_all(self, cells: Tensor, xn: Tensor, x0: Tensor, bigram_emb,
+                     input_ids: Tensor, labels: Tensor | None, layout: SlotLayout,
+                     L: int, coda_kw, tg_reset, plan_mode: str, stats: dict
+                     ) -> tuple[Tensor, Tensor, Tensor | None]:
+        """``tul.fan_mix="all"``: every stream is written, the coda picks per token,
+        and responsibility is winner-takes-all.
+
+        Returns ``(state, weights, wta_loss)``: ``state`` is the MEAN of the cells (what
+        the auxiliary readers of ``h_slots`` see; the coda does NOT read it — the caller
+        writes ``cells`` 1:1 into the prefix cells), ``weights`` uniform (so
+        ``fan/mix_entropy`` reads ``ln K``), ``wta_loss`` the winner-alone span CE at
+        train and ``None`` otherwise.
+
+        TRAIN (labels present, ``plan_mode == "normal"``): K no-grad coda passes, stream
+        ``i`` alone in its cell and the other cells blank (:meth:`_tul_fan_stream_write`),
+        the summed CE of the span after each slot — the per-slot argmin is the winner
+        (:func:`select_winners`, with ``fan_select_eps`` random on valid slots so a losing
+        stream keeps a reader). Then ONE pass WITH grad: the winner alone, the same way,
+        and its token-weighted span CE over the scored slots is the term. Its gradient
+        reaches the winning stream of every slot (through the scatter that blanks the
+        others), the coda and the tied head — the model's own CE on a one-stream write,
+        which is what makes a stream individually decodable. The passes read the coda's
+        carrier before token dropout and cut the slot cells' own injections exactly as
+        the shipped strict coda does (the select arm's rule).
+
+        EVAL, or a plan ablation: nothing extra; the oracle instrument after the coda
+        reports ``stream_ce_k{i}`` on the same one-stream write.
+
+        COST at train: K no-grad ``_back_region`` passes (the select arm's) plus ONE
+        ``_back_region`` pass with activations — one more coda backward per step.
+        """
+        tc = self.cfg.tul
+        k = int(cells.shape[2])
+        state, w = self.tul_fan(cells)                                       # mean, uniform
+        if not self.training or labels is None or plan_mode != "normal":
+            return state, w, None
+        if tc.coda_token_input == "embed":
+            base = x0.unsqueeze(2).expand_as(xn) if self._is_hc else x0
+            base = self.input_norm(base)
+        else:
+            base = xn
+        keep = (slot_cell_inject_keep(layout, xn.dtype)
+                if (tc.coda_token_input == "embed" or self._tg_strict) else None)
+        gid, keep_tok, lab, g_bins = span_ce_index(labels, layout)
+        w_head = self.embed.lm_weight()
+        n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]                # [B, S]
+        ok = layout.slot_valid & (n_tok > 0)
+        with torch.no_grad():
+            per_stream = []
+            base_d = base.detach()
+            cells_d = cells.detach()
+            for i in range(k):
+                values, pos = self._tul_fan_stream_write(cells_d, i, layout, L)
+                x_i = scatter_positions(base_d, pos, values)
+                xh_i = self._back_region(x_i, x0, bigram_emb, input_ids, inject_keep=keep,
+                                         attn_kwargs=coda_kw, ret_reset_mask=tg_reset)
+                per_stream.append(accumulate_span_ce(xh_i, w_head, gid, keep_tok,
+                                                     lab, g_bins)[:, 1:])
+            ce = torch.stack(per_stream, dim=-1)                                # [B, S, K]
+            choice, forced = select_winners(ce, ok, float(tc.fan_select_eps))
+            if bool(ok.any()):
+                denom = n_tok[ok].sum().clamp_min(1.0)
+                best, arg = ce.min(dim=-1)
+                stats["wta_oracle_ce"] = float(best[ok].sum() / denom)
+                stats["wta_single_ce"] = float(ce[..., 0][ok].sum() / denom)
+                stats["wta_pick0"] = float((arg[ok] == 0).float().mean())
+                stats["wta_forced"] = float(forced[ok].float().mean())
+                for i in range(k):
+                    stats[f"wta_share_k{i}"] = float((choice[ok] == i).float().mean())
+        if not bool(ok.any()):
+            return state, w, cells.sum() * 0.0
+        # The responsibility pass, WITH grad: the winner of every slot alone in its cell.
+        B, S = choice.shape
+        winner = select_streams(cells, choice)                                 # [B,S,*carrier,C]
+        idx = choice.view(B, S, 1, *([1] * (cells.dim() - 3))).expand(B, S, 1, *cells.shape[3:])
+        blank = torch.zeros_like(cells).scatter(2, idx, winner.unsqueeze(2))
+        values, pos = self.tul.prefix_project(winner, layout, L, cells=blank)
+        x_w = scatter_positions(base, pos, values)
+
+        def _row_ce(xh_b: Tensor, w_h: Tensor, b: int) -> Tensor:
+            logits = (xh_b.to(w_h.dtype) @ w_h.t()).float()                   # [L, V]
+            ce = F.cross_entropy(logits, lab[b], reduction="none") * keep_tok[b]
+            # `gid` indexes the FLAT [B * n_groups] table `accumulate_span_ce` fills: row
+            # b's scored positions carry the offset b * n_groups and its unscored ones
+            # sit at 0 (with an exactly-zero CE), so the local id is offset-free there.
+            local = torch.where(keep_tok[b], gid[b] - b * g_bins, torch.zeros_like(gid[b]))
+            return torch.zeros(g_bins, device=ce.device, dtype=ce.dtype).index_add(0, local, ce)
+
+        # Recomputed in backward (the core loop's own checkpoint rule), per coda BLOCK and
+        # per ROW of logits, so one block's activations or one row's [L, V] logits are
+        # ever live: the replay is the whole of the arm's memory cost over the select arm
+        # (Spark smoke 2026-09-20: 26.3 GB unchecked, 21.0 GB as one segment, against the
+        # select arm's 17.6), and the 5090 has no room for it beside the desktop.
+        xh_w = self._back_region(x_w, x0, bigram_emb, input_ids, inject_keep=keep,
+                                 attn_kwargs=coda_kw, ret_reset_mask=tg_reset,
+                                 checkpoint_blocks=True)
+        ce_w = torch.stack([checkpoint(_row_ce, xh_w[b], w_head, b, use_reentrant=False)
+                            for b in range(B)], dim=0)[:, 1:]                   # [B, S]
+        wta = ce_w[ok].sum() / n_tok[ok].sum().clamp_min(1.0)
+        return state, w, wta
 
     def _tul_db1_precheck(self, what: str) -> None:
         """Shared guards for :meth:`_tul_core_db1` and :meth:`_tul_core_db1_ladder`.
@@ -8067,6 +8199,7 @@ class MORPHTransformer(nn.Module):
         # other path is the signal those folds branch on.
         fan_repel_loss = None
         fan_select_loss = None          # tul.fan_mix="select": the gate's winner CE (train)
+        fan_wta_loss = None             # tul.fan_mix="all": the winner-alone span CE (train)
         fan_stats: dict[str, float] = {}
         _fan_cells = None
         if tc.tokens_through_core:
@@ -8310,6 +8443,15 @@ class MORPHTransformer(nn.Module):
                         # gate's argmax is written. Every reader after this seam (the
                         # span decoder, the write) grades the state the coda gets.
                         h_slots, _fan_w, fan_select_loss = self._tul_fan_select(
+                            _reg_cells, xn, x0, bigram_emb, input_ids, labels, layout, L,
+                            tg_attn_kwargs, tg_reset, plan_mode, fan_stats)
+                    elif self.tul_fan.mode == "all":
+                        # ── write all + WTA responsibility (tul.fan_mix="all") ──────
+                        # Every stream reaches the coda in ITS prefix cell (the write
+                        # below takes the register's `cells=` route); `h_slots` here is
+                        # only the mean the auxiliary readers see. The winner-alone
+                        # span CE is charged at train (`_tul_fan_all`).
+                        h_slots, _fan_w, fan_wta_loss = self._tul_fan_all(
                             _reg_cells, xn, x0, bigram_emb, input_ids, labels, layout, L,
                             tg_attn_kwargs, tg_reset, plan_mode, fan_stats)
                     else:
@@ -8590,7 +8732,12 @@ class MORPHTransformer(nn.Module):
                                                  plan_mode, code_mode, code_given,
                                                  code_given_mask, input_ids)
                 h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
-            elif _reg_cells is not None and self.tul_fan is None:
+            elif _reg_cells is not None and (self.tul_fan is None
+                                             or self.tul_fan.mode == "all"):
+                # The register's 1:1 write (cell i -> prefix cell i through W_prefix[i]);
+                # `tul.fan_mix="all"` takes the SAME route, so every stream reaches the
+                # coda in its own cell. The mixing fans (mean / softmax / select) fall to
+                # the `else` below with ONE state and `_cells` None.
                 # The register's M cells go 1:1 into the M prefix cells (`prefix_k` is
                 # refused unless it equals `slot_cells`). The ablation runs on the STACK
                 # and the exit mean is read back off it, so a `shuffle` draws ONE
@@ -8961,6 +9108,17 @@ class MORPHTransformer(nn.Module):
             _sw = tc.fan_select_gate_lambda * fan_select_loss
             groups["fan_select_gate_weighted"] = _sw.detach()
             groups["loss"] = groups["loss"] + _sw
+        if fan_wta_loss is not None and groups is not None:
+            # tul.fan_mix="all": the winner-alone span CE (the responsibility term),
+            # folded like the gate CE. `fan_wta_ce` is a CE in nats on the same spans
+            # `fan_wta_oracle_ce` scores, so `wta_ce - wta_oracle_ce` is the eps guard's
+            # price and `wta_ce - the model's CE` is what one stream alone costs the coda
+            # against the full K-cell read.
+            groups = dict(groups)
+            groups["fan_wta_ce"] = fan_wta_loss.detach()
+            _ww = tc.fan_all_wta_lambda * fan_wta_loss
+            groups["fan_wta_weighted"] = _ww.detach()
+            groups["loss"] = groups["loss"] + _ww
         if self.tul_carry is not None and groups is not None and self._loop_carry_stats:
             # `tul.loop_carry`'s per-pass readings. A VARIABLE number of keys (the
             # batch's realised max depth decides how many), so it is a scan and not a
