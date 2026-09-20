@@ -188,7 +188,7 @@ def evaluate(
                     continue
                 _name = str(_fk)[4:]
                 _dest = (f"val/fan_{_name}"
-                         if _name.startswith(("stream_cos_t", "epi_t")) or _name in _fan_train_side
+                         if _name.startswith(("stream_cos_t", "epi_t", "vol_t")) or _name in _fan_train_side
                          else f"fan/{_name}")
                 acc.setdefault(_dest, []).append(float(out[_fk]))
             if "ce_tokens_no_slots" in out:

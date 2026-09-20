@@ -60,7 +60,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 __all__ = ["TULFanMix", "fan_stream_stats", "fan_stream_cos", "fan_repel_term",
-           "FanReservoir", "ridge_map", "epi_score", "fan_epi_term"]
+           "FanReservoir", "ridge_map", "epi_score", "fan_epi_term", "fan_vol_term"]
 
 
 def _cell_readout(cells: Tensor) -> Tensor:
@@ -406,6 +406,70 @@ def fan_epi_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
             live.append(e)
         if stats is not None:
             stats[f"epi_t{t}"] = float(e.detach())
+    if not live:
+        return None
+    if stats is not None:
+        stats["repel_terms"] = float(len(live))
+    return -torch.stack(live).mean()
+
+
+# ── tul.fan_repel_mode: "vol" and "epivol" — the WITHIN-slot volume ─────────────────────
+# WHY A THIRD TERM. The epi term scores each stream's deviation ACROSS slots, so it never
+# looks inside a slot. fan4-epi (2026-09-20, step 1000) paid it off with
+# d_i(n) = c_i * v(n): one input-dependent direction per slot and fixed per-stream
+# scalars. Every stream's deviation is a learnable function of the seed (epi_t1 1.67 bits
+# per feature and rising) while the four streams of a slot stay on ONE line
+# (fan/stream_rank_t1 1.001 of 4, below fan4's 1.05). The volume term is the within-slot
+# reading the epi term lacks: with D̂ the K normalised deviations of a slot, `G = D̂ D̂ᵀ`
+# [K, K] has rank <= K-1 (deviations sum to zero) and `0.5 log2 det(I + eta G)` is
+# largest when the K-1 nonzero eigenvalues are equal and largest — orthogonal, equal
+# deviations — and near zero for a line. Scale-free through the same normalisation.
+# `vol` alone can be met by FIXED orthogonal axes (content-free, the cosine's failure one
+# rank up); `epivol` sums the two so the spread must also be input-dependent: a constant
+# deviation scores 0 on epi, and the epi part can only gain by making the axes vary with
+# the seed. Reported per pass as `fan_vol_t{t}` in bits per (K-1).
+
+
+def _fan_vol_pass(state: Tensor, valid: Tensor, m_cells: int, eta: float) -> Tensor:
+    """Mean over valid slots of the within-slot volume of the normalised deviations."""
+    b, sm = state.shape[0], state.shape[1]
+    s = valid.shape[1]
+    if sm != s * m_cells:
+        raise ValueError(f"fan_vol_term: compact axis {sm} != S*M = {s}*{m_cells}")
+    z = _cell_readout(state.reshape(b, s, m_cells, *state.shape[2:]))   # [B, S, M, C]
+    sel = z[valid].float()                                             # [N, M, C]
+    if sel.shape[0] == 0:
+        return z.sum() * 0.0
+    dev = sel - sel.mean(dim=1, keepdim=True)
+    scale = sel.norm(dim=-1).mean(dim=1, keepdim=True).unsqueeze(-1).clamp_min(1e-6)
+    dev = dev / scale
+    g = dev @ dev.transpose(1, 2)                                      # [N, M, M]
+    eye = torch.eye(m_cells, dtype=g.dtype, device=g.device)
+    ld = torch.linalg.slogdet(eye + float(eta) * g)[1]                 # [N]
+    return (0.5 * ld / math.log(2) / float(m_cells - 1)).mean().to(state.dtype)
+
+
+def fan_vol_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int, eta: float,
+                 stats: dict[str, float] | None = None) -> Tensor | None:
+    """``"vol"``'s raw term: MINUS the mean within-slot volume over passes ``1..n_passes``.
+
+    Same contract as :func:`fan_repel_term`: passes ``1..n`` carry gradient, every pass is
+    reported (``fan_vol_t{t}``), ``None`` when the batch is shallower than one pass.
+    """
+    if not traj:
+        return None
+    if n_passes < 1:
+        raise ValueError(f"fan_repel_passes must be >= 1, got {n_passes}")
+    live: list[Tensor] = []
+    for t in range(len(traj)):
+        if 1 <= t <= n_passes:
+            v = _fan_vol_pass(traj[t], valid, m_cells, eta)
+            live.append(v)
+        else:
+            with torch.no_grad():
+                v = _fan_vol_pass(traj[t], valid, m_cells, eta)
+        if stats is not None:
+            stats[f"vol_t{t}"] = float(v.detach())
     if not live:
         return None
     if stats is not None:

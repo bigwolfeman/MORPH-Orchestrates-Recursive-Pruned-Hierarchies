@@ -319,7 +319,8 @@ class TULConfig:
     fan_repel_passes: int = 2            # repel after passes 1..this (PLR Thm 4.4)
     fan_mix: str = "mean"                # "mean" (control) | "softmax" (learned gate)
     fan_repel_mode: str = "cos"          # "cos" (pairwise cosine) | "epi" (epiplexity of the
-                                         # between-stream deviations, morph/model/tul_fan.py)
+                                         # between-stream deviations) | "vol" (within-slot
+                                         # volume) | "epivol" (both; morph/model/tul_fan.py)
     fan_epi_features: int = 64           # reservoir width F (epi only)
     fan_epi_ridge: float = 3.0           # ridge rho of the readout (epi only)
     fan_epi_eta: float = 30.0            # saturation eta inside the log-det (epi only)
@@ -1590,9 +1591,10 @@ class TULConfig:
         if self.fan_repel_lambda < 0.0:
             raise ValueError(
                 f"tul.fan_repel_lambda must be >= 0, got {self.fan_repel_lambda}")
-        if self.fan_repel_mode not in ("cos", "epi"):
+        if self.fan_repel_mode not in ("cos", "epi", "vol", "epivol"):
             raise ValueError(
-                f"tul.fan_repel_mode must be 'cos' or 'epi', got {self.fan_repel_mode!r}")
+                f"tul.fan_repel_mode must be 'cos', 'epi', 'vol' or 'epivol', got "
+                f"{self.fan_repel_mode!r}")
         if self.fan_epi_features < 2:
             raise ValueError(
                 f"tul.fan_epi_features must be >= 2, got {self.fan_epi_features}")

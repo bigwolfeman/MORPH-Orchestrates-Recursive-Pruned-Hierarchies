@@ -1,0 +1,27 @@
+# LXTUL — arm "slot-spandec-strict-fan4-epivol": epiplexity PLUS the within-slot volume.
+# ONE factor against `tul_slot_spandec_strict_fan4_epi`: `tul.fan_repel_mode` epi -> epivol.
+#
+# WHY. fan4-epi paid the epi term off with d_i(n) = c_i * v(n): every stream's deviation
+# is a learnable function of the seed (epi_t1 1.67 bits per feature at step 1000) while
+# the four streams of a slot stay on ONE line (fan/stream_rank_t1 1.001 of 4). The epi
+# score is taken per stream ACROSS slots and never looks inside a slot. The volume term
+# is the within-slot reading: 0.5 log2 det(I + eta G) of the K x K Gram of a slot's
+# normalised deviations, near zero for a line and largest for K-1 orthogonal equal
+# deviations. Summed with epi so the spread must also be input-dependent (fixed orthogonal
+# axes score 0 on epi). morph/model/tul_fan.py has the derivation.
+#
+# WHAT TO READ, in order: `fan/stream_rank_t1` (fan4 1.05, fan4-epi 1.00; the term exists
+# to move it) with `val/fan_vol_t1` and `val/fan_epi_t1`; then `fan/oracle_ce` against
+# `fan/mixed_ce` and the four `fan/stream_ce_k{i}`; then the K-curve.
+#
+# Record: lab/experiments/planned/2026-09-20-lxtul-fan4-epivol.md
+# Note: .agents/notes/proposed/architecture/2026-09-20-fan-epiplexity-diversity.md
+defaults:
+  - tul_slot_spandec_strict_fan4_epi
+  - _self_
+
+tul:
+  fan_repel_mode: epivol
+
+wandb:
+  name: slot-spandec-strict-fan4-epivol

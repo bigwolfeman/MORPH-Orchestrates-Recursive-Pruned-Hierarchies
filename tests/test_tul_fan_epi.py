@@ -167,3 +167,104 @@ def test_config_refusals_and_known_keys():
         TULConfig(prefix_k=2, fan_repel_mode="epi")
     reject_unknown_tul_keys({"fan_k": 4, "fan_repel_mode": "epi", "fan_epi_features": 64,
                              "fan_epi_ridge": 3.0, "fan_epi_eta": 30.0})
+
+
+# ── "vol" / "epivol": the within-slot volume ──────────────────────────────────────────
+from morph.model.tul_fan import fan_vol_term  # noqa: E402
+
+
+def _traj_family(seed: int, kind: str, s: int = 16, m: int = 4, c: int = 24, n_entries: int = 3):
+    """Streams = base(n) + deviations of a given shape at passes 1.., identical at the seed.
+
+    ``line``: d_i(n) = c_i * v(n), one input-dependent direction per slot (fan4-epi's
+    loophole). ``ortho``: d_i(n) = the i-th of K-1 orthogonal input-dependent directions,
+    sum-to-zero. ``fixed``: the same K-1 orthogonal FIXED axes in every slot.
+    """
+    g = torch.Generator().manual_seed(seed)
+    base = torch.randn(s, c, generator=g)
+    mix = torch.randn(c, (m - 1) * c, generator=g) / math.sqrt(c)
+    dirs = (base @ mix).reshape(s, m - 1, c)                          # input-dependent
+    dirs = torch.linalg.qr(dirs.transpose(1, 2))[0].transpose(1, 2)   # orthonormal per slot
+    if kind == "fixed":
+        dirs = dirs[:1].expand(s, m - 1, c)
+    coef = torch.tensor([[1.0, -1.0, 0.0, 0.0], [0.0, 0.0, 1.0, -1.0], [0.5, 0.5, -0.5, -0.5]])
+    if kind == "line":
+        dev = torch.einsum("k,snc->snkc", torch.tensor([1.5, 0.5, -1.0, -1.0]), dirs[:, :1])[:, 0]
+    else:
+        dev = torch.einsum("jk,sjc->skc", coef, dirs)                 # [s, m, c], sums to 0
+    # Deviations of the order of the stream norm, as on the real arms (fan4's cross-stream
+    # cosines were -0.9). Below about 1/sqrt(eta) of the norm the log-det is linear in the
+    # eigenvalues and pays for magnitude only; the term is built for the saturated regime.
+    dev = dev * 4.0
+    out = []
+    for t in range(n_entries):
+        st = base.unsqueeze(1) + (0.0 if t == 0 else 1.0) * dev
+        out.append(_state(st).clone().requires_grad_(True))
+    return out
+
+
+def test_volume_reads_a_line_low_and_a_spread_high_at_equal_magnitude():
+    valid = torch.ones(1, 16, dtype=torch.bool)
+    stats_line, stats_orth = {}, {}
+    fan_vol_term(_traj_family(0, "line"), valid, 4, 1, 30.0, stats=stats_line)
+    fan_vol_term(_traj_family(0, "ortho"), valid, 4, 1, 30.0, stats=stats_orth)
+    assert stats_line["vol_t0"] == pytest.approx(0.0, abs=1e-6)       # identical at the seed
+    assert stats_orth["vol_t1"] > 2.0 * stats_line["vol_t1"] > 0.0
+
+
+def test_epi_is_blind_to_the_line_loophole_and_the_sum_is_not():
+    valid = torch.ones(1, 16, dtype=torch.bool)
+    res = FanReservoir(24, 16, seed=1, hidden=32)
+    e_line, e_orth, v_line, v_orth = {}, {}, {}, {}
+    fan_epi_term(_traj_family(0, "line"), valid, 4, 1, res, 3.0, 30.0, stats=e_line)
+    fan_epi_term(_traj_family(0, "ortho"), valid, 4, 1, res, 3.0, 30.0, stats=e_orth)
+    fan_vol_term(_traj_family(0, "line"), valid, 4, 1, 30.0, stats=v_line)
+    fan_vol_term(_traj_family(0, "ortho"), valid, 4, 1, 30.0, stats=v_orth)
+    # the epi score does not fall on the line family: it is input-dependent per stream
+    assert e_line["epi_t1"] > 0.5 * e_orth["epi_t1"]
+    # the combined score does: the volume part separates them
+    assert e_orth["epi_t1"] + v_orth["vol_t1"] > e_line["epi_t1"] + v_line["vol_t1"] + 0.5
+
+
+def test_fixed_axes_score_zero_on_epi_and_high_on_volume():
+    valid = torch.ones(1, 16, dtype=torch.bool)
+    res = FanReservoir(24, 16, seed=1, hidden=32)
+    e, v = {}, {}
+    fan_epi_term(_traj_family(0, "fixed"), valid, 4, 1, res, 3.0, 30.0, stats=e)
+    fan_vol_term(_traj_family(0, "fixed"), valid, 4, 1, 30.0, stats=v)
+    # Not exactly 0: the per-slot norm normalisation makes a constant deviation vary in
+    # magnitude with the base, so a sliver is predictable. Near zero against the spread
+    # family's bits is the claim.
+    assert e["epi_t1"] < 0.05
+    assert v["vol_t1"] > 1.0
+
+
+def test_volume_is_scale_free_and_charges_the_first_passes_only():
+    valid = torch.ones(1, 16, dtype=torch.bool)
+    a = fan_vol_term(_traj_family(0, "ortho"), valid, 4, 1, 30.0)
+    big = [(25.0 * t).detach().requires_grad_(True) for t in _traj_family(0, "ortho")]
+    b = fan_vol_term(big, valid, 4, 1, 30.0)
+    assert a.item() == pytest.approx(b.item(), rel=1e-5)
+    traj = _traj_family(0, "ortho")
+    term = fan_vol_term(traj, valid, 4, n_passes=1, eta=30.0)
+    gs = torch.autograd.grad(term, traj, allow_unused=True)
+    assert gs[0] is None and gs[1] is not None and gs[2] is None
+
+
+def test_vol_and_epivol_modes_build_and_reach_the_loss():
+    vol = _model(fan_k=4, slot_cells=4, fan_mix="mean", fan_repel_lambda=0.5, fan_repel_mode="vol")
+    assert vol.tul_fan_epi is None
+    both = _model(fan_k=4, slot_cells=4, fan_mix="mean", fan_repel_lambda=0.5,
+                  fan_repel_mode="epivol", fan_epi_features=8)
+    assert both.tul_fan_epi is not None
+    _ids0, inp, lab, layout = _batch(4)
+    for m, keys in ((vol, ("fan_vol_t",)), (both, ("fan_vol_t", "fan_epi_t"))):
+        m.train()
+        torch.manual_seed(7)
+        out = m(inp, labels=lab, slot_layout=layout)
+        assert "fan_repel" in out and torch.isfinite(out["fan_repel"])
+        for k in keys:
+            assert any(str(o).startswith(k) for o in out), k
+        assert any(str(o).startswith("fan_stream_cos_t") for o in out)
+        out["loss"].backward()
+        assert m.tul_register.W_o.weight.grad is not None

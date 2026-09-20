@@ -77,6 +77,27 @@ no global axis in the stream probe (mechanism); every `fan/stream_ce_k{i}` withi
 `fan/mixed_ce` by more than 0.022 (the streams give the coda something to choose
 between). Bit-identity at `cos` and the pass contract are `tests/test_tul_fan_epi.py`.
 
+## Amendment, 2026-09-20 (the epi arm's loophole, and the volume term)
+
+`slot-spandec-strict-fan4-epi` at step 1000 (val): `val/fan_epi_t1` 1.67 bits per feature
+and rising, `fan/stream_rank_t1` **1.001** of 4, `val/fan_stream_cos_t1` 0.30, cos_t6 0.55.
+The score is high and the streams of a slot lie on one line. The epi score is computed
+per stream ACROSS slots and never looks inside a slot, so it is paid off by
+`d_i(n) = c_i · v(n)`: one input-dependent direction per slot (learnable from the seed,
+hence the score) with fixed per-stream scalars (hence rank 1). The proposal above named
+"input-dependent, spread-out" as one property; it is two, and the term measured one.
+
+Added: `tul.fan_repel_mode: vol | epivol`. `vol` is the WITHIN-slot volume, `½ log₂ det(I +
+η G)` of the K × K Gram of a slot's normalised deviations (rank ≤ K − 1 since they sum to
+zero), in bits per (K − 1): near zero for a line, largest for K − 1 orthogonal equal
+deviations, scale-free through the same normalisation, reported as `fan/vol_t{t}`. `vol`
+alone can be met by fixed orthogonal axes (content-free, the cosine's failure one rank up);
+`epivol` sums the two so the spread must also be input-dependent, since a constant
+deviation scores exactly 0 on epi. Tests: a line scores low and a spread high on `vol` at
+equal magnitude; the line family keeps most of its epi score and loses on the sum; fixed
+axes score 0 on epi and high on `vol`. The next arm is `epivol` against `epi`
+(`lab/experiments/planned/2026-09-20-lxtul-fan4-epivol.md`).
+
 ## Risks
 
 - The term's scale differs from the cosine's (bits per feature, a few at most, against a

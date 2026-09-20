@@ -48,6 +48,7 @@ from .tul import (TULCenterExit, TULConfig, TULGate, TULGateConfig, TULGradPass,
                   window_drop_mask)
 from .tul_carry import TULLoopCarry
 from .tul_fan import (FanReservoir, TULFanMix, fan_epi_term, fan_repel_term, fan_stream_rank,
+                      fan_vol_term,
                       fan_stream_stats)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
@@ -2034,7 +2035,7 @@ class MORPHTransformer(nn.Module):
         # generator, so the base weights are byte-identical to the cosine arm's. `"cos"`
         # (the default) builds nothing and the forward is the one from before the key.
         self.tul_fan_epi: FanReservoir | None = None
-        if self.tul_fan is not None and cfg.tul.fan_repel_mode == "epi":
+        if self.tul_fan is not None and cfg.tul.fan_repel_mode in ("epi", "epivol"):
             self.tul_fan_epi = FanReservoir(d, cfg.tul.fan_epi_features, seed=0)
 
         # ── The discrete thought (TULConfig.vq_codes; morph/model/tul_vq.py) ──────
@@ -8232,20 +8233,30 @@ class MORPHTransformer(nn.Module):
                     # `fan/stream_cos_t{t}` under no_grad. Training only — at eval the
                     # cosines are instruments and there is no term.
                     if db_traj is not None:
-                        if self.tul_fan_epi is None:
+                        _mode = str(tc.fan_repel_mode)
+                        if _mode == "cos":
                             _rp = fan_repel_term(db_traj, layout.slot_valid, _m,
                                                  int(tc.fan_repel_passes), stats=fan_stats)
                         else:
-                            # `fan_repel_mode: "epi"`: the cosines stay INSTRUMENTS (every
-                            # pass, no gradient) and the charged term is minus the
-                            # epiplexity of the streams' deviations (`fan_epi_t{t}`).
+                            # `epi` / `vol` / `epivol`: the cosines stay INSTRUMENTS (every
+                            # pass, no gradient); the charged term is minus the epiplexity
+                            # of the streams' deviations (`fan_epi_t{t}`), minus the
+                            # within-slot volume (`fan_vol_t{t}`), or their sum.
                             with torch.no_grad():
                                 fan_repel_term(db_traj, layout.slot_valid, _m,
                                                int(tc.fan_repel_passes), stats=fan_stats)
-                            _rp = fan_epi_term(db_traj, layout.slot_valid, _m,
-                                               int(tc.fan_repel_passes), self.tul_fan_epi,
-                                               float(tc.fan_epi_ridge), float(tc.fan_epi_eta),
-                                               stats=fan_stats)
+                            _parts = []
+                            if _mode in ("epi", "epivol"):
+                                _parts.append(fan_epi_term(
+                                    db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
+                                    self.tul_fan_epi, float(tc.fan_epi_ridge),
+                                    float(tc.fan_epi_eta), stats=fan_stats))
+                            if _mode in ("vol", "epivol"):
+                                _parts.append(fan_vol_term(
+                                    db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
+                                    float(tc.fan_epi_eta), stats=fan_stats))
+                            _parts = [p for p in _parts if p is not None]
+                            _rp = torch.stack(_parts).sum() if _parts else None
                         if self.training and tc.fan_repel_lambda > 0.0:
                             fan_repel_loss = _rp
                         if not self.training:
