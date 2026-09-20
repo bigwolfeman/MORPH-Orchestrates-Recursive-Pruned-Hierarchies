@@ -79,6 +79,13 @@ write equals stream 0's own replay exactly.
 
 ## Not verified before launch
 
-- The GPU smoke of the composed config (recorded below before the queue line).
+- The GPU smoke of the composed config: Spark, 2026-09-20 18:29 to 18:38 UTC, the runner's
+  12-step command at ec0aa41, exit 0, peak 17.63 GB (epivol's smoke 17.58), build banner
+  `mix='select' repel_mode='epivol'`, final val `fan/gate_agree` 0.4804, `fan/mixed_ce`
+  11.1539, `fan/oracle_ce` 11.1373 (355 spans). The GPU shared the card with a running
+  readout, so its step rate is not a reading. The train-side `fan/select_*` keys are
+  proven present in the forward's output by `tests/test_tul_fan_select.py`; their wandb
+  rows could not be read from the offline smoke and are checked on the 5090 run's first
+  logged steps.
 - The step-time cost of the K no-grad coda passes at seq 1024, batch 6 (P-8 reads it).
 - Whether `fan_select_eps 0.05` is enough to keep a loser readable; P-1 and P-6 read it.
