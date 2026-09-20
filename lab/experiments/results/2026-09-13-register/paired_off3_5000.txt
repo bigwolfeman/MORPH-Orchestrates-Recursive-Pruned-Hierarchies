@@ -1,0 +1,20 @@
+slot-spandec-strict-off3 depth= 1 ce=4.3476  ruler 4.3490
+slot-spandec-strict-off3 depth= 2 ce=4.3468  ruler 4.3479
+slot-spandec-strict-off3 depth= 3 ce=4.3467  ruler 4.3476
+slot-spandec-strict-off3 depth= 6 ce=4.3466  ruler 4.3474
+slot-spandec-strict-off3 depth= 9 ce=4.3468  ruler 4.3476
+slot-spandec-strict-off3 depth=12 ce=4.3471  ruler 4.3480
+slot-spandec-strict-off3 depth=16 ce=4.3476  ruler 4.3486
+slot-spandec-strict-off3 K1-K6 +0.0009 [+0.0007, +0.0012]
+slot-spandec-strict-off3 K3-K6 +0.0000 [-0.0000, +0.0001]
+P-6 depth-6 token-paired: slot-spandec-strict-off3 - ruler = -0.0008 [-0.0032, +0.0016]  (bar: worse by 0.00..0.06)
+worth zero bins [[0, 0], [1, 1], [2, 2], [3, 3], [4, 7], [8, 15], [16, 1000000000]]
+  slot-spandec-strict-off3     +0.7828 +0.3715 +0.2851 +0.2506 +0.1923 +0.1373 +0.0961  total +0.1891
+  ruler                        +0.7567 +0.3964 +0.2991 +0.2576 +0.1931 +0.1310 +0.0905  total +0.1865
+  bin16+ slot-spandec-strict-off3 +0.0961 [+0.0900,+0.1030] vs ruler +0.0905 [+0.0845,+0.0969]  delta +0.0056
+worth shuffle bins [[0, 0], [1, 1], [2, 2], [3, 3], [4, 7], [8, 15], [16, 1000000000]]
+  slot-spandec-strict-off3     +1.5858 +0.2832 +0.2025 +0.1622 +0.1112 +0.0741 +0.0371  total +0.1634
+  ruler                        +1.7391 +0.3197 +0.2162 +0.1713 +0.1172 +0.0751 +0.0332  total +0.1739
+  bin16+ slot-spandec-strict-off3 +0.0371 [+0.0320,+0.0423] vs ruler +0.0332 [+0.0284,+0.0384]  delta +0.0039
+P-7 bar: zero-mode bin 16+ at least +0.02 above ruler (0.0905) -> needs >= 0.1105
+P-8 depth-6 token-paired: slot-spandec-strict-off3 - slot-spandec-strict-off2 = +0.0027 [+0.0005, +0.0049]  (fails if off3 better by > 0.02)

@@ -1,0 +1,2 @@
+off3 step 5000 depth 6 rows 48 offset 3: spandec_ce normal 4.5781 zero 4.8380 shuffle 4.6138 | zero-normal +0.2599 [+0.2375, +0.2853] shuffle-normal +0.0358
+off2 step 5000 depth 6 rows 48 offset 2: spandec_ce normal 4.5672 zero 4.8840 shuffle 4.6186 | zero-normal +0.3168 [+0.2927, +0.3450] shuffle-normal +0.0513

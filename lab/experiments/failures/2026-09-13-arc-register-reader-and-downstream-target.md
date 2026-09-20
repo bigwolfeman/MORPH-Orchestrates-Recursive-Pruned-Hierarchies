@@ -1,6 +1,6 @@
 # Planned: the register's READER, and a target that is not the next span
 
-Status: planned
+Status: failure
 
 Date: 2026-09-13 (frozen before any GPU step of any of the three arms; no smoke of any of
 them exists at filing time). Arc:
@@ -288,7 +288,7 @@ An inert auxiliary term is a noise source, and `-off2` becomes the only offset r
 
 ## Results
 
-(predictions above are frozen; the file stays `planned` until `-off3` has run)
+(predictions above are frozen; `-off3` ran 2026-09-20 and the file is filed below)
 
 ### Interim, 2026-09-19: `slot-spandec-strict-off2` only
 
@@ -345,3 +345,79 @@ moves no worth bin. That is the same branch's conclusion with less hedging: the 
 not the reason the far budget is unreached; the coda's worth by offset is set by what the
 cell can carry, which is the hop-distance line (`../failures/2026-09-19-hop-distance-plateau-and-dilution.md`).
 Verdict waits for `-off3` (P-8, P-9) so the offset dial is read at two points, not one.
+
+### `slot-spandec-strict-off3`, 2026-09-20
+
+Run: 5000 steps at `2fc81d6`, exit 0, tripwire HEALTHY (max 35.5 at step 224), final
+val_loss 4.4316, 11,502 tok/s at step 200. Artifacts beside `-off2`'s in
+`../results/2026-09-13-register/` (`sweep_slot-spandec-strict-off3_{2500,5000}.json`,
+`worth_slot-spandec-strict-off3_5000.json`, `slot_state_slot-spandec-strict-off3_5000.json`,
+`run_slot-spandec-strict-off3.txt`, scorer output `paired_off3_5000.txt`, and the P-9 probe's
+`spandec_z_off_5000.{json,txt}`).
+
+| depth | `-off3` token CE | ruler |
+|---|---|---|
+| 1 | 4.3476 | 4.3490 |
+| 3 | 4.3467 | 4.3476 |
+| 6 | 4.3466 | 4.3474 |
+| 16 | 4.3476 | 4.3486 |
+
+K1−K6 +0.0009 [+0.0007, +0.0012]; K3−K6 +0.0000 [−0.0000, +0.0001].
+
+- **P-5, the `-off3` clause: TRUE.** K3−K6 0.0000.
+- **P-6, the `-off3` half: FALSE.** `-off3` − ruler at depth 6, token-paired on the same
+  480 rows: −0.0008 [−0.0032, +0.0016]. Not worse; the interval covers zero. Both offset
+  arms cost nothing at 5k.
+- **P-7, `-off3`: FALSE** (the prediction named `-off2`; `-off3` is read the same way).
+  Zero-mode bin 16+: +0.0961 [+0.0900, +0.1030] against the ruler's +0.0905, delta
+  +0.0056, bar +0.02. Bins 0.783/0.372/0.285/0.251/0.192/0.137/0.096, total 0.1891 vs the
+  ruler's 0.1865; shuffle 16+ +0.0371 vs +0.0332.
+- **P-8: TRUE.** `-off3` − `-off2` at depth 6, token-paired: +0.0027 [+0.0005, +0.0049].
+  Offset 3 is 0.0027 nats WORSE than offset 2, nowhere near beating it by 0.02. Distance
+  is not a live dial past 2 at this horizon.
+- **P-9: TRUE, with the instrument corrected.** `plan_mode: zero` does NOT zero the
+  decoder's z: `_tul_plan_ablate` runs after `_tul_spandec_loss` has read `h_slots`
+  (transformer.py), so the worth profile's zero mode ablates what the coda reads and leaves
+  the decoder's input as trained. `lab/divergence/spandec_zero_z_probe.py` (new, eval-only)
+  wraps the decoder's input itself: 48 rows, batch 3, forced depth 6, on the Spark.
+  `-off3` `spandec_ce` 4.5781 as trained, 4.8380 zeroed (+0.2599 [+0.2375, +0.2853]),
+  4.6138 shuffled within the row (+0.0358). `-off2`: 4.5672 / 4.8840 (+0.3168 [+0.2927,
+  +0.3450]) / 4.6186 (+0.0513). The bar was 0.10: the far target did not go inert. The
+  caveat is on the number, not the verdict: a zeroed z is an input the decoder never saw,
+  so +0.26 is an upper bound on "the decoder without z"; the shuffle, which keeps the input
+  distribution and removes only the correspondence, says the SPECIFIC content of z is
+  worth 0.036 nats to a decoder grading span s+3 and 0.051 grading span s+2.
+- **P-10, the `-off3` half: TRUE.** 11,502 tok/s at step 200 against the 11,000 bar
+  (`-off2` 10,672 on its own day; a same-day pair was never run).
+- **P-1, P-2, P-3, P-4, P-11: UNSCORED.** `slot-register-m4-reader` never ran (0 lines in
+  the runner's queue log on 2026-09-20). That is a protocol failure of this file, not a
+  reading: the register lane was overtaken by the LXTUL fan (`2026-09-19-lxtul-fan4.md`),
+  which reads the same "K states per span" question with a per-stream reader
+  (`2026-09-20-lxtul-fan4-select.md`). If the reader arm is ever wanted it gets a new
+  planned file; nothing in this one may be scored after the fact.
+
+## Verdict
+
+**Failure.** Of the clauses the two offset arms can score, P-6 is FALSE on both halves, P-7
+is FALSE on both, P-10 is split; P-5, P-8 and P-9 hold. The arms' reason to exist (P-7, the
+far worth bins) fails at both offsets. The reader arm's five clauses are unscored because
+the arm never ran, which is a protocol failure by the rule in `docs/experiments/AGENTS.md`.
+
+## Updated hypothesis
+
+1. Where z is graded does not move what the coda gets from it. Offsets 1, 2 and 3 give the
+   same depth-6 token CE inside 0.004 nats on paired rows and the same worth-by-offset
+   profile inside every bin's interval. The decoder reads z at every offset (P-9: +0.26 and
+   +0.32 zeroed, +0.036 and +0.051 shuffled), so the objective IS trained and still does
+   not change the coda's reading. That is the Binding's "P-7 fails and P-6 holds" branch
+   with the CE cost removed: the far budget is unreached because of what the cell can
+   carry, not what it is asked for. The line that reads that is the hop-distance line
+   (`2026-09-19-hop-distance-plateau-and-dilution.md`) and the K-stream line, not another
+   target.
+2. The specific content of z is worth 0.04 to 0.05 nats to its own decoder at offsets 2
+   and 3 (the shuffle), against 0.26 to 0.32 for "a trained-distribution vector is there".
+   Most of what the decoder takes from z is generic. A future reader-side arm should quote
+   the shuffle number, not the zero number.
+3. The instrument correction stands on its own: any P that asks what an auxiliary head
+   reads must ablate that head's INPUT, not the coda's; `plan_mode` ablations are the
+   coda's. `spandec_zero_z_probe.py` is the home of the decoder-side read.
