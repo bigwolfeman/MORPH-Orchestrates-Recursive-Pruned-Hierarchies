@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import torch
-from _build import ROOT, build_cfg
+from _build import ROOT, build_cfg, parse_ckpt_spec
 from _rows import pack_rows, stream_from_loader
 import sys
 sys.path.insert(0, f"{ROOT}/scripts")
@@ -23,17 +23,17 @@ from tul_samples import load_ckpt  # noqa: E402
 @torch.no_grad()
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=True, help="LABEL=CONFIG=PATH")
+    ap.add_argument("--ckpt", required=True, help="LABEL=CONFIG=PATH[=ovr1,ovr2]")
     ap.add_argument("--depths", default="1,2,3,6,16")
     ap.add_argument("--rows", type=int, default=12)
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    label, config, path = a.ckpt.split("=", 2)
+    label, config, path, ovr = parse_ckpt_spec(a.ckpt)
     depths = [int(x) for x in a.depths.split(",")]
     from morph.training.data import create_dataloader
     from morph.training.tul_setup import build_tul_runtime
-    cfg = build_cfg(config, ["model.use_kernels=false"])
+    cfg = build_cfg(config, ["model.use_kernels=false", *ovr])
     tul_rt = build_tul_runtime(cfg)
     if tul_rt is None or bool(tul_rt.model_cfg.tokens_through_core):
         raise SystemExit("slot_state_probe needs a SLOT-LOOP model (tokens_through_core false)")

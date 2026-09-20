@@ -24,9 +24,29 @@ from morph.training.quant_setup import apply_quantization     # noqa: E402
 from morph.training.train import build_morph_config           # noqa: E402
 from morph.training.tul_setup import build_tul_runtime        # noqa: E402
 
-__all__ = ["build_cfg", "build_model", "DepthLever", "uses_sample_depth", "ROOT"]
+__all__ = ["build_cfg", "build_model", "DepthLever", "uses_sample_depth", "ROOT",
+           "parse_ckpt_spec"]
 
 ROOT = _ROOT
+
+
+def parse_ckpt_spec(spec: str) -> tuple[str, str, str, list[str]]:
+    """``LABEL=CONFIG=PATH[=ovr1,ovr2,...]`` -> ``(label, config, abs_path, overrides)``.
+
+    THE ONE parser for every probe's ``--ckpt``. The fourth part carries Hydra overrides
+    the arm was TRAINED with (the queue line's EXTRA: ``tul.fan_mix=mean``,
+    ``tul.prefix_k=4``); a probe that drops it builds the wrong module set and the
+    checkpoint load fails (fan4-mean, 2026-09-20: ``tul_fan.gate.weight`` missing). A
+    relative PATH is taken against the repo root. Fewer than three parts raise.
+    """
+    parts = spec.split("=", 3)
+    if len(parts) < 3 or not all(parts[:3]):
+        raise ValueError(f"--ckpt wants LABEL=CONFIG=PATH[=ovr,...], got {spec!r}")
+    label, config, path = parts[0], parts[1], parts[2]
+    ovr = [o for o in parts[3].split(",") if o] if len(parts) == 4 else []
+    if not path.startswith("/"):
+        path = os.path.join(_ROOT, path)
+    return label, config, path, ovr
 
 
 def build_cfg(config_name: str, overrides: list[str]):

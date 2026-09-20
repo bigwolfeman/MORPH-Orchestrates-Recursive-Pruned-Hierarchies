@@ -34,7 +34,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from _build import ROOT, build_cfg
+from _build import ROOT, build_cfg, parse_ckpt_spec
 
 sys.path.insert(0, f"{ROOT}/scripts")
 from tul_samples import load_ckpt  # noqa: E402  (handles the _orig_mod. compile prefix)
@@ -138,12 +138,10 @@ def main() -> None:
 
     results: dict[str, dict] = {}
     for triple in a.ckpt:
-        parts = triple.split("=", 3)
-        label, config, path = parts[0], parts[1], parts[2]
-        ovr = parts[3].split(",") if len(parts) == 4 and parts[3] else []
+        label, config, path, ovr = parse_ckpt_spec(triple)
         cfg = build_cfg(config, ["model.use_kernels=false", *ovr])
         tul_rt = build_tul_runtime(cfg)
-        model, step = load_ckpt(cfg, path if path.startswith("/") else f"{ROOT}/{path}",
+        model, step = load_ckpt(cfg, path,
                                 device, tul_rt.model_cfg if tul_rt else None)
         model.eval()
         spec = tul_rt.data_cfg.spec_for(cfg.data.seq_len)

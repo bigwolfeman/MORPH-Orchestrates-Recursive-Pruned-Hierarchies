@@ -120,7 +120,7 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
-    from _build import ROOT, build_cfg
+    from _build import ROOT, build_cfg, parse_ckpt_spec
     from _rows import pack_rows, stream_from_loader
     sys.path.insert(0, f"{ROOT}/scripts")
     from tul_samples import load_ckpt  # noqa: E402
@@ -129,15 +129,12 @@ def main() -> None:
     import morph.model.transformer as tr_mod
     from morph.model.tul_fan import _cell_readout
 
-    parts = a.ckpt.split("=", 3)
-    label, config, path = parts[0], parts[1], parts[2]
-    ovr = parts[3].split(",") if len(parts) == 4 and parts[3] else []
+    label, config, path, ovr = parse_ckpt_spec(a.ckpt)
     cfg = build_cfg(config, ["model.use_kernels=false", *ovr])
     tul_rt = build_tul_runtime(cfg)
     if tul_rt is None or int(getattr(tul_rt.model_cfg, "fan_k", 0)) < 2:
         raise SystemExit(f"{label}: not a fan arm (tul.fan_k < 2)")
-    model, step = load_ckpt(cfg, path if path.startswith("/") else f"{ROOT}/{path}",
-                            a.device, tul_rt.model_cfg)
+    model, step = load_ckpt(cfg, path, a.device, tul_rt.model_cfg)
     model.eval()
     tc = model.cfg.tul
     m_cells = int(tc.fan_k)
