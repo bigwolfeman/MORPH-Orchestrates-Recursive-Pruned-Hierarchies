@@ -59,7 +59,12 @@ stream probe runs on the 3070 on the step-5000 checkpoint. Scored with `fan_scor
 
 ## Not verified before launch
 
-- A GPU smoke of the composed config on the Spark, recorded here before the queue line.
+- A GPU smoke of the composed config: the first Spark smoke (38e16f4) died in the compile
+  warmup on `linalg.slogdet` refusing a bf16 Gram; fixed in 0e9e3da (Gram in fp32 with
+  autocast off, CPU bf16-autocast test added). Second smoke at 0e9e3da, 2026-09-20 13:09 to
+  13:18 UTC, the runner's 12-step command, exit 0, peak 17.63 GB, `val/fan_vol_t0..6` 1.25
+  to 0.85 bits per (K − 1) and `val/fan_epi_t0..6` 0.30 to 0.16 logged at step 12. Not a
+  reading; the runner's own smoke gate runs again before the arm starts.
 - The relative scale of the two summed parts at λ 0.1 on the real shapes (both in bits;
   P-7 reads the sum).
 
