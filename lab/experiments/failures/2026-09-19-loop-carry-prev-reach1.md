@@ -1,6 +1,6 @@
 # Loop carry: if a cell KEEPS what it read from its neighbour, does the far hop stop decaying?
 
-Status: planned
+Status: failure
 
 Date: 2026-09-19. Commit: the sha in the queue lines below. Arms
 `slot-spandec-strict-prev-reach1-carry-sum` and `-carry-gate`, 5,000 steps, seq 1024,
@@ -132,3 +132,118 @@ random model over synthetic spans — which predicts nothing about a trained one
 
 **Unverified at the time of writing:** no GPU run, `torch.compile` untested, peak memory
 untested (P5's memory clause is read off the runner's smoke, not from anything here).
+
+## Results
+
+Read 2026-09-20 (sum: runner readouts in `results/2026-09-19-loop-carry/`; gate: the
+runner's readouts LOAD_FAIL on an override arm (`runner-smoke-skips-extra`), so its sweeps,
+worth profile and state probe ran by hand on the Spark from the same template and are
+copied into the same directory; hop probes on the 3070 at commit `908fe61`, 480 rows,
+batch 4, hops 6, `--planted --planted-len 2`). The ruler's pair rows are the same
+instrument's `hop2_prev-reach1-pair-{alldepths,cut1}_5000.json` in
+`results/2026-09-19-hop-distance-pass2/`. Scored with the scratch `hop_score.py` that
+scored the ruler.
+
+**Whole-arm depth sweep at 5,000 (480 rows, token CE), context only.**
+
+| arm | d1 | d3 | d6 | K1−K6 | K3−K6 |
+|---|---|---|---|---|---|
+| ruler `prev-reach1` | 4.3742 | 4.3620 | 4.3578 | +0.0163 | +0.0042 |
+| `carry-sum` | 4.4958 | 4.4561 | 4.4554 | +0.0404 | +0.0008 |
+| `carry-gate` | 4.4167 | 4.4094 | 4.4081 | +0.0086 | +0.0013 |
+
+Both carry arms sit behind the ruler at depth 6 (sum +0.098, gate +0.050). The sum arm's
+larger K1−K6 is a worse depth 1, not a better depth 6: on this arm the carry is injected
+only from pass 2 (`transformer.py`, `_cy = _carry_state if (... and t > 0)`), and the
+planted rows below show that NO neighbour content reaches a cell at depth 1.
+
+**Per-hop K1−K6 (pair, all depths, 5,000; sum arm; gate arm pending the 3070 run).**
+
+| h | ruler | `carry-sum` | sum per depth (d1, d2, d3, d6, d16) |
+|---|---|---|---|
+| 1 | +0.0109 | +0.1033 [+0.0995, +0.1071] | 4.5436, 4.4417, 4.4420, 4.4404, 4.4532 |
+| 2 | −0.0169 | +0.0846 [+0.0794, +0.0898] | 4.6473, 4.5641, 4.5655, 4.5627, 4.5622 |
+| 3 | +0.0640 | −0.0209 [−0.0248, −0.0169] | 4.4455, 4.4921, 4.4818, 4.4664, 4.4407 |
+| 4 | +0.0535 | −0.0742 [−0.0793, −0.0690] | 4.1809, 4.2491, 4.2465, 4.2550, 4.2900 |
+| 5 | +0.0288 | −0.0878 [−0.0947, −0.0809] | 4.4917, 4.5692, 4.5660, 4.5794, 4.6279 |
+| 6 | −0.0203 | −0.0957 [−0.1024, −0.0890] | 4.5357, 4.6209, 4.6173, 4.6314, 4.6807 |
+
+The sum arm inverts the ruler's staircase (Spearman(h, K1−K6) = −1.000). The near bins
+gain everything at pass 2, which is the first pass the carry is injected, and the far bins
+are best at depth 1 and get monotonically worse with every pass after 2.
+
+**Planted pair, benefit at the target cell (nats), sum arm vs ruler.**
+
+| row | ruler d1 → d2 → d3 → d6 | `carry-sum` d1 → d2 → d3 → d6 |
+|---|---|---|
+| g = 2, `--cut-after 1` (P1) | +0.148 → +0.073 → +0.050 → +0.036 | +0.000 → +0.108 → +0.147 → +0.210 |
+| g = 1, `--cut-after 1` | +0.181 → +0.245 → +0.271 → +0.290 | +0.003 → +0.090 → +0.124 → +0.170 |
+| g = 0, `--cut-after 1` | +0.566 → +0.577 → +0.582 → +0.585 | +0.679 → +0.666 → +0.653 → +0.624 |
+| g = 2, uncut | +0.148 → +0.108 → +0.088 → +0.071 (d16 +0.062) | +0.000 → +0.108 → +0.097 → +0.090 (d16 +0.079) |
+| g = 0, uncut, d6 | +0.558 | +0.659 |
+
+**Trainer instruments.** `carry/rms_t1..t6` at step 4980: sum 4.97, 22.5, 39.0, 54.2, 66.3,
+75.4; gate 9.43, 29.3, 48.0, 65.2, 79.0, 89.3 (both 0.11 → 0.50 at step 0). The gate's
+`carry/gate_mean_t1..t6` 0.38, 0.28, 0.27, 0.27, 0.27, 0.27. `loop/core_gain_t0`: ruler
+max 1.95 (last 1.27), sum max 2.82e5 at 4921 (last 2.46e5), gate max 573 at 4967 (last
+454). `preclip/total` max at step ≥ 200: ruler 33.9, sum 6.1e4 at 3652 (ONE row; the
+two-row tripwire never fired), gate 53.5. Smoke peak memory: ruler 12.95 GB, sum 12.96 GB,
+gate 12.96 GB.
+
+**Scoring on the `sum` arm.**
+
+- **P1: fails by the letter.** Under `--cut-after 1` the g = 2 benefit at depth 6 is
+  +0.210 against +0.000 at depth 1: 0.210 apart, the clause asked for 0.03. The clause's
+  premise is false on this arm: content two spans back arrives at pass 2, not pass 1,
+  because the carry is the only route and it is injected from pass 2. Read for its intent
+  (does a re-supplied read stop decaying?) the answer is yes: +0.108 at d2 → +0.210 at d6
+  against the ruler's +0.148 → +0.036. That is recorded, not scored.
+- **P2: fails, all four clauses.** h = 5 −0.088 (asked ≥ +0.045), h = 6 −0.096 (asked
+  ≥ +0.010), h = 3 −0.021 and h = 4 −0.074 (asked not below the ruler's +0.064 / +0.054
+  minus 0.010).
+- **P3: fails.** h = 1 is +0.103 against the ruler's +0.011 (asked within 0.005); the g = 0
+  benefit at depth 6 is +0.659 against +0.558 (asked within 0.05).
+- **P4: holds** (measured at build, Method's last paragraph; a gate on the run, not a
+  result).
+- **P5: fails.** `loop/core_gain_t0` reaches 2.82e5 against the ruler's band of at most
+  1.95; no detonation (the tripwire never fired) and the memory clause holds (12.96 vs
+  12.95 GB).
+
+**The `gate` arm, read against `sum`.** Depth-6 CE 4.4081, 0.047 better than sum and 0.050
+behind the ruler; K1−K6 +0.0086. Its carry RMS grows the same way (89 at t6) and its gate
+mean settles at 0.27 from pass 3 on, so the learned weighting does not bound the state.
+`core_gain_t0` 573: the same scale mode, 500x smaller. Its per-hop table and cut-1 row
+are pending the 3070 run and will be appended here when it finishes; nothing in the
+verdict depends on them (the filing rule reads `sum` only).
+
+## Verdict
+
+**Failure.** P1, P2, P3 and P5 fail on the `sum` arm; the filing rule needed all four.
+
+## Updated hypothesis
+
+1. The carry as built is not one factor from the ruler. It REPLACES the pass-1 read
+   rather than adding to it: at depth 1 a carry cell holds no neighbour content at all
+   (planted g = 1 and g = 2 both +0.000 at d1, h = 1 K1−K6 +0.103 from a depth-1 rung
+   with nothing in it). Any next carry keeps the direct read at pass 1 and adds the
+   re-supply on top.
+2. Re-supply does stop the decay. That is the one clause of the Hypothesis that survived
+   (g = 2 under the cut: +0.108 → +0.210 instead of +0.148 → +0.036). The question's
+   second half, does the far hop start earning, is answered no, and the reason is not
+   decay: with the read uncut, the state is a plain sum of every pass's read, so content
+   h spans back is one part in T of what gets injected at pass T. The far bins lose to
+   DILUTION and get worse with every pass after 2; the same dilution the ruler's near/far
+   bins showed (`2026-09-19-hop-distance-plateau-and-dilution.md`), now made worse by
+   accumulating it.
+3. The state is unbounded and it runs. Carry RMS 0.5 → 75 over training and 5 → 75 across
+   the six passes at 5k, and the first-iteration gain 1.24 → 2.8e5 on the same clock. The
+   RMS match at the injection site bounds what is injected, not the state, and the gate
+   (mean 0.27) scales the read but never subtracts. A next carry is bounded by
+   construction: a running MEAN or an EMA with a fixed target RMS, so pass T injects a
+   vector whose norm does not grow with T or with training.
+4. `gate` did not beat `sum` by enough to matter (0.047 at depth 6, both behind the ruler)
+   and the prereg's expectation that it would not stands.
+
+No carry arm is queued from this file. The next planned file, if Wolfe wants one, is a
+bounded carry that keeps the pass-1 read, scored on the same per-hop table with the
+dilution reading as the thing to beat (h = 5 and h = 6 must not get worse with depth).

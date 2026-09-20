@@ -147,3 +147,29 @@ because the first sabotage pass showed a version that read the term and happily 
 - The reach read `r_k(t)` is the window branch's output at layer 0 under `tg_allow`; on the
   register arm (`slot_cells > 1`) the relation differs and the carry is refused there until
   measured.
+
+## Outcome (2026-09-20, measured)
+
+Filed as a failure: `lab/experiments/failures/2026-09-19-loop-carry-prev-reach1.md`
+(P1, P2, P3 and P5 fail on `sum`; `gate` 0.047 nats better than `sum` at depth 6 and
+0.050 behind the ruler). Two things this note got wrong, in the order they matter:
+
+1. The carry REPLACED the pass-1 read instead of adding to it. At depth 1 a carry cell
+   holds no neighbour content (planted g = 1 and g = 2 both +0.000 at d1; the ruler reads
+   +0.181 and +0.148). Everything arrives at pass 2. The arm was never one factor from
+   the ruler.
+2. The first risk above happened, and the RMS normalisation did not guard it: the state is
+   an unbounded sum (RMS 0.5 → 75 over training, 5 → 75 across six passes at 5k) and the
+   first-iteration gain ran 1.24 → 2.8e5 (`gate` 573). The match at the injection site
+   bounds the injected vector, not the state; with the read uncut the injected vector at
+   pass T is one part in T of each earlier read, so the far bins lose to dilution and get
+   worse with every pass after 2 (h = 5 K1−K6 −0.088, h = 6 −0.096; the ruler +0.029 and
+   −0.020).
+
+What held: under `--cut-after 1` a re-supplied read stops decaying (g = 2 +0.108 at d2 →
++0.210 at d6, the ruler +0.148 → +0.036). The Problem section's mechanism (decay under
+re-processing) is real; the Proposal's vehicle is not. A next carry keeps the pass-1 read
+and is bounded by construction (a running mean or an EMA with a fixed target RMS). None is
+queued; the lifecycle of this note (rejected, or superseded by a bounded carry) is Wolfe's
+call after the `gate` hop table lands.
+
