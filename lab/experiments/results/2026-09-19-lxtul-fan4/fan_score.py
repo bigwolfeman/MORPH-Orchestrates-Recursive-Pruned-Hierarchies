@@ -1,4 +1,4 @@
-"""Score the LXTUL fan arms (lab/experiments/planned/2026-09-19-lxtul-fan4.md) from wandb
+"""Score the LXTUL fan arms (lab/experiments/failures/2026-09-19-lxtul-fan4.md) from wandb
 summaries at 5000, the runner's sweep JSON (K-curve) and its RATE line. Usage:
   fan_score.py ARM [ARM ...]   (arms: slot-spandec-strict-fan4, -norepel, -mean, pk4)"""
 import json, re, sys, wandb

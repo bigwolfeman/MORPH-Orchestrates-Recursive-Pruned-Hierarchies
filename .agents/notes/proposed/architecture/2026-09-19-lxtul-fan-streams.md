@@ -71,7 +71,7 @@ gets — and writes that one state through the ordinary single-source `prefix_pr
 `prefix_k == slot_cells` is relaxed for a fan model and for a fan model only.
 
 The falsifier is stated in
-[`lab/experiments/planned/2026-09-19-lxtul-fan4.md`](../../../../lab/experiments/planned/2026-09-19-lxtul-fan4.md):
+[`lab/experiments/failures/2026-09-19-lxtul-fan4.md`](../../../../lab/experiments/failures/2026-09-19-lxtul-fan4.md):
 if `fan/oracle_ce` does not beat `fan/single_ce` by more than 0.022 nats — the register's
 own measured width gain, the only width number this lineage has on disk — the streams are
 copies and the width branch closes.

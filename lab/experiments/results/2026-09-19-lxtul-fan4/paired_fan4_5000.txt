@@ -1,0 +1,8 @@
+Paired depth-6 token CE gaps at step 5000 on the same 480 rows (511,089 tokens; tok_index identical across the four sweeps).
+Block bootstrap over 1024-token blocks, 2000 draws, 95 % interval. Computed 2026-09-20 from
+sweep_<arm>_5000.<arm>.tokens.npz (fan4 and norepel from the 5090 runner, pk4 and mean from the Spark readouts).
+
+fan4 - pk4 (the prefix_k 4 width partner)   +0.0073 [+0.0051, +0.0094]   fan4 is WORSE than its exact-width ruler
+fan4 - mean (K streams, mean mix, no term)  -0.0005 [-0.0027, +0.0016]   tie
+fan4 - norepel (gate alone)                 +0.0025 [+0.0003, +0.0046]
+pk4  - mean                                  -0.0078 [-0.0100, -0.0057]
