@@ -327,6 +327,16 @@ class TULConfig:
     # gate's argmax stream is written alone: the deployable number is ONE chosen stream.
     fan_select_eps: float = 0.05         # P(random stream written) per slot, train only
     fan_select_gate_lambda: float = 1.0  # weight of the gate's winner-prediction CE
+    # `fan_select_write` (2026-09-20, after the select filing): WHICH stream the training
+    # pass writes. "oracle" (the filed arm): the table's winner, so the coda trains on a
+    # TARGET-chosen stream and is deployed on the gate's guess, a train/eval mismatch the
+    # filing named (the fitted-z trap). "gate": the gate's own argmax, with the same eps
+    # random write, so the forward is the SAME at train and eval; the table still runs,
+    # as the gate's LABEL only. "anneal": per-slot scheduled sampling from oracle to gate,
+    # P(gate) = step / `fan_select_write_anneal` clamped at 1 (the trainer writes the step
+    # into the `fan_select_step` buffer). Read only under `fan_mix: select`.
+    fan_select_write: str = "oracle"     # "oracle" | "gate" | "anneal"
+    fan_select_write_anneal: int = 1500  # steps from oracle to gate (fan_select_write=anneal)
     # `fan_mix: "all"` (2026-09-20, after select): NO mixture and NO gate. Every stream is
     # WRITTEN — cell i into prefix cell i through W_prefix[i], the Thought Register's 1:1
     # route (`prefix_project(cells=...)`), so `prefix_k` must equal `fan_k` — and the coda
@@ -1623,6 +1633,23 @@ class TULConfig:
                 "tul.fan_select_gate_lambda is read only under tul.fan_mix='select' "
                 f"(got fan_mix={self.fan_mix!r}): 'all' has no gate and a mixture has no "
                 "winner, so the knob would be a silent no-op.")
+        if self.fan_select_write not in ("oracle", "gate", "anneal"):
+            raise ValueError(
+                f"tul.fan_select_write must be 'oracle', 'gate' or 'anneal', got "
+                f"{self.fan_select_write!r}")
+        if self.fan_select_write_anneal < 1:
+            raise ValueError(
+                f"tul.fan_select_write_anneal must be >= 1, got {self.fan_select_write_anneal}")
+        if self.fan_mix != "select" and self.fan_select_write != "oracle":
+            raise ValueError(
+                "tul.fan_select_write is read only under tul.fan_mix='select' "
+                f"(got fan_mix={self.fan_mix!r}): only the select arm has a gate to write "
+                "from, so the knob would be a silent no-op.")
+        if self.fan_select_write != "anneal" and self.fan_select_write_anneal != 1500:
+            raise ValueError(
+                "tul.fan_select_write_anneal is read only under tul.fan_select_write="
+                f"'anneal' (got {self.fan_select_write!r}): setting it elsewhere would be "
+                "a silent no-op.")
         if self.fan_all_wta_lambda < 0.0:
             raise ValueError(
                 f"tul.fan_all_wta_lambda must be >= 0, got {self.fan_all_wta_lambda}")

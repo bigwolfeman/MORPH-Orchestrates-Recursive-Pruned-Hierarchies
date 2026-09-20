@@ -2967,6 +2967,13 @@ def main(cfg: DictConfig) -> None:
         print(f"  [code] phase 2 (flow loss) at step {_code_p2}, phase 3 (rollout) at step "
               f"{_code_p3} (of {total_steps})", flush=True)
 
+    _fan_select_anneal = bool(
+        _tulc is not None and str(getattr(_tulc, "fan_mix", "mean")) == "select"
+        and str(getattr(_tulc, "fan_select_write", "oracle")) == "anneal"
+        and hasattr(_mdl, "fan_select_step"))
+    if _fan_select_anneal:
+        print(f"  [fan] select write anneals oracle -> gate over the first "
+              f"{int(getattr(_tulc, 'fan_select_write_anneal', 1500))} steps", flush=True)
     for step in range(start_step, total_steps):
         if _tulc is not None and hasattr(_mdl, "mux_gate"):
             _mdl.mux_gate.fill_(1.0 if step >= _mux_on_at else 0.0)
@@ -2976,6 +2983,10 @@ def main(cfg: DictConfig) -> None:
             # step and seeds its own generators from this. A buffer, so flipping it costs no
             # recompile, and read only inside the compile-disabled grader.
             _mdl.code_grade_step.fill_(int(step))
+        if _fan_select_anneal:
+            # tul.fan_select_write=anneal: the select arm's scheduled sampling reads this
+            # buffer inside the compile-disabled `_tul_fan_select`. Filled only on that arm.
+            _mdl.fan_select_step.fill_(int(step))
         if _is_code:
             _ph = 1 if step < _code_p2 else (2 if step < _code_p3 else 3)
             if _ph != int(_mdl.code_phase):

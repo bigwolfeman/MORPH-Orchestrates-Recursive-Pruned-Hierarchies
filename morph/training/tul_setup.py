@@ -64,6 +64,7 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_k", "fan_mix", "fan_repel_lambda", "fan_repel_passes",
     "fan_repel_mode", "fan_epi_features", "fan_epi_ridge", "fan_epi_eta",
     "fan_select_eps", "fan_select_gate_lambda", "fan_all_wta_lambda",
+    "fan_select_write", "fan_select_write_anneal",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_cells", "slot_cell_init", "slot_chain", "slot_chain_detach",
     "vq_beta", "vq_codebook", "vq_codes", "vq_dim", "vq_groups", "vq_reset_after",
@@ -325,6 +326,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_epi_eta=float(tc.get("fan_epi_eta", 30.0)),
         fan_select_eps=float(tc.get("fan_select_eps", 0.05)),
         fan_select_gate_lambda=float(tc.get("fan_select_gate_lambda", 1.0)),
+        fan_select_write=str(tc.get("fan_select_write", "oracle")),
+        fan_select_write_anneal=int(tc.get("fan_select_write_anneal", 1500)),
         fan_all_wta_lambda=float(tc.get("fan_all_wta_lambda", 1.0)),
         vq_codes=int(tc.get("vq_codes", 0)),
         vq_codebook=int(tc.get("vq_codebook", 512)),
@@ -538,6 +541,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_repel_mode": model_cfg.fan_repel_mode,
         "fan_select_eps": model_cfg.fan_select_eps,
         "fan_select_gate_lambda": model_cfg.fan_select_gate_lambda,
+        "fan_select_write": model_cfg.fan_select_write,
+        "fan_select_write_anneal": model_cfg.fan_select_write_anneal,
         "fan_all_wta_lambda": model_cfg.fan_all_wta_lambda,
         "fan_epi_features": model_cfg.fan_epi_features,
         "fan_epi_ridge": model_cfg.fan_epi_ridge,
@@ -813,7 +818,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               + (f"SELECT eps={model_cfg.fan_select_eps} gate_lambda={model_cfg.fan_select_gate_lambda} "
                  f"(no mixture: K no-grad coda passes pick each slot's winner at train, the "
                  f"winner is written ALONE, the gate learns to predict it, the eval write is "
-                 f"the gate's argmax stream) " if model_cfg.fan_mix == "select" else "")
+                 f"the gate's argmax stream; train WRITE={model_cfg.fan_select_write!r}"
+                 + (f" over {model_cfg.fan_select_write_anneal} steps"
+                    if model_cfg.fan_select_write == "anneal" else "")
+                 + (": the coda trains on the gate's own pick, the same forward as eval; the "
+                    f"table is the gate's label only" if model_cfg.fan_select_write != "oracle"
+                    else ": the coda trains on the table's winner, a stream it never gets at "
+                    "eval") + ") " if model_cfg.fan_mix == "select" else "")
               + (f"ALL eps={model_cfg.fan_select_eps} wta_lambda={model_cfg.fan_all_wta_lambda} "
                  f"(no mixture, no gate: every stream is written into ITS prefix cell "
                  f"through W_prefix[i], the register's 1:1 route, and the coda reads all "

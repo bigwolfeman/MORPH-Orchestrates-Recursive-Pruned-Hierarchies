@@ -1,0 +1,18 @@
+# LXTUL fan, SELECT with the GATE'S OWN WRITE (2026-09-20, after the select filing). ONE
+# factor over the select arm: `tul.fan_select_write` oracle -> anneal. The filed select arm
+# trained its coda on the TABLE's winner (a stream chosen by reading the span's target) and
+# deployed it on the gate's guess: a train/eval mismatch, the fitted-z trap. Here the
+# training pass writes the gate's own argmax (the same forward as eval), reached by per-slot
+# scheduled sampling from the table's winner over the first 1500 steps; the table still runs,
+# as the gate's label only. Everything else (eps 0.05, gate_lambda 1.0, epivol) is the select
+# arm's. Prereg: lab/experiments/planned/2026-09-20-lxtul-fan4-select-gate.md
+defaults:
+  - tul_slot_spandec_strict_fan4_select
+  - _self_
+
+tul:
+  fan_select_write: anneal
+  fan_select_write_anneal: 1500
+
+wandb:
+  name: slot-spandec-strict-fan4-select-gate

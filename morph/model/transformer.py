@@ -1567,6 +1567,12 @@ class MORPHTransformer(nn.Module):
         # `torch.compiler.disable`d — so no `.item()` ever lands in a captured graph.
         self.register_buffer("code_grade_step", torch.zeros((), dtype=torch.long),
                              persistent=False)
+        # The trainer's step counter for `tul.fan_select_write: anneal` (the select arm's
+        # scheduled sampling from the table's winner to the gate's pick). Same shape of
+        # reason: a buffer the trainer fills, read ONLY inside `_tul_fan_select`, which is
+        # `torch.compiler.disable`d.
+        self.register_buffer("fan_select_step", torch.zeros((), dtype=torch.long),
+                             persistent=False)
         self._in_code_grade = False      # reentrancy guard: the grader runs the forward
         # tul.code_target_ref (spec §17.1): the FROZEN reference copy of the VAE stage.
         # Deliberately NOT a registered submodule. Every walk in this tree enumerates
@@ -5865,6 +5871,23 @@ class MORPHTransformer(nn.Module):
         token dropout (the winner is chosen on clean inputs) and the slot cells' own
         injections are cut exactly as the shipped strict coda cuts them.
 
+        WHICH stream the training pass writes is ``tul.fan_select_write``. ``"oracle"``
+        writes the table's winner: the coda then trains on a TARGET-chosen stream and is
+        deployed on the gate's guess (the train/eval mismatch the select filing named).
+        ``"gate"`` writes the gate's own argmax on every non-forced slot, so the forward
+        is the same at train and eval and the table is the gate's LABEL only.
+        ``"anneal"`` is per-slot scheduled sampling: a slot writes the gate's pick with
+        probability ``step / fan_select_write_anneal`` (clamped at 1; ``step`` is the
+        ``fan_select_step`` buffer the trainer fills) and the table's winner otherwise.
+        The eps random write applies under every mode. The gate's label is the table's
+        winner under every mode (``select_gate_loss``), so the three differ ONLY in the
+        written stream. Stats: ``select_write_p_gate`` (the schedule), ``select_write_from_gate``
+        (fraction of valid slots that wrote the gate's pick), ``select_written_ce`` (the
+        table's CE of the stream actually written; minus ``select_oracle_ce`` is the
+        TRAIN-side selector regret, the partner of the eval-side ``mixed_ce − oracle_ce``)
+        ``select_written_agree`` (written == argmin) and ``select_written_share_k{i}``
+        (the written shares; ``select_share_k{i}`` stays the table's winner shares).
+
         EVAL, or a plan ablation: the gate's argmax stream is written; no extra passes
         (the oracle instrument after the coda reports ``gate_agree`` against its argmin).
 
@@ -5906,9 +5929,21 @@ class MORPHTransformer(nn.Module):
             ce = torch.stack(per_stream, dim=-1)                                # [B, S, K]
             ok = layout.slot_valid & (n_tok > 0)
             choice, forced = select_winners(ce, ok, float(tc.fan_select_eps))
+            written, p_gate, from_gate = self._fan_select_written(logits, choice, forced, ok)
             if bool(ok.any()):
                 denom = n_tok[ok].sum().clamp_min(1.0)
                 best, arg = ce.min(dim=-1)
+                if tc.fan_select_write != "oracle":
+                    stats["select_write_p_gate"] = p_gate
+                    stats["select_write_from_gate"] = float(from_gate[ok].float().mean())
+                    stats["select_written_ce"] = float(
+                        ce.gather(-1, written.unsqueeze(-1)).squeeze(-1)[ok].sum() / denom)
+                    stats["select_written_agree"] = float((written[ok] == arg[ok]).float().mean())
+                    for i in range(k):
+                        # the WRITTEN shares (the gate's picks plus eps): the collapse
+                        # instrument of a closed train/eval loop, beside `select_share_k{i}`,
+                        # which stays the TABLE's winner shares (the gate's label)
+                        stats[f"select_written_share_k{i}"] = float((written[ok] == i).float().mean())
                 stats["select_oracle_ce"] = float(best[ok].sum() / denom)
                 stats["select_single_ce"] = float(ce[..., 0][ok].sum() / denom)
                 stats["select_pick0"] = float((arg[ok] == 0).float().mean())
@@ -5917,7 +5952,35 @@ class MORPHTransformer(nn.Module):
                 for i in range(k):
                     stats[f"select_share_k{i}"] = float((choice[ok] == i).float().mean())
         gate_loss = select_gate_loss(logits, choice, ok)
-        return self.tul_fan(cells, choice)[0], w, gate_loss
+        return self.tul_fan(cells, written)[0], w, gate_loss
+
+    def _fan_select_written(self, logits: Tensor, choice: Tensor, forced: Tensor,
+                            ok: Tensor) -> tuple[Tensor, float, Tensor]:
+        """The stream the select arm's training pass WRITES, per ``tul.fan_select_write``.
+
+        ``choice`` ``[B, S]`` is the table's winner with the eps random writes already
+        applied (``forced`` marks those). Returns ``(written, p_gate, from_gate)``:
+        ``written`` is ``choice`` itself under ``"oracle"`` (no RNG draw, so the filed arm
+        is bit-identical); under ``"gate"`` every valid, non-forced slot writes the gate's
+        argmax; under ``"anneal"`` each valid, non-forced slot writes the gate's argmax
+        with probability ``p_gate = min(1, fan_select_step / fan_select_write_anneal)``.
+        A forced slot keeps its random stream under every mode (exploration is the same
+        knob everywhere); an invalid slot keeps 0 (never written).
+        """
+        tc = self.cfg.tul
+        mode = tc.fan_select_write
+        if mode == "oracle":
+            return choice, 0.0, torch.zeros_like(forced)
+        if mode == "gate":
+            p_gate = 1.0
+            use_gate = ok & ~forced
+        else:
+            p_gate = min(1.0, float(self.fan_select_step) / float(tc.fan_select_write_anneal))
+            u = torch.rand(choice.shape, device=choice.device)
+            use_gate = (u < p_gate) & ok & ~forced
+        gate_pick = logits.argmax(dim=-1).detach()
+        written = torch.where(use_gate, gate_pick, choice)
+        return written, p_gate, use_gate
 
     def _tul_fan_stream_write(self, cells: Tensor, i: int, layout: SlotLayout, L: int
                               ) -> tuple[Tensor, Tensor]:
