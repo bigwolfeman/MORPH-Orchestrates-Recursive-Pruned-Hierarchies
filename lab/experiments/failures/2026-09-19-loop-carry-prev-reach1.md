@@ -212,9 +212,31 @@ gate 12.96 GB.
 **The `gate` arm, read against `sum`.** Depth-6 CE 4.4081, 0.047 better than sum and 0.050
 behind the ruler; K1−K6 +0.0086. Its carry RMS grows the same way (89 at t6) and its gate
 mean settles at 0.27 from pass 3 on, so the learned weighting does not bound the state.
-`core_gain_t0` 573: the same scale mode, 500x smaller. Its per-hop table and cut-1 row
-are pending the 3070 run and will be appended here when it finishes; nothing in the
-verdict depends on them (the filing rule reads `sum` only).
+`core_gain_t0` 573: the same scale mode, 500x smaller. Its hop tables (3070, ALLDEPTHS
+exit 0 at 21:08 UTC, CUT1 exit 0 at 21:51 UTC, same instrument and rows):
+
+| h | ruler | `carry-sum` | `carry-gate` | gate per depth (d1, d2, d3, d6, d16) |
+|---|---|---|---|---|
+| 1 | +0.0109 | +0.1033 | +0.0028 [+0.0015, +0.0040] | 4.2702, 4.2661, 4.2663, 4.2674, 4.2780 |
+| 2 | −0.0169 | +0.0846 | +0.0530 [+0.0510, +0.0553] | 4.6372, 4.5853, 4.5822, 4.5841, 4.5899 |
+| 3 | +0.0640 | −0.0209 | +0.0359 [+0.0337, +0.0383] | 4.6665, 4.6705, 4.6579, 4.6306, 4.5945 |
+| 4 | +0.0535 | −0.0742 | −0.0331 [−0.0355, −0.0306] | 4.2660, 4.2948, 4.2974, 4.2991, 4.3016 |
+| 5 | +0.0288 | −0.0878 | −0.0458 [−0.0487, −0.0430] | 4.5313, 4.5647, 4.5674, 4.5771, 4.5983 |
+| 6 | −0.0203 | −0.0957 | −0.0464 [−0.0497, −0.0436] | 4.6796, 4.7131, 4.7159, 4.7260, 4.7475 |
+
+Planted, gate: g = 1 uncut +0.173 → +0.124 (d1 → d6; ruler +0.181 → +0.137), cut-1
++0.173 → +0.131 (ruler +0.181 → +0.290); g = 2 uncut +0.024 → +0.065 (ruler +0.148 →
++0.071), cut-1 +0.024 → +0.092 (ruler +0.148 → +0.036); g = 0 flat at +0.56.
+
+Read against `sum`: the gate halves the damage (h = 5 −0.046 against −0.088, h = 6
+−0.046 against −0.096) and keeps a direct one-back read at depth 1 (g = 1 +0.173, where
+`sum` has +0.003), but two-back content still arrives only from pass 2 (g = 2 +0.024 at
+d1 against the ruler's +0.148) and the far bins still get worse with every pass after 2.
+The h = 3 bin is the one place the gate beats the ruler's shape (it keeps falling to
+d16, 4.5945, where the ruler settles by pass 3); it is bought with the far bins. P1 by
+the letter fails on the gate too (d6 − d1 = +0.068 > 0.03) and by intent holds
+(re-supply stops the decay: +0.069 → +0.092 under the cut). The verdict does not read
+the gate (the filing rule reads `sum` only).
 
 ## Verdict
 
