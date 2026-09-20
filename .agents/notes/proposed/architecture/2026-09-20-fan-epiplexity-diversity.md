@@ -98,6 +98,17 @@ equal magnitude; the line family keeps most of its epi score and loses on the su
 axes score 0 on epi and high on `vol`. The next arm is `epivol` against `epi`
 (`lab/experiments/planned/2026-09-20-lxtul-fan4-epivol.md`).
 
+The epi arm at 5000 (filed: `lab/experiments/failures/2026-09-20-lxtul-fan4-epi.md`): the
+loophole was realised as a ONE-HOT stream per slot, not a shared line. The stream probe reads
+per-stream norms 14.5 / 0.1 / 0.1 / 18.9 at pass 1, rank 1.000, `axis_cos` 0.125, and two
+sign-pattern families of about equal size (`+---` 1347 slots, `+++-` 1226): stream 0 carries
+the slot in half the slots and stream 3 in the rest, chosen by the input, the other streams
+near zero. Which stream fires is a learnable function of the seed, so each stream's
+epiplexity is high (`val/fan_epi_t1` 1.67 bits per feature) while the within-slot rank is
+exactly 1. Oracle − mixed 0.011, inside the 0.008 to 0.016 every fan arm reads. The volume
+term scores a one-hot slot near zero (three of four deviations are the negated mean and the
+fourth is their sum: rank 1 Gram), so it is blind to this shape as well as to the line.
+
 ## Risks
 
 - The term's scale differs from the cosine's (bits per feature, a few at most, against a

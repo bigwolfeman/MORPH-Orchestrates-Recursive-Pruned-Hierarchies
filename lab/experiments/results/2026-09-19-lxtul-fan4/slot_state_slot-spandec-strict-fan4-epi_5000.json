@@ -1,0 +1,44 @@
+{
+ "label": "slot-spandec-strict-fan4-epi",
+ "step": 5000,
+ "rows": 12,
+ "valid_slots": 644,
+ "state_dim": 4096,
+ "ref_depth": 1,
+ "per_depth": {
+  "1": {
+   "norm_mean": 94.46668243408203,
+   "rel_dist_from_ref_mean": 0.0,
+   "rel_dist_from_ref_p90": 0.0,
+   "cos_to_ref_mean": 1.0
+  },
+  "2": {
+   "norm_mean": 104.04953002929688,
+   "rel_dist_from_ref_mean": 0.1460440307855606,
+   "rel_dist_from_ref_p90": 0.21361321210861206,
+   "cos_to_ref_mean": 0.9944596290588379,
+   "rel_dist_from_prev_depth_mean": 0.1460440307855606
+  },
+  "3": {
+   "norm_mean": 109.79214477539062,
+   "rel_dist_from_ref_mean": 0.2395779937505722,
+   "rel_dist_from_ref_p90": 0.36998942494392395,
+   "cos_to_ref_mean": 0.9851459264755249,
+   "rel_dist_from_prev_depth_mean": 0.09447771310806274
+  },
+  "6": {
+   "norm_mean": 119.42237091064453,
+   "rel_dist_from_ref_mean": 0.39080071449279785,
+   "rel_dist_from_ref_p90": 0.6484706997871399,
+   "cos_to_ref_mean": 0.9625422358512878,
+   "rel_dist_from_prev_depth_mean": 0.15317460894584656
+  },
+  "16": {
+   "norm_mean": 133.9293212890625,
+   "rel_dist_from_ref_mean": 0.6221189498901367,
+   "rel_dist_from_ref_p90": 1.011070966720581,
+   "cos_to_ref_mean": 0.91171795129776,
+   "rel_dist_from_prev_depth_mean": 0.26392799615859985
+  }
+ }
+}
