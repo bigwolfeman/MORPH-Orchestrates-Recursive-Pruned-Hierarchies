@@ -64,7 +64,7 @@ them). At eval the rollout is a sample, so `val/code_target_cos` is a sample's c
 the truth, not a mean's, and is expected LOWER than arm A's 0.147 even when the sample is
 good; read it beside the reader.
 
-**Method amendment 2026-09-21 12:50 (before any training step; predictions untouched).**
+**Method amendment 2026-09-21 12:39 (before any training step; predictions untouched).**
 The runner's 12-step smoke of this config FAILED at 12:34 (`queue.log`: "smoke FAILED:
 draw not started") inside `warmup_compile_all_shapes`: the trainer's compile warmup runs
 BEFORE `tul_code_ref_snapshot`, and the denoiser's pre-loop target call raised with no
