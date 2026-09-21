@@ -71,3 +71,17 @@ width partner pk4 on paired depth-6 CE by 0.005.
   GAP to `ce_main`, not its share.
 - One more coda pass with activations per step: peak memory and rate are read from the
   Spark smoke before the queue line is written.
+
+## Outcome (2026-09-20, measured)
+
+Filed as a success: `lab/experiments/successes/2026-09-20-lxtul-fan4-all.md` (P-3, P-4, P-5
+hold; P-7 fails; P-8's first clause was miswritten, see the filing). At 5,000 steps the
+four-cell read cashes 0.056 of a 0.099-nat oracle value where the select gate cashed
+0.014 of 0.113; selector regret 0.042; rank 2.82 at pass 1; paired depth-6 CE 0.034 nats
+BELOW the width partner pk4 (select was 0.086 above it). The K-curve is flat (tokens
+K1−K6 +0.0049), so the arm answers the reader and selector question and not the depth
+question. Lifecycle is Wolfe's call: the knob (`fan_mix: all`) is shipped code, the
+recipe is not in `base.yaml`, so the note stays proposed until the fan is a shipped
+design. Next levers named in the filing: the per-token HARD read (top-1 over the cells)
+against the 0.042 regret, and a term that keeps the four streams apart through the loop
+(pass-6 rank 2.03).

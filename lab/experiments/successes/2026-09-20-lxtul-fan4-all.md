@@ -1,6 +1,6 @@
 # Planned: the fan with every stream written — the coda's own attention is the selector
 
-Status: planned
+Status: success
 
 Date: 2026-09-20 (frozen before any GPU step of the arm; a 12-step smoke of the config on
 the Spark is the only run that may precede it). Arc: the LXTUL fan
@@ -149,3 +149,110 @@ amended here with the date and the reason.
   `fan/wta_*` keys are proven present in the forward's output by the tests and are checked
   on the 5090 run's first logged steps. The smoke's step rate is not a reading (12 steps,
   compile warmup); P-8 reads the runner's RATE line.
+
+## Results
+
+Run: 5,000 steps at `98e698a` on the 5090 through `run_recon.sh`, started 17:20 local
+2026-09-20, DONE 18:50, tripwire HEALTHY (max 29.4 at step 219), final val_loss 4.4376,
+RATE OK 7,096 tok/s at step 200, peak 19.14 GB. Artifacts in
+`../results/2026-09-19-lxtul-fan4/`: `sweep_slot-spandec-strict-fan4-all_{2500,5000}.json`,
+`worth_slot-spandec-strict-fan4-all_5000.json`, `slot_state_slot-spandec-strict-fan4-all_5000.json`,
+`run_slot-spandec-strict-fan4-all.txt`, `fan_geom_fan4-all_5000_d6.{json,txt}` (3070 stream
+probe, 48 rows, depth 6, from the `MORPH-all` worktree at `98e698a`), `paired_all_5000.{txt,json}`.
+The train-side `fan/wta_*` keys reached wandb from step 0 (the launch's open item).
+
+**Final-val keys at 5,000.**
+
+| key | value |
+|---|---|
+| `fan/stream_ce_k0..k3` (stream i alone in its cell, the other three blank) | 4.4911 / 4.5013 / 4.5386 / 4.5362 (spread 0.048) |
+| `fan/oracle_ce` | 4.3925 (0.099 below the best single stream) |
+| `fan/mixed_ce` (all four cells written, the deployed read) | 4.4348 (0.056 below the best single stream) |
+| `fan/mixed_ce − fan/oracle_ce` (selector regret) | 0.042 |
+| `fan/oracle_pick0` | 0.322 |
+| `fan/stream_rank_t1` / `_t6` | 2.820 / 2.060 |
+| `val/fan_stream_cos_t1` / `_t6` | −0.295 / +0.057 |
+| `val/fan_mix_entropy` | 1.386 (= ln 4; the mix is the mean, no gate) |
+
+**Stream probe at 5,000 (3070, 2,573 slots).** Pass 1: rank 2.826, mean cos −0.29,
+`axis_cos` 0.129, shared 0.22, norms 25.2 / 21.7 / 17.5 / 18.9, sign family `+---` 47 %.
+Pass 6: rank 2.026, cos +0.09, `axis_cos` 0.259, shared 0.64, norms 56.0 / 26.2 / 18.1 /
+24.7, `+---` 95 %. The same shape as select (spread at passes 1–2, the later passes pull
+the four together with stream 0 growing), with a lower rank at pass 6 (2.03 vs 2.59).
+
+**Train-side, steps 4000–5000 (50 rows).** `fan/wta_pick0` mean 0.350 (min 0.247, max
+0.538); shares k0..k3 mean 0.347 / 0.267 / 0.215 / 0.171, per-row minima 0.256 / 0.193 /
+0.108 / 0.082; forced 0.050; `fan/wta_ce` mean 4.373, the table's oracle 4.362, stream 0
+alone 4.451. `fan/wta_weighted / loss/total` 0.33 throughout. `loop/core_gain_t0` max 9.92
+at step 4680, last 6.53 (select reached 20.7; epivol 1.6): the winner-takes-all climb
+is present and half the select arm's.
+
+**Depth sweep (480 rows).** 5,000: d1 4.3105, d2 4.3072, d3 4.3060, d6 4.3056, d9 4.3061,
+d12 4.3068, d16 4.3080; tokens K1−K6 +0.0049 [+0.0044, +0.0055], K3−K6 +0.0004 [+0.0003,
++0.0006]; the span decoder's own CE K1−K6 +0.0314 [+0.0302, +0.0326] (select +0.0574).
+2,500: tokens K1−K6 +0.0024.
+
+**Paired against the width partner (`paired_all_5000.txt`, 511,089 tokens, 500 blocks).**
+Depth 6: fan4-all − pk4 **−0.0342 [−0.0367, −0.0316]**; depth 1: −0.0293 [−0.0320,
+−0.0266]; every swept depth between −0.029 and −0.034. Select − pk4 at depth 6 was
++0.0861, so fan4-all − select is −0.120 by subtraction.
+
+**Scoring.**
+
+- **P-1: HOLDS.** The read cashes 0.056 against a 0.02 bar (the select gate cashed 0.014).
+- **P-2: HOLDS.** Oracle 0.099 below the best single stream (bar 0.05; select 0.113).
+- **P-3 (the arm's reason): HOLDS.** Regret 0.042 < 0.05 (select 0.099).
+- **P-4: HOLDS.** Rank 2.82 > 2.0; probe `axis_cos` 0.129 at pass 1 (< 0.5).
+- **P-5: HOLDS.** −0.0342 against a −0.005 bar; the interval excludes zero by 0.03.
+- **P-6: HOLDS.** pick0 0.350 in [0.15, 0.60]; smallest share 0.082 > 0.05.
+- **P-7: FAILS.** K1−K6 +0.0049 against +0.005 (the interval's upper end is +0.0055),
+  K3−K6 +0.0004 against +0.001. Read as written, the bar is missed by 0.0001 and 0.0006;
+  the arm's loop is as flat as every slot arm's (yardstick +0.002; select +0.0076).
+- **P-8: HOLDS on the rate and tripwire clauses; the first clause is NOT SCORABLE as
+  written.** `loss/ce_main` is `out["loss"]`, the whole training objective (13.27 here,
+  with the span decoder's term and the WTA term inside it), not the token CE, so
+  `fan/wta_ce − loss/ce_main` reads −8.9 and means nothing. The nearest honest reading is
+  the final val: one stream alone in its cell (best 4.4911) against the four-cell read
+  (4.4348), a gap of 0.056, inside the 0.30 bar. Rate 7,096 ≥ 5,000; no tripwire.
+
+## Verdict
+
+**Success** under the filing rule: P-3, P-4 and P-5 all hold, with P-1, P-2 and P-6; P-7
+fails; P-8's first clause was miswritten and is recorded with its substitute reading.
+
+The coda's own per-token attention, reading all four cells, recovers 0.056 of the 0.099
+nats of oracle value that the select gate could not (0.014 of 0.113), leaves 0.042 of
+selector regret, keeps the streams at rank 2.8, and the deployed arm is 0.034 nats
+BELOW its width partner pk4 on paired rows where the select arm was 0.086 above it. The
+standing rule applies to that last number: a paired 5k gap is context, not a ranking
+(`short-horizon-ce-is-not-a-verdict`). What the arm is scored on, the K-curve, is flat:
+tokens K1−K6 +0.0049, the same order as every slot arm. The write-all arm fixes the
+reader and the selector; it does not make the loop earn depth.
+
+## Updated hypothesis
+
+1. The 2026-09-20 correction on the select filing stands and is now measured from the
+   other side: the select deficit was NOT candidate value (unchanged at 0.099 here) and
+   NOT the reader (every stream within 0.048 of the best). It was the deployment: a
+   one-stream write chosen before the span, on a coda trained on the target's choice. Keep
+   all four cells in the coda and the per-token read selects with the span's own
+   evidence, at no extra pass at inference.
+2. Selector regret 0.042 remains. The read is soft (attention over four cells inside a
+   window that also holds the span's tokens), so part of the 0.042 is Jensen's gap on a
+   soft mix and part is tokens early in a span that have no evidence yet. The per-token
+   HARD read (top-1 over the four cells, the named next lever) tests the first; the
+   worth profile by offset tests the second and is on file in `worth_…_5000.json`.
+3. The streams still converge across the loop (pass-6 rank 2.03, stream 0's norm 56 vs
+   18–26). Responsibility holds them apart where they are written, not where they loop;
+   the later passes have no term that keeps four things four. That is the register's
+   collapse pressure, slowed, not removed.
+4. The loop is flat under the fan too (K1−K6 +0.0049 tokens; the span decoder's own read
+   +0.031, a within-run signal that the slot's z does move with depth for the span
+   decoder even when tokens do not). The fan family has answered the reader question and
+   not the depth question. The depth lever is elsewhere (the hop staircase on the
+   forced-through geometry, `hop-staircase-on-prev-reach1`).
+5. `loop/core_gain_t0` climbs under winner-takes-all (9.9 here, 20.7 on select, 1.6 on
+   epivol) and did not detonate. The select-gate arm (`2026-09-20-lxtul-fan4-select-gate.md`,
+   running next) carries the same table and is read beside these two.
+6. The P-8 lesson: name the key AND its scale in a clause. `loss/ce_main` is the whole
+   objective on this tree; a token-CE clause must name a token-CE key.

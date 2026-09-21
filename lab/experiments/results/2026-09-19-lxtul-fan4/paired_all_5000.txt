@@ -1,0 +1,19 @@
+Paired token CE gaps at step 5000 on the same 480 rows (511,089 tokens; tok_index identical across the sweeps).
+Block bootstrap over 1024-token blocks (500 blocks), 95 % interval, lab/divergence/paired_vs_ruler.py with the
+pk4 arm's depth-6 sweep as the ruler. Computed 2026-09-20 from sweep_<arm>_5000.<arm>.tokens.npz
+(fan4-all and select from the 5090 runner, pk4 from the Spark readouts).
+
+fan4-all - pk4@6:
+  depth 1:  -0.0293 [-0.0320, -0.0266]
+  depth 2:  -0.0326 [-0.0352, -0.0300]
+  depth 3:  -0.0338 [-0.0363, -0.0311]
+  depth 6:  -0.0342 [-0.0367, -0.0316]
+  depth 9:  -0.0338 [-0.0363, -0.0311]
+  depth 12: -0.0330 [-0.0355, -0.0304]
+  depth 16: -0.0318 [-0.0343, -0.0291]
+
+select - pk4@6 (the same run as paired_select_5000.txt):
+  depth 1:  +0.0937 [+0.0904, +0.0972]
+  depth 6:  +0.0861 [+0.0830, +0.0894]
+
+fan4-all - select at depth 6, by subtraction of the two paired points: -0.1203.
