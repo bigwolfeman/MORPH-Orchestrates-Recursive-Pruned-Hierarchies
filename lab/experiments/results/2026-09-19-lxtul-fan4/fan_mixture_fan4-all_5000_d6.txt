@@ -1,0 +1,35 @@
+slot-spandec-strict-fan4-all step 5000  rows=48 depth=6 K=4  spans=2526 tokens=49687 mean_span_len=19.67
+  model fan/oracle_ce 4.208159  probe oracle 4.208159  |d| 4.48e-09
+  model fan/mixed_ce  4.248542  probe deployed 4.248542  |d| 1.02e-08
+
+  reading         nats/token   95 % block bootstrap (rows)
+  oracle         +4.2082 [+4.0849, +4.3329]
+  best_single    +4.2874 [+4.1572, +4.4152]
+  deployed       +4.2485 [+4.1230, +4.3744]
+  uniform_mix    +4.2583 [+4.1337, +4.3840]
+  prefix_mix     +4.2583 [+4.1337, +4.3840]
+  single_k0      +4.2874   (model fan/stream_ce_k0 +4.2874)
+  single_k1      +4.3118   (model fan/stream_ce_k1 +4.3118)
+  single_k2      +4.3615   (model fan/stream_ce_k2 +4.3615)
+  single_k3      +4.3490   (model fan/stream_ce_k3 +4.3490)
+  log(K)/mean_span_len = 0.0705 (the per-token bound on uniform_mix − oracle)
+
+  difference               nats/token   95 %
+  deployed - prefix_mix    -0.0098 [-0.0119, -0.0077]
+  deployed - oracle        +0.0404 [+0.0375, +0.0434]
+  uniform_mix - oracle     +0.0502 [+0.0484, +0.0520]
+
+  offset bin   n_tok   prefix_mix   deployed     oracle   best_single
+  0             2526      3.8182     3.7974     3.7241       3.8557
+  1             2498      4.7129     4.6925     4.6398       4.7704
+  2             2498      4.5162     4.5126     4.4384       4.5616
+  3             2498      4.4151     4.4032     4.3343       4.4605
+  4-7           9084      4.3315     4.3226     4.2719       4.3708
+  8-15         14427      4.2538     4.2449     4.2092       4.2805
+  16+          16156      4.1557     4.1473     4.1252       4.1703
+
+  winner persistence P(k*_(s+1) = k*_s) = +0.3039 [+0.2854, +0.3250]  vs chance +0.2676 [+0.2623, +0.2752]
+  excess over chance +0.0363 [+0.0165, +0.0570] over 2478 in-row pairs in 48 rows
+  winner shares: 0.354 0.259 0.203 0.183
+
+wrote /mnt/bigdata/morph-instruments/results/fan_mixture_fan4-all_5000_d6.json

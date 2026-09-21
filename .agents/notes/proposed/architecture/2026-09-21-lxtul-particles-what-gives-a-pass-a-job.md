@@ -194,3 +194,40 @@ this week moved nothing on the passes.
   §2.5.2) applies to any frozen target: small moves decode to different text.
 - Five rungs at 5k steps each is a week of 5090 time; the ladder stops at the first rung that
   fails its falsifier.
+
+## Outcome, running (dated entries; the note is the record the ladder writes to)
+
+**2026-09-21, Part 1 probe 1 (the mixture read) — DONE, on fan4-all @ 5000, 48 rows, depth 6,
+`lab/divergence/fan_mixture_probe.py` (17 tests), artifacts
+`lab/experiments/results/2026-09-19-lxtul-fan4/fan_mixture_fan4-all_5000_d6.{json,txt}`.**
+Process slip, named: this probe ran with no frozen numeric prediction beyond the bound stated
+above (uniform mixture at most `log K` per span above the oracle); the acceptance criterion
+was written before the run (commit c707c29), the prediction was not. The reading (nats per
+token, 95 % row-block bootstrap; the probe reproduces the model's own `fan/oracle_ce` and
+`fan/mixed_ce` to 1e-8 on the same rows):
+
+| reading | value |
+|---|---|
+| oracle (hindsight per span) | 4.2082 |
+| deployed all-cell read | 4.2485 |
+| uniform mixture = prefix-weighted mixture (telescoping identity, asserted) | 4.2583 |
+| best single stream (k0) | 4.2874 |
+| deployed − prefix mixture | **−0.0098 [−0.0119, −0.0077]** |
+| deployed − oracle | +0.0404 [+0.0375, +0.0434] |
+| uniform mixture − oracle | +0.0502 [+0.0484, +0.0520]; the bound `log K / mean span length` is 0.0705 |
+| mean span length | 19.67 tokens |
+
+**What it settles.** The selector question closes. The deployed read (the coda's per-token
+attention over the four cells) BEATS the principled branch-blind marginaliser by 0.0098, in
+every offset bin (by 0.008–0.021), and the marginaliser itself pays 71 % of the `log K` bound:
+the branch is genuinely ambiguous before the span, and no selector that does not see the
+future recovers the oracle's 0.040. The 0.042 "selector regret" in the fan4-all filing is the
+price of hindsight, not a defect of the gate. The lever left for the read is BETTER CANDIDATES
+(rungs P1–P3), not a better selector. Not explained: why a learned joint read beats every
+convex combination of the per-stream predictive distributions (a joint read can combine
+features the streams hold separately; hypothesis, untested).
+
+**Winner persistence** (the precondition for rung P4): P(winner of span n+1 = winner of span n)
+0.3039 [0.2854, 0.3250] against chance 0.2676 [0.2623, 0.2752], excess +0.036 [+0.017,
++0.057]; shares 0.354 / 0.259 / 0.203 / 0.183. Identities persist a little more than chance;
+a thin base for lineages. Rung P4 stays last.
