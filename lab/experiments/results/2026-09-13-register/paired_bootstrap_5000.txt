@@ -1,0 +1,13 @@
+Paired token CE gaps at step 5000 (of the TUL phase; 10,000 steps of training in all) on the same 480 rows
+(501,106 tokens after intersection; 490 blocks). Block bootstrap over 1024-token blocks, 95 % interval,
+lab/divergence/paired_vs_ruler.py with slot-spandec-strict's depth-6 sweep (2026-09-12-strict) as the ruler.
+Computed 2026-09-20 from sweep_slot-strict-bootstrap_5000.slot-strict-bootstrap.tokens.npz.
+
+bootstrap - slot-spandec-strict@6:
+  depth 1: -0.2145 [-0.2204, -0.2083]
+  depth 6: -0.2164 [-0.2223, -0.2102]
+
+Worth profile (worth_profile.py, 192 rows, token-weighted total over the seven offset bins; offset-0 bin second):
+  all_slots (= zero): partner 0.1865 / 0.7567   bootstrap 0.2287 / 0.9016
+  shuffle:            partner 0.1739 / 1.7391   bootstrap 0.1969 / 1.8509
+  wrong_seed:         partner 0.0426 / 0.6180   bootstrap 0.0344 / 0.4511

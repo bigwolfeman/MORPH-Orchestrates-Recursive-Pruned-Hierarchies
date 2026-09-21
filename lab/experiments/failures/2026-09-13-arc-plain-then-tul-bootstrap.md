@@ -1,6 +1,6 @@
 # Planned: plain for 5,000 steps, THEN the slot loop
 
-Status: planned
+Status: failure
 
 Date: 2026-09-13 (frozen before any GPU step of the arm; no smoke of it exists at filing
 time). Arc: [`2026-09-04-loop-contribution-arc.md`](2026-09-04-loop-contribution-arc.md).
@@ -202,4 +202,75 @@ else is concluded.
 
 ## Results
 
-(to be filled after the run; predictions above are frozen)
+Run: 5,000 TUL steps from the `plain-panel-norm-match` step-5000 seed, on the 5090 through
+`run_recon.sh` at `3cb6114`, started 20:43 local 2026-09-20, DONE 21:39, tripwire HEALTHY
+(`preclip/total` max 26.6 at step 3290), RATE OK 11,486 tok/s at step 200, final val_loss
+4.2281. The seed's plain phase is the panel run of 2026-09-20 (16:11 to 17:0x local).
+Artifacts in `../results/2026-09-13-register/`: `sweep_slot-strict-bootstrap_{2500,5000}.json`,
+`worth_slot-strict-bootstrap_5000.json`, `slot_state_slot-strict-bootstrap_5000.json`,
+`run_slot-strict-bootstrap.txt`, `paired_bootstrap_5000.{txt,json}`. Scored 2026-09-20,
+seven days after the prereg, the arm having waited in the queue behind the fan arc.
+
+**Depth sweep (480 rows) at 5,000.** d1 4.1329, d2 4.1315, d3 4.1312, d6 4.1310, d9 4.1313,
+d12 4.1318, d16 4.1327; tokens K1−K6 **+0.0019 [+0.0016, +0.0022]**, K3−K6 **+0.0002
+[+0.0000, +0.0003]**; the span decoder's own CE K1−K6 +0.0062, K3−K6 +0.0007. At 2,500:
+d1 4.3031.
+
+**Worth profile (`worth_profile.py`, 192 rows, token-weighted total / offset-0 bin).**
+`all_slots` (= `zero`) **0.2287 / 0.9016** against the partner's 0.1865 / 0.7567; `shuffle`
+0.1969 / 1.8509 (partner 0.1739 / 1.7391); `wrong_seed` 0.0344 / 0.4511 (partner 0.0426 /
+0.6180).
+
+**Paired (`paired_bootstrap_5000.txt`, 501,106 tokens, 490 blocks).** Depth 6: bootstrap −
+`slot-spandec-strict` **−0.2164 [−0.2223, −0.2102]**; depth 1: −0.2145.
+
+**Slot state at 5,000.** `val/slot_eff_rank` 12.44, `val/slot_pairwise_cos` 0.590 (at 4750:
+12.64 / 0.579). The partner's 5.7598 / 0.7104 in the Predictions were BARE-FRONT probe
+numbers from before `7a24adf` (`slot-rank-anatomy-2026-09-13`); the corrected ruler reads
+13.85 / 0.52. Both are recorded; the clause is scored on the bar as written.
+
+**Opening.** First logged `val/loss` at step 250: **4.7389** against the partner's 7.0412;
+step 500: 4.7275 against 6.4147. `loop/core_gain_t0` max 10.2 at step 5, last 1.66.
+
+**Scoring.**
+
+- **P-1: HOLDS.** K1−K6 +0.0019 < 0.005. A coda mature for 5,000 steps before the loop
+  starts reads the same nothing from passes 2 to 6 as a cold one. Reader maturity was
+  not the confounder.
+- **P-2: HOLDS.** K3−K6 +0.0002 < 0.002.
+- **P-3: FAILS (worth UP).** `all_slots` 0.2287 > 0.1865, by 0.042. The mature coda does
+  not ignore `z` harder; the slot channel carries MORE.
+- **P-4: FAILS on the literal bar.** The offset-0 bin is 0.9016 against 0.7567, 0.145 past
+  the 0.05 allowance. The clause was written to catch a regression of the bin; the bin
+  moved the other way (removing `z` costs the first token MORE), which the wording also
+  catches. Recorded as a fail with the direction named.
+- **P-5: HOLDS, and is not the result.** −0.216 nats at depth 6, four times the 0.05 bar;
+  10,000 steps against 5,000, no plain 10k control exists.
+- **P-6: FAILS on the bar as written.** Rank 12.44 is outside [4.5, 8.0] and cosine 0.590
+  is below 0.60. Against the corrected ruler (13.85 / 0.52) the arm sits in the same
+  place; the bar was set on a number the 2026-09-13 correction retracted.
+- **P-7: HOLDS.** No tripwire, no rate stop.
+- **P-8: HOLDS.** 4.7389 < 7.0412 at step 250: a bump, not a cliff.
+
+## Verdict
+
+**Failure** (P-3, P-4 and P-6 fail; P-1, P-2, P-5, P-7, P-8 hold). The Binding's third
+case applies: P-1 holds and P-3 fails with the worth UP. What a mature model improves is
+the SEED, not the loop: the slot channel carries 0.042 nats more on the mature backbone
+(0.145 more at the first token) while passes 2 to 6 still read +0.0002. The bootstrap
+does not move the K-curve, so the thirteen-arm panel was not measuring a cold coda.
+
+## Updated hypothesis
+
+1. Reader maturity is closed as a confounder. Every later arm is scored without a
+   bootstrap variant; the standing +0.002 yardstick for a slot-loop K1−K6 stands.
+2. The mature backbone makes a better seed and a more used `z` (worth up, offset-0 up,
+   `wrong_seed` cost down 0.043 → 0.034 because the coda now reads the seed's content
+   rather than its identity). None of that reaches the loop. The lane is the target the
+   loop is graded on (the LCTUL and fan lines), not the schedule.
+3. P-6's bar was written against a retracted number. A prereg that quotes a partner's
+   instrument must name the probe commit the number came from.
+4. The dropped compressed branch and the bootstrap are still conflated (the un-queued
+   control in the Risks). The opening bump (4.74 at step 250 against the partner's 7.04)
+   says the drop cost little; a control that seeds a non-restricted slot arm would say
+   whether it cost anything at all.

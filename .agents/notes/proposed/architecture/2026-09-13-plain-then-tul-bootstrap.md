@@ -133,3 +133,13 @@ arm.
 
 Record: [`lab/experiments/planned/2026-09-13-arc-plain-then-tul-bootstrap.md`](../../../../lab/experiments/planned/2026-09-13-arc-plain-then-tul-bootstrap.md).
 Config: `morph/configs/tul_slot_strict_bootstrap.yaml`.
+
+## Outcome (2026-09-20, measured)
+
+Filed as a failure: `lab/experiments/failures/2026-09-13-arc-plain-then-tul-bootstrap.md`.
+The K-curve did not move (tokens K1−K6 +0.0019, K3−K6 +0.0002), so a mature reader was not
+the confounder behind the flat slot loop. What the mature backbone changed is the seed:
+the slot channel's worth rose 0.1865 → 0.2287 (offset-0 bin 0.76 → 0.90) and the paired
+depth-6 CE is 0.216 nats better than the 5k partner, which measures the extra 5,000 steps.
+The Binding's third case: the lane is the target `z` is graded on, not the schedule. Per
+the acceptance criteria this note moves to `rejected/` on Wolfe's call.
