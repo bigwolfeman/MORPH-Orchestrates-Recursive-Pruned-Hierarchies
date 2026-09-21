@@ -397,3 +397,10 @@ RMS; and the oracle-over-streams instrument reads 0.04 of regret on near-copies,
 fan arm's regret is mostly min-over-K on noise. Rung P2 (denoise) is the next reading,
 on the single-stream base; its entry is a convex mix with a fixed target, so the scale
 escape is closed there by construction.
+
+**2026-09-21, rung P4 relation half (lineage) FILED: `lab/experiments/failures/2026-09-21-lxtul-fan4-all-lineage.md`.**
+On the collapsed noise base (same scale escape, 7.6x), the per-stream channel holds the
+deviations' centred rank at 2.0 instead of 1.3 through the loop and buys nothing:
+persistence 0.300 vs 0.36 bar (noise 0.271, chance 0.256), paired +0.004 vs the noise
+arm. Rung P4 closes: lineages need a causal weighting this forward cannot compute. Of the
+ladder, P2 (denoise, 20k, next on the runner) and np0 remain; P3 (sonar) is held.

@@ -1,6 +1,6 @@
 # Planned: LXTUL-P rung P4, the relation half — K streams as K LINEAGES (`tul.fan_lineage`)
 
-Status: planned
+Status: failure
 
 Date: 2026-09-21 (frozen before any GPU step of the arm). Arc: the LXTUL-P note
 [`2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md`](../../../.agents/notes/proposed/architecture/2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md),
@@ -109,3 +109,81 @@ oracle and the per-stream span CE spread before calling it a loss.
   this arm's base is gone and it must be re-cut over whatever base survives.
 - No measurement says the relation narrowing is what changes persistence rather than the
   general loss of cross-stream routes; the arm cannot separate those two.
+
+## Results
+
+Run: 5,000 steps at `36a571d` on the 5090 through `run_recon.sh`, START 10:52 local
+2026-09-21, DONE 12:18, tripwire HEALTHY (`preclip/total` max 52 at step 220), final
+val_loss 4.4479, RATE 7,318 tok/s at step 200 (7,292 at 4800), peak 19.14 GB. Artifacts in
+`../results/2026-09-19-lxtul-fan4/`: `sweep_slot-spandec-strict-fan4-all-lineage_{2500,5000}.json`,
+`worth_..._5000.json`, `slot_state_..._5000.json`, `run_slot-spandec-strict-fan4-all-lineage.txt`,
+`wandb_series_lineage.json`, `loop_norms_lineage_vs_noise.txt`, `fan_geom_lineage_5000_d6.{json,txt}`
+and `fan_mixture_lineage_5000_d6.{json,txt}` (Spark, worktree `MORPH-0921` at `82868b4`,
+the same 48 rows), `paired_lineage_vs_noise_5000.json`, `paired_lineage_vs_fan4all_5000.json`.
+
+**The base is gone, as the prereg named.** The noise arm failed its P-1/P-2 clause pair
+on P-2 (`../failures/2026-09-21-lxtul-fan4-all-noise.md`): its K draws were escaped by a
+scale growth of the entry state. This arm composes that config and shows the same escape,
+smaller: `loop/in_norm_t0` **1,365 → 2,454 → 4,752 → 7,720 → 10,317** (noise 15,417 at the
+end), streams at cosine +0.99 from pass 0. Everything below is read as "what does the
+per-stream channel do on a collapsed fan", not as rung P4.
+
+**Last-val keys (step 4,750; wandb).**
+
+| key | lineage | noise (rung below) | fan4-all |
+|---|---|---|---|
+| `fan/oracle_ce` | 4.3613 | 4.3663 | 4.3925 |
+| `fan/mixed_ce` | 4.4016 | 4.4113 | 4.4348 |
+| regret | 0.040 | 0.045 | 0.042 |
+| `fan/stream_rank_t1` / `_t6` | **2.407 / 2.085** | 1.542 / 1.323 | 2.820 / 2.060 |
+| `val/fan_stream_cos_t1` / `_t6` | +0.987 / +0.982 | +0.991 / +0.984 | −0.30 / +0.06 |
+| `loop/core_gain_t0` max | 1.78 | 1.74 | 9.92 |
+
+**Stream probe at 5,000 (Spark, 2,573 slots).** Pass 0: cos +0.990, rank **2.860**, norms
+333 / 345 / 346 / 338, `++--` 33 %. Pass 1: rank 2.370, `+---` 43 %. Pass 6: cos +0.981,
+rank **2.032**, norms 401 / 430 / 431 / 421, `+---` 44 %. The noise base reads 1.827 →
+1.263 on the same rows. Inside a deviation that is 1 % of the state, the per-stream
+channel keeps the four deviations spread at fan4-all's rank (2.31 → 2.03), where the
+all-to-all relation let them merge.
+
+**Mixture probe at 5,000 (Spark, same rows).** Oracle 4.2095, deployed 4.2515 (agreement
+8e-8 / 3e-8); deployed − prefix mixture −0.0092 [−0.0114, −0.0071]; deployed − oracle
++0.0419; best single 0.098 above the oracle; **winner persistence 0.3002 [0.2776, 0.3217]
+vs chance 0.2558** (excess +0.044; noise 0.2708 vs 0.2525, +0.018; fan4-all 0.3039 vs
+0.2676, +0.036); shares 0.219 / 0.228 / 0.315 / 0.238.
+
+**Depth sweep (480 rows).** 5,000: d1 4.3143, d6 4.3113, d16 4.3132; tokens K1−K6
+**+0.0029 [+0.0025, +0.0034]**, K3−K6 −0.0001. **Paired at depth 6:** lineage − noise
+**+0.0040 [+0.0018, +0.0063]**; lineage − fan4-all +0.0057 [+0.0036, +0.0079]. Worth: zero
+0.1989, shuffle 0.1962, wrong_seed 0.0878.
+
+**Scoring.**
+
+- **P-1: HOLDS.** 5,000 steps, HEALTHY.
+- **P-2 (the rung's reason): FAILS.** Persistence 0.300 against 0.36, its interval
+  overlapping the noise arm's [0.249, 0.294] by 0.017.
+- **P-3: HOLDS.** +0.0040 [+0.0018, +0.0063], inside ±0.024.
+- **P-4: FAILS on its letter, in the good direction.** rank_t6 2.085 is 0.76 ABOVE the noise
+  arm's 1.323, outside ±0.3. The narrowing did not let the rank fall; it held it.
+- **P-5: HOLDS.** Top share 0.315 > 0.30.
+- **P-6: HOLDS.** 7,318 within 3 % of 7,295.
+
+## Verdict
+
+**Failure** on the rung's reason (P-2), 4 of 6 hold. Binding branch: "P-2 fails and P-3
+holds: a per-stream channel costs nothing and buys nothing. Rung P4 closes as 'lineages
+need the weighting, and the weighting needs a different forward'". The channel does
+one measurable thing, holding the centred rank of the (collapsed, 1 %-scale) deviations at
+2.0 instead of 1.3 through the loop, and that rank buys the reader nothing (+0.004 paired,
+inside the spread) and the winners nothing (persistence +0.044 over chance against
++0.018 and +0.036). The sequential-over-spans forward is NOT built for this. Two arms in a
+row now read a regret of 0.040–0.045 and an oracle 0.10 below the best single on
+streams at cosine 0.99: the oracle-gap floor named in the noise filing stands.
+
+## Updated hypothesis
+
+A per-stream channel along the slot axis is a precondition, not a lever: with nothing
+preferring the lineage that has been right, K channels are K parallel summaries and the
+coda keys on none of them. Lineages become a live question only on a fan whose streams
+are distinct in the first place (the volume term, or a per-pass job), and only with a
+causal weighting, which this forward cannot compute. Rung P4 is closed on this tree.
