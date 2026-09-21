@@ -1,0 +1,15 @@
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.0 slot_seed='boundary'
+  LCTUL ON: prefix_k=2 CONTINUOUS code, flow thinker (source_std=1.0), 8 Euler steps at eval - the slot holds the CODE of the span it precedes: E makes it from that span at train, the core body samples it at eval. Train schedule: t ~ logit-normal(mu=-1.0, sigma=1.0): median t = 0.2689 (lambda = -2.00), the flow LOSS is reweighted toward HIGH NOISE (LCM's wide schedule: CA 80.3 % against the peaked schedule's 70.6 %). The SAMPLER's Euler grid stays UNIFORM - this knob moves training only. TARGET = E's own code of the next span (verbatim reconstruction). READ `val/code_ca` AGAINST `val/code_ca_chance` FIRST (LCM's contrastive accuracy: does the SAMPLED code retrieve its own span's true code out of the batch, neighbours excluded) - a code that wins `code_fm_rel` and reads CA at chance is a regression to the conditional mean, whatever the CE says. Then `train/code_t_mean` (the schedule, as drawn) and the four `code_fm_band{b}_rel` ratios (.agents/notes/proposed/architecture/2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 270.0M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 20000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+tul-code-cfg-tlow-past: step 20000, 96 rows x 2 passes, overrides=['tul.code_cfg_drop=0.001']
+  code_fm_rel          0.3921 ± 0.0025
+  code_fm_band0_rel    0.4513 ± 0.0029
+  code_fm_band1_rel    0.3598 ± 0.0022
+  code_fm_band2_rel    0.2927 ± 0.0016
+  code_fm_band3_rel    0.3789 ± 0.0054
+wrote /home/wolfe/morph-instruments/results/code_flow_tul-code-cfg-tlow_20000_past.json

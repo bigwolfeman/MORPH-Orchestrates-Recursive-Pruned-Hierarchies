@@ -1,0 +1,24 @@
+{
+ "label": "tul-code-cfg-tlow-past",
+ "step": 20000,
+ "rows": 96,
+ "repeats": 2,
+ "mean": {
+  "code_fm_rel": 0.39211501460522413,
+  "code_fm_band0_rel": 0.45130067504942417,
+  "code_fm_band1_rel": 0.3597572688013315,
+  "code_fm_band2_rel": 0.2926578624173999,
+  "code_fm_band3_rel": 0.3789230100810528,
+  "code_fm_raw": 1606.729866027832,
+  "code_fm_null": 4097.649711608887
+ },
+ "sem": {
+  "code_fm_rel": 0.0024724194510004345,
+  "code_fm_band0_rel": 0.0028572258145160958,
+  "code_fm_band1_rel": 0.0022071653882807323,
+  "code_fm_band2_rel": 0.0015757593052221474,
+  "code_fm_band3_rel": 0.005381881950346687,
+  "code_fm_raw": 10.047084891662042,
+  "code_fm_null": 0.9835321390747047
+ }
+}

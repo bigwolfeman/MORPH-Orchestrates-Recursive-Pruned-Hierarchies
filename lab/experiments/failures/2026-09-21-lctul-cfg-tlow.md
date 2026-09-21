@@ -1,6 +1,6 @@
 # Planned: LCTUL cfg arm with the flow noise schedule shifted to HIGH noise (`tul.code_t_logit_mean −1`)
 
-Status: planned
+Status: failure
 
 Date: 2026-09-21 (frozen before any GPU step of the arm). Arc: the LXTUL-P note
 [`2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md`](../../../.agents/notes/proposed/architecture/2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md),
@@ -116,3 +116,87 @@ readable.
 - The draw's `None` branch is a config read inside `draw_flow_t`, a Python-level constant
   on a frozen field (the same class as the `code_discrete` branch beside it), not a
   build-time bound method.
+
+## Results
+
+Run: 20,000 steps at `6210c1f` on the 5090 through `run_recon.sh`, START 04:33 local
+2026-09-21, DONE 07:35, tripwire HEALTHY (`preclip/total` max 143 at step 11454), final
+val_loss 4.4686, phase-1 rate 33,915 tok/s at step 200, phase-3 rate 19,157 tok/s (parent
+19,742), peak 13.22 GB. wandb `bzltw7vw`. Artifacts in `../results/2026-09-21-lctul-tlow/`:
+`sweep_tul-code-cfg-tlow_{5000,10000,15000,20000}.json` (+ the 20k `tokens.npz`),
+`worth_..._20000.json`, `slot_state_..._20000.json`, `run_tul-code-cfg-tlow.txt`,
+`wandb_series_tul-code-cfg-tlow.json`, `code_flow_tul-code-cfg-tlow_20000_{blind,past}.{json,txt}`
+and `code_marginal_sweep_tul-code-cfg-tlow_20000.{json,txt}` (Spark, worktree `MORPH-0921`
+at `82868b4`, the parent's 96 rows), `paired_tlow_vs_parent_20000.json` (ruler = the
+parent's 20k sweep at k = 1), `paired_tlow_vs_ruler_20000.json` (ruler =
+`slot-spandec-strict-20k` at depth 6).
+
+**The schedule reached the draw.** `train/code_t_mean` over phases 2–3 (900 points): mean
+**0.3030**, min 0.2752, max 0.3355; analytic 0.3033.
+
+**The new instrument.** `val/code_ca` climbed 0.0027 (step 250) → 0.0049 (6750) → 0.0085
+(19750) against `val/code_ca_chance` 0.0032–0.0033: **2.7 × chance** at 20k. The parent has
+no CA reading (the instrument is new), so this is the FIRST above-chance in-batch retrieval
+of a sampled MORPH code; LCM's Base-LCM read 70–80 % on sentences.
+
+**Context-blind flow probe at 20k (Spark, 96 rows, 2 repeats).** With the past
+(`code_cfg_drop` 0.001) `code_fm_rel` **0.3921 ± 0.0025**; blind (0.999) **0.3994 ±
+0.0023**; gap 0.0073 = **1.9 %** of the with-past loss (parent 0.0036 = 1 %). Bands 0–3:
+0.4513/0.3598/0.2927/0.3789 with the past, 0.4626/0.3639/0.2961/0.3851 blind.
+
+**8-draw marginal (Spark, 96 rows).** k = 0 (encoder) 0.3239; k = 1 → 16: 4.3634, 4.3541,
+4.3532, 4.3548, 4.3566; **k = 16 − k = 1: −0.0068 [−0.0089, −0.0048]** (parent 4.3795 →
+4.3748, −0.0047 [−0.0070, −0.0024]). The k = 1 marginal is 0.016 below the parent's on the
+same rows.
+
+**Paired one-draw reads (501,106 tokens, 490 blocks).** vs the parent at k = 1: k = 1
+**−0.0095 [−0.0123, −0.0068]**, k = 2 −0.0149, k = 3 −0.0117, k = 6 −0.0041, k = 9 −0.0005,
+k = 12 +0.0013, k = 16 +0.0029. vs the strict ruler at depth 6: k = 1 **+0.6384 [+0.6310,
++0.6462]** (parent +0.648), k = 16 +0.6508; the encoder code (k = 0) −3.4704. Runner sweep at
+20k: K1−K6 −0.0054 [−0.0067, −0.0039], K3−K6 −0.0076: more Euler steps HURT a single draw
+past k = 2.
+
+**Teacher-forced CE.** `val/ce_tf` 0.3551 at 19750 (min over the run 0.3151; parent 0.32).
+Worth profile at 20k: zero 0.0558, shuffle 0.0114.
+
+**Scoring.**
+
+- **P-1: HOLDS.** HEALTHY, phase-3 19,157 tok/s ≥ 15,000.
+- **P-2: HOLDS.** `code_t_mean` 0.3030 inside [0.28, 0.33].
+- **P-3 (the arm's reason): FAILS.** 1.9 % against 3 %. The past is worth twice what it was
+  worth to the parent and still under the bar.
+- **P-4: FAILS.** 2.7 × chance against 3 ×.
+- **P-5: FAILS.** −0.0068 against −0.020 (parent −0.0047).
+- **P-6: FAILS.** −0.0095 [−0.0123, −0.0068] against −0.020 (parent − tul-code-20k was
+  +0.022, so the sign flipped and the interval is clear of zero).
+- **P-7: HOLDS.** +0.638 against +0.45. The verbatim ceiling stands.
+- **P-8: HOLDS.** 0.355 ≤ 0.40.
+
+Four of eight hold. The four that fail all moved in the predicted direction by roughly
+half their bar.
+
+## Verdict
+
+**Failure** on the arm's reason. Shifting the flow noise to high noise (E[t] 0.30 against
+0.50) is a real but small lever on a verbatim target: the field's context dependence
+doubles (1 % → 1.9 %), a sampled code is retrievable in-batch at 2.7 × chance, one draw reads
+0.010 nats better than the parent and the k-curve bends 0.002 more, while the ceiling
+against the strict ruler stays at +0.64 nats. None of it reaches the bars the prereg set,
+and the parent's diagnosis stands: on a code whose predictable-from-context fraction is a
+tenth, no schedule makes the field read the past. Binding branch taken: "P-3 fails: rung P3
+still runs, but from the parent's uniform schedule with the shift as a second factor to
+re-test on the semantic target". The sonar arm was BUILT composed from this config
+(`tul_code_cfg_tlow_sonar.yaml`); per this binding it should be re-cut over
+`tul_code_cfg` (uniform t) with the shift as a second factor, and it is HELD in any case on
+its own C-1 miss (`planned/2026-09-21-lctul-tlow-sonar.md`). The note's Risks gain the line
+"the schedule is not a lever on a lossless code".
+
+## Updated hypothesis
+
+A wide, high-noise schedule gives the field more of its loss at levels where the context is
+the only signal, and the field takes it (the gap doubled). The size of what it can take is
+bounded by the target: E's code is a near-lossless copy of the next span (ce_tf 0.32–0.36),
+and the context explains a tenth of it, so the ceiling on the context-blind gap is the
+target's, not the schedule's. The lever on the target is rung P3 (SONAR) or a code that IS
+the conditional entropy (LCTUL-D). The schedule shift is kept as a second factor for that
+test, not as a rung.

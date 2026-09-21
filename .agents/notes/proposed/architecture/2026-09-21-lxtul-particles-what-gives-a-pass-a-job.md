@@ -373,3 +373,11 @@ Re-supplying the per-stream trigger at every pass collapses the streams HARDER (
 the K-curve and the CE unchanged inside the seed spread (paired −0.005). Both Part-1
 state levers are now closed (fp0, trig); the ladder's claim that a pass needs a JOB is
 what remains, and P1 (noise) then P2 (denoise) are queued behind tlow and pk8.
+
+**2026-09-21, the schedule arm (tlow) FILED: `lab/experiments/failures/2026-09-21-lctul-cfg-tlow.md`.**
+E[t] 0.30 on the flow thinker doubles the field's context dependence (1 % → 1.9 %), reads
+a sampled code at 2.7 × chance in-batch (new instrument), one draw 0.010 better than the
+parent, k-curve −0.0068; every clause moved the predicted way by about half its bar and
+none reached it. The ceiling vs the strict ruler stays +0.64. Risk added: the schedule
+is not a lever on a lossless code. The sonar arm (P3) should be re-cut over the uniform
+schedule with the shift as a second factor; it is held on its C-1 miss regardless.
