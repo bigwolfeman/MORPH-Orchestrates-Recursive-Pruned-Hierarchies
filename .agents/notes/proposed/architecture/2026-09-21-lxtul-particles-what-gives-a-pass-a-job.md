@@ -130,6 +130,23 @@ on this tree is 0.024 nats (`mean-depth-is-a-depth-axis-dial`); a rung must clea
 spread, a pass with a defined job still adds nothing at this scale, and the loop's job was not
 the issue. That closes the sampler lane on this tree for good, with the mechanism named.
 
+### If the ladder fails: remove the prelude (Wolfe, 2026-09-21)
+
+Wolfe's direction, verbatim: "If these fail we should test removing the prelude." Recorded
+here so it is not lost. The arm is `model.n_prelude: 0` on the strict slot loop (and on the
+LCTUL thinker if that lane is still open): the core reads the embeddings directly, for the
+tokens and for the slot seed, with no prelude blocks in front of it. It is NOT the same as
+the noise entry already measured (`core_state_init`, `2026-09-10-arc-slot-mnext-noise-entry`:
+the slot loop read K1−K6 0.002 under a noise entry with the prelude still present). The prior
+fact that motivates it (`prelude-entry-flattens-the-loop`): the PLAIN norm_match model earns
+K1−K6 0.033 under the prelude entry and 0.185 under Parcae's noise entry, and the core's
+blocks are near-inert on slot states under the prelude entry (MLP out/in 1–2 %), because the
+prelude hands the loop a state near its fixed point. Removing the prelude removes the thing
+that produces that state. Queue it as one factor over the strict partner FIRST (the ruler must
+move before a fan or a sampler is read on it), with the hinge re-checked (a state that is not
+near the fixed point at entry reads a gain the hinge was not tuned for; the noise-entry filing
+found `gain_est` 8.6 and a 6,000-nat penalty, and ran on the free base).
+
 ## Alternatives considered
 
 The outside agent's six answers, each scored against the tree:
