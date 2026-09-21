@@ -1,6 +1,6 @@
 # Planned: LXTUL-P rung P2, single-stream form: the slot loop as a DENOISER (`tul.loop_denoise`)
 
-Status: planned
+Status: failure
 
 Date: 2026-09-21 (frozen before any GPU step of the arm). Arc: the LXTUL-P note
 [`2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md`](../../../.agents/notes/proposed/architecture/2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md),
@@ -153,3 +153,85 @@ tests, re-queue with a fresh prereg. Nothing about the idea is read.
 - `torch.compile` on the new branch: the tests are eager.
 - The exposure-bias gap (train teacher-forced vs eval rollout) has no instrument here
   beyond `val/code_target_cos`.
+
+## Results
+
+Run 2026-09-21 13:39:28 to 16:47:38 (`queue.log`), wandb `b7xmmyb1`, commit 8b8f824,
+20,000 steps, verdict HEALTHY. Artifacts:
+[`results/2026-09-21-lxtul-denoise/`](../results/2026-09-21-lxtul-denoise/) (the four
+sweeps, the paired read, the worth profile, the corpus-mean probe at depths 1/6/16 from
+the Spark, the wandb series). The pairing intersected 490 blocks / 501,106 tokens with
+arm A's rows (bar 300): the pairing is valid.
+
+| prediction | bar | reading | result |
+|---|---|---|---|
+| P-1 healthy | `preclip/total` < 1e4 at every step ≥ 200 | max 17.52 at step 14,612; no abort | holds |
+| P-2 denoiser learns | `train/loop_denoise` at 20k < 0.70× its 200–400 mean | 6.34 / 13.92 = 0.455 | holds |
+| P-3 the reader (the rung's reason) | paired depth-6 denoise − arm A ≤ −0.50 | **+0.1260 [+0.0725, +0.1779]** | **fails** |
+| P-4 worth having | depth-6 val CE < 4.50 (no-cell floor) | 9.2360; worth `zero` total −4.737 (zeroing HELPS by 4.74 nats; arm A −4.608) | **fails** |
+| P-5 a sample, not a mean | `val/code_target_cos` in [0.06, 0.20] AND probe rank ≥ 35 | cos 0.0316 (last four vals; shuffle 0.015); rank at depth 6: 75.6 / 58.5 | **fails** (cosine clause) |
+| P-6 K-curve rises (instrument) | K1−K6 ≥ +0.20 | +0.5575 (5k +0.688, 10k +0.662, 15k +0.722) | holds, as an instrument |
+| P-7 rate | ≥ 0.80 × 14,393 = 11,514 tok/s | 13,505 at step 200 | holds |
+
+4 of 7 hold; the rung's reason (P-3) fails, and P-4 and P-5 with it.
+
+Sign note on P-4: the worth instrument reports a POSITIVE total when zeroing the cell
+hurts (strict at 5k reads +0.187) and arm A read −4.608 under that convention. The
+prediction's parenthetical ("NEGATIVE (zeroing the cell HURTS)") reverses the sign. The
+first clause (depth-6 CE under 4.50) fails at 9.236, and the worth reads −4.737 (zeroing
+helps), so P-4 fails under the letter and under the instrument's meaning alike. The
+Predictions text is left as written.
+
+Readings beyond the letter, all from the artifacts:
+
+- **Pass 1 never learned.** `train/loop_denoise_l2_t0` (the pass that enters at pure
+  noise, `2(1 − cos)` per cell) read 1.91 over steps 200–400 and 1.96 over the last
+  1,000 steps: cosine to the target near 0.02 from the first step to the last. The
+  whole fall of the summed term is passes 2–6 under teacher forcing: `l2_t5` 1.68 →
+  0.48. At eval the rollout starts from pass 1, so it inherits a pass that carries
+  nothing of the target.
+- **The rollout drifts to the corpus mean with depth.** Corpus-mean probe, 96 rows,
+  4,900 slots, cells 0 / 1: `pred·zbar` 0.085 / 0.185 at depth 1, 0.115 / 0.235 at 6,
+  0.159 / 0.319 at 16; effective rank 92.4 / 87.7 → 75.6 / 58.5 → 66.9 / 34.8 (truth
+  77.5 / 70.2); centred own cosine 0.016–0.022 at every depth (arm A 0.145). The
+  sample has the truth's RANK at depth 6 and almost none of its DIRECTION.
+- **The K-curve and the deep paired readings are genericity.** Depth 16 reads −0.784
+  [−0.839, −0.729] against arm A's depth-6 mean while the cell's cosine to its code
+  is flat; the frozen coda reads a blander cell better (the runner's own warning,
+  `frozen-coda-k-curve-measures-genericity`). None of it is depth.
+- **The read got worse over training.** `val/ce_tokens` minimum 8.439 at step 500,
+  9.349 at step 19,750 (arm A 9.110 at depth 6).
+- `shuffle` worth +0.072: swapping a slot's cell for another slot's costs the frozen
+  coda 0.07 nats, so the sample is slot-specific by a little and useful by nothing.
+- The state probe is skipped by design on a `tul.code` model (`slot_state_*.json`).
+
+## Verdict
+
+Failure on the rung's reason. The rolled-out sample reads 0.126 nats WORSE than arm A's
+regressed mean at depth 6 on 490 shared blocks, 4.74 nats worse than no cell, and its
+exit has the truth's rank with a cosine of 0.03 to the truth. Per the binding: rung P2
+does not beat its rung below, which is the note's falsifier for the ladder on the
+single-stream base. No schedule sweep is queued.
+
+## Updated hypothesis
+
+Teacher forcing is a bypass. A per-pass job gives a pass a job only if the loss reads
+that pass's OUTPUT with no shallower route. Under teacher forcing pass i's input is
+handed to it, so passes 2–T learn to denoise a given entry (the training term falls
+0.455×) while pass 1, which starts at noise and has only context to predict the target
+from, learns nothing (cosine 0.02, flat for 20k steps), and the rollout inherits pass 1.
+This is the same reading the whole ladder converges on: depth is earned in proportion
+to the loss share that has no shallower route and that pass 1 cannot satisfy alone
+(plain/noise 0.185, plain/prelude 0.033, the slot side channel 0.002; the slot channel's
+entire worth is 0.19 nats at 5k, most of it the first token after a boundary; a 4x
+horizon moves the plain loop 0.136 → 0.170 and the strict slot loop not at all). The
+one denoise cut not run is the rollout trained end to end (loss on the rolled-out exit,
+no teacher forcing): it removes the bypass, but it is then a T-step regression onto the
+code from a noise entry, which `per-pass-targets-met-in-one-step` and arm A predict flat;
+it is not queued without Wolfe's call. Next, per the binding: the single-stream ladder
+is falsified; np0 has run (failure); P3 (SONAR) is held on the C-1 miss.
+
+Not verified after the run: `torch.compile` was on in the trainer (the arm ran under
+it), but no eager-vs-compiled parity was measured on this branch; the exposure-bias
+gap has no instrument beyond the cosine and the corpus-mean probe; the worth profile is
+192 rows, unpaired.

@@ -411,3 +411,21 @@ doubled (12.9 vs 6.2) and the coda pays 0.36 nats for a wrong seed (the seed is 
 per-span content). The entry explanation is spent on the slot loop; `prelude-entry-
 flattens-the-loop` stays a plain-model fact. What is left of the ladder is P2 (denoise,
 queued at the fix commit) and the held P3.
+
+**2026-09-21, rung P2 (denoise, the single-stream form) FILED: `lab/experiments/failures/2026-09-21-lxtul-loop-denoise.md`.**
+The rolled-out sample reads +0.126 [+0.073, +0.178] WORSE than arm A's regressed mean
+at depth 6 (490 shared blocks), 4.74 nats worse than no cell, cosine 0.03 to its code
+with the truth's rank (75.6 of 77.5). Pass 1, the pass that enters at pure noise, never
+learned (its term 1.91 → 1.96 over 20k steps); every fall in the summed term was passes
+2–6 under teacher forcing, and the rollout inherits pass 1. The K-curve (+0.56) and the
+deep paired readings are the frozen coda reading a blander cell (the rollout drifts to
+the corpus mean with depth: `pred·zbar` 0.09 → 0.16 / 0.19 → 0.32, rank 92 → 67 / 88 →
+35). Per the binding, rung P2 does not beat its rung below: the ladder's falsifier on
+the single-stream base fires. **Reading for the whole ladder:** teacher forcing is a
+bypass, and every arm here had one. Depth is earned in proportion to the loss share
+with no shallower route that pass 1 cannot satisfy alone (plain/noise 0.185,
+plain/prelude 0.033, slot side channel 0.002); the slot channel's whole worth is 0.19
+nats at 5k, and a 4x horizon moves the plain loop (0.136 → 0.170) and the strict slot
+loop not at all (0.0001–0.0016 at 5k/10k/15k/20k). The lever is upstream of the passes:
+what the channel is forced to carry and can carry. Of the ladder only P3 (SONAR)
+remains, held on the C-1 miss.
