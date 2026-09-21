@@ -1,0 +1,13 @@
+Paired token CE gaps at step 5000 on the same 480 rows (501,106 tokens after intersection; 490 blocks).
+Block bootstrap over 1024-token blocks, 95 % interval, lab/divergence/paired_vs_ruler.py with
+slot-spandec-strict's depth-6 sweep (2026-09-12-strict) as the ruler. Computed 2026-09-20 from
+sweep_slot-spandec-strict-vq8_5000.slot-spandec-strict-vq8.tokens.npz.
+
+vq8 - slot-spandec-strict@6:
+  depth 1: +0.0264 [+0.0232, +0.0298]
+  depth 6: +0.0250 [+0.0217, +0.0283]
+
+Worth profile (worth_profile.py, 192 rows, token-weighted total over the seven offset bins / offset-0 bin):
+  all_slots (= zero): partner 0.1865 / 0.7567   vq8 0.1397 / 0.5717
+  shuffle:            partner 0.1739 / 1.7391   vq8 0.1263 / 1.2815
+  wrong_seed:         partner 0.0426 / 0.6180   vq8 0.0362 / 0.4132

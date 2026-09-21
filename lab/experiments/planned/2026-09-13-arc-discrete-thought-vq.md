@@ -325,4 +325,47 @@ sweep continues upward, with the `prefix_k` confound resolved first.
 
 ## Results
 
-(to be filled after the runs; predictions above are frozen)
+### vq8 (run 2026-09-20)
+
+Run: 5,000 steps at `53c0497` on the 5090 through `run_recon.sh`, started 21:51 local
+2026-09-20, DONE 23:00, tripwire HEALTHY (max 58 at step 214), final val_loss 4.4738, RATE
+OK 9,450 tok/s at step 200, peak 24.83 GB. An earlier attempt at the same commit exited 1
+at step 36 (queue log, 14:50 local); the re-queued run passed the runner's smoke. Artifacts
+in `../results/2026-09-13-register/`: `sweep_slot-spandec-strict-vq8_{2500,5000}.json`,
+`worth_slot-spandec-strict-vq8_5000.json`, `slot_state_slot-spandec-strict-vq8_5000.json`,
+`run_slot-spandec-strict-vq8.txt`, `paired_vq8_5000.{txt,json}`.
+
+**Quantizer at 5,000.** `tul/vq_perplexity` 105.7 (288 at step 0, 65.8 at step 2480, mean
+89.0 over the last 1,000 steps), `tul/vq_used` 295 of 512, `tul/vq_commit` 0.0089 (0.0114 at
+step 0; flat, not rising). `val/slot_eff_rank` 35.09 over the 64·8 lifted cells,
+`val/slot_pairwise_cos` 0.109; `val/slot_cell_eff_rank` 6.72 of 8, `val/slot_cell_pairwise_cos`
+0.135.
+
+**Depth sweep (480 rows).** 5,000: d1 4.3751, d2 4.3741, d3 4.3736, d6 4.3736, d9 4.3741,
+d12 4.3748, d16 4.3764; tokens K1−K6 **+0.0015 [+0.0011, +0.0019]**, K3−K6 **−0.0000
+[−0.0002, +0.0002]**; the span decoder's own CE K1−K6 +0.0038, K3−K6 +0.0005. 2,500: d1
+4.6721, d6 4.6702, K1−K6 +0.0018.
+
+**Paired (`paired_vq8_5000.txt`, 501,106 tokens, 490 blocks).** Depth 6: vq8 −
+`slot-spandec-strict` **+0.0250 [+0.0217, +0.0283]**; depth 1: +0.0264.
+
+**Worth profile (token-weighted total / offset-0 bin).** `all_slots` 0.1397 / 0.5717 against
+the partner's 0.1865 / 0.7567; `shuffle` 0.1263 / 1.2815 (partner 0.1739 / 1.7391);
+`wrong_seed` 0.0362 / 0.4132 (partner 0.0426 / 0.6180). The discrete channel carries LESS
+than the continuous one at every bin (no clause predicted this; recorded).
+
+**Scoring, vq8 clauses.**
+
+- **P-1: HOLDS.** Perplexity 105.7 > 32; 295 codes in use. The codebook did not collapse.
+- **P-2: HOLDS.** Rank 35.1 > 20 (the partner's 5.7598 in the clause is the bare-front
+  probe number; the corrected ruler reads 13.85. Either way the clause holds).
+- **P-3: HOLDS.** Within-slot rank 6.72 > 4.0.
+- **P-4: HOLDS.** K3−K6 −0.0000 < 0.002.
+- **P-5: HOLDS.** K1−K6 +0.0015 < 0.005 (partner +0.0016). No first-pass effect from the
+  hard code boundary.
+- **P-6: HOLDS.** +0.0250 worse, inside [0.02, 0.30]; the interval's lower end (+0.0217)
+  clears the 0.02 floor.
+- **P-8: HOLDS.** Commitment 0.0089 < 0.30, flat.
+- **P-9: HOLDS.** No OOM at batch 6 (24.83 GB); 9,450 ≥ 9,000 tok/s.
+- **P-7:** waits on `slot-spandec-strict-vq4` (queued 2026-09-20 at the same commit,
+  started 23:15 local).
