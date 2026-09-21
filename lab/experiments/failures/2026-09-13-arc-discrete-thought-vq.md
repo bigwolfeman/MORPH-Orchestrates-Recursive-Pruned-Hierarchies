@@ -1,6 +1,6 @@
 # Planned: the DISCRETE thought — K vector-quantized codes per span instead of one vector
 
-Status: planned
+Status: failure
 
 Date: 2026-09-13 (frozen before any GPU step of either arm; no smoke of either exists at
 filing time). Arc:
@@ -369,3 +369,90 @@ than the continuous one at every bin (no clause predicted this; recorded).
 - **P-9: HOLDS.** No OOM at batch 6 (24.83 GB); 9,450 ≥ 9,000 tok/s.
 - **P-7:** waits on `slot-spandec-strict-vq4` (queued 2026-09-20 at the same commit,
   started 23:15 local).
+
+### vq4 (run 2026-09-20/21)
+
+Run: 5,000 steps at `53c0497` on the 5090 through `run_recon.sh`, started 23:15 local
+2026-09-20, DONE 00:20 local 2026-09-21, tripwire HEALTHY (max 63.7 at step 238), final
+val_loss 4.5513, RATE OK 9,049 tok/s at step 200, peak 19.01 GB (vq8 24.83). Artifacts in
+`../results/2026-09-13-register/`: `sweep_slot-spandec-strict-vq4_{2500,5000}.json`,
+`worth_slot-spandec-strict-vq4_5000.json`, `slot_state_slot-spandec-strict-vq4_5000.json`,
+`run_slot-spandec-strict-vq4.txt`, `paired_vq4_5000.json`, `paired_vq8_vs_vq4_5000.json`.
+
+**Quantizer at 5,000** (wandb `exaxa0gc`, one key per query). `tul/vq_perplexity` 39.2
+(237 at step 0, 17.2 at step 2480, mean 32.5 over the last 1,000 steps), `tul/vq_used` 85 of
+512, `tul/vq_commit` 0.0046 (0.0063 at step 0; flat). `val/slot_eff_rank` 17.13 over the 64·4
+lifted cells, `val/slot_pairwise_cos` 0.185; `val/slot_cell_eff_rank` 2.91 of 4,
+`val/slot_cell_pairwise_cos` 0.210. Half the codes per span uses 85 symbols where vq8 used
+295.
+
+**Depth sweep (480 rows).** 5,000: d1 4.4116, d2 4.4104, d3 4.4101, d6 4.4099, d9 4.4106,
+d12 4.4116, d16 4.4136; tokens K1−K6 **+0.0017 [+0.0011, +0.0022]**, K3−K6 **+0.0002
+[−0.0002, +0.0005]**; the span decoder's own CE K1−K6 +0.0025, K3−K6 +0.0001. 2,500: d1
+4.6943, d6 4.6927, K1−K6 +0.0016.
+
+**Paired (`paired_vs_ruler.py`, 1024-token blocks, 95 % interval).** vq4 −
+`slot-spandec-strict` at depth 6: **+0.0577 [+0.0541, +0.0614]** (501,106 tokens, 490
+blocks); depth 1 +0.0593. vq8 − vq4 with vq4's depth-6 sweep as the ruler (511,089 tokens,
+500 blocks): **−0.0328 [−0.0358, −0.0300]** at depth 6; −0.0313 at depth 1; the gap is the
+same at every eval depth (−0.0300 to −0.0328).
+
+**Worth profile (token-weighted total / offset-0 bin).** `all_slots` 0.1109 / 0.5302 (vq8
+0.1397 / 0.5717, partner 0.1865 / 0.7567); `shuffle` 0.1003 / 1.0736 (vq8 0.1263 / 1.2815);
+`wrong_seed` 0.0313 / 0.4483 (vq8 0.0362 / 0.4132). The channel's worth falls with the code
+count: partner 0.19, vq8 0.14, vq4 0.11.
+
+**State probe (12 rows, 644 slots).** Cosine of the depth-k state to the depth-1 state
+0.913 / 0.871 / 0.806 / 0.693 at depths 2 / 3 / 6 / 16 (vq8 0.922 / 0.883 / 0.829 / 0.721);
+norm 33.8 at every depth. The state keeps moving with depth on both arms while the token
+CE does not.
+
+**Scoring, the remaining clause.**
+
+- **P-7: FAILS.** vq8 beats vq4 at depth 6 by 0.0328 [0.0300, 0.0358] nats, above the 0.02
+  bar; the interval's near end clears the bar. The clause's own caveat applies: the pair
+  differs by the code count, the code width and the prefix width (`L_total` 1536 against
+  1280), and the register's one width number on disk is 0.022 nats for a 1→4 prefix.
+
+The vq8 clauses read on vq4, for the record and not as clauses: codes used (39.2 > 32, 85
+live), passes flat (K3−K6 +0.0002), first pass flat (K1−K6 +0.0017), commitment flat, no OOM.
+
+## Verdict
+
+**FAILURE: eight of nine predictions held; P-7 failed.** Filed under `failures/` because
+success means the predictions held, and one did not.
+
+What the panel settled. **Binding case 1 holds on both arms**: the codes are used (P-1) and
+the passes read nothing (P-4), at slot rank 35 (vq8) and 17 (vq4) against the partner's 13.85.
+Rank was not what stopped the passes. A write given rank by construction leaves K3−K6 at
+0.0000 and +0.0002, inside the band every strict arm sits in. The lane moves to the READER,
+as the Binding says.
+
+What the failed clause says. **The write's capacity is a live lever**: the discrete channel
+carries less than the continuous one on both arms (worth 0.14 and 0.11 against 0.19; paired
+CE +0.025 and +0.058), and the deficit shrinks with the code count. The Binding's condition
+stands: the `prefix_k` confound is resolved first, and the arm that resolves it — a strict
+ruler at `prefix_k` 8 with no quantizer — is not built.
+
+Two caveats from the LCM reading
+(`docs/references/tul-latent-emission/lcm/2026-09-21-lcm-reading.md`, filed the same night),
+recorded here because the filing would hide them otherwise. (1) **No reconstruction ceiling
+was measured.** LCM needed 64 codebooks of 8,192 entries to keep about 70 % of the
+continuous vector's autoencoding BLEU (their Figure 9). Nothing in this panel says how much
+of a span 8 or 4 codes from 512 can carry, so the CE deficit cannot be split between "the
+code cannot carry the span" and "the loop does not fill the code". (2) **The harder discrete
+form was the one built.** LCM's residual-regression form (Quant-LCM-c: regress the residual
+given the codes so far) beat its index-classification form (Quant-LCM-d) on every corpus
+(their Tables 3, 4). The control was not run.
+
+## Updated hypothesis
+
+The rank of the written state is not the depth limit; that reading is closed by this panel
+and by the fan (2026-09-20). A discrete write is a lossy channel whose loss falls with the
+code count, and whether vq8's 0.033 over vq4 is code capacity or prefix width is one arm
+away (strict ruler, `prefix_k` 8, no quantizer). For depth, the LCM reading names the one
+mechanism in print by which a quantized span latent earns steps: code k predicts what codes
+1..k−1 left out, so step k has a job that depends on the earlier steps. A deterministic
+bottleneck with one terminal loss gives passes 2–6 no such job, and that is what both arms
+measured. If the write lane continues, the next prereg is the residual-code form with one
+code emitted per pass; the lane this file binds to is the reader.

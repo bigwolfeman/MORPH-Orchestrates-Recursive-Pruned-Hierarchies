@@ -207,3 +207,16 @@ Prereg: `lab/experiments/planned/2026-09-13-arc-discrete-thought-vq.md`.
 * **A VQ checkpoint carries three keys no other model has**, and loading one into a non-VQ
   model raises on the homeless keys (the tree's contract, `train.py`). Both arms train from
   scratch, so no loader path was tested.
+
+## Outcome (2026-09-21)
+
+Both arms ran (vq8 2026-09-20, vq4 2026-09-20/21, commit `53c0497`). Record:
+[`lab/experiments/failures/2026-09-13-arc-discrete-thought-vq.md`](../../../../lab/experiments/failures/2026-09-13-arc-discrete-thought-vq.md).
+Acceptance: the codebook is used on both arms (perplexity 106 and 39 of 512; 295 and 85
+codes live), the written rank rises to 35 and 17 against the partner's 13.85, and the passes
+stay flat (K3−K6 0.0000 and +0.0002). The discrete channel carries less than the continuous
+one (paired CE +0.025 and +0.058 nats; worth 0.14 and 0.11 against 0.19), and vq8 beats vq4
+by 0.033 nats with the code count, code width and prefix width confounded. Rank is not the
+depth limit. The lifecycle call (implemented as an instrument, or rejected) is Wolfe's; the
+width-matched strict ruler at `prefix_k` 8 and the residual-code form (LCM Quant-LCM-c) are
+the two named follow-ups.
