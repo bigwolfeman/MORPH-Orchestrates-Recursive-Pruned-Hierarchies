@@ -256,3 +256,18 @@ reader and the selector; it does not make the loop earn depth.
    running next) carries the same table and is read beside these two.
 6. The P-8 lesson: name the key AND its scale in a clause. `loss/ce_main` is the whole
    objective on this tree; a token-CE clause must name a token-CE key.
+
+**Correction, 2026-09-20 (after filing; Wolfe asked why the streams read low rank).**
+`fan/stream_rank_t{t}` and the probe's `rank` are the participation ratio of the CENTERED
+streams (`fan_stream_stats`, `morph/model/tul_fan.py`): four vectors minus their slot mean
+sum to zero, so the ceiling for K = 4 is **3, not 4**. "2.82 of 4" above should read 2.82 of
+a ceiling of 3, about 93 % of a regular simplex (whose pairwise cosine is −1/3; the arm
+reads −0.29 at pass 1). The pass-1 reading is therefore at the volume term's own optimum.
+The reading that IS low is pass 6: 2.03 of 3 with the shared fraction 0.22 → 0.64 and
+stream 0's norm 25 → 56, while the select arm (balanced written shares) kept 2.59 at pass 6
+with norms 46 / 39 / 39 / 39. Three correlated causes, not separated: the volume term is
+charged after passes 1 and 2 only (`fan_repel_passes: 2`); the shared core contracts the
+four states onto its dominant direction; winner-takes-all gives stream 0 most of the
+gradient. P-4's bar (2.0) stands as written and holds. Named tests, not queued: the volume
+term on every pass (`fan_repel_passes: 6`, one factor), and the core Jacobian's contraction
+rate on the deviation subspace against the slot-mean direction.
