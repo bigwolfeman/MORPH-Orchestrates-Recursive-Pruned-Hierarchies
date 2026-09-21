@@ -1,0 +1,95 @@
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  LCTUL ON: prefix_k=2 CONTINUOUS code, flow thinker (source_std=1.0), 8 Euler steps at eval - the slot holds the CODE of the span it precedes: E makes it from that span at train, the core body samples it at eval. Train schedule: t ~ U(0, 1) (lambda = 2*logit(t) uniform in t: HALF of training sits above SNR 1, where the noisy input carries the answer and the context is worth nothing to the velocity - LCM Table 5's peaked schedule, 'akin to a Base-LCM'). TARGET = E's own code of the next span (verbatim reconstruction). READ `val/code_ca` AGAINST `val/code_ca_chance` FIRST (LCM's contrastive accuracy: does the SAMPLED code retrieve its own span's true code out of the batch, neighbours excluded) - a code that wins `code_fm_rel` and reads CA at chance is a regression to the conditional mean, whatever the CE says. Then `train/code_t_mean` (the schedule, as drawn) and the four `code_fm_band{b}_rel` ratios (.agents/notes/proposed/architecture/2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 270.0M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 20000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+  batch 1/16 done  (54s)
+  batch 2/16 done  (103s)
+  batch 3/16 done  (151s)
+  batch 4/16 done  (207s)
+  batch 5/16 done  (260s)
+  batch 6/16 done  (303s)
+  batch 7/16 done  (350s)
+  batch 8/16 done  (400s)
+  batch 9/16 done  (436s)
+  batch 10/16 done  (475s)
+  batch 11/16 done  (526s)
+  batch 12/16 done  (575s)
+  batch 13/16 done  (626s)
+  batch 14/16 done  (669s)
+  batch 15/16 done  (725s)
+  batch 16/16 done  (768s)
+tul-code-cfg step 20000  rows=48 batch=3 k_main=8 k_one=1 max_span_tokens=32
+morph from /home/wolfe/morph-instruments/MORPH-0921/morph
+identity check (pinned == unpinned logits) max|d| = 0.000e+00
+parity check (even-only decode vs all-live) mismatched tokens = not run
+
+condition   slots   tokens   cos(zhat,ztrue)   cos(zre,zhat)   cos(zre,ztrue)   cos(zre,other)        gap = d_re - d_hat
+k8           2449    48489           +0.1247         +0.1276          +0.1206          +0.0912   +0.0041 [-0.0027, +0.0106]
+k1           2449    48489           +0.2297         +0.2358          +0.1208          +0.0957   +0.1089 [+0.1027, +0.1157]
+truth        2449    48489           +1.0000         +0.6695          +0.6695          +0.1129   +0.3305 [+0.3030, +0.3582]
+
+CHANCE for every cosine column: cos(z_true, another scored slot's z_true) = +0.1176 [+0.1109, +0.1246]
+A cos(zre, ztrue) at that level means the round trip kept NO slot identity.
+
+95 % row-block bootstrap on every column:
+  k8
+    cos_hat_true   +0.1247 [+0.1202, +0.1298]
+    cos_re_hat     +0.1276 [+0.1225, +0.1328]
+    cos_re_true    +0.1206 [+0.1161, +0.1256]
+    d_hat          +0.8753 [+0.8702, +0.8798]
+    d_re           +0.8794 [+0.8744, +0.8839]
+    move           +0.8724 [+0.8672, +0.8775]
+    gap            +0.0041 [-0.0027, +0.0106]
+    cos_true_other +0.1176 [+0.1109, +0.1246]
+    cos_re_other   +0.0912 [+0.0862, +0.0957]
+    d_re-d_hat     +0.0041 [-0.0027, +0.0106]
+  k1
+    cos_hat_true   +0.2297 [+0.2251, +0.2347]
+    cos_re_hat     +0.2358 [+0.2288, +0.2431]
+    cos_re_true    +0.1208 [+0.1165, +0.1248]
+    d_hat          +0.7703 [+0.7653, +0.7749]
+    d_re           +0.8792 [+0.8752, +0.8835]
+    move           +0.7642 [+0.7569, +0.7712]
+    gap            +0.1089 [+0.1027, +0.1157]
+    cos_true_other +0.1176 [+0.1109, +0.1246]
+    cos_re_other   +0.0957 [+0.0903, +0.1009]
+    d_re-d_hat     +0.1089 [+0.1027, +0.1157]
+  truth
+    cos_hat_true   +1.0000 [+1.0000, +1.0000]
+    cos_re_hat     +0.6695 [+0.6418, +0.6970]
+    cos_re_true    +0.6695 [+0.6418, +0.6970]
+    d_hat          -0.0000 [-0.0000, -0.0000]
+    d_re           +0.3305 [+0.3030, +0.3582]
+    move           +0.3305 [+0.3030, +0.3582]
+    gap            +0.3305 [+0.3030, +0.3582]
+    cos_true_other +0.1176 [+0.1109, +0.1246]
+    cos_re_other   +0.1129 [+0.1067, +0.1198]
+    d_re-d_hat     +0.3305 [+0.3030, +0.3582]
+
+decoded spans (first batch):
+  [truth] slot 0 row 0: ' A few years ago, the police said the police had been killed.\n\nThe police said the police had been killed.\n\nThe'
+  [truth] slot 1 row 0: 'riday night after a Belgian medical team evacuated the area, saying it was concerned about security.'
+  [truth] slot 2 row 0: '\n\nThe decision left CNN Chief Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.'
+  [truth] slot 3 row 0: '\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team'
+  [truth] slot 4 row 0: '. evacuate.'
+  [truth] slot 5 row 0: '\n\nThe report said the U.S. government was not a "unprecedented" for the U.S. government.\n\nThe'
+  [k8] slot 0 row 0: ' A 19-year-old boy, who was a member of the 1990s, was a 19-year-old'
+  [k8] slot 1 row 0: 'riday, 2013.\n\nThe 2015-19-19-'
+  [k8] slot 2 row 0: '\n\nThe 2015-19-year-old was a 19-year-old boy, who was a former co'
+  [k8] slot 3 row 0: '\n\nThe 19th century, which was the first to be the first to be the first to be the first to be the first to be'
+  [k8] slot 4 row 0: ', and the 1'
+  [k8] slot 5 row 0: '\n\nThe 19th century, which was the first time the 19th century was to be a 10-year-'
+  [k1] slot 0 row 0: ' A 19-year-old boy, who was a 10-year-old boy, was a 10-year-old boy'
+  [k1] slot 1 row 0: 'riday, 2013.\n\nThe 2015-19-year-old'
+  [k1] slot 2 row 0: '\n\nThe 19th century, which was released in 1985, was released in 1995, and the'
+  [k1] slot 3 row 0: '\n\nThe 19-year-old was a 19-year-old boy, who was a former boy, who was a former boy'
+  [k1] slot 4 row 0: ', and the 1'
+  [k1] slot 5 row 0: '\n\nThe report said the incident was "a significant amount of time to reassure the government\'s policies and the government\'s policies that are not allowed to'
+
+wall clock 768 s
+
+wrote /home/wolfe/morph-instruments/results/code_roundtrip_tul-code-cfg_20000.json and /home/wolfe/morph-instruments/results/code_roundtrip_tul-code-cfg_20000.txt

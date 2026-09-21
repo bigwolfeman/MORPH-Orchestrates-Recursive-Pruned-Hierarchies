@@ -212,3 +212,13 @@ tul-code-20k (gap 0.108 vs 0.709): this encoder/decoder pair keeps a code on a r
 where the earlier pair lost most of it. Which factor did that — the CFG training (tlow's
 parent `tul-code-cfg` has no round-trip reading) or the schedule — is UNMEASURED; run
 the probe on `tul-code-cfg_step_20000.pt` (on the Spark) before crediting the schedule.
+
+**Control run 2026-09-21 (round-trip probe on the cfg parent `tul-code-cfg` @20k, Spark,
+`../results/2026-09-15-tul-code-cond/code_roundtrip_tul-code-cfg_20000.{json,txt}`, same 48
+rows).** Truth round trip **0.670** (gap 0.331); chance 0.1176; k = 8 sample 0.1247
+[0.1202, 0.1298] (above chance by 0.007, intervals touching); k = 1 sample 0.2297. So the
+ladder on the truth round trip is tul-code-20k 0.291 → cfg 0.670 → tlow 0.892: CFG
+training accounts for most of it and the schedule adds 0.22 on top. The k = 8 SAMPLE is
+within a touching interval of chance on all three arms (−0.004, +0.007, +0.011): neither
+factor made the sampler carry slot identity. The attribution question in the addendum
+above is answered; the sample question is not moved.
