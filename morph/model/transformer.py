@@ -57,7 +57,8 @@ from .tul_vq import TULThoughtVQ
 from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
                        cfm_null_floor, cfm_pair, code_rmsnorm, code_target_infonce,
                        code_target_regression, code_target_shuffled_cos,
-                       code_thinker_relation, euler_sample,
+                       code_thinker_relation, euler_sample, draw_flow_t,
+                       code_contrastive_accuracy,
                        code_grade_distinct2, code_grade_pref_loss,
                        TULCodeSymHead, mdm_loss, mdm_mask, maskgit_sample)
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
@@ -5662,7 +5663,13 @@ class MORPHTransformer(nn.Module):
                 _roll = (tc.code_rollout_steps if phase >= 3 else 0)
                 self._code_last_passes = 1 + _roll + _tape_passes
             elif phase >= 2:
-                t = torch.rand(B, S, device=z.device, dtype=torch.float32)
+                # The TRAINING noise schedule: uniform t, or the logit-normal draw
+                # `tul.code_t_logit_mean` / `code_t_logit_std` asks for. ONE home
+                # (`draw_flow_t`), one `torch.rand` either way — see its docstring for
+                # `lambda(t) = 2 logit(t)` and why uniform t spends half of training
+                # above SNR 1. The DISCRETE branch above keeps its own draw: there t is a
+                # Bernoulli mask rate and the 1/t weight is the ELBO, not a schedule.
+                t = draw_flow_t(B, S, tc, z.device)
                 # The target: E's code, detached (C4) unless `code_target_lambda` lets the
                 # flow loss's gradient reach E at that weight (value unchanged). The clean
                 # TAPE stays detached in every case: it is context, not target.
@@ -5723,6 +5730,10 @@ class MORPHTransformer(nn.Module):
                 fm_loss = loss_raw / float(self._code_fm_scale)
                 with torch.no_grad():
                     null = (null_slot * ok.float()).sum() / n_ok
+                    # The schedule AS DRAWN, over every drawn slot (pads included): it
+                    # reads the draw, not the loss weighting, so it is the check that the
+                    # knob is live. Uniform reads ~0.5; mu=-1, sigma=1 reads ~0.303.
+                    stats["code_t_mean"] = float(t.mean())
                     stats["code_fm_raw"] = float(loss_raw)
                     stats["code_fm_null"] = float(null)
                     stats["code_fm_rel"] = float(loss_raw / null.clamp_min(1e-12))
@@ -5755,6 +5766,18 @@ class MORPHTransformer(nn.Module):
                                               ok, e, inj, layout, k, generator=gen)
                 z_coda = code_rmsnorm(z_hat).to(z.dtype) * okf
                 self._code_last_passes = k * (2 if tc.code_cfg_scale != 1.0 else 1)
+                # LCM's CA on THIS sample (the same tensor `val/loss` and `val/ce_marginal`
+                # read): does the sampled code retrieve its own span's true code out of the
+                # batch, the two temporal neighbours excluded? Base-LCM won l2 on all four
+                # corpora and lost CA on all four — a code that wins `code_fm_rel` and
+                # reads CA at `code_ca_chance` is a regression to the conditional mean.
+                # Cheap by construction: one [n, n] cosine over the batch's valid slots.
+                _ca, _ch = code_contrastive_accuracy(
+                    z_coda.float(), z.float(), ok,
+                    torch.arange(B, device=ok.device).view(B, 1).expand(B, S),
+                    torch.arange(S, device=ok.device).view(1, S).expand(B, S))
+                stats["code_ca"] = _ca
+                stats["code_ca_chance"] = _ch
             elif mode == "rolled":
                 z_hat = self._tul_code_sample_rolled(ok, e, inj, layout, k, generator=gen)
                 z_coda = z_hat.to(z.dtype)

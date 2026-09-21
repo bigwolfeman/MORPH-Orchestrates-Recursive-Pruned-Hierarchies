@@ -55,7 +55,8 @@ from morph.model.tul_layout import SlotLayout
 __all__ = [
     "TULCodeEncoder", "TULCodeTime", "TULCodeHead", "TULCodeSymHead",
     "code_rmsnorm", "code_target_valid", "code_thinker_relation",
-    "cfm_pair", "cfm_null_floor", "euler_sample",
+    "cfm_pair", "cfm_null_floor", "euler_sample", "draw_flow_t",
+    "code_contrastive_accuracy",
     "mdm_mask", "mdm_loss", "mdm_unmask_counts", "maskgit_sample",
     "code_grade_distinct2", "code_grade_pref_loss",
 ]
@@ -65,6 +66,7 @@ _SEED_TIME = 0xC0DE + 1
 _SEED_SYM = 0xC0DE + 2
 _EPS = 1e-8
 _MDM_T_MIN = 1e-3
+_FLOW_T_EPS = 1e-4
 
 
 def code_rmsnorm(z: Tensor, eps: float = _EPS) -> Tensor:
@@ -414,6 +416,112 @@ def cfm_pair(z: Tensor, source_std: float, t: Tensor, generator=None,
     zf = z.float()
     z_t = (1.0 - tt) * z0 + tt * zf
     return z0, z_t, zf - z0
+
+
+def draw_flow_t(B: int, S: int, tc, device, generator=None) -> Tensor:
+    """The flow thinker's per-slot time draw ``[B, S]`` fp32 — the ONE home of the
+    training-time NOISE SCHEDULE (``tul.code_t_logit_mean`` / ``code_t_logit_std``).
+
+    ``tc.code_t_logit_mean is None`` (the default) draws ``t ~ U(0, 1)``, the tree's
+    behaviour before the knob, and consumes exactly one ``torch.rand`` of shape
+    ``[B, S]`` — the same call the flow site made when the line was written inline, so a
+    default arm is bit-identical to a pre-knob run, RNG stream included.
+
+    Set, the draw is ``t = sigmoid(mu + sigma * eps)`` with ``eps ~ N(0, 1)`` per slot,
+    clamped to ``[1e-4, 1 - 1e-4]``. ``eps`` comes from the SAME uniform by the normal
+    quantile ``sqrt(2) * erfinv(2u - 1)`` rather than a second ``torch.randn``, so both
+    branches consume one identically shaped draw and an arm and its control stay aligned
+    on every LATER random draw of the step.
+
+    WHY THIS KNOB EXISTS — the log-SNR, and what uniform ``t`` spends its training on.
+    The interpolant is ``z_t = (1-t) z_0 + t z`` with ``z_0 ~ N(0, s^2 I)`` at
+    ``s = code_source_std = 1`` and unit-RMS codes, so signal and noise stand at ``t`` and
+    ``1 - t`` and the log signal-to-noise ratio is
+
+        lambda(t) = log( t^2 / (1-t)^2 ) = 2 * logit(t)          (at s = 1)
+
+    Uniform ``t`` therefore puts HALF of training above ``lambda = 0`` (SNR 1), where the
+    noisy input already carries the answer and the context is worth nothing to the
+    velocity. That is the regime LCM's Table 5 measures: a schedule concentrated at low
+    noise gets the best l2 and the WORST contrastive accuracy — "akin to a Base-LCM" —
+    while a schedule spread to high noise "learns to contrast". Our own thinker read 1 %
+    of its loss from the past (`lctul-thinker-is-context-blind`), which is that failure.
+
+    A logit-normal draw moves the mass. ``mu = -1, sigma = 1`` puts the MEDIAN ``t`` at
+    ``sigmoid(-1) = 0.2689`` (``lambda = -2``, SNR ``e^-2 = 0.135``), its MEAN at
+    ``0.30327`` (Gaussian quadrature) and ``P(t < 0.5) = Phi(1) = 0.8413``.
+
+    This reweights the training LOSS only. The SAMPLER's Euler grid stays uniform
+    (:func:`euler_sample` walks ``t_j = j/k``): LCM changes the training schedule, and
+    their sampler's step selection is a separate knob this tree does not add.
+
+    NOTE the discrete path (``tul.code_discrete``) draws its own ``t`` and is NOT this
+    function: there ``t`` is the Bernoulli MASK RATE of the ELBO and the ``1/t`` weight in
+    :func:`mdm_loss` is the estimator, not a schedule to tune.
+    """
+    u = torch.rand(B, S, device=device, dtype=torch.float32, generator=generator)
+    mu = tc.code_t_logit_mean
+    if mu is None:
+        return u
+    eps = torch.erfinv(2.0 * u - 1.0) * math.sqrt(2.0)
+    t = torch.sigmoid(float(mu) + float(tc.code_t_logit_std) * eps)
+    return t.clamp(_FLOW_T_EPS, 1.0 - _FLOW_T_EPS)
+
+
+@torch.no_grad()
+def code_contrastive_accuracy(pred: Tensor, truth: Tensor, valid: Tensor,
+                              row_id: Tensor, slot_id: Tensor) -> tuple[float, float]:
+    """LCM's CA (contrastive accuracy) on codes: does the SAMPLED code retrieve its own
+    span's TRUE code out of the batch?
+
+    ``pred`` / ``truth`` ``[..., M, C]`` (the sampled cells and E's cells), ``valid`` /
+    ``row_id`` / ``slot_id`` ``[...]`` over the same leading axes. Each valid slot's cells
+    are FLATTENED to one ``M*C`` vector and l2-normalised; the score against candidate
+    ``j`` is the cosine to ``truth_j``. A hit is ``argmax_j = i``.
+
+    LCM's exclusion rule (§2.4.1): the slot's two TEMPORAL NEIGHBOURS in its own row are
+    dropped from the pool, because consecutive spans are near-paraphrases and would be
+    scored as wrong answers. The slot's own truth is always a candidate; a slot in another
+    row never is excluded. ``chance`` is the mean over slots of ``1 / n_candidates``, and
+    it is NOT ``1/n``: an interior slot has two fewer candidates than an end slot, so the
+    reading has to be compared against its own floor and never against a nominal one.
+
+    Returns ``(acc, chance)`` as Python floats. With no valid slot both are 0.0.
+
+    Why CA and not l2: Base-LCM won l2 on all four corpora and lost CA on all four
+    (Table 3). A regression to the conditional mean minimises distance and retrieves
+    nothing; CA is the instrument that separates the two, and it is scale-free where l2
+    is not.
+    """
+    if pred.shape != truth.shape:
+        raise ValueError(f"code_contrastive_accuracy: pred {tuple(pred.shape)} != "
+                         f"truth {tuple(truth.shape)}")
+    if pred.dim() < 3:
+        raise ValueError(f"code_contrastive_accuracy needs [..., M, C], got "
+                         f"{tuple(pred.shape)}")
+    if valid.shape != pred.shape[:-2] or row_id.shape != valid.shape \
+            or slot_id.shape != valid.shape:
+        raise ValueError(
+            f"code_contrastive_accuracy: valid {tuple(valid.shape)} / row_id "
+            f"{tuple(row_id.shape)} / slot_id {tuple(slot_id.shape)} must all be "
+            f"{tuple(pred.shape[:-2])}")
+    w = int(pred.shape[-2]) * int(pred.shape[-1])
+    v = valid.reshape(-1)
+    n = int(v.sum())
+    if n == 0:
+        return 0.0, 0.0
+    P = pred.reshape(-1, w).float()[v]
+    Z = truth.reshape(-1, w).float()[v]
+    r = row_id.reshape(-1)[v]
+    s = slot_id.reshape(-1)[v]
+    P = P / P.norm(dim=-1, keepdim=True).clamp_min(_EPS)
+    Z = Z / Z.norm(dim=-1, keepdim=True).clamp_min(_EPS)
+    sim = P @ Z.t()                                                          # [n, n]
+    drop = (r.view(-1, 1) == r.view(1, -1)) & ((s.view(-1, 1) - s.view(1, -1)).abs() == 1)
+    n_cand = (~drop).sum(dim=1).clamp_min(1).float()
+    hit = sim.masked_fill(drop, float("-inf")).argmax(dim=1) == torch.arange(
+        n, device=sim.device)
+    return float(hit.float().mean()), float((1.0 / n_cand).mean())
 
 
 def cfm_null_floor(d_model: int, m_cells: int, source_std: float) -> float:

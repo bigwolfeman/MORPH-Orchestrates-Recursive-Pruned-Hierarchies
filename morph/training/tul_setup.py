@@ -10,6 +10,7 @@ changes — no TUL parameters are constructed and the forward never sees a layou
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from dataclasses import replace as _dc_replace
@@ -71,7 +72,8 @@ KNOWN_TUL_KEYS = frozenset({
     "vq_beta", "vq_codebook", "vq_codes", "vq_dim", "vq_groups", "vq_reset_after",
     "vq_weight",
     "code", "code_noise", "code_noise_renorm", "code_norm", "code_fm_weight", "code_source_std",
-    "code_t_embed_scale", "code_phase2_at", "code_phase3_at", "code_rollout_p",
+    "code_t_embed_scale", "code_t_logit_mean", "code_t_logit_std",
+    "code_phase2_at", "code_phase3_at", "code_rollout_p",
     "code_rollout_steps", "code_infer_steps", "code_seed_detach", "code_marginal_k",
     "code_cfg_drop", "code_cfg_scale", "code_target_lambda", "code_rank_abort",
     "code_xm_k", "code_xm_select", "code_xm_mode", "code_tape_rollout_p", "code_sigreg_lambda",
@@ -409,6 +411,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         code_fm_weight=float(tc.get("code_fm_weight", 1.0)),
         code_source_std=float(tc.get("code_source_std", 1.0)),
         code_t_embed_scale=float(tc.get("code_t_embed_scale", 1.0)),
+        # `null` stays None (the uniform draw); anything else is a float.
+        code_t_logit_mean=(None if tc.get("code_t_logit_mean", None) is None
+                           else float(tc.get("code_t_logit_mean"))),
+        code_t_logit_std=float(tc.get("code_t_logit_std", 1.0)),
         code_phase2_at=float(tc.get("code_phase2_at", 0.10)),
         code_phase3_at=float(tc.get("code_phase3_at", 0.50)),
         code_rollout_p=float(tc.get("code_rollout_p", 0.5)),
@@ -608,6 +614,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "code_fm_weight": model_cfg.code_fm_weight,
         "code_source_std": model_cfg.code_source_std,
         "code_t_embed_scale": model_cfg.code_t_embed_scale,
+        "code_t_logit_mean": model_cfg.code_t_logit_mean,
+        "code_t_logit_std": model_cfg.code_t_logit_std,
         "code_phase2_at": model_cfg.code_phase2_at,
         "code_phase3_at": model_cfg.code_phase3_at,
         "code_rollout_p": model_cfg.code_rollout_p,
@@ -870,6 +878,45 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"register read 0.94) and `fan/stream_rank_t{{t}}` (the register read 1.24 "
               f"of 4) "
               f"(lab/experiments/planned/2026-09-19-lxtul-fan4.md)",
+              flush=True)
+    if model_cfg.code:
+        # LCTUL (tul.code, docs/tul-code-spec.md). No banner existed before 2026-09-21;
+        # this one prints the two things an arm is read by — WHICH thinker was built and
+        # WHICH noise levels its loss was trained on.
+        _sched = ("t ~ U(0, 1) (lambda = 2*logit(t) uniform in t: HALF of training sits "
+                  "above SNR 1, where the noisy input carries the answer and the context "
+                  "is worth nothing to the velocity - LCM Table 5's peaked schedule, "
+                  "'akin to a Base-LCM')"
+                  if model_cfg.code_t_logit_mean is None else
+                  f"t ~ logit-normal(mu={model_cfg.code_t_logit_mean}, "
+                  f"sigma={model_cfg.code_t_logit_std}): median t = "
+                  f"{1.0 / (1.0 + math.exp(-float(model_cfg.code_t_logit_mean))):.4f} "
+                  f"(lambda = {2.0 * float(model_cfg.code_t_logit_mean):.2f}), the flow "
+                  "LOSS is reweighted toward HIGH NOISE (LCM's wide schedule: CA 80.3 % "
+                  "against the peaked schedule's 70.6 %). The SAMPLER's Euler grid stays "
+                  "UNIFORM - this knob moves training only")
+        print(f"  LCTUL ON: prefix_k={model_cfg.prefix_k} "
+              + (f"DISCRETE code ({model_cfg.code_vq_groups} symbols/cell of "
+                 f"{model_cfg.code_vq_codebook}), masked denoiser, "
+                 f"{model_cfg.code_mask_schedule} unmasking "
+                 if model_cfg.code_discrete else
+                 f"CONTINUOUS code, flow thinker (source_std="
+                 f"{model_cfg.code_source_std}), {model_cfg.code_infer_steps} Euler steps "
+                 "at eval ")
+              + "- the slot holds the CODE of the span it precedes: E makes it from that "
+              "span at train, the core body samples it at eval. Train schedule: "
+              + ("the mask rate t ~ U(0, 1) with the ELBO's 1/t weight (NOT a tunable "
+                 "noise schedule)" if model_cfg.code_discrete else _sched)
+              + ". READ `val/code_ca` AGAINST `val/code_ca_chance` FIRST (LCM's "
+              "contrastive accuracy: does the SAMPLED code retrieve its own span's true "
+              "code out of the batch, neighbours excluded) - a code that wins "
+              "`code_fm_rel` and reads CA at chance is a regression to the conditional "
+              "mean, whatever the CE says. Then "
+              + ("" if model_cfg.code_discrete else
+                 "`train/code_t_mean` (the schedule, as drawn) and ")
+              + "the four `code_fm_band{b}_rel` ratios "
+              "(.agents/notes/proposed/architecture/"
+              "2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md)",
               flush=True)
     if model_cfg.vq_codes > 0:
         _dc = model_cfg.vq_dim or (int(cfg.model.d_model) // model_cfg.vq_codes)

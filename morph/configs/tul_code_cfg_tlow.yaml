@@ -1,0 +1,29 @@
+# LCTUL arm "tul-code-cfg-tlow" (2026-09-21): the flow thinker's TRAINING NOISE SCHEDULE,
+# one factor over tul_code_cfg. Why: the interpolant is z_t = (1-t) z_0 + t z at
+# source_std 1 on unit-RMS codes, so the log-SNR is lambda(t) = 2*logit(t) and the
+# default t ~ U(0, 1) spends HALF of training above SNR 1, where the noisy input already
+# carries the answer and the context is worth nothing to the velocity. That is the
+# measured failure of this thinker: the past is worth 1 % of its flow loss
+# (`lctul-thinker-is-context-blind`), and guidance at sample time moved the one-draw CE
+# < 0.01 nats because guidance can only amplify a dependence the field already learned
+# (lab/experiments/failures/2026-09-15-tul-code-conditioned-thinker.md).
+# LCM's Table 5 is the same experiment inside the diffusion family: their PEAKED
+# schedule got the best l2 and the worst CA and MI ("akin to a Base-LCM"), their WIDE
+# schedule the worst l2 and the best CA (80.3 % against 70.6 %) — "learns to contrast".
+# mu = -1, sigma = 1 puts the median t at 0.2689 (lambda = -2, SNR 0.135), the mean at
+# 0.30327 and P(t < 0.5) = Phi(1) = 0.8413. Training only: the sampler's Euler grid
+# stays uniform. CFG is kept from the parent, so the guidance lever sits on top of a
+# field that was trained where guidance can act.
+# Read `val/code_ca` against `val/code_ca_chance` first, then `train/code_t_mean`
+# (~0.303 here, ~0.5 on the parent) and the four `code_fm_band{b}_rel` ratios.
+# Prereg: lab/experiments/planned/2026-09-21-lctul-cfg-tlow.md
+defaults:
+  - tul_code_cfg
+  - _self_
+
+tul:
+  code_t_logit_mean: -1.0
+  code_t_logit_std: 1.0
+
+wandb:
+  name: tul-code-cfg-tlow

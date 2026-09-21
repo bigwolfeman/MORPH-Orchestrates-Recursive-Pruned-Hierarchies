@@ -786,6 +786,36 @@ class TULConfig:
     code_fm_weight: float = 1.0          # weight of the flow term, on the null-floor scale
     code_source_std: float = 1.0         # CFM source std, matched to unit-RMS codes
     code_t_embed_scale: float = 1.0      # fm_planner's knob, same meaning
+    # ── the flow thinker's NOISE SCHEDULE (2026-09-21, LCM Table 5) ────────────────
+    #
+    # WHICH noise levels the flow loss is trained on. The interpolant is
+    # `z_t = (1-t) z_0 + t z` with `z_0 ~ N(0, s^2 I)` at `s = code_source_std = 1` and
+    # unit-RMS codes, so the log-SNR is `lambda(t) = 2 * logit(t)`. The default draw
+    # `t ~ U(0, 1)` puts HALF of training above SNR 1, where the noisy input already
+    # carries the answer and the context is worth nothing to the velocity — LCM measured
+    # exactly that regime (their peaked sigmoid schedule: best l2 in the table, worst CA
+    # and worst MI, "akin to a Base-LCM") and their WIDE schedule, spread to high noise,
+    # "learns to contrast" (CA 80.3 % against 70.6 %). Our thinker's own failure is the
+    # same shape: the past is worth 1 % of the flow loss (`lctul-thinker-is-context-blind`)
+    # and guidance at sample time moved the one-draw CE < 0.01 nats, because guidance can
+    # only amplify a context dependence the field already learned
+    # (lab/experiments/failures/2026-09-15-tul-code-conditioned-thinker.md).
+    #
+    # `code_t_logit_mean: null` (the default) is the uniform draw and is bit-identical to
+    # the tree before this knob, RNG consumption included. Set, the draw is
+    # `t = sigmoid(mu + sigma * eps)`, `eps ~ N(0, 1)` per slot, clamped to
+    # [1e-4, 1-1e-4]. At `mu = -1, sigma = 1` the median t is 0.2689 (lambda = -2,
+    # SNR 0.135), the mean 0.30327 and P(t < 0.5) = Phi(1) = 0.8413.
+    #
+    # It reweights the training LOSS only: the sampler's Euler grid stays uniform
+    # (`euler_sample` walks t_j = j/k). LCM changes the TRAINING schedule and their
+    # sampler's step selection is a separate knob this tree does not add.
+    #
+    # ONE home for the draw: `morph.model.tul_code.draw_flow_t`. The discrete path's `t`
+    # (`code_discrete`) is a Bernoulli MASK RATE with a 1/t ELBO weight, not a schedule,
+    # and these keys are refused there.
+    code_t_logit_mean: float | None = None
+    code_t_logit_std: float = 1.0
     code_phase2_at: float = 0.10         # UNTUNED fraction of training.steps: the flow loss starts
     code_phase3_at: float = 0.50         # UNTUNED fraction: rollout (sampled codes to the coda) starts
     code_rollout_p: float = 0.5          # UNTUNED fraction of valid slots given a sampled code in phase 3
@@ -2662,6 +2692,7 @@ class TULConfig:
         _knobs = (("code_noise", 0.5), ("code_noise_renorm", False), ("code_norm", "rms"),
                   ("code_fm_weight", 1.0),
                   ("code_source_std", 1.0), ("code_t_embed_scale", 1.0),
+                  ("code_t_logit_mean", None), ("code_t_logit_std", 1.0),
                   ("code_phase2_at", 0.10), ("code_phase3_at", 0.50),
                   ("code_rollout_p", 0.5), ("code_rollout_steps", 8),
                   ("code_infer_steps", 8), ("code_seed_detach", False),
@@ -2691,6 +2722,21 @@ class TULConfig:
         if self.code_t_embed_scale <= 0.0:
             raise ValueError(
                 f"tul.code_t_embed_scale must be > 0, got {self.code_t_embed_scale}")
+        if self.code_t_logit_std <= 0.0:
+            raise ValueError(
+                f"tul.code_t_logit_std must be > 0, got {self.code_t_logit_std}")
+        if self.code_t_logit_mean is not None or self.code_t_logit_std != 1.0:
+            if self.code_discrete:
+                raise ValueError(
+                    "tul.code_t_logit_mean / code_t_logit_std are FLOW-thinker knobs and "
+                    "tul.code_discrete=true builds a masked denoiser instead: its t is a "
+                    "Bernoulli mask rate whose 1/t weight is the ELBO, not a noise "
+                    "schedule, so the keys would be silently ignored.")
+            if self.code_fm_weight == 0.0:
+                raise ValueError(
+                    "tul.code_t_logit_mean / code_t_logit_std are read only under "
+                    "tul.code_fm_weight > 0 (got 0): the flow term carries no weight, so "
+                    "reweighting its noise levels would be a silent no-op.")
         if not (0.0 <= self.code_phase2_at <= self.code_phase3_at <= 1.0):
             raise ValueError(
                 f"tul.code_phase2_at={self.code_phase2_at} and "

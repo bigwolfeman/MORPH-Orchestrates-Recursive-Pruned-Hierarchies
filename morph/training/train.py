@@ -172,7 +172,16 @@ def evaluate(
                         # projected exit state to the frozen code, on the eval forward.
                         "code_target", "code_target_mse", "code_target_cos",
                         # the generic floor and the InfoNCE top-1 rate (code-only arms)
-                        "code_target_cos_shuf", "code_target_acc"):
+                        "code_target_cos_shuf", "code_target_acc",
+                        # LCM's contrastive accuracy on the SAMPLED code (tul.code): does
+                        # the sample retrieve its own span's true code out of the batch,
+                        # the two temporal neighbours excluded? Read it against
+                        # `val/code_ca_chance`, which is 1/n_candidates averaged over
+                        # slots and NOT 1/n — an interior slot has two fewer candidates
+                        # than an end slot. A code at chance is a conditional mean,
+                        # whatever `code_fm_rel` says (LCM Table 3: Base-LCM won l2 on
+                        # all four corpora and lost CA on all four).
+                        "code_ca", "code_ca_chance"):
                 # (TUL-Code's flow statistics are TRAIN-side only: the eval forward runs
                 # the sampler, not the flow term. Read train/code_fm_rel and tul/code_fm_*.)
                 if _mk in out:
@@ -3578,6 +3587,10 @@ def main(cfg: DictConfig) -> None:
                     or _k.startswith("code_target") or _k.startswith("code_grade")
                     or _k in ("code_rollout_frac", "code_cfg_drop_frac", "code_tape_rollout_frac",
                               "code_xm_score_mean", "code_xm_score_best",
+                              # the flow thinker's noise schedule AS DRAWN
+                              # (tul.code_t_logit_mean): uniform reads ~0.5, the
+                              # mu=-1 / sigma=1 logit-normal reads ~0.303
+                              "code_t_mean",
                               "code_mdm_nats", "code_mask_frac", "code_sub_frac")}
                    if isinstance(out, dict) else {}),
                 "train/ppl": math.exp(min(_lv, 20.0)),
@@ -3682,6 +3695,7 @@ def main(cfg: DictConfig) -> None:
                            "code_fm_band2_rel", "code_fm_band3_rel", "code_rollout_frac",
                            "code_cfg_drop_frac", "code_tape_rollout_frac", "code_phase",
                            "code_xm_score_mean", "code_xm_score_best",
+                           "code_t_mean",
                            "code_sigreg", "code_sigreg_weighted",
                            "code_mdm_nats", "code_mask_frac", "code_sub_frac",
                            "horizon_n_tokens"):
