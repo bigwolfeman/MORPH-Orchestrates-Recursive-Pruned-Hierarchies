@@ -9588,6 +9588,13 @@ class MORPHTransformer(nn.Module):
             groups["code_target_weighted"] = _tw.detach()
             groups["loss"] = groups["loss"] + _tw
         _dn_out = self._loop_denoise
+        # Consumed here and CLEARED here (the `_core_aux` contract): the stash holds a
+        # graph tensor, and a module attribute that outlives the forward breaks
+        # `copy.deepcopy(self)` in `tul_code_ref_snapshot` (the trainer's compile warmup
+        # is a train forward that precedes the snapshot; the 2026-09-21 13:35 smoke died
+        # there with "Only Tensors created explicitly by the user (graph leaves) support
+        # the deepcopy protocol").
+        self._loop_denoise = None
         if _dn_out is not None and groups is not None:
             # tul.loop_denoise's per-pass sum. Same contract as `code_target_weighted`:
             # the WEIGHTED term is exposed so train.py subtracts it and train/loss and the

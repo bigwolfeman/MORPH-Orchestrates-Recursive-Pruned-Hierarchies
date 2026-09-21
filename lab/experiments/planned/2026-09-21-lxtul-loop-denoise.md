@@ -76,6 +76,14 @@ the file, 35 in the ref + target files). The arm is re-queued at the fix commit 
 np0; the runner's smoke is the GPU check. No prediction is changed by this: the trained
 forward never runs without the twin (the snapshot precedes step 0).
 
+**Second smoke failure, same day (13:35), same window.** With the first fix in, the warmup
+forward completed and `tul_code_ref_snapshot`'s `copy.deepcopy(self)` then died: the
+per-pass stash `_loop_denoise` held a graph tensor on the module after the forward. Fix:
+the stash is cleared where it is consumed (the `_core_aux` contract); the pre-snapshot
+test now snapshots right after a train forward and fails without the clear (checked by
+removing the clear and running it). Re-queued and the runner relaunched (it had completed
+on the empty queue). Predictions untouched.
+
 ## Predictions (frozen)
 
 Arm A at 20k for reference: depth-6 val CE 9.1099 on 480 rows; K1−K6 +0.0320 [+0.0235,

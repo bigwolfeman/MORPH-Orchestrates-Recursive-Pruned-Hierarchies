@@ -543,6 +543,13 @@ def test_a_forward_before_the_twin_is_snapshotted_runs_on_the_live_front():
     out = m.train()(inp, labels=lab, slot_layout=layout)      # must not raise
     assert torch.isfinite(out["loss"])
     assert "loop_denoise" in out and float(out["loop_denoise"]) > 0.0
+    # the trainer snapshots RIGHT AFTER that train forward: no eval forward in between
+    # resets the stash, so the stash must not outlive the forward (a graph tensor on the
+    # module breaks deepcopy; the 13:35 smoke)
+    assert m._loop_denoise is None, "the per-pass stash must be consumed and cleared"
+    m.tul_code_ref_snapshot()
+    assert m.__dict__.get("_code_ref") is not None
+    del m.__dict__["_code_ref"]                     # back to the pre-snapshot state
     # and the pre-snapshot target IS E on the live front (the write path's fallback)
     with torch.no_grad():
         x, _x0, _bg = m._tul_front(inp, layout, **_front_kwargs(m, layout))
