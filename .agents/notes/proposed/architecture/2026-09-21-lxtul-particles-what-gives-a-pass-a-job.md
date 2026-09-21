@@ -248,3 +248,87 @@ features the streams hold separately; hypothesis, untested).
 0.3039 [0.2854, 0.3250] against chance 0.2676 [0.2623, 0.2752], excess +0.036 [+0.017,
 +0.057]; shares 0.354 / 0.259 / 0.203 / 0.183. Identities persist a little more than chance;
 a thin base for lineages. Rung P4 stays last.
+
+**2026-09-21, rungs P1 and P4 BUILT (no GPU step yet).** Appended rather than rewritten,
+because two agents were editing this tree at once.
+
+**P1 — `tul.fan_seed_noise`** (`morph/model/tul.py`, `transformer.py`,
+`training/tul_setup.py`; 12 tests in `tests/test_tul_fan_seed_noise.py`; config
+`tul_slot_spandec_strict_fan4_all_noise.yaml`; prereg
+[`2026-09-21-lxtul-fan4-all-noise.md`](../../../../lab/experiments/planned/2026-09-21-lxtul-fan4-all-noise.md)).
+One `torch.randn` per forward, per stream and per slot, added to the ENTRY STATE
+`h = core_init(e)` — NOT to `e`. That distinction is the one design decision here and it is
+a test, not a comment: `e` is bound once and handed to every pass as the injection source,
+so noise in `e` would be one draw re-injected at every pass, i.e. a random per-stream
+trigger rather than a sample. Scale: the seed lives in the `input_norm`'d field, so
+`fan_seed_noise: 1.0` is unit per-channel RMS there (a pair of streams then differs by RMS
+sqrt(2)); a fixed std, never a rescale of the live state's RMS, which would correlate the K
+draws through one norm and shrink the spread exactly when the map contracts. Drawn at train
+AND at eval, so it moves the global RNG stream — a one-factor comparison against fan4-all is
+one factor in the MECHANISM, not in the draw order. The arm pairs it with
+`fan_repel_lambda: 0`: the volume term's CHARGE goes, its instruments (`fan/vol_t*`,
+`fan/epi_t*`, `fan/stream_cos_t*`) keep reporting on the same axes.
+
+**P4 — `tul.fan_lineage: "relation"` only, and the reason the rest is not built.** The
+relation half is built (`slot_cell_relation(..., lineage=True)` narrows the CROSS-SLOT half
+to the own stream index; within a slot the register's all-to-all relation is untouched; 7
+tests in `tests/test_tul_fan_lineage.py` assert the mask pair by pair AND prove the
+narrowing EXECUTES, two-sided against an independently written mask — the 2026-09-13
+`tg_allow` bug one level down). **The filtering posterior is NOT built, and it is not a
+matter of effort: in this forward it is circular.** `_tul_core` advances every slot's pass
+`t` together (one `_apply_core_step` over `[B, S*M, *carrier, C]`, the per-slot depth
+applied as a masked `where` at the foot of the loop), so slot n's exit state does not exist
+when slot n+1's pass 1 runs; and `l_{n,k}` is not a loop quantity at all — `_tul_fan_all`
+builds it from K CODA replays AFTER `_tul_core` returns, so the weight that would gate pass
+1 is a function of the coda's output, which is a function of the whole loop. Rejected
+workarounds, each for a stated reason: the previous step's table (a weight learned on
+another document), a second full forward (double cost, still needs a loop before the loop),
+a slot-sequential loop (S times the sequential depth, S up to 64). A third `fan_lineage`
+value RAISES with that explanation rather than shipping a weighting that reads span n+1.
+**So rung P4 as written in Part 2 needs a forward that is sequential over spans; the
+relation arm tests only whether a per-stream channel is worth anything before any
+reweighting exists to sit on it.**
+
+**The fallback (`model.n_prelude: 0`) is configured and smoked on CPU:**
+`morph/configs/tul_slot_spandec_strict_np0.yaml`, prereg
+[`2026-09-21-strict-np0.md`](../../../../lab/experiments/planned/2026-09-21-strict-np0.md).
+No model code change; `model.n_layers` is documentation in this tree (nothing reads it).
+The block budget falls 14 -> 10, so it is NOT a matched-compute partner to
+`slot-spandec-strict`. CPU smoke on the tiny fan fixture with the span decoder on and the
+hinge at 100 @ 0.9: builds, finite loss and grads, `gain_est` 0.8734 / max 0.8823 with the
+penalty exactly 0.0 at `n_prelude 0` against 0.8756 / 0.8860 / 0.0 at `n_prelude 2`. That
+is a 64-wide random-init model with two core blocks — it says the arm BUILDS and nothing
+about what a 1024-wide trained core reads at step 200, which is why the prereg makes
+reading `loop/slot_gain_pen` in the first 500 steps a precondition.
+
+**2026-09-21, Part 1 probe 2 (anisotropic gain) — DONE, on fan4-all @ 5000, 24 rows, depth 6,
+16 draws per slot, `lab/divergence/fan_gain_probe.py` (12 tests; the JVP checked against a
+central finite difference on the real map, relative error 1.8e-4 at its minimum), artifacts
+`lab/experiments/results/2026-09-19-lxtul-fan4/fan_gain_fan4-all_5000_d6.{json,txt}`.
+Process slip as for probe 1: no frozen numeric prediction; the hypothesis was written (the
+core contracts the deviations faster than the mean).**
+
+| pass | centred rank | gain, random mean-direction | gain, random deviation-direction | dev / mean | gain on the state's OWN mean | on its OWN deviation |
+|---|---|---|---|---|---|---|
+| 1 | 2.29 | 0.976 | 0.973 | 0.997 | 1.000 | 1.174 |
+| 2 | 2.83 | 0.897 | 0.896 | 0.999 | 0.969 | 0.987 |
+| 3 | 2.79 | 0.890 | 0.891 | 1.000 | 0.984 | 1.002 |
+| 4 | 2.58 | 0.888 | 0.888 | 1.000 | 0.988 | 1.004 |
+| 5 | 2.33 | 0.887 | 0.887 | 1.001 | 0.988 | 1.003 |
+| 6 | 2.15 | 0.887 | 0.887 | 0.999 | 0.988 | 1.003 |
+
+**The hypothesis is REFUTED.** One core pass contracts the stream mean and the stream
+deviations by the same factor (0.887 on random directions, ratio 0.997–1.001, SE ≤ 0.006),
+and the state's own realised directions are barely contracted at all (0.99–1.00), the
+deviation slightly LESS than the mean. Both subspaces are near-isotropic (effective
+dimension ~7,500 of 12,288 deviation directions). So the rank fall 2.83 → 2.15 across
+passes is not a Jacobian effect on the K axis, and the split-map construction (Jacobian 1
+on the deviations) would change nothing the map is not already doing. The remaining
+candidate is the AFFINE part of the pass, what each pass ADDS: the stream probe on the same
+arm reads stream 0's norm 25 → 56 across passes with the `+−−−` sign family hardening 0.47
+→ 0.95 (`fan_geom_fan4-all_5000_d6.txt`), i.e. a drive that pushes one stream along a
+shared axis. Not measured by this probe; the trig arm (re-inject the trigger every pass)
+and the fp0 arm (the terminal fixed-point term is also a drive on the last pass) are the
+two arms already queued that act on the drive rather than the map. Caveat: the numbers are
+the EAGER map's (`tg_scoped_kernels` forced off, the fused path has no second derivative);
+the eager trajectory's ranks match the fused stream probe's to 0.01.

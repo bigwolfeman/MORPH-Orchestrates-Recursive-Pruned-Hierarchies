@@ -1,0 +1,19 @@
+fan4-all pass=1 slots=192 cells= 5240 rank=2.286 cos=+0.000 | mean=0.9763±0.0062 dev=0.9731±0.0060 dev/mean=0.9967 | real_mean=1.0002±0.0243 real_dev=1.1737±0.0296 r=1.1735 | glob_mean=1.0003 glob_dev=0.9934 | cv=0.0337/0.0291 d_eff=398/562 leak=0.118/0.092
+fan4-all pass=2 slots=192 cells= 5240 rank=2.827 cos=-0.295 | mean=0.8971±0.0007 dev=0.8963±0.0007 dev/mean=0.9991 | real_mean=0.9691±0.0054 real_dev=0.9866±0.0030 r=1.0181 | glob_mean=0.8989 glob_dev=0.8983 | cv=0.0084/0.0054 d_eff=2599/7134 leak=0.036/0.026
+fan4-all pass=3 slots=192 cells= 5240 rank=2.788 cos=-0.274 | mean=0.8903±0.0004 dev=0.8906±0.0004 dev/mean=1.0003 | real_mean=0.9836±0.0053 real_dev=1.0017±0.0031 r=1.0184 | glob_mean=0.8918 glob_dev=0.8914 | cv=0.0077/0.0052 d_eff=2746/7391 leak=0.026/0.019
+fan4-all pass=4 slots=192 cells= 5240 rank=2.575 cos=-0.196 | mean=0.8884±0.0003 dev=0.8880±0.0003 dev/mean=0.9996 | real_mean=0.9881±0.0048 real_dev=1.0036±0.0030 r=1.0157 | glob_mean=0.8887 glob_dev=0.8887 | cv=0.0079/0.0054 d_eff=2714/7111 leak=0.020/0.014
+fan4-all pass=5 slots=192 cells= 5240 rank=2.333 cos=-0.085 | mean=0.8867±0.0002 dev=0.8872±0.0002 dev/mean=1.0006 | real_mean=0.9884±0.0045 real_dev=1.0031±0.0028 r=1.0148 | glob_mean=0.8876 glob_dev=0.8875 | cv=0.0078/0.0052 d_eff=2744/7425 leak=0.016/0.011
+fan4-all pass=6 slots=192 cells= 5240 rank=2.147 cos=+0.010 | mean=0.8873±0.0002 dev=0.8865±0.0002 dev/mean=0.9991 | real_mean=0.9878±0.0042 real_dev=1.0032±0.0026 r=1.0156 | glob_mean=0.8870 glob_dev=0.8868 | cv=0.0080/0.0051 d_eff=2688/7550 leak=0.014/0.010
+wrote /mnt/bigdata/morph-instruments/results/fan_gain_fan4-all_5000_d6.json in 4543s
+
+# JVP verification on the REAL map (fan_gain_probe.py --fd-checks, 2026-09-21).
+# Central finite difference against the exact double-backward JVP, one deviation
+# direction, fp32. eps is a fraction of the carrier's scale. The U-shape (truncation
+# above, fp32 rounding below, a minimum of 1.8e-4 at 1e-2) is what a CORRECT derivative
+# looks like; a wrong operator reads O(1) at every eps.
+# eps     pass1 rel_err   pass2 rel_err
+# 1e-1    2.73e-03        9.73e-03
+# 3e-2    6.84e-04        9.02e-04
+# 1e-2    1.84e-03        1.84e-04
+# 1e-3    1.77e-02        1.60e-03
+# 1e-4    8.32e-02        1.06e-02
