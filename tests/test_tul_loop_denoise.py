@@ -528,3 +528,39 @@ def test_the_shipped_config_leaves_the_new_modules_trainable():
     assert all(p.requires_grad for p in m.tul_loop_denoise.parameters())
     assert all(p.requires_grad for p in m.tul_code_time.parameters())
     assert not any(p.requires_grad for p in m.tul_code_enc.parameters()), "E stays frozen"
+
+
+def test_a_forward_before_the_twin_is_snapshotted_runs_on_the_live_front():
+    """The trainer's compile warmup runs BEFORE `tul_code_ref_snapshot` (train.py), so
+    the pre-loop target call must not need the twin. Before the snapshot the target is
+    E on THIS forward's prelude (the write path's own fallback); after it, the twin's.
+    The 2026-09-21 runner smoke of `tul_slot_spandec_strict_denoise` died here."""
+    m = _model(dn=True)
+    del m.__dict__["_code_ref"]                     # the pre-snapshot state
+    assert m.__dict__.get("_code_ref") is None
+    _ids, inp, lab, layout = _pack()
+    torch.manual_seed(3)
+    out = m.train()(inp, labels=lab, slot_layout=layout)      # must not raise
+    assert torch.isfinite(out["loss"])
+    assert "loop_denoise" in out and float(out["loop_denoise"]) > 0.0
+    # and the pre-snapshot target IS E on the live front (the write path's fallback)
+    with torch.no_grad():
+        x, _x0, _bg = m._tul_front(inp, layout, **_front_kwargs(m, layout))
+        want, _ok = m.tul_code_enc(m.input_norm(x).mean(dim=2) if m._is_hc
+                                   else m.input_norm(x), layout)
+        got, _ = m._tul_code_target_encode_pre(x, layout, inp)
+    assert torch.equal(got, want)
+    m.eval()
+    with torch.no_grad():
+        out_e = m(inp, labels=None, slot_layout=layout)
+    assert torch.isfinite(out_e["logits"][torch.isfinite(out_e["logits"])]).all()
+    m.tul_code_ref_snapshot()                        # the trainer's next step
+    assert m.__dict__.get("_code_ref") is not None
+    torch.manual_seed(3)
+    out2 = m.train()(inp, labels=lab, slot_layout=layout)
+    assert torch.isfinite(out2["loss"])
+
+
+def _front_kwargs(m: MORPHTransformer, layout):
+    fkw, freset, _, _ = m._tul_tg_kwargs(layout)
+    return dict(attn_kwargs=fkw, ret_reset_mask=freset)

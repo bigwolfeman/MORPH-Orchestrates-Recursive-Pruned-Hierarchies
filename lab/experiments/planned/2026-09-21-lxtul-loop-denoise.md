@@ -64,6 +64,18 @@ them). At eval the rollout is a sample, so `val/code_target_cos` is a sample's c
 the truth, not a mean's, and is expected LOWER than arm A's 0.147 even when the sample is
 good; read it beside the reader.
 
+**Method amendment 2026-09-21 12:50 (before any training step; predictions untouched).**
+The runner's 12-step smoke of this config FAILED at 12:34 (`queue.log`: "smoke FAILED:
+draw not started") inside `warmup_compile_all_shapes`: the trainer's compile warmup runs
+BEFORE `tul_code_ref_snapshot`, and the denoiser's pre-loop target call raised with no
+twin and no live states. The write path has always fallen back to E on the live prelude
+in that window (every `code_target_ref` arm's smoke took it). Fix: `_tul_code_target_encode_pre`
+takes the same fallback with the exact `xn` the loop forms, at both pre-loop call sites;
+test `test_a_forward_before_the_twin_is_snapshotted_runs_on_the_live_front` (31 pass in
+the file, 35 in the ref + target files). The arm is re-queued at the fix commit behind
+np0; the runner's smoke is the GPU check. No prediction is changed by this: the trained
+forward never runs without the twin (the snapshot precedes step 0).
+
 ## Predictions (frozen)
 
 Arm A at 20k for reference: depth-6 val CE 9.1099 on 480 rows; K1−K6 +0.0320 [+0.0235,

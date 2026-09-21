@@ -6921,6 +6921,25 @@ class MORPHTransformer(nn.Module):
             _rxn = ref.input_norm(_rx)
             return ref.tul_code_enc(_rxn.mean(dim=2) if ref._is_hc else _rxn, layout)
 
+    def _tul_code_target_encode_pre(self, x: Tensor, layout: SlotLayout,
+                                    input_ids: Tensor | None):
+        """The pre-loop call of :meth:`_tul_code_target_encode` (``tul.loop_denoise``).
+
+        ``x`` is the front's output, the tensor ``_tul_core`` is about to be handed; the
+        loop forms ``xn = input_norm(x)`` from it, and so does this. The frozen twin is
+        snapshotted AFTER the weights load, and the trainer's compile warmup runs BEFORE
+        that (``train.py``: ``warmup_compile_all_shapes`` precedes
+        ``tul_code_ref_snapshot``), so in that window ``_code_ref`` is ``None`` and the
+        write path pools THIS forward's own prelude states — the fallback every
+        ``code_target_ref`` arm's runner smoke has taken. The pre-loop call takes the same
+        one, with the same tensor, instead of raising (the 2026-09-21 denoise smoke died
+        here at ``warmup_compile_all_shapes``, ``queue.log`` 12:34). Once the twin exists
+        ``xn`` is not read at all and the target is the twin's.
+        """
+        if self.__dict__.get("_code_ref") is not None:
+            return self._tul_code_target_encode(None, layout, input_ids)
+        return self._tul_code_target_encode(self.input_norm(x), layout, input_ids)
+
     def _tul_code_target_write(self, h_slots: Tensor, xn: Tensor, db_traj, depths: Tensor,
                                layout: SlotLayout, L: int, plan_mode: str,
                                code_mode: str | None, code_given: Tensor | None,
@@ -8931,7 +8950,7 @@ class MORPHTransformer(nn.Module):
                 # `None` on every other arm, and the write then computes it itself exactly
                 # as it always has.
                 if self.tul_loop_denoise is not None:
-                    _ct_z, _ct_ok = self._tul_code_target_encode(None, layout, input_ids)
+                    _ct_z, _ct_ok = self._tul_code_target_encode_pre(x, layout, input_ids)
                 xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep = self._tul_core(
                     x, x0, bigram_emb, layout, halt=halt, input_ids=input_ids,
                     slot_depths=slot_depths, code_x0=_ct_z, code_ok=_ct_ok)
@@ -10383,7 +10402,7 @@ class MORPHTransformer(nn.Module):
         # `None` on every other arm — `_tul_core` then traces the graph it always has.
         _pz = _pok = None
         if self.tul_loop_denoise is not None:
-            _pz, _pok = self._tul_code_target_encode(None, layout, input_ids)
+            _pz, _pok = self._tul_code_target_encode_pre(x, layout, input_ids)
         _xn, h_slots, _d, _g, *_ = self._tul_core(x, x0, bigram, layout,
                                                  input_ids=input_ids,
                                                  code_x0=_pz, code_ok=_pok)
