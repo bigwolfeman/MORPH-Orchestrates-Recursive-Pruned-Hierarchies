@@ -1,11 +1,9 @@
-# Slot-loop panel, control "slot-spandec-strict-pk8": the strict ruler with EIGHT prefix
-# cells per slot and NO quantizer. It exists for one reason: `slot-spandec-strict-vq8`
-# writes 8 discrete codes into 8 prefix cells (`prefix_k == vq_codes` is forced), so
-# vq8 against the k=2 ruler confounds the quantizer with the prefix width. This arm
-# holds the width at 8 and keeps today's continuous write (`W_prefix` fans the ONE exit
-# state into 8 cells), so vq8 minus pk8 is the quantizer alone and pk8 minus the ruler
-# is the width alone. L_total = 1024 + 8*64 = 1536, the same row as vq8.
-# Pre-registration: lab/experiments/planned/2026-09-13-arc-discrete-thought-vq.md
+# The width-matched ruler the discrete-thought panel could not build (2026-09-21): the strict
+# partner at prefix_k 8 with NO quantizer, so vq8 (8 codes of 512 into 8 cells) has a partner
+# that differs by the quantizer alone, and vq8 - vq4 (0.033 nats, three factors confounded:
+# code count, code width, prefix width) can be split. Record:
+# lab/experiments/mixed/2026-09-13-arc-discrete-thought-vq.md (P-7 and the Binding).
+# Prereg: lab/experiments/planned/2026-09-21-strict-pk8-ruler.md
 defaults:
   - tul_slot_spandec_strict
   - _self_
