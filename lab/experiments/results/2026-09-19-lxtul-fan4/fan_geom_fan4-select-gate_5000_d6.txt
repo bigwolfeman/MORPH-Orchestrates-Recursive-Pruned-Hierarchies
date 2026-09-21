@@ -1,0 +1,7 @@
+slot-spandec-strict-fan4-select-gate t=0 slots=2573 cos=+0.3259 rank=1.801 sv2../sv1=[0.574 0.296 0.000] shared=0.702 pattern=+--- (0.63) axis_cos=0.199 norms=18.5 8.2 7.3 12.6
+slot-spandec-strict-fan4-select-gate t=1 slots=2573 cos=-0.3059 rank=2.863 sv2../sv1=[0.879 0.787 0.000] shared=0.161 pattern=+--+ (0.46) axis_cos=0.151 norms=17.8 15.9 15.1 15.3
+slot-spandec-strict-fan4-select-gate t=2 slots=2573 cos=-0.2886 rank=2.795 sv2../sv1=[0.838 0.747 0.000] shared=0.220 pattern=+--- (0.58) axis_cos=0.186 norms=21.1 15.5 14.7 15.4
+slot-spandec-strict-fan4-select-gate t=3 slots=2573 cos=-0.0916 rank=2.533 sv2../sv1=[0.751 0.618 0.000] shared=0.469 pattern=+--- (0.76) axis_cos=0.213 norms=23.0 13.1 11.0 14.1
+slot-spandec-strict-fan4-select-gate t=4 slots=2573 cos=+0.1501 rank=2.256 sv2../sv1=[0.663 0.515 0.000] shared=0.628 pattern=+--- (0.66) axis_cos=0.239 norms=24.7 13.3 11.0 14.1
+slot-spandec-strict-fan4-select-gate t=5 slots=2573 cos=+0.2964 rank=2.083 sv2../sv1=[0.606 0.453 0.000] shared=0.706 pattern=+--- (0.65) axis_cos=0.253 norms=26.0 14.1 11.7 14.6
+slot-spandec-strict-fan4-select-gate t=6 slots=2573 cos=+0.3787 rank=1.986 sv2../sv1=[0.576 0.419 0.000] shared=0.745 pattern=+--- (0.64) axis_cos=0.256 norms=27.1 14.9 12.4 15.3

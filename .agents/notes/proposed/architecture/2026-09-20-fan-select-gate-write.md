@@ -82,3 +82,17 @@ write, and this note moves to `rejected/`.
   the coda still sees the table's winner in most slots; if the coda's reading is set
   early, the anneal buys nothing and the arm reads like select. P-1 separates the cases.
 - **The gate's label carries 5 % noise** (unchanged from the filed arm). Named, not fixed.
+
+## Outcome (2026-09-20, measured)
+
+Filed as a failure: `lab/experiments/failures/2026-09-20-lxtul-fan4-select-gate.md` (P-1
+and P-2 hold, P-5 fails). The mismatch closed as predicted (train-side regret 0.030,
+eval-side 0.019) and the deployed write recovered 0.066 of the select arm's 0.086 paired
+deficit against pk4 (now +0.020). Then the closed loop did what the Risks section said:
+within 500 steps of the gate write turning on, the gate wrote stream 0 in 95 % of slots,
+the coda specialised to it (oracle headroom 0.113 → 0.019) and the other three streams
+are read only through the eps writes. The arm is the strict ruler at prefix_k 4 with a
+dead fan. Per the acceptance criteria this note moves to `rejected/` on Wolfe's call;
+the knob stays in the tree as the measured record (`oracle` is the filed select arm bit
+for bit). The select family closes on the deployed write; the write-all arm
+(`2026-09-20-fan-write-all-wta.md`, filed a success) is the shape that escapes the loop.

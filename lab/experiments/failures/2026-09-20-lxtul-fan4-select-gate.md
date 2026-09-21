@@ -1,6 +1,6 @@
 # Planned: the select arm writes the gate's own pick — closing the train/eval mismatch
 
-Status: planned
+Status: failure
 
 Date: 2026-09-20 (frozen before any GPU step of the arm; a 12-step smoke of the config on
 the Spark is the only run that may precede it). Arc: the LXTUL fan
@@ -145,3 +145,107 @@ schedule is 0.008 of the way to the gate, so the smoke exercises the buffer read
 per-slot draw, not the gate write itself; the train-side `fan/select_write_*` rows are
 in the offline wandb run and are read on the 5090 run's first logged steps. The GPU was
 otherwise idle; the step rate of a 12-step smoke is not a reading.
+
+## Results
+
+Run: 5,000 steps at `57a0c3a` on the 5090 through `run_recon.sh`, started 19:07 local
+2026-09-20, DONE 20:26, tripwire HEALTHY (max 42.3 at step 241), final val_loss 4.4922,
+RATE OK 8,288 tok/s at step 200, peak 21.06 GB. Artifacts in
+`../results/2026-09-19-lxtul-fan4/`: `sweep_slot-spandec-strict-fan4-select-gate_{2500,5000}.json`,
+`worth_slot-spandec-strict-fan4-select-gate_5000.json`,
+`slot_state_slot-spandec-strict-fan4-select-gate_5000.json`,
+`run_slot-spandec-strict-fan4-select-gate.txt`, `fan_geom_fan4-select-gate_5000_d6.{json,txt}`
+(3070 stream probe, 48 rows, depth 6, from the `MORPH-gate` worktree at `57a0c3a`),
+`paired_select_gate_5000.{txt,json}`. The train-side `fan/select_write_*` and
+`fan/select_written_*` keys reached wandb from step 0 (the launch's open item).
+
+**The schedule, as logged.** `fan/select_write_p_gate` 0.000 at step 0, 0.493 at 740,
+1.000 from step 1500 on; `fan/select_write_from_gate` 0.016 at step 20, 0.515 at 740,
+0.957 at 1500, mean 0.952 (0.926 to 0.977) over steps 4000 to 5000.
+
+**Final-val keys at 5,000.**
+
+| key | value |
+|---|---|
+| `fan/stream_ce_k0..k3` | 4.4894 / 4.5117 / 4.5189 / 4.5297 (spread 0.040) |
+| `fan/oracle_ce` | 4.4704 (0.019 below the best single stream; select 0.113, fan4-all 0.099) |
+| `fan/mixed_ce` (the gate's argmax written, the deployed write) | 4.4894 (= `stream_ce_k0`: the gate writes stream 0) |
+| `fan/mixed_ce − fan/oracle_ce` (eval-side selector regret) | 0.019 (select 0.099) |
+| `fan/gate_agree` / `fan/oracle_pick0` | 0.514 / 0.514 |
+| `fan/stream_rank_t1` / `_t6` | 2.857 / 1.999 |
+| `val/fan_stream_cos_t1` / `_t6` | −0.306 / +0.333 |
+| `val/fan_mix_entropy` | 1.275 (ln 4 = 1.386) |
+
+**Train-side, steps 4000 to 5000 (50 rows).** Written shares k0..k3 mean 0.954 / 0.016 /
+0.015 / 0.015 (k0 min 0.928, max 0.991); the TABLE's winner shares 0.435 / 0.222 / 0.172 /
+0.171 (the gate's label stays spread while its pick does not); `fan/select_written_ce`
+mean 4.462, `fan/select_oracle_ce` 4.432, train-side regret **0.030**; `select_written_agree`
+0.437, `select_agree` 0.447, `select_gate_ce` 1.288 (ln 4 = 1.386); forced 0.048;
+`fan/select_gate_weighted / loss/total` after step 1000 mean 0.120, max 0.142.
+`loop/core_gain_t0` max 11.41 at step 2922, last 4.29 (select 20.7, fan4-all 9.9).
+
+**Stream probe at 5,000 (3070, 2,573 slots).** Pass 1: rank 2.863, mean cos −0.31,
+`axis_cos` 0.151, shared 0.16, norms 17.8 / 15.9 / 15.1 / 15.3, sign family `+--+` 46 %.
+Pass 6: rank 1.986, cos +0.38, `axis_cos` 0.256, shared 0.75, norms 27.1 / 14.9 / 12.4 /
+15.3, `+---` 64 %. The streams are spread at pass 1 (the epivol term) and stream 0 alone
+grows through the loop; the coda reads only it.
+
+**Depth sweep (480 rows).** 5,000: d1 4.3632, d2 4.3612, d3 4.3605, d6 4.3603, d9 4.3606,
+d12 4.3611, d16 4.3618; tokens K1−K6 +0.0030 [+0.0026, +0.0033], K3−K6 +0.0002 [+0.0001,
++0.0003]. 2,500: d1 4.6912, d6 4.6892, K1−K6 +0.0020.
+
+**Paired (`paired_select_gate_5000.txt`, 511,089 tokens, 500 blocks).** Depth 6:
+select-gate − pk4 **+0.0205 [+0.0183, +0.0227]**; depth 1: +0.0234. Against the select
+arm's own depth-6 sweep: **−0.0656 [−0.0689, −0.0623]**.
+
+**Scoring.**
+
+- **P-1 (the mechanism): HOLDS.** Train-side regret 0.030, eval-side 0.019; gap 0.011 <
+  0.02 (select: about 0.006 against 0.099). The coda is deployed on what it was trained on.
+- **P-2 (the arm's reason): HOLDS.** +0.0205 against a +0.030 bar; the arm recovered
+  0.066 of the select arm's 0.086 deficit (recorded: select-gate − select = −0.0656).
+- **P-3: FAILS.** The deployed write equals stream 0 alone (0.000 against > 0.02): the
+  gate writes stream 0 in 95 % of slots, so "the gate's pick" and "the best forced
+  single stream" are the same stream.
+- **P-4: HOLDS, by collapse.** Regret 0.019 < 0.05, because the oracle's headroom over
+  stream 0 fell from 0.113 to 0.019: the coda specialised to the one stream it is fed.
+- **P-5 (no collapse): FAILS.** Written share of stream 0 is 0.954 over the last 1,000
+  steps against a 0.70 ceiling; the other three sit at 0.015 each (the eps writes).
+  Rank at pass 1 holds (2.86 > 2.0) because the epivol term still spreads the streams
+  where they are made; the READ collapsed, not the geometry.
+- **P-6: FAILS.** K1−K6 +0.0030 against +0.005; K3−K6 +0.0002 against +0.001.
+- **P-7: HOLDS.** 8,288 tok/s; no tripwire; gain max 11.4 < 25; gate share max 14.2 % < 15 %.
+- **P-8: HOLDS.** 1.0 from step 1500; from-gate mean 0.952 in [0.94, 0.96].
+
+## Verdict
+
+**Failure** under the filing rule (P-5 fails; P-1 and P-2 hold). The prereg's own clause
+for this outcome applies: "P-2 without P-5: the arm is pk4 with a dead fan and P-2 is
+width, not selection." The mismatch closed exactly as predicted (P-1), the deployed
+write recovered 0.066 of the select arm's 0.086 deficit (P-2), and the closed loop of
+gate, coda and table settled on one stream within 500 steps of the gate write turning
+on. What is left is the strict ruler at prefix_k 4 with stream 0 as its state, paying
++0.020 nats against pk4 for the K-pass table, the eps writes into a coda that no longer
+reads them, and the gate term.
+
+## Updated hypothesis
+
+1. The select family's deployed write cannot both explore and deploy. A before-the-span
+   commit has to be TRAINED on its own picks to transfer (P-1 proves that transfer), and
+   training on its own picks removes the reader's reason to keep any other stream. The
+   two arms bracket it: select (oracle write) keeps four streams and cannot deploy;
+   select-gate (gate write) deploys and keeps one. The select family closes on the
+   deployed write; this note's alternatives (a clean argmin label, a longer anneal,
+   Gumbel through the gate) all sit inside the same loop and are not queued.
+2. The write-all arm (`../successes/2026-09-20-lxtul-fan4-all.md`) is the shape that
+   escapes it: no commit before the span, every stream stays in the coda, selection per
+   token. Its 0.042 regret is the number to work on; the per-token HARD read is the
+   named lever there.
+3. The table's oracle headroom is a reader property, not a stream property. Same streams
+   (rank 2.86 at pass 1 here, 2.89 on select), same term, and the headroom is 0.019 or
+   0.113 depending on what the coda was trained to read. `fan/oracle_ce − best single`
+   measures the coda's breadth, and a small value can mean collapse as easily as copies.
+4. Winner-takes-all does not move `loop/core_gain_t0` the same way twice (20.7 select,
+   9.9 all, 11.4 here); none detonated. Still no instrument on its cause.
+5. The loop is flat on every fan arm (+0.003 to +0.008 tokens). The fan family has not
+   touched depth.
