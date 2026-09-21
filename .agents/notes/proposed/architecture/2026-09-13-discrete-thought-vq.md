@@ -211,7 +211,8 @@ Prereg: `lab/experiments/planned/2026-09-13-arc-discrete-thought-vq.md`.
 ## Outcome (2026-09-21)
 
 Both arms ran (vq8 2026-09-20, vq4 2026-09-20/21, commit `53c0497`). Record:
-[`lab/experiments/failures/2026-09-13-arc-discrete-thought-vq.md`](../../../../lab/experiments/failures/2026-09-13-arc-discrete-thought-vq.md).
+[`lab/experiments/mixed/2026-09-13-arc-discrete-thought-vq.md`](../../../../lab/experiments/mixed/2026-09-13-arc-discrete-thought-vq.md)
+(filed as a failure, then moved to the new `mixed/` folder on Wolfe's call, 2026-09-21).
 Acceptance: the codebook is used on both arms (perplexity 106 and 39 of 512; 295 and 85
 codes live), the written rank rises to 35 and 17 against the partner's 13.85, and the passes
 stay flat (K3−K6 0.0000 and +0.0002). The discrete channel carries less than the continuous

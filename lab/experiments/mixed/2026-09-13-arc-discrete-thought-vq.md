@@ -1,6 +1,6 @@
 # Planned: the DISCRETE thought — K vector-quantized codes per span instead of one vector
 
-Status: failure
+Status: mixed
 
 Date: 2026-09-13 (frozen before any GPU step of either arm; no smoke of either exists at
 filing time). Arc:
@@ -419,8 +419,11 @@ live), passes flat (K3−K6 +0.0002), first pass flat (K1−K6 +0.0017), commitm
 
 ## Verdict
 
-**FAILURE: eight of nine predictions held; P-7 failed.** Filed under `failures/` because
-success means the predictions held, and one did not.
+**MIXED: eight of nine predictions held; P-7 failed.** Filed under `failures/` at 00:34
+local 2026-09-21 (commit 880ba59) because success means the predictions held and one did not;
+moved to `mixed/` the same night on Wolfe's call, with the folder created for it: the panel's
+core hypothesis (rank by construction, passes still flat) held on both arms, and the one
+failed clause is a live lever, not a refuted mechanism.
 
 What the panel settled. **Binding case 1 holds on both arms**: the codes are used (P-1) and
 the passes read nothing (P-4), at slot rank 35 (vq8) and 17 (vq4) against the partner's 13.85.

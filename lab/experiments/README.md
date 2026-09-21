@@ -8,6 +8,7 @@ date the experiment RAN, not the date the note was edited.
 | `planned/` | Pre-registered question, method and predictions, written BEFORE the run. |
 | `results/` | Runs that produced a usable comparison, plus the data behind their figures. |
 | `failures/` | Runs that produced no verdict, or whose predictions were falsified. A record here is still a result — it is where the campaign's real cost is written down. |
+| `mixed/` | Runs where SOME predictions held and some were falsified, and the mixed reading is itself the result (added 2026-09-21 on Wolfe's call; the first record is the discrete-thought vq8/vq4 panel). Not a home for an inconclusive run — that is a `failures/` record with the next planned experiment. |
 | `figures/` | Rendered PNGs for the records above. |
 
 A `planned/` file moves to `results/` or `failures/` when it has an answer. It keeps its

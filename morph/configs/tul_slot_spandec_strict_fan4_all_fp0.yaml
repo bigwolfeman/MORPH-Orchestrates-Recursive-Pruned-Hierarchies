@@ -1,0 +1,18 @@
+# LXTUL fan4-all with the terminal fixed-point term OFF (2026-09-21), one factor over
+# tul_slot_spandec_strict_fan4_all. Why: `model.core_fixed_point_lambda 1.0` (base.yaml) asks
+# the LAST pass to be a fixed point of the map on the WHOLE state. On a K-stream arm that
+# includes the K-1 deviation directions, so the term pushes the streams to stop moving relative
+# to each other — the opposite of a pass having a job — and it is a candidate cause of the
+# pass-6 rank fall (2.8 -> 2.0 of 3, fan4-all filing). The term was added as a detonation hold
+# under warmup 0; under the 1000-step ramp it is measured free (CLAUDE.md), so removing it on
+# this arm is safe. Same seed, packer and prefix width as fan4-all.
+# Prereg: lab/experiments/planned/2026-09-21-lxtul-fan4-all-fp0.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all
+  - _self_
+
+model:
+  core_fixed_point_lambda: 0.0
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp0
