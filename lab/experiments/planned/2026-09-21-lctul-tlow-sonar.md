@@ -63,6 +63,14 @@ HELD rather than queued or filed: the go/no-go on a 0.005 miss is Wolfe's, state
 before anyone reads the run. The SONAR anisotropy assumption in C-1 was wrong (random
 pairs sit at 0.09, not 0.3–0.5), which does not change the excess.
 
+**Parent filed (2026-09-21, `../failures/2026-09-21-lctul-cfg-tlow.md`):** the tlow arm's
+P-3 failed (context-blind gap 1.9 % against 3 %), so its binding says rung P3 runs "from
+the parent's uniform schedule with the shift as a second factor". This config composes
+`tul_code_cfg_tlow` (the shift IN). If Wolfe queues the arm despite C-1, the honest cut is
+TWO lines: `tul_code_cfg` + sonar (uniform t) first, then this file's config as the
+second factor; the "vs tlow" clauses above then pair each against its own schedule twin.
+Not re-cut here: the decision to run at all is Wolfe's.
+
 ## Hypothesis
 
 A target whose predictable-from-context fraction is large gives the field a reason to
