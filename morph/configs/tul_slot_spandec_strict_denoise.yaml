@@ -1,0 +1,120 @@
+# LXTUL-P rung P2 in the SINGLE-STREAM form: "slot-spandec-strict-denoise" (2026-09-21).
+# Each pass of the strict slot loop gets a JOB — a noise level.
+#
+# Note: .agents/notes/proposed/architecture/
+#       2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md (Part 2, change 1)
+# Reading: docs/references/tul-latent-emission/lcm/2026-09-21-lcm-reading.md §3
+#          (x0-prediction, the schedule, the time conditioning)
+# Prereg: lab/experiments/planned/2026-09-21-lxtul-loop-denoise.md — WRITE IT BEFORE
+#         LAUNCH. This file must not be queued without a committed prereg whose
+#         predictions are frozen; the arm's own theatre risk (below) is exactly the kind
+#         a post-hoc reading would hide.
+#
+# WHY. Fourteen strict slot-loop arms read token K3-K6 inside [-0.0002, +0.002] and pass 1
+# does 89-95 % of the work. Every target tried is a DETERMINISTIC function of the past and
+# every one has a ONE-STEP optimum, so nothing asks pass 2 to do what pass 1 could not.
+# LCM's denoising steps earn (MI rises with steps, their Figure 10) because each step
+# RECEIVES a noise level and has the clean target AT that level as its own target. This
+# arm builds that structure inside the loop.
+#
+# ONE FACTOR against `tul_code_target` + the frozen reference (arm A with
+# `code_target_ref: true`): the loop's per-pass entry and its loss. Everything else is arm
+# A's — the frozen VAE stage, the frozen coda, `code_target_detach: true`, the strict
+# geometry, the slot-loop gain constraint, `train_only` on the loop alone.
+#
+# WHAT CHANGES, mechanically (morph/model/tul_denoise.py, `_tul_core`):
+#   * pass i of a slot whose realised depth is T_s enters at t_i = (i-1)/T_s on the
+#     straight line z_t = (1-t) z0 + t x0, z0 ~ N(0, I) drawn ONCE per slot and shared by
+#     its passes and its M = prefix_k cells; x0 is the FROZEN reference encoder's rms-normed
+#     code of the NEXT span. Pass 1 therefore enters at PURE NOISE.
+#   * AT TRAIN the entry is built from the TRUE x0, not from pass i-1's output (LCM's
+#     teacher forcing). The passes are INDEPENDENT; that is what gives each one a job.
+#     Each pass predicts x0 through the existing `TULCodeProj` and is charged
+#     ||x0_hat_i - x0||^2 per cell, summed over the realised passes at weight 1 each
+#     (LCM's omega(t) = 1, Eq. 16's x0-prediction). This IS diffusion training with the
+#     core as the denoiser.
+#   * AT EVAL the loop RUNS: pass i+1 enters at the re-noised prediction of pass i on the
+#     same line with the same z0 (DDIM-style), so the exit is a SAMPLE and two eval
+#     forwards with different z0 give different exits.
+#   * every pass receives its level through the existing `TULCodeTime` embedding, added at
+#     the injection seam the fan's trigger uses, so pass i is not pass 1 with a different
+#     input. Its last layer is zero-init, so the LEVEL term starts inert — the ENTRY does
+#     not, so this arm is NOT bit-identical to its ruler at step 0.
+#
+# TRAIN AND EVAL DIFFER BY DESIGN (teacher forcing against rollout — the LCM /
+# diffusion-forcing structure). The rollout gap is the named risk and LCM §2.3.2's
+# epsilon-scaling against exposure bias is NOT built here.
+#
+# THEATRE RISK, named before the run (the note's own words): a denoiser's K-curve rises
+# because the early passes are noisy. Any reading that quotes K1-K6 without the READER's
+# paired CE against arm-A-with-the-reference on the same rows is reading the noise
+# schedule, not depth. Score this arm on the reader.
+#
+# NOT COMPARABLE with any other arm, because every per-pass loop instrument reads the
+# state as it ENTERS a pass and that state is an independently noised target at train:
+# `gain_est`, `gain_est_max`, `loop/core_gain*`, `loop/in_norm`, `loop/out_norm`,
+# `loop/delta_ratio`, `loop/delta_mean`, `loop/eff_rank`, `fixed_point`, `fp_weighted`,
+# `pass_residual` and `tul/code_target_cos_l{t}`.
+#
+# THE OPENING is arm A's, unchanged — `training.init_from` the VAE stage (weights only,
+# step axis 0, the measured 1000-step ramp, a fresh optimizer) and the stream skipped past
+# the batches the VAE stage already read. The frozen reference twin is snapshotted right
+# after that load, so the target cannot drift:
+#   training.init_from=/home/wolfe/morph-to/checkpoints/morph/tul-code-vae/step_10000.pt
+#
+# NOT COMPOSABLE WITH THE FAN, and the refusal is the reason: `tul.fan_k` forces
+# `tul.slot_cells == fan_k`, and `tul.code_target` refuses `slot_cells > 1` ("each of
+# those also claims the prefix cells"). A fan4 + denoise arm therefore needs the code
+# target's cells and the register's cells to be the same object, which they are not.
+# `tul_slot_spandec_strict_fan4_all_denoise.yaml` is deliberately NOT in this tree.
+defaults:
+  - tul_code_target
+  - _self_
+training:
+  # THE LIST IS RESTATED, and it is not cosmetic. `tul_code_target.yaml` freezes everything
+  # outside its prefixes, and Hydra REPLACES a list rather than extending it — so without
+  # these two lines `tul_loop_denoise.` and `tul_code_time.` would be frozen at their init.
+  # `TULCodeTime`'s last layer is ZERO-init, so a frozen level embedding adds exactly 0
+  # forever: every pass would then be pass 1 with a different input, which is the one thing
+  # this arm exists to stop. `apply_train_only` prints the trainable groups at startup —
+  # check `tul_loop_denoise` and `tul_code_time` are in that line before trusting a run.
+  train_only:
+    - core.                       # the loop body (model 4:6x6:4 -> core injections 4..9)
+    - x0_injects.4.
+    - x0_injects.5.
+    - x0_injects.6.
+    - x0_injects.7.
+    - x0_injects.8.
+    - x0_injects.9.
+    - injection.
+    - tul.E_slot                  # the slot seed path (the loop's input)
+    - tul.E_mask
+    - tul.W_sent
+    - tul_code_proj.              # the ONE write into the frozen coda (x0_hat)
+    - tul_loop_denoise.           # the M cells -> carrier entry map (I/M at init)
+    - tul_code_time.              # the level embedding each pass receives
+model:
+  # THE TERMINAL FIXED-POINT TERM IS OFF HERE, and it is not a free choice. base.yaml
+  # ships `core_fixed_point_lambda: 1.0` and `_tul_core` charges
+  # ||h_T - h_{T-1}||^2 / ||h_T||^2 on every valid slot's LAST pass. Under loop_denoise at
+  # train, h_T and h_{T-1} are the outputs of two DIFFERENT inputs (two different noise
+  # levels), so the term stops being a fixed-point reading and becomes a penalty on the
+  # denoising trajectory's own motion — exactly the motion this arm exists to create.
+  core_fixed_point_lambda: 0.0
+tul:
+  code_target_ref: true           # REQUIRED by loop_denoise: the per-pass target must be
+                                  # FIXED, and E is frozen while its INPUT is not
+                                  # (docs/tul-code-spec.md §17.1).
+  loop_denoise: true
+  loop_denoise_grid: linear       # t_i = (i-1)/T_s over the slot's realised depth
+  loop_denoise_weight: 1.0
+  code_target_weight: 0.0         # REQUIRED at 0: a slot's LAST realised pass IS the exit
+                                  # the coda reads, so the exit term is already the last
+                                  # entry of the per-pass sum. Its instruments
+                                  # (code_target_cos, code_target_cos_shuf) keep logging.
+  code_t_embed_scale: 16.0        # the time basis over t in [0, 1): at 1.0 the top
+                                  # frequency is 1 rad/unit and the basis is low order;
+                                  # ~16 is a real Fourier basis over the unit interval
+                                  # (TULCodeTime's docstring, fm_planner's meaning).
+wandb:
+  name: slot-spandec-strict-denoise

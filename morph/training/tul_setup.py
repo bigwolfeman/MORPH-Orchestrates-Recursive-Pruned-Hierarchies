@@ -66,7 +66,7 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_repel_mode", "fan_epi_features", "fan_epi_ridge", "fan_epi_eta",
     "fan_select_eps", "fan_select_gate_lambda", "fan_all_wta_lambda",
     "fan_select_write", "fan_select_write_anneal",
-    "fan_trigger_every_pass",
+    "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_cells", "slot_cell_init", "slot_chain", "slot_chain_detach",
     "vq_beta", "vq_codebook", "vq_codes", "vq_dim", "vq_groups", "vq_reset_after",
@@ -79,11 +79,13 @@ KNOWN_TUL_KEYS = frozenset({
     "code_xm_k", "code_xm_select", "code_xm_mode", "code_tape_rollout_p", "code_sigreg_lambda",
     "code_discrete", "code_vq_codebook", "code_vq_groups", "code_vq_dim", "code_vq_beta",
     "code_vq_weight", "code_sub_p", "code_mask_schedule",
+    "code_target_source", "code_sonar_cache",
     "code_target", "code_target_weight", "code_target_detach", "code_target_skip_coda",
     "code_target_loss", "code_target_tau", "code_target_ref",
     "code_grade", "code_grade_k", "code_grade_tokens", "code_grade_rows",
     "code_grade_every", "code_grade_loss", "code_grade_grader", "code_grade_weight",
     "code_grade_temp", "code_grade_tau", "code_grade_min_distinct2",
+    "loop_denoise", "loop_denoise_grid", "loop_denoise_weight",
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
     "spandec", "spandec_heads", "spandec_horizon", "spandec_layers", "spandec_max_tokens",
     "spandec_pass_horizon_max", "spandec_pass_tokens", "spandec_pass_weight",
@@ -333,6 +335,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_select_write_anneal=int(tc.get("fan_select_write_anneal", 1500)),
         fan_all_wta_lambda=float(tc.get("fan_all_wta_lambda", 1.0)),
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
+        fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
+        fan_lineage=str(tc.get("fan_lineage", "off")),
         vq_codes=int(tc.get("vq_codes", 0)),
         vq_codebook=int(tc.get("vq_codebook", 512)),
         vq_dim=int(tc.get("vq_dim", 0)),
@@ -439,6 +443,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         code_vq_weight=float(tc.get("code_vq_weight", 1.0)),
         code_sub_p=float(tc.get("code_sub_p", 0.3)),
         code_mask_schedule=str(tc.get("code_mask_schedule", "linear")),
+        code_target_source=str(tc.get("code_target_source", "e")),
+        code_sonar_cache=(None if tc.get("code_sonar_cache", None) is None
+                          else str(tc.get("code_sonar_cache"))),
         code_target=bool(tc.get("code_target", False)),
         code_target_weight=float(tc.get("code_target_weight", 1.0)),
         code_target_detach=bool(tc.get("code_target_detach", True)),
@@ -446,6 +453,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         code_target_loss=str(tc.get("code_target_loss", "l2")),
         code_target_tau=float(tc.get("code_target_tau", 0.1)),
         code_target_ref=bool(tc.get("code_target_ref", False)),
+        loop_denoise=bool(tc.get("loop_denoise", False)),
+        loop_denoise_grid=str(tc.get("loop_denoise_grid", "linear")),
+        loop_denoise_weight=float(tc.get("loop_denoise_weight", 1.0)),
         code_grade=bool(tc.get("code_grade", False)),
         code_grade_k=int(tc.get("code_grade_k", 4)),
         code_grade_tokens=int(tc.get("code_grade_tokens", 16)),
@@ -553,6 +563,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_select_write_anneal": model_cfg.fan_select_write_anneal,
         "fan_all_wta_lambda": model_cfg.fan_all_wta_lambda,
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
+        "fan_seed_noise": model_cfg.fan_seed_noise,
+        "fan_lineage": model_cfg.fan_lineage,
         "fan_epi_features": model_cfg.fan_epi_features,
         "fan_epi_ridge": model_cfg.fan_epi_ridge,
         "fan_epi_eta": model_cfg.fan_epi_eta,
@@ -640,6 +652,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "code_vq_weight": model_cfg.code_vq_weight,
         "code_sub_p": model_cfg.code_sub_p,
         "code_mask_schedule": model_cfg.code_mask_schedule,
+        "code_target_source": model_cfg.code_target_source,
+        "code_sonar_cache": model_cfg.code_sonar_cache,
         "code_target": model_cfg.code_target,
         "code_target_weight": model_cfg.code_target_weight,
         "code_target_detach": model_cfg.code_target_detach,
@@ -647,6 +661,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "code_target_loss": model_cfg.code_target_loss,
         "code_target_tau": model_cfg.code_target_tau,
         "code_target_ref": model_cfg.code_target_ref,
+        "loop_denoise": model_cfg.loop_denoise,
+        "loop_denoise_grid": model_cfg.loop_denoise_grid,
+        "loop_denoise_weight": model_cfg.loop_denoise_weight,
         "code_grade": model_cfg.code_grade,
         "code_grade_k": model_cfg.code_grade_k,
         "code_grade_tokens": model_cfg.code_grade_tokens,
@@ -855,13 +872,40 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                     if str(getattr(cfg.model, "injection_channels", "ctx")) == "ctx" else
                     "every channel, so read this add as a GAIN on the existing route")
                  + ") " if model_cfg.fan_trigger_every_pass else "")
+              + (f"SEED NOISE std={model_cfg.fan_seed_noise} (the K streams are K "
+                 "SAMPLES: an independent Gaussian draw per stream, per slot and per "
+                 "forward is added to the ENTRY STATE core_init(e) - NOT to `e`, which "
+                 "every pass re-injects - at train AND at eval, pads zero. The seed "
+                 "lives in the input_norm'd field, so std 1.0 IS unit per-channel RMS "
+                 "there and two streams differ by RMS sqrt(2). "
+                 + ("The diversity term is OFF (fan_repel_lambda 0): the noise replaces "
+                    "it and fan_vol_t/fan_epi_t stay INSTRUMENTS. "
+                    if model_cfg.fan_repel_lambda == 0.0 else
+                    f"NOTE the diversity term is STILL CHARGED "
+                    f"(fan_repel_lambda={model_cfg.fan_repel_lambda}): this arm is noise "
+                    f"AND a term, which is two factors. ")
+                 + ") " if model_cfg.fan_seed_noise > 0.0 else "")
+              + ("LINEAGE RELATION (tul.fan_lineage='relation': across slots a cell reads "
+                 "only its OWN stream index, so the K streams are K channels along the "
+                 "slot axis; within a slot the register's all-to-all relation is "
+                 "unchanged. The REWEIGHTING half of rung P4 is NOT built - the "
+                 "per-stream span CE that would set the weights comes from the coda AFTER "
+                 "the loop, so gating pass 1 with it is circular here) "
+                 if model_cfg.fan_lineage != "off" else "")
               + 
-              f"- K latent STREAMS per span through the ONE shared core. The streams ARE "
-              f"the Thought Register's cells (fan_k aliases slot_cells, so the message "
-              f"above is this arm's loop); what is NEW is the three things the register "
-              f"did not have. (1) a pairwise-cosine REPULSION charged after passes 1.."
-              f"{model_cfg.fan_repel_passes} only, because PLR Thm 4.4 makes the collapse "
-              f"exponential in depth (pass 1 fights L^2, pass 6 fights L^12). (2) the "
+              "- K latent STREAMS per span through the ONE shared core. The streams ARE "
+              "the Thought Register's cells (fan_k aliases slot_cells, so the message "
+              "above is this arm's loop); what is NEW is the three things the register "
+              + (f"did not have. (1) a DIVERSITY term ({model_cfg.fan_repel_mode!r}) "
+                 f"charged after passes 1..{model_cfg.fan_repel_passes} only, because PLR "
+                 f"Thm 4.4 makes the collapse exponential in depth (pass 1 fights L^2, "
+                 f"pass 6 fights L^12). "
+                 if model_cfg.fan_repel_lambda > 0.0 else
+                 f"did not have. (1) a DIVERSITY term ({model_cfg.fan_repel_mode!r}) - NOT "
+                 "CHARGED on this arm (fan_repel_lambda 0): `fan/vol_t`, `fan/epi_t` and "
+                 "`fan/stream_cos_t` are still computed every pass and reported, as "
+                 "instruments. ")
+              + "(2) the "
               + (f"exit WRITE: every stream in its own prefix cell, the register's 1:1 "
                  f"route, so the coda's width is prefix_k={model_cfg.prefix_k} and the width "
                  f"partner is the ruler at the same prefix_k. " if model_cfg.fan_mix == "all" else
@@ -895,6 +939,19 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                   "LOSS is reweighted toward HIGH NOISE (LCM's wide schedule: CA 80.3 % "
                   "against the peaked schedule's 70.6 %). The SAMPLER's Euler grid stays "
                   "UNIFORM - this knob moves training only")
+        # Rung P3 (`tul.code_target_source`): WHAT the thinker aims at. The cache is
+        # opened here, at config time, so a missing or malformed one kills the run at
+        # startup instead of five minutes into a queue slot — and so the banner's row
+        # count is the file's, not the config's claim about it.
+        _tgt = "TARGET = E's own code of the next span (verbatim reconstruction)"
+        if model_cfg.code_target_source == "sonar":
+            from morph.model.sonar_cache import SONAR_DIM, SonarSpanCache
+            _sc = SonarSpanCache(model_cfg.code_sonar_cache)
+            _mc = int(model_cfg.prefix_k) * int(cfg.model.d_model)
+            _tgt = (f"TARGET = SONAR cache {_sc.path}, {_sc.n_rows} rows, frozen "
+                    f"{SONAR_DIM}->{_mc} expansion "
+                    f"(M={model_cfg.prefix_k} cells x C={int(cfg.model.d_model)}); E is "
+                    f"built and RUNS for its validity mask but receives NO GRADIENT")
         print(f"  LCTUL ON: prefix_k={model_cfg.prefix_k} "
               + (f"DISCRETE code ({model_cfg.code_vq_groups} symbols/cell of "
                  f"{model_cfg.code_vq_codebook}), masked denoiser, "
@@ -907,6 +964,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               "span at train, the core body samples it at eval. Train schedule: "
               + ("the mask rate t ~ U(0, 1) with the ELBO's 1/t weight (NOT a tunable "
                  "noise schedule)" if model_cfg.code_discrete else _sched)
+              + ". " + _tgt
               + ". READ `val/code_ca` AGAINST `val/code_ca_chance` FIRST (LCM's "
               "contrastive accuracy: does the SAMPLED code retrieve its own span's true "
               "code out of the batch, neighbours excluded) - a code that wins "
@@ -917,6 +975,36 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               + "the four `code_fm_band{b}_rel` ratios "
               "(.agents/notes/proposed/architecture/"
               "2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md)",
+              flush=True)
+    if model_cfg.loop_denoise:
+        # LXTUL-P change 1 (tul.loop_denoise). The banner prints the two things that make
+        # this arm unreadable if they are forgotten: train and eval run DIFFERENT
+        # functions, and every per-pass loop instrument now reads a noised entry.
+        print(f"  LOOP DENOISE ON: grid {model_cfg.loop_denoise_grid}, teacher-forced at "
+              f"train, rolled out at eval - each pass of the slot loop gets a JOB, a "
+              f"noise level. Pass i of a slot whose realised depth is T_s enters at "
+              f"t_i = (i-1)/T_s on the straight line z_t = (1-t) z0 + t x0, with x0 the "
+              f"FROZEN reference encoder's code of the NEXT span (prefix_k="
+              f"{model_cfg.prefix_k} cells) and ONE z0 per slot. AT TRAIN the entry is "
+              f"built from the TRUE x0 and NOT from the previous pass (LCM's teacher "
+              f"forcing, Eq. 16 x0-prediction, omega(t)=1): the passes are INDEPENDENT, "
+              f"which is what gives each one a job. AT EVAL the loop RUNS - pass i+1 "
+              f"enters at the re-noised prediction of pass i on the same line with the "
+              f"same z0 - so the exit is a SAMPLE and two forwards differ. "
+              f"weight={model_cfg.loop_denoise_weight}, code_target_weight="
+              f"{model_cfg.code_target_weight} (0 by construction: a slot's LAST pass IS "
+              f"the exit term). READ `train/loop_denoise_l2_t{{t}}` ACROSS t FIRST - the "
+              f"per-pass term is what this arm exists to move - and score the arm on the "
+              f"READER's paired CE against its rung below, never on the K-curve alone: a "
+              f"denoiser's K-curve rises trivially because the early passes are noisy "
+              f"(the theatre risk the note names). NOT COMPARABLE with any other arm: "
+              f"gain_est, loop/core_gain*, loop/delta_*, loop/eff_rank, loop/in_norm, "
+              f"fixed_point, pass_residual and tul/code_target_cos_l{{t}} all read an "
+              f"independently noised entry at train. Train and eval differ BY DESIGN "
+              f"(teacher forcing vs rollout); LCM 2.3.2's epsilon-scaling against "
+              f"exposure bias is NOT built "
+              f"(.agents/notes/proposed/architecture/"
+              f"2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md, Part 2 change 1)",
               flush=True)
     if model_cfg.vq_codes > 0:
         _dc = model_cfg.vq_dim or (int(cfg.model.d_model) // model_cfg.vq_codes)

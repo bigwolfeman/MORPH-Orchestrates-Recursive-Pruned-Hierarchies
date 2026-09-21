@@ -1,0 +1,47 @@
+# THE FALLBACK ARM: remove the prelude (2026-09-21, Wolfe's direction recorded in the
+# LXTUL-P note's "If the ladder fails" section). ONE factor over
+# `tul_slot_spandec_strict`: `model.n_prelude: 0`. No model code changes.
+#
+# WHY. The plain norm_match model earns K1-K6 0.033 under the PRELUDE entry and 0.185
+# under Parcae's NOISE entry (`prelude-entry-flattens-the-loop`, 2026-09-10), and the
+# core's blocks read near-inert on slot states under the prelude entry (MLP out/in 1-2 %).
+# The working explanation is that the prelude hands the loop a state already near the
+# map's fixed point, so there is nothing for passes 2..T to do. This arm removes the thing
+# that produces that state: the core reads the embeddings directly, for the tokens and for
+# the slot seed.
+#
+# IT IS NOT THE NOISE ENTRY. `model.core_state_init: noise`
+# (`2026-09-10-arc-slot-mnext-noise-entry`) replaces h_0 with a draw while the PRELUDE is
+# still there feeding `e`, and the slot loop read K1-K6 0.002 under it. Here the prelude
+# is gone and the entry is still `h_0 = e`; what changes is what `e` IS.
+#
+# THE BLOCK COUNT. `model.n_layers` is documentation in this tree (nothing reads it;
+# `MORPHTransformer` computes `n_total = n_prelude + n_core + n_coda`), so it is reduced
+# by the same 4 to keep the file honest. The block budget FALLS from 14 to 10: this is
+# NOT a matched-compute partner to `slot-spandec-strict` and must not be scored as one.
+# The partner for a CE contrast is a 10-block strict arm; the reading this arm exists for
+# is the K-CURVE and the per-pass instruments, which are within-run
+# (`tul-goal-is-loop-contribution-not-matched-compute`).
+#
+# CHECK THE HINGE BEFORE READING ANYTHING ELSE. `model.slot_gain_lambda` is 100 at target
+# 0.9 on this branch and it was tuned on states the prelude produced. A state that is not
+# near the fixed point at entry reads a gain the hinge was not tuned for: the noise-entry
+# filing found `gain_est` 8.6 with a ~6,000-nat penalty and ran on the free base. So read
+# `loop/gain_est`, `loop/slot_gain_pen` and `loop/core_gain_t0` in the FIRST 200 steps. If
+# the penalty dominates the loss, the arm to run is this file with
+# `model.slot_gain_lambda: 0` on the command line, and the detonation tripwire
+# (`preclip/total > 1e4` at any step >= 200) is then the only hold left.
+#
+# What did NOT change: the strict geometry, the span decoder, `prefix_k`, the ternary
+# rule, the 1000-step ramp, the seed, the packer, 5,000 steps.
+# Prereg: lab/experiments/planned/2026-09-21-strict-np0.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+model:
+  n_prelude: 0
+  n_layers: 10   # 0 + n_core 6 + n_coda 4 — documentation only; nothing reads this key
+
+wandb:
+  name: slot-spandec-strict-np0

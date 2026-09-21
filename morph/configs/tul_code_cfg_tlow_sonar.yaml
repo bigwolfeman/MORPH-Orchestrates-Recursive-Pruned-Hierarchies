@@ -1,0 +1,46 @@
+# LCTUL arm "tul-code-cfg-tlow-sonar" (2026-09-21): rung P3 of LXTUL-P — WHAT the flow
+# thinker aims at, one factor over `tul_code_cfg_tlow`. The thinker, the wide noise
+# schedule (mu = -1, sigma = 1), guidance (drop 0.1 / scale 2.0) and the coda's read of
+# the sampled code are all kept; only the TARGET changes.
+#
+# Why. Today's target is E's VERBATIM reconstruction code of the next span, and the
+# context explains 5-15 % of it (`lab/theory/lctul_euler_depth/`,
+# `explained_of_residual_ratio`) — the thinker is asked mostly for what the past cannot
+# say, and it duly reads the past at 1 % of its loss
+# (`lctul-thinker-is-context-blind`). LCM's number for the other side: in SONAR's
+# sentence space the TRUE next sentence is retrievable among in-batch alternatives
+# 75-80 % of the time (their Table 3 CA column,
+# docs/references/tul-latent-emission/lcm/2026-09-21-lcm-reading.md sections 1-2), so a
+# denoiser on a SONAR target has a context dependence to find.
+#
+# How. `scripts/sonar_span_cache.py` cuts the trainer's own rows into the packer's spans,
+# detokenises each, encodes it with `text_sonar_basic_encoder` (1024-d, frozen) and writes
+# a cache keyed by the span's TOKEN IDS. At train the cache row for slot s's NEXT span —
+# the same span E pools — is lifted to the thinker's [B, S, M, C] target by a FROZEN
+# random orthogonal 1024 -> M*C map (M = prefix_k = 2, C = d_model = 1024) and RMS-normed
+# per cell, the statistic E's code carries. A cache MISS raises; there is no fallback.
+#
+# What is NOT the same as the parent, said plainly: E is built and still runs (its
+# validity mask), but its code is discarded, so E receives no gradient on this arm and
+# every reader of the code — the coda in phases 1-2 included — reads SONAR. The
+# checkpoint layout is unchanged, so this arm pairs key for key with `tul-code-cfg-tlow`.
+#
+# The cache must cover the run's whole stream. `/home/wolfe/sonar-cache/tul_code_cfg_tlow`
+# holds the FIRST 2,000 train steps plus the 20 val batches at the time of writing; a
+# 5,000-step run needs the rest of the train stream cached first or it will raise at the
+# first uncached step. Check `meta.json`'s row count against the banner.
+#
+# Read `val/code_ca` against `val/code_ca_chance` FIRST (a SONAR target that reads CA at
+# chance is the same conditional mean in a new space), then the reader's paired CE against
+# `tul-code-cfg-tlow` on the same rows — the rung's score, not the K-curve.
+# Prereg: lab/experiments/planned/2026-09-21-lctul-tlow-sonar.md
+defaults:
+  - tul_code_cfg_tlow
+  - _self_
+
+tul:
+  code_target_source: sonar
+  code_sonar_cache: /home/wolfe/sonar-cache/tul_code_cfg_tlow
+
+wandb:
+  name: tul-code-cfg-tlow-sonar

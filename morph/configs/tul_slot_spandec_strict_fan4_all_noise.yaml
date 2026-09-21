@@ -1,0 +1,53 @@
+# LXTUL-P rung P1: the K streams as K SAMPLES (2026-09-21), one factor over
+# tul_slot_spandec_strict_fan4_all — "one factor" counted as ONE mechanism, not one key:
+# the seed noise REPLACES the diversity term, so both keys move together and neither
+# alone is the arm.
+#
+# WHY. fan4-all holds its four streams apart with a within-slot volume term
+# (`fan_repel_mode: epivol`, lambda 0.1, passes 1-2). That term is the one diversity term
+# measured NOT to be gamed (centred rank 2.82 of 3 at pass 1, four live input-dependent
+# streams) and the reader still cashes almost nothing of the gap it opens: oracle - mixed
+# 0.018, deployed - oracle 0.040, and the mixture probe says no branch-blind selector can
+# recover it (`.agents/notes/proposed/architecture/2026-09-21-lxtul-particles-what-gives-
+# a-pass-a-job.md`, Outcome). The LXTUL-P reading is that a term the streams are TRAINED
+# to satisfy gives the K states a reason to be four SEPARATED states and no reason to be
+# four PLAUSIBLE continuations. Rung P1 removes the term and makes the streams samples:
+# distinctness comes from an independent Gaussian draw at each stream's seed, which has no
+# objective to game.
+#
+# WHAT CHANGES, exactly.
+#   tul.fan_seed_noise 1.0   an independent N(0, 1) draw per stream, per slot and per
+#                            forward, added to the ENTRY STATE `core_init(e)` after the
+#                            register's trigger and before pass 1, at train AND at eval
+#                            (the streams ARE samples; a deterministic eval would read a
+#                            different model). Pads get exactly 0. The seed lives in the
+#                            `input_norm`'d field, so std 1.0 is unit per-channel RMS
+#                            there and two streams differ by RMS sqrt(2).
+#   tul.fan_repel_lambda 0.0 the volume term is no longer CHARGED. It is still COMPUTED
+#                            and reported every pass: `fan/vol_t{t}`, `fan/epi_t{t}` and
+#                            `fan/stream_cos_t{t}` stay instruments (transformer.py's fan
+#                            block gates the LOSS on the lambda, never the readout), so
+#                            this arm's collapse shape is readable against fan4-all's on
+#                            the same axes. `fan_repel_mode: epivol` is inherited and kept
+#                            for exactly that reason - changing it would change the
+#                            instruments as well as the term.
+# Everything else is fan4-all's: K=4, prefix_k 4, `fan_mix: all`, the winner-takes-all
+# term at 1.0, `fan_select_eps` 0.05, the terminal fixed-point term at 1.0 (rung P0 is the
+# other one-factor arm), the same seed, packer and prefix width.
+#
+# WHAT TO READ FIRST, so the K-curve is not over-read: the paired reader CE against
+# fan4-all on the same rows (the rung's score; the seed spread it must clear is 0.024
+# nats), then `fan/stream_rank_t{t}` (fan4-all: 2.820 at pass 1, 2.060 at pass 6) and
+# `fan/oracle_ce` - `fan/mixed_ce` (fan4-all: 0.018). A rank that rises with the term
+# gone is the noise, not the loop.
+# Prereg: lab/experiments/planned/2026-09-21-lxtul-fan4-all-noise.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all
+  - _self_
+
+tul:
+  fan_seed_noise: 1.0
+  fan_repel_lambda: 0.0
+
+wandb:
+  name: slot-spandec-strict-fan4-all-noise

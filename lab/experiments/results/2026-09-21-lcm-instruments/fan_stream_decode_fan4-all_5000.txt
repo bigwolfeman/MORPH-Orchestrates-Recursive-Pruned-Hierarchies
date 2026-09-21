@@ -1,0 +1,47 @@
+fan4-all step 5000  rows=32 batch=2 depth=6 K=4 spans=1680 tokens=33094
+embedding: mean-pooled prelude states (no E on this arm)
+within-stream control: stream 0, tul.token_state_dropout=0.15 forced on, 4 seeded draws
+morph from /mnt/bigdata/morph-instruments/MORPH-all/morph
+identity check (pinned == unpinned logits) max|d| = 0.000e+00
+parity check mismatched tokens = 0
+
+NOTE: a span's FIRST token is emitted at the previous span's boundary token,
+which under the strict geometry cannot read THIS slot's cells. It can still read
+EARLIER slots' cells, which the single-stream write also blanks, so the streams
+are not forced to agree there. `first_agree` is what is left; read it beside
+`within_first_agree`, the same statistic under the nuisance draw.
+(These five lines replaced three lines of prose after the run, which claimed the
+streams must agree at token 0; `first_agree` 0.7226 refutes that. No number in this
+file was touched.)
+
+reading                     value   95 % row-block bootstrap
+  between_dist             +0.4743  [+0.4601, +0.4889]
+  within_dist              +0.2481  [+0.2405, +0.2554]
+  distinct_all             +0.8994  [+0.8784, +0.9193]
+  pair_distinct            +0.9771  [+0.9723, +0.9813]
+  within_distinct_all      +0.7512  [+0.7262, +0.7762]
+  within_pair_distinct     +0.9113  [+0.9000, +0.9240]
+  first_agree              +0.7226  [+0.6910, +0.7539]
+  within_first_agree       +0.6607  [+0.6355, +0.6852]
+  between - within         +0.2261  [+0.2117, +0.2417]
+  between / within         +1.9113  [+1.8371, +1.9877]
+
+decoded spans (first batch):
+  [stream 0] row 0 slot 0: ' The 2016-16-12-12-12-12-12-12-12-1'
+  [stream 0] row 0 slot 1: 'riday.\n\n"I\'m not a woman, I\'m not a woman," said the woman. "I'
+  [stream 0] row 0 slot 2: '\n\n"I think it\'s a good thing to do," said the police. "I think it\'s a good thing to do," she said'
+  [stream 0] row 0 slot 3: '\n\n"We have a lot of money to do that," said the police.\n\nThe suspects were in the hospital.\n\nThe suspect'
+  [stream 1] row 0 slot 0: ' The BBC\'s "The Wisconsin" (1981) is a 1999-999-999'
+  [stream 1] row 0 slot 1: 'riday, 2016.\n\nThe 1990s, which was the first time'
+  [stream 1] row 0 slot 2: "\n\nThe city's home is a major part of the city's economic development, which is a major part of the country's economic growth."
+  [stream 1] row 0 slot 3: "\n\nThe city's home is a major part of the city's new home in the city, where the city is a city of 100,"
+  [stream 2] row 0 slot 0: ' The BBC\'s Mike Bradley\n\n"I think it\'s a good thing to do," said Mike. "I think it\'s a'
+  [stream 2] row 0 slot 1: 'riday.\n\nThe 1980s, which was the first time in 1991'
+  [stream 2] row 0 slot 2: '\n\n"I was a woman, and I was a woman. I was a woman. I was a woman. I was a woman. I was'
+  [stream 2] row 0 slot 3: '\n\nThe 1990s, which was the first time in 1991, was the first time the city was in the '
+  [stream 3] row 0 slot 0: " The BBC's Friday, March 20, 2015\n\nThe 2012-12 season, 2"
+  [stream 3] row 0 slot 1: 'riday, and a few months ago, the group was arrested in 2011.\n\n'
+  [stream 3] row 0 slot 2: '\n\nThe 2016-16 election, which was held in the 1990s, was awarded a 1'
+  [stream 3] row 0 slot 3: '\n\nThe 2016-18 attack on the U.S. President, who was arrested in 2011'
+
+wall clock 2847 s

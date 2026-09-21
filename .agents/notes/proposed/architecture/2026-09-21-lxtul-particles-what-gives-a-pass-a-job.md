@@ -332,3 +332,29 @@ and the fp0 arm (the terminal fixed-point term is also a drive on the last pass)
 two arms already queued that act on the drive rather than the map. Caveat: the numbers are
 the EAGER map's (`tg_scoped_kernels` forced off, the fused path has no second derivative);
 the eager trajectory's ranks match the fused stream probe's to 0.01.
+
+**2026-09-21, the three LCM instruments — DONE (probes, not preregs; process slip as above),
+`lab/divergence/{code_roundtrip_probe,code_context_mi_probe,fan_stream_decode_probe}.py` on
+`_span_decode.py`, 17 tests, artifacts `lab/experiments/results/2026-09-21-lcm-instruments/`.**
+
+1. Round-trip gap on `tul-code-20k` @ 20k (Spark, 48 rows). Chance cosine between two spans'
+   true codes 0.102. The k = 8 sample sits AT chance (cos to truth 0.098), so its round-trip
+   gap is 0 for the wrong reason. The k = 1 sample carries signal (0.222) and decoding then
+   re-encoding destroys all of it (0.109): gap +0.113 [+0.108, +0.120], Base-LCM's signature.
+   The floor that makes it legible: the TRUE code decoded and re-encoded lands at cos 0.291, a
+   gap of 0.709. This encoder/decoder pair loses most of a code on one round trip even when the
+   code is exactly right. Quote that floor beside any future round-trip reading.
+2. Context MI (model-internal form: the coda's CE on a span with the earlier cells present vs
+   zeroed; the strict geometry makes the cut exact). Decoded span: +0.013 [+0.001, +0.025] and
+   a shuffle control at 0. True span: +0.102 [+0.078, +0.129], shuffle +0.044. The sampler's
+   own span gets no cheaper from its context: the LCM MI verdict on Base-LCM, on our decoder.
+3. Fan stream decodes on fan4-all @ 5000 (3070, 32 rows). Between-stream decode distance
+   0.474 against 0.248 within one stream under dropout: ratio **1.91 [1.84, 1.99]**; 90 % of
+   slots have all four decodes pairwise different (75 % for the nuisance control). On text the
+   four streams are not four spellings of one thing. The outside agent's null ("the deviations
+   have no stable causal semantic effect once surface variation is controlled") is rejected on
+   this proxy; the semantic-branch labelling it asked for is still not built.
+
+Together: the LCTUL sampler at 20k is Base-LCM by two independent instruments, and the fan's
+exit carries K distinguishable hypotheses while its passes stay flat. Both support the ladder
+as ordered: fix the proposer (P1–P3) before asking the loop for depth.

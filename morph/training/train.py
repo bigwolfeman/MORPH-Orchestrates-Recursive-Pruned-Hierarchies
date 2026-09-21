@@ -138,7 +138,11 @@ def evaluate(
                           "core_token_aux_weighted", "critic_weighted",
                           "vq_weighted", "row_contrast_weighted", "horizon_weighted",
                           "code_fm_weighted", "code_sigreg_weighted", "code_target_weighted",
-                          "code_grade_weighted"):
+                          "code_grade_weighted",
+                          # tul.loop_denoise (LXTUL-P change 1, 2026-09-21): the
+                          # per-pass denoising sum. Subtracted so val loss stays the
+                          # MODEL's CE and the ppl guard fires on the language model.
+                          "loop_denoise_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -173,6 +177,9 @@ def evaluate(
                         "code_target", "code_target_mse", "code_target_cos",
                         # the generic floor and the InfoNCE top-1 rate (code-only arms)
                         "code_target_cos_shuf", "code_target_acc",
+                        # tul.loop_denoise: no per-pass TERM is built at eval (the
+                        # rollout has no teacher), so only the exit readings above
+                        # appear there; `loop_denoise*` is train-side only.
                         # LCM's contrastive accuracy on the SAMPLED code (tul.code): does
                         # the sample retrieve its own span's true code out of the batch,
                         # the two temporal neighbours excluded? Read it against
@@ -3386,6 +3393,7 @@ def main(cfg: DictConfig) -> None:
                             "pass_residual", "pass_res_weighted",
                             "oracle_z", "oracle_z_weighted",
                             "code_target", "code_target_weighted",
+                            "loop_denoise", "loop_denoise_weighted",
                             "code_grade", "code_grade_weighted",
                             "spandec_pass", "spandec_pass_weighted",
                             "coda_span", "coda_span_weighted",
@@ -3521,6 +3529,7 @@ def main(cfg: DictConfig) -> None:
             for _ak in ("fp_weighted", "core_gain_weighted", "egrad_weighted",
                         "pass_res_weighted", "oracle_z_weighted", "code_target_weighted",
                         "code_grade_weighted",   # tul.code_grade, 2026-09-17 (spec §17.2)
+                        "loop_denoise_weighted",  # tul.loop_denoise, LXTUL-P change 1
                         "spandec_pass_weighted", "coda_span_weighted",
                         "core_token_aux_weighted",
                         "loopmtp_weighted",          # LoopMTP Eq 13 (arXiv 2608.03624)
@@ -3585,6 +3594,10 @@ def main(cfg: DictConfig) -> None:
                     # construction (transformer.py wraps the stats as 0-d tensors).
                     or _k.startswith("code_fm") or _k.startswith("code_sigreg")
                     or _k.startswith("code_target") or _k.startswith("code_grade")
+                    # tul.loop_denoise: the sum, its weighted twin and the per-pass
+                    # `loop_denoise_l2_t{t}` / `_cos_t{t}` / `_level_t{t}` (a VARIABLE
+                    # number of keys — the batch's realised max depth decides how many)
+                    or _k.startswith("loop_denoise")
                     or _k in ("code_rollout_frac", "code_cfg_drop_frac", "code_tape_rollout_frac",
                               "code_xm_score_mean", "code_xm_score_best",
                               # the flow thinker's noise schedule AS DRAWN

@@ -18,6 +18,7 @@ import os
 from contextlib import nullcontext
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -61,6 +62,7 @@ from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
                        code_contrastive_accuracy,
                        code_grade_distinct2, code_grade_pref_loss,
                        TULCodeSymHead, mdm_loss, mdm_mask, maskgit_sample)
+from .tul_denoise import (TULLoopDenoiseIn, loop_denoise_interp, loop_denoise_levels)
 from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
                          tg_reset_from_ids,
@@ -70,6 +72,11 @@ from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
 # zero production cost). Set MORPH_PROFILE_REGIONS=1 to name forward carrier sites so the
 # profiler attributes copy_/add/gather kernels to them (with_stack is blind to compiled +
 # backward kernels; record_function is not). Used by ignore/profile_copy_stack.py.
+# Seed of the FROZEN SONAR 1024 -> M·C lift (rung P3, `tul.code_target_source: sonar`).
+# A module constant so the map is reproducible from the config alone: the buffer is not
+# persisted and an offline probe rebuilds it by calling `frozen_code_expansion` with this.
+_SONAR_LIFT_SEED = 0x50FA
+
 _PROFILE_REGIONS = os.environ.get("MORPH_PROFILE_REGIONS", "0") == "1"
 if _PROFILE_REGIONS:
     from torch.profiler import record_function as _record_function
@@ -1187,8 +1194,8 @@ def span_token_counts(gid: Tensor, keep_tok: Tensor, n_groups: int) -> Tensor:
     return out.view(B, n_groups)
 
 
-def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0
-                       ) -> tuple[Tensor, Tensor]:
+def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0,
+                       lineage: bool = False) -> tuple[Tensor, Tensor]:
     """The Thought Register's CELL relation, in one place (``tul.slot_cells``).
 
     The compact axis is ``n_slots * m_cells`` cells, slot-major (index ``s*M + i``).
@@ -1226,6 +1233,15 @@ def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0
     from plain flattened causal and equals an independently written all-true-within-slot
     mask — in ``tests/test_tul_slot_register.py`` and ``tests/test_tul_cond4_strict.py``.
 
+    ``lineage`` (``tul.fan_lineage: "relation"``, LXTUL-P rung P4) narrows ``blk`` on the
+    CROSS-SLOT half alone: a cell of slot ``k`` still reads every cell of its own slot,
+    but of an EARLIER slot it reads only the cell with its own stream index. The K streams
+    are then K separate channels along the slot axis — K lineages — instead of K states
+    that re-mix at every span. ``same`` is untouched (it is already slot-local), and the
+    narrowing is an AND, so the result stays a subset of the relation above and the
+    ``tg_relation`` delivery argument is unchanged. At ``m_cells == 1`` it is a no-op by
+    construction (one stream), which is why it is refused at ``fan_k == 0``.
+
     **What is still CAUSAL on the cell axis, by decision.** The CCA causal conv, its
     ``W_v_prev`` value shift and (on a core that carries one) the GLA retention branch are
     position-wise / recurrent operators, not attention: they read backwards along the
@@ -1235,9 +1251,15 @@ def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0
     mean an acausal conv, a different mechanism from this relation.
     """
     sm = n_slots * m_cells
-    sl = torch.arange(sm, device=device) // m_cells            # slot id per cell
+    _idx = torch.arange(sm, device=device)
+    sl = _idx // m_cells                                       # slot id per cell
+    cl = _idx % m_cells                                        # STREAM id per cell
     si, sj = sl.unsqueeze(1), sl.unsqueeze(0)
     blk = si >= sj
+    if lineage:
+        # `tul.fan_lineage: "relation"` — see the docstring. Own slot: untouched
+        # (all M cells). Earlier slots: the SAME stream index only.
+        blk = blk & ((si == sj) | (cl.unsqueeze(1) == cl.unsqueeze(0)))
     if reach > 0:
         blk = blk & (sj >= si - reach)
     return blk.view(1, 1, sm, sm), (si == sj).view(1, 1, sm, sm)
@@ -1282,12 +1304,33 @@ class MORPHTransformer(nn.Module):
     # the shipped graph never sees it.
     _carry_capture: list | None = None
 
+    # `tul.fan_seed_noise`'s generator. `None` — every training and eval forward — draws
+    # the per-stream seed noise from the model's own DEVICE generator, exactly as
+    # `fan_select_eps`'s `select_winners` draws its random writes. A probe or a test that
+    # needs the draw isolated from the global stream attaches a `torch.Generator` here;
+    # nothing else reads it, so the shipped path is one `torch.randn` per forward.
+    _fan_noise_gen: "torch.Generator | None" = None
+
     # `tul.fan_trigger_every_pass`'s test hook: attach a list and `_tul_core` appends
     # ``{"t": the pass index, "pre": the carrier before the re-injection, "post": after}``
     # (detached) once per pass that gets the term. It is the ONLY way a test can see the
     # add: the injected carrier is consumed by `_core_step` and never returned. None by
     # default — a Python-level branch, so the shipped graph never sees it.
     _trigger_capture: list | None = None
+
+    # `tul.loop_denoise`'s per-pass term, written by `_tul_core` at train:
+    # ``{"loss": the sum over realised passes, "stats": {loop_denoise_l2_t{t},
+    # loop_denoise_cos_t{t}, loop_denoise_level_t{t}}}``. `_forward_tul` folds it into
+    # `groups` at the `code_target` seam and resets it to None at the head of every
+    # forward. None on every other model.
+    _loop_denoise: dict | None = None
+
+    # `tul.loop_denoise`'s test hook (the `_trigger_capture` pattern): attach a list and
+    # `_tul_core` appends ``{"t", "level", "z0", "src", "z_t", "entry"}`` (detached) once
+    # per pass. It is the ONLY way a test can see what entered a pass — the entry is
+    # consumed by `_core_step` and never returned. None by default, so the shipped graph
+    # never sees it.
+    _denoise_capture: list | None = None
 
     def __init__(self, cfg: MORPHConfig):
         super().__init__()
@@ -2051,6 +2094,25 @@ class MORPHTransformer(nn.Module):
         # `TULConfig` refuses it at `fan_k == 0`, so a True here always has a register.
         self._fan_trigger_every_pass: bool = bool(
             cfg.tul is not None and cfg.tul.fan_trigger_every_pass)
+        # `tul.fan_seed_noise` / `tul.fan_lineage` — BUILD-TIME constants, so `_tul_core`'s
+        # branches are Python-level and a model with the keys off traces the graph from
+        # before they existed.
+        self._fan_seed_noise: float = float(
+            cfg.tul.fan_seed_noise) if cfg.tul is not None else 0.0
+        self._fan_lineage: bool = bool(
+            cfg.tul is not None and cfg.tul.fan_lineage == "relation")
+        if self._fan_seed_noise > 0.0 and cfg.core_state_init != "prelude":
+            # The one refusal this knob needs. SCSE is NOT checked here and that is
+            # deliberate: a fan forces `slot_cells == fan_k >= 2`, and the register above
+            # already refuses SCSE at construction, so a check here would be unreachable
+            # code wearing the shape of a guard (tests/test_tul_fan_seed_noise.py pins the
+            # upstream refusal instead).
+            raise ValueError(
+                f"tul.fan_seed_noise > 0 with model.core_state_init="
+                f"{cfg.core_state_init!r}: that entry ALREADY replaces h_0 with a fresh "
+                f"N(0, core_state_init_std^2) draw per cell, so the sum of the two is an "
+                f"entry noise at an unnamed scale and neither knob means what it says. "
+                f"Use one.")
         # `tul.fan_repel_mode: "epi"` — the epiplexity diversity term's FROZEN random
         # reservoir (morph/model/tul_fan.py). Buffers, never parameters; a private
         # generator, so the base weights are byte-identical to the cosine arm's. `"cos"`
@@ -2073,6 +2135,9 @@ class MORPHTransformer(nn.Module):
         self.tul_code_proj: TULCodeProj | None = None
         self.tul_code_time: TULCodeTime | None = None
         self.tul_code_head: TULCodeHead | None = None
+        # rung P3 (`tul.code_target_source: sonar`): the read-only span cache. None on
+        # every other model, and the code path's `"e"` branch never looks at it.
+        self._sonar_cache = None
         # `code_phase` is a Python int the TRAINER sets per step (1 define the code, 2 learn
         # to guess it, 3 rollout). A trace-time branch, on purpose: a multiply-by-zero gate
         # would pay the thinker in phase 1 and the sampler in phases 1-2 (spec §6). Two
@@ -2155,6 +2220,24 @@ class MORPHTransformer(nn.Module):
             self._code_fm_scale = (float(_N) * math.log(float(cfg.tul.code_vq_codebook))
                                    if cfg.tul.code_discrete
                                    else cfm_null_floor(d, _M, cfg.tul.code_source_std))
+            # ── rung P3: the SONAR target (tul.code_target_source) ────────────────
+            # `"e"` builds NOTHING here and the forward is the one from before the knob.
+            # `"sonar"` opens the cache (read-only memmap; the index is ~8 bytes a span)
+            # and draws the FROZEN 1024 -> M·C lift. The lift is a NON-PERSISTENT buffer:
+            # it is a pure function of its seed, so a sonar arm's `state_dict()` is
+            # key-for-key identical to its `"e"` partner's and the two pair offline.
+            # Private generator inside `frozen_code_expansion`, so the trainable weights
+            # are byte-identical too. See morph/model/sonar_cache.py for why frozen.
+            if cfg.tul.code_target_source == "sonar":
+                from morph.model.sonar_cache import (SONAR_DIM, SonarSpanCache,
+                                                     frozen_code_expansion)
+                self._sonar_cache = SonarSpanCache(cfg.tul.code_sonar_cache)
+                _rng0 = torch.random.get_rng_state()
+                self.register_buffer(
+                    "tul_code_sonar_q",
+                    frozen_code_expansion(SONAR_DIM, _M * d, seed=_SONAR_LIFT_SEED),
+                    persistent=False)
+                torch.random.set_rng_state(_rng0)
             # W_prefix is BUILT (the parameter set matches the ruler, C1) and never applied
             # on a code model: the cells are scattered directly (spec §3.2).
             if self.tul is not None and self.tul.W_prefix is not None:
@@ -2180,6 +2263,40 @@ class MORPHTransformer(nn.Module):
             self.tul_code_proj = TULCodeProj(d, _M)
             if self.tul is not None and self.tul.W_prefix is not None:
                 self.tul.W_prefix.requires_grad_(False)
+        # ── tul.loop_denoise: each pass gets a noise level (LXTUL-P change 1) ─────
+        # Built INSIDE the code-target family (TULConfig refuses the key without
+        # `code_target` + `code_target_ref`), and both modules are RNG-neutral —
+        # `TULLoopDenoiseIn` draws nothing and `TULCodeTime` uses a private generator and
+        # puts the global stream back — so a denoise model's other weights are
+        # byte-identical to its ruler's.
+        #
+        # `tul_code_time` is the time embedding the flow THINKER already has; it is built
+        # here for the same job on a target model, which otherwise has no thinker at all
+        # (tests/test_tul_code_target.py pins `tul_code_time is None` on a plain target
+        # model, and that stays true — it is None unless loop_denoise is on).
+        self.tul_loop_denoise: TULLoopDenoiseIn | None = None
+        if cfg.tul is not None and cfg.tul.loop_denoise:
+            if cfg.scse_enabled:
+                raise NotImplementedError(
+                    "tul.loop_denoise under SCSE is not defined: the loop carries the "
+                    "DEVIATION, and the state a pass is handed here is an absolute noised "
+                    "code, not a deviation from an anchor (the db_loop precedent).")
+            if cfg.core_init_scale > 0.0:
+                raise NotImplementedError(
+                    "tul.loop_denoise with model.core_init_scale > 0: both decide the "
+                    "loop's entry state, and loop_denoise decides it at EVERY pass. Set "
+                    "core_init_scale to 0.")
+            if cfg.bptt_depth < cfg.max_depth:
+                raise ValueError(
+                    f"tul.loop_denoise needs FULL BPTT (model.bptt_depth "
+                    f"{cfg.bptt_depth} >= max_depth {cfg.max_depth}): the passes are "
+                    f"independent, so every realised pass carries its OWN per-pass term "
+                    f"and a truncated window would silently drop the early passes' terms "
+                    f"instead of truncating a chain.")
+            self.tul_loop_denoise = TULLoopDenoiseIn(d, int(cfg.tul.prefix_k))
+            if self.tul_code_time is None:
+                self.tul_code_time = TULCodeTime(
+                    d, t_embed_scale=cfg.tul.code_t_embed_scale)
         self.tul_vq: TULThoughtVQ | None = None
         if cfg.tul is not None and cfg.tul.vq_codes > 0:
             if cfg.n_core == 0:
@@ -4129,8 +4246,17 @@ class MORPHTransformer(nn.Module):
 
     def _tul_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
                   halt: bool = False, input_ids: Tensor | None = None,
-                  slot_depths: Tensor | None = None):
+                  slot_depths: Tensor | None = None,
+                  code_x0: Tensor | None = None, code_ok: Tensor | None = None):
         """Gather slots → masked per-slot depth loop → looped states (spec §3.3).
+
+        ``code_x0`` ``[B, S, M, C]`` / ``code_ok`` ``[B, S]`` (``tul.loop_denoise`` ONLY,
+        and REQUIRED there): the frozen reference encoder's code of each slot's next span,
+        computed by :meth:`_tul_code_target_encode` before this call. It is what every
+        pass is noised toward and trained to predict. ``None`` — every other arm — traces
+        the graph from before this parameter existed; a ``loop_denoise`` model called
+        without it RAISES rather than running the loop with the feature switched off (the
+        ``grad_pass`` rule).
 
         Returns ``(xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep)``:
         ``xn = input_norm(prelude)`` for the
@@ -4344,6 +4470,26 @@ class MORPHTransformer(nn.Module):
                 # `gather_valid` zeroes pad slots, and both projections are bias-free, so a
                 # pad has h* = 0 AND Delta_0 = 0 exactly — invariant S8.
                 h_star, h = _scse.entry(e)
+        # ── tul.fan_seed_noise: the K streams as K SAMPLES (LXTUL-P rung P1) ──
+        # One independent draw per (row, cell, channel), added to the ENTRY STATE and
+        # nowhere else. `e` is deliberately NOT touched: it is the per-pass injection
+        # source (`_apply_core_step` opens with `self.injection(h_in, e_in)`), so noise
+        # there would be one draw re-injected at every pass — a random per-stream trigger,
+        # not a sample. See `TULConfig.fan_seed_noise` for the scale rule (the field the
+        # seed lives in is `input_norm`'d, so the std IS unit per-channel RMS at 1.0).
+        #
+        # BEFORE `_db_traj` is seeded below, so `traj[0]` — what every fan instrument and
+        # the repulsion term call "the seed" — is the state the passes actually start from.
+        # fp32 draw then cast, so the sample's scale does not depend on the autocast dtype.
+        # Pads get exactly 0 (`gvalid`), the register's own rule. Train AND eval.
+        # `_fan_seed_noise == 0.0` is a Python-level constant: nothing here is traced and
+        # no RNG is consumed.
+        if self._fan_seed_noise > 0.0:
+            _seed_noise = torch.randn(
+                B, gidx.shape[1], h.shape[-1], device=h.device, dtype=torch.float32,
+                generator=self._fan_noise_gen) * self._fan_seed_noise
+            _seed_noise = _seed_noise * gvalid.unsqueeze(-1).to(_seed_noise.dtype)
+            h = self._apply_injection(h, _seed_noise.to(h.dtype))
         # Trajectory for the local losses: OUTER-graph states, one per iteration, returned
         # (never a side channel — the g_traj / ret_capture lesson). _db_traj[0] is the seed
         # state; entry t is the post-update state after iteration t-1.
@@ -4402,6 +4548,43 @@ class MORPHTransformer(nn.Module):
         # `depth-summing-instruments-hide-pass-trades` rule). SCSE is already refused at
         # `slot_cells > 1`, so no deviation carry can reach this list.
         _fan = self.tul_fan is not None
+        # ── tul.loop_denoise: each pass gets a noise level (LXTUL-P change 1) ─────
+        # A Python-level constant read once: `None` — every model without the key — traces
+        # the graph from before this existed, and nothing below it is built or drawn.
+        #
+        # ON, the loop stops being a chain at TRAIN. The state entering pass i is
+        # `z_{t_i} = (1 - t_i) z0 + t_i x0` built from the FROZEN code, NOT from pass
+        # i-1's output, and pass i predicts `x0` from it through `TULCodeProj`. The passes
+        # are INDEPENDENT and that is the mechanism: a pass with its own input and its own
+        # target has a job no earlier pass can have already done. This is exactly
+        # diffusion training with the core as the denoiser (LCM Eq. 16, x0-prediction,
+        # omega(t) = 1).
+        #
+        # AT EVAL the loop RUNS: pass 1 enters at pure noise and pass i+1 enters at the
+        # DDIM-style re-noising of the model's OWN prediction on the same straight line
+        # with the SAME z0, so the exit is a SAMPLE and two forwards with different z0
+        # give different exits. Train and eval therefore differ BY DESIGN (teacher forcing
+        # against rollout — the diffusion-forcing / LCM structure). The rollout gap is the
+        # named risk: LCM §2.3.2's epsilon-scaling against exposure bias is NOT built.
+        _dn = self.tul_loop_denoise
+        if _dn is not None:
+            if code_x0 is None or code_ok is None:
+                raise RuntimeError(
+                    "tul.loop_denoise needs `code_x0` / `code_ok` in _tul_core: the state "
+                    "that enters every pass is the frozen code noised to that pass's "
+                    "level. This caller passed none — pass them (see "
+                    "`_tul_code_target_encode`) rather than running the loop with the "
+                    "feature silently switched off.")
+            if _scse is not None or _db:
+                raise NotImplementedError(
+                    "tul.loop_denoise under SCSE / tul.db_loop is not defined (both decide "
+                    "what a pass receives; refused at construction too).")
+            if halt:
+                raise RuntimeError(
+                    "tul.loop_denoise with halt=True: the level grid is t_i = (i-1)/T_s "
+                    "over the slot's REALISED depth, and under halt the depth is not known "
+                    "until the gate stops the slot. Run the halt eval on a model without "
+                    "the denoise schedule, or force the depth with `slot_depths`.")
         if (_hz_loss or _hz_gate) and _scse is not None:
             raise NotImplementedError(
                 "tul.horizon_weight>0 / tul.pass_readout='gated' under SCSE is not "
@@ -4622,7 +4805,10 @@ class MORPHTransformer(nn.Module):
                     "tul.loop_reach with tul.slot_cells>1 under SCSE is not defined.")
             # ONE builder, shared with the think-once stack (`_tul_cond_apply`): a second
             # copy of this mask is how the two would drift into different relations.
-            _mask0, _same = slot_cell_relation(_n_slots, _m_cells, x.device, _reach)
+            # `lineage=` is `tul.fan_lineage: "relation"`: across slots a cell keeps its
+            # OWN stream index only, so the K streams are K channels along the slot axis.
+            _mask0, _same = slot_cell_relation(_n_slots, _m_cells, x.device, _reach,
+                                               lineage=self._fan_lineage)
             # With a reach budget the later core layers are position-local exactly as the
             # reach arm's are, except that "position" is the SLOT: a cell keeps its own
             # slot's cells, which is what makes the register a register and not M
@@ -4798,6 +4984,28 @@ class MORPHTransformer(nn.Module):
         # `fan_k == 0`, and `fan_k > 0` forces `slot_cells == fan_k > 1`, so the register
         # is always built when this is not None).
         _trig = _reg_term if self._fan_trigger_every_pass else None
+        # ── tul.loop_denoise: ONE source draw per slot, and the rollout's state ───
+        # `z0` is drawn ONCE per forward and SHARED by a slot's passes, so the slot walks
+        # ONE straight line rather than a fresh line per level; it is shared by the slot's
+        # M cells too (one code per span). Masked by `slot_valid`, so a pad enters every
+        # pass at exactly 0 — the zero `gather_valid` would have given it — instead of
+        # entering at noise.
+        #
+        # It is drawn at EVAL as well as at train: at eval it IS the sample's randomness
+        # (`_NoiseInit`'s precedent — that entry draws on every call too). Off the knob
+        # nothing is drawn and the RNG stream is untouched.
+        #
+        # `_dn_src` is what the NEXT pass is noised toward: the frozen code at train
+        # (teacher forcing, every pass) and the model's own previous prediction at eval
+        # (the DDIM-style rollout). It is rebound inside the loop at eval only.
+        _dn_z0 = _dn_src = None
+        _dn_terms: list[Tensor] = []
+        _dn_stats: dict[str, Tensor] = {}
+        if _dn is not None:
+            _dn_z0 = torch.randn(code_x0.shape, device=code_x0.device,
+                                 dtype=torch.float32) * layout.slot_valid.view(
+                                     *layout.slot_valid.shape, 1, 1).float()
+            _dn_src = code_x0.float()
         for t in range(total_iters):
             active = alive if halt else (depths > t)               # [B, S]
             _sc = self.tul_stage_cond.stage_embed(iter_stage_value(t, x.device)) \
@@ -4829,6 +5037,42 @@ class MORPHTransformer(nn.Module):
             # through the live e/injection (ONE core application), never through h. The
             # retention state is detached below for the same reason.
             _h_in = h.detach() if _db else h
+            # ── tul.loop_denoise: THE ENTRY OF THIS PASS ──────────────────────────
+            # `_h_in` is REPLACED, not added to: the pass's input is the noised code and
+            # not the carry. At train that is the whole mechanism (the passes are
+            # independent, so each has a job); at eval `_dn_src` holds the previous pass's
+            # own prediction, so the entries form the DDIM chain.
+            #
+            # PLACED HERE — before the trigger, the chain, the grad-pass feature and the
+            # gain hinge — for the reason every one of those states at its own site: the
+            # hinge probes the map at `_h_in`, and the entry IS part of the map this arm
+            # runs. It follows that on a denoise arm `gain_est`, `loop/core_gain*`,
+            # `loop/delta_*`, `loop/eff_rank`, `fixed_point` and `pass_residual` all read
+            # an independently noised operating point at train and are NOT comparable with
+            # any other arm's. Named in TULConfig.loop_denoise's doc block.
+            #
+            # The LEVEL reaches the pass through `TULCodeTime`, at the injection seam the
+            # fan's trigger uses, so pass i is not pass 1 with a different input. The
+            # embedding's last layer is zero-init, so at step 0 the level term is exactly
+            # 0 and the conditioning starts inert — the ENTRY, however, is already the
+            # noised code, so a denoise arm is NOT bit-identical to its ruler at step 0.
+            if _dn is not None:
+                _lvl = loop_denoise_levels(depths, t, self.cfg.tul.loop_denoise_grid)
+                _z_t = loop_denoise_interp(_dn_z0, _dn_src, _lvl)      # [B, S, M, C] fp32
+                _h_in = _dn(_z_t.to(h.dtype), layout.slot_valid)       # [B, S, C]
+                if self._is_hc:
+                    _h_in = _h_in.unsqueeze(2).expand(-1, -1, self._n_streams,
+                                                      -1).contiguous()
+                _h_in = self._apply_injection(
+                    _h_in, self.tul_code_time(_lvl).to(_h_in.dtype))
+                if self._denoise_capture is not None:
+                    # The test hook (the `_trigger_capture` pattern). Detached, so
+                    # attaching it cannot change a gradient; `None` by default, so it
+                    # traces out.
+                    self._denoise_capture.append({
+                        "t": t, "level": _lvl.detach(), "z0": _dn_z0.detach(),
+                        "src": _dn_src.detach(), "z_t": _z_t.detach(),
+                        "entry": _h_in.detach()})
             # ── tul.fan_trigger_every_pass ────────────────────────────────────────
             # THE RE-INJECTION, at the START of every pass after the first. `t` counts
             # from 0, so `t > 0` is "pass 2 onwards": pass 1 already got the term through
@@ -5147,6 +5391,50 @@ class MORPHTransformer(nn.Module):
                     _rel = (_fn - _fo).pow(2).sum(-1) / (_fd.pow(2).sum(-1) + 1e-6)   # [B, S]
                     _fp_terms.append(_rel[_fin])
 
+            # ── tul.loop_denoise: THIS PASS'S PREDICTION, AND ITS TERM ────────────
+            # Read off the SAME post-step state the exit is read off — after the
+            # renorm, the gain clip and the recurrence gate, immediately before the
+            # `torch.where` that freezes finished slots. That is what makes a slot's LAST
+            # realised pass's prediction EQUAL the exit cell `_tul_code_target_write`
+            # projects, which is why `code_target_weight` must be 0 on this arm: the exit
+            # term is already the last entry of this sum.
+            #
+            # The mask is `active & valid` (train: `& ok`, the slots that HAVE a next
+            # span): a slot whose depth is spent contributes to no later pass, and at
+            # train the row's tail slot has no code to be graded against. At eval the mask
+            # is `slot_valid`, the open-slot rule of the write.
+            #
+            # The TERM is training-only and only on a pass inside the BPTT window (full
+            # BPTT is required at construction, so `n_nograd` is 0 — the guard is kept
+            # where it is relied on). At eval no term is built and the prediction exists
+            # only to be re-noised into the next pass's entry.
+            if _dn is not None:
+                _dn_m = active & (code_ok if self.training else layout.slot_valid)
+                _pred_t = self.tul_code_proj(self._readout(h_new), _dn_m)
+                if self._denoise_capture is not None:
+                    # Completed here, on the entry dict this pass appended above: the
+                    # prediction is what the eval rollout re-noises, and a test cannot see
+                    # it any other way (only the LAST pass's survives into the write).
+                    self._denoise_capture[-1]["pred"] = _pred_t.detach()
+                    self._denoise_capture[-1]["mask"] = _dn_m.detach()
+                if self.training and t >= n_nograd:
+                    _l_t, _c_t, _n_t = code_target_regression(_pred_t, code_x0, _dn_m)
+                    _dn_terms.append(_l_t)
+                    with torch.no_grad():
+                        _dn_stats[f"loop_denoise_l2_t{t}"] = _l_t.detach()
+                        _dn_stats[f"loop_denoise_cos_t{t}"] = _c_t
+                        _dn_stats[f"loop_denoise_level_t{t}"] = (
+                            (_lvl * _dn_m.float()).sum()
+                            / _dn_m.float().sum().clamp(min=1.0)).detach()
+                if not self.training:
+                    # THE ROLLOUT: pass t+1 is noised toward THIS pass's prediction, on the
+                    # same line and with the same z0. Slots that are finished keep their
+                    # last prediction as the source; it is never read again, because their
+                    # `active` is False from here on.
+                    # DETACHED: no term is built at eval, and a live chain across the
+                    # rollout would hold every pass's graph for nothing.
+                    _dn_src = torch.where(
+                        _dn_m.view(*_dn_m.shape, 1, 1), _pred_t.detach().float(), _dn_src)
             h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
             if _db_traj is not None:
                 _db_traj.append(h)
@@ -5195,6 +5483,14 @@ class MORPHTransformer(nn.Module):
             # than returned for the `_loop_gradpass` reason: this function's return tuple
             # is unpacked positionally by the probes and the tests.
             self._loop_carry_stats = _carry_stats
+        if _dn is not None and _dn_terms:
+            # The per-pass sum, stashed for `_forward_tul` to fold into `groups` at the
+            # SAME seam `code_target` is folded (and NOT through `_core_aux`, which the
+            # code-only path never consumes). LCM's omega(t) = 1: each realised pass gets
+            # weight 1, so this is a plain sum of the per-pass means, and the reported
+            # `loop_denoise` is exactly the sum of the `loop_denoise_l2_t{t}` keys.
+            self._loop_denoise = {"loss": torch.stack(_dn_terms).sum(),
+                                  "stats": _dn_stats}
         # The `disc` critic needs the SAME context at its own training site, which sits
         # after the coda (its label is the coda's CE). Stashed rather than returned for the
         # `_loop_gradpass` reason: it is a detached tensor built OUTSIDE every checkpointed
@@ -5497,12 +5793,78 @@ class MORPHTransformer(nn.Module):
             tape[:, s] = code_rmsnorm(zk[:, s]) * ok[:, s].view(B, 1, 1).float()
         return tape
 
+    @torch.compiler.disable
+    def _sonar_target(self, input_ids: Tensor, layout: SlotLayout, ok: Tensor,
+                      dtype: torch.dtype) -> Tensor:
+        """Rung P3: slot ``s``'s cells ``[B, S, M, C]`` from SONAR's embedding of span ``s+1``.
+
+        The key is the span's TOKEN IDS (:func:`~morph.model.sonar_cache.span_token_hash`),
+        cut by the packer's own bag ids — the SAME span ``TULCodeEncoder`` pools, so a
+        ``sonar`` arm and its ``"e"`` partner aim at the same object in two spaces. The
+        1024-d vector is lifted by the frozen orthogonal ``tul_code_sonar_q`` and
+        RMS-normed per cell, so a SONAR cell and an E cell carry the same statistic and the
+        coda cannot tell them apart by scale.
+
+        A MISS RAISES, naming the span's first token ids. Nothing is filled in: a zero row
+        would be a perfectly learnable target direction for that slot and would poison the
+        arm with no symptom.
+
+        Cost: one device→host copy of ``input_ids`` and the two layout masks per forward,
+        then a ``B·S`` numpy loop and a ``searchsorted``. Measured at B=6, S=64 this is
+        milliseconds against a step in the hundreds; it is NOT free of a sync, and that is
+        the price of keeping the key in token space.
+        """
+        from morph.model.sonar_cache import next_span_hashes, span_hashes
+        if input_ids is None:
+            raise ValueError(
+                "tul.code_target_source='sonar' needs `input_ids` at the code seam: the "
+                "target is keyed by the span's token ids and the layout alone does not "
+                "carry them.")
+        cache = self._sonar_cache
+        if cache is None:
+            raise RuntimeError("_sonar_target called on a model with no SONAR cache.")
+        B, S = ok.shape
+        M, C = int(self.cfg.tul.prefix_k), self.cfg.d_model
+        ids = input_ids.detach().to("cpu", torch.int64).numpy()
+        bag = layout.bag_id.detach().to("cpu", torch.int64).numpy()
+        sm = layout.slot_mask.detach().to("cpu").numpy()
+        h, n_tok, span_ids = span_hashes(ids, bag, sm, S)
+        tgt, has = next_span_hashes(h, n_tok)
+        okn = ok.detach().to("cpu").numpy()
+        if not bool((okn == (okn & has)).all()):
+            # E calls a slot valid exactly when its next span holds a token; if the two
+            # disagree the packer's bag layout and E's pooling have drifted apart, and a
+            # target would be silently read for a slot E never encodes.
+            raise RuntimeError(
+                "the SONAR span cut and TULCodeEncoder disagree about which slots have a "
+                "next span; the packer's bag layout changed.")
+        flat = np.flatnonzero(okn.reshape(-1))
+        out = torch.zeros(B * S, M * C, device=ok.device, dtype=torch.float32)
+        if flat.size:
+            rows = cache.lookup(tgt.reshape(-1)[flat])
+            bad = np.flatnonzero(rows < 0)
+            if bad.size:
+                j = int(flat[int(bad[0])])
+                b, s = divmod(j, S)
+                first = span_ids[b][s + 1][:16].tolist()
+                raise KeyError(
+                    f"SONAR cache MISS for {bad.size} of {flat.size} spans in this batch "
+                    f"(cache {cache.path}, {cache.n_rows} rows). First miss: row {b} slot "
+                    f"{s}, span {s + 1}, key {int(tgt[b, s])}, first token ids {first}. The "
+                    f"cache was built from a different stream, config or packer — rebuild "
+                    f"it with `scripts/sonar_span_cache.py` for THIS config and step count.")
+            vec = torch.from_numpy(cache.take(rows)).to(ok.device, torch.float32)
+            out[torch.as_tensor(flat, device=ok.device, dtype=torch.long)] = \
+                vec @ self.tul_code_sonar_q.to(torch.float32).t()
+        z = code_rmsnorm(out.view(B, S, M, C)) * ok.view(B, S, 1, 1).float()
+        return z.to(dtype)
+
     def _tul_code_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
                        code_mode: str | None, code_steps: int | None, plan_mode: str,
                        code_seed: int | None = None,
                        code_given: Tensor | None = None,
                        code_given_mask: Tensor | None = None,
-                       span_scorer=None):
+                       span_scorer=None, input_ids: Tensor | None = None):
         """The code branch of :meth:`_forward_tul` (spec §4).
 
         ``span_scorer(cells) -> [B, S]``: the coda's CE on slot s's NEXT span when it reads
@@ -5524,6 +5886,18 @@ class MORPHTransformer(nn.Module):
         xn, e, inj = self._tul_code_seed(x, x0, bigram_emb, layout)
         xs = xn.mean(dim=2) if self._is_hc else xn
         z, ok = self.tul_code_enc(xs, layout)                          # [B, S, M, C], [B, S]
+        if self._sonar_cache is not None:
+            # ── rung P3: the code IS SONAR's embedding of the next span ─────────────
+            # ONE seam. Everything below reads `z` — the flow target, the cell the coda
+            # gets in phases 1-2, `code_ca`'s truth, the `encoder` eval mode behind
+            # `val/ce_tf`, the rank instruments — so swapping it here swaps all of them at
+            # once and none of them can be left pointing at E by accident. E's own output
+            # is DISCARDED; E keeps running because its `ok` is the validity mask (a slot
+            # whose next span holds no token) and because its parameters must stay in the
+            # checkpoint for the "e" partner to pair with. E therefore gets no gradient on
+            # this arm — see `TULConfig.code_target_source` for why that is the design and
+            # not an oversight.
+            z = self._sonar_target(input_ids, layout, ok, z.dtype)
         B, S = ok.shape
         if span_scorer is not None:
             span_scorer.bind(xn)
@@ -6510,12 +6884,54 @@ class MORPHTransformer(nn.Module):
             stats["mux_n_supervised"] = float(n_sup)
         return loss
 
+    def _tul_code_target_encode(self, xn: Tensor | None, layout: SlotLayout,
+                                input_ids: Tensor | None = None):
+        """``(z_tgt [B, S, M, C], ok [B, S])`` — the FROZEN code of each slot's next span.
+
+        Lifted verbatim out of :meth:`_tul_code_target_write` so ``tul.loop_denoise`` can
+        compute the target BEFORE the loop runs (the noised entry of every pass is built
+        from it) and hand the same tensors back to the write, instead of paying for a
+        second reference forward. Off ``loop_denoise`` the write still calls this itself
+        and the path is the one it has always been.
+
+        With ``tul.code_target_ref`` the whole front comes from the frozen twin (E is
+        frozen but its INPUT is not: it pools the live prelude, and on any arm whose front
+        trains the codes collapse — own cosine 0.61 -> 0.99 by step 3000, oracle CE 13.1
+        nats; docs/tul-code-spec.md §17.1). The twin runs its OWN ``_tul_front`` with its
+        OWN TG kwargs (``instruments-must-use-the-models-tg-kwargs``: a bare ``_tul_front``
+        scored strict arms from an unrestricted prelude once already), so ``input_ids`` is
+        required there and ``xn`` is not read at all.
+        """
+        ref = self.__dict__.get("_code_ref")
+        with torch.no_grad():
+            if ref is None:
+                if xn is None:
+                    raise RuntimeError(
+                        "_tul_code_target_encode without tul.code_target_ref needs `xn`: "
+                        "E pools THIS forward's own prelude states.")
+                xs = xn.mean(dim=2) if self._is_hc else xn
+                return self.tul_code_enc(xs, layout)          # [B, S, M, C], [B, S]
+            if input_ids is None:
+                raise RuntimeError(
+                    "tul.code_target_ref needs input_ids at the code-target seam: the "
+                    "reference recomputes the front itself and cannot reuse `xn`.")
+            _fkw, _freset, _, _ = ref._tul_tg_kwargs(layout)
+            _rx, _, _ = ref._tul_front(input_ids, layout, attn_kwargs=_fkw,
+                                       ret_reset_mask=_freset)
+            _rxn = ref.input_norm(_rx)
+            return ref.tul_code_enc(_rxn.mean(dim=2) if ref._is_hc else _rxn, layout)
+
     def _tul_code_target_write(self, h_slots: Tensor, xn: Tensor, db_traj, depths: Tensor,
                                layout: SlotLayout, L: int, plan_mode: str,
                                code_mode: str | None, code_given: Tensor | None,
                                code_given_mask: Tensor | None,
-                               input_ids: Tensor | None = None):
+                               input_ids: Tensor | None = None,
+                               z_tgt: Tensor | None = None, ok: Tensor | None = None):
         """``tul.code_target`` (spec §17): the cells the coda reads, and the term.
+
+        ``z_tgt`` / ``ok`` (``tul.loop_denoise``): the frozen code already computed by
+        :meth:`_tul_code_target_encode` before the loop ran. ``None`` — every other arm —
+        computes it here, exactly as before.
 
         Returns ``(values, cells, z, loss, stats, grade_loss, grade_stats)``: ``z`` is the
         frozen encoder's code of THIS row's spans (``out["code_z"]`` at eval, what the
@@ -6546,30 +6962,10 @@ class MORPHTransformer(nn.Module):
         arm's depth question, and this is where it is read.
         """
         tc = self.cfg.tul
-        ref = self.__dict__.get("_code_ref")
-        with torch.no_grad():
-            if ref is None:
-                xs = xn.mean(dim=2) if self._is_hc else xn
-                z_tgt, ok = self.tul_code_enc(xs, layout)                 # [B, S, M, C], [B, S]
-            else:
-                # tul.code_target_ref: E is frozen but its INPUT is not — it pools the
-                # prelude's states of the next span, and on any arm where the prelude or
-                # the embeddings train those states drift and E's codes collapse (measured
-                # 2026-09-17: own cosine 0.61 -> 0.99, shuffled 0.56 -> 0.98 by step 3000).
-                # So the whole front comes from the frozen twin, built with the twin's OWN
-                # TG kwargs (`instruments-must-use-the-models-tg-kwargs`: a bare
-                # `_tul_front` scored strict arms from an unrestricted prelude once
-                # already). `input_ids` is required here and the config check guarantees it.
-                if input_ids is None:
-                    raise RuntimeError(
-                        "tul.code_target_ref needs input_ids at the code-target seam: the "
-                        "reference recomputes the front itself and cannot reuse `xn`.")
-                _fkw, _freset, _, _ = ref._tul_tg_kwargs(layout)
-                _rx, _, _ = ref._tul_front(input_ids, layout, attn_kwargs=_fkw,
-                                           ret_reset_mask=_freset)
-                _rxn = ref.input_norm(_rx)
-                z_tgt, ok = ref.tul_code_enc(
-                    _rxn.mean(dim=2) if ref._is_hc else _rxn, layout)
+        if z_tgt is None:
+            z_tgt, ok = self._tul_code_target_encode(xn, layout, input_ids)
+        elif ok is None:
+            raise ValueError("_tul_code_target_write: a given z_tgt needs its `ok` mask")
         # THE OPEN SLOT (2026-09-17, measured). `ok` is `code_target_valid`: False for a
         # row's LAST valid slot, which has no next span IN THE LAYOUT. At GENERATION that
         # slot is the OPEN one — the span the coda is about to write — so masking the
@@ -8193,6 +8589,9 @@ class MORPHTransformer(nn.Module):
         # loop runs unchanged, so it is stashed there and consumed at the end of this
         # forward. A slot-loop or gain-penalty model never gets here (rejected at build).
         self._core_aux = None
+        # tul.loop_denoise's per-pass term: reset at the head of EVERY forward, so a
+        # label-less or eval forward can never hand the next training step a stale sum.
+        self._loop_denoise = None
         if self.tul is None:
             raise RuntimeError(
                 "forward(slot_layout=...) requires a model built with MORPHConfig(tul=...); "
@@ -8481,7 +8880,8 @@ class MORPHTransformer(nn.Module):
             xn, _cells, code_fm_loss, code_stats, h_slots, depths = self._tul_code_core(
                 x, x0, bigram_emb, layout, code_mode=code_mode, code_steps=code_steps,
                 plan_mode=plan_mode, code_seed=code_seed, code_given=code_given,
-                code_given_mask=code_given_mask, span_scorer=_scorer)
+                code_given_mask=code_given_mask, span_scorer=_scorer,
+                input_ids=input_ids)
             _code_cells_out = _cells
             g_traj = db_traj = gain_reg = mep_keep = None
             mux_loss, sigreg_loss, mux_stats = None, None, {}
@@ -8503,6 +8903,7 @@ class MORPHTransformer(nn.Module):
             x_coda = scatter_positions(xn, pos, values)
         else:
             fm_y = fm_geom = fm_ctx = None
+            _ct_z = _ct_ok = None      # tul.loop_denoise's hoisted target (see below)
             # ── faithful DiffusionBlocks dispatch (morph/model/iter_cond.py) ────────
             # "db1" is a TRAINING selector; the Euler ladder auto-fires at eval on a
             # sigma-conditioned model regardless of tul_step_mode (docstring above).
@@ -8523,9 +8924,17 @@ class MORPHTransformer(nn.Module):
                     x, x0, bigram_emb, layout)
                 gain_reg = mep_keep = None   # eval-only ladder: no penalty, no passes
             else:
+                # ── tul.loop_denoise: the target is computed BEFORE the loop ───────
+                # Every pass is noised toward the frozen code, so the code has to exist
+                # before the first pass. It is computed ONCE here and handed to BOTH the
+                # loop and the write below, so the reference forward is paid for once.
+                # `None` on every other arm, and the write then computes it itself exactly
+                # as it always has.
+                if self.tul_loop_denoise is not None:
+                    _ct_z, _ct_ok = self._tul_code_target_encode(None, layout, input_ids)
                 xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep = self._tul_core(
                     x, x0, bigram_emb, layout, halt=halt, input_ids=input_ids,
-                    slot_depths=slot_depths)
+                    slot_depths=slot_depths, code_x0=_ct_z, code_ok=_ct_ok)
             # ── the Thought Register (tul.slot_cells) ─────────────────────────────
             # `_tul_core` returns the compact CELL axis, [B, S*M, …]. M == 1 — every model
             # before the knob — leaves `_reg_cells` None and this block traces out.
@@ -8883,7 +9292,8 @@ class MORPHTransformer(nn.Module):
                  code_target_stats, code_grade_loss, code_grade_stats
                  ) = self._tul_code_target_write(h_slots, xn, db_traj, depths, layout, L,
                                                  plan_mode, code_mode, code_given,
-                                                 code_given_mask, input_ids)
+                                                 code_given_mask, input_ids,
+                                                 z_tgt=_ct_z, ok=_ct_ok)
                 h_slots = self._tul_plan_ablate(h_slots, layout, plan_mode)
             elif _reg_cells is not None and (self.tul_fan is None
                                              or self.tul_fan.mode == "all"):
@@ -9158,6 +9568,20 @@ class MORPHTransformer(nn.Module):
             _tw = tc.code_target_weight * code_target_loss
             groups["code_target_weighted"] = _tw.detach()
             groups["loss"] = groups["loss"] + _tw
+        _dn_out = self._loop_denoise
+        if _dn_out is not None and groups is not None:
+            # tul.loop_denoise's per-pass sum. Same contract as `code_target_weighted`:
+            # the WEIGHTED term is exposed so train.py subtracts it and train/loss and the
+            # val loss stay the MODEL's CE. `code_target_weight` is 0 on this arm by
+            # construction, so `code_target_weighted` is an exact 0 and this is the only
+            # term the loop trains on.
+            groups = dict(groups)
+            groups["loop_denoise"] = _dn_out["loss"].detach()
+            for _k, _v in _dn_out["stats"].items():
+                groups[_k] = _v
+            _dw = tc.loop_denoise_weight * _dn_out["loss"]
+            groups["loop_denoise_weighted"] = _dw.detach()
+            groups["loss"] = groups["loss"] + _dw
         if code_grade_loss is not None and groups is not None:
             # The graded-continuation term (tul.code_grade; spec §17.2). Same contract as
             # `code_target_weighted`: the WEIGHTED term is exposed so train.py subtracts it
@@ -9954,8 +10378,15 @@ class MORPHTransformer(nn.Module):
                     "slot_norm_mean": float(_rows.norm(dim=-1).mean()) if _rows.numel() else 0.0,
                     "slot_component_std": float(_rows.std()) if _rows.numel() > 1 else 0.0,
                     "slot_component_mean": float(_rows.mean()) if _rows.numel() else 0.0}
+        # tul.loop_denoise: the loop's entry is the frozen code noised to each pass's
+        # level, so this probe has to hand it the same target the trainer's forward does.
+        # `None` on every other arm — `_tul_core` then traces the graph it always has.
+        _pz = _pok = None
+        if self.tul_loop_denoise is not None:
+            _pz, _pok = self._tul_code_target_encode(None, layout, input_ids)
         _xn, h_slots, _d, _g, *_ = self._tul_core(x, x0, bigram, layout,
-                                                 input_ids=input_ids)
+                                                 input_ids=input_ids,
+                                                 code_x0=_pz, code_ok=_pok)
         # ── the think-once stack (tul.cond_layers) ───────────────────────────────
         # This probe's contract is "the WRITTEN slot states, read at the point the coda
         # reads them". On a `cond_layers` model the coda reads the STACK's output, so the
@@ -10273,7 +10704,11 @@ class MORPHTransformer(nn.Module):
         """
         akw = None
         if m_cells > 1:
-            allow, _same = slot_cell_relation(n_slots, m_cells, h_slots.device)
+            # SAME `lineage=` as the loop's stage, from the SAME build-time constant: a
+            # stack that mixed the streams across slots while the loop kept them apart
+            # would be a second relation, which is exactly what one builder exists to stop.
+            allow, _same = slot_cell_relation(n_slots, m_cells, h_slots.device,
+                                              lineage=self._fan_lineage)
             akw = {"tg_relation": allow}
         for layer in self.tul_cond:
             h_slots = layer(h_slots, attn_kwargs=akw)

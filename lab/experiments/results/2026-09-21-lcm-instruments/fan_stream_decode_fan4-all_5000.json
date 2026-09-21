@@ -1,0 +1,102 @@
+{
+ "arm": "fan4-all",
+ "config": "tul_slot_spandec_strict_fan4_all",
+ "ckpt": "/mnt/bigdata/morph-instruments/slot-spandec-strict-fan4-all_step_5000.pt",
+ "step": 5000,
+ "rows": 32,
+ "batch": 2,
+ "depth": 6,
+ "fan_k": 4,
+ "within_stream": 0,
+ "token_state_dropout": 0.15,
+ "embedding": "mean-pooled prelude states (no E on this arm)",
+ "n_spans": 1680,
+ "n_rows": 32,
+ "n_tokens": 33094.0,
+ "morph_module": "/mnt/bigdata/morph-instruments/MORPH-all/morph",
+ "identity_check_max_abs": 0.0,
+ "parity_check_mismatched_tokens": 0,
+ "bootstrap": {
+  "between_dist": {
+   "point": 0.47428809185637466,
+   "lo": 0.46011788957093525,
+   "hi": 0.48892871708115615,
+   "n_units": 32,
+   "n_boot": 1000,
+   "level": 0.95
+  },
+  "within_dist": {
+   "point": 0.24814859858542707,
+   "lo": 0.24046451857919546,
+   "hi": 0.2553972806794039,
+   "n_units": 32,
+   "n_boot": 1000,
+   "level": 0.95
+  },
+  "distinct_all": {
+   "point": 0.8994047619047619,
+   "lo": 0.8784324770892529,
+   "hi": 0.9192985620770815,
+   "n_units": 32,
+   "n_boot": 1000,
+   "level": 0.95
+  },
+  "pair_distinct": {
+   "point": 0.9770833367038341,
+   "lo": 0.9723202767556777,
+   "hi": 0.9813151883280686,
+   "n_units": 32,
+   "n_boot": 1000,
+   "level": 0.95
+  },
+  "within_distinct_all": {
+   "point": 0.7511904761904762,
+   "lo": 0.7262091967357389,
+   "hi": 0.7762217213234971,
+   "n_units": 32,
+   "n_boot": 1000,
+   "level": 0.95
+  },
+  "within_pair_distinct": {
+   "point": 0.9113095297345093,
+   "lo": 0.8999783086378208,
+   "hi": 0.9239583671888465,
+   "n_units": 32,
+   "n_boot": 1000,
+   "level": 0.95
+  },
+  "first_agree": {
+   "point": 0.7226190476190476,
+   "lo": 0.6910442600276625,
+   "hi": 0.7538658964751934,
+   "n_units": 32,
+   "n_boot": 1000,
+   "level": 0.95
+  },
+  "within_first_agree": {
+   "point": 0.6607142857142857,
+   "lo": 0.6354806670869787,
+   "hi": 0.6851976531278744,
+   "n_units": 32,
+   "n_boot": 1000,
+   "level": 0.95
+  },
+  "between_dist-within_dist": {
+   "point": 0.2261394932709476,
+   "lo": 0.21168911601046678,
+   "hi": 0.24168941674698374,
+   "n_units": 32,
+   "n_boot": 1000,
+   "level": 0.95
+  }
+ },
+ "between_over_within": {
+  "point": 1.911306751519281,
+  "lo": 1.837068989980423,
+  "hi": 1.9877442641355774,
+  "n_units": 32,
+  "n_boot": 1000,
+  "level": 0.95
+ },
+ "wall_clock_s": 2847.4320175647736
+}

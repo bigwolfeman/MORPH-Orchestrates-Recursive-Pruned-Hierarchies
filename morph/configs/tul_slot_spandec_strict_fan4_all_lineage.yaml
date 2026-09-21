@@ -1,0 +1,34 @@
+# LXTUL-P rung P4 (PARTIAL): the K streams as K LINEAGES along the slot axis
+# (2026-09-21), one factor over the noise arm `tul_slot_spandec_strict_fan4_all_noise`.
+#
+# WHY. Winner persistence on fan4-all is P(k*_{n+1} = k*_n) 0.3039 [0.2854, 0.3250]
+# against a chance of 0.2676 [0.2623, 0.2752] - an excess of +0.036, "a thin base for
+# lineages" (the LXTUL-P note's Outcome). Stream identities persist a little more than
+# chance while nothing in the model connects stream k of one span to stream k of the next:
+# the loop's cell relation lets a cell of slot n+1 read EVERY cell of every earlier slot,
+# so the four streams re-mix at every span. `tul.fan_lineage: relation` narrows that half
+# of the relation to the own stream index, and nothing else: within a slot the register's
+# all-to-all relation is untouched.
+#
+# WHAT IS NOT IN THIS ARM, said here so the rung is not read as complete. The design's
+# filtering posterior - w_{n,k} ∝ w_{n-1,k}·exp(-l_{n,k}/tau) from the per-stream span CE
+# of span n, resampling the lineages at span n+1's seed - is NOT built, because in this
+# forward it is circular: `_tul_core` advances every slot's pass t together (one
+# `_apply_core_step` over `[B, S*M, *carrier, C]`), so slot n's exit state does not exist
+# when slot n+1's pass 1 runs, and `l_{n,k}` is not a loop quantity at all - it comes from
+# K CODA replays in `_tul_fan_all` AFTER the loop returns. See `TULConfig.fan_lineage`.
+# This arm therefore tests ONE half of P4: whether a per-stream channel across spans is
+# worth anything before any reweighting exists to sit on it.
+#
+# COST: no new parameter and no new draw. The mask is the same `[1, 1, S*M, S*M]` bool the
+# register already builds, with one AND term - the attention branch it feeds is unchanged.
+# Prereg: lab/experiments/planned/2026-09-21-lxtul-fan4-all-lineage.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_noise
+  - _self_
+
+tul:
+  fan_lineage: relation
+
+wandb:
+  name: slot-spandec-strict-fan4-all-lineage

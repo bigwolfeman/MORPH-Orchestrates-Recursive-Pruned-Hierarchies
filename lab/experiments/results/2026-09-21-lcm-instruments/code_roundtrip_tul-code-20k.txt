@@ -1,0 +1,69 @@
+tul-code-20k step 20000  rows=48 batch=3 k_main=8 k_one=1 max_span_tokens=32
+morph from /home/wolfe/morph-1eefe85/morph
+identity check (pinned == unpinned logits) max|d| = 0.000e+00
+parity check (even-only decode vs all-live) mismatched tokens = 0
+
+condition   slots   tokens   cos(zhat,ztrue)   cos(zre,zhat)   cos(zre,ztrue)   cos(zre,other)        gap = d_re - d_hat
+k8           2449    48489           +0.0984         +0.0763          +0.1040          +0.0614   -0.0056 [-0.0110, +0.0002]
+k1           2449    48489           +0.2221         +0.1943          +0.1089          +0.0707   +0.1132 [+0.1077, +0.1199]
+truth        2449    48489           +1.0000         +0.2913          +0.2913          +0.0942   +0.7087 [+0.6929, +0.7256]
+
+CHANCE for every cosine column: cos(z_true, another scored slot's z_true) = +0.1016 [+0.0942, +0.1091]
+A cos(zre, ztrue) at that level means the round trip kept NO slot identity.
+
+95 % row-block bootstrap on every column:
+  k8
+    cos_hat_true   +0.0984 [+0.0938, +0.1029]
+    cos_re_hat     +0.0763 [+0.0716, +0.0811]
+    cos_re_true    +0.1040 [+0.1001, +0.1081]
+    d_hat          +0.9016 [+0.8971, +0.9062]
+    d_re           +0.8960 [+0.8919, +0.8999]
+    move           +0.9237 [+0.9189, +0.9284]
+    gap            -0.0056 [-0.0110, +0.0002]
+    cos_true_other +0.1016 [+0.0942, +0.1091]
+    cos_re_other   +0.0614 [+0.0564, +0.0664]
+    d_re-d_hat     -0.0056 [-0.0110, +0.0002]
+  k1
+    cos_hat_true   +0.2221 [+0.2167, +0.2275]
+    cos_re_hat     +0.1943 [+0.1862, +0.2023]
+    cos_re_true    +0.1089 [+0.1044, +0.1136]
+    d_hat          +0.7779 [+0.7725, +0.7833]
+    d_re           +0.8911 [+0.8864, +0.8956]
+    move           +0.8057 [+0.7977, +0.8138]
+    gap            +0.1132 [+0.1077, +0.1199]
+    cos_true_other +0.1016 [+0.0942, +0.1091]
+    cos_re_other   +0.0707 [+0.0655, +0.0757]
+    d_re-d_hat     +0.1132 [+0.1077, +0.1199]
+  truth
+    cos_hat_true   +1.0000 [+1.0000, +1.0000]
+    cos_re_hat     +0.2913 [+0.2744, +0.3071]
+    cos_re_true    +0.2913 [+0.2744, +0.3071]
+    d_hat          -0.0000 [-0.0000, -0.0000]
+    d_re           +0.7087 [+0.6929, +0.7256]
+    move           +0.7087 [+0.6929, +0.7256]
+    gap            +0.7087 [+0.6929, +0.7256]
+    cos_true_other +0.1016 [+0.0942, +0.1091]
+    cos_re_other   +0.0942 [+0.0890, +0.0992]
+    d_re-d_hat     +0.7087 [+0.6929, +0.7256]
+
+decoded spans (first batch):
+  [truth] slot 0 row 0: ' The suspects were killed in the 1980s.\n\nThe 1980s, the 1980s,'
+  [truth] slot 1 row 0: 'riday.\n\nThe police said the suspects were not in the case.\n\nThe police said'
+  [truth] slot 2 row 0: '\n\nThe police said the incident was not a "no-fashioned" and said the incident was not in the case.\n\nThe'
+  [truth] slot 3 row 0: '\n\nThe police said the incident was not a "no-fashioned" and "the only way to get the murder of the pol'
+  [truth] slot 4 row 0: ', evacuate.'
+  [truth] slot 5 row 0: '\n\nThe police said the incident was not a "no-fashioned" and that the police had been "a little bit of a man'
+  [k8] slot 0 row 0: ' The result is that the 19th century, the 19th century, was a 19th century, and the '
+  [k8] slot 1 row 0: 'riday, the 2012-15 season.\n\nThe 2012-1'
+  [k8] slot 2 row 0: '\n\nThe 2012-19-19-19-19, the 1990s, was the'
+  [k8] slot 3 row 0: '\n\nThe 2012-19-19-19-19, the 1990s, was a '
+  [k8] slot 4 row 0: ' to the United States.'
+  [k8] slot 5 row 0: '\n\nThe 2012-19-19-19-19, the 1990s, was the first'
+  [k1] slot 0 row 0: ' The 2012-12-12-12-12-12-12-12-12-1'
+  [k1] slot 1 row 0: 'riday, the 2012-15-15 season.\n\nThe 201'
+  [k1] slot 2 row 0: '\n\nThe 2012-12-12-12-12-12-12-12-1'
+  [k1] slot 3 row 0: '\n\nThe 2012-19-year-old, who was a 20-year-old boy, was a 1'
+  [k1] slot 4 row 0: ' to the United States.'
+  [k1] slot 5 row 0: '\n\nThe 2012-12-12-12-12-12-12-12-12'
+
+wall clock 776 s

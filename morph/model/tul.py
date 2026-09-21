@@ -21,6 +21,7 @@ from torch import Tensor
 
 from .attention import RMSNorm
 from .tul_carry import LOOP_CARRY_MODES
+from .tul_denoise import LOOP_DENOISE_GRIDS
 from .tul_layout import SlotLayout
 
 __all__ = ["TULCenterExit", "TULConfig", "TULGate", "TULGateConfig", "TULGradPass",
@@ -385,6 +386,69 @@ class TULConfig:
     # function the trainer ran (the `grad_pass` / `slot_chain` rule).
     # Prereg: lab/experiments/planned/2026-09-21-lxtul-fan4-all-trig.md
     fan_trigger_every_pass: bool = False  # re-inject the per-stream trigger at passes 2..T
+    # ── `fan_seed_noise` (2026-09-21, the LXTUL-P note's rung P1) ─────────────────
+    # THE K STREAMS AS K SAMPLES. Each stream's SEED gets its own Gaussian draw
+    # `N(0, fan_seed_noise^2 I)` — independent per stream, per slot and per forward —
+    # added at the register's seam, after the trigger and before pass 1. The arm it is
+    # built for takes the diversity term OFF with it (`fan_repel_lambda: 0`, the
+    # instruments kept): `epivol` is the one diversity term that is NOT gamed (rank 2.82
+    # of 3) and the reader still cashes 0.018 of the oracle's gap, so a term the streams
+    # are TRAINED to satisfy gives the K states no reason to be four plausible
+    # continuations rather than four separated ones (`fan-diversity-terms-get-gamed`).
+    # Noise is the one source of distinctness that has no objective to game.
+    #
+    # THE SCALE, and why it is a fixed std. The seed lives in the `input_norm`'d field
+    # (`_tul_core` opens with `xn = self.input_norm(x)`, an RMSNorm whose per-channel RMS
+    # IS its learned scale, 1.0 at init), so the draw's std is the knob in that field's
+    # own units: `fan_seed_noise: 1.0` is unit per-channel RMS — a sample as large as the
+    # signal the prelude hands the loop; two streams then differ by RMS sqrt(2). A FIXED
+    # std, NOT a rescale of the live state's RMS: a rescale would correlate the K draws
+    # through one shared state norm and would shrink the sample spread exactly when a
+    # contracting map shrinks the state, which is the thing this rung asks about.
+    #
+    # WHERE IT IS ADDED, and what it is NOT. Into `h = core_init(e)`, the entry STATE —
+    # never into `e`. `e` is bound ONCE and handed to EVERY pass as the injection source
+    # (`_apply_core_step` opens with `self.injection(h_in, e_in)`), so noise in `e` would
+    # be the SAME draw re-injected at every pass: a per-stream constant bias, i.e. a
+    # random trigger, not a sample. Pads get exactly 0 (masked by `slot_valid`, the
+    # register's own rule). TRAIN AND EVAL alike, because the streams ARE samples and a
+    # deterministic eval would read a different model — the `_NoiseInit`
+    # (`model.core_state_init: "noise"`) precedent, which draws on every call as Parcae
+    # does. Refused WITH that entry (`MORPHTransformer.__init__`): the sum of the two is
+    # an entry noise at an unnamed scale. SCSE needs no check of its own — a fan forces
+    # `slot_cells >= 2` and the register already refuses SCSE.
+    # Prereg: lab/experiments/planned/2026-09-21-lxtul-fan4-all-noise.md
+    fan_seed_noise: float = 0.0          # per-stream seed-noise std, in the normed field
+    # ── `fan_lineage` (2026-09-21, the LXTUL-P note's rung P4 — PARTIAL) ──────────
+    # "off" is every model before this key and is bit-identical to it.
+    #
+    # "relation": the K streams become K LINEAGES along the slot axis. The loop's cell
+    # relation (`transformer.slot_cell_relation`) is narrowed so that ACROSS slots a cell
+    # reads only its own stream index — stream k of slot n+1 attends stream k of every
+    # earlier slot and no other stream — while WITHIN a slot the register's all-to-all
+    # relation is untouched. A lineage is then a separate channel through the loop
+    # instead of K states that re-mix at every span.
+    #
+    # WHAT IS NOT BUILT, AND WHY: the reweighting half of rung P4. The design wants
+    # `w_{n,k} ∝ w_{n-1,k} · exp(-l_{n,k}/tau)` from the per-stream span CE of span n,
+    # resampling the lineages at span n+1's seed. In THIS forward that is circular, not
+    # merely awkward:
+    #   * `_tul_core` advances every slot's pass t TOGETHER (`h` is `[B, S*M, *carrier,
+    #     C]` and ONE `_apply_core_step` moves all the cells), so slot n's EXIT state does
+    #     not exist when slot n+1's pass 1 runs;
+    #   * `l_{n,k}` is not a loop quantity at all. `MORPHTransformer._tul_fan_all` builds
+    #     it from K CODA replays (`_tul_fan_stream_write` -> `_back_region`) AFTER
+    #     `_tul_core` has returned, so the weight that would gate pass 1 is a function of
+    #     the coda's output, which is a function of the whole loop.
+    # The three non-circular readings were each rejected: the PREVIOUS step's table mixes
+    # rows (a weight learned on another document); a second full forward doubles the cost
+    # and still needs a loop before the loop; a slot-sequential loop is S times the
+    # sequential depth of the shipped one. So this knob stops at the relation, which IS
+    # causal, and the filtering posterior waits for a forward that is sequential over
+    # spans. Reading a span's OWN CE into its own seed would be the fitted-z trap
+    # (`fitted-z-used-the-answer`) and is not done here under any name.
+    # Prereg: lab/experiments/planned/2026-09-21-lxtul-fan4-all-lineage.md
+    fan_lineage: str = "off"             # "off" | "relation" (per-stream cross-slot channel)
     slot_id: int = 4                     # "<fim_pad>"; its LM-head logit is −inf (§3.1)
     token_state_dropout: float = 0.15    # Bowman word dropout on the coda input (§3.4)
     slot_mean_depth: int = 0             # 0 → cfg.mean_depth
@@ -857,6 +921,46 @@ class TULConfig:
     code_sub_p: float = 0.3              # LaDiR's substitution: a truth symbol the coda reads is
                                          # replaced by a uniform random one with this probability
     code_mask_schedule: str = "linear"   # unmasking schedule of the sampler: linear | cosine
+    # ── WHAT THE THINKER AIMS AT (rung P3 of LXTUL-P, 2026-09-21) ────────────────────
+    #
+    # "e" (the default, bit-identical to the tree before this knob): the flow target is E's
+    # own code of the next span — a VERBATIM reconstruction code of which the context
+    # explains 5-15 % (`lab/theory/lctul_euler_depth/`, `explained_of_residual_ratio`), so
+    # most of what the thinker is asked to produce is not there to be predicted.
+    #
+    # "sonar": the target is SONAR's 1024-d sentence embedding of that same span's TEXT
+    # (Meta's `text_sonar_basic_encoder`), read from a precomputed cache keyed by the
+    # span's TOKEN IDS (`morph/model/sonar_cache.py`, built by
+    # `scripts/sonar_span_cache.py`) and lifted to the thinker's [B, S, M, C] target by a
+    # FROZEN random orthogonal 1024 -> M*C map plus the same `code_rmsnorm` E's code gets.
+    # LCM's number for why a semantic target has more to learn: in SONAR space the true
+    # next sentence is retrievable among in-batch alternatives 75-80 % of the time (their
+    # Table 3 CA column; `docs/references/tul-latent-emission/lcm/2026-09-21-lcm-reading.md`
+    # sections 1 and 2). One factor over `tul_code_cfg_tlow`: the thinker, the noise
+    # schedule, guidance and the coda's read of the sampled code are unchanged.
+    #
+    # WHY THE LIFT IS FROZEN AND NOT TRAINED. A trained 1024 -> M*C map would let the
+    # target move with the model, which is the 2026-09-17 collapse
+    # (`frozen-encoder-on-live-front-is-not-a-fixed-target`: E frozen but its INPUT live,
+    # own cosine 0.61 -> 0.99 by step 3000, oracle CE 13.1 nats). The flow loss would fall
+    # by shrinking the target rather than by predicting it.
+    #
+    # E IS STILL BUILT AND STILL RUNS under "sonar" — its forward supplies the validity
+    # mask `ok` (a slot whose next span holds no token), and its parameters keep their
+    # names and shapes, so the checkpoint layout of a sonar arm is byte-identical to its
+    # "e" partner's and the two pair key for key.
+    #
+    # NOT HIDDEN, the one thing this knob does that its name does not say: the SONAR cells
+    # replace E's code at the seam, so EVERY reader of the code sees SONAR — the flow
+    # target, the cell the coda reads in phases 1-2, `code_ca`'s truth, the `encoder` eval
+    # mode behind `val/ce_tf`, and the rank instruments. E's own output is discarded and E
+    # therefore receives NO GRADIENT: a sonar arm does not train E, and E's parameters stay
+    # at their initialised (or loaded) values for the whole run. That is deliberate. The
+    # alternative — the coda trained on E's code while the thinker samples in SONAR space —
+    # would hand the coda an out-of-distribution cell at every eval and make `val/loss`
+    # unreadable, which is the number the rung is scored on.
+    code_target_source: str = "e"
+    code_sonar_cache: str | None = None  # directory holding index.npy + emb.f16.npy
     code_sigreg_lambda: float = 0.0      # LeJEPA (arXiv 2511.08544): SIGReg on E's code cells,
                                          # per cell index over the valid slots, pushing the code
                                          # distribution to N(0, I) (the collapse guard that lets
@@ -1598,6 +1702,61 @@ class TULConfig:
     # three extra coda passes and one extra prelude pass, which is why it is a knob
     # and not a default.
     eval_ablations: bool = False
+    # ── LXTUL-P change 1: EACH PASS HAS A JOB, A NOISE LEVEL (2026-09-21) ────────────
+    #
+    # WHY. Fourteen strict slot-loop arms read token K3-K6 inside [-0.0002, +0.002] and
+    # pass 1 does 89-95 % of the work. Every target tried is a DETERMINISTIC function of
+    # the past, and a deterministic target has a one-step optimum: nothing in the
+    # objective asks pass 2 to do what pass 1 could not
+    # (.agents/notes/proposed/architecture/
+    #  2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md, Part 2 change 1). LCM's
+    # denoising steps earn (MI rises with steps, their Figure 10) because each step
+    # RECEIVES a noise level and has the clean target AT that level as its own target.
+    #
+    # WHAT IT DOES. On a `code_target` + `code_target_ref` model (so a FROZEN target
+    # x0 = the reference encoder's rms-normed code of the next span exists per slot),
+    # the slot loop becomes a diffusion denoiser over its OWN passes:
+    #
+    #   * levels: pass i of a slot whose realised depth is T_s enters at t_i = (i-1)/T_s
+    #     on the straight line z_t = (1-t) z_0 + t x_0, z_0 ~ N(0, I) drawn ONCE per slot
+    #     (one line per slot) — `morph/model/tul_denoise.py`;
+    #   * AT TRAIN, teacher forcing, LCM's way: the state entering pass i is z_{t_i} built
+    #     from the FROZEN x0, NOT from pass i-1's output. The passes are INDEPENDENT; that
+    #     is exactly what gives each one a defined job. Each pass predicts x0 through the
+    #     existing TULCodeProj and is charged ||x0_hat_i - x0||^2 per cell (the
+    #     `code_target_loss: l2` form), summed over the realised passes at weight 1 each
+    #     (LCM's omega(t) = 1). This IS diffusion training with the core as the denoiser.
+    #   * AT EVAL the loop RUNS: pass 1 enters at pure noise, and pass i+1 enters at the
+    #     DDIM-style re-noising of the model's own prediction on the SAME line,
+    #     z_{t_{i+1}} = (1-t_{i+1}) z_0 + t_{i+1} x0_hat_i. The exit is a SAMPLE, and two
+    #     eval forwards with different z_0 give different exits.
+    #   * every pass RECEIVES its level: `TULCodeTime(t)` added at the injection seam the
+    #     fan's trigger uses, so pass i is not pass 1 with a different input.
+    #
+    # TRAIN AND EVAL DIFFER BY DESIGN (teacher forcing against rollout) — the
+    # diffusion-forcing / LCM structure. The rollout gap is the named risk: LCM §2.3.2
+    # uses epsilon-scaling against exposure bias and that is NOT built here.
+    #
+    # WHAT IS NOT COMPARABLE UNDER THIS ARM. Every per-pass instrument reads the state as
+    # it ENTERS each pass, and at train that state is an independently noised target, not
+    # the previous pass's output. `gain_est` / `gain_est_max` / `loop/core_gain*` /
+    # `loop/delta_ratio` / `loop/delta_mean` / `loop/eff_rank` / `loop/in_norm` /
+    # `fixed_point` / `fp_weighted` / `pass_residual` / `tul/code_target_cos_l{t}` and the
+    # cotangent readings therefore measure a different object here and must not be
+    # compared across arms. `tul/code_target_cos_l0` is worse than incomparable: it reads
+    # `core_init(e)`, the prelude entry, which under this key the loop NEVER uses — pass 1
+    # enters at pure noise. Read `loop_denoise_cos_t{t}` instead; it is the per-pass
+    # instrument of this arm and it reads the state each pass actually produced.
+    # `core_fixed_point_lambda` in particular is no longer a
+    # fixed-point term at train (it compares the outputs of two DIFFERENT inputs): the
+    # shipped config sets it to 0.
+    #
+    # Default off, and off is BIT-IDENTICAL (no module, no RNG draw, no branch).
+    loop_denoise: bool = False
+    loop_denoise_grid: str = "linear"    # the level grid; "linear" = t_i = (i-1)/T_s. One
+                                         # grid for now: a second grid is a second arm, and
+                                         # an unknown name raises here.
+    loop_denoise_weight: float = 1.0     # weight of the per-pass sum in the loss
 
     def __post_init__(self) -> None:
         # ── the loop carry (tul.loop_carry; morph/model/tul_carry.py) ─────────
@@ -1746,6 +1905,29 @@ class TULConfig:
                 "is the fan's per-stream trigger (TULSlotRegister's W_o(pooled) + P_cell), "
                 "and with no fan there is no register and no per-stream term — the knob "
                 "would be silently ignored. Set tul.fan_k >= 2 or drop the key.")
+        if self.fan_seed_noise < 0.0:
+            raise ValueError(
+                f"tul.fan_seed_noise is a standard deviation and must be >= 0, got "
+                f"{self.fan_seed_noise}")
+        if self.fan_seed_noise > 0.0 and self.fan_k == 0:
+            raise ValueError(
+                "tul.fan_seed_noise > 0 with tul.fan_k=0: the draw is PER STREAM at the "
+                "fan's seed, and with no fan there is one state per slot — the knob would "
+                "be an unnamed entry noise on the slot loop, which is a different arm "
+                "with its own key (model.core_state_init='noise'). Set tul.fan_k >= 2 or "
+                "drop the key.")
+        if self.fan_lineage not in ("off", "relation"):
+            raise ValueError(
+                f"tul.fan_lineage must be 'off' or 'relation', got {self.fan_lineage!r}. "
+                "The RESAMPLED/reweighted lineage (LXTUL-P rung P4) is deliberately not "
+                "implemented: the per-stream span CE that would set the weights is built "
+                "by the CODA after the loop returns, so gating pass 1 with it is circular "
+                "in a forward whose slots loop in parallel (see the field's doc block).")
+        if self.fan_lineage != "off" and self.fan_k == 0:
+            raise ValueError(
+                f"tul.fan_lineage={self.fan_lineage!r} with tul.fan_k=0: the lineages ARE "
+                "the fan's K streams and the relation it narrows is the CELL relation "
+                "only a register builds. Set tul.fan_k >= 2 or drop the key.")
         if self.fan_k == 0:
             _fan_orphan = [n for n, v in (("fan_repel_lambda", self.fan_repel_lambda > 0.0),
                                           ("fan_mix", self.fan_mix != "mean"),
@@ -1840,6 +2022,9 @@ class TULConfig:
                 f"{self.row_contrast_tau}")
         self._check_vq()
         self._check_code()
+        # BEFORE `_check_code_target`: a loop_denoise model that also breaks a code-target
+        # rule must be told about the key it actually set, not about a rule it inherited.
+        self._check_loop_denoise()
         self._check_code_target()
         self._check_code_grade()
         if self.prefix_source in ("trajectory", "entry_exit") and self.prefix_k < 2:
@@ -2703,9 +2888,15 @@ class TULConfig:
                   ("code_sigreg_lambda", 0.0),
                   ("code_discrete", False), ("code_vq_codebook", 512), ("code_vq_groups", 4),
                   ("code_vq_dim", 0), ("code_vq_beta", 0.25), ("code_vq_weight", 1.0),
-                  ("code_sub_p", 0.3), ("code_mask_schedule", "linear"))
+                  ("code_sub_p", 0.3), ("code_mask_schedule", "linear"),
+                  ("code_target_source", "e"), ("code_sonar_cache", None))
         if not self.code:
             _set = [n for n, dflt in _knobs if getattr(self, n) != dflt]
+            if self.loop_denoise and "code_t_embed_scale" in _set:
+                # tul.loop_denoise builds the SAME `TULCodeTime` module to hand each pass
+                # its noise level, so this knob is read there and is not an orphan. One
+                # home for the time basis rather than a parallel `loop_denoise_t_scale`.
+                _set.remove("code_t_embed_scale")
             if _set:
                 raise ValueError(
                     f"tul.{sorted(_set)} set with tul.code=false: no encoder or velocity "
@@ -2786,6 +2977,38 @@ class TULConfig:
                 "tul.code_xm_mode='noise' scores candidates by the flow loss itself; "
                 f"code_xm_select={self.code_xm_select!r} needs a full generation "
                 "(code_xm_mode='sample')")
+        # ── rung P3: WHAT THE THINKER AIMS AT (tul.code_target_source) ───────────────
+        if self.code_target_source not in ("e", "sonar"):
+            raise ValueError(
+                f"tul.code_target_source must be 'e' or 'sonar', got "
+                f"{self.code_target_source!r}")
+        if self.code_target_source == "sonar":
+            if not self.code_sonar_cache:
+                raise ValueError(
+                    "tul.code_target_source='sonar' needs tul.code_sonar_cache — the "
+                    "directory holding index.npy + emb.f16.npy that "
+                    "`scripts/sonar_span_cache.py` writes. There is no fallback: a missing "
+                    "cache must stop the run, not silently hand the thinker E's code back.")
+            if self.code_discrete:
+                raise ValueError(
+                    "tul.code_target_source='sonar' with tul.code_discrete=true: the "
+                    "discrete path quantises E's pooled vector and its denoiser's target "
+                    "is the SYMBOL, not a continuous code, so a SONAR vector has nowhere "
+                    "to go. Rung P3 is the CONTINUOUS flow thinker.")
+            if self.code_fm_weight == 0.0:
+                raise ValueError(
+                    "tul.code_target_source='sonar' with tul.code_fm_weight=0: there is no "
+                    "flow thinker to aim anywhere, so the knob would be a silent no-op.")
+            if self.code_target_lambda != 0.0:
+                raise ValueError(
+                    f"tul.code_target_source='sonar' with code_target_lambda="
+                    f"{self.code_target_lambda}: that knob lets the flow loss's gradient "
+                    "reach E, and under 'sonar' the target is a frozen cache E cannot "
+                    "move. Leave it at 0.")
+        elif self.code_sonar_cache:
+            raise ValueError(
+                f"tul.code_sonar_cache={self.code_sonar_cache!r} with "
+                f"code_target_source='e': nothing would read the cache.")
         if self.code_rollout_steps < 1 or self.code_infer_steps < 1:
             raise ValueError(
                 f"tul.code_rollout_steps / code_infer_steps must be >= 1, got "
@@ -2840,6 +3063,71 @@ class TULConfig:
                 "slot_depth_fixed): training runs one velocity pass per slot and eval runs "
                 "code_infer_steps Euler passes. Drop the depth knobs.")
 
+    def _check_loop_denoise(self) -> None:
+        """``tul.loop_denoise`` — each pass gets a noise level (LXTUL-P change 1)."""
+        if not self.loop_denoise:
+            if self.loop_denoise_grid != "linear" or self.loop_denoise_weight != 1.0:
+                raise ValueError(
+                    "tul.loop_denoise_grid / loop_denoise_weight set with "
+                    "tul.loop_denoise=false: no schedule and no per-pass term are built, "
+                    "so the knob(s) would be silently ignored.")
+            return
+        if self.loop_denoise_grid not in LOOP_DENOISE_GRIDS:
+            raise ValueError(
+                f"tul.loop_denoise_grid must be one of {list(LOOP_DENOISE_GRIDS)}, got "
+                f"{self.loop_denoise_grid!r}. A second grid is a second arm.")
+        if self.loop_denoise_weight < 0.0:
+            raise ValueError(
+                f"tul.loop_denoise_weight must be >= 0, got {self.loop_denoise_weight}")
+        if self.code_t_embed_scale <= 0.0:
+            raise ValueError(
+                f"tul.code_t_embed_scale must be > 0, got {self.code_t_embed_scale} "
+                f"(loop_denoise builds TULCodeTime with it)")
+        if self.tokens_through_core or self.loop_reads_tokens:
+            raise NotImplementedError(
+                "tul.loop_denoise needs the SLOT loop (tokens_through_core=false, "
+                "loop_reads_tokens=false): the noised state that enters a pass is a "
+                "slot's code, and on the paid loop the core also carries every token "
+                "position, which has no code and no target to be noised toward.")
+        if not self.code_target:
+            raise ValueError(
+                "tul.loop_denoise needs tul.code_target: the clean target x0 each pass is "
+                "trained to predict IS the frozen encoder's code of the next span, and "
+                "without the code-target arm there is no encoder, no projection and no "
+                "target to noise.")
+        if not self.code_target_ref:
+            raise ValueError(
+                "tul.loop_denoise needs tul.code_target_ref: the per-pass target must be "
+                "FIXED. E is frozen but its INPUT is not — it pools the live prelude, and "
+                "on an arm whose front trains the codes collapse (own cosine 0.61 -> 0.99 "
+                "by step 3000, oracle CE 13.1 nats; docs/tul-code-spec.md §17.1). A "
+                "denoiser trained toward a moving x0 measures nothing at every level at "
+                "once.")
+        if self.code_target_loss != "l2":
+            raise NotImplementedError(
+                f"tul.loop_denoise with code_target_loss={self.code_target_loss!r}: the "
+                f"per-pass term is LCM's x0-prediction reconstruction loss "
+                f"||x0_hat - x0||^2 (their Eq. 16), which is the 'l2' form. An InfoNCE "
+                f"per-pass term is a different arm.")
+        if self.code_target_weight != 0.0:
+            raise ValueError(
+                f"tul.loop_denoise needs tul.code_target_weight=0 (got "
+                f"{self.code_target_weight}): a slot's LAST realised pass IS the exit the "
+                f"coda reads, so its term is already in the per-pass sum. Keeping both "
+                f"would weight the last pass twice and nothing else. The exit instruments "
+                f"(code_target_cos, code_target_cos_shuf) keep logging at weight 0.")
+        if self.db_loop:
+            raise NotImplementedError(
+                "tul.loop_denoise with tul.db_loop: both replace what a pass receives. "
+                "db_loop detaches the carry; loop_denoise discards it and hands the pass a "
+                "noised target instead. Pick one.")
+        if self.progressive_p > 0.0:
+            raise NotImplementedError(
+                "tul.loop_denoise with tul.progressive_p > 0: the progressive draw cuts a "
+                "per-slot no-grad PREFIX of the trajectory, and under loop_denoise the "
+                "passes are independent — a cut prefix would silently drop those passes' "
+                "own per-pass terms rather than truncating a chain.")
+
     def _check_code_target(self) -> None:
         """``tul.code_target`` — the slot loop regressed onto the frozen code (spec §17)."""
         if not self.code_target:
@@ -2860,10 +3148,11 @@ class TULConfig:
                 "tul.code_target_skip_coda with code_target_detach=false: the CE route into "
                 "the loop needs a coda, and the code-only arm runs none at train.")
         if self.code_target_skip_coda and self.code_target_weight == 0.0 \
-                and not self.code_grade:
+                and not self.code_grade and not self.loop_denoise:
             raise ValueError(
                 "tul.code_target_skip_coda with code_target_weight=0: nothing would train. "
-                "(tul.code_grade lifts this: the graded term is then the only one.)")
+                "(tul.code_grade lifts this: the graded term is then the only one; so does "
+                "tul.loop_denoise, whose per-pass sum already contains the exit term.)")
         if self.code:
             raise NotImplementedError(
                 "tul.code_target with tul.code: a code model has no slot loop to regress. "
