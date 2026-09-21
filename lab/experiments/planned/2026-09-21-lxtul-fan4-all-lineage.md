@@ -69,7 +69,7 @@ PERSISTENCE reading from `lab/divergence/fan_mixture_probe.py` on the same 48 ro
 Baselines: fan4-all persistence 0.3039 [0.2854, 0.3250], chance 0.2676, shares
 0.354 / 0.259 / 0.203 / 0.183. The noise arm's own numbers replace fan4-all's wherever
 this arm is scored against its rung below. Seed spread 0.024 nats. Probabilities are the
-builder's, reviewed by the orchestrator 2026-09-21 03:50 and adopted unchanged before any GPU step.
+builder's, reviewed by the orchestrator 2026-09-21 03:44 and adopted unchanged before any GPU step.
 
 - **P-1 (stable).** 5,000 steps, tripwire HEALTHY. **85 %.** The change is a narrowing of
   an attention mask; it removes routes, it does not add scale.

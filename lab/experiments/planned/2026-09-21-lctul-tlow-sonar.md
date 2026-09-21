@@ -50,7 +50,7 @@ sentence encoder. If **C-1 holds and C-2 fails** the arm is queued; C-2 is a flo
 how much an UNCONDITIONAL "copy the last span" predictor gets, and the thinker reads more
 than the last span.
 
-**Precondition reading (2026-09-21 03:53, run after commit 0ee368b, artifact
+**Precondition reading (2026-09-21 03:45, run after commit 0ee368b, artifact
 `../results/2026-09-21-lctul-tlow-sonar/sonar_cache_structure_2k.{json,txt}`):** over
 19,999 adjacent pairs of the first 20,000 stream keys, cos(next) 0.1860, cos(random)
 0.0907, **C-1 excess +0.0953 [+0.0935, +0.0972]: FAILS its 0.10 threshold**, the interval

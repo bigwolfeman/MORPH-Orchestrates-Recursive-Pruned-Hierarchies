@@ -60,7 +60,7 @@ against fan4-all's `tokens.npz`, and the mixture probe on the same 48 rows.
 fan4-all's finals for reference: `fan/oracle_ce` 4.3925, `fan/mixed_ce` 4.4348 (oracle −
 mixed 0.018 on the probe's 48 rows: 4.2082 / 4.2485 deployed), `fan/stream_rank_t1` 2.820,
 `_t6` 2.060, tokens K1−K6 +0.0049, RATE 7,096 tok/s, `loop/core_gain_t0` max 9.92. Seed
-spread 0.024 nats. Probabilities are the builder's, reviewed by the orchestrator 2026-09-21 03:45 and adopted unchanged before any GPU step.
+spread 0.024 nats. Probabilities are the builder's, reviewed by the orchestrator 2026-09-21 03:44 and adopted unchanged before any GPU step.
 
 - **P-1 (stable).** 5,000 steps, tripwire HEALTHY (`preclip/total` under 1e4 at every step
   ≥ 200). **80 %.** A unit-RMS perturbation of the entry state is large — as large as the
