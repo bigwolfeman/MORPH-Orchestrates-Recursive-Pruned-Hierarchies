@@ -50,6 +50,19 @@ sentence encoder. If **C-1 holds and C-2 fails** the arm is queued; C-2 is a flo
 how much an UNCONDITIONAL "copy the last span" predictor gets, and the thinker reads more
 than the last span.
 
+**Precondition reading (2026-09-21 03:53, run after commit 0ee368b, artifact
+`../results/2026-09-21-lctul-tlow-sonar/sonar_cache_structure_2k.{json,txt}`):** over
+19,999 adjacent pairs of the first 20,000 stream keys, cos(next) 0.1860, cos(random)
+0.0907, **C-1 excess +0.0953 [+0.0935, +0.0972]: FAILS its 0.10 threshold**, the interval
+clear of it by 0.003. **C-2 top-1 0.0955 [0.0835, 0.1085] among 1,000 candidates: HOLDS**
+(95 × chance 0.001). The letter of the binding says the arm is not queued. The structure
+the check was written to detect is present (a 95-fold retrieval excess on a
+zero-parameter predictor) and the threshold I froze on C-1 was missed by 5 % of itself.
+The rule against post-hoc rescue is the reason this file stays in `planned/` with the arm
+HELD rather than queued or filed: the go/no-go on a 0.005 miss is Wolfe's, stated here
+before anyone reads the run. The SONAR anisotropy assumption in C-1 was wrong (random
+pairs sit at 0.09, not 0.3–0.5), which does not change the excess.
+
 ## Hypothesis
 
 A target whose predictable-from-context fraction is large gives the field a reason to
