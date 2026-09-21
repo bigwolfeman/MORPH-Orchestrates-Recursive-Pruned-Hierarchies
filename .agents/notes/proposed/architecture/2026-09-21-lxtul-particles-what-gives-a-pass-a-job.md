@@ -358,3 +358,11 @@ the eager trajectory's ranks match the fused stream probe's to 0.01.
 Together: the LCTUL sampler at 20k is Base-LCM by two independent instruments, and the fan's
 exit carries K distinguishable hypotheses while its passes stay flat. Both support the ladder
 as ordered: fix the proposer (P1–P3) before asking the loop for depth.
+
+**2026-09-21, rung P0 (fp0) FILED: `lab/experiments/failures/2026-09-21-lxtul-fan4-all-fp0.md`.**
+The terminal fixed-point term does not contract the K deviations (rank_t6 2.01 vs 2.06
+with it on). Off, it was holding the exit's SCALE (norms 2.3–4.2x through the loop,
+pre-clip max 522 vs 29.4), and the coda reads the exit 0.006 better with pass 1 doing
+twice the work (K1−K6 +0.0102). The rungs keep the term at 1.0. The trig arm (rank_t6
+1.47, one stream at 95 %) says re-supplying identity every pass collapses harder, not
+softer; its filing follows the runner's readouts.
