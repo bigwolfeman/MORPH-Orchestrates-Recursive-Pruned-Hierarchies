@@ -404,3 +404,10 @@ deviations' centred rank at 2.0 instead of 1.3 through the loop and buys nothing
 persistence 0.300 vs 0.36 bar (noise 0.271, chance 0.256), paired +0.004 vs the noise
 arm. Rung P4 closes: lineages need a causal weighting this forward cannot compute. Of the
 ladder, P2 (denoise, 20k, next on the runner) and np0 remain; P3 (sonar) is held.
+
+**2026-09-21, the fallback (np0, remove the prelude) FILED: `lab/experiments/failures/2026-09-21-strict-np0.md`.**
+K1−K6 +0.0045, K3−K6 −0.0008 with no prelude at all; the hinge free; the seed's rank
+doubled (12.9 vs 6.2) and the coda pays 0.36 nats for a wrong seed (the seed is the only
+per-span content). The entry explanation is spent on the slot loop; `prelude-entry-
+flattens-the-loop` stays a plain-model fact. What is left of the ladder is P2 (denoise,
+queued at the fix commit) and the held P3.
