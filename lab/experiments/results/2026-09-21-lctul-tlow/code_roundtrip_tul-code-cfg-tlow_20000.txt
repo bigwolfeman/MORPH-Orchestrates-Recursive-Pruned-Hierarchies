@@ -1,0 +1,95 @@
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  LCTUL ON: prefix_k=2 CONTINUOUS code, flow thinker (source_std=1.0), 8 Euler steps at eval - the slot holds the CODE of the span it precedes: E makes it from that span at train, the core body samples it at eval. Train schedule: t ~ logit-normal(mu=-1.0, sigma=1.0): median t = 0.2689 (lambda = -2.00), the flow LOSS is reweighted toward HIGH NOISE (LCM's wide schedule: CA 80.3 % against the peaked schedule's 70.6 %). The SAMPLER's Euler grid stays UNIFORM - this knob moves training only. TARGET = E's own code of the next span (verbatim reconstruction). READ `val/code_ca` AGAINST `val/code_ca_chance` FIRST (LCM's contrastive accuracy: does the SAMPLED code retrieve its own span's true code out of the batch, neighbours excluded) - a code that wins `code_fm_rel` and reads CA at chance is a regression to the conditional mean, whatever the CE says. Then `train/code_t_mean` (the schedule, as drawn) and the four `code_fm_band{b}_rel` ratios (.agents/notes/proposed/architecture/2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 270.0M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 20000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+  batch 1/16 done  (60s)
+  batch 2/16 done  (118s)
+  batch 3/16 done  (164s)
+  batch 4/16 done  (209s)
+  batch 5/16 done  (260s)
+  batch 6/16 done  (304s)
+  batch 7/16 done  (357s)
+  batch 8/16 done  (404s)
+  batch 9/16 done  (458s)
+  batch 10/16 done  (503s)
+  batch 11/16 done  (549s)
+  batch 12/16 done  (592s)
+  batch 13/16 done  (646s)
+  batch 14/16 done  (691s)
+  batch 15/16 done  (740s)
+  batch 16/16 done  (781s)
+tul-code-cfg-tlow step 20000  rows=48 batch=3 k_main=8 k_one=1 max_span_tokens=32
+morph from /home/wolfe/morph-instruments/MORPH-0921/morph
+identity check (pinned == unpinned logits) max|d| = 0.000e+00
+parity check (even-only decode vs all-live) mismatched tokens = not run
+
+condition   slots   tokens   cos(zhat,ztrue)   cos(zre,zhat)   cos(zre,ztrue)   cos(zre,other)        gap = d_re - d_hat
+k8           2449    48489           +0.1457         +0.1711          +0.1520          +0.1150   -0.0062 [-0.0132, +0.0018]
+k1           2449    48489           +0.2232         +0.2448          +0.1504          +0.1194   +0.0728 [+0.0665, +0.0791]
+truth        2449    48489           +1.0000         +0.8919          +0.8919          +0.1345   +0.1081 [+0.0933, +0.1251]
+
+CHANCE for every cosine column: cos(z_true, another scored slot's z_true) = +0.1349 [+0.1268, +0.1434]
+A cos(zre, ztrue) at that level means the round trip kept NO slot identity.
+
+95 % row-block bootstrap on every column:
+  k8
+    cos_hat_true   +0.1457 [+0.1392, +0.1527]
+    cos_re_hat     +0.1711 [+0.1641, +0.1793]
+    cos_re_true    +0.1520 [+0.1463, +0.1579]
+    d_hat          +0.8543 [+0.8473, +0.8608]
+    d_re           +0.8480 [+0.8421, +0.8537]
+    move           +0.8289 [+0.8207, +0.8359]
+    gap            -0.0062 [-0.0132, +0.0018]
+    cos_true_other +0.1349 [+0.1268, +0.1434]
+    cos_re_other   +0.1150 [+0.1095, +0.1211]
+    d_re-d_hat     -0.0062 [-0.0132, +0.0018]
+  k1
+    cos_hat_true   +0.2232 [+0.2174, +0.2296]
+    cos_re_hat     +0.2448 [+0.2360, +0.2539]
+    cos_re_true    +0.1504 [+0.1456, +0.1555]
+    d_hat          +0.7768 [+0.7704, +0.7826]
+    d_re           +0.8496 [+0.8445, +0.8544]
+    move           +0.7552 [+0.7461, +0.7640]
+    gap            +0.0728 [+0.0665, +0.0791]
+    cos_true_other +0.1349 [+0.1268, +0.1434]
+    cos_re_other   +0.1194 [+0.1130, +0.1264]
+    d_re-d_hat     +0.0728 [+0.0665, +0.0791]
+  truth
+    cos_hat_true   +1.0000 [+1.0000, +1.0000]
+    cos_re_hat     +0.8919 [+0.8749, +0.9067]
+    cos_re_true    +0.8919 [+0.8749, +0.9067]
+    d_hat          -0.0000 [-0.0000, -0.0000]
+    d_re           +0.1081 [+0.0933, +0.1251]
+    move           +0.1081 [+0.0933, +0.1251]
+    gap            +0.1081 [+0.0933, +0.1251]
+    cos_true_other +0.1349 [+0.1268, +0.1434]
+    cos_re_other   +0.1345 [+0.1270, +0.1429]
+    d_re-d_hat     +0.1081 [+0.0933, +0.1251]
+
+decoded spans (first batch):
+  [truth] slot 0 row 0: ' Thequake victims, writhing in pain and grasping at life, watched doctors and nurses walk away from a hospital field F'
+  [truth] slot 1 row 0: 'riday night after a Belgian medical team evacuated the area, saying it was concerned about security.'
+  [truth] slot 2 row 0: '\n\nThe decision left CNN Chief Medical Correspondent Sanjay Gupta as the only doctor at the hospital to get the patients through the night.'
+  [truth] slot 3 row 0: '\n\nCNN initially reported, based on conversations with some of the doctors, that the United Nations ordered the Belgian First Aid and Support Team'
+  [truth] slot 4 row 0: ', evacuate.'
+  [truth] slot 5 row 0: '\n, Belgian Chief Coordinator Geert Gijs, was a doctor who attended with the 60 hospitalg Belgian with'
+  [k8] slot 0 row 0: ' The first is that the 1990s was a 1990s, and the 1990s, and 1'
+  [k8] slot 1 row 0: 'riday, 2015.\n\nThe 2015-19-year-old'
+  [k8] slot 2 row 0: '\n\nThe group of people who are in the country are not the only ones who are not in the country.\n\nThe government has been working on'
+  [k8] slot 3 row 0: '\n\nThe group’s first-person group, which is the first to be a major problem in the world, is the first time the city is in'
+  [k8] slot 4 row 0: ' to the civilian'
+  [k8] slot 5 row 0: '\n\nThe 2016 report, which was released in 2012, was released in 2012, and the '
+  [k1] slot 0 row 0: ' The first is that the 1980s was a 1990s, and the 1990s, and 1'
+  [k1] slot 1 row 0: 'riday.\n\nThe 2014-14 report, which was released in 201'
+  [k1] slot 2 row 0: '\n\nThe police said the suspects were not in the case.\n\nThe police said the suspects were not in the case.\n'
+  [k1] slot 3 row 0: '\n\nThe police said the suspects were not in the case.\n\nThe police said the suspects were not in the case.\n\n'
+  [k1] slot 4 row 0: ' to the police.'
+  [k1] slot 5 row 0: '\n\nThe report said the report was "unprecedented and unhappy with the government\'s actions.\n\nThe report said the government was "'
+
+wall clock 781 s
+
+wrote /home/wolfe/morph-instruments/results/code_roundtrip_tul-code-cfg-tlow_20000.json and /home/wolfe/morph-instruments/results/code_roundtrip_tul-code-cfg-tlow_20000.txt

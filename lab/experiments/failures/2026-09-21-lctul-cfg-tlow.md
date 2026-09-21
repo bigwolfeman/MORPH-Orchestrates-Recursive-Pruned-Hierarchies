@@ -200,3 +200,15 @@ and the context explains a tenth of it, so the ceiling on the context-blind gap 
 target's, not the schedule's. The lever on the target is rung P3 (SONAR) or a code that IS
 the conditional entropy (LCTUL-D). The schedule shift is kept as a second factor for that
 test, not as a rung.
+
+**Addendum 2026-09-21 (round-trip probe, Spark, `code_roundtrip_tul-code-cfg-tlow_20000.{json,txt}`,
+48 rows = 2,449 slots, not a pre-registered clause).** Chance cosine between two slots'
+true codes on this arm: 0.1349 [0.1268, 0.1434] (tul-code-20k 0.1016). The k = 8 sample's
+cosine to its own truth: **0.1457 [0.1392, 0.1527]**, above chance by 0.011 with the
+intervals touching (tul-code-20k's k = 8 sample sat AT chance, 0.098 vs 0.102); its
+round-trip gap −0.006 (nothing to lose). The k = 1 sample: 0.2232 (tul-code-20k 0.2221).
+The TRUE code decoded and re-encoded lands at **0.892** on this arm against **0.291** on
+tul-code-20k (gap 0.108 vs 0.709): this encoder/decoder pair keeps a code on a round trip
+where the earlier pair lost most of it. Which factor did that — the CFG training (tlow's
+parent `tul-code-cfg` has no round-trip reading) or the schedule — is UNMEASURED; run
+the probe on `tul-code-cfg_step_20000.pt` (on the Spark) before crediting the schedule.
