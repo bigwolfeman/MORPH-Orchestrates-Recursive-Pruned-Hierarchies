@@ -25,10 +25,15 @@
 # every reader of the code — the coda in phases 1-2 included — reads SONAR. The
 # checkpoint layout is unchanged, so this arm pairs key for key with `tul-code-cfg-tlow`.
 #
-# The cache must cover the run's whole stream. `/home/wolfe/sonar-cache/tul_code_cfg_tlow`
-# holds the FIRST 2,000 train steps plus the 20 val batches at the time of writing; a
-# 5,000-step run needs the rest of the train stream cached first or it will raise at the
-# first uncached step. Check `meta.json`'s row count against the banner.
+# The cache must cover the run's whole stream. `/home/wolfe/sonar-cache/tul_code_cfg_tlow_full`
+# (2026-09-21 04:56, encoded on the 3070 at 716 sent/s, rsynced home) holds the 20,000
+# train steps at batch 6 plus the 20 val batches: 5,738,552 unique spans, 11.75 GB fp16,
+# memmapped. `/home/wolfe/sonar-cache/tul_code_cfg_tlow` is the 2,000-step subset used for
+# the smoke and the structure check; every one of its 590,446 keys is in the full cache
+# (0 misses, embeddings equal to fp16 precision). A run past the cached stream raises at
+# the first uncached step. Check `meta.json`'s row count against the banner.
+# HELD (2026-09-21): the pre-registered cache check C-1 missed its threshold by 0.005
+# (lab/experiments/planned/2026-09-21-lctul-tlow-sonar.md); do not queue without Wolfe.
 #
 # Read `val/code_ca` against `val/code_ca_chance` FIRST (a SONAR target that reads CA at
 # chance is the same conditional mean in a new space), then the reader's paired CE against
@@ -40,7 +45,7 @@ defaults:
 
 tul:
   code_target_source: sonar
-  code_sonar_cache: /home/wolfe/sonar-cache/tul_code_cfg_tlow
+  code_sonar_cache: /home/wolfe/sonar-cache/tul_code_cfg_tlow_full
 
 wandb:
   name: tul-code-cfg-tlow-sonar
