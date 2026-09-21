@@ -1,6 +1,6 @@
 # Planned: LXTUL fan4-all with the per-stream trigger re-injected every pass (`tul.fan_trigger_every_pass`)
 
-Status: planned
+Status: failure
 
 Date: 2026-09-21 (frozen before any GPU step of the arm). Arc: the LXTUL-P note
 [`2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md`](../../../.agents/notes/proposed/architecture/2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md),
@@ -108,3 +108,90 @@ believing it (a stream identity the coda can key on is a width-like gain, not a 
 - The claim that the shipped injection reaches the context slice only at
   `injection_channels: ctx` is from reading `DiagonalInjection`, not from a measurement of the
   two routes' relative magnitude.
+
+## Results
+
+Run: 5,000 steps at `5d8a599`'s tree on the 5090 through `run_recon.sh`, START 02:50 local
+2026-09-21, DONE 04:16, tripwire HEALTHY (`preclip/total` max 37.1 at step 238; fan4-all
+29.4), final val_loss 4.4427, RATE 7,284 tok/s at step 200 (7,301 at 4800; fan4-all 7,080),
+peak 19.30 GB (fan4-all 19.14). Artifacts in `../results/2026-09-19-lxtul-fan4/`:
+`sweep_slot-spandec-strict-fan4-all-trig_{2500,5000}.json`, `worth_..._5000.json`,
+`slot_state_..._5000.json`, `run_slot-spandec-strict-fan4-all-trig.txt`,
+`fan_geom_trig_5000_d6.{json,txt}` and `fan_mixture_trig_5000_d6.{json,txt}` (Spark, worktree
+`MORPH-0921` at `82868b4`, 48 rows = 2,573 slots, the same rows as fan4-all's probes; the
+3070 was encoding the SONAR cache), `paired_trig_5000.json`, `wandb_series_trig.json`
+(wandb `a8lermim`).
+
+**Last-val keys (step 4,750; wandb).**
+
+| key | trig | fan4-all |
+|---|---|---|
+| `fan/oracle_ce` | 4.3611 | 4.3925 |
+| `fan/mixed_ce` | 4.4023 | 4.4348 |
+| `fan/mixed_ce − fan/oracle_ce` | 0.041 | 0.042 |
+| `fan/stream_rank_t1` / `_t6` | 2.788 / **1.470** (min over the run 1.433; the max, 2.50, at step 1000) | 2.820 / 2.060 |
+| `val/fan_stream_cos_t1` / `_t6` | −0.31 / +0.20 | −0.30 / +0.06 |
+| `loop/core_gain_t0` max over the run | 10.31 (step 4799) | 9.92 |
+
+**Stream probe at 5,000 (Spark, 2,573 slots).** Pass 1: rank 2.816, cos −0.31, `axis_cos`
+0.166, shared 0.16, norms 14.7 / 13.3 / 11.3 / 11.7, sign family `++--` 60 %. Pass 3: rank
+2.167, `+---` 84 %. Pass 6: rank **1.425**, cos +0.27, `axis_cos` 0.381, shared 0.78, norms
+**63.7 / 21.6 / 15.3 / 15.5**, `+---` **95 %**. fan4-all at pass 6: rank 2.026, norms 56.0 /
+26.2 / 18.1 / 24.7, `+---` 95 %. The same one-live-stream shape as fan4-all, reached two
+passes earlier and further: with the trigger re-supplied every pass, stream 0 ends 4.1x its
+siblings (fan4-all 2.1x). The pass-1 norms are half fan4-all's (the trigger's parameters
+now take gradient through six passes and shrank).
+
+**Mixture probe at 5,000 (Spark, same rows).** Oracle 4.1951, deployed 4.2352 (agreement
+with the model's keys 3e-10 / 5e-8); deployed − prefix mixture **−0.0107 [−0.0132,
+−0.0081]** (fan4-all −0.0098); deployed − oracle +0.0402 (fan4-all +0.0404); winner
+persistence 0.3067 [0.2892, 0.3254] vs chance 0.2811 (fan4-all 0.3039 vs 0.2676); winner
+shares 0.403 / 0.194 / 0.202 / 0.202 (fan4-all 0.354 / 0.259 / 0.203 / 0.183).
+
+**Depth sweep (480 rows).** 5,000: d1 4.3094, d2 4.3043, d3 4.3020, d6 4.3005, d9 4.3009,
+d12 4.3017, d16 4.3033; tokens K1−K6 **+0.0089 [+0.0082, +0.0096]**, K3−K6 +0.0016
+[+0.0013, +0.0018]. 2,500: d1 4.6149, d6 4.6086 (K1−K6 +0.0063). fan4-all 5,000: K1−K6
++0.0049, K3−K6 +0.0004.
+
+**Paired against fan4-all (`paired_trig_5000.json`, 511,089 tokens, 500 blocks).** Depth 6:
+trig − fan4-all **−0.0051 [−0.0073, −0.0030]**; depth 1: +0.0038 [+0.0015, +0.0059];
+depths 2–16 between −0.0013 and −0.0051. Worth profile at 5,000: zero 0.1978 (fan4-all
+0.1955), shuffle 0.1798 (0.1879), wrong_seed 0.0764 (0.0949). Slot-state probe: the exit
+moves 0.324 of its norm from depth 1 to 6 (fan4-all 0.328), cos 0.968 (0.970).
+
+**Scoring.**
+
+- **P-1: HOLDS.** 5,000 steps, HEALTHY, pre-clip max 37.1.
+- **P-2 (the arm's reason): FAILS.** rank_t6 1.470 (wandb) and 1.425 (probe) against 2.30,
+  BELOW fan4-all's 2.06. Re-supplying identity every pass collapsed the streams harder.
+- **P-3: HOLDS.** rank_t1 2.788 (probe 2.816), within 0.15 of 2.820.
+- **P-4: HOLDS.** K1−K6 +0.0089 [+0.0082, +0.0096] under +0.010; K3−K6 +0.0016.
+- **P-5: HOLDS.** −0.0051 [−0.0073, −0.0030], inside ±0.024.
+- **P-6: HOLDS.** Regret 0.041 within 0.010 of 0.042; deployed − prefix mixture −0.0107,
+  within 0.005 of −0.0098.
+- **P-7: HOLDS.** `loop/core_gain_t0` max 10.31 ≤ 20.
+
+## Verdict
+
+**Failure** (the arm's reason failed; 6 of 7 hold). A full-width, undecayed re-supply of
+the per-stream trigger at the start of every pass does not preserve the K deviations
+through the loop: the exit rank falls to 1.43 of 3 (fan4-all 2.03), one stream ends at
+4.1x its siblings, and the `+---` family reaches 95 % by pass 6 as on fan4-all but from
+pass 3. The prereg's counter-mechanism is the reading: an offset the shared map sees every
+pass is one it can learn to cancel, and the winner-takes-all share then does the rest. The
+read is unchanged (regret 0.041, mixture −0.011, persistence +0.026 over chance), the loop
+is flat past pass 3, and the coda reads the exit 0.005 better, inside the seed spread.
+Binding branch: the note's alternative 2 (re-supply identity to the map) closes. With fp0
+also filed, both Part-1 levers that act on the STATE are closed; what is left is the
+ladder's own claim, that a pass needs a JOB (P1 noise, then P2 denoise, queued).
+
+## Updated hypothesis
+
+Stream identity cannot be kept by supplying it, whether once (fan4-all) or every pass
+(trig), because nothing after pass 2 is charged for losing it and the winner-takes-all
+gradient rewards one stream. The rank at the exit will follow the OBJECTIVE, not the entry:
+K exits stay distinct only if K distinct things are asked of them (a per-stream target, or
+a per-pass job). The `+---` family's 95 % at pass 6 on three arms in a row (fan4-all, trig,
+and fan4-epi's one-live-stream shape) is the winner-takes-all signature and the next
+instrument to read on the noise arm is whether it appears there too with no diversity term
+at all.

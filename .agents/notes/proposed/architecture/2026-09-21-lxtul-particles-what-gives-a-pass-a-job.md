@@ -366,3 +366,10 @@ pre-clip max 522 vs 29.4), and the coda reads the exit 0.006 better with pass 1 
 twice the work (K1−K6 +0.0102). The rungs keep the term at 1.0. The trig arm (rank_t6
 1.47, one stream at 95 %) says re-supplying identity every pass collapses harder, not
 softer; its filing follows the runner's readouts.
+
+**2026-09-21, alternative 2 (trig) FILED: `lab/experiments/failures/2026-09-21-lxtul-fan4-all-trig.md`.**
+Re-supplying the per-stream trigger at every pass collapses the streams HARDER (rank_t6
+1.43 vs 2.03, stream 0 at 4.1x its siblings, `+---` 95 % from pass 3), with the read,
+the K-curve and the CE unchanged inside the seed spread (paired −0.005). Both Part-1
+state levers are now closed (fp0, trig); the ladder's claim that a pass needs a JOB is
+what remains, and P1 (noise) then P2 (denoise) are queued behind tlow and pk8.

@@ -179,3 +179,10 @@ Jacobian. A rung that wants K distinct exits has to give the passes K distinct j
 (the builders' configs keep 1.0 except the denoiser, which turns it off for its own
 reason); this filing does not move that default, because the 0.006-nat CE gain is inside
 the seed spread and the 18x pre-clip rise is a cost on the detonation margin.
+
+**Addendum 2026-09-21 (mixture probe, Spark, `fan_mixture_fp0_5000_d6.{json,txt}`, 48
+rows, the same rows as fan4-all's).** Oracle 4.1914, deployed 4.2342 (agreement with the
+model's own keys 3e-8 / 7e-8); deployed − prefix mixture **−0.0082 [−0.0108, −0.0053]**
+(fan4-all −0.0098), deployed − oracle +0.0428 (fan4-all +0.0404); winner persistence
+0.3047 vs chance 0.2652 (fan4-all 0.3039 vs 0.2676); winner shares 0.283 / ... (the json).
+The read is unchanged by the term, as P-6 said.
