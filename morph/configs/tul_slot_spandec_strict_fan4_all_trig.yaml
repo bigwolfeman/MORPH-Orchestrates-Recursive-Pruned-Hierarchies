@@ -1,0 +1,24 @@
+# LXTUL fan4-all with the per-stream TRIGGER RE-INJECTED EVERY PASS (2026-09-21), one
+# factor over tul_slot_spandec_strict_fan4_all. Why: under one shared contractive map the
+# between-stream deviations decay like gain^(2T) (PLR Thm 4.4), and on fan4-all the
+# within-slot rank falls 2.8 -> 2.0 of 3 across the passes. Adding the register's own
+# per-stream trigger (W_o(pooled) + P_cell, the SAME tensor the seed adds once) to the cell
+# carrier at the start of passes 2..T makes the map f_k(z, C) = f(z, C, e_k) on that route
+# — K maps with K distinct fixed points — so the streams stay apart by re-injection with
+# Jacobian aI instead of by a diversity term that gets gamed (LXTUL-P note, Alternatives
+# considered item 2: second in line after P0). The term is zero at step 0 (W_o zero-init,
+# P_cell zeros), so this arm starts bit-identical to fan4-all. CAVEAT recorded in the
+# TULConfig doc block: the seed ALREADY reaches every pass through DiagonalInjection, but
+# at model.injection_channels "ctx" only through the context channel slice and decayed by
+# A < 1; this add is full width and undecayed. Same seed, packer and prefix width as
+# fan4-all.
+# Prereg: lab/experiments/planned/2026-09-21-lxtul-fan4-all-trig.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all
+  - _self_
+
+tul:
+  fan_trigger_every_pass: true
+
+wandb:
+  name: slot-spandec-strict-fan4-all-trig

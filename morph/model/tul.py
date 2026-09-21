@@ -355,6 +355,36 @@ class TULConfig:
     fan_epi_features: int = 64           # reservoir width F (epi only)
     fan_epi_ridge: float = 3.0           # ridge rho of the readout (epi only)
     fan_epi_eta: float = 30.0            # saturation eta inside the log-det (epi only)
+    # `fan_trigger_every_pass` (2026-09-21, the LXTUL-P note's alternative 2, second in
+    # line after P0): the register's per-stream TRIGGER — the SAME `W_o(pooled) + P_cell`
+    # tensor the seed already adds once, before `core_init` — is added to the cell carrier
+    # at the START of every pass after the first (t >= 1 in `_tul_core`'s loop), so the
+    # stream identity is re-supplied to the map instead of living only in the initial
+    # condition. WHY: under one shared contractive map the between-stream deviations decay
+    # like `gain^(2T)` (PLR Thm 4.4), and a per-stream input every pass makes the map
+    # `f_k(z, C) = f(z, C, e_k)` — K maps with K distinct fixed points — which keeps the
+    # streams apart without a diversity term to game.
+    #
+    # WHAT IT IS NOT, stated because the tree already refuses its neighbour.
+    # `tul.reinject_seed_every_pass` RAISES as a NO-OP: `_tul_core` binds `_e_arg = e`
+    # ONCE and hands it to EVERY pass, where `_apply_core_step` opens with
+    # `self.injection(h_in, e_in)`. So the WHOLE seed, the trigger included, already
+    # reaches every pass — through `DiagonalInjection`, which at the shipped
+    # `model.injection_channels: "ctx"` writes `dt * e_ctx` into the CONTEXT channel slice
+    # alone and decays what is there by `A < 1`. This knob is a different route, not a
+    # duplicate of that one: a full-width, undecayed, unscaled add of the trigger ALONE.
+    # At `model.injection_channels: "all"` the two routes overlap on every channel and the
+    # knob is close to a gain on the trigger's existing path; read the arm that way.
+    #
+    # Plain ADD, no scale: `W_o` is zero-init and `P_cell` is zeros, so the term is
+    # EXACTLY 0 at step 0 and the arm's step-0 forward is bit-identical to its fan
+    # partner's — the same "start at the ruler" rule the register and `TULFanMix` follow.
+    # Slot cells only: `_tul_core` never sees a token position (`tokens_through_core` and
+    # `loop_reads_tokens` are already refused at `slot_cells > 1`). TRAIN AND EVAL do the
+    # same thing — the term is part of the MAP, so a forced-depth sweep must see the
+    # function the trainer ran (the `grad_pass` / `slot_chain` rule).
+    # Prereg: lab/experiments/planned/2026-09-21-lxtul-fan4-all-trig.md
+    fan_trigger_every_pass: bool = False  # re-inject the per-stream trigger at passes 2..T
     slot_id: int = 4                     # "<fim_pad>"; its LM-head logit is −inf (§3.1)
     token_state_dropout: float = 0.15    # Bowman word dropout on the coda input (§3.4)
     slot_mean_depth: int = 0             # 0 → cfg.mean_depth
@@ -1680,6 +1710,12 @@ class TULConfig:
             raise ValueError(
                 f"tul.fan_epi_ridge and tul.fan_epi_eta must be > 0, got "
                 f"{self.fan_epi_ridge} / {self.fan_epi_eta}")
+        if self.fan_trigger_every_pass and self.fan_k == 0:
+            raise ValueError(
+                "tul.fan_trigger_every_pass=true with tul.fan_k=0: the term it re-injects "
+                "is the fan's per-stream trigger (TULSlotRegister's W_o(pooled) + P_cell), "
+                "and with no fan there is no register and no per-stream term — the knob "
+                "would be silently ignored. Set tul.fan_k >= 2 or drop the key.")
         if self.fan_k == 0:
             _fan_orphan = [n for n, v in (("fan_repel_lambda", self.fan_repel_lambda > 0.0),
                                           ("fan_mix", self.fan_mix != "mean"),

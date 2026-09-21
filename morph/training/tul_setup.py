@@ -65,6 +65,7 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_repel_mode", "fan_epi_features", "fan_epi_ridge", "fan_epi_eta",
     "fan_select_eps", "fan_select_gate_lambda", "fan_all_wta_lambda",
     "fan_select_write", "fan_select_write_anneal",
+    "fan_trigger_every_pass",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_cells", "slot_cell_init", "slot_chain", "slot_chain_detach",
     "vq_beta", "vq_codebook", "vq_codes", "vq_dim", "vq_groups", "vq_reset_after",
@@ -329,6 +330,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_select_write=str(tc.get("fan_select_write", "oracle")),
         fan_select_write_anneal=int(tc.get("fan_select_write_anneal", 1500)),
         fan_all_wta_lambda=float(tc.get("fan_all_wta_lambda", 1.0)),
+        fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         vq_codes=int(tc.get("vq_codes", 0)),
         vq_codebook=int(tc.get("vq_codebook", 512)),
         vq_dim=int(tc.get("vq_dim", 0)),
@@ -544,6 +546,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_select_write": model_cfg.fan_select_write,
         "fan_select_write_anneal": model_cfg.fan_select_write_anneal,
         "fan_all_wta_lambda": model_cfg.fan_all_wta_lambda,
+        "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_epi_features": model_cfg.fan_epi_features,
         "fan_epi_ridge": model_cfg.fan_epi_ridge,
         "fan_epi_eta": model_cfg.fan_epi_eta,
@@ -831,6 +834,19 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                  f"K; at train K no-grad passes with stream i alone in its cell pick each "
                  f"slot's winner and one more pass with grad charges the winner-alone span "
                  f"CE, the responsibility term) " if model_cfg.fan_mix == "all" else "")
+              + ("TRIGGER EVERY PASS (the per-stream trigger W_o(pooled)+P_cell, the "
+                 "SAME tensor the seed adds once, is added to the cell carrier at the "
+                 "start of passes 2..T, so stream identity is re-supplied to the map "
+                 "instead of living only in the initial condition; zero at step 0, so "
+                 "this arm starts bit-identical to its fan partner. NOTE the seed "
+                 "ALREADY reaches every pass through DiagonalInjection - at "
+                 f"injection_channels={getattr(cfg.model, 'injection_channels', 'ctx')!r} "
+                 f"that route is "
+                 + ("the CONTEXT channel slice only, decayed, so this add is a NEW "
+                    "full-width route"
+                    if str(getattr(cfg.model, "injection_channels", "ctx")) == "ctx" else
+                    "every channel, so read this add as a GAIN on the existing route")
+                 + ") " if model_cfg.fan_trigger_every_pass else "")
               + 
               f"- K latent STREAMS per span through the ONE shared core. The streams ARE "
               f"the Thought Register's cells (fan_k aliases slot_cells, so the message "

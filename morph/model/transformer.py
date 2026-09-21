@@ -1281,6 +1281,13 @@ class MORPHTransformer(nn.Module):
     # the shipped graph never sees it.
     _carry_capture: list | None = None
 
+    # `tul.fan_trigger_every_pass`'s test hook: attach a list and `_tul_core` appends
+    # ``{"t": the pass index, "pre": the carrier before the re-injection, "post": after}``
+    # (detached) once per pass that gets the term. It is the ONLY way a test can see the
+    # add: the injected carrier is consumed by `_core_step` and never returned. None by
+    # default — a Python-level branch, so the shipped graph never sees it.
+    _trigger_capture: list | None = None
+
     def __init__(self, cfg: MORPHConfig):
         super().__init__()
         self.cfg = cfg
@@ -2036,6 +2043,13 @@ class MORPHTransformer(nn.Module):
         self.tul_fan: TULFanMix | None = None
         if cfg.tul is not None and cfg.tul.fan_k > 0:
             self.tul_fan = TULFanMix(d, cfg.tul.fan_k, cfg.tul.fan_mix)
+        # `tul.fan_trigger_every_pass` — a BUILD-TIME bool, so `_tul_core`'s per-pass
+        # branch on it is a Python-level constant that traces out and an arm with the key
+        # off runs the graph from before it existed. It builds NOTHING: the tensor it
+        # re-injects is the register's own output, already computed once per forward.
+        # `TULConfig` refuses it at `fan_k == 0`, so a True here always has a register.
+        self._fan_trigger_every_pass: bool = bool(
+            cfg.tul is not None and cfg.tul.fan_trigger_every_pass)
         # `tul.fan_repel_mode: "epi"` — the epiplexity diversity term's FROZEN random
         # reservoir (morph/model/tul_fan.py). Buffers, never parameters; a private
         # generator, so the base weights are byte-identical to the cosine arm's. `"cos"`
@@ -4191,14 +4205,21 @@ class MORPHTransformer(nn.Module):
 
         xn = self.input_norm(x)
         e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
+        # `tul.fan_trigger_every_pass` re-injects THIS tensor (the per-stream trigger,
+        # `[B, S*M, C]`, single-stream, pads exactly 0) at every later pass. It is stashed
+        # rather than recomputed: one register call per forward, one graph, so the seed add
+        # and every re-injection are the SAME node and the gradient of all of them
+        # accumulates into one `W_o` / `P_cell`. None on every model without a register.
+        _reg_term: Tensor | None = None
         if self.tul_register is not None:
             # The seed pull-apart, added to the gathered prelude state BEFORE `core_init`.
             # Single-stream (the register pools token states, which have no stream axis of
             # their own) and broadcast into the Hyper-Connection carrier the way every
             # other injection is. `W_o` is zero-init, so this line is an exact no-op at
             # step 0 and the arm starts at its ruler.
-            _reg = self.tul_register(xn.mean(dim=2) if self._is_hc else xn, _layout_slots)
-            e = e + (_reg.unsqueeze(2) if self._is_hc else _reg).to(e.dtype)
+            _reg_term = self.tul_register(
+                xn.mean(dim=2) if self._is_hc else xn, _layout_slots)
+            e = e + (_reg_term.unsqueeze(2) if self._is_hc else _reg_term).to(e.dtype)
 
         # ── n_core == 0: NO LOOP AT ALL (arm GL1, the gist baseline) ─────────
         # .agents/notes/proposed/architecture/2026-08-29-gist-loop.md. The slot state IS
@@ -4769,6 +4790,13 @@ class MORPHTransformer(nn.Module):
         _carry_stats: dict[str, Tensor] = {}
         if _carry is not None:
             _carry_state = h.new_zeros(h.shape[0], h.shape[1], h.shape[-1])
+        # ── tul.fan_trigger_every_pass: the per-stream trigger, every pass ────
+        # Bound ONCE here, so the per-pass `if` below is a Python-level constant and an
+        # arm with the key off traces the graph from before it existed. `None` off the
+        # knob; the register's `[B, S*M, C]` output on it (`TULConfig` refuses the key at
+        # `fan_k == 0`, and `fan_k > 0` forces `slot_cells == fan_k > 1`, so the register
+        # is always built when this is not None).
+        _trig = _reg_term if self._fan_trigger_every_pass else None
         for t in range(total_iters):
             active = alive if halt else (depths > t)               # [B, S]
             _sc = self.tul_stage_cond.stage_embed(iter_stage_value(t, x.device)) \
@@ -4800,6 +4828,45 @@ class MORPHTransformer(nn.Module):
             # through the live e/injection (ONE core application), never through h. The
             # retention state is detached below for the same reason.
             _h_in = h.detach() if _db else h
+            # ── tul.fan_trigger_every_pass ────────────────────────────────────────
+            # THE RE-INJECTION, at the START of every pass after the first. `t` counts
+            # from 0, so `t > 0` is "pass 2 onwards": pass 1 already got the term through
+            # the seed, before `core_init`, and adding it again there would be two copies
+            # in one pass.
+            #
+            # WHY HERE and not inside `_core_step`: `_h_in` is a positional INPUT of
+            # `checkpoint(_core_step, _h_in, ...)`, so the add is part of the checkpointed
+            # function's saved inputs and the backward recompute replays it with the value
+            # this pass actually used. A term read off a closure inside `_core_step` would
+            # be safe for THIS tensor (it is loop-invariant, unlike `tul.loop_carry`'s
+            # `c(t)`), but the injected carrier would then be invisible to the gain hinge,
+            # which probes the map at `_h_in` — and the trigger IS part of the map this
+            # arm runs. Same placement, same reason, as `tul.slot_chain` and
+            # `tul.grad_pass`.
+            #
+            # PLAIN ADD, no scale: `W_o` zero-init and `P_cell` zeros make the term
+            # exactly 0 at step 0, so the arm starts bit-identical to its fan partner.
+            # Pads are exactly 0 (the register masks by `slot_valid`), and a slot whose
+            # depth is already spent is frozen by the `torch.where(active, ...)` at the
+            # foot of the loop, so neither gets a term it keeps. TRAIN AND EVAL alike —
+            # the term is part of the map, not a training signal.
+            #
+            # NOT A NO-OP, and NOT the refused `tul.reinject_seed_every_pass`: that knob
+            # raises because `_e_arg` (which carries the trigger) already reaches every
+            # pass through `self.injection(h_in, e_in)`. It reaches it through
+            # `DiagonalInjection`, i.e. `dt * e_ctx` into the CONTEXT channel slice with
+            # the carrier there decayed by `A < 1`. This is a full-width, undecayed,
+            # unscaled add of the trigger alone. At `model.injection_channels: "all"` the
+            # two routes overlap on every channel — read the arm as a gain on the existing
+            # path there, not as a new one.
+            if _trig is not None and t > 0:
+                _trig_pre = _h_in
+                _h_in = self._apply_injection(_h_in, _trig.to(_h_in.dtype))
+                if self._trigger_capture is not None:
+                    # The test hook (see the class attribute). Detached, so attaching it
+                    # cannot change a gradient; `None` by default, so it traces out.
+                    self._trigger_capture.append({
+                        "t": t, "pre": _trig_pre.detach(), "post": _h_in.detach()})
             # progressive: this slot's pass t is inside its private no-grad prefix.
             _pfx = (_pk > t) if _prog else None
             _pv = None if _pfx is None else _pfx.view(*_pfx.shape, *([1] * (h.dim() - 2)))
