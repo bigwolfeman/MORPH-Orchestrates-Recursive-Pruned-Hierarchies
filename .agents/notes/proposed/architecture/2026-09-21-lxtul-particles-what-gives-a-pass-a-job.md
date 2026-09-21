@@ -387,3 +387,13 @@ eight continuous cells on one stream are worth 0.035 nats to the reader (strict 
 ruler) with the loop flat (K1−K6 +0.0010); vq8 sits 0.059 above that width ruler, so the
 discrete write's deficit is the quantizer's own. Width is a reader lever, not a depth
 lever, at 2, 4 and 8 cells.
+
+**2026-09-21, rung P1 (noise) FILED: `lab/experiments/failures/2026-09-21-lxtul-fan4-all-noise.md`.**
+K unit-RMS draws at the entry collapse to ONE stream (cos 0.99 at pass 0, rank 1.46 at
+pass 1) because the carrier's scale is free: the entry norm grew 11x (1,365 → 15,417) and
+the fixed-std draw became a 9 % perturbation. Reader unchanged (paired +0.0017), loop
+flat. Two readings kept: the next sampling cut scales the draw to the entry's per-slot
+RMS; and the oracle-over-streams instrument reads 0.04 of regret on near-copies, so every
+fan arm's regret is mostly min-over-K on noise. Rung P2 (denoise) is the next reading,
+on the single-stream base; its entry is a convex mix with a fixed target, so the scale
+escape is closed there by construction.

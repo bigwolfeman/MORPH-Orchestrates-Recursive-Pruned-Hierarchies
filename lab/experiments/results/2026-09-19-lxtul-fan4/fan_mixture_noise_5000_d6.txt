@@ -1,0 +1,46 @@
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=4 max_slots=64 L_total=1280 p_drop=0.15 slot_seed='boundary'
+  TUL SPAN DECODER ON: layers=2 heads=8 J=32x1 offset=1 weight=1.0 — span s+1 is decoded from z with a teacher-forced token path (morph/model/tul_spandec.py)
+  TUL THOUGHT REGISTER ON: slot_cells=4 init='distinct' - each span gets M MUTABLE looped cells instead of one, seeded apart by M learned queries pooling the span's own prelude states (W_o zero-init: step 0 IS the ruler). They loop together at one per-slot depth; inside the loop a cell reads every cell of earlier slots AND every cell of its own slot, LATER siblings included (the relation travels as `tg_relation` and REPLACES the attention branches' causal term; through `tg_allow` it would only narrow and would execute as plain flattened causal - measured and fixed 2026-09-13). The M cells are LXTUL's K streams and every one of them is written 1:1 into ITS prefix cell (fan_mix=all; see the LXTUL FAN line below). the coda is unchanged, and the span decoder grades the MEAN of the M cells. Built against the measured rank collapse (slot_eff_rank 5.7-7.3 in 1024 dims, pairwise cos 0.72-0.77). Read `val/slot_cell_eff_rank` - the rank WITHIN a slot - beside `val/slot_eff_rank` (lab/experiments/planned/2026-09-13-arc-thought-register.md)
+  LXTUL FAN ON: fan_k=4 mix='all' repel_mode='epivol' repel_lambda=0.0 repel_passes=2 prefix_k=4 ALL eps=0.05 wta_lambda=1.0 (no mixture, no gate: every stream is written into ITS prefix cell through W_prefix[i], the register's 1:1 route, and the coda reads all K; at train K no-grad passes with stream i alone in its cell pick each slot's winner and one more pass with grad charges the winner-alone span CE, the responsibility term) SEED NOISE std=1.0 (the K streams are K SAMPLES: an independent Gaussian draw per stream, per slot and per forward is added to the ENTRY STATE core_init(e) - NOT to `e`, which every pass re-injects - at train AND at eval, pads zero. The seed lives in the input_norm'd field, so std 1.0 IS unit per-channel RMS there and two streams differ by RMS sqrt(2). The diversity term is OFF (fan_repel_lambda 0): the noise replaces it and fan_vol_t/fan_epi_t stay INSTRUMENTS. ) - K latent STREAMS per span through the ONE shared core. The streams ARE the Thought Register's cells (fan_k aliases slot_cells, so the message above is this arm's loop); what is NEW is the three things the register did not have. (1) a DIVERSITY term ('epivol') - NOT CHARGED on this arm (fan_repel_lambda 0): `fan/vol_t`, `fan/epi_t` and `fan/stream_cos_t` are still computed every pass and reported, as instruments. (2) the exit WRITE: every stream in its own prefix cell, the register's 1:1 route, so the coda's width is prefix_k=4 and the width partner is the ruler at the same prefix_k. (3) the ORACLE: at every val the coda is re-run once per stream and `fan/oracle_ce` is the per-span minimum. READ `fan/oracle_ce` AGAINST `fan/single_ce` FIRST - if the gap is inside a width control's own CE gain, the streams are copies and the width branch closes, whatever `fan/mixed_ce` says. Then `fan/stream_cos_t{t}` (1.0 = collapsed; the register read 0.94) and `fan/stream_rank_t{t}` (the register read 1.24 of 4) (lab/experiments/planned/2026-09-19-lxtul-fan4.md)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 297.7M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+
+slot-spandec-strict-fan4-all-noise step 5000  rows=48 depth=6 K=4  spans=2526 tokens=49687 mean_span_len=19.67
+  model fan/oracle_ce 4.203276  probe oracle 4.203276  |d| 3.51e-08
+  model fan/mixed_ce  4.244988  probe deployed 4.244989  |d| 4.88e-08
+
+  reading         nats/token   95 % block bootstrap (rows)
+  oracle         +4.2033 [+4.0802, +4.3270]
+  best_single    +4.3152 [+4.1853, +4.4463]
+  deployed       +4.2450 [+4.1197, +4.3689]
+  uniform_mix    +4.2541 [+4.1304, +4.3778]
+  prefix_mix     +4.2541 [+4.1304, +4.3778]
+  single_k0      +4.3406   (model fan/stream_ce_k0 +4.3406)
+  single_k1      +4.3177   (model fan/stream_ce_k1 +4.3177)
+  single_k2      +4.3152   (model fan/stream_ce_k2 +4.3152)
+  single_k3      +4.3213   (model fan/stream_ce_k3 +4.3213)
+  log(K)/mean_span_len = 0.0705 (the per-token bound on uniform_mix − oracle)
+
+  difference               nats/token   95 %
+  deployed - prefix_mix    -0.0091 [-0.0112, -0.0068]
+  deployed - oracle        +0.0417 [+0.0384, +0.0452]
+  uniform_mix - oracle     +0.0508 [+0.0492, +0.0525]
+
+  offset bin   n_tok   prefix_mix   deployed     oracle   best_single
+  0             2526      3.8053     3.7943     3.7449       3.8505
+  1             2498      4.6644     4.6601     4.6056       4.7469
+  2             2498      4.4899     4.4879     4.4165       4.5683
+  3             2498      4.3878     4.3798     4.3181       4.4689
+  4-7           9084      4.3273     4.3192     4.2764       4.4050
+  8-15         14427      4.2571     4.2501     4.2058       4.3256
+  16+          16156      4.1598     4.1466     4.1186       4.1984
+
+  winner persistence P(k*_(s+1) = k*_s) = +0.2708 [+0.2486, +0.2944]  vs chance +0.2525 [+0.2509, +0.2560]
+  excess over chance +0.0183 [-0.0044, +0.0415] over 2478 in-row pairs in 48 rows
+  winner shares: 0.225 0.272 0.278 0.225
+
+wrote /home/wolfe/morph-instruments/results/fan_mixture_noise_5000_d6.json
