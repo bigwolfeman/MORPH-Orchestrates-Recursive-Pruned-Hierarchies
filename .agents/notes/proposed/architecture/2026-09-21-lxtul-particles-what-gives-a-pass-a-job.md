@@ -381,3 +381,9 @@ parent, k-curve −0.0068; every clause moved the predicted way by about half it
 none reached it. The ceiling vs the strict ruler stays +0.64. Risk added: the schedule
 is not a lever on a lossless code. The sonar arm (P3) should be re-cut over the uniform
 schedule with the shift as a second factor; it is held on its C-1 miss regardless.
+
+**2026-09-21, pk8 FILED (success, `lab/experiments/successes/2026-09-21-strict-pk8-ruler.md`):**
+eight continuous cells on one stream are worth 0.035 nats to the reader (strict partner
+ruler) with the loop flat (K1−K6 +0.0010); vq8 sits 0.059 above that width ruler, so the
+discrete write's deficit is the quantizer's own. Width is a reader lever, not a depth
+lever, at 2, 4 and 8 cells.

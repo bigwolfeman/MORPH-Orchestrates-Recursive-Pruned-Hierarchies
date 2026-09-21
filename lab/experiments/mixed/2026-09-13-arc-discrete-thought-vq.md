@@ -459,3 +459,9 @@ mechanism in print by which a quantized span latent earns steps: code k predicts
 bottleneck with one terminal loss gives passes 2–6 no such job, and that is what both arms
 measured. If the write lane continues, the next prereg is the residual-code form with one
 code emitted per pass; the lane this file binds to is the reader.
+
+**2026-09-21, width ruler FILED (`../successes/2026-09-21-strict-pk8-ruler.md`):** pk8 −
+strict −0.0349 [−0.0378, −0.0319]; vq8 − pk8 +0.0592 [+0.0563, +0.0623]; vq4 − pk8 +0.0923.
+The confound named in the Verdict is resolved: the quantizer costs 0.059 nats beyond its
+width, and vq8's win over vq4 is code capacity. The Binding stands; the residual-code form
+is the next discrete arm, scored against pk8.
