@@ -45,6 +45,11 @@ from morph.kernels.triton.fused_cca_prologue import fused_cca_prologue
 # Fused causal conv pair (depthwise + head-grouped), replacing the cuDNN convs
 # whose grouped wgrad backward is slow on sm_120. Verified fwd/grad-exact.
 from morph.kernels.triton.fused_cca_conv import fused_cca_conv
+# The SEGMENT-RESET twin of the pair above, for the tg_seg call sites (the eager form
+# measures 147 CUDA launches per forward call at the arm's shapes, and the register-reach
+# arm calls it at every core layer of every loop pass).
+from morph.kernels.triton.fused_seg_causal_conv import (fused_segment_causal_conv,
+                                                        seg_conv_available)
 # Fused HCA compressed attention (flash online-softmax over blocks, sink + early-
 # query guard folded in). Never materializes [B,H,S,n_blocks] scores → big memory
 # win at scale. Verified fwd/grad-exact vs the eager einsum path.
@@ -467,6 +472,33 @@ def _tg_span_attention(q: Tensor, k: Tensor, v: Tensor, bag_id: Tensor,
 
 
 def segment_causal_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor, seg: Tensor) -> Tensor:
+    """THE segment-reset causal conv pair: one Triton kernel per stage on CUDA.
+
+    Dispatch only — :func:`segment_causal_conv_reference` below is the definition of
+    the function and stays the reference every test compares against. The fused path
+    (``morph/kernels/triton/fused_seg_causal_conv.py``) is taken when Triton is
+    present, the tensor is on CUDA, kernels are not forced eager and the shapes are
+    inside the kernel's support (``seg_conv_available``); it is the same math with
+    the K taps accumulated in fp32 rather than the input dtype.
+
+    Why: the eager form below builds K-1 boundary masks and runs K shifted pointwise
+    convs per stage — 147 CUDA launches for one forward at [6, 512, 256], measured,
+    against the kernel's 2, on tensors small enough that the step is latency bound.
+    The register-reach arm calls it at every core layer of every loop pass, which
+    profiled at ~175 ms of a 971 ms step.
+
+    The two are NOT bit-identical and the kernel is the more accurate of the two: it
+    accumulates every tap in fp32 where the reference rounds to the input dtype after
+    each tap, and the reference's fp32 path runs on cuDNN with TF32 enabled. Both
+    measured against an fp64 oracle in tests/test_segment_causal_conv_kernel.py.
+    """
+    if seg_conv_available(x_BCS, w_dw, w_gp):
+        return fused_segment_causal_conv(x_BCS, w_dw, w_gp, seg)
+    return segment_causal_conv_reference(x_BCS, w_dw, w_gp, seg)
+
+
+def segment_causal_conv_reference(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor,
+                                  seg: Tensor) -> Tensor:
     """``causal_conv_reference`` with the taps RESET at segment boundaries.
 
     ``seg`` ``[B, S]`` int: a tap ``x[p-j]`` contributes to output ``p`` only when
@@ -478,6 +510,11 @@ def segment_causal_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor, seg: Tensor) 
     and key are built from the cells alone and carry z and nothing else; measured before
     this existed: the conv taps handed span content to the cells and the arm's contract
     test leaked 0.07 nats. Eager only (the restriction is eager-only at construction).
+
+    THE reference: :func:`segment_causal_conv` dispatches to the Triton kernel on CUDA
+    and to this function everywhere else, and every kernel test in
+    ``tests/test_segment_causal_conv_kernel.py`` scores the kernel against this body.
+    Change the semantics here and the kernel is wrong, not the other way round.
     """
     B, C, S = x_BCS.shape
     k = w_dw.shape[-1]

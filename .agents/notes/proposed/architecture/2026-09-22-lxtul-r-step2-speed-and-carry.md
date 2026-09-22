@@ -46,7 +46,7 @@ SPEED (objective-preserving; the loss is the same function)
       (zero-row pad of the tied head, sliced before the CE).
 - [x] S3 (cad4515) no host syncs in the training forward: fan stats become detached 0-dim tensors,
       `float()` in the trainer on logging steps.
-- [ ] S4 fused Triton segmented two-stage causal conv (fwd + bwd) for `segment_causal_conv`,
+- [x] S4 (merged 11:25; step-level effect unmeasured until the GPU is free) fused Triton segmented two-stage causal conv (fwd + bwd) for `segment_causal_conv`,
       the eager path every reach arm pays at every core layer of every pass.
 - [ ] S5 measure: a 48-step profile run of the same config at the merged commit; report
       steps/s and the region split beside the 971 ms baseline. Bar: >= 1.30 steps/s on the
