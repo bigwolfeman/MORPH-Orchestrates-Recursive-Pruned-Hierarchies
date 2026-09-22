@@ -59,6 +59,7 @@ __all__ = [
     "code_contrastive_accuracy",
     "mdm_mask", "mdm_loss", "mdm_unmask_counts", "maskgit_sample",
     "code_grade_distinct2", "code_grade_pref_loss",
+    "code_enc_var_floor",
 ]
 
 _SEED_ENC = 0xC0DE
@@ -250,6 +251,40 @@ def code_target_shuffled_cos(pred: Tensor, z: Tensor, ok: Tensor) -> Tensor:
     Z = z.float()[ok]
     Zr = torch.roll(Z, shifts=Z.shape[0] // 2, dims=0)
     return ((P * Zr).sum(-1) / float(C)).mean()
+
+
+def code_enc_var_floor(pred: Tensor, ok: Tensor, gamma: float, eps: float = 1e-4
+                       ) -> tuple[Tensor, Tensor, Tensor]:
+    """``tul.code_enc_var_lambda`` (LCTUL-J Stage 1, JEPA-Anything eq. 9's ``L_enc``): a
+    variance floor on the ONLINE predicted cells, per cell index and coordinate.
+
+    ``pred`` ``[B, S, M, C]`` the predicted cells AFTER :func:`code_rmsnorm`, ``ok``
+    ``[B, S]`` the valid slots. For each ``(m, j)``, ``sigma_{m,j} = sqrt(var over the
+    valid slots of pred[..., m, j] + eps)`` (biased, ``unbiased=False``); the loss is
+    ``mean_{m,j} max(0, gamma - sigma_{m,j})``. Returns ``(loss, std_mean, active_frac)``:
+    ``std_mean`` the mean of ``sigma`` over ``(m, j)`` and ``active_frac`` the fraction of
+    coordinates with ``sigma < gamma`` (both detached instruments, the collapse reading —
+    read this on ``z_tgt`` too, no loss, as the TARGET-side ``code_tgt_std``). With fewer
+    than two valid slots there is no variance to measure: an exact 0 that still carries
+    ``pred``'s graph, ``std_mean`` 0, ``active_frac`` 0.
+
+    fp32 throughout, the ``code_target_regression`` convention.
+    """
+    B, S, M, C = pred.shape
+    p = pred.float()
+    okm = ok.reshape(B, S).bool()
+    n = int(okm.sum())
+    if n < 2:
+        zero = (p * 0.0).sum()
+        return zero, zero.detach(), zero.detach()
+    P = p[okm]                                                              # [n, M, C]
+    var = P.var(dim=0, unbiased=False)                                      # [M, C]
+    sigma = torch.sqrt(var + eps)                                           # [M, C]
+    floor = torch.clamp(gamma - sigma, min=0.0)
+    loss = floor.mean()
+    std_mean = sigma.mean().detach()
+    active_frac = (sigma < gamma).float().mean().detach()
+    return loss, std_mean, active_frac
 
 
 def code_grade_distinct2(tokens: Tensor, lengths: Tensor) -> Tensor:

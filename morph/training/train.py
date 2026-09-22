@@ -146,6 +146,11 @@ def evaluate(
                           "vq_weighted", "row_contrast_weighted", "horizon_weighted",
                           "code_fm_weighted", "code_sigreg_weighted", "code_target_weighted",
                           "code_grade_weighted",
+                          # tul.code_enc_var_lambda (LCTUL-J Stage 1, 2026-09-22): the
+                          # online variance floor, weighted separately from
+                          # code_target_weighted (see _tul_code_target_write's
+                          # docstring). Subtracted so val loss stays the MODEL's CE.
+                          "code_enc_var_weighted",
                           # tul.loop_denoise (LXTUL-P change 1, 2026-09-21): the
                           # per-pass denoising sum. Subtracted so val loss stays the
                           # MODEL's CE and the ppl guard fires on the language model.
@@ -184,6 +189,11 @@ def evaluate(
                         "code_target", "code_target_mse", "code_target_cos",
                         # the generic floor and the InfoNCE top-1 rate (code-only arms)
                         "code_target_cos_shuf", "code_target_acc",
+                        # tul.code_enc_var_lambda (LCTUL-J Stage 1): the online variance
+                        # floor's raw value, its mean sigma and active fraction; the
+                        # TARGET-side collapse reading (code_tgt_std) runs whenever
+                        # code_target is on, lambda 0 or not.
+                        "code_enc_var", "code_enc_std", "code_enc_active", "code_tgt_std",
                         # tul.loop_denoise: no per-pass TERM is built at eval (the
                         # rollout has no teacher), so only the exit readings above
                         # appear there; `loop_denoise*` is train-side only.
@@ -2639,6 +2649,17 @@ def main(cfg: DictConfig) -> None:
               f"0 trainable, eval mode; every code target and every grade is measured "
               f"against it", flush=True)
 
+    # ── tul.code_target_ema (LCTUL-J Stage 1) ─────────────────────────────────────────
+    # Resolved ONCE, outside the training loop: whether and at what momentum the frozen
+    # twin above moves toward the live model after every optimizer step.
+    _code_ema_m = float(getattr(getattr(_mdl0, "cfg", None).tul, "code_target_ema", 0.0)
+                        if getattr(_mdl0, "cfg", None) is not None
+                        and getattr(_mdl0.cfg, "tul", None) is not None else 0.0)
+    if _code_ema_m > 0.0:
+        print(f"  [code_ref] EMA target: momentum m={_code_ema_m} (the twin keeps "
+              f"fraction m of itself after every optimizer step, weight (1 - m) toward "
+              f"the live model)", flush=True)
+
     # The phase (bag_size, tul_on) and both loaders are built after the curriculum block,
     # where total_steps is final. See phase.py.
     # Data fast-forward to the exact resume position (deterministic unshuffled stream). Only
@@ -3465,6 +3486,12 @@ def main(cfg: DictConfig) -> None:
             _proj_log = _spec_proj.step() if _spec_proj is not None else {}
             if _tern_ema_pairs:
                 update_scale_emas(_tern_ema_pairs)
+            # tul.code_target_ema (LCTUL-J Stage 1): AFTER the optimizer step and AFTER
+            # the projected-gradient constraint and the ternary scale EMA above, so the
+            # twin always lags the weights those actually produced. On the un-compiled
+            # module (`_mdl0`), never `model` — the twin's own parameters live there.
+            if _code_ema_m > 0.0:
+                _mdl0.tul_code_ref_ema_update(_code_ema_m)
 
         # ── Prune-divergence diagnostic (env MORPH_DIAG_OPT=<path>) ─────────
         # Post-step, grads still live (zero_grad is top-of-next-iter). Dequants m₂/ν and
@@ -3556,7 +3583,11 @@ def main(cfg: DictConfig) -> None:
                         "code_fm_weighted",   # TUL-Code flow term (the val side already
                                               # subtracts it; the tul-code draw at 2b6b321
                                               # reported CE + flow as train/loss)
-                        "code_sigreg_weighted"):  # LeJEPA SIGReg on the code cells
+                        "code_sigreg_weighted",   # LeJEPA SIGReg on the code cells
+                        "code_enc_var_weighted"):  # LCTUL-J Stage 1, 2026-09-22: the
+                                                   # online variance floor, its own weight
+                                                   # (code_enc_var_lambda), separate from
+                                                   # code_target_weight
                 if isinstance(out, dict) and out.get(_ak) is not None:
                     _lv = _lv - float(out[_ak])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
@@ -3606,6 +3637,10 @@ def main(cfg: DictConfig) -> None:
                     # construction (transformer.py wraps the stats as 0-d tensors).
                     or _k.startswith("code_fm") or _k.startswith("code_sigreg")
                     or _k.startswith("code_target") or _k.startswith("code_grade")
+                    # tul.code_enc_var_lambda (LCTUL-J Stage 1): the online variance
+                    # floor, its weighted twin (both "code_enc*") and the target-side
+                    # collapse reading.
+                    or _k.startswith("code_enc") or _k == "code_tgt_std"
                     # tul.loop_denoise: the sum, its weighted twin and the per-pass
                     # `loop_denoise_l2_t{t}` / `_cos_t{t}` / `_level_t{t}` (a VARIABLE
                     # number of keys — the batch's realised max depth decides how many)
@@ -3730,6 +3765,14 @@ def main(cfg: DictConfig) -> None:
                 # per-pass cosines `code_target_cos_l{t}` (one key per realised pass).
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
                     if _k.startswith("code_target") and out[_k] is not None:
+                        log[f"tul/{_k}"] = float(out[_k].detach())
+                # tul.code_enc_var_lambda (LCTUL-J Stage 1, 2026-09-22): the online
+                # variance floor ("code_enc_var", its weighted twin, "code_enc_std",
+                # "code_enc_active") and the target-side collapse reading
+                # ("code_tgt_std", live whenever code_target is on, lambda 0 or not).
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if (_k.startswith("code_enc") or _k == "code_tgt_std") \
+                            and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.code_grade (spec §17.2): the grades, the cosines to E(best) and
                 # E(true), the degenerate fraction and the per-pass `code_grade_cos_l{t}`.

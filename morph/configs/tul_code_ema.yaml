@@ -1,0 +1,42 @@
+# LCTUL-J Stage 1, arm "tul-code-ema" (2026-09-22; note
+# .agents/notes/proposed/architecture/2026-09-22-lctul-ema-target-and-factors.md).
+#
+# The frozen VAE-stage twin `tul_code_target.yaml` builds (`tul.code_target_ref`) stops
+# being a fixed snapshot and becomes an EMA of the LIVE model instead
+# (`tul.code_target_ema: 0.996`, JEPA-Anything's target-encoder momentum), so the target
+# drifts toward what the context can predict instead of staying a verbatim reconstruction
+# code. `tul.code_enc_var_lambda: 0.02` is the paper's `L_enc` (eq. 9): a variance floor
+# on the ONLINE predicted cells, the collapse guard a MOVING target needs — the earlier
+# `tul-code-lejepa` arm moved the code with no floor and the online front's own input
+# drift collapsed it (own cosine 0.61 -> 0.99 by step 3000).
+#
+# ONE change against `tul_code_target.yaml`, beyond the EMA/floor knobs themselves:
+# `training.train_only` is CLEARED to `[]` (the whole model trains — the front-freeze
+# check `assert_code_target_front_frozen` is satisfied by `code_target_ref` alone, not by
+# `train_only`; see train.py). Read against `code_enc_var_lambda`'s stated rule (the
+# 2026-09-22 build report): the floor's weight is NOT scaled by `code_target_weight`.
+#
+# E's ONLINE copy receives no gradient on this arm (the online path never encodes a
+# target): the twin's E stays the VAE stage's E and the target moves only through the
+# EMA of the front. That is the I-JEPA regime, stated and not hidden.
+defaults:
+  - tul_code_target
+  - _self_
+training:
+  steps: 5000
+  ckpt_every: 2500
+  ademamix_t_beta3: 5000
+  data_skip_batches: 10000
+  # div_ppl_ceiling: inherited from tul_code_target.yaml (1e8) — the frozen strict coda's
+  # CE on the predicted cell is the arm's instrument, not a divergence signal.
+  train_only: []                  # whole model trains; code_target_ref satisfies the
+                                   # front-freeze check on its own (train.py)
+tul:
+  code_target_ref: true
+  code_target_ema: 0.996
+  code_enc_var_lambda: 0.02
+  code_enc_var_gamma: 1.0
+  code_target_detach: true
+  token_state_dropout: 0.0
+wandb:
+  name: tul-code-ema

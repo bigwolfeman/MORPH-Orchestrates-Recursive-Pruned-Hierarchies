@@ -1,0 +1,17 @@
+# LCTUL-J Stage 1, the one-factor control "tul-code-ema0" against `tul_code_ema.yaml`
+# (2026-09-22; note
+# .agents/notes/proposed/architecture/2026-09-22-lctul-ema-target-and-factors.md).
+#
+# Identical arm, EMA and the variance floor both off: `code_target_ema: 0.0` keeps the
+# frozen twin (`tul_code_target.yaml`'s ORIGINAL behaviour, bit-identical to the tree
+# before this key), `code_enc_var_lambda: 0.0` turns the floor off. Everything else —
+# `train_only: []` included — matches the EMA arm, so a paired reading isolates the EMA
+# and the floor's contribution from the "whole model trains" change alone.
+defaults:
+  - tul_code_ema
+  - _self_
+tul:
+  code_target_ema: 0.0
+  code_enc_var_lambda: 0.0
+wandb:
+  name: tul-code-ema0

@@ -1060,6 +1060,30 @@ class TULConfig:
     # contributes only the loop's predicted cell. Costs one extra fp32 copy of the model
     # (~1.1 GB at 270M) plus one no_grad prelude forward per step.
     code_target_ref: bool = False
+    # ── THE EMA TARGET AND THE ONLINE VARIANCE FLOOR (LCTUL-J Stage 1, 2026-09-22) ────
+    #
+    # JEPA-Anything (arXiv 2609.20800)'s answer to a target that cannot move: the frozen
+    # twin `code_target_ref` builds becomes an EMA of the LIVE model instead of a fixed
+    # snapshot, so the target drifts toward what the context can predict rather than
+    # staying a verbatim reconstruction code. `code_enc_var_lambda` is the paper's
+    # `L_enc` (eq. 9): a variance floor on the ONLINE predicted cells — the collapse
+    # guard a moving target needs (the earlier `tul-code-lejepa` arm moved the code with
+    # no floor and the online front's own input drift collapsed it, own cosine 0.61 ->
+    # 0.99 by step 3000). Note:
+    # .agents/notes/proposed/architecture/2026-09-22-lctul-ema-target-and-factors.md.
+    code_target_ema: float = 0.0         # 0.0 keeps the frozen twin, bit-identical to
+                                         # the tree before this key. 0 < m < 1: AFTER
+                                         # every optimizer step the twin lerps toward the
+                                         # live model, weight (1 - m) — m is the fraction
+                                         # of the OLD twin kept (I-JEPA's constant,
+                                         # 0.996). Needs code_target AND code_target_ref;
+                                         # fixed for the run, no schedule in Stage 1.
+    code_enc_var_lambda: float = 0.0     # weight of L_enc, the online variance floor
+                                         # (paper 0.02); 0.0 = off. Needs code_target.
+    code_enc_var_gamma: float = 1.0      # the floor's target std sigma (the paper does
+                                         # not state it; VICReg's standard,
+                                         # sqrt(Var + 1e-4), which a unit-RMS zero-mean
+                                         # cell reads 1.0 at per coordinate).
     # ── THE GRADED-CONTINUATION TARGET (arm `tul-code-grade`, 2026-09-17; spec §17.2) ──
     #
     # Every target above is a deterministic function of the past and every one is met in
@@ -2098,6 +2122,7 @@ class TULConfig:
         # rule must be told about the key it actually set, not about a rule it inherited.
         self._check_loop_denoise()
         self._check_code_target()
+        self._check_code_ema()
         self._check_code_grade()
         if self.prefix_source in ("trajectory", "entry_exit") and self.prefix_k < 2:
             raise ValueError(
@@ -3258,6 +3283,35 @@ class TULConfig:
             raise NotImplementedError(
                 "tul.code_target with tul.bcast / spandec_reads_cells: both read the prefix "
                 "write, which on this arm is the projection's cells, not h_slots.")
+
+    def _check_code_ema(self) -> None:
+        """``tul.code_target_ema`` / ``tul.code_enc_var_*`` — LCTUL-J Stage 1 (spec
+        `.agents/notes/proposed/architecture/2026-09-22-lctul-ema-target-and-factors.md`):
+        the moving EMA target and its online variance floor.
+        """
+        if not 0.0 <= self.code_target_ema < 1.0:
+            raise ValueError(
+                f"tul.code_target_ema must be in [0, 1), got {self.code_target_ema}")
+        if self.code_target_ema > 0.0:
+            if not self.code_target:
+                raise ValueError(
+                    "tul.code_target_ema > 0 needs tul.code_target: there is no encoder, "
+                    "no projection and no frozen twin to move without it.")
+            if not self.code_target_ref:
+                raise ValueError(
+                    "tul.code_target_ema > 0 needs tul.code_target_ref: the EMA update "
+                    "moves the FROZEN TWIN that code_target_ref builds; with no twin "
+                    "there is nothing for the momentum to act on.")
+        if self.code_enc_var_lambda < 0.0:
+            raise ValueError(
+                f"tul.code_enc_var_lambda must be >= 0, got {self.code_enc_var_lambda}")
+        if self.code_enc_var_gamma <= 0.0:
+            raise ValueError(
+                f"tul.code_enc_var_gamma must be > 0, got {self.code_enc_var_gamma}")
+        if self.code_enc_var_lambda > 0.0 and not self.code_target:
+            raise ValueError(
+                "tul.code_enc_var_lambda > 0 needs tul.code_target: the floor acts on "
+                "the predicted cells the code-target projection builds.")
 
     def _check_code_grade(self) -> None:
         """``tul.code_grade`` — the graded-continuation target (spec §17.2)."""

@@ -82,6 +82,7 @@ KNOWN_TUL_KEYS = frozenset({
     "code_target_source", "code_sonar_cache",
     "code_target", "code_target_weight", "code_target_detach", "code_target_skip_coda",
     "code_target_loss", "code_target_tau", "code_target_ref",
+    "code_target_ema", "code_enc_var_lambda", "code_enc_var_gamma",
     "code_grade", "code_grade_k", "code_grade_tokens", "code_grade_rows",
     "code_grade_every", "code_grade_loss", "code_grade_grader", "code_grade_weight",
     "code_grade_temp", "code_grade_tau", "code_grade_min_distinct2",
@@ -454,6 +455,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         code_target_loss=str(tc.get("code_target_loss", "l2")),
         code_target_tau=float(tc.get("code_target_tau", 0.1)),
         code_target_ref=bool(tc.get("code_target_ref", False)),
+        code_target_ema=float(tc.get("code_target_ema", 0.0)),
+        code_enc_var_lambda=float(tc.get("code_enc_var_lambda", 0.0)),
+        code_enc_var_gamma=float(tc.get("code_enc_var_gamma", 1.0)),
         loop_denoise=bool(tc.get("loop_denoise", False)),
         loop_denoise_grid=str(tc.get("loop_denoise_grid", "linear")),
         loop_denoise_weight=float(tc.get("loop_denoise_weight", 1.0)),
@@ -663,6 +667,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "code_target_loss": model_cfg.code_target_loss,
         "code_target_tau": model_cfg.code_target_tau,
         "code_target_ref": model_cfg.code_target_ref,
+        "code_target_ema": model_cfg.code_target_ema,
+        "code_enc_var_lambda": model_cfg.code_enc_var_lambda,
+        "code_enc_var_gamma": model_cfg.code_enc_var_gamma,
         "loop_denoise": model_cfg.loop_denoise,
         "loop_denoise_grid": model_cfg.loop_denoise_grid,
         "loop_denoise_weight": model_cfg.loop_denoise_weight,
@@ -1010,6 +1017,20 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               "(.agents/notes/proposed/architecture/"
               "2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md)",
               flush=True)
+    if model_cfg.code_target and (model_cfg.code_target_ema > 0.0
+                                  or model_cfg.code_enc_var_lambda > 0.0):
+        # LCTUL-J Stage 1 (tul.code_target_ema / tul.code_enc_var_lambda, 2026-09-22).
+        _ema_bit = (f"EMA target, momentum m={model_cfg.code_target_ema} (the twin lerps "
+                   f"toward the live model after every optimizer step, weight "
+                   f"1-m={1.0 - model_cfg.code_target_ema:.4f})"
+                   if model_cfg.code_target_ema > 0.0 else "FROZEN target (m=0)")
+        _floor_bit = (f"variance floor L_enc: lambda={model_cfg.code_enc_var_lambda}, "
+                     f"gamma={model_cfg.code_enc_var_gamma} (own weight, NOT scaled by "
+                     f"code_target_weight)"
+                     if model_cfg.code_enc_var_lambda > 0.0 else "no variance floor")
+        print(f"  LCTUL-J ON: {_ema_bit}; {_floor_bit}. Read `tul/code_tgt_std` (the "
+              f"target-side collapse instrument, always on with code_target) beside "
+              f"`tul/code_enc_std` and `tul/code_enc_active`.", flush=True)
     if model_cfg.loop_denoise:
         # LXTUL-P change 1 (tul.loop_denoise). The banner prints the two things that make
         # this arm unreadable if they are forgotten: train and eval run DIFFERENT

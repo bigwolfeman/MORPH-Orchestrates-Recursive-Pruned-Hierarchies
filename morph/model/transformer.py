@@ -60,7 +60,7 @@ from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
                        code_target_regression, code_target_shuffled_cos,
                        code_thinker_relation, euler_sample, draw_flow_t,
                        code_contrastive_accuracy,
-                       code_grade_distinct2, code_grade_pref_loss,
+                       code_grade_distinct2, code_grade_pref_loss, code_enc_var_floor,
                        TULCodeSymHead, mdm_loss, mdm_mask, maskgit_sample)
 from .tul_denoise import (TULLoopDenoiseIn, loop_denoise_interp, loop_denoise_levels)
 from .tul_layout import (SlotLayout, span_reach_allow, span_ids_from_ids,
@@ -7352,16 +7352,19 @@ class MORPHTransformer(nn.Module):
         :meth:`_tul_code_target_encode` before the loop ran. ``None`` — every other arm —
         computes it here, exactly as before.
 
-        Returns ``(values, cells, z, loss, stats, grade_loss, grade_stats)``: ``z`` is the
-        frozen encoder's code of THIS row's spans (``out["code_z"]`` at eval, what the
-        graded sampler reads off a candidate row), ``grade_loss`` / ``grade_stats`` are
-        :meth:`_tul_code_grade`'s (spec §17.2; ``None`` and ``{}`` off a graded step).
+        Returns ``(values, cells, z, loss, stats, grade_loss, grade_stats, enc_var_loss)``:
+        ``z`` is the frozen encoder's code of THIS row's spans (``out["code_z"]`` at eval,
+        what the graded sampler reads off a candidate row), ``grade_loss`` / ``grade_stats``
+        are :meth:`_tul_code_grade`'s (spec §17.2; ``None`` and ``{}`` off a graded step).
         ``values`` ``[B, S·M, (n,) C]`` ready for
         :func:`scatter_positions` at :meth:`TULSlots.prefix_positions`; ``cells``
         ``[B, S, M, C]`` what the coda reads (after the oracle switch, ``code_given`` and
         the plan ablation), returned as ``out["code_cells"]`` at eval; ``loss`` the
         regression of the PREDICTED cells onto the frozen encoder's code, ``2 (1 − cos)``
-        per valid cell; ``stats`` the readings.
+        per valid cell; ``stats`` the readings. ``enc_var_loss`` (``tul.code_enc_var_lambda``,
+        LCTUL-J Stage 1) is the RAW (unweighted) online variance floor with its own graph —
+        ``None`` at ``code_enc_var_lambda == 0`` — kept separate from ``loss`` on purpose
+        (below).
 
         THE TARGET. E runs under ``no_grad`` on the token positions of this forward's own
         prelude output (``xn``), exactly as the VAE stage ran it, and its code is unit-RMS
@@ -7379,6 +7382,19 @@ class MORPHTransformer(nn.Module):
         ``core_init(e)``, ``code_target_cos_l{t}`` the state after pass ``t`` over the slots
         whose realised depth reaches it. Whether the passes MOVE toward the code is the
         arm's depth question, and this is where it is read.
+
+        THE VARIANCE FLOOR (``tul.code_enc_var_lambda``, LCTUL-J Stage 1). Returned
+        UNWEIGHTED and NOT folded into ``loss``: ``loss`` is what the caller multiplies by
+        ``tc.code_target_weight`` (the seam a few lines up the call stack), and folding the
+        floor in there would scale ``L_enc`` by ``code_target_weight`` too — a different
+        knob doing a different job (the regression's own weight, not the floor's). The
+        caller instead adds ``code_enc_var_lambda * enc_var_loss`` to ``groups["loss"]``
+        directly, so the floor's weight is exactly ``code_enc_var_lambda`` whatever
+        ``code_target_weight`` is set to. ``stats["code_enc_var"]`` is this same raw value,
+        detached, for the log. ``stats["code_tgt_std"]`` runs UNCONDITIONALLY (lambda 0 or
+        not) on ``z_tgt`` under ``no_grad``: the target-side collapse instrument, no loss —
+        an EMA target (``code_target_ema``) can still collapse even with the floor on the
+        online side (Risks, the spec note).
         """
         tc = self.cfg.tul
         if z_tgt is None:
@@ -7411,6 +7427,20 @@ class MORPHTransformer(nn.Module):
                      "code_target_n": float(n)}
         # own minus this is what the cell knows about ITS span (the generic floor)
         stats["code_target_cos_shuf"] = float(code_target_shuffled_cos(pred.detach(), z_tgt, ok))
+        # LCTUL-J Stage 1 (tul.code_enc_var_lambda): the online variance floor on `pred`,
+        # kept unweighted here — see the docstring for why the caller weights it, not this
+        # method. `code_tgt_std` runs UNCONDITIONALLY, no_grad, on the target `z_tgt`: the
+        # target-side collapse reading, live whether or not the floor is charged.
+        enc_var_loss = None
+        if tc.code_enc_var_lambda > 0.0:
+            enc_var_loss, enc_std_mean, enc_active = code_enc_var_floor(
+                pred, ok, tc.code_enc_var_gamma)
+            stats["code_enc_var"] = float(enc_var_loss.detach())
+            stats["code_enc_std"] = float(enc_std_mean)
+            stats["code_enc_active"] = float(enc_active)
+        with torch.no_grad():
+            _, _tgt_std_mean, _ = code_enc_var_floor(z_tgt, ok, tc.code_enc_var_gamma)
+            stats["code_tgt_std"] = float(_tgt_std_mean)
         if db_traj is not None and self.training:
             with torch.no_grad():
                 for t, ht in enumerate(db_traj):
@@ -7439,7 +7469,7 @@ class MORPHTransformer(nn.Module):
         if self.cfg.tul.code_grade and input_ids is not None:
             grade_loss, grade_stats = self._tul_code_grade(
                 pred, z_tgt, ok, layout, input_ids, db_traj, depths)
-        return values, cells, z_tgt, loss, stats, grade_loss, grade_stats
+        return values, cells, z_tgt, loss, stats, grade_loss, grade_stats, enc_var_loss
 
     # ── the frozen reference copy (tul.code_target_ref; spec §17.1) ──────────────────
 
@@ -7484,6 +7514,70 @@ class MORPHTransformer(nn.Module):
         """The reference's ``state_dict`` for the checkpoint, or ``None``."""
         ref = self.__dict__.get("_code_ref")
         return None if ref is None else ref.state_dict()
+
+    def tul_code_ref_ema_update(self, m: float) -> None:
+        """``tul.code_target_ema`` (LCTUL-J Stage 1): lerp the frozen twin toward the LIVE
+        model, weight ``(1 - m)`` — the twin keeps fraction ``m`` of its own value:
+        ``theta_ref <- m * theta_ref + (1 - m) * theta_live``. A no-op when
+        ``code_target_ref`` never built a twin (``code_ref is None``).
+
+        Called by the trainer ONCE per optimizer step, AFTER the step and after every
+        post-step bookkeeping (the projected-gradient constraint, the ternary scale EMA),
+        so the twin always lags the weights those actually produced. The LIVE model's own
+        tensors are never written — every mutation lands in the twin's.
+
+        NAMED lookup, not a zipped module walk: the twin is ``copy.deepcopy(self)``, so a
+        parametrised tensor (a ternary shadow weight) surfaces as
+        ``...parametrizations.weight.original`` on BOTH sides under ``named_parameters``,
+        and matching by name is what keeps that identity across the two ``state_dict``
+        layouts. The two tensors' NAME SETS are asserted equal once, at the first update
+        this instance runs (a deepcopy guarantees they start equal; the assertion exists
+        so a future edit that unregisters something on one side fails loudly here rather
+        than silently updating a stale or missing subset).
+
+        Grouped by ``(dtype, device)`` for ``torch._foreach_lerp_`` (`(1)`, the paper's
+        eq. 2): float PARAMETERS and float BUFFERS lerp together; integer / bool buffers
+        (RNG-free counters, masks) have no meaningful float average and are COPIED.
+        """
+        ref = self.__dict__.get("_code_ref")
+        if ref is None:
+            return
+        if not 0.0 <= m < 1.0:
+            raise ValueError(f"tul_code_ref_ema_update: m must be in [0, 1), got {m}")
+        live_params = dict(self.named_parameters())
+        live_bufs = dict(self.named_buffers())
+        ref_params = dict(ref.named_parameters())
+        ref_bufs = dict(ref.named_buffers())
+        if not self.__dict__.get("_code_ema_names_checked", False):
+            _live_names = set(live_params) | set(live_bufs)
+            _ref_names = set(ref_params) | set(ref_bufs)
+            if _live_names != _ref_names:
+                _missing = sorted(_live_names - _ref_names)
+                _extra = sorted(_ref_names - _live_names)
+                raise RuntimeError(
+                    "tul_code_ref_ema_update: the live model and the frozen twin do not "
+                    f"name the same tensors. Missing from the twin: {_missing}. Extra in "
+                    f"the twin: {_extra}.")
+            self.__dict__["_code_ema_names_checked"] = True
+        with torch.no_grad():
+            _groups: dict[tuple, tuple[list[Tensor], list[Tensor]]] = {}
+            for name, rp in ref_params.items():
+                key = (rp.dtype, rp.device)
+                dst, src = _groups.setdefault(key, ([], []))
+                dst.append(rp)
+                src.append(live_params[name].detach())
+            for name, rb in ref_bufs.items():
+                lb = live_bufs[name]
+                if not torch.is_floating_point(rb):
+                    rb.copy_(lb)
+                    continue
+                key = (rb.dtype, rb.device)
+                dst, src = _groups.setdefault(key, ([], []))
+                dst.append(rb)
+                src.append(lb.detach())
+            for (dst, src) in _groups.values():
+                if dst:
+                    torch._foreach_lerp_(dst, src, 1.0 - m)
 
     def _code_read_model(self):
         """WHICH model computes the VAE-stage readings: the frozen twin when there is one.
@@ -9061,6 +9155,7 @@ class MORPHTransformer(nn.Module):
         _code_z_out = None
         code_target_loss, code_target_stats = None, {}
         code_grade_loss, code_grade_stats = None, {}
+        code_enc_var_loss = None
         if slot_depths is not None:
             # The SAME rule tul_step_mode='db1' states above: every branch of this forward
             # that never reaches `_tul_core` would ignore the table in silence, so each is
@@ -9762,7 +9857,7 @@ class MORPHTransformer(nn.Module):
                 # ablation all live in one method so the cells the coda reads and the
                 # cells the loss grades are built at one seam.
                 (_ct_values, _code_cells_out, _code_z_out, code_target_loss,
-                 code_target_stats, code_grade_loss, code_grade_stats
+                 code_target_stats, code_grade_loss, code_grade_stats, code_enc_var_loss
                  ) = self._tul_code_target_write(h_slots, xn, db_traj, depths, layout, L,
                                                  plan_mode, code_mode, code_given,
                                                  code_given_mask, input_ids,
@@ -10041,6 +10136,14 @@ class MORPHTransformer(nn.Module):
             _tw = tc.code_target_weight * code_target_loss
             groups["code_target_weighted"] = _tw.detach()
             groups["loss"] = groups["loss"] + _tw
+            if code_enc_var_loss is not None:
+                # LCTUL-J Stage 1 (tul.code_enc_var_lambda): a SEPARATE weight from
+                # code_target_weight (`_tul_code_target_write`'s docstring says why) —
+                # the floor's own contribution to the objective is exactly
+                # code_enc_var_lambda, not code_target_weight * code_enc_var_lambda.
+                _ew = tc.code_enc_var_lambda * code_enc_var_loss
+                groups["code_enc_var_weighted"] = _ew.detach()
+                groups["loss"] = groups["loss"] + _ew
         _dn_out = self._loop_denoise
         # Consumed here and CLEARED here (the `_core_aux` contract): the stash holds a
         # graph tensor, and a module attribute that outlives the forward breaks
