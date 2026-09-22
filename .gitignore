@@ -55,3 +55,6 @@ uv.lock
 
 # template-standard bulky artifacts (probe logs etc.), see AGENTS.md
 ignored/
+# 2026-09-22: sweep token dumps and per-step probe streams are large binaries; they stay under morph-scratch (a pointer in the filing names them)
+lab/experiments/results/**/*.npz
+lab/experiments/results/**/*.jsonl
