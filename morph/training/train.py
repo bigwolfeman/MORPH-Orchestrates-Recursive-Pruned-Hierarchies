@@ -525,6 +525,10 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         # comment). 0 is the "span" arm's own same-span relation, bit-identical to
         # leaving the key out of the YAML.
         span_reach=int(m.get("span_reach", 0)),
+        # Which block gets the reach relation (`MORPHConfig.span_reach_layer`'s own
+        # comment). -1 is every block (today's default), bit-identical to leaving the
+        # key out of the YAML.
+        span_reach_layer=int(m.get("span_reach_layer", -1)),
         top_k=int(m.top_k),
         window_size=int(m.window_size),
         context_len=int(m.context_len),

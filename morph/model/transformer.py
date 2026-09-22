@@ -323,6 +323,26 @@ class MORPHConfig:
     # cross-span budget of `lab/experiments/failures/2026-09-11-arc-span-budget.md`
     # into a previous-span part and a further-back part.
     span_reach: int = 0
+    # WHICH block gets the reach relation (model.span_reach_layer). -1 (default): every
+    # block gets `span_reach_allow(span_id, span_reach)` — today's behaviour, and the
+    # reason `span_reach`'s own reading is only a LOWER bound on "what a previous span
+    # is worth": the stack relays one span per attention layer (a query in span k reads
+    # span k-1's states, which one layer earlier already read span k-2 — see
+    # `span_reach`'s own comment and the leak test). ``g >= 0``: ONLY the block whose
+    # GLOBAL index (prelude 0..n_prelude-1, core n_prelude..n_prelude+n_core-1, coda
+    # n_prelude+n_core..n_prelude+n_core+n_coda-1 — `_back_region`'s own `gi`) equals
+    # `g` gets `span_reach_allow(span_id, span_reach)`; every OTHER block gets
+    # `span_reach_allow(span_id, 0)` (own-span only). A query in span k+1 at THAT one
+    # block reads span k's states as they enter it — states built under reach 0 the
+    # whole way up to there — so nothing from span k-1 can have arrived: the EXACT
+    # previous-span reading, not a lower bound. Refused: `span_reach_layer != -1` with
+    # `span_reach == 0` (nothing to widen); `g` outside `[0, n_prelude+n_core+n_coda)`;
+    # `g` inside the CORE's range — the core is LOOPED and every pass shares the same
+    # relation, so a cross-span read there relays once per pass, the exact problem this
+    # knob exists to avoid, not a single clean hop. Arm `budget-web-reach1-coda`
+    # (`g = n_prelude + n_core`, coda's first block) is the exact-previous-span upper
+    # bound paired against `budget-web-reach1`'s lower bound.
+    span_reach_layer: int = -1
 
     top_k: int = 128
     d_indexer: int = 32
@@ -1402,9 +1422,30 @@ class MORPHTransformer(nn.Module):
             raise ValueError(
                 "model.span_reach != 0 requires model.span_mask='span': 'row' and "
                 "'off' have no span index for a reach to count from.")
+        if cfg.span_reach_layer != -1 and cfg.span_reach == 0:
+            raise ValueError(
+                "model.span_reach_layer != -1 requires model.span_reach != 0: with "
+                "span_reach 0 every block already reads only its own span, so there is "
+                "no wider relation for span_reach_layer to confine to one block.")
+        if cfg.span_reach_layer != -1:
+            _n_total = cfg.n_prelude + cfg.n_core + cfg.n_coda
+            if not (0 <= cfg.span_reach_layer < _n_total):
+                raise ValueError(
+                    f"model.span_reach_layer {cfg.span_reach_layer} out of range "
+                    f"[0, {_n_total}) (n_prelude={cfg.n_prelude} + n_core={cfg.n_core} "
+                    f"+ n_coda={cfg.n_coda}).")
+            if cfg.n_prelude <= cfg.span_reach_layer < cfg.n_prelude + cfg.n_core:
+                raise ValueError(
+                    f"model.span_reach_layer {cfg.span_reach_layer} indexes a CORE block "
+                    f"(core range [{cfg.n_prelude}, {cfg.n_prelude + cfg.n_core})): the "
+                    "core is LOOPED and every pass shares the SAME attention relation, "
+                    "so a cross-span read there relays once per pass — exactly the "
+                    "multi-hop relay this knob exists to avoid, not one clean hop. Pick "
+                    "a prelude or coda block instead.")
         self._span_mask = cfg.span_mask != "off"
         self._span_rule = cfg.span_rule if cfg.span_mask == "span" else None
         self._span_reach = int(cfg.span_reach)
+        self._span_reach_layer = int(cfg.span_reach_layer)
         if self._span_mask:
             if cfg.span_mask == "span" and cfg.span_rule is None:
                 raise ValueError(
@@ -3056,13 +3097,19 @@ class MORPHTransformer(nn.Module):
 
     def _front_tail(self, x: Tensor, input_ids: Tensor, bigram_emb,
                     ve_bagged, attn_kwargs: dict | None = None,
-                    ret_reset_mask: Tensor | None = None) -> tuple[Tensor, Tensor]:
+                    ret_reset_mask: Tensor | None = None,
+                    attn_kwargs_at: dict[int, dict] | None = None) -> tuple[Tensor, Tensor]:
         """x0 skip-clone → HC stream expansion → prelude blocks. Returns (x, x0).
 
         ``attn_kwargs`` / ``ret_reset_mask`` (docs/tul-tg-spec.md §§1-4): the SAME
         tg_allow / slot-mask / GLA-reset-mask dict, built ONCE per forward, threaded
         into every prelude block. None on every non-TG path → the calls below are
         exactly ``layer(x)`` as before (bit-identical, spec T4).
+
+        ``attn_kwargs_at`` (``model.span_reach_layer`` only): ``{global_block_index:
+        dict}`` — a prelude block whose GLOBAL index (== its local index ``i`` here) is
+        a key gets THAT dict instead of ``attn_kwargs``. ``None`` on every other path →
+        the loop below is exactly the one above, bit-identical.
         """
         B, T = x.shape[0], x.shape[1]
         x0 = x.clone()      # single-stream skip signal (broadcast into HC streams)
@@ -3083,16 +3130,18 @@ class MORPHTransformer(nn.Module):
                 ve_bagged=ve_bagged,
             )
             x = self._apply_injection(x, term)
-            x = layer(x, attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
+            _akw = attn_kwargs_at[i] if attn_kwargs_at and i in attn_kwargs_at else attn_kwargs
+            x = layer(x, attn_kwargs=_akw, ret_reset_mask=ret_reset_mask)
         return x, x0
 
     def _span_context(self, input_ids: Tensor):
-        """``(block_kwargs, core_kwargs, bigram_cut)`` for ``model.span_mask``.
+        """``(block_kwargs, core_kwargs, bigram_cut, reach_override)`` for
+        ``model.span_mask``.
 
         Built ONCE per forward from the token ids alone, then threaded into the prelude,
         the core and the coda exactly the way the TG masks are — there is no per-block
-        recomputation and no second rule. ``(None, None, None)`` on a model built with
-        ``span_mask: "off"``, which keeps every op below untouched.
+        recomputation and no second rule. ``(None, None, None, None)`` on a model built
+        with ``span_mask: "off"``, which keeps every op below untouched.
 
         ``span_mask: "row"`` passes ``rule=None``: one span per row, so the relation is
         plain causal, the segment reset never fires and the bigram cut is only the row's
@@ -3114,28 +3163,50 @@ class MORPHTransformer(nn.Module):
         ``tg_seg`` (the conv/value-shift reset) and ``cut`` (the bigram cut) still come
         from ``span_id`` alone, so they cut at every span boundary at every reach — a
         reach arm's attention and its conv/bigram routes disagree on purpose.
+
+        ``model.span_reach_layer`` (-1 by default, bit-identical to before this field
+        existed): when set, ``block_kwargs`` / ``core_kwargs`` here fall back to the
+        REACH-0 (own-span-only) relation — the default for every block — and
+        ``reach_override`` is ``(gi, block_kwargs_at_gi)``, the ONE global block index
+        that instead gets `span_reach_allow(span_id, span_reach)`. ``_forward_single``
+        turns that into the ``attn_kwargs_at`` override `_front_tail` / `_back_region`
+        read; the core is never the target (refused at construction), so
+        ``core_kwargs`` needs no override path at all.
         """
         if not self._span_mask:
-            return None, None, None
+            return None, None, None, None
         ids_np = input_ids.detach().to("cpu", torch.int64).numpy()
         span_id = torch.from_numpy(span_ids_from_ids(ids_np, self._span_rule)).to(
             input_ids.device)
-        allow = span_reach_allow(span_id, self._span_reach)    # [B, 1, S, S] bool
         cut = span_start_mask(span_id)                         # [B, S] bool
-        block_kw = {"tg_allow": allow, "tg_comp_allow": allow, "tg_seg": span_id}
-        return block_kw, {"tg_allow": allow}, cut
+        if self._span_reach_layer == -1:
+            allow = span_reach_allow(span_id, self._span_reach)    # [B, 1, S, S] bool
+            block_kw = {"tg_allow": allow, "tg_comp_allow": allow, "tg_seg": span_id}
+            return block_kw, {"tg_allow": allow}, cut, None
+        # The default for every block is reach 0 (own span only); the ONE targeted
+        # block gets the wider relation — `tg_seg` is unchanged either way.
+        allow0 = span_reach_allow(span_id, 0)                  # [B, 1, S, S] bool
+        allowR = span_reach_allow(span_id, self._span_reach)   # [B, 1, S, S] bool
+        block_kw = {"tg_allow": allow0, "tg_comp_allow": allow0, "tg_seg": span_id}
+        block_kw_reach = {"tg_allow": allowR, "tg_comp_allow": allowR, "tg_seg": span_id}
+        reach_override = (self._span_reach_layer, block_kw_reach)
+        return block_kw, {"tg_allow": allow0}, cut, reach_override
 
     def _front_region(self, input_ids: Tensor, attn_kwargs: dict | None = None,
-                      bigram_cut: Tensor | None = None
+                      bigram_cut: Tensor | None = None,
+                      attn_kwargs_at: dict[int, dict] | None = None
                       ) -> tuple[Tensor, Tensor, Tensor | None]:
         """bag0 FRONT region: embed+dropout+bigram → _front_tail. Fixed shapes, no
         recurrence, one RNG site (embed_drop) + prelude MLP dropouts → graphable.
 
         ``attn_kwargs`` / ``bigram_cut``: ``model.span_mask``'s per-forward span masks
-        (`_span_context`). None on every other path → bit-identical to before."""
+        (`_span_context`). None on every other path → bit-identical to before.
+        ``attn_kwargs_at``: ``model.span_reach_layer``'s per-block override, see
+        `_front_tail`. None on every other path → bit-identical to before."""
         x = self.embed_drop(self.embed(input_ids))
         bigram_emb = self.embed.get_bigram(input_ids, bigram_cut)
-        x, x0 = self._front_tail(x, input_ids, bigram_emb, None, attn_kwargs=attn_kwargs)
+        x, x0 = self._front_tail(x, input_ids, bigram_emb, None, attn_kwargs=attn_kwargs,
+                                 attn_kwargs_at=attn_kwargs_at)
         return x, x0, bigram_emb
 
     def _back_region(self, x: Tensor, x0: Tensor, bigram_emb,
@@ -3143,7 +3214,8 @@ class MORPHTransformer(nn.Module):
                      inject_keep: Tensor | None = None,
                      attn_kwargs: dict | None = None,
                      ret_reset_mask: Tensor | None = None,
-                     checkpoint_blocks: bool = False) -> Tensor:
+                     checkpoint_blocks: bool = False,
+                     attn_kwargs_at: dict[int, dict] | None = None) -> Tensor:
         """BACK region: coda blocks → HC stream mean → lm_mixer → final_norm.
         input_ids is only threaded into _build_injection_term for signature parity —
         value-embeds fire exclusively in the prelude (gi ≥ n_prelude+n_core is never in
@@ -3162,7 +3234,11 @@ class MORPHTransformer(nn.Module):
         coda block. Only meaningful for the FULL-``L`` coda call (``coda_sees_slots
         and coda_token_cut == 0``); the gathered-subset coda callers never pass these
         (docs/tul-tg-spec.md does not define the restriction on a gathered index
-        space — see ``_forward_tul``'s raise for that combination)."""
+        space — see ``_forward_tul``'s raise for that combination).
+
+        ``attn_kwargs_at`` (``model.span_reach_layer`` only): see :meth:`_front_tail` —
+        keyed by the coda block's GLOBAL index ``gi``, not its local ``i``. ``None`` on
+        every other path → the loop below is exactly the one above, bit-identical."""
         for i, layer in enumerate(self.coda):
             gi = self.cfg.n_prelude + self.cfg.n_core + i
             term = self._build_injection_term(
@@ -3170,18 +3246,19 @@ class MORPHTransformer(nn.Module):
             )
             if inject_keep is not None:
                 term = term * inject_keep.to(term.dtype)
+            _akw = attn_kwargs_at[gi] if attn_kwargs_at and gi in attn_kwargs_at else attn_kwargs
             if checkpoint_blocks:
                 # ``checkpoint_blocks`` (tul.fan_mix="all"'s winner replay, 2026-09-20):
                 # one coda block's activations live at a time and each is recomputed in
                 # backward, the core loop's own rule. False on every shipped path → the
                 # ops below are the ones above, bit-identical.
-                def _blk(x_in: Tensor, t_in: Tensor, _layer=layer) -> Tensor:
-                    return _layer(self._apply_injection(x_in, t_in), attn_kwargs=attn_kwargs,
+                def _blk(x_in: Tensor, t_in: Tensor, _layer=layer, _akw=_akw) -> Tensor:
+                    return _layer(self._apply_injection(x_in, t_in), attn_kwargs=_akw,
                                   ret_reset_mask=ret_reset_mask)
                 x = checkpoint(_blk, x, term, use_reentrant=False)
             else:
                 x = self._apply_injection(x, term)
-                x = layer(x, attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
+                x = layer(x, attn_kwargs=_akw, ret_reset_mask=ret_reset_mask)
 
         return self._readout(x)
 
@@ -10950,7 +11027,11 @@ class MORPHTransformer(nn.Module):
         B, T_in = input_ids.shape
         s = bag_size
         # The span masks, built ONCE per forward from the ids (see `_span_context`).
-        _span_kw, _span_core_kw, _span_cut = self._span_context(input_ids)
+        _span_kw, _span_core_kw, _span_cut, _span_reach_ov = self._span_context(input_ids)
+        # `model.span_reach_layer` only: {global_block_index: its own reach-r dict}, so
+        # `_front_tail`/`_back_region` give every block but that ONE the reach-0 default
+        # already carried in `_span_kw`. None (the -1 default) → both regions ignore it.
+        _span_kw_at = {_span_reach_ov[0]: _span_reach_ov[1]} if _span_reach_ov else None
         if self._span_mask and s > 0:
             raise NotImplementedError(
                 "model.span_mask with TST bagging (bag_size > 0): a bagged position is "
@@ -10995,7 +11076,8 @@ class MORPHTransformer(nn.Module):
                     x, x0 = outs
                     bigram_emb = None
             else:
-                x, x0, bigram_emb = self._front_region(input_ids, _span_kw, _span_cut)
+                x, x0, bigram_emb = self._front_region(input_ids, _span_kw, _span_cut,
+                                                       attn_kwargs_at=_span_kw_at)
 
         # `labels` is read only by LoopMTP's Eq-13 term (training only, and only when
         # model.loopmtp_weight > 0); on every other model it is an unread argument and the
@@ -11015,7 +11097,7 @@ class MORPHTransformer(nn.Module):
             x = outs[0]
         else:
             x = self._back_region(x, x0, bigram_emb, input_ids,
-                                  attn_kwargs=_span_kw)
+                                  attn_kwargs=_span_kw, attn_kwargs_at=_span_kw_at)
 
         if labels is not None and self.cfg.use_kernels:
             # Fused chunked cross-entropy whenever we have labels (TRAINING **and**

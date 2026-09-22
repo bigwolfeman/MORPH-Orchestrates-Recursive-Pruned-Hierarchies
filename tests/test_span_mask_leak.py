@@ -216,25 +216,138 @@ def test_reach1_relation_is_reach1_at_a_single_attention_layer():
     assert saw_two_back, "fixture needs at least one query with 2+ earlier spans"
 
 
-# ── the end-to-end instrument ────────────────────────────────────────────────
+# ── model.span_reach_layer: the exact previous-span arm ───────────────────────
+#
+# `span_reach_layer` confines `span_reach`'s wider relation to ONE block: every block
+# EXCEPT it reads reach 0 (own-span only). A query in span k+1 at that ONE block reads
+# span k's states as they enter it, and those states were built under reach 0 the whole
+# way up to there, so nothing from span k-1 can have arrived — the end-to-end logit
+# check IS the right instrument here (unlike plain `span_reach`, see the section above).
+# `_tiny()`: n_prelude=2, n_core=2, n_coda=2 -> coda[0]'s global index is 2+2 = 4, the
+# SAME formula `_back_region` computes (`gi = cfg.n_prelude + cfg.n_core + i`).
+_TINY_CODA0_GI = 4
+
+
+def test_span_reach_layer_minus_one_is_bit_identical_to_the_field_absent():
+    ids = torch.from_numpy(_ids())
+    m_default = _model("span", span_reach=1)                     # span_reach_layer: default -1
+    m_explicit = _model("span", span_reach=1, span_reach_layer=-1)
+    assert m_default.cfg.span_reach_layer == -1 and m_explicit.cfg.span_reach_layer == -1
+    with torch.no_grad():
+        a = m_default(ids)["logits"]
+        b = m_explicit(ids)["logits"]
+    assert torch.equal(a, b)
+
 
 @pytest.mark.parametrize("site", ["interior", "boundary_token"])
-@pytest.mark.parametrize("mode,leaks", [("span", False), ("row", True)])
-def test_no_id_from_an_earlier_span_can_move_a_later_span(mode, leaks, site):
-    """Edit one token of span 0; every logit in spans >= 1 must not move (mode 'span').
+def test_reach1_coda_moves_one_span_back_and_not_two(site):
+    """`span_reach=1, span_reach_layer=coda[0]`: the exact previous-span arm. A
+    perturbation ONE span back MUST move logits (coda[0] reads directly across that one
+    boundary); a perturbation TWO spans back MUST move logits by EXACTLY 0.0 — every
+    block before coda[0] (every prelude block, every core pass) ran at reach 0, so there
+    is no relay path for it to have arrived by."""
+    ids = _ids()
+    span = span_ids_from_ids(ids, _rule())
+    assert span.max() >= 3, "fixture must carry at least 4 spans per row"
+    _pos, edited = _perturb_span0(ids, span, site)
+
+    m = _model("span", span_reach=1, span_reach_layer=_TINY_CODA0_GI)
+    with torch.no_grad():
+        a = m(torch.from_numpy(ids))["logits"]
+        b = m(torch.from_numpy(edited))["logits"]
+
+    span1 = torch.from_numpy(span[0] == 1)
+    span2plus = torch.from_numpy(span[0] >= 2)
+    assert span1.any() and span2plus.any(), "fixture needs spans 1 and >=2 present"
+
+    moved_span1 = (a[0][span1] != b[0][span1]).any().item()
+    assert moved_span1, (
+        "span_reach_layer's reach block must let span 1 read span 0's perturbed "
+        "token — the exact previous-span channel is supposed to be open")
+    assert torch.equal(a[0][span2plus], b[0][span2plus]), (
+        "LEAK: a perturbation two spans back moved logits under the exact "
+        "previous-span arm. Max |delta| = "
+        f"{(a[0][span2plus] - b[0][span2plus]).abs().max().item():.3e}")
+
+
+def test_span_reach_layer_only_the_reach_block_gets_the_wide_relation():
+    """Hook every prelude and coda block; ONLY the block at `span_reach_layer`'s global
+    index must be handed the reach-1 `tg_allow` tensor — every other block must be
+    handed the reach-0 tensor, bit-for-bit (`torch.equal` against an independently
+    built `span_reach_allow` call, not merely "not reach-1")."""
+    ids = _ids()
+    span = span_ids_from_ids(ids, _rule())
+    span_id = torch.from_numpy(span)
+
+    m = _model("span", span_reach=1, span_reach_layer=_TINY_CODA0_GI)
+    n_prelude, n_core = m.cfg.n_prelude, m.cfg.n_core
+
+    seen: dict[int, torch.Tensor] = {}
+
+    def _hook(_mod, _args, kwargs, _gi):
+        seen[_gi] = kwargs["attn_kwargs"]["tg_allow"]
+
+    handles = []
+    for i, layer in enumerate(m.prelude):
+        handles.append(layer.register_forward_pre_hook(
+            lambda mod, args, kwargs, _gi=i: _hook(mod, args, kwargs, _gi), with_kwargs=True))
+    for i, layer in enumerate(m.coda):
+        gi = n_prelude + n_core + i
+        handles.append(layer.register_forward_pre_hook(
+            lambda mod, args, kwargs, _gi=gi: _hook(mod, args, kwargs, _gi), with_kwargs=True))
+    try:
+        with torch.no_grad():
+            m(torch.from_numpy(ids))
+    finally:
+        for h in handles:
+            h.remove()
+
+    assert _TINY_CODA0_GI in seen, "fixture: the reach block itself must have been hooked"
+    assert len(seen) == n_prelude + m.cfg.n_coda, "fixture: every prelude/coda block must be hooked"
+    allow0 = span_reach_allow(span_id, 0)
+    allow1 = span_reach_allow(span_id, 1)
+    for gi, allow in seen.items():
+        if gi == _TINY_CODA0_GI:
+            assert torch.equal(allow, allow1), \
+                f"block {gi} (the reach block) did not get the reach-1 relation"
+        else:
+            assert torch.equal(allow, allow0), \
+                f"block {gi} did not get the reach-0 default"
+
+
+def test_span_reach_layer_refuses_when_span_reach_is_zero():
+    with pytest.raises(ValueError, match="span_reach_layer != -1 requires model.span_reach != 0"):
+        MORPHTransformer(_tiny(span_mask="span", span_rule=_rule(), span_reach=0,
+                               span_reach_layer=0))
+
+
+def test_span_reach_layer_refuses_a_core_block():
+    # _tiny(): n_prelude=2, n_core=2 -> core range [2, 4)
+    with pytest.raises(ValueError, match="indexes a CORE block"):
+        MORPHTransformer(_tiny(span_mask="span", span_rule=_rule(), span_reach=1,
+                               span_reach_layer=2))
+
+
+def test_span_reach_layer_refuses_out_of_range():
+    # _tiny(): n_prelude=2 + n_core=2 + n_coda=2 = 6 total blocks -> valid range [0, 6)
+    with pytest.raises(ValueError, match="out of range"):
+        MORPHTransformer(_tiny(span_mask="span", span_rule=_rule(), span_reach=1,
+                               span_reach_layer=6))
+
+
+# ── the end-to-end instrument ────────────────────────────────────────────────
+
+def _perturb_span0(ids: np.ndarray, span: np.ndarray, site: str) -> tuple[int, np.ndarray]:
+    """``(pos, edited)``: edit ONE token of span 0 at ``site`` without moving the cut.
 
     Two edit sites, because they leak through different routes. ``interior`` is an
     ordinary token in the middle of span 0 and only attention (and the conv's k-1 taps)
     can carry it forward. ``boundary_token`` is span 0's LAST token, which is also the
     token the hash bigram of span 1's FIRST token reads — the one route no amount of
-    attention masking touches, and exactly the datum a slot seed would carry.
+    attention masking touches, and exactly the datum a slot seed would carry. The cut
+    must not move, so a non-boundary id is swapped for another non-boundary id and the
+    boundary token for another BOUNDARY id — asserted here, not assumed.
     """
-    ids = _ids()
-    span = span_ids_from_ids(ids, _rule())
-    assert span.max() >= 3, "fixture must carry at least 4 spans per row"
-
-    # The cut must not move, so a non-boundary id is swapped for another non-boundary id
-    # and the boundary token for another BOUNDARY id. Asserted below, not assumed.
     edited = ids.copy()
     if site == "interior":
         pos = int(np.flatnonzero(span[0] == 0)[1])
@@ -245,6 +358,17 @@ def test_no_id_from_an_earlier_span_can_move_a_later_span(mode, leaks, site):
     assert span[0][pos] == 0 and pos > 0
     assert np.array_equal(span_ids_from_ids(edited, _rule()), span), \
         "the edit moved the cut — the fixture, not the model, is wrong"
+    return pos, edited
+
+
+@pytest.mark.parametrize("site", ["interior", "boundary_token"])
+@pytest.mark.parametrize("mode,leaks", [("span", False), ("row", True)])
+def test_no_id_from_an_earlier_span_can_move_a_later_span(mode, leaks, site):
+    """Edit one token of span 0; every logit in spans >= 1 must not move (mode 'span')."""
+    ids = _ids()
+    span = span_ids_from_ids(ids, _rule())
+    assert span.max() >= 3, "fixture must carry at least 4 spans per row"
+    _pos, edited = _perturb_span0(ids, span, site)
 
     m = _model(mode)
     with torch.no_grad():
@@ -442,7 +566,7 @@ def test_span_mask_off_is_the_default_and_builds_the_pooled_compressor():
     m = MORPHTransformer(_tiny())
     assert m.cfg.span_mask == "off" and not m._span_mask
     assert m.prelude[0].attention._impl.compressor is not None
-    assert m._span_context(torch.zeros(1, 4, dtype=torch.long)) == (None, None, None)
+    assert m._span_context(torch.zeros(1, 4, dtype=torch.long)) == (None, None, None, None)
 
 
 def test_span_reach_refuses_below_minus_one():
