@@ -90,6 +90,21 @@ and host syncs were not what the GPU waited on. The remaining speed levers are S
 conv path's launches) and the compile/latency floor of the 256-cell core; S5's bar
 stands and is now expected to fail without the second.
 
+**Wolfe's calls, 2026-09-22 (13:40 to 14:00), during the C1 run.** (1) The chain geometry
+is a sliding window with a stride of one span per pass; it is INTENTIONAL as a measurement
+of whether forced passes earn, and it is NOT a final design. Every arm on it sits behind
+fp0 at every depth (the A1.8 guard reads negative on Step 1b and C2), and reaching g spans
+back costs g full passes where one attention hop is free: relay is the wrong job for a
+pass. C1 is read for the decay question; no C3 and no 20k run on this geometry unless C1
+clears fp0 at depth 6. The open problem stays: keep direct access and find a pass job
+that is not relay. (2) The span-swap instrument (I1) is a CORRUPTION: it inserts wrong
+text, so its benefit overstates content use and its "decay" may be the later passes
+discounting a mismatched span. Language is causal. Its exact zeros and arrival staircase
+stand as the leak check; its kept fractions are not read as loop decay, and the sum of its
+far rows is not compared with Step 0's far budget (a different instrument). The proposed
+replacement is information REMOVAL: replace slot k-g's seed (the span summary entering the
+loop) with the batch-mean seed, tokens untouched; not built until Wolfe decides.
+
 ## Alternatives considered
 
 - **Widen the reach (2 slots per pass).** The leaky Step 1 arm effectively relayed four
