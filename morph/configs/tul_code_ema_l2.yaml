@@ -1,0 +1,16 @@
+# LCTUL-J Stage 1, the ONE retry the prereg allows (lab/experiments/planned/
+# 2026-09-22-lctul-ema-target.md, Binding, P-1 branch; dated amendment there names the
+# lever): the online variance floor at TEN times the paper's weight. Why this lever and
+# not the momentum: on `tul-code-ema` (m 0.996, lambda 0.02) the floor was active on
+# every coordinate from step 0 and the online spread still FELL (tul/code_enc_std 0.50 ->
+# 0.39 by step 2820) while the target drifted generic (shuffled cosine 0.006 -> 0.48,
+# code_tgt_std 0.99 -> 0.84, eff rank 34 -> 22): the term's weight (0.61 x 0.02 = 0.012
+# of an objective near 6) was too small to hold anything. Same momentum, same seed, one
+# factor over tul_code_ema.yaml.
+defaults:
+  - tul_code_ema
+  - _self_
+tul:
+  code_enc_var_lambda: 0.2
+wandb:
+  name: tul-code-ema-l2

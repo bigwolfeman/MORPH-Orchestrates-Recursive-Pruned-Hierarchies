@@ -123,3 +123,21 @@ value, not this 0.986.
 - The `ema0` control differs from `tul-code-only-ref` (the coda trains here and reads
   the predicted cells; that arm had no coda at train), so 20k numbers above are scale
   only.
+
+## Amendment 2026-09-22 (17:20): the one retry, lever named
+
+`tul-code-ema` (run twx0472q, 13a9535) finished 5000 steps healthy (tripwire max 24.3 at
+4625, exit 0). P-1's first clause holds (`val/code_tgt_std` 0.837 at 4750 against a first
+value of 0.985, ratio 0.85) and its second clause FAILS: `val/code_target_cos_shuf` 0.448
+(bar 0.10). The own cosine reads 0.575 but the shuffled cosine rose with it from 0.073 at
+step 250, so the target drifted toward one common direction (effective rank 58 → 24,
+`val/ce_tf` 1.73 → 4.02, i.e. the coda's read of the TRUE code ended at the token CE
+itself: the code became worth nothing to the reader). The online floor was active on
+every coordinate the whole run and the online spread still fell (`tul/code_enc_std` 0.50
+→ 0.44), so the lever is the floor's WEIGHT, not the momentum. Per the Binding, the one
+retry is `tul_code_ema_l2.yaml` (`code_enc_var_lambda 0.2`, ten times the paper's value;
+`m` 0.996 unchanged; one factor over `tul_code_ema.yaml`), wandb `tul-code-ema-l2`,
+queued behind `ema0` at the same seed and data offset. The frozen predictions apply to the
+retry unchanged, with `ema0` still the control. No other prediction is scored before
+`ema0` lands. P-4 on the first draw reads +0.0017 (fails); recorded now so the number
+cannot be re-read later.
