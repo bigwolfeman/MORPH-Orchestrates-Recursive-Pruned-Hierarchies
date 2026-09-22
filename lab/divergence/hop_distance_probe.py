@@ -58,6 +58,33 @@ TWO INSTRUMENTS, deliberately not one.
    source inside span s itself; that is the instrument's positive control, and if it shows
    no benefit the model cannot copy at all and no larger g can say anything.
 
+   REJECTED as the sole instrument (2026-09-22): the plant is an id absent from the WHOLE
+   batch, so its control CE is 15.5 nats — 4.7 nats ABOVE uniform (ln 49169 = 10.80) — and
+   even the g=0 positive control (source inside the scored span itself) only lifts the
+   target 1.8x. That is an exact-induction test on out-of-distribution pairs a 5k-step
+   model barely passes, so a "kept fraction" computed from it is a ratio of small effects
+   on a floor the model never operates at in ordinary text. Kept in the file as a record;
+   `--swap` below is the replacement.
+
+3. THE SPAN SWAP (`--swap`). Same site machinery, a different corruption: the tokens of
+   span k−g are replaced by a length-matched run of NATURAL text — either another row of
+   the same batch (`--swap-mode row`, the default) or span k−g's own tokens with their
+   order shuffled (`--swap-mode shuffle`, a same-content wrong-order control) — and
+   Benefit(g, d) = CE(span k's tokens | swapped) − CE(span k's tokens | original) at forced
+   depth d. The layout (boundaries, cells, every mask) is held IDENTICAL to the clean row:
+   only the token ids inside span k−g's existing positions move, never the cut. Because the
+   strict/chain geometry gives span k's TOKENS no route to another span's tokens except
+   through the slot cells and the loop, the only way a swap at distance g can move span k's
+   CE is if the loop carried span k−g's content to the coda by pass d — so benefit(g, d)
+   reads as "how much of that content the loop delivered," on an operating point (the
+   swapped text is real, grammatical language, not an out-of-vocabulary plant) close to the
+   model's ordinary ~4.3 nats rather than the planted probe's 15.5. `--swap-mode row`'s
+   donor text: the SAME span index in a deterministic OTHER row of the batch (a fixed
+   row → row+1 mod B pairing, the same one the localiser uses) when it has exactly the
+   right length; otherwise the first same-length run of donor tokens that sits inside ONE
+   of the donor's own spans (never crossing a boundary); a site with no such run at a given
+   g is skipped and counted, never padded with anything artificial.
+
 Depth forcing is `core_depth_sweep.py`'s: `tul.slot_mean_depth` (and `slot_max_depth`, and
 `slot_depth_fixed` on a k-fixed arm) between evals. Depth 0 is NOT valid on a slot arm —
 `_sample_slot_depths` reads `tc.slot_mean_depth or self.cfg.mean_depth`, so 0 silently
@@ -71,6 +98,12 @@ Usage:
     --ckpt strict=tul_slot_spandec_strict=/path/step_5000.pt \
     --rows 24 --batch 4 --depths 1,2,3,6,9,12,16 --hops 6 --planted \
     --out lab/experiments/results/2026-09-18-hop-distance-probe/hop_strict_5000.json
+
+  PYTHONPATH=. python lab/divergence/hop_distance_probe.py \
+    --ckpt strict=tul_slot_spandec_strict_fan4_all_reach1=/path/step_5000.pt \
+    --depths 1,2,3,6 --rows 480 --batch 3 --hops 6 --swap --swap-mode row \
+    --skip-localiser \
+    --out lab/experiments/results/2026-09-22-hop-distance-swap/hop_strict_5000.json
 """
 from __future__ import annotations
 
@@ -103,6 +136,14 @@ __all__ = [
     "span_index_from_layout",
     "bin_sums",
     "HopTable",
+    "swap_sites",
+    "span_token_positions",
+    "donor_window",
+    "swap_replacement",
+    "shuffle_ids",
+    "build_swap_sites",
+    "build_swap_plan",
+    "kept_fraction",
 ]
 
 
@@ -297,6 +338,133 @@ def source_position(span_idx: np.ndarray, s: int, g: int, rng) -> int:
     return source_positions(span_idx, s, g, rng, 1)[0]
 
 
+# ── pure logic: the span swap ──────────────────────────────────────────────────────
+
+def swap_sites(n_slots: int, hops: int, phase: int = 0) -> list[int]:
+    """Target spans for the swap probe, spaced so a site's window never overlaps another's.
+
+    A site ``k`` owns spans ``k-hops … k`` (no ``s+1`` slot the way the planted probe
+    needs one: the swap corrupts a span INSIDE the window and scores span ``k`` itself, so
+    the window is ``hops+1`` spans wide and consecutive sites are ``hops+1`` apart).
+    """
+    if hops < 1:
+        raise ValueError(f"hops must be >= 1, got {hops}")
+    step = hops + 1
+    first = hops + (phase % step)
+    return list(range(first, n_slots, step))
+
+
+def span_token_positions(span_idx: np.ndarray, s: int) -> np.ndarray:
+    """Token positions of span ``s``, in row order (empty when span ``s`` holds none)."""
+    return np.flatnonzero(np.asarray(span_idx) == s)
+
+
+def donor_window(donor_span_idx: np.ndarray, s: int, length: int) -> np.ndarray | None:
+    """``length`` donor token positions to replace span ``s`` with, or ``None``.
+
+    Prefers the donor row's OWN span ``s`` when it holds exactly ``length`` tokens — the
+    same slot index, so the replacement is that slot's natural continuation in the donor's
+    own text. Otherwise the FIRST contiguous run of ``length`` token positions that sits
+    inside ONE span of the donor row (never crossing a boundary — a span's own token
+    positions are always contiguous in a packed row, so this is a plain scan). ``None``
+    when no such run exists anywhere in the donor row: the caller must skip the site.
+    """
+    donor_span_idx = np.asarray(donor_span_idx, dtype=np.int64)
+    own = np.flatnonzero(donor_span_idx == s)
+    if own.size == length:
+        return own
+    for sp in np.unique(donor_span_idx[donor_span_idx >= 0]):
+        pos = np.flatnonzero(donor_span_idx == sp)
+        for i in range(pos.size - length + 1):
+            if pos[i + length - 1] - pos[i] == length - 1:      # contiguous run
+                return pos[i:i + length]
+    return None
+
+
+def swap_replacement(span_idx: np.ndarray, k: int, g: int, donor_span_idx: np.ndarray,
+                     donor_ids: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
+    """``(positions, ids)`` to overwrite span ``k-g`` in THIS row with donor text, or
+    ``None`` when span ``k-g`` holds no token here or the donor has no matching window.
+    """
+    pos = span_token_positions(span_idx, k - g)
+    if pos.size == 0:
+        return None
+    win = donor_window(donor_span_idx, k - g, pos.size)
+    if win is None:
+        return None
+    return pos, np.asarray(donor_ids)[win]
+
+
+def shuffle_ids(own_ids: np.ndarray, pos: np.ndarray, rng) -> np.ndarray:
+    """The tokens already at ``pos``, order permuted (the same-content wrong-order
+    control): every id in the span survives, only their sequence changes."""
+    order = rng.permutation(pos.size)
+    return np.asarray(own_ids)[pos][order]
+
+
+def build_swap_sites(span_idx: np.ndarray, hops: int) -> list[tuple[int, np.ndarray]]:
+    """``(target span k, its own token positions)`` for every site this row offers.
+
+    A candidate from :func:`swap_sites` that holds no token here (a dump-bin tail, or a
+    span entirely consumed by boundary bookkeeping) has nothing to score and is dropped —
+    not counted as a site at all, and never reaches the skip counter either.
+    """
+    span_idx = np.asarray(span_idx)
+    n_sp = int(span_idx.max()) + 1 if (span_idx >= 0).any() else 0
+    out = []
+    for k in swap_sites(n_sp, hops):
+        pos = span_token_positions(span_idx, k)
+        if pos.size:
+            out.append((k, pos))
+    return out
+
+
+def build_swap_plan(span_idx: np.ndarray, hops: int, mode: str,
+                    donor_span_idx: np.ndarray | None, donor_ids: np.ndarray | None,
+                    own_ids: np.ndarray | None, rng) -> dict[tuple[int, int], object]:
+    """The swap for every ``(target span k, distance g)`` this row offers, one entry per
+    site per ``g`` in ``1..hops`` — ``None`` where the site must be skipped at that ``g``.
+
+    ``mode='row'`` needs ``donor_span_idx``/``donor_ids`` (another row's layout and
+    tokens, see :func:`swap_replacement`); ``mode='shuffle'`` needs ``own_ids`` (this
+    row's own tokens) and draws its permutation from ``rng``.
+    """
+    if mode not in ("row", "shuffle"):
+        raise ValueError(f"mode must be 'row' or 'shuffle', got {mode!r}")
+    plan: dict[tuple[int, int], object] = {}
+    for k, _pos in build_swap_sites(span_idx, hops):
+        for g in range(1, hops + 1):
+            if mode == "row":
+                plan[(k, g)] = swap_replacement(span_idx, k, g, donor_span_idx, donor_ids)
+            else:
+                pos = span_token_positions(span_idx, k - g)
+                plan[(k, g)] = (None if pos.size == 0
+                                else (pos, shuffle_ids(own_ids, pos, rng)))
+    return plan
+
+
+def kept_fraction(benefit: dict[str, float], depths: list[int]) -> float:
+    """``benefit(deepest depth) / benefit(first depth whose benefit is nonzero)``.
+
+    NaN when no depth carries a nonzero benefit (the g-window never reached the coda at
+    any forced depth) — the ratio has no meaning there, and NaN says so honestly rather
+    than a printed 0/0 that would read as "reached nothing at every depth but this one".
+    """
+    ds = sorted(depths)
+    first = None
+    for d in ds:
+        v = benefit.get(str(d))
+        if v is not None and v == v and v != 0.0:          # v == v excludes NaN
+            first = d
+            break
+    if first is None:
+        return float("nan")
+    last = benefit.get(str(ds[-1]))
+    if last is None or last != last:
+        return float("nan")
+    return float(last / benefit[str(first)])
+
+
 # ── pure logic: aggregation ────────────────────────────────────────────────────────
 
 def bin_sums(values: np.ndarray, row: np.ndarray, keep: np.ndarray,
@@ -465,21 +633,33 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--seed", type=int, default=0,
-                    help="rng for planted source positions and rare ids ONLY: the rows are "
-                         "the validation stream from its start, so --seed never changes "
-                         "which rows are scored (2026-09-19 lesson). Use --row-offset for that")
+                    help="rng for planted source positions/rare ids AND for swap-mode "
+                         "shuffle's permutation: the rows are the validation stream from "
+                         "its start, so --seed never changes which rows are scored "
+                         "(2026-09-19 lesson). Use --row-offset for that")
     ap.add_argument("--row-offset", type=int, default=0,
                     help="skip this many rows' worth of the validation stream before packing, "
                          "so the scored rows are a DISJOINT later stretch of text")
-    ap.add_argument("--planted", action="store_true", help="also run the planted copy pair")
+    ap.add_argument("--planted", action="store_true",
+                    help="also run the planted copy pair (rejected as the sole instrument, "
+                         "see the module docstring; kept as a record). Needs --batch >= 2")
     ap.add_argument("--planted-len", type=int, default=1, choices=(1, 2),
                     help="1: a rare id seen once at the source; 2: a (cue, X) pair at the "
                          "source with the cue at the scored position (induction copy)")
+    ap.add_argument("--swap", action="store_true",
+                    help="also run the span-swap probe: span k-g's tokens are replaced by "
+                         "natural text and span k's own CE is read against (g, d). The "
+                         "replacement for --planted. Needs --batch >= 2 in --swap-mode row")
+    ap.add_argument("--swap-mode", default="row", choices=("row", "shuffle"),
+                    help="row (default): donor text from another row of the batch, the "
+                         "same span index when length-matched else a same-length window "
+                         "inside one of the donor's own spans. shuffle: span k-g's own "
+                         "tokens, order permuted (same-content, wrong-order control)")
     ap.add_argument("--cut-after", type=int, default=-1,
                     help="passes with 0-based index >= this read no other cell (reach 0). "
                          "-1: off. Needs tul.loop_reach > 0")
     ap.add_argument("--skip-localiser", action="store_true",
-                    help="planted probe only (no corruption forwards, no h* bins)")
+                    help="planted/swap probes only (no corruption forwards, no h* bins)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
@@ -708,6 +888,11 @@ def main() -> None:
             arm["planted"] = _planted(packed, meta, spec, tul_rt, cfg, depths, H,
                                       forward_ce, paired_bootstrap_ci, n_rows, rng, torch,
                                       planted_len=a.planted_len)
+
+        if a.swap:
+            arm[f"swap_{a.swap_mode}"] = _swap(packed, meta, depths, H, forward_ce,
+                                               paired_bootstrap_ci, n_rows, rng, torch,
+                                               mode=a.swap_mode)
     finally:
         restore()
 
@@ -822,6 +1007,107 @@ def _planted(packed, meta, spec, tul_rt, cfg, depths, H, forward_ce, boot,
     return out
 
 
+def _swap(packed, meta, depths, H, forward_ce, boot, n_rows, rng, torch,
+          mode: str = "row") -> dict:
+    """The span swap: CE of span k's own tokens against (source distance g, depth d),
+    with span k-g's tokens replaced by natural text (see the module docstring, part 3).
+
+    Every site's control CE (the unmodified forward) is computed ONCE — span k's tokens
+    never move, whatever g is being tested — and reused across every g, so the pairing at
+    the site level is exact by construction, not by re-matching row order afterward.
+    """
+    sites: list[dict] = []         # (bi, b, row, k, pos)
+    plans: dict[int, dict[int, object]] = {}   # site idx -> {g: (pos, ids) | None}
+    for bi, ((inp, labels, layout, _), m) in enumerate(zip(packed, meta)):
+        B = inp.shape[0]
+        inp_np = inp.numpy()
+        for b in range(B):
+            spans_row = np.where(m["istok"][b], m["spans"][b], -1)
+            donor_spans = donor_ids = own_ids = None
+            if mode == "row":
+                dn = m["donor_local"][b]
+                donor_spans = np.where(m["istok"][dn], m["spans"][dn], -1)
+                donor_ids = inp_np[dn]
+            else:
+                own_ids = inp_np[b]
+            plan = build_swap_plan(spans_row, H, mode, donor_spans, donor_ids, own_ids, rng)
+            for k, pos in build_swap_sites(spans_row, H):
+                idx = len(sites)
+                sites.append({"bi": bi, "b": b, "k": int(k), "pos": pos,
+                              "row": m["row0"] + b})
+                plans[idx] = {g: plan[(k, g)] for g in range(1, H + 1)}
+    if not sites:
+        raise SystemExit(f"no swap site fits ({mode}): the rows hold too few spans for "
+                         f"hops={H}")
+    print(f"[swap:{mode}] {len(sites)} candidate sites over {n_rows} rows", flush=True)
+
+    site_rows = np.asarray([s["row"] for s in sites], dtype=np.int64)
+
+    def score(pos_of, d: int) -> np.ndarray:
+        """CE at each site's `pos_of(site_idx)` positions, mean over the span's tokens.
+
+        `pos_of` returns `None` for a site not scored in this pass (skipped at this g).
+        """
+        vals = np.full(len(sites), np.nan, dtype=np.float64)
+        for bi, (inp, labels, layout, _) in enumerate(packed):
+            mine = [i for i, s in enumerate(sites)
+                   if s["bi"] == bi and pos_of(i) is not None]
+            if not mine:
+                continue
+            ci = inp.numpy().copy()
+            for i in mine:
+                pos, ids = pos_of(i)          # `mine` already excludes the None case
+                ci[sites[i]["b"], pos] = ids
+            ce = forward_ce(torch.from_numpy(ci), labels, layout, d)
+            for i in mine:
+                vals[i] = float(ce[sites[i]["b"]][sites[i]["pos"]].mean())
+        return vals
+
+    ctrl: dict[int, np.ndarray] = {}
+    out: dict[str, object] = {"n_sites": len(sites), "hops": H, "mode": mode, "control": {}}
+    # the control pass never edits anything, so it is a plain forward on `packed` rather
+    # than a call to `score` (whose contract is "edit, then score" and has nothing to do
+    # for a control point).
+    for d in depths:
+        vals = np.full(len(sites), np.nan, dtype=np.float64)
+        for bi, (inp, labels, layout, _) in enumerate(packed):
+            mine = [i for i, s in enumerate(sites) if s["bi"] == bi]
+            if not mine:
+                continue
+            ce = forward_ce(inp, labels, layout, d)
+            for i in mine:
+                vals[i] = float(ce[sites[i]["b"]][sites[i]["pos"]].mean())
+        ctrl[d] = vals
+        out["control"][str(d)] = float(np.nanmean(vals))
+        print(f"  swap:{mode} control depth={d:>2d}  ce={np.nanmean(vals):.4f}", flush=True)
+
+    for g in range(1, H + 1):
+        use = np.array([plans[i][g] is not None for i in range(len(sites))])
+        n_used, n_skip = int(use.sum()), int((~use).sum())
+        print(f"  swap:{mode} g={g}  sites={n_used}/{len(sites)}  skipped={n_skip}",
+              flush=True)
+        cell: dict[str, object] = {"n_sites": n_used, "n_skipped": n_skip,
+                                   "ce": {}, "benefit": {}, "benefit_ci": {}, "frac_hurt": {}}
+        for d in depths:
+            vals = score(lambda i, g=g: plans[i][g], d)
+            keep = use & ~np.isnan(vals) & ~np.isnan(ctrl[d])
+            cell["ce"][str(d)] = float(np.nanmean(vals[use])) if n_used else float("nan")
+            if keep.any():
+                delta = vals[keep] - ctrl[d][keep]
+                cell["benefit"][str(d)] = float(delta.mean())
+                cell["frac_hurt"][str(d)] = float((delta > 0.0).mean())
+                sa, n = bin_sums(vals, site_rows, keep, n_rows)
+                sz, _ = bin_sums(ctrl[d], site_rows, keep, n_rows)
+                cell["benefit_ci"][str(d)] = boot(sa, sz, n)
+            else:
+                cell["benefit"][str(d)] = float("nan")
+        cell["kept"] = kept_fraction(cell["benefit"], depths)
+        out[f"g{g}"] = cell
+        print(f"  swap:{mode} g={g}  " + "  ".join(
+            f"d{d}={cell['ce'][str(d)]:.3f}" for d in depths), flush=True)
+    return out
+
+
 def _print_tables(arm: dict, depths: list[int], H: int) -> None:
     print()
     print(f"== {arm['label']} step {arm['step']} — geometry {arm['tg_geometry']}, "
@@ -862,6 +1148,24 @@ def _print_tables(arm: dict, depths: list[int], H: int) -> None:
             e = p[f"g{g}"]
             print(f"  {g:>2d}  " + "".join(
                 f"  {e['benefit'][str(d)]:+9.4f}" for d in depths))
+    for key in [k for k in arm if k.startswith("swap_")]:
+        p = arm[key]
+        print(f"\n-- span swap ({p['mode']}, {p['n_sites']} sites); "
+              f"g = distance to the swapped span --")
+        print("  g   " + "".join(f"  d={d:<7d}" for d in depths))
+        print("  ctl " + "".join(f"  {p['control'][str(d)]:9.4f}" for d in depths))
+        for g in range(1, p["hops"] + 1):
+            e = p[f"g{g}"]
+            print(f"  {g:>2d}  " + "".join(
+                f"  {e['ce'].get(str(d), float('nan')):9.4f}" for d in depths)
+                  + f"   n={e['n_sites']}/{p['n_sites']} skip={e['n_skipped']}")
+        print("  benefit = swapped - control (nats); >0 means the swap HURT "
+              "(the loop was using that content)")
+        for g in range(1, p["hops"] + 1):
+            e = p[f"g{g}"]
+            print(f"  {g:>2d}  " + "".join(
+                f"  {e['benefit'].get(str(d), float('nan')):+9.4f}" for d in depths)
+                  + f"   kept={e['kept']:+.4f}")
 
 
 if __name__ == "__main__":
