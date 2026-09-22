@@ -49,6 +49,7 @@ Three arms at HEAD, same seed, same recipe as the budget pair (`budget_root.yaml
 | `budget-web-span-h` | `budget_web_span` | 0 | own span only (the 2026-09-11 arm re-run at HEAD) |
 | `budget-web-reach1` | `budget_web_reach1` | 1 | own span + the previous span |
 | `budget-web-reachall` | `budget_web_reachall` | −1 | every earlier span (conv / bigram still cut) |
+| `budget-web-reach1-coda` | `budget_web_reach1_coda` | 1 at the coda's first block only | own span + the previous span's reach-0 states, no relay (added 2026-09-21 21:46) |
 
 The `span` endpoint is re-run at HEAD rather than reused so the three arms share one
 commit; the 2026-09-11 arm's sweep at cc4e034 is paired against the re-run as a drift
@@ -64,6 +65,30 @@ Readings (all at 5k, depth 6, paired on the 480 rows):
 - **local routes** = CE(reachall) − CE(full, 2026-09-11 at cc4e034): the conv / value-shift
   / bigram routes' share, read across commits (a drift caveat is attached to it).
 - the per-offset table of the budget filing, for each pair.
+
+**Method amendment 2026-09-21 21:46 (before any GPU step; the builder's finding).** The reach is
+applied at EVERY attention layer, so the stack relays content one span per layer: a
+token in span k reads span k−1's states, which after the first layer already hold span
+k−2's content. Measured on the leak test's fixture: a perturbation two spans back moves
+end-to-end logits by about 0.87 under `span_reach: 1` while the single-layer relation is
+exactly zero there (`tests/test_span_mask_leak.py::test_reach1_relation_is_reach1_at_a_single_attention_layer`).
+`budget-web-reach1` is therefore NOT "the previous span alone". It bounds the split
+from one side. A fourth arm gives the other side: `budget-web-reach1-coda`
+(`budget_web_reach1_coda.yaml`, `model.span_reach_layer` = the coda's first block, a
+build of 2026-09-21): the reach-1 relation at ONE non-looped block and reach 0
+everywhere else, so a query reads the previous span's states as computed under reach 0
+and no relay exists (an end-to-end perturbation two spans back moves logits by exactly
+0, which is that arm's leak test). The readings become brackets:
+
+- previous-span value: lower bound CE(span-h) − CE(reach1-coda) (one block reads it),
+  upper bound CE(span-h) − CE(reach1) (every layer reads it, plus relay);
+- far budget: lower bound CE(reach1) − CE(reachall), upper bound
+  CE(reach1-coda) − CE(reachall);
+- relay share = upper − lower of the far budget (what the per-layer stack fetched from
+  beyond one span by relay).
+
+Ordering the arms have to respect: CE(span-h) ≥ CE(reach1-coda) ≥ CE(reach1) ≥
+CE(reachall), each step within its interval. Four arms, about 3.3 hours.
 
 ## Predictions (frozen)
 
@@ -90,14 +115,31 @@ Readings (all at 5k, depth 6, paired on the 480 rows):
   context is topical and lifts every position; the previous-span part is what is
   front-loaded.
 
+**Scoring note and two predictions added 2026-09-21 21:46, before any GPU step (the fourth arm).**
+P-4 is scored on the previous-span value's UPPER bound (span-h − reach1), P-5 on the far
+budget's LOWER bound (reach1 − reachall): the design's "queue" case needs the lower bound
+and its "stop" case needs the upper bound, so both are read and the binding below says
+which one each clause uses.
+
+- **P-8 (the relay share).** far-budget upper − lower inside **[0.02, 0.12]**. **60 %.**
+  Point estimate 0.06. The per-layer stack has 14 attention layers and the hop-distance
+  filing measured relay decaying a third per hop inside the loop; a plain stack should
+  relay better than that but not fetch everything. Above 0.12: 25 % (relay does most of
+  the far work, and then a loop that relays one span per pass has the same job). Below
+  0.02: 15 %.
+- **P-9 (the ordering).** CE(span-h) ≥ CE(reach1-coda) ≥ CE(reach1) ≥ CE(reachall) with
+  each consecutive gap at or above −0.01 (a violation larger than that is a build or
+  seed fault, not a reading). **85 %.**
+
 ## Binding (the design note's rule, copied so it cannot drift)
 
-- far budget **under 0.03**: no geometry gives the slot loop a depth job at this span
-  size; the LXTUL-R reach arm is NOT queued; the next note is the two-channel design
-  (history through the coda's token reach, plan through the K cells).
-- far budget **0.10 or more**: the LXTUL-R arm (Step 1) is queued with its own planned
-  file; its K1−K6 bar is +0.05 AND half of this far budget, and its CE is paired against
-  `budget-web-reachall` as well as against strict.
+- far budget UPPER bound **under 0.03**: no geometry gives the slot loop a depth job at
+  this span size; the LXTUL-R reach arm is NOT queued; the next note is the two-channel
+  design (history through the coda's token reach, plan through the K cells).
+- far budget LOWER bound **0.10 or more**: the LXTUL-R arm (Step 1) is queued with its
+  own planned file; its K1−K6 bar is +0.05 AND half of the far budget's lower bound, and
+  its CE is paired against `budget-web-reachall` as well as against strict.
+  (Bounds wording added 2026-09-21 21:46; the thresholds are the design note's, unchanged.)
 - **between 0.03 and 0.10**: Wolfe decides with the two numbers in hand; nothing is
   queued by default.
 - P-2 fails: re-queue `full` at HEAD before applying the rule.
