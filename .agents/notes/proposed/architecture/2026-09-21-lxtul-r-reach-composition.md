@@ -274,3 +274,5 @@ ppl 71, top-1 29.5 % against fp0's 4.236 / 69 / 29.8 %; the checkpoint predicts 
 binding's branch is "both fail: `failures/`, no Step 2, Wolfe decides" between Step 2 (a
 persistent carry on this chain) and the two-channel design; this note's Step 1 is not
 promoted.
+
+**2026-09-22, 10:30, the mixed-result reading.** Wolfe read Step 1b as a mixed result with two problems to solve, speed and contribution (target near 0.1, 80-94 % of the gain by half the mean depth). The task list, the profile of a Step 1b step and the builds (S1-S5, C1-C4, I1) are in [`2026-09-22-lxtul-r-step2-speed-and-carry.md`](2026-09-22-lxtul-r-step2-speed-and-carry.md); Step 2 of this note runs as its C1.

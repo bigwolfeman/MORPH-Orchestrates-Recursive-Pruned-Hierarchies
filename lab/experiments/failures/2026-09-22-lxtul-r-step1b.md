@@ -188,6 +188,14 @@ the corrected arm says, in the design note's own terms:
   candidates (rank 2.97), the rate holds (6,335 tok/s), and the first tripwire spikes of
   the fan family appeared late in this run (1,050 and 431, under the 1e4 tripwire).
 
+- **Wolfe's reading (2026-09-22, 10:00, after the readable CE check):** "This shouldn't be a
+  failure it is a mixed result." The `Status:` field keeps the prereg's letter (P-3 and P-4 fail
+  against their frozen bars); the verdict on the record is MIXED, with two problems to solve
+  before the geometry is judged: SPEED (1.03 steps/s against fan4-all's 1.15 and the plain
+  model's 1.98) and CONTRIBUTION (+0.026 against a target near 0.1, with ~80-94 % of the loop
+  gain due by half the mean depth). The plan is the task list in
+  [`2026-09-22-lxtul-r-step2-speed-and-carry.md`](../../../.agents/notes/proposed/architecture/2026-09-22-lxtul-r-step2-speed-and-carry.md).
+
 ## Updated hypothesis
 
 With the leak closed, the chain geometry on the fan is a controlled trade: it takes 0.053
