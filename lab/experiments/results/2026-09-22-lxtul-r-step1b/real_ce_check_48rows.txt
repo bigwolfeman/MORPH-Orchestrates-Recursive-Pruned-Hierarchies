@@ -1,0 +1,55 @@
+real_ce_check.py on the DGX Spark (MORPH-0922 at 83f1ef8), 48 validation rows, batch 3, forced depth.
+uniform CE = ln 49169 = 10.803 nats
+
+Step 1b (slot-spandec-strict-fan4-all-reach1, 5000, u8xh91vd):
+  depth 1: 4.2924 nats (ppl 73.1)  top-1 0.292
+  depth 3: 4.2726 nats (ppl 71.7)  top-1 0.294
+  depth 6: 4.2669 nats (ppl 71.3)  top-1 0.295   row CE min/median/max 3.300 / 4.314 / 5.623
+  K1-K6 = +0.0255 (480-row sweep: +0.0261 [+0.0251, +0.0273])
+fan4-all-fp0 (5000):
+  depth 1: 4.2467 (ppl 69.9)  top-1 0.296
+  depth 3: 4.2379 (ppl 69.3)  top-1 0.297
+  depth 6: 4.2363 (ppl 69.1)  top-1 0.298   row CE min/median/max 3.254 / 4.287 / 5.603
+  K1-K6 = +0.0104 (480-row sweep: +0.0102)
+
+Row 0, positions 44-91, Step 1b at depth 6 (input -> label | top-1 | CE; x = miss):
+  ' away' -> ' from' | ' from' | 1.04
+  ' from' -> ' a' | ' the' | 2.53 x
+  ' a' -> ' field' | ' gun' | 7.41 x
+  ' field' -> ' hospital' | ' of' | 8.09 x
+  ' hospital' -> ' F' | '.' | 8.14 x
+  ' F' -> 'riday' | 'riday' | 0.33
+  'riday' -> ' night' | ' night' | 1.39
+  ' night' -> ' after' | '.' | 4.73 x
+  ' after' -> ' a' | ' a' | 1.72
+  ' a' -> ' Bel' | ' woman' | 9.55 x
+  ' Bel' -> 'g' | 'g' | 0.20
+  'g' -> 'ian' | 'ian' | 0.10
+  'ian' -> ' medical' | ' man' | 7.53 x
+  ' medical' -> ' team' | ' m' | 5.69 x
+  ' team' -> ' ev' | '.' | 9.36 x
+  ' ev' -> 'ac' | 'ac' | 0.44
+  'ac' -> 'u' | 'u' | 0.36
+  'u' -> 'ated' | 'ated' | 0.01
+  'ated' -> ' the' | ' a' | 2.23 x
+  ' the' -> ' area' | ' country' | 4.82 x
+  ' area' -> ',' | '.' | 3.13 x
+  ',' -> ' saying' | ' according' | 5.00 x
+  ' saying' -> ' it' | ' he' | 2.29 x
+  ' it' -> ' was' | ' was' | 0.86
+  ' was' -> ' concerned' | ' a' | 8.71 x
+  ' concerned' -> ' about' | ' that' | 2.33 x
+  ' about' -> ' security' | ' the' | 7.74 x
+  ' security' -> '.' | '.' | 1.55
+  '.' -> '\n' | '\n' | 0.31
+  '\n' -> 'The' | '"' | 1.99 x
+  'The' -> ' decision' | ' ' | 6.47 x
+  ' decision' -> ' left' | ' to' | 6.82 x
+  ' left' -> ' CNN' | ' the' | 10.50 x
+  ' CNN' -> ' Ch' | "'s" | 7.54 x
+  ' Ch' -> 'ief' | 'air' | 1.64 x
+  'ief' -> ' Medical' | ' of' | 9.11 x
+  ' Medical' -> ' Corre' | ' Center' | 9.08 x
+  ' Corre' -> 'spond' | 'ction' | 3.57 x
+  'spond' -> 'ent' | 'ents' | 0.81 x
+(fan4-all-fp0 gets the same lines right and wrong; its full table is in the session log.)

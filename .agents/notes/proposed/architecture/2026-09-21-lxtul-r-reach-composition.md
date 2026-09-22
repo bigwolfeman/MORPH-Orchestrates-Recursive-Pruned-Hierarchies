@@ -258,3 +258,19 @@ previous span is worth 0.112 at every offset. Step 0's brackets: previous span [
 unchanged (lower bound 0.126). Two consequences for this note: the two-channel fallback's
 "history through the coda's token reach" is worth about 0.11 at ONE block and 0.18 at every
 block, and any single-block design must be read at two seeds.
+
+**Step 1b outcome (2026-09-22 09:51).** Filed under
+[`failures/2026-09-22-lxtul-r-step1b.md`](../../../../lab/experiments/failures/2026-09-22-lxtul-r-step1b.md):
+P-3 and P-4 fail, the rest hold (P-9, the leak check, holds on the real model: exact zeros
+before pass g − 1). At the corrected one-slot-per-pass geometry the arm reads token K1−K6
+**+0.0261 [+0.0251, +0.0273]** (bar +0.063; the largest slot-loop K-curve on the ledger,
+K3−K6 +0.0057), paired −0.026 vs strict, **+0.0265 vs fan4-all-fp0 at depth 6 and +0.053
+at depth 1** (A1.8 fraction −0.21: the geometry costs 0.053 and the passes recover half),
+rank 2.97, 6,335 tok/s, entry norm 1.29x, tripwire spikes 1,050 and 431 (under 1e4, the
+family's first), channel worth 0.153 (fan4-all 0.196), planted g = 2 kept 62 % (bar 75 %;
+the probe is an exact-induction test on out-of-context subwords with a 15.5-nat control,
+4.7 above uniform, and is filed with that caveat). Readable check on 48 rows: 4.267 nats,
+ppl 71, top-1 29.5 % against fp0's 4.236 / 69 / 29.8 %; the checkpoint predicts text. The
+binding's branch is "both fail: `failures/`, no Step 2, Wolfe decides" between Step 2 (a
+persistent carry on this chain) and the two-channel design; this note's Step 1 is not
+promoted.

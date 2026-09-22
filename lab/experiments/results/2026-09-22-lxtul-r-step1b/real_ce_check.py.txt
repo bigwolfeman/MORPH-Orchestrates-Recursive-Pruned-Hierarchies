@@ -1,0 +1,79 @@
+"""Readable CE check on a slot-loop checkpoint: per-row token CE against uniform, top-1
+accuracy, and a stretch of real validation text with the model's next-token guess beside
+each token. Same loader/packer/forward as core_depth_sweep.py, forced depth via the
+hop probe's forcer. Run from the repo root with PYTHONPATH=.:lab/divergence."""
+import argparse
+import math
+import sys
+
+import torch
+import torch.nn.functional as F
+
+from _build import ROOT, build_cfg  # noqa: E402
+from _rows import pack_rows, stream_from_loader  # noqa: E402
+from hop_distance_probe import _depth_forcer  # noqa: E402
+from tul_samples import load_ckpt  # noqa: E402
+from morph.training.data import create_dataloader  # noqa: E402
+from morph.training.tul_setup import build_tul_runtime  # noqa: E402
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--ckpt", required=True, help="LABEL=CONFIG=PATH")
+ap.add_argument("--rows", type=int, default=48)
+ap.add_argument("--batch", type=int, default=3)
+ap.add_argument("--depth", type=int, default=6)
+ap.add_argument("--show", type=int, default=48, help="tokens of row 0 to print")
+a = ap.parse_args()
+label, config, path = a.ckpt.split("=", 2)
+device = "cuda"
+cfg = build_cfg(config, ["model.use_kernels=false"])
+tul_rt = build_tul_runtime(cfg)
+model, step = load_ckpt(cfg, path if path.startswith("/") else f"{ROOT}/{path}", device,
+                        tul_rt.model_cfg)
+model.eval()
+set_depth, restore = _depth_forcer(model, model.cfg.tul)
+set_depth(a.depth)
+from transformers import AutoTokenizer  # noqa: E402
+tok = AutoTokenizer.from_pretrained(cfg.data.tokenizer)
+V = int(model.cfg.vocab_size)
+print(f"[{label}] step {step} depth {a.depth} vocab {V} uniform CE = ln V = {math.log(V):.3f} nats")
+
+spec = tul_rt.data_cfg.spec_for(cfg.data.seq_len)
+loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8, split="validation",
+                           skip_samples=0, bag_size=0, tul=None)
+stream = stream_from_loader(loader, a.rows * (spec.l_total + 1))
+batches = pack_rows(stream, tul_rt, cfg, a.batch, plain=False)[: -(-a.rows // a.batch)]
+
+tot_ce = tot_n = tot_hit = 0.0
+row_ce = []
+shown = False
+with torch.no_grad():
+    for inp, labels, layout, _ in batches:
+        inp_d, lab_d, lay_d = inp.to(device), labels.to(device), layout.to(device)
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            logits = model(inp_d, labels=None, slot_layout=lay_d)["logits"].float()
+        tokpos = (~lay_d.slot_mask) & (lab_d >= 0)
+        lg = logits[tokpos]
+        lb = lab_d[tokpos]
+        ce = F.cross_entropy(lg, lb, reduction="none")
+        hit = (lg.argmax(-1) == lb).float()
+        tot_ce += float(ce.sum()); tot_n += int(lb.numel()); tot_hit += float(hit.sum())
+        # per row
+        for b in range(inp.shape[0]):
+            m = tokpos[b]
+            if m.any():
+                row_ce.append(float(F.cross_entropy(logits[b][m], lab_d[b][m])))
+        if not shown:
+            shown = True
+            b = 0
+            pos = tokpos[b].nonzero(as_tuple=True)[0][40: 40 + a.show].tolist()
+            print(f"\n{'pos':>4} {'input token':>16} -> {'label':>14} | {'model top-1':>14} | {'CE':>6}")
+            for p in pos:
+                x = int(inp_d[b, p]); y = int(lab_d[b, p]); g = int(logits[b, p].argmax())
+                c = float(F.cross_entropy(logits[b, p][None], lab_d[b, p][None]))
+                mark = "" if g == y else "  x"
+                print(f"{p:>4} {tok.decode([x])!r:>16} -> {tok.decode([y])!r:>14} | {tok.decode([g])!r:>14} | {c:6.2f}{mark}")
+restore()
+print(f"\n[{label}] token CE over {int(tot_n)} tokens / {len(row_ce)} rows: {tot_ce / tot_n:.4f} nats "
+      f"(ppl {math.exp(tot_ce / tot_n):.1f}); top-1 acc {tot_hit / tot_n:.3f}; uniform {math.log(V):.3f}")
+print(f"[{label}] per-row CE, first 12 rows: {[round(x, 3) for x in row_ce[:12]]}")
+print(f"[{label}] row CE min/median/max: {min(row_ce):.3f} / {sorted(row_ce)[len(row_ce) // 2]:.3f} / {max(row_ce):.3f}")
