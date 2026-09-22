@@ -142,7 +142,7 @@ retry unchanged, with `ema0` still the control. No other prediction is scored be
 `ema0` lands. P-4 on the first draw reads +0.0017 (fails); recorded now so the number
 cannot be re-read later.
 
-## Amendment 2026-09-22 (17:30): Wolfe's call on the cosine bars
+## Amendment 2026-09-22 (17:19): Wolfe's call on the cosine bars
 
 Wolfe, after the first draw: "I think you're reading tea leaves with the cosine. I
 wouldn't pass or fail anything by it." Applied as follows, without touching the frozen
