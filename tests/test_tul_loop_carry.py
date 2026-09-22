@@ -21,6 +21,13 @@ WHAT THIS FILE HAS TO PROVE, in the order it matters:
    every pass, on every cell that receives one — read off the model, not recomputed from
    the rule.
 5. THE FOUR REFUSALS RAISE, each with its own message.
+6. ``"persist"`` (LXTUL-R Step 2, 2026-09-22) ACCUMULATES LIKE ``sum`` BUT NEVER
+   RE-INJECTS. Its per-pass carrier — ``_apply_core_step``'s own return, upstream of any
+   exit add — is bit-identical to ``"none"`` at every pass, which ``sum`` is NOT (it
+   diverges from pass 1 on); the exit state ``_tul_core`` returns is exactly
+   ``h_none + carry_rms_match(sum of the T reads, h_none)``; ``carry/persist_ratio`` is
+   reported only on this mode; and it is NOT refused on a Thought Register
+   (``tul.slot_cells > 1`` / ``tul.fan_k > 0``), where ``sum``/``gate`` stay refused.
 
 CPU only, fp32, ``use_kernels=False``, tiny config, the
 ``tests/test_tul_strict_geometry.py`` fixtures. fp32 and not fp64: ``_window_fallback``
@@ -439,6 +446,165 @@ def test_gate_mean_is_reported_on_gate_and_absent_on_sum():
         s = _model(**kw, loop_carry="sum")(inp, labels=lab, slot_layout=layout)
     assert abs(float(g["carry_gate_mean_t1"]) - 0.5) < 1e-6
     assert not any(k.startswith("carry_gate_mean") for k in s)
+
+
+# ── PERSIST (tul.loop_carry="persist", LXTUL-R Step 2) ───────────────────────
+#
+# `sum` / `gate` re-inject the accumulated read at the entry of EVERY later pass, and
+# that re-supply is the measured failure this arm answers
+# (lab/experiments/failures/2026-09-19-loop-carry-prev-reach1.md: carry RMS 0.5 -> 75).
+# `persist` accumulates the SAME reads, the SAME way, but never hands them back to a
+# pass — the whole sum is added ONCE, at the loop's exit. The tests below prove, in
+# order: no parameter and no new state-dict keys; the per-pass MAP is bit-identical to
+# `loop_carry: "none"` (the property `sum` does NOT have, from pass 1 on); the exit
+# state is exactly `h_none + carry_rms_match(sum of reads, h_none)`; `carry/persist_ratio`
+# is reported (and only on `persist`); persist is NOT refused on a Thought Register
+# (`tul.slot_cells > 1` / `tul.fan_k > 0`), unlike `sum` / `gate`; and gradients are
+# finite end to end.
+
+
+def test_persist_builds_no_parameter_and_its_param_names_match_none():
+    a = _model()
+    b = _model(tg_coda_prefix_reach="prev", loop_reach=1, loop_carry="persist")
+    assert b.tul_carry is not None and b.tul_carry.mode == "persist"
+    assert b.tul_carry.W_g is None
+    assert not any(k.startswith("tul_carry.") for k in b.state_dict())
+    assert set(a.state_dict()) == set(b.state_dict())
+
+
+def _core_step_outputs(m: MORPHTransformer, inp, layout):
+    """Spy on `_apply_core_step`; return the carrier it RETURNS at every pass — upstream
+    of any exit-only add, so this is "the carrier after each pass" the docstring claims
+    bit-identity for."""
+    real = m._apply_core_step
+    outs = []
+
+    def spy(*a, **kw):
+        h_out, rs = real(*a, **kw)
+        outs.append(h_out.detach().clone())
+        return h_out, rs
+
+    m._apply_core_step = spy
+    try:
+        with torch.no_grad():
+            m(inp, labels=None, slot_layout=layout)
+        return outs
+    finally:
+        m._apply_core_step = real
+
+
+def test_persist_per_pass_trajectory_is_bit_identical_to_none_and_sum_is_not():
+    """The test that distinguishes persist from sum: persist never injects at a pass
+    entry, so the carrier `_apply_core_step` returns at every pass must be bit-identical
+    to a `loop_carry: "none"` twin at the same seed and weights — unlike `sum`, which
+    diverges starting at pass 1 (its carry(0) = 0, so pass 0 still agrees)."""
+    _ids0, inp, _lab, layout = _batch()
+    kw = dict(tg_coda_prefix_reach="prev", loop_reach=1, slot_depth_fixed=3,
+              slot_max_depth=8)
+    m_persist = _model(**kw, loop_carry="persist")
+    m_none = _model(**kw)
+    out_p = _core_step_outputs(m_persist, inp, layout)
+    out_n = _core_step_outputs(m_none, inp, layout)
+    assert len(out_p) == len(out_n) == 3
+    for t, (a, b) in enumerate(zip(out_p, out_n)):
+        assert torch.equal(a, b), f"pass {t}: persist's per-pass carrier diverged from none"
+    m_sum = _model(**kw, loop_carry="sum")
+    out_s = _core_step_outputs(m_sum, inp, layout)
+    assert torch.equal(out_s[0], out_n[0]), "pass 0: sum must still agree (carry(0) = 0)"
+    assert not torch.equal(out_s[1], out_n[1]), \
+        "sum must diverge from none by pass 1 — persist's agreement above is not vacuous"
+
+
+def _tul_core_exit_h(m: MORPHTransformer, inp, layout):
+    """Spy on `_tul_core`; return its raw return value `h` (the second tuple entry, the
+    compact-axis carrier `_forward_tul` renames `h_slots`) — AFTER any exit-only add."""
+    real = m._tul_core
+    captured: dict = {}
+
+    def spy(*a, **kw):
+        ret = real(*a, **kw)
+        captured["h"] = ret[1]
+        return ret
+
+    m._tul_core = spy
+    try:
+        with torch.no_grad():
+            m(inp, labels=None, slot_layout=layout)
+        return captured["h"]
+    finally:
+        m._tul_core = real
+
+
+@pytest.mark.parametrize("depth", [1, 2, 3])
+def test_persist_exit_is_the_raw_exit_plus_the_rms_matched_sum_of_reads(depth):
+    """h_persist == h_none + carry_rms_match(sum of the T captured reads, h_none), where
+    h_none is `_tul_core`'s raw return from a `loop_carry: "none"` twin at the same seed
+    and weights. Exactly zero on cell 0 of every row (its window row is empty under reach
+    1) and on every pad slot."""
+    _ids0, inp, _lab, layout = _batch()
+    kw = dict(tg_coda_prefix_reach="prev", loop_reach=1, slot_depth_fixed=depth,
+              slot_max_depth=8)
+    m_persist = _model(**kw, loop_carry="persist")
+    m_none = _model(**kw)
+    recs = _reads(m_persist, inp, layout)
+    assert len(recs) == depth, f"forced depth {depth} ran {len(recs)} passes"
+    # `recs[-1]["carry"]` IS the sum of the T reads, already masked to the slots whose
+    # pass actually ran (`test_sum_carry_is_the_sum_of_its_reads_at_forced_depth` proves
+    # that equality for `sum`, which accumulates identically). Re-summing `recs[*]["read"]`
+    # here directly would NOT reproduce it: a pad slot READS something nonzero at every
+    # pass (its window row holds a real cell) but never accumulates — the accumulator's
+    # own `active & slot_valid` mask keeps its carry at exactly 0 — so an unmasked sum of
+    # raw reads is the WRONG reference at every pad cell.
+    total_accum = recs[-1]["carry"]
+    h_none = _tul_core_exit_h(m_none, inp, layout)
+    h_persist = _tul_core_exit_h(m_persist, inp, layout)
+    # `h_none` is the Hyper-Connection carrier `[B, S, n, C]` on this fixture; the
+    # production add goes through `_apply_injection`, which broadcasts the single-stream
+    # `[B, S, C]` term onto the stream axis — a raw `+` would try to broadcast on the
+    # wrong axis.
+    expected = MORPHTransformer._apply_injection(
+        h_none, carry_rms_match(total_accum, h_none))
+    assert torch.allclose(h_persist, expected, atol=1e-5), \
+        f"depth {depth}: persist's exit != h_none + carry_rms_match(sum reads, h_none)"
+    v = layout.slot_valid
+    assert float((h_persist[:, 0] - h_none[:, 0]).abs().max()) == 0.0, \
+        "cell 0 of every row must get exactly zero persist term (empty window row)"
+    assert float((h_persist[~v] - h_none[~v]).abs().max()) == 0.0, \
+        "a pad slot must get exactly zero persist term"
+
+
+def test_persist_ratio_is_reported_and_absent_on_sum_and_none():
+    _ids0, inp, lab, layout = _batch()
+    kw = dict(tg_coda_prefix_reach="prev", loop_reach=1, slot_depth_fixed=3,
+              slot_max_depth=8)
+    with torch.no_grad():
+        p = _model(**kw, loop_carry="persist")(inp, labels=lab, slot_layout=layout)
+        s = _model(**kw, loop_carry="sum")(inp, labels=lab, slot_layout=layout)
+        n = _model(**kw)(inp, labels=lab, slot_layout=layout)
+    assert "carry_persist_ratio" in p
+    assert 0.0 < float(p["carry_persist_ratio"]) <= 1.0 + 1e-4
+    assert not any(k.startswith("carry_persist_ratio") for k in s)
+    assert not any(k.startswith("carry_") for k in n)
+
+
+def test_persist_is_not_refused_at_slot_cells_greater_than_one():
+    """The mirror of the `slot_cells=2` case in `test_loop_carry_refusals`: persist must
+    NOT raise there, unlike sum/gate — LXTUL-R Step 2 is measured on the register."""
+    _tul(loop_carry="persist", loop_reach=1, slot_cells=2, prefix_k=2)   # must not raise
+
+
+def test_persist_training_step_gradients_are_finite():
+    _ids0, inp, lab, layout = _batch()
+    m = _model(tg_coda_prefix_reach="prev", loop_reach=1, loop_carry="persist").train()
+    torch.manual_seed(7)
+    res = m(inp, labels=lab, slot_layout=layout)
+    res["loss"].backward()
+    n_finite = 0
+    for name, p in m.named_parameters():
+        if p.grad is not None:
+            assert torch.isfinite(p.grad).all(), f"persist: {name} has a non-finite grad"
+            n_finite += 1
+    assert n_finite > 0
 
 
 # ── 5. THE REFUSALS ──────────────────────────────────────────────────────────

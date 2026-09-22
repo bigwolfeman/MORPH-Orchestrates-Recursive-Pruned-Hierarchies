@@ -322,12 +322,21 @@ def _span_logit_delta(m, inp, layout, j: int, g: int) -> float:
 
 
 @pytest.mark.parametrize("depth,first_dark", [(1, 3), (2, 4)])
-def test_loop_reach1_register_reaches_exactly_one_slot_per_pass(depth, first_dark):
+@pytest.mark.parametrize("loop_carry", ["none", "persist"])
+def test_loop_reach1_register_reaches_exactly_one_slot_per_pass(loop_carry, depth,
+                                                                 first_dark):
     """Strict geometry, coda prefix reach prev, forced depth T: a token of span j reads
     its own span and slot j-1's cells; slot j-1's cells hold spans j-1 .. j-1-T after T
     in-loop hops. So span j-(T+1) moves span j's logits and span j-(T+2) moves them by
-    EXACTLY 0, with the shipped conv kernel (4) and value shift in place."""
-    m = _r1_model(seed=12, tul_kw=dict(slot_mean_depth=depth, slot_max_depth=depth))
+    EXACTLY 0, with the shipped conv kernel (4) and value shift in place.
+
+    Parametrized over ``tul.loop_carry`` (``"none"`` / ``"persist"``, LXTUL-R Step 2):
+    the reach is a property of the MAP, and ``persist`` never touches the map (its whole
+    accumulator is added once, at the loop's exit, after every in-loop hop has already
+    happened) — so the reach must be exactly the same under both.
+    """
+    m = _r1_model(seed=12, tul_kw=dict(slot_mean_depth=depth, slot_max_depth=depth,
+                                       loop_carry=loop_carry))
     ids, inp, lab, layout = _batch(prefix_k=4, seed=3)
     nb = int(layout.bag_id[0].max())
     j = min(nb - 1, 7)
@@ -375,3 +384,260 @@ def test_loop_reach1_register_core_kwargs_carry_a_per_slot_segment_and_reach0_do
         for kw in kws:
             assert "tg_relation" in kw and "tg_seg" not in kw, \
                 "reach 0 must keep the filed register arms' forward (no tg_seg)"
+
+
+# ── LXTUL-R Step 2: tul.loop_carry="persist" on the shipped fan4-all-reach1 geometry ──
+#
+# The decay fix: a per-cell state that accumulates the SAME cross-cell read `sum` does,
+# but never hands it back into the loop — the whole accumulator is added once, at the
+# loop's exit. `tests/test_tul_loop_carry.py` proves the mechanism on the small single-
+# cell fixture; these three prove it composes with the SHIPPED register geometry
+# (fan_k 4, fan_mix "all", loop_reach 1, tg_coda_prefix_reach "prev",
+# slot_state_renorm True, core_fixed_point_lambda 0) end to end.
+
+
+def test_persist_composes_with_the_shipped_fan4_all_reach1_geometry():
+    m = _r1_model(seed=12, tul_kw=dict(loop_carry="persist"))
+    assert m.cfg.tul.loop_carry == "persist"
+    assert m.cfg.tul.fan_k == 4 and m.cfg.tul.slot_cells == 4
+    assert m.cfg.tul.loop_reach == 1
+    assert m.tul_carry is not None and m.tul_carry.mode == "persist"
+
+
+def test_persist_term_differs_with_depth():
+    """The accumulated read is a SUM over the realised passes, so the exit's persist term
+    — and therefore the logits — must actually depend on how many passes ran."""
+    ids, inp, lab, layout = _batch(prefix_k=4, seed=3)
+    m1 = _r1_model(seed=12, tul_kw=dict(slot_mean_depth=1, slot_max_depth=1,
+                                        loop_carry="persist"))
+    m3 = _r1_model(seed=12, tul_kw=dict(slot_mean_depth=3, slot_max_depth=3,
+                                        loop_carry="persist"))
+    with torch.no_grad():
+        l1 = m1(inp, labels=None, slot_layout=layout)["logits"]
+        l3 = m3(inp, labels=None, slot_layout=layout)["logits"]
+    d = torch.where(torch.isfinite(l1) & torch.isfinite(l3), l1 - l3,
+                    torch.zeros_like(l1))
+    assert float(d.abs().max()) > 0.0, \
+        "depth 1 and depth 3 persist exits must differ — the term is not depth-blind"
+
+
+def test_persist_shipped_composition_training_step_is_finite():
+    ids, inp, lab, layout = _batch(prefix_k=4, seed=2)
+    m = _r1_model(seed=11, tul_kw=dict(loop_carry="persist")).train()
+    opt = torch.optim.SGD(m.parameters(), lr=1e-4)
+    out = m(inp, labels=lab, slot_layout=layout)
+    loss = out["loss"]
+    assert torch.isfinite(loss), f"loss is not finite ({loss})"
+    loss.backward()
+    n_finite_grads = 0
+    for p in m.parameters():
+        if p.grad is not None:
+            assert torch.isfinite(p.grad).all(), "a gradient is not finite"
+            n_finite_grads += 1
+    assert n_finite_grads > 0, "no parameter received a gradient"
+    opt.step()
+
+
+# ── the composed config (tul_slot_spandec_strict_fan4_all_reach1_persist.yaml) ───────
+
+_CONFIG_DIR = __import__("os").path.abspath("morph/configs")
+
+
+class _StubTok:
+    """Enough of a tokenizer for `build_tul_runtime`'s id resolution, no download."""
+
+    @staticmethod
+    def from_pretrained(_name):
+        return _StubTok()
+
+    def convert_tokens_to_ids(self, _tok):
+        return 4
+
+
+def test_the_persist_config_composes_through_hydra_and_build_tul_runtime(monkeypatch):
+    """`tul_slot_spandec_strict_fan4_all_reach1_persist.yaml` — Step 2 of the reach
+    composition, `tul.loop_carry: persist` over the shipped Step 1 arm — composes through
+    Hydra, maps through the SHIPPED `build_tul_runtime` key mapping (the
+    `test_tul_strict_geometry.py` pattern, no tokenizer download) and resolves the three
+    knobs the design record names."""
+    import transformers
+    from hydra import compose, initialize_config_dir
+
+    from morph.training import tul_setup
+
+    monkeypatch.setattr(transformers, "AutoTokenizer", _StubTok)
+    monkeypatch.setattr(
+        tul_setup, "build_boundary_rule",
+        lambda cfg, cache_dir="": (_rule(), _rule().is_boundary, 0, ("\n",)))
+    with initialize_config_dir(version_base=None, config_dir=_CONFIG_DIR):
+        cfg = compose(config_name="tul_slot_spandec_strict_fan4_all_reach1_persist")
+    rt = tul_setup.build_tul_runtime(cfg)
+    assert rt is not None, "tul is off — the arm would run the plain model"
+    tc = rt.model_cfg
+    assert tc.loop_carry == "persist"
+    assert tc.loop_reach == 1
+    assert tc.fan_k == 4
+    assert tc.tg_coda_prefix_reach == "prev"
+    assert cfg.wandb.name == "slot-spandec-strict-fan4-all-reach1-persist"
+
+
+# ── 2026-09-22 correction: the READER fix (persist on a register excludes siblings) ──
+#
+# On a Thought Register (`slot_cells > 1`) core layer 0's window branch runs under
+# `_mask0` — own slot's OTHER cells (every one, XSA excludes only literal self) PLUS
+# slot k-1's cells. The ORDINARY `tg_win_capture` (what `sum`/`gate` would use, and what
+# is refused there — morph/model/tul.py) would therefore mix a slot's M cells toward
+# each other through the persist accumulator: a READER problem the repulsion terms
+# (which read the raw `db_traj`, never this capture) cannot see. The fix: persist reads a
+# SEPARATE relation, `cross = blk & ~same` (own slot excluded ENTIRELY, not just self),
+# through one extra layer-0 attention call fired inside `_apply_core_step`
+# (`"tg_persist_capture"`), WITH grad. These tests prove, in order: (0) at `slot_cells
+# == 1` — where the new mechanism is NOT used — `cross` would equal the relation the OLD
+# `tg_win_capture` path already captures under, so the fix is not a special case that
+# only happens to work on the register shape; (a)/(b) on the shipped fan4-all-reach1
+# geometry at forced depth 1, a SIBLING cell's perturbed SEED (`core_init(e)`'s output at
+# that one compact-axis position — the only way to isolate one cell's identity, since all
+# M cells of a slot pool the SAME span and an input-token edit cannot separate them)
+# leaves cell i's captured read, and therefore the persist TERM added at the exit,
+# bit-identical; a slot k-1 perturbation moves both. (c): the full six-file gate is
+# re-run at the end of the report.
+
+
+def test_cross_relation_at_m_cells_1_equals_the_old_captures_relation():
+    """`cross = blk & ~same`, evaluated at `m_cells = 1` (where persist does NOT build
+    this mechanism — the single-cell arm stays on the ordinary `tg_win_capture` path,
+    `_tul_core`), must equal "causal, self excluded": the relation the OLD single-cell
+    capture already runs under (its `tg_relation`/`tg_allow` mask includes the diagonal,
+    but the window branch's XSA excludes literal self regardless of the mask — so the
+    EFFECTIVE relation of the old path is exactly this). This is what makes "cross == blk
+    minus self at m_cells == 1" a proven equality and not a coincidence of the register
+    shape.
+    """
+    n_slots, reach = 6, 1
+    blk, same = slot_cell_relation(n_slots, 1, torch.device("cpu"), reach=reach)
+    cross = blk & ~same
+    idx = torch.arange(n_slots)
+    ii, jj = idx.unsqueeze(1), idx.unsqueeze(0)
+    old_effective = (ii >= jj) & (jj >= ii - reach) & (ii != jj)
+    assert torch.equal(cross[0, 0], old_effective)
+
+
+def _core_init_seed_perturb_hook(cell_idx: int, scale: float = 5.0):
+    """A one-shot forward hook on `core_init` that adds a large, deterministic
+    perturbation to ONE compact-axis cell's `h_0 = core_init(e)` — the "seed" every pass
+    starts from — and to nothing else. Perturbing an INPUT TOKEN cannot isolate one
+    cell's identity (all M cells of a slot pool the same span); the seed is the earliest
+    point one specific cell's own state can be moved alone.
+    """
+    gen = torch.Generator().manual_seed(0)
+
+    def hook(module, inputs, output):
+        out = output.clone()
+        pert = torch.randn(out.shape[-1], generator=gen) * scale
+        out[:, cell_idx] = out[:, cell_idx] + pert.to(out.dtype)
+        return out
+    return hook
+
+
+def _reads(m, inp, layout):
+    m._carry_capture = []
+    try:
+        with torch.no_grad():
+            m(inp, labels=None, slot_layout=layout)
+        return list(m._carry_capture)
+    finally:
+        m._carry_capture = None
+
+
+def _tul_core_exit_h(m, inp, layout):
+    """Spy on `_tul_core`; return its raw return value `h` (the second tuple entry)."""
+    real = m._tul_core
+    captured: dict = {}
+
+    def spy(*a, **kw):
+        ret = real(*a, **kw)
+        captured["h"] = ret[1]
+        return ret
+
+    m._tul_core = spy
+    try:
+        with torch.no_grad():
+            m(inp, labels=None, slot_layout=layout)
+        return captured["h"]
+    finally:
+        m._tul_core = real
+
+
+def test_persist_register_capture_is_blind_to_siblings_and_reads_the_previous_slot():
+    """(a) + (b) of the 2026-09-22 correction, on the shipped fan4-all-reach1 geometry,
+    forced depth 1."""
+    from morph.model.tul_carry import carry_rms_match
+
+    kw = dict(slot_mean_depth=1, slot_max_depth=1)
+    m = _r1_model(seed=12, tul_kw=dict(loop_carry="persist", **kw))
+    m_none = _r1_model(seed=12, tul_kw=dict(**kw))     # same seed/weights, no carry —
+                                                        # the raw-exit reference (b) needs
+    ids, inp, lab, layout = _batch(prefix_k=4, seed=3)
+    M = m.cfg.tul.slot_cells
+    valid = layout.slot_valid[0]
+
+    k = None
+    for cand in range(1, int(layout.bag_id[0].max())):
+        if cand < valid.shape[0] and bool(valid[cand]) and bool(valid[cand - 1]):
+            k = cand
+            break
+    assert k is not None, "fixture must contain two consecutive valid slots"
+    target_cell = k * M + 0
+    sibling_cell = k * M + 1        # SAME slot, a different stream — must NOT leak
+    prev_cell = (k - 1) * M + 0     # the PREVIOUS slot — must reach the capture
+
+    def reads(perturb_idx):
+        handle = (m.core_init.register_forward_hook(_core_init_seed_perturb_hook(perturb_idx))
+                  if perturb_idx is not None else None)
+        try:
+            return _reads(m, inp, layout)
+        finally:
+            if handle is not None:
+                handle.remove()
+
+    def exit_h(perturb_idx):
+        handle = (m_none.core_init.register_forward_hook(
+                      _core_init_seed_perturb_hook(perturb_idx))
+                  if perturb_idx is not None else None)
+        try:
+            return _tul_core_exit_h(m_none, inp, layout)
+        finally:
+            if handle is not None:
+                handle.remove()
+
+    recs_base, recs_sib, recs_prev = reads(None), reads(sibling_cell), reads(prev_cell)
+    assert len(recs_base) == len(recs_sib) == len(recs_prev) == 1, "forced depth 1"
+
+    r_base = recs_base[0]["read"][:, target_cell]
+    r_sib = recs_sib[0]["read"][:, target_cell]
+    r_prev = recs_prev[0]["read"][:, target_cell]
+    assert torch.equal(r_base, r_sib), \
+        "(a) a SIBLING (same slot, different stream) perturbation changed cell i's read"
+    assert not torch.equal(r_base, r_prev), \
+        "(a) a slot k-1 perturbation left cell i's read unchanged — the fixture is inert"
+
+    # (b) THE TERM, not the raw exit. The real (unmodified) layer-0 step still mixes
+    # siblings under `_mask0` — cell i's own exit state legitimately moves — but its
+    # NORM is pinned by `model.slot_state_renorm` to the entry norm `core_init(e)` set,
+    # which a sibling-only perturbation never touches. `carry_rms_match`'s scale is
+    # exactly that norm ratio, so the TERM (unlike the raw exit tensor) is unaffected.
+    h_base, h_sib = exit_h(None), exit_h(sibling_cell)
+    c_base, c_sib = recs_base[0]["carry"], recs_sib[0]["carry"]
+    # `carry_rms_match` is elementwise on the cell axis (no cross-cell mixing — read the
+    # docstring), so comparing the FULL tensor here is the wrong claim: the sibling's OWN
+    # accumulated cell (its query row moved, since the perturbation sits on the sibling's
+    # own entry state) and every slot >= k+1 within reach of slot k (which now attends a
+    # perturbed sibling exit) legitimately differ. The claim under test is narrower and is
+    # exactly what (a) already established at the read level: cell i's OWN accumulated
+    # carry — built only from `cross` = slot k-1's cells — must not move.
+    assert torch.equal(c_base[:, target_cell], c_sib[:, target_cell]), \
+        "the accumulated carry at cell i itself must be sibling-blind"
+    term_base = carry_rms_match(c_base, h_base)[:, target_cell]
+    term_sib = carry_rms_match(c_sib, h_sib)[:, target_cell]
+    assert torch.allclose(term_base, term_sib, atol=1e-5), \
+        "(b) the persist exit term for cell i moved under a sibling-only perturbation"

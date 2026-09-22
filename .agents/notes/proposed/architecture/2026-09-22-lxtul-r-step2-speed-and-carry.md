@@ -40,11 +40,11 @@ Two, measured on `slot-spandec-strict-fan4-all-reach1` at 5k (commit 9b430d3, ru
 The task list. A box is ticked in this note when the item is merged (build) or filed (run).
 
 SPEED (objective-preserving; the loss is the same function)
-- [ ] S1 batch the K no-grad stream-scoring coda passes of `_tul_fan_all` into one
+- [x] S1 (cad4515) batch the K no-grad stream-scoring coda passes of `_tul_fan_all` into one
       `[K*B, L, C]` call (same FLOPs, a quarter of the launches, 4x gemm M).
-- [ ] S2 8-aligned vocab for every raw `[L, V]` logits matmul on the fan/span-CE path
+- [x] S2 (cad4515) 8-aligned vocab for every raw `[L, V]` logits matmul on the fan/span-CE path
       (zero-row pad of the tied head, sliced before the CE).
-- [ ] S3 no host syncs in the training forward: fan stats become detached 0-dim tensors,
+- [x] S3 (cad4515) no host syncs in the training forward: fan stats become detached 0-dim tensors,
       `float()` in the trainer on logging steps.
 - [ ] S4 fused Triton segmented two-stage causal conv (fwd + bwd) for `segment_causal_conv`,
       the eager path every reach arm pays at every core layer of every pass.
@@ -55,19 +55,19 @@ SPEED (objective-preserving; the loss is the same function)
       fall short; it is NOT in this list.
 
 CONTRIBUTION (each a one-factor arm over Step 1b, 5k steps, then the winner at 20k)
-- [ ] C1 `tul.loop_carry: persist` (Step 2 of the parent note): the accumulated layer-0
+- [x] C1 (merged 11:10, queued behind C2) `tul.loop_carry: persist` (Step 2 of the parent note): the accumulated layer-0
       cross-cell read is added ONCE at the loop exit, RMS-matched to the exit cell, and is
       never re-processed by the core (the map is bit-identical to `none`; the rejected
       `sum`/`gate` re-injected at every entry). Config
       `tul_slot_spandec_strict_fan4_all_reach1_persist.yaml`.
-- [ ] C2 `tul.fan_history_streams: 1`: stream 0 is the history channel (reads stream 0 of
+- [x] C2 (5b09669, queued 10:55) `tul.fan_history_streams: 1`: stream 0 is the history channel (reads stream 0 of
       slot k-1 at core layer 0, exempt from the epivol repulsion), streams 1..3 are plan
       streams (slot-local at every layer, they read history through their own slot's
       history cell, repelled among themselves). Config
       `tul_slot_spandec_strict_fan4_all_reach1_hist1.yaml`.
 - [ ] C3 the conjunction C1 x C2 if both move the K-curve in the same direction.
 - [ ] C4 20k horizon for the best arm, paired against fp0 at 20k.
-- [ ] I1 the span-swap instrument (`hop_distance_probe.py --swap`): span k-g's tokens
+- [x] I1 (84ad3b2) the span-swap instrument (`hop_distance_probe.py --swap`): span k-g's tokens
       replaced by natural text from another row, benefit = CE(target span | swapped) -
       CE(target span | original) at forced depths; replaces the out-of-context planted
       probe (control 15.5 nats, 4.7 above uniform) as the distance instrument.
@@ -81,6 +81,14 @@ tripwire.
 Order: S1-S4 built in parallel by subagents, merged one patch at a time with the test
 gates, S5 measured; C1, C2 and I1 built in parallel; then the runner queue C1, C2 (and C3)
 at 5k with the S-merged code; readouts; C4.
+
+S5 reading 1 (2026-09-22, 10:50, `results/2026-09-22-lxtul-r-step1b/profile_step_s123_84ad3b2.txt`):
+S1–S3 merged leave the step at 994 ms against 971 (inside run-to-run noise). The unaligned
+gemm is gone (about 20 ms/step), copies rose by about the same, and the step is bound by
+about 830 ms of GPU kernel time spread over tens of thousands of small kernels. Launches
+and host syncs were not what the GPU waited on. The remaining speed levers are S4 (the
+conv path's launches) and the compile/latency floor of the 256-cell core; S5's bar
+stands and is now expected to fail without the second.
 
 ## Alternatives considered
 

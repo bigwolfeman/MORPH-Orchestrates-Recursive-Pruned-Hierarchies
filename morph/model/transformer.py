@@ -5103,11 +5103,43 @@ class MORPHTransformer(nn.Module):
         # checkpoint-safe (MORPHBlock.forward's `ret_capture` docstring says so, and
         # `ret_state` is returned for the same reason). The dict is the transport INSIDE
         # one call; the tuple is the contract across the boundary.
+        #
+        # ── THE READER FIX (2026-09-22 correction, register only) ──────────────
+        # On a Thought Register (`_m_cells > 1`) core layer 0's window branch runs under
+        # `_mask0` — own slot (every OTHER cell, XSA excludes only literal self) PLUS
+        # slot k-1's cells — so the ORDINARY capture above would be `r_k(t)` mixed with
+        # every SIBLING cell's content, not purely the previous slot's. That is exactly
+        # why `sum`/`gate` stay refused there (morph/model/tul.py). For `persist` it is
+        # not a map problem (persist never re-injects — see `_carry_reinjects` below) but
+        # a READER problem: the exit add would push each of a slot's M cells toward the
+        # SAME accumulated sibling mixture, the coda would read M near-copies, and the
+        # fan's repulsion terms (which read the RAW `db_traj`, never this capture) cannot
+        # see it happening. So a register + persist model captures a SEPARATE relation,
+        # `cross = _mask0 & ~_same` — own slot excluded ENTIRELY, not just self, leaving
+        # only slot k-1..k-reach's cells — through a SECOND attention call fired at core
+        # layer 0 (`"tg_persist_capture"`, transported as a per-layer-0 kwarg and popped,
+        # then fired WITH grad, inside `MORPHBlock.forward`'s `_attn_fn` closure in
+        # `morph/model/mhc.py` — NOT here in `_apply_core_step`, because only `_attn_fn`
+        # has `x_bar`, the Hyper-Connection residual's own mixed single-stream view of
+        # the carrier, without re-deriving the Cayley/softmax pre-map by hand). The real
+        # layer-0 step keeps running under `_mask0` unchanged and carries no
+        # `tg_win_capture` of its own under this arm — the ordinary capture above is
+        # used everywhere else (`slot_cells == 1`, and `sum`/`gate`, which stay refused
+        # at `slot_cells > 1`).
+        # COST: one extra core-layer-0 attention application per pass, over the S*M
+        # compact cells (window + compressed branches both run; only the window branch's
+        # gated contribution is read).
         _carry = self.tul_carry
         _carry_cap: dict = {}
         if _carry is not None:
-            _core_akw = (({**_core_akw[0], "tg_win_capture": _carry_cap},)
-                         + tuple(_core_akw[1:]))
+            if _carry.mode == "persist" and _m_cells > 1:
+                _cross = _mask0 & ~_same
+                _core_akw = (({**_core_akw[0],
+                               "tg_persist_capture": (_cross, _seg_slot, _carry_cap)},)
+                             + tuple(_core_akw[1:]))
+            else:
+                _core_akw = (({**_core_akw[0], "tg_win_capture": _carry_cap},)
+                             + tuple(_core_akw[1:]))
 
         def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0, stage_cond=None,
                        carry=None, want_carry=False):
@@ -5222,8 +5254,16 @@ class MORPHTransformer(nn.Module):
         # Pass 0 is handed `carry=None`, not a zero tensor: the spec's add is at the
         # entry of pass t+1, and it also keeps the t=0 graph free of a term that is
         # identically zero.
+        #
+        # `tul.loop_carry="persist"` NEVER hands the accumulator back as `carry=` — see
+        # `_carry_reinjects` at the `_cy` assignment below — so it still needs
+        # `_carry_state` (the read is captured and accumulated every pass, exactly as
+        # `sum` does) but takes no per-pass entry at all. The exit-only add lives after
+        # the `for t in range(total_iters)` loop, in the `if _carry is not None:` block
+        # near this function's return.
         _carry_state = None
         _carry_stats: dict[str, Tensor] = {}
+        _carry_reinjects = _carry is not None and _carry.mode != "persist"
         if _carry is not None:
             _carry_state = h.new_zeros(h.shape[0], h.shape[1], h.shape[-1])
         # ── tul.fan_trigger_every_pass: the per-stream trigger, every pass ────
@@ -5417,7 +5457,15 @@ class MORPHTransformer(nn.Module):
             # `checkpoint(use_reentrant=False)` the recompute re-runs `_core_step` during
             # backward, when a nonlocal would already hold c(T-1) instead of c(t-1). An
             # argument is saved with the call and replayed with the right value.
-            _cy = _carry_state if (_carry is not None and t > 0) else None
+            #
+            # `tul.loop_carry="persist"`: `_carry_reinjects` is False for that mode, so
+            # `_cy` stays None at EVERY t and `_core_step`'s `if carry is not None:` block
+            # (the injection) never runs — the map every later reader sees (the gain
+            # hinge's probe just below, the fixed-point term, the renorm, every
+            # forced-depth sweep) is therefore the one `loop_carry: "none"` runs, pass for
+            # pass. `_want_carry` stays True regardless of mode: the read `r_k(t)` still
+            # has to be captured so the accumulator still grows (morph/model/tul_carry.py).
+            _cy = _carry_state if (_carry_reinjects and t > 0) else None
             _want_carry = _carry is not None
             if t < n_nograd:
                 with torch.no_grad():
@@ -5727,6 +5775,45 @@ class MORPHTransformer(nn.Module):
         if _gp_write:
             self._loop_gradpass = _gp_stats
         if _carry is not None:
+            # ── THE EXIT INJECTION (tul.loop_carry="persist") ──────────────────────
+            # ONE add, on the compact cell axis, AFTER every pass has run — the opposite
+            # placement of `sum`/`gate`'s per-pass re-injection. `h` here is the loop's
+            # RAW exit: `_carry_reinjects` kept every pass's `carry=` argument at `None`
+            # for this mode (see the `_cy` assignment above), so nothing this function has
+            # done to `h` up to this line differs from a `loop_carry: "none"` twin at the
+            # same seed and weights — `db_traj` (appended inside the loop, above) is
+            # therefore already the RAW trajectory and is untouched by this block.
+            #
+            # `carry_rms_match` scales the full-depth accumulator to the exit carrier's
+            # own per-cell RMS (morph/model/tul_carry.py), and the explicit
+            # `layout.slot_valid` mask is belt-and-braces: a cell whose accumulator never
+            # moved off 0 (every pad, and cell 0 of every row under a reach budget — its
+            # window row is empty) already scales to exactly 0 there, so masking cannot
+            # change a live term, only pin down a dead one twice.
+            if _carry.mode == "persist":
+                _h_exit = h
+                _persist_term = _carry.inject_term(_carry_state, _h_exit)
+                _persist_term = _persist_term * layout.slot_valid.unsqueeze(-1).to(
+                    _persist_term.dtype)
+                h = self._apply_injection(h, _persist_term)
+                with torch.no_grad():
+                    # `carry/persist_ratio`: mean, over VALID cells, of RMS(the term just
+                    # added) / RMS(the raw exit it was added to). ~1.0 on a cell whose
+                    # accumulator is nonzero (the RMS match's own guarantee) and exactly 0
+                    # on one whose accumulator never moved — so the mean reads as the
+                    # fraction of valid cells the persist term actually reached, in RMS
+                    # terms, not a per-pass "is the match live" check (that is what
+                    # `carry/rms_t{t}`, kept below, already reports for the accumulator's
+                    # own growth).
+                    _rms_term = _persist_term.detach().float().flatten(2).pow(
+                        2).mean(-1).sqrt()                                    # [B, S]
+                    _rms_exit = _h_exit.detach().float().flatten(2).pow(
+                        2).mean(-1).sqrt()                                    # [B, S]
+                    _pratio = _rms_term / _rms_exit.clamp_min(1e-12)
+                    _vf = layout.slot_valid.float()
+                    _nv = _vf.sum().clamp(min=1.0)
+                    _carry_stats["persist_ratio"] = (
+                        (_pratio * _vf).sum() / _nv).detach()
             # 0-dim detached tensors, still on GPU; `_forward_tul` folds them into
             # `groups` as `carry_*` and train.py logs them under `carry/`. Stashed rather
             # than returned for the `_loop_gradpass` reason: this function's return tuple

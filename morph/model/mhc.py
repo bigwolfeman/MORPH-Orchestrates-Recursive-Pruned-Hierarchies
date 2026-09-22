@@ -345,8 +345,44 @@ class MORPHBlock(nn.Module):
         # never rebound), so both branches below trace out on a model without the knob.
         lora = self.pass_lora
 
+        # ── tul.loop_carry="persist" on a Thought Register — the READER FIX ────────
+        # (2026-09-22 correction; `morph/model/transformer.py::_tul_core`, "THE READER
+        # FIX", is the one place that builds this payload — ONLY for
+        # `tul.loop_carry="persist"` with `tul.slot_cells > 1`.) `"tg_persist_capture"`
+        # is a private transport, not a `MORPHAttention` kwarg (it would TypeError if
+        # forwarded), so it is popped HERE, once, into its own local. The `dict(...)`
+        # copy fires ONLY when the key is present: `_core_akw[0]` is the SAME dict
+        # object shared by every pass of the loop, so popping it IN PLACE would strip
+        # the key after pass 1 and silently stop capturing from pass 2 on — every other
+        # call site (every arm without this key) keeps the zero-copy path it always
+        # had. `None` is what makes the `if` inside `_attn_fn` below a Python-level
+        # no-op on every block of every model without a register+persist arm.
+        _persist_capture = None
+        if "tg_persist_capture" in attn_kwargs:
+            attn_kwargs = dict(attn_kwargs)
+            _persist_capture = attn_kwargs.pop("tg_persist_capture")
+
         def _attn_fn(x: Tensor) -> Tensor:
             xa = self.norm_attn(x)
+            if _persist_capture is not None:
+                # ONE extra core-layer-0 attention application, on the EXACT SAME `xa`
+                # the real call two lines down is about to consume — `x` here is
+                # already `x_bar`, the Hyper-Connection residual's OWN mixed
+                # single-stream view (`HyperConnectionResidual.forward`'s pre-map),
+                # which is why this sits INSIDE `_attn_fn` and not one level up in
+                # `_apply_core_step`: nothing outside this closure has access to
+                # `x_bar` without re-deriving the Cayley/softmax mapping by hand.
+                # `cross` excludes a cell's OWN slot entirely (not merely self, unlike
+                # the real call's `tg_relation` below), which is the whole fix — see
+                # the transformer.py comment for why. WITH GRAD, no `torch.no_grad()`:
+                # the persist term must carry gradient back to the PREVIOUS slot's
+                # cells this call's K/V read. Its own output tensor is otherwise
+                # unused; only `capture_dict["win"]` (`_CCABase._gate_combine_up`) is
+                # read, by `_core_step`'s `want_carry` branch, exactly where the
+                # ordinary `tg_win_capture` path (below, on every OTHER arm) writes it.
+                _p_relation, _p_seg, _p_cap = _persist_capture
+                self.attention(xa, tg_relation=_p_relation, tg_seg=_p_seg,
+                               tg_win_capture=_p_cap)
             a = self.attention(xa, **attn_kwargs)
             if lora is not None and lora.has_attn:
                 # The delta rides the attention branch's own input and output, i.e. it

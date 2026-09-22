@@ -820,7 +820,34 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               "`val/slot_eff_rank` "
               "(lab/experiments/planned/2026-09-13-arc-thought-register.md)",
               flush=True)
-    if model_cfg.loop_carry != "none":
+    if model_cfg.loop_carry == "persist":
+        print(f"  LOOP CARRY ON: loop_carry='persist' loop_reach={model_cfg.loop_reach} "
+              f"slot_cells={model_cfg.slot_cells} - a per-cell state that KEEPS what the "
+              "cell read from its neighbours, written ONCE at the loop's EXIT and NEVER "
+              "handed back into the loop. At pass t core layer 0's WINDOW branch is the "
+              f"cell's read of cells k-{model_cfg.loop_reach}..k-1 (its XSA excludes the "
+              "self token, so the read is purely cross-cell); the accumulator sums it "
+              "(plain addition, no parameter) EVERY pass, exactly as 'sum' does, but the "
+              "sum is NEVER handed to a pass as its `carry=` argument — the map every "
+              "later reader sees (the gain hinge, the terminal fixed-point term, "
+              "slot_state_renorm, every forced-depth sweep) is therefore the SAME map "
+              "loop_carry='none' runs, pass for pass. AFTER the last pass the full "
+              "accumulator is RMS-matched to the exit carrier and ADDED ONCE, masked to "
+              "valid cells. WHY: 'sum' / 'gate' re-inject at the entry of every later "
+              "pass, and that re-supply REPLACES the pass-1 read and dilutes the far hops "
+              "instead of adding to them (carry RMS 0.5 -> 75 over a run, "
+              "lab/experiments/failures/2026-09-19-loop-carry-prev-reach1.md) — 'persist' "
+              "keeps the direct read and bounds the state by construction (the add is one "
+              "carrier-RMS worth of the accumulated direction, however long the "
+              "accumulator has been summing). Measured on the Thought Register "
+              f"(tul.slot_cells > 1 / tul.fan_k > 0), where 'sum' / 'gate' stay refused. "
+              "READ `carry/rms_t{t}` (the accumulator's own per-pass growth) and "
+              "`carry/persist_ratio` (mean, over valid cells, of the exit add's RMS over "
+              "the raw exit's RMS) "
+              "(.agents/notes/proposed/architecture/2026-09-21-lxtul-r-reach-"
+              "composition.md, Step 2)",
+              flush=True)
+    elif model_cfg.loop_carry != "none":
         print(f"  LOOP CARRY ON: loop_carry={model_cfg.loop_carry!r} "
               f"loop_reach={model_cfg.loop_reach} - a per-cell state that KEEPS what the "
               f"cell read from its neighbours. At pass t core layer 0's WINDOW branch is "

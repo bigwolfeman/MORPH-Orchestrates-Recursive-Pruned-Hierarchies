@@ -649,7 +649,10 @@ class TULConfig:
     loop_reach: int = 0
     # ── THE LOOP CARRY (arm `slot-spandec-strict-prev-reach1-carry-*`, 2026-09-19) ──
     # "none" (default) builds nothing, runs nothing and is bit-identical to the tree
-    # before this key. "sum" / "gate" keep the cross-cell read and re-inject it.
+    # before this key. "sum" / "gate" keep the cross-cell read and re-inject it EVERY
+    # later pass. "persist" (LXTUL-R Step 2, 2026-09-22) keeps the SAME read, accumulated
+    # the SAME way as "sum", but never hands it back to a pass — it is added ONCE, at the
+    # loop's exit, so the map is bit-identical to "none" at every pass.
     #
     # WHY. The hop-distance probe's second pass
     # (lab/experiments/failures/2026-09-19-hop-distance-plateau-and-dilution.md) measured
@@ -657,11 +660,16 @@ class TULConfig:
     # the reach cut so nothing arrives after pass 0, a planted copy two spans back falls
     # from 0.148 to 0.035 nats between depth 1 and depth 6 — while the cell's OWN span,
     # re-supplied every pass by the per-layer x0/bigram injection, is refined instead
-    # (0.181 -> 0.291). The carry gives neighbour content the same footing: it is written
-    # when the layer-0 reach read arrives and re-injected at the entry of every later
-    # pass, RMS-matched to the carrier so accumulation cannot grow its norm.
+    # (0.181 -> 0.291). "sum" / "gate" give neighbour content the same footing by
+    # re-injecting it, but that re-supply REPLACES the pass-1 read and dilutes the far
+    # hops instead (carry RMS 0.5 -> 75 over a run,
+    # lab/experiments/failures/2026-09-19-loop-carry-prev-reach1.md). "persist" is the
+    # decay fix's "keep the direct read and bound the state by construction" candidate
+    # (.agents/notes/proposed/architecture/2026-09-21-lxtul-r-reach-composition.md,
+    # Step 2): it is measured on the Thought Register (tul.slot_cells > 1 / fan_k > 0),
+    # where "sum" / "gate" stay refused (see slot_cells below).
     # morph/model/tul_carry.py holds the state and the normalisation rule.
-    loop_carry: str = "none"             # "none" | "sum" | "gate"
+    loop_carry: str = "none"             # "none" | "sum" | "gate" | "persist"
     gate: "TULGateConfig | None" = None  # docs/tul-gate-spec.md; None = arm A1 (nothing built)
     # Per-slot-INDEX input embedding instead of one shared E_slot. 0 = off (one shared
     # vector, the shipped behaviour); >0 = that many rows, and the slot at index s gets row
@@ -1811,7 +1819,7 @@ class TULConfig:
                     f"the reach relation; without that relation the captured tensor would "
                     f"be a local token window and would mean something else. Set "
                     f"tul.loop_reach >= 1.")
-            if self.slot_cells > 1:
+            if self.slot_cells > 1 and self.loop_carry in ("sum", "gate"):
                 raise NotImplementedError(
                     f"tul.loop_carry={self.loop_carry!r} with tul.slot_cells="
                     f"{self.slot_cells} (the Thought Register / the LXTUL fan): the "
@@ -1819,7 +1827,13 @@ class TULConfig:
                     f"REPLACES the causal term and lets a cell read the LATER cells of "
                     f"its own slot — so core layer 0's window branch there is not "
                     f"'cells k-w .. k-1' and the carry would accumulate within-slot "
-                    f"content it was never measured on. Refused until measured.")
+                    f"content it was never measured on. Refused until measured. "
+                    f"tul.loop_carry='persist' is not refused here: it never re-injects "
+                    f"into the map (the within-slot content the read might carry is never "
+                    f"handed back to a pass), so the register concern above does not "
+                    f"apply to it — LXTUL-R Step 2, "
+                    f".agents/notes/proposed/architecture/2026-09-21-lxtul-r-reach-"
+                    f"composition.md.")
             if self.tokens_through_core or self.loop_reads_tokens:
                 raise NotImplementedError(
                     f"tul.loop_carry={self.loop_carry!r} with "

@@ -49,8 +49,36 @@ vector, renormalised to the same RMS). The two modes differ only from pass 2 on,
 ``gate`` can weight the new read against what it already holds. The bit-identity claim of
 this key is ``loop_carry: "none"``, where nothing is built and nothing runs.
 
+``"persist"`` (LXTUL-R Step 2, 2026-09-22): ``sum``/``gate`` re-inject the accumulated
+read at the entry of EVERY later pass, and that re-supply is the measured failure — it
+REPLACES the direct pass-1 read and dilutes the far hops instead of adding to them
+(`lab/experiments/failures/2026-09-19-loop-carry-prev-reach1.md`: carry RMS grows 0.5 ->
+75 over a run). ``persist`` accumulates the SAME per-cell state, with the SAME update
+rule as ``sum`` (plain accumulation, no parameter):
+
+    p_k(0) = 0
+    p_k(t) = p_k(t-1) + r_k(t)
+
+but it is NEVER handed back to ``_core_step`` as ``carry=``: every pass runs with
+``carry=None``, so the map every later reader sees (the gain hinge's probe, the terminal
+fixed-point term, ``slot_state_renorm``, every forced-depth sweep) is IDENTICAL to
+``loop_carry: "none"`` at every pass — the per-pass trajectory is bit-identical between
+the two, which is what makes this the arm that "keeps the direct pass-1 read" rather than
+replacing it. The accumulated state is added exactly ONCE, after the LAST pass, to the
+compact-axis carrier the loop hands its readers (``h_slots`` / the register's cells):
+
+    h_exit' = h_exit + carry_rms_match(p_k(T), h_exit)
+
+RMS-matched the same way and by the same function as the per-pass term (masked to valid
+cells; a cell whose accumulator never moved off 0 — a pad, or cell 0 of every row under a
+reach budget — adds exactly 0). This is the "bound the state by construction" half of the
+`2026-09-21-lxtul-r-reach-composition.md` Step 2 proposal: the add is a SINGLE
+carrier-RMS-worth of the accumulated direction, so an unbounded sum over an arbitrary
+depth still adds a bounded term, unlike re-injecting it T times.
+
 Record: .agents/notes/proposed/architecture/2026-09-19-loop-carry-reinjection.md
 Prereg: lab/experiments/planned/2026-09-19-loop-carry-prev-reach1.md
+Step 2: .agents/notes/proposed/architecture/2026-09-21-lxtul-r-reach-composition.md
 """
 
 from __future__ import annotations
@@ -60,7 +88,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-LOOP_CARRY_MODES: tuple[str, ...] = ("none", "sum", "gate")
+LOOP_CARRY_MODES: tuple[str, ...] = ("none", "sum", "gate", "persist")
 
 
 def carry_rms_match(c: Tensor, h: Tensor, eps: float = 1e-6) -> Tensor:
@@ -93,10 +121,10 @@ class TULLoopCarry(nn.Module):
 
     def __init__(self, d_model: int, mode: str):
         super().__init__()
-        if mode not in ("sum", "gate"):
+        if mode not in ("sum", "gate", "persist"):
             raise ValueError(
                 f"TULLoopCarry(mode={mode!r}): 'none' builds no module at all; the only "
-                f"modes that do are 'sum' and 'gate'.")
+                f"modes that do are 'sum', 'gate' and 'persist'.")
         self.mode = mode
         self.d_model = d_model
         self.eps = 1e-6
@@ -115,16 +143,25 @@ class TULLoopCarry(nn.Module):
         """``(c_k(t), gate)`` from the read ``r`` ``[B, S, C]`` and ``c_k(t-1)``.
 
         ``gate`` is the elementwise sigmoid under ``mode='gate'`` and ``None`` under
-        ``'sum'`` — the caller reports its mean as ``carry/gate_mean_t{t}``.
+        ``'sum'`` / ``'persist'`` — the caller reports its mean as
+        ``carry/gate_mean_t{t}`` when it is not ``None``. ``'persist'`` accumulates
+        exactly like ``'sum'`` (plain addition, no parameter); the two modes differ only
+        in WHERE the caller uses the result — ``'sum'`` hands it back to `_core_step` as
+        `carry=` every later pass, ``'persist'`` never does and adds it once at the
+        loop's exit instead (`inject_term`, called from `_tul_core` after the loop).
         """
-        if self.mode == "sum":
+        if self.mode in ("sum", "persist"):
             return c_prev + r, None
         g = torch.sigmoid(F.linear(torch.cat([r, c_prev], dim=-1),
                                    self.W_g.to(r.dtype)))
         return c_prev + g * r, g
 
     def inject_term(self, c: Tensor, h: Tensor) -> Tensor:
-        """The ``[B, S, C]`` term added to the carrier ``h`` at the entry of the next pass."""
+        """The ``[B, S, C]`` term added to the carrier ``h``.
+
+        At the entry of the next pass for ``'sum'`` / ``'gate'``; once, at the loop's
+        exit, for ``'persist'`` (see the module docstring's "persist" section).
+        """
         return carry_rms_match(c, h, self.eps)
 
     def extra_repr(self) -> str:
