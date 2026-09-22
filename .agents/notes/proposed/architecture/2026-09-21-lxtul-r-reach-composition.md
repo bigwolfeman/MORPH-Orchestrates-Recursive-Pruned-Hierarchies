@@ -248,3 +248,13 @@ Step 1b (`lab/experiments/planned/2026-09-22-lxtul-r-step1b.md`, 0b338f4) re-run
 at the corrected geometry, queued behind the seed twins of the Step 0 coda arm
 (`2026-09-22-coda-seed-twin.md`, 599ae1d). Risk row to add for the next composition:
 "every op with a receptive field, and which kwarg cuts it".
+
+**Seed-twin correction to the Step 0 outcome (2026-09-22 05:00).**
+[`failures/2026-09-22-coda-seed-twin.md`](../../../../lab/experiments/failures/2026-09-22-coda-seed-twin.md):
+the seed-1 coda arm was a bad draw of the single-block-reach config (two seeds 0.152 apart;
+the plain span config's seeds 0.004 apart). At seed 2 one non-looped block reading the
+previous span is worth 0.112 at every offset. Step 0's brackets: previous span [0.112,
+0.179], far budget [0.126, 0.197], relay share 0.071. The queue rule's reading is
+unchanged (lower bound 0.126). Two consequences for this note: the two-channel fallback's
+"history through the coda's token reach" is worth about 0.11 at ONE block and 0.18 at every
+block, and any single-block design must be read at two seeds.

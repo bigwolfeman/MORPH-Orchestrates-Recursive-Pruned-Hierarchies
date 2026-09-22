@@ -313,3 +313,21 @@ Step 1 asks the slot loop to perform, and the reason the far budget is the right
 for it. A single non-looped block reading the previous span is a different object: it
 pays on the boundary tokens and costs the span's tail, and the cost is on the trained
 weights, not on the mask.
+
+## Correction (2026-09-22 05:00, after the seed twins)
+
+`failures/2026-09-22-coda-seed-twin.md` (599ae1d): at seed 2 the single-block arm
+(`budget-web-reach1-coda-s2`) reads **0.112 [0.108, 0.117] BETTER** than its span twin at
+depth 6, at every offset (−0.076 at 0, −0.469 at 1, −0.069 at 8+), while the two span seeds
+differ by 0.004 [0.001, 0.006]. The seed-1 coda arm read above was a bad training draw of
+that config (its two seeds differ by 0.152), not a learned trade; the "learned trade" and
+"run draw" readings in the swap section are settled in favour of the draw, and the
+"single-block read costs the span's tail" sentence in Updated hypothesis is withdrawn.
+Brackets re-read with the coda at seed 2 (the plain seed floor 0.004 is the error bar):
+previous-span value **[0.112, 0.179]**; far budget **[0.126, 0.197]** (coda-s2 − reachall
++0.197 [+0.187, +0.208]); relay share **0.071**, inside P-8's [0.02, 0.12]; ordering
+span-s2 4.4014 ≥ coda-s2 4.2893 ≥ reach1 4.2181 ≥ reachall 4.0922 (P-9's clause holds on the
+seed-2 arm); P-3's sum 0.112 + 0.197 + 0.053 = 0.362 against the 0.358 endpoint. The
+verdict's letter is unchanged (P-4, P-8, P-9 failed on the arms as run); the open item is
+now the 0.041 drift between `span` at cc4e034 and `span-h` at 66fc75c, which the seed
+floor shows is not noise.
