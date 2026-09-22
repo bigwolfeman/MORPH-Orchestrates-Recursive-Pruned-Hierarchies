@@ -260,7 +260,7 @@ on the shipped model. Beyond the zeros the rows are read for nothing (a swapped 
 corruption); noted only that the numbers match Step 1b's within 0.045 at g = 1 and 0.002
 from g = 2 on. The C1 persist table follows as its own addendum.
 
-## Addendum 2026-09-22 (17:25): the C1 persist swap table, a leak check
+## Addendum 2026-09-22 (17:40): the C1 persist swap table, a leak check
 
 The Spark at 6bcbe89 (`tg_seg` count 24), `hop_distance_probe.py --swap --swap-mode row`
 on `persist@5000`, 480 rows, 3,482 sites, 0 skipped
