@@ -72,12 +72,18 @@ LXTUL works = channel worth it × passes have a job × reader cashes it × K are
 
 ### Step 0, the measurement that bounds the prize (one small build, no loop)
 
-A **coda token-reach dial**: `tul.tg_token_reach: int` in `tg_strict_allow`
-(`morph/model/tul_layout.py`), 0 = strict as today, r = the coda's window branch may also
-attend the tokens of the r previous spans, −1 = all (the unrestricted geometry). Run it at
-depth 1 with no slot write (the "no slots" control of
-[`cross-span-budget`](../../../../lab/experiments/failures/2026-09-11-arc-span-budget.md)),
-r ∈ {0, 1, −1}, 5k, 480 rows, paired. Two numbers fall out of one run pair:
+A **reach dial on the budget mask**: `model.span_reach: int` under `model.span_mask:
+span`, the plain-model knob the 0.40 budget was measured with
+([`2026-09-11-arc-span-budget.md`](../../../../lab/experiments/failures/2026-09-11-arc-span-budget.md);
+no TUL in the model at all, so the endpoints are exact by construction). Relation
+`causal AND span_id[j] >= span_id[i] − r` on both attention branches and the core; 0 is
+bit-identical to `span`, −1 is fully causal; the conv / value-shift and bigram stay cut at
+every boundary for every r, so `reachall` differs from `row` by those local routes alone
+(a fourth number the existing `full` arm gives for free). Corrected 2026-09-21 21:28 from
+an earlier draft that put the dial inside `tg_strict_allow`. Three arms at HEAD (`span`
+re-run, `reach1`, `reachall`), 5k, 480 rows, paired; prereg
+[`planned/2026-09-21-span-reach-split.md`](../../../../lab/experiments/planned/2026-09-21-span-reach-split.md).
+Two numbers fall out:
 
 - **bandwidth ceiling** = CE(r=0) − CE(r=1): what a perfect memory of the PREVIOUS span is
   worth. The slot channel returns 0.19; this says how much of the rest is history a
@@ -85,9 +91,10 @@ r ∈ {0, 1, −1}, 5k, 480 rows, paired. Two numbers fall out of one run pair:
 - **far budget** = CE(r=1) − CE(r=−1): what spans further back are worth. This is the
   relay loop's entire job, and the ceiling of any honest reach K-curve.
 
-Build size: one allow-mask branch and one test row in `tests/test_tul_strict_geometry.py`
-(the leak test already sabotages one cut at a time; the new value is one more cut). The
-compose check prints the value at startup.
+Build size: one relation function (`span_reach_allow`), one config field, two YAMLs, and
+tests in `tests/test_span_mask_leak.py` (reach 0 bit-identical, the hand-built matrices,
+and the leak test with a perturbation one span back that must move and two spans back
+that must not). The compose check prints the value at startup.
 
 Reading rule, frozen now: if the far budget is under 0.03 nats, no geometry gives this
 loop a depth job at this span size, and the reach arm is NOT queued; the design falls
@@ -160,7 +167,7 @@ force depth; it is the fallback if Step 0 says the far budget is small.
 
 Step 0 (the dial), frozen before the run in its own planned file:
 
-- A0.1 the dial composes and prints; the leak test passes with r=0 bit-identical to strict.
+- A0.1 the dial composes and prints; the leak test passes with r=0 bit-identical to `span`.
 - A0.2 CE(r=0) − CE(r=−1) reproduces the 0.40 [0.38, 0.42] budget within 0.05 on 480 rows.
 - A0.3 the two numbers (bandwidth ceiling, far budget) are filed with intervals; the
   reading rule above decides Step 1 without a second look at the data.
@@ -180,6 +187,10 @@ Step 1 (LXTUL-R), frozen before the run in its own planned file; bars set now:
 - A1.6 the streams are candidates: `rank_t1` ≥ 2.5 of 3; `oracle − mixed` quoted beside
   the 0.04 near-copy floor.
 - A1.7 rate at or above 0.80x fan4-all's tok/s.
+- A1.8 (added 2026-09-21 21:28, the depth-dependence guard) paired CE at 5k vs Step 0's
+  `budget-web-reachall` model, reported as the fraction of the far budget the loop at
+  depth 6 recovers; the reach K-curve is forced by construction (the `loop_reach` comment
+  says so), so a pass on A1.3 without this fraction is depth dependence, not a win.
 
 Pass = A1.1 to A1.7 all hold. If A1.3 holds and A1.4 fails, Step 2 runs. If A1.3 fails
 with A1.4 holding, the reach frame is closed for this loop and the two-channel design is
