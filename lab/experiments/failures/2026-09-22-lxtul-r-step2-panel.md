@@ -259,3 +259,27 @@ forbids arrival, so the history stream leaks nothing: one slot per pass, at core
 on the shipped model. Beyond the zeros the rows are read for nothing (a swapped span is a
 corruption); noted only that the numbers match Step 1b's within 0.045 at g = 1 and 0.002
 from g = 2 on. The C1 persist table follows as its own addendum.
+
+## Addendum 2026-09-22 (17:25): the C1 persist swap table, a leak check
+
+The Spark at 6bcbe89 (`tg_seg` count 24), `hop_distance_probe.py --swap --swap-mode row`
+on `persist@5000`, 480 rows, 3,482 sites, 0 skipped
+(`../results/2026-09-22-lxtul-r-step2/hop_swap_persist_5000.{json,runlog.txt}`).
+Controls 4.3019 / 4.2875 / 4.2788 / 4.2727 at depths 1 / 2 / 3 / 6. Benefit = swapped −
+control:
+
+| g | persist d1 / d2 / d3 / d6 |
+|---|---|
+| 1 | 0.318 / 0.311 / 0.309 / 0.301 |
+| 2 | 0.053 / 0.048 / 0.037 / 0.030 |
+| 3 | **0.000** / 0.022 / 0.020 / 0.013 |
+| 4 | **0.000 / 0.000** / 0.010 / 0.008 |
+| 5 | **0.000 / 0.000 / 0.000** / 0.005 |
+| 6 | **0.000 / 0.000 / 0.000** / 0.003 |
+
+The zeros are bit-exact and sit where the chain forbids arrival: the persist accumulator
+(the second layer-0 attention call on the register) leaks nothing across the one-slot-per-
+pass boundary. The rows beyond the zeros are not read (a swapped span is a corruption);
+they sit within 0.01 of Step 1b's and hist1's at every g from 2 on, which is consistent
+with the three arms sharing one depth-6 CE. All three leak checks of the Step 2 panel are
+now filed; the Spark's `SWAPRUN3 COMPLETE` closes the instrument's run.
