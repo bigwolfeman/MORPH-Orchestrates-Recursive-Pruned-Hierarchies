@@ -1,0 +1,31 @@
+# LXTUL-R history streams (2026-09-22). One factor over
+# `tul_slot_spandec_strict_fan4_all_reach1`: `tul.fan_history_streams: 1` splits the fan's
+# 4 streams into 1 HISTORY stream (index 0) and 3 PLAN streams (index 1-3). Inside the
+# loop (`slot_cell_relation`, core layer 0 only, the same seam `tul.loop_reach` narrows):
+# the history stream still reads the same-index cell of the slot `loop_reach` back (the
+# relay, unchanged from the reach1 arm); the three plan streams read their own slot's
+# cells only, never another slot directly. The diversity term (`fan_repel_lambda`,
+# `fan_repel_mode`) is charged on the three plan streams alone
+# (`morph/model/tul_fan.py::plan_streams`) — the eval instruments
+# (`fan/stream_cos_t{t}`, `fan/stream_rank_t{t}`, the epi/vol readouts) keep reporting
+# over all four streams, plus a new `fan/plan_rank_t{t}` over the three plan streams.
+#
+# WHY: Step 1b filed with the relay and the diversity push sharing the same K cells — the
+# repulsion term reads the whole `fan_k` axis every pass, which includes whatever cell is
+# carrying content forward from the previous slot, so pushing the streams apart pushes
+# the relay apart from whatever else lives in that cell. This arm gives the relay its own
+# cell and lets the repulsion push only the streams that have no relay job.
+#
+# `training.warmup` composes to 1000 (inherited through the whole strict/fan/reach1
+# chain). Never override it to 0 on this ternary + AdEMAMix recipe (CLAUDE.md).
+#
+# Record: .agents/notes/proposed/architecture/2026-09-21-lxtul-r-reach-composition.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_reach1
+  - _self_
+
+tul:
+  fan_history_streams: 1
+
+wandb:
+  name: slot-spandec-strict-fan4-all-reach1-hist1

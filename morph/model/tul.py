@@ -449,6 +449,43 @@ class TULConfig:
     # (`fitted-z-used-the-answer`) and is not done here under any name.
     # Prereg: lab/experiments/planned/2026-09-21-lxtul-fan4-all-lineage.md
     fan_lineage: str = "off"             # "off" | "relation" (per-stream cross-slot channel)
+    # ── `fan_history_streams` (2026-09-22, LXTUL-R: the reach composition) ────────
+    # 0 is every model before this key and is bit-identical to it.
+    #
+    # WHY. Step 1b (`slot-spandec-strict-fan4-all-reach1`, the reach chain over the fan)
+    # filed with the relay (`tul.loop_reach`, the K-1 span-back chain) and the diversity
+    # push (`fan_repel_lambda`) sharing the SAME K cells: the repulsion term reads the
+    # whole `m_cells` axis every pass, which includes whatever cell is carrying content
+    # forward from the previous slot, so pushing the streams apart pushes the relay apart
+    # from whatever else lives in that cell.
+    #
+    # WHAT IT SPLITS. The K = `fan_k` streams into `h` HISTORY streams (index < h) and
+    # K - h PLAN streams (index >= h). Inside the loop (`slot_cell_relation`, core layer
+    # 0 only, same seam `tul.loop_reach` narrows): a HISTORY cell reads its own slot's
+    # cells AND the same-index history cell of the `loop_reach` slots behind it (the
+    # `fan_lineage` narrowing, restricted to the history streams); a PLAN cell reads its
+    # own slot's cells ONLY — never another slot directly, only through its own slot's
+    # history cell. The repulsion (`tul_fan.plan_streams`, `fan_repel_term` and its `epi`
+    # / `vol` siblings) is then charged on the PLAN streams alone (K - h >= 2, so a
+    # repulsion still has something to push apart), while the eval instruments
+    # (`fan/stream_cos_t{t}`, `fan/stream_rank_t{t}`, the `epi`/`vol` readouts) keep
+    # reporting over ALL K streams, plus a new `fan/plan_rank_t{t}` over the plan streams
+    # alone.
+    #
+    # REQUIRES `tul.loop_reach >= 1`: the split is a narrowing of the SAME cross-slot
+    # reach budget `loop_reach` opens, and at `loop_reach == 0` (unlimited) the
+    # unrestricted `si >= sj` relation already lets every stream read every earlier
+    # slot's every cell, so a history/plan split would narrow nothing (`slot_cell_relation`
+    # raises rather than silently no-op). `0 <= h <= fan_k - 2`: at least two plan streams
+    # must remain for the repulsion to have a pair to compare.
+    #
+    # `fan_lineage: "relation"` composes with this key as a documented NO-OP on the
+    # history half: `fan_lineage`'s narrowing (same stream index across slots) is already
+    # implied by this key's (same stream index AND a history stream), so setting both is
+    # allowed, not refused — refusing a redundant-but-consistent combination would guard
+    # nothing.
+    # Record: .agents/notes/proposed/architecture/2026-09-21-lxtul-r-reach-composition.md
+    fan_history_streams: int = 0         # h HISTORY streams; K-h PLAN streams; 0 = off
     slot_id: int = 4                     # "<fim_pad>"; its LM-head logit is −inf (§3.1)
     token_state_dropout: float = 0.15    # Bowman word dropout on the coda input (§3.4)
     slot_mean_depth: int = 0             # 0 → cfg.mean_depth
@@ -1928,6 +1965,27 @@ class TULConfig:
                 f"tul.fan_lineage={self.fan_lineage!r} with tul.fan_k=0: the lineages ARE "
                 "the fan's K streams and the relation it narrows is the CELL relation "
                 "only a register builds. Set tul.fan_k >= 2 or drop the key.")
+        if self.fan_history_streams < 0:
+            raise ValueError(
+                f"tul.fan_history_streams must be >= 0, got {self.fan_history_streams}")
+        if self.fan_history_streams > 0:
+            if self.fan_k == 0:
+                raise ValueError(
+                    f"tul.fan_history_streams={self.fan_history_streams} with "
+                    "tul.fan_k=0: the history/plan split narrows the fan's K streams and "
+                    "there is no fan to split. Set tul.fan_k >= 2 or drop the key.")
+            if self.fan_history_streams > self.fan_k - 2:
+                raise ValueError(
+                    f"tul.fan_history_streams={self.fan_history_streams} must be <= "
+                    f"tul.fan_k - 2 = {self.fan_k - 2}: at least two PLAN streams must "
+                    "remain for the repulsion term to have a pair to compare.")
+            if self.loop_reach < 1:
+                raise ValueError(
+                    f"tul.fan_history_streams={self.fan_history_streams} needs "
+                    f"tul.loop_reach >= 1 (got tul.loop_reach={self.loop_reach}): the "
+                    "split narrows the SAME cross-slot reach budget loop_reach opens, "
+                    "and at loop_reach=0 (unlimited) the unrestricted relation would "
+                    "narrow nothing.")
         if self.fan_k == 0:
             _fan_orphan = [n for n, v in (("fan_repel_lambda", self.fan_repel_lambda > 0.0),
                                           ("fan_mix", self.fan_mix != "mean"),

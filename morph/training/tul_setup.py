@@ -66,7 +66,7 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_repel_mode", "fan_epi_features", "fan_epi_ridge", "fan_epi_eta",
     "fan_select_eps", "fan_select_gate_lambda", "fan_all_wta_lambda",
     "fan_select_write", "fan_select_write_anneal",
-    "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage",
+    "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_cells", "slot_cell_init", "slot_chain", "slot_chain_detach",
     "vq_beta", "vq_codebook", "vq_codes", "vq_dim", "vq_groups", "vq_reset_after",
@@ -337,6 +337,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
         fan_lineage=str(tc.get("fan_lineage", "off")),
+        fan_history_streams=int(tc.get("fan_history_streams", 0)),
         vq_codes=int(tc.get("vq_codes", 0)),
         vq_codebook=int(tc.get("vq_codebook", 512)),
         vq_dim=int(tc.get("vq_dim", 0)),
@@ -565,6 +566,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_seed_noise": model_cfg.fan_seed_noise,
         "fan_lineage": model_cfg.fan_lineage,
+        "fan_history_streams": model_cfg.fan_history_streams,
         "fan_epi_features": model_cfg.fan_epi_features,
         "fan_epi_ridge": model_cfg.fan_epi_ridge,
         "fan_epi_eta": model_cfg.fan_epi_eta,
@@ -892,7 +894,12 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                  "per-stream span CE that would set the weights comes from the coda AFTER "
                  "the loop, so gating pass 1 with it is circular here) "
                  if model_cfg.fan_lineage != "off" else "")
-              + 
+              + (f"HISTORY STREAMS h={model_cfg.fan_history_streams} of "
+                 f"{model_cfg.fan_k} (loop_reach={model_cfg.loop_reach}: h streams relay "
+                 "across slots, the remaining K-h PLAN streams are slot-local and take "
+                 "the diversity term ALONE, so the relay and the repulsion stop sharing "
+                 "cells) " if model_cfg.fan_history_streams > 0 else "")
+              +
               "- K latent STREAMS per span through the ONE shared core. The streams ARE "
               "the Thought Register's cells (fan_k aliases slot_cells, so the message "
               "above is this arm's loop); what is NEW is the three things the register "

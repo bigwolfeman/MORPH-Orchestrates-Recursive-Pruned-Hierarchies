@@ -355,12 +355,14 @@ def patch_relation(mode: str):
     import morph.model.transformer as _T
     real = _T.slot_cell_relation
 
-    def patched(n_slots, m_cells, device, r=0, lineage=False):
+    def patched(n_slots, m_cells, device, r=0, lineage=False, history_streams=0):
         # `lineage` is `tul.fan_lineage: "relation"` (a fan arm). Every model in this
         # file is a plain register, so it must arrive False here — accepted and ASSERTED
         # rather than swallowed, so a caller that starts passing True cannot have its
-        # narrowing silently dropped by this stub.
+        # narrowing silently dropped by this stub. Same for `history_streams`
+        # (`tul.fan_history_streams`): every model here builds no fan at all.
         assert lineage is False, "the register fixtures build no fan lineage"
+        assert history_streams == 0, "the register fixtures build no fan history split"
         blk, same = real(n_slots, m_cells, device, r)
         sm = n_slots * m_cells
         idx = torch.arange(sm, device=device)

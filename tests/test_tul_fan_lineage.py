@@ -121,8 +121,11 @@ def _force_lineage_mask():
     import morph.model.transformer as _T
     real = _T.slot_cell_relation
 
-    def patched(n_slots, m_cells, device, r=0, lineage=False):
+    def patched(n_slots, m_cells, device, r=0, lineage=False, history_streams=0):
         assert lineage is False, "the control arm must not ask for the real narrowing"
+        assert history_streams == 0, (
+            "this file never composes tul.fan_history_streams; a nonzero value here "
+            "would mean the call site changed without this stub following it")
         _blk, same = real(n_slots, m_cells, device, r)
         sm = n_slots * m_cells
         idx = torch.arange(sm, device=device)

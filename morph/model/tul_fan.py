@@ -60,7 +60,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 __all__ = ["TULFanMix", "select_streams", "select_winners", "select_gate_loss", "fan_stream_stats", "fan_stream_cos", "fan_repel_term",
-           "FanReservoir", "ridge_map", "epi_score", "fan_epi_term", "fan_vol_term"]
+           "FanReservoir", "ridge_map", "epi_score", "fan_epi_term", "fan_vol_term", "plan_streams"]
 
 
 def _cell_readout(cells: Tensor) -> Tensor:
@@ -135,6 +135,33 @@ def fan_stream_cos(state: Tensor, valid: Tensor, m_cells: int) -> Tensor:
     g = n @ n.transpose(1, 2)
     m = float(m_cells)
     return ((g.sum((1, 2)) - g.diagonal(dim1=1, dim2=2).sum(-1)) / (m * (m - 1))).mean()
+
+
+def plan_streams(traj: Tensor, m_cells: int, h: int) -> tuple[Tensor, int]:
+    """``tul.fan_history_streams`` — slice a ``_tul_core`` trajectory entry ``[B, S*M,
+    *carrier, C]`` to its PLAN streams alone: ``[B, S*(M-h), *carrier, C]``, dropping the
+    first ``h`` (HISTORY) cells of every slot. Returns ``(traj_plan, m_plan)`` with
+    ``m_plan = M - h``.
+
+    ONE helper because the repulsion terms (:func:`fan_repel_term`, :func:`fan_epi_term`,
+    :func:`fan_vol_term`) and their instrument-only calls must slice the SAME way, or a
+    charged term and its reported cosine would silently read different cells. The slot
+    axis is untouched: this only removes cells from the STREAM axis within each slot, so
+    a caller with a per-slot ``valid`` mask (``[B, S]``) passes it through unchanged.
+    """
+    if h < 1:
+        raise ValueError(f"plan_streams: h must be >= 1, got {h}")
+    if h >= m_cells:
+        raise ValueError(f"plan_streams: h={h} must be < m_cells={m_cells}")
+    b, sm = traj.shape[0], traj.shape[1]
+    if sm % m_cells != 0:
+        raise ValueError(
+            f"plan_streams: compact axis {sm} not divisible by m_cells={m_cells}")
+    s = sm // m_cells
+    m_plan = m_cells - h
+    traj_plan = traj.reshape(b, s, m_cells, *traj.shape[2:])[:, :, h:].reshape(
+        b, s * m_plan, *traj.shape[2:])
+    return traj_plan, m_plan
 
 
 def fan_repel_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,

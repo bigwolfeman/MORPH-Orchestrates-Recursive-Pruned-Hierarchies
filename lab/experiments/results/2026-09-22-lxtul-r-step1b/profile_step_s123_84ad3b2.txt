@@ -1,0 +1,36 @@
+# S5 reading 1: the same config at 84ad3b2 (S1 batched stream scoring, S2 aligned vocab, S3 no host syncs), 2026-09-22, 48-step run, kineto steps 40..43
+# Regions (wall/gpu ms, mean over 20 steps) and the trainer's rate line:
+[perf] step 19 mean over 20 (wall/gpu ms): bwd 410.2/434.5  clip 31.2/7.0  data 54.7/38.6  fwd 494.4/494.4  opt 8.4/26.7  prune 0.1/0.0  | untracked 0.6  | step 999.4ms
+[perf] step 39 mean over 20 (wall/gpu ms): bwd 429.7/454.3  clip 31.3/6.9  data 16.6/0.2  fwd 509.8/509.8  opt 5.8/24.4  prune 0.1/0.0  | untracked 0.6  | step 993.9ms
+[     40/48] loss=31.6729  ppl=485165195.4  lr=4.00e-06  sps=1.00  tok/s=6129  proxy=10.15  tflops=8.7  peak=17.72GB
+
+# Top kernels by self CUDA time (self CUDA total 2.493s):
+aten::mm                                                                                                                 | 615.664ms 24.70% | avg 88.455us
+aten::copy_                                                                                                              | 396.792ms 15.92% | avg 7.246us
+void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x128_32x3_tn_align8>(cutlass_80_tensorop_bf16_s16 | 221.520ms 8.89% | avg 285.097us
+aten::convolution_backward                                                                                               | 181.967ms 7.30% | avg 60.576us
+aten::mul                                                                                                                | 152.398ms 6.11% | avg 7.060us
+void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul> >(int, at:: | 127.033ms 5.10% | avg 18.111us
+void at::native::vectorized_elementwise_kernel<4, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambd | 125.297ms 5.03% | avg 11.991us
+aten::cudnn_convolution                                                                                                  | 122.341ms 4.91% | avg 41.356us
+void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::T | 121.759ms 4.88% | avg 3.944us
+void cudnn::cnn::dgrad2d_grouped_direct_kernel<__nv_bfloat16, int, float, float, false, true, 0, 1>(cudnn::cnn::DgradGro | 112.498ms 4.51% | avg 65.103us
+aten::add_                                                                                                               | 108.418ms 4.35% | avg 8.789us
+void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}: | 79.668ms 3.20% | avg 14.355us
+Optimizer.step#AdEMAMixB1Zero.step                                                                                       | 76.089ms 3.05% | avg 25.363ms
+_FusedCCAPrologue                                                                                                        | 75.311ms 3.02% | avg 228.438us
+aten::add                                                                                                                | 71.531ms 2.87% | avg 8.230us
+void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, f | 67.045ms 2.69% | avg 16.265us
+void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x64_32x4_nn_align8>(cutlass_80_tensorop_bf16_s168 | 56.703ms 2.27% | avg 510.835us
+void cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16, __nv_bfloat16, float, false, true, (cudnnKernelDataType | 50.991ms 2.05% | avg 2.059us
+_cca_q_fwd_kernel                                                                                                        | 47.660ms 1.91% | avg 124.116us
+void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::T | 47.362ms 1.90% | avg 96.854us
+_FusedHCPost                                                                                                             | 45.282ms 1.82% | avg 58.961us
+_hc_post_fwd_kernel                                                                                                      | 45.282ms 1.82% | avg 58.961us
+_FusedHCPostBackward                                                                                                     | 43.670ms 1.75% | avg 646.795us
+_hc_post_bwd_kernel                                                                                                      | 43.670ms 1.75% | avg 101.088us
+void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x128_32x3_nt_align8>(cutlass_80_tensorop_bf16_s16 | 41.947ms 1.68% | avg 517.865us
+void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<float> >(at:: | 41.620ms 1.67% | avg 67.675us
+void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<c10::BFloat16,  | 41.245ms 1.65% | avg 3.511us
+
+# Reading: step 994 ms vs 971 at c0f6bc4 (no change inside the run-to-run noise); the align1 [L,V] gemm is gone (its work moved to the align8 256x128 gemm, 155 -> 222 ms per 3 steps, about 20 ms/step saved); aten::copy_ rose 341 -> 397 ms per 3 steps; aten::mm 702 -> 616. The step is bound by GPU kernel time (about 830 ms of 994) spread over tens of thousands of small kernels, not by launches or syncs: S1 and S3 remove CPU work the GPU was not waiting on.

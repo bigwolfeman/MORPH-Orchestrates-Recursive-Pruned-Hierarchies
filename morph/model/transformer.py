@@ -50,7 +50,7 @@ from .tul import (TULCenterExit, TULConfig, TULGate, TULGateConfig, TULGradPass,
 from .tul_carry import TULLoopCarry
 from .tul_fan import (FanReservoir, TULFanMix, fan_epi_term, fan_repel_term, fan_stream_rank,
                       fan_vol_term, select_gate_loss, select_streams, select_winners,
-                      fan_stream_stats)
+                      fan_stream_stats, plan_streams)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
@@ -1292,7 +1292,7 @@ def span_token_counts(gid: Tensor, keep_tok: Tensor, n_groups: int) -> Tensor:
 
 
 def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0,
-                       lineage: bool = False) -> tuple[Tensor, Tensor]:
+                       lineage: bool = False, history_streams: int = 0) -> tuple[Tensor, Tensor]:
     """The Thought Register's CELL relation, in one place (``tul.slot_cells``).
 
     The compact axis is ``n_slots * m_cells`` cells, slot-major (index ``s*M + i``).
@@ -1339,6 +1339,36 @@ def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0,
     ``tg_relation`` delivery argument is unchanged. At ``m_cells == 1`` it is a no-op by
     construction (one stream), which is why it is refused at ``fan_k == 0``.
 
+    ``history_streams`` (``tul.fan_history_streams``, LXTUL-R) splits the ``m_cells``
+    streams into ``h`` HISTORY streams (index ``< h``) and ``M - h`` PLAN streams (index
+    ``>= h``), and narrows the CROSS-SLOT half of ``blk`` again: a cell may read an
+    EARLIER slot's cell only when its own stream index is a history stream AND the two
+    cells share that stream index — exactly the ``lineage`` narrowing, but restricted to
+    the history streams alone and applied whether or not ``lineage`` is also set. A plan
+    cell therefore never reads another slot directly; it reads its own slot's history
+    cell (own slot is untouched by this or any other narrowing here), which is where any
+    relayed content must pass through. ``same`` is untouched, as it is for ``lineage``.
+    This is why LXTUL-R Step 1b's relay and its diversity push were fighting inside the
+    same K cells: without this split, the repulsion term (``tul_fan.fan_repel_term`` and
+    friends) reads the WHOLE ``m_cells`` axis, which includes whatever cell is carrying
+    the relay.
+
+    Composing ``lineage`` with ``history_streams > 0`` is a documented no-op on the
+    history half: ``lineage``'s narrowing (``cl(query) == cl(key)``) is already implied
+    by ``history_streams``'s (``cl(query) < h AND cl(query) == cl(key)``), so ANDing both
+    leaves the stricter one. Passing both is allowed rather than refused, because refusing
+    a redundant-but-consistent combination would be a check that protects nothing.
+
+    Refused: ``history_streams > 0`` with ``reach == 0`` (a history stream with no
+    reach budget has nothing to read across slots — the relation would ALREADY allow the
+    unrestricted ``lineage`` cross-slot read via ``si >= sj``, so ``history_streams``
+    would silently do nothing under ``reach == 0``, which the ``lineage`` no-op paragraph
+    above shows is NOT a general property of this narrowing); ``history_streams >=
+    m_cells`` (no plan stream would be left to narrow the reach for). ``TULConfig``
+    carries the domain-specific bound ``0 <= h <= fan_k - 2`` (at least two plan streams,
+    since the repulsion needs ``M - h >= 2``); the checks here are the function's own,
+    generic safety net for any caller.
+
     **What is still CAUSAL on the cell axis, by decision.** The CCA causal conv, its
     ``W_v_prev`` value shift and (on a core that carries one) the GLA retention branch are
     position-wise / recurrent operators, not attention: they read backwards along the
@@ -1347,16 +1377,31 @@ def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0,
     never leak; they simply give cell 0 no sibling context of its own. Widening them would
     mean an acausal conv, a different mechanism from this relation.
     """
+    if history_streams > 0 and reach <= 0:
+        raise ValueError(
+            f"slot_cell_relation: history_streams={history_streams} with reach={reach}: "
+            "a history stream needs a reach budget to narrow, or the cross-slot read "
+            "stays the unrestricted 'si >= sj' this function returns at reach 0.")
+    if history_streams >= m_cells:
+        raise ValueError(
+            f"slot_cell_relation: history_streams={history_streams} must be < "
+            f"m_cells={m_cells}: at least one PLAN stream must be left.")
     sm = n_slots * m_cells
     _idx = torch.arange(sm, device=device)
     sl = _idx // m_cells                                       # slot id per cell
     cl = _idx % m_cells                                        # STREAM id per cell
     si, sj = sl.unsqueeze(1), sl.unsqueeze(0)
+    ci, cj = cl.unsqueeze(1), cl.unsqueeze(0)
     blk = si >= sj
     if lineage:
         # `tul.fan_lineage: "relation"` — see the docstring. Own slot: untouched
         # (all M cells). Earlier slots: the SAME stream index only.
-        blk = blk & ((si == sj) | (cl.unsqueeze(1) == cl.unsqueeze(0)))
+        blk = blk & ((si == sj) | (ci == cj))
+    if history_streams > 0:
+        # `tul.fan_history_streams` — see the docstring. Own slot: untouched. Earlier
+        # slots: the querying cell must itself be a HISTORY stream (`ci < h`) AND share
+        # the key's stream index — a plan cell (`ci >= h`) gets no cross-slot read at all.
+        blk = blk & ((si == sj) | ((ci < history_streams) & (ci == cj)))
     if reach > 0:
         blk = blk & (sj >= si - reach)
     return blk.view(1, 1, sm, sm), (si == sj).view(1, 1, sm, sm)
@@ -2234,6 +2279,10 @@ class MORPHTransformer(nn.Module):
             cfg.tul.fan_seed_noise) if cfg.tul is not None else 0.0
         self._fan_lineage: bool = bool(
             cfg.tul is not None and cfg.tul.fan_lineage == "relation")
+        # `tul.fan_history_streams` — a BUILD-TIME constant, same rule: `_tul_core`'s
+        # branch on it is Python-level and traces out at the default 0.
+        self._fan_history_streams: int = int(
+            cfg.tul.fan_history_streams) if cfg.tul is not None else 0
         if self._fan_seed_noise > 0.0 and cfg.core_state_init != "prelude":
             # The one refusal this knob needs. SCSE is NOT checked here and that is
             # deliberate: a fan forces `slot_cells == fan_k >= 2`, and the register above
@@ -4981,8 +5030,14 @@ class MORPHTransformer(nn.Module):
             # copy of this mask is how the two would drift into different relations.
             # `lineage=` is `tul.fan_lineage: "relation"`: across slots a cell keeps its
             # OWN stream index only, so the K streams are K channels along the slot axis.
+            # `history_streams=` is `tul.fan_history_streams`: the SAME cross-slot
+            # narrowing, restricted further to the first `h` streams alone, so the
+            # remaining `M - h` PLAN streams never read another slot directly — only
+            # their own slot's history cell, which the repulsion (`tul_fan.plan_streams`)
+            # excludes from the term it charges.
             _mask0, _same = slot_cell_relation(_n_slots, _m_cells, x.device, _reach,
-                                               lineage=self._fan_lineage)
+                                               lineage=self._fan_lineage,
+                                               history_streams=self._fan_history_streams)
             # With a reach budget the later core layers are position-local exactly as the
             # reach arm's are, except that "position" is the SLOT: a cell keeps its own
             # slot's cells, which is what makes the register a register and not M
@@ -9316,29 +9371,74 @@ class MORPHTransformer(nn.Module):
                     # cosines are instruments and there is no term.
                     if db_traj is not None:
                         _mode = str(tc.fan_repel_mode)
-                        if _mode == "cos":
-                            _rp = fan_repel_term(db_traj, layout.slot_valid, _m,
-                                                 int(tc.fan_repel_passes), stats=fan_stats)
+                        _h = self._fan_history_streams
+                        if _h == 0:
+                            if _mode == "cos":
+                                _rp = fan_repel_term(db_traj, layout.slot_valid, _m,
+                                                     int(tc.fan_repel_passes), stats=fan_stats)
+                            else:
+                                # `epi` / `vol` / `epivol`: the cosines stay INSTRUMENTS
+                                # (every pass, no gradient); the charged term is minus the
+                                # epiplexity of the streams' deviations (`fan_epi_t{t}`),
+                                # minus the within-slot volume (`fan_vol_t{t}`), or their sum.
+                                with torch.no_grad():
+                                    fan_repel_term(db_traj, layout.slot_valid, _m,
+                                                   int(tc.fan_repel_passes), stats=fan_stats)
+                                _parts = []
+                                if _mode in ("epi", "epivol"):
+                                    _parts.append(fan_epi_term(
+                                        db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
+                                        self.tul_fan_epi, float(tc.fan_epi_ridge),
+                                        float(tc.fan_epi_eta), stats=fan_stats))
+                                if _mode in ("vol", "epivol"):
+                                    _parts.append(fan_vol_term(
+                                        db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
+                                        float(tc.fan_epi_eta), stats=fan_stats))
+                                _parts = [p for p in _parts if p is not None]
+                                _rp = torch.stack(_parts).sum() if _parts else None
                         else:
-                            # `epi` / `vol` / `epivol`: the cosines stay INSTRUMENTS (every
-                            # pass, no gradient); the charged term is minus the epiplexity
-                            # of the streams' deviations (`fan_epi_t{t}`), minus the
-                            # within-slot volume (`fan_vol_t{t}`), or their sum.
+                            # ── LXTUL-R history streams (tul.fan_history_streams) ──────
+                            # The instruments (`stream_cos_t{t}`, `epi_t{t}`, `vol_t{t}`)
+                            # keep reporting over ALL K streams, no_grad, exactly as at
+                            # `_h == 0` above — a history-streams arm reads the same
+                            # collapse-shape numbers a plain fan arm does. The CHARGED
+                            # term is computed on the PLAN streams alone
+                            # (`tul_fan.plan_streams`), with its own `stats=None` so it
+                            # never overwrites the full-K instrument keys: the relay
+                            # (history) and the diversity push (plan) stop fighting inside
+                            # the same K cells (LXTUL-R Step 1b, 2026-09-22).
                             with torch.no_grad():
                                 fan_repel_term(db_traj, layout.slot_valid, _m,
                                                int(tc.fan_repel_passes), stats=fan_stats)
-                            _parts = []
-                            if _mode in ("epi", "epivol"):
-                                _parts.append(fan_epi_term(
-                                    db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
-                                    self.tul_fan_epi, float(tc.fan_epi_ridge),
-                                    float(tc.fan_epi_eta), stats=fan_stats))
-                            if _mode in ("vol", "epivol"):
-                                _parts.append(fan_vol_term(
-                                    db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
-                                    float(tc.fan_epi_eta), stats=fan_stats))
-                            _parts = [p for p in _parts if p is not None]
-                            _rp = torch.stack(_parts).sum() if _parts else None
+                                if _mode in ("epi", "epivol"):
+                                    fan_epi_term(
+                                        db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
+                                        self.tul_fan_epi, float(tc.fan_epi_ridge),
+                                        float(tc.fan_epi_eta), stats=fan_stats)
+                                if _mode in ("vol", "epivol"):
+                                    fan_vol_term(
+                                        db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
+                                        float(tc.fan_epi_eta), stats=fan_stats)
+                            _traj_plan = [plan_streams(_t, _m, _h)[0] for _t in db_traj]
+                            _m_plan = _m - _h
+                            if _mode == "cos":
+                                _rp = fan_repel_term(_traj_plan, layout.slot_valid, _m_plan,
+                                                     int(tc.fan_repel_passes), stats=None)
+                            else:
+                                _parts = []
+                                if _mode in ("epi", "epivol"):
+                                    _parts.append(fan_epi_term(
+                                        _traj_plan, layout.slot_valid, _m_plan,
+                                        int(tc.fan_repel_passes), self.tul_fan_epi,
+                                        float(tc.fan_epi_ridge), float(tc.fan_epi_eta),
+                                        stats=None))
+                                if _mode in ("vol", "epivol"):
+                                    _parts.append(fan_vol_term(
+                                        _traj_plan, layout.slot_valid, _m_plan,
+                                        int(tc.fan_repel_passes), float(tc.fan_epi_eta),
+                                        stats=None))
+                                _parts = [p for p in _parts if p is not None]
+                                _rp = torch.stack(_parts).sum() if _parts else None
                         if self.training and tc.fan_repel_lambda > 0.0:
                             fan_repel_loss = _rp
                         if not self.training:
@@ -9349,6 +9449,10 @@ class MORPHTransformer(nn.Module):
                             for _t in range(len(db_traj)):
                                 fan_stats[f"stream_rank_t{_t}"] = fan_stream_rank(
                                     db_traj[_t], layout.slot_valid, _m)
+                                if _h > 0:
+                                    _tp, _mp = plan_streams(db_traj[_t], _m, _h)
+                                    fan_stats[f"plan_rank_t{_t}"] = fan_stream_rank(
+                                        _tp, layout.slot_valid, _mp)
                 depths = depths.reshape(depths.shape[0], _S, _m)[:, :, 0].contiguous()
             # ── the discrete thought (tul.vq_codes; morph/model/tul_vq.py) ─────────
             # THE SAME SEAM the register's mean sits at, and for the same reason: every
@@ -10992,6 +11096,19 @@ class MORPHTransformer(nn.Module):
         the flattened axis would make cell 0 blind to its siblings, and the stack would be
         a different mechanism from the loop it conditions. ``tul.loop_reach`` is refused
         with a stack (``TULConfig``), so no reach budget reaches this relation.
+
+        ``tul.fan_history_streams`` is NOT wired to this caller's ``slot_cell_relation``
+        call, on purpose, and it composes with ``fan_k > 0`` (``m_cells > 1``) exactly as
+        described above — a register/fan model builds this stack the same as any other.
+        What it does not compose with is ``history_streams > 0`` itself:
+        ``TULConfig`` requires ``tul.loop_reach >= 1`` for a nonzero history-stream
+        count (the split is a reach-budget narrowing, see ``slot_cell_relation``'s
+        docstring), and ``TULConfig`` ALSO refuses ``tul.loop_reach > 0`` with
+        ``tul.cond_layers > 0`` (this stack) for an unrelated, pre-existing reason — the
+        stack runs the loop's UNBUDGETED relation, wider than a reach-1 pass. The two
+        refusals compose transitively: no config can ever reach this method with
+        ``history_streams > 0``, so passing it here would be an untestable parameter on a
+        dead branch. Left as a comment, not a kwarg.
 
         Pad slots sit at the tail of the compact sequence and the relation never lets a
         valid cell read past its own slot, so a pad cell is never a key of a valid one;
