@@ -199,3 +199,169 @@ def test_all_refusals_and_the_knobs_it_reads():
 def test_all_key_composes_through_tul_setup():
     from morph.training.tul_setup import KNOWN_TUL_KEYS
     assert "fan_all_wta_lambda" in KNOWN_TUL_KEYS
+
+
+# ── speed-build (2026-09-22): batched K-stream coda, aligned vocab, no host sync ──────
+#
+# WHAT THESE PROVE:
+#
+# 7. THE BATCHED CODA IS THE SEQUENTIAL LOOP. `_tul_fan_all` replaced K sequential
+#    `_back_region([B, ...])` calls with ONE `_back_region([K*B, ...])` call. The
+#    reference below is NOT the shipped code: it re-derives the per-stream CE table from
+#    the exact inputs the batched call used (captured via `_fan_all_ce_capture`), with a
+#    plain Python loop over `_tul_fan_stream_write` / `_back_region` /
+#    `accumulate_span_ce` — the arithmetic the method ran before the change.
+# 8. THE VOCAB PADDING IS INVISIBLE TO THE LOSS AND THE EMBEDDING'S GRADIENT. An 8-
+#    misaligned vocab's CE is identical (atol 1e-6) whether the matmul runs against the
+#    raw weight or the zero-padded-and-sliced one, and the gradient the padded path
+#    sends back to the tied embedding is the SAME as the unpadded path's — the pad row
+#    is a bare tensor, never a Parameter.
+# 9. NO STATS-PATH `float()` FIRES INSIDE THE MODEL. `_tul_fan_all`'s wta_* readings and
+#    `fan_repel_term`'s per-pass cosines (the SAME `fan_stats` dict, shared across every
+#    writer `_forward_tul` calls) are tensors at the point the model itself is done
+#    writing them — the sync, if any, belongs to whoever logs them.
+
+def test_fan_all_batched_coda_matches_a_sequential_reference():
+    from morph.model.transformer import accumulate_span_ce, scatter_positions
+
+    ids, inp, lab, layout = _batch()
+    m = _all_model().train()
+    m._fan_all_ce_capture = []
+    out = m(inp, labels=lab, slot_layout=layout)
+    assert len(m._fan_all_ce_capture) == 1, "expected exactly one _tul_fan_all call"
+    cap = m._fan_all_ce_capture[0]
+    m._fan_all_ce_capture = None
+    k = cap["cells_d"].shape[2]
+
+    per_stream_ref = []
+    with torch.no_grad():
+        for i in range(k):
+            values, pos = m._tul_fan_stream_write(cap["cells_d"], i, cap["layout"], cap["L"])
+            x_i = scatter_positions(cap["base_d"], pos, values)
+            xh_i = m._back_region(x_i, cap["x0"], cap["bigram_emb"], cap["input_ids"],
+                                  inject_keep=cap["keep"], attn_kwargs=cap["coda_kw"],
+                                  ret_reset_mask=cap["tg_reset"])
+            per_stream_ref.append(accumulate_span_ce(
+                xh_i, cap["w_head"], cap["gid"], cap["keep_tok"], cap["lab"],
+                cap["g_bins"])[:, 1:])
+    ce_ref = torch.stack(per_stream_ref, dim=-1)
+    ce_batched = cap["ce"]
+    assert ce_ref.shape == ce_batched.shape
+    rel = (ce_batched - ce_ref).abs() / ce_ref.abs().clamp_min(1e-6)
+    assert float(rel.max()) < 1e-4, (
+        f"batched vs sequential coda max relative diff {float(rel.max())}")
+    assert "fan_wta_ce" in out
+
+
+def test_pad_vocab_align8_keeps_ce_and_the_tied_embeddings_gradient_exact():
+    from morph.model.transformer import accumulate_span_ce, pad_vocab_align8
+
+    torch.manual_seed(0)
+    V, d, L, B = 67, 16, 5, 2          # V % 8 == 3: genuinely 8-misaligned
+    emb = torch.nn.Embedding(V, d)
+    xh = torch.randn(B, L, d)
+    n_groups = L
+    gid = (torch.arange(B).view(B, 1) * n_groups
+          + torch.arange(L).view(1, L)).long()
+    keep_tok = torch.ones(B, L, dtype=torch.bool)
+    lab = torch.randint(0, V, (B, L))
+
+    ce1 = accumulate_span_ce(xh, emb.weight, gid, keep_tok, lab, n_groups)
+    ce1.sum().backward()
+    g1 = emb.weight.grad.clone()
+    emb.weight.grad = None
+
+    w_pad = pad_vocab_align8(emb.weight)
+    assert w_pad.shape[0] == 72                       # ceil(67/8)*8
+    assert not isinstance(w_pad, torch.nn.Parameter)
+    ce2 = accumulate_span_ce(xh, w_pad, gid, keep_tok, lab, n_groups, vocab_size=V)
+    ce2.sum().backward()
+    g2 = emb.weight.grad.clone()
+
+    assert torch.allclose(ce1, ce2, atol=1e-6), "padded-and-sliced CE must match the raw matmul"
+    assert torch.allclose(g1, g2, atol=1e-6), (
+        "padding the vocab axis must not change the tied embedding's gradient")
+
+    # An already-aligned vocab is a genuine no-op (same tensor, not a copy).
+    emb8 = torch.nn.Embedding(64, d)
+    assert pad_vocab_align8(emb8.weight) is emb8.weight
+
+
+def test_fan_all_stats_dict_holds_tensors_not_python_floats_after_the_forward():
+    """The SAME ``fan_stats`` dict ``_forward_tul`` builds is handed to `_tul_fan_all`
+    (the wta_* keys) and to `fan_repel_term` (`stream_cos_t{t}`) — capturing a
+    REFERENCE to it (not a copy) via a spy on `_tul_fan_all` sees every writer's keys
+    once the whole forward is done, and every one of them must be a tensor except the
+    documented Python-int count `repel_terms`.
+    """
+    ids, inp, lab, layout = _batch()
+    m = _all_model().train()
+    captured: dict = {}
+    real = m._tul_fan_all
+
+    def spy(cells, xn, x0, bigram_emb, input_ids, labels, layout_, L, coda_kw, tg_reset,
+            plan_mode, stats):
+        captured["stats"] = stats          # reference: later writers mutate it in place
+        return real(cells, xn, x0, bigram_emb, input_ids, labels, layout_, L, coda_kw,
+                    tg_reset, plan_mode, stats)
+
+    m._tul_fan_all = spy
+    try:
+        out = m(inp, labels=lab, slot_layout=layout)
+    finally:
+        m._tul_fan_all = real
+    stats = captured["stats"]
+    assert stats, "expected the fan_stats dict to be non-empty"
+    seen_wta = seen_cos = False
+    for k, v in stats.items():
+        if k == "repel_terms":
+            assert isinstance(v, float), "repel_terms is a Python int count, never a sync"
+            continue
+        assert torch.is_tensor(v), f"stats[{k!r}] is a Python {type(v)}, expected a tensor"
+        seen_wta = seen_wta or k.startswith("wta_")
+        seen_cos = seen_cos or k.startswith("stream_cos_t")
+    assert seen_wta and seen_cos, "expected both _tul_fan_all and fan_repel_term keys"
+    # Values are unaffected: the deferred float() at the consumer reads the same numbers.
+    assert float(out["fan_wta_forced"]) == 0.0
+    assert float(out["fan_mix_entropy"]) == pytest.approx(math.log(4.0), abs=1e-5)
+
+
+def test_fan_select_stats_dict_holds_tensors_not_python_floats():
+    ids, inp, lab, layout = _batch()
+    m = _model(fan_k=4, slot_cells=4, prefix_k=4, fan_mix="select").train()
+    captured: dict = {}
+    real = m._tul_fan_select
+
+    def spy(cells, xn, x0, bigram_emb, input_ids, labels, layout_, L, coda_kw, tg_reset,
+            plan_mode, stats):
+        captured["stats"] = stats
+        return real(cells, xn, x0, bigram_emb, input_ids, labels, layout_, L, coda_kw,
+                    tg_reset, plan_mode, stats)
+
+    m._tul_fan_select = spy
+    try:
+        m(inp, labels=lab, slot_layout=layout)
+    finally:
+        m._tul_fan_select = real
+    stats = captured["stats"]
+    assert any(k.startswith("select_") for k in stats)
+    for k, v in stats.items():
+        if k in ("repel_terms", "select_write_p_gate"):
+            assert isinstance(v, float), f"{k} is a Python count/schedule value, never a sync"
+            continue
+        assert torch.is_tensor(v), f"stats[{k!r}] is a Python {type(v)}, expected a tensor"
+
+
+def test_repeat_along_batch_repeats_tensors_none_and_nested_dicts():
+    from morph.model.transformer import repeat_along_batch
+
+    assert repeat_along_batch(None, 3) is None
+    t = torch.arange(6).view(2, 3)
+    r = repeat_along_batch(t, 3)
+    assert r.shape == (6, 3)
+    assert torch.equal(r, torch.cat([t, t, t], dim=0))
+    nested = {"a": t, "b": {"c": t + 1, "d": None}}
+    rn = repeat_along_batch(nested, 2)
+    assert torch.equal(rn["a"], torch.cat([t, t], dim=0))
+    assert torch.equal(rn["b"]["c"], torch.cat([t + 1, t + 1], dim=0))
+    assert rn["b"]["d"] is None

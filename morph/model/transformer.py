@@ -1205,21 +1205,82 @@ def span_ce_index(labels: Tensor, layout: SlotLayout):
     return gid, keep_tok, lab, G
 
 
+def pad_vocab_align8(w_head: Tensor) -> Tensor:
+    """Zero-row-pad a ``[V, d]`` weight's vocab axis to the next multiple of 8.
+
+    ``x @ w_head.t()`` at an odd (or merely not-8-aligned) ``V`` runs cutlass's
+    ``128x256_tn_align1`` kernel — the unaligned, slow path (measured on the fan write
+    replay: 108 calls at 1.18 ms each, 127 ms/step, V = 49169). A vocab axis padded to a
+    multiple of 8 lets the same GEMM take the aligned kernel instead; the extra columns
+    of the product are sliced away with ``[..., :V]`` before any loss, so the padding is
+    invisible past that point (the sliced logits are bit-for-bit the ones the unpadded
+    matmul would have produced — each kept column is an independent dot product against
+    one row of ``w_head``, untouched by the padding).
+
+    Returns a plain tensor (never a ``Parameter``, never assigned to a module): the
+    padded rows are literal zeros with no leaf of their own, so gradient reaching them
+    (there is none — the caller slices them out before any loss) has nowhere to
+    accumulate and the real ``V`` rows' gradient is exactly what the unpadded matmul
+    would have produced, flowing back through the ``cat`` into ``w_head`` unchanged.
+    A no-op (returns ``w_head`` itself) when ``V`` is already 8-aligned.
+    """
+    v = w_head.shape[0]
+    pad = (-v) % 8
+    if pad == 0:
+        return w_head
+    return torch.cat([w_head, w_head.new_zeros(pad, w_head.shape[1])], dim=0)
+
+
 def accumulate_span_ce(xh: Tensor, w_head: Tensor, gid: Tensor, keep_tok: Tensor,
-                       lab: Tensor, n_groups: int) -> Tensor:
+                       lab: Tensor, n_groups: int, vocab_size: int | None = None) -> Tensor:
     """``[B, n_groups]`` SUMMED token CE per bag, from a coda state and the tied head.
 
     The logits are built ONE ROW at a time and never materialised for the whole batch:
     ``[L, V]`` at ``V`` ~ 49k is 200 MB in fp32 and ``[B, L, V]`` is not affordable
     inside an eval forward that already holds the loop's trajectory.
+
+    ``vocab_size`` (perf, launch alignment): when given, ``w_head`` is taken to be
+    ALREADY padded to an 8-aligned vocab (:func:`pad_vocab_align8`, built once by the
+    caller and reused across every row/stream of one forward) and the logits are sliced
+    back to ``[:vocab_size]`` before ``cross_entropy`` — the real, unpadded vocabulary
+    the labels index into. ``None`` (default): ``w_head`` is used as given, no slice —
+    bit-identical to before this parameter existed.
     """
     B = lab.shape[0]
     out = torch.zeros(B * n_groups, device=lab.device, dtype=torch.float32)
     for b in range(B):
-        logits = (xh[b].to(w_head.dtype) @ w_head.t()).float()          # [L, V]
+        logits = (xh[b].to(w_head.dtype) @ w_head.t()).float()          # [L, V] (or V_pad)
+        if vocab_size is not None:
+            logits = logits[:, :vocab_size]
         ce = F.cross_entropy(logits, lab[b], reduction="none") * keep_tok[b]
         out.index_add_(0, gid[b], ce)
     return out.view(B, n_groups)
+
+
+def repeat_along_batch(x, k: int):
+    """Repeat a batch-axis-0 tensor (or a dict of them, recursively) ``k`` times.
+
+    ``[B, ...] -> [k*B, ...]`` by concatenating ``k`` IDENTICAL copies along dim 0 — the
+    same order :meth:`MORPHTransformer._tul_fan_all` concatenates its ``K`` per-stream
+    coda inputs in (``x_all = cat([x_0, ..., x_{K-1}])``), so stream ``i``'s rows land at
+    ``[i*B:(i+1)*B]`` in both the batched call and a reader that recovers the sequential
+    per-stream split from it. Every kwarg this repeats is itself STREAM-INDEPENDENT
+    (``x0``, ``bigram_emb``, ``input_ids``, ``inject_keep``, the TG attention kwargs,
+    ``ret_reset_mask``) — only the coda's TOKEN INPUT differs per stream, which the
+    caller concatenates separately.
+
+    ``None`` passes through unchanged (every caller here builds these kwargs as
+    ``None`` on a model that does not need them, and repeating ``None`` k times is still
+    ``None``). A nested ``dict`` (``tg_span``, TG's per-forward span-attention kwargs) is
+    walked recursively so no batch-shaped tensor inside it is missed.
+    """
+    if x is None:
+        return None
+    if torch.is_tensor(x):
+        return x.repeat(k, *([1] * (x.dim() - 1)))
+    if isinstance(x, dict):
+        return {kk: repeat_along_batch(vv, k) for kk, vv in x.items()}
+    return x
 
 
 def span_token_counts(gid: Tensor, keep_tok: Tensor, n_groups: int) -> Tensor:
@@ -1367,6 +1428,13 @@ class MORPHTransformer(nn.Module):
     # consumed by `_core_step` and never returned. None by default, so the shipped graph
     # never sees it.
     _denoise_capture: list | None = None
+
+    # `tul.fan_mix="all"`'s test hook (the `_trigger_capture` pattern): attach a list
+    # and `_tul_fan_all` appends the per-stream span-CE table ``[B, S, K]`` (detached)
+    # once per train step, right after the batched no-grad coda pass builds it — the
+    # ONLY way a test can recover that table, since it is a local of the method. None by
+    # default, so the shipped graph never sees it.
+    _fan_all_ce_capture: list | None = None
 
     def __init__(self, cfg: MORPHConfig):
         super().__init__()
@@ -6338,6 +6406,8 @@ class MORPHTransformer(nn.Module):
         gid, keep_tok, lab, G = span_ce_index(labels, layout)
         pos = self.tul.prefix_positions(layout, L)
         w_head = self.embed.lm_weight()
+        vocab_size = int(w_head.shape[0])
+        w_head_pad = pad_vocab_align8(w_head)          # once per call (perf: aligned GEMM)
         state = {"xn": None}
 
         @torch.no_grad()
@@ -6355,7 +6425,8 @@ class MORPHTransformer(nn.Module):
                 keep = slot_cell_inject_keep(layout, x_coda.dtype)
             xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
                                    attn_kwargs=tg_attn_kwargs, ret_reset_mask=tg_reset)
-            span_ce = accumulate_span_ce(xh, w_head, gid, keep_tok, lab, G)
+            span_ce = accumulate_span_ce(xh, w_head_pad, gid, keep_tok, lab, G,
+                                         vocab_size=vocab_size)
             return span_ce[:, 1:]                       # slot s reads bag s+1: [B, S]
 
         score.bind = lambda xn: state.__setitem__("xn", xn)
@@ -6400,6 +6471,8 @@ class MORPHTransformer(nn.Module):
         k = int(cells.shape[2])
         gid, keep_tok, lab, g_bins = span_ce_index(labels, layout)
         w_head = self.embed.lm_weight()
+        vocab_size = int(w_head.shape[0])
+        w_head_pad = pad_vocab_align8(w_head)          # once per call (perf: aligned GEMM)
         n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]        # [B, S]
         per_stream = []
         for i in range(k):
@@ -6407,10 +6480,11 @@ class MORPHTransformer(nn.Module):
             x_i = scatter_positions(base, pos, values)
             xh_i = self._back_region(x_i, x0, bigram_emb, input_ids, inject_keep=keep,
                                      attn_kwargs=coda_kw, ret_reset_mask=tg_reset)
-            per_stream.append(accumulate_span_ce(xh_i, w_head, gid, keep_tok,
-                                                 lab, g_bins)[:, 1:])
+            per_stream.append(accumulate_span_ce(xh_i, w_head_pad, gid, keep_tok,
+                                                 lab, g_bins, vocab_size=vocab_size)[:, 1:])
         ce = torch.stack(per_stream, dim=-1)                           # [B, S, K]
-        mixed = accumulate_span_ce(xh, w_head, gid, keep_tok, lab, g_bins)[:, 1:]
+        mixed = accumulate_span_ce(xh, w_head_pad, gid, keep_tok, lab, g_bins,
+                                   vocab_size=vocab_size)[:, 1:]
         # A span is scored only when its slot is real AND the span has scored tokens: a
         # tail-pad slot and a slot whose next span fell off the row would otherwise enter
         # the minimum at CE 0 and drag the oracle to an artefact.
@@ -6506,6 +6580,8 @@ class MORPHTransformer(nn.Module):
         with torch.no_grad():
             gid, keep_tok, lab, g_bins = span_ce_index(labels, layout)
             w_head = self.embed.lm_weight()
+            vocab_size = int(w_head.shape[0])
+            w_head_pad = pad_vocab_align8(w_head)      # once per forward (perf: aligned GEMM)
             n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]            # [B, S]
             per_stream = []
             base_d = base.detach()
@@ -6514,33 +6590,43 @@ class MORPHTransformer(nn.Module):
                 x_i = scatter_positions(base_d, pos, values)
                 xh_i = self._back_region(x_i, x0, bigram_emb, input_ids, inject_keep=keep,
                                          attn_kwargs=coda_kw, ret_reset_mask=tg_reset)
-                per_stream.append(accumulate_span_ce(xh_i, w_head, gid, keep_tok,
-                                                     lab, g_bins)[:, 1:])
+                per_stream.append(accumulate_span_ce(xh_i, w_head_pad, gid, keep_tok,
+                                                     lab, g_bins,
+                                                     vocab_size=vocab_size)[:, 1:])
             ce = torch.stack(per_stream, dim=-1)                                # [B, S, K]
             ok = layout.slot_valid & (n_tok > 0)
             choice, forced = select_winners(ce, ok, float(tc.fan_select_eps))
             written, p_gate, from_gate = self._fan_select_written(logits, choice, forced, ok)
+            # Detached 0-dim TENSORS below, not `float(...)` (perf: no host sync on the
+            # training path — the `_tul_fan_all` precedent; `p_gate` alone stays a plain
+            # Python float, it never touched the GPU). `_tul_group_losses` lifts every
+            # `stats` entry into the loss `groups` dict as a tensor already, and train.py's
+            # logger is the one place that calls `float()` on these, on the steps it logs.
             if bool(ok.any()):
                 denom = n_tok[ok].sum().clamp_min(1.0)
                 best, arg = ce.min(dim=-1)
                 if tc.fan_select_write != "oracle":
                     stats["select_write_p_gate"] = p_gate
-                    stats["select_write_from_gate"] = float(from_gate[ok].float().mean())
-                    stats["select_written_ce"] = float(
-                        ce.gather(-1, written.unsqueeze(-1)).squeeze(-1)[ok].sum() / denom)
-                    stats["select_written_agree"] = float((written[ok] == arg[ok]).float().mean())
+                    stats["select_write_from_gate"] = from_gate[ok].float().mean().detach()
+                    stats["select_written_ce"] = (
+                        ce.gather(-1, written.unsqueeze(-1)).squeeze(-1)[ok].sum() / denom
+                    ).detach()
+                    stats["select_written_agree"] = (
+                        (written[ok] == arg[ok]).float().mean().detach())
                     for i in range(k):
                         # the WRITTEN shares (the gate's picks plus eps): the collapse
                         # instrument of a closed train/eval loop, beside `select_share_k{i}`,
                         # which stays the TABLE's winner shares (the gate's label)
-                        stats[f"select_written_share_k{i}"] = float((written[ok] == i).float().mean())
-                stats["select_oracle_ce"] = float(best[ok].sum() / denom)
-                stats["select_single_ce"] = float(ce[..., 0][ok].sum() / denom)
-                stats["select_pick0"] = float((arg[ok] == 0).float().mean())
-                stats["select_forced"] = float(forced[ok].float().mean())
-                stats["select_agree"] = float((logits.argmax(dim=-1)[ok] == arg[ok]).float().mean())
+                        stats[f"select_written_share_k{i}"] = (
+                            (written[ok] == i).float().mean().detach())
+                stats["select_oracle_ce"] = (best[ok].sum() / denom).detach()
+                stats["select_single_ce"] = (ce[..., 0][ok].sum() / denom).detach()
+                stats["select_pick0"] = (arg[ok] == 0).float().mean().detach()
+                stats["select_forced"] = forced[ok].float().mean().detach()
+                stats["select_agree"] = (
+                    (logits.argmax(dim=-1)[ok] == arg[ok]).float().mean().detach())
                 for i in range(k):
-                    stats[f"select_share_k{i}"] = float((choice[ok] == i).float().mean())
+                    stats[f"select_share_k{i}"] = (choice[ok] == i).float().mean().detach()
         gate_loss = select_gate_loss(logits, choice, ok)
         return self.tul_fan(cells, written)[0], w, gate_loss
 
@@ -6625,6 +6711,7 @@ class MORPHTransformer(nn.Module):
         """
         tc = self.cfg.tul
         k = int(cells.shape[2])
+        B = int(cells.shape[0])
         state, w = self.tul_fan(cells)                                       # mean, uniform
         if not self.training or labels is None or plan_mode != "normal":
             return state, w, None
@@ -6637,42 +6724,87 @@ class MORPHTransformer(nn.Module):
                 if (tc.coda_token_input == "embed" or self._tg_strict) else None)
         gid, keep_tok, lab, g_bins = span_ce_index(labels, layout)
         w_head = self.embed.lm_weight()
+        vocab_size = int(w_head.shape[0])
+        w_head_pad = pad_vocab_align8(w_head)          # once per forward (perf: aligned GEMM)
         n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]                # [B, S]
         ok = layout.slot_valid & (n_tok > 0)
         with torch.no_grad():
-            per_stream = []
             base_d = base.detach()
             cells_d = cells.detach()
+            x_list = []
             for i in range(k):
                 values, pos = self._tul_fan_stream_write(cells_d, i, layout, L)
-                x_i = scatter_positions(base_d, pos, values)
-                xh_i = self._back_region(x_i, x0, bigram_emb, input_ids, inject_keep=keep,
-                                         attn_kwargs=coda_kw, ret_reset_mask=tg_reset)
-                per_stream.append(accumulate_span_ce(xh_i, w_head, gid, keep_tok,
-                                                     lab, g_bins)[:, 1:])
+                x_list.append(scatter_positions(base_d, pos, values))
+            # ONE batched coda pass over the K written inputs stacked along the batch
+            # axis, instead of K sequential `_back_region` calls (perf: 971 ms/step
+            # measured on this arm, `aten::mm` 27.9%/`cudaLaunchKernel` 476 ms self CPU —
+            # coda launch/kernel overhead dominates at this shape, so K forwards of batch
+            # B pay it K times where one forward of batch K*B pays it once). Every OTHER
+            # coda input is stream-INDEPENDENT (only the written cells differ across the
+            # K streams), so it is repeated K times along the batch axis
+            # (`repeat_along_batch`) rather than recomputed — `x0`/`bigram_emb` carry no
+            # per-stream signal and `coda_kw`/`ret_reset_mask`/`inject_keep`/`input_ids`
+            # are one dict/mask/id-tensor built once per forward, upstream of the fan.
+            x_all = torch.cat(x_list, dim=0)                                   # [K*B, L, ...]
+            xh_all = self._back_region(
+                x_all, repeat_along_batch(x0, k), repeat_along_batch(bigram_emb, k),
+                repeat_along_batch(input_ids, k), inject_keep=repeat_along_batch(keep, k),
+                attn_kwargs=repeat_along_batch(coda_kw, k),
+                ret_reset_mask=repeat_along_batch(tg_reset, k))
+            # Split back into the K streams (row block i is stream i, the same order the
+            # inputs were concatenated in) — cheap CE bookkeeping against the ALREADY
+            # batched coda output, not a second coda pass.
+            per_stream = [accumulate_span_ce(xh_all[i * B:(i + 1) * B], w_head_pad, gid,
+                                             keep_tok, lab, g_bins,
+                                             vocab_size=vocab_size)[:, 1:]
+                         for i in range(k)]
             ce = torch.stack(per_stream, dim=-1)                                # [B, S, K]
+            if self._fan_all_ce_capture is not None:
+                # Test hook (the `_trigger_capture` pattern): the ONLY way a test can
+                # recover the per-stream table the batched coda pass built, AND the
+                # exact inputs it was built from, to pin both against a sequential
+                # reference built from the same tensors with the model's own
+                # `_tul_fan_stream_write` / `_back_region` / `accumulate_span_ce`. None
+                # on every shipped path.
+                self._fan_all_ce_capture.append({
+                    "ce": ce.detach().clone(), "cells_d": cells_d, "base_d": base_d,
+                    "x0": x0.detach(), "bigram_emb": (None if bigram_emb is None
+                                                       else bigram_emb.detach()),
+                    "input_ids": input_ids.detach(), "keep": (None if keep is None
+                                                              else keep.detach()),
+                    "coda_kw": coda_kw, "tg_reset": tg_reset, "layout": layout, "L": L,
+                    "gid": gid, "keep_tok": keep_tok, "lab": lab, "g_bins": g_bins,
+                    "w_head": w_head.detach(),
+                })
             choice, forced = select_winners(ce, ok, float(tc.fan_select_eps))
             if bool(ok.any()):
                 denom = n_tok[ok].sum().clamp_min(1.0)
                 best, arg = ce.min(dim=-1)
-                stats["wta_oracle_ce"] = float(best[ok].sum() / denom)
-                stats["wta_single_ce"] = float(ce[..., 0][ok].sum() / denom)
-                stats["wta_pick0"] = float((arg[ok] == 0).float().mean())
-                stats["wta_forced"] = float(forced[ok].float().mean())
+                # Detached 0-dim TENSORS, not `float(...)` — each `float()` on a CUDA
+                # tensor is a `cudaStreamSynchronize` mid-step (perf: 896 ms self-CPU
+                # `cudaStreamSynchronize` measured on this arm). `_tul_group_losses`
+                # wraps every `stats` entry into the loss `groups` dict as a tensor
+                # already (`groups["loss"].new_tensor`/`.to`), and train.py's logger is
+                # the one place that calls `float()` on these, on the steps it logs (the
+                # `_loop_carry_stats` / `_loop_mux` precedent).
+                stats["wta_oracle_ce"] = (best[ok].sum() / denom).detach()
+                stats["wta_single_ce"] = (ce[..., 0][ok].sum() / denom).detach()
+                stats["wta_pick0"] = (arg[ok] == 0).float().mean().detach()
+                stats["wta_forced"] = forced[ok].float().mean().detach()
                 for i in range(k):
-                    stats[f"wta_share_k{i}"] = float((choice[ok] == i).float().mean())
+                    stats[f"wta_share_k{i}"] = (choice[ok] == i).float().mean().detach()
         if not bool(ok.any()):
             return state, w, cells.sum() * 0.0
         # The responsibility pass, WITH grad: the winner of every slot alone in its cell.
-        B, S = choice.shape
         winner = select_streams(cells, choice)                                 # [B,S,*carrier,C]
-        idx = choice.view(B, S, 1, *([1] * (cells.dim() - 3))).expand(B, S, 1, *cells.shape[3:])
+        idx = choice.view(B, choice.shape[1], 1, *([1] * (cells.dim() - 3))).expand(
+            B, choice.shape[1], 1, *cells.shape[3:])
         blank = torch.zeros_like(cells).scatter(2, idx, winner.unsqueeze(2))
         values, pos = self.tul.prefix_project(winner, layout, L, cells=blank)
         x_w = scatter_positions(base, pos, values)
 
         def _row_ce(xh_b: Tensor, w_h: Tensor, b: int) -> Tensor:
-            logits = (xh_b.to(w_h.dtype) @ w_h.t()).float()                   # [L, V]
+            logits = (xh_b.to(w_h.dtype) @ w_h.t()).float()[:, :vocab_size]    # [L, V]
             ce = F.cross_entropy(logits, lab[b], reduction="none") * keep_tok[b]
             # `gid` indexes the FLAT [B * n_groups] table `accumulate_span_ce` fills: row
             # b's scored positions carry the offset b * n_groups and its unscored ones
@@ -6688,7 +6820,7 @@ class MORPHTransformer(nn.Module):
         xh_w = self._back_region(x_w, x0, bigram_emb, input_ids, inject_keep=keep,
                                  attn_kwargs=coda_kw, ret_reset_mask=tg_reset,
                                  checkpoint_blocks=True)
-        ce_w = torch.stack([checkpoint(_row_ce, xh_w[b], w_head, b, use_reentrant=False)
+        ce_w = torch.stack([checkpoint(_row_ce, xh_w[b], w_head_pad, b, use_reentrant=False)
                             for b in range(B)], dim=0)[:, 1:]                   # [B, S]
         wta = ce_w[ok].sum() / n_tok[ok].sum().clamp_min(1.0)
         return state, w, wta
@@ -9163,11 +9295,16 @@ class MORPHTransformer(nn.Module):
                             tg_attn_kwargs, tg_reset, plan_mode, fan_stats)
                     else:
                         h_slots, _fan_w = self.tul_fan(_reg_cells)
-                    fan_stats["mix_entropy"] = float(
-                        TULFanMix.entropy(_fan_w, layout.slot_valid).detach())
-                    fan_stats["mix_w_max"] = float(
+                    # Detached 0-dim TENSORS, not `float(...)` (perf: no host sync on the
+                    # training path — the `_tul_fan_all` wta-stats precedent above;
+                    # `_tul_group_losses` lifts them into the loss `groups` dict as
+                    # tensors already, and train.py's logger is the one place that calls
+                    # `float()` on these, on the steps it logs).
+                    fan_stats["mix_entropy"] = TULFanMix.entropy(
+                        _fan_w, layout.slot_valid).detach()
+                    fan_stats["mix_w_max"] = (
                         _fan_w[layout.slot_valid].amax(dim=-1).mean().detach()
-                        if bool(layout.slot_valid.any()) else 0.0)
+                        if bool(layout.slot_valid.any()) else _fan_w.new_zeros(()))
                     _fan_cells = _reg_cells
                     # ── the repulsion (tul.fan_repel_lambda, tul.fan_repel_passes) ──
                     # Read off the SAME live-carry trajectory every per-pass reader uses,
@@ -9863,9 +10000,17 @@ class MORPHTransformer(nn.Module):
             # prefix: the per-pass cosines and ranks are a VARIABLE number of keys (the
             # batch's realised max depth decides how many), which a fixed tuple cannot
             # carry. train.py logs them under `fan/`.
+            #
+            # `fan_stats` entries are a mix, and both are handled without a host sync
+            # here: most are DETACHED TENSORS (the wta/mix/repel readings, perf: no
+            # `float()` on the training path — see `_tul_fan_all`, `fan_repel_term`) and
+            # `.to(dtype)` keeps them that way; a few (`repel_terms`, a pass COUNT) are
+            # plain Python numbers that never touched the GPU, and `new_tensor` lifts
+            # those the way it always has.
             groups = dict(groups)
             for _k, _v in fan_stats.items():
-                groups[f"fan_{_k}"] = groups["loss"].new_tensor(_v)
+                groups[f"fan_{_k}"] = (_v.detach().to(groups["loss"].dtype)
+                                       if torch.is_tensor(_v) else groups["loss"].new_tensor(_v))
 
         if spandec_pass_loss is not None and groups is not None:
             # Same contract as `spandec_weighted`: the WEIGHTED term is exposed so train.py

@@ -166,11 +166,16 @@ def fan_repel_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: in
             with torch.no_grad():
                 c = fan_stream_cos(traj[t], valid, m_cells)
         if stats is not None:
-            stats[f"stream_cos_t{t}"] = float(c.detach())
+            # Detached 0-dim TENSOR, not `float(...)` — perf: `float()` on a CUDA tensor
+            # is a `cudaStreamSynchronize` mid-step, and this fires once per PASS on
+            # every training step. The caller (`_forward_tul`) lifts every `stats` entry
+            # into the loss `groups` dict as a tensor already; train.py's logger is the
+            # one place that calls `float()` on these, on the steps it logs.
+            stats[f"stream_cos_t{t}"] = c.detach()
     if not live:
         return None
     if stats is not None:
-        stats["repel_terms"] = float(len(live))
+        stats["repel_terms"] = float(len(live))       # a Python int count, no GPU sync
     return torch.stack(live).mean()
 
 
@@ -484,11 +489,13 @@ def fan_epi_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
         if 1 <= t <= n_passes:
             live.append(e)
         if stats is not None:
-            stats[f"epi_t{t}"] = float(e.detach())
+            # Detached 0-dim TENSOR, not `float(...)` — see the same note in
+            # `fan_repel_term` (perf: no host sync on the training path).
+            stats[f"epi_t{t}"] = e.detach()
     if not live:
         return None
     if stats is not None:
-        stats["repel_terms"] = float(len(live))
+        stats["repel_terms"] = float(len(live))       # a Python int count, no GPU sync
     return -torch.stack(live).mean()
 
 
@@ -553,9 +560,11 @@ def fan_vol_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
             with torch.no_grad():
                 v = _fan_vol_pass(traj[t], valid, m_cells, eta)
         if stats is not None:
-            stats[f"vol_t{t}"] = float(v.detach())
+            # Detached 0-dim TENSOR, not `float(...)` — see the same note in
+            # `fan_repel_term` (perf: no host sync on the training path).
+            stats[f"vol_t{t}"] = v.detach()
     if not live:
         return None
     if stats is not None:
-        stats["repel_terms"] = float(len(live))
+        stats["repel_terms"] = float(len(live))       # a Python int count, no GPU sync
     return -torch.stack(live).mean()
