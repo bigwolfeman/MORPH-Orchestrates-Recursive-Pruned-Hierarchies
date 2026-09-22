@@ -46,9 +46,9 @@ SPEED (objective-preserving; the loss is the same function)
       (zero-row pad of the tied head, sliced before the CE).
 - [x] S3 (cad4515) no host syncs in the training forward: fan stats become detached 0-dim tensors,
       `float()` in the trainer on logging steps.
-- [x] S4 (merged 11:25; step-level effect unmeasured until the GPU is free) fused Triton segmented two-stage causal conv (fwd + bwd) for `segment_causal_conv`,
+- [x] S4 (merged 11:25; S5 reading 2: 227 ms/step off, the cuDNN conv path 468 -> 43 ms per 3 profiled steps) fused Triton segmented two-stage causal conv (fwd + bwd) for `segment_causal_conv`,
       the eager path every reach arm pays at every core layer of every pass.
-- [ ] S5 measure: a 48-step profile run of the same config at the merged commit; report
+- [x] S5 (reading 2 at d1c42f0, 15:05: 767 ms/step, 1.30 steps/s, bar MET at its edge) measure: a 48-step profile run of the same config at the merged commit; report
       steps/s and the region split beside the 971 ms baseline. Bar: >= 1.30 steps/s on the
       Step 1b config (fan4-all's 1.15 plus the reach cost removed). The compile/latency
       floor of the 256-cell core (compile_blocks bench 1.84x) is the next lever if S1-S4
@@ -65,8 +65,8 @@ CONTRIBUTION (each a one-factor arm over Step 1b, 5k steps, then the winner at 2
       streams (slot-local at every layer, they read history through their own slot's
       history cell, repelled among themselves). Config
       `tul_slot_spandec_strict_fan4_all_reach1_hist1.yaml`.
-- [ ] C3 the conjunction C1 x C2 if both move the K-curve in the same direction.
-- [ ] C4 20k horizon for the best arm, paired against fp0 at 20k.
+- [ ] C3 CLOSED (2026-09-22 15:00, not queued): neither C1 nor C2 moved the K-curve or the depth-6 CE (Wolfe's call: no C3 on this geometry unless C1 clears fp0 at depth 6; C1 reads +0.025 behind).
+- [ ] C4 CLOSED (2026-09-22 15:00, not queued): no 20k run on the chain geometry (Wolfe's call, same reason).
 - [x] I1 (84ad3b2) the span-swap instrument (`hop_distance_probe.py --swap`): span k-g's tokens
       replaced by natural text from another row, benefit = CE(target span | swapped) -
       CE(target span | original) at forced depths; replaces the out-of-context planted
@@ -89,6 +89,17 @@ about 830 ms of GPU kernel time spread over tens of thousands of small kernels. 
 and host syncs were not what the GPU waited on. The remaining speed levers are S4 (the
 conv path's launches) and the compile/latency floor of the 256-cell core; S5's bar
 stands and is now expected to fail without the second.
+
+S5 reading 2 (2026-09-22, 15:05, `results/2026-09-22-lxtul-r-step1b/profile_step_s4_d1c42f0.txt`):
+S4 merged takes the step from 994 to 767 ms (1.30 steps/s, 7,707 tok/s against 6,129;
+forward 510 → 413, backward 454 → 325 ms GPU). The cuDNN conv kernels and their layout
+copies leave the table (468 → 43 ms per 3 profiled steps for the conv path; `aten::copy_`
+397 → 305 ms); `aten::mm` is unchanged at 614 ms. Peak memory 17.7 → 17.0 GB. The S5 bar
+is met at its edge. What remains is the same shape as reading 1: about 26k copy launches
+and 7.5k small matmuls per 3 steps on 256-cell tensors; the compile/latency floor of the
+core is the next lever and is outside this list. Not verified: the arms C1 and C2 ran
+without S4 (queued before its merge); a training-run reading of the fused conv under the
+reach geometry is the next arm's smoke.
 
 **Wolfe's calls, 2026-09-22 (13:40 to 14:00), during the C1 run.** (1) The chain geometry
 is a sliding window with a stride of one span per pass; it is INTENTIONAL as a measurement
@@ -143,3 +154,24 @@ loop) with the batch-mean seed, tokens untouched; not built until Wolfe decides.
   The raw `db_traj` rank and the swap table at forced depths read that.
 - C2 with one history stream makes that stream the only relay; if the epivol term on the
   three plan streams collapses without the fourth, `fan/plan_rank` reads it.
+
+## Outcome (2026-09-22 15:05)
+
+C1 and C2 filed together under
+[`failures/2026-09-22-lxtul-r-step2-panel.md`](../../../../lab/experiments/failures/2026-09-22-lxtul-r-step2-panel.md).
+Both fail the panel's headline bars: C2 hist1 token K1−K6 +0.0204 [+0.0194, +0.0214], C1
+persist +0.0234 [+0.0222, +0.0246] (bar +0.035; Step 1b +0.0261); K3−K6 ratios 0.225 and
+0.222 (bar 0.06 to 0.20); paired depth-6 CE against fp0 +0.0255 and +0.0248 (bar ≤ +0.015);
+against Step 1b −0.0010 and −0.0018, both inside their intervals. P-1 holds on both with
+no late spikes (the first spike-free reach runs); C1's persist term is live by construction
+(`carry/persist_ratio` 0.98, the accumulator's RMS at pass 5 growing 0.54 → 2.63) and C2's
+three plan streams sit at rank 1.99 of 3. C1 costs 0.6 % more rate than the bar allows
+(6,106 against 6,335 tok/s; the second layer-0 attention call). Reading: Step 1b, C1 and
+C2 have the same depth-6 CE within 0.002; persistence and stream separation do not change
+what the coda gets from the loop; the relay itself is the limit. Per Wolfe's calls above,
+the chain geometry is closed as a measurement: C3 and C4 are not queued. The speed items
+stand on their own (S5 reading 2 below). Next design direction, from the JEPA-Anything
+summary of the same day: keep fp0's direct access and give each pass one orthogonal
+factor of the slot target under an EMA target encoder with per-coordinate variance floors
+(the same recipe that addresses the LCTUL code-target collapse); to be written as its own
+proposed note before any prereg.

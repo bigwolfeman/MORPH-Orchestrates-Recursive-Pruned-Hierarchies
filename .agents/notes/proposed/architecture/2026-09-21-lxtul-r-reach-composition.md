@@ -276,3 +276,22 @@ persistent carry on this chain) and the two-channel design; this note's Step 1 i
 promoted.
 
 **2026-09-22, 10:30, the mixed-result reading.** Wolfe read Step 1b as a mixed result with two problems to solve, speed and contribution (target near 0.1, 80-94 % of the gain by half the mean depth). The task list, the profile of a Step 1b step and the builds (S1-S5, C1-C4, I1) are in [`2026-09-22-lxtul-r-step2-speed-and-carry.md`](2026-09-22-lxtul-r-step2-speed-and-carry.md); Step 2 of this note runs as its C1.
+
+**Step 2 outcome (2026-09-22 15:05), the mechanism levers closed.** Filed under
+[`failures/2026-09-22-lxtul-r-step2-panel.md`](../../../../lab/experiments/failures/2026-09-22-lxtul-r-step2-panel.md)
+(task list
+[`2026-09-22-lxtul-r-step2-speed-and-carry.md`](2026-09-22-lxtul-r-step2-speed-and-carry.md)).
+C1 (`loop_carry: persist`, the arrived reads kept un-decayed and added once at the exit)
+reads token K1−K6 +0.0234 [+0.0222, +0.0246] and C2 (`fan_history_streams: 1`, the relay
+on its own stream) +0.0204 [+0.0194, +0.0214], against Step 1b's +0.0261 and the bar
++0.035; paired depth-6 CE against Step 1b −0.0018 and −0.0010, against fp0 +0.0248 and
++0.0255 (bar ≤ +0.015). The persist term is live (0.98 of a carrier RMS on every valid
+cell) and the plan streams keep rank 1.99 of 3, so neither the decay of the relayed
+content nor its competition with the diversity term was the limit; the relay is. Wolfe's
+reading (13:40 to 14:00): the chain geometry is a sliding window of one span per pass,
+intentional as a measurement and not a design; relay is the wrong pass job (g spans back
+costs g core passes where one attention hop is free; every arm sits behind fp0 at every
+depth); no C3, no 20k. The span-swap instrument (I1) is a corruption measure and is read
+for the exact zeros and the arrival staircase only. This note's Step 2 is closed; the
+open problem it leaves is stated in the task list's outcome: keep direct access and find a
+pass job that is not relay.

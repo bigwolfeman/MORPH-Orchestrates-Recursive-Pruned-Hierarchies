@@ -1,0 +1,41 @@
+# S5 reading 2: the same config at d1c42f0 (S1-S3 plus S4, the fused Triton segmented causal conv), 2026-09-22 15:00, 48-step run, kineto steps 40..43
+# Regions (wall/gpu ms, mean over 20 steps) and the trainer's rate line:
+[perf] step 19 mean over 20 (wall/gpu ms): bwd 303.0/334.5  clip 38.3/7.0  data 58.1/41.8  fwd 414.2/414.3  opt 8.7/27.1  prune 0.1/0.0  | untracked 0.7  | step 823.1ms
+[perf] step 39 mean over 20 (wall/gpu ms): bwd 293.2/325.1  clip 38.5/6.7  data 16.2/0.1  fwd 413.2/413.2  opt 5.7/23.9  prune 0.1/0.0  | untracked 0.6  | step 767.4ms
+[     40/48] loss=31.7084  ppl=485165195.4  lr=4.00e-06  sps=1.25  tok/s=7707  proxy=10.15  tflops=10.9  peak=17.03GB
+
+# Top kernels by self CUDA time (self CUDA total 2.060s over 3 profiled steps; S1-S3 reading: 2.493s):
+aten::mm                                                                                                               |  614.483ms  29.82% | avg   88.265us | calls 7545
+aten::copy_                                                                                                            |  304.790ms  14.79% | avg   11.528us | calls 26439
+void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x128_32x3_tn_align8>(cutlass_80_tensorop_bf16_s |  221.043ms  10.73% | avg  284.482us | calls 777
+void at::native::vectorized_elementwise_kernel<4, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lam |  127.594ms   6.19% | avg   11.279us | calls 11313
+void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul> >(int, at |  127.479ms   6.19% | avg   18.175us | calls 7014
+aten::mul                                                                                                              |  121.853ms   5.91% | avg   10.165us | calls 11988
+aten::add_                                                                                                             |  102.630ms   4.98% | avg   14.350us | calls 7152
+void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3 |   78.927ms   3.83% | avg   14.221us | calls 5550
+Optimizer.step#AdEMAMixB1Zero.step                                                                                     |   76.107ms   3.69% | avg   25.369ms | calls 3
+_FusedCCAPrologue                                                                                                      |   75.577ms   3.67% | avg  228.873us | calls 384
+void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, |   67.993ms   3.30% | avg   16.495us | calls 4122
+aten::add                                                                                                              |   61.921ms   3.01% | avg   15.165us | calls 4083
+void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x64_32x4_nn_align8>(cutlass_80_tensorop_bf16_s1 |   56.112ms   2.72% | avg  505.512us | calls 111
+_cca_q_fwd_kernel                                                                                                      |   47.956ms   2.33% | avg  124.886us | calls 384
+void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at: |   46.565ms   2.26% | avg   95.225us | calls 489
+_hc_post_fwd_kernel                                                                                                    |   46.112ms   2.24% | avg   60.041us | calls 768
+_FusedHCPost                                                                                                           |   46.112ms   2.24% | avg   60.041us | calls 768
+_hc_post_bwd_kernel                                                                                                    |   44.364ms   2.15% | avg  102.694us | calls 432
+_FusedHCPostBackward                                                                                                   |   44.364ms   2.15% | avg  475.261us | calls 432
+aten::sum                                                                                                              |   43.364ms   2.10% | avg    8.668us | calls 5073
+void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x128_32x3_nt_align8>(cutlass_80_tensorop_bf16_s |   41.532ms   2.02% | avg  512.746us | calls 81
+void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<float> >(at |   41.189ms   2.00% | avg   66.974us | calls 615
+_FusedCCAPrologueBackward                                                                                              |   39.048ms   1.90% | avg  234.088us | calls 216
+void at::native::(anonymous namespace)::cunn_SoftMaxForward<4, float, float, float, at::native::(anonymous namespace): |   38.856ms   1.89% | avg  359.782us | calls 108
+aten::_log_softmax                                                                                                     |   38.856ms   1.89% | avg  694.028us | calls 108
+void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x256_32x4_nt_align8>(cutlass_80_tensorop_bf16_s1 |   38.190ms   1.85% | avg  303.096us | calls 126
+
+# The S4 kernels themselves:
+_seg_gp_fwd_kernel                                           |   13.430ms   0.65% | avg   17.487us | calls 768
+_seg_gp_bwd_dw_kernel                                        |   13.307ms   0.65% | avg   30.803us | calls 432
+_seg_dw_bwd_kernel                                           |    9.131ms   0.44% | avg   21.137us | calls 432
+_seg_dw_fwd_kernel                                           |    7.108ms   0.34% | avg    9.256us | calls 768
+
+# Reading: step 767 ms (steps 20-39 mean; 823 over steps 0-19 with the data stalls) vs 994 at 84ad3b2 and 971 at c0f6bc4: S4 takes 227 ms off the step, 1.30 steps/s at 7,707 tok/s against 6,129, and the S5 bar (>= 1.30 steps/s) is MET at the bar's edge. Forward 510 -> 413 ms, backward 454 -> 325 ms (gpu). The cuDNN conv kernels (cudnn_convolution 122 ms, convolution_backward 182 ms, dgrad 112 ms, nchwToNhwc 51 ms per 3 steps) are gone from the table; the four S4 kernels take 43 ms per 3 steps in their place (468 -> 43 ms, 11x). aten::copy_ fell 397 -> 305 ms per 3 steps (the conv path's layout copies), aten::mm unchanged at 614. Self CUDA total 2.493 -> 2.060 s per 3 steps. Peak memory 17.72 -> 17.03 GB. The step is still bound by GPU kernel time over ~26k copy launches and ~7.5k mm launches per 3 steps; the compile/latency floor of the 256-cell core is the next lever, outside this list. NOT verified: the loss at step 40 (31.7084 vs 31.6729 at 84ad3b2) is a bf16-noise difference under the kernel contract, not checked here beyond the test suite's oracle bound; the C1/C2 arms ran without S4.
