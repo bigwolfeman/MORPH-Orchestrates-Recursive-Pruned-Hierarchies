@@ -1,6 +1,6 @@
 # Planned: LXTUL-R Step 1 — the fan's K streams on the chain geometry (fan4-all + loop reach 1 + coda prefix reach prev + fixed-point 0 + slot-state renorm)
 
-Status: planned
+Status: failure
 
 Date: 2026-09-22 (frozen before any GPU step of the arm; committed before the runner line
 is appended). Arc: Step 1 of the LXTUL-R design note
@@ -147,3 +147,125 @@ d6 **+0.071**, so the chain kept 48 % of the arrival worth at depth 6 (the desig
   checkout at this file's commit (the bundle is being shipped).
 - Wall clock: fan4-all took about 2.5 hours at 1.15 steps/s; this arm is expected the
   same or slower.
+
+## Results
+
+One arm on the runner at bcb0dc2, 2026-09-22 01:38 to 03:03 (smoke 35 s, 5,000 steps at
+1.21 to 1.22 steps/s), readouts to 03:25. Artifacts: `../results/2026-09-22-lxtul-r-step1/`
+(the runner's sweeps at 2500 and 5000, the four paired jsons, the planted probe's json
+and its Spark run log); wandb run `dwx8hig1`. Intervals are the block bootstrap.
+
+| reading | value | clause |
+|---|---|---|
+| startup config (wandb config; the log prints the reach, the fan mix and the coda reach) | `warmup 1000`, `core_fixed_point_lambda 0`, `loop_reach 1`, `tg_coda_prefix_reach prev`, `fan_mix all`, `slot_state_renorm True`; smoke exit 0 | P-1 |
+| `preclip/total` max at step ≥ 200 | 42.2 at step 2675 (tripwire 1e4); verdict HEALTHY | P-2 |
+| `loop/in_norm_t0` step 200 → 4999 | 943 → 1,196 (**1.27x**; bar 3x; noise arm 11x, fan4-all 1.09x) | P-2 |
+| `loop/core_gain_t0` | 1.000 at every logged step (the renorm pins it) | — |
+| token CE, forced depth 1 / 2 / 3 / 6 / 9 / 12 / 16 at 5000 | 4.3394 / 4.3295 / 4.3217 / 4.3192 / 4.3195 / 4.3198 / 4.3201 | P-3 |
+| **token K1−K6 at 5000** | **+0.0202 [+0.0193, +0.0212]**; K3−K6 +0.0025 [+0.0022, +0.0028] | P-3 |
+| token K1−K6 at 2500 | +0.0163 | — |
+| paired depth 6 vs `slot-spandec-strict` (490 blocks) | **−0.0329 [−0.0362, −0.0296]** (the arm better); depth 1: −0.0128 | P-5 |
+| paired depth 6 vs `slot-spandec-strict-fan4-all` (500 blocks) | +0.0136 [+0.0110, +0.0163]; depth 1: +0.0338 | — |
+| paired depth 6 vs `slot-spandec-strict-fan4-all-fp0` (500 blocks) | **+0.0194 [+0.0168, +0.0222]**; depth 1: **+0.0396 [+0.0367, +0.0427]** | P-8 |
+| paired depth 6 vs `budget-web-reachall` (481 blocks) | +0.2215 [+0.2113, +0.2328]; depth 1: +0.2416 | P-8 |
+| A1.8 fraction `(0.2021 − 0.2215) / 0.1259` | **−0.15** | P-8 |
+| `fan/stream_rank_t1` / `_t6` at the last val | **2.975** / 1.728 (fan4-all 2.820 / 2.060) | P-6 |
+| `fan/oracle_ce` / `fan/mixed_ce` / `fan/single_ce` | 4.3641 / 4.4118 / 4.4566; oracle − mixed **0.048** beside the 0.04 near-copy floor (fan4-all 0.042) | P-6 |
+| `val/fan_stream_cos_t1` | −0.327 | — |
+| rate | 7,496 tok/s at step 200 (RATE OK), 7,454 to 7,525 through the run; fan4-all 7,096 | P-7 |
+| final `val/loss` | 4.4163 (fan4-all 4.4348 as `fan/mixed_ce`) | — |
+
+Scoring:
+
+- **P-1 HOLDS.** All six values on the run's config; the smoke passed (loss 33.67 at step 0,
+  the family's number: fan4-all's smoke read 33.675).
+- **P-2 HOLDS.** Tripwire max 42 at step 2675; the entry norm grew 1.27x.
+- **P-3 FAILS.** +0.0202 against the +0.063 bar (and against +0.05 alone). It is the largest
+  token K-curve of any slot-loop arm on the ledger (fan4-all +0.0049, fp0 +0.0102, the
+  single-cell chain +0.0163, twelve arms at about +0.002) and it is a third of the bar. The
+  prereg's middle band ([+0.02, +0.063), 30 %) is where it fell, at the band's floor.
+- **P-5 HOLDS.** 0.033 better than strict, paired; the fan's write-all read is worth 0.047
+  against strict on the same rows, so the chain geometry gave back 0.014 of it.
+- **P-6 HOLDS.** Rank 2.98 of 4 at pass 1 (above fan4-all's 2.82); the oracle-over-streams
+  gap 0.048 sits 0.008 above the 0.04 floor, as it did on fan4-all (0.042).
+- **P-7 HOLDS.** 7,496 tok/s, 1.06x fan4-all; the reach mask and the renorm cost nothing
+  measurable.
+- **P-8: the fraction is −0.15** (the prereg's "at or below 0" branch, 35 %). The arm is
+  0.019 FARTHER from reachall than fp0 at depth 6 and 0.040 farther at depth 1. Read
+  together with P-3: the chain geometry costs the fan 0.040 nats at depth 1 (the coda
+  reads one slot instead of all, the loop reads one neighbour instead of all), and the
+  passes claw back 0.020 of it by depth 6. That is depth DEPENDENCE in the design note's
+  own words (A1.8): the K-curve is forced by the geometry and the arm never reaches its
+  base, so the +0.020 is not a win over fan4-all-fp0.
+
+### The planted decay row (A1.4), DGX Spark, 03:08 to 04:38, and what it exposed
+
+`hop_distance_probe.py` on the 5000 checkpoint from the `MORPH-0922` worktree (bcb0dc2),
+480 rows, batch 3, `--planted --planted-len 2 --skip-localiser --hops 6`, depths 1, 2, 3, 6;
+2,842 sites (the chain's run: 2,778). Benefit = control − planted, controls 15.407 / 15.403 /
+15.397 / 15.401 at depths 1 / 2 / 3 / 6. The chain's row
+(`failures/2026-09-19-hop-distance-plateau-and-dilution.md`, single cell, fixed-point term
+on, no renorm) beside it:
+
+| g | this arm d1 | d2 | d3 | d6 | kept at d6 | chain d1 | d2 | d3 | d6 | chain kept |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | +0.549 | +0.539 | +0.534 | +0.526 | 96 % | +0.566 | +0.562 | +0.560 | +0.558 | 99 % |
+| 1 | +0.115 | +0.089 | +0.105 | +0.106 | 92 % | +0.181 | +0.158 | +0.149 | +0.137 | 76 % |
+| 2 | +0.051 | +0.046 | +0.048 | +0.046 | 89 % | +0.148 | +0.108 | +0.088 | +0.071 | 48 % |
+| 3 | **+0.048** | +0.033 | +0.030 | +0.033 | 68 % | +0.000 | +0.083 | +0.076 | +0.062 | — |
+| 4 | **+0.023** | +0.022 | +0.017 | +0.022 | 94 % | +0.000 | +0.000 | +0.046 | +0.047 | — |
+| 5 | +0.000 | +0.028 | +0.020 | +0.023 | — | +0.000 | +0.000 | +0.000 | +0.034 | — |
+| 6 | +0.000 | +0.022 | +0.017 | +0.017 | — | +0.000 | +0.000 | +0.000 | +0.021 | — |
+
+- **P-4 HOLDS on its letter.** g = 2 keeps **89 %** of its depth-1 benefit at depth 6
+  (0.051 → 0.046), against the 75 % bar and the chain's 48 %.
+- **The row is not the design's row.** g = 3 reads **0.048 at depth 1** and g = 4
+  0.023; g = 5 and g = 6 read exactly the control at depth 1 (0.000) and arrive at
+  depth 2. The leaky reach inside one pass was FOUR slots. Under a one-slot
+  reach it must read exactly 0 there (the chain did: 0.000 at every g ≥ 3, arrival at
+  pass g − 1). Content three spans back reached the coda inside ONE pass, so the arm's
+  in-loop reach was not one slot per pass.
+
+**The leak, found and fixed the same night.** The register branch of `_tul_core` hands
+the core layers `tg_relation` alone. The CCA conv (kernel 4) and the value shift are
+position-local on the flattened cell axis and were "left alone" by that branch (its
+comment says why: at reach 0 every earlier cell is allowed anyway). Under a reach budget
+they read the previous slot's last cells at EVERY core layer, so the six core layers
+relayed about one slot per LAYER. On the tiny model at forced depth 1 (a perturbation of
+span j − g, max |Δlogits| on span j): j−2 1.1e−1, **j−3 1.9e−2, j−4 6.5e−4, j−5 1.3e−4**
+with the conv, and with the conv cut to kernel 1 still **j−3 2.9e−2** (the value shift
+alone relays) and j−5 exactly 0. The single-cell chain never had this: its reach kwargs
+carry a per-cell `tg_seg`, which resets both ops. The fix (9b430d3, committed before this filing:
+a per-SLOT `tg_seg` beside the relation whenever `loop_reach > 0`, reach 0 untouched so
+every filed register arm keeps its forward) makes j−3 and beyond read **exactly 0** at
+depth 1 and j−4 exactly 0 at depth 2 with the shipped conv;
+`tests/test_lxtul_r_composition.py` (11) asserts it, and `test_tul_fan*` (30 + the rest)
+still pass. The composition test 3a checked the attention relation and nothing else; the
+prereg's "Not verified" list did not name the position-local ops. That is the method
+fault.
+
+## Verdict
+
+**Failure, method fault** (P-3 fails as scored; P-1, P-2, P-4, P-5, P-6, P-7 hold; P-8
+reads −0.15; but the arm did not run the design's geometry). The readings stand as a
+record of what the LEAKY chain does: the largest token K-curve of any slot-loop arm
+(+0.0202 [+0.0193, +0.0212]), a 0.040-nat depth-1 cost against fan4-all-fp0 of which the
+passes recover half, carried content that no longer decays (89 % kept) but arrives at a
+third of the chain's worth, channel worth 0.162 against 0.196. None of the binding's
+three clauses is applied: the clause "P-3 fails with P-4 holding → the reach frame is
+closed" needs a one-slot reach, and this arm relayed several slots per pass through the
+conv and the value shift, so its passes had less to do than the design gives them. The
+next planned experiment is the same arm at the corrected geometry
+(`2026-09-22-lxtul-r-step1b.md`), queued behind the seed twins.
+
+## Updated hypothesis
+
+The reach dial on a register is a relation on attention AND a segment reset on the
+position-local ops; the first without the second is a per-layer relay. With the leak,
+forcing history through the loop still moved the passes (K1−K6 +0.005 → +0.020) and the
+renorm held what they carried; with the leak closed, each pass has strictly more to fetch
+(one slot, not several) and the depth-1 cost against fp0 will be larger than 0.040. The
+design's question, whether the passes recover that cost and more, is open until Step 1b
+reads. What is settled: a pass-relayed copy under this recipe is worth less than a direct
+read of the same content (planted g = 2: 0.051 relayed against 0.148 on the chain), and
+the coda's `prev` read costs the channel 0.034 nats of worth.

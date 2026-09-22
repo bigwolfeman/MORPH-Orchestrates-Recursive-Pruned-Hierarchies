@@ -230,3 +230,21 @@ cross-commit pair drifts 0.048 at 8+). The far budget's honest bracket is [0.126
 the relay share is not read. A0.1 to A0.3 hold on the lower bound. Observation: the plain
 loop's own K1−K6 is largest under reach 1 (+0.055 vs +0.033 at reach 0 and +0.038 at reach
 all): a relay geometry makes the plain loop's passes relay.
+
+**Step 1 outcome (2026-09-22 04:39), a method fault.** Filed under
+[`failures/2026-09-22-lxtul-r-step1.md`](../../../../lab/experiments/failures/2026-09-22-lxtul-r-step1.md).
+The arm (`slot-spandec-strict-fan4-all-reach1`, bcb0dc2) ran healthy and read token K1−K6
+**+0.0202 [+0.0193, +0.0212]** at 5k (bar +0.063; the largest slot-loop K-curve on the
+ledger), paired −0.033 vs strict, +0.019 vs fan4-all-fp0 at depth 6 and +0.040 at depth 1
+(A1.8 fraction −0.15), rank 2.98, 7,496 tok/s, entry norm 1.27x, channel worth 0.162 (fan4-all
+0.196), planted g = 2 kept 89 % at depth 6. But the planted row read content three and four
+spans back at depth 1 (0.048, 0.023; exact zeros were due), and a depth-1 perturbation test
+on the tiny model confirmed it: the register branch passed `tg_relation` without `tg_seg`,
+so the CCA conv and the value shift relayed about one slot per LAYER (four slots per pass on
+the real model). The composition's A1 checks covered attention masks only. Fixed at 9b430d3
+(per-slot `tg_seg` under `loop_reach > 0`, reach 0 untouched; exact zeros beyond one slot per
+pass in `tests/test_lxtul_r_composition.py`). None of the Step 1 binding clauses is applied;
+Step 1b (`lab/experiments/planned/2026-09-22-lxtul-r-step1b.md`, 0b338f4) re-runs the arm
+at the corrected geometry, queued behind the seed twins of the Step 0 coda arm
+(`2026-09-22-coda-seed-twin.md`, 599ae1d). Risk row to add for the next composition:
+"every op with a receptive field, and which kwarg cuts it".
