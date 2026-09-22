@@ -236,3 +236,26 @@ coda) and give the passes a job that is not relay. The candidate on the table fr
 JEPA-Anything summary (2026-09-22): a slot target split into K orthogonal factors with
 private predictors, one factor per pass, under an EMA target encoder with per-coordinate
 variance floors, which is also the standard fix for the code-target collapse LCTUL hit.
+
+## Addendum 2026-09-22 (16:15): the C2 hist1 swap table, a leak check
+
+The Spark at 6bcbe89 (`tg_seg` count 24), `hop_distance_probe.py --swap --swap-mode row`
+on `hist1@5000`, 480 rows, 3,482 sites, 0 skipped
+(`../results/2026-09-22-lxtul-r-step2/hop_swap_hist1_5000.{json,runlog.txt}`). Controls
+4.2955 / 4.2864 / 4.2748 / 4.2708 at depths 1 / 2 / 3 / 6. Benefit = swapped − control;
+Step 1b's row beside it:
+
+| g | hist1 d1 / d2 / d3 / d6 | Step 1b d1 / d2 / d3 / d6 |
+|---|---|---|
+| 1 | 0.313 / 0.293 / 0.302 / 0.299 | 0.268 / 0.258 / 0.290 / 0.287 |
+| 2 | 0.044 / 0.038 / 0.034 / 0.027 | 0.042 / 0.043 / 0.034 / 0.028 |
+| 3 | **0.000** / 0.021 / 0.020 / 0.015 | **0.000** / 0.019 / 0.017 / 0.014 |
+| 4 | **0.000 / 0.000** / 0.010 / 0.009 | **0.000 / 0.000** / 0.010 / 0.007 |
+| 5 | **0.000 / 0.000 / 0.000** / 0.005 | **0.000 / 0.000 / 0.000** / 0.004 |
+| 6 | **0.000 / 0.000 / 0.000** / 0.003 | **0.000 / 0.000 / 0.000** / 0.003 |
+
+The zeros are bit-exact (the JSON's `benefit` fields read `0.0`) and sit where the chain
+forbids arrival, so the history stream leaks nothing: one slot per pass, at core layer 0,
+on the shipped model. Beyond the zeros the rows are read for nothing (a swapped span is a
+corruption); noted only that the numbers match Step 1b's within 0.045 at g = 1 and 0.002
+from g = 2 on. The C1 persist table follows as its own addendum.
