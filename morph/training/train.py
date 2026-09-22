@@ -113,6 +113,13 @@ def evaluate(
     model.eval()
     losses: list[float] = []
     acc: dict[str, list[float]] = {}
+    # getattr-chained on purpose: this function is also driven by the CE stub models in
+    # tests/test_train_phase.py, which have no `cfg` at all. Assigned HERE, before the
+    # tul/plain branch, because the code-rank abort at the end reads it on BOTH paths:
+    # from d0a2308 (2026-09-15) to 2026-09-21 it was assigned inside the TUL branch only,
+    # and every plain-model eval died with UnboundLocalError (the reach-split smokes,
+    # tests/test_train_evaluate_plain.py).
+    _tul_cfg = getattr(getattr(getattr(model, "_orig_mod", model), "cfg", None), "tul", None)
     for _ in range(n_batches):
         try:
             batch = next(loader)
@@ -231,9 +238,6 @@ def evaluate(
                 acc.setdefault("val/halt_layer_passes_per_token", []).append(
                     float(out_h["layer_passes"]) / max(float(out_h["n_tokens"]), 1.0))
             _has_fm = getattr(_m, "fm_planner", None) is not None
-            # getattr-chained on purpose: this function is also driven by the CE stub
-            # models in tests/test_train_phase.py, which have no `cfg` at all.
-            _tul_cfg = getattr(getattr(_m, "cfg", None), "tul", None)
             _ablate = bool(getattr(_tul_cfg, "eval_ablations", False))
             if _has_fm or _ablate:
                 # Plan WORTH is the ce_tokens COST of removing the plan (zero) or of
