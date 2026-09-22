@@ -124,7 +124,7 @@ value, not this 0.986.
   the predicted cells; that arm had no coda at train), so 20k numbers above are scale
   only.
 
-## Amendment 2026-09-22 (17:20): the one retry, lever named
+## Amendment 2026-09-22 (17:14): the one retry, lever named
 
 `tul-code-ema` (run twx0472q, 13a9535) finished 5000 steps healthy (tripwire max 24.3 at
 4625, exit 0). P-1's first clause holds (`val/code_tgt_std` 0.837 at 4750 against a first
