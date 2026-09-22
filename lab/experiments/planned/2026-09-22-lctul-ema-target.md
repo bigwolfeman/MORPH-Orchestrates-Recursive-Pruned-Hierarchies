@@ -141,3 +141,20 @@ queued behind `ema0` at the same seed and data offset. The frozen predictions ap
 retry unchanged, with `ema0` still the control. No other prediction is scored before
 `ema0` lands. P-4 on the first draw reads +0.0017 (fails); recorded now so the number
 cannot be re-read later.
+
+## Amendment 2026-09-22 (17:30): Wolfe's call on the cosine bars
+
+Wolfe, after the first draw: "I think you're reading tea leaves with the cosine. I
+wouldn't pass or fail anything by it." Applied as follows, without touching the frozen
+text above. P-1's second clause, P-2 and P-4 are cosine bars; they are scored as written
+for the record and are NOT the basis of the verdict or the binding branch. The verdict
+and the branch are decided on the nats and rank instruments already in the Method:
+`val/ce_tf` against the arm's own token CE (the true code's worth to the reader; on the
+first draw 1.73 → 4.02 = the token CE, so the code ended worth nothing), the worth
+profile of the predicted cell (first draw: zero +0.168, shuffle +0.142 total), `val/
+code_eff_rank` (58 → 24), the token K-curve (+0.0006 [+0.0002, +0.0010]) and the paired
+depth-6 CE against `ema0`. The retry `tul-code-ema-l2` was queued on P-1's cosine clause
+at 17:14; it stands on the nats reading alone (the reader lost the whole worth of the
+true code and the rank halved), so it runs. The health readings for the retry are
+`val/ce_tf` staying clear of the token CE and the rank staying up; the cosines are read
+as diagnostics of why.
