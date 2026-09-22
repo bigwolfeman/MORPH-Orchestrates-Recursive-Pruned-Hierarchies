@@ -36,7 +36,8 @@ import pytest
 import torch
 
 from morph.model.transformer import MORPHConfig, MORPHTransformer
-from morph.model.tul_layout import BoundaryRule, span_ids_from_ids
+from morph.model.tul_layout import (BoundaryRule, span_allow_mask, span_ids_from_ids,
+                                    span_reach_allow)
 
 V = 64
 DOT = 10
@@ -82,6 +83,137 @@ def _model(mode: str, seed: int = 1234, **cfg_kw) -> MORPHTransformer:
     with torch.no_grad():
         m.embed.bigram.lambdas.fill_(0.5)
     return m.eval().float()
+
+
+# ── model.span_reach: the relation builder ────────────────────────────────────
+#
+# `span_reach_allow` is the ONE thing `model.span_reach` changes (`_span_context`'s
+# ``allow`` tensor); `tg_seg` and the bigram ``cut`` stay `span_id` / `span_start_mask`
+# at every reach, unchanged from plain `span_mask: "span"`. These tests cover the pure
+# relation (no model) and the attention route at reach 1, isolated to ONE layer so a
+# multi-layer forward's relay cannot be mistaken for the relation itself — see
+# `test_reach1_relation_is_reach1_at_a_single_attention_layer`'s docstring for why an
+# END-TO-END logit check is the wrong instrument for "two spans back must not move".
+
+def _expected_reach_allow(span: list[int], reach: int) -> torch.Tensor:
+    """Hand-built ``[S, S]`` bool expected relation, independent of `span_reach_allow`."""
+    S = len(span)
+    out = torch.zeros(S, S, dtype=torch.bool)
+    for i in range(S):
+        for j in range(S):
+            if j > i:
+                continue
+            out[i, j] = True if reach == -1 else span[j] >= span[i] - reach
+    return out
+
+
+def test_span_reach_allow_matches_span_allow_mask_at_reach_zero():
+    ids = _ids()
+    span_id = torch.from_numpy(span_ids_from_ids(ids, _rule()))
+    assert torch.equal(span_reach_allow(span_id, 0), span_allow_mask(span_id))
+
+
+def test_span_reach_allow_synthetic_row():
+    """A hand-picked row with 6 spans; every reach checked against a hand-built matrix,
+    and every mask asserted causal (``allow(i, j)`` False for ``j > i``)."""
+    span = [0, 0, 0, 1, 1, 2, 2, 2, 3, 3]
+    span_id = torch.tensor([span], dtype=torch.int64)
+    S = len(span)
+    row = torch.arange(S).unsqueeze(1)
+    col = torch.arange(S).unsqueeze(0)
+    for reach in (0, 1, 2, -1):
+        got = span_reach_allow(span_id, reach)[0, 0]
+        expected = _expected_reach_allow(span, reach)
+        assert torch.equal(got, expected), f"reach={reach} mismatch"
+        assert not (got & (col > row)).any(), f"reach={reach} is not causal"
+
+    # reach 1 from span 3's last position (index 9): own span and span 2, not 0/1.
+    q = 9
+    seen = {span[j] for j in range(S) if span_reach_allow(span_id, 1)[0, 0, q, j]}
+    assert seen == {2, 3}
+    # reach 2: adds span 1.
+    seen2 = {span[j] for j in range(S) if span_reach_allow(span_id, 2)[0, 0, q, j]}
+    assert seen2 == {1, 2, 3}
+    # reach -1: plain causal, every earlier span reachable.
+    seen_all = {span[j] for j in range(S) if span_reach_allow(span_id, -1)[0, 0, q, j]}
+    assert seen_all == {0, 1, 2, 3}
+
+
+def test_span_reach_zero_is_bit_identical_to_the_field_absent():
+    """``span_reach=0`` explicit vs the field left at its dataclass default: same seed,
+    same architecture, same forward — the two models must be bit-identical, and a
+    forward on `span_mask: "span"` at `span_reach=0` must match `span_allow_mask`'s own
+    arm exactly (same call, `_span_context` routes both through `span_reach_allow`)."""
+    ids = torch.from_numpy(_ids())
+    m_default = _model("span")                       # span_reach: MORPHConfig default (0)
+    m_explicit = _model("span", span_reach=0)
+    assert m_default.cfg.span_reach == 0 and m_explicit.cfg.span_reach == 0
+    with torch.no_grad():
+        a = m_default(ids)["logits"]
+        b = m_explicit(ids)["logits"]
+    assert torch.equal(a, b)
+
+
+def test_reach1_relation_is_reach1_at_a_single_attention_layer():
+    """`model.span_reach=1` widens the PER-LAYER relation by exactly one span; it does
+    NOT bound the model's end-to-end receptive field, which grows with depth like any
+    stack of locally-restricted attention layers does (measured on this fixture's
+    prelude+core+coda model, ~6+ sequential attention layers: a perturbation TWO spans
+    back moves span-2+ END-TO-END logits by ~0.87 — real relay through the intervening
+    span's updated representation after layer 1, not a leak in the mask; see the note
+    `hop-staircase-on-prev-reach1` for the same phenomenon elsewhere in this tree). An
+    end-to-end logit check is therefore the WRONG instrument for "two spans back must
+    not move" at reach >= 1 — it is right only at reach 0, where every layer's relation
+    already forbids ANY cross-span read (`test_no_id_from_an_earlier_span_can_move_a_
+    later_span`).
+
+    This test isolates the ONE relation `span_reach_allow` actually builds: the same
+    embedding-Jacobian instrument `test_cross_span_jacobian_is_zero_at_every_region`
+    uses, but read at `prelude[0]` — the FIRST block, one hop from the raw embedding —
+    instead of `prelude[-1]`, so no second attention layer can compose a relay.
+    """
+    ids = _ids()
+    span = span_ids_from_ids(ids, _rule())
+    assert span.max() >= 3, "fixture must carry at least 4 spans per row"
+
+    m = _model("span", span_reach=1)
+    B, S = ids.shape
+    eps = torch.zeros(B, S, m.cfg.d_model, requires_grad=True)
+    grabbed: dict[str, torch.Tensor] = {}
+    handles = [
+        m.embed.hybrid.register_forward_hook(lambda _m, _i, o: o + eps),
+        m.prelude[0].register_forward_hook(lambda _m, _i, o: grabbed.__setitem__("p0", o)),
+    ]
+    try:
+        m(torch.from_numpy(ids))
+    finally:
+        for h in handles:
+            h.remove()
+    y = grabbed["p0"]
+
+    queries = [int(np.flatnonzero(span[0] == k)[-1])
+               for k in range(1, int(span[0].max()) + 1)
+               if int((span[0] == k).sum()) > 1]
+    assert len(queries) >= 2
+
+    saw_two_back = False
+    for i in queries:
+        g, = torch.autograd.grad(y[0, i].sum(), eps, retain_graph=True)
+        g = g[0].abs().sum(-1)
+        own_span = int(span[0][i])
+        one_back = torch.from_numpy(span[0] == own_span - 1)
+        two_back = torch.from_numpy(span[0] <= own_span - 2)
+        if one_back.any():
+            assert g[one_back].max() > 0, (
+                f"query span {own_span}: reach=1 must read its ONE previous span "
+                "directly (one attention layer, no relay needed)")
+        if two_back.any():
+            saw_two_back = True
+            assert g[two_back].max().item() == 0.0, (
+                f"query span {own_span}: reach=1's own relation let it read a span "
+                "TWO OR MORE back at a SINGLE attention layer — max |d out/d embed| = "
+                f"{g[two_back].max().item():.3e}")
+    assert saw_two_back, "fixture needs at least one query with 2+ earlier spans"
 
 
 # ── the end-to-end instrument ────────────────────────────────────────────────
@@ -311,3 +443,14 @@ def test_span_mask_off_is_the_default_and_builds_the_pooled_compressor():
     assert m.cfg.span_mask == "off" and not m._span_mask
     assert m.prelude[0].attention._impl.compressor is not None
     assert m._span_context(torch.zeros(1, 4, dtype=torch.long)) == (None, None, None)
+
+
+def test_span_reach_refuses_below_minus_one():
+    with pytest.raises(ValueError, match="span_reach must be >= -1"):
+        MORPHTransformer(_tiny(span_mask="span", span_rule=_rule(), span_reach=-2))
+
+
+@pytest.mark.parametrize("mode,rule", [("row", None), ("off", None)])
+def test_span_reach_nonzero_requires_span_mask_span(mode, rule):
+    with pytest.raises(ValueError, match="span_reach != 0 requires model.span_mask='span'"):
+        MORPHTransformer(_tiny(span_mask=mode, span_rule=rule, span_reach=1))

@@ -63,7 +63,7 @@ from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
                        code_grade_distinct2, code_grade_pref_loss,
                        TULCodeSymHead, mdm_loss, mdm_mask, maskgit_sample)
 from .tul_denoise import (TULLoopDenoiseIn, loop_denoise_interp, loop_denoise_levels)
-from .tul_layout import (SlotLayout, span_allow_mask, span_ids_from_ids,
+from .tul_layout import (SlotLayout, span_reach_allow, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
                          tg_reset_from_ids,
                          tg_reset_mask, tg_segment_ids, tg_strict_allow)
@@ -307,6 +307,22 @@ class MORPHConfig:
     # Record: .agents/notes/proposed/architecture/2026-09-11-cross-span-budget.md
     span_mask: str = "off"
     span_rule: object | None = None
+    # The reach dial on the "span" relation (model.span_reach). 0 (default) is
+    # `span_mask`'s own same-span-only relation, BIT-IDENTICAL to leaving this field
+    # unset (`span_reach_allow(span_id, 0) == span_allow_mask(span_id)` exactly,
+    # `morph/model/tul_layout.py`). r >= 1 lets a query additionally attend the tokens
+    # of its r previous spans (`allow(i,j) = (j<=i) AND (span_id[j] >= span_id[i]-r)`);
+    # -1 is the fully causal relation (every earlier position, no span restriction).
+    # Values < -1 are refused. Requires `span_mask: "span"` — "row" and "off" have no
+    # span index for a reach to count from, so a nonzero reach there is refused too.
+    # The conv/value-shift (`tg_seg = span_id`) and the hash-bigram cut
+    # (`span_start_mask(span_id)`) are UNCHANGED by this knob at every r — they still
+    # reset at every span boundary, exactly as under plain "span" — so r >= 1 differs
+    # from "row" by the ATTENTION reach alone; those two routes still cut. Arms
+    # `budget-web-reach1` (r=1) / `budget-web-reachall` (r=-1) split the 0.40-nat
+    # cross-span budget of `lab/experiments/failures/2026-09-11-arc-span-budget.md`
+    # into a previous-span part and a further-back part.
+    span_reach: int = 0
 
     top_k: int = 128
     d_indexer: int = 32
@@ -1379,8 +1395,16 @@ class MORPHTransformer(nn.Module):
         if cfg.span_mask not in ("off", "row", "span"):
             raise ValueError(
                 f"model.span_mask must be 'off', 'row' or 'span', got {cfg.span_mask!r}")
+        if cfg.span_reach < -1:
+            raise ValueError(
+                f"model.span_reach must be >= -1, got {cfg.span_reach}")
+        if cfg.span_reach != 0 and cfg.span_mask != "span":
+            raise ValueError(
+                "model.span_reach != 0 requires model.span_mask='span': 'row' and "
+                "'off' have no span index for a reach to count from.")
         self._span_mask = cfg.span_mask != "off"
         self._span_rule = cfg.span_rule if cfg.span_mask == "span" else None
+        self._span_reach = int(cfg.span_reach)
         if self._span_mask:
             if cfg.span_mask == "span" and cfg.span_rule is None:
                 raise ValueError(
@@ -3085,13 +3109,18 @@ class MORPHTransformer(nn.Module):
         value shift and no pooled branch, so the softmax relation IS its whole
         cross-position path, and `_core_region` already sorts `tg_allow` into
         active-set order.
+
+        ``model.span_reach`` widens ONLY ``allow`` (`span_reach_allow`, `tul_layout.py`);
+        ``tg_seg`` (the conv/value-shift reset) and ``cut`` (the bigram cut) still come
+        from ``span_id`` alone, so they cut at every span boundary at every reach — a
+        reach arm's attention and its conv/bigram routes disagree on purpose.
         """
         if not self._span_mask:
             return None, None, None
         ids_np = input_ids.detach().to("cpu", torch.int64).numpy()
         span_id = torch.from_numpy(span_ids_from_ids(ids_np, self._span_rule)).to(
             input_ids.device)
-        allow = span_allow_mask(span_id)                       # [B, 1, S, S] bool
+        allow = span_reach_allow(span_id, self._span_reach)    # [B, 1, S, S] bool
         cut = span_start_mask(span_id)                         # [B, S] bool
         block_kw = {"tg_allow": allow, "tg_comp_allow": allow, "tg_seg": span_id}
         return block_kw, {"tg_allow": allow}, cut

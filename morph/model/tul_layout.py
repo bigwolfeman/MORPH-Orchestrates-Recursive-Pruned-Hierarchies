@@ -52,6 +52,7 @@ __all__ = [
     "pack_tul_row",
     "slot_layout_from_ids",
     "span_allow_mask",
+    "span_reach_allow",
     "span_ids_from_ids",
     "slot_cell_inject_keep",
     "span_start_mask",
@@ -668,11 +669,51 @@ def span_ids_from_ids(ids: np.ndarray, rule: "BoundaryRule | None") -> np.ndarra
     return out
 
 
+def span_reach_allow(span_id: Tensor, reach: int) -> Tensor:
+    """``[B, 1, S, S]`` bool: the reach-``r`` generalisation of `span_allow_mask`.
+
+    ``allow(i, j) = (j <= i) AND (span_id[j] >= span_id[i] - r)`` for ``r >= 0`` — a
+    query may attend the tokens of its own span and of the ``r`` previous spans.
+    ``r == -1`` is the fully causal relation (``allow(i, j) = j <= i``, no span
+    restriction at all). ``r < -1`` is not a defined relation; callers must refuse it
+    before this function is reached (`MORPHConfig` construction in `transformer.py`).
+
+    ``r == 0`` is BIT-IDENTICAL to `span_allow_mask`: this function requires ``span_id``
+    non-decreasing along dim 1 per row (`span_ids_from_ids`'s own contract — it writes a
+    running `np.cumsum` of 0/1 boundary marks, which can only hold or increase), and
+    under that contract ``j <= i`` already forces ``span_id[j] <= span_id[i]``, so ANDing
+    it with ``span_id[j] >= span_id[i] - 0`` collapses to ANDing it with
+    ``span_id[j] == span_id[i]`` — `span_allow_mask`'s own relation, not merely an
+    equivalent one. The comparison is a plain elementwise subtract, not a sort or an
+    explicit per-span-index correspondence, because monotonicity is exactly what makes
+    "``span_id[j] >= span_id[i] - r``" mean "j's span is within r spans of i's".
+    """
+    if span_id.dim() != 2:
+        raise ValueError(f"span_reach_allow expects [B, S] ids, got {tuple(span_id.shape)}")
+    if reach < -1:
+        raise ValueError(f"span_reach_allow: reach must be >= -1, got {reach}")
+    S = span_id.shape[1]
+    device = span_id.device
+    row = torch.arange(S, device=device).unsqueeze(1)
+    col = torch.arange(S, device=device).unsqueeze(0)
+    causal = (col <= row)                                       # [S, S], j <= i
+    if reach == -1:
+        # Materialised, not an expanded view: `_core_region` sorts `tg_allow` into
+        # active-set order and every other path hands consumers a real [B, 1, S, S].
+        return causal.unsqueeze(0).unsqueeze(0).expand(
+            span_id.shape[0], 1, S, S).contiguous()
+    # span_id.unsqueeze(2) is span_id[i] (broadcasts over j); span_id.unsqueeze(1) is
+    # span_id[j] (broadcasts over i) — same convention `span_allow_mask` used.
+    within = (span_id.unsqueeze(2) - span_id.unsqueeze(1)) <= reach   # [B, S, S]
+    return (within & causal).unsqueeze(1)
+
+
 def span_allow_mask(span_id: Tensor) -> Tensor:
     """``[B, 1, S, S]`` bool: ``allow(i, j) = (j <= i) AND span_id[i] == span_id[j]``.
 
-    The ONE cross-span relation. Both attention branches of a `span_mask` model read
-    this same tensor (window via `_window_fallback`'s ``extra_mask``, compressed via
+    The cross-span relation at reach 0 — `span_reach_allow(span_id, 0)`, kept as its own
+    name because it is the ONE relation both attention branches of a `span_mask` model
+    read (window via `_window_fallback`'s ``extra_mask``, compressed via
     `_tg_slot_attention`'s), so there is no branch that can be restricted while another
     is not — the defect class finding F1 of the 2026-09-10 audit was.
 
@@ -684,13 +725,7 @@ def span_allow_mask(span_id: Tensor) -> Tensor:
     """
     if span_id.dim() != 2:
         raise ValueError(f"span_allow_mask expects [B, S] ids, got {tuple(span_id.shape)}")
-    S = span_id.shape[1]
-    device = span_id.device
-    row = torch.arange(S, device=device).unsqueeze(1)
-    col = torch.arange(S, device=device).unsqueeze(0)
-    causal = (col <= row)                                       # [S, S], j <= i
-    same = span_id.unsqueeze(2) == span_id.unsqueeze(1)         # [B, S, S]
-    return (same & causal).unsqueeze(1)
+    return span_reach_allow(span_id, 0)
 
 
 def span_start_mask(span_id: Tensor) -> Tensor:

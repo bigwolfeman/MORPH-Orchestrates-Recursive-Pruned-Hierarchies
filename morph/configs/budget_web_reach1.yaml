@@ -1,0 +1,30 @@
+# Cross-span budget panel, arm "budget-web-reach1": one span of REACH beyond the own
+# span. Same relation as `budget_web_span.yaml`'s "span" arm — same-span causal on both
+# attention branches, the CCA conv and the value shift reset at every span boundary, the
+# hash bigram cut at every span's first position — except attention may ALSO see the
+# tokens of the ONE previous span (`model.span_reach: 1`, `allow(i,j) = (j<=i) AND
+# span_id[j] >= span_id[i] - 1`). The conv/value-shift/bigram routes are UNCHANGED: they
+# still cut at every boundary, so this arm's cross-span channel is attention alone.
+#
+# The reach is PER ATTENTION LAYER, not end to end: a token in span k reads span k-1's
+# states, which at any layer after the first already hold span k-2's content read one
+# layer earlier, so the stack relays content one span per layer (measured on the leak
+# test's fixture: a perturbation two spans back moves end-to-end logits by ~0.87 while
+# the single-layer relation is exactly zero there). This arm is therefore a LOWER bound
+# on what spans further back are worth, not "the previous span alone"; the exact
+# previous-span arm reads across a boundary at ONE non-looped block (`span_reach_layer`).
+# CE(span) - CE(reach1) and CE(reach1) - CE(reachall), paired on tok_index, bound the
+# split of the 0.40-nat cross-span budget of
+# `lab/experiments/failures/2026-09-11-arc-span-budget.md`.
+# Leak gate: tests/test_span_mask_leak.py.
+# Record: lab/experiments/planned/2026-09-21-span-reach-split.md
+defaults:
+  - budget_root
+  - _self_
+
+model:
+  span_mask: span
+  span_reach: 1
+
+wandb:
+  name: budget-web-reach1

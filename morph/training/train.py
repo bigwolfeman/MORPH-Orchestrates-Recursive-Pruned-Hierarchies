@@ -521,6 +521,10 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         span_mask=str(m.get("span_mask", "off")),
         span_rule=(_span_rule(cfg) if str(m.get("span_mask", "off")) == "span"
                    else None),
+        # The reach dial on the "span" relation (`MORPHConfig.span_reach`'s own
+        # comment). 0 is the "span" arm's own same-span relation, bit-identical to
+        # leaving the key out of the YAML.
+        span_reach=int(m.get("span_reach", 0)),
         top_k=int(m.top_k),
         window_size=int(m.window_size),
         context_len=int(m.context_len),

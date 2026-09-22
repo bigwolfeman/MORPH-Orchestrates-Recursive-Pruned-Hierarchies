@@ -1,0 +1,24 @@
+# Cross-span budget panel, arm "budget-web-reachall": every earlier span reachable by
+# attention (`model.span_reach: -1`, `allow(i,j) = j <= i` — plain causal, no span
+# restriction at all). The conv/value-shift and the hash bigram STILL cut at every span
+# boundary (`tg_seg = span_id`, `span_start_mask(span_id)` — unchanged from
+# `budget_web_span.yaml`'s "span" arm and from `budget_web_reach1.yaml`), so this arm is
+# NOT the same model as `span_mask: off`; it is the span relation with the attention
+# restriction removed and the other two routes left cut.
+#
+# CE(span) - CE(reachall), paired on tok_index, together with `budget_web_reach1.yaml`,
+# splits the 0.40-nat cross-span information budget of
+# `lab/experiments/failures/2026-09-11-arc-span-budget.md` into a previous-span part
+# (`budget_web_reach1.yaml`) and a further-back part (this file).
+# Leak gate: tests/test_span_mask_leak.py.
+# Record: lab/experiments/planned/2026-09-21-span-reach-split.md
+defaults:
+  - budget_root
+  - _self_
+
+model:
+  span_mask: span
+  span_reach: -1
+
+wandb:
+  name: budget-web-reachall
