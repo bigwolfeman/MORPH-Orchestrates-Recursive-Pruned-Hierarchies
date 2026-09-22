@@ -1,0 +1,14 @@
+# Cross-span budget panel, arm "budget-web-reach1-coda-s2": `budget_web_reach1_coda.yaml`
+# at training seed 2, otherwise identical (reach 1 at coda[0] only, global index 10).
+# The seed twin of `budget-web-reach1-coda` (seed 1, 66fc75c); paired against
+# `budget-web-span-s2` on the same rows. See `budget_web_span_s2.yaml` for why.
+# Record: lab/experiments/planned/2026-09-22-coda-seed-twin.md
+defaults:
+  - budget_web_reach1_coda
+  - _self_
+
+training:
+  seed: 2
+
+wandb:
+  name: budget-web-reach1-coda-s2
