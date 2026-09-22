@@ -4921,6 +4921,26 @@ class MORPHTransformer(nn.Module):
             # independent loops.
             _kw0 = {"tg_relation": _mask0}
             _kwr = {"tg_relation": _same}
+            if _reach > 0:
+                # The paragraph above ("the CCA conv and the value shift are left alone")
+                # holds at reach 0 only, where every earlier cell is allowed anyway. Under
+                # a reach budget those two position-local ops still read the previous
+                # slot's LAST cells at EVERY core layer (the conv kernel 4 reaches 3 cells
+                # back, the value shift 1), so the stack relayed about one slot per
+                # LAYER, not one per pass: measured 2026-09-22 on the LXTUL-R Step 1 arm
+                # (planted content three spans back reached the coda at depth 1 with a
+                # benefit of 0.048, where the single-cell chain read exactly 0) and on
+                # the tiny model (a perturbation three spans back moved depth-1 logits
+                # by 1.9e-2 with the conv, 2.9e-2 with the conv cut to kernel 1 — the
+                # value shift alone relays). A per-SLOT segment id resets both ops at
+                # slot boundaries and leaves them free within a slot's M cells, the same
+                # `tg_seg` contract the single-cell reach arm passes per cell below.
+                # Reach 0 is untouched (no `tg_seg`): every filed register arm keeps its
+                # forward. Test: tests/test_lxtul_r_composition.py (the depth-1 leak).
+                _seg_slot = torch.arange(_n_slots, device=x.device).repeat_interleave(
+                    _m_cells).unsqueeze(0).expand(B, _n_slots * _m_cells)
+                _kw0["tg_seg"] = _seg_slot
+                _kwr["tg_seg"] = _seg_slot
             _core_akw = tuple([_kw0] + [(_kwr if _reach > 0 else _kw0)
                                         for _ in range(n_core - 1)])
         elif _reach > 0:

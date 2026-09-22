@@ -284,3 +284,94 @@ def test_r1_eval_forward_with_forced_depth_is_finite():
 
 
 
+
+
+# ── 3e. the in-loop reach is ONE SLOT PER PASS through every op, not only attention ──
+#
+# Found 2026-09-22 on the Step 1 arm: the register branch handed the core layers
+# `tg_relation` alone, so the CCA conv (kernel 4) and the value shift, which are
+# position-local on the flattened CELL axis and were "left alone" (a choice that holds
+# at reach 0 only), read the previous slot's last cells at EVERY core layer and relayed
+# about one slot per LAYER. The planted probe read content three spans back at depth 1
+# (0.048) where the single-cell chain read exactly 0. The fix passes a per-SLOT `tg_seg`
+# with the relation whenever `loop_reach > 0`; reach 0 keeps its forward.
+
+
+def _span_logit_delta(m, inp, layout, j: int, g: int) -> float:
+    """max |logits| change on span j's tokens when span j-g's token ids are perturbed
+    (non-boundary, non-slot ids only, so the packing is unchanged)."""
+    from test_tul_fan import DOT
+    bag = layout.bag_id[0]
+    slot = layout.slot_mask[0]
+    tgt = ((bag == j) & ~slot).nonzero(as_tuple=True)[0]
+    src = ((bag == j - g) & ~slot).nonzero(as_tuple=True)[0]
+    assert tgt.numel() > 0 and src.numel() > 0, (j, g)
+    inp2 = inp.clone()
+    for p in src.tolist():
+        v = int(inp2[0, p])
+        if v in (0, 4, DOT, 11):
+            continue
+        inp2[0, p] = 5 + ((v - 5 + 1) % 40)
+    with torch.no_grad():
+        a = m(inp, labels=None, slot_layout=layout)["logits"][0, tgt]
+        b = m(inp2, labels=None, slot_layout=layout)["logits"][0, tgt]
+    d = a - b
+    d[:, m.cfg.tul.slot_id] = 0.0            # the masked slot-id column is -inf on both
+    d = torch.where(torch.isfinite(d), d, torch.zeros_like(d))
+    return float(d.abs().max())
+
+
+@pytest.mark.parametrize("depth,first_dark", [(1, 3), (2, 4)])
+def test_loop_reach1_register_reaches_exactly_one_slot_per_pass(depth, first_dark):
+    """Strict geometry, coda prefix reach prev, forced depth T: a token of span j reads
+    its own span and slot j-1's cells; slot j-1's cells hold spans j-1 .. j-1-T after T
+    in-loop hops. So span j-(T+1) moves span j's logits and span j-(T+2) moves them by
+    EXACTLY 0, with the shipped conv kernel (4) and value shift in place."""
+    m = _r1_model(seed=12, tul_kw=dict(slot_mean_depth=depth, slot_max_depth=depth))
+    ids, inp, lab, layout = _batch(prefix_k=4, seed=3)
+    nb = int(layout.bag_id[0].max())
+    j = min(nb - 1, 7)
+    lit = _span_logit_delta(m, inp, layout, j, first_dark - 1)
+    dark = _span_logit_delta(m, inp, layout, j, first_dark)
+    assert lit > 1e-4, f"depth {depth}: span j-{first_dark - 1} must reach span j, got {lit}"
+    assert dark == 0.0, f"depth {depth}: span j-{first_dark} must NOT reach span j, got {dark}"
+
+
+def _core_kwargs_seen(m, inp, layout) -> list:
+    seen = []
+    real = m._apply_core_step
+
+    def spy(*args, attn_kw=None, **kw):
+        if attn_kw is not None:
+            seen.append(attn_kw)
+        return real(*args, attn_kw=attn_kw, **kw)
+
+    m._apply_core_step = spy
+    try:
+        with torch.no_grad():
+            m(inp, labels=None, slot_layout=layout)
+    finally:
+        m._apply_core_step = real
+    return seen
+
+
+def test_loop_reach1_register_core_kwargs_carry_a_per_slot_segment_and_reach0_does_not():
+    ids, inp, lab, layout = _batch(prefix_k=4, seed=3)
+    m1 = _r1_model(seed=12, tul_kw=dict(slot_mean_depth=1, slot_max_depth=1))
+    seen1 = _core_kwargs_seen(m1, inp, layout)
+    assert seen1, "the core must run at least one pass"
+    for kws in seen1:
+        for kw in kws:
+            assert "tg_relation" in kw and "tg_seg" in kw
+            seg = kw["tg_seg"]
+            M = m1.cfg.tul.slot_cells
+            assert seg.shape[1] % M == 0
+            assert torch.equal(seg[0], torch.arange(seg.shape[1] // M).repeat_interleave(M))
+    m0 = _r1_model(seed=12, tul_kw=dict(slot_mean_depth=1, slot_max_depth=1, loop_reach=0,
+                                        tg_coda_prefix_reach="all"))
+    seen0 = _core_kwargs_seen(m0, inp, layout)
+    assert seen0
+    for kws in seen0:
+        for kw in kws:
+            assert "tg_relation" in kw and "tg_seg" not in kw, \
+                "reach 0 must keep the filed register arms' forward (no tg_seg)"
