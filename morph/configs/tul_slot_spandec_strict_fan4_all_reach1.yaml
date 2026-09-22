@@ -1,0 +1,40 @@
+# LXTUL-R Step 1: fan4-all PLUS the chain (2026-09-21). One factor over
+# `tul_slot_spandec_strict_fan4_all`: `tul.loop_reach: 1` narrows the in-loop relation so a
+# cell of slot k attends every cell of its OWN slot and of slot k-1 ONLY (core layer 0;
+# later layers are slot-local — `slot_cell_relation`, morph/model/transformer.py), and
+# `tul.tg_coda_prefix_reach: prev` narrows the coda's read the same way: a token of span
+# k+1 reads the K cells of slot k alone (`tg_strict_allow`, morph/model/tul_layout.py).
+# Together: content h spans back can only arrive at pass h-1 — depth is reach, by
+# construction, not a mechanism the loop chose. `model.core_fixed_point_lambda: 0.0`: the
+# term asks the LAST pass to be a fixed point of the map, i.e. to stop moving relative to
+# the K-1 stream-deviation directions too — the opposite of a pass having a job on a chain
+# that needs every pass to carry the relay forward; measured safe at 0 on the fan (fp0:
+# rank unchanged, scale held elsewhere). `model.slot_state_renorm: true`: the state keeps
+# the per-cell norm it entered a pass with, bounding the scale the loop-carry arm (the
+# re-supply candidate this design rejected) ran unbounded (RMS 0.5 -> 75,
+# lab/experiments/failures/2026-09-19-loop-carry-prev-reach1.md).
+#
+# Paired against `slot-spandec-strict` (the single-cell ruler) and against Step 0's
+# `budget-web-reachall` PLAIN model (the depth-dependence guard, A1.8: the reach K-curve
+# is forced by construction, so a pass on the K-curve bar without recovering a real share
+# of the far budget is depth dependence, not a win).
+#
+# `training.warmup` composes to 1000 (inherited from base.yaml through the whole
+# strict/fan chain; verified by compose — see the compose-check output in the build
+# report). Never override it to 0 on this ternary + AdEMAMix recipe (CLAUDE.md).
+#
+# Record: .agents/notes/proposed/architecture/2026-09-21-lxtul-r-reach-composition.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all
+  - _self_
+
+tul:
+  loop_reach: 1
+  tg_coda_prefix_reach: prev
+
+model:
+  core_fixed_point_lambda: 0.0
+  slot_state_renorm: true
+
+wandb:
+  name: slot-spandec-strict-fan4-all-reach1
