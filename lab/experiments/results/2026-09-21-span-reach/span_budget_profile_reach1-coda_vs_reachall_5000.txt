@@ -1,0 +1,31 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+paired 491,520 tokens (full 491,520, span 491,520)
+offsets from budget_web_reachall over 480 rows; 480 paired tokens have none
+
+depth 6:  CE full 4.0922   CE span 4.4414   gap +0.3492 nats [+0.3396, +0.3608]
+   offset      n        gap        95% CI
+        0    24,338   +0.2143  [+0.1993, +0.2289]
+        1    24,584   +0.4155  [+0.3902, +0.4428]
+        2    24,546   +0.4704  [+0.4403, +0.5073]
+        3    24,504   +0.4442  [+0.4208, +0.4738]
+        4    23,343   +0.4014  [+0.3833, +0.4203]
+        5    22,646   +0.3746  [+0.3567, +0.3943]
+        6    21,799   +0.3582  [+0.3413, +0.3779]
+        7    21,034   +0.3482  [+0.3302, +0.3669]
+       8+   304,246   +0.3307  [+0.3220, +0.3421]
+
+depth 1:  CE full 4.1300   CE span 4.4680   gap +0.3379 nats [+0.3283, +0.3490]
+   offset      n        gap        95% CI
+        0    24,338   +0.2120  [+0.1975, +0.2263]
+        1    24,584   +0.3848  [+0.3590, +0.4112]
+        2    24,546   +0.4509  [+0.4210, +0.4886]
+        3    24,504   +0.4345  [+0.4101, +0.4647]
+        4    23,343   +0.3868  [+0.3680, +0.4084]
+        5    22,646   +0.3654  [+0.3459, +0.3862]
+        6    21,799   +0.3432  [+0.3268, +0.3622]
+        7    21,034   +0.3401  [+0.3221, +0.3578]
+       8+   304,246   +0.3209  [+0.3126, +0.3324]
+
+wrote lab/experiments/results/2026-09-21-span-reach/span_budget_profile_reach1-coda_vs_reachall_5000.json

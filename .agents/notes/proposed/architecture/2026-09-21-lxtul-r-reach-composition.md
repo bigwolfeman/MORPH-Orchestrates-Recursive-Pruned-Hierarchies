@@ -211,3 +211,22 @@ the next note.
 - **Compose before queue.** Every config here composes through Hydra and `tul_setup`
   before it is queued (`compose-every-config-before-queueing`); unknown `tul.*` keys raise.
 - **One trainer on the 5090.** Step 0's three runs are 5k each; Step 1 is 5k then 20k.
+
+## Outcome log
+
+**Step 0 outcome (2026-09-22 02:05).** Filed under
+[`failures/2026-09-21-span-reach-split.md`](../../../../lab/experiments/failures/2026-09-21-span-reach-split.md)
+(P-4, P-8, P-9 fail; 6 of 9 hold). At 5k, depth 6, 481 paired blocks: span-h 4.3975,
+reach1 4.2181, reachall 4.0922. The far budget's LOWER bound (reach1 − reachall) is
+**+0.1259 [+0.1165, +0.1364]**, so the reading rule's "queue" clause fired; Step 1 is
+planned in `lab/experiments/planned/2026-09-22-lxtul-r-step1.md` (bcb0dc2) and launched
+2026-09-22 01:38. The previous-span value's UPPER bound (span-h − reach1) is +0.179. The
+fourth arm (reach 1 at coda[0] only) reads WORSE than span-h by 0.044 (0.39 better on the
+first token after a boundary, 0.106 worse from the eighth on); eval swaps on the Spark
+show the mask is harmless to a model trained without it (−0.001) and the trained model
+uses the read at every offset, so the deficit is on the trained weights; a learned
+single-block trade and a run draw are not separated by one arm (the same-config
+cross-commit pair drifts 0.048 at 8+). The far budget's honest bracket is [0.126, ≤ 0.28];
+the relay share is not read. A0.1 to A0.3 hold on the lower bound. Observation: the plain
+loop's own K1−K6 is largest under reach 1 (+0.055 vs +0.033 at reach 0 and +0.038 at reach
+all): a relay geometry makes the plain loop's passes relay.

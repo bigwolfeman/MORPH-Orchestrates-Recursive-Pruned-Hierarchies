@@ -1,0 +1,16 @@
+paired 491,520 tokens (full 491,520, span 491,520)
+offsets from budget_web_span over 480 rows; 480 paired tokens have none
+
+depth 6:  CE full 4.3975   CE span 4.4389   gap +0.0414 nats [+0.0393, +0.0435]
+   offset      n        gap        95% CI
+        0    24,338   +0.0160  [+0.0103, +0.0220]
+        1    24,584   +0.0077  [+0.0017, +0.0144]
+        2    24,546   +0.0230  [+0.0161, +0.0296]
+        3    24,504   +0.0357  [+0.0282, +0.0444]
+        4    23,343   +0.0365  [+0.0285, +0.0440]
+        5    22,646   +0.0411  [+0.0340, +0.0485]
+        6    21,799   +0.0450  [+0.0365, +0.0524]
+        7    21,034   +0.0406  [+0.0321, +0.0478]
+       8+   304,246   +0.0483  [+0.0456, +0.0509]
+
+wrote lab/experiments/results/2026-09-21-span-reach/span_budget_profile_drift_span-h_vs_span_cc4e034_5000.json
