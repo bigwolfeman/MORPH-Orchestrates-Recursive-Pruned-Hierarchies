@@ -143,6 +143,10 @@ def gram_probe(model, batches, device: str, *, n_list=N_LIST, seed: int = 0,
     if getattr(model, "tul_gram", None) is None:
         raise ValueError("lxtul_g_probe needs a model built with tul.gram=true")
     model.eval()
+    # LXTUL-GK models (tul.gram_objective="iw") are built WITHOUT a posterior: the
+    # posterior-mode readings (ce_post, KL, ce_elbo, the exposure gap) do not exist there
+    # and are reported as None; every prior-side reading is the same code.
+    has_post = getattr(model.tul_gram, "pool", None) is not None
     n_max = max(n_list)
     tok: dict[str, list[np.ndarray]] = {}
     tok_index: list[np.ndarray] = []
@@ -184,16 +188,18 @@ def gram_probe(model, batches, device: str, *, n_list=N_LIST, seed: int = 0,
             _put(f"iw{N}", _iw(lps[:N], bags, rows))
         _put("iw_identity4", _iw([lps[0]] * 4, bags, rows))
         # posterior sample (the instrument that reads the answer) and its KL
-        lp, out = label_logp(model, inp, layout, labels, device, gram_mode="post", seed=seed)
-        _put("post", lp[tp].numpy())
-        kp = out["gram_kl_pass"].float().cpu().numpy()                   # [B, S, T]
-        km = out["gram_kl_mask"].cpu().numpy()
-        kl_sum += float((kp * km).sum())
-        for t in range(kp.shape[-1]):
-            kl_pass.setdefault(t + 1, []).append(kp[..., t][km[..., t]])
-        has = km.any(-1)
-        kl_slot.append((kp * km).sum(-1)[has])
-        sig_post.append(float(out["gram_sigma_ratio_post"]))
+        if has_post:
+            lp, out = label_logp(model, inp, layout, labels, device, gram_mode="post",
+                                 seed=seed)
+            _put("post", lp[tp].numpy())
+            kp = out["gram_kl_pass"].float().cpu().numpy()               # [B, S, T]
+            km = out["gram_kl_mask"].cpu().numpy()
+            kl_sum += float((kp * km).sum())
+            for t in range(kp.shape[-1]):
+                kl_pass.setdefault(t + 1, []).append(kp[..., t][km[..., t]])
+            has = km.any(-1)
+            kl_slot.append((kp * km).sum(-1)[has])
+            sig_post.append(float(out["gram_sigma_ratio_post"]))
         # prior mean, cells zeroed
         lp, _ = label_logp(model, inp, layout, labels, device, gram_mode="mean")
         _put("prior_mean", lp[tp].numpy())
@@ -224,12 +230,14 @@ def gram_probe(model, batches, device: str, *, n_list=N_LIST, seed: int = 0,
         raise AssertionError("ce_iw@1 != ce_prior@1: the read changed a single sample")
     res = {
         "n_tokens": n_tok, "seed": seed, "n_list": list(n_list),
-        "ce_post": ce["post"], "ce_prior@1": ce["prior1"], "ce_prior_mean": ce["prior_mean"],
+        "has_posterior": has_post,
+        "ce_post": ce["post"] if has_post else None,
+        "ce_prior@1": ce["prior1"], "ce_prior_mean": ce["prior_mean"],
         **{f"ce_iw@{N}": ce[f"iw{N}"] for N in n_list},
         "ce_iw_identity@4": ce["iw_identity4"], "ce_zero": ce["zero"],
-        "ce_elbo": ce["post"] + kl_sum / max(n_tok, 1),
-        "kl_per_token": kl_sum / max(n_tok, 1),
-        "exposure_gap": ce["prior1"] - ce["post"],
+        "ce_elbo": ce["post"] + kl_sum / max(n_tok, 1) if has_post else None,
+        "kl_per_token": kl_sum / max(n_tok, 1) if has_post else None,
+        "exposure_gap": ce["prior1"] - ce["post"] if has_post else None,
         "width_gain@4": ce["prior1"] - ce.get("iw4", float("nan")),
         "worth_zero": ce["zero"] - ce["prior1"],
         "sigma_ratio_prior": float(np.mean(sig_prior)) if sig_prior else float("nan"),

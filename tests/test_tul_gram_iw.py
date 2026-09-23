@@ -585,3 +585,21 @@ def test_the_two_configs_compose_through_hydra_and_the_runtime():
         assert mc.gram_beta == 0.1 and mc.gram_kl_balance == 0.8 and mc.gram_free_bits == 0.0
         assert mc.tg_geometry == "strict" and mc.spandec and mc.emit_weight == 0.0
         assert mc.plast_weight == 1.0
+
+
+def test_the_probe_runs_on_a_model_without_a_posterior():
+    """`lab/divergence/lxtul_g_probe.py::gram_probe` on a GK model: the posterior readings
+    are None (there is no posterior), and the prior-side Bayesian read equals the model's
+    own eval `gram_mode="iw"` bound on the same seeds."""
+    from lxtul_g_probe import gram_probe
+    _ids, inp, lab, layout = _pack()
+    m = _gk(4, plast_weight=1.0)
+    res, arr = gram_probe(m, [(inp, lab, layout, None)], "cpu", n_list=(1, 4), seed=3)
+    assert res["has_posterior"] is False
+    for k in ("ce_post", "ce_elbo", "kl_per_token", "exposure_gap"):
+        assert res[k] is None, k
+    assert "post" not in arr
+    m.eval()
+    with torch.no_grad():
+        o = m(inp, labels=lab, slot_layout=layout, gram_mode="iw", gram_sample_seed=3)
+    assert abs(res["ce_iw@4"] - float(o["loss"])) < 2e-5, (res["ce_iw@4"], float(o["loss"]))
