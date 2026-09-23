@@ -215,3 +215,10 @@ Bayesian read's own loss, with no posterior and no KL: LXTUL-GK,
 [`2026-09-23-lxtul-gk-multisample.md`](../planned/2026-09-23-lxtul-gk-multisample.md). If its width
 gain survives and the depth-under-width reading grows, that is the loop contributing
 through search. Spectral decoupling is closed as a lever on the fan4-all read.
+
+## Addendum (2026-09-23 16:14): b1 at step 2500
+
+The probe finished after filing. lxtul-g-b1 at 2500: ce_post 4.6084, ce_prior@1 4.6092,
+ce_iw@4 4.6089, ce_iw@16 4.6089, ce_zero 4.7247, KL 0.018 per token. The gap is 0.0008
+and width gains 0.0003: in its collapsed phase b1 is a near-deterministic loop whose
+cells the coda uses (zeroing them costs 0.116 nats). No verdict changes.
