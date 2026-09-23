@@ -121,3 +121,14 @@ scored on `lxtul-g`; this arm has its own, frozen now:
 - **P-10.** lxtul-g-b1 `ce_prior@1 - ce_post` at 5k smaller than lxtul-g's: **75 %.**
 - **P-11.** lxtul-g-b1 `ce_iw@4` better than lxtul-g's `ce_iw@4` (paired): **60 %.**
 - **P-12.** lxtul-g-b1 mean KL per slot at 5k above 0.5 nats (not collapsed): **50 %.**
+
+## Amendment: two controls pulled from the queue (2026-09-23 13:27)
+
+`lxtul-g-meanfree` and `lxtul-g-d1` are removed from the runner queue before they
+started. Both control the beta-0.1 posterior-trained design, and lxtul-g's 5k sweep shows
+that design is teacher-forced across passes (prior-sample token CE 5.0956 at depth 6
+against the ruler's 4.3474; span-decoder CE 8.66 -> 9.24 with depth), so their readings
+would measure a known exposure gap, not search against noise. Their configs stay in the
+tree. P-4 and P-7 are therefore NOT RUN. The design moves to training on K prior rollouts
+under the multi-sample bound (Wolfe's go, 2026-09-23 13:27): new prereg
+`lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md`.
