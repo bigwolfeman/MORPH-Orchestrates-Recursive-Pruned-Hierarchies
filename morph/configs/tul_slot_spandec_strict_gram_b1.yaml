@@ -1,0 +1,20 @@
+# LXTUL-G panel, arm "lxtul-g-b1": lxtul-g with tul.gram_beta 1.0 (the true ELBO).
+# ONE factor against `lxtul-g` (`tul_slot_spandec_strict_gram.yaml`): gram_beta 0.1 -> 1.0.
+#
+# WHY (dated amendment 2026-09-23 to lab/experiments/planned/2026-09-23-lxtul-g-panel.md,
+# added while lxtul-g ran). At beta 0.1 one nat of KL costs 0.1 nats of loss, so the
+# posterior is paid to copy the next span into the latent: lxtul-g at step 2720 reads a KL
+# of 43 nats per slot (1.8 nats per coda token), posterior sigma/r falling 0.21 -> 0.09, and
+# a val loss on PRIOR samples of 5.28 at 2500, the fitted-z exposure gap. At beta 1 the
+# training loss CE + KL/token is an upper bound on the NLL, and the posterior carries only
+# what is worth its KL. GRAM's 0.1 was tuned on puzzles, where solution diversity is the
+# goal; on a language model the bound is the honest objective.
+defaults:
+  - tul_slot_spandec_strict_gram
+  - _self_
+
+tul:
+  gram_beta: 1.0
+
+wandb:
+  name: lxtul-g-b1

@@ -108,3 +108,16 @@ Predictions unchanged. What the review of the two builds fixed or recorded:
 - Build commits: gram e75e78c, spectral decoupling 3221610, merge (this commit's parent).
   Review: 44 + 131 + 58 tests passed on the branches, 185 on the merge; five sabotages
   caught; 40-step GPU smokes of gram and meanfree exit 0.
+
+## Amendment: a fifth arm (2026-09-23 12:24, while lxtul-g ran, before its readouts)
+
+`lxtul-g-b1` (`tul_slot_spandec_strict_gram_b1.yaml`): lxtul-g with `tul.gram_beta`
+1.0. The first arm's training log at step 2720 reads a KL of 43 nats per slot (1.8 per
+coda token), posterior sigma/r 0.21 -> 0.09 and a runner val loss on prior samples of 5.28
+at 2500: the posterior is paid to copy the next span at beta 0.1. At beta 1 the training
+objective is the ELBO, an upper bound on the NLL. The frozen predictions P-1..P-9 stay
+scored on `lxtul-g`; this arm has its own, frozen now:
+
+- **P-10.** lxtul-g-b1 `ce_prior@1 - ce_post` at 5k smaller than lxtul-g's: **75 %.**
+- **P-11.** lxtul-g-b1 `ce_iw@4` better than lxtul-g's `ce_iw@4` (paired): **60 %.**
+- **P-12.** lxtul-g-b1 mean KL per slot at 5k above 0.5 nats (not collapsed): **50 %.**
