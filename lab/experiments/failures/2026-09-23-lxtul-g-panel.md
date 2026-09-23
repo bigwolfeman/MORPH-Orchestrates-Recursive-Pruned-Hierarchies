@@ -1,6 +1,6 @@
 # Planned: LXTUL-G, the stochastic contractive slot loop trained as a latent-variable model
 
-Status: planned
+Status: failure
 
 Date: 2026-09-23 11:07 (frozen before any build or GPU step). Note:
 [`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../.agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md)
@@ -132,3 +132,86 @@ would measure a known exposure gap, not search against noise. Their configs stay
 tree. P-4 and P-7 are therefore NOT RUN. The design moves to training on K prior rollouts
 under the multi-sample bound (Wolfe's go, 2026-09-23 13:27): new prereg
 `lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md`.
+
+## Results (filed 2026-09-23 16:06)
+
+Artifacts: [`../results/2026-09-23-lxtul-g/`](../results/2026-09-23-lxtul-g/) (sweeps, worth,
+slot state, the probe JSONs, `paired_5000.json`, run logs). Probe: `lab/divergence/lxtul_g_probe.py`
+on the Spark at 1416d4d, 192 validation rows (200,719 tokens), seeds 0.. for the prior samples.
+Paired CIs bootstrap over 1,024-token stream blocks against the ruler `slot-spandec-strict` @5000 depth 6.
+
+The exposure gap (one prior sample minus one posterior sample, same rows):
+
+| arm | step | ce_post | ce_prior@1 | ce_iw@4 | ce_iw@16 | ce_zero | gap | KL / token |
+|---|---|---|---|---|---|---|---|---|
+| lxtul-g | 2500 | 4.4798 | 5.1905 | 5.0881 | | 4.8893 | 0.7108 | 1.87 |
+| lxtul-g | 5000 | 4.0270 | 5.0110 | 4.8523 | 4.7957 | 4.6862 | 0.9840 | 2.81 |
+| lxtul-g-b1 | 5000 | 3.9934 | 6.0620 | 5.5896 | 5.2901 | 4.8693 | 2.0686 | 3.58 |
+
+The identity null (`ce_iw_identity@4`) equals `ce_prior@1` exactly on both arms.
+
+Paired against the ruler at depth 6 (on the probe's tokens):
+
+| reading | lxtul-g | lxtul-g-b1 |
+|---|---|---|
+| ce_iw@4 | +0.5901 [+0.5796, +0.6012] | +1.3275 [+1.3105, +1.3447] |
+| ce_iw@16 | +0.5336 [+0.5239, +0.5437] | +1.0280 [+1.0135, +1.0424] |
+| ce_zero (cells zeroed) | +0.4241 [+0.4150, +0.4338] | +0.6072 [+0.5943, +0.6205] |
+| ce_post (reads the answer) | −0.2352 [−0.2447, −0.2254] | −0.2687 [−0.2801, −0.2577] |
+| ce_iw@4, depth 1 minus depth 6 | +0.0123 [+0.0093, +0.0150] | −0.2674 [−0.2732, −0.2616] |
+| ce_prior@1, depth 1 minus depth 6 | −0.0010 [−0.0055, +0.0037] | −0.3481 [−0.3546, −0.3418] |
+
+Runner sweeps (one seeded prior sample, 480 rows): lxtul-g K1−K6 −0.1340 at 2500 and
+−0.0050 [−0.0083, −0.0018] at 5000. b1 K1−K6 −0.0001 [−0.0003, +0.0001] at 2500 and
+−0.3580 at 5000. The lxtul-g worth profile at 5000: a shuffled cell costs +1.12 nats at a
+span's first token, and a zeroed cell is 0.60 nats BETTER than the own prior cell there.
+
+b1's training history (wandb `wpnauq56`). Steps 0 to ~2750: the posterior sat on the prior
+(KL per token ≤ 0.016), val 4.58 to 4.68, and the 2500 sweep read 4.6878 at depth 6
+against the ruler's 4.6567. From step 3000: KL per token 0.29 → 3.57, the pre-noise state
+RMS `u_rms` 1.7 → 21.3, grad norm 1.5 → 27, val 4.58 → 5.88, and `loss/total` 9.26 → 12.88.
+The optimizer climbed its own objective by ~3.6 nats over the last 2500 steps.
+
+fan4-all-sd at 5000: K1−K6 +0.0043 [+0.0038, +0.0047] (fan4-all: +0.0049 [+0.0044, +0.0055]).
+Depth-6 CE paired: +0.0141 [+0.0117, +0.0163] against fan4-all, −0.0327 [−0.0356, −0.0299]
+against the ruler. Tok/s at step 200: lxtul-g 11,712, b1 11,657, fan4-all-sd 7,709, ruler 11,759.
+
+| clause | reading | verdict |
+|---|---|---|
+| P-1 KL per slot > 0.5 | 58.85 nats | held |
+| P-2 gap smaller at 5000 than 2500 | 0.7108 → 0.9840 | failed |
+| P-3 worth(zero) on a prior sample > 0.2365 | −0.325 | failed |
+| P-4 width vs mean-free | control pulled | not run |
+| P-5 K1−K6 > +0.005 | −0.0050 [−0.0083, −0.0018] | failed |
+| P-6 ce_iw@4 within +0.020 of the ruler | +0.5901 | failed |
+| P-7 training depth vs d1 | control pulled | not run |
+| P-8 fan4-all-sd K1−K6 > +0.0099 | +0.0043 | failed |
+| P-9 tok/s ≥ 0.85x ruler | 0.996x | held |
+| P-10 b1 gap smaller than lxtul-g's | 2.0686 vs 0.9840 | failed |
+| P-11 b1 ce_iw@4 better than lxtul-g's | +0.7374 [+0.7184, +0.7549] worse | failed |
+| P-12 b1 KL per slot > 0.5 | 74.84 nats | held |
+
+## Verdict
+
+Failure. The latent does not collapse (P-1, P-12), and the coda does read it: a shuffled
+cell costs 1.12 nats at a span's first token. But the coda reads the POSTERIOR's cell.
+Training takes a posterior step at every pass and eval takes prior steps, so the reader is
+trained on cells the deployed loop never produces. The gap grows with training (P-2), a
+prior cell does more harm than an empty one (P-3), and more prior passes do more harm on
+b1 (P-5). At beta 1 the ELBO did not hold the posterior near the prior; the run went
+unstable after step 3000 and ascended its own loss. Spectral decoupling costs 0.014 nats
+against fan4-all and leaves its K-curve where it was (P-8).
+
+Two readings are worth keeping. Width earns inside the Bayesian read (lxtul-g 0.159 nats
+at 4 samples and 0.215 at 16; b1 0.47 and 0.77), and under that read depth 6 beats depth 1
+by 0.0123 [+0.0093, +0.0150] on lxtul-g while the single-sample curve is flat. Both
+readings sit on a trajectory the model was not trained to produce.
+
+## Updated hypothesis
+
+A stochastic slot loop has to be trained on the rollouts it will be deployed with. The
+next arm trains on K prior rollouts under the multi-sample bound, which is the deployed
+Bayesian read's own loss, with no posterior and no KL: LXTUL-GK,
+[`2026-09-23-lxtul-gk-multisample.md`](../planned/2026-09-23-lxtul-gk-multisample.md). If its width
+gain survives and the depth-under-width reading grows, that is the loop contributing
+through search. Spectral decoupling is closed as a lever on the fan4-all read.

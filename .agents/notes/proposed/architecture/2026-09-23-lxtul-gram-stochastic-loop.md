@@ -149,3 +149,15 @@ changes in the proposal above, before any prereg:
 - **GRAM facts corrected** in the re-read note: ARC-AGI-1 52.0 and ARC-AGI-2 11.1 (the
   earlier note read the LLM bars); no official code; how the posterior reads the target is
   not stated.
+
+## Outcome of the posterior-trained arms (2026-09-23 16:06)
+
+Filed as a failure: [`2026-09-23-lxtul-g-panel.md`](../../../../lab/experiments/failures/2026-09-23-lxtul-g-panel.md).
+The posterior-plus-KL training forward is teacher-forced across passes. At beta 0.1 the
+exposure gap grew from 0.71 to 0.98 nats between steps 2500 and 5000, and a prior cell
+read 0.32 nats worse than a zeroed cell. At beta 1 the posterior sat on the prior until
+step ~2750, then the run went unstable and climbed its own loss. The Gaussian step itself
+stays: the note remains `proposed`, and its training objective moves to K prior rollouts
+under the multi-sample bound (LXTUL-GK,
+[`2026-09-23-lxtul-gk-multisample.md`](../../../../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md)).
+The posterior, the KL and KL balancing are the parts this outcome rejects.

@@ -1851,7 +1851,7 @@ class TULConfig:
     # term reads the DETERMINISTIC part u_T (on h_T it would pay sigma to shrink), and the
     # gain hinge probes f alone. morph/model/tul_gram.py; note
     # .agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md; prereg
-    # lab/experiments/planned/2026-09-23-lxtul-g-panel.md.
+    # lab/experiments/failures/2026-09-23-lxtul-g-panel.md.
     # Default off, and off is BIT-IDENTICAL (no module, no RNG draw, no branch).
     gram: bool = False
     gram_beta: float = 0.1               # KL weight against the per-token CE

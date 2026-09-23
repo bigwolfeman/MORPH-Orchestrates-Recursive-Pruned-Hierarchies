@@ -3,7 +3,7 @@
 Status: planned
 
 Date: 2026-09-23 13:27 (frozen before any build or GPU step). Parent:
-[`2026-09-23-lxtul-g-panel.md`](2026-09-23-lxtul-g-panel.md). Note:
+[`2026-09-23-lxtul-g-panel.md`](../failures/2026-09-23-lxtul-g-panel.md). Note:
 [`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../.agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md).
 Wolfe's go: 2026-09-23 ("Should I build the multi-sample arm ... Answer: yes").
 

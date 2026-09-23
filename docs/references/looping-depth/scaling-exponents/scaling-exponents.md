@@ -2,7 +2,7 @@
 
 Read 2026-09-23, for the LXTUL-G panel
 ([`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../../.agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md),
-prereg [`2026-09-23-lxtul-g-panel.md`](../../../../lab/experiments/planned/2026-09-23-lxtul-g-panel.md)).
+prereg [`2026-09-23-lxtul-g-panel.md`](../../../../lab/experiments/failures/2026-09-23-lxtul-g-panel.md)).
 
 Short answer for LXTUL-G: this is a scaling-law paper about looped transformers as a way
 to add depth. It has no latent variable, no posterior, no KL and no sampling. It says

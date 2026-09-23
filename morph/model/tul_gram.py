@@ -2,7 +2,7 @@
 
 GRAM shape (Generative Recursive Reasoning, arXiv 2605.19376; design note
 ``.agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md``, Proposal
-and Paper refresh; prereg ``lab/experiments/planned/2026-09-23-lxtul-g-panel.md``; design
+and Paper refresh; prereg ``lab/experiments/failures/2026-09-23-lxtul-g-panel.md``; design
 synthesis ``/home/wolfe/morph-scratch/arc/notes/2026-09-23-lxtul-g-paper-synthesis.md``,
 Decisions 1-7).
 

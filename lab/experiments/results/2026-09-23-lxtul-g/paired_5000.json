@@ -1,0 +1,104 @@
+{
+ "fan4-all-sd_d6_minus_fan4-all_d6": {
+  "point": 0.014066565725633804,
+  "lo": 0.01170168896332025,
+  "hi": 0.016313052160395476,
+  "basis": "tokens n=511089 blocks=500"
+ },
+ "fan4-all-sd_d6_minus_ruler_d6": {
+  "point": -0.03274155030164987,
+  "lo": -0.035576260388763,
+  "hi": -0.02986473766004183,
+  "basis": "tokens n=501106 blocks=490"
+ },
+ "lxtul-g_iw4_minus_ruler_d6": {
+  "point": 0.5901405032403882,
+  "lo": 0.5796441223410115,
+  "hi": 0.6011606412817808,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g_prior1_minus_ruler_d6": {
+  "point": 0.7488672523089668,
+  "lo": 0.7371383323202201,
+  "hi": 0.7617495090780191,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g_iw16_minus_ruler_d6": {
+  "point": 0.5335688161461646,
+  "lo": 0.5239468449421899,
+  "hi": 0.5437469901484913,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g_zero_minus_ruler_d6": {
+  "point": 0.42412287312071173,
+  "lo": 0.4149595779541598,
+  "hi": 0.43375321621268526,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g_post_minus_ruler_d6": {
+  "point": -0.23515421631318892,
+  "lo": -0.2447230057122984,
+  "hi": -0.22536544968754654,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g_iw4_d1_minus_iw4_d6": {
+  "point": 0.012268715735042028,
+  "lo": 0.00932583469747333,
+  "hi": 0.014975673971342243,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g_prior1_d1_minus_prior1_d6": {
+  "point": -0.0009608525417474041,
+  "lo": -0.0054965085013848934,
+  "hi": 0.0037272443322453387,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g-b1_iw4_minus_ruler_d6": {
+  "point": 1.3274956549053483,
+  "lo": 1.310516756287395,
+  "hi": 1.3447327108549783,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g-b1_prior1_minus_ruler_d6": {
+  "point": 1.7998698028000633,
+  "lo": 1.7795399421822444,
+  "hi": 1.8203711800521516,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g-b1_iw16_minus_ruler_d6": {
+  "point": 1.0279773440977358,
+  "lo": 1.013548748904449,
+  "hi": 1.0424270478972026,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g-b1_zero_minus_ruler_d6": {
+  "point": 0.6072261663979154,
+  "lo": 0.5943494559644262,
+  "hi": 0.6204721691829518,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g-b1_post_minus_ruler_d6": {
+  "point": -0.26869487923985186,
+  "lo": -0.28007748528883225,
+  "hi": -0.2577311589455399,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g-b1_iw4_d1_minus_iw4_d6": {
+  "point": -0.2674092245509966,
+  "lo": -0.27317668312409316,
+  "hi": -0.2615638868658796,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g-b1_prior1_d1_minus_prior1_d6": {
+  "point": -0.34811542502260207,
+  "lo": -0.354618557327336,
+  "hi": -0.34180341601302333,
+  "basis": "tokens n=200719 blocks=197"
+ },
+ "lxtul-g-b1_iw4_minus_lxtul-g_iw4": {
+  "point": 0.7373551516649598,
+  "lo": 0.7183944783744257,
+  "hi": 0.7549349235246382,
+  "basis": "tokens n=200719 blocks=197"
+ }
+}

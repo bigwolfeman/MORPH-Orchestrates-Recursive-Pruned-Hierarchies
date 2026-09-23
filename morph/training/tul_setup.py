@@ -1120,7 +1120,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"DETERMINISTIC u_T. Read `tul/gram_kl` (collapse below 0.5 nats per slot), "
               f"then the exposure gap ce_prior@1 - ce_post from "
               f"lab/divergence/lxtul_g_probe.py (prereg "
-              f"lab/experiments/planned/2026-09-23-lxtul-g-panel.md)", flush=True)
+              f"lab/experiments/failures/2026-09-23-lxtul-g-panel.md)", flush=True)
     if model_cfg.vq_codes > 0:
         _dc = model_cfg.vq_dim or (int(cfg.model.d_model) // model_cfg.vq_codes)
         print(f"  TUL DISCRETE THOUGHT ON: vq_codes={model_cfg.vq_codes} "

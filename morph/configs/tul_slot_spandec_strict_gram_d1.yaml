@@ -9,7 +9,7 @@
 # `lxtul_g_probe.py --depths 1,6` reads both models at depths {1, 6}. At depth 1 the KL is
 # a single-pass KL, so the two arms' per-slot KL are not the same sum.
 #
-# Prereg: lab/experiments/planned/2026-09-23-lxtul-g-panel.md
+# Prereg: lab/experiments/failures/2026-09-23-lxtul-g-panel.md
 # Note: .agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md
 defaults:
   - tul_slot_spandec_strict_gram
