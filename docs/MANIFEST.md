@@ -8,6 +8,7 @@ Top-level navigation for project documentation.
 - [MORTAR BCSR + CMS (sparse MLP path)](mortar-bcsr.md)
 - [Runtime invariants (BPTT, kernels, compile, phases)](../lab/runtime-invariants.md)
 - [Ablation ledger (accepted / rejected / deferred)](ablation-ledger.md)
+- [TUL run history: every positive loop-contribution reading (IMPORTANT)](9-26-TUL-run-history-IMPORTANT.md) — 2026-09-22, the 66-row positives ledger; companion of the campaign synthesis note
 - [Parcae TUL proof and MORPH depth-selection plan](../.agents/notes/proposed/architecture/2026-09-05-parcae-tul-depth-transfer-plan.md) includes the completed Parcae CE reference and the new VLD paper reading.
 - [TUL — Thought Unpack Loop specification](tul-spec.md) — layout, slot input, loss and generation contract; its §3.3 slot-only core and §7 arms are RETIRED 2026-09-03 (the paid loop below is the shipped forward)
 - [SCSE — Source-Centered State Evolution port specification](scse-spec.md)
